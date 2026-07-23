@@ -1014,13 +1014,15 @@ fn gen_letbox_ty(env: &WtEnv, r: &mut Rng, b: u32) -> (Rc<Term>, Rc<Type>, Level
 /// recursive-call entry has that same motive (so `Var(0)` inhabits the
 /// branch type). Order = `Branches` field order. Independent transcription
 /// of docs/delam/04 — a disagreement with `src/rec.rs` is a test failure.
-const BRANCH_DIMS: [(u32, u32, u32, bool, bool); 22] = [
+const BRANCH_DIMS: [(u32, u32, u32, bool, bool); 28] = [
     (0, 1, 0, false, false), // ty_nat
     (2, 3, 2, false, true),  // ty_pi
     (1, 1, 0, false, false), // ty_ty
     (1, 2, 1, false, false), // ty_el (innermost local is a *term*-motive call)
     (1, 4, 3, false, false), // ty_id (innermost local is a *term*-motive call)
     (2, 3, 2, false, true),  // ty_sigma
+    (0, 1, 0, false, false), // ty_unit
+    (0, 1, 0, false, false), // ty_empty
     (1, 3, 0, true, false),  // tm_var
     (0, 1, 0, true, false),  // tm_nat
     (2, 3, 2, true, true),   // tm_pi
@@ -1037,6 +1039,10 @@ const BRANCH_DIMS: [(u32, u32, u32, bool, bool); 22] = [
     (2, 5, 4, true, true),   // tm_pair
     (2, 4, 3, true, true),   // tm_fst
     (2, 4, 3, true, true),   // tm_snd
+    (0, 1, 0, true, false),  // tm_unit
+    (0, 1, 0, true, false),  // tm_empty
+    (0, 1, 0, true, false),  // tm_triv
+    (1, 3, 2, true, true),   // tm_elim_empty (innermost local is a term-motive call)
 ];
 
 /// A Γ-variable whose WHNF type is a contextual type matching `tm_variant`:
@@ -1092,7 +1098,7 @@ fn gen_const_rec(
         ty_motive: rty(m1ty.shift_univ(1).shift_global(1).shift_local(1)),
         tm_motive: rty(m2ty.shift_univ(1).shift_global(2).shift_local(1)),
     });
-    let mut bs: Vec<Rc<Term>> = Vec::with_capacity(22);
+    let mut bs: Vec<Rc<Term>> = Vec::with_capacity(28);
     for &(tu, tg, tl, tm_kind, var_ok) in &BRANCH_DIMS {
         if var_ok && r.below(3) == 0 {
             bs.push(rt(v(0)));
@@ -1108,22 +1114,28 @@ fn gen_const_rec(
         ty_el: bs[3].clone(),
         ty_id: bs[4].clone(),
         ty_sigma: bs[5].clone(),
-        tm_var: bs[6].clone(),
-        tm_nat: bs[7].clone(),
-        tm_pi: bs[8].clone(),
-        tm_ty: bs[9].clone(),
-        tm_zero: bs[10].clone(),
-        tm_succ: bs[11].clone(),
-        tm_elim_nat: bs[12].clone(),
-        tm_lam: bs[13].clone(),
-        tm_app: bs[14].clone(),
-        tm_id: bs[15].clone(),
-        tm_refl: bs[16].clone(),
-        tm_j: bs[17].clone(),
-        tm_sigma: bs[18].clone(),
-        tm_pair: bs[19].clone(),
-        tm_fst: bs[20].clone(),
-        tm_snd: bs[21].clone(),
+        ty_unit: bs[6].clone(),
+        ty_empty: bs[7].clone(),
+        tm_var: bs[8].clone(),
+        tm_nat: bs[9].clone(),
+        tm_pi: bs[10].clone(),
+        tm_ty: bs[11].clone(),
+        tm_zero: bs[12].clone(),
+        tm_succ: bs[13].clone(),
+        tm_elim_nat: bs[14].clone(),
+        tm_lam: bs[15].clone(),
+        tm_app: bs[16].clone(),
+        tm_id: bs[17].clone(),
+        tm_refl: bs[18].clone(),
+        tm_j: bs[19].clone(),
+        tm_sigma: bs[20].clone(),
+        tm_pair: bs[21].clone(),
+        tm_fst: bs[22].clone(),
+        tm_snd: bs[23].clone(),
+        tm_unit: bs[24].clone(),
+        tm_empty: bs[25].clone(),
+        tm_triv: bs[26].clone(),
+        tm_elim_empty: bs[27].clone(),
     });
     if tm_variant {
         let (scrut, delta, cty, cl) = match neutral {
@@ -1364,7 +1376,7 @@ pub fn gen_nat_rec(base: &WtEnv, r: &mut Rng, tm_variant: bool) -> NatRec {
 impl NatRec {
     /// The recursor over `Var 0` with the given branch bodies, in
     /// [`Branches`] field order. Checks at `Nat @ 0` in `self.env`.
-    pub fn build(&self, bs: &[Rc<Term>; 22]) -> Rc<Term> {
+    pub fn build(&self, bs: &[Rc<Term>; 28]) -> Rc<Term> {
         let motives = Rc::new(Motives {
             ty_motive: rty(Type::Nat),
             tm_motive: rty(Type::Nat),
@@ -1376,22 +1388,28 @@ impl NatRec {
             ty_el: bs[3].clone(),
             ty_id: bs[4].clone(),
             ty_sigma: bs[5].clone(),
-            tm_var: bs[6].clone(),
-            tm_nat: bs[7].clone(),
-            tm_pi: bs[8].clone(),
-            tm_ty: bs[9].clone(),
-            tm_zero: bs[10].clone(),
-            tm_succ: bs[11].clone(),
-            tm_elim_nat: bs[12].clone(),
-            tm_lam: bs[13].clone(),
-            tm_app: bs[14].clone(),
-            tm_id: bs[15].clone(),
-            tm_refl: bs[16].clone(),
-            tm_j: bs[17].clone(),
-            tm_sigma: bs[18].clone(),
-            tm_pair: bs[19].clone(),
-            tm_fst: bs[20].clone(),
-            tm_snd: bs[21].clone(),
+            ty_unit: bs[6].clone(),
+            ty_empty: bs[7].clone(),
+            tm_var: bs[8].clone(),
+            tm_nat: bs[9].clone(),
+            tm_pi: bs[10].clone(),
+            tm_ty: bs[11].clone(),
+            tm_zero: bs[12].clone(),
+            tm_succ: bs[13].clone(),
+            tm_elim_nat: bs[14].clone(),
+            tm_lam: bs[15].clone(),
+            tm_app: bs[16].clone(),
+            tm_id: bs[17].clone(),
+            tm_refl: bs[18].clone(),
+            tm_j: bs[19].clone(),
+            tm_sigma: bs[20].clone(),
+            tm_pair: bs[21].clone(),
+            tm_fst: bs[22].clone(),
+            tm_snd: bs[23].clone(),
+            tm_unit: bs[24].clone(),
+            tm_empty: bs[25].clone(),
+            tm_triv: bs[26].clone(),
+            tm_elim_empty: bs[27].clone(),
         });
         rt(if self.tm_variant {
             Term::ElimCodeTm {
@@ -1573,5 +1591,21 @@ pub fn identity_branches() -> Rc<Branches> {
             snd_ty: rty(gty(1, &gx_lam)),
             pair: rt(gtm(0, &g3)),
         }))),
+        ty_unit: rt(Term::BoxTy(rty(Type::Unit))),
+        ty_empty: rt(Term::BoxTy(rty(Type::Empty))),
+        tm_unit: rt(Term::BoxTm(rt(Term::TmUnit))),
+        tm_empty: rt(Term::BoxTm(rt(Term::TmEmpty))),
+        tm_triv: rt(Term::BoxTm(rt(Term::Triv))),
+        // box (elim_Empty^ℓ (x. U_M^id; u_t^id)) — telescope g = 2, U_M = 1,
+        // u_t = 0.
+        tm_elim_empty: {
+            let gx_empty = ext(&g2, Type::Empty, Level::Zero);
+            let u_m_e = Type::GlobalTy { var: GlobalVar(1), subst: LocalSubst::id(&gx_empty) };
+            rt(Term::BoxTm(rt(Term::ElimEmpty {
+                level: lv(0),
+                motive: rty(u_m_e),
+                scrut: rt(gtm(0, &g2)),
+            })))
+        },
     })
 }

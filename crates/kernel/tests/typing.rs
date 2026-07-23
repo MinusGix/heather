@@ -528,6 +528,12 @@ fn constant_branches() -> Rc<Branches> {
         tm_pair: z(),
         tm_fst: z(),
         tm_snd: z(),
+        ty_unit: z(),
+        ty_empty: z(),
+        tm_unit: z(),
+        tm_empty: z(),
+        tm_triv: z(),
+        tm_elim_empty: z(),
     })
 }
 
@@ -746,6 +752,24 @@ fn identity_branches() -> Rc<Branches> {
             snd_ty: rty(gty(1, &gx_lam)),
             pair: rt(gtm(0, &g3)),
         }))),
+        // box Unit / box Empty (the types)
+        ty_unit: rt(Term::BoxTy(rty(Type::Unit))),
+        ty_empty: rt(Term::BoxTy(rty(Type::Empty))),
+        // box Unit / box Empty (the encodings), box ⟨⟩
+        tm_unit: rt(Term::BoxTm(rt(Term::TmUnit))),
+        tm_empty: rt(Term::BoxTm(rt(Term::TmEmpty))),
+        tm_triv: rt(Term::BoxTm(rt(Term::Triv))),
+        // box (elim_Empty^ℓ (x. U_M^id; u_t^id)) — telescope g = 2, U_M = 1,
+        // u_t = 0.
+        tm_elim_empty: {
+            let gx_empty = ext(&g2, Type::Empty, Level::Zero);
+            let u_m_e = Type::GlobalTy { var: GlobalVar(1), subst: LocalSubst::id(&gx_empty) };
+            rt(Term::BoxTm(rt(Term::ElimEmpty {
+                level: lv(0),
+                motive: rty(u_m_e),
+                scrut: rt(gtm(0, &g2)),
+            })))
+        },
     })
 }
 
@@ -1059,4 +1083,71 @@ fn pair_projections_and_dependency() {
     assert!(infer_closed(Layer::Prog, &bad).is_err());
     // Layer v admits neither projection nor pair.
     assert_eq!(infer_closed(Layer::Var, &mk_pair()).unwrap_err(), TypeError::LayerMismatch);
+}
+
+// -------------------------------------------------------------------------
+// Unit and Empty (extension beyond ch. 04; kernel-v1-extensions)
+// -------------------------------------------------------------------------
+
+#[test]
+fn unit_formation_intro_and_encoding() {
+    let psi = GlobalCtx::default();
+    // Unit @ 0, and its encoding «Unit» : Ty 0 @ 1.
+    assert!(infer_type(&psi, 0, Layer::Prog, &nil_ctx(), &Type::Unit, FUEL)
+        .unwrap()
+        .equiv(&Level::Zero));
+    let (ty, l) = infer_closed(Layer::Prog, &Term::TmUnit).unwrap();
+    assert!(ty == Type::Ty(Level::Zero) && l.equiv(&c(1)));
+    // ⟨⟩ : Unit @ 0, and it checks against the El-decode of the encoding.
+    let (ty, l) = infer_closed(Layer::Prog, &Term::Triv).unwrap();
+    assert!(ty == Type::Unit && l.equiv(&Level::Zero));
+    let el_unit = Type::El { level: Level::Zero, tm: rt(Term::TmUnit) };
+    check_closed(Layer::Prog, &Term::Triv, &el_unit, &Level::Zero).unwrap();
+    // Layer v admits neither the intro nor the encoding.
+    assert_eq!(infer_closed(Layer::Var, &Term::Triv).unwrap_err(), TypeError::LayerMismatch);
+    assert_eq!(infer_closed(Layer::Var, &Term::TmUnit).unwrap_err(), TypeError::LayerMismatch);
+}
+
+#[test]
+fn empty_formation_encoding_and_elimination() {
+    let psi = GlobalCtx::default();
+    assert!(infer_type(&psi, 0, Layer::Prog, &nil_ctx(), &Type::Empty, FUEL)
+        .unwrap()
+        .equiv(&Level::Zero));
+    let (ty, l) = infer_closed(Layer::Prog, &Term::TmEmpty).unwrap();
+    assert!(ty == Type::Ty(Level::Zero) && l.equiv(&c(1)));
+    // elim_Empty^0 (x. Nat; e) : Nat @ 0 under `e : Empty`. Check in a context
+    // with one Empty-typed variable so the scrutinee is a (neutral) variable.
+    let gamma = ext(&nil_ctx(), Type::Empty, Level::Zero);
+    let elim = Term::ElimEmpty {
+        level: Level::Zero,
+        motive: rty(Type::Nat),
+        scrut: rt(v(0)),
+    };
+    let (ty, l) =
+        infer_term(&psi, 0, Layer::Prog, &gamma, &elim, FUEL).unwrap();
+    assert!(ty == Type::Nat && l.equiv(&Level::Zero));
+    // A dependent motive: elim_Empty^0 (x. El 0 «Nat»; e) : El 0 «Nat» @ 0,
+    // convertible to Nat via the motive at the scrutinee.
+    let dep = Term::ElimEmpty {
+        level: Level::Zero,
+        motive: rty(Type::El { level: Level::Zero, tm: rt(Term::TmNat) }),
+        scrut: rt(v(0)),
+    };
+    check_term(
+        &psi, 0, Layer::Prog, &gamma, &dep, &Type::Nat, &Level::Zero, FUEL,
+    )
+    .unwrap();
+    // A non-Empty scrutinee is rejected.
+    let bad = Term::ElimEmpty {
+        level: Level::Zero,
+        motive: rty(Type::Nat),
+        scrut: rt(Term::Zero),
+    };
+    assert!(infer_closed(Layer::Prog, &bad).is_err());
+    // Layer v does not admit the eliminator.
+    assert_eq!(
+        infer_term(&psi, 0, Layer::Var, &gamma, &elim, FUEL).unwrap_err(),
+        TypeError::LayerMismatch
+    );
 }

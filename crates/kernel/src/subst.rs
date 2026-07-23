@@ -189,6 +189,8 @@ fn map_type<M: Mapper>(t: &Type, m: &mut M, at: Depths) -> Type {
             fst: sub_ty(fst, m, at),
             snd: sub_ty(snd, m, at + dep(0, 0, 1)),
         },
+        Type::Unit => Type::Unit,
+        Type::Empty => Type::Empty,
         Type::GlobalTy { var, subst } => {
             let subst = map_subst(subst, m, at);
             m.global_ty(*var, subst, at)
@@ -238,6 +240,8 @@ fn map_term<M: Mapper>(t: &Term, m: &mut M, at: Depths) -> Term {
             fst: sub_tm(fst, m, at),
             snd: sub_tm(snd, m, at + dep(0, 0, 1)),
         },
+        Term::TmUnit => Term::TmUnit,
+        Term::TmEmpty => Term::TmEmpty,
         Term::Zero => Term::Zero,
         Term::Succ(t) => Term::Succ(sub_tm(t, m, at)),
         Term::ElimNat { level, motive, base, step, scrut } => Term::ElimNat {
@@ -283,6 +287,12 @@ fn map_term<M: Mapper>(t: &Term, m: &mut M, at: Depths) -> Term {
             fst_ty: sub_ty(fst_ty, m, at),
             snd_ty: sub_ty(snd_ty, m, at + dep(0, 0, 1)),
             pair: sub_tm(pair, m, at),
+        },
+        Term::Triv => Term::Triv,
+        Term::ElimEmpty { level, motive, scrut } => Term::ElimEmpty {
+            level: m.level(level, at),
+            motive: sub_ty(motive, m, at + dep(0, 0, 1)),
+            scrut: sub_tm(scrut, m, at),
         },
         Term::Lam { dom_level, cod_level, dom, body } => Term::Lam {
             dom_level: m.level(dom_level, at),
@@ -408,6 +418,8 @@ fn map_branches<M: Mapper>(b: &Branches, m: &mut M, at: Depths) -> Branches {
         ty_el: sub_tm(&b.ty_el, m, at + dep(1, 2, 1)),
         ty_id: sub_tm(&b.ty_id, m, at + dep(1, 4, 3)),
         ty_sigma: sub_tm(&b.ty_sigma, m, at + dep(2, 3, 2)),
+        ty_unit: sub_tm(&b.ty_unit, m, at + dep(0, 1, 0)),
+        ty_empty: sub_tm(&b.ty_empty, m, at + dep(0, 1, 0)),
         tm_var: sub_tm(&b.tm_var, m, at + dep(1, 3, 0)),
         tm_nat: sub_tm(&b.tm_nat, m, at + dep(0, 1, 0)),
         tm_pi: sub_tm(&b.tm_pi, m, at + dep(2, 3, 2)),
@@ -424,6 +436,10 @@ fn map_branches<M: Mapper>(b: &Branches, m: &mut M, at: Depths) -> Branches {
         tm_pair: sub_tm(&b.tm_pair, m, at + dep(2, 5, 4)),
         tm_fst: sub_tm(&b.tm_fst, m, at + dep(2, 4, 3)),
         tm_snd: sub_tm(&b.tm_snd, m, at + dep(2, 4, 3)),
+        tm_unit: sub_tm(&b.tm_unit, m, at + dep(0, 1, 0)),
+        tm_empty: sub_tm(&b.tm_empty, m, at + dep(0, 1, 0)),
+        tm_triv: sub_tm(&b.tm_triv, m, at + dep(0, 1, 0)),
+        tm_elim_empty: sub_tm(&b.tm_elim_empty, m, at + dep(1, 3, 2)),
     }
 }
 

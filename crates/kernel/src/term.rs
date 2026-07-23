@@ -70,6 +70,13 @@ pub enum Type {
         fst: Rc<Type>,
         snd: Rc<Type>,
     },
+    /// `Unit` — the unit type. A single inhabitant `⟨⟩` ([`Term::Triv`]) with
+    /// definitional η (proof irrelevance), so no eliminator. Lives at level 0.
+    /// Extension beyond DeLaM ch. 04 (see issues/kernel-v1-extensions.md).
+    Unit,
+    /// `Empty` — the empty type; no inhabitants, eliminated by
+    /// [`Term::ElimEmpty`]. Lives at level 0. Extension beyond DeLaM ch. 04.
+    Empty,
     /// `U^δ` — global type variable under a local substitution.
     GlobalTy { var: GlobalVar, subst: LocalSubst },
     /// `(g : Ctx) ⇒^l T` — meta-function type over context variables; binds
@@ -129,6 +136,12 @@ pub enum Term {
         fst: Rc<Term>,
         snd: Rc<Term>,
     },
+    /// `Unit : Ty 0` — encoding of the unit type (decoded by
+    /// `El (Unit) ⇝ Unit`). Extension beyond DeLaM ch. 04.
+    TmUnit,
+    /// `Empty : Ty 0` — encoding of the empty type (decoded by
+    /// `El (Empty) ⇝ Empty`). Extension beyond DeLaM ch. 04.
+    TmEmpty,
 
     // ---- natural numbers ----
     Zero,
@@ -195,6 +208,21 @@ pub enum Term {
         fst_ty: Rc<Type>,
         snd_ty: Rc<Type>,
         pair: Rc<Term>,
+    },
+
+    // ---- unit and empty (extension beyond DeLaM ch. 04) ----
+    /// `⟨⟩ : Unit` — the unique inhabitant of `Unit`. By η every term of
+    /// `Unit` type is convertible to it (proof irrelevance), so `Unit` has no
+    /// eliminator.
+    Triv,
+    /// `elim_Empty^l (x. M; t) : M[t/x]` — absurdity elimination; `motive`
+    /// binds one local variable (`x : Empty`), `scrut : Empty`. No β rule
+    /// (`Empty` has no constructors); neutral on a neutral scrutinee. Annotated
+    /// like `elim_Nat` so it infers.
+    ElimEmpty {
+        level: Level,
+        motive: Rc<Type>,
+        scrut: Rc<Term>,
     },
 
     // ---- dependent functions ----
@@ -348,6 +376,12 @@ pub struct Branches {
     /// locals: `x_S`, `x_T` (recursive calls). Mirrors `ty_pi`. Extension
     /// beyond ch. 04 (kernel-v1-extensions).
     pub ty_sigma: Rc<Term>,
+    /// `(g. t_Unit)` — globals: g. Code of the type `Unit`; mirrors `ty_nat`.
+    /// Extension beyond ch. 04 (kernel-v1-extensions).
+    pub ty_unit: Rc<Term>,
+    /// `(g. t_Empty)` — globals: g. Code of the type `Empty`; mirrors
+    /// `ty_nat`. Extension beyond ch. 04 (kernel-v1-extensions).
+    pub ty_empty: Rc<Term>,
 
     // -- branches for code of terms (b_Trm) --
     /// `(ℓ, g, U_T, u_x. t_x)` — univs: ℓ; globals: g,
@@ -425,6 +459,21 @@ pub struct Branches {
     /// `(ℓ, ℓ', g, U_S, U_T, u_p, x_S, x_T, x_p. t_snd)` — as `tm_fst`; the
     /// branch type is `U_T^{id, fst(…u_p^id)/x}` @ ℓ'. Extension.
     pub tm_snd: Rc<Term>,
+    /// `(g. t'_Unit)` — globals: g. Code of the encoding `Unit : Ty 0`;
+    /// mirrors `tm_nat`. Extension beyond ch. 04 (kernel-v1-extensions).
+    pub tm_unit: Rc<Term>,
+    /// `(g. t'_Empty)` — globals: g. Code of the encoding `Empty : Ty 0`;
+    /// mirrors `tm_nat`. Extension beyond ch. 04 (kernel-v1-extensions).
+    pub tm_empty: Rc<Term>,
+    /// `(g. t_triv)` — globals: g. Code of the intro `⟨⟩ : Unit`; mirrors
+    /// `tm_zero`. Extension beyond ch. 04 (kernel-v1-extensions).
+    pub tm_triv: Rc<Term>,
+    /// `(ℓ, g, U_M, u_t, x_M, x_t. t_elimE)` — univs: ℓ; globals: g,
+    /// `U_M : Typ_c((g, x : Empty @ 0), ℓ)`, `u_t : Trm_c(g ⊢ Empty @ 0)`;
+    /// locals: `x_M` (type motive!), `x_t`. Code of `elim_Empty^ℓ (x. U_M^id;
+    /// u_t^id)`; mirrors `tm_elim_nat` minus base/step. Extension
+    /// (kernel-v1-extensions).
+    pub tm_elim_empty: Rc<Term>,
 }
 
 /// Base of a local context: empty (`·`) or a context variable `g`.

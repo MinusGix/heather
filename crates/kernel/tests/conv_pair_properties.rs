@@ -275,9 +275,9 @@ fn neutral_recursor_compares_branches() {
         let tm_variant = r.below(2) == 1;
         let nr = gen_nat_rec(&base_env, &mut r, tm_variant);
         let env = &nr.env;
-        // Branch i holds the numeral i: all 22 pairwise distinct, so any
+        // Branch i holds the numeral i: all 28 pairwise distinct, so any
         // swap or bump must be caught by the branchwise comparison.
-        let base: [Rc<Term>; 22] = std::array::from_fn(|i| numeral(i as u32));
+        let base: [Rc<Term>; 28] = std::array::from_fn(|i| numeral(i as u32));
         let t = nr.build(&base);
         let res =
             check_term(&env.psi, env.univs, env.layer, &env.gamma, &t, &Type::Nat, &Level::Zero, FUEL);
@@ -285,7 +285,7 @@ fn neutral_recursor_compares_branches() {
         let conv = |a: &Term, b: &Term| {
             conv_term(&env.psi, &env.gamma, Layer::Meta, a, b, &Type::Nat, &Level::Zero, FUEL)
         };
-        let k = r.below(22) as usize;
+        let k = r.below(28) as usize;
         // β-wrapped branch: differing sides that are still convertible.
         let mut pos = base.clone();
         pos[k] = beta_wrap(&base[k]);
@@ -301,7 +301,7 @@ fn neutral_recursor_compares_branches() {
         let tn = nr.build(&neg);
         assert_eq!(conv(&t, &tn), Err(NC), "seed {seed}: bumped branch {k}");
         // Two distinct branches swapped: NotConvertible.
-        let j = (k + 1 + r.below(21) as usize) % 22;
+        let j = (k + 1 + r.below(27) as usize) % 28;
         let mut sw = base.clone();
         sw.swap(j, k);
         let ts = nr.build(&sw);

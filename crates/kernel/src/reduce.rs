@@ -96,6 +96,9 @@ pub fn step_type(t: &Type, gamma: &LocalCtx) -> Option<Type> {
                 fst: Rc::new(Type::El { level: fst_level.clone(), tm: Rc::clone(fst) }),
                 snd: Rc::new(Type::El { level: snd_level.clone(), tm: Rc::clone(snd) }),
             }),
+            // El^0 Unit ⇝ Unit, El^0 Empty ⇝ Empty   (extension)
+            Term::TmUnit => Some(Type::Unit),
+            Term::TmEmpty => Some(Type::Empty),
             _ => step_term(tm, gamma)
                 .map(|tm| Type::El { level: level.clone(), tm: Rc::new(tm) }),
         },
@@ -159,6 +162,15 @@ pub fn step_term(t: &Term, gamma: &LocalCtx) -> Option<Term> {
                 pair: Rc::new(p),
             }),
         },
+        // elim_Empty has no β rule (Empty has no constructors); it only ever
+        // steps its scrutinee, staying neutral when the scrutinee is.
+        Term::ElimEmpty { level, motive, scrut } => {
+            step_term(scrut, gamma).map(|s| Term::ElimEmpty {
+                level: level.clone(),
+                motive: Rc::clone(motive),
+                scrut: Rc::new(s),
+            })
+        }
         // snd (pair a b) ⇝ b; else reduce the pair   (extension)
         Term::Snd { fst_level, snd_level, fst_ty, snd_ty, pair } => match &**pair {
             Term::Pair { snd, .. } => Some((**snd).clone()),
@@ -481,6 +493,21 @@ fn beta_elim_ty(
                 gamma,
             ))
         }
+        // (g. t_Unit), (g. t_Empty)   (extension)
+        Type::Unit => Some(fire(
+            &b.ty_unit,
+            &[],
+            vec![GlobalEntry::Ctx(delta.clone())],
+            vec![],
+            gamma,
+        )),
+        Type::Empty => Some(fire(
+            &b.ty_empty,
+            &[],
+            vec![GlobalEntry::Ctx(delta.clone())],
+            vec![],
+            gamma,
+        )),
         // box (U^δ): blocked, neutral.
         Type::GlobalTy { .. } => None,
         // Layer-m types cannot be layer-c code: ill-typed, stuck.
@@ -896,6 +923,52 @@ fn beta_elim_tm(
                 gamma,
             ))
         }
+        // (g. t'_Unit), (g. t'_Empty) — the encodings.   (extension)
+        Term::TmUnit => Some(fire(
+            &b.tm_unit,
+            &[],
+            vec![GlobalEntry::Ctx(delta.clone())],
+            vec![],
+            gamma,
+        )),
+        Term::TmEmpty => Some(fire(
+            &b.tm_empty,
+            &[],
+            vec![GlobalEntry::Ctx(delta.clone())],
+            vec![],
+            gamma,
+        )),
+        // (g. t_triv)   (extension)
+        Term::Triv => Some(fire(
+            &b.tm_triv,
+            &[],
+            vec![GlobalEntry::Ctx(delta.clone())],
+            vec![],
+            gamma,
+        )),
+        // (ℓ, g, U_M, u_t, x_M, x_t. t_elimE) — x_M recurses at the *type*
+        // motive; mirrors tm_elim_nat minus the base/step branches.   (extension)
+        Term::ElimEmpty { level, motive, scrut } => {
+            let dx_empty = extend(delta, Rc::new(Type::Empty), Level::Zero);
+            let s_motive = rec.elim_ty(level.clone(), dx_empty, Rc::clone(motive));
+            let s_scrut = rec.elim_tm(
+                Level::Zero,
+                delta.clone(),
+                Rc::new(Type::Empty),
+                Rc::clone(scrut),
+            );
+            Some(fire(
+                &b.tm_elim_empty,
+                std::slice::from_ref(level),
+                vec![
+                    GlobalEntry::Ctx(delta.clone()),
+                    GlobalEntry::Ty(Rc::clone(motive)),
+                    GlobalEntry::Tm(Rc::clone(scrut)),
+                ],
+                vec![s_motive, s_scrut],
+                gamma,
+            ))
+        }
         // box (u^δ): blocked, neutral.
         Term::GlobalTm { .. } => None,
         // Layer-m forms cannot be layer-c code: ill-typed, stuck.
@@ -924,6 +997,8 @@ pub fn is_whnf_type(t: &Type) -> bool {
         | Type::Pi { .. }
         | Type::Id { .. }
         | Type::Sigma { .. }
+        | Type::Unit
+        | Type::Empty
         | Type::Ty(_)
         | Type::UPi { .. }
         | Type::CtxPi { .. }
@@ -943,6 +1018,7 @@ pub fn is_neutral_term(t: &Term) -> bool {
     match t {
         Term::Var(_) | Term::GlobalTm { .. } => true,
         Term::ElimNat { scrut, .. } => is_neutral_term(scrut),
+        Term::ElimEmpty { scrut, .. } => is_neutral_term(scrut),
         Term::J { proof, .. } => is_neutral_term(proof),
         Term::Fst { pair, .. } | Term::Snd { pair, .. } => is_neutral_term(pair),
         Term::App { fun, .. }
@@ -973,10 +1049,13 @@ pub fn is_whnf_term(t: &Term) -> bool {
         | Term::TmTy(_)
         | Term::TmId { .. }
         | Term::TmSigma { .. }
+        | Term::TmUnit
+        | Term::TmEmpty
         | Term::Zero
         | Term::Succ(_)
         | Term::Refl { .. }
         | Term::Pair { .. }
+        | Term::Triv
         | Term::Lam { .. }
         | Term::ULam { .. }
         | Term::CtxLam { .. }

@@ -30,7 +30,7 @@
 //! - **Boxed types/terms compare syntactically** (`==`; α-equality is free
 //!   under de Bruijn). Code is static data — β-convertible code is *not*
 //!   convertible.
-//! - Neutral recursors compare motives, all 22 branches (each at its
+//! - Neutral recursors compare motives, all 28 branches (each at its
 //!   instantiated motive type, the ch. 04 `G_A` telescopes), and indices —
 //!   the ch. 06 `C_A` bundle ([`Conv::rec_ca`]).
 //! - The layer index restricts *types*, not terms (ch. 06 intro): layer-m
@@ -294,6 +294,8 @@ impl Conv {
                 let e = env.push_entry(Rc::clone(s1), dl1.clone());
                 self.ty(&e, t1, t2, cl1)
             }
+            // Unit/Empty congruence (extension; nullary formers).
+            (Type::Unit, Type::Unit) | (Type::Empty, Type::Empty) => Ok(()),
             // -- layer-m type formers: mismatch outside layer m -------------
             (
                 Type::UPi { num_vars: n1, level: v1, body: b1 },
@@ -579,12 +581,16 @@ impl Conv {
                     let e = env.push_entry(Rc::new(el), dl1.clone());
                     self.tm(&e, t1, t2, &Type::Ty(cl1.clone()), &Level::succ(cl1.clone()))
                 }
+                // TmUnit/TmEmpty congruence (extension; nullary encodings).
+                (Term::TmUnit, Term::TmUnit) | (Term::TmEmpty, Term::TmEmpty) => Ok(()),
                 (
                     Term::TmNat
                     | Term::TmTy(_)
                     | Term::TmPi { .. }
                     | Term::TmId { .. }
-                    | Term::TmSigma { .. },
+                    | Term::TmSigma { .. }
+                    | Term::TmUnit
+                    | Term::TmEmpty,
                     _,
                 )
                 | (
@@ -593,7 +599,9 @@ impl Conv {
                     | Term::TmTy(_)
                     | Term::TmPi { .. }
                     | Term::TmId { .. }
-                    | Term::TmSigma { .. },
+                    | Term::TmSigma { .. }
+                    | Term::TmUnit
+                    | Term::TmEmpty,
                 ) => Err(NC),
                 _ => self.tm_nee(env, a, b).map(drop),
             },
@@ -634,6 +642,14 @@ impl Conv {
                 );
                 self.tm(env, &proj(a, false), &proj(b, false), &snd_ty, snd_level)
             }
+            // Unit η (extension): proof irrelevance — every term of Unit type
+            // is convertible to ⟨⟩, hence to each other. Type-directed like Σ
+            // η, so it fires on ⟨⟩, neutrals, or mixtures without inspecting
+            // either side.
+            Type::Unit => Ok(()),
+            // Empty (extension): no canonical inhabitants, so only neutrals can
+            // appear; compare them structurally.
+            Type::Empty => self.tm_nee(env, a, b).map(drop),
             // Neutral type: only neutral terms inhabit it.
             Type::El { .. } | Type::GlobalTy { .. } => self.tm_nee(env, a, b).map(drop),
         }
@@ -703,6 +719,21 @@ impl Conv {
                 let e_xy = e_x.push_entry(Rc::clone(m1), v1.clone());
                 self.tm(&e_xy, s1, s2, &step_ty, v1)?;
                 self.tm_nee(env, n1, n2)?; // inferred Nat: redundant, ignored
+                Ok((
+                    m1.apply_local(&LocalSubst::id(&env.gamma).extended(Rc::clone(n1))),
+                    v1.clone(),
+                ))
+            }
+            // elim_Empty neutral congruence (extension); mirrors ElimNat
+            // minus the base/step branches.
+            (
+                Term::ElimEmpty { level: v1, motive: m1, scrut: n1 },
+                Term::ElimEmpty { level: v2, motive: m2, scrut: n2 },
+            ) => {
+                self.lev_eq(v1, v2)?;
+                let e_x = env.push_entry(Rc::new(Type::Empty), Level::Zero);
+                self.ty(&e_x, m1, m2, v1)?;
+                self.tm_nee(env, n1, n2)?; // inferred Empty: redundant, ignored
                 Ok((
                     m1.apply_local(&LocalSubst::id(&env.gamma).extended(Rc::clone(n1))),
                     v1.clone(),
@@ -1043,7 +1074,7 @@ impl Conv {
 
     // -- the C_A bundle for neutral recursors -------------------------------
 
-    /// Ch. 06 `C_A`: motive levels, both motives, and all 22 branches, each
+    /// Ch. 06 `C_A`: motive levels, both motives, and all 28 branches, each
     /// branch compared at its instantiated motive type under its ch. 04
     /// telescope (`G_M G_Typ G_Trm`). Branch types and telescope entry
     /// types are built from the *left* side (left-biased, like all
@@ -1062,7 +1093,7 @@ impl Conv {
             self.ty(&e, x, y, &spec.level)?;
         }
 
-        // G_Typ G_Trm: the 22 branches, each at its instantiated motive
+        // G_Typ G_Trm: the 28 branches, each at its instantiated motive
         // type under its telescope.
         let branch_specs = rec::branch_specs(a.motives, a.l1, a.l2, &env.gamma);
         let ba = rec::branch_terms(a.branches);

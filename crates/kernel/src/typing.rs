@@ -33,7 +33,7 @@
 //!   variables demand `i' ≤ i`; `ω` is accepted nowhere a programmer level
 //!   is demanded ([`crate::level::Level::well_formed`]) and arises only as
 //!   the inferred level of `ΠΠ`/`Λ ℓ⃗`.
-//! - The recursor rules check the two motives and 22 branches against the
+//! - The recursor rules check the two motives and 28 branches against the
 //!   `G_M G_Typ G_Trm` telescopes of [`crate::rec`] — the same tables
 //!   conversion compares against.
 //!
@@ -479,6 +479,9 @@ impl Tc {
                 self.ty_check(&e, snd, snd_level)?;
                 Ok(Level::max(fst_level.clone(), snd_level.clone()))
             }
+            // Unit/Empty-formation (extension beyond ch. 04): ⊢_i Unit @ 0,
+            // ⊢_i Empty @ 0.
+            Type::Unit | Type::Empty => Ok(Level::Zero),
             Type::GlobalTy { var, subst } => {
                 let Some(binding) = lookup(&env.psi, *var) else {
                     return Err(TypeError::UnboundGlobalVar(var.0));
@@ -721,6 +724,11 @@ impl Tc {
                 let lmax = Level::max(fst_level.clone(), snd_level.clone());
                 Ok((Type::Ty(lmax.clone()), Level::succ(lmax)))
             }
+            // Encodings of Unit/Empty (extension): Unit, Empty : Ty 0.
+            Term::TmUnit | Term::TmEmpty => {
+                self.not_var_layer(env)?;
+                Ok((Type::Ty(Level::Zero), Level::constant(1)))
+            }
             Term::Zero => {
                 self.not_var_layer(env)?;
                 Ok((Type::Nat, Level::Zero))
@@ -894,6 +902,25 @@ impl Tc {
                     snd_ty
                         .apply_local(&LocalSubst::id(&env.gamma).extended(Rc::new(fst_p))),
                     snd_level.clone(),
+                ))
+            }
+
+            // -- unit and empty (extension beyond ch. 04) -------------------
+            // ⟨⟩ : Unit @ 0.
+            Term::Triv => {
+                self.not_var_layer(env)?;
+                Ok((Type::Unit, Level::Zero))
+            }
+            // elim_Empty^l (x. M; t) : M[t/x] @ l.
+            Term::ElimEmpty { level, motive, scrut } => {
+                self.not_var_layer(env)?;
+                self.level_wf(env, level)?;
+                let e_x = env.push_entry(Rc::new(Type::Empty), Level::Zero);
+                self.ty_check(&e_x, motive, level)?;
+                self.tm_check(env, scrut, &Type::Empty, &Level::Zero)?;
+                Ok((
+                    motive.apply_local(&LocalSubst::id(&env.gamma).extended(Rc::clone(scrut))),
+                    level.clone(),
                 ))
             }
 
@@ -1168,7 +1195,7 @@ impl Tc {
 
     /// The `G_A = G_M G_Typ G_Trm` premise bundle shared by the two
     /// recursor rules: motive levels, both motives well-formed in their
-    /// scopes, and all 22 branches at their instantiated motive types.
+    /// scopes, and all 28 branches at their instantiated motive types.
     fn rec_ga(
         &self,
         env: &Env,

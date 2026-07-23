@@ -106,6 +106,8 @@ impl fmt::Debug for Type {
             Type::Sigma { fst_level, snd_level, fst, snd } => {
                 write!(f, "Σ[{fst_level:?},{snd_level:?}]({fst:?}). {snd:?}")
             }
+            Type::Unit => f.write_str("Unit"),
+            Type::Empty => f.write_str("Empty"),
             Type::GlobalTy { var, subst } => write!(f, "U{}^{subst:?}", var.0),
             Type::CtxPi { level, body } => write!(f, "Π[g:Ctx@{level:?}]. {body:?}"),
             Type::TyPi { ctx, arg_level, body_level, body } => {
@@ -134,6 +136,8 @@ impl fmt::Debug for Term {
             Term::TmSigma { fst_level, snd_level, fst, snd } => {
                 write!(f, "«Σ[{fst_level:?},{snd_level:?}]({fst:?}). {snd:?}»")
             }
+            Term::TmUnit => f.write_str("«Unit»"),
+            Term::TmEmpty => f.write_str("«Empty»"),
             Term::Zero => f.write_str("0"),
             Term::Succ(t) => write!(f, "S({t:?})"),
             Term::ElimNat { level, motive, base, step, scrut } => write!(
@@ -157,6 +161,10 @@ impl fmt::Debug for Term {
                 f,
                 "snd[{fst_level:?},{snd_level:?}]({fst_ty:?}. {snd_ty:?}; {pair:?})"
             ),
+            Term::Triv => f.write_str("⟨⟩"),
+            Term::ElimEmpty { level, motive, scrut } => {
+                write!(f, "elimE[{level:?}](M {motive:?}; {scrut:?})")
+            }
             Term::Lam { dom_level, cod_level, dom, body } => {
                 write!(f, "λ[{dom_level:?},{cod_level:?}]({dom:?}). {body:?}")
             }
@@ -268,13 +276,15 @@ impl fmt::Debug for Branches {
         node(f, |f| {
             write!(
                 f,
-                "b⃗(Nat {:?}; Π {:?}; Ty {:?}; El {:?}; Id {:?}; Σ {:?} | x {:?}; «Nat» {:?}; «Π» {:?}; «Ty» {:?}; 0 {:?}; S {:?}; elimN {:?}; λ {:?}; app {:?}; «Id» {:?}; refl {:?}; J {:?}; «Σ» {:?}; pair {:?}; fst {:?}; snd {:?})",
+                "b⃗(Nat {:?}; Π {:?}; Ty {:?}; El {:?}; Id {:?}; Σ {:?}; Unit {:?}; Empty {:?} | x {:?}; «Nat» {:?}; «Π» {:?}; «Ty» {:?}; 0 {:?}; S {:?}; elimN {:?}; λ {:?}; app {:?}; «Id» {:?}; refl {:?}; J {:?}; «Σ» {:?}; pair {:?}; fst {:?}; snd {:?}; «Unit» {:?}; «Empty» {:?}; ⟨⟩ {:?}; elimE {:?})",
                 self.ty_nat,
                 self.ty_pi,
                 self.ty_ty,
                 self.ty_el,
                 self.ty_id,
                 self.ty_sigma,
+                self.ty_unit,
+                self.ty_empty,
                 self.tm_var,
                 self.tm_nat,
                 self.tm_pi,
@@ -291,6 +301,10 @@ impl fmt::Debug for Branches {
                 self.tm_pair,
                 self.tm_fst,
                 self.tm_snd,
+                self.tm_unit,
+                self.tm_empty,
+                self.tm_triv,
+                self.tm_elim_empty,
             )
         })
     }

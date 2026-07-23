@@ -442,7 +442,13 @@ fn const_branches(t: Term) -> Rc<Branches> {
         tm_sigma: rt(t.clone()),
         tm_pair: rt(t.clone()),
         tm_fst: rt(t.clone()),
-        tm_snd: rt(t),
+        tm_snd: rt(t.clone()),
+        ty_unit: rt(t.clone()),
+        ty_empty: rt(t.clone()),
+        tm_unit: rt(t.clone()),
+        tm_empty: rt(t.clone()),
+        tm_triv: rt(t.clone()),
+        tm_elim_empty: rt(t),
     })
 }
 
@@ -511,7 +517,8 @@ fn recursor_branch_type_uses_motive() {
                   &mut br.tm_zero, &mut br.tm_succ, &mut br.tm_elim_nat,
                   &mut br.tm_lam, &mut br.tm_app, &mut br.tm_id, &mut br.tm_refl,
                   &mut br.tm_j, &mut br.tm_sigma, &mut br.tm_pair, &mut br.tm_fst,
-                  &mut br.tm_snd] {
+                  &mut br.tm_snd, &mut br.tm_unit, &mut br.tm_empty, &mut br.tm_triv,
+                  &mut br.tm_elim_empty] {
             *f = rt(Term::Zero);
         }
         br.ty_nat = rt(v(0));
@@ -536,7 +543,8 @@ fn recursor_branch_type_uses_motive() {
                   &mut br.tm_zero, &mut br.tm_succ, &mut br.tm_elim_nat,
                   &mut br.tm_lam, &mut br.tm_app, &mut br.tm_id, &mut br.tm_refl,
                   &mut br.tm_j, &mut br.tm_sigma, &mut br.tm_pair, &mut br.tm_fst,
-                  &mut br.tm_snd] {
+                  &mut br.tm_snd, &mut br.tm_unit, &mut br.tm_empty, &mut br.tm_triv,
+                  &mut br.tm_elim_empty] {
             *f = rt(Term::Zero);
         }
         *branches = Rc::new(br);
@@ -751,4 +759,59 @@ fn sigma_eta_surjective_pairing() {
     ok_tm(&psi, &nil_ctx(0), &snd_of(pair(Term::Zero, num(2))), &num(2), &Type::Nat, &c(0));
     // A neutral fst distinguishes its scrutinee.
     no_tm(&psi, &gamma2, &fst_of(v(0)), &fst_of(v(1)), &Type::Nat, &c(0));
+}
+
+// -------------------------------------------------------------------------
+// Unit and Empty (extension beyond ch. 04; kernel-v1-extensions)
+// -------------------------------------------------------------------------
+
+#[test]
+fn unit_eta_proof_irrelevance() {
+    let psi = psi(vec![]);
+    // Two Unit-typed variables: every term at Unit is ≈ ⟨⟩ and ≈ every other,
+    // including distinct neutrals (definitional proof irrelevance).
+    let gamma = extend(&extend(&nil_ctx(0), Type::Unit, c(0)), Type::Unit, c(0));
+    ok_tm(&psi, &gamma, &Term::Triv, &Term::Triv, &Type::Unit, &c(0));
+    ok_tm(&psi, &gamma, &v(0), &Term::Triv, &Type::Unit, &c(0));
+    ok_tm(&psi, &gamma, &v(0), &v(1), &Type::Unit, &c(0));
+}
+
+#[test]
+fn empty_neutrals_and_encodings() {
+    let psi = psi(vec![]);
+    // At Empty only neutrals appear: equal vars convert, distinct ones do not.
+    let gamma = extend(&extend(&nil_ctx(0), Type::Empty, c(0)), Type::Empty, c(0));
+    ok_tm(&psi, &gamma, &v(0), &v(0), &Type::Empty, &c(0));
+    no_tm(&psi, &gamma, &v(0), &v(1), &Type::Empty, &c(0));
+    // Encodings congruence at Ty 0; «Unit» ≉ «Empty».
+    ok_tm(&psi, &nil_ctx(0), &Term::TmUnit, &Term::TmUnit, &Type::Ty(c(0)), &c(1));
+    no_tm(&psi, &nil_ctx(0), &Term::TmUnit, &Term::TmEmpty, &Type::Ty(c(0)), &c(1));
+    // El-decode of the encodings, and Unit ≉ Empty as types.
+    let el = |t: Term| Type::El { level: c(0), tm: rt(t) };
+    assert_eq!(
+        conv_type(&psi, &nil_ctx(0), Layer::Prog, &el(Term::TmUnit), &Type::Unit, &c(0), FUEL),
+        Ok(())
+    );
+    assert_eq!(
+        conv_type(&psi, &nil_ctx(0), Layer::Prog, &el(Term::TmEmpty), &Type::Empty, &c(0), FUEL),
+        Ok(())
+    );
+    assert_eq!(
+        conv_type(&psi, &nil_ctx(0), Layer::Prog, &Type::Unit, &Type::Empty, &c(0), FUEL),
+        Err(ConvError::NotConvertible)
+    );
+}
+
+#[test]
+fn elim_empty_neutral_congruence() {
+    let psi = psi(vec![]);
+    let gamma = extend(&nil_ctx(0), Type::Empty, c(0));
+    let elim = |m: Type| Term::ElimEmpty { level: c(0), motive: rty(m), scrut: rt(v(0)) };
+    // Same motive: convertible at the result type.
+    ok_tm(&psi, &gamma, &elim(Type::Nat), &elim(Type::Nat), &Type::Nat, &c(0));
+    // β-convertible motive (El «Nat» ⇝ Nat) accepted.
+    let el_nat = Type::El { level: c(0), tm: rt(Term::TmNat) };
+    ok_tm(&psi, &gamma, &elim(el_nat), &elim(Type::Nat), &Type::Nat, &c(0));
+    // A differing motive is caught.
+    no_tm(&psi, &gamma, &elim(Type::Nat), &elim(Type::Unit), &Type::Nat, &c(0));
 }

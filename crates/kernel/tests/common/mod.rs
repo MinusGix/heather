@@ -280,6 +280,13 @@ pub fn gen_branches(sc: &Sc, r: &mut Rng, b: u32) -> Rc<Branches> {
         tm_snd: t(2, 3, &|g| {
             vec![GK::Ctx, GK::Ty(sh(g, 0)), GK::Ty(sh(g, 1)), GK::Tm(sh(g, 0))]
         }),
+        ty_unit: t(0, 0, &|_| vec![GK::Ctx]),
+        ty_empty: t(0, 0, &|_| vec![GK::Ctx]),
+        tm_unit: t(0, 0, &|_| vec![GK::Ctx]),
+        tm_empty: t(0, 0, &|_| vec![GK::Ctx]),
+        tm_triv: t(0, 0, &|_| vec![GK::Ctx]),
+        // (ℓ, g, U_M : Typ_c((g, x:Empty), ℓ), u_t : Trm_c(g ⊢ Empty), x_M, x_t)
+        tm_elim_empty: t(1, 2, &|g| vec![GK::Ctx, GK::Ty(sh(g, 1)), GK::Tm(sh(g, 0))]),
     })
 }
 
@@ -303,10 +310,12 @@ pub fn gen_type(sc: &Sc, r: &mut Rng, b: u32) -> Rc<Type> {
     }
 
     for _ in 0..8 {
-        let arm = if b == 0 { r.below(3) } else { r.below(12) };
+        let arm = if b == 0 { r.below(3) } else { r.below(14) };
         match arm {
             0 => return Rc::new(Type::Nat),
             1 => return Rc::new(Type::Ty(gen_level(sc, r, 1))),
+            12 => return Rc::new(Type::Unit),
+            13 => return Rc::new(Type::Empty),
             2 if !ty_refs.is_empty() => {
                 let (abs, shape) = ty_refs[r.below(ty_refs.len() as u32) as usize];
                 return Rc::new(Type::GlobalTy {
@@ -413,11 +422,23 @@ pub fn gen_term(sc: &Sc, r: &mut Rng, b: u32) -> Rc<Term> {
     }
 
     for _ in 0..8 {
-        let arm = if b == 0 { r.below(5) } else { r.below(23) };
+        let arm = if b == 0 { r.below(5) } else { r.below(27) };
         match arm {
             0 if sc.local.len > 0 => return Rc::new(Term::Var(LocalVar(r.below(sc.local.len)))),
             0 | 1 => return Rc::new(Term::Zero),
             2 => return Rc::new(Term::TmNat),
+            23 => return Rc::new(Term::TmUnit),
+            24 => return Rc::new(Term::TmEmpty),
+            25 => return Rc::new(Term::Triv),
+            26 if b > 0 => {
+                let mut in1 = sc.clone();
+                in1.local.len += 1;
+                return Rc::new(Term::ElimEmpty {
+                    level: gen_level(sc, r, 1),
+                    motive: gen_type(&in1, r, b / 2),
+                    scrut: gen_term(sc, r, b / 2),
+                });
+            }
             3 => return Rc::new(Term::TmTy(gen_level(sc, r, 1))),
             4 if !tm_refs.is_empty() => {
                 let (abs, shape) = tm_refs[r.below(tm_refs.len() as u32) as usize];
@@ -733,7 +754,7 @@ pub fn gen_sigma(sc: &Sc, r: &mut Rng, b: u32) -> (GlobalSubst, Sc) {
 
 pub fn count_type(t: &Type) -> u64 {
     1 + match t {
-        Type::Nat | Type::Ty(_) => 0,
+        Type::Nat | Type::Ty(_) | Type::Unit | Type::Empty => 0,
         Type::Pi { dom, cod, .. } => count_type(dom) + count_type(cod),
         Type::Id { ty, lhs, rhs, .. } => count_type(ty) + count_term(lhs) + count_term(rhs),
         Type::Sigma { fst, snd, .. } => count_type(fst) + count_type(snd),
@@ -749,7 +770,13 @@ pub fn count_type(t: &Type) -> u64 {
 
 pub fn count_term(t: &Term) -> u64 {
     1 + match t {
-        Term::Var(_) | Term::TmNat | Term::TmTy(_) | Term::Zero => 0,
+        Term::Var(_)
+        | Term::TmNat
+        | Term::TmTy(_)
+        | Term::Zero
+        | Term::TmUnit
+        | Term::TmEmpty
+        | Term::Triv => 0,
         Term::TmPi { dom, cod, .. } => count_term(dom) + count_term(cod),
         Term::TmId { ty, lhs, rhs, .. } => {
             count_term(ty) + count_term(lhs) + count_term(rhs)
@@ -770,6 +797,7 @@ pub fn count_term(t: &Term) -> u64 {
         Term::ElimNat { motive, base, step, scrut, .. } => {
             count_type(motive) + count_term(base) + count_term(step) + count_term(scrut)
         }
+        Term::ElimEmpty { motive, scrut, .. } => count_type(motive) + count_term(scrut),
         Term::Lam { dom, body, .. } => count_type(dom) + count_term(body),
         Term::App { fun, dom, cod, arg, .. } => {
             count_term(fun) + count_type(dom) + count_type(cod) + count_term(arg)
@@ -836,4 +864,10 @@ pub fn count_branches(b: &Branches) -> u64 {
         + count_term(&b.tm_pair)
         + count_term(&b.tm_fst)
         + count_term(&b.tm_snd)
+        + count_term(&b.ty_unit)
+        + count_term(&b.ty_empty)
+        + count_term(&b.tm_unit)
+        + count_term(&b.tm_empty)
+        + count_term(&b.tm_triv)
+        + count_term(&b.tm_elim_empty)
 }

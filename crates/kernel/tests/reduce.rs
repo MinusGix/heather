@@ -153,6 +153,12 @@ fn dummy_branches() -> Branches {
         tm_pair: z(),
         tm_fst: z(),
         tm_snd: z(),
+        ty_unit: z(),
+        ty_empty: z(),
+        tm_unit: z(),
+        tm_empty: z(),
+        tm_triv: z(),
+        tm_elim_empty: z(),
     }
 }
 
@@ -1459,4 +1465,128 @@ fn beta_elim_code_tm_fst_and_snd() {
     };
     let t = elim_tm(&bs, c(2), delta.clone(), Type::Nat, Term::BoxTm(rt(code)));
     assert_eq!(step_term(&t, &gamma), Some(chain(tail(&bs))));
+}
+
+// -------------------------------------------------------------------------
+// Unit and Empty (extension beyond ch. 04; kernel-v1-extensions)
+// -------------------------------------------------------------------------
+
+#[test]
+fn el_decodes_tm_unit_and_empty() {
+    // El^0 «Unit» ⇝ Unit, El^0 «Empty» ⇝ Empty.
+    let gamma = nil_ctx(0);
+    assert_eq!(
+        step_type(&Type::El { level: c(0), tm: rt(Term::TmUnit) }, &gamma),
+        Some(Type::Unit)
+    );
+    assert_eq!(
+        step_type(&Type::El { level: c(0), tm: rt(Term::TmEmpty) }, &gamma),
+        Some(Type::Empty)
+    );
+    assert!(is_whnf_type(&Type::Unit) && is_whnf_type(&Type::Empty));
+    assert!(is_whnf_term(&Term::Triv));
+    assert!(is_whnf_term(&Term::TmUnit) && is_whnf_term(&Term::TmEmpty));
+}
+
+#[test]
+fn elim_empty_is_neutral_and_reduces_scrutinee() {
+    let gamma = nil_ctx(1);
+    // elim_Empty has no β rule: stuck (and neutral) on a neutral scrutinee.
+    let neutral = Term::ElimEmpty { level: Level::Zero, motive: rty(Type::Nat), scrut: rt(v(0)) };
+    assert_eq!(step_term(&neutral, &gamma), None);
+    assert!(is_neutral_term(&neutral));
+    // Congruence: a reducible scrutinee steps (untyped reduction).
+    let redex = Term::ElimEmpty {
+        level: Level::Zero,
+        motive: rty(Type::Nat),
+        scrut: rt(app2(lam(v(0)), Term::Zero)),
+    };
+    assert_eq!(
+        step_term(&redex, &gamma),
+        Some(Term::ElimEmpty { level: Level::Zero, motive: rty(Type::Nat), scrut: rt(Term::Zero) })
+    );
+}
+
+#[test]
+fn beta_elim_code_unit_empty_nullary_branches() {
+    // ty_unit/ty_empty/tm_unit/tm_empty/tm_triv all have the single-`g`
+    // telescope: firing substitutes only Δ, so a closed marker body passes
+    // through unchanged. Distinct markers confirm the dispatch.
+    let gamma = nil_ctx(0);
+    let delta = nil_ctx(1);
+    let mut b = dummy_branches();
+    b.ty_unit = rt(Term::BoxTy(rty(Type::Ty(c(0)))));
+    b.ty_empty = rt(Term::BoxTy(rty(Type::Ty(c(1)))));
+    b.tm_unit = rt(Term::BoxTm(rt(num(1))));
+    b.tm_empty = rt(Term::BoxTm(rt(num(2))));
+    b.tm_triv = rt(Term::BoxTm(rt(num(3))));
+    let b = Rc::new(b);
+    assert_eq!(
+        step_term(&elim_ty(&b, c(0), delta.clone(), Term::BoxTy(rty(Type::Unit))), &gamma),
+        Some(Term::BoxTy(rty(Type::Ty(c(0)))))
+    );
+    assert_eq!(
+        step_term(&elim_ty(&b, c(0), delta.clone(), Term::BoxTy(rty(Type::Empty))), &gamma),
+        Some(Term::BoxTy(rty(Type::Ty(c(1)))))
+    );
+    assert_eq!(
+        step_term(
+            &elim_tm(&b, c(1), delta.clone(), Type::Ty(c(0)), Term::BoxTm(rt(Term::TmUnit))),
+            &gamma
+        ),
+        Some(Term::BoxTm(rt(num(1))))
+    );
+    assert_eq!(
+        step_term(
+            &elim_tm(&b, c(1), delta.clone(), Type::Ty(c(0)), Term::BoxTm(rt(Term::TmEmpty))),
+            &gamma
+        ),
+        Some(Term::BoxTm(rt(num(2))))
+    );
+    assert_eq!(
+        step_term(
+            &elim_tm(&b, Level::Zero, delta.clone(), Type::Unit, Term::BoxTm(rt(Term::Triv))),
+            &gamma
+        ),
+        Some(Term::BoxTm(rt(num(3))))
+    );
+}
+
+#[test]
+fn beta_elim_code_tm_elim_empty() {
+    // Telescope (ℓ, g, U_M, u_t, x_M, x_t. t_elimE): globals g=2, U_M=1,
+    // u_t=0; locals x_M=1, x_t=0. x_M recurses at the *type* motive, x_t at
+    // the term motive. Mirrors tm_elim_nat minus the base/step branches.
+    let gamma = nil_ctx(0);
+    let delta = nil_ctx(1);
+    let motive = Type::Ty(Level::Zero); // scoped in (Δ, x : Empty); closed here
+    let inner_scrut = Term::TmNat; // the u_t payload probe
+    let mut b = dummy_branches();
+    b.tm_elim_empty = rt(chain(vec![
+        v(1),              // x_M
+        v(0),              // x_t
+        box_gty(1, 2, 1),  // box U_M^{id} (context (g, x : Empty))
+        box_gtm(0, 2, 0),  // box u_t^{id}
+        Term::TmTy(lv(0)), // ℓ
+    ]));
+    let b = Rc::new(b);
+    let code = Term::ElimEmpty {
+        level: c(2),
+        motive: rty(motive.clone()),
+        scrut: rt(inner_scrut.clone()),
+    };
+    let t = elim_tm(&b, c(2), delta.clone(), motive.clone(), Term::BoxTm(rt(code)));
+
+    let dx_empty = extend(&delta, Type::Empty, Level::Zero);
+    let s_motive = elim_ty(&b, c(2), dx_empty, Term::BoxTy(rty(motive.clone())));
+    let s_scrut =
+        elim_tm(&b, Level::Zero, delta.clone(), Type::Empty, Term::BoxTm(rt(inner_scrut.clone())));
+    let expect = chain(vec![
+        s_motive,
+        s_scrut,
+        Term::BoxTy(rty(motive)),
+        Term::BoxTm(rt(inner_scrut)),
+        Term::TmTy(c(2)),
+    ]);
+    assert_eq!(step_term(&t, &gamma), Some(expect));
 }
