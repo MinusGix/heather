@@ -82,6 +82,13 @@ pub fn step_type(t: &Type, gamma: &LocalCtx) -> Option<Type> {
                 dom: Rc::new(Type::El { level: dom_level.clone(), tm: Rc::clone(dom) }),
                 cod: Rc::new(Type::El { level: cod_level.clone(), tm: Rc::clone(cod) }),
             }),
+            // El^l (Id^l s t u) ⇝ Id^l (El^l s; t; u)   (extension)
+            Term::TmId { level: l, ty, lhs, rhs } => Some(Type::Id {
+                level: l.clone(),
+                ty: Rc::new(Type::El { level: l.clone(), tm: Rc::clone(ty) }),
+                lhs: Rc::clone(lhs),
+                rhs: Rc::clone(rhs),
+            }),
             _ => step_term(tm, gamma)
                 .map(|tm| Type::El { level: level.clone(), tm: Rc::new(tm) }),
         },
@@ -118,6 +125,22 @@ pub fn step_term(t: &Term, gamma: &LocalCtx) -> Option<Term> {
                 scrut: Rc::new(s),
             }),
         },
+        Term::J { ty_level, motive_level, ty, lhs, motive, case, rhs, proof } => {
+            match &**proof {
+                // J … refl ⇝ c   (extension; fires on head shape only)
+                Term::Refl { .. } => Some((**case).clone()),
+                _ => step_term(proof, gamma).map(|p| Term::J {
+                    ty_level: ty_level.clone(),
+                    motive_level: motive_level.clone(),
+                    ty: Rc::clone(ty),
+                    lhs: Rc::clone(lhs),
+                    motive: Rc::clone(motive),
+                    case: Rc::clone(case),
+                    rhs: Rc::clone(rhs),
+                    proof: Rc::new(p),
+                }),
+            }
+        }
         Term::App { fun, dom_level, cod_level, dom, cod, arg } => match &**fun {
             // app(λx. t; …; s) ⇝ t[s/x]
             Term::Lam { body, .. } => {
@@ -392,6 +415,26 @@ fn beta_elim_ty(
                 gamma,
             ))
         }
+        // (ℓ, g, U_S, u_t, u_u, x_S, x_t, x_u. t_Id)   (extension)
+        Type::Id { level, ty, lhs, rhs } => {
+            let s_ty = rec.elim_ty(level.clone(), delta.clone(), Rc::clone(ty));
+            let s_lhs =
+                rec.elim_tm(level.clone(), delta.clone(), Rc::clone(ty), Rc::clone(lhs));
+            let s_rhs =
+                rec.elim_tm(level.clone(), delta.clone(), Rc::clone(ty), Rc::clone(rhs));
+            Some(fire(
+                &b.ty_id,
+                std::slice::from_ref(level),
+                vec![
+                    GlobalEntry::Ctx(delta.clone()),
+                    GlobalEntry::Ty(Rc::clone(ty)),
+                    GlobalEntry::Tm(Rc::clone(lhs)),
+                    GlobalEntry::Tm(Rc::clone(rhs)),
+                ],
+                vec![s_ty, s_lhs, s_rhs],
+                gamma,
+            ))
+        }
         // box (U^δ): blocked, neutral.
         Type::GlobalTy { .. } => None,
         // Layer-m types cannot be layer-c code: ill-typed, stuck.
@@ -588,6 +631,106 @@ fn beta_elim_tm(
                 gamma,
             ))
         }
+        // (ℓ, g, u_S, u_t, u_u, x_S, x_t, x_u. t'_Id) — the encoding; both
+        // endpoints are scoped in Δ at El u_S.   (extension)
+        Term::TmId { level, ty, lhs, rhs } => {
+            let s_ty = rec.elim_tm(
+                Level::succ(level.clone()),
+                delta.clone(),
+                Rc::new(Type::Ty(level.clone())),
+                Rc::clone(ty),
+            );
+            let el = Rc::new(Type::El { level: level.clone(), tm: Rc::clone(ty) });
+            let s_lhs =
+                rec.elim_tm(level.clone(), delta.clone(), Rc::clone(&el), Rc::clone(lhs));
+            let s_rhs = rec.elim_tm(level.clone(), delta.clone(), el, Rc::clone(rhs));
+            Some(fire(
+                &b.tm_id,
+                std::slice::from_ref(level),
+                vec![
+                    GlobalEntry::Ctx(delta.clone()),
+                    GlobalEntry::Tm(Rc::clone(ty)),
+                    GlobalEntry::Tm(Rc::clone(lhs)),
+                    GlobalEntry::Tm(Rc::clone(rhs)),
+                ],
+                vec![s_ty, s_lhs, s_rhs],
+                gamma,
+            ))
+        }
+        // (ℓ, g, U_S, u_t, x_S, x_t. t_refl)   (extension)
+        Term::Refl { level, ty, tm } => {
+            let s_ty = rec.elim_ty(level.clone(), delta.clone(), Rc::clone(ty));
+            let s_tm =
+                rec.elim_tm(level.clone(), delta.clone(), Rc::clone(ty), Rc::clone(tm));
+            Some(fire(
+                &b.tm_refl,
+                std::slice::from_ref(level),
+                vec![
+                    GlobalEntry::Ctx(delta.clone()),
+                    GlobalEntry::Ty(Rc::clone(ty)),
+                    GlobalEntry::Tm(Rc::clone(tm)),
+                ],
+                vec![s_ty, s_tm],
+                gamma,
+            ))
+        }
+        // (ℓ, ℓ', g, U_S, u_a, U_M, u_c, u_r, u_e, x_S, x_a, x_M, x_c, x_r,
+        // x_e. t_J) — the motive code is scoped in
+        // (Δ, y : S @ ℓ, p : Id^ℓ(S; a; y) @ ℓ); the case's annotation type
+        // instantiates the motive at (a, refl).   (extension)
+        Term::J { ty_level, motive_level, ty, lhs, motive, case, rhs, proof } => {
+            let s_ty = rec.elim_ty(ty_level.clone(), delta.clone(), Rc::clone(ty));
+            let s_lhs =
+                rec.elim_tm(ty_level.clone(), delta.clone(), Rc::clone(ty), Rc::clone(lhs));
+            let dy = extend(delta, Rc::clone(ty), ty_level.clone());
+            let p_ty = Type::Id {
+                level: ty_level.clone(),
+                ty: Rc::new(ty.shift_local(1)),
+                lhs: Rc::new(lhs.shift_local(1)),
+                rhs: Rc::new(Term::Var(crate::term::LocalVar(0))),
+            };
+            let dyp = extend(&dy, Rc::new(p_ty), ty_level.clone());
+            let s_motive = rec.elim_ty(motive_level.clone(), dyp, Rc::clone(motive));
+            let refl_a = Term::Refl {
+                level: ty_level.clone(),
+                ty: Rc::clone(ty),
+                tm: Rc::clone(lhs),
+            };
+            let ty_case = motive.apply_local(
+                &LocalSubst::id(delta).extended(Rc::clone(lhs)).extended(Rc::new(refl_a)),
+            );
+            let s_case = rec.elim_tm(
+                motive_level.clone(),
+                delta.clone(),
+                Rc::new(ty_case),
+                Rc::clone(case),
+            );
+            let s_rhs =
+                rec.elim_tm(ty_level.clone(), delta.clone(), Rc::clone(ty), Rc::clone(rhs));
+            let id_ty = Rc::new(Type::Id {
+                level: ty_level.clone(),
+                ty: Rc::clone(ty),
+                lhs: Rc::clone(lhs),
+                rhs: Rc::clone(rhs),
+            });
+            let s_proof =
+                rec.elim_tm(ty_level.clone(), delta.clone(), id_ty, Rc::clone(proof));
+            Some(fire(
+                &b.tm_j,
+                &[motive_level.clone(), ty_level.clone()],
+                vec![
+                    GlobalEntry::Ctx(delta.clone()),
+                    GlobalEntry::Ty(Rc::clone(ty)),
+                    GlobalEntry::Tm(Rc::clone(lhs)),
+                    GlobalEntry::Ty(Rc::clone(motive)),
+                    GlobalEntry::Tm(Rc::clone(case)),
+                    GlobalEntry::Tm(Rc::clone(rhs)),
+                    GlobalEntry::Tm(Rc::clone(proof)),
+                ],
+                vec![s_ty, s_lhs, s_motive, s_case, s_rhs, s_proof],
+                gamma,
+            ))
+        }
         // box (u^δ): blocked, neutral.
         Term::GlobalTm { .. } => None,
         // Layer-m forms cannot be layer-c code: ill-typed, stuck.
@@ -614,6 +757,7 @@ pub fn is_whnf_type(t: &Type) -> bool {
     match t {
         Type::Nat
         | Type::Pi { .. }
+        | Type::Id { .. }
         | Type::Ty(_)
         | Type::UPi { .. }
         | Type::CtxPi { .. }
@@ -633,6 +777,7 @@ pub fn is_neutral_term(t: &Term) -> bool {
     match t {
         Term::Var(_) | Term::GlobalTm { .. } => true,
         Term::ElimNat { scrut, .. } => is_neutral_term(scrut),
+        Term::J { proof, .. } => is_neutral_term(proof),
         Term::App { fun, .. }
         | Term::UApp { fun, .. }
         | Term::CtxApp { fun, .. }
@@ -659,8 +804,10 @@ pub fn is_whnf_term(t: &Term) -> bool {
         Term::TmNat
         | Term::TmPi { .. }
         | Term::TmTy(_)
+        | Term::TmId { .. }
         | Term::Zero
         | Term::Succ(_)
+        | Term::Refl { .. }
         | Term::Lam { .. }
         | Term::ULam { .. }
         | Term::CtxLam { .. }

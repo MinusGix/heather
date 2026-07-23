@@ -241,7 +241,7 @@ pub fn gen_wt_ctx(env: &WtEnv, r: &mut Rng, b: u32, layer: Layer) -> LocalCtx {
 pub fn gen_wt_type(env: &WtEnv, r: &mut Rng, b: u32) -> (Rc<Type>, Level) {
     assert!(env.layer != Layer::Var);
     for _ in 0..8 {
-        match r.below(10) {
+        match r.below(11) {
             0 => return (rty(Type::Nat), Level::Zero),
             1 => {
                 let l = gen_wf_level(env.univs, r, 1);
@@ -311,6 +311,13 @@ pub fn gen_wt_type(env: &WtEnv, r: &mut Rng, b: u32) -> (Rc<Type>, Level) {
                 let (ty, cl) = gen_wt_type(&env.in_ctx(ctx.clone(), Layer::Prog), r, b / 2);
                 return (rty(Type::CodeTm { ctx, ty, level: cl }), Level::Zero);
             }
+            9 if b > 0 => {
+                // Id^l (S; t; u) (extension): both endpoints checked at S.
+                let (ty, l) = gen_wt_type(env, r, b / 2);
+                let Some(lhs) = gen_wt_term_at(env, r, b / 2, &ty, &l) else { continue };
+                let Some(rhs) = gen_wt_term_at(env, r, b / 2, &ty, &l) else { continue };
+                return (rty(Type::Id { level: l.clone(), ty, lhs, rhs }), l);
+            }
             _ => continue,
         }
     }
@@ -319,13 +326,13 @@ pub fn gen_wt_type(env: &WtEnv, r: &mut Rng, b: u32) -> (Rc<Type>, Level) {
 
 /// Synthesize an encoding `⊢_i t : Ty l @ 1+l`, returning `(t, l)`.
 pub fn gen_encoding(env: &WtEnv, r: &mut Rng, b: u32) -> (Rc<Term>, Level) {
-    match r.below(3) {
+    match r.below(4) {
         0 => (rt(Term::TmNat), Level::Zero),
         1 => {
             let l = gen_wf_level(env.univs, r, 1);
             (rt(Term::TmTy(l.clone())), Level::succ(l))
         }
-        _ if b > 0 => {
+        2 if b > 0 => {
             let (dom, dl) = gen_encoding(env, r, b / 2);
             let e = env.push_entry(
                 rty(Type::El { level: dl.clone(), tm: Rc::clone(&dom) }),
@@ -336,6 +343,19 @@ pub fn gen_encoding(env: &WtEnv, r: &mut Rng, b: u32) -> (Rc<Term>, Level) {
                 rt(Term::TmPi { dom_level: dl.clone(), cod_level: cl.clone(), dom, cod }),
                 Level::max(dl, cl),
             )
+        }
+        3 if b > 0 => {
+            // Id encoding (extension): endpoints checked at El of the
+            // encoded type; fall back to Nat when uninhabitable.
+            let (ty, l) = gen_encoding(env, r, b / 2);
+            let el = Type::El { level: l.clone(), tm: Rc::clone(&ty) };
+            let (Some(lhs), Some(rhs)) = (
+                gen_wt_term_at(env, r, b / 2, &el, &l),
+                gen_wt_term_at(env, r, b / 2, &el, &l),
+            ) else {
+                return (rt(Term::TmNat), Level::Zero);
+            };
+            (rt(Term::TmId { level: l.clone(), ty, lhs, rhs }), l)
         }
         _ => (rt(Term::TmNat), Level::Zero),
     }
@@ -495,6 +515,13 @@ pub fn gen_wt_term_at(
             let ce = env.in_ctx(ctx.clone(), Layer::Code);
             gen_wt_term_at(&ce, r, b - 1, cty, cl).map(|t| rt(Term::BoxTm(t)))
         }
+        // refl inhabits Id when the endpoints convert — the checks() filter
+        // below rejects the candidate otherwise.
+        Type::Id { level: il, ty: ity, lhs, .. } => Some(rt(Term::Refl {
+            level: il.clone(),
+            ty: Rc::clone(ity),
+            tm: Rc::clone(lhs),
+        })),
         _ => None,
     };
     // Verify intro results (annotations copied out of the target type can
@@ -527,7 +554,7 @@ pub fn gen_wt_term(env: &WtEnv, r: &mut Rng, b: u32) -> (Rc<Term>, Rc<Type>, Lev
     assert!(env.layer != Layer::Var);
     let meta = env.layer == Layer::Meta;
     for _ in 0..10 {
-        match r.below(18) {
+        match r.below(20) {
             0 | 1 if !env.gamma.entries.is_empty() => {
                 let x = r.below(env.gamma.entries.len() as u32);
                 let i = env.gamma.entries.len() - 1 - x as usize;
@@ -726,6 +753,47 @@ pub fn gen_wt_term(env: &WtEnv, r: &mut Rng, b: u32) -> (Rc<Term>, Rc<Type>, Lev
             15 if b > 1 && meta => return gen_letbox_ty(env, r, b),
             16 if b >= 4 && meta => return gen_const_rec(env, r, b, false),
             17 if b >= 4 && meta => return gen_const_rec(env, r, b, true),
+            18 if b > 0 => {
+                // refl^l (S; t) : Id^l (S; t; t) (extension).
+                let (ty, l) = gen_wt_type(env, r, b / 2);
+                let Some(tm) = gen_wt_term_at(env, r, b / 2, &ty, &l) else { continue };
+                return (
+                    rt(Term::Refl {
+                        level: l.clone(),
+                        ty: Rc::clone(&ty),
+                        tm: Rc::clone(&tm),
+                    }),
+                    rty(Type::Id { level: l.clone(), ty, lhs: Rc::clone(&tm), rhs: tm }),
+                    l,
+                );
+            }
+            19 if b > 0 => {
+                // J with a constant motive over `refl` (extension): rhs is
+                // the left endpoint, so the result type is the motive itself
+                // and β stays common.
+                let (ty, tl) = gen_wt_type(env, r, b / 2);
+                let Some(a) = gen_wt_term_at(env, r, b / 2, &ty, &tl) else { continue };
+                let (case, mty, ml) = guard(env.univs, gen_wt_term(env, r, b / 2));
+                let refl = rt(Term::Refl {
+                    level: tl.clone(),
+                    ty: Rc::clone(&ty),
+                    tm: Rc::clone(&a),
+                });
+                return (
+                    rt(Term::J {
+                        ty_level: tl,
+                        motive_level: ml.clone(),
+                        ty,
+                        lhs: Rc::clone(&a),
+                        motive: rty(mty.shift_local(2)),
+                        case,
+                        rhs: a,
+                        proof: refl,
+                    }),
+                    mty,
+                    ml,
+                );
+            }
             _ => continue,
         }
     }
@@ -819,11 +887,12 @@ fn gen_letbox_ty(env: &WtEnv, r: &mut Rng, b: u32) -> (Rc<Term>, Rc<Type>, Level
 /// recursive-call entry has that same motive (so `Var(0)` inhabits the
 /// branch type). Order = `Branches` field order. Independent transcription
 /// of docs/delam/04 — a disagreement with `src/rec.rs` is a test failure.
-const BRANCH_DIMS: [(u32, u32, u32, bool, bool); 13] = [
+const BRANCH_DIMS: [(u32, u32, u32, bool, bool); 17] = [
     (0, 1, 0, false, false), // ty_nat
     (2, 3, 2, false, true),  // ty_pi
     (1, 1, 0, false, false), // ty_ty
     (1, 2, 1, false, false), // ty_el (innermost local is a *term*-motive call)
+    (1, 4, 3, false, false), // ty_id (innermost local is a *term*-motive call)
     (1, 3, 0, true, false),  // tm_var
     (0, 1, 0, true, false),  // tm_nat
     (2, 3, 2, true, true),   // tm_pi
@@ -833,6 +902,9 @@ const BRANCH_DIMS: [(u32, u32, u32, bool, bool); 13] = [
     (1, 5, 4, true, true),   // tm_elim_nat
     (2, 4, 2, true, true),   // tm_lam
     (2, 5, 4, true, true),   // tm_app
+    (1, 4, 3, true, true),   // tm_id
+    (1, 3, 2, true, true),   // tm_refl
+    (2, 7, 6, true, true),   // tm_j
 ];
 
 /// A Γ-variable whose WHNF type is a contextual type matching `tm_variant`:
@@ -902,15 +974,19 @@ fn gen_const_rec(
         ty_pi: bs[1].clone(),
         ty_ty: bs[2].clone(),
         ty_el: bs[3].clone(),
-        tm_var: bs[4].clone(),
-        tm_nat: bs[5].clone(),
-        tm_pi: bs[6].clone(),
-        tm_ty: bs[7].clone(),
-        tm_zero: bs[8].clone(),
-        tm_succ: bs[9].clone(),
-        tm_elim_nat: bs[10].clone(),
-        tm_lam: bs[11].clone(),
-        tm_app: bs[12].clone(),
+        ty_id: bs[4].clone(),
+        tm_var: bs[5].clone(),
+        tm_nat: bs[6].clone(),
+        tm_pi: bs[7].clone(),
+        tm_ty: bs[8].clone(),
+        tm_zero: bs[9].clone(),
+        tm_succ: bs[10].clone(),
+        tm_elim_nat: bs[11].clone(),
+        tm_lam: bs[12].clone(),
+        tm_app: bs[13].clone(),
+        tm_id: bs[14].clone(),
+        tm_refl: bs[15].clone(),
+        tm_j: bs[16].clone(),
     });
     if tm_variant {
         let (scrut, delta, cty, cl) = match neutral {
@@ -1151,7 +1227,7 @@ pub fn gen_nat_rec(base: &WtEnv, r: &mut Rng, tm_variant: bool) -> NatRec {
 impl NatRec {
     /// The recursor over `Var 0` with the given branch bodies, in
     /// [`Branches`] field order. Checks at `Nat @ 0` in `self.env`.
-    pub fn build(&self, bs: &[Rc<Term>; 13]) -> Rc<Term> {
+    pub fn build(&self, bs: &[Rc<Term>; 17]) -> Rc<Term> {
         let motives = Rc::new(Motives {
             ty_motive: rty(Type::Nat),
             tm_motive: rty(Type::Nat),
@@ -1161,15 +1237,19 @@ impl NatRec {
             ty_pi: bs[1].clone(),
             ty_ty: bs[2].clone(),
             ty_el: bs[3].clone(),
-            tm_var: bs[4].clone(),
-            tm_nat: bs[5].clone(),
-            tm_pi: bs[6].clone(),
-            tm_ty: bs[7].clone(),
-            tm_zero: bs[8].clone(),
-            tm_succ: bs[9].clone(),
-            tm_elim_nat: bs[10].clone(),
-            tm_lam: bs[11].clone(),
-            tm_app: bs[12].clone(),
+            ty_id: bs[4].clone(),
+            tm_var: bs[5].clone(),
+            tm_nat: bs[6].clone(),
+            tm_pi: bs[7].clone(),
+            tm_ty: bs[8].clone(),
+            tm_zero: bs[9].clone(),
+            tm_succ: bs[10].clone(),
+            tm_elim_nat: bs[11].clone(),
+            tm_lam: bs[12].clone(),
+            tm_app: bs[13].clone(),
+            tm_id: bs[14].clone(),
+            tm_refl: bs[15].clone(),
+            tm_j: bs[16].clone(),
         });
         rt(if self.tm_variant {
             Term::ElimCodeTm {
@@ -1222,6 +1302,7 @@ pub fn identity_branches() -> Rc<Branches> {
     let g2 = g_ctx(2);
     let g3 = g_ctx(3);
     let g4 = g_ctx(4);
+    let g6 = g_ctx(6);
     let gx_typi = ext(&g2, gty(1, &g2), lv(1));
     let gx_app = ext(&g4, gty(3, &g4), lv(1));
     let gx_tmpi = ext(&g2, Type::El { level: lv(1), tm: rt(gtm(1, &g2)) }, lv(1));
@@ -1272,5 +1353,46 @@ pub fn identity_branches() -> Rc<Branches> {
             cod: rty(gty(2, &gx_app)),
             arg: rt(gtm(0, &g4)),
         }))),
+        // -- extension branches (kernel-v1-extensions) --
+        ty_id: rt(Term::BoxTy(rty(Type::Id {
+            level: lv(0),
+            ty: rty(gty(2, &g3)),
+            lhs: rt(gtm(1, &g3)),
+            rhs: rt(gtm(0, &g3)),
+        }))),
+        tm_id: rt(Term::BoxTm(rt(Term::TmId {
+            level: lv(0),
+            ty: rt(gtm(2, &g3)),
+            lhs: rt(gtm(1, &g3)),
+            rhs: rt(gtm(0, &g3)),
+        }))),
+        tm_refl: rt(Term::BoxTm(rt(Term::Refl {
+            level: lv(0),
+            ty: rty(gty(1, &g2)),
+            tm: rt(gtm(0, &g2)),
+        }))),
+        tm_j: {
+            let gy = ext(&g6, gty(5, &g6), lv(1));
+            let p_ty = Type::Id {
+                level: lv(1),
+                ty: rty(gty(5, &g6).shift_local(1)),
+                lhs: rt(gtm(4, &g6).shift_local(1)),
+                rhs: rt(v(0)),
+            };
+            let gyp = ext(&gy, p_ty, lv(1));
+            rt(Term::BoxTm(rt(Term::J {
+                ty_level: lv(1),
+                motive_level: lv(0),
+                ty: rty(gty(5, &g6)),
+                lhs: rt(gtm(4, &g6)),
+                motive: rty(Type::GlobalTy {
+                    var: GlobalVar(3),
+                    subst: LocalSubst::id(&gyp),
+                }),
+                case: rt(gtm(2, &g6)),
+                rhs: rt(gtm(1, &g6)),
+                proof: rt(gtm(0, &g6)),
+            })))
+        },
     })
 }

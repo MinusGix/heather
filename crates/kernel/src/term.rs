@@ -52,6 +52,15 @@ pub enum Type {
     },
     /// `El^l t` — decode the encoding `t : Ty l` into a type.
     El { level: Level, tm: Rc<Term> },
+    /// `Id^l (S; t; u)` — identity type over `S : Typ` at level `l`;
+    /// `lhs`, `rhs : S`. Extension beyond DeLaM ch. 04 (see
+    /// issues/kernel-v1-extensions.md).
+    Id {
+        level: Level,
+        ty: Rc<Type>,
+        lhs: Rc<Term>,
+        rhs: Rc<Term>,
+    },
     /// `U^δ` — global type variable under a local substitution.
     GlobalTy { var: GlobalVar, subst: LocalSubst },
     /// `(g : Ctx) ⇒^l T` — meta-function type over context variables; binds
@@ -94,6 +103,14 @@ pub enum Term {
     },
     /// `Ty l : Ty (1 + l)`.
     TmTy(Level),
+    /// `Id^l (s; t; u) : Ty l` where `s : Ty l`, `t, u : El^l s` — encoding
+    /// of the identity type. Extension beyond DeLaM ch. 04.
+    TmId {
+        level: Level,
+        ty: Rc<Term>,
+        lhs: Rc<Term>,
+        rhs: Rc<Term>,
+    },
 
     // ---- natural numbers ----
     Zero,
@@ -106,6 +123,29 @@ pub enum Term {
         base: Rc<Term>,
         step: Rc<Term>,
         scrut: Rc<Term>,
+    },
+
+    // ---- identity (extension beyond DeLaM ch. 04) ----
+    /// `refl^l (S; t) : Id^l (S; t; t)`. Fully annotated so it synthesizes.
+    Refl {
+        level: Level,
+        ty: Rc<Type>,
+        tm: Rc<Term>,
+    },
+    /// `J^{l,l'} (S; a; y p. M; c; u; e)` — based path induction
+    /// (Paulin-Mohring). `motive` binds two local variables
+    /// (`y : S`, `p : Id^l (S; a; y)`); nothing else binds. `lhs` is the
+    /// fixed left endpoint `a`, `case : M[a/y, refl/p]`, `rhs` the right
+    /// endpoint `u`, and `proof : Id^l (S; a; u)` is the scrutinee.
+    J {
+        ty_level: Level,
+        motive_level: Level,
+        ty: Rc<Type>,
+        lhs: Rc<Term>,
+        motive: Rc<Type>,
+        case: Rc<Term>,
+        rhs: Rc<Term>,
+        proof: Rc<Term>,
     },
 
     // ---- dependent functions ----
@@ -249,6 +289,11 @@ pub struct Branches {
     /// `u_t : Trm_c(g ⊢ Ty ℓ @ 1+ℓ)`; locals: `x_t` (recursive call, at the
     /// *term* motive).
     pub ty_el: Rc<Term>,
+    /// `(ℓ, g, U_S, u_t, u_u, x_S, x_t, x_u. t_Id)` — univs: ℓ; globals: g,
+    /// `U_S : Typ_c(g, ℓ)`, `u_t : Trm_c(g ⊢ U_S^id @ ℓ)`,
+    /// `u_u : Trm_c(g ⊢ U_S^id @ ℓ)`; locals: `x_S` (type motive!), `x_t`,
+    /// `x_u`. Extension beyond ch. 04 (kernel-v1-extensions).
+    pub ty_id: Rc<Term>,
 
     // -- branches for code of terms (b_Trm) --
     /// `(ℓ, g, U_T, u_x. t_x)` — univs: ℓ; globals: g,
@@ -287,6 +332,26 @@ pub struct Branches {
     /// `u_t : Trm_c(g ⊢ Π(x:U_S).U_T @ ℓ⊔ℓ')`, `u_s : Trm_c(g ⊢ U_S^id @ ℓ)`;
     /// locals: `x_S`, `x_T`, `x_t`, `x_s`.
     pub tm_app: Rc<Term>,
+
+    // -- extension branches (beyond ch. 04; kernel-v1-extensions) --
+    /// `(ℓ, g, u_S, u_t, u_u, x_S, x_t, x_u. t'_Id)` — univs: ℓ; globals: g,
+    /// `u_S : Trm_c(g ⊢ Ty ℓ @ 1+ℓ)`, `u_t : Trm_c(g ⊢ El ℓ u_S^id @ ℓ)`,
+    /// `u_u : Trm_c(g ⊢ El ℓ u_S^id @ ℓ)`; locals: `x_S`, `x_t`, `x_u`.
+    /// Code of the encoding `Id^ℓ (s; t; u) : Ty ℓ`.
+    pub tm_id: Rc<Term>,
+    /// `(ℓ, g, U_S, u_t, x_S, x_t. t_refl)` — univs: ℓ; globals: g,
+    /// `U_S : Typ_c(g, ℓ)`, `u_t : Trm_c(g ⊢ U_S^id @ ℓ)`; locals: `x_S`
+    /// (type motive!), `x_t`.
+    pub tm_refl: Rc<Term>,
+    /// `(ℓ, ℓ', g, U_S, u_a, U_M, u_c, u_r, u_e, x_S, x_a, x_M, x_c, x_r,
+    /// x_e. t_J)` — univs: ℓ, ℓ'; globals: g, `U_S : Typ_c(g, ℓ)`,
+    /// `u_a : Trm_c(g ⊢ U_S^id @ ℓ)`,
+    /// `U_M : Typ_c((g, y : U_S^id @ ℓ, p : Id^ℓ(U_S^id; u_a^id; y) @ ℓ), ℓ')`,
+    /// `u_c : Trm_c(g ⊢ U_M^{id, u_a/y, refl^ℓ(U_S^id; u_a^id)/p} @ ℓ')`,
+    /// `u_r : Trm_c(g ⊢ U_S^id @ ℓ)`,
+    /// `u_e : Trm_c(g ⊢ Id^ℓ(U_S^id; u_a^id; u_r^id) @ ℓ)`; locals: `x_S`,
+    /// `x_a`, `x_M` (type motive!), `x_c`, `x_r`, `x_e`.
+    pub tm_j: Rc<Term>,
 }
 
 /// Base of a local context: empty (`·`) or a context variable `g`.

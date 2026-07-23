@@ -33,10 +33,22 @@ applications. Concretely:
   and over types (`TyPi/TyLam/TyApp`); contextual types `□(Δ ⊢ Ty l)` and
   `□(Δ ⊢ T @ l)` (both at universe 0); `box`; `letbox` for both kinds; and the
   two mutual recursive principles over code (4 type branches, 9 term
-  branches).
+  branches in the paper; see the extension below).
+
+**Extension beyond the paper** (issues/kernel-v1-extensions.md): the identity
+type — `Id^l(S; t; u)` with its encoding `Id^l(s; t; u) : Ty l` (decoded by
+`El (Id …) ⇝ Id (El …)`), intro `refl^l(S; t)`, and Paulin-Mohring based
+path induction `J^{l,l'}(S; a; y p. M; c; u; e)` with β `J … refl ⇝ c`.
+DeLaM has no Id; every rule here is ours, flagged `(extension)` in comments,
+and follows the paper's discipline: fully annotated so everything but `box`
+infers, and the sub-structures are recursor-reachable. The code recursors
+gain four branches (`ty_id`, `tm_id`, `tm_refl`, `tm_j`; 17 total). No K —
+UIP, where wanted, is Hedberg's theorem territory, and a strict-Prop-style
+alternative stays open (see the issue).
 
 Explicitly out of v0: coinduction/effects, typeclasses, compiler machinery,
-inductive types beyond Nat, the type lifter (omitted by the paper too).
+inductive types beyond Nat and Id, the type lifter (omitted by the paper
+too).
 
 ## Algorithms
 

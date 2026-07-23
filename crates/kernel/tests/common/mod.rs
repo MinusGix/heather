@@ -245,6 +245,24 @@ pub fn gen_branches(sc: &Sc, r: &mut Rng, b: u32) -> Rc<Branches> {
                 GK::Tm(sh(g, 0)),
             ]
         }),
+        ty_id: t(1, 3, &|g| {
+            vec![GK::Ctx, GK::Ty(sh(g, 0)), GK::Tm(sh(g, 0)), GK::Tm(sh(g, 0))]
+        }),
+        tm_id: t(1, 3, &|g| {
+            vec![GK::Ctx, GK::Tm(sh(g, 0)), GK::Tm(sh(g, 0)), GK::Tm(sh(g, 0))]
+        }),
+        tm_refl: t(1, 2, &|g| vec![GK::Ctx, GK::Ty(sh(g, 0)), GK::Tm(sh(g, 0))]),
+        tm_j: t(2, 6, &|g| {
+            vec![
+                GK::Ctx,
+                GK::Ty(sh(g, 0)),
+                GK::Tm(sh(g, 0)),
+                GK::Ty(sh(g, 2)),
+                GK::Tm(sh(g, 0)),
+                GK::Tm(sh(g, 0)),
+                GK::Tm(sh(g, 0)),
+            ]
+        }),
     })
 }
 
@@ -268,7 +286,7 @@ pub fn gen_type(sc: &Sc, r: &mut Rng, b: u32) -> Rc<Type> {
     }
 
     for _ in 0..8 {
-        let arm = if b == 0 { r.below(3) } else { r.below(10) };
+        let arm = if b == 0 { r.below(3) } else { r.below(11) };
         match arm {
             0 => return Rc::new(Type::Nat),
             1 => return Rc::new(Type::Ty(gen_level(sc, r, 1))),
@@ -337,6 +355,14 @@ pub fn gen_type(sc: &Sc, r: &mut Rng, b: u32) -> Rc<Type> {
                     level: gen_level(sc, r, 1),
                 });
             }
+            10 if b > 0 => {
+                return Rc::new(Type::Id {
+                    level: gen_level(sc, r, 1),
+                    ty: gen_type(sc, r, b / 2),
+                    lhs: gen_term(sc, r, b / 2),
+                    rhs: gen_term(sc, r, b / 2),
+                });
+            }
             _ => continue,
         }
     }
@@ -360,7 +386,7 @@ pub fn gen_term(sc: &Sc, r: &mut Rng, b: u32) -> Rc<Term> {
     }
 
     for _ in 0..8 {
-        let arm = if b == 0 { r.below(5) } else { r.below(16) };
+        let arm = if b == 0 { r.below(5) } else { r.below(19) };
         match arm {
             0 if sc.local.len > 0 => return Rc::new(Term::Var(LocalVar(r.below(sc.local.len)))),
             0 | 1 => return Rc::new(Term::Zero),
@@ -511,6 +537,35 @@ pub fn gen_term(sc: &Sc, r: &mut Rng, b: u32) -> Rc<Term> {
                     scrut: gen_term(sc, r, bb),
                 });
             }
+            16 if b > 0 => {
+                return Rc::new(Term::TmId {
+                    level: gen_level(sc, r, 1),
+                    ty: gen_term(sc, r, b / 2),
+                    lhs: gen_term(sc, r, b / 2),
+                    rhs: gen_term(sc, r, b / 2),
+                });
+            }
+            17 if b > 0 => {
+                return Rc::new(Term::Refl {
+                    level: gen_level(sc, r, 1),
+                    ty: gen_type(sc, r, b / 2),
+                    tm: gen_term(sc, r, b / 2),
+                });
+            }
+            18 if b > 0 => {
+                let mut in2 = sc.clone();
+                in2.local.len += 2;
+                return Rc::new(Term::J {
+                    ty_level: gen_level(sc, r, 1),
+                    motive_level: gen_level(sc, r, 1),
+                    ty: gen_type(sc, r, b / 2),
+                    lhs: gen_term(sc, r, b / 2),
+                    motive: gen_type(&in2, r, b / 2),
+                    case: gen_term(sc, r, b / 2),
+                    rhs: gen_term(sc, r, b / 2),
+                    proof: gen_term(sc, r, b / 2),
+                });
+            }
             _ => continue,
         }
     }
@@ -609,6 +664,7 @@ pub fn count_type(t: &Type) -> u64 {
     1 + match t {
         Type::Nat | Type::Ty(_) => 0,
         Type::Pi { dom, cod, .. } => count_type(dom) + count_type(cod),
+        Type::Id { ty, lhs, rhs, .. } => count_type(ty) + count_term(lhs) + count_term(rhs),
         Type::UPi { body, .. } => count_type(body),
         Type::El { tm, .. } => count_term(tm),
         Type::GlobalTy { subst, .. } => count_subst(subst),
@@ -623,7 +679,15 @@ pub fn count_term(t: &Term) -> u64 {
     1 + match t {
         Term::Var(_) | Term::TmNat | Term::TmTy(_) | Term::Zero => 0,
         Term::TmPi { dom, cod, .. } => count_term(dom) + count_term(cod),
+        Term::TmId { ty, lhs, rhs, .. } => {
+            count_term(ty) + count_term(lhs) + count_term(rhs)
+        }
         Term::Succ(t) => count_term(t),
+        Term::Refl { ty, tm, .. } => count_type(ty) + count_term(tm),
+        Term::J { ty, lhs, motive, case, rhs, proof, .. } => {
+            count_type(ty) + count_term(lhs) + count_type(motive) + count_term(case)
+                + count_term(rhs) + count_term(proof)
+        }
         Term::ElimNat { motive, base, step, scrut, .. } => {
             count_type(motive) + count_term(base) + count_term(step) + count_term(scrut)
         }
@@ -684,4 +748,8 @@ pub fn count_branches(b: &Branches) -> u64 {
         + count_term(&b.tm_elim_nat)
         + count_term(&b.tm_lam)
         + count_term(&b.tm_app)
+        + count_term(&b.ty_id)
+        + count_term(&b.tm_id)
+        + count_term(&b.tm_refl)
+        + count_term(&b.tm_j)
 }

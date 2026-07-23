@@ -1,5 +1,5 @@
 //! Tests for ch. 06 weak-head reduction: golden tests for every β-rule
-//! (including all 13 recursor branches, probing each branch telescope's
+//! (including all 17 recursor branches, probing each branch telescope's
 //! universe / global / recursive-call instantiation), congruence-order and
 //! blocking behavior, and generator-based properties (normal forms do not
 //! step; reducts stay well-scoped).
@@ -144,6 +144,10 @@ fn dummy_branches() -> Branches {
         tm_elim_nat: z(),
         tm_lam: z(),
         tm_app: z(),
+        ty_id: z(),
+        tm_id: z(),
+        tm_refl: z(),
+        tm_j: z(),
     }
 }
 
@@ -976,4 +980,230 @@ fn classified_normal_forms_are_stable_under_more_steps() {
             law!(seed, step_term(&cur, &gamma).is_none(), true);
         }
     }
+}
+
+// -------------------------------------------------------------------------
+// Identity type (extension beyond ch. 04; kernel-v1-extensions)
+// -------------------------------------------------------------------------
+
+#[test]
+fn el_decodes_tm_id() {
+    // El^0 (Id^0(«Nat»; 0; 1)) ⇝ Id^0(El^0 «Nat»; 0; 1).
+    let gamma = nil_ctx(0);
+    let t = Type::El {
+        level: Level::Zero,
+        tm: rt(Term::TmId {
+            level: Level::Zero,
+            ty: rt(Term::TmNat),
+            lhs: rt(Term::Zero),
+            rhs: rt(num(1)),
+        }),
+    };
+    let expect = Type::Id {
+        level: Level::Zero,
+        ty: rty(Type::El { level: Level::Zero, tm: rt(Term::TmNat) }),
+        lhs: rt(Term::Zero),
+        rhs: rt(num(1)),
+    };
+    assert_eq!(step_type(&t, &gamma), Some(expect.clone()));
+    assert!(is_whnf_type(&expect));
+}
+
+#[test]
+fn beta_j_refl_and_congruence() {
+    let gamma = nil_ctx(1);
+    let refl0 = Term::Refl { level: Level::Zero, ty: rty(Type::Nat), tm: rt(Term::Zero) };
+    let j = |proof: Term| Term::J {
+        ty_level: Level::Zero,
+        motive_level: Level::Zero,
+        ty: rty(Type::Nat),
+        lhs: rt(Term::Zero),
+        motive: rty(Type::Nat),
+        case: rt(num(2)),
+        rhs: rt(Term::Zero),
+        proof: rt(proof),
+    };
+    // J … refl ⇝ c.
+    assert_eq!(step_term(&j(refl0.clone()), &gamma), Some(num(2)));
+    // Congruence reduces the proof first.
+    let letbox_refl = Term::LetBoxTm {
+        motive_level: Level::Zero,
+        code_level: Level::Zero,
+        ctx: nil_ctx(0),
+        ty: rty(Type::Nat),
+        motive: rty(Type::Nat),
+        body: rt(refl0.clone().shift_global(1)),
+        scrut: rt(Term::BoxTm(rt(Term::Zero))),
+    };
+    let stepped = step_term(&j(letbox_refl), &gamma).unwrap();
+    assert_eq!(step_term(&stepped, &gamma), Some(num(2)));
+    // Blocked on a neutral proof: no rule, classified neutral.
+    let blocked = j(v(0));
+    assert_eq!(step_term(&blocked, &gamma), None);
+    assert!(is_neutral_term(&blocked));
+    // refl and the encoding are WHNFs.
+    assert!(is_whnf_term(&refl0));
+    assert!(is_whnf_term(&Term::TmId {
+        level: Level::Zero,
+        ty: rt(Term::TmNat),
+        lhs: rt(Term::Zero),
+        rhs: rt(Term::Zero),
+    }));
+}
+
+#[test]
+fn beta_elim_code_ty_id() {
+    // Telescope (ℓ, g, U_S, u_t, u_u, x_S, x_t, x_u. t_Id):
+    // globals g=3, U_S=2, u_t=1, u_u=0; locals x_S=2, x_t=1, x_u=0.
+    let gamma = nil_ctx(0);
+    let delta = nil_ctx(1);
+    let mut b = dummy_branches();
+    b.ty_id = rt(chain(vec![
+        v(2),             // x_S
+        v(1),             // x_t
+        v(0),             // x_u
+        box_gty(2, 3, 0), // box U_S^{id}
+        box_gtm(1, 3, 0), // box u_t^{id}
+        box_gtm(0, 3, 0), // box u_u^{id}
+        Term::TmTy(lv(0)), // ℓ
+    ]));
+    let b = Rc::new(b);
+    let code = Type::Id {
+        level: c(2),
+        ty: rty(Type::Nat),
+        lhs: rt(Term::Zero),
+        rhs: rt(num(1)),
+    };
+    let t = elim_ty(&b, c(2), delta.clone(), Term::BoxTy(rty(code)));
+
+    let s_ty = elim_ty(&b, c(2), delta.clone(), Term::BoxTy(rty(Type::Nat)));
+    let s_lhs = elim_tm(&b, c(2), delta.clone(), Type::Nat, Term::BoxTm(rt(Term::Zero)));
+    let s_rhs = elim_tm(&b, c(2), delta.clone(), Type::Nat, Term::BoxTm(rt(num(1))));
+    let expect = chain(vec![
+        s_ty,
+        s_lhs,
+        s_rhs,
+        Term::BoxTy(rty(Type::Nat)),
+        Term::BoxTm(rt(Term::Zero)),
+        Term::BoxTm(rt(num(1))),
+        Term::TmTy(c(2)),
+    ]);
+    assert_eq!(step_term(&t, &gamma), Some(expect));
+}
+
+#[test]
+fn beta_elim_code_tm_refl() {
+    // Telescope (ℓ, g, U_S, u_t, x_S, x_t. t_refl): globals g=2, U_S=1,
+    // u_t=0; locals x_S=1, x_t=0.
+    let gamma = nil_ctx(0);
+    let delta = nil_ctx(1);
+    let mut b = dummy_branches();
+    b.tm_refl = rt(chain(vec![
+        v(1),             // x_S
+        v(0),             // x_t
+        box_gty(1, 2, 0), // box U_S^{id}
+        box_gtm(0, 2, 0), // box u_t^{id}
+        Term::TmTy(lv(0)), // ℓ
+    ]));
+    let b = Rc::new(b);
+    let code = Term::Refl { level: c(3), ty: rty(Type::Nat), tm: rt(num(1)) };
+    let ann = Type::Id {
+        level: c(3),
+        ty: rty(Type::Nat),
+        lhs: rt(num(1)),
+        rhs: rt(num(1)),
+    };
+    let t = elim_tm(&b, c(3), delta.clone(), ann, Term::BoxTm(rt(code)));
+
+    let s_ty = elim_ty(&b, c(3), delta.clone(), Term::BoxTy(rty(Type::Nat)));
+    let s_tm = elim_tm(&b, c(3), delta.clone(), Type::Nat, Term::BoxTm(rt(num(1))));
+    let expect = chain(vec![
+        s_ty,
+        s_tm,
+        Term::BoxTy(rty(Type::Nat)),
+        Term::BoxTm(rt(num(1))),
+        Term::TmTy(c(3)),
+    ]);
+    assert_eq!(step_term(&t, &gamma), Some(expect));
+}
+
+#[test]
+fn beta_elim_code_tm_j() {
+    // Telescope (ℓ, ℓ', g, U_S, u_a, U_M, u_c, u_r, u_e, x_S, x_a, x_M,
+    // x_c, x_r, x_e. t_J): globals g=6, U_S=5, u_a=4, U_M=3, u_c=2, u_r=1,
+    // u_e=0; locals x_S=5, x_a=4, x_M=3, x_c=2, x_r=1, x_e=0. The motive
+    // code is scoped in (Δ, y, p); the case's annotation instantiates it at
+    // (a, refl).
+    let gamma = nil_ctx(0);
+    let delta = nil_ctx(1);
+    let motive = Type::Ty(Level::Zero); // scoped in (Δ, y, p); closed here
+    let mut b = dummy_branches();
+    b.tm_j = rt(chain(vec![
+        v(5),              // x_S
+        v(4),              // x_a
+        v(3),              // x_M
+        v(2),              // x_c
+        v(1),              // x_r
+        v(0),              // x_e
+        box_gty(5, 6, 0),  // box U_S^{id}
+        box_gtm(4, 6, 0),  // box u_a^{id}
+        box_gty(3, 6, 2),  // box U_M^{id} (context (g, y, p))
+        box_gtm(2, 6, 0),  // box u_c^{id}
+        box_gtm(1, 6, 0),  // box u_r^{id}
+        box_gtm(0, 6, 0),  // box u_e^{id}
+        Term::TmTy(lv(1)), // ℓ
+        Term::TmTy(lv(0)), // ℓ'
+    ]));
+    let b = Rc::new(b);
+    let code = Term::J {
+        ty_level: c(1),
+        motive_level: c(2),
+        ty: rty(Type::Nat),
+        lhs: rt(Term::Zero),
+        motive: rty(motive.clone()),
+        case: rt(Term::TmNat),
+        rhs: rt(num(1)),
+        proof: rt(num(2)),
+    };
+    let t = elim_tm(&b, c(2), delta.clone(), Type::Ty(Level::Zero), Term::BoxTm(rt(code)));
+
+    let s_ty = elim_ty(&b, c(1), delta.clone(), Term::BoxTy(rty(Type::Nat)));
+    let s_a = elim_tm(&b, c(1), delta.clone(), Type::Nat, Term::BoxTm(rt(Term::Zero)));
+    let dy = extend(&delta, Type::Nat, c(1));
+    let p_ty = Type::Id {
+        level: c(1),
+        ty: rty(Type::Nat),
+        lhs: rt(Term::Zero),
+        rhs: rt(v(0)),
+    };
+    let dyp = extend(&dy, p_ty, c(1));
+    let s_motive = elim_ty(&b, c(2), dyp, Term::BoxTy(rty(motive.clone())));
+    // The motive is closed, so its instantiation at (a, refl) is itself.
+    let s_case =
+        elim_tm(&b, c(2), delta.clone(), motive.clone(), Term::BoxTm(rt(Term::TmNat)));
+    let s_rhs = elim_tm(&b, c(1), delta.clone(), Type::Nat, Term::BoxTm(rt(num(1))));
+    let id_a_r = Type::Id {
+        level: c(1),
+        ty: rty(Type::Nat),
+        lhs: rt(Term::Zero),
+        rhs: rt(num(1)),
+    };
+    let s_proof = elim_tm(&b, c(1), delta.clone(), id_a_r, Term::BoxTm(rt(num(2))));
+    let expect = chain(vec![
+        s_ty,
+        s_a,
+        s_motive,
+        s_case,
+        s_rhs,
+        s_proof,
+        Term::BoxTy(rty(Type::Nat)),
+        Term::BoxTm(rt(Term::Zero)),
+        Term::BoxTy(rty(motive)),
+        Term::BoxTm(rt(Term::TmNat)),
+        Term::BoxTm(rt(num(1))),
+        Term::BoxTm(rt(num(2))),
+        Term::TmTy(c(1)),
+        Term::TmTy(c(2)),
+    ]);
+    assert_eq!(step_term(&t, &gamma), Some(expect));
 }

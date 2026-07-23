@@ -30,7 +30,7 @@
 //! - **Boxed types/terms compare syntactically** (`==`; α-equality is free
 //!   under de Bruijn). Code is static data — β-convertible code is *not*
 //!   convertible.
-//! - Neutral recursors compare motives, all 13 branches (each at its
+//! - Neutral recursors compare motives, all 17 branches (each at its
 //!   instantiated motive type, the ch. 04 `G_A` telescopes), and indices —
 //!   the ch. 06 `C_A` bundle ([`Conv::rec_ca`]).
 //! - The layer index restricts *types*, not terms (ch. 06 intro): layer-m
@@ -272,6 +272,16 @@ impl Conv {
                 self.ty(env, s1, s2, dl1)?;
                 let e = env.push_entry(Rc::clone(s1), dl1.clone());
                 self.ty(&e, t1, t2, cl1)
+            }
+            // Id congruence (extension beyond ch. 04; kernel-v1-extensions).
+            (
+                Type::Id { level: l1, ty: s1, lhs: t1, rhs: u1 },
+                Type::Id { level: l2, ty: s2, lhs: t2, rhs: u2 },
+            ) => {
+                self.lev_eq(l1, l2)?;
+                self.ty(env, s1, s2, l1)?;
+                self.tm(env, t1, t2, s1, l1)?;
+                self.tm(env, u1, u2, s1, l1)
             }
             // -- layer-m type formers: mismatch outside layer m -------------
             (
@@ -535,8 +545,31 @@ impl Conv {
                     let e = env.push_entry(Rc::new(el), dl1.clone());
                     self.tm(&e, t1, t2, &Type::Ty(cl1.clone()), &Level::succ(cl1.clone()))
                 }
-                (Term::TmNat | Term::TmTy(_) | Term::TmPi { .. }, _)
-                | (_, Term::TmNat | Term::TmTy(_) | Term::TmPi { .. }) => Err(NC),
+                // TmId congruence (extension).
+                (
+                    Term::TmId { level: l1, ty: s1, lhs: t1, rhs: u1 },
+                    Term::TmId { level: l2, ty: s2, lhs: t2, rhs: u2 },
+                ) => {
+                    self.lev_eq(l1, l2)?;
+                    self.tm(env, s1, s2, &Type::Ty(l1.clone()), &Level::succ(l1.clone()))?;
+                    let el = Type::El { level: l1.clone(), tm: Rc::clone(s1) };
+                    self.tm(env, t1, t2, &el, l1)?;
+                    self.tm(env, u1, u2, &el, l1)
+                }
+                (Term::TmNat | Term::TmTy(_) | Term::TmPi { .. } | Term::TmId { .. }, _)
+                | (_, Term::TmNat | Term::TmTy(_) | Term::TmPi { .. } | Term::TmId { .. }) => {
+                    Err(NC)
+                }
+                _ => self.tm_nee(env, a, b).map(drop),
+            },
+            // Id (extension): refl congruence on the point; else neutral.
+            // The refl annotations are forced by well-typedness at this Id
+            // type, so only the point is compared.
+            Type::Id { level, ty, .. } => match (a, b) {
+                (Term::Refl { tm: x, .. }, Term::Refl { tm: y, .. }) => {
+                    self.tm(env, x, y, ty, level)
+                }
+                (Term::Refl { .. }, _) | (_, Term::Refl { .. }) => Err(NC),
                 _ => self.tm_nee(env, a, b).map(drop),
             },
             // Neutral type: only neutral terms inhabit it.
@@ -611,6 +644,66 @@ impl Conv {
                 Ok((
                     m1.apply_local(&LocalSubst::id(&env.gamma).extended(Rc::clone(n1))),
                     v1.clone(),
+                ))
+            }
+            // J neutral congruence (extension beyond ch. 04); mirrors the
+            // ElimNat arm — annotations compared, scrutinee via tm_nee.
+            (
+                Term::J {
+                    ty_level: al1,
+                    motive_level: ml1,
+                    ty: s1,
+                    lhs: a1,
+                    motive: m1,
+                    case: c1,
+                    rhs: r1,
+                    proof: p1,
+                },
+                Term::J {
+                    ty_level: al2,
+                    motive_level: ml2,
+                    ty: s2,
+                    lhs: a2,
+                    motive: m2,
+                    case: c2,
+                    rhs: r2,
+                    proof: p2,
+                },
+            ) => {
+                self.lev_eq(al1, al2)?;
+                self.lev_eq(ml1, ml2)?;
+                self.ty(env, s1, s2, al1)?;
+                self.tm(env, a1, a2, s1, al1)?;
+                // M scoped in (Γ, y : S, p : Id^l(S; a; y)), as in typing.rs.
+                let e_y = env.push_entry(Rc::clone(s1), al1.clone());
+                let p_ty = Type::Id {
+                    level: al1.clone(),
+                    ty: Rc::new(s1.shift_local(1)),
+                    lhs: Rc::new(a1.shift_local(1)),
+                    rhs: Rc::new(Term::Var(LocalVar(0))),
+                };
+                let e_yp = e_y.push_entry(Rc::new(p_ty), al1.clone());
+                self.ty(&e_yp, m1, m2, ml1)?;
+                let refl_a = Term::Refl {
+                    level: al1.clone(),
+                    ty: Rc::clone(s1),
+                    tm: Rc::clone(a1),
+                };
+                let case_ty = m1.apply_local(
+                    &LocalSubst::id(&env.gamma)
+                        .extended(Rc::clone(a1))
+                        .extended(Rc::new(refl_a)),
+                );
+                self.tm(env, c1, c2, &case_ty, ml1)?;
+                self.tm(env, r1, r2, s1, al1)?;
+                self.tm_nee(env, p1, p2)?; // inferred Id: redundant, ignored
+                Ok((
+                    m1.apply_local(
+                        &LocalSubst::id(&env.gamma)
+                            .extended(Rc::clone(r1))
+                            .extended(Rc::clone(p1)),
+                    ),
+                    ml1.clone(),
                 ))
             }
             (
@@ -850,7 +943,7 @@ impl Conv {
 
     // -- the C_A bundle for neutral recursors -------------------------------
 
-    /// Ch. 06 `C_A`: motive levels, both motives, and all 13 branches, each
+    /// Ch. 06 `C_A`: motive levels, both motives, and all 17 branches, each
     /// branch compared at its instantiated motive type under its ch. 04
     /// telescope (`G_M G_Typ G_Trm`). Branch types and telescope entry
     /// types are built from the *left* side (left-biased, like all
@@ -869,7 +962,7 @@ impl Conv {
             self.ty(&e, x, y, &spec.level)?;
         }
 
-        // G_Typ G_Trm: the 13 branches, each at its instantiated motive
+        // G_Typ G_Trm: the 17 branches, each at its instantiated motive
         // type under its telescope.
         let branch_specs = rec::branch_specs(a.motives, a.l1, a.l2, &env.gamma);
         let ba = rec::branch_terms(a.branches);

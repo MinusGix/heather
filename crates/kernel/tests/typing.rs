@@ -4,7 +4,7 @@
 //! disciplines, global contexts and local substitutions, universe
 //! polymorphism, contextual types (box/letbox, checking-only box under
 //! binders), and the code recursors, including a full *identity recursor*
-//! whose 13 branches re-box their telescopes' code — an end-to-end exercise
+//! whose 17 branches re-box their telescopes' code — an end-to-end exercise
 //! of every `G_Typ`/`G_Trm` telescope.
 //!
 //! No generator-based properties: the generators produce ill-typed terms,
@@ -510,6 +510,7 @@ fn constant_branches() -> Rc<Branches> {
         ty_pi: z(),
         ty_ty: z(),
         ty_el: z(),
+        ty_id: z(),
         tm_var: z(),
         tm_nat: z(),
         tm_pi: z(),
@@ -519,6 +520,9 @@ fn constant_branches() -> Rc<Branches> {
         tm_elim_nat: z(),
         tm_lam: z(),
         tm_app: z(),
+        tm_id: z(),
+        tm_refl: z(),
+        tm_j: z(),
     })
 }
 
@@ -649,6 +653,52 @@ fn identity_branches() -> Rc<Branches> {
             cod: rty(gty(2, &gx_app)),
             arg: rt(gtm(0, &g4)),
         }))),
+        // -- extension branches (kernel-v1-extensions) --
+        // box (Id^ℓ(U_S^id; u_t^id; u_u^id))
+        ty_id: rt(Term::BoxTy(rty(Type::Id {
+            level: lv(0),
+            ty: rty(gty(2, &g3)),
+            lhs: rt(gtm(1, &g3)),
+            rhs: rt(gtm(0, &g3)),
+        }))),
+        // box (Id^ℓ(u_S^id; u_t^id; u_u^id)) (the encoding)
+        tm_id: rt(Term::BoxTm(rt(Term::TmId {
+            level: lv(0),
+            ty: rt(gtm(2, &g3)),
+            lhs: rt(gtm(1, &g3)),
+            rhs: rt(gtm(0, &g3)),
+        }))),
+        // box (refl^ℓ(U_S^id; u_t^id))
+        tm_refl: rt(Term::BoxTm(rt(Term::Refl {
+            level: lv(0),
+            ty: rty(gty(1, &g2)),
+            tm: rt(gtm(0, &g2)),
+        }))),
+        // box (J^{ℓ,ℓ'}(U_S^id; u_a^id; y p. U_M^id; u_c^id; u_r^id; u_e^id))
+        tm_j: {
+            let g6 = g_ctx(6);
+            let gy = ext(&g6, gty(5, &g6), lv(1));
+            let p_ty = Type::Id {
+                level: lv(1),
+                ty: rty(gty(5, &g6).shift_local(1)),
+                lhs: rt(gtm(4, &g6).shift_local(1)),
+                rhs: rt(Term::Var(LocalVar(0))),
+            };
+            let gyp = ext(&gy, p_ty, lv(1));
+            rt(Term::BoxTm(rt(Term::J {
+                ty_level: lv(1),
+                motive_level: lv(0),
+                ty: rty(gty(5, &g6)),
+                lhs: rt(gtm(4, &g6)),
+                motive: rty(Type::GlobalTy {
+                    var: GlobalVar(3),
+                    subst: LocalSubst::id(&gyp),
+                }),
+                case: rt(gtm(2, &g6)),
+                rhs: rt(gtm(1, &g6)),
+                proof: rt(gtm(0, &g6)),
+            })))
+        },
     })
 }
 
@@ -760,4 +810,94 @@ fn out_of_fuel_is_distinguishable() {
     );
     check_type(&GlobalCtx::default(), 0, Layer::Prog, &nil_ctx(), &Type::Nat, &Level::Zero, FUEL)
         .unwrap();
+}
+
+// -------------------------------------------------------------------------
+// Identity type (extension beyond ch. 04; kernel-v1-extensions)
+// -------------------------------------------------------------------------
+
+#[test]
+fn id_formation_refl_and_encoding() {
+    let psi = GlobalCtx::default();
+    // Id^0(Nat; 0; 0) @ 0.
+    let id00 = Type::Id {
+        level: Level::Zero,
+        ty: rty(Type::Nat),
+        lhs: rt(Term::Zero),
+        rhs: rt(Term::Zero),
+    };
+    check_type(&psi, 0, Layer::Prog, &nil_ctx(), &id00, &Level::Zero, FUEL).unwrap();
+    // Endpoints must check at the carrier.
+    let bad = Type::Id {
+        level: Level::Zero,
+        ty: rty(Type::Nat),
+        lhs: rt(Term::TmNat),
+        rhs: rt(Term::Zero),
+    };
+    assert!(check_type(&psi, 0, Layer::Prog, &nil_ctx(), &bad, &Level::Zero, FUEL).is_err());
+    // refl^0(Nat; 0) infers Id^0(Nat; 0; 0) @ 0; the point must check.
+    let refl0 = Term::Refl { level: Level::Zero, ty: rty(Type::Nat), tm: rt(Term::Zero) };
+    let (ty, l) = infer_closed(Layer::Prog, &refl0).unwrap();
+    assert!(ty == id00);
+    assert!(l.equiv(&Level::Zero));
+    let refl_bad =
+        Term::Refl { level: Level::Zero, ty: rty(Type::Nat), tm: rt(Term::TmNat) };
+    assert!(infer_closed(Layer::Prog, &refl_bad).is_err());
+    // Layer v admits neither form.
+    assert_eq!(infer_closed(Layer::Var, &refl0).unwrap_err(), TypeError::LayerMismatch);
+    // The encoding Id^0(«Nat»; 0; 1) : Ty 0 @ 1, and refl checks against
+    // its El-decode (conversion fires through El (Id …) ⇝ Id (El …)).
+    let tm_id = Term::TmId {
+        level: Level::Zero,
+        ty: rt(Term::TmNat),
+        lhs: rt(Term::Zero),
+        rhs: rt(Term::Zero),
+    };
+    let (ty, l) = infer_closed(Layer::Prog, &tm_id).unwrap();
+    assert!(ty == Type::Ty(Level::Zero));
+    assert!(l.equiv(&c(1)));
+    let el_id = Type::El { level: Level::Zero, tm: rt(tm_id) };
+    check_closed(Layer::Prog, &refl0, &el_id, &Level::Zero).unwrap();
+}
+
+#[test]
+fn j_paulin_mohring() {
+    // Dependent motive M(y, p) = Id^0(Nat; 0; y), scoped in (Γ, y, p).
+    let motive = Type::Id {
+        level: Level::Zero,
+        ty: rty(Type::Nat),
+        lhs: rt(Term::Zero),
+        rhs: rt(v(1)),
+    };
+    let refl0 = Term::Refl { level: Level::Zero, ty: rty(Type::Nat), tm: rt(Term::Zero) };
+    let j = |rhs: Term, proof: Term| Term::J {
+        ty_level: Level::Zero,
+        motive_level: Level::Zero,
+        ty: rty(Type::Nat),
+        lhs: rt(Term::Zero),
+        motive: rty(motive.clone()),
+        case: rt(refl0.clone()),
+        rhs: rt(rhs),
+        proof: rt(proof),
+    };
+    // J … 0 (refl 0) : M[0/y, refl/p] = Id^0(Nat; 0; 0) @ 0.
+    let (ty, l) = infer_closed(Layer::Prog, &j(Term::Zero, refl0.clone())).unwrap();
+    assert!(
+        ty == Type::Id {
+            level: Level::Zero,
+            ty: rty(Type::Nat),
+            lhs: rt(Term::Zero),
+            rhs: rt(Term::Zero),
+        }
+    );
+    assert!(l.equiv(&Level::Zero));
+    // A proof that is not an Id inhabitant is rejected …
+    assert!(infer_closed(Layer::Prog, &j(Term::Zero, Term::Zero)).is_err());
+    // … as is a proof whose right endpoint mismatches `rhs`.
+    assert!(infer_closed(Layer::Prog, &j(Term::Succ(rt(Term::Zero)), refl0.clone())).is_err());
+    // Layer p only (not v).
+    assert_eq!(
+        infer_closed(Layer::Var, &j(Term::Zero, refl0.clone())).unwrap_err(),
+        TypeError::LayerMismatch
+    );
 }

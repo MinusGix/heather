@@ -33,7 +33,7 @@
 //!   variables demand `i' ≤ i`; `ω` is accepted nowhere a programmer level
 //!   is demanded ([`crate::level::Level::well_formed`]) and arises only as
 //!   the inferred level of `ΠΠ`/`Λ ℓ⃗`.
-//! - The recursor rules check the two motives and 13 branches against the
+//! - The recursor rules check the two motives and 17 branches against the
 //!   `G_M G_Typ G_Trm` telescopes of [`crate::rec`] — the same tables
 //!   conversion compares against.
 //!
@@ -460,6 +460,15 @@ impl Tc {
                 self.tm_check(env, tm, &Type::Ty(level.clone()), &Level::succ(level.clone()))?;
                 Ok(level.clone())
             }
+            // Id-formation (extension beyond ch. 04; kernel-v1-extensions):
+            // ⊢_i Id^l (S; t; u) @ l ⟸ ⊢_i S @ l, ⊢_i t : S @ l, ⊢_i u : S @ l
+            Type::Id { level, ty, lhs, rhs } => {
+                self.level_wf(env, level)?;
+                self.ty_check(env, ty, level)?;
+                self.tm_check(env, lhs, ty, level)?;
+                self.tm_check(env, rhs, ty, level)?;
+                Ok(level.clone())
+            }
             Type::GlobalTy { var, subst } => {
                 let Some(binding) = lookup(&env.psi, *var) else {
                     return Err(TypeError::UnboundGlobalVar(var.0));
@@ -670,6 +679,16 @@ impl Tc {
                 self.level_wf(env, l)?;
                 Ok((Type::Ty(Level::succ(l.clone())), Level::succ(Level::succ(l.clone()))))
             }
+            // Encoding of Id (extension): Id^l (s; t; u) : Ty l.
+            Term::TmId { level, ty, lhs, rhs } => {
+                self.not_var_layer(env)?;
+                self.level_wf(env, level)?;
+                self.tm_check(env, ty, &Type::Ty(level.clone()), &Level::succ(level.clone()))?;
+                let el = Type::El { level: level.clone(), tm: Rc::clone(ty) };
+                self.tm_check(env, lhs, &el, level)?;
+                self.tm_check(env, rhs, &el, level)?;
+                Ok((Type::Ty(level.clone()), Level::succ(level.clone())))
+            }
             Term::Zero => {
                 self.not_var_layer(env)?;
                 Ok((Type::Nat, Level::Zero))
@@ -698,6 +717,71 @@ impl Tc {
                 Ok((
                     motive.apply_local(&LocalSubst::id(&env.gamma).extended(Rc::clone(scrut))),
                     level.clone(),
+                ))
+            }
+
+            // -- identity (extension beyond ch. 04; kernel-v1-extensions) ---
+            // refl^l (S; t) : Id^l (S; t; t) @ l
+            Term::Refl { level, ty, tm } => {
+                self.not_var_layer(env)?;
+                self.level_wf(env, level)?;
+                self.ty_check(env, ty, level)?;
+                self.tm_check(env, tm, ty, level)?;
+                Ok((
+                    Type::Id {
+                        level: level.clone(),
+                        ty: Rc::clone(ty),
+                        lhs: Rc::clone(tm),
+                        rhs: Rc::clone(tm),
+                    },
+                    level.clone(),
+                ))
+            }
+            // Based path induction (Paulin-Mohring):
+            // J^{l,l'} (S; a; y p. M; c; u; e) : M[u/y, e/p] @ l'.
+            Term::J { ty_level, motive_level, ty, lhs, motive, case, rhs, proof } => {
+                self.not_var_layer(env)?;
+                self.level_wf(env, ty_level)?;
+                self.level_wf(env, motive_level)?;
+                self.ty_check(env, ty, ty_level)?;
+                self.tm_check(env, lhs, ty, ty_level)?;
+                // M scoped in (Γ, y : S, p : Id^l(S; a; y)).
+                let e_y = env.push_entry(Rc::clone(ty), ty_level.clone());
+                let p_ty = Type::Id {
+                    level: ty_level.clone(),
+                    ty: Rc::new(ty.shift_local(1)),
+                    lhs: Rc::new(lhs.shift_local(1)),
+                    rhs: Rc::new(Term::Var(LocalVar(0))),
+                };
+                let e_yp = e_y.push_entry(Rc::new(p_ty), ty_level.clone());
+                self.ty_check(&e_yp, motive, motive_level)?;
+                // c : M[a/y, refl^l(S; a)/p].
+                let refl_a = Term::Refl {
+                    level: ty_level.clone(),
+                    ty: Rc::clone(ty),
+                    tm: Rc::clone(lhs),
+                };
+                let case_ty = motive.apply_local(
+                    &LocalSubst::id(&env.gamma)
+                        .extended(Rc::clone(lhs))
+                        .extended(Rc::new(refl_a)),
+                );
+                self.tm_check(env, case, &case_ty, motive_level)?;
+                self.tm_check(env, rhs, ty, ty_level)?;
+                let id_ty = Type::Id {
+                    level: ty_level.clone(),
+                    ty: Rc::clone(ty),
+                    lhs: Rc::clone(lhs),
+                    rhs: Rc::clone(rhs),
+                };
+                self.tm_check(env, proof, &id_ty, ty_level)?;
+                Ok((
+                    motive.apply_local(
+                        &LocalSubst::id(&env.gamma)
+                            .extended(Rc::clone(rhs))
+                            .extended(Rc::clone(proof)),
+                    ),
+                    motive_level.clone(),
                 ))
             }
 
@@ -972,7 +1056,7 @@ impl Tc {
 
     /// The `G_A = G_M G_Typ G_Trm` premise bundle shared by the two
     /// recursor rules: motive levels, both motives well-formed in their
-    /// scopes, and all 13 branches at their instantiated motive types.
+    /// scopes, and all 17 branches at their instantiated motive types.
     fn rec_ga(
         &self,
         env: &Env,

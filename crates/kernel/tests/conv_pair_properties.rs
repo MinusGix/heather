@@ -95,7 +95,13 @@ fn decode(e: &Term) -> Type {
             dom: rty(Type::El { level: dom_level.clone(), tm: Rc::clone(dom) }),
             cod: rty(Type::El { level: cod_level.clone(), tm: Rc::clone(cod) }),
         },
-        _ => unreachable!("gen_encoding only produces TmNat/TmTy/TmPi"),
+        Term::TmId { level, ty, lhs, rhs } => Type::Id {
+            level: level.clone(),
+            ty: rty(Type::El { level: level.clone(), tm: Rc::clone(ty) }),
+            lhs: Rc::clone(lhs),
+            rhs: Rc::clone(rhs),
+        },
+        _ => unreachable!("gen_encoding only produces TmNat/TmTy/TmPi/TmId"),
     }
 }
 
@@ -132,8 +138,10 @@ fn succ_wrap_is_not_convertible() {
 }
 
 /// A type-preserving, shape-changing mutation of an encoding: the root (or,
-/// for `TmPi`, the domain, recursively) is replaced by an encoding of a
-/// different head constructor at the same level.
+/// for `TmPi`, the codomain, recursively) is replaced by an encoding of a
+/// different head constructor at the same level. Only roots are replaced —
+/// never a binder's type — because `TmId` endpoints may reference enclosing
+/// binders, so changing a domain is not type-preserving.
 fn mutate_encoding(e: &Term) -> Term {
     match e {
         // Ty 0 = Ty (0 ⊔ 0).
@@ -153,10 +161,13 @@ fn mutate_encoding(e: &Term) -> Term {
         Term::TmPi { dom_level, cod_level, dom, cod } => Term::TmPi {
             dom_level: dom_level.clone(),
             cod_level: cod_level.clone(),
-            dom: rt(mutate_encoding(dom)),
-            cod: Rc::clone(cod),
+            dom: Rc::clone(dom),
+            cod: rt(mutate_encoding(cod)),
         },
-        _ => unreachable!("gen_encoding only produces TmNat/TmTy/TmPi"),
+        // Id^l(s; t; u) : Ty l and s : Ty l — dropping to the carrier is
+        // type-preserving and changes the head.
+        Term::TmId { ty, .. } => (**ty).clone(),
+        _ => unreachable!("gen_encoding only produces TmNat/TmTy/TmPi/TmId"),
     }
 }
 
@@ -245,9 +256,9 @@ fn neutral_recursor_compares_branches() {
         let tm_variant = r.below(2) == 1;
         let nr = gen_nat_rec(&base_env, &mut r, tm_variant);
         let env = &nr.env;
-        // Branch i holds the numeral i: all 13 pairwise distinct, so any
+        // Branch i holds the numeral i: all 17 pairwise distinct, so any
         // swap or bump must be caught by the branchwise comparison.
-        let base: [Rc<Term>; 13] = std::array::from_fn(|i| numeral(i as u32));
+        let base: [Rc<Term>; 17] = std::array::from_fn(|i| numeral(i as u32));
         let t = nr.build(&base);
         let res =
             check_term(&env.psi, env.univs, env.layer, &env.gamma, &t, &Type::Nat, &Level::Zero, FUEL);
@@ -255,7 +266,7 @@ fn neutral_recursor_compares_branches() {
         let conv = |a: &Term, b: &Term| {
             conv_term(&env.psi, &env.gamma, Layer::Meta, a, b, &Type::Nat, &Level::Zero, FUEL)
         };
-        let k = r.below(13) as usize;
+        let k = r.below(17) as usize;
         // β-wrapped branch: differing sides that are still convertible.
         let mut pos = base.clone();
         pos[k] = beta_wrap(&base[k]);
@@ -271,7 +282,7 @@ fn neutral_recursor_compares_branches() {
         let tn = nr.build(&neg);
         assert_eq!(conv(&t, &tn), Err(NC), "seed {seed}: bumped branch {k}");
         // Two distinct branches swapped: NotConvertible.
-        let j = (k + 1 + r.below(12) as usize) % 13;
+        let j = (k + 1 + r.below(16) as usize) % 17;
         let mut sw = base.clone();
         sw.swap(j, k);
         let ts = nr.build(&sw);

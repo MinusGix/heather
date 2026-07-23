@@ -433,7 +433,11 @@ fn const_branches(t: Term) -> Rc<Branches> {
         tm_succ: rt(t.clone()),
         tm_elim_nat: rt(t.clone()),
         tm_lam: rt(t.clone()),
-        tm_app: rt(t),
+        tm_app: rt(t.clone()),
+        ty_id: rt(t.clone()),
+        tm_id: rt(t.clone()),
+        tm_refl: rt(t.clone()),
+        tm_j: rt(t),
     })
 }
 
@@ -500,7 +504,8 @@ fn recursor_branch_type_uses_motive() {
         // tm branches compare at Nat; keep them Zero on both sides.
         for f in [&mut br.tm_var, &mut br.tm_nat, &mut br.tm_pi, &mut br.tm_ty,
                   &mut br.tm_zero, &mut br.tm_succ, &mut br.tm_elim_nat,
-                  &mut br.tm_lam, &mut br.tm_app] {
+                  &mut br.tm_lam, &mut br.tm_app, &mut br.tm_id, &mut br.tm_refl,
+                  &mut br.tm_j] {
             *f = rt(Term::Zero);
         }
         br.ty_nat = rt(v(0));
@@ -523,7 +528,8 @@ fn recursor_branch_type_uses_motive() {
         let mut br = (**branches).clone();
         for f in [&mut br.tm_var, &mut br.tm_nat, &mut br.tm_pi, &mut br.tm_ty,
                   &mut br.tm_zero, &mut br.tm_succ, &mut br.tm_elim_nat,
-                  &mut br.tm_lam, &mut br.tm_app] {
+                  &mut br.tm_lam, &mut br.tm_app, &mut br.tm_id, &mut br.tm_refl,
+                  &mut br.tm_j] {
             *f = rt(Term::Zero);
         }
         *branches = Rc::new(br);
@@ -575,4 +581,77 @@ fn fuel_exhaustion_is_distinguishable() {
         conv_term(&psi, &nil_ctx(0), Layer::Prog, &omega, &Term::Zero, &Type::Nat, &c(0), 500),
         Err(ConvError::OutOfFuel)
     );
+}
+
+// -------------------------------------------------------------------------
+// Identity type (extension beyond ch. 04; kernel-v1-extensions)
+// -------------------------------------------------------------------------
+
+#[test]
+fn id_type_congruence() {
+    let psi = psi(vec![]);
+    let g0 = nil_ctx(0);
+    let id = |lhs: Term, rhs: Term| Type::Id {
+        level: Level::Zero,
+        ty: rty(Type::Nat),
+        lhs: rt(lhs),
+        rhs: rt(rhs),
+    };
+    // Congruence through β-convertible components.
+    assert_eq!(
+        conv_type(&psi, &g0, Layer::Prog, &id(beta_zero(), Term::Zero),
+                  &id(Term::Zero, Term::Zero), &c(0), FUEL),
+        Ok(())
+    );
+    // Distinct endpoints are caught.
+    assert_eq!(
+        conv_type(&psi, &g0, Layer::Prog, &id(Term::Zero, Term::Zero),
+                  &id(Term::Zero, num(1)), &c(0), FUEL),
+        Err(ConvError::NotConvertible)
+    );
+    // El of the encoding decodes to the Id former.
+    let el_id = Type::El {
+        level: Level::Zero,
+        tm: rt(Term::TmId {
+            level: Level::Zero,
+            ty: rt(Term::TmNat),
+            lhs: rt(beta_zero()),
+            rhs: rt(Term::Zero),
+        }),
+    };
+    assert_eq!(
+        conv_type(&psi, &g0, Layer::Prog, &el_id, &id(Term::Zero, Term::Zero), &c(0), FUEL),
+        Ok(())
+    );
+}
+
+#[test]
+fn refl_and_j_conversion() {
+    let psi = psi(vec![]);
+    let id00 = Type::Id {
+        level: Level::Zero,
+        ty: rty(Type::Nat),
+        lhs: rt(Term::Zero),
+        rhs: rt(Term::Zero),
+    };
+    // refl ≈ refl at Id, through β-convertible points.
+    let refl = |tm: Term| Term::Refl { level: Level::Zero, ty: rty(Type::Nat), tm: rt(tm) };
+    ok_tm(&psi, &nil_ctx(0), &refl(beta_zero()), &refl(Term::Zero), &id00, &c(0));
+    // J β-fires against its case during conversion.
+    let j = |case: Term, proof: Term| Term::J {
+        ty_level: Level::Zero,
+        motive_level: Level::Zero,
+        ty: rty(Type::Nat),
+        lhs: rt(Term::Zero),
+        motive: rty(Type::Nat),
+        case: rt(case),
+        rhs: rt(Term::Zero),
+        proof: rt(proof),
+    };
+    ok_tm(&psi, &nil_ctx(0), &j(num(2), refl(Term::Zero)), &num(2), &Type::Nat, &c(0));
+    // Neutral J (proof is a variable): annotations compared, β-convertible
+    // cases accepted, differing cases rejected.
+    let gamma = extend(&nil_ctx(0), id00, c(0));
+    ok_tm(&psi, &gamma, &j(beta_zero(), v(0)), &j(Term::Zero, v(0)), &Type::Nat, &c(0));
+    no_tm(&psi, &gamma, &j(Term::Zero, v(0)), &j(num(1), v(0)), &Type::Nat, &c(0));
 }

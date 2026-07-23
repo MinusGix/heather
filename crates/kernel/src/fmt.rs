@@ -100,6 +100,9 @@ impl fmt::Debug for Type {
                 write!(f, "ΠΠ[{num_vars}ℓ@{level:?}]. {body:?}")
             }
             Type::El { level, tm } => write!(f, "El[{level:?}]({tm:?})"),
+            Type::Id { level, ty, lhs, rhs } => {
+                write!(f, "Id[{level:?}]({ty:?}; {lhs:?}; {rhs:?})")
+            }
             Type::GlobalTy { var, subst } => write!(f, "U{}^{subst:?}", var.0),
             Type::CtxPi { level, body } => write!(f, "Π[g:Ctx@{level:?}]. {body:?}"),
             Type::TyPi { ctx, arg_level, body_level, body } => {
@@ -122,11 +125,19 @@ impl fmt::Debug for Term {
                 write!(f, "«Π[{dom_level:?},{cod_level:?}]({dom:?}). {cod:?}»")
             }
             Term::TmTy(l) => write!(f, "«Ty {l:?}»"),
+            Term::TmId { level, ty, lhs, rhs } => {
+                write!(f, "«Id[{level:?}]({ty:?}; {lhs:?}; {rhs:?})»")
+            }
             Term::Zero => f.write_str("0"),
             Term::Succ(t) => write!(f, "S({t:?})"),
             Term::ElimNat { level, motive, base, step, scrut } => write!(
                 f,
                 "elimN[{level:?}](M {motive:?}; z {base:?}; s {step:?}; {scrut:?})"
+            ),
+            Term::Refl { level, ty, tm } => write!(f, "refl[{level:?}]({ty:?}; {tm:?})"),
+            Term::J { ty_level, motive_level, ty, lhs, motive, case, rhs, proof } => write!(
+                f,
+                "J[{ty_level:?},{motive_level:?}]({ty:?}; a {lhs:?}; M {motive:?}; c {case:?}; {rhs:?}; {proof:?})"
             ),
             Term::Lam { dom_level, cod_level, dom, body } => {
                 write!(f, "λ[{dom_level:?},{cod_level:?}]({dom:?}). {body:?}")
@@ -239,11 +250,12 @@ impl fmt::Debug for Branches {
         node(f, |f| {
             write!(
                 f,
-                "b⃗(Nat {:?}; Π {:?}; Ty {:?}; El {:?} | x {:?}; «Nat» {:?}; «Π» {:?}; «Ty» {:?}; 0 {:?}; S {:?}; elimN {:?}; λ {:?}; app {:?})",
+                "b⃗(Nat {:?}; Π {:?}; Ty {:?}; El {:?}; Id {:?} | x {:?}; «Nat» {:?}; «Π» {:?}; «Ty» {:?}; 0 {:?}; S {:?}; elimN {:?}; λ {:?}; app {:?}; «Id» {:?}; refl {:?}; J {:?})",
                 self.ty_nat,
                 self.ty_pi,
                 self.ty_ty,
                 self.ty_el,
+                self.ty_id,
                 self.tm_var,
                 self.tm_nat,
                 self.tm_pi,
@@ -253,6 +265,9 @@ impl fmt::Debug for Branches {
                 self.tm_elim_nat,
                 self.tm_lam,
                 self.tm_app,
+                self.tm_id,
+                self.tm_refl,
+                self.tm_j,
             )
         })
     }

@@ -59,3 +59,5 @@ checking-descent story — eliminators should stay inferable (annotated like
 unaffected.
 
 ## Log
+
+- 2026-07-23: Id landed: Type::Id + TmId encoding (El decode rule), refl, PM-based J (motive binds y,p; case closed; β J…refl ⇝ c). Threaded through subst (J motive dep(0,0,2)), typing, reduction, conversion (Id/TmId congruence, J neutral arm mirroring ElimNat), and the code recursors: four new branches ty_id/tm_id/tm_refl/tm_j (17 total), tm_j telescope modeled on tm_elim_nat (univs 2, globals 7, locals 6). All five transcriptions updated (rec.rs, subst depths, reduce β, BRANCH_DIMS, identity_branches x2, gen_branches); identity-recursor tests cross-check the new telescopes end-to-end. Generators (well-scoped + well-typed) now emit Id forms; golden tests for typing/reduction/conversion added. DESIGN.md fragment note updated. Next in the set: Σ.
