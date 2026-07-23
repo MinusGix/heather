@@ -27,11 +27,13 @@ use heather_kernel::term::{
 /// terms into an in-memory string, and substituted terms are large enough to
 /// OOM the machine. Report only the seed; reproduce it in isolation to
 /// inspect.
+#[allow(unused_macros)] // not every test binary asserts laws
 macro_rules! law {
     ($seed:expr, $a:expr, $b:expr) => {
         assert!($a == $b, "law violated at seed {} (term output suppressed)", $seed);
     };
 }
+#[allow(unused_imports)]
 pub(crate) use law;
 
 // -------------------------------------------------------------------------

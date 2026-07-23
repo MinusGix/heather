@@ -318,7 +318,7 @@ pub fn gen_wt_type(env: &WtEnv, r: &mut Rng, b: u32) -> (Rc<Type>, Level) {
 }
 
 /// Synthesize an encoding `⊢_i t : Ty l @ 1+l`, returning `(t, l)`.
-fn gen_encoding(env: &WtEnv, r: &mut Rng, b: u32) -> (Rc<Term>, Level) {
+pub fn gen_encoding(env: &WtEnv, r: &mut Rng, b: u32) -> (Rc<Term>, Level) {
     match r.below(3) {
         0 => (rt(Term::TmNat), Level::Zero),
         1 => {
@@ -835,18 +835,53 @@ const BRANCH_DIMS: [(u32, u32, u32, bool, bool); 13] = [
     (2, 5, 4, true, true),   // tm_app
 ];
 
+/// A Γ-variable whose WHNF type is a contextual type matching `tm_variant`:
+/// `(index, Δ, T?, l)`. Δ and T live in their own scopes (local contexts
+/// never reference the ambient Γ), so they are usable as recursor header
+/// fields directly.
+fn find_code_var(
+    env: &WtEnv,
+    r: &mut Rng,
+    tm_variant: bool,
+) -> Option<(u32, LocalCtx, Option<Rc<Type>>, Level)> {
+    let n = env.gamma.entries.len() as u32;
+    if n == 0 {
+        return None;
+    }
+    let start = r.below(n);
+    for k in 0..n {
+        let x = (start + k) % n;
+        let i = env.gamma.entries.len() - 1 - x as usize;
+        let ty = env.gamma.entries[i].ty.shift_local(x + 1);
+        let Ok(w) = whnf_type(&ty, &env.gamma, FUEL) else { continue };
+        match w {
+            Type::CodeTy { ctx, level } if !tm_variant => {
+                return Some((x, ctx, None, level));
+            }
+            Type::CodeTm { ctx, ty, level } if tm_variant => {
+                return Some((x, ctx, Some(ty), level));
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
 /// A code recursor with constant motives `M₁ = typeof(m₁)`, `M₂ =
 /// typeof(m₂)`: every branch is the matching inhabitant weakened by its
 /// telescope depths (or `Var(0)` where the innermost recursive call has the
-/// right motive). `tm_variant` selects `elim^Trm` over `elim^Typ`.
+/// right motive). `tm_variant` selects `elim^Trm` over `elim^Typ`. When a
+/// Γ-variable of matching contextual type exists, the scrutinee is sometimes
+/// that variable instead of freshly boxed code — the recursor is then
+/// *neutral*, so conversion's branchwise comparison path gets exercised, not
+/// just β-firing.
 fn gen_const_rec(
     env: &WtEnv,
     r: &mut Rng,
     b: u32,
     tm_variant: bool,
 ) -> (Rc<Term>, Rc<Type>, Level) {
-    let delta = gen_wt_ctx(env, r, b / 4, Layer::Prog);
-    let ce = env.in_ctx(delta.clone(), Layer::Code);
+    let neutral = if r.below(3) == 0 { find_code_var(env, r, tm_variant) } else { None };
     let (m1t, m1ty, l1) = guard(env.univs, gen_wt_term(env, r, b / 4));
     let (m2t, m2ty, l2) = guard(env.univs, gen_wt_term(env, r, b / 4));
     let motives = Rc::new(Motives {
@@ -878,7 +913,15 @@ fn gen_const_rec(
         tm_app: bs[12].clone(),
     });
     if tm_variant {
-        let (tc, cty, cl) = gen_wt_term(&ce, r, b / 4);
+        let (scrut, delta, cty, cl) = match neutral {
+            Some((x, ctx, Some(cty), cl)) => (rt(v(x)), ctx, cty, cl),
+            _ => {
+                let delta = gen_wt_ctx(env, r, b / 4, Layer::Prog);
+                let ce = env.in_ctx(delta.clone(), Layer::Code);
+                let (tc, cty, cl) = gen_wt_term(&ce, r, b / 4);
+                (rt(Term::BoxTm(tc)), delta, cty, cl)
+            }
+        };
         (
             rt(Term::ElimCodeTm {
                 ty_motive_level: l1,
@@ -888,13 +931,21 @@ fn gen_const_rec(
                 code_level: cl,
                 ctx: delta,
                 ty: cty,
-                scrut: rt(Term::BoxTm(tc)),
+                scrut,
             }),
             m2ty,
             l2,
         )
     } else {
-        let (cty, cl) = gen_wt_type(&ce, r, b / 4);
+        let (scrut, delta, cl) = match neutral {
+            Some((x, ctx, None, cl)) => (rt(v(x)), ctx, cl),
+            _ => {
+                let delta = gen_wt_ctx(env, r, b / 4, Layer::Prog);
+                let ce = env.in_ctx(delta.clone(), Layer::Code);
+                let (cty, cl) = gen_wt_type(&ce, r, b / 4);
+                (rt(Term::BoxTy(cty)), delta, cl)
+            }
+        };
         (
             rt(Term::ElimCodeTy {
                 ty_motive_level: l1.clone(),
@@ -903,11 +954,245 @@ fn gen_const_rec(
                 branches,
                 code_level: cl,
                 ctx: delta,
-                scrut: rt(Term::BoxTy(cty)),
+                scrut,
             }),
             m1ty,
             l1,
         )
+    }
+}
+
+// -------------------------------------------------------------------------
+// Convertible perturbations (issues/kernel-conv-pair-properties.md)
+// -------------------------------------------------------------------------
+
+/// A term structurally distinct from `t` but convertible to it at
+/// `ty @ l`, built by a root-level expansion: a β-redex wrap, `elim_Nat` on
+/// a numeral with a constant motive, `letbox` over fresh code, or
+/// η-expansion at the WHNF of `ty`. Root-only on purpose: box bodies
+/// compare *syntactically*, so perturbing under a `box` breaks
+/// convertibility. `None` only when no strategy is applicable (an ω-level
+/// term whose type is not a `ΠΠ`, which the generator never produces).
+///
+/// Results are not checker-filtered — callers assert `check_term` passes,
+/// keeping a perturbation bug distinct from a conversion bug.
+pub fn perturb_conv(
+    env: &WtEnv,
+    r: &mut Rng,
+    t: &Rc<Term>,
+    ty: &Rc<Type>,
+    l: &Level,
+) -> Option<Rc<Term>> {
+    let w = whnf_type(ty, &env.gamma, FUEL).ok()?;
+    let meta = env.layer == Layer::Meta;
+    // ω-level results cannot be re-stated as λ/elim/letbox annotations.
+    let finite = l.well_formed(env.univs);
+    let mut arms: Vec<u32> = vec![];
+    if finite {
+        arms.extend([0, 1]);
+        if meta {
+            arms.push(2);
+        }
+    }
+    match &w {
+        Type::Pi { .. } => arms.push(3),
+        Type::UPi { .. } if meta => arms.push(4),
+        Type::CtxPi { .. } | Type::TyPi { .. } if meta => arms.push(5),
+        _ => {}
+    }
+    if arms.is_empty() {
+        return None;
+    }
+    let t2 = match arms[r.below(arms.len() as u32) as usize] {
+        // β: app(λ(x : Nat). t↑; n) — one β-step from t.
+        0 => Term::App {
+            fun: rt(Term::Lam {
+                dom_level: Level::Zero,
+                cod_level: l.clone(),
+                dom: rty(Type::Nat),
+                body: rt(t.shift_local(1)),
+            }),
+            dom_level: Level::Zero,
+            cod_level: l.clone(),
+            dom: rty(Type::Nat),
+            cod: rty(ty.shift_local(1)),
+            arg: gen_nat(env, r),
+        },
+        // elim_Nat with the constant motive T: computes to t on a numeral.
+        1 => {
+            let mut scrut = Term::Zero;
+            for _ in 0..r.below(3) {
+                scrut = Term::Succ(rt(scrut));
+            }
+            let step = if r.below(2) == 0 { rt(v(0)) } else { rt(t.shift_local(2)) };
+            Term::ElimNat {
+                level: l.clone(),
+                motive: rty(ty.shift_local(1)),
+                base: Rc::clone(t),
+                step,
+                scrut: rt(scrut),
+            }
+        }
+        // letbox over fresh boxed code with the constant motive T.
+        2 => {
+            let delta = gen_wt_ctx(env, r, 2, Layer::Prog);
+            let ce = env.in_ctx(delta.clone(), Layer::Code);
+            let (tc, cty, cl) = gen_wt_term(&ce, r, 2);
+            Term::LetBoxTm {
+                motive_level: l.clone(),
+                code_level: cl,
+                ctx: delta,
+                ty: cty,
+                motive: rty(ty.shift_local(1)),
+                body: rt(t.shift_global(1)),
+                scrut: rt(Term::BoxTm(tc)),
+            }
+        }
+        // η at Π: λ(x : S). app(t↑; x). The cod annotation moves under the
+        // App binder exactly as in conv.rs's η rule: Π's variable ↦ Var 0,
+        // Γ weakens by 2 (λ binder + App's cod binder).
+        3 => {
+            let Type::Pi { dom_level, cod_level, dom, cod } = &w else { unreachable!() };
+            let cod_ann = rty(cod.apply_local(
+                &LocalSubst::id(&env.gamma).shift_local(2).extended(rt(v(0))),
+            ));
+            Term::Lam {
+                dom_level: dom_level.clone(),
+                cod_level: cod_level.clone(),
+                dom: Rc::clone(dom),
+                body: rt(Term::App {
+                    fun: rt(t.shift_local(1)),
+                    dom_level: dom_level.clone(),
+                    cod_level: cod_level.clone(),
+                    dom: rty(dom.shift_local(1)),
+                    cod: cod_ann,
+                    arg: rt(v(0)),
+                }),
+            }
+        }
+        // η at ΠΠ: Λ ℓ⃗. t↑ $ ℓ⃗ — the only strategy for ω-level terms.
+        4 => {
+            let Type::UPi { num_vars, level, .. } = &w else { unreachable!() };
+            let n = *num_vars;
+            Term::ULam {
+                num_vars: n,
+                level: level.clone(),
+                body: rt(Term::UApp {
+                    fun: rt(t.shift_univ(n)),
+                    levels: (0..n).rev().map(|i| Level::Var(UnivVar(i))).collect(),
+                }),
+            }
+        }
+        // η at ⇒: context / type meta-functions.
+        _ => match &w {
+            Type::CtxPi { level, .. } => Term::CtxLam {
+                level: level.clone(),
+                body: rt(Term::CtxApp { fun: rt(t.shift_global(1)), ctx: g_ctx(0) }),
+            },
+            Type::TyPi { ctx, arg_level, body_level, .. } => Term::TyLam {
+                ctx: ctx.clone(),
+                arg_level: arg_level.clone(),
+                body_level: body_level.clone(),
+                body: rt(Term::TyApp {
+                    fun: rt(t.shift_global(1)),
+                    arg: rty(gty(0, &ctx.shift_global(1))),
+                }),
+            },
+            _ => unreachable!(),
+        },
+    };
+    Some(rt(t2))
+}
+
+// -------------------------------------------------------------------------
+// Neutral recursors at constant Nat motives
+// -------------------------------------------------------------------------
+
+/// A *neutral* code recursor at type `Nat @ 0`: both motives are the
+/// constant `Nat` and the scrutinee is a Γ-variable (`Var 0`, pushed by
+/// [`gen_nat_rec`]), so conversion cannot fire β and must compare the 13
+/// branches pairwise under their telescopes (`rec_ca`). Every branch type
+/// collapses to `Nat`, so *closed* `Nat` terms (numerals and wraps thereof)
+/// are well-typed branch bodies under every telescope — callers build twins
+/// differing in chosen branches via [`NatRec::build`].
+pub struct NatRec {
+    /// The ambient scope, layer m, with the scrutinee entry pushed last.
+    pub env: WtEnv,
+    tm_variant: bool,
+    ctx: LocalCtx,
+    ty: Option<Rc<Type>>,
+    code_level: Level,
+}
+
+/// Extend `base` (forced to layer m) with a `□`-typed entry and describe the
+/// neutral recursor over it. `tm_variant` selects `elim^Trm` over `elim^Typ`.
+pub fn gen_nat_rec(base: &WtEnv, r: &mut Rng, tm_variant: bool) -> NatRec {
+    let mut env = base.clone();
+    env.layer = Layer::Meta;
+    let ctx = gen_wt_ctx(&env, r, 2, Layer::Prog);
+    let (entry, ty, code_level) = if tm_variant {
+        let ce = env.in_ctx(ctx.clone(), Layer::Code);
+        let (cty, cl) = gen_wt_type(&ce, r, 2);
+        (
+            Type::CodeTm { ctx: ctx.clone(), ty: Rc::clone(&cty), level: cl.clone() },
+            Some(cty),
+            cl,
+        )
+    } else {
+        let cl = gen_wf_level(env.univs, r, 1);
+        (Type::CodeTy { ctx: ctx.clone(), level: cl.clone() }, None, cl)
+    };
+    // Contextual types live at universe 0. Δ and the code type never mention
+    // Γ's locals, so pushing the entry needs no shifts in the header fields.
+    let env = env.push_entry(rty(entry), Level::Zero);
+    NatRec { env, tm_variant, ctx, ty, code_level }
+}
+
+impl NatRec {
+    /// The recursor over `Var 0` with the given branch bodies, in
+    /// [`Branches`] field order. Checks at `Nat @ 0` in `self.env`.
+    pub fn build(&self, bs: &[Rc<Term>; 13]) -> Rc<Term> {
+        let motives = Rc::new(Motives {
+            ty_motive: rty(Type::Nat),
+            tm_motive: rty(Type::Nat),
+        });
+        let branches = Rc::new(Branches {
+            ty_nat: bs[0].clone(),
+            ty_pi: bs[1].clone(),
+            ty_ty: bs[2].clone(),
+            ty_el: bs[3].clone(),
+            tm_var: bs[4].clone(),
+            tm_nat: bs[5].clone(),
+            tm_pi: bs[6].clone(),
+            tm_ty: bs[7].clone(),
+            tm_zero: bs[8].clone(),
+            tm_succ: bs[9].clone(),
+            tm_elim_nat: bs[10].clone(),
+            tm_lam: bs[11].clone(),
+            tm_app: bs[12].clone(),
+        });
+        rt(if self.tm_variant {
+            Term::ElimCodeTm {
+                ty_motive_level: Level::Zero,
+                tm_motive_level: Level::Zero,
+                motives,
+                branches,
+                code_level: self.code_level.clone(),
+                ctx: self.ctx.clone(),
+                ty: Rc::clone(self.ty.as_ref().expect("tm variant carries a code type")),
+                scrut: rt(v(0)),
+            }
+        } else {
+            Term::ElimCodeTy {
+                ty_motive_level: Level::Zero,
+                tm_motive_level: Level::Zero,
+                motives,
+                branches,
+                code_level: self.code_level.clone(),
+                ctx: self.ctx.clone(),
+                scrut: rt(v(0)),
+            }
+        })
     }
 }
 
