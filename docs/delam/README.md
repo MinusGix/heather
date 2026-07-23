@@ -52,6 +52,14 @@ module docs):
   level metavariables on both sides where every comparable rule (`Ty`,
   `ΠΠ`, `⇒`, application) has explicit `l ≈ l'` premises; annotation levels
   are compared up to `≈` like everywhere else.
+- **04, letbox scrutinee levels**: the `letbox` typing rules give the
+  scrutinee judgments `⊢ t : □(Δ ⊢ Ty l) @ 1+l` and `⊢ t : □(Δ ⊢ T @ l) @ l`,
+  but contextual types live at universe **0** (their formation rules, the
+  recursor rules' `⊢ t : □(…) @ 0`, and the surrounding discussion all say
+  so). The kernel checks letbox scrutinees at level 0.
+- **04, `ΠΠ` well-formedness premise layer**: the rule writes
+  `⊢_1 T @ l` for the body; the layer index must be `m` (universe
+  polymorphism is layer-m only, as its own typing rules state).
 
 Kernel-facing summary of the layer structure (ch. 04, Table feat):
 

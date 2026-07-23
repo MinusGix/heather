@@ -1,6 +1,6 @@
 ---
 title: Implement the typing judgments / type checker (ch. 04)
-status: open
+status: closed
 labels: [kernel, delam]
 blocked-by: [kernel-conversion]
 created: 2026-07-22
@@ -36,3 +36,4 @@ layer m.
 ## Log
 
 - 2026-07-22: Conversion landed (conv.rs); handoff notes: (1) call conv only on already-checked inputs - it presupposes well-typedness (see DESIGN.md trust-boundary note); (2) API is conv_type/conv_term/conv_local_ctx(Psi, Gamma, layer, ..., fuel) - the judgment-level argument is inert, pass whatever the rule gives you; (3) the checker owns the fuel policy - pick a default and thread it, OutOfFuel should surface as its own type-checking error, not 'not equal'; (4) neutral inference inside conv is left-biased and returns (Type, Level) but the public API discards it - the bidirectional checker computes its own types and only asks yes/no.
+- 2026-07-22: Implemented in crates/kernel/src/typing.rs (tests: crates/kernel/tests/typing.rs). Handoff notes: (1) refactor: the 13 branch telescopes + 2 motive scopes moved from conv.rs into src/rec.rs (motive_specs/branch_specs), shared by conversion and typing - edit them in ONE place only; (2) API is check_global_ctx / check_local_ctx / check_type / infer_type / check_term / infer_term / check_local_subst, all taking (psi, univs=|L|, layer, gamma, ..., fuel); inference returns the canonical type/level, checking = infer + conv at typeof(i) + level equiv; (3) box is checking-only; checking descends through Lam/ULam/CtxLam/TyLam, but box in an immediately-beta-reduced meta-function body is NotInferable (documented incompleteness, see DESIGN.md); (4) fuel is per-conversion/per-whnf, not a shared budget; OutOfFuel is its own TypeError; (5) two new tex errata recorded in docs/delam/README.md (letbox scrutinee levels are 0, UPi wf premise layer '1' means m); (6) the identity-recursor tests in tests/typing.rs re-elaborate all 13 telescopes by hand - keep them in sync with rec.rs if the tables ever change.

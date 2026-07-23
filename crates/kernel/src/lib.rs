@@ -10,6 +10,8 @@ pub mod conv;
 mod fmt;
 pub mod layer;
 pub mod level;
+mod rec;
 pub mod reduce;
 pub mod subst;
 pub mod term;
+pub mod typing;

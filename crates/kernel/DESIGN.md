@@ -64,9 +64,18 @@ inductive types beyond Nat, the type lifter (omitted by the paper too).
   nodes); the fuel *policy* is the caller's, to be fixed by the type
   checker.
 - **Type checking** is syntax-directed on fully explicit core terms — the
-  kernel does no inference, no implicit insertion, no elaboration. The
-  conversion rule fires exactly where the bidirectional structure demands a
-  check against an expected type.
+  kernel does no implicit insertion and no elaboration. Every form except
+  `box` synthesizes its canonical type/level from its annotations; checking
+  = synthesize + conversion at `typeof(i)` + level `≈`, which is exactly
+  where the two conversion rules fire. `box` (no Δ/l in the term, per the
+  paper's syntax) is checking-only; checking descends structurally through
+  the four function intro forms so boxed bodies still check. Known
+  incompleteness, documented in `typing.rs`: a `box` in the body of an
+  *immediately β-reduced* meta-function (e.g. `(Λ g. box Nat) @ Δ`) cannot
+  be synthesized — elaborators must bind such code with `letbox` instead.
+  The recursor telescopes live once in `rec.rs`, shared by conversion and
+  typing. Fuel is granted per conversion call / per weak-head normalization
+  (the checker's own recursion is structural, hence total without fuel).
 
 ## Representation
 
