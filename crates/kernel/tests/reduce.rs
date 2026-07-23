@@ -164,6 +164,10 @@ fn dummy_branches() -> Branches {
         tm_inl: z(),
         tm_inr: z(),
         tm_case: z(),
+        ty_w: z(),
+        tm_w: z(),
+        tm_sup: z(),
+        tm_elim_w: z(),
     }
 }
 
@@ -1904,6 +1908,371 @@ fn beta_elim_code_tm_case() {
         Term::BoxTm(rt(num(3))),
         Term::TmTy(c(1)),
         Term::TmTy(c(2)),
+        Term::TmTy(Level::Zero),
+    ]);
+    assert_eq!(step_term(&t, &gamma), Some(expect));
+}
+
+// -------------------------------------------------------------------------
+// W-types (extension; kernel-v1-extensions)
+// -------------------------------------------------------------------------
+
+/// `W^{0,0}(x : Nat). Empty` — Nat-labeled leaves (every node childless).
+fn w_nat_empty() -> Type {
+    Type::W {
+        shape_level: Level::Zero,
+        pos_level: Level::Zero,
+        shape: rty(Type::Nat),
+        pos: rty(Type::Empty),
+    }
+}
+
+/// `λ^{0,0}(y : Empty). elim_Empty^0 (x. W; y)` — the childless subtree
+/// function (everything closed, so no shifts are needed).
+fn no_children() -> Term {
+    Term::Lam {
+        dom_level: Level::Zero,
+        cod_level: Level::Zero,
+        dom: rty(Type::Empty),
+        body: rt(Term::ElimEmpty {
+            level: Level::Zero,
+            motive: rty(w_nat_empty()),
+            scrut: rt(v(0)),
+        }),
+    }
+}
+
+fn sup_leaf(label: Term) -> Term {
+    Term::Sup {
+        shape_level: Level::Zero,
+        pos_level: Level::Zero,
+        shape_ty: rty(Type::Nat),
+        pos_ty: rty(Type::Empty),
+        label: rt(label),
+        children: rt(no_children()),
+    }
+}
+
+#[test]
+fn el_decodes_tm_w() {
+    // El^{1⊔2} (W (x : «Ty 0»). «Nat») ⇝ W (x : El^1 «Ty 0»). El^2 «Nat».
+    let gamma = nil_ctx(0);
+    let t = Type::El {
+        level: Level::max(c(1), c(2)),
+        tm: rt(Term::TmW {
+            shape_level: c(1),
+            pos_level: c(2),
+            shape: rt(Term::TmTy(c(0))),
+            pos: rt(Term::TmNat),
+        }),
+    };
+    let expect = Type::W {
+        shape_level: c(1),
+        pos_level: c(2),
+        shape: rty(Type::El { level: c(1), tm: rt(Term::TmTy(c(0))) }),
+        pos: rty(Type::El { level: c(2), tm: rt(Term::TmNat) }),
+    };
+    assert_eq!(step_type(&t, &gamma), Some(expect.clone()));
+    assert!(is_whnf_type(&expect));
+}
+
+#[test]
+fn beta_elim_w_and_congruence() {
+    let gamma = nil_ctx(1);
+    // elim_W^{0,0,0}(x:Nat. Empty; z. Nat; a f ih. step; scrut).
+    let elim = |step: Term, scrut: Term| Term::ElimW {
+        shape_level: Level::Zero,
+        pos_level: Level::Zero,
+        motive_level: Level::Zero,
+        shape: rty(Type::Nat),
+        pos: rty(Type::Empty),
+        motive: rty(Type::Nat),
+        step: rt(step),
+        scrut: rt(scrut),
+    };
+    // step = a: β yields the label.
+    assert_eq!(step_term(&elim(v(2), sup_leaf(num(1))), &gamma), Some(num(1)));
+    // step = f: β yields the subtree function verbatim.
+    assert_eq!(
+        step_term(&elim(v(1), sup_leaf(num(1))), &gamma),
+        Some(no_children())
+    );
+    // step = ih: β synthesizes λ(y : T[a/x]). elim_W … (f y) — everything
+    // here is closed, so the expected term is exact.
+    let f_y = Term::App {
+        fun: rt(no_children()),
+        dom_level: Level::Zero,
+        cod_level: Level::max(Level::Zero, Level::Zero),
+        dom: rty(Type::Empty),
+        cod: rty(w_nat_empty()),
+        arg: rt(v(0)),
+    };
+    let expect_ih = Term::Lam {
+        dom_level: Level::Zero,
+        cod_level: Level::Zero,
+        dom: rty(Type::Empty),
+        body: rt(elim(v(0), f_y)),
+    };
+    assert_eq!(step_term(&elim(v(0), sup_leaf(num(1))), &gamma), Some(expect_ih));
+    // Congruence reduces a redex scrutinee first.
+    let redex = app2(lam(sup_leaf(num(2))), Term::Zero);
+    let stepped = step_term(&elim(v(2), redex), &gamma).unwrap();
+    assert_eq!(step_term(&stepped, &gamma), Some(num(2)));
+    // Blocked on a neutral scrutinee: neutral, no step.
+    let blocked = elim(v(2), v(0));
+    assert_eq!(step_term(&blocked, &gamma), None);
+    assert!(is_neutral_term(&blocked));
+    // sup and the encoding are WHNFs.
+    assert!(is_whnf_term(&sup_leaf(num(1))));
+    assert!(is_whnf_term(&Term::TmW {
+        shape_level: Level::Zero,
+        pos_level: Level::Zero,
+        shape: rt(Term::TmNat),
+        pos: rt(Term::TmNat),
+    }));
+}
+
+#[test]
+fn beta_elim_code_ty_w() {
+    // Telescope (ℓ, ℓ', g, U_S, U_T, x_S, x_T. t_W): globals g=2, U_S=1,
+    // U_T=0; locals x_S=1, x_T=0. Univs ℓ=1, ℓ'=0. Mirrors ty_sigma.
+    let gamma = nil_ctx(0);
+    let delta = nil_ctx(1);
+    let mut b = dummy_branches();
+    b.ty_w = rt(chain(vec![
+        v(1),              // x_S
+        v(0),              // x_T
+        box_gty(1, 2, 0),  // box U_S^{id}
+        box_gty(0, 2, 1),  // box U_T^{id} (context (g, x))
+        Term::TmTy(lv(1)), // ℓ
+        Term::TmTy(lv(0)), // ℓ'
+    ]));
+    let b = Rc::new(b);
+    let code = Type::W {
+        shape_level: c(1),
+        pos_level: c(2),
+        shape: rty(Type::Nat),
+        pos: rty(Type::Nat),
+    };
+    let t = elim_ty(&b, Level::max(c(1), c(2)), delta.clone(), Term::BoxTy(rty(code)));
+
+    let s_shape = elim_ty(&b, c(1), delta.clone(), Term::BoxTy(rty(Type::Nat)));
+    let dx = extend(&delta, Type::Nat, c(1));
+    let s_pos = elim_ty(&b, c(2), dx, Term::BoxTy(rty(Type::Nat)));
+    let expect = chain(vec![
+        s_shape,
+        s_pos,
+        Term::BoxTy(rty(Type::Nat)),
+        Term::BoxTy(rty(Type::Nat)),
+        Term::TmTy(c(1)),
+        Term::TmTy(c(2)),
+    ]);
+    assert_eq!(step_term(&t, &gamma), Some(expect));
+}
+
+#[test]
+fn beta_elim_code_tm_w() {
+    // Telescope (ℓ, ℓ', g, u_s, u_t, x_s, x_t. t'_W): globals g=2, u_s=1,
+    // u_t=0; locals x_s=1, x_t=0. The encoding; u_t lives in (g, x : El u_s).
+    let gamma = nil_ctx(0);
+    let delta = nil_ctx(1);
+    let mut b = dummy_branches();
+    b.tm_w = rt(chain(vec![
+        v(1),              // x_s
+        v(0),              // x_t
+        box_gtm(1, 2, 0),  // box u_s^{id}
+        box_gtm(0, 2, 1),  // box u_t^{id} (context (g, x))
+        Term::TmTy(lv(1)), // ℓ
+        Term::TmTy(lv(0)), // ℓ'
+    ]));
+    let b = Rc::new(b);
+    let lmax = Level::max(c(1), Level::Zero);
+    let code = Term::TmW {
+        shape_level: c(1),
+        pos_level: Level::Zero,
+        shape: rt(Term::TmTy(c(0))), // : Ty 1
+        pos: rt(Term::TmNat),        // : Ty 0
+    };
+    let t = elim_tm(
+        &b,
+        Level::succ(lmax.clone()),
+        delta.clone(),
+        Type::Ty(lmax),
+        Term::BoxTm(rt(code)),
+    );
+
+    let s_shape = elim_tm(
+        &b,
+        Level::succ(c(1)),
+        delta.clone(),
+        Type::Ty(c(1)),
+        Term::BoxTm(rt(Term::TmTy(c(0)))),
+    );
+    let dx = extend(
+        &delta,
+        Type::El { level: c(1), tm: rt(Term::TmTy(c(0))) },
+        c(1),
+    );
+    let s_pos = elim_tm(
+        &b,
+        Level::succ(Level::Zero),
+        dx,
+        Type::Ty(Level::Zero),
+        Term::BoxTm(rt(Term::TmNat)),
+    );
+    let expect = chain(vec![
+        s_shape,
+        s_pos,
+        Term::BoxTm(rt(Term::TmTy(c(0)))),
+        Term::BoxTm(rt(Term::TmNat)),
+        Term::TmTy(c(1)),
+        Term::TmTy(Level::Zero),
+    ]);
+    assert_eq!(step_term(&t, &gamma), Some(expect));
+}
+
+#[test]
+fn beta_elim_code_tm_sup() {
+    // Telescope (ℓ, ℓ', g, U_S, U_T, u_a, u_f, x_S, x_T, x_a, x_f. t_sup):
+    // globals g=4, U_S=3, U_T=2, u_a=1, u_f=0; locals x_S=3, x_T=2, x_a=1,
+    // x_f=0. Univs ℓ=1, ℓ'=0. Mirrors tm_pair.
+    let gamma = nil_ctx(0);
+    let delta = nil_ctx(1);
+    let mut b = dummy_branches();
+    b.tm_sup = rt(chain(vec![
+        v(3),              // x_S
+        v(2),              // x_T
+        v(1),              // x_a
+        v(0),              // x_f
+        box_gty(3, 4, 0),  // box U_S^{id}
+        box_gty(2, 4, 1),  // box U_T^{id} (context (g, x))
+        box_gtm(1, 4, 0),  // box u_a^{id}
+        box_gtm(0, 4, 0),  // box u_f^{id}
+        Term::TmTy(lv(1)), // ℓ
+        Term::TmTy(lv(0)), // ℓ'
+    ]));
+    let b = Rc::new(b);
+    let code = sup_leaf(num(1));
+    let t = elim_tm(
+        &b,
+        Level::max(Level::Zero, Level::Zero),
+        delta.clone(),
+        w_nat_empty(),
+        Term::BoxTm(rt(code)),
+    );
+
+    let s_shape = elim_ty(&b, Level::Zero, delta.clone(), Term::BoxTy(rty(Type::Nat)));
+    let dx = extend(&delta, Type::Nat, Level::Zero);
+    let s_pos = elim_ty(&b, Level::Zero, dx, Term::BoxTy(rty(Type::Empty)));
+    let s_label = elim_tm(
+        &b,
+        Level::Zero,
+        delta.clone(),
+        Type::Nat,
+        Term::BoxTm(rt(num(1))),
+    );
+    let lmax = Level::max(Level::Zero, Level::Zero);
+    let f_ty = Type::Pi {
+        dom_level: Level::Zero,
+        cod_level: lmax.clone(),
+        dom: rty(Type::Empty),
+        cod: rty(w_nat_empty()),
+    };
+    let s_children = elim_tm(
+        &b,
+        Level::max(Level::Zero, lmax),
+        delta.clone(),
+        f_ty,
+        Term::BoxTm(rt(no_children())),
+    );
+    let expect = chain(vec![
+        s_shape,
+        s_pos,
+        s_label,
+        s_children,
+        Term::BoxTy(rty(Type::Nat)),
+        Term::BoxTy(rty(Type::Empty)),
+        Term::BoxTm(rt(num(1))),
+        Term::BoxTm(rt(no_children())),
+        Term::TmTy(Level::Zero),
+        Term::TmTy(Level::Zero),
+    ]);
+    assert_eq!(step_term(&t, &gamma), Some(expect));
+}
+
+#[test]
+fn beta_elim_code_tm_elim_w() {
+    // Telescope (ℓ, ℓ', ℓ'', g, U_S, U_T, U_M, u_s, u_t, x_S, x_T, x_M, x_s,
+    // x_t. t_elimW): globals g=5, U_S=4, U_T=3, U_M=2, u_s=1, u_t=0; locals
+    // x_S=4, x_T=3, x_M=2, x_s=1, x_t=0. All annotations here are closed, so
+    // every shift is the identity and the expected term is exact.
+    let gamma = nil_ctx(0);
+    let delta = nil_ctx(1);
+    let mut b = dummy_branches();
+    b.tm_elim_w = rt(chain(vec![
+        v(4),              // x_S
+        v(3),              // x_T
+        v(2),              // x_M
+        v(1),              // x_s
+        v(0),              // x_t
+        box_gty(4, 5, 0),  // box U_S^{id}
+        box_gty(3, 5, 1),  // box U_T^{id} (context (g, x))
+        box_gty(2, 5, 1),  // box U_M^{id} (context (g, z))
+        box_gtm(1, 5, 3),  // box u_s^{id} (context (g, a, f, ih))
+        box_gtm(0, 5, 0),  // box u_t^{id}
+        Term::TmTy(lv(2)), // ℓ
+        Term::TmTy(lv(1)), // ℓ'
+        Term::TmTy(lv(0)), // ℓ''
+    ]));
+    let b = Rc::new(b);
+    let code = Term::ElimW {
+        shape_level: Level::Zero,
+        pos_level: Level::Zero,
+        motive_level: Level::Zero,
+        shape: rty(Type::Nat),
+        pos: rty(Type::Empty),
+        motive: rty(Type::Nat),
+        step: rt(num(2)),
+        scrut: rt(sup_leaf(num(1))),
+    };
+    let t = elim_tm(&b, Level::Zero, delta.clone(), Type::Nat, Term::BoxTm(rt(code)));
+
+    let lmax = Level::max(Level::Zero, Level::Zero);
+    let w = w_nat_empty();
+    let s_shape = elim_ty(&b, Level::Zero, delta.clone(), Term::BoxTy(rty(Type::Nat)));
+    let da = extend(&delta, Type::Nat, Level::Zero);
+    let s_pos = elim_ty(&b, Level::Zero, da.clone(), Term::BoxTy(rty(Type::Empty)));
+    let dz = extend(&delta, w.clone(), lmax.clone());
+    let s_motive = elim_ty(&b, Level::Zero, dz, Term::BoxTy(rty(Type::Nat)));
+    let f_ty = Type::Pi {
+        dom_level: Level::Zero,
+        cod_level: lmax.clone(),
+        dom: rty(Type::Empty),
+        cod: rty(w.clone()),
+    };
+    let daf = extend(&da, f_ty, Level::max(Level::Zero, lmax.clone()));
+    let ih_ty = Type::Pi {
+        dom_level: Level::Zero,
+        cod_level: Level::Zero,
+        dom: rty(Type::Empty),
+        cod: rty(Type::Nat),
+    };
+    let dafi = extend(&daf, ih_ty, Level::max(Level::Zero, Level::Zero));
+    let s_step = elim_tm(&b, Level::Zero, dafi, Type::Nat, Term::BoxTm(rt(num(2))));
+    let s_scrut = elim_tm(&b, lmax, delta.clone(), w, Term::BoxTm(rt(sup_leaf(num(1)))));
+    let expect = chain(vec![
+        s_shape,
+        s_pos,
+        s_motive,
+        s_step,
+        s_scrut,
+        Term::BoxTy(rty(Type::Nat)),
+        Term::BoxTy(rty(Type::Empty)),
+        Term::BoxTy(rty(Type::Nat)),
+        Term::BoxTm(rt(num(2))),
+        Term::BoxTm(rt(sup_leaf(num(1)))),
+        Term::TmTy(Level::Zero),
+        Term::TmTy(Level::Zero),
         Term::TmTy(Level::Zero),
     ]);
     assert_eq!(step_term(&t, &gamma), Some(expect));

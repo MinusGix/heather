@@ -33,7 +33,7 @@
 //!   variables demand `i' ≤ i`; `ω` is accepted nowhere a programmer level
 //!   is demanded ([`crate::level::Level::well_formed`]) and arises only as
 //!   the inferred level of `ΠΠ`/`Λ ℓ⃗`.
-//! - The recursor rules check the two motives and 28 branches against the
+//! - The recursor rules check the two motives and 37 branches against the
 //!   `G_M G_Typ G_Trm` telescopes of [`crate::rec`] — the same tables
 //!   conversion compares against.
 //!
@@ -492,6 +492,16 @@ impl Tc {
                 self.ty_check(env, rhs, rhs_level)?;
                 Ok(Level::max(lhs_level.clone(), rhs_level.clone()))
             }
+            // W-formation (extension beyond ch. 04; kernel-v1-extensions):
+            // ⊢_i W^{l,l'}(x:S).T @ l⊔l' ⟸ ⊢_i S @ l, (Γ, x:S) ⊢_i T @ l'
+            Type::W { shape_level, pos_level, shape, pos } => {
+                self.level_wf(env, shape_level)?;
+                self.level_wf(env, pos_level)?;
+                self.ty_check(env, shape, shape_level)?;
+                let e = env.push_entry(Rc::clone(shape), shape_level.clone());
+                self.ty_check(&e, pos, pos_level)?;
+                Ok(Level::max(shape_level.clone(), pos_level.clone()))
+            }
             Type::GlobalTy { var, subst } => {
                 let Some(binding) = lookup(&env.psi, *var) else {
                     return Err(TypeError::UnboundGlobalVar(var.0));
@@ -757,6 +767,28 @@ impl Tc {
                     &Level::succ(rhs_level.clone()),
                 )?;
                 let lmax = Level::max(lhs_level.clone(), rhs_level.clone());
+                Ok((Type::Ty(lmax.clone()), Level::succ(lmax)))
+            }
+            // Encoding of W (extension): W^{l,l'}(x:s).t : Ty (l⊔l').
+            Term::TmW { shape_level, pos_level, shape, pos } => {
+                self.not_var_layer(env)?;
+                self.level_wf(env, shape_level)?;
+                self.level_wf(env, pos_level)?;
+                self.tm_check(
+                    env,
+                    shape,
+                    &Type::Ty(shape_level.clone()),
+                    &Level::succ(shape_level.clone()),
+                )?;
+                let el = Type::El { level: shape_level.clone(), tm: Rc::clone(shape) };
+                let e = env.push_entry(Rc::new(el), shape_level.clone());
+                self.tm_check(
+                    &e,
+                    pos,
+                    &Type::Ty(pos_level.clone()),
+                    &Level::succ(pos_level.clone()),
+                )?;
+                let lmax = Level::max(shape_level.clone(), pos_level.clone());
                 Ok((Type::Ty(lmax.clone()), Level::succ(lmax)))
             }
             Term::Zero => {
@@ -1052,6 +1084,127 @@ impl Tc {
                 ))
             }
 
+            // -- well-founded trees (extension beyond ch. 04) ---------------
+            // sup^{l,l'}(x:S.T; a; f) : W^{l,l'}(x:S).T @ l⊔l' with a : S and
+            // f : Π^{l',l⊔l'}(y : T[a/x]). W.
+            Term::Sup { shape_level, pos_level, shape_ty, pos_ty, label, children } => {
+                self.not_var_layer(env)?;
+                self.level_wf(env, shape_level)?;
+                self.level_wf(env, pos_level)?;
+                self.ty_check(env, shape_ty, shape_level)?;
+                let e = env.push_entry(Rc::clone(shape_ty), shape_level.clone());
+                self.ty_check(&e, pos_ty, pos_level)?;
+                self.tm_check(env, label, shape_ty, shape_level)?;
+                let lmax = Level::max(shape_level.clone(), pos_level.clone());
+                let w = Type::W {
+                    shape_level: shape_level.clone(),
+                    pos_level: pos_level.clone(),
+                    shape: Rc::clone(shape_ty),
+                    pos: Rc::clone(pos_ty),
+                };
+                // f : Π(y : T[a/x]). W (W weakened under y).
+                let pos_at = pos_ty
+                    .apply_local(&LocalSubst::id(&env.gamma).extended(Rc::clone(label)));
+                let f_ty = Type::Pi {
+                    dom_level: pos_level.clone(),
+                    cod_level: lmax.clone(),
+                    dom: Rc::new(pos_at),
+                    cod: Rc::new(w.shift_local(1)),
+                };
+                self.tm_check(
+                    env,
+                    children,
+                    &f_ty,
+                    &Level::max(pos_level.clone(), lmax.clone()),
+                )?;
+                Ok((w, lmax))
+            }
+            // elim_W^{l,l',l''}(x:S.T; z. M; a f ih. s; t) : M[t/z] @ l''.
+            Term::ElimW {
+                shape_level,
+                pos_level,
+                motive_level,
+                shape,
+                pos,
+                motive,
+                step,
+                scrut,
+            } => {
+                self.not_var_layer(env)?;
+                self.level_wf(env, shape_level)?;
+                self.level_wf(env, pos_level)?;
+                self.level_wf(env, motive_level)?;
+                self.ty_check(env, shape, shape_level)?;
+                let e_x = env.push_entry(Rc::clone(shape), shape_level.clone());
+                self.ty_check(&e_x, pos, pos_level)?;
+                let lmax = Level::max(shape_level.clone(), pos_level.clone());
+                let w = Type::W {
+                    shape_level: shape_level.clone(),
+                    pos_level: pos_level.clone(),
+                    shape: Rc::clone(shape),
+                    pos: Rc::clone(pos),
+                };
+                // M scoped in (Γ, z : W).
+                let e_z = env.push_entry(Rc::new(w.clone()), lmax.clone());
+                self.ty_check(&e_z, motive, motive_level)?;
+                // Step scoped in (Γ, a : S, f : Π(y:T[a/x]). W,
+                // ih : Π(y:T[a/x]). M[f y/z]). In (Γ, a), T[a/x] is `pos`
+                // itself (a sits exactly where the binder x was).
+                let e_a = env.push_entry(Rc::clone(shape), shape_level.clone());
+                let f_ty = Type::Pi {
+                    dom_level: pos_level.clone(),
+                    cod_level: lmax.clone(),
+                    dom: Rc::clone(pos),
+                    cod: Rc::new(w.shift_local(2)),
+                };
+                let f_level = Level::max(pos_level.clone(), lmax.clone());
+                let e_af = e_a.push_entry(Rc::new(f_ty), f_level);
+                // f y in (Γ, a, f, y : T[a/x]): f = Var 1, y = Var 0.
+                let f_y = Term::App {
+                    fun: Rc::new(Term::Var(LocalVar(1))),
+                    dom_level: pos_level.clone(),
+                    cod_level: lmax.clone(),
+                    dom: Rc::new(pos.shift_local(2)),
+                    cod: Rc::new(w.shift_local(4)),
+                    arg: Rc::new(Term::Var(LocalVar(0))),
+                };
+                let ih_cod = motive.apply_local(
+                    &LocalSubst::id(&env.gamma).shift_local(3).extended(Rc::new(f_y)),
+                );
+                let ih_ty = Type::Pi {
+                    dom_level: pos_level.clone(),
+                    cod_level: motive_level.clone(),
+                    dom: Rc::new(pos.shift_local(1)),
+                    cod: Rc::new(ih_cod),
+                };
+                let ih_level = Level::max(pos_level.clone(), motive_level.clone());
+                let e_step = e_af.push_entry(Rc::new(ih_ty), ih_level);
+                // s : M[sup(a, f)/z] with sup built in (Γ, a, f), then
+                // weakened past ih.
+                let Type::W { shape: s2, pos: p2, .. } = w.shift_local(2) else {
+                    unreachable!()
+                };
+                let sup_af = Term::Sup {
+                    shape_level: shape_level.clone(),
+                    pos_level: pos_level.clone(),
+                    shape_ty: s2,
+                    pos_ty: p2,
+                    label: Rc::new(Term::Var(LocalVar(1))),
+                    children: Rc::new(Term::Var(LocalVar(0))),
+                };
+                let step_ty = motive.apply_local(
+                    &LocalSubst::id(&env.gamma)
+                        .shift_local(3)
+                        .extended(Rc::new(sup_af.shift_local(1))),
+                );
+                self.tm_check(&e_step, step, &step_ty, motive_level)?;
+                self.tm_check(env, scrut, &w, &lmax)?;
+                Ok((
+                    motive.apply_local(&LocalSubst::id(&env.gamma).extended(Rc::clone(scrut))),
+                    motive_level.clone(),
+                ))
+            }
+
             // -- dependent functions ----------------------------------------
             Term::Lam { dom_level, cod_level, dom, body } => {
                 self.not_var_layer(env)?;
@@ -1323,7 +1476,7 @@ impl Tc {
 
     /// The `G_A = G_M G_Typ G_Trm` premise bundle shared by the two
     /// recursor rules: motive levels, both motives well-formed in their
-    /// scopes, and all 28 branches at their instantiated motive types.
+    /// scopes, and all 37 branches at their instantiated motive types.
     fn rec_ga(
         &self,
         env: &Env,

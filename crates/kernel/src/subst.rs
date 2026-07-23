@@ -197,6 +197,12 @@ fn map_type<M: Mapper>(t: &Type, m: &mut M, at: Depths) -> Type {
             lhs: sub_ty(lhs, m, at),
             rhs: sub_ty(rhs, m, at),
         },
+        Type::W { shape_level, pos_level, shape, pos } => Type::W {
+            shape_level: m.level(shape_level, at),
+            pos_level: m.level(pos_level, at),
+            shape: sub_ty(shape, m, at),
+            pos: sub_ty(pos, m, at + dep(0, 0, 1)),
+        },
         Type::GlobalTy { var, subst } => {
             let subst = map_subst(subst, m, at);
             m.global_ty(*var, subst, at)
@@ -253,6 +259,12 @@ fn map_term<M: Mapper>(t: &Term, m: &mut M, at: Depths) -> Term {
             rhs_level: m.level(rhs_level, at),
             lhs: sub_tm(lhs, m, at),
             rhs: sub_tm(rhs, m, at),
+        },
+        Term::TmW { shape_level, pos_level, shape, pos } => Term::TmW {
+            shape_level: m.level(shape_level, at),
+            pos_level: m.level(pos_level, at),
+            shape: sub_tm(shape, m, at),
+            pos: sub_tm(pos, m, at + dep(0, 0, 1)),
         },
         Term::Zero => Term::Zero,
         Term::Succ(t) => Term::Succ(sub_tm(t, m, at)),
@@ -339,6 +351,33 @@ fn map_term<M: Mapper>(t: &Term, m: &mut M, at: Depths) -> Term {
             motive: sub_ty(motive, m, at + dep(0, 0, 1)),
             case_l: sub_tm(case_l, m, at + dep(0, 0, 1)),
             case_r: sub_tm(case_r, m, at + dep(0, 0, 1)),
+            scrut: sub_tm(scrut, m, at),
+        },
+        Term::Sup { shape_level, pos_level, shape_ty, pos_ty, label, children } => Term::Sup {
+            shape_level: m.level(shape_level, at),
+            pos_level: m.level(pos_level, at),
+            shape_ty: sub_ty(shape_ty, m, at),
+            pos_ty: sub_ty(pos_ty, m, at + dep(0, 0, 1)),
+            label: sub_tm(label, m, at),
+            children: sub_tm(children, m, at),
+        },
+        Term::ElimW {
+            shape_level,
+            pos_level,
+            motive_level,
+            shape,
+            pos,
+            motive,
+            step,
+            scrut,
+        } => Term::ElimW {
+            shape_level: m.level(shape_level, at),
+            pos_level: m.level(pos_level, at),
+            motive_level: m.level(motive_level, at),
+            shape: sub_ty(shape, m, at),
+            pos: sub_ty(pos, m, at + dep(0, 0, 1)),
+            motive: sub_ty(motive, m, at + dep(0, 0, 1)),
+            step: sub_tm(step, m, at + dep(0, 0, 3)),
             scrut: sub_tm(scrut, m, at),
         },
         Term::Lam { dom_level, cod_level, dom, body } => Term::Lam {
@@ -492,6 +531,10 @@ fn map_branches<M: Mapper>(b: &Branches, m: &mut M, at: Depths) -> Branches {
         tm_inl: sub_tm(&b.tm_inl, m, at + dep(2, 4, 3)),
         tm_inr: sub_tm(&b.tm_inr, m, at + dep(2, 4, 3)),
         tm_case: sub_tm(&b.tm_case, m, at + dep(3, 7, 6)),
+        ty_w: sub_tm(&b.ty_w, m, at + dep(2, 3, 2)),
+        tm_w: sub_tm(&b.tm_w, m, at + dep(2, 3, 2)),
+        tm_sup: sub_tm(&b.tm_sup, m, at + dep(2, 5, 4)),
+        tm_elim_w: sub_tm(&b.tm_elim_w, m, at + dep(3, 6, 5)),
     }
 }
 

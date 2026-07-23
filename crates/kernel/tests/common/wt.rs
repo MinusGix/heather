@@ -241,7 +241,7 @@ pub fn gen_wt_ctx(env: &WtEnv, r: &mut Rng, b: u32, layer: Layer) -> LocalCtx {
 pub fn gen_wt_type(env: &WtEnv, r: &mut Rng, b: u32) -> (Rc<Type>, Level) {
     assert!(env.layer != Layer::Var);
     for _ in 0..8 {
-        match r.below(12) {
+        match r.below(13) {
             0 => return (rty(Type::Nat), Level::Zero),
             1 => {
                 let l = gen_wf_level(env.univs, r, 1);
@@ -347,6 +347,21 @@ pub fn gen_wt_type(env: &WtEnv, r: &mut Rng, b: u32) -> (Rc<Type>, Level) {
                     Level::max(dl, cl),
                 );
             }
+            12 if b > 0 => {
+                // W^{l,l'}(x:S).T (extension): T checked in (Γ, x:S), as Σ.
+                let (shape, dl) = gen_wt_type(env, r, b / 2);
+                let e = env.push_entry(Rc::clone(&shape), dl.clone());
+                let (pos, cl) = gen_wt_type(&e, r, b / 2);
+                return (
+                    rty(Type::W {
+                        shape_level: dl.clone(),
+                        pos_level: cl.clone(),
+                        shape,
+                        pos,
+                    }),
+                    Level::max(dl, cl),
+                );
+            }
             _ => continue,
         }
     }
@@ -355,7 +370,7 @@ pub fn gen_wt_type(env: &WtEnv, r: &mut Rng, b: u32) -> (Rc<Type>, Level) {
 
 /// Synthesize an encoding `⊢_i t : Ty l @ 1+l`, returning `(t, l)`.
 pub fn gen_encoding(env: &WtEnv, r: &mut Rng, b: u32) -> (Rc<Term>, Level) {
-    match r.below(6) {
+    match r.below(7) {
         0 => (rt(Term::TmNat), Level::Zero),
         1 => {
             let l = gen_wf_level(env.univs, r, 1);
@@ -405,6 +420,20 @@ pub fn gen_encoding(env: &WtEnv, r: &mut Rng, b: u32) -> (Rc<Term>, Level) {
             let (rhs, cl) = gen_encoding(env, r, b / 2);
             (
                 rt(Term::TmSum { lhs_level: dl.clone(), rhs_level: cl.clone(), lhs, rhs }),
+                Level::max(dl, cl),
+            )
+        }
+        6 if b > 0 => {
+            // W encoding (extension): pos is an encoding in (Γ, x:El shape),
+            // mirroring the Σ arm.
+            let (shape, dl) = gen_encoding(env, r, b / 2);
+            let e = env.push_entry(
+                rty(Type::El { level: dl.clone(), tm: Rc::clone(&shape) }),
+                dl.clone(),
+            );
+            let (pos, cl) = gen_encoding(&e, r, b / 2);
+            (
+                rt(Term::TmW { shape_level: dl.clone(), pos_level: cl.clone(), shape, pos }),
                 Level::max(dl, cl),
             )
         }
@@ -609,6 +638,34 @@ pub fn gen_wt_term_at(
                 }))
             }
         }
+        // sup inhabits W: a : S, then f : Π(y : T[a/x]). W (extension).
+        Type::W { shape_level: dl, pos_level: cl, shape, pos } if b > 0 => {
+            let a = gen_wt_term_at(env, r, b / 2, shape, dl)?;
+            let pos_at =
+                pos.apply_local(&LocalSubst::id(&env.gamma).extended(Rc::clone(&a)));
+            let lmax = Level::max(dl.clone(), cl.clone());
+            let w = Type::W {
+                shape_level: dl.clone(),
+                pos_level: cl.clone(),
+                shape: Rc::clone(shape),
+                pos: Rc::clone(pos),
+            };
+            let f_ty = Type::Pi {
+                dom_level: cl.clone(),
+                cod_level: lmax.clone(),
+                dom: rty(pos_at),
+                cod: rty(w.shift_local(1)),
+            };
+            let f = gen_wt_term_at(env, r, b / 2, &f_ty, &Level::max(cl.clone(), lmax))?;
+            Some(rt(Term::Sup {
+                shape_level: dl.clone(),
+                pos_level: cl.clone(),
+                shape_ty: Rc::clone(shape),
+                pos_ty: Rc::clone(pos),
+                label: a,
+                children: f,
+            }))
+        }
         _ => None,
     };
     // Verify intro results (annotations copied out of the target type can
@@ -641,7 +698,7 @@ pub fn gen_wt_term(env: &WtEnv, r: &mut Rng, b: u32) -> (Rc<Term>, Rc<Type>, Lev
     assert!(env.layer != Layer::Var);
     let meta = env.layer == Layer::Meta;
     for _ in 0..10 {
-        match r.below(26) {
+        match r.below(27) {
             0 | 1 if !env.gamma.entries.is_empty() => {
                 let x = r.below(env.gamma.entries.len() as u32);
                 let i = env.gamma.entries.len() - 1 - x as usize;
@@ -1045,6 +1102,40 @@ pub fn gen_wt_term(env: &WtEnv, r: &mut Rng, b: u32) -> (Rc<Term>, Rc<Type>, Lev
                     bl,
                 );
             }
+            26 if b > 0 => {
+                // elim_W with a constant motive B: the step lives at B in the
+                // (a, f, ih) context, the scrutinee inhabits the W type.
+                let (base, bty, bl) = guard(env.univs, gen_wt_term(env, r, b / 2));
+                let motive = rty(bty.shift_local(1));
+                let (shape, dl) = gen_wt_type(env, r, b / 2);
+                let e = env.push_entry(Rc::clone(&shape), dl.clone());
+                let (pos, cl) = gen_wt_type(&e, r, b / 2);
+                let lmax = Level::max(dl.clone(), cl.clone());
+                let w = rty(Type::W {
+                    shape_level: dl.clone(),
+                    pos_level: cl.clone(),
+                    shape: Rc::clone(&shape),
+                    pos: Rc::clone(&pos),
+                });
+                let Some(scrut) = gen_wt_term_at(env, r, b / 2, &w, &lmax) else {
+                    continue;
+                };
+                let step = rt(base.shift_local(3));
+                return (
+                    rt(Term::ElimW {
+                        shape_level: dl,
+                        pos_level: cl,
+                        motive_level: bl.clone(),
+                        shape,
+                        pos,
+                        motive,
+                        step,
+                        scrut,
+                    }),
+                    bty,
+                    bl,
+                );
+            }
             _ => continue,
         }
     }
@@ -1138,7 +1229,7 @@ fn gen_letbox_ty(env: &WtEnv, r: &mut Rng, b: u32) -> (Rc<Term>, Rc<Type>, Level
 /// recursive-call entry has that same motive (so `Var(0)` inhabits the
 /// branch type). Order = `Branches` field order. Independent transcription
 /// of docs/delam/04 — a disagreement with `src/rec.rs` is a test failure.
-const BRANCH_DIMS: [(u32, u32, u32, bool, bool); 33] = [
+const BRANCH_DIMS: [(u32, u32, u32, bool, bool); 37] = [
     (0, 1, 0, false, false), // ty_nat
     (2, 3, 2, false, true),  // ty_pi
     (1, 1, 0, false, false), // ty_ty
@@ -1172,6 +1263,10 @@ const BRANCH_DIMS: [(u32, u32, u32, bool, bool); 33] = [
     (2, 4, 3, true, true),   // tm_inl
     (2, 4, 3, true, true),   // tm_inr
     (3, 7, 6, true, true),   // tm_case (innermost local is a term-motive call)
+    (2, 3, 2, false, true),  // ty_w
+    (2, 3, 2, true, true),   // tm_w
+    (2, 5, 4, true, true),   // tm_sup
+    (3, 6, 5, true, true),   // tm_elim_w (innermost local is a term-motive call)
 ];
 
 /// A Γ-variable whose WHNF type is a contextual type matching `tm_variant`:
@@ -1227,7 +1322,7 @@ fn gen_const_rec(
         ty_motive: rty(m1ty.shift_univ(1).shift_global(1).shift_local(1)),
         tm_motive: rty(m2ty.shift_univ(1).shift_global(2).shift_local(1)),
     });
-    let mut bs: Vec<Rc<Term>> = Vec::with_capacity(33);
+    let mut bs: Vec<Rc<Term>> = Vec::with_capacity(37);
     for &(tu, tg, tl, tm_kind, var_ok) in &BRANCH_DIMS {
         if var_ok && r.below(3) == 0 {
             bs.push(rt(v(0)));
@@ -1270,6 +1365,10 @@ fn gen_const_rec(
         tm_inl: bs[30].clone(),
         tm_inr: bs[31].clone(),
         tm_case: bs[32].clone(),
+        ty_w: bs[33].clone(),
+        tm_w: bs[34].clone(),
+        tm_sup: bs[35].clone(),
+        tm_elim_w: bs[36].clone(),
     });
     if tm_variant {
         let (scrut, delta, cty, cl) = match neutral {
@@ -1510,7 +1609,7 @@ pub fn gen_nat_rec(base: &WtEnv, r: &mut Rng, tm_variant: bool) -> NatRec {
 impl NatRec {
     /// The recursor over `Var 0` with the given branch bodies, in
     /// [`Branches`] field order. Checks at `Nat @ 0` in `self.env`.
-    pub fn build(&self, bs: &[Rc<Term>; 33]) -> Rc<Term> {
+    pub fn build(&self, bs: &[Rc<Term>; 37]) -> Rc<Term> {
         let motives = Rc::new(Motives {
             ty_motive: rty(Type::Nat),
             tm_motive: rty(Type::Nat),
@@ -1549,6 +1648,10 @@ impl NatRec {
             tm_inl: bs[30].clone(),
             tm_inr: bs[31].clone(),
             tm_case: bs[32].clone(),
+            ty_w: bs[33].clone(),
+            tm_w: bs[34].clone(),
+            tm_sup: bs[35].clone(),
+            tm_elim_w: bs[36].clone(),
         });
         rt(if self.tm_variant {
             Term::ElimCodeTm {
@@ -1798,6 +1901,80 @@ pub fn identity_branches() -> Rc<Branches> {
                 case_l: rt(gtm(2, &gx_a)),
                 case_r: rt(gtm(1, &gx_b)),
                 scrut: rt(gtm(0, &g6)),
+            })))
+        },
+        // box (W x:U_S^id. U_T^id) — telescope g = 2, U_S = 1, U_T = 0.
+        ty_w: rt(Term::BoxTy(rty(Type::W {
+            shape_level: lv(1),
+            pos_level: lv(0),
+            shape: rty(gty(1, &g2)),
+            pos: rty(gty(0, &gx_typi)),
+        }))),
+        // box (W x:u_s^id. u_t^id) — telescope g = 2, u_s = 1, u_t = 0.
+        tm_w: rt(Term::BoxTm(rt(Term::TmW {
+            shape_level: lv(1),
+            pos_level: lv(0),
+            shape: rt(gtm(1, &g2)),
+            pos: rt(gtm(0, &gx_tmpi)),
+        }))),
+        // box (sup(x:U_S^id. U_T^id; u_a^id; u_f^id)) — telescope g = 4,
+        // U_S = 3, U_T = 2, u_a = 1, u_f = 0.
+        tm_sup: rt(Term::BoxTm(rt(Term::Sup {
+            shape_level: lv(1),
+            pos_level: lv(0),
+            shape_ty: rty(gty(3, &g4)),
+            pos_ty: rty(gty(2, &gx_app)),
+            label: rt(gtm(1, &g4)),
+            children: rt(gtm(0, &g4)),
+        }))),
+        // box (elim_W (x:U_S^id.U_T^id) (z. U_M^id) (a f ih. u_s^id) u_t^id)
+        // — telescope g = 5, U_S = 4, U_T = 3, U_M = 2, u_s = 1, u_t = 0.
+        tm_elim_w: {
+            let g5 = g_ctx(5);
+            let gx5 = ext(&g5, gty(4, &g5), lv(2));
+            let w5 = Type::W {
+                shape_level: lv(2),
+                pos_level: lv(1),
+                shape: rty(gty(4, &g5)),
+                pos: rty(gty(3, &gx5)),
+            };
+            let lmax = Level::max(lv(2), lv(1));
+            let gz = ext(&g5, w5.clone(), lmax.clone());
+            let f_ty = Type::Pi {
+                dom_level: lv(1),
+                cod_level: lmax.clone(),
+                dom: rty(gty(3, &gx5)),
+                cod: rty(w5.shift_local(2)),
+            };
+            let gaf = ext(&gx5, f_ty, Level::max(lv(1), lmax));
+            let f_y = Term::App {
+                fun: rt(v(1)),
+                dom_level: lv(1),
+                cod_level: Level::max(lv(2), lv(1)),
+                dom: rty(gty(3, &gx5).shift_local(2)),
+                cod: rty(w5.shift_local(4)),
+                arg: rt(v(0)),
+            };
+            let u_m_at_fy = Type::GlobalTy {
+                var: GlobalVar(2),
+                subst: LocalSubst::id(&g5).shift_local(3).extended(rt(f_y)),
+            };
+            let ih_ty = Type::Pi {
+                dom_level: lv(1),
+                cod_level: lv(0),
+                dom: rty(gty(3, &gx5).shift_local(1)),
+                cod: rty(u_m_at_fy),
+            };
+            let gafi = ext(&gaf, ih_ty, Level::max(lv(1), lv(0)));
+            rt(Term::BoxTm(rt(Term::ElimW {
+                shape_level: lv(2),
+                pos_level: lv(1),
+                motive_level: lv(0),
+                shape: rty(gty(4, &g5)),
+                pos: rty(gty(3, &gx5)),
+                motive: rty(gty(2, &gz)),
+                step: rt(gtm(1, &gafi)),
+                scrut: rt(gtm(0, &g5)),
             })))
         },
     })

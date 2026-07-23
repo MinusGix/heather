@@ -111,6 +111,9 @@ impl fmt::Debug for Type {
             Type::Sum { lhs_level, rhs_level, lhs, rhs } => {
                 write!(f, "({lhs:?} +[{lhs_level:?},{rhs_level:?}] {rhs:?})")
             }
+            Type::W { shape_level, pos_level, shape, pos } => {
+                write!(f, "W[{shape_level:?},{pos_level:?}]({shape:?}). {pos:?}")
+            }
             Type::GlobalTy { var, subst } => write!(f, "U{}^{subst:?}", var.0),
             Type::CtxPi { level, body } => write!(f, "Π[g:Ctx@{level:?}]. {body:?}"),
             Type::TyPi { ctx, arg_level, body_level, body } => {
@@ -143,6 +146,9 @@ impl fmt::Debug for Term {
             Term::TmEmpty => f.write_str("«Empty»"),
             Term::TmSum { lhs_level, rhs_level, lhs, rhs } => {
                 write!(f, "«({lhs:?} +[{lhs_level:?},{rhs_level:?}] {rhs:?})»")
+            }
+            Term::TmW { shape_level, pos_level, shape, pos } => {
+                write!(f, "«W[{shape_level:?},{pos_level:?}]({shape:?}). {pos:?}»")
             }
             Term::Zero => f.write_str("0"),
             Term::Succ(t) => write!(f, "S({t:?})"),
@@ -192,6 +198,23 @@ impl fmt::Debug for Term {
             } => write!(
                 f,
                 "case[{lhs_level:?},{rhs_level:?},{motive_level:?}](M {motive:?}; {lhs:?}; {rhs:?}; l {case_l:?}; r {case_r:?}; {scrut:?})"
+            ),
+            Term::Sup { shape_level, pos_level, shape_ty, pos_ty, label, children } => write!(
+                f,
+                "sup[{shape_level:?},{pos_level:?}]({shape_ty:?}. {pos_ty:?}; {label:?}; {children:?})"
+            ),
+            Term::ElimW {
+                shape_level,
+                pos_level,
+                motive_level,
+                shape,
+                pos,
+                motive,
+                step,
+                scrut,
+            } => write!(
+                f,
+                "elimW[{shape_level:?},{pos_level:?},{motive_level:?}]({shape:?}. {pos:?}; M {motive:?}; s {step:?}; {scrut:?})"
             ),
             Term::Lam { dom_level, cod_level, dom, body } => {
                 write!(f, "λ[{dom_level:?},{cod_level:?}]({dom:?}). {body:?}")
@@ -304,7 +327,7 @@ impl fmt::Debug for Branches {
         node(f, |f| {
             write!(
                 f,
-                "b⃗(Nat {:?}; Π {:?}; Ty {:?}; El {:?}; Id {:?}; Σ {:?}; Unit {:?}; Empty {:?} | x {:?}; «Nat» {:?}; «Π» {:?}; «Ty» {:?}; 0 {:?}; S {:?}; elimN {:?}; λ {:?}; app {:?}; «Id» {:?}; refl {:?}; J {:?}; «Σ» {:?}; pair {:?}; fst {:?}; snd {:?}; «Unit» {:?}; «Empty» {:?}; ⟨⟩ {:?}; elimE {:?}; + {:?}; «+» {:?}; inl {:?}; inr {:?}; case {:?})",
+                "b⃗(Nat {:?}; Π {:?}; Ty {:?}; El {:?}; Id {:?}; Σ {:?}; Unit {:?}; Empty {:?} | x {:?}; «Nat» {:?}; «Π» {:?}; «Ty» {:?}; 0 {:?}; S {:?}; elimN {:?}; λ {:?}; app {:?}; «Id» {:?}; refl {:?}; J {:?}; «Σ» {:?}; pair {:?}; fst {:?}; snd {:?}; «Unit» {:?}; «Empty» {:?}; ⟨⟩ {:?}; elimE {:?}; + {:?}; «+» {:?}; inl {:?}; inr {:?}; case {:?}; W {:?}; «W» {:?}; sup {:?}; elimW {:?})",
                 self.ty_nat,
                 self.ty_pi,
                 self.ty_ty,
@@ -338,6 +361,10 @@ impl fmt::Debug for Branches {
                 self.tm_inl,
                 self.tm_inr,
                 self.tm_case,
+                self.ty_w,
+                self.tm_w,
+                self.tm_sup,
+                self.tm_elim_w,
             )
         })
     }

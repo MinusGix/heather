@@ -87,6 +87,18 @@ pub enum Type {
         lhs: Rc<Type>,
         rhs: Rc<Type>,
     },
+    /// `W^{l,l'}(x : S). T` — well-founded tree type (labels/shapes `S`,
+    /// branching positions `T`); `pos` binds one local variable (of type
+    /// `shape`). Introduced by [`Term::Sup`], eliminated (dependently) by
+    /// [`Term::ElimW`]; positive like [`Type::Sum`] (no η). Lives at
+    /// `l ⊔ l'`. Extension beyond DeLaM ch. 04 (see
+    /// issues/kernel-v1-extensions.md).
+    W {
+        shape_level: Level,
+        pos_level: Level,
+        shape: Rc<Type>,
+        pos: Rc<Type>,
+    },
     /// `U^δ` — global type variable under a local substitution.
     GlobalTy { var: GlobalVar, subst: LocalSubst },
     /// `(g : Ctx) ⇒^l T` — meta-function type over context variables; binds
@@ -160,6 +172,16 @@ pub enum Term {
         rhs_level: Level,
         lhs: Rc<Term>,
         rhs: Rc<Term>,
+    },
+    /// `W^{l,l'}(x : s). t : Ty (l ⊔ l')` where `s : Ty l`; `pos` binds one
+    /// local variable (of type `El s`) — encoding of the W-type (decoded by
+    /// `El (W (x:s). t) ⇝ W (x : El s). El t`, mirroring Π/Σ). Extension
+    /// beyond DeLaM ch. 04.
+    TmW {
+        shape_level: Level,
+        pos_level: Level,
+        shape: Rc<Term>,
+        pos: Rc<Term>,
     },
 
     // ---- natural numbers ----
@@ -278,6 +300,39 @@ pub enum Term {
         motive: Rc<Type>,
         case_l: Rc<Term>,
         case_r: Rc<Term>,
+        scrut: Rc<Term>,
+    },
+
+    // ---- well-founded trees (extension beyond DeLaM ch. 04) ----
+    /// `sup^{l,l'}(x:S. T; a; f) : W^{l,l'}(x:S). T` where `a : S` and
+    /// `f : Π^{l',l⊔l'}(y : T[a/x]). W^{l,l'}(x:S). T`. Fully annotated so
+    /// it synthesizes; `pos_ty` binds one local variable.
+    Sup {
+        shape_level: Level,
+        pos_level: Level,
+        shape_ty: Rc<Type>,
+        pos_ty: Rc<Type>,
+        label: Rc<Term>,
+        children: Rc<Term>,
+    },
+    /// `elim_W^{l,l',l''}(x:S. T; z. M; a f ih. s; t) : M[t/z]` — dependent
+    /// W-elimination over `t : W^{l,l'}(x:S). T`. `motive` binds one local
+    /// (`z : W`), `step` binds three (`a : S`,
+    /// `f : Π^{l',l⊔l'}(y : T[a/x]). W`,
+    /// `ih : Π^{l',l''}(y : T[a/x]). M[f y/z]`) with
+    /// `s : M[sup(a, f)/z]`. β `elim_W (sup(…; a; f)) ⇝
+    /// s[a, f, λy. elim_W(…; f y)]` — the recursive call is synthesized
+    /// *under a λ* (the ih function), the only β rule with that shape.
+    /// Neutral on a neutral scrutinee (positive, like `case`/`elim_Nat`).
+    /// Annotated like `elim_Nat` so it infers.
+    ElimW {
+        shape_level: Level,
+        pos_level: Level,
+        motive_level: Level,
+        shape: Rc<Type>,
+        pos: Rc<Type>,
+        motive: Rc<Type>,
+        step: Rc<Term>,
         scrut: Rc<Term>,
     },
 
@@ -562,6 +617,39 @@ pub struct Branches {
     /// dependent eliminator (mirrors `tm_elim_nat`'s shape, two branches).
     /// Extension.
     pub tm_case: Rc<Term>,
+    /// `(ℓ, ℓ', g, U_S, U_T, x_S, x_T. t_W)` — univs: ℓ, ℓ'; globals: g,
+    /// `U_S : Typ_c(g, ℓ)`, `U_T : Typ_c((g, x : U_S^id @ ℓ), ℓ')`;
+    /// locals: `x_S`, `x_T` (recursive calls). Code of the type
+    /// `W(x:U_S^id). U_T^id`; mirrors `ty_pi`/`ty_sigma`. Extension beyond
+    /// ch. 04 (kernel-v1-extensions).
+    pub ty_w: Rc<Term>,
+    /// `(ℓ, ℓ', g, u_s, u_t, x_s, x_t. t'_W)` — univs: ℓ, ℓ'; globals: g,
+    /// `u_s : Trm_c(g ⊢ Ty ℓ)`, `u_t : Trm_c((g, x : El u_s) ⊢ Ty ℓ')`;
+    /// locals: `x_s`, `x_t`. Code of the encoding `W (x:u_s). u_t :
+    /// Ty (ℓ⊔ℓ')`; mirrors `tm_pi`/`tm_sigma`. Extension.
+    pub tm_w: Rc<Term>,
+    /// `(ℓ, ℓ', g, U_S, U_T, u_a, u_f, x_S, x_T, x_a, x_f. t_sup)` —
+    /// univs: ℓ, ℓ'; globals: g, `U_S : Typ_c(g, ℓ)`,
+    /// `U_T : Typ_c((g, x : U_S^id @ ℓ), ℓ')`, `u_a : Trm_c(g ⊢ U_S^id @ ℓ)`,
+    /// `u_f : Trm_c(g ⊢ Π^{ℓ',ℓ⊔ℓ'}(y : U_T^{id, u_a/x}). W(x:U_S^id).U_T^id
+    /// @ ℓ⊔ℓ')`; locals: `x_S`, `x_T` (both type motive!), `x_a`, `x_f`.
+    /// Code of `sup(x:U_S^id. U_T^id; u_a^id; u_f^id)`; dims mirror
+    /// `tm_pair`. Extension.
+    pub tm_sup: Rc<Term>,
+    /// `(ℓ, ℓ', ℓ'', g, U_S, U_T, U_M, u_s, u_t, x_S, x_T, x_M, x_s, x_t.
+    /// t_elimW)` — univs: ℓ, ℓ', ℓ''; globals: g, `U_S : Typ_c(g, ℓ)`,
+    /// `U_T : Typ_c((g, x : U_S^id @ ℓ), ℓ')`,
+    /// `U_M : Typ_c((g, z : W(x:U_S^id).U_T^id @ ℓ⊔ℓ'), ℓ'')`,
+    /// `u_s : Trm_c((g, a : U_S^id @ ℓ,
+    ///   f : Π^{ℓ',ℓ⊔ℓ'}(y : U_T^{id,a/x}). W @ ℓ⊔ℓ',
+    ///   ih : Π^{ℓ',ℓ''}(y : U_T^{id,a/x}). U_M^{id, f y/z} @ ℓ'⊔ℓ'')
+    ///   ⊢ U_M^{id, sup(a, f)/z} @ ℓ'')`,
+    /// `u_t : Trm_c(g ⊢ W(x:U_S^id).U_T^id @ ℓ⊔ℓ')`; locals: `x_S`, `x_T`,
+    /// `x_M` (type motive!), `x_s`, `x_t`. Code of
+    /// `elim_W (x. U_S^id. U_T^id) (z. U_M^id) (a f ih. u_s^id) u_t^id`;
+    /// positive dependent eliminator like `tm_case`/`tm_elim_nat`.
+    /// Extension.
+    pub tm_elim_w: Rc<Term>,
 }
 
 /// Base of a local context: empty (`·`) or a context variable `g`.

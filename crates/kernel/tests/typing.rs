@@ -539,6 +539,10 @@ fn constant_branches() -> Rc<Branches> {
         tm_inl: z(),
         tm_inr: z(),
         tm_case: z(),
+        ty_w: z(),
+        tm_w: z(),
+        tm_sup: z(),
+        tm_elim_w: z(),
     })
 }
 
@@ -828,6 +832,80 @@ fn identity_branches() -> Rc<Branches> {
                 case_l: rt(gtm(2, &gx_a)),
                 case_r: rt(gtm(1, &gx_b)),
                 scrut: rt(gtm(0, &g6)),
+            })))
+        },
+        // box (W x:U_S^id. U_T^id) — telescope g = 2, U_S = 1, U_T = 0.
+        ty_w: rt(Term::BoxTy(rty(Type::W {
+            shape_level: lv(1),
+            pos_level: lv(0),
+            shape: rty(gty(1, &g2)),
+            pos: rty(gty(0, &gx_typi)),
+        }))),
+        // box (W x:u_s^id. u_t^id) (the encoding) — g = 2, u_s = 1, u_t = 0.
+        tm_w: rt(Term::BoxTm(rt(Term::TmW {
+            shape_level: lv(1),
+            pos_level: lv(0),
+            shape: rt(gtm(1, &g2)),
+            pos: rt(gtm(0, &gx_tmpi)),
+        }))),
+        // box (sup(x:U_S^id. U_T^id; u_a^id; u_f^id)) — g = 4, U_S = 3,
+        // U_T = 2, u_a = 1, u_f = 0.
+        tm_sup: rt(Term::BoxTm(rt(Term::Sup {
+            shape_level: lv(1),
+            pos_level: lv(0),
+            shape_ty: rty(gty(3, &g4)),
+            pos_ty: rty(gty(2, &gx_app)),
+            label: rt(gtm(1, &g4)),
+            children: rt(gtm(0, &g4)),
+        }))),
+        // box (elim_W (x:U_S^id.U_T^id) (z. U_M^id) (a f ih. u_s^id) u_t^id)
+        // — telescope g = 5, U_S = 4, U_T = 3, U_M = 2, u_s = 1, u_t = 0.
+        tm_elim_w: {
+            let g5 = g_ctx(5);
+            let gx5 = ext(&g5, gty(4, &g5), lv(2));
+            let w5 = Type::W {
+                shape_level: lv(2),
+                pos_level: lv(1),
+                shape: rty(gty(4, &g5)),
+                pos: rty(gty(3, &gx5)),
+            };
+            let lmax = Level::max(lv(2), lv(1));
+            let gz = ext(&g5, w5.clone(), lmax.clone());
+            let f_ty = Type::Pi {
+                dom_level: lv(1),
+                cod_level: lmax.clone(),
+                dom: rty(gty(3, &gx5)),
+                cod: rty(w5.shift_local(2)),
+            };
+            let gaf = ext(&gx5, f_ty, Level::max(lv(1), lmax));
+            let f_y = Term::App {
+                fun: rt(Term::Var(LocalVar(1))),
+                dom_level: lv(1),
+                cod_level: Level::max(lv(2), lv(1)),
+                dom: rty(gty(3, &gx5).shift_local(2)),
+                cod: rty(w5.shift_local(4)),
+                arg: rt(Term::Var(LocalVar(0))),
+            };
+            let u_m_at_fy = Type::GlobalTy {
+                var: GlobalVar(2),
+                subst: LocalSubst::id(&g5).shift_local(3).extended(rt(f_y)),
+            };
+            let ih_ty = Type::Pi {
+                dom_level: lv(1),
+                cod_level: lv(0),
+                dom: rty(gty(3, &gx5).shift_local(1)),
+                cod: rty(u_m_at_fy),
+            };
+            let gafi = ext(&gaf, ih_ty, Level::max(lv(1), lv(0)));
+            rt(Term::BoxTm(rt(Term::ElimW {
+                shape_level: lv(2),
+                pos_level: lv(1),
+                motive_level: lv(0),
+                shape: rty(gty(4, &g5)),
+                pos: rty(gty(3, &gx5)),
+                motive: rty(gty(2, &gz)),
+                step: rt(gtm(1, &gafi)),
+                scrut: rt(gtm(0, &g5)),
             })))
         },
     })
@@ -1326,4 +1404,162 @@ fn sum_formation_intro_encoding_and_case() {
     // Layer v admits neither intro nor eliminator.
     assert_eq!(infer_closed(Layer::Var, &mk_inl()).unwrap_err(), TypeError::LayerMismatch);
     assert_eq!(infer_closed(Layer::Var, &case).unwrap_err(), TypeError::LayerMismatch);
+}
+
+// -------------------------------------------------------------------------
+// W-types (extension; kernel-v1-extensions)
+// -------------------------------------------------------------------------
+
+#[test]
+fn w_formation_intro_encoding_and_elim() {
+    let psi = GlobalCtx::default();
+    // W^{0,0}(x : Nat). Nat @ 0; heterogeneous W^{0,1}(x : Nat). Ty 0 @ 1.
+    let w_nat_nat = Type::W {
+        shape_level: Level::Zero,
+        pos_level: Level::Zero,
+        shape: rty(Type::Nat),
+        pos: rty(Type::Nat),
+    };
+    assert!(infer_type(&psi, 0, Layer::Prog, &nil_ctx(), &w_nat_nat, FUEL)
+        .unwrap()
+        .equiv(&Level::Zero));
+    let het = Type::W {
+        shape_level: Level::Zero,
+        pos_level: c(1),
+        shape: rty(Type::Nat),
+        pos: rty(Type::Ty(Level::Zero)),
+    };
+    assert!(infer_type(&psi, 0, Layer::Prog, &nil_ctx(), &het, FUEL)
+        .unwrap()
+        .equiv(&c(1)));
+    // A dependent position family: W^{0,0}(x : Nat). El 0 «Nat» — the family
+    // is checked in (Γ, x : Nat).
+    let dep_w = Type::W {
+        shape_level: Level::Zero,
+        pos_level: Level::Zero,
+        shape: rty(Type::Nat),
+        pos: rty(Type::El { level: Level::Zero, tm: rt(Term::TmNat) }),
+    };
+    assert!(infer_type(&psi, 0, Layer::Prog, &nil_ctx(), &dep_w, FUEL)
+        .unwrap()
+        .equiv(&Level::Zero));
+    // Encoding W (x : «Nat»). «Empty» : Ty 0 @ 1.
+    let tm_w = Term::TmW {
+        shape_level: Level::Zero,
+        pos_level: Level::Zero,
+        shape: rt(Term::TmNat),
+        pos: rt(Term::TmEmpty),
+    };
+    let (ty, l) = infer_closed(Layer::Prog, &tm_w).unwrap();
+    let Type::Ty(tl) = &ty else { panic!("encoding should infer a universe") };
+    assert!(tl.equiv(&Level::Zero) && l.equiv(&c(1)));
+    // sup into W(x:Nat).Empty: the childless leaf. f : Π(y : Empty). W.
+    let w = Type::W {
+        shape_level: Level::Zero,
+        pos_level: Level::Zero,
+        shape: rty(Type::Nat),
+        pos: rty(Type::Empty),
+    };
+    let no_children = Term::Lam {
+        dom_level: Level::Zero,
+        cod_level: Level::Zero,
+        dom: rty(Type::Empty),
+        body: rt(Term::ElimEmpty {
+            level: Level::Zero,
+            motive: rty(w.clone()),
+            scrut: rt(v(0)),
+        }),
+    };
+    let mk_sup = |label: Term| Term::Sup {
+        shape_level: Level::Zero,
+        pos_level: Level::Zero,
+        shape_ty: rty(Type::Nat),
+        pos_ty: rty(Type::Empty),
+        label: rt(label),
+        children: rt(no_children.clone()),
+    };
+    let (ty, l) = infer_closed(Layer::Prog, &mk_sup(Term::Zero)).unwrap();
+    assert!(ty == w && l.equiv(&Level::Zero));
+    // It also checks against the El-decode of the encoding (conversion fires
+    // through El (W s t) ⇝ W (El s) (El t)).
+    let el_w = Type::El { level: Level::Zero, tm: rt(tm_w) };
+    check_closed(Layer::Prog, &mk_sup(Term::Zero), &el_w, &Level::Zero).unwrap();
+    // A label not inhabiting the shape type is rejected.
+    assert!(infer_closed(Layer::Prog, &mk_sup(Term::Triv)).is_err());
+    // A subtree function of the wrong type is rejected.
+    let bad_sup = Term::Sup {
+        shape_level: Level::Zero,
+        pos_level: Level::Zero,
+        shape_ty: rty(Type::Nat),
+        pos_ty: rty(Type::Empty),
+        label: rt(Term::Zero),
+        children: rt(Term::Zero),
+    };
+    assert!(infer_closed(Layer::Prog, &bad_sup).is_err());
+    // elim_W with a constant Nat motive: step returns the label a.
+    let mk_elim = |step: Term, scrut: Term| Term::ElimW {
+        shape_level: Level::Zero,
+        pos_level: Level::Zero,
+        motive_level: Level::Zero,
+        shape: rty(Type::Nat),
+        pos: rty(Type::Empty),
+        motive: rty(Type::Nat),
+        step: rt(step),
+        scrut: rt(scrut),
+    };
+    let elim = mk_elim(v(2), mk_sup(Term::Zero));
+    let (ty, l) = infer_closed(Layer::Prog, &elim).unwrap();
+    assert!(ty == Type::Nat && l.equiv(&Level::Zero));
+    // The step's binders really carry the (a, f, ih) types: a step returning
+    // f (a Π type, not the motive Nat) is rejected…
+    assert!(infer_closed(Layer::Prog, &mk_elim(v(1), mk_sup(Term::Zero))).is_err());
+    // …and a step that η-uses the ih binder at Π(y : T[a/x]). M is accepted
+    // in a position expecting that Π type: check the raw binder against it.
+    // (With a constant Nat motive, ih : Π(y : Empty). Nat.)
+    let ih_pi = Type::Pi {
+        dom_level: Level::Zero,
+        cod_level: Level::Zero,
+        dom: rty(Type::Empty),
+        cod: rty(Type::Nat),
+    };
+    let use_ih = mk_elim(
+        Term::App {
+            fun: rt(Term::Lam {
+                dom_level: Level::Zero,
+                cod_level: Level::Zero,
+                dom: rty(ih_pi.clone()),
+                body: rt(Term::Zero),
+            }),
+            dom_level: Level::Zero,
+            cod_level: Level::Zero,
+            dom: rty(ih_pi),
+            cod: rty(Type::Nat),
+            arg: rt(v(0)), // the ih binder
+        },
+        mk_sup(Term::Zero),
+    );
+    let (ty, l) = infer_closed(Layer::Prog, &use_ih).unwrap();
+    assert!(ty == Type::Nat && l.equiv(&Level::Zero));
+    // A dependent motive over a variable scrutinee: with z : W in Γ,
+    // elim (z. El 0 «Nat»; a f ih. 0; z) checks against Nat.
+    let gamma = ext(&nil_ctx(), w.clone(), Level::Zero);
+    let dep = Term::ElimW {
+        shape_level: Level::Zero,
+        pos_level: Level::Zero,
+        motive_level: Level::Zero,
+        shape: rty(Type::Nat),
+        pos: rty(Type::Empty),
+        motive: rty(Type::El { level: Level::Zero, tm: rt(Term::TmNat) }),
+        step: rt(Term::Zero),
+        scrut: rt(v(0)),
+    };
+    check_term(&psi, 0, Layer::Prog, &gamma, &dep, &Type::Nat, &Level::Zero, FUEL).unwrap();
+    // A non-W scrutinee is rejected.
+    assert!(infer_closed(Layer::Prog, &mk_elim(v(2), Term::Zero)).is_err());
+    // Layer v admits neither intro nor eliminator.
+    assert_eq!(
+        infer_closed(Layer::Var, &mk_sup(Term::Zero)).unwrap_err(),
+        TypeError::LayerMismatch
+    );
+    assert_eq!(infer_closed(Layer::Var, &elim).unwrap_err(), TypeError::LayerMismatch);
 }

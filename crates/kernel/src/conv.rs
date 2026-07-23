@@ -30,7 +30,7 @@
 //! - **Boxed types/terms compare syntactically** (`==`; α-equality is free
 //!   under de Bruijn). Code is static data — β-convertible code is *not*
 //!   convertible.
-//! - Neutral recursors compare motives, all 28 branches (each at its
+//! - Neutral recursors compare motives, all 37 branches (each at its
 //!   instantiated motive type, the ch. 04 `G_A` telescopes), and indices —
 //!   the ch. 06 `C_A` bundle ([`Conv::rec_ca`]).
 //! - The layer index restricts *types*, not terms (ch. 06 intro): layer-m
@@ -305,6 +305,17 @@ impl Conv {
                 self.lev_eq(cl1, cl2)?;
                 self.ty(env, s1, s2, dl1)?;
                 self.ty(env, t1, t2, cl1)
+            }
+            // W congruence (extension; mirrors Π/Σ).
+            (
+                Type::W { shape_level: dl1, pos_level: cl1, shape: s1, pos: t1 },
+                Type::W { shape_level: dl2, pos_level: cl2, shape: s2, pos: t2 },
+            ) => {
+                self.lev_eq(dl1, dl2)?;
+                self.lev_eq(cl1, cl2)?;
+                self.ty(env, s1, s2, dl1)?;
+                let e = env.push_entry(Rc::clone(s1), dl1.clone());
+                self.ty(&e, t1, t2, cl1)
             }
             // -- layer-m type formers: mismatch outside layer m -------------
             (
@@ -603,6 +614,18 @@ impl Conv {
                     self.tm(env, s1, s2, &Type::Ty(dl1.clone()), &Level::succ(dl1.clone()))?;
                     self.tm(env, t1, t2, &Type::Ty(cl1.clone()), &Level::succ(cl1.clone()))
                 }
+                // TmW congruence (extension; mirrors TmPi/TmSigma).
+                (
+                    Term::TmW { shape_level: dl1, pos_level: cl1, shape: s1, pos: t1 },
+                    Term::TmW { shape_level: dl2, pos_level: cl2, shape: s2, pos: t2 },
+                ) => {
+                    self.lev_eq(dl1, dl2)?;
+                    self.lev_eq(cl1, cl2)?;
+                    self.tm(env, s1, s2, &Type::Ty(dl1.clone()), &Level::succ(dl1.clone()))?;
+                    let el = Type::El { level: dl1.clone(), tm: Rc::clone(s1) };
+                    let e = env.push_entry(Rc::new(el), dl1.clone());
+                    self.tm(&e, t1, t2, &Type::Ty(cl1.clone()), &Level::succ(cl1.clone()))
+                }
                 (
                     Term::TmNat
                     | Term::TmTy(_)
@@ -611,7 +634,8 @@ impl Conv {
                     | Term::TmSigma { .. }
                     | Term::TmUnit
                     | Term::TmEmpty
-                    | Term::TmSum { .. },
+                    | Term::TmSum { .. }
+                    | Term::TmW { .. },
                     _,
                 )
                 | (
@@ -623,7 +647,8 @@ impl Conv {
                     | Term::TmSigma { .. }
                     | Term::TmUnit
                     | Term::TmEmpty
-                    | Term::TmSum { .. },
+                    | Term::TmSum { .. }
+                    | Term::TmW { .. },
                 ) => Err(NC),
                 _ => self.tm_nee(env, a, b).map(drop),
             },
@@ -687,6 +712,32 @@ impl Conv {
                 }
                 (Term::Inl { .. } | Term::Inr { .. }, _)
                 | (_, Term::Inl { .. } | Term::Inr { .. }) => Err(NC),
+                _ => self.tm_nee(env, a, b).map(drop),
+            },
+            // W (extension): a positive type — `sup` matches like the sum
+            // constructors. The annotations on sup are forced by
+            // well-typedness at this W type, so only the label and the
+            // subtree function are compared (the latter at the left label's
+            // instantiated Π type, left-biased); neutrals (a stuck elim_W, a
+            // variable) fall through to structural comparison.
+            Type::W { shape_level, pos_level, shape, pos } => match (a, b) {
+                (
+                    Term::Sup { label: a1, children: f1, .. },
+                    Term::Sup { label: a2, children: f2, .. },
+                ) => {
+                    self.tm(env, a1, a2, shape, shape_level)?;
+                    let lmax = Level::max(shape_level.clone(), pos_level.clone());
+                    let pos_at =
+                        pos.apply_local(&LocalSubst::id(&env.gamma).extended(Rc::clone(a1)));
+                    let f_ty = Type::Pi {
+                        dom_level: pos_level.clone(),
+                        cod_level: lmax.clone(),
+                        dom: Rc::new(pos_at),
+                        cod: Rc::new(w.shift_local(1)),
+                    };
+                    self.tm(env, f1, f2, &f_ty, &Level::max(pos_level.clone(), lmax))
+                }
+                (Term::Sup { .. }, _) | (_, Term::Sup { .. }) => Err(NC),
                 _ => self.tm_nee(env, a, b).map(drop),
             },
             // Neutral type: only neutral terms inhabit it.
@@ -848,6 +899,103 @@ impl Conv {
                 );
                 self.tm(&e_y, r1, r2, &right_ty, ml1)?;
                 self.tm_nee(env, n1, n2)?; // inferred A + B: redundant, ignored
+                Ok((
+                    m1.apply_local(&LocalSubst::id(&env.gamma).extended(Rc::clone(n1))),
+                    ml1.clone(),
+                ))
+            }
+            // elim_W neutral congruence (extension); mirrors ElimNat/Case —
+            // all annotations compared (the step at M[sup(a,f)/z] under the
+            // (a, f, ih) telescope, as in typing.rs), the scrutinee via
+            // tm_nee, result inferred as M[scrut/z]. Fires only on a neutral
+            // scrutinee (a canonical sup β-fired in reduce).
+            (
+                Term::ElimW {
+                    shape_level: dl1,
+                    pos_level: cl1,
+                    motive_level: ml1,
+                    shape: s1,
+                    pos: t1,
+                    motive: m1,
+                    step: st1,
+                    scrut: n1,
+                },
+                Term::ElimW {
+                    shape_level: dl2,
+                    pos_level: cl2,
+                    motive_level: ml2,
+                    shape: s2,
+                    pos: t2,
+                    motive: m2,
+                    step: st2,
+                    scrut: n2,
+                },
+            ) => {
+                self.lev_eq(dl1, dl2)?;
+                self.lev_eq(cl1, cl2)?;
+                self.lev_eq(ml1, ml2)?;
+                self.ty(env, s1, s2, dl1)?;
+                let e_x = env.push_entry(Rc::clone(s1), dl1.clone());
+                self.ty(&e_x, t1, t2, cl1)?;
+                let lmax = Level::max(dl1.clone(), cl1.clone());
+                let w = Type::W {
+                    shape_level: dl1.clone(),
+                    pos_level: cl1.clone(),
+                    shape: Rc::clone(s1),
+                    pos: Rc::clone(t1),
+                };
+                // M scoped in (Γ, z : W).
+                let e_z = env.push_entry(Rc::new(w.clone()), lmax.clone());
+                self.ty(&e_z, m1, m2, ml1)?;
+                // Steps under (Γ, a : S, f : Π(y:T[a/x]). W,
+                // ih : Π(y:T[a/x]). M[f y/z]) at M[sup(a, f)/z] — the same
+                // construction as the typing rule.
+                let e_a = env.push_entry(Rc::clone(s1), dl1.clone());
+                let f_ty = Type::Pi {
+                    dom_level: cl1.clone(),
+                    cod_level: lmax.clone(),
+                    dom: Rc::clone(t1),
+                    cod: Rc::new(w.shift_local(2)),
+                };
+                let e_af =
+                    e_a.push_entry(Rc::new(f_ty), Level::max(cl1.clone(), lmax.clone()));
+                let f_y = Term::App {
+                    fun: Rc::new(Term::Var(LocalVar(1))),
+                    dom_level: cl1.clone(),
+                    cod_level: lmax.clone(),
+                    dom: Rc::new(t1.shift_local(2)),
+                    cod: Rc::new(w.shift_local(4)),
+                    arg: Rc::new(Term::Var(LocalVar(0))),
+                };
+                let ih_cod = m1.apply_local(
+                    &LocalSubst::id(&env.gamma).shift_local(3).extended(Rc::new(f_y)),
+                );
+                let ih_ty = Type::Pi {
+                    dom_level: cl1.clone(),
+                    cod_level: ml1.clone(),
+                    dom: Rc::new(t1.shift_local(1)),
+                    cod: Rc::new(ih_cod),
+                };
+                let e_step =
+                    e_af.push_entry(Rc::new(ih_ty), Level::max(cl1.clone(), ml1.clone()));
+                let Type::W { shape: ws2, pos: wp2, .. } = w.shift_local(2) else {
+                    unreachable!()
+                };
+                let sup_af = Term::Sup {
+                    shape_level: dl1.clone(),
+                    pos_level: cl1.clone(),
+                    shape_ty: ws2,
+                    pos_ty: wp2,
+                    label: Rc::new(Term::Var(LocalVar(1))),
+                    children: Rc::new(Term::Var(LocalVar(0))),
+                };
+                let step_ty = m1.apply_local(
+                    &LocalSubst::id(&env.gamma)
+                        .shift_local(3)
+                        .extended(Rc::new(sup_af.shift_local(1))),
+                );
+                self.tm(&e_step, st1, st2, &step_ty, ml1)?;
+                self.tm_nee(env, n1, n2)?; // inferred W: redundant, ignored
                 Ok((
                     m1.apply_local(&LocalSubst::id(&env.gamma).extended(Rc::clone(n1))),
                     ml1.clone(),
@@ -1188,7 +1336,7 @@ impl Conv {
 
     // -- the C_A bundle for neutral recursors -------------------------------
 
-    /// Ch. 06 `C_A`: motive levels, both motives, and all 28 branches, each
+    /// Ch. 06 `C_A`: motive levels, both motives, and all 37 branches, each
     /// branch compared at its instantiated motive type under its ch. 04
     /// telescope (`G_M G_Typ G_Trm`). Branch types and telescope entry
     /// types are built from the *left* side (left-biased, like all
@@ -1207,7 +1355,7 @@ impl Conv {
             self.ty(&e, x, y, &spec.level)?;
         }
 
-        // G_Typ G_Trm: the 28 branches, each at its instantiated motive
+        // G_Typ G_Trm: the 37 branches, each at its instantiated motive
         // type under its telescope.
         let branch_specs = rec::branch_specs(a.motives, a.l1, a.l2, &env.gamma);
         let ba = rec::branch_terms(a.branches);

@@ -34,7 +34,18 @@ Candidate v1 set (order roughly = implementation order):
 3. **Binary sums + case** — IR instruction alternatives.
 4. **Unit, Empty** — cheap, useful (Empty gives negation; Unit gives
    degenerate cases).
-5. W-types: deferred until something concretely wants them.
+5. **W-types: promoted from "deferred" to planned (2026-07-23).** The
+   project goal is unification of programming *and mathematics*; something
+   concrete now wants them: general well-founded recursion (`Acc`), which is
+   the one thing the finitary-encoding story (Nat-approximants via large
+   elim, fording via Id+Σ+sums) provably cannot reach — `Acc.intro` puts a
+   function under the constructor, so no uniform depth bound exists. Plain W
+   + Id (+ funext, which the user accepts as an axiom — see log) yields
+   indexed W-types and hence `Acc`/inductive families by the standard
+   indexed-containers reduction. Note the classic "W-encodings of *first-
+   order* inductives need funext" complaint is irrelevant here: first-order
+   data stays on the finitary encodings; W is for the infinitely-branching
+   tier only.
 
 **Earmarked metatheory check (for the formalization): Id/Σ at □ types.**
 Ch. 06 checks `box t ≈ box t'` by converting the insides (~l. 527/535),
@@ -83,6 +94,26 @@ checking-descent story — eliminators should stay inferable (annotated like
 `App`/the recursors), intros checkable, so the meta-ANF invariant is
 unaffected.
 
+**W implementation earmarks** (for whoever lands it):
+
+- β puts the recursive call **under a binder**: `elim_W (sup a f) ⇝
+  s[a, f, λb. elim_W … (f b)]` — first β rule whose right-hand side
+  synthesizes a λ around the recursive call. Reduction, the `tm_elim_w`
+  recursor branch, and the subst depth bookkeeping all need this new shape;
+  none of the 33 existing branches have it.
+- Conversion: positive like sums — `sup` compared structurally at
+  `Type::W`, `elim_W` neutral on a neutral scrutinee, **no η**.
+- LR obligation (ch. 07 earmark): heaviest yet — positive *and* infinitely
+  branching; the `sup` case quantifies over all subtree functions, in the
+  layered/□ setting. Wants its own line next to the Σ (negative/η) and sum
+  (positive/finitary) earmarks above.
+- Funext-interaction earmark: funext (as an axiom) is purely propositional
+  and □-conversion is syntactic, so it cannot leak into code equality —
+  *provided* no rule ever derives □-level equality from function-level
+  `Id`. Keep it that way: no "unbox congruence" for propositional equality,
+  ever. Two functions may be propositionally equal yet distinguishable as
+  code; that is a feature (the user's stated position), not a bug.
+
 ## Log
 
 - 2026-07-23: Id landed: Type::Id + TmId encoding (El decode rule), refl, PM-based J (motive binds y,p; case closed; β J…refl ⇝ c). Threaded through subst (J motive dep(0,0,2)), typing, reduction, conversion (Id/TmId congruence, J neutral arm mirroring ElimNat), and the code recursors: four new branches ty_id/tm_id/tm_refl/tm_j (17 total), tm_j telescope modeled on tm_elim_nat (univs 2, globals 7, locals 6). All five transcriptions updated (rec.rs, subst depths, reduce β, BRANCH_DIMS, identity_branches x2, gen_branches); identity-recursor tests cross-check the new telescopes end-to-end. Generators (well-scoped + well-typed) now emit Id forms; golden tests for typing/reduction/conversion added. DESIGN.md fragment note updated. Next in the set: Σ.
@@ -114,3 +145,4 @@ unaffected.
   for typing/reduction (β for all five recursor branches, incl. tm_case) /
   conversion added. DESIGN.md fourth-extension paragraph added.
 - 2026-07-23: 2026-07-23: Unit + Empty landed (item 4 of the set, ahead of sums). Unit: Type::Unit + TmUnit encoding (El decode El Unit ⇝ Unit), single intro Triv (⟨⟩), and **definitional η / proof irrelevance** — a Type::Unit arm in tm_nf accepts any two terms at Unit type, mirroring the Σ-η decision (type-directed, no eliminator, no new neutral head). Empty: Type::Empty + TmEmpty encoding (El Empty ⇝ Empty), no intro, dependent eliminator elim_Empty^l(x.M; t) : M[t/x] modeled on elim_Nat minus base/step — no β rule (no constructors), neutral on a neutral scrutinee, fully annotated so it infers. Threaded through subst (ElimEmpty motive dep(0,0,1)), typing, reduction (decode + ElimEmpty congruence, is_whnf/is_neutral), conversion (Unit/Empty type congruence, Unit-η arm, Empty via tm_nee, TmUnit/TmEmpty congruence at Ty, ElimEmpty neutral arm), and the code recursors: six new branches ty_unit/ty_empty/tm_unit/tm_empty/tm_triv/tm_elim_empty (28 total; nullary ones mirror ty_nat/tm_nat/tm_zero, tm_elim_empty mirrors tm_elim_nat dep(1,3,2)). All transcriptions updated (rec.rs, subst depths, reduce β, BRANCH_DIMS, identity_branches x2, gen_branches); identity-recursor tests cross-check the new telescopes end-to-end. Generators (well-scoped + well-typed) emit Unit/Empty forms; golden tests for typing/reduction/conversion added. DESIGN.md updated. Next in the set: binary sums + case (item 3, still pending).
+- 2026-07-23: W-types landed (item 5, closing the planned former set). Type::W (shape/pos, pos binds one; ≡ Σ/Π shape) + TmW encoding (El (W s t) ⇝ W (El s) (El t)), intro sup(x:S.T; a; f) with f : Π(y:T[a/x]). W (fully annotated, synthesizes), dependent eliminator elim_W^{l,l',l''}(x:S.T; z.M; a f ih. s; t) with step binding (a, f : Π(y:T[a/x]).W, ih : Π(y:T[a/x]).M[f y/z]). Positive like sums: no η, neutral on neutral scrutinee, Type::W conversion compares sup label + subtree function. The novel bit: β synthesizes a λ — elim_W (sup a f) ⇝ s[a, f, (λy. elim_W …(f y))/ih] — the first RHS that builds a binder around the recursive call; reduce.rs constructs it from the eliminator's annotations (shift-under-binder via a closed-placeholder template destructure, same trick as typing's sup(a,f) construction). Threaded through subst (W/TmW pos dep(0,0,1), ElimW motive dep(0,0,1) step dep(0,0,3)), typing, reduction (decode + β + congruence + whnf/neutral), conversion (W/TmW congruence, positive Type::W arm, ElimW neutral arm with the full (a,f,ih) step telescope), and the code recursors: four new branches ty_w/tm_w/tm_sup/tm_elim_w (37 total; ty_w≡ty_pi dep(2,3,2), tm_w≡tm_pi, tm_sup≡tm_pair dep(2,5,4), tm_elim_w dep(3,6,5) — nests Π types inside its global bindings, deepest binding-type construction yet). All transcriptions updated (rec.rs branch_terms/branch_specs, subst depths, reduce β, BRANCH_DIMS 37, identity_branches ×2, gen_branches, count_term/count_branches — also fixed count_branches' pre-existing omission of the five sum branches, dummy-branch literals, conv_pair_properties 37-arrays + decode/mutate_encoding + gen_encoding TmW arm). Generators (well-scoped + well-typed) emit W/TmW/Sup/ElimW (wt: sup intro at Type::W, elim_W with constant motive); golden tests for typing (formation/intro/encoding/elim incl. binder-type checks)/reduction (decode, direct β incl. exact synthesized-ih term, recursor β for all four branches)/conversion (congruence, positive sup, elim_W neutral) added; identity-recursor + const-motive recursor cross-check the telescopes end-to-end. DESIGN.md fifth-extension paragraph added. scripts/test fully green.

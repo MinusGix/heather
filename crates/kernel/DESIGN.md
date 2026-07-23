@@ -90,8 +90,29 @@ summands live in Γ, so the `Sum`/`TmSum`/`ty_sum`/`tm_sum` shapes drop the
 `tm_sum`, `tm_inl`, `tm_inr`, `tm_case`; 33 total); `tm_case` is the widest
 telescope (3 univs, 7 globals, 6 recursive calls).
 
+Fifth extension: **W-types** — `W^{l,l'}(x : S). T` (shapes `S`, positions
+`T`; `pos` binds one local, structurally ≡ Σ/Π) with encoding
+`W (x : s). t : Ty (l⊔l')` (decoded by `El (W s t) ⇝ W (El s) (El t)`),
+intro `sup^{l,l'}(x:S. T; a; f)` where `f : Π^{l',l⊔l'}(y : T[a/x]). W`
+(fully annotated, synthesizes), and the dependent eliminator
+`elim_W^{l,l',l''}(x:S. T; z. M; a f ih. s; t) : M[t/z]` where the step
+binds three locals (`a : S`, `f : Π(y:T[a/x]). W`,
+`ih : Π(y:T[a/x]). M[f y/z]`). **Positive** like sums: no η, `elim_W`
+neutral on a neutral scrutinee, conversion at `Type::W` compares `sup`
+labels and subtree functions (annotations forced by the type). The β rule
+is the first whose right-hand side **synthesizes a λ**: `elim_W (sup a f) ⇝
+s[a, f, (λy. elim_W … (f y))/ih]` — reduction builds the ih function around
+the recursive call from the eliminator's own annotations. Motivation
+(kernel-v1-extensions): general well-founded recursion (`Acc` via
+`W (x:A) (Σ y, R y x)` + Id, funext discharging the indexed-containers
+obligations) — the one thing the finitary encodings provably cannot reach.
+The code recursors gain four branches (`ty_w`, `tm_w`, `tm_sup`,
+`tm_elim_w`; **37 total**); `tm_elim_w`'s telescope (3 univs, 6 globals, 5
+recursive calls) nests Π types inside its global bindings (the step's `f`
+and `ih` binders), the deepest binding-type construction yet.
+
 Explicitly out of v0: coinduction/effects, typeclasses, compiler machinery,
-inductive types beyond Nat, Id, Σ, Unit, Empty, and binary sums, the type
+inductive types beyond Nat, Id, Σ, Unit, Empty, binary sums, and W, the type
 lifter (omitted by the paper too).
 
 ## Algorithms

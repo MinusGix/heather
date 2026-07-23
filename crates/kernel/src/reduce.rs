@@ -106,6 +106,13 @@ pub fn step_type(t: &Type, gamma: &LocalCtx) -> Option<Type> {
                 lhs: Rc::new(Type::El { level: lhs_level.clone(), tm: Rc::clone(lhs) }),
                 rhs: Rc::new(Type::El { level: rhs_level.clone(), tm: Rc::clone(rhs) }),
             }),
+            // El^{l⊔l'} (W (x:s). t) ⇝ W (x : El^l s). El^{l'} t   (extension)
+            Term::TmW { shape_level, pos_level, shape, pos } => Some(Type::W {
+                shape_level: shape_level.clone(),
+                pos_level: pos_level.clone(),
+                shape: Rc::new(Type::El { level: shape_level.clone(), tm: Rc::clone(shape) }),
+                pos: Rc::new(Type::El { level: pos_level.clone(), tm: Rc::clone(pos) }),
+            }),
             _ => step_term(tm, gamma)
                 .map(|tm| Type::El { level: level.clone(), tm: Rc::new(tm) }),
         },
@@ -218,6 +225,88 @@ pub fn step_term(t: &Term, gamma: &LocalCtx) -> Option<Term> {
                 fst_ty: Rc::clone(fst_ty),
                 snd_ty: Rc::clone(snd_ty),
                 pair: Rc::new(p),
+            }),
+        },
+        // elim_W (sup(…; a; f)) ⇝ s[a/a, f/f, (λy. elim_W …(f y))/ih] — the
+        // ih is synthesized as a λ around the recursive call, built from the
+        // *eliminator's* annotations (fires on head shape only).  (extension)
+        Term::ElimW {
+            shape_level,
+            pos_level,
+            motive_level,
+            shape,
+            pos,
+            motive,
+            step,
+            scrut,
+        } => match &**scrut {
+            Term::Sup { label, children, .. } => {
+                let lmax = Level::max(shape_level.clone(), pos_level.clone());
+                let w = Type::W {
+                    shape_level: shape_level.clone(),
+                    pos_level: pos_level.clone(),
+                    shape: Rc::clone(shape),
+                    pos: Rc::clone(pos),
+                };
+                // T[a/x], scoped in Γ — the ih λ's domain.
+                let pos_at = pos.apply_local(&LocalSubst::id(gamma).extended(Rc::clone(label)));
+                // Weaken the binder-carrying annotations under the ih λ in
+                // one shift (the placeholder scrutinee is closed).
+                let template = Term::ElimW {
+                    shape_level: shape_level.clone(),
+                    pos_level: pos_level.clone(),
+                    motive_level: motive_level.clone(),
+                    shape: Rc::clone(shape),
+                    pos: Rc::clone(pos),
+                    motive: Rc::clone(motive),
+                    step: Rc::clone(step),
+                    scrut: Rc::new(Term::Zero),
+                }
+                .shift_local(1);
+                let Term::ElimW { shape: s1, pos: p1, motive: m1, step: st1, .. } = template
+                else {
+                    unreachable!()
+                };
+                // f y, scoped in (Γ, y : T[a/x]).
+                let f_y = Term::App {
+                    fun: Rc::new(children.shift_local(1)),
+                    dom_level: pos_level.clone(),
+                    cod_level: lmax.clone(),
+                    dom: Rc::new(pos_at.shift_local(1)),
+                    cod: Rc::new(w.shift_local(2)),
+                    arg: Rc::new(Term::Var(LocalVar(0))),
+                };
+                let rec = Term::ElimW {
+                    shape_level: shape_level.clone(),
+                    pos_level: pos_level.clone(),
+                    motive_level: motive_level.clone(),
+                    shape: s1,
+                    pos: p1,
+                    motive: m1,
+                    step: st1,
+                    scrut: Rc::new(f_y),
+                };
+                let ih = Term::Lam {
+                    dom_level: pos_level.clone(),
+                    cod_level: motive_level.clone(),
+                    dom: Rc::new(pos_at),
+                    body: Rc::new(rec),
+                };
+                let delta = LocalSubst::id(gamma)
+                    .extended(Rc::clone(label))
+                    .extended(Rc::clone(children))
+                    .extended(Rc::new(ih));
+                Some(step.apply_local(&delta))
+            }
+            _ => step_term(scrut, gamma).map(|s| Term::ElimW {
+                shape_level: shape_level.clone(),
+                pos_level: pos_level.clone(),
+                motive_level: motive_level.clone(),
+                shape: Rc::clone(shape),
+                pos: Rc::clone(pos),
+                motive: Rc::clone(motive),
+                step: Rc::clone(step),
+                scrut: Rc::new(s),
             }),
         },
         Term::App { fun, dom_level, cod_level, dom, cod, arg } => match &**fun {
@@ -560,6 +649,24 @@ fn beta_elim_ty(
                     GlobalEntry::Ty(Rc::clone(rhs)),
                 ],
                 vec![s_lhs, s_rhs],
+                gamma,
+            ))
+        }
+        // (ℓ, ℓ', g, U_S, U_T, x_S, x_T. t_W) — mirrors ty_pi/ty_sigma.
+        // (extension)
+        Type::W { shape_level, pos_level, shape, pos } => {
+            let dx = extend(delta, Rc::clone(shape), shape_level.clone());
+            let s_shape = rec.elim_ty(shape_level.clone(), delta.clone(), Rc::clone(shape));
+            let s_pos = rec.elim_ty(pos_level.clone(), dx, Rc::clone(pos));
+            Some(fire(
+                &b.ty_w,
+                &[pos_level.clone(), shape_level.clone()],
+                vec![
+                    GlobalEntry::Ctx(delta.clone()),
+                    GlobalEntry::Ty(Rc::clone(shape)),
+                    GlobalEntry::Ty(Rc::clone(pos)),
+                ],
+                vec![s_shape, s_pos],
                 gamma,
             ))
         }
@@ -1161,6 +1268,176 @@ fn beta_elim_tm(
                 gamma,
             ))
         }
+        // (ℓ, ℓ', g, u_s, u_t, x_s, x_t. t'_W) — the encoding; mirrors
+        // tm_pi/tm_sigma.   (extension)
+        Term::TmW { shape_level, pos_level, shape, pos } => {
+            let s_shape = rec.elim_tm(
+                Level::succ(shape_level.clone()),
+                delta.clone(),
+                Rc::new(Type::Ty(shape_level.clone())),
+                Rc::clone(shape),
+            );
+            let dx = extend(
+                delta,
+                Rc::new(Type::El { level: shape_level.clone(), tm: Rc::clone(shape) }),
+                shape_level.clone(),
+            );
+            let s_pos = rec.elim_tm(
+                Level::succ(pos_level.clone()),
+                dx,
+                Rc::new(Type::Ty(pos_level.clone())),
+                Rc::clone(pos),
+            );
+            Some(fire(
+                &b.tm_w,
+                &[pos_level.clone(), shape_level.clone()],
+                vec![
+                    GlobalEntry::Ctx(delta.clone()),
+                    GlobalEntry::Tm(Rc::clone(shape)),
+                    GlobalEntry::Tm(Rc::clone(pos)),
+                ],
+                vec![s_shape, s_pos],
+                gamma,
+            ))
+        }
+        // (ℓ, ℓ', g, U_S, U_T, u_a, u_f, x_S, x_T, x_a, x_f. t_sup) — both
+        // type annotations are sub-structures (like pair).   (extension)
+        Term::Sup { shape_level, pos_level, shape_ty, pos_ty, label, children } => {
+            let lmax = Level::max(shape_level.clone(), pos_level.clone());
+            let s_shape = rec.elim_ty(shape_level.clone(), delta.clone(), Rc::clone(shape_ty));
+            let dx = extend(delta, Rc::clone(shape_ty), shape_level.clone());
+            let s_pos = rec.elim_ty(pos_level.clone(), dx, Rc::clone(pos_ty));
+            let s_label = rec.elim_tm(
+                shape_level.clone(),
+                delta.clone(),
+                Rc::clone(shape_ty),
+                Rc::clone(label),
+            );
+            // f : Π(y : T[a/x]). W.
+            let w = Type::W {
+                shape_level: shape_level.clone(),
+                pos_level: pos_level.clone(),
+                shape: Rc::clone(shape_ty),
+                pos: Rc::clone(pos_ty),
+            };
+            let pos_at =
+                pos_ty.apply_local(&LocalSubst::id(delta).extended(Rc::clone(label)));
+            let f_ty = Rc::new(Type::Pi {
+                dom_level: pos_level.clone(),
+                cod_level: lmax.clone(),
+                dom: Rc::new(pos_at),
+                cod: Rc::new(w.shift_local(1)),
+            });
+            let s_children = rec.elim_tm(
+                Level::max(pos_level.clone(), lmax),
+                delta.clone(),
+                f_ty,
+                Rc::clone(children),
+            );
+            Some(fire(
+                &b.tm_sup,
+                &[pos_level.clone(), shape_level.clone()],
+                vec![
+                    GlobalEntry::Ctx(delta.clone()),
+                    GlobalEntry::Ty(Rc::clone(shape_ty)),
+                    GlobalEntry::Ty(Rc::clone(pos_ty)),
+                    GlobalEntry::Tm(Rc::clone(label)),
+                    GlobalEntry::Tm(Rc::clone(children)),
+                ],
+                vec![s_shape, s_pos, s_label, s_children],
+                gamma,
+            ))
+        }
+        // (ℓ, ℓ', ℓ'', g, U_S, U_T, U_M, u_s, u_t, x_S, x_T, x_M, x_s, x_t.
+        // t_elimW) — x_M recurses at the *type* motive; the step's
+        // annotation type instantiates the motive at sup(a, f), mirroring
+        // the typing rule.   (extension)
+        Term::ElimW {
+            shape_level,
+            pos_level,
+            motive_level,
+            shape,
+            pos,
+            motive,
+            step,
+            scrut,
+        } => {
+            let lmax = Level::max(shape_level.clone(), pos_level.clone());
+            let w = Type::W {
+                shape_level: shape_level.clone(),
+                pos_level: pos_level.clone(),
+                shape: Rc::clone(shape),
+                pos: Rc::clone(pos),
+            };
+            let s_shape = rec.elim_ty(shape_level.clone(), delta.clone(), Rc::clone(shape));
+            let da = extend(delta, Rc::clone(shape), shape_level.clone());
+            let s_pos = rec.elim_ty(pos_level.clone(), da.clone(), Rc::clone(pos));
+            let dz = extend(delta, Rc::new(w.clone()), lmax.clone());
+            let s_motive = rec.elim_ty(motive_level.clone(), dz, Rc::clone(motive));
+            // Step scoped in (Δ, a : S, f : Π(y:T[a/x]). W,
+            // ih : Π(y:T[a/x]). M[f y/z]) — same construction as typing.
+            let f_ty = Type::Pi {
+                dom_level: pos_level.clone(),
+                cod_level: lmax.clone(),
+                dom: Rc::clone(pos),
+                cod: Rc::new(w.shift_local(2)),
+            };
+            let daf = extend(&da, Rc::new(f_ty), Level::max(pos_level.clone(), lmax.clone()));
+            let f_y = Term::App {
+                fun: Rc::new(Term::Var(LocalVar(1))),
+                dom_level: pos_level.clone(),
+                cod_level: lmax.clone(),
+                dom: Rc::new(pos.shift_local(2)),
+                cod: Rc::new(w.shift_local(4)),
+                arg: Rc::new(Term::Var(LocalVar(0))),
+            };
+            let ih_cod = motive
+                .apply_local(&LocalSubst::id(delta).shift_local(3).extended(Rc::new(f_y)));
+            let ih_ty = Type::Pi {
+                dom_level: pos_level.clone(),
+                cod_level: motive_level.clone(),
+                dom: Rc::new(pos.shift_local(1)),
+                cod: Rc::new(ih_cod),
+            };
+            let dafi = extend(
+                &daf,
+                Rc::new(ih_ty),
+                Level::max(pos_level.clone(), motive_level.clone()),
+            );
+            let Type::W { shape: s2, pos: p2, .. } = w.shift_local(2) else {
+                unreachable!()
+            };
+            let sup_af = Term::Sup {
+                shape_level: shape_level.clone(),
+                pos_level: pos_level.clone(),
+                shape_ty: s2,
+                pos_ty: p2,
+                label: Rc::new(Term::Var(LocalVar(1))),
+                children: Rc::new(Term::Var(LocalVar(0))),
+            };
+            let ty_step = motive.apply_local(
+                &LocalSubst::id(delta)
+                    .shift_local(3)
+                    .extended(Rc::new(sup_af.shift_local(1))),
+            );
+            let s_step =
+                rec.elim_tm(motive_level.clone(), dafi, Rc::new(ty_step), Rc::clone(step));
+            let s_scrut = rec.elim_tm(lmax, delta.clone(), Rc::new(w), Rc::clone(scrut));
+            Some(fire(
+                &b.tm_elim_w,
+                &[motive_level.clone(), pos_level.clone(), shape_level.clone()],
+                vec![
+                    GlobalEntry::Ctx(delta.clone()),
+                    GlobalEntry::Ty(Rc::clone(shape)),
+                    GlobalEntry::Ty(Rc::clone(pos)),
+                    GlobalEntry::Ty(Rc::clone(motive)),
+                    GlobalEntry::Tm(Rc::clone(step)),
+                    GlobalEntry::Tm(Rc::clone(scrut)),
+                ],
+                vec![s_shape, s_pos, s_motive, s_step, s_scrut],
+                gamma,
+            ))
+        }
         // box (u^δ): blocked, neutral.
         Term::GlobalTm { .. } => None,
         // Layer-m forms cannot be layer-c code: ill-typed, stuck.
@@ -1192,6 +1469,7 @@ pub fn is_whnf_type(t: &Type) -> bool {
         | Type::Unit
         | Type::Empty
         | Type::Sum { .. }
+        | Type::W { .. }
         | Type::Ty(_)
         | Type::UPi { .. }
         | Type::CtxPi { .. }
@@ -1213,6 +1491,7 @@ pub fn is_neutral_term(t: &Term) -> bool {
         Term::ElimNat { scrut, .. } => is_neutral_term(scrut),
         Term::ElimEmpty { scrut, .. } => is_neutral_term(scrut),
         Term::Case { scrut, .. } => is_neutral_term(scrut),
+        Term::ElimW { scrut, .. } => is_neutral_term(scrut),
         Term::J { proof, .. } => is_neutral_term(proof),
         Term::Fst { pair, .. } | Term::Snd { pair, .. } => is_neutral_term(pair),
         Term::App { fun, .. }
@@ -1246,6 +1525,7 @@ pub fn is_whnf_term(t: &Term) -> bool {
         | Term::TmUnit
         | Term::TmEmpty
         | Term::TmSum { .. }
+        | Term::TmW { .. }
         | Term::Zero
         | Term::Succ(_)
         | Term::Refl { .. }
@@ -1253,6 +1533,7 @@ pub fn is_whnf_term(t: &Term) -> bool {
         | Term::Triv
         | Term::Inl { .. }
         | Term::Inr { .. }
+        | Term::Sup { .. }
         | Term::Lam { .. }
         | Term::ULam { .. }
         | Term::CtxLam { .. }

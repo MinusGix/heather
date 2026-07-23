@@ -453,7 +453,11 @@ fn const_branches(t: Term) -> Rc<Branches> {
         tm_sum: rt(t.clone()),
         tm_inl: rt(t.clone()),
         tm_inr: rt(t.clone()),
-        tm_case: rt(t),
+        tm_case: rt(t.clone()),
+        ty_w: rt(t.clone()),
+        tm_w: rt(t.clone()),
+        tm_sup: rt(t.clone()),
+        tm_elim_w: rt(t),
     })
 }
 
@@ -524,7 +528,8 @@ fn recursor_branch_type_uses_motive() {
                   &mut br.tm_j, &mut br.tm_sigma, &mut br.tm_pair, &mut br.tm_fst,
                   &mut br.tm_snd, &mut br.tm_unit, &mut br.tm_empty, &mut br.tm_triv,
                   &mut br.tm_elim_empty, &mut br.tm_sum, &mut br.tm_inl,
-                  &mut br.tm_inr, &mut br.tm_case] {
+                  &mut br.tm_inr, &mut br.tm_case, &mut br.tm_w, &mut br.tm_sup,
+                  &mut br.tm_elim_w] {
             *f = rt(Term::Zero);
         }
         br.ty_nat = rt(v(0));
@@ -551,7 +556,8 @@ fn recursor_branch_type_uses_motive() {
                   &mut br.tm_j, &mut br.tm_sigma, &mut br.tm_pair, &mut br.tm_fst,
                   &mut br.tm_snd, &mut br.tm_unit, &mut br.tm_empty, &mut br.tm_triv,
                   &mut br.tm_elim_empty, &mut br.tm_sum, &mut br.tm_inl,
-                  &mut br.tm_inr, &mut br.tm_case] {
+                  &mut br.tm_inr, &mut br.tm_case, &mut br.tm_w, &mut br.tm_sup,
+                  &mut br.tm_elim_w] {
             *f = rt(Term::Zero);
         }
         *branches = Rc::new(br);
@@ -948,4 +954,148 @@ fn case_neutral_congruence() {
     // A differing left branch is caught.
     no_tm(&psi, &gamma, &case(Type::Nat, v(0), v(0)),
           &case(Type::Nat, Term::Succ(rt(v(0))), v(0)), &Type::Nat, &c(0));
+}
+
+// -------------------------------------------------------------------------
+// W-types (extension; kernel-v1-extensions)
+// -------------------------------------------------------------------------
+
+/// `W^{0,0}(x : Nat). Empty` — Nat-labeled leaves.
+fn w_nat_empty() -> Type {
+    Type::W {
+        shape_level: Level::Zero,
+        pos_level: Level::Zero,
+        shape: rty(Type::Nat),
+        pos: rty(Type::Empty),
+    }
+}
+
+/// `λ^{0,0}(y : Empty). elim_Empty^0 (x. W; y)` — the childless subtree
+/// function (closed).
+fn no_children() -> Term {
+    Term::Lam {
+        dom_level: Level::Zero,
+        cod_level: Level::Zero,
+        dom: rty(Type::Empty),
+        body: rt(Term::ElimEmpty {
+            level: Level::Zero,
+            motive: rty(w_nat_empty()),
+            scrut: rt(v(0)),
+        }),
+    }
+}
+
+fn sup_leaf(label: Term) -> Term {
+    Term::Sup {
+        shape_level: Level::Zero,
+        pos_level: Level::Zero,
+        shape_ty: rty(Type::Nat),
+        pos_ty: rty(Type::Empty),
+        label: rt(label),
+        children: rt(no_children()),
+    }
+}
+
+#[test]
+fn w_type_congruence() {
+    let psi = psi(vec![]);
+    let g0 = nil_ctx(0);
+    let w = |shape: Type, pos: Type| Type::W {
+        shape_level: Level::Zero,
+        pos_level: Level::Zero,
+        shape: rty(shape),
+        pos: rty(pos),
+    };
+    // Congruence through a β-convertible shape.
+    let el_beta = Type::El { level: Level::Zero, tm: rt(app(lam(Term::TmNat), Term::Zero)) };
+    assert_eq!(
+        conv_type(&psi, &g0, Layer::Prog, &w(el_beta, Type::Nat),
+                  &w(Type::Nat, Type::Nat), &c(0), FUEL),
+        Ok(())
+    );
+    // A distinct position family is caught.
+    assert_eq!(
+        conv_type(&psi, &g0, Layer::Prog, &w(Type::Nat, Type::Nat),
+                  &w(Type::Nat, Type::Empty), &c(0), FUEL),
+        Err(ConvError::NotConvertible)
+    );
+    // W is not Σ (same components, different former).
+    let sigma = Type::Sigma {
+        fst_level: Level::Zero,
+        snd_level: Level::Zero,
+        fst: rty(Type::Nat),
+        snd: rty(Type::Nat),
+    };
+    assert_eq!(
+        conv_type(&psi, &g0, Layer::Prog, &w(Type::Nat, Type::Nat), &sigma, &c(0), FUEL),
+        Err(ConvError::NotConvertible)
+    );
+    // El of the encoding decodes to the W former.
+    let el_w = Type::El {
+        level: Level::Zero,
+        tm: rt(Term::TmW {
+            shape_level: Level::Zero,
+            pos_level: Level::Zero,
+            shape: rt(Term::TmNat),
+            pos: rt(Term::TmNat),
+        }),
+    };
+    assert_eq!(
+        conv_type(&psi, &g0, Layer::Prog, &el_w, &w(Type::Nat, Type::Nat), &c(0), FUEL),
+        Ok(())
+    );
+}
+
+#[test]
+fn w_positive_conversion_and_elim_beta() {
+    let psi = psi(vec![]);
+    let w = w_nat_empty();
+    // Positive: sup compares the label (β fires inside) and the subtree
+    // function; a differing label is NotConvertible.
+    ok_tm(&psi, &nil_ctx(0), &sup_leaf(Term::Zero), &sup_leaf(beta_zero()), &w, &c(0));
+    no_tm(&psi, &nil_ctx(0), &sup_leaf(Term::Zero), &sup_leaf(num(1)), &w, &c(0));
+    // A neutral scrutinee compares structurally, and never to a canonical sup.
+    let gamma = extend(&nil_ctx(0), w.clone(), c(0));
+    ok_tm(&psi, &gamma, &v(0), &v(0), &w, &c(0));
+    no_tm(&psi, &gamma, &v(0), &sup_leaf(Term::Zero), &w, &c(0));
+    // elim_W β-fires during conversion: with step = a, the whole eliminator
+    // converts to the label.
+    let elim = |scrut: Term| Term::ElimW {
+        shape_level: Level::Zero,
+        pos_level: Level::Zero,
+        motive_level: Level::Zero,
+        shape: rty(Type::Nat),
+        pos: rty(Type::Empty),
+        motive: rty(Type::Nat),
+        step: rt(v(2)),
+        scrut: rt(scrut),
+    };
+    ok_tm(&psi, &nil_ctx(0), &elim(sup_leaf(num(2))), &num(2), &Type::Nat, &c(0));
+}
+
+#[test]
+fn elim_w_neutral_congruence() {
+    let psi = psi(vec![]);
+    // elim_W over a neutral variable z : W, constant Nat motive.
+    let gamma = extend(&nil_ctx(0), w_nat_empty(), c(0));
+    let elim = |m: Type, step: Term| Term::ElimW {
+        shape_level: Level::Zero,
+        pos_level: Level::Zero,
+        motive_level: Level::Zero,
+        shape: rty(Type::Nat),
+        pos: rty(Type::Empty),
+        motive: rty(m),
+        step: rt(step),
+        scrut: rt(v(0)),
+    };
+    // Same everything: convertible at the result type.
+    ok_tm(&psi, &gamma, &elim(Type::Nat, v(2)),
+          &elim(Type::Nat, v(2)), &Type::Nat, &c(0));
+    // A β-convertible motive (El «Nat» ⇝ Nat) is accepted.
+    let el_nat = Type::El { level: c(0), tm: rt(Term::TmNat) };
+    ok_tm(&psi, &gamma, &elim(el_nat, v(2)),
+          &elim(Type::Nat, v(2)), &Type::Nat, &c(0));
+    // A differing step is caught.
+    no_tm(&psi, &gamma, &elim(Type::Nat, v(2)),
+          &elim(Type::Nat, Term::Succ(rt(v(2)))), &Type::Nat, &c(0));
 }
