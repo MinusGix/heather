@@ -61,6 +61,15 @@ pub enum Type {
         lhs: Rc<Term>,
         rhs: Rc<Term>,
     },
+    /// `Σ^{l,l'}(x : S). T` — dependent pair type; `snd` binds one local
+    /// variable (of type `fst`). Lives at `l ⊔ l'`. Extension beyond DeLaM
+    /// ch. 04 (see issues/kernel-v1-extensions.md).
+    Sigma {
+        fst_level: Level,
+        snd_level: Level,
+        fst: Rc<Type>,
+        snd: Rc<Type>,
+    },
     /// `U^δ` — global type variable under a local substitution.
     GlobalTy { var: GlobalVar, subst: LocalSubst },
     /// `(g : Ctx) ⇒^l T` — meta-function type over context variables; binds
@@ -111,6 +120,15 @@ pub enum Term {
         lhs: Rc<Term>,
         rhs: Rc<Term>,
     },
+    /// `Σ^{l,l'}(x : s). t : Ty (l ⊔ l')` where `s : Ty l`; `snd` binds one
+    /// local variable (of type `El s`) — encoding of the dependent pair
+    /// type. Extension beyond DeLaM ch. 04.
+    TmSigma {
+        fst_level: Level,
+        snd_level: Level,
+        fst: Rc<Term>,
+        snd: Rc<Term>,
+    },
 
     // ---- natural numbers ----
     Zero,
@@ -146,6 +164,37 @@ pub enum Term {
         case: Rc<Term>,
         rhs: Rc<Term>,
         proof: Rc<Term>,
+    },
+
+    // ---- dependent pairs (extension beyond DeLaM ch. 04) ----
+    /// `pair^{l,l'}(x:S. T; a; b) : Σ^{l,l'}(x:S). T` — dependent pair
+    /// introduction. Fully annotated so it synthesizes: `snd_ty` binds one
+    /// local variable, `fst : S`, `snd : T[fst/x]`.
+    Pair {
+        fst_level: Level,
+        snd_level: Level,
+        fst_ty: Rc<Type>,
+        snd_ty: Rc<Type>,
+        fst: Rc<Term>,
+        snd: Rc<Term>,
+    },
+    /// `fst^{l,l'}(x:S. T; p) : S` — first projection; `p : Σ^{l,l'}(x:S). T`.
+    /// `snd_ty` binds one local variable. Annotated like `App` so it infers.
+    Fst {
+        fst_level: Level,
+        snd_level: Level,
+        fst_ty: Rc<Type>,
+        snd_ty: Rc<Type>,
+        pair: Rc<Term>,
+    },
+    /// `snd^{l,l'}(x:S. T; p) : T[fst p/x]` — second projection.
+    /// `snd_ty` binds one local variable.
+    Snd {
+        fst_level: Level,
+        snd_level: Level,
+        fst_ty: Rc<Type>,
+        snd_ty: Rc<Type>,
+        pair: Rc<Term>,
     },
 
     // ---- dependent functions ----
@@ -294,6 +343,11 @@ pub struct Branches {
     /// `u_u : Trm_c(g ⊢ U_S^id @ ℓ)`; locals: `x_S` (type motive!), `x_t`,
     /// `x_u`. Extension beyond ch. 04 (kernel-v1-extensions).
     pub ty_id: Rc<Term>,
+    /// `(ℓ, ℓ', g, U_S, U_T, x_S, x_T. t_Σ)` — univs: ℓ, ℓ'; globals: g,
+    /// `U_S : Typ_c(g, ℓ)`, `U_T : Typ_c((g, x : U_S^id @ ℓ), ℓ')`;
+    /// locals: `x_S`, `x_T` (recursive calls). Mirrors `ty_pi`. Extension
+    /// beyond ch. 04 (kernel-v1-extensions).
+    pub ty_sigma: Rc<Term>,
 
     // -- branches for code of terms (b_Trm) --
     /// `(ℓ, g, U_T, u_x. t_x)` — univs: ℓ; globals: g,
@@ -352,6 +406,25 @@ pub struct Branches {
     /// `u_e : Trm_c(g ⊢ Id^ℓ(U_S^id; u_a^id; u_r^id) @ ℓ)`; locals: `x_S`,
     /// `x_a`, `x_M` (type motive!), `x_c`, `x_r`, `x_e`.
     pub tm_j: Rc<Term>,
+    /// `(ℓ, ℓ', g, u_s, u_t, x_s, x_t. t'_Σ)` — univs: ℓ, ℓ'; globals: g,
+    /// `u_s : Trm_c(g ⊢ Ty ℓ)`, `u_t : Trm_c((g, x : El u_s) ⊢ Ty ℓ')`;
+    /// locals: `x_s`, `x_t`. Code of the encoding `Σ^ℓ,ℓ' (s; t) : Ty (ℓ⊔ℓ')`.
+    /// Mirrors `tm_pi`. Extension beyond ch. 04 (kernel-v1-extensions).
+    pub tm_sigma: Rc<Term>,
+    /// `(ℓ, ℓ', g, U_S, U_T, u_a, u_b, x_S, x_T, x_a, x_b. t_pair)` —
+    /// univs: ℓ, ℓ'; globals: g, `U_S : Typ_c(g, ℓ)`,
+    /// `U_T : Typ_c((g, x : U_S^id @ ℓ), ℓ')`, `u_a : Trm_c(g ⊢ U_S^id @ ℓ)`,
+    /// `u_b : Trm_c(g ⊢ U_T^{id, u_a/x} @ ℓ')`; locals: `x_S`, `x_T` (both
+    /// type motive!), `x_a`, `x_b`. Extension (kernel-v1-extensions).
+    pub tm_pair: Rc<Term>,
+    /// `(ℓ, ℓ', g, U_S, U_T, u_p, x_S, x_T, x_p. t_fst)` — univs: ℓ, ℓ';
+    /// globals: g, `U_S : Typ_c(g, ℓ)`, `U_T : Typ_c((g, x : U_S^id @ ℓ), ℓ')`,
+    /// `u_p : Trm_c(g ⊢ Σ x:U_S^id. U_T^id @ ℓ⊔ℓ')`; locals: `x_S`, `x_T`
+    /// (both type motive!), `x_p`. Extension (kernel-v1-extensions).
+    pub tm_fst: Rc<Term>,
+    /// `(ℓ, ℓ', g, U_S, U_T, u_p, x_S, x_T, x_p. t_snd)` — as `tm_fst`; the
+    /// branch type is `U_T^{id, fst(…u_p^id)/x}` @ ℓ'. Extension.
+    pub tm_snd: Rc<Term>,
 }
 
 /// Base of a local context: empty (`·`) or a context variable `g`.

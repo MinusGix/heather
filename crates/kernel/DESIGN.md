@@ -46,6 +46,21 @@ gain four branches (`ty_id`, `tm_id`, `tm_refl`, `tm_j`; 17 total). No K —
 UIP, where wanted, is Hedberg's theorem territory, and a strict-Prop-style
 alternative stays open (see the issue).
 
+Second extension: **Σ-types** — `Σ^{l,l'}(x:S). T` with encoding
+`Σ^{l,l'}(s; t) : Ty (l⊔l')` (decoded by `El (Σ …) ⇝ Σ (El …)`, mirroring
+Π), intro `pair^{l,l'}(x:S.T; a; b)`, and **projections** `fst`/`snd` (not a
+single match/split eliminator) with β `fst (pair a b) ⇝ a`, `snd … ⇝ b`.
+The key design choice — projections **with η for pairs** rather than split —
+follows the ch. 06 conversion structure consciously: `tm_nf` is
+type-directed, so a `Type::Sigma` arm comparing `fst a ≈ fst b` and
+`snd a ≈ snd b` mirrors the existing Π η arm exactly, giving definitional
+surjective pairing (`p ≈ (fst p, snd p)`); a match eliminator is not
+η-compatible and would diverge from Π's treatment. `fst`/`snd` are neutral
+when their pair is (like `app`/`elim_Nat`/`J`), and compared structurally at
+neutral result types. Fully annotated (like `App`) so they infer. The code
+recursors gain five branches (`ty_sigma`, `tm_sigma`, `tm_pair`, `tm_fst`,
+`tm_snd`; 22 total).
+
 Explicitly out of v0: coinduction/effects, typeclasses, compiler machinery,
 inductive types beyond Nat and Id, the type lifter (omitted by the paper
 too).

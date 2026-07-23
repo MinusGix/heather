@@ -435,9 +435,14 @@ fn const_branches(t: Term) -> Rc<Branches> {
         tm_lam: rt(t.clone()),
         tm_app: rt(t.clone()),
         ty_id: rt(t.clone()),
+        ty_sigma: rt(t.clone()),
         tm_id: rt(t.clone()),
         tm_refl: rt(t.clone()),
-        tm_j: rt(t),
+        tm_j: rt(t.clone()),
+        tm_sigma: rt(t.clone()),
+        tm_pair: rt(t.clone()),
+        tm_fst: rt(t.clone()),
+        tm_snd: rt(t),
     })
 }
 
@@ -505,7 +510,8 @@ fn recursor_branch_type_uses_motive() {
         for f in [&mut br.tm_var, &mut br.tm_nat, &mut br.tm_pi, &mut br.tm_ty,
                   &mut br.tm_zero, &mut br.tm_succ, &mut br.tm_elim_nat,
                   &mut br.tm_lam, &mut br.tm_app, &mut br.tm_id, &mut br.tm_refl,
-                  &mut br.tm_j] {
+                  &mut br.tm_j, &mut br.tm_sigma, &mut br.tm_pair, &mut br.tm_fst,
+                  &mut br.tm_snd] {
             *f = rt(Term::Zero);
         }
         br.ty_nat = rt(v(0));
@@ -529,7 +535,8 @@ fn recursor_branch_type_uses_motive() {
         for f in [&mut br.tm_var, &mut br.tm_nat, &mut br.tm_pi, &mut br.tm_ty,
                   &mut br.tm_zero, &mut br.tm_succ, &mut br.tm_elim_nat,
                   &mut br.tm_lam, &mut br.tm_app, &mut br.tm_id, &mut br.tm_refl,
-                  &mut br.tm_j] {
+                  &mut br.tm_j, &mut br.tm_sigma, &mut br.tm_pair, &mut br.tm_fst,
+                  &mut br.tm_snd] {
             *f = rt(Term::Zero);
         }
         *branches = Rc::new(br);
@@ -654,4 +661,94 @@ fn refl_and_j_conversion() {
     let gamma = extend(&nil_ctx(0), id00, c(0));
     ok_tm(&psi, &gamma, &j(beta_zero(), v(0)), &j(Term::Zero, v(0)), &Type::Nat, &c(0));
     no_tm(&psi, &gamma, &j(Term::Zero, v(0)), &j(num(1), v(0)), &Type::Nat, &c(0));
+}
+
+// -------------------------------------------------------------------------
+// Dependent pairs (extension beyond ch. 04; kernel-v1-extensions)
+// -------------------------------------------------------------------------
+
+#[test]
+fn sigma_type_congruence() {
+    let psi = psi(vec![]);
+    let g0 = nil_ctx(0);
+    let sig = |fst: Type, snd: Type| Type::Sigma {
+        fst_level: Level::Zero,
+        snd_level: Level::Zero,
+        fst: rty(fst),
+        snd: rty(snd),
+    };
+    // Congruence through a β-convertible first component:
+    // El^0 ((λx. «Nat») 0) ⇝ El^0 «Nat» ⇝ Nat.
+    let el_beta = Type::El { level: Level::Zero, tm: rt(app(lam(Term::TmNat), Term::Zero)) };
+    assert_eq!(
+        conv_type(&psi, &g0, Layer::Prog, &sig(el_beta, Type::Nat),
+                  &sig(Type::Nat, Type::Nat), &c(0), FUEL),
+        Ok(())
+    );
+    // A distinct second component is caught.
+    assert_eq!(
+        conv_type(&psi, &g0, Layer::Prog, &sig(Type::Nat, Type::Nat),
+                  &sig(Type::Nat, sig(Type::Nat, Type::Nat)), &c(0), FUEL),
+        Err(ConvError::NotConvertible)
+    );
+    // El of the encoding decodes to the Σ former.
+    let el_sig = Type::El {
+        level: Level::Zero,
+        tm: rt(Term::TmSigma {
+            fst_level: Level::Zero,
+            snd_level: Level::Zero,
+            fst: rt(Term::TmNat),
+            snd: rt(Term::TmNat),
+        }),
+    };
+    assert_eq!(
+        conv_type(&psi, &g0, Layer::Prog, &el_sig, &sig(Type::Nat, Type::Nat), &c(0), FUEL),
+        Ok(())
+    );
+}
+
+#[test]
+fn sigma_eta_surjective_pairing() {
+    let psi = psi(vec![]);
+    let sig = Type::Sigma {
+        fst_level: Level::Zero,
+        snd_level: Level::Zero,
+        fst: rty(Type::Nat),
+        snd: rty(Type::Nat),
+    };
+    let fst_of = |p: Term| Term::Fst {
+        fst_level: Level::Zero,
+        snd_level: Level::Zero,
+        fst_ty: rty(Type::Nat),
+        snd_ty: rty(Type::Nat),
+        pair: rt(p),
+    };
+    let snd_of = |p: Term| Term::Snd {
+        fst_level: Level::Zero,
+        snd_level: Level::Zero,
+        fst_ty: rty(Type::Nat),
+        snd_ty: rty(Type::Nat),
+        pair: rt(p),
+    };
+    let pair = |a: Term, b: Term| Term::Pair {
+        fst_level: Level::Zero,
+        snd_level: Level::Zero,
+        fst_ty: rty(Type::Nat),
+        snd_ty: rty(Type::Nat),
+        fst: rt(a),
+        snd: rt(b),
+    };
+    // η: a neutral p ≈ (fst p, snd p) definitionally, both directions.
+    let gamma = extend(&nil_ctx(0), sig.clone(), c(0));
+    let eta = pair(fst_of(v(0)), snd_of(v(0)));
+    ok_tm(&psi, &gamma, &v(0), &eta, &sig, &c(0));
+    ok_tm(&psi, &gamma, &eta, &v(0), &sig, &c(0));
+    // η is not blind: two distinct neutral pairs are not convertible.
+    let gamma2 = extend(&extend(&nil_ctx(0), sig.clone(), c(0)), sig.clone(), c(0));
+    no_tm(&psi, &gamma2, &v(0), &v(1), &sig, &c(0));
+    // Projections β-fire during conversion.
+    ok_tm(&psi, &nil_ctx(0), &fst_of(pair(beta_zero(), num(1))), &Term::Zero, &Type::Nat, &c(0));
+    ok_tm(&psi, &nil_ctx(0), &snd_of(pair(Term::Zero, num(2))), &num(2), &Type::Nat, &c(0));
+    // A neutral fst distinguishes its scrutinee.
+    no_tm(&psi, &gamma2, &fst_of(v(0)), &fst_of(v(1)), &Type::Nat, &c(0));
 }

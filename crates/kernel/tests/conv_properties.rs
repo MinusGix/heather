@@ -12,7 +12,7 @@
 //!    `fire` instantiations through `typing.rs`'s `G_A` telescope checks —
 //!    the cross-check of the hand-maintained tables the issue asks for;
 //! 5. the identity recursor is the identity in one β-step on arbitrary
-//!    generated code — `fire`'s payload wiring against all 17 branches.
+//!    generated code — `fire`'s payload wiring against all 22 branches.
 //!
 //! Failures report seeds only (`law!`); never Debug-format terms here.
 

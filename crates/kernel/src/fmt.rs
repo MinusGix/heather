@@ -103,6 +103,9 @@ impl fmt::Debug for Type {
             Type::Id { level, ty, lhs, rhs } => {
                 write!(f, "Id[{level:?}]({ty:?}; {lhs:?}; {rhs:?})")
             }
+            Type::Sigma { fst_level, snd_level, fst, snd } => {
+                write!(f, "Σ[{fst_level:?},{snd_level:?}]({fst:?}). {snd:?}")
+            }
             Type::GlobalTy { var, subst } => write!(f, "U{}^{subst:?}", var.0),
             Type::CtxPi { level, body } => write!(f, "Π[g:Ctx@{level:?}]. {body:?}"),
             Type::TyPi { ctx, arg_level, body_level, body } => {
@@ -128,6 +131,9 @@ impl fmt::Debug for Term {
             Term::TmId { level, ty, lhs, rhs } => {
                 write!(f, "«Id[{level:?}]({ty:?}; {lhs:?}; {rhs:?})»")
             }
+            Term::TmSigma { fst_level, snd_level, fst, snd } => {
+                write!(f, "«Σ[{fst_level:?},{snd_level:?}]({fst:?}). {snd:?}»")
+            }
             Term::Zero => f.write_str("0"),
             Term::Succ(t) => write!(f, "S({t:?})"),
             Term::ElimNat { level, motive, base, step, scrut } => write!(
@@ -138,6 +144,18 @@ impl fmt::Debug for Term {
             Term::J { ty_level, motive_level, ty, lhs, motive, case, rhs, proof } => write!(
                 f,
                 "J[{ty_level:?},{motive_level:?}]({ty:?}; a {lhs:?}; M {motive:?}; c {case:?}; {rhs:?}; {proof:?})"
+            ),
+            Term::Pair { fst_level, snd_level, fst_ty, snd_ty, fst, snd } => write!(
+                f,
+                "pair[{fst_level:?},{snd_level:?}]({fst_ty:?}. {snd_ty:?}; {fst:?}; {snd:?})"
+            ),
+            Term::Fst { fst_level, snd_level, fst_ty, snd_ty, pair } => write!(
+                f,
+                "fst[{fst_level:?},{snd_level:?}]({fst_ty:?}. {snd_ty:?}; {pair:?})"
+            ),
+            Term::Snd { fst_level, snd_level, fst_ty, snd_ty, pair } => write!(
+                f,
+                "snd[{fst_level:?},{snd_level:?}]({fst_ty:?}. {snd_ty:?}; {pair:?})"
             ),
             Term::Lam { dom_level, cod_level, dom, body } => {
                 write!(f, "λ[{dom_level:?},{cod_level:?}]({dom:?}). {body:?}")
@@ -250,12 +268,13 @@ impl fmt::Debug for Branches {
         node(f, |f| {
             write!(
                 f,
-                "b⃗(Nat {:?}; Π {:?}; Ty {:?}; El {:?}; Id {:?} | x {:?}; «Nat» {:?}; «Π» {:?}; «Ty» {:?}; 0 {:?}; S {:?}; elimN {:?}; λ {:?}; app {:?}; «Id» {:?}; refl {:?}; J {:?})",
+                "b⃗(Nat {:?}; Π {:?}; Ty {:?}; El {:?}; Id {:?}; Σ {:?} | x {:?}; «Nat» {:?}; «Π» {:?}; «Ty» {:?}; 0 {:?}; S {:?}; elimN {:?}; λ {:?}; app {:?}; «Id» {:?}; refl {:?}; J {:?}; «Σ» {:?}; pair {:?}; fst {:?}; snd {:?})",
                 self.ty_nat,
                 self.ty_pi,
                 self.ty_ty,
                 self.ty_el,
                 self.ty_id,
+                self.ty_sigma,
                 self.tm_var,
                 self.tm_nat,
                 self.tm_pi,
@@ -268,6 +287,10 @@ impl fmt::Debug for Branches {
                 self.tm_id,
                 self.tm_refl,
                 self.tm_j,
+                self.tm_sigma,
+                self.tm_pair,
+                self.tm_fst,
+                self.tm_snd,
             )
         })
     }

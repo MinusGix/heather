@@ -4,7 +4,7 @@
 //! disciplines, global contexts and local substitutions, universe
 //! polymorphism, contextual types (box/letbox, checking-only box under
 //! binders), and the code recursors, including a full *identity recursor*
-//! whose 17 branches re-box their telescopes' code — an end-to-end exercise
+//! whose 22 branches re-box their telescopes' code — an end-to-end exercise
 //! of every `G_Typ`/`G_Trm` telescope.
 //!
 //! No generator-based properties: the generators produce ill-typed terms,
@@ -511,6 +511,7 @@ fn constant_branches() -> Rc<Branches> {
         ty_ty: z(),
         ty_el: z(),
         ty_id: z(),
+        ty_sigma: z(),
         tm_var: z(),
         tm_nat: z(),
         tm_pi: z(),
@@ -523,6 +524,10 @@ fn constant_branches() -> Rc<Branches> {
         tm_id: z(),
         tm_refl: z(),
         tm_j: z(),
+        tm_sigma: z(),
+        tm_pair: z(),
+        tm_fst: z(),
+        tm_snd: z(),
     })
 }
 
@@ -661,6 +666,13 @@ fn identity_branches() -> Rc<Branches> {
             lhs: rt(gtm(1, &g3)),
             rhs: rt(gtm(0, &g3)),
         }))),
+        // box (Σ^{ℓ,ℓ'}(U_S^id; U_T^id))
+        ty_sigma: rt(Term::BoxTy(rty(Type::Sigma {
+            fst_level: lv(1),
+            snd_level: lv(0),
+            fst: rty(gty(1, &g2)),
+            snd: rty(gty(0, &gx_typi)),
+        }))),
         // box (Id^ℓ(u_S^id; u_t^id; u_u^id)) (the encoding)
         tm_id: rt(Term::BoxTm(rt(Term::TmId {
             level: lv(0),
@@ -699,6 +711,41 @@ fn identity_branches() -> Rc<Branches> {
                 proof: rt(gtm(0, &g6)),
             })))
         },
+        // box (Σ^{ℓ,ℓ'}(u_S^id; u_t^id)) (the encoding)
+        tm_sigma: {
+            let gx = ext(&g2, Type::El { level: lv(1), tm: rt(gtm(1, &g2)) }, lv(1));
+            rt(Term::BoxTm(rt(Term::TmSigma {
+                fst_level: lv(1),
+                snd_level: lv(0),
+                fst: rt(gtm(1, &g2)),
+                snd: rt(gtm(0, &gx)),
+            })))
+        },
+        // box (pair(x:U_S^id. U_T^id; u_a^id; u_b^id))
+        tm_pair: rt(Term::BoxTm(rt(Term::Pair {
+            fst_level: lv(1),
+            snd_level: lv(0),
+            fst_ty: rty(gty(3, &g4)),
+            snd_ty: rty(gty(2, &gx_app)),
+            fst: rt(gtm(1, &g4)),
+            snd: rt(gtm(0, &g4)),
+        }))),
+        // box (fst(x:U_S^id. U_T^id; u_p^id))
+        tm_fst: rt(Term::BoxTm(rt(Term::Fst {
+            fst_level: lv(1),
+            snd_level: lv(0),
+            fst_ty: rty(gty(2, &g3)),
+            snd_ty: rty(gty(1, &gx_lam)),
+            pair: rt(gtm(0, &g3)),
+        }))),
+        // box (snd(x:U_S^id. U_T^id; u_p^id))
+        tm_snd: rt(Term::BoxTm(rt(Term::Snd {
+            fst_level: lv(1),
+            snd_level: lv(0),
+            fst_ty: rty(gty(2, &g3)),
+            snd_ty: rty(gty(1, &gx_lam)),
+            pair: rt(gtm(0, &g3)),
+        }))),
     })
 }
 
@@ -900,4 +947,116 @@ fn j_paulin_mohring() {
         infer_closed(Layer::Var, &j(Term::Zero, refl0.clone())).unwrap_err(),
         TypeError::LayerMismatch
     );
+}
+
+// -------------------------------------------------------------------------
+// Dependent pairs (extension beyond ch. 04; kernel-v1-extensions)
+// -------------------------------------------------------------------------
+
+#[test]
+fn sigma_formation_and_encoding() {
+    let psi = GlobalCtx::default();
+    // Σ^{0,0}(x:Nat). Nat @ 0.
+    let sig = Type::Sigma {
+        fst_level: Level::Zero,
+        snd_level: Level::Zero,
+        fst: rty(Type::Nat),
+        snd: rty(Type::Nat),
+    };
+    let l = infer_type(&psi, 0, Layer::Prog, &nil_ctx(), &sig, FUEL).unwrap();
+    assert!(l.equiv(&Level::Zero));
+    // A dependent Σ: Σ(A : Ty 0). El 0 A @ 1.
+    let dep = Type::Sigma {
+        fst_level: c(1),
+        snd_level: Level::Zero,
+        fst: rty(Type::Ty(Level::Zero)),
+        snd: rty(Type::El { level: Level::Zero, tm: rt(v(0)) }),
+    };
+    let l = infer_type(&psi, 0, Layer::Prog, &nil_ctx(), &dep, FUEL).unwrap();
+    assert!(l.equiv(&c(1)));
+    // The encoding Σ^{0,0}(«Nat»; «Nat») : Ty 0 @ 1, El-decoding to the former.
+    let tm_sig = Term::TmSigma {
+        fst_level: Level::Zero,
+        snd_level: Level::Zero,
+        fst: rt(Term::TmNat),
+        snd: rt(Term::TmNat),
+    };
+    let (ty, l) = infer_closed(Layer::Prog, &tm_sig).unwrap();
+    // The inferred universe is 0⊔0 (a Max node), equivalent to 0.
+    let Type::Ty(tl) = &ty else { panic!("encoding should infer a universe") };
+    assert!(tl.equiv(&Level::Zero));
+    assert!(l.equiv(&c(1)));
+    let el_sig = Type::El { level: Level::Zero, tm: rt(tm_sig) };
+    // The pair (0, 0) checks against the El-decode (conversion fires through
+    // El (Σ …) ⇝ Σ (El …)).
+    let pair = Term::Pair {
+        fst_level: Level::Zero,
+        snd_level: Level::Zero,
+        fst_ty: rty(Type::Nat),
+        snd_ty: rty(Type::Nat),
+        fst: rt(Term::Zero),
+        snd: rt(Term::Zero),
+    };
+    check_closed(Layer::Prog, &pair, &el_sig, &Level::Zero).unwrap();
+}
+
+#[test]
+fn pair_projections_and_dependency() {
+    // A genuinely dependent pair: Σ(A : Ty 0). El 0 A, inhabited by
+    // (Nat, 0) — snd : El 0 (fst p) must land on Nat after β on fst.
+    let snd_ty = Type::El { level: Level::Zero, tm: rt(v(0)) };
+    let mk_pair = || Term::Pair {
+        fst_level: c(1),
+        snd_level: Level::Zero,
+        fst_ty: rty(Type::Ty(Level::Zero)),
+        snd_ty: rty(snd_ty.clone()),
+        fst: rt(Term::TmNat),
+        snd: rt(Term::Zero),
+    };
+    let sigma = Type::Sigma {
+        fst_level: c(1),
+        snd_level: Level::Zero,
+        fst: rty(Type::Ty(Level::Zero)),
+        snd: rty(snd_ty.clone()),
+    };
+    let (ty, l) = infer_closed(Layer::Prog, &mk_pair()).unwrap();
+    assert!(ty == sigma);
+    assert!(l.equiv(&c(1)));
+    // fst (Nat, 0) : Ty 0 @ 1.
+    let fst = Term::Fst {
+        fst_level: c(1),
+        snd_level: Level::Zero,
+        fst_ty: rty(Type::Ty(Level::Zero)),
+        snd_ty: rty(snd_ty.clone()),
+        pair: rt(mk_pair()),
+    };
+    let (ty, l) = infer_closed(Layer::Prog, &fst).unwrap();
+    assert!(ty == Type::Ty(Level::Zero));
+    assert!(l.equiv(&c(1)));
+    // snd (Nat, 0) : El 0 (fst (Nat, 0)) @ 0 — and, since fst β-reduces to
+    // Nat, this checks against Nat too.
+    let snd = Term::Snd {
+        fst_level: c(1),
+        snd_level: Level::Zero,
+        fst_ty: rty(Type::Ty(Level::Zero)),
+        snd_ty: rty(snd_ty.clone()),
+        pair: rt(mk_pair()),
+    };
+    let (ty, l) = infer_closed(Layer::Prog, &snd).unwrap();
+    assert!(l.equiv(&Level::Zero));
+    // The inferred type is El 0 (fst …); it is convertible to Nat.
+    assert!(ty == Type::El { level: Level::Zero, tm: rt(fst.clone()) });
+    check_closed(Layer::Prog, &snd, &Type::Nat, &Level::Zero).unwrap();
+    // A snd whose annotation mismatches the pair's is rejected: the pair
+    // must check at Σ(x:S).T with the *given* T.
+    let bad = Term::Fst {
+        fst_level: c(1),
+        snd_level: Level::Zero,
+        fst_ty: rty(Type::Ty(Level::Zero)),
+        snd_ty: rty(Type::Nat), // wrong: pair's snd_ty is El 0 (Var 0)
+        pair: rt(mk_pair()),
+    };
+    assert!(infer_closed(Layer::Prog, &bad).is_err());
+    // Layer v admits neither projection nor pair.
+    assert_eq!(infer_closed(Layer::Var, &mk_pair()).unwrap_err(), TypeError::LayerMismatch);
 }

@@ -33,7 +33,7 @@
 //!   variables demand `i' ≤ i`; `ω` is accepted nowhere a programmer level
 //!   is demanded ([`crate::level::Level::well_formed`]) and arises only as
 //!   the inferred level of `ΠΠ`/`Λ ℓ⃗`.
-//! - The recursor rules check the two motives and 17 branches against the
+//! - The recursor rules check the two motives and 22 branches against the
 //!   `G_M G_Typ G_Trm` telescopes of [`crate::rec`] — the same tables
 //!   conversion compares against.
 //!
@@ -469,6 +469,16 @@ impl Tc {
                 self.tm_check(env, rhs, ty, level)?;
                 Ok(level.clone())
             }
+            // Σ-formation (extension beyond ch. 04; kernel-v1-extensions):
+            // ⊢_i Σ^{l,l'}(x:S).T @ l⊔l' ⟸ ⊢_i S @ l, (Γ, x:S) ⊢_i T @ l'
+            Type::Sigma { fst_level, snd_level, fst, snd } => {
+                self.level_wf(env, fst_level)?;
+                self.level_wf(env, snd_level)?;
+                self.ty_check(env, fst, fst_level)?;
+                let e = env.push_entry(Rc::clone(fst), fst_level.clone());
+                self.ty_check(&e, snd, snd_level)?;
+                Ok(Level::max(fst_level.clone(), snd_level.clone()))
+            }
             Type::GlobalTy { var, subst } => {
                 let Some(binding) = lookup(&env.psi, *var) else {
                     return Err(TypeError::UnboundGlobalVar(var.0));
@@ -689,6 +699,28 @@ impl Tc {
                 self.tm_check(env, rhs, &el, level)?;
                 Ok((Type::Ty(level.clone()), Level::succ(level.clone())))
             }
+            // Encoding of Σ (extension): Σ^{l,l'}(x:s).t : Ty (l⊔l').
+            Term::TmSigma { fst_level, snd_level, fst, snd } => {
+                self.not_var_layer(env)?;
+                self.level_wf(env, fst_level)?;
+                self.level_wf(env, snd_level)?;
+                self.tm_check(
+                    env,
+                    fst,
+                    &Type::Ty(fst_level.clone()),
+                    &Level::succ(fst_level.clone()),
+                )?;
+                let el = Type::El { level: fst_level.clone(), tm: Rc::clone(fst) };
+                let e = env.push_entry(Rc::new(el), fst_level.clone());
+                self.tm_check(
+                    &e,
+                    snd,
+                    &Type::Ty(snd_level.clone()),
+                    &Level::succ(snd_level.clone()),
+                )?;
+                let lmax = Level::max(fst_level.clone(), snd_level.clone());
+                Ok((Type::Ty(lmax.clone()), Level::succ(lmax)))
+            }
             Term::Zero => {
                 self.not_var_layer(env)?;
                 Ok((Type::Nat, Level::Zero))
@@ -782,6 +814,86 @@ impl Tc {
                             .extended(Rc::clone(proof)),
                     ),
                     motive_level.clone(),
+                ))
+            }
+
+            // -- dependent pairs (extension beyond ch. 04) ------------------
+            // pair^{l,l'}(x:S.T; a; b) : Σ^{l,l'}(x:S).T @ l⊔l'.
+            Term::Pair { fst_level, snd_level, fst_ty, snd_ty, fst, snd } => {
+                self.not_var_layer(env)?;
+                self.level_wf(env, fst_level)?;
+                self.level_wf(env, snd_level)?;
+                self.ty_check(env, fst_ty, fst_level)?;
+                let e = env.push_entry(Rc::clone(fst_ty), fst_level.clone());
+                self.ty_check(&e, snd_ty, snd_level)?;
+                self.tm_check(env, fst, fst_ty, fst_level)?;
+                // b : T[a/x].
+                let snd_at = snd_ty
+                    .apply_local(&LocalSubst::id(&env.gamma).extended(Rc::clone(fst)));
+                self.tm_check(env, snd, &snd_at, snd_level)?;
+                Ok((
+                    Type::Sigma {
+                        fst_level: fst_level.clone(),
+                        snd_level: snd_level.clone(),
+                        fst: Rc::clone(fst_ty),
+                        snd: Rc::clone(snd_ty),
+                    },
+                    Level::max(fst_level.clone(), snd_level.clone()),
+                ))
+            }
+            // fst^{l,l'}(x:S.T; p) : S @ l.
+            Term::Fst { fst_level, snd_level, fst_ty, snd_ty, pair } => {
+                self.not_var_layer(env)?;
+                self.level_wf(env, fst_level)?;
+                self.level_wf(env, snd_level)?;
+                self.ty_check(env, fst_ty, fst_level)?;
+                let e = env.push_entry(Rc::clone(fst_ty), fst_level.clone());
+                self.ty_check(&e, snd_ty, snd_level)?;
+                let sigma = Type::Sigma {
+                    fst_level: fst_level.clone(),
+                    snd_level: snd_level.clone(),
+                    fst: Rc::clone(fst_ty),
+                    snd: Rc::clone(snd_ty),
+                };
+                self.tm_check(
+                    env,
+                    pair,
+                    &sigma,
+                    &Level::max(fst_level.clone(), snd_level.clone()),
+                )?;
+                Ok(((**fst_ty).clone(), fst_level.clone()))
+            }
+            // snd^{l,l'}(x:S.T; p) : T[fst p/x] @ l'.
+            Term::Snd { fst_level, snd_level, fst_ty, snd_ty, pair } => {
+                self.not_var_layer(env)?;
+                self.level_wf(env, fst_level)?;
+                self.level_wf(env, snd_level)?;
+                self.ty_check(env, fst_ty, fst_level)?;
+                let e = env.push_entry(Rc::clone(fst_ty), fst_level.clone());
+                self.ty_check(&e, snd_ty, snd_level)?;
+                let sigma = Type::Sigma {
+                    fst_level: fst_level.clone(),
+                    snd_level: snd_level.clone(),
+                    fst: Rc::clone(fst_ty),
+                    snd: Rc::clone(snd_ty),
+                };
+                self.tm_check(
+                    env,
+                    pair,
+                    &sigma,
+                    &Level::max(fst_level.clone(), snd_level.clone()),
+                )?;
+                let fst_p = Term::Fst {
+                    fst_level: fst_level.clone(),
+                    snd_level: snd_level.clone(),
+                    fst_ty: Rc::clone(fst_ty),
+                    snd_ty: Rc::clone(snd_ty),
+                    pair: Rc::clone(pair),
+                };
+                Ok((
+                    snd_ty
+                        .apply_local(&LocalSubst::id(&env.gamma).extended(Rc::new(fst_p))),
+                    snd_level.clone(),
                 ))
             }
 
@@ -1056,7 +1168,7 @@ impl Tc {
 
     /// The `G_A = G_M G_Typ G_Trm` premise bundle shared by the two
     /// recursor rules: motive levels, both motives well-formed in their
-    /// scopes, and all 17 branches at their instantiated motive types.
+    /// scopes, and all 22 branches at their instantiated motive types.
     fn rec_ga(
         &self,
         env: &Env,

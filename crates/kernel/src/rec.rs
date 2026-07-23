@@ -1,5 +1,5 @@
 //! The code-recursor telescopes of ch. 04 (§More Typing and Equivalence
-//! Judgments): the two motive scopes `G_M` and the 17 branch telescopes
+//! Judgments): the two motive scopes `G_M` and the 22 branch telescopes
 //! `G_Typ G_Trm` (13 from ch. 04 plus the Id/refl/J extension branches of
 //! kernel-v1-extensions), each with its expected (motive-instantiated) type.
 //!
@@ -199,14 +199,15 @@ pub(crate) fn motive_types(m: &Motives) -> [&Rc<Type>; 2] {
     [&m.ty_motive, &m.tm_motive]
 }
 
-/// The 17 branches, in [`branch_specs`] order (= `Branches` field order).
-pub(crate) fn branch_terms(b: &Branches) -> [&Rc<Term>; 17] {
+/// The 22 branches, in [`branch_specs`] order (= `Branches` field order).
+pub(crate) fn branch_terms(b: &Branches) -> [&Rc<Term>; 22] {
     [
         &b.ty_nat,
         &b.ty_pi,
         &b.ty_ty,
         &b.ty_el,
         &b.ty_id,
+        &b.ty_sigma,
         &b.tm_var,
         &b.tm_nat,
         &b.tm_pi,
@@ -219,21 +220,26 @@ pub(crate) fn branch_terms(b: &Branches) -> [&Rc<Term>; 17] {
         &b.tm_id,
         &b.tm_refl,
         &b.tm_j,
+        &b.tm_sigma,
+        &b.tm_pair,
+        &b.tm_fst,
+        &b.tm_snd,
     ]
 }
 
-/// The 17 branch telescopes `G_Typ G_Trm` with their expected types, built
+/// The 22 branch telescopes `G_Typ G_Trm` with their expected types, built
 /// from the given motives (for conversion: the *left* side's, matching its
 /// left-biased inference). `gamma` is the ambient local context (before any
 /// telescope), used only for the shape of the identity substitutions in the
 /// motive instantiations. The 13 ch. 04 branches come first in each group;
-/// `ty_id`/`tm_id`/`tm_refl`/`tm_j` are extensions (kernel-v1-extensions).
+/// `ty_id`/`ty_sigma` and `tm_id`/`tm_refl`/`tm_j`/`tm_sigma`/`tm_pair`/
+/// `tm_fst`/`tm_snd` are extensions (kernel-v1-extensions).
 pub(crate) fn branch_specs(
     motives: &Motives,
     l1: &Level,
     l2: &Level,
     gamma: &LocalCtx,
-) -> [BranchSpec; 17] {
+) -> [BranchSpec; 22] {
     let m_ty = &*motives.ty_motive;
     let m_tm = &*motives.tm_motive;
     let gt = |tu: u32, tg: u32| gamma.shift_univ(tu).shift_global(tg);
@@ -444,6 +450,64 @@ pub(crate) fn branch_specs(
                 &gt,
             )),
             level: l1.shift(1, 0),
+        }
+    };
+
+    // (ℓ, ℓ', g, U_S : Typ_c(g, ℓ), U_T : Typ_c((g, x : U_S^id @ ℓ), ℓ'),
+    //  x_S, x_T. t_Σ) : M_Typ[ℓ⊔ℓ'/ℓ, g/g, box (Σ x:U_S^id. U_T^id)/x_T]
+    // Extension beyond ch. 04 (kernel-v1-extensions); mirrors ty_pi.
+    let ty_sigma = {
+        let gt = gt(2, 3);
+        // telescope view: g = 2, U_S = 1, U_T = 0
+        let gx = ext_ctx(&g_ctx(2), gty(1, &g_ctx(2)), lvar(1));
+        let x_s = inst_ty_motive(
+            m_ty,
+            (2, 3, 0),
+            lvar(1),
+            g_ctx(2),
+            Term::BoxTy(Rc::new(gty(1, &g_ctx(2)))),
+            &gt,
+        );
+        let x_t = inst_ty_motive(
+            m_ty,
+            (2, 3, 1),
+            lvar(0),
+            gx.clone(),
+            Term::BoxTy(Rc::new(gty(0, &gx))),
+            &gt,
+        );
+        let code = Type::Sigma {
+            fst_level: lvar(1),
+            snd_level: lvar(0),
+            fst: Rc::new(gty(1, &g_ctx(2))),
+            snd: Rc::new(gty(0, &gx)),
+        };
+        BranchSpec {
+            tele: Tele {
+                univs: 2,
+                globals: vec![
+                    GlobalBinding::Ctx,
+                    GlobalBinding::Ty { ctx: g_ctx(0), layer: Layer::Code, level: lvar(1) },
+                    GlobalBinding::Ty {
+                        ctx: ext_ctx(&g_ctx(1), gty(0, &g_ctx(1)), lvar(1)),
+                        layer: Layer::Code,
+                        level: lvar(0),
+                    },
+                ],
+                locals: vec![
+                    (Rc::new(x_s), l1.shift(2, 0)),
+                    (Rc::new(x_t), l1.shift(2, 0)),
+                ],
+            },
+            ty: Rc::new(inst_ty_motive(
+                m_ty,
+                (2, 3, 2),
+                Level::max(lvar(1), lvar(0)),
+                g_ctx(2),
+                Term::BoxTy(Rc::new(code)),
+                &gt,
+            )),
+            level: l1.shift(2, 0),
         }
     };
 
@@ -1315,8 +1379,385 @@ pub(crate) fn branch_specs(
         }
     };
 
+    // (ℓ, ℓ', g, u_s : Trm_c(g ⊢ Ty ℓ @ 1+ℓ),
+    //  u_t : Trm_c((g, x : El ℓ u_s^id @ ℓ) ⊢ Ty ℓ' @ 1+ℓ'), x_s, x_t. t'_Σ)
+    //   : M_Trm[1+(ℓ⊔ℓ')/ℓ, g/g, Ty (ℓ⊔ℓ')/U_T, box (Σ x:u_s^id. u_t^id)/x_t]
+    // Extension; mirrors tm_pi.
+    let tm_sigma = {
+        let gt = gt(2, 3);
+        // telescope view: g = 2, u_s = 1, u_t = 0
+        let gx = ext_ctx(
+            &g_ctx(2),
+            Type::El { level: lvar(1), tm: Rc::new(gtm(1, &g_ctx(2))) },
+            lvar(1),
+        );
+        let x_s = inst_tm_motive(
+            m_tm,
+            (2, 3, 0),
+            Level::succ(lvar(1)),
+            g_ctx(2),
+            Type::Ty(lvar(1)),
+            Term::BoxTm(Rc::new(gtm(1, &g_ctx(2)))),
+            &gt,
+        );
+        let x_t = inst_tm_motive(
+            m_tm,
+            (2, 3, 1),
+            Level::succ(lvar(0)),
+            gx.clone(),
+            Type::Ty(lvar(0)),
+            Term::BoxTm(Rc::new(gtm(0, &gx))),
+            &gt,
+        );
+        let lmax = Level::max(lvar(1), lvar(0));
+        let code = Term::TmSigma {
+            fst_level: lvar(1),
+            snd_level: lvar(0),
+            fst: Rc::new(gtm(1, &g_ctx(2))),
+            snd: Rc::new(gtm(0, &gx)),
+        };
+        BranchSpec {
+            tele: Tele {
+                univs: 2,
+                globals: vec![
+                    GlobalBinding::Ctx,
+                    GlobalBinding::Tm {
+                        ctx: g_ctx(0),
+                        layer: Layer::Code,
+                        ty: Rc::new(Type::Ty(lvar(1))),
+                        level: Level::succ(lvar(1)),
+                    },
+                    GlobalBinding::Tm {
+                        ctx: ext_ctx(
+                            &g_ctx(1),
+                            Type::El { level: lvar(1), tm: Rc::new(gtm(0, &g_ctx(1))) },
+                            lvar(1),
+                        ),
+                        layer: Layer::Code,
+                        ty: Rc::new(Type::Ty(lvar(0))),
+                        level: Level::succ(lvar(0)),
+                    },
+                ],
+                locals: vec![
+                    (Rc::new(x_s), l2.shift(2, 0)),
+                    (Rc::new(x_t), l2.shift(2, 0)),
+                ],
+            },
+            ty: Rc::new(inst_tm_motive(
+                m_tm,
+                (2, 3, 2),
+                Level::succ(lmax.clone()),
+                g_ctx(2),
+                Type::Ty(lmax),
+                Term::BoxTm(Rc::new(code)),
+                &gt,
+            )),
+            level: l2.shift(2, 0),
+        }
+    };
+
+    // (ℓ, ℓ', g, U_S : Typ_c(g, ℓ), U_T : Typ_c((g, x : U_S^id @ ℓ), ℓ'),
+    //  u_a : Trm_c(g ⊢ U_S^id @ ℓ), u_b : Trm_c(g ⊢ U_T^{id,u_a/x} @ ℓ'),
+    //  x_S, x_T, x_a, x_b. t_pair)
+    //   : M_Trm[ℓ⊔ℓ'/ℓ, g/g, Σ x:U_S^id. U_T^id / U_T,
+    //           box (pair(x:U_S^id. U_T^id; u_a^id; u_b^id))/x_t]
+    // Both type annotations are sub-structures (like app); extension.
+    let tm_pair = {
+        let gt = gt(2, 5);
+        // telescope view: g = 4, U_S = 3, U_T = 2, u_a = 1, u_b = 0
+        let gx = ext_ctx(&g_ctx(4), gty(3, &g_ctx(4)), lvar(1));
+        let x_s = inst_ty_motive(
+            m_ty,
+            (2, 5, 0),
+            lvar(1),
+            g_ctx(4),
+            Term::BoxTy(Rc::new(gty(3, &g_ctx(4)))),
+            &gt,
+        );
+        let x_t = inst_ty_motive(
+            m_ty,
+            (2, 5, 1),
+            lvar(0),
+            gx.clone(),
+            Term::BoxTy(Rc::new(gty(2, &gx))),
+            &gt,
+        );
+        let x_a = inst_tm_motive(
+            m_tm,
+            (2, 5, 2),
+            lvar(1),
+            g_ctx(4),
+            gty(3, &g_ctx(4)),
+            Term::BoxTm(Rc::new(gtm(1, &g_ctx(4)))),
+            &gt,
+        );
+        let u_t_at_ua = Type::GlobalTy {
+            var: GlobalVar(2),
+            subst: LocalSubst::id(&g_ctx(4)).extended(Rc::new(gtm(1, &g_ctx(4)))),
+        };
+        let x_b = inst_tm_motive(
+            m_tm,
+            (2, 5, 3),
+            lvar(0),
+            g_ctx(4),
+            u_t_at_ua,
+            Term::BoxTm(Rc::new(gtm(0, &g_ctx(4)))),
+            &gt,
+        );
+        let sigma = Type::Sigma {
+            fst_level: lvar(1),
+            snd_level: lvar(0),
+            fst: Rc::new(gty(3, &g_ctx(4))),
+            snd: Rc::new(gty(2, &gx)),
+        };
+        let code = Term::Pair {
+            fst_level: lvar(1),
+            snd_level: lvar(0),
+            fst_ty: Rc::new(gty(3, &g_ctx(4))),
+            snd_ty: Rc::new(gty(2, &gx)),
+            fst: Rc::new(gtm(1, &g_ctx(4))),
+            snd: Rc::new(gtm(0, &g_ctx(4))),
+        };
+        BranchSpec {
+            tele: Tele {
+                univs: 2,
+                globals: vec![
+                    GlobalBinding::Ctx,
+                    GlobalBinding::Ty { ctx: g_ctx(0), layer: Layer::Code, level: lvar(1) },
+                    GlobalBinding::Ty {
+                        ctx: ext_ctx(&g_ctx(1), gty(0, &g_ctx(1)), lvar(1)),
+                        layer: Layer::Code,
+                        level: lvar(0),
+                    },
+                    GlobalBinding::Tm {
+                        ctx: g_ctx(2),
+                        layer: Layer::Code,
+                        ty: Rc::new(gty(1, &g_ctx(2))),
+                        level: lvar(1),
+                    },
+                    GlobalBinding::Tm {
+                        ctx: g_ctx(3),
+                        layer: Layer::Code,
+                        ty: Rc::new(Type::GlobalTy {
+                            var: GlobalVar(1),
+                            subst: LocalSubst::id(&g_ctx(3))
+                                .extended(Rc::new(gtm(0, &g_ctx(3)))),
+                        }),
+                        level: lvar(0),
+                    },
+                ],
+                locals: vec![
+                    (Rc::new(x_s), l1.shift(2, 0)),
+                    (Rc::new(x_t), l1.shift(2, 0)),
+                    (Rc::new(x_a), l2.shift(2, 0)),
+                    (Rc::new(x_b), l2.shift(2, 0)),
+                ],
+            },
+            ty: Rc::new(inst_tm_motive(
+                m_tm,
+                (2, 5, 4),
+                Level::max(lvar(1), lvar(0)),
+                g_ctx(4),
+                sigma,
+                Term::BoxTm(Rc::new(code)),
+                &gt,
+            )),
+            level: l2.shift(2, 0),
+        }
+    };
+
+    // (ℓ, ℓ', g, U_S : Typ_c(g, ℓ), U_T : Typ_c((g, x : U_S^id @ ℓ), ℓ'),
+    //  u_p : Trm_c(g ⊢ Σ x:U_S^id. U_T^id @ ℓ⊔ℓ'), x_S, x_T, x_p. t_fst)
+    //   : M_Trm[ℓ/ℓ, g/g, U_S^id/U_T, box (fst(x:U_S^id.U_T^id; u_p^id))/x_t]
+    // Extension.
+    let tm_fst = {
+        let gt = gt(2, 4);
+        // telescope view: g = 3, U_S = 2, U_T = 1, u_p = 0
+        let gx = ext_ctx(&g_ctx(3), gty(2, &g_ctx(3)), lvar(1));
+        let x_s = inst_ty_motive(
+            m_ty,
+            (2, 4, 0),
+            lvar(1),
+            g_ctx(3),
+            Term::BoxTy(Rc::new(gty(2, &g_ctx(3)))),
+            &gt,
+        );
+        let x_t = inst_ty_motive(
+            m_ty,
+            (2, 4, 1),
+            lvar(0),
+            gx.clone(),
+            Term::BoxTy(Rc::new(gty(1, &gx))),
+            &gt,
+        );
+        let sigma = Type::Sigma {
+            fst_level: lvar(1),
+            snd_level: lvar(0),
+            fst: Rc::new(gty(2, &g_ctx(3))),
+            snd: Rc::new(gty(1, &gx)),
+        };
+        let x_p = inst_tm_motive(
+            m_tm,
+            (2, 4, 2),
+            Level::max(lvar(1), lvar(0)),
+            g_ctx(3),
+            sigma.clone(),
+            Term::BoxTm(Rc::new(gtm(0, &g_ctx(3)))),
+            &gt,
+        );
+        let code = Term::Fst {
+            fst_level: lvar(1),
+            snd_level: lvar(0),
+            fst_ty: Rc::new(gty(2, &g_ctx(3))),
+            snd_ty: Rc::new(gty(1, &gx)),
+            pair: Rc::new(gtm(0, &g_ctx(3))),
+        };
+        // u_p's binding type, scoped over [g, U_S, U_T] (g=2, U_S=1, U_T=0).
+        let sigma_up = Type::Sigma {
+            fst_level: lvar(1),
+            snd_level: lvar(0),
+            fst: Rc::new(gty(1, &g_ctx(2))),
+            snd: Rc::new(gty(0, &ext_ctx(&g_ctx(2), gty(1, &g_ctx(2)), lvar(1)))),
+        };
+        BranchSpec {
+            tele: Tele {
+                univs: 2,
+                globals: vec![
+                    GlobalBinding::Ctx,
+                    GlobalBinding::Ty { ctx: g_ctx(0), layer: Layer::Code, level: lvar(1) },
+                    GlobalBinding::Ty {
+                        ctx: ext_ctx(&g_ctx(1), gty(0, &g_ctx(1)), lvar(1)),
+                        layer: Layer::Code,
+                        level: lvar(0),
+                    },
+                    GlobalBinding::Tm {
+                        ctx: g_ctx(2),
+                        layer: Layer::Code,
+                        ty: Rc::new(sigma_up),
+                        level: Level::max(lvar(1), lvar(0)),
+                    },
+                ],
+                locals: vec![
+                    (Rc::new(x_s), l1.shift(2, 0)),
+                    (Rc::new(x_t), l1.shift(2, 0)),
+                    (Rc::new(x_p), l2.shift(2, 0)),
+                ],
+            },
+            ty: Rc::new(inst_tm_motive(
+                m_tm,
+                (2, 4, 3),
+                lvar(1),
+                g_ctx(3),
+                gty(2, &g_ctx(3)),
+                Term::BoxTm(Rc::new(code)),
+                &gt,
+            )),
+            level: l2.shift(2, 0),
+        }
+    };
+
+    // (ℓ, ℓ', g, U_S, U_T, u_p, x_S, x_T, x_p. t_snd) — telescope as tm_fst;
+    //   : M_Trm[ℓ'/ℓ, g/g, U_T^{id, fst(u_p^id)/x}/U_T,
+    //           box (snd(x:U_S^id.U_T^id; u_p^id))/x_t]. Extension.
+    let tm_snd = {
+        let gt = gt(2, 4);
+        // telescope view: g = 3, U_S = 2, U_T = 1, u_p = 0
+        let gx = ext_ctx(&g_ctx(3), gty(2, &g_ctx(3)), lvar(1));
+        let x_s = inst_ty_motive(
+            m_ty,
+            (2, 4, 0),
+            lvar(1),
+            g_ctx(3),
+            Term::BoxTy(Rc::new(gty(2, &g_ctx(3)))),
+            &gt,
+        );
+        let x_t = inst_ty_motive(
+            m_ty,
+            (2, 4, 1),
+            lvar(0),
+            gx.clone(),
+            Term::BoxTy(Rc::new(gty(1, &gx))),
+            &gt,
+        );
+        let sigma = Type::Sigma {
+            fst_level: lvar(1),
+            snd_level: lvar(0),
+            fst: Rc::new(gty(2, &g_ctx(3))),
+            snd: Rc::new(gty(1, &gx)),
+        };
+        let x_p = inst_tm_motive(
+            m_tm,
+            (2, 4, 2),
+            Level::max(lvar(1), lvar(0)),
+            g_ctx(3),
+            sigma.clone(),
+            Term::BoxTm(Rc::new(gtm(0, &g_ctx(3)))),
+            &gt,
+        );
+        let fst_code = Term::Fst {
+            fst_level: lvar(1),
+            snd_level: lvar(0),
+            fst_ty: Rc::new(gty(2, &g_ctx(3))),
+            snd_ty: Rc::new(gty(1, &gx)),
+            pair: Rc::new(gtm(0, &g_ctx(3))),
+        };
+        let snd_code = Term::Snd {
+            fst_level: lvar(1),
+            snd_level: lvar(0),
+            fst_ty: Rc::new(gty(2, &g_ctx(3))),
+            snd_ty: Rc::new(gty(1, &gx)),
+            pair: Rc::new(gtm(0, &g_ctx(3))),
+        };
+        let u_t_at_fst = Type::GlobalTy {
+            var: GlobalVar(1),
+            subst: LocalSubst::id(&g_ctx(3)).extended(Rc::new(fst_code)),
+        };
+        let sigma_up = Type::Sigma {
+            fst_level: lvar(1),
+            snd_level: lvar(0),
+            fst: Rc::new(gty(1, &g_ctx(2))),
+            snd: Rc::new(gty(0, &ext_ctx(&g_ctx(2), gty(1, &g_ctx(2)), lvar(1)))),
+        };
+        BranchSpec {
+            tele: Tele {
+                univs: 2,
+                globals: vec![
+                    GlobalBinding::Ctx,
+                    GlobalBinding::Ty { ctx: g_ctx(0), layer: Layer::Code, level: lvar(1) },
+                    GlobalBinding::Ty {
+                        ctx: ext_ctx(&g_ctx(1), gty(0, &g_ctx(1)), lvar(1)),
+                        layer: Layer::Code,
+                        level: lvar(0),
+                    },
+                    GlobalBinding::Tm {
+                        ctx: g_ctx(2),
+                        layer: Layer::Code,
+                        ty: Rc::new(sigma_up),
+                        level: Level::max(lvar(1), lvar(0)),
+                    },
+                ],
+                locals: vec![
+                    (Rc::new(x_s), l1.shift(2, 0)),
+                    (Rc::new(x_t), l1.shift(2, 0)),
+                    (Rc::new(x_p), l2.shift(2, 0)),
+                ],
+            },
+            ty: Rc::new(inst_tm_motive(
+                m_tm,
+                (2, 4, 3),
+                lvar(0),
+                g_ctx(3),
+                u_t_at_fst,
+                Term::BoxTm(Rc::new(snd_code)),
+                &gt,
+            )),
+            level: l2.shift(2, 0),
+        }
+    };
+
     [
-        ty_nat, ty_pi, ty_ty, ty_el, ty_id, tm_var, tm_nat, tm_pi, tm_ty, tm_zero,
-        tm_succ, tm_elim_nat, tm_lam, tm_app, tm_id, tm_refl, tm_j,
+        ty_nat, ty_pi, ty_ty, ty_el, ty_id, ty_sigma, tm_var, tm_nat, tm_pi, tm_ty,
+        tm_zero, tm_succ, tm_elim_nat, tm_lam, tm_app, tm_id, tm_refl, tm_j, tm_sigma,
+        tm_pair, tm_fst, tm_snd,
     ]
 }

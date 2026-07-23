@@ -30,7 +30,7 @@
 //! - **Boxed types/terms compare syntactically** (`==`; α-equality is free
 //!   under de Bruijn). Code is static data — β-convertible code is *not*
 //!   convertible.
-//! - Neutral recursors compare motives, all 17 branches (each at its
+//! - Neutral recursors compare motives, all 22 branches (each at its
 //!   instantiated motive type, the ch. 04 `G_A` telescopes), and indices —
 //!   the ch. 06 `C_A` bundle ([`Conv::rec_ca`]).
 //! - The layer index restricts *types*, not terms (ch. 06 intro): layer-m
@@ -282,6 +282,17 @@ impl Conv {
                 self.ty(env, s1, s2, l1)?;
                 self.tm(env, t1, t2, s1, l1)?;
                 self.tm(env, u1, u2, s1, l1)
+            }
+            // Σ congruence (extension; mirrors Π).
+            (
+                Type::Sigma { fst_level: dl1, snd_level: cl1, fst: s1, snd: t1 },
+                Type::Sigma { fst_level: dl2, snd_level: cl2, fst: s2, snd: t2 },
+            ) => {
+                self.lev_eq(dl1, dl2)?;
+                self.lev_eq(cl1, cl2)?;
+                self.ty(env, s1, s2, dl1)?;
+                let e = env.push_entry(Rc::clone(s1), dl1.clone());
+                self.ty(&e, t1, t2, cl1)
             }
             // -- layer-m type formers: mismatch outside layer m -------------
             (
@@ -556,10 +567,34 @@ impl Conv {
                     self.tm(env, t1, t2, &el, l1)?;
                     self.tm(env, u1, u2, &el, l1)
                 }
-                (Term::TmNat | Term::TmTy(_) | Term::TmPi { .. } | Term::TmId { .. }, _)
-                | (_, Term::TmNat | Term::TmTy(_) | Term::TmPi { .. } | Term::TmId { .. }) => {
-                    Err(NC)
+                // TmSigma congruence (extension; mirrors TmPi).
+                (
+                    Term::TmSigma { fst_level: dl1, snd_level: cl1, fst: s1, snd: t1 },
+                    Term::TmSigma { fst_level: dl2, snd_level: cl2, fst: s2, snd: t2 },
+                ) => {
+                    self.lev_eq(dl1, dl2)?;
+                    self.lev_eq(cl1, cl2)?;
+                    self.tm(env, s1, s2, &Type::Ty(dl1.clone()), &Level::succ(dl1.clone()))?;
+                    let el = Type::El { level: dl1.clone(), tm: Rc::clone(s1) };
+                    let e = env.push_entry(Rc::new(el), dl1.clone());
+                    self.tm(&e, t1, t2, &Type::Ty(cl1.clone()), &Level::succ(cl1.clone()))
                 }
+                (
+                    Term::TmNat
+                    | Term::TmTy(_)
+                    | Term::TmPi { .. }
+                    | Term::TmId { .. }
+                    | Term::TmSigma { .. },
+                    _,
+                )
+                | (
+                    _,
+                    Term::TmNat
+                    | Term::TmTy(_)
+                    | Term::TmPi { .. }
+                    | Term::TmId { .. }
+                    | Term::TmSigma { .. },
+                ) => Err(NC),
                 _ => self.tm_nee(env, a, b).map(drop),
             },
             // Id (extension): refl congruence on the point; else neutral.
@@ -572,6 +607,33 @@ impl Conv {
                 (Term::Refl { .. }, _) | (_, Term::Refl { .. }) => Err(NC),
                 _ => self.tm_nee(env, a, b).map(drop),
             },
+            // Σ η (extension): surjective pairing — type-directed like the Π
+            // η arm, so it fires on literal pairs, neutrals, or mixtures.
+            // Compare `fst a ≈ fst b : S` and `snd a ≈ snd b : T[fst a/x]`.
+            Type::Sigma { fst_level, snd_level, fst, snd } => {
+                let proj = |head: &Term, first: bool| {
+                    let f = |pair: Rc<Term>| {
+                        (
+                            fst_level.clone(),
+                            snd_level.clone(),
+                            Rc::clone(fst),
+                            Rc::clone(snd),
+                            pair,
+                        )
+                    };
+                    let (fl, sl, ft, st, pair) = f(Rc::new(head.clone()));
+                    if first {
+                        Term::Fst { fst_level: fl, snd_level: sl, fst_ty: ft, snd_ty: st, pair }
+                    } else {
+                        Term::Snd { fst_level: fl, snd_level: sl, fst_ty: ft, snd_ty: st, pair }
+                    }
+                };
+                self.tm(env, &proj(a, true), &proj(b, true), fst, fst_level)?;
+                let snd_ty = snd.apply_local(
+                    &LocalSubst::id(&env.gamma).extended(Rc::new(proj(a, true))),
+                );
+                self.tm(env, &proj(a, false), &proj(b, false), &snd_ty, snd_level)
+            }
             // Neutral type: only neutral terms inhabit it.
             Type::El { .. } | Type::GlobalTy { .. } => self.tm_nee(env, a, b).map(drop),
         }
@@ -721,6 +783,44 @@ impl Conv {
                 self.tm(env, a1, a2, s1, dl1)?;
                 Ok((
                     t1.apply_local(&LocalSubst::id(&env.gamma).extended(Rc::clone(a1))),
+                    cl1.clone(),
+                ))
+            }
+            // fst/snd neutral congruence (extension; mirrors App — the Σ
+            // annotations forced by well-typedness are compared, the pair via
+            // tm_nee). These arms fire only when the projected pair is itself
+            // neutral (η already handled non-neutral pairs in tm_nf).
+            (
+                Term::Fst { fst_level: dl1, snd_level: cl1, fst_ty: s1, snd_ty: t1, pair: p1 },
+                Term::Fst { fst_level: dl2, snd_level: cl2, fst_ty: s2, snd_ty: t2, pair: p2 },
+            ) => {
+                self.lev_eq(dl1, dl2)?;
+                self.lev_eq(cl1, cl2)?;
+                self.ty(env, s1, s2, dl1)?;
+                let e_x = env.push_entry(Rc::clone(s1), dl1.clone());
+                self.ty(&e_x, t1, t2, cl1)?;
+                self.tm_nee(env, p1, p2)?; // inferred Σ: redundant, ignored
+                Ok(((**s1).clone(), dl1.clone()))
+            }
+            (
+                Term::Snd { fst_level: dl1, snd_level: cl1, fst_ty: s1, snd_ty: t1, pair: p1 },
+                Term::Snd { fst_level: dl2, snd_level: cl2, fst_ty: s2, snd_ty: t2, pair: p2 },
+            ) => {
+                self.lev_eq(dl1, dl2)?;
+                self.lev_eq(cl1, cl2)?;
+                self.ty(env, s1, s2, dl1)?;
+                let e_x = env.push_entry(Rc::clone(s1), dl1.clone());
+                self.ty(&e_x, t1, t2, cl1)?;
+                self.tm_nee(env, p1, p2)?;
+                let fst_p = Term::Fst {
+                    fst_level: dl1.clone(),
+                    snd_level: cl1.clone(),
+                    fst_ty: Rc::clone(s1),
+                    snd_ty: Rc::clone(t1),
+                    pair: Rc::clone(p1),
+                };
+                Ok((
+                    t1.apply_local(&LocalSubst::id(&env.gamma).extended(Rc::new(fst_p))),
                     cl1.clone(),
                 ))
             }
@@ -943,7 +1043,7 @@ impl Conv {
 
     // -- the C_A bundle for neutral recursors -------------------------------
 
-    /// Ch. 06 `C_A`: motive levels, both motives, and all 17 branches, each
+    /// Ch. 06 `C_A`: motive levels, both motives, and all 22 branches, each
     /// branch compared at its instantiated motive type under its ch. 04
     /// telescope (`G_M G_Typ G_Trm`). Branch types and telescope entry
     /// types are built from the *left* side (left-biased, like all
@@ -962,7 +1062,7 @@ impl Conv {
             self.ty(&e, x, y, &spec.level)?;
         }
 
-        // G_Typ G_Trm: the 17 branches, each at its instantiated motive
+        // G_Typ G_Trm: the 22 branches, each at its instantiated motive
         // type under its telescope.
         let branch_specs = rec::branch_specs(a.motives, a.l1, a.l2, &env.gamma);
         let ba = rec::branch_terms(a.branches);

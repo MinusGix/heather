@@ -89,6 +89,13 @@ pub fn step_type(t: &Type, gamma: &LocalCtx) -> Option<Type> {
                 lhs: Rc::clone(lhs),
                 rhs: Rc::clone(rhs),
             }),
+            // El^{l⊔l'} (Σ^{l,l'} s t) ⇝ Σ^{l,l'}(El^l s; El^l' t)   (extension)
+            Term::TmSigma { fst_level, snd_level, fst, snd } => Some(Type::Sigma {
+                fst_level: fst_level.clone(),
+                snd_level: snd_level.clone(),
+                fst: Rc::new(Type::El { level: fst_level.clone(), tm: Rc::clone(fst) }),
+                snd: Rc::new(Type::El { level: snd_level.clone(), tm: Rc::clone(snd) }),
+            }),
             _ => step_term(tm, gamma)
                 .map(|tm| Type::El { level: level.clone(), tm: Rc::new(tm) }),
         },
@@ -141,6 +148,28 @@ pub fn step_term(t: &Term, gamma: &LocalCtx) -> Option<Term> {
                 }),
             }
         }
+        // fst (pair a b) ⇝ a; else reduce the pair   (extension)
+        Term::Fst { fst_level, snd_level, fst_ty, snd_ty, pair } => match &**pair {
+            Term::Pair { fst, .. } => Some((**fst).clone()),
+            _ => step_term(pair, gamma).map(|p| Term::Fst {
+                fst_level: fst_level.clone(),
+                snd_level: snd_level.clone(),
+                fst_ty: Rc::clone(fst_ty),
+                snd_ty: Rc::clone(snd_ty),
+                pair: Rc::new(p),
+            }),
+        },
+        // snd (pair a b) ⇝ b; else reduce the pair   (extension)
+        Term::Snd { fst_level, snd_level, fst_ty, snd_ty, pair } => match &**pair {
+            Term::Pair { snd, .. } => Some((**snd).clone()),
+            _ => step_term(pair, gamma).map(|p| Term::Snd {
+                fst_level: fst_level.clone(),
+                snd_level: snd_level.clone(),
+                fst_ty: Rc::clone(fst_ty),
+                snd_ty: Rc::clone(snd_ty),
+                pair: Rc::new(p),
+            }),
+        },
         Term::App { fun, dom_level, cod_level, dom, cod, arg } => match &**fun {
             // app(λx. t; …; s) ⇝ t[s/x]
             Term::Lam { body, .. } => {
@@ -432,6 +461,23 @@ fn beta_elim_ty(
                     GlobalEntry::Tm(Rc::clone(rhs)),
                 ],
                 vec![s_ty, s_lhs, s_rhs],
+                gamma,
+            ))
+        }
+        // (ℓ, ℓ', g, U_S, U_T, x_S, x_T. t_Σ)   (extension)
+        Type::Sigma { fst_level, snd_level, fst, snd } => {
+            let dx = extend(delta, Rc::clone(fst), fst_level.clone());
+            let s_fst = rec.elim_ty(fst_level.clone(), delta.clone(), Rc::clone(fst));
+            let s_snd = rec.elim_ty(snd_level.clone(), dx, Rc::clone(snd));
+            Some(fire(
+                &b.ty_sigma,
+                &[snd_level.clone(), fst_level.clone()],
+                vec![
+                    GlobalEntry::Ctx(delta.clone()),
+                    GlobalEntry::Ty(Rc::clone(fst)),
+                    GlobalEntry::Ty(Rc::clone(snd)),
+                ],
+                vec![s_fst, s_snd],
                 gamma,
             ))
         }
@@ -731,6 +777,125 @@ fn beta_elim_tm(
                 gamma,
             ))
         }
+        // (ℓ, ℓ', g, u_s, u_t, x_s, x_t. t'_Σ) — the encoding; mirrors
+        // tm_pi.   (extension)
+        Term::TmSigma { fst_level, snd_level, fst, snd } => {
+            let s_fst = rec.elim_tm(
+                Level::succ(fst_level.clone()),
+                delta.clone(),
+                Rc::new(Type::Ty(fst_level.clone())),
+                Rc::clone(fst),
+            );
+            let dx = extend(
+                delta,
+                Rc::new(Type::El { level: fst_level.clone(), tm: Rc::clone(fst) }),
+                fst_level.clone(),
+            );
+            let s_snd = rec.elim_tm(
+                Level::succ(snd_level.clone()),
+                dx,
+                Rc::new(Type::Ty(snd_level.clone())),
+                Rc::clone(snd),
+            );
+            Some(fire(
+                &b.tm_sigma,
+                &[snd_level.clone(), fst_level.clone()],
+                vec![
+                    GlobalEntry::Ctx(delta.clone()),
+                    GlobalEntry::Tm(Rc::clone(fst)),
+                    GlobalEntry::Tm(Rc::clone(snd)),
+                ],
+                vec![s_fst, s_snd],
+                gamma,
+            ))
+        }
+        // (ℓ, ℓ', g, U_S, U_T, u_a, u_b, x_S, x_T, x_a, x_b. t_pair) — both
+        // type annotations are sub-structures (like app).   (extension)
+        Term::Pair { fst_level, snd_level, fst_ty, snd_ty, fst, snd } => {
+            let s_fst_ty = rec.elim_ty(fst_level.clone(), delta.clone(), Rc::clone(fst_ty));
+            let dx = extend(delta, Rc::clone(fst_ty), fst_level.clone());
+            let s_snd_ty = rec.elim_ty(snd_level.clone(), dx, Rc::clone(snd_ty));
+            let s_fst =
+                rec.elim_tm(fst_level.clone(), delta.clone(), Rc::clone(fst_ty), Rc::clone(fst));
+            // b : T[a/x].
+            let snd_at =
+                snd_ty.apply_local(&LocalSubst::id(delta).extended(Rc::clone(fst)));
+            let s_snd =
+                rec.elim_tm(snd_level.clone(), delta.clone(), Rc::new(snd_at), Rc::clone(snd));
+            Some(fire(
+                &b.tm_pair,
+                &[snd_level.clone(), fst_level.clone()],
+                vec![
+                    GlobalEntry::Ctx(delta.clone()),
+                    GlobalEntry::Ty(Rc::clone(fst_ty)),
+                    GlobalEntry::Ty(Rc::clone(snd_ty)),
+                    GlobalEntry::Tm(Rc::clone(fst)),
+                    GlobalEntry::Tm(Rc::clone(snd)),
+                ],
+                vec![s_fst_ty, s_snd_ty, s_fst, s_snd],
+                gamma,
+            ))
+        }
+        // (ℓ, ℓ', g, U_S, U_T, u_p, x_S, x_T, x_p. t_fst)   (extension)
+        Term::Fst { fst_level, snd_level, fst_ty, snd_ty, pair } => {
+            let s_fst_ty = rec.elim_ty(fst_level.clone(), delta.clone(), Rc::clone(fst_ty));
+            let dx = extend(delta, Rc::clone(fst_ty), fst_level.clone());
+            let s_snd_ty = rec.elim_ty(snd_level.clone(), dx, Rc::clone(snd_ty));
+            let sigma = Rc::new(Type::Sigma {
+                fst_level: fst_level.clone(),
+                snd_level: snd_level.clone(),
+                fst: Rc::clone(fst_ty),
+                snd: Rc::clone(snd_ty),
+            });
+            let s_pair = rec.elim_tm(
+                Level::max(fst_level.clone(), snd_level.clone()),
+                delta.clone(),
+                sigma,
+                Rc::clone(pair),
+            );
+            Some(fire(
+                &b.tm_fst,
+                &[snd_level.clone(), fst_level.clone()],
+                vec![
+                    GlobalEntry::Ctx(delta.clone()),
+                    GlobalEntry::Ty(Rc::clone(fst_ty)),
+                    GlobalEntry::Ty(Rc::clone(snd_ty)),
+                    GlobalEntry::Tm(Rc::clone(pair)),
+                ],
+                vec![s_fst_ty, s_snd_ty, s_pair],
+                gamma,
+            ))
+        }
+        // (ℓ, ℓ', g, U_S, U_T, u_p, x_S, x_T, x_p. t_snd)   (extension)
+        Term::Snd { fst_level, snd_level, fst_ty, snd_ty, pair } => {
+            let s_fst_ty = rec.elim_ty(fst_level.clone(), delta.clone(), Rc::clone(fst_ty));
+            let dx = extend(delta, Rc::clone(fst_ty), fst_level.clone());
+            let s_snd_ty = rec.elim_ty(snd_level.clone(), dx, Rc::clone(snd_ty));
+            let sigma = Rc::new(Type::Sigma {
+                fst_level: fst_level.clone(),
+                snd_level: snd_level.clone(),
+                fst: Rc::clone(fst_ty),
+                snd: Rc::clone(snd_ty),
+            });
+            let s_pair = rec.elim_tm(
+                Level::max(fst_level.clone(), snd_level.clone()),
+                delta.clone(),
+                sigma,
+                Rc::clone(pair),
+            );
+            Some(fire(
+                &b.tm_snd,
+                &[snd_level.clone(), fst_level.clone()],
+                vec![
+                    GlobalEntry::Ctx(delta.clone()),
+                    GlobalEntry::Ty(Rc::clone(fst_ty)),
+                    GlobalEntry::Ty(Rc::clone(snd_ty)),
+                    GlobalEntry::Tm(Rc::clone(pair)),
+                ],
+                vec![s_fst_ty, s_snd_ty, s_pair],
+                gamma,
+            ))
+        }
         // box (u^δ): blocked, neutral.
         Term::GlobalTm { .. } => None,
         // Layer-m forms cannot be layer-c code: ill-typed, stuck.
@@ -758,6 +923,7 @@ pub fn is_whnf_type(t: &Type) -> bool {
         Type::Nat
         | Type::Pi { .. }
         | Type::Id { .. }
+        | Type::Sigma { .. }
         | Type::Ty(_)
         | Type::UPi { .. }
         | Type::CtxPi { .. }
@@ -778,6 +944,7 @@ pub fn is_neutral_term(t: &Term) -> bool {
         Term::Var(_) | Term::GlobalTm { .. } => true,
         Term::ElimNat { scrut, .. } => is_neutral_term(scrut),
         Term::J { proof, .. } => is_neutral_term(proof),
+        Term::Fst { pair, .. } | Term::Snd { pair, .. } => is_neutral_term(pair),
         Term::App { fun, .. }
         | Term::UApp { fun, .. }
         | Term::CtxApp { fun, .. }
@@ -805,9 +972,11 @@ pub fn is_whnf_term(t: &Term) -> bool {
         | Term::TmPi { .. }
         | Term::TmTy(_)
         | Term::TmId { .. }
+        | Term::TmSigma { .. }
         | Term::Zero
         | Term::Succ(_)
         | Term::Refl { .. }
+        | Term::Pair { .. }
         | Term::Lam { .. }
         | Term::ULam { .. }
         | Term::CtxLam { .. }

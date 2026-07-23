@@ -263,6 +263,23 @@ pub fn gen_branches(sc: &Sc, r: &mut Rng, b: u32) -> Rc<Branches> {
                 GK::Tm(sh(g, 0)),
             ]
         }),
+        ty_sigma: t(2, 2, &|g| vec![GK::Ctx, GK::Ty(sh(g, 0)), GK::Ty(sh(g, 1))]),
+        tm_sigma: t(2, 2, &|g| vec![GK::Ctx, GK::Tm(sh(g, 0)), GK::Tm(sh(g, 1))]),
+        tm_pair: t(2, 4, &|g| {
+            vec![
+                GK::Ctx,
+                GK::Ty(sh(g, 0)),
+                GK::Ty(sh(g, 1)),
+                GK::Tm(sh(g, 0)),
+                GK::Tm(sh(g, 0)),
+            ]
+        }),
+        tm_fst: t(2, 3, &|g| {
+            vec![GK::Ctx, GK::Ty(sh(g, 0)), GK::Ty(sh(g, 1)), GK::Tm(sh(g, 0))]
+        }),
+        tm_snd: t(2, 3, &|g| {
+            vec![GK::Ctx, GK::Ty(sh(g, 0)), GK::Ty(sh(g, 1)), GK::Tm(sh(g, 0))]
+        }),
     })
 }
 
@@ -286,7 +303,7 @@ pub fn gen_type(sc: &Sc, r: &mut Rng, b: u32) -> Rc<Type> {
     }
 
     for _ in 0..8 {
-        let arm = if b == 0 { r.below(3) } else { r.below(11) };
+        let arm = if b == 0 { r.below(3) } else { r.below(12) };
         match arm {
             0 => return Rc::new(Type::Nat),
             1 => return Rc::new(Type::Ty(gen_level(sc, r, 1))),
@@ -363,6 +380,16 @@ pub fn gen_type(sc: &Sc, r: &mut Rng, b: u32) -> Rc<Type> {
                     rhs: gen_term(sc, r, b / 2),
                 });
             }
+            11 if b > 0 => {
+                let mut inner = sc.clone();
+                inner.local.len += 1;
+                return Rc::new(Type::Sigma {
+                    fst_level: gen_level(sc, r, 1),
+                    snd_level: gen_level(sc, r, 1),
+                    fst: gen_type(sc, r, b / 2),
+                    snd: gen_type(&inner, r, b / 2),
+                });
+            }
             _ => continue,
         }
     }
@@ -386,7 +413,7 @@ pub fn gen_term(sc: &Sc, r: &mut Rng, b: u32) -> Rc<Term> {
     }
 
     for _ in 0..8 {
-        let arm = if b == 0 { r.below(5) } else { r.below(19) };
+        let arm = if b == 0 { r.below(5) } else { r.below(23) };
         match arm {
             0 if sc.local.len > 0 => return Rc::new(Term::Var(LocalVar(r.below(sc.local.len)))),
             0 | 1 => return Rc::new(Term::Zero),
@@ -566,6 +593,50 @@ pub fn gen_term(sc: &Sc, r: &mut Rng, b: u32) -> Rc<Term> {
                     proof: gen_term(sc, r, b / 2),
                 });
             }
+            19 if b > 0 => {
+                let mut inner = sc.clone();
+                inner.local.len += 1;
+                return Rc::new(Term::TmSigma {
+                    fst_level: gen_level(sc, r, 1),
+                    snd_level: gen_level(sc, r, 1),
+                    fst: gen_term(sc, r, b / 2),
+                    snd: gen_term(&inner, r, b / 2),
+                });
+            }
+            20 if b > 0 => {
+                let mut inner = sc.clone();
+                inner.local.len += 1;
+                return Rc::new(Term::Pair {
+                    fst_level: gen_level(sc, r, 1),
+                    snd_level: gen_level(sc, r, 1),
+                    fst_ty: gen_type(sc, r, b / 2),
+                    snd_ty: gen_type(&inner, r, b / 2),
+                    fst: gen_term(sc, r, b / 2),
+                    snd: gen_term(sc, r, b / 2),
+                });
+            }
+            21 if b > 0 => {
+                let mut inner = sc.clone();
+                inner.local.len += 1;
+                return Rc::new(Term::Fst {
+                    fst_level: gen_level(sc, r, 1),
+                    snd_level: gen_level(sc, r, 1),
+                    fst_ty: gen_type(sc, r, b / 2),
+                    snd_ty: gen_type(&inner, r, b / 2),
+                    pair: gen_term(sc, r, b / 2),
+                });
+            }
+            22 if b > 0 => {
+                let mut inner = sc.clone();
+                inner.local.len += 1;
+                return Rc::new(Term::Snd {
+                    fst_level: gen_level(sc, r, 1),
+                    snd_level: gen_level(sc, r, 1),
+                    fst_ty: gen_type(sc, r, b / 2),
+                    snd_ty: gen_type(&inner, r, b / 2),
+                    pair: gen_term(sc, r, b / 2),
+                });
+            }
             _ => continue,
         }
     }
@@ -665,6 +736,7 @@ pub fn count_type(t: &Type) -> u64 {
         Type::Nat | Type::Ty(_) => 0,
         Type::Pi { dom, cod, .. } => count_type(dom) + count_type(cod),
         Type::Id { ty, lhs, rhs, .. } => count_type(ty) + count_term(lhs) + count_term(rhs),
+        Type::Sigma { fst, snd, .. } => count_type(fst) + count_type(snd),
         Type::UPi { body, .. } => count_type(body),
         Type::El { tm, .. } => count_term(tm),
         Type::GlobalTy { subst, .. } => count_subst(subst),
@@ -682,11 +754,18 @@ pub fn count_term(t: &Term) -> u64 {
         Term::TmId { ty, lhs, rhs, .. } => {
             count_term(ty) + count_term(lhs) + count_term(rhs)
         }
+        Term::TmSigma { fst, snd, .. } => count_term(fst) + count_term(snd),
         Term::Succ(t) => count_term(t),
         Term::Refl { ty, tm, .. } => count_type(ty) + count_term(tm),
         Term::J { ty, lhs, motive, case, rhs, proof, .. } => {
             count_type(ty) + count_term(lhs) + count_type(motive) + count_term(case)
                 + count_term(rhs) + count_term(proof)
+        }
+        Term::Pair { fst_ty, snd_ty, fst, snd, .. } => {
+            count_type(fst_ty) + count_type(snd_ty) + count_term(fst) + count_term(snd)
+        }
+        Term::Fst { fst_ty, snd_ty, pair, .. } | Term::Snd { fst_ty, snd_ty, pair, .. } => {
+            count_type(fst_ty) + count_type(snd_ty) + count_term(pair)
         }
         Term::ElimNat { motive, base, step, scrut, .. } => {
             count_type(motive) + count_term(base) + count_term(step) + count_term(scrut)
@@ -749,7 +828,12 @@ pub fn count_branches(b: &Branches) -> u64 {
         + count_term(&b.tm_lam)
         + count_term(&b.tm_app)
         + count_term(&b.ty_id)
+        + count_term(&b.ty_sigma)
         + count_term(&b.tm_id)
         + count_term(&b.tm_refl)
         + count_term(&b.tm_j)
+        + count_term(&b.tm_sigma)
+        + count_term(&b.tm_pair)
+        + count_term(&b.tm_fst)
+        + count_term(&b.tm_snd)
 }
