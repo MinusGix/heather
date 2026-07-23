@@ -1,0 +1,723 @@
+\section{Reduction and Convertibility}
+
+We have finished syntactic verification for \delamlang. %
+In this section, let us consider its dynamics by providing the reduction rules for
+types and terms and the convertibility checking algorithm between two terms. %
+The reduction relations to be given compute the weak head normal forms for
+types and terms, respectively, and are sub-relations for equivalence judgments for
+types and terms. %
+We first give the syntax for weak head normal forms and neutral forms, and then give
+the rules for reduction. %
+We will need the reduction relations to write down the Kripke logical relations in the
+next section as well as in the convertibility checking algorithm. %
+
+\subsection{Weak Head Normal Forms}
+
+The following gives the syntax for weak head normal forms and neutral forms for types
+and terms. %
+As usual, we use capital case for types and lower case for terms. 
+
+\begin{alignat*}{2}
+  W &:= && \ \Nat \sep \PI{l}{l'}x S T \sep \Ty l \sep \UPI \ell l T 
+           \tag{Weak head normal form for types}\\
+    & &&  \sep \CPI g l T \sep \TPI U l{l'}T \sep \CTyp l \sep \CTrm T l  \\
+  V & := &&\ U^\delta \sep \Elt l \nu
+  \tag{Neutral form for types}\\
+  w &:= &&\ \nu \sep \Nat \sep \PI{l}{l'}x s t \sep \Ty l \sep \ze \sep \su t \sep \LAM l{l'} x S t
+           \tag{Weak head normal form for terms ($\Nf$)} \\
+    & && \sep \ULAM l \ell t \sep \CLAM l g t \sep \TLAM l{l'} U t \sep \boxit T \sep
+         \boxit t \\
+  \nu &:= &&\ x \sep u^\delta \sep \ELIMN l{x.M}{s}{x, y.s'}{\nu} \sep \APP \nu l{l'} x S T
+           s \sep \UAPP \nu l
+           \tag{Neutral form for terms ($\Ne$)} \\
+    & && \sep \CAPP \nu \Gamma \sep \TAPP \nu T \sep \LETBTYP{l'}l\Gamma{x_T. M}{U}{t'}\nu
+         \sep \LETBTRM{l'}l\Gamma T{x_t. M}{u}{t'}\nu \\
+    & && \sep \ELIMTYP{l_1}{l_2}Mbl\Gamma \nu \sep \ELIMTYP{l_1}{l_2}Mbl\Gamma {(\boxit
+         {U^\delta})} \\
+    & && \sep \ELIMTRM{l_1}{l_2}Mbl\Gamma T \nu \sep \ELIMTRM{l_1}{l_2}Mbl\Gamma T {(\boxit{u^\delta})}
+\end{alignat*}
+
+Notice that for the recursive principles, we block on global variables, following
+\citet{hu2024layered}. 
+
+\subsection{Reduction Relations}
+
+There are two required reduction relations, one for types and one for terms. %
+The one for types simply compute types from encodings via $\tEl$. %
+Unlike~\citet{abel_decidability_2017} who employed typed reductions, we deliberately
+use untyped reductions and use preservation later to make sure the reductions are
+well-defined. %
+This deviation from \citet{abel_decidability_2017} requires us to establish enough
+syntactic theorems before hand. %
+It is particularly important to use untyped reductions because of the way in which the logical relations
+relate terms. %
+We let $\reds$ to be the reflexive transitive closure of $\redd$. 
+\begin{mathpar}
+  {{\Elt 0 \Nat} \redd \Nat}
+
+  {{\Elt{1 + l}{\Ty l}} \redd {\Ty l}}
+  
+  {{\Elt{l \sqcup l'}{\PI l{l'} x s t}}\redd{\PI l{l'} x{\Elt l s}{\Elt{l'} t}}}
+
+  \inferrule
+  {t \redd t'}
+  {{\Elt{l}t} \redd {\Elt l{t'}}}
+\end{mathpar}
+
+The reduction rules for terms are simply the $\beta$ equivalence rules. %
+\begin{mathpar}
+  {{\ELIMN l{x.M}s{x,y. s'}\ze} \redd {s}}
+
+  {{\ELIMN l{x.M}s{x,y. s'}{(\su t)}} \redd {s'[t/x,\ELIMN l{x.M}s{x,y. s'}t/y]}}
+
+  {{\APP {\LAM {l}{l'} x S t} {l}{l'} x{S} T s} \redd {t[s/x]}}
+
+  {{(\ULAM l \ell t)~\$~\vect l} \redd {t[\vect l/\vect \ell]}}
+
+  {{\CAPP{(\CLAM l g t)}\Delta} \redd {t[\Delta/g]}}
+
+  {{\TAPP{(\TLAM{l}{l'}U t)}{T}} \redd {t[T/U]}}
+
+  {{\LETBTYP{l'}l \Delta{x_T.M}{U}{t'}{(\boxit T)}} \redd {t'[T/U]}}
+
+  {{\LETBTRM{l'}l \Delta T{x_t.M}{u}{t'}{(\boxit t)}} \redd {t'[t/u]}}
+\end{mathpar}
+
+The reduction rules for recursors follow the same principle. %
+We write down only one rule as an example and omit the rest as they are just
+$\beta$ rules:
+\begin{mathpar}
+  {{\ELIMTYP{l_1}{l_2}M b{0}\Delta{(\boxit
+        \Nat)}} \redd {t_\Nat[\Delta/g]}}
+\end{mathpar}
+
+The congruence rules reduce the terms at the weak head positions to discover further
+redices. %
+There are at least one congruence rules for all elimination forms. %
+\begin{mathpar}
+  \inferrule
+  {t \redd t'}
+  {{\ELIMN l{x.M}s{x,y. s'}t} \redd {\ELIMN l{x.M}s{x,y. s'}{t'}}}
+
+  \inferrule
+  {t \redd t'}
+  {{\APP t {l}{l'} x{S} T s} \redd {\APP{t'}{l}{l'} x{S} T s}}
+\end{mathpar}
+For elimination forms for meta-programming, we have
+\begin{mathpar}
+  \inferrule
+  {t \redd t'}
+  {{t~\$~\vect l} \redd {t'~\$~\vect l}}
+
+  \inferrule
+  {t \redd t'}
+  {{\CAPP{t}\Delta} \redd {\CAPP{t'}\Delta}}
+
+  \inferrule
+  {t \redd t'}
+  {{\TAPP{t}{T}} \redd {\TAPP{t'}{T}}}
+
+  \inferrule
+  {t \redd t'}
+  {{\LETBTYP{l'}l \Delta{x_T.M}{U}{s}{t}} \redd {\LETBTYP{l'}l \Delta{x_T.M}{U}{s}{t'}}}
+
+  \inferrule
+  {t \redd t'}
+  {{\LETBTRM{l'}l \Delta T{x_t.M}{u}{s}{t}} \redd {\LETBTRM{l'}l \Delta T{x_t.M}{u}{s}{t'}}}
+\end{mathpar}
+There are also congruence rules for the recursive principles. %
+For the recursive principle for code of terms, we choose to reduce the type to weak
+head normal form first and then reduce the term itself. %
+This order is arbitrary and can be flipped. %
+We simply fix a choice here.
+\begin{mathpar}
+  \inferrule
+  {t \redd t'}
+  {{\ELIMTYP{l_1}{l_2}M b{l'}\Delta t} \redd {\ELIMTYP{l_1}{l_2}M b{l'}\Delta {t'}}}
+
+  \inferrule
+  {T \redd T'}
+  {{\ELIMTRM{l_1}{l_2}M b{l'}\Delta T t} \redd {\ELIMTRM{l_1}{l_2}M b{l'}\Delta {T'}{t}}}
+
+  \inferrule
+  {t \redd t'}
+  {{\ELIMTRM{l_1}{l_2}M b{l'}\Delta W t} \redd {\ELIMTRM{l_1}{l_2}M b{l'}\Delta W {t'}}}
+\end{mathpar}
+We first verify the fact that reductions are just sub-relations of the
+equivalence judgments:
+\begin{lemma}[Soundness]
+  Given $\compt i$,
+  \begin{itemize}
+  \item if $\lttypwf i T l$ and $T \redd T'$, then $\lttypeq i T{T'} l$;
+  \item if $\lttyping i t T l$ and $t \redd t'$, then $\lttyequiv i t{t'} T l$.
+  \end{itemize}
+\end{lemma}
+\begin{proof}
+  We proceed by mutual induction on the typing judgments and then invert the reduction
+  relations. %
+  We use $\compt i$ to make sure computation rules are available. %
+  We select a few cases for discussion:
+  \begin{itemize}[label=Case]
+  \item
+    The following is the only possible rule for types:
+    \begin{mathpar}
+      \inferrule
+      {\typing[L] l \Level \\ \lttyping i t{\Ty l}{1 + l}}
+      {\lttypwf i{\Elt l t}{l}}
+    \end{mathpar}
+    Inversion of $\Elt l t \redd T'$ gives four possible subcases. %
+    We only consider two:
+    \begin{itemize}[label=Subcase]
+    \item
+      \[
+        {\Elt{l_1 \sqcup l_2}{\PI {l_1}{l_2} x s t}}\redd{\PI {l_1}{l_2} x{\Elt{l_1} s}{\Elt{l_2} t}}
+      \]
+      Then we know
+      \[
+        \lttyping i{\PI {l_1}{l_2} x s t}{\Ty l}{1 + l}
+      \]
+      We further do an inner induction on the typing judgment above after generalizing
+      $\Ty l$ to some arbitrary $T$. %
+      There are only three cases to consider:
+      \begin{itemize}[label=Subsubcase]
+      \item
+        \begin{mathpar}
+          \inferrule
+          {\typing[L]{l_1}\Level  \\ \typing[L]{l_2}\Level \\
+            \lttyping i s{\Ty{l_1}}{1 + l_1} \\ \lttyping[\Psi][\Gamma, x : \Elt{l_1} s \at{l_1}] i t{\Ty{l_2}}{1 + l_2}}
+          {\lttyping i{\PI {l_1}{l_2} x s t}{\Ty{l_1 \sqcup l_2}}{1 + {(l_1 \sqcup l_2)}}}
+        \end{mathpar}
+        Then this case we derive the goal immediately from the $\tEl$ rule for $\Pi$
+        types. 
+      \item
+        \begin{mathpar}
+          \inferrule
+          {\lttyping i {\PI {l_1}{l_2} x s t}{T'}{l'} \\ \lttypeq{\typeof i}{T}{T'}{l'}}
+          {\lttyping i {\PI {l_1}{l_2} x s t}{T}{l'}}
+        \end{mathpar}
+        In this case, we simply apply the inner IH to obtain the goal. 
+      \item
+        \begin{mathpar}
+          \inferrule
+          {\lttyping i {\PI {l_1}{l_2} x s t} T{l'} \\ \tyequiv[L]l{l'}\Level}
+          {\lttyping i {\PI {l_1}{l_2} x s t} T l}
+        \end{mathpar}
+        Similarly, we use the inner IH to obtain the goal. 
+      \end{itemize}
+      In general, when we know the form of a term, an inner induction must reveal only
+      three cases to consider. %
+      This pattern appears a lot when we consider cases for types.
+      
+    \item
+      We have this case
+      \begin{mathpar}
+        \inferrule
+        {t \redd t'}
+        {{\Elt{l}t} \redd {\Elt l{t'}}}
+      \end{mathpar}
+      Then by IH, we have
+      \[
+        \lttyequiv i t{t'}{\Ty l}{1 + l}
+      \]
+      We obtain the goal by the congruence rule for $\tEl$.
+      
+    \end{itemize}
+    
+  \item
+    \begin{mathpar}
+      \inferrule
+      {\lttyping i t{T'}l \\ \lttypeq{\typeof i}T{T'}l}
+      {\lttyping i t T l}
+    \end{mathpar}
+    By IH, we have
+    \[
+      \lttyequiv i{t}{t'}{T'}l
+    \]
+    We obtain the goal by the conversion rule.
+    
+  \item
+    \begin{mathpar}
+      \inferrule
+      {\lttyping i tT{l'} \\ \tyequiv[L]l{l'}\Level}
+      {\lttyping i t T l}
+    \end{mathpar}
+    By IH, we have
+    \[
+      \lttyequiv i{t}{t'}{T}{l'}
+    \]
+    We obtain the goal by the conversion rule.
+
+  \item
+    For the recursive principle for natural numbers, there are three subcases after
+    inverting the reduction premise. %
+    We apply $\beta$ rules or the congruence rule properly.
+
+    The same principle applies for the recursive principles for code, but a bit more
+    complex. %
+    We will use theorems from \Cref{sec:dt:syn:cov} in combination of the congruence
+    rules to obtain our goals. 
+    
+  \end{itemize}
+\end{proof}
+
+As a corollary,
+\begin{lemma}[Preservation] $ $
+  \begin{itemize}
+  \item If $\lttypwf i T l$ and $T \redd T'$, then $\lttypwf i {T'} l$.
+  \item If $\lttyping i t T l$ and $t \redd t'$, then $\lttyping i {t'} T l$.
+  \end{itemize}
+\end{lemma}
+\begin{proof}
+  We analyze $i$. %
+  If $i = \varlevel$, then there is no applicable reduction rule. %
+  If $i = \codelevel$, then we use lifting to lift $i$ to $\proglevel$, then use the soundness,
+  presupposition and unlifting lemmas to obtain the goals. %
+  Otherwise, we use the soundness lemma and the presupposition lemma. %
+\end{proof}
+
+The substitution lemmas require the well-formedness of types and the well-typedness of
+terms to make use of algebraic laws of substitutions.
+\begin{lemma}[Universe Substitutions] $ $
+  Given $\compt i$,
+  \begin{itemize}
+  \item if $\lttypwf[\Psi][\Gamma][L'] i T l$, $T \redd T'$ and $\typing[L]{\phi}{L'}$, then $T[\phi] \redd T'[\phi]$;
+  \item if $\lttyping[\Psi][\Gamma][L'] i t T l$, $t \redd t'$ and
+    $\typing[L]{\phi}{L'}$, then $t[\phi] \redd t'[\phi]$.
+  \end{itemize}
+\end{lemma}
+
+\begin{lemma}[Local Substitutions] $ $
+  Given $\compt i$,
+  \begin{itemize}
+  \item if $\lttypwf[\Psi][\Delta] i T l$, $T \redd T'$ and $\ltsubst i \delta \Delta$, then $T[\delta] \redd T'[\delta]$;
+  \item if $\lttyping[\Psi][\Delta] i t T l$, $t \redd t'$ and
+    $\ltsubst i \delta \Delta$, then $t[\delta] \redd t'[\delta]$.
+  \end{itemize}
+\end{lemma}
+
+\begin{lemma}[Global Substitutions] $ $
+  Given $\compt i$,
+  \begin{itemize}
+  \item if $\lttypwf[\Phi] i T l$, $T \redd T'$ and $\ptyping \sigma \Phi$, then $T[\sigma] \redd T'[\sigma]$;
+  \item if $\lttyping[\Phi] i t T l$, $t \redd t'$ and
+    $\ptyping \sigma \Phi$, then $t[\sigma] \redd t'[\sigma]$.
+  \end{itemize}
+\end{lemma}
+
+All lemmas above also work for the reflexive transitive closure versions of
+reduction. 
+
+\begin{lemma}[Determinacy] $ $
+  \begin{itemize}
+  \item If $T \redd T'$ and $T \redd T'$, then $T' = T''$. 
+  \item If $t \redd t'$ and $t \redd t''$, then $t' = t''$. 
+  \end{itemize}
+\end{lemma}
+
+If a multi-step reduction reaches a normal form, then we know this normal form is also
+uniquely determined:
+\begin{lemma}[Determinacy] $ $
+  \begin{itemize}
+  \item If $T \reds W$ and $T \reds W'$, then $W = W'$. 
+  \item If $t \reds w$ and $t \reds w'$, then $w = w'$. 
+  \end{itemize}
+\end{lemma}
+\begin{proof}
+  Induction. Use the fact that weak head normal forms do not reduce and determinacy of
+  single-step reduction. 
+\end{proof}
+
+Due to preservation, we often are interested in keeping track of well-formedness and
+well-typedness of types and terms. %
+Therefore it is convenient to give the following convenient auxiliary judgments:
+\begin{mathpar}
+  \inferrule
+  {\lttypwf i T l \\ T \redd T'}
+  {\ttypred i T{T'} l}
+
+  \inferrule
+  {\lttypwf i T l \\ T \reds T'}
+  {\ttypreds i T{T'} l}
+
+  \inferrule
+  {\lttyping i t T l \\ t \redd t'}
+  {\ttrmred i t{t'} T l}
+
+  \inferrule
+  {\lttyping i t T l \\ t \reds t'}
+  {\ttrmreds i t{t'} T l}
+\end{mathpar}
+
+\subsection{Convertibility Checking}
+
+The convertibility checking is standard: we first reduce types or terms to their
+weak head normal forms using reduction, and then recursively compare the
+sub-structures. %
+Either we detect a mismatch which causes a failure, or everything checks out and the
+convertibility is verified.
+
+Following this line, we give the following judgments for convertibility checking. %
+Here we always quantify $\compt i$. %
+The layering index $i$ restricts only types (i.e. those in MLTT or in \delamlang), but
+not terms. %
+In other words, it is possible for convertibility checking to relate at layer $\proglevel$ two
+terms only well-typed at layer $\metalevel$, as long as these two terms have type well-formed
+at layer $\proglevel$ (i.e. MLTT). %
+This is a critical property to establish a relation between the logical relations at
+both layers. %
+\begin{itemize}
+\item $\tconvtyp i T{T'} l$ denotes that $T$ and $T'$ are convertible at universe level $l$. 
+\item $\tconvtypnf i W{W'} l$ denotes that $W$ and $W'$ are convertible normal types.
+\item $\tconvtypne i V{V'}l$ denotes that $V$ and $V'$ are convertible neutral types.
+\item $\tconvctx i \Gamma \Delta$ denotes that $\Gamma$ and $\Delta$ are convertible contexts. %
+  This judgment is defined by using $\tconvtyp i T{T'} l$ pairwise.
+\item $\tconvtrm i t{t'}T l$ denotes that $t$ and $t'$ of type $T$ are convertible.
+\item $\tconvtrmnf i w{w'}W l$ denotes that $w$ and $w'$ are convertible normal terms of a normal
+  type $W$.
+\item $\tconvtrmne i \nu{\nu'}T l$ denotes that $\nu$ and $\nu'$ are convertible
+  neutral terms. %
+  $T$ is the result of inference. %
+\item $\tconvtrmnee i \nu{\nu'}W l$ denotes that $\nu$ and $\nu'$ are convertible neutral terms of
+  a normal type $W$. %
+  $W$ is the result of inference. 
+\item $\tconvsub i{\delta}{\delta'}\Delta$ denotes that $\delta$ and $\delta'$ are convertible
+  local substitutions. %
+  This judgment is defined by using $\tconvtrm i t{t'}T l$ pairwise. 
+\end{itemize}
+
+We give the following convertibility checking rules for types first:
+\begin{mathpar}
+  \inferrule
+  {\ttypreds i T W l \\ \ttypreds i{T'}{W'} l \\ \tconvtypnf i W{W'} l}
+  {\tconvtyp i T{T'} l}
+
+  \inferrule
+  {\lpjudge i \Gamma}
+  {\tconvtypnf i \Nat{\Nat} 0}
+
+  \inferrule
+  {\lpjudge i \Gamma \\ \tyequiv[L]{l}{l'}{\Level}}
+  {\tconvtypnf i {\Ty l}{\Ty{l'}}{1 + l}}
+
+  \inferrule
+  {\tconvtyp i S{S'} l \\ \tconvtyp[\Psi][\Gamma, x : S \at l] i T{T'}{l'}}
+  {\tconvtypnf i{\PI l{l'}x{S}{T}}{\PI l{l'}x{S'}{T'}}{l \sqcup l'}}
+
+  \inferrule
+  {\tconvtypne iV{V'}{l}}
+  {\tconvtypnf i{V}{V'}{l}}
+
+  \inferrule
+  {\tconvtypnf i{W}{W'}{l'} \\ \tyequiv{l}{l'}\Level}
+  {\tconvtypnf i{W}{W'}{l}}
+
+  \inferrule
+  {\lpjudge i \Gamma \\ U : \DTyp[\Delta]{i'} l \in \Psi \\ i' \in \{\codelevel, \proglevel\} \\ i' \le i \\ \tconvsub i \delta{\delta'} \Delta}
+  {\tconvtypne i{U^\delta}{U^{\delta'}}{l}}
+
+  \inferrule
+  {\tyequiv[L]{l}{l'}\Level \\ \tconvtrmnee i \nu{\nu'}{\Ty l}{1 + l}}
+  {\tconvtypne i{\Elt l \nu}{\Elt{l'}{\nu'}}{l}}
+
+  \inferrule
+  {\tconvtypne iV{V'}{l'}  \\ \tyequiv[L]{l}{l'}\Level}
+  {\tconvtypne iV{V'}{l}}
+\end{mathpar}
+For the types only available at layer $\metalevel$:
+\begin{mathpar}
+  \inferrule
+  {\lpjudge \metalevel \Gamma \\ \tconvtyp[\Psi][\Gamma][L, \vect\ell] \metalevel{T}{T'}{l} \\ \tyequiv[L,\vect\ell]{l}{l'}{\Level}}
+  {\tconvtypnf \metalevel{\UPI \ell l T}{\UPI \ell{l'}{T'}}\omega}
+  
+  \inferrule
+  {\lpjudge \metalevel \Gamma \\ \tconvtyp[\Psi, g : \Ctx] \metalevel{T}{T'}{l} \\ \tyequiv[L]{l}{l'}{\Level}}
+  {\tconvtypnf \metalevel{\CPI g l T}{\CPI g{l'}{T'}}{l}}
+
+  \inferrule
+  {\lpjudge \metalevel \Gamma \\ \tconvtyp[\Psi, U : \DTyp[\Delta] \proglevel{l_1}] \metalevel{T}{T'}{l_2} \\ \tconvctx \proglevel{\Delta}{\Delta'} \\ \tyequiv[L]{l_1}{l_3}{\Level} \\ \tyequiv[L]{l_2}{l_4}{\Level}}
+  {\tconvtypnf \metalevel{\TPI U [\Delta]{l_1}{l_2} T}{\TPI U[\Delta']{l_3}{l_4}{T'}}{l_2}}
+
+  \inferrule
+  {\lpjudge \metalevel \Gamma \\ \tconvctx \proglevel{\Delta}{\Delta'} \\ \tyequiv[L]{l}{l'}{\Level}}
+  {\tconvtypnf \metalevel{\CTyp[\Delta]l}{\CTyp[\Delta']{l'}}{0}}  
+
+  \inferrule
+  {\lpjudge \metalevel \Gamma \\ \tconvctx \proglevel{\Delta}{\Delta'} \\ \tconvtyp[\Psi][\Delta]\proglevel
+    T{T'}l \\ \tyequiv[L]{l}{l'}{\Level}}
+  {\tconvtypnf \metalevel{\CTrm[\Delta] Tl}{\CTrm[\Delta']{T'}{l'}}{0}}
+\end{mathpar}
+
+We propagate the convertibility for types pairwise to obtain the convertibility for local contexts.
+\begin{mathpar}
+  \inferrule
+  {\judge[L] \Psi}
+  {\tconvctx i \cdot\cdot}
+
+  \inferrule
+  {\judge[L] \Psi \\ g : \Ctx \in \Psi}
+  {\tconvctx i{g}{g}}
+
+  \inferrule
+  {\tconvctx i \Gamma\Delta \\ \tconvtyp i T{T'} l \\ \tyequiv[L]l{l'}\Level}
+  {\tconvctx i{\Gamma, x : T \at l}{\Delta, x : T' \at{l'}}}
+\end{mathpar}
+
+
+The convertibility of terms proceeds similarly. %
+The following are checking rules that are available at both layers:
+\begin{mathpar}
+  \inferrule
+  { T \reds W \\ \ttrmreds i t w T l \\ \ttrmreds i
+    {t'}{w'}T l \\ \tconvtrmnf i w{w'}W l}
+  {\tconvtrm i t{t'}T l}
+
+  \inferrule
+  {\lpjudge i \Gamma}
+  {\tconvtrmnf i \Nat{\Nat}{\Ty 0}{1}}
+
+  \inferrule
+  {\lpjudge i \Gamma \\ \tyequiv[L]{l}{l'}{\Level}}
+  {\tconvtrmnf i {\Ty l}{\Ty{l'}}{\Ty{1 + l}}{2 + l}}
+
+  \inferrule
+  {\tconvtrm i s{s'}{\Ty l}{1 + l} \\ \tconvtrm[\Psi][\Gamma, x : \Elt l s \at l] i t{t'}{\Ty{l'}}{1 + l'}}
+  {\tconvtrmnf i{\PI l{l'}x{s}{t}}{\PI l{l'}x{s'}{t'}}{\Ty{l \sqcup l'}}{1 + {(l \sqcup l')}}}
+
+  \inferrule
+  {\lpjudge i \Gamma}
+  {\tconvtrmnf i \ze \ze \Nat 0}
+
+  \inferrule
+  {\tconvtrmnf i t{t'}\Nat 0}
+  {\tconvtrmnf i{\su t}{\su{t'}}\Nat 0}
+
+  \inferrule
+  {\tconvtrmnee i \nu{\nu'}{\Nat} 0}
+  {\tconvtrmnf i \nu{\nu'}\Nat 0}
+
+  \inferrule
+  {\lttypwf i S l \\ \lttyping i w {\PI{l}{l'}x{S}{T}}{l \sqcup l'} \\ \lttyping i {w'}{\PI{l}{l'}x{S}{T}}{l \sqcup l'} \\ \tconvtrm[\Psi][\Gamma, x : S \at{l}] i {\APP{w}{l}{l'}x{S}{T}{x}}{\APP{w'}{l}{l'}x{S}{T}{x}}{T}{l'}}
+  {\tconvtrmnf i{w}{w'}{\PI{l}{l'}x{S}{T}}{l \sqcup l'}}
+
+  \inferrule
+  {\tconvtrmnee i \nu{\nu'}{W} l}
+  {\tconvtrmnf i \nu{\nu'}V l}
+
+  \inferrule
+  {\tconvtrmnf i w{w'}W{l'} \\ \tyequiv[L]{l}{l'}\Level}
+  {\tconvtrmnf i w{w'}W l}
+\end{mathpar}
+
+The following rules check terms that are available only at layer $\metalevel$:
+\begin{mathpar}
+  \inferrule
+  {\lttyping \metalevel w {\UPI \ell l T}{\omega} \\ \lttyping \metalevel {w'}{\UPI \ell l T}{\omega} \\ \tconvtrm[\Psi][\Gamma][L, \vect\ell] \metalevel{\UAPP t{\ell}}{\UAPP{t'}{\ell}}{T}{l}}
+  {\tconvtrmnf \metalevel{w}{w'}{\UPI \ell l T}{\omega}}
+
+  \inferrule
+  {\lttyping \metalevel w{\CPI g l T}{l} \\ \lttyping \metalevel {w'}{\CPI g l T}{l} \\ \tconvtrm[\Psi, g : \Ctx] \metalevel{\CAPP w{g}}{\CAPP{w'}{g}}{T}{l}}
+  {\tconvtrmnf \metalevel{w}{w'}{\CPI g l T}{l}}
+
+  \inferrule
+  {\lttyping \metalevel w {\TPI U [\Delta]{l}{l'} T}{l'} \\ \lttyping \metalevel {w'}{\TPI U [\Delta]{l}{l'} T}{l'} \\ \tconvtrm[\Psi, U : \DTyp[\Delta] \proglevel{l}] \metalevel{\TAPP w{U^{\id_\Delta}}}{\TAPP{w'}{U^{\id_\Delta}}}{T}{l'}}
+  {\tconvtrmnf \metalevel{w}{w'}{\TPI U [\Delta]{l}{l'} T}{l'}}
+
+  \inferrule
+  {\lpjudge \metalevel \Gamma \\ \lttypwf[\Psi][\Delta] \codelevel T l \\ T = T'}
+  {\tconvtrmnf \metalevel{\boxit T}{\boxit{T'}}{\CTyp[\Delta] l}{0}}
+
+  \inferrule
+  {\tconvtrmnee \metalevel \nu{\nu'}{\CTyp[\Delta] l}{0}}
+  {\tconvtrmnf \metalevel \nu{\nu'}{\CTyp[\Delta] l}{0}}
+
+  \inferrule
+  {\lpjudge \metalevel \Gamma \\ \lttyping[\Psi][\Delta] \codelevel t T l \\ t = t'}
+  {\tconvtrmnf \metalevel{\boxit t}{\boxit{t'}}{\CTrm[\Delta] T l}{0}}
+
+  \inferrule
+  {\tconvtrmnee \metalevel \nu{\nu'}{\CTrm[\Delta] T l}{0}}
+  {\tconvtrmnf \metalevel \nu{\nu'}{\CTrm[\Delta] T l}{0}}
+\end{mathpar}
+Notice here convertibility of $\tbox$'ed types and terms are checked simply with
+syntactic equality. %
+The convertibility of neutral terms proceeds as follows. %
+Similarly, we first give the checking rules that are available at both layers:
+\begin{mathpar}
+  \inferrule
+  {\tconvtrmne i \nu{\nu'}{T}{l} \\ T \reds W}
+  {\tconvtrmnee i \nu{\nu'}W l}
+
+  \inferrule
+  {\tconvtrmne i \nu{\nu'}T{l'} \\ \tyequiv[L]{l}{l'}\Level}
+  {\tconvtrmne i \nu{\nu'}T l}
+
+  \inferrule
+  {\lpjudge i \Gamma \\ x : T \at l \in \Gamma}
+  {\tconvtrmne i x{x}T l}
+
+  \inferrule
+  {\lpjudge i \Gamma \\ u : \DTrm[\Delta]{i'}T l \in \Psi \\ i' \in \{\varlevel, \codelevel\} \\ i' \le i \\ \tconvsub i \delta{\delta'} \Delta}
+  {\tconvtrmne i{u^\delta}{u^{\delta'}}{T[\delta]}{l}}
+
+  \inferrule
+  {\tyequiv[L]l{l'}\Level \\ \tconvtyp[\Psi][\Gamma, x : \Nat \at 0] i M{M'} l \\
+    \tconvtrm i {s_1}{s_3} {M[\ze/x]}l \\
+    \tconvtrm[\Psi][\Gamma, x : \Nat \at 0, y : M \at l] i{s_2}{s_4}{M[\su x/x]}l \\
+    \tconvtrmnee i \nu{\nu'} \Nat 0}
+  {\tconvtrmne i{\ELIMN l{x.M}{s_1}{x,y. s_2}\nu}{\ELIMN{l'}{x.M'}{s_3}{x,y. s_4}{\nu'}}{M[\nu/x]}{l}}
+
+  \inferrule
+  {\tyequiv[L]{l_1}{l_3}\Level  \\ \tyequiv[L]{l_2}{l_4}\Level \\ \tconvtyp i S{S'}{l_1}
+    \\
+    \tconvtyp[\Psi][\Gamma, x : S \at{l_1}] i{T}{T'}{l_2} \\
+    \tconvtrmnee i \nu{\nu'}{\PI {l_1}{l_2} x{S''}{T''}}{l_1 \sqcup l_2} \\ \tconvtrm i s{s'} S{l_1}}
+  {\tconvtrmne i{\APP \nu {l_1}{l_2} x S T s}{\APP{\nu'}{l_3}{l_4} x {S'}{T'}{s'}}{T[s/x]}{l_2}}
+\end{mathpar}
+When checking applications, we simply ignore the type inferred by checking $\nu$ and
+$\nu'$. %
+This is fine because we already know $\nu$ and $\nu'$ are well-typed so the type
+annotations must be equivalent.
+
+Then we give the rules only available at layer $\metalevel$:
+\begin{mathpar}
+  \inferrule
+  {\tconvtrmnee \metalevel{\nu}{\nu'}{\UPI \ell l T}{\omega} \\ |\vect\ell| = |\vect l| = |\vect
+    l'| > \codelevel \\
+    \forall \codelevel \le n < |\vect l| ~.~ \tyequiv[L]{\vect l(n)}{\vect l'(n)}\Level}
+  {\tconvtrmne \metalevel{\UAPP \nu l}{\nu'~\$~\vect l'}{T[\vect l/\vect \ell]}{l[\vect l/\vect \ell]}}
+
+  \inferrule
+  {\tconvtrmnee \metalevel{\nu}{\nu'}{\CPI g l T}{l} \\ \tconvctx \proglevel \Delta{\Delta'}}
+  {\tconvtrmne \metalevel{\CAPP \nu \Delta}{\CAPP{\nu'}{\Delta'}}{T[\Delta/g]}{l}}
+
+  \inferrule
+  {\tconvtrmnee \metalevel{\nu}{\nu'}{\TPI U[\Delta] l{l'}{T''}}{l'} \\ \tconvtyp[\Psi][\Delta] \proglevel{T}{T'}l}
+  {\tconvtrmne \metalevel{\TAPP \nu{T}}{\TAPP{\nu'}{T'}}{T''[T/U]}{l'}}
+
+  \inferrule
+  {\lpjudge \metalevel \Gamma \\ \tyequiv[L]{l_1}{l_3}\Level \\ \tyequiv[L]{l_2}{l_4}\Level \\ \tconvctx \proglevel \Delta{\Delta'} \\
+    \tconvtrmnee \metalevel{\nu}{\nu'}{\CTyp[\Delta]{l_2}}{0} \\
+    \tconvtyp[\Psi][\Gamma,x_T : \CTyp[\Delta]{l_2} \at{0}]\metalevel{M}{M'}{l_1} \\
+  \tconvtrm[\Psi, U : \DTyp[\Delta]\codelevel{l_2}]\metalevel{t_1}{t_2}{M[\boxit U/x_T]}{l_1}}
+  {\tconvtrmne \metalevel{\LETBTYP{l_1}{l_2} \Delta{x_T.M}{U}{t_1}\nu}{\LETBTYP{l_3}{l_4}{\Delta'}{x_T.M'}{U}{t_2}{\nu'}}{M[t/x_T]}{l_1}}
+
+  \inferrule
+  {\lpjudge \metalevel \Gamma \\ \tyequiv[L]{l_1}{l_3}\Level \\ \tyequiv[L]{l_2}{l_4}\Level \\ \tconvctx \proglevel \Delta{\Delta'} \\
+    \tconvtyp \proglevel T{T'}{l_2} \\
+    \tconvtrmnee \metalevel{\nu}{\nu'}{\CTrm[\Delta]T{l_2}}{0} \\
+    \tconvtyp[\Psi][\Gamma,x_T : \CTrm[\Delta]T{l_2} \at{0}]\metalevel{M}{M'}{l_1} \\
+    \tconvtrm[\Psi, u : \DTrm[\Delta]\codelevel T{l_2}]\metalevel{t_1}{t_2}{M[\boxit u/x_t]}{l_1}}
+  {\tconvtrmne \metalevel{\LETBTRM{l_1}{l_2} \Delta{T}{x_t.M}{u}{t_1}\nu}{\LETBTRM{l_3}{l_4}{\Delta'}{T'}{x_T.M'}{u}{t_2}{\nu'}}{M[t/x_t]}{l_1}}
+\end{mathpar}
+The remaining piece of the convertibility checking for neutral recursive principles. %
+The recursive principles get stuck when the scrutinees are neutral or $\tbox$'ed
+global variables. %
+To check the convertibility of neutral recursive principles, we recursively check the
+convertibility between motives, corresponding branches and the indexing universe
+levels, local contexts and potentially types. %
+To derive the following two conclusions:
+\begin{gather*}
+  \tconvtrmne \metalevel{\ELIMTYP{l_1}{l_2}Mbl\Delta
+    \nu}{\ELIMTYP{l_3}{l_4}{M'}{b'}{l'}{\Delta'}{\nu'}}{M_\Typ[\nu/x_T]}{l_1} \\
+  \tconvtrmne \metalevel{\ELIMTRM{l_1}{l_2}Mbl\Delta T \nu}{\ELIMTYP{l_3}{l_4}{M'}{b'}{l'}{\Delta'}{T'}{\nu'}}{M_\Trm[\nu/x_t]}{l_1}
+\end{gather*}
+We proceed by checking the convertibility of motives:
+\begin{mathpar}
+  \tyequiv[L]{l_1}{l_3}\Level
+
+  \tyequiv[L]{l_2}{l_4}\Level
+  
+  \tconvtyp[\Psi, g : \Ctx][\Gamma, x_T : \CTyp[g]\ell \at 0][L,\ell] \metalevel {M_\Typ}{M_\Typ'}{l_1}
+
+  \tconvtyp[\Psi, g : \Ctx, U_T : \DTyp[g]\proglevel\ell][\Gamma, x_t : \CTrm[g]{U_T^\id}\ell
+  \at 0][L,\ell] \metalevel{M_\Trm}{M_\Trm'}{l_2}
+\end{mathpar}
+We do the same for all the branches as well. %
+Following the previous conventions, we group all these checking into $C_A$ for
+\textbf{\codelevel}onvertibility checking for all premises. %
+Then what we have left is to make sure the scrutinees are convertible.
+\begin{mathpar}
+  \inferrule
+  {C_A \\ \tyequiv[L]{l}{l'}\Level \\ \tconvctx \proglevel{\Delta}{\Delta'} \\ \tconvtrmnee \metalevel{\nu}{\nu'}{\CTyp[\Delta]{l}}{0}}
+  {\tconvtrmne \metalevel{\ELIMTYP{l_1}{l_2}Mbl\Delta \nu}{\ELIMTYP{l_3}{l_4}{M'}{b'}{l'}{\Delta'}{\nu'}}{M_\Typ[\nu/x_T]}{l_1}}
+
+  \inferrule
+  {C_A \\ \tyequiv[L]{l}{l'}\Level \\ \tconvctx \proglevel{\Delta}{\Delta'} \\ \tconvtyp \proglevel
+    T{T'}{1 + l} \\ \tconvtrmnee \metalevel{\nu}{\nu'}{\CTrm[\Delta]T{l}}{0}}
+  {\tconvtrmne \metalevel{\ELIMTRM{l_1}{l_2}Mbl\Delta T \nu}{\ELIMTYP{l_3}{l_4}{M'}{b'}{l'}{\Delta'}{T'}{\nu'}}{M_\Trm[\nu/x_t]}{l_1}}
+\end{mathpar}
+
+If the scrutinees are $\tbox$'ed global variables, then the check is always the same,
+except that the global variables are compared syntactically:
+\begin{mathpar}
+  \inferrule
+  {C_A \\ \tyequiv[L]{l}{l'}\Level \\ \tconvctx \proglevel{\Delta}{\Delta'} \\ U :
+    \DTyp[\Delta]{\codelevel} l \in \Psi  \\ \ltsubst \codelevel \delta \Delta}
+  {\tconvtrmne \metalevel{\ELIMTYP{l_1}{l_2}Mbl\Delta{(\boxit{U^\delta})}}{\ELIMTYP{l_3}{l_4}{M'}{b'}{l'}{\Delta'}{(\boxit{U^\delta})}}{M_\Typ[\boxit{U^\delta}/x_T]}{l_1}}
+
+  \inferrule
+  {C_A \\ \tyequiv[L]{l}{l'}\Level \\ \tconvctx \proglevel{\Delta}{\Delta'} \\ \tconvtyp \proglevel
+    T{T'}{1 + l} \\ u : \DTrm[\Delta]{i'}T l \in \Psi \\ i' \in \{\varlevel, \codelevel\} \\ \ltsubst \codelevel \delta \Delta}
+  {\tconvtrmne \metalevel{\ELIMTRM{l_1}{l_2}Mbl\Delta T{(\boxit{u^\delta})}}{\ELIMTYP{l_3}{l_4}{M'}{b'}{l'}{\Delta'}{T'}{(\boxit{u^\delta})}}{M_\Trm[\boxit{u^\delta}/x_t]}{l_1}}
+\end{mathpar}
+Now we have finished all the convertibility rules for neutral terms.
+
+We simply let the convertibility for terms to propagate pairwise to derive the
+convertibility for local substitutions:
+\begin{mathpar}
+  \inferrule
+  {\lpjudge i\Gamma \\ \text{$\Gamma$ ends with $\cdot$} \\ |\Gamma| = \metalevel}
+  {\tconvsub i {\cdot^\metalevel}{\cdot^\metalevel}{\cdot}}
+
+  \inferrule
+  {\lpjudge i\Gamma \\ g : \Ctx \in \Psi \\ \text{$\Gamma$ ends with $g$} \\ |\Gamma| = \metalevel}
+  {\tconvsub i {\cdot_g^\metalevel}{\cdot_g^\metalevel}{\cdot}}
+
+  \inferrule
+  {\lpjudge i\Gamma \\ g : \Ctx \in \Psi \\\\ \text{$\Gamma$ ends with $g$} \\ |\Gamma| = \metalevel}
+  {\tconvsub i {\wk_g^\metalevel}{\wk_g^\metalevel}{g}}
+
+  \inferrule
+  {\tconvsub i {\delta}{\delta'}{\Delta} \\\\ \lttypwf[\Psi][\Delta]i T l \\ \tconvtrm i {t}{t'}{T[\delta]} l}
+  {\tconvsub i {\delta, t/x}{\delta', t'/x}{\Delta, x : T \at l}}
+\end{mathpar}
+
+The convertibility algorithm is obtained by reading all the components for
+convertibility rules as inputs and the neutral judgments consider types as outputs. %
+If there is no corresponding rule, then two terms are not convertible; otherwise, two
+terms are convertible. %
+We verify some basic properties as follows:
+\begin{lemma}[Soundness] Assuming $\compt i$,
+  \begin{itemize}
+  \item if $\tconvtyp i T{T'} l$, then $\lttypeq i T{T'} l$;
+  \item if $\tconvtypnf i W{W'} l$, then $\lttypeq i W{W'} l$;
+  \item if $\tconvtypne i V{V'}l$, then $\lttypeq i{V}{V'}l$;
+  \item if $\tconvctx i \Gamma \Delta$, then $\lpequiv i \Gamma \Delta$;
+  \item if $\tconvtrm i t{t'}T l$, then $\lttyequiv i t{t'} T l$;
+  \item if $\tconvtrmnf i w{w'}W l$, then $\lttyequiv i w{w'} W l$;
+  \item if $\tconvtrmne i \nu{\nu'}T l$, then $\lttyequiv i\nu{\nu'} T l$;
+  \item if $\tconvtrmnee i \nu{\nu'}W l$, then $\lttyequiv i \nu{\nu'} W l$;
+  \item if $\tconvsub i{\delta}{\delta'}\Delta$, then $\ltsubeq i
+    {\delta}{\delta'}{\Delta}$. 
+  \end{itemize}
+\end{lemma}
+\begin{proof}
+  Mutual induction.  %
+  Use $\eta$ rules for all kinds of function types. %
+  Use congruence rules, presupposition and conversion rules when checking neutral
+  terms. %
+\end{proof}
+
+\begin{lemma} $ $
+  \begin{itemize}
+  \item If $\tconvtypnf i W{W'} l$, then $\tconvtyp i W{W'} l$. 
+  \item If $\tconvtrmnf i w{w'}W l$, then $\tconvtrm i w{w'} W l$. 
+  \end{itemize}
+\end{lemma}
+
+Other lemmas like PER require the fundamental theorems so we postpone their proofs
+until we have the semantic models. 
+
+% \begin{lemma}[PER]
+%   All convertibility judgments form PERs.
+% \end{lemma}

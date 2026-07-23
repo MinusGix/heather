@@ -1,0 +1,1126 @@
+\section{Logical Relations for \delamlang}\labeledit{sec:dt:logrel}
+
+Previously, we have given the judgments of \delamlang, verified its syntactic
+properties and given its reduction and convertibility algorithms. %
+Starting this section, we establish the logical relation and prove the (weak)
+normalization and convertibility properties of \delamlang. %
+Following \citet{abel_decidability_2017}, we proceeds as follows:
+\begin{itemize}
+\item First we give a set of generic equivalence conditions for a parameterized
+  discussion of the logical relation.
+\item Then we give the definition of the Kripke logical relations of types and
+  terms. %
+  The logical relations are parameterized by layers. %
+  In this step, we are only concerned about types that are available at all layers,
+  i.e. those in MLTT and unrelated to meta-programming. 
+\item Then we give the definition  of the Kripke logical relations of local contexts
+  and local substitutions. %
+\item Then we branch off two orthogonal developments.
+  \begin{itemize}
+  \item We give the definition of the Kripke logical relations of global contexts and
+    global substitutions.
+  \item We give the definition of the Kripke logical relations of types and terms,
+    again. %
+    But in this case, we must also give the definition for types that are related to
+    meta-programming, i.e. contextual types. %
+  \end{itemize}
+  In fact, the definitions given by the two sub-steps above must consider each
+  other. %
+  Otherwise, we will not able to extend related global substitutions during the proof
+  of the fundamental theorems. 
+\item Next we give the semantic judgments. %
+  The semantic judgments require types, terms, etc. to be stable under all universe,
+  global and local substitutions. %
+\item Finally, we establish the fundamental theorems for the semantic judgments. %
+  Instantiating the generic equivalence gives us the proof of convertibility.
+\end{itemize}
+Due to layering, following \Cref{sec:cv:logrel}, the generic equivalence, logical
+relation and validity judgments are all layered. %
+In fact, since computation exists at both layers $\proglevel$ and $\metalevel$, the situation is very
+complex. %
+\citet{abel_decidability_2017} instantiate their generic equivalence twice to obtain
+the decidability of convertibility checking, and we will also be doing the same. %
+Due to the complication of layering, our fundamental theorems must talk about all
+layers. %
+The difficulties of the logical relations lie in that how we can support code running
+and recursions on code at the same time and justify them in the semantics. %
+
+\subsection{Generic Equivalence}
+
+Similar to \Cref{sec:cv:logrel}, we first quantify four generic equivalence relations,
+which will be instantiated to syntactic equivalence and convertibility later, and
+their laws. %
+This step provides modularity to logical relation argument: we simply instantiate this
+generic equivalence to obtain different versions of the fundamental theorems. %
+Due to dependent types, we define generic equivalence over $i \in \{\proglevel, \metalevel\}$:
+\begin{itemize}
+\item $\lttypgneeq i V{V'} l$ describes a generic type equivalence between two neutral
+  types at universe level $l$ at layer $i$.
+\item $\lttypgeq i {T}{T'} l$ describes a generic type equivalence between two types at
+  universe level $l$ at layer $i$.
+\item $\lttrmgneeq i \nu{\nu'} T l$ describes a generic type equivalence between two neutral
+  terms of type $T$ at universe level $l$ at layer $i$. 
+\item $\lttrmgeq i t{t'} T l$ describes a generic type equivalence between two
+  terms of type $T$ at universe level $l$ at layer $i$. 
+\end{itemize}
+
+From the four generic equivalence, we induce two equivalence of local contexts and
+local substitutions by using the generic equivalence pairwise:
+\begin{mathpar}
+  \inferrule
+  {\judge[L] \Psi}
+  {\ltctxgeq i \cdot\cdot}
+
+  \inferrule
+  {\judge[L] \Psi \\ g : \Ctx \in \Psi}
+  {\ltctxgeq i{g}{g}}
+
+  \inferrule
+  {\ltctxgeq i \Gamma\Delta \\ \lttypgeq i T{T'} l \\ \tyequiv[L]l{l'}\Level}
+  {\ltctxgeq i{\Gamma, x : T \at l}{\Delta, x : T' \at{l'}}}
+
+  \inferrule
+  {\lpjudge i\Gamma \\ \text{$\Gamma$ ends with $\cdot$} \\ |\Gamma| = \metalevel}
+  {\ltsubgeq i {\cdot^\metalevel}{\cdot^\metalevel}{\cdot}}
+
+  \inferrule
+  {\lpjudge i\Gamma \\ g : \Ctx \in \Psi \\ \text{$\Gamma$ ends with $g$} \\ |\Gamma| = \metalevel}
+  {\ltsubgeq i {\cdot_g^\metalevel}{\cdot_g^\metalevel}{\cdot}}
+
+  \inferrule
+  {\lpjudge i\Gamma \\ g : \Ctx \in \Psi \\\\ \text{$\Gamma$ ends with $g$} \\ |\Gamma| = \metalevel}
+  {\ltsubgeq i {\wk_g^\metalevel}{\wk_g^\metalevel}{g}}
+
+  \inferrule
+  {\ltsubgeq i {\delta}{\delta'}{\Delta} \\\\ \lttypwf[\Psi][\Delta]i T l \\
+    \lttrmgeq i {t}{t'}{T[\delta]} l}
+  {\ltsubgeq i {\delta, t/x}{\delta', t'/x}{\Delta, x : T \at l}}
+\end{mathpar}
+
+The generic equivalence and the logical relations are invariant under all
+weakenings. %
+Therefore, we should make these notions clear here. %
+Since there are three different contexts, we have three corresponding kinds of
+weakenings. %
+In particular, $\theta :: L \To L'$ is the universe weakening. %
+Following previous conventions, $\gamma :: L \sep \Psi \To_g \theta$ is a global
+weakening, and $\tau :: L \sep \Psi;\Gamma \To_i \Delta$ is a local weakening. %
+The subscript $i$ denotes which layer the contexts $\Gamma$ and $\Delta$ live in. %
+We can simultaneously weaken all three contexts at the same time. %
+We simply apply $\theta$, $\gamma$ and $\tau$ in this order. %
+We let $\psi$ represent this triple:
+\[
+  \psi := (\theta, \gamma, \tau) :: L \sep \Psi; \Gamma \To_i L' \sep \Phi;\Delta
+\]
+where
+\begin{align*}
+  \theta &:: L \To L' \\
+  \gamma &:: L' \sep \Psi[\theta] \To_g \Phi \\
+  \tau &:: L' \sep \theta; \Gamma[\theta][\gamma] \To_i \Delta
+\end{align*}
+Similarly we let
+\[
+  \alpha := (\theta, \gamma) :: L \sep \Psi \To L' \sep \Phi
+\]
+We can apply weakenings like substitutions to universe levels, types, terms, contexts
+and substitutions as expected. %
+The action is to shift the variables according to the specified weakenings. %
+This is a standard action, despite having three separate notions, so we take it for
+granted here. %
+When it is clear from the context, we do not write down the weakening action at all to
+avoid clutter. 
+
+Then we give the laws of the generic equivalence. %
+Since the generic equivalence at layer $\metalevel$ subsumes that at layer $\proglevel$, we first give
+the laws that hold for both layers, and then incrementally add those that only hold at
+layer $\metalevel$.
+
+\begin{law}[Subsumption]$ $
+  \begin{itemize}
+  \item If $\lttypgneeq i V{V'} l$, then $\lttypgeq i V {V'} l$. 
+  \item If $\lttypgeq i T{T'} l$, then $\lttypeq i T{T'} l$. 
+  \item If $\lttrmgneeq i \nu{\nu'} T l$, then $\lttrmgeq i \nu{\nu'} T l$.
+  \item If $\lttrmgeq i t{t'} T l$, then $\lttyequiv i t{t'} T l$.
+  \end{itemize}
+\end{law}
+
+As a lemma, subsumption propagates to contexts and local substitutions:
+\begin{lemma}[Subsumption] $ $
+  \begin{itemize}
+  \item If $\ltctxgeq i \Gamma \Delta$, then $\lpequiv i \Gamma \Delta$. 
+  \item If $\ltsubgeq i \delta {\delta'} \Delta$, then $\ltsubeq i \delta {\delta'} \Delta$.  
+  \end{itemize}
+\end{lemma}
+
+Due to subsumption, we know that components in generic equivalence are well-formed or
+well-typed:
+\begin{lemma}[Presupposition] $ $
+  \begin{itemize}
+  \item If $\lttypgeq i T{T'} l$, then $\lttypwf i T l$ and $\lttypwf i{T'} l$.
+  \item If $\lttrmgeq i t{t'} T l$, then $\lttyping i t T l$ and $\lttyping i{t'}T
+    l$. 
+  \end{itemize}
+\end{lemma}
+\begin{proof}
+  By subsumption and presupposition. 
+\end{proof}
+
+\begin{law}[PER]
+  All four relations are PERs. 
+\end{law}
+
+\begin{law}[Type Conversion] $ $
+  \begin{itemize}
+  \item If $\lttrmgneeq i \nu {\nu'} T l$ and $\lttypeq i T{T'} l$, then $\lttrmgneeq i \nu {\nu'}{T'} l$.
+  \item If $\lttrmgeq i t {t'} T l$ and $\lttypeq i T{T'} l$, then $\lttrmgeq i t
+    {t'}{T'} l$.
+  \end{itemize}
+\end{law}
+
+\begin{law}[Context Equivalence] $ $
+  \begin{itemize}
+  \item If $\lttypgneeq i V {V'} l$, $\gequiv\Phi\Psi$ and
+    $\lpequiv[\Phi]{i}\Delta\Gamma$, then $\lttypgneeq[\Phi][\Delta] i V {V'} l$.
+  \item If $\lttypgeq i T{T'} l$, $\gequiv\Phi\Psi$ and
+    $\lpequiv[\Phi]{i}\Delta\Gamma$, then $\lttypgeq[\Phi][\Delta] i T{T'} l$.
+  \item If $\lttrmgneeq i \nu {\nu'} T l$, $\gequiv\Phi\Psi$ and
+    $\lpequiv[\Phi]{i}\Delta\Gamma$, then $\lttrmgneeq[\Phi][\Delta] i \nu {\nu'}{T} l$.
+  \item If $\lttrmgeq i t {t'} T l$, $\gequiv\Phi\Psi$ and
+    $\lpequiv[\Phi]{i}\Delta\Gamma$, then $\lttrmgeq[\Phi][\Delta] i t {t'}{T} l$.
+  \end{itemize}
+\end{law}
+
+\begin{law}[Weakening] $ $
+  \begin{itemize}
+  \item If $\lttypgneeq i V {V'} l$ and
+    $\psi :: L \sep \Psi; \Gamma \To_i L' \sep \Phi;\Delta$, then
+    $\lttypgneeq[\Phi][\Delta][L'] i{V}{V'}{l}$.
+  \item If $\lttypgeq i T{T'} l$ and
+    $\psi :: L \sep \Psi; \Gamma \To_i L' \sep \Phi;\Delta$, then
+    $\lttypgeq[\Phi][\Delta][L'] i{T}{T'}{l}$.
+  \item If $\lttrmgneeq i \nu {\nu'} T l$ and
+    $\psi :: L \sep \Psi; \Gamma \To_i L' \sep \Phi;\Delta$, then
+    $\lttrmgneeq[\Phi][\Delta][L'] i{\nu}{\nu'}{T}{l}$.
+  \item If $\lttrmgeq i t {t'} T l$ and
+    $\psi :: L \sep \Psi; \Gamma \To_i L' \sep \Phi;\Delta$, then
+    $\lttrmgeq[\Phi][\Delta][L'] i{t}{t'}{T}{l}$.
+  \end{itemize}  
+\end{law}
+
+\begin{law}[Weak Head Closure] $ $
+  \begin{itemize}
+  \item If $\ttypreds i T W l$, $\ttypreds i{T'}{W'} l$ and $\lttypgeq i W{W'} l$, then $\lttypgeq i T{T'} l$. 
+  \item If $\ttrmreds i t w T l$, $\ttrmreds i{t'}{w'}T l$ and $\lttrmgeq i w{w'} T l$, then $\lttrmgeq i t{t'} T l$.
+  \end{itemize}
+\end{law}
+
+\begin{law}[Type Constructors]
+  If $\lpjudge i \Gamma$, 
+  \begin{itemize}
+  \item if $\tyequiv[L] l{l'}\Level$, then $\lttypgeq i{\Ty l}{\Ty l'}{1 + l}$ and
+    $\lttrmgeq i{\Ty l}{\Ty l'}{\Ty{1 + l}}{2 + l}$;
+  \item then $\lttypgeq i{\Nat}{\Nat}0$ and $\lttrmgeq i{\Nat}{\Nat}{\Ty 0}{1}$;
+  \item if $\lttypgeq i S{S'} l$ and
+    $\lttypgeq[\Psi][\Gamma, x : S \at l] i T{T'}{l'}$, then \newline
+    $\lttypgeq i{\PI{l}{l'}x S T}{\PI{l}{l'}x{S'}{T'}}{l \sqcup l'}$;
+  \item if $\lttrmgeq i s{s'}{\Ty l}{1 + l}$ and $\lttrmgeq[\Psi][\Gamma, x : \Elt l s \at l] i
+    t{t'}{\Ty{l'}}{1 + l'}$, then \newline
+    $\lttrmgeq i{\PI{l}{l'}x s t}{\PI{l}{l'}x{s'}{t'}}{\Ty{l \sqcup
+      l'}}{1 + {(l \sqcup l')}}$.
+  \end{itemize}
+\end{law}
+
+\begin{law}[Neutral Types]  $ $
+  \begin{itemize}
+  \item If $\lpjudge i \Gamma$, $U : \DTyp[\Delta]{i'} l \in \Psi$, $i' \in \{\codelevel, \proglevel\}$,
+    $i' \le i$ and
+    $\ltsubgeq i \delta{\delta'} \Delta$, then
+    $\lttypgneeq i{U^\delta}{U^{\delta'}}{l}$. 
+  \item If $\tyequiv[L]{l}{l'}\Level$ and $\lttrmgneeq i \nu{\nu'}{\Ty l}{1 + l}$,
+    then $\lttypgneeq i{\Elt l \nu}{\Elt{l'}{\nu'}}{l}$.
+  \end{itemize}
+\end{law}
+
+\begin{law}[Congruence] $ $
+  \begin{itemize}
+  \item If $\lpjudge i \Gamma$, then $\lttrmgeq i \ze \ze \Nat 0$.
+  \item If $\lttrmgeq i t{t'}\Nat 0$, then $\lttrmgeq i {\su t}{\su{t'}}\Nat 0$.
+  \item If $\lttypwf i S l$, $\lttyping i t {\PI{l}{l'}x{S}{T}}{l \sqcup l'}$,
+    $\lttyping i {t'}{\PI{l}{l'}x{S}{T}}{l \sqcup l'}$ and \newline
+    $\lttrmgeq[\Psi][\Gamma, x : S \at{l}] i
+    {\APP{t}{l}{l'}x{S}{T}{x}}{\APP{t'}{l}{l'}x{S}{T}{x}}{T}{l'}$, then \newline
+    $\lttrmgeq i t{t'}{\PI{l}{l'}x{S}{T}}{l \sqcup l'}$.
+  \end{itemize}
+\end{law}
+
+\begin{law}[Congruence for Neutrals] $ $
+  \begin{itemize}
+  \item If $\lpjudge i \Gamma$ and $x : T \at l \in \Gamma$, then $\lttrmgneeq i x x
+    T l$. 
+  \item If $\lpjudge i \Gamma$, $u : \DTrm[\Delta]{i'}T l \in \Psi$,
+    $i' \in \{\varlevel, \codelevel\}$, $i' \le i$ and $\ltsubgeq i \delta{\delta'} \Delta$, then
+    \newline $\lttrmgneeq i{u^\delta}{u^{\delta'}} {T[\delta]} l$.
+  \item If $\tyequiv[L]l{l'}\Level$, $\lttypgeq[\Psi][\Gamma, x : \Nat \at 0] i M{M'} l$,
+    $\lttrmgeq i {s_1}{s_3} {M[\ze/x]}l$, \newline
+    $\lttrmgeq[\Psi][\Gamma, x : \Nat \at 0, y : M \at l] i{s_2}{s_4}{M[\su
+      x/x]}l$ and
+    $\lttrmgneeq i \nu{\nu'} \Nat 0$, then \newline
+    $\lttrmgneeq i{\ELIMN l{x.M}{s_1}{x,y. s_2}\nu}{\ELIMN{l'}{x.M'}{s_3}{x,y. s_4}{\nu'}}{M[\nu/x]}{l}$.
+  \item If $\tyequiv[L]{l_1}{l_3}\Level$, $\tyequiv[L]{l_2}{l_4}\Level$, $\lttypgeq i S{S'}{l_1}$,
+    $\lttypgeq[\Psi][\Gamma, x : S \at{l_1}] i{T}{T'}{l_2}$, 
+    $\lttrmgneeq i \nu{\nu'}{\PI {l_1}{l_2} x{S''}{T''}}{l_1 \sqcup l_2}$ and $\lttrmgeq i
+    s{s'} S{l_1}$, then \newline
+    $\lttrmgneeq i{\APP \nu {l_1}{l_2} x S T s}{\APP{\nu'}{l_3}{l_4} x
+      {S'}{T'}{s'}}{T[s/x]}{l_2}$. 
+
+  \end{itemize}
+\end{law}
+
+We derive that
+\begin{lemma}[Reflexivity of Local Identity Substitutions]
+  If $\lpequiv i \Gamma \Delta$, then
+  $\ltsubgeq i{\id_{\Gamma}}{\id_{\Gamma}}{\Delta}$.
+\end{lemma}
+
+\begin{lemma}[Congruence of Global Variables] $ $
+  \begin{itemize}
+  \item If $\lpequiv i \Gamma \Delta$, $u : \DTrm[\Delta]{i'}T l \in \Psi$, $i' \in \{\varlevel, \codelevel\}$ and
+    $i' \le i$, then $\lttrmgneeq i {u^{\id_{\Gamma}}}{u^{\id_{\Gamma}}} T l$.
+  \item If $\lpequiv i \Gamma \Delta$, $U : \DTyp[\Delta]{i'} l \in \Psi$,
+    $i' \in \{\codelevel, \proglevel\}$ and $i' \le i$, then $\lttypgneeq i{U^{\id_{\Gamma}}}{U^{\id_{\Gamma}}}{l}$.
+  \end{itemize}
+\end{lemma}
+
+At this point, we give the laws that should hold for both layers. %
+Next, we consider laws that only hold at layer $i = \metalevel$. %
+We first give the laws for type constructors.
+\begin{law}[Type Constructors] $ $
+  \begin{itemize}
+  \item If $\lpjudge \metalevel \Gamma$, $\lttypgeq[\Psi][\Gamma][L, \vect\ell] \metalevel{T}{T'}{l}$
+    and $\tyequiv[L,\vect\ell]{l}{l'}{\Level}$, then
+    $\lttypgeq \metalevel{\UPI \ell l T}{\UPI \ell{l'}{T'}}\omega$.
+  \item If $\lpjudge \metalevel \Gamma$, $\lttypgeq[\Psi, g : \Ctx] \metalevel{T}{T'}{l}$ and
+    $\tyequiv[L]{l}{l'}{\Level}$, then \newline
+    $\lttypgeq \metalevel{\CPI g l T}{\CPI g{l'}{T'}}{l}$. 
+  \item If $\lpjudge \metalevel \Gamma$, $\lttypgeq[\Psi, U : \DTyp[\Delta] \proglevel{l_1}]
+    \metalevel{T}{T'}{l_2}$, $\ltctxgeq \proglevel{\Delta}{\Delta'}$, $\tyequiv[L]{l_1}{l_3}{\Level}$
+    and $\tyequiv[L]{l_2}{l_4}{\Level}$, then 
+    $\lttypgeq \metalevel{\TPI U [\Delta]{l_1}{l_2} T}{\TPI U[\Delta']{l_3}{l_4}{T'}}{l_2}$.
+  \item If $\lpjudge \metalevel \Gamma$ and $\ltctxgeq \proglevel{\Delta}{\Delta'}$, then $\lttypgeq
+    \metalevel{\CTyp[\Delta]l}{\CTyp[\Delta']l}{0}$.
+  \item If $\lpjudge \metalevel \Gamma$, $\ltctxgeq \proglevel{\Delta}{\Delta'}$ and
+    $\lttypgeq[\Psi][\Delta]\proglevel T{T'}l$, then \newline
+    $\lttypgeq \metalevel{\CTrm[\Delta] Tl}{\CTrm[\Delta']{T'}l}{0}$.
+  \end{itemize}
+\end{law}
+
+\begin{law}[Congruence] $ $
+  \begin{itemize}
+  \item If $\lttyping \metalevel t {\UPI \ell l T}{\omega}$, $\lttyping \metalevel {t'}{\UPI \ell l
+      T}{\omega}$ and $\lttrmgeq[\Psi][\Gamma][L, \vect\ell] \metalevel{\UAPP
+      t{\ell}}{\UAPP{t'}{\ell}}{T}{l}$, then
+    $\tconvtrmnf \metalevel{t}{t'}{\UPI \ell l T}{\omega}$. 
+  \item If $\lttyping \metalevel t{\CPI g l T}{l}$, $\lttyping \metalevel {t'}{\CPI g l T}{l}$ and \newline
+    $\lttrmgeq[\Psi, g : \Ctx] \metalevel{\CAPP t{g}}{\CAPP{t'}{g}}{T}{l}$, then $\lttrmgeq
+    \metalevel{t}{t'}{\CPI g l T}{l}$. 
+  \item If $\lttyping \metalevel t {\TPI U [\Delta]{l}{l'} T}{l'}$,
+    $\lttyping \metalevel {t'}{\TPI U [\Delta]{l}{l'} T}{l'}$, and \newline
+    $\lttrmgeq[\Psi, U : \DTyp[\Delta] \proglevel{l}] \metalevel{\TAPP
+      t{U^{\id_\Delta}}}{\TAPP{t'}{U^{\id_\Delta}}}{T}{l'}$, then \newline
+    $\lttrmgeq \metalevel{w}{w'}{\TPI U [\Delta]{l}{l'} T}{l'}$.
+  \item If $\lpjudge \metalevel \Gamma$ and $\lttypwf[\Psi][\Delta] \codelevel T l$, then $\lttrmgeq
+    \metalevel{\boxit T}{\boxit{T}}{\CTyp[\Delta] l}{0}$.
+  \item If $\lpjudge \metalevel \Gamma$ and $\lttyping[\Psi][\Delta] \codelevel t T l$, then
+    $\lttrmgeq \metalevel{\boxit t}{\boxit{t}}{\CTrm[\Delta] T l}{0}$. 
+  \end{itemize}
+\end{law}
+
+\begin{law}[Congruence for Neutrals] $ $
+  \begin{itemize}
+  \item If $\lttrmgneeq \metalevel{\nu}{\nu'}{\UPI \ell l T}{\omega}$, $|\vect\ell| = |\vect l| = |\vect
+    l'| > \codelevel$ and
+    $\forall ~ \codelevel \le n < |\vect l| ~.~ \tyequiv[L]{\vect l(n)}{\vect l'(n)}\Level$,
+    then $\lttrmgneeq \metalevel{\UAPP \nu l}{\nu'~\$~\vect l'}{T[\vect l/\vect \ell]}{l[\vect
+      l/\vect \ell]}$. 
+  \item If $\lttrmgneeq \metalevel{\nu}{\nu'}{\CPI g l T}{l}$ and $\ltctxgeq \proglevel
+    \Delta{\Delta'}$, then $\lttrmgneeq \metalevel{\CAPP \nu
+      \Delta}{\CAPP{\nu'}{\Delta'}}{T[\Delta/g]}{l}$.
+  \item If $\lttrmgneeq \metalevel{\nu}{\nu'}{\TPI U[\Delta] l{l'}{T''}}{l'}$ and
+    $\lttypgeq[\Psi][\Delta] \proglevel{T}{T'}l$, then \newline
+    $\lttrmgneeq \metalevel{\TAPP \nu{T}}{\TAPP{\nu'}{T'}}{T''[T/U]}{l'}$. 
+  \item If $\lpjudge \metalevel \Gamma$, $\tyequiv[L]{l_1}{l_3}\Level$, 
+    $\tyequiv[L]{l_2}{l_4}\Level$, $\ltctxgeq \proglevel \Delta{\Delta'}$, \newline
+    $\lttrmgneeq \metalevel{\nu}{\nu'}{\CTyp[\Delta]{l_2}}{0}$, 
+    $\lttypgeq[\Psi][\Gamma,x_T : \CTyp[\Delta]{l_2} \at{0}]\metalevel{M}{M'}{l_1}$
+    and \newline
+    $ \lttrmgeq[\Psi, U : \DTyp[\Delta]\codelevel{l_2}]\metalevel{t_1}{t_2}{M[\boxit{U^\id}/x_T]}{l_1}$, then \newline
+    $\lttrmgneeq \metalevel{\LETBTYP{l_1}{l_2}
+      \Delta{x_T.M}{U}{t_1}\nu}{\LETBTYP{l_3}{l_4}{\Delta'}{x_T.M'}{U}{t_2}{\nu'}}{M[t/x_T]}{l_1}$. 
+  \item If $\lpjudge \metalevel \Gamma$, $\tyequiv[L]{l_1}{l_3}\Level$, 
+    $\tyequiv[L]{l_2}{l_4}\Level$, $\ltctxgeq \proglevel \Delta{\Delta'}$,
+    $\lttypgeq \proglevel T{T'}{l_2}$,
+    $\lttrmgneeq \metalevel{\nu}{\nu'}{\CTrm[\Delta]T{l_2}}{0}$, 
+    $\lttypgeq[\Psi][\Gamma,x_T : \CTrm[\Delta]T{l_2} \at{0}]\metalevel{M}{M'}{l_1}$
+    and \newline
+    $ \lttrmgeq[\Psi, u : \DTrm[\Delta]\codelevel T{l_2}]\metalevel{t_1}{t_2}{M[\boxit{u^\id}/x_t]}{l_1}$, then \newline
+    $\lttrmgneeq \metalevel{\LETBTRM{l_1}{l_2}
+      \Delta{T}{x_t.M}{u}{t_1}\nu}{\LETBTRM{l_3}{l_4}{\Delta'}{T'}{x_T.M'}{u}{t_2}{\nu'}}{M[t/x_t]}{l_1}$. 
+  \end{itemize}
+\end{law}
+
+Then we consider the law for neutral forms for recursive principles for code. %
+The law follows a similar line to the equivalence judgments and the convertibility
+checking: the evaluation is blocked when the scrutinee is neutral or is a $\tbox$'ed
+global variable. 
+\begin{law}[Neutral Recursion on Code] $ $
+  \begin{itemize}
+  \item If all motives and branches are related by corresponding generic equivalence,
+    moreover, $\tyequiv[L]{l}{l'}\Level$, $\ltctxgeq \proglevel{\Delta}{\Delta'}$ and
+    $\lttrmgneeq \metalevel{\nu}{\nu'}{\CTyp[\Delta]{l}}{0}$, then \newline
+    $\lttrmgneeq \metalevel{\ELIMTYP{l_1}{l_2}Mbl\Delta
+      \nu}{\ELIMTYP{l_3}{l_4}{M'}{b'}{l'}{\Delta'}{\nu'}}{M_\Typ[l/\ell,\Delta/g,\nu/x_T]}{l_1}$. 
+  \item If all motives and branches are related by corresponding generic equivalence,
+    moreover, $\tyequiv[L]{l}{l'}\Level$, $\ltctxgeq \proglevel{\Delta}{\Delta'}$,
+    $U : \DTyp[\Delta]{\codelevel} l \in \Psi$ and $\ltsubst \codelevel \delta \Delta$, then \newline
+    $\lttrmgneeq \metalevel{\ELIMTYP{l_1}{l_2}Mbl\Delta{(\boxit{U^\delta})}}{\ELIMTYP{l_3}{l_4}{M'}{b'}{l'}{\Delta'}{(\boxit{U^\delta})}}{M_\Typ[l/\ell,\Delta/g,\boxit{U^\delta}/x_T]}{l_1}$.
+  \item If all motives and branches are related by corresponding generic equivalence,
+    moreover, $\tyequiv[L]{l}{l'}\Level$, $\ltctxgeq \proglevel{\Delta}{\Delta'}$,
+    $\tconvtyp \proglevel T{T'}{l}$ and
+    $\tconvtrmnee \metalevel{\nu}{\nu'}{\CTrm[\Delta]T{l}}{0}$, then \newline
+    $\lttrmgneeq \metalevel{\ELIMTRM{l_1}{l_2}Mbl\Delta T \nu}{\ELIMTYP{l_3}{l_4}{M'}{b'}{l'}{\Delta'}{T'}{\nu'}}{M_\Trm[l/\ell,\Delta/g,T/U_T,\nu/x_t]}{l_2}$.
+  \item If all motives and branches are related by corresponding generic equivalence,
+    moreover, $\tyequiv[L]{l}{l'}\Level$, $\ltctxgeq \proglevel{\Delta}{\Delta'}$,
+    $\tconvtyp \proglevel T{T'}{l}$, $u : \DTrm[\Delta]{i'}T l \in \Psi$,
+    $ i' \in \{\varlevel, \codelevel\}$ and $\ltsubst \codelevel \delta \Delta$, then \newline
+    $\lttrmgneeq \metalevel{\ELIMTRM{l_1}{l_2}Mbl\Delta T
+      {(\boxit{u^\delta})}}{\ELIMTYP{l_3}{l_4}{M'}{b'}{l'}{\Delta'}{T'}{(\boxit{u^\delta})}}{M_\Trm[l/\ell,\Delta/g,T/U_T,\boxit{u^\delta}/x_t]}{l_2}$.
+  \end{itemize}
+\end{law}
+We conclude all the laws here fore the generic equivalence.
+
+This generic equivalence will be instantiated twice times: the syntactic equivalence
+judgments, and the convertibility checking judgments. %
+\delamlang is way more complex than \citet{abel_decidability_2017}'s work because
+\delamlang has computations at two layers, $\proglevel$ and $\metalevel$. %
+Therefore, we must derive the necessary properties from the fundamental theorems to be
+proved shortly at each layer. %
+
+\subsection{Kripke Logical Relations for MLTT}\labeledit{sec:dt:klogrel}
+
+The Kripke logical relations are parameterized by the generic equivalence. %
+It is additionally indexed by another layering index $j \in \{\proglevel, \metalevel\}$, which
+quantifies the types described by the relations. %
+When $j = \proglevel$, we consider types from MLTT. %
+When $j = \metalevel$, we consider all possible types. %
+The reason for this distinction is to handle the lifting property from layer $\codelevel$
+(which has the terms as $\proglevel$) or $\proglevel$ to
+$\metalevel$, where terms from MLTT are brought to \delamlang. %
+On the semantic side, we need to make sure that terms from MLTT can interact with
+``native'' terms in \delamlang coherent. %
+We further restrict $j = \proglevel$ when $i = \proglevel$. 
+
+The Kripke logical relations are defined by
+\begin{enumerate}
+\item recursion on $j$, which effectively means the logical relations are
+  2-layered; also note when $i = \proglevel$, $j = \proglevel$ is determined;
+\item a transfinite well-founded recursion on the universe levels, and
+\item induction-recursion on related types and terms. 
+\end{enumerate}
+In particular, the recursion on $j$ is necessary, as the relations when $j = \metalevel$ depend
+on the validity judgments of $j = \proglevel$. %
+When we do a recursion on universe levels, we must mind the well-foundedness of
+universe levels. %
+As we have discussed in \Cref{sec:dt:ulevel}, we are sure that all universe
+levels must find a finite number of steps to descend to $0$. %
+The only problem is $\omega$, which is not finite. %
+Thus we must include one large cardinal to handle this level, hence the transfinite
+recursion. %
+Luckily, we do not have to think about it most of the time as we cannot really use
+$\omega$ to do anything special at all. %
+Note that our relations do not exactly follow \citet{abel_decidability_2017} tightly,
+where two relations are defined for types and terms respectively. %
+In our case, we provide simpler inductive-recursive definitions, where only one
+relation is defined for types and for terms respectively. %
+This style is more akin to the PER models in untyped domains by
+\citet{abel_normalization_2013,hu_jang_pientka_2023}, except that our logical
+relations are Kripke. %
+We follow a proof schema that combines that of \citet{abel_decidability_2017} and that
+of \citet{abel_normalization_2013,hu_jang_pientka_2023}. %
+We define the following judgments:
+\begin{itemize}
+\item $\D :: \ldtypeq i j T{T'} l$ denotes that two types $T$ and $T'$ are related. %
+  This relation is defined inductively. %
+  We use $\D$ to mark give a name to the derivation as we will do recursion on it. %
+\item $\ldtyequiv i j t{t'} \D$ denotes that two terms $t$ and $T'$ related by $\D$. %
+  This relation is defined by a recursion on $\D$. 
+\item $\E :: \ldctxeq i j \Gamma \Delta$ denotes that two contexts are related. %
+  It is a generalization of $\D$. 
+\item $\ldsubeq i j \delta{\delta'} \E$ denotes that two local substitutions
+  $\delta$ and $\delta'$ are related. %
+  It is a generalization of $\ldtyequiv i j t{t'} \D$ by doing recursion on $\E$. 
+\end{itemize}
+% The index $i$ is fixed for each instance of generic equivalence.
+For convenience, we define the following:
+\begin{align*}
+  \ldtypwf i j T l &:= \ldtypeq i j T T l \\
+  \ldtyequivt i j t{t'} T l & := \text{for some $T'$, } \D :: \ldtypeq i j T{T'}
+l \tand \ldtyequiv i j t{t'}{\D} \\
+  \ldtyping i j t T l & := \ldtyequivt i j t{t} T l \\
+  \ldctxwf i j \Gamma &:=  \ldctxeq i j \Gamma \Gamma \\
+  \ldsubeq i j \delta{\delta'} \Delta &:= \text{for some $\Delta'$, }\E :: \ldctxeq i
+                                        j \Delta{\Delta'} \tand \ldsubeq i j \delta{\delta'} \E \\
+  \ldsubst i j \delta \Delta &:= \ldsubeq i j \delta{\delta} \Delta
+\end{align*}
+
+Now we proceed to define the relations. %
+We begin with the natural numbers. %
+\begin{mathpar}
+  \D :: \inferrule
+  {\ttypreds i T{\Nat}0 \\ \ttypreds i {T'}\Nat0}
+  {\ldtypeq i j T{T'}0}
+\end{mathpar}
+Then $\ldtyequiv i j t{t'} \D$ is defined by $\ldtyeqnat i t{t'}$, which we
+define as follows:
+\begin{mathpar}
+  \inferrule
+  {\ttrmreds i t w \Nat 0 \\ \ttrmreds i{t'}{w'}\Nat 0 \\ \lttrmgeq i w{w'}\Nat 0
+    \\ \ldtynfeqnat i w{w'}}
+  {\ldtyeqnat i t{t'}}
+
+  \inferrule
+  { }
+  {\ldtynfeqnat i \ze \ze}
+
+  \inferrule
+  {\ldtyeqnat i t{t'}}
+  {\ldtynfeqnat i{\su t}{\su{t'}}}
+
+  \inferrule
+  {\lttrmgneeq i \nu{\nu'}\Nat 0}
+  {\ldtynfeqnat i{\nu}{\nu'}}  
+\end{mathpar}
+
+Then we consider universes.
+\begin{mathpar}
+  \D :: \inferrule
+  {\ttypreds i T{\Ty{l_1}}{1 + l_1} \\ \ttypreds i {T'}{\Ty{l_2}}{1 + l_2} \\\\
+  \tyequiv[L]{l_1}{l}\Level \\ \tyequiv[L]{l_2}{l}\Level}
+  {\ldtypeq i j{T}{T'}{1 + l}}
+\end{mathpar}
+Then $\ldtyequiv i j t{t'} \D$ is defined by
+\begin{itemize}
+\item $\ttrmreds i t w{\Ty l}{1 + l}$,
+\item $\ttrmreds i {t'}{w'}{\Ty l}{1 + l}$,
+\item $\lttrmgeq i w{w'}{\Ty l}{1 + l}$, which means that $t$ and $t'$ are equivalent
+  types at level $l$,
+\item $\ldtypeq i j{\Elt l w}{\Elt l{w'}}{l}$, which means that the corresponding
+  types of $w$ and $w'$ are related. 
+\end{itemize}
+The last condition requires the well-founded recursion on the universe levels in order
+to refer back to the relation for types. %
+Notice that the universe level decreases by one so this definition is valid. %
+
+Then we define the relation for $\Pi$ types.
+\begin{mathpar}
+  \D :: \inferrule
+  {\ttypreds i T{\PI l{l'} x{S_1}{T_1}}{l \sqcup l'} \\ \ttypreds i {T'}{\PI l{l'}
+      x{S_2}{T_2}}{l \sqcup l'} \\
+    \lttypwf i{S_1} l \\ \lttypwf i{S_2} l \\ \lttypwf[\Psi][\Gamma, x : S_1 \at l]
+    i{T_1}{l'} \\
+    \lttypwf[\Psi][\Gamma, x : S_2 \at l] i{T_2}{l'} \\
+    \lttypgeq i{\PI l{l'} x{S_1}{T_1}}{\PI l{l'} x{S_2}{T_2}}{l \sqcup l'} \\
+    \E :: (\forall~ \psi :: L' \sep \Phi;\Delta \To_i L \sep \Psi; \Gamma ~.~
+    \ldtypeq[\Phi][\Delta][L'] i j{S_1}{S_2}{l}) \\
+    \F :: (\forall~ \psi :: L' \sep \Phi;\Delta \To_i L \sep \Psi; \Gamma \tand \ldtyequiv[\Phi][\Delta][L']
+    i j {s}{s'}{\E(\psi)} ~.~
+    \ldtypeq[\Phi][\Delta][L'] i j{T_1[s/x]}{T_2[s'/x]}{l'})}
+  {\ldtypeq i j{T}{T'}{l \sqcup l'}}
+\end{mathpar}
+This case is particularly complex. %
+Let us digest the premises one by one. %
+First, we require that both types $T$ and $T'$ to reduce to some $\Pi$ types. %
+The typing judgments require the components of the $\Pi$ types are well-formed. %
+Further, the $\Pi$ types themselves are equivalent. %
+Then $\E$ requires that $S_1$ and $S_2$ are related under any weakening. %
+This makes the relation Kripke. %
+$\F$ is similar but require $T_1$ and $T_2$ remain related given any two related terms
+$s$ and $s'$. %
+Furthermore, in reality, we should put down sufficient premises for equivalent
+universes to allow syntactically different universes to appear in both $T$ and $T'$,
+but due to the size of this rule, we only use $l$ and $l'$ here. %
+We apply the same principle in other rules in the rest of this technical report.
+
+Then $\ldtyequiv i j t{t'} \D$ is defined by
+\begin{itemize}
+\item $\ttrmreds i t w{\PI l{l'} x{S_1}{T_1}}{l \sqcup l'}$, 
+\item $\ttrmreds i {t'}{w'}{\PI l{l'} x{S_2}{T_2}}{l \sqcup l'}$,
+\item $\lttrmgeq i w{w'}{\PI l{l'} x{S_1}{T_1}}{l \sqcup l'}$,
+\item $\lttrmgeq i w{w'}{\PI l{l'} x{S_2}{T_2}}{l \sqcup l'}$, which is duplicated to
+  make symmetry a simpler property,
+\item
+  for all $\forall\ \psi :: L' \sep \Phi;\Delta \To_i L \sep \Psi; \Gamma$ and $\Ac ::
+  \ldtyequiv[\Phi][\Delta][L'] i j {s}{s'}{\E(\psi)}$, moreover, we add
+  equivalence assumptions to remove the effect of type annotations,
+  $\lttypgeq[\Phi][\Delta][L'] i{S_1}{S_1'}l$, $\lttypgeq[\Phi][\Delta][L'] i{S_2}{S_2'}l$, \break
+  $\lttypgeq[\Phi][\Delta, x : S_1 \at l][L'] i{T_1}{T_1'}{l'}$,
+  $\lttypgeq[\Phi][\Delta, x : S_2 \at l][L'] i{T_2}{T_2'}{l'}$, then \break
+  $\ldtyequiv[\Phi][\Delta][L'] i j{\APP w l{l'} x{S_1'}{T_1'} s}{\APP{w'}l{l'}
+    x{S_2'}{T_2'}{s'}}{\F(\psi, \Ac)}$.
+\end{itemize}
+
+The next case is neutral types.
+\begin{mathpar}
+  \D :: \inferrule
+  {\ttypreds i T{V}l \\ \ttypreds i{T'}{V'}l \\
+    \lttypgneeq i V{V'} l}
+  {\ldtypeq i j{T}{T'}{l}}
+\end{mathpar}
+Then $\ldtyequiv i j t{t'} \D$ is defined by
+\begin{itemize}
+\item $\ttrmreds i t \nu{V}{l}$,
+\item $\ttrmreds i {t'}{\nu'}{V'}{l}$,
+\item $\lttrmgneeq i \nu{\nu'}{V}{l}$,
+\item $\lttrmgneeq i \nu{\nu'}{V'}{l}$.
+\end{itemize}
+Again, we duplicate $\nu \sim \nu'$ to make symmetry easy.
+
+The last case possible for both layers is equivalence of universe levels. %
+This case is introduced for bureaucratic purposes and often ignored.
+\begin{mathpar}
+  \D :: \inferrule
+  {\E :: \ldtypeq i j{T}{T'}{l'} \\ \tyequiv[L]l{l'}\Level}
+  {\ldtypeq i j{T}{T'}{l}}
+\end{mathpar}
+Then $\ldtyequiv i j t{t'} \D$ is defined by $\ldtyequiv i j t{t'} \E$. 
+
+Now we have given all logical relations for types and terms that are available at both layers. %
+In order to give the logical relations for layer $\metalevel$, we need to first give the
+logical relations for local contexts and local substitutions, as the semantics of
+contextual types depend on them. %
+The complexity of our logical relations primarily comes from the fact that we must be
+able to handle computation at two layers ($\proglevel$ and $\metalevel$) and different lifting
+behaviors. %
+
+We proceed by defining related local contexts inductively and then the corresponding
+recursive case for local substitutions. %
+\begin{mathpar}
+  \E :: \inferrule
+  {\judge[L] \Psi}
+  {\ldctxeq i j \cdot\cdot}
+\end{mathpar}
+Then $\ldsubeq i j \delta{\delta'} \E$ is defined by $\lpjudge i \Gamma$ and then checking $\Gamma$:
+\begin{itemize}
+\item if $\Gamma$ ends with $\cdot$, then $\delta = \delta' = \cdot^{|\Gamma|}$;
+\item if $\Gamma$ ends with $g$, then $g : \Ctx \in \Psi$ and $\delta = \delta' = \cdot^{|\Gamma|}_g$;
+\end{itemize}
+
+\begin{mathpar}
+  \E :: \inferrule
+  {\judge[L] \Psi \\ g : \Ctx \in \Psi}
+  {\ldctxeq i j {g}{g}}
+\end{mathpar}
+Then $\ldsubeq i j \delta{\delta'} \E$ is defined as $\lpjudge i \Gamma$ and
+\begin{itemize}
+\item $\Gamma$ also ends with $g$,
+\item $\delta = \delta' = \wk^{|\Gamma|}_g$.
+\end{itemize}
+
+\begin{mathpar}
+  \E :: \inferrule
+  {\F :: \forall~\alpha :: L' \sep \Phi \To L \sep \Psi ~.~ \ldctxeq[\Phi][L'] i j
+    \Delta{\Delta'} \\ \D :: \ldStypeq \F i j T{T'} l \\ \tyequiv[L]l{l'}\Level}
+  {\ldctxeq i j{\Delta, x : T \at l}{\Delta', x : T' \at{l'}}}
+\end{mathpar}
+Then $\ldsubeq i j \delta{\delta'} \E$ is defined as
+\begin{itemize}
+\item $\delta = \delta_1, t/x$,
+\item $\delta' = \delta_1', t'/x$,
+\item $\Cc :: \forall~\alpha :: L' \sep \Phi \To L \sep \Psi ~.~ \ldsubeq[\Phi][\Gamma][L'] i j {\delta_1}{\delta_1'}{\F(\alpha)}$,
+\item $\forall~\alpha :: L' \sep \Phi \To L \sep \Psi ~.~ \ldtyequiv[\Phi][\Gamma][L'] i j t{t'}{\D(\alpha,
+    \Cc(\alpha))}$.
+\end{itemize}
+where we let $\D :: \ldStypeq \F i j T{T'} l$ to be
+\[
+  \forall~\alpha :: L' \sep \Phi \To L \sep \Psi \tand \ldsubeq[\Phi][\Gamma][L'] i j \delta{\delta'}{\F(\alpha)} ~.~ \ldtypeq[\Phi][\Gamma][L'] i j {T[\delta]}{T'[\delta']}{l}
+\]
+The judgment $\ldStypeq \F i j T{T'} l$ requires the stability under local substitutions
+of the relation between $T$ and $T'$. %
+We apply the same principle to related terms and derive the judgment
+$\ldStyequiv \F i j t{t'}{\D}$, which is given by
+\[
+  \forall~\alpha :: L' \sep \Phi \To L \sep \Psi \tand \Cc :: \ldsubeq[\Phi][\Gamma][L'] i j
+  \delta{\delta'}{\F(\alpha)} ~.~ \ldtyequiv[\Phi][\Gamma][L'] i j {t[\delta]}{t'[\delta']}{\D(\alpha,
+    \Cc)}
+\]
+
+\subsection{Properties for Logical Relations When $j = \proglevel$}\labeledit{sec:dt:logrel-prop}
+
+
+In this section, we pause our progress of defining the logical relations when $j =
+\metalevel$. %
+Following previous lines of work, when we give the Kripke logical relations to
+contextual types, we will have to refer to the validity judgments of types and terms
+in the logical relations. %
+Therefore, in this section, we first work out a list of properties of the logical
+relations when $j = \proglevel$, and then in the next section, we define semantic judgments for
+global contexts and global substitutions, and then validity judgments. %
+Once we have the validity judgments when $j = \proglevel$, we can then finish writing down the
+logical relations for contextual types. %
+Without further ado, let us start proving some lemmas. %
+The list of lemmas mainly follows \citet{abel_normalization_2013,hu_jang_pientka_2023}
+though we also take \citet{abel_decidability_2017} into consideration. 
+
+\begin{lemma}[Weakening] $ $
+  \begin{itemize}
+  \item If $\D :: \ldtypeq i \proglevel{T}{T'}{l}$ and
+    $\psi :: L' \sep \Phi;\Delta \To_i L \sep \Psi; \Gamma$, then
+    $\E :: \ldtypeq[\Phi][\Delta][L'] i \proglevel{T}{T'}{l}$.
+  \item If $\ldtyequiv i \proglevel{t}{t'}\D$ and
+    $\psi :: L' \sep \Phi;\Delta \To_i L \sep \Psi; \Gamma$, then
+    $\ldtyequiv[\Phi][\Delta][L'] i \proglevel{t'}{t}\E$.
+  \end{itemize}
+\end{lemma}
+\begin{proof}
+  Induction on $\D$. %
+  Note that typing judgments are invariant under weakenings. %
+  Also use the weakening law for generic equivalence. %
+\end{proof}
+
+\begin{lemma}[Escape] $ $
+  \begin{itemize}
+  \item If $\D :: \ldtypeq i \proglevel{T}{T'}{l}$, then $\lttypgeq i {T}{T'} l$.
+  \item If $\ldtyequiv i \proglevel{t}{t'}\D$, then $\lttrmgeq i t{t'} T l$ and $\lttrmgeq i t{t'}{T'} l$.
+  \end{itemize}  
+\end{lemma}
+\begin{proof}
+  Induction on $\D$. %
+  Use the subsumption law of the generic equivalence. %
+\end{proof}
+
+\begin{lemma}[Reflexivity of Neutral]
+  If $\D :: \ldtypeq i \proglevel{T}{T'}l$, $\lttrmgneeq i \nu{\nu'} T l$ and $\lttrmgneeq i \nu{\nu'}{T'} l$, then $\ldtyequiv i \proglevel{\nu}{\nu'}\D$.
+\end{lemma}
+\begin{proof}
+  Induction on $\D$. %
+  Use the conversion and subsumption laws of generic equivalence and then the
+  soundness of multi-step reductions and the escape lemma to obtain the equivalence
+  between $\nu$ and $\nu'$ as normal forms. %
+  In the function case, we use the congruence for neutral law of generic equivalence
+  to show that the results of applying two neutral function are related.
+\end{proof}
+
+\begin{lemma}[Weak Head Expansion] $ $
+  \begin{itemize}
+  \item If $\D :: \ldtypeq i \proglevel{T}{T'}{l}$, $\ttypreds i{T_1} T l$ and $\ttypreds
+    i{T_1'}{T'}l$, then \newline $\ldtypeq i \proglevel {T_1}{T_1'} l$.
+  \item If $\ldtyequiv i \proglevel{t}{t'}\D$, $\ttrmreds i{t_1}{t}{T} l$ and $\ttrmreds
+    i{t_1'}{t'}{T'}l$, then $\ldtyequiv i \proglevel {t_1}{t_1'} \D$.
+  \end{itemize}  
+\end{lemma}
+\begin{proof}
+  Induction on $\D$. Use transitivity of reductions. 
+\end{proof}
+
+\begin{lemma}[Symmetry] $ $
+  \begin{itemize}
+  \item If $\D :: \ldtypeq i \proglevel{T}{T'}{l}$, then $\E :: \ldtypeq i \proglevel{T'}{T}{l}$.
+  \item If $\ldtyequiv i \proglevel{t}{t'}\D$, then $\ldtyequiv i \proglevel{t'}{t}\E$. 
+  \end{itemize}
+\end{lemma}
+\begin{proof}
+  We do induction on $\D$. %
+  Since our definition is designed with symmetry in mind, symmetry is rather immediate.
+\end{proof}
+
+\begin{lemma}[Right Irrelevance]
+  If $\D :: \ldtypeq i \proglevel{T}{T'}{l}$, $\E :: \ldtypeq i \proglevel{T}{T''}{l}$ and
+  $\ldtyequiv i \proglevel{t}{t'}\D$, then $\ldtyequiv i \proglevel{t}{t'}\E$.
+\end{lemma}
+\begin{proof}
+  We do induction on $\D$ and then invert $\E$. %
+  We consider the function case. %
+  In this case, we have premises
+  \begin{align*}
+    \D_1 &:: (\forall~ \psi :: L' \sep \Phi;\Delta \To_i L \sep \Psi; \Gamma ~.~
+    \ldtypeq[\Phi][\Delta][L'] i \proglevel{S_1}{S_2}{l_1}) \\
+    \D_2 &:: (\forall~ \psi :: L' \sep \Phi;\Delta \To_i L \sep \Psi; \Gamma ~.~ \forall~ \ldtyequiv[\Phi][\Delta][L']
+    i \proglevel {s}{s'}{\D_1(\psi)} ~.~
+    \ldtypeq[\Phi][\Delta][L'] i \proglevel{T_1[s/x]}{T_2[s'/x]}{l_2}) \\
+    \E_1 &:: (\forall~ \psi :: L' \sep \Phi;\Delta \To_i L \sep \Psi; \Gamma ~.~
+    \ldtypeq[\Phi][\Delta][L'] i \proglevel{S_1}{S_2'}{l_1}) \\
+    \E_2 &:: (\forall~ \psi :: L' \sep \Phi;\Delta \To_i L \sep \Psi; \Gamma ~.~ \forall~ \ldtyequiv[\Phi][\Delta][L']
+    i \proglevel {s}{s'}{\E_1(\psi)} ~.~
+    \ldtypeq[\Phi][\Delta][L'] i \proglevel{T_1[s/x]}{T_2'[s'/x]}{l_2})
+  \end{align*}
+  from $\D$ and $\E$. %
+  Here $\D_1$ and $\D_2$ are the premises of $\D$, and likewise for $\E$. %
+  By determinacy, we know that
+  \[
+    T \reds \PI{l_1}{l_2} x{S_1}{T_1}
+  \]
+  must be unique.  %
+  Moreover, we also know
+  \begin{gather*}
+    T' \reds \PI{l_1}{l_2} x{S_2}{T_2} \\
+    T'' \reds \PI{l_1}{l_2} x{S_2'}{T_2'}
+  \end{gather*}
+  The most difficult part is to show that given
+  \begin{itemize}
+  \item $\psi :: L' \sep \Phi;\Delta \To_i L \sep \Psi; \Gamma$,    
+  \item $\Ac :: \ldtyequiv[\Phi][\Delta][L'] i \proglevel {s}{s'}{\E_1(\psi)}$
+  \item $\lttypgeq[\Phi][\Delta][L'] i{S_1}{S_3}l$,
+  \item $\lttypgeq[\Phi][\Delta][L'] i{S_2}{S_4}l$, 
+  \item $\lttypgeq[\Phi][\Delta, x : S_1 \at{l_1}][L'] i{T_1}{T_3}{l_2}$, and
+  \item $\lttypgeq[\Phi][\Delta, x : S_2' \at{l_1}][L'] i{T_2'}{T_4}{l_2}$,
+  \end{itemize}
+  then
+  \[
+    \ldtyequiv[\Phi][\Delta][L'] i \proglevel{\APP w{l_1}{l_2} x{S_3}{T_3} s}{\APP{w'}{l_1}{l_2}
+      x{S_4}{T_4}{s'}}{\E_2(\psi, \Ac)}
+  \]
+
+  From $\ldtyequiv i \proglevel{t}{t'}\D$, together with
+  \begin{itemize}
+  \item $\Bc :: \ldtyequiv[\Phi][\Delta][L'] i \proglevel {s}{s'}{\D_1(\psi)}$ by IH,
+  \item $\lttypgeq[\Phi][\Delta, x : S_2 \at{l_1}][L'] i{T_2}{T_4}{l_2}$, where we
+    know $\lttypeq i{S_2}{S_2'}{l_1}$ by escape, the subsumption law of generic
+    equivalence, transitivity and local context equivalence of syntactic and generic
+    equivalence. %
+  \end{itemize}
+  we have
+  \[
+    \ldtyequiv[\Phi][\Delta][L'] i \proglevel{\APP w{l_1}{l_2} x{S_3}{T_3} s}{\APP{w'}{l_1}{l_2}
+      x{S_4}{T_4}{s'}}{\D_2(\psi, \Bc)}
+  \]
+  By another IH, we have the goal.
+\end{proof}
+
+\begin{lemma}[Left Irrelevance]
+  If $\D :: \ldtypeq i \proglevel{T'}{T}{l}$, $\E :: \ldtypeq i \proglevel{T''}{T}{l}$ and
+  $\ldtyequiv i \proglevel{t}{t'}\D$, then $\ldtyequiv i \proglevel{t}{t'}\E$.
+\end{lemma}
+\begin{proof}
+  Immediate by symmetry and right irrelevance. 
+\end{proof}
+
+The left and right irrelevance lemmas are called the irrelevance lemma. %
+It says that the exact relation between types is not important as long as their normal
+forms are related. %
+
+\begin{lemma}[Reflexivity and Transitivity] $ $
+  \begin{itemize}
+  \item If $\D_1 :: \ldtypeq i \proglevel{T_1}{T_2}{l}$ and $\D_2 :: \ldtypeq i
+    \proglevel{T_2}{T_3}{l}$, then $\D_3 :: \ldtypeq i \proglevel{T_1}{T_3}{l}$.
+  \item If $\E :: \ldtypeq i \proglevel{T_1}{T_1}{l}$, $\ldtyequiv i \proglevel{t_1}{t_2}{\D_1}$ and
+    $\ldtyequiv i \proglevel{t_2}{t_3}{\D_2}$, then $\ldtyequiv i \proglevel{t_1}{t_3}{\D_3}$.
+  \item $\F :: \ldtypeq i \proglevel{T_1}{T_1}{l}$.
+  \item If $\ldtyequiv i \proglevel{t_1}{t_2}{\D_1}$, then $\ldtyequiv i \proglevel{t_1}{t_1}{\F}$.
+  \end{itemize}
+\end{lemma}
+\begin{proof}
+  We do induction on $\D_1$ and then invert $\D_2$. %
+  The function case is the most complex one. %
+  We have the following premises:
+  \begin{align*}
+    \Ac_1 &:: (\forall~ \psi :: L' \sep \Phi;\Delta \To_i L \sep \Psi; \Gamma ~.~
+    \ldtypeq[\Phi][\Delta][L'] i \proglevel{S_1}{S_2}{l_1}) \\
+    \Ac_2 &:: (\forall~ \psi :: L' \sep \Phi;\Delta \To_i L \sep \Psi; \Gamma ~.~ \forall~ \ldtyequiv[\Phi][\Delta][L']
+    i \proglevel {s}{s'}{\Ac_1(\psi)} ~.~
+    \ldtypeq[\Phi][\Delta][L'] i \proglevel{S_1'[s/x]}{S_2'[s'/x]}{l_2}) \\
+    \Bc_1 &:: (\forall~ \psi :: L' \sep \Phi;\Delta \To_i L \sep \Psi; \Gamma ~.~
+    \ldtypeq[\Phi][\Delta][L'] i \proglevel{S_2}{S_3}{l_1}) \\
+    \Bc_2 &:: (\forall~ \psi :: L' \sep \Phi;\Delta \To_i L \sep \Psi; \Gamma ~.~ \forall~ \ldtyequiv[\Phi][\Delta][L']
+    i \proglevel {s}{s'}{\E_1(\psi)} ~.~
+    \ldtypeq[\Phi][\Delta][L'] i \proglevel{S_2'[s/x]}{S_3'[s'/x]}{l_2})
+  \end{align*}
+  from $\D$ and $\E$. %
+  Here $\Ac_1$ and $\Ac_2$ are the premises of $\D_1$, and $\Bc_1$ and $\Bc_2$ are from $\D_2$. %
+  By determinacy, we know that
+  \begin{gather*}
+    T_1 \reds \PI{l_1}{l_2} x{S_1}{S_1'} \\
+    T_2 \reds \PI{l_1}{l_2} x{S_2}{S_2'} \\
+    T_3 \reds \PI{l_1}{l_2} x{S_3}{S_3'}
+  \end{gather*}
+
+  Now, we should construct the transitivity for types and terms at the same time to
+  understand how this proof is going to check out. %
+  First we let 
+  \[
+    \Cc_1 :: (\forall~ \psi :: L' \sep \Phi;\Delta \To_i L \sep \Psi; \Gamma ~.~
+    \ldtypeq[\Phi][\Delta][L'] i \proglevel{S_1}{S_3}{l_1})
+  \]
+  be the result of IH on $\Ac_1$ and $\Bc_1$. %
+  Then our goal is to show that 
+  
+  The most difficult part is to show that given
+  \begin{itemize}
+  \item $\psi :: L' \sep \Phi;\Delta \To_i L \sep \Psi; \Gamma$,    
+  \item $\F :: \ldtyequiv[\Phi][\Delta][L'] i \proglevel {s}{s'}{\Cc_1(\psi)}$
+  \item $\lttypgeq[\Phi][\Delta][L'] i{S_1}{S_4}l$,
+  \item $\lttypgeq[\Phi][\Delta][L'] i{S_3}{S_5}l$, 
+  \item $\lttypgeq[\Phi][\Delta, x : S_1 \at{l_1}][L'] i{S_1'}{S_4'}{l_2}$, and
+  \item $\lttypgeq[\Phi][\Delta, x : S_3 \at{l_1}][L'] i{S_3'}{S_5'}{l_2}$,
+  \end{itemize}
+  then
+  \begin{itemize}
+  \item
+    \[
+      \Cc_2 :: \ldtypeq[\Phi][\Delta][L'] i \proglevel{S_1'[s/x]}{S_3'[s'/x]}{l_2}
+    \]
+  \item 
+    \[
+      \ldtyequiv[\Phi][\Delta][L'] i \proglevel{\APP w_1{l_1}{l_2} x{S_4}{S_4'} s}{\APP{w_3}{l_1}{l_2}
+        x{S_5}{S_5'}{s'}}{\Cc_2}
+    \]
+    where $t_k \reds w_k$ for $k \in \{1, 2, 3\}$. 
+  \end{itemize}
+  Our plan is the following:
+  \begin{enumerate}
+  \item We first relate $S_1'[s/x]$ and $S_2'[s/x]$, resp.
+    $\APP {w_1}{l_1}{l_2} x{S_4}{S_4'} s$ and $\APP {w_2}{l_1}{l_2} x{S_4}{S_4'} s$, which
+    requires
+    \[
+      \ldtyequiv[\Phi][\Delta][L'] i \proglevel {s}{s}{\Ac_1(\psi)}
+    \]
+    which is derived from reflexivity and irrelevance;
+  \item and then relate $S_2'[s/x]$ and $S_3'[s/x]$, resp.
+    $\APP {w_2}{l_1}{l_2} x{S_4}{S_4'} s$ and $\APP {w_2}{l_1}{l_2} x{S_5}{S_5'}{s'}$,
+    which requires
+    \[
+      \ldtyequiv[\Phi][\Delta][L'] i \proglevel {s}{s'}{\Bc_1(\psi)}
+    \]
+    which is immediate from irrelevance.
+  \end{enumerate}
+  The final missing piece is reflexivity. %
+  For types, it is just a result from transitivity and symmetry. %
+  For terms, it is reflexivity and transitivity of related types and then
+  irrelevance. %
+  
+  This concludes the function case. 
+\end{proof}
+
+Next, we work on the properties for related local contexts and local substitutions. %
+We first consider the built property of weakening. %
+Weakening can be seen as a case of the Yoneda lemma, where we only depend on
+composition of weakenings.
+\begin{lemma}[Weakening] $ $
+  \begin{itemize}
+  \item If $\D :: \ldctxeq i \proglevel \Delta{\Delta'}$ and  $\alpha :: L' \sep \Phi \To L \sep
+    \Psi$, then $\E :: \ldctxeq[\Phi][L'] i \proglevel \Delta{\Delta'}$.
+  \item If $\ldsubeq i \proglevel{\delta}{\delta'}\D$, $\alpha :: L' \sep \Phi \To L \sep \Psi$
+    and $\tau :: L' \sep \Phi; \Gamma' \To_i \Gamma$, then
+    $\ldsubeq[\Phi][\Gamma'][L'] i \proglevel{\delta}{\delta'}\E$.
+  \end{itemize}
+\end{lemma}
+\begin{proof}
+  Induction on $\D$. %
+  In the two base cases, we know $\judge[L']\Phi$ by weakening. %
+  In the step case, we simply store the given weakenings in a composition. %
+\end{proof}
+Notice that the second statement is a little bit strengthened. %
+It is possible due to local weakening of related types and terms. %
+
+We should first prove the reflexivity between identity local substitutions before
+proving the the escape lemma.
+\begin{lemma}[Reflexive Local Weakenings]
+  If $\lpequiv i{\Delta,\Gamma}{\Delta',\Gamma}$ and $\D :: \ldctxeq i \proglevel \Delta{\Delta'}$, then \break
+  $\ldsubeq[\Psi][\Delta,\Gamma] i \proglevel{\wk^{|\Gamma|}_{\Delta}}{\wk^{|\Gamma|}_{\Delta}}\D$. 
+\end{lemma}
+\begin{proof}
+  We do induction on $\D$ and consider the step case
+  \begin{mathpar}
+    \D :: \inferrule
+    {\E :: \forall \alpha :: L' \sep \Phi \To L \sep \Psi ~.~ \ldctxeq[\Phi][L'] i \proglevel {\Delta}{\Delta'} \\
+      \F :: \ldStypeq \E i \proglevel T{T'} l \\ \tyequiv[L]l{l'}\Level}
+    {\ldctxeq i \proglevel{\Delta, x : T \at l}{\Delta', x : T' \at{l'}}}
+  \end{mathpar}
+  \begin{align*}
+    \Bc :: & \forall \alpha :: L' \sep \Phi \To L \sep \Psi ~.~ \ldsubeq[\Phi][\Delta, x : T \at l,\Gamma][L'] i \proglevel{\wk^{1 + |\Gamma|}_{\Delta}}{\wk^{1 + |\Gamma|}_{\Delta}}{\E(\alpha)}
+      \byIH \\
+    \alpha :: & L' \sep \Phi \To L \sep \Psi
+                \tag{by assumption} \\
+    & \ldtypeq[\Phi][\Delta, x : T \at l,\Gamma][L'] i \proglevel {T[\wk^{1 + |\Gamma|}_{\Delta}]}{T'[\wk^{1 + |\Gamma|}_{\Delta}]}{l}
+      \tag{as $\F(\alpha, \Bc(\alpha))$} \\
+    \Ac :: & \ldtypeq[\Phi][\Delta, x : T \at l,\Gamma][L'] i \proglevel {T}{T'}{l} \\
+    & \lpjudge[\Phi][L'] i{\Gamma, x : T \at l,\Delta}
+      \tag{by weakening and presupposition} \\
+    & \lttrmgneeq[\Phi][\Delta, x : T \at l,\Gamma][L'] i x x T l
+      \tag{by congruence for neutrals of generic equivalence} \\
+    & \ldtyequiv[\Phi][\Delta, x : T \at l,\Gamma][L'] i \proglevel{x}{x}\Ac
+      \tag{by reflexivity of neutral} \\
+    & \ldsubeq[\Psi][\Gamma, x : T \at l,\Delta] i \proglevel{\wk^{1 + |\Gamma|}_{\Delta},x/x}{\wk^{1 + |\Gamma|}_{\Delta},x/x}\D
+  \end{align*}
+  Thus we conclude the goal. 
+\end{proof}
+
+\begin{corollary}[Reflexive Local Identity Substitutions]\labeledit{lem:dt:refl-lid}
+  If $\lpequiv i \Gamma \Delta$ and $\D :: \ldctxeq i \proglevel \Gamma \Delta$, then \break
+  $\ldsubeq i \proglevel{\id}{\id}\D$. 
+\end{corollary}
+\begin{proof}
+  This is a specialization of the previous lemma. 
+\end{proof}
+
+Knowing all local identity substitutions are reflexively related, we can then prove
+the escape lemma.
+\begin{lemma}[Escape] $ $
+  \begin{itemize}
+  \item If $\D :: \ldctxeq i \proglevel{\Delta_1}{\Delta_2}$, then $\ltctxgeq i{\Delta_1}{\Delta_2}$. 
+  \item If $\ldsubeq i \proglevel{\delta}{\delta'}\D$, then $\ltsubgeq i
+    {\delta}{\delta'}{\Delta_1}$ and $\ltsubgeq i {\delta}{\delta'}{\Delta_2}$.
+  \end{itemize}
+\end{lemma}
+\begin{proof}
+  Induction on $\D$. %
+  We consider the step case.
+  \begin{mathpar}
+    \D :: \inferrule
+    {\E :: \forall \alpha :: L' \sep \Phi \To L \sep \Psi ~.~ \ldctxeq[\Phi][L'] i
+      \proglevel{\Delta_1}{\Delta_2} \\ \F :: \ldStypeq \E i \proglevel T{T'} l \\ \tyequiv[L]l{l'}\Level}
+    {\ldctxeq i \proglevel{\Delta_1, x : T \at l}{\Delta_2, x : T' \at{l'}}}
+  \end{mathpar}
+  \begin{align*}
+    & \ltctxgeq i{\Delta_1}{\Delta_2}
+      \byIH \\
+    & \ldsubeq[\Psi][\Delta_1] i \proglevel{\id}{\id}{\E(\id)}
+      \tag{by \Cref{lem:dt:refl-lid}} \\
+    & \ldtypeq[\Psi][\Delta_1] i \proglevel {T}{T'}{l}
+      \tag{as $\F(\id, \E(\id))$} \\
+    & \lttypgeq[\Psi][\Delta_1] i {T}{T'} l
+      \tag{by escape}
+  \end{align*}
+  Hence we conclude the first statement.
+  
+  In the second statement, we have $\delta = \delta_1, t/x$ and $\delta' = \delta_1',
+  t'/x$, then
+  \begin{align*}
+    & \ldsubeq i \proglevel {\delta_1}{\delta_1'}{\E(\id)}
+      \tag{by assumption} \\
+    & \ltsubgeq i {\delta_1}{\delta_1'}{\Delta_1} \tand \ltsubgeq i {\delta_1}{\delta_1'}{\Delta_2}
+      \byIH \\
+    & \ldtyequiv i \proglevel t{t'}{\F(\id, \E(\id))}
+      \tag{by assumption} \\
+    & \lttrmgeq i t{t'}{T[\delta_1]}l
+      \tag{by escape of related terms}
+  \end{align*}
+  Therefore we conclude the second statement as well.
+\end{proof}
+
+\begin{lemma}[Symmetry] $ $
+  \begin{itemize}
+  \item If $\D :: \ldctxeq i \proglevel{\Delta_1}{\Delta_2}$, then $\E :: \ldctxeq i \proglevel{\Delta_2}{\Delta_1}$.
+  \item If $\ldsubeq i \proglevel{\delta}{\delta'}\D$, then $\ldsubeq i \proglevel{\delta'}{\delta}\E$.
+  \end{itemize}  
+\end{lemma}
+\begin{proof}
+  Induction on $\D$. %
+  Use the symmetry of related types to obtain the goal.
+\end{proof}
+
+\begin{lemma}[Right Irrelevance]
+  If $\D :: \ldctxeq i \proglevel{\Delta_1}{\Delta_2}$, $\E :: \ldctxeq i
+  \proglevel{\Delta_1}{\Delta_3}$ and $\ldsubeq i \proglevel{\delta}{\delta'}\D$, then
+  $\ldsubeq i \proglevel{\delta}{\delta'}\E$.
+\end{lemma}
+\begin{proof}
+  Do induction on $\D$ and then invert $\E$. %
+  Use the right irrelevance of related terms. %
+\end{proof}
+
+\begin{lemma}[Left Irrelevance]
+  If $\D :: \ldctxeq i \proglevel{\Delta_1}{\Delta_2}$, $\E :: \ldctxeq i
+  \proglevel{\Delta_3}{\Delta_1}$ and $\ldsubeq i \proglevel{\delta}{\delta'}\D$, then
+  $\ldsubeq i \proglevel{\delta}{\delta'}\E$.
+\end{lemma}
+\begin{proof}
+   A direct consequence of right irrelevance and symmetry. 
+\end{proof}
+
+\begin{lemma}[Reflexivity and Transitivity] $ $
+  \begin{itemize}
+  \item If $\D_1 :: \ldctxeq i \proglevel{\Delta_1}{\Delta_2}$ and
+    $\D_2 :: \ldctxeq i \proglevel{\Delta_2}{\Delta_3}$, then
+    $\D_3 :: \ldctxeq i \proglevel{\Delta_1}{\Delta_3}$.
+  \item If $\ldsubeq i \proglevel{\delta_1}{\delta_2}{\D_1}$ and
+    $\ldsubeq i \proglevel{\delta_2}{\delta_3}{\D_2}$, then
+    $\ldsubeq i \proglevel{\delta_1}{\delta_3}{\D_3}$.
+  \item $\E :: \ldctxeq i \proglevel{\Delta_1}{\Delta_1}$.
+  \item If $\ldsubeq i \proglevel{\delta_1}{\delta_2}{\D_1}$, then $\ldsubeq i \proglevel{\delta_1}{\delta_1}{\E}$.
+  \end{itemize}  
+\end{lemma}
+\begin{proof}
+  Do induction on $\D_1$ and then invert $\D_2$. %
+  The proof proceeds very similarly to the relations for types and terms. %
+  We only consider the step case. %
+  In this case, we have the following premises:
+  \begin{itemize}
+  \item $\F_1 :: \forall~\alpha :: L' \sep \Phi \To L \sep \Psi ~.~
+    \ldctxeq[\Phi][L'] i \proglevel {\Delta_1'}{\Delta_2'}$,
+  \item $\F_2 :: \forall~\alpha :: L' \sep \Phi \To L \sep \Psi ~.~
+    \ldctxeq[\Phi][L'] i \proglevel {\Delta_2'}{\Delta_3'}$,
+  \item $\Ac_1 :: \ldStypeq{\F_1} i \proglevel {T_1}{T_2} l$,
+  \item $\Ac_2 :: \ldStypeq{\F_2} i \proglevel{T_2}{T_3} l$,
+  \item If $\ldStypeq{\F_1} i \proglevel T{T'} l$ and $\ldStypeq{\F_2} i \proglevel{T'}{T''} l$, then
+    $\ldStypeq {\F_3} i \proglevel T{T''} l$.
+  \item
+    $\forall~\alpha :: L' \sep \Phi \To L \sep \Psi ~.~ \ldtyequiv[\Phi][\Gamma][L']
+    i \proglevel {t_1}{t_2}{\Ac_1(\alpha, \F_1(\alpha))}$,
+  \item
+    $\forall~\alpha :: L' \sep \Phi \To L \sep \Psi ~.~ \ldtyequiv[\Phi][\Gamma][L']
+    i \proglevel {t_2}{t_3}{\Ac_2(\alpha, \F_2(\alpha))}$,
+  \end{itemize}
+  By IH, it is easy to show
+  \[
+    \F_3 :: \forall~\alpha :: L' \sep \Phi \To L \sep \Psi ~.~
+    \ldctxeq[\Phi][L'] i \proglevel {\Delta_1'}{\Delta_3'}
+  \]
+  The difficult goals are
+  \begin{itemize}
+  \item $\Ac_3 :: \ldStypeq{\F_3} i \proglevel{T_1}{T_3} l$, and
+  \item
+    $\forall~\alpha :: L' \sep \Phi \To L \sep \Psi ~.~ \ldtyequiv[\Phi][\Gamma][L']
+    i \proglevel {t_1}{t_3}{\Ac_3(\alpha, \F_3(\alpha))}$. 
+  \end{itemize}
+  We first assume $\alpha :: L' \sep \Phi \To L \sep \Psi$. %
+  To prove the first statement, we further assume $\ldsubeq[\Phi][\Gamma][L'] i j
+  \delta{\delta'}{\F_3(\alpha)}$. %
+  Then we do a similar reasoning to the function case for transitivity of related
+  types. %
+  \begin{enumerate}
+  \item We first relate $T_1[\delta]$ and $T_2[\delta]$ by using reflexivity.
+  \item Then we related $T_2[\delta]$ and $T_3[\delta']$.
+  \item Then we apply transitivity of related types. 
+  \end{enumerate}
+
+  To prove the second statement, we can simply use irrelevance so that transitivity
+  can eventually apply on $\Ac_3(\alpha, \F_3(\alpha))$. 
+\end{proof}
+
+\begin{lemma}[Transitivity]
+  Given
+  \begin{itemize}
+  \item 
+    $\F_1 :: \forall~\alpha :: L' \sep \Phi \To L \sep \Psi ~.~ \ldctxeq[\Phi][L'] i \proglevel
+    {\Delta_1}{\Delta_2}$,
+  \item $\F_2 :: \forall~\alpha :: L' \sep \Phi \To L \sep \Psi ~.~ \ldctxeq[\Phi][L'] i \proglevel
+    {\Delta_2}{\Delta_3}$, and
+  \item $\F_3 :: \forall~\alpha :: L' \sep \Phi \To L \sep \Psi ~.~ \ldctxeq[\Phi][L'] i \proglevel
+    {\Delta_1}{\Delta_3}$,
+  \end{itemize}
+  then
+  \begin{itemize}
+  \item if $\D_1 :e: \ldStypeq{\F_1} i \proglevel T{T'} l$ and $\D_2 :: \ldStypeq{\F_2} i
+    \proglevel{T'}{T''} l$, then 
+    $\D_3 :: \ldStypeq{\F_3} i \proglevel T{T'} l$;
+  \item if $\ldStyequiv{\F_1} i \proglevel t{t'}{\D_1}$ and $\ldStyequiv{\F_2} i \proglevel
+    {t'}{t''}{\D_3}$, then $\ldStyequiv{\F_3} i \proglevel t{t''}{\D_3}$.
+  \end{itemize}
+\end{lemma}
+\begin{proof}
+  The first statement is what we have proved in transitivity previously. %
+  The second statement uses the transitivity of related terms. %
+\end{proof}
+
+\input{sec_validp}
+
+\input{sec_fund}

@@ -1,0 +1,44 @@
+\section{Introduction}
+
+\citet{hu2024layered} develop a layered modal type theory which supports pattern
+matching on code. %
+A critical idea lying in this system is \emph{the layering principle}. %
+The layering principle begins with a core language, e.g. simply typed
+$\lambda$-calculus (STLC). %
+Then we extend the core language with a layer of the $\square$ modality which supports
+meta-programming and intensional analysis. %
+Though only two layers are demonstrated by \citet{hu2024layered}, in principle, this
+extension can be iterated indefinite number of times, forming an arbitrary $n$-layered
+modal type theory. %
+
+In another dimension, instead of adding more and more layers, we could also increase
+the expressive power of the core language. %
+One interesting candidate for a core language is Martin-L\"of type theory (MLTT). %
+MLTT is the foundation for many type-theory-based proof assistants, including Coq,
+Agda and Lean. %
+Treating MLTT as the core language and applying the layering principle to it could
+yield a dependently typed system that allows to meta-program and intensionally analyze
+code of itself without forgoing the consistency of the overall system. %
+This feature gives a solid foundation for proof assistants to support truly type-safe
+meta-programming. %
+Due to the layering principle, libraries written for bare MLTT can also be used during
+meta-programming. %
+For example, we can use the same data structures for natural numbers and lists for
+both programs and meta-programs. %
+Meanwhile in reality, e.g. in Coq, we have at least four unexchangeable notions
+natural numbers: the natural numbers defined inductively in Gallina, Ltac's natural
+numbers, failure levels and hint database's search levels. %
+Therefore, we can foresee that the layering principle also has the additional benefit
+in engineering.
+
+In this technical report, we first extend the previous layered modal type theory with
+context variables. %
+They are necessary to enable recursion on code. %
+We justify the decidability of conversion checking following
+\citet{abel_decidability_2017}'s reducibility proof. %
+We then scale the setup all the way to MLTT, introducing \delamlang,
+\textbf{De}pendent \textbf{La}yered \textbf{M}odal type theory. %
+We then scale the reducibility proof to \delamlang and therefore justify its
+decidability of conversion checking. %
+A corollary is the consistency of \delamlang, hence showing that this type theory can
+be used as a foundation for proof assistants.

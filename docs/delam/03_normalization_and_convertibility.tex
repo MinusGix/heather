@@ -1,0 +1,1107 @@
+\section{Normalization and Convertibility}\labeledit{sec:cv:logrel}
+
+In the previous section, we have developed the syntactic theory of context
+variables and the weak head reduction relation. %
+In this section, our goal is to show the termination of the weak head reduction,
+i.e. normalization, develop a type-directed convertibility checking algorithm, and
+show that this algorithm is sound and complete w.r.t. the equivalence of terms. %
+In the first step to normalization, we establish the reducibility predicate. %
+This predicate is defined inductively and then recursively in order to describe the
+semantic well-formedness of types and terms. %
+Then from the reducibility predicate, we prove the semantic soundness of the model and
+prove the normalization property as a corollary. %
+Next, we give the convertibility algorithm as a judgment. %
+This judgment will be shown equivalent to the equivalence of terms, which wraps up
+our discussion on simple types.
+
+\subsection{Generic Equivalence}
+
+We follow \citet{abel_decidability_2017} to define a modular generic equivalence to ease
+subsequent proof constructions. %
+Since we do not have type-level computation for this almost simply typed theory, we
+only have to be concerned about two kinds of equivalence over terms:
+$\ltygteq t {t'} T$ describes a generic equivalence between two terms, and
+$\ltygneeq v {v'} T$ describes a generic equivalence between two neutral terms. %
+Furthermore, $\ltygteq t {t'} T$ is generalized to $\ltygteq{\delta}{\delta'}\Delta$
+by recursion on $\Delta$, which denotes a generic equivalence between local
+substitutions and the base cases are just congruence. %
+The definition is
+\begin{mathpar}
+  \inferrule
+  {\ljudge 1 \Gamma \\ \text{$\Gamma$ ends with $\cdot$} \\ |\Gamma| = m}
+  {\ltygteq{\cdot^m}{\cdot^m}{\cdot}}
+
+  \inferrule
+  {\ljudge 1 \Gamma \\ g : \Ctx \in \Psi \\ \text{$\Gamma$ ends with $g$} \\ |\Gamma| = m}
+  {\ltygteq{\cdot_g^m}{\cdot_g^m}{\cdot}}
+
+  \inferrule
+  {\ljudge 1 \Gamma \\ g : \Ctx \in \Psi \\ \text{$\Gamma$ ends with $g$} \\ |\Gamma| = m}
+  {\ltygteq{\wk_g^m}{\wk_g^m}{g}}
+
+  \inferrule
+  {\ltygteq{\delta}{\delta'}{\Delta} \\ \ltygteq{t}{t'}T}
+  {\ltygteq{\delta, t/x}{\delta',t'/x}{\Delta, x: T}}
+\end{mathpar}
+
+The generic equivalence will be instantiated twice, once for each layer. %
+Following the layering principle, the laws for layer $0$ are subsumed by those for
+layer $1$. %
+The reason why we also need an instantiation for layer $0$ is that code from layer $0$
+can be lifted by $\tletbox$ and become a program, so that its computation is
+recovered. %
+Therefore, a logical relation is needed to capture its computational behavior. %
+
+These two relations must satisfy the following laws. %
+Law statements for $\square$ and meta-functions only apply when the generic
+equivalence is indexed by layer $1$. 
+
+\begin{law}[Subsumption]$ $
+  \begin{itemize}
+  \item If $\ltygneeq v {v'} T$, then $\ltygteq v {v'} T$.
+  \item If $\ltygteq t {t'} T$, then $\ltyequiv 1 t {t'} T$.
+  \end{itemize}
+\end{law}
+
+From the subsumption of generic equivalence of terms, we have the subsumption of
+generic equivalence of local substitutions as a lemma:
+\begin{lemma}[Subsumption]
+  If $\ltygteq \delta {\delta'} \Delta$, then $\ltyequiv 1 \delta {\delta'} \Delta$.  
+\end{lemma}
+
+\begin{law}[PER]
+  Both relations are PERs. 
+\end{law}
+
+\begin{law}[Monotonicity]
+  Given $\gamma; \tau : \Psi; \Gamma \To \Phi; \Delta$, if
+  $\ltygteq[\Phi][\Delta] t {t'} T$, or $\ltygneeq[\Phi][\Delta] v {v'} T$, then
+  $\ltygteq{t[\gamma;\tau]}{t'[\gamma;\tau]}{T[\gamma]}$, or
+  $\ltygneeq{v[\gamma;\tau]}{v'[\gamma;\tau]}{T[\gamma]}$, respectively.
+\end{law}
+
+As a lemma, we have monotonicity generalized to local substitutions:
+\begin{lemma}[Monotonicity]
+  Given $\gamma; \tau : \Psi; \Gamma \To \Phi; \Delta$, if
+  $\ltygteq[\Phi][\Delta] \delta {\delta'}{\Delta'}$, then
+  $\ltygteq{\delta[\gamma;\tau]}{\delta'[\gamma;\tau]}{\Delta'[\gamma]}$.
+\end{lemma}
+
+
+\begin{law}[Weak head closure]
+  If $\ltyreds t w T$, $\ltyreds{t'}{w'}T$ and $\ltygteq w {w'} T$, then $\ltygteq t {t'} T$.
+\end{law}
+
+\begin{law}[Congruence] $ $
+  \begin{itemize}
+  \item If $\ljudge[\Psi] 1 \Gamma$, then $\ltygteq \ze \ze \Nat$. 
+  \item If $\ltygteq {t}{t'} \Nat$, then $\ltygteq{\su t}{\su t'} \Nat$.
+  \item If $\ltyping 1 t {S \func T}$, $\ltyping 1 {t'}{S \func T}$ and
+    $\ltygteq[\Psi][\Gamma, x : S]{t[\id;p(\id)]~x}{t'[\id;p(\id)]~x}{T}$, then
+    $\ltygteq{t}{t'}{S \func T}$.
+    
+  \item If $\ljudge[\Psi] 1 \Gamma$ and $\ltyping[\Psi][\Delta] 0 t {T}$,
+    then $\ltygteq{\boxit t}{\boxit t}{T}$.
+    
+  \item If $\ltyping 1 t {(g : \Ctx) \STo T}$, $\ltyping 1 {t'}{(g : \Ctx) \STo T}$ and
+    $\ltygteq[\Psi, g : \Ctx]{t[p(\id)]~\$~g}{t'[p(\id)]~\$~g}{T}$, then
+    $\ltygteq{t}{t'}{(g : \Ctx) \STo T}$.
+  \end{itemize}
+\end{law}
+
+\begin{law}[Congruence of neutrals]$ $
+  \begin{itemize}
+  \item If $\ltyping 1 x T$, then $\ltygneeq x x T$. 
+  \item If $u : (\judge[\Delta] T) \in \Psi$ and $\ltygteq{\delta}{\delta'}\Delta$, then
+    $\ltygneeq {u^{\delta}}{u^{\delta'}} T$.
+  \item If $\ltygneeq v {v'}{S\func T}$ and $\ltygteq{t}{t'}S$, then
+    $\ltygneeq{v~t}{v~t'}T$. 
+  \item If $\ljudge[\Psi] 1 {T'}$, $\ltygneeq{v}{v'}{\cont[\Delta]T}$ and
+    $\ltygteq[\Psi, u : (\judge[\Delta] T)]{t}{t'}{T'[p(\id)]}$, then
+    $\ltygneeq{\letbox u v t}{\letbox u{v'}{t'}}{T'}$.
+  \item If $\ltygneeq{v}{v'}{(g : \Ctx) \STo T}$ and $\ljudge[\Psi] 0 \Delta$,
+    then $\ltygneeq{v~\$~\Delta}{v'~\$~\Delta}{T[\id_\Psi, \Delta/g]}$
+  \end{itemize}
+\end{law}
+
+From the congruence of local variables, we have that local weakening substitutions,
+specifically, local identity substitutions, are reflexive in the generic equivalence:
+\begin{lemma}[Reflexivity of Local Weakening Substitutions]
+  If $\ljudge[\Psi] 1 \Delta, \Gamma$, then
+  $\ltygteq[\Psi][\Delta,
+  \Gamma]{\wk^{|\Gamma|}_{\Delta}}{\wk^{|\Gamma|}_{\Delta}}{\Delta}$.
+\end{lemma}
+\begin{lemma}[Reflexivity of Local Identity Substitutions]
+  If $\ljudge[\Psi] 1 \Gamma$, then
+  $\ltygteq[\Psi][\Gamma]{\id_{\Gamma}}{\id_{\Gamma}}{\Gamma}$.
+\end{lemma}
+This further implies
+\begin{lemma}[Congruence of Global Variables]
+  If $\vdash \Psi$ and $u : (\judge T) \in \Psi$, then
+  $\ltygneeq {u^{\id_{\Gamma}}}{u^{\id_{\Gamma}}} T$.
+\end{lemma}
+
+We give the first instantiation of both relations as follows:
+\begin{itemize}
+\item $\ltygteq t {t'} T := \ltyequiv 1 t {t'} T$, and
+\item $\ltygneeq v {v'} T := \ltyequiv 1 v {v'} T$.
+\end{itemize}
+The laws are instantiated to appropriate rules. %
+Later, we will instantiate the relations to algorithmic equivalence, showing that the
+algorithmic rules are complete, following \citet{abel_decidability_2017}. %
+Before that, let us first define the reducibility predicates parameterized by the
+generic equivalence relations for terms. 
+
+\subsection{Reducibility Predicates}
+
+Following~\citet{abel_decidability_2017}, we first give the semantic well-formedness
+of types. %
+The predicates do not need to be defined recursive-inductively, because unlike
+dependent types, there is no type-level computation here in our system. %
+\begin{mathpar}
+  \inferrule
+  {\vdash \Psi}
+  {\lsemjudge i \Nat}
+
+  \inferrule
+  {\forall \gamma : \Phi \To_g \Psi ~.~ \lsemjudge[\Phi] i{S[\gamma]} \\
+    \forall \gamma : \Phi \To_g \Psi ~.~ \lsemjudge[\Phi] i{T[\gamma]}}
+  {\lsemjudge i {S \func T}}
+
+  \inferrule
+  {\ljudge 0 \Delta \\ \forall \gamma : \Phi \To_g \Psi ~.~ \lsemjudge[\Phi] 0 {T[\gamma]}}
+  {\lsemjudge 1 {\cont[\Delta] T}}
+  \qquad
+  \inferrule
+  {\ljudge[\Psi, g : \Ctx] 1 T \\
+    \forall \gamma : \Phi \To_g \Psi \tand \ljudge[\Phi] 0 \Gamma ~.~ \lsemjudge[\Phi]
+    1{T[q(\gamma)][\id_\Phi, \Gamma/g]}}
+  {\lsemjudge 1 {(g : \Ctx) \STo T}}
+\end{mathpar}
+Compared to the syntactic well-formedness judgment in~\Cref{sec:cv:ctx-types}, the
+semantic counterpart has extra universal quantifications over global weakenings. %
+These universal quantifications are necessary when we give semantics to terms. %
+Moreover, the semantic well-formedness of types is monotonic w.r.t. global weakenings:
+\begin{lemma}[Monotonicity]
+  If $\gamma : \Phi \To_g \Psi$ and $\lsemjudge i T$, then $\lsemjudge[\Phi] i
+  {T[\gamma]}$. 
+\end{lemma}
+\begin{proof}
+  Induction. %
+\end{proof}
+
+The lifting lemma also has a semantic counterpart:
+\begin{lemma}[Lifting]
+  If $\lsemjudge 0 T$, then $\lsemjudge 1 T$.
+\end{lemma}
+\begin{proof}
+  Induction.
+\end{proof}
+
+\begin{lemma}[Escape]
+  If $\lsemjudge i T$, then $\ljudge i T$. 
+\end{lemma}
+\begin{proof}
+  We do induction on $\lsemjudge i T$. %
+  In the meta-function case, we instantiate the global weakening to
+  $p(\id) : \Psi, g : \Ctx \To_g \Psi$ and $\Gamma$ to $g$. %
+  Apply IH again to obtain the goal. 
+\end{proof}
+
+Now we move on to defining the reducibility for terms $\lsemtyeq i t {t'} T$ and
+local substitutions $\lsemtyeq i \delta {\delta'} \Delta$. %
+Both relations are defined first by recursion on the layer $i$. %
+Then, the reducibility predicate for terms $\lsemtyeq i t {t'} T$ is defined by recursion on
+$\lsemjudge i T$. %
+The reducibility predicate for local substitutions $\lsemtyeq i \delta {\delta'}
+\Delta$ is defined inductively. %
+The predicates are defined in this way because the layer-1 predicate for terms refers
+to the predicates at layer $0$, as in our presheaf models by \citet{hu2024layered}. %
+The definition that we present here does not focus too much on the
+layered nature to save space and be more modular. %
+However, we imagine that if this model must be put into a proof assistant, then
+attention must be paid to ensure the well-foundness. %
+The predicate for terms is a Kripke model, as it is indexed by both global and local contexts. %
+We first define the semantic natural numbers:
+\begin{mathpar}
+  \inferrule
+  {% \ltyping i t \Nat \\ \ltyping i{t'}\Nat \\ 
+    \ltyreds t w \Nat \\ \ltyreds{t'}{w'} \Nat \\ \ltygteq{w}{w'}\Nat \\ \dsemtyeq {^{\Nf} w}{w'} \Nat}
+  {\lsemtyeq i {t}{t'}\Nat}
+
+  \inferrule
+  { }
+  {\dsemtyeq{^{\Nf} \ze}\ze \Nat}
+
+  \inferrule
+  {\dsemtyeq t{t'} \Nat}
+  {\dsemtyeq {^{\Nf} {\su t}}{\su t'} \Nat}
+
+  \inferrule
+  {\ltygneeq v{v'} \Nat}
+  {\dsemtyeq{^{\Nf} {v}}{v'} \Nat}
+\end{mathpar}
+Then we let $\lsemtyeq i {t}{t'}\Nat := \dsemtyeq {t}{t'}\Nat$.
+
+Next, we define the case for function. %
+$\lsemtyeq i t {t'}{S \func T}$ holds iff
+\begin{itemize}
+% \item $\ltyping i t {S \func T}$ and $\ltyping i{t'}{S \func T}$, and
+\item $\ltyreds t w {S \func T}$, and
+\item $\ltyreds{t'}{w'}{S \func T}$, and
+\item $\ltygteq{w}{w'}{S \func T}$, and
+\item for any $\gamma; \tau: \Phi; \Delta \To \Psi; \Gamma$, and given
+  $\lsemtyeq[\Phi][\Delta] i s{s'}{S[\gamma]}$, then we have
+  $\lsemtyeq[\Phi][\Delta] i{w[\gamma;\tau]~s}{w'[\gamma;\tau]~s'}{T[\gamma]}$.
+\end{itemize}
+It means that $t$ reduces to some weak head normal form, and the result of applying
+this weak head normal form to a reducible term remains reducible. 
+
+Next, we define the reducibility for $\cont[\Delta] T$,
+\begin{mathpar}
+  \inferrule
+  {\ltyreds t w{\cont[\Delta] T} \\ \ltyreds{t'}{w'}{\cont[\Delta] T} \\\\ \ltygteq{w}{w'}{\cont[\Delta] T} \\ \lsemtyeq {1}{^{\Nf} w}{w'}{\cont[\Delta] T}}
+  {\lsemtyeq 1{t}{t'}{\cont[\Delta] T}}
+  \\
+  \inferrule
+  {\ltyping[\Psi][\Delta] 0 t T \\ \forall~\lsemtyeq[\Psi][\Delta'] 0{\delta}{\delta'}{\Delta} ~.~ \lsemtyeq[\Psi][\Delta'] 0{t[\delta]}{t[\delta']}{T}}
+  {\lsemtyeq {1}{^{\Nf} {\boxit t}}{\boxit t}{\cont[\Delta] T}}
+
+  \inferrule
+  {\ltygneeq v{v'}{\cont[\Delta] T}}
+  {\lsemtyeq {1}{^{\Nf} {v}}{v'}{\cont[\Delta] T}}
+\end{mathpar}
+Similar to our presheaf models, we must refer to $\lsemtyeq[\Psi][\Delta]
+0{\delta}{\delta'}{\Gamma}$ when giving semantics for terms of type $\cont[\Delta] T$,
+so the predicates at layer $0$ must be finished before defining the predicate at layer
+$1$. %
+To support pattern matching on code, instead of this universal quantification, we must
+use an inductively defined layer-$0$ model instead as done in
+\citet[Sec. 5.4.1]{hu2024layered}. 
+
+Next, we define the case for meta-functions. %
+$\lsemtyeq 1 t {t'}{(g : \Ctx) \STo T}$ holds iff
+\begin{itemize}
+\item $\ltyreds t w {(g : \Ctx) \STo T}$, and
+\item $\ltyreds{t'}{w'}{(g : \Ctx) \STo T}$, and
+\item $\ltygteq{w}{w'}{(g : \Ctx) \STo T}$, and
+\item for any $\gamma; \tau: \Phi; \Delta \To \Psi; \Gamma$, and given
+  $\ljudge[\Phi] 0{\Delta'}$, then we have
+  $\lsemtyeq[\Phi][\Delta]
+  1{w[\gamma;\tau]~\$~\Delta'}{w'[\gamma;\tau]~\$~\Delta'}{T[q(\gamma)][\id_\Phi, \Delta'/g]}$.
+\end{itemize}
+
+We generalize the reducibility for terms to local contexts and local substitutions by
+doing an inductive-recursive definition:
+\begin{mathpar}
+  \inferrule
+  {\vdash \Psi}
+  {\lsemjudge i \cdot}
+\end{mathpar}
+Then $\lsemtyeq i \delta{\delta'}\cdot$ holds by considering the cases for $\Gamma$,
+\begin{itemize}
+\item if $\Gamma$ ends with $\cdot$, then $\delta = \delta' = \cdot^{|\Gamma|}$;
+\item if $\Gamma$ ends with $g$, then $g : \Ctx \in \Psi$ and $\delta = \delta' = \cdot^{|\Gamma|}_g$.
+\end{itemize}
+\begin{mathpar}
+  \inferrule
+  {\vdash \Psi \\ g : \Ctx \in \Psi}
+  {\lsemjudge i g}
+\end{mathpar}
+Then $\lsemtyeq i \delta{\delta'}g$ holds iff $\Gamma$ ends with $g$ and $\delta = \delta' =
+\wk_g^{|\Gamma|}$. 
+
+\begin{mathpar}
+  \inferrule
+  {\lsemjudge i \Delta \\ \lsemjudge i T}
+  {\lsemjudge i {\Delta, x : T}}
+\end{mathpar}
+Then $\lsemtyeq i \delta{\delta'}{\Delta, x : T}$ holds iff
+\begin{itemize}
+\item $\lsemtyeq i{\delta}{\delta'}{\Delta}$,
+\item $\lsemtyeq i {t}{t'}{T}$.
+\end{itemize}
+Note that one should consider the rules above really give two predicates, one for
+layer $0$ and one for layer $1$. %
+In this technical report, however, we do not really type out the replication. %
+
+At this point, we have finished defining reducibility predicates for all types. %
+We further let $\lsemtyp i t T$ be $\lsemtyeq i t t T$. %
+This predicate basically means that $t$ can be reduced to some weak head normal form. 
+
+By the definition of the predicates, we have the following lemmas:
+\begin{lemma}\labeledit{lem:cvar:semred}
+  If $\lsemtyeq i {t}{t'} T$, then $\ltyreds {s}{t}{T}$, and $\ltyreds{s'}{t'}{T}$, and
+  $\lsemtyeq i{s}{s'}{T}$.
+\end{lemma}
+\begin{proof}
+  By induction on $\lsemjudge i T$. 
+\end{proof}
+\begin{lemma}
+  If $\lsemtyeq i {t}{t'} T$, then $\ltyreds t w {T}$, and $\ltyreds{t'}{w'}{T}$, and
+  $\ltygteq{w}{w'}{T}$.
+\end{lemma}
+\begin{proof}
+  By induction on $\lsemjudge i T$ and transitivity of multi-step weak head
+  reduction. 
+\end{proof}
+\begin{corollary}\labeledit{lem:cvar:semeq2geneq}
+  If $\lsemtyeq i {t}{t'} T$, then $\ltygteq{t}{t'}{T}$.
+\end{corollary}
+\begin{lemma}\labeledit{lem:cvar:semeq2geneq-lsubst}
+  If $\lsemtyeq i {\delta}{\delta'} \Delta$, then
+  $\ltygteq{\delta}{\delta'}{\Delta}$. 
+\end{lemma}
+\begin{proof}
+  Generalization of \Cref{lem:cvar:semeq2geneq}. 
+\end{proof}
+
+\begin{lemma}[Reducibility of Neutrals]\labeledit{lem:cvar:red-ne}
+  If $\lsemjudge i T$, $\ltyping i v T$ and $\ltygneeq v {v'} T$, then $\lsemtyeq i v {v'} T$. 
+\end{lemma}
+\begin{proof}
+  Induction by $\lsemjudge i T$ and apply IHs. 
+\end{proof}
+\begin{lemma}[Reducibility of Weakenings]
+  If $\lsemjudge i \Gamma,\Delta$, then $\lsemtyeq[\Psi][\Gamma,\Delta]i {\wk^{|\Delta|}_{\Gamma}}{\wk^{|\Delta|}_{\Gamma}}{\Gamma}$.
+\end{lemma}
+\begin{proof}
+  A direct consequence of \Cref{lem:cvar:red-ne}.
+\end{proof}
+\begin{corollary}[Reducibility of Identity]
+  If $\lsemjudge i \Gamma$, then $\lsemtyeq i {\id_{\Gamma}}{\id_{\Gamma}}{\Gamma}$.  
+\end{corollary}
+
+\begin{lemma}
+  If $\lsemjudge 0 T$, then $\lsemtyeq 0 {t}{t'} T$ iff $\lsemtyeq 1 {t}{t'} T$.
+\end{lemma}
+\begin{proof}
+  We only consider the cases for $\Nat$ and functions and apply IHs directly. 
+\end{proof}
+This is derived from the fact that the predicate for $\Nat$ is invariant at
+different layers. %
+
+We verify several important properties for the reducibility predicates:
+\begin{lemma}[Escape]
+  If $\lsemtyeq i {t}{t'} T$, then $\ltyequiv 1 {t}{t'}T$.
+\end{lemma}
+\begin{proof}
+  We do induction on $\lsemjudge i T$. %
+  Notice that generic equivalence eventually implies syntactic equivalence by the
+  subsumption law. 
+\end{proof}
+\begin{lemma}[Escape]
+  If $\lsemtyeq i {\delta}{\delta'} \Delta$, then $\ltyequiv 1 {\delta}{\delta'}\Delta$.
+\end{lemma}
+
+\begin{lemma}[Monotonicity]
+  If $\lsemjudge i T$ and $\lsemtyeq i {t}{t'} T$, given $\gamma; \tau : \Phi;\Delta
+  \To \Psi; \Gamma$, then $\lsemtyeq[\Phi][\Delta] i
+  {t[\gamma;\tau]}{t'[\gamma;\tau]}{T[\gamma]}$.
+\end{lemma}
+\begin{proof}
+  We do induction on $\lsemjudge i T$.
+  \begin{itemize}[label=Case]
+  \item $T = \Nat$, then we have the goal by the monotonicity of multi-step weak head
+    reduction and the generic equivalence. %
+    We further do induction on $\dsemtyeq{^{\Nf} {w}}{w'} \Nat$.
+    
+  \item $T = S \func T'$, then we assume another $\gamma';\tau' : \Phi'; \Delta' \To
+    \Phi; \Delta$ and $\lsemtyeq[\Phi'][\Delta'] i {s}{s'}{S[\gamma \circ
+      \gamma']}$, we must show $\lsemtyeq[\Phi'][\Delta'] i {t[\gamma; \tau][\gamma'; \tau']~s}{t'[\gamma; \tau][\gamma'; \tau']~s'}{S[\gamma \circ
+      \gamma']}$. %
+    But this is immediate due to the composition of weakenings.
+    
+  \item $T = \cont[\Delta]{T'}$, then it is also immediate after a case analysis of
+    $\dsemtyeq{^{\Nf} {w}}{w'}{\cont[\Delta]{T'}}$. %
+    We apply the monotonicity of multi-step weak head
+    reduction and the generic equivalence appropriately.
+    
+  \item $T = (g : \Ctx) \STo T'$, then this case is very similar to the function
+    case. %
+    We assume another $\gamma';\tau' : \Phi'; \Delta' \To
+    \Phi; \Delta$ and $\ljudge[\Phi'] 0 \Gamma'$. %
+    Our goal is to show
+    \[
+      \lsemtyeq[\Phi'][\Delta']
+      1{w[\gamma;\tau][\gamma';\tau']~\$~\Gamma'}{w'[\gamma;\tau][\gamma';\tau']~\$~\Gamma'}{T[q(\gamma
+        \circ \gamma')][\id_{\Phi'}, \Gamma'/g]}
+    \]
+    This again has been given by the composition of weakenings and notice that
+    $q(\gamma \circ \gamma') = q(\gamma) \circ q(\gamma')$. 
+  \end{itemize}
+\end{proof}
+\begin{lemma}[Monotonicity]
+  If $\lsemtyeq i {\delta}{\delta'}{\Delta'}$, given $\gamma; \tau : \Phi;\Delta
+  \To \Psi; \Gamma$, then $\lsemtyeq[\Phi][\Delta] i
+  {\delta[\gamma;\tau]}{\delta'[\gamma;\tau]}{\Delta'[\gamma]}$.
+\end{lemma}
+
+\begin{lemma}[PER]
+  The $\lsemtyeq i {t}{t'} T$ relation satisfies symmetry and transitivity.
+\end{lemma}
+\begin{proof}
+  Transitivity relies on the uniqueness of weak head reduction. 
+\end{proof}
+\begin{lemma}[PER]
+  The $\lsemtyeq i {\delta}{\delta'} \Delta$ relation satisfies symmetry and transitivity.
+\end{lemma}
+
+The following lemma is the semantic counterpart for the layering principle. %
+It ensures that terms inhabiting types in STLC have the same behaviors at both layers.
+\begin{lemma}[Layering Restriction] $ $
+  \begin{itemize}
+  \item If $\lsemjudge 0 T$, then $\lsemtyeq 0 t{t'} T$ is equivalent to $\lsemtyeq 1 t{t'} T$.
+  \item If $\lsemjudge 0 \Delta$, then $\lsemtyeq 0 \delta{\delta'} \Delta$ is
+    equivalent to $\lsemtyeq 1 \delta{\delta'} \Delta$.
+  \end{itemize}
+\end{lemma}
+This lemma is particularly useful to help treat global variables the same at both layers.
+
+Our goal is then to show the following theorem:
+\begin{theorem}[Completeness]\labeledit{thm:cvar:comp} $ $
+  \begin{itemize}
+  \item If $\ljudge[\Psi] i T$, then $\lsemjudge[\Psi] i T$.
+  \item If $\ltyequiv i {t}{t'} T$, then $\lsemtyeq i {t}{t'} T$.
+  \item If $\ltyequiv i {\delta}{\delta'} \Delta$, then $\lsemtyeq i {\delta}{\delta'} \Delta$.
+  \end{itemize}
+\end{theorem}
+If the $\ltygteq{t}{t'}{T}$ is the algorithmic convertibility checking algorithm, then
+we show that syntactic equivalence implies algorithmic equivalence. %
+In other words, algorithmic convertibility is complete w.r.t. syntactic equivalence. %
+However, to arrive at that solution, we must first show that the completeness theorem
+above holds w.r.t. the generic equivalence relations. %
+Following \citet{abel_decidability_2017}, however, we still have one step missing to
+conclude this goal. %
+We must define a set of validity judgments to handle the meta-function case in the
+semantic well-formedness of types.
+
+\subsection{Validity Judgments}
+
+According to \citet{abel_decidability_2017}, validity judgments are introduced to
+characterize the reducible terms that are also closed under substitutions. %
+In the same spirit, we also need the validity judgments to handle the case for
+meta-functions:
+\begin{mathpar}
+  \inferrule
+  {\ljudge[\Psi, g : \Ctx] 1 T \\
+    \forall \gamma : \Phi \To_g \Psi \tand \ljudge[\Phi] 0 \Gamma ~.~ \lsemjudge[\Phi]
+    1{T[q(\gamma)][\id_\Phi, \Gamma/g]}}
+  {\lsemjudge 1 {(g : \Ctx) \STo T}}
+\end{mathpar}
+When we attempt to prove the following statement from the completeness theorem:
+\begin{center}
+  If $\ljudge[\Psi] i T$, then $\lsemjudge[\Psi] 1 T$.
+\end{center}
+This case breaks down, because the IH only provides
+\[
+  \lsemjudge[\Psi, g : \Ctx] 1{T}
+\]
+and by monotonicity, we derive 
+\[
+  \lsemjudge[\Phi, g : \Ctx] 1{T[q(\gamma)]}
+\]
+but then we are stuck. %
+We have no way to prove that the semantic well-formedness of types is closed under
+substitutions. %
+Following~\citet{abel_decidability_2017}, we define validity judgments which further
+restrict reducibility predicates to subsets that are closed under substitutions. %
+Since types are only affected by the global contexts, the validity judgments are
+defined by induction-recursion on global contexts:
+\begin{mathpar}
+  \inferrule
+  { }
+  {\vDash^v \cdot}
+\end{mathpar}
+
+The validity equivalence for global substitutions
+$\semvtyp[\Phi]{\sigma}{\cdot}$ is defined as $\vdash \Phi$ and $\sigma =\cdot$. 
+
+\begin{mathpar}
+  \inferrule
+  {\vDash^v \Psi}
+  {\vDash^v \Psi, g : \Ctx}
+\end{mathpar}
+$\semvtyp[\Phi]{\sigma}{\Psi, g : \Ctx}$ is defined as
+\begin{itemize}
+\item $\sigma = \sigma_1, \Gamma/g$,
+\item $\ljudge[\Phi] 0 \Gamma$, and
+\item $\semvtyp[\Phi]{\sigma_1}{\Psi}$.
+\end{itemize}
+
+\begin{mathpar}
+  \inferrule
+  {\vDash^v \Psi \\ \lsemvjudge 0 \Gamma \\ \lsemvjudge 0 T}
+  {\vDash^v \Psi, u : (\judge T)}
+\end{mathpar}
+$\semvtyp[\Phi]{\sigma}{\Psi, u : (\judge T)}$ is defined as
+\begin{itemize}
+\item $\sigma = \sigma_1, t/u$,
+\item $\semvtyp[\Phi]{\sigma_1}{\Psi}$, and
+\item for all $\lsemtyeq[\Phi][\Delta]0{\delta}{\delta'}{\Gamma[\sigma_1]}$, we have
+  $\lsemtyeq[\Phi][\Delta] 0 {t[\delta]}{t[\delta']}{T[\sigma_1]}$.
+\end{itemize}
+
+The validity of types $\lsemvjudge i T$ is defined as: $\lsemjudge i T$ and given
+$\semvtyp[\Phi]{\sigma}{\Psi}$, we have $\lsemjudge[\Phi] i {T[\sigma]}$. %
+The validity of local contexts $\lsemvjudge i \Gamma$ is defined by applying the validity
+of types pointwise. %
+The judgments are simplified because there is no need to have an equivalence judgment
+between global substitutions. %
+In a global substitution, there are only two kinds of components: code of STLC and
+local contexts. %
+The former is determined to be identified by syntax. %
+Local contexts are also identified by syntax because we are dealing with simple
+types. %
+
+With these definitions ready, we put a universal quantification on top of the
+reducibility predicates, which specifies the reducible terms that are closed under
+valid global substitutions:
+\begin{itemize}
+\item $\lsemvtyeq i{t}{t'}{T}$ iff for any $\semvtyp[\Phi]{\sigma}{\Psi}$ and
+  $\lsemtyeq[\Phi][\Delta]i{\delta}{\delta'}{\Gamma[\sigma]}$, we have
+  $\lsemtyeq[\Phi][\Delta] i{t[\sigma][\delta]}{t'[\sigma][\delta]}{T[\sigma]}$.
+\item $\lsemvtyeq i{\delta}{\delta'}{\Delta}$ iff for any
+  $\semvtyp[\Phi]{\sigma}{\Psi}$ and
+  $\lsemtyeq[\Phi][\Delta']i{\delta''}{\delta'''}{\Gamma[\sigma]}$, we have
+  $\lsemtyeq[\Phi][\Delta']
+  i{\delta[\sigma] \circ \delta''}{\delta'[\sigma] \circ \delta''}{\Delta[\sigma]}$.
+\end{itemize}
+
+Now we work out several lemmas:
+\begin{lemma}[Escape]
+  If $\semvtyp[\Phi]{\sigma}{\Psi}$, then $\typing[\Phi]\sigma\Psi$. 
+\end{lemma}
+\begin{proof}
+  We do induction on $\vDash^v \Psi$. %
+  In the case for extension of code, we apply the escape lemma for semantically
+  well-formed types and reducible terms.
+\end{proof}
+
+\begin{lemma}[Monotonicity]
+  If $\semvtyp[\Phi]{\sigma}{\Psi}$ and $\gamma : \Phi' \To_g \Phi$, then
+  $\semvtyp[\Phi']{\sigma[\gamma]}{\Psi}$.
+\end{lemma}
+\begin{proof}
+  We do induction on $\vDash^v \Psi$. %
+  Use monotonicity of reducible terms and the algebra of global substitutions. %
+\end{proof}
+
+\begin{lemma}[Validity of Global Weakening Substitutions]
+  If $\vdash \Psi, \Phi$ and $\vDash^v \Psi$, then $\semvtyp[\Psi,\Phi]{\wk^{|\Phi|}_{\Psi}}{\Psi}$. 
+\end{lemma}
+\begin{proof}
+  We do induction on $\vDash^v \Psi$. %
+  The most interesting case is the extension case for code. %
+  If $\Psi = \Psi', u : (\judge T)$, then our goal is given $\lsemtyeq[\Psi', u : (\judge T), \Phi][\Delta]0{\delta}{\delta'}{\Gamma[\wk^{1 + |\Phi|}_{\Psi'}]}$, to prove
+  \[
+    \lsemtyeq[\Psi', u : (\judge T), \Phi][\Delta] 0 {u^{\id_{\Gamma}[p^{1 + |\Phi|}(\id)]}[\delta]}{u^{\id_{\Gamma}[p^{1 + |\Phi|}(\id)]}[\delta']}{T[\wk^{1 + |\Phi|}_{\Psi'}]}
+  \]
+  In the last section, we have established that $[\wk^{1 + |\Phi|}_{\Psi'}]$ has the
+  same effect as $[p^{1 + |\Phi|}(\id)]$, so this goal becomes
+  \[
+    \lsemtyeq[\Psi', u : (\judge T), \Phi][\Delta] 0 {u^{\id_{\Gamma}[p^{1 + |\Phi|}(\id)]}[\delta]}{u^{\id_{\Gamma}[p^{1 + |\Phi|}(\id)]}[\delta']}{T[p^{1 + |\Phi|}(\id)]}
+  \]
+  By computation, the goal further becomes:
+  \[
+    \lsemtyeq[\Psi', u : (\judge T), \Phi][\Delta] 0 {u^{\delta}}{u^{\delta'}}{T[p^{1 + |\Phi|}(\id)]}
+  \]
+  But this is immediate due to \Cref{lem:cvar:semeq2geneq-lsubst}, the reducibility of
+  neutrals and congruence of the generic equivalence
+  \[
+    \ltygneeq[\Psi', u : (\judge T), \Phi][\Delta] {u^{\delta}}{u^{\delta'}}{T[p^{1 + |\Phi|}(\id)]}
+  \]
+\end{proof}
+
+In particular, it proves that the identity is valid:
+\begin{corollary}
+  If $\vdash \Psi$, then $\semvtyp{\id}{\Psi}$. 
+\end{corollary}
+
+\begin{theorem}[Fundamental] $ $
+  \begin{itemize}
+  \item If $\vdash \Psi$, then $\vDash^v \Psi$.
+  \item If $\ljudge i T$, then $\lsemvjudge i T$. 
+  \item If $\ljudge i \Gamma$, then $\lsemvjudge i \Gamma$. 
+  \end{itemize}
+\end{theorem}
+\begin{proof}
+  We do induction. The cases for global contexts are simple.
+  \begin{itemize}[label=Case]
+  \item
+    \begin{mathpar}
+      \inferrule
+      {\vdash \Psi}
+      {\ljudge i \Nat}
+    \end{mathpar}
+    Assuming $\semvtyp[\Phi]{\sigma}{\Psi}$, by escape, we have
+    $\typing[\Phi]{\sigma}{\Psi}$, and then $\vdash \Phi$ by presupposition. %
+    We then conclude the goal. 
+    
+  \item
+    \begin{mathpar}
+      \inferrule
+      {\ljudge i S \\ \ljudge i T}
+      {\ljudge i {S \func T}}
+    \end{mathpar}
+    We assume $\semvtyp[\Phi]{\sigma}{\Psi}$. %
+    We now should prove $\lsemjudge[\Phi]i{(S \func T)[\sigma]}$. %
+    This can be concluded from $\lsemjudge[\Phi]i{S[\sigma]}$ and
+    $\lsemjudge[\Phi]i{T[\sigma]}$. %
+    They are immediate from $\lsemvjudge i S$ and $\lsemvjudge i T$ by IH. %
+    
+  \item
+    \begin{mathpar}
+      \inferrule
+      {\ljudge 0 \Delta \\ \ljudge 0 T}
+      {\ljudge 1 {\cont[\Delta] T}}
+    \end{mathpar}
+    We assume $\semvtyp[\Phi]{\sigma}{\Psi}$. %
+    We now should prove $\lsemjudge[\Phi]i{(\cont[\Delta] T)[\sigma]}$. %
+    We further assume $\gamma : \Phi' \To_g \Phi$. %
+    The goal can be concluded from $\lsemjudge[\Phi']1{T[\sigma][\gamma]}$. %
+    Since $T[\sigma][\gamma] = T[\sigma[\gamma]]$ and $\lsemvjudge 0 T$ from IH,
+    we only need $\semvtyp[\Phi']{\sigma[\gamma]}{\Psi}$, which we get from
+    monotonicity. %
+    
+  \item
+    \begin{mathpar}
+      \inferrule
+      {\ljudge[\Psi, g : \Ctx] 1 T}
+      {\ljudge 1 {(g : \Ctx) \STo T}}
+    \end{mathpar}
+    We assume $\semvtyp[\Phi]{\sigma}{\Psi}$. %
+    We now should prove $\lsemjudge[\Phi]i{((g : \Ctx) \STo T)[\sigma]}$. %
+    We further assume $\gamma : \Phi' \To_g \Phi$ and $\ljudge[\Phi'] 0 \Gamma$. %
+    The goal can be concluded from $\lsemjudge[\Phi']1{T[q(\sigma)][q(\gamma)][\id,\Gamma/g]}$. %
+    We compute:
+    \begin{align*}
+      T[q(\sigma)][q(\gamma)][\id,\Gamma/g]
+      & = T[q(\sigma)[q(\gamma)]][\id,\Gamma/g] \\
+      & = T[q(\sigma[\gamma])][\id,\Gamma/g] \\
+      & = T[\sigma[\gamma][p(\id)], g/g][\id,\Gamma/g] \\
+      & = T[(\sigma[\gamma][p(\id)] \circ (\id,\Gamma/g)), g[\id,\Gamma/g]/g] \\
+      & = T[\sigma[\gamma], \Gamma/g]
+    \end{align*}
+    Therefore the goal becomes to prove $\lsemjudge[\Phi']1{T[\sigma[\gamma],
+      \Gamma/g]}$. %
+    By IH, we have $\lsemvjudge[\Psi, g : \Ctx] 1 T$. %
+    We simply need $\semvtyp[\Phi']{\sigma[\gamma], \Gamma/g}{\Psi, g : \Ctx}$. %
+    This is immediate from monotonicity and definition. 
+  \end{itemize}
+\end{proof}
+
+\begin{theorem}[Fundamental] $ $
+  \begin{itemize}
+  \item If $\ltyping i t T$, then $\lsemvtyp i{t}{T}$.
+  \item If $\ltyping i \delta \Delta$, then $\lsemvtyp i{\delta}{\Delta}$.
+  \item If $\ltyequiv i t {t'} T$, then $\lsemvtyeq i{t}{t'}{T}$.
+  \item If $\ltyequiv i \delta{\delta'}\Delta$, then $\lsemvtyeq i{\delta}{\delta'}{\Delta}$. 
+  \end{itemize}
+\end{theorem}
+\begin{proof}
+  We again do mutual induction. %
+  We focus on modal cases. %
+  \begin{itemize}[label=Case]
+  \item
+    \begin{mathpar}
+      \inferrule
+      {\ltyequiv i \delta{\delta'} \Delta \\ u : (\judge[\Delta] T) \in \Psi}
+      {\ltyequiv{i}{u^\delta}{u^{\delta'}}{T}}
+    \end{mathpar}
+    \begin{align*}
+      H_0: & \lsemvtyeq i \delta{\delta'} \Delta
+             \byIH \\
+      H_1: & \semvtyp[\Phi]{\sigma}{\Psi}
+             \tag*{(by assumption)} \\
+           & \lsemtyeq[\Phi][\Delta']i{\delta''}{\delta'''}{\Gamma[\sigma]}
+             \tag*{(by assumption)} \\
+      H_2: & \lsemtyeq[\Phi][\Delta'] i{\delta[\sigma] \circ
+             \delta''}{\delta'[\sigma] \circ \delta'''}{\Delta[\sigma]}
+             \tag*{(by $H_0$)} \\
+      H_3: & \lsemtyeq[\Phi][\Delta'] 0{\delta[\sigma] \circ
+             \delta''}{\delta'[\sigma] \circ \delta'''}{\Delta[\sigma]}
+      \tag{by layering restriction and $\Delta$ is well-formed at layer $0$}\\
+           & \lsemtyeq[\Phi][\Delta']i{\sigma(u)[\delta[\sigma] \circ
+             \delta'']}{\sigma(u)[\delta'[\sigma] \circ
+             \delta''']}{T[\sigma[p^{1 + u}(\id)]]}
+             \tag*{(by $H_1$ and $H_3$)}
+    \end{align*}
+
+  \item
+    \begin{mathpar}
+      \inferrule
+      {\ljudge 1 \Gamma \\ \ltyequiv[\Psi][\Delta] 0{t}{t'}T}
+      {\ltyequiv{1}{\boxit t}{{\boxit{t'}}}{\cont[\Delta] T}}
+    \end{mathpar}
+    \begin{align*}
+      H_0: & \lsemvtyeq[\Psi][\Delta]0{t}{t'}{T}
+             \byIH \\
+      H_1: & \semvtyp[\Phi]{\sigma}{\Psi}
+             \tag*{(by assumption)} \\
+      H_2: & \lsemtyeq[\Phi][\Delta']1{\delta}{\delta'}{\Gamma[\sigma]}
+             \tag*{(by assumption)} \\
+           & \ljudge[\Phi] 1 {\Delta'}
+             \tag*{(by $H_2$, escape and presupposition)} \\
+      H_3: & \lsemtyeq[\Phi][\Delta'']0{\delta''}{\delta'''}{\Delta[\sigma]}
+             \tag*{(by assumption)} \\
+           & t = t' \tag*{(by static code)} \\
+           & \lsemtyeq[\Phi][\Delta'']0{t[\sigma][\delta'']}{t'[\sigma][\delta''']}{T[\sigma]}
+             \tag*{(by $H_0$, $H_1$ and $H_3$)} \\
+           & \lsemtyeq[\Phi][\Delta[\sigma]]1{^\Nf \boxit t[\sigma]}{\boxit{t'}[\sigma]}{T[\sigma]}
+             \tag*{(by definition)} \\
+           & \ltyequiv[\Phi][\Delta']{1}{\boxit t [\sigma][\delta]}{{\boxit{t'}[\sigma][\delta']}}{\cont[\Delta] T[\sigma]}
+    \end{align*}
+    In the last step, notice that local substitutions do not propagate into $\tbox$. 
+  \item
+    \begin{mathpar}
+      \inferrule
+      {\ltyequiv 1 {s}{s'}{\cont[\Delta] T} \\ \ljudge[\Psi] 0 \Delta \\
+        \ljudge[\Psi] 0 T \\
+        \ljudge[\Psi] 1{T'} \\
+        \ltyequiv[\Psi, u : (\judge[\Delta] T)][\Gamma[p(\id)]] 1 {t}{t'}{T'[p(\id)]}}
+      {\ltyequiv 1 {\letbox u s t}{\letbox u {s'}{t'}} T'}
+    \end{mathpar}
+    \begin{align*}
+      H_0: & \lsemvtyeq 1 {s}{s'}{\cont[\Delta] T}
+             \byIH \\
+      H_1: & \lsemvtyeq[\Psi, u : (\judge[\Delta] T)][\Gamma[p(\id)]] 1
+             {t}{t'}{T'[p(\id)]}
+             \byIH \\
+      H_2: & \semvtyp[\Phi]{\sigma}{\Psi}
+             \tag*{(by assumption)} \\
+      H_3: & \lsemtyeq[\Phi][\Delta']1{\delta}{\delta'}{\Gamma[\sigma]}
+             \tag*{(by assumption)} \\
+           & \lsemtyeq[\Phi][\Delta']0{s[\sigma][\delta]}{s'[\sigma][\delta']}{\cont[\Delta]T[\sigma]}
+             \tag*{(by $H_0$, $H_2$ and $H_3$)}
+    \end{align*}
+    Now, we consider $H_3$, where we know for some $w$ and $w'$
+    \begin{align*}
+      & \ltyreds[\Phi][\Delta']{s[\sigma][\delta]} w{\cont[\Delta[\sigma]]{(T[\sigma])}} \\
+      & \ltyreds[\Phi][\Delta']{s'[\sigma][\delta]}{w'}{\cont[\Delta[\sigma]]{(T[\sigma])}} \\
+      H_4: & \lsemtyeq[\Phi][\Delta']{1}{^{\Nf} w}{w'}{\cont[\Delta[\sigma]]{(T[\sigma])}}
+    \end{align*}
+    We then case analyze $H_4$:
+    \begin{itemize}[label=Subcase]
+    \item
+      \begin{mathpar}
+        \inferrule
+        {\ltyping[\Phi][\Delta[\sigma]] 0{t''}{T[\sigma]} \\ \forall~\lsemtyeq[\Phi'][\Delta''] 0{\delta''}{\delta'''}{\Delta[\sigma]} ~.~ \lsemtyeq[\Phi'][\Delta''] 0{t''[\delta'']}{t''[\delta''']}{T}}
+        {\lsemtyeq[\Phi][\Delta']{1}{^{\Nf} {\boxit{t''}}}{\boxit{t''}}{\cont[\Delta] T[\sigma]}}
+      \end{mathpar}
+      Then we have
+      \begin{align*}
+        H_5: & \semvtyp[\Phi]{\sigma, t''/u}{\Psi, u: (\judge[\Delta] T)}
+               \tag*{(by definition)} \\
+             & \lsemtyeq[\Phi][\Delta']1{t[\sigma,t''/u][\delta]}{t'[\sigma,t''/u][\delta']}{T'[p(\id)][\sigma,t''/u]}
+               \tag*{(by $H_1$ and $H_5$)} \\
+             & T'[p(\id)][\sigma,t''/u] = T'[\sigma]
+               \tag*{(by computation)} \\
+             & \letbox u s t[\sigma][\delta] \\
+               = & \letbox u {s[\sigma][\delta]}{(t[q(\sigma)][\delta[p(\id)]])} \\
+        \rightsquigarrow^\ast & \letbox u
+                                {\boxit{t''}}{(t[q(\sigma)][\delta[p(\id)]])} \\
+        \rightsquigarrow & t[q(\sigma)][\delta[p(\id)]][\id,t''/u] \\
+        = & t[q(\sigma) \circ (\id,t''/u)][\delta[p(\id)][\id,t''/u]] \\
+        = & t[\sigma,t''/u][\delta]
+            \tag*{(by computation)} \\
+             & \letbox u{s'}{t'}[\sigma][\delta'] \rightsquigarrow^\ast t'[\sigma,t''/u][\delta']
+               \tag*{(similarly)} \\
+           & \lsemtyeq[\Phi][\Delta'] 1 {\letbox u s t[\sigma][\delta]}{\letbox u {s'}{t'}[\sigma][\delta]}{T'[\sigma]}
+      \end{align*}
+      
+    \item
+      \begin{mathpar}
+        \inferrule
+        {\ltygneeq[\Phi][\Delta'] v{v'}{\cont[\Delta] T[\sigma]}}
+        {\lsemtyeq[\Phi][\Delta'] {1}{^{\Nf} {v}}{v'}{\cont[\Delta] T[\sigma]}}
+      \end{mathpar}
+      Then we have
+      \begin{align*}
+        H_5: & \semvtyp[\Phi,u : (\judge[\Delta[\sigma]]{(T[\sigma])})]{\sigma[p(\id)],
+               u^\id/u}{\Psi, u: (\judge[\Delta] T)}
+               \tag*{(by monotonicity and \Cref{lem:cvar:red-ne})} \\
+        H_6: & \lsemtyeq[\Phi, u : (\judge[\Delta[\sigma]]{(T[\sigma])})][\Delta'[p(\id)]]1{\delta[p(\id)]}{\delta'[p(\id)]}{\Gamma[\sigma][p(\id)]}
+               \tag*{(by monotonicity)} \\
+             & \Gamma[p(\id)][\sigma[p(\id)],u^\id/u] = \Gamma[\sigma[p(\id)]] =
+               \Gamma[\sigma][p(\id)]
+               \tag*{(by computation)} \\
+             & T'[p(\id)][\sigma[p(\id)],u^\id/u] = T'[\sigma[p(\id)]] =
+               T'[\sigma][p(\id)]
+               \tag*{(by computation)} \\
+             & \lsemtyeq[\Phi, u : (\judge[\Delta[\sigma]]{(T[\sigma])})][\Delta'[p(\id)]]1{t[\sigma[p(\id)],u^\id/u][\delta[p(\id)]]}{t'[\sigma[p(\id)],u^\id/u][\delta'[p(\id)]]}{T'[\sigma][p(\id)]}
+               \tag*{(by $H_1$, $H_5$ and $H_6$)} \\
+             & \ltygteq[\Phi, u :
+               (\judge[\Delta[\sigma]]{(T[\sigma])})][\Delta'[p(\id)]]{t[\sigma[p(\id)],u^\id/u][\delta[p(\id)]]}{t'[\sigma[p(\id)],u^\id/u][\delta'[p(\id)]]}{T'[\sigma][p(\id)]}
+               \tag*{(by \Cref{lem:cvar:semeq2geneq})} \\
+             & \letbox u s t[\sigma][\delta] \\
+        = & \letbox u {s[\sigma][\delta]}{(t[q(\sigma)][\delta[p(\id)]])} \\
+        \rightsquigarrow^\ast & \letbox u
+                                {v}{(t[q(\sigma)][\delta[p(\id)]])} 
+                                \tag*{(by computation)} \\        
+             & \letbox u{s'}{t'}[\sigma][\delta'] 
+               \rightsquigarrow^\ast \letbox u
+               {v'}{(t'[q(\sigma)][\delta'[p(\id)]])} 
+               \tag*{(similarly)} \\
+             & \ltygneeq[\Phi][\Delta']{\letbox u
+               {v}{(t[q(\sigma)][\delta[p(\id)]])} }
+               {\letbox u {v'}{(t'[q(\sigma)][\delta'[p(\id)]])} }{T[\sigma]}
+               \tag*{(neutral terms)} \\
+             & \lsemtyeq[\Phi][\Delta']1{\letbox u
+               {v}{(t[q(\sigma)][\delta[p(\id)]])} }
+               {\letbox u {v'}{(t'[q(\sigma)][\delta'[p(\id)]])} }{T[\sigma]}
+               \tag*{(by \Cref{lem:cvar:red-ne})} \\
+             & \lsemtyeq[\Phi][\Delta'] 1 {\letbox u s t[\sigma][\delta]}{\letbox u {s'}{t'}[\sigma][\delta]}{T'[\sigma]}
+      \end{align*}
+    \end{itemize}
+
+  \item
+    \begin{mathpar}
+      \inferrule
+      {\ljudge[\Psi] 1 \Gamma \\ \ltyequiv[\Psi, g: \Ctx][\Gamma[p(\id)]] 1 t{t'} T}
+      {\ltyequiv{1}{\Lambda g. t}{\Lambda g. t'}{(g : \Ctx) \STo T}}
+    \end{mathpar}
+    \begin{align*}
+      H_0: & \lsemvtyeq[\Psi, g: \Ctx][\Gamma[p(\id)]] 1 t{t'} T
+             \byIH \\
+      H_1: & \semvtyp[\Phi]{\sigma}{\Psi}
+             \tag*{(by assumption)} \\
+      H_2: & \lsemtyeq[\Phi][\Delta']1{\delta}{\delta'}{\Gamma[\sigma]}
+             \tag*{(by assumption)} \\
+      H_3: & \gamma;\tau : \Phi'; \Delta'' \To \Phi;\Delta'
+             \tag*{(by assumption)} \\
+      H_4: & \ljudge[\Phi']0{\Gamma'}
+             \tag*{(by assumption)} \\
+      H_5: & \semvtyp[\Phi']{\sigma[\gamma], \Gamma'/g}{\Psi, g: \Ctx}
+             \tag*{(by monotonicity)} \\
+      H_6: & \lsemtyeq[\Phi'][\Delta'']1{\delta[\gamma;\tau]}{\delta'[\gamma;\tau]}{\Gamma[\sigma][\gamma]}
+             \tag*{(by monotonicity)} \\
+           & \lsemtyeq[\Phi'][\Delta'']
+             1{t[\sigma[\gamma],\Gamma'/g][\delta[\gamma;\tau]]}{t'[\sigma[\gamma],\Gamma'/g][\delta'[\gamma;\tau]]}{T[\sigma[\gamma], \Gamma'/g]}
+             \tag*{(by $H_0$, $H_5$ and $H_6$)} \\
+           & \Lambda g. t[\sigma][\delta][\gamma;\tau]~\$~\Gamma' \\
+      = & \Lambda g. (t[q(\sigma[\gamma])][\delta[\gamma;\tau][p(\id)]])~\$~\Gamma' \\
+      \rightsquigarrow & t[q(\sigma[\gamma])][\delta[\gamma;\tau][p(\id)]][\id,\Gamma'/g] \\
+      = & t[q(\sigma[\gamma])][\id,\Gamma'/g][\delta[\gamma;\tau][p(\id)][\id,\Gamma'/g]] \\
+      = & t[\sigma[\gamma],\Gamma'/g][\delta[\gamma;\tau]]
+          \tag*{(by computation)} \\
+           & \Lambda g. t'[\sigma][\delta'][\gamma;\tau]~\$~\Gamma' \rightsquigarrow t'[\sigma[\gamma],\Gamma'/g][\delta'[\gamma;\tau]]
+             \tag*{(similarly)}\\
+           & \lsemtyeq[\Phi'][\Delta'']
+             1{\Lambda g. t[\sigma][\delta][\gamma;\tau]~\$~\Gamma'}{\Lambda g. t'[\sigma][\delta'][\gamma;\tau]~\$~\Gamma'}{T[\sigma[\gamma],
+             \Gamma'/g]}
+      \tag*{(by \Cref{lem:cvar:semred})}\\
+           & \lsemtyeq[\Phi][\Delta']{1}{\Lambda g. t[\sigma][\delta]}{\Lambda g. t'[\sigma][\delta']}{(g : \Ctx) \STo T[\sigma]}
+    \end{align*}
+    
+  \item
+    \begin{mathpar}
+      \inferrule
+      {\ltyequiv{1}{t}{t'}{(g : \Ctx) \STo T} \\ \ljudge[\Psi] 0 \Delta}
+      {\ltyequiv{1}{t~\$~\Delta}{t'~\$~\Delta}{T[\id_{\Psi}, \Delta/g]}}
+    \end{mathpar}
+    \begin{align*}
+      H_0: & \lsemvtyeq 1 t{t'}{(g : \Ctx) \STo T}
+             \byIH \\
+      H_1: & \semvtyp[\Phi]{\sigma}{\Psi}
+             \tag*{(by assumption)} \\
+      H_2: & \lsemtyeq[\Phi][\Delta']i{\delta}{\delta'}{\Gamma[\sigma]}
+             \tag*{(by assumption)} \\ 
+           & \lsemtyeq[\Phi][\Delta'] 1{t[\sigma][\delta]}{t'[\sigma][\delta']}{(g :
+             \Ctx) \STo T[\sigma]} \\
+           & \ljudge[\Phi] 0 {\Delta[\sigma]} \\
+           & \lsemtyeq[\Phi][\Delta']
+             1{t[\sigma][\delta]~\$~\Delta[\sigma]}{t'[\sigma][\delta']~\$~\Delta[\sigma]}{T[\sigma][\id,\Delta[\sigma]/g]}
+      \\
+           & T[\sigma][\id,\Delta[\sigma]/g] = T[\id,\Delta/g][\sigma]
+             \tag*{(by computation)}
+    \end{align*}
+    The goal is then concluded. 
+
+  \item
+    \begin{mathpar}
+      \inferrule
+      {\ljudge i \Gamma \\ \text{$\Gamma$ ends with $\cdot$} \\ |\Gamma| = m}
+      {\ltyequiv i {\cdot^m}{\cdot^m}{\cdot}}
+    \end{mathpar}
+    \begin{align*}
+      & \semvtyp[\Phi]{\sigma}{\Psi}
+             \tag*{(by assumption)} \\
+      & \lsemtyeq[\Phi][\Delta']i{\delta}{\delta'}{\Gamma[\sigma]}
+             \tag*{(by assumption)}
+    \end{align*}
+    We must compare $\cdot^m[\sigma] \circ \delta =
+    \cdot_{\widecheck{\delta}}^{\widehat\delta}$ and $\cdot^m[\sigma] \circ \delta' =
+    \cdot_{\widecheck{\delta'}}^{\widehat{\delta'}}$.
+    But they are immediately equal, as we can show that
+    $\lsemtyeq[\Phi][\Delta']i{\delta}{\delta'}{\Gamma[\sigma]}$ implies
+    $\widecheck{\delta} = \widecheck{\delta'}$ and $\widehat{\delta} = \widehat{\delta'}$.
+
+  \item
+    \begin{mathpar}
+      \inferrule
+      {\ljudge i \Gamma \\ g : \Ctx \in \Psi \\ \text{$\Gamma$ ends with $g$} \\ |\Gamma| = m}
+      {\ltyequiv i {\cdot_g^m}{\cdot_g^m}{\cdot}}
+    \end{mathpar}
+    \begin{align*}
+      & \semvtyp[\Phi]{\sigma}{\Psi}
+        \tag*{(by assumption)} \\
+      & \lsemtyeq[\Phi][\Delta']i{\delta}{\delta'}{\Gamma[\sigma]}
+        \tag*{(by assumption)}
+    \end{align*}
+    We look up $\sigma(g)$ and consider what it ends with.
+    \begin{itemize}[label=Subcase]
+    \item $\sigma(g)$ ends with $\cdot$. Then we must compare
+      $\cdot_g^m[\sigma]\circ \delta = \cdot_{\widecheck{\delta}}^{\widehat\delta}$ and
+      $\cdot_g^m[\sigma]\circ \delta' = \cdot_{\widecheck{\delta'}}^{\widehat{\delta'}}$,
+      which we know are equal.
+      
+    \item $\sigma(g)$ ends with some $g'$. Then we must compare
+      $\cdot_g^m[\sigma]\circ \delta = \cdot_{g'}^{\widehat\delta}$ and
+      $\cdot_g^m[\sigma]\circ \delta' = \cdot_{g'}^{\widehat{\delta'}}$,
+      which we know are also equal.
+    \end{itemize}
+    
+  \item 
+    \begin{mathpar}
+      \inferrule
+      {\ljudge i \Gamma \\ g : \Ctx \in \Psi \\ \text{$\Gamma$ ends with $g$} \\ |\Gamma| = m}
+      {\ltyequiv i {\wk_g^m}{\wk_g^m}{g}}
+    \end{mathpar}
+    \begin{align*}
+      & \semvtyp[\Phi]{\sigma}{\Psi}
+        \tag*{(by assumption)} \\
+      H_0: & \lsemtyeq[\Phi][\Delta']i{\delta}{\delta'}{\Gamma[\sigma]}
+        \tag*{(by assumption)}
+    \end{align*}
+    Then we have
+    \[
+      \wk_g^m[\sigma]\circ \delta = \id_{\sigma(g)}[id;p^m(\id)] \circ \delta =
+      \wk^m_{\sigma(g)} \circ \delta
+    \]
+    and 
+    \[
+      \wk_g^m[\sigma]\circ \delta' = \id_{\sigma(g)}[id;p^m(\id)] \circ \delta' =
+      \wk^m_{\sigma(g)} \circ \delta'
+    \]
+    We show $\lsemtyeq[\Phi][\Delta']i{\wk^m_{\sigma(g)} \circ
+      \delta}{\wk^m_{\sigma(g)} \circ \delta'}{\sigma(g)}$
+    by unraveling $H_0$ $m$ times. 
+  \end{itemize}
+\end{proof}
+
+As a corollary of the fundamental theorems, we can prove the completeness theorem:
+\begin{proof}[Proof of \Cref{thm:cvar:comp}]
+  Notice that the reducibility predicates are just special cases of the validity
+  judgments. 
+\end{proof}
+
+\subsection{Convertibility Checking}
+
+In this section, we will write down the converibility checking rules and instantiate
+the generic equivalence with it, proving that equivalence terms can be checked. %
+We define three judgments: $\dtconv{t}{t'}{T}$ checks the convertibility of two terms
+$t$ and $t'$. %
+$\dtconvnf{w}{w'}{T}$ checks the convertibility of two normal forms $w$ and $w'$. %
+This operation is directed by types. %
+$\dtconvne{v}{v'}T$ checks the convertibility of two neutral forms $v$ and $v'$. %
+This operation is structural on the neutral forms. %
+We give all the rules below:
+\begin{mathpar}
+  \inferrule
+  {\ltyreds t w T \\ \ltyreds {t'}{w'}T \\ \dtconvnf{w}{w'}T}
+  {\dtconv t{t'} T}
+
+  \inferrule
+  {\ljudge[\Psi]1\Gamma}
+  {\dtconvnf{\ze}{\ze}\Nat}
+
+  \inferrule
+  {\dtconv t{t'} \Nat}
+  {\dtconvnf{\su{t}}{\su{t'}}\Nat}
+
+  \inferrule
+  {\dtconvne v{v'} \Nat}
+  {\dtconvnf{v}{v'}\Nat}
+
+  \inferrule
+  {\dtconv[\Psi][\Gamma, x : S]{w[\id;p(\id)]~x}{w'[\id;p(\id)]~x}T}
+  {\dtconvnf{w}{w'}{S \func T}}
+
+  \inferrule
+  {\ljudge[\Psi]1\Gamma \\ \ltyping[\Psi][\Delta]0 t T}
+  {\dtconvnf{\boxit{t}}{\boxit{t}}{\cont[\Delta] T}}
+
+  \inferrule
+  {\dtconvne v{v'}{\cont[\Delta] T}}
+  {\dtconvnf{v}{v'}{\cont[\Delta] T}}
+
+  \inferrule
+  {\dtconv[\Psi,g:\Ctx]{w[p(\id)]~\$~g}{w'[p(\id)]~\$~g}T}
+  {\dtconvnf{w}{w'}{(g : \Ctx) \STo T}}
+
+  \inferrule
+  {\ljudge 1 \Gamma \\ x : T \in \Gamma}
+  {\dtconvne x{x} T}
+
+  \inferrule
+  {\dtconvnf{\delta}{\delta'}\Delta \\ x : (\judge[\Delta]T) \in \Psi}
+  {\dtconvne{u^\delta}{u^{\delta'}}T}
+
+  \inferrule
+  {\dtconvne{v}{v'}{S \func T} \\ \dtconv{t}{t'}S}
+  {\dtconvne{v~t}{v'~t'} T}
+
+  \inferrule
+  {\dtconvne{v}{v'}{\cont[\Delta] T} \\ \ljudge 1 {T'} \\\\
+    \dtconv[\Psi,u:(\judge[\Delta] T)][\Gamma[p(\id)]]{t}{t'}{T'[p(\id)]}}
+  {\dtconvne{\letbox u v t}{\letbox u{v'}{t'}}{T'}}
+
+  \inferrule
+  {\dtconvne{v}{v'}{(g : \Ctx) \STo T} \\ \ljudge 0 \Delta}
+  {\dtconvne{v~\$~\Delta}{v'~\$~\Delta}{T[\id,\Delta/g]}}
+\end{mathpar}
+
+We then instantiate the generic equivalence. We instantiate $\ltygteq t {t'} T$ with
+$\dtconv{t}{t'}{T}$ and $\ltygneeq t {t'} T$ with $\dtconvne{t}{t'}{T}$.
+
+Most laws are immediate. %
+We discuss a few of them.
+\begin{lemma}[PERs]
+  All three relations above are PERs.
+\end{lemma}
+\begin{proof}
+  When we prove transitivity of $\dtconv{t}{t'}{T}$, we use the uniqueness of
+  multi-step weak head reduction.
+\end{proof}
+
+\begin{lemma}[Congruence of $\tbox$]
+  If $\ljudge[\Psi] 1 \Gamma$, $\ltyping[\Psi][\Delta] 0 t {T}$ and $\dtconv[\Psi][\Delta]{t}{t}{T}$,
+  then $\dtconv{\boxit t}{\boxit t}{T}$.
+\end{lemma}
+\begin{proof}
+  Notice that we are almost there, except that we must prove
+  $\dtconv[\Psi][\Delta]{t}{t}{T}$ for $t$ at layer $0$. %
+  This premise is met due to our layered model, where we instantiate layer $0$ and
+  layer $1$ separately, so that the fundamental theorem of layer $0$ gives
+  $\dtconv[\Psi][\Delta]{t}{t}{T}$. 
+\end{proof}
+
+A successful instantiation gives us the following desired completeness theorem for
+converibility checking:
+\begin{theorem}[Completeness]$ $
+  \begin{itemize}
+  \item If $\ltyequiv 1 t {t'} T$, then $\dtconv{t}{t'}{T}$.
+  \item If $\ltyequiv 1 \delta{\delta'}\Delta$, then $\dtconv{\delta}{\delta'}{\Delta}$. 
+  \end{itemize}
+\end{theorem}
+Soundness is easy by a simple induction:
+\begin{theorem}[Soundness]$ $
+  \begin{itemize}
+  \item If $\dtconv{t}{t'}{T}$, then $\ltyequiv 1 t {t'} T$.
+  \item If $\dtconvnf{w}{w'}{T}$, then $\ltyequiv 1 w {w'} T$.
+  \item If $\dtconvne{v}{v'}{T}$, then $\ltyequiv 1 v {v'} T$.
+  \item If $\dtconv{\delta}{\delta'}{\Delta}$, then $\ltyequiv 1 \delta{\delta'}\Delta$.
+  \end{itemize}
+\end{theorem}
+This concludes our discussion about context variables.

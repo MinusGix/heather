@@ -1,0 +1,16 @@
+[package]
+name = "heather-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "heather"
+path = "src/main.rs"
+
+[dependencies]
+heather-kernel = { path = "../kernel" }
+heather-syntax = { path = "../syntax" }
+
+[lints]
+workspace = true

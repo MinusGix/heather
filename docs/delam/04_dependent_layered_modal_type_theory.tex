@@ -1,0 +1,1626 @@
+\section{Dependent Layered Modal Type Theory}\labeledit{sec:dt}
+
+In this section, we combine the work by \citet{hu2024layered} and what we have built
+up in the previous sections and scale all the way up to dependent types. %
+We present \delamlang, \textbf{De}pendent \textbf{La}yered \textbf{M}odal Type
+Theory. %
+With dependent types, we can not only analyze the syntax of programs, but also that of
+types. %
+This ability, therefore, gives us the power to write tactics that could potentially
+fill in proof obligations in a proof environment. %
+In particular, this type theory addresses a number of problems that we often see in
+proof assistants like Coq, Lean, and Agda. %
+In Coq, tactics are written in a separate language, Ltac or Ltac2, where the
+advantages of dependent types in Gallina, the core language, are lost. %
+Stratifying the tactic language and the core language into two also cause
+duplications: there are multiple notions for natural numbers, functions, etc.. %
+On the other hand, in Lean and Agda, we use reflection to convert a Lean or an Agda
+term into an AST and then use the core language to manipulate the AST. %
+An instrumentation in the kernel is responsible for converting this AST back to a
+valid term, if type-checked. %
+This mechanism superficially provides a uniform way to tactics, but reflection
+generally fails to guarantee the well-formedness of ASTs, making type malformedness
+run-time errors and necessitating exception mechanisms exclusively for macro executions.
+
+We believe that this type theory provides an example to address all aforementioned
+problems. %
+Starting this section, let us dive into dependent types.
+
+\subsection{Highlights}
+
+On a high level, we would continue to apply the layering principle in \delamlang to
+guide us in the design of this type theory. %
+In particular, we would want the layer for static code to be subsumed by layer for
+computing programs. %
+Moreover, with context variables, we are now able to formulate a recursive
+elimination principle for code, which was not possible in simple types. %
+However, these two requirements combining together causes some high-level technical
+effects to the design of the type theory, which are worth mentioning before presenting the
+type theory itself.
+
+
+\subsubsection{Code Promotion}
+
+Since we are going to introduce elimination principle for terms with dependent types,
+we must also consider how equivalences are handled for code. %
+For example, if we know a given piece of code has type $(\lambda x. x)~\Nat$, should
+we regard this type the ``same'' as $\Nat$? %
+Intuitively, the answer should be yes. %
+After all, we only want to capture the syntax of the term, not its type. %
+Effectively, for code of type $\cont T$, it should also be regarded as an inhabitant
+of another type $\cont{T'}$, as long as $T \approx T'$ in $\Gamma$. 
+
+In the context of dependent types, however, that causes some problems in the presence
+of function applications. %
+Consider a function $f : \Pi(x : S). T$ and an argument $t : S$. %
+Then in general, the type of $f~t$ is $T[t/x]$. %
+Now, let us construct this term as code. %
+Even though $t$ is constructed as part of the code, the type of the overall code
+$\cont{(T[t/x])}$ contains $t$ and therefore part of the dynamics of $t$ is in fact
+promoted to the type. %
+For a more concrete example, if $f : \Pi(x : \Ty 0). x$ and let the argument be
+$(\lambda x. x)~\Nat$, then $\boxit{(f~((\lambda x. x)~\Nat))}$ has type
+$\cont{(\lambda x. x)~\Nat}$, which we agree is just $\cont{\Nat}$. %
+Clearly, the argument computes and is not purely static code as in simple types. %
+We cannot avoid this phenomenon because of dependent types, so we must handle it with
+care. %
+This phenomenon is call a \emph{code promotion}. 
+
+\subsubsection{Non-cumulativity}
+
+Due to code promotions, we must permit non-trivial equivalences in types of code. %
+This causes particular problems when we want an elimination principle for code with
+intensional analyses. %
+When we split code into cases in the elimination form, we must specify in each case
+how do we construct the original code from its components. %
+Therefore, it is the most convenient, when each term has a unique type, leading to a
+conclusion of preferring non-cumulative universes. %
+Whereas with cumulative universes, types live in higher universes for free. %
+Cumulativity forms a pre-order of types which cannot be captured solely by equivalence
+rules and makes the typing rule for the elimination principle extremely difficult to express, if
+not completely impossible.
+
+\subsubsection{Universe Polymorphism}
+
+Though it is often omitted in other work, universe levels and universe polymorphism
+are important ingredients in dependent type theory. %
+They are typically considered as ``details'' and are not very much paid attention
+to. %
+However, in this work, we must be explicit about universe polymorphism. %
+Consider some code for function application $t~s$. %
+We in general do not know the type of $s$, let alone its universe level (though it
+must be uniquely determined due to non-cumulativity discussed above). %
+Therefore, the elimination principle for code must work for \emph{all} universe
+levels, leading to a formalism of universe polymorphism. 
+
+\subsubsection{Tarski-style Universes}
+
+Another ingredient to consider when approaching an elimination principle for code with
+dependent types and intensional analyses is the separation between types and terms. %
+Consider Russell-style universes where types and terms are not distinguished
+naturally. %
+It would probably suffice to say that $\cont T$ can represent code for both types and
+terms. %
+In particular, code for some types just has type $\cont{\Ty 0}$, for example. %
+Unfortunately, this thought is too naive. %
+When we consider $\cont T$ as the type of code, we are considering this type with two
+indices, the (local) context $\Gamma$ and the type of the code body $T$. %
+But what is the type of $T$? %
+Well, it is $\cont{\Ty l}$ for some $l$, which is just a special case of $\cont T$! %
+A type clearly should not be indexed by a special case of itself. %
+The intertwine between types and terms in Russell-style universes seems to even
+prevent a proper statement of indices of types for code. %
+However, Tarski-style universes, where types and terms are clearly distinguished, introduce
+mutually inductive relations between types and terms, and safely bail us out of this
+problem, as we will see very soon.
+
+\subsection{Syntax}\labeledit{sec:dt:syntax}
+
+Let us start with the syntax of \delamlang. %
+Since we employ Tarski-style universes, the syntax of terms and types are separate. %
+Due to non-cumulativity, certain constructs must remember universe levels. %
+Due to the elimination principle of code, some constructs must include additional
+sub-structures so that the elimination eventually checks out. %
+Let us begin with the subset that is basically just Martin-L\"of type theory (MLTT).
+\begin{alignat*}{2}
+  x, y & && \tag{Local variables} \\
+  \ell & && \tag{Universe variables} \\
+  l & := &&\ \ell \sep 0 \sep 1 + l \sep l \sqcup l' \sep \omega \tag{Universe levels} \\
+  M, S, T & := && \ \Nat \sep \PI{l}{l'}x S T \sep \Ty l \sep \UPI \ell l T \sep \Elt l t \tag{Types, $\Typ$} \\
+  s, t &:=&&\ x \tag{Terms, $\Exp$} \\
+  & && \sep \Nat \sep \PI{l}{l'}x s t \sep \Ty l \tag{encoding of types}  \\
+  & && \sep \ze \sep \su t \sep \ELIMN l{x.M}{s}{x, y.s'}{t} \tag{natural numbers $N$} \\
+       & &&\sep \LAM l{l'} x S t \sep \APP t l{l'} x S T s \tag{dependent functions}  \\
+  & && \sep \ULAM l \ell t \sep \UAPP t l \tag{universe polymorphic functions} \\
+  \Gamma, \Delta &:= &&\ \cdot \sep g \sep \Gamma, x : T \at l
+                        \tag{Local contexts, \Ctx} \\
+  L &:= && \cdot \sep L, \ell \tag{Universe contexts}
+\end{alignat*}
+Due to three kinds of contexts and the scale of the system, we omit the discussion of
+weakenings, which we diligently kept track of in the previous sections. %
+We take various weakenings for granted. %
+Nevertheless, they will appear in the semantics. %
+Weakenings in general are pretty obvious, as we permit arbitrary lookups for all
+variables. %
+Since we now must deal with universe levels, we use $\ell$ to range over variables for
+universe levels. %
+The syntax for universe levels follows Agda's conventions. %
+Universe levels form an idempotent commutative monoid, the laws of which we will show
+in the next subsection. %
+Here we use $\sqcup$ to denote taking the max of two universe levels. %
+% Our syntax above has not introduced the syntax to introduce a universe level
+% variables.
+The ability to take maximum between two levels induces a partial order:
+\begin{align*}
+  l \le l' := l' \approx l \sqcup l'
+\end{align*}
+where we use $\approx$ to express the equivalence between universe levels. %
+Thus, with $\le$, universe levels form a bounded inf-lattice. %
+A strict order is given by requiring the pre-order to hold for the successor of $l$:
+\begin{align*}
+  l < l' := l' \approx (1 + l) \sqcup l'
+\end{align*}
+This strict order, as to be shown later, is well-founded, based on which we will give
+semantics to universes. %
+Due to universe polymorphism, we must also include an $\omega$ level, which will be
+used to represent the universe level of a universe-polymorphic function. %
+The $\omega$ level must not appear in any program, does not participate in the bounded
+inf-lattice specified above, is only used in type-checking, and therefore can be
+ignored most of the time. %
+The formalization of universe polymorphism here follows~\citet{bezem_type_2023}
+tightly. %
+We use $\UPI \ell l T$ to denote the type of a universe-polymorphic function. %
+It introduce a non-empty list of universe variables at once, and lives at $\Ty
+\omega$. %
+The type $T$ lives at $\Ty l$, where $l$ may refer to all variables from $\vect
+\ell$. %
+Since $l$ cannot be $\omega$, we must have all universe variables introduced in one
+go. %
+The introduction form is $\ULAM l \ell t$, which also introduces a non-empty list of
+universe variables first and then the function body as expected. %
+The elimination form $\UAPP t l$ symmetrically eliminates a universe-polymorphic
+function with the same number of universe level expressions. %
+
+The rest of the expressions are pretty much standard from MLTT. %
+We have natural numbers (\Nat), their introduction forms and a recursion principle. %
+We always use $M$ to exclusively represent the motives of a recursion principle. %
+For regular dependent functions $\PI{l}{l'}x S T$, we must specify the universe levels
+of $S$ and $T$, following~\citet{pujet_impredicative_2023}. %
+We might omit the universe levels if they are not important in the discussion. %
+The function abstraction $\LAM l{l'} x S t$ is standard; we might omit $l$ and $S$ if they
+are not important or can be inferred from the context. %
+The function application $\APP t l{l'} x S T s$ is arguably more complex. %
+We explicitly specify the type of the function to prepare for a better formulation of
+the elimination principle for code later in the section. %
+By requiring explicit type annotations in elimination forms, types that are usually
+hidden in the core syntax become 
+sub-structures in the elimination form for code. %
+This verbosity has no negative impact for programmers: after all, we are discussing a core theory, and
+we can let a type-inferring front-end to fill in these types for the users if they
+choose so. %
+Following conventions, we may simply write $s~t$ if the types are not important. %
+
+Since we are employing Tarski-style universes, as we have specified in the syntax,
+types and terms are separated. %
+As terms, we use \emph{encodings} of types, i.e. the overloaded $\Nat$,
+$\PI l{l'} x s t$ and $\Ty l$, which are members of some universes. %
+They are \emph{decoded} into actual types through $\Elt l t$, converting the encodings
+to actual corresponding types. %
+This part is basically identical to~\citet{palmgren_universes_1998}.  %
+For simplicity, we have omitted the type lifter, which is responsible for raising the
+universe levels explicitly, similar to \texttt{Lift} in Agda's standard library. %
+According~\citet{palmgren_universes_1998}, the type lifter bears additional
+equivalences and therefore we omit them here for conciseness, as lifting of the levels
+is an orthogonal issue here. %
+
+\subsection{Universe Levels}\labeledit{sec:dt:ulevel}
+
+In the syntax, we deliberately group all the universe variables into a separate
+context. %
+This is beneficial as both local and global contexts (to be discussed later) will need to refer
+to universe variables. %
+It is also helpful for the future work of extending \delamlang to more
+layers, by simply inserting more contexts after $L$. %
+In this section, we state the well-formedness and equivalence judgments for universe
+levels. %
+Note that all syntactically valid universe contexts are already well-formed as they
+only contain universe variables.
+\begin{mathpar}
+  \inferrule
+  {\ell \in L}
+  {\typing[L]{\ell}{\Level}}
+
+  \inferrule
+  { }
+  {\typing[L]{0}{\Level}}
+
+  \inferrule
+  {\typing[L]{l}{\Level}}
+  {\typing[L]{1 + l}{\Level}}
+  
+  \inferrule
+  {\typing[L]{l}{\Level} \\ \typing[L]{l'}{\Level}}
+  {\typing[L]{l \sqcup l'}{\Level}}
+\end{mathpar}
+Notice that $\omega$ is not well-formed. %
+Indeed, the judgment $\typing[L]l\Level$ only captures the well-formed universe levels
+that can be written by a programmer. %
+The level $\omega$, on the other hand, only appears during type-checking to denote the
+type of universe-polymorphic functions. %
+
+As discussed above, universe levels themselves form an idempotent commutative
+monoid. %
+Hence they have the following equivalence rules:
+\begin{mathpar}
+  \inferrule
+  {\typing[L]{l}{\Level}}
+  {\tyequiv[L]{l}{l}\Level}
+  
+  \inferrule
+  {\tyequiv[L]{l}{l'}{\Level}}
+  {\tyequiv[L]{l'}{l}\Level}
+
+  \inferrule
+  {\tyequiv[L]{l}{l'}\Level \\ \tyequiv[L]{l'}{l''}\Level}
+  {\tyequiv[L]{l}{l''}\Level}
+\end{mathpar}
+First we specify the basic PER rules. %
+Then we have congruence rules:
+\begin{mathpar}
+  \inferrule
+  {\tyequiv[L]{l}{l'}{\Level}}
+  {\tyequiv[L]{1 + l}{1 + {l'}}\Level}
+
+  \inferrule
+  {\tyequiv[L]{l}{l'}\Level \\ \tyequiv[L]{l''}{l'''}\Level}
+  {\tyequiv[L]{l \sqcup l''}{l' \sqcup l'''}\Level}  
+\end{mathpar}
+Finally we have the algebraic rules:
+\begin{mathpar}
+  \inferrule
+  {\typing[L]{l}{\Level}}
+  {\tyequiv[L]{l \sqcup 0}{l}\Level}
+  
+  \inferrule
+  {\typing[L]{l}{\Level} \\ \typing[L]{l'}{\Level} \\ \typing[L]{l''}{\Level}}
+  {\tyequiv[L]{(l \sqcup l') \sqcup l''}{l \sqcup (l' \sqcup l'')}\Level}
+
+  \inferrule
+  {\typing[L]{l}{\Level} \\ \typing[L]{l'}{\Level}}
+  {\tyequiv[L]{l \sqcup l'}{l' \sqcup l}\Level}
+
+  \inferrule
+  {\typing[L]{l}{\Level}}
+  {\tyequiv[L]{l \sqcup l}{l}\Level}
+
+  \inferrule
+  {\typing[L]{l}{\Level} \\ \typing[L]{l'}{\Level}}
+  {\tyequiv[L]{1 + (l \sqcup l')}{1 + l \sqcup 1 + {l'}}\Level}
+
+  \inferrule
+  {\ell \in L}
+  {\tyequiv[L]{\ell \sqcup (1 + \ell)}{1 + \ell}{\Level}}
+\end{mathpar}
+The second last rule is distributivity of $\tsucc$ over $\sqcup$. %
+The last rule is absorption of $\tsucc$ over $\sqcup$. %
+The equivalence judgment confirms the well-formedness of both components:
+\begin{lemma}[Presupposition]
+  If $\tyequiv[L]{l}{l'}\Level$, then $\typing[L]l\Level$ and $\typing[L]{l'}\Level$. 
+\end{lemma}
+\begin{proof}
+  Induction.
+\end{proof}
+We can prove a more general absorption rule by doing a few inductions.
+\begin{lemma}[Absorption]
+  If $\typing[L]l\Level$, then $\tyequiv[L]{l \sqcup (1 + l)}{1 + l}\Level$. 
+\end{lemma}
+\begin{proof}
+  Induction. Only the following case is interesting:
+  \begin{mathpar}
+    \inferrule
+    {\typing[L]{l}{\Level} \\ \typing[L]{l'}{\Level}}
+    {\typing[L]{l \sqcup l'}{\Level}}
+  \end{mathpar}
+  We reason as follows:
+  \begin{align*}
+    l \sqcup l' \sqcup (1 +{l \sqcup l'})
+    & \approx (l \sqcup (1 + l)) \sqcup (l' \sqcup (1 +{l'})) \\
+    & \approx (1 + l) \sqcup (1 +{l'}) \byIH \\
+    & \approx 1 +{(l \sqcup l')}
+  \end{align*}
+  Hence the proof is complete. 
+\end{proof}
+Then we generalize further:
+\begin{lemma}[Absorption]
+  If $\typing[L]l\Level$, then for any $n$, $\tyequiv[L]{l \sqcup (n + {l})}{n + {l}}\Level$.   
+\end{lemma}
+\begin{proof}
+  We proceed by induction on $n$. %
+  The cases for $n=0$ and $n=1$ are simple.  We consider the step case, where
+  $n = 1 + n'$ and we know
+  $\tyequiv[L]{l \sqcup (n' + {l})}{n' + {l}}\Level$. %
+  We reason as follows:
+  \begin{align*}
+    l \sqcup (1 + (n' + l))
+    & \approx l \sqcup (1 +{(l \sqcup (n' + {l}))})
+      \byIH \\
+    & \approx l \sqcup (1 + l) \sqcup (1 + n' + {l}) \\
+    & \approx (1 + l) \sqcup (1 + n' + {l})
+    \tag{by absorption} \\
+    & \approx (1 + l) \sqcup (n' + (1 + l)) \\
+    & \approx n' + {(1 + l)} \byIH \\
+    & \approx n + l
+  \end{align*}
+  The proof is complete. 
+\end{proof}
+
+As readers might have noticed, the theory for universe levels are self-contained and
+their equivalence is decidable, as per implemented by Agda's type-checker. %
+For this reason, in the remainder of the discussion, we undermine the importance of
+well-formedness and equivalence of universe levels, unless it is essential in the
+surrounding context. 
+
+Next, we define substitutions for universe levels:
+\begin{align*}
+  \phi := \cdot \sep \phi,l/\ell \tag{Substitutions for universe levels}
+\end{align*}
+\begin{mathpar}
+  \inferrule
+  { }
+  {\typing[L]{\cdot}{\cdot}}
+
+  \inferrule
+  {\typing[L]\phi{L'} \\ \typing[L]l\Level}
+  {\typing[L]{\phi, l/\ell}{L',\ell}}
+\end{mathpar}
+Applying substitutions is intuitive:
+\begin{align*}
+  \ell [\phi] &:= \phi(\ell) \\
+  0 [\phi] &:= 0 \\
+  1 + l [\phi] &:= 1 + (l[\phi]) \\
+  l \sqcup l' [\phi] &:= (l [\phi]) \sqcup (l'[\phi]) \\
+  \omega [\phi] &:= \omega
+\end{align*}
+We then have the following lemmas:
+\begin{lemma}
+  If $\typing[L]l\Level$ and $\typing[L']\phi L$, then $\typing[L']{l[\phi]}\Level$.
+\end{lemma}
+\begin{proof}
+  Induction.
+\end{proof}
+\begin{lemma}
+  If $\tyequiv[L]l{l'}\Level$ and $\typing[L']\phi L$, then $\tyequiv[L']{l[\phi]}{l'[\phi]}\Level$.
+\end{lemma}
+\begin{proof}
+  Induction.
+\end{proof}
+
+\newcommand{\adjustf}[1]{\ensuremath{\textsf{adjust}(#1)}}
+
+The well-foundedness of the strict order $<$ is intuitive. %
+The only bottom element is $0$. %
+We simply keep removing $\tsucc$ from all components of $\sqcup$, and we must
+eventually stop. %
+Thus, the simplest way to argue the well-foundedness of $<$ is to define a measure
+based on the number of $\tsucc$'s that can be removed from an $l$. %
+This number is defined over all $\typing[L]l\Level$ recursively as follows:
+\begin{align*}
+  \countf \ell &:= \{ \ell \mapsto 0, 0 \mapsto 0 \} \\
+  \countf 0 &:= \{ 0 \mapsto 0 \} \\
+  \countf{1 + l} &:= \mergef{\{ \ell \mapsto 1 + n \sep \ell \mapsto n \in \countf{l}
+                   \}}{\{0 \mapsto 1 + \countf{l}(0)\}} \\
+  \countf{l \sqcup l'} &:= \mergef{\countf{l}}{\countf{l'}}
+\end{align*}
+Here \textsf{count} returns a map that counts the number of $\tsucc$'s over all
+universe variables and $0$. %
+The function \textsf{merge} merges two maps and takes the maximum in a conflict. %
+The following definition makes sure equivalent universe levels to have the same
+representation as maps:
+\begin{align*}
+  \adjustf m :=
+  \begin{cases}
+    \{ \ell \mapsto n \sep m(\ell) \mapsto n \} & \text{if $m(0) \le \max_{\ell
+                                                  \mapsto n \in m} n$} \\
+    m & \text{otherwise}
+  \end{cases}
+\end{align*}
+In the first branch, we check if there is a variable which has a higher universe level
+than the constant. %
+If so, we drop the constant completely. %
+For example, in $2 \sqcup (2 + \ell)$, $2$ is
+redundant, as we know $2 + \ell$ is at least as large as $2$. %
+On the other hand, in $2 \sqcup (1 + \ell)$, it is possible for $1 + \ell$
+to be smaller than $2$ when we take $\ell$ as $0$. %
+Therefore, in this case, we must keep $2$.  Thus, the finiteness of
+decreasing steps of the universe levels can be seen as taking some finite steps by
+removing all $1 +$ from maps returned by $\adjustf{\countf l}$. %
+Then we can just take away variables until we can no longer descend. %
+In fact, $\adjustf{\countf l}$ should be considered a normalization algorithm for
+universe levels. %
+We can simply compare equality between maps computed as such decide whether two
+universe levels are equivalent. %
+The correctness is as follows:
+\begin{lemma}
+  If $\tyequiv[L]l{l'}\Level$, then $\adjustf{\countf l} = \adjustf{\countf{l'}}$.
+\end{lemma}
+\begin{proof}
+  Induction. Take advantage of the idempotent commutative monoidal nature of maximum. 
+\end{proof}
+This lemma ensures that the procedure respects equivalence between universe levels. %
+The other direction is seen by providing a ``decoding'' function, which converts a map
+to a universe level. %
+% We then simply need to agree on a serialization of the map which is a mere detail
+% here. %
+We give one possible function that converts a map to a $\Level$.
+\begin{align*}
+  \flatten L m := \begin{cases}
+    \bigsqcup_{\ell \mapsto n \in m} n + \ell & \text{if $0$ is not in $m$} \\
+    m(0) \sqcup (\bigsqcup_{\ell \mapsto n \in m} n + \ell)
+    & \text{otherwise}
+  \end{cases}
+\end{align*}
+where the order of $\ell$'s respects their order in $L$ and all $\sqcup$ are right
+associative. %
+These requirements give a syntactically unique flattening of a map. %
+Then we prove
+\begin{lemma}
+  If $\typing[L]l\Level$, then $\tyequiv l{\flatten{L}{\adjustf{\countf l}}}\Level$. 
+\end{lemma}
+\begin{proof}
+  We proceed by induction. %
+  It is rather immediate. For the $\tsucc$ case, we use its distributivity to
+  propagate it inwards. For the $\sqcup$ case, we use commutativity to rearrange levels
+  within and absorption to eliminate small levels whenever necessary.
+\end{proof}
+% We can in fact just compare $\Level$'s by considering the results of \textsf{count}. %
+% This is pretty simple so we often consider the equalities of our types and terms
+% modulo the equivalence of $\Level$s. 
+
+\subsection{Typing and Equivalence Judgments}\labeledit{sec:dt:mltt-rules}
+
+In this section, we introduce the typing and equivalence judgments, only for the MLTT
+part. %
+We will consider the modal part next altogether. %
+The typing and equivalence judgments are defined mutually as usual. %
+All the related judgments are:
+\begin{itemize}
+\item $\judge[L]\Psi$ denotes the well-formedness of the global context $\Psi$ under
+  $L$. 
+\item $\lpjudge i \Gamma$ denotes the well-formedness of $\Gamma$ given the universe
+  context $L$ and the global context $\Psi$ at layer $i$. %
+  In this section, we are not very concerned about layers yet as most parts about
+  meta-programming and intensional analysis come in a later section
+  (\Cref{sec:dt:modal}). 
+\item $\lpequiv i \Gamma\Delta$ denotes the equivalence between two local contexts
+  $\Gamma$ and $\Delta$. 
+\item $\lttypwf i T l$ denotes the well-formedness of the type $T$ living in the
+  universe level $l$ at layer $i$ in the given contexts. 
+\item $\lttyping i t T l$ denotes the well-typedness of $t$ of type $T$, which is in
+  the universe level $l$ at layer $i$.
+  In the special occasion of $T$ being some $\Se$, we might write $\lttypingd i T
+  l{1 + l}$ to simultaneously denote two judgments at the same time to save space.
+\item $\lttypeq i{T}{T'}l$ denotes the equivalence between types $T$ and $T'$ living in the
+  universe level $l$ at layer $i$ in the given contexts. 
+\item $\lttyequiv i t {t'} T l$ denotes the equivalence between $t$ and $t'$ of type
+  $T$, which is in the universe level $l$ at layer $i$. %
+  The shorthand $\lttyequivd i T {T'} l {1 + l}$ has a meaning similar to above.
+\item $\ltsubst i \delta \Delta$ denotes the well-formedness of a local substitution
+  $\delta$ which substitute all local variables in $\Delta$ into terms referring to
+  $\Gamma$. %
+  We will introduce this judgment and the next when we discuss the modal part. %
+\item $\ltsubeq i\delta{\delta'}\Delta$ denotes the equivalence between local
+  substitutions $\delta$ and $\delta'$. 
+% \item $\lttypingv i t T l$ is a sub-judgment of $\lttyping i t T l$ which makes sure
+%   $t$ is a local variable or a global variable that can only be substituted to a local
+%   variable.
+% \item $\ltsubstv i \delta\Delta$ is the extension of $\lttypingv i t T l$ to local substitution.
+\end{itemize}
+
+The judgments for MLTT are rather routine. %
+Many are just generalization of the judgments in~\Cref{sec:cv}. 
+Let us first consider the well-formedness and equivalence of local contexts:
+\begin{mathpar}
+  \inferrule
+  {\judge[L] \Psi}
+  {\lpjudge i \cdot \\ \lpequiv i \cdot\cdot}
+
+  \inferrule
+  {\judge[L] \Psi \\ g : \Ctx \in \Psi}
+  {\lpjudge i{g} \\ \lpequiv i{g}{g}}
+
+  \inferrule
+  {\lpjudge i \Gamma \\\\ \lttypwf i T l \\ \typing[L]l\Level}
+  {\lpjudge i{\Gamma, x : T \at l}}
+
+  \inferrule
+  {\lpequiv i \Gamma\Delta \\ \lttypeq i T{T'} l \\ \lttypeq[\Psi][\Delta] i T{T'} l
+    \\ \lttypwf i T l \\ \lttypwf[\Psi][\Delta] i{T'}{l'} \\ \tyequiv[L]l{l'}\Level}
+  {\lpequiv i{\Gamma, x : T \at l}{\Delta, x : T' \at{l'}}}
+\end{mathpar}
+The well-formedness of types are also immediate, following~\citet{pujet_impredicative_2023}. %
+When we encounter $\tEl$, we resort that to the typing judgment of terms. %
+Overlapping rules for well-typedness of encoding as terms are also listed:
+\begin{mathpar}
+  \inferrule
+  {\lpjudge{\typeof i} \Gamma}
+  {\lttypingd i \Nat 0 {1}}
+
+  \inferrule
+  {\typing[L]l\Level  \\ \typing[L]{l'}\Level \\\\
+    \lttypwf i S l \\ \lttypwf[\Psi][\Gamma, x : S \at l] i T{l'}}
+  {\lttypwf i{\PI l{l'} x S T}{l \sqcup l'}}
+
+  \inferrule
+  {\typing[L]l\Level  \\ \typing[L]{l'}\Level \\\\
+    \lttyping i s{\Ty l}{1 + l} \\ \lttyping[\Psi][\Gamma, x : \Elt l s \at l] i t{\Ty{l'}}{1 + l'}}
+  {\lttyping i{\PI l{l'} x s t}{\Ty{l \sqcup l'}}{1 + {(l \sqcup l')}}}
+
+  \inferrule
+  {\typing[L] l \Level \\\\ \lttyping i t{\Ty l}{1 + l}}
+  {\lttypwf i{\Elt l t}{l}}
+
+  \inferrule
+  {\lpjudge{\typeof i} \Gamma \\ \typing[L]l\Level}
+  {\lttypingd i{\Ty l}{1 + l}{2 + l}}
+
+  \inferrule
+  {\lpjudge \metalevel \Gamma \\ \lttypwf[\Psi][\Gamma][L,\vect\ell] 1 T l \\\\ |\vect \ell| > 0 \\ \typing[L,\vect\ell]l\Level}
+  {\lttypwf \metalevel {\UPI \ell l T}{\omega}}
+
+  \inferrule
+  {\lttypwf i T{l'} \\\\ \tyequiv[L]l{l'}\Level}
+  {\lttypwf i{T}{l}}
+\end{mathpar}
+Note that all type constructors with explicitly specified universe levels must not
+refer to $\omega$. %
+Indeed, $\omega$ level only appears when we validate a universe-polymorphic function
+and nowhere else. %
+Nor can we pass around a universe-polymorphic function. %
+Moreover, universe-polymorphic functions are only available at the highest layer, which is the
+layer with capability to do meta-programming and recursive intensional analysis. %
+This is because that universe variables must also be visible by the bindings in global
+contexts. %
+% In general, universe-polymorphic functions must only be available at the highest
+% layer, if \delamlang is extended to more than two layers. % 
+In the well-formedness rule for $\Nat$, we use a function $\typeof i$ which alters the
+layer, in which local contexts live. %
+This treatment is necessary to accommodate code promotions and permit computation in the
+local contexts and on the type level. %
+We give the actual definition of $\typeof i$ in \Cref{sec:dt:modal}.
+
+The equivalence between types is composed of three parts. %
+The first part is the PER rules. %
+\begin{mathpar}
+  \inferrule
+  {\lttypeq i{T}{T'}l}
+  {\lttypeq i{T'}{T}l}
+
+  \inferrule
+  {\lttypeq i{T}{T'}l \\ \lttypeq i{T'}{T''}l}
+  {\lttypeq i{T}{T''}l}
+\end{mathpar}
+Then we have the congruence rules, which simply straightforwardly propagate
+equivalence downwards:
+\begin{mathpar}
+  \inferrule
+  {\lpjudge{\typeof i} \Gamma}
+  {\lttyequivd i \Nat \Nat 0 {1}}
+
+  \inferrule
+  {\tyequiv[L]{l_1}{l_3}\Level \\ \tyequiv[L]{l_2}{l_4}\Level \\\\ \lttypeq i S{S'}{l_1} \\ \lttypeq[\Psi][\Gamma, x : S \at{l_1}] iT{T'}{l_2}}
+  {\lttypeq i{\PI{l_1}{l_2} x S T}{\PI{l_3}{l_4} x{S'}{T'}}{l_1 \sqcup l_2}}
+
+  \inferrule
+  {\tyequiv[L]{l_1}{l_3}\Level \\ \tyequiv[L]{l_2}{l_4}\Level \\\\
+    \lttyequiv i s{s'}{\Ty{l_1}}{1 + l_1} \\
+    \lttyequiv[\Psi][\Gamma, x : \Elt{l_1} s \at{l_1}] i t{t'}{\Ty{l_2}}{1 + l_2}}
+  {\lttyequiv i{\PI{l_1}{l_2} x s t}{\PI{l_3}{l_4} x{s'}{t'}}{\Ty{l_1 \sqcup l_2}}{1 + {(l_1 \sqcup l_2)}}}
+
+  \inferrule
+  {\tyequiv[L]{l}{l'}\Level \\ \lttyequiv i t{t'}{\Ty l}{1 + l}}
+  {\lttypeq i{\Elt l t}{\Elt{l'}{t'}}{l}}
+
+  \inferrule
+  {\lpjudge{\typeof i}\Gamma \\ \tyequiv[L]l{l'}\Level}
+  {\lttyequivd i{\Ty l}{\Ty{l'}}{1 + l}{2 + l}}
+
+  \inferrule
+  {\lttypwf[\Psi][\Gamma][L,\vect\ell] \metalevel T l \\
+    \lttypeq[\Psi][\Gamma][L,\vect\ell] \metalevel T{T'} l \\\\ |\vect \ell| > 0 \\ \tyequiv[L,\vect\ell]l{l'}\Level}
+  {\lttypeq \metalevel {\UPI \ell l T}{\UPI \ell{l'}{T'}}{\omega}}
+
+  \inferrule
+  {\lttypeq i T{T'}{l'} \\ \tyequiv[L]l{l'}\Level}
+  {\lttypeq i{T}{T'}{l}}
+\end{mathpar}
+
+Finally, we have a number of computation rules that decode terms into types:
+\begin{mathpar}
+  \inferrule
+  {\lpjudge{\typeof i} \Gamma}
+  {\lttypeq i \Nat{\Elt 0 \Nat} 0}
+
+  \inferrule
+  {\typing[L]l\Level \\ \lpjudge{\typeof i} \Gamma}
+  {\lttypeq i{\Ty l}{\Elt{1 + l}{\Ty l}}{1 + l}}
+  
+  \inferrule
+  {\typing[L]l\Level  \\ \typing[L]{l'}\Level \\
+    \lttyping i s{\Ty l}{1 + l} \\ \lttyping[\Psi][\Gamma, x : \Elt l s \at l] i t{\Ty{l'}}{1 + l'}}
+  {\lttypeq i{\PI l{l'} x{\Elt l s}{\Elt{l'} t}}{\Elt{l \sqcup l'}{\PI l{l'} x s t}}{l \sqcup l'}}
+\end{mathpar}
+We do not have an encoding for universe-polymorphic functions, so there is not a
+decoding rule for them.
+
+Then we move on to defining the typing rules for terms. %
+They are pretty much straightforward:
+\begin{mathpar}
+  \inferrule
+  {\lpjudge{\typeof i}\Gamma \\ x : T \at l \in \Gamma}
+  {\lttyping i x T l}
+
+  \inferrule
+  {\lpjudge{\typeof i}\Gamma}
+  {\lttyping i \ze \Nat 0}
+
+  \inferrule
+  {\lttyping i t \Nat 0}
+  {\lttyping i {\su t} \Nat 0}
+
+  \inferrule
+  {\typing[L]l\Level \\ \lttypwf[\Psi][\Gamma, x : \Nat \at 0] i M l \\
+    \lttyping i s {M[\ze/x]}l \\
+    \lttyping[\Psi][\Gamma, x : \Nat \at 0, y : M \at l] i {s'}{M[\su x/x]}l \\
+  \lttyping i t \Nat 0}
+  {\lttyping i{\ELIMN l{x.M}s{x,y. s'}t}{M[t/x]}{l}}
+
+  \inferrule
+  {\typing[L]l\Level  \\ \typing[L]{l'}\Level \\ \lttypwf i S l \\ \lttyping[\Psi][\Gamma, x : S \at l] i t{T}{l'}}
+  {\lttyping i{\LAM l{l'} x S t}{\PI l{l'} x S T}{l \sqcup l'}}
+
+  \inferrule
+  {\typing[L]l\Level  \\ \typing[L]{l'}\Level \\ \lttypwf i S l \\ \lttypwf[\Psi][\Gamma, x : S \at l] i{T}{l'} \\
+    \lttyping i t{\PI l{l'} x S T}{l \sqcup l'} \\ \lttyping i s S l}
+  {\lttyping i{\APP t l{l'} x S T s}{T[s/x]}{l'}}
+
+  \inferrule
+  {\lttyping[\Psi][\Gamma][L, \vect \ell]\metalevel{t}{T}{l} \\\\ |\vect \ell| > 0 \\ \typing[L,\vect\ell]l\Level}
+  {\lttyping \metalevel {\ULAM l \ell t}{\UPI \ell l T}{\omega}}
+
+  \inferrule
+  {\lttypwf[\Psi][\Gamma][L,\vect\ell] \metalevel T l \\
+    \lttyping \metalevel{t}{\UPI \ell l T}{\omega} \\\\ |\vect\ell| = |\vect l| > 0 \\ \forall l' \in \vect l ~.~ \typing[L]{l'}\Level}
+  {\lttyping \metalevel{\UAPP t l}{T[\vect l/\vect \ell]}{l[\vect l/\vect \ell]}}
+
+  \inferrule
+  {\lttyping i t{T'}l \\ \lttypeq{\typeof i}T{T'}l}
+  {\lttyping i t T l}
+
+  \inferrule
+  {\lttyping i tT{l'} \\ \tyequiv[L]l{l'}\Level}
+  {\lttyping i t T l}
+\end{mathpar}
+
+The equivalence rules for terms are also composed of three parts. %
+The PER rules are immediate:
+\begin{mathpar}
+  \inferrule
+  {\lttyequiv i t{t'}T l}
+  {\lttyequiv i{t'}tT l}
+
+  \inferrule
+  {\lttyequiv i t{t'}T l \\ \lttyequiv i{t'}{t''}T l}
+  {\lttyequiv i t{t''}T l}
+\end{mathpar}
+The congruence rules are naturally induced by the typing rules:
+\begin{mathpar}
+  \inferrule
+  {\lpjudge{\typeof i}\Gamma \\ x : T \at l \in \Gamma}
+  {\lttyequiv i x x T l}
+
+  \inferrule
+  {\lpjudge{\typeof i}\Gamma}
+  {\lttyequiv i \ze \ze \Nat 0}
+
+  \inferrule
+  {\lttyequiv i t{t'} \Nat 0}
+  {\lttyequiv i {\su t}{\su{t'}} \Nat 0}
+
+  \inferrule
+  {\tyequiv[L]l{l'}\Level \\ \lttypeq[\Psi][\Gamma, x : \Nat \at 0] i M{M'} l \\
+    \lttyequiv i {s_1}{s_3} {M[\ze/x]}l \\
+    \lttyequiv[\Psi][\Gamma, x : \Nat \at 0, y : M \at l] i{s_2}{s_4}{M[\su x/x]}l \\
+  \lttyequiv i t{t'} \Nat 0}
+  {\lttyequiv i{\ELIMN l{x.M}{s_1}{x,y. s_2}t}{\ELIMN{l'}{x.M'}{s_3}{x,y. s_4}{t'}}{M[t/x]}{l}}
+
+  \inferrule
+  {\tyequiv[L]{l_1}{l_3}\Level  \\ \tyequiv[L]{l_2}{l_4}\Level \\ \lttypwf i S{l_1} \\ \lttypeq i
+    S{S'}{l_1} \\
+    \lttyequiv[\Psi][\Gamma, x : S \at {l_1}] i t{t'}{T}{l_2}}
+  {\lttyequiv i{\LAM {l_1}{l_2} x S t}{\LAM {l_3}{l_4} x{S'}{t'}}{\PI l{l'} x S T}{l_1 \sqcup l_2}}
+
+  \inferrule
+  {\tyequiv[L]{l_1}{l_3}\Level  \\ \tyequiv[L]{l_2}{l_4}\Level \\ \lttypwf i S{l_1} \\ \lttypeq i S{S'}{l_1}
+    \\
+    \lttypeq[\Psi][\Gamma, x : S \at{l_1}] i{T}{T'}{l_2} \\
+    \lttyequiv i t{t'}{\PI {l_1}{l_2} x S T}{l_1 \sqcup l_2} \\ \lttyequiv i s{s'} S{l_1}}
+  {\lttyequiv i{\APP t {l_1}{l_2} x S T s}{\APP{t'} {l_3}{l_4} x {S'}{T'}{s'}}{T[s/x]}{l_2}}
+
+  \inferrule
+  {\lttyequiv[\Psi][\Gamma][L, \vect \ell]\metalevel{t}{t'}{T}{l} \\ |\vect \ell| > 0 \\ \tyequiv[L,\vect\ell]l{l'}\Level}
+  {\lttyequiv \metalevel {\ULAM l \ell t}{\ULAM {l'} \ell{t'}}{\UPI \ell l T}{\omega}}
+
+  \inferrule
+  {\lttypwf[\Psi][\Gamma][L,\vect\ell] \metalevel T l \\
+    \lttyequiv \metalevel{t}{t'}{\UPI \ell l T}{\omega} \\ |\vect\ell| = |\vect l| = |\vect
+    l'| > 0 \\
+    \forall 0 \le n < |\vect l| ~.~ \tyequiv[L]{\vect l(n)}{\vect l'(n)}\Level}
+  {\lttyequiv \metalevel{\UAPP t l}{t'~\$~\vect l'}{T[\vect l/\vect \ell]}{l[\vect l/\vect \ell]}}
+
+  \inferrule
+  {\lttyequiv i t{t'}{T'}l \\ \lttypeq{\typeof i}T{T'}l}
+  {\lttyequiv i t {t'} T l}
+
+  \inferrule
+  {\lttyequiv i t{t'}T{l'} \\ \tyequiv[L]l{l'}\Level}
+  {\lttyequiv i t{t'}T l}
+\end{mathpar}
+
+\subsection{Meta-programming Modalities}\labeledit{sec:dt:modal}
+
+In this part, we introduce the modalities for meta-programming and intensional
+analysis. %
+We use the $\square$ modality to represent the type of
+code and we use layers to control the computational behaviors of the type theory. %
+However, there are two points that we need to pay attention to:
+\begin{enumerate}
+\item Previously, we have discussed code promotions. %
+  Code promotions imply that we must permit computation of code on the type level. %
+  This further implies that we must introduce an intermediate layer between layer for code and
+  that for meta-programs, which restricts the language to still MLTT but permits computation. 
+\item Due to Tarski-style universes, we must introduce two kinds of contextual types,
+  one for types and one for terms. %
+  As seen in the syntax of types and terms, they are mutually defined, so the
+  recursive principles for code of types and terms must also be mutual.
+\end{enumerate}
+
+\begin{table}[]
+\begin{tabular}{|l|l|l|l|l|}
+\hline
+Layer            & $\varlevel$ & $\codelevel$  & $\proglevel$  & $\metalevel$                          \\ \hline
+Language         & Variables only &MLTT & MLTT & MLTT extended with meta-programming \\ \hline
+Computation      & No & No   & Yes  & Yes                          \\ \hline
+Meta-programming & No & No   & No  & Yes                          \\ \hline
+Layer of types   & $\proglevel$ & $\proglevel$  & $\proglevel$  & $\metalevel$                          \\ \hline
+\end{tabular}
+\caption{Features at each layer}\labeledit{tab:dt:feat}
+\end{table}
+
+Having set up the basic theme, let us begin with the syntax of the extension to MLTT:
+\begin{alignat*}{2}
+  i &:= &&\ \varlevel \sep \codelevel \sep \proglevel \sep \metalevel \tag{Layers} \\
+  U & && \tag{Global variables as types} \\
+  u & && \tag{Global variables as terms} \\
+  % u_\# & && \tag{Global variables as variables} \\
+  k & && \tag{Natural numbers, $\N$} \\
+  \delta &:=&& \cdot_{g?}^k \sep \wk_g^k \sep \delta, t/x \tag{Local substitutions} \\
+  B &:=&&\ g : \Ctx \sep U : \DTyp i l \sep u : \DTrm i T l
+          \tag{Global bindings} \\
+  \Phi, \Psi &:= &&\ \cdot \sep \Phi, B \tag{Global contexts} \\
+  S, T & := && \cdots \sep U^\delta \sep \CPI g l T \sep \TPI U l{l'}T \sep \CTyp l \sep \CTrm T l \\
+  s, t & := && \cdots \sep u^\delta \sep \CLAM l g t \sep \CAPP t \Gamma
+               \sep \TLAM l{l'} U t \sep \TAPP t T
+               \sep \boxit T \sep \boxit t \\
+    & && \sep \LETBTYP{l'}l\Gamma{x_T. M}{U}{t'}t \sep \LETBTRM{l'}l\Gamma
+         T{x_t. M}{u}{t'}t \\
+    & && \sep \ELIMTYP{l_1}{l_2}Mbl\Gamma t \sep \ELIMTRM{l_1}{l_2}Mbl\Gamma T t \\
+  \vect M & := &&\ (\ell,g,x_T. M_\Typ)~(\ell,g,U_T,x_t. M_\Trm)
+                  \tag{Two motives for mutual recursion of code} \\
+  \vect b &:= && \vect{b}_\Typ~\vect{b}_\Trm
+                 \tag{Branches for mutual recursion of code} \\
+  b_\Typ &:= &&\ (g. t_\Nat) \sep (\ell,\ell',g, U_S,U_T,x_S,x_T. t_\Pi) \sep (\ell,g. t_{\Se})
+                \sep (\ell,g,u_t,x_t. t_\tEl)
+                       \tag{Branches for code of types} \\
+  b_\Trm &:= &&\ (\ell,g,U_T,u_x. t_x) \sep (g.t'_\Nat) \sep (\ell,\ell',g,u_s,u_t,x_s,x_t.t'_\Pi) \sep
+                (\ell,g.t'_\Se) 
+                \tag{Branches for code of terms} \\
+    & && \sep (g.t_\ze) \sep (g,u_t,x_t.t_{\tsucc}) \sep
+         (\ell,g,U_M,u_s,u_{s'},u_t,x_M,x_s,x_{s'},x_t.t_{\telimn}) \\
+    & && \sep (\ell,\ell',g,U_S,U_T,u_t,x_S,x_t.t_\lambda) \sep (\ell,\ell',g,U_S,U_T,u_t,u_s,x_S,x_T,x_t,x_s.t_\tapp)
+\end{alignat*}
+Following the layering principle before, we index our judgments with an layer index
+$i$. %
+We include four layers and these layers are summarized in \Cref{tab:dt:feat}. %
+To elaborate, we begin with layer $\varlevel$, which is the layer that contains only
+variables. %
+This layer is needed to describe the base case of the recursive principles for code
+when a local variable is hit. %
+Layer $\varlevel$ (for variables) is \emph{not} available for most rules given in
+\Cref{sec:dt:mltt-rules} other than the local variable rule and its congruence. %
+We will follow this convention for the rest of this report, unless we specifically
+state that layer $\varlevel$ is available for particular rules. %
+Layer $\codelevel$ (for code) is the layer for code of MLTT. %
+This layer is akin to layer $0$ in \Cref{sec:cv,sec:cv:logrel}, where static code
+resides and no computation is allowed. %
+However, in order to capture code promotions, we must introduce another layer, $\proglevel$ (for
+programs), to permit computation of MLTT \emph{programs} in local contexts and on the
+type level. %
+This layer is especially crucial in the recursive principle for terms for the argument
+$T$ where code promotions are implicitly handled by definitional equivalence. %
+However, no meta-programs are allowed at layer $\proglevel$; in other words, the language at
+layer $\proglevel$ is virtually vanilla MLTT. %
+Therefore, unlike simple types, there are two layers in \delamlang permitting
+computation. %
+At last, we have layer $\metalevel$ (for meta-programs) where we have the power to do
+meta-programming. %
+At this layer, we have access to not only universe-polymorphic functions, but also
+contextual types and recursive principles for code. %
+All meta-functions must reside at this layer. %
+All layers are related by a strict order of $\varlevel < \codelevel < \proglevel < \metalevel$. %
+
+The reason to introduce layer $\proglevel$ becomes obvious by considering which layer the type
+of a given MLTT term should live in. %
+For instance, given a judgment $\lttyping \codelevel t T l$, we know $t$ lives at layer $\codelevel$ as
+code, but what about $T$? %
+Since $T$ is a type and we want $T$ to compute, it cannot live at layer $\codelevel$, but also
+not $\metalevel$ as it must be a well-formed pure MLTT type. %
+Indeed, $T$ ought to live at layer $\proglevel$, i.e. $\lttypwf \proglevel T l$. %
+What about $\lttyping \proglevel t T l$? %
+In this case, $t$ lives at layer $\proglevel$. %
+Since $T$ must still be a well-formed pure MLTT type and compute, we must have
+$\lttypwf \proglevel T l$. %
+The type of a term living at layer $\metalevel$ simply also lives at layer $\metalevel$.  %
+The relation of layers of terms and types is summarized by the following function:
+\begin{align*}
+  \typeof \varlevel &:= \proglevel \\
+  \typeof \codelevel &:= \proglevel \\
+  \typeof \proglevel &:= \proglevel \\
+  \typeof \metalevel &:= \metalevel
+\end{align*}
+The judgment $\compt i$ quantifies computable layers:
+\begin{mathpar}
+  \inferrule
+  { }
+  {\compt \proglevel}
+
+  \inferrule
+  { }
+  {\compt \metalevel}
+\end{mathpar}
+
+Then we extend our system with five types, following~\Cref{sec:cv}:
+\begin{itemize}
+\item $U^\delta$ is a global variable for types. %
+  Due to separation of types and terms, we need a way to refer to code of types on the
+  type level. 
+\item $\CPI g l T$ is a meta-function type for introducing a context variable $g$
+  to the global context. %
+  We also have this in~\Cref{sec:cv}.
+\item $\TPI U l{l'}T$ is similarly a meta-function type for introducing a type at
+  layer $\proglevel$ to the global context. %
+  This type is introduced to provide an index for the contextual type for terms to be
+  discussed in the second next item.
+\item $\CTyp l$ is a contextual type for types in MLTT. %
+  It represents a static code of types. %
+\item Finally, $\CTrm T l$ is a contextual type for terms in MLTT. %
+  This $T$ may refer to the index type at layer $\proglevel$ introduced by meta-functions above. 
+\end{itemize}
+
+Since there are two kinds of contextual types now, there four kinds of bindings in a
+global context:
+\begin{itemize}
+\item context variables $g : \Ctx$ representing a local context;
+\item global variables $U : \DTyp i l$ representing a type in MLTT (note that $i \in
+  \{\codelevel, \proglevel\}$);
+\item global variables $u : \DTrm i T l$ representing a term in MLTT (note that
+  $i \in \{\varlevel, \codelevel\}$ and there is no way to introduce a term at layer $\proglevel$ to global
+  context).
+\end{itemize}
+
+Now, let us move on to discuss the extended terms. %
+\begin{itemize}
+\item First, we also introduce global variables and local substitutions. %
+  Their syntax is identical to one in \Cref{sec:cv}. 
+\item Then we have the introduction and elimination forms for meta-functions of
+  context variables, $\CLAM l g t$ and $\CAPP t \Gamma$. 
+\item Similarly, we have the introduction and elimination forms for meta-functions of
+  types, $\TLAM l{l'} U t$ and $\TAPP t T$. 
+\item Then we have the introduction forms of two kinds of contextual types.
+\item Following \citet[Sec. 4]{hu2024layered}, we have two elimination forms for each kind of
+  contextual types, $\tletbox$ and the recursive principles. %
+  Same as before, $\tletbox$ is responsible for code composition and evaluation. %
+  Intentional analyses are done through the recursive principles. %
+  In \delamlang, $\tletbox$ is a bit more complex as it requires a specified motive. %
+  We alter the syntax a little bit to make $\tletbox$ more like an operation:
+  $\LETBTYP{l'}l\Gamma{x_T. M}{u}{t'}t$ and $\LETBTRM{l'}l\Gamma T{x_t. M}{u}{t'}t$.
+
+\item Finally, we extend the recursive principles for code. %
+  As indicated before, code of types and terms in MLTT are mutually defined, so the
+  recursive principles must also be mutual. %
+  The two recursive principles $\ELIMTYP{l_1}{l_2}Mbl\Gamma t$ and
+  $\ELIMTRM{l_1}{l_2}Mbl\Gamma T t$ require two motives, one for types and one for terms,
+  and contain all branches for code of types and terms. %
+  Their difference is what exactly eventually being eliminated, as indicated by their
+  subscript. %
+  The branches $\vect b$ are a list of branches $\vect b_\Typ$ and $\vect b_\Trm$,
+  where $\vect b_\Typ$ and $\vect b_\Trm$ contain \emph{all} branches for types and
+  terms, respectively. %
+
+\end{itemize}
+In the branches, there are four kinds of variables.
+\begin{itemize}
+\item There is a globally introduced context variable $g$ which represents the
+  local context where the code lives.
+\item There could be some universe variables that are used to tell the universe levels
+  of some types.
+\item There could be some global variables $u$ and $U$ represent the sub-structures of
+  a given case. %
+  The subscripts correspond tightly to the syntax given in \Cref{sec:dt:syntax}.
+\item For each sub-structure, there is one corresponding recursive variable $x$. %
+  Again, the subscripts correspond tightly to the sub-structure. 
+\end{itemize}
+
+\subsection{More Typing and Equivalence Judgments}
+
+In this section, we specify the remainder of the rules. %
+We begin with the well-formedness rule for the global contexts. %
+Recall that layer $\varlevel$ does not apply for most rules below, unless the otherwise is
+specifically stated.
+\begin{mathpar}
+  \inferrule
+  { }
+  {\judge[L]\cdot}
+
+  \inferrule
+  {\judge[L]\Psi}
+  {\judge[L]{\Psi, g : \Ctx}}
+
+  \inferrule
+  {\judge[L]\Psi \\ \lpjudge \proglevel \Gamma \\\\ \typing[L]l\Level \\ i \in \{\codelevel, \proglevel\}}
+  {\judge[L]{\Psi, U : \DTyp i l}}
+
+  \inferrule
+  {\judge[L]\Psi \\ \lttypwf \proglevel T l \\\\ \typing[L]l\Level \\ i \in \{\varlevel, \codelevel\}}
+  {\judge[L]{\Psi, u : \DTrm i T l}}
+\end{mathpar}
+The judgments for local substitutions follow very closely \Cref{sec:cv}. %
+In these rules, $i$ might take $\varlevel$. %
+This permission has a particular effect on the step case, which forces all terms in a
+local substitution must be variables. %
+\begin{mathpar}
+  \inferrule
+  {\lpjudge{\typeof i}\Gamma \\\\ \text{$\Gamma$ ends with $\cdot$} \\ |\Gamma| = k}
+  {\ltsubst i {\cdot^k}{\cdot} \\ \ltsubeq i {\cdot^k}{\cdot^k}{\cdot}}
+
+  \inferrule
+  {\lpjudge{\typeof i}\Gamma \\ g : \Ctx \in \Psi \\\\ \text{$\Gamma$ ends with $g$} \\ |\Gamma| = k}
+  {\ltsubst i {\cdot_g^k}{\cdot} \\ \ltsubeq i {\cdot_g^k}{\cdot_g^k}{\cdot}}
+
+  \inferrule
+  {\lpjudge{\typeof i}\Gamma \\ g : \Ctx \in \Psi \\ \text{$\Gamma$ ends with $g$} \\ |\Gamma| = k}
+  {\ltsubst i {\wk_g^k}{g} \\ \ltsubeq i {\wk_g^k}{\wk_g^k}{g}}
+
+  \inferrule
+  {\typing[L]l\Level \\ \ltsubst i {\delta}{\Delta} \\ \lttypwf[\Psi][\Delta]{\typeof i}T l \\ \lttyping i {t}{T[\delta]} l}
+  {\ltsubst i {\delta, t/x}{\Delta, x : T \at l}}
+
+  \inferrule
+  {\typing[L]l\Level \\ \ltsubeq i {\delta}{\delta'}{\Delta} \\ \lttypwf[\Psi][\Delta]{\typeof i}T l \\
+    \lttyping i {t}{T[\delta]} l \\ \lttyping i {t'}{T[\delta]} l \\ \lttyequiv i {t}{t'}{T[\delta]} l}
+  {\ltsubeq i {\delta, t/x}{\delta', t'/x}{\Delta, x : T \at l}}
+\end{mathpar}
+In the step case for equivalence above, we ask for two redundant premises of the
+well-typedness of $t$ and $t'$ to provide an early presupposition for equivalence of
+local substitutions. %
+We will need this early presupposition in \Cref{lem:dt:lsubst-eq}. %
+It breaks the dependency loop so that reaching the full presupposition lemma becomes
+viable. 
+
+Now let us consider the extended types and their equivalence.
+\begin{mathpar}
+  \inferrule
+  {\lpjudge{\typeof i}\Gamma \\ U : \DTyp[\Delta]{i'} l \in \Psi \\ i' \in \{\codelevel, \proglevel\} \\ i' \le i \\ \ltsubst i \delta \Delta}
+  {\lttypwf i{U^\delta}{l}}
+
+  \inferrule
+  {\lpjudge \metalevel\Gamma \\\\ \lttypwf[\Psi, g : \Ctx] \metalevel T l \\ \typing[L]l\Level}
+  {\lttypwf \metalevel{\CPI g l T}{l}}
+
+  \inferrule
+  {\lpjudge \metalevel\Gamma \\ \lttypwf[\Psi, U : \DTyp[\Delta] \proglevel l] \metalevel T{l'} \\\\ \typing[L]l\Level \\ \typing[L]{l'}\Level}
+  {\lttypwf \metalevel{\TPI U[\Delta] l{l'} T}{l'}}
+
+  \inferrule
+  {\lpjudge \metalevel\Gamma \\ \lpjudge \proglevel \Delta \\ \typing[L]l\Level}
+  {\lttypwf \metalevel{\CTyp[\Delta]l}{0}}
+
+  \inferrule
+  {\lpjudge \metalevel\Gamma \\ \lttypwf[\Psi][\Delta] \proglevel T l \\ \typing[L]l\Level}
+  {\lttypwf \metalevel{\CTrm[\Delta]T l}{0}}
+\end{mathpar}
+Notice that contextual types always live on the universe level $0$. %
+This is fine because the meta-language at layer $\metalevel$ is strictly more expressive than
+that at layer $\codelevel$, i.e. \mltt. %
+Therefore, the universe level $0$ is large enough to encode all intrinsically typed
+syntax of \mltt without causing any size issue. %
+This intuition is further justified in the logical relations, where the semantics of
+contextual types need not to refer to other semantics at layer $\metalevel$, so contextual
+types can safely reside on level $0$. %
+Similarly, meta-functions with open types as inputs also do not need to be concerned
+about the universe levels of the types. %
+
+The additional equivalence rules are just their congruence rules:
+\begin{mathpar}
+  \inferrule
+  {\lpjudge{\typeof i}\Gamma \\ U : \DTyp[\Delta]{i'} l \in \Psi \\ i' \in \{\codelevel, \proglevel\} \\ i' \le i \\ \ltsubeq i \delta{\delta'} \Delta}
+  {\lttypeq i{U^\delta}{U^{\delta'}}{l}}
+
+  \inferrule
+  {\lpjudge \metalevel\Gamma \\ \lttypeq[\Psi, g : \Ctx] \metalevel T{T'} l \\ \tyequiv[L]l{l'}\Level}
+  {\lttypeq \metalevel{\CPI g l T}{\CPI g{l'}{T'}}{l}}
+
+  \inferrule
+  {\lpjudge \metalevel\Gamma \\ \lpequiv \proglevel \Delta{\Delta'} \\ \lttypeq[\Psi, U : \DTyp[\Delta] \proglevel l] \metalevel T{T'}{l'} \\ \tyequiv[L]{l_1}{l_3}\Level \\ \tyequiv[L]{l_2}{l_4}\Level}
+  {\lttypeq \metalevel{\TPI U[\Delta]{l_1}{l_2}T}{\TPI U[\Delta']{l_3}{l_4}{T'}}{l_2}}
+
+  \inferrule
+  {\lpjudge \metalevel\Gamma \\ \lpequiv \proglevel \Delta{\Delta'} \\ \tyequiv[L]l{l'}\Level}
+  {\lttypeq \metalevel{\CTyp[\Delta]l}{\CTyp[\Delta']{l'}}{0}}
+
+  \inferrule
+  {\lpjudge \metalevel\Gamma \\ \lpequiv \proglevel \Delta{\Delta'} \\ \lttypeq[\Psi][\Delta] \proglevel T{T'} l \\ \tyequiv[L]l{l'}\Level}
+  {\lttypeq \metalevel{\CTrm[\Delta]T l}{\CTrm[\Delta']{T'}{l'}}{0}}
+\end{mathpar}
+
+Next, we list the extended typing judgments:
+\begin{mathpar}
+  \inferrule
+  {\lpjudge{\typeof i}\Gamma \\ u : \DTrm[\Delta]{i'}T l \in \Psi \\ i' \in \{\varlevel, \codelevel\} \\ i \in
+    \{\varlevel, \codelevel, \proglevel, \metalevel\} \\ i' \le i \\ \ltsubst i \delta \Delta}
+  {\lttyping i{u^\delta}{T[\delta]}{l}}
+
+  \inferrule
+  {\lpjudge \metalevel\Gamma \\\\ \lttyping[\Psi, g : \Ctx]\metalevel t{T}{l} \\ \typing[L]l\Level}
+  {\lttyping \metalevel{\CLAM l g t}{\CPI g l T}{l}}
+
+  \inferrule
+  {\lttypwf[\Psi, g : \Ctx] \metalevel T l  \\\\ \lttyping \metalevel{t}{\CPI g l T}{l} \\ \lpjudge \proglevel \Delta}
+  {\lttyping \metalevel{\CAPP t \Delta}{T[\Delta/g]}{l}}
+
+  \inferrule
+  {\lpjudge \metalevel\Gamma \\ \lttyping[\Psi, U : \DTyp[\Delta] \proglevel l]\metalevel{t}{T}{l'} \\ \typing[L]{l}\Level \\ \typing[L]{l'}\Level}
+  {\lttyping \metalevel{\TLAM{l}{l'}U t}{\TPI U[\Delta] l{l'} T}{l'}}
+
+  \inferrule
+  {\lttypwf[\Psi, U : \DTyp[\Delta] \proglevel l] \metalevel {T'}{l'} \\ \lttyping \metalevel{t}{\TPI U[\Delta] l{l'}{T'}}{l'} \\ \lttypwf[\Psi][\Delta] \proglevel{T} l}
+  {\lttyping \metalevel{\TAPP t{T}}{T'[T/U]}{l'}}
+
+  \inferrule
+  {\lpjudge \metalevel \Gamma \\ \lttypwf[\Psi][\Delta]\codelevel T l}
+  {\lttyping \metalevel{\boxit T}{\CTyp[\Delta] l}{0}}
+
+  \inferrule
+  {\lpjudge \metalevel \Gamma \\ \lttyping[\Psi][\Delta]\codelevel t T l}
+  {\lttyping \metalevel{\boxit t}{\CTrm[\Delta] T l}{0}}
+
+  \inferrule
+  {\typing[L]{l'}\Level \\ \typing[L]l\Level \\ \lpjudge \proglevel \Delta \\
+    \lttyping \metalevel{t}{\CTyp[\Delta]l}{1 + l} \\
+    \lttypwf[\Psi][\Gamma,x_T : \CTyp[\Delta]l \at{0}]\metalevel{M}{l'} \\
+  \lttyping[\Psi, U : \DTyp[\Delta]\codelevel l]\metalevel{t'}{M[\boxit U/x_T]}{l'}}
+  {\lttyping \metalevel{\LETBTYP{l'}l \Delta{x_T.M}{U}{t'}t}{M[t/x_T]}{l'}}
+
+  \inferrule
+  {\typing[L]{l'}\Level \\ \typing[L]l\Level \\ \lpjudge \proglevel \Delta \\
+    \lttypwf[\Psi][\Delta]\proglevel T l \\
+    \lttyping \metalevel{t}{\CTrm[\Delta] T l}{l} \\
+    \lttypwf[\Psi][\Gamma,x_t : \CTrm[\Delta] T l \at{0}]\metalevel{M}{l'} \\
+  \lttyping[\Psi, u : \DTrm[\Delta]\codelevel T l]\metalevel{t'}{M[\boxit u/x_t]}{l'}}
+  {\lttyping \metalevel{\LETBTRM{l'}l \Delta T{x_t.M}{u}{t'}t}{M[t/x_t]}{l'}}
+\end{mathpar}
+For the typing rule of $\CAPP t \Delta$, we require $\Delta$ to be a context at layer
+$\proglevel$. %
+This is because a context variable represents a local context for an MLTT term. %
+A local context for an MLTT term necessarily lives at layer $\proglevel$, so we can only
+substitute a context living at layer $\proglevel$ with a context variable. %
+
+Now we shall mentally prepare ourselves to write down the typing rules for the two
+recursive principles. %
+They are conceptually easy but simply verbose to write down. %
+We will only write down the rules for this time for completeness and in later
+discussions, we simply omit the premises. %
+% As both recursive principles share most premises, we write them
+Our goal is to provide the following conclusions:
+\begin{gather*}
+  \lttyping \metalevel {\ELIMTYP{l_1}{l_2}M b{l'}\Delta t}{M_\Typ[l'/l,\Delta/g,t/x_T]}{l_1} \\
+  \lttyping \metalevel {\ELIMTRM{l_1}{l_2}M b{l'}\Delta T t}{M_\Trm[l'/l,\Delta/g,T/U_T,t/x_t]}{l_2}
+\end{gather*}
+We group the premises into different parts. %
+First we give the premises related to the motives:
+\begin{mathpar}
+  \typing[L]{l_1}\Level
+
+  \typing[L]{l_2}\Level
+
+  \lttypwf[\Psi, g : \Ctx][\Gamma, x_T : \CTyp[g]\ell \at{0}][L,\ell] \metalevel{M_\Typ}{l_1}
+
+  \lttypwf[\Psi, g : \Ctx, U_T : \DTyp[g]\proglevel\ell][\Gamma, x_t : \CTrm[g]{U_T^\id}\ell \at{0}][L,\ell] \metalevel{M_\Trm}{l_2}
+\end{mathpar}
+where $\vect M =  (\ell,g,x_T. M_\Typ)~(\ell,g,U_T,x_t. M_\Trm)$. %
+In the premises above, we give the well-formedness of two motives for code of types
+and terms, respectively. %
+Let us call this group $G_M$. %
+We move on to considering the branches. %
+We first consider the branches for code of types. %
+It is relatively easy as there are only four cases:
+\begin{itemize}
+\item 
+  \[
+    \lttyping[\Psi, g : \Ctx]\metalevel{t_\Nat}{M_\Typ[0/\ell,g/g,\boxit \Nat/x_T]}{l_1}
+  \]
+\item We explain this premise more carefully. Consider some code of type
+  $\boxit{\PI{l}{l'}x S T}$, then we have the matching premise
+  \[
+    \lttyping[\Psi'][\Gamma'][L,\ell,\ell']\metalevel{t_\Pi}{M_\Typ[\ell\sqcup \ell'/\ell,g/g,\boxit{\PI{\ell}{\ell'}x{U_S^\id}{U_T^\id}}/x_T]}{l_1}
+  \]
+  where
+  \begin{align*}
+    \Psi' :=&~ \Psi \\
+    ,&~ g : \Ctx \\
+    ,&~U_S : \DTyp[g] \codelevel \ell
+       \tag{the global variable for the input type, which captures $S$}\\
+    ,&~U_T :\DTyp[g,x:U_S^\id \at{\ell}]\codelevel {\ell'}
+       \tag{the global variable for the output type, which captures $T$; note that it
+       lives in an extended local context}
+  \end{align*}
+  and
+  \begin{align*}
+    \Gamma' :=&~ \Gamma \\
+    ,&~ x_S: M_\Typ[\ell/\ell,g/g,\boxit{U_S^\id}/x_T] \at{l_1}
+       \tag{the recursive call for $S$ of type $M$ that is properly substituted}\\
+    ,&~x_T:M_\Typ[\ell'/\ell,(g,x:U_S^\id \at{\ell})/g,\boxit{U_T^\id}/x_T]\at {l_1}
+       \tag{the recursive call for $T$; see how the local context is extended}
+  \end{align*}
+\item
+  Further,
+  \[
+    \lttyping[\Psi,g:\Ctx][\Gamma][L,\ell]\metalevel{t_\Se}{M_\Typ[1 + \ell/\ell,g/g,\boxit{\Ty \ell}/x_T]}{l_1}
+  \]
+\item
+  \[
+    \lttyping[\Psi,g:\Ctx, u_t:\DTrm[g]\codelevel{\Ty \ell}{1 + \ell}][\Gamma'][L,\ell]\metalevel{t_\tEl}{M_\Typ[\ell/\ell,g/g,\boxit{(\Elt \ell{u_t^\id})}/x_T]}{l_1}
+  \]
+  where
+  \[
+    \Gamma' := \Gamma, x_t : M_\Trm[1 + \ell/\ell,g/g,\Ty \ell/U_T,\boxit{u_t^\id}/x_t]  \at{l_2}
+  \]
+\end{itemize}
+Let us call this group $G_\Typ$. 
+
+Lastly, let us consider the nine cases for terms.
+\begin{itemize}
+\item
+  \[
+    \lttyping[\Psi, g : \Ctx,U_T : \DTyp[g] \proglevel \ell, u_x : \DTrm[g]\varlevel{U_T^\id}{\ell}][\Gamma][L,\ell]\metalevel{t_x}{M_\Trm[\ell/\ell,g/g,U_T^\id/U_T,\boxit u_x/x_t]}{l_2}
+  \]
+  In this case, the type of the variable is captured by $U_T$. %
+  It has to live at layer $\proglevel$ because it is not a sub-structure of the variable,
+  i.e. it is obtained externally, from the indexing arguments of the recursive principles. %
+\item
+  \[
+    \lttyping[\Psi, g : \Ctx]\metalevel{t'_\Nat}{M_\Trm[1/\ell,g/g,\Ty 0/U_T,\boxit \Nat/x_t]}{l_2}    
+  \]
+\item
+  \[
+    \lttyping[\Psi'][\Gamma'][L,\ell,\ell']\metalevel{t'_\Pi}{M_\Trm[1 +{(\ell\sqcup \ell')}/\ell,g/g,\Ty{\ell\sqcup \ell'}/U_T,\boxit{\PI{\ell}{\ell'}x{u_s^\id}{u_t^\id}}/x_t]}{l_2}
+  \]
+  where
+  \[
+    \Psi' := \Psi, g : \Ctx,u_s : \DTrm[g] \codelevel {\Ty \ell}{1 + \ell},u_t :\DTrm[g,x:\Elt{\ell}{u_s^\id}]\codelevel{\Ty{\ell'}} {1 + \ell'}
+  \]
+  and
+  \begin{align*}
+    \Gamma' :=&~ \Gamma \\
+    ,&~ x_s: M_\Trm[1 + \ell/\ell,g/g,\Ty \ell/U_T,\boxit{u_s^\id}/x_t] \at{l_2} \\
+    ,&~ x_t:M_\Trm[1 + \ell'/\ell,(g,x:\Elt{\ell}{u_s^\id})/g,\Ty{\ell'}/U_T,\boxit{u_t^\id}/x_t]\at {l_2}
+  \end{align*}
+  Notice that this premise for the encoding of $\Pi$ is almost identical to the
+  premise in $G_\Typ$ above, with necessary adjustment to return the proper motive
+  $M_\Trm$ instead. %
+  
+\item
+  \[
+    \lttyping[\Psi,g:\Ctx][\Gamma][L,\ell]\metalevel{t'_\Se}{M_\Trm[{2 + \ell}/\ell,g/g, \Ty{1 + \ell}/U_T,\boxit{\Ty \ell}/x_T]}{l_2}
+  \]
+\item
+  \[
+    \lttyping[\Psi, g : \Ctx]\metalevel{t_\ze}{M_\Trm[0/\ell,g/g,\Nat/U_T,\boxit \ze/x_t]}{l_2}    
+  \]
+\item 
+  \[
+    \lttyping[\Psi, g : \Ctx,u_t: \DTrm[g]\codelevel\Nat 0][\Gamma']\metalevel{t_\tsucc}{M_\Trm[0/\ell,g/g,\Nat/U_T,\boxit{(\su{u_t^\id})}/x_t]}{l_2}    
+  \]
+  where $\Gamma' := \Gamma, x_t:M_\Trm[0/\ell,g/g,\Nat/U_T,\boxit{u_t^\id}/x_t] \at{l_2}$.
+\item We carefully explain this premise for the code of the elimination of natural
+  numbers. %
+  Recall that the syntax is $\ELIMN l{x.M}{s}{x,y.s'}t$. %
+  We use corresponding global variables to capture the sub-structures. 
+  \[
+    \lttyping[\Psi'][\Gamma'][L,\ell]\metalevel{t_{\telimn}}{M_\Trm[\ell/\ell,g/g,U_M^{\id_g,u_t^\id/x}/U_T,\ELIMN \ell{x.U_M^{\id_{g,x}}}{u_s^{\id_g}}{x,y. u_{s'}^{\id_{g,x,y}}}{u_t^{\id_g}}/x_t]}{l_2}
+  \]
+  where
+  \begin{align*}
+    \Psi' :=&~ \Psi \\
+    ,&~g : \Ctx \\
+    ,&~U_M : \DTyp[g,x:\Nat\at 0]\codelevel \ell
+       \tag{the global variable for the motive; it lives at layer $\codelevel$ as it is a sub-structure}\\
+    ,&~u_s : \DTrm[g]\codelevel{U_M^{\id_g,\ze/x}}\ell
+       \tag{the code for the base case; its type refers to the code of the motive with
+       $x$ for $\ze$}\\
+    ,&~u_{s'} : \DTrm[g, x : \Nat\at 0, y : U_M^{\id_{g,x}} \at
+       \ell]\codelevel{U_M^{\id_g,\su{x}/x}}\ell
+       \tag{the code for the step case; the local context is extended with the
+       predecessor and the recursive call} \\
+    ,&~u_t : \DTrm[g]\codelevel{\Nat}0
+       \tag{the code for the scrutinee}
+  \end{align*}
+  and
+  \begin{align*}
+    \Gamma' :=&~\Gamma \\
+    ,&~x_M : M_\Typ[\ell/\ell,(g,x:\Nat\at 0)/g,\boxit{U_M^{\id_{g,x}}}/x_T] \at{l_1}
+       \tag{since the motive is a sub-structure, a recursive call is available}\\
+    ,&~x_s : M_\Trm[\ell/\ell,g/g,U_M^{\id_g,\ze/x}/U_T,\boxit{u_s^{\id_g}}/x_t] \at{l_2}
+       \tag{the recursive call for the base case; recall that $U_T$ is the type of
+       $x_t$,}\\
+    \tag{which in this case is also the type of $u_s$} \\
+    ,&~x_{s'} : M_\Trm[\ell/\ell,(g, x : \Nat\at 0, y : U_M^{\id_{g,x}} \at
+       \ell)/g,U_M^{\id_g,\su x/x}/U_T,\boxit{u_{s'}^{\id_{g,x,y}}}/x_t] \at{l_2}
+       \tag{the recursive call for the step case; similar logic applies but more longer}\\
+    ,&~x_t : M_\Trm[\ell/\ell,g/g,\Nat/U_T,\boxit{u_t^\id}/x_t] \at{l_2}
+       \tag{the recursive call for the scrutinee}
+  \end{align*}
+\item
+  \[
+    \lttyping[\Psi'][\Gamma'][L,\ell,\ell']\metalevel{t_\lambda}{M_\Trm[\ell\sqcup \ell'/\ell,g/g,\PI
+      \ell{\ell'}x{U_S^{\id_g}}{U_T^{\id_{g,x}}}/U_T, \boxit{\LAM \ell{\ell'} x{U_S^{\id_g}}{u_t^{\id_{g,x}}}}/x_t]}{l_2}
+  \]
+  where
+  \begin{align*}
+    \Psi' :=&~ \Psi \\
+    ,&~g : \Ctx \\
+    ,&~U_S : \DTyp[g]\codelevel \ell \\
+    ,&~U_T : \DTyp[g, x : U_S^{\id_g} \at \ell]\proglevel{\ell'} \\
+    ,&~u_t : \DTrm[g, x : U_S^{\id_g} \at \ell]\codelevel{U_T^{\id_{g,x}}}{\ell'}
+  \end{align*}
+  and
+  \begin{align*}
+    \Gamma' :=&~\Gamma \\
+    ,&~x_S : M_\Typ[\ell/\ell,g/g,\boxit{U_S^{\id_g}}/x_T] \at{l_1} \\
+    ,&~x_t : M_\Trm[\ell'/\ell,(g,x : U_S^{\id_g} \at \ell)/g,U_T^{\id_{g,x}}/U_T,\boxit{u_t^{\id_{g,x}}}/x_t] \at{l_2}
+  \end{align*}
+  Note that here $U_T$ is at layer $\proglevel$. %
+  This is because the return type of not a sub-structure in a function abstraction
+  $\LAM l{l'} x S t$, and therefore it must be captured externally from the indexing
+  arguments of the recursive principle. %
+  Since it is not a sub-structure, there also is not a recursive call for it. %
+  It is possible to include the return type as a sub-structure, e.g. $\LAM{l}{l'}x S{(t
+    : T)}$ but we decided to show this alternative to demonstrate various design spaces.
+  
+\item Finally,
+  \[
+    \lttyping[\Psi'][\Gamma'][L,\ell,\ell']\metalevel{t_\tapp}{M_\Trm[\ell'/\ell,g/g,U_T^{\id_g,u_t^{\id_g}/x}/U_T,\boxit{(\APP{u_t^{\id_g}}
+        \ell{\ell'} x{U_S^{\id_{g}}}{U_T^{\id_{g,x}}}{u_s^{\id_g}})}/x_t]}{l_2}
+  \]
+  where
+  \begin{align*}
+    \Psi' :=&~ \Psi \\
+    ,&~g : \Ctx \\
+    ,&~U_S : \DTyp[g]\codelevel \ell \\
+    ,&~U_T : \DTyp[g, x : U_S^{\id_g} \at \ell]\codelevel{\ell'} \\
+    ,&~u_t : \DTrm[g]\codelevel{\PI \ell{\ell'}x{U_S^{\id_{g}}}{U_T^{\id_{g,x}}}}{\ell \sqcup \ell'} \\
+    ,&~u_s : \DTrm[g]\codelevel{U_S^{\id_{g}}}{\ell}
+  \end{align*}
+  and
+  \begin{align*}
+    \Gamma' :=&~\Gamma \\
+    ,&~x_S : M_\Typ[\ell/\ell,g/g,\boxit{U_S^{\id_g}}/x_T] \at{l_1} \\
+    ,&~x_T : M_\Typ[\ell/\ell,(g,x : U_S^{\id_g} \at \ell)/g,\boxit{U_T^{\id_{g,x}}}/x_T] \at{l_1} \\
+    ,&~x_t : M_\Trm[\ell \sqcup \ell'/\ell,g/g,\PI \ell{\ell'}x{U_S^{\id_{g}}}{U_T^{\id_{g,x}}}/U_T,\boxit{u_t^{\id_{g}}}/x_t] \at{l_2} \\
+    ,&~x_s : M_\Trm[\ell/\ell,g/g,U_S^{\id_{g}}/U_T,\boxit{u_s^{\id_{g}}}/x_t] \at{l_2}
+  \end{align*}
+  This premise shows why we must use a more verbose syntax for application, i.e. $\APP
+  t l{l'}xSTs$. %
+  In the global context, we must introduce the global variables for the input and
+  output types. %
+  However, a vanilla function application $t~s$ has no such information at all. %
+  Since the current syntax has both input and output types as sub-structures, we can
+  also allow their recursive calls. 
+\end{itemize}
+All premises above conclude the group for terms, which we name $G_\Trm$. %
+We collectively use $G_A$ for all three groups above, i.e. $G_A :=
+G_M~G_\Typ~G_\Trm$. %
+Then we have the typing rule for the recursive principles as follows:
+\begin{mathpar}
+  \inferrule
+  {G_A \\ \typing[L]{l'}\Level \\ \lpjudge \proglevel \Delta \\ \lttyping \metalevel t{\CTyp[\Delta]{l'}}{0}}
+  {\lttyping \metalevel {\ELIMTYP{l_1}{l_2}M b{l'}\Delta t}{M_\Typ[l'/\ell,\Delta/g,t/x_T]}{l_1}}
+
+  \inferrule
+  {G_A \\ \typing[L]{l'}\Level \\ \lpjudge \proglevel \Delta \\ \lttypwf[\Psi][\Delta]\proglevel T{l'} \\
+    \lttyping \metalevel t{\CTrm[\Delta]T{l'}}{0}}
+  {\lttyping \metalevel {\ELIMTRM{l_1}{l_2}M b{l'}\Delta T t}{M_\Trm[l'/\ell,\Delta/g,T/U_T,t/x_t]}{l_2}}
+\end{mathpar}
+
+
+\subsection{More Congruence Rules for Typing}
+
+The congruence rules for the additional typing rules are naturally derived from
+the typing rules above.
+\begin{mathpar}
+  \inferrule
+  {\lpjudge{\typeof i}\Gamma \\ u : \DTrm[\Delta]{i'}T l \in \Psi \\ i' \in \{\varlevel, \codelevel\} \\ i \in
+    \{\varlevel, \codelevel, \proglevel, \metalevel\} \\ i' \le i \\ \ltsubeq i \delta{\delta'} \Delta}
+  {\lttyequiv i{u^\delta}{u^{\delta'}}{T[\delta]}{l}}
+
+  \inferrule
+  {\lpjudge \metalevel\Gamma \\ \lttyequiv[\Psi, g : \Ctx]\metalevel t{t'}{T}{l} \\ \tyequiv[L]l{l'}\Level}
+  {\lttyequiv \metalevel{\CLAM l g t}{\CLAM{l'} g{t'}}{\CPI g l T}{l}}
+
+  \inferrule
+  {\lttyequiv \metalevel{t}{t'}{\CPI g l T}{l} \\ \lpequiv \proglevel \Delta{\Delta'}}
+  {\lttyequiv \metalevel{\CAPP t \Delta}{\CAPP{t'}{\Delta'}}{T[\Delta/g]}{l}}
+
+  \inferrule
+  {\lpjudge \metalevel\Gamma \\ \lttyequiv[\Psi, U : \DTyp[\Delta] \proglevel{l_1}]\metalevel{t}{t'}{T}{l_2} \\ \tyequiv[L]{l_1}{l_3}\Level \\ \tyequiv[L]{l_2}{l_4}\Level}
+  {\lttyequiv \metalevel{\TLAM{l_1}{l_2}U t}{\TLAM{l_3}{l_4}U{t'}}{\TPI U[\Delta]{l_1}{l_2}
+      T}{l_2}}
+
+  \inferrule
+  {\lttyequiv \metalevel{t}{t'}{\TPI U[\Delta] l{l'}{T''}}{l'} \\ \lttypeq[\Psi][\Delta] \proglevel{T}{T'}l}
+  {\lttyequiv \metalevel{\TAPP t{T}}{\TAPP{t'}{T'}}{T''[T/U]}{l'}}
+\end{mathpar}
+
+The following rules are related to meta-programming and intensional analysis. 
+\begin{mathpar}
+  \inferrule
+  {\lpjudge \metalevel \Gamma \\ \lttypeq[\Psi][\Delta]\codelevel T{T'}l}
+  {\lttyequiv \metalevel{\boxit T}{\boxit{T'}}{\CTyp[\Delta] l}{0}}
+
+  \inferrule
+  {\lpjudge \metalevel \Gamma \\ \lttyequiv[\Psi][\Delta]\codelevel t{t'} T l}
+  {\lttyequiv \metalevel{\boxit t}{\boxit{t'}}{\CTrm[\Delta] T l}{0}}
+
+  \inferrule
+  {\lpjudge \metalevel \Gamma \\ \tyequiv[L]{l_1}{l_3}\Level \\ \tyequiv[L]{l_2}{l_4}\Level \\ \lpequiv \proglevel \Delta{\Delta'} \\
+    \lttyequiv \metalevel{t}{t'}{\CTyp[\Delta]{l_2}}{0} \\
+    \lttypeq[\Psi][\Gamma,x_T : \CTyp[\Delta]{l_2} \at{0}]\metalevel{M}{M'}{l_1} \\
+  \lttyequiv[\Psi, U : \DTyp[\Delta]\codelevel {l_2}]\metalevel{t_1}{t_2}{M[\boxit{U^\id}/x_T]}{l_1}}
+  {\lttyequiv \metalevel{\LETBTYP{l_1}{l_2} \Delta{x_T.M}{U}{t_1}t}{\LETBTYP{l_3}{l_4}{\Delta'}{x_T.M'}{U}{t_2}{t'}}{M[t/x_T]}{l_1}}
+
+  \inferrule
+  {\lpjudge \metalevel \Gamma \\ \tyequiv[L]{l_1}{l_3}\Level \\ \tyequiv[L]{l_2}{l_4}\Level \\
+    \lpequiv \proglevel \Delta{\Delta'} \\
+    \lttypeq \proglevel T{T'}{l_2} \\
+    \lttyequiv \metalevel{t}{t'}{\CTrm[\Delta]T{l_2}}{0} \\
+    \lttypeq[\Psi][\Gamma,x_T : \CTrm[\Delta]T{l_2} \at{0}]\metalevel{M}{M'}{l_1} \\
+    \lttyequiv[\Psi, u : \DTrm[\Delta]\codelevel T{l_2}]\metalevel{t_1}{t_2}{M[\boxit{u^\id}/x_t]}{l_1}}
+  {\lttyequiv \metalevel{\LETBTRM{l_1}{l_2} \Delta{T}{x_t.M}{u}{t_1}t}{\LETBTRM{l_3}{l_4}{\Delta'}{T'}{x_T.M'}{u}{t_2}{t'}}{M[t/x_t]}{l_1}}
+\end{mathpar}
+We omit the congruence rules for the recursive principles for code as they are
+conceptually simple but too long. %
+We simply let equivalence to propagate inwards to all the sub-terms of the recursive
+principles. 
+
+\subsection{Computation Rules}
+
+Finally, we list all the computation rules. %
+In the rules below, we let $\compt i$. %
+We first list the $\beta$ rules for
+natural numbers:
+\begin{mathpar}
+  \inferrule
+  {\typing[L]l\Level \\ \lttypwf[\Psi][\Gamma, x : \Nat \at 0] i M l \\
+    \lttyping i s {M[\ze/x]}l \\
+    \lttyping[\Psi][\Gamma, x : \Nat \at 0, y : M \at l] i {s'}{M[\su x/x]}l}
+  {\lttyequiv i{s}{\ELIMN l{x.M}s{x,y. s'}\ze}{M[\ze/x]}{l}}
+
+  \inferrule
+  {\typing[L]l\Level \\ \lttypwf[\Psi][\Gamma, x : \Nat \at 0] i M l \\
+    \lttyping i s {M[\ze/x]}l \\
+    \lttyping[\Psi][\Gamma, x : \Nat \at 0, y : M \at l] i {s'}{M[\su x/x]}l \\
+    \lttyping i t \Nat 0}
+  {\lttyequiv i{s'[t/x,\ELIMN l{x.M}s{x,y. s'}t/y]}{\ELIMN l{x.M}s{x,y. s'}{(\su t)}}{M[\su t/x]}{l}}
+\end{mathpar}
+Then we have the $\beta$ and $\eta$ rules for dependent functions:
+\begin{mathpar}
+  \inferrule
+  {\typing[L]l\Level \\ \typing[L]{l'}\Level \\ \lttypwf i S{l}
+    \\
+    \lttypwf[\Psi][\Gamma, x : S \at{l}] i{T}{l'} \\
+    \lttyping[\Psi][\Gamma, x : S \at{l}] i t{T}{l'} \\ \lttyping i s{S}{l}}
+  {\lttyequiv i{t[s/x]}{\APP {\LAM {l}{l'} x S t} {l}{l'} x{S} T s}{T[s/x]}{l'}}
+
+  \inferrule
+  {\typing[L]l\Level \\ \typing[L]{l'}\Level \\ \lttypwf i S{l} \\
+    \lttypwf[\Psi][\Gamma, x : S \at{l}] i{T}{l'} \\
+    \lttyping i t{\PI {l}{l'}x S T}{l \sqcup l'}}
+  {\lttyequiv i{\LAM {l}{l'} x{S} {\APP t {l}{l'}x S T x}}{t}{\PI {l}{l'} x S T}{l \sqcup l'}}
+\end{mathpar}
+In the $\eta$ rule, on the right hand side, all $t$, $S$ and $T$ should be properly
+locally weakened.
+
+Finally we have $\beta$ and $\eta$ rules for universe-polymorphic functions:
+\begin{mathpar}
+  \inferrule
+  {\lpjudge \metalevel \Gamma \\ \lttyping[\Psi][\Gamma][L, \vect \ell]\metalevel{t}{T}{l} \\ \typing[L,\vect\ell]l\Level \\
+    |\vect\ell| = |\vect l| > 0 \\ \forall l' \in \vect l ~.~ \typing[L]{l'}\Level}
+  {\lttyequiv \metalevel{t[\vect l/\vect \ell]}{(\ULAM l \ell t)~\$~\vect l}{T[\vect l/\vect \ell]}{l[\vect l/\vect \ell]}}
+
+  \inferrule
+  {\lttyping \metalevel{t}{\UPI \ell l T}{\omega}}
+  {\lttyequiv \metalevel{\ULAM l \ell{(t~\$~\vect\ell)}}{t}{\UPI \ell l T}{\omega}}
+\end{mathpar}
+Similarly, in the $\eta$ rule, the universe variables appearing in $t$ must also be
+properly weakened. 
+This concludes all the rules for the MLTT portion of \delamlang. 
+
+Then we move on to considering the computation rules for the extended types. %
+Let us finish considering all meta-function types.
+\begin{mathpar}
+  \inferrule
+  {\lpjudge \metalevel \Gamma \\ \lttyping[\Psi, g : \Ctx]\metalevel t{T}{l} \\ \typing[L]l\Level \\ \lpjudge \proglevel \Delta}
+  {\lttyequiv \metalevel{t[\Delta/g]}{\CAPP{(\CLAM l g t)}\Delta}{T[\Delta/g]}{l}}
+
+  \inferrule
+  {\lttyping \metalevel{t}{\CPI g l T}{l}}
+  {\lttyequiv \metalevel{\CLAM l g {(\CAPP t g)}}{t}{\CPI g l T}{l}}
+
+  \inferrule
+  {\lpjudge \metalevel \Gamma \\ \lttyping[\Psi, U : \DTyp[\Delta] \proglevel l]\metalevel{t}{T'}{l'} \\ \typing[L]{l}\Level \\ \typing[L]{l'}\Level \\ \lttypwf[\Psi][\Delta] \proglevel{T} l}
+  {\lttyequiv \metalevel{t[T/U]}{\TAPP{(\TLAM{l}{l'}U t)}{T}}{T'[T/U]}{l'}}
+
+  \inferrule
+  {\lttyping \metalevel{t}{\TPI U[\Delta] l{l'}{T'}}{l'}}
+  {\lttyequiv \metalevel{\TLAM{l}{l'}U{(\TAPP t{U^\id})}}{t}{\TPI U[\Delta] l{l'}{T'}}{l'}}
+\end{mathpar}
+Now we consider the contextual types. %
+They only have $\beta$ rules. %
+Let us consider $\tletbox$ first.
+\begin{mathpar}
+  \inferrule
+  {\lpjudge \metalevel \Gamma \\ \typing[L]{l'}\Level \\ \typing[L]l\Level \\ \lpjudge \proglevel \Delta \\
+    \lttypwf[\Psi][\Delta]\codelevel T l \\
+    \lttypwf[\Psi][\Gamma,x_T : \CTyp[\Delta]l \at{0}]\metalevel{M}{l'} \\
+  \lttyping[\Psi, U : \DTyp[\Delta]\codelevel l]\metalevel{t'}{M[\boxit U^\id/x_T]}{l'}}
+  {\lttyequiv \metalevel{t'[T/U]}{\LETBTYP{l'}l \Delta{x_T.M}{U}{t'}{(\boxit T)}}{M[\boxit T/x_T]}{l'}}
+
+  \inferrule
+  {\lpjudge \metalevel \Gamma \\ \typing[L]{l'}\Level \\ \typing[L]l\Level \\ \lpjudge \proglevel \Delta \\
+    \lttypwf[\Psi][\Delta]\proglevel T l \\
+    \lttyping[\Psi][\Delta]\codelevel t T l \\
+    \lttypwf[\Psi][\Gamma,x_t : \CTrm[\Delta] T l \at{0}]\metalevel{M}{l'} \\
+  \lttyping[\Psi, u : \DTrm[\Delta]\codelevel T l]\metalevel{t'}{M[\boxit u^\id/x_t]}{l'}}
+  {\lttyequiv \metalevel{t'[t/u]}{\LETBTRM{l'}l \Delta T{x_t.M}{u}{t'}{(\boxit t)}}{M[\boxit t/x_t]}{l'}}
+\end{mathpar}
+We can also give the $\beta$ rules for the recursive principles for code. %
+There are too many to list them all, and moreover they follow the same pattern, so we
+just list a selected few of them. %
+We begin with something easy:
+\begin{mathpar}
+  \inferrule
+  {G_A \\ \lpjudge \metalevel \Gamma \\ \lpjudge \proglevel \Delta}
+  {\lttyequiv \metalevel {t_\Nat[\Delta/g]}{\ELIMTYP{l_1}{l_2}M b{0}\Delta{(\boxit
+        \Nat)}}{M[0/\ell,\Delta/g,\boxit \Nat/x_T]}{l_1}}
+\end{mathpar}
+In this case, we provide $\Nat$ to the recursive principle for code of types. %
+It hits the base case described by $t_\Nat$, and thus the whole program is reduced to
+$t_\Nat$ with $g$ for $\Delta$. %
+Note that the universe level for $\Nat$ must be $0$ as specified by the typing
+judgment at layer $\codelevel$. %
+The recursive principle for code of terms behaves very similarly when encountering the
+code of $\Nat$. %
+Instead, it picks the right branch $t'_\Nat$ and returns the right motive instead:
+\begin{mathpar}
+  \inferrule
+  {G_A \\ \lpjudge \metalevel \Gamma \\ \lpjudge \proglevel \Delta}
+  {\lttyequiv \metalevel {t'_\Nat[\Delta/g]}{\ELIMTRM{l_1}{l_2}M b{1}\Delta{\Ty 0}{(\boxit
+        \Nat)}}{M_\Trm[1/\ell,\Delta/g,\Ty 0/U_T,\boxit \Nat/x_t]}{l_2}}
+\end{mathpar}
+In order to have the code to be $\boxit\Nat$ as a term, this code must have type $\Ty
+0$, which lives at universe level $1$. %
+Hence the indices are forced by the typing rules at layer $\codelevel$. 
+
+Then we specify the variable case:
+\begin{mathpar}
+  \inferrule
+  {G_A \\ \lpjudge \metalevel \Gamma \\ \typing[L]{l'}\Level \\ \lpjudge \proglevel \Delta \\ \lttypwf[\Psi][\Delta]\proglevel T{l'}
+    \\
+    x : T \at{l'} \in \Delta}
+  {\lttyequiv \metalevel {t_x[l'/\ell,\Delta/g,T/U_T,x/u_x]}{\ELIMTRM{l_1}{l_2}M b{l'}\Delta{T}{(\boxit
+        x)}}{M_\Trm[l'/\ell,\Delta/g,T/U_T,\boxit x/x_t]}{l_2}}
+\end{mathpar}
+The subtlety here is that $u_x$ can only receive a variable as it is typed at layer
+$\varlevel$, but it is fine as $x$ is precisely just a variable. 
+
+Then let us consider a more complex case of $\Pi$ types.
+\begin{mathpar}
+  \inferrule
+  {G_A \\ \lpjudge \metalevel \Gamma \\ \typing[L]{l}\Level \\ \typing[L]{l'}\Level \\ \lpjudge \proglevel \Delta \\
+    \lttypwf[\Psi][\Delta] \codelevel S l  \\ \lttypwf[\Psi][\Delta, x : S \at l]\codelevel{T}{l'} \\
+    t = \boxit{\PI{l}{l'}x S T} \\
+    s_S = \ELIMTYP{l_1}{l_2}M b{l}\Delta{(\boxit{S})} \\
+    s_T = \ELIMTYP{l_1}{l_2}M b{l'}{(\Delta, x : S \at l)}{(\boxit{T})}}
+  {\lttyequiv \metalevel {t_\Pi[l/\ell,l'/\ell',\Delta/g,S/U_S,T/U_T,s_S/x_S,
+      s_T/x_T]}{\ELIMTYP{l_1}{l_2}M b{(l \sqcup
+        l')}\Delta{t}}{M_\Trm[l\sqcup l'/\ell,\Delta/g,t/x_T]}{l_1}}
+\end{mathpar}
+Notice how $s_S$ and $s_T$ recurse down the sub-structures, i.e. $S$ and $T$ with the
+proper universe levels and local contexts. %
+We end our discussion by given the $\beta$ rules for code of function abstractions and
+applications, as they appear to be rather complex, but their essence is fundamentally simple.
+\begin{mathpar}
+  \inferrule
+  {G_A \\ \lpjudge \metalevel \Gamma \\ \lpjudge \proglevel \Delta \\ \typing[L]l\Level  \\
+    \typing[L]{l'}\Level \\ \lttypwf[\Psi][\Delta] \codelevel S l \\
+    \lttyping[\Psi][\Delta, x : S \at l] \codelevel t{T}{l'} \\
+    l_\Pi = l \sqcup l' \\
+    T_\Pi = \PI{l}{l'}x{S}{T} \\
+    t' = \boxit{\LAM{l}{l'}x{S}{t}} \\
+    s_S = \ELIMTYP{l_1}{l_2}M b{l}\Delta{(\boxit{S})} \\
+    s_t = \ELIMTRM{l_1}{l_2}M b{l'}{(\Delta, x : S \at l)}{T}{(\boxit{t})} \\
+    \delta = s_S/x_S,s_t/x_t}
+  {\lttyequiv \metalevel {t_\lambda[l/\ell,l'/\ell',\Delta/g,S/U_S,T/U_T,t/u_t,\delta]}{\ELIMTRM{l_1}{l_2}M b{l_\Pi}\Delta{T_\Pi}{t'}}{M_\Trm[l_\Pi/\ell,\Delta/g,T_\Pi/U_T,t'/x_t]}{l_2}}
+\end{mathpar}
+Similarly, the recursive principle for code of terms picks the right branch
+($t_\lambda$) with variables properly substituted. %
+Since $S$ is also a sub-structure, the recursive call $s_S$ invokes the recursive
+principle for code of types instead, hence making the recursive principles mutually
+defined.
+
+Last, we give the case for function applications.
+\begin{mathpar}
+  \inferrule
+  {G_A \\ \lpjudge \metalevel \Gamma \\ \lpjudge \proglevel \Delta \\ \typing[L]l\Level  \\ \typing[L]{l'}\Level
+    \\ \lttypwf[\Psi][\Delta]\codelevel S l \\ \lttypwf[\Psi][\Delta, x : S \at l] \codelevel{T}{l'} \\
+    \lttyping[\Psi][\Delta] \codelevel t{\PI l{l'} x S T}{l \sqcup l'} \\
+    \lttyping[\Psi][\Delta] \codelevel s S l \\
+    T_\tapp = T[s/x] \\
+    t' = \boxit{(\APP t l{l'} x S T s)} \\
+    s_S = \ELIMTYP{l_1}{l_2}M b{l}\Delta{(\boxit{S})} \\
+    s_T = \ELIMTYP{l_1}{l_2}M b{l'}{(\Delta, x : S \at l)}{(\boxit{T})} \\
+    s_t = \ELIMTRM{l_1}{l_2}M b{(l \sqcup l')}{\Delta}{(\PI{l}{l'}xST)}{(\boxit{t})} \\
+    s_s = \ELIMTRM{l_1}{l_2}M b{l}{\Delta}{S}{(\boxit{s})} \\
+    \sigma = \Delta/g,S/U_S,T/U_T,t/u_t,s/u_s \\
+    \delta = s_S/x_S,s_T/x_T,s_t/x_t,s_s/x_s}
+  {\lttyequiv \metalevel {t_\tapp[l/\ell,l'/\ell',\sigma,\delta]}{\ELIMTRM{l_1}{l_2}M b{l'}\Delta{T_\tapp}{t'}}{M_\Trm[l'/\ell,\Delta/g,T_\tapp/U_T,t'/x_t]}{l_2}}
+\end{mathpar}
+Similar to above, we can do recursion on all sub-structures, including $S$ and $T$,
+which are handled by the recursive principles for code of types. %
+It is not only convenient to put $S$ and $T$ in the syntax of a function
+application, but also necessary. %
+If we look at $s_t$ and $s_s$, the recursive calls on the function and the argument,
+we see that we must supply their types, i.e. $\PI{l}{l'}xST$ and $S$, respectively. %
+This information, unfortunately, cannot be recovered, if we employed the more common
+syntax of $t~s$. %
+In practice, the $\Pi$ type can be filled in by a type inference algorithm when we do
+not care, so it does not truly make the type theory more difficult, but rather enables
+the recursion on code of function applications.
+
+At this point, we conclude all rules for \delamlang. %
+Next, we shall carefully define all syntactic operations and examine the syntactic
+properties of \delamlang. %
+Then we work out the semantics by following \Cref{sec:cv} and
+\citet{abel_decidability_2017}, from which we conclude the convertibility problem of
+\delamlang is decidable.
+
+\subsection{A Note on Layer $\varlevel$ Rules}
+
+To summarize, only the following rules can be indexed by layer $\varlevel$:
+\begin{itemize}
+\item the typing rule for local variables and its congruence;
+\item the local substitution rules and their equivalence rules;
+\item the typing rule for global variables and its congruence;
+\item all conversion rules for terms and their equivalence.
+\end{itemize}
+In particular, we are not even obliged to include symmetry and transitivity, because
+they can be derived from existing rules.

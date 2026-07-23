@@ -1,0 +1,1636 @@
+\section{Syntactic Operations and Properties of \delamlang}\labeledit{sec:dt:syn}
+
+In the previous section, we have introduced all judgments of \delamlang, but we have
+left out some details. %
+For one, we have not defined the substitution operations yet, though they are very
+intuitive. %
+For the sake of completeness, we will give their definitions. %
+Then we examine the syntactic properties of \delamlang before entering the semantic
+zone. %
+
+\subsection{Substitution Operations}
+
+In \Cref{sec:dt:ulevel}, we have given the definition of substitutions for universe
+levels and how to apply one to a universe level. %
+Applying a substitution for universe levels to types and terms simply propagate the
+substitution downwards.
+\begin{longtable}{R@{$[\phi]~:=~$}L}
+  \Nat & \Nat \\
+  \PI{l}{l'}x S T & \PI{l[\phi]}{l'[\phi]}x{S[\phi]}{(T[\phi])} \\
+  \Ty l & \Ty{l[\phi]} \\
+  \UPI \ell l T &
+  \UPI\ell{l[\phi,\vect\ell/\vect\ell]}{(T[\phi,\vect\ell/\vect\ell])} \\
+  \Elt l t & \Elt{l[\phi]}{(t[\phi])} \\
+  U^\delta & U^{\delta[\phi]} \\
+  \CPI g l T & \CPI g{l[\phi]}{(T[\phi])} \\
+  \TPI U l{l'}T & \TPI U[\Gamma[\phi]]{l[\phi]}{l'[\phi]}{(T[\phi])} \\
+  \CTyp l & \CTyp[\Gamma[\phi]]{l[\phi]} \\
+  \CTrm T l & \CTrm[\Gamma[\phi]]{T[\phi]}{l[\phi]} \\[5pt]
+  \cdot & \cdot \\
+  g & g \\
+  \Gamma, x : T \at l & \Gamma[\phi], x : T[\phi] \at{l[\phi]} \\[5pt]
+  \cdot^k_{g?} & \cdot^k_{g?} \\
+  \wk^k_g & \wk^k_g \\
+  \delta, t/x & \delta[\phi], t[\phi]/x \\[5pt]
+  x & x \\
+  \Nat & \Nat \\
+  \PI{l}{l'}x s t & \PI{l[\phi]}{l'[\phi]}x{s[\phi]}{(t[\phi])} \\
+  \Ty l & \Ty{l[\phi]} \\
+  \ze & \ze \\
+  \su t & \su{(t[\phi])} \\
+  \ELIMN l{x.M}{s}{x,y.s'}{t} &
+  \ELIMN{l[\phi]}{x.M[\phi]}{(s[\phi])}{x,y.s'[\phi]}{(t[\phi])}
+  \\
+  \LAM{l}{l'}x{S}t & \LAM{l[\phi]}{l'[\phi]}x{S[\phi]}{(t[\phi])} \\
+  \APP t{l}{l'}x{S}T s & \APP{t[\phi]}{l[\phi]}{l'[\phi]}x{S[\phi]}{T[\phi]}{(s[\phi])}
+  \\
+  \ULAM l \ell t & \ULAM{l[\phi,\vect\ell/\vect\ell]}\ell{t[\phi,\vect\ell/\vect\ell]}
+  \\
+  \UAPP t l & (t[\phi])~\$~(\vect l[\phi]) \\
+  u^\delta & u^{\delta[\phi]} \\
+  \CLAM l g t & \CLAM{l[\phi]}g{(t[\phi])} \\
+  \CAPP t \Gamma & \CAPP{t[\phi]}{(\Gamma[\phi])} \\
+  \TLAM l{l'} U t & \TLAM{l[\phi]}{l'[\phi]} U{(t[\phi])} \\
+  \TAPP t T & \TAPP{t[\phi]}{(T[\phi])} \\
+  \boxit T & \boxit{(T[\phi])} \\
+  \boxit t & \boxit{(t[\phi])} \\
+  \LETBTYP{l'}l\Gamma{x_T. M}{U}{t'}t & \LETBTYP{l'[\phi]}{(l[\phi])}{(\Gamma[\phi])}{x_T. M[\phi]}{U}{t'[\phi]}{(t[\phi])} \\
+  \LETBTRM{l'}l\Gamma T{x_t. M}{u}{t'}t &
+  \LETBTRM{l'[\phi]}{(l[\phi])}{(\Gamma[\phi])}{(T[\phi])}{x_t. M[\phi]}{u}{t'[\phi]}{(t[\phi])}
+  \\
+  \ELIMTYP{l_1}{l_2}Mbl\Gamma t & \ELIMTYPn{l_1[\phi]}{l_2[\phi]}{(\vect M[\phi])}{(\vect b[\phi])}{(l[\phi])}{(\Gamma[\phi])}{(t[\phi])} \\
+  \ELIMTRM{l_1}{l_2}Mbl\Gamma T t & \ELIMTRMn{l_1[\phi]}{l_2[\phi]}{(\vect
+    M[\phi])}{(\vect b[\phi])}{(l[\phi])}{(\Gamma[\phi])}{(T[\phi])}{(t[\phi])}
+  \\[5pt]
+  \vect M & (\ell,g,x_T. M_\Typ[\phi,\ell/\ell])~(\ell,g,U_T,x_t. M_\Trm[\phi,\ell/\ell]) \\[5pt]
+  (g. t_\Nat) & (g. t_\Nat[\phi]) \\
+  (\ell,\ell',g, U_S,U_T,x_S,x_T. t_\Pi) & (\ell,\ell',g, U_S,U_T,x_S,x_T. t_\Pi[\phi,\ell/\ell,\ell'/\ell'])  \\
+  (\ell,g. t_{\Se}) & (\ell,g. t_{\Se}[\phi,\ell/\ell]) \\
+  (\ell,g,u_t,x_t. t_\tEl) & (\ell,g,u_t,x_t. t_\tEl[\phi,\ell/\ell]) \\[5pt]
+  (\ell,g,U_T,u_x. t_x) & (\ell,g,U_T,u_x. t_x[\phi,\ell/\ell]) \\
+  (g.t'_\Nat) & (g.t'_\Nat[\phi]) \\
+  (\ell,\ell',g,u_s,u_t,x_s,x_t.t'_\Pi) & (\ell,\ell',g,u_s,u_t,x_s,x_t.t'_\Pi[\phi,\ell/\ell,\ell'/\ell']) \\
+  (\ell,g.t'_\Se) & (\ell,g.t'_\Se[\phi,\ell/\ell]) \\
+  (g.t_\ze) & (g.t_\ze[\phi]) \\
+  (g,u_t,x_t.t_{\tsucc}) & (g,u_t,x_t.t_{\tsucc}[\phi]) \\
+  (\ell,g,U_M,u_s,u_{s'},u_t,x_M,x_s,x_{s'},x_t.t_{\telimn}) & (\ell,g,U_M,u_s,u_{s'},u_t,x_M,x_s,x_{s'},x_t.t_{\telimn}[\phi,\ell/\ell]) \\
+  (\ell,\ell',g,U_S,U_T,u_t,x_S,x_t.t_\lambda) & (\ell,\ell',g,U_S,U_T,u_t,x_S,x_t.t_\lambda[\phi,\ell/\ell,\ell'/\ell']) \\
+  (\ell,\ell',g,U_S,U_T,u_t,u_s,x_S,x_T,x_t,x_s.t_\tapp) &
+  (\ell,\ell',g,U_S,U_T,u_t,u_s,x_S,x_T,x_t,x_s.t_\tapp[\phi,\ell/\ell,\ell'/\ell']) \\
+\end{longtable}
+The composition operation and the identity substitution are defined intuitively as:
+\begin{longtable}{R@{$~\circ~\phi~:=~$}L}
+  \cdot & \cdot \\
+  (\phi',l/\ell) & (\phi' \circ \phi), l[\phi]/\ell \\
+\end{longtable}
+\begin{longtable}{R@{$~:=~$}L}
+  \id_\cdot & \cdot \\
+  \id_{L,\ell} & \id_L,\ell/\ell \\
+\end{longtable}
+The presentation of the identity substitution is simpler as we do not consider
+weakenings for universe contexts.  %
+We sometimes omit the subscript when it can be inferred from the textual context. %
+We will also need to apply a universe substitution to global context, which does not
+need to be mutually defined:
+\begin{longtable}{R@{$[\phi]~:=~$}L}
+  \cdot & \cdot \\
+  (\Psi, g : \Ctx) & \Psi[\phi], g : \Ctx \\
+  (\Psi, U : \DTyp i l) & \Psi[\phi], U : \DTyp[\Gamma[\phi]]{i}{l[\phi]} \\
+  (\Psi, u : \DTrm i T l) & \Psi[\phi], u : \DTrm[\Gamma[\phi]]{i}{T[\phi]}{l[\phi]}
+\end{longtable}
+
+Then we give the the application of a local substitution. %
+Following \Cref{sec:cv}, we need two auxiliary definitions to query a local
+substitution in order to define its composition. %
+We repeat their definitions as follows:
+\begin{align*}
+  \widehat{\cdot_{g?}^k} &:= k \\
+  \widehat{\wk_{g}^k} &:= k \\
+  \widehat{\delta, t/x} &:= \widehat{\delta} \\
+  \widecheck{\cdot_{g?}^k} &:= g? \\
+  \widecheck{\wk_g^k} &:= g \\
+  \widecheck{\delta, t/x} &:= \widecheck{\delta}
+\end{align*}
+Then we give the application of local substitutions:
+\begin{longtable}{R@{$[\delta]~:=~$}L}
+  \Nat & \Nat \\
+  \PI{l}{l'}x S T & \PI{l}{l'}x{S[\delta]}{(T[\delta,x/x])} \\
+  \Ty l & \Ty{l} \\
+  \UPI \ell l T &
+  \UPI\ell{l}{(T[\delta])} \\
+  \Elt l t & \Elt{l}{(t[\delta])} \\
+  U^{\delta'} & U^{\delta' \circ \delta} \\
+  \CPI g l T & \CPI g{l}{(T[\delta])} \\
+  \TPI U l{l'}T & \TPI U[\Gamma]{l}{l'}{(T[\delta])} \\
+  \CTyp l & \CTyp{l} \\
+  \CTrm T l & \CTrm{T}{l} \\[5pt]
+  x & \delta(x) \hfill \text{(lookup of $x$ in $\delta$)} \\
+  \Nat & \Nat \\
+  \PI{l}{l'}x s t & \PI{l}{l'}x{s[\delta]}{(t[\delta,x/x])} \\
+  \Ty l & \Ty{l} \\
+  \ze & \ze \\
+  \su t & \su{(t[\delta])} \\
+  \ELIMN l{x.M}{s}{x,y.s'}{t} &
+  \ELIMN{l}{x.M[\delta,x/x]}{(s[\delta])}{x,y.s'[\delta,x/x,y/y]}{(t[\delta])}
+  \\
+  \LAM{l}{l'}x{S}t & \LAM{l}{l'}x{S[\delta]}{(t[\delta,x/x])} \\
+  \APP t{l}{l'}x{S}T s & \APP{t[\delta]}{l}{l'}x{S[\delta]}{T[\delta,x/x]}{(s[\delta])}
+  \\
+  \ULAM l \ell t & \ULAM{l}\ell{t[\delta]}
+  \\
+  \UAPP t l & \UAPP{t[\delta]}{l} \\
+  u^{\delta'} & u^{\delta' \circ \delta} \\
+  \CLAM l g t & \CLAM{l}g{(t[\delta])} \\
+  \CAPP t \Gamma & \CAPP{t[\delta]}{\Gamma} \\
+  \TLAM l{l'} U t & \TLAM{l}{l'} U{(t[\delta])} \\
+  \TAPP t T & \TAPP{t[\delta]}{T} \\
+  \boxit T & \boxit{T} \\
+  \boxit t & \boxit{t} \\
+  \LETBTYP{l'}l\Gamma{x_T. M}{U}{t'}t & \LETBTYP{l'}{l}{\Gamma}{x_T. M[\delta,x_T/x_T]}{U}{t'[\delta]}{(t[\delta])} \\
+  \LETBTRM{l'}l\Gamma T{x_t. M}{u}{t'}t &
+  \LETBTRM{l'}{l}{\Gamma}{T}{x_t. M[\delta,x_t/x_t]}{u}{t'[\delta]}{(t[\delta])}
+  \\
+  \ELIMTYP{l_1}{l_2}Mbl\Gamma t & \ELIMTYPn{l_1}{l_2}{(\vect M[\delta])}{(\vect b[\delta])}{l}{\Gamma}{(t[\delta])} \\
+  \ELIMTRM{l_1}{l_2}Mbl\Gamma T t & \ELIMTRMn{l_1}{l_2}{(\vect
+    M[\delta])}{(\vect b[\delta])}{l}{\Gamma}{T}{(t[\delta])}
+  \\[5pt]
+  \vect M & (\ell,g,x_T. M_\Typ[\delta,x_T/x_T])~(\ell,g,U_T,x_t. M_\Trm[\delta,x_t/x_t]) \\[5pt]
+  (g. t_\Nat) & (g. t_\Nat[\delta]) \\
+  (\ell,\ell',g, U_S,U_T,x_S,x_T. t_\Pi) & (\ell,\ell',g, U_S,U_T,x_S,x_T. t_\Pi[\delta,x_S/x_S,x_T/x_T])  \\
+  (\ell,g. t_{\Se}) & (\ell,g. t_{\Se}[\delta]) \\
+  (\ell,g,u_t,x_t. t_\tEl) & (\ell,g,u_t,x_t. t_\tEl[\delta,x_t/x_t]) \\[5pt]
+  (\ell,g,U_T,u_x. t_x) & (\ell,g,U_T,u_x. t_x[\delta]) \\
+  (g.t'_\Nat) & (g.t'_\Nat[\delta]) \\
+  (\ell,\ell',g,u_s,u_t,x_s,x_t.t'_\Pi) & (\ell,\ell',g,u_s,u_t,x_s,x_t.t'_\Pi[\delta,x_s/x_s,x_t/x_t]) \\
+  (\ell,g.t'_\Se) & (\ell,g.t'_\Se[\delta]) \\
+  (g.t_\ze) & (g.t_\ze[\delta]) \\
+  (g,u_t,x_t.t_{\tsucc}) & (g,u_t,x_t.t_{\tsucc}[\delta,x_t/x_t]) \\
+  (\ell,g,U_M,u_s,u_{s'},u_t,x_M,x_s,x_{s'},x_t.t_{\telimn}) & \\
+  \multicolumn{2}{R}{(\ell,g,U_M,u_s,u_{s'},u_t,x_M,x_s,x_{s'},x_t.t_{\telimn}[\delta,x_M/x_M,x_s/x_s,x_{s'}/x_{s'},x_t/x_t])} \\
+  (\ell,\ell',g,U_S,U_T,u_t,x_S,x_t.t_\lambda) & (\ell,\ell',g,U_S,U_T,u_t,x_S,x_t.t_\lambda[\delta,x_S/x_S,x_t/x_t]) \\
+  (\ell,\ell',g,U_S,U_T,u_t,u_s,x_S,x_T,x_t,x_s.t_\tapp) & \\
+  \multicolumn{2}{R}{(\ell,\ell',g,U_S,U_T,u_t,u_s,x_S,x_T,x_t,x_s.t_\tapp[\delta,x_S/x_S,x_T/x_T,x_{t}/x_{t},x_s/x_s])} \\
+\end{longtable}
+where composition is defined in the same way as \Cref{sec:cv}:
+\begin{align*}
+  \wk_g^k \circ \delta &:= \wk_g^{\widehat\delta} \\
+  \cdot^k \circ \delta &:= \cdot_{\widecheck{\delta}}^{\widehat\delta} \\
+  \cdot_{g}^k \circ \delta &:= \cdot_{g}^{\widehat\delta} \\
+  (\delta', t/x) \circ \delta &:= (\delta' \circ \delta), t[\delta]/x
+\end{align*}
+The identity local substitution is characterized as a generalization of local
+weakening $\wk$.
+\begin{align*}
+  \wk^k_{\cdot} &:=  \cdot^k \\
+  \wk^k_{g} &:=  \wk_g^k \\
+  \wk^k_{\Gamma, x : T \at l} &:= \wk^{1 + k}_{\Gamma}, x/x
+\end{align*}
+Identity is just $\id_\Gamma := \wk^0_\Gamma$. 
+
+Then we give the global substitutions.
+\begin{alignat*}{2}
+  \sigma &:=&& \cdot \sep \sigma, \Gamma/g \sep \sigma, T/U  \sep \sigma, t/u
+               \tag{Global substitutions}
+\end{alignat*}
+Then we define the typing rules as:
+\begin{mathpar}
+  \inferrule*
+  {\judge[L] \Psi}
+  {\ptyping{\cdot}{\cdot}}
+
+  \inferrule*
+  {\ptyping{\sigma}{\Phi} \\ \lpjudge \proglevel \Gamma}
+  {\ptyping{\sigma, \Gamma/g}{\Phi, g: \Ctx}}
+
+  \inferrule*
+  {\ptyping{\sigma}{\Phi} \\ \lpjudge[\Phi] \proglevel \Gamma \\\\ \typing[L]l\Level \\ i \in \{\codelevel, \proglevel\}
+    \\
+    \lttypwf[\Psi][\Gamma[\sigma]] i{T}l}
+  {\ptyping{\sigma, T/U}{\Phi, u : \DTyp i l}}
+  
+  \inferrule*
+  {\ptyping{\sigma}{\Phi} \\ \lttypwf[\Phi] \proglevel T l \\ \typing[L]l\Level \\
+    i \in \{\varlevel, \codelevel\} \\
+    \lttyping[\Psi][\Gamma[\sigma]] i t{T[\sigma]}l}
+  {\ptyping[\Psi]{\sigma, t/u}{\Phi, u : \DTrm{i} T l}}
+\end{mathpar}
+
+Then we consider the cases for application:
+\begin{longtable}{R@{$[\sigma]~:=~$}L}
+  \Nat & \Nat \\
+  \PI{l}{l'}x S T & \PI{l}{l'}x{S[\sigma]}{(T[\sigma])} \\
+  \Ty l & \Ty{l} \\
+  \UPI \ell l T &
+  \UPI\ell{l}{(T[\sigma])} \\
+  \Elt l t & \Elt{l}{(t[\sigma])} \\
+  U^{\delta} & \sigma(U)[\delta[\sigma]]
+  \hfill \text{(lookup of $U$ in $\sigma$)}\\
+  \CPI g l T & \CPI g{l}{(T[\sigma,g/g])} \\
+  \TPI U l{l'}T & \TPI U[\Gamma[\sigma]]{l}{l'}{(T[\sigma,U^\id/U])} \\
+  \CTyp l & \CTyp[\Gamma[\sigma]]{l} \\
+  \CTrm T l & \CTrm[\Gamma[\sigma]]{T[\sigma]}{l} \\[5pt]
+  \cdot & \cdot \\
+  g & \sigma(g) \\
+  \Gamma, x : T \at l & \Gamma[\sigma], x : T[\sigma] \at{l} \\[5pt]
+  \wk_g^k & \wk^k_{\sigma(g)} \\
+  \multicolumn{2}{r}{(a local weakening extending the local context by length $\metalevel$)}\\
+  \cdot^k  & \cdot^k \\
+  \cdot_{g}^k & \cdot^{|\Gamma| + \metalevel}
+  \hfill \text{(if $\sigma(g) = \Gamma$ and $\Gamma$ ends with a $\cdot$)} \\
+  \cdot_{g}^k  & \cdot_{g'}^{|\Gamma| + \metalevel}
+  \hfill \text{(if $\sigma(g) = \Gamma$ and $\Gamma$ ends with a $g'$)} \\
+  (\delta, t/x) & (\delta[\sigma]), t[\sigma]/x \\[5pt]
+  x & x
+  \hfill \text{(no effect on local variables)}\\
+  \Nat & \Nat \\
+  \PI{l}{l'}x s t & \PI{l}{l'}x{s[\sigma]}{(t[\sigma])} \\
+  \Ty l & \Ty l \\
+  \ze & \ze \\
+  \su t & \su{(t[\sigma])} \\
+  \ELIMN l{x.M}{s}{x,y.s'}{t} &
+  \ELIMN{l}{x.M[\sigma]}{(s[\sigma])}{x,y.s'[\sigma]}{(t[\sigma])}
+  \\
+  \LAM{l}{l'}x{S}t & \LAM{l}{l'}x{S[\sigma]}{(t[\sigma])} \\
+  \APP t{l}{l'}x{S}T s & \APP{t[\sigma]}{l}{l'}x{S[\sigma]}{T[\sigma]}{(s[\sigma])}
+  \\
+  \ULAM l \ell t & \ULAM{l}\ell{t[\sigma]}
+  \\
+  \UAPP t l & \UAPP{t[\sigma]}l \\
+  u^{\delta} & \sigma(u)[\delta[\sigma]]
+  \hfill \text{(lookup of $u$ in $\sigma$)} \\
+  \CLAM l g t & \CLAM{l}g{(t[\sigma,g/g])} \\
+  \CAPP t \Gamma & \CAPP{(t[\sigma])}{(\Gamma[\sigma])} \\
+  \TLAM l{l'} U t & \TLAM{l}{l'} U{(t[\sigma,U^\id/U])} \\
+  \TAPP t T & \TAPP{(t[\sigma])}{(T[\sigma])} \\
+  \boxit T & \boxit{(T[\sigma])} \\
+  \boxit t & \boxit{(t[\sigma])} \\
+  \LETBTYP{l'}l\Gamma{x_T. M}{U}{t'}t & \LETBTYP{l'}{l}{\Gamma}{x_T. M[\sigma]}{U}{t'[\sigma,U^\id/U]}{(t[\sigma])} \\
+  \LETBTRM{l'}l\Gamma T{x_t. M}{u}{t'}t &
+  \LETBTRM{l'}{l}{\Gamma}{T}{x_t. M[\sigma]}{u}{t'[\sigma,u/u]}{(t[\sigma])}
+  \\
+  \ELIMTYP{l_1}{l_2}Mbl\Gamma t & \ELIMTYPn{l_1}{l_2}{(\vect M[\sigma])}{(\vect b[\sigma])}{l}{(\Gamma[\sigma])}{(t[\sigma])} \\
+  \ELIMTRM{l_1}{l_2}Mbl\Gamma T t & \ELIMTRMn{l_1}{l_2}{(\vect
+    M[\sigma])}{(\vect b[\sigma])}{l}{(\Gamma[\sigma])}{(T[\sigma])}{(t[\sigma])}
+  \\[5pt]
+  \vect M & (\ell,g,x_T. M_\Typ[\sigma,g/g])~(\ell,g,U_T,x_t. M_\Trm[\sigma,g/g,U_T^{\id}/U_T]) \\[5pt]
+  (g. t_\Nat) & (g. t_\Nat[\sigma,g/g]) \\
+  (\ell,\ell',g, U_S,U_T,x_S,x_T. t_\Pi) & (\ell,\ell',g, U_S,U_T,x_S,x_T. t_\Pi[\sigma,g/g,U_S^\id/U_S,U_T^\id/U_T])  \\
+  (\ell,g. t_{\Se}) & (\ell,g. t_{\Se}[\sigma,g/g]) \\
+  (\ell,g,u_t,x_t. t_\tEl) & (\ell,g,u_t,x_t. t_\tEl[\sigma,g/g,u_t^\id/u_t]) \\[5pt]
+  (\ell,g,U_T,u_x. t_x) & (\ell,g,U_T,u_x. t_x[\sigma,g/g,U_T^\id/U_T,u_x^\id/u_x]) \\
+  (g.t'_\Nat) & (g.t'_\Nat[\sigma,g/g]) \\
+  (\ell,\ell',g,u_s,u_t,x_s,x_t.t'_\Pi) & (\ell,\ell',g,u_s,u_t,x_s,x_t.t'_\Pi[\sigma,g/g,u_s^\id/u_s,u_t^\id/u_t]) \\
+  (\ell,g.t'_\Se) & (\ell,g.t'_\Se[\sigma,g/g]) \\
+  (g.t_\ze) & (g.t_\ze[\sigma,g/g]) \\
+  (g,u_t,x_t.t_{\tsucc}) & (g,u_t,x_t.t_{\tsucc}[\sigma,g/g,u_t^\id/u_t]) \\
+  (\ell,g,U_M,u_s,u_{s'},u_t,x_M,x_s,x_{s'},x_t.t_{\telimn}) & \\
+  \multicolumn{2}{R}{(\ell,g,U_M,u_s,u_{s'},u_t,x_M,x_s,x_{s'},x_t.t_{\telimn}[\sigma,g/g,U_M^\id/U_M,u_s^\id/u_s,u_{s'}^\id/u_{s'},u_t^\id/u_t])} \\
+  (\ell,\ell',g,U_S,U_T,u_t,x_S,x_t.t_\lambda) & (\ell,\ell',g,U_S,U_T,u_t,x_S,x_t.t_\lambda[\sigma,g/g,U_S^\id/U_S,U_T^\id/U_T,u_t^\id/u_t]) \\
+  (\ell,\ell',g,U_S,U_T,u_t,u_s,x_S,x_T,x_t,x_s.t_\tapp) & \\
+  \multicolumn{2}{R}{(\ell,\ell',g,U_S,U_T,u_t,u_s,x_S,x_T,x_t,x_s.t_\tapp[\sigma,g/g,U_S^\id/U_S,U_T^\id/U_T,u_{t}^\id/u_{t},u_s^\id/u_s])} \\
+\end{longtable}
+Following \Cref{sec:cv}, we give the identity global substitution as a special case of
+global weakenings, and composition. %
+\begin{align*}
+  \wk^k_{\cdot} &:=  \cdot \\
+  \wk^k_{\Psi, g : \Ctx} &:=  \wk_{\Psi}^{1+k}, g/g \\
+  \wk^k_{\Psi, U : \DTyp i l} &:= \wk^{1 + k}_{\Psi}, U^{\id_\Gamma}/U \\
+  \wk^k_{\Psi, u : \DTrm i T l} &:= \wk^{1 + k}_{\Psi}, u^{\id_\Gamma}/u
+\end{align*}
+As a special case, we have
+\begin{align*}
+  \id_{\Psi} := \wk^0_{\Psi}
+\end{align*}
+Moreover, we have composition
+\begin{align*}
+  \cdot \circ \sigma' &:= \cdot \\
+  (\sigma, \Gamma/g) \circ \sigma' &:= (\sigma \circ \sigma'), \Gamma[\sigma']/g \\
+  (\sigma, T/U) \circ \sigma' &:= (\sigma \circ \sigma'), T[\sigma']/U \\
+  (\sigma, t/u) \circ \sigma' &:= (\sigma \circ \sigma'), t[\sigma']/u 
+\end{align*}
+
+
+
+\subsection{Properties of Substitutions}
+
+In the next step, we examine the algebraic properties of all substitutions. %
+In the lemmas below, we always assume well-formedness or well-typedness of the
+subjects in the lemmas, unless the lemmas are about typing. %
+For conciseness, we do not spell out the conditions as they are routine.
+\begin{lemma} $ $
+  \begin{itemize}
+  \item $\typing[L]{\id_L}{L}$
+  \item If $\typing[L]{\phi}{L'}$ and $\typing[L']{\phi'}{L''}$, then
+    $\typing[L]{\phi' \circ \phi}{L''}$.
+  \end{itemize}
+\end{lemma}
+\begin{proof}
+  Analyze the definition of identity and composition.
+\end{proof}
+\begin{lemma}[Algebra of Universe Substitutions] $ $
+  \begin{itemize}
+  \item $l[\phi][\phi'] = l[\phi \circ \phi']$ ($T$, $\Gamma$, $\delta$, $t$, $\Psi$ resp.)
+  \item $l[\id] = l$ ($T$, $\Gamma$, $\delta$, $t$, $\Psi$ resp.)
+  \item $\id \circ \phi = \phi$ and $\phi \circ \id = \phi$
+  \item $(\phi_1 \circ \phi_2) \circ \phi_3 = \phi_1 \circ (\phi_2 \circ \phi_3)$
+  \end{itemize}
+\end{lemma}
+\begin{proof}
+  The proofs are routine; the first two statements are proved by induction on $l$
+  first, and then mutual induction on all applications of universe substitutions. %
+  The last two we analyze the definition of composition. 
+\end{proof}
+
+Similar lemmas hold for local and global substitutions.
+\begin{lemma} $ $
+  \begin{itemize}
+  \item $\ltsubst[\Psi][\Gamma,\Delta]i{\wk_{\Gamma}^{|\Delta|}}{\Gamma}$
+  \item $\ltsubst i{\id_{\Gamma}}{\Gamma}$
+  \end{itemize}
+\end{lemma}
+Note that local substitutions permit $i = \varlevel$, so we have $\ltsubst
+\varlevel{\id_{\Gamma}}{\Gamma}$. %
+This intuitively makes sense, as all terms in $\id_{\Gamma}$ are just local variables. 
+\begin{lemma}[Algebra of Local Substitutions] $ $
+  \begin{itemize}
+  \item $T[\delta][\delta'] = T[\delta \circ \delta']$ ($t$ resp.)
+  \item $T[\id] = T$ ($t$ resp.)
+  \item $\id \circ \delta = \delta$ and $\delta \circ \id = \delta$
+  \item $(\delta_1 \circ \delta_2) \circ \delta_3 = \delta_1 \circ (\delta_2 \circ \delta_3)$
+  \end{itemize}
+\end{lemma}
+\begin{proof}
+  The first statement is mutually proved with associativity and by mutual
+  induction. The second statement is mutually proved with right identity and also by
+  mutual induction. %
+  When proving right identity, we realize that all extended local substitutions under
+  binders are identities.
+\end{proof}
+
+Then we reason about global substitutions.
+\begin{lemma} $ $
+  \begin{itemize}
+  \item $\ptyping[\Psi,\Phi] {\wk_{\Psi}^{|\Phi|}}{\Psi}$
+  \item $\ptyping {\id_{\Psi}}{\Psi}$
+  \end{itemize}
+\end{lemma}
+\begin{lemma}[Algebra of Global Substitutions] $ $
+  \begin{itemize}
+  \item $T[\sigma][\sigma'] = T[\sigma \circ \sigma']$ ($\Gamma$, $\delta$, $t$ resp.)
+  \item $T[\id] = T$ ($\Gamma$, $\delta$, $t$ resp.)
+  \item $\id \circ \sigma = \sigma$ and $\sigma \circ \id = \sigma$
+  \item $(\sigma_1 \circ \sigma_2) \circ \sigma_3 = \sigma_1 \circ (\sigma_2 \circ \sigma_3)$
+  \end{itemize}
+\end{lemma}
+\begin{proof}
+  The first two statements require mutual inductions on the applications of global
+  substitutions. %
+  Right identity is a natural consequence of the second statement. %
+  Left identity is proved by simply looking at the definition of the identity global
+  substitution. %
+  Associativity is routine. 
+\end{proof}
+
+Finally, we conclude how all these kinds of substitutions interact.
+\begin{lemma}[Acting on Weakenings]\labeledit{lem:dt:wkact} $ $
+  \begin{itemize}
+  \item $\wk^k_\Gamma[\phi] = \wk^k_{\Gamma[\phi]}$
+  \item $\wk^k_\Psi[\phi] = \wk^k_{\Psi[\phi]}$
+  \item $\wk^k_\Gamma[\sigma] = \wk^k_{\Gamma[\sigma]}$
+  \end{itemize}  
+\end{lemma}
+\begin{proof}
+  The first two statements are pretty straightforward as the lengths of the contexts
+  are not altered. %
+  The last one requires a bit more thought. %
+  We proceed by induction on $\Gamma$.
+  \begin{itemize}[label=Case]
+  \item
+    \begin{align*}
+      \wk^k_\cdot[\sigma]
+      &= \cdot^k[\sigma] \\
+      &= \cdot^k
+    \end{align*}
+  \item
+    \begin{align*}
+      \wk^k_g[\sigma]
+      &= \wk^k_{\sigma(g)}
+    \end{align*}
+    which already matches the definition of $\wk^k_{g[\sigma]}$.
+  \item
+    \begin{align*}
+      \wk^k_{\Gamma,x: T \at l}[\sigma]
+      &= (\wk^{1 + \metalevel}_{\Gamma}, x/x)[\sigma] \\
+      &= \wk^{1 + \metalevel}_{\Gamma}[\sigma], x/x \\
+      &= \wk^{1 + \metalevel}_{\Gamma[\sigma]}, x/x
+        \byIH \\
+      &= \wk^{k}_{\Gamma[\sigma], x : T[\sigma] \at l}
+    \end{align*}
+  \end{itemize}
+\end{proof}
+\begin{corollary}[Acting on Identities] $ $
+  \begin{itemize}
+  \item $\id_\Gamma[\phi] = \id_{\Gamma[\phi]}$
+  \item $\id_\Psi[\phi] = \id_{\Psi[\phi]}$
+  \item $\id_\Gamma[\sigma] = \id_{\Gamma[\sigma]}$
+  \end{itemize}
+\end{corollary}
+\begin{lemma}[Interactions between Different Substitutions]\labeledit{lem:dt:interact} $ $
+  \begin{itemize}
+  \item $T[\delta][\phi] = T[\phi][\delta[\phi]]$ ($t$, resp.)
+  \item $(\delta \circ \delta') [\phi] = (\delta[\phi]) \circ (\delta'[\phi])$
+  \item $T[\sigma][\phi] = T[\phi][\sigma[\phi]]$ ($\Gamma$, $\delta$, $t$, resp.)
+  \item $T[\delta][\sigma] = T[\sigma][\delta[\sigma]]$ ($t$, resp.)
+  \item $(\delta \circ \delta') [\sigma] = (\delta[\sigma]) \circ (\delta'[\sigma])$
+  \end{itemize}
+\end{lemma}
+\begin{proof}
+  The first two statements are mutually proved. The last two statements are also
+  mutually proved. %
+
+  Most of them can be done by simply following the IHs. %
+  We give a few examples.
+  \begin{itemize}[label=Case]
+  \item
+    \begin{align*}
+      (\LAM{l}{l'}x{S}t)[\delta][\phi]
+      &= \LAM{l}{l'}x{S[\delta][\phi]}{(t[\delta,x/x][\phi])} \\
+      &= \LAM{l}{l'}x{S[\phi][\delta[\phi]]}{(t[\phi][(\delta,x/x)[\phi]])}
+      \byIH \\
+      &= \LAM{l}{l'}x{S[\phi][\delta[\phi]]}{(t[\phi][(\delta[\phi],x/x)])} \\
+      &= (\LAM{l}{l'}x{S}t)[\phi][\delta[\phi]]
+    \end{align*}
+  \item
+    \begin{align*}
+      (\ell,g,x_T. M_\Typ)[\delta][\phi]
+      &= (\ell,g,x_T. M_\Typ[\delta,x_T/x_T][\phi,\ell/\ell]) \\
+      &= (\ell,g,x_T. M_\Typ[\phi,\ell/\ell][(\delta,x_T/x_T)[\phi,\ell/\ell]])
+      \byIH \\
+      &= (\ell,g,x_T. M_\Typ[\phi,\ell/\ell][(\delta[\phi],x_T/x_T)])
+      \tag{$\delta[\phi,\ell/\ell] = \delta[\phi]$ due to weakening of universe variables}\\
+      &= (\ell,g,x_T. M_\Typ)[\phi][\delta[\phi]]
+    \end{align*}
+  \item
+    \begin{align*}
+      (\ell,g,u_t,x_t. t_\tEl)[\sigma][\phi]
+      &= (\ell,g,u_t,x_t. t_\tEl[\sigma,g/g,u_t^\id/u_t][\phi,\ell/\ell]) \\
+      &= (\ell,g,u_t,x_t. t_\tEl[\phi,\ell/\ell][(\sigma,g/g,u_t^\id/u_t)[\phi,\ell/\ell]])
+      \byIH \\
+      &= (\ell,g,u_t,x_t. t_\tEl[\phi,\ell/\ell][(\sigma[\phi],g/g,u_t^\id/u_t)])
+        \tag{$\sigma$ is universe weakened; \Cref{lem:dt:wkact}} \\
+      &= (\ell,g,u_t,x_t. t_\tEl)[\phi][\sigma[\phi]]
+    \end{align*}
+  \item
+    \begin{align*}
+      \wk^k_g[\sigma][\phi]
+      &= \wk^k_{\sigma(g)}[\phi] \\
+      &= \wk^k_{\sigma(g)[\phi]} 
+      \tag{by \Cref{lem:dt:wkact}} \\
+      &= \wk^k_{g[\sigma[\phi]]}  \\
+      &= \wk^k_g[\phi][\sigma[\phi]] 
+    \end{align*}
+    
+  \item
+    Then we consider $\cdot^k_g$, and we case analyze $\Gamma := \sigma(g)$:
+    \begin{itemize}[label=Subcase]
+    \item If $\Gamma$ ends with $\cdot$. 
+      \begin{align*}
+        \cdot^k_g[\sigma][\phi]
+        = \cdot^{|\Gamma| + \metalevel} [\phi] = \cdot^{|\Gamma| + \metalevel}
+      \end{align*}
+    \item If $\Gamma$ ends with $g'$. 
+      \begin{align*}
+        \cdot^k_g[\sigma][\phi]
+        = \cdot^{|\Gamma| + \metalevel}_{g'} [\phi] = \cdot^{|\Gamma| + \metalevel}_{g'}
+      \end{align*}
+    \end{itemize}
+    
+  \item
+    \begin{align*}
+      (\ell,g,u_t,x_t. t_\tEl)[\delta][\sigma]
+      &= (\ell,g,u_t,x_t. t_\tEl[\delta,x_t/x_t][\sigma,u_t^\id/u_t]) \\
+      &= (\ell,g,u_t,x_t. t_\tEl[\sigma,u_t^\id/u_t][(\delta,x_t/x_t)[\sigma,u_t^\id/u_t]])
+      \byIH \\
+      &= (\ell,g,u_t,x_t. t_\tEl[\sigma,u_t^\id/u_t][\delta[\sigma],x_t/x_t])
+      \tag{$\delta$ is globally weakened} \\
+      &= (\ell,g,u_t,x_t. t_\tEl)[\sigma][\delta[\sigma]]
+    \end{align*}
+    
+  \item Now we consider $\wk^k_g \circ \delta$. %
+    This composition basically cancels out all terms from $\delta$ and leave a
+    weakening behind. %
+    In this case, we know that $\delta$ must end with $\wk^{k'}_g$ for some $g$. %
+    Moreover, in order to compose, we have that $|\delta| = \metalevel$. %
+    Therefore, 
+    \begin{align*}
+      (\wk^k_g \circ \delta) [\sigma]
+      &= \wk^{\widehat \delta}_g[\sigma] \\
+      &= \wk^{k'}_{\sigma(g)}
+    \end{align*}
+    Moreover,
+    \begin{align*}
+      (\wk^k_g[\sigma]) \circ (\delta[\sigma])
+      &= \wk^{|\delta|}_{\sigma(g)} \circ (\delta[\sigma]) \\
+      &= \wk^{k'}_{\sigma(g)}
+        \tag{$\wk^{|\delta|}_{\sigma(g)}$ projects away all leading terms kept by
+        $\delta$ so only $\wk^{k'}_{g}[\sigma]$ is left}
+    \end{align*}
+    Therefore two expressions are equal. %
+    Similar reasoning holds for the case of $\cdot^k_g \circ \delta$. 
+    
+  \item Then we consider $\cdot^k$ and case analyze $\widecheck \delta$.
+    \begin{itemize}[label=Subcase]
+    \item If $\widecheck\delta$ is not a context variable, then $\delta$ must end
+      with $\cdot^{k'}$ and also $|\delta| = \metalevel$ due to well-typedness.
+      \begin{align*}
+        (\cdot^k \circ \delta)[\sigma]
+        &= \cdot^{\widehat \delta}[\sigma] \\
+        &= \cdot^{k'} \\
+        &= \cdot^{k'}[\sigma] \\
+        &= (\cdot^k[\sigma]) \circ (\delta[\sigma])
+      \end{align*}
+    \item If $\widecheck\delta$ is context variable $g$, then $\delta$ must end
+      with $\cdot^{k'}_g$ and also $|\delta| = \metalevel$ due to well-typedness.
+      \begin{align*}
+        (\cdot^k \circ \delta)[\sigma]
+        &= \cdot^{\widehat \delta}_g[\sigma] \\
+        &= \cdot^{k'}_g[\sigma]
+      \end{align*}
+      Moreover,
+      \begin{align*}
+        \cdot^k[\sigma] \circ (\delta[\sigma])
+        &= \cdot^k \circ (\delta[\sigma]) \\
+        &= \cdot^{\widehat{\delta[\sigma]}}_{\widecheck{\delta[\sigma]}} \\
+        &= \cdot^{|\sigma(g)| + k'}_{\widecheck{\delta[\sigma]}}
+      \end{align*}
+      Then we consider whether $\sigma(g)$ ends with another context variable or
+      not.
+      \begin{itemize}[label=Subsubcase]
+      \item If $\sigma(g)$ ends with $\cdot$, then 
+        \begin{align*}
+          (\cdot^k \circ \delta)[\sigma]
+          &= \cdot^{k'}_g[\sigma] \\
+          &= \cdot^{|\sigma(g)| + k'}
+        \end{align*}
+        and also $\delta[\sigma]$ must also end with no global variable.
+      \item If $\sigma(g)$ ends with some $g'$, then 
+        \begin{align*}
+          (\cdot^k \circ \delta)[\sigma]
+          &= \cdot^{k'}_g[\sigma] \\
+          &= \cdot^{|\sigma(g)| + k'}_{g'}
+        \end{align*}
+        Then $\widecheck{\delta[\sigma]}$ must also return $g'$. 
+      \end{itemize}
+    \end{itemize}
+  \end{itemize}
+\end{proof}
+
+% ----------
+\begin{lemma}[Universe Substitutions] $ $
+  \begin{itemize}
+  \item If $\judge[L']\Psi$ and $\typing[L]\phi{L'}$, then $\judge[L]{\Psi[\phi]}$.
+  \item If $\lpjudge[\Psi][L']i\Gamma$ and $\typing[L]\phi{L'}$, then $\lpjudge[\Psi[\phi]]i{\Gamma[\phi]}$.
+  \item If $\lpequiv[\Psi][L']i\Gamma\Delta$ and $\typing[L]\phi{L'}$, then $\lpequiv[\Psi[\phi]]i{\Gamma[\phi]}{\Delta[\phi]}$.
+  \item If $\lttypwf[\Psi][\Gamma][L']i T l$ and $\typing[L]\phi{L'}$, then
+    $\lttypwf[\Psi[\phi]][\Gamma[\phi]] i{T[\phi]}{l[\phi]}$.
+  \item If $\lttypeq[\Psi][\Gamma][L']i T{T'} l$ and $\typing[L]\phi{L'}$, then
+    $\lttypeq[\Psi[\phi]][\Gamma[\phi]] i{T[\phi]}{T'[\phi]} {l[\phi]}$.
+  \item If $\lttyping[\Psi][\Gamma][L']i t T l$ and $\typing[L]\phi{L'}$, then
+    $\lttyping[\Psi[\phi]][\Gamma[\phi]] i{t[\phi]}{T[\phi]} {l[\phi]}$.
+  \item If $\lttyequiv[\Psi][\Gamma][L']i t{t'} T l$ and $\typing[L]\phi{L'}$, then
+    $\lttyequiv[\Psi[\phi]][\Gamma[\phi]] i{t[\phi]}{t'[\phi]}{T[\phi]} {l[\phi]}$.
+  \item If $\ltsubst[\Psi][\Gamma][L'] i{\delta}{\Gamma'}$ and $\typing[L]\phi{L'}$, then
+    $\ltsubst[\Psi[\phi]][\Gamma[\phi]] i{\delta[\phi]}{\Gamma'[\phi]}$.
+  \item If $\ltsubeq[\Psi][\Gamma][L'] i{\delta}{\delta'}{\Gamma'}$ and $\typing[L]\phi{L'}$, then
+    $\ltsubeq[\Psi[\phi]][\Gamma[\phi]] i{\delta[\phi]}{\delta'[\phi]}{\Gamma'[\phi]}$.
+  \end{itemize}  
+\end{lemma}
+\begin{proof}
+  Do a mutual induction. Most rules do not alter the universe context at all so they
+  are discharged naturally. %
+  When encountering the only changing cases, i.e. universe-polymorphic functions and
+  branches of the recursive principles for code, we extend the unvierse substitutions
+  with sufficient new universe variables before applying the IHs. %
+  When computation rules are encountered, we apply the composition lemma above before
+  applying the IHs.
+
+  We consider one complex computational rule in detail to illustrate the proof of the
+  lemma:
+  \begin{mathpar}
+    \inferrule
+    {G_A \\ \lpjudge \metalevel \Gamma \\ \typing[L']{l}\Level \\ \typing[L']{l'}\Level \\ \lpjudge[\Psi][L'] \proglevel \Delta \\
+      \lttypwf[\Psi][\Delta][L'] \codelevel S l  \\ \lttypwf[\Psi][\Delta, x : S \at l][L']\codelevel{T}{l'} \\
+      t = \boxit{\PI{l}{l'}x S T} \\
+      s_S = \ELIMTYP{l_1}{l_2}M b{l}\Delta{(\boxit{S})} \\
+      s_T = \ELIMTYP{l_1}{l_2}M b{l'}{(\Delta, x : S \at l)}{(\boxit{T})}}
+    {\lttyequiv[\Psi][\Gamma][L'] \metalevel {t_\Pi[l/\ell,l'/\ell',\Delta/g,S/U_S,T/U_T,s_S/x_S,
+        s_T/x_T]}{\ELIMTYP{l_1}{l_2}M b{(l \sqcup
+          l')}\Delta{t}}{M_\Typ[l\sqcup l'/\ell,\Delta/g,t/x_T]}{l_1}}
+  \end{mathpar}
+  On the right hand side, $\phi$ simply propagates. %
+  By IH, we can show that all premises with the universe-substituted sub-terms are
+  well-formed. %
+  For example, we have
+  \[
+    \lttypwf[\Psi[\phi]][\Delta[\phi]]\codelevel{S[\phi]}{l[\phi]}
+  \]
+  and
+  \[
+    \lttypwf[\Psi[\phi]][\Delta[\phi], x : S[\phi] \at {l[\phi]}]\codelevel{T[\phi]}{l'[\phi]}
+  \]
+  Now we consider the left hand side.
+  \begin{align*}
+    & t_\Pi[l/\ell,l'/\ell',\Delta/g,S/U_S,T/U_T,s_S/x_S,
+    s_T/x_T][\phi] \\
+    =~ & t_\Pi[l/\ell,l'/\ell'][\phi][\Delta[\phi]/g,S[\phi]/U_S,T[\phi]/U_T,s_S[\phi]/x_S,
+      s_T[\phi]/x_T]
+      \tag{by \Cref{lem:dt:interact}} \\
+    =~ & t_\Pi[\phi,\ell/\ell,\ell'/\ell'][l[\phi]/\ell,l'[\phi]/\ell'][\Delta[\phi]/g,S[\phi]/U_S,T[\phi]/U_T,s_S[\phi]/x_S,
+      s_T[\phi]/x_T]
+      \tag{by naturality of substitutions}
+  \end{align*}
+  Note that $t_\Pi[\phi,\ell/\ell,\ell'/\ell']$ is precisely how $\phi$ should be
+  propagated in $t_\Pi$. %
+
+  Now we consider the type. %
+  A similar reasoning applies:
+  \begin{align*}
+    M_\Typ[l \sqcup l'/\ell, \Delta/g,t/x_T][\phi]
+    &= M_\Typ[l \sqcup l'/\ell][\phi][\Delta[\phi]/g,t[\phi]/x_T]
+      \tag{by \Cref{lem:dt:interact}} \\
+    &= M_\Typ[\phi,\ell/\ell][l[\phi] \sqcup l'[\phi]/\ell][\Delta[\phi]/g,t[\phi]/x_T]
+      \tag{by naturality of substitutions}
+  \end{align*}
+  This equality verifies the resulting type is correct. %
+  The same rule ensures the equivalence lives in the universe level $l_1[\phi]$. 
+\end{proof}
+
+Then we consider the properties of local substitutions.
+\begin{lemma}[Partial Presupposition]\labeledit{lem:dt:presup1} $ $
+  \begin{itemize}
+  \item If $\lpjudge i \Gamma$, then $\judge[L]\Psi$. 
+  \item If $\lpequiv i \Gamma \Delta$, then $\lpjudge i \Gamma$ and $\lpjudge i
+    \Delta$. 
+  \item If $\ltsubst i \delta \Delta$, then $\lpjudge i \Gamma$. 
+  \item If $\ltsubeq i{\delta}{\delta'}\Delta$, then $\ltsubst i \delta \Delta$ and
+    $\ltsubst i{\delta'} \Delta$.
+  \item If $\ptyping \sigma \Phi$, then $\judge[L]\Psi$ and $\judge[L]\Phi$.
+  \end{itemize}
+\end{lemma}
+\begin{proof}
+  Induction on their respective premises. Note that in the second statement, the
+  definition of $\lpequiv i \Gamma \Delta$ is adjusted so that a simple induction
+  would suffice. %
+  The third statement requires the extra premises added to the step case of the equivalence judgment.
+\end{proof}
+In fact the lemma above has given full presupposition for local contexts and their
+equivalence. %
+Therefore, in the forthcoming full presupposition lemma, we do not have to state these
+cases.
+
+\begin{lemma}[Symmetry and Transitivity of Local Substitutions] $ $
+  \begin{itemize}
+  \item If $\ltsubeq i{\delta}{\delta'}\Delta$, then $\ltsubeq i{\delta'}{\delta}\Delta$.
+  \item If $\ltsubeq i{\delta}{\delta'}\Delta$ and $\ltsubeq
+    i{\delta}{\delta''}\Delta$, then $\ltsubeq i{\delta}{\delta''}\Delta$.
+  \end{itemize}
+\end{lemma}
+\begin{proof}
+  By induction.
+\end{proof}
+
+\begin{lemma}[Reflexivity] $ $
+  \begin{itemize}
+  \item If $\lttypwf i T l$, then $\lttypeq i T T l$.
+  \item If $\lttyping i t T l$, then $\lttyequiv i t t T l$.
+  \item If $\ltsubst i \delta \Delta$, then $\ltsubeq i \delta \delta \Delta$. 
+  \item If $\lpjudge i \Gamma$, then $\lpequiv i \Gamma \Gamma$.
+  \end{itemize}
+\end{lemma}
+\begin{proof}
+  The first two statements are proved by symmetry and then transitivity. %
+  The third (fourth) statement is a natural consequence of the second (first, resp.) statement. 
+\end{proof}
+
+
+\begin{lemma}[Local Substitutions]$ $
+  \begin{itemize}
+  \item If $\lttypwf[\Psi][\Gamma']i T l$ and $\ltsubst i{\delta}{\Gamma'}$, then
+    $\lttypwf i{T[\delta]} l$.
+  \item If $\lttypeq[\Psi][\Gamma']i T{T'} l$ and $\ltsubst i{\delta}{\Gamma'}$, then
+    $\lttypeq i{T[\delta]}{T'[\delta]} l$.
+  \item If $\lttyping[\Psi][\Gamma']i t T l$ and $\ltsubst i{\delta}{\Gamma'}$, then
+    $\lttyping i{t[\delta]}{T[\delta]} l$.
+  \item If $\lttyequiv[\Psi][\Gamma']i t{t'} T l$ and $\ltsubst i{\delta}{\Gamma'}$, then
+    $\lttyequiv i{t[\delta]}{t'[\delta]}{T[\delta]} l$.
+  \item If $\ltsubst[\Psi][\Gamma'] i{\delta'}{\Gamma''}$ and $\ltsubst i{\delta}{\Gamma'}$, then
+    $\ltsubst i{\delta' \circ \delta}{\Gamma''}$.
+  \item If $\ltsubeq[\Psi][\Gamma'] i{\delta'}{\delta''}{\Gamma''}$ and $\ltsubst i{\delta}{\Gamma'}$, then
+    $\ltsubeq i{\delta' \circ \delta}{\delta'' \circ \delta}{\Gamma''}$.
+  \end{itemize}
+\end{lemma}
+\begin{proof}
+  Do a mutual induction. %
+  Many cases go through naturally if their premises do not alter the local context. %
+  In the base cases, we use partial presupposition above to obtain $\lpjudge i
+  \Gamma$ and $\judge[L]\Psi$. %
+  The global variable cases depend on the composition of local substitutions. %
+  The local variable case depends on the reflexivity lemma. 
+  
+  We consider a few cases:
+  \begin{itemize}[label=Case]
+  \item
+    \begin{mathpar}
+      \inferrule
+      {\lttyequiv[\Psi][\Gamma'] \metalevel{t}{t'}{\TPI U[\Delta] l{l'}{T''}}{l'} \\ \lttypeq[\Psi][\Delta] \proglevel{T}{T'}l}
+      {\lttyequiv[\Psi][\Gamma'] \metalevel{\TAPP t{T}}{\TAPP{t'}{T'}}{T''[T/U]}{l'}}
+    \end{mathpar}
+    \begin{align*}
+      & \lttyequiv \metalevel{t[\delta]}{t'[\delta]}{\TPI U[\Delta] l{l'}{(T''[\delta])}}{l'}
+        \byIH \\
+      & \lttyequiv \metalevel{\TAPP{t[\delta]}{T}}{\TAPP{t'[\delta]}{T'}}{T''[\delta][T/U]}{l'}
+        \tag{by the same congruence rule} 
+    \end{align*}
+    Notice that
+    \[
+      T''[\delta][T/U] = T''[T/U][\delta[T/U]] = T''[T/U][\delta]
+    \]
+    where the second equation holds because $\delta$ is not typed in a context with
+    $U$.
+    
+  \item
+    \begin{mathpar}
+      \inferrule
+      {G_A \\ \lpjudge \metalevel {\Gamma'} \\ \lpjudge \proglevel \Delta \\ \typing[L]l\Level  \\
+        \typing[L]{l'}\Level \\ \lttypwf[\Psi][\Delta] \codelevel S l \\
+        \lttyping[\Psi][\Delta, x : S \at l] \codelevel t{T}{l'} \\
+        l_\Pi = l \sqcup l' \\
+        T_\Pi = \PI{l}{l'}x{S}{T} \\
+        t' = \boxit{\LAM{l}{l'}x{S}{t}} \\
+        s_S = \ELIMTYP{l_1}{l_2}M b{l}\Delta{(\boxit{S})}[\delta] \\
+        s_t = \ELIMTRM{l_1}{l_2}M b{l'}{(\Delta, x : S \at l)}{T}{(\boxit{t})}[\delta] \\
+        \delta' = s_S/x_S,s_t/x_t}
+      {\lttyequiv[\Psi][\Gamma'] \metalevel{t_\lambda[l/\ell,l'/\ell',\Delta/g,S/U_S,T/U_T,t/u_t,\delta']}{\ELIMTRM{l_1}{l_2}M b{l_\Pi}\Delta{T_\Pi}{t'}}{M_\Trm[l_\Pi/\ell,\Delta/g,T_\Pi/U_T,t'/x_t]}{l_2}}
+    \end{mathpar}
+    In this case, we first apply IHs so that $\delta$ is propagated into all premises
+    in $G_A$ and we must reason about the left hand side and the result type.
+    \begin{align*}
+      & t_\lambda[\delta,x_S/x_S,x_t/x_t][l/\ell,l'/\ell',\Delta/g,S/U_S,T/U_T,t/u_t,\delta'] \\
+      =~& t_\lambda[l/\ell,l'/\ell',\Delta/g,S/U_S,T/U_T,t/u_t][\delta[l/\ell,l'/\ell',\Delta/g,S/U_S,T/U_T,t/u_t],x_S/x_S,x_t/x_t][\delta']
+          \tag{by \Cref{lem:dt:interact}} \\
+      =~&t_\lambda[l/\ell,l'/\ell',\Delta/g,S/U_S,T/U_T,t/u_t][\delta,x_S/x_S,x_t/x_t][\delta']
+          \tag{$\delta$ has no those variables} \\
+      =~&t_\lambda[l/\ell,l'/\ell',\Delta/g,S/U_S,T/U_T,t/u_t][s_S/x_S,s_t/x_t][\delta]
+          \tag{naturality of local substitutions}
+    \end{align*}
+    On the return type, we have
+    \begin{align*}
+      & M_\Trm[\delta,x_t/x_t][l_\Pi/\ell,\Delta/g,T_\Pi/U_T,t'/x_t] \\
+      =~& M_\Trm[l_\Pi/\ell,\Delta/g,T_\Pi/U_T][\delta,x_t/x_t][t'/x_t]
+          \tag{by \Cref{lem:dt:interact} similarly} \\
+      =~& M_\Trm[l_\Pi/\ell,\Delta/g,T_\Pi/U_T][t'/x_t][\delta]
+          \tag{naturality of local substitutions}
+    \end{align*}
+    Both equations conclude this case. 
+  \end{itemize}
+\end{proof}
+
+We also need a similar lemma about equivalent local substitutions.
+\begin{lemma}[Equivalent Local Substitutions]\labeledit{lem:dt:lsubst-eq}$ $
+  \begin{itemize}
+  \item If $\lttypwf[\Psi][\Gamma']i T l$ and $\ltsubeq i{\delta_1}{\delta_2}{\Gamma'}$, then
+    $\lttypeq i{T[\delta_1]}{T[\delta_2]} l$.
+  \item If $\lttypeq[\Psi][\Gamma']i T{T'} l$ and $\ltsubeq i{\delta_1}{\delta_2}{\Gamma'}$, then
+    $\lttypeq i{T[\delta_1]}{T'[\delta_2]} l$.
+  \item If $\lttyping[\Psi][\Gamma']i t T l$ and $\ltsubeq i{\delta_1}{\delta_2}{\Gamma'}$, then
+    $\lttyequiv i{t[\delta_1]}{t[\delta_2]}{T[\delta_1]} l$.
+  \item If $\lttyequiv[\Psi][\Gamma']i t{t'} T l$ and $\ltsubeq i{\delta_1}{\delta_2}{\Gamma'}$, then
+    $\lttyequiv i{t[\delta_1]}{t'[\delta_2]}{T[\delta_1]} l$.
+  \item If $\ltsubst[\Psi][\Gamma'] i{\delta}{\Gamma''}$ and $\ltsubeq i{\delta_1}{\delta_2}{\Gamma'}$, then
+    $\ltsubeq i{\delta \circ \delta_1}{\delta \circ \delta_2}{\Gamma''}$.
+  \item If $\ltsubeq[\Psi][\Gamma'] i{\delta}{\delta'}{\Gamma''}$ and $\ltsubeq i{\delta_1}{\delta_2}{\Gamma'}$, then
+    $\ltsubeq i{\delta \circ \delta_1}{\delta' \circ \delta_2}{\Gamma''}$.
+  \end{itemize}
+\end{lemma}
+\begin{proof}
+  We proceed by mutual induction. %
+  When we encounter well-formedness of types and well-typedness of terms, we conclude
+  by IHs and respective congruence rules. %
+  What is more difficult are the asymmetric equivalence rules. %
+  We must apply IHs a bit more carefully to obtain the conclusions. %
+  We elaborate on a few cases.
+  \begin{itemize}[label=Case]
+  \item
+    \begin{mathpar}
+      \inferrule
+      {\lttyequiv[\Psi][\Gamma'] i t{t'}T l \\ \lttyequiv[\Psi][\Gamma'] i{t'}{t''}T l}
+      {\lttyequiv[\Psi][\Gamma'] i t{t''}T l}
+    \end{mathpar}
+    \begin{align*}
+      & \ltsubst i{\delta_1}{\Gamma'}
+        \tag{by presupposition} \\
+      & \lttyequiv i {t[\delta_1]}{t'[\delta_1]}{T[\delta_1]} l
+        \tag{by local substitution lemma} \\
+      & \lttyequiv i{t'[\delta_1]}{t''[\delta_2]}{T[\delta_1]} l
+        \byIH \\
+      & \lttyequiv i {t[\delta_1]}{t''[\delta_2]}{T[\delta_1]} l
+        \tag{by transitivity}
+    \end{align*}
+  \item
+    \begin{mathpar}
+      \inferrule
+      {\lttyping[\Psi][\Gamma'] i t{T'}l \\ \lttypeq[\Psi][\Gamma']{\typeof i}T{T'}l}
+      {\lttyping[\Psi][\Gamma'] i t T l}
+    \end{mathpar}
+    \begin{align*}
+      & \ltsubst i{\delta_1}{\Gamma'}
+        \tag{by presupposition} \\
+      & \lttypeq{\typeof i}{T[\delta_1]}{T'[\delta_1]}l
+        \tag{by local substitution lemma} \\
+      & \lttyequiv i {t[\delta_1]}{t[\delta_2]}{T'[\delta_1]}l
+        \byIH \\
+      & \lttyequiv i {t[\delta_1]}{t[\delta_2]}{T[\delta_1]}l
+        \tag{by conversion}
+    \end{align*}
+    
+  \item
+    \begin{mathpar}
+      \inferrule
+      {\lpjudge \metalevel{\Gamma'} \\ \lttyping[\Psi, U : \DTyp[\Delta] \proglevel l][\Gamma']\metalevel{t}{T'}{l'} \\ \typing[L]{l}\Level \\ \typing[L]{l'}\Level \\ \lttypwf[\Psi][\Delta] \proglevel{T} l}
+      {\lttyequiv[\Psi][\Gamma'] \metalevel{t[T/U]}{\TAPP{(\TLAM{l}{l'}U t)}{T}}{T'[T/U]}{l'}}
+    \end{mathpar}
+    \begin{align*}
+      & \ltsubst \metalevel{\delta_1}{\Gamma'}
+        \tag{by presupposition} \\
+      & \lttyequiv \metalevel{t[T/U][\delta_1]}{\TAPP{(\TLAM{l}{l'}U
+        {t[\delta_1]})}{T}}{T'[T/U][\delta_1]}{l'}
+        \tag{by local substitution lemma} \\
+      & \lttyequiv[\Psi, U : \DTyp[\Delta] \proglevel
+        l]\metalevel{t[\delta_1]}{t[\delta_2]}{T'[\delta_1]}{l'}
+        \byIH \\
+      & \lttyequiv \metalevel{\TAPP{(\TLAM{l}{l'}U {t[\delta_1]})}{T}}{\TAPP{(\TLAM{l}{l'}U
+        {t[\delta_2]})}{T}}{T'[T/U][\delta_1]}{l'}
+        \tag{by congruence; note that $T'[T/U][\delta_1] = T'[\delta_1][T/U]$ as
+        $U$ is not in $\delta_1$} \\
+      & \lttyequiv \metalevel{t[T/U][\delta_1]}{\TAPP{(\TLAM{l}{l'}U
+        {t[\delta_2]})}{T}}{T'[T/U][\delta_1]}{l'}
+        \tag{by transitivity} 
+    \end{align*}
+    
+  \item
+    \begin{mathpar}
+      \inferrule
+      {\lpjudge \metalevel{\Gamma'} \\ \typing[L]{l'}\Level \\ \typing[L]l\Level \\ \lpjudge \proglevel \Delta \\
+        \lttypwf[\Psi][\Delta]\codelevel T l \\
+        \lttypwf[\Psi][\Gamma',x_T : \CTyp[\Delta]l \at{0}]\metalevel{M}{l'} \\
+        \lttyping[\Psi, U : \DTyp[\Delta]\codelevel l][\Gamma']\metalevel{t'}{M[\boxit U^\id/x_T]}{l'}}
+      {\lttyequiv[\Psi][\Gamma'] \metalevel{t'[T/U]}{\LETBTYP{l'}l \Delta{x_T.M}{U}{t'}{(\boxit T)}}{M[\boxit T/x_T]}{l'}}
+    \end{mathpar}
+    \begin{align*}
+      & \ltsubst \metalevel{\delta_1}{\Gamma'}
+        \tag{by presupposition} \\
+      & \lpjudge \metalevel{\Gamma}
+        \tag{by presupposition} \\        
+      & \lttyequiv \metalevel{t'[T/U][\delta_1]}{\LETBTYP{l'}l
+        \Delta{x_T.M[\delta_1,x_T/x_T]}{U}{t'[\delta_1]}{(\boxit T)}}{M[\boxit
+        T/x_T][\delta_1]}{l'}
+        \tag{by local substitution lemma} \\
+      & \lttypeq[\Psi][\Gamma,x_T : \CTyp[\Delta]l \at{0}]\metalevel{M[\delta_1,x_T/x_T]}{M[\delta_2,x_T/x_T]}{l'}
+        \byIH \\
+      & \lttyequiv[\Psi, U : \DTyp[\Delta]\codelevel
+        l]\metalevel{t'[\delta_1]}{t'[\delta_2]}{M[\delta_1,x_T/x_T][\boxit U^\id/x_T]}{l'}
+        \byIH \\
+      & \quad {\LETBTYP{l'}l
+        \Delta{x_T.M[\delta_1,x_T/x_T]}{U}{t'[\delta_1]}{(\boxit T)}} \\
+      & \approx {\LETBTYP{l'}l
+        \Delta{x_T.M[\delta_2,x_T/x_T]}{U}{t'[\delta_2]}{(\boxit T)}}:
+        {M[\delta_1,x_T/x_T][\boxit T/x_T]}
+        \tag{by congruence} \\
+      & \lttyequiv \metalevel{t'[T/U][\delta_1]}{\LETBTYP{l'}l
+        \Delta{x_T.M[\delta_2,x_T/x_T]}{U}{t'[\delta_2]}{(\boxit T)}}{M[\delta_1,x_T/x_T][\boxit
+        T/x_T]}{l'}
+        \tag{by transitivity}
+    \end{align*}
+    
+  \item Finally we consider a $\eta$ rule.
+    \begin{mathpar}
+      \inferrule
+      {\lttyping[\Psi][\Gamma'] \metalevel{t}{\CPI g l T}{l}}
+      {\lttyequiv[\Psi][\Gamma'] \metalevel{\CLAM l g {(\CAPP t g)}}{t}{\CPI g l T}{l}}
+    \end{mathpar}
+    \begin{align*}
+      & \ltsubst \metalevel{\delta_1}{\Gamma'}
+        \tag{by presupposition} \\
+      & \lttyping \metalevel{t[\delta_1]}{\CPI g l{(T[\delta_1])}}{l}
+        \tag{by local substitution lemma} \\
+      & \lttyequiv \metalevel{\CLAM l g {(\CAPP{(t[\delta_1])} g)}}{t[\delta_1]}{\CPI g l{(T[\delta_1])}}{l}
+        \tag{by the same $\eta$ rule} \\
+      & \lttyequiv \metalevel{t[\delta_1]}{t[\delta_2]}{\CPI g l{(T[\delta_1])}}{l}
+        \byIH \\
+      & \lttyequiv \metalevel{\CLAM l g {(\CAPP{(t[\delta_1])} g)}}{t[\delta_2]}{\CPI g
+        l{(T[\delta_1])}}{l}
+        \tag{by transitivity}
+    \end{align*}
+  \end{itemize}
+\end{proof}
+\begin{remark}
+  Note that the statement of this lemma is left-biased. %
+  For example, when considering terms, the types are substituted by $\delta_1$. %
+  This bias causes the whole formulation of equivalence judgment between terms to be
+  left biased as well. %
+  Otherwise, this lemma cannot be easily justified as above and requires the global
+  substitution lemma, which definitely causes issues as the latter depends on this
+  very lemma in the global variable cases. %
+
+  A visible effect of this left bias is especially evident in the computation rules. %
+  For example, if we define the following $\beta$ rule instead, then the lemma above
+  suddenly becomes unprovable at this stage:
+  \begin{mathpar}
+    \inferrule
+    {\lpjudge \metalevel{\Gamma'} \\ \lttyping[\Psi, U : \DTyp[\Delta] \proglevel l][\Gamma']\metalevel{t}{T'}{l'} \\ \typing[L]{l}\Level \\ \typing[L]{l'}\Level \\ \lttypwf[\Psi][\Delta] \proglevel{T} l}
+    {\lttyequiv[\Psi][\Gamma'] \metalevel{\TAPP{(\TLAM{l}{l'}U t)}{T}}{t[T/U]}{T'[T/U]}{l'}}
+  \end{mathpar}
+  Let us work on the proof to see what happens. %
+  We now must prove
+  \[
+    \lttyequiv \metalevel{\TAPP{(\TLAM{l}{l'}U{(t[\delta_1])})}{T}}{t[T/U][\delta_2]}{T'[T/U][\delta_1]}{l'}
+  \]
+  The only way to introduce $\delta_2$ on the right hand side now is to apply the
+  local substitution lemma, which yields
+  \[
+    \lttyequiv
+    \metalevel{\TAPP{(\TLAM{l}{l'}U{(t[\delta_2])})}{T}}{t[T/U][\delta_2]}{T'[T/U][{\color{red}\delta_2}]}{l'}
+  \]
+  Notice that the return type yields a local substitution $\delta_2$, instead of
+  $\delta_1$ as required by the goal. %
+  At this stage, however, we are not able to prove the equivalence between
+  $T'[T/U][\delta_1]$ and $T'[T/U][\delta_2]$ as we are missing the global
+  substitution lemma to justify that $T'[T/U]$ remains well-formed.
+
+  Similarly, we are not able to prove a lemma if some $\eta$ rules are flipped
+  either. %
+  Consider the following ``innocent'' $\eta$ rule:
+  \begin{mathpar}
+    \inferrule
+    {\lttyping[\Psi][\Gamma'] \metalevel{t}{\CPI g l T}{l}}
+    {\lttyequiv[\Psi][\Gamma'] \metalevel{t}{\CLAM l g {(\CAPP t g)}}{\CPI g l T}{l}}
+  \end{mathpar}
+  Since there is only one premise, we have no choice but to eventually use IH to
+  obtain
+  \[
+    \lttyequiv \metalevel{t[\delta_1]}{t[\delta_2]}{\CPI g l{(T[\delta_1])}}{l}
+  \]
+  This leaves us \emph{to prove}
+  \[
+    \lttyequiv \metalevel{t[\delta_2]}{\CLAM l g {(\CAPP{(t[\delta_2])} g)}}{\CPI g l {(T[{\color{red}\delta_1}])}}{l}
+  \]
+  Notice how the equivalence itself talks about $\delta_2$ exclusively while the type
+  refers to $\delta_1$. %
+  This asymmetry forces us to flip the equivalence to obtain a better proof. 
+\end{remark}
+
+Then we move on to the global substitution lemma. %
+We must first establish a number of other lemmas. %
+The lifting lemma is one of the guiding lemmas of the layering principle, where we
+require that well-formedness can be carried over to higher layers. 
+\begin{lemma}[Lifting]\labeledit{lem:dt:lift} If $i \le i'$, and
+  \begin{itemize}
+  \item $\lpjudge i \Gamma$, then $\lpjudge{i'} \Gamma$;
+  \item $\lpequiv i \Gamma \Delta$, then $\lpequiv{i'} \Gamma \Delta$;
+  \item $\lttypwf i T l$, then $\lttypwf{i'} T l$;
+  \item $\lttypeq i T{T'} l$, then $\lttypeq{i'} T{T'} l$;
+  \item $\lttyping i t T l$, then $\lttyping{i'} t T l$.
+  \item $\lttyequiv i t{t'} T l$, then $\lttyequiv{i'} t{t'} T l$;
+  \item $\ltsubst i{\delta}{\Delta}$, then $\ltsubst{i'}{\delta}{\Delta}$;
+  \item $\ltsubeq i{\delta}{\delta'}{\Delta}$, then $\ltsubeq{i'}{\delta}{\delta'}{\Delta}$.
+  \end{itemize}
+\end{lemma}
+\begin{proof}
+  First, we realize that the $\ttypeof$ function is monotonic, i.e. $\typeof i \le
+  \typeof{i'}$. %
+  We proceed by a mutual induction. %
+  Most cases are obvious by IHs. %
+  Notice that there are cases where we have premises like $\lpjudge{\typeof i}
+  \Gamma$, so we must apply IH to obtain $\lpjudge{\typeof{i'}} \Gamma$ with the
+  monotonicity property above. %
+  It works similarly for the conversion rule, where we have $\lttypeq{\typeof i}T
+  {T'} l$. %
+  In the cases of global variables, the transitivity of $\le$ eventually complete the
+  proof of this lemma. %
+  We elaborate on one case:
+  \begin{mathpar}
+    \inferrule
+    {\lpjudge{\typeof i}\Gamma \\ u : \DTrm[\Delta]{i''}T l \in \Psi \\ i'' \in \{\varlevel, \codelevel\} \\ i \in
+      \{\varlevel, \codelevel, \proglevel, \metalevel\} \\ i'' \le i \\ \ltsubst i \delta \Delta}
+    {\lttyping i{u^\delta}{T[\delta]}{l}}
+  \end{mathpar}
+  \begin{align*}
+    & \lpjudge{\typeof{i'}}\Gamma
+      \byIH \\
+    & \ltsubst{i'} \delta \Delta
+      \byIH \\
+    & i'' \le i \le i' \\
+    & \lttyping{i'}{u^\delta}{T[\delta]}{l}
+      \tag{by the same rule}
+  \end{align*}
+\end{proof}
+
+The inverse of lifting sometimes is possible
+\begin{lemma}[Unlifting] $ $
+  \begin{itemize}
+  \item $\lttypwf \proglevel T l$, then $\lttypwf \codelevel T l$;
+  \item $\lttyping \proglevel t T l$, then $\lttyping \codelevel t T l$.
+  \item $\ltsubst \proglevel{\delta}{\Delta}$, then $\ltsubst \codelevel{\delta}{\Delta}$;
+  \end{itemize}
+\end{lemma}
+\begin{proof}
+  Induction. %
+  Notice that $\typeof \proglevel = \typeof \codelevel = \proglevel$. 
+\end{proof}
+The unlifting lemma says that the typing at layer $\proglevel$ can be unlifted back to layer
+$\codelevel$. %
+
+As another guiding lemma, we have the static code lemma, which states that code at
+layer $\varlevel$ and $\codelevel$ has no computational behavior.
+\begin{lemma}[Static Code]\labeledit{lem:dt:static} If $i \in \{\varlevel, \codelevel\}$,
+  \begin{itemize}
+  \item $\lttypeq i T{T'} l$, then $T = T'$;
+  \item $\lttyequiv i t{t'} T l$, then $t = t'$;
+  \item $\ltsubeq i{\delta}{\delta'}{\Delta}$, then $\delta = \delta'$.
+  \end{itemize}
+  All equalities above are quotient over the equivalence of universe levels.
+\end{lemma}
+\begin{proof}
+  Mutual induction. %
+  We are not concerned about the equivalence of types due to the conversion rule.
+\end{proof}
+We emphasize again that the equalities hold modulo the equivalence of universe
+levels. %
+For example, $\Ty{\ell \sqcup \ell'}$ and $\Ty{\ell' \sqcup \ell}$ as code are
+considered \emph{equal}, though their universe levels are not exactly syntactically
+identical. %
+This is fine as we know how to decide the equality between two universe levels as
+shown in \Cref{sec:dt:ulevel}. 
+
+\begin{lemma}[Global Substitutions]$ $
+  \begin{itemize}
+  \item If $\lpjudge[\Phi] i \Gamma$, $i \in \{\proglevel, \metalevel\}$ and $\ptyping{\sigma}{\Phi}$, then $\lpjudge i {\Gamma[\sigma]}$.
+  \item If $\lpequiv[\Phi] i \Gamma \Delta$, $i \in \{\proglevel, \metalevel\}$ and $\ptyping{\sigma}{\Phi}$, then $\lpequiv i {\Gamma[\sigma]}{\Delta[\sigma]}$.
+  \item If $\lttypwf[\Phi]i T l$ and $\ptyping\sigma\Phi$, then
+    $\lttypwf[\Psi][\Gamma[\sigma]] i{T[\sigma]} l$.
+  \item If $\lttypeq[\Phi]i T{T'} l$ and $\ptyping\sigma\Phi$, then
+    $\lttypeq[\Psi][\Gamma[\sigma]] i{T[\sigma]}{T'[\sigma]} l$.
+  \item If $\lttyping[\Phi]i t T l$ and $\ptyping\sigma\Phi$, then
+    $\lttyping[\Psi][\Gamma[\sigma]] i{t[\sigma]}{T[\sigma]} l$.
+  \item If $\lttyequiv[\Phi]i t{t'} T l$ and $\ptyping\sigma\Phi$, then
+    $\lttyequiv[\Psi][\Gamma[\sigma]] i{t[\sigma]}{t'[\sigma]}{T[\sigma]} l$.
+  \item If $\ltsubst[\Phi] i{\delta}{\Delta}$ and $\ptyping\sigma\Phi$, then
+    $\ltsubst[\Psi][\Gamma[\sigma]] i{\delta[\sigma]}{\Delta[\sigma]}$.
+  \item If $\ltsubeq[\Phi] i{\delta}{\delta'}{\Delta}$ and $\ptyping\sigma\Phi$, then
+    $\ltsubeq[\Psi][\Gamma[\sigma]] i{\delta[\sigma]}{\delta'[\sigma]}{\Delta[\sigma]}$.
+  \end{itemize}
+\end{lemma}
+\begin{proof}
+  We proceed by a mutual induction. %
+  Notice that in the first two statements, $i \in \{\proglevel, \metalevel\}$, namely the range of the
+  $\ttypeof$ function. %
+  This ensures a lookup $\sigma(g)$ of a context variable $g$ to be well-formed at
+  layer $i$, due to \Cref{lem:dt:lift}.  %
+  Most cases can be discharged by IHs directly. %
+  The complex cases are the computation rules and the global variable cases. %
+  
+  We consider a few cases:
+  \begin{itemize}[label=Case]
+  \item
+    \begin{mathpar}
+      \inferrule
+      {\lpjudge[\Phi]{\typeof i}\Gamma \\ u : \DTrm[\Delta]{i'}T l \in \Phi \\ i' \in \{\varlevel, \codelevel\} \\ i \in
+        \{\varlevel, \codelevel, \proglevel, \metalevel\} \\ i' \le i \\ \ltsubeq[\Phi] i \delta{\delta'} \Delta}
+      {\lttyequiv[\Phi] i{u^\delta}{u^{\delta'}}{T[\delta]}{l}}
+    \end{mathpar}
+    \begin{align*}
+      & \lttyping[\Psi][\Delta[\sigma]]{i'}{\sigma(u)}{T[\sigma]}l
+        \tag{by lookup} \\
+      & \lttyping[\Psi][\Delta[\sigma]]{i}{\sigma(u)}{T[\sigma]}l
+        \tag{by lifting} \\
+      & \ltsubeq[\Psi][\Gamma[\sigma]] i
+        {\delta[\sigma]}{\delta'[\sigma]}{\Delta[\sigma]}
+        \byIH \\
+      &
+        \lttyequiv[\Psi][\Gamma[\sigma]]{i}{\sigma(u)[\delta[\sigma]]}{\sigma(u)[\delta'[\sigma]]}{T[\sigma][\delta[\sigma]]}l
+        \tag{by equivalent local substitution lemma}
+    \end{align*}
+    Notice that
+    \[
+      T[\sigma][\delta[\sigma]] = T[\delta][\sigma]
+    \]
+    
+  \item
+    \begin{mathpar}
+      \inferrule
+      {\lttyequiv[\Phi] \metalevel{t}{t'}{\UPI \ell l T}{\omega} \\ |\vect\ell| = |\vect l| = |\vect
+        l'| > 0 \\
+        \forall 0 \le n < |\vect l| ~.~ \tyequiv[L]{\vect l(n)}{\vect l'(n)}\Level}
+      {\lttyequiv[\Phi] \metalevel{t~\$~\vect l}{t'~\$~\vect l'}{T[\vect l/\vect \ell]}{l[\vect l/\vect \ell]}}
+    \end{mathpar}
+    \begin{align*}
+      & \lttyequiv[\Psi][\Gamma[\sigma]] \metalevel{t[\sigma]}{t'[\sigma]}{\UPI \ell l{(T[\sigma])}}{\omega}
+        \byIH \\
+      & \lttyequiv[\Psi][\Gamma[\sigma]] \metalevel{(t[\sigma])~\$~\vect l}{(t'[\sigma])~\$~\vect l'}{T[\sigma][\vect l/\vect \ell]}{l[\vect l/\vect \ell]}
+    \end{align*}
+    Note that
+    \[
+      T[\sigma][\vect l/\vect \ell] = T[\vect l/\vect \ell][\sigma[\vect l/\vect \ell]] = T[\vect l/\vect \ell][\sigma]
+    \]
+    because all $\vect\ell$ do not occur in $\sigma$.
+    
+  \item
+    \begin{mathpar}
+      \inferrule
+      {G_A \\ \lpjudge \metalevel{\Gamma} \\ \typing[L]{l}\Level \\ \typing[L]{l'}\Level \\ \lpjudge[\Phi] \proglevel \Delta \\
+        \lttypwf[\Phi][\Delta] \codelevel S l  \\ \lttypwf[\Phi][\Delta, x : S \at l]\codelevel{T}{l'} \\
+        t = \boxit{\PI{l}{l'}x S T} \\
+        s_S = \ELIMTYP{l_1}{l_2}M b{l}\Delta{(\boxit{S})} \\
+        s_T = \ELIMTYP{l_1}{l_2}M b{l'}{(\Delta, x : S \at l)}{(\boxit{T})}}
+      {\lttyequiv[\Phi] \metalevel {t_\Pi[l/\ell,l'/\ell',\Delta/g,S/U_S,T/U_T,s_S/x_S,
+          s_T/x_T]}{\ELIMTYP{l_1}{l_2}M b{(l \sqcup
+            l')}\Delta{t}}{M_\Typ[l\sqcup l'/\ell,\Delta/g,t/x_T]}{l_1}}
+    \end{mathpar}
+    We first proceed by using IHs on the premises, which include the following
+    judgments:
+    \begin{align*}
+      & \lpjudge \proglevel {\Delta[\sigma]} \\
+      & \lttypwf[\Psi][\Delta[\sigma]] \codelevel{S[\sigma]} l  \\
+      & \lttypwf[\Psi][\Delta[\sigma], x : S[\sigma] \at l]\codelevel{T[\sigma]}{l'}
+    \end{align*}
+    By using the same $\beta$ rule, we must check the resulting left hand side and the
+    result type are equal to the target goal. %
+    Let us first consider the left hand side:
+    \begin{align*}
+      & t_\Pi[\sigma,g/g,U_S^\id/U_S,U_T^\id/U_T][l/\ell,l'/\ell',\Delta[\sigma]/g,S[\sigma]/U_S,T[\sigma]/U_T,s_S[\sigma]/x_S,
+        s_T[\sigma]/x_T] \\
+      =~& t_\Pi[l/\ell,l'/\ell'][\sigma,g/g,U_S^\id/U_S,U_T^\id/U_T][\Delta[\sigma]/g,S[\sigma]/U_S,T[\sigma]/U_T,s_S[\sigma]/x_S,
+          s_T[\sigma]/x_T]
+          \tag{by \Cref{lem:dt:interact}; $\ell$ and $\ell'$ do not occur in $\sigma$}\\
+      =~& t_\Pi[l/\ell,l'/\ell'][\sigma,\Delta[\sigma]/g,S[\sigma]/U_S,T[\sigma]/U_T][s_S[\sigma]/x_S,
+          s_T[\sigma]/x_T] \\
+      =~& t_\Pi[l/\ell,l'/\ell'][\Delta/g,S/U_S,T/U_T][\sigma][s_S[\sigma]/x_S,
+          s_T[\sigma]/x_T]
+          \tag{by naturality} \\
+      =~& t_\Pi[l/\ell,l'/\ell'][\Delta/g,S/U_S,T/U_T][s_S/x_S, s_T/x_T][\sigma]
+          \tag{by \Cref{lem:dt:interact}}
+    \end{align*}
+    Then we consider the result type in a similar way:
+    \begin{align*}
+      & M_\Typ[\sigma,g/g][l\sqcup l'/\ell,\Delta[\sigma]/g,t[\sigma]/x_T] \\
+      =~& M_\Typ[l\sqcup l'/\ell][\sigma,g/g][\Delta[\sigma]/g,t[\sigma]/x_T] \\
+      =~& M_\Typ[l\sqcup l'/\ell][\Delta/g][\sigma][t[\sigma]/x_T] \\
+      =~& M_\Typ[l\sqcup l'/\ell][\Delta/g][t/x_T][\sigma]
+    \end{align*}
+    Both equations allow us to conclude the goal. 
+  \end{itemize}
+\end{proof}
+
+Next, we consider the effect of equivalent global substitutions on the judgments. %
+We first define the equivalence relation between global substitutions:
+\begin{mathpar}
+  \inferrule*
+  {\judge[L] \Psi}
+  {\ptyequiv{\cdot}{\cdot}{\cdot}}
+
+  \inferrule*
+  {\ptyequiv{\sigma}{\sigma'}{\Phi} \\ \lpequiv \proglevel \Gamma\Delta}
+  {\ptyequiv{\sigma, \Gamma/g}{\sigma', \Delta/g}{\Phi, g: \Ctx}}
+
+  \inferrule*
+  {\ptyequiv{\sigma}{\sigma'}{\Phi} \\ \lpjudge[\Phi] \proglevel \Gamma \\ \typing[L]l\Level \\ i \in \{\codelevel, \proglevel\}
+    \\ \lttypwf[\Psi][\Gamma[\sigma]] i{T}l \\ \lttypwf[\Psi][\Gamma[\sigma]] i{T'}l \\
+    \lttypeq[\Psi][\Gamma[\sigma]] i{T}{T'}l}
+  {\ptyequiv{\sigma, T/U}{\sigma', T'/U}{\Phi, u : \DTyp i l}}
+  
+  \inferrule*
+  {\ptyequiv{\sigma}{\sigma'}{\Phi} \\ \lttypwf[\Phi] \proglevel T l \\ \typing[L]l\Level \\
+    i \in \{\varlevel, \codelevel\} \\ \lttyping[\Psi][\Gamma[\sigma]] i t{T[\sigma]}l \\
+    \lttyping[\Psi][\Gamma[\sigma]] i{t'}{T[\sigma]}l \\
+    \lttyequiv[\Psi][\Gamma[\sigma]] i t{t'}{T[\sigma]}l}
+  {\ptyequiv[\Psi]{\sigma, t/u}{\sigma', t'/u}{\Phi, u : \DTrm{i} T l}}
+\end{mathpar}
+We can then consider similar properties of this equivalence relation.
+\begin{lemma}[Presupposition]
+  If $\ptyequiv{\sigma}{\sigma'}{\Phi}$, then $\ptyping{\sigma}{\Phi}$ and $\ptyping{\sigma'}{\Phi}$.
+\end{lemma}
+\begin{proof}
+  Induction. 
+\end{proof}
+
+\begin{lemma}[Equivalent Global Substitutions]\labeledit{lem:dt:gsubst-eq}$ $
+  \begin{itemize}
+  \item If $\lpjudge[\Phi] i \Gamma$, $i \in \{\proglevel, \metalevel\}$ and $\ptyequiv{\sigma}{\sigma'}{\Phi}$, then $\lpequiv i {\Gamma[\sigma]}{\Gamma[\sigma']}$.
+  \item If $\lpequiv[\Phi] i \Gamma \Delta$, $i \in \{\proglevel, \metalevel\}$ and $\ptyequiv{\sigma}{\sigma'}{\Phi}$, then $\lpequiv i {\Gamma[\sigma]}{\Delta[\sigma']}$.
+  \item If $\lttypwf[\Phi]i T l$ and $\ptyequiv{\sigma}{\sigma'}{\Phi}$, then
+    $\lttypeq[\Psi][\Gamma[\sigma]] i{T[\sigma]}{T[\sigma']} l$.
+  \item If $\lttypeq[\Phi]i T{T'} l$ and $\ptyequiv{\sigma}{\sigma'}{\Phi}$, then
+    $\lttypeq[\Psi][\Gamma[\sigma]] i{T[\sigma]}{T'[\sigma']} l$.
+  \item If $\lttyping[\Phi]i t T l$ and $\ptyequiv{\sigma}{\sigma'}{\Phi}$, then
+    $\lttyequiv[\Psi][\Gamma[\sigma]] i{t[\sigma]}{t[\sigma']}{T[\sigma]} l$.
+  \item If $\lttyequiv[\Phi]i t{t'} T l$ and $\ptyequiv{\sigma}{\sigma'}{\Phi}$, then
+    $\lttyequiv[\Psi][\Gamma[\sigma]] i{t[\sigma]}{t'[\sigma']}{T[\sigma]} l$.
+  \item If $\ltsubst[\Phi] i{\delta}{\Delta}$ and $\ptyequiv{\sigma}{\sigma'}{\Phi}$, then
+    $\ltsubeq[\Psi][\Gamma[\sigma]] i{\delta[\sigma]}{\delta[\sigma']}{\Delta[\sigma]}$.
+  \item If $\ltsubeq[\Phi] i{\delta}{\delta'}{\Delta}$ and $\ptyequiv{\sigma}{\sigma'}{\Phi}$, then
+    $\ltsubeq[\Psi][\Gamma[\sigma]] i{\delta[\sigma]}{\delta'[\sigma']}{\Delta[\sigma]}$.
+  \end{itemize}
+\end{lemma}
+\begin{proof}
+  We apply mutual induction. %
+  This lemma is much less sensitive to the exact statement of rules compared to
+  \Cref{lem:dt:lsubst-eq}. %
+  Since now we have proved the global substitution lemma, we could use conversion
+  rules whenever necessary.
+\end{proof}
+
+At this point, we have concluded that all substitutions are coherent with
+well-formedness and typing judgments. %
+Next, we shall move towards the full presupposition lemma and end our discussion on
+syntactic properties with it.
+
+\subsection{Context Equivalence and Presupposition}
+
+In order to establish presupposition, we must concern ourselves with the asymmetry in
+the congruence rules of the equivalence judgments. %
+Presupposition, intuitively, requires us to show that this asymmetry ``does not
+matter''. %
+This intuition is formalized by the context equivalence lemma. %
+In fact, we need two such lemmas, as we need to show one for local contexts and one
+for global contexts. %
+In light of that, let us proceed with the lemma for local contexts first.
+% \begin{lemma}[Local Context Equivalence Weakening]\labeledit{lem:dt:lctxeqwk} $ $
+%   \begin{itemize}
+%   \item If $\lpequiv i\Delta \Gamma$ and $\judge[L]{\Psi,\Phi}$, then $\lpequiv[\Psi,\Phi]i\Delta\Gamma$.
+%   \item If $\lpequiv i\Delta \Gamma$, then $\lpequiv[\Psi][L,L']i\Delta\Gamma$.
+%   \end{itemize}
+% \end{lemma}
+% \begin{proof}
+%   Induction. 
+% \end{proof}
+
+\begin{lemma}[Local Context Equivalence]\labeledit{lem:dt:lctxeq1}$ $
+  \begin{itemize}
+  \item If $\lttypwf[\Psi][\Delta]i T l$ and $\lpequiv{\typeof i}\Delta\Gamma$, then
+    $\lttypwf i{T} l$.
+  \item If $\lttypeq[\Psi][\Delta]i T{T'} l$ and $\lpequiv{\typeof i}\Delta\Gamma$, then
+    $\lttypeq i{T}{T'} l$.
+  \item If $\lttyping[\Psi][\Delta]i t T l$ and $\lpequiv{\typeof i}\Delta\Gamma$, then
+    $\lttyping i{t}{T} l$.
+  \item If $\lttyequiv[\Psi][\Delta]i t{t'} T l$ and $\lpequiv{\typeof i}\Delta\Gamma$, then
+    $\lttyequiv i{t}{t'}{T} l$.
+  \item If $\ltsubst[\Psi][\Delta] i{\delta}{\Gamma'}$ and $\lpequiv{\typeof i}\Delta\Gamma$, then
+    $\ltsubst i{\delta}{\Gamma'}$.
+  \item If $\ltsubeq[\Psi][\Delta] i{\delta}{\delta'}{\Gamma'}$ and $\lpequiv{\typeof i}\Delta\Gamma$, then
+    $\ltsubeq i{\delta}{\delta'}{\Gamma'}$.
+  \end{itemize}
+\end{lemma}
+\begin{proof}
+  We start by mutual induction. %
+  The base case is the local variable cases, where we simply apply the conversion rule
+  to the equivalence given by $\lpequiv{\typeof i}\Delta\Gamma$. %
+  We might also use presupposition (\Cref{lem:dt:presup1}) to derive $\lpjudge{\typeof
+    i}\Delta$. %
+  Otherwise, most cases can be handled by IHs. %
+  In cases where local contexts are extended with variables, we shall carefully use
+  IHs to obtain the necessary premises to extend the equivalence of $\Delta$ and
+  $\Gamma$ as well. %
+  % Also make use of \Cref{lem:dt:lctxeqwk} whenever necessary. %
+
+  We consider a few cases:
+  \begin{itemize}[label=Case]
+  \item
+    \begin{mathpar}
+      \inferrule
+      {\tyequiv[L]{l_1}{l_3}\Level  \\ \tyequiv[L]{l_2}{l_4}\Level \\ \lttypwf[\Psi][\Delta] i S{l_1} \\ \lttypeq[\Psi][\Delta] i
+        S{S'}{l_1} \\
+        \lttyequiv[\Psi][\Delta, x : S \at {l_1}] i t{t'}{T}{l_2}}
+      {\lttyequiv[\Psi][\Delta] i{\LAM {l_1}{l_2} x S t}{\LAM {l_3}{l_4} x{S'}{t'}}{\PI l{l'} x S T}{l \sqcup l'}}
+    \end{mathpar}
+    In this case, the crucial part is to be able to invoke IH on $t \approx t'$. %
+    We proceed as follows:
+    \begin{align*}
+      & \lttypwf i S{l_1}
+      \byIH \\
+      & \lpequiv{\typeof i}{\Delta, x : S \at {l_1}}{\Gamma, x : S \at {l_1}}
+        \tag{by lifting and step case of the equivalence} \\
+      & \lttyequiv[\Psi][\Gamma, x : S \at {l_1}] i t{t'}{T}{l_2}
+        \byIH
+    \end{align*}
+    Then IHs will allow us to conclude the rest. 
+  \item
+    \begin{mathpar}
+      \inferrule
+      {\lpjudge \metalevel \Delta \\ \typing[L]{l'}\Level \\ \typing[L]l\Level \\ \lpjudge \proglevel{\Delta'} \\
+        \lttypwf[\Psi][\Delta']\codelevel T l \\
+        \lttypwf[\Psi][\Delta,x_T : \CTyp[\Delta']l \at{0}]\metalevel{M}{l'} \\
+        \lttyping[\Psi, U : \DTyp[\Delta']\codelevel l][\Delta]\metalevel{t'}{M[\boxit U^\id/x_T]}{l'}}
+      {\lttyequiv[\Psi][\Delta] \metalevel{t'[T/U]}{\LETBTYP{l'}l{\Delta'}{x_T.M}{U}{t'}{(\boxit T)}}{M[\boxit T/x_T]}{l'}}
+    \end{mathpar}
+    \begin{align*}
+      & \lpjudge \metalevel \Gamma
+        \tag{by presupposition (\Cref{lem:dt:presup1})} \\
+      & \lpequiv \metalevel{\Delta,x_T : \CTyp[\Delta']l \at{0}}{\Gamma,x_T :
+        \CTyp[\Delta']l \at{0}}
+        \tag{note that well-formedness of $\CTyp[\Delta']l$ does not depend on
+        $\Delta$ or $\Gamma$} \\
+      & \lttypwf[\Psi][\Gamma,x_T : \CTyp[\Delta']l \at{0}]\metalevel{M}{l'}
+        \byIH \\
+      & \lpequiv[\Psi, U : \DTyp[\Delta']\codelevel l] \metalevel{\Delta}{\Gamma}
+        \tag{by global weakening} \\
+      & \lttyping[\Psi, U : \DTyp[\Delta']\codelevel l]\metalevel{t'}{M[\boxit U^\id/x_T]}{l'}
+        \byIH \\
+      & \lttyequiv \metalevel{t'[T/U]}{\LETBTYP{l'}l{\Delta'}{x_T.M}{U}{t'}{(\boxit T)}}{M[\boxit T/x_T]}{l'}
+    \end{align*}
+  \end{itemize}
+\end{proof}
+As a corollary, we can prove the following lemma.
+\begin{lemma}[Symmetry and Transitivity of Local Contexts]$ $
+  \begin{itemize}
+  \item If $\lpequiv i \Gamma \Delta$, then $\lpequiv i \Delta \Gamma$.
+  \item If $\lpequiv i{\Gamma_1}{\Gamma_2}$ and $\lpequiv i{\Gamma_2}{\Gamma_3}$, then
+    $\lpequiv i{\Gamma_1}{\Gamma_3}$.
+  \end{itemize}
+\end{lemma}
+\begin{proof}
+  Induction. Note that transitivity replies on the local context equivalence lemma. 
+\end{proof}
+A similar lemma replaces the codomain local contexts of local substitutions. %
+This variant is much simpler just by conversion rules.
+\begin{lemma}[Local Context Conversion]\labeledit{lem:dt:lctxeq2} $ $
+  \begin{itemize}
+  \item If $\ltsubst i{\delta}{\Gamma'}$ and $\lpequiv{\typeof i}{\Gamma'}{\Delta}$, then
+    $\ltsubst i{\delta}{\Delta}$.
+  \item If $\ltsubeq i{\delta}{\delta'}{\Gamma'}$ and $\lpequiv{\typeof i}{\Gamma'}{\Delta}$, then
+    $\ltsubeq i{\delta}{\delta'}{\Delta}$.
+  \end{itemize}
+\end{lemma}
+\begin{proof}
+  By induction. Propagate conversion rules together with the local substitution lemma in the step case. 
+\end{proof}
+
+
+Then we work on the global context equivalence lemma. %
+To state this lemma, we should first specify what does that mean for two global
+contexts are equivalent.
+\begin{mathpar}
+  \inferrule
+  { }
+  {\gequiv\cdot\cdot}
+
+  \inferrule
+  {\gequiv\Psi\Phi}
+  {\gequiv{\Psi, g : \Ctx}{\Phi, g : \Ctx}}
+
+  \inferrule
+  {\gequiv\Psi\Phi \\ \lpjudge \proglevel \Gamma \\ \lpjudge[\Phi] \proglevel\Delta \\ \lpequiv \proglevel \Gamma\Delta \\ \typing[L]l\Level \\ i \in \{\codelevel, \proglevel\}}
+  {\gequiv{\Psi, U : \DTyp i l}{\Phi, U : \DTyp[\Delta] i l}}
+
+  \inferrule
+  {\gequiv\Psi \Phi % \\ \lpjudge \proglevel \Gamma \\ \lpjudge[\Phi] \proglevel\Delta
+    \\ \lpequiv \proglevel
+    \Gamma\Delta \\ \lttypwf \proglevel T l \\ \lttypwf[\Phi][\Delta] \proglevel{T'} l \\ \lttypeq \proglevel T{T'} l \\ \typing[L]l\Level \\ i \in \{\varlevel, \codelevel\}}
+  {\gequiv{\Psi, u : \DTrm i T l}{\Phi, u : \DTrm[\Delta] i{T'} l}}
+\end{mathpar}
+Essentially, the equivalence of global contexts are just point-wise equivalence of
+types within. %
+We can reconstruct the well-formedness of both components from the premises:
+\begin{lemma}[Presupposition of Equivalence of Global Contexts]\labeledit{lem:dt:presup-gctx}
+  If $\gequiv \Psi\Phi$, then $\judge[L]\Psi$ and $\judge[L]\Phi$. 
+\end{lemma}
+For the global context equivalence lemma, we would like to take a shortcut by taking
+advantage of the global substitution lemma. %
+\begin{lemma}\labeledit{lem:dt:lctxeq-id}
+  If $\lpequiv{\typeof i}\Gamma \Delta$, then $\ltsubst i{\id}\Delta$. 
+\end{lemma}
+\begin{lemma}\labeledit{lem:dt:gctxeq-id}
+  If $\gequiv \Psi\Phi$, then $\ptyping{\id}\Phi$. 
+\end{lemma}
+\begin{proof}
+  We proceed by induction. %
+  In each step case, notice that weakening is used implicitly. %
+  Use \Cref{lem:dt:lctxeq-id} to derive $\ltsubst \proglevel{\id}\Delta$ whenever necessary.
+\end{proof}
+
+\begin{lemma}[Global Context Equivalence]$ $
+  \begin{itemize}
+  \item If $\lpjudge[\Phi] i \Gamma$ and $\gequiv\Phi\Psi$, then $\lpjudge i {\Gamma}$.
+  \item If $\lpequiv[\Phi] i \Gamma \Delta$ and $\gequiv\Phi\Psi$, then $\lpequiv i {\Gamma}{\Delta}$.
+  \item If $\lttypwf[\Phi]i T l$ and $\gequiv\Phi\Psi$, then
+    $\lttypwf[\Psi][\Gamma] i{T} l$.
+  \item If $\lttypeq[\Phi]i T{T'} l$ and $\gequiv\Phi\Psi$, then
+    $\lttypeq[\Psi][\Gamma] i{T}{T'} l$.
+  \item If $\lttyping[\Phi]i t T l$ and $\gequiv\Phi\Psi$, then
+    $\lttyping[\Psi][\Gamma] i{t}{T} l$.
+  \item If $\lttyequiv[\Phi]i t{t'} T l$ and $\gequiv\Phi\Psi$, then
+    $\lttyequiv[\Psi][\Gamma] i{t}{t'}{T} l$.
+  \item If $\ltsubst[\Phi] i{\delta}{\Delta}$ and $\gequiv\Phi\Psi$, then
+    $\ltsubst[\Psi][\Gamma] i{\delta}{\Delta}$.
+  \item If $\ltsubeq[\Phi] i{\delta}{\delta'}{\Delta}$ and $\gequiv\Phi\Psi$, then
+    $\ltsubeq[\Psi][\Gamma] i{\delta}{\delta'}{\Delta}$.
+  \end{itemize}
+\end{lemma}
+\begin{proof}
+  We have $\ptyping\id\Phi$ due to \Cref{lem:dt:gctxeq-id}. %
+  Then by the global substitution lemma, we have our goal by knowing that a global
+  identity substitution $\id$ does no action. 
+\end{proof}
+
+Finally, we prove the presupposition lemma, which is the last guiding lemma of the
+layering principle.
+\begin{lemma}[Presupposition] $ $
+  \begin{itemize}
+  \item If $\lttypwf i T l$, then $\lpjudge{\typeof i}\Gamma$ and $\typing[L]l\Level$ or $i = \metalevel \wedge l = \omega$. 
+  \item If $\lttypeq i T{T'} l$, then $\lpjudge{\typeof i}\Gamma$, $\lttypwf i T l$,
+    $\lttypwf i{T'}l$ and $\typing[L]l\Level$ or $i = \metalevel \wedge l = \omega$.
+  \item If $\lttyping i t T l$, then $\lpjudge{\typeof i}\Gamma$, \newline
+    $\lttypwf{\typeof i} T l$ and $\typing[L]l\Level$ or $i = \metalevel \wedge l = \omega$.
+  \item If $\lttyequiv i t{t'} T l$, then $\lpjudge{\typeof i}\Gamma$, $\lttyping i t
+    T l$, $\lttyping i{t'} T l$, $\lttypwf{\typeof i} T l$
+     and $\typing[L]l\Level$ or $i = \metalevel \wedge l = \omega$.
+  \item If $\ltsubst i{\delta}{\Delta}$, then $\lpjudge{\typeof i}\Delta$.
+  \item If $\ltsubeq i{\delta}{\delta'}{\Gamma'}$, then $\lpjudge{\typeof i}\Delta$.
+  \end{itemize}  
+\end{lemma}
+Notice that in the statement of the lemma, we sometimes conclude $i = \metalevel \wedge l =
+\omega$. %
+The only occasion when $\omega$ is used is when universe polymorphic functions are
+involved. %
+In that case, we know for sure that $i = \metalevel$. %
+In any other cases, we obtain $\typing[L]l\Level$, which excludes $l = \omega$.
+\begin{proof}
+  We proceed by a mutual induction. %
+  In certain congruence rules, we must apply
+  \Cref{lem:dt:lsubst-eq,lem:dt:gsubst-eq} to resolve the asymmetry in the rules. %
+  Otherwise, we simply apply the substitution lemmas whenever necessary. %
+  Note that our rules are stated with redundant premises to make sure this lemma
+  eventually checks out. %
+  \begin{mathpar}
+    \inferrule
+    {\lttyequiv \metalevel{t}{t'}{\TPI U[\Delta] l{l'}{T''}}{l'} \\ \lttypeq[\Psi][\Delta] \proglevel{T}{T'}l}
+    {\lttyequiv \metalevel{\TAPP t{T}}{\TAPP{t'}{T'}}{T''[T/U]}{l'}}
+  \end{mathpar}
+  \begin{align*}
+    & \lttyping \metalevel{t}{\TPI U[\Delta] l{l'}{T''}}{l'}
+      \byIH \\
+    & \lttyping \metalevel{t'}{\TPI U[\Delta] l{l'}{T''}}{l'}
+      \byIH \\
+    & \lttypwf[\Psi][\Delta] \proglevel{T}l
+      \byIH \\
+    & \lttypwf[\Psi][\Delta] \proglevel{T'}l
+      \byIH \\
+    & \lttyping \metalevel{\TAPP{t'}{T'}}{T''[T'/U]}{l'} \\
+    & \lttypwf \metalevel{\TPI U[\Delta] l{l'}{T''}}{l'}
+      \byIH \\
+    & \lttypwf[\Psi, U : \DTyp[\Delta] \proglevel l] \metalevel{T''}{l'}
+      \tag{by inversion}
+  \end{align*}
+  Notice that
+  \[
+    T/U \approx T'/U
+  \]
+  We then have the goal by \Cref{lem:dt:gsubst-eq}. 
+\end{proof}
+
+\subsection{Coverage and Progress of Recursive Principles}\labeledit{sec:dt:syn:cov}
+
+Before moving to the semantics, let us pause a second and think about the recursive
+principles: is it guaranteed to always pick a case from the branches? %
+In this section, we would like to positively answer this question. %
+The ingredient lies in the typing judgment at layer $\codelevel$ and how the recursive
+principle is formulated. %
+Recall that the recursive principle for code of terms is
+\begin{mathpar}
+  \inferrule
+  {G_A \\ \typing[L]{l'}\Level \\ \lpjudge \proglevel \Delta \\ \lttypwf[\Psi][\Delta]\proglevel T{l'} \\
+    \lttyping \metalevel t{\CTrm[\Delta]T{l'}}{0}}
+  {\lttyping \metalevel {\ELIMTRM{l_1}{l_2}M b{l'}\Delta T t}{M_\Trm[l'/\ell,\Delta/g,T/U_T,t/x_t]}{l_2}}
+\end{mathpar}
+In this rule, we see that the type of $t$ is indexed by $l$, $\Delta$ and $T$, both of
+which live at layer $\proglevel$. %
+When $t = \boxit{t'}$, then $t'$ must be typed at layer $\codelevel$. %
+Then coverage is provided by the exhaustiveness of the branches which should enumerate
+all possible types and terms at layer $\codelevel$. %
+This is simple as we simply check the syntax at layer $\codelevel$ and can confirm that the
+branches are indeed exhaustive. %
+Progress, on the other hand, requires both $\Delta$ and $T$ are in the right form
+prescribed by the $\beta$ rules. %
+For example, the following rule gives the $\beta$ rule for the $\Nat$ case as a term:
+\begin{mathpar}
+  \inferrule
+  {G_A \\ \lpjudge \metalevel \Gamma \\ \lpjudge \proglevel \Delta}
+  {\lttyequiv \metalevel {t'_\Nat[\Delta/g]}{\ELIMTRM{l_1}{l_2}M b{1}\Delta{\Ty 0}{(\boxit
+        \Nat)}}{M_\Trm[1/\ell,\Delta/g,\Ty 0/U_T,\boxit \Nat/x_t]}{l_2}}
+\end{mathpar}
+where $T = \Ty 0$ is required. %
+In this section, we show that when $t= \boxit{t'}$ where $t'$ is of some concrete form
+prescribed by a $\beta$ rule, then the indices must have the right form. %
+
+We first consider the well-formed types at layer $\codelevel$:
+\begin{lemma}
+  If $\lttypwf \codelevel \Nat l$, then $\tyequiv[L]{l}{0}\Level$. 
+\end{lemma}
+\begin{proof}
+  By induction. The only applicable rules are the well-formedness rule and the
+  conversion rule. %
+\end{proof}
+Similar lemmas can be stated and proved.
+\begin{lemma}
+  If $\lttypwf \codelevel{\PI l{l'}x S T}{l''}$, then $\lttypwf \codelevel S{l}$ and
+  $\lttypwf[\Psi][\Gamma, x : S \at l] \codelevel T{l'}$ and they are sub-derivations of the
+  assumption; moreover, $\tyequiv[L]{l''}{l \sqcup l'}\Level$. 
+\end{lemma}
+\begin{proof}
+  Induction. 
+\end{proof}
+That the judgments in the conclusion are sub-derivations ensures the well-foundedness
+of the recursion. %
+Effectively, the recursive principles recurse on the structures of the typing
+derivations, so they are the most general principles that can be formulated on top the
+syntax of MLTT.
+\begin{lemma}
+  If $\lttypwf \codelevel{\Elt l t}{l'}$, then $\lttyping \codelevel t{\Ty l}{1 + l}$ as a
+  sub-derivation and $\tyequiv[L]{l'}{l}\Level$. 
+\end{lemma}
+\begin{lemma}
+  If $\lttypwf \codelevel{\Ty l}{l'}$, then $\tyequiv[L]{l'}{1 + l}\Level$.
+\end{lemma}
+Now we have exhausted all possible cases for types, so we move on to terms.
+
+\begin{lemma}
+  If $\lttyping \codelevel x T l$, then $x : T' \at{l'} \in \Gamma$ and $\lttypeq \proglevel{T}{T'}{l}$
+  and $\tyequiv[L]{l}{l'}\Level$. 
+\end{lemma}
+The statement of lemmas for terms need to also consider the equivalence of types. %
+The equivalence of types is implicitly handled by when evaluating the recursive
+principles: since the equivalence is at layer $\proglevel$, computation applies, so the
+equivalence can be acknowledged by the conversion checking algorithm. %
+\begin{lemma}
+  If $\lttyping \codelevel \Nat{T}{l}$, then $\lttypeq \proglevel{T}{\Ty 0}{l}$ and $\tyequiv[L]{l}{1}\Level$. 
+\end{lemma}
+\begin{lemma}
+  If $\lttyping \codelevel{\PI l{l'}x s t}{T}{l''}$, then as sub-derivations $\lttyping \codelevel s{\Ty
+    l}{1 + l}$ and
+  $\lttyping[\Psi][\Gamma, x : \Elt l s \at l] \codelevel{t}{\Ty{l'}}{1 + l'}$, $\lttypeq
+  \proglevel{T}{\Ty{l \sqcup l'}}{l''}$ and $\tyequiv[L]{l''}{1 + {(l \sqcup l')}}\Level$. 
+\end{lemma}
+\begin{lemma}
+  If $\lttyping \codelevel{\Ty l}{T}{l'}$, then $\lttypeq \proglevel{T}{\Ty{1 + l}}{l'}$ and
+  $\tyequiv[L]{l'}{2 + l}\Level$.
+\end{lemma}
+
+\begin{lemma}
+  If $\lttyping \codelevel \ze T l$, then $\lttypeq \proglevel{T}{\Nat}{0}$
+  and $\tyequiv[L]{l}{0}\Level$.   
+\end{lemma}
+\begin{lemma}
+  If $\lttyping \codelevel{\su t}{T}{l}$, then as a sub-derivation $\lttyping \codelevel t{\Nat}{0}$,
+  $\lttypeq \proglevel{T}{\Nat}{0}$ and
+  $\tyequiv[L]{l}{0}\Level$.
+\end{lemma}
+\begin{lemma}
+  If $\lttyping \codelevel{\ELIMN l{x.M}{s}{x,y.s'}t}{T}{l'}$, then as sub-derivations
+  \begin{itemize}
+  \item $\lttypwf[\Psi][\Gamma, x : \Nat \at 0] \codelevel M l$,
+  \item $\lttyping \codelevel s {M[\ze/x]}l$,
+  \item $\lttyping[\Psi][\Gamma, x : \Nat \at 0, y : M \at l] \codelevel {s'}{M[\su x/x]}l$
+  \item $\lttyping \codelevel t \Nat 0$;
+  \end{itemize}
+  moreover $\lttypeq \proglevel{T}{M[t/x]}{l'}$ and
+  $\tyequiv[L]{l'}{l}\Level$.
+\end{lemma}
+\begin{lemma}
+  If $\lttyping \codelevel{\LAM{l}{l'}x S t}{T'}{l''}$, then as sub-derivations
+  \begin{itemize}
+  \item $\lttypwf \codelevel S l$,
+  \item $\lttyping[\Psi][\Gamma, x : S \at l] \codelevel t{T}{l'}$;
+  \end{itemize}
+  moreover $\lttypeq \proglevel{T'}{\PI{l}{l'}x S T}{l''}$ and
+  $\tyequiv[L]{l''}{l \sqcup l'}\Level$.
+\end{lemma}
+Notice that in this case, we do not have the well-formedness of $T$ as a
+sub-derivation. %
+This is reflected in the premises for the $t_\lambda$ branch that the global variable $U_T$
+representing $T$ lives at layer $\proglevel$. %
+In general, a global assumption can live at layer $\codelevel$ and have a recursive call only
+if it has a sub-derivation in the typing judgment.
+\begin{lemma}
+  If $\lttyping \codelevel{\APP t {l}{l'}x S T s}{T'}{l''}$, then as sub-derivations
+  \begin{itemize}
+  \item $\lttypwf \codelevel S l$,
+  \item $\lttypwf[\Psi][\Gamma, x : S \at l] \codelevel{T}{l'}$,
+  \item $\lttyping \codelevel t{\PI l{l'} x S T}{l \sqcup l'}$,
+  \item $\lttyping \codelevel s S l$;
+  \end{itemize}
+  moreover $\lttypeq \proglevel{T'}{T[s/x]}{l''}$ and
+  $\tyequiv[L]{l''}{l'}\Level$.
+\end{lemma}
+There is no other possible terms at layer $\codelevel$. %
+These lemmas give us a syntactic account of coverage and progress of the recursive
+principles. %
+In the next section, we give a more rigorous semantic account.

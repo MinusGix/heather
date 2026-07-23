@@ -1,0 +1,1705 @@
+\subsection{Semantic Judgments and Fundamental Theorems}
+
+After establishing all logical relations and their properties, we are ready for giving
+the definitions for semantic judgments and then moving on to proving the fundamental
+theorems. %
+The semantic judgments intuitively should say that logical relations are stable under
+all substitutions. %
+More concretely, we have
+\begin{align*}
+  \lsgctx \Psi &:= \forall ~ \tyequiv[L']{\phi}{\phi'}L ~.~
+                 \ldSgctxeq[L']{\Psi[\phi]}{\Psi[\phi']}
+\end{align*}
+$\lsgsubeq \sigma{\sigma'} \Phi$ is defined as $\lsgctx \Psi$, $\lsgctx \Phi$ and
+given
+\begin{itemize}
+\item $\tyequiv[L']{\phi}{\phi'}L$, and
+\item $\ldSgsubeq[\Psi'][L']{\sigma_1}{\sigma_1'}{\Psi[\phi]}$, 
+\end{itemize}
+then
+\[
+  \ldSgsubeq[\Psi'][L']{\sigma[\phi] \circ \sigma_1}{\sigma_1[\phi] \circ \sigma_1'}{\Phi[\phi]}
+\]
+We also define
+\[
+  \lsgsubst \sigma \Phi := \lsgsubeq \sigma\sigma \Phi
+\]
+
+$\lsctxeq i \Gamma{\Delta}$ where $i \in \{\proglevel, \metalevel \}$ is defined as $\lsgctx \Psi$ and given
+\begin{itemize}
+\item $\tyequiv[L']{\phi}{\phi'}L$, 
+\item $\ldSgsubeq[\Phi][L'] \sigma{\sigma'}{\Psi[\phi]}$, and 
+\item $k \ge i$,
+\end{itemize}
+then
+\[
+  \ldSctxeq[\Phi][L'] k{\typeof i} {\Gamma[\phi][\sigma]}{\Delta[\phi'][\sigma']}
+\]
+We also define
+\[
+  \lsctxwf i \Gamma := \lsctxeq i \Gamma \Gamma
+\]
+
+$\lstypeq i T{T'}l$ is defined as $\lsgctx \Psi$ and $\lsctxwf{\typeof i} \Gamma$ and given
+\begin{itemize}
+\item $\tyequiv[L']{\phi}{\phi'}L$, 
+\item $\ldSgsubeq[\Phi][L'] \sigma{\sigma'}{\Psi[\phi]}$, 
+\item $k \ge i$,
+\item $\ldsubeq[\Phi][\Delta][L'] k{\typeof i} \delta{\delta'}{\Gamma[\phi][\sigma]}$, 
+\end{itemize}
+then
+\[
+  \ldtypeq[\Phi][\Delta][L']k{\typeof i}{T[\phi][\sigma][\delta]}{T'[\phi'][\sigma'][\delta']}{l[\phi]}
+\]
+We also define
+\[
+  \lstypwf i T l := \lstypeq i T{T}l
+\]
+
+$\lstyequiv i t{t'}T l$ is defined as $\lsgctx \Psi$ and $\lsctxwf{\typeof i} \Gamma$ and
+$\lstypwf{\typeof i} T l$ given
+\begin{itemize}
+\item $\tyequiv[L']{\phi}{\phi'}L$, 
+\item $\ldSgsubeq[\Phi][L'] \sigma{\sigma'}{\Psi[\phi]}$, 
+\item $k \ge i$,
+\item $\ldsubeq[\Phi][\Delta][L'] k{\typeof i} \delta{\delta'}{\Gamma[\phi][\sigma]}$, 
+\end{itemize}
+then
+\[
+  \ldtyequivt[\Phi][\Delta][L']k{\typeof i}{t[\phi][\sigma][\delta]}{t'[\phi'][\sigma'][\delta']}{T[\phi][\sigma][\delta]}{l[\phi]}
+\]
+We also define
+\[
+  \lstyping i t T l := \lstyequiv i t{t}T l
+\]
+
+$\lssubeq i \delta{\delta'}{\Delta}$ is defined as $\lsgctx \Psi$ and
+$\lsctxwf{\typeof i} \Gamma$ and $\lsctxwf{\typeof i} \Delta$ given
+\begin{itemize}
+\item $\tyequiv[L']{\phi}{\phi'}L$, 
+\item $\ldSgsubeq[\Phi][L'] \sigma{\sigma'}{\Psi[\phi]}$, 
+\item $k \ge i$,
+\item $\ldsubeq[\Phi][\Delta'][L'] k{\typeof i} {\delta_1}{\delta_1'}{\Gamma[\phi][\sigma]}$, 
+\end{itemize}
+then
+\[
+  \ldsubeq[\Phi][\Delta'][L'] k{\typeof i}{\delta[\phi][\sigma] \circ \delta_1}{\delta'[\phi'][\sigma'] \circ \delta_1'}{\Delta[\phi][\sigma]}
+\]
+We also define
+\[
+  \lssubst i \delta{\Delta} := \lssubeq i \delta{\delta}{\Delta}
+\]
+
+Notice that for definitions above, when $k \in \{\varlevel, \codelevel \}$ is possible, we can use the
+local substitution lemma and ignore the local substitutions completely. %
+This will be a frequent pattern in the proofs of the semantic rules. 
+
+Summarizing the semantic judgments, we shall arriving at our statement of the
+fundamental theorems:
+\begin{theorem}[Fundamental] $ $
+  \begin{itemize}
+  \item If $\judge[L]\Psi$, then $\lsgctx \Psi$. 
+  \item If $\lpjudge i \Gamma$ and $i \in \{\proglevel, \metalevel\}$, then $\lsctxwf i \Gamma$. 
+  \item If $\lpequiv i \Gamma\Delta$ and $i \in \{\proglevel, \metalevel\}$, then $\lsctxeq i \Gamma{\Delta}$. 
+  \item If $\lttypwf i T l$, then $\lstypwf i T l$. 
+  \item If $\lttypeq i T{T'} l$, then $\lstypeq i T{T'} l$. 
+  \item If $\lttyping i t T l$, then $\lstyping i t T l$.
+  \item If $\lttyequiv i t{t'} T l$, then $\lstyequiv i t{t'} T l$.
+  \item If $\ltsubst i \delta \Delta$, then $\lssubst i \delta{\Delta}$. 
+  \item If $\ltsubeq i\delta{\delta'}\Delta$, then $\lssubeq i \delta{\delta'}{\Delta}$.
+  \end{itemize}
+\end{theorem}
+
+The following lemma is obvious. 
+\begin{lemma}[PER]
+  All semantic judgments are PER.
+\end{lemma}
+
+\begin{lemma}[Reduction Expansion] $ $
+  \begin{itemize}
+  \item If $\lstypeq i T{T'} l$, $i \in \{\proglevel, \metalevel\}$ and $\ttypred i {T_1}{T'} l$, then $\lstypeq i{T}{T_1} l$.
+  \item If $\lstyequiv i t{t'} T l$, $i \in \{\proglevel, \metalevel\}$ and $\ttrmred i{t_1}{t'}T l$, then
+    $\lstyequiv i t{t_1} T l$.
+  \end{itemize}
+\end{lemma}
+\begin{proof}
+  It is easy to easy due to the weak head expansion lemma for the logical relations
+  and the stability of reduction under all substitutions. 
+\end{proof}
+
+The escape lemma recovers Kripke logical relations by passing in corresponding
+identity substitutions:
+\begin{lemma}[Escape] $ $
+  \begin{itemize}
+  \item If $\lsgctx \Psi$, then $\ldSgctxeq{\Psi}{\Psi}$. 
+  \item If $\lsgsubeq \sigma{\sigma'} \Phi$, then
+    $\ldSgsubeq{\sigma}{\sigma'}{\Phi}$. 
+  \item If $\lsctxeq i \Gamma\Delta$, $i \in \{\proglevel, \metalevel\}$ and $k \ge i$, then
+    $\ldSctxeq k{\typeof i} {\Gamma}{\Delta}$.
+  \item If $\lstypeq i T{T'} l$ and $k \ge i$, then $\ldtypeq k{\typeof i}{T}{T'}{l}$.
+  \item If $\lstyequiv i t{t'} T l$ and $k \ge i$, then
+    $\ldtyequivt k{\typeof i}{t}{t'}{T}{l}$.
+  \item If $\lssubeq i \delta{\delta'}{\Delta}$ and $k \ge i$, then
+    $\ldsubeq k{\typeof i} \delta{\delta'}{\Delta}$.
+  \end{itemize}
+\end{lemma}
+By chaining escape lemmas, we can obtain that semantic equivalence judgments generic
+and syntactic equivalences.
+
+The semantic judgments are stable under substitutions.
+\begin{lemma}[Universe Substitutions] $ $
+  \begin{itemize}
+  \item If $\lsgctx \Psi$ and $\typing[L']{\phi}L$, then $\lsgctx[L']{\Psi[\phi]}$.
+  \item If $\lsgsubeq \sigma{\sigma'} \Phi$ and $\tyequiv[L']{\phi}{\phi'}L$, then
+    $\lsgsubeq[\Psi[\phi]][L']{\sigma[\phi]}{\sigma'[\phi']}{\Phi[\phi]}$.
+  \item If $\lsctxeq i \Gamma\Delta$, $i \in \{\proglevel, \metalevel\}$ and $\tyequiv[L']{\phi}{\phi'}L$, then
+    $\lsctxeq[\Psi[\phi]][L'] i{\Gamma[\phi]}{\Delta[\phi']}$.
+  \item If $\lstypeq i T{T'} l$ and $\tyequiv[L']{\phi}{\phi'}L$, then
+    $\lstypeq[\Psi[\phi]][\Gamma[\phi]][L'] i{T[\phi]}{T'[\phi']}{l[\phi]}$.
+  \item If $\lstyequiv i t{t'} T l$ and $\tyequiv[L']{\phi}{\phi'}L$,
+    then
+    $\lstyequiv[\Psi[\phi]][\Gamma[\phi]][L'] i{t[\phi]}{t'[\phi']}{T[\phi]}{l[\phi]}$.
+  \item If $\lssubeq i \delta{\delta'}{\Delta}$ and $\tyequiv[L']{\phi}{\phi'}L$, then
+    $\lssubeq[\Psi[\phi]][\Gamma[\phi]][L'] i{\delta[\phi]}{\delta'[\phi']}{\Delta[\phi]}$.
+  \end{itemize}  
+\end{lemma}
+\begin{proof}
+  Use composition of universe substitutions.
+\end{proof}
+
+\begin{lemma}[Global Substitutions] $ $
+  \begin{itemize}
+  \item If $\lsgsubeq \sigma{\sigma'} \Phi$ and $\lsgsubeq[\Psi']{\sigma_1}{\sigma_1'}{\Psi}$, then
+    $\lsgsubeq[\Psi']{\sigma \circ \sigma_1}{\sigma' \circ \sigma_1'}{\Phi}$.
+  \item If $\lsctxeq i \Gamma\Delta$, $i \in \{\proglevel, \metalevel\}$ and $\lsgsubeq[\Phi] \sigma{\sigma'} \Psi$, then
+    $\lsctxeq[\Phi] i{\Gamma[\sigma]}{\Delta[\sigma']}$.
+  \item If $\lstypeq i T{T'} l$ and $\lsgsubeq[\Phi] \sigma{\sigma'} \Psi$, then
+    $\lstypeq[\Phi][\Gamma[\sigma]] i{T[\sigma]}{T'[\sigma']}{l}$.
+  \item If $\lstyequiv i t{t'} T l$ and $\lsgsubeq[\Phi] \sigma{\sigma'} \Psi$,
+    then
+    $\lstyequiv[\Phi][\Gamma[\sigma]] i{t[\sigma]}{t'[\sigma']}{T[\sigma]}{l}$.
+  \item If $\lssubeq i \delta{\delta'}{\Delta}$ and $\lsgsubeq[\Phi] \sigma{\sigma'} \Psi$, then
+    $\lssubeq[\Phi][\Gamma[\sigma]] i{\delta[\sigma]}{\delta'[\sigma']}{\Delta[\sigma]}$.
+  \end{itemize}  
+\end{lemma}
+\begin{proof}
+  The principle is also to use the composition of global substitutions. %
+  We also make use of the commutativity of substitutions, e.g.
+  \[
+    t[\phi][\sigma[\phi]] = t[\sigma][\phi]
+  \]
+  This equation allows us to swap $\sigma$ forwards, which will be frequently used in
+  this proof.
+\end{proof}
+
+\begin{lemma}[Local Substitutions] $ $
+  \begin{itemize}
+  \item If $\lstypeq i T{T'} l$ and $\lssubeq[\Psi][\Delta] i \delta{\delta'}{\Gamma}$, then
+    $\lstypeq[\Psi][\Delta] i{T[\delta]}{T'[\delta']}{l}$.
+  \item If $\lstyequiv i t{t'} T l$ and
+    $\lssubeq[\Psi][\Delta] i \delta{\delta'}{\Gamma}$, then
+    $\lstyequiv[\Psi][\Delta] i{t[\delta]}{t'[\delta']}{T[\delta]}{l}$.
+  \item If $\lssubeq i \delta{\delta'}{\Delta}$ and $\lssubeq[\Psi][\Gamma'] i{\delta_1}{\delta_1'}{\Gamma}$, then
+    $\lssubeq[\Psi][\Gamma'] i{\delta \circ \delta_1}{\delta' \circ \delta_1'}{\Delta}$.
+  \end{itemize}  
+\end{lemma}
+\begin{proof}
+  We apply the similar technique here. %
+  We make use equations similar to below:
+  \begin{gather*}
+    t[\phi][\delta[\phi]] = t[\delta][\phi] \\
+    t[\sigma][\delta[\sigma]] = t[\delta][\sigma]
+  \end{gather*}
+  These equations will swap $\delta$ forwards. 
+\end{proof}
+
+The theorem proceeds by doing induction on the derivations. %
+The proof though is rather verbose due to how the semantic judgments are defined. %
+One pattern that is worth mentioning is that the proof should work ``backwards'' from
+the layers. %
+That is, we should work out the proofs from layer $\metalevel$, and then $\proglevel$ and then $\codelevel$ and
+finally $\varlevel$. %
+This pattern makes sense if we consider what information layers contain. %
+The semantics of a term at layer $\metalevel$ only contains its computational contents at layer
+$\metalevel$. %
+However, for a term at layer $\proglevel$, due to lifting, its semantics must explain how this
+term computes at both layers $\proglevel$ and $\metalevel$. %
+For a term at layer $\codelevel$, in addition to its collective information as a term at layer
+$\proglevel$, it should also has all information about its sub-structures. %
+At last, if a term is at layer $\varlevel$, then we know it must be well-formed at layer $\codelevel$
+but also it represents a variable. %
+Thus, due to lifting, information contained at each layer strictly increases as the
+layer decreases.  To build up information at a smaller layer, we should prove the
+fundamental theorems from a higher layer. %
+In the next section, we will start proving the fundamental theorems and make sure that
+all syntactically well-formed types and terms at all layers are semantically
+well-formed.
+
+\subsection{Proving Fundamental Theorems}
+
+To demonstrate the idea described at the end of the previous subsection, let us first
+consider the simplest case. %
+We often proceed by first proving the semantic rule for types and then go on and prove
+the rules for terms. %
+\begin{lemma}
+  \begin{mathpar}
+    \inferrule
+    {\lsctxwf {\typeof i} \Gamma}
+    {\lstypeq i\Nat \Nat \ze}
+  \end{mathpar}
+\end{lemma}
+\begin{proof}
+  From $\lsctxwf {\typeof i} \Gamma$, we also know $\lsgctx \Psi$. %
+  Now assume $\tyequiv[L']{\phi}{\phi'}L$ and
+  $\ldSgsubeq[\Phi][L'] \sigma{\sigma'}{\Psi[\phi]}$, we have to consider all
+  $i \ge \codelevel$. %
+  \begin{itemize}
+  \item[Case $i = \metalevel$] Then assuming
+    $\ldsubeq[\Phi][\Delta][L'] \metalevel \metalevel \delta{\delta'}{\Gamma[\phi][\sigma]}$, we must
+    show
+    \[
+      \ldtypeq[\Phi][\Delta][L'] \metalevel \metalevel \Nat \Nat \ze
+    \]
+    This holds by definition.
+    
+  \item[Case $i = \proglevel$] Then assuming some $k \ge \proglevel$ and
+    $\ldsubeq[\Phi][\Delta][L'] k \proglevel \delta{\delta'}{\Gamma[\phi][\sigma]}$, we must
+    show
+    \[
+      \ldtypeq[\Phi][\Delta][L'] k \proglevel \Nat \Nat \ze
+    \]
+    Again, this also holds by definition as we see that $k \in \{\proglevel, \metalevel\}$.
+    
+  \item[Case $i = \codelevel$] This is the last case. %
+    Assuming some $k \ge \codelevel$ and
+    $\ldsubeq[\Phi][\Delta][L'] k \proglevel \delta{\delta'}{\Gamma[\phi][\sigma]}$, we must
+    show
+    \[
+      \ldtypeq[\Phi][\Delta][L'] k \proglevel \Nat \Nat \ze
+    \]
+    In the previous case of $i = \proglevel$, we have given the proof for $k \in \{\proglevel, \metalevel\}$, so
+    essentially we only have one case $k = \codelevel$ left. %
+    In this case, we apply the local substitution lemma so we do not have to introduce
+    any local substitutions at all. %
+    Looking up the rules in \Cref{sec:dt:semglob}, we need to show
+    \[
+      \ldStypwfge[\Phi][\Gamma[\phi][\sigma]][L'] \proglevel \proglevel \Nat \ze
+    \]
+    This is again have been given by the case of $i = \proglevel$, modulo converting weakenings
+    to substitutions.  %
+    Hence we conclude the proof.
+  \end{itemize}
+\end{proof}
+
+\begin{lemma}
+  \begin{mathpar}
+    \inferrule
+    {\lsctxwf {\typeof i} \Gamma \\ \tyequiv[L]{l}{l'}\Level}
+    {\lstypeq i{\Ty l}{\Ty{l'}}{1 + l}}
+  \end{mathpar}
+\end{lemma}
+\begin{proof}
+  Similar to the previous lemma. 
+\end{proof}
+
+\begin{lemma}
+  \begin{mathpar}
+    \inferrule
+    {\lsctxwf {\typeof i} \Gamma}
+    {\lstyequiv i \ze\ze \Nat \ze}
+  \end{mathpar}
+\end{lemma}
+\begin{proof}
+  From the previous lemma, we obtain $\lsgctx \Psi$, $\lsctxwf {\typeof i} \Gamma$ and
+  $\lstypwf i \Nat \ze$. %
+  Simulating the previous lemma, assuming $\tyequiv[L']{\phi}{\phi'}L$ and
+  $\ldSgsubeq[\Phi][L'] \sigma{\sigma'}{\Psi[\phi]}$, we have to consider all
+  $i \ge \codelevel$. %
+  \begin{itemize}
+  \item[Case $i = \metalevel$] Then assuming
+    $\ldsubeq[\Phi][\Delta][L'] \metalevel \metalevel \delta{\delta'}{\Gamma[\phi][\sigma]}$, we must
+    show
+    \[
+      \ldtyequivt[\Phi][\Delta][L'] \metalevel \metalevel \ze \ze \Nat \ze
+    \]
+    This is the same as showing
+    \[
+      \D :: \ldtypeq[\Phi][\Delta][L'] \metalevel \metalevel \Nat \Nat \ze \tand
+      \ldtyequiv[\Phi][\Delta][L'] \metalevel \metalevel \ze \ze \D
+    \]
+    This is immediate by the congruence law of the generic equivalence and the
+    definition of the logical relations.
+    
+  \item[Case $i = \proglevel$] Then assuming some $k \ge \proglevel$ and
+    $\ldsubeq[\Phi][\Delta][L'] k \proglevel \delta{\delta'}{\Gamma[\phi][\sigma]}$, we must
+    show
+    \[
+      \D :: \ldtypeq[\Phi][\Delta][L'] k \proglevel \Nat \Nat \ze \tand
+      \ldtyequiv[\Phi][\Delta][L'] k \proglevel \ze \ze \D
+    \]
+    Following a similar proof to the case above, we also establish this case knowing
+    $k \in \{\proglevel, \metalevel\}$.
+    
+  \item[Case $i = \codelevel$] Assuming some $k \ge \codelevel$ and
+    $\ldsubeq[\Phi][\Delta][L'] k \proglevel \delta{\delta'}{\Gamma[\phi][\sigma]}$, we must
+    show
+    \[
+      \ldtyequivt[\Phi][\Delta][L'] k \proglevel \ze \ze \Nat \ze
+    \]
+    The only additional analysis is when $k = \codelevel$ as other values for $k$ have been
+    considered in the previous case. %
+    In this case, we apply local substitution lemma so we only need to prove
+    \[
+      \ldStypingge[\Phi][\Gamma[\phi][\sigma]][L'] \proglevel \proglevel \ze \Nat \ze
+    \]
+    This clearly has been proven in the previous case. 
+  \end{itemize}
+\end{proof}
+
+\begin{lemma}
+  \begin{mathpar}
+    \inferrule
+    {\lstyequiv i t{t'}\Nat\ze}
+    {\lstyequiv i{\su t}{\su{t'}}\Nat\ze}
+  \end{mathpar}
+\end{lemma}
+\begin{proof}
+  From $\lstyequiv i t{t'}\Nat\ze$, we also know $\lsgctx \Psi$,
+  $\lsctxwf {\typeof i} \Gamma$ and \break $\lstypeq i \Nat\Nat\ze$. %
+  Now assume $\tyequiv[L']{\phi}{\phi'}L$ and
+  $\ldSgsubeq[\Phi][L'] \sigma{\sigma'}{\Psi[\phi]}$, we have to consider all
+  $i \ge \codelevel$. %
+  \begin{itemize}
+  \item[Case $i = \metalevel$] Then assuming
+    $\ldsubeq[\Phi][\Delta][L'] \metalevel \metalevel \delta{\delta'}{\Gamma[\phi][\sigma]}$, we must
+    show
+    \[
+      \D :: \ldtypeq[\Phi][\Delta][L'] \metalevel \metalevel \Nat \Nat \ze \tand \ldtyequiv[\Phi][\Delta][L'] \metalevel \metalevel{\su t[\phi][\sigma][\delta]}{\su{t'}[\phi'][\sigma'][\delta']} \D
+    \]
+    From $\lstyequiv i t{t'}\Nat\ze$, we obtain such $\D$ and also
+    \[
+      \ldtyequiv[\Phi][\Delta][L'] \metalevel \metalevel{t[\phi][\sigma][\delta]}{t'[\phi'][\sigma'][\delta']} \D
+    \]
+    From here we obtain $\ldtynfeqnat i{\su t}{\su{t'}}$ which leads to our desired
+    goal. 
+  \item[Case $i = \proglevel$] Then assuming some $k \ge \proglevel$ and
+    $\ldsubeq[\Phi][\Delta][L'] k \proglevel \delta{\delta'}{\Gamma[\phi][\sigma]}$, we must
+    show
+    \[
+      \D :: \ldtypeq[\Phi][\Delta][L'] k \proglevel \Nat \Nat \ze \tand
+      \ldtyequiv[\Phi][\Delta][L'] k \proglevel{\su t[\phi][\sigma][\delta]}{\su{t'}[\phi'][\sigma'][\delta']}\D
+    \]
+    We follow the previous case.
+  \item [Case $i = \codelevel$] In this case, we only consider the most interesting case of
+    $k = \codelevel$. %
+    In this case, we apply local substitution lemma, so we know
+    $\ldStypingge[\Phi][\Gamma[\phi][\sigma]][L'] \proglevel \proglevel{t[\phi][\sigma]}\Nat\ze$ and we
+    must prove
+    \[
+      \ldStypingge[\Phi][\Gamma[\phi][\sigma]][L'] \proglevel \proglevel{\su t[\phi][\sigma]}\Nat\ze
+    \]
+    This clearly has been given by the previous case. %
+    As we have seen in the last few proofs with $k = \codelevel$, it is a common pattern that
+    we use the local substitution lemma to get rid of the local substitution lemma. %
+    Then what is left for the proof obligation is given by $i = \proglevel$ modulo converting
+    weakenings to substitutions. %
+    Essentially, the semantics of layer $\codelevel$ simply remembers the derivation given by
+    the semantic rules. %
+    For this reason, we will keep cases of $i = \codelevel$ short.
+  \end{itemize}
+\end{proof}
+
+The semantic rules are pretty sensitive to the orders in which they are proved. %
+To handle $\Pi$ types, it is more convenient if we have the rules for contexts
+ready.
+\begin{lemma}
+  \begin{mathpar}
+  \inferrule
+  {\lsgctx \Psi}
+  {\lsctxeq i \cdot\cdot}
+  \end{mathpar}
+\end{lemma}
+\begin{proof}
+  Immediate.
+\end{proof}
+
+\begin{lemma}
+  \begin{mathpar}
+  \inferrule
+  {\lsgctx \Psi \\ g : \Ctx \in \Psi}
+  {\lsctxeq i{g}{g}}
+  \end{mathpar}
+\end{lemma}
+\begin{proof}
+  Now assuming $\tyequiv[L']{\phi}{\phi'}L$ and
+  $\ldSgsubeq[\Phi][L'] \sigma{\sigma'}{\Psi[\phi]}$, we have to consider all
+  $i \in \{\proglevel, \metalevel\}$. %
+  We only consider $i = \metalevel$ here as the proof for $i = \proglevel$ is very similar.
+  We know $g : \Ctx \in \Psi[\phi]$ as well. %
+  Then we have the following after lookup
+  \[
+    \ldSctxeqge[\Phi][L'] \proglevel \proglevel{\sigma(g)}{\sigma'(g)}
+  \]
+  We are very close to our goal
+  \[
+    \ldSctxeq[\Phi][L'] \metalevel \metalevel{\sigma(g)}{\sigma'(g)}
+  \]
+  First we obtain $\ldSctxeq[\Phi][L'] \metalevel \proglevel{\sigma(g)}{\sigma'(g)}$. %
+  Then by layering restriction, we have the goal by lifting $\proglevel$ to $\metalevel$.
+\end{proof}
+
+\begin{lemma}
+  \begin{mathpar}
+    \inferrule
+    {\lsctxeq i \Gamma\Delta \\ \lstypeq i T{T'} l \\ \tyequiv[L]l{l'}\Level}
+    {\lsctxeq i{\Gamma, x : T \at l}{\Delta, x : T' \at{l'}}}
+  \end{mathpar}
+\end{lemma}
+\begin{proof}
+  Now assuming $\tyequiv[L']{\phi}{\phi'}L$ and
+  $\ldSgsubeq[\Phi][L'] \sigma{\sigma'}{\Psi[\phi]}$, we have to consider all
+  $i \in \{\proglevel, \metalevel\}$. %
+  We only consider $i = \metalevel$ here as the proof for $i = \proglevel$ is very similar. %
+  We should prove
+  \[
+    \ldSctxeq[\Phi][L'] \metalevel \metalevel{\Gamma[\phi][\sigma], x : T[\phi][\sigma] \at{l[\phi]}}{\Delta[\phi'][\sigma'], x : T'[\phi'][\sigma'] \at{l'[\phi']}}
+  \]
+  We first obtain 
+ \[
+    \ldSctxeq[\Phi][L'] \metalevel \metalevel{\Gamma[\phi][\sigma]}{\Delta[\phi'][\sigma']}
+  \]
+  To obtain the goal, we must show $T[\phi][\sigma] \approx T'[\phi'][\sigma']$ is
+  stable under local substitutions. %
+  This is immediate by the semantic judgment, after converting weakenings into
+  universe and global substitutions.
+\end{proof}
+
+\begin{lemma}
+  \begin{mathpar}
+  \inferrule
+  {\lsctxwf{\typeof i}\Gamma \\ \text{$\Gamma$ ends with $\cdot$} \\ |\Gamma| = k'}
+  {\lssubeq i {\cdot^{k'}}{\cdot^{k'}}{\cdot}}
+  \end{mathpar}
+\end{lemma}
+\begin{proof}
+  From $\lsctxwf {\typeof i} \Gamma$, we also know $\lsgctx \Psi$. %
+  Assuming
+  $\tyequiv[L']{\phi}{\phi'}L$, $\ldSgsubeq[\Phi][L'] \sigma{\sigma'}{\Psi[\phi]}$. %
+  We should consider all possible $i$.
+  \begin{itemize}
+  \item[Case $i = \metalevel$] Then assuming
+    $\ldsubeq[\Phi][\Delta][L'] \metalevel \metalevel \delta{\delta'}{\Gamma[\phi][\sigma]}$, we must
+    show
+    \[
+      \D :: \ldctxeq[\Phi][L'] \metalevel \metalevel \cdot \cdot
+      \tand
+      \ldsubeq[\Phi][\Delta][L'] \metalevel \metalevel{\cdot^{k'} \circ \delta}{\cdot^{k'} \circ \delta'}\D
+    \]
+    $\D$ is immediate. %
+    Now we should consider the composition. %
+    We know
+    \[
+      {\cdot^{k'} \circ \delta} = {\cdot^{k'} \circ \delta'} = \cdot_{\widecheck{\delta}}^{\widehat\delta}
+    \]
+    We then have the goal by definition.
+  \item[Case $i = \proglevel$] Similar.
+  \item[Case $i = \codelevel$] By the local substitution lemma and the rule in
+    \Cref{sec:dt:semglob}, we conclude this case by repeating the previous case. 
+  \item[Case $i = \varlevel$] Similar.
+  \end{itemize}
+\end{proof}
+
+\begin{lemma}
+  \begin{mathpar}
+  \inferrule
+  {\lsctxwf{\typeof i}\Gamma \\ g : \Ctx \in \Psi \\ \text{$\Gamma$ ends with $g$} \\ |\Gamma| = k'}
+  {\lssubeq i {\cdot_g^{k'}}{\cdot_g^{k'}}{\cdot}}
+  \end{mathpar}
+\end{lemma}
+\begin{proof}
+  Similar to the previous lemma. %
+  We will need to do a case analysis on the result of lookup of $g$, but otherwise the
+  result is straightforward.
+\end{proof}
+
+\begin{lemma}
+  \begin{mathpar}
+  \inferrule
+  {\lsctxwf{\typeof i}\Gamma \\ g : \Ctx \in \Psi \\ \text{$\Gamma$ ends with $g$} \\ |\Gamma| = k'}
+  {\lssubeq i {\wk_g^{k'}}{\wk_g^{k'}}{g}}
+  \end{mathpar}
+\end{lemma}
+\begin{proof}
+  From $\lsctxwf {\typeof i} \Gamma$, we also know $\lsgctx \Psi$. %
+  The semantic well-formedness for $g$ is established by a previous lemma.
+  
+  Now we assume $\tyequiv[L']{\phi}{\phi'}L$,
+  $\ldSgsubeq[\Phi][L'] \sigma{\sigma'}{\Psi[\phi]}$. %
+  We should consider all possible $i$.
+  \begin{itemize}
+  \item[Case $i = \metalevel$] Then assuming
+    $\ldsubeq[\Phi][\Delta][L'] \metalevel \metalevel \delta{\delta'}{\Gamma[\phi][\sigma]}$, we must
+    show
+    \[
+      \D :: \ldctxeq[\Phi][L'] \metalevel \metalevel{\sigma(g)}{\sigma'(g)}
+      \tand
+      \ldsubeq[\Phi][\Delta][L'] \metalevel \metalevel{\wk_g^{k'}[\sigma] \circ \delta}{\wk_g^{k'}[\sigma'] \circ \delta'}\D
+    \]
+    $\D$ is obtained by looking up $g$ in $\sigma$, from which we get
+    \[
+      \ldSctxeq[\Phi][L'] \metalevel \proglevel{\sigma(g)}{\sigma'(g)}
+    \]
+    We have $\D$ by layering restriction. %
+
+    For composition, we have
+    \begin{gather*}
+      \wk_g^{k'}[\sigma] \circ \delta = \wk_{\sigma(g)}^{k'} \circ \delta \\
+      \wk_g^{k'}[\sigma'] \circ \delta' = \wk_{\sigma'(g)}^{k'} \circ \delta'
+    \end{gather*}
+    Effectively, this is the same as popping off $k'$ terms from $\delta$ and
+    $\delta'$ simultaneously. %
+    We have the goal by irrelevance.
+  \item[Case $i = \proglevel$] Similar. 
+  \item[Case $i \in \{\varlevel, \codelevel\}$]
+    Similarly, we use the previous case.
+  \end{itemize}
+\end{proof}
+
+\begin{lemma}
+    \begin{mathpar}
+    \inferrule
+    {\typing[L]l\Level \\ \lssubeq i {\delta}{\delta'}{\Delta} \\ \lstypwf[\Psi][\Delta]{\typeof i}T l \\
+      \lstyequiv i {t}{t'}{T[\delta]} l}
+    {\lssubeq i {\delta, t/x}{\delta', t'/x}{\Delta, x : T \at l}}
+  \end{mathpar}
+\end{lemma}
+\begin{proof}
+  From $\lssubeq i {\delta}{\delta'}{\Delta}$ we have $\lsctxwf {\typeof i} \Gamma$,
+  $\lsctxwf{\typeof i} \Delta$ and $\lsgctx \Psi$. %
+  Then from a previous lemma, we further have
+  $\lsctxwf{\typeof i}{\Delta, x : T \at l}$.
+
+  Now we assume $\tyequiv[L']{\phi}{\phi'}L$,
+  $\ldSgsubeq[\Phi][L'] \sigma{\sigma'}{\Psi[\phi]}$. %
+  We should consider all possible $i$.
+  \begin{itemize}
+  \item[Case $i = \metalevel$] Then assuming
+    $\ldsubeq[\Phi][\Delta'][L'] \metalevel \metalevel{\delta_1}{\delta_1'}{\Gamma[\phi][\sigma]}$, we must
+    show
+    \begin{itemize}
+    \item $\D :: \ldctxeq[\Phi][L'] \metalevel \metalevel{(\Delta, x : T \at
+        l)[\phi][\sigma]}{(\Delta, x : T \at l)[\phi'][\sigma']}$ and 
+    \item
+      $\ldsubeq[\Phi][\Delta'][L'] \metalevel \metalevel{(\delta, t/x)[\phi][\sigma] \circ
+        \delta_1}{(\delta', t'/x)[\phi'][\sigma'] \circ \delta_1'}\D$.
+    \end{itemize}
+    We expand the composition:
+    \begin{align*}
+      (\delta, t/x)[\phi][\sigma] \circ \delta_1 &= (\delta[\phi][\sigma] \circ
+                                                   \delta_1),
+                                                   (t[\phi][\sigma][\delta_1])/x \\
+      (\delta', t'/x)[\phi'][\sigma'] \circ \delta_1' &= (\delta'[\phi'][\sigma'] \circ
+                                                        \delta_1'),
+                                                        (t'[\phi'][\sigma'][\delta_1'])/x 
+    \end{align*}
+    
+    We can conclude the goal by using $\lsctxwf{\typeof i}{\Delta, x : T \at l}$,
+    $\lstyequiv i {t}{t'}{T[\delta]} l$ and irrelevance. %
+    
+  \item[Case $i = \proglevel$] Similar.
+    
+  \item[Case $i = \codelevel$] Similar to the previous pattern, we apply the local substitution
+    lemma and use the previous case to discharge the obligations. 
+  \item[Case $i = \varlevel$] Similar.
+  \end{itemize}
+\end{proof}
+
+\begin{lemma}
+  \begin{mathpar}
+    \inferrule
+    { }
+    {\lsgctx\cdot}
+
+    \inferrule
+    {\lsgctx\Psi}
+    {\lsgctx{\Psi, g : \Ctx}}
+
+    \inferrule
+    {\lsgctx\Psi \\ \lsctxwf \proglevel \Gamma \\\\ \typing[L]l\Level \\ i \in \{\codelevel, \proglevel\}}
+    {\lsgctx{\Psi, U : \DTyp i l}}
+
+    \inferrule
+    {\lsgctx\Psi \\ \lstypwf \proglevel T l \\\\ \typing[L]l\Level \\ i \in \{\varlevel, \codelevel\}}
+    {\lsgctx{\Psi, u : \DTrm i T l}}
+  \end{mathpar}
+\end{lemma}
+\begin{proof}
+  Immediate. %
+  We take advantage of the fact that a universe weakening is a special universe
+  substitution. %
+\end{proof}
+
+\begin{lemma}
+  \begin{mathpar}
+    \inferrule
+    {\lsctxwf{\typeof i}\Gamma \\ x : T \at l \in \Gamma}
+    {\lstyequiv i x x T l}
+  \end{mathpar}
+\end{lemma}
+\begin{proof}
+  From $\lsctxwf {\typeof i} \Gamma$, we also know $\lsgctx \Psi$. %
+
+  To construct the semantic judgment for type $T$, we first assuming
+  $\tyequiv[L']{\phi}{\phi'}L$, $\ldSgsubeq[\Phi][L'] \sigma{\sigma'}{\Psi[\phi]}$ and
+  some $k \ge i$. %
+  We have
+  \[
+    \ldSctxeq[\Phi][L'] k{\typeof i} {\Gamma[\phi][\sigma]}{\Gamma[\phi'][\sigma']}
+  \]
+  Our goal is to construct
+  \[
+    \ldtypeq[\Phi][\Delta][L'] k{\typeof
+      i}{T[\phi][\sigma][\delta]}{T'[\phi'][\sigma'][\delta']}{l[\phi]}
+  \]
+  with further assuming
+  $\ldsubeq[\Phi][\Delta][L'] k{\typeof i}\delta{\delta'}{\Gamma[\phi][\sigma]}$. %
+  This is done by doing induction on $x : T \at l \in \Gamma$. %
+
+  Then we consider the term. %
+  Since it is the variable case, $i$ can take all four layers.
+  \begin{itemize}
+  \item[Case $i = \metalevel$] Then assuming
+    $\ldsubeq[\Phi][\Delta][L'] \metalevel \metalevel \delta{\delta'}{\Gamma[\phi][\sigma]}$, we must
+    show
+    \[
+      \D :: \ldtypeq[\Phi][\Delta][L'] \metalevel \metalevel{T[\phi][\sigma][\delta]}{T'[\phi'][\sigma'][\delta']}{l[\phi]}
+      \tand
+      \ldtyequiv[\Phi][\Delta][L'] \metalevel \metalevel{\delta(x)}{\delta'(x)}\D
+    \]
+    We proceed by doing induction on $x : T \at l \in \Gamma$. %
+    We weaken the universe and global contexts to obtain the goal.
+    
+  \item[Case $i = \proglevel$] This case works similarly at different layers. %
+    We omit it here.
+  \item[Case $i = \codelevel$] In this case, we consider $k = \codelevel$ and apply the local
+    substitution lemma.  %
+    Based on the rule in \Cref{sec:dt:semglob} and the previous case, we have the
+    goal.
+  \item[Case $i = \varlevel$] This case makes use of the entire previous case and also in
+    addition must prove the same for $k = \varlevel$. %
+    But this is virtually identical to the previous case.
+  \end{itemize}
+\end{proof}
+
+Combining the semantic rules for local substitutions, we derive that
+\begin{corollary}[Local Weakening Substitutions]\labeledit{lem:dt:sem:lwk}
+  $\lssubst[\Psi][\Gamma,\Delta] i{\wk_{\Gamma}^{|\Delta|}}\Gamma$
+\end{corollary}
+
+\begin{lemma}
+  \begin{mathpar}
+    \inferrule
+    {\lsctxwf{\typeof i}\Gamma \\ u : \DTrm[\Delta]{i'}T l \in \Psi \\ i' \in \{\varlevel, \codelevel\} \\ i \in
+      \{\varlevel, \codelevel, \proglevel, \metalevel\} \\ i' \le i \\ \Ac :: \lssubeq i \delta{\delta'} \Delta}
+    {\lstyequiv i{u^\delta}{u^{\delta'}}{T[\delta]}{l}}
+  \end{mathpar}
+\end{lemma}
+\begin{proof}
+  From $\lsctxwf {\typeof i} \Gamma$, we also know $\lsgctx \Psi$. %
+
+  To construct the semantic judgment for type $T$, we first assuming
+  $\tyequiv[L']{\phi}{\phi'}L$, $\ldSgsubeq[\Phi][L'] \sigma{\sigma'}{\Psi[\phi]}$ and
+  some $k \ge i$, and then
+  $\ldsubeq[\Phi][\Delta'][L'] k{\typeof i}{\delta_1}{\delta_1'}{\Gamma[\phi][\sigma]}$. %
+  We have
+  \[
+    \ldSctxeq[\Phi][L'] k{\typeof i} {\Gamma[\phi][\sigma]}{\Gamma[\phi'][\sigma']}
+  \]
+  Our goal is to construct
+  \[
+    \ldtypeq[\Phi][\Delta'][L'] k{\typeof
+      i}{T[\phi][\sigma][\delta[\phi][\sigma] \circ \delta_1]}{T[\phi'][\sigma'][\delta'[\phi'][\sigma'] \circ \delta_1']}{l[\phi]}
+  \]
+  We obtain this by looking up $\ldSgctx[L']{\Psi[\phi]}$ using
+  $u : \DTrm[\Delta]{i'}T l \in \Psi$, and use the invariant that $T$ is stable under
+  global and local substitutions. 
+  
+  Then we consider the term. %
+  \begin{itemize}
+  \item[Case $i = \metalevel$] Then assuming
+    $\ldsubeq[\Phi][\Delta'][L'] \metalevel \metalevel{\delta_1}{\delta_1'}{\Gamma[\phi][\sigma]}$, we must show
+    \[
+      \ldtyequivt[\Phi][\Delta'][L'] \metalevel \metalevel{\sigma(u)[\delta[\phi][\sigma]\circ
+        \delta_1]}{\sigma'(u)[\delta'[\phi'][\sigma']\circ
+        \delta_1']}{T[\phi][\sigma][\delta[\phi][\sigma] \circ \delta_1]}{l[\phi]}
+    \]
+    Looking up $\ldSgsubeq[\Phi][L'] \sigma{\sigma'}{\Psi[\phi]}$, we know that
+    \[
+      \Bc :: \ldStyequivge[\Phi][\Delta[\phi][\sigma]][L']{i'} \proglevel{\sigma(u)}{\sigma'(u)}{T[\phi][\sigma]} l
+    \]
+    and
+    \[
+      \ldctxwf[\Phi][L'] \proglevel \proglevel{\Delta[\phi][\sigma]}
+    \]
+    We also know the following from $\Ac$
+    \[
+      \ldsubeq[\Phi][\Delta'][L'] \metalevel \metalevel{\delta[\phi][\sigma] \circ
+        \delta_1}{\delta'[\phi'][\sigma'] \circ \delta_1'}{\Delta[\phi][\sigma]}
+    \]
+    Therefore, we can apply layering restriction and obtain
+    \[
+      \ldsubeq[\Phi][\Delta'][L'] \metalevel \proglevel{\delta[\phi][\sigma] \circ
+        \delta_1}{\delta'[\phi'][\sigma'] \circ \delta_1'}{\Delta[\phi][\sigma]}
+    \]
+    This is because we are sure $\Delta[\phi][\sigma]$ only contains types from MLTT.
+    
+    We want to lift $\sigma(u)$ and $\sigma'(u)$ to $\metalevel$, so we instantiate $\Bc$ with
+    the related local substitutions above and obtain
+    \[
+      \ldtyequivt[\Phi][\Delta'][L'] \metalevel \proglevel{\sigma(u)[\delta[\phi][\sigma]\circ
+        \delta_1]}{\sigma'(u)[\delta'[\phi'][\sigma']\circ
+        \delta_1']}{T[\phi][\sigma][\delta[\phi][\sigma] \circ \delta_1]}{l[\phi]}
+    \]
+    The goal is achieved by another layering restriction. 
+  \item[Case $i = \proglevel$] Similar to the previous case except that there is no need for
+    layering restriction, as we are evaluating terms right inside of MLTT and
+    therefore no lifting occurs. 
+  \item[Case $i \in \{\varlevel, \codelevel\}$] In this case, we also follow similar footsteps as the
+    results of looking up global substitutions must be stable under local
+    substitutions. %
+  \end{itemize}
+\end{proof}
+
+\begin{lemma}
+  \begin{mathpar}
+    \inferrule
+    {\lsctxwf{\typeof i}\Gamma \\ U : \DTyp[\Delta]{i'} l \in \Psi \\ i' \in \{\codelevel, \proglevel\} \\ i' \le i \\ \lssubeq i \delta{\delta'} \Delta}
+    {\lstypeq i{U^\delta}{U^{\delta'}}{l}}
+  \end{mathpar}
+\end{lemma}
+\begin{proof}
+  Similar to above, but simpler. %
+  Use layering restriction as well when $i = \metalevel$.
+\end{proof}
+
+\begin{lemma}
+  \begin{mathpar}
+      \inferrule*
+      {\lsgctx \Psi}
+      {\lsgsubeq{\cdot}{\cdot}{\cdot}}
+
+      \inferrule*
+      {\lsgsubeq{\sigma}{\sigma'}{\Phi} \\ \lsctxeq \proglevel \Gamma\Delta}
+      {\lsgsubeq{\sigma, \Gamma/g}{\sigma', \Delta/g}{\Phi, g: \Ctx}}
+    \end{mathpar}
+\end{lemma}
+\begin{proof}
+  Immediate.
+\end{proof}
+
+\begin{lemma}
+  \begin{mathpar}
+    \inferrule*
+    {\lsgsubeq{\sigma}{\sigma'}{\Phi} \\ \lstypwf[\Phi] \proglevel T l \\ \typing[L]l\Level \\
+      i \in \{\varlevel, \codelevel\} \\ \Ac :: \lstyequiv[\Psi][\Gamma[\sigma]] i t{t'}{T[\sigma]}l}
+    {\lsgsubeq[\Psi]{\sigma, t/u}{\sigma', t'/u}{\Phi, u : \DTrm{i} T l}}
+  \end{mathpar}
+\end{lemma}
+\begin{proof}
+  Assuming $\tyequiv[L']{\phi}{\phi'}L$ and
+  $\ldSgsubeq[\Psi'][L']{\sigma_1}{\sigma_1'}{\Psi[\phi]}$, we have to show
+  \[
+    \ldSgsubeq[\Psi'][L']{\sigma[\phi] \circ \sigma_1, t[\phi][\sigma_1]/u}{\sigma'[\phi] \circ
+      \sigma_1', t[\phi][\sigma_1']/u}{(\Phi, u : \DTrm{i} T l)[\phi]}
+  \]
+  Our goal is to show, without loss of generality,
+  \[
+    \ldStyequivge[\Psi][\Gamma[\sigma[\phi] \circ \sigma_1]] i
+    \proglevel{t[\phi][\sigma_1]}{t'[\phi][\sigma_1']}{T[\sigma[\phi] \circ \sigma_1]} l
+  \]
+  This is given by $\Ac$, modulo converting weakenings to substitutions. %
+\end{proof}
+
+\begin{lemma}
+  \begin{mathpar}
+    \inferrule*
+    {\lsgsubeq{\sigma}{\sigma'}{\Phi} \\ \lsctxwf[\Phi] \proglevel \Gamma \\ \typing[L]l\Level
+      \\ i \in \{\codelevel, \proglevel\} \\
+      \lstypeq[\Psi][\Gamma[\sigma]] i{T}{T'}l}
+    {\lsgsubeq{\sigma, T/U}{\sigma', T'/U}{\Phi, u : \DTyp i l}}    
+  \end{mathpar}
+\end{lemma}
+\begin{proof}
+  Similar to the previous case but simpler. 
+\end{proof}
+
+\begin{corollary}[Global Weakening Substitutions]\labeledit{lem:dt:sem:gwk}
+  $\lsgsubst[\Psi,\Phi] {\wk_{\Psi}^{|\Phi|}}{\Psi}$
+\end{corollary}
+
+\begin{lemma}
+  \begin{mathpar}
+    \inferrule
+    {\tyequiv[L]{l_1}{l_3}\Level \\ \tyequiv[L]{l_2}{l_4}\Level \\
+      \lstypeq i S{S'}{l_1} \\ \lstypeq[\Psi][\Gamma, x : S \at{l_1}] iT{T'}{l_2}}
+    {\lstypeq i{\PI{l_1}{l_2} x S T}{\PI{l_3}{l_4} x{S'}{T'}}{l_1 \sqcup l_2}}
+  \end{mathpar}
+\end{lemma}
+\begin{proof}
+  From $\lstypeq i S{S'}{l_1}$, we can conclude $\lsgctx \Psi$ and $\lsctxwf {\typeof
+    i} \Gamma$. %
+  Now assuming $\tyequiv[L']{\phi}{\phi'}L$ and
+  $\ldSgsubeq[\Phi][L'] \sigma{\sigma'}{\Psi[\phi]}$, we have to consider all
+  $i \ge \codelevel$. %
+  \begin{itemize}
+  \item[Case $i = \metalevel$] Then assuming
+    $\ldsubeq[\Phi][\Delta][L'] \metalevel \metalevel \delta{\delta'}{\Gamma[\phi][\sigma]}$, we must
+    show
+    \[
+      \ldtypeq[\Phi][\Delta][L'] \metalevel \metalevel{\PI{l_1}{l_2} x S T[\phi][\sigma][\delta]}{\PI{l_3}{l_4} x{S'}{T'}[\phi'][\sigma'][\delta']}{(l_1 \sqcup l_2)[\phi]}
+    \]
+    From escape lemmas, we are able to establish the reduction premises, typing
+    premises and the generic equivalence. %
+    We then only focus on the semantic premises. %
+    First, from $\lstypeq i S{S'}{l_1}$, we obtain
+    \[
+      \ldtypeq[\Phi][\Delta][L'] \metalevel
+      \metalevel{S[\phi][\sigma][\delta]}{S'[\phi'][\sigma'][\delta']}{l_1[\phi]}
+    \]
+    Then we further assume
+    $\psi :: L'' \sep \Phi'; \Delta' \To_m L' \sep \Phi; \Delta$ and
+    $\ldtyequivt[\Phi'][\Delta'][L''] \metalevel \metalevel{s}{s'}{S[\phi][\sigma][\delta]}{l_1[\phi]}$,
+    we should prove
+    \[
+      \ldtypeq[\Phi'][\Delta'][L''] \metalevel
+      \metalevel{T[\phi][\sigma][\delta, s/x]}{T'[\phi'][\sigma'][\delta',s'/x]}{l_1[\phi]}
+    \]
+    We are almost there, as long as we can provide
+    \[
+      \ldsubeq[\Phi'][\Delta'][L''] \metalevel \metalevel {\delta,s/x}{\delta',s'/x}{(\Gamma, x : S \at{l_1})[\phi][\sigma]}
+    \]
+    To prove these two local substitutions are related, we are interested in showing \break
+    $\lsctxeq{\typeof i}{\Gamma, x : S \at{l_1}}{\Gamma, x : S' \at{l_3}}$, but
+    this is immediate from a previous lemma.
+  \item[Case $i = \proglevel$] This case follows similarly to the previous case. %
+    It must range over $k \in \{\proglevel, \metalevel\}$ so a similar reasoning must be repeated twice.
+    
+  \item[Case $i = \codelevel$]
+    This case is much simpler by using the local substitution lemma to remove the need
+    to assume another local substitution. %
+    Then we can simply apply identity local substitutions to all premises and use the
+    previous case to conclude
+    \[
+      \ldStypwfge[\Phi][\Gamma[\phi][\sigma]][L'] \proglevel \proglevel{\PI{l_1}{l_2} x S T}{(l_1\sqcup l_2)[\phi]}
+    \]
+    If we introduce another local substitution, then we must reason about extending a
+    local variable to an arbitrary local substitution, which is quite verbose and
+    unnecessary. %
+  \end{itemize}
+\end{proof}
+
+\begin{lemma}
+  \begin{mathpar}
+    \inferrule
+    {\tyequiv[L]{l}{l'}\Level \\ \lstyequiv i t{t'}{\Ty l}{1 + l}}
+    {\lstypeq i{\Elt l t}{\Elt{l'}{t'}}{l}}
+  \end{mathpar}
+\end{lemma}
+\begin{proof}
+  We use the fact that $\Ty{l}$ reduces only to itself and therefore it is only
+  possible to expand $t \approx t'$ to the universe case. %  
+\end{proof}
+
+\begin{lemma}
+  \begin{mathpar}
+    \inferrule
+    {\tyequiv[L]{l_1}{l_3}\Level \\ \tyequiv[L]{l_2}{l_4}\Level \\\\
+      \lstyequiv i s{s'}{\Ty{l_1}}{1 + l_1} \\
+      \lstyequiv[\Psi][\Gamma, x : \Elt{l_1} s \at{l_1}] i t{t'}{\Ty{l_2}}{1 + l_2}}
+    {\lstyequiv i{\PI{l_1}{l_2} x s t}{\PI{l_3}{l_4} x{s'}{t'}}{\Ty{l_1 \sqcup l_2}}{\su{(l_1 \sqcup l_2)}}}
+  \end{mathpar}
+\end{lemma}
+\begin{proof}
+  Very similar to the previous proof. %
+  We use the previous lemma and know that
+  \[
+    \lstypeq i{\Elt {l_1} s}{\Elt{l_3}{s'}}{l_1}
+  \]
+  We do the same for $t \approx t'$. %
+  This gives us
+  \[
+    \lstypeq i{\PI {l_1}{l_2} x{\Elt{l_1} s}{\Elt{l_2} t}}{\PI {l_3}{l_4}
+      x{\Elt{l_3}{s'}}{\Elt{l_4}{t'}}}{l_1 \sqcup l_2}
+  \]
+  When $i \in \{\proglevel, \metalevel\}$, we use 
+  \begin{align*}
+    \Elt{l_1 \sqcup l_2}{\PI{l_1}{l_2} x s t} &\redd {\PI {l_1}{l_2} x{\Elt{l_1}
+                                                s}{\Elt{l_2} t}} \\
+    \Elt{l_3 \sqcup l_4}{\PI{l_3}{l_4} x{s'}{t'}} &\redd {\PI {l_3}{l_4}
+                                                    x{\Elt{l_3}{s'}}{\Elt{l_4}{t'}}}
+  \end{align*}
+  We have the goal using reduction expansion. 
+\end{proof}
+
+\begin{lemma}
+  \begin{mathpar}
+    \inferrule
+    {\typing[L]l\Level  \\ \typing[L]{l'}\Level \\
+      \lstyping i s{\Ty l}{1 + l} \\ \lstyping[\Psi][\Gamma, x : \Elt l s \at l] i t{\Ty{l'}}{1 + l'}}
+    {\lstypeq i{\PI l{l'} x{\Elt l s}{\Elt{l'} t}}{\Elt{l \sqcup l'}{\PI l{l'} x s t}}{l \sqcup l'}}
+  \end{mathpar}
+\end{lemma}
+\begin{proof}
+  Here $i \in \{\proglevel, \metalevel\}$. %
+  The proof is similar to the previous lemma except that we only use reduction
+  expansion on one side. 
+\end{proof}
+
+\begin{lemma}
+  \begin{mathpar}
+    \inferrule
+    {\tyequiv[L]{l_1}{l_3}\Level \\ \tyequiv[L]{l_2}{l_4}\Level \\
+      \lstypeq i S{S'}{l_1} \\
+      \lstyequiv[\Psi][\Gamma, x : S \at {l_1}] i t{t'}{T}{l_2}}
+    {\lstyequiv i{\LAM {l_1}{l_2} x S t}{\LAM {l_3}{l_4} x{S'}{t'}}{\PI l{l'} x S T}{l_1 \sqcup l_2}}
+  \end{mathpar}
+\end{lemma}
+\begin{proof}
+  From $\lstypeq i S{S'}{l_1}$, we can conclude $\lsgctx \Psi$ and
+  $\lsctxwf {\typeof i} \Gamma$. %
+  The premise $\lstyequiv[\Psi][\Gamma, x : S \at {l_1}] i t{t'}{T}{l_2}$ also gives
+  us $\lstypwf[\Psi][\Gamma, x : S \at{l_1}] iT{l_2}$. %
+  Combining symmetry, transitivity and the previous lemma, we have
+  \[
+    \lstypwf i{\PI{l_1}{l_2} x S T}{l_1 \sqcup l_2}
+  \]
+  Now assuming $\tyequiv[L']{\phi}{\phi'}L$ and
+  $\ldSgsubeq[\Phi][L'] \sigma{\sigma'}{\Psi[\phi]}$, we have to consider all
+  $i \ge \codelevel$. %
+  \begin{itemize}
+  \item[Case $i = \metalevel$] Then assuming
+    $\ldsubeq[\Phi][\Delta][L'] \metalevel \metalevel \delta{\delta'}{\Gamma[\phi][\sigma]}$, we must
+    show
+    \begin{itemize}
+    \item
+      $\D :: \ldtypeq[\Phi][\Delta][L'] \metalevel \metalevel{\PI{l_1}{l_2} x S
+        T[\phi][\sigma][\delta]}{\PI{l_3}{l_4} x{S}{T}[\phi'][\sigma'][\delta']}{(l_1
+        \sqcup l_2)[\phi]}$, and
+    \item
+      $\ldtyequiv[\Phi][\Delta][L'] \metalevel \metalevel{\LAM {l_1}{l_2} x S
+        t[\phi][\sigma][\delta]}{\LAM {l_3}{l_4}
+        x{S'}{t'}[\phi'][\sigma'][\delta']}\D$.
+    \end{itemize}
+
+    To obtain the goal we shall proceed in two steps. %
+    First, we obtain
+    \[
+      \ldsubeq[\Phi][\Delta, x : S[\phi][\sigma][\delta] \at{l_1[\phi]}][L'] \metalevel \metalevel
+      {\delta,x/x}{\delta',x/x}{(\Gamma, x : S \at{l_1})[\phi][\sigma]}
+    \]. %
+    Giving it to $\lstyequiv[\Psi][\Gamma, x : S \at {l_1}] i t{t'}{T}{l_2}$, we
+    have
+    \[
+      \ldtyequivt[\Phi][\Delta, x : S[\phi][\sigma][\delta] \at{l_1[\phi]}][L'] \metalevel \metalevel
+      {t[\phi][\sigma][\delta,x/x]}{t'[\phi'][\sigma'][\delta',x/x]}{T[\phi][\sigma][\delta,x/x]}{l_2[\phi]}
+    \]
+    A further escape gives us
+    \[
+      \lttrmgeq[\Phi][\Delta, x : S[\phi][\sigma][\delta] \at{l_1[\phi]}][L'] \metalevel
+      {t[\phi][\sigma][\delta,x/x]}{t'[\phi'][\sigma'][\delta',x/x]}{T[\phi][\sigma][\delta,x/x]}{l_2[\phi]}
+    \]
+    From this, we conclude 
+    \[
+      \lttrmgeq[\Phi][\Delta][L'] \metalevel {(\LAM {l_1}{l_2} x S
+        t)[\phi][\sigma][\delta]}{(\LAM {l_3}{l_4}
+        x{S'}{t'})[\phi'][\sigma'][\delta']}{T[\phi][\sigma][\delta]}{l_2[\phi]}
+    \]
+    modulo the law of weak head closure.
+
+    In the second step, we assume
+    $\psi :: L'' \sep \Phi'; \Delta' \To_m L' \sep \Phi; \Delta$ and 
+    $\ldtyequivt[\Phi'][\Delta'][L''] \metalevel \metalevel{s}{s'}{S[\phi][\sigma][\delta]}{l_1[\phi]}$,
+    we should prove
+    \[
+      \ldtyequivt[\Phi'][\Delta'][L''] \metalevel \metalevel{t[\phi][\sigma][\delta,
+        s/x]}{t'[\phi'][\sigma'][\delta',s'/x]}{T[\phi][\sigma][\delta, s/x]}{l_1[\phi]}
+    \]
+    then we have the goal modulo weak head expansion. %
+    We are almost there, as long as we can provide
+    \[
+      \ldsubeq[\Phi'][\Delta'][L''] \metalevel \metalevel {\delta,s/x}{\delta',s'/x}{(\Gamma, x : S \at{l_1})[\phi][\sigma]}
+    \]
+    But in the previous lemma, we have seen it obvious.
+    
+  \item[Case $i = \proglevel$] Repeat the previous case at different layers twice. %
+  \item[Case $i = \codelevel$] This case is very similar to that of $\Pi$. %
+  \end{itemize}  
+\end{proof}
+
+\begin{lemma}
+  \begin{mathpar}
+    \inferrule
+    {\tyequiv[L]{l_1}{l_3}\Level  \\ \tyequiv[L]{l_2}{l_4}\Level \\ \lstypeq i S{S'}{l_1}
+      \\
+      \lstypeq[\Psi][\Gamma, x : S \at{l_1}] i{T}{T'}{l_2} \\
+      \Ac :: \lstyequiv i t{t'}{\PI {l_1}{l_2} x S T}{l_1 \sqcup l_2} \\ \lstyequiv i s{s'} S{l_1}}
+    {\lstyequiv i{\APP t {l_1}{l_2} x S T s}{\APP{t'} {l_3}{l_4} x {S'}{T'}{s'}}{T[s/x]}{l_2}}
+  \end{mathpar}
+\end{lemma}
+\begin{proof}
+  From $\lstypeq i S{S'}{l_1}$, we can conclude $\lsgctx \Psi$ and
+  $\lsctxwf {\typeof i} \Gamma$. %
+  To show\break
+  $\lstypwf{\typeof i}{T[s/x]}{l_2}$, we first show $\lssubst{\typeof i}{s/x}{\Gamma,x
+    : S \at{l_1}}$ and get the goal using the local substitution lemma. %
+  This is immediate by the semantic rule for local substitutions and
+  \Cref{lem:dt:sem:lwk}. %
+  
+  Now assuming $\tyequiv[L']{\phi}{\phi'}L$ and
+  $\ldSgsubeq[\Phi][L'] \sigma{\sigma'}{\Psi[\phi]}$, we have to consider all
+  $i \ge \codelevel$. %
+  \begin{itemize}
+  \item[Case $i = \metalevel$] Then assuming
+    $\ldsubeq[\Phi][\Delta][L'] \metalevel \metalevel \delta{\delta'}{\Gamma[\phi][\sigma]}$, we must
+    show
+    \begin{itemize}
+    \item
+      $\D :: \ldtypeq[\Phi][\Delta][L'] \metalevel \metalevel{T[\phi][\sigma][\delta,s[\phi][\sigma][\delta]/x]}{T'[\phi'][\sigma'][\delta',s'[\phi'][\sigma'][\delta']/x]}{l_2[\phi]}$, and
+    \item
+      $\ldtyequiv[\Phi][\Delta][L'] \metalevel \metalevel{{\APP t {l_1}{l_2} x S T
+          s}[\phi][\sigma][\delta]}{{\APP{t'} {l_3}{l_4} x
+          {S'}{T'}{s'}}[\phi'][\sigma'][\delta']}\D$.
+    \end{itemize}
+    $\D$ is easily concluded from $\lstypwf \metalevel {T[s/x]}{l_2}$. %
+
+    We obtain the goal by instantiating $\Ac$, from which we get
+    \[
+      \ldtyequiv[\Phi][\Delta][L'] \metalevel \metalevel{t[\phi][\sigma][\delta]}{t'[\phi'][\sigma'][\delta']}{\PI {l_1}{l_2} x S T[\phi][\sigma][\delta]}{(l_1 \sqcup l_2)[\phi]}
+    \]
+    The semantics of ${\PI {l_1}{l_2} x S T[\phi][\sigma][\delta]}$ gives us the
+    goal, up to irrelevance. 
+  \item[Case $i = \proglevel$] Similar.
+  \item[Case $i = \codelevel$] Follow the previous pattern, we use the local substitution
+    lemma. 
+  \end{itemize}
+\end{proof}
+
+\begin{lemma}
+  \begin{mathpar}
+    \inferrule
+    {\typing[L]l\Level \\ \typing[L]{l'}\Level \\ 
+      \lstyping[\Psi][\Gamma, x : S \at{l}] i t{T}{l'} \\ \lstyping i s{S}{l}}
+    {\lstyequiv i{t[s/x]}{\APP {\LAM {l}{l'} x S t} {l}{l'} x{S} T s}{T[s/x]}{l'}}
+  \end{mathpar}
+\end{lemma}
+\begin{proof}
+  Here $i \in \{\proglevel, \metalevel\}$. %
+  We obtain $\lsgctx \Psi$, $\lsctxwf {\typeof i} \Gamma$, and
+  $\lstypwf{\typeof i}{T[s/x]}{l'}$ following similar lines as the previous lemma. %
+
+  From the local substitution lemma, we also have $\lstyping i{t[s/x]}{T}{l'}$ so we
+  are one reduction step away, which can be concluded by the reduction expansion lemma. %
+\end{proof}
+
+\begin{lemma}
+  \begin{mathpar}
+    \inferrule
+    {\typing[L]l\Level \\ \typing[L]{l'}\Level \\ \lstypwf i S{l} \\
+      \lstypwf[\Psi][\Gamma, x : S \at{l}] i{T}{l'} \\
+      \lstyping i t{\PI {l}{l'}x S T}{l \sqcup l'}}
+    {\lstyequiv i{\LAM {l}{l'} x{S} {\APP t {l}{l'}x S T x}}{t}{\PI {l}{l'} x S T}{l \sqcup l'}}
+  \end{mathpar}
+\end{lemma}
+\begin{proof}
+  Here $i \in \{\proglevel, \metalevel\}$. %
+  We assume $\phi \approx \phi'$, $\sigma \approx \sigma'$ and $\delta \approx
+  \delta'$, and finally $s \approx s'$. Then see
+  \begin{align*}
+    &~ \APP {\LAM {l}{l'} x{S} {\APP{t[\phi][\sigma][\delta]} {l}{l'}x S T x}} {l}{l'}x S
+      T s \\
+    \redd&~ {\APP {t[\phi][\sigma][\delta]}
+           {l}{l'}x S T x}[s/x] \\
+    =&~ {\APP {t[\phi][\sigma][\delta]} {l}{l'}x S T s} \\
+    \approx &~ {\APP {t[\phi'][\sigma'][\delta']} {l}{l'}x S T{s'}}
+  \end{align*}
+  Therefore, we obtain the goal by weak head expansion of logical relations. 
+\end{proof}
+
+\begin{lemma}
+  If
+  \begin{itemize}
+  \item $(k, i) \in \{(\proglevel, \proglevel), (\metalevel, \proglevel), (\metalevel, \metalevel)\}$,
+  \item $\tyequiv[L]l{l'}\Level$,
+  \item $\lstypeq[\Psi][\Gamma, x : \Nat \at 0] i M{M'} l$,
+  \item $\lstyequiv i {s_1}{s_3} {M[\ze/x]}l$, 
+  \item $\Bc :: \lstyequiv[\Psi][\Gamma, x : \Nat \at 0, y : M \at l] i{s_2}{s_4}{M[\su
+      x/x]}l$,
+  \item $\tyequiv[L']{\phi}{\phi'}L$,
+  \item $\ldSgsubeq[\Phi][L'] \sigma{\sigma'}{\Psi[\phi]}$,
+  \item $\ldsubeq[\Phi][\Delta][L'] k{\typeof i} \delta{\delta'}{\Gamma[\phi][\sigma]}$,
+  \item $\ttrmreds[\Phi][\Delta][L'] k t w \Nat \ze$,
+  \item $\ttrmreds[\Phi][\Delta][L'] k{t'}{w'}\Nat \ze$,
+  \item $\lttrmgeq[\Phi][\Delta][L'] k w{w'}\Nat\ze$, 
+  \item $\Ac :: \ldtynfeqnat[\Phi][\Delta][L'] k w{w'}$,
+  \item
+    $t_1 = {\ELIMN
+      l{x.M[\phi][\sigma][\delta,x/x]}{(s_1[\phi][\sigma][\delta])}{x,y. s_2[\phi][\sigma][\delta,x/x,y/y]}{t}}$,
+  \item $t_2 = {\ELIMN
+      l{x.M'[\phi'][\sigma'][\delta',x/x]}{(s_3[\phi'][\sigma'][\delta'])}{x,y. s_4[\phi'][\sigma'][\delta',x/x,y/y]}{t'}}$
+  \end{itemize}
+  then
+  \[
+    \ldtyequivt[\Phi][\Delta][L'] k{\typeof i}{t_1}{t_2}{M[\phi][\sigma][\delta, t/x]}{l[\phi]}
+  \]
+\end{lemma}
+\begin{proof}
+  We do induction on $\Ac$.
+  \begin{itemize}
+  \item If $w = w' = \ze$, then we hit the base case. In this case, we use $\lstyequiv
+    i {s_1}{s_3} {M[\ze/x]}l$ and reduction expansion to almost obtain the goal. %
+    The only missing piece is to prove
+    \[
+      M[\phi][\sigma][\delta, t/x] \approx M[\phi][\sigma][\delta, \ze/x]
+    \]
+    This holds from symmetry and the fact that $t \approx \ze$, so that we can extend
+    $\delta \approx \delta$.
+  \item If $w = \su s$ and $w' = \su s'$, then we apply IH and also $\Bc$ to obtain
+    the relation between recursive calls for $s$ and $s'$. %
+    We perform a similar analysis to handle the types.
+  \item If $w = \varlevel$ and $w = \varlevel'$ for some neutrals, then we relate them using the
+    reflexivity of neutral.
+  \end{itemize}
+\end{proof}
+
+\begin{lemma}
+  \begin{mathpar}
+    \inferrule
+    {\tyequiv[L]l{l'}\Level \\ \lstypeq[\Psi][\Gamma, x : \Nat \at 0] i M{M'} l \\
+      \lstyequiv i {s_1}{s_3} {M[\ze/x]}l \\
+      \lstyequiv[\Psi][\Gamma, x : \Nat \at 0, y : M \at l] i{s_2}{s_4}{M[\su x/x]}l \\
+      \Ac :: \lstyequiv i t{t'} \Nat \ze}
+    {\lstyequiv i{\ELIMN l{x.M}{s_1}{x,y. s_2}t}{\ELIMN{l'}{x.M'}{s_3}{x,y. s_4}{t'}}{M[t/x]}{l}}
+  \end{mathpar}
+\end{lemma}
+\begin{proof}
+  Instantiate $\Ac$ and use the previous lemma for $i \in \{\proglevel, \metalevel\}$. %
+  Notice that we know $t$ and $t'$ are related by $\Nat$ which must reduce to itself
+  so we can supply all premises required by the previous lemma. %
+  When $i = \codelevel$, we reuse the proof when $i = \proglevel$. 
+\end{proof}
+
+\begin{lemma}
+  \begin{mathpar}
+    \inferrule
+    {\typing[L]l\Level \\ \lstypwf[\Psi][\Gamma, x : \Nat \at 0] i M l \\
+      \lstyping i s {M[\ze/x]}l \\
+      \lstyping[\Psi][\Gamma, x : \Nat \at 0, y : M \at l] i {s'}{M[\su x/x]}l}
+    {\lstyequiv i{s}{\ELIMN l{x.M}s{x,y. s'}\ze}{M[\ze/x]}{l}}
+
+    \inferrule
+    {\typing[L]l\Level \\ \lstypwf[\Psi][\Gamma, x : \Nat \at 0] i M l \\
+      \lstyping i s {M[\ze/x]}l \\
+      \lstyping[\Psi][\Gamma, x : \Nat \at 0, y : M \at l] i {s'}{M[\su x/x]}l \\
+      \lstyping i t \Nat \ze}
+    {\lstyequiv i{s'[t/x,\ELIMN l{x.M}s{x,y. s'}t/y]}{\ELIMN l{x.M}s{x,y. s'}{(\su t)}}{M[\su t/x]}{l}}
+  \end{mathpar}
+\end{lemma}
+\begin{proof}
+  We use reduction expansion, semantic local substitution lemma and the previous lemma. %
+\end{proof}
+
+\begin{lemma}
+  \begin{mathpar}
+    \inferrule
+    {\lstyequiv i t{t'}{T'}l \\ \lstypeq{\typeof i}T{T'}l}
+    {\lstyequiv i t {t'} T l}
+  \end{mathpar}
+\end{lemma}
+\begin{proof}
+  Use irrelevance when $i \in \{\proglevel, \metalevel\}$. %
+  When $i \in \{\varlevel, \codelevel\}$, we do a case analysis on the semantics of related terms. %
+  Notice that all rules for terms in \Cref{sec:dt:semglob} contain a type relation. %
+  We apply transitivity of related types and irrelevance. %
+\end{proof}
+
+\subsection{More Semantic Rules}
+
+In the previous section, we have considered all possible (non-trivial) rules for all
+layers. %
+Among these rules, we have looked at the rules for global variables and see how
+layering restriction enables code running in the semantics. %
+In this section, we will finish the proof by considering rules that are available at
+layer $\metalevel$. %
+This will make our proofs in some sense simpler; there is only one layer to
+consider. %
+On the other hand, we will look into another important feature, recursors for code,
+and how it is semantically justified. %
+
+\begin{lemma}
+  \begin{mathpar}
+    \inferrule
+    {\lsctxwf \metalevel\Gamma \\ \lsctxeq \proglevel \Delta{\Delta'} \\ \lstypeq[\Psi][\Delta] \proglevel T{T'} l \\ \tyequiv[L]l{l'}\Level}
+    {\lstypeq \metalevel{\CTrm[\Delta]T l}{\CTrm[\Delta']{T'}{l'}}{0}}
+  \end{mathpar}
+\end{lemma}
+\begin{proof}
+  Assuming $\tyequiv[L']{\phi}{\phi'}L$,
+  $\ldSgsubeq[\Phi][L'] \sigma{\sigma'}{\Psi[\phi]}$ and
+  $\ldsubeq[\Phi][\Delta_1][L'] \metalevel \metalevel \delta{\delta'}{\Gamma[\phi][\sigma]}$, the
+  focuses are
+  \begin{itemize}
+  \item $\Ac :: \ldSctxeqge[\Phi][L'] \proglevel \proglevel {\Delta[\phi][\sigma]}{\Delta'[\phi'][\sigma']}$,
+  \item $\Bc :: \ldStypwfge[\Phi][\Delta[\phi][\sigma]][L'] \proglevel \proglevel{T[\phi][\sigma]}{l[\phi]}$ and
+  \item $\Cc :: \ldStypwfge[\Psi][\Delta'[\phi][\sigma]][L'] \proglevel \proglevel{T'[\phi][\sigma]}{l[\phi]}$.
+  \end{itemize}
+  $\Ac$ is simple as we only need to convert weakenings to substitutions. %
+  Then we can use $\lsctxeq \proglevel \Delta{\Delta'}$. %
+  $\Bc$ and $\Cc$ are symmetric so we only focus on $\Cc$ which is slightly more
+  complex. %
+  We similarly want to convert weakenings to substitutions so that we can apply
+  $\lstypeq[\Psi][\Delta] \proglevel T{T'} l$ to obtain the goal. %
+  The local contexts are mismatched, though it is not a problem. %
+  The local contexts are used when further assuming related local substitutions, and
+  by $\lsctxeq \proglevel \Delta{\Delta'}$, we can use irrelevance to swap the local contexts. 
+\end{proof}
+
+\begin{lemma}
+  \begin{mathpar}
+    \inferrule
+    {\lsctxwf \metalevel\Gamma \\ \lsctxeq \proglevel \Delta{\Delta'} \\ \tyequiv[L]l{l'}\Level}
+    {\lstypeq \metalevel{\CTyp[\Delta]l}{\CTyp[\Delta']{l'}}{0}}
+  \end{mathpar}
+\end{lemma}
+\begin{proof}
+  Similar to above but simpler. 
+\end{proof}
+
+\begin{lemma}
+  \begin{mathpar}
+    \inferrule
+    {\lsctxwf \metalevel \Gamma \\ \lstyping[\Psi][\Delta]\codelevel t T l}
+    {\lstyequiv \metalevel{\boxit t}{\boxit{t}}{\CTrm[\Delta] T l}{0}}
+  \end{mathpar}
+\end{lemma}
+\begin{proof}
+  Assuming $\tyequiv[L']{\phi}{\phi'}L$,
+  $\ldSgsubeq[\Phi][L'] \sigma{\sigma'}{\Psi[\phi]}$ and
+  $\ldsubeq[\Phi][\Delta'][L'] \metalevel \metalevel \delta{\delta'}{\Gamma[\phi][\sigma]}$, then
+  the goal requires
+  \[
+    \ldtyping[\Phi][\Delta][L']\codelevel \proglevel{t[\phi][\sigma]}{T[\phi][\sigma]}{l[\phi]}
+  \]
+  Notice that the effect of local substitutions is irrelevant anymore. %
+  This goal can be instantiate by\break $\lstyping[\Psi][\Delta]\codelevel t T l$ by passing in
+  the same universe and global substitutions, and the identity local substitution. %
+\end{proof}
+
+\begin{lemma}
+  \begin{mathpar}
+  \inferrule
+  {\lsctxwf \metalevel \Gamma \\ \lstypwf[\Psi][\Delta]\codelevel T l}
+  {\lstyequiv \metalevel{\boxit T}{\boxit{T}}{\CTyp[\Delta] l}{0}}
+  \end{mathpar}
+\end{lemma}
+\begin{proof}
+  Similar to above but simpler. 
+\end{proof}
+
+\begin{lemma}
+  \begin{mathpar}
+    \inferrule
+    {\tyequiv[L]{l_1}{l_3}\Level \\ \tyequiv[L]{l_2}{l_4}\Level \\
+      \lpequiv \proglevel \Delta{\Delta'} \\
+      \lstypeq \proglevel T{T'}{l_2} \\
+      \lstyequiv \metalevel{t}{t'}{\CTrm[\Delta]T{l_2}}{0} \\
+      \lstypeq[\Psi][\Gamma,x_T : \CTrm[\Delta]T{l_2} \at{0}]\metalevel{M}{M'}{l_1} \\
+      \lstyequiv[\Psi, u : \DTrm[\Delta]\codelevel T {l_2}]\metalevel{t_1}{t_2}{M[\boxit{u^\id}/x_t]}{l_1}}
+    {\lstyequiv \metalevel{\LETBTRM{l_1}{l_2} \Delta{T}{x_t.M}{u}{t_1}t}{\LETBTRM{l_3}{l_4}{\Delta'}{T'}{x_T.M'}{u}{t_2}{t'}}{M[t/x_t]}{l_1}}
+  \end{mathpar}
+\end{lemma}
+\begin{proof}
+  Assuming $\tyequiv[L']{\phi}{\phi'}L$,
+  $\ldSgsubeq[\Phi][L'] \sigma{\sigma'}{\Psi[\phi]}$ and
+  $\ldsubeq[\Phi][\Delta'][L'] \metalevel \metalevel \delta{\delta'}{\Gamma[\phi][\sigma]}$, then
+  the goal requires
+  \[
+    \ldtyequivt[\Phi][\Delta][L']\metalevel \metalevel{s_1}{s_2}{M[\phi][\sigma][\delta,t[\phi][\sigma][\delta]/x_t]}{l_1[\phi]}
+  \]
+  where $s_1 = {\LETBTRM{l_1}{l_2} \Delta{T}{x_t.M}{u}{t_1}t[\phi][\sigma][\delta]}$
+  and\\
+  $s_2 = {\LETBTRM{l_3}{l_4}{\Delta'}{T'}{x_T.M'}{u}{t_2}{t'}[\phi'][\sigma'][\delta']}$.
+  By instantiating\\
+  $\lstyequiv \metalevel{t}{t'}{\CTrm[\Delta]T{l_2}}{0}$, we have
+  \[
+    \ldtyequivt[\Phi][\Delta'][L']\metalevel \metalevel{t[\phi][\sigma][\delta]}{{t'}[\phi'][\sigma'][\delta']}{\CTrm[\Delta]T{l_2}[\phi][\sigma][\delta]}{0}
+  \]
+  Unfolding it, there are two possibilities for this relation.
+  \begin{itemize}[label=Case]
+  \item We know for some $t''$,
+    \begin{itemize}
+    \item $\ttrmreds[\Phi][\Delta'][L']
+      k{t[\phi][\sigma][\delta]}{\boxit{t''}}{\CTrm[\Delta]T{l_2}[\phi][\sigma][\delta]}{0}$,
+    \item $\ttrmreds[\Phi][\Delta'][L']
+      k{t[\phi'][\sigma'][\delta']}{\boxit{t''}}{\CTrm[\Delta]T{l_2}[\phi][\sigma][\delta]}{0}$,
+      and
+    \item $\ldtyping[\Phi][\Delta[\phi][\sigma]][L']\codelevel \proglevel{t''}{T[\phi][\sigma]}{0}$
+    \end{itemize}
+    We observe that
+    \[
+      \ldSgsubeq[\Phi][L']{\sigma,t''/u}{\sigma', t''/u}{\Psi[\phi], u :
+        \DTrm[\Delta[\phi][\sigma]] \codelevel{T[\phi][\sigma]}{0}}
+    \]
+    Giving it to $\lstyequiv[\Psi, u : \DTrm[\Delta]\codelevel T
+    {l_2}]\metalevel{t_1}{t_2}{M[\boxit{u^\id}/x_t]}{l_1}$, we obtain
+    \[
+      \ldtyequivt[\Phi][\Delta'][L']\metalevel
+      \metalevel{t_1[\phi][\sigma,t''/u][\delta]}{{t_2}[\phi'][\sigma',t''/u][\delta']}{M[\phi][\sigma][\delta,
+        \boxit{t''}/x_t]}{l_1[\phi]}
+    \]
+    By reduction expansion, we have 
+    \[
+      \ldtyequivt[\Phi][\Delta'][L']\metalevel \metalevel{s_1}{s_2}{M[\phi][\sigma][\delta,
+        \boxit{t''}/x_t]}{l_1[\phi]}
+    \]
+    which is almost the goal.  %
+    To tame the goal, we observe that
+    \[
+      \ldtyequivt[\Phi][\Delta'][L']\metalevel \metalevel{t[\phi][\sigma][\delta]}{\boxit{t''}}{\CTrm[\Delta]T{l_2}[\phi][\sigma][\delta]}{0}
+    \]
+    which further allows us to conclude
+    \[
+      \ldsubeq[\Phi][\Delta'][L'] \metalevel
+      \metalevel{\delta,t[\phi][\sigma][\delta]/x_t}{\delta',\boxit{t''}/x_t}{(\Gamma, x_T : \CTrm[\Delta]T{l_2} \at{0})[\phi][\sigma]}
+    \]
+    Apply $\lstypeq[\Psi][\Gamma,x_T : \CTrm[\Delta]T{l_2} \at{0}]\metalevel{M}{M'}{l_1}$
+    gives us the goal using irrelevance and weak head expansion. %
+  \item We know for some $\nu$ and $\nu'$, 
+    \begin{itemize}
+    \item $\ttrmreds[\Phi][\Delta'][L']
+      k{t[\phi][\sigma][\delta]}{\nu}{\CTrm[\Delta]T{l_2}[\phi][\sigma][\delta]}{0}$,
+    \item $\ttrmreds[\Phi][\Delta'][L']
+      k{t[\phi'][\sigma'][\delta']}{\nu'}{\CTrm[\Delta]T{l_2}[\phi][\sigma][\delta]}{0}$,
+      and
+    \item $\lttrmgneeq[\Phi][\Delta'][L'] \metalevel \nu{\nu'}{\CTrm[\Delta] T{l_2}[\phi][\sigma][\delta]}{0}$
+    \end{itemize}
+
+    The idea here is to use the law of congruence for neutrals to establish a generic
+    equivalence between neutrals, and then we use reflexivity for neutrals to relate
+    two neutrals using the logical relations. %
+
+    The process requires us to provide
+    \[
+      \ldsubeq[\Phi][\Delta',x_T : \CTrm[\Delta]T{l_2}[\phi][\sigma]
+      \at{0}][L'] \metalevel \metalevel {\delta,x_T/x_T}{\delta',x_T/x_T}{(\Gamma, x_T :
+        \CTrm[\Delta]T{l_2} \at{0})[\phi][\sigma]}
+    \]
+    This is immediate. %
+    We also need
+    \[
+      \ldSgsubeq[\Phi,u : \DTrm[\Delta]\codelevel T {l_2}[\phi][\sigma]][L']{\sigma,u^\id/u}{\sigma',u^\id/u}{(\Psi, u : \DTrm[\Delta]\codelevel T {l_2})[\phi]}
+    \]
+    In this case, we should prove
+    \[
+      \ldStypingge[\Phi,u : \DTrm[\Delta]\codelevel T
+      {l_2}[\phi][\sigma]][\Delta[\phi][\sigma]][L'] \proglevel
+      \proglevel{u^\id}{T[\phi][\sigma]}{0}
+    \]
+    This turns out to have been checked by the lemma of reflexive global weakening in
+    \Cref{sec:dt:semglob}. %
+    Finally, $\ldsubeq[\Phi][\Delta'][L'] \metalevel \metalevel \delta{\delta'}{\Gamma[\phi][\sigma]}$
+    is weakened before applying. 
+  \end{itemize}
+\end{proof}
+
+\begin{lemma}
+  \begin{mathpar}
+    \inferrule
+    {\tyequiv[L]{l_1}{l_3}\Level \\ \tyequiv[L]{l_2}{l_4}\Level \\ \lpequiv \proglevel \Delta{\Delta'} \\
+      \lstyequiv \metalevel{t}{t'}{\CTyp[\Delta]{l_2}}{0} \\
+      \lstypeq[\Psi][\Gamma,x_T : \CTyp[\Delta]{l_2} \at{0}]\metalevel{M}{M'}{l_1} \\
+      \lstyequiv[\Psi, U : \DTyp[\Delta]\codelevel{l_2}]\metalevel{t_1}{t_2}{M[\boxit{U^\id}/x_T]}{l_1}}
+    {\lstyequiv \metalevel{\LETBTYP{l_1}{l_2} \Delta{x_T.M}{U}{t_1}t}{\LETBTYP{l_3}{l_4}{\Delta'}{x_T.M'}{U}{t_2}{t'}}{M[t/x_T]}{l_1}}
+  \end{mathpar}
+\end{lemma}
+\begin{proof}
+  Similar to above but simpler. 
+\end{proof}
+
+Next, we consider the semantics for the recursive principles. %
+The following lemma needs to be mutually proved.
+\begin{lemma}
+  If
+  \begin{itemize}
+  \item $S_A$,
+  \item $\tyequiv[L']{\phi}{\phi'}L$,
+  \item $\ldSgsubeq[\Phi][L'] \sigma{\sigma'}{\Psi[\phi]}$,
+  \item $\ldsubeq[\Phi][\Delta_1][L'] \metalevel \metalevel \delta{\delta'}{\Gamma[\phi][\sigma]}$,
+  \item $\tyequiv[L']l{l'}\Level$,
+  \item $\ldSctxeqge[\Phi][L']\proglevel \proglevel\Delta{\Delta'}$,
+  \item $\ttrmreds[\Phi][\Delta_1][L'] \metalevel t{\boxit{T_1}} {\CTyp[\Delta] l}{0}$,
+  \item $\ttrmreds[\Phi][\Delta_1][L'] \metalevel{t'}{\boxit{T_1}}{\CTyp[\Delta] l}{0}$,
+  \item $\Ac :: \ldtypwf[\Psi][\Delta][L'] \codelevel \proglevel {T_1}l$, 
+  \item
+    $t_1 = \ELIMTYPn{l_1[\phi]}{l_2[\phi]}{(\vect M[\phi][\sigma][\delta])}{(\vect
+      b[\phi][\sigma][\delta])}l \Delta t$, and
+  \item
+    $t_2 = \ELIMTYPn{l_1[\phi]}{l_2[\phi]}{(\vect M'[\phi][\sigma][\delta])}{(\vect
+      b'[\phi][\sigma][\delta])}{l'}{\Delta'}{t'}$,
+  \end{itemize}
+  then
+  \[
+    \ldtyequivt[\Phi][\Delta_1][L'] \metalevel \metalevel{t_1}{t_2}{M[l/\ell,\Delta/g,t/x_T][\phi][\sigma][\delta]}{l_1[\phi]}
+  \]
+\end{lemma}
+\begin{lemma}
+  If
+  \begin{itemize}
+  \item $S_A$,
+  \item $\tyequiv[L']{\phi}{\phi'}L$,
+  \item $\ldSgsubeq[\Phi][L'] \sigma{\sigma'}{\Psi[\phi]}$,
+  \item $\ldsubeq[\Phi][\Delta_1][L'] \metalevel \metalevel \delta{\delta'}{\Gamma[\phi][\sigma]}$,
+  \item $\tyequiv[L']l{l'}\Level$,
+  \item $\ldSctxeqge[\Phi][L']\proglevel \proglevel\Delta{\Delta'}$,
+  \item $\ldStypeqge[\Phi][\Delta][L'] \proglevel \proglevel T{T'} l$,
+  \item $\ttrmreds[\Phi][\Delta_1][L'] \metalevel t{\boxit t} {\CTrm[\Delta] T l} 0$,
+  \item $\ttrmreds[\Phi][\Delta_1][L'] \metalevel{t'}{\boxit{t_1}}{\CTrm[\Delta] T l} 0$,
+  \item $\Bc :: \ldtyping[\Psi][\Delta][L'] \codelevel \proglevel {t_1}T l$,
+  \item
+    $t_1 = \ELIMTRMn{l_1[\phi]}{l_2[\phi]}{(\vect M[\phi][\sigma][\delta])}{(\vect
+      b[\phi][\sigma][\delta])}l \Delta T t$, and
+  \item
+    $t_2 = \ELIMTRMn{l_1[\phi]}{l_2[\phi]}{(\vect M'[\phi][\sigma][\delta])}{(\vect
+      b'[\phi][\sigma][\delta])}{l'}{\Delta'}{T'}{t'}$,
+  \end{itemize}
+  then
+  \[
+    \ldtyequivt[\Phi][\Delta_1][L'] \metalevel \metalevel{t_1}{t_2}{M'[l/\ell,\Delta/g,T/U_T,t/x_t][\phi][\sigma][\delta]}{l_2[\phi]}
+  \]
+\end{lemma}
+where $S_A$ is the set containing all semantic judgments for motives and branches in
+$L \sep \Psi; \Gamma$.
+\begin{proof}
+  The idea is to do a mutual induction on $\Ac$ and $\Bc$. %
+  Recall that they are mutually defined structures as shown in
+  \Cref{sec:dt:semglob}. %
+  Let us pick two cases to discuss:
+  \begin{itemize}[label=Case]
+  \item
+    \begin{mathpar}
+      \inferrule
+      {u : \DTrm[\Delta_2]{i'}{T_2}{l''} \in \Phi \\ i' \in \{\varlevel, \codelevel\} \\ 
+        \ldsubst[\Phi][\Delta][L'] \codelevel \proglevel{\delta_2}{\Delta_2} \\
+        \tyequiv[L]l{l''}\Level \\
+        \ldStypeqge[\Phi][\Delta][L'] \proglevel \proglevel{T}{T_2[\delta_2]}l \\
+        \ldStypingge[\Phi][\Delta][L'] \proglevel \proglevel{u^{\delta_2}}{T}l}
+      {\ldtyping[\Phi][\Delta][L'] \codelevel \proglevel{u^{\delta_2}}{T}l}
+    \end{mathpar}
+    In this case, we must block the evaluation. %
+    The idea follows closely to the neutral case for $\tletbox$ and we should apply
+    the law of neutral recursion on code. %
+    In this case, we see that $\ltctxgeq[\Phi][L'] \proglevel{\Delta}{\Delta'}$,
+    $\tconvtyp[\Phi][\Delta][L'] \proglevel T{T'}{l}$. %
+    Then we have to show that the motives and the branches are related by generic
+    equivalence. %
+    The idea is to extend all substitutions if necessary. %
+    We have shown that all substitutions can be extended by identities in the
+    semantics (and universe substitutions are the same in both syntax and
+    semantics). %
+    
+  \item
+    \begin{mathpar}
+      \inferrule
+      {\typing[L']{l_3}\Level  \\ \typing[L']{l_4}\Level \\ \ldtypwf[\Phi][\Delta][L'] \codelevel \proglevel{S_2}{l_3} \\
+        \ldtyping[\Phi][\Delta, x :{S_2} \at{l_3}][L'] \codelevel \proglevel{t_2}{T_2}{l_4} \\
+        \tyequiv[L']l{l_3 \sqcup l_4}\Level \\
+        \ldStypeqge[\Phi][\Delta][L'] \proglevel \proglevel{T}{\PI{l_3}{l_4} x{S_2}{T_2}}l \\
+        \ldStypingge[\Phi][\Delta][L'] \proglevel \proglevel{\LAM {l_3}{l_4} x{S_2}{t_2}}{T}l}
+      {\ldtyping[\Phi][\Delta][L'] \codelevel \proglevel{\LAM {l_3}{l_4} x{S_2}{t_2}}{T}{l}}
+    \end{mathpar}
+    In this case, we should go down and recurse on $S_2$ and $t_2$. %
+    We then use the semantic rule for $t_{\lambda}$ to substitute in the results of
+    the recursive calls for $S_2$ and $t_2$. %
+    We also obtain $\ldStypwfge[\Phi][\Delta, x :{S_2} \at{l_3}][L'] \proglevel \proglevel{T_2}l$. %
+    Therefore we have everything we need to use the semantic rule for $t_\lambda$. %
+    The only missing piece is that the conclusion requires relation between $T$ and
+    $T'$. %
+    Meanwhile, $t_\lambda$ only gives us ${\PI{l_3}{l_4} x{S_2}{T_2}}$. %
+    The solution lies in
+    \begin{gather*}
+      \ldStypeqge[\Phi][\Delta][L'] \proglevel \proglevel T{T'} l \\
+      \ldStypeqge[\Phi][\Delta][L'] \proglevel \proglevel{T}{\PI{l_3}{l_4} x{S_2}{T_2}}l
+    \end{gather*}
+    Thus these three types are related. %
+    Since ${\PI{l_3}{l_4} x{S_2}{T_2}}$ is already in normal form, so we know both
+    $T'$ and $T'$ must reduce to it. %
+    Together with the $\beta$ rule when hitting the $\lambda$ case, we use weak head
+    expansion to obtain the desired goal. %
+  \end{itemize}
+\end{proof}
+
+These two lemmas in the semantics give the recursions on code of types and terms and
+actual do the recursions. %
+For the semantic rules for the recursors, we first use these lemmas to prove the
+congruence rules. %
+We are almost done wit the congruence rules except that we have to handle the neutral
+cases. %
+This is virtually identical to the global variable cases, where we use the law of
+neutral recursion of code to relate neutral terms and use reflexivity for neutrals to
+establish the logical relations. %
+The rest are the $\beta$ rules. %
+They are even simpler due to access to the congruence rules. %
+Then we use reduction expansion to achieve the goals. %
+
+What are left now are the meta-functions including universe-polymorphic functions. %
+Fist the meta-functions for local contexts and types are very similar. %
+\begin{lemma}
+  \begin{mathpar}
+    \inferrule
+    {\lsctxwf \metalevel\Gamma \\ \lsctxeq \proglevel \Delta{\Delta'} \\ \lstypeq[\Psi, U : \DTyp[\Delta] \proglevel l] \metalevel T{T'}{l'} \\ \tyequiv[L]{l_1}{l_3}\Level \\ \tyequiv[L]{l_2}{l_4}\Level}
+    {\lstypeq \metalevel{\TPI U[\Delta]{l_1}{l_2}T}{\TPI U[\Delta']{l_3}{l_4}{T'}}{l_2}}
+  \end{mathpar}
+\end{lemma}
+\begin{proof}
+  Assuming $\tyequiv[L']{\phi}{\phi'}L$,
+  $\ldSgsubeq[\Phi][L'] \sigma{\sigma'}{\Psi[\phi]}$ and
+  $\ldsubeq[\Phi][\Delta'][L'] \metalevel \metalevel \delta{\delta'}{\Gamma[\phi][\sigma]}$, then
+  we should prove
+  \[
+    \ldtypeq[\Phi][\Delta'][L'] \metalevel \metalevel{\TPI
+      U[\Delta]{l_1}{l_2}T[\phi][\sigma][\delta]}{\TPI
+      U[\Delta']{l_3}{l_4}{T'}[\phi'][\sigma'][\delta']}{l_2[\phi]}
+  \]
+  Most premises are simple. The tricky part is to show $\E_1$ and $\E_2$, which are
+  symmetric. %
+  Knowing $\lsctxeq \proglevel \Delta{\Delta'}$, it is sufficient to only prove one of them. %
+  Using $\lstypeq[\Psi, U : \DTyp[\Delta] \proglevel l] \metalevel T{T'}{l'}$, it is easy to see that
+  both $\E_1$ and $E_2$ hold, by extending $\sigma$ and $\sigma'$. 
+\end{proof}
+
+\begin{lemma}
+  \begin{mathpar}
+    \inferrule
+    {\lsctxwf \metalevel\Gamma \\ \lstypeq[\Psi, g : \Ctx] \metalevel T{T'} l \\ \tyequiv[L]l{l'}\Level}
+    {\lstypeq \metalevel{\CPI g l T}{\CPI g{l'}{T'}}{l}}
+  \end{mathpar}
+\end{lemma}
+\begin{proof}
+  Similar to above but simpler. 
+\end{proof}
+
+\begin{lemma}
+  \begin{mathpar}
+    \inferrule
+    {\lsctxwf \metalevel\Gamma \\ \lstyequiv[\Psi, U : \DTyp[\Delta] \proglevel{l_1}]\metalevel{t}{t'}{T}{l_2} \\
+      \tyequiv[L]{l_1}{l_3}\Level \\ \tyequiv[L]{l_2}{l_4}\Level}
+    {\lstyequiv \metalevel{\TLAM{l_1}{l_2}U t}{\TLAM{l_3}{l_4}U{t'}}{\TPI U[\Delta]{l_1}{l_2}
+        T}{l_2}}
+  \end{mathpar}
+\end{lemma}
+\begin{proof}
+  In this proof, we are asked to prove two symmetric proof which is essentially to
+  show that the results of applying ${\TLAM{l_1}{l_2}U t}$ and
+  ${\TLAM{l_3}{l_4}U{t'}}$ are related. %
+  This is immediate by extending related global substitutions and applying them to
+  $\lstyequiv[\Psi, U : \DTyp[\Delta] \proglevel{l_1}]\metalevel{t}{t'}{T}{l_2}$. %
+\end{proof}
+
+\begin{lemma}
+  \begin{mathpar}
+    \inferrule
+    {\lstyequiv \metalevel{t}{t'}{\TPI U[\Delta] l{l'}{T''}}{l'} \\ \lstypeq[\Psi][\Delta] \proglevel{T}{T'}l}
+    {\lstyequiv \metalevel{\TAPP t{T}}{\TAPP{t'}{T'}}{T''[T/U]}{l'}}
+  \end{mathpar}
+\end{lemma}
+\begin{proof}
+  We obtain the goal quite easily by using the semantics of related terms of type
+  \break $\TPI U[\Delta] l{l'}{T''}$.
+\end{proof}
+
+\begin{lemma}
+  \begin{mathpar}
+    \inferrule
+    {\lsctxwf \metalevel \Gamma \\ \lstyping[\Psi, U : \DTyp[\Delta] \proglevel l]\metalevel{t}{T'}{l'} \\ \typing[L]{l}\Level \\ \typing[L]{l'}\Level \\ \lstypwf[\Psi][\Delta] \proglevel{T} l}
+    {\lstyequiv \metalevel{t[T/U]}{\TAPP{(\TLAM{l}{l'}U t)}{T}}{T'[T/U]}{l'}}
+
+    \inferrule
+    {\lstyping \metalevel{t}{\TPI U[\Delta] l{l'}{T'}}{1 + l \sqcup l'}}
+    {\lstyequiv \metalevel{\TLAM{l}{l'}U{(\TAPP t{U^\id})}}{t}{\TPI U[\Delta] l{l'}{T'}}{l'}}
+  \end{mathpar}
+\end{lemma}
+\begin{proof}
+  These two rules are also very simple to prove and follow similar lines to those of
+  $\Pi$ types. %
+  For the $\beta$ rule, we use reduction expansion. For the $\eta$ rule, we see it by
+  noticing applying related global substitutions. %
+\end{proof}
+
+The corresponding introduction, elimination, $\beta$ and $\eta$ rules for
+meta-functions for local contexts are proved similarly but just simpler. %
+
+Now the only last piece is universe-polymorphic functions.
+
+\begin{lemma}
+  \begin{mathpar}
+    \inferrule
+    {\lstypwf[\Psi][\Gamma][L,\vect\ell] \metalevel T l \\
+      \lstypeq[\Psi][\Gamma][L,\vect\ell] \metalevel T{T'} l \\ |\vect \ell| > 0 \\ \tyequiv[L,\vect\ell]l{l'}\Level}
+    {\lstypeq \metalevel {\UPI \ell l T}{\UPI \ell{l'}{T'}}{\omega}}
+  \end{mathpar}
+\end{lemma}
+\begin{proof}
+  Assuming $\tyequiv[L']{\phi}{\phi'}L$,
+  $\ldSgsubeq[\Phi][L'] \sigma{\sigma'}{\Psi[\phi]}$ and
+  $\ldsubeq[\Phi][\Delta'][L'] \metalevel \metalevel \delta{\delta'}{\Gamma[\phi][\sigma]}$, then
+  we should prove
+  \[
+    \ldtypeq[\Phi][\Delta'][L'] \metalevel \metalevel{\UPI \ell l T[\phi][\sigma][\delta]}{\UPI
+      \ell{l'}{T'}[\phi'][\sigma'][\delta']}{\omega}
+  \]
+  Looking at the semantics of universe-polymorphic functions, we see that
+  $\lstypwf[\Psi][\Gamma][L,\vect\ell] \metalevel T l$ has already provided the goal. %
+  It is important to see that $\typing[L']{l[\phi, \vect l/\vect \ell]}\Level$ if all
+  universe levels in $\vect l$ are well-formed so it is strictly smaller than
+  $\omega$. %
+  Therefore, we still have a well-founded semantics. 
+\end{proof}
+
+\begin{lemma}
+  \begin{mathpar}
+    \inferrule
+    {\lstyequiv[\Psi][\Gamma][L, \vect \ell]\metalevel{t}{t'}{T}{l} \\ |\vect \ell| > 0 \\ \tyequiv[L,\vect\ell]l{l'}\Level}
+    {\lstyequiv \metalevel {\ULAM l \ell t}{\ULAM {l'} \ell{t'}}{\UPI \ell l T}{\omega}}
+
+    \inferrule
+    {\lstypwf[\Psi][\Gamma][L,\vect\ell] \metalevel T l \\
+      \lstyequiv \metalevel{t}{t'}{\UPI \ell l T}{\omega} \\ |\vect\ell| = |\vect l| = |\vect
+      l'| > 0 \\
+      \forall 0 \le n < |\vect l| ~.~ \tyequiv[L]{\vect l(n)}{\vect l'(n)}\Level}
+    {\lstyequiv \metalevel{\UAPP t l}{t'~\$~\vect l'}{T[\vect l/\vect \ell]}{l[\vect l/\vect \ell]}}
+
+    \inferrule
+    {\lsctxwf \metalevel \Gamma \\ \lstyping[\Psi][\Gamma][L, \vect \ell]\metalevel{t}{T}{l} \\ \typing[L,\vect\ell]l\Level \\
+      |\vect\ell| = |\vect l| > 0 \\ \forall l' \in \vect l ~.~ \typing[L]{l'}\Level}
+    {\lstyequiv \metalevel{t[\vect l/\vect \ell]}{(\ULAM l \ell t)~\$~\vect l}{T[\vect l/\vect \ell]}{l[\vect l/\vect \ell]}}
+
+    \inferrule
+    {\lstyping \metalevel{t}{\UPI \ell l T}{\omega}}
+    {\lstyequiv \metalevel{\ULAM l \ell{(t~\$~\vect\ell)}}{t}{\UPI \ell l T}{\omega}}
+  \end{mathpar}
+\end{lemma}
+\begin{proof}
+  All these rules are relatively simple. %
+  The congruence rule for introduction can be proved by following the definition of
+  related terms of type ${\UPI \ell l T}$.
+
+  The congruence rule for elimination can be proved by using the definition of related
+  terms of type ${\UPI \ell l T}$.
+
+  The $\beta$ rule can be derived from using reduction expansion.
+
+  The $\eta$ rule can be given after applying arbitrary equivalent universe
+  substitutions. %
+\end{proof}
+
+At this point, we have proved all semantic rules and thus the fundamental theorems
+hold. 

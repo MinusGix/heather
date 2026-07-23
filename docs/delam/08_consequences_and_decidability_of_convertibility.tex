@@ -1,0 +1,372 @@
+\section{Consequences and Decidability of Convertibility}
+
+In the previous section, we have established the fundamental theorems, and using the
+escape lemma, we see that all syntactic equivalent types and terms are also
+semantically related by the Kripke logical relations. %
+In this section, we will instantiate the generic equivalence so that we can obtain
+desired properties that are difficult to prove syntactically. %
+
+\subsection{First Instantiation: Syntactic Equivalence}
+
+First we instantiate the generic equivalence with syntactic equivalences of types and
+terms. %
+The laws are all easily instantiated by the corresponding equivalence rules. %
+We also see that the derived equivalences between local contexts and local
+substitutions are equivalent to the corresponding syntactic equivalences. %
+From the fundamental theorems and the escape lemma, we are able to derive the
+following lemmas.
+
+\begin{lemma}[Injectivity of Type Constructors] $ $
+  \begin{itemize}
+  \item If $\lttypeq i{\PI{l}{l'} x S T}{\PI{l}{l'} x{S'}{T'}}{l \sqcup l'}$ and
+    $i \in \{\proglevel, \metalevel\}$, then $\lttypeq i{S}{S'}l$ and
+    $\lttypeq[\Psi][\Gamma, x : S \at l]i{T}{T'}{l'}$.
+  \item If
+    $\lttyequiv i{\PI{l}{l'} x s t}{\PI{l}{l'} x{s'}{t'}}{\Ty{l \sqcup l'}}{\su{(l
+        \sqcup l')}}$ and $i \in \{\proglevel, \metalevel\}$, then \break
+    $\lttyequiv i{s}{s'}{\Ty l}{1 + l}$ and
+    $\lttyequiv[\Psi][\Gamma, x : \Elt l s \at l]i{t}{t'}{\Ty{l'}}{1 + l'}$.
+  \item If $\lttypeq \metalevel{\CTyp[\Delta]l}{\CTyp[\Delta']l}{0}$, then
+    $\lpequiv \proglevel \Delta{\Delta'}$.
+  \item If $\lttypeq \metalevel{\CTrm[\Delta] T l}{\CTrm[\Delta'] T l}{0}$, then
+    $\lpequiv \proglevel \Delta{\Delta'}$ and $\lttypeq[\Psi][\Delta] \proglevel{T}{T'}l$.
+  \item If $\lttypeq \metalevel{\CPI g l T}{\CPI g l{T'}}l$, then
+    $\lttypeq[\Psi, g : \Ctx] \metalevel{T}{T'}l$.
+  \item If
+    $\lttypeq \metalevel{\TPI{U}[\Delta]{l}{l'}{T}}{\TPI{U}[\Delta']{l}{l'}{T'}}{l'}$, then $\lpequiv \proglevel \Delta{\Delta'}$ and
+    $\lttypeq[\Psi, U : \DTyp[\Delta] \proglevel l] \metalevel{T}{T'}{l'}$.
+  \item If $\lttypeq \metalevel{\UPI \ell l T}{\UPI \ell l{T'}}\omega$, then
+    $\lttypeq[\Psi][\Gamma][L, \vect \ell] \metalevel{T}{T'}{l}$.
+  \end{itemize}
+\end{lemma}
+\begin{proof}
+  By fundamental theorems, we pass in all identity substitutions and then we can
+  extract this fact from the logical relations of types. 
+\end{proof}
+
+We follow \citet{hu_jang_pientka_2023} and give us the consistency proof of \delamlang.
+\begin{lemma}[Consistency]
+  There is no term $t$ that satisfies this typing judgment:
+  \[
+    \lttyping[\cdot][\cdot][\ell] \metalevel t{\PI{1 + \ell}{\ell}x{\Ty \ell}x}{1 + \ell}
+  \]
+\end{lemma}
+That is, there is not a generic way to construct a term of an arbitrary type.
+\begin{proof}
+  The lemma effectively asks to reject the following derivation after applying the
+  fundamental theorems:
+  \[
+    \lttyping[\cdot][x : \Ty \ell \at{1 + \ell}][\ell] \metalevel t x \ell
+  \]
+  Now by the logical relations of the neutral type $x$, we know that $t$ must also be
+  neutral, so we now move on to rejecting 
+  \[
+    \lttyping[\cdot][x : \Ty \ell \at{1 + \ell}][\ell] \metalevel \varlevel x \ell
+  \]
+  Then we do induction on $\varlevel$. %
+  It is impossible to do any operation on $\varlevel$ but to refer to $x$ ultimately, but then
+  $x$ has type $\Ty \ell$ which cannot be equivalent to $x$, as they both have reached
+  normal forms and it is not possible to relate any two distinguished normal forms in
+  any case by the logical relations. %
+\end{proof}
+
+\subsection{Second Instantiation: Convertibility Checking}
+
+In this section, we perform our second instantiation by specifying the generic
+equivalence to be the convertibility checking judgments. %
+This second instantiation is not very immediate for some laws for the generic
+equivalence, so we must do some verification, using the results from the first
+instantiation. %
+
+\begin{itemize}
+\item $\lttypgneeq i V{V'} l$ is $\tconvtypne i V{V'}l$.
+\item $\lttypgeq i {T}{T'} l$ is $\tconvtyp i T{T'} l$.
+\item $\lttrmgneeq i \nu{\nu'} T l$ is $\tconvtrmne i \nu{\nu'}{T'} l$ and
+  $\lttypeq i T{T'} l$.
+\item $\lttrmgeq i t{t'} T l$ is $\tconvtrm i t{t'}T l$.
+\end{itemize}
+
+Most laws are quite straightforward, except the conversion laws and the PER laws. %
+Let us consider the conversion laws first. %
+We must show that the convertibility checking algorithm is invariant under contexts
+and types. %
+Intuitively, this should be true, but it is not very easy to prove, until we obtain
+the injectivity lemma after the first instantiation.
+
+\begin{lemma}[Conversion] $ $
+  \begin{itemize}
+  \item if $\tconvtyp i T{T'} l$, $\gequiv\Phi\Psi$ and
+    $\lpequiv[\Phi]{i}\Delta\Gamma$, then $\tconvtyp[\Phi][\Delta] i T{T'} l$.
+  \item if $\tconvtypnf i W{W'} l$, $\gequiv\Phi\Psi$ and
+    $\lpequiv[\Phi]{i}\Delta\Gamma$, then $\tconvtypnf[\Phi][\Delta] i W{W'} l$.
+  \item if $\tconvtypne i V{V'}l$, $\gequiv\Phi\Psi$ and
+    $\lpequiv[\Phi]{i}\Delta\Gamma$, then $\tconvtypne[\Phi][\Delta] i V{V'}l$.
+  \item if $\tconvctx i \Gamma \Delta$ and $\gequiv\Phi\Psi$, then $\tconvctx[\Phi] i \Gamma \Delta$.
+  \item if $\tconvtrm i t{t'}T l$, $\gequiv\Phi\Psi$, $\lpequiv[\Phi]{i}\Delta\Gamma$
+    and $\lttypeq[\Phi][\Delta] i{T'} T l$, then
+    $\tconvtrm[\Phi][\Delta] i t{t'}{T'} l$.
+  \item if $\tconvtrmnf i w{w'}W l$, $\gequiv\Phi\Psi$, $\lpequiv[\Phi]{i}\Delta\Gamma$
+    and $\lttypeq[\Phi][\Delta] i{W'}W l$, then $\lttyequiv[\Phi][\Delta] i w{w'}{W'} l$;
+  \item if $\tconvtrmne i \nu{\nu'}T l$, $\gequiv\Phi\Psi$ and
+    $\lpequiv[\Phi]{i}\Delta\Gamma$, then $\tconvtrmne[\Phi][\Delta] i \nu{\nu'}{T'} l$
+    and $\lttypeq i{T'}{T}l$ for some $T'$. 
+  \item if $\tconvtrmnee i \nu{\nu'}W l$, $\gequiv\Phi\Psi$ and
+    $\lpequiv[\Phi]{i}\Delta\Gamma$, then $\lttyequiv[\Phi][\Delta] i \nu{\nu'}{W'} l$
+    and $\lttypeq i{W'}{W}l$ for some $W'$.
+  \item if $\tconvsub i{\delta}{\delta'}\Delta$, $\gequiv\Phi\Psi$,
+    $\lpequiv[\Phi]{i}{\Gamma'}\Gamma$ and $\lpequiv[\Phi]{i}{\Delta'}\Delta$, then
+    $\tconvsub[\Phi][\Gamma'] i{\delta}{\delta'}{\Delta'}$.
+  \end{itemize}
+\end{lemma}
+\begin{proof}
+  We do induction on all derivations. %
+  Most cases are immediate. %
+  When we get under binders, we need to extend the context equivalences, in which case
+  we should use the soundness lemma to obtain the well-formedness of the type that
+  needs to be extended to the contexts. %
+
+  We consider a few cases.
+  \begin{itemize}[label=Case]
+  \item
+    \begin{mathpar}
+      \inferrule
+      { T \reds W \\ \ttrmreds i t w T l \\ \ttrmreds i
+        {t'}{w'}T l \\ \tconvtrmnf i w{w'}W l}
+      {\tconvtrm i t{t'}T l}
+    \end{mathpar}
+    The most important thing to notice is that by $\lttypeq[\Phi][\Delta] i{T'} T l$
+    and $T \reds W$, we know that $T' \reds W'$ for some $W'$. Therefore we can prove
+    this case using IH. %
+    Other premises are satisfied by syntactic context equivalence lemmas. %
+    
+  \item
+    \begin{mathpar}
+      \inferrule
+      {\lttypwf i S l \\ \lttyping i w {\PI{l}{l'}x{S}{T}}{l \sqcup l'} \\ \lttyping i {w'}{\PI{l}{l'}x{S}{T}}{l \sqcup l'} \\ \tconvtrm[\Psi][\Gamma, x : S \at{l}] i {\APP{w}{l}{l'}x{S}{T}{x}}{\APP{w'}{l}{l'}x{S}{T}{x}}{T}{l'}}
+      {\tconvtrmnf i{w}{w'}{\PI{l}{l'}x{S}{T}}{l \sqcup l'}}
+    \end{mathpar}
+    In this case, we know $\lttypeq[\Phi][\Delta] i{W'}{\PI{l}{l'}x{S}{T}}{l \sqcup
+      l'}$. %
+    By the fundamental theorems, we know that $W'$ can only reduce to some $\Pi$
+    type. %
+    Since $W'$ is already normal, it is only possible for $W'$ to be some $\Pi$
+    type. %
+    Say $W' = {\PI{l}{l'}x{S'}{T'}}$. %
+    Then by injectivity, we know $S \approx S'$ and $T \approx T'$. %
+    We obtain our goal by extending the local contexts. 
+    
+  \item
+    \begin{mathpar}
+      \inferrule
+      {\tconvtrmnee i \nu{\nu'}{W} l}
+      {\tconvtrmnf i \nu{\nu'}V l}
+    \end{mathpar}
+    In this case, the type equivalence is irrelevant. %
+    When hitting neutral types, we simply ignore the type $W$ inferred by
+    $\tconvtrmnee i \nu{\nu'}{W} l$.
+
+  \item
+    \begin{mathpar}
+      \inferrule
+      {\tconvtrmne i \nu{\nu'}{T}{l} \\ T \reds W}
+      {\tconvtrmnee i \nu{\nu'}W l}
+    \end{mathpar}
+    In this case, we simply apply IH. Then we know
+    \[
+      T \reds W \tand T' \reds W'
+    \]
+    Our goal is to show $W \approx W'$. %
+    But this is immediate from the determinacy lemma of multi-step reduction and the
+    fundamental theorems. %
+
+  \item
+    \begin{mathpar}
+      \inferrule
+      {\lpjudge i \Gamma \\ x : T \at l \in \Gamma}
+      {\tconvtrmne i x{x}T l}
+    \end{mathpar}
+    The goal is given by the equivalence between $\Gamma$ and $\Delta$. 
+    
+  \item
+    \begin{mathpar}
+      \inferrule
+      {\tyequiv[L]{l_1}{l_3}\Level  \\ \tyequiv[L]{l_2}{l_4}\Level \\ \tconvtyp i S{S'}{l_1}
+        \\
+        \tconvtyp[\Psi][\Gamma, x : S \at{l_1}] i{T}{T'}{l_2} \\
+        \tconvtrmnee i \nu{\nu'}{\PI {l_1}{l_2} x{S''}{T''}}{l_1 \sqcup l_2} \\ \tconvtrm i s{s'} S{l_1}}
+      {\tconvtrmne i{\APP \nu {l_1}{l_2} x S T s}{\APP{\nu'}{l_3}{l_4} x {S'}{T'}{s'}}{T[s/x]}{l_2}}
+    \end{mathpar}
+    By IH, we know from
+    $\tconvtrmnee i \nu{\nu'}{\PI {l_1}{l_2} x{S''}{T''}}{l_1 \sqcup l_2}$ that there
+    must be $W'$, so that
+    \[
+      \lttypeq i{W'}{\PI {l_1}{l_2} x{S''}{T''}}{l_1 \sqcup l_2}
+    \]
+    By the fundamental theorems, we know $W'$ must be some $\Pi$ types. %
+    The return type is fixed so we do not have to do anything. %
+  \end{itemize}
+\end{proof}
+
+From the conversion lemma, we see that both $\tconvtrmne i \nu{\nu'}T l$ and
+$\tconvtrmnee i \nu{\nu'}W l$ return some equivalent types because they are in fact
+inference steps. %
+Therefore, it makes sense when we instantiate $\lttrmgneeq i \nu{\nu'} T l$, we hide a
+syntactic equivalence judgment inside. %
+
+For the PER laws, we see that the difficulties primarily come from the convertibility
+checking of neutrals, because again they are inference steps. %
+Moreover, due to their left-biased design, in general it is not true that the inferred
+types can be replaced by their equivalence. %
+However, since we are hiding an equivalence judgment in $\lttrmgneeq i \nu{\nu'} T l$
+during instantiation, following the same principle as the conversion lemma, we are
+able to erase the effect of the left bias and establish the PER laws. %
+
+The instantiation immediately gives us the convertibility lemma once we apply the
+escape lemma:
+\begin{theorem}[Convertibility] $ $
+  \begin{itemize}
+  \item If $\lttypwf i T l$, then $\tconvtyp i T T l$. 
+  \item If $\lttypeq i T{T'} l$, then $\tconvtyp i T{T'} l$. 
+  \item If $\lttyping i t T l$, then $\tconvtrm i t t T l$.
+  \item If $\lttyequiv i t{t'} T l$, then $\tconvtrm i t{t'} T l$.
+  \end{itemize}
+\end{theorem}
+In particular, we see that the convertibility checking algorithm is both sound and
+complete w.r.t. the syntactic equivalence judgments. %
+The decidability of type checking requires the following lemma by attempting to relate
+two reflexively convertible types or terms. 
+
+\begin{lemma}[Decidability] $ $
+  \begin{itemize}
+  \item if $\tconvtyp[\Phi][\Delta] i T{T} l$, $\tconvtyp i {T'}{T'} l$,
+    $\gequiv\Phi\Psi$ and $\lpequiv[\Phi]{i}\Delta\Gamma$, then whether
+    $\tconvtyp[\Phi][\Delta] i T{T'} l$ is decidable.
+  \item if $\tconvtypnf[\Phi][\Delta] i W{W} l$, $\tconvtypnf i{W'}{W'} l$,
+    $\gequiv\Phi\Psi$ and $\lpequiv[\Phi]{i}\Delta\Gamma$, then whether
+    $\tconvtypnf[\Phi][\Delta] i W{W'} l$ is decidable.
+  \item if $\tconvtypne[\Phi][\Delta] i V{V}l$, $\tconvtypne i {V'}{V'}l$,
+    $\gequiv\Phi\Psi$ and $\lpequiv[\Phi]{i}\Delta\Gamma$, then whether
+    $\tconvtypne[\Phi][\Delta] i V{V'}l$ is decidable. %
+  \item if $\tconvctx[\Phi] i \Gamma \Gamma$, $\tconvctx i \Delta \Delta$ and
+    $\gequiv\Phi\Psi$, then whether $\tconvctx[\Phi] i \Gamma \Delta$ is decidable. 
+  \item if $\tconvtrm[\Phi][\Delta] i t{t}T l$, $\tconvtrm i{t'}{t'}{T} l$,
+    $\gequiv\Phi\Psi$ and $\lpequiv[\Phi]{i}\Delta\Gamma$, then whether
+    $\tconvtrm[\Phi][\Delta] i t{t'}{T} l$ is decidable.
+  \item if $\tconvtrmnf[\Phi][\Delta] i w{w}W l$, $\tconvtrmnf i {w'}{w'}{W} l$,
+    $\gequiv\Phi\Psi$ and $\lpequiv[\Phi]{i}\Delta\Gamma$, then whether
+    $\lttyequiv[\Phi][\Delta] i w{w'}{W} l$ is decidable.
+  \item if $\tconvtrmne[\Phi][\Delta] i \nu{\nu}T l$,
+    $\tconvtrmne i {\nu'}{\nu'}{T'} l$, $\gequiv\Phi\Psi$ and
+    $\lpequiv[\Phi]{i}\Delta\Gamma$, then whether
+    $\tconvtrmne[\Phi][\Delta] i \nu{\nu'}{T''} l$ for some $T''$ is decidable.
+  \item if $\tconvtrmnee[\Phi][\Delta] i \nu{\nu}W l$,
+    $\tconvtrmnee i {\nu'}{\nu'}{W'} l$, $\gequiv\Phi\Psi$ and
+    $\lpequiv[\Phi]{i}\Delta\Gamma$, then whether
+    $\lttyequiv[\Phi][\Delta] i \nu{\nu'}{W''} l$ is decidable.
+  \item if $\tconvsub[\Phi][\Gamma'] i{\delta}{\delta}{\Delta}$,
+    $\tconvsub i{\delta'}{\delta'}{\Delta}$, $\gequiv\Phi\Psi$ and
+    $\lpequiv[\Phi]{i}{\Gamma'}\Gamma$, then whether
+    $\tconvsub[\Phi][\Gamma'] i{\delta}{\delta'}{\Delta}$ is decidable. %
+  \end{itemize}
+\end{lemma}
+\begin{proof}
+  We do a mutual induction on the first derivations and then invert the second ones. %
+  We can reject most cases when they have different root derivations. %
+  We consider a few cases.
+  \begin{itemize}[label=Case]
+  \item
+    \begin{mathpar}
+      \inferrule
+      {\ttypreds[\Phi][\Delta] i T W l \\\\ \tconvtypnf i W{W} l}
+      {\tconvtyp[\Phi][\Delta] i T{T} l}
+
+      \inferrule
+      {\ttypreds i{T'}{W'} l \\\\ \tconvtypnf i{W'}{W'} l}
+      {\tconvtyp i T{T'} l}
+    \end{mathpar}
+    In this case, we apply IH to decide whether $W$ and $W'$ are convertible. %
+
+  \item
+    \begin{mathpar}
+      \inferrule
+      {\tconvtyp[\Phi][\Delta] i S{S} l \\ \tconvtyp[\Phi][\Delta, x : S \at l] i T{T}{l'}}
+      {\tconvtypnf[\Phi][\Delta] i{\PI l{l'}x{S}{T}}{\PI l{l'}x{S}{T}}{l \sqcup l'}}
+
+      \inferrule
+      {\tconvtyp i{S'}{S'} l \\ \tconvtyp[\Psi][\Gamma, x : S' \at l] i{T'}{T'}{l'}}
+      {\tconvtypnf i{\PI l{l'}x{S'}{T'}}{\PI l{l'}x{S'}{T'}}{l \sqcup l'}}
+    \end{mathpar}
+    We can decide whether $S$ and $S'$ are convertible by IH. %
+    When we decide $T$ and $T'$, we must extend the equivalent local contexts. %
+    
+  \item
+    \begin{mathpar}
+      \inferrule
+      {T \reds W \\ \ttrmreds[\Phi][\Delta] i t w T l \\\\  \tconvtrmnf[\Phi][\Delta] i w{w}W l}
+      {\tconvtrm[\Phi][\Delta] i t{t}T l}
+
+      \inferrule
+      {T' \reds W' \\ \ttrmreds i{t'}{w'}{T'} l \\\\  \tconvtrmnf i {w'}{w'}{W'} l}
+      {\tconvtrm i {t'}{t'}{T} l}
+    \end{mathpar}
+    By fundamental theorems, we know $W \approx W'$. %
+    Then by IH, we can decide whether $w$ and $w'$ are convertible. %
+    
+  \item
+    \begin{mathpar}
+      \inferrule
+      {\lttypwf[\Phi][\Delta] i S l \\ \lttyping[\Phi][\Delta] i w
+        {\PI{l}{l'}x{S}{T}}{l \sqcup l'} \\
+        \tconvtrm[\Phi][\Delta, x : S \at{l}] i {\APP{w}{l}{l'}x{S}{T}{x}}{\APP{w}{l}{l'}x{S}{T}{x}}{T}{l'}}
+      {\tconvtrmnf[\Phi][\Delta] i{w}{w}{\PI{l}{l'}x{S}{T}}{l \sqcup l'}}
+
+      \inferrule
+      {\lttypwf i{S} l \\ \lttyping i{w'}{\PI{l}{l'}x{S}{T}}{l \sqcup l'} \\
+        \tconvtrm[\Psi][\Gamma, x : S \at{l}] i {\APP{w'}{l}{l'}x{S}{T}{x}}{\APP{w'}{l}{l'}x{S}{T}{x}}{T}{l'}}
+      {\tconvtrmnf i{w'}{w'}{\PI{l}{l'}x{S}{T}}{l \sqcup l'}}
+    \end{mathpar}
+    Again, it is quite immediate by IH. %
+    
+  \item
+    \begin{mathpar}
+      \inferrule
+      {\tconvtrmnee[\Phi][\Delta] i \nu{\nu}{W} l}
+      {\tconvtrmnf[\Phi][\Delta] i \nu{\nu}V l}
+
+      \inferrule
+      {\tconvtrmnee i {\nu'}{\nu'}{W'} l}
+      {\tconvtrmnf i {\nu'}{\nu'}{V} l}
+    \end{mathpar}
+    By IH, we know $\tconvtrmnee[\Phi][\Delta] i \nu{\nu'}{W''} l$ for some $W''$. 
+
+  \item
+    \begin{mathpar}
+      \inferrule
+      {\tconvtrmne[\Phi][\Delta] i \nu{\nu}{T}{l} \\ T \reds W}
+      {\tconvtrmnee[\Phi][\Delta] i \nu{\nu}W l}
+
+      \inferrule
+      {\tconvtrmne i {\nu'}{\nu'}{T'}{l} \\ T' \reds W'}
+      {\tconvtrmnee i {\nu'}{\nu'}{W'} l}
+    \end{mathpar}
+    By IH, we have $\tconvtrmne i {\nu'}{\nu'}{T''}{l}$ for some $T''$. %
+    $T''$ will reduce to some normal form by the fundamental theorems. %
+  \end{itemize}
+\end{proof}
+
+\begin{theorem}[Decidability of Convertibility] $ $
+  \begin{itemize}
+  \item If $\lttypwf i T l$ and $\lttypwf i{T'} l$, then whether $\tconvtyp i T{T'} l$
+    is decidable.
+  \item If $\lttyping i t T l$ and $\lttyping i{t'} T l$, then whether
+    $\tconvtrm i t{t'}T l$ is decidable.
+  \end{itemize}
+\end{theorem}
+\begin{proof}
+  First we use the fundamental theorems from the second instantiation to show that
+  both types (or terms, resp.) are reflexively convertible. %
+  Then we use the decidability lemma above. %
+\end{proof}
+
+At this point, we have justified the decidability of convertibility checking of
+\delamlang and therefore conclude our investigations. %

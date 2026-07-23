@@ -1,0 +1,1481 @@
+\section{Supporting Context Variables}\labeledit{sec:cv}
+
+\citet{hu2024layered} present a layered modal type theory which supports pattern
+matching on code and establish a normalization proof via a presheaf model. %
+However, this form of intentional analysis is not in the most desired form: we cannot
+perform recursion on the structure of code. %
+This limitations comes from two aspects:
+\begin{itemize}
+\item STLC lacks a generic notion of types. %
+  When we do recursion on, for example, a $\lambda$ expression, the type of the
+  $\lambda$ and the type of the body necessarily differ. %
+  Therefore, we are not able to formulate a recursion principle without type variables
+  as in System F, or a variable of type \texttt{Set} in dependent type theory. %
+  This problem naturally goes away if we employ a stronger core type system, so it is
+  not our primary concern.
+  
+\item However, System F or dependent types does not give us a way to capture local
+  contexts using a variable. %
+  Consider again the $\lambda$ case, even if we have type variables, the recursion on
+  the body is in an extended local context, so for the recursion to work, we must be
+  able to capture \emph{context variables}, which capture local contexts as global
+  variables. 
+\end{itemize}
+
+In this section, we focus on context variables. %
+We develop the syntactic theory for our $2$-layered contextual model type theory with
+context variables, and show its consistency via a reducibility predicate argument. %
+
+\subsection{Well-formedness of Contexts and Types}\labeledit{sec:cv:ctx-types}
+
+With context variables, the type theory becomes ``slightly'' dependently typed, in
+that both global and local contexts, and types can depend on context variables, so
+their well-formedness requires dedicated judgments. %
+The syntax of contexts and types is:
+\begin{alignat*}{2}
+  i & && \tag{Layer, $i \in[0, 1]$} \\
+  x, y & && \tag{Local variables} \\
+  u & && \tag{Global variables} \\
+  g & && \tag{Context variables} \\
+  S, T &:=&&\ \Nat \sep \cont T \sep S \func T \sep (g : \Ctx) \STo T
+             \tag{Types, \Typ} \\
+  B &:=&&\ u : (\judge T) \sep g : \Ctx
+          \tag{Global bindings} \\
+  \Phi, \Psi &:= &&\ \cdot \sep \Phi, B
+  \tag{Global contexts} \\
+  \Gamma, \Delta &:= &&\ \cdot \sep g \sep \Gamma, x : T
+                        \tag{Local contexts}
+\end{alignat*}
+Their well-formedness judgments are:
+\begin{mathpar}
+  \inferrule
+  { }
+  {\vdash \cdot}
+
+  \inferrule
+  {\vdash \Psi}
+  {\vdash \Psi, g : \Ctx}
+  
+  \inferrule
+  {\ljudge 0 \Gamma \\ \ljudge 0 T}
+  {\vdash \Psi, u : (\judge T)}
+
+  \inferrule
+  {\vdash \Psi}
+  {\ljudge i \cdot}
+
+  \inferrule
+  {\vdash \Psi \\ g : \Ctx \in \Psi}
+  {\ljudge i{g}}
+
+  \inferrule
+  {\ljudge i \Gamma \\ \ljudge i T}
+  {\ljudge[\Psi] i{\Gamma, x : T}}
+
+  \inferrule
+  {\vdash \Psi}
+  {\ljudge i \Nat}
+
+  \inferrule
+  {\ljudge i S \\ \ljudge i T}
+  {\ljudge i {S \func T}}
+
+  \inferrule
+  {\ljudge 0 \Delta \\ \ljudge 0 T}
+  {\ljudge 1 {\cont[\Delta] T}}
+
+  \inferrule
+  {\ljudge[\Psi, g : \Ctx] 1 T}
+  {\ljudge 1 {(g : \Ctx) \STo T}}
+\end{mathpar}
+$\vdash \Psi$ states the well-formedness of a global context $\Psi$. %
+There are two kinds of bindings in a global context: either $x : (\judge T)$ as in 
+previous modal type theory, or $g : \Ctx$ which is a context variable representing a local
+context. %
+Eventually, $g$ will be substituted by a concrete and well-formed local context. %
+Due to the introduction of context variables, the system clearly becomes
+dependently typed. %
+$\ljudge i \Gamma$ states the well-formedness of a local context $\Gamma$ at
+layer $i$. %
+Since we are dealing with a $2$-layered system now, we know $i \in [0, 1]$. %
+The base case of a local context can either be an empty local context, or be
+a well-scoped context variable. %
+The layer $i$ is propagated to the well-formedness judgment of types $\ljudge i T$,
+which states that $T$ is well-formed in $\Psi$ at layer $i$. %
+Notice that the well-formedness of $T$ does not depend on any local context. %
+This judgment essentially combines $\iscore T$ and $\istype T$
+predicates in \citet{hu2024layered}, with context variables taken into consideration. %
+Context variables is introduced by a special meta-function type $(g : \Ctx)
+\STo T$, which pushes a context variable $g$ to the global context. %
+This type can be seen as a ``meta-function space'' in which we define macros or
+meta-programs, so intuitively, this type and its terms can only live at layer $1$. %
+We prove the presupposition lemma of these three judgments:
+\begin{lemma}[Presupposition]$ $
+  \begin{itemize}
+  \item If $\ljudge i \Gamma$,  then $\vdash \Psi$.
+  \item If $\ljudge i T$, then $\vdash \Psi$.
+  \end{itemize}
+\end{lemma}
+\begin{lemma}[Lifting] $ $
+  \begin{itemize}
+  \item If $\ljudge 0 \Gamma$,  then $\ljudge 1 \Gamma$.
+  \item If $\ljudge 0 T$,  then $\ljudge 1 T$.
+  \end{itemize}
+\end{lemma}
+
+\subsection{Weakenings}
+
+Similar to previous layered modal type theories, we need two notions of weakenings: a global one and
+a local one. %
+In this section, due to context variables, we change the definition of weakenings
+based on their counterparts in \citet{hu2024layered}:
+\begin{align*}
+  \gamma &:= \id \sep q(\gamma) \sep p(\gamma)
+  \tag{Global weakenings}
+  \\
+  \tau &:= \id \sep q(\tau) \sep p(\tau)
+  \tag{Local weakenings}
+\end{align*}
+We will use a global weakening $p(\id)$ in the typing rule of meta-functions in
+$\Gamma[p(\id)]$ to account for the insertion of $g: \Ctx$ to the global context
+$\Psi$. %
+In the following, we examine the properties of weakenings. %
+First, we define the composition of weakenings. %
+We only define the one for global weakenings and the one for local weakenings is
+completely identical:
+\begin{align*}
+  \id \circ \gamma' &:= \gamma' \\
+  \gamma \circ \id &:= \gamma \\
+  p(\gamma) \circ q(\gamma') &:= p(\gamma \circ \gamma') \\
+  q(\gamma) \circ q(\gamma') &:= q(\gamma \circ \gamma') \\
+  \gamma \circ p(\gamma') &:= p(\gamma \circ \gamma')
+\end{align*}
+\begin{lemma}[Associativity] $ $
+  \begin{itemize}
+  \item $(\gamma \circ \gamma') \circ \gamma'' = \gamma \circ (\gamma' \circ \gamma'')$
+  \item $(\tau \circ \tau') \circ \tau'' = \tau \circ (\tau' \circ \tau'')$
+  \end{itemize}
+\end{lemma}
+Then we apply global weakenings to types and contexts:
+\begin{align*}
+  \Nat[\gamma] &:= \Nat \\
+  S \func T[\gamma] &:= (S[\gamma]) \func (T[\gamma]) \\
+  \cont T [\gamma] &:= \cont[\Gamma[\gamma]]{T[\gamma]} \\
+  (g: \Ctx) \STo T[\gamma] &:= (g: \Ctx) \STo (T[q(\gamma)]) \\[0.25em]
+  \cdot[\gamma] &:= \cdot \\
+  g[\gamma] &:= g
+                 \tag{properly weakened depending on the name representation} \\
+  \Gamma, x : T[\gamma] &:= (\Gamma[\gamma]), x : (T[\gamma])
+\end{align*}
+This definition of global weakenings admits the following lemma:
+\begin{lemma}[Algebra of global weakenings] $ $
+  \begin{itemize}
+  \item $T[\id] = T$
+  \item $\Gamma[\id] = \Gamma$
+  \item $T[\gamma][\gamma'] = T[\gamma \circ \gamma']$
+  \item $\Gamma[\gamma][\gamma'] = \Gamma[\gamma \circ \gamma']$
+  \end{itemize}
+\end{lemma}
+The well-formedness of weakenings is given by the following rules:
+\begin{mathpar}
+  \inferrule
+  {\vdash \Psi}
+  {\id: \Psi \To_g \Psi}
+
+  \inferrule
+  {\gamma : \Psi \To_g \Phi \\ \judge[\Psi] B}
+  {p(\gamma) : \Psi, B \To_g \Phi}
+
+  \inferrule
+  {\gamma : \Psi \To_g \Phi \\ \judge[\Phi] B \\ \judge[\Psi]{B[\gamma]}}
+  {q(\gamma) : \Psi, B[\gamma] \To_g \Phi, B}
+  \\
+  
+  \inferrule
+  {\ljudge[\Psi] i \Gamma}
+  {\id: \Psi;\Gamma \To_i \Gamma}
+
+  \inferrule
+  {\tau : \Psi; \Gamma \To_i \Delta \\ \ljudge i T}
+  {p(\tau) : \Psi; \Gamma, x : T \To_i \Delta}
+
+  \inferrule
+  {\tau : \Psi; \Gamma \To_i \Delta \\ \ljudge i T}
+  {q(\tau) : \Psi; \Gamma, x : T \To_i \Delta, x : T}
+\end{mathpar}
+where the well-formedness of global bindings $\judge[\Psi] B$ is given as follows:
+\begin{mathpar}
+  \inferrule
+  {\vdash \Psi}
+  {\judge[\Psi]{g: \Ctx}}
+
+  \inferrule
+  {\ljudge 0 \Gamma \\ \ljudge 0 T}
+  {\judge[\Psi]{u: (\judge T)}}
+\end{mathpar}
+The identity case for local weakenings is slightly more complex because we must take
+the context variables into consideration. %
+
+Then we can prove the following global weakening lemma:
+\begin{lemma}[Global weakenings]\labeledit{lem:cvar:glob-wk-ty} $ $
+  \begin{itemize}
+  \item If $\ljudge[\Phi] i \Gamma$ and $\gamma : \Psi \To_g \Phi$, then $\ljudge i{ \Gamma[\gamma]}$.
+  \item If $\ljudge[\Phi] i T$ and $\gamma : \Psi \To_g \Phi$, then $\ljudge i{ T[\gamma]}$.
+  \end{itemize}
+\end{lemma}
+\begin{proof}
+  Mutual induction on $\ljudge[\Phi] i \Gamma$ and $\ljudge[\Phi] i T$.
+\end{proof}
+
+The action of global weakenings on a type at layer $0$ is no-op:
+\begin{lemma}
+  If $\ljudge 0 T$, then $T[\gamma] = T$.
+\end{lemma}
+Global weakenings do not really affect local weakenings:
+\begin{lemma}
+  If $\gamma : \Psi \To_g \Phi$ and $\tau : \Phi; \Gamma \To_i \Delta$, then $\tau :
+  \Psi; \Gamma[\gamma] \To_i \Delta[\gamma]$. 
+\end{lemma}
+\begin{proof}
+  Induction on $\tau : \Phi; \Gamma \To_i \Delta$.
+\end{proof}
+
+The actions of local weakenings only affect terms so they will be looked into in the
+next section, after we consider the syntax of the type theory.
+
+\subsection{Syntax and Typing}
+
+In this section, we define the syntax of the type theory with context variables. %
+To isolate concerns, we use $\tletbox$ for elimination, instead of pattern matching. %
+Nevertheless, pattern matching on code should work with proper adjustments to our
+development:
+\begin{alignat*}{2}
+  m & && \tag{Natural numbers, $\N$} \\
+  \delta &:=&& \cdot_{g?}^{m} \sep \wk_g^m \sep \delta, t/x \tag{Local substitutions} \\
+  s, t &:=&&\ x \sep u^\delta \tag{Terms, $\Exp$} \\
+  & && \sep \ze \sep \su t
+  \tag{natural numbers}\\
+  & && \sep \boxit t \sep \letbox u s t
+  \tag{box}\\
+  & &&\sep \lambda x. t \sep s\ t \tag{functions}  \\
+  & &&\sep \Lambda g. t \sep t ~\$~ \Gamma \tag{meta-functions} 
+\end{alignat*}
+Similar to before, we have natural numbers as our base type. %
+To construct and eliminate meta-functions, we have $\Lambda g. t$ and $t ~\$~ \Gamma$
+respectively. %
+Since we have contextual types, each global variable must be associated with a local
+substitution. %
+In a local substitution, due to how a local context is structured, there are also two
+base cases: it can either be an empty local substitution $\cdot_{g?}^{m}$, or a weakening $\wk^m_g$ of a
+context variable $g$. %
+The number $m$ associated with both cases are the number of local weakening $p$'s. %
+Effectively, $m$ equals to the length of the codomain local context in the typing
+judgment, as we will specify later in this section. %
+This number can be fetched from a local substitution by the following function:
+\begin{align*}
+  \widehat{\cdot_{g?}^m} &:= m \\
+  \widehat{\wk_{g}^m} &:= m \\
+  \widehat{\delta, t/x} &:= \widehat{\delta}
+\end{align*}
+In addition, $\cdot$ is optionally associated with a context variable $g$. %
+If there is such a $g$, it is the base case of the codomain local context. %
+These information are necessary in order to define the local and global substitution
+operations. %
+We rely on the following function to return the context variable inside of a local
+substitution, if it exists:
+\begin{align*}
+  \widecheck{\cdot_{g?}^m} &:= g? \\
+  \widecheck{\wk_g^m} &:= g \\
+  \widecheck{\delta, t/x} &:= \widecheck{\delta}
+\end{align*}
+Next, we define the action of global weakenings on terms and local substitutions:
+\begin{align*}
+  x[\gamma] &:= x \\
+  u^\delta[\gamma] &:= u^{\delta[\gamma]}
+                     \tag{with $u$ properly weakened depending on name representation} \\
+  \ze[\gamma] &:= \ze \\
+  \su t[\gamma] &:= \su {(t[\gamma])} \\
+  \boxit t[\gamma] &:= \boxit {(t[\gamma])} \\
+  \letbox u s t[\gamma] &:= \letbox u {s[\gamma]} {(t[q(\gamma)])} \\
+  \lambda x. t[\gamma] &:= \lambda x. {(t[\gamma])} \\
+  t~s[\gamma] &:= (t[\gamma])~(s[\gamma]) \\
+  \Lambda g. t[\gamma] &:= \Lambda g. {(t[q(\gamma)])} \\
+  t~\$~\Gamma[\gamma] &:= (t[\gamma])~\$~(\Gamma[\gamma]) \\[0.25em]
+  \wk_g^m[\gamma] &:= \wk_g^m
+                     \tag{with $g$ properly weakened} \\
+  \cdot_{g?}^m[\gamma] &:= \cdot_{g?}^m
+                         \tag{with $g$ properly weakened if exists} \\
+  \delta, t/x[\gamma] &:= (\delta[\gamma]), (t[\gamma])/x
+\end{align*}
+The application of global weakenings satisfy the following lemma:
+\begin{lemma}[Algebra of global weakenings]$ $
+  \begin{itemize}
+  \item $t[\id] = t$
+  \item $\delta[\id] = \delta$
+  \item $t[\gamma][\gamma'] = t[\gamma \circ \gamma']$
+  \item $\delta[\gamma][\gamma'] = \delta[\gamma \circ \gamma']$
+  \end{itemize}
+\end{lemma}
+
+Applying local weakenings on terms and local substitutions is defined as follows:
+\begin{align*}
+  x[\tau] &:= x
+  \tag{properly weakened} \\
+  u^\delta[\tau] &:= u^{\delta[\tau]} \\
+  \ze[\tau] &:= \ze \\
+  \su t[\tau] &:= \su {(t[\tau])} \\
+  \boxit t[\tau] &:= \boxit t \\
+  \letbox u s t[\tau] &:= \letbox u {s[\tau]} {(t[\tau])} \\
+  \lambda x. t[\tau] &:= \lambda x. {(t[q(\tau)])} \\
+  t~s[\tau] &:= (t[\tau])~(s[\tau]) \\
+  \Lambda g. t[\tau] &:= \Lambda g. {(t[\tau])} \\
+  t~\$~\Gamma[\tau] &:= (t[\tau])~\$~\Gamma \\[0.25em]
+  \wk_g^m[\tau] &:= \wk_g^{m + m'}
+  \tag{where $m'$ is the number of $p$ constructor in $\tau$} \\
+  \cdot_{g?}^m[\tau] &:= \cdot_{g?}^{m + m'}
+                       \tag{where $m'$ is the number of $p$ constructor in $\tau$} \\
+  \delta, t/x[\tau] &:= (\delta[\tau]), (t[\tau])/x
+\end{align*}
+The application of local weakenings satisfy the following lemma:
+\begin{lemma}[Algebra of local weakenings]$ $
+  \begin{itemize}
+  \item $t[\gamma][\tau] = t[\tau][\gamma]$
+  \item $\delta[\gamma][\tau] = \delta[\tau][\gamma]$
+  \item $t[\tau][\tau'] = t[\tau \circ \tau']$
+  \item $\delta[\tau][\tau'] = \delta[\tau \circ \tau']$
+  \item $t[\delta][\tau] = t[\delta[\tau]]$
+  \item $(\delta \circ \delta')[\tau] = \delta \circ (\delta'[\tau])$
+  \end{itemize}
+\end{lemma}
+
+Then the weakenings of dual-contexts are defined as just tuples of global and local
+weakenings:
+\begin{align*}
+  &\inferrule
+  {\gamma : \Psi \To_g \Phi \\ \tau : \Psi;\Gamma \To_i \Delta[\gamma]}
+  {\gamma; \tau : \Psi; \Gamma \To_i \Phi; \Delta} \\
+  &t[\gamma; \tau] := t[\gamma][\tau] \\
+  &\delta[\gamma; \tau] := \delta[\gamma][\tau]
+\end{align*}
+To disambiguate, when we apply a local weakening literal, we usually pair it with an
+identity global weakening. %
+For example, $t [ \id; p(\id)]$ \emph{locally} weakens $t$ with a local weakening $p(\id)$. %
+When we write $t[p(\id)]$, we mean that $t$ is \emph{globally} weakened by $p(\id)$. %
+The correctness lemma for these operations can only be proved after defining the typing
+rules. %
+In order to define the typing rules, we must first give the definition of global
+substitutions of types and local contexts:
+\begin{alignat*}{2}
+  \sigma &:=&& \cdot \sep \sigma, t/u \sep \sigma, \Gamma/g
+               \tag{Global substitutions}
+\end{alignat*}
+Global substitutions can obviously be globally weakened by iteratively applying a
+global weakening to the terms and local contexts within. %
+The global substitution operation of types and local contexts is defined as follows:
+\begin{align*}
+  \Nat [\sigma] &:= \Nat \\
+  S \func T [\sigma] &:= (S[\sigma]) \func (T[\sigma]) \\
+  \cont T [\sigma] &:= \cont[\Gamma[\sigma]]{T[\sigma]} \\
+  (g: \Ctx) \STo T [\sigma] &:= (g: \Ctx) \STo (T [\sigma[p(\id)], g/g])
+  \\[0.25em]
+  \cdot [\sigma] &:= \cdot \\
+  g [\sigma] &:= \sigma(g)
+                  \tag{lookup $g$ in $\sigma$; undefined if $g$ is not bound or result is not a
+                  local context} \\
+  \Gamma, x : T[\sigma] &:= (\Gamma[\sigma]) , x : (T[\sigma])
+\end{align*}
+For consistency of notations, we often write $q(\sigma)$ for $\sigma[p(\id)], g/g$ or
+$\sigma[p(\id)], u^\id/u$. %
+This notation relates similar operations of weakenings and substitutions. %
+The global substitutions on types satisfy the following lemma:
+\begin{lemma}[Algebra of Global Substitutions]$ $
+  \begin{itemize}
+  \item $T[\gamma][\gamma'] = T[\gamma \circ \gamma]$
+  \item $\sigma[\gamma][\gamma'] = \sigma[\gamma \circ \gamma]$
+  \item $T[\sigma][\gamma] = T[\sigma[\gamma]]$
+  \item $\Gamma[\sigma][\gamma] = \Gamma[\sigma[\gamma]]$
+  \item $t[\sigma][\gamma] = t[\sigma[\gamma]]$
+  \item $\delta[\sigma][\gamma] = \delta[\sigma[\gamma]]$
+  \end{itemize}
+\end{lemma}
+
+Next, we give the application operation of local substitutions on terms and
+composition of local substitutions:
+\begin{align*}
+  x[\delta] &:= \delta(x)
+              \tag{lookup of $x$ in $\delta$} \\
+  u^{\delta'}[\delta] &:= u^{\delta' \circ \delta} \\
+  \ze[\delta] &:= \ze \\
+  \su t[\delta] &:= \su{(t[\delta])} \\
+  \lambda x. t[\delta] &:= \lambda x. (t[\delta[\id; p(\id)], x/x]) \\
+  t~s[\delta] &:= (t[\delta])~(s[\delta]) \\
+  \boxit t [\delta] &:= \boxit t \\
+  \letbox u s t[\delta] &:= \letbox u {s[\delta]} {(t[\delta[p(\id)]])} \\
+  \Lambda g. t [\delta] &:= \Lambda g. (t[\delta[(p(\id))]]) \\
+  t~\$~\Gamma [\delta] &:= (t[\delta]) ~\$~\Gamma \\[.25em]
+  \wk_g^m \circ \delta &:= \wk_g^{\widehat\delta} \\
+  \cdot^m \circ \delta &:= \cdot_{\widecheck{\delta}}^{\widehat\delta} \\
+  \cdot_{g}^m \circ \delta &:= \cdot_{g}^{\widehat\delta} \\
+  (\delta', t/x) \circ \delta &:= (\delta' \circ \delta), t[\delta]/x
+\end{align*}
+Similarly, we might also write $q(\delta)$ for $\delta[\id; p(\id)], x/x$. %
+Notice that in the definition of composition, we make use of the $\widehat\delta$
+function to fetch the number of weakenings. %
+This number is used in the application operation of global substitutions given below
+in the application of global substitutions to specify the number of local $p$
+weakenings when a context variable is substituted by a concrete context. %
+In the composition of $\cdot^m$, we use $\widecheck{\delta}$ to query whether
+$\delta$'s codomain context starts from a context variable. %
+If it does, then we use that context variable in the result of the composition. %
+Local substitutions and global weakenings interact in the following way:
+\begin{lemma}[Algebra of Local Substitutions] $ $
+  \begin{itemize}
+  \item $t[\delta][\gamma] = (t[\gamma])[\delta[\gamma]]$
+  \item $(\delta \circ \delta')[\gamma] = (\delta[\gamma]) \circ (\delta'[\gamma])$
+  \end{itemize}
+\end{lemma}
+
+Now, we define the application of global substitutions to terms and local substitutions:
+\begin{align*}
+  x[\sigma] &:= x \\
+  u^{\delta}[\sigma] &:= \sigma(u)[\delta[\sigma]]
+                        \tag{lookup of $u$ in $\sigma$} \\
+  \ze[\sigma] &:= \ze \\
+  \su t[\sigma] &:= \su{(t[\sigma])} \\
+  \lambda x. t[\sigma] &:= \lambda x. (t[\sigma]) \\
+  t~s[\sigma] &:= (t[\sigma])~(s[\sigma]) \\
+  \boxit t [\sigma] &:= \boxit {(t[\sigma])} \\
+  \letbox u s t[\sigma] &:= \letbox u {s[\sigma]} {(t[\sigma[p(\id)], u^\id/u])} \\
+  \Lambda g. t [\sigma] &:= \Lambda g. (t[\sigma[(p(\id))], g/g]) \\
+  t~\$~\Gamma [\sigma] &:= (t[\sigma]) ~\$~(\Gamma[\sigma]) \\[.25em]
+  \wk_g^m [\sigma] &:= \id_{\sigma(g)}[\id; p^m(\id)]
+                     \tag{defined only when $\sigma(g)$ is a local context}\\
+  \cdot^m [\sigma] &:= \cdot^m \\
+  \cdot_{g}^m [\sigma] &:= \cdot^{|\Gamma| + m}
+  \tag{if $\sigma(g) = \Gamma$ and $\Gamma$ ends with a $\cdot$} \\
+  \cdot_{g}^m [\sigma] &:= \cdot_{g'}^{|\Gamma| + m}
+  \tag{if $\sigma(g) = \Gamma$ and $\Gamma$ ends with a $g'$} \\
+  (\delta, t/x) [\sigma] &:= (\delta[\sigma]), t[\sigma]/x
+\end{align*}
+In the definition of global substitution operation, we make use of the local identity
+substitution, which is defined through local weakening substitutions as below:
+\begin{align*}
+  \wk^m_{\cdot} &:=  \cdot^m \\
+  \wk^m_{g} &:=  \wk_g^m \\
+  \wk^m_{\Gamma, x : T} &:= \wk^{1 + m}_{\Gamma}, x/x
+\end{align*}
+The local identity substitution is defined as a special case of the local weakening
+substitutions by setting $m$ to be $0$:
+\begin{align*}
+  \id_{\Gamma} := \wk^0_{\Gamma}
+\end{align*}
+Though we make heavy use of symbol overloading, but hopefully the exact meanings of
+symbols should be disambiguated by the surrounding textual contexts. %
+Usually, the symbols are designed such that their behaviors remain the same for their
+ambiguous readings (e.g. various uses of $\id$ and $\wk$).  %
+
+At last, we need to define the global identity substitution before giving the typing
+rules. %
+The global identity substitution is defined in the same principle; it is a special
+case of the global weakening substitutions:
+\begin{align*}
+  \wk^m_{\cdot} &:=  \cdot \\
+  \wk^m_{\Psi, g : \Ctx} &:=  \wk_{\Psi}^{1+m}, g/g \\
+  \wk^m_{\Psi, u : (\judge T)} &:= \wk^{1 + m}_{\Psi}, u^{\id_\Gamma[p^{1+m}(\id)]}/u
+\end{align*}
+Notice that in the cons case for $u : (\judge T)$, the local identity substitution
+$\id_{\Gamma}$ must be weakened by $p^{1+m}(\id)$, because its global typing
+environment is weakened by $\wk^{1 + m}_{\Psi}$, which takes the same effect. %
+This weakening is necessary to make the typing to go through. %
+Then identity is just a special case:
+\begin{align*}
+  \id_{\Psi} := \wk^0_{\Psi}
+\end{align*}
+We sometimes omit the subscript for different $\id$, as we know their effects on
+types, local contexts, terms and local substitutions are just \emph{identity}. 
+
+The composition of global substitutions is defined intuitively:
+\begin{align*}
+  \cdot \circ \sigma' &:= \cdot \\
+  (\sigma, t/u) \circ \sigma' &:= (\sigma \circ \sigma'), t[\sigma']/u \\
+  (\sigma, \Gamma/g) \circ \sigma' &:= (\sigma \circ \sigma'), \Gamma[\sigma']/g
+\end{align*}
+Essentially, composition just iteratively applies $\sigma'$ to all terms and contexts
+in the first global substitution. %
+Notice that composition can only be defined, after the applications of global
+substitutions to both terms and local contexts are defined. %
+This definition does lead to some complication when we tries to prove the global
+substitution lemma of terms and local substitutions in the next section. %
+
+At last, the following gives the typing rules of terms and local substitutions.
+\begin{mathpar}
+  \inferrule
+  {\ljudge i \Gamma \\ x : T \in \Gamma}
+  {\ltyping{i}{x}{T}}
+
+  \inferrule
+  {\ltyping i \delta \Delta \\ u : (\judge[\Delta] T) \in \Psi}
+  {\ltyping{i}{u^\delta}{T}}
+
+  \inferrule
+  {\ljudge i \Gamma}
+  {\ltyping{i}{\ze}{\Nat}}
+
+  \inferrule
+  {\ltyping{i}{t}{\Nat}}
+  {\ltyping{i}{\su t}{\Nat}}
+  
+  \inferrule
+  {\ltyping[\Psi][\Gamma, x : S]{i}{t}{T}}
+  {\ltyping{i}{\lambda x. t}{S \func T}}
+
+  \inferrule
+  {\ltyping{i}{t}{S \func T} \\ \ltyping{i}{s}{S}}
+  {\ltyping{i}{t\ s}{T}}
+
+  \inferrule
+  {\ljudge 1 \Gamma \\ \ltyping[\Psi][\Delta] 0 t T}
+  {\ltyping{1}{\boxit t}{\cont[\Delta] T}}
+  
+  \inferrule
+  {\ltyping 1 {s}{\cont[\Delta] T} \\ \mhighlight{\ljudge[\Psi] 0 \Delta} \\
+    \mhighlight{\ljudge[\Psi] 0 T} \\
+    \ljudge[\Psi] 1{T'} \\
+    \ltyping[\Psi, u : (\judge[\Delta] T)][\Gamma[p(\id)]] 1 {t}{T'[p(\id)]}}
+  {\ltyping 1 {\letbox u s t} T'}
+
+  \inferrule
+  {\ljudge[\Psi] 1 \Gamma \\ \ltyping[\Psi, g: \Ctx][\Gamma[p(\id)]] 1 t T}
+  {\ltyping{1}{\Lambda g. t}{(g : \Ctx) \STo T}}
+
+  \inferrule
+  {\ltyping{1}{t}{(g : \Ctx) \STo T} \\ \ljudge[\Psi] 0 \Delta}
+  {\ltyping{1}{t~\$~\Delta}{T[\id_{\Psi}, \Delta/g]}}
+  
+  \inferrule
+  {\ljudge i \Gamma \\ \text{$\Gamma$ ends with $\cdot$} \\ |\Gamma| = m}
+  {\ltyping i {\cdot^m}{\cdot}}
+
+  \inferrule
+  {\ljudge i \Gamma \\ g : \Ctx \in \Psi \\ \text{$\Gamma$ ends with $g$} \\ |\Gamma| = m}
+  {\ltyping i {\cdot_g^m}{\cdot}}
+
+  \inferrule
+  {\ljudge i \Gamma \\ g : \Ctx \in \Psi \\ \text{$\Gamma$ ends with $g$} \\ |\Gamma| = m}
+  {\ltyping i {\wk_g^m}{g}}
+
+  \inferrule
+  {\ltyping i {\delta}{\Delta} \\ \ltyping i {t}{T}}
+  {\ltyping i {\delta, t/x}{\Delta, x : T}}
+\end{mathpar}
+In the typing rules, there are premises highlighted by \mhighlight{\text{shades}}. %
+These shaded premises are necessary to establish the theorem of \emph{presupposition}
+or \emph{syntactic validity}. %
+After establishing presupposition, these premises can be derived from other premises
+and thus technically can be omitted afterwards. %
+Moreover, in the rule for global variables, the lookup of a global context $\Psi$ must
+consider the effect of global weakenings as follows:
+\begin{mathpar}
+  \inferrule
+  { }
+  {u : B[p(\id)] \in \Psi, u : B}
+
+  \inferrule
+  {u : B \in \Psi}
+  {u : B[p(\id)] \in \Psi , u' : B'}
+\end{mathpar}
+The typing rules also support lifting:
+\begin{lemma}[Lifting] $ $
+  \begin{itemize}
+  \item If $\ltyping{0}{t}{T}$, then $\ltyping{1}{t}{T}$.
+  \item If $\ltyping{0}{\delta}{\Delta}$, then $\ltyping{1}{\delta}{\Delta}$.
+  \end{itemize}
+\end{lemma}
+This lemma ensures that terms at layer $0$ are \emph{included} in layer $1$. 
+
+Typing rules for global substitutions are defined as follows:
+\begin{mathpar}
+  \inferrule*
+  {\vdash \Psi}
+  {\typing[\Psi]{\cdot}{\cdot}}
+
+  \inferrule*
+  {\typing[\Psi]{\sigma}{\Phi} \\ \ljudge[\Psi] 0 \Gamma \\ \ljudge[\Psi] 0 T \\ \ltyping[\Psi][\Gamma[\sigma]] 0 {t}{T[\sigma]}}
+  {\typing[\Psi]{\sigma, t/u}{\Phi, u : (\judge T)}}
+
+  \inferrule*
+  {\typing[\Psi]{\sigma}{\Phi} \\ \ljudge 0 \Gamma}
+  {\typing[\Psi]{\sigma, \Gamma/g}{\Phi, g: \Ctx}}
+\end{mathpar}
+
+In the next section, we establish a set of syntactic properties as a basic sanity
+check of the definitions, which are also useful in later section proving normalization. 
+
+\subsection{Syntactic Properties of 2-layered Modal Type Theory with Context Variables}
+
+In this section, we list syntactic properties that eventually leads to the
+substitution lemma of terms and local substitutions for global substitutions. %
+This lemma is our ``benchmark'' to ensure that the rules for the system make sense. %
+During the process, we must establish other necessary syntactic properties. %
+We elaborate the proofs an important and selected few. %
+Other proofs in this section have been mechanized in Agda.
+
+\begin{lemma}\labeledit{lem:cvar:gsubst-skip} $ $
+  \begin{itemize}
+  \item If $n$ is the length of $\sigma'$, then $t [q^n(p(id))][\sigma,t/u,\sigma'] =
+    t [q^n(p(id))][\sigma,\Gamma/g,\sigma'] = t[\sigma,\sigma']$.
+  \item If $n$ is the length of $\sigma'$, then $\delta [q^n(p(id))][\sigma,t/u,\sigma'] =
+    \delta [q^n(p(id))][\sigma,\Gamma/g,\sigma'] = \delta[\sigma,\sigma']$.
+  \end{itemize}
+\end{lemma}
+This lemma allows to skip a binding in the middle of a global substitution according
+to a global weakening.
+
+A similar lemma holds for local substitutions:
+\begin{lemma}\labeledit{lem:cvar:lsubst-skip} $ $
+  \begin{itemize}
+  \item If $n$ is the length of $\delta'$, then $t [q^n(p(id))][\delta,t/x,\delta'] =
+    t[\delta,\delta']$.
+  \item If $n$ is the length of $\delta'$, then $\delta [q^n(p(id))] \circ (\delta,t/x,\delta') =
+    \delta \circ (\delta,\delta')$.
+  \end{itemize}
+\end{lemma}
+
+
+\begin{lemma}[Composition of Global Substitutions]$ $
+  \begin{itemize}
+  \item $T[\sigma][\sigma'] = T[\sigma \circ \sigma']$
+  \item $\Gamma[\sigma][\sigma'] = \Gamma[\sigma \circ \sigma']$
+  \end{itemize}
+\end{lemma}
+
+\begin{lemma}[Composition and Associativity of Local Substitutions] $ $
+  \begin{itemize}
+  \item $t[\delta][\delta'] = t[\delta \circ \delta']$
+  \item $(\delta \circ \delta') \circ \delta'' = \delta \circ (\delta' \circ \delta'')$
+  \end{itemize}
+\end{lemma}
+
+\begin{lemma}[Typing of Local Weakening Substitutions]
+  If $\ljudge i {\Delta, \Gamma}$, then $\ltyping[\Psi][\Delta, \Gamma] i
+  {\wk^{|\Gamma|}_{\Delta}}{\Delta}$. 
+\end{lemma}
+The corollary is the well-typedness of local identity substitution:
+\begin{corollary}
+  If $\ljudge i \Gamma$, then $\ltyping i {\id_{\Gamma}}{\Gamma}$. 
+\end{corollary}
+
+The next few questions require well-formedness or typing judgments to work:
+\begin{lemma}\labeledit{lem:cvar:wk-p-n-ty} $ $
+  \begin{itemize}
+  \item If $\ljudge i T$, then $T[\wk^n_{\Psi}] = T[p^n(\id)]$. 
+  \item If $\ljudge i \Gamma$, then $\Gamma[\wk^n_{\Psi}] = \Gamma[p^n(\id)]$. 
+  \end{itemize}
+\end{lemma}
+This lemma proves that the global weakening substitutions behaves exactly like global
+weakenings.
+
+\begin{lemma}[Naturality]$ $
+  \begin{itemize}
+  \item If $\ljudge[\Psi,g:\Ctx] i T$ and $\gamma : \Phi \To_g \Psi$, then
+    $T[\id_{\Psi}, \Gamma/g][\gamma] = T[q(\gamma)][\id_{\Phi},\Gamma[\gamma]/g]$.
+  \item If $\ljudge[\Psi,g:\Ctx] i \Delta$ and $\gamma : \Phi \To_g \Psi$, then
+    $\Delta[\id_{\Psi}, \Gamma/g][\gamma] = \Delta[q(\gamma)][\id_{\Phi},\Gamma[\gamma]/g]$.
+  \end{itemize}
+\end{lemma}
+The naturality lemma finds correspondence in the characterization of a presheaf
+category of a type theory in general, which instructs how $q$ weakenings can be used
+to swap a global weakening and a global substitution. %
+
+\begin{lemma}[Local Identity]\labeledit{lem:cvar:loc-id}$ $
+  \begin{itemize}
+  \item If $\ltyping i t T$, then $t[\id_{\Gamma}] = t$. 
+  \item If $\ltyping i \delta \Delta$, then $\delta \circ \id_{\Gamma} = \delta$. 
+  \end{itemize}
+\end{lemma}
+This lemma shows that the local identity substitution has no effect on terms and that
+the right identity property of local substitutions. %
+
+Next, we establish the global weakening lemma for typing rules:
+\begin{lemma}[Global weakenings]\labeledit{lem:cvar:glob-wk-tm} $ $
+  \begin{itemize}
+  \item If $\ltyping i t T$ and $\gamma : \Psi' \To_g \Psi$, then
+    $\ltyping[\Psi'][\Gamma[\gamma]] i {t[\gamma]}{ T[\gamma]}$.
+  \item If $\ltyping i \delta \Delta$ and $\gamma : \Psi' \To_g \Psi$, then
+    $\ltyping[\Psi'][\Gamma[\gamma]] i {\delta[\gamma]}{\Delta[\gamma]}$.
+  \end{itemize}
+\end{lemma}
+\begin{proof}
+  Mutual induction on $\ltyping[\Phi] i t T$ and $\ltyping[\Phi] i \delta \Delta$. %
+  We only consider a few interesting cases:
+  \begin{itemize}[label=Case]
+  \item
+    \begin{mathpar}
+      \inferrule
+      {\ltyping[\Phi] 1 {s}{\cont[\Delta] T} \\ \ljudge[\Phi] 1 {T'} \\ \ltyping[\Phi, u : (\judge[\Delta] T)][\Gamma[p(\id)]] 1 {t}{T'[p(\id)]}}
+      {\ltyping[\Phi] 1 {\letbox u s t} T'}
+    \end{mathpar}
+    \begin{align*}
+      & \ltyping[\Psi][\Gamma[\gamma]] 1 {s[\gamma]}{\cont[\Delta] T[\gamma]}
+        \byIH \\
+      & \ltyping[\Psi, u : (\judge[\Delta[\gamma]]
+        T[\gamma])][\Gamma[p(\id)][q(\gamma)]] 1 {t[q(\gamma)]}{T'[p(\id)][q(\gamma)]}
+        \byIH \\
+      & \ltyping[\Psi, u : (\judge[\Delta[\gamma]]
+        T[\gamma])][\Gamma[p(\gamma)]] 1 {t[q(\gamma)]}{T'[p(\gamma)]}
+        \tag{by computation} \\
+      & \ltyping[\Psi, u : (\judge[\Delta[\gamma]]
+        T[\gamma])][\Gamma[\gamma][p(\id)]] 1 {t[q(\gamma)]}{T'[\gamma][p(\id)]} \\
+      & \ltyping[\Psi][\Gamma[\gamma]] 1 {\letbox u s t[\gamma]}{T'[\gamma]}
+        \tag{by constructor}
+    \end{align*}
+    
+  \item
+    \begin{mathpar}
+      \inferrule
+      {\ltyping[\Phi, g: \Ctx][\Gamma[p(\id)]] 1 t T}
+      {\ltyping[\Phi]{1}{\Lambda g. t}{(g : \Ctx) \STo T}}
+    \end{mathpar}
+    \begin{align*}
+      & q(\gamma) : \Psi', g : \Ctx \To_g \Psi, g : \Ctx
+        \tag{by typing rules} \\
+      & \ltyping[\Psi', g: \Ctx][\Gamma[p(\id)][q(\gamma)]]
+        1{t[q(\gamma)]}{T[q(\gamma)]}
+        \byIH \\
+      & \ltyping[\Psi', g: \Ctx][\Gamma[p(\id) \circ q(\gamma)]]
+        1{t[q(\gamma)]}{T[q(\gamma)]}
+        \tag{by algebraic law} \\
+      & \ltyping[\Psi', g: \Ctx][\Gamma[p(\gamma)]]
+        1{t[q(\gamma)]}{T[q(\gamma)]} \\
+      & \ltyping[\Psi', g: \Ctx][\Gamma[\gamma][p(\id)]]
+        1{t[q(\gamma)]}{T[q(\gamma)]} \\
+      & \ltyping[\Psi'][\Gamma[\gamma]]
+        1{\Lambda g. (t[q(\gamma)])}{(g : \Ctx) \STo (T[q(\gamma)])}
+        \tag{by typing rule}
+    \end{align*}
+    
+  \item
+    \begin{mathpar}
+      \inferrule
+      {\ltyping[\Phi]{1}{t}{(g : \Ctx) \STo T} \\ \ljudge[\Phi] 0 \Delta}
+      {\ltyping[\Phi]{1}{t~\$~\Delta}{T[\id_{\Phi}, \Delta/g]}}
+    \end{mathpar}
+    \begin{align*}
+      & \ltyping[\Psi][\Gamma[\gamma]]{1}{t[\gamma]}{(g : \Ctx) \STo T[\gamma]}
+        \byIH \\
+      & \ljudge[\Psi] 0 {\Delta[\gamma]}
+        \tag{by \Cref{lem:cvar:glob-wk-ty}} \\
+      &
+        \ltyping[\Psi][\Gamma[\gamma]]{1}{(t[\gamma])~\$~(\Delta[\gamma])}{T[q(\gamma)][\id_{\Psi}, \Delta[\gamma]/g]}
+        \tag{by constructor} \\
+      & \ltyping[\Psi][\Gamma[\gamma]]{1}{(t[\gamma])~\$~(\Delta[\gamma])}{T[\id_{\Phi},
+        \Delta/g][\gamma]}
+        \tag{by naturality}
+    \end{align*}
+    
+  \end{itemize}
+\end{proof}
+
+\begin{lemma}[Global Weakening]
+  If $\typing[\Psi] \sigma \Phi$ and $\gamma : \Psi' \To_g \Psi$, then $\typing[\Psi']{\sigma[\gamma]}\Phi$.
+\end{lemma}
+
+\begin{lemma}[Global Weakening Substitutions]
+  If $\vdash \Psi,\Phi$, then $\typing[\Psi,\Phi]{\wk^{|\Phi|}_{\Psi}}{\Psi}$. 
+\end{lemma}
+\begin{proof}
+  This lemma is actually requires a bit preliminaries to establish and so this is the
+  earliest point where this lemma can be proven. %
+  From $\vdash \Psi,\Phi$, we know $\vdash \Psi$, which we do induction on. %
+  We consider only one case:
+  \begin{mathpar}
+    \inferrule
+    {\ljudge 0 \Gamma \\ \ljudge 0 T}
+    {\vdash \Psi, u : (\judge T)}
+  \end{mathpar}
+  \begin{align*}
+    & \wk^{|\Phi|}_{\Psi, u : (\judge T)} = \wk^{1 + |\Phi|}_{\Psi},
+      u^{\id_\Gamma[p^{1+|\Phi|}(\id)]}/u
+      \tag{by definition} \\
+    & \typing[\Psi, u : (\judge T),\Phi]{\wk^{1 + |\Phi|}_{\Psi}}{\Psi}
+      \byIH 
+  \end{align*}
+  At last, we must prove $\ltyping[\Psi, u : (\judge
+  T),\Phi][\Gamma[\wk^{1 + |\Phi|}_{\Psi}]] 0
+  {u^{\id_\Gamma[p^{1+|\Phi|}(\id)]}}{T[\wk^{1 + |\Phi|}_{\Psi}]}$. %
+  But we know that this goal is the same as the following due to
+  \Cref{lem:cvar:wk-p-n-ty}:
+  \begin{align*}
+    \ltyping[\Psi, u : (\judge
+    T),\Phi][\Gamma[p^{1 + |\Phi|}(\id)]] 0
+    {u^{\id_\Gamma[p^{1+|\Phi|}(\id)]}}{T[p^{1 + |\Phi|}(\id)]}
+  \end{align*}
+  It remains to prove that the substitution is well-typed:
+  \begin{align*}
+    \ltyping[\Psi, u : (\judge
+    T),\Phi][\Gamma[p^{1 + |\Phi|}(\id)]] 0
+    {\id_\Gamma[p^{1+|\Phi|}(\id)]}{\Gamma[p^{1 + |\Phi|}(\id)]}
+  \end{align*}
+  This goal is immediate due to \Cref{lem:cvar:loc-id,lem:cvar:glob-wk-tm}.
+\end{proof}
+
+\begin{corollary}
+  If $\vdash \Psi$, then $\typing[\Psi]{\id_{\Psi}}{\Psi}$. 
+\end{corollary}
+
+
+Finally, we can establish the presupposition of terms and local substitutions:
+\begin{lemma}[Presupposition]$ $
+  \begin{itemize}
+  \item If $\ltyping i t T$, then $\ljudge i \Gamma$ and $\ljudge i T$. 
+  \item If $\ltyping i \delta \Delta$, then $\ljudge i \Gamma$ and $\ljudge i \Delta$. 
+  \end{itemize}
+\end{lemma}
+\begin{proof}
+  We do a mutual induction.
+\end{proof}
+
+Next, we need a similar lemma to \Cref{lem:cvar:wk-p-n-ty} but for terms and local
+substitutions:
+\begin{lemma}\labeledit{lem:cvar:wk-p-n-tm} $ $
+  \begin{itemize}
+  \item If $\ltyping i t T$, then $t[\wk^n_{\Psi}] = t[p^n(\id)]$. 
+  \item If $\ltyping i \delta \Delta$, then $\delta[\wk^n_{\Psi}] = \delta[p^n(\id)]$. 
+  \end{itemize}
+\end{lemma}
+\begin{proof}
+  The proof of this lemma requires an intrigued generalization in order to handle
+  extensions of global contexts due to $\tletbox$ and $\Lambda$. %
+  Details of the generalization are technical and too elaborate to put in this
+  technical report, and thus we choose to leave them in the Agda mechanization for
+  readers' reference. 
+\end{proof}
+
+Next, we should verify the identity rules of composition of global substitutions. %
+Notice that by applying \Cref{lem:cvar:wk-p-n-ty,lem:cvar:wk-p-n-tm}, we obtain the
+right identity immediately:
+\begin{lemma}
+  If $\typing[\Psi] \sigma \Phi$, then $\sigma \circ \id_{\Psi} = \sigma$. 
+\end{lemma}
+
+The left identity, on the other hand, requires certain generalization which
+must incorporate global weakenings. %
+We again leave the details in the Agda mechanization:
+\begin{lemma}
+  If $\typing[\Psi] \sigma \Phi$, then $\id_{\Phi} \circ \sigma = \sigma$. 
+\end{lemma}
+
+Another useful equation is that global substitutions and local weakenings commute:
+\begin{lemma}[Commutativity of Global Substitutions and Local Weakenings] $ $
+  \begin{itemize}
+  \item If $\ltyping i t T$ and $\tau : \Psi ; \Delta \To_i \Gamma$, then
+    $t[\tau][\sigma] = t[\sigma][\tau]$.
+  \item If $\ltyping i \delta {\Gamma'}$ and $\tau : \Psi ; \Delta \To_i \Gamma$, then
+    $\delta[\tau][\sigma] = \delta[\sigma][\tau]$.
+  \end{itemize}
+\end{lemma}
+
+Next, we move on to the global substitution lemma for terms and local substitutions. %
+Prior to that, we must first show the local weakening lemma and local substitution lemma:
+\begin{lemma}[Local Weakenings] $ $
+  \begin{itemize}
+  \item If $\ltyping i t T$ and $\tau : \Psi; \Delta \To_i \Gamma$, then
+    $\ltyping[\Psi][\Delta] i{t[\tau]} T$. 
+  \item If $\ltyping i \delta {\Delta'}$ and $\tau : \Psi; \Delta \To_i \Gamma$, then
+    $\ltyping[\Psi][\Delta] i{\delta[\tau]}{\Delta'}$. 
+  \end{itemize}
+\end{lemma}
+
+\begin{lemma}[Local Substitutions] $ $
+  \begin{itemize}
+  \item If $\ltyping i t T$ and $\ltyping[\Psi][\Delta] i \delta \Gamma$, then
+    $\ltyping[\Psi][\Delta] i{t[\delta]} T$. 
+  \item If $\ltyping i \delta \Delta$ and $\ltyping[\Psi][\Gamma'] i {\delta'} \Gamma$, then
+    $\ltyping[\Psi][\Gamma'] i{\delta \circ \delta'} {\Delta}$. 
+  \end{itemize}
+\end{lemma}
+\begin{proof}
+  We do a mutual induction. %
+  Notice that in this lemma, it is somewhat more cumbersome to establish the proof for
+  local substitutions. %
+  When $\delta = \cdot^m$, then we must reason about the properties of
+  $\widecheck{\delta'}$. %
+  If $\widecheck{\delta'} = g$ for some $g$, then we must show that both $\Gamma$ and
+  $\Gamma'$ start with this $g$. %
+  The details are given in the Agda mechanization. 
+\end{proof}
+
+Finally, we give the global substitution lemma:
+\begin{lemma}[Global Substitutions] $ $
+  \begin{itemize}
+  \item If $\ltyping i t T$ and $\typing[\Psi']\sigma{\Psi}$, then
+    $\ltyping[\Psi'][\Gamma[\sigma]] i{t[\sigma]}{T[\sigma]}$. 
+  \item If $\ltyping i \delta \Delta$ and $\typing[\Psi']\sigma{\Psi}$, then
+    $\ltyping[\Psi'][\Gamma[\sigma]] i{\delta[\sigma]}{\Delta[\sigma]}$. 
+  \end{itemize}
+\end{lemma}
+\begin{proof}
+  We do a mutual induction. %
+  We consider a few interesting cases:
+  \begin{itemize}[label=Case]
+  \item
+    \begin{mathpar}
+      \inferrule
+      {\ltyping 1 {s}{\cont[\Delta] T} \\
+        \ljudge[\Psi] 1{T'} \\
+        \ltyping[\Psi, u : (\judge[\Delta] T)][\Gamma[p(\id)]] 1 {t}{T'[p(\id)]}}
+      {\ltyping 1 {\letbox u s t} T'}
+    \end{mathpar}
+    \begin{align*}
+      & \ltyping[\Psi'][\Gamma[\sigma]] 1 {s[\sigma]}{\cont[\Delta] T [\sigma] = \cont[\Delta[\sigma]]{T[\sigma]} }
+        \byIH \\
+      & \typing[\Psi', u : (\judge[\Delta[\sigma]]{T[\sigma]})]{\sigma[p(\id)],
+        u^{\id_{\Delta[\sigma[p(\id)]]}}/u}{\Psi, u : (\judge[\Delta] T)}
+        \tag{by typing rule} \\
+      & \ltyping[\Psi', u : (\judge[\Delta[\sigma]]{T[\sigma]})][\Gamma[p(\id)][\sigma[p(\id)],
+        u^{\id_{\Delta[\sigma[p(\id)]]}}/u]] 1 {t[\sigma[p(\id)],
+        u^{\id_{\Delta[\sigma[p(\id)]]}}/u]}{T'[p(\id)][\sigma[p(\id)],
+        u^{\id_{\Delta[\sigma[p(\id)]]}}/u]}
+        \byIH \\
+      & \ltyping[\Psi', u : (\judge[\Delta[\sigma]]{T[\sigma]})][\Gamma[\sigma[p(\id)]]] 1 {t[\sigma[p(\id)],
+        u^{\id_{\Delta[\sigma[p(\id)]]}}/u]}{T'[\sigma[p(\id)]]}
+        \tag{by \Cref{lem:cvar:gsubst-skip}} \\
+      & \ltyping[\Psi', u : (\judge[\Delta[\sigma]]{T[\sigma]})][\Gamma[\sigma][p(\id)]] 1 {t[\sigma[p(\id)],
+        u^{\id_{\Delta[\sigma][p(\id)]}}/u]}{T'[\sigma][p(\id)]}
+        \tag{by algebraic laws} \\
+      & \ltyping[\Psi'][\Gamma[\sigma]] 1 {\letbox u s t}{T'[\sigma]}
+        \tag{by typing rule}
+    \end{align*}
+    
+  \item
+    \begin{mathpar}
+      \inferrule
+      {\ljudge[\Psi] 1 \Gamma \\ \ltyping[\Psi, g: \Ctx][\Gamma[p(\id)]] 1 t T}
+      {\ltyping{1}{\Lambda g. t}{(g : \Ctx) \STo T}}
+    \end{mathpar}
+    Basically we do the same as above, but instead of providing a global substitution
+    of terms, we provide a global substitution of a local context.
+    
+  \item
+    \begin{mathpar}
+      \inferrule
+      {\ltyping{1}{t}{(g : \Ctx) \STo T} \\ \ljudge[\Psi] 0 \Delta}
+      {\ltyping{1}{t~\$~\Delta}{T[\id_{\Psi}, \Delta/g]}}
+    \end{mathpar}
+    \begin{align*}
+      &\ltyping[\Psi'][\Gamma[\sigma]]{1}{t[\sigma]}{(g : \Ctx) \STo T[\sigma] = (g :
+      \Ctx) \STo (T[\sigma[p(\id)], g/g])}
+      \byIH \\
+      & \ljudge[\Psi'] 0 {\Delta[\sigma]}
+        \byIH \\
+      & \ltyping[\Psi'][\Gamma[\sigma]]{1}{t~\$~\Delta[\sigma]}{T[\sigma[p(\id)],
+        g/g][\id_{\Psi'}, \Delta[\sigma]/g]}
+        \tag{by typing rule}
+    \end{align*}
+    Finally we must show the following equation:
+    \begin{align*}
+      T[\sigma[p(\id)],
+      g/g][\id_{\Psi'}, \Delta[\sigma]/g] =
+      T[\id_{\Psi}, \Delta/g][\sigma]
+    \end{align*}
+    We reason as follows:
+    \begin{align*}
+      T[\sigma[p(\id)], g/g][\id_{\Psi'}, \Delta[\sigma]/g]
+      &= T[(\sigma[p(\id)], g/g) \circ (\id_{\Psi'}, \Delta[\sigma]/g)] \\
+      &= T[(\sigma[p(\id)] \circ (\id_{\Psi'}, \Delta[\sigma]/g)), \Delta[\sigma] ] \\
+      &= T[(\sigma \circ \id_{\Psi'}), \Delta[\sigma] ]
+      \tag{by \Cref{lem:cvar:gsubst-skip}}\\
+      &= T[\sigma, \Delta[\sigma] ]
+        \tag{by right identity}
+    \end{align*}
+    On the right hand side,
+    \begin{align*}
+      T[\id_{\Psi}, \Delta/g][\sigma]
+      &= T[(\id_{\Psi} \circ \sigma), \Delta[\sigma]/g] \\
+      &= T[\sigma, \Delta[\sigma]/g]
+        \tag{by left identity}
+    \end{align*}
+    Thus both sides agree. 
+  \item
+    \begin{mathpar}
+      \inferrule
+      {\ljudge i \Gamma \\ g : \Ctx \in \Psi \\ \text{$\Gamma$ ends with $g$} \\ |\Gamma| = m}
+      {\ltyping i {\cdot_g^m}{\cdot}}
+    \end{mathpar}
+    In this case, we must look up $g$ in $\sigma$, and branch depending on
+    $\sigma(g)$.
+    \begin{itemize}[label=Subcase]
+    \item
+      If $\sigma(g) = g', \Delta$ meaning that $\sigma(g)$ ends with a context
+      variable $g'$, then we must construct a typing judgment for $\cdot_{g'}^{m'}$
+      for some $m'$. %
+      In this case, say if $\Gamma = g, \Gamma'$, then $\Gamma[\sigma] = g', \Delta,
+      (\Gamma'[\sigma])$. %
+      Therefore, $m' = |\Delta| + |\Gamma'[\sigma]| = |\Delta| + m$. 
+    \item If $\sigma(g) = \cdot, \Delta$, then we proceed similarly except that we
+      must construct a typing judgment for $\cdot^{m'}$ instead. 
+    \end{itemize}
+    
+  \end{itemize}
+\end{proof}
+
+\begin{lemma}[Distributivity of Global Substitutions] $ $
+  \begin{itemize}
+  \item If $\ltyping i t T$, $\ltyping[\Psi][\Delta] i \delta \Gamma$ and
+    $\typing[\Phi] \sigma \Psi$, then
+    $t[\delta][\sigma] = (t[\sigma][\delta[\sigma]])$.
+  \item If $\ltyping i \delta \Delta$, $\ltyping[\Psi][\Gamma'] i {\delta'} \Gamma$
+    and $\typing[\Phi] \sigma \Psi$, then
+    $(\delta \circ \delta') [\sigma] = (\delta[\sigma]) \circ (\delta'[\sigma])$.
+  \end{itemize}
+\end{lemma}
+\begin{proof}
+  We do a mutual induction on $\ltyping i t T$ and $\ltyping i \delta \Delta$. %
+  The difficulty is coming from the base cases of local substitutions. %
+  We must incorporate the shape of $\delta'$ depending on the cases of $\delta$. %
+  We refer the readers to the Agda mechanization for the detailed proof and how we do
+  case analysis on the base cases. 
+  
+  % We consider these cases:
+  % \begin{itemize}[label=Case]
+  % \item
+  %   \begin{mathpar}
+  %     \inferrule
+  %     {\ljudge i \Gamma \\ \text{$\Gamma$ ends with $\cdot$} \\ |\Gamma| = m}
+  %     {\ltyping i {\cdot^m}{\cdot}}
+  %   \end{mathpar}
+  %   We have
+  %   \begin{align*}
+  %     (\delta \circ \delta') [\sigma]
+  %     &= \cdot^{\widehat{\delta'}}_{\widecheck{\delta'}}[\sigma] \\
+  %     (\delta[\sigma]) \circ (\delta'[\sigma])
+  %     &= \cdot^m \circ (\delta'[\sigma]) \\
+  %     &= \cdot^{\widehat{\delta'[\sigma]}}_{\widecheck{\delta'[\sigma]}}
+  %   \end{align*}
+  %   We do a further case analysis based on whether there is a $\widecheck{\delta'}$:
+  %   \begin{itemize}[label=Subcase]
+  %   \item $\widecheck{\delta'} = g$ for some $g$. %
+  %     We need to further check whether $\sigma(g)$ ends with a $\cdot$ or another
+  %     $g'$.
+  %     \begin{itemize}[label=Subsubcase]
+  %     \item $\sigma(g)$ ends with $\cdot$, then
+  %       \begin{align*}
+  %         \cdot^{\widehat{\delta'}}_{\widecheck{\delta'}}[\sigma]
+  %         &= \cdot^{\widehat{\delta'} + |\sigma(g)|}
+  %       \end{align*}
+  %       Notice that $\widehat{\delta'} = \widehat{\delta'[\sigma]}$, we have the equation.
+  %     \item $\sigma(g)$ ends with another $g'$, then
+  %       \begin{align*}
+  %         \cdot^{\widehat{\delta'}}_{\widecheck{\delta'}}[\sigma]
+  %         &= \cdot^{\widehat{\delta'} + |\sigma(g)|}_{g'}
+  %       \end{align*}
+  %       Moreover, $\widecheck{\delta'[\sigma]} = g'$ as well by a simple induction
+  %       argument, due to which we have the target goal.
+  %     \end{itemize}
+      
+  %   \item $\widecheck{\delta'}$ does not exist. %
+  %     Then
+  %     \begin{align*}
+  %       \cdot^{\widehat{\delta'}}_{\widecheck{\delta'}}[\sigma]
+  %       &= \cdot^{\widehat{\delta'}} \\
+  %       &= \cdot^{\widehat{\delta'[\sigma]}} \tag{by a simple induction} \\
+  %       &= \cdot^{\widehat{\delta'[\sigma]}}_{\widecheck{\delta'[\sigma]}}
+  %         \tag{$\widecheck{\delta'[\sigma]}$ also does not exist}
+  %     \end{align*}
+  %   \end{itemize}
+    
+  % \item
+  %   \begin{mathpar}
+  %     \inferrule
+  %     {\ljudge i \Gamma \\ g : \Ctx \in \Psi \\ \text{$\Gamma$ ends with $g$} \\ |\Gamma| = m}
+  %     {\ltyping i {\cdot_g^m}{\cdot}}
+  %   \end{mathpar}
+  %   \begin{align*}
+  %     (\delta \circ \delta') [\sigma]
+  %     &= \cdot^{\widehat{\delta'}}_{g}[\sigma] \\
+  %     (\delta[\sigma]) \circ (\delta'[\sigma])
+  %     &= (\cdot^m_g[\sigma]) \circ (\delta'[\sigma])
+  %   \end{align*}
+  %   We analyze what is the base case of $\sigma(g)$:
+  %   \begin{itemize}[label=Subcase]
+  %   \item $\sigma(g)$ ends with $\cdot$, then
+  %     \begin{align*}
+  %       \cdot^{\widehat{\delta'}}_{g}[\sigma]
+  %       &= \cdot^{\widehat{\delta'}+|\sigma(g)|} \\
+  %       (\cdot^m_g[\sigma]) \circ (\delta'[\sigma])
+  %       &= \cdot^{m + |\sigma(g)|} \circ (\delta'[\sigma]) \\
+  %       &= \cdot^{\widehat{\delta'[\sigma]}}_{\widecheck{\delta'[\sigma]}}
+  %     \end{align*}
+  %   \item
+      
+  %   \end{itemize}
+  % \item
+  %   \begin{mathpar}
+  %     \inferrule
+  %     {\ljudge i \Gamma \\ g : \Ctx \in \Psi \\ \text{$\Gamma$ ends with $g$} \\ |\Gamma| = m}
+  %     {\ltyping i {\wk_g^m}{g}}
+  %   \end{mathpar}
+  % \end{itemize}
+\end{proof}
+
+\subsection{Equivalence Rules}
+
+In this section, we describe the equivalence rules. %
+They follow closely to the equivalence rules by \citet[Sec. 4]{hu2024layered}. %
+We only show the rules for the newly added constructs.
+\begin{mathpar}
+  \inferrule
+  {\ljudge[\Psi] 1 \Gamma \\ \ltyequiv[\Psi, g: \Ctx][\Gamma[p(\id)]] 1 t {t'} T}
+  {\ltyequiv{1}{\Lambda g. t}{\Lambda g. t'}{(g : \Ctx) \STo T}}
+
+  \inferrule
+  {\ltyequiv{1}{t}{t'}{(g : \Ctx) \STo T} \\ \ljudge[\Psi] 0 \Delta}
+  {\ltyequiv{1}{t~\$~\Delta}{t'~\$~\Delta}{T[\id_{\Psi}, \Delta/g]}}
+
+  \inferrule
+  {\ljudge[\Psi] 1 \Gamma \\ \ltyping[\Psi, g: \Ctx][\Gamma[p(\id)]] 1 t T \\ \ljudge[\Psi] 0 \Delta}
+  {\ltyequiv{1}{(\Lambda g. t)~\$~\Delta}{t[\id_{\Psi}, \Delta/g]}{T[\id_{\Psi}, \Delta/g]}}
+
+  \inferrule
+  {\ltyping{1}{t}{(g : \Ctx) \STo T}}
+  {\ltyequiv{1}{t}{\Lambda g. (t[p(\id)])~\$~g}{(g : \Ctx) \STo T}}
+\end{mathpar}
+In the rules above, we specify the congruence for meta-abstraction $\Lambda$ and the
+meta-application. %
+Moreover, they also have $\beta$ and $\eta$ rules in the expected ways.
+
+We also have a equivalence judgment for local substitutions
+\[
+  \ltyequiv 1 \delta{\delta'} \Delta
+\]
+The only rules are the congruence rules determined by all possible constructors. %
+Both equivalence judgments for terms and local substitutions must be mutually
+defined. %
+
+Note that there is no need to define the equivalence for global substitutions. %
+Effectively, the equivalence for global substitutions is defined as the equality. %
+This is because all terms stored in a global substitution are at layer $0$, and thus
+they do not have meaningful dynamics. %
+Therefore, equivalent global substitutions must also be equal. %
+
+We first establish the presupposition lemma for equivalence:
+\begin{lemma}[Presupposition] $ $
+  \begin{itemize}
+  \item If $\ltyequiv 1 t {t'} T$, then $\ltyping 1 t T$ and $\ltyping 1 {t'} T$.
+  \item If $\ltyequiv 1 \delta {\delta'} \Delta$, then $\ltyping 1 \delta \Delta$ and $\ltyping 1 {\delta'} \Delta$.
+  \end{itemize}
+\end{lemma}
+\begin{proof}
+  We perform a mutual induction. %
+  For the $\beta$ and $\eta$ rules, we apply substitution lemmas proved in the
+  previous section. 
+\end{proof}
+
+\begin{lemma}[Local Weakenings] $ $
+  \begin{itemize}
+  \item If $\ltyequiv[\Psi][\Delta] 1 t{t'} T$ and $\tau : \Psi; \Gamma \To_1 \Delta$,
+    then $\ltyequiv 1 {t[\tau]}{t'[\tau]} T$.
+  \item If $\ltyequiv[\Psi][\Delta] 1 \delta{\delta'} \Delta'$ and
+    $\tau : \Psi; \Gamma \To_1 \Delta$, then
+    $\ltyequiv 1 {\delta[\tau]}{\delta'[\tau]} \Delta'$.
+  \end{itemize}
+\end{lemma}
+\begin{proof}
+  We follow the local weakening property for typing above. 
+\end{proof}
+
+A counterpart is w.r.t to global weakenings:
+\begin{lemma}[Global Weakenings] $ $
+  \begin{itemize}
+  \item If $\ltyequiv[\Phi] 1 t{t'} T$ and $\gamma : \Psi \To_g \Phi$,
+    then $\ltyequiv[\Psi][\Gamma[\gamma]] 1 {t[\gamma]}{t'[\gamma]}{T[\gamma]}$.
+  \item If $\ltyequiv[\Phi] 1 \delta{\delta'} \Delta$ and $\gamma : \Psi \To_g \Phi$,
+    then $\ltyequiv[\Psi][\Gamma[\gamma]] 1 {\delta[\gamma]}{\delta'[\gamma]}{\Delta[\gamma]}$.
+  \end{itemize}
+\end{lemma}
+\begin{proof}
+  Similarly, we follow the global weakening property for typing above. 
+\end{proof}
+
+\begin{lemma}[Congruence of Local Substitutions] $ $
+  \begin{itemize}
+  \item If $\ltyping 1 t T$ and $\ltyequiv[\Psi][\Delta] 1 \delta{\delta'} \Gamma$, then
+    $\ltyequiv[\Psi][\Delta] 1{t[\delta]}{t[\delta']} T$. 
+  \item If $\ltyping 1 {\delta} {\Delta'}$ and
+    $\ltyequiv[\Psi][\Delta] 1 {\delta'}{\delta''} \Gamma$, then
+    $\ltyequiv[\Psi][\Delta] 1{\delta \circ \delta'}{\delta \circ \delta''}
+    {\Delta'}$.
+  \end{itemize}
+\end{lemma}
+\begin{proof}
+  We do a mutual induction on $\ltyping 1 t T$ and $\ltyping 1 {\delta} {\Delta'}$. %
+  We only consider a few interesting cases.
+  \begin{itemize}[label=Case]
+  \item
+    \begin{mathpar}
+      \inferrule
+      {\ltyping 1 {s}{\cont[\Delta'] T} \\
+        \ljudge[\Psi] 1{T'} \\
+        \ltyping[\Psi, u : (\judge[\Delta'] T)][\Gamma[p(\id)]] 1 {t}{T'[p(\id)]}}
+      {\ltyping 1 {\letbox u s t} T'}
+    \end{mathpar}
+    In this case, we must use the global weakening lemma above to derive
+    \[
+      \ltyequiv[\Psi][\Delta[p(\id)]] 1 {\delta[p(\id)]}{\delta'[p(\id)]}{\Gamma[p(\id)]}
+    \]
+    and then we apply IH.
+    
+  \item
+    For all base cases of local substitutions, we realize that given
+    $\ltyequiv[\Psi][\Delta] 1 \delta{\delta'} \Gamma$,
+    we have
+    \begin{itemize}
+    \item $\widecheck{\delta} = \widecheck{\delta'}$, and
+    \item $\widehat\delta = \widehat{\delta'}$.
+    \end{itemize}
+    because they characterize $\Delta$, so the exact $\delta$ and $\delta'$ are
+    irrelevant. 
+    
+    The target goal follows immediate. 
+    
+  \end{itemize}
+\end{proof}
+
+\begin{lemma}[Local Substitutions] $ $
+  \begin{itemize}
+  \item If $\ltyequiv 1 t {t'} T$ and $\ltyequiv[\Psi][\Delta] 1 \delta{\delta'} \Gamma$, then
+    $\ltyequiv[\Psi][\Delta] 1{t[\delta]}{t'[\delta']} T$. 
+  \item If $\ltyequiv 1 {\delta''} {\delta'''} {\Delta'}$ and
+    $\ltyequiv[\Psi][\Delta] 1 \delta{\delta'} \Gamma$, then
+    $\ltyequiv[\Psi][\Delta] 1{\delta'' \circ \delta}{\delta''' \circ \delta'}
+    {\Delta'}$.
+  \end{itemize}
+\end{lemma}
+\begin{proof}
+  We proceed by a mutual induction on $\ltyequiv 1 t {t'} T$ and
+  $\ltyequiv 1 {\delta''} {\delta'''} {\Delta'}$. %
+  We only look into the $\beta$ and $\eta$ rule for meta-functions, because we cannot
+  apply IH:
+  \begin{itemize}[label=Case]
+  \item
+    \begin{mathpar}
+      \inferrule
+      {\ljudge[\Psi] 1 \Gamma \\ \ltyping[\Psi, g: \Ctx][\Gamma[p(\id)]] 1 t T \\ \ljudge[\Psi] 0 \Delta'}
+      {\ltyequiv{1}{(\Lambda g. t)~\$~\Delta'}{t[\id_{\Psi}, \Delta'/g]}{T[\id_{\Psi}, \Delta'/g]}}
+    \end{mathpar}
+    \begin{align*}
+      & \ltyequiv[\Psi, g: \Ctx][\Delta[p(\id)]] 1
+        {t[\delta[p(\id)]]}{t[\delta'[p(\id)]]} T
+        \tag{by local substitution lemma} \\
+      & \ltyequiv[\Psi][\Delta]{1}{(\Lambda g. (t[\delta[p(\id)]]))~\$~\Delta'}{t[\delta'[p(\id)]][\id_{\Psi}, \Delta'/g]}{T[\id_{\Psi}, \Delta'/g]}
+    \end{align*}
+    Now we have to align up the right hand side. %
+    The target right hand side is
+    \[
+      t[\id_{\Psi}, \Delta'/g][\delta']
+    \]
+    We reason as follows
+    \begin{align*}
+      t[\delta'[p(\id)]][\id_{\Psi}, \Delta'/g]
+      &= t[\id_{\Psi}, \Delta'/g][\delta'[p(\id)][\id_{\Psi}, \Delta'/g]]
+        \tag{by distributivity of global substitutions} \\
+      &= t[\id_{\Psi}, \Delta'/g][\delta']
+        \tag{by \Cref{lem:cvar:gsubst-skip}}
+    \end{align*}
+    and we have the target goal. 
+  \item
+    \begin{mathpar}
+      \inferrule
+      {\ltyping{1}{t}{(g : \Ctx) \STo T}}
+      {\ltyequiv{1}{t}{\Lambda g. (t[p(\id)])~\$~g}{(g : \Ctx) \STo T}}
+    \end{mathpar}
+    We apply the local weakening lemma:
+    \begin{align*}
+      & \ltyequiv[\Psi][\Delta] 1 {t[\delta]}{t[\delta']} T 
+    \end{align*}
+    On the right hand side, we have
+    \begin{align*}
+      \Lambda g. (t[p(\id)])~\$~g[\delta']
+      & = \Lambda g. (t[p(\id)][\delta'[p(\id)]])~\$~g \\
+      & = \Lambda g. (t[\delta'][p(\id)])~\$~g
+        \tag{by algebraic rule}
+    \end{align*}
+    
+  \end{itemize}
+\end{proof}
+
+Next, we consider the global substitution lemma:
+\begin{lemma}[Global Substitutions] $ $
+  \begin{itemize}
+  \item If $\ltyequiv 1 t {t'} T$ and $\typing[\Phi]\sigma\Psi$, then
+    $\ltyequiv[\Phi][\Gamma[\sigma]] 1{t[\sigma]}{t'[\sigma]}{T[\sigma]}$. 
+  \item If $\ltyequiv 1{\delta} {\delta'}{\Delta}$ and $\typing[\Phi]\sigma\Psi$, then
+    $\ltyequiv[\Phi][\Gamma[\sigma]] 1{\delta[\sigma]}{\delta'[\sigma]}{\Delta[\sigma]}$. 
+  \end{itemize}
+\end{lemma}
+\begin{proof}
+  As we have noted above, there is no need for an equivalence judgment between two
+  global substitutions. %
+  Therefore we directly apply the same $\sigma$ on both sides. %
+  Let us consider the $\beta$ and $\eta$ rules for meta-functions:
+  \begin{itemize}[label=Case]
+  \item
+    \begin{mathpar}
+      \inferrule
+      {\ljudge[\Psi] 1 \Gamma \\ \ltyping[\Psi, g: \Ctx][\Gamma[p(\id)]] 1 t T \\ \ljudge[\Psi] 0 \Delta'}
+      {\ltyequiv{1}{(\Lambda g. t)~\$~\Delta'}{t[\id_{\Psi}, \Delta'/g]}{T[\id_{\Psi}, \Delta'/g]}}
+    \end{mathpar}
+    \begin{align*}
+      & \typing[\Phi, g : \Ctx]{\sigma[p(\id)], g/g}{\Psi, g : \Ctx} \\
+      & \ltyping[\Phi, g: \Ctx][\Gamma[p(\id)][\sigma[p(\id)], g/g]] 1
+        {t[\sigma[p(\id)], g/g]}{T[\sigma[p(\id)], g/g]}
+        \tag{by global substitution lemma} \\
+      & \ltyping[\Phi, g: \Ctx][\Gamma[\sigma][p(\id)]] 1
+        {t[\sigma[p(\id)], g/g]}{T[\sigma[p(\id)], g/g]} \\
+      &  \ljudge[\Phi] 0 {\Delta'[\sigma]}\\
+      & \ltyequiv[\Phi][\Gamma[\sigma]]{1}{(\Lambda g. (t[\sigma[p(\id)], g/g]))~\$~(\Delta'[\sigma])}{t[\sigma[p(\id)], g/g][\id_{\Psi}, \Delta'[\sigma]/g]}{T[\sigma[p(\id)], g/g][\id_{\Psi}, \Delta'[\sigma]/g]}
+    \end{align*}
+    We now reason a few equations:
+    \begin{align*}
+      (\Lambda g. (t[\sigma[p(\id)], g/g]))~\$~(\Delta'[\sigma])
+      = (\Lambda g. t)~\$~\Delta' [\sigma]
+    \end{align*}
+    and
+    \begin{align*}
+      t[\sigma[p(\id)], g/g][\id_{\Psi}, \Delta'[\sigma]/g]
+      & = t[(\sigma[p(\id)], g/g) \circ (\id_{\Psi}, \Delta'[\sigma]/g)]  \\
+      & = t[\sigma[p(\id)] \circ (\id_{\Psi}, \Delta'[\sigma]/g), \Delta'[\sigma]/g]  \\
+      & = t[\sigma \circ \id_{\Psi}, \Delta'[\sigma]/g]  \\
+      & = t[\id_{\Phi} \circ \sigma, \Delta'[\sigma]/g]  \\
+      & = t[\id_{\Phi}, \Delta'/g][\sigma] 
+    \end{align*}
+    Similarly, we have
+    \begin{align*}
+      T[\sigma[p(\id)], g/g][\id_{\Psi}, \Delta'[\sigma]/g]
+      = T[\id_{\Phi}, \Delta'/g][\sigma]
+    \end{align*}
+    This concludes the goal. 
+  \item
+    \begin{mathpar}
+      \inferrule
+      {\ltyping{1}{t}{(g : \Ctx) \STo T}}
+      {\ltyequiv{1}{t}{\Lambda g. (t[p(\id)])~\$~g}{(g : \Ctx) \STo T}}
+    \end{mathpar}
+    \begin{align*}
+      & \ltyping[\Phi][\Gamma[\sigma]]{1}{t[\sigma]}{(g : \Ctx) \STo T[\sigma]} \\
+      & \ltyping[\Phi][\Gamma[\sigma]]{1}{t[\sigma]}{(g : \Ctx) \STo (T[\sigma[p(\id)],g/g])} \\
+      & \ltyequiv[\Phi][\Gamma[\sigma]]{1}{t[\sigma]}{\Lambda g. t[\sigma][p(\id)]~\$~g}{(g : \Ctx) \STo (T[\sigma[p(\id)],g/g])} 
+    \end{align*}
+    We reason the right hand side
+    \begin{align*}
+      \Lambda g. (t[p(\id)])~\$~g[\sigma]
+      &= \Lambda g. (t[p(\id)][\sigma[p(\id)], g/g])~\$~g \\
+      &= \Lambda g. (t[\sigma[p(\id)]])~\$~g \\
+      &= \Lambda g. (t[\sigma][p(\id)])~\$~g
+    \end{align*}
+    and hence establish the goal.
+  \end{itemize}
+\end{proof}
+
+\subsection{Weak Head Reduction}
+
+To compute the decide whether two terms are equivalence based on the typing rules
+above, we take the approach of reducibility candidates. %
+This approach requires a reduction strategy, and then we use a type directed
+convertibility checking to determine whether two normal forms after reduction are
+equivalent. %
+In this approach, it is sufficient to have a term reduced to weak head normal forms,
+specified as below:
+\begin{alignat*}{2}
+  w &:= &&\ v \sep \ze \sep \su t \sep \boxit t \sep \lambda x. t \sep \Lambda g. t
+  \tag{Weak head normal form ($\Nf$)} \\
+  v &:= &&\ x \sep u^\delta \sep v\ t \sep \letbox u v t \sep v~\$~\Gamma \tag{Neutral form
+    ($\Ne$)}
+\end{alignat*}
+Basically the one-step weak head reduction simply takes the $\beta$ rules from the
+equivalence relations and adds head reduction:
+
+Head reductions:
+\begin{mathpar}
+  \inferrule*
+  {\ltyred{t}{t'}{S \func T} \\ \ltyping 1{s}{S}}
+  {\ltyred{t\ s}{t'\ s}{T}}
+
+  \inferrule*
+  {\ltyred {s}{s'}{\square T} \\ \ltyping[\Psi, u : T][\Gamma[p(\id)]] 1 {t}{T'[p(\id)]}}
+  {\ltyred {\letbox u s t}{\letbox u{s'}{t}}{T'}}
+
+  \inferrule*
+  {\ltyred{t}{t'}{(g : \Ctx) \STo T} \\ \ljudge[\Psi] 0 \Delta}
+  {\ltyred{t~\$~\Delta}{t'~\$~\Delta}{T[\id_{\Psi}, \Delta/g]}}
+\end{mathpar}
+
+$\beta$ reductions:
+\begin{mathpar}
+  \inferrule*
+  {\ltyping[\Psi][\Gamma, x : S] 1 t T \\ \ltyping 1 s S}
+  {\ltyred{(\lambda x. t)\ s}{t[\id_{\Gamma}, s/x]}{T}}
+
+  \inferrule*
+  {\ljudge[\Psi] 1 \Gamma \\ \ltyping[\Psi, g: \Ctx][\Gamma[p(\id)]] 1 t T \\ \ljudge[\Psi] 0 \Delta}
+  {\ltyred{(\Lambda g. t)~\$~\Delta}{t[\id_{\Psi}, \Delta/g]}{T[\id_{\Psi}, \Delta/g]}}
+
+  \inferrule*
+  {\ltyping[\Psi][\cdot] 0 s T \\ \ljudge 1 \Gamma \\ \ljudge 1 T' \\ \ltyping[\Psi, u : T][\Gamma[p(\id)]] 1 {t}{T'[p(\id)]}}
+  {\ltyred{\letbox u {\boxit s} t}{t[\id_{\Psi}, s/u]}{T'}}
+\end{mathpar}
+
+Notice that weak head reduction only occurs at layer $1$, so we do not need to rewrite
+down the layer explicitly. %
+This is because $\beta$ reduction only occurs at layer $1$ and all terms at layer $0$
+are identified by their exact syntactic structure. %
+We define the reflexive transitive closure $\ltyreds t{t'} T$ of weak head reduction
+in the usual way. %
+In an implementation, we would repeatedly do one-step weak head reduction, until it
+reaches a normal form. %
+To compare two terms of the same type, we would first compute the weak head normal
+forms of both sides, and then based on their type, we perform a type-directed
+convertibility check. %
+This check also performs $\eta$ expansion when necessary, so the resulting algorithm
+is complete w.r.t. the equivalence relation. %
+
+Notice that the weak head reduction relation is a subrelation of the equivalence
+above. %
+Therefore, several theorems are simply carried over. %
+We omit the proofs and only state the theorems below:
+\begin{lemma}[Local Weakenings]
+  If $\ltyred[\Psi][\Delta] t{t'} T$ and $\tau : \Psi; \Gamma \To_1 \Delta$,
+    then $\ltyred {t[\tau]}{t'[\tau]} T$.
+\end{lemma}
+
+\begin{lemma}[Global Weakenings]
+  If $\ltyred[\Phi] t{t'} T$ and $\gamma : \Psi \To_g \Phi$,
+  then $\ltyred[\Psi][\Gamma[\gamma]] {t[\gamma]}{t'[\gamma]}{T[\gamma]}$.
+\end{lemma}
+
+\begin{theorem}[Preservation]
+  If $\ltyred t {t'} T$, then $\ltyping 1 t T$ and $\ltyping 1 {t'} T$. 
+\end{theorem}
+
+
+\begin{lemma}[Local Substitutions]
+  If $\ltyred t {t'} T$ and $\ltyping[\Psi][\Delta] 1 \delta \Gamma$, then
+  $\ltyred[\Psi][\Delta] {t[\delta]}{t'[\delta]} T$. 
+\end{lemma}
+\begin{lemma}[Globale Substitutions]
+  If $\ltyred t {t'} T$ and $\typing[\Phi]\sigma\Psi$, then
+    $\ltyred[\Phi][\Gamma[\sigma]]{t[\sigma]}{t'[\sigma]}{T[\sigma]}$. 
+\end{lemma}
+\begin{lemma}[Uniqueness]
+  If $\ltyred t {t'} T$ and $\ltyred t {t''} T$, then $t' = t''$. 
+\end{lemma}
+\begin{proof}
+  Induction on $\ltyred t {t'} T$ and analyze $\ltyred t {t''} T$. 
+\end{proof}
+
+
+These conclusions can be generalized to its reflexive transitive closure. 
+
+In the next section, we will first look into the logical relations which establish
+normalization property, and then we show that this checking strategy indeed is
+complete.
