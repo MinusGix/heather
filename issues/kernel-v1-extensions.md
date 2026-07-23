@@ -54,6 +54,21 @@ to go through — η at a negative type is standard — but it is the concrete
 form the "could bite" worry takes now, and worth checking before adding
 sums (whose eliminator is *positive*, a different LR shape again).
 
+Sums (as landed) are that different shape, and the *first positive*
+eliminator among the extensions (Nat aside): the LR at `□(Δ ⊢ A + B @ l)` is
+not η/projection-based like Σ but must instead be closed under the two
+injections and `case`'s commuting conversions — the fundamental theorem's
+`case` arm has to reduce a `case` on each canonical `inl`/`inr` and stay
+neutral on a neutral scrutinee, with `tm_inl`/`tm_inr`/`tm_case` joining the
+recursor's constructor/neutral cases. Concretely distinct from the Σ worry
+(positive vs. negative), so it wants its own line in the ch. 07 check rather
+than folding under surjective pairing; still expected to go through (positive
+elimination is standard MLTT), but it is a separate obligation. The widest
+telescope (`tm_case`: 3 univs, 7 globals, 6 recursive calls) is also the
+most error-prone transcription — cross-checked in-kernel three ways
+(identity-recursor typing, const-motive recursor, direct `tm_case` β test),
+but that is decidability/soundness of *checking*, not the LR itself.
+
 **Not a blocker for [[end-to-end-compile-instance]]:** universe
 polymorphism makes Leibniz equality (`Eq A x y := Π(P : A → Ty l'). P x →
 P y`) definable in the *current* grammar — transport free, sym/trans/cong

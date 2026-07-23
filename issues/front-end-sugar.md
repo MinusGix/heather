@@ -33,6 +33,17 @@ elaborator will be checked against.
   is what makes `let (a, b) = p` transparent. The IR nodes that "carry more
   than one field" — the original concrete motivation for Σ in the issue —
   want exactly this.
+- **Sum sugar (positive counterpart of Σ).** Surface `A + B` desugars to
+  `Sum`; `inl e` / `inr e` to the annotated intros (both summands + levels
+  synthesized from the expected type); a `match e { inl x => … | inr y => … }`
+  to the fully-annotated `case` (9 fields: `l,l',l''`, `A`, `B`, the motive
+  `z. M`, both branch bodies, the scrutinee). Because sums are *positive*
+  (no η, unlike Σ), the motive `M` is not recoverable by projection and must
+  come from the checking type — so `match` is only inferable when its result
+  type is known (checking position) or annotated; this is the concrete place
+  the elaborator meets the checking-descent constraint below. Enums /
+  tagged-union IR nodes (the original motivation for sums) are nested
+  `A + (B + (C + …))` with named constructors mapping to injection chains.
 - **Levels.** `⊔`/`ω`/level variables are checker-internal; surface syntax
   needs level inference or a polymorphism-by-default story so users do not
   write `ΠΠ ℓ⃗`.
@@ -59,3 +70,7 @@ elaborator will be checked against.
 - 2026-07-23: Opened as a mental-development tracker once Σ landed and made
   the multi-field-IR motivation concrete. No elaborator yet; this collects
   requirements as formers accrue.
+- 2026-07-23: Sums landed ([[kernel-v1-extensions]]); added the `A + B` /
+  `inl`/`inr` / `match` sugar requirement. Note the positive/negative split:
+  Σ's motive is recoverable by projection (η), a sum's is not — `match` needs
+  its result type from context, sharpening the checking-descent constraint.
