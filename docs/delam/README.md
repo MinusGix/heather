@@ -33,6 +33,26 @@ second pass is the system we implement**:
   Implementation-relevant only for the statement shapes (e.g. neutral
   convertibility is an *inference* step returning a type).
 
+## Errata (found while implementing)
+
+Apparent typos in the tex, cross-checked against the ch. 04 typing rules;
+the kernel deliberately deviates (also noted in `crates/kernel/src/conv.rs`
+module docs):
+
+- **06, neutral `elim^Trm` conclusions** (both the neutral-scrutinee and
+  boxed-global-variable rules, and the goal display above them): the level
+  is written `l₁` but must be `l₂` (the term-motive level) — the ch. 04
+  typing rule for `elim^Trm` concludes at `l₂`. The same rules also write
+  `elim^Typ` on their right-hand sides where `elim^Trm` is meant.
+- **04, `t_app` branch type**: the `U_T` index substitution is written
+  `U_T^{id_g, u_t^{id_g}/x}` but must substitute the *argument* code
+  `u_s^{id_g}` for `x` — `x : U_S` and `u_t` is the function. (The boxed
+  `app(…)` in the same rule applies `u_t` to `u_s`, correctly.)
+- **06, Π convertibility rules** (types and term-encodings) bind the same
+  level metavariables on both sides where every comparable rule (`Ty`,
+  `ΠΠ`, `⇒`, application) has explicit `l ≈ l'` premises; annotation levels
+  are compared up to `≈` like everywhere else.
+
 Kernel-facing summary of the layer structure (ch. 04, Table feat):
 
 | layer | language | computes | meta-programming | layer of types |

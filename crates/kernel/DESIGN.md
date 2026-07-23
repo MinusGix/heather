@@ -48,6 +48,21 @@ inductive types beyond Nat, the type lifter (omitted by the paper too).
   `□(u^δ)`; neutral comparison is an inference step that returns a type.
 - **Level equivalence**: normalize to `adjust(count(l))` maps and compare;
   `ω` compares only to itself.
+- **Conversion presupposes well-typed inputs.** The algorithm is only
+  sound/complete on well-typed terms (ch. 08); on garbage it may return a
+  meaningless `NotConvertible`, burn fuel, or panic in substitution's
+  scope-invariant assertions. It therefore skips premises that
+  well-typedness makes redundant (e.g. it does not re-check that an
+  `elim_Nat` scrutinee's inferred type is `Nat`). The type checker must
+  call it only on already-checked inputs — this is a kernel trust-boundary
+  invariant, not a robustness bug.
+- **Conversion's judgment-level inputs are inert.** Every universe level
+  the ch. 06 rules actually compare is an *annotation* on the terms (or
+  inferred from a binding); the `l` in `T ≈ T' : l` never branches the
+  algorithm. It is threaded anyway so the functions match the paper's
+  judgments. Fuel is a single shared budget (reduction steps + comparison
+  nodes); the fuel *policy* is the caller's, to be fixed by the type
+  checker.
 - **Type checking** is syntax-directed on fully explicit core terms — the
   kernel does no inference, no implicit insertion, no elaboration. The
   conversion rule fires exactly where the bidirectional structure demands a
