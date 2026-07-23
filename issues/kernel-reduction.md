@@ -23,3 +23,7 @@ form, per ch. 06:
 
 Determinacy is a good cheap test: reduce with a fuel bound and check the
 WHNF is stable; golden tests for each β-rule shape.
+
+## Log
+
+- 2026-07-22: Ready to start: substitutions landed (d4a81e2). Implementation pointers: beta for app/elimN via LocalSubst::id(ctx).extended(arg); letbox beta via GlobalSubst::single; recursor branch beta needs multi-entry GlobalSubst matching the branch telescopes (entries outermost-first, see Branches docs in term.rs) plus universe subst for the branch's level vars. Blocking behavior: recursors stuck on neutral scrutinees AND box(U^delta)/box(u^delta). Run tests only via scripts/test.
