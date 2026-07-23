@@ -6,6 +6,7 @@
 //! Nothing outside this crate is trusted. The compiler, elaborator, and any
 //! code-analysis functions produce terms/proofs that this crate re-checks.
 
+mod fmt;
 pub mod layer;
 pub mod level;
 pub mod subst;

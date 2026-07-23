@@ -29,7 +29,7 @@ pub struct LocalVar(pub u32);
 pub struct GlobalVar(pub u32);
 
 /// Types `S, T` (sort `Typ`).
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub enum Type {
     /// `Nat`.
     Nat,
@@ -76,7 +76,7 @@ pub enum Type {
 }
 
 /// Terms `s, t` (sort `Exp`).
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub enum Term {
     /// Local variable `x`.
     Var(LocalVar),
@@ -221,7 +221,7 @@ pub enum Term {
 /// - `tm_motive` = `(ℓ, g, U_T, x_t. M_Trm)`: under 1 universe variable, 2
 ///   global variables (`g : Ctx`, `U_T : Typ_p(g, ℓ)`), and 1 local variable
 ///   `x_t : □(g ⊢ U_T^id @ ℓ)`.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct Motives {
     pub ty_motive: Rc<Type>,
     pub tm_motive: Rc<Type>,
@@ -234,7 +234,7 @@ pub struct Motives {
 /// global variables (`g`, `U_…`, `u_…`) extend Ψ innermost-last in the order
 /// written in the paper, and recursive-call variables (`x_…`) extend Γ in the
 /// order written. The comment on each field lists that telescope.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct Branches {
     // -- branches for code of types (b_Typ) --
     /// `(g. t_Nat)` — globals: g.
@@ -300,13 +300,13 @@ pub enum CtxBase {
 ///
 /// `entries[0]` is the *outermost* binding; [`LocalVar`] 0 refers to the
 /// last entry. Each entry's type is scoped over the entries before it.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct LocalCtx {
     pub base: CtxBase,
     pub entries: Vec<CtxEntry>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct CtxEntry {
     pub ty: Rc<Type>,
     pub level: Level,
@@ -317,7 +317,7 @@ pub struct CtxEntry {
 /// The tail is the paper's `·^k_{g?}` / `wk^k_g`; `terms[0]` substitutes the
 /// *outermost* entry of the target context Δ. The query operations δ̂ and δ̌
 /// (used by composition) read the tail's length and base.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct LocalSubst {
     pub tail: SubstTail,
     pub terms: Vec<Rc<Term>>,

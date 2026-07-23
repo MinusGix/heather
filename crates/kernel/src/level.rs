@@ -19,7 +19,7 @@ use std::rc::Rc;
 pub struct UnivVar(pub u32);
 
 /// Universe levels `l := ℓ | 0 | 1 + l | l ⊔ l' | ω`.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub enum Level {
     Var(UnivVar),
     Zero,
