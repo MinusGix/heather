@@ -139,6 +139,24 @@ impl Level {
         }
     }
 
+    /// Instantiate the innermost `phi.len()` universe variables under
+    /// `depth` binders (the universe mirror of [`crate::subst::GlobalSubst`]'s
+    /// instantiation form): variable `depth + i` for `i < phi.len()` maps to
+    /// `phi[i]` shifted by `depth`; variables beyond map down by `phi.len()`
+    /// (the instantiated binders are consumed).
+    pub fn inst_at(&self, phi: &[Level], depth: u32) -> Level {
+        let n = phi.len() as u32;
+        match self {
+            Level::Var(v) if v.0 < depth => Level::Var(*v),
+            Level::Var(v) if v.0 - depth < n => phi[(v.0 - depth) as usize].shift(depth, 0),
+            Level::Var(v) => Level::Var(UnivVar(v.0 - n)),
+            Level::Zero => Level::Zero,
+            Level::Succ(l) => Level::succ(l.inst_at(phi, depth)),
+            Level::Max(a, b) => Level::max(a.inst_at(phi, depth), b.inst_at(phi, depth)),
+            Level::Omega => Level::Omega,
+        }
+    }
+
     /// Weakening: add `by` to every variable at or above `cutoff`.
     pub fn shift(&self, by: u32, cutoff: u32) -> Level {
         match self {

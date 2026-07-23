@@ -9,5 +9,6 @@
 mod fmt;
 pub mod layer;
 pub mod level;
+pub mod reduce;
 pub mod subst;
 pub mod term;

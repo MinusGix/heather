@@ -477,6 +477,23 @@ impl Mapper for SubstUniv<'_> {
     }
 }
 
+/// Universe instantiation: substitute the innermost `phi.len()` universe
+/// variables and renumber the rest down — the universe mirror of
+/// [`GlobalSubst`]'s instantiation form. Used by the β-rules for `Λ ℓ⃗` and
+/// for the recursor branch telescopes. `phi[0]` is the payload for the
+/// *innermost* variable.
+struct InstUniv<'a> {
+    phi: &'a [Level],
+}
+
+impl Mapper for InstUniv<'_> {
+    const LOCAL_OP: bool = false;
+
+    fn level(&mut self, l: &Level, at: Depths) -> Level {
+        l.inst_at(self.phi, at.univ)
+    }
+}
+
 /// Local substitution `δ`, applied from depth zero; lifting under binders is
 /// depth-based (payloads are shifted in all three namespaces at insertion).
 struct SubstLocal<'a> {
@@ -670,6 +687,12 @@ macro_rules! ops {
             /// Apply a universe substitution `φ`.
             pub fn apply_univ(&self, phi: &[Level]) -> $ty {
                 $map(self, &mut SubstUniv { phi }, Depths::default())
+            }
+
+            /// Instantiate the innermost `phi.len()` universe variables
+            /// (`phi[0]` innermost), renumbering deeper variables down.
+            pub fn inst_univ(&self, phi: &[Level]) -> $ty {
+                $map(self, &mut InstUniv { phi }, Depths::default())
             }
 
             /// Apply a local substitution `δ` (`self` scoped in δ's target).
