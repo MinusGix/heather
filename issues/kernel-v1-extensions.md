@@ -36,13 +36,23 @@ Candidate v1 set (order roughly = implementation order):
    degenerate cases).
 5. W-types: deferred until something concretely wants them.
 
-**Earmarked metatheory check (for the formalization): Id at □ types.**
+**Earmarked metatheory check (for the formalization): Id/Σ at □ types.**
 Ch. 06 checks `box t ≈ box t'` by converting the insides (~l. 527/535),
 while the code recursor is intensional (stuck only on neutrals / boxed
 globals). Adding Id makes code conversion *propositionally observable* at
 `□(Δ ⊢ T)`; the recursor cases of the ch. 07 logical relations are where
 this could bite. Nothing is expected to break, but this is the one
 non-mechanical spot.
+
+Σ (as landed) sharpens the same spot in two ways: (i) η-for-pairs is a
+*definitional* equation the logical relations must respect at Σ-typed code —
+the LR at `□(Δ ⊢ Σ … @ l)` has to be closed under surjective pairing, not
+just structural on `pair`; and (ii) `fst`/`snd` are new neutral heads, so
+the recursor's neutral cases (and the `tm_fst`/`tm_snd` β-branches) join
+`elim_Nat`/`J` as things the fundamental theorem must cover. Still expected
+to go through — η at a negative type is standard — but it is the concrete
+form the "could bite" worry takes now, and worth checking before adding
+sums (whose eliminator is *positive*, a different LR shape again).
 
 **Not a blocker for [[end-to-end-compile-instance]]:** universe
 polymorphism makes Leibniz equality (`Eq A x y := Π(P : A → Ty l'). P x →

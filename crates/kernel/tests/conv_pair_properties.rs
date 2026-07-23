@@ -18,6 +18,11 @@
 //!    a β-wrapped branch stays convertible while a bumped or swapped branch
 //!    does not — `rec_ca`'s pairwise C_A comparison with genuinely
 //!    differing sides, which β-firing recursors never reach.
+//! 6. the **Σ algebraic laws** over generated well-typed pairs: β
+//!    (`fst (pair a b) ≈ a`, `snd … ≈ b`) and η — a neutral `p ≈ (fst p,
+//!    snd p)` definitionally — while two *distinct* neutral inhabitants of
+//!    the same Σ stay `NotConvertible`, so η is surjective-pairing, not
+//!    blind acceptance.
 //!
 //! Failures report seeds only; never Debug-format terms here.
 
@@ -27,13 +32,13 @@ use std::rc::Rc;
 
 use common::wt::{
     gen_encoding, gen_nat_rec, gen_wt_ctx, gen_wt_env, gen_wt_term, gen_wt_term_at,
-    perturb_conv, FUEL,
+    gen_wt_type, perturb_conv, FUEL,
 };
 use common::Rng;
 use heather_kernel::conv::{conv_term, conv_type, ConvError};
 use heather_kernel::layer::Layer;
 use heather_kernel::level::Level;
-use heather_kernel::term::{Term, Type};
+use heather_kernel::term::{LocalSubst, LocalVar, Term, Type};
 use heather_kernel::typing::check_term;
 
 const CASES: u64 = 300;
@@ -301,5 +306,151 @@ fn neutral_recursor_compares_branches() {
         sw.swap(j, k);
         let ts = nr.build(&sw);
         assert_eq!(conv(&t, &ts), Err(NC), "seed {seed}: swapped branches {j},{k}");
+    }
+}
+
+/// β for the projections: `fst (pair a b) ≈ a`, `snd (pair a b) ≈ b`, over
+/// generated well-typed (possibly dependent) Σ inhabitants.
+#[test]
+fn sigma_projection_beta_laws() {
+    let mut ran = 0u64;
+    for seed in 0..CASES {
+        let mut r = Rng::new(seed ^ 0x27d4eb2f165667c5);
+        let env = gen_wt_env(&mut r);
+        let (fst_ty, fl) = gen_wt_type(&env, &mut r, BUDGET / 2);
+        let Some(a) = gen_wt_term_at(&env, &mut r, BUDGET / 2, &fst_ty, &fl) else { continue };
+        let e = env.push_entry(Rc::clone(&fst_ty), fl.clone());
+        let (snd_ty, sl) = gen_wt_type(&e, &mut r, BUDGET / 2);
+        // b : T[a/x].
+        let snd_at = snd_ty.apply_local(&LocalSubst::id(&env.gamma).extended(Rc::clone(&a)));
+        let Some(b) = gen_wt_term_at(&env, &mut r, BUDGET / 2, &snd_at, &sl) else { continue };
+        let sig = Type::Sigma {
+            fst_level: fl.clone(),
+            snd_level: sl.clone(),
+            fst: Rc::clone(&fst_ty),
+            snd: Rc::clone(&snd_ty),
+        };
+        let pair = rt(Term::Pair {
+            fst_level: fl.clone(),
+            snd_level: sl.clone(),
+            fst_ty: Rc::clone(&fst_ty),
+            snd_ty: Rc::clone(&snd_ty),
+            fst: Rc::clone(&a),
+            snd: Rc::clone(&b),
+        });
+        let lmax = Level::max(fl.clone(), sl.clone());
+        // Sanity: the constructed pair is genuinely well-typed at Σ.
+        let ck = check_term(&env.psi, env.univs, env.layer, &env.gamma, &pair, &sig, &lmax, FUEL);
+        assert!(ck.is_ok(), "seed {seed}: generated pair ill-typed: {ck:?}");
+        let fst = Term::Fst {
+            fst_level: fl.clone(),
+            snd_level: sl.clone(),
+            fst_ty: Rc::clone(&fst_ty),
+            snd_ty: Rc::clone(&snd_ty),
+            pair: Rc::clone(&pair),
+        };
+        let snd = Term::Snd {
+            fst_level: fl.clone(),
+            snd_level: sl.clone(),
+            fst_ty: Rc::clone(&fst_ty),
+            snd_ty: Rc::clone(&snd_ty),
+            pair: Rc::clone(&pair),
+        };
+        let at = env.layer.type_layer();
+        // fst (pair a b) ≈ a : S, both orientations.
+        assert!(
+            conv_term(&env.psi, &env.gamma, at, &fst, &a, &fst_ty, &fl, FUEL).is_ok(),
+            "seed {seed}: fst (pair a b) ≉ a"
+        );
+        assert!(
+            conv_term(&env.psi, &env.gamma, at, &a, &fst, &fst_ty, &fl, FUEL).is_ok(),
+            "seed {seed}: a ≉ fst (pair a b)"
+        );
+        // snd (pair a b) ≈ b : T[a/x], both orientations.
+        assert!(
+            conv_term(&env.psi, &env.gamma, at, &snd, &b, &snd_at, &sl, FUEL).is_ok(),
+            "seed {seed}: snd (pair a b) ≉ b"
+        );
+        assert!(
+            conv_term(&env.psi, &env.gamma, at, &b, &snd, &snd_at, &sl, FUEL).is_ok(),
+            "seed {seed}: b ≉ snd (pair a b)"
+        );
+        ran += 1;
+    }
+    assert!(ran > 0, "no inhabited Σ was generated across {CASES} seeds");
+}
+
+/// η for pairs: a neutral `p ≈ (fst p, snd p)` definitionally, over generated
+/// Σ types — and the sharpening negative that two *distinct* neutral
+/// inhabitants of the same Σ are not convertible (η is not blind).
+#[test]
+fn sigma_eta_and_neutral_distinctness() {
+    for seed in 0..CASES {
+        let mut r = Rng::new(seed ^ 0x94d049bb133111eb);
+        let env = gen_wt_env(&mut r);
+        // A well-formed Σ type (always constructible — no inhabitant needed).
+        let (fst_ty, fl) = gen_wt_type(&env, &mut r, BUDGET / 2);
+        let e = env.push_entry(Rc::clone(&fst_ty), fl.clone());
+        let (snd_ty, sl) = gen_wt_type(&e, &mut r, BUDGET / 2);
+        let lmax = Level::max(fl.clone(), sl.clone());
+        let sig = Type::Sigma {
+            fst_level: fl.clone(),
+            snd_level: sl.clone(),
+            fst: Rc::clone(&fst_ty),
+            snd: Rc::clone(&snd_ty),
+        };
+        // Two Γ-variables of the *same* Σ type: after two pushes, both
+        // Var(0) and Var(1) have type sig↑².
+        let e1 = env.push_entry(rty(sig.clone()), lmax.clone());
+        let e2 = e1.push_entry(rty(sig.shift_local(1)), lmax.clone());
+        let sig2 = sig.shift_local(2);
+        let Type::Sigma { fst_level, snd_level, fst, snd } = &sig2 else {
+            unreachable!("shift preserves the Σ head")
+        };
+        let proj = |first: bool, idx: u32| {
+            let pair = rt(Term::Var(LocalVar(idx)));
+            if first {
+                Term::Fst {
+                    fst_level: fst_level.clone(),
+                    snd_level: snd_level.clone(),
+                    fst_ty: Rc::clone(fst),
+                    snd_ty: Rc::clone(snd),
+                    pair,
+                }
+            } else {
+                Term::Snd {
+                    fst_level: fst_level.clone(),
+                    snd_level: snd_level.clone(),
+                    fst_ty: Rc::clone(fst),
+                    snd_ty: Rc::clone(snd),
+                    pair,
+                }
+            }
+        };
+        let eta = |idx| Term::Pair {
+            fst_level: fst_level.clone(),
+            snd_level: snd_level.clone(),
+            fst_ty: Rc::clone(fst),
+            snd_ty: Rc::clone(snd),
+            fst: rt(proj(true, idx)),
+            snd: rt(proj(false, idx)),
+        };
+        let at = e2.layer.type_layer();
+        let p0 = Term::Var(LocalVar(0));
+        // η: p ≈ (fst p, snd p), both orientations.
+        assert!(
+            conv_term(&e2.psi, &e2.gamma, at, &p0, &eta(0), &sig2, &lmax, FUEL).is_ok(),
+            "seed {seed}: p ≉ (fst p, snd p)"
+        );
+        assert!(
+            conv_term(&e2.psi, &e2.gamma, at, &eta(0), &p0, &sig2, &lmax, FUEL).is_ok(),
+            "seed {seed}: (fst p, snd p) ≉ p"
+        );
+        // Not blind: distinct neutral inhabitants of the same Σ differ.
+        assert_eq!(
+            conv_term(&e2.psi, &e2.gamma, at, &p0, &Term::Var(LocalVar(1)), &sig2, &lmax, FUEL),
+            Err(NC),
+            "seed {seed}: distinct Σ variables wrongly convertible"
+        );
     }
 }

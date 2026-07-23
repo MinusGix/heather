@@ -135,7 +135,7 @@ impl WtEnv {
         WtEnv { gamma, layer, ..self.clone() }
     }
 
-    fn push_entry(&self, ty: Rc<Type>, level: Level) -> WtEnv {
+    pub fn push_entry(&self, ty: Rc<Type>, level: Level) -> WtEnv {
         let mut e = self.clone();
         e.gamma.entries.push(CtxEntry { ty, level });
         e
