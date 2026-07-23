@@ -534,6 +534,11 @@ fn constant_branches() -> Rc<Branches> {
         tm_empty: z(),
         tm_triv: z(),
         tm_elim_empty: z(),
+        ty_sum: z(),
+        tm_sum: z(),
+        tm_inl: z(),
+        tm_inr: z(),
+        tm_case: z(),
     })
 }
 
@@ -768,6 +773,61 @@ fn identity_branches() -> Rc<Branches> {
                 level: lv(0),
                 motive: rty(u_m_e),
                 scrut: rt(gtm(0, &g2)),
+            })))
+        },
+        // box (U_A^id +^{ℓ,ℓ'} U_B^id) — telescope g = 2, U_A = 1, U_B = 0.
+        ty_sum: rt(Term::BoxTy(rty(Type::Sum {
+            lhs_level: lv(1),
+            rhs_level: lv(0),
+            lhs: rty(gty(1, &g2)),
+            rhs: rty(gty(0, &g2)),
+        }))),
+        // box (u_a +^{ℓ,ℓ'} u_b) — telescope g = 2, u_a = 1, u_b = 0.
+        tm_sum: rt(Term::BoxTm(rt(Term::TmSum {
+            lhs_level: lv(1),
+            rhs_level: lv(0),
+            lhs: rt(gtm(1, &g2)),
+            rhs: rt(gtm(0, &g2)),
+        }))),
+        // box (inl(U_A^id; U_B^id; u_a^id)) — g = 3, U_A = 2, U_B = 1, u_a = 0.
+        tm_inl: rt(Term::BoxTm(rt(Term::Inl {
+            lhs_level: lv(1),
+            rhs_level: lv(0),
+            lhs: rty(gty(2, &g3)),
+            rhs: rty(gty(1, &g3)),
+            val: rt(gtm(0, &g3)),
+        }))),
+        // box (inr(U_A^id; U_B^id; u_b^id)) — g = 3, U_A = 2, U_B = 1, u_b = 0.
+        tm_inr: rt(Term::BoxTm(rt(Term::Inr {
+            lhs_level: lv(1),
+            rhs_level: lv(0),
+            lhs: rty(gty(2, &g3)),
+            rhs: rty(gty(1, &g3)),
+            val: rt(gtm(0, &g3)),
+        }))),
+        // box (case (z. U_M^id) (x. u_l^id) (y. u_r^id) u_t^id) — telescope
+        // g = 6, U_A = 5, U_B = 4, U_M = 3, u_l = 2, u_r = 1, u_t = 0.
+        tm_case: {
+            let g6 = g_ctx(6);
+            let sum = Type::Sum {
+                lhs_level: lv(2),
+                rhs_level: lv(1),
+                lhs: rty(gty(5, &g6)),
+                rhs: rty(gty(4, &g6)),
+            };
+            let gz = ext(&g6, sum, Level::max(lv(2), lv(1)));
+            let gx_a = ext(&g6, gty(5, &g6), lv(2));
+            let gx_b = ext(&g6, gty(4, &g6), lv(1));
+            rt(Term::BoxTm(rt(Term::Case {
+                lhs_level: lv(2),
+                rhs_level: lv(1),
+                motive_level: lv(0),
+                lhs: rty(gty(5, &g6)),
+                rhs: rty(gty(4, &g6)),
+                motive: rty(gty(3, &gz)),
+                case_l: rt(gtm(2, &gx_a)),
+                case_r: rt(gtm(1, &gx_b)),
+                scrut: rt(gtm(0, &g6)),
             })))
         },
     })
@@ -1150,4 +1210,120 @@ fn empty_formation_encoding_and_elimination() {
         infer_term(&psi, 0, Layer::Var, &gamma, &elim, FUEL).unwrap_err(),
         TypeError::LayerMismatch
     );
+}
+
+// -------------------------------------------------------------------------
+// Binary sums (extension beyond ch. 04; kernel-v1-extensions)
+// -------------------------------------------------------------------------
+
+#[test]
+fn sum_formation_intro_encoding_and_case() {
+    let psi = GlobalCtx::default();
+    // Nat +^{0,0} Nat @ 0.
+    let sum = Type::Sum {
+        lhs_level: Level::Zero,
+        rhs_level: Level::Zero,
+        lhs: rty(Type::Nat),
+        rhs: rty(Type::Nat),
+    };
+    assert!(infer_type(&psi, 0, Layer::Prog, &nil_ctx(), &sum, FUEL)
+        .unwrap()
+        .equiv(&Level::Zero));
+    // A heterogeneous sum: Nat +^{0,1} Ty 0 @ 1 (level is the ⊔).
+    let het = Type::Sum {
+        lhs_level: Level::Zero,
+        rhs_level: c(1),
+        lhs: rty(Type::Nat),
+        rhs: rty(Type::Ty(Level::Zero)),
+    };
+    assert!(infer_type(&psi, 0, Layer::Prog, &nil_ctx(), &het, FUEL)
+        .unwrap()
+        .equiv(&c(1)));
+    // Encoding «Nat» +^{0,0} «Nat» : Ty 0 @ 1, El-decoding to Nat + Nat.
+    let tm_sum = Term::TmSum {
+        lhs_level: Level::Zero,
+        rhs_level: Level::Zero,
+        lhs: rt(Term::TmNat),
+        rhs: rt(Term::TmNat),
+    };
+    let (ty, l) = infer_closed(Layer::Prog, &tm_sum).unwrap();
+    let Type::Ty(tl) = &ty else { panic!("encoding should infer a universe") };
+    assert!(tl.equiv(&Level::Zero) && l.equiv(&c(1)));
+    // inl 0 : Nat + Nat @ 0, and it checks against the El-decode of the
+    // encoding (conversion fires through El (s + t) ⇝ El s + El t).
+    let mk_inl = || Term::Inl {
+        lhs_level: Level::Zero,
+        rhs_level: Level::Zero,
+        lhs: rty(Type::Nat),
+        rhs: rty(Type::Nat),
+        val: rt(Term::Zero),
+    };
+    let (ty, l) = infer_closed(Layer::Prog, &mk_inl()).unwrap();
+    assert!(ty == sum && l.equiv(&Level::Zero));
+    let el_sum = Type::El { level: Level::Zero, tm: rt(tm_sum) };
+    check_closed(Layer::Prog, &mk_inl(), &el_sum, &Level::Zero).unwrap();
+    // inr (S 0) : Nat + Nat @ 0.
+    let mk_inr = || Term::Inr {
+        lhs_level: Level::Zero,
+        rhs_level: Level::Zero,
+        lhs: rty(Type::Nat),
+        rhs: rty(Type::Nat),
+        val: rt(Term::Succ(rt(Term::Zero))),
+    };
+    assert!(infer_closed(Layer::Prog, &mk_inr()).unwrap().0 == sum);
+    // A value not inhabiting the chosen summand is rejected (0 : Nat, not Ty 0).
+    let bad_inl = Term::Inl {
+        lhs_level: c(1),
+        rhs_level: Level::Zero,
+        lhs: rty(Type::Ty(Level::Zero)),
+        rhs: rty(Type::Nat),
+        val: rt(Term::Zero),
+    };
+    assert!(infer_closed(Layer::Prog, &bad_inl).is_err());
+    // case with a constant Nat motive: case (z. Nat; Nat; Nat; x. x; y. y;
+    // inl 0) : Nat @ 0.
+    let case = Term::Case {
+        lhs_level: Level::Zero,
+        rhs_level: Level::Zero,
+        motive_level: Level::Zero,
+        lhs: rty(Type::Nat),
+        rhs: rty(Type::Nat),
+        motive: rty(Type::Nat),
+        case_l: rt(v(0)),
+        case_r: rt(v(0)),
+        scrut: rt(mk_inl()),
+    };
+    let (ty, l) = infer_closed(Layer::Prog, &case).unwrap();
+    assert!(ty == Type::Nat && l.equiv(&Level::Zero));
+    // A dependent motive over a variable scrutinee: with z : Nat + Nat in Γ,
+    // case (z. El 0 «Nat»; …; z) : El 0 «Nat» @ 0, convertible to Nat.
+    let gamma = ext(&nil_ctx(), sum.clone(), Level::Zero);
+    let dep = Term::Case {
+        lhs_level: Level::Zero,
+        rhs_level: Level::Zero,
+        motive_level: Level::Zero,
+        lhs: rty(Type::Nat),
+        rhs: rty(Type::Nat),
+        motive: rty(Type::El { level: Level::Zero, tm: rt(Term::TmNat) }),
+        case_l: rt(Term::Zero),
+        case_r: rt(Term::Zero),
+        scrut: rt(v(0)),
+    };
+    check_term(&psi, 0, Layer::Prog, &gamma, &dep, &Type::Nat, &Level::Zero, FUEL).unwrap();
+    // A non-sum scrutinee is rejected.
+    let bad_case = Term::Case {
+        lhs_level: Level::Zero,
+        rhs_level: Level::Zero,
+        motive_level: Level::Zero,
+        lhs: rty(Type::Nat),
+        rhs: rty(Type::Nat),
+        motive: rty(Type::Nat),
+        case_l: rt(v(0)),
+        case_r: rt(v(0)),
+        scrut: rt(Term::Zero),
+    };
+    assert!(infer_closed(Layer::Prog, &bad_case).is_err());
+    // Layer v admits neither intro nor eliminator.
+    assert_eq!(infer_closed(Layer::Var, &mk_inl()).unwrap_err(), TypeError::LayerMismatch);
+    assert_eq!(infer_closed(Layer::Var, &case).unwrap_err(), TypeError::LayerMismatch);
 }

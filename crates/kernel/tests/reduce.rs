@@ -159,6 +159,11 @@ fn dummy_branches() -> Branches {
         tm_empty: z(),
         tm_triv: z(),
         tm_elim_empty: z(),
+        ty_sum: z(),
+        tm_sum: z(),
+        tm_inl: z(),
+        tm_inr: z(),
+        tm_case: z(),
     }
 }
 
@@ -1587,6 +1592,319 @@ fn beta_elim_code_tm_elim_empty() {
         Term::BoxTy(rty(motive)),
         Term::BoxTm(rt(inner_scrut)),
         Term::TmTy(c(2)),
+    ]);
+    assert_eq!(step_term(&t, &gamma), Some(expect));
+}
+
+// -------------------------------------------------------------------------
+// Binary sums (extension beyond ch. 04; kernel-v1-extensions)
+// -------------------------------------------------------------------------
+
+#[test]
+fn el_decodes_tm_sum() {
+    // El^{1⊔2} («Ty 0» +^{1,2} «Nat») ⇝ El^1 «Ty 0» +^{1,2} El^2 «Nat».
+    let gamma = nil_ctx(0);
+    let t = Type::El {
+        level: Level::max(c(1), c(2)),
+        tm: rt(Term::TmSum {
+            lhs_level: c(1),
+            rhs_level: c(2),
+            lhs: rt(Term::TmTy(c(0))),
+            rhs: rt(Term::TmNat),
+        }),
+    };
+    let expect = Type::Sum {
+        lhs_level: c(1),
+        rhs_level: c(2),
+        lhs: rty(Type::El { level: c(1), tm: rt(Term::TmTy(c(0))) }),
+        rhs: rty(Type::El { level: c(2), tm: rt(Term::TmNat) }),
+    };
+    assert_eq!(step_type(&t, &gamma), Some(expect.clone()));
+    assert!(is_whnf_type(&expect));
+}
+
+#[test]
+fn beta_case_and_congruence() {
+    let gamma = nil_ctx(1);
+    let inl = |a: Term| Term::Inl {
+        lhs_level: Level::Zero,
+        rhs_level: Level::Zero,
+        lhs: rty(Type::Nat),
+        rhs: rty(Type::Nat),
+        val: rt(a),
+    };
+    let inr = |b: Term| Term::Inr {
+        lhs_level: Level::Zero,
+        rhs_level: Level::Zero,
+        lhs: rty(Type::Nat),
+        rhs: rty(Type::Nat),
+        val: rt(b),
+    };
+    // case (z. Nat; x. S x; y. y; scrut) — left injects successor, right is
+    // the identity on its value.
+    let case = |scrut: Term| Term::Case {
+        lhs_level: Level::Zero,
+        rhs_level: Level::Zero,
+        motive_level: Level::Zero,
+        lhs: rty(Type::Nat),
+        rhs: rty(Type::Nat),
+        motive: rty(Type::Nat),
+        case_l: rt(Term::Succ(rt(v(0)))),
+        case_r: rt(v(0)),
+        scrut: rt(scrut),
+    };
+    // case (inl 1) ⇝ S 1 = 2; case (inr 1) ⇝ 1.
+    assert_eq!(step_term(&case(inl(num(1))), &gamma), Some(num(2)));
+    assert_eq!(step_term(&case(inr(num(1))), &gamma), Some(num(1)));
+    // Congruence reduces a redex scrutinee first.
+    let redex = app2(lam(inl(num(1))), Term::Zero);
+    let stepped = step_term(&case(redex), &gamma).unwrap();
+    assert_eq!(step_term(&stepped, &gamma), Some(num(2)));
+    // Blocked on a neutral scrutinee: neutral, no step.
+    let blocked = case(v(0));
+    assert_eq!(step_term(&blocked, &gamma), None);
+    assert!(is_neutral_term(&blocked));
+    // inl/inr and the encoding are WHNFs.
+    assert!(is_whnf_term(&inl(num(1))) && is_whnf_term(&inr(num(1))));
+    assert!(is_whnf_term(&Term::TmSum {
+        lhs_level: Level::Zero,
+        rhs_level: Level::Zero,
+        lhs: rt(Term::TmNat),
+        rhs: rt(Term::TmNat),
+    }));
+}
+
+#[test]
+fn beta_elim_code_ty_sum() {
+    // Telescope (ℓ, ℓ', g, U_A, U_B, x_A, x_B. t_+): globals g=2, U_A=1,
+    // U_B=0; locals x_A=1, x_B=0. Both summands live in g (non-dependent).
+    let gamma = nil_ctx(0);
+    let delta = nil_ctx(1);
+    let mut b = dummy_branches();
+    b.ty_sum = rt(chain(vec![
+        v(1),              // x_A
+        v(0),              // x_B
+        box_gty(1, 2, 0),  // box U_A^{id}
+        box_gty(0, 2, 0),  // box U_B^{id} (context g — not extended)
+        Term::TmTy(lv(1)), // ℓ
+        Term::TmTy(lv(0)), // ℓ'
+    ]));
+    let b = Rc::new(b);
+    let code = Type::Sum {
+        lhs_level: c(1),
+        rhs_level: c(2),
+        lhs: rty(Type::Nat),
+        rhs: rty(Type::Nat),
+    };
+    let t = elim_ty(&b, Level::max(c(1), c(2)), delta.clone(), Term::BoxTy(rty(code)));
+
+    let s_lhs = elim_ty(&b, c(1), delta.clone(), Term::BoxTy(rty(Type::Nat)));
+    let s_rhs = elim_ty(&b, c(2), delta.clone(), Term::BoxTy(rty(Type::Nat)));
+    let expect = chain(vec![
+        s_lhs,
+        s_rhs,
+        Term::BoxTy(rty(Type::Nat)),
+        Term::BoxTy(rty(Type::Nat)),
+        Term::TmTy(c(1)),
+        Term::TmTy(c(2)),
+    ]);
+    assert_eq!(step_term(&t, &gamma), Some(expect));
+}
+
+#[test]
+fn beta_elim_code_tm_sum() {
+    // Telescope (ℓ, ℓ', g, u_a, u_b, x_a, x_b. t'_+): globals g=2, u_a=1,
+    // u_b=0; locals x_a=1, x_b=0. The encoding; both encodings live in g.
+    let gamma = nil_ctx(0);
+    let delta = nil_ctx(1);
+    let mut b = dummy_branches();
+    b.tm_sum = rt(chain(vec![
+        v(1),              // x_a
+        v(0),              // x_b
+        box_gtm(1, 2, 0),  // box u_a^{id}
+        box_gtm(0, 2, 0),  // box u_b^{id}
+        Term::TmTy(lv(1)), // ℓ
+        Term::TmTy(lv(0)), // ℓ'
+    ]));
+    let b = Rc::new(b);
+    let lmax = Level::max(c(1), Level::Zero);
+    let code = Term::TmSum {
+        lhs_level: c(1),
+        rhs_level: Level::Zero,
+        lhs: rt(Term::TmTy(c(0))), // : Ty 1
+        rhs: rt(Term::TmNat),      // : Ty 0
+    };
+    let t = elim_tm(&b, Level::succ(lmax.clone()), delta.clone(), Type::Ty(lmax), Term::BoxTm(rt(code)));
+
+    let s_lhs = elim_tm(
+        &b,
+        Level::succ(c(1)),
+        delta.clone(),
+        Type::Ty(c(1)),
+        Term::BoxTm(rt(Term::TmTy(c(0)))),
+    );
+    let s_rhs = elim_tm(
+        &b,
+        Level::succ(Level::Zero),
+        delta.clone(),
+        Type::Ty(Level::Zero),
+        Term::BoxTm(rt(Term::TmNat)),
+    );
+    let expect = chain(vec![
+        s_lhs,
+        s_rhs,
+        Term::BoxTm(rt(Term::TmTy(c(0)))),
+        Term::BoxTm(rt(Term::TmNat)),
+        Term::TmTy(c(1)),
+        Term::TmTy(Level::Zero),
+    ]);
+    assert_eq!(step_term(&t, &gamma), Some(expect));
+}
+
+#[test]
+fn beta_elim_code_tm_inl_and_inr() {
+    // Telescope (ℓ, ℓ', g, U_A, U_B, u_v, x_A, x_B, x_v. t_inl/t_inr):
+    // globals g=3, U_A=2, U_B=1, u_v=0; locals x_A=2, x_B=1, x_v=0.
+    let gamma = nil_ctx(0);
+    let delta = nil_ctx(1);
+    let probe = |field: &mut Rc<Term>| {
+        *field = rt(chain(vec![
+            v(2),              // x_A
+            v(1),              // x_B
+            v(0),              // x_v
+            box_gty(2, 3, 0),  // box U_A^{id}
+            box_gty(1, 3, 0),  // box U_B^{id}
+            box_gtm(0, 3, 0),  // box u_v^{id}
+            Term::TmTy(lv(1)), // ℓ
+            Term::TmTy(lv(0)), // ℓ'
+        ]));
+    };
+    let mut b = dummy_branches();
+    probe(&mut b.tm_inl);
+    probe(&mut b.tm_inr);
+    let b = Rc::new(b);
+    let sum = Type::Sum {
+        lhs_level: c(1),
+        rhs_level: c(2),
+        lhs: rty(Type::Nat),
+        rhs: rty(Type::Nat),
+    };
+    // inl: value inhabits A (level ℓ=1); inr: value inhabits B (level ℓ'=2).
+    for (is_inl, val_level, inner_val) in [(true, c(1), num(1)), (false, c(2), num(2))] {
+        let code = if is_inl {
+            Term::Inl {
+                lhs_level: c(1),
+                rhs_level: c(2),
+                lhs: rty(Type::Nat),
+                rhs: rty(Type::Nat),
+                val: rt(inner_val.clone()),
+            }
+        } else {
+            Term::Inr {
+                lhs_level: c(1),
+                rhs_level: c(2),
+                lhs: rty(Type::Nat),
+                rhs: rty(Type::Nat),
+                val: rt(inner_val.clone()),
+            }
+        };
+        let t = elim_tm(&b, Level::max(c(1), c(2)), delta.clone(), sum.clone(), Term::BoxTm(rt(code)));
+        let s_lhs = elim_ty(&b, c(1), delta.clone(), Term::BoxTy(rty(Type::Nat)));
+        let s_rhs = elim_ty(&b, c(2), delta.clone(), Term::BoxTy(rty(Type::Nat)));
+        let s_val = elim_tm(
+            &b,
+            val_level,
+            delta.clone(),
+            Type::Nat,
+            Term::BoxTm(rt(inner_val.clone())),
+        );
+        let expect = chain(vec![
+            s_lhs,
+            s_rhs,
+            s_val,
+            Term::BoxTy(rty(Type::Nat)),
+            Term::BoxTy(rty(Type::Nat)),
+            Term::BoxTm(rt(inner_val)),
+            Term::TmTy(c(1)),
+            Term::TmTy(c(2)),
+        ]);
+        assert_eq!(step_term(&t, &gamma), Some(expect));
+    }
+}
+
+#[test]
+fn beta_elim_code_tm_case() {
+    // Telescope (ℓ, ℓ', ℓ'', g, U_A, U_B, U_M, u_l, u_r, u_t, x_A, x_B, x_M,
+    // x_l, x_r, x_t. t_case): globals g=6, U_A=5, U_B=4, U_M=3, u_l=2, u_r=1,
+    // u_t=0; locals x_A=5 … x_t=0. Univs ℓ=2, ℓ'=1, ℓ''=0. x_M recurses at the
+    // *type* motive.
+    let gamma = nil_ctx(0);
+    let delta = nil_ctx(1);
+    let mut b = dummy_branches();
+    b.tm_case = rt(chain(vec![
+        v(5),              // x_A
+        v(4),              // x_B
+        v(3),              // x_M
+        v(2),              // x_l
+        v(1),              // x_r
+        v(0),              // x_t
+        box_gty(5, 6, 0),  // box U_A^{id}
+        box_gty(4, 6, 0),  // box U_B^{id}
+        box_gty(3, 6, 1),  // box U_M^{id} (context (g, z : A + B))
+        box_gtm(2, 6, 1),  // box u_l^{id} (context (g, x : A))
+        box_gtm(1, 6, 1),  // box u_r^{id} (context (g, y : B))
+        box_gtm(0, 6, 0),  // box u_t^{id}
+        Term::TmTy(lv(2)), // ℓ
+        Term::TmTy(lv(1)), // ℓ'
+        Term::TmTy(lv(0)), // ℓ''
+    ]));
+    let b = Rc::new(b);
+    // A closed Nat motive keeps M[inl x/z] = M[inr y/z] = Nat.
+    let code = Term::Case {
+        lhs_level: c(1),
+        rhs_level: c(2),
+        motive_level: Level::Zero,
+        lhs: rty(Type::Nat),
+        rhs: rty(Type::Nat),
+        motive: rty(Type::Nat),
+        case_l: rt(num(1)),
+        case_r: rt(num(2)),
+        scrut: rt(num(3)),
+    };
+    let lmax = Level::max(c(1), c(2));
+    let t = elim_tm(&b, Level::Zero, delta.clone(), Type::Nat, Term::BoxTm(rt(code)));
+
+    let sum = Type::Sum {
+        lhs_level: c(1),
+        rhs_level: c(2),
+        lhs: rty(Type::Nat),
+        rhs: rty(Type::Nat),
+    };
+    let s_lhs = elim_ty(&b, c(1), delta.clone(), Term::BoxTy(rty(Type::Nat)));
+    let s_rhs = elim_ty(&b, c(2), delta.clone(), Term::BoxTy(rty(Type::Nat)));
+    let dz = extend(&delta, sum.clone(), lmax.clone());
+    let s_motive = elim_ty(&b, Level::Zero, dz, Term::BoxTy(rty(Type::Nat)));
+    let dx = extend(&delta, Type::Nat, c(1));
+    let s_case_l = elim_tm(&b, Level::Zero, dx, Type::Nat, Term::BoxTm(rt(num(1))));
+    let dy = extend(&delta, Type::Nat, c(2));
+    let s_case_r = elim_tm(&b, Level::Zero, dy, Type::Nat, Term::BoxTm(rt(num(2))));
+    let s_scrut = elim_tm(&b, lmax, delta.clone(), sum, Term::BoxTm(rt(num(3))));
+    let expect = chain(vec![
+        s_lhs,
+        s_rhs,
+        s_motive,
+        s_case_l,
+        s_case_r,
+        s_scrut,
+        Term::BoxTy(rty(Type::Nat)),
+        Term::BoxTy(rty(Type::Nat)),
+        Term::BoxTy(rty(Type::Nat)),
+        Term::BoxTm(rt(num(1))),
+        Term::BoxTm(rt(num(2))),
+        Term::BoxTm(rt(num(3))),
+        Term::TmTy(c(1)),
+        Term::TmTy(c(2)),
+        Term::TmTy(Level::Zero),
     ]);
     assert_eq!(step_term(&t, &gamma), Some(expect));
 }

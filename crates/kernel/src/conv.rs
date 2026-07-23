@@ -296,6 +296,16 @@ impl Conv {
             }
             // Unit/Empty congruence (extension; nullary formers).
             (Type::Unit, Type::Unit) | (Type::Empty, Type::Empty) => Ok(()),
+            // Sum congruence (extension; non-dependent, so no binder push).
+            (
+                Type::Sum { lhs_level: dl1, rhs_level: cl1, lhs: s1, rhs: t1 },
+                Type::Sum { lhs_level: dl2, rhs_level: cl2, lhs: s2, rhs: t2 },
+            ) => {
+                self.lev_eq(dl1, dl2)?;
+                self.lev_eq(cl1, cl2)?;
+                self.ty(env, s1, s2, dl1)?;
+                self.ty(env, t1, t2, cl1)
+            }
             // -- layer-m type formers: mismatch outside layer m -------------
             (
                 Type::UPi { num_vars: n1, level: v1, body: b1 },
@@ -583,6 +593,16 @@ impl Conv {
                 }
                 // TmUnit/TmEmpty congruence (extension; nullary encodings).
                 (Term::TmUnit, Term::TmUnit) | (Term::TmEmpty, Term::TmEmpty) => Ok(()),
+                // TmSum congruence (extension; non-dependent, mirrors TmSigma).
+                (
+                    Term::TmSum { lhs_level: dl1, rhs_level: cl1, lhs: s1, rhs: t1 },
+                    Term::TmSum { lhs_level: dl2, rhs_level: cl2, lhs: s2, rhs: t2 },
+                ) => {
+                    self.lev_eq(dl1, dl2)?;
+                    self.lev_eq(cl1, cl2)?;
+                    self.tm(env, s1, s2, &Type::Ty(dl1.clone()), &Level::succ(dl1.clone()))?;
+                    self.tm(env, t1, t2, &Type::Ty(cl1.clone()), &Level::succ(cl1.clone()))
+                }
                 (
                     Term::TmNat
                     | Term::TmTy(_)
@@ -590,7 +610,8 @@ impl Conv {
                     | Term::TmId { .. }
                     | Term::TmSigma { .. }
                     | Term::TmUnit
-                    | Term::TmEmpty,
+                    | Term::TmEmpty
+                    | Term::TmSum { .. },
                     _,
                 )
                 | (
@@ -601,7 +622,8 @@ impl Conv {
                     | Term::TmId { .. }
                     | Term::TmSigma { .. }
                     | Term::TmUnit
-                    | Term::TmEmpty,
+                    | Term::TmEmpty
+                    | Term::TmSum { .. },
                 ) => Err(NC),
                 _ => self.tm_nee(env, a, b).map(drop),
             },
@@ -650,6 +672,23 @@ impl Conv {
             // Empty (extension): no canonical inhabitants, so only neutrals can
             // appear; compare them structurally.
             Type::Empty => self.tm_nee(env, a, b).map(drop),
+            // Sum (extension): a positive type — the two constructors match
+            // like `Zero`/`Succ` at `Nat`. The annotations on inl/inr are
+            // forced by well-typedness at this sum type, so only the injected
+            // value is compared; a tag mismatch is `NotConvertible`; neutrals
+            // (a stuck `case`, a variable) fall through to structural
+            // comparison.
+            Type::Sum { lhs_level, rhs_level, lhs, rhs } => match (a, b) {
+                (Term::Inl { val: x, .. }, Term::Inl { val: y, .. }) => {
+                    self.tm(env, x, y, lhs, lhs_level)
+                }
+                (Term::Inr { val: x, .. }, Term::Inr { val: y, .. }) => {
+                    self.tm(env, x, y, rhs, rhs_level)
+                }
+                (Term::Inl { .. } | Term::Inr { .. }, _)
+                | (_, Term::Inl { .. } | Term::Inr { .. }) => Err(NC),
+                _ => self.tm_nee(env, a, b).map(drop),
+            },
             // Neutral type: only neutral terms inhabit it.
             Type::El { .. } | Type::GlobalTy { .. } => self.tm_nee(env, a, b).map(drop),
         }
@@ -737,6 +776,81 @@ impl Conv {
                 Ok((
                     m1.apply_local(&LocalSubst::id(&env.gamma).extended(Rc::clone(n1))),
                     v1.clone(),
+                ))
+            }
+            // case neutral congruence (extension); mirrors ElimNat — all
+            // annotations compared (branches at M[inl x/z] / M[inr y/z]), the
+            // scrutinee via tm_nee, result inferred as M[scrut/z]. Fires only
+            // on a neutral scrutinee (canonical inl/inr β-fired in reduce).
+            (
+                Term::Case {
+                    lhs_level: dl1,
+                    rhs_level: cl1,
+                    motive_level: ml1,
+                    lhs: s1,
+                    rhs: t1,
+                    motive: m1,
+                    case_l: l1,
+                    case_r: r1,
+                    scrut: n1,
+                },
+                Term::Case {
+                    lhs_level: dl2,
+                    rhs_level: cl2,
+                    motive_level: ml2,
+                    lhs: s2,
+                    rhs: t2,
+                    motive: m2,
+                    case_l: l2,
+                    case_r: r2,
+                    scrut: n2,
+                },
+            ) => {
+                self.lev_eq(dl1, dl2)?;
+                self.lev_eq(cl1, cl2)?;
+                self.lev_eq(ml1, ml2)?;
+                self.ty(env, s1, s2, dl1)?;
+                self.ty(env, t1, t2, cl1)?;
+                let lmax = Level::max(dl1.clone(), cl1.clone());
+                let sum = Type::Sum {
+                    lhs_level: dl1.clone(),
+                    rhs_level: cl1.clone(),
+                    lhs: Rc::clone(s1),
+                    rhs: Rc::clone(t1),
+                };
+                // M scoped in (Γ, z : A + B), as in typing.rs.
+                let e_z = env.push_entry(Rc::new(sum.clone()), lmax.clone());
+                self.ty(&e_z, m1, m2, ml1)?;
+                // c_l at M[inl x/z] in (Γ, x : A).
+                let e_x = env.push_entry(Rc::clone(s1), dl1.clone());
+                let inl_x = Term::Inl {
+                    lhs_level: dl1.clone(),
+                    rhs_level: cl1.clone(),
+                    lhs: Rc::new(s1.shift_local(1)),
+                    rhs: Rc::new(t1.shift_local(1)),
+                    val: Rc::new(Term::Var(LocalVar(0))),
+                };
+                let left_ty = m1.apply_local(
+                    &LocalSubst::id(&env.gamma).shift_local(1).extended(Rc::new(inl_x)),
+                );
+                self.tm(&e_x, l1, l2, &left_ty, ml1)?;
+                // c_r at M[inr y/z] in (Γ, y : B).
+                let e_y = env.push_entry(Rc::clone(t1), cl1.clone());
+                let inr_y = Term::Inr {
+                    lhs_level: dl1.clone(),
+                    rhs_level: cl1.clone(),
+                    lhs: Rc::new(s1.shift_local(1)),
+                    rhs: Rc::new(t1.shift_local(1)),
+                    val: Rc::new(Term::Var(LocalVar(0))),
+                };
+                let right_ty = m1.apply_local(
+                    &LocalSubst::id(&env.gamma).shift_local(1).extended(Rc::new(inr_y)),
+                );
+                self.tm(&e_y, r1, r2, &right_ty, ml1)?;
+                self.tm_nee(env, n1, n2)?; // inferred A + B: redundant, ignored
+                Ok((
+                    m1.apply_local(&LocalSubst::id(&env.gamma).extended(Rc::clone(n1))),
+                    ml1.clone(),
                 ))
             }
             // J neutral congruence (extension beyond ch. 04); mirrors the

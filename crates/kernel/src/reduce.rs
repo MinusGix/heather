@@ -26,7 +26,7 @@ use std::rc::Rc;
 
 use crate::level::Level;
 use crate::subst::{GlobalEntry, GlobalSubst};
-use crate::term::{CtxEntry, LocalCtx, LocalSubst, Term, Type};
+use crate::term::{CtxEntry, LocalCtx, LocalSubst, LocalVar, Term, Type};
 
 /// Reduction ran out of fuel before reaching a normal form. On well-typed
 /// input this indicates the fuel bound was too small (reduction of
@@ -99,6 +99,13 @@ pub fn step_type(t: &Type, gamma: &LocalCtx) -> Option<Type> {
             // El^0 Unit ⇝ Unit, El^0 Empty ⇝ Empty   (extension)
             Term::TmUnit => Some(Type::Unit),
             Term::TmEmpty => Some(Type::Empty),
+            // El^{l⊔l'} (s +^{l,l'} t) ⇝ El^l s +^{l,l'} El^l' t   (extension)
+            Term::TmSum { lhs_level, rhs_level, lhs, rhs } => Some(Type::Sum {
+                lhs_level: lhs_level.clone(),
+                rhs_level: rhs_level.clone(),
+                lhs: Rc::new(Type::El { level: lhs_level.clone(), tm: Rc::clone(lhs) }),
+                rhs: Rc::new(Type::El { level: rhs_level.clone(), tm: Rc::clone(rhs) }),
+            }),
             _ => step_term(tm, gamma)
                 .map(|tm| Type::El { level: level.clone(), tm: Rc::new(tm) }),
         },
@@ -171,6 +178,37 @@ pub fn step_term(t: &Term, gamma: &LocalCtx) -> Option<Term> {
                 scrut: Rc::new(s),
             })
         }
+        // case (inl a) ⇝ c_l[a/x]; case (inr b) ⇝ c_r[b/y]; else reduce the
+        // scrutinee, staying neutral when it is.   (extension)
+        Term::Case {
+            lhs_level,
+            rhs_level,
+            motive_level,
+            lhs,
+            rhs,
+            motive,
+            case_l,
+            case_r,
+            scrut,
+        } => match &**scrut {
+            Term::Inl { val, .. } => {
+                Some(case_l.apply_local(&LocalSubst::id(gamma).extended(Rc::clone(val))))
+            }
+            Term::Inr { val, .. } => {
+                Some(case_r.apply_local(&LocalSubst::id(gamma).extended(Rc::clone(val))))
+            }
+            _ => step_term(scrut, gamma).map(|s| Term::Case {
+                lhs_level: lhs_level.clone(),
+                rhs_level: rhs_level.clone(),
+                motive_level: motive_level.clone(),
+                lhs: Rc::clone(lhs),
+                rhs: Rc::clone(rhs),
+                motive: Rc::clone(motive),
+                case_l: Rc::clone(case_l),
+                case_r: Rc::clone(case_r),
+                scrut: Rc::new(s),
+            }),
+        },
         // snd (pair a b) ⇝ b; else reduce the pair   (extension)
         Term::Snd { fst_level, snd_level, fst_ty, snd_ty, pair } => match &**pair {
             Term::Pair { snd, .. } => Some((**snd).clone()),
@@ -508,6 +546,23 @@ fn beta_elim_ty(
             vec![],
             gamma,
         )),
+        // (ℓ, ℓ', g, U_A, U_B, x_A, x_B. t_+) — both summands in g (non-
+        // dependent); mirrors ty_sigma minus the binder extension.   (extension)
+        Type::Sum { lhs_level, rhs_level, lhs, rhs } => {
+            let s_lhs = rec.elim_ty(lhs_level.clone(), delta.clone(), Rc::clone(lhs));
+            let s_rhs = rec.elim_ty(rhs_level.clone(), delta.clone(), Rc::clone(rhs));
+            Some(fire(
+                &b.ty_sum,
+                &[rhs_level.clone(), lhs_level.clone()],
+                vec![
+                    GlobalEntry::Ctx(delta.clone()),
+                    GlobalEntry::Ty(Rc::clone(lhs)),
+                    GlobalEntry::Ty(Rc::clone(rhs)),
+                ],
+                vec![s_lhs, s_rhs],
+                gamma,
+            ))
+        }
         // box (U^δ): blocked, neutral.
         Type::GlobalTy { .. } => None,
         // Layer-m types cannot be layer-c code: ill-typed, stuck.
@@ -969,6 +1024,143 @@ fn beta_elim_tm(
                 gamma,
             ))
         }
+        // (ℓ, ℓ', g, u_a, u_b, x_a, x_b. t'_+) — the encoding; mirrors
+        // tm_sigma minus the binder extension.   (extension)
+        Term::TmSum { lhs_level, rhs_level, lhs, rhs } => {
+            let s_lhs = rec.elim_tm(
+                Level::succ(lhs_level.clone()),
+                delta.clone(),
+                Rc::new(Type::Ty(lhs_level.clone())),
+                Rc::clone(lhs),
+            );
+            let s_rhs = rec.elim_tm(
+                Level::succ(rhs_level.clone()),
+                delta.clone(),
+                Rc::new(Type::Ty(rhs_level.clone())),
+                Rc::clone(rhs),
+            );
+            Some(fire(
+                &b.tm_sum,
+                &[rhs_level.clone(), lhs_level.clone()],
+                vec![
+                    GlobalEntry::Ctx(delta.clone()),
+                    GlobalEntry::Tm(Rc::clone(lhs)),
+                    GlobalEntry::Tm(Rc::clone(rhs)),
+                ],
+                vec![s_lhs, s_rhs],
+                gamma,
+            ))
+        }
+        // (ℓ, ℓ', g, U_A, U_B, u_a, x_A, x_B, x_a. t_inl) — both type
+        // annotations are sub-structures.   (extension)
+        Term::Inl { lhs_level, rhs_level, lhs, rhs, val } => {
+            let s_lhs = rec.elim_ty(lhs_level.clone(), delta.clone(), Rc::clone(lhs));
+            let s_rhs = rec.elim_ty(rhs_level.clone(), delta.clone(), Rc::clone(rhs));
+            let s_val =
+                rec.elim_tm(lhs_level.clone(), delta.clone(), Rc::clone(lhs), Rc::clone(val));
+            Some(fire(
+                &b.tm_inl,
+                &[rhs_level.clone(), lhs_level.clone()],
+                vec![
+                    GlobalEntry::Ctx(delta.clone()),
+                    GlobalEntry::Ty(Rc::clone(lhs)),
+                    GlobalEntry::Ty(Rc::clone(rhs)),
+                    GlobalEntry::Tm(Rc::clone(val)),
+                ],
+                vec![s_lhs, s_rhs, s_val],
+                gamma,
+            ))
+        }
+        // (ℓ, ℓ', g, U_A, U_B, u_b, x_A, x_B, x_b. t_inr) — as inl but the
+        // value inhabits B.   (extension)
+        Term::Inr { lhs_level, rhs_level, lhs, rhs, val } => {
+            let s_lhs = rec.elim_ty(lhs_level.clone(), delta.clone(), Rc::clone(lhs));
+            let s_rhs = rec.elim_ty(rhs_level.clone(), delta.clone(), Rc::clone(rhs));
+            let s_val =
+                rec.elim_tm(rhs_level.clone(), delta.clone(), Rc::clone(rhs), Rc::clone(val));
+            Some(fire(
+                &b.tm_inr,
+                &[rhs_level.clone(), lhs_level.clone()],
+                vec![
+                    GlobalEntry::Ctx(delta.clone()),
+                    GlobalEntry::Ty(Rc::clone(lhs)),
+                    GlobalEntry::Ty(Rc::clone(rhs)),
+                    GlobalEntry::Tm(Rc::clone(val)),
+                ],
+                vec![s_lhs, s_rhs, s_val],
+                gamma,
+            ))
+        }
+        // (ℓ, ℓ', ℓ'', g, U_A, U_B, U_M, u_l, u_r, u_t, x_A, x_B, x_M, x_l,
+        // x_r, x_t. t_case) — x_M/x_l/x_r/x_t recurse (x_M at the *type*
+        // motive); a positive dependent eliminator.   (extension)
+        Term::Case {
+            lhs_level,
+            rhs_level,
+            motive_level,
+            lhs,
+            rhs,
+            motive,
+            case_l,
+            case_r,
+            scrut,
+        } => {
+            let lmax = Level::max(lhs_level.clone(), rhs_level.clone());
+            let sum = Rc::new(Type::Sum {
+                lhs_level: lhs_level.clone(),
+                rhs_level: rhs_level.clone(),
+                lhs: Rc::clone(lhs),
+                rhs: Rc::clone(rhs),
+            });
+            let s_lhs = rec.elim_ty(lhs_level.clone(), delta.clone(), Rc::clone(lhs));
+            let s_rhs = rec.elim_ty(rhs_level.clone(), delta.clone(), Rc::clone(rhs));
+            // M scoped in (Δ, z : A + B).
+            let dz = extend(delta, Rc::clone(&sum), lmax.clone());
+            let s_motive = rec.elim_ty(motive_level.clone(), dz, Rc::clone(motive));
+            // c_l : M[inl x/z] scoped in (Δ, x : A).
+            let dx = extend(delta, Rc::clone(lhs), lhs_level.clone());
+            let inl_x = Term::Inl {
+                lhs_level: lhs_level.clone(),
+                rhs_level: rhs_level.clone(),
+                lhs: Rc::new(lhs.shift_local(1)),
+                rhs: Rc::new(rhs.shift_local(1)),
+                val: Rc::new(Term::Var(LocalVar(0))),
+            };
+            let left_ty = motive
+                .apply_local(&LocalSubst::id(delta).shift_local(1).extended(Rc::new(inl_x)));
+            let s_case_l =
+                rec.elim_tm(motive_level.clone(), dx, Rc::new(left_ty), Rc::clone(case_l));
+            // c_r : M[inr y/z] scoped in (Δ, y : B).
+            let dy = extend(delta, Rc::clone(rhs), rhs_level.clone());
+            let inr_y = Term::Inr {
+                lhs_level: lhs_level.clone(),
+                rhs_level: rhs_level.clone(),
+                lhs: Rc::new(lhs.shift_local(1)),
+                rhs: Rc::new(rhs.shift_local(1)),
+                val: Rc::new(Term::Var(LocalVar(0))),
+            };
+            let right_ty = motive
+                .apply_local(&LocalSubst::id(delta).shift_local(1).extended(Rc::new(inr_y)));
+            let s_case_r =
+                rec.elim_tm(motive_level.clone(), dy, Rc::new(right_ty), Rc::clone(case_r));
+            let s_scrut =
+                rec.elim_tm(lmax, delta.clone(), Rc::clone(&sum), Rc::clone(scrut));
+            Some(fire(
+                &b.tm_case,
+                &[motive_level.clone(), rhs_level.clone(), lhs_level.clone()],
+                vec![
+                    GlobalEntry::Ctx(delta.clone()),
+                    GlobalEntry::Ty(Rc::clone(lhs)),
+                    GlobalEntry::Ty(Rc::clone(rhs)),
+                    GlobalEntry::Ty(Rc::clone(motive)),
+                    GlobalEntry::Tm(Rc::clone(case_l)),
+                    GlobalEntry::Tm(Rc::clone(case_r)),
+                    GlobalEntry::Tm(Rc::clone(scrut)),
+                ],
+                vec![s_lhs, s_rhs, s_motive, s_case_l, s_case_r, s_scrut],
+                gamma,
+            ))
+        }
         // box (u^δ): blocked, neutral.
         Term::GlobalTm { .. } => None,
         // Layer-m forms cannot be layer-c code: ill-typed, stuck.
@@ -999,6 +1191,7 @@ pub fn is_whnf_type(t: &Type) -> bool {
         | Type::Sigma { .. }
         | Type::Unit
         | Type::Empty
+        | Type::Sum { .. }
         | Type::Ty(_)
         | Type::UPi { .. }
         | Type::CtxPi { .. }
@@ -1019,6 +1212,7 @@ pub fn is_neutral_term(t: &Term) -> bool {
         Term::Var(_) | Term::GlobalTm { .. } => true,
         Term::ElimNat { scrut, .. } => is_neutral_term(scrut),
         Term::ElimEmpty { scrut, .. } => is_neutral_term(scrut),
+        Term::Case { scrut, .. } => is_neutral_term(scrut),
         Term::J { proof, .. } => is_neutral_term(proof),
         Term::Fst { pair, .. } | Term::Snd { pair, .. } => is_neutral_term(pair),
         Term::App { fun, .. }
@@ -1051,11 +1245,14 @@ pub fn is_whnf_term(t: &Term) -> bool {
         | Term::TmSigma { .. }
         | Term::TmUnit
         | Term::TmEmpty
+        | Term::TmSum { .. }
         | Term::Zero
         | Term::Succ(_)
         | Term::Refl { .. }
         | Term::Pair { .. }
         | Term::Triv
+        | Term::Inl { .. }
+        | Term::Inr { .. }
         | Term::Lam { .. }
         | Term::ULam { .. }
         | Term::CtxLam { .. }

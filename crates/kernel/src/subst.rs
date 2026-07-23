@@ -191,6 +191,12 @@ fn map_type<M: Mapper>(t: &Type, m: &mut M, at: Depths) -> Type {
         },
         Type::Unit => Type::Unit,
         Type::Empty => Type::Empty,
+        Type::Sum { lhs_level, rhs_level, lhs, rhs } => Type::Sum {
+            lhs_level: m.level(lhs_level, at),
+            rhs_level: m.level(rhs_level, at),
+            lhs: sub_ty(lhs, m, at),
+            rhs: sub_ty(rhs, m, at),
+        },
         Type::GlobalTy { var, subst } => {
             let subst = map_subst(subst, m, at);
             m.global_ty(*var, subst, at)
@@ -242,6 +248,12 @@ fn map_term<M: Mapper>(t: &Term, m: &mut M, at: Depths) -> Term {
         },
         Term::TmUnit => Term::TmUnit,
         Term::TmEmpty => Term::TmEmpty,
+        Term::TmSum { lhs_level, rhs_level, lhs, rhs } => Term::TmSum {
+            lhs_level: m.level(lhs_level, at),
+            rhs_level: m.level(rhs_level, at),
+            lhs: sub_tm(lhs, m, at),
+            rhs: sub_tm(rhs, m, at),
+        },
         Term::Zero => Term::Zero,
         Term::Succ(t) => Term::Succ(sub_tm(t, m, at)),
         Term::ElimNat { level, motive, base, step, scrut } => Term::ElimNat {
@@ -292,6 +304,41 @@ fn map_term<M: Mapper>(t: &Term, m: &mut M, at: Depths) -> Term {
         Term::ElimEmpty { level, motive, scrut } => Term::ElimEmpty {
             level: m.level(level, at),
             motive: sub_ty(motive, m, at + dep(0, 0, 1)),
+            scrut: sub_tm(scrut, m, at),
+        },
+        Term::Inl { lhs_level, rhs_level, lhs, rhs, val } => Term::Inl {
+            lhs_level: m.level(lhs_level, at),
+            rhs_level: m.level(rhs_level, at),
+            lhs: sub_ty(lhs, m, at),
+            rhs: sub_ty(rhs, m, at),
+            val: sub_tm(val, m, at),
+        },
+        Term::Inr { lhs_level, rhs_level, lhs, rhs, val } => Term::Inr {
+            lhs_level: m.level(lhs_level, at),
+            rhs_level: m.level(rhs_level, at),
+            lhs: sub_ty(lhs, m, at),
+            rhs: sub_ty(rhs, m, at),
+            val: sub_tm(val, m, at),
+        },
+        Term::Case {
+            lhs_level,
+            rhs_level,
+            motive_level,
+            lhs,
+            rhs,
+            motive,
+            case_l,
+            case_r,
+            scrut,
+        } => Term::Case {
+            lhs_level: m.level(lhs_level, at),
+            rhs_level: m.level(rhs_level, at),
+            motive_level: m.level(motive_level, at),
+            lhs: sub_ty(lhs, m, at),
+            rhs: sub_ty(rhs, m, at),
+            motive: sub_ty(motive, m, at + dep(0, 0, 1)),
+            case_l: sub_tm(case_l, m, at + dep(0, 0, 1)),
+            case_r: sub_tm(case_r, m, at + dep(0, 0, 1)),
             scrut: sub_tm(scrut, m, at),
         },
         Term::Lam { dom_level, cod_level, dom, body } => Term::Lam {
@@ -440,6 +487,11 @@ fn map_branches<M: Mapper>(b: &Branches, m: &mut M, at: Depths) -> Branches {
         tm_empty: sub_tm(&b.tm_empty, m, at + dep(0, 1, 0)),
         tm_triv: sub_tm(&b.tm_triv, m, at + dep(0, 1, 0)),
         tm_elim_empty: sub_tm(&b.tm_elim_empty, m, at + dep(1, 3, 2)),
+        ty_sum: sub_tm(&b.ty_sum, m, at + dep(2, 3, 2)),
+        tm_sum: sub_tm(&b.tm_sum, m, at + dep(2, 3, 2)),
+        tm_inl: sub_tm(&b.tm_inl, m, at + dep(2, 4, 3)),
+        tm_inr: sub_tm(&b.tm_inr, m, at + dep(2, 4, 3)),
+        tm_case: sub_tm(&b.tm_case, m, at + dep(3, 7, 6)),
     }
 }
 

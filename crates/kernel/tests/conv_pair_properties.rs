@@ -112,7 +112,13 @@ fn decode(e: &Term) -> Type {
             fst: rty(Type::El { level: fst_level.clone(), tm: Rc::clone(fst) }),
             snd: rty(Type::El { level: snd_level.clone(), tm: Rc::clone(snd) }),
         },
-        _ => unreachable!("gen_encoding only produces TmNat/TmTy/TmPi/TmId/TmSigma"),
+        Term::TmSum { lhs_level, rhs_level, lhs, rhs } => Type::Sum {
+            lhs_level: lhs_level.clone(),
+            rhs_level: rhs_level.clone(),
+            lhs: rty(Type::El { level: lhs_level.clone(), tm: Rc::clone(lhs) }),
+            rhs: rty(Type::El { level: rhs_level.clone(), tm: Rc::clone(rhs) }),
+        },
+        _ => unreachable!("gen_encoding only produces TmNat/TmTy/TmPi/TmId/TmSigma/TmSum"),
     }
 }
 
@@ -186,7 +192,15 @@ fn mutate_encoding(e: &Term) -> Term {
             fst: Rc::clone(fst),
             snd: rt(mutate_encoding(snd)),
         },
-        _ => unreachable!("gen_encoding only produces TmNat/TmTy/TmPi/TmId/TmSigma"),
+        // Sum: non-dependent, so mutating either component is type-preserving;
+        // change the lhs head.
+        Term::TmSum { lhs_level, rhs_level, lhs, rhs } => Term::TmSum {
+            lhs_level: lhs_level.clone(),
+            rhs_level: rhs_level.clone(),
+            lhs: rt(mutate_encoding(lhs)),
+            rhs: Rc::clone(rhs),
+        },
+        _ => unreachable!("gen_encoding only produces TmNat/TmTy/TmPi/TmId/TmSigma/TmSum"),
     }
 }
 
@@ -275,9 +289,9 @@ fn neutral_recursor_compares_branches() {
         let tm_variant = r.below(2) == 1;
         let nr = gen_nat_rec(&base_env, &mut r, tm_variant);
         let env = &nr.env;
-        // Branch i holds the numeral i: all 28 pairwise distinct, so any
+        // Branch i holds the numeral i: all 33 pairwise distinct, so any
         // swap or bump must be caught by the branchwise comparison.
-        let base: [Rc<Term>; 28] = std::array::from_fn(|i| numeral(i as u32));
+        let base: [Rc<Term>; 33] = std::array::from_fn(|i| numeral(i as u32));
         let t = nr.build(&base);
         let res =
             check_term(&env.psi, env.univs, env.layer, &env.gamma, &t, &Type::Nat, &Level::Zero, FUEL);
@@ -285,7 +299,7 @@ fn neutral_recursor_compares_branches() {
         let conv = |a: &Term, b: &Term| {
             conv_term(&env.psi, &env.gamma, Layer::Meta, a, b, &Type::Nat, &Level::Zero, FUEL)
         };
-        let k = r.below(28) as usize;
+        let k = r.below(33) as usize;
         // β-wrapped branch: differing sides that are still convertible.
         let mut pos = base.clone();
         pos[k] = beta_wrap(&base[k]);
@@ -301,7 +315,7 @@ fn neutral_recursor_compares_branches() {
         let tn = nr.build(&neg);
         assert_eq!(conv(&t, &tn), Err(NC), "seed {seed}: bumped branch {k}");
         // Two distinct branches swapped: NotConvertible.
-        let j = (k + 1 + r.below(27) as usize) % 28;
+        let j = (k + 1 + r.below(32) as usize) % 33;
         let mut sw = base.clone();
         sw.swap(j, k);
         let ts = nr.build(&sw);

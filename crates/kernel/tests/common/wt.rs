@@ -241,7 +241,7 @@ pub fn gen_wt_ctx(env: &WtEnv, r: &mut Rng, b: u32, layer: Layer) -> LocalCtx {
 pub fn gen_wt_type(env: &WtEnv, r: &mut Rng, b: u32) -> (Rc<Type>, Level) {
     assert!(env.layer != Layer::Var);
     for _ in 0..8 {
-        match r.below(11) {
+        match r.below(12) {
             0 => return (rty(Type::Nat), Level::Zero),
             1 => {
                 let l = gen_wf_level(env.univs, r, 1);
@@ -333,6 +333,20 @@ pub fn gen_wt_type(env: &WtEnv, r: &mut Rng, b: u32) -> (Rc<Type>, Level) {
                     Level::max(dl, cl),
                 );
             }
+            11 if b > 0 => {
+                // A +^{l,l'} B (extension): non-dependent, both in Γ.
+                let (lhs, dl) = gen_wt_type(env, r, b / 2);
+                let (rhs, cl) = gen_wt_type(env, r, b / 2);
+                return (
+                    rty(Type::Sum {
+                        lhs_level: dl.clone(),
+                        rhs_level: cl.clone(),
+                        lhs,
+                        rhs,
+                    }),
+                    Level::max(dl, cl),
+                );
+            }
             _ => continue,
         }
     }
@@ -341,7 +355,7 @@ pub fn gen_wt_type(env: &WtEnv, r: &mut Rng, b: u32) -> (Rc<Type>, Level) {
 
 /// Synthesize an encoding `⊢_i t : Ty l @ 1+l`, returning `(t, l)`.
 pub fn gen_encoding(env: &WtEnv, r: &mut Rng, b: u32) -> (Rc<Term>, Level) {
-    match r.below(5) {
+    match r.below(6) {
         0 => (rt(Term::TmNat), Level::Zero),
         1 => {
             let l = gen_wf_level(env.univs, r, 1);
@@ -382,6 +396,15 @@ pub fn gen_encoding(env: &WtEnv, r: &mut Rng, b: u32) -> (Rc<Term>, Level) {
             let (snd, cl) = gen_encoding(&e, r, b / 2);
             (
                 rt(Term::TmSigma { fst_level: dl.clone(), snd_level: cl.clone(), fst, snd }),
+                Level::max(dl, cl),
+            )
+        }
+        5 if b > 0 => {
+            // Sum encoding (extension): non-dependent, both encodings in Γ.
+            let (lhs, dl) = gen_encoding(env, r, b / 2);
+            let (rhs, cl) = gen_encoding(env, r, b / 2);
+            (
+                rt(Term::TmSum { lhs_level: dl.clone(), rhs_level: cl.clone(), lhs, rhs }),
                 Level::max(dl, cl),
             )
         }
@@ -564,6 +587,28 @@ pub fn gen_wt_term_at(
                 snd: bb,
             }))
         }
+        // inl/inr inhabit a sum: inject into the chosen summand (extension).
+        Type::Sum { lhs_level: dl, rhs_level: cl, lhs, rhs } if b > 0 => {
+            if r.below(2) == 0 {
+                let v = gen_wt_term_at(env, r, b / 2, lhs, dl)?;
+                Some(rt(Term::Inl {
+                    lhs_level: dl.clone(),
+                    rhs_level: cl.clone(),
+                    lhs: Rc::clone(lhs),
+                    rhs: Rc::clone(rhs),
+                    val: v,
+                }))
+            } else {
+                let v = gen_wt_term_at(env, r, b / 2, rhs, cl)?;
+                Some(rt(Term::Inr {
+                    lhs_level: dl.clone(),
+                    rhs_level: cl.clone(),
+                    lhs: Rc::clone(lhs),
+                    rhs: Rc::clone(rhs),
+                    val: v,
+                }))
+            }
+        }
         _ => None,
     };
     // Verify intro results (annotations copied out of the target type can
@@ -596,7 +641,7 @@ pub fn gen_wt_term(env: &WtEnv, r: &mut Rng, b: u32) -> (Rc<Term>, Rc<Type>, Lev
     assert!(env.layer != Layer::Var);
     let meta = env.layer == Layer::Meta;
     for _ in 0..10 {
-        match r.below(23) {
+        match r.below(26) {
             0 | 1 if !env.gamma.entries.is_empty() => {
                 let x = r.below(env.gamma.entries.len() as u32);
                 let i = env.gamma.entries.len() - 1 - x as usize;
@@ -921,6 +966,85 @@ pub fn gen_wt_term(env: &WtEnv, r: &mut Rng, b: u32) -> (Rc<Term>, Rc<Type>, Lev
                     cl,
                 );
             }
+            23 if b > 0 => {
+                // inl^{l,l'}(A;B;a) : A + B (extension).
+                let (lhs, dl) = gen_wt_type(env, r, b / 2);
+                let (rhs, cl) = gen_wt_type(env, r, b / 2);
+                let Some(a) = gen_wt_term_at(env, r, b / 2, &lhs, &dl) else { continue };
+                return (
+                    rt(Term::Inl {
+                        lhs_level: dl.clone(),
+                        rhs_level: cl.clone(),
+                        lhs: Rc::clone(&lhs),
+                        rhs: Rc::clone(&rhs),
+                        val: a,
+                    }),
+                    rty(Type::Sum {
+                        lhs_level: dl.clone(),
+                        rhs_level: cl.clone(),
+                        lhs,
+                        rhs,
+                    }),
+                    Level::max(dl, cl),
+                );
+            }
+            24 if b > 0 => {
+                // inr^{l,l'}(A;B;b) : A + B (extension).
+                let (lhs, dl) = gen_wt_type(env, r, b / 2);
+                let (rhs, cl) = gen_wt_type(env, r, b / 2);
+                let Some(bb) = gen_wt_term_at(env, r, b / 2, &rhs, &cl) else { continue };
+                return (
+                    rt(Term::Inr {
+                        lhs_level: dl.clone(),
+                        rhs_level: cl.clone(),
+                        lhs: Rc::clone(&lhs),
+                        rhs: Rc::clone(&rhs),
+                        val: bb,
+                    }),
+                    rty(Type::Sum {
+                        lhs_level: dl.clone(),
+                        rhs_level: cl.clone(),
+                        lhs,
+                        rhs,
+                    }),
+                    Level::max(dl, cl),
+                );
+            }
+            25 if b > 0 => {
+                // case with a constant motive B (the synthesized value's
+                // type): both branches at B, scrutinee an inhabitant of A + B.
+                let (base, bty, bl) = guard(env.univs, gen_wt_term(env, r, b / 2));
+                let motive = rty(bty.shift_local(1));
+                let (lhs, dl) = gen_wt_type(env, r, b / 2);
+                let (rhs, cl) = gen_wt_type(env, r, b / 2);
+                let lmax = Level::max(dl.clone(), cl.clone());
+                let sum = rty(Type::Sum {
+                    lhs_level: dl.clone(),
+                    rhs_level: cl.clone(),
+                    lhs: Rc::clone(&lhs),
+                    rhs: Rc::clone(&rhs),
+                });
+                let Some(scrut) = gen_wt_term_at(env, r, b / 2, &sum, &lmax) else {
+                    continue;
+                };
+                let case_l = rt(base.shift_local(1));
+                let case_r = rt(base.shift_local(1));
+                return (
+                    rt(Term::Case {
+                        lhs_level: dl,
+                        rhs_level: cl,
+                        motive_level: bl.clone(),
+                        lhs,
+                        rhs,
+                        motive,
+                        case_l,
+                        case_r,
+                        scrut,
+                    }),
+                    bty,
+                    bl,
+                );
+            }
             _ => continue,
         }
     }
@@ -1014,7 +1138,7 @@ fn gen_letbox_ty(env: &WtEnv, r: &mut Rng, b: u32) -> (Rc<Term>, Rc<Type>, Level
 /// recursive-call entry has that same motive (so `Var(0)` inhabits the
 /// branch type). Order = `Branches` field order. Independent transcription
 /// of docs/delam/04 — a disagreement with `src/rec.rs` is a test failure.
-const BRANCH_DIMS: [(u32, u32, u32, bool, bool); 28] = [
+const BRANCH_DIMS: [(u32, u32, u32, bool, bool); 33] = [
     (0, 1, 0, false, false), // ty_nat
     (2, 3, 2, false, true),  // ty_pi
     (1, 1, 0, false, false), // ty_ty
@@ -1043,6 +1167,11 @@ const BRANCH_DIMS: [(u32, u32, u32, bool, bool); 28] = [
     (0, 1, 0, true, false),  // tm_empty
     (0, 1, 0, true, false),  // tm_triv
     (1, 3, 2, true, true),   // tm_elim_empty (innermost local is a term-motive call)
+    (2, 3, 2, false, true),  // ty_sum
+    (2, 3, 2, true, true),   // tm_sum
+    (2, 4, 3, true, true),   // tm_inl
+    (2, 4, 3, true, true),   // tm_inr
+    (3, 7, 6, true, true),   // tm_case (innermost local is a term-motive call)
 ];
 
 /// A Γ-variable whose WHNF type is a contextual type matching `tm_variant`:
@@ -1098,7 +1227,7 @@ fn gen_const_rec(
         ty_motive: rty(m1ty.shift_univ(1).shift_global(1).shift_local(1)),
         tm_motive: rty(m2ty.shift_univ(1).shift_global(2).shift_local(1)),
     });
-    let mut bs: Vec<Rc<Term>> = Vec::with_capacity(28);
+    let mut bs: Vec<Rc<Term>> = Vec::with_capacity(33);
     for &(tu, tg, tl, tm_kind, var_ok) in &BRANCH_DIMS {
         if var_ok && r.below(3) == 0 {
             bs.push(rt(v(0)));
@@ -1136,6 +1265,11 @@ fn gen_const_rec(
         tm_empty: bs[25].clone(),
         tm_triv: bs[26].clone(),
         tm_elim_empty: bs[27].clone(),
+        ty_sum: bs[28].clone(),
+        tm_sum: bs[29].clone(),
+        tm_inl: bs[30].clone(),
+        tm_inr: bs[31].clone(),
+        tm_case: bs[32].clone(),
     });
     if tm_variant {
         let (scrut, delta, cty, cl) = match neutral {
@@ -1376,7 +1510,7 @@ pub fn gen_nat_rec(base: &WtEnv, r: &mut Rng, tm_variant: bool) -> NatRec {
 impl NatRec {
     /// The recursor over `Var 0` with the given branch bodies, in
     /// [`Branches`] field order. Checks at `Nat @ 0` in `self.env`.
-    pub fn build(&self, bs: &[Rc<Term>; 28]) -> Rc<Term> {
+    pub fn build(&self, bs: &[Rc<Term>; 33]) -> Rc<Term> {
         let motives = Rc::new(Motives {
             ty_motive: rty(Type::Nat),
             tm_motive: rty(Type::Nat),
@@ -1410,6 +1544,11 @@ impl NatRec {
             tm_empty: bs[25].clone(),
             tm_triv: bs[26].clone(),
             tm_elim_empty: bs[27].clone(),
+            ty_sum: bs[28].clone(),
+            tm_sum: bs[29].clone(),
+            tm_inl: bs[30].clone(),
+            tm_inr: bs[31].clone(),
+            tm_case: bs[32].clone(),
         });
         rt(if self.tm_variant {
             Term::ElimCodeTm {
@@ -1605,6 +1744,60 @@ pub fn identity_branches() -> Rc<Branches> {
                 level: lv(0),
                 motive: rty(u_m_e),
                 scrut: rt(gtm(0, &g2)),
+            })))
+        },
+        // box (U_A^id +^{ℓ,ℓ'} U_B^id) — telescope g = 2, U_A = 1, U_B = 0.
+        ty_sum: rt(Term::BoxTy(rty(Type::Sum {
+            lhs_level: lv(1),
+            rhs_level: lv(0),
+            lhs: rty(gty(1, &g2)),
+            rhs: rty(gty(0, &g2)),
+        }))),
+        // box (u_a +^{ℓ,ℓ'} u_b) — telescope g = 2, u_a = 1, u_b = 0.
+        tm_sum: rt(Term::BoxTm(rt(Term::TmSum {
+            lhs_level: lv(1),
+            rhs_level: lv(0),
+            lhs: rt(gtm(1, &g2)),
+            rhs: rt(gtm(0, &g2)),
+        }))),
+        // box (inl(U_A^id; U_B^id; u_a^id)) — g = 3, U_A = 2, U_B = 1, u_a = 0.
+        tm_inl: rt(Term::BoxTm(rt(Term::Inl {
+            lhs_level: lv(1),
+            rhs_level: lv(0),
+            lhs: rty(gty(2, &g3)),
+            rhs: rty(gty(1, &g3)),
+            val: rt(gtm(0, &g3)),
+        }))),
+        // box (inr(U_A^id; U_B^id; u_b^id)) — g = 3, U_A = 2, U_B = 1, u_b = 0.
+        tm_inr: rt(Term::BoxTm(rt(Term::Inr {
+            lhs_level: lv(1),
+            rhs_level: lv(0),
+            lhs: rty(gty(2, &g3)),
+            rhs: rty(gty(1, &g3)),
+            val: rt(gtm(0, &g3)),
+        }))),
+        // box (case (z. U_M^id) (x. u_l^id) (y. u_r^id) u_t^id) — telescope
+        // g = 6, U_A = 5, U_B = 4, U_M = 3, u_l = 2, u_r = 1, u_t = 0.
+        tm_case: {
+            let sum = Type::Sum {
+                lhs_level: lv(2),
+                rhs_level: lv(1),
+                lhs: rty(gty(5, &g6)),
+                rhs: rty(gty(4, &g6)),
+            };
+            let gz = ext(&g6, sum, Level::max(lv(2), lv(1)));
+            let gx_a = ext(&g6, gty(5, &g6), lv(2));
+            let gx_b = ext(&g6, gty(4, &g6), lv(1));
+            rt(Term::BoxTm(rt(Term::Case {
+                lhs_level: lv(2),
+                rhs_level: lv(1),
+                motive_level: lv(0),
+                lhs: rty(gty(5, &g6)),
+                rhs: rty(gty(4, &g6)),
+                motive: rty(gty(3, &gz)),
+                case_l: rt(gtm(2, &gx_a)),
+                case_r: rt(gtm(1, &gx_b)),
+                scrut: rt(gtm(0, &g6)),
             })))
         },
     })

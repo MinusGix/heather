@@ -482,6 +482,16 @@ impl Tc {
             // Unit/Empty-formation (extension beyond ch. 04): ⊢_i Unit @ 0,
             // ⊢_i Empty @ 0.
             Type::Unit | Type::Empty => Ok(Level::Zero),
+            // Sum-formation (extension beyond ch. 04; kernel-v1-extensions):
+            // ⊢_i A +^{l,l'} B @ l⊔l' ⟸ ⊢_i A @ l, ⊢_i B @ l'. Non-dependent:
+            // both summands live in Γ.
+            Type::Sum { lhs_level, rhs_level, lhs, rhs } => {
+                self.level_wf(env, lhs_level)?;
+                self.level_wf(env, rhs_level)?;
+                self.ty_check(env, lhs, lhs_level)?;
+                self.ty_check(env, rhs, rhs_level)?;
+                Ok(Level::max(lhs_level.clone(), rhs_level.clone()))
+            }
             Type::GlobalTy { var, subst } => {
                 let Some(binding) = lookup(&env.psi, *var) else {
                     return Err(TypeError::UnboundGlobalVar(var.0));
@@ -729,6 +739,26 @@ impl Tc {
                 self.not_var_layer(env)?;
                 Ok((Type::Ty(Level::Zero), Level::constant(1)))
             }
+            // Encoding of the binary sum (extension): a +^{l,l'} b : Ty (l⊔l').
+            Term::TmSum { lhs_level, rhs_level, lhs, rhs } => {
+                self.not_var_layer(env)?;
+                self.level_wf(env, lhs_level)?;
+                self.level_wf(env, rhs_level)?;
+                self.tm_check(
+                    env,
+                    lhs,
+                    &Type::Ty(lhs_level.clone()),
+                    &Level::succ(lhs_level.clone()),
+                )?;
+                self.tm_check(
+                    env,
+                    rhs,
+                    &Type::Ty(rhs_level.clone()),
+                    &Level::succ(rhs_level.clone()),
+                )?;
+                let lmax = Level::max(lhs_level.clone(), rhs_level.clone());
+                Ok((Type::Ty(lmax.clone()), Level::succ(lmax)))
+            }
             Term::Zero => {
                 self.not_var_layer(env)?;
                 Ok((Type::Nat, Level::Zero))
@@ -921,6 +951,104 @@ impl Tc {
                 Ok((
                     motive.apply_local(&LocalSubst::id(&env.gamma).extended(Rc::clone(scrut))),
                     level.clone(),
+                ))
+            }
+
+            // -- binary sums (extension beyond ch. 04) ----------------------
+            // inl^{l,l'}(A; B; a) : A +^{l,l'} B @ l⊔l'.
+            Term::Inl { lhs_level, rhs_level, lhs, rhs, val } => {
+                self.not_var_layer(env)?;
+                self.level_wf(env, lhs_level)?;
+                self.level_wf(env, rhs_level)?;
+                self.ty_check(env, lhs, lhs_level)?;
+                self.ty_check(env, rhs, rhs_level)?;
+                self.tm_check(env, val, lhs, lhs_level)?;
+                Ok((
+                    Type::Sum {
+                        lhs_level: lhs_level.clone(),
+                        rhs_level: rhs_level.clone(),
+                        lhs: Rc::clone(lhs),
+                        rhs: Rc::clone(rhs),
+                    },
+                    Level::max(lhs_level.clone(), rhs_level.clone()),
+                ))
+            }
+            // inr^{l,l'}(A; B; b) : A +^{l,l'} B @ l⊔l'.
+            Term::Inr { lhs_level, rhs_level, lhs, rhs, val } => {
+                self.not_var_layer(env)?;
+                self.level_wf(env, lhs_level)?;
+                self.level_wf(env, rhs_level)?;
+                self.ty_check(env, lhs, lhs_level)?;
+                self.ty_check(env, rhs, rhs_level)?;
+                self.tm_check(env, val, rhs, rhs_level)?;
+                Ok((
+                    Type::Sum {
+                        lhs_level: lhs_level.clone(),
+                        rhs_level: rhs_level.clone(),
+                        lhs: Rc::clone(lhs),
+                        rhs: Rc::clone(rhs),
+                    },
+                    Level::max(lhs_level.clone(), rhs_level.clone()),
+                ))
+            }
+            // case^{l,l',l''}(z. M; A; B; x. c_l; y. c_r; t) : M[t/z] @ l''.
+            Term::Case {
+                lhs_level,
+                rhs_level,
+                motive_level,
+                lhs,
+                rhs,
+                motive,
+                case_l,
+                case_r,
+                scrut,
+            } => {
+                self.not_var_layer(env)?;
+                self.level_wf(env, lhs_level)?;
+                self.level_wf(env, rhs_level)?;
+                self.level_wf(env, motive_level)?;
+                self.ty_check(env, lhs, lhs_level)?;
+                self.ty_check(env, rhs, rhs_level)?;
+                let lmax = Level::max(lhs_level.clone(), rhs_level.clone());
+                let sum = Type::Sum {
+                    lhs_level: lhs_level.clone(),
+                    rhs_level: rhs_level.clone(),
+                    lhs: Rc::clone(lhs),
+                    rhs: Rc::clone(rhs),
+                };
+                // M scoped in (Γ, z : A + B).
+                let e_z = env.push_entry(Rc::new(sum.clone()), lmax.clone());
+                self.ty_check(&e_z, motive, motive_level)?;
+                // c_l : M[inl x/z] scoped in (Γ, x : A).
+                let e_x = env.push_entry(Rc::clone(lhs), lhs_level.clone());
+                let inl_x = Term::Inl {
+                    lhs_level: lhs_level.clone(),
+                    rhs_level: rhs_level.clone(),
+                    lhs: Rc::new(lhs.shift_local(1)),
+                    rhs: Rc::new(rhs.shift_local(1)),
+                    val: Rc::new(Term::Var(LocalVar(0))),
+                };
+                let left_ty = motive.apply_local(
+                    &LocalSubst::id(&env.gamma).shift_local(1).extended(Rc::new(inl_x)),
+                );
+                self.tm_check(&e_x, case_l, &left_ty, motive_level)?;
+                // c_r : M[inr y/z] scoped in (Γ, y : B).
+                let e_y = env.push_entry(Rc::clone(rhs), rhs_level.clone());
+                let inr_y = Term::Inr {
+                    lhs_level: lhs_level.clone(),
+                    rhs_level: rhs_level.clone(),
+                    lhs: Rc::new(lhs.shift_local(1)),
+                    rhs: Rc::new(rhs.shift_local(1)),
+                    val: Rc::new(Term::Var(LocalVar(0))),
+                };
+                let right_ty = motive.apply_local(
+                    &LocalSubst::id(&env.gamma).shift_local(1).extended(Rc::new(inr_y)),
+                );
+                self.tm_check(&e_y, case_r, &right_ty, motive_level)?;
+                self.tm_check(env, scrut, &sum, &lmax)?;
+                Ok((
+                    motive.apply_local(&LocalSubst::id(&env.gamma).extended(Rc::clone(scrut))),
+                    motive_level.clone(),
                 ))
             }
 

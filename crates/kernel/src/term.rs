@@ -77,6 +77,16 @@ pub enum Type {
     /// `Empty` — the empty type; no inhabitants, eliminated by
     /// [`Term::ElimEmpty`]. Lives at level 0. Extension beyond DeLaM ch. 04.
     Empty,
+    /// `A +^{l,l'} B` — binary sum (coproduct); `lhs`, `rhs` are types in the
+    /// ambient Γ (non-dependent — neither binds). Lives at `l ⊔ l'`.
+    /// Introduced by [`Term::Inl`]/[`Term::Inr`], eliminated (dependently) by
+    /// [`Term::Case`]. Extension beyond DeLaM ch. 04.
+    Sum {
+        lhs_level: Level,
+        rhs_level: Level,
+        lhs: Rc<Type>,
+        rhs: Rc<Type>,
+    },
     /// `U^δ` — global type variable under a local substitution.
     GlobalTy { var: GlobalVar, subst: LocalSubst },
     /// `(g : Ctx) ⇒^l T` — meta-function type over context variables; binds
@@ -142,6 +152,15 @@ pub enum Term {
     /// `Empty : Ty 0` — encoding of the empty type (decoded by
     /// `El (Empty) ⇝ Empty`). Extension beyond DeLaM ch. 04.
     TmEmpty,
+    /// `s +^{l,l'} t : Ty (l ⊔ l')` where `s : Ty l`, `t : Ty l'` — encoding
+    /// of the binary sum (decoded by `El (s + t) ⇝ El s + El t`). Extension
+    /// beyond DeLaM ch. 04.
+    TmSum {
+        lhs_level: Level,
+        rhs_level: Level,
+        lhs: Rc<Term>,
+        rhs: Rc<Term>,
+    },
 
     // ---- natural numbers ----
     Zero,
@@ -222,6 +241,43 @@ pub enum Term {
     ElimEmpty {
         level: Level,
         motive: Rc<Type>,
+        scrut: Rc<Term>,
+    },
+
+    // ---- binary sums (extension beyond DeLaM ch. 04) ----
+    /// `inl^{l,l'}(A; B; a) : A +^{l,l'} B` where `a : A`. Fully annotated
+    /// (both summands and their levels) so it synthesizes.
+    Inl {
+        lhs_level: Level,
+        rhs_level: Level,
+        lhs: Rc<Type>,
+        rhs: Rc<Type>,
+        val: Rc<Term>,
+    },
+    /// `inr^{l,l'}(A; B; b) : A +^{l,l'} B` where `b : B`. Fully annotated so
+    /// it synthesizes.
+    Inr {
+        lhs_level: Level,
+        rhs_level: Level,
+        lhs: Rc<Type>,
+        rhs: Rc<Type>,
+        val: Rc<Term>,
+    },
+    /// `case^{l,l',l''}(z. M; A; B; x. c_l; y. c_r; t) : M[t/z]` — dependent
+    /// case analysis over `t : A +^{l,l'} B`. `motive` binds one local
+    /// (`z : A + B`), `left` binds one (`x : A`), `right` binds one
+    /// (`y : B`); `case_l : M[inl x/z]`, `case_r : M[inr y/z]`. β
+    /// `case (inl a) ⇝ c_l[a/x]`, `case (inr b) ⇝ c_r[b/y]`; neutral on a
+    /// neutral scrutinee. Annotated like `elim_Nat` so it infers.
+    Case {
+        lhs_level: Level,
+        rhs_level: Level,
+        motive_level: Level,
+        lhs: Rc<Type>,
+        rhs: Rc<Type>,
+        motive: Rc<Type>,
+        case_l: Rc<Term>,
+        case_r: Rc<Term>,
         scrut: Rc<Term>,
     },
 
@@ -474,6 +530,38 @@ pub struct Branches {
     /// u_t^id)`; mirrors `tm_elim_nat` minus base/step. Extension
     /// (kernel-v1-extensions).
     pub tm_elim_empty: Rc<Term>,
+    /// `(ℓ, ℓ', g, U_A, U_B, x_A, x_B. t_+)` — univs: ℓ, ℓ'; globals: g,
+    /// `U_A : Typ_c(g, ℓ)`, `U_B : Typ_c(g, ℓ')` (both in g — non-dependent);
+    /// locals: `x_A`, `x_B` (recursive calls). Code of the type
+    /// `U_A^id +^{ℓ,ℓ'} U_B^id`; mirrors `ty_sigma` minus the binder
+    /// extension. Extension beyond ch. 04 (kernel-v1-extensions).
+    pub ty_sum: Rc<Term>,
+    /// `(ℓ, ℓ', g, u_a, u_b, x_a, x_b. t'_+)` — univs: ℓ, ℓ'; globals: g,
+    /// `u_a : Trm_c(g ⊢ Ty ℓ)`, `u_b : Trm_c(g ⊢ Ty ℓ')`; locals: `x_a`,
+    /// `x_b`. Code of the encoding `u_a +^{ℓ,ℓ'} u_b : Ty (ℓ⊔ℓ')`; mirrors
+    /// `tm_sigma` minus the binder extension. Extension.
+    pub tm_sum: Rc<Term>,
+    /// `(ℓ, ℓ', g, U_A, U_B, u_a, x_A, x_B, x_a. t_inl)` — univs: ℓ, ℓ';
+    /// globals: g, `U_A : Typ_c(g, ℓ)`, `U_B : Typ_c(g, ℓ')`,
+    /// `u_a : Trm_c(g ⊢ U_A^id @ ℓ)`; locals: `x_A`, `x_B` (both type
+    /// motive!), `x_a`. Code of `inl(U_A^id; U_B^id; u_a^id)`. Extension.
+    pub tm_inl: Rc<Term>,
+    /// `(ℓ, ℓ', g, U_A, U_B, u_b, x_A, x_B, x_b. t_inr)` — as `tm_inl` but
+    /// `u_b : Trm_c(g ⊢ U_B^id @ ℓ')` and the code is
+    /// `inr(U_A^id; U_B^id; u_b^id)`. Extension.
+    pub tm_inr: Rc<Term>,
+    /// `(ℓ, ℓ', ℓ'', g, U_A, U_B, U_M, u_l, u_r, u_t, x_A, x_B, x_M, x_l,
+    /// x_r, x_t. t_case)` — univs: ℓ, ℓ', ℓ''; globals: g,
+    /// `U_A : Typ_c(g, ℓ)`, `U_B : Typ_c(g, ℓ')`,
+    /// `U_M : Typ_c((g, z : (U_A^id + U_B^id) @ ℓ⊔ℓ'), ℓ'')`,
+    /// `u_l : Trm_c((g, x : U_A^id @ ℓ) ⊢ U_M^{id, inl x/z} @ ℓ'')`,
+    /// `u_r : Trm_c((g, y : U_B^id @ ℓ') ⊢ U_M^{id, inr y/z} @ ℓ'')`,
+    /// `u_t : Trm_c(g ⊢ (U_A^id + U_B^id) @ ℓ⊔ℓ')`; locals: `x_A`, `x_B`,
+    /// `x_M` (type motive!), `x_l`, `x_r`, `x_t`. Code of
+    /// `case (z. U_M^id) (x. u_l^id) (y. u_r^id) u_t^id`; a positive
+    /// dependent eliminator (mirrors `tm_elim_nat`'s shape, two branches).
+    /// Extension.
+    pub tm_case: Rc<Term>,
 }
 
 /// Base of a local context: empty (`·`) or a context variable `g`.

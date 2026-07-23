@@ -74,9 +74,25 @@ scrutinee, fully annotated so it infers. The code recursors gain six
 branches (`ty_unit`, `ty_empty`, `tm_unit`, `tm_empty`, `tm_triv`,
 `tm_elim_empty`; 28 total).
 
+Fourth extension: **binary sums** — `A +^{l,l'} B` with encoding
+`s +^{l,l'} t : Ty (l⊔l')` (decoded by `El (s + t) ⇝ El s + El t`, mirroring
+Π/Σ), the two intros `inl^{l,l'}(A; B; a)` / `inr^{l,l'}(A; B; b)`, and a
+**dependent** eliminator `case^{l,l',l''}(z. M; A; B; x. c_l; y. c_r; t) :
+M[t/z]` with β `case (inl a) ⇝ c_l[a/x]`, `case (inr b) ⇝ c_r[b/y]`. Unlike
+the negative Σ (projections + η), a sum is **positive**: `case` is neutral on
+a neutral scrutinee (like `elim_Nat`), and conversion at `Type::Sum` matches
+the two constructors like `Zero`/`Succ` at `Nat` (comparing the injected
+value, tag mismatch = `NotConvertible`), *not* by η. `inl`/`inr` are fully
+annotated (both summands + levels) so they synthesize, and `case` is
+annotated like `elim_Nat` so it infers. The former is non-dependent — both
+summands live in Γ, so the `Sum`/`TmSum`/`ty_sum`/`tm_sum` shapes drop the
+Σ binder extension. The code recursors gain five branches (`ty_sum`,
+`tm_sum`, `tm_inl`, `tm_inr`, `tm_case`; 33 total); `tm_case` is the widest
+telescope (3 univs, 7 globals, 6 recursive calls).
+
 Explicitly out of v0: coinduction/effects, typeclasses, compiler machinery,
-inductive types beyond Nat, Id, Σ, Unit, and Empty, the type lifter (omitted
-by the paper too).
+inductive types beyond Nat, Id, Σ, Unit, Empty, and binary sums, the type
+lifter (omitted by the paper too).
 
 ## Algorithms
 

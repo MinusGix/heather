@@ -287,6 +287,30 @@ pub fn gen_branches(sc: &Sc, r: &mut Rng, b: u32) -> Rc<Branches> {
         tm_triv: t(0, 0, &|_| vec![GK::Ctx]),
         // (ℓ, g, U_M : Typ_c((g, x:Empty), ℓ), u_t : Trm_c(g ⊢ Empty), x_M, x_t)
         tm_elim_empty: t(1, 2, &|g| vec![GK::Ctx, GK::Ty(sh(g, 1)), GK::Tm(sh(g, 0))]),
+        // (ℓ, ℓ', g, U_A, U_B, x_A, x_B) — both summands in g (non-dependent).
+        ty_sum: t(2, 2, &|g| vec![GK::Ctx, GK::Ty(sh(g, 0)), GK::Ty(sh(g, 0))]),
+        tm_sum: t(2, 2, &|g| vec![GK::Ctx, GK::Tm(sh(g, 0)), GK::Tm(sh(g, 0))]),
+        // (ℓ, ℓ', g, U_A, U_B, u_a, x_A, x_B, x_a)
+        tm_inl: t(2, 3, &|g| {
+            vec![GK::Ctx, GK::Ty(sh(g, 0)), GK::Ty(sh(g, 0)), GK::Tm(sh(g, 0))]
+        }),
+        tm_inr: t(2, 3, &|g| {
+            vec![GK::Ctx, GK::Ty(sh(g, 0)), GK::Ty(sh(g, 0)), GK::Tm(sh(g, 0))]
+        }),
+        // (ℓ, ℓ', ℓ'', g, U_A, U_B, U_M : Typ_c((g, z:A+B), ℓ''),
+        //  u_l : Trm_c((g, x:A) ⊢ …), u_r : Trm_c((g, y:B) ⊢ …),
+        //  u_t : Trm_c(g ⊢ A+B), x_A, x_B, x_M, x_l, x_r, x_t)
+        tm_case: t(3, 6, &|g| {
+            vec![
+                GK::Ctx,
+                GK::Ty(sh(g, 0)),
+                GK::Ty(sh(g, 0)),
+                GK::Ty(sh(g, 1)),
+                GK::Tm(sh(g, 1)),
+                GK::Tm(sh(g, 1)),
+                GK::Tm(sh(g, 0)),
+            ]
+        }),
     })
 }
 
@@ -310,12 +334,21 @@ pub fn gen_type(sc: &Sc, r: &mut Rng, b: u32) -> Rc<Type> {
     }
 
     for _ in 0..8 {
-        let arm = if b == 0 { r.below(3) } else { r.below(14) };
+        let arm = if b == 0 { r.below(3) } else { r.below(15) };
         match arm {
             0 => return Rc::new(Type::Nat),
             1 => return Rc::new(Type::Ty(gen_level(sc, r, 1))),
             12 => return Rc::new(Type::Unit),
             13 => return Rc::new(Type::Empty),
+            14 if b > 0 => {
+                // Sum: non-dependent, both summands in the same scope.
+                return Rc::new(Type::Sum {
+                    lhs_level: gen_level(sc, r, 1),
+                    rhs_level: gen_level(sc, r, 1),
+                    lhs: gen_type(sc, r, b / 2),
+                    rhs: gen_type(sc, r, b / 2),
+                });
+            }
             2 if !ty_refs.is_empty() => {
                 let (abs, shape) = ty_refs[r.below(ty_refs.len() as u32) as usize];
                 return Rc::new(Type::GlobalTy {
@@ -422,7 +455,7 @@ pub fn gen_term(sc: &Sc, r: &mut Rng, b: u32) -> Rc<Term> {
     }
 
     for _ in 0..8 {
-        let arm = if b == 0 { r.below(5) } else { r.below(27) };
+        let arm = if b == 0 { r.below(5) } else { r.below(31) };
         match arm {
             0 if sc.local.len > 0 => return Rc::new(Term::Var(LocalVar(r.below(sc.local.len)))),
             0 | 1 => return Rc::new(Term::Zero),
@@ -658,6 +691,44 @@ pub fn gen_term(sc: &Sc, r: &mut Rng, b: u32) -> Rc<Term> {
                     pair: gen_term(sc, r, b / 2),
                 });
             }
+            27 if b > 0 => {
+                // TmSum: non-dependent encoding.
+                return Rc::new(Term::TmSum {
+                    lhs_level: gen_level(sc, r, 1),
+                    rhs_level: gen_level(sc, r, 1),
+                    lhs: gen_term(sc, r, b / 2),
+                    rhs: gen_term(sc, r, b / 2),
+                });
+            }
+            28 | 29 if b > 0 => {
+                // inl/inr: non-dependent type annotations, one value.
+                let lhs_level = gen_level(sc, r, 1);
+                let rhs_level = gen_level(sc, r, 1);
+                let lhs = gen_type(sc, r, b / 2);
+                let rhs = gen_type(sc, r, b / 2);
+                let val = gen_term(sc, r, b / 2);
+                return Rc::new(if arm == 28 {
+                    Term::Inl { lhs_level, rhs_level, lhs, rhs, val }
+                } else {
+                    Term::Inr { lhs_level, rhs_level, lhs, rhs, val }
+                });
+            }
+            30 if b > 0 => {
+                // case: motive binds z, each branch binds one value.
+                let mut inner = sc.clone();
+                inner.local.len += 1;
+                return Rc::new(Term::Case {
+                    lhs_level: gen_level(sc, r, 1),
+                    rhs_level: gen_level(sc, r, 1),
+                    motive_level: gen_level(sc, r, 1),
+                    lhs: gen_type(sc, r, b / 2),
+                    rhs: gen_type(sc, r, b / 2),
+                    motive: gen_type(&inner, r, b / 2),
+                    case_l: gen_term(&inner, r, b / 2),
+                    case_r: gen_term(&inner, r, b / 2),
+                    scrut: gen_term(sc, r, b / 2),
+                });
+            }
             _ => continue,
         }
     }
@@ -758,6 +829,7 @@ pub fn count_type(t: &Type) -> u64 {
         Type::Pi { dom, cod, .. } => count_type(dom) + count_type(cod),
         Type::Id { ty, lhs, rhs, .. } => count_type(ty) + count_term(lhs) + count_term(rhs),
         Type::Sigma { fst, snd, .. } => count_type(fst) + count_type(snd),
+        Type::Sum { lhs, rhs, .. } => count_type(lhs) + count_type(rhs),
         Type::UPi { body, .. } => count_type(body),
         Type::El { tm, .. } => count_term(tm),
         Type::GlobalTy { subst, .. } => count_subst(subst),
@@ -782,6 +854,7 @@ pub fn count_term(t: &Term) -> u64 {
             count_term(ty) + count_term(lhs) + count_term(rhs)
         }
         Term::TmSigma { fst, snd, .. } => count_term(fst) + count_term(snd),
+        Term::TmSum { lhs, rhs, .. } => count_term(lhs) + count_term(rhs),
         Term::Succ(t) => count_term(t),
         Term::Refl { ty, tm, .. } => count_type(ty) + count_term(tm),
         Term::J { ty, lhs, motive, case, rhs, proof, .. } => {
@@ -798,6 +871,13 @@ pub fn count_term(t: &Term) -> u64 {
             count_type(motive) + count_term(base) + count_term(step) + count_term(scrut)
         }
         Term::ElimEmpty { motive, scrut, .. } => count_type(motive) + count_term(scrut),
+        Term::Inl { lhs, rhs, val, .. } | Term::Inr { lhs, rhs, val, .. } => {
+            count_type(lhs) + count_type(rhs) + count_term(val)
+        }
+        Term::Case { lhs, rhs, motive, case_l, case_r, scrut, .. } => {
+            count_type(lhs) + count_type(rhs) + count_type(motive) + count_term(case_l)
+                + count_term(case_r) + count_term(scrut)
+        }
         Term::Lam { dom, body, .. } => count_type(dom) + count_term(body),
         Term::App { fun, dom, cod, arg, .. } => {
             count_term(fun) + count_type(dom) + count_type(cod) + count_term(arg)

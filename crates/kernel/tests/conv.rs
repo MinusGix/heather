@@ -448,7 +448,12 @@ fn const_branches(t: Term) -> Rc<Branches> {
         tm_unit: rt(t.clone()),
         tm_empty: rt(t.clone()),
         tm_triv: rt(t.clone()),
-        tm_elim_empty: rt(t),
+        tm_elim_empty: rt(t.clone()),
+        ty_sum: rt(t.clone()),
+        tm_sum: rt(t.clone()),
+        tm_inl: rt(t.clone()),
+        tm_inr: rt(t.clone()),
+        tm_case: rt(t),
     })
 }
 
@@ -518,7 +523,8 @@ fn recursor_branch_type_uses_motive() {
                   &mut br.tm_lam, &mut br.tm_app, &mut br.tm_id, &mut br.tm_refl,
                   &mut br.tm_j, &mut br.tm_sigma, &mut br.tm_pair, &mut br.tm_fst,
                   &mut br.tm_snd, &mut br.tm_unit, &mut br.tm_empty, &mut br.tm_triv,
-                  &mut br.tm_elim_empty] {
+                  &mut br.tm_elim_empty, &mut br.tm_sum, &mut br.tm_inl,
+                  &mut br.tm_inr, &mut br.tm_case] {
             *f = rt(Term::Zero);
         }
         br.ty_nat = rt(v(0));
@@ -544,7 +550,8 @@ fn recursor_branch_type_uses_motive() {
                   &mut br.tm_lam, &mut br.tm_app, &mut br.tm_id, &mut br.tm_refl,
                   &mut br.tm_j, &mut br.tm_sigma, &mut br.tm_pair, &mut br.tm_fst,
                   &mut br.tm_snd, &mut br.tm_unit, &mut br.tm_empty, &mut br.tm_triv,
-                  &mut br.tm_elim_empty] {
+                  &mut br.tm_elim_empty, &mut br.tm_sum, &mut br.tm_inl,
+                  &mut br.tm_inr, &mut br.tm_case] {
             *f = rt(Term::Zero);
         }
         *branches = Rc::new(br);
@@ -814,4 +821,131 @@ fn elim_empty_neutral_congruence() {
     ok_tm(&psi, &gamma, &elim(el_nat), &elim(Type::Nat), &Type::Nat, &c(0));
     // A differing motive is caught.
     no_tm(&psi, &gamma, &elim(Type::Nat), &elim(Type::Unit), &Type::Nat, &c(0));
+}
+
+// -------------------------------------------------------------------------
+// Binary sums (extension beyond ch. 04; kernel-v1-extensions)
+// -------------------------------------------------------------------------
+
+#[test]
+fn sum_type_congruence() {
+    let psi = psi(vec![]);
+    let g0 = nil_ctx(0);
+    let sum = |lhs: Type, rhs: Type| Type::Sum {
+        lhs_level: Level::Zero,
+        rhs_level: Level::Zero,
+        lhs: rty(lhs),
+        rhs: rty(rhs),
+    };
+    // Congruence through a β-convertible left component.
+    let el_beta = Type::El { level: Level::Zero, tm: rt(app(lam(Term::TmNat), Term::Zero)) };
+    assert_eq!(
+        conv_type(&psi, &g0, Layer::Prog, &sum(el_beta, Type::Nat),
+                  &sum(Type::Nat, Type::Nat), &c(0), FUEL),
+        Ok(())
+    );
+    // A distinct right component is caught.
+    assert_eq!(
+        conv_type(&psi, &g0, Layer::Prog, &sum(Type::Nat, Type::Nat),
+                  &sum(Type::Nat, Type::Unit), &c(0), FUEL),
+        Err(ConvError::NotConvertible)
+    );
+    // El of the encoding decodes to the Sum former.
+    let el_sum = Type::El {
+        level: Level::Zero,
+        tm: rt(Term::TmSum {
+            lhs_level: Level::Zero,
+            rhs_level: Level::Zero,
+            lhs: rt(Term::TmNat),
+            rhs: rt(Term::TmNat),
+        }),
+    };
+    assert_eq!(
+        conv_type(&psi, &g0, Layer::Prog, &el_sum, &sum(Type::Nat, Type::Nat), &c(0), FUEL),
+        Ok(())
+    );
+}
+
+#[test]
+fn sum_positive_conversion_and_case_beta() {
+    let psi = psi(vec![]);
+    let sum = Type::Sum {
+        lhs_level: Level::Zero,
+        rhs_level: Level::Zero,
+        lhs: rty(Type::Nat),
+        rhs: rty(Type::Nat),
+    };
+    let inl = |a: Term| Term::Inl {
+        lhs_level: Level::Zero,
+        rhs_level: Level::Zero,
+        lhs: rty(Type::Nat),
+        rhs: rty(Type::Nat),
+        val: rt(a),
+    };
+    let inr = |b: Term| Term::Inr {
+        lhs_level: Level::Zero,
+        rhs_level: Level::Zero,
+        lhs: rty(Type::Nat),
+        rhs: rty(Type::Nat),
+        val: rt(b),
+    };
+    // Positive: same tag compares its value (β fires inside); tag mismatch and
+    // a differing value are both NotConvertible.
+    ok_tm(&psi, &nil_ctx(0), &inl(Term::Zero), &inl(beta_zero()), &sum, &c(0));
+    no_tm(&psi, &nil_ctx(0), &inl(Term::Zero), &inl(num(1)), &sum, &c(0));
+    no_tm(&psi, &nil_ctx(0), &inl(Term::Zero), &inr(Term::Zero), &sum, &c(0));
+    ok_tm(&psi, &nil_ctx(0), &inr(num(2)), &inr(num(2)), &sum, &c(0));
+    // A neutral scrutinee compares structurally, and never to a canonical
+    // injection.
+    let gamma = extend(&nil_ctx(0), sum.clone(), c(0));
+    ok_tm(&psi, &gamma, &v(0), &v(0), &sum, &c(0));
+    no_tm(&psi, &gamma, &v(0), &inl(Term::Zero), &sum, &c(0));
+    // case β-fires during conversion (positive eliminator).
+    let case = |scrut: Term| Term::Case {
+        lhs_level: Level::Zero,
+        rhs_level: Level::Zero,
+        motive_level: Level::Zero,
+        lhs: rty(Type::Nat),
+        rhs: rty(Type::Nat),
+        motive: rty(Type::Nat),
+        case_l: rt(Term::Succ(rt(v(0)))),
+        case_r: rt(v(0)),
+        scrut: rt(scrut),
+    };
+    ok_tm(&psi, &nil_ctx(0), &case(inl(Term::Zero)), &num(1), &Type::Nat, &c(0));
+    ok_tm(&psi, &nil_ctx(0), &case(inr(num(2))), &num(2), &Type::Nat, &c(0));
+}
+
+#[test]
+fn case_neutral_congruence() {
+    let psi = psi(vec![]);
+    let sum = Type::Sum {
+        lhs_level: Level::Zero,
+        rhs_level: Level::Zero,
+        lhs: rty(Type::Nat),
+        rhs: rty(Type::Nat),
+    };
+    // case over a neutral variable z : Nat + Nat, constant Nat motive.
+    let gamma = extend(&nil_ctx(0), sum, c(0));
+    let case = |m: Type, l: Term, rr: Term| Term::Case {
+        lhs_level: Level::Zero,
+        rhs_level: Level::Zero,
+        motive_level: Level::Zero,
+        lhs: rty(Type::Nat),
+        rhs: rty(Type::Nat),
+        motive: rty(m),
+        case_l: rt(l),
+        case_r: rt(rr),
+        scrut: rt(v(0)),
+    };
+    // Same everything: convertible at the result type.
+    ok_tm(&psi, &gamma, &case(Type::Nat, v(0), v(0)),
+          &case(Type::Nat, v(0), v(0)), &Type::Nat, &c(0));
+    // A β-convertible motive (El «Nat» ⇝ Nat) is accepted.
+    let el_nat = Type::El { level: c(0), tm: rt(Term::TmNat) };
+    ok_tm(&psi, &gamma, &case(el_nat, v(0), v(0)),
+          &case(Type::Nat, v(0), v(0)), &Type::Nat, &c(0));
+    // A differing left branch is caught.
+    no_tm(&psi, &gamma, &case(Type::Nat, v(0), v(0)),
+          &case(Type::Nat, Term::Succ(rt(v(0))), v(0)), &Type::Nat, &c(0));
 }
