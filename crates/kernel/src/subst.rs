@@ -719,6 +719,23 @@ macro_rules! ops {
             pub fn shift_univ(&self, by: u32) -> $ty {
                 $map(self, &mut ShiftUniv { by }, Depths::default())
             }
+
+            /// Weaken the universe context by `by` variables *between*
+            /// existing binders: the innermost `cutoff` variables stay
+            /// fixed, everything above shifts. Used by conversion to view a
+            /// recursor motive (scoped in `L, ℓ`) under a branch telescope
+            /// (scoped in `L, ℓ⃗` with the motive's own binder still to be
+            /// instantiated).
+            pub fn shift_univ_above(&self, by: u32, cutoff: u32) -> $ty {
+                $map(self, &mut ShiftUniv { by }, Depths { univ: cutoff, ..Depths::default() })
+            }
+
+            /// Weaken the global context by `by` bindings between existing
+            /// binders: the innermost `cutoff` bindings stay fixed. See
+            /// [`Self::shift_univ_above`].
+            pub fn shift_global_above(&self, by: u32, cutoff: u32) -> $ty {
+                $map(self, &mut ShiftGlobal { by }, Depths { global: cutoff, ..Depths::default() })
+            }
         }
     };
 }

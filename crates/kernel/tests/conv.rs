@@ -1,0 +1,578 @@
+//! Golden tests for ch. 06 convertibility: one or more tests per rule
+//! family — β/η for all four function types, level equivalence at
+//! annotations, El decoding, syntactic box comparison, neutral inference
+//! (variables, globals with converting substitutions, elim_Nat, letbox,
+//! recursors with the C_A bundle), context conversion, and distinguishable
+//! fuel exhaustion.
+//!
+//! No generator-based properties here: conversion presupposes well-typed
+//! inputs, and on the generators' ill-typed terms a legitimate `Err` is
+//! indistinguishable from a bug. (Reflexivity on well-typed terms is the
+//! ch. 07/08 PER lemma, not something the generators can witness.)
+
+use std::rc::Rc;
+
+use heather_kernel::conv::{conv_local_ctx, conv_term, conv_type, ConvError};
+use heather_kernel::layer::Layer;
+use heather_kernel::level::{Level, UnivVar};
+use heather_kernel::term::{
+    Branches, CtxBase, CtxEntry, GlobalBinding, GlobalCtx, GlobalVar, LocalCtx, LocalSubst,
+    LocalVar, Motives, SubstTail, Term, Type,
+};
+
+const FUEL: u64 = 100_000;
+
+// -------------------------------------------------------------------------
+// Construction helpers (mirroring tests/reduce.rs)
+// -------------------------------------------------------------------------
+
+fn rt(t: Term) -> Rc<Term> {
+    Rc::new(t)
+}
+
+fn rty(t: Type) -> Rc<Type> {
+    Rc::new(t)
+}
+
+fn c(n: u64) -> Level {
+    Level::constant(n)
+}
+
+fn lv(i: u32) -> Level {
+    Level::Var(UnivVar(i))
+}
+
+fn v(i: u32) -> Term {
+    Term::Var(LocalVar(i))
+}
+
+fn psi(bindings: Vec<GlobalBinding>) -> GlobalCtx {
+    GlobalCtx { bindings }
+}
+
+/// `(·, x₀ : Nat @ 0, …)` with `n` entries.
+fn nil_ctx(n: u32) -> LocalCtx {
+    LocalCtx {
+        base: CtxBase::Nil,
+        entries: (0..n)
+            .map(|_| CtxEntry { ty: rty(Type::Nat), level: Level::Zero })
+            .collect(),
+    }
+}
+
+/// `Γ, x : ty @ level`.
+fn extend(gamma: &LocalCtx, ty: Type, level: Level) -> LocalCtx {
+    let mut g = gamma.clone();
+    g.entries.push(CtxEntry { ty: rty(ty), level });
+    g
+}
+
+/// `λ^{0,0}(x : Nat). body`.
+fn lam(body: Term) -> Term {
+    Term::Lam {
+        dom_level: Level::Zero,
+        cod_level: Level::Zero,
+        dom: rty(Type::Nat),
+        body: rt(body),
+    }
+}
+
+/// `app(f; 0,0; x : Nat. Nat; a)`.
+fn app(f: Term, a: Term) -> Term {
+    Term::App {
+        fun: rt(f),
+        dom_level: Level::Zero,
+        cod_level: Level::Zero,
+        dom: rty(Type::Nat),
+        cod: rty(Type::Nat),
+        arg: rt(a),
+    }
+}
+
+fn num(n: u32) -> Term {
+    let mut t = Term::Zero;
+    for _ in 0..n {
+        t = Term::Succ(rt(t));
+    }
+    t
+}
+
+/// `Π^{0,0}(x : Nat). Nat`.
+fn nat_to_nat() -> Type {
+    Type::Pi {
+        dom_level: Level::Zero,
+        cod_level: Level::Zero,
+        dom: rty(Type::Nat),
+        cod: rty(Type::Nat),
+    }
+}
+
+/// `(λx. x) 0` — β-convertible to `0` but not syntactically equal.
+fn beta_zero() -> Term {
+    app(lam(v(0)), Term::Zero)
+}
+
+/// The empty substitution `·⁰` out of the empty context.
+fn empty_subst(terms: Vec<Term>) -> LocalSubst {
+    LocalSubst {
+        tail: SubstTail::Empty { len: 0, base: CtxBase::Nil },
+        terms: terms.into_iter().map(rt).collect(),
+    }
+}
+
+fn ok_tm(psi: &GlobalCtx, gamma: &LocalCtx, a: &Term, b: &Term, ty: &Type, l: &Level) {
+    assert_eq!(conv_term(psi, gamma, Layer::Meta, a, b, ty, l, FUEL), Ok(()));
+}
+
+fn no_tm(psi: &GlobalCtx, gamma: &LocalCtx, a: &Term, b: &Term, ty: &Type, l: &Level) {
+    assert_eq!(
+        conv_term(psi, gamma, Layer::Meta, a, b, ty, l, FUEL),
+        Err(ConvError::NotConvertible)
+    );
+}
+
+// -------------------------------------------------------------------------
+// β, neutrals, congruence
+// -------------------------------------------------------------------------
+
+#[test]
+fn beta_redex_converts() {
+    let psi = psi(vec![]);
+    ok_tm(&psi, &nil_ctx(0), &beta_zero(), &Term::Zero, &Type::Nat, &c(0));
+    // Also at layer p.
+    assert_eq!(
+        conv_term(
+            &psi,
+            &nil_ctx(0),
+            Layer::Prog,
+            &beta_zero(),
+            &Term::Zero,
+            &Type::Nat,
+            &c(0),
+            FUEL
+        ),
+        Ok(())
+    );
+}
+
+#[test]
+fn succ_congruence() {
+    let psi = psi(vec![]);
+    ok_tm(&psi, &nil_ctx(0), &Term::Succ(rt(beta_zero())), &num(1), &Type::Nat, &c(0));
+    no_tm(&psi, &nil_ctx(0), &num(1), &num(2), &Type::Nat, &c(0));
+}
+
+#[test]
+fn neutral_variables() {
+    let psi = psi(vec![]);
+    let gamma = nil_ctx(2);
+    ok_tm(&psi, &gamma, &v(0), &v(0), &Type::Nat, &c(0));
+    no_tm(&psi, &gamma, &v(0), &v(1), &Type::Nat, &c(0));
+}
+
+#[test]
+fn elim_nat_neutral_congruence() {
+    // Two elim_Nats blocked on the same variable, β-convertible bases.
+    let psi = psi(vec![]);
+    let gamma = nil_ctx(1);
+    let elim = |base: Term| Term::ElimNat {
+        level: Level::Zero,
+        motive: rty(Type::Nat),
+        base: rt(base),
+        step: rt(Term::Zero),
+        scrut: rt(v(0)),
+    };
+    ok_tm(&psi, &gamma, &elim(beta_zero()), &elim(Term::Zero), &Type::Nat, &c(0));
+    no_tm(&psi, &gamma, &elim(Term::Zero), &elim(num(1)), &Type::Nat, &c(0));
+}
+
+// -------------------------------------------------------------------------
+// η at the four function types
+// -------------------------------------------------------------------------
+
+#[test]
+fn eta_pi() {
+    // Γ = (·, f : Π(x:Nat).Nat): λx. f x ≈ f.
+    let psi = psi(vec![]);
+    let gamma = extend(&nil_ctx(0), nat_to_nat(), c(0));
+    let expanded = lam(app(v(1), v(0)));
+    ok_tm(&psi, &gamma, &expanded, &v(0), &nat_to_nat(), &c(0));
+    ok_tm(&psi, &gamma, &v(0), &expanded, &nat_to_nat(), &c(0));
+    no_tm(&psi, &gamma, &lam(Term::Zero), &v(0), &nat_to_nat(), &c(0));
+}
+
+#[test]
+fn eta_upi() {
+    // f : ΠΠ ℓ. Nat — η-expansion drives both sides to a neutral $-spine.
+    let psi = psi(vec![]);
+    let upi = Type::UPi { num_vars: 1, level: Level::Zero, body: rty(Type::Nat) };
+    let gamma = extend(&nil_ctx(0), upi.clone(), Level::Omega);
+    ok_tm(&psi, &gamma, &v(0), &v(0), &upi, &Level::Omega);
+    let expanded = Term::ULam {
+        num_vars: 1,
+        level: Level::Zero,
+        body: rt(Term::UApp { fun: rt(v(0)), levels: vec![lv(0)] }),
+    };
+    ok_tm(&psi, &gamma, &expanded, &v(0), &upi, &Level::Omega);
+}
+
+#[test]
+fn eta_ctx_pi() {
+    let psi = psi(vec![]);
+    let cpi = Type::CtxPi { level: Level::Zero, body: rty(Type::Nat) };
+    let gamma = extend(&nil_ctx(0), cpi.clone(), c(0));
+    ok_tm(&psi, &gamma, &v(0), &v(0), &cpi, &c(0));
+    let expanded = Term::CtxLam {
+        level: Level::Zero,
+        body: rt(Term::CtxApp {
+            fun: rt(v(0)),
+            ctx: LocalCtx { base: CtxBase::Var(GlobalVar(0)), entries: vec![] },
+        }),
+    };
+    ok_tm(&psi, &gamma, &expanded, &v(0), &cpi, &c(0));
+}
+
+#[test]
+fn eta_ty_pi() {
+    let psi = psi(vec![]);
+    let tpi = Type::TyPi {
+        ctx: nil_ctx(0),
+        arg_level: Level::Zero,
+        body_level: Level::Zero,
+        body: rty(Type::Nat),
+    };
+    let gamma = extend(&nil_ctx(0), tpi.clone(), c(0));
+    ok_tm(&psi, &gamma, &v(0), &v(0), &tpi, &c(0));
+    let expanded = Term::TyLam {
+        ctx: nil_ctx(0),
+        arg_level: Level::Zero,
+        body_level: Level::Zero,
+        body: rt(Term::TyApp {
+            fun: rt(v(0)),
+            arg: rty(Type::GlobalTy { var: GlobalVar(0), subst: empty_subst(vec![]) }),
+        }),
+    };
+    ok_tm(&psi, &gamma, &expanded, &v(0), &tpi, &c(0));
+}
+
+// -------------------------------------------------------------------------
+// Types: levels, El decoding, binders
+// -------------------------------------------------------------------------
+
+#[test]
+fn type_levels_modulo_equiv() {
+    let psi = psi(vec![]);
+    let g = nil_ctx(0);
+    let a = Type::Ty(Level::max(lv(0), lv(0)));
+    let b = Type::Ty(lv(0));
+    assert_eq!(
+        conv_type(&psi, &g, Layer::Meta, &a, &b, &Level::succ(lv(0)), FUEL),
+        Ok(())
+    );
+    let too_big = Type::Ty(Level::succ(lv(0)));
+    assert_eq!(
+        conv_type(&psi, &g, Layer::Meta, &too_big, &b, &Level::succ(lv(0)), FUEL),
+        Err(ConvError::NotConvertible)
+    );
+}
+
+#[test]
+fn el_decodes_encodings() {
+    let psi = psi(vec![]);
+    let g = nil_ctx(0);
+    let el_nat = Type::El { level: Level::Zero, tm: rt(Term::TmNat) };
+    assert_eq!(conv_type(&psi, &g, Layer::Prog, &el_nat, &Type::Nat, &c(0), FUEL), Ok(()));
+    // El (Π-code) ≈ Π of Els ≈ Π of the decoded types.
+    let el_pi = Type::El {
+        level: Level::max(Level::Zero, Level::Zero),
+        tm: rt(Term::TmPi {
+            dom_level: Level::Zero,
+            cod_level: Level::Zero,
+            dom: rt(Term::TmNat),
+            cod: rt(Term::TmNat),
+        }),
+    };
+    assert_eq!(conv_type(&psi, &g, Layer::Prog, &el_pi, &nat_to_nat(), &c(0), FUEL), Ok(()));
+    assert_eq!(
+        conv_type(&psi, &g, Layer::Prog, &el_nat, &Type::Ty(c(0)), &c(0), FUEL),
+        Err(ConvError::NotConvertible)
+    );
+}
+
+#[test]
+fn pi_compares_under_binder() {
+    let psi = psi(vec![]);
+    let g = nil_ctx(0);
+    let a = Type::Pi {
+        dom_level: Level::Zero,
+        cod_level: Level::Zero,
+        dom: rty(Type::Nat),
+        cod: rty(Type::El { level: Level::Zero, tm: rt(Term::TmNat) }),
+    };
+    assert_eq!(conv_type(&psi, &g, Layer::Prog, &a, &nat_to_nat(), &c(0), FUEL), Ok(()));
+}
+
+#[test]
+fn tm_pi_encoding_congruence() {
+    // Term-level Π-codes compare componentwise (through reduction).
+    let psi = psi(vec![]);
+    let g = nil_ctx(0);
+    let a = Term::TmPi {
+        dom_level: Level::Zero,
+        cod_level: Level::Zero,
+        dom: rt(Term::TmNat),
+        cod: rt(Term::TmNat),
+    };
+    let b = Term::TmPi {
+        dom_level: Level::max(Level::Zero, Level::Zero),
+        cod_level: Level::Zero,
+        dom: rt(app(lam(v(0)), Term::TmNat)),
+        cod: rt(Term::TmNat),
+    };
+    ok_tm(&psi, &g, &a, &b, &Type::Ty(c(0)), &c(1));
+}
+
+#[test]
+fn ctx_conversion() {
+    let psi = psi(vec![]);
+    let a = extend(&nil_ctx(0), Type::El { level: Level::Zero, tm: rt(Term::TmNat) }, c(0));
+    let b = nil_ctx(1);
+    assert_eq!(conv_local_ctx(&psi, Layer::Prog, &a, &b, FUEL), Ok(()));
+    let wrong_level = extend(&nil_ctx(0), Type::Nat, c(1));
+    assert_eq!(
+        conv_local_ctx(&psi, Layer::Prog, &wrong_level, &b, FUEL),
+        Err(ConvError::NotConvertible)
+    );
+}
+
+// -------------------------------------------------------------------------
+// Boxes are syntactic; globals compare substitutions componentwise
+// -------------------------------------------------------------------------
+
+#[test]
+fn box_compares_syntactically() {
+    let psi = psi(vec![]);
+    let g = nil_ctx(0);
+    let code_ty = Type::CodeTy { ctx: nil_ctx(0), level: Level::Zero };
+    ok_tm(&psi, &g, &Term::BoxTy(rty(Type::Nat)), &Term::BoxTy(rty(Type::Nat)), &code_ty, &c(0));
+    // β/El-convertible code is NOT convertible as code.
+    let el_nat = Type::El { level: Level::Zero, tm: rt(Term::TmNat) };
+    no_tm(&psi, &g, &Term::BoxTy(rty(el_nat)), &Term::BoxTy(rty(Type::Nat)), &code_ty, &c(0));
+
+    let code_tm = Type::CodeTm { ctx: nil_ctx(0), ty: rty(Type::Nat), level: Level::Zero };
+    ok_tm(&psi, &g, &Term::BoxTm(rt(Term::Zero)), &Term::BoxTm(rt(Term::Zero)), &code_tm, &c(0));
+    no_tm(&psi, &g, &Term::BoxTm(rt(beta_zero())), &Term::BoxTm(rt(Term::Zero)), &code_tm, &c(0));
+}
+
+#[test]
+fn global_term_substitutions_convert_componentwise() {
+    // Ψ = (u : Trm_c((·, x : Nat @ 0) ⊢ Nat @ 0)); u^{·,(λx.x)0/x} ≈ u^{·,0/x}.
+    let psi = psi(vec![GlobalBinding::Tm {
+        ctx: nil_ctx(1),
+        layer: Layer::Code,
+        ty: rty(Type::Nat),
+        level: Level::Zero,
+    }]);
+    let g = nil_ctx(0);
+    let u = |t: Term| Term::GlobalTm { var: GlobalVar(0), subst: empty_subst(vec![t]) };
+    ok_tm(&psi, &g, &u(beta_zero()), &u(Term::Zero), &Type::Nat, &c(0));
+    no_tm(&psi, &g, &u(num(1)), &u(Term::Zero), &Type::Nat, &c(0));
+}
+
+// -------------------------------------------------------------------------
+// letbox
+// -------------------------------------------------------------------------
+
+#[test]
+fn letbox_ty_neutral() {
+    // Γ = (·, s : □(· ⊢ Ty 0) @ 0), scrutinee neutral: bodies compare up to β.
+    let psi = psi(vec![]);
+    let gamma = extend(&nil_ctx(0), Type::CodeTy { ctx: nil_ctx(0), level: Level::Zero }, c(0));
+    let letbox = |body: Term| Term::LetBoxTy {
+        motive_level: Level::Zero,
+        code_level: Level::Zero,
+        ctx: nil_ctx(0),
+        motive: rty(Type::Nat),
+        body: rt(body),
+        scrut: rt(v(0)),
+    };
+    ok_tm(&psi, &gamma, &letbox(beta_zero()), &letbox(Term::Zero), &Type::Nat, &c(0));
+    no_tm(&psi, &gamma, &letbox(Term::Zero), &letbox(num(1)), &Type::Nat, &c(0));
+    // The critical layer property: the same m-terms relate at layer p.
+    assert_eq!(
+        conv_term(
+            &psi,
+            &gamma,
+            Layer::Prog,
+            &letbox(beta_zero()),
+            &letbox(Term::Zero),
+            &Type::Nat,
+            &c(0),
+            FUEL
+        ),
+        Ok(())
+    );
+}
+
+// -------------------------------------------------------------------------
+// Neutral code recursors (the C_A bundle)
+// -------------------------------------------------------------------------
+
+/// Branches all equal to `t`.
+fn const_branches(t: Term) -> Rc<Branches> {
+    Rc::new(Branches {
+        ty_nat: rt(t.clone()),
+        ty_pi: rt(t.clone()),
+        ty_ty: rt(t.clone()),
+        ty_el: rt(t.clone()),
+        tm_var: rt(t.clone()),
+        tm_nat: rt(t.clone()),
+        tm_pi: rt(t.clone()),
+        tm_ty: rt(t.clone()),
+        tm_zero: rt(t.clone()),
+        tm_succ: rt(t.clone()),
+        tm_elim_nat: rt(t.clone()),
+        tm_lam: rt(t.clone()),
+        tm_app: rt(t),
+    })
+}
+
+fn nat_motives() -> Rc<Motives> {
+    Rc::new(Motives { ty_motive: rty(Type::Nat), tm_motive: rty(Type::Nat) })
+}
+
+/// A recursor blocked on `box (U₀^·)`; Ψ must start with `U₀ : Typ_c(·, 0)`.
+fn elim_code_ty(motives: Rc<Motives>, branches: Rc<Branches>, ty_nat: Term) -> Term {
+    let mut b = (*branches).clone();
+    b.ty_nat = rt(ty_nat);
+    Term::ElimCodeTy {
+        ty_motive_level: Level::Zero,
+        tm_motive_level: Level::Zero,
+        motives,
+        branches: Rc::new(b),
+        code_level: Level::Zero,
+        ctx: nil_ctx(0),
+        scrut: rt(Term::BoxTy(rty(Type::GlobalTy {
+            var: GlobalVar(0),
+            subst: empty_subst(vec![]),
+        }))),
+    }
+}
+
+fn code_psi() -> GlobalCtx {
+    psi(vec![GlobalBinding::Ty { ctx: nil_ctx(0), layer: Layer::Code, level: Level::Zero }])
+}
+
+#[test]
+fn recursor_neutral_trivial_motives() {
+    // Constant Nat motives: every branch compares at Nat; β-convertible
+    // branches are accepted, distinct values rejected.
+    let psi = code_psi();
+    let g = nil_ctx(0);
+    let a = elim_code_ty(nat_motives(), const_branches(Term::Zero), beta_zero());
+    let b = elim_code_ty(nat_motives(), const_branches(Term::Zero), Term::Zero);
+    ok_tm(&psi, &g, &a, &b, &Type::Nat, &c(0));
+    let bad = elim_code_ty(nat_motives(), const_branches(Term::Zero), num(1));
+    no_tm(&psi, &g, &b, &bad, &Type::Nat, &c(0));
+}
+
+#[test]
+fn recursor_branch_type_uses_motive() {
+    // M_Typ = Π(x:Nat).Nat: the ty branches compare at a Π type, so the
+    // η-pair λx. f x ≈ f is accepted — but only if the branch type really
+    // is the instantiated motive. With M_Typ = Nat the same pair mismatches.
+    let psi = code_psi();
+    let gamma = extend(&nil_ctx(0), nat_to_nat(), c(0));
+    let pi_motives =
+        Rc::new(Motives { ty_motive: rty(nat_to_nat()), tm_motive: rty(Type::Nat) });
+    // In every ty-branch telescope Γ only grows, so f stays in scope; the
+    // branch values here are closed over the telescope binders.
+    let a = elim_code_ty(
+        Rc::clone(&pi_motives),
+        const_branches(lam(Term::Zero)),
+        lam(app(v(1), v(0))),
+    );
+    let mut a = a;
+    let b = {
+        // Right side: ty_nat = f itself; all other branches identical.
+        let Term::ElimCodeTy { branches, .. } = &a else { unreachable!() };
+        let mut br = (**branches).clone();
+        // tm branches compare at Nat; keep them Zero on both sides.
+        for f in [&mut br.tm_var, &mut br.tm_nat, &mut br.tm_pi, &mut br.tm_ty,
+                  &mut br.tm_zero, &mut br.tm_succ, &mut br.tm_elim_nat,
+                  &mut br.tm_lam, &mut br.tm_app] {
+            *f = rt(Term::Zero);
+        }
+        br.ty_nat = rt(v(0));
+        let Term::ElimCodeTy { motives, code_level, ctx, scrut, .. } = &a else {
+            unreachable!()
+        };
+        Term::ElimCodeTy {
+            ty_motive_level: Level::Zero,
+            tm_motive_level: Level::Zero,
+            motives: Rc::clone(motives),
+            branches: Rc::new(br),
+            code_level: code_level.clone(),
+            ctx: ctx.clone(),
+            scrut: rt((**scrut).clone()),
+        }
+    };
+    // Fix up the left side's tm branches to Zero too.
+    {
+        let Term::ElimCodeTy { branches, .. } = &mut a else { unreachable!() };
+        let mut br = (**branches).clone();
+        for f in [&mut br.tm_var, &mut br.tm_nat, &mut br.tm_pi, &mut br.tm_ty,
+                  &mut br.tm_zero, &mut br.tm_succ, &mut br.tm_elim_nat,
+                  &mut br.tm_lam, &mut br.tm_app] {
+            *f = rt(Term::Zero);
+        }
+        *branches = Rc::new(br);
+    }
+    ok_tm(&psi, &gamma, &a, &b, &nat_to_nat(), &c(0));
+
+    // Control: with Nat motives the same η-pair is not convertible (λ vs
+    // variable at Nat), proving the Π above came from the motive.
+    let a_nat = elim_code_ty(nat_motives(), const_branches(Term::Zero), lam(app(v(1), v(0))));
+    let b_nat = elim_code_ty(nat_motives(), const_branches(Term::Zero), v(0));
+    no_tm(&psi, &gamma, &a_nat, &b_nat, &nat_to_nat(), &c(0));
+}
+
+#[test]
+fn recursor_scrut_box_is_syntactic() {
+    // Two Typ_c bindings; recursors blocked on box(U₀^·) vs box(U₁^·).
+    let psi = psi(vec![
+        GlobalBinding::Ty { ctx: nil_ctx(0), layer: Layer::Code, level: Level::Zero },
+        GlobalBinding::Ty { ctx: nil_ctx(0), layer: Layer::Code, level: Level::Zero },
+    ]);
+    let g = nil_ctx(0);
+    let elim = |var: u32| Term::ElimCodeTy {
+        ty_motive_level: Level::Zero,
+        tm_motive_level: Level::Zero,
+        motives: nat_motives(),
+        branches: const_branches(Term::Zero),
+        code_level: Level::Zero,
+        ctx: nil_ctx(0),
+        scrut: rt(Term::BoxTy(rty(Type::GlobalTy {
+            var: GlobalVar(var),
+            subst: empty_subst(vec![]),
+        }))),
+    };
+    ok_tm(&psi, &g, &elim(0), &elim(0), &Type::Nat, &c(0));
+    no_tm(&psi, &g, &elim(0), &elim(1), &Type::Nat, &c(0));
+}
+
+// -------------------------------------------------------------------------
+// Fuel
+// -------------------------------------------------------------------------
+
+#[test]
+fn fuel_exhaustion_is_distinguishable() {
+    // Ω = (λx. x x) (λx. x x) diverges under weak-head reduction.
+    let psi = psi(vec![]);
+    let delta = lam(app(v(0), v(0)));
+    let omega = app(delta.clone(), delta);
+    assert_eq!(
+        conv_term(&psi, &nil_ctx(0), Layer::Prog, &omega, &Term::Zero, &Type::Nat, &c(0), 500),
+        Err(ConvError::OutOfFuel)
+    );
+}
