@@ -8,4 +8,5 @@
 
 pub mod layer;
 pub mod level;
+pub mod subst;
 pub mod term;

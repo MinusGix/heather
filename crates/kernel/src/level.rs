@@ -119,14 +119,34 @@ impl Level {
         other.equiv(&Level::max(self.clone(), other.clone()))
     }
 
-    /// Apply a universe substitution `φ`, mapping each variable to
-    /// `phi[v.0]`. Callers guarantee `phi` covers the level's context.
+    /// Apply a universe substitution `φ`: variable `ℓᵢ` (innermost = 0) maps
+    /// to `phi[i]`. Callers guarantee `phi` covers the level's context.
     pub fn subst(&self, phi: &[Level]) -> Level {
+        self.subst_at(phi, 0)
+    }
+
+    /// Apply `φ` under `depth` universe binders: variables below `depth` are
+    /// bound (left alone); variable `depth + i` maps to `phi[i]` shifted by
+    /// `depth` so it does not capture the binders passed under.
+    pub fn subst_at(&self, phi: &[Level], depth: u32) -> Level {
         match self {
-            Level::Var(v) => phi[v.0 as usize].clone(),
+            Level::Var(v) if v.0 < depth => Level::Var(*v),
+            Level::Var(v) => phi[(v.0 - depth) as usize].shift(depth, 0),
             Level::Zero => Level::Zero,
-            Level::Succ(l) => Level::succ(l.subst(phi)),
-            Level::Max(a, b) => Level::max(a.subst(phi), b.subst(phi)),
+            Level::Succ(l) => Level::succ(l.subst_at(phi, depth)),
+            Level::Max(a, b) => Level::max(a.subst_at(phi, depth), b.subst_at(phi, depth)),
+            Level::Omega => Level::Omega,
+        }
+    }
+
+    /// Weakening: add `by` to every variable at or above `cutoff`.
+    pub fn shift(&self, by: u32, cutoff: u32) -> Level {
+        match self {
+            Level::Var(v) if v.0 < cutoff => Level::Var(*v),
+            Level::Var(v) => Level::Var(UnivVar(v.0 + by)),
+            Level::Zero => Level::Zero,
+            Level::Succ(l) => Level::succ(l.shift(by, cutoff)),
+            Level::Max(a, b) => Level::max(a.shift(by, cutoff), b.shift(by, cutoff)),
             Level::Omega => Level::Omega,
         }
     }

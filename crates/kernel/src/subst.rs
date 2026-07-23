@@ -1,0 +1,919 @@
+//! The three substitution operations and three shifting operations of DeLaM
+//! (docs/delam/05, §Substitution Operations), over the full syntax.
+//!
+//! All six are instances of one generic traversal ([`Mapper`]) that carries
+//! the binder [`Depths`] for the three independent namespaces. The binder
+//! bookkeeping (which field of which node is under which binders) therefore
+//! exists in exactly one place.
+//!
+//! Scoping rules the traversal encodes, which the paper's named notation
+//! leaves implicit:
+//!
+//! - Operations on the **local** namespace (`δ`, local shift) do not descend
+//!   into subtrees that live in a *different* local context: boxed code,
+//!   contextual-type components, context arguments, and the `ctx`/`ty`
+//!   annotations of letbox/recursors (`box T [δ] = box T`).
+//! - Operations on the **global** and **universe** namespaces descend
+//!   everywhere — those contexts are shared across all local contexts.
+//! - Inserting a `δ`-payload under binders weakens it in *all three*
+//!   namespaces (the `T[δ, x/x]`-style notation hides these weakenings).
+//! - Global substitution rewrites local-substitution *tails*: replacing `g`
+//!   by a concrete context `Γ'` turns `wk^k_g` into the expanded weakening
+//!   `wk^k_{Γ'}` (new tail plus one variable term per entry of `Γ'`), and
+//!   `·^k_g` into `·^{k+|Γ'|}` over `Γ'`'s base.
+
+use std::rc::Rc;
+
+use crate::level::Level;
+use crate::term::{
+    Branches, CtxBase, CtxEntry, GlobalVar, LocalCtx, LocalSubst, LocalVar, Motives, SubstTail,
+    Term, Type,
+};
+
+/// Binder depths for the three namespaces at the current traversal point.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Depths {
+    pub univ: u32,
+    pub global: u32,
+    pub local: u32,
+}
+
+impl std::ops::Add for Depths {
+    type Output = Depths;
+    fn add(self, o: Depths) -> Depths {
+        Depths {
+            univ: self.univ + o.univ,
+            global: self.global + o.global,
+            local: self.local + o.local,
+        }
+    }
+}
+
+/// Shorthand for a binder increment.
+fn dep(univ: u32, global: u32, local: u32) -> Depths {
+    Depths { univ, global, local }
+}
+
+/// A payload of a global substitution, matching the three binding forms.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum GlobalEntry {
+    /// `Γ/g` — a local context for a context variable.
+    Ctx(LocalCtx),
+    /// `T/U` — a type, scoped in the binding's local context `Δ[σ]`.
+    Ty(Rc<Type>),
+    /// `t/u` — a term, scoped in the binding's local context `Δ[σ]`.
+    Tm(Rc<Term>),
+}
+
+/// A global substitution `σ` in *instantiation form*: it substitutes the top
+/// (innermost) `entries.len()` bindings of the target global context Ψ and
+/// maps the rest identically, renumbering them down by `entries.len()`.
+/// `entries[0]` is the payload for the *outermost* substituted binding; all
+/// payloads are scoped in the source context (the prefix of Ψ), not
+/// telescoped among each other.
+///
+/// The paper's total `σ : Ψ' ⊢ σ : Ψ` is recovered by taking the prefix
+/// empty; the β-rules for letbox and the code recursors use `entries.len()`
+/// of 1–5.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct GlobalSubst {
+    pub entries: Vec<GlobalEntry>,
+}
+
+impl GlobalSubst {
+    /// σ instantiating only the innermost binding.
+    pub fn single(entry: GlobalEntry) -> GlobalSubst {
+        GlobalSubst { entries: vec![entry] }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Generic traversal
+// ---------------------------------------------------------------------------
+
+trait Mapper {
+    /// True for operations acting on the local namespace. Such operations do
+    /// not descend into other-local-scope subtrees (see module docs).
+    const LOCAL_OP: bool;
+
+    fn level(&mut self, l: &Level, _at: Depths) -> Level {
+        l.clone()
+    }
+    fn local_var(&mut self, v: LocalVar, _at: Depths) -> Term {
+        Term::Var(v)
+    }
+    /// `U^δ`; `subst` has already been mapped.
+    fn global_ty(&mut self, var: GlobalVar, subst: LocalSubst, _at: Depths) -> Type {
+        Type::GlobalTy { var, subst }
+    }
+    /// `u^δ`; `subst` has already been mapped.
+    fn global_tm(&mut self, var: GlobalVar, subst: LocalSubst, _at: Depths) -> Term {
+        Term::GlobalTm { var, subst }
+    }
+    /// Base of a local context; the returned entries are spliced in front of
+    /// the context's own (used by σ replacing `g` with a concrete context).
+    fn ctx_base(&mut self, base: CtxBase, _at: Depths) -> (CtxBase, Vec<CtxEntry>) {
+        (base, Vec::new())
+    }
+    /// Tail of a local substitution; the returned terms are spliced in front
+    /// of the substitution's own (used by σ expanding `wk^k_g`).
+    fn tail(&mut self, tail: SubstTail, _at: Depths) -> (SubstTail, Vec<Rc<Term>>) {
+        (tail, Vec::new())
+    }
+}
+
+fn sub_ty<M: Mapper>(t: &Rc<Type>, m: &mut M, at: Depths) -> Rc<Type> {
+    Rc::new(map_type(t, m, at))
+}
+
+fn sub_tm<M: Mapper>(t: &Rc<Term>, m: &mut M, at: Depths) -> Rc<Term> {
+    Rc::new(map_term(t, m, at))
+}
+
+/// A type/term/context living in a *different* local context than the
+/// traversal point (boxed code, contextual-type components, context
+/// arguments, letbox/recursor annotations). Local operations leave these
+/// untouched; other operations descend with the local depth reset (unused).
+fn other_ty<M: Mapper>(t: &Rc<Type>, m: &mut M, at: Depths) -> Rc<Type> {
+    if M::LOCAL_OP {
+        Rc::clone(t)
+    } else {
+        Rc::new(map_type(t, m, Depths { local: 0, ..at }))
+    }
+}
+
+fn other_tm<M: Mapper>(t: &Rc<Term>, m: &mut M, at: Depths) -> Rc<Term> {
+    if M::LOCAL_OP {
+        Rc::clone(t)
+    } else {
+        Rc::new(map_term(t, m, Depths { local: 0, ..at }))
+    }
+}
+
+fn other_ctx<M: Mapper>(c: &LocalCtx, m: &mut M, at: Depths) -> LocalCtx {
+    if M::LOCAL_OP {
+        c.clone()
+    } else {
+        map_ctx(c, m, Depths { local: 0, ..at })
+    }
+}
+
+fn map_type<M: Mapper>(t: &Type, m: &mut M, at: Depths) -> Type {
+    match t {
+        Type::Nat => Type::Nat,
+        Type::Pi { dom_level, cod_level, dom, cod } => Type::Pi {
+            dom_level: m.level(dom_level, at),
+            cod_level: m.level(cod_level, at),
+            dom: sub_ty(dom, m, at),
+            cod: sub_ty(cod, m, at + dep(0, 0, 1)),
+        },
+        Type::Ty(l) => Type::Ty(m.level(l, at)),
+        Type::UPi { num_vars, level, body } => Type::UPi {
+            num_vars: *num_vars,
+            level: m.level(level, at + dep(*num_vars, 0, 0)),
+            body: sub_ty(body, m, at + dep(*num_vars, 0, 0)),
+        },
+        Type::El { level, tm } => Type::El {
+            level: m.level(level, at),
+            tm: sub_tm(tm, m, at),
+        },
+        Type::GlobalTy { var, subst } => {
+            let subst = map_subst(subst, m, at);
+            m.global_ty(*var, subst, at)
+        }
+        Type::CtxPi { level, body } => Type::CtxPi {
+            level: m.level(level, at),
+            body: sub_ty(body, m, at + dep(0, 1, 0)),
+        },
+        Type::TyPi { ctx, arg_level, body_level, body } => Type::TyPi {
+            ctx: other_ctx(ctx, m, at),
+            arg_level: m.level(arg_level, at),
+            body_level: m.level(body_level, at),
+            body: sub_ty(body, m, at + dep(0, 1, 0)),
+        },
+        Type::CodeTy { ctx, level } => Type::CodeTy {
+            ctx: other_ctx(ctx, m, at),
+            level: m.level(level, at),
+        },
+        Type::CodeTm { ctx, ty, level } => Type::CodeTm {
+            ctx: other_ctx(ctx, m, at),
+            ty: other_ty(ty, m, at),
+            level: m.level(level, at),
+        },
+    }
+}
+
+fn map_term<M: Mapper>(t: &Term, m: &mut M, at: Depths) -> Term {
+    match t {
+        Term::Var(v) => m.local_var(*v, at),
+        Term::TmNat => Term::TmNat,
+        Term::TmPi { dom_level, cod_level, dom, cod } => Term::TmPi {
+            dom_level: m.level(dom_level, at),
+            cod_level: m.level(cod_level, at),
+            dom: sub_tm(dom, m, at),
+            cod: sub_tm(cod, m, at + dep(0, 0, 1)),
+        },
+        Term::TmTy(l) => Term::TmTy(m.level(l, at)),
+        Term::Zero => Term::Zero,
+        Term::Succ(t) => Term::Succ(sub_tm(t, m, at)),
+        Term::ElimNat { level, motive, base, step, scrut } => Term::ElimNat {
+            level: m.level(level, at),
+            motive: sub_ty(motive, m, at + dep(0, 0, 1)),
+            base: sub_tm(base, m, at),
+            step: sub_tm(step, m, at + dep(0, 0, 2)),
+            scrut: sub_tm(scrut, m, at),
+        },
+        Term::Lam { dom_level, cod_level, dom, body } => Term::Lam {
+            dom_level: m.level(dom_level, at),
+            cod_level: m.level(cod_level, at),
+            dom: sub_ty(dom, m, at),
+            body: sub_tm(body, m, at + dep(0, 0, 1)),
+        },
+        Term::App { fun, dom_level, cod_level, dom, cod, arg } => Term::App {
+            fun: sub_tm(fun, m, at),
+            dom_level: m.level(dom_level, at),
+            cod_level: m.level(cod_level, at),
+            dom: sub_ty(dom, m, at),
+            cod: sub_ty(cod, m, at + dep(0, 0, 1)),
+            arg: sub_tm(arg, m, at),
+        },
+        Term::ULam { num_vars, level, body } => Term::ULam {
+            num_vars: *num_vars,
+            level: m.level(level, at + dep(*num_vars, 0, 0)),
+            body: sub_tm(body, m, at + dep(*num_vars, 0, 0)),
+        },
+        Term::UApp { fun, levels } => Term::UApp {
+            fun: sub_tm(fun, m, at),
+            levels: levels.iter().map(|l| m.level(l, at)).collect(),
+        },
+        Term::GlobalTm { var, subst } => {
+            let subst = map_subst(subst, m, at);
+            m.global_tm(*var, subst, at)
+        }
+        Term::CtxLam { level, body } => Term::CtxLam {
+            level: m.level(level, at),
+            body: sub_tm(body, m, at + dep(0, 1, 0)),
+        },
+        Term::CtxApp { fun, ctx } => Term::CtxApp {
+            fun: sub_tm(fun, m, at),
+            ctx: other_ctx(ctx, m, at),
+        },
+        Term::TyLam { ctx, arg_level, body_level, body } => Term::TyLam {
+            ctx: other_ctx(ctx, m, at),
+            arg_level: m.level(arg_level, at),
+            body_level: m.level(body_level, at),
+            body: sub_tm(body, m, at + dep(0, 1, 0)),
+        },
+        Term::TyApp { fun, arg } => Term::TyApp {
+            fun: sub_tm(fun, m, at),
+            arg: other_ty(arg, m, at),
+        },
+        Term::BoxTy(t) => Term::BoxTy(other_ty(t, m, at)),
+        Term::BoxTm(t) => Term::BoxTm(other_tm(t, m, at)),
+        Term::LetBoxTy { motive_level, code_level, ctx, motive, body, scrut } => Term::LetBoxTy {
+            motive_level: m.level(motive_level, at),
+            code_level: m.level(code_level, at),
+            ctx: other_ctx(ctx, m, at),
+            motive: sub_ty(motive, m, at + dep(0, 0, 1)),
+            body: sub_tm(body, m, at + dep(0, 1, 0)),
+            scrut: sub_tm(scrut, m, at),
+        },
+        Term::LetBoxTm { motive_level, code_level, ctx, ty, motive, body, scrut } => {
+            Term::LetBoxTm {
+                motive_level: m.level(motive_level, at),
+                code_level: m.level(code_level, at),
+                ctx: other_ctx(ctx, m, at),
+                ty: other_ty(ty, m, at),
+                motive: sub_ty(motive, m, at + dep(0, 0, 1)),
+                body: sub_tm(body, m, at + dep(0, 1, 0)),
+                scrut: sub_tm(scrut, m, at),
+            }
+        }
+        Term::ElimCodeTy {
+            ty_motive_level,
+            tm_motive_level,
+            motives,
+            branches,
+            code_level,
+            ctx,
+            scrut,
+        } => Term::ElimCodeTy {
+            ty_motive_level: m.level(ty_motive_level, at),
+            tm_motive_level: m.level(tm_motive_level, at),
+            motives: Rc::new(map_motives(motives, m, at)),
+            branches: Rc::new(map_branches(branches, m, at)),
+            code_level: m.level(code_level, at),
+            ctx: other_ctx(ctx, m, at),
+            scrut: sub_tm(scrut, m, at),
+        },
+        Term::ElimCodeTm {
+            ty_motive_level,
+            tm_motive_level,
+            motives,
+            branches,
+            code_level,
+            ctx,
+            ty,
+            scrut,
+        } => Term::ElimCodeTm {
+            ty_motive_level: m.level(ty_motive_level, at),
+            tm_motive_level: m.level(tm_motive_level, at),
+            motives: Rc::new(map_motives(motives, m, at)),
+            branches: Rc::new(map_branches(branches, m, at)),
+            code_level: m.level(code_level, at),
+            ctx: other_ctx(ctx, m, at),
+            ty: other_ty(ty, m, at),
+            scrut: sub_tm(scrut, m, at),
+        },
+    }
+}
+
+/// Motive telescopes (ch. 04): `(ℓ, g, x_T. M_Typ)` and
+/// `(ℓ, g, U_T, x_t. M_Trm)`.
+fn map_motives<M: Mapper>(mo: &Motives, m: &mut M, at: Depths) -> Motives {
+    Motives {
+        ty_motive: sub_ty(&mo.ty_motive, m, at + dep(1, 1, 1)),
+        tm_motive: sub_ty(&mo.tm_motive, m, at + dep(1, 2, 1)),
+    }
+}
+
+/// Branch telescopes (ch. 04); the `dep(univ, global, local)` increments
+/// must match the telescopes documented on [`Branches`].
+fn map_branches<M: Mapper>(b: &Branches, m: &mut M, at: Depths) -> Branches {
+    Branches {
+        ty_nat: sub_tm(&b.ty_nat, m, at + dep(0, 1, 0)),
+        ty_pi: sub_tm(&b.ty_pi, m, at + dep(2, 3, 2)),
+        ty_ty: sub_tm(&b.ty_ty, m, at + dep(1, 1, 0)),
+        ty_el: sub_tm(&b.ty_el, m, at + dep(1, 2, 1)),
+        tm_var: sub_tm(&b.tm_var, m, at + dep(1, 3, 0)),
+        tm_nat: sub_tm(&b.tm_nat, m, at + dep(0, 1, 0)),
+        tm_pi: sub_tm(&b.tm_pi, m, at + dep(2, 3, 2)),
+        tm_ty: sub_tm(&b.tm_ty, m, at + dep(1, 1, 0)),
+        tm_zero: sub_tm(&b.tm_zero, m, at + dep(0, 1, 0)),
+        tm_succ: sub_tm(&b.tm_succ, m, at + dep(0, 2, 1)),
+        tm_elim_nat: sub_tm(&b.tm_elim_nat, m, at + dep(1, 5, 4)),
+        tm_lam: sub_tm(&b.tm_lam, m, at + dep(2, 4, 2)),
+        tm_app: sub_tm(&b.tm_app, m, at + dep(2, 5, 4)),
+    }
+}
+
+fn map_ctx<M: Mapper>(c: &LocalCtx, m: &mut M, at: Depths) -> LocalCtx {
+    let (base, mut entries) = m.ctx_base(c.base, at);
+    entries.extend(c.entries.iter().map(|e| CtxEntry {
+        ty: sub_ty(&e.ty, m, at),
+        level: m.level(&e.level, at),
+    }));
+    LocalCtx { base, entries }
+}
+
+fn map_subst<M: Mapper>(s: &LocalSubst, m: &mut M, at: Depths) -> LocalSubst {
+    let (tail, mut terms) = m.tail(s.tail, at);
+    terms.extend(s.terms.iter().map(|t| sub_tm(t, m, at)));
+    LocalSubst { tail, terms }
+}
+
+// ---------------------------------------------------------------------------
+// Shifts
+// ---------------------------------------------------------------------------
+
+/// Weaken the ambient local context by `by` entries. Any same-local-scope
+/// substitution's source grows accordingly (tail length bump).
+struct ShiftLocal {
+    by: u32,
+}
+
+impl Mapper for ShiftLocal {
+    const LOCAL_OP: bool = true;
+
+    fn local_var(&mut self, v: LocalVar, at: Depths) -> Term {
+        if v.0 < at.local {
+            Term::Var(v)
+        } else {
+            Term::Var(LocalVar(v.0 + self.by))
+        }
+    }
+
+    fn tail(&mut self, tail: SubstTail, _at: Depths) -> (SubstTail, Vec<Rc<Term>>) {
+        let t = match tail {
+            SubstTail::Empty { len, base } => SubstTail::Empty { len: len + self.by, base },
+            SubstTail::Wk { len, ctx_var } => SubstTail::Wk { len: len + self.by, ctx_var },
+        };
+        (t, Vec::new())
+    }
+}
+
+/// Weaken the global context by `by` bindings.
+struct ShiftGlobal {
+    by: u32,
+}
+
+impl ShiftGlobal {
+    fn var(&self, v: GlobalVar, at: Depths) -> GlobalVar {
+        if v.0 < at.global { v } else { GlobalVar(v.0 + self.by) }
+    }
+}
+
+impl Mapper for ShiftGlobal {
+    const LOCAL_OP: bool = false;
+
+    fn global_ty(&mut self, var: GlobalVar, subst: LocalSubst, at: Depths) -> Type {
+        Type::GlobalTy { var: self.var(var, at), subst }
+    }
+
+    fn global_tm(&mut self, var: GlobalVar, subst: LocalSubst, at: Depths) -> Term {
+        Term::GlobalTm { var: self.var(var, at), subst }
+    }
+
+    fn ctx_base(&mut self, base: CtxBase, at: Depths) -> (CtxBase, Vec<CtxEntry>) {
+        let b = match base {
+            CtxBase::Nil => CtxBase::Nil,
+            CtxBase::Var(g) => CtxBase::Var(self.var(g, at)),
+        };
+        (b, Vec::new())
+    }
+
+    fn tail(&mut self, tail: SubstTail, at: Depths) -> (SubstTail, Vec<Rc<Term>>) {
+        let t = match tail {
+            SubstTail::Empty { len, base: CtxBase::Var(g) } => {
+                SubstTail::Empty { len, base: CtxBase::Var(self.var(g, at)) }
+            }
+            SubstTail::Empty { .. } => tail,
+            SubstTail::Wk { len, ctx_var } => {
+                SubstTail::Wk { len, ctx_var: self.var(ctx_var, at) }
+            }
+        };
+        (t, Vec::new())
+    }
+}
+
+/// Weaken the universe context by `by` variables.
+struct ShiftUniv {
+    by: u32,
+}
+
+impl Mapper for ShiftUniv {
+    const LOCAL_OP: bool = false;
+
+    fn level(&mut self, l: &Level, at: Depths) -> Level {
+        l.shift(self.by, at.univ)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Substitutions
+// ---------------------------------------------------------------------------
+
+/// Universe substitution `φ`: `phi[i]` replaces universe variable `i`
+/// (innermost = 0), scoped in the source universe context.
+struct SubstUniv<'a> {
+    phi: &'a [Level],
+}
+
+impl Mapper for SubstUniv<'_> {
+    const LOCAL_OP: bool = false;
+
+    fn level(&mut self, l: &Level, at: Depths) -> Level {
+        l.subst_at(self.phi, at.univ)
+    }
+}
+
+/// Local substitution `δ`, applied from depth zero; lifting under binders is
+/// depth-based (payloads are shifted in all three namespaces at insertion).
+struct SubstLocal<'a> {
+    delta: &'a LocalSubst,
+}
+
+impl Mapper for SubstLocal<'_> {
+    const LOCAL_OP: bool = true;
+
+    fn local_var(&mut self, v: LocalVar, at: Depths) -> Term {
+        if v.0 < at.local {
+            return Term::Var(v);
+        }
+        let i = (v.0 - at.local) as usize;
+        let n = self.delta.terms.len();
+        assert!(
+            i < n,
+            "kernel invariant violated: local variable {} escapes the substitution's target \
+             entries (variables cannot address a context-variable base)",
+            v.0
+        );
+        // terms[0] substitutes the outermost entry; index from the innermost.
+        let payload = &self.delta.terms[n - 1 - i];
+        payload
+            .shift_local(at.local)
+            .shift_global(at.global)
+            .shift_univ(at.univ)
+    }
+
+    /// Composition on tails (ch. 02/05): `wk_g^k ∘ δ = wk_g^{δ̂}`,
+    /// `·_{g?}^k ∘ δ = ·_{δ̌}^{δ̂}`, where δ is conceptually lifted to the
+    /// current depths (source length + local depth; base shifted by the
+    /// global depth).
+    fn tail(&mut self, tail: SubstTail, at: Depths) -> (SubstTail, Vec<Rc<Term>>) {
+        let len = self.delta.source_len() + at.local;
+        let t = match tail {
+            SubstTail::Wk { ctx_var, .. } => SubstTail::Wk { len, ctx_var },
+            SubstTail::Empty { .. } => {
+                let base = match self.delta.source_base() {
+                    CtxBase::Nil => CtxBase::Nil,
+                    CtxBase::Var(g) => CtxBase::Var(GlobalVar(g.0 + at.global)),
+                };
+                SubstTail::Empty { len, base }
+            }
+        };
+        (t, Vec::new())
+    }
+}
+
+/// Global substitution `σ` (instantiation form, see [`GlobalSubst`]).
+struct SubstGlobal<'a> {
+    sigma: &'a GlobalSubst,
+}
+
+enum Resolved<'a> {
+    /// Bound by a binder passed under during traversal.
+    Bound,
+    /// Substituted: payload (scoped in the source, at depth zero).
+    Payload(&'a GlobalEntry),
+    /// In the identity region below the substituted bindings: renumbered.
+    Renumber(GlobalVar),
+}
+
+impl<'a> SubstGlobal<'a> {
+    fn resolve(&self, v: GlobalVar, at: Depths) -> Resolved<'a> {
+        let n = self.sigma.entries.len() as u32;
+        if v.0 < at.global {
+            Resolved::Bound
+        } else if v.0 - at.global < n {
+            let rel = (v.0 - at.global) as usize;
+            Resolved::Payload(&self.sigma.entries[n as usize - 1 - rel])
+        } else {
+            Resolved::Renumber(GlobalVar(v.0 - n))
+        }
+    }
+
+    /// Base and entry count of a context payload, viewed at the current
+    /// depths (only the base variable needs shifting).
+    fn ctx_payload_shape(c: &LocalCtx, at: Depths) -> (CtxBase, u32) {
+        let base = match c.base {
+            CtxBase::Nil => CtxBase::Nil,
+            CtxBase::Var(g) => CtxBase::Var(GlobalVar(g.0 + at.global)),
+        };
+        (base, c.entries.len() as u32)
+    }
+}
+
+impl Mapper for SubstGlobal<'_> {
+    const LOCAL_OP: bool = false;
+
+    fn global_ty(&mut self, var: GlobalVar, subst: LocalSubst, at: Depths) -> Type {
+        match self.resolve(var, at) {
+            Resolved::Bound => Type::GlobalTy { var, subst },
+            Resolved::Renumber(v) => Type::GlobalTy { var: v, subst },
+            Resolved::Payload(GlobalEntry::Ty(t)) => t
+                .shift_global(at.global)
+                .shift_univ(at.univ)
+                .apply_local(&subst),
+            Resolved::Payload(_) => panic!(
+                "kernel invariant violated: type-level global variable substituted by a \
+                 non-type payload"
+            ),
+        }
+    }
+
+    fn global_tm(&mut self, var: GlobalVar, subst: LocalSubst, at: Depths) -> Term {
+        match self.resolve(var, at) {
+            Resolved::Bound => Term::GlobalTm { var, subst },
+            Resolved::Renumber(v) => Term::GlobalTm { var: v, subst },
+            Resolved::Payload(GlobalEntry::Tm(t)) => t
+                .shift_global(at.global)
+                .shift_univ(at.univ)
+                .apply_local(&subst),
+            Resolved::Payload(_) => panic!(
+                "kernel invariant violated: term-level global variable substituted by a \
+                 non-term payload"
+            ),
+        }
+    }
+
+    fn ctx_base(&mut self, base: CtxBase, at: Depths) -> (CtxBase, Vec<CtxEntry>) {
+        match base {
+            CtxBase::Nil => (CtxBase::Nil, Vec::new()),
+            CtxBase::Var(g) => match self.resolve(g, at) {
+                Resolved::Bound => (CtxBase::Var(g), Vec::new()),
+                Resolved::Renumber(v) => (CtxBase::Var(v), Vec::new()),
+                Resolved::Payload(GlobalEntry::Ctx(c)) => {
+                    let shifted = c.shift_global(at.global).shift_univ(at.univ);
+                    (shifted.base, shifted.entries)
+                }
+                Resolved::Payload(_) => panic!(
+                    "kernel invariant violated: context variable substituted by a non-context \
+                     payload"
+                ),
+            },
+        }
+    }
+
+    fn tail(&mut self, tail: SubstTail, at: Depths) -> (SubstTail, Vec<Rc<Term>>) {
+        match tail {
+            SubstTail::Wk { len, ctx_var } => match self.resolve(ctx_var, at) {
+                Resolved::Bound => (SubstTail::Wk { len, ctx_var }, Vec::new()),
+                Resolved::Renumber(v) => (SubstTail::Wk { len, ctx_var: v }, Vec::new()),
+                Resolved::Payload(GlobalEntry::Ctx(c)) => {
+                    // wk^k_g becomes the generalized weakening wk^k_{Γ'}: the
+                    // spliced entries of Γ' sit below the k source entries,
+                    // so entry j (outermost = 0) is variable k + m' - 1 - j.
+                    let (base, m_prime) = Self::ctx_payload_shape(c, at);
+                    let new_tail = match base {
+                        CtxBase::Nil => SubstTail::Empty { len: len + m_prime, base: CtxBase::Nil },
+                        CtxBase::Var(g) => SubstTail::Wk { len: len + m_prime, ctx_var: g },
+                    };
+                    let terms = (0..m_prime)
+                        .map(|j| Rc::new(Term::Var(LocalVar(len + m_prime - 1 - j))))
+                        .collect();
+                    (new_tail, terms)
+                }
+                Resolved::Payload(_) => panic!(
+                    "kernel invariant violated: context variable substituted by a non-context \
+                     payload"
+                ),
+            },
+            SubstTail::Empty { len, base: CtxBase::Var(g) } => match self.resolve(g, at) {
+                Resolved::Bound => {
+                    (SubstTail::Empty { len, base: CtxBase::Var(g) }, Vec::new())
+                }
+                Resolved::Renumber(v) => {
+                    (SubstTail::Empty { len, base: CtxBase::Var(v) }, Vec::new())
+                }
+                Resolved::Payload(GlobalEntry::Ctx(c)) => {
+                    let (base, m_prime) = Self::ctx_payload_shape(c, at);
+                    (SubstTail::Empty { len: len + m_prime, base }, Vec::new())
+                }
+                Resolved::Payload(_) => panic!(
+                    "kernel invariant violated: context variable substituted by a non-context \
+                     payload"
+                ),
+            },
+            SubstTail::Empty { .. } => (tail, Vec::new()),
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Public API
+// ---------------------------------------------------------------------------
+
+macro_rules! ops {
+    ($ty:ident, $map:ident) => {
+        impl $ty {
+            /// Apply a universe substitution `φ`.
+            pub fn apply_univ(&self, phi: &[Level]) -> $ty {
+                $map(self, &mut SubstUniv { phi }, Depths::default())
+            }
+
+            /// Apply a local substitution `δ` (`self` scoped in δ's target).
+            pub fn apply_local(&self, delta: &LocalSubst) -> $ty {
+                $map(self, &mut SubstLocal { delta }, Depths::default())
+            }
+
+            /// Apply a global substitution `σ`.
+            pub fn apply_global(&self, sigma: &GlobalSubst) -> $ty {
+                $map(self, &mut SubstGlobal { sigma }, Depths::default())
+            }
+
+            /// Weaken the ambient local context by `by` entries.
+            pub fn shift_local(&self, by: u32) -> $ty {
+                $map(self, &mut ShiftLocal { by }, Depths::default())
+            }
+
+            /// Weaken the global context by `by` bindings.
+            pub fn shift_global(&self, by: u32) -> $ty {
+                $map(self, &mut ShiftGlobal { by }, Depths::default())
+            }
+
+            /// Weaken the universe context by `by` variables.
+            pub fn shift_univ(&self, by: u32) -> $ty {
+                $map(self, &mut ShiftUniv { by }, Depths::default())
+            }
+        }
+    };
+}
+
+ops!(Type, map_type);
+ops!(Term, map_term);
+
+impl LocalCtx {
+    pub fn apply_univ(&self, phi: &[Level]) -> LocalCtx {
+        map_ctx(self, &mut SubstUniv { phi }, Depths::default())
+    }
+
+    pub fn apply_global(&self, sigma: &GlobalSubst) -> LocalCtx {
+        map_ctx(self, &mut SubstGlobal { sigma }, Depths::default())
+    }
+
+    pub fn shift_global(&self, by: u32) -> LocalCtx {
+        map_ctx(self, &mut ShiftGlobal { by }, Depths::default())
+    }
+
+    pub fn shift_univ(&self, by: u32) -> LocalCtx {
+        map_ctx(self, &mut ShiftUniv { by }, Depths::default())
+    }
+}
+
+impl LocalSubst {
+    /// The identity substitution `id_Γ = wk^0_Γ`, fully expanded.
+    pub fn id(ctx: &LocalCtx) -> LocalSubst {
+        let m = ctx.entries.len() as u32;
+        let tail = match ctx.base {
+            CtxBase::Nil => SubstTail::Empty { len: m, base: CtxBase::Nil },
+            CtxBase::Var(g) => SubstTail::Wk { len: m, ctx_var: g },
+        };
+        let terms = (0..m)
+            .map(|j| Rc::new(Term::Var(LocalVar(m - 1 - j))))
+            .collect();
+        LocalSubst { tail, terms }
+    }
+
+    /// `δ, t/x` — extend to one more target entry; `t` is scoped in δ's
+    /// source. `LocalSubst::id(gamma).extended(s)` is the β-substitution
+    /// `[s/x]` for a body scoped in `Γ, x`.
+    pub fn extended(mut self, t: Rc<Term>) -> LocalSubst {
+        self.terms.push(t);
+        self
+    }
+
+    /// Composition `self ∘ other`: `t[self][other] == t[self.compose(other)]`.
+    pub fn compose(&self, other: &LocalSubst) -> LocalSubst {
+        map_subst(self, &mut SubstLocal { delta: other }, Depths::default())
+    }
+
+    pub fn apply_univ(&self, phi: &[Level]) -> LocalSubst {
+        map_subst(self, &mut SubstUniv { phi }, Depths::default())
+    }
+
+    pub fn apply_global(&self, sigma: &GlobalSubst) -> LocalSubst {
+        map_subst(self, &mut SubstGlobal { sigma }, Depths::default())
+    }
+
+    pub fn shift_local(&self, by: u32) -> LocalSubst {
+        map_subst(self, &mut ShiftLocal { by }, Depths::default())
+    }
+
+    pub fn shift_global(&self, by: u32) -> LocalSubst {
+        map_subst(self, &mut ShiftGlobal { by }, Depths::default())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::level::UnivVar;
+
+    fn rt(t: Term) -> Rc<Term> {
+        Rc::new(t)
+    }
+
+    fn nat_entry() -> CtxEntry {
+        CtxEntry { ty: Rc::new(Type::Nat), level: Level::Zero }
+    }
+
+    fn nil_ctx(n: u32) -> LocalCtx {
+        LocalCtx { base: CtxBase::Nil, entries: (0..n).map(|_| nat_entry()).collect() }
+    }
+
+    #[test]
+    fn single_instantiation() {
+        // Body scoped in (·, x0, x1, x2); substitute s for x2 (= Var 0).
+        let gamma = nil_ctx(2);
+        let s = rt(Term::Zero);
+        let delta = LocalSubst::id(&gamma).extended(s);
+        assert_eq!(Term::Var(LocalVar(0)).apply_local(&delta), Term::Zero);
+        assert_eq!(
+            Term::Var(LocalVar(1)).apply_local(&delta),
+            Term::Var(LocalVar(0))
+        );
+        assert_eq!(
+            Term::Var(LocalVar(2)).apply_local(&delta),
+            Term::Var(LocalVar(1))
+        );
+    }
+
+    #[test]
+    fn beta_under_binder_shifts_payload() {
+        // (Γ, x) ⊢ λy. x — substituting s for x must shift s under the λ.
+        let gamma = nil_ctx(1);
+        let s = rt(Term::Var(LocalVar(0))); // refers to Γ's entry
+        let delta = LocalSubst::id(&gamma).extended(s);
+        let body = Term::Lam {
+            dom_level: Level::Zero,
+            cod_level: Level::Zero,
+            dom: Rc::new(Type::Nat),
+            body: rt(Term::Var(LocalVar(1))), // x, under the λ binder
+        };
+        let expect = Term::Lam {
+            dom_level: Level::Zero,
+            cod_level: Level::Zero,
+            dom: Rc::new(Type::Nat),
+            body: rt(Term::Var(LocalVar(1))), // Γ's entry, shifted under λ
+        };
+        assert_eq!(body.apply_local(&delta), expect);
+    }
+
+    #[test]
+    fn box_blocks_local_substitution() {
+        let gamma = nil_ctx(0);
+        let delta = LocalSubst::id(&gamma).extended(rt(Term::Zero));
+        let boxed = Term::BoxTm(rt(Term::Var(LocalVar(0))));
+        assert_eq!(boxed.apply_local(&delta), boxed);
+    }
+
+    #[test]
+    fn local_payload_univ_shifted_under_ulam() {
+        // Substituting Ty ℓ0 for x under Λℓ. …: the payload's level must
+        // become ℓ1 inside.
+        let delta = LocalSubst {
+            tail: SubstTail::Empty { len: 0, base: CtxBase::Nil },
+            terms: vec![rt(Term::TmTy(Level::Var(UnivVar(0))))],
+        };
+        let t = Term::ULam {
+            num_vars: 1,
+            level: Level::Zero,
+            body: rt(Term::Var(LocalVar(0))),
+        };
+        let expect = Term::ULam {
+            num_vars: 1,
+            level: Level::Zero,
+            body: rt(Term::TmTy(Level::Var(UnivVar(1)))),
+        };
+        assert_eq!(t.apply_local(&delta), expect);
+    }
+
+    #[test]
+    fn ctx_binder_capture_avoidance() {
+        // (Πg. □(g ⊢ Ty 0))[σ]: the bound g (Var 0 under the binder) must
+        // survive; a free context variable (Var 1 under the binder) is
+        // substituted, splicing the payload's entries.
+        let payload = GlobalSubst::single(GlobalEntry::Ctx(nil_ctx(1)));
+        let bound = Type::CtxPi {
+            level: Level::Zero,
+            body: Rc::new(Type::CodeTy {
+                ctx: LocalCtx { base: CtxBase::Var(GlobalVar(0)), entries: vec![] },
+                level: Level::Zero,
+            }),
+        };
+        assert_eq!(bound.apply_global(&payload), bound);
+
+        let free = Type::CtxPi {
+            level: Level::Zero,
+            body: Rc::new(Type::CodeTy {
+                ctx: LocalCtx { base: CtxBase::Var(GlobalVar(1)), entries: vec![] },
+                level: Level::Zero,
+            }),
+        };
+        let expect = Type::CtxPi {
+            level: Level::Zero,
+            body: Rc::new(Type::CodeTy { ctx: nil_ctx(1), level: Level::Zero }),
+        };
+        assert_eq!(free.apply_global(&payload), expect);
+    }
+
+    #[test]
+    fn sigma_expands_weakening_tail() {
+        // Ψ = (g : Ctx, u : Trm(g ⊢ …)); current local context (g, 1 entry).
+        // t = u^{wk¹_g}. σ substitutes Γ' = (·, 2 entries) for g and
+        // s = Var 0 (innermost of Γ') for u.
+        // Expected: δ' = {·³; [Var 2, Var 1]} and result s[δ'] = Var 1.
+        let t = Term::GlobalTm {
+            var: GlobalVar(0),
+            subst: LocalSubst {
+                tail: SubstTail::Wk { len: 1, ctx_var: GlobalVar(1) },
+                terms: vec![],
+            },
+        };
+        let sigma = GlobalSubst {
+            entries: vec![
+                GlobalEntry::Ctx(nil_ctx(2)),
+                GlobalEntry::Tm(rt(Term::Var(LocalVar(0)))),
+            ],
+        };
+        assert_eq!(t.apply_global(&sigma), Term::Var(LocalVar(1)));
+
+        // The same, but keeping the substitution un-consumed: a variable
+        // payload deeper than Γ' maps through the expanded weakening.
+        let t2 = Term::GlobalTm {
+            var: GlobalVar(0),
+            subst: LocalSubst {
+                tail: SubstTail::Wk { len: 1, ctx_var: GlobalVar(1) },
+                terms: vec![],
+            },
+        };
+        let sigma2 = GlobalSubst {
+            entries: vec![
+                GlobalEntry::Ctx(nil_ctx(2)),
+                GlobalEntry::Tm(rt(Term::Var(LocalVar(1)))), // outer entry of Γ'
+            ],
+        };
+        assert_eq!(t2.apply_global(&sigma2), Term::Var(LocalVar(2)));
+    }
+}

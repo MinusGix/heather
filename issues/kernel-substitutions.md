@@ -1,6 +1,6 @@
 ---
 title: Implement the three substitution operations (ch. 05)
-status: open
+status: closed
 labels: [kernel, delam]
 blocked-by: [kernel-v0-scope]
 created: 2026-07-22
@@ -29,3 +29,7 @@ Verification: property-test the ch. 05 algebraic laws (identity,
 associativity/composition, commutation between the three kinds) on
 generated well-scoped terms. These tests are the main defense for
 everything downstream.
+
+## Log
+
+- 2026-07-22: Implemented: subst.rs — one generic Mapper traversal (binder depths for all 3 namespaces in one place), six ops (shift x3, phi/delta/sigma). 20 tests green: hand-computed unit tests + 9 property laws (id, composition, assoc, phi/delta and sigma/delta commutation, focused wk-tail expansion test). Mutation-verified: dropped payload univ-shift, broken sigma expansion indices, wrong branch telescope depth all caught. NOTE: assert_eq! on terms caused 2 machine OOMs (Debug-format of failure builds huge string in RAM) — hence law! macro + scripts/test ulimit wrapper + CLAUDE.md rules.
