@@ -12,6 +12,8 @@
 //! `tests/typing.rs`, which re-derives every telescope from docs/delam/04.
 #![allow(dead_code)]
 
+pub mod wt;
+
 use std::rc::Rc;
 
 use heather_kernel::level::{Level, UnivVar};
