@@ -13,3 +13,7 @@ proof checked by the Rust kernel. No generator required.
 
 After this lands, the certifying generator ([[certifying-generator]]) is
 "just" automation of what was done by hand.
+
+## Log
+
+- 2026-07-22: Kernel side is complete: substitutions, reduction, conversion, and now the ch. 04 type checker (typing.rs) all landed. Verifying a hand-elaborated term is: check_global_ctx -> check_local_ctx -> check_type -> check_term (see typing.rs module docs for presuppositions). Remaining blockers are compiler-side design ([[ir-simulate-design]], [[compile-typeclass-design]]). One elaboration constraint to respect: the box synthesis gap ([[box-synthesis-gap]]).

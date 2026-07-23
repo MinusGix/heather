@@ -5,9 +5,11 @@
 //! the universe-variable count. Substitution tails are generated
 //! consistently with those shapes.
 //!
-//! Caveat: the branch/motive binder telescopes here mirror the tables in
-//! `subst.rs`; a telescope wrong in *both* places would not be caught. Those
-//! tables are checked against docs/delam/04 by review.
+//! Caveat: the branch/motive binder telescopes here mirror `subst.rs`'s
+//! depth table and `src/rec.rs`'s spec tables; a telescope wrong in *all*
+//! places would not be caught by the generator-based tests. The independent
+//! hand-elaborated cross-check is the identity-recursor test in
+//! `tests/typing.rs`, which re-derives every telescope from docs/delam/04.
 #![allow(dead_code)]
 
 use std::rc::Rc;
