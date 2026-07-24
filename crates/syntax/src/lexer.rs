@@ -7,6 +7,11 @@ use crate::ast::Span;
 pub enum TokKind {
     Ident(String),
     Num(u64),
+    /// `?name` (named goal) or bare `?` (anonymous goal). Named-vs-anonymous
+    /// is decided here, by *adjacency*: `?p` is the hole `p`, `? p` is an
+    /// anonymous hole followed by the variable `p`. Settling it in the lexer
+    /// means the parser never has to (issues/goal-holes.md).
+    Hole(Option<String>),
     // punctuation
     LParen,
     RParen,
@@ -14,6 +19,7 @@ pub enum TokKind {
     RBrace,
     Comma,
     Colon,
+    Semi,      // ;
     At,        // @
     Dot,       // .
     Plus,      // +
@@ -83,6 +89,19 @@ pub fn lex(src: &str) -> Result<Vec<Tok>, LexError> {
             toks.push(Tok { kind: TokKind::Num(n), span: Span { start, end: i } });
             continue;
         }
+        // goal holes: `?name` if an identifier follows immediately, else `?`
+        if c == b'?' {
+            i += 1;
+            let name_start = i;
+            if i < bytes.len() && (bytes[i].is_ascii_alphabetic() || bytes[i] == b'_') {
+                while i < bytes.len() && (bytes[i].is_ascii_alphanumeric() || bytes[i] == b'_') {
+                    i += 1;
+                }
+            }
+            let name = (i > name_start).then(|| src[name_start..i].to_string());
+            toks.push(Tok { kind: TokKind::Hole(name), span: Span { start, end: i } });
+            continue;
+        }
         // punctuation
         let two = if i + 1 < bytes.len() { &src[i..i + 2] } else { "" };
         let (kind, len) = match two {
@@ -97,6 +116,7 @@ pub fn lex(src: &str) -> Result<Vec<Tok>, LexError> {
                 b'}' => (TokKind::RBrace, 1),
                 b',' => (TokKind::Comma, 1),
                 b':' => (TokKind::Colon, 1),
+                b';' => (TokKind::Semi, 1),
                 b'@' => (TokKind::At, 1),
                 b'.' => (TokKind::Dot, 1),
                 b'+' => (TokKind::Plus, 1),

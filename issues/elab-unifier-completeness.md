@@ -19,3 +19,7 @@ Follow-ups deferred from [[elab-stage2-metas]] (stage 2 shipped a deliberately m
 ## Trigger
 
 Whichever comes first: (a) a surface program whose implicit args cross-depend or use a non-identity scope, or (b) the layer-m / universe-polymorphic work where level metas become load-bearing. Until then the best-effort unifier is sufficient and kernel-gated.
+
+## Log
+
+- 2026-07-24: Second motivation for postponement, from [[goal-holes]]: holes are checking-only, and `apply_implicit` elaborates a callee's *explicit* arguments in inference mode (it needs their inferred types to drive unification). So `sym(?p)` is refused today and the user must write `@sym(a, b, ?p)` — a visible ergonomic dent on the most natural spelling. Postponement fixes it directly: with the argument's elaboration deferred until the domain's metas are solved, the hole gets a meta-free expected type and becomes an ordinary goal. A cheaper partial fix exists if postponement stays out of reach — check the hole against the parameter domain whenever that domain contains no meta occurrence — but it needs an occurs-style traversal over kernel Type/Term that the elaborator does not have and should probably not grow on its own.

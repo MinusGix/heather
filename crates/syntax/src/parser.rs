@@ -8,14 +8,21 @@
 //! param   := name ":" type | "{" name ":" type "}"   -- implicit
 //! type    := expr ("=" expr)?       -- bare `Nat` is the type Nat; `=` is
 //!                                      propositional equality (`==` rejected)
-//! block   := "{" expr "}"
+//! block   := "{" stmt* expr on_stmt* "}"
+//! stmt    := "let" name (":" type)? "=" expr ";"
+//! on_stmt := "on" ("?" name ("." numeral)? | "_" ":" type) ":=" expr ";"
 //! expr    := "match" expr ("as" name "->" type)? "{" arms "}"
-//!          | "refl"
+//!          | "refl" | "?" name?
 //!          | "j" "(" expr "," "(" name "," name ")" "->" type "," expr ")"
 //!          | "@"? name "(" args ")" | name | numeral | "(" expr ")"
 //! arms    := arm ("," arm)* ","?    -- exactly a Zero arm and a Succ arm
 //! arm     := "Zero" "=>" expr | "Succ" "(" name ("," name)? ")" "=>" expr
 //! ```
+//!
+//! `on` discharges are trailing: order-free among themselves, but after the
+//! result expression (issues/goal-holes.md). `let`/`on` are contextual
+//! keywords like every other keyword here — an expression can never be
+//! *continued* by a bare identifier, so a statement head is unambiguous.
 
 use crate::ast::*;
 use crate::lexer::{lex, Tok, TokKind};
@@ -147,10 +154,84 @@ impl Parser {
             }
         }
         let result = self.ty()?;
-        self.expect(&TokKind::LBrace, "`{`")?;
-        let body = self.expr()?;
-        let end = self.expect(&TokKind::RBrace, "`}`")?;
-        Ok(Decl { kind, name, params, result, body, span: start.join(end) })
+        let body = self.block()?;
+        let span = start.join(body.span);
+        Ok(Decl { kind, name, params, result, body, span })
+    }
+
+    // -- blocks and statements ----------------------------------------------
+
+    fn block(&mut self) -> R<Block> {
+        let open = self.expect(&TokKind::LBrace, "`{`")?;
+        let mut stmts = Vec::new();
+        while self.at_kw("let") {
+            stmts.push(self.let_stmt()?);
+        }
+        if self.at_kw("on") {
+            return self
+                .err("a block's `on` discharges come after its result expression");
+        }
+        let result = self.expr()?;
+        let mut ons = Vec::new();
+        while self.at_kw("on") {
+            ons.push(self.on_stmt()?);
+        }
+        let close = self.expect(&TokKind::RBrace, "`}`")?;
+        Ok(Block { stmts, result: Box::new(result), ons, span: open.join(close) })
+    }
+
+    /// `let x = e;` / `let x: T = e;`. The `=` here is the same `=` as the
+    /// equality type former ([`Self::expect_eq`]); `let p: a = b = pf;` parses
+    /// because `=` is not an expression operator, so `ty()` stops after `a = b`.
+    fn let_stmt(&mut self) -> R<Stmt> {
+        let start = self.bump().span; // `let`
+        let (name, _) = self.ident("`let` binding name")?;
+        let ty = if matches!(self.peek(), TokKind::Colon) {
+            self.bump();
+            Some(self.ty()?)
+        } else {
+            None
+        };
+        self.expect_eq("`let` binding")?;
+        let expr = self.expr()?;
+        let end = self.expect(&TokKind::Semi, "`;` to end the `let`")?;
+        Ok(Stmt::Let { name, ty, expr, span: start.join(end) })
+    }
+
+    fn on_stmt(&mut self) -> R<OnStmt> {
+        let start = self.bump().span; // `on`
+        let target = match self.peek().clone() {
+            TokKind::Hole(Some(name)) => {
+                self.bump();
+                // `?bound.1` — the checker's ordinal suffix for a deduplicated
+                // default name. Only a numeral follows; `.f(…)` is a method
+                // call, which a goal name never carries.
+                let mut name = name;
+                if matches!(self.peek(), TokKind::Dot)
+                    && let Some(TokKind::Num(n)) = self.toks.get(self.pos + 1).map(|t| &t.kind)
+                {
+                    name = format!("{name}.{n}");
+                    self.bump();
+                    self.bump();
+                }
+                OnTarget::Name(name)
+            }
+            TokKind::Hole(None) => {
+                return self.err(
+                    "`on ?` needs a goal name; write `on _: P := …` to discharge by statement",
+                )
+            }
+            _ if self.at_kw("_") => {
+                self.bump();
+                self.expect(&TokKind::Colon, "`:` (discharge by statement)")?;
+                OnTarget::Stmt(self.ty()?)
+            }
+            _ => return self.err("expected `?name` or `_: P` after `on`"),
+        };
+        self.expect(&TokKind::ColonEq, "`:=` (goal discharge)")?;
+        let expr = self.expr()?;
+        let end = self.expect(&TokKind::Semi, "`;` to end the `on`")?;
+        Ok(OnStmt { target, expr, span: start.join(end) })
     }
 
     // -- types --------------------------------------------------------------
@@ -276,6 +357,10 @@ impl Parser {
             });
         }
         match self.peek().clone() {
+            TokKind::Hole(name) => {
+                let sp = self.bump().span;
+                Ok(Expr { kind: ExprKind::Hole(name), span: sp })
+            }
             TokKind::Num(n) => {
                 let sp = self.bump().span;
                 Ok(Expr { kind: ExprKind::Num(n), span: sp })
@@ -482,7 +567,7 @@ mod tests {
     #[test]
     fn at_marks_a_fully_explicit_call() {
         let f = parse_file("fn f(n: Nat) -> Nat { @g(a, b, p) }").unwrap();
-        match &f.decls[0].body.kind {
+        match &f.decls[0].body.result.kind {
             ExprKind::Call { name, args, explicit } => {
                 assert_eq!(name, "g");
                 assert_eq!(args.len(), 3);
@@ -495,7 +580,7 @@ mod tests {
     #[test]
     fn plain_call_is_not_explicit() {
         let f = parse_file("fn f(n: Nat) -> Nat { g(a) }").unwrap();
-        match &f.decls[0].body.kind {
+        match &f.decls[0].body.result.kind {
             ExprKind::Call { explicit, .. } => assert!(!*explicit),
             other => panic!("expected a call, got {other:?}"),
         }
@@ -510,7 +595,7 @@ mod tests {
     // the body kind, for exercising expression desugaring.
     fn body(src_body: &str) -> ExprKind {
         let src = format!("fn f(n: Nat) -> Nat {{ {src_body} }}");
-        parse_file(&src).unwrap().decls.remove(0).body.kind
+        parse_file(&src).unwrap().decls.remove(0).body.result.kind
     }
 
     fn as_call(k: &ExprKind) -> (&str, &[Expr], bool) {
@@ -613,5 +698,87 @@ mod tests {
         let err = parse_file("theorem t(a: Nat, b: Nat): a == b { refl }").unwrap_err();
         assert!(err.msg.contains("=="), "hint should mention `==`: {}", err.msg);
         assert!(err.msg.contains('='), "hint should point at `=`: {}", err.msg);
+    }
+
+    // -- goal holes (issues/goal-holes.md) ----------------------------------
+
+    fn decl_of(src: &str) -> Decl {
+        parse_file(src).unwrap().decls.remove(0)
+    }
+
+    #[test]
+    fn named_and_anonymous_holes_parse() {
+        // Adjacency decides: `?p` is named, `? ` is anonymous. Both are atoms,
+        // so they nest inside calls like any other expression.
+        let k = body("f(?p, ?)");
+        let (_, args, _) = as_call(&k);
+        assert!(matches!(&args[0].kind, ExprKind::Hole(Some(n)) if n == "p"), "{:?}", args[0]);
+        assert!(matches!(args[1].kind, ExprKind::Hole(None)), "{:?}", args[1]);
+    }
+
+    #[test]
+    fn on_discharges_by_name_and_by_statement() {
+        let d = decl_of(
+            "theorem t(a: Nat, b: Nat): a = b {
+                 ?first
+                 on ?first := p;
+                 on ?bound.1 := q;
+                 on _: a = b := r;
+             }",
+        );
+        assert_eq!(d.body.ons.len(), 3);
+        match &d.body.ons[0].target {
+            OnTarget::Name(n) => assert_eq!(n, "first"),
+            other => panic!("expected a name target, got {other:?}"),
+        }
+        // The checker's ordinal suffix is part of the name, not a method call.
+        match &d.body.ons[1].target {
+            OnTarget::Name(n) => assert_eq!(n, "bound.1"),
+            other => panic!("expected a name target, got {other:?}"),
+        }
+        assert!(matches!(d.body.ons[2].target, OnTarget::Stmt(_)));
+    }
+
+    #[test]
+    fn let_binds_with_and_without_an_annotation() {
+        let d = decl_of(
+            "fn f(n: Nat) -> Nat {
+                 let a = n;
+                 let p: n = n = refl;
+                 a
+             }",
+        );
+        assert_eq!(d.body.stmts.len(), 2);
+        let Stmt::Let { name, ty, .. } = &d.body.stmts[0];
+        assert_eq!(name, "a");
+        assert!(ty.is_none());
+        // `let p: n = n = refl;` — `=` is not an expression operator, so the
+        // annotation stops after `n = n` and the binding `=` follows.
+        let Stmt::Let { name, ty, expr, .. } = &d.body.stmts[1];
+        assert_eq!(name, "p");
+        assert!(matches!(ty.as_ref().map(|t| &t.kind), Some(TyKind::Eq(..))));
+        assert!(matches!(expr.kind, ExprKind::Refl));
+    }
+
+    #[test]
+    fn statements_need_semicolons() {
+        assert!(parse_file("fn f(n: Nat) -> Nat { let a = n a }").is_err());
+        assert!(parse_file("theorem t(n: Nat): n = n { ?p on ?p := refl }").is_err());
+    }
+
+    #[test]
+    fn on_before_the_result_expression_is_rejected() {
+        let err = parse_file("theorem t(n: Nat): n = n { on ?p := refl; ?p }").unwrap_err();
+        assert!(err.msg.contains("result expression"), "{}", err.msg);
+    }
+
+    #[test]
+    fn on_and_let_are_still_usable_as_names() {
+        // Contextual keywords: an expression is never continued by a bare
+        // identifier, so a statement head is unambiguous and these still parse.
+        let k = body("add(on, let)");
+        let (_, args, _) = as_call(&k);
+        assert!(matches!(&args[0].kind, ExprKind::Var(n) if n == "on"));
+        assert!(matches!(&args[1].kind, ExprKind::Var(n) if n == "let"));
     }
 }

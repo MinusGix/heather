@@ -28,8 +28,46 @@ pub struct Decl {
     pub params: Vec<Param>,
     /// Return type of a `fn`, statement of a `theorem`.
     pub result: Ty,
-    pub body: Expr,
+    pub body: Block,
     pub span: Span,
+}
+
+/// A block: local bindings, the result expression, then the `on` discharges
+/// of any goals raised inside it (issues/goal-holes.md). Blocks exist only as
+/// declaration bodies for now, so "end of block" and "end of declaration"
+/// coincide — that is also the scope of a goal.
+#[derive(Debug, Clone)]
+pub struct Block {
+    pub stmts: Vec<Stmt>,
+    pub result: Box<Expr>,
+    /// Order-free: an `on` may discharge a goal raised anywhere in the block.
+    pub ons: Vec<OnStmt>,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone)]
+pub enum Stmt {
+    /// `let x = e;` or `let x: T = e;`. The annotation is what puts the
+    /// right-hand side in *checking* position, so `let p: a = b = ?g;` is how
+    /// a hole gets bound to a name.
+    Let { name: String, ty: Option<Ty>, expr: Expr, span: Span },
+}
+
+/// `on ?name := expr;` / `on _: P := expr;` — discharge of a goal.
+#[derive(Debug, Clone)]
+pub struct OnStmt {
+    pub target: OnTarget,
+    pub expr: Expr,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone)]
+pub enum OnTarget {
+    /// By name — the site name `?first`, or a checker-assigned default
+    /// (`?bound`, `?bound.1`, …).
+    Name(String),
+    /// By statement: discharges *every* goal whose statement is `P`.
+    Stmt(Ty),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -81,6 +119,10 @@ pub enum ExprKind {
     Call { name: String, args: Vec<Expr>, explicit: bool },
     /// `refl` — checking-only.
     Refl,
+    /// `?name` or `?` — a goal: a deferred obligation, discharged by an `on`
+    /// statement later in the same block. Checking-only, like `refl`: a hole
+    /// with no expected type has no statement to list.
+    Hole(Option<String>),
     /// `match scrut (as bind -> motive)? { Zero => zero, Succ(k) => succ }`,
     /// or with the low-level explicit-ih arm `Succ(k, ih) => succ`.
     Match {

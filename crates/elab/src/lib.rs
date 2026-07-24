@@ -22,9 +22,11 @@
 //! conversion still β-reduces during checking, which is all the Nat suite
 //! needs) so that theorems are bindable as `Trm_c` globals.
 
+use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::rc::Rc;
 
+use heather_kernel::conv::conv_type;
 use heather_kernel::layer::Layer;
 use heather_kernel::level::Level;
 use heather_kernel::reduce::whnf_type;
@@ -34,7 +36,10 @@ use heather_kernel::term::{
     SubstTail, Term, Type,
 };
 use heather_kernel::typing::{self, TypeError, DEFAULT_FUEL};
-use heather_syntax::{parse_file, Decl, DeclKind, Expr, ExprKind, ParseError, Span, Ty, TyKind};
+use heather_syntax::{
+    parse_file, Decl, DeclKind, Expr, ExprKind, OnStmt, OnTarget, ParseError, Span, Stmt, Ty,
+    TyKind,
+};
 
 /// The stage-1 prelude: `sym`/`trans`/`cong_succ`, monomorphic at `Nat`.
 /// (The universe-polymorphic versions are layer-m `Λ ℓ⃗` territory — later
@@ -51,6 +56,28 @@ pub enum ElabError {
     /// boundary speaking: either the source is ill-typed or the elaborator
     /// has a bug — the kernel does not care which.
     Kernel { decl: String, err: TypeError },
+    /// Goals raised in a block that no `on` statement discharged
+    /// (issues/goal-holes.md). Not one error per goal: the *listing* is the
+    /// point — it is how the checker shows goal state.
+    UnsolvedGoals { decl: String, goals: Vec<GoalReport> },
+}
+
+/// One entry of the unsolved-goal listing. Types are rendered eagerly with
+/// the kernel's budget-bounded `Debug` (crates/kernel/src/fmt.rs), so no
+/// kernel type escapes into the public error.
+#[derive(Debug)]
+pub struct GoalReport {
+    /// Discharge name: `on ?{name} := …`.
+    pub name: String,
+    /// The goal's statement.
+    pub statement: String,
+    /// The context captured at the hole — the names a discharge may use, which
+    /// is not the same as what is lexically in scope at the `on`.
+    pub context: Vec<(String, String)>,
+    /// Where the goal came from, when it was an argument: "the `p` parameter
+    /// of `sym`". Proof-parameter names are API precisely so this reads.
+    pub origin: Option<String>,
+    pub span: Span,
 }
 
 impl From<ParseError> for ElabError {
@@ -59,15 +86,96 @@ impl From<ParseError> for ElabError {
     }
 }
 
+impl ElabError {
+    /// The error with source positions resolved — what a front-end should
+    /// print. [`std::fmt::Display`] gives the same text without them, for
+    /// where the source is no longer at hand.
+    pub fn render(&self, src: &str) -> String {
+        let at = |span: Span| {
+            let (line, col) = line_col(src, span.start);
+            format!("{line}:{col}")
+        };
+        match self {
+            ElabError::Parse(e) => format!("{}:{}: {}", at(e.span), "parse error", e.msg),
+            ElabError::Elab { msg, span } => format!("{}: {msg}", at(*span)),
+            ElabError::Kernel { .. } => self.to_string(),
+            ElabError::UnsolvedGoals { decl, goals } => {
+                let mut s = format!("unsolved goals in `{decl}`:\n");
+                for g in goals {
+                    s.push('\n');
+                    s.push_str(&g.render(Some(&at(g.span))));
+                }
+                s.push_str("\ndischarge each with `on ?name := proof;`\n");
+                s
+            }
+        }
+    }
+}
+
+impl GoalReport {
+    fn render(&self, at: Option<&str>) -> String {
+        let mut s = match at {
+            Some(at) => format!("  ?{} : {}   ({at})\n", self.name, self.statement),
+            None => format!("  ?{} : {}\n", self.name, self.statement),
+        };
+        // The context is not decoration: a goal captured in a `match` arm is
+        // discharged with that arm's binders in scope, which is not what is
+        // lexically visible at the `on`.
+        for (name, ty) in &self.context {
+            s.push_str(&format!("      {name} : {ty}\n"));
+        }
+        if let Some(origin) = &self.origin {
+            s.push_str(&format!("      from {origin}\n"));
+        }
+        s
+    }
+}
+
+impl std::fmt::Display for ElabError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ElabError::Parse(e) => write!(f, "parse error: {}", e.msg),
+            ElabError::Elab { msg, .. } => write!(f, "{msg}"),
+            ElabError::Kernel { decl, err } => {
+                write!(f, "the kernel rejected `{decl}`: {err:?}")
+            }
+            ElabError::UnsolvedGoals { decl, goals } => {
+                writeln!(f, "unsolved goals in `{decl}`:")?;
+                for g in goals {
+                    writeln!(f)?;
+                    write!(f, "{}", g.render(None))?;
+                }
+                writeln!(f, "\ndischarge each with `on ?name := proof;`")
+            }
+        }
+    }
+}
+
+/// 1-based line and column of a byte offset.
+fn line_col(src: &str, offset: usize) -> (usize, usize) {
+    let upto = &src[..offset.min(src.len())];
+    let line = upto.matches('\n').count() + 1;
+    let col = upto.rfind('\n').map_or(upto.len(), |nl| upto.len() - nl - 1) + 1;
+    (line, col)
+}
+
 type R<T> = Result<T, ElabError>;
 
 fn err<T>(msg: impl Into<String>, span: Span) -> R<T> {
     Err(ElabError::Elab { msg: msg.into(), span })
 }
 
-/// What a global name refers to. `implicit[i]` flags whether parameter `i`
-/// (in declaration/telescope order) is an implicit `{}`-parameter, filled by
-/// unification at call sites (issues/elab-stage2-metas.md).
+/// One parameter of a callable global, in declaration/telescope order.
+/// `implicit` flags a `{}`-parameter, filled by unification at call sites
+/// (issues/elab-stage2-metas.md). The *name* is API: it is the default name of
+/// a goal raised in that argument position (issues/goal-holes.md), so callers
+/// discharge by it.
+struct ParamMeta {
+    name: String,
+    implicit: bool,
+}
+
+/// What a global name refers to.
 enum GlobalInfo {
     /// An inlined `fn`: the elaborated closed term, its type, level, and
     /// `|Ψ|` at elaboration time (for global-index shifting on use).
@@ -76,16 +184,54 @@ enum GlobalInfo {
         ty: Rc<Type>,
         level: Level,
         psi_len: u32,
-        implicit: Vec<bool>,
+        params: Rc<Vec<ParamMeta>>,
     },
     /// A `theorem`: absolute position of its `Trm_c` binding in Ψ.
-    Theorem { abs: u32, implicit: Vec<bool> },
+    Theorem { abs: u32, params: Rc<Vec<ParamMeta>> },
 }
 
 pub struct Elaborator {
     psi: GlobalCtx,
     globals: HashMap<String, GlobalInfo>,
     fuel: u64,
+    /// Number of Ψ slots reserved for the current declaration's goals — a
+    /// syntactic pre-count of its holes. Goals occupy the *innermost* indices
+    /// `[0, goal_base)` for the whole declaration, so every reference to a
+    /// committed global is offset by it (see [`Self::resolve`]). Zero outside
+    /// a declaration body, which makes the whole mechanism inert.
+    goal_base: u32,
+    /// Goals in creation order; goal `k` is `GlobalVar(goal_base - 1 - k)`.
+    /// Interior mutability because the elaboration methods take `&self` and
+    /// `Cx` is cloned at every binder.
+    goals: RefCell<Vec<Goal>>,
+    /// Hole span → goal index. The elaborator visits some expressions twice
+    /// (motive synthesis; `calc`'s cloned `@trans` spine), and one syntactic
+    /// hole must stay one goal.
+    goal_spans: RefCell<HashMap<(usize, usize), usize>>,
+    /// Set while elaborating an `on` right-hand side, where a *new* hole is
+    /// refused. Load-bearing: it is what makes [`strengthen_global`] sound.
+    frozen: Cell<bool>,
+}
+
+/// A goal: a hole that survives to the end of its block. Represented exactly
+/// like the elaborator's other metavariables (issues/elab-stage2-metas.md) —
+/// an innermost Ψ-binding `u : Trm(Γ ⊢ T @ l)` occurring as `u^{id_Γ}` — but
+/// allocated for the whole declaration and discharged by an `on` statement
+/// rather than by unification.
+struct Goal {
+    /// Discharge name (site-written `?first`, or checker-assigned).
+    name: String,
+    /// The context *at the hole*. This capture is the point of the design: an
+    /// `on` written at block end elaborates here, so a goal raised inside a
+    /// `match` arm is discharged with that arm's binders in scope.
+    cx: Cx,
+    ty: Type,
+    level: Level,
+    span: Span,
+    /// `(callee, parameter)` when the hole is an argument — the provenance the
+    /// listing reports, and where an anonymous hole's default name comes from.
+    origin: Option<(String, String)>,
+    solution: Option<Rc<Term>>,
 }
 
 impl Default for Elaborator {
@@ -97,7 +243,15 @@ impl Default for Elaborator {
 impl Elaborator {
     /// An empty elaborator (no prelude).
     pub fn new() -> Self {
-        Elaborator { psi: GlobalCtx::default(), globals: HashMap::new(), fuel: DEFAULT_FUEL }
+        Elaborator {
+            psi: GlobalCtx::default(),
+            globals: HashMap::new(),
+            fuel: DEFAULT_FUEL,
+            goal_base: 0,
+            goals: RefCell::new(Vec::new()),
+            goal_spans: RefCell::new(HashMap::new()),
+            frozen: Cell::new(false),
+        }
     }
 
     /// An elaborator with the stage-1 prelude already elaborated and
@@ -124,10 +278,27 @@ impl Elaborator {
 
     // -- declarations -------------------------------------------------------
 
+    /// Elaborate one declaration, always leaving the goal state clean — the
+    /// `Elaborator` outlives a declaration (and an `elab_source` call), so a
+    /// stale `goal_base` would silently corrupt the next one.
     fn elab_decl(&mut self, decl: &Decl) -> R<()> {
+        let r = self.elab_decl_inner(decl);
+        self.goal_base = 0;
+        self.goals.borrow_mut().clear();
+        self.goal_spans.borrow_mut().clear();
+        self.frozen.set(false);
+        r
+    }
+
+    fn elab_decl_inner(&mut self, decl: &Decl) -> R<()> {
         if self.globals.contains_key(&decl.name) {
             return err(format!("duplicate name `{}`", decl.name), decl.span);
         }
+        // Reserve the goal prefix *before* anything is elaborated: the
+        // telescope and result type are elaborated first and their types end
+        // up embedded in the emitted term, so they must live in the same
+        // (shifted) world as the body.
+        self.goal_base = count_holes(decl);
         // Elaborate the parameter telescope.
         let mut cx = Cx::empty();
         let mut param_info: Vec<(Type, Level)> = Vec::new();
@@ -146,7 +317,30 @@ impl Elaborator {
             name: decl.name.clone(),
             params: decl.params.iter().map(|p| (p.name.clone(), p.implicit)).collect(),
         }));
-        let body = self.elab_check(&cx, &decl.body, &res_ty, &res_lvl)?;
+        // `let` bindings, then the result expression. A `let` is an inlined
+        // alias (the same doctrine as a `fn` definition), not a kernel binder.
+        for stmt in &decl.body.stmts {
+            let Stmt::Let { name, ty, expr, .. } = stmt;
+            let (term, ty, level) = match ty {
+                Some(t) => {
+                    let (ty, lvl) = self.elab_ty(&cx, t)?;
+                    let tm = self.elab_check(&cx, expr, &ty, &lvl)?;
+                    (tm, ty, lvl)
+                }
+                None => self.elab_infer(&cx, expr)?,
+            };
+            cx.aliases.push(Rc::new(Alias {
+                name: name.clone(),
+                depth: cx.names.len(),
+                term: Rc::new(term),
+                ty,
+                level,
+            }));
+        }
+        let body = self.elab_check(&cx, &decl.body.result, &res_ty, &res_lvl)?;
+        // Discharge every goal the block raised, then substitute them away.
+        self.solve_goals(&decl.body.ons, &decl.name)?;
+        let sigma = self.goal_subst();
 
         // Close over the telescope: statement = Π…, proof/body = λ….
         let mut stmt = res_ty;
@@ -168,6 +362,12 @@ impl Elaborator {
             stmt_lvl = Level::max(dom_lvl, stmt_lvl);
         }
 
+        // One global substitution fills every goal and renumbers the committed
+        // globals back down out of the goal world (`GlobalSubst`'s
+        // instantiation semantics). With no holes it is the identity.
+        let term = term.apply_global(&sigma);
+        let stmt = stmt.apply_global(&sigma);
+
         // The kernel is the gate: check the statement, then the term.
         let empty = LocalCtx { base: CtxBase::Nil, entries: vec![] };
         typing::check_type(&self.psi, 0, Layer::Prog, &empty, &stmt, &stmt_lvl, self.fuel)
@@ -175,7 +375,12 @@ impl Elaborator {
         typing::check_term(&self.psi, 0, Layer::Code, &empty, &term, &stmt, &stmt_lvl, self.fuel)
             .map_err(|e| ElabError::Kernel { decl: decl.name.clone(), err: e })?;
 
-        let implicit: Vec<bool> = decl.params.iter().map(|p| p.implicit).collect();
+        let params = Rc::new(
+            decl.params
+                .iter()
+                .map(|p| ParamMeta { name: p.name.clone(), implicit: p.implicit })
+                .collect::<Vec<_>>(),
+        );
         match decl.kind {
             DeclKind::Fn => {
                 self.globals.insert(
@@ -185,7 +390,7 @@ impl Elaborator {
                         ty: Rc::new(stmt),
                         level: stmt_lvl,
                         psi_len: self.psi.bindings.len() as u32,
-                        implicit,
+                        params,
                     },
                 );
             }
@@ -197,10 +402,267 @@ impl Elaborator {
                     ty: Rc::new(stmt),
                     level: stmt_lvl,
                 });
-                self.globals.insert(decl.name.clone(), GlobalInfo::Theorem { abs, implicit });
+                self.globals.insert(decl.name.clone(), GlobalInfo::Theorem { abs, params });
             }
         }
         Ok(())
+    }
+
+    // -- goals --------------------------------------------------------------
+
+    /// Raise a goal for a hole, returning its occurrence `u^{id_Γ}`.
+    fn new_goal(
+        &self,
+        cx: &Cx,
+        name: Option<&str>,
+        hint: Option<(&str, &str)>,
+        ty: Type,
+        level: Level,
+        span: Span,
+    ) -> R<Term> {
+        if self.frozen.get() {
+            return err(
+                "a hole may not appear in an `on` right-hand side — give it its own `on`",
+                span,
+            );
+        }
+        let mut goals = self.goals.borrow_mut();
+        let mut spans = self.goal_spans.borrow_mut();
+        let k = match spans.get(&(span.start, span.end)) {
+            // Re-elaboration of the same syntactic hole (motive synthesis,
+            // `calc`'s cloned spine): the same goal, so long as it is the same
+            // context — the occurrence's `id_Γ` is what the payload lands in.
+            Some(&k) => {
+                if goals[k].cx.gamma.entries.len() != cx.gamma.entries.len() {
+                    return err("internal: a hole was re-elaborated in a different context", span);
+                }
+                k
+            }
+            None => {
+                let k = goals.len();
+                if k as u32 >= self.goal_base {
+                    return err("internal: more goals than the pre-count reserved", span);
+                }
+                // A goal payload is a `Trm` entry, so a context *variable* base
+                // would substitute a term for a `Ctx` binding (subst.rs).
+                // Nothing can build one today; assert rather than discover it.
+                debug_assert!(
+                    matches!(cx.gamma.base, CtxBase::Nil),
+                    "a goal context must be closed"
+                );
+                let name = match name {
+                    Some(n) => {
+                        if goals.iter().any(|g| g.name == n) {
+                            return err(
+                                format!(
+                                    "hole `?{n}` is already used in this block; \
+                                     each named hole is a distinct goal"
+                                ),
+                                span,
+                            );
+                        }
+                        n.to_string()
+                    }
+                    // An anonymous hole takes the callee's parameter name,
+                    // deduplicated with an ordinal (`bound`, `bound.1`, …);
+                    // with no callee to name it after, a positional fallback.
+                    None => {
+                        let base = match hint {
+                            Some((_, param)) => param.to_string(),
+                            None => format!("g{}", k + 1),
+                        };
+                        let mut candidate = base.clone();
+                        let mut ordinal = 0;
+                        while goals.iter().any(|g| g.name == candidate) {
+                            ordinal += 1;
+                            candidate = format!("{base}.{ordinal}");
+                        }
+                        candidate
+                    }
+                };
+                let origin =
+                    hint.map(|(callee, param)| (callee.to_string(), param.to_string()));
+                goals.push(Goal {
+                    name,
+                    cx: cx.clone(),
+                    ty,
+                    level,
+                    span,
+                    origin,
+                    solution: None,
+                });
+                spans.insert((span.start, span.end), k);
+                k
+            }
+        };
+        Ok(Term::GlobalTm {
+            var: GlobalVar(self.goal_base - 1 - k as u32),
+            subst: LocalSubst::id(&cx.gamma),
+        })
+    }
+
+    /// Run the block's `on` statements, then require that every goal is
+    /// discharged.
+    fn solve_goals(&self, ons: &[OnStmt], decl: &str) -> R<()> {
+        // No new goals from here on: `on` right-hand sides are elaborated in
+        // the goal world but their solutions are strengthened out of it.
+        self.frozen.set(true);
+        for on in ons {
+            match &on.target {
+                OnTarget::Name(name) => {
+                    let (cx, ty, lvl) = {
+                        let goals = self.goals.borrow();
+                        let Some(g) = goals.iter().find(|g| g.name == *name) else {
+                            let known: Vec<&str> =
+                                goals.iter().map(|g| g.name.as_str()).collect();
+                            return err(
+                                if known.is_empty() {
+                                    format!("no goal `?{name}` — this block raises none")
+                                } else {
+                                    format!(
+                                        "no goal `?{name}` in this block; it raises: ?{}",
+                                        known.join(", ?")
+                                    )
+                                },
+                                on.span,
+                            );
+                        };
+                        if g.solution.is_some() {
+                            return err(format!("goal `?{name}` is discharged twice"), on.span);
+                        }
+                        (g.cx.clone(), g.ty.clone(), g.level.clone())
+                    };
+                    // In the goal's *own* context, not the one at the `on`.
+                    let t = self.elab_check(&cx, &on.expr, &ty, &lvl)?;
+                    let t = strengthen_global(&t, self.goal_base);
+                    let mut goals = self.goals.borrow_mut();
+                    let g = goals.iter_mut().find(|g| g.name == *name).expect("found above");
+                    g.solution = Some(Rc::new(t));
+                }
+                // `on _: P := e;` — discharge *every* goal whose statement is
+                // `P` (docs/sketches/surface-v2.md §2: one bound proof feeding
+                // many sites). `P` is elaborated per goal, in that goal's own
+                // context, since that is where its statement lives.
+                OnTarget::Stmt(pat) => {
+                    let psi = self.goal_psi();
+                    let candidates: Vec<(usize, Cx, Type, Level)> = self
+                        .goals
+                        .borrow()
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, g)| g.solution.is_none())
+                        .map(|(k, g)| (k, g.cx.clone(), g.ty.clone(), g.level.clone()))
+                        .collect();
+                    let mut matched = Vec::new();
+                    for (k, cx, ty, lvl) in candidates {
+                        // Not well-formed in this goal's context just means
+                        // "not this goal" — a statement need not mention names
+                        // every goal has.
+                        let Ok((pat_ty, pat_lvl)) = self.elab_ty(&cx, pat) else {
+                            continue;
+                        };
+                        if conv_type(&psi, &cx.gamma, Layer::Prog, &pat_ty, &ty, &pat_lvl, self.fuel)
+                            .is_ok()
+                        {
+                            matched.push((k, cx, ty, lvl));
+                        }
+                    }
+                    if matched.is_empty() {
+                        return err(
+                            "no outstanding goal has this statement".to_string(),
+                            on.span,
+                        );
+                    }
+                    for (k, cx, ty, lvl) in matched {
+                        let t = self.elab_check(&cx, &on.expr, &ty, &lvl)?;
+                        let t = strengthen_global(&t, self.goal_base);
+                        self.goals.borrow_mut()[k].solution = Some(Rc::new(t));
+                    }
+                }
+            }
+        }
+        let goals = self.goals.borrow();
+        let unsolved: Vec<GoalReport> = goals
+            .iter()
+            .filter(|g| g.solution.is_none())
+            .map(|g| GoalReport {
+                name: g.name.clone(),
+                statement: format!("{:?}", g.ty),
+                context: g
+                    .cx
+                    .names
+                    .iter()
+                    .zip(&g.cx.gamma.entries)
+                    // `#`-prefixed binders are the elaborator's own (a `match`
+                    // arm's hidden ih); they are unspellable, so listing them
+                    // would only mislead.
+                    .filter(|(n, _)| !n.starts_with('#'))
+                    .map(|(n, e)| (n.clone(), format!("{:?}", e.ty)))
+                    .chain(g.cx.aliases.iter().map(|a| (a.name.clone(), format!("{:?}", a.ty))))
+                    .collect(),
+                origin: g
+                    .origin
+                    .as_ref()
+                    .map(|(callee, param)| format!("the `{param}` parameter of `{callee}`")),
+                span: g.span,
+            })
+            .collect();
+        if unsolved.is_empty() {
+            Ok(())
+        } else {
+            Err(ElabError::UnsolvedGoals { decl: decl.to_string(), goals: unsolved })
+        }
+    }
+
+    /// Ψ as the goal world sees it: the committed bindings, then one `Trm`
+    /// binding per goal in creation order, padded out to `goal_base`. With
+    /// `L = |Ψ| + goal_base`, `GlobalVar(v)` is `bindings[L - 1 - v]`, so goal
+    /// `k` at `GlobalVar(goal_base - 1 - k)` lands immediately after the
+    /// committed ones. Well-scoped precisely because goals are numbered in
+    /// creation order: goal `k`'s statement can only mention goals before it.
+    ///
+    /// Needed only where the kernel must look a global *up* — conversion. The
+    /// term path never does (`whnf_type` takes no Ψ), which is why goals need
+    /// no real binding for the rest of elaboration.
+    fn goal_psi(&self) -> GlobalCtx {
+        let goals = self.goals.borrow();
+        let mut bindings = self.psi.bindings.clone();
+        for k in 0..self.goal_base as usize {
+            bindings.push(match goals.get(k) {
+                Some(g) => GlobalBinding::Tm {
+                    ctx: g.cx.gamma.clone(),
+                    layer: Layer::Code,
+                    ty: Rc::new(g.ty.clone()),
+                    level: g.level.clone(),
+                },
+                // A reserved-but-unused slot (the pre-count is an upper
+                // bound). Nothing refers to it.
+                None => GlobalBinding::Tm {
+                    ctx: LocalCtx { base: CtxBase::Nil, entries: vec![] },
+                    layer: Layer::Code,
+                    ty: Rc::new(Type::Nat),
+                    level: Level::Zero,
+                },
+            });
+        }
+        GlobalCtx { bindings }
+    }
+
+    /// The substitution discharging the whole goal block: `entries[k]` is the
+    /// payload for goal `k` at `GlobalVar(goal_base - 1 - k)`, matching
+    /// `apply_global`'s convention. Reserved-but-unused slots (the pre-count
+    /// is an upper bound) get a payload nothing can reach.
+    fn goal_subst(&self) -> GlobalSubst {
+        let goals = self.goals.borrow();
+        let entries = (0..self.goal_base as usize)
+            .map(|k| {
+                GlobalEntry::Tm(match goals.get(k).and_then(|g| g.solution.clone()) {
+                    Some(t) => t,
+                    None => Rc::new(Term::Zero),
+                })
+            })
+            .collect();
+        GlobalSubst { entries }
     }
 
     // -- types --------------------------------------------------------------
@@ -232,7 +694,26 @@ impl Elaborator {
     /// declaration — the kernel converts at every application/eliminator
     /// premise, so errors cannot slip through, only be reported later.
     fn elab_check(&self, cx: &Cx, e: &Expr, expected: &Type, lvl: &Level) -> R<Term> {
+        self.elab_check_hinted(cx, e, expected, lvl, None)
+    }
+
+    /// [`Self::elab_check`] plus, where the caller knows it, the `(callee,
+    /// parameter)` this expression is an argument for — the provenance and
+    /// default name of any goal raised inside it.
+    fn elab_check_hinted(
+        &self,
+        cx: &Cx,
+        e: &Expr,
+        expected: &Type,
+        lvl: &Level,
+        hint: Option<(&str, &str)>,
+    ) -> R<Term> {
         match &e.kind {
+            // The expected type *is* the goal's statement, which is why holes
+            // are checking-only (issues/goal-holes.md).
+            ExprKind::Hole(name) => {
+                self.new_goal(cx, name.as_deref(), hint, expected.clone(), lvl.clone(), e.span)
+            }
             ExprKind::Refl => {
                 let head = self.whnf(cx, expected, e.span)?;
                 let Type::Id { level, ty, lhs, .. } = head else {
@@ -259,6 +740,13 @@ impl Elaborator {
     /// and level.
     fn elab_infer(&self, cx: &Cx, e: &Expr) -> R<(Term, Type, Level)> {
         match &e.kind {
+            // A goal is its statement; with nothing to check against there is
+            // no statement to defer, so holes are checking-only (like `refl`).
+            ExprKind::Hole(_) => err(
+                "a hole here has no expected type — annotate it (`let p: T = ?;`) \
+                 or write the call fully explicitly (`@f(a, b, ?p)`)",
+                e.span,
+            ),
             ExprKind::Num(n) => {
                 let mut t = Term::Zero;
                 for _ in 0..*n {
@@ -555,11 +1043,16 @@ impl Elaborator {
     /// The implicit-parameter mask of a callable global (empty for locals,
     /// builtins, and unknown names — none of which take implicits).
     fn implicit_mask(&self, name: &str) -> Vec<bool> {
+        self.params_of(name).iter().map(|p| p.implicit).collect()
+    }
+
+    /// The parameters of a callable global, for defaulting goal names.
+    fn params_of(&self, name: &str) -> Rc<Vec<ParamMeta>> {
         match self.globals.get(name) {
-            Some(GlobalInfo::Def { implicit, .. } | GlobalInfo::Theorem { implicit, .. }) => {
-                implicit.clone()
+            Some(GlobalInfo::Def { params, .. } | GlobalInfo::Theorem { params, .. }) => {
+                Rc::clone(params)
             }
-            None => Vec::new(),
+            None => Rc::new(Vec::new()),
         }
     }
 
@@ -576,12 +1069,16 @@ impl Elaborator {
         args: &[Expr],
     ) -> R<(Term, Type, Level)> {
         let (mut t, mut ty, mut lvl) = (head, ty, lvl);
-        for arg in args {
+        // Positional, so argument `i` is parameter `i`: a hole here defaults
+        // its name to that parameter's ("proof-parameter names are API").
+        let params = self.params_of(name);
+        for (i, arg) in args.iter().enumerate() {
             let head = self.whnf(cx, &ty, arg.span)?;
             let Type::Pi { dom_level, cod_level, dom, cod } = head else {
                 return err(format!("`{name}` is applied to too many arguments"), arg.span);
             };
-            let arg_t = self.elab_check(cx, arg, &dom, &dom_level)?;
+            let hint = params.get(i).map(|p| (name, p.name.as_str()));
+            let arg_t = self.elab_check_hinted(cx, arg, &dom, &dom_level, hint)?;
             let arg_rc = Rc::new(arg_t);
             ty = cod.apply_local(&LocalSubst::id(&cx.gamma).extended(Rc::clone(&arg_rc)));
             lvl = cod_level.clone();
@@ -675,9 +1172,21 @@ impl Elaborator {
         if name == "Zero" {
             return Ok((Term::Zero, Type::Nat, Level::Zero));
         }
-        // Locals, innermost first.
-        if let Some(pos) = cx.names.iter().rposition(|n| n == name) {
-            return Ok(self.local(cx, pos));
+        // Locals and `let` aliases, innermost first. An alias bound at depth
+        // `d` shadows every binder at position `< d` and is shadowed by the
+        // rest, which is what compares the two here.
+        let local_pos = cx.names.iter().rposition(|n| n == name);
+        let alias = cx.aliases.iter().rev().find(|a| a.name == *name);
+        match (local_pos, alias) {
+            (Some(pos), Some(a)) if a.depth <= pos => return Ok(self.local(cx, pos)),
+            (_, Some(a)) => {
+                // Inlined at the use site, shifted across the binders pushed
+                // since it was bound (same as a `fn` definition's globals).
+                let by = (cx.names.len() - a.depth) as u32;
+                return Ok(((*a.term).shift_local(by), a.ty.shift_local(by), a.level.clone()));
+            }
+            (Some(pos), None) => return Ok(self.local(cx, pos)),
+            (None, None) => {}
         }
         // The enclosing declaration's own name: only a saturated, guarded
         // *call* means anything (it is the induction hypothesis, not a value).
@@ -690,20 +1199,24 @@ impl Elaborator {
         match self.globals.get(name) {
             Some(GlobalInfo::Def { term, ty, level, psi_len, .. }) => {
                 // Shift global indices across whatever Ψ grew since the def
-                // was elaborated (GlobalVar counts from the innermost end).
-                let by = self.psi.bindings.len() as u32 - psi_len;
+                // was elaborated (GlobalVar counts from the innermost end),
+                // plus the current declaration's goal prefix.
+                let by = self.psi.bindings.len() as u32 + self.goal_base - psi_len;
                 Ok(((**term).shift_global(by), (**ty).shift_global(by), level.clone()))
             }
             Some(GlobalInfo::Theorem { abs, .. }) => {
                 let len = self.psi.bindings.len() as u32;
-                let var = GlobalVar(len - 1 - abs);
+                // The goals sit innermost, so a committed binding is that much
+                // further out.
+                let var = GlobalVar(len - 1 - abs + self.goal_base);
                 let GlobalBinding::Tm { ty, level, .. } =
                     &self.psi.bindings[*abs as usize]
                 else {
                     unreachable!("theorem index points at a non-Trm binding");
                 };
                 // Stored scoped in its prefix of Ψ; rescope to the full Ψ
-                // (the kernel's own lookup convention, typing.rs).
+                // (the kernel's own lookup convention, typing.rs). This needs
+                // no goal offset of its own: `var.0` already carries it.
                 let ty = ty.shift_global(var.0 + 1);
                 // The theorem is closed (· ⊢), so the delayed substitution
                 // is the empty map out of the current Γ.
@@ -762,6 +1275,21 @@ struct Cx {
     /// Set inside a `Succ(k)` arm; `None` outside every such arm, where a
     /// self-call has no induction hypothesis to become.
     guard: Option<Rc<Guard>>,
+    /// `let` bindings in scope, outermost first. Not kernel binders: an alias
+    /// is inlined at each use, so `Γ` is unchanged.
+    aliases: Vec<Rc<Alias>>,
+}
+
+/// A `let`-bound name: the elaborated right-hand side, inlined at every use
+/// (the same doctrine as an inlined `fn`). `depth` is `names.len()` at the
+/// binding, which is what decides shadowing against ordinary binders and how
+/// far a use must be shifted.
+struct Alias {
+    name: String,
+    depth: usize,
+    term: Rc<Term>,
+    ty: Type,
+    level: Level,
 }
 
 impl Cx {
@@ -771,6 +1299,7 @@ impl Cx {
             gamma: LocalCtx { base: CtxBase::Nil, entries: vec![] },
             selfref: None,
             guard: None,
+            aliases: vec![],
         }
     }
 
@@ -778,6 +1307,78 @@ impl Cx {
         self.names.push(name);
         self.gamma.entries.push(CtxEntry { ty: Rc::new(ty), level });
     }
+}
+
+/// Syntactic upper bound on the goals a declaration can raise: every `?` in
+/// it. An *upper* bound, not the count — `calc` clones sub-expressions into
+/// its `@trans` spine (parser.rs) and the elaborator visits some expressions
+/// twice — which is why goals are numbered in creation order and the unused
+/// slots are padded. Under-counting is impossible: nothing invents a hole.
+fn count_holes(decl: &Decl) -> u32 {
+    fn ty(t: &Ty, n: &mut u32) {
+        match &t.kind {
+            TyKind::Nat => {}
+            TyKind::Eq(a, b) => {
+                expr(a, n);
+                expr(b, n);
+            }
+        }
+    }
+    fn expr(e: &Expr, n: &mut u32) {
+        match &e.kind {
+            ExprKind::Hole(_) => *n += 1,
+            ExprKind::Var(_) | ExprKind::Num(_) | ExprKind::Refl => {}
+            ExprKind::Call { args, .. } => args.iter().for_each(|a| expr(a, n)),
+            ExprKind::Match { scrut, motive, zero, succ } => {
+                expr(scrut, n);
+                if let Some((_, m)) = motive {
+                    ty(m, n);
+                }
+                expr(zero, n);
+                expr(&succ.2, n);
+            }
+            ExprKind::J { proof, motive, case, .. } => {
+                expr(proof, n);
+                ty(motive, n);
+                expr(case, n);
+            }
+        }
+    }
+    let mut n = 0;
+    for p in &decl.params {
+        ty(&p.ty, &mut n);
+    }
+    ty(&decl.result, &mut n);
+    for s in &decl.body.stmts {
+        let Stmt::Let { ty: t, expr: e, .. } = s;
+        if let Some(t) = t {
+            ty(t, &mut n);
+        }
+        expr(e, &mut n);
+    }
+    expr(&decl.body.result, &mut n);
+    for on in &decl.body.ons {
+        if let OnTarget::Stmt(t) = &on.target {
+            ty(t, &mut n);
+        }
+        expr(&on.expr, &mut n);
+    }
+    n
+}
+
+/// Strengthen a discharge out of the goal world. An `on` right-hand side is
+/// elaborated *with* the goal prefix in scope — it has to be, since the goal's
+/// context and statement live there — but a `GlobalSubst` payload is scoped in
+/// the source Ψ, below the prefix (subst.rs). Applying a `g`-entry σ whose
+/// payloads are never reached renumbers every committed global back down by
+/// `g`. "Never reached" is exactly the `frozen` restriction: no new hole, so
+/// no goal occurrence survives in the payload to meet a dummy.
+fn strengthen_global(t: &Term, g: u32) -> Term {
+    if g == 0 {
+        return t.clone();
+    }
+    let entries = (0..g).map(|_| GlobalEntry::Tm(Rc::new(Term::Zero))).collect();
+    t.apply_global(&GlobalSubst { entries })
 }
 
 /// The identity substitution of `gamma`, weakened so its source is `gamma`

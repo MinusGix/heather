@@ -29,3 +29,7 @@ Goal: `apply sym` reads more naturally than `sym(...)`; 'wrap everything after t
 ## Sequencing
 
 Both want [[goal-holes]]' block-statement + `on` surface for their full form; interacts with [[match-recursion]] (self-call proofs share the block surface). auto-refl's empty-block MVP is the one independent, tiny piece. Enabled by [[elab-stage2-metas]] (done). Tracked in [[frontend-roadmap]]; not in the current focus order.
+
+## Log
+
+- 2026-07-24: Unblocked by [[goal-holes]] landing: blocks now have a statement grammar (`Block` + `let x (: T)? = e;` + trailing `on`), which was the stated dependency for even the cheap `apply` slice, and the goal engine (holes as decl-scoped Ψ-metas, `on` discharge, unfilled-goal listing) is the substrate the multi-premise `apply trans` slice wanted. Note for whoever picks this up: a hole is currently refused inside an `on` right-hand side, so `apply`'s desugaring must place its holes in the block body, not in a discharge.
