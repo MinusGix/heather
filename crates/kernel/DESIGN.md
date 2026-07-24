@@ -125,6 +125,16 @@ lifter (omitted by the paper too).
   `□(u^δ)`; neutral comparison is an inference step that returns a type.
 - **Level equivalence**: normalize to `adjust(count(l))` maps and compare;
   `ω` compares only to itself.
+- **Propositional equality at `□` is exactly the recursor's observation.**
+  `refl` *synthesizes* `Id(S; t; t)`, so checking it against `Id(S; a; b)`
+  goes through conversion on the endpoints — and conversion at `□` types is
+  syntactic equality. Hence `Id(□(Δ ⊢ T @ l); box t; box t')` is inhabited
+  iff `t ≡ t'` as syntax, the same equality the code recursors dispatch on.
+  This coincidence is what makes intensional code observation consistent
+  with a propositional equality over code types (the ch. 07 argument in
+  `docs/metatheory-ch07-extensions.md` §6); relaxing *either* half — a
+  conversion that identifies β-convertible code, or an `Id` rule that
+  bypasses endpoint conversion — breaks it. Treat both as invariants.
 - **Conversion presupposes well-typed inputs.** The algorithm is only
   sound/complete on well-typed terms (ch. 08); on garbage it may return a
   meaningless `NotConvertible`, burn fuel, or panic in substitution's
