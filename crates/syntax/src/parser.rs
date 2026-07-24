@@ -174,10 +174,75 @@ impl Parser {
 
     // -- expressions --------------------------------------------------------
 
+    /// Expressions, with infix operators. Note `==` is *not* an expression
+    /// operator: it is the identity-type former, parsed by [`Self::ty`] and by
+    /// `calc` steps. Precedence, loosest to tightest: `<` (→ `lt`), `+`
+    /// (→ `add`), `*` (→ `mul`), then postfix `.method(args)` / calls, then
+    /// atoms. Each infix operator desugars to an ordinary [`ExprKind::Call`]
+    /// on a fixed name table (issues/surface-operators.md — the decorated
+    /// `+_Z` grammar and trait hookup arrive with the real trait design).
     fn expr(&mut self) -> R<Expr> {
+        self.expr_bp(0)
+    }
+
+    /// Binding powers for the infix operators. `(name, left_bp, right_bp)`;
+    /// `right_bp > left_bp` makes every operator left-associative.
+    fn infix_op(tok: &TokKind) -> Option<(&'static str, u8, u8)> {
+        match tok {
+            TokKind::Lt => Some(("lt", 1, 2)),
+            TokKind::Plus => Some(("add", 3, 4)),
+            TokKind::Star => Some(("mul", 5, 6)),
+            _ => None,
+        }
+    }
+
+    /// Precedence-climbing loop: parse a postfix expression, then fold in
+    /// infix operators whose left binding power is at least `min_bp`.
+    fn expr_bp(&mut self, min_bp: u8) -> R<Expr> {
+        let mut lhs = self.postfix()?;
+        while let Some((name, l_bp, r_bp)) = Self::infix_op(self.peek()) {
+            if l_bp < min_bp {
+                break;
+            }
+            self.bump();
+            let rhs = self.expr_bp(r_bp)?;
+            let span = lhs.span.join(rhs.span);
+            lhs = Expr {
+                kind: ExprKind::Call { name: name.to_string(), args: vec![lhs, rhs], explicit: false },
+                span,
+            };
+        }
+        Ok(lhs)
+    }
+
+    /// An atom followed by zero or more method calls `.f(args)`. A method call
+    /// desugars to `f(args…, receiver)` — the receiver is the *last* argument,
+    /// so with stage-2 implicit endpoints (issues/elab-stage2-metas.md) the
+    /// earlier implicit parameters are inferred from it (`p.sym()` ⇒ `sym(p)`,
+    /// `add_succ(n, k).sym()` ⇒ `sym(add_succ(n, k))`).
+    fn postfix(&mut self) -> R<Expr> {
+        let mut e = self.atom()?;
+        while matches!(self.peek(), TokKind::Dot) {
+            self.bump();
+            let (method, _) = self.ident("method name")?;
+            self.expect(&TokKind::LParen, "`(` (method call)")?;
+            let (mut args, end) = self.call_args()?;
+            let span = e.span.join(end);
+            args.push(e);
+            e = Expr { kind: ExprKind::Call { name: method, args, explicit: false }, span };
+        }
+        Ok(e)
+    }
+
+    /// A primary expression: keyword forms (`match`/`refl`/`j`/`calc`), an
+    /// `@`- or plain call, a variable, a numeral, or a parenthesised group.
+    fn atom(&mut self) -> R<Expr> {
         let start = self.peek_span();
         if self.at_kw("match") {
             return self.match_expr();
+        }
+        if self.at_kw("calc") {
+            return self.calc_expr();
         }
         if self.at_kw("refl") {
             self.bump();
@@ -325,6 +390,60 @@ impl Parser {
             span: start.join(end),
         })
     }
+
+    /// `calc { e0 == e1 := p1 (, == e_i := p_i)* ,? }` — an equational chain
+    /// (surface-v1 §1). Desugars to a right-nested `@trans` over the step
+    /// proofs, carrying the step terms as the *explicit* endpoints so that
+    /// `refl` steps still receive a checking type. Proves `e0 == e_last`;
+    /// a single step is just its proof.
+    fn calc_expr(&mut self) -> R<Expr> {
+        let start = self.peek_span();
+        self.bump(); // `calc`
+        self.expect(&TokKind::LBrace, "`{`")?;
+        // The chain: terms[i] are the endpoints, proofs[i] : terms[i] == terms[i+1].
+        // The first step carries both endpoints (`e0 == e1 := p1`); later steps
+        // reuse the previous right endpoint (`== e_{i+1} := p_{i+1}`).
+        let mut terms = vec![self.expr()?];
+        let mut proofs = Vec::new();
+        self.expect(&TokKind::EqEq, "`==` (calc step)")?;
+        loop {
+            terms.push(self.expr()?);
+            self.expect(&TokKind::ColonEq, "`:=` (calc step proof)")?;
+            proofs.push(self.expr()?);
+            if !matches!(self.peek(), TokKind::Comma) {
+                break;
+            }
+            self.bump(); // `,`
+            if matches!(self.peek(), TokKind::RBrace) {
+                break; // trailing comma
+            }
+            self.expect(&TokKind::EqEq, "`==` (calc step)")?;
+        }
+        let end = self.expect(&TokKind::RBrace, "`}`")?;
+        let span = start.join(end);
+        // Fold right: acc proves terms[i+1] == e_last; prepend step i.
+        let m = proofs.len();
+        let last = &terms[m];
+        let mut acc = proofs[m - 1].clone();
+        for i in (0..m - 1).rev() {
+            acc = Expr {
+                kind: ExprKind::Call {
+                    name: "trans".to_string(),
+                    args: vec![
+                        terms[i].clone(),
+                        terms[i + 1].clone(),
+                        last.clone(),
+                        proofs[i].clone(),
+                        acc,
+                    ],
+                    explicit: true,
+                },
+                span,
+            };
+        }
+        acc.span = span;
+        Ok(acc)
+    }
 }
 
 #[cfg(test)]
@@ -366,5 +485,105 @@ mod tests {
     #[test]
     fn unclosed_implicit_param_errors() {
         assert!(parse_file("theorem t({a: Nat, b: Nat): a == b { refl }").is_err());
+    }
+
+    // Parse a single-declaration `fn f(n: Nat) -> Nat { <body> }` and return
+    // the body kind, for exercising expression desugaring.
+    fn body(src_body: &str) -> ExprKind {
+        let src = format!("fn f(n: Nat) -> Nat {{ {src_body} }}");
+        parse_file(&src).unwrap().decls.remove(0).body.kind
+    }
+
+    fn as_call(k: &ExprKind) -> (&str, &[Expr], bool) {
+        match k {
+            ExprKind::Call { name, args, explicit } => (name.as_str(), args.as_slice(), *explicit),
+            other => panic!("expected a call, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn operators_desugar_with_precedence() {
+        // `a + b * c` ⇒ add(a, mul(b, c)); `*` binds tighter than `+`.
+        let k = body("a + b * c");
+        let (name, args, _) = as_call(&k);
+        assert_eq!(name, "add");
+        assert_eq!(args.len(), 2);
+        let (inner, iargs, _) = as_call(&args[1].kind);
+        assert_eq!(inner, "mul");
+        assert!(matches!(&iargs[0].kind, ExprKind::Var(v) if v == "b"));
+    }
+
+    #[test]
+    fn addition_is_left_associative() {
+        // `a + b + c` ⇒ add(add(a, b), c).
+        let k = body("a + b + c");
+        let (name, args, _) = as_call(&k);
+        assert_eq!(name, "add");
+        assert_eq!(as_call(&args[0].kind).0, "add");
+        assert!(matches!(&args[1].kind, ExprKind::Var(v) if v == "c"));
+    }
+
+    #[test]
+    fn method_call_puts_receiver_last() {
+        // `add_succ(n, k).sym()` ⇒ sym(add_succ(n, k)); receiver is last.
+        let k = body("add_succ(n, k).sym()");
+        let (name, args, explicit) = as_call(&k);
+        assert_eq!(name, "sym");
+        assert!(!explicit);
+        assert_eq!(args.len(), 1);
+        assert_eq!(as_call(&args[0].kind).0, "add_succ");
+    }
+
+    #[test]
+    fn method_call_appends_receiver_after_args() {
+        // `x.f(a, b)` ⇒ f(a, b, x).
+        let k = body("x.f(a, b)");
+        let (name, args, _) = as_call(&k);
+        assert_eq!(name, "f");
+        assert_eq!(args.len(), 3);
+        assert!(matches!(&args[2].kind, ExprKind::Var(v) if v == "x"));
+    }
+
+    #[test]
+    fn calc_single_step_is_the_bare_proof() {
+        // `calc { a == b := p }` ⇒ p.
+        let k = body("calc { a == b := p }");
+        assert!(matches!(&k, ExprKind::Var(v) if v == "p"));
+    }
+
+    #[test]
+    fn calc_multi_step_nests_explicit_trans() {
+        // `calc { a == b := p1, == c := p2 }` ⇒ @trans(a, b, c, p1, p2).
+        let k = body("calc { a == b := p1, == c := p2 }");
+        let (name, args, explicit) = as_call(&k);
+        assert_eq!(name, "trans");
+        assert!(explicit, "calc lowers to the explicit `@trans`");
+        assert_eq!(args.len(), 5);
+        assert!(matches!(&args[0].kind, ExprKind::Var(v) if v == "a"));
+        assert!(matches!(&args[1].kind, ExprKind::Var(v) if v == "b"));
+        assert!(matches!(&args[2].kind, ExprKind::Var(v) if v == "c"));
+        assert!(matches!(&args[3].kind, ExprKind::Var(v) if v == "p1"));
+        assert!(matches!(&args[4].kind, ExprKind::Var(v) if v == "p2"));
+    }
+
+    #[test]
+    fn calc_three_steps_fold_right() {
+        // `calc { a==b:=p1, ==c:=p2, ==d:=p3 }` ⇒ @trans(a,b,d,p1,@trans(b,c,d,p2,p3)).
+        let k = body("calc { a == b := p1, == c := p2, == d := p3 }");
+        let (_, args, _) = as_call(&k);
+        assert!(matches!(&args[2].kind, ExprKind::Var(v) if v == "d"), "shared right endpoint");
+        let (inner, iargs, iexpl) = as_call(&args[4].kind);
+        assert_eq!(inner, "trans");
+        assert!(iexpl);
+        assert!(matches!(&iargs[0].kind, ExprKind::Var(v) if v == "b"));
+        assert!(matches!(&iargs[2].kind, ExprKind::Var(v) if v == "d"));
+    }
+
+    #[test]
+    fn eqeq_stays_a_type_former_not_an_expr_operator() {
+        // `a == b` at the top of a body is not an expression; the elaborator
+        // never sees `==` as a Call. (Here it parses as the type in `ty`.)
+        let f = parse_file("theorem t(a: Nat, b: Nat): a == b { refl }").unwrap();
+        assert!(matches!(f.decls[0].result.kind, crate::ast::TyKind::Eq(..)));
     }
 }

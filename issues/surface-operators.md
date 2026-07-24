@@ -1,9 +1,9 @@
 ---
 title: "Operators, methods, and calc for the surface"
-status: open
+status: closed
 labels: [frontend,syntax]
 created: 2026-07-23
-updated: 2026-07-23
+updated: 2026-07-24
 ---
 
 The ergonomics layer the sketches use freely and stage 1 lacks
@@ -35,3 +35,4 @@ call-style spelling.
 ## Log
 
 - 2026-07-23: Opened as part of the granular issue split after stage 1.
+- 2026-07-24: Landed as pure parser desugaring to ExprKind::Call — no AST, kernel, or elaborator change. (1) Infix operators via a fixed name table (+ -> add, * -> mul, < -> lt; only + exercised, mul/lt targets are future defs), precedence-climbing expr_bp with standard precedence (< < + < *), left-assoc; == stays the Id-former (parsed by ty()/calc, never an expr operator, keeping < unambiguous). (2) Method calls x.f(args) -> f(args, x) (receiver LAST, so stage-2 implicit endpoints infer from it: p.sym() -> sym(p)). (3) calc { e0 == e1 := p1, == ei := pi, ... } -> right-nested @trans over the step PROOFS with the step terms as EXPLICIT endpoints — the explicit endpoints give refl-steps their checking type (the reason calc can't be a blind trans-of-proofs fold). Single-step calc is the bare proof. New tokens: . + * < := (crates/syntax/src/lexer.rs). Acceptance MET: crates/elab/tests/operators.rs — add_comm's Succ arm as the surface-v1 §1 calc block, whole Nat suite in operator/method/calc style green (7 Psi-globals), method-style == call-style, incoherent calc kernel-rejected; 12 parser desugaring unit tests. Scope note: the sketch's .cong(Succ) needs higher-order cong + first-class function values (function types aren't in the surface yet) — deferred to the trait/function-value layer; the acceptance uses .cong_succ() and reads like §1 otherwise. split/on statement forms (surface-v1 §2) belong to [[goal-holes]]; unified self-call match (Succ(k) without ih) is [[match-recursion]].
