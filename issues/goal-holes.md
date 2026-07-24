@@ -4,7 +4,7 @@ status: open
 labels: [frontend,elaboration,syntax]
 blocked-by: [elab-stage2-metas]
 created: 2026-07-23
-updated: 2026-07-23
+updated: 2026-07-24
 ---
 
 The goal design of docs/sketches/surface-v1 §2 / v2 §2 / v3 §2
@@ -35,3 +35,4 @@ Out of scope here, tracked in the sketches: solver meta-functions
 ## Log
 
 - 2026-07-23: Opened as part of the granular issue split after stage 1.
+- 2026-07-24: Related: [[surface-proof-automation]] (auto-refl + apply) builds on this engine — auto-refl is the simplest hardwired instance of the future solver slot; apply's multi-premise form is defer-into-a-specific-application, discharged by on.
