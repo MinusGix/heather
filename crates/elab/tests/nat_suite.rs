@@ -1,0 +1,105 @@
+//! Stress-proof-suite item 1 (issues/stress-proof-suite.md): the Nat
+//! arithmetic + Id lemmas, elaborated from surface syntax and checked by the
+//! real kernel. Every declaration that lands here has passed
+//! `check_type` + `check_term`; the negative tests confirm the kernel gate
+//! actually rejects (elaborator soundness is by construction, not by trust).
+
+use heather_elab::{ElabError, Elaborator};
+
+const NAT_SUITE: &str = r#"
+fn add(m: Nat, n: Nat) -> Nat {
+    match m {
+        Zero => n,
+        Succ(k, ih) => Succ(ih),
+    }
+}
+
+theorem add_zero(n: Nat): add(n, 0) == n {
+    match n as z -> add(z, 0) == z {
+        Zero => refl,
+        Succ(k, ih) => cong_succ(add(k, 0), k, ih),
+    }
+}
+
+theorem add_succ(m: Nat, n: Nat): add(m, Succ(n)) == Succ(add(m, n)) {
+    match m as z -> add(z, Succ(n)) == Succ(add(z, n)) {
+        Zero => refl,
+        Succ(k, ih) => cong_succ(add(k, Succ(n)), Succ(add(k, n)), ih),
+    }
+}
+
+theorem add_comm(m: Nat, n: Nat): add(m, n) == add(n, m) {
+    match m as z -> add(z, n) == add(n, z) {
+        Zero => sym(add(n, 0), n, add_zero(n)),
+        Succ(k, ih) => trans(
+            Succ(add(k, n)),
+            Succ(add(n, k)),
+            add(n, Succ(k)),
+            cong_succ(add(k, n), add(n, k), ih),
+            sym(add(n, Succ(k)), Succ(add(n, k)), add_succ(n, k))
+        ),
+    }
+}
+
+theorem add_assoc(a: Nat, b: Nat, c: Nat): add(add(a, b), c) == add(a, add(b, c)) {
+    match a as z -> add(add(z, b), c) == add(z, add(b, c)) {
+        Zero => refl,
+        Succ(k, ih) => cong_succ(add(add(k, b), c), add(k, add(b, c)), ih),
+    }
+}
+"#;
+
+#[test]
+fn prelude_checks() {
+    Elaborator::with_prelude().expect("prelude must elaborate and kernel-check");
+}
+
+#[test]
+fn nat_suite_checks() {
+    let mut e = Elaborator::with_prelude().expect("prelude");
+    e.elab_source(NAT_SUITE).expect("Nat suite must elaborate and kernel-check");
+    // The prelude's 3 theorems + the suite's 4 all landed as Ψ-globals.
+    assert_eq!(e.psi().bindings.len(), 7);
+}
+
+#[test]
+fn computation_check() {
+    // Concrete arithmetic reduces: 2 + 2 == 4 proved by refl alone.
+    let mut e = Elaborator::with_prelude().expect("prelude");
+    e.elab_source(NAT_SUITE).expect("suite");
+    e.elab_source("theorem two_plus_two(): add(2, 2) == 4 { refl }")
+        .expect("2 + 2 == 4 by refl");
+}
+
+#[test]
+fn kernel_rejects_wrong_proof() {
+    // `refl` cannot prove add(n, 1) == n; the KERNEL (not the elaborator's
+    // surface checks) must be what rejects it.
+    let mut e = Elaborator::with_prelude().expect("prelude");
+    e.elab_source(NAT_SUITE).expect("suite");
+    let r = e.elab_source("theorem bogus(n: Nat): add(n, 1) == n { refl }");
+    assert!(
+        matches!(r, Err(ElabError::Kernel { .. })),
+        "expected a kernel rejection, got {r:?}"
+    );
+}
+
+#[test]
+fn kernel_rejects_wrong_lemma_use() {
+    // sym applied with swapped endpoints: types don't line up.
+    let mut e = Elaborator::with_prelude().expect("prelude");
+    let r = e.elab_source(
+        "theorem bogus(a: Nat, b: Nat, p: a == b): b == a { sym(b, a, p) }",
+    );
+    assert!(
+        matches!(r, Err(ElabError::Kernel { .. })),
+        "expected a kernel rejection, got {r:?}"
+    );
+}
+
+#[test]
+fn unbound_name_is_an_elab_error() {
+    let mut e = Elaborator::new();
+    let r = e.elab_source("theorem nope(n: Nat): n == n { mystery(n) }");
+    assert!(matches!(r, Err(ElabError::Elab { .. })), "got {r:?}");
+}
