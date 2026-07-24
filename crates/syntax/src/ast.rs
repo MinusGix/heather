@@ -81,14 +81,18 @@ pub enum ExprKind {
     Call { name: String, args: Vec<Expr>, explicit: bool },
     /// `refl` — checking-only.
     Refl,
-    /// `match scrut (as bind -> motive)? { Zero => zero, Succ(k, ih) => succ }`
+    /// `match scrut (as bind -> motive)? { Zero => zero, Succ(k) => succ }`,
+    /// or with the low-level explicit-ih arm `Succ(k, ih) => succ`.
     Match {
         scrut: Box<Expr>,
         /// Explicit dependent motive: `(binder name, motive type)`.
         motive: Option<(String, Box<Ty>)>,
         zero: Box<Expr>,
-        /// `(predecessor name, ih name, arm body)`.
-        succ: (String, String, Box<Expr>),
+        /// `(predecessor name, ih name, arm body)`. The ih name is `None` in
+        /// the unified form `Succ(k)`, where the induction hypothesis is
+        /// reached by a structurally guarded *self-call* instead of a binder
+        /// (issues/match-recursion.md).
+        succ: (String, Option<String>, Box<Expr>),
     },
     /// `j(proof, (y, p) -> M, case)` — based path induction. `proof`'s type
     /// fixes the endpoint and family; `M` is scoped over `y` (right endpoint)

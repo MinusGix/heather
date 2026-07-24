@@ -14,7 +14,7 @@
 //!          | "j" "(" expr "," "(" name "," name ")" "->" type "," expr ")"
 //!          | "@"? name "(" args ")" | name | numeral | "(" expr ")"
 //! arms    := arm ("," arm)* ","?    -- exactly a Zero arm and a Succ arm
-//! arm     := "Zero" "=>" expr | "Succ" "(" name "," name ")" "=>" expr
+//! arm     := "Zero" "=>" expr | "Succ" "(" name ("," name)? ")" "=>" expr
 //! ```
 
 use crate::ast::*;
@@ -333,7 +333,7 @@ impl Parser {
         };
         self.expect(&TokKind::LBrace, "`{`")?;
         let mut zero: Option<Expr> = None;
-        let mut succ: Option<(String, String, Expr)> = None;
+        let mut succ: Option<(String, Option<String>, Expr)> = None;
         while !matches!(self.peek(), TokKind::RBrace) {
             if self.eat_kw("Zero") {
                 self.expect(&TokKind::FatArrow, "`=>`")?;
@@ -343,15 +343,21 @@ impl Parser {
             } else if self.eat_kw("Succ") {
                 self.expect(&TokKind::LParen, "`(`")?;
                 let (k, _) = self.ident("predecessor name")?;
-                self.expect(&TokKind::Comma, "`,`")?;
-                let (ih, _) = self.ident("ih name")?;
+                // `Succ(k)` is the unified form (ih = guarded self-call);
+                // `Succ(k, ih)` stays as the low-level explicit fallback.
+                let ih = if matches!(self.peek(), TokKind::Comma) {
+                    self.bump();
+                    Some(self.ident("ih name")?.0)
+                } else {
+                    None
+                };
                 self.expect(&TokKind::RParen, "`)`")?;
                 self.expect(&TokKind::FatArrow, "`=>`")?;
                 if succ.replace((k, ih, self.expr()?)).is_some() {
                     return self.err("duplicate `Succ` arm");
                 }
             } else {
-                return self.err("expected `Zero` or `Succ(k, ih)` arm");
+                return self.err("expected a `Zero` or `Succ(k)` arm");
             }
             if !matches!(self.peek(), TokKind::Comma) {
                 break;
@@ -361,7 +367,7 @@ impl Parser {
         let end = self.expect(&TokKind::RBrace, "`}`")?;
         let (Some(zero), Some((k, ih, body))) = (zero, succ) else {
             return Err(ParseError {
-                msg: "`match` needs both a `Zero` and a `Succ(k, ih)` arm".into(),
+                msg: "`match` needs both a `Zero` and a `Succ(k)` arm".into(),
                 span: start.join(end),
             });
         };

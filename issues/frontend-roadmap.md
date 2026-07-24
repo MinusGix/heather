@@ -20,11 +20,11 @@ Design record: [[surface-syntax]] (decisions) + docs/sketches/surface-v0..3
    ([[elaborator-design]], [[stress-proof-suite]] item 1).
 2. [[metatheory-ch07-pass]] — interleave; wants doing before tier-1
    inductives generate serious term volume on the extension formers.
-3. [[elab-stage2-metas]] — implicit annotations/levels; the Nat suite loses
+3. ✅ [[elab-stage2-metas]] — implicit annotations/levels; the Nat suite loses
    its explicit motives and endpoint spam. Unblocks most ergonomics.
-4. [[surface-operators]] — `+`/`==` operators, method calls, `calc`.
+4. ✅ [[surface-operators]] — `+`/`==` operators, method calls, `calc`.
    Mostly parallel to 3; lemma-application ergonomics.
-5. [[match-recursion]] — termination checking; `induction`/`rec` collapse
+5. ✅ [[match-recursion]] — termination checking; `induction`/`rec` collapse
    into `match` with IH = self-call.
 6. [[goal-holes]] — `?holes` + `on` discharge (needs stage-2 metas).
 7. [[inductive-compiler]] tier 0 → List hand-prototype → tier 1
@@ -46,3 +46,4 @@ goal-solver meta-functions (sketch round 3 §2).
 - 2026-07-24: Item 4 [[surface-operators]] landed (operators/methods/calc as parser desugaring). Deferred within it, tied to later work: higher-order .cong(Succ) needs first-class function values/types in the surface (part of the trait/function-value layer, [[compile-typeclass-design]]); mul/lt need defs. Next focus: item 5 [[match-recursion]] (unified self-call match, drops the explicit Succ(k, ih) binder) and item 2 [[metatheory-ch07-pass]] before [[inductive-compiler]] term volume.
 - 2026-07-24: Filed [[surface-proof-automation]] (user-requested, unscheduled): auto-refl (empty-block trivial-closer; independent tiny MVP) + apply (prefix continuation application; wants goal-holes' block-statement surface). Sits after/with [[goal-holes]] in the 'later' cluster.
 - 2026-07-24: Equality notation settled ([[surface-syntax]]): single `=` for binding + propositional equality (ML-style), `==` rejected with a hint, `:=` for discharge (and future assignment, [[effects-direction]]). Follow-up diagnostic tracked: [[warn-bare-eq-no-effect]].
+- 2026-07-24: Item 5 [[match-recursion]] landed: unified `Succ(k)` match with IH = guarded self-call; Nat suite now readable as recursive theorems. Deferred within it: generalizing a *varying* non-decreasing argument into the motive (rejected with a diagnostic; additive to add later). Next focus: item 2 [[metatheory-ch07-pass]] before [[inductive-compiler]] term volume, then item 6 [[goal-holes]].

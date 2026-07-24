@@ -136,8 +136,16 @@ impl Elaborator {
             cx.push(p.name.clone(), ty.clone(), lvl.clone());
             param_info.push((ty, lvl));
         }
-        // Result type and body (checked against it).
+        // Result type and body (checked against it). The declaration's own
+        // name goes into scope for the body only: a self-call guarded by a
+        // `match` on one of these parameters *is* the induction hypothesis
+        // (issues/match-recursion.md), and the lowering constructs the
+        // recursor, so there is no fixpoint and nothing new for the kernel.
         let (res_ty, res_lvl) = self.elab_ty(&cx, &decl.result)?;
+        cx.selfref = Some(Rc::new(SelfRef {
+            name: decl.name.clone(),
+            params: decl.params.iter().map(|p| (p.name.clone(), p.implicit)).collect(),
+        }));
         let body = self.elab_check(&cx, &decl.body, &res_ty, &res_lvl)?;
 
         // Close over the telescope: statement = Π…, proof/body = λ….
@@ -267,6 +275,9 @@ impl Elaborator {
                     let arg = self.elab_check(cx, arg, &Type::Nat, &Level::Zero)?;
                     return Ok((Term::Succ(Rc::new(arg)), Type::Nat, Level::Zero));
                 }
+                if cx.selfref.as_ref().is_some_and(|s| s.name == *name) {
+                    return self.elab_self_call(cx, args, *explicit, e.span);
+                }
                 let mask = self.implicit_mask(name);
                 let (head, ty, lvl) = self.resolve(cx, name, e.span)?;
                 // Fully-explicit call (`@f`, or a callee with no implicits):
@@ -367,7 +378,26 @@ impl Elaborator {
         scx.push(k.clone(), Type::Nat, Level::Zero);
         let ih_ty = motive
             .apply_local(&embed(&cx.gamma, 1).extended(Rc::new(Term::Var(LocalVar(0)))));
-        scx.push(ih.clone(), ih_ty, mlvl.clone());
+        // The unified arm `Succ(k)` binds the ih anyway — the recursor demands
+        // it — but under a name the surface cannot spell, because it is
+        // reached by a guarded self-call instead.
+        scx.push(ih.clone().unwrap_or_else(|| "#ih".into()), ih_ty, mlvl.clone());
+        if ih.is_none() {
+            // Does this match descend on one of the declaration's own
+            // parameters? If so, self-calls in the arm become the ih. If not
+            // (a nested match on some other term), the enclosing arm's guard —
+            // if any — still stands.
+            scx.guard = self
+                .descends_on_param(cx, &scrut_t)
+                .map(|dec| {
+                    Rc::new(Guard {
+                        dec,
+                        pred_pos: cx.names.len(),
+                        ih_pos: cx.names.len() + 1,
+                    })
+                })
+                .or_else(|| cx.guard.clone());
+        }
         // step : M[Succ k/z] in Γ, k, ih.
         let step_ty = motive.apply_local(
             &embed(&cx.gamma, 2)
@@ -381,6 +411,113 @@ impl Elaborator {
             step: Rc::new(step),
             scrut: Rc::new(scrut_t),
         })
+    }
+
+    /// Is `scrut` (already elaborated) exactly one of the enclosing
+    /// declaration's parameters? Returns its parameter index — the argument
+    /// position the recursion descends on.
+    fn descends_on_param(&self, cx: &Cx, scrut: &Term) -> Option<usize> {
+        let s = cx.selfref.as_ref()?;
+        let Term::Var(LocalVar(i)) = scrut else { return None };
+        let pos = cx.names.len() - 1 - *i as usize;
+        (pos < s.params.len()).then_some(pos)
+    }
+
+    /// A local variable by absolute position (outermost first), as
+    /// [`Self::resolve`] would return it.
+    fn local(&self, cx: &Cx, pos: usize) -> (Term, Type, Level) {
+        let idx = (cx.names.len() - 1 - pos) as u32;
+        let entry = &cx.gamma.entries[pos];
+        (Term::Var(LocalVar(idx)), entry.ty.shift_local(idx + 1), entry.level.clone())
+    }
+
+    /// Lower a call to the enclosing declaration's own name
+    /// (issues/match-recursion.md). The termination analysis is deliberately
+    /// strict: the call must sit inside a `match` arm that descends on one of
+    /// the declaration's parameters, must be saturated, must pass the arm's
+    /// predecessor in the decreasing position, and must pass every other
+    /// parameter *unchanged*. Under exactly those conditions the recursive
+    /// result is definitionally the arm's induction hypothesis, so the
+    /// lowering is a variable — no motive surgery, no fixpoint.
+    ///
+    /// The analysis is untrusted: it can only *reject*. Anything it lets
+    /// through still has to typecheck as an `elim_Nat` in the kernel.
+    fn elab_self_call(
+        &self,
+        cx: &Cx,
+        args: &[Expr],
+        explicit: bool,
+        span: Span,
+    ) -> R<(Term, Type, Level)> {
+        let s = Rc::clone(cx.selfref.as_ref().expect("self-call outside a declaration"));
+        let name = &s.name;
+        let Some(g) = cx.guard.clone() else {
+            return err(
+                format!(
+                    "recursive call to `{name}` is not structurally guarded: it must occur \
+                     inside a `match` on one of `{name}`'s own parameters"
+                ),
+                span,
+            );
+        };
+        // Which parameter each surface argument fills: implicits are omitted
+        // unless the call is `@`-marked.
+        let positions: Vec<usize> = (0..s.params.len())
+            .filter(|&j| explicit || !s.params[j].1)
+            .collect();
+        if !positions.contains(&g.dec) {
+            return err(
+                format!(
+                    "`{name}` recurses on its implicit parameter `{}`; pass it explicitly \
+                     (`@{name}(…)`) to make the recursive call",
+                    s.params[g.dec].0
+                ),
+                span,
+            );
+        }
+        if args.len() != positions.len() {
+            return err(
+                format!(
+                    "recursive call to `{name}` must pass all {} argument(s), found {}",
+                    positions.len(),
+                    args.len()
+                ),
+                span,
+            );
+        }
+        for (arg, j) in args.iter().zip(positions) {
+            // Compare by *binder*, not by name, so shadowing cannot fake a
+            // guarded call.
+            let want = if j == g.dec { g.pred_pos } else { j };
+            let (arg_t, _, _) = self.elab_infer(cx, arg)?;
+            let matches_binder = matches!(
+                arg_t, Term::Var(LocalVar(i)) if cx.names.len() - 1 - i as usize == want
+            );
+            if matches_binder {
+                continue;
+            }
+            return if j == g.dec {
+                err(
+                    format!(
+                        "recursive call to `{name}` must descend: argument `{}` has to be \
+                         `{}`, the predecessor bound by the enclosing `match`",
+                        s.params[j].0, cx.names[g.pred_pos]
+                    ),
+                    arg.span,
+                )
+            } else {
+                err(
+                    format!(
+                        "recursive call to `{name}` must pass `{}` unchanged: the induction \
+                         hypothesis fixes every non-decreasing parameter (generalizing a \
+                         varying argument into the motive is not supported yet)",
+                        s.params[j].0
+                    ),
+                    arg.span,
+                )
+            };
+        }
+        Ok(self.local(cx, g.ih_pos))
     }
 
     /// Synthesize the dependent motive for a motive-less `match` in checking
@@ -540,13 +677,15 @@ impl Elaborator {
         }
         // Locals, innermost first.
         if let Some(pos) = cx.names.iter().rposition(|n| n == name) {
-            let idx = (cx.names.len() - 1 - pos) as u32;
-            let entry = &cx.gamma.entries[pos];
-            return Ok((
-                Term::Var(LocalVar(idx)),
-                entry.ty.shift_local(idx + 1),
-                entry.level.clone(),
-            ));
+            return Ok(self.local(cx, pos));
+        }
+        // The enclosing declaration's own name: only a saturated, guarded
+        // *call* means anything (it is the induction hypothesis, not a value).
+        if cx.selfref.as_ref().is_some_and(|s| s.name == name) {
+            return err(
+                format!("`{name}` can only be used here as a saturated recursive call"),
+                span,
+            );
         }
         match self.globals.get(name) {
             Some(GlobalInfo::Def { term, ty, level, psi_len, .. }) => {
@@ -589,17 +728,50 @@ impl Elaborator {
     }
 }
 
+/// The enclosing declaration, in scope throughout its own body so that a
+/// structurally guarded self-call can lower to the induction hypothesis
+/// (issues/match-recursion.md). Nothing else can reference it: the name is
+/// only registered as a global once the declaration is checked.
+struct SelfRef {
+    name: String,
+    /// `(parameter name, implicit?)` in declaration order. Parameter `j` is
+    /// bound at position `j` of the body's `Cx` (the telescope goes first).
+    params: Vec<(String, bool)>,
+}
+
+/// What a guarded self-call must look like inside a `Succ(k)` arm, and what
+/// it lowers to. Positions are *absolute* (indices into `cx.names`, outermost
+/// first) so they stay valid as inner binders are pushed.
+struct Guard {
+    /// Index of the parameter the recursion descends on.
+    dec: usize,
+    /// Position of the predecessor `k` bound by the arm.
+    pred_pos: usize,
+    /// Position of the arm's (hidden) induction-hypothesis binder.
+    ih_pos: usize,
+}
+
 /// Elaboration context: kernel Γ plus the parallel name list
 /// (`names[j]` names `gamma.entries[j]`, outermost first).
 #[derive(Clone)]
 struct Cx {
     names: Vec<String>,
     gamma: LocalCtx,
+    /// The declaration being elaborated, once its telescope is in scope.
+    selfref: Option<Rc<SelfRef>>,
+    /// Set inside a `Succ(k)` arm; `None` outside every such arm, where a
+    /// self-call has no induction hypothesis to become.
+    guard: Option<Rc<Guard>>,
 }
 
 impl Cx {
     fn empty() -> Cx {
-        Cx { names: vec![], gamma: LocalCtx { base: CtxBase::Nil, entries: vec![] } }
+        Cx {
+            names: vec![],
+            gamma: LocalCtx { base: CtxBase::Nil, entries: vec![] },
+            selfref: None,
+            guard: None,
+        }
     }
 
     fn push(&mut self, name: String, ty: Type, level: Level) {
