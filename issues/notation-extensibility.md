@@ -58,28 +58,180 @@ it does not automatically extend to axis 1.
 - **Coq** — notation levels, scopes, `%` delimiters, reserved notation. The
   cautionary end of axis 2.
 
-## Proposal to pressure-test
+## Proposal (worked out with the user, 2026-07-24)
 
 Keep axis 2 closed; open axis 1 in the one way that preserves context-free
-parsing:
+parsing. The organising claim, which the worked examples below support:
+**mathematical notation has few shapes and many symbols**, so fix the shapes
+in the grammar and let the symbols be open.
 
-- **Precedence comes from the base operator, not the decoration.** `+_Z`
-  parses at `+`'s precedence because it *starts* with `+` (the Scala trick,
-  specialised to the decoration grammar). Decoration then never perturbs
-  parsing — it only selects which meaning — so the parse is fixed and only
-  *resolution* is scope-dependent. This is also what makes decorated
-  operators implementable without a notation table at all.
-- **Bracket families are curated, hookable, and shape-fixed**: `⟦_⟧`,
-  `⌈_⌉`, `⟨_⟩`, `_[_]` are in the grammar with fixed arity; libraries bind
-  meanings via traits, not via new syntax.
-- **The escape hatch for the residue is the modal layer, not notation.**
-  This is the coherent part of Heather's position and it is stronger than
-  Lean's: the reason Lean needs `macro_rules` is that its metaprogramming is
-  a separate monadic layer over untyped `Syntax`, so generating terms *is* a
-  macro. Heather's meta-layer is typed code manipulation inside the language
-  ([[surface-syntax]] §metaprogramming), so the "generate a term" half of
-  what macros do is already covered, well-typed and kernel-checked. Only the
-  "introduce syntax" half is being declined.
+### The shape family — all of it
+
+| Shape | Examples | Cost |
+|---|---|---|
+| Enclosing brackets, fixed arity | `⟦t⟧`, `⌈x⌉`, `‖x‖`, matrix/vector literals | ~free: self-delimiting, so no precedence question exists |
+| Infix/prefix, possibly decorated | `a +_Z b`, `a ⊞ b`, `¬p` | needs a precedence answer |
+| Big-operator binder | `∑ a ∈ A, e`, `∫ x, f x`, `∏`, `⨆` | one new production |
+| Sub/superscript decoration on any of the above | `+_Z`, `⟦R⟧_s`, `∑_{i=0}^n` | lexical |
+
+The binder row is the only genuine addition to the grammar, and **all the
+binder examples are one shape**: `SYM binders (clause)? "," body`, body
+extending maximally right (so `∑ x ∈ s, f x + 1` takes the whole sum, and
+narrowing needs parens — the standard mathematical reading). Fix that one
+production and ∑ ∏ ∫ ⨆ ⋂ ⋀ all arrive together. This is Agda's `syntax`
+minus the generality: Agda needed a general form because it was retrofitting
+one; only the big-operator shape is needed here.
+
+### Classification by character class, not by a declared table
+
+The move that removes the need for any user-side notation declaration: do
+not ask "what has been declared?", ask "what *class* is this codepoint in?"
+Unicode has largely done the work.
+
+- **Brackets** from `Ps`/`Pe` plus the mirroring pairs — `⟦⟧ ⌈⌉ ⟨⟩`
+  classify themselves.
+- **Infix operators** from `Sm` / the `Math` property — `⊞`, `⊗`, `⋈` are
+  operators because of what they *are*.
+- **N-ary binders** need **exactly one curated list** (~20 codepoints:
+  ∑ ∏ ∐ ∫ ∮ ⋀ ⋁ ⋂ ⋃ ⨀ ⨁ ⨂ ⨄ ⨆ …), because Unicode genuinely does not mark
+  "this operator binds a variable". That list lives in the lexer — first
+  party, so parsing stays context-free.
+
+Consequence: "make a PR to core to add a symbol" narrows from *every* new
+symbol to *only a new binder symbol* — rare, and exactly the case worth
+gating. Everything else works on first use.
+
+### Precedence without declarations
+
+Assign precedence by class, not per symbol: relational-ish (`⊆ ≤ ≡`) at
+comparison level, additive-ish (`+ ⊕ ⊎ ∪`) at additive, multiplicative-ish
+(`× ⊗ ∘ ∩`) at multiplicative. Someone introducing `⊞` gets additive
+precedence automatically from its class; no fixity declaration, no scope
+dependence. For decorated operators, precedence comes from the **base**:
+`+_Z` binds like `+`, so decoration never perturbs the parse — it only
+selects which meaning, and that is ordinary (scope-dependent) resolution.
+
+**The relational class must be a ladder, not one level** — see the judgement
+case below.
+
+### Lexical rules
+
+- **Decoration is glued, application is spaced**: `+_Z` is a decorated
+  operator, `+ _Z` is `+` applied to the variable `_Z`. Adjacency decides,
+  and there is already a precedent for exactly this rule in the tree — the
+  hole lexer distinguishes `?p` (named) from `? p` (anonymous) the same way
+  ([[goal-holes]], `crates/syntax/src/lexer.rs`).
+- **`\sum` is an input method, not a lexeme.** Agda and Lean both do this:
+  the editor turns `\sum` into `∑` and the file stores Unicode. Keeps `\`
+  out of the lexical namespace and guarantees one spelling per symbol in
+  source. Commit early — it is much harder to walk back once files contain
+  both spellings. (Interim reality: without an editor input method, symbols
+  get pasted.)
+- **ASCII is a scarce namespace; spend it on core syntax and put domain
+  notation in Unicode.** `?`, `_`, `@`, `:=`, `.` are already spent. Concrete
+  payoff: the quotient/setoid bracket must be `⟦⟧` rather than an ASCII
+  doubled square bracket, because that collides with a nested list literal —
+  `[ [1,2], [3,4] ]` would lex its leading doubled `[` as one bracket token
+  and the parse is wrong before anything else happens.
+
+### Three things that turn out not to be notation
+
+Worth stating, because each one otherwise inflates the notation problem:
+
+- **Tactics.** `tactic split` — writing the bare name runs it with the
+  context auto-passed — is *auto-application of implicit arguments*, i.e.
+  the auto-defer mechanism already designed in [[goal-holes]] (an implicit
+  proof parameter marked auto-defer becomes a goal at the call site). A
+  declaration modifier plus an elaboration rule; `split x` is then ordinary
+  application. Zero notation support needed.
+- **Core forms** (`if`/`then`, `∀`/`∃`, `match`). The test: if it needs a
+  *typing rule* or a scrutinee-dependent motive, it was never notation.
+- **Judgement syntax** — see below; it is a precedence ladder.
+
+### The escape hatch for the residue is the modal layer, not notation
+
+This is the coherent part of Heather's position and it is stronger than
+Lean's: the reason Lean needs `macro_rules` is that its metaprogramming is
+a separate monadic layer over untyped `Syntax`, so generating terms *is* a
+macro. Heather's meta-layer is typed code manipulation inside the language
+([[surface-syntax]] §metaprogramming), so the "generate a term" half of
+what macros do is already covered, well-typed and kernel-checked. Only the
+"introduce syntax" half is being declined.
+
+Matrix/vector literals are the worked example: a bracketed comma-list (a
+shape you want anyway) whose *initialisation* is Code-generated by a
+meta-function. Syntax stays fixed, semantics is a library.
+
+## Judgement syntax, worked out
+
+`Γ ⊢ t : T` was flagged above as the case most likely to force general
+mixfix. It does not, once two different wants are separated.
+
+**(a) The contextual-type judgement is core.** `□(Δ ⊢ T)`, `Trm(Γ ⊢ P)`,
+`Code(g ⊢ El(P))` are DeLaM's contextual type former — a built-in form with
+a typing rule, arriving with the modal surface. Closed, fixed, no
+extensibility question. Probably half of why judgement notation felt
+necessary at all.
+
+**(b) User-defined judgements are a precedence ladder.** `Γ ⊢ e ⇓ v`,
+`e ⟶ e'`, `Γ ⊨ φ` are already plain binary infix. Only the typing judgement
+has three holes, and it decomposes by precedence alone:
+
+```
+Γ ⊢ t ⦂ T     parses as     ⊢(Γ, ⦂(t, T))       given  ⦂  tighter than  ⊢
+```
+
+No mixfix, no new production — two infix operators at different levels. The
+key is not to contest ASCII `:` (already ascription): use `⦂` (U+2982), which
+is what Agda's standard library reaches for under the same constraint. It
+extends the way one would hope, the ladder being "how much of the formula
+does this symbol scope over":
+
+```
+Δ ; Γ ▹ (x ⦂ A) ⊢ t ⦂ B        with     ⦂  >  ▹  >  ;  >  ⊢
+```
+
+So the concrete requirement this places on the class scheme: **turnstiles and
+entailment (`⊢ ⊨ ⊩ ⟹`) are the loosest relational level** — they are a
+judgement's main connective — and other relational symbols sit above them.
+Overloading (`⊢` for one library's typing relation and another's entailment)
+is ordinary resolution by operand type; nothing scope-dependent reaches the
+parser.
+
+Two caveats:
+
+- Defining such a relation needs indexed families, so this is naturally
+  downstream of [[inductive-compiler]] tier 2 and cannot be exercised before
+  then.
+- **The hard half is the rule, not the judgement.** Anyone wanting
+  `Γ ⊢ t ⦂ T` also wants premises over a horizontal bar, which is not linear
+  text and which *no* notation system delivers. The answer: rules are
+  ordinary constructors of an indexed family, and two-dimensional rendering
+  is a *display* concern — a meta-function `Code(Γ ⊢ T) → Presentation`,
+  i.e. the editor-feature-as-a-library idea in [[lsp-from-the-meta-layer]].
+  Stating this matters, because "we need rule syntax" is the demand that
+  would otherwise drag the design into general mixfix.
+
+## Declined: notation declared in package metadata
+
+Considered and rejected (user's own floated option): declaring fancy symbols
+in a package toml, parsed before codegen, with the notation "downgraded" when
+not in scope for a file. Two specific problems, neither aesthetic:
+
+1. A file stops being self-contained — it cannot be parsed without build
+   metadata. That is precisely the property the fixed grammar was protecting,
+   given up for less openness than the class-based scheme already provides.
+2. "Downgrade if not in scope" means the same text parses differently
+   depending on context, *silently*. That is the Lean problem re-entering
+   through the back door, in a worse form, because there is no error to read.
+
+If declared notation is ever wanted anyway, the least-bad shape is **per-file
+and lexical** (`use notation …` at the top of the file), so a file still says
+everything about how to read itself. Never build metadata.
+
+The boundary that stays simple, and that all of the above preserves:
+**parsing is context-free; only resolution (which trait, which instance)
+consults scope.**
 
 ## The honest counterargument
 
@@ -89,13 +241,34 @@ domain someone formalises, not the first. Two specific places a fixed
 lexicon is known to run out:
 
 - **Binder notation** — `∑ x ∈ s, f x`, `∀ x > 0, P x`, comprehensions, `do`.
-  Mixfix cannot express these, which is exactly why Agda added `syntax`. If
-  anything from axis 2 belongs in Heather's fixed set, it is one declarative
-  binder-notation form of that shape. **This is the concrete decision this
-  issue should reach.**
+  Mixfix cannot express these, which is exactly why Agda added `syntax`.
+  *Answered by the proposal*: one production for the big-operator shape,
+  entered by a curated lexical class. That is the single piece of axis 2
+  admitted to the fixed set, and it is admitted as a **shape**, not as a
+  user-extensible mechanism.
 - **Structured literals** — matrices, numeric literals at a user type
-  (Lean's `OfNat`), string interpolation. Partly a trait problem rather than
-  a syntax problem; worth separating before concluding it needs syntax.
+  (Lean's `OfNat`), string interpolation. *Answered*, at least for matrices:
+  bracketed comma-list (a shape wanted anyway) plus Code-generated
+  initialisation. Numeric literals at a user type are a trait problem, not a
+  syntax problem. String interpolation remains genuinely open, and is the
+  most likely future axis-2 pressure.
+
+## Open questions
+
+- **General mixfix.** Left out. The trigger for revisiting is explicit: if
+  the relational ladder proves insufficient for real judgement-shaped
+  notation in practice, not before. `if_then_else_`-style forms are core
+  language here, so they are not evidence.
+- **Where sub/superscript decoration attaches.** The original
+  [[surface-syntax]] question ("which decoration positions are in the fixed
+  set") survives: `+_Z` and `⟦R⟧_s` are settled by the adjacency rule, but
+  `∑_{i=0}^{n}` — decoration on a *binder* symbol, with braces — is not, and
+  it interacts with the binder production's clause slot.
+- **Precedence-class boundaries.** The additive/multiplicative/relational
+  split is folklore-obvious for common symbols and arbitrary at the edges
+  (where does `⋈` go? `∖`? `⨝`?). Needs a written table, and a stated default
+  for an `Sm` symbol matching no class.
+- **String interpolation**, per above.
 
 ## Why deciding conservatively is safe
 
@@ -107,4 +280,26 @@ this issue in the meantime.
 
 Related: [[front-end-sugar]] (what the sugar layer must cover),
 [[surface-syntax]] (the standing taste constraints), [[dependency-policy]]
-(`logos` lands with the symbol table).
+(`logos` lands with the symbol table), [[lsp-from-the-meta-layer]]
+(two-dimensional rule display as a meta-function, not syntax).
+
+## Log
+
+- 2026-07-24: Opened after the [[dependency-policy]] discussion surfaced the
+  user's uncertainty about whether the Lean route is really as bad as
+  [[surface-syntax]]'s anti-goal assumes. Recorded the two-axis distinction
+  and the precedents.
+- 2026-07-24: Proposal worked out with the user from a concrete wish list
+  (quotient brackets, decorated `+_Z`, `∑`/`∫` binders, matrix literals,
+  judgement syntax, tactic names). Settled: four shapes, classification by
+  Unicode character class with exactly one curated list (N-ary binders),
+  precedence by class with turnstiles as the loosest relational level,
+  adjacency for decoration, `\sum` as an input method, ASCII treated as a
+  scarce namespace (hence `⟦⟧` for the quotient bracket rather than an ASCII
+  doubled square bracket, which collides with nested list literals). Judgement syntax resolved as a precedence ladder over infix
+  relations using `⦂` rather than `:`, so it does *not* force general
+  mixfix; the two-dimensional inference-rule display it implies is a
+  presentation concern for [[lsp-from-the-meta-layer]]. Tactics and core
+  forms removed from the notation problem entirely. Package-metadata-declared
+  notation declined, with per-file lexical `use notation` as the least-bad
+  fallback if it is ever wanted.
