@@ -1,12 +1,18 @@
 //! Recursive-descent parser for the stage-1 grammar.
 //!
 //! ```text
-//! file    := decl*
+//! file    := item*
+//! item    := decl | inductive
 //! decl    := "fn" name "(" params? ")" "->" type block
 //!          | "theorem" name "(" params? ")" ":" type block
+//! induct  := "inductive" name ("<" name ("," name)* ">")? "{" ctors? "}"
+//! ctors   := ctor ("," ctor)* ","?
+//! ctor    := name ("(" field ("," field)* ","? ")")?
+//! field   := (name ":")? type
 //! params  := param ("," param)* ","?
 //! param   := name ":" type | "{" name ":" type "}"   -- implicit
-//! type    := expr ("=" expr)?       -- bare `Nat` is the type Nat; `=` is
+//! type    := name ("<" type ("," type)* ">")         -- applied inductive
+//!          | expr ("=" expr)?       -- bare `Nat`/`Bool` is that type; `=` is
 //!                                      propositional equality (`==` rejected)
 //! block   := "{" stmt* expr on_stmt* "}"
 //! stmt    := "let" name (":" type)? "=" expr ";"
@@ -15,8 +21,8 @@
 //!          | "refl" | "?" name?
 //!          | "j" "(" expr "," "(" name "," name ")" "->" type "," expr ")"
 //!          | "@"? name "(" args ")" | name | numeral | "(" expr ")"
-//! arms    := arm ("," arm)* ","?    -- exactly a Zero arm and a Succ arm
-//! arm     := "Zero" "=>" expr | "Succ" "(" name ("," name)? ")" "=>" expr
+//! arms    := arm ("," arm)* ","?    -- one per constructor, any order
+//! arm     := name ("(" name ("," name)* ")")? "=>" expr
 //! ```
 //!
 //! `on` discharges are trailing: order-free among themselves, but after the
@@ -36,11 +42,11 @@ pub struct ParseError {
 pub fn parse_file(src: &str) -> Result<File, ParseError> {
     let toks = lex(src).map_err(|e| ParseError { msg: e.msg, span: e.span })?;
     let mut p = Parser { toks, pos: 0 };
-    let mut decls = Vec::new();
+    let mut items = Vec::new();
     while !p.at_eof() {
-        decls.push(p.decl()?);
+        items.push(p.item()?);
     }
-    Ok(File { decls })
+    Ok(File { items })
 }
 
 struct Parser {
@@ -112,6 +118,78 @@ impl Parser {
 
     // -- declarations -------------------------------------------------------
 
+    fn item(&mut self) -> R<Item> {
+        if self.at_kw("inductive") {
+            return Ok(Item::Inductive(self.inductive()?));
+        }
+        Ok(Item::Decl(self.decl()?))
+    }
+
+    /// `inductive D<p, …> { c(f: T, …), … }`. Zero constructors is legal (the
+    /// empty type); so is a constructor with no field list.
+    fn inductive(&mut self) -> R<InductiveDecl> {
+        let start = self.peek_span();
+        self.bump(); // `inductive`
+        let (name, _) = self.ident("inductive name")?;
+        let mut params = Vec::new();
+        if matches!(self.peek(), TokKind::Lt) {
+            self.bump();
+            loop {
+                params.push(self.ident("type parameter name")?.0);
+                if !matches!(self.peek(), TokKind::Comma) {
+                    break;
+                }
+                self.bump();
+            }
+            self.expect(&TokKind::Gt, "`>` to close the type parameters")?;
+        }
+        self.expect(&TokKind::LBrace, "`{` (constructor list)")?;
+        let mut ctors = Vec::new();
+        while !matches!(self.peek(), TokKind::RBrace) {
+            let (cname, cspan) = self.ident("constructor name")?;
+            let mut fields = Vec::new();
+            let mut span = cspan;
+            if matches!(self.peek(), TokKind::LParen) {
+                self.bump();
+                while !matches!(self.peek(), TokKind::RParen) {
+                    fields.push(self.field()?);
+                    if !matches!(self.peek(), TokKind::Comma) {
+                        break;
+                    }
+                    self.bump();
+                }
+                span = span.join(self.expect(&TokKind::RParen, "`)` (field list)")?);
+            }
+            ctors.push(CtorDecl { name: cname, fields, span });
+            if !matches!(self.peek(), TokKind::Comma) {
+                break;
+            }
+            self.bump();
+        }
+        let end = self.expect(&TokKind::RBrace, "`}` (constructor list)")?;
+        Ok(InductiveDecl { name, params, ctors, span: start.join(end) })
+    }
+
+    /// A constructor field: `name: T` or a bare `T`. Named fields are in scope
+    /// in the later fields' types.
+    fn field(&mut self) -> R<FieldDecl> {
+        let start = self.peek_span();
+        // `name :` — but only when the `:` really follows, since a bare type
+        // is also an identifier (`Nat`).
+        let named = matches!(self.peek(), TokKind::Ident(_))
+            && matches!(self.toks.get(self.pos + 1).map(|t| &t.kind), Some(TokKind::Colon));
+        let name = if named {
+            let (n, _) = self.ident("field name")?;
+            self.bump(); // `:`
+            Some(n)
+        } else {
+            None
+        };
+        let ty = self.ty()?;
+        let span = start.join(ty.span);
+        Ok(FieldDecl { name, ty, span })
+    }
+
     fn decl(&mut self) -> R<Decl> {
         let start = self.peek_span();
         let kind = if self.eat_kw("fn") {
@@ -119,7 +197,7 @@ impl Parser {
         } else if self.eat_kw("theorem") {
             DeclKind::Theorem
         } else {
-            return self.err("expected `fn` or `theorem`");
+            return self.err("expected `fn`, `theorem`, or `inductive`");
         };
         let (name, _) = self.ident("declaration name")?;
         self.expect(&TokKind::LParen, "`(`")?;
@@ -249,6 +327,24 @@ impl Parser {
     }
 
     fn ty(&mut self) -> R<Ty> {
+        // `D<A, B>` — an applied inductive. Unambiguous: `<` is the `lt`
+        // operator only in *expression* position, and no expression is a type.
+        if matches!(self.peek(), TokKind::Ident(_))
+            && matches!(self.toks.get(self.pos + 1).map(|t| &t.kind), Some(TokKind::Lt))
+        {
+            let (name, start) = self.ident("type name")?;
+            self.bump(); // `<`
+            let mut args = Vec::new();
+            loop {
+                args.push(self.ty()?);
+                if !matches!(self.peek(), TokKind::Comma) {
+                    break;
+                }
+                self.bump();
+            }
+            let end = self.expect(&TokKind::Gt, "`>` to close the type arguments")?;
+            return Ok(Ty { kind: TyKind::Named { name, args }, span: start.join(end) });
+        }
         let lhs = self.expr()?;
         if matches!(self.peek(), TokKind::Eq | TokKind::EqEq) {
             self.expect_eq("equality type `a = b`")?;
@@ -256,11 +352,16 @@ impl Parser {
             let span = lhs.span.join(rhs.span);
             return Ok(Ty { kind: TyKind::Eq(Box::new(lhs), Box::new(rhs)), span });
         }
-        // A bare expression in type position must be the type `Nat`.
+        // A bare name in type position is `Nat` or a declared type; whether the
+        // name is in fact a type is the elaborator's call, not the grammar's.
         match &lhs.kind {
             ExprKind::Var(s) if s == "Nat" => Ok(Ty { kind: TyKind::Nat, span: lhs.span }),
+            ExprKind::Var(s) => Ok(Ty {
+                kind: TyKind::Named { name: s.clone(), args: vec![] },
+                span: lhs.span,
+            }),
             _ => Err(ParseError {
-                msg: "expected a type (`Nat` or `a = b`)".into(),
+                msg: "expected a type (`Nat`, a declared type, or `a = b`)".into(),
                 span: lhs.span,
             }),
         }
@@ -417,52 +518,37 @@ impl Parser {
             None
         };
         self.expect(&TokKind::LBrace, "`{`")?;
-        let mut zero: Option<Expr> = None;
-        let mut succ: Option<(String, Option<String>, Expr)> = None;
+        // Arms are `C(x, …) => body`, one per constructor. Which constructors
+        // exist — and so whether the arms are complete, duplicated, or of the
+        // wrong arity — is the elaborator's business: it knows the scrutinee's
+        // type, and the grammar does not.
+        let mut arms: Vec<Arm> = Vec::new();
         while !matches!(self.peek(), TokKind::RBrace) {
-            if self.eat_kw("Zero") {
-                self.expect(&TokKind::FatArrow, "`=>`")?;
-                if zero.replace(self.expr()?).is_some() {
-                    return self.err("duplicate `Zero` arm");
-                }
-            } else if self.eat_kw("Succ") {
-                self.expect(&TokKind::LParen, "`(`")?;
-                let (k, _) = self.ident("predecessor name")?;
-                // `Succ(k)` is the unified form (ih = guarded self-call);
-                // `Succ(k, ih)` stays as the low-level explicit fallback.
-                let ih = if matches!(self.peek(), TokKind::Comma) {
+            let (ctor, cspan) = self.ident("constructor name in a `match` arm")?;
+            let mut binders = Vec::new();
+            if matches!(self.peek(), TokKind::LParen) {
+                self.bump();
+                while !matches!(self.peek(), TokKind::RParen) {
+                    binders.push(self.ident("pattern binder")?.0);
+                    if !matches!(self.peek(), TokKind::Comma) {
+                        break;
+                    }
                     self.bump();
-                    Some(self.ident("ih name")?.0)
-                } else {
-                    None
-                };
-                self.expect(&TokKind::RParen, "`)`")?;
-                self.expect(&TokKind::FatArrow, "`=>`")?;
-                if succ.replace((k, ih, self.expr()?)).is_some() {
-                    return self.err("duplicate `Succ` arm");
                 }
-            } else {
-                return self.err("expected a `Zero` or `Succ(k)` arm");
+                self.expect(&TokKind::RParen, "`)` (pattern binders)")?;
             }
+            self.expect(&TokKind::FatArrow, "`=>`")?;
+            let body = self.expr()?;
+            let span = cspan.join(body.span);
+            arms.push(Arm { ctor, binders, body, span });
             if !matches!(self.peek(), TokKind::Comma) {
                 break;
             }
             self.bump();
         }
         let end = self.expect(&TokKind::RBrace, "`}`")?;
-        let (Some(zero), Some((k, ih, body))) = (zero, succ) else {
-            return Err(ParseError {
-                msg: "`match` needs both a `Zero` and a `Succ(k)` arm".into(),
-                span: start.join(end),
-            });
-        };
         Ok(Expr {
-            kind: ExprKind::Match {
-                scrut: Box::new(scrut),
-                motive,
-                zero: Box::new(zero),
-                succ: (k, ih, Box::new(body)),
-            },
+            kind: ExprKind::Match { scrut: Box::new(scrut), motive, arms },
             span: start.join(end),
         })
     }
@@ -554,10 +640,18 @@ impl Parser {
 mod tests {
     use super::*;
 
+    /// The file's single `fn`/`theorem` declaration.
+    fn only_decl(f: &File) -> &Decl {
+        match &f.items[0] {
+            Item::Decl(d) => d,
+            other => panic!("expected a declaration, got {other:?}"),
+        }
+    }
+
     #[test]
     fn implicit_and_explicit_params() {
         let f = parse_file("theorem t({a: Nat}, b: Nat, p: a = b): b = a { refl }").unwrap();
-        let ps = &f.decls[0].params;
+        let ps = &only_decl(&f).params;
         assert_eq!(ps.len(), 3);
         assert!(ps[0].implicit, "`{{a}}` is implicit");
         assert!(!ps[1].implicit, "`b` is explicit");
@@ -567,7 +661,7 @@ mod tests {
     #[test]
     fn at_marks_a_fully_explicit_call() {
         let f = parse_file("fn f(n: Nat) -> Nat { @g(a, b, p) }").unwrap();
-        match &f.decls[0].body.result.kind {
+        match &only_decl(&f).body.result.kind {
             ExprKind::Call { name, args, explicit } => {
                 assert_eq!(name, "g");
                 assert_eq!(args.len(), 3);
@@ -580,7 +674,7 @@ mod tests {
     #[test]
     fn plain_call_is_not_explicit() {
         let f = parse_file("fn f(n: Nat) -> Nat { g(a) }").unwrap();
-        match &f.decls[0].body.result.kind {
+        match &only_decl(&f).body.result.kind {
             ExprKind::Call { explicit, .. } => assert!(!*explicit),
             other => panic!("expected a call, got {other:?}"),
         }
@@ -595,7 +689,7 @@ mod tests {
     // the body kind, for exercising expression desugaring.
     fn body(src_body: &str) -> ExprKind {
         let src = format!("fn f(n: Nat) -> Nat {{ {src_body} }}");
-        parse_file(&src).unwrap().decls.remove(0).body.result.kind
+        parse_file(&src).unwrap().items.remove(0).into_decl().body.result.kind
     }
 
     fn as_call(k: &ExprKind) -> (&str, &[Expr], bool) {
@@ -688,7 +782,7 @@ mod tests {
         // `a = b` in type position is the identity type (not an expression
         // operator — the elaborator never sees `=` as a Call).
         let f = parse_file("theorem t(a: Nat, b: Nat): a = b { refl }").unwrap();
-        assert!(matches!(f.decls[0].result.kind, crate::ast::TyKind::Eq(..)));
+        assert!(matches!(only_decl(&f).result.kind, crate::ast::TyKind::Eq(..)));
     }
 
     #[test]
@@ -703,7 +797,7 @@ mod tests {
     // -- goal holes (issues/goal-holes.md) ----------------------------------
 
     fn decl_of(src: &str) -> Decl {
-        parse_file(src).unwrap().decls.remove(0)
+        parse_file(src).unwrap().items.remove(0).into_decl()
     }
 
     #[test]

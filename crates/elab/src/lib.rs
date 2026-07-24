@@ -37,9 +37,13 @@ use heather_kernel::term::{
 };
 use heather_kernel::typing::{self, TypeError, DEFAULT_FUEL};
 use heather_syntax::{
-    parse_file, Decl, DeclKind, Expr, ExprKind, OnStmt, OnTarget, ParseError, Span, Stmt, Ty,
-    TyKind,
+    parse_file, Arm, Decl, DeclKind, Expr, ExprKind, Item, OnStmt, OnTarget, ParseError, Span,
+    Stmt, Ty, TyKind,
 };
+
+mod inductive;
+
+use inductive::Inductive;
 
 /// The stage-1 prelude: `sym`/`trans`/`cong_succ`, monomorphic at `Nat`.
 /// (The universe-polymorphic versions are layer-m `Λ ℓ⃗` territory — later
@@ -193,6 +197,14 @@ enum GlobalInfo {
 pub struct Elaborator {
     psi: GlobalCtx,
     globals: HashMap<String, GlobalInfo>,
+    /// Declared inductives by name, by nominal tag, and by constructor name.
+    /// Constructor names are unqualified and globally unique — there is no
+    /// path syntax yet, so a clash is a declaration error
+    /// (docs/inductive-tier0-lowering.md).
+    inductives: HashMap<String, Rc<Inductive>>,
+    by_tag: HashMap<u32, Rc<Inductive>>,
+    ctors: HashMap<String, (Rc<Inductive>, usize)>,
+    next_tag: u32,
     fuel: u64,
     /// Number of Ψ slots reserved for the current declaration's goals — a
     /// syntactic pre-count of its holes. Goals occupy the *innermost* indices
@@ -246,6 +258,10 @@ impl Elaborator {
         Elaborator {
             psi: GlobalCtx::default(),
             globals: HashMap::new(),
+            inductives: HashMap::new(),
+            by_tag: HashMap::new(),
+            ctors: HashMap::new(),
+            next_tag: 0,
             fuel: DEFAULT_FUEL,
             goal_base: 0,
             goals: RefCell::new(Vec::new()),
@@ -265,8 +281,11 @@ impl Elaborator {
     /// Parse and elaborate a source file, kernel-checking every declaration.
     pub fn elab_source(&mut self, src: &str) -> R<()> {
         let file = parse_file(src)?;
-        for decl in &file.decls {
-            self.elab_decl(decl)?;
+        for item in &file.items {
+            match item {
+                Item::Decl(d) => self.elab_decl(d)?,
+                Item::Inductive(i) => self.elab_inductive(i)?,
+            }
         }
         Ok(())
     }
@@ -670,6 +689,7 @@ impl Elaborator {
     fn elab_ty(&self, cx: &Cx, ty: &Ty) -> R<(Type, Level)> {
         match &ty.kind {
             TyKind::Nat => Ok((Type::Nat, Level::Zero)),
+            TyKind::Named { name, args } => self.lower_named(cx, name, args, ty.span),
             TyKind::Eq(lhs, rhs) => {
                 let (lhs_t, lhs_ty, lvl) = self.elab_infer(cx, lhs)?;
                 let rhs_t = self.elab_check(cx, rhs, &lhs_ty, &lvl)?;
@@ -721,13 +741,40 @@ impl Elaborator {
                 };
                 Ok(Term::Refl { level, ty, tm: lhs })
             }
-            ExprKind::Match { motive: None, scrut, .. } => {
+            ExprKind::Match { motive: None, scrut, arms } => {
                 // Stage-2 motive synthesis (issues/elab-stage2-metas.md): when
                 // the scrutinee is a local variable, abstract it out of the
                 // expected type so the motive is genuinely dependent; otherwise
                 // fall back to the non-dependent motive (expected under `z`).
-                let motive = self.synth_motive(cx, scrut, expected)?;
-                self.elab_match(cx, e, motive, lvl.clone())
+                let (scrut_t, scrut_ty, scrut_lvl) = self.elab_infer(cx, scrut)?;
+                let motive = self.synth_motive(cx, &scrut_t, &scrut_ty, &scrut_lvl, expected);
+                self.elab_match(
+                    cx, arms, scrut_t, &scrut_ty, &scrut_lvl, motive, lvl.clone(), e.span,
+                )
+            }
+            // `absurd(p)`: from an equation between distinct constructors,
+            // anything — so it needs the expected type
+            // (docs/inductive-tier0-lowering.md §6.1).
+            ExprKind::Call { name, args, .. }
+                if name == "absurd" && !self.shadowed(cx, name) =>
+            {
+                let [arg] = args.as_slice() else {
+                    return err("`absurd` takes exactly one argument", e.span);
+                };
+                self.build_absurd(cx, arg, expected, lvl, e.span)
+            }
+            // A constructor in checking position: the expected type *is* the
+            // encoding, so every annotation of the injection and the field
+            // tuple is read off it (docs/inductive-tier0-lowering.md §4).
+            ExprKind::Var(name) if self.ctor_here(cx, name).is_some() => {
+                let (ind, i) = self.ctor_here(cx, name).expect("just checked");
+                self.build_ctor(cx, &ind, i, &[], expected, lvl, e.span)
+            }
+            ExprKind::Call { name, args, explicit: false }
+                if self.ctor_here(cx, name).is_some() =>
+            {
+                let (ind, i) = self.ctor_here(cx, name).expect("just checked");
+                self.build_ctor(cx, &ind, i, args, expected, lvl, e.span)
             }
             _ => {
                 let (t, _, _) = self.elab_infer(cx, e)?;
@@ -763,6 +810,30 @@ impl Elaborator {
                     let arg = self.elab_check(cx, arg, &Type::Nat, &Level::Zero)?;
                     return Ok((Term::Succ(Rc::new(arg)), Type::Nat, Level::Zero));
                 }
+                // `inj(p)` / `inj(k, p)`: the field equations of an equation
+                // between the same constructor (§6.2). The field index is a
+                // literal, so `p.inj(1)` reads as the second field's equation.
+                if name == "inj" && !self.shadowed(cx, name) {
+                    let (k, arg) = match args.as_slice() {
+                        [arg] => (0, arg),
+                        [k, arg] => match k.kind {
+                            ExprKind::Num(k) => (k as usize, arg),
+                            _ => return err("`inj`'s field index must be a numeral", k.span),
+                        },
+                        _ => return err("`inj` takes `(proof)` or `(field, proof)`", e.span),
+                    };
+                    return self.build_inj(cx, k, arg, e.span);
+                }
+                if name == "absurd" && !self.shadowed(cx, name) {
+                    return err(
+                        "`absurd` needs an expected type: use it in checking position \
+                         (a `theorem` body, an annotated `let`, or an argument)",
+                        e.span,
+                    );
+                }
+                if let Some((ind, i)) = self.ctor_here(cx, name) {
+                    return self.infer_ctor(cx, &ind, i, args, e.span);
+                }
                 if cx.selfref.as_ref().is_some_and(|s| s.name == *name) {
                     return self.elab_self_call(cx, args, *explicit, e.span);
                 }
@@ -776,15 +847,17 @@ impl Elaborator {
                     self.apply_implicit(cx, name, head, ty, lvl, args, &mask, e.span)
                 }
             }
-            ExprKind::Match { motive: Some((bind, m)), .. } => {
+            ExprKind::Match { motive: Some((bind, m)), scrut, arms } => {
+                let (scrut_t, scrut_ty, scrut_lvl) = self.elab_infer(cx, scrut)?;
                 let mut mcx = cx.clone();
-                mcx.push(bind.clone(), Type::Nat, Level::Zero);
+                mcx.push(bind.clone(), scrut_ty.clone(), scrut_lvl.clone());
                 let (motive, mlvl) = self.elab_ty(&mcx, m)?;
-                let ExprKind::Match { scrut, .. } = &e.kind else { unreachable!() };
-                let (scrut_t, _, _) = self.elab_infer(cx, scrut)?;
-                let result = motive
-                    .apply_local(&LocalSubst::id(&cx.gamma).extended(Rc::new(scrut_t)));
-                let t = self.elab_match(cx, e, motive, mlvl.clone())?;
+                let result = motive.apply_local(
+                    &LocalSubst::id(&cx.gamma).extended(Rc::new(scrut_t.clone())),
+                );
+                let t = self.elab_match(
+                    cx, arms, scrut_t, &scrut_ty, &scrut_lvl, motive, mlvl.clone(), e.span,
+                )?;
                 Ok((t, result, mlvl))
             }
             ExprKind::Match { motive: None, .. } => err(
@@ -846,17 +919,87 @@ impl Elaborator {
         }
     }
 
-    /// Elaborate a `match` given its (already elaborated) motive, scoped
-    /// over one extra local `z : Nat`.
-    fn elab_match(&self, cx: &Cx, e: &Expr, motive: Type, mlvl: Level) -> R<Term> {
-        let ExprKind::Match { scrut, zero, succ: (k, ih, succ_body), .. } = &e.kind else {
-            unreachable!("elab_match on a non-match");
-        };
-        let (scrut_t, scrut_ty, _) = self.elab_infer(cx, scrut)?;
-        let head = self.whnf(cx, &scrut_ty, scrut.span)?;
-        if !matches!(head, Type::Nat) {
-            return err("stage 1 `match` only eliminates `Nat`", scrut.span);
+    /// Elaborate a `match` given its scrutinee and its (already elaborated)
+    /// motive, scoped over one extra local `z` of the scrutinee's type.
+    /// Dispatch is by the scrutinee's type: `Nat` is the kernel's own
+    /// recursor, a declared inductive is the tier-0 case tree
+    /// (docs/inductive-tier0-lowering.md §5).
+    #[allow(clippy::too_many_arguments)]
+    fn elab_match(
+        &self,
+        cx: &Cx,
+        arms: &[Arm],
+        scrut_t: Term,
+        scrut_ty: &Type,
+        scrut_lvl: &Level,
+        motive: Type,
+        mlvl: Level,
+        span: Span,
+    ) -> R<Term> {
+        let head = self.whnf(cx, scrut_ty, span)?;
+        if let Some(ind) = self.tag_of(&head) {
+            return self
+                .elab_match_data(cx, &ind, arms, scrut_t, &head, scrut_lvl, motive, mlvl, span);
         }
+        if matches!(head, Type::Empty) {
+            // An inductive with no constructors: absurdity elimination. All of
+            // them share the kernel type `Empty` (§3.3), and none has an
+            // inhabitant to confuse, so no tag is needed to dispatch.
+            if !arms.is_empty() {
+                return err("this type has no constructors, so `match` takes no arms", span);
+            }
+            return Ok(Term::ElimEmpty {
+                level: mlvl,
+                motive: Rc::new(motive),
+                scrut: Rc::new(scrut_t),
+            });
+        }
+        if !matches!(head, Type::Nat) {
+            return err("`match` needs a `Nat` or a declared inductive", span);
+        }
+        self.elab_match_nat(cx, arms, scrut_t, motive, mlvl, span)
+    }
+
+    /// `match` on `Nat`: the kernel's `elim_Nat`, with the arms named `Zero`
+    /// and `Succ(k)` (or the low-level `Succ(k, ih)`).
+    fn elab_match_nat(
+        &self,
+        cx: &Cx,
+        arms: &[Arm],
+        scrut_t: Term,
+        motive: Type,
+        mlvl: Level,
+        span: Span,
+    ) -> R<Term> {
+        let mut zero: Option<&Arm> = None;
+        let mut succ: Option<&Arm> = None;
+        for a in arms {
+            let slot = match a.ctor.as_str() {
+                "Zero" => &mut zero,
+                "Succ" => &mut succ,
+                other => {
+                    return err(format!("`{other}` is not a constructor of `Nat`"), a.span)
+                }
+            };
+            if slot.replace(a).is_some() {
+                return err(format!("duplicate arm for `{}`", a.ctor), a.span);
+            }
+        }
+        let (Some(zero), Some(succ)) = (zero, succ) else {
+            return err("`match` on `Nat` needs both a `Zero` and a `Succ(k)` arm", span);
+        };
+        if !zero.binders.is_empty() {
+            return err("`Zero` binds no fields", zero.span);
+        }
+        // `Succ(k)` is the unified form (ih = guarded self-call); `Succ(k, ih)`
+        // stays as the low-level explicit fallback (issues/match-recursion.md).
+        let (k, ih) = match succ.binders.as_slice() {
+            [k] => (k, None),
+            [k, ih] => (k, Some(ih)),
+            _ => return err("`Succ` binds `(k)` or `(k, ih)`", succ.span),
+        };
+        let (zero, succ_body) = (&zero.body, &succ.body);
+        let _ = span;
         // base : M[Zero/z]
         let base_ty =
             motive.apply_local(&LocalSubst::id(&cx.gamma).extended(Rc::new(Term::Zero)));
@@ -869,7 +1012,7 @@ impl Elaborator {
         // The unified arm `Succ(k)` binds the ih anyway — the recursor demands
         // it — but under a name the surface cannot spell, because it is
         // reached by a guarded self-call instead.
-        scx.push(ih.clone().unwrap_or_else(|| "#ih".into()), ih_ty, mlvl.clone());
+        scx.push(ih.cloned().unwrap_or_else(|| "#ih".into()), ih_ty, mlvl.clone());
         if ih.is_none() {
             // Does this match descend on one of the declaration's own
             // parameters? If so, self-calls in the arm become the ih. If not
@@ -1019,23 +1162,95 @@ impl Elaborator {
     /// is `expected↑¹` (weaken into `Γ, z`) composed with the swap
     /// `Var(x+1) ↦ z`; applying `[x/z]` to it recovers `expected`, which is
     /// exactly the eliminator's motive obligation `M[scrut/z] = expected`.
-    fn synth_motive(&self, cx: &Cx, scrut: &Expr, expected: &Type) -> R<Type> {
-        // Weaken the expected type into `Γ, z : Nat` (z = LocalVar 0, unused).
+    fn synth_motive(
+        &self,
+        cx: &Cx,
+        scrut_t: &Term,
+        scrut_ty: &Type,
+        scrut_lvl: &Level,
+        expected: &Type,
+    ) -> Type {
+        // Weaken the expected type into `Γ, z` (z = LocalVar 0, unused).
         let weak = expected.shift_local(1);
-        let (scrut_t, _, _) = self.elab_infer(cx, scrut)?;
         let Term::Var(LocalVar(i)) = scrut_t else {
-            return Ok(weak);
+            return weak;
         };
         // Swap substitution over `Γ, z`: identity except the (shifted)
         // scrutinee `Var(i+1)` maps to `z = Var(0)`.
         let mut ext = cx.gamma.clone();
-        ext.entries.push(CtxEntry { ty: Rc::new(Type::Nat), level: Level::Zero });
+        ext.entries
+            .push(CtxEntry { ty: Rc::new(scrut_ty.clone()), level: scrut_lvl.clone() });
         let mut swap = LocalSubst::id(&ext);
         // `id` puts the outermost entry at index 0: `Var(i+1)` sits at
         // position `|Γ| - 1 - i` (see LocalSubst::id).
         let g = cx.gamma.entries.len() as u32;
         swap.terms[(g - 1 - i) as usize] = Rc::new(Term::Var(LocalVar(0)));
-        Ok(weak.apply_local(&swap))
+        weak.apply_local(&swap)
+    }
+
+    /// Is this name bound by something the user wrote? Builtins give way to
+    /// locals, `let` aliases and declarations, so none of them is a keyword.
+    fn shadowed(&self, cx: &Cx, name: &str) -> bool {
+        cx.names.iter().any(|n| n == name)
+            || cx.aliases.iter().any(|a| a.name == *name)
+            || self.globals.contains_key(name)
+    }
+
+    /// The constructor this name refers to *here* — `None` when it is not a
+    /// constructor, or when a local binder or `let` alias shadows it.
+    fn ctor_here(&self, cx: &Cx, name: &str) -> Option<(Rc<Inductive>, usize)> {
+        if cx.names.iter().any(|n| n == name) || cx.aliases.iter().any(|a| a.name == *name) {
+            return None;
+        }
+        self.ctor_of(name)
+    }
+
+    /// A constructor used where nothing is checking it. Only possible when the
+    /// declaration has no type parameters — otherwise there is nothing to
+    /// determine the instantiation, and an annotation is required (§2:
+    /// parameters are monomorphized, not inferred).
+    fn infer_ctor(
+        &self,
+        cx: &Cx,
+        ind: &Rc<Inductive>,
+        i: usize,
+        args: &[Expr],
+        span: Span,
+    ) -> R<(Term, Type, Level)> {
+        // Type arguments are recovered only from a field whose type *is* a
+        // parameter (`Some(A)`), by inferring that argument. Deliberately
+        // narrow: anything deeper is unification, which belongs to
+        // issues/elab-unifier-completeness.md, not here. A `None` on its own
+        // is genuinely ambiguous and says so.
+        let mut sols: Vec<Option<(Type, Level)>> = vec![None; ind.params.len()];
+        for (f, arg) in self.ctor_fields(ind, i).iter().zip(args) {
+            let TyKind::Named { name, args: targs } = &f.kind else { continue };
+            if !targs.is_empty() {
+                continue;
+            }
+            let Some(p) = ind.params.iter().position(|p| p == name) else { continue };
+            if sols[p].is_none() {
+                let (_, ty, lvl) = self.elab_infer(cx, arg)?;
+                sols[p] = Some((ty, lvl));
+            }
+        }
+        let mut targs = Vec::with_capacity(sols.len());
+        for (p, sol) in ind.params.iter().zip(sols) {
+            let Some(sol) = sol else {
+                return err(
+                    format!(
+                        "cannot infer the type argument `{p}` of `{}` here — annotate the \
+                         expression (`let x: {}<…> = …;`) or use it where a type is expected",
+                        ind.name, ind.name
+                    ),
+                    span,
+                );
+            };
+            targs.push(sol);
+        }
+        let (ty, lvl) = self.lower_instance(cx, ind, &targs, span)?;
+        let t = self.build_ctor(cx, ind, i, args, &ty, &lvl, span)?;
+        Ok((t, ty, lvl))
     }
 
     // -- application (explicit + implicit spines) ---------------------------
@@ -1188,6 +1403,9 @@ impl Elaborator {
             (Some(pos), None) => return Ok(self.local(cx, pos)),
             (None, None) => {}
         }
+        if let Some((ind, i)) = self.ctor_of(name) {
+            return self.infer_ctor(cx, &ind, i, &[], span);
+        }
         // The enclosing declaration's own name: only a saturated, guarded
         // *call* means anything (it is the induction hypothesis, not a value).
         if cx.selfref.as_ref().is_some_and(|s| s.name == name) {
@@ -1278,6 +1496,10 @@ struct Cx {
     /// `let` bindings in scope, outermost first. Not kernel binders: an alias
     /// is inlined at each use, so `Γ` is unchanged.
     aliases: Vec<Rc<Alias>>,
+    /// An `inductive`'s type parameters, while its field types are being
+    /// lowered at an instantiation. Empty everywhere else: type parameters are
+    /// monomorphized, so they never survive into a kernel term.
+    tyvars: Vec<(String, Type, Level)>,
 }
 
 /// A `let`-bound name: the elaborated right-hand side, inlined at every use
@@ -1300,6 +1522,7 @@ impl Cx {
             selfref: None,
             guard: None,
             aliases: vec![],
+            tyvars: vec![],
         }
     }
 
@@ -1322,6 +1545,7 @@ fn count_holes(decl: &Decl) -> u32 {
                 expr(a, n);
                 expr(b, n);
             }
+            TyKind::Named { args, .. } => args.iter().for_each(|a| ty(a, n)),
         }
     }
     fn expr(e: &Expr, n: &mut u32) {
@@ -1329,13 +1553,12 @@ fn count_holes(decl: &Decl) -> u32 {
             ExprKind::Hole(_) => *n += 1,
             ExprKind::Var(_) | ExprKind::Num(_) | ExprKind::Refl => {}
             ExprKind::Call { args, .. } => args.iter().for_each(|a| expr(a, n)),
-            ExprKind::Match { scrut, motive, zero, succ } => {
+            ExprKind::Match { scrut, motive, arms } => {
                 expr(scrut, n);
                 if let Some((_, m)) = motive {
                     ty(m, n);
                 }
-                expr(zero, n);
-                expr(&succ.2, n);
+                arms.iter().for_each(|a| expr(&a.body, n));
             }
             ExprKind::J { proof, motive, case, .. } => {
                 expr(proof, n);

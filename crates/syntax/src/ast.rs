@@ -13,10 +13,57 @@ impl Span {
     }
 }
 
-/// A source file: a sequence of declarations.
+/// A source file: a sequence of items.
 #[derive(Debug, Clone)]
 pub struct File {
-    pub decls: Vec<Decl>,
+    pub items: Vec<Item>,
+}
+
+#[derive(Debug, Clone)]
+pub enum Item {
+    Decl(Decl),
+    Inductive(InductiveDecl),
+}
+
+impl Item {
+    /// The `fn`/`theorem` declaration, panicking otherwise. For tests and
+    /// callers that have just constructed the item.
+    pub fn into_decl(self) -> Decl {
+        match self {
+            Item::Decl(d) => d,
+            Item::Inductive(i) => panic!("expected a declaration, found `inductive {}`", i.name),
+        }
+    }
+}
+
+/// `inductive D<p, …> { c(f: T, …), … }` — a datatype declaration. Tier 0
+/// (non-recursive) compiles to sums-of-Σs; see docs/inductive-tier0-lowering.md.
+/// Type parameters are monomorphized: `D<Nat>` and `D<Bool>` are unrelated
+/// kernel types.
+#[derive(Debug, Clone)]
+pub struct InductiveDecl {
+    pub name: String,
+    /// Type-parameter names, in order.
+    pub params: Vec<String>,
+    pub ctors: Vec<CtorDecl>,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone)]
+pub struct CtorDecl {
+    pub name: String,
+    pub fields: Vec<FieldDecl>,
+    pub span: Span,
+}
+
+/// One constructor field. A *named* field (`Some(n: Nat, p: n = n)`) is in
+/// scope in the types of the fields after it — that dependency is the reason
+/// the encoding's field spine is a Σ and not a product.
+#[derive(Debug, Clone)]
+pub struct FieldDecl {
+    pub name: Option<String>,
+    pub ty: Ty,
+    pub span: Span,
 }
 
 /// `fn name(params) -> T { body }` (computing definition, inlined) or
@@ -99,6 +146,21 @@ pub struct Ty {
 pub enum TyKind {
     Nat,
     Eq(Box<Expr>, Box<Expr>),
+    /// A declared inductive, applied to its type arguments (`Bool`,
+    /// `Option<Nat>`), or a type parameter in scope inside an `inductive`.
+    Named { name: String, args: Vec<Ty> },
+}
+
+/// One `match` arm: `C(x, y) => body`. The binders are the constructor's
+/// fields, positionally. `Succ(k, ih)` on `Nat` is the one place a second
+/// binder is *not* a field: it is the explicit induction hypothesis, kept as
+/// a low-level fallback (issues/match-recursion.md).
+#[derive(Debug, Clone)]
+pub struct Arm {
+    pub ctor: String,
+    pub binders: Vec<String>,
+    pub body: Expr,
+    pub span: Span,
 }
 
 #[derive(Debug, Clone)]
@@ -123,18 +185,15 @@ pub enum ExprKind {
     /// statement later in the same block. Checking-only, like `refl`: a hole
     /// with no expected type has no statement to list.
     Hole(Option<String>),
-    /// `match scrut (as bind -> motive)? { Zero => zero, Succ(k) => succ }`,
-    /// or with the low-level explicit-ih arm `Succ(k, ih) => succ`.
+    /// `match scrut (as bind -> motive)? { C(x, …) => body, … }` — one arm per
+    /// constructor of the scrutinee's type, in any order. On `Nat` the arms
+    /// are `Zero` and `Succ(k)` (or the low-level `Succ(k, ih)`); on a
+    /// declared inductive they are its constructors.
     Match {
         scrut: Box<Expr>,
         /// Explicit dependent motive: `(binder name, motive type)`.
         motive: Option<(String, Box<Ty>)>,
-        zero: Box<Expr>,
-        /// `(predecessor name, ih name, arm body)`. The ih name is `None` in
-        /// the unified form `Succ(k)`, where the induction hypothesis is
-        /// reached by a structurally guarded *self-call* instead of a binder
-        /// (issues/match-recursion.md).
-        succ: (String, Option<String>, Box<Expr>),
+        arms: Vec<Arm>,
     },
     /// `j(proof, (y, p) -> M, case)` — based path induction. `proof`'s type
     /// fixes the endpoint and family; `M` is scoped over `y` (right endpoint)

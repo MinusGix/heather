@@ -1,6 +1,9 @@
 # Tier-0 inductive lowering: the mechanical scheme
 
-Status: proposed, 2026-07-24. Not yet implemented.
+Status: implemented, 2026-07-24 — `crates/elab/src/inductive.rs` mechanizes
+this document section by section, and `crates/elab/tests/inductive_tier0.rs`
+is §9's checklist. Where the two disagree, the code is wrong; §3.3 and §6.2
+below record the two places where writing the code corrected the scheme.
 Tracking issue: `issues/inductive-compiler.md` (tier 0).
 
 Tier 0 is the non-recursive tier: `Bool`, `Option`, records, and most IR
@@ -50,7 +53,8 @@ than assumed:
    This is what makes the large-elimination no-confusion argument fire
    *definitionally*.
 
-Non-cumulativity is the one place the kernel constrains us; see §7.
+Non-cumulativity is the one place the kernel constrains us; see §6.2, where
+avoiding it turned out to be free.
 
 ---
 
@@ -87,7 +91,15 @@ is forced today — the surface has no first-class function values or types
 Tier 0's check is therefore just "no self-occurrence", but the *positivity*
 check that decides between reject and tier 1/2 must be written now, since
 misclassification is how a negative occurrence would sneak into a later
-tier's generator.
+tier's generator. As implemented it is occurrence-only, which is complete
+for today's surface: field types have no `→`, so no occurrence can be
+negative, and every self-occurrence is reported as tier 1. The strict-
+positivity refinement lands with function-typed fields.
+
+**Type arguments** are inferred only from an argument whose field type *is*
+a parameter (`Some(3)` gives `A := Nat`); anything deeper is unification,
+which belongs to [[elab-unifier-completeness]]. A bare `None` is genuinely
+ambiguous and asks for an annotation.
 
 ---
 
@@ -132,16 +144,61 @@ field record, no tag, which is the right answer for structs.
 
 Levels: `level(⟦D⟧) = ⊔_i level(⟦c_i⟧)`.
 
-### 3.3 Nominal tagging (open decision — see §8)
+### 3.3 The nominal tag (decided 2026-07-24)
 
-If the nominal variant is chosen, §3.1 is prefixed per declaration:
+Structurally identical declarations must not share a kernel type (§8.1), so
+every constructor's field spine is prefixed with a per-declaration tag:
 
 ```
-⟦c_i⟧ = Σ(_ : Id⁰(Nat; ⌜id_D⌝; ⌜id_D⌝)). (the spine above)
+⟦c_i⟧ = Σ(_ : Tag_D). Σ(f₁ : ⟦T₁⟧). … Σ(f_k : ⟦T_k⟧). Unit
 ```
 
-where `id_D` is a per-declaration numeral. Everything downstream shifts by
-one `snd`; constructors supply `refl`. See §8 for why this is on the table.
+Field `j` therefore sits at `fst(snd^j x)` — one more `snd` than §5.1's
+untagged count. `Bool` and a structurally identical `Direction` now have
+distinct kernel types, and the kernel itself rejects `True = Left`.
+
+**`Tag_D` must be proof-irrelevant, which rules out the obvious choice.**
+The first attempt was `Id⁰(Nat; ⌜id_D⌝; ⌜id_D⌝)`, inhabited by `refl`. It
+distinguishes declarations, and it typechecks every *non-dependent* use —
+and then fails on the first dependent motive, which is exactly what tier 0
+exists to support. In an arm for `c_i` the binder `x : ⟦c_i⟧` is neutral,
+and the motive puts it back together as `inl x`; proving e.g.
+`neg (neg b) = b` by `match b { True => refl, … }` requires `inl x` to be
+convertible with the canonical `inl (pair tag ⟨⟩)`. Σ-η reduces that to
+`fst x ≡ tag` — and `Id` has no η, so a neutral `fst x` is not convertible
+with `refl`. The proof is rejected. (This is the same η obligation that
+rules out a single tag at the top of the sum spine, one level up; the first
+draft of this document caught it there and missed it here.)
+
+So the tag is built from formers that *do* have η — `Unit` and `Σ`, both
+proof-irrelevant in `conv.rs` — while still being structurally distinct per
+declaration, since **type** conversion is structural and only **term**
+conversion is η-driven. `Tag_D` is the binary representation of `id_D` as a
+right-nested Σ: digit 0 is `Unit`, digit 1 is `Σ(Unit).Unit`, terminated by
+`Unit`. Minimal binary representations are distinct as digit strings, so the
+encoding is injective; the inhabitant is the matching nest of `⟨⟩`s, and
+which inhabitant hardly matters, since any two are convertible.
+
+Three consequences, all accepted:
+
+- **Cost.** One Σ node per constructor plus `O(log id_D)` nodes for the tag
+  itself, and one extra `snd` per field projection. Free in conversion: η
+  means the tag component is never actually compared.
+- **Placement is per-constructor, not per-type.** A single tag above the
+  sum spine would make `match` case on `snd t`, whose motive obligation
+  `t ≡ pair (fst t) (snd t)` is again η — fine for this `Tag_D`, but it
+  buys nothing and complicates every motive, so the tag stays field 0.
+- **Phantom parameters still collapse.** `Phantom<Nat>` and `Phantom<Bool>`
+  for `inductive Phantom<A> { P }` share a kernel type, since no field
+  mentions `A`. Tagging the *instantiation* as well as the declaration
+  would fix it; not worth it until someone writes a phantom parameter.
+
+`n = 0` is the exception: `⟦D⟧ = Empty` carries no tag (there is no
+constructor to put it in), so two empty inductives do share a type. Nothing
+observable follows — neither has an inhabitant to confuse.
+
+Users never see any of this: the tag is not a field, has no surface name,
+and is not bindable in a pattern.
 
 ---
 
@@ -283,53 +340,61 @@ and `ElimEmpty` from there to the user's goal. Both reductions are
 definitional by kernel fact 4 composed with `Case` β, so the `case: ⟨⟩` is
 accepted without any transport of our own.
 
-### 6.2 Injectivity (level-0 fields only)
+### 6.2 Injectivity (non-dependent fields)
 
-For `e : Id(⟦D⟧; c_i(a⃗); c_i(b⃗))`, derive `Id(⟦T_j⟧; a_j; b_j)` per field.
+For `e : Id(⟦D⟧; c_i(a⃗); c_i(b⃗))`, derive `Id(⟦T_k⟧; a_k; b_k)` per field.
 
-Needs a *total* function `⟦D⟧ → ⟦T_j⟧`, so the other constructors' branches
-need some inhabitant. Take `Unit`/`⟨⟩`, via a code-valued family:
+This needs a *total* function `⟦D⟧ → ⟦T_k⟧`, so the branches for the other
+constructors need some inhabitant of `⟦T_k⟧`. The first version of this
+document reached for `Unit` and a code-valued family; that works, but it
+buys a large elimination and, with it, a level restriction (`⌜Unit⌝ : Ty 0`
+against a field code at `Ty l`, under non-cumulative universes).
+
+There is a cheaper default sitting right there: **`a_k` itself**. The lemma
+is derived at a specific pair of terms, so the left-hand side's own field
+value inhabits exactly the type the other branches need, and the motive
+stays *constant*:
 
 ```
-F_j  = z. Case { motive: Ty l, … : ⌜⟦T_j⟧⌝ at constructor i, ⌜Unit⌝ elsewhere }
-p_j  = z. Case { motive: El^l (F_j z), … : π_j(x) at constructor i, ⟨⟩ elsewhere }
+proj = z. Case { motive: ⟦T_k⟧; … : π_k(x) at constructor i, a_k elsewhere }
 ```
 
-then `cong(p_j)` on `e` — i.e. `J` with motive `(y p. Id(El^l (F_j y); p_j(c_i(a⃗)); p_j(y)))`
-and `case: refl` — gives `Id(⟦T_j⟧; a_j; b_j)` after the definitional
-reductions `El^l (F_j c_i(b⃗)) ⇝ ⟦T_j⟧` and `p_j(c_i(b⃗)) ⇝ b_j`.
+then `J` with motive `(y p. Id(⟦T_k⟧; a_k; proj y))` and `case : refl` gives
+`Id(⟦T_k⟧; a_k; proj c_i(b⃗))`, which reduces to `Id(⟦T_k⟧; a_k; b_k)`. No
+codes, no `El`, no large elimination — and so no level restriction at all.
 
-**Side condition: `l = 0`.** `⌜Unit⌝ : Ty 0`, `⌜⟦T_j⟧⌝ : Ty l`, and the
-universes are non-cumulative — the two branches must land in the same
-`Ty l`, so this scheme only types at `l = 0`. Every tier-0 type expressible
-today is at level 0 (levels only become non-trivial at layer m,
-`issues/elab-stage2-metas.md`), so this is not currently a restriction; the
-generator must *check* it and emit a "no injectivity lemma derived for
-field `f` at level `l > 0`" diagnostic rather than generate an ill-typed
-term. Lifting it wants either a level-indexed `Empty`/`Unit` or layer-m
-universe polymorphism — deferred, tracked in §8.
-
-**Codeability.** `⌜·⌝` must exist for every field type. It is total on the
-fragment tier 0 generates: `⌜Nat⌝ = TmNat`, `⌜Σ⌝ = TmSigma(⌜·⌝, ⌜·⌝)`,
-`⌜+⌝ = TmSum`, `⌜Unit⌝ = TmUnit`, `⌜Empty⌝ = TmEmpty`,
-`⌜Id(S;a;b)⌝ = TmId(⌜S⌝; a; b)`, `⌜Π⌝ = TmPi`, `⌜Ty l⌝ = TmTy l`,
-`⌜El t⌝ = t`. It is *partial* in general — `GlobalTy`, `CodeTy`, `CodeTm`,
-`CtxPi`, `TyPi` have no code — so the generator checks codeability and
-degrades to "no injectivity lemma" rather than failing. None of those can
-appear in a tier-0 field today.
+**Side condition: `⟦T_k⟧` must not depend on the constructor's earlier
+fields.** The constant motive is what makes this work, and a dependent field
+type (`Mk(n: Nat, p: n = n)`, field 1) is not constant in `z`. The generator
+checks it — by reading the field type off *both* sides' encodings and
+comparing them with kernel conversion — and reports the limitation rather
+than emitting an ill-typed term. Field 0 of such a constructor is still
+injective; only the dependent field is out of reach. Recovering it wants
+either the code-valued family above (with its level restriction) or a
+transport along the earlier field's equation; neither is needed yet.
 
 ### 6.3 What is emitted, and when
 
-Derived lemmas are `theorem`-shaped: opaque Ψ-globals
-(`Trm_c(· ⊢ Stmt @ l)`), per the elaborator's definition split. Emitting
-`n²` disjointness lemmas eagerly is quadratic in constructor count and most
-are never used, so: **generate on demand**, at the site that needs one,
-keyed by `(D, i, j)` / `(D, i, field)` and cached in the declaration's
-entry. The scheme is fixed; only the timing is lazy.
+Disjointness and injectivity are not pre-generated lemmas but two surface
+forms, elaborated where they are used:
+
+- `absurd(p)` — checking-only (the goal is what it eliminates into), from an
+  equation between two *different* constructors.
+- `inj(p)` / `inj(k, p)` — the `k`-th field equation (`k` a literal,
+  defaulting to 0), from an equation between the *same* constructor.
+
+Both elaborate to ordinary terms that the kernel re-checks, so nothing is
+cached and nothing is trusted; and both give way to any user binding of the
+name, so neither is a keyword. Method syntax comes free from the existing
+desugaring: `p.absurd()`, `p.inj(1)`.
 
 ---
 
 ## 7. Worked examples
+
+The nominal tag of §3.3 is **elided throughout this section** — every
+`⟦c_i⟧` below really begins `Σ(_ : Tag_D).`, and every constructor really
+begins `pair(tag, …)`. Everything else is verbatim.
 
 **`inductive Bool { True, False }`**
 
@@ -381,7 +446,8 @@ checked against the wrong family. This is the first thing the tests pin.
 
 ## 8. Open decisions
 
-1. **Nominal collapse (needs a call before implementation).** Structurally
+1. **Nominal collapse — DECIDED 2026-07-24: tag (option b), see §3.3.**
+   Structurally
    identical declarations lower to the *same* kernel type: `Bool` and
    `inductive Direction { Left, Right }` are both `Unit + Unit`, and `True`
    and `Left` are the same term. The elaborator compares kernel types
@@ -395,11 +461,14 @@ checked against the wrong family. This is the first thing the tests pin.
    constructor, one `refl` per construction, and one `snd` per projection;
    (c) a nominal surface-type layer in the elaborator, parallel to the
    kernel types — the principled fix, and much the largest.
-   Recommendation: **(b)** — cheap, mechanical, kernel-enforced, and
-   revisitable, since it is a single prefix in one scheme.
-2. **Level-0 restriction on injectivity** (§6.2) — lift when either a
-   level-indexed `Empty` or layer-m universe polymorphism exists. Until
-   then the generator must diagnose, not generate.
+   Chosen: **(b)**, the per-constructor tag — cheap, mechanical,
+   kernel-enforced, invisible to users, and revisitable, since it is a
+   single prefix in one scheme. Written up as §3.3; §5.1's projection index
+   shifts by one accordingly.
+2. **Dependent-field injectivity** (§6.2) — a field whose type mentions an
+   earlier field of the same constructor is diagnosed, not derived. (This
+   replaces the level-0 restriction the first draft carried: the constant
+   motive removed it entirely.)
 3. **Interaction with tier 1.** The tag/field spine here is meant to be
    reused verbatim under tier 1's exact-height fording — the height is
    computed per constructor from the field spine. Tier 1 should not need to
@@ -410,7 +479,10 @@ checked against the wrong family. This is the first thing the tests pin.
 
 ## 9. Acceptance checklist
 
-The properties the implementation must exhibit, each a test:
+The properties the implementation must exhibit, each a test in
+`crates/elab/tests/inductive_tier0.rs`. All pass as of 2026-07-24, with the
+two documented exclusions (dependent-field injectivity, §6.2; tier-1
+declarations, §2).
 
 1. Every generated declaration's type, each constructor, and each derived
    lemma passes the real kernel check (the elaborator's

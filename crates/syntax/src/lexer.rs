@@ -25,6 +25,7 @@ pub enum TokKind {
     Plus,      // +
     Star,      // *
     Lt,        // <
+    Gt,        // >   (closes a type-argument list; `>` is not an operator)
     Arrow,     // ->
     FatArrow,  // =>
     Eq,        // =   (both `let x = e` binding and `a = b` equality)
@@ -122,6 +123,7 @@ pub fn lex(src: &str) -> Result<Vec<Tok>, LexError> {
                 b'+' => (TokKind::Plus, 1),
                 b'*' => (TokKind::Star, 1),
                 b'<' => (TokKind::Lt, 1),
+                b'>' => (TokKind::Gt, 1),
                 b'=' => (TokKind::Eq, 1),
                 _ => {
                     return Err(LexError {
