@@ -1,0 +1,38 @@
+---
+title: Stress-proof acceptance suite for the frontend
+status: open
+labels: [frontend,testing,milestone]
+blocked-by: [elaborator-design, inductive-compiler]
+created: 2026-07-23
+updated: 2026-07-23
+---
+
+The acceptance gate for [[elaborator-design]]: the stress proofs are not an
+alternative to the frontend, they are how we know it works — and they are
+barely feasible without it. When this suite passes, defining the IR is just
+another `inductive` and simulate another `def`, and
+[[ir-simulate-design]] reopens in-language.
+
+The three items (agreed 2026-07-23):
+
+1. **Nat arithmetic + Id lemmas.** comm/assoc via `elim_Nat`;
+   `sym`/`trans`/`cong` via J. Exercises Id and the elaborator's
+   annotation synthesis. Gates elaborator stage 1 (explicit levels, no
+   metas) and again stage 2 (annotations dropped).
+2. **List via tier-1 fording.** The forcing function for
+   [[inductive-compiler]] tier 1: exact-height encoding, derived recursor,
+   constructor injectivity/disjointness (no-confusion via large elim),
+   plus a real proof or two (e.g. append associativity). Hand-prototyped
+   first, then reproduced by the generator.
+3. **Acc via W** (tier 2, hand-built). Exercises the synthesized-ih β rule
+   — the newest, least-battle-tested kernel machinery — and the
+   W + Id + funext indexed-containers story from
+   [[kernel-v1-extensions]].
+
+Each item's elaborated output goes through the real kernel check (the
+frontend soundness-by-construction property from [[elaborator-design]]).
+
+## Log
+
+- 2026-07-23: Opened; items agreed in the frontend-first route discussion.
+- 2026-07-23: Item 1 PASSING at elaborator stage 1 (explicit-annotation form): add_zero/add_succ/add_comm/add_assoc via elim_Nat with explicit motives + ih patterns, sym/trans/cong_succ via J, all elaborated from surface syntax and checked by the real kernel (crates/elab/tests/nat_suite.rs). Also: 2+2==4 by bare refl (computation check), and negative tests confirming the kernel gate rejects wrong proofs/lemma uses. Item 1 re-gates at stage 2 when the annotations drop.

@@ -74,3 +74,4 @@ elaborator will be checked against.
   `inl`/`inr` / `match` sugar requirement. Note the positive/negative split:
   Σ's motive is recoverable by projection (η), a sum's is not — `match` needs
   its result type from context, sharpening the checking-descent constraint.
+- 2026-07-23: Frontend-first route decided; the elaborator now has a real design issue ([[elaborator-design]]) plus [[surface-syntax]], [[inductive-compiler]], [[stress-proof-suite]]. This issue stays the requirements/constraints tracker the elaborator is checked against.

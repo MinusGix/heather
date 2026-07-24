@@ -4,7 +4,7 @@ status: open
 labels: [compiler, metaprogramming]
 blocked-by: [end-to-end-compile-instance]
 created: 2026-07-22
-updated: 2026-07-22
+updated: 2026-07-23
 ---
 
 The `runtime_func`-style generator: intensionally analyze boxed function code
@@ -16,3 +16,7 @@ Protect this property as the design evolves.
 
 Surface form TBD: possibly not a named wrapper but a macro over
 `eval(generate(box f))`.
+
+## Log
+
+- 2026-07-23: Round-3 sketch (docs/sketches/surface-v3.md) identifies the certified partial evaluator as this issue's sibling: pe over code + pe_correct proven once = specialization-with-proof for every fn; smart Compile instances get specialized IR as lower(pe(f.code, ctx.const)) with certificates composing. Tractability facts: total object language (PE terminates structurally), honest stuckness (residualize on neutrals).
