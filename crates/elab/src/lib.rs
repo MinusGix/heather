@@ -228,7 +228,7 @@ impl Elaborator {
             ExprKind::Refl => {
                 let head = self.whnf(cx, expected, e.span)?;
                 let Type::Id { level, ty, lhs, .. } = head else {
-                    return err("`refl` needs an `==` expected type", e.span);
+                    return err("`refl` needs an `=` expected type", e.span);
                 };
                 Ok(Term::Refl { level, ty, tm: lhs })
             }
@@ -296,7 +296,7 @@ impl Elaborator {
                 let (proof_t, proof_ty, _) = self.elab_infer(cx, proof)?;
                 let head = self.whnf(cx, &proof_ty, proof.span)?;
                 let Type::Id { level, ty, lhs, rhs } = head else {
-                    return err("`j` needs a proof of an `==` type", proof.span);
+                    return err("`j` needs a proof of an `=` type", proof.span);
                 };
                 // Motive context: Γ, y : S, p : Id(S, a, y).
                 let mut mcx = cx.clone();

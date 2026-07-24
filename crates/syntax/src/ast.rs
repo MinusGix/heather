@@ -48,8 +48,9 @@ pub struct Param {
     pub span: Span,
 }
 
-/// Surface types. `a == b` is the identity type at the (synthesized) type
-/// of `a`.
+/// Surface types. `a = b` is the identity type at the (synthesized) type
+/// of `a` (Heather merges binding and equality onto one `=`, ML-style;
+/// issues/surface-syntax.md).
 #[derive(Debug, Clone)]
 pub struct Ty {
     pub kind: TyKind,

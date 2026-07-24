@@ -18,33 +18,33 @@ fn add(m: Nat, n: Nat) -> Nat {
     }
 }
 
-theorem add_zero(n: Nat): n + 0 == n {
+theorem add_zero(n: Nat): n + 0 = n {
     match n {
         Zero => refl,
         Succ(k, ih) => ih.cong_succ(),
     }
 }
 
-theorem add_succ(m: Nat, n: Nat): m + Succ(n) == Succ(m + n) {
+theorem add_succ(m: Nat, n: Nat): m + Succ(n) = Succ(m + n) {
     match m {
         Zero => refl,
         Succ(k, ih) => ih.cong_succ(),
     }
 }
 
-theorem add_comm(m: Nat, n: Nat): m + n == n + m {
+theorem add_comm(m: Nat, n: Nat): m + n = n + m {
     match m {
         Zero => add_zero(n).sym(),
         Succ(k, ih) => calc {
             Succ(k) + n
-                == Succ(k + n) := refl,
-                == Succ(n + k) := ih.cong_succ(),
-                == n + Succ(k) := add_succ(n, k).sym(),
+                = Succ(k + n) := refl,
+                = Succ(n + k) := ih.cong_succ(),
+                = n + Succ(k) := add_succ(n, k).sym(),
         },
     }
 }
 
-theorem add_assoc(a: Nat, b: Nat, c: Nat): (a + b) + c == a + (b + c) {
+theorem add_assoc(a: Nat, b: Nat, c: Nat): (a + b) + c = a + (b + c) {
     match a {
         Zero => refl,
         Succ(k, ih) => ih.cong_succ(),
@@ -62,26 +62,26 @@ fn nat_suite_ergonomic() {
 
 #[test]
 fn plus_desugars_to_add_in_types_and_terms() {
-    // `+` in both the statement (`n + 0 == n`) and the proof term reduces to
-    // `add`, so `refl` still closes `2 + 2 == 4`.
+    // `+` in both the statement (`n + 0 = n`) and the proof term reduces to
+    // `add`, so `refl` still closes `2 + 2 = 4`.
     let mut e = Elaborator::with_prelude().expect("prelude");
     e.elab_source(
         r#"
         fn add(m: Nat, n: Nat) -> Nat { match m { Zero => n, Succ(k, ih) => Succ(ih) } }
-        theorem two_two(): 2 + 2 == 4 { refl }
+        theorem two_two(): 2 + 2 = 4 { refl }
         "#,
     )
-    .expect("`+` is `add`, so `2 + 2 == 4` holds by refl");
+    .expect("`+` is `add`, so `2 + 2 = 4` holds by refl");
 }
 
 #[test]
 fn method_style_matches_call_style() {
-    // `p.sym()` and `sym(p)` elaborate to the same thing: both prove `b == a`.
+    // `p.sym()` and `sym(p)` elaborate to the same thing: both prove `b = a`.
     let mut e = Elaborator::with_prelude().expect("prelude");
     e.elab_source(
         r#"
-        theorem via_method(a: Nat, b: Nat, p: a == b): b == a { p.sym() }
-        theorem via_call(a: Nat, b: Nat, p: a == b): b == a { sym(p) }
+        theorem via_method(a: Nat, b: Nat, p: a = b): b = a { p.sym() }
+        theorem via_call(a: Nat, b: Nat, p: a = b): b = a { sym(p) }
         "#,
     )
     .expect("method and call spellings both check");
@@ -89,12 +89,12 @@ fn method_style_matches_call_style() {
 
 #[test]
 fn calc_single_step_is_just_the_proof() {
-    // A one-step calc is definitionally its proof; `refl` closes `2+2 == 4`.
+    // A one-step calc is definitionally its proof; `refl` closes `2+2 = 4`.
     let mut e = Elaborator::with_prelude().expect("prelude");
     e.elab_source(
         r#"
         fn add(m: Nat, n: Nat) -> Nat { match m { Zero => n, Succ(k, ih) => Succ(ih) } }
-        theorem two_two(): 2 + 2 == 4 { calc { 2 + 2 == 4 := refl } }
+        theorem two_two(): 2 + 2 = 4 { calc { 2 + 2 = 4 := refl } }
         "#,
     )
     .expect("single-step calc");
@@ -108,11 +108,11 @@ fn incoherent_calc_chain_is_kernel_rejected() {
     let r = e.elab_source(
         r#"
         fn add(m: Nat, n: Nat) -> Nat { match m { Zero => n, Succ(k, ih) => Succ(ih) } }
-        theorem bad(n: Nat): n + 0 == n {
+        theorem bad(n: Nat): n + 0 = n {
             calc {
                 n + 0
-                    == n + 1 := refl,
-                    == n := refl,
+                    = n + 1 := refl,
+                    = n := refl,
             }
         }
         "#,

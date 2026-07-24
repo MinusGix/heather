@@ -6,7 +6,8 @@
 //!          | "theorem" name "(" params? ")" ":" type block
 //! params  := param ("," param)* ","?
 //! param   := name ":" type | "{" name ":" type "}"   -- implicit
-//! type    := expr ("==" expr)?      -- bare `Nat` is the type Nat
+//! type    := expr ("=" expr)?       -- bare `Nat` is the type Nat; `=` is
+//!                                      propositional equality (`==` rejected)
 //! block   := "{" expr "}"
 //! expr    := "match" expr ("as" name "->" type)? "{" arms "}"
 //!          | "refl"
@@ -154,10 +155,22 @@ impl Parser {
 
     // -- types --------------------------------------------------------------
 
+    /// Consume the equality operator `=`. Heather merges binding and equality
+    /// onto one `=` (ML-style, disambiguated by `let`; issues/surface-syntax.md);
+    /// `==` is lexed but not part of the grammar, so it gets a targeted hint
+    /// where equality is expected (`a = b`, calc steps) — catching C/Rust habit.
+    fn expect_eq(&mut self, what: &str) -> R<()> {
+        if matches!(self.peek(), TokKind::EqEq) {
+            return self.err(format!("`==` is not used in Heather; write `=` ({what})"));
+        }
+        self.expect(&TokKind::Eq, "`=`")?;
+        Ok(())
+    }
+
     fn ty(&mut self) -> R<Ty> {
         let lhs = self.expr()?;
-        if matches!(self.peek(), TokKind::EqEq) {
-            self.bump();
+        if matches!(self.peek(), TokKind::Eq | TokKind::EqEq) {
+            self.expect_eq("equality type `a = b`")?;
             let rhs = self.expr()?;
             let span = lhs.span.join(rhs.span);
             return Ok(Ty { kind: TyKind::Eq(Box::new(lhs), Box::new(rhs)), span });
@@ -166,7 +179,7 @@ impl Parser {
         match &lhs.kind {
             ExprKind::Var(s) if s == "Nat" => Ok(Ty { kind: TyKind::Nat, span: lhs.span }),
             _ => Err(ParseError {
-                msg: "expected a type (`Nat` or `a == b`)".into(),
+                msg: "expected a type (`Nat` or `a = b`)".into(),
                 span: lhs.span,
             }),
         }
@@ -174,7 +187,7 @@ impl Parser {
 
     // -- expressions --------------------------------------------------------
 
-    /// Expressions, with infix operators. Note `==` is *not* an expression
+    /// Expressions, with infix operators. Note `=` is *not* an expression
     /// operator: it is the identity-type former, parsed by [`Self::ty`] and by
     /// `calc` steps. Precedence, loosest to tightest: `<` (→ `lt`), `+`
     /// (→ `add`), `*` (→ `mul`), then postfix `.method(args)` / calls, then
@@ -391,21 +404,21 @@ impl Parser {
         })
     }
 
-    /// `calc { e0 == e1 := p1 (, == e_i := p_i)* ,? }` — an equational chain
+    /// `calc { e0 = e1 := p1 (, = e_i := p_i)* ,? }` — an equational chain
     /// (surface-v1 §1). Desugars to a right-nested `@trans` over the step
     /// proofs, carrying the step terms as the *explicit* endpoints so that
-    /// `refl` steps still receive a checking type. Proves `e0 == e_last`;
+    /// `refl` steps still receive a checking type. Proves `e0 = e_last`;
     /// a single step is just its proof.
     fn calc_expr(&mut self) -> R<Expr> {
         let start = self.peek_span();
         self.bump(); // `calc`
         self.expect(&TokKind::LBrace, "`{`")?;
-        // The chain: terms[i] are the endpoints, proofs[i] : terms[i] == terms[i+1].
-        // The first step carries both endpoints (`e0 == e1 := p1`); later steps
-        // reuse the previous right endpoint (`== e_{i+1} := p_{i+1}`).
+        // The chain: terms[i] are the endpoints, proofs[i] : terms[i] = terms[i+1].
+        // The first step carries both endpoints (`e0 = e1 := p1`); later steps
+        // reuse the previous right endpoint (`= e_{i+1} := p_{i+1}`).
         let mut terms = vec![self.expr()?];
         let mut proofs = Vec::new();
-        self.expect(&TokKind::EqEq, "`==` (calc step)")?;
+        self.expect_eq("calc step")?;
         loop {
             terms.push(self.expr()?);
             self.expect(&TokKind::ColonEq, "`:=` (calc step proof)")?;
@@ -417,11 +430,11 @@ impl Parser {
             if matches!(self.peek(), TokKind::RBrace) {
                 break; // trailing comma
             }
-            self.expect(&TokKind::EqEq, "`==` (calc step)")?;
+            self.expect_eq("calc step")?;
         }
         let end = self.expect(&TokKind::RBrace, "`}`")?;
         let span = start.join(end);
-        // Fold right: acc proves terms[i+1] == e_last; prepend step i.
+        // Fold right: acc proves terms[i+1] = e_last; prepend step i.
         let m = proofs.len();
         let last = &terms[m];
         let mut acc = proofs[m - 1].clone();
@@ -452,7 +465,7 @@ mod tests {
 
     #[test]
     fn implicit_and_explicit_params() {
-        let f = parse_file("theorem t({a: Nat}, b: Nat, p: a == b): b == a { refl }").unwrap();
+        let f = parse_file("theorem t({a: Nat}, b: Nat, p: a = b): b = a { refl }").unwrap();
         let ps = &f.decls[0].params;
         assert_eq!(ps.len(), 3);
         assert!(ps[0].implicit, "`{{a}}` is implicit");
@@ -484,7 +497,7 @@ mod tests {
 
     #[test]
     fn unclosed_implicit_param_errors() {
-        assert!(parse_file("theorem t({a: Nat, b: Nat): a == b { refl }").is_err());
+        assert!(parse_file("theorem t({a: Nat, b: Nat): a = b { refl }").is_err());
     }
 
     // Parse a single-declaration `fn f(n: Nat) -> Nat { <body> }` and return
@@ -546,15 +559,15 @@ mod tests {
 
     #[test]
     fn calc_single_step_is_the_bare_proof() {
-        // `calc { a == b := p }` ⇒ p.
-        let k = body("calc { a == b := p }");
+        // `calc { a = b := p }` ⇒ p.
+        let k = body("calc { a = b := p }");
         assert!(matches!(&k, ExprKind::Var(v) if v == "p"));
     }
 
     #[test]
     fn calc_multi_step_nests_explicit_trans() {
-        // `calc { a == b := p1, == c := p2 }` ⇒ @trans(a, b, c, p1, p2).
-        let k = body("calc { a == b := p1, == c := p2 }");
+        // `calc { a = b := p1, = c := p2 }` ⇒ @trans(a, b, c, p1, p2).
+        let k = body("calc { a = b := p1, = c := p2 }");
         let (name, args, explicit) = as_call(&k);
         assert_eq!(name, "trans");
         assert!(explicit, "calc lowers to the explicit `@trans`");
@@ -568,8 +581,8 @@ mod tests {
 
     #[test]
     fn calc_three_steps_fold_right() {
-        // `calc { a==b:=p1, ==c:=p2, ==d:=p3 }` ⇒ @trans(a,b,d,p1,@trans(b,c,d,p2,p3)).
-        let k = body("calc { a == b := p1, == c := p2, == d := p3 }");
+        // `calc { a=b:=p1, =c:=p2, =d:=p3 }` ⇒ @trans(a,b,d,p1,@trans(b,c,d,p2,p3)).
+        let k = body("calc { a = b := p1, = c := p2, = d := p3 }");
         let (_, args, _) = as_call(&k);
         assert!(matches!(&args[2].kind, ExprKind::Var(v) if v == "d"), "shared right endpoint");
         let (inner, iargs, iexpl) = as_call(&args[4].kind);
@@ -580,10 +593,19 @@ mod tests {
     }
 
     #[test]
-    fn eqeq_stays_a_type_former_not_an_expr_operator() {
-        // `a == b` at the top of a body is not an expression; the elaborator
-        // never sees `==` as a Call. (Here it parses as the type in `ty`.)
-        let f = parse_file("theorem t(a: Nat, b: Nat): a == b { refl }").unwrap();
+    fn single_eq_is_the_equality_type_former() {
+        // `a = b` in type position is the identity type (not an expression
+        // operator — the elaborator never sees `=` as a Call).
+        let f = parse_file("theorem t(a: Nat, b: Nat): a = b { refl }").unwrap();
         assert!(matches!(f.decls[0].result.kind, crate::ast::TyKind::Eq(..)));
+    }
+
+    #[test]
+    fn double_eq_is_rejected_with_a_hint() {
+        // `==` is lexed but not grammatical; equality is `=`. The parser
+        // rejects it with a targeted message (C/Rust muscle memory).
+        let err = parse_file("theorem t(a: Nat, b: Nat): a == b { refl }").unwrap_err();
+        assert!(err.msg.contains("=="), "hint should mention `==`: {}", err.msg);
+        assert!(err.msg.contains('='), "hint should point at `=`: {}", err.msg);
     }
 }

@@ -3,7 +3,7 @@ title: Choose the effects story (uniqueness threading vs interaction trees)
 status: open
 labels: [design, effects]
 created: 2026-07-22
-updated: 2026-07-22
+updated: 2026-07-24
 ---
 
 Effectful runtime functions never run at kerneltime, so the question is what
@@ -31,3 +31,7 @@ payoff).
 
 Related: [[ir-simulate-design]] (trace-shaped simulate), [[kernel-v0-scope]]
 (coinduction explicitly out of v0).
+
+## Log
+
+- 2026-07-24: CONSTRAINT from the equality-notation decision ([[surface-syntax]], 2026-07-24): `=` is now propositional equality (and `let` binding). Any future imperative/assignment-like effect syntax must therefore NOT use bare `=` (`place = value` would be indistinguishable from asserting `place = value`, since only `let` disambiguates). Use `:=` (user's stylistic lean) or `<-`. Applies whichever way the effects story lands (interaction trees are the plan to explore); mutable-value ergonomics are wanted, so pin the assignment glyph early.

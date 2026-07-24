@@ -21,7 +21,8 @@ pub enum TokKind {
     Lt,        // <
     Arrow,     // ->
     FatArrow,  // =>
-    EqEq,      // ==
+    Eq,        // =   (both `let x = e` binding and `a = b` equality)
+    EqEq,      // ==  (lexed but rejected by the parser — see `=`)
     ColonEq,   // :=
     Eof,
 }
@@ -101,6 +102,7 @@ pub fn lex(src: &str) -> Result<Vec<Tok>, LexError> {
                 b'+' => (TokKind::Plus, 1),
                 b'*' => (TokKind::Star, 1),
                 b'<' => (TokKind::Lt, 1),
+                b'=' => (TokKind::Eq, 1),
                 _ => {
                     return Err(LexError {
                         msg: format!("unexpected character {:?}", c as char),

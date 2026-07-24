@@ -19,22 +19,22 @@ fn add(m: Nat, n: Nat) -> Nat {
     }
 }
 
-theorem add_zero(n: Nat): add(n, 0) == n {
-    match n as z -> add(z, 0) == z {
+theorem add_zero(n: Nat): add(n, 0) = n {
+    match n as z -> add(z, 0) = z {
         Zero => refl,
         Succ(k, ih) => @cong_succ(add(k, 0), k, ih),
     }
 }
 
-theorem add_succ(m: Nat, n: Nat): add(m, Succ(n)) == Succ(add(m, n)) {
-    match m as z -> add(z, Succ(n)) == Succ(add(z, n)) {
+theorem add_succ(m: Nat, n: Nat): add(m, Succ(n)) = Succ(add(m, n)) {
+    match m as z -> add(z, Succ(n)) = Succ(add(z, n)) {
         Zero => refl,
         Succ(k, ih) => @cong_succ(add(k, Succ(n)), Succ(add(k, n)), ih),
     }
 }
 
-theorem add_comm(m: Nat, n: Nat): add(m, n) == add(n, m) {
-    match m as z -> add(z, n) == add(n, z) {
+theorem add_comm(m: Nat, n: Nat): add(m, n) = add(n, m) {
+    match m as z -> add(z, n) = add(n, z) {
         Zero => @sym(add(n, 0), n, add_zero(n)),
         Succ(k, ih) => @trans(
             Succ(add(k, n)),
@@ -46,8 +46,8 @@ theorem add_comm(m: Nat, n: Nat): add(m, n) == add(n, m) {
     }
 }
 
-theorem add_assoc(a: Nat, b: Nat, c: Nat): add(add(a, b), c) == add(a, add(b, c)) {
-    match a as z -> add(add(z, b), c) == add(z, add(b, c)) {
+theorem add_assoc(a: Nat, b: Nat, c: Nat): add(add(a, b), c) = add(a, add(b, c)) {
+    match a as z -> add(add(z, b), c) = add(z, add(b, c)) {
         Zero => refl,
         Succ(k, ih) => @cong_succ(add(add(k, b), c), add(k, add(b, c)), ih),
     }
@@ -69,20 +69,20 @@ fn nat_suite_checks() {
 
 #[test]
 fn computation_check() {
-    // Concrete arithmetic reduces: 2 + 2 == 4 proved by refl alone.
+    // Concrete arithmetic reduces: 2 + 2 = 4 proved by refl alone.
     let mut e = Elaborator::with_prelude().expect("prelude");
     e.elab_source(NAT_SUITE).expect("suite");
-    e.elab_source("theorem two_plus_two(): add(2, 2) == 4 { refl }")
-        .expect("2 + 2 == 4 by refl");
+    e.elab_source("theorem two_plus_two(): add(2, 2) = 4 { refl }")
+        .expect("2 + 2 = 4 by refl");
 }
 
 #[test]
 fn kernel_rejects_wrong_proof() {
-    // `refl` cannot prove add(n, 1) == n; the KERNEL (not the elaborator's
+    // `refl` cannot prove add(n, 1) = n; the KERNEL (not the elaborator's
     // surface checks) must be what rejects it.
     let mut e = Elaborator::with_prelude().expect("prelude");
     e.elab_source(NAT_SUITE).expect("suite");
-    let r = e.elab_source("theorem bogus(n: Nat): add(n, 1) == n { refl }");
+    let r = e.elab_source("theorem bogus(n: Nat): add(n, 1) = n { refl }");
     assert!(
         matches!(r, Err(ElabError::Kernel { .. })),
         "expected a kernel rejection, got {r:?}"
@@ -94,7 +94,7 @@ fn kernel_rejects_wrong_lemma_use() {
     // sym applied with swapped endpoints: types don't line up.
     let mut e = Elaborator::with_prelude().expect("prelude");
     let r = e.elab_source(
-        "theorem bogus(a: Nat, b: Nat, p: a == b): b == a { @sym(b, a, p) }",
+        "theorem bogus(a: Nat, b: Nat, p: a = b): b = a { @sym(b, a, p) }",
     );
     assert!(
         matches!(r, Err(ElabError::Kernel { .. })),
@@ -105,6 +105,6 @@ fn kernel_rejects_wrong_lemma_use() {
 #[test]
 fn unbound_name_is_an_elab_error() {
     let mut e = Elaborator::new();
-    let r = e.elab_source("theorem nope(n: Nat): n == n { mystery(n) }");
+    let r = e.elab_source("theorem nope(n: Nat): n = n { mystery(n) }");
     assert!(matches!(r, Err(ElabError::Elab { .. })), "got {r:?}");
 }

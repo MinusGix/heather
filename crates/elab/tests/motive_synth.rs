@@ -18,21 +18,21 @@ fn add(m: Nat, n: Nat) -> Nat {
     }
 }
 
-theorem add_zero(n: Nat): add(n, 0) == n {
+theorem add_zero(n: Nat): add(n, 0) = n {
     match n {
         Zero => refl,
         Succ(k, ih) => @cong_succ(add(k, 0), k, ih),
     }
 }
 
-theorem add_succ(m: Nat, n: Nat): add(m, Succ(n)) == Succ(add(m, n)) {
+theorem add_succ(m: Nat, n: Nat): add(m, Succ(n)) = Succ(add(m, n)) {
     match m {
         Zero => refl,
         Succ(k, ih) => @cong_succ(add(k, Succ(n)), Succ(add(k, n)), ih),
     }
 }
 
-theorem add_comm(m: Nat, n: Nat): add(m, n) == add(n, m) {
+theorem add_comm(m: Nat, n: Nat): add(m, n) = add(n, m) {
     match m {
         Zero => @sym(add(n, 0), n, add_zero(n)),
         Succ(k, ih) => @trans(
@@ -45,7 +45,7 @@ theorem add_comm(m: Nat, n: Nat): add(m, n) == add(n, m) {
     }
 }
 
-theorem add_assoc(a: Nat, b: Nat, c: Nat): add(add(a, b), c) == add(a, add(b, c)) {
+theorem add_assoc(a: Nat, b: Nat, c: Nat): add(add(a, b), c) = add(a, add(b, c)) {
     match a {
         Zero => refl,
         Succ(k, ih) => @cong_succ(add(add(k, b), c), add(k, add(b, c)), ih),
@@ -66,7 +66,7 @@ fn non_dependent_motive_still_works() {
     // synthesized motive is non-dependent and the kernel accepts it.
     let mut e = Elaborator::with_prelude().expect("prelude");
     e.elab_source(
-        "theorem const_zero(n: Nat): 0 == 0 { match n { Zero => refl, Succ(k, ih) => ih } }",
+        "theorem const_zero(n: Nat): 0 = 0 { match n { Zero => refl, Succ(k, ih) => ih } }",
     )
     .expect("non-dependent motive");
 }
