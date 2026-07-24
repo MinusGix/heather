@@ -2,9 +2,8 @@
 title: "Inductive declaration compiler: tiered encodings"
 status: open
 labels: [frontend,elaboration,inductives,design]
-blocked-by: [elaborator-design]
 created: 2026-07-23
-updated: 2026-07-23
+updated: 2026-07-24
 ---
 
 Mechanize the encoding doctrine of [[kernel-v1-extensions]]: surface
@@ -67,3 +66,4 @@ Generator support can lag; a hand-built `Acc` exercises the synthesized-ih
 
 - 2026-07-23: Opened; tiers, exact-height decision, and the
   List-prototype-first discipline from the frontend-first route discussion.
+- 2026-07-24: Tier-0 lowering scheme written down before code: docs/inductive-tier0-lowering.md — sum spine over constructors, Unit-terminated Sigma spine per constructor (uniform field offsets; the trailing Unit is free by Unit-eta), injection paths, field projection as fst(snd^j) aliased into arm bodies, match as nested Case with the motive composed with the injection at each depth (the one place a bug would hide), and no-confusion split into disjointness (tag predicate by large elim into Ty 0 — any levels) and injectivity (code-valued family + cong — level-0 fields only, non-cumulativity blocks the Unit default at l>0). Verified against the kernel rather than assumed: Sigma-eta (conv.rs:668), Unit-eta (conv.rs:696), El decoding of every extension code (reduce.rs:93). Open decision blocking implementation: nominal collapse — structurally identical declarations share a kernel type, so 'True = Left' would check; recommendation is a per-declaration Id(Nat;k;k) tag prefix. Blocked-by elaborator-design dropped (stages 1-2 landed).
