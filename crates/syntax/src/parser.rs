@@ -4,13 +4,14 @@
 //! file    := decl*
 //! decl    := "fn" name "(" params? ")" "->" type block
 //!          | "theorem" name "(" params? ")" ":" type block
-//! params  := name ":" type ("," name ":" type)* ","?
+//! params  := param ("," param)* ","?
+//! param   := name ":" type | "{" name ":" type "}"   -- implicit
 //! type    := expr ("==" expr)?      -- bare `Nat` is the type Nat
 //! block   := "{" expr "}"
 //! expr    := "match" expr ("as" name "->" type)? "{" arms "}"
 //!          | "refl"
 //!          | "j" "(" expr "," "(" name "," name ")" "->" type "," expr ")"
-//!          | name "(" args ")" | name | numeral | "(" expr ")"
+//!          | "@"? name "(" args ")" | name | numeral | "(" expr ")"
 //! arms    := arm ("," arm)* ","?    -- exactly a Zero arm and a Succ arm
 //! arm     := "Zero" "=>" expr | "Succ" "(" name "," name ")" "=>" expr
 //! ```
@@ -116,11 +117,20 @@ impl Parser {
         self.expect(&TokKind::LParen, "`(`")?;
         let mut params = Vec::new();
         while !matches!(self.peek(), TokKind::RParen) {
+            // `{name: T}` marks an implicit parameter (filled by unification);
+            // `name: T` is explicit.
+            let implicit = matches!(self.peek(), TokKind::LBrace);
+            if implicit {
+                self.bump();
+            }
             let (pname, psp) = self.ident("parameter name")?;
             self.expect(&TokKind::Colon, "`:`")?;
             let ty = self.ty()?;
-            let span = psp.join(ty.span);
-            params.push(Param { name: pname, ty, span });
+            let mut span = psp.join(ty.span);
+            if implicit {
+                span = span.join(self.expect(&TokKind::RBrace, "`}` to close implicit parameter")?);
+            }
+            params.push(Param { name: pname, ty, implicit, span });
             if !matches!(self.peek(), TokKind::Comma) {
                 break;
             }
@@ -176,6 +186,17 @@ impl Parser {
         if self.at_kw("j") {
             return self.j_expr();
         }
+        // `@f(args)` — a fully-explicit call (implicit params given positionally).
+        if matches!(self.peek(), TokKind::At) {
+            let at = self.bump().span;
+            let (name, _) = self.ident("call head after `@`")?;
+            self.expect(&TokKind::LParen, "`(` (`@` marks a call)")?;
+            let (args, end) = self.call_args()?;
+            return Ok(Expr {
+                kind: ExprKind::Call { name, args, explicit: true },
+                span: at.join(end),
+            });
+        }
         match self.peek().clone() {
             TokKind::Num(n) => {
                 let sp = self.bump().span;
@@ -191,22 +212,33 @@ impl Parser {
                 let sp = self.bump().span;
                 if matches!(self.peek(), TokKind::LParen) {
                     self.bump();
-                    let mut args = Vec::new();
-                    while !matches!(self.peek(), TokKind::RParen) {
-                        args.push(self.expr()?);
-                        if !matches!(self.peek(), TokKind::Comma) {
-                            break;
-                        }
-                        self.bump();
-                    }
-                    let end = self.expect(&TokKind::RParen, "`)`")?;
-                    Ok(Expr { kind: ExprKind::Call(name, args), span: sp.join(end) })
+                    let (args, end) = self.call_args()?;
+                    Ok(Expr {
+                        kind: ExprKind::Call { name, args, explicit: false },
+                        span: sp.join(end),
+                    })
                 } else {
                     Ok(Expr { kind: ExprKind::Var(name), span: sp })
                 }
             }
             _ => self.err("expected an expression"),
         }
+    }
+
+    /// Parse a comma-separated argument list up to and including the closing
+    /// `)` (the opening `(` is already consumed). Returns the args and the
+    /// span of the `)`.
+    fn call_args(&mut self) -> R<(Vec<Expr>, Span)> {
+        let mut args = Vec::new();
+        while !matches!(self.peek(), TokKind::RParen) {
+            args.push(self.expr()?);
+            if !matches!(self.peek(), TokKind::Comma) {
+                break;
+            }
+            self.bump();
+        }
+        let end = self.expect(&TokKind::RParen, "`)`")?;
+        Ok((args, end))
     }
 
     fn match_expr(&mut self) -> R<Expr> {
@@ -292,5 +324,47 @@ impl Parser {
             },
             span: start.join(end),
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn implicit_and_explicit_params() {
+        let f = parse_file("theorem t({a: Nat}, b: Nat, p: a == b): b == a { refl }").unwrap();
+        let ps = &f.decls[0].params;
+        assert_eq!(ps.len(), 3);
+        assert!(ps[0].implicit, "`{{a}}` is implicit");
+        assert!(!ps[1].implicit, "`b` is explicit");
+        assert!(!ps[2].implicit, "`p` is explicit");
+    }
+
+    #[test]
+    fn at_marks_a_fully_explicit_call() {
+        let f = parse_file("fn f(n: Nat) -> Nat { @g(a, b, p) }").unwrap();
+        match &f.decls[0].body.kind {
+            ExprKind::Call { name, args, explicit } => {
+                assert_eq!(name, "g");
+                assert_eq!(args.len(), 3);
+                assert!(*explicit);
+            }
+            other => panic!("expected an explicit call, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn plain_call_is_not_explicit() {
+        let f = parse_file("fn f(n: Nat) -> Nat { g(a) }").unwrap();
+        match &f.decls[0].body.kind {
+            ExprKind::Call { explicit, .. } => assert!(!*explicit),
+            other => panic!("expected a call, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn unclosed_implicit_param_errors() {
+        assert!(parse_file("theorem t({a: Nat, b: Nat): a == b { refl }").is_err());
     }
 }

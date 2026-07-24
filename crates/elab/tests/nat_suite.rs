@@ -3,6 +3,11 @@
 //! real kernel. Every declaration that lands here has passed
 //! `check_type` + `check_term`; the negative tests confirm the kernel gate
 //! actually rejects (elaborator soundness is by construction, not by trust).
+//!
+//! This file pins the **stage-1 explicit forms** as a regression: `as z -> M`
+//! motives spelled out, and endpoints to the (now implicit-parametered)
+//! prelude lemmas supplied positionally via `@` (issues/elab-stage2-metas.md).
+//! The annotation-free stage-2 forms live in `implicit_args.rs`.
 
 use heather_elab::{ElabError, Elaborator};
 
@@ -17,26 +22,26 @@ fn add(m: Nat, n: Nat) -> Nat {
 theorem add_zero(n: Nat): add(n, 0) == n {
     match n as z -> add(z, 0) == z {
         Zero => refl,
-        Succ(k, ih) => cong_succ(add(k, 0), k, ih),
+        Succ(k, ih) => @cong_succ(add(k, 0), k, ih),
     }
 }
 
 theorem add_succ(m: Nat, n: Nat): add(m, Succ(n)) == Succ(add(m, n)) {
     match m as z -> add(z, Succ(n)) == Succ(add(z, n)) {
         Zero => refl,
-        Succ(k, ih) => cong_succ(add(k, Succ(n)), Succ(add(k, n)), ih),
+        Succ(k, ih) => @cong_succ(add(k, Succ(n)), Succ(add(k, n)), ih),
     }
 }
 
 theorem add_comm(m: Nat, n: Nat): add(m, n) == add(n, m) {
     match m as z -> add(z, n) == add(n, z) {
-        Zero => sym(add(n, 0), n, add_zero(n)),
-        Succ(k, ih) => trans(
+        Zero => @sym(add(n, 0), n, add_zero(n)),
+        Succ(k, ih) => @trans(
             Succ(add(k, n)),
             Succ(add(n, k)),
             add(n, Succ(k)),
-            cong_succ(add(k, n), add(n, k), ih),
-            sym(add(n, Succ(k)), Succ(add(n, k)), add_succ(n, k))
+            @cong_succ(add(k, n), add(n, k), ih),
+            @sym(add(n, Succ(k)), Succ(add(n, k)), add_succ(n, k))
         ),
     }
 }
@@ -44,7 +49,7 @@ theorem add_comm(m: Nat, n: Nat): add(m, n) == add(n, m) {
 theorem add_assoc(a: Nat, b: Nat, c: Nat): add(add(a, b), c) == add(a, add(b, c)) {
     match a as z -> add(add(z, b), c) == add(z, add(b, c)) {
         Zero => refl,
-        Succ(k, ih) => cong_succ(add(add(k, b), c), add(k, add(b, c)), ih),
+        Succ(k, ih) => @cong_succ(add(add(k, b), c), add(k, add(b, c)), ih),
     }
 }
 "#;
@@ -89,7 +94,7 @@ fn kernel_rejects_wrong_lemma_use() {
     // sym applied with swapped endpoints: types don't line up.
     let mut e = Elaborator::with_prelude().expect("prelude");
     let r = e.elab_source(
-        "theorem bogus(a: Nat, b: Nat, p: a == b): b == a { sym(b, a, p) }",
+        "theorem bogus(a: Nat, b: Nat, p: a == b): b == a { @sym(b, a, p) }",
     );
     assert!(
         matches!(r, Err(ElabError::Kernel { .. })),

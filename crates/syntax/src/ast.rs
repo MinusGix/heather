@@ -42,6 +42,9 @@ pub enum DeclKind {
 pub struct Param {
     pub name: String,
     pub ty: Ty,
+    /// Written `{name: T}` — filled by unification at call sites unless the
+    /// call is `@`-marked (fully explicit). See issues/elab-stage2-metas.md.
+    pub implicit: bool,
     pub span: Span,
 }
 
@@ -71,9 +74,10 @@ pub enum ExprKind {
     Var(String),
     /// Numeral literal (desugars to `Zero`/`Succ`).
     Num(u64),
-    /// `Succ(e)` — builtin constructor (also reachable as `Call`).
-    /// `f(a, b, …)`; the head is a name (stage 1).
-    Call(String, Vec<Expr>),
+    /// `f(a, b, …)` or `@f(a, b, …)`; the head is a name (stage 1).
+    /// `explicit` (the `@` prefix) suppresses implicit-argument insertion, so
+    /// every parameter — including `{}`-implicits — must be given positionally.
+    Call { name: String, args: Vec<Expr>, explicit: bool },
     /// `refl` — checking-only.
     Refl,
     /// `match scrut (as bind -> motive)? { Zero => zero, Succ(k, ih) => succ }`

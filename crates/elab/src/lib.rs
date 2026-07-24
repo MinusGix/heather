@@ -28,6 +28,7 @@ use std::rc::Rc;
 use heather_kernel::layer::Layer;
 use heather_kernel::level::Level;
 use heather_kernel::reduce::whnf_type;
+use heather_kernel::subst::{GlobalEntry, GlobalSubst};
 use heather_kernel::term::{
     CtxBase, CtxEntry, GlobalBinding, GlobalCtx, GlobalVar, LocalCtx, LocalSubst, LocalVar,
     SubstTail, Term, Type,
@@ -64,7 +65,9 @@ fn err<T>(msg: impl Into<String>, span: Span) -> R<T> {
     Err(ElabError::Elab { msg: msg.into(), span })
 }
 
-/// What a global name refers to.
+/// What a global name refers to. `implicit[i]` flags whether parameter `i`
+/// (in declaration/telescope order) is an implicit `{}`-parameter, filled by
+/// unification at call sites (issues/elab-stage2-metas.md).
 enum GlobalInfo {
     /// An inlined `fn`: the elaborated closed term, its type, level, and
     /// `|Ψ|` at elaboration time (for global-index shifting on use).
@@ -73,9 +76,10 @@ enum GlobalInfo {
         ty: Rc<Type>,
         level: Level,
         psi_len: u32,
+        implicit: Vec<bool>,
     },
     /// A `theorem`: absolute position of its `Trm_c` binding in Ψ.
-    Theorem { abs: u32 },
+    Theorem { abs: u32, implicit: Vec<bool> },
 }
 
 pub struct Elaborator {
@@ -163,6 +167,7 @@ impl Elaborator {
         typing::check_term(&self.psi, 0, Layer::Code, &empty, &term, &stmt, &stmt_lvl, self.fuel)
             .map_err(|e| ElabError::Kernel { decl: decl.name.clone(), err: e })?;
 
+        let implicit: Vec<bool> = decl.params.iter().map(|p| p.implicit).collect();
         match decl.kind {
             DeclKind::Fn => {
                 self.globals.insert(
@@ -172,6 +177,7 @@ impl Elaborator {
                         ty: Rc::new(stmt),
                         level: stmt_lvl,
                         psi_len: self.psi.bindings.len() as u32,
+                        implicit,
                     },
                 );
             }
@@ -183,7 +189,7 @@ impl Elaborator {
                     ty: Rc::new(stmt),
                     level: stmt_lvl,
                 });
-                self.globals.insert(decl.name.clone(), GlobalInfo::Theorem { abs });
+                self.globals.insert(decl.name.clone(), GlobalInfo::Theorem { abs, implicit });
             }
         }
         Ok(())
@@ -226,9 +232,12 @@ impl Elaborator {
                 };
                 Ok(Term::Refl { level, ty, tm: lhs })
             }
-            ExprKind::Match { motive: None, .. } => {
-                // Non-dependent motive: the expected type, weakened under z.
-                let motive = expected.shift_local(1);
+            ExprKind::Match { motive: None, scrut, .. } => {
+                // Stage-2 motive synthesis (issues/elab-stage2-metas.md): when
+                // the scrutinee is a local variable, abstract it out of the
+                // expected type so the motive is genuinely dependent; otherwise
+                // fall back to the non-dependent motive (expected under `z`).
+                let motive = self.synth_motive(cx, scrut, expected)?;
                 self.elab_match(cx, e, motive, lvl.clone())
             }
             _ => {
@@ -250,7 +259,7 @@ impl Elaborator {
                 Ok((t, Type::Nat, Level::Zero))
             }
             ExprKind::Var(name) => self.resolve(cx, name, e.span),
-            ExprKind::Call(name, args) => {
+            ExprKind::Call { name, args, explicit } => {
                 if name == "Succ" {
                     let [arg] = args.as_slice() else {
                         return err("`Succ` takes exactly one argument", e.span);
@@ -258,29 +267,15 @@ impl Elaborator {
                     let arg = self.elab_check(cx, arg, &Type::Nat, &Level::Zero)?;
                     return Ok((Term::Succ(Rc::new(arg)), Type::Nat, Level::Zero));
                 }
-                let (mut t, mut ty, mut lvl) = self.resolve(cx, name, e.span)?;
-                for arg in args {
-                    let head = self.whnf(cx, &ty, arg.span)?;
-                    let Type::Pi { dom_level, cod_level, dom, cod } = head else {
-                        return err(
-                            format!("`{name}` is applied to too many arguments"),
-                            arg.span,
-                        );
-                    };
-                    let arg_t = self.elab_check(cx, arg, &dom, &dom_level)?;
-                    let arg_rc = Rc::new(arg_t);
-                    ty = cod.apply_local(&LocalSubst::id(&cx.gamma).extended(Rc::clone(&arg_rc)));
-                    lvl = cod_level.clone();
-                    t = Term::App {
-                        fun: Rc::new(t),
-                        dom_level,
-                        cod_level,
-                        dom,
-                        cod,
-                        arg: arg_rc,
-                    };
+                let mask = self.implicit_mask(name);
+                let (head, ty, lvl) = self.resolve(cx, name, e.span)?;
+                // Fully-explicit call (`@f`, or a callee with no implicits):
+                // apply the arguments positionally down the Π spine.
+                if *explicit || !mask.iter().any(|&b| b) {
+                    self.apply_explicit(cx, name, head, ty, lvl, args)
+                } else {
+                    self.apply_implicit(cx, name, head, ty, lvl, args, &mask, e.span)
                 }
-                Ok((t, ty, lvl))
             }
             ExprKind::Match { motive: Some((bind, m)), .. } => {
                 let mut mcx = cx.clone();
@@ -388,6 +383,155 @@ impl Elaborator {
         })
     }
 
+    /// Synthesize the dependent motive for a motive-less `match` in checking
+    /// position. If the scrutinee elaborates to a local variable `x`, the
+    /// motive over `Γ, z : Nat` is the expected type with every occurrence of
+    /// `x` abstracted to `z` (the "clear-and-generalize" move); otherwise the
+    /// scrutinee is not a variable and no dependency can be recovered, so we
+    /// fall back to the non-dependent motive (expected, weakened under `z`).
+    ///
+    /// Both branches are pure kernel substitutions — no metas. The abstraction
+    /// is `expected↑¹` (weaken into `Γ, z`) composed with the swap
+    /// `Var(x+1) ↦ z`; applying `[x/z]` to it recovers `expected`, which is
+    /// exactly the eliminator's motive obligation `M[scrut/z] = expected`.
+    fn synth_motive(&self, cx: &Cx, scrut: &Expr, expected: &Type) -> R<Type> {
+        // Weaken the expected type into `Γ, z : Nat` (z = LocalVar 0, unused).
+        let weak = expected.shift_local(1);
+        let (scrut_t, _, _) = self.elab_infer(cx, scrut)?;
+        let Term::Var(LocalVar(i)) = scrut_t else {
+            return Ok(weak);
+        };
+        // Swap substitution over `Γ, z`: identity except the (shifted)
+        // scrutinee `Var(i+1)` maps to `z = Var(0)`.
+        let mut ext = cx.gamma.clone();
+        ext.entries.push(CtxEntry { ty: Rc::new(Type::Nat), level: Level::Zero });
+        let mut swap = LocalSubst::id(&ext);
+        // `id` puts the outermost entry at index 0: `Var(i+1)` sits at
+        // position `|Γ| - 1 - i` (see LocalSubst::id).
+        let g = cx.gamma.entries.len() as u32;
+        swap.terms[(g - 1 - i) as usize] = Rc::new(Term::Var(LocalVar(0)));
+        Ok(weak.apply_local(&swap))
+    }
+
+    // -- application (explicit + implicit spines) ---------------------------
+
+    /// The implicit-parameter mask of a callable global (empty for locals,
+    /// builtins, and unknown names — none of which take implicits).
+    fn implicit_mask(&self, name: &str) -> Vec<bool> {
+        match self.globals.get(name) {
+            Some(GlobalInfo::Def { implicit, .. } | GlobalInfo::Theorem { implicit, .. }) => {
+                implicit.clone()
+            }
+            None => Vec::new(),
+        }
+    }
+
+    /// Positional application down the Π spine — the stage-1 behaviour, reused
+    /// for `@`-marked calls and callees with no implicits. Supports partial
+    /// application (fewer args than parameters yields a function value).
+    fn apply_explicit(
+        &self,
+        cx: &Cx,
+        name: &str,
+        head: Term,
+        ty: Type,
+        lvl: Level,
+        args: &[Expr],
+    ) -> R<(Term, Type, Level)> {
+        let (mut t, mut ty, mut lvl) = (head, ty, lvl);
+        for arg in args {
+            let head = self.whnf(cx, &ty, arg.span)?;
+            let Type::Pi { dom_level, cod_level, dom, cod } = head else {
+                return err(format!("`{name}` is applied to too many arguments"), arg.span);
+            };
+            let arg_t = self.elab_check(cx, arg, &dom, &dom_level)?;
+            let arg_rc = Rc::new(arg_t);
+            ty = cod.apply_local(&LocalSubst::id(&cx.gamma).extended(Rc::clone(&arg_rc)));
+            lvl = cod_level.clone();
+            t = Term::App { fun: Rc::new(t), dom_level, cod_level, dom, cod, arg: arg_rc };
+        }
+        Ok((t, ty, lvl))
+    }
+
+    /// Application with implicit-argument insertion
+    /// (issues/elab-stage2-metas.md). Each implicit parameter becomes a fresh
+    /// metavariable — represented, per the architecture, as an *innermost*
+    /// Ψ-binding: occurrences are `?m^{id_Γ}` (`GlobalTm` at index `< n`),
+    /// solutions are recorded by unifying each explicit argument's inferred
+    /// type against the parameter's domain, and the whole meta block is
+    /// discharged by one global substitution σ (`apply_global`) that also
+    /// renumbers the committed globals back down. The kernel re-checks the
+    /// zonked term, so a mis-solved meta is a rejection, never unsoundness.
+    ///
+    /// Unlike [`Self::apply_explicit`] this requires *saturating* the spine
+    /// (every explicit parameter needs an argument): mixing partial
+    /// application with implicit insertion is ambiguous, so it is refused.
+    #[allow(clippy::too_many_arguments)]
+    fn apply_implicit(
+        &self,
+        cx: &Cx,
+        name: &str,
+        head: Term,
+        callee_ty: Type,
+        callee_lvl: Level,
+        args: &[Expr],
+        mask: &[bool],
+        span: Span,
+    ) -> R<(Term, Type, Level)> {
+        let n = mask.iter().filter(|&&b| b).count() as u32;
+        // Scratch world: the `n` metas take the innermost Ψ indices `[0, n)`;
+        // committed globals shift up by `n` so nothing collides.
+        let mut t = head.shift_global(n);
+        let mut ty = callee_ty.shift_global(n);
+        let mut lvl = callee_lvl;
+        let mut sols: Vec<Option<Rc<Term>>> = vec![None; n as usize];
+        let mut next_meta = 0u32;
+        let mut args = args.iter();
+        for &is_implicit in mask {
+            let head_ty = self.whnf(cx, &ty, span)?;
+            let Type::Pi { dom_level, cod_level, dom, cod } = head_ty else {
+                return err(format!("`{name}` is applied to too many arguments"), span);
+            };
+            let arg_rc = if is_implicit {
+                // A fresh metavariable `?m^{id_Γ}` at Ψ-index `next_meta`.
+                let m = Term::GlobalTm {
+                    var: GlobalVar(next_meta),
+                    subst: LocalSubst::id(&cx.gamma),
+                };
+                next_meta += 1;
+                Rc::new(m)
+            } else {
+                let arg = args.next().ok_or_else(|| ElabError::Elab {
+                    msg: format!("`{name}` is applied to too few arguments"),
+                    span,
+                })?;
+                let (arg_t, arg_ty, _) = self.elab_infer(cx, arg)?;
+                // Drive meta solutions from the argument's actual type, then
+                // splice the argument into the scratch world.
+                unify_ty(&dom, &arg_ty, n, &mut sols);
+                Rc::new(arg_t.shift_global(n))
+            };
+            ty = cod.apply_local(&LocalSubst::id(&cx.gamma).extended(Rc::clone(&arg_rc)));
+            lvl = cod_level.clone();
+            t = Term::App { fun: Rc::new(t), dom_level, cod_level, dom, cod, arg: arg_rc };
+        }
+        if args.next().is_some() {
+            return err(format!("`{name}` is applied to too many arguments"), span);
+        }
+        // Discharge the meta block: `entries[k]` is the payload for Ψ-index
+        // `n-1-k` (apply_global's convention), so it takes `sols[n-1-k]`.
+        let mut entries = Vec::with_capacity(n as usize);
+        for k in 0..n {
+            let sol = sols[(n - 1 - k) as usize].clone().ok_or_else(|| ElabError::Elab {
+                msg: format!("could not infer an implicit argument of `{name}`"),
+                span,
+            })?;
+            entries.push(GlobalEntry::Tm(sol));
+        }
+        let sigma = GlobalSubst { entries };
+        Ok((t.apply_global(&sigma), ty.apply_global(&sigma), lvl))
+    }
+
     // -- names --------------------------------------------------------------
 
     fn resolve(&self, cx: &Cx, name: &str, span: Span) -> R<(Term, Type, Level)> {
@@ -405,13 +549,13 @@ impl Elaborator {
             ));
         }
         match self.globals.get(name) {
-            Some(GlobalInfo::Def { term, ty, level, psi_len }) => {
+            Some(GlobalInfo::Def { term, ty, level, psi_len, .. }) => {
                 // Shift global indices across whatever Ψ grew since the def
                 // was elaborated (GlobalVar counts from the innermost end).
                 let by = self.psi.bindings.len() as u32 - psi_len;
                 Ok(((**term).shift_global(by), (**ty).shift_global(by), level.clone()))
             }
-            Some(GlobalInfo::Theorem { abs }) => {
+            Some(GlobalInfo::Theorem { abs, .. }) => {
                 let len = self.psi.bindings.len() as u32;
                 let var = GlobalVar(len - 1 - abs);
                 let GlobalBinding::Tm { ty, level, .. } =
@@ -477,4 +621,49 @@ fn embed(gamma: &LocalCtx, extra: u32) -> LocalSubst {
         .map(|j| Rc::new(Term::Var(LocalVar(m + extra - 1 - j))))
         .collect();
     LocalSubst { tail, terms }
+}
+
+/// Best-effort structural unification driving implicit-argument solutions
+/// (issues/elab-stage2-metas.md). `pat` is a parameter domain in the scratch
+/// world (metavariables at Ψ-indices `< n`); `subj` is an argument's inferred
+/// type. Solving is deliberately incomplete: this mirrors the fragment of
+/// `conv.rs` the Nat suite exercises (`Id`/`Nat` congruence), records a
+/// solution whenever a meta meets a rigid subterm, and otherwise makes no
+/// claim — an unsolved meta is reported by the caller, a *wrong* solution is
+/// caught by the kernel's re-check. It never fails: it only ever *learns*.
+fn unify_ty(pat: &Type, subj: &Type, n: u32, sols: &mut [Option<Rc<Term>>]) {
+    if let (
+        Type::Id { ty: t1, lhs: a1, rhs: b1, .. },
+        Type::Id { ty: t2, lhs: a2, rhs: b2, .. },
+    ) = (pat, subj)
+    {
+        unify_ty(t1, t2, n, sols);
+        unify_tm(a1, a2, n, sols);
+        unify_tm(b1, b2, n, sols);
+    }
+    // Nat vs Nat and every other pairing: nothing to solve here.
+}
+
+/// Term-level companion of [`unify_ty`]. When `pat` is an unsolved
+/// metavariable under a variable renaming (the Miller pattern condition —
+/// here always the identity `id_Γ`, so the solution is the subject verbatim),
+/// record it; otherwise recurse through matching heads toward nested metas.
+fn unify_tm(pat: &Term, subj: &Term, n: u32, sols: &mut [Option<Rc<Term>>]) {
+    if let Term::GlobalTm { var, subst } = pat
+        && var.0 < n
+    {
+        let is_pattern = subst.terms.iter().all(|t| matches!(**t, Term::Var(_)));
+        if is_pattern && sols[var.0 as usize].is_none() {
+            sols[var.0 as usize] = Some(Rc::new(subj.clone()));
+        }
+        return;
+    }
+    match (pat, subj) {
+        (Term::Succ(a), Term::Succ(b)) => unify_tm(a, b, n, sols),
+        (Term::App { fun: f1, arg: a1, .. }, Term::App { fun: f2, arg: a2, .. }) => {
+            unify_tm(f1, f2, n, sols);
+            unify_tm(a1, a2, n, sols);
+        }
+        _ => {}
+    }
 }

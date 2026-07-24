@@ -3,7 +3,7 @@ title: "Meta: frontend roadmap and current focus"
 status: open
 labels: [frontend,meta]
 created: 2026-07-23
-updated: 2026-07-23
+updated: 2026-07-24
 ---
 
 Organizing issue for the frontend push (the frontend-first route,
@@ -41,3 +41,5 @@ goal-solver meta-functions (sketch round 3 §2).
 
 - 2026-07-23: Opened after stage 1 landed, alongside the granular issue
   split (stage2/match-recursion/goal-holes/surface-operators/ch07-pass).
+- 2026-07-24: Stage 2 ([[elab-stage2-metas]]) landed — focus items 3 (metas/motives) done for the level-0 Nat suite. Level-meta *inference* deferred: no level constraints exist below layer m (universe polymorphism is layer-m only), so it is naturally sequenced with the later modal/layer-m work, not with stage 2. Next focus: item 4 [[surface-operators]] (+/== operators, method calls, calc) — now unblocked and high-leverage on top of implicit endpoints — interleaved with item 2 [[metatheory-ch07-pass]] before [[inductive-compiler]] term volume.
+- 2026-07-24: Deferred stage-2 unifier work promoted to a jumpable item: [[elab-unifier-completeness]] (postponement, general pattern inversion, level-meta inference). Kernel-gated, none are correctness holes; pick up when a program needs them.

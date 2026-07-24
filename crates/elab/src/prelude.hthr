@@ -2,14 +2,17 @@
 // versions need layer-m universe polymorphism — a later stage). Proofs are
 // ordinary expressions; `refl` is just a value (docs/sketches/surface-v1.md).
 
-theorem sym(a: Nat, b: Nat, p: a == b): b == a {
+// Endpoints are implicit `{}`-parameters: they are recovered by unification
+// from the proof argument's type (issues/elab-stage2-metas.md). `@sym(a,b,p)`
+// still supplies them positionally.
+theorem sym({a: Nat}, {b: Nat}, p: a == b): b == a {
     j(p, (y, q) -> y == a, refl)
 }
 
-theorem trans(a: Nat, b: Nat, c: Nat, p: a == b, q: b == c): a == c {
+theorem trans({a: Nat}, {b: Nat}, {c: Nat}, p: a == b, q: b == c): a == c {
     j(q, (y, r) -> a == y, p)
 }
 
-theorem cong_succ(a: Nat, b: Nat, p: a == b): Succ(a) == Succ(b) {
+theorem cong_succ({a: Nat}, {b: Nat}, p: a == b): Succ(a) == Succ(b) {
     j(p, (y, q) -> Succ(a) == Succ(y), refl)
 }

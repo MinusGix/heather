@@ -14,6 +14,7 @@ pub enum TokKind {
     RBrace,
     Comma,
     Colon,
+    At,        // @
     Arrow,     // ->
     FatArrow,  // =>
     EqEq,      // ==
@@ -89,6 +90,7 @@ pub fn lex(src: &str) -> Result<Vec<Tok>, LexError> {
                 b'}' => (TokKind::RBrace, 1),
                 b',' => (TokKind::Comma, 1),
                 b':' => (TokKind::Colon, 1),
+                b'@' => (TokKind::At, 1),
                 _ => {
                     return Err(LexError {
                         msg: format!("unexpected character {:?}", c as char),

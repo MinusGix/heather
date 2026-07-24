@@ -1,9 +1,9 @@
 ---
 title: "Elaborator stage 2: metas-as-Psi-globals + level inference"
-status: open
+status: closed
 labels: [frontend,elaboration]
 created: 2026-07-23
-updated: 2026-07-23
+updated: 2026-07-24
 ---
 
 Stage 2 of [[elaborator-design]] (architecture decided there; this is the
@@ -43,3 +43,4 @@ accepted (they are the fallback the sketches promise).
 ## Log
 
 - 2026-07-23: Opened as part of the granular issue split after stage 1.
+- 2026-07-24: Stage 2 landed (both ergonomics). Motive synthesis: motive-less `match` in checking position abstracts a *variable* scrutinee out of the expected type via a pure kernel substitution (shift_local + an apply_local swap `Var(scrut+1)->z`); non-variable scrutinees fall back to the non-dependent motive. No metas. Implicit endpoints: `{}`-implicit params (surface) + `@f(...)` explicit-override; each implicit becomes a fresh metavariable represented as an *innermost* Psi-binding `?m^{id_G}` (GlobalTm at index <n, committed globals shifted up by n), solutions recorded by a best-effort unifier (Id/Nat congruence, Miller-pattern meta solve = subject verbatim since delta is identity on G), whole meta block discharged by one apply_global sigma that also renumbers committed globals back down. Kernel re-checks the zonked term, so a mis-solved meta is a rejection not unsoundness. Acceptance MET: crates/elab/tests/implicit_args.rs (annotation-free Nat suite, 7 Psi-globals) + motive_synth.rs green; stage-1 explicit forms kept green in nat_suite.rs via `@`. Deferred (not needed by the level-0 suite, file as follow-up): level metas/inference; general delta inversion + constraint postponement (current unifier never blocks — unsolved metas error, wrong solutions are kernel-caught).
