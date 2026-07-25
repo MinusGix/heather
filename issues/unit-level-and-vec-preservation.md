@@ -134,8 +134,13 @@ reduces there. Roughly two lines.
 **The question to answer first:** does anything require every layer-`p` MLTT
 type at level `l` to have a code at `Ty l`? (b) creates `Unit @ 1` at `p` with
 no code at `Ty 1`. If Tarski-universe completeness is claimed or relied on
-anywhere — ch. 07's universe case, ch. 08 — (b) is out. Not yet checked; do
-not implement before checking.
+anywhere — ch. 07's universe case, ch. 08 — (b) is out.
+
+**Partly answered** by [[metatheory-lemma-sweep]]: no Tarski-completeness
+claim exists in the paper (citations in that issue). Still **not** a green
+light — ch. 08's decidability argument is unread, and the kernel's own "boxed
+code stays exhaustively recursable" invariant is ours, not the paper's, so it
+has to be argued separately. Do not implement (b) before both.
 
 ### (c) `Vec^l(T;0)` is its own whnf, proof-irrelevant
 
@@ -175,9 +180,20 @@ generated hundreds of times per run and nothing looked at it.
 kernel reverted — first run, no tuning. Both halves of a paper lemma are worth
 having; half of one is a blind spot shaped exactly like the lemma's other half.
 
-Worth a sweep: which other ch. 05/06 lemmas have a stated form we do *not*
-machine-check? Determinacy and the substitution lemmas are the obvious next
-candidates.
+**The sweep is done: [[metatheory-lemma-sweep]]**, audit in
+`docs/ch05-06-lemma-audit.md`. All 53 lemma environments of ch. 05/06 with a
+verdict each; nine new property tests. It found the same shape twice more —
+the *type* half of ch. 06's Soundness (`06:148`) was missing next to the term
+half, one lemma before Preservation, and the suite's own generator-soundness
+oracle was a single 300-case stream standing in for a precondition ten property
+tests depend on (it was violated at 1 in 3000). Determinacy turned out to hold
+by construction; the residue that does not — `step(t).is_none() ⟺ is_whnf(t)`,
+two independent copies of the `Vec`/`Fin` stuck-length condition — is now
+checked.
+
+Also from the sweep, for candidate (b) below: **no Tarski-completeness claim
+appears in the paper.** See [[metatheory-lemma-sweep]] for the citations. That
+is evidence for (b), not a green light — ch. 08 is still unread.
 
 ## Log
 
@@ -187,3 +203,4 @@ candidates.
   following commit. Kernel is back to the pre-fix behaviour with the gap
   pinned by tests and the missing property added. Fix (a) is the recommended
   direction; (b) is cheaper but gated on the Tarski-completeness question.
+- 2026-07-25: The sweep this issue asked for is done: [[metatheory-lemma-sweep]], audit at docs/ch05-06-lemma-audit.md. Relevant to this issue specifically: (i) candidate (b)'s gating question — does anything require every layer-p type at level l to have a code at Ty l — was checked against the paper and NO Tarski-completeness claim exists. 'Tarski' occurs five times in ch. 04 (04:96-120, :203, :781), always about the separation of types from terms and why Russell-style universes cannot state the indices of code, never a surjectivity property; and ch. 07's term relation at Ty l (07:512-514) is by cases on the code whnf, saying which codes are related, never that every related type is an El. Evidence for (b), NOT a green light: ch. 08's decidability argument is still unread, and so is our own 'boxed code stays exhaustively recursable' invariant, which is ours and not the paper's. (ii) The audit ranks ch. 05 Static Code (05:1055) as the top remaining gap, and it is the one that bears on this decision — at layers v/c convertibility must BE syntactic identity modulo level equivalence, which is what makes the code eliminator's intensional analysis meaningful. Only hand-built instances today. Worth closing before choosing between (a) and (b). (iii) ch. 05's Lifting lemma is now machine-checked (p->m arm), which the sweep needed in order to justify a generator fix.

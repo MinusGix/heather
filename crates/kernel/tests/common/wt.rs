@@ -302,13 +302,13 @@ pub fn gen_wt_type(env: &WtEnv, r: &mut Rng, b: u32) -> (Rc<Type>, Level) {
                 );
             }
             7 if env.layer == Layer::Meta => {
-                let ctx = gen_wt_ctx(env, r, b / 2, Layer::Prog);
+                let ctx = gen_wt_ctx(env, r, b / 2, Layer::Code);
                 let level = gen_wf_level(env.univs, r, 1);
                 return (rty(Type::CodeTy { ctx, level }), Level::Zero);
             }
             8 if b > 0 && env.layer == Layer::Meta => {
-                let ctx = gen_wt_ctx(env, r, b / 2, Layer::Prog);
-                let (ty, cl) = gen_wt_type(&env.in_ctx(ctx.clone(), Layer::Prog), r, b / 2);
+                let ctx = gen_wt_ctx(env, r, b / 2, Layer::Code);
+                let (ty, cl) = gen_wt_type(&env.in_ctx(ctx.clone(), Layer::Code), r, b / 2);
                 return (rty(Type::CodeTm { ctx, ty, level: cl }), Level::Zero);
             }
             9 if b > 0 => {
@@ -1200,7 +1200,7 @@ pub fn gen_wt_term(env: &WtEnv, r: &mut Rng, b: u32) -> (Rc<Term>, Rc<Type>, Lev
 /// contextual type and the body re-boxes the bound global — exercising
 /// checking-only `box` bodies and the `M[box u^id/x]` substitution.
 fn gen_letbox_tm(env: &WtEnv, r: &mut Rng, b: u32) -> (Rc<Term>, Rc<Type>, Level) {
-    let delta = gen_wt_ctx(env, r, b / 2, Layer::Prog);
+    let delta = gen_wt_ctx(env, r, b / 2, Layer::Code);
     let ce = env.in_ctx(delta.clone(), Layer::Code);
     let (tc, cty, cl) = gen_wt_term(&ce, r, b / 2);
     if r.below(2) == 0 {
@@ -1238,7 +1238,7 @@ fn gen_letbox_tm(env: &WtEnv, r: &mut Rng, b: u32) -> (Rc<Term>, Rc<Type>, Level
 }
 
 fn gen_letbox_ty(env: &WtEnv, r: &mut Rng, b: u32) -> (Rc<Term>, Rc<Type>, Level) {
-    let delta = gen_wt_ctx(env, r, b / 2, Layer::Prog);
+    let delta = gen_wt_ctx(env, r, b / 2, Layer::Code);
     let ce = env.in_ctx(delta.clone(), Layer::Code);
     let (cty, cl) = gen_wt_type(&ce, r, b / 2);
     if r.below(2) == 0 {
@@ -1443,7 +1443,7 @@ fn gen_const_rec(
         let (scrut, delta, cty, cl) = match neutral {
             Some((x, ctx, Some(cty), cl)) => (rt(v(x)), ctx, cty, cl),
             _ => {
-                let delta = gen_wt_ctx(env, r, b / 4, Layer::Prog);
+                let delta = gen_wt_ctx(env, r, b / 4, Layer::Code);
                 let ce = env.in_ctx(delta.clone(), Layer::Code);
                 let (tc, cty, cl) = gen_wt_term(&ce, r, b / 4);
                 (rt(Term::BoxTm(tc)), delta, cty, cl)
@@ -1467,7 +1467,7 @@ fn gen_const_rec(
         let (scrut, delta, cl) = match neutral {
             Some((x, ctx, None, cl)) => (rt(v(x)), ctx, cl),
             _ => {
-                let delta = gen_wt_ctx(env, r, b / 4, Layer::Prog);
+                let delta = gen_wt_ctx(env, r, b / 4, Layer::Code);
                 let ce = env.in_ctx(delta.clone(), Layer::Code);
                 let (cty, cl) = gen_wt_type(&ce, r, b / 4);
                 (rt(Term::BoxTy(cty)), delta, cl)
@@ -1562,7 +1562,7 @@ pub fn perturb_conv(
         }
         // letbox over fresh boxed code with the constant motive T.
         2 => {
-            let delta = gen_wt_ctx(env, r, 2, Layer::Prog);
+            let delta = gen_wt_ctx(env, r, 2, Layer::Code);
             let ce = env.in_ctx(delta.clone(), Layer::Code);
             let (tc, cty, cl) = gen_wt_term(&ce, r, 2);
             Term::LetBoxTm {
@@ -1656,7 +1656,7 @@ pub struct NatRec {
 pub fn gen_nat_rec(base: &WtEnv, r: &mut Rng, tm_variant: bool) -> NatRec {
     let mut env = base.clone();
     env.layer = Layer::Meta;
-    let ctx = gen_wt_ctx(&env, r, 2, Layer::Prog);
+    let ctx = gen_wt_ctx(&env, r, 2, Layer::Code);
     let (entry, ty, code_level) = if tm_variant {
         let ce = env.in_ctx(ctx.clone(), Layer::Code);
         let (cty, cl) = gen_wt_type(&ce, r, 2);
