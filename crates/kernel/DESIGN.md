@@ -158,20 +158,29 @@ term-motive one. `tm_elim_wf`'s step binding reuses `term::wf_step_telescope`
 verbatim, which is why the rec.rs, typing.rs and reduce.rs transcriptions of
 it cannot drift.
 
-**`Unit` and `Empty` are level-polymorphic** (2026-07-25, phase 4):
-`⊢ Unit @ l` and `⊢ Empty @ l` for every well-formed `l`, with `ty_infer`
-reporting `0` as the *least* level and `ty_check` accepting any. This is not
-a convenience and not cumulativity — it is what makes **type-level subject
-reduction hold across `Vec^l(T; 0) ⇝ Unit`**. `Vec` is the first type former
-whose whnf is chosen by a *term*; `El` is chosen by a term too, but its term
-is a code carrying its own level, so `El` cannot drop one, while `Vec`'s
-bare `Nat` length can. Without the polymorphism a well-formed
-`Π^{1,0}(_ : Vec^1(T;0)). Nat` steps to an ill-formed
-`Π^{1,0}(_ : Unit). Nat`. Every other former keeps an exact level, and `Vec`
-only ever over-declares (the successor case preserves `l`, the nullary case
-drops to `0`), so nothing large enters a small universe. The rule of thumb:
-*a former with no components has nothing bounding its level from below.*
-Derivation and the LR consequence: `docs/metatheory-ch07-extensions.md` §10.3.
+**Every type has exactly one level, and this is load-bearing** (2026-07-25,
+phase 4). Not tidiness: DeLaM ch. 04 §Non-cumulativity turns on it, because
+the code eliminator must reconstruct code from its components per branch,
+which is only expressible when each term has a unique type. `box T` is
+checking-only and checks `T` at the level in its `□`-type, so **a type
+checking at two levels is a term with two types**, and `rec.rs`'s branch
+telescopes are built against uniqueness (`ty_ty` binds a universe because
+`Ty ℓ`'s level varies; `ty_nat`/`ty_unit` bind none because theirs do not).
+
+The live consequence: **`Vec^l(T; 0) ⇝ Unit` drops the level**, so type-level
+preservation (ch. 06's *Preservation* lemma, at the same `l`) fails for
+`l ≠ 0` — a well-formed `Π^{1,0}(_ : Vec^1(T;0)). Nat` steps to an ill-formed
+`Π^{1,0}(_ : Unit). Nat`. `Vec` is the first type former whose whnf is chosen
+by a *term*; `El` is chosen by a term too, but its term is a code carrying
+its own level, so `El` cannot drop one, while `Vec`'s bare `Nat` length can.
+
+Making `Unit`/`Empty` level-polymorphic fixes that in one line and is
+**wrong** — it was landed and reverted the same day, because it gives
+`box Unit` a type at every level and breaks the code recursor's preservation.
+The favoured repair is level-*indexed* `Unit^l`/`Empty^l`, turning
+`ty_unit`/`ty_empty` into copies of `ty_ty`. Open, with measurements and
+three costed candidates: `issues/unit-level-and-vec-preservation.md`;
+LR consequences in `docs/metatheory-ch07-extensions.md` §10.3.
 
 Explicitly out of v0: coinduction/effects, typeclasses, compiler machinery,
 inductive types beyond Nat, Id, Σ, Unit, Empty, binary sums, W, and the

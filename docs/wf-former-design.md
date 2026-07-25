@@ -52,14 +52,17 @@ former, which is what removes wrinkle 1 of the choice doc: the elements no
 longer need to be *code-expressible*, so `Vec(Wf …; k)` is stateable with no
 side condition on shapes.
 
-*Level side-condition (found in the ch. 07 round, §8; fixed).* The nullary
-reduct `Unit` does not carry `l`, so type-level subject reduction needs
-`Unit` (and, for symmetry, `Empty`) to be **level-polymorphic** in
-formation — otherwise a well-formed `Π^{1,0}(_ : Vec^1(T;0)). Nat` steps to
-an ill-formed one. `Vec` is the first former whose whnf is chosen by a term
-that does not carry a level (`El`'s does), and this is the one place that
-shows. The successor case preserves `l` exactly, and `Fin` needs nothing —
-it is declared at `0` and both its reducts land there.
+*Level defect (found in the ch. 07 round, §8; **open**).* The nullary reduct
+`Unit` does not carry `l`, so a well-formed `Π^{1,0}(_ : Vec^1(T;0)). Nat`
+steps to an ill-formed one: type-level preservation fails for `l ≠ 0`. `Vec`
+is the first former whose whnf is chosen by a term that does not carry a
+level (`El`'s does), and this is the one place that shows. The successor
+case preserves `l` exactly, and `Fin` needs nothing — declared at `0`, both
+reducts land there. The one-line repair (level-polymorphic `Unit`) is wrong:
+it gives `box Unit` a type at every level, which the code eliminator cannot
+survive. Tracked with three costed candidates in
+`issues/unit-level-and-vec-preservation.md`; it does not affect anything else
+in this document.
 
 ### 1.2 `Fin` — canonical finite index types
 
@@ -293,11 +296,15 @@ Results, against what this section predicted:
   ih, and the `Π` term relation is the applied form — the semantic
   counterpart of "the ih is transient" (§4).
 
-**One real defect fell out**, invisible at level 0 and so missed by every
-test and prototype: `Vec^l(T;0) ⇝ Unit` dropped the level, breaking
-type-level subject reduction for `l ≠ 0`. Fixed by making the two
-component-free formers level-polymorphic; see §1.1 and
-`docs/metatheory-ch07-extensions.md` §10.3.
+**One real defect fell out**: `Vec^l(T;0) ⇝ Unit` drops the level, breaking
+ch. 06's *Preservation* lemma for `l ≠ 0`. It survived since phase 1 not
+because the witness was rare — the generator produces it routinely — but
+because the property that would observe it did not exist: the suite had the
+*term* half of preservation and no type half. That property now exists and
+fails on seed 102. The defect itself is **open**: the one-line repair breaks
+uniqueness of types at `□`, and the code eliminator depends on that. See
+§1.1, `docs/metatheory-ch07-extensions.md` §10.3, and
+`issues/unit-level-and-vec-preservation.md`.
 
 ---
 

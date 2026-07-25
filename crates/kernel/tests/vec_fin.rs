@@ -237,26 +237,33 @@ fn formation_and_levels() {
     ck_ty(&g1, &fin(v(0)), c(0));
 }
 
-/// Type-level subject reduction across `Vec^l(T; 0) ⇝ Unit`.
+/// **Known gap**, pinned so it cannot change silently:
+/// `Vec^l(T; 0) ⇝ Unit` drops the level, so type-level preservation
+/// (DeLaM ch. 06, Lemma *Preservation*: `⊢ T @ l` and `T ⇝ T'` imply
+/// `⊢ T' @ l`) fails for every `l ≠ 0`.
 ///
-/// This is the ch. 07 pass's one kernel finding
-/// (`docs/metatheory-ch07-extensions.md` §10). `Vec` is the first former
-/// whose weak head normal form is chosen by a *term*, and at length `0` the
-/// chosen whnf is `Unit`, whose least level is `0` — so a type declared at
-/// `l > 0` steps to one that, under an exact-level formation rule, is not
-/// well-formed at `l`. `El` is chosen by a term too but cannot drop a level,
-/// because its term is a code that carries one. The fix is that the two
-/// component-free formers are level-polymorphic; nothing else moved, and
-/// `Vec` only ever over-declares, so no large type enters a small universe.
+/// `Vec` is the kernel's first type former whose whnf is chosen by a *term*.
+/// `El` is chosen by a term too but cannot drop a level, because its term is
+/// a code that carries one; `Vec`'s length is a bare `Nat`, and at `0` the
+/// reduct `Unit` has nothing to do with `l`.
+///
+/// The obvious repair — letting `Unit`/`Empty` check at any level — was tried
+/// and **reverted**: it gives `box Unit` a type at every level, and DeLaM
+/// ch. 04 §Non-cumulativity makes unique types load-bearing for the code
+/// eliminator (`rec.rs`'s `ty_unit` binds no universe and reconstructs at
+/// `ℓ := 0`, so the recursor's `M[code_level/ℓ]` and the branch's `M[0/ℓ]`
+/// come apart). Three candidate fixes and the full evidence are in
+/// `issues/unit-level-and-vec-preservation.md`.
 #[test]
-fn vec_at_zero_reduces_without_dropping_its_level() {
+fn vec_at_zero_drops_its_level_known_gap() {
     let g = nil_ctx();
     let big = Type::Vec { level: c(1), elem: rty(Type::Ty(c(0))), len: rt(Term::Zero) };
     ck_ty(&g, &big, c(1));
     assert_eq!(whnf(&big, &g), Type::Unit);
-    // The reduct must still be well-formed at the level it was declared at.
-    ck_ty(&g, &Type::Unit, c(1));
-    // …and in a position where the level is actually consumed.
+    // The reduct is *not* well-formed at the level it was declared at.
+    check_type(&GlobalCtx::default(), 0, Layer::Prog, &g, &Type::Unit, &c(1), FUEL)
+        .expect_err("Unit is level-polymorphic again — see the issue before celebrating");
+    // …and the gap is observable where the level is actually consumed.
     let pi = |dom: Type| Type::Pi {
         dom_level: c(1),
         cod_level: c(0),
@@ -264,37 +271,44 @@ fn vec_at_zero_reduces_without_dropping_its_level() {
         cod: rty(Type::Nat),
     };
     ck_ty(&g, &pi(big.clone()), c(1));
-    ck_ty(&g, &pi(whnf(&big, &g)), c(1));
-    // Successor lengths preserve the level on the nose, so only the nullary
-    // case ever needed this.
+    check_type(&GlobalCtx::default(), 0, Layer::Prog, &g, &pi(whnf(&big, &g)), &c(1), FUEL)
+        .expect_err("the reduct of a well-formed Π is well-formed — gap closed?");
+    // Successor lengths preserve the level on the nose, so the nullary case
+    // is the *only* one at issue…
     let big1 = Type::Vec { level: c(1), elem: rty(Type::Ty(c(0))), len: rt(nat(1)) };
     ck_ty(&g, &whnf(&big1, &g), c(1));
+    // …and `Fin` is unaffected: declared at 0, both reducts land at 0.
+    ck_ty(&g, &whnf(&fin(Term::Zero), &g), c(0));
+    ck_ty(&g, &whnf(&fin(nat(1)), &g), c(0));
 }
 
-/// The polymorphism is confined to the component-free formers: everything
-/// else still has an exact level, so this is not cumulativity by the back
-/// door. `Fin` needed nothing — it is declared at `0` and both its reducts
-/// (`Empty`, `Unit +^{0,0} Fin k`) land there.
+/// The invariant the repair must not break: **each type has one level**, so
+/// each `box T` has one type. This is what `rec.rs`'s branch telescopes are
+/// built against — `ty_ty` binds a universe because `Ty ℓ`'s level varies,
+/// `ty_unit` binds none because `Unit`'s does not.
 #[test]
-fn only_unit_and_empty_are_level_polymorphic() {
+fn every_type_has_exactly_one_level() {
     let g = nil_ctx();
-    ck_ty(&g, &Type::Unit, c(0));
-    ck_ty(&g, &Type::Unit, c(2));
-    ck_ty(&g, &Type::Empty, c(2));
-    // Nat is not lifted…
-    check_type(&GlobalCtx::default(), 0, Layer::Prog, &g, &Type::Nat, &c(1), FUEL)
-        .expect_err("Nat must stay at 0");
-    // …nor is a Vec whose element pins the level…
-    let v0 = Type::Vec { level: c(0), elem: rty(Type::Nat), len: rt(Term::Zero) };
-    check_type(&GlobalCtx::default(), 0, Layer::Prog, &g, &v0, &c(1), FUEL)
-        .expect_err("Vec must keep its declared level");
-    // …nor is Fin, which never needed lifting.
-    check_type(&GlobalCtx::default(), 0, Layer::Prog, &g, &fin(nat(2)), &c(1), FUEL)
-        .expect_err("Fin must stay at 0");
-    // The level must still be well-formed: no unbound universe variable.
-    let unbound = Level::Var(heather_kernel::level::UnivVar(0));
-    check_type(&GlobalCtx::default(), 0, Layer::Prog, &g, &Type::Unit, &unbound, FUEL)
-        .expect_err("an unbound universe variable is not a level");
+    let psi = GlobalCtx::default();
+    let ck_at = |t: &Type, l: Level| check_type(&psi, 0, Layer::Prog, &g, t, &l, FUEL);
+
+    for (name, t) in [
+        ("Unit", Type::Unit),
+        ("Empty", Type::Empty),
+        ("Nat", Type::Nat),
+        ("Fin 2", fin(nat(2))),
+        ("Vec^0(Nat;0)", Type::Vec { level: c(0), elem: rty(Type::Nat), len: rt(Term::Zero) }),
+    ] {
+        ck_at(&t, c(0)).unwrap_or_else(|e| panic!("{name} must check at 0: {e:?}"));
+        ck_at(&t, c(1)).expect_err(&format!("{name} must NOT also check at 1"));
+    }
+    // And the box that reads off that level stays single-typed.
+    let bu = Term::BoxTy(rty(Type::Unit));
+    let code_at = |l: Level| Type::CodeTy { ctx: nil_ctx(), level: l };
+    check_term(&psi, 0, Layer::Meta, &g, &bu, &code_at(c(0)), &c(0), FUEL)
+        .expect("box Unit : □(· ⊢ Ty 0)");
+    check_term(&psi, 0, Layer::Meta, &g, &bu, &code_at(c(1)), &c(0), FUEL)
+        .expect_err("box Unit must NOT also inhabit □(· ⊢ Ty 1)");
 }
 
 #[test]

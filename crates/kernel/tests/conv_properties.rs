@@ -28,9 +28,9 @@ use common::{law, Rng};
 use heather_kernel::conv::conv_term;
 use heather_kernel::layer::Layer;
 use heather_kernel::level::Level;
-use heather_kernel::reduce::{step_term, whnf_term};
+use heather_kernel::reduce::{step_term, step_type, whnf_term};
 use heather_kernel::term::{Term, Type};
-use heather_kernel::typing::{check_global_ctx, check_local_ctx, check_term};
+use heather_kernel::typing::{check_global_ctx, check_local_ctx, check_term, check_type};
 
 const CASES: u64 = 300;
 const BUDGET: u32 = 8;
@@ -88,6 +88,46 @@ fn conv_relates_term_to_its_whnf() {
         assert!(lr.is_ok(), "seed {seed}: t ≉ whnf(t): {lr:?}");
         let rl = conv_term(&env.psi, &env.gamma, at, &w, &t, &ty, &l, FUEL);
         assert!(rl.is_ok(), "seed {seed}: whnf(t) ≉ t: {rl:?}");
+    }
+}
+
+/// Preservation for **types**, the other half of DeLaM ch. 06's lemma:
+/// *if `⊢_i T @ l` and `T ⇝ T'` then `⊢_i T' @ l`* — at the **same** `l`.
+///
+/// `reduction_preserves_type` below is the term half. There was no type half
+/// until 2026-07-25, which is the whole reason `Vec^l(T;0) ⇝ Unit` could
+/// drop a level unnoticed since phase 1: the generator was producing exactly
+/// that witness all along (`gen_wt_type` takes `Vec`'s level from its element
+/// and picks a small literal length two times in three), and nothing was
+/// looking. With the check in place it fails on the first run, seed 102.
+///
+/// **Known gap, deliberately skipped:** `Unit`/`Empty` are fixed at level 0,
+/// so `Vec^l(T;0) ⇝ Unit` violates this for `l ≠ 0`. The obvious repair
+/// (level-polymorphic `Unit`) is *wrong* — it gives `box Unit` more than one
+/// type and breaks the code recursor. Tracked, with three candidate fixes, in
+/// `issues/unit-level-and-vec-preservation.md`; pinned by
+/// `vec_fin.rs::vec_at_zero_drops_its_level_known_gap`. The skip is narrow on
+/// purpose — only this reduct, only this error — so every other former stays
+/// covered. Same shape as the `NotInferable` skip below.
+#[test]
+fn type_reduction_preserves_level() {
+    for seed in 0..CASES {
+        let mut r = Rng::new(seed ^ 0x84222325cbf29ce4);
+        let env = gen_wt_env(&mut r);
+        let (ty, l) = gen_wt_type(&env, &mut r, BUDGET);
+        let mut cur = (*ty).clone();
+        for _ in 0..16 {
+            let Some(next) = step_type(&cur, &env.gamma) else { break };
+            let res = check_type(&env.psi, env.univs, env.layer, &env.gamma, &next, &l, FUEL);
+            let known_gap = matches!(next, Type::Unit | Type::Empty)
+                && !l.equiv(&Level::Zero)
+                && res == Err(heather_kernel::typing::TypeError::LevelMismatch);
+            if known_gap {
+                break;
+            }
+            assert!(res.is_ok(), "seed {seed}: type preservation violated: {res:?}");
+            cur = next;
+        }
     }
 }
 
