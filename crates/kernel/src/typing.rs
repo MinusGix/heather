@@ -420,15 +420,36 @@ impl Tc {
 
     // -- types --------------------------------------------------------------
 
-    /// `⊢_i T @ l` for a given `l`: infer the canonical level and compare
-    /// (the level-conversion rule).
+    /// `⊢_i T @ l` for a given `l`: infer the least level and compare (the
+    /// level-conversion rule) — except for the two *component-free* formers,
+    /// which are level-polymorphic.
+    ///
+    /// `Unit` and `Empty` have no components, so nothing bounds their level
+    /// from below and every well-formed `l` is a legitimate one. This is not
+    /// a convenience: `Vec^l(T; 0) ⇝ Unit` (`docs/wf-former-design.md` §1.1)
+    /// makes a type declared at `l` step to `Unit`, so without polymorphic
+    /// `Unit`-formation *type-level subject reduction fails* for every
+    /// `l ≠ 0` — a well-formed `Π^{1,0}(_ : Vec^1(T;0)). Nat` would step to
+    /// an ill-formed `Π^{1,0}(_ : Unit). Nat`. `Vec` is the kernel's first
+    /// type former whose weak head normal form is chosen by a *term*; `El`
+    /// does that too, but its term is a code that carries its own level, so
+    /// `El` cannot drop one. See `docs/metatheory-ch07-extensions.md` §10.
+    ///
+    /// No cumulativity is implied: every *other* former still has an exact
+    /// level, and `Vec` only ever over-declares (`succ` preserves `l`, `0`
+    /// drops to `0`), so nothing large enters a small universe.
     fn ty_check(&self, env: &Env, t: &Type, l: &Level) -> R {
+        if matches!(t, Type::Unit | Type::Empty) {
+            self.not_var_layer(env)?;
+            return self.level_wf(env, l);
+        }
         let inferred = self.ty_infer(env, t)?;
         self.lev_eq(l, &inferred)
     }
 
-    /// `⊢_i T @ ?` — infer the canonical level of `T`. No type formation
-    /// rule is stated at layer v.
+    /// `⊢_i T @ ?` — infer the *least* level of `T` (canonical for every
+    /// former but `Unit`/`Empty`, which also check at any greater one; see
+    /// [`Tc::ty_check`]). No type formation rule is stated at layer v.
     fn ty_infer(&self, env: &Env, t: &Type) -> R<Level> {
         self.not_var_layer(env)?;
         match t {
@@ -479,8 +500,10 @@ impl Tc {
                 self.ty_check(&e, snd, snd_level)?;
                 Ok(Level::max(fst_level.clone(), snd_level.clone()))
             }
-            // Unit/Empty-formation (extension beyond ch. 04): ⊢_i Unit @ 0,
-            // ⊢_i Empty @ 0.
+            // Unit/Empty-formation (extension beyond ch. 04): ⊢_i Unit @ l,
+            // ⊢_i Empty @ l for *any* well-formed l — component-free, so 0 is
+            // only the least. `ty_check` implements the polymorphism; this
+            // arm reports the least level, which is what `infer_type` owes.
             Type::Unit | Type::Empty => Ok(Level::Zero),
             // Sum-formation (extension beyond ch. 04; kernel-v1-extensions):
             // ⊢_i A +^{l,l'} B @ l⊔l' ⟸ ⊢_i A @ l, ⊢_i B @ l'. Non-dependent:

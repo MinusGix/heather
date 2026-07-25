@@ -158,6 +158,21 @@ term-motive one. `tm_elim_wf`'s step binding reuses `term::wf_step_telescope`
 verbatim, which is why the rec.rs, typing.rs and reduce.rs transcriptions of
 it cannot drift.
 
+**`Unit` and `Empty` are level-polymorphic** (2026-07-25, phase 4):
+`⊢ Unit @ l` and `⊢ Empty @ l` for every well-formed `l`, with `ty_infer`
+reporting `0` as the *least* level and `ty_check` accepting any. This is not
+a convenience and not cumulativity — it is what makes **type-level subject
+reduction hold across `Vec^l(T; 0) ⇝ Unit`**. `Vec` is the first type former
+whose whnf is chosen by a *term*; `El` is chosen by a term too, but its term
+is a code carrying its own level, so `El` cannot drop one, while `Vec`'s
+bare `Nat` length can. Without the polymorphism a well-formed
+`Π^{1,0}(_ : Vec^1(T;0)). Nat` steps to an ill-formed
+`Π^{1,0}(_ : Unit). Nat`. Every other former keeps an exact level, and `Vec`
+only ever over-declares (the successor case preserves `l`, the nullary case
+drops to `0`), so nothing large enters a small universe. The rule of thumb:
+*a former with no components has nothing bounding its level from below.*
+Derivation and the LR consequence: `docs/metatheory-ch07-extensions.md` §10.3.
+
 Explicitly out of v0: coinduction/effects, typeclasses, compiler machinery,
 inductive types beyond Nat, Id, Σ, Unit, Empty, binary sums, W, and the
 `Vec`/`Fin`/`Wf` finitary-branching group, the type lifter (omitted by the

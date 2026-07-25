@@ -237,6 +237,66 @@ fn formation_and_levels() {
     ck_ty(&g1, &fin(v(0)), c(0));
 }
 
+/// Type-level subject reduction across `Vec^l(T; 0) ⇝ Unit`.
+///
+/// This is the ch. 07 pass's one kernel finding
+/// (`docs/metatheory-ch07-extensions.md` §10). `Vec` is the first former
+/// whose weak head normal form is chosen by a *term*, and at length `0` the
+/// chosen whnf is `Unit`, whose least level is `0` — so a type declared at
+/// `l > 0` steps to one that, under an exact-level formation rule, is not
+/// well-formed at `l`. `El` is chosen by a term too but cannot drop a level,
+/// because its term is a code that carries one. The fix is that the two
+/// component-free formers are level-polymorphic; nothing else moved, and
+/// `Vec` only ever over-declares, so no large type enters a small universe.
+#[test]
+fn vec_at_zero_reduces_without_dropping_its_level() {
+    let g = nil_ctx();
+    let big = Type::Vec { level: c(1), elem: rty(Type::Ty(c(0))), len: rt(Term::Zero) };
+    ck_ty(&g, &big, c(1));
+    assert_eq!(whnf(&big, &g), Type::Unit);
+    // The reduct must still be well-formed at the level it was declared at.
+    ck_ty(&g, &Type::Unit, c(1));
+    // …and in a position where the level is actually consumed.
+    let pi = |dom: Type| Type::Pi {
+        dom_level: c(1),
+        cod_level: c(0),
+        dom: rty(dom),
+        cod: rty(Type::Nat),
+    };
+    ck_ty(&g, &pi(big.clone()), c(1));
+    ck_ty(&g, &pi(whnf(&big, &g)), c(1));
+    // Successor lengths preserve the level on the nose, so only the nullary
+    // case ever needed this.
+    let big1 = Type::Vec { level: c(1), elem: rty(Type::Ty(c(0))), len: rt(nat(1)) };
+    ck_ty(&g, &whnf(&big1, &g), c(1));
+}
+
+/// The polymorphism is confined to the component-free formers: everything
+/// else still has an exact level, so this is not cumulativity by the back
+/// door. `Fin` needed nothing — it is declared at `0` and both its reducts
+/// (`Empty`, `Unit +^{0,0} Fin k`) land there.
+#[test]
+fn only_unit_and_empty_are_level_polymorphic() {
+    let g = nil_ctx();
+    ck_ty(&g, &Type::Unit, c(0));
+    ck_ty(&g, &Type::Unit, c(2));
+    ck_ty(&g, &Type::Empty, c(2));
+    // Nat is not lifted…
+    check_type(&GlobalCtx::default(), 0, Layer::Prog, &g, &Type::Nat, &c(1), FUEL)
+        .expect_err("Nat must stay at 0");
+    // …nor is a Vec whose element pins the level…
+    let v0 = Type::Vec { level: c(0), elem: rty(Type::Nat), len: rt(Term::Zero) };
+    check_type(&GlobalCtx::default(), 0, Layer::Prog, &g, &v0, &c(1), FUEL)
+        .expect_err("Vec must keep its declared level");
+    // …nor is Fin, which never needed lifting.
+    check_type(&GlobalCtx::default(), 0, Layer::Prog, &g, &fin(nat(2)), &c(1), FUEL)
+        .expect_err("Fin must stay at 0");
+    // The level must still be well-formed: no unbound universe variable.
+    let unbound = Level::Var(heather_kernel::level::UnivVar(0));
+    check_type(&GlobalCtx::default(), 0, Layer::Prog, &g, &Type::Unit, &unbound, FUEL)
+        .expect_err("an unbound universe variable is not a level");
+}
+
 #[test]
 fn layer_c_accepts_vec_and_fin() {
     // Phase 1 gated both out of layer c until they had code formers and

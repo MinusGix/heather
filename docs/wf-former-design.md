@@ -1,6 +1,6 @@
 # The `Wf` former: finitary branching inductives in the kernel
 
-Status: **phases 1–2 landed** (2026-07-25); §9 tracks the remaining rounds.
+Status: **phases 1–4 landed** (2026-07-25); §9 tracks the remaining round.
 Written as a design sketch before the code, per repo discipline, and kept as
 the specification the implementation is checked against. This is the
 route-C landing from `docs/branching-inductives-choice.md` §6/§12. Decision
@@ -45,11 +45,21 @@ Vec^l(T; S k)  ⇝  Σ^{l,l}(_ : T). Vec^l(T; k)
 Type-level reduction on the (whnf'd) length; **neutral at a neutral
 length**, no η of its own — η arrives through the reductions (`Unit`
 proof irrelevance at 0, `Σ`-η at successors), which is the entire point.
+
 This is the `vec` formula from the tier-1 fording round
 (`tier1_fording.rs` §3) promoted from a derived `elim_Nat` code into a
 former, which is what removes wrinkle 1 of the choice doc: the elements no
 longer need to be *code-expressible*, so `Vec(Wf …; k)` is stateable with no
 side condition on shapes.
+
+*Level side-condition (found in the ch. 07 round, §8; fixed).* The nullary
+reduct `Unit` does not carry `l`, so type-level subject reduction needs
+`Unit` (and, for symmetry, `Empty`) to be **level-polymorphic** in
+formation — otherwise a well-formed `Π^{1,0}(_ : Vec^1(T;0)). Nat` steps to
+an ill-formed one. `Vec` is the first former whose whnf is chosen by a term
+that does not carry a level (`El`'s does), and this is the one place that
+shows. The successor case preserves `l` exactly, and `Fin` needs nothing —
+it is declared at `0` and both its reducts land there.
 
 ### 1.2 `Fin` — canonical finite index types
 
@@ -254,22 +264,40 @@ Scope of the one regime:
 
 ---
 
-## 8. Metatheory (ch. 07) obligation
+## 8. Metatheory (ch. 07) obligation — **done**, and passed
 
-One LR case per former. `Vec`/`Fin`: by cases on the whnf of the length —
-canonical lengths reduce to existing formers (their clauses restrict
-`Unit`/`Σ`/`Empty`/`Sum`'s), neutral lengths are standard neutral-type
-cases. `Wf`: the value clause is "labels related and children
-componentwise related", a structural recursion over a *finite tuple* — the
-expected shape is a restriction of `W`'s clause with the quantification
-over subtree *functions* replaced by finitely many subtree positions,
-which is why it is expected to be easier, not harder.
+Landed 2026-07-25 as part II of `docs/metatheory-ch07-extensions.md`
+(§§10–17). **The abort criterion was not triggered; the decision stands.**
+Results, against what this section predicted:
 
-**The abort criterion, restated from the choice doc:** if this case turns
-out to need a genuinely new idea rather than a finitary restriction of
-`W`'s, reopen the decision with route A as the considered fallback. That
-is the only remaining falsifier; everything testable short of it has been
-tested and passed.
+- **`Vec`/`Fin` cost *no* LR case**, which is stronger than the prediction
+  above. Every type-relation rule is keyed on the whnf; at a canonical
+  length these formers reduce away and the `Unit`/`Σ`/`Empty`/`+` rules
+  apply through weak-head expansion, and at a neutral length they *are* the
+  whnf and the existing neutral-type rule applies. They owe two
+  Congruence-for-Neutrals laws, and those are a new *kind* — the first
+  neutral-type congruence with a type premise (`El ν`'s premise is a term).
+- **`Wf` is a restriction of `W`'s in three senses.** Its type rule is
+  `W`'s with a term relation at `Nat` in place of the position-type
+  relation; its term relation replaces `W`'s subtree quantifier with a
+  finite Σ-spine, recursing on the arity's `NfEqNat` derivation (*not* on
+  either length — the two sides' arities are related, not equal); and its
+  layering-restriction case has one contravariant premise where `W` has two.
+  `NfEqWf` is a `Wf`-shaped inductive definition where `NfEqW` is a
+  `W`-shaped one, so the *metatheory's* induction requirement drops too.
+- **The one new obligation** is the index lemma: `elim_Wf`'s arm needs
+  relatedness at arbitrary `Fin` indices, which the finite spine does not
+  hand over directly. Four cases, all reductions the kernel already
+  performs. That is the entire price of finitarity.
+- **No funext obligation appears in the `elim_Wf` arm.** The only `Π` is the
+  ih, and the `Π` term relation is the applied form — the semantic
+  counterpart of "the ih is transient" (§4).
+
+**One real defect fell out**, invisible at level 0 and so missed by every
+test and prototype: `Vec^l(T;0) ⇝ Unit` dropped the level, breaking
+type-level subject reduction for `l ≠ 0`. Fixed by making the two
+component-free formers level-polymorphic; see §1.1 and
+`docs/metatheory-ch07-extensions.md` §10.3.
 
 ---
 
@@ -294,7 +322,10 @@ tested and passed.
    `Empty`-η turned out **not** to be needed for the Leaf arm — arity 0 is
    `Vec(T;0) ⇝ Unit`, whose proof irrelevance already collapses every
    nullary constructor form.
-5. **rec.rs round** (§6), as its own unit, with the five transcriptions.
-6. **ch. 07 round** (§8), as its own unit, with the abort criterion live.
+5. ~~**rec.rs round** (§6)~~ Done (`crates/kernel/tests/wf_codes.rs`), 45
+   branches, layer-c gate removed.
+6. ~~**ch. 07 round** (§8)~~ Done — `docs/metatheory-ch07-extensions.md`
+   part II. Abort criterion **not** triggered; one kernel defect found and
+   fixed (§1.1).
 7. **Generator round** (§7) — at which point
    `issues/tier1-branching-constructors.md` closes.

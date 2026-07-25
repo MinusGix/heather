@@ -1,8 +1,9 @@
 # Ch. 07 pen-and-paper pass for the kernel-v1 extensions
 
-Status: first full pass, 2026-07-24. Pen and paper, not mechanized.
-Tracking issue: `issues/metatheory-ch07-pass.md` (earmarked from
-`issues/kernel-v1-extensions.md`).
+Status: **part I** (§§1–9), the kernel-v1 formers, 2026-07-24. **Part II**
+(§§10–17), the `Wf` round, 2026-07-25. Pen and paper, not mechanized.
+Tracking issues: `issues/metatheory-ch07-pass.md` (earmarked from
+`issues/kernel-v1-extensions.md`); `issues/wf-former.md` phase 4 for part II.
 
 The kernel extends DeLaM ch. 04 with six type formers that the paper's
 logical relations (ch. 07/07a/07b) never saw: `Id`, `Σ`, `Unit`, `Empty`,
@@ -343,19 +344,24 @@ this extension pass adds.
 
 The recursor arms of 07b (§More Semantic Rules) case-analyse boxed code by
 syntactic former. That argument is only valid if the branch bundle is
-exhaustive over well-typed layer-`c` syntax. Counted against `term.rs`:
+exhaustive over well-typed layer-`c` syntax. Counted against `term.rs`
+(**recounted 2026-07-25** for the `Wf` round; the part-I count was 37):
 
 - **Type formers at layer `c`**: `Nat`, `Π`, `Ty`, `El`, `Id`, `Σ`, `Unit`,
-  `Empty`, `+`, `W` = 10, matched by `ty_nat`, `ty_pi`, `ty_ty`, `ty_el`,
-  `ty_id`, `ty_sigma`, `ty_unit`, `ty_empty`, `ty_sum`, `ty_w` = 10.
+  `Empty`, `+`, `W`, `Vec`, `Fin`, `Wf` = 13, matched by `ty_nat`, `ty_pi`,
+  `ty_ty`, `ty_el`, `ty_id`, `ty_sigma`, `ty_unit`, `ty_empty`, `ty_sum`,
+  `ty_w`, `ty_vec`, `ty_fin`, `ty_wf` = 13.
   (`GlobalTy` is the blocked/neutral rule, not a branch.)
 - **Term formers at layer `c`**: `Var`, `TmNat`, `TmPi`, `TmTy`, `TmId`,
-  `TmSigma`, `TmUnit`, `TmEmpty`, `TmSum`, `TmW`, `Zero`, `Succ`,
-  `ElimNat`, `Refl`, `J`, `Pair`, `Fst`, `Snd`, `Triv`, `ElimEmpty`, `Inl`,
-  `Inr`, `Case`, `Sup`, `ElimW`, `Lam`, `App` = 27, matched one-for-one by
-  the 27 `tm_*` branches. (`GlobalTm` is the blocked rule.)
+  `TmSigma`, `TmUnit`, `TmEmpty`, `TmSum`, `TmW`, `TmVec`, `TmFin`, `TmWf`,
+  `Zero`, `Succ`, `ElimNat`, `Refl`, `J`, `Pair`, `Fst`, `Snd`, `Triv`,
+  `ElimEmpty`, `Inl`, `Inr`, `Case`, `Sup`, `ElimW`, `Supf`, `ElimWf`,
+  `Lam`, `App` = 32, matched one-for-one by the 32 `tm_*` branches.
+  (`GlobalTm` is the blocked rule.)
 
-10 + 27 = 37, the bundle `conv.rs` documents. Exhaustive; the recursor arms
+13 + 32 = 45, the bundle `conv.rs` documents (`term.rs` carries exactly 45
+`ty_*`/`tm_*` branch fields besides the two motives; `BRANCH_DIMS` in
+`crates/kernel/tests/common/mod.rs` agrees). Exhaustive; the recursor arms
 have no gap.
 
 ---
@@ -379,3 +385,482 @@ ch. 04 rules we produce. One invariant is worth promoting into
 conversion at code types is syntactic identity — together these are what
 keep propositional equality at `□` exactly as fine as the recursor's
 observation.*
+
+Part II adds three rows to this table; see §17.
+
+---
+---
+
+# Part II — the `Wf` round
+
+Status: pen-and-paper pass, 2026-07-25, for the three formers of
+`docs/wf-former-design.md`: `Vec`, `Fin`, `Wf` (with `sup_f`/`elim_Wf`).
+This is phase 4 of `issues/wf-former.md`, and it is the round that carried
+the **abort criterion**: if the `Wf` case of the logical relations needed a
+genuinely new idea rather than a finitary restriction of `W`'s, the
+branching-inductives decision was to be reopened with route A (`W` + funext)
+as the considered fallback.
+
+**Verdict up front: the criterion is not triggered, and the decision
+stands.** The `Wf` case is a restriction of `W`'s in a precise sense (§11,
+§12) — so precise that the metatheory's own induction requirement drops from
+`W`-shaped to `Wf`-shaped. It costs exactly one new lemma (§13), whose four
+cases are all reductions the kernel already performs. `Vec` and `Fin` cost
+*no new LR case at all* (§10).
+
+The round was not free of findings, though. Writing the fundamental-theorem
+arm for `Vec`-formation turned up a **real kernel defect** — type-level
+subject reduction failed across `Vec^l(T;0) ⇝ Unit` for every `l ≠ 0` —
+which is fixed here (§10). That is the pass paying for itself: the bug is
+invisible at `l = 0`, which is where every existing test and every generated
+datatype so far happens to live.
+
+---
+
+## 10. `Vec` and `Fin`: no new LR case, and one kernel finding
+
+### 10.1 Neither former gets a type-relation rule
+
+Every type-relation rule of 07 §sec:dt:klogrel is keyed on the **weak head
+normal form** of the two types: each premise set begins `T ⇝* W @ l`. So a
+former contributes a rule only if it can *be* a whnf. `Vec` and `Fin` are
+whnf exactly when their length is stuck (`reduce.rs:1791`, keyed through
+`is_neutral_term(len)`), and there they are **neutral** types
+(`reduce.rs:1778`). Therefore:
+
+- **canonical length** — `Vec^l(T;0) ⇝ Unit`, `Vec^l(T;su k) ⇝ Σ^{l,l}(_:T).
+  Vec^l(T;k)`, `Fin(0) ⇝ Empty`, `Fin(su k) ⇝ Unit +^{0,0} Fin(k)`. The
+  reduction is absorbed by the `⇝*` premise and the existing `Unit`, `Σ`,
+  `Empty`, `+` rules apply unchanged. Weak-head expansion (07,
+  §sec:dt:logrel-prop) is what carries this: the LR is closed under
+  expansion, so `Vec` *inherits* its reduct's clause rather than restricting
+  it.
+- **neutral length** — the existing **neutral-type** rule applies verbatim,
+  with `V = Vec^l(T;ν)`, discharged by the generic neutral-type equivalence
+  `lttypgneeq`.
+
+This is the strongest form of the design doc §8 prediction, and it is worth
+being explicit that it is stronger: §8 expected "clauses that restrict
+`Unit`/`Σ`/`Empty`/`+`'s". There are no clauses. The two formers are, on the
+semantic side, entirely invisible.
+
+One small lemma is owed for the neutral case, because the neutral-type rule
+relates only *neutral* terms and we must know nothing canonical inhabits a
+stuck `Vec`/`Fin`:
+
+> **Canonicity at a stuck length.** If `⊢ t : Vec^l(T;ν) @ l` with `ν`
+> neutral and `t` in whnf, then `t` is neutral. Likewise for `Fin(ν)`.
+
+Immediate from the kernel's introduction rules being type-directed on a
+*reduced* type: `⟨⟩` checks only at `Unit`, `⟨_,_⟩` only at `Σ`, `inl`/`inr`
+only at `+`, and none of these unify with a `Vec`/`Fin` whose length is
+stuck. `conv.rs:828–831` is the algorithmic side of the same fact — those
+types fall straight through to `tm_nee`.
+
+### 10.2 What they owe the generic equivalence
+
+Two **Congruence for Neutrals** laws, at the *type* level:
+
+```
+T ≈ T' @ l      ν ≈ ν' : Nat @ 0                ν ≈ ν' : Nat @ 0
+───────────────────────────────── (ν, ν' ne)    ──────────────── (ν, ν' ne)
+Vec^l(T;ν) ≈ Vec^l(T';ν') @ l                   Fin(ν) ≈ Fin(ν') @ 0
+```
+
+discharged by `conv.rs:313–323`. These are a **new kind** of law for this
+development, and it is worth naming why: the neutral-type equivalence has
+until now compared neutral types whose components are *terms* (`El ν`'s
+premise is `ν ≈ ν' : Ty l`) or nothing at all (`U^δ`). `Vec` is the first
+neutral type with a genuine **type** premise alongside a term one. It is
+still a legitimately *neutral* relation, because neutrality is decided by
+the length alone and the element is simply carried; but the generic
+equivalence interface has to be stated as closed under "a former applied to
+a related type and a related stuck term", not just "a former applied to
+related terms".
+
+The declarative side additionally owes the four computation rules above.
+Those are ordinary reductions, not new *shapes* — unlike part I's two η
+rules (§7), nothing here is a genuinely new rule.
+
+### 10.3 The finding: `Vec^l(T;0) ⇝ Unit` dropped a level
+
+Writing the fundamental-theorem arm for `Vec`-formation is what exposed
+this. The arm must conclude `⊨ Vec^l(T;k) @ l`. At `k ⇝* 0` that unfolds,
+via weak-head expansion, to a demand for `Unit ~ Unit @ l`. But the `Unit`
+type-relation rule as stated in §4 — and the kernel's `Unit`-formation rule
+as implemented — lives at level `0`, and the LR's level-conversion rule
+(07, the "bureaucratic" case) requires `l ≈ l'`, level *equivalence*, not
+`≤`. So for `l ≠ 0` the arm had nothing to land on.
+
+That is not merely a gap in the paper argument. It is a defect in the
+kernel, and a checkable one:
+
+```
+⊢ Π^{1,0}(_ : Vec^1(Ty 0; 0)). Nat @ 1        well-formed
+  ⇝  Π^{1,0}(_ : Unit). Nat                   LevelMismatch
+```
+
+**Type-level subject reduction failed.** `Vec` is the kernel's first type
+former whose whnf is chosen by a *term*; `El` is chosen by a term too, but
+its term is a code that carries its own level, so `El` cannot drop one.
+`Vec`'s length is a bare `Nat`, and at `0` the reduct `Unit` has nothing to
+do with `l`. Nothing caught it because the shape of a generated datatype is
+a sum of records at level `0`, so every existing test and every prototype
+sits at `l = 0`, where `Unit`'s level is right by accident.
+
+**Fix, landed:** the two **component-free** formers, `Unit` and `Empty`, are
+level-polymorphic in formation — `⊢ Unit @ l` and `⊢ Empty @ l` for any
+well-formed `l`. `typing.rs`'s `ty_check` special-cases them ahead of the
+level comparison; `ty_infer` still reports `0`, now documented as the
+*least* rather than the canonical level. Regression tests:
+`crates/kernel/tests/vec_fin.rs::vec_at_zero_reduces_without_dropping_its_level`
+and `::only_unit_and_empty_are_level_polymorphic`.
+
+Three things make this the right fix rather than an expedient one:
+
+- **It is principled.** A type with no components has nothing bounding its
+  level from below. Every *other* former's level is pinned by a component or
+  an annotation, and stays exact.
+- **It is not cumulativity.** Only these two formers move. And `Vec` only
+  ever *over*-declares — the successor case preserves `l` exactly, the
+  nullary case drops to `0` — so the direction is always small-into-large.
+  No large type enters a small universe, which is where a level bug would
+  become a soundness bug.
+- **`Fin` needed nothing.** It is declared at `0` and both reducts (`Empty`,
+  `Unit +^{0,0} Fin k`) land at `0`. The asymmetry is real and is the reason
+  `Vec`, not `Fin`, is the former that exposed this.
+
+On the LR side the consequence is one word in two rules: the `Unit` and
+`Empty` type-relation rules read `T ⇝* Unit` ⟹ `T ~ T' @ l` for any `l`,
+rather than at `0`. Nothing else changes — both are premise-free base cases,
+so the well-founded recursion on universe levels never descends through
+them, and every property lemma at `Unit`/`Empty` was already vacuous (§2,
+§4). `conv.rs` needed no change at all: `ty_nf` ignores its level argument,
+which is exactly right for a polymorphic former and was already right for
+everything else, since every other former's level is recovered from its
+annotations.
+
+---
+
+## 11. `Wf` — the type relation, and the one substitution that makes it finitary
+
+```
+D :: ─────────────────────────────────────────────────────────────
+     T  ⇝* Wf^l(x:S₁).n₁ @ l        T' ⇝* Wf^l(x:S₂).n₂ @ l
+     (components well-formed, as in the Π rule)
+     Wf^l(x:S₁).n₁ ≈g Wf^l(x:S₂).n₂ @ l
+     E :: ∀ψ. S₁ ~ S₂ @ l
+     N :: ∀ψ, ∀ A :: s ~ s' @ E(ψ).  n₁[s/x] ~ n₂[s'/x] : Nat @ 0
+     ─────────────────────────────────────────────────────────────
+     T ~ T' @ l
+```
+
+Set this beside `W`'s rule (§5). `E` is identical. `W`'s second premise is
+
+```
+F :: ∀ψ, ∀ s ~ s' @ E(ψ).  T₁[s/x] ~ T₂[s'/x] @ l'     (a TYPE relation)
+```
+
+and `Wf`'s `N` is the same premise with a **term relation at `Nat`** in place
+of the type relation. That single substitution is the whole difference, and
+it is also, in one line, the reason the term relation below is finitary:
+
+> `F` is something the term relation **quantifies over** — contravariantly,
+> and over an unbounded domain. `N` is something the term relation
+> **recurses on** — covariantly, and `NfEqNat` derivations are well-founded.
+
+Two smaller notes:
+
+- **No new premise kind.** A term relation already appears in the premises
+  of type rules (`Π`, `Σ`, `W` all quantify over `s ~ s'`), so `N` is not a
+  new shape; it uses one in *positive* position, which is strictly easier.
+  Well-foundedness is unaffected: the `Nat` type relation is the
+  premise-free base rule of 07, so `N` does not refer back to `D`.
+- **Levels get shallower, not deeper.** `W` lives at `l ⊔ l'`; `Wf` lives at
+  `l` alone, because an arity is a `Nat` term and contributes no level. The
+  transfinite recursion on universe levels has strictly less to do here.
+
+---
+
+## 12. `NfEqWf` — the term relation
+
+```
+    t ⇝* w @ Wf₁      t' ⇝* w' @ Wf₂
+    w ≈g w' @ Wf₁     w ≈g w' @ Wf₂      (duplicated, as everywhere,
+    NfEqWf(w, w')                         to keep symmetry cheap)
+    ─────────────────────────────────
+    t ~ t' @ D
+```
+
+with the auxiliary inductive `NfEqWf`:
+
+```
+  A :: a ~ a' @ E(id)
+  C :: ∀ψ.  cs ~ cs' @ Vecrel(ψ)
+  ─────────────────────────────────────────────────  (sup_f)
+  NfEqWf( sup_f(a; cs), sup_f(a'; cs') )
+
+  ν ≈g ν' neutral at both types
+  ─────────────────────────────                      (ne)
+  NfEqWf(ν, ν')
+```
+
+`Vecrel(ψ)` is **not a new relation**. It is the existing term relation at
+the pair of types `Vec^l(Wf₁; n₁[a/x])` and `Vec^l(Wf₂; n₂[a'/x])`, whose
+derivation is constructed by recursion on the `NfEqNat` derivation that
+`N(ψ, A(ψ))` supplies:
+
+| `NfEqNat` case | `Vec` reduces to | clause used | recursive `NfEqWf` premises |
+|---|---|---|---|
+| `ze / ze` | `Unit` | §4, irrelevant | **0** |
+| `su k / su k'` with `K :: k ~ k'` | `Σ^{l,l}(_ : Wf). Vec(Wf;k)` | §3, negative | **1** (`fst cs ~ fst cs'`), then recurse on `K` for `snd` |
+| `ν / ν'` neutral | itself, a neutral type | §10.1 | **0** |
+
+So a node carries exactly as many recursive premises as its arity's whnf is
+a numeral, and none at all at a neutral arity. `NfEqWf` is a **finitary,
+strictly positive, Kripke inductive definition**.
+
+Three points that are load-bearing rather than decorative:
+
+1. **The spine recursion is on the `NfEqNat` derivation, not on either
+   length.** The two sides' arities are only *related*, not equal —
+   `n₁[a/x]` versus `n₂[a'/x]` — so neither is available to recurse on.
+   `NfEqNat` is precisely what forces them to reduce in lockstep (both to
+   `ze`, both to `su`, or both neutral), and recursing on it is what makes
+   the two `Vec` unfoldings track each other. This is the one technical
+   point where a careless transcription of `W`'s clause would go wrong.
+2. **`C` must stay Kripke-quantified.** Not for the definition — the finite
+   spine needs no `∀ψ` — but for §13 and §14, which apply the children
+   relation under a weakening. This is the same dependency §5 recorded for
+   `W`, and it survives the restriction unchanged.
+3. **The children premise is the *negative* `Σ` reading.** Because §3 chose
+   projections over pairs, `C` is `fst cs ~ fst cs'` and `snd cs ~ snd cs'`
+   with no case analysis on whether `cs` is a literal tuple. That is the
+   semantic counterpart of `sigma_eta_bridges_the_constructor_form`: the gap
+   route A bridges with funext is closed inside the `Σ` clause, and `Wf`
+   itself never sees it. **`NfEqWf` has no η clause**, exactly as the design
+   promised.
+
+**The shape of the result.** `NfEqW` is a `W`-shaped inductive definition in
+the metatheory: its recursive premise sits under `∀ψ. ∀ b ~ b'. …`, a
+quantification over a *type* of positions. `NfEqWf` is a `Wf`-shaped one:
+finitely many recursive premises, the number computed from the node's own
+data. The restriction the design argued for at the object level turns out to
+hold at the meta level too — a mechanization of this development would need
+only finitary branching induction where `W` needs infinitary. That is a
+better outcome than "easier, not harder"; it is the same reduction, one
+level up.
+
+---
+
+## 13. The index lemma — the price of finitarity
+
+`W`'s `elim_W` arm can read its recursive premise straight out of `NfEqW`,
+because `NfEqW`'s premise is *already* in the `∀ψ ∀ b ~ b'` form the arm
+needs. `Wf`'s arm cannot: `NfEqWf` stores a finite Σ-spine, and the arm
+needs a statement about arbitrary related `Fin` indices. Bridging the two is
+the one genuinely new obligation of this round.
+
+> **Lemma (positions).** Let `NfEqWf(sup_f(a;cs), sup_f(a';cs'))` with
+> premises `A`, `C`. Then for every `ψ` and every
+> `I :: i ~ i' @ Fin(n₁[a/x])`,
+> ```
+> nth(Wf₁; n₁[a/x]; cs; i)  ~  nth(Wf₂; n₂[a'/x]; cs'; i')   @ D(ψ)
+> ```
+> and moreover the relation is witnessed by a **subderivation** of the given
+> `NfEqWf` whenever both sides are `sup_f`s.
+
+*Proof.* Induction on the `NfEqNat` derivation of
+`n₁[a/x] ~ n₂[a'/x]` obtained from `N(ψ, A(ψ))`. Recall `nth` is a fixed
+`elim_Nat` schema (`term::nth`, design doc §3), so every reduction quoted
+below is one the kernel already performs.
+
+- **arity `ze`.** `Fin(0) ⇝ Empty`, whose term relation (§2) relates only
+  neutrals, so `i`, `i'` are neutral; `nth(T;0;cs;i) ⇝ elim_Empty(_.T; i)`,
+  neutral. Reflexivity-of-neutral closes it. In the empty local context
+  there are no such `i` at all and the clause is vacuous — the `Empty` gain
+  of §2, reused.
+- **arity `su k`, with `K :: k ~ k'`.** `Fin(su k) ⇝ Unit +^{0,0} Fin(k)`,
+  so `I` is an `NfEqSum` derivation (§2):
+  - `inl / inl` — `nth ⇝ fst cs` and `nth ⇝ fst cs'`; related by `C`'s first
+    component. Weak-head expansion closes the gap to the unreduced `nth`s.
+  - `inr j / inr j'` with `J :: j ~ j' @ Fin(k)` — `nth ⇝ nth(T;k;snd cs;j)`
+    and symmetrically; apply the induction hypothesis at `K`, with `C`'s
+    second component as the children premise.
+  - `ν / ν'` neutral — `nth` whnfs to a neutral `case`; reflexivity-of-
+    neutral, whose motive and branch premises come from escape on `C`.
+- **arity neutral.** `Fin(ν)` is a neutral type (§10.1), so `i`, `i'` are
+  neutral and `nth` is a neutral `elim_Nat` under two applications.
+  Reflexivity-of-neutral. ∎
+
+Every step runs at an arbitrary `ψ` because `C` is Kripke-quantified; that
+is the dependency §12(2) flagged, discharged here.
+
+Four cases, all mechanical, no new definitional shape. This is the entire
+cost of choosing the finitary `NfEqWf` over a verbatim transcription of
+`W`'s infinitary clause — and it buys the reduction in §12's last paragraph.
+
+---
+
+## 14. Fundamental theorem: the `elim_Wf` arm
+
+The reduction (design doc §4), the second β rule in the kernel that
+synthesizes a binder:
+
+```
+elim_Wf(x:S.n; z.M; a cs ih. s; sup_f(_; a₀; cs₀))
+  ⇝ s[ a₀, cs₀,
+       λ(i : Fin n[a₀/x]). elim_Wf(x:S.n; z.M; a cs ih. s;
+                                    nth(Wf; n[a₀/x]; cs₀; i)) ]
+```
+
+The arm is an induction on `NfEqWf`.
+
+- **neutral case.** Reflexivity-of-neutral, with the `elim_Wf` neutral
+  congruence law (`conv.rs:1096–1139`) supplying the generic-equivalence
+  side. `elim_Wf` is neutral on a neutral scrutinee (`reduce.rs:1827`).
+- **`sup_f` case.** The semantic step premise must be supplied with three
+  related arguments:
+  1. `a₀ ~ a₀'` — premise `A`.
+  2. `cs₀ ~ cs₀'` at `Vec^l(Wf; n[a₀/x])` — premise `C` at `id`.
+  3. the two ih λs, related at `Π^{0,l'}(i : Fin n[a₀/x]). M[nth(…)/z]`.
+     Unfolding the `Π` term relation: for all `ψ` and all `i ~ i'` at the
+     domain,
+     ```
+     app(λi. elim_Wf(…; nth(cs₀;i)),  i )  ⇝ elim_Wf(…; nth(cs₀;i))
+     app(λi. elim_Wf(…; nth(cs₀';i)), i')  ⇝ elim_Wf(…; nth(cs₀';i'))
+     ```
+     and by the **index lemma** (§13) the two scrutinees are related by a
+     *subderivation* of the `NfEqWf` we are inducting on — so the inner
+     induction hypothesis applies to the two `elim_Wf`s directly. Weak-head
+     expansion closes the gap to the applications; the λ-congruence law
+     supplies the generic-equivalence side.
+
+  Then the usual motive-shuffle (`M[δ, t/z] ≈ M[δ, sup_f(a₀;cs₀)/z]` from
+  `t ≈ sup_f(a₀;cs₀)` extending `δ ≈ δ`), as in every eliminator arm since
+  §2. ∎
+
+Compared with §5's `elim_W` arm, the *only* difference is that the recursive
+premise arrives through §13 instead of being read off the `NfEqW` premise.
+Everything else — the synthesized λ, the `Π`-unfolding, the reliance on the
+Kripke `∀ψ` — is identical.
+
+Two things worth recording, because they are what the design was betting on:
+
+- **No funext obligation appears anywhere in this arm.** The only `Π` in
+  sight is the ih, and the `Π` term relation is the *applied* form, so the
+  ih is only ever eliminated, never compared as a function. That is the
+  semantic counterpart of the design's "the ih is transient" (§4 of the
+  design doc, wrinkle 6.2) — conversion showed it, and the LR agrees.
+- **The ih's domain reduces.** `Fin n[a₀/x]` is not a whnf at a canonical
+  arity, so the `Π` rule's domain premise is discharged by `Empty`'s or
+  `+`'s clause, never by a new one. §10.1 again.
+
+---
+
+## 15. Property lemmas and layering restriction
+
+**`Vec`, `Fin`: nothing.** No type-relation case means no case in weakening,
+escape, reflexivity-of-neutral, weak-head expansion, symmetry, left/right
+irrelevance, reflexivity or transitivity, and none in the layering
+restriction. Their reducts' cases discharge all of it, and closure under
+weak-head expansion is what makes that legitimate.
+
+**`Wf`: one case each, all by induction on `NfEqWf`.**
+
+| lemma | how |
+|---|---|
+| weakening | `C` is already `∀ψ`; `A` by IH |
+| escape | `NfEqWf` carries `w ≈g w'` at *both* types directly |
+| reflexivity of neutral | the `(ne)` rule |
+| weak-head expansion | the outer rule reduces both sides first |
+| symmetry | `NfEqNat` is symmetric, so the spine recursion mirrors; the duplicated `≈g` premises do the rest |
+| left/right irrelevance | as `W`'s |
+| reflexivity + transitivity | nested induction; see the note below |
+
+The transitivity case is the one place the spine recursion reappears and is
+worth flagging rather than waving through. Composing
+`NfEqWf(t₁,t₂)` with `NfEqWf(t₂,t₃)` at the `sup_f` rule needs
+`cs₁ ~ cs₃` from `cs₁ ~ cs₂` and `cs₂ ~ cs₃` at three *pairwise related but
+distinct* `Vec` types. The arity derivations compose by `NfEqNat`
+transitivity, and the spine composition is then a second induction on the
+composite `NfEqNat` derivation, mirroring §12's construction. Mechanical,
+but it is the second appearance of that recursion and a mechanization would
+want it factored out as a lemma about `Vecrel` rather than inlined twice.
+
+**Layering restriction (07a, `j = p` ⇄ `j = m`).** `Wf`'s type rule has a
+contravariant premise — `N` quantifies over related `s ~ s'`, exactly as
+`Π`/`Σ`/`W`'s `F` does — so this case needs the **iff-strengthened IH**,
+like `W`. The children premise `C` is covariant and needs no strengthening.
+
+That is a strict improvement on `W`, and worth stating as such: `W` has
+*two* contravariant premises (the position-type premise `F`, and the subtree
+quantifier inside `NfEqW`), `Wf` has one. The subtree quantifier is exactly
+what §12 replaced with a finite spine.
+
+---
+
+## 16. Cross-check: the new laws vs. the algorithm
+
+Extending §7's table. All present in `conv.rs`; the neutral congruences
+compare motives and branches at their instantiated (ch. 04) telescopes and
+the scrutinee via `tm_nee`, as the laws demand.
+
+| new law | kind | `conv.rs` |
+|---|---|---|
+| `Wf` type congruence (arity compared under the shape binder) | Type Constructors | `ty_nf`, 326–334 |
+| `Vec` / `Fin` neutral-type congruences | Congruence for Neutrals **(types)** | `ty_nf`, 313–323 |
+| `TmVec` / `TmFin` / `TmWf` as term encodings | Type Constructors | `tm_nf` at `Ty l`, 657–678 |
+| `sup_f` congruence (children compared at `Vec`) | Congruence | `Type::Wf` arm, 805–823 |
+| `elim_Wf` neutral congruence | Congruence for Neutrals | `tm_ne`, 1096–1139 |
+| `Unit` / `Empty` at any well-formed level | Type Constructors | `ty_nf` ignores its level argument (§10.3) |
+
+Row 2 is the new *kind* discussed in §10.2 — a neutral-type congruence with
+a type premise. Row 4 is the row that does the real work: because the
+children are compared **at the `Vec` type**, the comparison descends through
+§3's negative `Σ` clause and §4's `Unit` irrelevance, and no `Wf`-specific η
+is needed or present.
+
+**What the declarative side owes**, added to §7's two rules:
+
+3. The four `Vec`/`Fin` computation rules and `elim_Wf`'s β. Ordinary
+   reductions; no new rule *shape*.
+4. `Unit`- and `Empty`-formation at an arbitrary level (§10.3). This one
+   *is* a change to a rule already stated in part I, not an addition.
+
+No new η rule. That is the design's central claim — "store children where
+the kernel's η already reaches" — surviving the semantic pass.
+
+---
+
+## 17. Verdict
+
+| former | LR case shape | new definitional risk | layering restriction | verdict |
+|---|---|---|---|---|
+| `Vec` | **none** — reduces, or is neutral | none | none | invisible; owes one neutral-type congruence, and forced the `Unit` level fix |
+| `Fin` | **none** — same | none | none | invisible; owes one neutral-type congruence |
+| `Wf` | positive, **finitary** Kripke induction over a Σ-spine | one new lemma (§13), no new shape | contravariant in `N` only — one premise fewer than `W` | goes through |
+
+**The abort criterion is not triggered.** The `Wf` case is a restriction of
+`W`'s in three separate senses, each checkable against §5:
+
+- its type rule is `W`'s with a term relation at `Nat` in place of a type
+  relation (§11);
+- its term relation is `NfEqW` with the subtree quantifier replaced by a
+  finite Σ-spine, and is `Wf`-shaped where `NfEqW` is `W`-shaped (§12);
+- its layering-restriction case has one contravariant premise where `W` has
+  two (§15).
+
+The one thing `W` does not pay for is §13, and that lemma is four cases of
+reductions the kernel already performs. Route A (`W` + funext) stays
+unchosen; `crates/elab/tests/branching_route_a.rs` stays unchanged as the
+costed record of what was not taken.
+
+**Caveats, recorded honestly.** This is a pen-and-paper pass, like part I.
+The cases asserted "mechanical" — transitivity and left/right irrelevance
+(§15), and the property lemmas for `Wf` other than escape and
+reflexivity-of-neutral — were checked for *shape* against `W`'s and not
+written out in full. The one place that most deserves a second look before
+any mechanization is the composite spine recursion in transitivity (§15),
+because it is the only construction in this round that appears twice and was
+written out once.
