@@ -217,6 +217,28 @@ pub enum Term {
         shape: Rc<Term>,
         pos: Rc<Term>,
     },
+    /// `Vec^l(s; k) : Ty l` where `s : Ty l` and `k : Nat` — encoding of the
+    /// fixed-length tuple (decoded by `El (Vec^l(s; k)) ⇝ Vec^l(El^l s; k)`).
+    /// The length is an ordinary term of the *same* scope: `Vec` binds
+    /// nothing. Extension (docs/wf-former-design.md §6).
+    TmVec {
+        level: Level,
+        elem: Rc<Term>,
+        len: Rc<Term>,
+    },
+    /// `Fin(k) : Ty 0` where `k : Nat` — encoding of the canonical finite
+    /// index type (decoded by `El (Fin k) ⇝ Fin k`). Extension (§6).
+    TmFin { len: Rc<Term> },
+    /// `Wf^l(x : s). n : Ty l` where `s : Ty l` and `n : Nat` under
+    /// `x : El^l s` — encoding of the finitary branching fixed point
+    /// (decoded by `El (Wf^l(x:s). n) ⇝ Wf^l(x : El^l s). n`). The arity
+    /// binds one local variable but is a *term*, so — as with the type
+    /// former — it contributes no level. Extension (§6).
+    TmWf {
+        level: Level,
+        shape: Rc<Term>,
+        arity: Rc<Term>,
+    },
 
     // ---- natural numbers ----
     Zero,
@@ -721,6 +743,56 @@ pub struct Branches {
     /// positive dependent eliminator like `tm_case`/`tm_elim_nat`.
     /// Extension.
     pub tm_elim_w: Rc<Term>,
+
+    // -- finitary branching branches (docs/wf-former-design.md §6) --
+    /// `(ℓ, g, U_T, u_k, x_T, x_k. t_Vec)` — univs: ℓ; globals: g,
+    /// `U_T : Typ_c(g, ℓ)`, `u_k : Trm_c(g ⊢ Nat @ 0)`; locals: `x_T` (type
+    /// motive), `x_k` (*term* motive — the length is a term). Code of the
+    /// type `Vec^ℓ(U_T^id; u_k^id)`.
+    pub ty_vec: Rc<Term>,
+    /// `(ℓ, g, u_t, u_k, x_t, x_k. t'_Vec)` — univs: ℓ; globals: g,
+    /// `u_t : Trm_c(g ⊢ Ty ℓ @ 1+ℓ)`, `u_k : Trm_c(g ⊢ Nat @ 0)`; locals:
+    /// `x_t`, `x_k`. Code of the encoding `Vec^ℓ(u_t^id; u_k^id) : Ty ℓ`.
+    pub tm_vec: Rc<Term>,
+    /// `(g, u_k, x_k. t_Fin)` — globals: g, `u_k : Trm_c(g ⊢ Nat @ 0)`;
+    /// locals: `x_k` (*term* motive). Code of the type `Fin(u_k^id) @ 0`;
+    /// no universe binder, since `Fin` lives at 0.
+    pub ty_fin: Rc<Term>,
+    /// `(g, u_k, x_k. t'_Fin)` — as `ty_fin` but for the encoding
+    /// `Fin(u_k^id) : Ty 0`.
+    pub tm_fin: Rc<Term>,
+    /// `(ℓ, g, U_S, u_n, x_S, x_n. t_Wf)` — univs: ℓ; globals: g,
+    /// `U_S : Typ_c(g, ℓ)`, `u_n : Trm_c((g, x : U_S^id @ ℓ) ⊢ Nat @ 0)`;
+    /// locals: `x_S` (type motive), `x_n` (term motive). Code of the type
+    /// `Wf^ℓ(x:U_S^id). u_n^id`; mirrors `ty_w` with the positions replaced
+    /// by an arity *term*, which is why only one universe is bound.
+    pub ty_wf: Rc<Term>,
+    /// `(ℓ, g, u_s, u_n, x_s, x_n. t'_Wf)` — univs: ℓ; globals: g,
+    /// `u_s : Trm_c(g ⊢ Ty ℓ @ 1+ℓ)`,
+    /// `u_n : Trm_c((g, x : El ℓ u_s^id @ ℓ) ⊢ Nat @ 0)`; locals: `x_s`,
+    /// `x_n`. Code of the encoding `Wf^ℓ(x:u_s^id). u_n^id : Ty ℓ`.
+    pub tm_wf: Rc<Term>,
+    /// `(ℓ, g, U_S, u_n, u_a, u_cs, x_S, x_n, x_a, x_cs. t_supf)` — univs: ℓ;
+    /// globals: g, `U_S : Typ_c(g, ℓ)`,
+    /// `u_n : Trm_c((g, x : U_S^id @ ℓ) ⊢ Nat @ 0)`,
+    /// `u_a : Trm_c(g ⊢ U_S^id @ ℓ)`,
+    /// `u_cs : Trm_c(g ⊢ Vec^ℓ(Wf^ℓ(x:U_S^id).u_n^id; u_n^{id, u_a/x}) @ ℓ)`;
+    /// locals: `x_S` (type motive!), `x_n`, `x_a`, `x_cs`. Code of
+    /// `sup_f(x:U_S^id. u_n^id; u_a^id; u_cs^id)`; the analogue of `tm_sup`
+    /// with the child *function* replaced by a child *tuple*.
+    pub tm_supf: Rc<Term>,
+    /// `(ℓ, ℓ', g, U_S, u_n, U_M, u_s, u_t, x_S, x_n, x_M, x_s, x_t.
+    /// t_elimWf)` — univs: ℓ, ℓ'; globals: g, `U_S : Typ_c(g, ℓ)`,
+    /// `u_n : Trm_c((g, x : U_S^id @ ℓ) ⊢ Nat @ 0)`,
+    /// `U_M : Typ_c((g, z : Wf^ℓ(x:U_S^id).u_n^id @ ℓ), ℓ')`,
+    /// `u_s : Trm_c((g, a : U_S^id @ ℓ, cs : Vec^ℓ(Wf; u_n^{id,a/x}) @ ℓ,
+    ///   ih : Π^{0,ℓ'}(i : Fin u_n^{id,a/x}). U_M^{id, nth(…; cs; i)/z} @ ℓ')
+    ///   ⊢ U_M^{id, sup_f(a; cs)/z} @ ℓ')`,
+    /// `u_t : Trm_c(g ⊢ Wf^ℓ(x:U_S^id).u_n^id @ ℓ)`; locals: `x_S`, `x_n`,
+    /// `x_M` (type motive!), `x_s`, `x_t`. Code of
+    /// `elim_Wf (x. U_S^id. u_n^id) (z. U_M^id) (a cs ih. u_s^id) u_t^id`;
+    /// the step telescope is [`wf_step_telescope`], shared with typing.
+    pub tm_elim_wf: Rc<Term>,
 }
 
 /// Base of a local context: empty (`·`) or a context variable `g`.

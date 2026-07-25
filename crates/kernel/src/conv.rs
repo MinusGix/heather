@@ -30,7 +30,7 @@
 //! - **Boxed types/terms compare syntactically** (`==`; α-equality is free
 //!   under de Bruijn). Code is static data — β-convertible code is *not*
 //!   convertible.
-//! - Neutral recursors compare motives, all 37 branches (each at its
+//! - Neutral recursors compare motives, all 45 branches (each at its
 //!   instantiated motive type, the ch. 04 `G_A` telescopes), and indices —
 //!   the ch. 06 `C_A` bundle ([`Conv::rec_ca`]).
 //! - The layer index restricts *types*, not terms (ch. 06 intro): layer-m
@@ -652,6 +652,31 @@ impl Conv {
                     let e = env.push_entry(Rc::new(el), dl1.clone());
                     self.tm(&e, t1, t2, &Type::Ty(cl1.clone()), &Level::succ(cl1.clone()))
                 }
+                // TmVec/TmFin congruence (extension): the length is compared
+                // at Nat in the ambient scope — no binder, unlike TmWf.
+                (
+                    Term::TmVec { level: l1, elem: s1, len: k1 },
+                    Term::TmVec { level: l2, elem: s2, len: k2 },
+                ) => {
+                    self.lev_eq(l1, l2)?;
+                    self.tm(env, s1, s2, &Type::Ty(l1.clone()), &Level::succ(l1.clone()))?;
+                    self.tm(env, k1, k2, &Type::Nat, &Level::Zero)
+                }
+                (Term::TmFin { len: k1 }, Term::TmFin { len: k2 }) => {
+                    self.tm(env, k1, k2, &Type::Nat, &Level::Zero)
+                }
+                // TmWf congruence (extension): the arity is compared at Nat
+                // under the shape binder, mirroring TmW's positions.
+                (
+                    Term::TmWf { level: l1, shape: s1, arity: n1 },
+                    Term::TmWf { level: l2, shape: s2, arity: n2 },
+                ) => {
+                    self.lev_eq(l1, l2)?;
+                    self.tm(env, s1, s2, &Type::Ty(l1.clone()), &Level::succ(l1.clone()))?;
+                    let el = Type::El { level: l1.clone(), tm: Rc::clone(s1) };
+                    let e = env.push_entry(Rc::new(el), l1.clone());
+                    self.tm(&e, n1, n2, &Type::Nat, &Level::Zero)
+                }
                 (
                     Term::TmNat
                     | Term::TmTy(_)
@@ -661,7 +686,10 @@ impl Conv {
                     | Term::TmUnit
                     | Term::TmEmpty
                     | Term::TmSum { .. }
-                    | Term::TmW { .. },
+                    | Term::TmW { .. }
+                    | Term::TmVec { .. }
+                    | Term::TmFin { .. }
+                    | Term::TmWf { .. },
                     _,
                 )
                 | (
@@ -674,7 +702,10 @@ impl Conv {
                     | Term::TmUnit
                     | Term::TmEmpty
                     | Term::TmSum { .. }
-                    | Term::TmW { .. },
+                    | Term::TmW { .. }
+                    | Term::TmVec { .. }
+                    | Term::TmFin { .. }
+                    | Term::TmWf { .. },
                 ) => Err(NC),
                 _ => self.tm_nee(env, a, b).map(drop),
             },
@@ -1441,7 +1472,7 @@ impl Conv {
 
     // -- the C_A bundle for neutral recursors -------------------------------
 
-    /// Ch. 06 `C_A`: motive levels, both motives, and all 37 branches, each
+    /// Ch. 06 `C_A`: motive levels, both motives, and all 45 branches, each
     /// branch compared at its instantiated motive type under its ch. 04
     /// telescope (`G_M G_Typ G_Trm`). Branch types and telescope entry
     /// types are built from the *left* side (left-biased, like all
@@ -1460,7 +1491,7 @@ impl Conv {
             self.ty(&e, x, y, &spec.level)?;
         }
 
-        // G_Typ G_Trm: the 37 branches, each at its instantiated motive
+        // G_Typ G_Trm: the 45 branches, each at its instantiated motive
         // type under its telescope.
         let branch_specs = rec::branch_specs(a.motives, a.l1, a.l2, &env.gamma);
         let ba = rec::branch_terms(a.branches);

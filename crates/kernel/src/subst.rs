@@ -280,6 +280,19 @@ fn map_term<M: Mapper>(t: &Term, m: &mut M, at: Depths) -> Term {
             shape: sub_tm(shape, m, at),
             pos: sub_tm(pos, m, at + dep(0, 0, 1)),
         },
+        // Vec/Fin codes: the length is a term in the same scope (no binder);
+        // the Wf code's arity binds `x : El s`, like the type former's.
+        Term::TmVec { level, elem, len } => Term::TmVec {
+            level: m.level(level, at),
+            elem: sub_tm(elem, m, at),
+            len: sub_tm(len, m, at),
+        },
+        Term::TmFin { len } => Term::TmFin { len: sub_tm(len, m, at) },
+        Term::TmWf { level, shape, arity } => Term::TmWf {
+            level: m.level(level, at),
+            shape: sub_tm(shape, m, at),
+            arity: sub_tm(arity, m, at + dep(0, 0, 1)),
+        },
         Term::Zero => Term::Zero,
         Term::Succ(t) => Term::Succ(sub_tm(t, m, at)),
         Term::ElimNat { level, motive, base, step, scrut } => Term::ElimNat {
@@ -567,6 +580,14 @@ fn map_branches<M: Mapper>(b: &Branches, m: &mut M, at: Depths) -> Branches {
         tm_w: sub_tm(&b.tm_w, m, at + dep(2, 3, 2)),
         tm_sup: sub_tm(&b.tm_sup, m, at + dep(2, 5, 4)),
         tm_elim_w: sub_tm(&b.tm_elim_w, m, at + dep(3, 6, 5)),
+        ty_vec: sub_tm(&b.ty_vec, m, at + dep(1, 3, 2)),
+        tm_vec: sub_tm(&b.tm_vec, m, at + dep(1, 3, 2)),
+        ty_fin: sub_tm(&b.ty_fin, m, at + dep(0, 2, 1)),
+        tm_fin: sub_tm(&b.tm_fin, m, at + dep(0, 2, 1)),
+        ty_wf: sub_tm(&b.ty_wf, m, at + dep(1, 3, 2)),
+        tm_wf: sub_tm(&b.tm_wf, m, at + dep(1, 3, 2)),
+        tm_supf: sub_tm(&b.tm_supf, m, at + dep(1, 5, 4)),
+        tm_elim_wf: sub_tm(&b.tm_elim_wf, m, at + dep(2, 6, 5)),
     }
 }
 

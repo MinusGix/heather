@@ -35,8 +35,8 @@ use heather_kernel::layer::Layer;
 use heather_kernel::level::{Level, UnivVar};
 use heather_kernel::reduce::whnf_type;
 use heather_kernel::term::{
-    Branches, CtxBase, CtxEntry, GlobalBinding, GlobalCtx, GlobalVar, LocalCtx, LocalSubst,
-    LocalVar, Motives, SubstTail, Term, Type,
+    nth, Branches, CtxBase, CtxEntry, GlobalBinding, GlobalCtx, GlobalVar, LocalCtx,
+    LocalSubst, LocalVar, Motives, SubstTail, Term, Type,
 };
 use heather_kernel::typing::check_term;
 
@@ -241,7 +241,7 @@ pub fn gen_wt_ctx(env: &WtEnv, r: &mut Rng, b: u32, layer: Layer) -> LocalCtx {
 pub fn gen_wt_type(env: &WtEnv, r: &mut Rng, b: u32) -> (Rc<Type>, Level) {
     assert!(env.layer != Layer::Var);
     for _ in 0..8 {
-        match r.below(13) {
+        match r.below(16) {
             0 => return (rty(Type::Nat), Level::Zero),
             1 => {
                 let l = gen_wf_level(env.univs, r, 1);
@@ -362,15 +362,49 @@ pub fn gen_wt_type(env: &WtEnv, r: &mut Rng, b: u32) -> (Rc<Type>, Level) {
                     Level::max(dl, cl),
                 );
             }
+            // Vec/Fin/Wf (extension; docs/wf-former-design.md §1). Lengths
+            // and arities are Nat *terms*: often neutral, in which case the
+            // type is stuck and inhabiting it fails — the callers all treat
+            // that as a miss, and a literal length gives the Σ/Unit form.
+            13 if b > 0 => {
+                let (elem, l) = gen_wt_type(env, r, b / 2);
+                let len = gen_wt_nat(env, r, b / 2);
+                return (rty(Type::Vec { level: l.clone(), elem, len }), l);
+            }
+            14 if b > 0 => {
+                let len = gen_wt_nat(env, r, b / 2);
+                return (rty(Type::Fin { len }), Level::Zero);
+            }
+            15 if b > 0 => {
+                let (shape, l) = gen_wt_type(env, r, b / 2);
+                let e = env.push_entry(Rc::clone(&shape), l.clone());
+                let arity = gen_wt_nat(&e, r, b / 2);
+                return (rty(Type::Wf { level: l.clone(), shape, arity }), l);
+            }
             _ => continue,
         }
     }
     (rty(Type::Nat), Level::Zero)
 }
 
+/// A well-typed `Nat` term: a small literal most of the time (so `Vec`/`Fin`
+/// actually reduce), otherwise whatever the generator finds at `Nat`.
+fn gen_wt_nat(env: &WtEnv, r: &mut Rng, b: u32) -> Rc<Term> {
+    if b > 0 && r.below(3) == 0 {
+        if let Some(t) = gen_wt_term_at(env, r, b, &Type::Nat, &Level::Zero) {
+            return t;
+        }
+    }
+    let mut t = Term::Zero;
+    for _ in 0..r.below(3) {
+        t = Term::Succ(rt(t));
+    }
+    rt(t)
+}
+
 /// Synthesize an encoding `⊢_i t : Ty l @ 1+l`, returning `(t, l)`.
 pub fn gen_encoding(env: &WtEnv, r: &mut Rng, b: u32) -> (Rc<Term>, Level) {
-    match r.below(7) {
+    match r.below(10) {
         0 => (rt(Term::TmNat), Level::Zero),
         1 => {
             let l = gen_wf_level(env.univs, r, 1);
@@ -436,6 +470,25 @@ pub fn gen_encoding(env: &WtEnv, r: &mut Rng, b: u32) -> (Rc<Term>, Level) {
                 rt(Term::TmW { shape_level: dl.clone(), pos_level: cl.clone(), shape, pos }),
                 Level::max(dl, cl),
             )
+        }
+        7 if b > 0 => {
+            // Vec encoding (extension, §6): element code plus a Nat length
+            // in the same scope.
+            let (elem, l) = gen_encoding(env, r, b / 2);
+            let len = gen_wt_nat(env, r, b / 2);
+            (rt(Term::TmVec { level: l.clone(), elem, len }), l)
+        }
+        8 => (rt(Term::TmFin { len: gen_wt_nat(env, r, b / 2) }), Level::Zero),
+        9 if b > 0 => {
+            // Wf encoding (extension, §6): the arity is a Nat term under
+            // `x : El shape`, mirroring the W arm's positions.
+            let (shape, l) = gen_encoding(env, r, b / 2);
+            let e = env.push_entry(
+                rty(Type::El { level: l.clone(), tm: Rc::clone(&shape) }),
+                l.clone(),
+            );
+            let arity = gen_wt_nat(&e, r, b / 2);
+            (rt(Term::TmWf { level: l.clone(), shape, arity }), l)
         }
         _ => (rt(Term::TmNat), Level::Zero),
     }
@@ -1229,7 +1282,7 @@ fn gen_letbox_ty(env: &WtEnv, r: &mut Rng, b: u32) -> (Rc<Term>, Rc<Type>, Level
 /// recursive-call entry has that same motive (so `Var(0)` inhabits the
 /// branch type). Order = `Branches` field order. Independent transcription
 /// of docs/delam/04 — a disagreement with `src/rec.rs` is a test failure.
-const BRANCH_DIMS: [(u32, u32, u32, bool, bool); 37] = [
+const BRANCH_DIMS: [(u32, u32, u32, bool, bool); 45] = [
     (0, 1, 0, false, false), // ty_nat
     (2, 3, 2, false, true),  // ty_pi
     (1, 1, 0, false, false), // ty_ty
@@ -1267,6 +1320,14 @@ const BRANCH_DIMS: [(u32, u32, u32, bool, bool); 37] = [
     (2, 3, 2, true, true),   // tm_w
     (2, 5, 4, true, true),   // tm_sup
     (3, 6, 5, true, true),   // tm_elim_w (innermost local is a term-motive call)
+    (1, 3, 2, false, false), // ty_vec (innermost local is a term-motive call)
+    (1, 3, 2, true, true),   // tm_vec
+    (0, 2, 1, false, false), // ty_fin (innermost local is a term-motive call)
+    (0, 2, 1, true, true),   // tm_fin
+    (1, 3, 2, false, false), // ty_wf (innermost local is a term-motive call)
+    (1, 3, 2, true, true),   // tm_wf
+    (1, 5, 4, true, true),   // tm_supf
+    (2, 6, 5, true, true),   // tm_elim_wf (innermost local is a term-motive call)
 ];
 
 /// A Γ-variable whose WHNF type is a contextual type matching `tm_variant`:
@@ -1322,7 +1383,7 @@ fn gen_const_rec(
         ty_motive: rty(m1ty.shift_univ(1).shift_global(1).shift_local(1)),
         tm_motive: rty(m2ty.shift_univ(1).shift_global(2).shift_local(1)),
     });
-    let mut bs: Vec<Rc<Term>> = Vec::with_capacity(37);
+    let mut bs: Vec<Rc<Term>> = Vec::with_capacity(45);
     for &(tu, tg, tl, tm_kind, var_ok) in &BRANCH_DIMS {
         if var_ok && r.below(3) == 0 {
             bs.push(rt(v(0)));
@@ -1369,6 +1430,14 @@ fn gen_const_rec(
         tm_w: bs[34].clone(),
         tm_sup: bs[35].clone(),
         tm_elim_w: bs[36].clone(),
+        ty_vec: bs[37].clone(),
+        tm_vec: bs[38].clone(),
+        ty_fin: bs[39].clone(),
+        tm_fin: bs[40].clone(),
+        ty_wf: bs[41].clone(),
+        tm_wf: bs[42].clone(),
+        tm_supf: bs[43].clone(),
+        tm_elim_wf: bs[44].clone(),
     });
     if tm_variant {
         let (scrut, delta, cty, cl) = match neutral {
@@ -1609,7 +1678,7 @@ pub fn gen_nat_rec(base: &WtEnv, r: &mut Rng, tm_variant: bool) -> NatRec {
 impl NatRec {
     /// The recursor over `Var 0` with the given branch bodies, in
     /// [`Branches`] field order. Checks at `Nat @ 0` in `self.env`.
-    pub fn build(&self, bs: &[Rc<Term>; 37]) -> Rc<Term> {
+    pub fn build(&self, bs: &[Rc<Term>; 45]) -> Rc<Term> {
         let motives = Rc::new(Motives {
             ty_motive: rty(Type::Nat),
             tm_motive: rty(Type::Nat),
@@ -1652,6 +1721,14 @@ impl NatRec {
             tm_w: bs[34].clone(),
             tm_sup: bs[35].clone(),
             tm_elim_w: bs[36].clone(),
+            ty_vec: bs[37].clone(),
+            tm_vec: bs[38].clone(),
+            ty_fin: bs[39].clone(),
+            tm_fin: bs[40].clone(),
+            ty_wf: bs[41].clone(),
+            tm_wf: bs[42].clone(),
+            tm_supf: bs[43].clone(),
+            tm_elim_wf: bs[44].clone(),
         });
         rt(if self.tm_variant {
             Term::ElimCodeTm {
@@ -1974,6 +2051,106 @@ pub fn identity_branches() -> Rc<Branches> {
                 pos: rty(gty(3, &gx5)),
                 motive: rty(gty(2, &gz)),
                 step: rt(gtm(1, &gafi)),
+                scrut: rt(gtm(0, &g5)),
+            })))
+        },
+        // -- finitary branching branches (docs/wf-former-design.md §6) --
+        // box Vec^ℓ(U_T^id; u_k^id) — telescope g = 2, U_T = 1, u_k = 0.
+        ty_vec: rt(Term::BoxTy(rty(Type::Vec {
+            level: lv(0),
+            elem: rty(gty(1, &g2)),
+            len: rt(gtm(0, &g2)),
+        }))),
+        // box (Vec^ℓ(u_t^id; u_k^id)) (the encoding) — g = 2, u_t = 1,
+        // u_k = 0.
+        tm_vec: rt(Term::BoxTm(rt(Term::TmVec {
+            level: lv(0),
+            elem: rt(gtm(1, &g2)),
+            len: rt(gtm(0, &g2)),
+        }))),
+        // box Fin(u_k^id) / box (Fin u_k^id) — g = 1, u_k = 0; no universe
+        // binder.
+        ty_fin: rt(Term::BoxTy(rty(Type::Fin { len: rt(gtm(0, &g1)) }))),
+        tm_fin: rt(Term::BoxTm(rt(Term::TmFin { len: rt(gtm(0, &g1)) }))),
+        // box (Wf^ℓ(x:U_S^id). u_n^id) — g = 2, U_S = 1, u_n = 0. One
+        // universe only: the arity is a Nat term.
+        ty_wf: {
+            let gx = ext(&g2, gty(1, &g2), lv(0));
+            rt(Term::BoxTy(rty(Type::Wf {
+                level: lv(0),
+                shape: rty(gty(1, &g2)),
+                arity: rt(gtm(0, &gx)),
+            })))
+        },
+        // box (Wf^ℓ(x:u_s^id). u_n^id) (the encoding) — g = 2, u_s = 1,
+        // u_n = 0.
+        tm_wf: {
+            let gx = ext(&g2, Type::El { level: lv(0), tm: rt(gtm(1, &g2)) }, lv(0));
+            rt(Term::BoxTm(rt(Term::TmWf {
+                level: lv(0),
+                shape: rt(gtm(1, &g2)),
+                arity: rt(gtm(0, &gx)),
+            })))
+        },
+        // box (sup_f(x:U_S^id. u_n^id; u_a^id; u_cs^id)) — g = 4, U_S = 3,
+        // u_n = 2, u_a = 1, u_cs = 0.
+        tm_supf: {
+            let gx = ext(&g4, gty(3, &g4), lv(0));
+            rt(Term::BoxTm(rt(Term::Supf {
+                level: lv(0),
+                shape: rty(gty(3, &g4)),
+                arity: rt(gtm(2, &gx)),
+                label: rt(gtm(1, &g4)),
+                children: rt(gtm(0, &g4)),
+            })))
+        },
+        // box (elim_Wf (x. U_S^id. u_n^id) (z. U_M^id) (a cs ih. u_s^id)
+        // u_t^id) — telescope g = 5, U_S = 4, u_n = 3, U_M = 2, u_s = 1,
+        // u_t = 0. The step's context is (g, a, cs, ih); only its length and
+        // base are read by u_s's identity substitution, but the entries are
+        // spelled out to keep this an honest transcription of the rule.
+        tm_elim_wf: {
+            let g5 = g_ctx(5);
+            let gx5 = ext(&g5, gty(4, &g5), lv(1));
+            let wf5 = Type::Wf {
+                level: lv(1),
+                shape: rty(gty(4, &g5)),
+                arity: rt(gtm(3, &gx5)),
+            };
+            let gz = ext(&g5, wf5.clone(), lv(1));
+            // cs : Vec^ℓ(Wf; u_n^{id,a/x}) in (g, a) — `a` sits where the
+            // binder `x` was, so the arity is `u_n^id` unchanged.
+            let cs_ty = Type::Vec {
+                level: lv(1),
+                elem: rty(wf5.shift_local(1)),
+                len: rt(gtm(3, &gx5)),
+            };
+            let gacs = ext(&gx5, cs_ty, lv(1));
+            // ih : Π(i : Fin u_n). U_M^{id, nth(Wf; u_n; cs; i)/z}.
+            let nth_at_i = nth(
+                &lv(1),
+                &rty(wf5.shift_local(3)),
+                &rt(gtm(3, &gx5).shift_local(2)),
+                rt(Term::Var(LocalVar(1))),
+                rt(Term::Var(LocalVar(0))),
+            );
+            let ih_ty = Type::Pi {
+                dom_level: Level::Zero,
+                cod_level: lv(0),
+                dom: rty(Type::Fin { len: rt(gtm(3, &gx5).shift_local(1)) }),
+                cod: rty(Type::GlobalTy {
+                    var: GlobalVar(2),
+                    subst: LocalSubst::id(&g5).shift_local(3).extended(rt(nth_at_i)),
+                }),
+            };
+            let gacsi = ext(&gacs, ih_ty, lv(0));
+            rt(Term::BoxTm(rt(Term::ElimWf {
+                level: lv(1),
+                motive_level: lv(0),
+                shape: rty(gty(4, &g5)),
+                arity: rt(gtm(3, &gx5)),
+                motive: rty(gty(2, &gz)),
+                step: rt(gtm(1, &gacsi)),
                 scrut: rt(gtm(0, &g5)),
             })))
         },

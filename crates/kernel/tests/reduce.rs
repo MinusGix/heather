@@ -168,6 +168,14 @@ fn dummy_branches() -> Branches {
         tm_w: z(),
         tm_sup: z(),
         tm_elim_w: z(),
+        ty_vec: z(),
+        tm_vec: z(),
+        ty_fin: z(),
+        tm_fin: z(),
+        ty_wf: z(),
+        tm_wf: z(),
+        tm_supf: z(),
+        tm_elim_wf: z(),
     }
 }
 

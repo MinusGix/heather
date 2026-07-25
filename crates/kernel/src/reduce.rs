@@ -26,7 +26,9 @@ use std::rc::Rc;
 
 use crate::level::Level;
 use crate::subst::{GlobalEntry, GlobalSubst};
-use crate::term::{nth, CtxEntry, LocalCtx, LocalSubst, LocalVar, Term, Type};
+use crate::term::{
+    nth, wf_step_telescope, CtxEntry, LocalCtx, LocalSubst, LocalVar, Term, Type,
+};
 
 /// Reduction ran out of fuel before reaching a normal form. On well-typed
 /// input this indicates the fuel bound was too small (reduction of
@@ -112,6 +114,22 @@ pub fn step_type(t: &Type, gamma: &LocalCtx) -> Option<Type> {
                 pos_level: pos_level.clone(),
                 shape: Rc::new(Type::El { level: shape_level.clone(), tm: Rc::clone(shape) }),
                 pos: Rc::new(Type::El { level: pos_level.clone(), tm: Rc::clone(pos) }),
+            }),
+            // El^l (Vec^l(s; k)) ⇝ Vec^l(El^l s; k)   (extension, §6)
+            Term::TmVec { level: l, elem, len } => Some(Type::Vec {
+                level: l.clone(),
+                elem: Rc::new(Type::El { level: l.clone(), tm: Rc::clone(elem) }),
+                len: Rc::clone(len),
+            }),
+            // El^0 (Fin k) ⇝ Fin k   (extension, §6)
+            Term::TmFin { len } => Some(Type::Fin { len: Rc::clone(len) }),
+            // El^l (Wf^l(x:s). n) ⇝ Wf^l(x : El^l s). n   (extension, §6);
+            // the arity is a term under the same binder, so it is carried
+            // across unchanged — only the shape decodes.
+            Term::TmWf { level: l, shape, arity } => Some(Type::Wf {
+                level: l.clone(),
+                shape: Rc::new(Type::El { level: l.clone(), tm: Rc::clone(shape) }),
+                arity: Rc::clone(arity),
             }),
             _ => step_term(tm, gamma)
                 .map(|tm| Type::El { level: level.clone(), tm: Rc::new(tm) }),
@@ -771,14 +789,65 @@ fn beta_elim_ty(
                 gamma,
             ))
         }
+        // (ℓ, g, U_T, u_k, x_T, x_k. t_Vec) — x_k recurses at the *term*
+        // motive: the length is a term of Δ, not a type.   (extension, §6)
+        Type::Vec { level, elem, len } => {
+            let s_elem = rec.elim_ty(level.clone(), delta.clone(), Rc::clone(elem));
+            let s_len = rec.elim_tm(
+                Level::Zero,
+                delta.clone(),
+                Rc::new(Type::Nat),
+                Rc::clone(len),
+            );
+            Some(fire(
+                &b.ty_vec,
+                std::slice::from_ref(level),
+                vec![
+                    GlobalEntry::Ctx(delta.clone()),
+                    GlobalEntry::Ty(Rc::clone(elem)),
+                    GlobalEntry::Tm(Rc::clone(len)),
+                ],
+                vec![s_elem, s_len],
+                gamma,
+            ))
+        }
+        // (g, u_k, x_k. t_Fin) — no universe payload; `Fin` lives at 0.
+        Type::Fin { len } => {
+            let s_len = rec.elim_tm(
+                Level::Zero,
+                delta.clone(),
+                Rc::new(Type::Nat),
+                Rc::clone(len),
+            );
+            Some(fire(
+                &b.ty_fin,
+                &[],
+                vec![GlobalEntry::Ctx(delta.clone()), GlobalEntry::Tm(Rc::clone(len))],
+                vec![s_len],
+                gamma,
+            ))
+        }
+        // (ℓ, g, U_S, u_n, x_S, x_n. t_Wf) — mirrors ty_w, but the arity is
+        // a Nat *term* under the shape binder.   (extension, §6)
+        Type::Wf { level, shape, arity } => {
+            let dx = extend(delta, Rc::clone(shape), level.clone());
+            let s_shape = rec.elim_ty(level.clone(), delta.clone(), Rc::clone(shape));
+            let s_arity =
+                rec.elim_tm(Level::Zero, dx, Rc::new(Type::Nat), Rc::clone(arity));
+            Some(fire(
+                &b.ty_wf,
+                std::slice::from_ref(level),
+                vec![
+                    GlobalEntry::Ctx(delta.clone()),
+                    GlobalEntry::Ty(Rc::clone(shape)),
+                    GlobalEntry::Tm(Rc::clone(arity)),
+                ],
+                vec![s_shape, s_arity],
+                gamma,
+            ))
+        }
         // box (U^δ): blocked, neutral.
         Type::GlobalTy { .. } => None,
-        // Vec/Fin have no code formers and no branches yet, and `ty_infer`
-        // rejects them at layer c (`not_code_layer`), so a well-typed code
-        // never contains one; stuck rather than mis-fired if it does.
-        // Phase 3 replaces this with `ty_vec`/`ty_fin` branches
-        // (docs/wf-former-design.md §6, issues/wf-former.md).
-        Type::Vec { .. } | Type::Fin { .. } | Type::Wf { .. } => None,
         // Layer-m types cannot be layer-c code: ill-typed, stuck.
         _ => None,
     }
@@ -1545,6 +1614,155 @@ fn beta_elim_tm(
                 gamma,
             ))
         }
+        // (ℓ, g, u_t, u_k, x_t, x_k. t'_Vec) — the encoding.   (extension, §6)
+        Term::TmVec { level, elem, len } => {
+            let s_elem = rec.elim_tm(
+                Level::succ(level.clone()),
+                delta.clone(),
+                Rc::new(Type::Ty(level.clone())),
+                Rc::clone(elem),
+            );
+            let s_len = rec.elim_tm(
+                Level::Zero,
+                delta.clone(),
+                Rc::new(Type::Nat),
+                Rc::clone(len),
+            );
+            Some(fire(
+                &b.tm_vec,
+                std::slice::from_ref(level),
+                vec![
+                    GlobalEntry::Ctx(delta.clone()),
+                    GlobalEntry::Tm(Rc::clone(elem)),
+                    GlobalEntry::Tm(Rc::clone(len)),
+                ],
+                vec![s_elem, s_len],
+                gamma,
+            ))
+        }
+        // (g, u_k, x_k. t'_Fin) — the encoding; no universe payload.
+        Term::TmFin { len } => {
+            let s_len = rec.elim_tm(
+                Level::Zero,
+                delta.clone(),
+                Rc::new(Type::Nat),
+                Rc::clone(len),
+            );
+            Some(fire(
+                &b.tm_fin,
+                &[],
+                vec![GlobalEntry::Ctx(delta.clone()), GlobalEntry::Tm(Rc::clone(len))],
+                vec![s_len],
+                gamma,
+            ))
+        }
+        // (ℓ, g, u_s, u_n, x_s, x_n. t'_Wf) — the encoding; the arity
+        // recurses under `x : El ℓ u_s`.   (extension, §6)
+        Term::TmWf { level, shape, arity } => {
+            let s_shape = rec.elim_tm(
+                Level::succ(level.clone()),
+                delta.clone(),
+                Rc::new(Type::Ty(level.clone())),
+                Rc::clone(shape),
+            );
+            let dx = extend(
+                delta,
+                Rc::new(Type::El { level: level.clone(), tm: Rc::clone(shape) }),
+                level.clone(),
+            );
+            let s_arity = rec.elim_tm(Level::Zero, dx, Rc::new(Type::Nat), Rc::clone(arity));
+            Some(fire(
+                &b.tm_wf,
+                std::slice::from_ref(level),
+                vec![
+                    GlobalEntry::Ctx(delta.clone()),
+                    GlobalEntry::Tm(Rc::clone(shape)),
+                    GlobalEntry::Tm(Rc::clone(arity)),
+                ],
+                vec![s_shape, s_arity],
+                gamma,
+            ))
+        }
+        // (ℓ, g, U_S, u_n, u_a, u_cs, x_S, x_n, x_a, x_cs. t_supf) — the
+        // shape annotation is a type sub-structure (like sup's), the arity a
+        // term one; the children recurse at the `Vec` type.   (extension, §6)
+        Term::Supf { level, shape, arity, label, children } => {
+            let wf = Type::Wf {
+                level: level.clone(),
+                shape: Rc::clone(shape),
+                arity: Rc::clone(arity),
+            };
+            let s_shape = rec.elim_ty(level.clone(), delta.clone(), Rc::clone(shape));
+            let dx = extend(delta, Rc::clone(shape), level.clone());
+            let s_arity = rec.elim_tm(Level::Zero, dx, Rc::new(Type::Nat), Rc::clone(arity));
+            let s_label =
+                rec.elim_tm(level.clone(), delta.clone(), Rc::clone(shape), Rc::clone(label));
+            let arity_at =
+                arity.apply_local(&LocalSubst::id(delta).extended(Rc::clone(label)));
+            let cs_ty = Type::Vec {
+                level: level.clone(),
+                elem: Rc::new(wf.clone()),
+                len: Rc::new(arity_at),
+            };
+            let s_children = rec.elim_tm(
+                level.clone(),
+                delta.clone(),
+                Rc::new(cs_ty),
+                Rc::clone(children),
+            );
+            Some(fire(
+                &b.tm_supf,
+                std::slice::from_ref(level),
+                vec![
+                    GlobalEntry::Ctx(delta.clone()),
+                    GlobalEntry::Ty(Rc::clone(shape)),
+                    GlobalEntry::Tm(Rc::clone(arity)),
+                    GlobalEntry::Tm(Rc::clone(label)),
+                    GlobalEntry::Tm(Rc::clone(children)),
+                ],
+                vec![s_shape, s_arity, s_label, s_children],
+                gamma,
+            ))
+        }
+        // (ℓ, ℓ', g, U_S, u_n, U_M, u_s, u_t, x_S, x_n, x_M, x_s, x_t.
+        // t_elimWf) — x_M recurses at the *type* motive; the step's context
+        // and annotation come from `wf_step_telescope`, exactly as in the
+        // typing rule.   (extension, §6)
+        Term::ElimWf { level, motive_level, shape, arity, motive, step, scrut } => {
+            let wf = Type::Wf {
+                level: level.clone(),
+                shape: Rc::clone(shape),
+                arity: Rc::clone(arity),
+            };
+            let s_shape = rec.elim_ty(level.clone(), delta.clone(), Rc::clone(shape));
+            let da = extend(delta, Rc::clone(shape), level.clone());
+            let s_arity =
+                rec.elim_tm(Level::Zero, da.clone(), Rc::new(Type::Nat), Rc::clone(arity));
+            let dz = extend(delta, Rc::new(wf.clone()), level.clone());
+            let s_motive = rec.elim_ty(motive_level.clone(), dz, Rc::clone(motive));
+            let (cs_ty, ih_ty, step_ty) =
+                wf_step_telescope(delta, level, motive_level, shape, arity, motive);
+            let dacs = extend(&da, Rc::new(cs_ty), level.clone());
+            let dacsi = extend(&dacs, Rc::new(ih_ty), motive_level.clone());
+            let s_step =
+                rec.elim_tm(motive_level.clone(), dacsi, Rc::new(step_ty), Rc::clone(step));
+            let s_scrut =
+                rec.elim_tm(level.clone(), delta.clone(), Rc::new(wf), Rc::clone(scrut));
+            Some(fire(
+                &b.tm_elim_wf,
+                &[motive_level.clone(), level.clone()],
+                vec![
+                    GlobalEntry::Ctx(delta.clone()),
+                    GlobalEntry::Ty(Rc::clone(shape)),
+                    GlobalEntry::Tm(Rc::clone(arity)),
+                    GlobalEntry::Ty(Rc::clone(motive)),
+                    GlobalEntry::Tm(Rc::clone(step)),
+                    GlobalEntry::Tm(Rc::clone(scrut)),
+                ],
+                vec![s_shape, s_arity, s_motive, s_step, s_scrut],
+                gamma,
+            ))
+        }
         // box (u^δ): blocked, neutral.
         Term::GlobalTm { .. } => None,
         // Layer-m forms cannot be layer-c code: ill-typed, stuck.
@@ -1641,6 +1859,9 @@ pub fn is_whnf_term(t: &Term) -> bool {
         | Term::TmEmpty
         | Term::TmSum { .. }
         | Term::TmW { .. }
+        | Term::TmVec { .. }
+        | Term::TmFin { .. }
+        | Term::TmWf { .. }
         | Term::Zero
         | Term::Succ(_)
         | Term::Refl { .. }

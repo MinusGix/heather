@@ -14,6 +14,12 @@ cd "$(dirname "$0")/.."
 cargo test --workspace --no-run --quiet
 
 # ...then run under them: 4 GiB address space, 5 CPU minutes, two threads.
+#
+# RUST_MIN_STACK raises the *test thread* stack from its 2 MiB default: the
+# `Wf` step telescope embeds the `nth` schema (a nested elim_Nat under two
+# λs), so checking the `tm_elim_wf` branch of a 45-branch recursor recurses
+# deeper than 2 MiB allows. 8 MiB is comfortable; the cap above still bounds
+# total address space.
 ulimit -v 4194304
 ulimit -t 300
-RUST_TEST_THREADS=2 exec cargo test --quiet "$@"
+RUST_MIN_STACK=8388608 RUST_TEST_THREADS=2 exec cargo test --quiet "$@"

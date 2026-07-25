@@ -155,6 +155,13 @@ impl fmt::Debug for Term {
             Term::TmW { shape_level, pos_level, shape, pos } => {
                 write!(f, "«W[{shape_level:?},{pos_level:?}]({shape:?}). {pos:?}»")
             }
+            Term::TmVec { level, elem, len } => {
+                write!(f, "«Vec[{level:?}]({elem:?}; {len:?})»")
+            }
+            Term::TmFin { len } => write!(f, "«Fin({len:?})»"),
+            Term::TmWf { level, shape, arity } => {
+                write!(f, "«Wf[{level:?}]({shape:?}). {arity:?}»")
+            }
             Term::Zero => f.write_str("0"),
             Term::Succ(t) => write!(f, "S({t:?})"),
             Term::ElimNat { level, motive, base, step, scrut } => write!(

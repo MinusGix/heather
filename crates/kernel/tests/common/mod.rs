@@ -337,6 +337,41 @@ pub fn gen_branches(sc: &Sc, r: &mut Rng, b: u32) -> Rc<Branches> {
                 GK::Tm(sh(g, 0)),
             ]
         }),
+        // -- finitary branching (docs/wf-former-design.md §6) --
+        // (ℓ, g, U_T, u_k : Trm_c(g ⊢ Nat), x_T, x_k) — the length is a
+        // term of g, so it binds nothing.
+        ty_vec: t(1, 2, &|g| vec![GK::Ctx, GK::Ty(sh(g, 0)), GK::Tm(sh(g, 0))]),
+        tm_vec: t(1, 2, &|g| vec![GK::Ctx, GK::Tm(sh(g, 0)), GK::Tm(sh(g, 0))]),
+        // (g, u_k, x_k) — no universe binder; `Fin` lives at 0.
+        ty_fin: t(0, 1, &|g| vec![GK::Ctx, GK::Tm(sh(g, 0))]),
+        tm_fin: t(0, 1, &|g| vec![GK::Ctx, GK::Tm(sh(g, 0))]),
+        // (ℓ, g, U_S, u_n : Trm_c((g, x:U_S) ⊢ Nat), x_S, x_n) — one univ
+        // only: the arity is a term.
+        ty_wf: t(1, 2, &|g| vec![GK::Ctx, GK::Ty(sh(g, 0)), GK::Tm(sh(g, 1))]),
+        tm_wf: t(1, 2, &|g| vec![GK::Ctx, GK::Tm(sh(g, 0)), GK::Tm(sh(g, 1))]),
+        // (ℓ, g, U_S, u_n, u_a, u_cs, x_S, x_n, x_a, x_cs)
+        tm_supf: t(1, 4, &|g| {
+            vec![
+                GK::Ctx,
+                GK::Ty(sh(g, 0)),
+                GK::Tm(sh(g, 1)),
+                GK::Tm(sh(g, 0)),
+                GK::Tm(sh(g, 0)),
+            ]
+        }),
+        // (ℓ, ℓ', g, U_S, u_n, U_M : Typ_c((g, z:Wf), ℓ'),
+        //  u_s : Trm_c((g, a, cs, ih) ⊢ …), u_t : Trm_c(g ⊢ Wf),
+        //  x_S, x_n, x_M, x_s, x_t)
+        tm_elim_wf: t(2, 5, &|g| {
+            vec![
+                GK::Ctx,
+                GK::Ty(sh(g, 0)),
+                GK::Tm(sh(g, 1)),
+                GK::Ty(sh(g, 1)),
+                GK::Tm(sh(g, 3)),
+                GK::Tm(sh(g, 0)),
+            ]
+        }),
     })
 }
 
@@ -512,7 +547,7 @@ pub fn gen_term(sc: &Sc, r: &mut Rng, b: u32) -> Rc<Term> {
     }
 
     for _ in 0..8 {
-        let arm = if b == 0 { r.below(5) } else { r.below(36) };
+        let arm = if b == 0 { r.below(5) } else { r.below(39) };
         match arm {
             0 if sc.local.len > 0 => return Rc::new(Term::Var(LocalVar(r.below(sc.local.len)))),
             0 | 1 => return Rc::new(Term::Zero),
@@ -855,6 +890,25 @@ pub fn gen_term(sc: &Sc, r: &mut Rng, b: u32) -> Rc<Term> {
                     scrut: gen_term(sc, r, b / 2),
                 });
             }
+            // Vec/Fin/Wf codes: the lengths are terms of the ambient scope
+            // (no binder); only the Wf code's arity binds `x : El s`.
+            36 if b > 0 => {
+                return Rc::new(Term::TmVec {
+                    level: gen_level(sc, r, 1),
+                    elem: gen_term(sc, r, b / 2),
+                    len: gen_term(sc, r, b / 2),
+                });
+            }
+            37 if b > 0 => return Rc::new(Term::TmFin { len: gen_term(sc, r, b / 2) }),
+            38 if b > 0 => {
+                let mut in1 = sc.clone();
+                in1.local.len += 1;
+                return Rc::new(Term::TmWf {
+                    level: gen_level(sc, r, 1),
+                    shape: gen_term(sc, r, b / 2),
+                    arity: gen_term(&in1, r, b / 2),
+                });
+            }
             _ => continue,
         }
     }
@@ -986,6 +1040,9 @@ pub fn count_term(t: &Term) -> u64 {
         Term::TmSigma { fst, snd, .. } => count_term(fst) + count_term(snd),
         Term::TmSum { lhs, rhs, .. } => count_term(lhs) + count_term(rhs),
         Term::TmW { shape, pos, .. } => count_term(shape) + count_term(pos),
+        Term::TmVec { elem, len, .. } => count_term(elem) + count_term(len),
+        Term::TmFin { len } => count_term(len),
+        Term::TmWf { shape, arity, .. } => count_term(shape) + count_term(arity),
         Term::Sup { shape_ty, pos_ty, label, children, .. } => {
             count_type(shape_ty) + count_type(pos_ty) + count_term(label)
                 + count_term(children)

@@ -14,7 +14,7 @@
 //! Coverage: the reductions at literal lengths, neutrality at a neutral
 //! length (with structural congruence there), formation and its level,
 //! the componentwise Σ-η / Unit-irrelevance that `Wf`'s arm obligation
-//! will depend on, and the layer-c phase gate.
+//! will depend on.
 
 use std::rc::Rc;
 
@@ -23,7 +23,7 @@ use heather_kernel::layer::Layer;
 use heather_kernel::level::Level;
 use heather_kernel::reduce::whnf_type;
 use heather_kernel::term::{CtxBase, CtxEntry, GlobalCtx, LocalCtx, LocalVar, Term, Type};
-use heather_kernel::typing::{check_term, check_type, TypeError};
+use heather_kernel::typing::{check_term, check_type};
 
 const FUEL: u64 = 100_000;
 
@@ -238,16 +238,15 @@ fn formation_and_levels() {
 }
 
 #[test]
-fn the_layer_gate_holds_until_phase_3() {
-    // `Vec`/`Fin` have no code formers and no rec.rs branches yet, so they
-    // are rejected at layer c — boxed code stays exhaustively recursable
-    // (docs/wf-former-design.md §6). Phase 3 lifts this.
+fn layer_c_accepts_vec_and_fin() {
+    // Phase 1 gated both out of layer c until they had code formers and
+    // recursor branches; phase 3 gave them both, so boxed code may now
+    // mention them (docs/wf-former-design.md §6). The codes themselves and
+    // the round-trip through the recursor live in `tests/wf_codes.rs`.
     let g = nil_ctx();
     for t in [vec(Type::Nat, nat(2)), fin(nat(2))] {
-        assert_eq!(
-            check_type(&GlobalCtx::default(), 0, Layer::Code, &g, &t, &c(0), FUEL).unwrap_err(),
-            TypeError::LayerMismatch,
-        );
+        check_type(&GlobalCtx::default(), 0, Layer::Code, &g, &t, &c(0), FUEL)
+            .expect("layer c accepts Vec/Fin since phase 3");
     }
 }
 

@@ -198,6 +198,14 @@ TmWf  { level, shape: code, arity: term ⟨x⟩ }  El(TmWf s x.n)  ⇝ Wf(El s; 
 TmSupf, TmElimWf                               — term formers, mirroring §2/§4
 ```
 
+*Implementation note (phase 3, landed):* the last line needed no new enum
+variants — `sup_f`/`elim_Wf` are ordinary terms that become code once the
+layer gate lifts, exactly as `sup`/`elim_W` are; only their **branches**
+`tm_supf`/`tm_elim_wf` are new. Note also that `ty_vec`/`ty_fin`/`ty_wf`
+are type-motive branches whose length/arity recursive call sits at the
+*term* motive (`ty_el`'s shape), and that they bind one universe or none,
+not `W`'s two: an arity is a term and carries no level.
+
 Code-recursor bill (`crates/kernel/src/rec.rs`), using the W landing as the
 yardstick (4 branches, 37 total, `tm_elim_w` deepest at 3 univs / 6
 globals / 5 recursive calls): `ty_vec`/`tm_vec`, `ty_fin`/`tm_fin`,

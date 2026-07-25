@@ -124,7 +124,20 @@ fn decode(e: &Term) -> Type {
             shape: rty(Type::El { level: shape_level.clone(), tm: Rc::clone(shape) }),
             pos: rty(Type::El { level: pos_level.clone(), tm: Rc::clone(pos) }),
         },
-        _ => unreachable!("gen_encoding only produces TmNat/TmTy/TmPi/TmId/TmSigma/TmSum/TmW"),
+        // Vec/Fin/Wf (extension, §6): only the element/shape decodes — the
+        // length and the arity are terms and ride across unchanged.
+        Term::TmVec { level, elem, len } => Type::Vec {
+            level: level.clone(),
+            elem: rty(Type::El { level: level.clone(), tm: Rc::clone(elem) }),
+            len: Rc::clone(len),
+        },
+        Term::TmFin { len } => Type::Fin { len: Rc::clone(len) },
+        Term::TmWf { level, shape, arity } => Type::Wf {
+            level: level.clone(),
+            shape: rty(Type::El { level: level.clone(), tm: Rc::clone(shape) }),
+            arity: Rc::clone(arity),
+        },
+        _ => unreachable!("gen_encoding produced an encoding this decoder does not cover"),
     }
 }
 
@@ -214,7 +227,23 @@ fn mutate_encoding(e: &Term) -> Term {
             shape: Rc::clone(shape),
             pos: rt(mutate_encoding(pos)),
         },
-        _ => unreachable!("gen_encoding only produces TmNat/TmTy/TmPi/TmId/TmSigma/TmSum/TmW"),
+        // Vec: mutate the element code (the length is shared syntax with
+        // the type former, so leaving it alone keeps the level).
+        Term::TmVec { level, elem, len } => Term::TmVec {
+            level: level.clone(),
+            elem: rt(mutate_encoding(elem)),
+            len: Rc::clone(len),
+        },
+        // Fin/Wf have no sub-encoding to descend into that is not a binder's
+        // type, so bump the Nat instead: `S k ≉ k` at Nat, and both codes
+        // still live at the same level.
+        Term::TmFin { len } => Term::TmFin { len: rt(Term::Succ(Rc::clone(len))) },
+        Term::TmWf { level, shape, arity } => Term::TmWf {
+            level: level.clone(),
+            shape: Rc::clone(shape),
+            arity: rt(Term::Succ(Rc::clone(arity))),
+        },
+        _ => unreachable!("gen_encoding produced an encoding this mutator does not cover"),
     }
 }
 
@@ -303,9 +332,9 @@ fn neutral_recursor_compares_branches() {
         let tm_variant = r.below(2) == 1;
         let nr = gen_nat_rec(&base_env, &mut r, tm_variant);
         let env = &nr.env;
-        // Branch i holds the numeral i: all 37 pairwise distinct, so any
+        // Branch i holds the numeral i: all 45 pairwise distinct, so any
         // swap or bump must be caught by the branchwise comparison.
-        let base: [Rc<Term>; 37] = std::array::from_fn(|i| numeral(i as u32));
+        let base: [Rc<Term>; 45] = std::array::from_fn(|i| numeral(i as u32));
         let t = nr.build(&base);
         let res =
             check_term(&env.psi, env.univs, env.layer, &env.gamma, &t, &Type::Nat, &Level::Zero, FUEL);
@@ -313,7 +342,7 @@ fn neutral_recursor_compares_branches() {
         let conv = |a: &Term, b: &Term| {
             conv_term(&env.psi, &env.gamma, Layer::Meta, a, b, &Type::Nat, &Level::Zero, FUEL)
         };
-        let k = r.below(37) as usize;
+        let k = r.below(45) as usize;
         // β-wrapped branch: differing sides that are still convertible.
         let mut pos = base.clone();
         pos[k] = beta_wrap(&base[k]);
@@ -329,7 +358,7 @@ fn neutral_recursor_compares_branches() {
         let tn = nr.build(&neg);
         assert_eq!(conv(&t, &tn), Err(NC), "seed {seed}: bumped branch {k}");
         // Two distinct branches swapped: NotConvertible.
-        let j = (k + 1 + r.below(36) as usize) % 37;
+        let j = (k + 1 + r.below(44) as usize) % 45;
         let mut sw = base.clone();
         sw.swap(j, k);
         let ts = nr.build(&sw);
@@ -474,9 +503,30 @@ fn sigma_eta_and_neutral_distinctness() {
             conv_term(&e2.psi, &e2.gamma, at, &eta(0), &p0, &sig2, &lmax, FUEL).is_ok(),
             "seed {seed}: (fst p, snd p) ≉ p"
         );
-        // Not blind: distinct neutral inhabitants of the same Σ differ.
+        // Not blind: distinct neutral inhabitants of the same Σ differ —
+        // asserted at Σ(S, Nat) rather than the generated Σ, because a
+        // generated component may be *proof-irrelevant* (`Unit`, or a
+        // `Vec` at length 0, which reduces to it), and then η makes any two
+        // inhabitants convertible, correctly.
+        let sig_rel = Type::Sigma {
+            fst_level: fl.clone(),
+            snd_level: Level::Zero,
+            fst: Rc::clone(&fst_ty),
+            snd: rty(Type::Nat),
+        };
+        let r1 = env.push_entry(rty(sig_rel.clone()), fl.clone());
+        let r2 = r1.push_entry(rty(sig_rel.shift_local(1)), fl.clone());
         assert_eq!(
-            conv_term(&e2.psi, &e2.gamma, at, &p0, &Term::Var(LocalVar(1)), &sig2, &lmax, FUEL),
+            conv_term(
+                &r2.psi,
+                &r2.gamma,
+                at,
+                &Term::Var(LocalVar(0)),
+                &Term::Var(LocalVar(1)),
+                &sig_rel.shift_local(2),
+                &fl,
+                FUEL
+            ),
             Err(NC),
             "seed {seed}: distinct Σ variables wrongly convertible"
         );

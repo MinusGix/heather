@@ -33,7 +33,7 @@
 //!   variables demand `i' ≤ i`; `ω` is accepted nowhere a programmer level
 //!   is demanded ([`crate::level::Level::well_formed`]) and arises only as
 //!   the inferred level of `ΠΠ`/`Λ ℓ⃗`.
-//! - The recursor rules check the two motives and 37 branches against the
+//! - The recursor rules check the two motives and 45 branches against the
 //!   `G_M G_Typ G_Trm` telescopes of [`crate::rec`] — the same tables
 //!   conversion compares against.
 //!
@@ -364,18 +364,6 @@ impl Tc {
         if env.layer == Layer::Meta { Ok(()) } else { Err(TypeError::LayerMismatch) }
     }
 
-    /// Phase gate for `Vec`/`Fin` (docs/wf-former-design.md §1): they have
-    /// no code formers and no code-recursor branches yet, so they may not
-    /// appear at layer c (or v, which c subsumes here) — boxed code stays
-    /// exhaustively recursable. Lifted when `TmVec`/`TmFin` land with `Wf`
-    /// (issues/wf-former.md phase 3).
-    fn not_code_layer(&self, env: &Env) -> R {
-        match env.layer {
-            Layer::Var | Layer::Code => Err(TypeError::LayerMismatch),
-            Layer::Prog | Layer::Meta => Ok(()),
-        }
-    }
-
     // -- local contexts -----------------------------------------------------
 
     /// `⊢_i Γ` (in `env.psi`; `env.gamma` is irrelevant).
@@ -519,7 +507,6 @@ impl Tc {
             // is a term in Γ (no binder), which is what lets the tuple's
             // arity be *computed* from a shape.
             Type::Vec { level, elem, len } => {
-                self.not_code_layer(env)?;
                 self.level_wf(env, level)?;
                 self.ty_check(env, elem, level)?;
                 self.tm_check(env, len, &Type::Nat, &Level::Zero)?;
@@ -527,7 +514,6 @@ impl Tc {
             }
             // Fin-formation (extension; §1.2): ⊢_i Fin(k) @ 0 ⟸ ⊢_i k : Nat.
             Type::Fin { len } => {
-                self.not_code_layer(env)?;
                 self.tm_check(env, len, &Type::Nat, &Level::Zero)?;
                 Ok(Level::Zero)
             }
@@ -535,7 +521,6 @@ impl Tc {
             // ⊢_i S @ l, (Γ, x:S) ⊢_i n : Nat. The arity is a *term*, so it
             // contributes no level — unlike `W`, whose positions are a type.
             Type::Wf { level, shape, arity } => {
-                self.not_code_layer(env)?;
                 self.level_wf(env, level)?;
                 self.ty_check(env, shape, level)?;
                 let e_x = env.push_entry(Rc::clone(shape), level.clone());
@@ -830,6 +815,39 @@ impl Tc {
                 )?;
                 let lmax = Level::max(shape_level.clone(), pos_level.clone());
                 Ok((Type::Ty(lmax.clone()), Level::succ(lmax)))
+            }
+            // Encoding of Vec (extension; docs/wf-former-design.md §6):
+            // Vec^l(s; k) : Ty l ⟸ s : Ty l, k : Nat. The length is a term
+            // of the ambient scope, so it binds nothing.
+            Term::TmVec { level, elem, len } => {
+                self.not_var_layer(env)?;
+                self.level_wf(env, level)?;
+                self.tm_check(env, elem, &Type::Ty(level.clone()), &Level::succ(level.clone()))?;
+                self.tm_check(env, len, &Type::Nat, &Level::Zero)?;
+                Ok((Type::Ty(level.clone()), Level::succ(level.clone())))
+            }
+            // Encoding of Fin (extension; §6): Fin(k) : Ty 0 ⟸ k : Nat.
+            Term::TmFin { len } => {
+                self.not_var_layer(env)?;
+                self.tm_check(env, len, &Type::Nat, &Level::Zero)?;
+                Ok((Type::Ty(Level::Zero), Level::constant(1)))
+            }
+            // Encoding of Wf (extension; §6): Wf^l(x:s). n : Ty l ⟸
+            // s : Ty l, (Γ, x : El^l s) ⊢ n : Nat. As with the type former,
+            // the arity is a term, so it contributes no level.
+            Term::TmWf { level, shape, arity } => {
+                self.not_var_layer(env)?;
+                self.level_wf(env, level)?;
+                self.tm_check(
+                    env,
+                    shape,
+                    &Type::Ty(level.clone()),
+                    &Level::succ(level.clone()),
+                )?;
+                let el = Type::El { level: level.clone(), tm: Rc::clone(shape) };
+                let e = env.push_entry(Rc::new(el), level.clone());
+                self.tm_check(&e, arity, &Type::Nat, &Level::Zero)?;
+                Ok((Type::Ty(level.clone()), Level::succ(level.clone())))
             }
             Term::Zero => {
                 self.not_var_layer(env)?;
@@ -1249,7 +1267,6 @@ impl Tc {
             // cs : Vec^l(Wf; n[a/x]) — children as a tuple.
             Term::Supf { level, shape, arity, label, children } => {
                 self.not_var_layer(env)?;
-                self.not_code_layer(env)?;
                 self.level_wf(env, level)?;
                 self.ty_check(env, shape, level)?;
                 let e_x = env.push_entry(Rc::clone(shape), level.clone());
@@ -1276,7 +1293,6 @@ impl Tc {
             // `wf_step_telescope`, shared verbatim with conv.rs.
             Term::ElimWf { level, motive_level, shape, arity, motive, step, scrut } => {
                 self.not_var_layer(env)?;
-                self.not_code_layer(env)?;
                 self.level_wf(env, level)?;
                 self.level_wf(env, motive_level)?;
                 self.ty_check(env, shape, level)?;
@@ -1580,7 +1596,7 @@ impl Tc {
 
     /// The `G_A = G_M G_Typ G_Trm` premise bundle shared by the two
     /// recursor rules: motive levels, both motives well-formed in their
-    /// scopes, and all 37 branches at their instantiated motive types.
+    /// scopes, and all 45 branches at their instantiated motive types.
     fn rec_ga(
         &self,
         env: &Env,

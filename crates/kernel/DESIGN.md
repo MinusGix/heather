@@ -107,9 +107,10 @@ the recursive call from the eliminator's own annotations. Motivation
 `W (x:A) (Σ y, R y x)` + Id, funext discharging the indexed-containers
 obligations) — the one thing the finitary encodings provably cannot reach.
 The code recursors gain four branches (`ty_w`, `tm_w`, `tm_sup`,
-`tm_elim_w`; **37 total**); `tm_elim_w`'s telescope (3 univs, 6 globals, 5
-recursive calls) nests Π types inside its global bindings (the step's `f`
-and `ih` binders), the deepest binding-type construction yet.
+`tm_elim_w`; 37 at the time, 45 today); `tm_elim_w`'s telescope
+(3 univs, 6 globals, 5 recursive calls) nests Π types inside its global
+bindings (the step's `f` and `ih` binders), the deepest binding-type
+construction yet.
 
 `Vec^l(T; k)` and `Fin(k)` (2026-07-25) are index-computing wrappers, not
 new definitional power: `Vec(T;0) ⇝ Unit`, `Vec(T;S k) ⇝ Σ(_:T). Vec(T;k)`,
@@ -119,11 +120,7 @@ length** and carrying no introduction/elimination forms of its own — every
 length 0) is inherited through the reduction from `Σ`/`Unit`. The length is
 a *term* at the same depth as the element, with no binder anywhere, which is
 what lets a tuple's arity be computed from a datatype's tag. They are
-phase-1 of the `Wf` former (`docs/wf-former-design.md`), and until phase 3
-they are **gated out of layer c** (`not_code_layer` in `typing.rs`) because
-they have no code formers or code-recursor branches yet — so boxed code
-stays exhaustively recursable, and `beta_elim_ty` blocks rather than
-mis-fires if one ever reaches it.
+phase-1 of the `Wf` former (`docs/wf-former-design.md`).
 
 `Wf^l(x:S). n` (2026-07-25) is the finitary branching fixed point: shapes
 `S`, arity a `Nat` **term** with the shape free, children a
@@ -144,6 +141,22 @@ the entire reason the former exists — the abstract constructor
 `node (nth 2 cs 0) (nth 2 cs 1)`, which is the equation route A pays funext
 for in every arm (`crates/kernel/tests/wf.rs`,
 `crates/elab/tests/branching_route_a.rs`).
+
+The **codes** for the group (2026-07-25, phase 3) are `TmVec`, `TmFin`,
+`TmWf`, decoding as `El (Vec^l(s;k)) ⇝ Vec^l(El s; k)`,
+`El (Fin k) ⇝ Fin k`, `El (Wf^l(x:s). n) ⇝ Wf^l(x : El s). n` — in each
+case only the element/shape decodes, since the length and the arity are
+`Nat` *terms* and ride across unchanged. With them the phase-1/2 layer-c
+gate is gone: all three formers, `sup_f` and `elim_Wf` are code, and the
+code recursors gain eight branches (`ty_vec`/`tm_vec`, `ty_fin`/`tm_fin`,
+`ty_wf`/`tm_wf`, `tm_supf`, `tm_elim_wf`; **45 total**). Two asymmetries
+with the `W` group are worth remembering: the `Vec`/`Wf` branches bind one
+universe, not two (an arity term contributes no level), and their length /
+arity recursive calls go at the **term** motive — so `ty_vec`/`ty_fin`/
+`ty_wf` are type-motive branches whose innermost recursive-call entry is a
+term-motive one. `tm_elim_wf`'s step binding reuses `term::wf_step_telescope`
+verbatim, which is why the rec.rs, typing.rs and reduce.rs transcriptions of
+it cannot drift.
 
 Explicitly out of v0: coinduction/effects, typeclasses, compiler machinery,
 inductive types beyond Nat, Id, Σ, Unit, Empty, binary sums, W, and the

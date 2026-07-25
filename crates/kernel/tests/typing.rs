@@ -16,8 +16,8 @@ use std::rc::Rc;
 use heather_kernel::layer::Layer;
 use heather_kernel::level::{Level, UnivVar};
 use heather_kernel::term::{
-    Branches, CtxBase, CtxEntry, GlobalBinding, GlobalCtx, GlobalVar, LocalCtx, LocalSubst,
-    LocalVar, Motives, SubstTail, Term, Type,
+    nth, Branches, CtxBase, CtxEntry, GlobalBinding, GlobalCtx, GlobalVar, LocalCtx,
+    LocalSubst, LocalVar, Motives, SubstTail, Term, Type,
 };
 use heather_kernel::typing::{
     check_global_ctx, check_local_ctx, check_local_subst, check_term, check_type, infer_term,
@@ -543,6 +543,14 @@ fn constant_branches() -> Rc<Branches> {
         tm_w: z(),
         tm_sup: z(),
         tm_elim_w: z(),
+        ty_vec: z(),
+        tm_vec: z(),
+        ty_fin: z(),
+        tm_fin: z(),
+        ty_wf: z(),
+        tm_wf: z(),
+        tm_supf: z(),
+        tm_elim_wf: z(),
     })
 }
 
@@ -905,6 +913,106 @@ fn identity_branches() -> Rc<Branches> {
                 pos: rty(gty(3, &gx5)),
                 motive: rty(gty(2, &gz)),
                 step: rt(gtm(1, &gafi)),
+                scrut: rt(gtm(0, &g5)),
+            })))
+        },
+        // -- finitary branching branches (docs/wf-former-design.md §6) --
+        // box Vec^ℓ(U_T^id; u_k^id) — telescope g = 2, U_T = 1, u_k = 0.
+        ty_vec: rt(Term::BoxTy(rty(Type::Vec {
+            level: lv(0),
+            elem: rty(gty(1, &g2)),
+            len: rt(gtm(0, &g2)),
+        }))),
+        // box (Vec^ℓ(u_t^id; u_k^id)) (the encoding) — g = 2, u_t = 1,
+        // u_k = 0.
+        tm_vec: rt(Term::BoxTm(rt(Term::TmVec {
+            level: lv(0),
+            elem: rt(gtm(1, &g2)),
+            len: rt(gtm(0, &g2)),
+        }))),
+        // box Fin(u_k^id) / box (Fin u_k^id) — g = 1, u_k = 0; no universe
+        // binder.
+        ty_fin: rt(Term::BoxTy(rty(Type::Fin { len: rt(gtm(0, &g1)) }))),
+        tm_fin: rt(Term::BoxTm(rt(Term::TmFin { len: rt(gtm(0, &g1)) }))),
+        // box (Wf^ℓ(x:U_S^id). u_n^id) — g = 2, U_S = 1, u_n = 0. One
+        // universe only: the arity is a Nat term.
+        ty_wf: {
+            let gx = ext(&g2, gty(1, &g2), lv(0));
+            rt(Term::BoxTy(rty(Type::Wf {
+                level: lv(0),
+                shape: rty(gty(1, &g2)),
+                arity: rt(gtm(0, &gx)),
+            })))
+        },
+        // box (Wf^ℓ(x:u_s^id). u_n^id) (the encoding) — g = 2, u_s = 1,
+        // u_n = 0.
+        tm_wf: {
+            let gx = ext(&g2, Type::El { level: lv(0), tm: rt(gtm(1, &g2)) }, lv(0));
+            rt(Term::BoxTm(rt(Term::TmWf {
+                level: lv(0),
+                shape: rt(gtm(1, &g2)),
+                arity: rt(gtm(0, &gx)),
+            })))
+        },
+        // box (sup_f(x:U_S^id. u_n^id; u_a^id; u_cs^id)) — g = 4, U_S = 3,
+        // u_n = 2, u_a = 1, u_cs = 0.
+        tm_supf: {
+            let gx = ext(&g4, gty(3, &g4), lv(0));
+            rt(Term::BoxTm(rt(Term::Supf {
+                level: lv(0),
+                shape: rty(gty(3, &g4)),
+                arity: rt(gtm(2, &gx)),
+                label: rt(gtm(1, &g4)),
+                children: rt(gtm(0, &g4)),
+            })))
+        },
+        // box (elim_Wf (x. U_S^id. u_n^id) (z. U_M^id) (a cs ih. u_s^id)
+        // u_t^id) — telescope g = 5, U_S = 4, u_n = 3, U_M = 2, u_s = 1,
+        // u_t = 0. The step's context is (g, a, cs, ih); only its length and
+        // base are read by u_s's identity substitution, but the entries are
+        // spelled out to keep this an honest transcription of the rule.
+        tm_elim_wf: {
+            let g5 = g_ctx(5);
+            let gx5 = ext(&g5, gty(4, &g5), lv(1));
+            let wf5 = Type::Wf {
+                level: lv(1),
+                shape: rty(gty(4, &g5)),
+                arity: rt(gtm(3, &gx5)),
+            };
+            let gz = ext(&g5, wf5.clone(), lv(1));
+            // cs : Vec^ℓ(Wf; u_n^{id,a/x}) in (g, a) — `a` sits where the
+            // binder `x` was, so the arity is `u_n^id` unchanged.
+            let cs_ty = Type::Vec {
+                level: lv(1),
+                elem: rty(wf5.shift_local(1)),
+                len: rt(gtm(3, &gx5)),
+            };
+            let gacs = ext(&gx5, cs_ty, lv(1));
+            // ih : Π(i : Fin u_n). U_M^{id, nth(Wf; u_n; cs; i)/z}.
+            let nth_at_i = nth(
+                &lv(1),
+                &rty(wf5.shift_local(3)),
+                &rt(gtm(3, &gx5).shift_local(2)),
+                rt(Term::Var(LocalVar(1))),
+                rt(Term::Var(LocalVar(0))),
+            );
+            let ih_ty = Type::Pi {
+                dom_level: Level::Zero,
+                cod_level: lv(0),
+                dom: rty(Type::Fin { len: rt(gtm(3, &gx5).shift_local(1)) }),
+                cod: rty(Type::GlobalTy {
+                    var: GlobalVar(2),
+                    subst: LocalSubst::id(&g5).shift_local(3).extended(rt(nth_at_i)),
+                }),
+            };
+            let gacsi = ext(&gacs, ih_ty, lv(0));
+            rt(Term::BoxTm(rt(Term::ElimWf {
+                level: lv(1),
+                motive_level: lv(0),
+                shape: rty(gty(4, &g5)),
+                arity: rt(gtm(3, &gx5)),
+                motive: rty(gty(2, &gz)),
+                step: rt(gtm(1, &gacsi)),
                 scrut: rt(gtm(0, &g5)),
             })))
         },

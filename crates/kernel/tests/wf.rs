@@ -26,7 +26,7 @@ use heather_kernel::reduce::whnf_term;
 use heather_kernel::term::{
     nth, CtxBase, CtxEntry, GlobalCtx, LocalCtx, LocalVar, Term, Type,
 };
-use heather_kernel::typing::{check_term, check_type, TypeError};
+use heather_kernel::typing::{check_term, check_type};
 
 const FUEL: u64 = 1_000_000;
 
@@ -473,17 +473,14 @@ fn sigma_eta_bridges_the_constructor_form() {
 }
 
 #[test]
-fn the_layer_gate_holds_until_phase_3() {
+fn layer_c_accepts_wf_and_its_constructors() {
+    // Phase 2 gated these out of layer c; phase 3's codes and branches let
+    // them in (docs/wf-former-design.md §6, tests/wf_codes.rs).
     let g = nil_ctx();
-    assert_eq!(
-        check_type(&GlobalCtx::default(), 0, Layer::Code, &g, &tree(), &c(0), FUEL).unwrap_err(),
-        TypeError::LayerMismatch,
-    );
-    assert_eq!(
-        check_term(&GlobalCtx::default(), 0, Layer::Code, &g, &leaf(), &tree(), &c(0), FUEL)
-            .unwrap_err(),
-        TypeError::LayerMismatch,
-    );
+    check_type(&GlobalCtx::default(), 0, Layer::Code, &g, &tree(), &c(0), FUEL)
+        .expect("layer c accepts Wf since phase 3");
+    check_term(&GlobalCtx::default(), 0, Layer::Code, &g, &leaf(), &tree(), &c(0), FUEL)
+        .expect("layer c accepts sup_f since phase 3");
 }
 
 // -------------------------------------------------------------------------
