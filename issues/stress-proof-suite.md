@@ -4,7 +4,7 @@ status: open
 labels: [frontend,testing,milestone]
 blocked-by: [elaborator-design, inductive-compiler]
 created: 2026-07-23
-updated: 2026-07-23
+updated: 2026-07-24
 ---
 
 The acceptance gate for [[elaborator-design]]: the stress proofs are not an
@@ -36,3 +36,4 @@ frontend soundness-by-construction property from [[elaborator-design]]).
 
 - 2026-07-23: Opened; items agreed in the frontend-first route discussion.
 - 2026-07-23: Item 1 PASSING at elaborator stage 1 (explicit-annotation form): add_zero/add_succ/add_comm/add_assoc via elim_Nat with explicit motives + ih patterns, sym/trans/cong_succ via J, all elaborated from surface syntax and checked by the real kernel (crates/elab/tests/nat_suite.rs). Also: 2+2==4 by bare refl (computation check), and negative tests confirming the kernel gate rejects wrong proofs/lemma uses. Item 1 re-gates at stage 2 when the annotations drop.
+- 2026-07-24: Item 2 half done, 2026-07-24: List via tier-1 exact-height fording is hand-prototyped and kernel-checked (crates/elab/tests/tier1_fording.rs) -- derived recursor, append, append_nil and append_assoc by induction, disjointness and per-field injectivity incl. the recursive field, plus negative controls. Remaining for the item: reproduce it from a surface 'inductive' declaration once the tier-1 generator exists. Note the prototype adds a second type (Bits) beyond the item's text, because List's height classes hold one constructor each and so never exercise the sum spine or same-height disjointness.
