@@ -697,6 +697,21 @@ impl Mapper for ShiftUniv {
 // Substitutions
 // ---------------------------------------------------------------------------
 
+/// Rewrite every level to the canonical representative of its ≈-class.
+/// Not a substitution — a normalization, so that equality *modulo level
+/// equivalence* (the quotient DeLaM ch. 05's Static Code lemma takes) is
+/// plain `==` on the rewritten syntax. Depth-independent: normalization
+/// never renumbers a variable, so binders need no care.
+struct NormalizeLevels;
+
+impl Mapper for NormalizeLevels {
+    const LOCAL_OP: bool = false;
+
+    fn level(&mut self, l: &Level, _at: Depths) -> Level {
+        l.normalize().canonical()
+    }
+}
+
 /// Universe substitution `φ`: `phi[i]` replaces universe variable `i`
 /// (innermost = 0), scoped in the source universe context.
 struct SubstUniv<'a> {
@@ -937,6 +952,20 @@ macro_rules! ops {
             /// Apply a global substitution `σ`.
             pub fn apply_global(&self, sigma: &GlobalSubst) -> $ty {
                 $map(self, &mut SubstGlobal { sigma }, Depths::default())
+            }
+
+            /// Rewrite every level to the canonical representative of its
+            /// ≈-class, so that `a.normalize_levels() == b.normalize_levels()`
+            /// decides **syntactic equality modulo level equivalence**.
+            ///
+            /// That quotient is what DeLaM ch. 05's Static Code lemma
+            /// (`lem:dt:static`) states: at layers `v`/`c`, equivalence *is*
+            /// equality, "quotient over the equivalence of universe levels" —
+            /// the paper's own example being that `Ty (ℓ ⊔ ℓ')` and
+            /// `Ty (ℓ' ⊔ ℓ)` are equal **as code**. `conv.rs` uses this to
+            /// compare boxed code.
+            pub fn normalize_levels(&self) -> $ty {
+                $map(self, &mut NormalizeLevels, Depths::default())
             }
 
             /// Weaken the ambient local context by `by` entries.

@@ -80,6 +80,32 @@ type R<T = ()> = Result<T, ConvError>;
 const NC: ConvError = ConvError::NotConvertible;
 
 /// `Ψ; Γ ⊢_i T ≈ T' : l` — convertibility of types.
+/// Syntactic equality **modulo level equivalence** — the quotient DeLaM
+/// ch. 05's Static Code lemma (`lem:dt:static`) takes over its equalities.
+/// Used only to compare boxed code, where layer `c` does not compute and
+/// equivalence therefore *is* equality.
+trait CodeEq: PartialEq {
+    fn normalized(&self) -> Self;
+}
+
+impl CodeEq for Type {
+    fn normalized(&self) -> Type {
+        self.normalize_levels()
+    }
+}
+
+impl CodeEq for Term {
+    fn normalized(&self) -> Term {
+        self.normalize_levels()
+    }
+}
+
+/// `a = b` modulo level equivalence. The `==` fast path keeps the common
+/// case allocation-free; only genuinely different syntax pays for a rewrite.
+fn code_eq<T: CodeEq>(a: &T, b: &T) -> bool {
+    a == b || a.normalized() == b.normalized()
+}
+
 pub fn conv_type(
     psi: &GlobalCtx,
     gamma: &LocalCtx,
@@ -566,17 +592,25 @@ impl Conv {
                 });
                 self.tm(&e, &tapp(a), &tapp(b), body, body_level)
             }
-            // Code compares syntactically; neutrals structurally.
+            // Code compares syntactically — *modulo level equivalence*, which
+            // is the quotient ch. 05's Static Code lemma (`lem:dt:static`)
+            // takes: at layers v/c equivalence is equality, "quotient over
+            // the equivalence of universe levels", and the paper's own
+            // example is that `Ty (ℓ ⊔ ℓ')` and `Ty (ℓ' ⊔ ℓ)` are equal *as
+            // code*. Plain `==` here would reject that pair — incompleteness
+            // against ch. 08's Convertibility theorem, not unsoundness, but a
+            // spurious error for any universe-polymorphic metaprogram.
+            // Neutrals still compare structurally.
             Type::CodeTy { .. } => match (a, b) {
                 (Term::BoxTy(t1), Term::BoxTy(t2)) => {
-                    if t1 == t2 { Ok(()) } else { Err(NC) }
+                    if code_eq(&**t1, &**t2) { Ok(()) } else { Err(NC) }
                 }
                 (Term::BoxTy(_), _) | (_, Term::BoxTy(_)) => Err(NC),
                 _ => self.tm_nee(env, a, b).map(drop),
             },
             Type::CodeTm { .. } => match (a, b) {
                 (Term::BoxTm(t1), Term::BoxTm(t2)) => {
-                    if t1 == t2 { Ok(()) } else { Err(NC) }
+                    if code_eq(&**t1, &**t2) { Ok(()) } else { Err(NC) }
                 }
                 (Term::BoxTm(_), _) | (_, Term::BoxTm(_)) => Err(NC),
                 _ => self.tm_nee(env, a, b).map(drop),

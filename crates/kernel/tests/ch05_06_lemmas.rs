@@ -31,6 +31,7 @@ use heather_kernel::reduce::{
     is_neutral_term, is_neutral_type, is_whnf_term, is_whnf_type, step_term, step_type, whnf_type,
 };
 use heather_kernel::subst::{GlobalEntry, GlobalSubst};
+use heather_kernel::term::{Term, Type};
 use heather_kernel::typing::{check_term, check_type, infer_term, TypeError};
 
 const CASES: u64 = 300;
@@ -503,4 +504,207 @@ fn the_generator_oracle_holds_across_seed_streams() {
             );
         }
     }
+}
+
+// ==========================================================================
+// ch. 05 — Static Code
+// ==========================================================================
+
+/// **ch. 05 Static Code** (`05_…tex:1055`, `lem:dt:static`): at layers `v`
+/// and `c`, equivalence *is* equality —
+///
+/// > `⊢_i T ≡ T' @ l` ⇒ `T = T'`; `⊢_i t ≡ t' : T @ l` ⇒ `t = t'`
+/// > … *All equalities above are quotient over the equivalence of universe
+/// > levels.*
+///
+/// and the paper spells out the quotient it means:
+///
+/// > *For example, `Ty (ℓ ⊔ ℓ')` and `Ty (ℓ' ⊔ ℓ)` as code are considered
+/// > **equal**, though their universe levels are not exactly syntactically
+/// > identical.*
+///
+/// The kernel has no layer-`c` equivalence judgment — `conv_*` asserts
+/// `layer.computes()` — so the implementation-side reading is the lemma's
+/// *consequence*: `box` is intensional, and the equality it uses for boxed
+/// code must be exactly this quotient. Both directions matter, and they fail
+/// in opposite ways: too coarse and `box` stops being intensional (the code
+/// eliminator's whole point); too fine and the checker rejects code the
+/// declarative system equates, contradicting ch. 08's Convertibility theorem
+/// (`08:229`).
+///
+/// **This test found the kernel on the too-fine side.** `conv.rs` compared
+/// boxed code with plain `==`, which rejects the paper's own example
+/// verbatim. Fixed by `Term::normalize_levels` / `Type::normalize_levels`
+/// (`subst.rs`), which rewrites levels to `LevelNf::canonical`; the negatives
+/// below pin that the fix did not go too far.
+#[test]
+fn code_equality_is_equality_modulo_level_equivalence() {
+    use heather_kernel::conv::conv_term;
+    use heather_kernel::level::UnivVar;
+    use heather_kernel::term::{CtxBase, GlobalCtx, LocalCtx};
+
+
+    let psi = GlobalCtx::default();
+    let g = LocalCtx { base: CtxBase::Nil, entries: vec![] };
+    let l0 = Level::Var(UnivVar(0));
+    let l1 = Level::Var(UnivVar(1));
+
+    // Both orientations, at a code-of-types type and a code-of-terms type.
+    let probe = |a: Term, b: Term, ty: Type, want_ok: bool, what: &str| {
+        for (x, y) in [(&a, &b), (&b, &a)] {
+            let ck = check_term(&psi, 2, Layer::Meta, &g, x, &ty, &Level::Zero, FUEL);
+            assert!(ck.is_ok(), "{what}: side is ill-typed, so the test is vacuous: {ck:?}");
+            let got = conv_term(&psi, &g, Layer::Meta, x, y, &ty, &Level::Zero, FUEL);
+            assert_eq!(got.is_ok(), want_ok, "{what}: conv gave {got:?}");
+        }
+    };
+
+    // -- equal modulo levels: must be accepted -----------------------------
+
+    // The paper's example, as code of a type.
+    let (ab, ba) = (Level::max(l0.clone(), l1.clone()), Level::max(l1.clone(), l0.clone()));
+    probe(
+        Term::BoxTy(Rc::new(Type::Ty(ab.clone()))),
+        Term::BoxTy(Rc::new(Type::Ty(ba.clone()))),
+        Type::CodeTy { ctx: g.clone(), level: Level::succ(ab.clone()) },
+        true,
+        "Ty(ℓ⊔ℓ') vs Ty(ℓ'⊔ℓ) as code of a type",
+    );
+    // …and as code of a term, which is what `lem:dt:static` literally says.
+    probe(
+        Term::BoxTm(Rc::new(Term::TmTy(ab.clone()))),
+        Term::BoxTm(Rc::new(Term::TmTy(ba.clone()))),
+        Type::CodeTm {
+            ctx: g.clone(),
+            ty: Rc::new(Type::Ty(Level::succ(ab.clone()))),
+            level: Level::succ(Level::succ(ab.clone())),
+        },
+        true,
+        "TmTy(ℓ⊔ℓ') vs TmTy(ℓ'⊔ℓ) as code of a term",
+    );
+    // Idempotence and unit, the other two monoid laws of the level lattice.
+    probe(
+        Term::BoxTy(Rc::new(Type::Ty(l0.clone()))),
+        Term::BoxTy(Rc::new(Type::Ty(Level::max(l0.clone(), l0.clone())))),
+        Type::CodeTy { ctx: g.clone(), level: Level::succ(l0.clone()) },
+        true,
+        "Ty ℓ vs Ty (ℓ⊔ℓ)",
+    );
+    probe(
+        Term::BoxTy(Rc::new(Type::Ty(l0.clone()))),
+        Term::BoxTy(Rc::new(Type::Ty(Level::max(l0.clone(), Level::Zero)))),
+        Type::CodeTy { ctx: g.clone(), level: Level::succ(l0.clone()) },
+        true,
+        "Ty ℓ vs Ty (ℓ⊔0)",
+    );
+    // The quotient must reach *under* a former, not just at the head.
+    let pi_at = |l: Level| {
+        Type::Pi {
+            dom_level: Level::Zero,
+            cod_level: Level::succ(l.clone()),
+            dom: Rc::new(Type::Nat),
+            cod: Rc::new(Type::Ty(l)),
+        }
+    };
+    probe(
+        Term::BoxTy(Rc::new(pi_at(ab.clone()))),
+        Term::BoxTy(Rc::new(pi_at(ba.clone()))),
+        Type::CodeTy { ctx: g.clone(), level: Level::succ(ab.clone()) },
+        true,
+        "Π(_:Nat). Ty(ℓ⊔ℓ') vs the ℓ'⊔ℓ variant",
+    );
+
+    // -- NOT equal: must still be rejected ---------------------------------
+    //
+    // Note what cannot be tested here, because it cannot be *posed*: a pair
+    // of codes at **inequivalent levels but the same code type**. `□(Δ ⊢ Ty l)`
+    // fixes `l`, and at layer `c` a type's level is determined by the type
+    // (that is uniqueness-of-types, the very property
+    // `issues/unit-level-and-vec-preservation.md` is about), so inequivalent
+    // levels force inequivalent code types and the two sides never meet at
+    // one `conv_term` call. The level-sensitivity of the comparison is
+    // therefore carried by the *positive* cases above being exactly the
+    // ≈-classes and no coarser — which the negatives below bracket.
+
+    // Different syntax at the same level stays rejected: layer c does not
+    // compute, so `El Nat` is not `Nat` as code.
+    probe(
+        Term::BoxTy(Rc::new(Type::El { level: Level::Zero, tm: Rc::new(Term::TmNat) })),
+        Term::BoxTy(Rc::new(Type::Nat)),
+        Type::CodeTy { ctx: g.clone(), level: Level::Zero },
+        false,
+        "box (El Nat) vs box Nat — layer c does not compute",
+    );
+    // The sharpest one available, and it lands on the open `Vec` gap:
+    // `Vec^0(Nat; 0) ⇝ Unit`, so these two are *convertible as types* at
+    // layer p and both sit at level 0 — but as code they are different
+    // syntax and must stay apart. A `normalize_levels` that accidentally
+    // reduced, or a comparison that fell through to type conversion, would
+    // accept this.
+    probe(
+        Term::BoxTy(Rc::new(Type::Vec {
+            level: Level::Zero,
+            elem: Rc::new(Type::Nat),
+            len: Rc::new(Term::Zero),
+        })),
+        Term::BoxTy(Rc::new(Type::Unit)),
+        Type::CodeTy { ctx: g.clone(), level: Level::Zero },
+        false,
+        "box (Vec(Nat;0)) vs box Unit — p-convertible, but not equal as code",
+    );
+}
+
+/// The generated companion to the hand-built family above: for arbitrary
+/// well-typed code, a **level-equivalent variant is convertible with it**.
+///
+/// The variant is produced by `apply_univ` with `φ(ℓᵢ) = ℓᵢ ⊔ ℓᵢ` — a
+/// substitution that is the identity up to level equivalence but rewrites
+/// every level position to something structurally different. Deliberately
+/// *not* built with `normalize_levels`, which is what `conv.rs` uses
+/// internally: the check would then be circular and could not fail.
+#[test]
+fn level_equivalent_code_is_convertible() {
+    use heather_kernel::conv::conv_term;
+    use heather_kernel::level::UnivVar;
+
+    let mut exercised = 0u32;
+    for seed in 0..CASES {
+        let mut r = Rng::new(seed ^ 0x5851f42d4c957f2d);
+        let mut env = gen_wt_env(&mut r);
+        if env.univs == 0 {
+            continue;
+        }
+        env.layer = Layer::Meta; // `box` is a layer-m form
+        let delta = common::wt::gen_wt_ctx(&env, &mut r, 2, Layer::Code);
+        let ce = env.in_ctx(delta.clone(), Layer::Code);
+        let (code, cty, cl) = gen_wt_term(&ce, &mut r, BUDGET);
+
+        // φ = (ℓ ↦ ℓ ⊔ ℓ): idempotent, so equivalent at every position.
+        let phi: Vec<Level> = (0..env.univs)
+            .map(|i| {
+                let v = Level::Var(UnivVar(i));
+                Level::max(v.clone(), v)
+            })
+            .collect();
+        let twin = code.apply_univ(&phi);
+        if twin == *code {
+            continue; // no level occurred; nothing to compare
+        }
+        exercised += 1;
+
+        let ty = Type::CodeTm { ctx: delta, ty: cty, level: cl };
+        let a = Term::BoxTm(Rc::clone(&code));
+        let b = Term::BoxTm(Rc::new(twin));
+        // A level-equivalent variant still checks at the *same* code type —
+        // itself worth asserting, since `ty_check` compares levels with
+        // `lev_eq` throughout and a site using `==` would show up here.
+        let ck = check_term(&env.psi, env.univs, env.layer, &env.gamma, &b, &ty, &Level::Zero, FUEL);
+        assert!(ck.is_ok(), "seed {seed}: level-equivalent twin is ill-typed: {ck:?}");
+        for (x, y) in [(&a, &b), (&b, &a)] {
+            let got =
+                conv_term(&env.psi, &env.gamma, Layer::Meta, x, y, &ty, &Level::Zero, FUEL);
+            assert!(got.is_ok(), "seed {seed}: code ≉ its level-equivalent twin: {got:?}");
+        }
+    }
+    assert!(exercised > 20, "only {exercised} code witnesses mentioning a level");
 }

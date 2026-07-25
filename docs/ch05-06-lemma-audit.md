@@ -113,7 +113,7 @@ operation to the most delicate namespace in `subst.rs`.
 | `05:799` | **Equivalent Local Substitutions** (`lem:dt:lsubst-eq`) | ○ | Expressible via `wt::perturb_conv`. |
 | `05:996` | **Lifting** (`lem:dt:lift`), `i ≤ i'` | ✅ / ○ | `ch05_06_lemmas::typing_is_monotone_in_the_layer` *(new)* covers `p → m`; the `c → p` arm is ○ (needs a layer-`c` generator entry point). |
 | `05:1039` | **Unlifting**, `p → c` | ○ | The sharper direction, and unchecked. |
-| `05:1055` | **Static Code** (`lem:dt:static`) — at `v`/`c`, `T ≡ T'` ⇒ `T = T'` | ○ | Hand-built instances only: `conv::box_compares_syntactically`, `conv_pair_properties::box_is_intensional`. |
+| `05:1055` | **Static Code** (`lem:dt:static`) — at `v`/`c`, `T ≡ T'` ⇒ `T = T'`, *modulo level equivalence* | ✅ | `ch05_06_lemmas::code_equality_is_equality_modulo_level_equivalence` + `::level_equivalent_code_is_convertible` *(new)*. **Found a kernel defect — see below.** |
 | `05:1075` | **Global Substitutions** preserve typing | ○ | Blocked on a *well-typed* `σ` generator (`gen_sigma` is scope-only). |
 | `05:1219` | Presupposition of `σ`-equivalence | ⊘ | |
 | `05:1226` | **Equivalent Global Substitutions** (`lem:dt:gsubst-eq`) | ○ | |
@@ -249,12 +249,65 @@ rather than ours.
 
 ---
 
+## Static Code (`05:1055`): the sweep's first *kernel* defect
+
+The lemma states that at layers `v`/`c` equivalence is equality, and then adds
+the line that matters:
+
+> *All equalities above are quotient over the equivalence of universe levels.*
+> … *For example, `Ty (ℓ ⊔ ℓ')` and `Ty (ℓ' ⊔ ℓ)` as code are considered
+> **equal**, though their universe levels are not exactly syntactically
+> identical.*
+
+`conv.rs` compared boxed code with plain `==` on the syntax, and `Level`
+derives `PartialEq` structurally. So the kernel **rejected the paper's own
+example, verbatim**: `box (Ty (ℓ ⊔ ℓ'))` and `box (Ty (ℓ' ⊔ ℓ))` both check at
+the same `□(· ⊢ Ty (1 + (ℓ ⊔ ℓ')))` and were not convertible.
+
+This is **incompleteness, not unsoundness** — the checker rejected too much,
+never accepted too much — but it contradicts ch. 08's Convertibility theorem
+(`08:229`: `⊢ T ≡ T' @ l` implies the algorithm accepts), and it would have
+surfaced as a spurious error in any universe-polymorphic metaprogram that
+built the same code two ways.
+
+**The same shape as the `Vec` bug, one level up.** The implementation read the
+lemma's headline (`T = T'`) and not the sentence two lines below it that says
+which equality. Half a lemma again — this time half a *sentence*.
+
+Fixed by `Type::normalize_levels` / `Term::normalize_levels` (`subst.rs`),
+which rewrites every level to `LevelNf::canonical` (`level.rs`) and reuses the
+existing generic traversal rather than adding a third transcription of the
+syntax. `conv.rs`'s `code_eq` is `a == b || a.normalized() == b.normalized()`,
+so the common case stays allocation-free.
+
+**One thing the test could not pose, which is itself informative.** There is no
+pair of codes at *inequivalent levels but the same code type*: `□(Δ ⊢ Ty l)`
+fixes `l`, and at layer `c` a type determines its level — that is
+uniqueness-of-types, the property [[unit-level-and-vec-preservation]] is about.
+So inequivalent levels force inequivalent code types and the two sides never
+meet at one `conv_term` call. The level-sensitivity of the comparison is
+carried instead by the positive cases being exactly the ≈-classes, bracketed
+by two negatives: `box (El Nat)` vs `box Nat` (same level, different syntax),
+and `box (Vec(Nat;0))` vs `box Unit` — p-convertible via the open `Vec` gap,
+both at level 0, and correctly kept apart as code.
+
+**Consequence for the open decision.** This does *not* settle (a) vs (b) — I
+expected it to and it does not. What it does is remove a landmine specific to
+**(a)**: level-indexed `Unit^l`/`Empty^l` puts a level into a layer-`c` type
+former, so `box (Unit^{ℓ⊔ℓ'})` vs `box (Unit^{ℓ'⊔ℓ})` would have hit exactly
+this bug. (a) is now safe to build on that front; (b) leaves layer `c`
+untouched and was never exposed to it.
+
+---
+
 ## What the sweep changed
 
-**Nine new property tests** in `crates/kernel/tests/ch05_06_lemmas.rs`, closing
-seven paper lemmas or halves of lemmas. Suite: **312 → 322**.
+**Eleven new property tests** in `crates/kernel/tests/ch05_06_lemmas.rs`,
+closing eight paper lemmas or halves of lemmas. Suite: **312 → 324**.
 
-**One defect found, and it is in the suite rather than the kernel.**
+**Two defects found.** The first is in the kernel: boxed code was compared
+without the level quotient Static Code takes (previous section). The second is
+in the suite:
 `inferred_types_are_well_formed` failed on its seed 152, first run: a *generated
 term that does not type-check*. Every property test in the crate presupposes
 that `gen_wt_term` produces well-typed terms, and that presupposition was
@@ -284,25 +337,20 @@ wants a `p`-only `Δ` will have to build it by hand.
 
 ## Ranked remaining gaps
 
-1. **Static Code** (`05:1055`) — at layers `v`/`c`, convertibility *is*
-   syntactic identity modulo level equivalence. The most load-bearing open
-   gap: it is the property that makes the code eliminator's intensional
-   analysis meaningful, and it sits next to the open decision in
-   [[unit-level-and-vec-preservation]]. Hand-built instances only.
-2. **Unlifting** (`05:1039`) and the `c → p` arm of **Lifting** (`05:996`) —
+1. **Unlifting** (`05:1039`) and the `c → p` arm of **Lifting** (`05:996`) —
    needs a layer-`c` generator entry point, which the generator fix above has
    now made routine.
-3. **Global Substitutions preserve typing** (`05:1075`) — the largest build
+2. **Global Substitutions preserve typing** (`05:1075`) — the largest build
    cost (a well-typed `σ` generator; `gen_sigma` is scope-only) and the largest
    coverage win, since `σ` is the namespace the elaborator will live in.
-4. **Reduction under `φ` and `σ`** (`06:280`, `06:298`) — completes the trio
-   whose `δ` member is now checked. Cheap once (3) exists.
-5. **Equivalent Local Substitutions** (`05:799`) — `perturb_conv` already
+3. **Reduction under `φ` and `σ`** (`06:280`, `06:298`) — completes the trio
+   whose `δ` member is now checked. Cheap once (2) exists.
+4. **Equivalent Local Substitutions** (`05:799`) — `perturb_conv` already
    builds the witnesses.
-6. **`GlobalSubst::compose`** (`05:377`) — blocked by design, not by effort.
+5. **`GlobalSubst::compose`** (`05:377`) — blocked by design, not by effort.
    Decide whether the elaborator needs it *before* adding it, and add the two
    algebra laws in the same change.
-7. **Transitivity of convertibility** (`06:721`) — reflexivity and symmetry are
+6. **Transitivity of convertibility** (`06:721`) — reflexivity and symmetry are
    checked; the third PER law is not.
 
 ## The generalization, restated

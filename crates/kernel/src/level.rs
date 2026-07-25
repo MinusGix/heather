@@ -182,6 +182,37 @@ pub enum LevelNf {
     Omega,
 }
 
+impl LevelNf {
+    /// The canonical [`Level`] representative of this ≈-class: the constant
+    /// part (when not dominated) joined with `n + ℓ` for each variable, in
+    /// `BTreeMap` order. Deterministic, so `a.equiv(b)` iff
+    /// `a.normalize().canonical() == b.normalize().canonical()`.
+    ///
+    /// This is what makes *equality modulo level equivalence* — the quotient
+    /// DeLaM ch. 05's Static Code lemma takes — decidable by `==` on a
+    /// rewritten term, rather than needing a second traversal of the syntax
+    /// that compares levels with [`Level::equiv`]. See
+    /// [`crate::term::Term::normalize_levels`].
+    pub fn canonical(&self) -> Level {
+        let LevelNf::Finite { konst, vars } = self else { return Level::Omega };
+        // `konst` is `None` exactly when some variable dominates it, which
+        // requires `vars` non-empty; so the `Zero` fallback is the
+        // `Some(0)`-with-no-variables case.
+        let mut acc: Option<Level> = konst.map(Level::constant);
+        for (v, n) in vars {
+            let mut l = Level::Var(*v);
+            for _ in 0..*n {
+                l = Level::succ(l);
+            }
+            acc = Some(match acc {
+                None => l,
+                Some(a) => Level::max(a, l),
+            });
+        }
+        acc.unwrap_or(Level::Zero)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
