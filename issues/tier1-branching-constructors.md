@@ -35,6 +35,12 @@ Full argument: `docs/inductive-tier1-lowering.md` §8.1. In brief:
   types, assembly takes computation on measures, and that computation gets
   stuck on open terms.
 
+**Decision-support doc: `docs/branching-inductives-choice.md`** (2026-07-24)
+— the routes below in full, scored against the axes that survive the
+datarepr separation, plus the encodings already tried and rejected, what
+other systems choose, and a de-risking plan. Read that before deciding; the
+summary below is kept only as an index.
+
 ## Routes
 
 - **(a) Branching goes to tier 2** — `W` + `Id` + funext-as-axiom, as
@@ -65,3 +71,4 @@ the part that works) and indexed families (§8.4 — fording an index means an
 - 2026-07-24: Opened. Scheme + prototype for the linear fragment landed; the
   branching defect is diagnosed (β on open children), routes (a)/(b)/(c)
   written up, recommendation (b) with (a) as the IR's fallback.
+- 2026-07-24: Choice written up for deliberation: docs/branching-inductives-choice.md. Reframed around WHERE the cost lands rather than which encoding trick: (A) an axiom -- W + funext, which extends funext's blast radius from infinitary types to all branching first-order data; (B) the conversion checker -- Empty-eta plus coproduct eta, which would make W's children behave like tuples in place (research-grade for the coproduct half); (C) the former set -- a Wf former with arity-Nat and Sigma-tuple children, so Sigma-eta and Unit-eta do the work funext was doing; (D) the elaborator -- canonicalize the stuck embedding when heights are literal; (E) the surface -- defer branching declarations. Two things the discussion settled that change the analysis: the datarepr separation (kernel-side inductives are spec objects, runtime representation is chosen separately and certified) voids every efficiency objection and takes the flat-IR escape hatch off the table, leaving definitional behaviour as the only currency; and the ch. 07 funext-leak audit means route A's axiom is contained w.r.t. the meta layer, which is a point in A's favour I had overstated against. Also recorded: A does not INTRODUCE funext (tier 2 needs it for Acc anyway), it widens it; route A leaves a permanent seam where induction on List behaves definitionally and induction on Tree does not; and route C's real crux is not difficulty but carrying two branching formers, since W stays for the infinitary tier. Recommendation stands at C with E as sequencing and A as fallback, with three named falsifiers. Note for the record: this decision exists because kernel-v1-extensions' promise that 'first-order data stays on the finitary encodings' is false -- the finitary encodings reach the linear fragment and provably no further.
