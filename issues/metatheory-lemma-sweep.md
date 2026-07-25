@@ -104,16 +104,45 @@ one must build it by hand.
 
 ## Fallout for [[unit-level-and-vec-preservation]]
 
-Candidate **(b)**'s gating question was checked against the paper while
-compiling the audit: **no Tarski-completeness claim was found.** `Tarski`
-occurs five times in ch. 04 (`04:96–120`, `:203`, `:781`), every occurrence
-about the *separation* of types from terms and why Russell-style universes
-cannot even state the indices of code — never a surjectivity property. And
-ch. 07's term relation at `Ty l` (`07:512–514`) is defined by cases on the code
-whnf: it says which codes are related, never that every related type is an
-`El`. Evidence, not a verdict — ch. 08's decidability argument is unread, and
-so is our own "boxed code stays exhaustively recursable" invariant, which is
-ours and not the paper's. Do not implement (b) on this alone.
+Both of candidate **(b)**'s open questions are now closed — see
+`docs/ch05-06-lemma-audit.md` §"Two questions settled by reading further" for
+the citations.
+
+**1. Nothing requires Tarski completeness; (b) is not blocked.** ch. 08 read in
+full: Injectivity (`08:19`), Consistency (`08:48`), Conversion (`08:96`),
+Convertibility (`08:226`), Decidability (`08:239`, `:357`) — all structural
+induction on derivations, none quantifying over "all types at level `l`".
+ch. 07's Neutral Types law (`07:239`) is a closure rule, not completeness.
+ch. 04's five `Tarski` mentions are all about type/term separation.
+
+Two things found on the way matter more than the question:
+
+- The paper checks a **layer-`c` global binding's type at layer `p`**
+  (`04:~985`, matched at `typing.rs:154`), and ch. 05's coverage lemmas
+  conclude type equivalences at `p` (`05:1573`, `:1576`). A layer-`c` term
+  legitimately has a layer-`p` type — so (b)'s asymmetry sits in an existing,
+  deliberate gap. Better argument for (b) than the one in that issue.
+- (b)'s real cost is now nameable and it is *design*, not soundness: it
+  falsifies `every_type_has_exactly_one_level` and
+  `inferred_level_is_the_only_level` at layers `p`/`m`, and costs
+  deterministic level inference at `p` for `Unit`/`Empty`
+  ([[elab-unifier-completeness]]).
+
+**2. "Boxed code is exhaustively recursable" was wrong as stated — and the
+paper says so.** ch. 06's neutral grammar (`06:31–38`) lists
+`elim_Typ(…; box U^δ)` and `elim_Trm(…; box u^δ)` as **neutral forms**, with
+the prose *"for the recursive principles, we block on global variables"*.
+Global variables are legal at layer `c` and deliberately have no branch. The
+kernel was already right (`reduce.rs::is_neutral_term`, pinned by
+`recursors_block_on_boxed_global_variables`) and so was
+`docs/metatheory-ch07-extensions.md` §8, which annotates both counts with the
+blocking note. Only the shorthand in `issues/wf-former.md` and
+`tests/wf_codes.rs` overstated it; both corrected, now with the citation.
+
+What made the stronger reading tempting is worth keeping: **ch. 05's coverage
+prose closes with "There is no other possible terms at layer `c`"**, which is
+true only of the *syntactic formers* — ch. 06 handles the rest. A sentence
+from one chapter, read without the neighbouring chapter's grammar.
 
 ## Log
 
@@ -125,3 +154,4 @@ ours and not the paper's. Do not implement (b) on this alone.
   type, a generated witness, a classification predicate maintained in two
   places. Three of the nine new tests are of exactly that kind, and the one
   defect found was the second kind.
+- 2026-07-25: Read ch. 08 in full and ch. 06's normal-form grammar; both questions the audit left open are closed. (1) NOTHING REQUIRES TARSKI COMPLETENESS. Ch. 08's six results (Injectivity 08:19, Consistency 08:48, Conversion 08:96, Convertibility 08:226, Decidability 08:239 and 08:357) are structural induction on derivations; none quantifies over 'all types at level l'. Ch. 07's Neutral Types law (07:239) gives El l v ~ El l' v' FROM the code relation — a closure rule, not completeness. So candidate (b) of [[unit-level-and-vec-preservation]] is not blocked by the metatheory. Two better findings on the way: the paper checks a layer-c global binding's type at layer P (04:~985, matched at typing.rs:154) and ch. 05's coverage lemmas conclude type equivalences at p (05:1573), so a layer-c term legitimately has a layer-p type and (b)'s asymmetry sits in a gap the system already has deliberately — a stronger argument for (b) than 'ch. 04 section 4 is about layer c'; and the LR's only two 'must be unique' appeals (07:761, 07a:1092) are to determinacy of multi-step reduction, never to a type determining its level. (b)'s real cost is now nameable and it is DESIGN not soundness: it falsifies every_type_has_exactly_one_level and the new inferred_level_is_the_only_level at layers p/m, and costs deterministic level inference at p for Unit/Empty ([[elab-unifier-completeness]]). (2) 'BOXED CODE IS EXHAUSTIVELY RECURSABLE' IS WRONG AS STATED, and the paper says so: ch. 06's neutral-term grammar (06:31-38) lists elim_Typ(...; box U^d) and elim_Trm(...; box u^d) among the neutral forms and states 'for the recursive principles, we block on global variables, following [hu2024layered]'. Global variables are legal at layer c and deliberately have no branch, so exhaustiveness is over the SYNTACTIC FORMERS. The kernel was already right (reduce.rs::is_neutral_term, pinned by recursors_block_on_boxed_global_variables) and so was docs/metatheory-ch07-extensions.md section 8, which annotates both counts with the blocking note; only the shorthand in issues/wf-former.md and tests/wf_codes.rs overstated it, both corrected with the citation. What made the stronger reading tempting: ch. 05's coverage prose closes with 'There is no other possible terms at layer c', true only of the syntactic formers — one chapter's sentence read without the neighbouring chapter's grammar.

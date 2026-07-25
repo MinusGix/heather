@@ -49,8 +49,16 @@ stack allows.
 - **No layer-c gate any more**: all three formers, `sup_f`/`elim_Wf` and
   the three codes are layer-c citizens, and the code recursors carry all
   eight new branches (`ty_vec`/`tm_vec`, `ty_fin`/`tm_fin`, `ty_wf`/
-  `tm_wf`, `tm_supf`, `tm_elim_wf`; 37 → **45**), so boxed code is still
-  exhaustively recursable.
+  `tm_wf`, `tm_supf`, `tm_elim_wf`; 37 → **45**), so the branch bundle is
+  still exhaustive **over the syntactic formers** at layer `c`.
+  Not "over all boxed code": ch. 06's neutral grammar (`06:31–38`) lists
+  `elim_Typ(…; box U^δ)` and `elim_Trm(…; box u^δ)` as neutral forms and says
+  so outright — *"for the recursive principles, we block on global
+  variables"*. Global variables are legal at layer `c` and have no branch by
+  design. `reduce.rs` implements exactly that
+  (`recursors_block_on_boxed_global_variables`), and
+  `docs/metatheory-ch07-extensions.md` §8 counts it correctly; only the
+  shorthand here was overstated.
 
 ## Phase 4: the falsifier, spent
 

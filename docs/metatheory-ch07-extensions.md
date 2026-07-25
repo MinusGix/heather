@@ -364,6 +364,20 @@ exhaustive over well-typed layer-`c` syntax. Counted against `term.rs`
 `crates/kernel/tests/common/mod.rs` agrees). Exhaustive; the recursor arms
 have no gap.
 
+**The two parenthesised blocking notes are the paper's design, not ours**
+(confirmed 2026-07-25, and worth the citation because the shorthand "boxed
+code is exhaustively recursable" elsewhere in the repo overstated it).
+Ch. 06's neutral-term grammar (`06_reduction_and_convertibility.tex:31–38`)
+lists `elim_Typ(…; box (U^δ))` and `elim_Trm(…; box (u^δ))` among the neutral
+forms `ν`, and says outright: *"Notice that for the recursive principles, we
+block on global variables, following [hu2024layered]."* Global variables are
+legal at layer `c` (`i' ≤ i` in both variable rules), so exhaustiveness is
+over the **syntactic formers**, with global variables handled by the
+normal-form grammar. Ch. 05's coverage prose (`05:1535`–`:1622`, closing with
+"There is no other possible terms at layer `c`") enumerates only the formers
+and is what makes the stronger reading tempting.
+`reduce.rs::recursors_block_on_boxed_global_variables` pins the kernel's side.
+
 ---
 
 ## 9. Summary

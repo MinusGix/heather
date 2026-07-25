@@ -1,8 +1,15 @@
 //! Codes and recursor branches for `Vec`/`Fin`/`Wf`: phase 3 of the landing
 //! (`docs/wf-former-design.md` §6, `issues/wf-former.md`).
 //!
-//! Phases 1–2 gated all three formers out of layer c so that boxed code
-//! stayed exhaustively recursable. This file is what lets the gate go: the
+//! Phases 1–2 gated all three formers out of layer c so that the branch
+//! bundle stayed exhaustive over the layer-c *syntactic formers* — which is
+//! the actual invariant. It is not "every boxed code is recursable": DeLaM
+//! ch. 06's neutral grammar (`06_…tex:31–38`) lists
+//! `elim_Typ(…; box U^δ)` and `elim_Trm(…; box u^δ)` as neutral and says
+//! *"for the recursive principles, we block on global variables"*, so
+//! global variables are legal at layer c and deliberately have no branch
+//! (`reduce.rs::recursors_block_on_boxed_global_variables`).
+//! This file is what lets the gate go: the
 //! encodings `TmVec`/`TmFin`/`TmWf` decode through `El`, the formers and
 //! their intro/elim forms are accepted at layer c, and — the sharp test —
 //! the **identity recursor** round-trips every one of them in a single

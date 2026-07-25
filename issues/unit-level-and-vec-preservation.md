@@ -121,7 +121,7 @@ name them (`Triv`, `ElimEmpty`) — otherwise `⟨⟩` inhabits `Unit^l` for eve
 The LR case for `Unit` becomes level-indexed, which is *cleaner* than the
 level-polymorphic clause §10.3 of the ch. 07 doc currently describes.
 
-### (b) layer-gate the polymorphism — cheapest, needs one question answered
+### (b) layer-gate the polymorphism — cheapest, and now unblocked
 
 Uniqueness is only *needed* at layer `c` (§4's argument is entirely about the
 code eliminator), and `box` checks its body at layer `c`. So: `Unit`/`Empty`
@@ -136,11 +136,34 @@ type at level `l` to have a code at `Ty l`? (b) creates `Unit @ 1` at `p` with
 no code at `Ty 1`. If Tarski-universe completeness is claimed or relied on
 anywhere — ch. 07's universe case, ch. 08 — (b) is out.
 
-**Partly answered** by [[metatheory-lemma-sweep]]: no Tarski-completeness
-claim exists in the paper (citations in that issue). Still **not** a green
-light — ch. 08's decidability argument is unread, and the kernel's own "boxed
-code stays exhaustively recursable" invariant is ours, not the paper's, so it
-has to be argued separately. Do not implement (b) before both.
+**Answered, negative: nothing requires it.** ch. 08 was read in full
+(`08:19`, `:48`, `:96`, `:226`, `:239`, `:357` — Injectivity, Consistency,
+Conversion, Convertibility, Decidability ×2); every proof is structural
+induction on derivations and none quantifies over "all types at level `l`".
+ch. 07's Neutral Types law (`07:239`) gives `El l ν ≈ El l' ν'` *from* the
+code relation — a closure rule, not completeness. Full citations and the two
+ch. 04 rules involved: `docs/ch05-06-lemma-audit.md`, §"Two questions settled
+by reading further". **(b) is not blocked by the metatheory.**
+
+Two findings from that reading change (b)'s case in *both* directions:
+
+- **For (b), and stronger than the argument above.** The paper's
+  global-context rule (`04:~985`) admits `u : Trm_i(Δ ⊢ T @ l)` for
+  `i ∈ {v, c}` while checking `T` at layer **p** — a layer-`c` term
+  legitimately has a layer-`p` type, and ch. 05's coverage lemmas conclude
+  their type equivalences at `p` too (`05:1573`, `:1576`). `typing.rs:154`
+  already matches. So the `c`/`p` asymmetry (b) introduces sits in a gap the
+  system has deliberately, rather than being a new one. Also: the LR's only
+  two "must be unique" appeals (`07:761`, `07a:1092`) are to determinacy of
+  `⇝*`, never to a type determining its level.
+- **Against (b), and this is now the real cost.** (b) falsifies
+  `vec_fin::every_type_has_exactly_one_level` and
+  `ch05_06_lemmas::inferred_level_is_the_only_level`, which quantify at
+  layers `p`/`m`. Both would have to be re-scoped to layer `c`. Downstream,
+  `infer_type` stops being a deterministic level oracle at `p` for
+  `Unit`/`Empty` — a direct input to [[elab-unifier-completeness]]'s level
+  inference. **The trade is a design cost, not a soundness one**, which makes
+  it a choice rather than a blocker.
 
 ### (c) `Vec^l(T;0)` is its own whnf, proof-irrelevant
 
@@ -204,3 +227,4 @@ is evidence for (b), not a green light — ch. 08 is still unread.
   pinned by tests and the missing property added. Fix (a) is the recommended
   direction; (b) is cheaper but gated on the Tarski-completeness question.
 - 2026-07-25: The sweep this issue asked for is done: [[metatheory-lemma-sweep]], audit at docs/ch05-06-lemma-audit.md. Relevant to this issue specifically: (i) candidate (b)'s gating question — does anything require every layer-p type at level l to have a code at Ty l — was checked against the paper and NO Tarski-completeness claim exists. 'Tarski' occurs five times in ch. 04 (04:96-120, :203, :781), always about the separation of types from terms and why Russell-style universes cannot state the indices of code, never a surjectivity property; and ch. 07's term relation at Ty l (07:512-514) is by cases on the code whnf, saying which codes are related, never that every related type is an El. Evidence for (b), NOT a green light: ch. 08's decidability argument is still unread, and so is our own 'boxed code stays exhaustively recursable' invariant, which is ours and not the paper's. (ii) The audit ranks ch. 05 Static Code (05:1055) as the top remaining gap, and it is the one that bears on this decision — at layers v/c convertibility must BE syntactic identity modulo level equivalence, which is what makes the code eliminator's intensional analysis meaningful. Only hand-built instances today. Worth closing before choosing between (a) and (b). (iii) ch. 05's Lifting lemma is now machine-checked (p->m arm), which the sweep needed in order to justify a generator fix.
+- 2026-07-25: Both of (b)'s open questions are now closed by reading ch. 08 in full and ch. 06's normal-form grammar; details and citations in docs/ch05-06-lemma-audit.md and [[metatheory-lemma-sweep]]. (b) is NOT blocked by the metatheory: nothing in ch. 08 (Injectivity 08:19, Consistency 08:48, Conversion 08:96, Convertibility 08:226, Decidability 08:239/08:357) requires every layer-p type at level l to have a code at Ty l, and ch. 07's Neutral Types law (07:239) is a closure rule building El l v ~ El l' v' FROM the code relation rather than a completeness statement. A stronger structural argument FOR (b) turned up: the paper's global-context rule (04:~985) admits u : Trm_i(Delta |- T @ l) for i in {v,c} while checking T at layer p, and ch. 05's coverage lemmas conclude their type equivalences at p (05:1573, :1576), so a layer-c term legitimately has a layer-p type — the c/p asymmetry (b) introduces sits in a gap the system already has deliberately, rather than being new. typing.rs:154 already matches. Also: the LR's only two 'must be unique' appeals (07:761, 07a:1092) are to determinacy of multi-step reduction, not to a type determining its level, so nothing semantic needs level uniqueness at p. AGAINST (b), and this is now the actual cost and it is design rather than soundness: (b) falsifies vec_fin::every_type_has_exactly_one_level and the new ch05_06_lemmas::inferred_level_is_the_only_level, both of which quantify at layers p/m, so both would have to be re-scoped to layer c; and infer_type stops being a deterministic level oracle at p for Unit/Empty, which is a direct input to [[elab-unifier-completeness]]'s level inference. Net: (a) and (b) are now a genuine choice on cost rather than (b) being gated. Recommendation unchanged pending ch. 05 Static Code (05:1055), which the audit ranks first and which bears directly on this decision.
