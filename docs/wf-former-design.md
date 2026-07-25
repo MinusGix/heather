@@ -1,8 +1,10 @@
 # The `Wf` former: finitary branching inductives in the kernel
 
-Status: **design sketch, pre-implementation** (2026-07-25). This is the
-route-C landing from `docs/branching-inductives-choice.md` §6/§12, written
-down before the code per repo discipline. Decision evidence:
+Status: **phases 1–2 landed** (2026-07-25); §9 tracks the remaining rounds.
+Written as a design sketch before the code, per repo discipline, and kept as
+the specification the implementation is checked against. This is the
+route-C landing from `docs/branching-inductives-choice.md` §6/§12. Decision
+evidence:
 `branching-inductives-choice.md` §15 and the three prototype files
 
 - `crates/elab/tests/branching_route_a.rs` (what W + funext costs, measured),
@@ -265,18 +267,25 @@ tested and passed.
 
 ## 9. Sequencing and acceptance
 
-1. **This document reviewed** and the rule set frozen.
-2. **`Vec` + `Fin` land first** — self-contained, two reductions each,
+1. ~~**This document reviewed** and the rule set frozen.~~ Done.
+2. ~~**`Vec` + `Fin` land first**~~ Done (`crates/kernel/tests/vec_fin.rs`). — self-contained, two reductions each,
    their own conversion tests. Nothing about them is speculative.
-3. **`Wf`/`sup_f`/`elim_Wf`** with conversion tests pinning what the
-   postulate prototypes could not: β on open subterms, canonical-form
-   uniqueness, neutral behaviour at neutral arity, and the nth-schema
-   materialization in typing and β.
-4. **Acceptance:** replay the three prototype files against the real
-   former — every β-marker (`mbeta` postulate use) deletes to `refl`, the
-   leaf arm of `mirror (mirror t) = t` becomes literally `refl`, the node
-   arm becomes cong + cong + trans, and `branching_route_a.rs` is kept
-   unchanged as the record of what was not chosen.
+3. ~~**`Wf`/`sup_f`/`elim_Wf`**~~ Done (`crates/kernel/tests/wf.rs`), with
+   the conversion tests the postulate prototypes could not run: β on open
+   subterms, canonical-form uniqueness, neutral behaviour, and the
+   nth-schema materialization in typing and β.
+4. ~~**Acceptance**~~ Met, in `crates/kernel/tests/wf.rs`: `Tree` is built
+   on the real former and `mirror (mirror t) = t` goes through with every
+   β-marker deleted — the Leaf arm is literally `refl_tree(leaf())`, the
+   Node arm is cong + cong + trans, and the constructor-form gap that route
+   A bridges with funext is closed by conversion so it never appears in the
+   proof. `branching_route_a.rs` is kept unchanged as the record of what was
+   not chosen. Two implementation notes worth carrying to phase 3: the
+   motive is an ordinary `Type` binding `z` (no `Ty`-code round trip, unlike
+   the postulate prototypes, because the eliminator is a former), and
+   `Empty`-η turned out **not** to be needed for the Leaf arm — arity 0 is
+   `Vec(T;0) ⇝ Unit`, whose proof irrelevance already collapses every
+   nullary constructor form.
 5. **rec.rs round** (§6), as its own unit, with the five transcriptions.
 6. **ch. 07 round** (§8), as its own unit, with the abort criterion live.
 7. **Generator round** (§7) — at which point

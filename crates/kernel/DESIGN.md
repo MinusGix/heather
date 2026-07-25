@@ -125,6 +125,26 @@ they have no code formers or code-recursor branches yet — so boxed code
 stays exhaustively recursable, and `beta_elim_ty` blocks rather than
 mis-fires if one ever reaches it.
 
+`Wf^l(x:S). n` (2026-07-25) is the finitary branching fixed point: shapes
+`S`, arity a `Nat` **term** with the shape free, children a
+`Vec^l(Wf; n[a/x])` — a tuple, not a function. `sup_f` introduces,
+`elim_Wf` eliminates dependently with the step binding
+`(a : S, cs : Vec(Wf; n[a/x]), ih : Π(i : Fin n[a/x]). M[nth … i/z])`, and β
+synthesizes the ih λ around the recursive call like `elim_W`'s — but over a
+`Fin` index, so the ih is *transient*: applied at literal indices after the
+generated recursor cases on the tag, never stored and never compared. `nth`
+is not a former; it is a fixed `elim_Nat` schema materialized by the rules
+(`term::nth`), and the step telescope is built once in
+`term::wf_step_telescope` and shared verbatim by `typing.rs` and `conv.rs`
+so the two cannot drift. Positive, no η: conversion at `Wf` compares label
+and children, and the children comparison happens *at a `Vec`*, so it
+descends through Σ-η and bottoms out in `Unit`'s proof irrelevance. That is
+the entire reason the former exists — the abstract constructor
+`sup_f(tag; cs)` at a neutral `cs` is **convertible** with the concrete
+`node (nth 2 cs 0) (nth 2 cs 1)`, which is the equation route A pays funext
+for in every arm (`crates/kernel/tests/wf.rs`,
+`crates/elab/tests/branching_route_a.rs`).
+
 Explicitly out of v0: coinduction/effects, typeclasses, compiler machinery,
 inductive types beyond Nat, Id, Σ, Unit, Empty, binary sums, W, and the
 `Vec`/`Fin`/`Wf` finitary-branching group, the type lifter (omitted by the

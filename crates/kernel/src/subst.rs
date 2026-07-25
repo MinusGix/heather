@@ -205,6 +205,12 @@ fn map_type<M: Mapper>(t: &Type, m: &mut M, at: Depths) -> Type {
             len: sub_tm(len, m, at),
         },
         Type::Fin { len } => Type::Fin { len: sub_tm(len, m, at) },
+        // Wf: `arity` is a term under the shape binder `x : S`.
+        Type::Wf { level, shape, arity } => Type::Wf {
+            level: m.level(level, at),
+            shape: sub_ty(shape, m, at),
+            arity: sub_tm(arity, m, at + dep(0, 0, 1)),
+        },
         Type::W { shape_level, pos_level, shape, pos } => Type::W {
             shape_level: m.level(shape_level, at),
             pos_level: m.level(pos_level, at),
@@ -384,6 +390,24 @@ fn map_term<M: Mapper>(t: &Term, m: &mut M, at: Depths) -> Term {
             motive_level: m.level(motive_level, at),
             shape: sub_ty(shape, m, at),
             pos: sub_ty(pos, m, at + dep(0, 0, 1)),
+            motive: sub_ty(motive, m, at + dep(0, 0, 1)),
+            step: sub_tm(step, m, at + dep(0, 0, 3)),
+            scrut: sub_tm(scrut, m, at),
+        },
+        // sup_f / elim_Wf: `arity` binds `x : S`, `motive` binds `z : Wf`,
+        // and the step binds three (a, cs, ih) — same depths as `elim_W`'s.
+        Term::Supf { level, shape, arity, label, children } => Term::Supf {
+            level: m.level(level, at),
+            shape: sub_ty(shape, m, at),
+            arity: sub_tm(arity, m, at + dep(0, 0, 1)),
+            label: sub_tm(label, m, at),
+            children: sub_tm(children, m, at),
+        },
+        Term::ElimWf { level, motive_level, shape, arity, motive, step, scrut } => Term::ElimWf {
+            level: m.level(level, at),
+            motive_level: m.level(motive_level, at),
+            shape: sub_ty(shape, m, at),
+            arity: sub_tm(arity, m, at + dep(0, 0, 1)),
             motive: sub_ty(motive, m, at + dep(0, 0, 1)),
             step: sub_tm(step, m, at + dep(0, 0, 3)),
             scrut: sub_tm(scrut, m, at),

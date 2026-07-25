@@ -26,7 +26,7 @@ use std::rc::Rc;
 
 use crate::level::Level;
 use crate::subst::{GlobalEntry, GlobalSubst};
-use crate::term::{CtxEntry, LocalCtx, LocalSubst, LocalVar, Term, Type};
+use crate::term::{nth, CtxEntry, LocalCtx, LocalSubst, LocalVar, Term, Type};
 
 /// Reduction ran out of fuel before reaching a normal form. On well-typed
 /// input this indicates the fuel bound was too small (reduction of
@@ -336,6 +336,75 @@ pub fn step_term(t: &Term, gamma: &LocalCtx) -> Option<Term> {
                 motive_level: motive_level.clone(),
                 shape: Rc::clone(shape),
                 pos: Rc::clone(pos),
+                motive: Rc::clone(motive),
+                step: Rc::clone(step),
+                scrut: Rc::new(s),
+            }),
+        },
+        // elim_Wf (sup_f(…; a; cs)) ⇝ s[a, cs, λi. elim_Wf(…; nth … cs i)].
+        // Like `elim_W`'s β this synthesizes the ih *under a λ*, but over a
+        // `Fin` index: the recursive call goes to `nth(Wf; n[a/x]; cs; i)`,
+        // which at a literal arity reduces to a projection of `cs`.
+        Term::ElimWf { level, motive_level, shape, arity, motive, step, scrut } => match &**scrut {
+            Term::Supf { label, children, .. } => {
+                // n[a/x], scoped in Γ — the ih λ's index bound.
+                let arity_at =
+                    arity.apply_local(&LocalSubst::id(gamma).extended(Rc::clone(label)));
+                let wf = Type::Wf {
+                    level: level.clone(),
+                    shape: Rc::clone(shape),
+                    arity: Rc::clone(arity),
+                };
+                // Weaken the binder-carrying annotations under the ih λ in
+                // one shift (the placeholder scrutinee is closed).
+                let template = Term::ElimWf {
+                    level: level.clone(),
+                    motive_level: motive_level.clone(),
+                    shape: Rc::clone(shape),
+                    arity: Rc::clone(arity),
+                    motive: Rc::clone(motive),
+                    step: Rc::clone(step),
+                    scrut: Rc::new(Term::Zero),
+                }
+                .shift_local(1);
+                let Term::ElimWf { shape: s1, arity: n1, motive: m1, step: st1, .. } = template
+                else {
+                    unreachable!("shifting an elim_Wf yields an elim_Wf")
+                };
+                // nth(Wf; n[a/x]; cs; i), scoped in (Γ, i : Fin n[a/x]).
+                let child = nth(
+                    level,
+                    &Rc::new(wf.shift_local(1)),
+                    &Rc::new(arity_at.shift_local(1)),
+                    Rc::new(children.shift_local(1)),
+                    Rc::new(Term::Var(LocalVar(0))),
+                );
+                let rec = Term::ElimWf {
+                    level: level.clone(),
+                    motive_level: motive_level.clone(),
+                    shape: s1,
+                    arity: n1,
+                    motive: m1,
+                    step: st1,
+                    scrut: Rc::new(child),
+                };
+                let ih = Term::Lam {
+                    dom_level: Level::Zero,
+                    cod_level: motive_level.clone(),
+                    dom: Rc::new(Type::Fin { len: Rc::new(arity_at) }),
+                    body: Rc::new(rec),
+                };
+                let delta = LocalSubst::id(gamma)
+                    .extended(Rc::clone(label))
+                    .extended(Rc::clone(children))
+                    .extended(Rc::new(ih));
+                Some(step.apply_local(&delta))
+            }
+            _ => step_term(scrut, gamma).map(|s| Term::ElimWf {
+                level: level.clone(),
+                motive_level: motive_level.clone(),
+                shape: Rc::clone(shape),
+                arity: Rc::clone(arity),
                 motive: Rc::clone(motive),
                 step: Rc::clone(step),
                 scrut: Rc::new(s),
@@ -709,7 +778,7 @@ fn beta_elim_ty(
         // never contains one; stuck rather than mis-fired if it does.
         // Phase 3 replaces this with `ty_vec`/`ty_fin` branches
         // (docs/wf-former-design.md §6, issues/wf-former.md).
-        Type::Vec { .. } | Type::Fin { .. } => None,
+        Type::Vec { .. } | Type::Fin { .. } | Type::Wf { .. } => None,
         // Layer-m types cannot be layer-c code: ill-typed, stuck.
         _ => None,
     }
@@ -1511,6 +1580,7 @@ pub fn is_whnf_type(t: &Type) -> bool {
         | Type::Empty
         | Type::Sum { .. }
         | Type::W { .. }
+        | Type::Wf { .. }
         | Type::Ty(_)
         | Type::UPi { .. }
         | Type::CtxPi { .. }
@@ -1536,6 +1606,7 @@ pub fn is_neutral_term(t: &Term) -> bool {
         Term::ElimEmpty { scrut, .. } => is_neutral_term(scrut),
         Term::Case { scrut, .. } => is_neutral_term(scrut),
         Term::ElimW { scrut, .. } => is_neutral_term(scrut),
+        Term::ElimWf { scrut, .. } => is_neutral_term(scrut),
         Term::J { proof, .. } => is_neutral_term(proof),
         Term::Fst { pair, .. } | Term::Snd { pair, .. } => is_neutral_term(pair),
         Term::App { fun, .. }
@@ -1578,6 +1649,7 @@ pub fn is_whnf_term(t: &Term) -> bool {
         | Term::Inl { .. }
         | Term::Inr { .. }
         | Term::Sup { .. }
+        | Term::Supf { .. }
         | Term::Lam { .. }
         | Term::ULam { .. }
         | Term::CtxLam { .. }

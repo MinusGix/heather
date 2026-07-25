@@ -60,8 +60,8 @@ use crate::rec::{
 use crate::reduce::{step_term, step_type};
 use crate::subst::{GlobalEntry, GlobalSubst};
 use crate::term::{
-    Branches, CtxBase, CtxEntry, GlobalBinding, GlobalCtx, GlobalVar, LocalCtx, LocalSubst,
-    LocalVar, Motives, Term, Type,
+    wf_step_telescope, Branches, CtxBase, CtxEntry, GlobalBinding, GlobalCtx, GlobalVar,
+    LocalCtx, LocalSubst, LocalVar, Motives, Term, Type,
 };
 
 /// Why a convertibility check did not succeed.
@@ -320,6 +320,17 @@ impl Conv {
             }
             (Type::Fin { len: k1 }, Type::Fin { len: k2 }) => {
                 self.tm(env, k1, k2, &Type::Nat, &Level::Zero)
+            }
+            // Wf congruence (extension): the arity is a Nat term under the
+            // shape binder, so it is compared as a term in (Γ, x : S).
+            (
+                Type::Wf { level: l1, shape: s1, arity: n1 },
+                Type::Wf { level: l2, shape: s2, arity: n2 },
+            ) => {
+                self.lev_eq(l1, l2)?;
+                self.ty(env, s1, s2, l1)?;
+                let e_x = env.push_entry(Rc::clone(s1), l1.clone());
+                self.tm(&e_x, n1, n2, &Type::Nat, &Level::Zero)
             }
             // W congruence (extension; mirrors Π/Σ).
             (
@@ -755,6 +766,30 @@ impl Conv {
                 (Term::Sup { .. }, _) | (_, Term::Sup { .. }) => Err(NC),
                 _ => self.tm_nee(env, a, b).map(drop),
             },
+            // Wf (extension): positive, like W — but the children compare at
+            // a `Vec`, so the comparison descends through `Σ`-η and bottoms
+            // out in `Unit`'s proof irrelevance. That is the whole reason
+            // this former exists (docs/wf-former-design.md §5): no funext is
+            // reachable from here, because there is no function to compare.
+            Type::Wf { level, shape, arity } => match (a, b) {
+                (
+                    Term::Supf { label: a1, children: c1, .. },
+                    Term::Supf { label: a2, children: c2, .. },
+                ) => {
+                    self.tm(env, a1, a2, shape, level)?;
+                    // Children at Vec(Wf; n[a₁/x]), left-biased like W's.
+                    let arity_at =
+                        arity.apply_local(&LocalSubst::id(&env.gamma).extended(Rc::clone(a1)));
+                    let cs_ty = Type::Vec {
+                        level: level.clone(),
+                        elem: Rc::new(w.clone()),
+                        len: Rc::new(arity_at),
+                    };
+                    self.tm(env, c1, c2, &cs_ty, level)
+                }
+                (Term::Supf { .. }, _) | (_, Term::Supf { .. }) => Err(NC),
+                _ => self.tm_nee(env, a, b).map(drop),
+            },
             // Neutral type: only neutral terms inhabit it. `Vec`/`Fin` reach
             // here only at a neutral length (a canonical one reduces to
             // Σ/Unit resp. Sum/Empty first, and those arms then supply the
@@ -1017,6 +1052,55 @@ impl Conv {
                 );
                 self.tm(&e_step, st1, st2, &step_ty, ml1)?;
                 self.tm_nee(env, n1, n2)?; // inferred W: redundant, ignored
+                Ok((
+                    m1.apply_local(&LocalSubst::id(&env.gamma).extended(Rc::clone(n1))),
+                    ml1.clone(),
+                ))
+            }
+            // elim_Wf neutral congruence (extension): same shape as elim_W's,
+            // with the step telescope taken from `wf_step_telescope` — the
+            // single source shared with typing.rs, so the two cannot drift.
+            // Fires only on a neutral scrutinee; this is what makes two
+            // inductions over the *same* open term convertible.
+            (
+                Term::ElimWf {
+                    level: l1,
+                    motive_level: ml1,
+                    shape: s1,
+                    arity: k1,
+                    motive: m1,
+                    step: st1,
+                    scrut: n1,
+                },
+                Term::ElimWf {
+                    level: l2,
+                    motive_level: ml2,
+                    shape: s2,
+                    arity: k2,
+                    motive: m2,
+                    step: st2,
+                    scrut: n2,
+                },
+            ) => {
+                self.lev_eq(l1, l2)?;
+                self.lev_eq(ml1, ml2)?;
+                self.ty(env, s1, s2, l1)?;
+                let e_x = env.push_entry(Rc::clone(s1), l1.clone());
+                self.tm(&e_x, k1, k2, &Type::Nat, &Level::Zero)?;
+                let wf = Type::Wf {
+                    level: l1.clone(),
+                    shape: Rc::clone(s1),
+                    arity: Rc::clone(k1),
+                };
+                let e_z = env.push_entry(Rc::new(wf), l1.clone());
+                self.ty(&e_z, m1, m2, ml1)?;
+                let (cs_ty, ih_ty, step_ty) =
+                    wf_step_telescope(&env.gamma, l1, ml1, s1, k1, m1);
+                let e_a = env.push_entry(Rc::clone(s1), l1.clone());
+                let e_cs = e_a.push_entry(Rc::new(cs_ty), l1.clone());
+                let e_step = e_cs.push_entry(Rc::new(ih_ty), ml1.clone());
+                self.tm(&e_step, st1, st2, &step_ty, ml1)?;
+                self.tm_nee(env, n1, n2)?; // inferred Wf: redundant, ignored
                 Ok((
                     m1.apply_local(&LocalSubst::id(&env.gamma).extended(Rc::clone(n1))),
                     ml1.clone(),

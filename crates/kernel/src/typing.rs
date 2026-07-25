@@ -67,8 +67,8 @@ use crate::rec::{self, gtm, gty, inst_tm_motive, inst_ty_motive, shift_univ_psi}
 use crate::reduce::whnf_type;
 use crate::subst::{GlobalEntry, GlobalSubst};
 use crate::term::{
-    CtxBase, CtxEntry, GlobalBinding, GlobalCtx, GlobalVar, LocalCtx, LocalSubst, LocalVar,
-    SubstTail, Term, Type,
+    wf_step_telescope, CtxBase, CtxEntry, GlobalBinding, GlobalCtx, GlobalVar, LocalCtx,
+    LocalSubst, LocalVar, SubstTail, Term, Type,
 };
 
 /// A generous per-conversion fuel budget for callers without an opinion.
@@ -530,6 +530,17 @@ impl Tc {
                 self.not_code_layer(env)?;
                 self.tm_check(env, len, &Type::Nat, &Level::Zero)?;
                 Ok(Level::Zero)
+            }
+            // Wf-formation (extension; §1.3): ⊢_i Wf^l(x:S). n @ l ⟸
+            // ⊢_i S @ l, (Γ, x:S) ⊢_i n : Nat. The arity is a *term*, so it
+            // contributes no level — unlike `W`, whose positions are a type.
+            Type::Wf { level, shape, arity } => {
+                self.not_code_layer(env)?;
+                self.level_wf(env, level)?;
+                self.ty_check(env, shape, level)?;
+                let e_x = env.push_entry(Rc::clone(shape), level.clone());
+                self.tm_check(&e_x, arity, &Type::Nat, &Level::Zero)?;
+                Ok(level.clone())
             }
             Type::GlobalTy { var, subst } => {
                 let Some(binding) = lookup(&env.psi, *var) else {
@@ -1228,6 +1239,70 @@ impl Tc {
                 );
                 self.tm_check(&e_step, step, &step_ty, motive_level)?;
                 self.tm_check(env, scrut, &w, &lmax)?;
+                Ok((
+                    motive.apply_local(&LocalSubst::id(&env.gamma).extended(Rc::clone(scrut))),
+                    motive_level.clone(),
+                ))
+            }
+
+            // sup_f^l(x:S. n; a; cs) : Wf^l(x:S). n @ l, with
+            // cs : Vec^l(Wf; n[a/x]) — children as a tuple.
+            Term::Supf { level, shape, arity, label, children } => {
+                self.not_var_layer(env)?;
+                self.not_code_layer(env)?;
+                self.level_wf(env, level)?;
+                self.ty_check(env, shape, level)?;
+                let e_x = env.push_entry(Rc::clone(shape), level.clone());
+                self.tm_check(&e_x, arity, &Type::Nat, &Level::Zero)?;
+                self.tm_check(env, label, shape, level)?;
+                let wf = Type::Wf {
+                    level: level.clone(),
+                    shape: Rc::clone(shape),
+                    arity: Rc::clone(arity),
+                };
+                let arity_at =
+                    arity.apply_local(&LocalSubst::id(&env.gamma).extended(Rc::clone(label)));
+                let cs_ty = Type::Vec {
+                    level: level.clone(),
+                    elem: Rc::new(wf.clone()),
+                    len: Rc::new(arity_at),
+                };
+                self.tm_check(env, children, &cs_ty, level)?;
+                Ok((wf, level.clone()))
+            }
+            // elim_Wf^{l,l'}(x:S. n; z. M; a cs ih. s; t) : M[t/z] @ l'.
+            // The step telescope (children tuple, `Fin`-indexed ih, arm
+            // obligation at the constructor form) is built by
+            // `wf_step_telescope`, shared verbatim with conv.rs.
+            Term::ElimWf { level, motive_level, shape, arity, motive, step, scrut } => {
+                self.not_var_layer(env)?;
+                self.not_code_layer(env)?;
+                self.level_wf(env, level)?;
+                self.level_wf(env, motive_level)?;
+                self.ty_check(env, shape, level)?;
+                let e_x = env.push_entry(Rc::clone(shape), level.clone());
+                self.tm_check(&e_x, arity, &Type::Nat, &Level::Zero)?;
+                let wf = Type::Wf {
+                    level: level.clone(),
+                    shape: Rc::clone(shape),
+                    arity: Rc::clone(arity),
+                };
+                // M scoped in (Γ, z : Wf).
+                let e_z = env.push_entry(Rc::new(wf.clone()), level.clone());
+                self.ty_check(&e_z, motive, motive_level)?;
+                let (cs_ty, ih_ty, step_ty) = wf_step_telescope(
+                    &env.gamma,
+                    level,
+                    motive_level,
+                    shape,
+                    arity,
+                    motive,
+                );
+                let e_a = env.push_entry(Rc::clone(shape), level.clone());
+                let e_cs = e_a.push_entry(Rc::new(cs_ty), level.clone());
+                let e_step = e_cs.push_entry(Rc::new(ih_ty), motive_level.clone());
+                self.tm_check(&e_step, step, &step_ty, motive_level)?;
+                self.tm_check(env, scrut, &wf, level)?;
                 Ok((
                     motive.apply_local(&LocalSubst::id(&env.gamma).extended(Rc::clone(scrut))),
                     motive_level.clone(),

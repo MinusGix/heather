@@ -115,6 +115,24 @@ pub enum Type {
     /// `Fin(S k) ⇝ Unit + Fin(k)`; neutral at a neutral length. Lives at 0.
     /// Same phase gate as [`Type::Vec`] (docs/wf-former-design.md §1.2).
     Fin { len: Rc<Term> },
+    /// `Wf^l(x : S). n` — the **finitary** branching fixed point: shapes
+    /// `S`, arity a `Nat` *term* with the shape free (`arity` binds one
+    /// local, `x : S`). Introduced by [`Term::Supf`], eliminated by
+    /// [`Term::ElimWf`]; positive like [`Type::W`] (no η). Lives at `l`
+    /// alone — the arity is data, not a type.
+    ///
+    /// The difference from [`Type::W`] is the whole point (route C of
+    /// docs/branching-inductives-choice.md): `W` stores children in a `Π`,
+    /// which this kernel deliberately does not η-expand, so bridging an
+    /// abstract child function to a constructor form needs funext. `Wf`
+    /// stores them in a [`Type::Vec`], i.e. in `Σ`/`Unit`, whose η is
+    /// already in `conv.rs` — so the same bridge is a conversion.
+    /// Same phase gate as [`Type::Vec`] (docs/wf-former-design.md §1.3).
+    Wf {
+        level: Level,
+        shape: Rc<Type>,
+        arity: Rc<Term>,
+    },
     /// `U^δ` — global type variable under a local substitution.
     GlobalTy { var: GlobalVar, subst: LocalSubst },
     /// `(g : Ctx) ⇒^l T` — meta-function type over context variables; binds
@@ -347,6 +365,43 @@ pub enum Term {
         motive_level: Level,
         shape: Rc<Type>,
         pos: Rc<Type>,
+        motive: Rc<Type>,
+        step: Rc<Term>,
+        scrut: Rc<Term>,
+    },
+
+    // ---- finitary branching trees (extension; docs/wf-former-design.md) ----
+    /// `sup_f^l(x:S. n; a; cs) : Wf^l(x:S). n` where `a : S` and
+    /// `cs : Vec^l(Wf^l(x:S).n; n[a/x])` — the children are a **tuple**,
+    /// not a function. Fully annotated so it synthesizes; `arity` binds one
+    /// local (`x : shape`).
+    Supf {
+        level: Level,
+        shape: Rc<Type>,
+        arity: Rc<Term>,
+        label: Rc<Term>,
+        children: Rc<Term>,
+    },
+    /// `elim_Wf^{l,l'}(x:S. n; z. M; a cs ih. s; t) : M[t/z]` — dependent
+    /// elimination over `t : Wf^l(x:S). n`. `motive` binds one local
+    /// (`z : Wf`), `step` binds three (`a : S`,
+    /// `cs : Vec^l(Wf; n[a/x])`,
+    /// `ih : Π^{0,l'}(i : Fin n[a/x]). M[nth^l(Wf; n[a/x]; cs; i)/z]`) with
+    /// `s : M[sup_f(a; cs)/z]`. β
+    /// `elim_Wf (sup_f(…; a; cs)) ⇝ s[a, cs, λi. elim_Wf(…; nth … cs i)]` —
+    /// like `elim_W`'s, the recursive call is synthesized *under a λ*, but
+    /// over a `Fin` index rather than an abstract position, so the ih is
+    /// **transient**: applied at literal indices (after the generated
+    /// recursor cases on the tag), never stored in data and never compared.
+    /// That is why the η-deficiency of functions costs nothing here — the
+    /// resolution of wrinkle 6.2 in docs/branching-inductives-choice.md.
+    /// Neutral on a neutral scrutinee. [`nth`] is materialized by this
+    /// rule rather than being a former of its own.
+    ElimWf {
+        level: Level,
+        motive_level: Level,
+        shape: Rc<Type>,
+        arity: Rc<Term>,
         motive: Rc<Type>,
         step: Rc<Term>,
         scrut: Rc<Term>,
@@ -754,4 +809,220 @@ pub enum GlobalBinding {
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct GlobalCtx {
     pub bindings: Vec<GlobalBinding>,
+}
+
+// ---------------------------------------------------------------------------
+// Derived constructions materialized by the `Wf` rules
+//
+// `Wf`'s typing and β rules mention `nth` and a three-entry step telescope.
+// Neither is a former: both are fixed syntax schemas, built here once so the
+// typing rule (typing.rs) and the neutral comparison (conv.rs) cannot drift
+// apart — the transcription hazard flagged in docs/wf-former-design.md §6.
+// ---------------------------------------------------------------------------
+
+/// `nth^l(T; k; cs; i) : T` — project the `i`th component out of a
+/// `Vec^l(T; k)`, by `elim_Nat` on the length at the motive
+/// `Π(cs : Vec(T; k̂)). Π(i : Fin k̂). T`:
+///
+/// ```text
+/// nth(T; 0;   cs; i) ⇝ elim_Empty i           (Fin 0 is Empty)
+/// nth(T; S k; cs; i) ⇝ case i of inl _ ⇒ fst cs | inr j ⇒ nth(T; k; snd cs; j)
+/// ```
+///
+/// So at a literal length it reduces to the projections *whatever the tuple
+/// is* — including a neutral one, which is what makes the `Fin`-indexed
+/// induction hypothesis usable (docs/wf-former-design.md §3).
+///
+/// All four arguments live in the ambient Γ; the result does too.
+pub fn nth(level: &Level, elem: &Rc<Type>, len: &Rc<Term>, cs: Rc<Term>, idx: Rc<Term>) -> Term {
+    let vec_at = |elem_shift: u32, len: Rc<Term>| Type::Vec {
+        level: level.clone(),
+        elem: Rc::new(elem.shift_local(elem_shift)),
+        len,
+    };
+    let var = |i: u32| Rc::new(Term::Var(LocalVar(i)));
+
+    // Motive in (Γ, k̂): Π(cs : Vec(T; k̂)). Π(i : Fin k̂). T.
+    let motive = Type::Pi {
+        dom_level: level.clone(),
+        cod_level: level.clone(),
+        dom: Rc::new(vec_at(1, var(0))),
+        cod: Rc::new(Type::Pi {
+            dom_level: Level::Zero,
+            cod_level: level.clone(),
+            dom: Rc::new(Type::Fin { len: var(1) }),
+            cod: Rc::new(elem.shift_local(3)),
+        }),
+    };
+
+    // Base in Γ: λ(cs : Vec(T; 0)). λ(i : Fin 0). elim_Empty(_. T; i).
+    let base = Term::Lam {
+        dom_level: level.clone(),
+        cod_level: level.clone(),
+        dom: Rc::new(vec_at(0, Rc::new(Term::Zero))),
+        body: Rc::new(Term::Lam {
+            dom_level: Level::Zero,
+            cod_level: level.clone(),
+            dom: Rc::new(Type::Fin { len: Rc::new(Term::Zero) }),
+            body: Rc::new(Term::ElimEmpty {
+                level: level.clone(),
+                motive: Rc::new(elem.shift_local(3)),
+                scrut: var(0),
+            }),
+        }),
+    };
+
+    // Step in (Γ, k̂, r), k̂ = 1, r = 0; under both λs (Γ, k̂=3, r=2, cs=1, i=0).
+    // The Σ-typed projections out of `cs` are what `Vec (S k̂)` reduces to.
+    let fst_cs = Term::Fst {
+        fst_level: level.clone(),
+        snd_level: level.clone(),
+        fst_ty: Rc::new(elem.shift_local(5)),
+        snd_ty: Rc::new(vec_at(6, var(5))),
+        pair: var(2),
+    };
+    let snd_cs = Term::Snd {
+        fst_level: level.clone(),
+        snd_level: level.clone(),
+        fst_ty: Rc::new(elem.shift_local(5)),
+        snd_ty: Rc::new(vec_at(6, var(5))),
+        pair: var(2),
+    };
+    // r (snd cs) j, in (Γ, k̂=4, r=3, cs=2, i=1, j=0).
+    let rec_call = Term::App {
+        fun: Rc::new(Term::App {
+            fun: var(3),
+            dom_level: level.clone(),
+            cod_level: level.clone(),
+            dom: Rc::new(vec_at(5, var(4))),
+            cod: Rc::new(Type::Pi {
+                dom_level: Level::Zero,
+                cod_level: level.clone(),
+                dom: Rc::new(Type::Fin { len: var(5) }),
+                cod: Rc::new(elem.shift_local(7)),
+            }),
+            arg: Rc::new(snd_cs),
+        }),
+        dom_level: Level::Zero,
+        cod_level: level.clone(),
+        dom: Rc::new(Type::Fin { len: var(4) }),
+        cod: Rc::new(elem.shift_local(6)),
+        arg: var(0),
+    };
+    let step = Term::Lam {
+        dom_level: level.clone(),
+        cod_level: level.clone(),
+        dom: Rc::new(vec_at(2, Rc::new(Term::Succ(var(1))))),
+        body: Rc::new(Term::Lam {
+            dom_level: Level::Zero,
+            cod_level: level.clone(),
+            dom: Rc::new(Type::Fin { len: Rc::new(Term::Succ(var(2))) }),
+            body: Rc::new(Term::Case {
+                lhs_level: Level::Zero,
+                rhs_level: Level::Zero,
+                motive_level: level.clone(),
+                lhs: Rc::new(Type::Unit),
+                rhs: Rc::new(Type::Fin { len: var(3) }),
+                motive: Rc::new(elem.shift_local(5)),
+                case_l: Rc::new(fst_cs),
+                case_r: Rc::new(rec_call),
+                scrut: var(0),
+            }),
+        }),
+    };
+
+    // The recursion, then applied to the tuple and the index.
+    let recursion = Term::ElimNat {
+        level: level.clone(),
+        motive: Rc::new(motive),
+        base: Rc::new(base),
+        step: Rc::new(step),
+        scrut: Rc::clone(len),
+    };
+    let at_cs = Term::App {
+        fun: Rc::new(recursion),
+        dom_level: level.clone(),
+        cod_level: level.clone(),
+        dom: Rc::new(vec_at(0, Rc::clone(len))),
+        cod: Rc::new(Type::Pi {
+            dom_level: Level::Zero,
+            cod_level: level.clone(),
+            dom: Rc::new(Type::Fin { len: Rc::new(len.shift_local(1)) }),
+            cod: Rc::new(elem.shift_local(2)),
+        }),
+        arg: cs,
+    };
+    Term::App {
+        fun: Rc::new(at_cs),
+        dom_level: Level::Zero,
+        cod_level: level.clone(),
+        dom: Rc::new(Type::Fin { len: Rc::clone(len) }),
+        cod: Rc::new(elem.shift_local(1)),
+        arg: idx,
+    }
+}
+
+/// The `elim_Wf` step telescope. Given the former's parts in Γ, returns the
+/// three binding types
+///
+/// ```text
+/// cs : Vec^l(Wf; n[a/x])                                    in (Γ, a : S)
+/// ih : Π(i : Fin n[a/x]). M[nth^l(Wf; n[a/x]; cs; i)/z]      in (Γ, a, cs)
+/// s  : M[sup_f(a; cs)/z]                                    in (Γ, a, cs, ih)
+/// ```
+///
+/// In `(Γ, a : S)` the arity *is* `n[a/x]` already — `a` sits exactly where
+/// the binder `x` was — which is the same shortcut `elim_W`'s rules take
+/// with `T[a/x]`.
+pub fn wf_step_telescope(
+    gamma: &LocalCtx,
+    level: &Level,
+    motive_level: &Level,
+    shape: &Rc<Type>,
+    arity: &Rc<Term>,
+    motive: &Rc<Type>,
+) -> (Type, Type, Type) {
+    let wf = Type::Wf {
+        level: level.clone(),
+        shape: Rc::clone(shape),
+        arity: Rc::clone(arity),
+    };
+    // cs : Vec(Wf; n) in (Γ, a).
+    let cs_ty = Type::Vec {
+        level: level.clone(),
+        elem: Rc::new(wf.shift_local(1)),
+        len: Rc::clone(arity),
+    };
+    // ih in (Γ, a, cs); its body is in (Γ, a, cs, i) where cs = 1, i = 0.
+    let nth_at_i = nth(
+        level,
+        &Rc::new(wf.shift_local(3)),
+        &Rc::new(arity.shift_local(2)),
+        Rc::new(Term::Var(LocalVar(1))),
+        Rc::new(Term::Var(LocalVar(0))),
+    );
+    let ih_ty = Type::Pi {
+        dom_level: Level::Zero,
+        cod_level: motive_level.clone(),
+        dom: Rc::new(Type::Fin { len: Rc::new(arity.shift_local(1)) }),
+        cod: Rc::new(
+            motive.apply_local(&LocalSubst::id(gamma).shift_local(3).extended(Rc::new(nth_at_i))),
+        ),
+    };
+    // s : M[sup_f(a; cs)/z] — the constructor built in (Γ, a, cs), then
+    // weakened past `ih`.
+    let Type::Wf { shape: s2, arity: n2, .. } = wf.shift_local(2) else {
+        unreachable!("shifting a Wf yields a Wf")
+    };
+    let sup_ac = Term::Supf {
+        level: level.clone(),
+        shape: s2,
+        arity: n2,
+        label: Rc::new(Term::Var(LocalVar(1))),
+        children: Rc::new(Term::Var(LocalVar(0))),
+    };
+    let step_ty = motive.apply_local(
+        &LocalSubst::id(gamma).shift_local(3).extended(Rc::new(sup_ac.shift_local(1))),
+    );
+    (cs_ty, ih_ty, step_ty)
 }

@@ -360,7 +360,7 @@ pub fn gen_type(sc: &Sc, r: &mut Rng, b: u32) -> Rc<Type> {
     }
 
     for _ in 0..8 {
-        let arm = if b == 0 { r.below(3) } else { r.below(18) };
+        let arm = if b == 0 { r.below(3) } else { r.below(19) };
         match arm {
             0 => return Rc::new(Type::Nat),
             1 => return Rc::new(Type::Ty(gen_level(sc, r, 1))),
@@ -479,6 +479,16 @@ pub fn gen_type(sc: &Sc, r: &mut Rng, b: u32) -> Rc<Type> {
                 });
             }
             17 if b > 0 => return Rc::new(Type::Fin { len: gen_term(sc, r, b / 2) }),
+            18 if b > 0 => {
+                // Wf: the arity is a term under the shape binder.
+                let mut inner = sc.clone();
+                inner.local.len += 1;
+                return Rc::new(Type::Wf {
+                    level: gen_level(sc, r, 1),
+                    shape: gen_type(sc, r, b / 2),
+                    arity: gen_term(&inner, r, b / 2),
+                });
+            }
             _ => continue,
         }
     }
@@ -502,7 +512,7 @@ pub fn gen_term(sc: &Sc, r: &mut Rng, b: u32) -> Rc<Term> {
     }
 
     for _ in 0..8 {
-        let arm = if b == 0 { r.below(5) } else { r.below(34) };
+        let arm = if b == 0 { r.below(5) } else { r.below(36) };
         match arm {
             0 if sc.local.len > 0 => return Rc::new(Term::Var(LocalVar(r.below(sc.local.len)))),
             0 | 1 => return Rc::new(Term::Zero),
@@ -816,6 +826,35 @@ pub fn gen_term(sc: &Sc, r: &mut Rng, b: u32) -> Rc<Term> {
                     scrut: gen_term(sc, r, b / 2),
                 });
             }
+            // sup_f / elim_Wf: `arity` binds one (x : S), motive binds one
+            // (z : Wf), step binds three (a, cs, ih) — the depths the
+            // substitution laws have to respect.
+            34 if b > 0 => {
+                let mut in1 = sc.clone();
+                in1.local.len += 1;
+                return Rc::new(Term::Supf {
+                    level: gen_level(sc, r, 1),
+                    shape: gen_type(sc, r, b / 2),
+                    arity: gen_term(&in1, r, b / 2),
+                    label: gen_term(sc, r, b / 2),
+                    children: gen_term(sc, r, b / 2),
+                });
+            }
+            35 if b > 0 => {
+                let mut in1 = sc.clone();
+                in1.local.len += 1;
+                let mut in3 = sc.clone();
+                in3.local.len += 3;
+                return Rc::new(Term::ElimWf {
+                    level: gen_level(sc, r, 1),
+                    motive_level: gen_level(sc, r, 1),
+                    shape: gen_type(sc, r, b / 2),
+                    arity: gen_term(&in1, r, b / 2),
+                    motive: gen_type(&in1, r, b / 2),
+                    step: gen_term(&in3, r, b / 2),
+                    scrut: gen_term(sc, r, b / 2),
+                });
+            }
             _ => continue,
         }
     }
@@ -920,6 +959,7 @@ pub fn count_type(t: &Type) -> u64 {
         Type::W { shape, pos, .. } => count_type(shape) + count_type(pos),
         Type::Vec { elem, len, .. } => count_type(elem) + count_term(len),
         Type::Fin { len } => count_term(len),
+        Type::Wf { shape, arity, .. } => count_type(shape) + count_term(arity),
         Type::UPi { body, .. } => count_type(body),
         Type::El { tm, .. } => count_term(tm),
         Type::GlobalTy { subst, .. } => count_subst(subst),
@@ -952,6 +992,13 @@ pub fn count_term(t: &Term) -> u64 {
         }
         Term::ElimW { shape, pos, motive, step, scrut, .. } => {
             count_type(shape) + count_type(pos) + count_type(motive) + count_term(step)
+                + count_term(scrut)
+        }
+        Term::Supf { shape, arity, label, children, .. } => {
+            count_type(shape) + count_term(arity) + count_term(label) + count_term(children)
+        }
+        Term::ElimWf { shape, arity, motive, step, scrut, .. } => {
+            count_type(shape) + count_term(arity) + count_type(motive) + count_term(step)
                 + count_term(scrut)
         }
         Term::Succ(t) => count_term(t),

@@ -116,6 +116,9 @@ impl fmt::Debug for Type {
             }
             Type::Vec { level, elem, len } => write!(f, "Vec[{level:?}]({elem:?}; {len:?})"),
             Type::Fin { len } => write!(f, "Fin({len:?})"),
+            Type::Wf { level, shape, arity } => {
+                write!(f, "Wf[{level:?}]({shape:?}). {arity:?}")
+            }
             Type::GlobalTy { var, subst } => write!(f, "U{}^{subst:?}", var.0),
             Type::CtxPi { level, body } => write!(f, "Π[g:Ctx@{level:?}]. {body:?}"),
             Type::TyPi { ctx, arg_level, body_level, body } => {
@@ -217,6 +220,14 @@ impl fmt::Debug for Term {
             } => write!(
                 f,
                 "elimW[{shape_level:?},{pos_level:?},{motive_level:?}]({shape:?}. {pos:?}; M {motive:?}; s {step:?}; {scrut:?})"
+            ),
+            Term::Supf { level, shape, arity, label, children } => write!(
+                f,
+                "supf[{level:?}]({shape:?}. {arity:?}; {label:?}; {children:?})"
+            ),
+            Term::ElimWf { level, motive_level, shape, arity, motive, step, scrut } => write!(
+                f,
+                "elimWf[{level:?},{motive_level:?}]({shape:?}. {arity:?}; M {motive:?}; s {step:?}; {scrut:?})"
             ),
             Term::Lam { dom_level, cod_level, dom, body } => {
                 write!(f, "λ[{dom_level:?},{cod_level:?}]({dom:?}). {body:?}")
