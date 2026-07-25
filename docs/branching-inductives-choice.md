@@ -1,10 +1,13 @@
 # Branching finitary inductives: the choice
 
-Status: **decision support, no decision taken** (2026-07-24). Written to be
-thought over, not to be implemented from. Tracking issue:
-`issues/tier1-branching-constructors.md`. Evidence base:
-`docs/inductive-tier1-lowering.md` §8.1 and the validated linear-fragment
-prototype `crates/elab/tests/tier1_fording.rs`.
+Status: **decided — route C** (2026-07-25), on the strength of three
+prototype rounds; see §15 for the evidence and `docs/wf-former-design.md`
+for the rules. §§1–14 are kept as written on 2026-07-24 as the decision
+record. Tracking issues: `issues/tier1-branching-constructors.md` (the
+original question), `issues/wf-former.md` (the kernel round). Evidence
+base: `docs/inductive-tier1-lowering.md` §8.1, the validated
+linear-fragment prototype `crates/elab/tests/tier1_fording.rs`, and the
+three branching prototypes of §15.
 
 The question: a constructor with **two or more recursive fields**
 (`Node(Tree, Tree)`) has no lowering into the current kernel with the
@@ -433,3 +436,68 @@ Step 2 is where the wrinkles of §6 get settled honestly, and it is cheap.
   which is a point for C that this document has not scored.
 - Indexed families still want fording by `Id`, which has no η — unchanged by
   this decision, and tracked separately.
+
+---
+
+## 15. Decision (2026-07-25): route C, from evidence
+
+Three prototype rounds were built against the real kernel, all under
+`crates/elab/tests/`: `branching_route_a.rs` (Tree as a container on `W`,
+funext postulated in Ψ), `branching_route_c.rs` (the per-constructor `Wf`
+interface postulated, β laws propositional), and `branching_route_c_nary.rs`
+(the *generic* n-ary interface: `supf`, the `Fin`-indexed ih, `arity`/
+`tup`/`fin`/`nth` all defined via `elim_Nat` so the kernel computes them,
+one generic β postulate). Same theorem — `mirror (mirror t) = t` — on every
+side. What they established:
+
+- **A's §4 claims all hold** (open-subterm β, computing non-dependent
+  recursion, cong without funext), **and A's costs are now measured, not
+  argued**: one funext per constructor arm including nullary ones (pinned:
+  a bare `refl` leaf arm is rejected; `Empty`-η would erase exactly that
+  one), dependent recursion producing stuck axiom heads at closed data
+  (pinned: the finished proof at `leaf` is not convertible with `refl`),
+  and — unnoted in §4 — the axiom is needed **per position type**, so a
+  generator mints funext instances per constructor shape unless the axiom
+  is schematic.
+- **Wrinkle 6.2 is resolved as hoped**: the ih is transient — applied at
+  literal indices after tag-casing, never stored, never compared — and
+  `nth` at a literal arity reduces to the projections on a *neutral* tuple.
+  No dependent-vector former, no forest presentation. Falsifier 1 of §12
+  did not fire.
+- **C's central claim is a property of today's checker**, not a promise:
+  `supf (inr u) cs ≡ node (fst cs) (fst (snd cs))` for neutral `cs`, by the
+  Σ-η and Unit-η already in `conv.rs` — precisely the equation A pays
+  funext for. Arity 0 likewise: leaf uniqueness is definitional.
+- **The surviving proof content is identical in both routes** (cong on the
+  ihs, stitched by trans); A's extra η-bridges are generator-absorbable at
+  proof-construction time but permanent in the *terms* — and in this
+  language terms are data (code boxes, `lower`, discipline libraries), which
+  is the axis that decides it, sharpened by the datarepr separation of §3.
+
+Two corrections to the routes' write-ups, recorded so they are not
+re-derived:
+
+- **§5 (route B) is closed for a sharper reason than "research-grade".**
+  The sufficient restricted rule — pointwise conversion at Π over *closed
+  finite* domains — is decidable and looks cheap, but it breaks
+  congruence-completeness of algorithmic conversion: from
+  `λb. case b of _ ⇒ c | _ ⇒ c ≡ λb. c` (pointwise) congruence demands
+  `case b of _ ⇒ c | _ ⇒ c ≡ c` at a neutral `b`, which is the extensional-
+  sums problem again, outside the rule's reach. The checker would be
+  incomplete for its own declarative theory (Lean-style defeq
+  incompleteness) — against `conv.rs`'s stated invariant. That, and not
+  difficulty alone, is why no mainstream checker ships the tabulation rule.
+- **Quotients are not a rescue for A**: funext-as-theorem removes the
+  axiom but the transport in the dependent recursor still does not reduce —
+  it fixes the axis A already passes (containment) and none it fails.
+
+Consequences adopted into the design (`docs/wf-former-design.md`): the
+`Vec` former over the code-expressibility side condition (wrinkle 1); `Fin`
+as a former for symmetry and goal readability, explicitly sheddable; `nth`
+derived, materialized by the `elim_Wf` rules; `W` + funext retained for the
+infinitary tier only; `Empty`-η recommended regardless of this decision;
+one regime — tier 0/1 fold into the `Wf` generator, fording retires to a
+stress suite, `Rose`-style nesting falls out of arity-as-a-term (§14's
+unscored point, confirmed as real). The single remaining falsifier is the
+ch. 07 LR case for `Wf` (§12's second trigger): if it needs a new idea
+rather than a finitary restriction of `W`'s, reopen with A as the fallback.

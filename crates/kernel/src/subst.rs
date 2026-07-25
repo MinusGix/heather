@@ -197,6 +197,14 @@ fn map_type<M: Mapper>(t: &Type, m: &mut M, at: Depths) -> Type {
             lhs: sub_ty(lhs, m, at),
             rhs: sub_ty(rhs, m, at),
         },
+        // Vec/Fin (extension): the length is a *term* in Γ, so it takes the
+        // same depth as the element type — no binder anywhere.
+        Type::Vec { level, elem, len } => Type::Vec {
+            level: m.level(level, at),
+            elem: sub_ty(elem, m, at),
+            len: sub_tm(len, m, at),
+        },
+        Type::Fin { len } => Type::Fin { len: sub_tm(len, m, at) },
         Type::W { shape_level, pos_level, shape, pos } => Type::W {
             shape_level: m.level(shape_level, at),
             pos_level: m.level(pos_level, at),

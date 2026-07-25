@@ -111,9 +111,24 @@ The code recursors gain four branches (`ty_w`, `tm_w`, `tm_sup`,
 recursive calls) nests Π types inside its global bindings (the step's `f`
 and `ih` binders), the deepest binding-type construction yet.
 
+`Vec^l(T; k)` and `Fin(k)` (2026-07-25) are index-computing wrappers, not
+new definitional power: `Vec(T;0) ⇝ Unit`, `Vec(T;S k) ⇝ Σ(_:T). Vec(T;k)`,
+`Fin(0) ⇝ Empty`, `Fin(S k) ⇝ Unit + Fin(k)`, each **neutral at a neutral
+length** and carrying no introduction/elimination forms of its own — every
+η they appear to have (componentwise comparison, proof irrelevance at
+length 0) is inherited through the reduction from `Σ`/`Unit`. The length is
+a *term* at the same depth as the element, with no binder anywhere, which is
+what lets a tuple's arity be computed from a datatype's tag. They are
+phase-1 of the `Wf` former (`docs/wf-former-design.md`), and until phase 3
+they are **gated out of layer c** (`not_code_layer` in `typing.rs`) because
+they have no code formers or code-recursor branches yet — so boxed code
+stays exhaustively recursable, and `beta_elim_ty` blocks rather than
+mis-fires if one ever reaches it.
+
 Explicitly out of v0: coinduction/effects, typeclasses, compiler machinery,
-inductive types beyond Nat, Id, Σ, Unit, Empty, binary sums, and W, the type
-lifter (omitted by the paper too).
+inductive types beyond Nat, Id, Σ, Unit, Empty, binary sums, W, and the
+`Vec`/`Fin`/`Wf` finitary-branching group, the type lifter (omitted by the
+paper too).
 
 ## Algorithms
 

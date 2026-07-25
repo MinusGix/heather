@@ -360,7 +360,7 @@ pub fn gen_type(sc: &Sc, r: &mut Rng, b: u32) -> Rc<Type> {
     }
 
     for _ in 0..8 {
-        let arm = if b == 0 { r.below(3) } else { r.below(16) };
+        let arm = if b == 0 { r.below(3) } else { r.below(18) };
         match arm {
             0 => return Rc::new(Type::Nat),
             1 => return Rc::new(Type::Ty(gen_level(sc, r, 1))),
@@ -468,6 +468,17 @@ pub fn gen_type(sc: &Sc, r: &mut Rng, b: u32) -> Rc<Type> {
                     pos: gen_type(&inner, r, b / 2),
                 });
             }
+            // Vec/Fin: the length is a *term* at the same depth as the
+            // element (no binder anywhere), which is the shape substitution
+            // and shifting have to respect.
+            16 if b > 0 => {
+                return Rc::new(Type::Vec {
+                    level: gen_level(sc, r, 1),
+                    elem: gen_type(sc, r, b / 2),
+                    len: gen_term(sc, r, b / 2),
+                });
+            }
+            17 if b > 0 => return Rc::new(Type::Fin { len: gen_term(sc, r, b / 2) }),
             _ => continue,
         }
     }
@@ -907,6 +918,8 @@ pub fn count_type(t: &Type) -> u64 {
         Type::Sigma { fst, snd, .. } => count_type(fst) + count_type(snd),
         Type::Sum { lhs, rhs, .. } => count_type(lhs) + count_type(rhs),
         Type::W { shape, pos, .. } => count_type(shape) + count_type(pos),
+        Type::Vec { elem, len, .. } => count_type(elem) + count_term(len),
+        Type::Fin { len } => count_term(len),
         Type::UPi { body, .. } => count_type(body),
         Type::El { tm, .. } => count_term(tm),
         Type::GlobalTy { subst, .. } => count_subst(subst),

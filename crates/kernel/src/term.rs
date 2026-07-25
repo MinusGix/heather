@@ -99,6 +99,22 @@ pub enum Type {
         shape: Rc<Type>,
         pos: Rc<Type>,
     },
+    /// `Vec^l(T; k)` — the k-fold Σ-tuple of `T`, Unit-terminated, as a
+    /// former: `Vec(T; 0) ⇝ Unit`, `Vec(T; S k) ⇝ Σ(_ : T). Vec(T; k)`;
+    /// neutral at a neutral length, no η of its own (η arrives through the
+    /// reductions). No introduction/elimination forms — values are pairs.
+    /// Substrate for `Wf` (docs/wf-former-design.md §1.1); currently gated
+    /// out of the code layer until `TmVec` + rec.rs branches land
+    /// (issues/wf-former.md phase 3).
+    Vec {
+        level: Level,
+        elem: Rc<Type>,
+        len: Rc<Term>,
+    },
+    /// `Fin(k)` — canonical finite index types: `Fin(0) ⇝ Empty`,
+    /// `Fin(S k) ⇝ Unit + Fin(k)`; neutral at a neutral length. Lives at 0.
+    /// Same phase gate as [`Type::Vec`] (docs/wf-former-design.md §1.2).
+    Fin { len: Rc<Term> },
     /// `U^δ` — global type variable under a local substitution.
     GlobalTy { var: GlobalVar, subst: LocalSubst },
     /// `(g : Ctx) ⇒^l T` — meta-function type over context variables; binds

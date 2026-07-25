@@ -364,6 +364,18 @@ impl Tc {
         if env.layer == Layer::Meta { Ok(()) } else { Err(TypeError::LayerMismatch) }
     }
 
+    /// Phase gate for `Vec`/`Fin` (docs/wf-former-design.md §1): they have
+    /// no code formers and no code-recursor branches yet, so they may not
+    /// appear at layer c (or v, which c subsumes here) — boxed code stays
+    /// exhaustively recursable. Lifted when `TmVec`/`TmFin` land with `Wf`
+    /// (issues/wf-former.md phase 3).
+    fn not_code_layer(&self, env: &Env) -> R {
+        match env.layer {
+            Layer::Var | Layer::Code => Err(TypeError::LayerMismatch),
+            Layer::Prog | Layer::Meta => Ok(()),
+        }
+    }
+
     // -- local contexts -----------------------------------------------------
 
     /// `⊢_i Γ` (in `env.psi`; `env.gamma` is irrelevant).
@@ -501,6 +513,23 @@ impl Tc {
                 let e = env.push_entry(Rc::clone(shape), shape_level.clone());
                 self.ty_check(&e, pos, pos_level)?;
                 Ok(Level::max(shape_level.clone(), pos_level.clone()))
+            }
+            // Vec-formation (extension; docs/wf-former-design.md §1.1):
+            // ⊢_i Vec^l(T; k) @ l ⟸ ⊢_i T @ l, ⊢_i k : Nat @ 0. The length
+            // is a term in Γ (no binder), which is what lets the tuple's
+            // arity be *computed* from a shape.
+            Type::Vec { level, elem, len } => {
+                self.not_code_layer(env)?;
+                self.level_wf(env, level)?;
+                self.ty_check(env, elem, level)?;
+                self.tm_check(env, len, &Type::Nat, &Level::Zero)?;
+                Ok(level.clone())
+            }
+            // Fin-formation (extension; §1.2): ⊢_i Fin(k) @ 0 ⟸ ⊢_i k : Nat.
+            Type::Fin { len } => {
+                self.not_code_layer(env)?;
+                self.tm_check(env, len, &Type::Nat, &Level::Zero)?;
+                Ok(Level::Zero)
             }
             Type::GlobalTy { var, subst } => {
                 let Some(binding) = lookup(&env.psi, *var) else {

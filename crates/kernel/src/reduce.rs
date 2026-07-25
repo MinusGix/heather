@@ -116,6 +116,38 @@ pub fn step_type(t: &Type, gamma: &LocalCtx) -> Option<Type> {
             _ => step_term(tm, gamma)
                 .map(|tm| Type::El { level: level.clone(), tm: Rc::new(tm) }),
         },
+        // Vec^l(T; 0) ⇝ Unit, Vec^l(T; S k) ⇝ Σ^{l,l}(_ : T). Vec^l(T; k).
+        // The tail is under the Σ's binder, so the length is shifted; `T`
+        // and the tail's `T` likewise (docs/wf-former-design.md §1.1).
+        Type::Vec { level, elem, len } => match &**len {
+            Term::Zero => Some(Type::Unit),
+            Term::Succ(pred) => Some(Type::Sigma {
+                fst_level: level.clone(),
+                snd_level: level.clone(),
+                fst: Rc::clone(elem),
+                snd: Rc::new(Type::Vec {
+                    level: level.clone(),
+                    elem: Rc::new(elem.shift_local(1)),
+                    len: Rc::new(pred.shift_local(1)),
+                }),
+            }),
+            _ => step_term(len, gamma).map(|len| Type::Vec {
+                level: level.clone(),
+                elem: Rc::clone(elem),
+                len: Rc::new(len),
+            }),
+        },
+        // Fin(0) ⇝ Empty, Fin(S k) ⇝ Unit +^{0,0} Fin(k).   (§1.2)
+        Type::Fin { len } => match &**len {
+            Term::Zero => Some(Type::Empty),
+            Term::Succ(pred) => Some(Type::Sum {
+                lhs_level: Level::Zero,
+                rhs_level: Level::Zero,
+                lhs: Rc::new(Type::Unit),
+                rhs: Rc::new(Type::Fin { len: Rc::clone(pred) }),
+            }),
+            _ => step_term(len, gamma).map(|len| Type::Fin { len: Rc::new(len) }),
+        },
         _ => None,
     }
 }
@@ -672,6 +704,12 @@ fn beta_elim_ty(
         }
         // box (U^δ): blocked, neutral.
         Type::GlobalTy { .. } => None,
+        // Vec/Fin have no code formers and no branches yet, and `ty_infer`
+        // rejects them at layer c (`not_code_layer`), so a well-typed code
+        // never contains one; stuck rather than mis-fired if it does.
+        // Phase 3 replaces this with `ty_vec`/`ty_fin` branches
+        // (docs/wf-former-design.md §6, issues/wf-former.md).
+        Type::Vec { .. } | Type::Fin { .. } => None,
         // Layer-m types cannot be layer-c code: ill-typed, stuck.
         _ => None,
     }
@@ -1454,6 +1492,9 @@ pub fn is_neutral_type(t: &Type) -> bool {
     match t {
         Type::GlobalTy { .. } => true,
         Type::El { tm, .. } => is_neutral_term(tm),
+        // A stuck length blocks the reduction, so the type is neutral —
+        // conversion compares such `Vec`/`Fin` structurally (extension).
+        Type::Vec { len, .. } | Type::Fin { len } => is_neutral_term(len),
         _ => false,
     }
 }
@@ -1477,6 +1518,9 @@ pub fn is_whnf_type(t: &Type) -> bool {
         | Type::CodeTy { .. }
         | Type::CodeTm { .. } => true,
         Type::El { .. } | Type::GlobalTy { .. } => is_neutral_type(t),
+        // Vec/Fin step on a *canonical* length, so they are normal exactly
+        // when the length is stuck (extension; docs/wf-former-design.md §1).
+        Type::Vec { len, .. } | Type::Fin { len } => is_neutral_term(len),
     }
 }
 

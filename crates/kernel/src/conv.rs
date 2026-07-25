@@ -306,6 +306,21 @@ impl Conv {
                 self.ty(env, s1, s2, dl1)?;
                 self.ty(env, t1, t2, cl1)
             }
+            // Vec/Fin congruence (extension): reached only at a *neutral*
+            // length — a canonical one reduces away before `ty_nf` — so this
+            // is the neutral-type comparison, structural in element and
+            // length (docs/wf-former-design.md §5).
+            (
+                Type::Vec { level: l1, elem: e1, len: k1 },
+                Type::Vec { level: l2, elem: e2, len: k2 },
+            ) => {
+                self.lev_eq(l1, l2)?;
+                self.ty(env, e1, e2, l1)?;
+                self.tm(env, k1, k2, &Type::Nat, &Level::Zero)
+            }
+            (Type::Fin { len: k1 }, Type::Fin { len: k2 }) => {
+                self.tm(env, k1, k2, &Type::Nat, &Level::Zero)
+            }
             // W congruence (extension; mirrors Π/Σ).
             (
                 Type::W { shape_level: dl1, pos_level: cl1, shape: s1, pos: t1 },
@@ -740,8 +755,14 @@ impl Conv {
                 (Term::Sup { .. }, _) | (_, Term::Sup { .. }) => Err(NC),
                 _ => self.tm_nee(env, a, b).map(drop),
             },
-            // Neutral type: only neutral terms inhabit it.
-            Type::El { .. } | Type::GlobalTy { .. } => self.tm_nee(env, a, b).map(drop),
+            // Neutral type: only neutral terms inhabit it. `Vec`/`Fin` reach
+            // here only at a neutral length (a canonical one reduces to
+            // Σ/Unit resp. Sum/Empty first, and those arms then supply the
+            // η) — so they behave exactly like the other neutral types.
+            Type::El { .. }
+            | Type::GlobalTy { .. }
+            | Type::Vec { .. }
+            | Type::Fin { .. } => self.tm_nee(env, a, b).map(drop),
         }
     }
 

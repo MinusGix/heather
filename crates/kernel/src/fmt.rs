@@ -114,6 +114,8 @@ impl fmt::Debug for Type {
             Type::W { shape_level, pos_level, shape, pos } => {
                 write!(f, "W[{shape_level:?},{pos_level:?}]({shape:?}). {pos:?}")
             }
+            Type::Vec { level, elem, len } => write!(f, "Vec[{level:?}]({elem:?}; {len:?})"),
+            Type::Fin { len } => write!(f, "Fin({len:?})"),
             Type::GlobalTy { var, subst } => write!(f, "U{}^{subst:?}", var.0),
             Type::CtxPi { level, body } => write!(f, "Π[g:Ctx@{level:?}]. {body:?}"),
             Type::TyPi { ctx, arg_level, body_level, body } => {
