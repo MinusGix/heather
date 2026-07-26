@@ -1,6 +1,17 @@
 # Tier-1 inductive lowering: exact-height fording
 
-Status: scheme written and **validated by hand prototype**, 2026-07-24 —
+Status: **not the generator's scheme.** Superseded 2026-07-26 by
+`docs/inductive-tier1-wf-lowering.md`, which lowers *all* of tier 1 —
+`List` and `Bits` included — onto the `Wf` former. This document stays as the
+costed record of a scheme that was designed, prototyped and not taken, and
+its §8 is why: the branching defect it diagnoses is exactly what the former
+set was changed to remove (`docs/branching-inductives-choice.md` §15). Its
+prototype `crates/elab/tests/tier1_fording.rs` stays **live** as a kernel
+stress suite, and its `vec` formula survives as `Type::Vec`'s reduction
+semantics.
+
+Original status: scheme written and **validated by hand prototype**,
+2026-07-24 —
 `crates/elab/tests/tier1_fording.rs` builds every construction below as
 kernel terms and checks them with the real kernel (`List<Nat>` for §3–§6,
 `Bits` for the multi-constructor parts). The generator is **not** written

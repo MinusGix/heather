@@ -1,6 +1,9 @@
 # Tier-1 inductive lowering: branching constructors on the `Wf` former
 
-Status: **written before the code**, 2026-07-25, per the tier's discipline.
+Status: **implemented**, 2026-07-26 — `crates/elab/src/wf.rs` mechanizes this
+document section by section, and `crates/elab/tests/inductive_tier1.rs` is
+§10's checklist. Written before the code, per the tier's discipline; §7
+records the one place where writing the code corrected the scheme.
 Tracking issue: `issues/wf-former.md` (phase 5). This document replaces
 `docs/inductive-tier1-lowering.md` (exact-height fording) as *the generator's*
 scheme — see §9 for what happens to that document and its prototype.
@@ -41,10 +44,11 @@ Everything else that mentions `D` inside a field type is **rejected**, with
 its own message, rather than lowered:
 
 - **Nested** (`Rose { Node(A, List Rose) }`): `D` under another type
-  constructor. This one is *nearly* free on the `Wf` former — the shape is
-  `Σ(a : A). Nat` and the arity is `snd x`, so the child list *is* the `Vec`
-  (`wf-former-design.md` §7) — but it needs the generator to recognise a
-  container in field position, which is a separate round. §8.
+  constructor. The former *types* it — the shape is `Σ(a : A). Nat` and the
+  arity is `snd x`, so the child list is the `Vec` — but lowering a
+  declaration whose field type is a user-declared `List` is not a generator
+  tweak, and §8.1 says why: it would cost β on open subterms, which is the
+  property this tier exists for.
 - **Non-uniform** (`D<Nat>` inside `D<A>`): a genuinely different
   monomorphic instance, which the tier-0 rule "parameters are
   monomorphized" cannot express recursively at all.
@@ -112,9 +116,9 @@ agree — they do because both come from `spine`.
 
 Why a term and not a type: `Wf`'s arity contributes no level (§1.3 of the
 former design), so `⟦D⟧` lives at the shape's level and nothing about the
-recursion inflates the universe. This is also what makes §8's nesting
-cheap — an arity that is *data* (`snd x`) is as legal as one that is a
-literal.
+recursion inflates the universe. It is also what would let a nested
+declaration's arity be *data* (`snd x`) rather than a literal — the typing
+half of §8.1, and the half that is genuinely free.
 
 ## 4. The type
 
@@ -313,11 +317,51 @@ re-interleave them into declaration order.
 
 ## 8. Not covered here
 
-- **Nested recursion** (`Rose { Node(A, List Rose) }`) — §1. The former
-  supports it and the shape is known (`S = Σ(a : A). Nat`, `n = snd x`); what
-  is missing is the generator step that recognises "a container of `D`" in
-  field position and reconciles the container's own `Vec` with the child
-  tuple. Its own round.
+- **Indexed families** still ford by `Id`, tracked separately.
+- **Infinitary branching** (`Acc`) stays on `W` + funext: its positions are
+  a *type*, not a `Nat`, and that tier never computed anyway
+  (`wf-former-design.md` §7).
+- **Mutual** declarations: no scheme yet at any tier.
+- **Polymorphic containers.** The level constraint is gone (route (a) of
+  `unit-empty-level-indexing.md`) and the kernel side is exercised by
+  `wf.rs::polymorphic_shape`, but nothing at the *surface* can reach it: a
+  tier-0 type parameter is monomorphized, and the surface's type grammar
+  (`Nat`, a named declaration, `=`) has no inhabitant above level 0 to
+  instantiate one with. Nothing here assumes level 0 — the level is taken
+  from the shape throughout — so this is a surface gap, not a lowering one.
+
+### 8.1 Nested recursion, and why it is not one step away
+
+`wf-former-design.md` §7 records `Rose { Node(A, List Rose) }` as "nearly
+free", on the grounds that `S = Σ(a : A). Nat` and `n = snd x` type it: the
+child list *is* the `Vec` and its length is data in the shape. That is true
+of the **type**, and it is the reason arity-as-a-term was worth having. It is
+*not* true of the lowering from a surface declaration whose field type is a
+user-declared `List`, and the difference is worth stating precisely, because
+"nearly free" would otherwise be read as "a small round".
+
+The obstruction is that the generator would have to identify the user's
+`List<Rose>` with the kernel's `Vec^l(⟦Rose⟧; k)`. Both directions are
+*definable* — `Vec → List` by `elim_Nat` on the length, `List → Σ(n : Nat).
+Vec` by `elim_Wf` on the list — so this is not a typing problem. It is a
+**computation** problem:
+
+- `Node(xs)` for a *neutral* `xs` lowers to `sup_f(⟨a, len xs⟩; toVec xs)`,
+- and `match Node(xs) { Node(ys) ⇒ ys }` gives back `fromVec (toVec xs)`,
+- which is convertible with `xs` only for a canonical `xs`.
+
+So β would stop firing on open subterms — precisely the property that
+distinguishes this tier from every finitary encoding, and the property route
+C was chosen for (`branching-inductives-choice.md` §15). A lowering that
+loses it is not the tier.
+
+What actually unblocks it is **surface support for a children-container field
+type** — a field the declaration states *as* a vector of `D`, so that the
+container in the source and the `Vec` in the kernel are the same object and
+no conversion appears. That is a surface-language round (a new `TyKind`, its
+elimination forms, and what a `match` arm binds for it), not a generator
+tweak. Until it exists, a nested occurrence is rejected with its own message
+(§1) and `Rose` is unwritable rather than mis-lowered.
 - **Indexed families** still ford by `Id`, tracked separately.
 - **Infinitary branching** (`Acc`) stays on `W` + funext: its positions are
   a *type*, not a `Nat`, and that tier never computed anyway
@@ -336,20 +380,32 @@ and its `vec` formula survives as `Type::Vec`'s reduction semantics.
 
 ## 10. Acceptance checklist
 
+**All eight met**, 2026-07-26, in `crates/elab/tests/inductive_tier1.rs` (13
+tests). Every item below names the test that pins it.
+
 1. `Tree { Leaf, Node(Tree, Tree) }` declares, and `⟦Tree⟧` kernel-checks as
-   a `Wf`.
-2. `Leaf` and `Node(l, r)` check at `⟦Tree⟧`, including at *open* children.
-3. `mirror` elaborates from a surface `match` with self-calls, and
-   `mirror(Node(Leaf, Node(Leaf, Leaf)))` computes — `refl` proves it.
+   a `Wf` — `tree_declares_and_builds`.
+2. `Leaf` and `Node(l, r)` check at `⟦Tree⟧`, including at *open* children —
+   same test, and `beta_fires_on_open_children` for the reduction that needs
+   it.
+3. `mirror` elaborates from a surface `match` with self-calls, and closed
+   trees compute — `mirror_computes`, three `refl`s.
 4. **`mirror(mirror(t)) = t`** by a surface recursive `theorem`, matching by
-   hand what `crates/kernel/tests/wf.rs` does. This is the acceptance in
-   `issues/tier1-branching-constructors.md`.
-5. Arity 0, 1 and 2 constructors in one declaration, with payload fields
-   alongside recursive ones (`Tree2 { Leaf(Nat), One(Tree2), Two(Tree2,
-   Tree2) }`), and `match` β-firing on each.
-6. A linear declaration (`List`, `Bits`) lowers through the *same* path and
-   its suite still passes — the tier folds in rather than sitting beside.
-7. No-confusion: `absurd` between two constructors of a tier-1 declaration,
-   and `inj` at a payload field and at a recursive one.
-8. Rejections stay rejections: nested and non-uniform occurrences are
-   diagnosed, not lowered (§1).
+   hand what `crates/kernel/tests/wf.rs` does — `mirror_of_mirror`. This is
+   the acceptance in `issues/tier1-branching-constructors.md`.
+5. Arities 0/1/2 in one declaration, with payload fields alongside recursive
+   ones, and `match` β-firing on each — `mixed_arities_and_payloads`; and
+   `each_child_has_its_own_ih`, where an *asymmetric* motive is what would
+   catch a swapped `Fin` index.
+6. A linear declaration lowers through the same path —
+   `linear_declarations_fold_in`. The tier folds in rather than sitting
+   beside; the fording scheme is unused by any lowering (§9).
+7. No-confusion: `absurd` between two constructors, and `inj` at a payload
+   field and at a recursive one — `no_confusion`,
+   `injectivity_across_payload_and_children`.
+8. Rejections stay rejections — `nested_recursion_is_diagnosed`,
+   `a_recursive_field_is_not_in_scope_later`, `a_self_call_must_descend`,
+   `a_self_call_outside_a_match_is_rejected`, and tier 0's
+   `a_recursive_declaration_is_classified_not_lowered`, which now pins the
+   *boundary* (direct occurrences lower, nested ones do not) rather than a
+   blanket refusal.

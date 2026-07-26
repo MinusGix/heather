@@ -3,7 +3,7 @@ title: Wf former: finitary branching inductives in the kernel
 status: open
 labels: [kernel,inductives,metatheory]
 created: 2026-07-25
-updated: 2026-07-25
+updated: 2026-07-26
 ---
 
 The kernel round for route C of [[tier1-branching-constructors]]: three
@@ -14,7 +14,7 @@ implementation is checked against). **Decision record:**
 `docs/branching-inductives-choice.md` §15. **Kernel summary:**
 `crates/kernel/DESIGN.md`, Fragment section, last two paragraphs.
 
-## Status: phases 1–4 landed, phase 5 is next
+## Status: all five phases landed
 
 | | Phase | State |
 |---|---|---|
@@ -22,71 +22,62 @@ implementation is checked against). **Decision record:**
 | 2 | `Wf` / `sup_f` / `elim_Wf` | **done** — commit `2ddd20b`, `crates/kernel/tests/wf.rs` (12) |
 | 3 | codes + `rec.rs` branches; lifts the layer-c gate | **done** — commit `1c43729`, `crates/kernel/tests/wf_codes.rs` (8) |
 | 4 | ch. 07 logical relations | **done** — `docs/metatheory-ch07-extensions.md` part II. **Abort criterion not triggered.** One kernel defect found, split out as [[unit-level-and-vec-preservation]] — **closed**, route (a) |
-| 5 | generator round (one regime) | **next** — closes [[tier1-branching-constructors]]; **may go polymorphic** |
+| 5 | generator round (one regime) | **done** — `docs/inductive-tier1-wf-lowering.md`, `crates/elab/src/wf.rs`, `crates/elab/tests/inductive_tier1.rs` (13). Closed [[tier1-branching-constructors]] |
 
-## Phase 5: what to do (resume from zero)
+## Phase 5, as landed
 
-**Deliverable.** The *elaborator* round: lower a branching tier-1 inductive
-declaration onto the `Wf` former — constructors, the recursor, no-confusion —
-so that [[tier1-branching-constructors]] closes and
-[[stress-proof-suite]] item 2 (the List/tree acceptance suite) is reachable.
-Phases 1–4 were the kernel; nothing further is needed there.
+**Delivered.** A branching tier-1 declaration written at the *surface* lowers
+onto the former: the type, constructors, the recursor with a `Fin`-indexed ih
+reached by a guarded self-call, and both halves of no-confusion. The scheme is
+`docs/inductive-tier1-wf-lowering.md` (written before the code, then corrected
+in one place *by* it, §7); the mechanization is `crates/elab/src/wf.rs`;
+`crates/elab/tests/inductive_tier1.rs` is its §10 checklist, all eight items.
 
-**Build on.** `crates/elab/src/inductive.rs` (tier 0, landed) is the lowering
-machinery; `crates/elab/tests/branching_route_c_nary.rs` is the validated
-*shape* of the generated interface, built against postulates. The kernel side
-it now targets is real: `Type::Wf`, `Term::Supf`, `Term::ElimWf`, plus
-`term::wf_step_telescope`, which the generator should call rather than
-re-transcribe (`typing.rs`, `conv.rs`, `rec.rs` and `reduce.rs` already share
-that one copy deliberately).
+**The acceptance**, and it is the issue's own: `Tree { Leaf, Node(Tree,
+Tree) }` declared at the surface and `mirror (mirror t) = t` proved by an
+ordinary recursive `theorem` through the generated recursor — the same
+theorem `crates/kernel/tests/wf.rs` proves by hand, with no funext anywhere
+and `β` firing on open children.
 
-**Four things already settled that change the work:**
+**Two things it did not deliver**, split rather than dropped:
 
-- **The generated recursor is simpler than the prototype suggests.** The
-  motive is an ordinary `Type` binding `z` — no `Ty`-code round trip. The
-  postulate prototypes needed codes because their eliminator was a term with
-  a `Ty`-valued motive; a real former does not.
-- **It may go polymorphic.** The level constraint is gone as of route (a)
-  ([[unit-level-and-vec-preservation]]); `wf.rs::polymorphic_shape` is a
-  worked level-1 `Wf` to copy from. A polymorphic container in the acceptance
-  suite is now a free choice rather than a blocker.
-- **`Rose`-style nesting falls out of arity-as-a-term.** `Rose { Node(A,
-  List Rose) }` is `Wf` with `S = Σ(a : A). Nat` and `n = snd x` — the child
-  list *is* the `Vec`, its length is data in the shape. Worth exercising.
-- **`Empty`-η is not needed for the nullary arm.** Arity 0 is
-  `Vec^l(T;0) ⇝ Unit^l`, and proof irrelevance already collapses every
-  nullary constructor form, including the `u : Unit` payload in the tag.
+- **`Rose` is not one step away**, and the design doc's "nearly free" was
+  right about the *type* and wrong about the *lowering*. Arity-as-a-term does
+  make the child count data, but a declaration whose field type is a
+  user-declared `List` would make the generator identify that `List` with the
+  kernel's `Vec`, and `fromVec (toVec xs) ≡ xs` holds only for canonical
+  `xs` — so `match (Node xs) { … }` would stop firing on an open `xs`, which
+  is the one property this tier exists for. What unblocks it is surface
+  support for a children-container field type: a surface-language round.
+  Argument: `docs/inductive-tier1-wf-lowering.md` §8.1.
+- **Polymorphic containers are a surface gap, not a lowering one.** The
+  level constraint is gone and the lowering takes its level from the shape
+  throughout, assuming nothing; but the surface's type grammar (`Nat`, a
+  named declaration, `=`) has no inhabitant above level 0 to instantiate a
+  parameter with. `wf.rs::polymorphic_shape` stays the kernel-side coverage.
 
-**Acceptance.** `Tree { Leaf, Node(Tree, Tree) }` declared at the *surface*
-and `mirror (mirror t) = t` proved through the generated recursor, matching
-what `crates/kernel/tests/wf.rs` does by hand. Then `Rose`.
+**Findings from the round worth not rediscovering:**
 
-**Hazards, from the kernel phases:**
-
-- Hand-built test terms trip on de Bruijn depth — `App`'s `cod` binds its
-  argument, so it sits one level deeper than the ambient. Both kernel
-  acceptance tests failed first on exactly that, in the test rather than the
-  kernel.
-- **Do not add a recursor branch casually.** Telescope arities are
-  transcribed in *six* places: `rec.rs`, `reduce.rs`'s `fire`,
-  `subst.rs::map_branches`, `BRANCH_DIMS`, and the two `identity_branches`
-  fixtures (`common/wt.rs` and `tests/typing.rs`). Phase 2 of route (a)
-  learned this the expensive way; `map_branches` is the one that fails
-  loudly (an index past `phi` panics in `Level::subst_at`), the rest fail as
-  type errors on *unrelated* code, because `G_A` checks the whole bundle.
-- If a generated recursor is checked over deeply nested code, note that
-  `scripts/test` sets `RUST_MIN_STACK=8M` for exactly that reason.
-
-**The falsifier is spent and the decision is final.** Route A is no longer a
-live fallback; `crates/elab/tests/branching_route_a.rs` stays only as the
-costed record of what was not taken. Do not reopen
-[[branching-inductives-decision]] without new evidence of a *different* kind.
-
-Full suite is at **331 passing**. Run it with `scripts/test` (never bare
-`cargo test` — see CLAUDE.md); note that `scripts/test` now sets
-`RUST_MIN_STACK=8M`, because checking the `tm_elim_wf` branch of a
-45-branch recursor recurses deeper than the 2 MiB default test-thread
-stack allows.
+- **A constant motive frees the step from `ih`, not from `cs`.** Both halves
+  of no-confusion looked like "`elim_Wf` at a constant motive with a case
+  tree on the tag", and that is right for disjointness and for a *payload*
+  field. It is wrong for a *recursive* field: reading the `t`-th child needs
+  `nth` at the literal arity, and outside a tag branch `cs : Vec(D; n[a/x])`
+  is stuck on the variable `a`. That case needs the same `cs`-generalization
+  `match` does, and now shares the code. The kernel caught it as a
+  `NotConvertible` — the cheap half of the tier's hazard class.
+- **An arm binder is an alias, not a kernel binder**, so the guardedness
+  analysis has no binder *position* to compare a self-call's argument
+  against. It compares terms instead, which keeps the shadowing property the
+  positional comparison gave for `Nat`.
+- **Distinct constructors routinely share a shape summand.** `Leaf` and
+  `Node` both lower to `Σ(#tag). Unit⁰` — the same kernel type. The injection
+  is what distinguishes them, and the nominal tag still separates `Tree` from
+  a structurally identical declaration.
+- **The de Bruijn hazard landed where the issue predicted.** `App`'s `cod`
+  binds its argument, and the step's two trailing applications
+  (`(case a) cs ih`) are exactly where that bites; `wf.rs::apply_cs_ih`
+  writes all four instantiations out rather than folding them.
 
 ## What exists now
 
@@ -251,3 +242,4 @@ story regardless of anything above. Not blocking.
 - 2026-07-25: Phase 4 landed — the ch. 07 pen-and-paper pass, `docs/metatheory-ch07-extensions.md` part II (§§10–17). ABORT CRITERION NOT TRIGGERED; the branching-inductives decision is final and route A is no longer a live fallback. Vec/Fin turn out to need NO logical-relations case at all (stronger than the design doc's §8 prediction of "restricted clauses"): every type-relation rule of 07 is keyed on the whnf, so at a canonical length they reduce away and weak-head expansion inherits the Unit/Σ/Empty/+ clause, while at a neutral length they ARE the whnf and the existing neutral-type rule applies — they owe only two Congruence-for-Neutrals laws, which are a new kind (first neutral-type congruence with a type premise; El ν's premise is a term). Wf's case is a restriction of W's in three separately checkable senses: its type rule is W's with a term relation at Nat replacing the position-type relation F; its term relation NfEqWf replaces W's subtree quantifier with a finite Σ-spine, recursing on the arity's NfEqNat derivation (NOT on either length — the two sides' arities are related, not equal, and NfEqNat is what forces lockstep reduction; this is the one place a careless copy of W's clause goes wrong); and its layering-restriction case has one contravariant premise where W has two. Consequence worth keeping: NfEqWf is a Wf-shaped inductive definition where NfEqW is a W-shaped one, so a mechanization needs only finitary branching induction where W needs infinitary — the object-level restriction holds one level up too. The single new obligation is the index lemma (§13): elim_Wf's arm needs relatedness at arbitrary Fin indices, which the finite spine does not hand over directly; four cases (arity ze/su/neutral, and NfEqSum on the index), all reductions the kernel already performs, all at an arbitrary weakening because the children premise stays Kripke-quantified. No funext obligation appears in the elim_Wf arm: the only Π is the ih and the Π term relation is the applied form, the semantic counterpart of "the ih is transient". KERNEL DEFECT FOUND AND FIXED, and it is the pass paying for itself: writing the fundamental-theorem arm for Vec-formation exposed that Vec^l(T;0) ⇝ Unit DROPS THE LEVEL, so a well-formed Π^{1,0}(_ : Vec^1(T;0)). Nat stepped to an ill-formed Π^{1,0}(_ : Unit). Nat — type-level subject reduction failed for every l ≠ 0. Invisible until now because a generated shape is a sum of records at level 0. Fixed by making the two component-free formers (Unit, Empty) level-polymorphic in formation: typing.rs::ty_check special-cases them ahead of the level comparison, ty_infer still reports 0, now documented as the LEAST rather than the canonical level. Not cumulativity — every other former keeps an exact level and Vec only ever over-declares (successor preserves l, nullary drops to 0), so nothing large enters a small universe; conv.rs needed no change since ty_nf already ignores its level argument. Two regressions in crates/kernel/tests/vec_fin.rs (vec_at_zero_reduces_without_dropping_its_level, only_unit_and_empty_are_level_polymorphic). Recorded in crates/kernel/DESIGN.md (Fragment) and docs/wf-former-design.md §1.1. Also recounted §8 of the ch07 doc: 13 type + 32 term formers at layer c = 45 branches, matching term.rs and BRANCH_DIMS. Honest caveat carried in §17: this is pen and paper like part I, and the transitivity/irrelevance cases for Wf were checked for shape against W's rather than written out — the composite spine recursion in transitivity is the one construction that appears twice and was written once. Full suite 311 passing.
 - 2026-07-25 (same day, follow-up): The phase-4 level fix was WRONG and is reverted. Investigating the "level 0 hides level bugs" hypothesis showed it was false — common/wt.rs's gen_wt_type takes Vec's level from its element and picks a small literal length two times in three, so Vec^{l>0}(T;0) had been generated hundreds of times per run since phase 1. What was missing was the OBSERVER: conv_properties had reduction_preserves_type, the term half of DeLaM ch. 06's Preservation lemma (If ⊢ T @ l and T ⇝ T' then ⊢ T' @ l; if ⊢ t : T @ l and t ⇝ t' then ⊢ t' : T @ l), and no type half. Added conv_properties::type_reduction_preserves_level; with the kernel reverted it fails on seed 102, first run, no tuning. Then checking ch. 04 showed the fix itself was unsound in design: §Non-cumulativity says "we must specify in each case how do we construct the original code from its components; therefore, it is the most convenient, when each term has a unique type", i.e. uniqueness of types is load-bearing FOR THE CODE ELIMINATOR. box T : □(Δ ⊢ Ty l) is checking-only and checks T at l via ty_check, so a level-polymorphic Unit is a term with many types. Measured: box Unit : CodeTy(0/1/2) all Ok while box Nat correctly stays at 0 only; and elim_CodeTy(code_level=1; box Unit) TYPECHECKS while firing into the ty_unit branch, which rec.rs builds with tele.univs = 0 and instantiates at ℓ := 0 — so the redex is typed at M[1/ℓ] and the reduct verified at M[0/ℓ]. For the identity motive the reduct survives because box Unit now inhabits both, i.e. the polymorphism masks its own damage; for a motive genuinely depending on ℓ it does not. Preservation simply moved from Vec to the code recursor, which is the worse place. The tell was visible in rec.rs all along: ty_ty binds univs:1 and reconstructs at lvar(0) because Ty ℓ's level varies, ty_nat/ty_unit bind none. Reverted to the pre-fix kernel; the Vec gap is open and now PINNED by vec_fin::vec_at_zero_drops_its_level_known_gap, with the invariant any fix must preserve pinned by vec_fin::every_type_has_exactly_one_level (including the box consequence). type_reduction_preserves_level stays live and skips only this reduct with only this error, mirroring the NotInferable/box-synthesis-gap skip already in the same file. typing.rs::ty_check's doc comment now warns the next reader off the one-line fix. Split out as issues/unit-level-and-vec-preservation.md with three costed candidates: (a) level-INDEXED Unit^l/Empty^l, parameterized rather than polymorphic as non-cumulative systems do it, which restores uniqueness on the nose and turns ty_unit/ty_empty into copies of ty_ty — favoured, but a phase-3-sized round since Triv and ElimEmpty must carry levels too or the disease returns at tm_triv; (b) layer-gate the polymorphism to p/m only, since §4's argument is entirely about layer c and box checks its body at c — roughly two lines, but gated on an unanswered question, namely whether anything requires every layer-p MLTT type at level l to have a code at Ty l; (c) make Vec^l(T;0) its own proof-irrelevant whnf, which costs an LR case and an intro rule and reintroduces non-uniqueness at Triv. Phase 4's LR results are unaffected — §§11–17 do not route through Vec's nullary reduct and the abort criterion turns on the shape of the recursion. Full suite 312 passing.
 - 2026-07-25: Post-phase-4 sweep landed: [[metatheory-lemma-sweep]]. All 53 lemma environments of DeLaM ch. 05/06 audited in docs/ch05-06-lemma-audit.md with a verdict each (property-checked / instance-only / open gap / by-construction / not expressible); nine new property tests in crates/kernel/tests/ch05_06_lemmas.rs closing seven paper lemmas or halves; suite 312 -> 322. Two more instances of the missing-half pattern: the TYPE half of ch. 06 Soundness (06:148) was absent next to the term half, one lemma before Preservation; and Determinacy (06:310/:319) holds by construction but its presupposition does not — step().is_none() must be exactly is_whnf(), two independent copies of the Vec/Fin stuck-length condition, now checked. The one real defect was in the SUITE: gen_wt_term produced an ill-typed term at 1 in 3000, and the only observer of that precondition was 300 cases on a single seed stream; cause was Delta for a contextual type generated at layer p (correct per ch. 04) hosting a layer-c body that lifted a p-only entry type into a J motive. Fixed by generating code-hosting Deltas at layer c — still valid p-contexts by ch. 05 Lifting, which this round machine-checked. Also settled while auditing: no Tarski-completeness claim exists in the paper, which is evidence (not a verdict) for candidate (b) of [[unit-level-and-vec-preservation]].
+- 2026-07-26: Phase 5 landed — the generator round, so [[tier1-branching-constructors]] is CLOSED. Scheme first per the tier's discipline: docs/inductive-tier1-wf-lowering.md, written against the kernel phases 1-4 landed, mechanized by crates/elab/src/wf.rs. ACCEPTANCE MET: Tree { Leaf, Node(Tree, Tree) } declared at the surface and mirror (mirror t) = t proved by an ordinary recursive theorem through the generated recursor (crates/elab/tests/inductive_tier1.rs, 13 tests), matching crates/kernel/tests/wf.rs by hand. Shape = tier 0's sum-of-Σs with the recursive fields deleted; arity = tier 0's constant-motive case tree at the motive Nat; step telescope = term::wf_step_telescope, called rather than transcribed a fifth time. Constructors are sup_f with a literal children tuple built at the LITERAL arity (conversion closes the gap to n[label/x], since the arity is a Case on an injection). The recursor is one elim_Wf whose step cases on the tag with cs AND ih generalized in the case motive, because outside a tag branch the arity is stuck on a variable and neither Vec nor Fin reduces — the shape wf.rs's mirror uses, now generated. An arm's recursive binder aliases to nth cs' ι_t and a guarded self-call on it becomes ih' ι_t, so Guard grew a Wf kind carrying a table of (child, ih) pairs and matches self-call arguments by TERM rather than by binder position (an arm binder is an alias, not a kernel binder, so there is no position to compare). No-confusion: disjointness by elim_Wf at the motive Ty 0 (large elimination over a Wf needs no new kernel power — its motive is an arbitrary Type, exactly as Case's is), injectivity at a payload field by fst/snd and at a recursive field by nth. ONE CORRECTION to the scheme, made by the kernel: a constant motive frees the step from ih but NOT from cs, so the recursive half of injectivity needs §6.2's generalization too and now shares build_elim_wf over a Branches choice of branch body; docs §7 records it. Two things NOT delivered and split rather than dropped. (1) Rose: the former types nested recursion (arity-as-a-term makes the child count data), but a surface declaration whose field type is a user-declared List would make the generator identify that List with the kernel's Vec, and fromVec(toVec xs) is convertible with xs only for canonical xs — so it would cost beta on OPEN subterms, the property this tier exists for. It needs surface support for a children-container field type: a surface-language round, argued in docs/inductive-tier1-wf-lowering.md §8.1. The design doc's 'nearly free' was right about the type and wrong about the lowering. (2) Polymorphic containers: the level constraint is gone and the lowering assumes nothing (levels come from the shape throughout), but the surface's type grammar (Nat, a named declaration, =) has no inhabitant above level 0 to instantiate a parameter with, so nothing at the surface can reach the polymorphic case. wf.rs::polymorphic_shape remains the kernel-side coverage. Full suite 331 -> 341.

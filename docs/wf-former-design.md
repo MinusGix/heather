@@ -1,6 +1,7 @@
 # The `Wf` former: finitary branching inductives in the kernel
 
-Status: **phases 1–4 landed** (2026-07-25); §9 tracks the remaining round.
+Status: **all five phases landed** (phases 1–4 2026-07-25, the generator
+round 2026-07-26); §9 is the record.
 Written as a design sketch before the code, per repo discipline, and kept as
 the specification the implementation is checked against. This is the
 route-C landing from `docs/branching-inductives-choice.md` §6/§12. Decision
@@ -260,10 +261,19 @@ Scope of the one regime:
   arity-≤1 `Wf` declarations; the exact-height fording scheme retires from
   the generator. `tier1_fording.rs` stays as a kernel stress suite, and its
   `vec` formula survives as the `Vec` former's reduction semantics.
-- **`Rose`-style nesting is nearly free**: `Rose { Node(A, List Rose) }` is
-  `Wf` with `S = Σ(a : A). Nat` and `n = snd x` — the list of children *is*
-  the `Vec`, its length is data in the shape. This was §14's unscored point
-  in the choice doc; it falls out of arity-as-a-term.
+- **`Rose`-style nesting is nearly free** *as a type*: `Rose { Node(A, List
+  Rose) }` is `Wf` with `S = Σ(a : A). Nat` and `n = snd x` — the list of
+  children *is* the `Vec`, its length is data in the shape. This was §14's
+  unscored point in the choice doc; it falls out of arity-as-a-term.
+  **Correction (generator round, 2026-07-26): this does not make it a small
+  *lowering*.** A surface declaration whose field type is a user-declared
+  `List` would make the generator identify that `List` with the kernel's
+  `Vec`; both conversions are definable, but `fromVec (toVec xs) ≡ xs` holds
+  only for canonical `xs`, so `match (Node xs) { … }` would stop firing on an
+  open `xs` — the property route C was chosen for. What unblocks it is
+  surface support for a children-container field type, which is a
+  surface-language round. Full argument:
+  `docs/inductive-tier1-wf-lowering.md` §8.1.
 - **Unchanged**: indexed families still ford by `Id` (tracked separately);
   `W` + funext remain the infinitary tier (`Acc`) — `Acc`'s positions are a
   type, not a `Nat`, and that tier never computed anyway. Two branching
@@ -338,5 +348,10 @@ uniqueness of types at `□`, and the code eliminator depends on that. See
 6. ~~**ch. 07 round** (§8)~~ Done — `docs/metatheory-ch07-extensions.md`
    part II. Abort criterion **not** triggered; one kernel defect found and
    fixed (§1.1).
-7. **Generator round** (§7) — at which point
-   `issues/tier1-branching-constructors.md` closes.
+7. ~~**Generator round** (§7)~~ Done, 2026-07-26 —
+   `docs/inductive-tier1-wf-lowering.md`, `crates/elab/src/wf.rs`,
+   `crates/elab/tests/inductive_tier1.rs` (13).
+   `issues/tier1-branching-constructors.md` is **closed**: `Tree` is declared
+   at the surface and `mirror (mirror t) = t` goes through the generated
+   recursor. One correction to §7 below fell out of writing it, and it is
+   about `Rose`.

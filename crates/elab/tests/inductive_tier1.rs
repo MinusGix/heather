@@ -237,3 +237,58 @@ fn injectivity_across_payload_and_children() {
         "#,
     );
 }
+
+// §6.4 — the guardedness analysis is untrusted and can only *reject*, but it
+// still has to reject: the argument in the decreasing position must be one of
+// the recursive fields the arm binds, not the scrutinee and not a payload.
+#[test]
+fn a_self_call_must_descend() {
+    let msg = elab_err(&format!(
+        "{TREE}
+         fn loop_forever(t: Tree) -> Tree {{
+             match t {{ Leaf => Leaf, Node(l, r) => loop_forever(t) }}
+         }}"
+    ));
+    assert!(msg.contains("must descend"), "{msg}");
+
+    let msg = elab_err(
+        r#"
+        inductive T { Tip(Nat), One(n: Nat, s: T) }
+        fn f(t: T) -> Nat {
+            match t { Tip(n) => n, One(n, s) => f(t) }
+        }
+        "#,
+    );
+    assert!(msg.contains("must descend"), "{msg}");
+}
+
+#[test]
+fn a_self_call_outside_a_match_is_rejected() {
+    let msg = elab_err(&format!(
+        "{TREE}
+         fn f(t: Tree) -> Tree {{ f(t) }}"
+    ));
+    assert!(msg.contains("not structurally guarded"), "{msg}");
+}
+
+// Both children are reachable as ihs, at their own indices — the `Fin`-indexed
+// ih is what distinguishes them, and getting the index wrong would still
+// typecheck for a *symmetric* motive, so the asymmetric one is the test.
+#[test]
+fn each_child_has_its_own_ih() {
+    elab(
+        r#"
+        inductive T { Tip(Nat), Two(T, T) }
+
+        fn left_spine(t: T) -> Nat {
+            match t { Tip(n) => n, Two(a, b) => left_spine(a) }
+        }
+        fn right_spine(t: T) -> Nat {
+            match t { Tip(n) => n, Two(a, b) => right_spine(b) }
+        }
+
+        theorem l(): left_spine(Two(Tip(1), Tip(2))) = 1 { refl }
+        theorem r(): right_spine(Two(Tip(1), Tip(2))) = 2 { refl }
+        "#,
+    );
+}
