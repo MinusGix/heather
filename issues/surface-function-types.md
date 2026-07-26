@@ -48,17 +48,17 @@ them. They are load-bearing for:
 generalize. `cong` only needs the non-dependent arrow, but the mathematics
 side needs dependency throughout and a non-dependent surface would be rebuilt.
 
-**Type syntax:** `(x: A) -> B` dependent, `A -> B` non-dependent,
-`{x: A} -> B` implicit (matching the existing `{}` implicit-parameter
-spelling on `fn`/`theorem`). Right-associative. Consistent with `fn f(…) -> T`,
-which already reads this way.
+**Type syntax:** `(x: A) -> B` dependent, `A -> B` non-dependent.
+Right-associative. Consistent with `fn f(…) -> T`, which already reads this
+way. ~~`{x: A} -> B` implicit~~ — **struck 2026-07-26 by the scheme**, see
+"Corrections" below.
 
 **Lambda syntax:** `λ (x: A) => e`, with
 
 - `λ` the canonical spelling, `fun` accepted as an ASCII synonym, `λ`
   pretty-printed. One lexer alternation; nobody is blocked on input method.
 - binder groups as in `fn`: `λ (x: A) (y: B) => e`, parens optional when the
-  type is omitted (`λ x => e`), `{}` for implicits.
+  type is omitted (`λ x => e`). ~~`{}` for implicits~~ — struck, see below.
 - **`=>`, not `,`.** The comma is Lean 3's spelling and the one thing Lean 4
   moved away from (it kept `λ`, with `fun` as synonym). The reason applies
   here *one round early*: container literals `[a, b, c]` arrive with
@@ -75,14 +75,49 @@ which already reads this way.
 `|` is wanted for divisibility, absolute value, and cardinality on the
 mathematics half.
 
+## Corrections the scheme made (2026-07-26)
+
+Writing `docs/surface-function-types.md` against the actual elaborator
+contradicted two things above. Recorded here because that is what the
+scheme-before-code discipline is for.
+
+1. **No implicit binders in function types or lambdas this round.**
+   Implicitness is not in `Type::Pi` — the kernel has one function type and no
+   notion of an implicit argument. It lives in the elaborator as
+   `ParamMeta.implicit` on a *declaration*, looked up **by name**
+   (`crates/elab/src/lib.rs:1303–1315`) and consumed by `apply_implicit`'s
+   `mask`. A function *type* has nowhere to put the flag and a λ-bound value
+   has no `ParamMeta`. It also buys nothing yet: the surface has no universe,
+   so `{A: Type}` is not writable and implicit *value* binders are the only
+   expressible case. Explicit binders only; `{` diagnosed. Revisit with the
+   universe/polymorphism layer. (Consequence: implicit insertion stays
+   name-directed, so applying a function *value* is always explicit.)
+
+2. **The `Call`-head refactor is small.** 13 sites — 9 in the parser, 4 in the
+   elaborator (`lib.rs:759, 774, 806, 1643`), three of which are name-keyed
+   special forms that want a `Var` head anyway. The bulk of the diff is the
+   `ty()` restructure (its `Ident '<'` early return currently bypasses any
+   arrow check) and the new elaboration arms.
+
+A third finding, not a correction but worth having in the issue: **η at `Π` is
+definitional and unconditional** (`crates/kernel/src/conv.rs:535` compares at
+a `Π` by applying both sides to a fresh variable, at every layer). So
+`λ (x: Nat) => f(x) ≡ f`, including for neutral `f`, and `refl` proves it.
+Pinned as an acceptance item. `docs/wf-former-design.md`'s opening calls `Π`
+"the one type family this kernel deliberately does not η-expand", which read
+literally is wrong and wants a clarifying edit — what route A lacked is that a
+*neutral* children-function cannot be reconstructed from a projection, which
+is not the same as lacking η.
+
 ## Scope
 
 In:
 
-- `TyKind::Fn` (dependent, implicit-capable) + parsing/printing.
+- `TyKind::Fn` (dependent, explicit binders only — see Corrections) + parsing/printing.
 - `ExprKind::Lam` + parsing/printing.
-- **`Call`'s head becomes an `Expr`.** Mechanical but broad — it touches
-  every call site in the elaborator, and it is the bulk of the diff.
+- **`Call`'s head becomes an `Expr`** (n-ary, not curried, so implicit
+  insertion and `@` keep working). *Measured at 13 sites, not "broad" — see
+  Corrections.*
 - Elaboration of application and abstraction against the kernel's
   `Pi`/`Lam`/`App`, in both checking and inference mode.
 
@@ -114,3 +149,4 @@ into one general one. Worth its own small round after this lands.
   is that the surface type grammar is three constructors wide. Syntax
   decisions above taken in the same discussion. Next step: the scheme doc
   before the code, per the tier-0/tier-1 discipline.
+- 2026-07-26: Scheme written: docs/surface-function-types.md (grammar, the ty() restructure with every existing call site checked for arrow ambiguity, elaboration arms, five interactions to observe rather than assume, eight rejections with messages, and a 15-item acceptance checklist). Two corrections to this issue's plan came out of writing it against the real elaborator, both recorded above: implicit binders are out of scope (implicitness lives in ParamMeta keyed by declaration name, not in Type::Pi, and the surface has no universe to make them worth having), and the Call-head refactor is 13 sites rather than 'broad'. Also pinned: eta at Pi is definitional and unconditional, so lambda x => f(x) is convertible with f. Ready to implement.
