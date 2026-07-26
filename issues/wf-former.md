@@ -76,13 +76,17 @@ and `β` firing on open children.
   `Node` both lower to `Σ(#tag). Unit⁰` — the same kernel type. The injection
   is what distinguishes them, and the nominal tag still separates `Tree` from
   a structurally identical declaration.
-- **Every shift in the lowering is currently a no-op**, because a
-  monomorphic declaration lowers to a *closed* `⟦D⟧` — so `wf.rs`'s
+- **Every shift in the lowering was a no-op**, because a monomorphic
+  declaration lowers to a *closed* `⟦D⟧` — so `wf.rs`'s
   `d_ty.shift_local(…)`, `build_children`'s `snd_ty` shift and `inject`'s
-  spine shifts are written to be correct and are observed by nothing. The
-  audit that established this also turned up a live tier-0 wrong-type bug,
-  [[tyvar-scoping-in-lowered-fields]], whose fix is what creates the observer
-  for the whole class.
+  spine shifts were written to be correct and observed by nothing. The audit
+  that established this turned up a live tier-0 wrong-type bug,
+  [[tyvar-scoping-in-lowered-fields]] — **fixed**, and its fix is what
+  created the observer: `inductive_tier1.rs`'s
+  `the_lowering_shifts_are_exercised_by_a_dependent_parameter` runs the whole
+  `mirror (mirror t) = t` acceptance over `Tree<n = n>`, where `⟦D⟧` has a
+  free local and every one of those shifts is load-bearing. It fails against
+  the pre-fix elaborator, so it is a real observer and not a passing test.
 - **The de Bruijn hazard landed where the issue predicted.** `App`'s `cod`
   binds its argument, and the step's two trailing applications
   (`(case a) cs ih`) are exactly where that bites; `wf.rs::apply_cs_ih`

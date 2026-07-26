@@ -1565,7 +1565,29 @@ struct Cx {
     /// An `inductive`'s type parameters, while its field types are being
     /// lowered at an instantiation. Empty everywhere else: type parameters are
     /// monomorphized, so they never survive into a kernel term.
-    tyvars: Vec<(String, Type, Level)>,
+    tyvars: Vec<TyVar>,
+}
+
+/// One type parameter, bound to the type it is instantiated at
+/// (`docs/inductive-tier0-lowering.md` §3.1).
+///
+/// `depth` is `names.len()` at the binding — the same device [`Alias`] uses,
+/// and needed for the same reason. The instantiation is lowered in the
+/// *ambient* context, and the constructor's field spine then pushes the
+/// nominal tag and every earlier field on top of it, so a use in field `j`
+/// sits `1 + j` binders deeper than where its type is scoped and must be
+/// weakened by exactly that.
+///
+/// Getting this wrong is invisible for a *closed* instantiation, which is
+/// every instantiation the suite had until 2026-07-26
+/// (issues/tyvar-scoping-in-lowered-fields.md). The surface's one
+/// context-dependent type is `=`, whose endpoints are terms.
+#[derive(Clone)]
+struct TyVar {
+    name: String,
+    ty: Type,
+    level: Level,
+    depth: usize,
 }
 
 /// A `let`-bound name: the elaborated right-hand side, inlined at every use

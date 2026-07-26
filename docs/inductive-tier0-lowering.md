@@ -128,6 +128,31 @@ way — and by kernel fact 2 the trailing `Unit` is invisible to conversion:
 Levels: `Σ` lives at `fst_level ⊔ snd_level`, so
 `level(⟦c_i⟧) = level(T₁) ⊔ … ⊔ level(T_k) ⊔ 0`.
 
+**Scoping, and the one place it is not free** (corrected 2026-07-26,
+`issues/tyvar-scoping-in-lowered-fields.md`). The spine is built outside-in
+and folded from the end, so entry `j`'s own type is already scoped in
+`Γ` + entries `0..j` and needs no shifting — that is why a named field is in
+scope in the types after it, and why the spine is a Σ at all.
+
+The **type parameters** are the exception, and they are not entries. A
+parameter's instantiation `⟦A⟧` is lowered in the ambient `Γ`, once, before
+the spine exists; by the time it is *used* in field `j` the spine has pushed
+the nominal tag (§3.3) and the `j` earlier fields on top of it. So every use
+of a parameter is weakened by `1 + j`:
+
+```
+⟦A⟧ used in field j   ↦   ⟦A⟧ ↑^{1+j}
+```
+
+For a **closed** `⟦A⟧` — every instantiation the suite had for two years'
+worth of tests: `Nat`, another monomorphic declaration — this is the
+identity, which is exactly why a missing weakening was invisible. The
+surface's one context-dependent type is `=`, whose endpoints are terms, and
+at `Box2<A> { Mk(x : Nat, y : A) }` instantiated at `n = n` a missing
+weakening re-points `n` at `x` and the encoding silently becomes `x = x`:
+well-formed, checked, and not what was written. In the implementation this
+is `Cx::tyvars` carrying a binding depth, the same device `Alias` uses.
+
 ### 3.2 Tag spine
 
 Right-nested, with tails `R_i`:

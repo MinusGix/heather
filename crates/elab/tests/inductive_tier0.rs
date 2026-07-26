@@ -388,3 +388,53 @@ fn the_independent_field_of_a_dependent_constructor_is_injective() {
         "#,
     );
 }
+
+// §3.1 — a type parameter instantiated at a *context-dependent* type
+// (issues/tyvar-scoping-in-lowered-fields.md). The instantiation is lowered
+// in the ambient context and then used under the nominal tag and the earlier
+// fields, so each use has to be weakened by exactly that many binders.
+//
+// This is the observer the suite lacked: every other instantiation here is at
+// a closed type, where the weakening is a no-op and a missing one is
+// invisible. The surface's one context-dependent type is `=`.
+//
+// The two tests below are the bug's two faces, and they are separate on
+// purpose: which one you get depends only on what the *preceding* field's
+// type happens to be, so pinning one does not pin the other.
+
+#[test]
+fn a_parameter_at_a_dependent_type_keeps_its_scope() {
+    // The loud face: with the parameter as the only field, a missing
+    // weakening lands on the nominal tag's `⟨⟩`, which is not a `Nat`, so the
+    // kernel rejects and nothing silently goes wrong.
+    elab(
+        "inductive Box<A> { Mk(A) }
+         fn mk(n: Nat, p: n = n) -> Box<n = n> { Mk(p) }",
+    );
+}
+
+#[test]
+fn a_parameter_at_a_dependent_type_is_not_captured_by_an_earlier_field() {
+    // The silent face, and the one that matters. With a `Nat` field before
+    // it, a missing weakening lands on *that field* — same type, so the
+    // encoding stays well-formed and `Box2<n = n>`'s second component quietly
+    // becomes `x = x`. Nothing rejects; the declaration just means something
+    // else. Only a test that can tell `n = n` from `3 = 3` sees it.
+    elab(
+        "inductive Box2<A> { Mk(x: Nat, y: A) }
+         fn mk(n: Nat, p: n = n) -> Box2<n = n> { Mk(3, p) }",
+    );
+    let msg = elab_err(
+        "inductive Box2<A> { Mk(x: Nat, y: A) }
+         fn mk(n: Nat, q: 3 = 3) -> Box2<n = n> { Mk(3, q) }",
+    );
+    assert!(
+        msg.contains("rejected"),
+        "a proof of `3 = 3` was accepted where `n = n` was written: {msg}"
+    );
+    // …and the field really is `n = n`: projecting it back out proves it.
+    elab(
+        "inductive Box2<A> { Mk(x: Nat, y: A) }
+         theorem out(n: Nat, p: n = n): n = n { match Mk(3, p) as z -> n = n { Mk(x, y) => y } }",
+    );
+}

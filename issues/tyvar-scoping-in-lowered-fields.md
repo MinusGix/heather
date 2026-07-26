@@ -1,6 +1,6 @@
 ---
 title: A type parameter instantiated at a context-dependent type is mis-scoped
-status: open
+status: closed
 labels: [elaboration,inductives,soundness]
 created: 2026-07-26
 updated: 2026-07-26
@@ -114,3 +114,7 @@ observer:
    property test over *surface* declarations; this was found by hand. A
    generator that instantiates parameters at `=` types is the systematic
    version of step 2.
+
+## Log
+
+- 2026-07-26: FIXED. `Cx::tyvars` now carries a binding depth and `lower_named` weakens by `names.len() - depth`, the same device `Alias` already used; `lower_ctor` records the depth as the ambient context, which is where the instantiation was lowered. One-line rule, and it is now stated as part of docs/inductive-tier0-lowering.md §3.1 rather than left implicit — the section previously said 'no shifting is needed', which is true of the field ENTRIES and false of the PARAMETERS. Three tests, each verified to fail against the pre-fix elaborator: (1) tier 0 a_parameter_at_a_dependent_type_keeps_its_scope — the loud face, where the collision is with the nominal tag's Unit and the kernel rejects; (2) tier 0 a_parameter_at_a_dependent_type_is_not_captured_by_an_earlier_field — the SILENT face, where a Nat field before the parameter makes the collision type-correct, so the encoding stays well-formed and quietly means `x = x`; it is pinned by rejecting a proof of `3 = 3` where `n = n` was written, and by projecting the field back out. (3) tier 1 the_lowering_shifts_are_exercised_by_a_dependent_parameter — the observer for the wider class, per this issue's step 3: `Tree<A> { Leaf(A), Node(A, Tree<A>, Tree<A>) }` instantiated at `n = n`, run through the full mirror(mirror t) = t acceptance. That puts a free local inside the Wf and makes wf.rs's d_ty shifts, build_children's snd_ty shift and inject's spine shifts all load-bearing at once; it too fails pre-fix. Two incidental findings while writing (3), neither a defect: a constructor inside an `=` type is in INFERENCE position, so a parametric declaration needs a field whose type is the bare parameter for infer_ctor to recover it (Node(A, Tree<A>, Tree<A>) does, Node(Tree<A>, Tree<A>) does not); and a theorem parameter mentioning another parameter must follow it, since the telescope is elaborated in order. Step 4 of this issue — a generator over SURFACE declarations that instantiates parameters at `=` types, the systematic version of these tests — is NOT done and is split out as [[surface-declaration-generator]], with the sharpest oracle named there (instantiation commutes with lowering, which is precisely what this bug violated). Suite 344 -> 347.

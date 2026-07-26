@@ -27,7 +27,7 @@ use heather_kernel::level::Level;
 use heather_kernel::term::{LocalSubst, LocalVar, Term, Type};
 use heather_syntax::{Arm, Expr, InductiveDecl, Span, Ty, TyKind};
 
-use crate::{embed, err, Alias, Cx, Elaborator, R};
+use crate::{embed, err, Alias, Cx, Elaborator, TyVar, R};
 
 /// A declared inductive, kept in surface form: the field types are lowered
 /// afresh at each instantiation, since type parameters are monomorphized
@@ -285,11 +285,17 @@ impl Elaborator {
         args: &[Ty],
         span: Span,
     ) -> R<(Type, Level)> {
-        if let Some((_, ty, lvl)) = cx.tyvars.iter().rev().find(|(n, _, _)| n == name) {
+        if let Some(p) = cx.tyvars.iter().rev().find(|p| p.name == name) {
             if !args.is_empty() {
                 return err(format!("type parameter `{name}` takes no arguments"), span);
             }
-            return Ok((ty.clone(), lvl.clone()));
+            // Weaken across the binders the field spine has pushed since the
+            // instantiation was lowered — the nominal tag, then each earlier
+            // field (§3.1). A closed instantiation makes this a no-op, which
+            // is why its absence went unnoticed
+            // (issues/tyvar-scoping-in-lowered-fields.md).
+            let by = (cx.names.len() - p.depth) as u32;
+            return Ok((p.ty.shift_local(by), p.level.clone()));
         }
         let Some(ind) = self.inductives.get(name) else {
             return err(format!("unknown type `{name}`"), span);
@@ -426,16 +432,22 @@ impl Elaborator {
         span: Span,
     ) -> R<(Type, Level)> {
         // Field types see the type parameters and the earlier *named* fields;
-        // nothing else from the ambient declaration.
+        // nothing else from the ambient declaration. The arguments are scoped
+        // in `cx`, so that is the depth every use of one is weakened from.
         let mut fcx = cx.clone();
         fcx.selfref = None;
         fcx.guard = None;
+        let depth = cx.names.len();
         fcx.tyvars = ind
             .params
             .iter()
-            .cloned()
-            .zip(args.iter().map(|(t, l)| (t.clone(), l.clone())))
-            .map(|(n, (t, l))| (n, t, l))
+            .zip(args)
+            .map(|(name, (ty, level))| TyVar {
+                name: name.clone(),
+                ty: ty.clone(),
+                level: level.clone(),
+                depth,
+            })
             .collect();
         // Entry 0 is the tag; the surface has no name for it and no way to
         // bind it in a pattern.

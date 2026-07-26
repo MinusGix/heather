@@ -292,3 +292,53 @@ fn each_child_has_its_own_ih() {
         "#,
     );
 }
+
+// The shift observer (issues/tyvar-scoping-in-lowered-fields.md). Every
+// declaration above is monomorphic, so `⟦D⟧` is *closed* and every
+// `shift_local` in the lowering — `d_ty` in `wf.rs`, the children tuple's
+// `snd_ty`, the spine shifts in `inject` — is a no-op. Instantiating a
+// parameter at a context-dependent type (`n = n`) puts a free local inside
+// `⟦D⟧` and makes all of them load-bearing at once, through the same
+// acceptance the closed version goes through.
+#[test]
+fn the_lowering_shifts_are_exercised_by_a_dependent_parameter() {
+    // `Node` carries a payload of the parameter's type as well as its two
+    // children: that is what lets a constructor inside an `=` type recover
+    // `A`, and it also puts a context-dependent type in the *shape* rather
+    // than only in the leaves.
+    elab(
+        r#"
+        inductive Tree<A> { Leaf(A), Node(A, Tree<A>, Tree<A>) }
+
+        fn mirror(n: Nat, t: Tree<n = n>) -> Tree<n = n> {
+            match t {
+                Leaf(a) => Leaf(a),
+                Node(a, l, r) => Node(a, mirror(n, r), mirror(n, l)),
+            }
+        }
+
+        theorem cong_l(n: Nat, a: n = n, l1: Tree<n = n>, l2: Tree<n = n>,
+                       r: Tree<n = n>, p: l1 = l2): Node(a, l1, r) = Node(a, l2, r)
+        { j(p, (y, q) -> Node(a, l1, r) = Node(a, y, r), refl) }
+
+        theorem cong_r(n: Nat, a: n = n, l: Tree<n = n>, r1: Tree<n = n>,
+                       r2: Tree<n = n>, p: r1 = r2): Node(a, l, r1) = Node(a, l, r2)
+        { j(p, (y, q) -> Node(a, l, r1) = Node(a, l, y), refl) }
+
+        theorem tr(n: Nat, {x: Tree<n = n>}, {y: Tree<n = n>}, {z: Tree<n = n>},
+                   p: x = y, q: y = z): x = z
+        { j(q, (w, r) -> x = w, p) }
+
+        theorem mirror_mirror(n: Nat, t: Tree<n = n>): mirror(n, mirror(n, t)) = t {
+            match t {
+                Leaf(a) => refl,
+                Node(a, l, r) => tr(n,
+                    @cong_l(n, a, mirror(n, mirror(n, l)), l, mirror(n, mirror(n, r)),
+                            mirror_mirror(n, l)),
+                    @cong_r(n, a, l, mirror(n, mirror(n, r)), r,
+                            mirror_mirror(n, r))),
+            }
+        }
+        "#,
+    );
+}
