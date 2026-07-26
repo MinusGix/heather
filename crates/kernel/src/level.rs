@@ -193,6 +193,34 @@ impl LevelNf {
     /// rewritten term, rather than needing a second traversal of the syntax
     /// that compares levels with [`Level::equiv`]. See
     /// [`crate::term::Term::normalize_levels`].
+    ///
+    /// # This is a property of the level *algebra*, and a new sort could take it away
+    ///
+    /// A canonical representative exists because DeLaM's levels are a join
+    /// semilattice with a successor (`ℓ | 0 | 1+l | l ⊔ l' | ω`): `⊔` is
+    /// associative, commutative and idempotent, and `1+` distributes over it,
+    /// so every level collapses to `max of (n + ℓᵢ)` plus a constant. Agda's
+    /// `lzero`/`lsuc`/`_⊔_` is the same algebra and admits the same normal
+    /// form.
+    ///
+    /// Lean cannot do this, because an impredicative `Prop` forces a second
+    /// operator: `imax u v` is `0` when `v` is `0` and `max u v` otherwise.
+    /// That is *conditional*, not a lattice operation, so there is no
+    /// finitary canonical form — level equality has to be a decision
+    /// procedure with case splits on whether a variable is `Zero` or
+    /// `Succ p`. Lean's kernel does exactly that and is correct, but it
+    /// cannot hand back a representative, so terms with equivalent-but-not-
+    /// identical levels miss the structural fast path in its defeq check and
+    /// fall through to unfolding (leanprover/lean4#12102, reproducer at 600×).
+    ///
+    /// **So: if Heather ever grows an impredicative or proof-irrelevant sort,
+    /// this function stops being canonical**, and
+    /// [`crate::conv`]'s `code_eq` silently regresses to *too fine* — the
+    /// exact defect it was introduced to fix (see
+    /// `docs/ch05-06-lemma-audit.md`, §Static Code), reintroduced by a
+    /// feature that looks unrelated. Any such sort must come with a decision
+    /// procedure for level equality and a rewritten `code_eq`, not just a new
+    /// `Level` constructor.
     pub fn canonical(&self) -> Level {
         let LevelNf::Finite { konst, vars } = self else { return Level::Omega };
         // `konst` is `None` exactly when some variable dominates it, which
