@@ -66,3 +66,7 @@ containers (a surface gap of its own: the type grammar has no inhabitant
 above level 0 to instantiate a parameter with, though the tier-1 lowering
 takes its level from the shape throughout and assumes nothing). All three
 are listed in `docs/inductive-tier1-wf-lowering.md` §8.
+
+## Log
+
+- 2026-07-26: Sequenced behind [[surface-function-types]] (roadmap item 9, after 8). The design fork this issue names — 'an indexed accessor (Fin n -> D, which the surface has no function type for) or a fold' — is decided by that round rather than within this one: with function values the fold is an ordinary library function taking a lambda, and the arm binder needs no special-form eliminator. Without them the only routes are (a) a 'fold' syntactic form sitting next to match, to be deleted as soon as lambdas land, or (b) matching the container by its length and pushing the tail recursion into an auxiliary, which makes it MUTUAL recursion with the function recursing on D and so needs mutual declarations plus cross-function termination checking — a bigger round than function types and less reusable. So this issue gets smaller by waiting. Unaffected by the wait and still this issue's own work: the container TyKind (which must be the kernel's Vec, not a user-declared List — that is the whole §8.1 argument, since routing through List stops beta firing on open children), vector literals for construction, and how a constructor argument's length reaches the shape.
