@@ -90,11 +90,19 @@ and any later reader need from it:
 ### The kernel defect it turned up — split out as its own issue
 
 `Vec^l(T; 0) ⇝ Unit` **drops the level**, so ch. 06's *Preservation* lemma
-fails for every `l ≠ 0`. Full write-up, measurements and three costed
-candidate fixes: [[unit-level-and-vec-preservation]]. It is **open** — the
-one-line repair (level-polymorphic `Unit`) was landed in `fd72716`, shown to
-give `box Unit` a type at every level and break the code recursor, and
-reverted. Does not affect phases 1–4's results or phase 5's plan.
+fails for every `l ≠ 0`. Full write-up and measurements:
+[[unit-level-and-vec-preservation]]; **decided 2026-07-25 as route (a),
+level-indexed `Unit^l`/`Empty^l`** — rules and phases in
+`docs/unit-empty-level-indexing.md`.
+
+**It bites phase 5 only if phase 5 goes polymorphic.** `Vec^l(child; 0)` is
+the children type of a nullary constructor, so for a `Wf` whose shape sits at
+level `l > 0` the `Leaf` arm is `Vec^l(…; 0)` and, measured,
+`Triv : Vec^1(Ty 0;0) @ 1` is a `LevelMismatch` — `Leaf` cannot be built at
+all. A monomorphic shape is a sum of records at level 0 and is unaffected,
+which is exactly why this hid through four phases. **Sequencing: monomorphic
+phase 5 can go first; a polymorphic container in the acceptance suite wants
+route (a) landed first.**
 
 Two things from it worth carrying here:
 

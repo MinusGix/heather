@@ -1,5 +1,5 @@
 ---
-title: "Vec^l(T;0) ⇝ Unit drops the level: fix it without breaking type uniqueness"
+title: "Level-index Unit^l/Empty^l: close the Vec^l(T;0) level drop"
 status: open
 labels: [kernel,levels,metatheory,delam]
 created: 2026-07-25
@@ -99,89 +99,67 @@ Note the half-doneness that is itself a tell: the *type* `Unit` became
 polymorphic while its *code* `TmUnit : Ty 0` did not (`TmUnit : Ty 1` is
 still rejected), so `El` and `Unit` disagreed about what levels exist.
 
-## Candidate fixes
+## Decision (2026-07-25): route (a), level-indexed `Unit^l` / `Empty^l`
 
-### (a) level-indexed `Unit^l` / `Empty^l` — most faithful
+**Rules, phases and the full costed record of the routes not taken:
+`docs/unit-empty-level-indexing.md`** (written before the code, house pattern).
 
 Parameterize rather than polymorphise: `Unit^l : Type @ l`, distinct types at
-distinct levels, exactly as non-cumulative systems do it (Agda's
-`record ⊤ {ℓ} : Set ℓ`). Uniqueness is preserved on the nose, `ty_check` goes
-back to plain `lev_eq`, and `Vec^l(T;0) ⇝ Unit^l` preserves the level.
+distinct levels, as non-cumulative systems do it. Uniqueness of types survives
+on the nose, `ty_check` goes back to plain `lev_eq`, `Vec^l(T;0) ⇝ Unit^l`
+preserves the level, and the four affected recursor branches become copies of
+`ty_ty` — which binds a universe precisely because `Ty ℓ`'s level varies.
 
-Crucially the recursor branches get the shape they already have for `Ty`:
-`ty_unit`/`ty_empty` become `univs: 1`, motive at `lvar(0)`, scrutinee
-`box (Unit^ℓ)` — a copy of `ty_ty`. That is evidence this is the grain of the
-design rather than against it.
+### What settled it, beyond the original write-up
 
-**A prerequisite for (a) is now in place.** (a) puts a level into a layer-`c`
-type former, so `box (Unit^{ℓ⊔ℓ'})` and `box (Unit^{ℓ'⊔ℓ})` must compare
-equal. Until 2026-07-25 they would not have: `conv.rs` compared boxed code with
-plain `==`, missing the quotient ch. 05's Static Code lemma takes over level
-equivalence. Found and fixed by [[metatheory-lemma-sweep]]
-(`Type`/`Term::normalize_levels`). (a) would have walked straight into it.
+The gap is **not only a broken lemma — it is a functional hole.** Measured:
 
-Cost, and it is a phase-3-sized round: level fields on `Type::Unit`,
-`Type::Empty`, the codes `TmUnit`/`TmEmpty`, and the intro/elim forms that
-name them (`Triv`, `ElimEmpty`) — otherwise `⟨⟩` inhabits `Unit^l` for every
-`l` and the disease returns at `tm_triv`. Then `BRANCH_DIMS`, both
-`identity_branches` copies, both generators, `subst`, `conv`, `fmt`, `reduce`.
-The LR case for `Unit` becomes level-indexed, which is *cleaner* than the
-level-polymorphic clause §10.3 of the ch. 07 doc currently describes.
+```
+Vec^1(Ty 0;0) well-formed @1 : Ok
+  ..its whnf                 : Unit
+Triv : Vec^1(Ty 0;0) @ 1     : Err(LevelMismatch)
+Triv : Vec^1(Ty 0;0) @ 0     : Ok
+```
 
-### (b) layer-gate the polymorphism — cheapest, and now unblocked
+`Vec^l(child; 0)` is the children type of a **nullary constructor** of a `Wf`
+whose shape is at level `l`. So `Leaf` cannot be built for any polymorphic
+branching inductive today. Monomorphic ones are unaffected (shape at level 0),
+which is why this hid from phase 1 to phase 4 of [[wf-former]].
 
-Uniqueness is only *needed* at layer `c` (§4's argument is entirely about the
-code eliminator), and `box` checks its body at layer `c`. So: `Unit`/`Empty`
-level-polymorphic at layers `p`/`m`, fixed at `0` at layer `c`. Then
-`box Unit` stays single-typed, `Vec^1(T;0) ⇝ Unit` is fine at `p`, and code
-of `Vec^1(T;0)` dispatches to `ty_vec` (which binds a universe already) and
-never reaches `ty_unit`. Conversion never runs at layer `c`, so nothing
-reduces there. Roughly two lines.
+And (b) does **not** fix it: (b) patches `ty_check` (types), while the
+inhabitation failure is in `tm_check`'s fallback (`typing.rs:689`) — `Triv`
+infers level 0 and `lev_eq` rejects it against `l`. The repair requires
+special-casing `Triv`, i.e. `⟨⟩ : Unit @ l` for every `l` at `p`/`m` — and
+ch. 04's sentence is literally *"each term has a unique **type**"*. (b) looked
+like it preserved that only because it never touched terms.
 
-**The question to answer first:** does anything require every layer-`p` MLTT
-type at level `l` to have a code at `Ty l`? (b) creates `Unit @ 1` at `p` with
-no code at `Ty 1`. If Tarski-universe completeness is claimed or relied on
-anywhere — ch. 07's universe case, ch. 08 — (b) is out.
+### Phases
 
-**Answered, negative: nothing requires it.** ch. 08 was read in full
-(`08:19`, `:48`, `:96`, `:226`, `:239`, `:357` — Injectivity, Consistency,
-Conversion, Convertibility, Decidability ×2); every proof is structural
-induction on derivations and none quantifies over "all types at level `l`".
-ch. 07's Neutral Types law (`07:239`) gives `El l ν ≈ El l' ν'` *from* the
-code relation — a closure rule, not completeness. Full citations and the two
-ch. 04 rules involved: `docs/ch05-06-lemma-audit.md`, §"Two questions settled
-by reading further". **(b) is not blocked by the metatheory.**
+| | Phase | State |
+|---|---|---|
+| 1 | level fields + reduction; layer-`c` gate. **The bug closes here** | next |
+| 2 | the four recursor branches (`ty_unit`, `ty_empty`, `tm_triv`, `tm_elim_empty`); lift the gate | |
+| 3 | close the pins; polymorphic nullary-arm acceptance test | |
+| 4 | elaborator catch-up (tier-0 tags are Σ-of-Units) + docs | |
 
-Two findings from that reading change (b)'s case in *both* directions:
+### Prerequisite, already paid
 
-- **For (b), and stronger than the argument above.** The paper's
-  global-context rule (`04:~985`) admits `u : Trm_i(Δ ⊢ T @ l)` for
-  `i ∈ {v, c}` while checking `T` at layer **p** — a layer-`c` term
-  legitimately has a layer-`p` type, and ch. 05's coverage lemmas conclude
-  their type equivalences at `p` too (`05:1573`, `:1576`). `typing.rs:154`
-  already matches. So the `c`/`p` asymmetry (b) introduces sits in a gap the
-  system has deliberately, rather than being a new one. Also: the LR's only
-  two "must be unique" appeals (`07:761`, `07a:1092`) are to determinacy of
-  `⇝*`, never to a type determining its level.
-- **Against (b), and this is now the real cost.** (b) falsifies
-  `vec_fin::every_type_has_exactly_one_level` and
-  `ch05_06_lemmas::inferred_level_is_the_only_level`, which quantify at
-  layers `p`/`m`. Both would have to be re-scoped to layer `c`. Downstream,
-  `infer_type` stops being a deterministic level oracle at `p` for
-  `Unit`/`Empty` — a direct input to [[elab-unifier-completeness]]'s level
-  inference. **The trade is a design cost, not a soundness one**, which makes
-  it a choice rather than a blocker.
+**Static Code (`05:1055`)**, fixed 2026-07-25 by [[metatheory-lemma-sweep]].
+(a) puts a level into a layer-`c` type former, so `box (Unit^{ℓ⊔ℓ'})` and
+`box (Unit^{ℓ'⊔ℓ})` must compare equal; until that round `conv.rs` compared
+boxed code with plain `==` and would have rejected them. Found for unrelated
+reasons, one week before it would have bitten.
 
-### (c) `Vec^l(T;0)` is its own whnf, proof-irrelevant
+### Routes not taken
 
-Don't reduce at `0` at all: make `Vec` at length `0` a normal (non-neutral)
-type with `Unit`'s irrelevance directly in `conv.rs`. Levels never move.
-
-Costs an LR case for `Vec` after all (undoing the "no LR case" result of
-`docs/metatheory-ch07-extensions.md` §10) and, worse, an introduction rule —
-`⟨⟩` must inhabit `Vec^l(T;0)`, which gives `Triv` two types and reintroduces
-exactly the uniqueness problem (a) and (b) exist to avoid, unless `Triv` is
-annotated. Weakest of the three; recorded so it stays costed.
+**(b) layer-gate to `p`/`m`** and **(c) `Vec^l(T;0)` as its own irrelevant
+whnf** are preserved fully costed in `docs/unit-empty-level-indexing.md` §6,
+including the metatheory verification that cleared (b) (no Tarski-completeness
+requirement anywhere in ch. 07/08; a layer-`c` term legitimately has a layer-`p`
+type; the LR never inverts on a level). **Neither was rejected for being
+unsound.** Only one thing reopens (b): phase 4 measuring (a)'s elaborator churn
+as materially worse than expected — ergonomics, not metatheory. (c) needs a new
+argument about the LR case.
 
 ## Current state of the tree
 
@@ -236,3 +214,4 @@ is evidence for (b), not a green light — ch. 08 is still unread.
 - 2026-07-25: The sweep this issue asked for is done: [[metatheory-lemma-sweep]], audit at docs/ch05-06-lemma-audit.md. Relevant to this issue specifically: (i) candidate (b)'s gating question — does anything require every layer-p type at level l to have a code at Ty l — was checked against the paper and NO Tarski-completeness claim exists. 'Tarski' occurs five times in ch. 04 (04:96-120, :203, :781), always about the separation of types from terms and why Russell-style universes cannot state the indices of code, never a surjectivity property; and ch. 07's term relation at Ty l (07:512-514) is by cases on the code whnf, saying which codes are related, never that every related type is an El. Evidence for (b), NOT a green light: ch. 08's decidability argument is still unread, and so is our own 'boxed code stays exhaustively recursable' invariant, which is ours and not the paper's. (ii) The audit ranks ch. 05 Static Code (05:1055) as the top remaining gap, and it is the one that bears on this decision — at layers v/c convertibility must BE syntactic identity modulo level equivalence, which is what makes the code eliminator's intensional analysis meaningful. Only hand-built instances today. Worth closing before choosing between (a) and (b). (iii) ch. 05's Lifting lemma is now machine-checked (p->m arm), which the sweep needed in order to justify a generator fix.
 - 2026-07-25: Both of (b)'s open questions are now closed by reading ch. 08 in full and ch. 06's normal-form grammar; details and citations in docs/ch05-06-lemma-audit.md and [[metatheory-lemma-sweep]]. (b) is NOT blocked by the metatheory: nothing in ch. 08 (Injectivity 08:19, Consistency 08:48, Conversion 08:96, Convertibility 08:226, Decidability 08:239/08:357) requires every layer-p type at level l to have a code at Ty l, and ch. 07's Neutral Types law (07:239) is a closure rule building El l v ~ El l' v' FROM the code relation rather than a completeness statement. A stronger structural argument FOR (b) turned up: the paper's global-context rule (04:~985) admits u : Trm_i(Delta |- T @ l) for i in {v,c} while checking T at layer p, and ch. 05's coverage lemmas conclude their type equivalences at p (05:1573, :1576), so a layer-c term legitimately has a layer-p type — the c/p asymmetry (b) introduces sits in a gap the system already has deliberately, rather than being new. typing.rs:154 already matches. Also: the LR's only two 'must be unique' appeals (07:761, 07a:1092) are to determinacy of multi-step reduction, not to a type determining its level, so nothing semantic needs level uniqueness at p. AGAINST (b), and this is now the actual cost and it is design rather than soundness: (b) falsifies vec_fin::every_type_has_exactly_one_level and the new ch05_06_lemmas::inferred_level_is_the_only_level, both of which quantify at layers p/m, so both would have to be re-scoped to layer c; and infer_type stops being a deterministic level oracle at p for Unit/Empty, which is a direct input to [[elab-unifier-completeness]]'s level inference. Net: (a) and (b) are now a genuine choice on cost rather than (b) being gated. Recommendation unchanged pending ch. 05 Static Code (05:1055), which the audit ranks first and which bears directly on this decision.
 - 2026-07-25: ch. 05 Static Code (05:1055) is now machine-checked ([[metatheory-lemma-sweep]]), and it did NOT discriminate (a) from (b) the way I predicted it would. What it did instead: it found a live kernel defect and removed a landmine specific to (a). conv.rs compared boxed code with plain == , while the lemma quotients its equalities over level equivalence and gives its own example (Ty(l u l') and Ty(l' u l) are EQUAL as code) — so the kernel rejected that pair verbatim. Fixed with Type/Term::normalize_levels. Bearing on this decision: (a) puts a level into a layer-c type former, so box(Unit^{l u l'}) vs box(Unit^{l' u l}) has to compare equal; before the fix it would not have, and (a) would have walked straight into it. (b) leaves layer c untouched and was never exposed. So (a) is now safer to build than it was, and the choice between (a) and (b) still rests on what the earlier log entry recorded: (b) is unblocked metatheoretically but costs level-uniqueness at layer p and deterministic level inference for Unit/Empty; (a) is faithful but phase-3-sized. Also worth noting from writing the test: a pair of codes at inequivalent levels but the SAME code type cannot be constructed at all, because box(Delta |- Ty l) fixes l and at layer c a type determines its level. That is uniqueness of types showing up as a limit on what is even expressible — a small piece of evidence that the layer-c half of the invariant is doing real structural work, which is the half both (a) and (b) preserve.
+- 2026-07-25: DECIDED: route (a), level-indexed Unit^l/Empty^l. Rules, phases and the costed record of what was not taken are in docs/unit-empty-level-indexing.md, written before the code in the house pattern. Two things settled it beyond the original write-up. FIRST, the gap is not only a broken lemma but a functional hole: Vec^l(child;0) is the children type of a NULLARY CONSTRUCTOR of a Wf whose shape sits at level l, and measured on the current kernel, Vec^1(Ty 0;0) is well-formed at 1, its whnf is Unit, and Triv : Vec^1(Ty 0;0) @ 1 is LevelMismatch while @ 0 is Ok — so Leaf cannot be built for any polymorphic branching inductive. Monomorphic ones are unaffected (shape at level 0), which is exactly why this hid from phase 1 to phase 4 of [[wf-former]]. SECOND, (b) does not fix that: (b) patches ty_check, i.e. TYPES, while the inhabitation failure is in tm_check's fallback at typing.rs:689 where Triv infers level 0 and lev_eq rejects it against l. Making (b) work requires special-casing Triv as well, i.e. <> : Unit @ l for every l at layers p/m — and ch. 04's sentence is literally 'each term has a unique type'. (b) appeared to preserve that sentence only because it never touched terms; the working version abandons precisely it. Cost was also understated about 5x (~10 lines across two judgments, and infer_type/infer_term permanently become 'least level' rather than 'the level'). (b) was NOT rejected for being unsound — the metatheory verification cleared it and is preserved in the doc. Only ergonomics reopens it: phase 4 measuring (a)'s elaborator churn as materially worse than expected. Phases: 1 level fields + reduction with a layer-c gate (the bug closes here), 2 the four recursor branches ty_unit/ty_empty/tm_triv/tm_elim_empty and lift the gate, 3 close the pins plus a polymorphic nullary-arm acceptance test, 4 elaborator catch-up (tier-0 tags are Sigma-of-Units) and docs. Prerequisite already paid: the Static Code fix from [[metatheory-lemma-sweep]], without which box(Unit^{l u l'}) vs box(Unit^{l' u l}) would have been rejected — found for unrelated reasons one week before it would have bitten.
