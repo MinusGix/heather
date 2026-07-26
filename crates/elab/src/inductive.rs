@@ -72,16 +72,16 @@ pub(crate) struct Spine {
 ///   typechecking.
 fn tag_type(k: u32) -> Type {
     if k == 0 {
-        return Type::Unit;
+        return Type::Unit { level: Level::Zero };
     }
     let digit = if k & 1 == 0 {
-        Type::Unit
+        Type::Unit { level: Level::Zero }
     } else {
         Type::Sigma {
             fst_level: Level::Zero,
             snd_level: Level::Zero,
-            fst: Rc::new(Type::Unit),
-            snd: Rc::new(Type::Unit),
+            fst: Rc::new(Type::Unit { level: Level::Zero }),
+            snd: Rc::new(Type::Unit { level: Level::Zero }),
         }
     };
     Type::Sigma {
@@ -95,12 +95,12 @@ fn tag_type(k: u32) -> Type {
 /// Read a tag type back to its declaration index — the inverse of [`tag_type`].
 fn read_tag(t: &Type) -> Option<u32> {
     match t {
-        Type::Unit => Some(0),
+        Type::Unit { .. } => Some(0),
         Type::Sigma { fst, snd, .. } => {
             let digit = match &**fst {
-                Type::Unit => 0,
+                Type::Unit { .. } => 0,
                 Type::Sigma { fst, snd, .. }
-                    if matches!(**fst, Type::Unit) && matches!(**snd, Type::Unit) =>
+                    if matches!(**fst, Type::Unit { .. }) && matches!(**snd, Type::Unit { .. }) =>
                 {
                     1
                 }
@@ -125,7 +125,7 @@ fn tag_value(t: &Type) -> Term {
             fst: Rc::new(tag_value(fst)),
             snd: Rc::new(tag_value(snd)),
         },
-        _ => Term::Triv,
+        _ => Term::Triv { level: Level::Zero },
     }
 }
 
@@ -259,7 +259,7 @@ impl Elaborator {
             parts.push(self.lower_ctor(cx, ind, i, args, span)?);
         }
         let Some((last, last_lvl)) = parts.pop() else {
-            return Ok((Type::Empty, Level::Zero));
+            return Ok((Type::Empty { level: Level::Zero }, Level::Zero));
         };
         let mut acc = last;
         let mut acc_lvl = last_lvl;
@@ -309,7 +309,7 @@ impl Elaborator {
             fcx.push(name.clone().unwrap_or_else(|| "#field".into()), t, l);
         }
         let _ = span;
-        let mut acc = Type::Unit;
+        let mut acc = Type::Unit { level: Level::Zero };
         let mut acc_lvl = Level::Zero;
         for (ty, lvl) in entries.into_iter().rev() {
             acc = Type::Sigma {
@@ -449,8 +449,8 @@ impl Elaborator {
         let head = self.whnf(cx, ctor_ty, span)?;
         let Type::Sigma { fst_level, snd_level, fst, snd } = head else {
             // The Unit terminator (§3.1): every field consumed.
-            if matches!(head, Type::Unit) && args.is_empty() {
-                return Ok(Term::Triv);
+            if matches!(head, Type::Unit { level: Level::Zero }) && args.is_empty() {
+                return Ok(Term::Triv { level: Level::Zero });
             }
             return err("internal: malformed constructor encoding", span);
         };
@@ -528,6 +528,7 @@ impl Elaborator {
             }
             return Ok(Term::ElimEmpty {
                 level: mlvl,
+            scrut_level: Level::Zero,
                 motive: Rc::new(motive),
                 scrut: Rc::new(scrut),
             });
@@ -812,7 +813,7 @@ impl Elaborator {
     ) -> R<Term> {
         match body {
             ConstBody::TagCode(i) => {
-                Ok(if j == *i { Term::TmUnit } else { Term::TmEmpty })
+                Ok(if j == *i { Term::TmUnit { level: Level::Zero } } else { Term::TmEmpty { level: Level::Zero } })
             }
             ConstBody::Field { i, k, default } => {
                 if j != *i {
@@ -991,13 +992,14 @@ impl Elaborator {
             lhs,
             motive: Rc::new(motive),
             // `El⁰ (tag_i lhs) ⇝ El ⌜Unit⌝ ⇝ Unit`, definitionally.
-            case: Rc::new(Term::Triv),
+            case: Rc::new(Term::Triv { level: Level::Zero }),
             rhs,
             proof: Rc::new(proof),
         };
         // …and `El⁰ (tag_i rhs) ⇝ Empty`, so this eliminates into anything.
         Ok(Term::ElimEmpty {
             level: expected_lvl.clone(),
+            scrut_level: Level::Zero,
             motive: Rc::new(expected.shift_local(1)),
             scrut: Rc::new(absurd),
         })

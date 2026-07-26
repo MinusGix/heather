@@ -52,17 +52,21 @@ former, which is what removes wrinkle 1 of the choice doc: the elements no
 longer need to be *code-expressible*, so `Vec(Wf …; k)` is stateable with no
 side condition on shapes.
 
-*Level defect (found in the ch. 07 round, §8; **open**).* The nullary reduct
-`Unit` does not carry `l`, so a well-formed `Π^{1,0}(_ : Vec^1(T;0)). Nat`
-steps to an ill-formed one: type-level preservation fails for `l ≠ 0`. `Vec`
-is the first former whose whnf is chosen by a term that does not carry a
-level (`El`'s does), and this is the one place that shows. The successor
-case preserves `l` exactly, and `Fin` needs nothing — declared at `0`, both
-reducts land there. The one-line repair (level-polymorphic `Unit`) is wrong:
-it gives `box Unit` a type at every level, which the code eliminator cannot
-survive. Tracked with three costed candidates in
-`issues/unit-level-and-vec-preservation.md`; it does not affect anything else
-in this document.
+*Level defect (found in the ch. 07 round, §8; **closed 2026-07-25**).* The
+nullary reduct `Unit` did not carry `l`, so a well-formed
+`Π^{1,0}(_ : Vec^1(T;0)). Nat` stepped to an ill-formed one — type-level
+preservation failed for `l ≠ 0`, and `Triv : Vec^1(T;0) @ 1` was a
+`LevelMismatch`, i.e. a level-`l` `Wf`'s nullary constructor could not be
+built at all. `Vec` is the first former whose whnf is chosen by a term that
+does not carry a level (`El`'s does), and this is the one place that shows.
+The successor case preserved `l` exactly, and `Fin` needed nothing — declared
+at `0`, both reducts land there.
+
+Fixed by **level-indexing `Unit`/`Empty`**: `Vec^l(T; 0) ⇝ Unit^l`. The
+one-line repair (level-*polymorphic* `Unit`) was wrong — it gives `box Unit` a
+type at every level, which the code eliminator cannot survive. Rules, phases
+and the costed record of the two routes not taken:
+`docs/unit-empty-level-indexing.md`.
 
 ### 1.2 `Fin` — canonical finite index types
 

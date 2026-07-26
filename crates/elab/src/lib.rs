@@ -941,7 +941,7 @@ impl Elaborator {
             return self
                 .elab_match_data(cx, &ind, arms, scrut_t, &head, scrut_lvl, motive, mlvl, span);
         }
-        if matches!(head, Type::Empty) {
+        if matches!(head, Type::Empty { level: Level::Zero }) {
             // An inductive with no constructors: absurdity elimination. All of
             // them share the kernel type `Empty` (§3.3), and none has an
             // inhabitant to confuse, so no tag is needed to dispatch.
@@ -950,6 +950,7 @@ impl Elaborator {
             }
             return Ok(Term::ElimEmpty {
                 level: mlvl,
+            scrut_level: Level::Zero,
                 motive: Rc::new(motive),
                 scrut: Rc::new(scrut_t),
             });

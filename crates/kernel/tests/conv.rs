@@ -793,34 +793,34 @@ fn unit_eta_proof_irrelevance() {
     let psi = psi(vec![]);
     // Two Unit-typed variables: every term at Unit is ≈ ⟨⟩ and ≈ every other,
     // including distinct neutrals (definitional proof irrelevance).
-    let gamma = extend(&extend(&nil_ctx(0), Type::Unit, c(0)), Type::Unit, c(0));
-    ok_tm(&psi, &gamma, &Term::Triv, &Term::Triv, &Type::Unit, &c(0));
-    ok_tm(&psi, &gamma, &v(0), &Term::Triv, &Type::Unit, &c(0));
-    ok_tm(&psi, &gamma, &v(0), &v(1), &Type::Unit, &c(0));
+    let gamma = extend(&extend(&nil_ctx(0), Type::Unit { level: Level::Zero }, c(0)), Type::Unit { level: Level::Zero }, c(0));
+    ok_tm(&psi, &gamma, &Term::Triv { level: Level::Zero }, &Term::Triv { level: Level::Zero }, &Type::Unit { level: Level::Zero }, &c(0));
+    ok_tm(&psi, &gamma, &v(0), &Term::Triv { level: Level::Zero }, &Type::Unit { level: Level::Zero }, &c(0));
+    ok_tm(&psi, &gamma, &v(0), &v(1), &Type::Unit { level: Level::Zero }, &c(0));
 }
 
 #[test]
 fn empty_neutrals_and_encodings() {
     let psi = psi(vec![]);
     // At Empty only neutrals appear: equal vars convert, distinct ones do not.
-    let gamma = extend(&extend(&nil_ctx(0), Type::Empty, c(0)), Type::Empty, c(0));
-    ok_tm(&psi, &gamma, &v(0), &v(0), &Type::Empty, &c(0));
-    no_tm(&psi, &gamma, &v(0), &v(1), &Type::Empty, &c(0));
+    let gamma = extend(&extend(&nil_ctx(0), Type::Empty { level: Level::Zero }, c(0)), Type::Empty { level: Level::Zero }, c(0));
+    ok_tm(&psi, &gamma, &v(0), &v(0), &Type::Empty { level: Level::Zero }, &c(0));
+    no_tm(&psi, &gamma, &v(0), &v(1), &Type::Empty { level: Level::Zero }, &c(0));
     // Encodings congruence at Ty 0; «Unit» ≉ «Empty».
-    ok_tm(&psi, &nil_ctx(0), &Term::TmUnit, &Term::TmUnit, &Type::Ty(c(0)), &c(1));
-    no_tm(&psi, &nil_ctx(0), &Term::TmUnit, &Term::TmEmpty, &Type::Ty(c(0)), &c(1));
+    ok_tm(&psi, &nil_ctx(0), &Term::TmUnit { level: Level::Zero }, &Term::TmUnit { level: Level::Zero }, &Type::Ty(c(0)), &c(1));
+    no_tm(&psi, &nil_ctx(0), &Term::TmUnit { level: Level::Zero }, &Term::TmEmpty { level: Level::Zero }, &Type::Ty(c(0)), &c(1));
     // El-decode of the encodings, and Unit ≉ Empty as types.
     let el = |t: Term| Type::El { level: c(0), tm: rt(t) };
     assert_eq!(
-        conv_type(&psi, &nil_ctx(0), Layer::Prog, &el(Term::TmUnit), &Type::Unit, &c(0), FUEL),
+        conv_type(&psi, &nil_ctx(0), Layer::Prog, &el(Term::TmUnit { level: Level::Zero }), &Type::Unit { level: Level::Zero }, &c(0), FUEL),
         Ok(())
     );
     assert_eq!(
-        conv_type(&psi, &nil_ctx(0), Layer::Prog, &el(Term::TmEmpty), &Type::Empty, &c(0), FUEL),
+        conv_type(&psi, &nil_ctx(0), Layer::Prog, &el(Term::TmEmpty { level: Level::Zero }), &Type::Empty { level: Level::Zero }, &c(0), FUEL),
         Ok(())
     );
     assert_eq!(
-        conv_type(&psi, &nil_ctx(0), Layer::Prog, &Type::Unit, &Type::Empty, &c(0), FUEL),
+        conv_type(&psi, &nil_ctx(0), Layer::Prog, &Type::Unit { level: Level::Zero }, &Type::Empty { level: Level::Zero }, &c(0), FUEL),
         Err(ConvError::NotConvertible)
     );
 }
@@ -828,15 +828,16 @@ fn empty_neutrals_and_encodings() {
 #[test]
 fn elim_empty_neutral_congruence() {
     let psi = psi(vec![]);
-    let gamma = extend(&nil_ctx(0), Type::Empty, c(0));
-    let elim = |m: Type| Term::ElimEmpty { level: c(0), motive: rty(m), scrut: rt(v(0)) };
+    let gamma = extend(&nil_ctx(0), Type::Empty { level: Level::Zero }, c(0));
+    let elim = |m: Type| Term::ElimEmpty { level: c(0),
+            scrut_level: Level::Zero, motive: rty(m), scrut: rt(v(0)) };
     // Same motive: convertible at the result type.
     ok_tm(&psi, &gamma, &elim(Type::Nat), &elim(Type::Nat), &Type::Nat, &c(0));
     // β-convertible motive (El «Nat» ⇝ Nat) accepted.
     let el_nat = Type::El { level: c(0), tm: rt(Term::TmNat) };
     ok_tm(&psi, &gamma, &elim(el_nat), &elim(Type::Nat), &Type::Nat, &c(0));
     // A differing motive is caught.
-    no_tm(&psi, &gamma, &elim(Type::Nat), &elim(Type::Unit), &Type::Nat, &c(0));
+    no_tm(&psi, &gamma, &elim(Type::Nat), &elim(Type::Unit { level: Level::Zero }), &Type::Nat, &c(0));
 }
 
 // -------------------------------------------------------------------------
@@ -863,7 +864,7 @@ fn sum_type_congruence() {
     // A distinct right component is caught.
     assert_eq!(
         conv_type(&psi, &g0, Layer::Prog, &sum(Type::Nat, Type::Nat),
-                  &sum(Type::Nat, Type::Unit), &c(0), FUEL),
+                  &sum(Type::Nat, Type::Unit { level: Level::Zero }), &c(0), FUEL),
         Err(ConvError::NotConvertible)
     );
     // El of the encoding decodes to the Sum former.
@@ -976,7 +977,7 @@ fn w_nat_empty() -> Type {
         shape_level: Level::Zero,
         pos_level: Level::Zero,
         shape: rty(Type::Nat),
-        pos: rty(Type::Empty),
+        pos: rty(Type::Empty { level: Level::Zero }),
     }
 }
 
@@ -986,9 +987,10 @@ fn no_children() -> Term {
     Term::Lam {
         dom_level: Level::Zero,
         cod_level: Level::Zero,
-        dom: rty(Type::Empty),
+        dom: rty(Type::Empty { level: Level::Zero }),
         body: rt(Term::ElimEmpty {
             level: Level::Zero,
+            scrut_level: Level::Zero,
             motive: rty(w_nat_empty()),
             scrut: rt(v(0)),
         }),
@@ -1000,7 +1002,7 @@ fn sup_leaf(label: Term) -> Term {
         shape_level: Level::Zero,
         pos_level: Level::Zero,
         shape_ty: rty(Type::Nat),
-        pos_ty: rty(Type::Empty),
+        pos_ty: rty(Type::Empty { level: Level::Zero }),
         label: rt(label),
         children: rt(no_children()),
     }
@@ -1026,7 +1028,7 @@ fn w_type_congruence() {
     // A distinct position family is caught.
     assert_eq!(
         conv_type(&psi, &g0, Layer::Prog, &w(Type::Nat, Type::Nat),
-                  &w(Type::Nat, Type::Empty), &c(0), FUEL),
+                  &w(Type::Nat, Type::Empty { level: Level::Zero }), &c(0), FUEL),
         Err(ConvError::NotConvertible)
     );
     // W is not Σ (same components, different former).
@@ -1075,7 +1077,7 @@ fn w_positive_conversion_and_elim_beta() {
         pos_level: Level::Zero,
         motive_level: Level::Zero,
         shape: rty(Type::Nat),
-        pos: rty(Type::Empty),
+        pos: rty(Type::Empty { level: Level::Zero }),
         motive: rty(Type::Nat),
         step: rt(v(2)),
         scrut: rt(scrut),
@@ -1093,7 +1095,7 @@ fn elim_w_neutral_congruence() {
         pos_level: Level::Zero,
         motive_level: Level::Zero,
         shape: rty(Type::Nat),
-        pos: rty(Type::Empty),
+        pos: rty(Type::Empty { level: Level::Zero }),
         motive: rty(m),
         step: rt(step),
         scrut: rt(v(0)),

@@ -63,8 +63,8 @@ fn shape() -> Type {
     Type::Sum {
         lhs_level: Level::Zero,
         rhs_level: Level::Zero,
-        lhs: rty(Type::Unit),
-        rhs: rty(Type::Unit),
+        lhs: rty(Type::Unit { level: Level::Zero }),
+        rhs: rty(Type::Unit { level: Level::Zero }),
     }
 }
 
@@ -74,8 +74,8 @@ fn arity() -> Term {
         lhs_level: Level::Zero,
         rhs_level: Level::Zero,
         motive_level: Level::Zero,
-        lhs: rty(Type::Unit),
-        rhs: rty(Type::Unit),
+        lhs: rty(Type::Unit { level: Level::Zero }),
+        rhs: rty(Type::Unit { level: Level::Zero }),
         motive: rty(Type::Nat),
         case_l: rt(Term::Zero),
         case_r: rt(nat(2)),
@@ -92,9 +92,9 @@ fn leaf_tag() -> Term {
     Term::Inl {
         lhs_level: Level::Zero,
         rhs_level: Level::Zero,
-        lhs: rty(Type::Unit),
-        rhs: rty(Type::Unit),
-        val: rt(Term::Triv),
+        lhs: rty(Type::Unit { level: Level::Zero }),
+        rhs: rty(Type::Unit { level: Level::Zero }),
+        val: rt(Term::Triv { level: Level::Zero }),
     }
 }
 
@@ -105,7 +105,7 @@ fn leaf() -> Term {
         shape: rty(shape()),
         arity: rt(arity()),
         label: rt(leaf_tag()),
-        children: rt(Term::Triv),
+        children: rt(Term::Triv { level: Level::Zero }),
     }
 }
 
@@ -173,8 +173,8 @@ fn codes_check_and_decode() {
     let code_shape = Term::TmSum {
         lhs_level: Level::Zero,
         rhs_level: Level::Zero,
-        lhs: rt(Term::TmUnit),
-        rhs: rt(Term::TmUnit),
+        lhs: rt(Term::TmUnit { level: Level::Zero }),
+        rhs: rt(Term::TmUnit { level: Level::Zero }),
     };
     let code_wf = Term::TmWf {
         level: Level::Zero,
@@ -269,8 +269,8 @@ fn identity_recursor_round_trips_the_encodings() {
             shape: rt(Term::TmSum {
                 lhs_level: Level::Zero,
                 rhs_level: Level::Zero,
-                lhs: rt(Term::TmUnit),
-                rhs: rt(Term::TmUnit),
+                lhs: rt(Term::TmUnit { level: Level::Zero }),
+                rhs: rt(Term::TmUnit { level: Level::Zero }),
             }),
             arity: rt(arity()),
         },

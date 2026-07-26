@@ -1910,18 +1910,19 @@ pub fn identity_branches() -> Rc<Branches> {
             snd_ty: rty(gty(1, &gx_lam)),
             pair: rt(gtm(0, &g3)),
         }))),
-        ty_unit: rt(Term::BoxTy(rty(Type::Unit))),
-        ty_empty: rt(Term::BoxTy(rty(Type::Empty))),
-        tm_unit: rt(Term::BoxTm(rt(Term::TmUnit))),
-        tm_empty: rt(Term::BoxTm(rt(Term::TmEmpty))),
-        tm_triv: rt(Term::BoxTm(rt(Term::Triv))),
+        ty_unit: rt(Term::BoxTy(rty(Type::Unit { level: Level::Zero }))),
+        ty_empty: rt(Term::BoxTy(rty(Type::Empty { level: Level::Zero }))),
+        tm_unit: rt(Term::BoxTm(rt(Term::TmUnit { level: Level::Zero }))),
+        tm_empty: rt(Term::BoxTm(rt(Term::TmEmpty { level: Level::Zero }))),
+        tm_triv: rt(Term::BoxTm(rt(Term::Triv { level: Level::Zero }))),
         // box (elim_Empty^ℓ (x. U_M^id; u_t^id)) — telescope g = 2, U_M = 1,
         // u_t = 0.
         tm_elim_empty: {
-            let gx_empty = ext(&g2, Type::Empty, Level::Zero);
+            let gx_empty = ext(&g2, Type::Empty { level: Level::Zero }, Level::Zero);
             let u_m_e = Type::GlobalTy { var: GlobalVar(1), subst: LocalSubst::id(&gx_empty) };
             rt(Term::BoxTm(rt(Term::ElimEmpty {
                 level: lv(0),
+            scrut_level: Level::Zero,
                 motive: rty(u_m_e),
                 scrut: rt(gtm(0, &g2)),
             })))

@@ -1493,34 +1493,37 @@ fn el_decodes_tm_unit_and_empty() {
     // El^0 «Unit» ⇝ Unit, El^0 «Empty» ⇝ Empty.
     let gamma = nil_ctx(0);
     assert_eq!(
-        step_type(&Type::El { level: c(0), tm: rt(Term::TmUnit) }, &gamma),
-        Some(Type::Unit)
+        step_type(&Type::El { level: c(0), tm: rt(Term::TmUnit { level: Level::Zero }) }, &gamma),
+        Some(Type::Unit { level: Level::Zero })
     );
     assert_eq!(
-        step_type(&Type::El { level: c(0), tm: rt(Term::TmEmpty) }, &gamma),
-        Some(Type::Empty)
+        step_type(&Type::El { level: c(0), tm: rt(Term::TmEmpty { level: Level::Zero }) }, &gamma),
+        Some(Type::Empty { level: Level::Zero })
     );
-    assert!(is_whnf_type(&Type::Unit) && is_whnf_type(&Type::Empty));
-    assert!(is_whnf_term(&Term::Triv));
-    assert!(is_whnf_term(&Term::TmUnit) && is_whnf_term(&Term::TmEmpty));
+    assert!(is_whnf_type(&Type::Unit { level: Level::Zero }) && is_whnf_type(&Type::Empty { level: Level::Zero }));
+    assert!(is_whnf_term(&Term::Triv { level: Level::Zero }));
+    assert!(is_whnf_term(&Term::TmUnit { level: Level::Zero }) && is_whnf_term(&Term::TmEmpty { level: Level::Zero }));
 }
 
 #[test]
 fn elim_empty_is_neutral_and_reduces_scrutinee() {
     let gamma = nil_ctx(1);
     // elim_Empty has no β rule: stuck (and neutral) on a neutral scrutinee.
-    let neutral = Term::ElimEmpty { level: Level::Zero, motive: rty(Type::Nat), scrut: rt(v(0)) };
+    let neutral = Term::ElimEmpty { level: Level::Zero,
+            scrut_level: Level::Zero, motive: rty(Type::Nat), scrut: rt(v(0)) };
     assert_eq!(step_term(&neutral, &gamma), None);
     assert!(is_neutral_term(&neutral));
     // Congruence: a reducible scrutinee steps (untyped reduction).
     let redex = Term::ElimEmpty {
         level: Level::Zero,
+            scrut_level: Level::Zero,
         motive: rty(Type::Nat),
         scrut: rt(app2(lam(v(0)), Term::Zero)),
     };
     assert_eq!(
         step_term(&redex, &gamma),
-        Some(Term::ElimEmpty { level: Level::Zero, motive: rty(Type::Nat), scrut: rt(Term::Zero) })
+        Some(Term::ElimEmpty { level: Level::Zero,
+            scrut_level: Level::Zero, motive: rty(Type::Nat), scrut: rt(Term::Zero) })
     );
 }
 
@@ -1539,30 +1542,30 @@ fn beta_elim_code_unit_empty_nullary_branches() {
     b.tm_triv = rt(Term::BoxTm(rt(num(3))));
     let b = Rc::new(b);
     assert_eq!(
-        step_term(&elim_ty(&b, c(0), delta.clone(), Term::BoxTy(rty(Type::Unit))), &gamma),
+        step_term(&elim_ty(&b, c(0), delta.clone(), Term::BoxTy(rty(Type::Unit { level: Level::Zero }))), &gamma),
         Some(Term::BoxTy(rty(Type::Ty(c(0)))))
     );
     assert_eq!(
-        step_term(&elim_ty(&b, c(0), delta.clone(), Term::BoxTy(rty(Type::Empty))), &gamma),
+        step_term(&elim_ty(&b, c(0), delta.clone(), Term::BoxTy(rty(Type::Empty { level: Level::Zero }))), &gamma),
         Some(Term::BoxTy(rty(Type::Ty(c(1)))))
     );
     assert_eq!(
         step_term(
-            &elim_tm(&b, c(1), delta.clone(), Type::Ty(c(0)), Term::BoxTm(rt(Term::TmUnit))),
+            &elim_tm(&b, c(1), delta.clone(), Type::Ty(c(0)), Term::BoxTm(rt(Term::TmUnit { level: Level::Zero }))),
             &gamma
         ),
         Some(Term::BoxTm(rt(num(1))))
     );
     assert_eq!(
         step_term(
-            &elim_tm(&b, c(1), delta.clone(), Type::Ty(c(0)), Term::BoxTm(rt(Term::TmEmpty))),
+            &elim_tm(&b, c(1), delta.clone(), Type::Ty(c(0)), Term::BoxTm(rt(Term::TmEmpty { level: Level::Zero }))),
             &gamma
         ),
         Some(Term::BoxTm(rt(num(2))))
     );
     assert_eq!(
         step_term(
-            &elim_tm(&b, Level::Zero, delta.clone(), Type::Unit, Term::BoxTm(rt(Term::Triv))),
+            &elim_tm(&b, Level::Zero, delta.clone(), Type::Unit { level: Level::Zero }, Term::BoxTm(rt(Term::Triv { level: Level::Zero }))),
             &gamma
         ),
         Some(Term::BoxTm(rt(num(3))))
@@ -1589,15 +1592,16 @@ fn beta_elim_code_tm_elim_empty() {
     let b = Rc::new(b);
     let code = Term::ElimEmpty {
         level: c(2),
+            scrut_level: Level::Zero,
         motive: rty(motive.clone()),
         scrut: rt(inner_scrut.clone()),
     };
     let t = elim_tm(&b, c(2), delta.clone(), motive.clone(), Term::BoxTm(rt(code)));
 
-    let dx_empty = extend(&delta, Type::Empty, Level::Zero);
+    let dx_empty = extend(&delta, Type::Empty { level: Level::Zero }, Level::Zero);
     let s_motive = elim_ty(&b, c(2), dx_empty, Term::BoxTy(rty(motive.clone())));
     let s_scrut =
-        elim_tm(&b, Level::Zero, delta.clone(), Type::Empty, Term::BoxTm(rt(inner_scrut.clone())));
+        elim_tm(&b, Level::Zero, delta.clone(), Type::Empty { level: Level::Zero }, Term::BoxTm(rt(inner_scrut.clone())));
     let expect = chain(vec![
         s_motive,
         s_scrut,
@@ -1931,7 +1935,7 @@ fn w_nat_empty() -> Type {
         shape_level: Level::Zero,
         pos_level: Level::Zero,
         shape: rty(Type::Nat),
-        pos: rty(Type::Empty),
+        pos: rty(Type::Empty { level: Level::Zero }),
     }
 }
 
@@ -1941,9 +1945,10 @@ fn no_children() -> Term {
     Term::Lam {
         dom_level: Level::Zero,
         cod_level: Level::Zero,
-        dom: rty(Type::Empty),
+        dom: rty(Type::Empty { level: Level::Zero }),
         body: rt(Term::ElimEmpty {
             level: Level::Zero,
+            scrut_level: Level::Zero,
             motive: rty(w_nat_empty()),
             scrut: rt(v(0)),
         }),
@@ -1955,7 +1960,7 @@ fn sup_leaf(label: Term) -> Term {
         shape_level: Level::Zero,
         pos_level: Level::Zero,
         shape_ty: rty(Type::Nat),
-        pos_ty: rty(Type::Empty),
+        pos_ty: rty(Type::Empty { level: Level::Zero }),
         label: rt(label),
         children: rt(no_children()),
     }
@@ -1993,7 +1998,7 @@ fn beta_elim_w_and_congruence() {
         pos_level: Level::Zero,
         motive_level: Level::Zero,
         shape: rty(Type::Nat),
-        pos: rty(Type::Empty),
+        pos: rty(Type::Empty { level: Level::Zero }),
         motive: rty(Type::Nat),
         step: rt(step),
         scrut: rt(scrut),
@@ -2011,14 +2016,14 @@ fn beta_elim_w_and_congruence() {
         fun: rt(no_children()),
         dom_level: Level::Zero,
         cod_level: Level::max(Level::Zero, Level::Zero),
-        dom: rty(Type::Empty),
+        dom: rty(Type::Empty { level: Level::Zero }),
         cod: rty(w_nat_empty()),
         arg: rt(v(0)),
     };
     let expect_ih = Term::Lam {
         dom_level: Level::Zero,
         cod_level: Level::Zero,
-        dom: rty(Type::Empty),
+        dom: rty(Type::Empty { level: Level::Zero }),
         body: rt(elim(v(0), f_y)),
     };
     assert_eq!(step_term(&elim(v(0), sup_leaf(num(1))), &gamma), Some(expect_ih));
@@ -2171,7 +2176,7 @@ fn beta_elim_code_tm_sup() {
 
     let s_shape = elim_ty(&b, Level::Zero, delta.clone(), Term::BoxTy(rty(Type::Nat)));
     let dx = extend(&delta, Type::Nat, Level::Zero);
-    let s_pos = elim_ty(&b, Level::Zero, dx, Term::BoxTy(rty(Type::Empty)));
+    let s_pos = elim_ty(&b, Level::Zero, dx, Term::BoxTy(rty(Type::Empty { level: Level::Zero })));
     let s_label = elim_tm(
         &b,
         Level::Zero,
@@ -2183,7 +2188,7 @@ fn beta_elim_code_tm_sup() {
     let f_ty = Type::Pi {
         dom_level: Level::Zero,
         cod_level: lmax.clone(),
-        dom: rty(Type::Empty),
+        dom: rty(Type::Empty { level: Level::Zero }),
         cod: rty(w_nat_empty()),
     };
     let s_children = elim_tm(
@@ -2199,7 +2204,7 @@ fn beta_elim_code_tm_sup() {
         s_label,
         s_children,
         Term::BoxTy(rty(Type::Nat)),
-        Term::BoxTy(rty(Type::Empty)),
+        Term::BoxTy(rty(Type::Empty { level: Level::Zero })),
         Term::BoxTm(rt(num(1))),
         Term::BoxTm(rt(no_children())),
         Term::TmTy(Level::Zero),
@@ -2238,7 +2243,7 @@ fn beta_elim_code_tm_elim_w() {
         pos_level: Level::Zero,
         motive_level: Level::Zero,
         shape: rty(Type::Nat),
-        pos: rty(Type::Empty),
+        pos: rty(Type::Empty { level: Level::Zero }),
         motive: rty(Type::Nat),
         step: rt(num(2)),
         scrut: rt(sup_leaf(num(1))),
@@ -2249,20 +2254,20 @@ fn beta_elim_code_tm_elim_w() {
     let w = w_nat_empty();
     let s_shape = elim_ty(&b, Level::Zero, delta.clone(), Term::BoxTy(rty(Type::Nat)));
     let da = extend(&delta, Type::Nat, Level::Zero);
-    let s_pos = elim_ty(&b, Level::Zero, da.clone(), Term::BoxTy(rty(Type::Empty)));
+    let s_pos = elim_ty(&b, Level::Zero, da.clone(), Term::BoxTy(rty(Type::Empty { level: Level::Zero })));
     let dz = extend(&delta, w.clone(), lmax.clone());
     let s_motive = elim_ty(&b, Level::Zero, dz, Term::BoxTy(rty(Type::Nat)));
     let f_ty = Type::Pi {
         dom_level: Level::Zero,
         cod_level: lmax.clone(),
-        dom: rty(Type::Empty),
+        dom: rty(Type::Empty { level: Level::Zero }),
         cod: rty(w.clone()),
     };
     let daf = extend(&da, f_ty, Level::max(Level::Zero, lmax.clone()));
     let ih_ty = Type::Pi {
         dom_level: Level::Zero,
         cod_level: Level::Zero,
-        dom: rty(Type::Empty),
+        dom: rty(Type::Empty { level: Level::Zero }),
         cod: rty(Type::Nat),
     };
     let dafi = extend(&daf, ih_ty, Level::max(Level::Zero, Level::Zero));
@@ -2275,7 +2280,7 @@ fn beta_elim_code_tm_elim_w() {
         s_step,
         s_scrut,
         Term::BoxTy(rty(Type::Nat)),
-        Term::BoxTy(rty(Type::Empty)),
+        Term::BoxTy(rty(Type::Empty { level: Level::Zero })),
         Term::BoxTy(rty(Type::Nat)),
         Term::BoxTm(rt(num(2))),
         Term::BoxTm(rt(sup_leaf(num(1)))),

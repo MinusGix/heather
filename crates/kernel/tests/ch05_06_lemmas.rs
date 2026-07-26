@@ -647,7 +647,7 @@ fn code_equality_is_equality_modulo_level_equivalence() {
             elem: Rc::new(Type::Nat),
             len: Rc::new(Term::Zero),
         })),
-        Term::BoxTy(Rc::new(Type::Unit)),
+        Term::BoxTy(Rc::new(Type::Unit { level: Level::Zero })),
         Type::CodeTy { ctx: g.clone(), level: Level::Zero },
         false,
         "box (Vec(Nat;0)) vs box Unit — p-convertible, but not equal as code",

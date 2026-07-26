@@ -85,7 +85,7 @@ fn vec_code(n: Term) -> Term {
     Term::ElimNat {
         level: c(1),
         motive: rty(Type::Ty(c(0))),
-        base: rt(Term::TmUnit),
+        base: rt(Term::TmUnit { level: Level::Zero }),
         // (m : Nat, rec : Ty 0) ⊢ ⌜Σ(_ : Nat). El rec⌝; `rec` is Var 1 under
         // the Σ-code's own binder.
         step: rt(Term::TmSigma {
@@ -146,7 +146,7 @@ fn nil() -> Term {
         fst_ty: rty(Type::Nat),
         snd_ty: rty(vec(v(0))),
         fst: rt(Term::Zero),
-        snd: rt(Term::Triv),
+        snd: rt(Term::Triv { level: Level::Zero }),
     }
 }
 
@@ -349,8 +349,8 @@ fn zero_pred(n: Term) -> Term {
     Term::ElimNat {
         level: c(1),
         motive: rty(Type::Ty(c(0))),
-        base: rt(Term::TmUnit),
-        step: rt(Term::TmEmpty),
+        base: rt(Term::TmUnit { level: Level::Zero }),
+        step: rt(Term::TmEmpty { level: Level::Zero }),
         scrut: rt(n),
     }
 }
@@ -494,14 +494,15 @@ fn no_confusion_nil_versus_cons() {
         lhs: rt(nil()),
         // (Γ, y, p) ⊢ El (zero_pred (fst y))
         motive: rty(el(zero_pred(height(v(1))))),
-        case: rt(Term::Triv),
+        case: rt(Term::Triv { level: Level::Zero }),
         rhs: rt(cons(v(2), v(1))),
         proof: rt(v(0)),
     };
-    ck(&g, &absurd, &Type::Empty, c(0));
+    ck(&g, &absurd, &Type::Empty { level: Level::Zero }, c(0));
     // ...and `Empty` eliminates into any goal, e.g. a false equation.
     let anything = Term::ElimEmpty {
         level: c(0),
+            scrut_level: Level::Zero,
         motive: rty(id_list(nil(), list_of(&[7])).shift_local(1)),
         scrut: rt(absurd),
     };
@@ -612,11 +613,11 @@ fn the_kernel_gate_rejects_the_near_misses() {
         ty: rty(list()),
         lhs: rt(cons(v(4), v(3))),
         motive: rty(el(zero_pred(height(v(1))))),
-        case: rt(Term::Triv),
+        case: rt(Term::Triv { level: Level::Zero }),
         rhs: rt(cons(v(2), v(1))),
         proof: rt(v(0)),
     };
-    ck_fails(&g3, &not_absurd, &Type::Empty, c(0));
+    ck_fails(&g3, &not_absurd, &Type::Empty { level: Level::Zero }, c(0));
 }
 
 #[test]
@@ -649,7 +650,7 @@ fn spine_code(n: Term) -> Term {
     Term::ElimNat {
         level: c(1),
         motive: rty(Type::Ty(c(0))),
-        base: rt(Term::TmUnit),
+        base: rt(Term::TmUnit { level: Level::Zero }),
         step: rt(Term::TmSum {
             lhs_level: c(0),
             rhs_level: c(0),
@@ -705,7 +706,7 @@ fn brepack(n: Term, payload: Term) -> Term {
 }
 
 fn bnil() -> Term {
-    brepack(Term::Zero, Term::Triv)
+    brepack(Term::Zero, Term::Triv { level: Level::Zero })
 }
 
 /// `B0 x` / `B1 x` — the injection into the successor spine's sum, then the
@@ -858,7 +859,7 @@ fn is_b0(x: Term) -> Term {
         dom_level: c(0),
         cod_level: c(1),
         dom: rty(bspine(Term::Zero)),
-        body: rt(Term::TmEmpty),
+        body: rt(Term::TmEmpty { level: Level::Zero }),
     };
     let step = Term::Lam {
         dom_level: c(0),
@@ -871,8 +872,8 @@ fn is_b0(x: Term) -> Term {
             lhs: rty(bspine(v(2))),
             rhs: rty(bspine(v(2))),
             motive: rty(Type::Ty(c(0))),
-            case_l: rt(Term::TmUnit),
-            case_r: rt(Term::TmEmpty),
+            case_l: rt(Term::TmUnit { level: Level::Zero }),
+            case_r: rt(Term::TmEmpty { level: Level::Zero }),
             scrut: rt(v(0)),
         }),
     };
@@ -949,11 +950,11 @@ fn bits_no_confusion_at_the_same_height() {
         ty: rty(bits()),
         lhs: rt(bcons(false, v(2))),
         motive: rty(Type::El { level: c(0), tm: rt(is_b0(v(1))) }),
-        case: rt(Term::Triv),
+        case: rt(Term::Triv { level: Level::Zero }),
         rhs: rt(bcons(true, v(1))),
         proof: rt(v(0)),
     };
-    ck(&g, &absurd, &Type::Empty, c(0));
+    ck(&g, &absurd, &Type::Empty { level: Level::Zero }, c(0));
 
     // The same term shape must NOT check when both sides are `B0` — there the
     // predicate decodes to `Unit` on both endpoints and proves nothing.
@@ -965,9 +966,9 @@ fn bits_no_confusion_at_the_same_height() {
         ty: rty(bits()),
         lhs: rt(bcons(false, v(2))),
         motive: rty(Type::El { level: c(0), tm: rt(is_b0(v(1))) }),
-        case: rt(Term::Triv),
+        case: rt(Term::Triv { level: Level::Zero }),
         rhs: rt(bcons(false, v(1))),
         proof: rt(v(0)),
     };
-    ck_fails(&g2, &not_absurd, &Type::Empty, c(0));
+    ck_fails(&g2, &not_absurd, &Type::Empty { level: Level::Zero }, c(0));
 }

@@ -106,8 +106,8 @@ impl fmt::Debug for Type {
             Type::Sigma { fst_level, snd_level, fst, snd } => {
                 write!(f, "Σ[{fst_level:?},{snd_level:?}]({fst:?}). {snd:?}")
             }
-            Type::Unit => f.write_str("Unit"),
-            Type::Empty => f.write_str("Empty"),
+            Type::Unit { level } => write!(f, "Unit {level:?}"),
+            Type::Empty { level } => write!(f, "Empty {level:?}"),
             Type::Sum { lhs_level, rhs_level, lhs, rhs } => {
                 write!(f, "({lhs:?} +[{lhs_level:?},{rhs_level:?}] {rhs:?})")
             }
@@ -147,8 +147,8 @@ impl fmt::Debug for Term {
             Term::TmSigma { fst_level, snd_level, fst, snd } => {
                 write!(f, "«Σ[{fst_level:?},{snd_level:?}]({fst:?}). {snd:?}»")
             }
-            Term::TmUnit => f.write_str("«Unit»"),
-            Term::TmEmpty => f.write_str("«Empty»"),
+            Term::TmUnit { level } => write!(f, "«Unit {level:?}»"),
+            Term::TmEmpty { level } => write!(f, "«Empty {level:?}»"),
             Term::TmSum { lhs_level, rhs_level, lhs, rhs } => {
                 write!(f, "«({lhs:?} +[{lhs_level:?},{rhs_level:?}] {rhs:?})»")
             }
@@ -185,9 +185,9 @@ impl fmt::Debug for Term {
                 f,
                 "snd[{fst_level:?},{snd_level:?}]({fst_ty:?}. {snd_ty:?}; {pair:?})"
             ),
-            Term::Triv => f.write_str("⟨⟩"),
-            Term::ElimEmpty { level, motive, scrut } => {
-                write!(f, "elimE[{level:?}](M {motive:?}; {scrut:?})")
+            Term::Triv { level } => write!(f, "⟨⟩{level:?}"),
+            Term::ElimEmpty { level, scrut_level, motive, scrut } => {
+                write!(f, "elimE[{level:?},{scrut_level:?}](M {motive:?}; {scrut:?})")
             }
             Term::Inl { lhs_level, rhs_level, lhs, rhs, val } => write!(
                 f,

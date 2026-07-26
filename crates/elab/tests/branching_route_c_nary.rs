@@ -76,8 +76,8 @@ fn two() -> Type {
     Type::Sum {
         lhs_level: c(0),
         rhs_level: c(0),
-        lhs: rty(Type::Unit),
-        rhs: rty(Type::Unit),
+        lhs: rty(Type::Unit { level: Level::Zero }),
+        rhs: rty(Type::Unit { level: Level::Zero }),
     }
 }
 
@@ -85,9 +85,9 @@ fn inl_triv() -> Term {
     Term::Inl {
         lhs_level: c(0),
         rhs_level: c(0),
-        lhs: rty(Type::Unit),
-        rhs: rty(Type::Unit),
-        val: rt(Term::Triv),
+        lhs: rty(Type::Unit { level: Level::Zero }),
+        rhs: rty(Type::Unit { level: Level::Zero }),
+        val: rt(Term::Triv { level: Level::Zero }),
     }
 }
 
@@ -95,9 +95,9 @@ fn inr_triv() -> Term {
     Term::Inr {
         lhs_level: c(0),
         rhs_level: c(0),
-        lhs: rty(Type::Unit),
-        rhs: rty(Type::Unit),
-        val: rt(Term::Triv),
+        lhs: rty(Type::Unit { level: Level::Zero }),
+        rhs: rty(Type::Unit { level: Level::Zero }),
+        val: rt(Term::Triv { level: Level::Zero }),
     }
 }
 
@@ -153,8 +153,8 @@ fn arity(a: Term) -> Term {
         lhs_level: c(0),
         rhs_level: c(0),
         motive_level: c(0),
-        lhs: rty(Type::Unit),
-        rhs: rty(Type::Unit),
+        lhs: rty(Type::Unit { level: Level::Zero }),
+        rhs: rty(Type::Unit { level: Level::Zero }),
         motive: rty(Type::Nat),
         case_l: rt(Term::Zero),
         case_r: rt(Term::Succ(rt(Term::Succ(rt(Term::Zero))))),
@@ -168,7 +168,7 @@ fn tup_code(k: Term, depth: u32) -> Term {
     Term::ElimNat {
         level: c(1),
         motive: rty(Type::Ty(c(0))),
-        base: rt(Term::TmUnit),
+        base: rt(Term::TmUnit { level: Level::Zero }),
         // (m : Nat, rec : Ty 0) ⊢ ⌜Σ(_ : Tree). El rec⌝; rec is v(1) under
         // the Σ-code's own binder, treeCode's subst is 2 binders deep.
         step: rt(Term::TmSigma {
@@ -186,11 +186,11 @@ fn fin_code(k: Term) -> Term {
     Term::ElimNat {
         level: c(1),
         motive: rty(Type::Ty(c(0))),
-        base: rt(Term::TmEmpty),
+        base: rt(Term::TmEmpty { level: Level::Zero }),
         step: rt(Term::TmSum {
             lhs_level: c(0),
             rhs_level: c(0),
-            lhs: rt(Term::TmUnit),
+            lhs: rt(Term::TmUnit { level: Level::Zero }),
             rhs: rt(v(0)),
         }),
         scrut: rt(k),
@@ -202,12 +202,12 @@ fn fin2_ty() -> Type {
     Type::Sum {
         lhs_level: c(0),
         rhs_level: c(0),
-        lhs: rty(Type::Unit),
+        lhs: rty(Type::Unit { level: Level::Zero }),
         rhs: rty(Type::Sum {
             lhs_level: c(0),
             rhs_level: c(0),
-            lhs: rty(Type::Unit),
-            rhs: rty(Type::Empty),
+            lhs: rty(Type::Unit { level: Level::Zero }),
+            rhs: rty(Type::Empty { level: Level::Zero }),
         }),
     }
 }
@@ -217,14 +217,14 @@ fn i0() -> Term {
     Term::Inl {
         lhs_level: c(0),
         rhs_level: c(0),
-        lhs: rty(Type::Unit),
+        lhs: rty(Type::Unit { level: Level::Zero }),
         rhs: rty(Type::Sum {
             lhs_level: c(0),
             rhs_level: c(0),
-            lhs: rty(Type::Unit),
-            rhs: rty(Type::Empty),
+            lhs: rty(Type::Unit { level: Level::Zero }),
+            rhs: rty(Type::Empty { level: Level::Zero }),
         }),
-        val: rt(Term::Triv),
+        val: rt(Term::Triv { level: Level::Zero }),
     }
 }
 
@@ -233,19 +233,19 @@ fn i1() -> Term {
     Term::Inr {
         lhs_level: c(0),
         rhs_level: c(0),
-        lhs: rty(Type::Unit),
+        lhs: rty(Type::Unit { level: Level::Zero }),
         rhs: rty(Type::Sum {
             lhs_level: c(0),
             rhs_level: c(0),
-            lhs: rty(Type::Unit),
-            rhs: rty(Type::Empty),
+            lhs: rty(Type::Unit { level: Level::Zero }),
+            rhs: rty(Type::Empty { level: Level::Zero }),
         }),
         val: rt(Term::Inl {
             lhs_level: c(0),
             rhs_level: c(0),
-            lhs: rty(Type::Unit),
-            rhs: rty(Type::Empty),
-            val: rt(Term::Triv),
+            lhs: rty(Type::Unit { level: Level::Zero }),
+            rhs: rty(Type::Empty { level: Level::Zero }),
+            val: rt(Term::Triv { level: Level::Zero }),
         }),
     }
 }
@@ -263,13 +263,14 @@ fn nth_app(n: Term, cs: Term, i: Term, depth: u32) -> Term {
     let base = Term::Lam {
         dom_level: c(0),
         cod_level: c(0),
-        dom: rty(Type::Unit),
+        dom: rty(Type::Unit { level: Level::Zero }),
         body: rt(Term::Lam {
             dom_level: c(0),
             cod_level: c(0),
-            dom: rty(Type::Empty),
+            dom: rty(Type::Empty { level: Level::Zero }),
             body: rt(Term::ElimEmpty {
                 level: c(0),
+            scrut_level: Level::Zero,
                 motive: rty(tree_c(depth + 3)),
                 scrut: rt(v(0)),
             }),
@@ -329,14 +330,14 @@ fn nth_app(n: Term, cs: Term, i: Term, depth: u32) -> Term {
             dom: rty(Type::Sum {
                 lhs_level: c(0),
                 rhs_level: c(0),
-                lhs: rty(Type::Unit),
+                lhs: rty(Type::Unit { level: Level::Zero }),
                 rhs: rty(el(fin_code(v(2)))),
             }),
             body: rt(Term::Case {
                 lhs_level: c(0),
                 rhs_level: c(0),
                 motive_level: c(0),
-                lhs: rty(Type::Unit),
+                lhs: rty(Type::Unit { level: Level::Zero }),
                 rhs: rty(el(fin_code(v(3)))),
                 motive: rty(tree_c(depth + 5)),
                 case_l: rt(fst_cs),
@@ -417,7 +418,7 @@ fn supf_app(a: Term, cs: Term, depth: u32) -> Term {
 }
 
 fn leaf(depth: u32) -> Term {
-    supf_app(inl_triv(), Term::Triv, depth)
+    supf_app(inl_triv(), Term::Triv { level: Level::Zero }, depth)
 }
 
 /// The canonical 2-tuple `(l, (r, ⟨⟩))`.
@@ -426,9 +427,9 @@ fn pair2(l: Term, r: Term, depth: u32) -> Term {
         fst_level: c(0),
         snd_level: c(0),
         fst_ty: rty(tree_c(depth)),
-        snd_ty: rty(Type::Unit),
+        snd_ty: rty(Type::Unit { level: Level::Zero }),
         fst: rt(r),
-        snd: rt(Term::Triv),
+        snd: rt(Term::Triv { level: Level::Zero }),
     };
     Term::Pair {
         fst_level: c(0),
@@ -438,7 +439,7 @@ fn pair2(l: Term, r: Term, depth: u32) -> Term {
             fst_level: c(0),
             snd_level: c(0),
             fst: rty(tree_c(depth + 1)),
-            snd: rty(Type::Unit),
+            snd: rty(Type::Unit { level: Level::Zero }),
         }),
         fst: rt(l),
         snd: rt(inner),
@@ -459,7 +460,7 @@ fn sigma2_ty(depth: u32) -> Type {
             fst_level: c(0),
             snd_level: c(0),
             fst: rty(tree_c(depth + 1)),
-            snd: rty(Type::Unit),
+            snd: rty(Type::Unit { level: Level::Zero }),
         }),
     }
 }
@@ -474,7 +475,7 @@ fn proj_l(cs: Term, depth: u32) -> Term {
             fst_level: c(0),
             snd_level: c(0),
             fst: rty(tree_c(depth + 1)),
-            snd: rty(Type::Unit),
+            snd: rty(Type::Unit { level: Level::Zero }),
         }),
         pair: rt(cs),
     }
@@ -489,7 +490,7 @@ fn proj_r(cs: Term, depth: u32) -> Term {
             fst_level: c(0),
             snd_level: c(0),
             fst: rty(tree_c(depth + 1)),
-            snd: rty(Type::Unit),
+            snd: rty(Type::Unit { level: Level::Zero }),
         }),
         pair: rt(cs),
     };
@@ -497,7 +498,7 @@ fn proj_r(cs: Term, depth: u32) -> Term {
         fst_level: c(0),
         snd_level: c(0),
         fst_ty: rty(tree_c(depth)),
-        snd_ty: rty(Type::Unit),
+        snd_ty: rty(Type::Unit { level: Level::Zero }),
         pair: rt(snd),
     }
 }
@@ -663,14 +664,14 @@ fn mirror_step(depth: u32) -> Term {
     let arm_l = Term::Lam {
         dom_level: c(0),
         cod_level: c(0),
-        dom: rty(Type::Unit),
+        dom: rty(Type::Unit { level: Level::Zero }),
         body: rt(Term::Lam {
             dom_level: c(0),
             cod_level: c(0),
             dom: rty(Type::Pi {
                 dom_level: c(0),
                 cod_level: c(0),
-                dom: rty(Type::Empty),
+                dom: rty(Type::Empty { level: Level::Zero }),
                 cod: rty(tree_c(depth + 6)),
             }),
             body: rt(leaf(depth + 6)),
@@ -707,8 +708,8 @@ fn mirror_step(depth: u32) -> Term {
         lhs_level: c(0),
         rhs_level: c(0),
         motive_level: c(0),
-        lhs: rty(Type::Unit),
-        rhs: rty(Type::Unit),
+        lhs: rty(Type::Unit { level: Level::Zero }),
+        rhs: rty(Type::Unit { level: Level::Zero }),
         motive: rty(cmot),
         case_l: rt(arm_l),
         case_r: rt(arm_r),
@@ -1061,7 +1062,7 @@ fn leaf_arm_body(depth: u32) -> Term {
     let ml = mirror(depth, lf.clone());
     // β-marker: Id(mirror leaf; leaf) — the mbeta RHS at (inl ⟨⟩, ⟨⟩)
     // computes to `leaf` (case fires, arm ignores the ih).
-    let p1 = apply_mbeta(depth, inl_triv(), Term::Triv);
+    let p1 = apply_mbeta(depth, inl_triv(), Term::Triv { level: Level::Zero });
     let p2 = cong_mirror(depth, ml.clone(), lf.clone(), p1.clone());
     trans_tree(depth, mm(depth, lf.clone()), ml, lf, p2, p1)
 }
@@ -1168,14 +1169,14 @@ fn mirror_mirror_proof(leaf_body: Term) -> Term {
     let arm_l = Term::Lam {
         dom_level: c(0),
         cod_level: c(0),
-        dom: rty(Type::Unit),
+        dom: rty(Type::Unit { level: Level::Zero }),
         body: rt(Term::Lam {
             dom_level: c(0),
             cod_level: c(0),
             dom: rty(Type::Pi {
                 dom_level: c(0),
                 cod_level: c(0),
-                dom: rty(Type::Empty),
+                dom: rty(Type::Empty { level: Level::Zero }),
                 cod: rty(id_tree(
                     mm(7, nth_app(Term::Zero, v(1), v(0), 7)),
                     nth_app(Term::Zero, v(1), v(0), 7),
@@ -1211,8 +1212,8 @@ fn mirror_mirror_proof(leaf_body: Term) -> Term {
         lhs_level: c(0),
         rhs_level: c(0),
         motive_level: c(0),
-        lhs: rty(Type::Unit),
-        rhs: rty(Type::Unit),
+        lhs: rty(Type::Unit { level: Level::Zero }),
+        rhs: rty(Type::Unit { level: Level::Zero }),
         motive: rty(cmot),
         case_l: rt(arm_l),
         case_r: rt(arm_r),
@@ -1349,12 +1350,12 @@ fn sigma_eta_bridges_the_constructor_form() {
     // by Σ-η and Unit-η, with no transport and no funext. This is exactly
     // the equation route A had to postulate funext to cross.
     let psi = psi();
-    let g = ext(&ext(&nil_ctx(), Type::Unit, c(0)), sigma2_ty(1), c(0));
+    let g = ext(&ext(&nil_ctx(), Type::Unit { level: Level::Zero }, c(0)), sigma2_ty(1), c(0));
     let u_inj = Term::Inr {
         lhs_level: c(0),
         rhs_level: c(0),
-        lhs: rty(Type::Unit),
-        rhs: rty(Type::Unit),
+        lhs: rty(Type::Unit { level: Level::Zero }),
+        rhs: rty(Type::Unit { level: Level::Zero }),
         val: rt(v(1)),
     };
     let lhs = supf_app(u_inj, v(0), 2);
@@ -1362,7 +1363,7 @@ fn sigma_eta_bridges_the_constructor_form() {
     ck_in(&psi, &g, &lhs, &tree_c(2), c(0));
     conv_in(&psi, &g, &lhs, &rhs, &tree_c(2), c(0));
     // And the arity-0 analogue: any `cs' : Unit` gives the same leaf.
-    let g0 = ext(&nil_ctx(), Type::Unit, c(0));
+    let g0 = ext(&nil_ctx(), Type::Unit { level: Level::Zero }, c(0));
     conv_in(&psi, &g0, &supf_app(inl_triv(), v(0), 1), &leaf(1), &tree_c(1), c(0));
 }
 

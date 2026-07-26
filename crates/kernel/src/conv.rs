@@ -321,7 +321,10 @@ impl Conv {
                 self.ty(&e, t1, t2, cl1)
             }
             // Unit/Empty congruence (extension; nullary formers).
-            (Type::Unit, Type::Unit) | (Type::Empty, Type::Empty) => Ok(()),
+            // Unit^l / Empty^l congruence (extension): level-indexed, so the
+            // levels must agree — up to `≈`, not `==`.
+            (Type::Unit { level: l1 }, Type::Unit { level: l2 })
+            | (Type::Empty { level: l1 }, Type::Empty { level: l2 }) => self.lev_eq(l1, l2),
             // Sum congruence (extension; non-dependent, so no binder push).
             (
                 Type::Sum { lhs_level: dl1, rhs_level: cl1, lhs: s1, rhs: t1 },
@@ -663,7 +666,10 @@ impl Conv {
                     self.tm(&e, t1, t2, &Type::Ty(cl1.clone()), &Level::succ(cl1.clone()))
                 }
                 // TmUnit/TmEmpty congruence (extension; nullary encodings).
-                (Term::TmUnit, Term::TmUnit) | (Term::TmEmpty, Term::TmEmpty) => Ok(()),
+                (Term::TmUnit { level: l1 }, Term::TmUnit { level: l2 })
+                | (Term::TmEmpty { level: l1 }, Term::TmEmpty { level: l2 }) => {
+                    self.lev_eq(l1, l2)
+                }
                 // TmSum congruence (extension; non-dependent, mirrors TmSigma).
                 (
                     Term::TmSum { lhs_level: dl1, rhs_level: cl1, lhs: s1, rhs: t1 },
@@ -717,8 +723,8 @@ impl Conv {
                     | Term::TmPi { .. }
                     | Term::TmId { .. }
                     | Term::TmSigma { .. }
-                    | Term::TmUnit
-                    | Term::TmEmpty
+                    | Term::TmUnit { .. }
+                    | Term::TmEmpty { .. }
                     | Term::TmSum { .. }
                     | Term::TmW { .. }
                     | Term::TmVec { .. }
@@ -733,8 +739,8 @@ impl Conv {
                     | Term::TmPi { .. }
                     | Term::TmId { .. }
                     | Term::TmSigma { .. }
-                    | Term::TmUnit
-                    | Term::TmEmpty
+                    | Term::TmUnit { .. }
+                    | Term::TmEmpty { .. }
                     | Term::TmSum { .. }
                     | Term::TmW { .. }
                     | Term::TmVec { .. }
@@ -784,10 +790,10 @@ impl Conv {
             // is convertible to ⟨⟩, hence to each other. Type-directed like Σ
             // η, so it fires on ⟨⟩, neutrals, or mixtures without inspecting
             // either side.
-            Type::Unit => Ok(()),
+            Type::Unit { .. } => Ok(()),
             // Empty (extension): no canonical inhabitants, so only neutrals can
             // appear; compare them structurally.
-            Type::Empty => self.tm_nee(env, a, b).map(drop),
+            Type::Empty { .. } => self.tm_nee(env, a, b).map(drop),
             // Sum (extension): a positive type — the two constructors match
             // like `Zero`/`Succ` at `Nat`. The annotations on inl/inr are
             // forced by well-typedness at this sum type, so only the injected
@@ -938,11 +944,12 @@ impl Conv {
             // elim_Empty neutral congruence (extension); mirrors ElimNat
             // minus the base/step branches.
             (
-                Term::ElimEmpty { level: v1, motive: m1, scrut: n1 },
-                Term::ElimEmpty { level: v2, motive: m2, scrut: n2 },
+                Term::ElimEmpty { level: v1, scrut_level: s1, motive: m1, scrut: n1 },
+                Term::ElimEmpty { level: v2, scrut_level: s2, motive: m2, scrut: n2 },
             ) => {
                 self.lev_eq(v1, v2)?;
-                let e_x = env.push_entry(Rc::new(Type::Empty), Level::Zero);
+                self.lev_eq(s1, s2)?;
+                let e_x = env.push_entry(Rc::new(Type::Empty { level: s1.clone() }), s1.clone());
                 self.ty(&e_x, m1, m2, v1)?;
                 self.tm_nee(env, n1, n2)?; // inferred Empty: redundant, ignored
                 Ok((

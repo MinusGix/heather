@@ -72,8 +72,8 @@ fn two() -> Type {
     Type::Sum {
         lhs_level: c(0),
         rhs_level: c(0),
-        lhs: rty(Type::Unit),
-        rhs: rty(Type::Unit),
+        lhs: rty(Type::Unit { level: Level::Zero }),
+        rhs: rty(Type::Unit { level: Level::Zero }),
     }
 }
 
@@ -81,9 +81,9 @@ fn inl_triv() -> Term {
     Term::Inl {
         lhs_level: c(0),
         rhs_level: c(0),
-        lhs: rty(Type::Unit),
-        rhs: rty(Type::Unit),
-        val: rt(Term::Triv),
+        lhs: rty(Type::Unit { level: Level::Zero }),
+        rhs: rty(Type::Unit { level: Level::Zero }),
+        val: rt(Term::Triv { level: Level::Zero }),
     }
 }
 
@@ -91,9 +91,9 @@ fn inr_triv() -> Term {
     Term::Inr {
         lhs_level: c(0),
         rhs_level: c(0),
-        lhs: rty(Type::Unit),
-        rhs: rty(Type::Unit),
-        val: rt(Term::Triv),
+        lhs: rty(Type::Unit { level: Level::Zero }),
+        rhs: rty(Type::Unit { level: Level::Zero }),
+        val: rt(Term::Triv { level: Level::Zero }),
     }
 }
 
@@ -106,15 +106,15 @@ fn pos_of(x: Term) -> Type {
             lhs_level: c(0),
             rhs_level: c(0),
             motive_level: c(1),
-            lhs: rty(Type::Unit),
-            rhs: rty(Type::Unit),
+            lhs: rty(Type::Unit { level: Level::Zero }),
+            rhs: rty(Type::Unit { level: Level::Zero }),
             motive: rty(Type::Ty(c(0))),
-            case_l: rt(Term::TmEmpty),
+            case_l: rt(Term::TmEmpty { level: Level::Zero }),
             case_r: rt(Term::TmSum {
                 lhs_level: c(0),
                 rhs_level: c(0),
-                lhs: rt(Term::TmUnit),
-                rhs: rt(Term::TmUnit),
+                lhs: rt(Term::TmUnit { level: Level::Zero }),
+                rhs: rt(Term::TmUnit { level: Level::Zero }),
             }),
             scrut: rt(x),
         }),
@@ -159,9 +159,10 @@ fn leaf() -> Term {
         Term::Lam {
             dom_level: c(0),
             cod_level: c(0),
-            dom: rty(Type::Empty),
+            dom: rty(Type::Empty { level: Level::Zero }),
             body: rt(Term::ElimEmpty {
                 level: c(0),
+            scrut_level: Level::Zero,
                 motive: rty(tree()),
                 scrut: rt(v(0)),
             }),
@@ -181,8 +182,8 @@ fn node_children(l: Term, r: Term) -> Term {
             lhs_level: c(0),
             rhs_level: c(0),
             motive_level: c(0),
-            lhs: rty(Type::Unit),
-            rhs: rty(Type::Unit),
+            lhs: rty(Type::Unit { level: Level::Zero }),
+            rhs: rty(Type::Unit { level: Level::Zero }),
             motive: rty(tree()),
             case_l: rt(l.shift_local(2)),
             case_r: rt(r.shift_local(2)),
@@ -232,7 +233,7 @@ fn mirror(scrut: Term) -> Term {
     let arm_leaf = Term::Lam {
         dom_level: c(0),
         cod_level: c(0),
-        dom: rty(children_pi(Type::Empty)),
+        dom: rty(children_pi(Type::Empty { level: Level::Zero })),
         body: rt(leaf()),
     };
     // inr arm, binds (u : Unit):
@@ -252,8 +253,8 @@ fn mirror(scrut: Term) -> Term {
         lhs_level: c(0),
         rhs_level: c(0),
         motive_level: c(0),
-        lhs: rty(Type::Unit),
-        rhs: rty(Type::Unit),
+        lhs: rty(Type::Unit { level: Level::Zero }),
+        rhs: rty(Type::Unit { level: Level::Zero }),
         motive: rty(case_motive),
         case_l: rt(arm_leaf),
         case_r: rt(arm_node),
@@ -367,7 +368,7 @@ fn psi() -> GlobalCtx {
             GlobalBinding::Tm {
                 ctx: nil_ctx(),
                 layer: Layer::Code,
-                ty: rty(funext_ty(&Type::Empty)),
+                ty: rty(funext_ty(&Type::Empty { level: Level::Zero })),
                 level: c(0),
             },
             GlobalBinding::Tm {
@@ -551,8 +552,9 @@ fn leaf_children() -> Term {
     Term::Lam {
         dom_level: c(0),
         cod_level: c(0),
-        dom: rty(Type::Empty),
-        body: rt(Term::ElimEmpty { level: c(0), motive: rty(tree()), scrut: rt(v(0)) }),
+        dom: rty(Type::Empty { level: Level::Zero }),
+        body: rt(Term::ElimEmpty { level: c(0),
+            scrut_level: Level::Zero, motive: rty(tree()), scrut: rt(v(0)) }),
     }
 }
 
@@ -563,18 +565,19 @@ fn eta_leaf(depth: u32, fp: Term) -> Term {
     let pw = Term::Lam {
         dom_level: c(0),
         cod_level: c(0),
-        dom: rty(Type::Empty),
+        dom: rty(Type::Empty { level: Level::Zero }),
         body: rt(Term::ElimEmpty {
             level: c(0),
+            scrut_level: Level::Zero,
             motive: rty(id_tree(
-                app_tree(leaf_children(), Type::Empty, v(0)),
-                app_tree(fp.clone().shift_local(2), Type::Empty, v(0)),
+                app_tree(leaf_children(), Type::Empty { level: Level::Zero }, v(0)),
+                app_tree(fp.clone().shift_local(2), Type::Empty { level: Level::Zero }, v(0)),
             )),
             scrut: rt(v(0)),
         }),
     };
-    let eq_fun = apply_funext(FUNEXT_EMPTY, depth, &Type::Empty, leaf_children(), fp.clone(), pw);
-    cong_sup(inl_triv(), &Type::Empty, leaf_children(), fp, eq_fun)
+    let eq_fun = apply_funext(FUNEXT_EMPTY, depth, &Type::Empty { level: Level::Zero }, leaf_children(), fp.clone(), pw);
+    cong_sup(inl_triv(), &Type::Empty { level: Level::Zero }, leaf_children(), fp, eq_fun)
 }
 
 /// `Id(Tree; node (fp (inl ⟨⟩)) (fp (inr ⟨⟩)); sup(inr ⟨⟩; fp))` for
@@ -593,8 +596,8 @@ fn eta_node(depth: u32, fp: Term) -> Term {
             lhs_level: c(0),
             rhs_level: c(0),
             motive_level: c(0),
-            lhs: rty(Type::Unit),
-            rhs: rty(Type::Unit),
+            lhs: rty(Type::Unit { level: Level::Zero }),
+            rhs: rty(Type::Unit { level: Level::Zero }),
             motive: rty(id_tree(
                 app_tree(nc.clone().shift_local(2), two(), v(0)),
                 app_tree(fp.clone().shift_local(2), two(), v(0)),
@@ -638,11 +641,11 @@ fn mirror_mirror_proof_with_leaf_arm(leaf_body: Term) -> Term {
     let arm_leaf = Term::Lam {
         dom_level: c(0),
         cod_level: c(0),
-        dom: rty(children_pi(Type::Empty)),
+        dom: rty(children_pi(Type::Empty { level: Level::Zero })),
         body: rt(Term::Lam {
             dom_level: c(0),
             cod_level: c(0),
-            dom: rty(ih_pi_ty(&Type::Empty)),
+            dom: rty(ih_pi_ty(&Type::Empty { level: Level::Zero })),
             body: rt(leaf_body),
         }),
     };
@@ -724,8 +727,8 @@ fn mirror_mirror_proof_with_leaf_arm(leaf_body: Term) -> Term {
         lhs_level: c(0),
         rhs_level: c(0),
         motive_level: c(0),
-        lhs: rty(Type::Unit),
-        rhs: rty(Type::Unit),
+        lhs: rty(Type::Unit { level: Level::Zero }),
+        rhs: rty(Type::Unit { level: Level::Zero }),
         motive: rty(case_motive),
         case_l: rt(arm_leaf),
         case_r: rt(arm_node),

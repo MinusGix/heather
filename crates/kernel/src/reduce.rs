@@ -98,9 +98,9 @@ pub fn step_type(t: &Type, gamma: &LocalCtx) -> Option<Type> {
                 fst: Rc::new(Type::El { level: fst_level.clone(), tm: Rc::clone(fst) }),
                 snd: Rc::new(Type::El { level: snd_level.clone(), tm: Rc::clone(snd) }),
             }),
-            // El^0 Unit ⇝ Unit, El^0 Empty ⇝ Empty   (extension)
-            Term::TmUnit => Some(Type::Unit),
-            Term::TmEmpty => Some(Type::Empty),
+            // El^l (Unit^l) ⇝ Unit^l, El^l (Empty^l) ⇝ Empty^l   (extension)
+            Term::TmUnit { level } => Some(Type::Unit { level: level.clone() }),
+            Term::TmEmpty { level } => Some(Type::Empty { level: level.clone() }),
             // El^{l⊔l'} (s +^{l,l'} t) ⇝ El^l s +^{l,l'} El^l' t   (extension)
             Term::TmSum { lhs_level, rhs_level, lhs, rhs } => Some(Type::Sum {
                 lhs_level: lhs_level.clone(),
@@ -134,11 +134,16 @@ pub fn step_type(t: &Type, gamma: &LocalCtx) -> Option<Type> {
             _ => step_term(tm, gamma)
                 .map(|tm| Type::El { level: level.clone(), tm: Rc::new(tm) }),
         },
-        // Vec^l(T; 0) ⇝ Unit, Vec^l(T; S k) ⇝ Σ^{l,l}(_ : T). Vec^l(T; k).
+        // Vec^l(T; 0) ⇝ Unit^l, Vec^l(T; S k) ⇝ Σ^{l,l}(_ : T). Vec^l(T; k).
         // The tail is under the Σ's binder, so the length is shifted; `T`
         // and the tail's `T` likewise (docs/wf-former-design.md §1.1).
+        //
+        // **The nullary reduct carries `l`.** It did not until 2026-07-25,
+        // which broke ch. 06's Preservation for every `l ≠ 0` and left the
+        // nullary constructor of a level-`l` `Wf` uninhabitable — the defect
+        // route (a) exists to close (docs/unit-empty-level-indexing.md §1).
         Type::Vec { level, elem, len } => match &**len {
-            Term::Zero => Some(Type::Unit),
+            Term::Zero => Some(Type::Unit { level: level.clone() }),
             Term::Succ(pred) => Some(Type::Sigma {
                 fst_level: level.clone(),
                 snd_level: level.clone(),
@@ -155,13 +160,15 @@ pub fn step_type(t: &Type, gamma: &LocalCtx) -> Option<Type> {
                 len: Rc::new(len),
             }),
         },
-        // Fin(0) ⇝ Empty, Fin(S k) ⇝ Unit +^{0,0} Fin(k).   (§1.2)
+        // Fin(0) ⇝ Empty^0, Fin(S k) ⇝ Unit^0 +^{0,0} Fin(k).   (§1.2)
+        // `Fin` is declared at level 0, so both reducts land there and it
+        // needs nothing from the level-indexing round.
         Type::Fin { len } => match &**len {
-            Term::Zero => Some(Type::Empty),
+            Term::Zero => Some(Type::Empty { level: Level::Zero }),
             Term::Succ(pred) => Some(Type::Sum {
                 lhs_level: Level::Zero,
                 rhs_level: Level::Zero,
-                lhs: Rc::new(Type::Unit),
+                lhs: Rc::new(Type::Unit { level: Level::Zero }),
                 rhs: Rc::new(Type::Fin { len: Rc::clone(pred) }),
             }),
             _ => step_term(len, gamma).map(|len| Type::Fin { len: Rc::new(len) }),
@@ -228,9 +235,10 @@ pub fn step_term(t: &Term, gamma: &LocalCtx) -> Option<Term> {
         },
         // elim_Empty has no β rule (Empty has no constructors); it only ever
         // steps its scrutinee, staying neutral when the scrutinee is.
-        Term::ElimEmpty { level, motive, scrut } => {
+        Term::ElimEmpty { level, scrut_level, motive, scrut } => {
             step_term(scrut, gamma).map(|s| Term::ElimEmpty {
                 level: level.clone(),
+                scrut_level: scrut_level.clone(),
                 motive: Rc::clone(motive),
                 scrut: Rc::new(s),
             })
@@ -740,14 +748,20 @@ fn beta_elim_ty(
             ))
         }
         // (g. t_Unit), (g. t_Empty)   (extension)
-        Type::Unit => Some(fire(
+        //
+        // PHASE 1 of docs/unit-empty-level-indexing.md: the branches still
+        // bind no universe, and `typing.rs`'s layer-c gate guarantees only
+        // `Unit^0`/`Empty^0` reach layer c, so firing with no universe
+        // payload stays consistent. Phase 2 reshapes both sides together and
+        // passes `level` here.
+        Type::Unit { .. } => Some(fire(
             &b.ty_unit,
             &[],
             vec![GlobalEntry::Ctx(delta.clone())],
             vec![],
             gamma,
         )),
-        Type::Empty => Some(fire(
+        Type::Empty { .. } => Some(fire(
             &b.ty_empty,
             &[],
             vec![GlobalEntry::Ctx(delta.clone())],
@@ -1262,14 +1276,14 @@ fn beta_elim_tm(
             ))
         }
         // (g. t'_Unit), (g. t'_Empty) — the encodings.   (extension)
-        Term::TmUnit => Some(fire(
+        Term::TmUnit { .. } => Some(fire(
             &b.tm_unit,
             &[],
             vec![GlobalEntry::Ctx(delta.clone())],
             vec![],
             gamma,
         )),
-        Term::TmEmpty => Some(fire(
+        Term::TmEmpty { .. } => Some(fire(
             &b.tm_empty,
             &[],
             vec![GlobalEntry::Ctx(delta.clone())],
@@ -1277,7 +1291,7 @@ fn beta_elim_tm(
             gamma,
         )),
         // (g. t_triv)   (extension)
-        Term::Triv => Some(fire(
+        Term::Triv { .. } => Some(fire(
             &b.tm_triv,
             &[],
             vec![GlobalEntry::Ctx(delta.clone())],
@@ -1286,15 +1300,13 @@ fn beta_elim_tm(
         )),
         // (ℓ, g, U_M, u_t, x_M, x_t. t_elimE) — x_M recurses at the *type*
         // motive; mirrors tm_elim_nat minus the base/step branches.   (extension)
-        Term::ElimEmpty { level, motive, scrut } => {
-            let dx_empty = extend(delta, Rc::new(Type::Empty), Level::Zero);
+        // PHASE 1: `scrut_level` is 0 at layer c by the gate, so the branch
+        // still binds one universe (the motive's). Phase 2 binds two.
+        Term::ElimEmpty { level, motive, scrut, .. } => {
+            let empty0 = || Rc::new(Type::Empty { level: Level::Zero });
+            let dx_empty = extend(delta, empty0(), Level::Zero);
             let s_motive = rec.elim_ty(level.clone(), dx_empty, Rc::clone(motive));
-            let s_scrut = rec.elim_tm(
-                Level::Zero,
-                delta.clone(),
-                Rc::new(Type::Empty),
-                Rc::clone(scrut),
-            );
+            let s_scrut = rec.elim_tm(Level::Zero, delta.clone(), empty0(), Rc::clone(scrut));
             Some(fire(
                 &b.tm_elim_empty,
                 std::slice::from_ref(level),
@@ -1794,8 +1806,8 @@ pub fn is_whnf_type(t: &Type) -> bool {
         | Type::Pi { .. }
         | Type::Id { .. }
         | Type::Sigma { .. }
-        | Type::Unit
-        | Type::Empty
+        | Type::Unit { .. }
+        | Type::Empty { .. }
         | Type::Sum { .. }
         | Type::W { .. }
         | Type::Wf { .. }
@@ -1855,8 +1867,8 @@ pub fn is_whnf_term(t: &Term) -> bool {
         | Term::TmTy(_)
         | Term::TmId { .. }
         | Term::TmSigma { .. }
-        | Term::TmUnit
-        | Term::TmEmpty
+        | Term::TmUnit { .. }
+        | Term::TmEmpty { .. }
         | Term::TmSum { .. }
         | Term::TmW { .. }
         | Term::TmVec { .. }
@@ -1866,7 +1878,7 @@ pub fn is_whnf_term(t: &Term) -> bool {
         | Term::Succ(_)
         | Term::Refl { .. }
         | Term::Pair { .. }
-        | Term::Triv
+        | Term::Triv { .. }
         | Term::Inl { .. }
         | Term::Inr { .. }
         | Term::Sup { .. }

@@ -101,14 +101,10 @@ fn conv_relates_term_to_its_whnf() {
 /// and picks a small literal length two times in three), and nothing was
 /// looking. With the check in place it fails on the first run, seed 102.
 ///
-/// **Known gap, deliberately skipped:** `Unit`/`Empty` are fixed at level 0,
-/// so `Vec^l(T;0) ⇝ Unit` violates this for `l ≠ 0`. The obvious repair
-/// (level-polymorphic `Unit`) is *wrong* — it gives `box Unit` more than one
-/// type and breaks the code recursor. Tracked, with three candidate fixes, in
-/// `issues/unit-level-and-vec-preservation.md`; pinned by
-/// `vec_fin.rs::vec_at_zero_drops_its_level_known_gap`. The skip is narrow on
-/// purpose — only this reduct, only this error — so every other former stays
-/// covered. Same shape as the `NotInferable` skip below.
+/// **The gap this found is closed** as of route (a)
+/// (`docs/unit-empty-level-indexing.md`): `Vec^l(T;0) ⇝ Unit^l` now carries
+/// its level, so the narrow skip that used to sit here — only this reduct,
+/// only `LevelMismatch` — is gone and the law runs unconditionally.
 #[test]
 fn type_reduction_preserves_level() {
     for seed in 0..CASES {
@@ -119,12 +115,6 @@ fn type_reduction_preserves_level() {
         for _ in 0..16 {
             let Some(next) = step_type(&cur, &env.gamma) else { break };
             let res = check_type(&env.psi, env.univs, env.layer, &env.gamma, &next, &l, FUEL);
-            let known_gap = matches!(next, Type::Unit | Type::Empty)
-                && !l.equiv(&Level::Zero)
-                && res == Err(heather_kernel::typing::TypeError::LevelMismatch);
-            if known_gap {
-                break;
-            }
             assert!(res.is_ok(), "seed {seed}: type preservation violated: {res:?}");
             cur = next;
         }

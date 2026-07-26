@@ -399,8 +399,8 @@ pub fn gen_type(sc: &Sc, r: &mut Rng, b: u32) -> Rc<Type> {
         match arm {
             0 => return Rc::new(Type::Nat),
             1 => return Rc::new(Type::Ty(gen_level(sc, r, 1))),
-            12 => return Rc::new(Type::Unit),
-            13 => return Rc::new(Type::Empty),
+            12 => return Rc::new(Type::Unit { level: Level::Zero }),
+            13 => return Rc::new(Type::Empty { level: Level::Zero }),
             14 if b > 0 => {
                 // Sum: non-dependent, both summands in the same scope.
                 return Rc::new(Type::Sum {
@@ -552,14 +552,15 @@ pub fn gen_term(sc: &Sc, r: &mut Rng, b: u32) -> Rc<Term> {
             0 if sc.local.len > 0 => return Rc::new(Term::Var(LocalVar(r.below(sc.local.len)))),
             0 | 1 => return Rc::new(Term::Zero),
             2 => return Rc::new(Term::TmNat),
-            23 => return Rc::new(Term::TmUnit),
-            24 => return Rc::new(Term::TmEmpty),
-            25 => return Rc::new(Term::Triv),
+            23 => return Rc::new(Term::TmUnit { level: Level::Zero }),
+            24 => return Rc::new(Term::TmEmpty { level: Level::Zero }),
+            25 => return Rc::new(Term::Triv { level: Level::Zero }),
             26 if b > 0 => {
                 let mut in1 = sc.clone();
                 in1.local.len += 1;
                 return Rc::new(Term::ElimEmpty {
                     level: gen_level(sc, r, 1),
+                    scrut_level: Level::Zero,
                     motive: gen_type(&in1, r, b / 2),
                     scrut: gen_term(sc, r, b / 2),
                 });
@@ -1005,7 +1006,7 @@ pub fn gen_sigma(sc: &Sc, r: &mut Rng, b: u32) -> (GlobalSubst, Sc) {
 
 pub fn count_type(t: &Type) -> u64 {
     1 + match t {
-        Type::Nat | Type::Ty(_) | Type::Unit | Type::Empty => 0,
+        Type::Nat | Type::Ty(_) | Type::Unit { .. } | Type::Empty { .. } => 0,
         Type::Pi { dom, cod, .. } => count_type(dom) + count_type(cod),
         Type::Id { ty, lhs, rhs, .. } => count_type(ty) + count_term(lhs) + count_term(rhs),
         Type::Sigma { fst, snd, .. } => count_type(fst) + count_type(snd),
@@ -1030,9 +1031,9 @@ pub fn count_term(t: &Term) -> u64 {
         | Term::TmNat
         | Term::TmTy(_)
         | Term::Zero
-        | Term::TmUnit
-        | Term::TmEmpty
-        | Term::Triv => 0,
+        | Term::TmUnit { .. }
+        | Term::TmEmpty { .. }
+        | Term::Triv { .. } => 0,
         Term::TmPi { dom, cod, .. } => count_term(dom) + count_term(cod),
         Term::TmId { ty, lhs, rhs, .. } => {
             count_term(ty) + count_term(lhs) + count_term(rhs)

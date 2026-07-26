@@ -151,7 +151,7 @@ shape.
 Mirroring how [[wf-former]] was run: each phase leaves the tree green, and a
 layer-`c` gate holds the line between 1 and 2.
 
-**Phase 1 — types, terms, codes, reduction.** Level fields on `Type::Unit`,
+**Phase 1 — types, terms, codes, reduction. ✅ done.** Level fields on `Type::Unit`,
 `Type::Empty`, `Term::TmUnit`, `Term::TmEmpty`, `Term::Triv`; `scrut_level` on
 `Term::ElimEmpty`. Through `term.rs`, `subst.rs`, `reduce.rs` (including
 `Vec^l(T;0) ⇝ Unit^l` — **the bug closes here**), `typing.rs`, `conv.rs`,

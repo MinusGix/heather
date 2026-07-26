@@ -72,8 +72,8 @@ fn two() -> Type {
     Type::Sum {
         lhs_level: c(0),
         rhs_level: c(0),
-        lhs: rty(Type::Unit),
-        rhs: rty(Type::Unit),
+        lhs: rty(Type::Unit { level: Level::Zero }),
+        rhs: rty(Type::Unit { level: Level::Zero }),
     }
 }
 
@@ -83,16 +83,16 @@ fn inj(right: bool, val: Term) -> Term {
         Term::Inr {
             lhs_level: c(0),
             rhs_level: c(0),
-            lhs: rty(Type::Unit),
-            rhs: rty(Type::Unit),
+            lhs: rty(Type::Unit { level: Level::Zero }),
+            rhs: rty(Type::Unit { level: Level::Zero }),
             val: rt(val),
         }
     } else {
         Term::Inl {
             lhs_level: c(0),
             rhs_level: c(0),
-            lhs: rty(Type::Unit),
-            rhs: rty(Type::Unit),
+            lhs: rty(Type::Unit { level: Level::Zero }),
+            rhs: rty(Type::Unit { level: Level::Zero }),
             val: rt(val),
         }
     }
@@ -106,8 +106,8 @@ fn arity_of(scrut: Term) -> Term {
         lhs_level: c(0),
         rhs_level: c(0),
         motive_level: c(0),
-        lhs: rty(Type::Unit),
-        rhs: rty(Type::Unit),
+        lhs: rty(Type::Unit { level: Level::Zero }),
+        rhs: rty(Type::Unit { level: Level::Zero }),
         motive: rty(Type::Nat),
         case_l: rt(Term::Zero),
         case_r: rt(nat(2)),
@@ -131,7 +131,7 @@ fn supf(label: Term, children: Term) -> Term {
 }
 
 fn leaf() -> Term {
-    supf(inj(false, Term::Triv), Term::Triv)
+    supf(inj(false, Term::Triv { level: Level::Zero }), Term::Triv { level: Level::Zero })
 }
 
 /// The canonical children tuple `(l, (r, ⟨⟩)) : Vec(Tree; 2)`.
@@ -148,13 +148,13 @@ fn pair2(l: Term, r: Term) -> Term {
             fst_ty: rty(tree()),
             snd_ty: rty(Type::Vec { level: c(0), elem: rty(tree()), len: rt(nat(0)) }),
             fst: rt(r),
-            snd: rt(Term::Triv),
+            snd: rt(Term::Triv { level: Level::Zero }),
         }),
     }
 }
 
 fn node(l: Term, r: Term) -> Term {
-    supf(inj(true, Term::Triv), pair2(l, r))
+    supf(inj(true, Term::Triv { level: Level::Zero }), pair2(l, r))
 }
 
 fn vec_tree(len: Term) -> Type {
@@ -175,30 +175,30 @@ fn idx(one: bool) -> Term {
     let inner = Type::Sum {
         lhs_level: c(0),
         rhs_level: c(0),
-        lhs: rty(Type::Unit),
-        rhs: rty(Type::Empty),
+        lhs: rty(Type::Unit { level: Level::Zero }),
+        rhs: rty(Type::Empty { level: Level::Zero }),
     };
     if one {
         Term::Inr {
             lhs_level: c(0),
             rhs_level: c(0),
-            lhs: rty(Type::Unit),
+            lhs: rty(Type::Unit { level: Level::Zero }),
             rhs: rty(inner),
             val: rt(Term::Inl {
                 lhs_level: c(0),
                 rhs_level: c(0),
-                lhs: rty(Type::Unit),
-                rhs: rty(Type::Empty),
-                val: rt(Term::Triv),
+                lhs: rty(Type::Unit { level: Level::Zero }),
+                rhs: rty(Type::Empty { level: Level::Zero }),
+                val: rt(Term::Triv { level: Level::Zero }),
             }),
         }
     } else {
         Term::Inl {
             lhs_level: c(0),
             rhs_level: c(0),
-            lhs: rty(Type::Unit),
+            lhs: rty(Type::Unit { level: Level::Zero }),
             rhs: rty(inner),
-            val: rt(Term::Triv),
+            val: rt(Term::Triv { level: Level::Zero }),
         }
     }
 }
@@ -304,8 +304,8 @@ fn mirror(scrut: Term) -> Term {
         lhs_level: c(0),
         rhs_level: c(0),
         motive_level: c(0),
-        lhs: rty(Type::Unit),
-        rhs: rty(Type::Unit),
+        lhs: rty(Type::Unit { level: Level::Zero }),
+        rhs: rty(Type::Unit { level: Level::Zero }),
         motive: rty(cmot),
         case_l: rt(arm_l),
         case_r: rt(arm_r),
@@ -460,7 +460,7 @@ fn sigma_eta_bridges_the_constructor_form() {
     // cs)` is convertible with the concrete `node (nth 2 cs 0) (nth 2 cs 1)`.
     // Route A's analogue of this equation is what needs funext, per arm,
     // forever (`crates/elab/tests/branching_route_a.rs`).
-    let g = ext(&ext(&nil_ctx(), Type::Unit, c(0)), vec_tree(nat(2)), c(0));
+    let g = ext(&ext(&nil_ctx(), Type::Unit { level: Level::Zero }, c(0)), vec_tree(nat(2)), c(0));
     let abstract_node = supf(inj(true, v(1)), v(0));
     let concrete = node(nth_tree(nat(2), v(0), idx(false)), nth_tree(nat(2), v(0), idx(true)));
     ck(&g, &abstract_node, &tree(), c(0));
@@ -468,7 +468,7 @@ fn sigma_eta_bridges_the_constructor_form() {
 
     // Arity 0 is proof-irrelevant, so *every* nullary constructor form is
     // the same leaf — no funext, no transport, and no `Empty`-η needed.
-    let g0 = ext(&ext(&nil_ctx(), Type::Unit, c(0)), vec_tree(nat(0)), c(0));
+    let g0 = ext(&ext(&nil_ctx(), Type::Unit { level: Level::Zero }, c(0)), vec_tree(nat(0)), c(0));
     conv(&g0, &supf(inj(false, v(1)), v(0)), &leaf(), &tree(), c(0));
 }
 
@@ -649,8 +649,8 @@ fn mirror_mirror(leaf_arm: Term) -> Term {
         lhs_level: c(0),
         rhs_level: c(0),
         motive_level: c(0),
-        lhs: rty(Type::Unit),
-        rhs: rty(Type::Unit),
+        lhs: rty(Type::Unit { level: Level::Zero }),
+        rhs: rty(Type::Unit { level: Level::Zero }),
         motive: rty(cmot),
         case_l: rt(arm_l),
         case_r: rt(arm_r),

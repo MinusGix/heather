@@ -70,13 +70,24 @@ pub enum Type {
         fst: Rc<Type>,
         snd: Rc<Type>,
     },
-    /// `Unit` — the unit type. A single inhabitant `⟨⟩` ([`Term::Triv`]) with
-    /// definitional η (proof irrelevance), so no eliminator. Lives at level 0.
-    /// Extension beyond DeLaM ch. 04 (see issues/kernel-v1-extensions.md).
-    Unit,
-    /// `Empty` — the empty type; no inhabitants, eliminated by
-    /// [`Term::ElimEmpty`]. Lives at level 0. Extension beyond DeLaM ch. 04.
-    Empty,
+    /// `Unit^l` — the unit type at level `l`. A single inhabitant `⟨⟩^l`
+    /// ([`Term::Triv`]) with definitional η (proof irrelevance), so no
+    /// eliminator. Extension beyond DeLaM ch. 04 (see
+    /// issues/kernel-v1-extensions.md).
+    ///
+    /// **Level-indexed, not level-polymorphic** — `Unit^l` and `Unit^{l'}` are
+    /// distinct types, so every type still has exactly one level. That is
+    /// load-bearing: see [`crate::typing`]'s `ty_check` and
+    /// `docs/unit-empty-level-indexing.md`.
+    Unit {
+        level: Level,
+    },
+    /// `Empty^l` — the empty type at level `l`; no inhabitants, eliminated by
+    /// [`Term::ElimEmpty`]. Extension beyond DeLaM ch. 04. Level-indexed for
+    /// the same reason as [`Type::Unit`].
+    Empty {
+        level: Level,
+    },
     /// `A +^{l,l'} B` — binary sum (coproduct); `lhs`, `rhs` are types in the
     /// ambient Γ (non-dependent — neither binds). Lives at `l ⊔ l'`.
     /// Introduced by [`Term::Inl`]/[`Term::Inr`], eliminated (dependently) by
@@ -192,12 +203,19 @@ pub enum Term {
         fst: Rc<Term>,
         snd: Rc<Term>,
     },
-    /// `Unit : Ty 0` — encoding of the unit type (decoded by
-    /// `El (Unit) ⇝ Unit`). Extension beyond DeLaM ch. 04.
-    TmUnit,
-    /// `Empty : Ty 0` — encoding of the empty type (decoded by
-    /// `El (Empty) ⇝ Empty`). Extension beyond DeLaM ch. 04.
-    TmEmpty,
+    /// `Unit^l : Ty l` — encoding of the unit type (decoded by
+    /// `El^l (Unit^l) ⇝ Unit^l`). Extension beyond DeLaM ch. 04.
+    ///
+    /// Carries its level for the same reason [`Term::TmTy`] does: the code is
+    /// a *term*, and its type `Ty l` must be determined by it.
+    TmUnit {
+        level: Level,
+    },
+    /// `Empty^l : Ty l` — encoding of the empty type (decoded by
+    /// `El^l (Empty^l) ⇝ Empty^l`). Extension beyond DeLaM ch. 04.
+    TmEmpty {
+        level: Level,
+    },
     /// `s +^{l,l'} t : Ty (l ⊔ l')` where `s : Ty l`, `t : Ty l'` — encoding
     /// of the binary sum (decoded by `El (s + t) ⇝ El s + El t`). Extension
     /// beyond DeLaM ch. 04.
@@ -308,16 +326,29 @@ pub enum Term {
     },
 
     // ---- unit and empty (extension beyond DeLaM ch. 04) ----
-    /// `⟨⟩ : Unit` — the unique inhabitant of `Unit`. By η every term of
-    /// `Unit` type is convertible to it (proof irrelevance), so `Unit` has no
-    /// eliminator.
-    Triv,
-    /// `elim_Empty^l (x. M; t) : M[t/x]` — absurdity elimination; `motive`
-    /// binds one local variable (`x : Empty`), `scrut : Empty`. No β rule
-    /// (`Empty` has no constructors); neutral on a neutral scrutinee. Annotated
-    /// like `elim_Nat` so it infers.
+    /// `⟨⟩^l : Unit^l` — the unique inhabitant of `Unit^l`. By η every term of
+    /// `Unit^l` type is convertible to it (proof irrelevance), so `Unit` has
+    /// no eliminator.
+    ///
+    /// **The level annotation is not redundant**, even though it is always
+    /// recoverable from the expected type. Without it `⟨⟩` inhabits `Unit^l`
+    /// for *every* `l`, and a term with many types is exactly what ch. 04
+    /// §Non-cumulativity says the code eliminator cannot survive — the
+    /// failure that sank route (b) in `docs/unit-empty-level-indexing.md` §6.1.
+    Triv {
+        level: Level,
+    },
+    /// `elim_Empty^{l, l'} (x. M; t) : M[t/x]` — absurdity elimination;
+    /// `motive` binds one local variable (`x : Empty^{l'} @ l'`),
+    /// `scrut : Empty^{l'}`. No β rule (`Empty` has no constructors); neutral
+    /// on a neutral scrutinee. Annotated like `elim_Nat` so it infers.
+    ///
+    /// `level` is the *motive's*; `scrut_level` is the scrutinee's `Empty`
+    /// level. The two are independent — this is the one variant that carries
+    /// a second level rather than a first.
     ElimEmpty {
         level: Level,
+        scrut_level: Level,
         motive: Rc<Type>,
         scrut: Rc<Term>,
     },
@@ -938,6 +969,8 @@ pub fn nth(level: &Level, elem: &Rc<Type>, len: &Rc<Term>, cs: Rc<Term>, idx: Rc
             dom: Rc::new(Type::Fin { len: Rc::new(Term::Zero) }),
             body: Rc::new(Term::ElimEmpty {
                 level: level.clone(),
+                // `Fin(0) ⇝ Empty^0` — `Fin` is declared at level 0.
+                scrut_level: Level::Zero,
                 motive: Rc::new(elem.shift_local(3)),
                 scrut: var(0),
             }),
@@ -993,7 +1026,8 @@ pub fn nth(level: &Level, elem: &Rc<Type>, len: &Rc<Term>, cs: Rc<Term>, idx: Rc
                 lhs_level: Level::Zero,
                 rhs_level: Level::Zero,
                 motive_level: level.clone(),
-                lhs: Rc::new(Type::Unit),
+                // `Fin(S k) ⇝ Unit^0 +^{0,0} Fin(k)`.
+                lhs: Rc::new(Type::Unit { level: Level::Zero }),
                 rhs: Rc::new(Type::Fin { len: var(3) }),
                 motive: Rc::new(elem.shift_local(5)),
                 case_l: Rc::new(fst_cs),

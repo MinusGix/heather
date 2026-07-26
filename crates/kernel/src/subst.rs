@@ -189,8 +189,8 @@ fn map_type<M: Mapper>(t: &Type, m: &mut M, at: Depths) -> Type {
             fst: sub_ty(fst, m, at),
             snd: sub_ty(snd, m, at + dep(0, 0, 1)),
         },
-        Type::Unit => Type::Unit,
-        Type::Empty => Type::Empty,
+        Type::Unit { level } => Type::Unit { level: m.level(level, at) },
+        Type::Empty { level } => Type::Empty { level: m.level(level, at) },
         Type::Sum { lhs_level, rhs_level, lhs, rhs } => Type::Sum {
             lhs_level: m.level(lhs_level, at),
             rhs_level: m.level(rhs_level, at),
@@ -266,8 +266,8 @@ fn map_term<M: Mapper>(t: &Term, m: &mut M, at: Depths) -> Term {
             fst: sub_tm(fst, m, at),
             snd: sub_tm(snd, m, at + dep(0, 0, 1)),
         },
-        Term::TmUnit => Term::TmUnit,
-        Term::TmEmpty => Term::TmEmpty,
+        Term::TmUnit { level } => Term::TmUnit { level: m.level(level, at) },
+        Term::TmEmpty { level } => Term::TmEmpty { level: m.level(level, at) },
         Term::TmSum { lhs_level, rhs_level, lhs, rhs } => Term::TmSum {
             lhs_level: m.level(lhs_level, at),
             rhs_level: m.level(rhs_level, at),
@@ -339,9 +339,10 @@ fn map_term<M: Mapper>(t: &Term, m: &mut M, at: Depths) -> Term {
             snd_ty: sub_ty(snd_ty, m, at + dep(0, 0, 1)),
             pair: sub_tm(pair, m, at),
         },
-        Term::Triv => Term::Triv,
-        Term::ElimEmpty { level, motive, scrut } => Term::ElimEmpty {
+        Term::Triv { level } => Term::Triv { level: m.level(level, at) },
+        Term::ElimEmpty { level, scrut_level, motive, scrut } => Term::ElimEmpty {
             level: m.level(level, at),
+            scrut_level: m.level(scrut_level, at),
             motive: sub_ty(motive, m, at + dep(0, 0, 1)),
             scrut: sub_tm(scrut, m, at),
         },

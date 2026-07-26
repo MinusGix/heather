@@ -131,7 +131,7 @@ fn conv_tm(gamma: &LocalCtx, a: &Term, b: &Term, ty: &Type, level: Level) {
 fn vec_reduces_on_a_literal_length() {
     let g = nil_ctx();
     // Vec(Nat; 0) ⇝ Unit.
-    assert_eq!(whnf(&vec(Type::Nat, nat(0)), &g), Type::Unit);
+    assert_eq!(whnf(&vec(Type::Nat, nat(0)), &g), Type::Unit { level: Level::Zero });
     // Vec(Nat; 2) ⇝ Σ(_ : Nat). Vec(Nat; 1) — one step at a time, so the
     // head is a Σ whose tail is still a `Vec`.
     let one = whnf(&vec(Type::Nat, nat(2)), &g);
@@ -144,7 +144,7 @@ fn vec_reduces_on_a_literal_length() {
     conv_ty(
         &g,
         &vec(Type::Nat, nat(2)),
-        &sigma(Type::Nat, sigma(Type::Nat, Type::Unit)),
+        &sigma(Type::Nat, sigma(Type::Nat, Type::Unit { level: Level::Zero })),
         c(0),
     );
 }
@@ -152,19 +152,19 @@ fn vec_reduces_on_a_literal_length() {
 #[test]
 fn fin_reduces_on_a_literal_length() {
     let g = nil_ctx();
-    assert_eq!(whnf(&fin(nat(0)), &g), Type::Empty);
+    assert_eq!(whnf(&fin(nat(0)), &g), Type::Empty { level: Level::Zero });
     conv_ty(
         &g,
         &fin(nat(2)),
         &Type::Sum {
             lhs_level: c(0),
             rhs_level: c(0),
-            lhs: rty(Type::Unit),
+            lhs: rty(Type::Unit { level: Level::Zero }),
             rhs: rty(Type::Sum {
                 lhs_level: c(0),
                 rhs_level: c(0),
-                lhs: rty(Type::Unit),
-                rhs: rty(Type::Empty),
+                lhs: rty(Type::Unit { level: Level::Zero }),
+                rhs: rty(Type::Empty { level: Level::Zero }),
             }),
         },
         c(0),
@@ -203,7 +203,7 @@ fn neutral_at_a_neutral_length() {
     conv_ty(&g, &fin(v(0)), &fin(v(0)), c(0));
     // Different lengths, and different elements, are distinguished.
     not_conv_ty(&g, &vk, &vec(Type::Nat, Term::Succ(rt(v(0)))), c(0));
-    not_conv_ty(&g, &vk, &vec(Type::Unit, v(0)), c(0));
+    not_conv_ty(&g, &vk, &vec(Type::Unit { level: Level::Zero }, v(0)), c(0));
     // A neutral length is not convertible with a literal one.
     not_conv_ty(&g, &vk, &vec(Type::Nat, nat(2)), c(0));
 
@@ -228,7 +228,7 @@ fn formation_and_levels() {
     ck_ty(&g, &fin(nat(3)), c(0));
     ck_ty(&g, &Type::Vec { level: c(1), elem: rty(Type::Ty(c(0))), len: rt(nat(2)) }, c(1));
     // The length must be a Nat.
-    let bad = Type::Vec { level: c(0), elem: rty(Type::Nat), len: rt(Term::Triv) };
+    let bad = Type::Vec { level: c(0), elem: rty(Type::Nat), len: rt(Term::Triv { level: Level::Zero }) };
     check_type(&GlobalCtx::default(), 0, Layer::Prog, &g, &bad, &c(0), FUEL)
         .expect_err("a non-Nat length must be rejected");
     // A length may be open, and may mention the context.
@@ -237,33 +237,22 @@ fn formation_and_levels() {
     ck_ty(&g1, &fin(v(0)), c(0));
 }
 
-/// **Known gap**, pinned so it cannot change silently:
-/// `Vec^l(T; 0) ⇝ Unit` drops the level, so type-level preservation
-/// (DeLaM ch. 06, Lemma *Preservation*: `⊢ T @ l` and `T ⇝ T'` imply
-/// `⊢ T' @ l`) fails for every `l ≠ 0`.
+/// `Vec^l(T; 0) ⇝ Unit^l` **keeps its level** — DeLaM ch. 06's Preservation
+/// lemma (`06:264`), at the same `l`, for the reduction that used to break it.
 ///
-/// `Vec` is the kernel's first type former whose whnf is chosen by a *term*.
-/// `El` is chosen by a term too but cannot drop a level, because its term is
-/// a code that carries one; `Vec`'s length is a bare `Nat`, and at `0` the
-/// reduct `Unit` has nothing to do with `l`.
-///
-/// The obvious repair — letting `Unit`/`Empty` check at any level — was tried
-/// and **reverted**: it gives `box Unit` a type at every level, and DeLaM
-/// ch. 04 §Non-cumulativity makes unique types load-bearing for the code
-/// eliminator (`rec.rs`'s `ty_unit` binds no universe and reconstructs at
-/// `ℓ := 0`, so the recursor's `M[code_level/ℓ]` and the branch's `M[0/ℓ]`
-/// come apart). Three candidate fixes and the full evidence are in
-/// `issues/unit-level-and-vec-preservation.md`.
+/// This was `vec_at_zero_drops_its_level_known_gap`, which pinned the defect
+/// so it could not close silently. Route (a) closed it
+/// (`docs/unit-empty-level-indexing.md`), so the pin becomes its positive.
 #[test]
-fn vec_at_zero_drops_its_level_known_gap() {
+fn vec_at_zero_keeps_its_level() {
     let g = nil_ctx();
     let big = Type::Vec { level: c(1), elem: rty(Type::Ty(c(0))), len: rt(Term::Zero) };
     ck_ty(&g, &big, c(1));
-    assert_eq!(whnf(&big, &g), Type::Unit);
-    // The reduct is *not* well-formed at the level it was declared at.
-    check_type(&GlobalCtx::default(), 0, Layer::Prog, &g, &Type::Unit, &c(1), FUEL)
-        .expect_err("Unit is level-polymorphic again — see the issue before celebrating");
-    // …and the gap is observable where the level is actually consumed.
+    // The reduct is `Unit^1`, not `Unit^0`…
+    assert_eq!(whnf(&big, &g), Type::Unit { level: c(1) });
+    ck_ty(&g, &whnf(&big, &g), c(1));
+    // …so a well-formed Π stays well-formed across the step, which is the
+    // shape the lemma is actually consumed in.
     let pi = |dom: Type| Type::Pi {
         dom_level: c(1),
         cod_level: c(0),
@@ -271,15 +260,33 @@ fn vec_at_zero_drops_its_level_known_gap() {
         cod: rty(Type::Nat),
     };
     ck_ty(&g, &pi(big.clone()), c(1));
-    check_type(&GlobalCtx::default(), 0, Layer::Prog, &g, &pi(whnf(&big, &g)), &c(1), FUEL)
-        .expect_err("the reduct of a well-formed Π is well-formed — gap closed?");
-    // Successor lengths preserve the level on the nose, so the nullary case
-    // is the *only* one at issue…
+    ck_ty(&g, &pi(whnf(&big, &g)), c(1));
+    // Successor lengths preserved it all along…
     let big1 = Type::Vec { level: c(1), elem: rty(Type::Ty(c(0))), len: rt(nat(1)) };
     ck_ty(&g, &whnf(&big1, &g), c(1));
     // …and `Fin` is unaffected: declared at 0, both reducts land at 0.
     ck_ty(&g, &whnf(&fin(Term::Zero), &g), c(0));
     ck_ty(&g, &whnf(&fin(nat(1)), &g), c(0));
+}
+
+/// The functional hole the level drop left, closed. `Vec^l(child; 0)` is the
+/// children type of a **nullary constructor** of a `Wf` whose shape sits at
+/// level `l`, so before route (a) `Leaf` could not be built for any
+/// polymorphic branching inductive: `Triv : Vec^1(Ty 0;0) @ 1` was a
+/// `LevelMismatch`, and it only checked at the *wrong* level 0.
+#[test]
+fn the_nullary_arm_is_inhabited_at_its_own_level() {
+    let g = nil_ctx();
+    let psi = GlobalCtx::default();
+    let children = Type::Vec { level: c(1), elem: rty(Type::Ty(c(0))), len: rt(Term::Zero) };
+    ck_ty(&g, &children, c(1));
+    ck(&g, &Term::Triv { level: c(1) }, &children, c(1));
+    // And the annotation is not decoration: the *wrong* level is rejected,
+    // which is what keeps `⟨⟩` from having many types.
+    check_term(&psi, 0, Layer::Prog, &g, &Term::Triv { level: Level::Zero }, &children, &c(1), FUEL)
+        .expect_err("⟨⟩^0 must not inhabit Vec^1(_;0)");
+    check_term(&psi, 0, Layer::Prog, &g, &Term::Triv { level: c(1) }, &Type::Unit { level: Level::Zero }, &Level::Zero, FUEL)
+        .expect_err("⟨⟩^1 must not inhabit Unit^0");
 }
 
 /// The invariant the repair must not break: **each type has one level**, so
@@ -293,8 +300,8 @@ fn every_type_has_exactly_one_level() {
     let ck_at = |t: &Type, l: Level| check_type(&psi, 0, Layer::Prog, &g, t, &l, FUEL);
 
     for (name, t) in [
-        ("Unit", Type::Unit),
-        ("Empty", Type::Empty),
+        ("Unit", Type::Unit { level: Level::Zero }),
+        ("Empty", Type::Empty { level: Level::Zero }),
         ("Nat", Type::Nat),
         ("Fin 2", fin(nat(2))),
         ("Vec^0(Nat;0)", Type::Vec { level: c(0), elem: rty(Type::Nat), len: rt(Term::Zero) }),
@@ -303,7 +310,7 @@ fn every_type_has_exactly_one_level() {
         ck_at(&t, c(1)).expect_err(&format!("{name} must NOT also check at 1"));
     }
     // And the box that reads off that level stays single-typed.
-    let bu = Term::BoxTy(rty(Type::Unit));
+    let bu = Term::BoxTy(rty(Type::Unit { level: Level::Zero }));
     let code_at = |l: Level| Type::CodeTy { ctx: nil_ctx(), level: l };
     check_term(&psi, 0, Layer::Meta, &g, &bu, &code_at(c(0)), &c(0), FUEL)
         .expect("box Unit : □(· ⊢ Ty 0)");
@@ -339,7 +346,7 @@ fn tuples_inhabit_vec_and_compare_componentwise() {
             Type::Nat,
             vec(Type::Nat, nat(1)),
             nat(a),
-            pair(Type::Nat, vec(Type::Nat, nat(0)), nat(b), Term::Triv),
+            pair(Type::Nat, vec(Type::Nat, nat(0)), nat(b), Term::Triv { level: Level::Zero }),
         )
     };
     ck(&g, &tup(1, 2), &ty, c(0));
@@ -355,9 +362,9 @@ fn arity_zero_is_proof_irrelevant() {
     // inherited from Unit rather than stated anew.
     let g = ext(&nil_ctx(), vec(Type::Nat, nat(0)), c(0));
     let ty = vec(Type::Nat, nat(0));
-    ck(&g, &Term::Triv, &ty, c(0));
+    ck(&g, &Term::Triv { level: Level::Zero }, &ty, c(0));
     // A variable of the type and `⟨⟩` are convertible.
-    conv_tm(&g, &v(0), &Term::Triv, &ty, c(0));
+    conv_tm(&g, &v(0), &Term::Triv { level: Level::Zero }, &ty, c(0));
 }
 
 #[test]
@@ -397,7 +404,7 @@ fn sigma_eta_reaches_through_vec() {
         Type::Nat,
         tail_ty,
         fst,
-        pair(Type::Nat, vec(Type::Nat, nat(0)), snd_fst, Term::Triv),
+        pair(Type::Nat, vec(Type::Nat, nat(0)), snd_fst, Term::Triv { level: Level::Zero }),
     );
     ck(&g, &repacked, &ty, c(0));
     conv_tm(&g, &v(0), &repacked, &ty, c(0));
@@ -411,27 +418,27 @@ fn fin_indices_are_the_sum_injections() {
     let inner = Type::Sum {
         lhs_level: c(0),
         rhs_level: c(0),
-        lhs: rty(Type::Unit),
-        rhs: rty(Type::Empty),
+        lhs: rty(Type::Unit { level: Level::Zero }),
+        rhs: rty(Type::Empty { level: Level::Zero }),
     };
     let i0 = Term::Inl {
         lhs_level: c(0),
         rhs_level: c(0),
-        lhs: rty(Type::Unit),
+        lhs: rty(Type::Unit { level: Level::Zero }),
         rhs: rty(inner.clone()),
-        val: rt(Term::Triv),
+        val: rt(Term::Triv { level: Level::Zero }),
     };
     let i1 = Term::Inr {
         lhs_level: c(0),
         rhs_level: c(0),
-        lhs: rty(Type::Unit),
+        lhs: rty(Type::Unit { level: Level::Zero }),
         rhs: rty(inner),
         val: rt(Term::Inl {
             lhs_level: c(0),
             rhs_level: c(0),
-            lhs: rty(Type::Unit),
-            rhs: rty(Type::Empty),
-            val: rt(Term::Triv),
+            lhs: rty(Type::Unit { level: Level::Zero }),
+            rhs: rty(Type::Empty { level: Level::Zero }),
+            val: rt(Term::Triv { level: Level::Zero }),
         }),
     };
     ck(&g, &i0, &fin(nat(2)), c(0));
@@ -440,7 +447,8 @@ fn fin_indices_are_the_sum_injections() {
         .expect_err("distinct indices must be distinguishable");
     // `Fin(0)` is `Empty`: it eliminates into anything.
     let g1 = ext(&nil_ctx(), fin(nat(0)), c(0));
-    let absurd = Term::ElimEmpty { level: c(0), motive: rty(Type::Nat), scrut: rt(v(0)) };
+    let absurd = Term::ElimEmpty { level: c(0),
+            scrut_level: Level::Zero, motive: rty(Type::Nat), scrut: rt(v(0)) };
     ck(&g1, &absurd, &Type::Nat, c(0));
 }
 
@@ -454,7 +462,7 @@ fn substitution_reaches_the_length() {
     let inst = open.apply_local(
         &heather_kernel::term::LocalSubst::id(&nil_ctx()).extended(rt(nat(2))),
     );
-    conv_ty(&nil_ctx(), &inst, &sigma(Type::Nat, sigma(Type::Nat, Type::Unit)), c(0));
+    conv_ty(&nil_ctx(), &inst, &sigma(Type::Nat, sigma(Type::Nat, Type::Unit { level: Level::Zero })), c(0));
     // …and weakening keeps it stuck at the shifted variable.
     let _ = g;
     let shifted = open.shift_local(1);

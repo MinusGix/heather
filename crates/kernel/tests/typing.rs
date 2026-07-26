@@ -770,19 +770,20 @@ fn identity_branches() -> Rc<Branches> {
             pair: rt(gtm(0, &g3)),
         }))),
         // box Unit / box Empty (the types)
-        ty_unit: rt(Term::BoxTy(rty(Type::Unit))),
-        ty_empty: rt(Term::BoxTy(rty(Type::Empty))),
+        ty_unit: rt(Term::BoxTy(rty(Type::Unit { level: Level::Zero }))),
+        ty_empty: rt(Term::BoxTy(rty(Type::Empty { level: Level::Zero }))),
         // box Unit / box Empty (the encodings), box ⟨⟩
-        tm_unit: rt(Term::BoxTm(rt(Term::TmUnit))),
-        tm_empty: rt(Term::BoxTm(rt(Term::TmEmpty))),
-        tm_triv: rt(Term::BoxTm(rt(Term::Triv))),
+        tm_unit: rt(Term::BoxTm(rt(Term::TmUnit { level: Level::Zero }))),
+        tm_empty: rt(Term::BoxTm(rt(Term::TmEmpty { level: Level::Zero }))),
+        tm_triv: rt(Term::BoxTm(rt(Term::Triv { level: Level::Zero }))),
         // box (elim_Empty^ℓ (x. U_M^id; u_t^id)) — telescope g = 2, U_M = 1,
         // u_t = 0.
         tm_elim_empty: {
-            let gx_empty = ext(&g2, Type::Empty, Level::Zero);
+            let gx_empty = ext(&g2, Type::Empty { level: Level::Zero }, Level::Zero);
             let u_m_e = Type::GlobalTy { var: GlobalVar(1), subst: LocalSubst::id(&gx_empty) };
             rt(Term::BoxTm(rt(Term::ElimEmpty {
                 level: lv(0),
+            scrut_level: Level::Zero,
                 motive: rty(u_m_e),
                 scrut: rt(gtm(0, &g2)),
             })))
@@ -1335,38 +1336,90 @@ fn pair_projections_and_dependency() {
 // Unit and Empty (extension beyond ch. 04; kernel-v1-extensions)
 // -------------------------------------------------------------------------
 
+/// `Unit^l`/`Empty^l`/`⟨⟩^l` are level-indexed at layers `p`/`m`, and the
+/// **phase-1 layer-`c` gate** (`docs/unit-empty-level-indexing.md` §4) pins
+/// code to level 0 until phase 2 reshapes the four branch telescopes.
+///
+/// Delete the `Layer::Code` half of this when the gate goes; the `Layer::Prog`
+/// half is permanent.
+#[test]
+fn unit_empty_are_level_indexed_and_code_is_gated() {
+    let psi = GlobalCtx::default();
+    let g = nil_ctx();
+    let infer_at = |layer, t: &Type| infer_type(&psi, 0, layer, &g, t, FUEL);
+
+    // At p, each carries and reports its own level — that is the whole route.
+    for l in [Level::Zero, c(1), c(2)] {
+        for t in [Type::Unit { level: l.clone() }, Type::Empty { level: l.clone() }] {
+            assert!(infer_at(Layer::Prog, &t).unwrap().equiv(&l), "{t:?} must be at {l:?}");
+            // …and at no other level, which is uniqueness of types.
+            assert_eq!(
+                check_type(&psi, 0, Layer::Prog, &g, &t, &Level::succ(l.clone()), FUEL).unwrap_err(),
+                TypeError::LevelMismatch,
+            );
+        }
+        // ⟨⟩^l : Unit^l @ l — the annotation is load-bearing, not decoration.
+        let (ty, li) = infer_term(&psi, 0, Layer::Prog, &g, &Term::Triv { level: l.clone() }, FUEL).unwrap();
+        assert!(ty == Type::Unit { level: l.clone() } && li.equiv(&l));
+        // The encodings agree with the types about which levels exist:
+        // Unit^l : Ty l, so `El` and `Unit` cannot drift apart.
+        let (ty, li) = infer_term(&psi, 0, Layer::Prog, &g, &Term::TmUnit { level: l.clone() }, FUEL).unwrap();
+        assert!(ty == Type::Ty(l.clone()) && li.equiv(&Level::succ(l.clone())));
+    }
+
+    // PHASE-1 GATE: layer c stays at level 0, so the unreshaped branch
+    // telescopes cannot receive a level they have nowhere to put.
+    for l in [c(1), c(2)] {
+        for t in [Type::Unit { level: l.clone() }, Type::Empty { level: l.clone() }] {
+            assert_eq!(
+                check_type(&psi, 0, Layer::Code, &g, &t, &l, FUEL).unwrap_err(),
+                TypeError::LayerMismatch,
+                "phase-1 gate must reject {t:?} at layer c",
+            );
+        }
+        assert_eq!(
+            infer_term(&psi, 0, Layer::Code, &g, &Term::Triv { level: l.clone() }, FUEL).unwrap_err(),
+            TypeError::LayerMismatch,
+        );
+    }
+    // Level 0 is unaffected at c — everything that used to work still does.
+    check_type(&psi, 0, Layer::Code, &g, &Type::Unit { level: Level::Zero }, &Level::Zero, FUEL).unwrap();
+    check_term(&psi, 0, Layer::Code, &g, &Term::Triv { level: Level::Zero }, &Type::Unit { level: Level::Zero }, &Level::Zero, FUEL).unwrap();
+}
+
 #[test]
 fn unit_formation_intro_and_encoding() {
     let psi = GlobalCtx::default();
     // Unit @ 0, and its encoding «Unit» : Ty 0 @ 1.
-    assert!(infer_type(&psi, 0, Layer::Prog, &nil_ctx(), &Type::Unit, FUEL)
+    assert!(infer_type(&psi, 0, Layer::Prog, &nil_ctx(), &Type::Unit { level: Level::Zero }, FUEL)
         .unwrap()
         .equiv(&Level::Zero));
-    let (ty, l) = infer_closed(Layer::Prog, &Term::TmUnit).unwrap();
+    let (ty, l) = infer_closed(Layer::Prog, &Term::TmUnit { level: Level::Zero }).unwrap();
     assert!(ty == Type::Ty(Level::Zero) && l.equiv(&c(1)));
     // ⟨⟩ : Unit @ 0, and it checks against the El-decode of the encoding.
-    let (ty, l) = infer_closed(Layer::Prog, &Term::Triv).unwrap();
-    assert!(ty == Type::Unit && l.equiv(&Level::Zero));
-    let el_unit = Type::El { level: Level::Zero, tm: rt(Term::TmUnit) };
-    check_closed(Layer::Prog, &Term::Triv, &el_unit, &Level::Zero).unwrap();
+    let (ty, l) = infer_closed(Layer::Prog, &Term::Triv { level: Level::Zero }).unwrap();
+    assert!(ty == Type::Unit { level: Level::Zero } && l.equiv(&Level::Zero));
+    let el_unit = Type::El { level: Level::Zero, tm: rt(Term::TmUnit { level: Level::Zero }) };
+    check_closed(Layer::Prog, &Term::Triv { level: Level::Zero }, &el_unit, &Level::Zero).unwrap();
     // Layer v admits neither the intro nor the encoding.
-    assert_eq!(infer_closed(Layer::Var, &Term::Triv).unwrap_err(), TypeError::LayerMismatch);
-    assert_eq!(infer_closed(Layer::Var, &Term::TmUnit).unwrap_err(), TypeError::LayerMismatch);
+    assert_eq!(infer_closed(Layer::Var, &Term::Triv { level: Level::Zero }).unwrap_err(), TypeError::LayerMismatch);
+    assert_eq!(infer_closed(Layer::Var, &Term::TmUnit { level: Level::Zero }).unwrap_err(), TypeError::LayerMismatch);
 }
 
 #[test]
 fn empty_formation_encoding_and_elimination() {
     let psi = GlobalCtx::default();
-    assert!(infer_type(&psi, 0, Layer::Prog, &nil_ctx(), &Type::Empty, FUEL)
+    assert!(infer_type(&psi, 0, Layer::Prog, &nil_ctx(), &Type::Empty { level: Level::Zero }, FUEL)
         .unwrap()
         .equiv(&Level::Zero));
-    let (ty, l) = infer_closed(Layer::Prog, &Term::TmEmpty).unwrap();
+    let (ty, l) = infer_closed(Layer::Prog, &Term::TmEmpty { level: Level::Zero }).unwrap();
     assert!(ty == Type::Ty(Level::Zero) && l.equiv(&c(1)));
     // elim_Empty^0 (x. Nat; e) : Nat @ 0 under `e : Empty`. Check in a context
     // with one Empty-typed variable so the scrutinee is a (neutral) variable.
-    let gamma = ext(&nil_ctx(), Type::Empty, Level::Zero);
+    let gamma = ext(&nil_ctx(), Type::Empty { level: Level::Zero }, Level::Zero);
     let elim = Term::ElimEmpty {
         level: Level::Zero,
+            scrut_level: Level::Zero,
         motive: rty(Type::Nat),
         scrut: rt(v(0)),
     };
@@ -1377,6 +1430,7 @@ fn empty_formation_encoding_and_elimination() {
     // convertible to Nat via the motive at the scrutinee.
     let dep = Term::ElimEmpty {
         level: Level::Zero,
+            scrut_level: Level::Zero,
         motive: rty(Type::El { level: Level::Zero, tm: rt(Term::TmNat) }),
         scrut: rt(v(0)),
     };
@@ -1387,6 +1441,7 @@ fn empty_formation_encoding_and_elimination() {
     // A non-Empty scrutinee is rejected.
     let bad = Term::ElimEmpty {
         level: Level::Zero,
+            scrut_level: Level::Zero,
         motive: rty(Type::Nat),
         scrut: rt(Term::Zero),
     };
@@ -1556,7 +1611,7 @@ fn w_formation_intro_encoding_and_elim() {
         shape_level: Level::Zero,
         pos_level: Level::Zero,
         shape: rt(Term::TmNat),
-        pos: rt(Term::TmEmpty),
+        pos: rt(Term::TmEmpty { level: Level::Zero }),
     };
     let (ty, l) = infer_closed(Layer::Prog, &tm_w).unwrap();
     let Type::Ty(tl) = &ty else { panic!("encoding should infer a universe") };
@@ -1566,14 +1621,15 @@ fn w_formation_intro_encoding_and_elim() {
         shape_level: Level::Zero,
         pos_level: Level::Zero,
         shape: rty(Type::Nat),
-        pos: rty(Type::Empty),
+        pos: rty(Type::Empty { level: Level::Zero }),
     };
     let no_children = Term::Lam {
         dom_level: Level::Zero,
         cod_level: Level::Zero,
-        dom: rty(Type::Empty),
+        dom: rty(Type::Empty { level: Level::Zero }),
         body: rt(Term::ElimEmpty {
             level: Level::Zero,
+            scrut_level: Level::Zero,
             motive: rty(w.clone()),
             scrut: rt(v(0)),
         }),
@@ -1582,7 +1638,7 @@ fn w_formation_intro_encoding_and_elim() {
         shape_level: Level::Zero,
         pos_level: Level::Zero,
         shape_ty: rty(Type::Nat),
-        pos_ty: rty(Type::Empty),
+        pos_ty: rty(Type::Empty { level: Level::Zero }),
         label: rt(label),
         children: rt(no_children.clone()),
     };
@@ -1593,13 +1649,13 @@ fn w_formation_intro_encoding_and_elim() {
     let el_w = Type::El { level: Level::Zero, tm: rt(tm_w) };
     check_closed(Layer::Prog, &mk_sup(Term::Zero), &el_w, &Level::Zero).unwrap();
     // A label not inhabiting the shape type is rejected.
-    assert!(infer_closed(Layer::Prog, &mk_sup(Term::Triv)).is_err());
+    assert!(infer_closed(Layer::Prog, &mk_sup(Term::Triv { level: Level::Zero })).is_err());
     // A subtree function of the wrong type is rejected.
     let bad_sup = Term::Sup {
         shape_level: Level::Zero,
         pos_level: Level::Zero,
         shape_ty: rty(Type::Nat),
-        pos_ty: rty(Type::Empty),
+        pos_ty: rty(Type::Empty { level: Level::Zero }),
         label: rt(Term::Zero),
         children: rt(Term::Zero),
     };
@@ -1610,7 +1666,7 @@ fn w_formation_intro_encoding_and_elim() {
         pos_level: Level::Zero,
         motive_level: Level::Zero,
         shape: rty(Type::Nat),
-        pos: rty(Type::Empty),
+        pos: rty(Type::Empty { level: Level::Zero }),
         motive: rty(Type::Nat),
         step: rt(step),
         scrut: rt(scrut),
@@ -1627,7 +1683,7 @@ fn w_formation_intro_encoding_and_elim() {
     let ih_pi = Type::Pi {
         dom_level: Level::Zero,
         cod_level: Level::Zero,
-        dom: rty(Type::Empty),
+        dom: rty(Type::Empty { level: Level::Zero }),
         cod: rty(Type::Nat),
     };
     let use_ih = mk_elim(
@@ -1656,7 +1712,7 @@ fn w_formation_intro_encoding_and_elim() {
         pos_level: Level::Zero,
         motive_level: Level::Zero,
         shape: rty(Type::Nat),
-        pos: rty(Type::Empty),
+        pos: rty(Type::Empty { level: Level::Zero }),
         motive: rty(Type::El { level: Level::Zero, tm: rt(Term::TmNat) }),
         step: rt(Term::Zero),
         scrut: rt(v(0)),

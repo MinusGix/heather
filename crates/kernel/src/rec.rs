@@ -548,7 +548,7 @@ pub(crate) fn branch_specs(
                 (0, 1, 0),
                 Level::Zero,
                 g_ctx(0),
-                Term::BoxTy(Rc::new(Type::Unit)),
+                Term::BoxTy(Rc::new(Type::Unit { level: Level::Zero })),
                 &gt,
             )),
             level: l1.clone(),
@@ -565,7 +565,7 @@ pub(crate) fn branch_specs(
                 (0, 1, 0),
                 Level::Zero,
                 g_ctx(0),
-                Term::BoxTy(Rc::new(Type::Empty)),
+                Term::BoxTy(Rc::new(Type::Empty { level: Level::Zero })),
                 &gt,
             )),
             level: l1.clone(),
@@ -1828,7 +1828,7 @@ pub(crate) fn branch_specs(
                 Level::constant(1),
                 g_ctx(0),
                 Type::Ty(Level::Zero),
-                Term::BoxTm(Rc::new(Term::TmUnit)),
+                Term::BoxTm(Rc::new(Term::TmUnit { level: Level::Zero })),
                 &gt,
             )),
             level: l2.clone(),
@@ -1847,7 +1847,7 @@ pub(crate) fn branch_specs(
                 Level::constant(1),
                 g_ctx(0),
                 Type::Ty(Level::Zero),
-                Term::BoxTm(Rc::new(Term::TmEmpty)),
+                Term::BoxTm(Rc::new(Term::TmEmpty { level: Level::Zero })),
                 &gt,
             )),
             level: l2.clone(),
@@ -1865,8 +1865,8 @@ pub(crate) fn branch_specs(
                 (0, 1, 0),
                 Level::Zero,
                 g_ctx(0),
-                Type::Unit,
-                Term::BoxTm(Rc::new(Term::Triv)),
+                Type::Unit { level: Level::Zero },
+                Term::BoxTm(Rc::new(Term::Triv { level: Level::Zero })),
                 &gt,
             )),
             level: l2.clone(),
@@ -1880,7 +1880,7 @@ pub(crate) fn branch_specs(
     let tm_elim_empty = {
         let gt = gt(1, 3);
         // telescope view: g = 2, U_M = 1, u_t = 0
-        let gx = ext_ctx(&g_ctx(2), Type::Empty, Level::Zero);
+        let gx = ext_ctx(&g_ctx(2), Type::Empty { level: Level::Zero }, Level::Zero);
         let motive_code = Type::GlobalTy { var: GlobalVar(1), subst: LocalSubst::id(&gx) };
         let x_m = inst_ty_motive(
             m_ty,
@@ -1895,12 +1895,16 @@ pub(crate) fn branch_specs(
             (1, 3, 1),
             lvar(0),
             g_ctx(2),
-            Type::Empty,
+            Type::Empty { level: Level::Zero },
             Term::BoxTm(Rc::new(gtm(0, &g_ctx(2)))),
             &gt,
         );
         let code = Term::ElimEmpty {
             level: lvar(0),
+            // PHASE 1 (docs/unit-empty-level-indexing.md): the layer-c gate
+            // pins code to level 0, so the branch still binds one universe.
+            // Phase 2 binds two and this becomes `lvar(1)`.
+            scrut_level: Level::Zero,
             motive: Rc::new(motive_code),
             scrut: Rc::new(gtm(0, &g_ctx(2))),
         };
@@ -1914,14 +1918,14 @@ pub(crate) fn branch_specs(
                 globals: vec![
                     GlobalBinding::Ctx,
                     GlobalBinding::Ty {
-                        ctx: ext_ctx(&g_ctx(0), Type::Empty, Level::Zero),
+                        ctx: ext_ctx(&g_ctx(0), Type::Empty { level: Level::Zero }, Level::Zero),
                         layer: Layer::Code,
                         level: lvar(0),
                     },
                     GlobalBinding::Tm {
                         ctx: g_ctx(1),
                         layer: Layer::Code,
-                        ty: Rc::new(Type::Empty),
+                        ty: Rc::new(Type::Empty { level: Level::Zero }),
                         level: Level::Zero,
                     },
                 ],

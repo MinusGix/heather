@@ -356,6 +356,26 @@ impl Tc {
 
     /// Reject everything at layer v except the forms listed in ch. 04's
     /// "Note on Layer v Rules".
+    /// **Phase-1 gate of `docs/unit-empty-level-indexing.md`.** `Unit^l` /
+    /// `Empty^l` / `⟨⟩^l` for `l ≠ 0` are rejected at layer `c` until phase 2
+    /// reshapes `ty_unit`, `ty_empty`, `tm_triv` and `tm_elim_empty` to bind
+    /// their universe. Without the gate, boxed code could carry a level the
+    /// branch telescopes cannot receive, and `fire` would instantiate a
+    /// motive at the wrong level — the same failure mode as the reverted
+    /// phase-4 fix in [[unit-level-and-vec-preservation]].
+    ///
+    /// Everything at layers `p`/`m` is already level-indexed, so the defect
+    /// this route closes (`Vec^l(T;0) ⇝ Unit^l`) is fixed as of phase 1; only
+    /// *code* is restricted.
+    ///
+    /// Delete this, and its four call sites, in phase 2.
+    fn code_level_gate(&self, env: &Env, level: &Level) -> R {
+        if env.layer == Layer::Code && !level.equiv(&Level::Zero) {
+            return Err(TypeError::LayerMismatch);
+        }
+        Ok(())
+    }
+
     fn not_var_layer(&self, env: &Env) -> R {
         if env.layer == Layer::Var { Err(TypeError::LayerMismatch) } else { Ok(()) }
     }
@@ -492,11 +512,18 @@ impl Tc {
                 self.ty_check(&e, snd, snd_level)?;
                 Ok(Level::max(fst_level.clone(), snd_level.clone()))
             }
-            // Unit/Empty-formation (extension beyond ch. 04): ⊢_i Unit @ 0,
-            // ⊢_i Empty @ 0. Fixed at 0, *not* level-polymorphic — see
-            // `ty_check`. `Vec^l(T;0) ⇝ Unit` therefore breaks type-level
-            // preservation for l ≠ 0 (issues/unit-level-and-vec-preservation).
-            Type::Unit | Type::Empty => Ok(Level::Zero),
+            // Unit/Empty-formation (extension beyond ch. 04):
+            // ⊢_i Unit^l @ l, ⊢_i Empty^l @ l.
+            //
+            // **Level-indexed, not level-polymorphic.** `Unit^l` and
+            // `Unit^{l'}` are distinct types, so a type still determines its
+            // level and `ty_check` needs no special case — see its doc
+            // comment and `docs/unit-empty-level-indexing.md`.
+            Type::Unit { level } | Type::Empty { level } => {
+                self.level_wf(env, level)?;
+                self.code_level_gate(env, level)?;
+                Ok(level.clone())
+            }
             // Sum-formation (extension beyond ch. 04; kernel-v1-extensions):
             // ⊢_i A +^{l,l'} B @ l⊔l' ⟸ ⊢_i A @ l, ⊢_i B @ l'. Non-dependent:
             // both summands live in Γ.
@@ -784,10 +811,14 @@ impl Tc {
                 let lmax = Level::max(fst_level.clone(), snd_level.clone());
                 Ok((Type::Ty(lmax.clone()), Level::succ(lmax)))
             }
-            // Encodings of Unit/Empty (extension): Unit, Empty : Ty 0.
-            Term::TmUnit | Term::TmEmpty => {
+            // Encodings of Unit/Empty (extension): Unit^l, Empty^l : Ty l.
+            // The code carries `l` for the same reason `TmTy` does — it is a
+            // *term*, so its type must be determined by it.
+            Term::TmUnit { level } | Term::TmEmpty { level } => {
                 self.not_var_layer(env)?;
-                Ok((Type::Ty(Level::Zero), Level::constant(1)))
+                self.level_wf(env, level)?;
+                self.code_level_gate(env, level)?;
+                Ok((Type::Ty(level.clone()), Level::succ(level.clone())))
             }
             // Encoding of the binary sum (extension): a +^{l,l'} b : Ty (l⊔l').
             Term::TmSum { lhs_level, rhs_level, lhs, rhs } => {
@@ -1041,18 +1072,28 @@ impl Tc {
             }
 
             // -- unit and empty (extension beyond ch. 04) -------------------
-            // ⟨⟩ : Unit @ 0.
-            Term::Triv => {
-                self.not_var_layer(env)?;
-                Ok((Type::Unit, Level::Zero))
-            }
-            // elim_Empty^l (x. M; t) : M[t/x] @ l.
-            Term::ElimEmpty { level, motive, scrut } => {
+            // ⟨⟩^l : Unit^l @ l.
+            //
+            // The level annotation is load-bearing, not decoration: without
+            // it `⟨⟩` inhabits `Unit^l` for every `l`, i.e. a *term* with many
+            // types, which ch. 04 §Non-cumulativity says the code eliminator
+            // cannot survive (`docs/unit-empty-level-indexing.md` §2.2).
+            Term::Triv { level } => {
                 self.not_var_layer(env)?;
                 self.level_wf(env, level)?;
-                let e_x = env.push_entry(Rc::new(Type::Empty), Level::Zero);
+                self.code_level_gate(env, level)?;
+                Ok((Type::Unit { level: level.clone() }, level.clone()))
+            }
+            // elim_Empty^{l,l'} (x. M; t) : M[t/x] @ l, scrutinee at Empty^{l'}.
+            Term::ElimEmpty { level, scrut_level, motive, scrut } => {
+                self.not_var_layer(env)?;
+                self.level_wf(env, level)?;
+                self.level_wf(env, scrut_level)?;
+                self.code_level_gate(env, scrut_level)?;
+                let empty = Type::Empty { level: scrut_level.clone() };
+                let e_x = env.push_entry(Rc::new(empty.clone()), scrut_level.clone());
                 self.ty_check(&e_x, motive, level)?;
-                self.tm_check(env, scrut, &Type::Empty, &Level::Zero)?;
+                self.tm_check(env, scrut, &empty, scrut_level)?;
                 Ok((
                     motive.apply_local(&LocalSubst::id(&env.gamma).extended(Rc::clone(scrut))),
                     level.clone(),
