@@ -528,6 +528,7 @@ impl Elaborator {
                 let mut acx = bcx.clone();
                 let ctor_ty = ctor_ty_here.clone();
                 let mut children = Vec::with_capacity(m);
+                let mut container_ih: Option<crate::ContainerIh> = None;
                 let (mut payload_k, mut rec_t) = (0usize, 0usize);
                 for (k, name) in arm.binders.iter().enumerate() {
                     // The container binder is the *tail* of the children
@@ -560,14 +561,28 @@ impl Elaborator {
                         acx.aliases.push(Rc::new(Alias {
                             name: name.clone(),
                             depth: acx.names.len(),
-                            term,
+                            term: Rc::clone(&term),
                             ty: Type::Vec {
                                 level: tel.level.clone(),
                                 elem: Rc::clone(&d_ty_here),
-                                len: tail_len,
+                                len: Rc::clone(&tail_len),
                             },
                             level: tel.level.clone(),
                         }));
+                        // What a self-call over this binder needs (§4.2). The
+                        // motive is strengthened here rather than at the call:
+                        // a container maps to a *vector* of results, which
+                        // only types when the result is independent of the
+                        // child (§4.3).
+                        container_ih = Some(crate::ContainerIh {
+                            term,
+                            len: tail_len,
+                            ih: Rc::new(Term::Var(LocalVar(0))),
+                            plain: m,
+                            result: crate::vec::strengthen(&tel.motive, tel.gamma0)
+                                .map(|t| t.shift_local(d_body)),
+                            mlvl: tel.mlvl.clone(),
+                        });
                         continue;
                     }
                     if ctor.kind[k] == FieldKind::Plain {
@@ -627,7 +642,11 @@ impl Elaborator {
                     .map(|dec| {
                         Rc::new(Guard {
                             dec,
-                            kind: GuardKind::Wf { depth: acx.names.len(), children },
+                            kind: GuardKind::Wf {
+                                depth: acx.names.len(),
+                                children,
+                                container: container_ih.clone(),
+                            },
                         })
                     })
                     .or_else(|| cx.guard.clone());

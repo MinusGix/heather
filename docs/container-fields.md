@@ -1,8 +1,9 @@
 # Container fields: `Rose` and the surface vector type
 
-Status: **phase 1 implemented 2026-07-26.** `crates/elab/tests/container_fields.rs`
-and `crates/elab/tests/vector_types.rs` are §8's checklist (11 tests); §9
-records what implementing it found. Written before
+Status: **phases 1 and 2 implemented 2026-07-26.** `container_fields.rs` +
+`vector_types.rs` are §8's checklist; `container_recursion.rs` is §4.2's
+(17 tests total, plus 7 kernel-level ones on the schemas in
+`crates/elab/src/vec.rs`). §9 records what implementing found. Written before
 the code, per the discipline of `docs/inductive-tier0-lowering.md` and
 `docs/inductive-tier1-wf-lowering.md`. Tracking issue:
 `issues/nested-inductives-container-fields.md`.
@@ -192,6 +193,11 @@ same encoding.
 
 ### 4.2 Phase 2 — `map`/`fold`, and the self-call over a container
 
+**Implemented 2026-07-26**, as designed below. `crates/elab/src/vec.rs` holds
+the three schemas with their own kernel-level tests; the surface forms are
+`map`/`fold` builtins in `elab_infer`, and `GuardKind::Wf` gained a
+`ContainerIh` so a self-call can find the container it belongs to.
+
 Two primitives, both `elim_Nat` on the length (the same shape as `term::nth`,
 which is already an `elim_Nat` schema):
 
@@ -264,7 +270,10 @@ Each diagnosed, never mis-lowered — the hazard class
 | a vector literal at a non-literal expected length | "a vector literal needs a literal length here; `xs` of length `n` has to come from a binder" |
 | a vector literal of the wrong length | "this vector literal has `k` elements but `m` are expected" |
 | a vector literal with no expected type | "a vector literal needs an expected type (it is checking-only, like `refl`)" |
-| `xs.map`/`xs.fold` in phase 1 | "eliminating a container is not implemented yet (docs/container-fields.md §4.2)" |
+| `xs.map(f)` on a non-vector | "`map`'s receiver has to be a vector" |
+| a self-call `xs.map(f)` where `xs` is not *the* container binder | "a recursive call over a vector has to be over the container field bound by the enclosing `match`" |
+| a self-call over a container at a **dependent** result type | "recursing over a container field needs the result type to be independent of its argument … (§4.3)" — this is the phase-3 boundary, and it is a rejection rather than a silent mis-elaboration |
+| `map`'s function at a dependent result type | "the result is a vector, whose elements all have one type" |
 | `inj` at a container field | "its type `[D; …]` depends on the length field before it, so the two sides' lengths would have to be definitionally equal" — see §9.2 |
 
 ## 7. Deliberately not in phase 1
@@ -382,3 +391,59 @@ No function in the test suite recurses into a container's children, because
 none can be written yet (§4.2). `Rose` is declarable, constructible,
 matchable and comparable; it is not yet *foldable*. The one thing phase 1
 should not be read as claiming is that `Rose` is usable for programming.
+
+## 10. What implementing phase 2 found
+
+### 10.1 The step of an `elim_Nat` schema proves `M(S k̂)`, not `M(k̂)`
+
+Both `map` and `fold` had their step's λ domain as `Vec(A; k̂)` where it must
+be `Vec(A; S k̂)` — the step *proves* `M(S k̂)`, and that is precisely what
+makes the `fst`/`snd` in its body legal, since `Vec(A; S k̂) ⇝ Σ(_ : A).
+Vec(A; k̂)`. `tabulate`, written last, had it right.
+
+Caught in seconds because the schemas were kernel-tested **before** any
+surface syntax reached them (`crates/elab/src/vec.rs`'s test module). Through
+three layers of elaboration the same bug would have surfaced as an opaque
+`NotConvertible` on a `Rose` program. The general lesson is the tier-1 one: a
+generated term wants a test at the level it is generated, not only at the
+level it is used.
+
+### 10.2 `strengthen` needs no occurrence traversal
+
+Phase 2 has to decide whether a motive depends on the scrutinee — a container
+maps to a *vector* of results, which only types when the result type is
+independent of the child (§4.3). Rather than a fourth hand-written traversal
+over the syntax, `vec::strengthen` substitutes `Zero` for the variable and
+weakens back: that round trip is the identity exactly when the variable did
+not occur, because `shift_local` moves *variables* and leaves the `Zero` that
+replaced any occurrence behind. Two existing `subst.rs` operations, no new
+code over the term grammar — which matters, because a traversal that forgets
+a former is a silent wrong answer.
+
+### 10.3 The self-call over a container is a *lifting*, and reads as one
+
+`kids.map(size)` has `size : Rose → Nat` applied to `kids : [Rose; len]`. The
+types do not line up under any ordinary rule, and they are not meant to: this
+is the induction hypothesis, which the eliminator hands over as
+`Π(i : Fin n). M` — an index function — and `tabulate` turns into data. It is
+recognized syntactically (receiver is *the* container binder, function is
+exactly the self-name) and elaborates to nothing else.
+
+The alternative, letting `size` be an ordinary value passed to a real `map`,
+cannot work and it is worth restating why: there is no fixpoint and no `rec`,
+so **the self-name is not a value**. It exists only as the eliminator's ih.
+That is `issues/match-recursion.md`'s design, not an accident here.
+
+Note the offset that a mixed constructor forces: with `m` plain children the
+ih is indexed by `Fin (Succ^m len)` and the container's indices start at `m`,
+so the index map is `m` `inr`s. `a_plain_child_and_a_container_recurse_together`
+pins it with an asymmetric tree, which is what would catch an off-by-one that
+a symmetric one cannot.
+
+### 10.4 Phase 3 remains, and is now a diagnostic rather than a silence
+
+A proof by induction over a container — `kids.map(refl_all)` at a dependent
+motive — is rejected with a message naming §4.3. That is the honest boundary:
+the ih at index `i` proves `M[kids[i]]`, and combining `n` of those into
+`M[Node …]` needs an `All`-predicate or a pointwise-equality story that has
+not been designed.

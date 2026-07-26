@@ -42,6 +42,7 @@ use heather_syntax::{
 };
 
 mod inductive;
+mod vec;
 mod wf;
 
 use inductive::Inductive;
@@ -891,6 +892,22 @@ impl Elaborator {
                     let arg = self.elab_check(cx, arg, &Type::Nat, &Level::Zero)?;
                     return Ok((Term::Succ(Rc::new(arg)), Type::Nat, Level::Zero));
                 }
+                // `xs.map(f)` / `xs.fold(z, f)` — the vector eliminators
+                // (docs/container-fields.md §4.2). The method desugaring puts
+                // the receiver last, so they arrive as `map(f, xs)` and
+                // `fold(z, f, xs)`.
+                if name == "map" && !self.shadowed(cx, name) {
+                    let [f, xs] = args.as_slice() else {
+                        return err("`map` takes `(f)` on a vector receiver", e.span);
+                    };
+                    return self.elab_vec_map(cx, f, xs, e.span);
+                }
+                if name == "fold" && !self.shadowed(cx, name) {
+                    let [z, f, xs] = args.as_slice() else {
+                        return err("`fold` takes `(init, f)` on a vector receiver", e.span);
+                    };
+                    return self.elab_vec_fold(cx, z, f, xs, e.span);
+                }
                 // `inj(p)` / `inj(k, p)`: the field equations of an equation
                 // between the same constructor (§6.2). The field index is a
                 // literal, so `p.inj(1)` reads as the second field's equation.
@@ -1216,7 +1233,7 @@ impl Elaborator {
                     matches!(arg_t, Term::Var(LocalVar(i))
                              if cx.names.len() - 1 - i as usize == *pred_pos)
                 }
-                (GuardKind::Wf { depth, children }, true) => {
+                (GuardKind::Wf { depth, children, .. }, true) => {
                     let by = (cx.names.len() - depth) as u32;
                     match children.iter().position(|(c, ..)| c.shift_local(by) == arg_t) {
                         Some(t) => {
@@ -1266,7 +1283,7 @@ impl Elaborator {
         match &g.kind {
             GuardKind::Nat { ih_pos, .. } => Ok(self.local(cx, *ih_pos)),
             // `ih' ι_t` and its type, shifted out to wherever the call sits.
-            GuardKind::Wf { depth, children } => {
+            GuardKind::Wf { depth, children, .. } => {
                 let by = (cx.names.len() - depth) as u32;
                 let (_, ih, ty, lvl) = &children[descendant];
                 Ok(((**ih).shift_local(by), ty.shift_local(by), lvl.clone()))
@@ -1392,6 +1409,185 @@ impl Elaborator {
             }
             None => Rc::new(Vec::new()),
         }
+    }
+
+    /// `xs.map(f)`. Two forms, and the split is what
+    /// `docs/container-fields.md` §4.2 is about:
+    ///
+    /// - `f` is an ordinary function: the `elim_Nat` schema `vec::map`.
+    /// - `f` is the **self-name** and `xs` the enclosing arm's container
+    ///   binder: the induction hypothesis, *tabulated* over the container's
+    ///   index range. It cannot be the first form, because the self-name is
+    ///   not a value — there is no fixpoint, and the recursive call exists
+    ///   only as the eliminator's ih (issues/match-recursion.md).
+    fn elab_vec_map(
+        &self,
+        cx: &Cx,
+        f: &Expr,
+        xs: &Expr,
+        span: Span,
+    ) -> R<(Term, Type, Level)> {
+        let (xs_t, xs_ty, _) = self.elab_infer(cx, xs)?;
+        let Type::Vec { level: al, elem: a_ty, len } = &xs_ty else {
+            return err("`map`'s receiver has to be a vector", span);
+        };
+        // The self-call form.
+        if let ExprKind::Var(name) = &f.kind
+            && cx.selfref.as_ref().is_some_and(|s| s.name == *name)
+        {
+            return self.elab_container_ih(cx, name, &xs_t, span);
+        }
+        let (f_t, f_ty, _) = self.elab_infer(cx, f)?;
+        let Type::Pi { cod_level: bl, dom, cod, .. } = self.whnf(cx, &f_ty, span)? else {
+            return err("`map`'s argument has to be a function", span);
+        };
+        let Some(b_ty) = vec::strengthen(&cod, &cx.gamma) else {
+            return err(
+                "`map`'s function must not have a dependent result type: the result \
+                 is a vector, whose elements all have one type",
+                span,
+            );
+        };
+        let _ = dom;
+        Ok((
+            vec::map(al, &bl, a_ty, &b_ty, len, Rc::new(f_t), Rc::new(xs_t)),
+            Type::Vec {
+                level: bl.clone(),
+                elem: Rc::new(b_ty),
+                len: Rc::clone(len),
+            },
+            bl,
+        ))
+    }
+
+    /// `xs.fold(init, f)` for `f : A → B → B`. A right fold: `[a, b]` folds to
+    /// `f a (f b init)`, which is the direction that computes on a
+    /// constructor form.
+    fn elab_vec_fold(
+        &self,
+        cx: &Cx,
+        z: &Expr,
+        f: &Expr,
+        xs: &Expr,
+        span: Span,
+    ) -> R<(Term, Type, Level)> {
+        let (xs_t, xs_ty, _) = self.elab_infer(cx, xs)?;
+        let Type::Vec { level: al, elem: a_ty, len } = &xs_ty else {
+            return err("`fold`'s receiver has to be a vector", span);
+        };
+        let (z_t, b_ty, bl) = self.elab_infer(cx, z)?;
+        let step_ty = Type::Pi {
+            dom_level: al.clone(),
+            cod_level: bl.clone(),
+            dom: Rc::clone(a_ty),
+            cod: Rc::new(Type::Pi {
+                dom_level: bl.clone(),
+                cod_level: bl.clone(),
+                dom: Rc::new(b_ty.shift_local(1)),
+                cod: Rc::new(b_ty.shift_local(2)),
+            }),
+        };
+        let f_t = self.elab_check(cx, f, &step_ty, &Level::max(al.clone(), bl.clone()))?;
+        Ok((
+            vec::fold(al, &bl, a_ty, &b_ty, len, Rc::new(z_t), Rc::new(f_t), Rc::new(xs_t)),
+            b_ty,
+            bl,
+        ))
+    }
+
+    /// The self-call over a container binder: `tabulate(len, λ(i : Fin len).
+    /// ih (inr^m i))` (`docs/container-fields.md` §4.2).
+    ///
+    /// The ih is indexed by `Fin (Succ^m len)` — `m` plain children first,
+    /// then the container's — so the index map is `m` `inr`s.
+    fn elab_container_ih(
+        &self,
+        cx: &Cx,
+        name: &str,
+        xs: &Term,
+        span: Span,
+    ) -> R<(Term, Type, Level)> {
+        let Some(g) = cx.guard.clone() else {
+            return err(
+                format!(
+                    "recursive call to `{name}` is not structurally guarded: it must occur \
+                     inside a `match` on one of `{name}`'s own parameters"
+                ),
+                span,
+            );
+        };
+        let GuardKind::Wf { depth, container: Some(c), .. } = &g.kind else {
+            return err(
+                format!("the enclosing `match` arm of `{name}` has no container field"),
+                span,
+            );
+        };
+        let by = (cx.names.len() - depth) as u32;
+        if c.term.shift_local(by) != *xs {
+            return err(
+                format!(
+                    "a recursive call to `{name}` over a vector has to be over the \
+                     container field bound by the enclosing `match`"
+                ),
+                span,
+            );
+        }
+        let Some(result) = &c.result else {
+            return err(
+                format!(
+                    "recursing over a container field needs `{name}`'s result type to be \
+                     independent of its argument; a dependent one (a proof *about* the \
+                     value) is not supported yet (docs/container-fields.md §4.3)"
+                ),
+                span,
+            );
+        };
+        let (result, len) = (result.shift_local(by), c.len.shift_local(by));
+        let ih = c.ih.shift_local(by);
+        let len_rc = Rc::new(len.clone());
+        // λ(i : Fin len). ih (inr^m i) — one binder deeper than everything
+        // above, hence the shifts.
+        let unit = || Rc::new(Type::Unit { level: Level::Zero });
+        let mut idx = Term::Var(LocalVar(0));
+        for j in 0..c.plain {
+            let mut inner = len.shift_local(1);
+            for _ in 0..j {
+                inner = Term::Succ(Rc::new(inner));
+            }
+            idx = Term::Inr {
+                lhs_level: Level::Zero,
+                rhs_level: Level::Zero,
+                lhs: unit(),
+                rhs: Rc::new(Type::Fin { len: Rc::new(inner) }),
+                val: Rc::new(idx),
+            };
+        }
+        let mut full = len.shift_local(1);
+        for _ in 0..c.plain {
+            full = Term::Succ(Rc::new(full));
+        }
+        let f = Term::Lam {
+            dom_level: Level::Zero,
+            cod_level: c.mlvl.clone(),
+            dom: Rc::new(Type::Fin { len: Rc::clone(&len_rc) }),
+            body: Rc::new(Term::App {
+                fun: Rc::new(ih.shift_local(1)),
+                dom_level: Level::Zero,
+                cod_level: c.mlvl.clone(),
+                dom: Rc::new(Type::Fin { len: Rc::new(full) }),
+                cod: Rc::new(result.shift_local(2)),
+                arg: Rc::new(idx),
+            }),
+        };
+        Ok((
+            vec::tabulate(&c.mlvl, &result, &len_rc, Rc::new(f)),
+            Type::Vec {
+                level: c.mlvl.clone(),
+                elem: Rc::new(result),
+                len: len_rc,
+            },
+            c.mlvl.clone(),
+        ))
     }
 
     /// `[a, b, c]` at an expected `Vec^l(T; k)`: the Σ-chain that `Vec`
@@ -1788,7 +1984,35 @@ enum GuardKind {
     Wf {
         depth: usize,
         children: Vec<(Rc<Term>, Rc<Term>, Type, Level)>,
+        /// The arm's *container* field, if it has one
+        /// (`docs/container-fields.md` §4.2). A container is a group of
+        /// children rather than one, so a self-call over it maps rather than
+        /// descends — and the thing it maps to is the ih *tabulated* over the
+        /// container's index range.
+        container: Option<ContainerIh>,
     },
+}
+
+/// What a self-call over a container binder needs, gathered at the arm and
+/// scoped like the rest of [`GuardKind::Wf`], at `depth` binders.
+#[derive(Clone)]
+struct ContainerIh {
+    /// The container binder's own term (`snd^m cs`), matched against the
+    /// call's elaborated argument exactly as a plain child's term is.
+    term: Rc<Term>,
+    /// Its length.
+    len: Rc<Term>,
+    /// The ih function `Π(i : Fin (Succ^m len)). M`, as a term.
+    ih: Rc<Term>,
+    /// `m`: how many plain children precede the container, and so how far the
+    /// container's indices are offset inside `Fin (Succ^m len)`.
+    plain: usize,
+    /// The motive, *strengthened* — a self-call over a container is phase 2,
+    /// which requires a motive independent of the scrutinee
+    /// (`docs/container-fields.md` §4.3). `None` when it depends, so the call
+    /// is diagnosed rather than mis-elaborated.
+    result: Option<Type>,
+    mlvl: Level,
 }
 
 /// Elaboration context: kernel Γ plus the parallel name list
