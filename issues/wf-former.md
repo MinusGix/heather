@@ -24,6 +24,59 @@ implementation is checked against). **Decision record:**
 | 4 | ch. 07 logical relations | **done** — `docs/metatheory-ch07-extensions.md` part II. **Abort criterion not triggered.** One kernel defect found, split out as [[unit-level-and-vec-preservation]] — **closed**, route (a) |
 | 5 | generator round (one regime) | **next** — closes [[tier1-branching-constructors]]; **may go polymorphic** |
 
+## Phase 5: what to do (resume from zero)
+
+**Deliverable.** The *elaborator* round: lower a branching tier-1 inductive
+declaration onto the `Wf` former — constructors, the recursor, no-confusion —
+so that [[tier1-branching-constructors]] closes and
+[[stress-proof-suite]] item 2 (the List/tree acceptance suite) is reachable.
+Phases 1–4 were the kernel; nothing further is needed there.
+
+**Build on.** `crates/elab/src/inductive.rs` (tier 0, landed) is the lowering
+machinery; `crates/elab/tests/branching_route_c_nary.rs` is the validated
+*shape* of the generated interface, built against postulates. The kernel side
+it now targets is real: `Type::Wf`, `Term::Supf`, `Term::ElimWf`, plus
+`term::wf_step_telescope`, which the generator should call rather than
+re-transcribe (`typing.rs`, `conv.rs`, `rec.rs` and `reduce.rs` already share
+that one copy deliberately).
+
+**Four things already settled that change the work:**
+
+- **The generated recursor is simpler than the prototype suggests.** The
+  motive is an ordinary `Type` binding `z` — no `Ty`-code round trip. The
+  postulate prototypes needed codes because their eliminator was a term with
+  a `Ty`-valued motive; a real former does not.
+- **It may go polymorphic.** The level constraint is gone as of route (a)
+  ([[unit-level-and-vec-preservation]]); `wf.rs::polymorphic_shape` is a
+  worked level-1 `Wf` to copy from. A polymorphic container in the acceptance
+  suite is now a free choice rather than a blocker.
+- **`Rose`-style nesting falls out of arity-as-a-term.** `Rose { Node(A,
+  List Rose) }` is `Wf` with `S = Σ(a : A). Nat` and `n = snd x` — the child
+  list *is* the `Vec`, its length is data in the shape. Worth exercising.
+- **`Empty`-η is not needed for the nullary arm.** Arity 0 is
+  `Vec^l(T;0) ⇝ Unit^l`, and proof irrelevance already collapses every
+  nullary constructor form, including the `u : Unit` payload in the tag.
+
+**Acceptance.** `Tree { Leaf, Node(Tree, Tree) }` declared at the *surface*
+and `mirror (mirror t) = t` proved through the generated recursor, matching
+what `crates/kernel/tests/wf.rs` does by hand. Then `Rose`.
+
+**Hazards, from the kernel phases:**
+
+- Hand-built test terms trip on de Bruijn depth — `App`'s `cod` binds its
+  argument, so it sits one level deeper than the ambient. Both kernel
+  acceptance tests failed first on exactly that, in the test rather than the
+  kernel.
+- **Do not add a recursor branch casually.** Telescope arities are
+  transcribed in *six* places: `rec.rs`, `reduce.rs`'s `fire`,
+  `subst.rs::map_branches`, `BRANCH_DIMS`, and the two `identity_branches`
+  fixtures (`common/wt.rs` and `tests/typing.rs`). Phase 2 of route (a)
+  learned this the expensive way; `map_branches` is the one that fails
+  loudly (an index past `phi` panics in `Level::subst_at`), the rest fail as
+  type errors on *unrelated* code, because `G_A` checks the whole bundle.
+- If a generated recursor is checked over deeply nested code, note that
+  `scripts/test` sets `RUST_MIN_STACK=8M` for exactly that reason.
+
 **The falsifier is spent and the decision is final.** Route A is no longer a
 live fallback; `crates/elab/tests/branching_route_a.rs` stays only as the
 costed record of what was not taken. Do not reopen
