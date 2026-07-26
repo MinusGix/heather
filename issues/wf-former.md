@@ -21,15 +21,15 @@ implementation is checked against). **Decision record:**
 | 1 | `Vec` + `Fin` formers | **done** — commit `f538141`, `crates/kernel/tests/vec_fin.rs` (12) |
 | 2 | `Wf` / `sup_f` / `elim_Wf` | **done** — commit `2ddd20b`, `crates/kernel/tests/wf.rs` (12) |
 | 3 | codes + `rec.rs` branches; lifts the layer-c gate | **done** — commit `1c43729`, `crates/kernel/tests/wf_codes.rs` (8) |
-| 4 | ch. 07 logical relations | **done** — `docs/metatheory-ch07-extensions.md` part II. **Abort criterion not triggered.** One kernel defect found, split out as [[unit-level-and-vec-preservation]] (open) |
-| 5 | generator round (one regime) | **next** — closes [[tier1-branching-constructors]] |
+| 4 | ch. 07 logical relations | **done** — `docs/metatheory-ch07-extensions.md` part II. **Abort criterion not triggered.** One kernel defect found, split out as [[unit-level-and-vec-preservation]] — **closed**, route (a) |
+| 5 | generator round (one regime) | **next** — closes [[tier1-branching-constructors]]; **may go polymorphic** |
 
 **The falsifier is spent and the decision is final.** Route A is no longer a
 live fallback; `crates/elab/tests/branching_route_a.rs` stays only as the
 costed record of what was not taken. Do not reopen
 [[branching-inductives-decision]] without new evidence of a *different* kind.
 
-Full suite is at **322 passing**. Run it with `scripts/test` (never bare
+Full suite is at **331 passing**. Run it with `scripts/test` (never bare
 `cargo test` — see CLAUDE.md); note that `scripts/test` now sets
 `RUST_MIN_STACK=8M`, because checking the `tm_elim_wf` branch of a
 45-branch recursor recurses deeper than the 2 MiB default test-thread
