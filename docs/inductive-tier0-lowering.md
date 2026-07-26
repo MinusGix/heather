@@ -396,7 +396,14 @@ comparing them with kernel conversion — and reports the limitation rather
 than emitting an ill-typed term. Field 0 of such a constructor is still
 injective; only the dependent field is out of reach. Recovering it wants
 either the code-valued family above (with its level restriction) or a
-transport along the earlier field's equation; neither is needed yet.
+transport along the earlier field's equation.
+
+*Update 2026-07-26.* This restriction now has a second instance — a
+**container field**'s type `[D; len]` depends on the length field before it
+(`docs/container-fields.md` §9.2), and unlike a dependent payload field that
+is the *normal* case rather than an unusual one. Tracked for a shared fix as
+`issues/dependent-field-injectivity.md`, which also records why the transport
+route raises a design question (`inj` would state a heterogeneous equation).
 
 ### 6.3 What is emitted, and when
 

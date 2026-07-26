@@ -354,6 +354,15 @@ payload field whose type depends on an earlier one, and it should be lifted
 the same way and at the same time — so it is diagnosed here rather than
 special-cased. Disjointness (`absurd`) is unaffected and works.
 
+Tracked as `issues/dependent-field-injectivity.md`, filed *because* of this
+second instance: one restriction with two instances wants a shared fix, and
+the issue records the wrinkle that makes it a design question rather than a
+patch — the transport route makes `inj` state a **heterogeneous** equation
+(`kids_a = transport(…, kids_b)`), and whether that is the API we want has
+not been decided. Note the container case is the more likely one to be hit:
+a dependent payload field is unusual, a container field is dependent by
+construction.
+
 ### 9.3 Two smaller corrections
 
 - **`read_ctor`'s payload walk was `fields.len() - arity()`.** With three
