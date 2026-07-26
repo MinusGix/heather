@@ -61,14 +61,16 @@ neutral result types. Fully annotated (like `App`) so they infer. The code
 recursors gain five branches (`ty_sigma`, `tm_sigma`, `tm_pair`, `tm_fst`,
 `tm_snd`; 22 total).
 
-Third extension: **Unit and Empty** — the two degenerate finite types.
-`Unit` with encoding `Unit : Ty 0` (decoded by `El (Unit) ⇝ Unit`) and the
-single intro `⟨⟩` (`Term::Triv`); **no eliminator** — instead `Unit` carries
-definitional **η (proof irrelevance)**: a `Type::Unit` arm in `tm_nf` accepts
-*any* two terms at `Unit` type, exactly mirroring the Σ-η choice (type-
-directed, no new neutral head). `Empty` with encoding `Empty : Ty 0`
-(`El (Empty) ⇝ Empty`), no intro, and a dependent eliminator
-`elim_Empty^l(x. M; t) : M[t/x]` modeled on `elim_Nat` minus the base/step
+Third extension: **Unit and Empty** — the two degenerate finite types,
+**level-indexed**: `Unit^l : Type @ l` with encoding `Unit^l : Ty l` (decoded
+by `El^l (Unit^l) ⇝ Unit^l`) and the single intro `⟨⟩^l` (`Term::Triv`);
+**no eliminator** — instead `Unit^l` carries definitional **η (proof
+irrelevance)**: a `Type::Unit` arm in `tm_nf` accepts *any* two terms at
+`Unit^l` type, exactly mirroring the Σ-η choice (type-directed, no new
+neutral head). `Empty^l` with encoding `Empty^l : Ty l`
+(`El^l (Empty^l) ⇝ Empty^l`), no intro, and a dependent eliminator
+`elim_Empty^{l,l'}(x. M; t) : M[t/x]` (two levels: the motive's and the
+scrutinee's `Empty`) modeled on `elim_Nat` minus the base/step
 branches: no β rule (no constructors), always neutral on a neutral
 scrutinee, fully annotated so it infers. The code recursors gain six
 branches (`ty_unit`, `ty_empty`, `tm_unit`, `tm_empty`, `tm_triv`,
@@ -113,8 +115,8 @@ bindings (the step's `f` and `ih` binders), the deepest binding-type
 construction yet.
 
 `Vec^l(T; k)` and `Fin(k)` (2026-07-25) are index-computing wrappers, not
-new definitional power: `Vec(T;0) ⇝ Unit`, `Vec(T;S k) ⇝ Σ(_:T). Vec(T;k)`,
-`Fin(0) ⇝ Empty`, `Fin(S k) ⇝ Unit + Fin(k)`, each **neutral at a neutral
+new definitional power: `Vec^l(T;0) ⇝ Unit^l`, `Vec^l(T;S k) ⇝ Σ(_:T). Vec^l(T;k)`,
+`Fin(0) ⇝ Empty^0`, `Fin(S k) ⇝ Unit^0 + Fin(k)`, each **neutral at a neutral
 length** and carrying no introduction/elimination forms of its own — every
 η they appear to have (componentwise comparison, proof irrelevance at
 length 0) is inherited through the reduction from `Σ`/`Unit`. The length is

@@ -259,6 +259,15 @@ impl Elaborator {
             parts.push(self.lower_ctor(cx, ind, i, args, span)?);
         }
         let Some((last, last_lvl)) = parts.pop() else {
+            // A declaration with no constructors lowers to `Empty` (§3.3).
+            //
+            // **This is where the level-0 assumption enters.** `Unit`/`Empty`
+            // are level-indexed (docs/unit-empty-level-indexing.md), but tier
+            // 0 monomorphises type parameters, so every encoding this module
+            // builds lives at level 0 and there is no `l` here to derive one
+            // from — `parts` is empty. A polymorphic declaration would take
+            // its level from the declaration head, and this is the site that
+            // changes first.
             return Ok((Type::Empty { level: Level::Zero }, Level::Zero));
         };
         let mut acc = last;
@@ -448,9 +457,15 @@ impl Elaborator {
     ) -> R<Term> {
         let head = self.whnf(cx, ctor_ty, span)?;
         let Type::Sigma { fst_level, snd_level, fst, snd } = head else {
-            // The Unit terminator (§3.1): every field consumed.
-            if matches!(head, Type::Unit { level: Level::Zero }) && args.is_empty() {
-                return Ok(Term::Triv { level: Level::Zero });
+            // The Unit terminator (§3.1): every field consumed. `Unit` is
+            // level-indexed (docs/unit-empty-level-indexing.md), so match at
+            // *any* level and take the inhabitant's level from the type —
+            // matching on `Unit^0` would silently stop terminating records
+            // once a declaration lives above level 0.
+            if let Type::Unit { level } = &head
+                && args.is_empty()
+            {
+                return Ok(Term::Triv { level: level.clone() });
             }
             return err("internal: malformed constructor encoding", span);
         };
@@ -528,7 +543,10 @@ impl Elaborator {
             }
             return Ok(Term::ElimEmpty {
                 level: mlvl,
-            scrut_level: Level::Zero,
+                // The scrutinee's `Empty` is the one `lower_data` built, so
+                // its level is the declaration's — read it off the scrutinee
+                // rather than repeating the constant.
+                scrut_level: scrut_lvl.clone(),
                 motive: Rc::new(motive),
                 scrut: Rc::new(scrut),
             });
@@ -996,7 +1014,8 @@ impl Elaborator {
             rhs,
             proof: Rc::new(proof),
         };
-        // …and `El⁰ (tag_i rhs) ⇝ Empty`, so this eliminates into anything.
+        // …and `El⁰ (tag_i rhs) ⇝ Empty^0`, so this eliminates into anything.
+        // The scrutinee's level is the `El`'s, which is 0 just above.
         Ok(Term::ElimEmpty {
             level: expected_lvl.clone(),
             scrut_level: Level::Zero,

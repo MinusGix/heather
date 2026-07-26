@@ -95,14 +95,12 @@ fails for every `l ≠ 0`. Full write-up and measurements:
 level-indexed `Unit^l`/`Empty^l`** — rules and phases in
 `docs/unit-empty-level-indexing.md`.
 
-**It bites phase 5 only if phase 5 goes polymorphic.** `Vec^l(child; 0)` is
-the children type of a nullary constructor, so for a `Wf` whose shape sits at
-level `l > 0` the `Leaf` arm is `Vec^l(…; 0)` and, measured,
-`Triv : Vec^1(Ty 0;0) @ 1` is a `LevelMismatch` — `Leaf` cannot be built at
-all. A monomorphic shape is a sum of records at level 0 and is unaffected,
-which is exactly why this hid through four phases. **Sequencing: monomorphic
-phase 5 can go first; a polymorphic container in the acceptance suite wants
-route (a) landed first.**
+**CLOSED 2026-07-25** by route (a), level-indexed `Unit^l`/`Empty^l`
+(`docs/unit-empty-level-indexing.md`, four phases). The sequencing constraint
+it imposed on phase 5 is **gone**: `Vec^l(child; 0) ⇝ Unit^l` keeps its level,
+so a polymorphic container's nullary constructor builds. The end-to-end
+acceptance test is `wf.rs::polymorphic_shape` — a real `Wf` at level 1 whose
+`Node` carries a type payload. **Phase 5 may go polymorphic.**
 
 Two things from it worth carrying here:
 

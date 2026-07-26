@@ -76,7 +76,8 @@ all, so it is strictly *simpler* than `Nat` — no IH inside `NfEqSum`.
 
 **Layering restriction.** No contravariant premise; a direct induction.
 
-`Empty` is the degenerate positive: type rule with no component premises,
+`Empty` is the degenerate positive (and **level-indexed** as of §10.3, so read
+`Empty^l`): type rule with no component premises,
 term relation = "both whnf are generically equivalent neutrals" (no
 constructor case, matching `conv.rs`'s `Type::Empty => tm_nee`).
 `elim_Empty`'s arm is the neutral case alone. Worth recording as a *gain*:
@@ -140,10 +141,15 @@ the term-level question.
 
 ## 4. `Unit` — η as proof irrelevance
 
+> **Level note (2026-07-25).** `Unit`/`Empty` are now **level-indexed**,
+> `Unit^l : Type @ l` — see §10.3. Read every `Unit` below as `Unit^l` with
+> the level carried; nothing in this section's argument depended on it being
+> `0`, and both rules stay premise-free base cases.
+
 `Unit` has no eliminator; η is definitional and total (`conv.rs`:
 `Type::Unit => Ok(())`).
 
-**LR case.** Type rule: both sides reduce to `Unit`. Term relation: `t ~ t'`
+**LR case.** Type rule: both sides reduce to `Unit^l`. Term relation: `t ~ t'`
 iff both are well-typed at `Unit` — no whnf condition, no case analysis.
 This is the standard irrelevant-unit LR.
 
@@ -444,8 +450,8 @@ whnf exactly when their length is stuck (`reduce.rs:1791`, keyed through
 `is_neutral_term(len)`), and there they are **neutral** types
 (`reduce.rs:1778`). Therefore:
 
-- **canonical length** — `Vec^l(T;0) ⇝ Unit`, `Vec^l(T;su k) ⇝ Σ^{l,l}(_:T).
-  Vec^l(T;k)`, `Fin(0) ⇝ Empty`, `Fin(su k) ⇝ Unit +^{0,0} Fin(k)`. The
+- **canonical length** — `Vec^l(T;0) ⇝ Unit^l`, `Vec^l(T;su k) ⇝ Σ^{l,l}(_:T).
+  Vec^l(T;k)`, `Fin(0) ⇝ Empty^0`, `Fin(su k) ⇝ Unit^0 +^{0,0} Fin(k)`. The
   reduction is absorbed by the `⇝*` premise and the existing `Unit`, `Σ`,
   `Empty`, `+` rules apply unchanged. Weak-head expansion (07,
   §sec:dt:logrel-prop) is what carries this: the LR is closed under
@@ -530,55 +536,61 @@ not optional bookkeeping — ch. 07's auxiliary judgment `\ttypreds i T W l`
 is *defined* as `⊢ T @ l` together with `T ⇝* W`, so every type rule of the
 LR carries `l` across the reduction and reads the whnf at that same `l`.
 
-**Status: open, and the obvious fix is wrong.** Tracked in
-`issues/unit-level-and-vec-preservation.md`, which carries the measurements
-and three candidate repairs. The short version, because it changes what this
-section can claim:
+**Status: CLOSED, 2026-07-25, and the obvious fix really was wrong.** The
+route taken, its rules and the costed record of what was not taken:
+`docs/unit-empty-level-indexing.md`. Tracked in
+`issues/unit-level-and-vec-preservation.md`.
 
-Making `Unit`/`Empty` level-polymorphic in formation repairs preservation in
-one line, and was landed and then reverted in the same session. DeLaM ch. 04
-§Non-cumulativity makes **unique types load-bearing for the code
-eliminator** — "we must specify in each case how do we construct the original
-code from its components; therefore, it is the most convenient, when each
-term has a unique type". `box T : □(Δ ⊢ Ty l)` is checking-only and checks
-`T` at `l`, so a type that checks at many levels is a *term* with many types.
-Measured: with the polymorphic version in place, `box Unit` inhabits
-`CodeTy(l)` for every `l` (`box Nat` correctly does not), and
-`elim_CodeTy(code_level = 1; box Unit)` typechecks while firing into the
-`ty_unit` branch, which `rec.rs` builds with `univs: 0` and instantiates at
-`ℓ := 0` — so the redex is typed at `M[1/ℓ]` and the reduct verified at
-`M[0/ℓ]`. Preservation moves from `Vec` to the code recursor, which is the
-worse place for it to be. (`ty_ty` binds a universe precisely because `Ty ℓ`
-varies; that is the shape a correct fix has to take.)
+The wrong fix, kept because it is the instructive part: making `Unit`/`Empty`
+level-**polymorphic** in formation repairs preservation in one line, and was
+landed and then reverted in the same session. DeLaM ch. 04 §Non-cumulativity
+makes **unique types load-bearing for the code eliminator** — "we must specify
+in each case how do we construct the original code from its components;
+therefore, it is the most convenient, when each term has a unique type".
+`box T : □(Δ ⊢ Ty l)` is checking-only and checks `T` at `l`, so a type that
+checks at many levels is a *term* with many types. Measured: with the
+polymorphic version in place, `box Unit` inhabits `CodeTy(l)` for every `l`
+(`box Nat` correctly does not), and `elim_CodeTy(code_level = 1; box Unit)`
+typechecks while firing into the `ty_unit` branch, which `rec.rs` built with
+`univs: 0` and instantiated at `ℓ := 0` — so the redex is typed at `M[1/ℓ]`
+and the reduct verified at `M[0/ℓ]`. Preservation moves from `Vec` to the code
+recursor, which is the worse place for it to be.
 
-The favoured repair is **level-indexed** `Unit^l`/`Empty^l` — parameterized,
-not polymorphic, as non-cumulative systems do it — which keeps uniqueness on
-the nose and turns `ty_unit`/`ty_empty` into copies of `ty_ty`. It is a
-phase-3-sized round, not a patch.
+The fix that landed is **level-indexed** `Unit^l`/`Empty^l` — parameterized,
+not polymorphic, as non-cumulative systems do it. `Vec^l(T;0) ⇝ Unit^l`,
+uniqueness of types is preserved on the nose, and `ty_unit`/`ty_empty` became
+copies of `ty_ty`, which binds a universe precisely because `Ty ℓ`'s level
+varies. It also closed a **functional hole** that the level drop had left and
+that this section did not originally notice: `Vec^l(child;0)` is the children
+type of a *nullary constructor* of a `Wf` whose shape sits at level `l`, and
+`Triv : Vec^1(Ty 0;0) @ 1` was a `LevelMismatch` — so `Leaf` could not be
+built for any polymorphic branching inductive. `wf.rs::polymorphic_shape` is
+the end-to-end acceptance test.
 
 What this section can still claim unconditionally:
 
-- **`Fin` is unaffected.** Declared at `0`, both reducts (`Empty`,
-  `Unit +^{0,0} Fin k`) land at `0`. The asymmetry is real and is why `Vec`,
+- **`Fin` is unaffected.** Declared at `0`, both reducts (`Empty^0`,
+  `Unit^0 +^{0,0} Fin k`) land at `0`. The asymmetry is real and is why `Vec`,
   not `Fin`, exposed this.
 - **The successor case is exact.** `Vec^l(T;su k) ⇝ Σ^{l,l}(…)` at `l ⊔ l`.
-  The nullary case is the only one at issue.
-- **Nothing large enters a small universe.** `Vec` only ever over-declares,
-  so this is a broken lemma rather than a soundness hole — the same character
-  as the recursor breakage above, and equally not a reason to leave either.
+  The nullary case was the only one at issue.
+- **Nothing large ever entered a small universe.** `Vec` only ever
+  over-declared, so this was a broken lemma rather than a soundness hole.
 
-**Consequence for §§11–17 below: none.** The `Wf` case does not go through
-`Vec`'s nullary reduct — `NfEqWf`'s spine bottoms out in the `Unit` clause at
-whatever level the repair settles on, and the abort criterion turns on the
-*shape* of the recursion, not on `Unit`'s level. The verdict in §17 stands
-either way.
+**Consequence for §§11–17 below: none**, as predicted. The `Wf` case does not
+go through `Vec`'s nullary reduct — `NfEqWf`'s spine bottoms out in the `Unit`
+clause at whatever level the repair settled on, and the abort criterion turns
+on the *shape* of the recursion. The verdict in §17 stands.
 
-**Consequence for the `Unit`/`Empty` LR rules: deferred.** Under the
-level-indexed repair they become indexed rules (`T ⇝* Unit^l` ⟹
-`T ~ T' @ l`), which is cleaner than either the current level-0 rule or the
-polymorphic one. Both remain premise-free base cases, so the well-founded
-recursion on universe levels never descends through them and every property
-lemma at `Unit`/`Empty` stays vacuous (§2, §4).
+**Consequence for the `Unit`/`Empty` LR rules: they are level-indexed**, which
+is what §4 and §2 should now be read as saying. The type rule is
+`T ⇝* Unit^l`, `T' ⇝* Unit^l` ⟹ `T ~ T' @ l`, and likewise for `Empty^l` —
+cleaner than either the old level-0 rule or the polymorphic one, because the
+level is *carried* rather than quantified. Both remain premise-free base
+cases, so the well-founded recursion on universe levels never descends
+through them and every property lemma at `Unit`/`Empty` stays vacuous
+(§2, §4). Nothing in §§2–4's arguments depends on the level being `0`; they
+were written before the indexing and survive it unchanged.
 
 ### 10.4 The deeper finding: a missing property, not a missing case
 
@@ -592,8 +604,20 @@ and nothing looked at them.
 `type_reduction_preserves_level` now exists and fails on **seed 102**, first
 run, no tuning. The general lesson is worth more than the bug: *half of a
 stated lemma leaves a blind spot shaped exactly like its other half.*
-Determinacy and the substitution lemmas of ch. 05/06 are the next candidates
-for the same treatment.
+
+**Swept**: `docs/ch05-06-lemma-audit.md` — all 53 lemmas of ch. 05/06, each
+with a verdict. It found the same shape twice more (the *type* half of ch. 06
+Soundness, `06:148`, one lemma earlier in the same chapter; and the suite's
+own generator-soundness oracle running on a single 300-case stream), plus a
+kernel defect at ch. 05's Static Code (`05:1055`) where boxed code was
+compared without the level quotient the lemma takes.
+
+And the lesson generalized once more during the repair: the well-typed
+generator produced **no `Unit`/`Empty` at all**, so the level-indexing round
+would have been covered only by hand-built tests. It is not enough for the
+observer to exist — the *witness* has to be generated, and that now has its
+own assertion
+(`vec_fin::the_well_typed_generator_reaches_unit_at_a_nonzero_level`).
 
 ---
 

@@ -941,16 +941,19 @@ impl Elaborator {
             return self
                 .elab_match_data(cx, &ind, arms, scrut_t, &head, scrut_lvl, motive, mlvl, span);
         }
-        if matches!(head, Type::Empty { level: Level::Zero }) {
+        if let Type::Empty { level: empty_lvl } = &head {
             // An inductive with no constructors: absurdity elimination. All of
             // them share the kernel type `Empty` (§3.3), and none has an
             // inhabitant to confuse, so no tag is needed to dispatch.
+            //
+            // `Empty` is level-indexed, so the scrutinee's level comes off the
+            // *type* and is independent of the motive's `mlvl`.
             if !arms.is_empty() {
                 return err("this type has no constructors, so `match` takes no arms", span);
             }
             return Ok(Term::ElimEmpty {
                 level: mlvl,
-            scrut_level: Level::Zero,
+                scrut_level: empty_lvl.clone(),
                 motive: Rc::new(motive),
                 scrut: Rc::new(scrut_t),
             });

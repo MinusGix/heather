@@ -212,12 +212,26 @@ Adding that coverage immediately found two things, which is the point:
   `local_substitution_preserves_typing`, same as `conv_properties` does for
   reduction.
 
-**Phase 4 — catch-up.** Elaborator: tier-0's nominal tag is Σ-of-Units, so
-generated tags carry an inferred level. Docs:
-`docs/metatheory-ch07-extensions.md` §10.3 (the LR case becomes level-indexed,
-which is *simpler* than the level-polymorphic clause it currently describes),
-`crates/kernel/DESIGN.md`, `docs/wf-former-design.md` §1.1 (delete the "level
-defect, **open**" note).
+**Phase 4 — catch-up. ✅ done.**
+
+*Elaborator.* The measured answer to (a)'s ergonomic cost, which §7 said
+would be the only thing to reopen route (b): **it is currently zero.** Tier 0
+monomorphises type parameters, so every encoding `crates/elab` builds lives
+at level 0, and no level inference is needed anywhere. What the round did
+change is that three sites were *coupled by an unstated invariant* and two
+were pattern-matching on `Unit^0`/`Empty^0` specifically — those would have
+silently stopped firing once a declaration lived above level 0. They now read
+the level off the type (`inductive.rs`'s `Unit` terminator, `lib.rs`'s
+absurdity elimination) or say plainly where the level-0 assumption enters
+(`lower_data`'s no-constructor case, which has no `l` to derive from because
+`parts` is empty — the site a polymorphic declaration changes first).
+
+*Docs.* `crates/kernel/DESIGN.md` (the Fragment section, and the `Vec`/`Fin`
+reduction listing), `docs/metatheory-ch07-extensions.md` §10.1/§10.3/§10.4
+(the LR case is now stated as level-**indexed**, which is cleaner than either
+the old level-0 rule or the polymorphic one, plus level notes on §2/§4 so a
+reader arriving there is not misled), and `docs/wf-former-design.md` §1.1
+(done in phase 1).
 
 ---
 
