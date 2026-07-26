@@ -747,23 +747,17 @@ fn beta_elim_ty(
                 gamma,
             ))
         }
-        // (g. t_Unit), (g. t_Empty)   (extension)
-        //
-        // PHASE 1 of docs/unit-empty-level-indexing.md: the branches still
-        // bind no universe, and `typing.rs`'s layer-c gate guarantees only
-        // `Unit^0`/`Empty^0` reach layer c, so firing with no universe
-        // payload stays consistent. Phase 2 reshapes both sides together and
-        // passes `level` here.
-        Type::Unit { .. } => Some(fire(
+        // (ℓ, g. t_Unit), (ℓ, g. t_Empty)   (extension)
+        Type::Unit { level } => Some(fire(
             &b.ty_unit,
-            &[],
+            std::slice::from_ref(level),
             vec![GlobalEntry::Ctx(delta.clone())],
             vec![],
             gamma,
         )),
-        Type::Empty { .. } => Some(fire(
+        Type::Empty { level } => Some(fire(
             &b.ty_empty,
-            &[],
+            std::slice::from_ref(level),
             vec![GlobalEntry::Ctx(delta.clone())],
             vec![],
             gamma,
@@ -1276,40 +1270,43 @@ fn beta_elim_tm(
             ))
         }
         // (g. t'_Unit), (g. t'_Empty) — the encodings.   (extension)
-        Term::TmUnit { .. } => Some(fire(
+        Term::TmUnit { level } => Some(fire(
             &b.tm_unit,
-            &[],
+            std::slice::from_ref(level),
             vec![GlobalEntry::Ctx(delta.clone())],
             vec![],
             gamma,
         )),
-        Term::TmEmpty { .. } => Some(fire(
+        Term::TmEmpty { level } => Some(fire(
             &b.tm_empty,
-            &[],
+            std::slice::from_ref(level),
             vec![GlobalEntry::Ctx(delta.clone())],
             vec![],
             gamma,
         )),
         // (g. t_triv)   (extension)
-        Term::Triv { .. } => Some(fire(
+        Term::Triv { level } => Some(fire(
             &b.tm_triv,
-            &[],
+            std::slice::from_ref(level),
             vec![GlobalEntry::Ctx(delta.clone())],
             vec![],
             gamma,
         )),
         // (ℓ, g, U_M, u_t, x_M, x_t. t_elimE) — x_M recurses at the *type*
         // motive; mirrors tm_elim_nat minus the base/step branches.   (extension)
-        // PHASE 1: `scrut_level` is 0 at layer c by the gate, so the branch
-        // still binds one universe (the motive's). Phase 2 binds two.
-        Term::ElimEmpty { level, motive, scrut, .. } => {
-            let empty0 = || Rc::new(Type::Empty { level: Level::Zero });
-            let dx_empty = extend(delta, empty0(), Level::Zero);
+        // (ℓ, ℓ', g, U_M, u_t, x_M, x_t. t_elimE) — ℓ the motive's, ℓ' the
+        // scrutinee's `Empty` level. Two universes as of
+        // docs/unit-empty-level-indexing.md §3.
+        Term::ElimEmpty { level, scrut_level, motive, scrut } => {
+            let empty = || Rc::new(Type::Empty { level: scrut_level.clone() });
+            let dx_empty = extend(delta, empty(), scrut_level.clone());
             let s_motive = rec.elim_ty(level.clone(), dx_empty, Rc::clone(motive));
-            let s_scrut = rec.elim_tm(Level::Zero, delta.clone(), empty0(), Rc::clone(scrut));
+            let s_scrut =
+                rec.elim_tm(scrut_level.clone(), delta.clone(), empty(), Rc::clone(scrut));
             Some(fire(
                 &b.tm_elim_empty,
-                std::slice::from_ref(level),
+                // innermost-first: ℓ' (scrutinee) then ℓ (motive)
+                &[scrut_level.clone(), level.clone()],
                 vec![
                     GlobalEntry::Ctx(delta.clone()),
                     GlobalEntry::Ty(Rc::clone(motive)),

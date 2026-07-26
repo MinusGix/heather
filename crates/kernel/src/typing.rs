@@ -356,26 +356,6 @@ impl Tc {
 
     /// Reject everything at layer v except the forms listed in ch. 04's
     /// "Note on Layer v Rules".
-    /// **Phase-1 gate of `docs/unit-empty-level-indexing.md`.** `Unit^l` /
-    /// `Empty^l` / `⟨⟩^l` for `l ≠ 0` are rejected at layer `c` until phase 2
-    /// reshapes `ty_unit`, `ty_empty`, `tm_triv` and `tm_elim_empty` to bind
-    /// their universe. Without the gate, boxed code could carry a level the
-    /// branch telescopes cannot receive, and `fire` would instantiate a
-    /// motive at the wrong level — the same failure mode as the reverted
-    /// phase-4 fix in [[unit-level-and-vec-preservation]].
-    ///
-    /// Everything at layers `p`/`m` is already level-indexed, so the defect
-    /// this route closes (`Vec^l(T;0) ⇝ Unit^l`) is fixed as of phase 1; only
-    /// *code* is restricted.
-    ///
-    /// Delete this, and its four call sites, in phase 2.
-    fn code_level_gate(&self, env: &Env, level: &Level) -> R {
-        if env.layer == Layer::Code && !level.equiv(&Level::Zero) {
-            return Err(TypeError::LayerMismatch);
-        }
-        Ok(())
-    }
-
     fn not_var_layer(&self, env: &Env) -> R {
         if env.layer == Layer::Var { Err(TypeError::LayerMismatch) } else { Ok(()) }
     }
@@ -521,7 +501,6 @@ impl Tc {
             // comment and `docs/unit-empty-level-indexing.md`.
             Type::Unit { level } | Type::Empty { level } => {
                 self.level_wf(env, level)?;
-                self.code_level_gate(env, level)?;
                 Ok(level.clone())
             }
             // Sum-formation (extension beyond ch. 04; kernel-v1-extensions):
@@ -817,7 +796,6 @@ impl Tc {
             Term::TmUnit { level } | Term::TmEmpty { level } => {
                 self.not_var_layer(env)?;
                 self.level_wf(env, level)?;
-                self.code_level_gate(env, level)?;
                 Ok((Type::Ty(level.clone()), Level::succ(level.clone())))
             }
             // Encoding of the binary sum (extension): a +^{l,l'} b : Ty (l⊔l').
@@ -1081,7 +1059,6 @@ impl Tc {
             Term::Triv { level } => {
                 self.not_var_layer(env)?;
                 self.level_wf(env, level)?;
-                self.code_level_gate(env, level)?;
                 Ok((Type::Unit { level: level.clone() }, level.clone()))
             }
             // elim_Empty^{l,l'} (x. M; t) : M[t/x] @ l, scrutinee at Empty^{l'}.
@@ -1089,7 +1066,6 @@ impl Tc {
                 self.not_var_layer(env)?;
                 self.level_wf(env, level)?;
                 self.level_wf(env, scrut_level)?;
-                self.code_level_gate(env, scrut_level)?;
                 let empty = Type::Empty { level: scrut_level.clone() };
                 let e_x = env.push_entry(Rc::new(empty.clone()), scrut_level.clone());
                 self.ty_check(&e_x, motive, level)?;

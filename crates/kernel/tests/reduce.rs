@@ -1574,40 +1574,48 @@ fn beta_elim_code_unit_empty_nullary_branches() {
 
 #[test]
 fn beta_elim_code_tm_elim_empty() {
-    // Telescope (ℓ, g, U_M, u_t, x_M, x_t. t_elimE): globals g=2, U_M=1,
-    // u_t=0; locals x_M=1, x_t=0. x_M recurses at the *type* motive, x_t at
-    // the term motive. Mirrors tm_elim_nat minus the base/step branches.
+    // Telescope (ℓ, ℓ', g, U_M, u_t, x_M, x_t. t_elimE): universes ℓ = lv(1)
+    // (the motive's) and ℓ' = lv(0) (the scrutinee's `Empty^{ℓ'}`); globals
+    // g=2, U_M=1, u_t=0; locals x_M=1, x_t=0. `x_M` recurses at the *type*
+    // motive, `x_t` at the term motive.
+    //
+    // The two levels are deliberately **distinct** here (2 and 1): that is the
+    // degree of freedom level-indexing `Empty` adds
+    // (docs/unit-empty-level-indexing.md §3), and firing them in the wrong
+    // order — `fire`'s `phi` is innermost-first — swaps them silently.
     let gamma = nil_ctx(0);
     let delta = nil_ctx(1);
-    let motive = Type::Ty(Level::Zero); // scoped in (Δ, x : Empty); closed here
+    let motive = Type::Ty(Level::Zero); // scoped in (Δ, x : Empty^{ℓ'})
     let inner_scrut = Term::TmNat; // the u_t payload probe
     let mut b = dummy_branches();
     b.tm_elim_empty = rt(chain(vec![
         v(1),              // x_M
         v(0),              // x_t
-        box_gty(1, 2, 1),  // box U_M^{id} (context (g, x : Empty))
+        box_gty(1, 2, 1),  // box U_M^{id} (context (g, x : Empty^{ℓ'}))
         box_gtm(0, 2, 0),  // box u_t^{id}
-        Term::TmTy(lv(0)), // ℓ
+        Term::TmTy(lv(1)), // ℓ  — the motive's level
+        Term::TmTy(lv(0)), // ℓ' — the scrutinee's level
     ]));
     let b = Rc::new(b);
     let code = Term::ElimEmpty {
         level: c(2),
-            scrut_level: Level::Zero,
+        scrut_level: c(1),
         motive: rty(motive.clone()),
         scrut: rt(inner_scrut.clone()),
     };
     let t = elim_tm(&b, c(2), delta.clone(), motive.clone(), Term::BoxTm(rt(code)));
 
-    let dx_empty = extend(&delta, Type::Empty { level: Level::Zero }, Level::Zero);
+    let empty1 = Type::Empty { level: c(1) };
+    let dx_empty = extend(&delta, empty1.clone(), c(1));
     let s_motive = elim_ty(&b, c(2), dx_empty, Term::BoxTy(rty(motive.clone())));
-    let s_scrut =
-        elim_tm(&b, Level::Zero, delta.clone(), Type::Empty { level: Level::Zero }, Term::BoxTm(rt(inner_scrut.clone())));
+    let s_scrut = elim_tm(&b, c(1), delta.clone(), empty1, Term::BoxTm(rt(inner_scrut.clone())));
     let expect = chain(vec![
         s_motive,
         s_scrut,
         Term::BoxTy(rty(motive)),
         Term::BoxTm(rt(inner_scrut)),
         Term::TmTy(c(2)),
+        Term::TmTy(c(1)),
     ]);
     assert_eq!(step_term(&t, &gamma), Some(expect));
 }

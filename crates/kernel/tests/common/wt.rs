@@ -1289,8 +1289,8 @@ const BRANCH_DIMS: [(u32, u32, u32, bool, bool); 45] = [
     (1, 2, 1, false, false), // ty_el (innermost local is a *term*-motive call)
     (1, 4, 3, false, false), // ty_id (innermost local is a *term*-motive call)
     (2, 3, 2, false, true),  // ty_sigma
-    (0, 1, 0, false, false), // ty_unit
-    (0, 1, 0, false, false), // ty_empty
+    (1, 1, 0, false, false), // ty_unit
+    (1, 1, 0, false, false), // ty_empty
     (1, 3, 0, true, false),  // tm_var
     (0, 1, 0, true, false),  // tm_nat
     (2, 3, 2, true, true),   // tm_pi
@@ -1307,10 +1307,10 @@ const BRANCH_DIMS: [(u32, u32, u32, bool, bool); 45] = [
     (2, 5, 4, true, true),   // tm_pair
     (2, 4, 3, true, true),   // tm_fst
     (2, 4, 3, true, true),   // tm_snd
-    (0, 1, 0, true, false),  // tm_unit
-    (0, 1, 0, true, false),  // tm_empty
-    (0, 1, 0, true, false),  // tm_triv
-    (1, 3, 2, true, true),   // tm_elim_empty (innermost local is a term-motive call)
+    (1, 1, 0, true, false),  // tm_unit
+    (1, 1, 0, true, false),  // tm_empty
+    (1, 1, 0, true, false),  // tm_triv
+    (2, 3, 2, true, true),   // tm_elim_empty (ℓ motive, ℓ' scrutinee; innermost local is a term-motive call)
     (2, 3, 2, false, true),  // ty_sum
     (2, 3, 2, true, true),   // tm_sum
     (2, 4, 3, true, true),   // tm_inl
@@ -1910,19 +1910,21 @@ pub fn identity_branches() -> Rc<Branches> {
             snd_ty: rty(gty(1, &gx_lam)),
             pair: rt(gtm(0, &g3)),
         }))),
-        ty_unit: rt(Term::BoxTy(rty(Type::Unit { level: Level::Zero }))),
-        ty_empty: rt(Term::BoxTy(rty(Type::Empty { level: Level::Zero }))),
-        tm_unit: rt(Term::BoxTm(rt(Term::TmUnit { level: Level::Zero }))),
-        tm_empty: rt(Term::BoxTm(rt(Term::TmEmpty { level: Level::Zero }))),
-        tm_triv: rt(Term::BoxTm(rt(Term::Triv { level: Level::Zero }))),
-        // box (elim_Empty^ℓ (x. U_M^id; u_t^id)) — telescope g = 2, U_M = 1,
-        // u_t = 0.
+        // Each binds ℓ now (docs/unit-empty-level-indexing.md §3), so the
+        // identity arm reconstructs at `ℓ` rather than at 0.
+        ty_unit: rt(Term::BoxTy(rty(Type::Unit { level: lv(0) }))),
+        ty_empty: rt(Term::BoxTy(rty(Type::Empty { level: lv(0) }))),
+        tm_unit: rt(Term::BoxTm(rt(Term::TmUnit { level: lv(0) }))),
+        tm_empty: rt(Term::BoxTm(rt(Term::TmEmpty { level: lv(0) }))),
+        tm_triv: rt(Term::BoxTm(rt(Term::Triv { level: lv(0) }))),
+        // box (elim_Empty^{ℓ,ℓ'} (x. U_M^id; u_t^id)) — universes ℓ = 1
+        // (motive), ℓ' = 0 (scrutinee); telescope g = 2, U_M = 1, u_t = 0.
         tm_elim_empty: {
-            let gx_empty = ext(&g2, Type::Empty { level: Level::Zero }, Level::Zero);
+            let gx_empty = ext(&g2, Type::Empty { level: lv(0) }, lv(0));
             let u_m_e = Type::GlobalTy { var: GlobalVar(1), subst: LocalSubst::id(&gx_empty) };
             rt(Term::BoxTm(rt(Term::ElimEmpty {
-                level: lv(0),
-            scrut_level: Level::Zero,
+                level: lv(1),
+                scrut_level: lv(0),
                 motive: rty(u_m_e),
                 scrut: rt(gtm(0, &g2)),
             })))

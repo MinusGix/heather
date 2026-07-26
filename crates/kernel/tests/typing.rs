@@ -769,21 +769,21 @@ fn identity_branches() -> Rc<Branches> {
             snd_ty: rty(gty(1, &gx_lam)),
             pair: rt(gtm(0, &g3)),
         }))),
-        // box Unit / box Empty (the types)
-        ty_unit: rt(Term::BoxTy(rty(Type::Unit { level: Level::Zero }))),
-        ty_empty: rt(Term::BoxTy(rty(Type::Empty { level: Level::Zero }))),
-        // box Unit / box Empty (the encodings), box ⟨⟩
-        tm_unit: rt(Term::BoxTm(rt(Term::TmUnit { level: Level::Zero }))),
-        tm_empty: rt(Term::BoxTm(rt(Term::TmEmpty { level: Level::Zero }))),
-        tm_triv: rt(Term::BoxTm(rt(Term::Triv { level: Level::Zero }))),
-        // box (elim_Empty^ℓ (x. U_M^id; u_t^id)) — telescope g = 2, U_M = 1,
-        // u_t = 0.
+        // box (Unit^ℓ) / box (Empty^ℓ) (the types) — each binds ℓ now.
+        ty_unit: rt(Term::BoxTy(rty(Type::Unit { level: lv(0) }))),
+        ty_empty: rt(Term::BoxTy(rty(Type::Empty { level: lv(0) }))),
+        // box (Unit^ℓ) / box (Empty^ℓ) (the encodings), box ⟨⟩^ℓ
+        tm_unit: rt(Term::BoxTm(rt(Term::TmUnit { level: lv(0) }))),
+        tm_empty: rt(Term::BoxTm(rt(Term::TmEmpty { level: lv(0) }))),
+        tm_triv: rt(Term::BoxTm(rt(Term::Triv { level: lv(0) }))),
+        // box (elim_Empty^{ℓ,ℓ'} (x. U_M^id; u_t^id)) — universes ℓ = 1
+        // (motive), ℓ' = 0 (scrutinee); telescope g = 2, U_M = 1, u_t = 0.
         tm_elim_empty: {
-            let gx_empty = ext(&g2, Type::Empty { level: Level::Zero }, Level::Zero);
+            let gx_empty = ext(&g2, Type::Empty { level: lv(0) }, lv(0));
             let u_m_e = Type::GlobalTy { var: GlobalVar(1), subst: LocalSubst::id(&gx_empty) };
             rt(Term::BoxTm(rt(Term::ElimEmpty {
-                level: lv(0),
-            scrut_level: Level::Zero,
+                level: lv(1),
+                scrut_level: lv(0),
                 motive: rty(u_m_e),
                 scrut: rt(gtm(0, &g2)),
             })))
@@ -1018,6 +1018,100 @@ fn identity_branches() -> Rc<Branches> {
             })))
         },
     })
+}
+
+/// **Phase-2 acceptance** (`docs/unit-empty-level-indexing.md` §4): the
+/// identity recursor round-trips level-indexed `Unit`/`Empty` code **at a
+/// non-zero level**, in a single β-step.
+///
+/// This is the sharp cross-check of the six reshaped branch telescopes in
+/// `rec.rs` against `fire`'s payload wiring in `reduce.rs`: a telescope wrong
+/// in either makes the re-boxed code ill-typed or unequal, and at level 0 the
+/// two are indistinguishable — which is exactly why the gate existed.
+///
+/// `elim_Empty` is the one that can go wrong *silently*: it binds two
+/// universes, `fire`'s `phi` is innermost-first, and swapping ℓ with ℓ' still
+/// typechecks when they happen to be equal. They are distinct here.
+#[test]
+fn identity_recursor_round_trips_unit_and_empty_at_a_level() {
+    let psi = GlobalCtx::default();
+    let elim_ty_at = |code_level: Level, code: Type| Term::ElimCodeTy {
+        ty_motive_level: Level::Zero,
+        tm_motive_level: Level::Zero,
+        motives: identity_motives(),
+        branches: identity_branches(),
+        code_level,
+        ctx: nil_ctx(),
+        scrut: rt(Term::BoxTy(rty(code))),
+    };
+    let elim_tm_at = |code_level: Level, ty: Type, code: Term| Term::ElimCodeTm {
+        ty_motive_level: Level::Zero,
+        tm_motive_level: Level::Zero,
+        motives: identity_motives(),
+        branches: identity_branches(),
+        code_level,
+        ctx: nil_ctx(),
+        ty: rty(ty),
+        scrut: rt(Term::BoxTm(rt(code))),
+    };
+    let one_step = |t: &Term| {
+        heather_kernel::reduce::whnf_term(t, &nil_ctx(), FUEL).expect("recursor must fire")
+    };
+
+    for l in [c(1), c(2)] {
+        // box (Unit^l) and box (Empty^l), as code of *types*.
+        for code in [Type::Unit { level: l.clone() }, Type::Empty { level: l.clone() }] {
+            let t = elim_ty_at(l.clone(), code.clone());
+            let (ty, _) = infer_closed(Layer::Meta, &t).unwrap();
+            assert!(ty == Type::CodeTy { ctx: nil_ctx(), level: l.clone() });
+            assert_eq!(one_step(&t), Term::BoxTy(rty(code)), "identity must return its input");
+        }
+        // box (Unit^l) as code of a *term*: Unit^l : Ty l.
+        for code in [Term::TmUnit { level: l.clone() }, Term::TmEmpty { level: l.clone() }] {
+            let t = elim_tm_at(Level::succ(l.clone()), Type::Ty(l.clone()), code.clone());
+            check_term(&psi, 0, Layer::Meta, &nil_ctx(), &t,
+                &Type::CodeTm { ctx: nil_ctx(), ty: rty(Type::Ty(l.clone())), level: Level::succ(l.clone()) },
+                &Level::Zero, FUEL).unwrap();
+            assert_eq!(one_step(&t), Term::BoxTm(rt(code)));
+        }
+        // box (⟨⟩^l) : □(· ⊢ Unit^l @ l) — the intro, which is where a term
+        // with many types would show up.
+        let t = elim_tm_at(l.clone(), Type::Unit { level: l.clone() }, Term::Triv { level: l.clone() });
+        check_term(&psi, 0, Layer::Meta, &nil_ctx(), &t,
+            &Type::CodeTm { ctx: nil_ctx(), ty: rty(Type::Unit { level: l.clone() }), level: l.clone() },
+            &Level::Zero, FUEL).unwrap();
+        assert_eq!(one_step(&t), Term::BoxTm(rt(Term::Triv { level: l.clone() })));
+    }
+
+    // box (elim_Empty^{2,1}(y. Ty 1; x)) in Δ = (·, x : Empty^1 @ 1) — two
+    // universes, DISTINCT (motive 2, scrutinee 1), so an innermost-first slip
+    // in `fire`'s `phi` cannot hide behind them being equal. `Empty` has no
+    // inhabitants, so the scrutinee is a Δ-variable.
+    let delta = ext(&nil_ctx(), Type::Empty { level: c(1) }, c(1));
+    let motive = Type::Ty(c(1)); // at level 2 = the motive's level
+    let code = Term::ElimEmpty {
+        level: c(2),
+        scrut_level: c(1),
+        motive: rty(motive.clone()),
+        scrut: rt(Term::Var(LocalVar(0))),
+    };
+    check_term(&psi, 0, Layer::Code, &delta, &code, &motive, &c(2), FUEL)
+        .expect("elim_Empty^{2,1} must be well-typed code");
+    let t = Term::ElimCodeTm {
+        ty_motive_level: Level::Zero,
+        tm_motive_level: Level::Zero,
+        motives: identity_motives(),
+        branches: identity_branches(),
+        code_level: c(2),
+        ctx: delta.clone(),
+        ty: rty(motive.clone()),
+        scrut: rt(Term::BoxTm(rt(code.clone()))),
+    };
+    check_term(&psi, 0, Layer::Meta, &nil_ctx(), &t,
+        &Type::CodeTm { ctx: delta, ty: rty(motive), level: c(2) },
+        &Level::Zero, FUEL)
+        .expect("the identity recursor must accept it");
+    assert_eq!(one_step(&t), Term::BoxTm(rt(code)), "identity must return its input");
 }
 
 #[test]
@@ -1336,14 +1430,11 @@ fn pair_projections_and_dependency() {
 // Unit and Empty (extension beyond ch. 04; kernel-v1-extensions)
 // -------------------------------------------------------------------------
 
-/// `Unit^l`/`Empty^l`/`⟨⟩^l` are level-indexed at layers `p`/`m`, and the
-/// **phase-1 layer-`c` gate** (`docs/unit-empty-level-indexing.md` §4) pins
-/// code to level 0 until phase 2 reshapes the four branch telescopes.
-///
-/// Delete the `Layer::Code` half of this when the gate goes; the `Layer::Prog`
-/// half is permanent.
+/// `Unit^l`/`Empty^l`/`⟨⟩^l` are level-indexed at **every** layer, code
+/// included (`docs/unit-empty-level-indexing.md`). The phase-1 layer-`c` gate
+/// is gone as of phase 2.
 #[test]
-fn unit_empty_are_level_indexed_and_code_is_gated() {
+fn unit_empty_are_level_indexed_at_every_layer() {
     let psi = GlobalCtx::default();
     let g = nil_ctx();
     let infer_at = |layer, t: &Type| infer_type(&psi, 0, layer, &g, t, FUEL);
@@ -1367,20 +1458,17 @@ fn unit_empty_are_level_indexed_and_code_is_gated() {
         assert!(ty == Type::Ty(l.clone()) && li.equiv(&Level::succ(l.clone())));
     }
 
-    // PHASE-1 GATE: layer c stays at level 0, so the unreshaped branch
-    // telescopes cannot receive a level they have nowhere to put.
+    // The phase-1 gate is GONE (phase 2 reshaped the six branch telescopes),
+    // so layer c is level-indexed too — which is what makes `box (Unit^ℓ)`
+    // recursable rather than merely well-formed.
     for l in [c(1), c(2)] {
         for t in [Type::Unit { level: l.clone() }, Type::Empty { level: l.clone() }] {
-            assert_eq!(
-                check_type(&psi, 0, Layer::Code, &g, &t, &l, FUEL).unwrap_err(),
-                TypeError::LayerMismatch,
-                "phase-1 gate must reject {t:?} at layer c",
-            );
+            check_type(&psi, 0, Layer::Code, &g, &t, &l, FUEL)
+                .unwrap_or_else(|e| panic!("{t:?} must check at layer c: {e:?}"));
         }
-        assert_eq!(
-            infer_term(&psi, 0, Layer::Code, &g, &Term::Triv { level: l.clone() }, FUEL).unwrap_err(),
-            TypeError::LayerMismatch,
-        );
+        let (ty, li) =
+            infer_term(&psi, 0, Layer::Code, &g, &Term::Triv { level: l.clone() }, FUEL).unwrap();
+        assert!(ty == Type::Unit { level: l.clone() } && li.equiv(&l));
     }
     // Level 0 is unaffected at c — everything that used to work still does.
     check_type(&psi, 0, Layer::Code, &g, &Type::Unit { level: Level::Zero }, &Level::Zero, FUEL).unwrap();

@@ -540,35 +540,35 @@ pub(crate) fn branch_specs(
 
     // (g. t_Unit) : M_Typ[0/ℓ, g/g, box Unit/x_T]   (extension; mirrors ty_nat)
     let ty_unit = {
-        let gt = gt(0, 1);
+        let gt = gt(1, 1);
         BranchSpec {
-            tele: Tele { univs: 0, globals: vec![GlobalBinding::Ctx], locals: vec![] },
+            tele: Tele { univs: 1, globals: vec![GlobalBinding::Ctx], locals: vec![] },
             ty: Rc::new(inst_ty_motive(
                 m_ty,
-                (0, 1, 0),
-                Level::Zero,
+                (1, 1, 0),
+                lvar(0),
                 g_ctx(0),
-                Term::BoxTy(Rc::new(Type::Unit { level: Level::Zero })),
+                Term::BoxTy(Rc::new(Type::Unit { level: lvar(0) })),
                 &gt,
             )),
-            level: l1.clone(),
+            level: l1.shift(1, 0),
         }
     };
 
     // (g. t_Empty) : M_Typ[0/ℓ, g/g, box Empty/x_T]   (extension; mirrors ty_nat)
     let ty_empty = {
-        let gt = gt(0, 1);
+        let gt = gt(1, 1);
         BranchSpec {
-            tele: Tele { univs: 0, globals: vec![GlobalBinding::Ctx], locals: vec![] },
+            tele: Tele { univs: 1, globals: vec![GlobalBinding::Ctx], locals: vec![] },
             ty: Rc::new(inst_ty_motive(
                 m_ty,
-                (0, 1, 0),
-                Level::Zero,
+                (1, 1, 0),
+                lvar(0),
                 g_ctx(0),
-                Term::BoxTy(Rc::new(Type::Empty { level: Level::Zero })),
+                Term::BoxTy(Rc::new(Type::Empty { level: lvar(0) })),
                 &gt,
             )),
-            level: l1.clone(),
+            level: l1.shift(1, 0),
         }
     };
 
@@ -1819,57 +1819,57 @@ pub(crate) fn branch_specs(
     // (g. t'_Unit) : M_Trm[1/ℓ, g/g, Ty 0/U_T, box Unit/x_t]
     //   (extension; mirrors tm_nat — code of the encoding Unit : Ty 0)
     let tm_unit = {
-        let gt = gt(0, 1);
+        let gt = gt(1, 1);
         BranchSpec {
-            tele: Tele { univs: 0, globals: vec![GlobalBinding::Ctx], locals: vec![] },
+            tele: Tele { univs: 1, globals: vec![GlobalBinding::Ctx], locals: vec![] },
             ty: Rc::new(inst_tm_motive(
                 m_tm,
-                (0, 1, 0),
-                Level::constant(1),
+                (1, 1, 0),
+                Level::succ(lvar(0)),
                 g_ctx(0),
-                Type::Ty(Level::Zero),
-                Term::BoxTm(Rc::new(Term::TmUnit { level: Level::Zero })),
+                Type::Ty(lvar(0)),
+                Term::BoxTm(Rc::new(Term::TmUnit { level: lvar(0) })),
                 &gt,
             )),
-            level: l2.clone(),
+            level: l2.shift(1, 0),
         }
     };
 
     // (g. t'_Empty) : M_Trm[1/ℓ, g/g, Ty 0/U_T, box Empty/x_t]
     //   (extension; mirrors tm_nat)
     let tm_empty = {
-        let gt = gt(0, 1);
+        let gt = gt(1, 1);
         BranchSpec {
-            tele: Tele { univs: 0, globals: vec![GlobalBinding::Ctx], locals: vec![] },
+            tele: Tele { univs: 1, globals: vec![GlobalBinding::Ctx], locals: vec![] },
             ty: Rc::new(inst_tm_motive(
                 m_tm,
-                (0, 1, 0),
-                Level::constant(1),
+                (1, 1, 0),
+                Level::succ(lvar(0)),
                 g_ctx(0),
-                Type::Ty(Level::Zero),
-                Term::BoxTm(Rc::new(Term::TmEmpty { level: Level::Zero })),
+                Type::Ty(lvar(0)),
+                Term::BoxTm(Rc::new(Term::TmEmpty { level: lvar(0) })),
                 &gt,
             )),
-            level: l2.clone(),
+            level: l2.shift(1, 0),
         }
     };
 
     // (g. t_triv) : M_Trm[0/ℓ, g/g, Unit/U_T, box ⟨⟩/x_t]
     //   (extension; mirrors tm_zero — code of the intro ⟨⟩ : Unit)
     let tm_triv = {
-        let gt = gt(0, 1);
+        let gt = gt(1, 1);
         BranchSpec {
-            tele: Tele { univs: 0, globals: vec![GlobalBinding::Ctx], locals: vec![] },
+            tele: Tele { univs: 1, globals: vec![GlobalBinding::Ctx], locals: vec![] },
             ty: Rc::new(inst_tm_motive(
                 m_tm,
-                (0, 1, 0),
-                Level::Zero,
+                (1, 1, 0),
+                lvar(0),
                 g_ctx(0),
-                Type::Unit { level: Level::Zero },
-                Term::BoxTm(Rc::new(Term::Triv { level: Level::Zero })),
+                Type::Unit { level: lvar(0) },
+                Term::BoxTm(Rc::new(Term::Triv { level: lvar(0) })),
                 &gt,
             )),
-            level: l2.clone(),
+            level: l2.shift(1, 0),
         }
     };
 
@@ -1878,33 +1878,35 @@ pub(crate) fn branch_specs(
     //   : M_Trm[ℓ/ℓ, g/g, U_M^{id, u_t^id/x}/U_T, box (elim_Empty …)/x_t]
     // Extension; mirrors tm_elim_nat minus the base/step branches.
     let tm_elim_empty = {
-        let gt = gt(1, 3);
-        // telescope view: g = 2, U_M = 1, u_t = 0
-        let gx = ext_ctx(&g_ctx(2), Type::Empty { level: Level::Zero }, Level::Zero);
+        let gt = gt(2, 3);
+        // telescope view: ℓ = 1 (motive), ℓ' = 0 (scrutinee); g = 2, U_M = 1,
+        // u_t = 0. `Empty` is level-indexed as of
+        // docs/unit-empty-level-indexing.md, so the scrutinee's level is its
+        // own binder rather than a hardcoded 0 — this is the one branch that
+        // gains a *second* universe rather than a first.
+        let empty = Type::Empty { level: lvar(0) };
+        let gx = ext_ctx(&g_ctx(2), empty.clone(), lvar(0));
         let motive_code = Type::GlobalTy { var: GlobalVar(1), subst: LocalSubst::id(&gx) };
         let x_m = inst_ty_motive(
             m_ty,
-            (1, 3, 0),
-            lvar(0),
+            (2, 3, 0),
+            lvar(1),
             gx.clone(),
             Term::BoxTy(Rc::new(motive_code.clone())),
             &gt,
         );
         let x_t = inst_tm_motive(
             m_tm,
-            (1, 3, 1),
-            lvar(0),
+            (2, 3, 1),
+            lvar(1),
             g_ctx(2),
-            Type::Empty { level: Level::Zero },
+            empty.clone(),
             Term::BoxTm(Rc::new(gtm(0, &g_ctx(2)))),
             &gt,
         );
         let code = Term::ElimEmpty {
-            level: lvar(0),
-            // PHASE 1 (docs/unit-empty-level-indexing.md): the layer-c gate
-            // pins code to level 0, so the branch still binds one universe.
-            // Phase 2 binds two and this becomes `lvar(1)`.
-            scrut_level: Level::Zero,
+            level: lvar(1),
+            scrut_level: lvar(0),
             motive: Rc::new(motive_code),
             scrut: Rc::new(gtm(0, &g_ctx(2))),
         };
@@ -1914,43 +1916,39 @@ pub(crate) fn branch_specs(
         };
         BranchSpec {
             tele: Tele {
-                univs: 1,
+                univs: 2,
                 globals: vec![
                     GlobalBinding::Ctx,
                     GlobalBinding::Ty {
-                        ctx: ext_ctx(&g_ctx(0), Type::Empty { level: Level::Zero }, Level::Zero),
+                        ctx: ext_ctx(&g_ctx(0), Type::Empty { level: lvar(0) }, lvar(0)),
                         layer: Layer::Code,
-                        level: lvar(0),
+                        level: lvar(1),
                     },
                     GlobalBinding::Tm {
                         ctx: g_ctx(1),
                         layer: Layer::Code,
-                        ty: Rc::new(Type::Empty { level: Level::Zero }),
-                        level: Level::Zero,
+                        ty: Rc::new(Type::Empty { level: lvar(0) }),
+                        level: lvar(0),
                     },
                 ],
                 locals: vec![
-                    (Rc::new(x_m), l1.shift(1, 0)),
-                    (Rc::new(x_t), l2.shift(1, 0)),
+                    (Rc::new(x_m), l1.shift(2, 0)),
+                    (Rc::new(x_t), l2.shift(2, 0)),
                 ],
             },
             ty: Rc::new(inst_tm_motive(
                 m_tm,
-                (1, 3, 2),
-                lvar(0),
+                (2, 3, 2),
+                lvar(1),
                 g_ctx(2),
                 u_m_at_scrut,
                 Term::BoxTm(Rc::new(code)),
                 &gt,
             )),
-            level: l2.shift(1, 0),
+            level: l2.shift(2, 0),
         }
     };
 
-    // (ℓ, ℓ', g, U_A : Typ_c(g, ℓ), U_B : Typ_c(g, ℓ'), x_A, x_B. t_+)
-    //   : M_Typ[ℓ⊔ℓ'/ℓ, g/g, box (U_A^id +^{ℓ,ℓ'} U_B^id)/x_T]
-    // Extension (kernel-v1-extensions); mirrors ty_sigma minus the binder
-    // extension (both summands live in g).
     let ty_sum = {
         let gt = gt(2, 3);
         // telescope view: g = 2, U_A = 1, U_B = 0

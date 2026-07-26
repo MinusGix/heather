@@ -126,15 +126,23 @@ level-equivalence-aware (§5, prerequisites).
 
 ## 3. Recursor branches
 
-Four branches change, and all four become copies of a shape `rec.rs` already
-has. This is the evidence the route is with the grain rather than against it.
+**Six** branches change — the spec said four before phase 2 counted them, and
+missed `tm_unit`/`tm_empty`, the branches for the *encodings* `TmUnit`/
+`TmEmpty`. Those are terms `Unit^l : Ty l`, so they bind a universe for exactly
+the same reason `tm_ty` does. Corrected here rather than silently: the
+undercount is what a spec-before-code round is for.
+
+All six become copies of a shape `rec.rs` already has. This is the evidence the
+route is with the grain rather than against it.
 
 | branch | now | under (a) |
 |---|---|---|
 | `ty_unit` (`rec.rs:542`) | `univs: 0`, motive at `Level::Zero`, scrutinee `box Unit` | `univs: 1`, motive at `lvar(0)`, scrutinee `box (Unit^ℓ)` |
 | `ty_empty` (`rec.rs:559`) | as above | as above, `box (Empty^ℓ)` |
 | `tm_triv` (`rec.rs:1859`) | `univs: 0`, motive at `Zero`, `U_T = Unit`, scrutinee `box ⟨⟩` | `univs: 1`, motive at `lvar(0)`, `U_T = Unit^ℓ`, scrutinee `box ⟨⟩^ℓ` |
-| `tm_elim_empty` (`rec.rs:1880`) | `univs: 1` (motive's ℓ); context extension hardcodes `Empty @ 0` | `univs: 2` (ℓ motive, ℓ' scrutinee); extension `Empty^{ℓ'} @ ℓ'` |
+| `tm_unit` (`rec.rs:1821`) | `univs: 0`, motive at `1`, `U_T = Ty 0`, scrutinee `box Unit` | `univs: 1`, motive at `1+ℓ`, `U_T = Ty ℓ`, scrutinee `box (Unit^ℓ)` |
+| `tm_empty` (`rec.rs:1840`) | as above | as above, `box (Empty^ℓ)` |
+| `tm_elim_empty` (`rec.rs:1880`) | `univs: 1` (motive's ℓ); context extension hardcodes `Empty @ 0` | `univs: 2` (ℓ = `lvar(1)` motive, ℓ' = `lvar(0)` scrutinee); extension `Empty^{ℓ'} @ ℓ'` |
 
 The template for the first three is `ty_ty` (`rec.rs:351`), which binds a
 universe *precisely because* `Ty ℓ`'s level varies. `typing.rs:433` already
@@ -159,9 +167,12 @@ layer-`c` gate holds the line between 1 and 2.
 unreshaped branches stay exhaustive and boxed code stays recursable over the
 syntactic formers.
 
-**Phase 2 — the four branches; lift the gate.** `rec.rs` as §3, plus
-`BRANCH_DIMS`, both `identity_branches` copies, and both generators
-(`common/mod.rs`, `common/wt.rs`). Acceptance: the identity recursor
+**Phase 2 — the six branches; lift the gate. ✅ done.** `rec.rs` as §3, plus
+**`subst.rs::map_branches`** (the per-branch binder depths — missed by the
+plan, and the site that fails *loudly*: a wrong universe arity indexes past
+`phi` and panics in `Level::subst_at`), `BRANCH_DIMS`, both
+`identity_branches` copies (`common/wt.rs` **and** `tests/typing.rs`), and
+`reduce.rs`'s six `fire` call sites. Acceptance: the identity recursor
 round-trips `box (Unit^ℓ)`, `box (Empty^ℓ)`, `box ⟨⟩^ℓ` and
 `box (elim_Empty^{ℓ,ℓ'})` in one β-step, which is the sharp cross-check of the
 new telescopes against `reduce.rs`'s `fire`.
