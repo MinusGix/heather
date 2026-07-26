@@ -1,9 +1,9 @@
 # Function types and lambdas at the surface
 
-Status: **scheme written, not yet implemented** (2026-07-26). Written before
-the code, per the discipline of `docs/inductive-tier0-lowering.md` and
-`docs/wf-former-design.md`; this is the specification the implementation is
-checked against, and §9 is the acceptance checklist.
+Status: **implemented 2026-07-26**, scheme written first per the discipline
+of `docs/inductive-tier0-lowering.md` and `docs/wf-former-design.md`. §9 is
+the acceptance checklist and `crates/elab/tests/function_types.rs` is its
+executable half (24 tests). §10 records what implementing it corrected.
 
 Tracking issue: `issues/surface-function-types.md`.
 
@@ -65,8 +65,10 @@ binder   ::= ident | '(' ident ':' ty ')'
 fun (x: Nat) => Succ(x)              -- ASCII synonym, prints back as λ
 ```
 
-`λ` is canonical and is what the printer emits; `fun` is accepted so that no
-one is blocked on input method. The body is parsed at binding power 0, so it
+`λ` is canonical and `fun` is accepted so that no one is blocked on input
+method. (There is **no surface printer** today — nothing renders an `Expr`
+back to source — so "canonical" here fixes what a printer should emit when
+one exists, and what the docs and tests use.) The body is parsed at binding power 0, so it
 extends as far as it can and stops at `,` `)` `}` `]` `;` — none of which are
 infix operators. A lambda therefore needs no parentheses as a final argument
 and needs them as a non-final one, which is the usual rule.
@@ -126,7 +128,12 @@ only on `inductive` declarations where they are monomorphized. Implicit
 case and are not worth the machinery.
 
 **Decision: explicit binders only.** `{` in a function type or lambda binder
-is diagnosed (§8). Revisit with the universe/polymorphism layer.
+is diagnosed (§8). This is a *deferral*, not a rejection — implicit arguments
+are wanted on by-value functions too, since a `Compile` instance or an
+optimization pass taking a lemma-shaped callback wants its endpoints inferred
+exactly as `trans`/`sym` do today. Tracked with its design options in
+`issues/implicit-binders-in-function-types.md`; revisit with the
+universe/polymorphism layer.
 
 ### 2.2 The `Call`-head refactor is small, not broad
 
@@ -318,11 +325,9 @@ round must *observe*.
    lambda pushes; check the shift.
 3. **A hole under a lambda binder.** `new_goal` builds `?m^{id_Γ}` over the
    *current* Γ, which now includes the λ-binder, while the `on` discharge is
-   elaborated outside it. This is the same shape as
-   `issues/nested-goal-discharge.md` and is **expected to need a rejection**:
-   a goal whose context mentions a binder not in scope at its discharge site
-   cannot be strengthened back down. Diagnose it (§8) rather than emit a
-   wrong term; lift it with, or after, `nested-goal-discharge`.
+   elaborated outside it. Predicted here to need a rejection; **it does not** —
+   see §10.1, which also records why the negative control is the load-bearing
+   half of the test.
 4. **η at `Π` is definitional.** `conv.rs:535` compares at a `Π` type by
    applying both sides to a fresh variable, unconditionally at every layer.
    So `λ (x: Nat) => f(x)` and `f` are convertible and `refl` proves it. Users
@@ -360,8 +365,8 @@ tracked.
 | `λ x => e` in inference position | "this lambda's binder needs a type annotation, or the lambda needs a checking position (`let f: A -> B = λ x => e;`)" |
 | `λ x => e` where a non-function is expected | "a lambda needs a function type here; expected `T`" |
 | `{x: A} -> B`, `λ {x: A} => e` | "implicit binders are not supported in function types yet — implicitness is a property of a declaration's parameters (see issues/surface-function-types.md §2.1)" |
-| `?p` under a λ-binder | "a hole may not appear under a lambda binder: its context would mention `x`, which is not in scope at the discharge (issues/nested-goal-discharge.md)" |
-| `@` on a non-name head | "`@` suppresses implicit-argument insertion, which only applies to a named callee" |
+| ~~`?p` under a λ-binder~~ | **Withdrawn** — it works; see §10.1. |
+| `@` on a non-name head | rejected by the **grammar** — the parser demands a name after `@` ("expected call head after `@`"). The elaborator keeps the same check as defence in depth, but nothing at the surface can reach it. |
 | a function type as an `inductive` field | "a field of a finitary declaration may not be a function (that is the infinitary tier, issues/inductive-compiler.md)" |
 | too many arguments | existing `apply_explicit` message, with the head printed when it is not a name |
 
@@ -378,12 +383,19 @@ naming.
 Every item is a test, and every positive one is elaborated and then re-checked
 by the real kernel.
 
-1. `(x: A) -> B` and `A -> B` parse, print back, and elaborate to `Type::Pi`
-   with the level `Level::max(dom, cod)`; `A -> B -> C` associates right.
+1. `(x: A) -> B` and `A -> B` parse and elaborate to `Type::Pi`;
+   `A -> B -> C` associates right.
+
+   The level rule `Level::max(dom, cod)` is **not separately observable at the
+   surface**: `TyKind` has no universe, so every writable type sits at level
+   0 and every `max` is `max(0, 0)`. It is protected instead by construction —
+   `elab_ty`'s `Fn` arm uses the same rule as `elab_decl_inner`'s telescope
+   close (`lib.rs:376–382`) — and it becomes testable when the universe layer
+   arrives.
 2. `a = b -> C` parses as `(a = b) -> C`.
 3. `D<A> -> B` parses — i.e. the `Ident '<'` early return no longer bypasses
    the arrow check (§3.1).
-4. `λ` and `fun` both parse; the printer emits `λ`.
+4. `λ` and `fun` both parse and produce the same term.
 5. A lambda checks against an expected Π; a lambda with annotated binders
    infers; an unannotated binder in inference position is rejected (§8).
 6. A multi-binder lambda equals its nested form.
@@ -403,3 +415,72 @@ by the real kernel.
 15. The whole existing suite still passes — in particular the parser tests
     that pattern-match `ExprKind::Call` (§2.2) and the tier-0/tier-1
     acceptance files.
+
+---
+
+## 10. What implementing it corrected
+
+Three things, all small — the scheme survived contact better than the tier-0
+one did, which is what a round with no kernel change should look like.
+
+1. **The parenthesis rule in `ty()` was wrong on the first draft, and the
+   existing suite caught it.** The scheme said a leading `(` in type position
+   is a parenthesised *type* unless the group is an equality's left endpoint,
+   which is too narrow: `add_assoc`'s statement is `(a + b) + c = a + (b + c)`,
+   where the group opens an ordinary *expression* and is followed by `+`. The
+   rule is now "`->` is the discriminator" — the group is a type exactly when
+   it contains a top-level `->` of its own or is immediately followed by one,
+   which is sound because `->` is not an expression operator
+   (`parser.rs::group_is_type`). Pinned by
+   `function_types::a_leading_paren_can_open_an_expression_not_a_type`.
+
+2. **A latent lexer bug, surfaced by the first multi-byte token.** The
+   two-character-token window was `&src[i..i + 2]`, which panics when it lands
+   inside a codepoint — `(λ` does exactly that, putting `λ`'s first byte at
+   `i + 1`. Now `src.get(i..i + 2).unwrap_or("")`. This was unreachable while
+   every token was ASCII; `λ` is the first non-ASCII token the language has.
+
+3. **Two claims in this document had no referent.** There is no surface
+   printer at all, so "prints back" in §9.1 and "the printer emits `λ`" in
+   §9.4 were checking nothing; both are restated above. And `@` on a non-name
+   head is caught by the grammar, one layer earlier than §8 placed it.
+
+Nothing in §6 misbehaved: the guard machinery, aliases, and partial
+application all survived the extra binder a lambda pushes, as predicted. They
+are tested rather than assumed anyway — that is the whole point of the section
+— and the tests are `function_types::interactions`.
+
+### 10.1 §6.3 was wrong: a hole under a lambda binder just works
+
+The scheme predicted this would need a rejection, reasoning that `new_goal`
+builds `?m^{id_Γ}` over a Γ that now includes the λ-binder while the `on`
+discharge sits outside the lambda. **It works, and the reason is in
+`issues/goal-holes.md`:** an `on` RHS is elaborated *in the goal world*, so the
+binder is legitimately in scope at the discharge and means the binder.
+
+```heather
+fn g(n: Nat) -> Nat {
+    ap(λ (y: Nat) => ?h, n)
+    on ?h := Succ(y);
+}
+theorem check(): g(1) = 2 { refl }
+```
+
+Kept as a test with a **negative control** rather than as a note, because "the
+name resolves to the wrong variable and the term still typechecks" is the
+hazard class of `issues/tyvar-scoping-in-lowered-fields.md`. The control — the
+same program asserted at `3` — is what distinguishes `y` meaning the binder
+from `y` meaning a neighbouring index; without it the positive test proves
+much less than it appears to.
+
+The §8 rejection row for this case is therefore **withdrawn**.
+
+### 10.2 A pre-existing parser bug, found in passing
+
+`let n: Nat = 3;` does not parse: `ty()` takes the first `=` as the equality
+type former, leaving nothing for the statement's binder. Confirmed
+pre-existing against the parser as of `13dd25d`, so not a consequence of this
+round. Filed as `issues/annotated-let-swallows-the-equals.md` rather than
+fixed here — `let x: T = e;` versus `let p: a = b = pf;` is a genuine grammar
+ambiguity, and choosing between the resolutions is not a decision that should
+ride along inside a function-types commit.

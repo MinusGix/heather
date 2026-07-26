@@ -28,6 +28,9 @@ pub enum TokKind {
     Gt,        // >   (closes a type-argument list; `>` is not an operator)
     Arrow,     // ->
     FatArrow,  // =>
+    /// `λ` (U+03BB). `fun` is the ASCII synonym and stays an `Ident`, matched
+    /// by the parser's keyword helpers (docs/surface-function-types.md §3.2).
+    Lambda,
     Eq,        // =   (both `let x = e` binding and `a = b` equality)
     EqEq,      // ==  (lexed but rejected by the parser — see `=`)
     ColonEq,   // :=
@@ -104,8 +107,16 @@ pub fn lex(src: &str) -> Result<Vec<Tok>, LexError> {
             continue;
         }
         // punctuation
-        let two = if i + 1 < bytes.len() { &src[i..i + 2] } else { "" };
+        // `get` rather than an index: the two-byte window can land *inside* a
+        // multi-byte codepoint (`(λ` puts `λ`'s first byte at `i + 1`), and
+        // slicing there panics. A non-boundary simply means "not a two-byte
+        // token".
+        let two = src.get(i..i + 2).unwrap_or("");
         let (kind, len) = match two {
+            // `λ` (U+03BB) is two bytes and is *not* an identifier character,
+            // so it lexes here rather than in the identifier rule above.
+            // `fun` is the ASCII synonym and is an ordinary keyword.
+            "λ" => (TokKind::Lambda, 2),
             "->" => (TokKind::Arrow, 2),
             "=>" => (TokKind::FatArrow, 2),
             "==" => (TokKind::EqEq, 2),

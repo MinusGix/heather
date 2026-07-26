@@ -213,6 +213,7 @@ impl Elaborator {
         if d.name == "Nat" {
             return err("`Nat` is built in", d.span);
         }
+        reject_function_fields(d)?;
         for (i, p) in d.params.iter().enumerate() {
             if d.params[..i].contains(p) {
                 return err(format!("duplicate type parameter `{p}`"), d.span);
@@ -945,7 +946,41 @@ fn occurs(t: &Ty, name: &str) -> Option<Span> {
             }
             args.iter().find_map(|a| occurs(a, name))
         }
+        // A function field is what makes a declaration *infinitary*; it is
+        // rejected outright before this runs (`reject_function_fields`), so
+        // an occurrence inside one cannot reach the lowering.
+        TyKind::Fn { dom, cod, .. } => occurs(dom, name).or_else(|| occurs(cod, name)),
     }
+}
+
+/// A `Π` field puts a declaration in the infinitary tier, which neither the
+/// tier-0 nor the tier-1 lowering handles: both assume finitary children
+/// throughout. Diagnosed rather than mis-lowered — the hazard class
+/// `docs/inductive-tier0-lowering.md` opens by naming
+/// (docs/surface-function-types.md §8).
+pub(crate) fn reject_function_fields(d: &InductiveDecl) -> Result<(), crate::ElabError> {
+    fn has_fn(t: &Ty) -> Option<Span> {
+        match &t.kind {
+            TyKind::Fn { .. } => Some(t.span),
+            TyKind::Named { args, .. } => args.iter().find_map(has_fn),
+            TyKind::Nat | TyKind::Eq(..) => None,
+        }
+    }
+    for c in &d.ctors {
+        for f in &c.fields {
+            if let Some(sp) = has_fn(&f.ty) {
+                return Err(crate::ElabError::Elab {
+                    msg: format!(
+                        "field of `{}` has a function type: that is the infinitary \
+                         tier, which is not lowered yet (issues/inductive-compiler.md)",
+                        c.name
+                    ),
+                    span: sp,
+                });
+            }
+        }
+    }
+    Ok(())
 }
 
 

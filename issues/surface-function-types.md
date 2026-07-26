@@ -1,6 +1,6 @@
 ---
 title: Function types and lambdas at the surface
-status: open
+status: closed
 labels: [frontend,syntax,elaboration,design]
 created: 2026-07-26
 updated: 2026-07-26
@@ -92,6 +92,9 @@ scheme-before-code discipline is for.
    expressible case. Explicit binders only; `{` diagnosed. Revisit with the
    universe/polymorphism layer. (Consequence: implicit insertion stays
    name-directed, so applying a function *value* is always explicit.)
+   **Tracked as its own issue: [[implicit-binders-in-function-types]]** —
+   wanted on by-value functions too, not merely for symmetry with `fn`, so
+   this is a deferral and not a rejection.
 
 2. **The `Call`-head refactor is small.** 13 sites — 9 in the parser, 4 in the
    elaborator (`lib.rs:759, 774, 806, 1643`), three of which are name-keyed
@@ -132,6 +135,7 @@ Out, and each to be *diagnosed* rather than mis-elaborated (the discipline
   [[inductive-compiler]] tier 2; a finitary declaration must stay finitary).
 - The trait/instance layer ([[compile-typeclass-design]]) — records of
   functions are a separate round on top of this one.
+- Implicit binders ([[implicit-binders-in-function-types]]).
 
 ## Follow-on this enables (do not do inline)
 
@@ -150,3 +154,4 @@ into one general one. Worth its own small round after this lands.
   decisions above taken in the same discussion. Next step: the scheme doc
   before the code, per the tier-0/tier-1 discipline.
 - 2026-07-26: Scheme written: docs/surface-function-types.md (grammar, the ty() restructure with every existing call site checked for arrow ambiguity, elaboration arms, five interactions to observe rather than assume, eight rejections with messages, and a 15-item acceptance checklist). Two corrections to this issue's plan came out of writing it against the real elaborator, both recorded above: implicit binders are out of scope (implicitness lives in ParamMeta keyed by declaration name, not in Type::Pi, and the surface has no universe to make them worth having), and the Call-head refactor is 13 sites rather than 'broad'. Also pinned: eta at Pi is definitional and unconditional, so lambda x => f(x) is convertible with f. Ready to implement.
+- 2026-07-26: IMPLEMENTED and green: 26 acceptance tests in crates/elab/tests/function_types.rs, workspace at 379 passing. Landed: TyKind::Fn (dependent, right-associative, one binder per paren group), ExprKind::Lam with the lambda/fun spellings and juxtaposed binders, postfix application so a call's head is any expression, Call -> App n-ary with an Expr head plus the Expr::as_named helper, elab_ty's Fn arm sharing elab_decl_inner's max(dom,cod) level rule, lambda checking (expected domain wins; a written annotation must be convertible) and inference (every binder annotated), apply_explicit generalized to an optional callee name, and reject_function_fields keeping a Pi out of an inductive field. Three things implementing it corrected, all in docs/surface-function-types.md §10: (1) the first parenthesis rule in ty() was too narrow and the EXISTING suite caught it — add_assoc's statement '(a + b) + c = a + (b + c)' opens with a group that is an expression, not a type, so the discriminator is now a top-level '->' rather than 'not followed by ='; (2) a latent lexer panic, since the two-byte token window '&src[i..i+2]' sliced into a codepoint the moment a non-ASCII token existed — '(λ' does exactly that, and λ is the first non-ASCII token the language has; (3) two claims in the scheme had no referent — there is no surface printer at all, and '@' on a non-name head is caught by the grammar, one layer earlier than §8 placed it. §6.3's predicted rejection was WITHDRAWN: a hole under a lambda binder works, because an on RHS is elaborated in the goal world so the binder is legitimately in scope; kept as a test WITH a negative control, since 'the name resolves to the wrong variable but the term still typechecks' is [[tyvar-scoping-in-lowered-fields]]'s hazard class. Nothing else in §6 misbehaved: guards, aliases and partial application all survive the extra binder a lambda pushes. Found in passing and filed rather than fixed: [[annotated-let-swallows-the-equals]], pre-existing and confirmed against 13dd25d.

@@ -149,6 +149,25 @@ pub enum TyKind {
     /// A declared inductive, applied to its type arguments (`Bool`,
     /// `Option<Nat>`), or a type parameter in scope inside an `inductive`.
     Named { name: String, args: Vec<Ty> },
+    /// `(x: A) -> B` (dependent) or `A -> B` (`binder: None`).
+    /// Right-associative; one binder per parenthesis group, so `(x: A) (y: B)
+    /// -> C` is written `(x: A) -> (y: B) -> C`
+    /// (docs/surface-function-types.md §1.1).
+    ///
+    /// Binders are always *explicit*: implicitness lives in the elaborator's
+    /// per-declaration `ParamMeta`, not in the kernel's `Type::Pi`, so there
+    /// is nowhere in a function type to record it
+    /// (issues/implicit-binders-in-function-types.md).
+    Fn { binder: Option<String>, dom: Box<Ty>, cod: Box<Ty> },
+}
+
+/// One lambda binder: `x` or `(x: A)`. An unannotated binder is only usable
+/// in checking position, where the expected Π supplies the domain.
+#[derive(Debug, Clone)]
+pub struct LamBinder {
+    pub name: String,
+    pub ty: Option<Ty>,
+    pub span: Span,
 }
 
 /// One `match` arm: `C(x, y) => body`. The binders are the constructor's
@@ -169,16 +188,41 @@ pub struct Expr {
     pub span: Span,
 }
 
+impl Expr {
+    /// `f(a, b)` with a *name* at the head — the shape every name-keyed
+    /// special form wants (`absurd`, `inj`, constructors, `Succ`, a self-call,
+    /// and implicit-argument insertion, which is name-directed). Returns
+    /// `None` for an application of anything else.
+    pub fn as_named(&self) -> Option<(&str, &[Expr], bool)> {
+        match &self.kind {
+            ExprKind::App { head, args, explicit } => match &head.kind {
+                ExprKind::Var(name) => Some((name.as_str(), args.as_slice(), *explicit)),
+                _ => None,
+            },
+            _ => None,
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub enum ExprKind {
     /// A name: parameter, `fn`, or `theorem`.
     Var(String),
     /// Numeral literal (desugars to `Zero`/`Succ`).
     Num(u64),
-    /// `f(a, b, …)` or `@f(a, b, …)`; the head is a name (stage 1).
+    /// `f(a, b, …)`, `@f(a, b, …)`, or an application of any expression —
+    /// `g(a)(b)`, `(λ x => x)(3)`. Kept **n-ary rather than curried** so that
+    /// implicit-argument insertion, which needs the whole argument list at
+    /// once, keeps working unchanged (docs/surface-function-types.md §2.2).
+    ///
     /// `explicit` (the `@` prefix) suppresses implicit-argument insertion, so
     /// every parameter — including `{}`-implicits — must be given positionally.
-    Call { name: String, args: Vec<Expr>, explicit: bool },
+    /// It is only ever set on a `Var` head: implicit insertion is
+    /// name-directed, so there is nothing for `@` to suppress elsewhere.
+    App { head: Box<Expr>, args: Vec<Expr>, explicit: bool },
+    /// `λ (x: A) (y: B) => e`, or `fun` for the ASCII spelling. Multiple
+    /// binders are sugar for nesting.
+    Lam { binders: Vec<LamBinder>, body: Box<Expr> },
     /// `refl` — checking-only.
     Refl,
     /// `?name` or `?` — a goal: a deferred obligation, discharged by an `on`

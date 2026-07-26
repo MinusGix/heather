@@ -17,13 +17,29 @@ evidence:
 Tracking issue: `issues/wf-former.md`.
 
 The design principle, stated once: **store children where the kernel's η
-already reaches.** `W` stores children in `Π`, the one type family this
-kernel deliberately does not η-expand, and that single fact is the source of
-every funext obligation route A pays. `Wf` stores them in `Σ`/`Unit`, whose
-η is in `conv.rs` today — the prototype demonstrated that
+already reaches.** `W` stores children in `Π`, and that single fact is the
+source of every funext obligation route A pays. `Wf` stores them in
+`Σ`/`Unit`, whose η is in `conv.rs` today — the prototype demonstrated that
 `supf (inr u) cs ≡ node (fst cs) (fst (snd cs))` for *neutral* `cs` is
 already a theorem of the current checker. The former is not new definitional
 power; it is a data representation aligned with the power we have.
+
+> **Precision about `Π` and η** (clarified 2026-07-26, while writing
+> `docs/surface-function-types.md`). An earlier phrasing of the paragraph
+> above called `Π` "the one type family this kernel deliberately does not
+> η-expand". Read literally that is **wrong**: `conv.rs:535` compares at a `Π`
+> by applying both sides to a fresh variable, unconditionally at every layer,
+> which is full type-directed η — so `λx. f x ≡ f` holds definitionally, for
+> neutral `f` included.
+>
+> The property route A actually lacks is different and narrower. η lets you
+> compare two functions *pointwise*; it does not let you **reconstruct** a
+> function from a projection. Route A's problem is that after eliminating a
+> `sup a f`, the children come back as `λy. nth …`, and showing that
+> convertible with the original `f` needs the encoding round-trip to compute
+> — which it does for canonical `f` and does not for neutral `f`. That gap is
+> what funext would close and what `Σ`/`Unit` children avoid, because a
+> `Σ`-tuple's components are recovered by projections that η *does* reach.
 
 ---
 

@@ -37,8 +37,8 @@ use heather_kernel::term::{
 };
 use heather_kernel::typing::{self, TypeError, DEFAULT_FUEL};
 use heather_syntax::{
-    parse_file, Arm, Decl, DeclKind, Expr, ExprKind, Item, OnStmt, OnTarget, ParseError, Span,
-    Stmt, Ty, TyKind,
+    parse_file, Arm, Decl, DeclKind, Expr, ExprKind, Item, LamBinder, OnStmt, OnTarget, ParseError,
+    Span, Stmt, Ty, TyKind,
 };
 
 mod inductive;
@@ -691,6 +691,29 @@ impl Elaborator {
         match &ty.kind {
             TyKind::Nat => Ok((Type::Nat, Level::Zero)),
             TyKind::Named { name, args } => self.lower_named(cx, name, args, ty.span),
+            // `(x: A) -> B` / `A -> B`. The level rule is `max(dom, cod)`,
+            // the same one `elab_decl_inner` uses to close a declaration's
+            // telescope — a written function type and a `fn`'s own type must
+            // not compute levels differently
+            // (docs/surface-function-types.md §5.1).
+            TyKind::Fn { binder, dom, cod } => {
+                let (dom_t, dom_level) = self.elab_ty(cx, dom)?;
+                let mut inner = cx.clone();
+                // `#` marks an elaborator-introduced binder: unspellable, and
+                // filtered out of the goal listing.
+                let name = binder.clone().unwrap_or_else(|| "#arrow".to_string());
+                inner.push(name, dom_t.clone(), dom_level.clone());
+                let (cod_t, cod_level) = self.elab_ty(&inner, cod)?;
+                Ok((
+                    Type::Pi {
+                        dom_level: dom_level.clone(),
+                        cod_level: cod_level.clone(),
+                        dom: Rc::new(dom_t),
+                        cod: Rc::new(cod_t),
+                    },
+                    Level::max(dom_level, cod_level),
+                ))
+            }
             TyKind::Eq(lhs, rhs) => {
                 let (lhs_t, lhs_ty, lvl) = self.elab_infer(cx, lhs)?;
                 let rhs_t = self.elab_check(cx, rhs, &lhs_ty, &lvl)?;
@@ -756,13 +779,23 @@ impl Elaborator {
             // `absurd(p)`: from an equation between distinct constructors,
             // anything — so it needs the expected type
             // (docs/inductive-tier0-lowering.md §6.1).
-            ExprKind::Call { name, args, .. }
-                if name == "absurd" && !self.shadowed(cx, name) =>
+            ExprKind::App { .. }
+                if matches!(e.as_named(), Some((n, _, _))
+                            if n == "absurd" && !self.shadowed(cx, n)) =>
             {
-                let [arg] = args.as_slice() else {
+                let (_, args, _) = e.as_named().expect("just checked");
+                let [arg] = args else {
                     return err("`absurd` takes exactly one argument", e.span);
                 };
                 self.build_absurd(cx, arg, expected, lvl, e.span)
+            }
+            // A lambda against an expected Π: the *expected* domain is what
+            // the binder is pushed with, so the emitted annotation always
+            // matches the type it is checked against. A written annotation is
+            // a readability aid and must be convertible with it
+            // (docs/surface-function-types.md §5.2).
+            ExprKind::Lam { binders, body } => {
+                self.elab_lam_check(cx, binders, body, expected, lvl, e.span)
             }
             // A constructor in checking position: the expected type *is* the
             // encoding, so every annotation of the injection and the field
@@ -771,9 +804,11 @@ impl Elaborator {
                 let (ind, i) = self.ctor_here(cx, name).expect("just checked");
                 self.build_ctor(cx, &ind, i, &[], expected, lvl, e.span)
             }
-            ExprKind::Call { name, args, explicit: false }
-                if self.ctor_here(cx, name).is_some() =>
+            ExprKind::App { .. }
+                if matches!(e.as_named(), Some((n, _, false))
+                            if self.ctor_here(cx, n).is_some()) =>
             {
+                let (name, args, _) = e.as_named().expect("just checked");
                 let (ind, i) = self.ctor_here(cx, name).expect("just checked");
                 self.build_ctor(cx, &ind, i, args, expected, lvl, e.span)
             }
@@ -803,7 +838,26 @@ impl Elaborator {
                 Ok((t, Type::Nat, Level::Zero))
             }
             ExprKind::Var(name) => self.resolve(cx, name, e.span),
-            ExprKind::Call { name, args, explicit } => {
+            // A lambda in inference position needs every binder annotated:
+            // with no expected type there is nothing else to take the domain
+            // from (docs/surface-function-types.md §5.2).
+            ExprKind::Lam { binders, body } => self.elab_lam_infer(cx, binders, body),
+            // An application whose head is *not* a name: no parameter
+            // metadata exists for it, so it is always explicit.
+            ExprKind::App { head, args, explicit } if e.as_named().is_none() => {
+                if *explicit {
+                    return err(
+                        "`@` suppresses implicit-argument insertion, which only applies \
+                         to a named callee",
+                        e.span,
+                    );
+                }
+                let (h, hty, hlvl) = self.elab_infer(cx, head)?;
+                self.apply_explicit(cx, None, h, hty, hlvl, args)
+            }
+            ExprKind::App { args, explicit, .. } => {
+                let (name, _, _) = e.as_named().expect("head is a name");
+                let name = &name.to_string();
                 if name == "Succ" {
                     let [arg] = args.as_slice() else {
                         return err("`Succ` takes exactly one argument", e.span);
@@ -843,7 +897,7 @@ impl Elaborator {
                 // Fully-explicit call (`@f`, or a callee with no implicits):
                 // apply the arguments positionally down the Π spine.
                 if *explicit || !mask.iter().any(|&b| b) {
-                    self.apply_explicit(cx, name, head, ty, lvl, args)
+                    self.apply_explicit(cx, Some(name), head, ty, lvl, args)
                 } else {
                     self.apply_implicit(cx, name, head, ty, lvl, args, &mask, e.span)
                 }
@@ -1314,13 +1368,107 @@ impl Elaborator {
         }
     }
 
+    /// A lambda against an expected type (docs/surface-function-types.md §5.2).
+    /// One Π is peeled per binder; a written annotation must be convertible
+    /// with the expected domain, but the *expected* domain is what gets
+    /// pushed and emitted.
+    fn elab_lam_check(
+        &self,
+        cx: &Cx,
+        binders: &[LamBinder],
+        body: &Expr,
+        expected: &Type,
+        lvl: &Level,
+        span: Span,
+    ) -> R<Term> {
+        let Some((b, rest)) = binders.split_first() else {
+            return self.elab_check(cx, body, expected, lvl);
+        };
+        let head = self.whnf(cx, expected, span)?;
+        let Type::Pi { dom_level, cod_level, dom, cod } = head else {
+            return err(
+                format!("a lambda needs a function type here, found `{expected:?}`"),
+                span,
+            );
+        };
+        if let Some(ann) = &b.ty {
+            let (ann_t, _) = self.elab_ty(cx, ann)?;
+            let psi = self.goal_psi();
+            if conv_type(&psi, &cx.gamma, Layer::Prog, &ann_t, &dom, &dom_level, self.fuel)
+                .is_err()
+            {
+                return err(
+                    format!(
+                        "`{}` is annotated with a type that is not the one expected here",
+                        b.name
+                    ),
+                    ann.span,
+                );
+            }
+        }
+        let mut inner = cx.clone();
+        inner.push(b.name.clone(), (*dom).clone(), dom_level.clone());
+        let body_t = if rest.is_empty() {
+            self.elab_check(&inner, body, &cod, &cod_level)?
+        } else {
+            self.elab_lam_check(&inner, rest, body, &cod, &cod_level, span)?
+        };
+        Ok(Term::Lam {
+            dom_level,
+            cod_level,
+            dom,
+            body: Rc::new(body_t),
+        })
+    }
+
+    /// A lambda in inference position: every binder must be annotated.
+    fn elab_lam_infer(
+        &self,
+        cx: &Cx,
+        binders: &[LamBinder],
+        body: &Expr,
+    ) -> R<(Term, Type, Level)> {
+        let Some((b, rest)) = binders.split_first() else {
+            return self.elab_infer(cx, body);
+        };
+        let Some(ann) = &b.ty else {
+            return err(
+                format!(
+                    "this lambda's binder `{}` needs a type annotation, or the lambda \
+                     needs a checking position (`let f: A -> B = λ {} => …;`)",
+                    b.name, b.name
+                ),
+                b.span,
+            );
+        };
+        let (dom, dom_level) = self.elab_ty(cx, ann)?;
+        let mut inner = cx.clone();
+        inner.push(b.name.clone(), dom.clone(), dom_level.clone());
+        let (body_t, cod, cod_level) = self.elab_lam_infer(&inner, rest, body)?;
+        Ok((
+            Term::Lam {
+                dom_level: dom_level.clone(),
+                cod_level: cod_level.clone(),
+                dom: Rc::new(dom.clone()),
+                body: Rc::new(body_t),
+            },
+            Type::Pi {
+                dom_level: dom_level.clone(),
+                cod_level: cod_level.clone(),
+                dom: Rc::new(dom),
+                cod: Rc::new(cod),
+            },
+            Level::max(dom_level, cod_level),
+        ))
+    }
+
     /// Positional application down the Π spine — the stage-1 behaviour, reused
     /// for `@`-marked calls and callees with no implicits. Supports partial
     /// application (fewer args than parameters yields a function value).
     fn apply_explicit(
         &self,
         cx: &Cx,
-        name: &str,
+        name: Option<&str>,
         head: Term,
         ty: Type,
         lvl: Level,
@@ -1329,13 +1477,15 @@ impl Elaborator {
         let (mut t, mut ty, mut lvl) = (head, ty, lvl);
         // Positional, so argument `i` is parameter `i`: a hole here defaults
         // its name to that parameter's ("proof-parameter names are API").
-        let params = self.params_of(name);
+        // A head that is not a name has no parameter metadata, hence no hints.
+        let params = name.map(|n| self.params_of(n)).unwrap_or_default();
+        let what = name.map_or_else(|| "this function".to_string(), |n| format!("`{n}`"));
         for (i, arg) in args.iter().enumerate() {
             let head = self.whnf(cx, &ty, arg.span)?;
             let Type::Pi { dom_level, cod_level, dom, cod } = head else {
-                return err(format!("`{name}` is applied to too many arguments"), arg.span);
+                return err(format!("{what} is applied to too many arguments"), arg.span);
             };
-            let hint = params.get(i).map(|p| (name, p.name.as_str()));
+            let hint = name.zip(params.get(i)).map(|(n, p)| (n, p.name.as_str()));
             let arg_t = self.elab_check_hinted(cx, arg, &dom, &dom_level, hint)?;
             let arg_rc = Rc::new(arg_t);
             ty = cod.apply_local(&LocalSubst::id(&cx.gamma).extended(Rc::clone(&arg_rc)));
@@ -1634,13 +1784,24 @@ fn count_holes(decl: &Decl) -> u32 {
                 expr(b, n);
             }
             TyKind::Named { args, .. } => args.iter().for_each(|a| ty(a, n)),
+            TyKind::Fn { dom, cod, .. } => {
+                ty(dom, n);
+                ty(cod, n);
+            }
         }
     }
     fn expr(e: &Expr, n: &mut u32) {
         match &e.kind {
             ExprKind::Hole(_) => *n += 1,
             ExprKind::Var(_) | ExprKind::Num(_) | ExprKind::Refl => {}
-            ExprKind::Call { args, .. } => args.iter().for_each(|a| expr(a, n)),
+            ExprKind::App { head, args, .. } => {
+                expr(head, n);
+                args.iter().for_each(|a| expr(a, n));
+            }
+            ExprKind::Lam { binders, body } => {
+                binders.iter().filter_map(|b| b.ty.as_ref()).for_each(|t| ty(t, n));
+                expr(body, n);
+            }
             ExprKind::Match { scrut, motive, arms } => {
                 expr(scrut, n);
                 if let Some((_, m)) = motive {

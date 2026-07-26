@@ -11,16 +11,24 @@
 //! field   := (name ":")? type
 //! params  := param ("," param)* ","?
 //! param   := name ":" type | "{" name ":" type "}"   -- implicit
-//! type    := name ("<" type ("," type)* ">")         -- applied inductive
+//! type    := "(" name ":" type ")" "->" type         -- dependent function
+//!          | tyatom "->" type                        -- right-associative
+//!          | tyatom
+//! tyatom  := name ("<" type ("," type)* ">")         -- applied inductive
 //!          | expr ("=" expr)?       -- bare `Nat`/`Bool` is that type; `=` is
 //!                                      propositional equality (`==` rejected)
+//!          | "(" type ")"
 //! block   := "{" stmt* expr on_stmt* "}"
 //! stmt    := "let" name (":" type)? "=" expr ";"
 //! on_stmt := "on" ("?" name ("." numeral)? | "_" ":" type) ":=" expr ";"
 //! expr    := "match" expr ("as" name "->" type)? "{" arms "}"
 //!          | "refl" | "?" name?
 //!          | "j" "(" expr "," "(" name "," name ")" "->" type "," expr ")"
-//!          | "@"? name "(" args ")" | name | numeral | "(" expr ")"
+//!          | ("λ"|"fun") binder+ "=>" expr
+//!          | "@" name "(" args ")"
+//!          | atom (("." name)? "(" args ")")*      -- application is postfix
+//!          | name | numeral | "(" expr ")"
+//! binder  := name | "(" name ":" type ")"
 //! arms    := arm ("," arm)* ","?    -- one per constructor, any order
 //! arm     := name ("(" name ("," name)* ")")? "=>" expr
 //! ```
@@ -56,7 +64,51 @@ struct Parser {
 
 type R<T> = Result<T, ParseError>;
 
+/// `name(args…)` as an [`ExprKind::App`] with a `Var` head — what the operator
+/// and `calc` desugarings build.
+fn named_call(name: &str, args: Vec<Expr>, explicit: bool, span: Span) -> Expr {
+    let head = Expr { kind: ExprKind::Var(name.to_string()), span };
+    Expr { kind: ExprKind::App { head: Box::new(head), args, explicit }, span }
+}
+
 impl Parser {
+    /// The token `k` positions ahead (`nth(0)` is [`Self::peek`]). Clamped to
+    /// `Eof`, which the token stream always ends with.
+    fn nth(&self, k: usize) -> &TokKind {
+        let i = (self.pos + k).min(self.toks.len() - 1);
+        &self.toks[i].kind
+    }
+
+    /// Is the parenthesised group at the current position a **type** rather
+    /// than the start of an expression?
+    ///
+    /// In type position a leading `(` is ambiguous: `(A -> B) -> C` groups a
+    /// type, while `(a + b) + c = d` opens the *expression* that is an
+    /// equality's left endpoint. `->` is the discriminator, because it is not
+    /// an expression operator — so the group is a type exactly when it
+    /// contains a top-level `->` of its own, or is immediately followed by
+    /// one. One scan, no backtracking.
+    fn group_is_type(&self) -> bool {
+        let mut depth = 0usize;
+        let mut i = self.pos;
+        while i < self.toks.len() {
+            match self.toks[i].kind {
+                TokKind::LParen => depth += 1,
+                TokKind::Arrow if depth == 1 => return true,
+                TokKind::RParen => {
+                    depth -= 1;
+                    if depth == 0 {
+                        return matches!(self.nth(i + 1 - self.pos), TokKind::Arrow);
+                    }
+                }
+                TokKind::Eof => break,
+                _ => {}
+            }
+            i += 1;
+        }
+        false
+    }
+
     fn peek(&self) -> &TokKind {
         &self.toks[self.pos].kind
     }
@@ -326,7 +378,74 @@ impl Parser {
         Ok(())
     }
 
+    /// Types, arrow-aware. `->` is right-associative, and a *binder-headed*
+    /// group `(x: A) -> B` makes it dependent
+    /// (docs/surface-function-types.md §3.1).
+    ///
+    /// The arrow check has to live above [`Self::ty_atom`] rather than inside
+    /// it: `ty_atom`'s `D<A>` case returns early, so folding the arrow into it
+    /// would silently drop the `-> B` of `D<A> -> B`.
     fn ty(&mut self) -> R<Ty> {
+        // `(x: A) -> B`. Three-token lookahead; `:` is not in the expression
+        // grammar, so a binder-headed group cannot be anything else.
+        if matches!(self.peek(), TokKind::LParen)
+            && matches!(self.nth(1), TokKind::Ident(_))
+            && matches!(self.nth(2), TokKind::Colon)
+        {
+            let start = self.bump().span; // `(`
+            let (name, _) = self.ident("binder name")?;
+            self.expect(&TokKind::Colon, "`:`")?;
+            let dom = self.ty()?;
+            self.expect(&TokKind::RParen, "`)` to close the binder")?;
+            self.expect(&TokKind::Arrow, "`->` after a function-type binder")?;
+            let cod = self.ty()?;
+            let span = start.join(cod.span);
+            return Ok(Ty {
+                kind: TyKind::Fn {
+                    binder: Some(name),
+                    dom: Box::new(dom),
+                    cod: Box::new(cod),
+                },
+                span,
+            });
+        }
+        // `{x: A} -> B` — diagnosed rather than parsed
+        // (issues/implicit-binders-in-function-types.md).
+        if matches!(self.peek(), TokKind::LBrace)
+            && matches!(self.nth(1), TokKind::Ident(_))
+            && matches!(self.nth(2), TokKind::Colon)
+        {
+            return self.err(
+                "implicit binders are not supported in function types yet: \
+                 implicitness is a property of a declaration's parameters \
+                 (see issues/implicit-binders-in-function-types.md)",
+            );
+        }
+        let lhs = self.ty_atom()?;
+        if matches!(self.peek(), TokKind::Arrow) {
+            self.bump();
+            let cod = self.ty()?; // right-associative
+            let span = lhs.span.join(cod.span);
+            return Ok(Ty {
+                kind: TyKind::Fn { binder: None, dom: Box::new(lhs), cod: Box::new(cod) },
+                span,
+            });
+        }
+        Ok(lhs)
+    }
+
+    /// A type with no top-level arrow.
+    fn ty_atom(&mut self) -> R<Ty> {
+        // `( ty )` — needed so `(A -> B) -> C` groups. Guarded by
+        // `group_is_type`, because in type position a leading `(` far more
+        // often opens an *expression*: `(a + b) + c = a + (b + c)` is a type,
+        // but every parenthesis in it is an arithmetic one.
+        if matches!(self.peek(), TokKind::LParen) && self.group_is_type() {
+            let start = self.bump().span;
+            let inner = self.ty()?;
+            let end = self.expect(&TokKind::RParen, "`)`")?;
+            return Ok(Ty { kind: inner.kind, span: start.join(end) });
+        }
         // `D<A, B>` — an applied inductive. Unambiguous: `<` is the `lt`
         // operator only in *expression* position, and no expression is a type.
         if matches!(self.peek(), TokKind::Ident(_))
@@ -402,10 +521,7 @@ impl Parser {
             self.bump();
             let rhs = self.expr_bp(r_bp)?;
             let span = lhs.span.join(rhs.span);
-            lhs = Expr {
-                kind: ExprKind::Call { name: name.to_string(), args: vec![lhs, rhs], explicit: false },
-                span,
-            };
+            lhs = named_call(name, vec![lhs, rhs], false, span);
         }
         Ok(lhs)
     }
@@ -415,16 +531,37 @@ impl Parser {
     /// so with stage-2 implicit endpoints (issues/elab-stage2-metas.md) the
     /// earlier implicit parameters are inferred from it (`p.sym()` ⇒ `sym(p)`,
     /// `add_succ(n, k).sym()` ⇒ `sym(add_succ(n, k))`).
+    /// …and by zero or more applications `(args)`, so the head of a call can
+    /// be any expression: `g(a)(b)`, `(λ x => x)(3)`
+    /// (docs/surface-function-types.md §1.3).
     fn postfix(&mut self) -> R<Expr> {
         let mut e = self.atom()?;
-        while matches!(self.peek(), TokKind::Dot) {
-            self.bump();
-            let (method, _) = self.ident("method name")?;
-            self.expect(&TokKind::LParen, "`(` (method call)")?;
-            let (mut args, end) = self.call_args()?;
-            let span = e.span.join(end);
-            args.push(e);
-            e = Expr { kind: ExprKind::Call { name: method, args, explicit: false }, span };
+        loop {
+            match self.peek() {
+                TokKind::Dot => {
+                    self.bump();
+                    let (method, _) = self.ident("method name")?;
+                    self.expect(&TokKind::LParen, "`(` (method call)")?;
+                    let (mut args, end) = self.call_args()?;
+                    let span = e.span.join(end);
+                    args.push(e);
+                    let head = Expr { kind: ExprKind::Var(method), span };
+                    e = Expr {
+                        kind: ExprKind::App { head: Box::new(head), args, explicit: false },
+                        span,
+                    };
+                }
+                TokKind::LParen => {
+                    self.bump();
+                    let (args, end) = self.call_args()?;
+                    let span = e.span.join(end);
+                    e = Expr {
+                        kind: ExprKind::App { head: Box::new(e), args, explicit: false },
+                        span,
+                    };
+                }
+                _ => break,
+            }
         }
         Ok(e)
     }
@@ -446,14 +583,22 @@ impl Parser {
         if self.at_kw("j") {
             return self.j_expr();
         }
-        // `@f(args)` — a fully-explicit call (implicit params given positionally).
+        if matches!(self.peek(), TokKind::Lambda) || self.at_kw("fun") {
+            return self.lambda();
+        }
+        // `@f(args)` — a fully-explicit call (implicit params given
+        // positionally). Stays an atom-level *named* form rather than a
+        // prefix on any application: `@` suppresses implicit-argument
+        // insertion, which is name-directed, so on a non-name there is
+        // nothing to suppress (docs/surface-function-types.md §1.3).
         if matches!(self.peek(), TokKind::At) {
             let at = self.bump().span;
-            let (name, _) = self.ident("call head after `@`")?;
+            let (name, nsp) = self.ident("call head after `@`")?;
             self.expect(&TokKind::LParen, "`(` (`@` marks a call)")?;
             let (args, end) = self.call_args()?;
+            let head = Expr { kind: ExprKind::Var(name), span: nsp };
             return Ok(Expr {
-                kind: ExprKind::Call { name, args, explicit: true },
+                kind: ExprKind::App { head: Box::new(head), args, explicit: true },
                 span: at.join(end),
             });
         }
@@ -472,21 +617,57 @@ impl Parser {
                 self.expect(&TokKind::RParen, "`)`")?;
                 Ok(e)
             }
+            // Application is postfix now, so a bare name is just a name;
+            // `f(a)` is assembled by `postfix`.
             TokKind::Ident(name) => {
                 let sp = self.bump().span;
-                if matches!(self.peek(), TokKind::LParen) {
-                    self.bump();
-                    let (args, end) = self.call_args()?;
-                    Ok(Expr {
-                        kind: ExprKind::Call { name, args, explicit: false },
-                        span: sp.join(end),
-                    })
-                } else {
-                    Ok(Expr { kind: ExprKind::Var(name), span: sp })
-                }
+                Ok(Expr { kind: ExprKind::Var(name), span: sp })
             }
             _ => self.err("expected an expression"),
         }
+    }
+
+    /// `λ (x: A) (y: B) => e`, or `fun` for the ASCII spelling. Multiple
+    /// binders are sugar for nesting. The body is parsed at binding power 0,
+    /// so it extends as far as it can and stops at `,` `)` `}` `;` — none of
+    /// which are infix operators.
+    fn lambda(&mut self) -> R<Expr> {
+        let start = self.bump().span; // `λ` or `fun`
+        let mut binders = Vec::new();
+        loop {
+            match self.peek() {
+                TokKind::Ident(_) => {
+                    let (name, sp) = self.ident("lambda binder")?;
+                    binders.push(LamBinder { name, ty: None, span: sp });
+                }
+                TokKind::LParen => {
+                    let open = self.bump().span;
+                    let (name, _) = self.ident("lambda binder")?;
+                    self.expect(&TokKind::Colon, "`:` (annotated lambda binder)")?;
+                    let ty = self.ty()?;
+                    let close = self.expect(&TokKind::RParen, "`)`")?;
+                    binders.push(LamBinder {
+                        name,
+                        ty: Some(ty),
+                        span: open.join(close),
+                    });
+                }
+                TokKind::LBrace => {
+                    return self.err(
+                        "implicit lambda binders are not supported yet \
+                         (see issues/implicit-binders-in-function-types.md)",
+                    )
+                }
+                _ => break,
+            }
+        }
+        if binders.is_empty() {
+            return self.err("a lambda needs at least one binder");
+        }
+        self.expect(&TokKind::FatArrow, "`=>` (a lambda's body follows `=>`)")?;
+        let body = self.expr()?;
+        let span = start.join(body.span);
+        Ok(Expr { kind: ExprKind::Lam { binders, body: Box::new(body) }, span })
     }
 
     /// Parse a comma-separated argument list up to and including the closing
@@ -616,20 +797,18 @@ impl Parser {
         let last = &terms[m];
         let mut acc = proofs[m - 1].clone();
         for i in (0..m - 1).rev() {
-            acc = Expr {
-                kind: ExprKind::Call {
-                    name: "trans".to_string(),
-                    args: vec![
-                        terms[i].clone(),
-                        terms[i + 1].clone(),
-                        last.clone(),
-                        proofs[i].clone(),
-                        acc,
-                    ],
-                    explicit: true,
-                },
+            acc = named_call(
+                "trans",
+                vec![
+                    terms[i].clone(),
+                    terms[i + 1].clone(),
+                    last.clone(),
+                    proofs[i].clone(),
+                    acc,
+                ],
+                true,
                 span,
-            };
+            );
         }
         acc.span = span;
         Ok(acc)
@@ -662,8 +841,8 @@ mod tests {
     fn at_marks_a_fully_explicit_call() {
         let f = parse_file("fn f(n: Nat) -> Nat { @g(a, b, p) }").unwrap();
         match &only_decl(&f).body.result.kind {
-            ExprKind::Call { name, args, explicit } => {
-                assert_eq!(name, "g");
+            ExprKind::App { head, args, explicit } => {
+                assert!(matches!(&head.kind, ExprKind::Var(n) if n == "g"));
                 assert_eq!(args.len(), 3);
                 assert!(*explicit);
             }
@@ -675,7 +854,7 @@ mod tests {
     fn plain_call_is_not_explicit() {
         let f = parse_file("fn f(n: Nat) -> Nat { g(a) }").unwrap();
         match &only_decl(&f).body.result.kind {
-            ExprKind::Call { explicit, .. } => assert!(!*explicit),
+            ExprKind::App { explicit, .. } => assert!(!*explicit),
             other => panic!("expected a call, got {other:?}"),
         }
     }
@@ -694,7 +873,10 @@ mod tests {
 
     fn as_call(k: &ExprKind) -> (&str, &[Expr], bool) {
         match k {
-            ExprKind::Call { name, args, explicit } => (name.as_str(), args.as_slice(), *explicit),
+            ExprKind::App { head, args, explicit } => match &head.kind {
+                ExprKind::Var(name) => (name.as_str(), args.as_slice(), *explicit),
+                other => panic!("expected a named call, got {other:?}"),
+            },
             other => panic!("expected a call, got {other:?}"),
         }
     }
