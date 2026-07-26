@@ -3,7 +3,7 @@ title: "Meta: frontend roadmap and current focus"
 status: open
 labels: [frontend,meta]
 created: 2026-07-23
-updated: 2026-07-24
+updated: 2026-07-26
 ---
 
 Organizing issue for the frontend push (the frontend-first route,
@@ -18,7 +18,7 @@ Design record: [[surface-syntax]] (decisions) + docs/sketches/surface-v0..3
 
 1. ✅ Stage 1: parser + annotation-filling elaborator; Nat suite checked
    ([[elaborator-design]], [[stress-proof-suite]] item 1).
-2. [[metatheory-ch07-pass]] — interleave; wants doing before tier-1
+2. ✅ [[metatheory-ch07-pass]] — interleave; wants doing before tier-1
    inductives generate serious term volume on the extension formers.
 3. ✅ [[elab-stage2-metas]] — implicit annotations/levels; the Nat suite loses
    its explicit motives and endpoint spam. Unblocks most ergonomics.
@@ -26,9 +26,10 @@ Design record: [[surface-syntax]] (decisions) + docs/sketches/surface-v0..3
    Mostly parallel to 3; lemma-application ergonomics.
 5. ✅ [[match-recursion]] — termination checking; `induction`/`rec` collapse
    into `match` with IH = self-call.
-6. [[goal-holes]] — `?holes` + `on` discharge (needs stage-2 metas).
-7. [[inductive-compiler]] tier 0 → List hand-prototype → tier 1
-   ([[stress-proof-suite]] item 2).
+6. ✅ [[goal-holes]] — `?holes` + `on` discharge (needs stage-2 metas).
+7. ✅ [[inductive-compiler]] tiers 0 and 1 — the latter onto `Wf`, not
+   fording; [[stress-proof-suite]] item 2 done. The issue itself stays open
+   for tier 2 and the surface gaps ([[nested-inductives-container-fields]]).
 8. Tier 2 / `Acc` by hand ([[stress-proof-suite]] item 3), then reopen
    [[ir-simulate-design]] in-language.
 
@@ -50,3 +51,4 @@ goal-solver meta-functions (sketch round 3 §2).
 - 2026-07-24: Item 2 [[metatheory-ch07-pass]] done and closed: full ch. 07 pass over the six extensions (docs/metatheory-ch07-extensions.md), nothing broken, no kernel-rule change, so [[inductive-compiler]] tier 1 is no longer gated on unpaid metatheory debt. Next focus: item 6 [[goal-holes]], then item 7 [[inductive-compiler]] tier 0.
 - 2026-07-24: Item 6 [[goal-holes]] landed: `?name`/`?` holes as decl-scoped Ψ-metas, `on ?name := e;` / `on _: P := e;` discharge, and the unsolved-goal listing (with the first `Display for ElabError`). Came with the block-statement grammar the roadmap had been deferring — `Block` + `let` — which is the surface [[surface-proof-automation]]'s `apply` was waiting on, so its cheap slice is now unblocked too. Deferred within it, each tested as a rejection: holes are checking-only (so `sym(?p)` needs `@sym(a,b,?p)` — the fix is postponement, i.e. [[elab-unifier-completeness]], not this issue), one occurrence per named hole, no holes inside an `on` RHS (goal payloads are not telescoped), `on` trailing-only, and auto-defer holes (`xs[i]`) still want the trait/indexing layer. Next focus: item 7 [[inductive-compiler]] tier 0 → List hand-prototype → tier 1 ([[stress-proof-suite]] item 2).
 - 2026-07-24: Item 7 [[inductive-compiler]] TIER 0 LANDED: scheme doc first (docs/inductive-tier0-lowering.md), then the mechanization (crates/elab/src/inductive.rs) plus surface support — 'inductive' decls with monomorphized type parameters, named/applied types, n-ary match arms (Nat folded into the same grammar), constructors in both modes, and no-confusion as 'absurd(p)'/'inj(k, p)'. 24 acceptance tests, every one kernel-checked. Two scheme corrections found by implementing: the nominal tag must be eta-irrelevant (Sigma-of-Units, not Id — a dependent motive needs 'inl x' to convert with the canonical constructor), and injectivity needs no large elim (the lhs's own field is the default, which keeps the motive constant and drops the level restriction). Deferred and diagnosed rather than mis-lowered: tier 1 (recursive) declarations, dependent-field injectivity, deep type-argument inference. Next focus: item 7's remainder — the List hand-prototype (exact-height fording) as the acceptance test for tier 1 ([[stress-proof-suite]] item 2), then the tier-1 generator.
+- 2026-07-26: Item 7 remainder closed on the linear side: [[stress-proof-suite]] item 2 is DONE — append_nil/append_assoc/rev_append written at the surface over a generator-produced 'inductive List' and kernel-checked (crates/elab/tests/tier1_list_proofs.rs). The tier-1 generator needed no changes to carry proof content, only definitions, which was the open question. Next focus: item 8 — tier 2 / Acc by hand ([[stress-proof-suite]] item 3), which exercises the synthesized-ih beta rule, the least battle-tested kernel machinery; then [[ir-simulate-design]] reopens in-language.
