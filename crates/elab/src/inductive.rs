@@ -949,9 +949,9 @@ pub(crate) enum ConstBody {
     /// motive is `Ty 0` — this is the large elimination, and it is what makes
     /// two distinct constructors provably distinct.
     TagCode(usize),
-    /// §6.2: the `k`-th field projection at constructor `i`, and a default
-    /// term (the left-hand side's own field value) elsewhere, so that the
-    /// projection is total on `⟦D⟧`.
+    /// §6.2: the `k`-th *payload* field projection at constructor `i`, and a
+    /// default term (the left-hand side's own field value) elsewhere, so that
+    /// the projection is total on `⟦D⟧`.
     Field { i: usize, k: usize, default: Rc<Term> },
 }
 
@@ -1101,9 +1101,15 @@ impl Elaborator {
     /// which is a diagnosable surface condition, not an internal error, since
     /// no-confusion is only meaningful between actual constructors.
     pub(crate) fn read_ctor(&self, ind: &Inductive, t: &Term) -> Option<(usize, Vec<Rc<Term>>)> {
+        // Tier 1: the injections are in the *label*, and the fields are split
+        // between the label's Σ spine and the children tuple (tier 1 §7).
+        let (label, children) = match t {
+            Term::Supf { label, children, .. } => (&**label, Some(&**children)),
+            _ => (t, None),
+        };
         let n = ind.ctors.len();
         let mut i = 0usize;
-        let mut cur = t;
+        let mut cur = label;
         loop {
             match cur {
                 Term::Inr { val, .. } if i + 1 < n => {
@@ -1120,15 +1126,40 @@ impl Elaborator {
         if i >= n {
             return None;
         }
-        // Skip the nominal tag, then collect one value per declared field.
+        let ctor = &ind.ctors[i];
+        // Skip the nominal tag, then collect one value per *payload* field.
         let Term::Pair { snd, .. } = cur else { return None };
         let mut p = snd;
-        let mut fields = Vec::new();
-        for _ in 0..ind.ctors[i].fields.len() {
+        let mut payload = Vec::new();
+        for _ in 0..ctor.fields.len() - ctor.arity() {
             let Term::Pair { fst, snd, .. } = &**p else { return None };
-            fields.push(Rc::clone(fst));
+            payload.push(Rc::clone(fst));
             p = snd;
         }
+        // …and one per child, out of the tuple.
+        let mut kids = Vec::new();
+        if let Some(children) = children {
+            let mut c = children;
+            for _ in 0..ctor.arity() {
+                let Term::Pair { fst, snd, .. } = c else { return None };
+                kids.push(Rc::clone(fst));
+                c = snd;
+            }
+        }
+        // Re-interleave into declaration order, which is the order `inj`'s
+        // field index and every surface message speak in.
+        let (mut a, mut b) = (0usize, 0usize);
+        let fields = (0..ctor.fields.len())
+            .map(|k| {
+                if ctor.rec_field[k] {
+                    b += 1;
+                    Rc::clone(&kids[b - 1])
+                } else {
+                    a += 1;
+                    Rc::clone(&payload[a - 1])
+                }
+            })
+            .collect();
         Some((i, fields))
     }
 
@@ -1162,6 +1193,46 @@ impl Elaborator {
             );
         };
         Ok((proof, ind, sty, level, lhs, rhs, l, r))
+    }
+
+    /// A total, constant-motive function of `⟦D⟧` built inside a `J` motive —
+    /// which is what both halves of no-confusion need, and the one place the
+    /// two tiers differ in *how* they eliminate. Tier 0 cases on the
+    /// scrutinee directly; tier 1 cases on the tag inside an `elim_Wf`
+    /// (docs/inductive-tier1-wf-lowering.md §7).
+    ///
+    /// `d_ty`, `spine` and `body`'s payloads are scoped in the caller's base
+    /// context; `motive` and `scrut` in `mcx`, which is that context plus the
+    /// `J` motive's two binders — hence the fixed `2` below.
+    #[allow(clippy::too_many_arguments)]
+    fn const_predicate(
+        &self,
+        mcx: &Cx,
+        ind: &Inductive,
+        d_ty: &Type,
+        spine: &Spine,
+        motive: &Type,
+        mlvl: &Level,
+        scrut: Rc<Term>,
+        body: &ConstBody,
+        span: Span,
+    ) -> R<Term> {
+        if ind.recursive {
+            return self
+                .const_elim_wf(mcx, ind, d_ty, spine, motive, mlvl, scrut, body, 2, span);
+        }
+        self.const_case_tree(
+            mcx,
+            spine,
+            ind.ctors.len(),
+            motive,
+            mlvl,
+            scrut,
+            body,
+            0,
+            2,
+            span,
+        )
     }
 
     /// §6.1, disjointness: from an equation between *different* constructors,
@@ -1202,16 +1273,15 @@ impl Elaborator {
             slvl.clone(),
         );
         let spine = self.spine(&sty, &slvl, ind.ctors.len(), span)?;
-        let pred = self.const_case_tree(
+        let pred = self.const_predicate(
             &mcx,
+            &ind,
+            &sty,
             &spine,
-            ind.ctors.len(),
             &Type::Ty(Level::Zero),
             &Level::succ(Level::Zero),
             Rc::new(Term::Var(LocalVar(1))),
             &ConstBody::TagCode(i),
-            0,
-            2,
             span,
         )?;
         let motive = Type::El { level: Level::Zero, tm: Rc::new(pred) };
@@ -1272,23 +1342,40 @@ impl Elaborator {
             );
         }
         let spine = self.spine(&sty, &slvl, ind.ctors.len(), span)?;
-        // The field type at each side. They differ exactly when the field's
-        // type depends on an earlier field of the same constructor.
-        let (_, lty, llvl) = self.projection(cx, &spine.ctors[i].0, &lhs, k, span)?;
-        let (_, rty, _) = self.projection(cx, &spine.ctors[i].0, &rhs, k, span)?;
-        // Layer p: conversion is only defined at computing layers, and this
-        // comparison is the elaborator's own, not part of an emitted term.
-        if conv_type(self.psi(), &cx.gamma, Layer::Prog, &lty, &rty, &llvl, self.fuel).is_err() {
-            return err(
-                format!(
-                    "field {k} of `{}` has a type that depends on an earlier field, so its \
-                     injectivity is not derivable this way yet \
-                     (docs/inductive-tier0-lowering.md §6.2)",
-                    ind.ctors[i].name
-                ),
-                span,
-            );
-        }
+        // Which body the projection's case tree gets, and at what type. A
+        // recursive field is a child rather than a component of the shape, so
+        // its type is `⟦D⟧` itself and there is nothing for it to depend on
+        // (tier 1 §2/§7.2); a payload field is tier 0's projection, at its
+        // index *among the payload*.
+        let (body, lty, llvl) = if ind.ctors[i].rec_field[k] {
+            // A child, not a component of the shape: `None` routes the
+            // projection through `child_projection` below.
+            (None, sty.clone(), slvl.clone())
+        } else {
+            let p = ind.ctors[i].rec_field[..k].iter().filter(|r| !**r).count();
+            // The field type at each side. They differ exactly when the
+            // field's type depends on an earlier field of the same
+            // constructor.
+            let (_, lty, llvl) = self.projection(cx, &spine.ctors[i].0, &lhs, p, span)?;
+            let (_, rty, _) = self.projection(cx, &spine.ctors[i].0, &rhs, p, span)?;
+            // Layer p: conversion is only defined at computing layers, and
+            // this comparison is the elaborator's own, not part of an emitted
+            // term.
+            if conv_type(self.psi(), &cx.gamma, Layer::Prog, &lty, &rty, &llvl, self.fuel)
+                .is_err()
+            {
+                return err(
+                    format!(
+                        "field {k} of `{}` has a type that depends on an earlier field, so its \
+                         injectivity is not derivable this way yet \
+                         (docs/inductive-tier0-lowering.md §6.2)",
+                        ind.ctors[i].name
+                    ),
+                    span,
+                );
+            }
+            (Some(ConstBody::Field { i, k: p, default: Rc::clone(&la[k]) }), lty, llvl)
+        };
         // The J motive, over `y` and `p : lhs = y`: `a_k = proj y`.
         let mut mcx = cx.clone();
         mcx.push("#y".into(), sty.clone(), slvl.clone());
@@ -1302,18 +1389,38 @@ impl Elaborator {
             },
             slvl.clone(),
         );
-        let proj = self.const_case_tree(
-            &mcx,
-            &spine,
-            ind.ctors.len(),
-            &lty.shift_local(2),
-            &llvl,
-            Rc::new(Term::Var(LocalVar(1))),
-            &ConstBody::Field { i, k, default: Rc::clone(&la[k]) },
-            0,
-            2,
-            span,
-        )?;
+        let proj = match &body {
+            Some(body) => self.const_predicate(
+                &mcx,
+                &ind,
+                &sty,
+                &spine,
+                &lty.shift_local(2),
+                &llvl,
+                Rc::new(Term::Var(LocalVar(1))),
+                body,
+                span,
+            )?,
+            // The recursive half (tier 1 §7.2). It cannot go through
+            // `const_predicate`: reading a child out of `cs` needs `cs` at
+            // the *literal* arity, and outside a tag branch that arity is
+            // stuck on a variable — so this one generalizes `cs` in the case
+            // motive exactly as `match` does, and shares the code that does.
+            None => {
+                let t = ind.ctors[i].rec_field[..k].iter().filter(|r| **r).count();
+                self.child_projection(
+                    &mcx,
+                    &ind,
+                    &sty.shift_local(2),
+                    &slvl,
+                    i,
+                    t,
+                    Rc::new(la[k].shift_local(2)),
+                    Term::Var(LocalVar(1)),
+                    span,
+                )?
+            }
+        };
         let motive = Type::Id {
             level: llvl.clone(),
             ty: Rc::new(lty.shift_local(2)),

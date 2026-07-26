@@ -187,3 +187,53 @@ fn a_recursive_field_is_not_in_scope_later() {
     );
     assert!(msg.contains("unbound name `t`"), "{msg}");
 }
+
+// §10.7 — no-confusion, both halves, on a tier-1 declaration. Disjointness
+// is `elim_Wf` at the motive `Ty 0` (large elimination over a `Wf`, which
+// needs no new kernel power); injectivity is `elim_Wf` at a constant motive,
+// projecting a payload field with `fst`/`snd` and a recursive one with `nth`.
+#[test]
+fn no_confusion() {
+    elab(&format!(
+        "{TREE}
+         theorem leaf_is_not_node(l: Tree, r: Tree, p: Leaf = Node(l, r)): Leaf = l {{
+             absurd(p)
+         }}
+
+         theorem node_injective_left(a: Tree, b: Tree, c: Tree, d: Tree,
+                                     p: Node(a, b) = Node(c, d)): a = c {{
+             inj(p)
+         }}
+
+         theorem node_injective_right(a: Tree, b: Tree, c: Tree, d: Tree,
+                                      p: Node(a, b) = Node(c, d)): b = d {{
+             inj(1, p)
+         }}"
+    ));
+}
+
+// The payload half of injectivity, at a constructor that carries both a
+// payload field and children: the two halves are projected by different
+// mechanisms and both have to land on the declared field order.
+#[test]
+fn injectivity_across_payload_and_children() {
+    elab(
+        r#"
+        inductive T { Tip(Nat), Two(n: Nat, l: T, r: T) }
+
+        theorem tip_inj(a: Nat, b: Nat, p: Tip(a) = Tip(b)): a = b { inj(p) }
+
+        theorem two_payload(a: Nat, b: Nat, l: T, r: T, l2: T, r2: T,
+                            p: Two(a, l, r) = Two(b, l2, r2)): a = b { inj(p) }
+
+        theorem two_left(a: Nat, b: Nat, l: T, r: T, l2: T, r2: T,
+                         p: Two(a, l, r) = Two(b, l2, r2)): l = l2 { inj(1, p) }
+
+        theorem two_right(a: Nat, b: Nat, l: T, r: T, l2: T, r2: T,
+                          p: Two(a, l, r) = Two(b, l2, r2)): r = r2 { inj(2, p) }
+
+        theorem tip_is_not_two(a: Nat, b: Nat, l: T, r: T,
+                               p: Tip(a) = Two(b, l, r)): a = b { absurd(p) }
+        "#,
+    );
+}

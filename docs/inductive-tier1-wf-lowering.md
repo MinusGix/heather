@@ -270,6 +270,19 @@ Both halves are tier 0 §6's, with `Case`-on-the-scrutinee replaced by
 `elim_Wf`-with-a-constant-motive-and-a-`Case`-on-the-tag. In each, the step
 ignores `ih` entirely — no-confusion is not an inductive argument.
 
+*Correction, made while writing the code.* That is true of everything except
+**injectivity at a recursive field**, and the first draft of §7.2 below had it
+wrong. A constant motive frees the step from `ih`; it does *not* free it from
+`cs`. Reading the `t`-th child means `nth^l(⟦D⟧; mᵢ; cs; ι_t)` at the
+**literal** `mᵢ`, and outside a tag branch `cs : Vec^l(⟦D⟧; n[a/x])` is stuck
+on the variable `a` — so `Vec^l(⟦D⟧; mᵢ)` is not convertible with it and the
+projection does not typecheck. That case therefore needs §6.2's
+generalization, exactly as `match` does, and shares the code that does it
+(`wf.rs::build_elim_wf`, over a `Branches` choice of branch body); only the
+two `ih`-free cases go through the simpler `const_elim_wf`. The kernel caught
+this as a `NotConvertible`, which is the cheap half of the hazard class — the
+expensive half is the bug that typechecks.
+
 - **§7.1 Disjointness (`absurd`).** The tag predicate
   `tagᵢ : ⟦D⟧ → Ty 0` is `elim_Wf` at motive `Ty 0` (motive level 1) whose
   step is the constant case tree returning `⌜Unit⁰⌝` at `i` and `⌜Empty⁰⌝`
@@ -281,13 +294,16 @@ ignores `ih` entirely — no-confusion is not an inductive argument.
 - **§7.2 Injectivity (`inj`).** The `k`-th field projection is `elim_Wf` at
   the *constant* motive "that field's type", whose step is the case tree
   returning
-  - `fst (snd^{j+1} a)` for a payload field `j`, or
-  - `nth^l(⟦D⟧; mᵢ; cs; ι_t)` for the `t`-th recursive field,
+  - `fst (snd^{j+1} a)` for a payload field `j` — that field's index among
+    the payload, which is not its index among the surface fields, and
+  - `nth^l(⟦D⟧; mᵢ; cs; ι_t)` for the `t`-th recursive field, **through
+    §6.2's `cs` generalization** (see the correction above); its motive is
+    `⟦D⟧` itself, and there is nothing for it to depend on,
 
   and, at every other constructor, the left-hand side's own field value —
   the same totality trick as tier 0 §6.2, and the same restriction it
-  carries (the field's type must not depend on an earlier field, checked by
-  conversion rather than assumed).
+  carries for payload fields (the field's type must not depend on an earlier
+  field, checked by conversion rather than assumed).
 
 Reading a constructor term back (`read_ctor`, which is what decides *which*
 constructor each side of the equation is) gains a `Supf` case: walk the

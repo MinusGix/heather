@@ -24,7 +24,7 @@ use heather_kernel::level::Level;
 use heather_kernel::term::{nth, wf_step_telescope, LocalCtx, LocalVar, Term, Type};
 use heather_syntax::{Arm, Expr, Span};
 
-use crate::inductive::{inject, nat_lit, Inductive, Spine};
+use crate::inductive::{inject, nat_lit, ConstBody, Inductive, Spine};
 use crate::{embed, err, Alias, Cx, Elaborator, Guard, GuardKind, R};
 
 /// The pieces every part of the lowering needs, gathered once so that the
@@ -88,6 +88,21 @@ impl Tel<'_> {
         );
         (cs, ih, step)
     }
+}
+
+/// What a branch of the step's case tree computes. The two share the whole
+/// eliminator — the telescope, the case tree, the `cs`/`ih` generalization
+/// and the two trailing applications — and differ only in the body at each
+/// constructor.
+enum Branches<'a> {
+    /// `match`: the surface arms, already in declaration order (§6.3).
+    Arms(&'a [&'a Arm]),
+    /// Injectivity at a recursive field (§7.2): the `t`-th child at
+    /// constructor `i`, and the totality default elsewhere. It has to go
+    /// through the generalization too — reading a child out of `cs` needs the
+    /// *literal* arity, and outside a tag branch that arity is stuck on a
+    /// variable.
+    Child { i: usize, t: usize, default: Rc<Term> },
 }
 
 impl Elaborator {
@@ -157,6 +172,73 @@ impl Elaborator {
         mlvl: Level,
         span: Span,
     ) -> R<Term> {
+        // Does this `match` descend on one of the enclosing declaration's own
+        // parameters? If so, a self-call in an arm is the ih (§6.4).
+        let dec = self.descends_on_param(cx, &scrut);
+        self.build_elim_wf(
+            cx,
+            ind,
+            scrut_ty,
+            motive,
+            mlvl,
+            scrut,
+            &Branches::Arms(arms),
+            dec,
+            span,
+        )
+    }
+
+    /// The `t`-th child of constructor `i` as a *total* function of `⟦D⟧`
+    /// (§7.2), for injectivity. `d_ty`, `default` and `scrut` are all scoped
+    /// in `cx`.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn child_projection(
+        &self,
+        cx: &Cx,
+        ind: &Inductive,
+        d_ty: &Type,
+        level: &Level,
+        i: usize,
+        t: usize,
+        default: Rc<Term>,
+        scrut: Term,
+        span: Span,
+    ) -> R<Term> {
+        // A constant motive at `⟦D⟧` — the projection is not an inductive
+        // argument, so nothing here reads `ih`.
+        self.build_elim_wf(
+            cx,
+            ind,
+            d_ty,
+            d_ty.shift_local(1),
+            level.clone(),
+            scrut,
+            &Branches::Child { i, t, default },
+            None,
+            span,
+        )
+    }
+
+    /// The eliminator both of the above are (§6.2): one `elim_Wf` whose step
+    /// cases on the tag with `cs` and `ih` generalized in the case motive.
+    /// Outside a tag branch the arity `n[a/x]` is stuck on a variable, so
+    /// neither `Vec` nor `Fin` reduces and neither the children tuple nor the
+    /// ih can be projected; inside branch `i` the arity is the literal `mᵢ`
+    /// and everything unfolds. That is why the generalization is not
+    /// stylistic.
+    #[allow(clippy::too_many_arguments)]
+    fn build_elim_wf(
+        &self,
+        cx: &Cx,
+        ind: &Inductive,
+        scrut_ty: &Type,
+        motive: Type,
+        mlvl: Level,
+        scrut: Term,
+        branches: &Branches,
+        dec: Option<usize>,
+        span: Span,
+    ) -> R<Term> {
         let Type::Wf { level, shape, arity } = scrut_ty else {
             return err("internal: a recursive declaration did not lower to a `Wf`", span);
         };
@@ -174,10 +256,6 @@ impl Elaborator {
             ih_ty,
             step_ty,
         };
-        // Does this `match` descend on one of the enclosing declaration's own
-        // parameters? If so, a self-call in an arm is the ih (§6.4).
-        let dec = self.descends_on_param(cx, &scrut);
-
         // Γ₃ = (Γ, a : S, cs : cs_ty, ih : ih_ty) — the step's context, and
         // the kernel's, verbatim (typing.rs's `elim_Wf` rule).
         let mut cx3 = cx.clone();
@@ -213,7 +291,7 @@ impl Elaborator {
         let plvl = Level::max(tel.level.clone(), tel.mlvl.clone());
 
         let cased = self.wf_case_tree(
-            &cx3, ind, arms, &tel, dec, 0, p_motive, &plvl, var(2), 3, span,
+            &cx3, ind, branches, &tel, dec, 0, p_motive, &plvl, var(2), 3, span,
         )?;
         let step = self.apply_cs_ih(&tel, cased);
 
@@ -289,7 +367,7 @@ impl Elaborator {
         &self,
         cx: &Cx,
         ind: &Inductive,
-        arms: &[&Arm],
+        branches: &Branches,
         tel: &Tel,
         dec: Option<usize>,
         j: usize,
@@ -299,9 +377,9 @@ impl Elaborator {
         d: u32,
         span: Span,
     ) -> R<Term> {
-        let n = arms.len();
+        let n = ind.ctors.len();
         if j + 1 == n {
-            return self.wf_branch(cx, ind, arms[j], tel, dec, j, scrut, d, span);
+            return self.wf_branch(cx, ind, branches, tel, dec, j, scrut, d, span);
         }
         let ctor_lvl = tel.spine.ctors[j].1.clone();
         let tail_lvl = tel.spine.tails[j].1.clone();
@@ -313,7 +391,7 @@ impl Elaborator {
         let case_l = self.wf_branch(
             &lcx,
             ind,
-            arms[j],
+            branches,
             tel,
             dec,
             j,
@@ -336,7 +414,7 @@ impl Elaborator {
         let case_r = self.wf_case_tree(
             &rcx,
             ind,
-            arms,
+            branches,
             tel,
             dec,
             j + 1,
@@ -370,7 +448,7 @@ impl Elaborator {
         &self,
         cx: &Cx,
         ind: &Inductive,
-        arm: &Arm,
+        branches: &Branches,
         tel: &Tel,
         dec: Option<usize>,
         i: usize,
@@ -398,83 +476,91 @@ impl Elaborator {
         // The `t`-th child, `nth^l(⟦D⟧; m; cs'; ι_t)`. At a literal `m` this
         // β-reduces to the projections of `cs'` even though `cs'` is a
         // variable, which is what makes an arm binder behave like a field.
-        let child = |t: usize| {
-            Rc::new(nth(
-                &tel.level,
-                &d_ty_here,
-                &len,
-                Rc::clone(&cs_var),
-                Rc::new(fin_index(t, m)),
-            ))
-        };
+        let child =
+            |t: usize| Rc::new(nth_child(&tel.level, &d_ty_here, m, t, Rc::clone(&cs_var)));
 
-        let mut acx = bcx.clone();
-        let ctor_ty = tel.spine.ctors[i].0.shift_local(d_body);
-        let value_here = Rc::new(value.shift_local(2));
-        let mut children = Vec::with_capacity(m);
-        let (mut payload_k, mut rec_t) = (0usize, 0usize);
-        for (k, name) in arm.binders.iter().enumerate() {
-            if ctor.rec_field[k] {
-                let c = child(rec_t);
-                // The ih at this index, and the type it lands at: the
-                // eliminator's `cod` binds `i`, so it is `M[nth(…; i)/z]`
-                // one binder deeper, and instantiating it at `ι_t` gives
-                // `M[child/z]` — which is the child term verbatim.
-                let cod = tel.motive.apply_local(
-                    &embed(tel.gamma0, d_body + 1).extended(Rc::new(nth(
-                        &tel.level,
-                        &Rc::new(tel.d_ty.shift_local(d_body + 1)),
-                        &len,
-                        Rc::new(Term::Var(LocalVar(2))),
-                        Rc::new(Term::Var(LocalVar(0))),
-                    ))),
-                );
-                let ih_at = Rc::new(Term::App {
-                    fun: Rc::new(Term::Var(LocalVar(0))),
-                    dom_level: Level::Zero,
-                    cod_level: tel.mlvl.clone(),
-                    dom: Rc::new(Type::Fin { len: Rc::clone(&len) }),
-                    cod: Rc::new(cod),
-                    arg: Rc::new(fin_index(rec_t, m)),
-                });
-                let ih_ty = tel
-                    .motive
-                    .apply_local(&embed(tel.gamma0, d_body).extended(Rc::clone(&c)));
-                acx.aliases.push(Rc::new(Alias {
-                    name: name.clone(),
-                    depth: acx.names.len(),
-                    term: Rc::clone(&c),
-                    ty: tel.d_ty.shift_local(d_body),
-                    level: tel.level.clone(),
-                }));
-                children.push((c, ih_at, ih_ty, tel.mlvl.clone()));
-                rec_t += 1;
-            } else {
-                let (proj, ty, level) =
-                    self.projection(&acx, &ctor_ty, &value_here, payload_k, span)?;
-                acx.aliases.push(Rc::new(Alias {
-                    name: name.clone(),
-                    depth: acx.names.len(),
-                    term: proj,
-                    ty,
-                    level,
-                }));
-                payload_k += 1;
+        let body = match branches {
+            // §7.2: no binders, no guard — just the child, or the default at
+            // every other constructor.
+            Branches::Child { i: ci, t, default } => {
+                if i == *ci {
+                    nth_child(&tel.level, &d_ty_here, m, *t, cs_var)
+                } else {
+                    default.shift_local(d_body)
+                }
             }
-        }
-        // A self-call in this arm is the ih (§6.4) — but only if the `match`
-        // descends on one of the declaration's own parameters. If it does
-        // not, an enclosing arm's guard, if any, still stands.
-        acx.guard = dec
-            .map(|dec| {
-                Rc::new(Guard {
-                    dec,
-                    kind: GuardKind::Wf { depth: acx.names.len(), children },
-                })
-            })
-            .or_else(|| cx.guard.clone());
-
-        let body = self.elab_check(&acx, &arm.body, &body_ty, &tel.mlvl)?;
+            Branches::Arms(arms) => {
+                let arm = arms[i];
+                let mut acx = bcx.clone();
+                let ctor_ty = tel.spine.ctors[i].0.shift_local(d_body);
+                let value_here = Rc::new(value.shift_local(2));
+                let mut children = Vec::with_capacity(m);
+                let (mut payload_k, mut rec_t) = (0usize, 0usize);
+                for (k, name) in arm.binders.iter().enumerate() {
+                    if ctor.rec_field[k] {
+                        let c = child(rec_t);
+                        // The ih at this index, and the type it lands at: the
+                        // eliminator's `cod` binds `i`, so it is
+                        // `M[nth(…; i)/z]` one binder deeper, and
+                        // instantiating it at `ι_t` gives `M[child/z]` —
+                        // which is the child term verbatim.
+                        let cod = tel.motive.apply_local(
+                            &embed(tel.gamma0, d_body + 1).extended(Rc::new(nth(
+                                &tel.level,
+                                &Rc::new(tel.d_ty.shift_local(d_body + 1)),
+                                &len,
+                                Rc::new(Term::Var(LocalVar(2))),
+                                Rc::new(Term::Var(LocalVar(0))),
+                            ))),
+                        );
+                        let ih_at = Rc::new(Term::App {
+                            fun: Rc::new(Term::Var(LocalVar(0))),
+                            dom_level: Level::Zero,
+                            cod_level: tel.mlvl.clone(),
+                            dom: Rc::new(Type::Fin { len: Rc::clone(&len) }),
+                            cod: Rc::new(cod),
+                            arg: Rc::new(fin_index(rec_t, m)),
+                        });
+                        let ih_ty = tel
+                            .motive
+                            .apply_local(&embed(tel.gamma0, d_body).extended(Rc::clone(&c)));
+                        acx.aliases.push(Rc::new(Alias {
+                            name: name.clone(),
+                            depth: acx.names.len(),
+                            term: Rc::clone(&c),
+                            ty: tel.d_ty.shift_local(d_body),
+                            level: tel.level.clone(),
+                        }));
+                        children.push((c, ih_at, ih_ty, tel.mlvl.clone()));
+                        rec_t += 1;
+                    } else {
+                        let (proj, ty, level) =
+                            self.projection(&acx, &ctor_ty, &value_here, payload_k, span)?;
+                        acx.aliases.push(Rc::new(Alias {
+                            name: name.clone(),
+                            depth: acx.names.len(),
+                            term: proj,
+                            ty,
+                            level,
+                        }));
+                        payload_k += 1;
+                    }
+                }
+                // A self-call in this arm is the ih (§6.4) — but only if the
+                // `match` descends on one of the declaration's own
+                // parameters. If it does not, an enclosing arm's guard, if
+                // any, still stands.
+                acx.guard = dec
+                    .map(|dec| {
+                        Rc::new(Guard {
+                            dec,
+                            kind: GuardKind::Wf { depth: acx.names.len(), children },
+                        })
+                    })
+                    .or_else(|| cx.guard.clone());
+                self.elab_check(&acx, &arm.body, &body_ty, &tel.mlvl)?
+            }
+        };
         Ok(Term::Lam {
             dom_level: tel.level.clone(),
             cod_level: tel.mlvl.clone(),
@@ -487,6 +573,89 @@ impl Elaborator {
             }),
         })
     }
+}
+
+impl Elaborator {
+    // -- no-confusion (§7) --------------------------------------------------
+
+    /// `elim_Wf` at a **constant** motive, with a constant-motive case tree on
+    /// the tag as its step (§7). Both halves of no-confusion are this: the
+    /// disjointness predicate is it at the motive `Ty 0`, and a field
+    /// projection is it at the motive "that field's type". Neither is an
+    /// inductive argument, so the step ignores `ih` entirely.
+    ///
+    /// Scoping follows tier 0 §6's convention, which is worth stating because
+    /// it is mixed on purpose: `spine`, `d_ty` and the `ConstBody` payloads
+    /// are scoped in the *base* context the caller read them back in, `d0`
+    /// counts the binders pushed since (2, inside a `J` motive), and `motive`
+    /// and `scrut` are scoped in `cx` — here and now.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn const_elim_wf(
+        &self,
+        cx: &Cx,
+        ind: &Inductive,
+        d_ty: &Type,
+        spine: &Spine,
+        motive: &Type,
+        mlvl: &Level,
+        scrut: Rc<Term>,
+        body: &ConstBody,
+        d0: u32,
+        span: Span,
+    ) -> R<Term> {
+        let Type::Wf { level, shape, arity } = d_ty.shift_local(d0) else {
+            return err("internal: a recursive declaration did not lower to a `Wf`", span);
+        };
+        // The motive binds `z` and ignores it; the telescope needs it anyway,
+        // since `ih_ty` and `step_ty` are stated in terms of it.
+        let under_z = Rc::new(motive.shift_local(1));
+        let (cs_ty, ih_ty, _) =
+            wf_step_telescope(&cx.gamma, &level, mlvl, &shape, &arity, &under_z);
+        let mut cx3 = cx.clone();
+        cx3.push("#a".into(), (*shape).clone(), level.clone());
+        cx3.push("#cs".into(), cs_ty, level.clone());
+        cx3.push("#ih".into(), ih_ty, mlvl.clone());
+        let step = self.const_case_tree(
+            &cx3,
+            spine,
+            ind.ctors.len(),
+            &motive.shift_local(3),
+            mlvl,
+            Rc::new(Term::Var(LocalVar(2))),
+            body,
+            0,
+            d0 + 3,
+            span,
+        )?;
+        Ok(Term::ElimWf {
+            level,
+            motive_level: mlvl.clone(),
+            shape,
+            arity,
+            motive: under_z,
+            step: Rc::new(step),
+            scrut,
+        })
+    }
+}
+
+/// `nth^l(⟦D⟧; m; cs; ι_t)` — the `t`-th of `m` children of `cs` (§6.3).
+/// Shared by the `match` arms, which bind it as an alias, and by
+/// injectivity, which projects with it.
+pub(crate) fn nth_child(
+    level: &Level,
+    d_ty: &Rc<Type>,
+    m: usize,
+    t: usize,
+    cs: Rc<Term>,
+) -> Term {
+    nth(
+        level,
+        d_ty,
+        &Rc::new(nat_lit(m)),
+        cs,
+        Rc::new(fin_index(t, m)),
+    )
 }
 
 /// The literal index `t` of `Fin m`: `inr^t (inl ⟨⟩)` (§6.3). Each tail is
