@@ -70,11 +70,19 @@ and `β` firing on open children.
 - **An arm binder is an alias, not a kernel binder**, so the guardedness
   analysis has no binder *position* to compare a self-call's argument
   against. It compares terms instead, which keeps the shadowing property the
-  positional comparison gave for `Nat`.
+  positional comparison gave for `Nat` — and is syntactic, which is the
+  brittleness split out as [[guard-matches-self-calls-by-term]].
 - **Distinct constructors routinely share a shape summand.** `Leaf` and
   `Node` both lower to `Σ(#tag). Unit⁰` — the same kernel type. The injection
   is what distinguishes them, and the nominal tag still separates `Tree` from
   a structurally identical declaration.
+- **Every shift in the lowering is currently a no-op**, because a
+  monomorphic declaration lowers to a *closed* `⟦D⟧` — so `wf.rs`'s
+  `d_ty.shift_local(…)`, `build_children`'s `snd_ty` shift and `inject`'s
+  spine shifts are written to be correct and are observed by nothing. The
+  audit that established this also turned up a live tier-0 wrong-type bug,
+  [[tyvar-scoping-in-lowered-fields]], whose fix is what creates the observer
+  for the whole class.
 - **The de Bruijn hazard landed where the issue predicted.** `App`'s `cod`
   binds its argument, and the step's two trailing applications
   (`(case a) cs ih`) are exactly where that bites; `wf.rs::apply_cs_ih`
