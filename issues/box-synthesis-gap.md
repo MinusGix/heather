@@ -3,7 +3,7 @@ title: Decide how elaborated code avoids the box synthesis gap
 status: closed
 labels: [kernel,delam,design,elaboration]
 created: 2026-07-22
-updated: 2026-07-23
+updated: 2026-07-25
 code: crates/kernel/src/typing.rs:20 @ bbb95ec
 ---
 
@@ -80,3 +80,4 @@ literals — whichever discipline is chosen gets exercised constantly.
     elaborator-bug detector rather than a language restriction.
 - 2026-07-23: Decided: option 1. Elaborated terms are meta-layer β-normal; code naming/composition goes through letbox. Kernel grammar stays exactly ch. 04; NotInferable acts as an elaborator-bug detector. Follow-through lands as an emission invariant in [[ir-simulate-design]] / [[certifying-generator]].
 - 2026-07-23: Property testing surfaced a sharpening: ordinary term-level β can CREATE meta-β-redexes with box bodies (app(λx. Λg. x; box T) ⇝ Λg. box T under an elimination head), so algorithmic typability is not closed under reduction — meta-ANF is an invariant of elaborated source, not of reducts. Harmless for the kernel (it never re-checks reducts; conversion is untyped), but reduction_preserves_type now treats NotInferable as the documented gap rather than a subject-reduction failure.
+- 2026-07-25: New instance of the gap, found by the [[unit-level-and-vec-preservation]] phase-3 generator coverage: SUBSTITUTION is a second trigger, and the first one outside reduction. A well-typed local substitution can replace a variable sitting in an INFERENCE position with a payload containing a bare box — the witness was 'capp(Lambda g. box <>, g2)' arising from t[delta] where t held a variable under a capp head. Declaratively typable, algorithmically NotInferable, exactly as for the reduction trigger already recorded in conv_properties::reduction_preserves_type. ch05_06_lemmas::local_substitution_preserves_typing now carries the same narrow skip with the same rationale. This does not change the decision recorded here (elaborated code avoids the gap by construction); it widens the list of operations that can move a box into an inference position from {reduction} to {reduction, substitution}, which is worth knowing for anyone reasoning about where the checker is incomplete.

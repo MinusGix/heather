@@ -132,6 +132,11 @@ fn decode(e: &Term) -> Type {
             len: Rc::clone(len),
         },
         Term::TmFin { len } => Type::Fin { len: Rc::clone(len) },
+        // Unit^l / Empty^l — level-indexed as of
+        // docs/unit-empty-level-indexing.md, so the code's level is the
+        // decoded type's.
+        Term::TmUnit { level } => Type::Unit { level: level.clone() },
+        Term::TmEmpty { level } => Type::Empty { level: level.clone() },
         Term::TmWf { level, shape, arity } => Type::Wf {
             level: level.clone(),
             shape: rty(Type::El { level: level.clone(), tm: Rc::clone(shape) }),
@@ -238,6 +243,11 @@ fn mutate_encoding(e: &Term) -> Term {
         // type, so bump the Nat instead: `S k ≉ k` at Nat, and both codes
         // still live at the same level.
         Term::TmFin { len } => Term::TmFin { len: rt(Term::Succ(Rc::clone(len))) },
+        // Unit^l and Empty^l are the two codes at `Ty l` with no
+        // sub-structure, so each is the other's minimal mutation: same level,
+        // different head, and `Unit^l ≉ Empty^l`.
+        Term::TmUnit { level } => Term::TmEmpty { level: level.clone() },
+        Term::TmEmpty { level } => Term::TmUnit { level: level.clone() },
         Term::TmWf { level, shape, arity } => Term::TmWf {
             level: level.clone(),
             shape: Rc::clone(shape),

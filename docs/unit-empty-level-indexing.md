@@ -177,13 +177,40 @@ round-trips `box (Unit^ℓ)`, `box (Empty^ℓ)`, `box ⟨⟩^ℓ` and
 `box (elim_Empty^{ℓ,ℓ'})` in one β-step, which is the sharp cross-check of the
 new telescopes against `reduce.rs`'s `fire`.
 
-**Phase 3 — close the pins.** Delete
-`vec_fin::vec_at_zero_drops_its_level_known_gap`; drop the `known_gap` skip in
-`conv_properties::type_reduction_preserves_level`; re-point
-`vec_fin::every_type_has_exactly_one_level` (it should now *pass unchanged* —
-that is the invariant this route preserves). Add the polymorphic nullary-arm
-acceptance test: `Leaf` for a `Wf` whose shape is at level `l > 0`, which is
-the functional hole of §1 and cannot be built today.
+**Phase 3 — the pins, and the coverage. ✅ done.** The pins were converted in
+phase 1 (`vec_at_zero_drops_its_level_known_gap` became
+`vec_at_zero_keeps_its_level`; the `known_gap` skip left
+`type_reduction_preserves_level`), and `every_type_has_exactly_one_level`
+passes **unchanged** — the invariant the route was chosen to preserve.
+
+What phase 3 added:
+
+- **The end-to-end acceptance test** (`wf.rs::polymorphic_shape`): a real
+  `Wf` whose shape is `Unit^1 + Ty 0`, i.e. level 1 — a branching inductive
+  with a *type* payload, which is what every polymorphic container is. `Leaf`
+  builds, nested `Node`s build, the nullary arm is still proof-irrelevant, and
+  `elim_Wf` computes on it. Before this round `Leaf` could not be built at all.
+- **Generator coverage, which was the real gap.** The well-typed generator
+  produced **no `Unit`/`Empty` at all**, so nothing in `conv_properties` or
+  `ch05_06_lemmas` would have exercised this round. Now `gen_wt_type`,
+  `gen_encoding` and the checked-mode intro all reach them at generated
+  levels, and the scope-only generator no longer hardcodes 0.
+  `vec_fin::the_well_typed_generator_reaches_unit_at_a_nonzero_level` pins it:
+  measured 102 hits per 300 types, 67 of them at a non-zero level.
+
+Adding that coverage immediately found two things, which is the point:
+
+- `conv_pair_properties`' own `decode` and `mutate_encoding` helpers did not
+  cover `TmUnit`/`TmEmpty` — they had never been generated. (`Unit^l` and
+  `Empty^l` turn out to be each other's minimal mutation: same level,
+  different head.)
+- **Substitution is a second trigger for the box synthesis gap**
+  ([[box-synthesis-gap]]), and the first found outside reduction: `δ` can
+  replace a variable in an *inference* position with a payload containing a
+  bare `box` (`Λ g. box ⟨⟩` under a `capp` head). Declaratively fine,
+  algorithmically `NotInferable`. Skipped narrowly in
+  `local_substitution_preserves_typing`, same as `conv_properties` does for
+  reduction.
 
 **Phase 4 — catch-up.** Elaborator: tier-0's nominal tag is Σ-of-Units, so
 generated tags carry an inferred level. Docs:

@@ -399,8 +399,8 @@ pub fn gen_type(sc: &Sc, r: &mut Rng, b: u32) -> Rc<Type> {
         match arm {
             0 => return Rc::new(Type::Nat),
             1 => return Rc::new(Type::Ty(gen_level(sc, r, 1))),
-            12 => return Rc::new(Type::Unit { level: Level::Zero }),
-            13 => return Rc::new(Type::Empty { level: Level::Zero }),
+            12 => return Rc::new(Type::Unit { level: gen_level(sc, r, 1) }),
+            13 => return Rc::new(Type::Empty { level: gen_level(sc, r, 1) }),
             14 if b > 0 => {
                 // Sum: non-dependent, both summands in the same scope.
                 return Rc::new(Type::Sum {
@@ -552,9 +552,9 @@ pub fn gen_term(sc: &Sc, r: &mut Rng, b: u32) -> Rc<Term> {
             0 if sc.local.len > 0 => return Rc::new(Term::Var(LocalVar(r.below(sc.local.len)))),
             0 | 1 => return Rc::new(Term::Zero),
             2 => return Rc::new(Term::TmNat),
-            23 => return Rc::new(Term::TmUnit { level: Level::Zero }),
-            24 => return Rc::new(Term::TmEmpty { level: Level::Zero }),
-            25 => return Rc::new(Term::Triv { level: Level::Zero }),
+            23 => return Rc::new(Term::TmUnit { level: gen_level(sc, r, 1) }),
+            24 => return Rc::new(Term::TmEmpty { level: gen_level(sc, r, 1) }),
+            25 => return Rc::new(Term::Triv { level: gen_level(sc, r, 1) }),
             26 if b > 0 => {
                 let mut in1 = sc.clone();
                 in1.local.len += 1;

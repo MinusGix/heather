@@ -241,7 +241,18 @@ pub fn gen_wt_ctx(env: &WtEnv, r: &mut Rng, b: u32, layer: Layer) -> LocalCtx {
 pub fn gen_wt_type(env: &WtEnv, r: &mut Rng, b: u32) -> (Rc<Type>, Level) {
     assert!(env.layer != Layer::Var);
     for _ in 0..8 {
-        match r.below(16) {
+        match r.below(18) {
+            // Unit^l / Empty^l — level-indexed, so a generated level rather
+            // than 0 (docs/unit-empty-level-indexing.md). Without these the
+            // property suite never sees the round at all.
+            16 => {
+                let l = gen_wf_level(env.univs, r, 1);
+                return (rty(Type::Unit { level: l.clone() }), l);
+            }
+            17 => {
+                let l = gen_wf_level(env.univs, r, 1);
+                return (rty(Type::Empty { level: l.clone() }), l);
+            }
             0 => return (rty(Type::Nat), Level::Zero),
             1 => {
                 let l = gen_wf_level(env.univs, r, 1);
@@ -404,7 +415,15 @@ fn gen_wt_nat(env: &WtEnv, r: &mut Rng, b: u32) -> Rc<Term> {
 
 /// Synthesize an encoding `⊢_i t : Ty l @ 1+l`, returning `(t, l)`.
 pub fn gen_encoding(env: &WtEnv, r: &mut Rng, b: u32) -> (Rc<Term>, Level) {
-    match r.below(10) {
+    match r.below(12) {
+        10 => {
+            let l = gen_wf_level(env.univs, r, 1);
+            (rt(Term::TmUnit { level: l.clone() }), l)
+        }
+        11 => {
+            let l = gen_wf_level(env.univs, r, 1);
+            (rt(Term::TmEmpty { level: l.clone() }), l)
+        }
         0 => (rt(Term::TmNat), Level::Zero),
         1 => {
             let l = gen_wf_level(env.univs, r, 1);
@@ -592,6 +611,9 @@ pub fn gen_wt_term_at(
     let w = whnf_type(ty, &env.gamma, FUEL).ok()?;
     let intro: Option<Rc<Term>> = match &w {
         Type::Nat => Some(gen_nat(env, r)),
+        // `⟨⟩^l : Unit^l` — the level comes from the *type*, which is the
+        // whole reason the annotation exists.
+        Type::Unit { level: l } => Some(rt(Term::Triv { level: l.clone() })),
         Type::Pi { dom_level, cod_level, dom, cod } if b > 0 => {
             let e = env.push_entry(Rc::clone(dom), dom_level.clone());
             gen_wt_term_at(&e, r, b - 1, cod, cod_level).map(|body| {

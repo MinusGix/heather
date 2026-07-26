@@ -137,10 +137,10 @@ like it preserved that only because it never touched terms.
 
 | | Phase | State |
 |---|---|---|
-| 1 | level fields + reduction; layer-`c` gate. **The bug closes here** | next |
-| 2 | the four recursor branches (`ty_unit`, `ty_empty`, `tm_triv`, `tm_elim_empty`); lift the gate | |
-| 3 | close the pins; polymorphic nullary-arm acceptance test | |
-| 4 | elaborator catch-up (tier-0 tags are Σ-of-Units) + docs | |
+| 1 | level fields + reduction; layer-`c` gate. **The bug closed here** | **done** |
+| 2 | the **six** recursor branches (four predicted, plus `tm_unit`/`tm_empty`); lift the gate | **done** |
+| 3 | pins, the polymorphic end-to-end acceptance test, and generator coverage | **done** |
+| 4 | elaborator catch-up (tier-0 tags are Σ-of-Units) + docs | next |
 
 ### Prerequisite, already paid
 

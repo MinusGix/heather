@@ -496,3 +496,50 @@ fn the_generators_reach_vec_and_fin() {
     let hits = (0..300).filter(|_| has(&common::gen_type(&sc, &mut r, 4))).count();
     assert!(hits > 20, "generator produced Vec/Fin only {hits}/300 times");
 }
+
+/// The **witness has to be generated**, not merely generatable — the lesson
+/// of `issues/metatheory-lemma-sweep.md`. Level-indexing `Unit`/`Empty`
+/// (`docs/unit-empty-level-indexing.md`) is only covered by the property
+/// suite if `gen_wt_type` actually reaches `Unit^l` with `l ≠ 0`; before this
+/// round the well-typed generator produced no `Unit`/`Empty` at all, so the
+/// whole route would have been untested by everything in `conv_properties`
+/// and `ch05_06_lemmas`.
+#[test]
+fn the_well_typed_generator_reaches_unit_at_a_nonzero_level() {
+    fn find(t: &Type, out: &mut (u32, u32)) {
+        match t {
+            Type::Unit { level } | Type::Empty { level } => {
+                out.0 += 1;
+                if !level.equiv(&Level::Zero) {
+                    out.1 += 1;
+                }
+            }
+            Type::Pi { dom, cod, .. } | Type::Sigma { fst: dom, snd: cod, .. } => {
+                find(dom, out);
+                find(cod, out);
+            }
+            Type::Sum { lhs, rhs, .. } | Type::W { shape: lhs, pos: rhs, .. } => {
+                find(lhs, out);
+                find(rhs, out);
+            }
+            Type::Vec { elem, .. } => find(elem, out),
+            Type::Wf { shape, .. } => find(shape, out),
+            Type::Id { ty, .. } => find(ty, out),
+            _ => {}
+        }
+    }
+    let mut seen = (0u32, 0u32);
+    for seed in 0..300u64 {
+        let mut r = common::Rng::new(seed ^ 0xa076_1d64_78bd_642f);
+        let env = common::wt::gen_wt_env(&mut r);
+        let (ty, _) = common::wt::gen_wt_type(&env, &mut r, 8);
+        find(&ty, &mut seen);
+    }
+    assert!(seen.0 > 30, "generator reached Unit/Empty only {} times in 300", seen.0);
+    assert!(
+        seen.1 > 5,
+        "generator reached Unit/Empty at a NON-ZERO level only {} times in 300 — \
+         the level-indexing round would be covered only at level 0",
+        seen.1,
+    );
+}

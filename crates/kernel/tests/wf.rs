@@ -734,3 +734,167 @@ fn the_kernel_gate_rejects_a_wrong_arm() {
     ck_fails(&g, &refl_tree(v(0)), &id_tree(mm(v(0)), v(0)), c(0));
 }
 
+
+// -------------------------------------------------------------------------
+// A branching inductive whose shape lives above level 0 — the functional
+// hole that the `Vec^l(T;0) ⇝ Unit` level drop left, closed end to end.
+// -------------------------------------------------------------------------
+
+/// `PTree = Wf^1(x : Unit^1 + Ty 0). arity x` — `Leaf` nullary, `Node`
+/// binary and carrying a *type* payload. The shape mentions `Ty 0`, so it
+/// lives at level **1**, which is what every polymorphic container does.
+///
+/// Before `docs/unit-empty-level-indexing.md`, **`Leaf` could not be built at
+/// all**: its children tuple has type `Vec^1(PTree; 0)`, that reduced to
+/// `Unit` at level 0 rather than `Unit^1`, and `⟨⟩ : Vec^1(PTree;0) @ 1` was
+/// a `LevelMismatch`. Monomorphic trees never noticed, because a sum of
+/// records sits at level 0 and the reduct's level is right by accident.
+mod polymorphic_shape {
+    use super::*;
+
+    /// `Unit^1 +^{1,1} Ty 0` — the tag set. `Ty 0` is at level 1, so is the sum.
+    fn shape() -> Type {
+        Type::Sum {
+            lhs_level: c(1),
+            rhs_level: c(1),
+            lhs: rty(Type::Unit { level: c(1) }),
+            rhs: rty(Type::Ty(c(0))),
+        }
+    }
+
+    fn arity_of(scrut: Term) -> Term {
+        Term::Case {
+            lhs_level: c(1),
+            rhs_level: c(1),
+            motive_level: c(0),
+            lhs: rty(Type::Unit { level: c(1) }),
+            rhs: rty(Type::Ty(c(0))),
+            motive: rty(Type::Nat),
+            case_l: rt(Term::Zero),
+            case_r: rt(nat(2)),
+            scrut: rt(scrut),
+        }
+    }
+
+    fn ptree() -> Type {
+        Type::Wf { level: c(1), shape: rty(shape()), arity: rt(arity_of(v(0))) }
+    }
+
+    fn supf(label: Term, children: Term) -> Term {
+        Term::Supf {
+            level: c(1),
+            shape: rty(shape()),
+            arity: rt(arity_of(v(0))),
+            label: rt(label),
+            children: rt(children),
+        }
+    }
+
+    /// `inl ⟨⟩^1` — the nullary tag.
+    fn leaf_tag() -> Term {
+        Term::Inl {
+            lhs_level: c(1),
+            rhs_level: c(1),
+            lhs: rty(Type::Unit { level: c(1) }),
+            rhs: rty(Type::Ty(c(0))),
+            val: rt(Term::Triv { level: c(1) }),
+        }
+    }
+
+    /// `inr Nat` — the binary tag, carrying a code of a type as its payload.
+    fn node_tag() -> Term {
+        Term::Inr {
+            lhs_level: c(1),
+            rhs_level: c(1),
+            lhs: rty(Type::Unit { level: c(1) }),
+            rhs: rty(Type::Ty(c(0))),
+            val: rt(Term::TmNat),
+        }
+    }
+
+    fn vec_ptree(len: Term) -> Type {
+        Type::Vec { level: c(1), elem: rty(ptree()), len: rt(len) }
+    }
+
+    /// `⟨⟩^1 : Vec^1(PTree; 0)` — **the hole**. `Vec^1(_;0) ⇝ Unit^1`, so the
+    /// unit at level 1 is what inhabits it.
+    fn no_children() -> Term {
+        Term::Triv { level: c(1) }
+    }
+
+    fn leaf() -> Term {
+        supf(leaf_tag(), no_children())
+    }
+
+    /// `(l, (r, ⟨⟩^1)) : Vec^1(PTree; 2)`.
+    fn children2(l: Term, r: Term) -> Term {
+        Term::Pair {
+            fst_level: c(1),
+            snd_level: c(1),
+            fst_ty: rty(ptree()),
+            snd_ty: rty(vec_ptree(nat(1))),
+            fst: rt(l),
+            snd: rt(Term::Pair {
+                fst_level: c(1),
+                snd_level: c(1),
+                fst_ty: rty(ptree()),
+                snd_ty: rty(vec_ptree(nat(0))),
+                fst: rt(r),
+                snd: rt(no_children()),
+            }),
+        }
+    }
+
+    fn node(l: Term, r: Term) -> Term {
+        supf(node_tag(), children2(l, r))
+    }
+
+    #[test]
+    fn the_type_and_both_constructors_check_at_level_one() {
+        let g = nil_ctx();
+        check_type(&GlobalCtx::default(), 0, Layer::Prog, &g, &ptree(), &c(1), FUEL)
+            .expect("Wf^1 over a level-1 shape");
+        // The children type of the nullary arm, and its inhabitant.
+        check_type(&GlobalCtx::default(), 0, Layer::Prog, &g, &vec_ptree(Term::Zero), &c(1), FUEL)
+            .expect("Vec^1(PTree; 0) @ 1");
+        assert_eq!(
+            heather_kernel::reduce::whnf_type(&vec_ptree(Term::Zero), &g, FUEL).unwrap(),
+            Type::Unit { level: c(1) },
+            "the nullary reduct must keep its level",
+        );
+        // THE HOLE: Leaf.
+        ck(&g, &leaf(), &ptree(), c(1));
+        // …and Node, so the arm is not special-cased into working.
+        ck(&g, &node(leaf(), leaf()), &ptree(), c(1));
+        ck(&g, &node(node(leaf(), leaf()), leaf()), &ptree(), c(1));
+    }
+
+    #[test]
+    fn the_nullary_arm_is_still_proof_irrelevant_at_level_one() {
+        // Arity 0 means the children tuple is `Unit^1`, so any two `Leaf`s
+        // are convertible whatever their children terms — the property the
+        // whole `Wf` design leans on, now holding above level 0 too.
+        let g = ext(&nil_ctx(), vec_ptree(Term::Zero), c(1));
+        let other = supf(leaf_tag(), Term::Var(LocalVar(0)));
+        ck(&g, &other, &ptree(), c(1));
+        conv(&g, &leaf().shift_local(1), &other, &ptree(), c(1));
+    }
+
+    #[test]
+    fn elim_wf_computes_on_a_level_one_leaf() {
+        // A constant motive, so the step needs nothing from its telescope:
+        // elim_Wf (z. Nat) (a cs ih. 7) leaf ⇝* 7.
+        let g = nil_ctx();
+        let e = Term::ElimWf {
+            level: c(1),
+            motive_level: c(0),
+            shape: rty(shape()),
+            arity: rt(arity_of(v(0))),
+            motive: rty(Type::Nat),
+            step: rt(nat(7)),
+            scrut: rt(leaf()),
+        };
+        ck(&g, &e, &Type::Nat, c(0));
+        assert_eq!(whnf_term(&e, &g, FUEL).unwrap(), nat(7));
+    }
+}
