@@ -821,17 +821,15 @@ impl Elaborator {
             // A constructor in checking position: the expected type *is* the
             // encoding, so every annotation of the injection and the field
             // tuple is read off it (docs/inductive-tier0-lowering.md §4).
+            // Unsaturated against an expected `Π`, it η-expands into a function
+            // value (docs/constructor-function-values.md §2).
             ExprKind::Var(name) if self.ctor_here(cx, name).is_some() => {
                 let (ind, i) = self.ctor_here(cx, name).expect("just checked");
-                self.build_ctor(cx, &ind, i, &[], expected, lvl, e.span)
+                self.build_ctor_value(cx, &ind, i, &[], expected, lvl, e.span)
             }
-            ExprKind::App { .. }
-                if matches!(e.as_named(), Some((n, _, false))
-                            if self.ctor_here(cx, n).is_some()) =>
-            {
-                let (name, args, _) = e.as_named().expect("just checked");
-                let (ind, i) = self.ctor_here(cx, name).expect("just checked");
-                self.build_ctor(cx, &ind, i, args, expected, lvl, e.span)
+            ExprKind::App { .. } if self.ctor_spine(cx, e).is_some() => {
+                let (ind, i, args) = self.ctor_spine(cx, e).expect("just checked");
+                self.build_ctor_value(cx, &ind, i, &args, expected, lvl, e.span)
             }
             _ => {
                 let (t, _, _) = self.elab_infer(cx, e)?;
@@ -869,6 +867,14 @@ impl Elaborator {
             // with no expected type there is nothing else to take the domain
             // from (docs/surface-function-types.md §5.2).
             ExprKind::Lam { binders, body } => self.elab_lam_infer(cx, binders, body),
+            // A constructor applied in the curried spelling — `Cons(1)(xs)`.
+            // Re-associated into one saturated application, which is what lets
+            // it infer: the head alone (`Cons(1)`) has no inferable type, but
+            // the whole spine does (docs/constructor-function-values.md §3).
+            ExprKind::App { .. } if e.as_named().is_none() && self.ctor_spine(cx, e).is_some() => {
+                let (ind, i, args) = self.ctor_spine(cx, e).expect("just checked");
+                self.infer_ctor(cx, &ind, i, &args, e.span)
+            }
             // An application whose head is *not* a name: no parameter
             // metadata exists for it, so it is always explicit.
             ExprKind::App { head, args, explicit } if e.as_named().is_none() => {
@@ -1343,6 +1349,33 @@ impl Elaborator {
             return None;
         }
         self.ctor_of(name)
+    }
+
+    /// A constructor applied to its arguments, however the surface
+    /// parenthesized them: `Cons(1, xs)` and `Cons(1)(xs)` flatten to the same
+    /// `(declaration, index, arguments)`. Re-associating is sound because a
+    /// constructor's function value *is* its η-expansion
+    /// (docs/constructor-function-values.md §2), so the curried spelling is
+    /// definitionally the saturated one — and flattening is what lets the
+    /// curried spelling work in inference position, where the head alone
+    /// (`Cons(1)`) has no type to infer.
+    fn ctor_spine(&self, cx: &Cx, e: &Expr) -> Option<(Rc<Inductive>, usize, Vec<Expr>)> {
+        let ExprKind::App { head, args, explicit } = &e.kind else { return None };
+        if *explicit {
+            return None;
+        }
+        match &head.kind {
+            ExprKind::Var(name) => {
+                let (ind, i) = self.ctor_here(cx, name)?;
+                Some((ind, i, args.clone()))
+            }
+            ExprKind::App { .. } => {
+                let (ind, i, mut prefix) = self.ctor_spine(cx, head)?;
+                prefix.extend(args.iter().cloned());
+                Some((ind, i, prefix))
+            }
+            _ => None,
+        }
     }
 
     /// A constructor used where nothing is checking it. Only possible when the
@@ -1868,6 +1901,33 @@ impl Elaborator {
     fn resolve(&self, cx: &Cx, name: &str, span: Span) -> R<(Term, Type, Level)> {
         if name == "Zero" {
             return Ok((Term::Zero, Type::Nat, Level::Zero));
+        }
+        // `Succ` as a *value*: the kernel has it as a term former, not a
+        // global, so there is nothing to pass and the η-expansion is built here
+        // (docs/constructor-function-values.md §2.1). Unlike a declared
+        // constructor this needs no expected type — its type is a constant —
+        // which is what makes `p.cong(Succ)` work even though `cong`'s
+        // implicits put the argument in *inference* position.
+        //
+        // Checked before locals, like `Zero`: `Succ(x)` in the application arm
+        // already ignores shadowing, and the two must agree.
+        if name == "Succ" {
+            let nat = || Rc::new(Type::Nat);
+            return Ok((
+                Term::Lam {
+                    dom_level: Level::Zero,
+                    cod_level: Level::Zero,
+                    dom: nat(),
+                    body: Rc::new(Term::Succ(Rc::new(Term::Var(LocalVar(0))))),
+                },
+                Type::Pi {
+                    dom_level: Level::Zero,
+                    cod_level: Level::Zero,
+                    dom: nat(),
+                    cod: nat(),
+                },
+                Level::Zero,
+            ));
         }
         // Locals and `let` aliases, innermost first. An alias bound at depth
         // `d` shadows every binder at position `< d` and is shadowed by the

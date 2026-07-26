@@ -491,6 +491,13 @@ still needs `λ x => Succ(x)`. Filed as
 `issues/constructors-as-function-values.md`; the position is already a
 checking one, so the fix looks localized.
 
+**Since fixed** (`docs/constructor-function-values.md`), and the estimate held.
+One correction to the reasoning above: `Succ` is fixed by becoming an ordinary
+*name*, not by the checking position — which matters, because `.cong(Succ)`'s
+argument is in an inference position (`cong`'s implicit endpoints send it
+through `apply_implicit`). The checking-position η-expansion is what fixes
+declared constructors, and `.cong(Wrap)` accordingly still does not work.
+
 ### 10.3 A pre-existing parser bug, found in passing
 
 `let n: Nat = 3;` does not parse: `ty()` takes the first `=` as the equality

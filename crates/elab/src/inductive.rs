@@ -584,6 +584,81 @@ impl Elaborator {
 
     // -- constructors (§4) --------------------------------------------------
 
+    /// A constructor in checking position, saturated **or not**
+    /// (`docs/constructor-function-values.md` §2). With every field supplied
+    /// this is [`Self::build_ctor`]; with fields missing and a `Π` expected it
+    /// is the η-expansion
+    ///
+    /// ```text
+    /// C(a₁ … a_j) ⇐ Π(x_{j+1} : A_{j+1}). … Π(x_m : A_m). D
+    ///     ⇝ λ x_{j+1} … λ x_m. ⟦C(a₁ … a_j, x_{j+1} … x_m)⟧ at D
+    /// ```
+    ///
+    /// The missing arguments are *surface* variables at unspellable `#`-names,
+    /// so the saturated builder runs unchanged and every tier distinction
+    /// (`sup_f`, the children tuple, the container tail) stays inside it. The
+    /// built term's type is the expected one by construction; a peeled domain
+    /// that disagrees with the field it fills is a kernel rejection, not a
+    /// mis-lowering (§2.2).
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn build_ctor_value(
+        &self,
+        cx: &Cx,
+        ind: &Inductive,
+        i: usize,
+        args: &[Expr],
+        expected: &Type,
+        expected_lvl: &Level,
+        span: Span,
+    ) -> R<Term> {
+        let ctor = &ind.ctors[i];
+        let missing = ctor.fields.len().saturating_sub(args.len());
+        if missing == 0 {
+            return self.build_ctor(cx, ind, i, args, expected, expected_lvl, span);
+        }
+        let mut cx = cx.clone();
+        let mut args = args.to_vec();
+        let mut peeled = Vec::with_capacity(missing);
+        let mut ty = expected.clone();
+        let mut lvl = expected_lvl.clone();
+        for k in 0..missing {
+            let head = self.whnf(&cx, &ty, span)?;
+            let Type::Pi { dom_level, cod_level, dom, cod } = head else {
+                // Not enough arrows to absorb the missing fields. Diagnosed
+                // here rather than left to `build_ctor`'s arity message, which
+                // would count the arguments the user wrote and not the ones
+                // the expected type would have supplied (§3).
+                if k == 0 {
+                    return self.build_ctor(&cx, ind, i, &args, &ty, &lvl, span);
+                }
+                return err(
+                    format!(
+                        "`{}` needs {missing} more argument(s), but the expected function \
+                         type provides only {k}",
+                        ctor.name
+                    ),
+                    span,
+                );
+            };
+            // `#` marks an elaborator-introduced binder: unspellable, so it
+            // cannot capture anything the user wrote, and filtered out of the
+            // goal listing.
+            let name = format!("#arg{k}");
+            cx.push(name.clone(), (*dom).clone(), dom_level.clone());
+            args.push(Expr { kind: ExprKind::Var(name), span });
+            // The codomain is scoped under the binder just pushed, which is
+            // what makes a *dependent* expected type work.
+            ty = (*cod).clone();
+            lvl = cod_level.clone();
+            peeled.push((dom_level, cod_level, dom));
+        }
+        let mut t = self.build_ctor(&cx, ind, i, &args, &ty, &lvl, span)?;
+        for (dom_level, cod_level, dom) in peeled.into_iter().rev() {
+            t = Term::Lam { dom_level, cod_level, dom, body: Rc::new(t) };
+        }
+        Ok(t)
+    }
+
     /// Build `⟦c_i(a⃗)⟧` at a known type: the injection path, then the field
     /// tuple. Every annotation comes from `expected`, so this is total on a
     /// well-formed encoding and produces a kernel-rejected term otherwise.
