@@ -475,7 +475,23 @@ much less than it appears to.
 
 The §8 rejection row for this case is therefore **withdrawn**.
 
-### 10.2 A pre-existing parser bug, found in passing
+### 10.2 Constructors did not become first-class, and `.cong(Succ)` still does not work
+
+An ordinary global is now a function value (`twice(inc, 0)` checks). A
+**constructor** is not: `twice(Succ, 0)` is `unbound name Succ`, and
+`ap(Wrap, 1)` for a declared `Wrap` is an arity error. `Succ` is not a name at
+all — `resolve` knows `Zero` and nothing else, with `Succ` existing only as
+the applied form — and a bare declared constructor reaches `build_ctor` with
+no arguments instead of η-expanding against the expected `Π`.
+
+So the payoff line above wants qualifying: this round delivers the
+*capability* of `cong` over an arbitrary function, but **not** the
+`.cong(Succ)` spelling that `issues/surface-operators.md` deferred, which
+still needs `λ x => Succ(x)`. Filed as
+`issues/constructors-as-function-values.md`; the position is already a
+checking one, so the fix looks localized.
+
+### 10.3 A pre-existing parser bug, found in passing
 
 `let n: Nat = 3;` does not parse: `ty()` takes the first `=` as the equality
 type former, leaving nothing for the statement's binder. Confirmed
