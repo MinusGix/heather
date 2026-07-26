@@ -24,7 +24,7 @@ use heather_kernel::level::Level;
 use heather_kernel::term::{nth, wf_step_telescope, LocalCtx, LocalVar, Term, Type};
 use heather_syntax::{Arm, Expr, Span};
 
-use crate::inductive::{inject, nat_lit, ConstBody, Inductive, Spine};
+use crate::inductive::{inject, ConstBody, FieldKind, Inductive, Spine};
 use crate::{embed, err, Alias, Cx, Elaborator, Guard, GuardKind, R};
 
 /// The pieces every part of the lowering needs, gathered once so that the
@@ -121,17 +121,30 @@ impl Elaborator {
         d_ty: &Type,
         level: &Level,
         args: &[Expr],
+        container: Option<(&Expr, Rc<Term>)>,
         span: Span,
     ) -> R<Term> {
         let _ = span;
-        // `Vec^l(T; 0) ⇝ Unit^l`, which carries the level since route (a) of
+        // The tuple's terminator. Tier 1 ends with `⟨⟩ : Unit^l` — which
+        // `Vec^l(T; 0) ⇝ Unit^l` makes the *zero* case of a container tail,
+        // so the two are one code path (docs/container-fields.md §3.4).
+        // (`Triv` carries the level since route (a) of
         // issues/unit-level-and-vec-preservation.md; a `Triv` at 0 here would
-        // be exactly the defect that round closed.
-        let mut acc = Term::Triv { level: level.clone() };
-        for (k, arg) in args.iter().enumerate().rev() {
+        // be exactly the defect that round closed.)
+        let (mut acc, mut tail_len) = match &container {
+            Some((arg, len)) => {
+                let vec_ty = Type::Vec {
+                    level: level.clone(),
+                    elem: Rc::new(d_ty.clone()),
+                    len: Rc::clone(len),
+                };
+                (self.elab_check(cx, arg, &vec_ty, level)?, (**len).clone())
+            }
+            None => (Term::Triv { level: level.clone() }, Term::Zero),
+        };
+        for arg in args.iter().rev() {
             let child = self.elab_check(cx, arg, d_ty, level)?;
-            // What is left *after* this child: the tail's length.
-            let tail = args.len() - 1 - k;
+            let tail = tail_len.clone();
             acc = Term::Pair {
                 fst_level: level.clone(),
                 snd_level: level.clone(),
@@ -142,11 +155,12 @@ impl Elaborator {
                 snd_ty: Rc::new(Type::Vec {
                     level: level.clone(),
                     elem: Rc::new(d_ty.shift_local(1)),
-                    len: Rc::new(nat_lit(tail)),
+                    len: Rc::new(tail.shift_local(1)),
                 }),
                 fst: Rc::new(child),
                 snd: Rc::new(acc),
             };
+            tail_len = Term::Succ(Rc::new(tail_len));
         }
         Ok(acc)
     }
@@ -471,20 +485,40 @@ impl Elaborator {
         let cs_var = Rc::new(Term::Var(LocalVar(1)));
         let d_body = d + 2;
         let d_ty_here = Rc::new(tel.d_ty.shift_local(d_body));
-        let len = Rc::new(nat_lit(m));
+        let ctor_ty_here = tel.spine.ctors[i].0.shift_local(d_body);
+        let value_here = Rc::new(value.shift_local(2));
+        // This branch's arity. Without a container it is the literal `m`;
+        // with one it is `Succ^m(len)` for `len` projected out of the label,
+        // which is the *same* term the `Wf`'s arity computes here
+        // (docs/container-fields.md §3.3). `Succ`-headed either way, which is
+        // what lets `Vec` unfold `m` times and `Fin` admit the `m` literal
+        // indices below.
+        let container_len = match ctor.container() {
+            Some((_, p)) => {
+                let (len, _, _) =
+                    self.projection(cx, &ctor_ty_here, &value_here, p, span)?;
+                Some(len)
+            }
+            None => None,
+        };
+        let base = match &container_len {
+            Some(l) => (**l).clone(),
+            None => Term::Zero,
+        };
+        let len = Rc::new(succ_n(m, &base));
 
         // The `t`-th child, `nth^l(⟦D⟧; m; cs'; ι_t)`. At a literal `m` this
         // β-reduces to the projections of `cs'` even though `cs'` is a
         // variable, which is what makes an arm binder behave like a field.
         let child =
-            |t: usize| Rc::new(nth_child(&tel.level, &d_ty_here, m, t, Rc::clone(&cs_var)));
+            |t: usize| Rc::new(nth_child(&tel.level, &d_ty_here, m, t, Rc::clone(&cs_var), &base));
 
         let body = match branches {
             // §7.2: no binders, no guard — just the child, or the default at
             // every other constructor.
             Branches::Child { i: ci, t, default } => {
                 if i == *ci {
-                    nth_child(&tel.level, &d_ty_here, m, *t, cs_var)
+                    nth_child(&tel.level, &d_ty_here, m, *t, cs_var, &base)
                 } else {
                     default.shift_local(d_body)
                 }
@@ -492,12 +526,51 @@ impl Elaborator {
             Branches::Arms(arms) => {
                 let arm = arms[i];
                 let mut acx = bcx.clone();
-                let ctor_ty = tel.spine.ctors[i].0.shift_local(d_body);
-                let value_here = Rc::new(value.shift_local(2));
+                let ctor_ty = ctor_ty_here.clone();
                 let mut children = Vec::with_capacity(m);
                 let (mut payload_k, mut rec_t) = (0usize, 0usize);
                 for (k, name) in arm.binders.iter().enumerate() {
-                    if ctor.rec_field[k] {
+                    // The container binder is the *tail* of the children
+                    // tuple — one `snd` per preceding plain child, no `nth`
+                    // and no index arithmetic (docs/container-fields.md §3.5).
+                    if let FieldKind::Container { .. } = ctor.kind[k] {
+                        let tail_len = container_len
+                            .clone()
+                            .expect("a container field has a length");
+                        let mut term = Rc::clone(&cs_var);
+                        let mut left = m;
+                        while left > 0 {
+                            left -= 1;
+                            let mut rest = (*tail_len).clone();
+                            for _ in 0..left {
+                                rest = Term::Succ(Rc::new(rest));
+                            }
+                            term = Rc::new(Term::Snd {
+                                fst_level: tel.level.clone(),
+                                snd_level: tel.level.clone(),
+                                fst_ty: Rc::clone(&d_ty_here),
+                                snd_ty: Rc::new(Type::Vec {
+                                    level: tel.level.clone(),
+                                    elem: Rc::new(tel.d_ty.shift_local(d_body + 1)),
+                                    len: Rc::new(rest.shift_local(1)),
+                                }),
+                                pair: term,
+                            });
+                        }
+                        acx.aliases.push(Rc::new(Alias {
+                            name: name.clone(),
+                            depth: acx.names.len(),
+                            term,
+                            ty: Type::Vec {
+                                level: tel.level.clone(),
+                                elem: Rc::clone(&d_ty_here),
+                                len: tail_len,
+                            },
+                            level: tel.level.clone(),
+                        }));
+                        continue;
+                    }
+                    if ctor.kind[k] == FieldKind::Plain {
                         let c = child(rec_t);
                         // The ih at this index, and the type it lands at: the
                         // eliminator's `cod` binds `i`, so it is
@@ -519,7 +592,7 @@ impl Elaborator {
                             cod_level: tel.mlvl.clone(),
                             dom: Rc::new(Type::Fin { len: Rc::clone(&len) }),
                             cod: Rc::new(cod),
-                            arg: Rc::new(fin_index(rec_t, m)),
+                            arg: Rc::new(fin_index(rec_t, m, &base)),
                         });
                         let ih_ty = tel
                             .motive
@@ -642,33 +715,52 @@ impl Elaborator {
 /// `nth^l(⟦D⟧; m; cs; ι_t)` — the `t`-th of `m` children of `cs` (§6.3).
 /// Shared by the `match` arms, which bind it as an alias, and by
 /// injectivity, which projects with it.
+/// The `t`-th plain child, out of a children tuple whose length is
+/// `Succ^m(base)`.
+///
+/// `base` is `Zero` for a constructor with no container field — recovering
+/// tier 1's literal `m` exactly — and the container's length term otherwise
+/// (docs/container-fields.md §3.3). Either way the length is `Succ`-headed
+/// `m` times, which is all `nth` and `Fin` need in order to reduce down to
+/// the `t`-th projection.
 pub(crate) fn nth_child(
     level: &Level,
     d_ty: &Rc<Type>,
     m: usize,
     t: usize,
     cs: Rc<Term>,
+    base: &Term,
 ) -> Term {
     nth(
         level,
         d_ty,
-        &Rc::new(nat_lit(m)),
+        &Rc::new(succ_n(m, base)),
         cs,
-        Rc::new(fin_index(t, m)),
+        Rc::new(fin_index(t, m, base)),
     )
 }
 
-/// The literal index `t` of `Fin m`: `inr^t (inl ⟨⟩)` (§6.3). Each tail is
+/// `Succ^k(base)`.
+fn succ_n(k: usize, base: &Term) -> Term {
+    let mut acc = base.clone();
+    for _ in 0..k {
+        acc = Term::Succ(Rc::new(acc));
+    }
+    acc
+}
+
+/// The index `t` of `Fin(Succ^m(base))`: `inr^t (inl ⟨⟩)` (§6.3). Each tail is
 /// annotated with `Fin` itself rather than its unfolded sum — `Fin(S k) ⇝
 /// Unit⁰ + Fin(k)`, so the kernel converts the two, and the folded form is
 /// what a goal reads back as.
-fn fin_index(t: usize, m: usize) -> Term {
+fn fin_index(t: usize, m: usize, base: &Term) -> Term {
     let unit = || Rc::new(Type::Unit { level: Level::Zero });
+    let fin = |k: usize| Rc::new(Type::Fin { len: Rc::new(succ_n(k, base)) });
     let mut v = Term::Inl {
         lhs_level: Level::Zero,
         rhs_level: Level::Zero,
         lhs: unit(),
-        rhs: Rc::new(Type::Fin { len: Rc::new(nat_lit(m - t - 1)) }),
+        rhs: fin(m - t - 1),
         val: Rc::new(Term::Triv { level: Level::Zero }),
     };
     for k in (0..t).rev() {
@@ -676,7 +768,7 @@ fn fin_index(t: usize, m: usize) -> Term {
             lhs_level: Level::Zero,
             rhs_level: Level::Zero,
             lhs: unit(),
-            rhs: Rc::new(Type::Fin { len: Rc::new(nat_lit(m - k - 1)) }),
+            rhs: fin(m - k - 1),
             val: Rc::new(v),
         };
     }

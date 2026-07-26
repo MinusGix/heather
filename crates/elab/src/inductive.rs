@@ -25,7 +25,7 @@ use heather_kernel::conv::conv_type;
 use heather_kernel::layer::Layer;
 use heather_kernel::level::Level;
 use heather_kernel::term::{LocalSubst, LocalVar, Term, Type};
-use heather_syntax::{Arm, Expr, InductiveDecl, Span, Ty, TyKind};
+use heather_syntax::{Arm, CtorDecl, Expr, ExprKind, InductiveDecl, Span, Ty, TyKind};
 
 use crate::{embed, err, Alias, Cx, Elaborator, TyVar, R};
 
@@ -52,19 +52,49 @@ pub(crate) struct Ctor {
     /// `(optional field name, field type)`. A named field is in scope in the
     /// types of the fields after it, which is why the spine is a Σ.
     pub fields: Vec<(Option<String>, Ty)>,
-    /// Parallel to [`Self::fields`]: which of them are recursive occurrences
-    /// of the declaration. A recursive field is *not* part of the shape — it
-    /// is a child in the `Vec` — so it is skipped by every payload walk here
-    /// and reappears only in `wf.rs`.
-    pub rec_field: Vec<bool>,
+    /// Parallel to [`Self::fields`]: what each one contributes
+    /// (`docs/container-fields.md` §3.1). Neither recursive kind is part of
+    /// the shape — both are children in the `Vec` — so both are skipped by
+    /// every payload walk here and reappear only in `wf.rs`.
+    pub kind: Vec<FieldKind>,
+}
+
+/// What a constructor field contributes to the lowering.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum FieldKind {
+    /// Any type not mentioning `D`: a Σ component of the shape.
+    Payload,
+    /// `D` itself, uniform and direct (tier 1 §1): exactly one child.
+    Plain,
+    /// `[D; len]` (`docs/container-fields.md` §3.1): `len` children, where
+    /// `len_payload` is the *payload* index of the `Nat` field naming the
+    /// length. At most one per constructor, last among the child-contributing
+    /// fields.
+    Container { len_payload: usize },
+}
+
+impl FieldKind {
+    pub fn is_child(self) -> bool {
+        !matches!(self, FieldKind::Payload)
+    }
 }
 
 impl Ctor {
-    /// How many children a value of this constructor carries: the `mᵢ` of
-    /// `docs/inductive-tier1-wf-lowering.md`, and the literal this
-    /// constructor's branch of the arity returns.
+    /// How many **plain** children this constructor carries: the `kᵢ` of
+    /// `docs/container-fields.md` §3.3. Without a container field this is the
+    /// whole arity (tier 1's `mᵢ`); with one, the arity is
+    /// `Succ^{kᵢ}(len)` and only these `kᵢ` are reachable by a literal index.
     pub fn arity(&self) -> usize {
-        self.rec_field.iter().filter(|r| **r).count()
+        self.kind.iter().filter(|k| **k == FieldKind::Plain).count()
+    }
+
+    /// This constructor's container field, if it has one: its index among the
+    /// surface fields, and the payload index of its length.
+    pub fn container(&self) -> Option<(usize, usize)> {
+        self.kind.iter().enumerate().find_map(|(k, f)| match f {
+            FieldKind::Container { len_payload } => Some((k, *len_payload)),
+            _ => None,
+        })
     }
 
     /// The payload fields — everything the *shape* carries — in declaration
@@ -73,7 +103,7 @@ impl Ctor {
         self.fields
             .iter()
             .enumerate()
-            .filter(|(k, _)| !self.rec_field[*k])
+            .filter(|(k, _)| !self.kind[*k].is_child())
     }
 }
 
@@ -175,6 +205,17 @@ pub(crate) fn inject(spine: &Spine, i: usize, n: usize, val: Term, d: u32) -> Te
 }
 
 /// `k` as a `Nat` literal.
+/// The `usize` a `Nat` literal denotes, if it is one. `Vec` reduces on the
+/// whnf of its length, so "is this a literal" is exactly "can this be
+/// unfolded to a Σ-chain of known width".
+pub(crate) fn nat_value(t: &Term) -> Option<usize> {
+    match t {
+        Term::Zero => Some(0),
+        Term::Succ(p) => nat_value(p).map(|k| k + 1),
+        _ => None,
+    }
+}
+
 pub(crate) fn nat_lit(k: usize) -> Term {
     let mut t = Term::Zero;
     for _ in 0..k {
@@ -244,10 +285,7 @@ impl Elaborator {
             // find yet, so an occurrence is either the uniform recursive one
             // — tier 1, lowered onto `Wf` — or a rejection, never a silent
             // lowering.
-            let mut rec_field = Vec::with_capacity(c.fields.len());
-            for f in &c.fields {
-                rec_field.push(classify_field(&f.ty, &d.name, &d.params, &c.name)?);
-            }
+            let kind = classify_fields(c, &d.name, &d.params)?;
             ctors.push(Ctor {
                 name: c.name.clone(),
                 fields: c
@@ -255,10 +293,16 @@ impl Elaborator {
                     .iter()
                     .map(|f| (f.name.clone(), f.ty.clone()))
                     .collect(),
-                rec_field,
+                kind,
             });
         }
-        let recursive = ctors.iter().any(|c| c.arity() > 0);
+        // *Any* child-contributing field, not just a plain one: a constructor
+        // whose only recursive field is a container has `arity() == 0` and is
+        // still tier 1 (docs/container-fields.md §3.1). Getting this wrong
+        // classifies `Rose` as non-recursive and silently drops its children —
+        // which is the hazard class, not a rejection, so
+        // `container_fields::a_container_is_not_dropped` is the observer.
+        let recursive = ctors.iter().any(|c| c.kind.iter().any(|k| k.is_child()));
         let ind = Rc::new(Inductive {
             name: d.name.clone(),
             tag: self.next_tag,
@@ -398,7 +442,11 @@ impl Elaborator {
         span: Span,
     ) -> R<Term> {
         let spine = self.spine(shape, level, ind.ctors.len(), span)?;
-        let counts: Vec<usize> = ind.ctors.iter().map(|c| c.arity()).collect();
+        let counts: Vec<(usize, Option<usize>)> = ind
+            .ctors
+            .iter()
+            .map(|c| (c.arity(), c.container().map(|(_, len)| len)))
+            .collect();
         self.const_case_tree(
             xcx,
             &spine,
@@ -580,17 +628,33 @@ impl Elaborator {
         // ones build the children tuple. Both keep declaration order.
         let payload: Vec<Expr> = args
             .iter()
-            .zip(&ctor.rec_field)
-            .filter(|(_, r)| !**r)
+            .zip(&ctor.kind)
+            .filter(|(_, k)| !k.is_child())
             .map(|(a, _)| a.clone())
             .collect();
+        // The *plain* children, in order; the container argument, if any, is
+        // the tuple's tail rather than an element (container-fields §3.4).
         let children: Vec<Expr> = args
             .iter()
-            .zip(&ctor.rec_field)
-            .filter(|(_, r)| **r)
+            .zip(&ctor.kind)
+            .filter(|(_, k)| **k == FieldKind::Plain)
             .map(|(a, _)| a.clone())
             .collect();
+        let container: Option<Expr> = ctor.container().map(|(k, _)| args[k].clone());
         let fields = self.build_fields(cx, &spine.ctors[i].0, &payload, true, span)?;
+        // A container's length, read *out of the label just built* rather than
+        // re-elaborated from the argument: the arity term projects the same
+        // field with the same function (`ConstBody::Arity`), so the two agree
+        // by construction instead of by two elaborations happening to match
+        // (docs/container-fields.md §3.4).
+        let container = match (ctor.container(), &container) {
+            (Some((_, p)), Some(arg)) => {
+                let (len, _, _) =
+                    self.projection(cx, &spine.ctors[i].0, &Rc::new(fields.clone()), p, span)?;
+                Some((arg, len))
+            }
+            _ => None,
+        };
         // …then the injection path.
         let val = inject(&spine, i, ind.ctors.len(), fields, 0);
         if !ind.recursive {
@@ -607,7 +671,14 @@ impl Elaborator {
             shape: Rc::clone(shape),
             arity: Rc::clone(arity),
             label: Rc::new(val),
-            children: Rc::new(self.build_children(cx, &expected, level, &children, span)?),
+            children: Rc::new(self.build_children(
+                cx,
+                &expected,
+                level,
+                &children,
+                container.as_ref().map(|(a, l)| (*a, Rc::clone(l))),
+                span,
+            )?),
         })
     }
 
@@ -899,6 +970,87 @@ impl Elaborator {
 ///   at different arguments. Both are lowerable in principle and neither is
 ///   lowered here; a rejection with its own message is the whole point of
 ///   classifying rather than scanning.
+/// Classify every field of one constructor (`docs/container-fields.md` §3.1),
+/// which has to be one pass rather than one call per field: a container
+/// field's length names an *earlier* field, and the position restrictions
+/// ("at most one container, last among the children") are properties of the
+/// sequence.
+fn classify_fields(c: &CtorDecl, name: &str, params: &[String]) -> R<Vec<FieldKind>> {
+    let mut kinds: Vec<FieldKind> = Vec::with_capacity(c.fields.len());
+    let mut payload_k = 0usize;
+    // (payload index, span) of each `Nat` field seen so far, by name — the
+    // only things a container length may refer to.
+    let mut nat_fields: Vec<(String, usize)> = Vec::new();
+    for f in &c.fields {
+        // `[D; len]` — a container field.
+        if let TyKind::Vec { elem, len } = &f.ty.kind
+            && classify_field(elem.as_ref(), name, params, &c.name)?
+        {
+            if let Some((prev, _)) = kinds.iter().enumerate().find(|(_, k)| {
+                matches!(k, FieldKind::Container { .. })
+            }) {
+                let _ = prev;
+                return err(
+                    format!(
+                        "`{}` has more than one container field: the children are one \
+                         tuple, and splitting it at a computed length is not an operation \
+                         it has (docs/container-fields.md §3.1)",
+                        c.name
+                    ),
+                    f.ty.span,
+                );
+            }
+            // Phase 1: the length must be a bare payload field name (§3.1).
+            let ExprKind::Var(lname) = &len.kind else {
+                return err(
+                    format!(
+                        "a container field's length must be the name of a `Nat` field \
+                         declared before it (docs/container-fields.md §3.1)"
+                    ),
+                    len.span,
+                );
+            };
+            let Some((_, idx)) = nat_fields.iter().find(|(n, _)| n == lname) else {
+                return err(
+                    format!(
+                        "`{lname}` is not a `Nat` field of `{}` declared before this one; \
+                         a container field's length is evaluated inside the shape, so it \
+                         can only name an earlier payload field \
+                         (docs/container-fields.md §3.1)",
+                        c.name
+                    ),
+                    len.span,
+                );
+            };
+            kinds.push(FieldKind::Container { len_payload: *idx });
+            continue;
+        }
+        if classify_field(&f.ty, name, params, &c.name)? {
+            if kinds.iter().any(|k| matches!(k, FieldKind::Container { .. })) {
+                return err(
+                    format!(
+                        "a recursive field of `{}` may not follow a container field: \
+                         reaching it would mean skipping the container's children \
+                         (docs/container-fields.md §3.1)",
+                        c.name
+                    ),
+                    f.ty.span,
+                );
+            }
+            kinds.push(FieldKind::Plain);
+            continue;
+        }
+        if matches!(f.ty.kind, TyKind::Nat)
+            && let Some(n) = &f.name
+        {
+            nat_fields.push((n.clone(), payload_k));
+        }
+        kinds.push(FieldKind::Payload);
+        payload_k += 1;
+    }
+    Ok(kinds)
+}
+
 fn classify_field(t: &Ty, name: &str, params: &[String], ctor: &str) -> R<bool> {
     if let TyKind::Named { name: n, args } = &t.kind
         && n == name
@@ -950,6 +1102,10 @@ fn occurs(t: &Ty, name: &str) -> Option<Span> {
         // rejected outright before this runs (`reject_function_fields`), so
         // an occurrence inside one cannot reach the lowering.
         TyKind::Fn { dom, cod, .. } => occurs(dom, name).or_else(|| occurs(cod, name)),
+        // `[D; n]` is a *container* field, classified before this is reached
+        // (§3.1); an occurrence deeper inside the element type is nested and
+        // still rejected.
+        TyKind::Vec { elem, .. } => occurs(elem, name),
     }
 }
 
@@ -963,6 +1119,7 @@ pub(crate) fn reject_function_fields(d: &InductiveDecl) -> Result<(), crate::Ela
         match &t.kind {
             TyKind::Fn { .. } => Some(t.span),
             TyKind::Named { args, .. } => args.iter().find_map(has_fn),
+            TyKind::Vec { elem, .. } => has_fn(elem),
             TyKind::Nat | TyKind::Eq(..) => None,
         }
     }
@@ -988,10 +1145,13 @@ pub(crate) fn reject_function_fields(d: &InductiveDecl) -> Result<(), crate::Ela
 
 /// Which branch body a constant-motive case tree puts at each constructor.
 pub(crate) enum ConstBody {
-    /// Tier 1 §3: constructor `j`'s recursive-field count, as a `Nat`
-    /// literal. The motive is `Nat`, and the resulting tree *is* the `Wf`'s
-    /// arity.
-    Arity(Vec<usize>),
+    /// Tier 1 §3 / container-fields §3.3: constructor `j`'s arity. The motive
+    /// is `Nat`, and the resulting tree *is* the `Wf`'s arity. Each entry is
+    /// `(plain children, optional payload index of a container's length)`,
+    /// giving `Succ^{plain}(len)` — with the tier-1 literal being the
+    /// `len`-absent instance `Succ^{plain}(Zero)` of the same formula, so the
+    /// two cannot diverge.
+    Arity(Vec<(usize, Option<usize>)>),
     /// §6.1: the code of `Unit` at constructor `i`, of `Empty` elsewhere. The
     /// motive is `Ty 0` — this is the large elimination, and it is what makes
     /// two distinct constructors provably distinct.
@@ -1088,7 +1248,27 @@ impl Elaborator {
         span: Span,
     ) -> R<Term> {
         match body {
-            ConstBody::Arity(counts) => Ok(nat_lit(counts[j])),
+            ConstBody::Arity(counts) => {
+                let (plain, len_payload) = counts[j];
+                let mut acc = match len_payload {
+                    // A container: the arity is data — the length field
+                    // projected straight out of the shape (§3.3). This is the
+                    // same projection `ConstBody::Field` builds, deliberately.
+                    Some(p) => {
+                        let ctor_ty = spine.ctors[j].0.shift_local(d);
+                        let (proj, _, _) = self.projection(cx, &ctor_ty, value, p, span)?;
+                        (*proj).clone()
+                    }
+                    None => Term::Zero,
+                };
+                // `Succ`-headed exactly `plain` times, which is what lets
+                // `Vec` unfold that many steps and leave the container as the
+                // tail (§3.3).
+                for _ in 0..plain {
+                    acc = Term::Succ(Rc::new(acc));
+                }
+                Ok(acc)
+            }
             ConstBody::TagCode(i) => {
                 Ok(if j == *i { Term::TmUnit { level: Level::Zero } } else { Term::TmEmpty { level: Level::Zero } })
             }
@@ -1178,12 +1358,15 @@ impl Elaborator {
         let Term::Pair { snd, .. } = cur else { return None };
         let mut p = snd;
         let mut payload = Vec::new();
-        for _ in 0..ctor.fields.len() - ctor.arity() {
+        // Not `fields.len() - arity()`: a container field is neither payload
+        // nor a *plain* child, so the two no longer partition the fields
+        // (docs/container-fields.md §3.1).
+        for _ in 0..ctor.payload().count() {
             let Term::Pair { fst, snd, .. } = &**p else { return None };
             payload.push(Rc::clone(fst));
             p = snd;
         }
-        // …and one per child, out of the tuple.
+        // …one per plain child, out of the tuple…
         let mut kids = Vec::new();
         if let Some(children) = children {
             let mut c = children;
@@ -1192,13 +1375,22 @@ impl Elaborator {
                 kids.push(Rc::clone(fst));
                 c = snd;
             }
+            // …and the container, if there is one, is what remains: the
+            // tuple's tail *is* the children vector
+            // (docs/container-fields.md §3.4), so it reads back as one field
+            // value like any other.
+            if ctor.container().is_some() {
+                kids.push(Rc::new(c.clone()));
+            }
+        } else if ctor.container().is_some() {
+            return None;
         }
         // Re-interleave into declaration order, which is the order `inj`'s
         // field index and every surface message speak in.
         let (mut a, mut b) = (0usize, 0usize);
         let fields = (0..ctor.fields.len())
             .map(|k| {
-                if ctor.rec_field[k] {
+                if ctor.kind[k].is_child() {
                     b += 1;
                     Rc::clone(&kids[b - 1])
                 } else {
@@ -1394,12 +1586,31 @@ impl Elaborator {
         // its type is `⟦D⟧` itself and there is nothing for it to depend on
         // (tier 1 §2/§7.2); a payload field is tier 0's projection, at its
         // index *among the payload*.
-        let (body, lty, llvl) = if ind.ctors[i].rec_field[k] {
+        // Injectivity at a *container* field is not phase 1
+        // (docs/container-fields.md §6). It is not a missing case so much as
+        // a dependent one: the field's type is `[D; len]`, which depends on
+        // an earlier field, so a constant motive would need both sides'
+        // lengths to be definitionally equal. That is tier 0's
+        // dependent-field restriction, and it wants the same treatment rather
+        // than a special case here.
+        if matches!(ind.ctors[i].kind[k], FieldKind::Container { .. }) {
+            return err(
+                format!(
+                    "`inj` at the container field of `{}` is not supported yet: its type \
+                     `[{}; …]` depends on the length field before it, so the two sides' \
+                     lengths would have to be definitionally equal \
+                     (docs/container-fields.md §6)",
+                    ind.ctors[i].name, ind.name
+                ),
+                span,
+            );
+        }
+        let (body, lty, llvl) = if ind.ctors[i].kind[k].is_child() {
             // A child, not a component of the shape: `None` routes the
             // projection through `child_projection` below.
             (None, sty.clone(), slvl.clone())
         } else {
-            let p = ind.ctors[i].rec_field[..k].iter().filter(|r| !**r).count();
+            let p = ind.ctors[i].kind[..k].iter().filter(|f| !f.is_child()).count();
             // The field type at each side. They differ exactly when the
             // field's type depends on an earlier field of the same
             // constructor.
@@ -1454,7 +1665,7 @@ impl Elaborator {
             // stuck on a variable — so this one generalizes `cs` in the case
             // motive exactly as `match` does, and shares the code that does.
             None => {
-                let t = ind.ctors[i].rec_field[..k].iter().filter(|r| **r).count();
+                let t = ind.ctors[i].kind[..k].iter().filter(|f| **f == FieldKind::Plain).count();
                 self.child_projection(
                     &mcx,
                     &ind,

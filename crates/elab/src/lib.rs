@@ -29,7 +29,7 @@ use std::rc::Rc;
 use heather_kernel::conv::conv_type;
 use heather_kernel::layer::Layer;
 use heather_kernel::level::Level;
-use heather_kernel::reduce::whnf_type;
+use heather_kernel::reduce::{whnf_term, whnf_type};
 use heather_kernel::subst::{GlobalEntry, GlobalSubst};
 use heather_kernel::term::{
     CtxBase, CtxEntry, GlobalBinding, GlobalCtx, GlobalVar, LocalCtx, LocalSubst, LocalVar,
@@ -691,6 +691,21 @@ impl Elaborator {
         match &ty.kind {
             TyKind::Nat => Ok((Type::Nat, Level::Zero)),
             TyKind::Named { name, args } => self.lower_named(cx, name, args, ty.span),
+            // `[T; n]` — the kernel's `Type::Vec` directly. A primitive
+            // indexed type: no fording, no encoding
+            // (docs/container-fields.md §2.1).
+            TyKind::Vec { elem, len } => {
+                let (elem_t, level) = self.elab_ty(cx, elem)?;
+                let len_t = self.elab_check(cx, len, &Type::Nat, &Level::Zero)?;
+                Ok((
+                    Type::Vec {
+                        level: level.clone(),
+                        elem: Rc::new(elem_t),
+                        len: Rc::new(len_t),
+                    },
+                    level,
+                ))
+            }
             // `(x: A) -> B` / `A -> B`. The level rule is `max(dom, cod)`,
             // the same one `elab_decl_inner` uses to close a declaration's
             // telescope — a written function type and a `fn`'s own type must
@@ -789,6 +804,11 @@ impl Elaborator {
                 };
                 self.build_absurd(cx, arg, expected, lvl, e.span)
             }
+            // A vector literal against an expected `Vec(T; k)`. Checking-only
+            // like `refl`, and the length must be a *literal*: matching a
+            // literal's own length against a neutral one is unification, not
+            // a check (docs/container-fields.md §2.2).
+            ExprKind::VecLit(elems) => self.elab_vec_lit(cx, elems, expected, e.span),
             // A lambda against an expected Π: the *expected* domain is what
             // the binder is pushed with, so the emitted annotation always
             // matches the type it is checked against. A written annotation is
@@ -838,6 +858,12 @@ impl Elaborator {
                 Ok((t, Type::Nat, Level::Zero))
             }
             ExprKind::Var(name) => self.resolve(cx, name, e.span),
+            ExprKind::VecLit(_) => err(
+                "a vector literal needs an expected type (it is checking-only, like \
+                 `refl`): annotate it (`let xs: [T; 2] = [a, b];`) or use it as an \
+                 argument",
+                e.span,
+            ),
             // A lambda in inference position needs every binder annotated:
             // with no expected type there is nothing else to take the domain
             // from (docs/surface-function-types.md §5.2).
@@ -1368,6 +1394,73 @@ impl Elaborator {
         }
     }
 
+    /// `[a, b, c]` at an expected `Vec^l(T; k)`: the Σ-chain that `Vec`
+    /// unfolds to, terminated by `⟨⟩ : Unit^l`
+    /// (docs/container-fields.md §2.2). Shares its shape with
+    /// `wf::build_children`, which builds the same chain for a constructor's
+    /// children — the difference is only where the element type comes from.
+    fn elab_vec_lit(
+        &self,
+        cx: &Cx,
+        elems: &[Expr],
+        expected: &Type,
+        span: Span,
+    ) -> R<Term> {
+        // *Not* whnf'd: `Vec` reduces on its length, so the whnf of
+        // `[T; 0]` is `Unit` and of `[T; 2]` a Σ-chain — the former is what
+        // this arm exists to recognise. Every `Vec` reaching here came
+        // straight from `elab_ty`, so it is already in the right shape.
+        let Type::Vec { level, elem, len } = expected else {
+            return err("a vector literal needs a `[T; n]` expected type", span);
+        };
+        let (level, elem) = (level.clone(), Rc::clone(elem));
+        // The length has to be a literal — but only *after* reduction:
+        // `Vec` itself reduces on the whnf of its length, and a container
+        // field's expected length arrives as a projection out of the label
+        // (docs/container-fields.md §3.4), which computes to a numeral rather
+        // than being one.
+        let len = whnf_term(len, &cx.gamma, self.fuel)
+            .map_err(|_| ElabError::Elab {
+                msg: "ran out of fuel reducing a vector literal's expected length".into(),
+                span,
+            })?;
+        let Some(k) = crate::inductive::nat_value(&len) else {
+            return err(
+                "a vector literal needs a literal length here; a vector of a \
+                 variable length has to come from a binder",
+                span,
+            );
+        };
+        if k != elems.len() {
+            return err(
+                format!(
+                    "this vector literal has {} element(s) but {k} are expected",
+                    elems.len()
+                ),
+                span,
+            );
+        }
+        let mut acc = Term::Triv { level: level.clone() };
+        for (j, e) in elems.iter().enumerate().rev() {
+            let x = self.elab_check(cx, e, &elem, &level)?;
+            acc = Term::Pair {
+                fst_level: level.clone(),
+                snd_level: level.clone(),
+                fst_ty: Rc::clone(&elem),
+                // A Σ's second component binds, so the tail type sits one
+                // binder deeper (tier-1 §5's annotation caveat).
+                snd_ty: Rc::new(Type::Vec {
+                    level: level.clone(),
+                    elem: Rc::new(elem.shift_local(1)),
+                    len: Rc::new(crate::inductive::nat_lit(elems.len() - 1 - j)),
+                }),
+                fst: Rc::new(x),
+                snd: Rc::new(acc),
+            };
+        }
+        Ok(acc)
+    }
+
     /// A lambda against an expected type (docs/surface-function-types.md §5.2).
     /// One Π is peeled per binder; a written annotation must be convertible
     /// with the expected domain, but the *expected* domain is what gets
@@ -1788,6 +1881,10 @@ fn count_holes(decl: &Decl) -> u32 {
                 ty(dom, n);
                 ty(cod, n);
             }
+            TyKind::Vec { elem, len } => {
+                ty(elem, n);
+                expr(len, n);
+            }
         }
     }
     fn expr(e: &Expr, n: &mut u32) {
@@ -1802,6 +1899,7 @@ fn count_holes(decl: &Decl) -> u32 {
                 binders.iter().filter_map(|b| b.ty.as_ref()).for_each(|t| ty(t, n));
                 expr(body, n);
             }
+            ExprKind::VecLit(elems) => elems.iter().for_each(|x| expr(x, n)),
             ExprKind::Match { scrut, motive, arms } => {
                 expr(scrut, n);
                 if let Some((_, m)) = motive {

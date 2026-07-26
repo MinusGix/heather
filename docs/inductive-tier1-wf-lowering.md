@@ -360,8 +360,15 @@ type** — a field the declaration states *as* a vector of `D`, so that the
 container in the source and the `Vec` in the kernel are the same object and
 no conversion appears. That is a surface-language round (a new `TyKind`, its
 elimination forms, and what a `match` arm binds for it), not a generator
-tweak. Until it exists, a nested occurrence is rejected with its own message
-(§1) and `Rose` is unwritable rather than mis-lowered.
+tweak.
+
+**Done, phase 1, 2026-07-26: `docs/container-fields.md`.** `Rose` is written
+`Node(label: Nat, len: Nat, kids: [Rose; len])` — the length is an ordinary
+payload field and `[Rose; len]` is the kernel's `Vec` directly, so the arity
+term projects `len` out of the shape and the children tuple's tail *is* the
+container. A *nested* occurrence (`List Rose`) is still rejected with the
+message below, and correctly: this closes the gap by adding the container to
+the surface, not by identifying a user declaration with `Vec`.
 - **Indexed families** still ford by `Id`, tracked separately.
 - **Infinitary branching** (`Acc`) stays on `W` + funext: its positions are
   a *type*, not a `Nat`, and that tier never computed anyway

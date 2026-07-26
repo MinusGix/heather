@@ -26,6 +26,8 @@ pub enum TokKind {
     Star,      // *
     Lt,        // <
     Gt,        // >   (closes a type-argument list; `>` is not an operator)
+    LBracket,  // [
+    RBracket,  // ]
     Arrow,     // ->
     FatArrow,  // =>
     /// `λ` (U+03BB). `fun` is the ASCII synonym and stays an `Ident`, matched
@@ -126,6 +128,8 @@ pub fn lex(src: &str) -> Result<Vec<Tok>, LexError> {
                 b')' => (TokKind::RParen, 1),
                 b'{' => (TokKind::LBrace, 1),
                 b'}' => (TokKind::RBrace, 1),
+                b'[' => (TokKind::LBracket, 1),
+                b']' => (TokKind::RBracket, 1),
                 b',' => (TokKind::Comma, 1),
                 b':' => (TokKind::Colon, 1),
                 b';' => (TokKind::Semi, 1),

@@ -14,7 +14,8 @@
 //! type    := "(" name ":" type ")" "->" type         -- dependent function
 //!          | tyatom "->" type                        -- right-associative
 //!          | tyatom
-//! tyatom  := name ("<" type ("," type)* ">")         -- applied inductive
+//! tyatom  := "[" type ";" expr "]"                   -- length-indexed vector
+//!          | name ("<" type ("," type)* ">")         -- applied inductive
 //!          | expr ("=" expr)?       -- bare `Nat`/`Bool` is that type; `=` is
 //!                                      propositional equality (`==` rejected)
 //!          | "(" type ")"
@@ -27,6 +28,7 @@
 //!          | ("λ"|"fun") binder+ "=>" expr
 //!          | "@" name "(" args ")"
 //!          | atom (("." name)? "(" args ")")*      -- application is postfix
+//!          | "[" (expr ("," expr)*)? "]"           -- vector literal
 //!          | name | numeral | "(" expr ")"
 //! binder  := name | "(" name ":" type ")"
 //! arms    := arm ("," arm)* ","?    -- one per constructor, any order
@@ -446,6 +448,18 @@ impl Parser {
             let end = self.expect(&TokKind::RParen, "`)`")?;
             return Ok(Ty { kind: inner.kind, span: start.join(end) });
         }
+        // `[T; n]` — a length-indexed vector (docs/container-fields.md §2.1).
+        if matches!(self.peek(), TokKind::LBracket) {
+            let start = self.bump().span;
+            let elem = self.ty()?;
+            self.expect(&TokKind::Semi, "`;` (a vector type is `[T; n]`)")?;
+            let len = self.expr()?;
+            let end = self.expect(&TokKind::RBracket, "`]`")?;
+            return Ok(Ty {
+                kind: TyKind::Vec { elem: Box::new(elem), len: Box::new(len) },
+                span: start.join(end),
+            });
+        }
         // `D<A, B>` — an applied inductive. Unambiguous: `<` is the `lt`
         // operator only in *expression* position, and no expression is a type.
         if matches!(self.peek(), TokKind::Ident(_))
@@ -601,6 +615,20 @@ impl Parser {
                 kind: ExprKind::App { head: Box::new(head), args, explicit: true },
                 span: at.join(end),
             });
+        }
+        // `[a, b, c]` — a vector literal (docs/container-fields.md §2.2).
+        if matches!(self.peek(), TokKind::LBracket) {
+            let open = self.bump().span;
+            let mut elems = Vec::new();
+            while !matches!(self.peek(), TokKind::RBracket) {
+                elems.push(self.expr()?);
+                if !matches!(self.peek(), TokKind::Comma) {
+                    break;
+                }
+                self.bump();
+            }
+            let close = self.expect(&TokKind::RBracket, "`]` (vector literal)")?;
+            return Ok(Expr { kind: ExprKind::VecLit(elems), span: open.join(close) });
         }
         match self.peek().clone() {
             TokKind::Hole(name) => {

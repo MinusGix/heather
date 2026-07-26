@@ -149,6 +149,11 @@ pub enum TyKind {
     /// A declared inductive, applied to its type arguments (`Bool`,
     /// `Option<Nat>`), or a type parameter in scope inside an `inductive`.
     Named { name: String, args: Vec<Ty> },
+    /// `[T; n]` — a length-indexed vector, the kernel's `Type::Vec`. A
+    /// *primitive* indexed type, not a user declaration: there is no fording
+    /// and no encoding (docs/container-fields.md §2.1). The length is an
+    /// expression checked at `Nat`.
+    Vec { elem: Box<Ty>, len: Box<Expr> },
     /// `(x: A) -> B` (dependent) or `A -> B` (`binder: None`).
     /// Right-associative; one binder per parenthesis group, so `(x: A) (y: B)
     /// -> C` is written `(x: A) -> (y: B) -> C`
@@ -223,6 +228,10 @@ pub enum ExprKind {
     /// `λ (x: A) (y: B) => e`, or `fun` for the ASCII spelling. Multiple
     /// binders are sugar for nesting.
     Lam { binders: Vec<LamBinder>, body: Box<Expr> },
+    /// `[a, b, c]` — a vector literal. Checking-only, like `refl`: the
+    /// expected `[T; k]` supplies both the element type and the length, and
+    /// the length must be a literal (docs/container-fields.md §2.2).
+    VecLit(Vec<Expr>),
     /// `refl` — checking-only.
     Refl,
     /// `?name` or `?` — a goal: a deferred obligation, discharged by an `on`
