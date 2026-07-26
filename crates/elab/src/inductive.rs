@@ -9,8 +9,15 @@
 //! Hence: no clever shortcuts, one function per numbered rule, and the
 //! annotations always read off the type being eliminated rather than rebuilt.
 //!
-//! Not here yet: tier 1 (recursive, exact-height fording) and tier 2 (W).
-//! Recursive declarations are classified and rejected, not mis-lowered.
+//! Tier 1 (recursive, branching) shares this module: its shape is *this*
+//! lowering with the recursive fields deleted, and the `Wf` former wraps it
+//! (`docs/inductive-tier1-wf-lowering.md`, mechanized in `wf.rs`). Sharing
+//! `lower_ctor`/`spine`/`const_case_tree` between the tiers is deliberate —
+//! it is what makes a divergence in payload handling impossible rather than
+//! merely unlikely.
+//!
+//! Not here yet: nested recursion (`Rose`) and tier 2 (W). Both are
+//! classified and rejected, not mis-lowered.
 
 use std::rc::Rc;
 
@@ -33,6 +40,11 @@ pub(crate) struct Inductive {
     pub tag: u32,
     pub params: Vec<String>,
     pub ctors: Vec<Ctor>,
+    /// Tier 1: some constructor has a recursive field, so the lowering is
+    /// `Wf^l(x : S). n` rather than the bare sum-of-Σs `S`
+    /// (`docs/inductive-tier1-wf-lowering.md` §1). Computed once, at
+    /// declaration time; every tier-1 branch below is guarded by it.
+    pub recursive: bool,
 }
 
 pub(crate) struct Ctor {
@@ -40,6 +52,29 @@ pub(crate) struct Ctor {
     /// `(optional field name, field type)`. A named field is in scope in the
     /// types of the fields after it, which is why the spine is a Σ.
     pub fields: Vec<(Option<String>, Ty)>,
+    /// Parallel to [`Self::fields`]: which of them are recursive occurrences
+    /// of the declaration. A recursive field is *not* part of the shape — it
+    /// is a child in the `Vec` — so it is skipped by every payload walk here
+    /// and reappears only in `wf.rs`.
+    pub rec_field: Vec<bool>,
+}
+
+impl Ctor {
+    /// How many children a value of this constructor carries: the `mᵢ` of
+    /// `docs/inductive-tier1-wf-lowering.md`, and the literal this
+    /// constructor's branch of the arity returns.
+    pub fn arity(&self) -> usize {
+        self.rec_field.iter().filter(|r| **r).count()
+    }
+
+    /// The payload fields — everything the *shape* carries — in declaration
+    /// order, paired with their index among the surface fields.
+    pub fn payload(&self) -> impl Iterator<Item = (usize, &(Option<String>, Ty))> {
+        self.fields
+            .iter()
+            .enumerate()
+            .filter(|(k, _)| !self.rec_field[*k])
+    }
 }
 
 /// A kernel type read back as a tag spine (§3.2). Everything the constructor
@@ -112,6 +147,42 @@ fn read_tag(t: &Type) -> Option<u32> {
     }
 }
 
+/// The injection path into a tag spine (§3.2/§4): `Inl` unless this is the
+/// last constructor, under `i` `Inr`s. `d` weakens the spine's components,
+/// which are scoped where the spine was read back — 0 at a constructor, and
+/// however many binders the step's case tree has pushed inside `match`.
+pub(crate) fn inject(spine: &Spine, i: usize, n: usize, val: Term, d: u32) -> Term {
+    let mut val = val;
+    if i + 1 < n {
+        val = Term::Inl {
+            lhs_level: spine.ctors[i].1.clone(),
+            rhs_level: spine.tails[i].1.clone(),
+            lhs: Rc::new(spine.ctors[i].0.shift_local(d)),
+            rhs: Rc::new(spine.tails[i].0.shift_local(d)),
+            val: Rc::new(val),
+        };
+    }
+    for j in (0..i).rev() {
+        val = Term::Inr {
+            lhs_level: spine.ctors[j].1.clone(),
+            rhs_level: spine.tails[j].1.clone(),
+            lhs: Rc::new(spine.ctors[j].0.shift_local(d)),
+            rhs: Rc::new(spine.tails[j].0.shift_local(d)),
+            val: Rc::new(val),
+        };
+    }
+    val
+}
+
+/// `k` as a `Nat` literal.
+pub(crate) fn nat_lit(k: usize) -> Term {
+    let mut t = Term::Zero;
+    for _ in 0..k {
+        t = Term::Succ(Rc::new(t));
+    }
+    t
+}
+
 /// The tag's inhabitant: nested `⟨⟩`s matching the tag type's shape. Which
 /// inhabitant hardly matters — the type is proof-irrelevant — but it has to be
 /// *an* inhabitant for the kernel to accept the constructor.
@@ -167,22 +238,14 @@ impl Elaborator {
             if self.globals.contains_key(&c.name) || self.inductives.contains_key(&c.name) {
                 return err(format!("duplicate name `{}`", c.name), c.span);
             }
-            // Tier classification (§2). With no function types in field
-            // position there is no *negative* occurrence to find yet, so any
-            // self-occurrence means tier 1 or 2 — which is a rejection today,
-            // never a silent lowering.
+            // Tier classification (tier 0 §2; tier 1 §1). With no function
+            // types in field position there is no *negative* occurrence to
+            // find yet, so an occurrence is either the uniform recursive one
+            // — tier 1, lowered onto `Wf` — or a rejection, never a silent
+            // lowering.
+            let mut rec_field = Vec::with_capacity(c.fields.len());
             for f in &c.fields {
-                if let Some(sp) = occurs(&f.ty, &d.name) {
-                    return err(
-                        format!(
-                            "`{}` is recursive (field of `{}` mentions `{}`): that is a tier-1 \
-                             inductive, and the exact-height encoding is not implemented yet \
-                             (docs/inductive-tier0-lowering.md §2)",
-                            d.name, c.name, d.name
-                        ),
-                        sp,
-                    );
-                }
+                rec_field.push(classify_field(&f.ty, &d.name, &d.params, &c.name)?);
             }
             ctors.push(Ctor {
                 name: c.name.clone(),
@@ -191,13 +254,16 @@ impl Elaborator {
                     .iter()
                     .map(|f| (f.name.clone(), f.ty.clone()))
                     .collect(),
+                rec_field,
             });
         }
+        let recursive = ctors.iter().any(|c| c.arity() > 0);
         let ind = Rc::new(Inductive {
             name: d.name.clone(),
             tag: self.next_tag,
             params: d.params.clone(),
             ctors,
+            recursive,
         });
         self.next_tag += 1;
         for i in 0..ind.ctors.len() {
@@ -245,9 +311,37 @@ impl Elaborator {
         self.lower_instance(cx, ind, &lowered, span)
     }
 
-    /// The tag spine (§3.2): `⟦D⟧ = ⟦c₁⟧ + (⟦c₂⟧ + …)`, right-nested;
-    /// `Empty` with no constructors, and no `+` at all with one.
+    /// `⟦D<ā>⟧`: the tag spine at tier 0, and the `Wf` over it at tier 1
+    /// (`docs/inductive-tier1-wf-lowering.md` §4). Every other lowering in
+    /// this crate goes through here, so the two tiers cannot disagree about
+    /// what a declaration's kernel type is.
     pub(crate) fn lower_instance(
+        &self,
+        cx: &Cx,
+        ind: &Inductive,
+        args: &[(Type, Level)],
+        span: Span,
+    ) -> R<(Type, Level)> {
+        let (shape, level) = self.lower_shape(cx, ind, args, span)?;
+        if !ind.recursive {
+            return Ok((shape, level));
+        }
+        // The arity is a `Nat` term with `x : S` free, so it is built in the
+        // context extended by that binder (§3).
+        let mut xcx = cx.clone();
+        xcx.push("#shape".into(), shape.clone(), level.clone());
+        let arity = self.lower_arity(&xcx, ind, &shape, &level, span)?;
+        Ok((
+            Type::Wf { level: level.clone(), shape: Rc::new(shape), arity: Rc::new(arity) },
+            level,
+        ))
+    }
+
+    /// The tag spine (§3.2): `S = ⟦c₁⟧ + (⟦c₂⟧ + …)`, right-nested;
+    /// `Empty` with no constructors, and no `+` at all with one. At tier 1
+    /// this is the `Wf`'s *shape*, so the recursive fields are already gone
+    /// by construction — [`Self::lower_ctor`] skips them.
+    pub(crate) fn lower_shape(
         &self,
         cx: &Cx,
         ind: &Inductive,
@@ -284,11 +378,46 @@ impl Elaborator {
         Ok((acc, acc_lvl))
     }
 
+    /// The arity `n` over `(Γ, x : S)` (tier 1 §3): a case on the tag
+    /// returning each constructor's literal recursive-field count. This is
+    /// §6.1's constant-motive case tree at the motive `Nat` — the same code,
+    /// so the shape's structure and the constructor list cannot disagree.
+    fn lower_arity(
+        &self,
+        xcx: &Cx,
+        ind: &Inductive,
+        shape: &Type,
+        level: &Level,
+        span: Span,
+    ) -> R<Term> {
+        let spine = self.spine(shape, level, ind.ctors.len(), span)?;
+        let counts: Vec<usize> = ind.ctors.iter().map(|c| c.arity()).collect();
+        self.const_case_tree(
+            xcx,
+            &spine,
+            ind.ctors.len(),
+            &Type::Nat,
+            &Level::Zero,
+            Rc::new(Term::Var(LocalVar(0))),
+            &ConstBody::Arity(counts),
+            0,
+            // The spine is scoped in `Γ`; one binder (`x`) has been pushed
+            // since.
+            1,
+            span,
+        )
+    }
+
     /// One constructor's field spine (§3.1 + §3.3): the nominal tag, then the
-    /// fields, Unit-terminated. Built outside-in as a list of entries and
-    /// folded from the end, which is exactly why no shifting is needed: entry
-    /// `j`'s type is already scoped in `Γ` plus entries `0..j`.
-    fn lower_ctor(
+    /// **payload** fields, Unit-terminated. Built outside-in as a list of
+    /// entries and folded from the end, which is exactly why no shifting is
+    /// needed: entry `j`'s type is already scoped in `Γ` plus entries `0..j`.
+    ///
+    /// Recursive fields are skipped and *not* pushed into scope: they are
+    /// children in the `Vec`, not components of the shape, so a later field
+    /// type cannot depend on one (tier 1 §2, where the restriction is stated
+    /// and costed).
+    pub(crate) fn lower_ctor(
         &self,
         cx: &Cx,
         ind: &Inductive,
@@ -312,7 +441,7 @@ impl Elaborator {
         // bind it in a pattern.
         let mut entries = vec![(tag_type(ind.tag), Level::Zero)];
         fcx.push("#tag".into(), tag_type(ind.tag), Level::Zero);
-        for (name, ty) in &ind.ctors[i].fields {
+        for (_, (name, ty)) in ind.ctors[i].payload() {
             let (t, l) = self.elab_ty(&fcx, ty)?;
             entries.push((t.clone(), l.clone()));
             fcx.push(name.clone().unwrap_or_else(|| "#field".into()), t, l);
@@ -337,11 +466,22 @@ impl Elaborator {
     /// Split a lowered `⟦D⟧` into its `n` constructor summands (§3.2). `n`
     /// comes from the declaration, never from the shape, so a constructor
     /// whose own encoding is a `+` could not confuse it.
+    ///
+    /// A tier-1 `⟦D⟧` is `Wf^l(x : S). n`, and the summands are `S`'s: the
+    /// unwrapping happens here, once, so no caller has to know which tier it
+    /// is holding. A summand is always a `Σ`, never itself a `Wf`, so this
+    /// cannot strip too much.
     pub(crate) fn spine(&self, ty: &Type, lvl: &Level, n: usize, span: Span) -> R<Spine> {
         let mut ctors = Vec::with_capacity(n);
         let mut tails = Vec::with_capacity(n.saturating_sub(1));
-        let mut cur = Rc::new(ty.clone());
-        let mut cur_lvl = lvl.clone();
+        let (cur, cur_lvl) = match ty {
+            // `Wf`'s shape lives at the `Wf`'s own level (kernel formation
+            // rule), so there is no second level to read off.
+            Type::Wf { shape, level, .. } => (Rc::clone(shape), level.clone()),
+            _ => (Rc::new(ty.clone()), lvl.clone()),
+        };
+        let mut cur = cur;
+        let mut cur_lvl = cur_lvl;
         for _ in 0..n.saturating_sub(1) {
             let Type::Sum { lhs_level, rhs_level, lhs, rhs } = &*cur else {
                 return err("internal: malformed inductive encoding (expected a `+`)", span);
@@ -359,7 +499,11 @@ impl Elaborator {
     /// to the leftmost constructor and read its tag field (§3.3). `None` for
     /// anything that is not an inductive encoding.
     pub(crate) fn tag_of(&self, ty: &Type) -> Option<Rc<Inductive>> {
-        let mut cur = ty;
+        // Tier 1: the tag is in the `Wf`'s shape (tier 1 §4).
+        let mut cur = match ty {
+            Type::Wf { shape, .. } => shape,
+            _ => ty,
+        };
         while let Type::Sum { lhs, .. } = cur {
             cur = lhs;
         }
@@ -419,35 +563,46 @@ impl Elaborator {
             }
         }
         let spine = self.spine(&expected, expected_lvl, ind.ctors.len(), span)?;
-        let mut val = self.build_fields(cx, &spine.ctors[i].0, args, true, span)?;
-        // …then the injection path: `Inl` unless this is the last constructor,
-        // under `i` `Inr`s.
-        if i + 1 < ind.ctors.len() {
-            val = Term::Inl {
-                lhs_level: spine.ctors[i].1.clone(),
-                rhs_level: spine.tails[i].1.clone(),
-                lhs: Rc::clone(&spine.ctors[i].0),
-                rhs: Rc::clone(&spine.tails[i].0),
-                val: Rc::new(val),
-            };
+        // Tier 1 (§5): the payload arguments build the *label*, the recursive
+        // ones build the children tuple. Both keep declaration order.
+        let payload: Vec<Expr> = args
+            .iter()
+            .zip(&ctor.rec_field)
+            .filter(|(_, r)| !**r)
+            .map(|(a, _)| a.clone())
+            .collect();
+        let children: Vec<Expr> = args
+            .iter()
+            .zip(&ctor.rec_field)
+            .filter(|(_, r)| **r)
+            .map(|(a, _)| a.clone())
+            .collect();
+        let fields = self.build_fields(cx, &spine.ctors[i].0, &payload, true, span)?;
+        // …then the injection path.
+        let val = inject(&spine, i, ind.ctors.len(), fields, 0);
+        if !ind.recursive {
+            return Ok(val);
         }
-        for j in (0..i).rev() {
-            val = Term::Inr {
-                lhs_level: spine.ctors[j].1.clone(),
-                rhs_level: spine.tails[j].1.clone(),
-                lhs: Rc::clone(&spine.ctors[j].0),
-                rhs: Rc::clone(&spine.tails[j].0),
-                val: Rc::new(val),
-            };
-        }
-        Ok(val)
+        // `val` is the label `ℓᵢ : S`; wrap it in `sup_f` with the children
+        // (§5). Shape and arity are read off the type being built, never
+        // rebuilt — the same discipline as the injections just above.
+        let Type::Wf { level, shape, arity } = &expected else {
+            return err("internal: a recursive declaration did not lower to a `Wf`", span);
+        };
+        Ok(Term::Supf {
+            level: level.clone(),
+            shape: Rc::clone(shape),
+            arity: Rc::clone(arity),
+            label: Rc::new(val),
+            children: Rc::new(self.build_children(cx, &expected, level, &children, span)?),
+        })
     }
 
     /// The field tuple: `pair(tag_refl, pair(a₁, … pair(a_k, ⟨⟩)))`, walking
     /// the Σ spine of `⟦c_i⟧` and checking each argument against the component
     /// the spine says it must have. `tag` marks the first component, which is
     /// the nominal tag rather than a field.
-    fn build_fields(
+    pub(crate) fn build_fields(
         &self,
         cx: &Cx,
         ctor_ty: &Type,
@@ -564,6 +719,13 @@ impl Elaborator {
             );
         }
         let arms: Vec<&Arm> = ordered.into_iter().map(|a| a.expect("checked above")).collect();
+        if ind.recursive {
+            // Tier 1: one `elim_Wf`, not a case tree over the scrutinee
+            // (docs/inductive-tier1-wf-lowering.md §6). Everything above is
+            // surface bookkeeping and is shared.
+            return self
+                .elab_match_wf(cx, ind, &arms, scrut, scrut_ty, motive, mlvl, span);
+        }
         let spine = self.spine(scrut_ty, scrut_lvl, n, span)?;
         self.case_tree(cx, &arms, &spine, 0, motive, &mlvl, Rc::new(scrut))
     }
@@ -712,10 +874,55 @@ impl Elaborator {
     }
 }
 
-/// Where `name` occurs in a surface type, if it does — the tier-classification
-/// scan (§2). Only *occurrence* today: the surface has no function type, so a
-/// negative occurrence cannot be written, and the strict-positivity refinement
-/// lands with tier 1.
+/// Is this field a recursive occurrence of the declaration being read
+/// (`docs/inductive-tier1-wf-lowering.md` §1)? Three outcomes, and the third
+/// is why this returns a `Result` rather than a `bool`:
+///
+/// - `false` — the field does not mention `name` at all.
+/// - `true` — the field *is* `name<p̄>` applied to the declaration's own
+///   parameters in order: the uniform, direct occurrence, which becomes a
+///   child in the `Vec`.
+/// - an error — `name` occurs, but nested under another type constructor or
+///   at different arguments. Both are lowerable in principle and neither is
+///   lowered here; a rejection with its own message is the whole point of
+///   classifying rather than scanning.
+fn classify_field(t: &Ty, name: &str, params: &[String], ctor: &str) -> R<bool> {
+    if let TyKind::Named { name: n, args } = &t.kind
+        && n == name
+    {
+        let uniform = args.len() == params.len()
+            && args.iter().zip(params).all(|(a, p)| {
+                matches!(&a.kind, TyKind::Named { name: an, args } if an == p && args.is_empty())
+            });
+        if uniform {
+            return Ok(true);
+        }
+        return err(
+            format!(
+                "field of `{ctor}` uses `{name}` at arguments other than its own parameters \
+                 (`{}`); parameters are monomorphized, so a recursive occurrence must be \
+                 uniform (docs/inductive-tier1-wf-lowering.md §1)",
+                params.join(", ")
+            ),
+            t.span,
+        );
+    }
+    if let Some(sp) = occurs(t, name) {
+        return err(
+            format!(
+                "field of `{ctor}` mentions `{name}` nested inside another type: nested \
+                 recursion (`Rose {{ Node(A, List Rose) }}`) is not lowered yet \
+                 (docs/inductive-tier1-wf-lowering.md §8)"
+            ),
+            sp,
+        );
+    }
+    Ok(false)
+}
+
+/// Where `name` occurs in a surface type, if it does. Only *occurrence*
+/// today: the surface has no function type, so a negative occurrence cannot
+/// be written, and the strict-positivity refinement lands when it can.
 fn occurs(t: &Ty, name: &str) -> Option<Span> {
     match &t.kind {
         TyKind::Nat => None,
@@ -733,7 +940,11 @@ fn occurs(t: &Ty, name: &str) -> Option<Span> {
 // -- no-confusion (§6) ------------------------------------------------------
 
 /// Which branch body a constant-motive case tree puts at each constructor.
-enum ConstBody {
+pub(crate) enum ConstBody {
+    /// Tier 1 §3: constructor `j`'s recursive-field count, as a `Nat`
+    /// literal. The motive is `Nat`, and the resulting tree *is* the `Wf`'s
+    /// arity.
+    Arity(Vec<usize>),
     /// §6.1: the code of `Unit` at constructor `i`, of `Empty` elsewhere. The
     /// motive is `Ty 0` — this is the large elimination, and it is what makes
     /// two distinct constructors provably distinct.
@@ -755,7 +966,7 @@ impl Elaborator {
     /// index — *not* the same counter as `d`, since these trees are built
     /// several binders deep (inside a `J` motive, `d` starts at 2).
     #[allow(clippy::too_many_arguments)]
-    fn const_case_tree(
+    pub(crate) fn const_case_tree(
         &self,
         cx: &Cx,
         spine: &Spine,
@@ -830,6 +1041,7 @@ impl Elaborator {
         span: Span,
     ) -> R<Term> {
         match body {
+            ConstBody::Arity(counts) => Ok(nat_lit(counts[j])),
             ConstBody::TagCode(i) => {
                 Ok(if j == *i { Term::TmUnit { level: Level::Zero } } else { Term::TmEmpty { level: Level::Zero } })
             }
@@ -846,7 +1058,7 @@ impl Elaborator {
 
     /// The `k`-th field projection `fst(snd^{k+1} value)` and its type (§5.1;
     /// the `+1` is the nominal tag). `ctor_ty` is `⟦c_i⟧` scoped in `cx`.
-    fn projection(
+    pub(crate) fn projection(
         &self,
         cx: &Cx,
         ctor_ty: &Type,
@@ -888,7 +1100,7 @@ impl Elaborator {
     /// `None` if the term is not a constructor of `ind` in canonical form —
     /// which is a diagnosable surface condition, not an internal error, since
     /// no-confusion is only meaningful between actual constructors.
-    fn read_ctor(&self, ind: &Inductive, t: &Term) -> Option<(usize, Vec<Rc<Term>>)> {
+    pub(crate) fn read_ctor(&self, ind: &Inductive, t: &Term) -> Option<(usize, Vec<Rc<Term>>)> {
         let n = ind.ctors.len();
         let mut i = 0usize;
         let mut cur = t;
@@ -923,7 +1135,7 @@ impl Elaborator {
     /// The equation an `absurd`/`inj` argument must prove, with both sides read
     /// back as constructors.
     #[allow(clippy::type_complexity)]
-    fn equation(
+    pub(crate) fn equation(
         &self,
         cx: &Cx,
         e: &Expr,

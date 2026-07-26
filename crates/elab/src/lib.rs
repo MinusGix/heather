@@ -42,6 +42,7 @@ use heather_syntax::{
 };
 
 mod inductive;
+mod wf;
 
 use inductive::Inductive;
 
@@ -1027,8 +1028,10 @@ impl Elaborator {
                 .map(|dec| {
                     Rc::new(Guard {
                         dec,
-                        pred_pos: cx.names.len(),
-                        ih_pos: cx.names.len() + 1,
+                        kind: GuardKind::Nat {
+                            pred_pos: cx.names.len(),
+                            ih_pos: cx.names.len() + 1,
+                        },
                     })
                 })
                 .or_else(|| cx.guard.clone());
@@ -1120,23 +1123,51 @@ impl Elaborator {
                 span,
             );
         }
+        // Which descendant the call goes to, once the decreasing argument has
+        // been matched: `Nat` has only one, a `Wf` arm has one per recursive
+        // field, so this is set inside the loop below.
+        let mut descendant = 0usize;
         for (arg, j) in args.iter().zip(positions) {
-            // Compare by *binder*, not by name, so shadowing cannot fake a
-            // guarded call.
-            let want = if j == g.dec { g.pred_pos } else { j };
+            // Compare by *binder* (`Nat`) or by *term* (`Wf`), never by name,
+            // so shadowing cannot fake a guarded call.
             let (arg_t, _, _) = self.elab_infer(cx, arg)?;
-            let matches_binder = matches!(
-                arg_t, Term::Var(LocalVar(i)) if cx.names.len() - 1 - i as usize == want
-            );
-            if matches_binder {
+            let ok = match (&g.kind, j == g.dec) {
+                (GuardKind::Nat { pred_pos, .. }, true) => {
+                    matches!(arg_t, Term::Var(LocalVar(i))
+                             if cx.names.len() - 1 - i as usize == *pred_pos)
+                }
+                (GuardKind::Wf { depth, children }, true) => {
+                    let by = (cx.names.len() - depth) as u32;
+                    match children.iter().position(|(c, ..)| c.shift_local(by) == arg_t) {
+                        Some(t) => {
+                            descendant = t;
+                            true
+                        }
+                        None => false,
+                    }
+                }
+                (_, false) => {
+                    matches!(arg_t, Term::Var(LocalVar(i))
+                             if cx.names.len() - 1 - i as usize == j)
+                }
+            };
+            if ok {
                 continue;
             }
             return if j == g.dec {
+                let what = match &g.kind {
+                    GuardKind::Nat { pred_pos, .. } => {
+                        format!("`{}`, the predecessor bound by", cx.names[*pred_pos])
+                    }
+                    GuardKind::Wf { .. } => {
+                        "one of the recursive fields bound by".to_string()
+                    }
+                };
                 err(
                     format!(
                         "recursive call to `{name}` must descend: argument `{}` has to be \
-                         `{}`, the predecessor bound by the enclosing `match`",
-                        s.params[j].0, cx.names[g.pred_pos]
+                         {what} the enclosing `match`",
+                        s.params[j].0
                     ),
                     arg.span,
                 )
@@ -1152,7 +1183,15 @@ impl Elaborator {
                 )
             };
         }
-        Ok(self.local(cx, g.ih_pos))
+        match &g.kind {
+            GuardKind::Nat { ih_pos, .. } => Ok(self.local(cx, *ih_pos)),
+            // `ih' ι_t` and its type, shifted out to wherever the call sits.
+            GuardKind::Wf { depth, children } => {
+                let by = (cx.names.len() - depth) as u32;
+                let (_, ih, ty, lvl) = &children[descendant];
+                Ok(((**ih).shift_local(by), ty.shift_local(by), lvl.clone()))
+            }
+        }
     }
 
     /// Synthesize the dependent motive for a motive-less `match` in checking
@@ -1474,16 +1513,39 @@ struct SelfRef {
     params: Vec<(String, bool)>,
 }
 
-/// What a guarded self-call must look like inside a `Succ(k)` arm, and what
-/// it lowers to. Positions are *absolute* (indices into `cx.names`, outermost
-/// first) so they stay valid as inner binders are pushed.
+/// What a guarded self-call must look like inside a `match` arm, and what it
+/// lowers to (issues/match-recursion.md).
 struct Guard {
     /// Index of the parameter the recursion descends on.
     dec: usize,
-    /// Position of the predecessor `k` bound by the arm.
-    pred_pos: usize,
-    /// Position of the arm's (hidden) induction-hypothesis binder.
-    ih_pos: usize,
+    kind: GuardKind,
+}
+
+/// The two arm shapes a self-call can sit in. They differ in how many
+/// descendants an arm has — one for `Nat`, `mᵢ` for a branching constructor —
+/// and correspondingly in whether the ih is a variable or a function of the
+/// index (`docs/inductive-tier1-wf-lowering.md` §6.4).
+enum GuardKind {
+    /// A `Succ(k)` arm. Positions are *absolute* (indices into `cx.names`,
+    /// outermost first) so they stay valid as inner binders are pushed.
+    Nat {
+        /// Position of the predecessor `k` bound by the arm.
+        pred_pos: usize,
+        /// Position of the arm's (hidden) induction-hypothesis binder.
+        ih_pos: usize,
+    },
+    /// A `Wf` arm: one entry per recursive field, as
+    /// `(the child's term, `ih' ι_t`, its type, that type's level)`. All four
+    /// are scoped at `depth` binders, so a call from deeper inside the arm
+    /// shifts them by the difference.
+    ///
+    /// The match is on the *term*, not the name: an arm binder is an alias
+    /// (tier 0 §5.1), not a kernel binder, so there is no position to compare,
+    /// and comparing terms is what keeps shadowing from faking a guarded call.
+    Wf {
+        depth: usize,
+        children: Vec<(Rc<Term>, Rc<Term>, Type, Level)>,
+    },
 }
 
 /// Elaboration context: kernel Γ plus the parallel name list

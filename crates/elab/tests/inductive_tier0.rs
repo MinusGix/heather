@@ -232,18 +232,21 @@ fn wrong_constructor_arity_is_rejected() {
 }
 
 // §9.7 — a recursive declaration is *classified*, not silently lowered as if
-// it were tier 0.
+// it were tier 0. A direct, uniform occurrence is now tier 1 and lowers onto
+// the `Wf` former (docs/inductive-tier1-wf-lowering.md,
+// crates/elab/tests/inductive_tier1.rs); everything else is still a rejection
+// with its own message, and this is where that boundary is pinned.
 #[test]
 fn a_recursive_declaration_is_classified_not_lowered() {
-    let msg = elab_err("inductive List { Nil, Cons(Nat, List) }");
-    assert!(msg.contains("tier-1"), "{msg}");
-    assert!(msg.contains("recursive"), "{msg}");
-    // Also through another type's arguments.
+    // Direct and uniform: tier 1, and it is not lowered as a sum-of-Σs.
+    let e = elab("inductive List { Nil, Cons(Nat, List) } fn f(l: List) -> Nat { 0 }");
+    drop(e);
+    // Nested inside another type's arguments: rejected, not mis-lowered.
     let msg = elab_err(
         "inductive Option<A> { None, Some(A) }
          inductive Tree { Leaf, Node(Option<Tree>) }",
     );
-    assert!(msg.contains("tier-1"), "{msg}");
+    assert!(msg.contains("nested"), "{msg}");
 }
 
 #[test]
