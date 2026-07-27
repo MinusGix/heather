@@ -91,10 +91,20 @@ is forced today — the surface has no first-class function values or types
 Tier 0's check is therefore just "no self-occurrence", but the *positivity*
 check that decides between reject and tier 1/2 must be written now, since
 misclassification is how a negative occurrence would sneak into a later
-tier's generator. As implemented it is occurrence-only, which is complete
-for today's surface: field types have no `→`, so no occurrence can be
-negative, and every self-occurrence is reported as tier 1. The strict-
-positivity refinement lands with function-typed fields.
+tier's generator. As implemented it is occurrence-only, and every
+self-occurrence is reported as tier 1.
+
+*Updated 2026-07-27.* This paragraph used to justify occurrence-only by "field
+types have no `→`, so no occurrence can be negative". **A field type can have
+a `→` now** (docs/surface-records.md §11.1 — a function field that does not
+mention the declaration is an ordinary payload, which is what a record of
+functions is made of). The conclusion survives, for a different reason:
+`reject_function_fields` runs *before* classification and rejects a `Π` field
+mentioning the declaration in the domain **or** the codomain, so every
+occurrence reaching `occurs` is still under type constructors only and is
+necessarily positive. The strict-positivity refinement is what would lift that
+rejection — admitting `D` in a codomain while still refusing it in a domain —
+rather than what replaces the occurrence check.
 
 **Type arguments** are inferred only from an argument whose field type *is*
 a parameter (`Some(3)` gives `A := Nat`); anything deeper is unification,

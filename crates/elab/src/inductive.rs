@@ -1280,9 +1280,17 @@ fn classify_field(t: &Ty, name: &str, params: &[String], ctor: &str) -> R<bool> 
     Ok(false)
 }
 
-/// Where `name` occurs in a surface type, if it does. Only *occurrence*
-/// today: the surface has no function type, so a negative occurrence cannot
-/// be written, and the strict-positivity refinement lands when it can.
+/// Where `name` occurs in a surface type, if it does. Only *occurrence*, not
+/// polarity — and the reason that is still sound changed on 2026-07-27.
+///
+/// It used to be that no field could have a function type at all, so a
+/// negative occurrence could not be written. Now one can
+/// (docs/surface-records.md §11.1), and what keeps polarity out of reach here
+/// is that [`reject_function_fields`] runs **first** and rejects a `Π` field
+/// mentioning the declaration in *either* position. So every occurrence that
+/// reaches this function is still under type constructors only, where it is
+/// necessarily positive. The strict-positivity refinement is what lifts that
+/// rejection, not what replaces this check.
 fn occurs(t: &Ty, name: &str) -> Option<Span> {
     match &t.kind {
         TyKind::Nat => None,
