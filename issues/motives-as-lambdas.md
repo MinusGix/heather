@@ -3,7 +3,7 @@ title: "Motives are lambdas: retire the bespoke binder syntaxes"
 status: open
 labels: [frontend,syntax,elaboration]
 created: 2026-07-26
-updated: 2026-07-26
+updated: 2026-07-27
 ---
 
 Filed by [[surface-function-types]] as its own follow-on ("two special-form
@@ -57,3 +57,7 @@ say what it rejects.
 - The `Succ(k, ih)` low-level arm form and the `as z -> M` motive are the two
   survivors of the pre-[[match-recursion]] surface; check whether both should
   go at once.
+
+## Log
+
+- 2026-07-27: Gated on [[surface-universe]], and that is where this issue's 'Watch for' fork gets decided rather than here. The flagged design decision -- 'the surface has no Ty-valued expression form today, and inventing one is the actual design decision in this round' -- dissolves once TyKind can say Type<n>: a motive becomes an ordinary function at '(z: A) -> Type', a lambda into it is a plain ExprKind::Lam, and the Expr/Ty bridge is the EXISTING path (checking an expression against an expected Ty l, lib.rs:950, today only a diagnostic arm) rather than a new invention. So this lands as phase 3 of that session rather than as its own round. Also recorded there: the follow-on this issue sets up (j/refl/cong/absurd/inj as ordinary declarations) can only go through at CONCRETE level 0, because a fully general motive is polymorphic in its level, which is UPi, which is layer m. Every current use is at level 0, so that is not a blocker -- but the round should state it rather than discover it.

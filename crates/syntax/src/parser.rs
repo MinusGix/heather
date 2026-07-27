@@ -5,7 +5,9 @@
 //! item    := decl | inductive | record
 //! decl    := "fn" name tyvars? "(" params? ")" "->" type block
 //!          | "theorem" name tyvars? "(" params? ")" ":" type block
-//! tyvars  := "<" name ("," name)* ">"
+//! tyvars  := "<" tyvar ("," tyvar)* ">"
+//! tyvar   := name (":" univ)?                        -- default `Type<0>`
+//! univ    := "Type" ("<" numeral ">")?
 //! induct  := "inductive" name tyvars? "{" ctors? "}"
 //! record  := "record" name tyvars? "{" rfield ("," rfield)* ","? "}"
 //! rfield  := name ":" type            -- a record field is always named
@@ -17,7 +19,8 @@
 //! type    := "(" name ":" type ")" "->" type         -- dependent function
 //!          | tyatom "->" type                        -- right-associative
 //!          | tyatom
-//! tyatom  := "[" type ";" expr "]"                   -- length-indexed vector
+//! tyatom  := univ                                    -- Type, Type<n>
+//!          | "[" type ";" expr "]"                   -- length-indexed vector
 //!          | name ("<" type ("," type)* ">")         -- applied inductive
 //!          | expr ("=" expr)?       -- bare `Nat`/`Bool` is that type; `=` is
 //!                                      propositional equality (`==` rejected)
@@ -344,7 +347,22 @@ impl Parser {
                         span: tvsp,
                     });
                 }
-                tyvars.push(tv);
+                // `<A: Type<1>>` — the universe the parameter ranges over,
+                // defaulting to `Type<0>` (docs/surface-universe.md §2). The
+                // annotation is a *universe*, not any type: a type parameter
+                // ranges over a universe by definition.
+                let mut level = 0;
+                if matches!(self.peek(), TokKind::Colon) {
+                    self.bump();
+                    let Some((n, _)) = self.univ()? else {
+                        return self.err(
+                            "a type parameter's annotation must be a universe: write \
+                             `<A: Type<n>>`, or `<A>` for `Type<0>`",
+                        );
+                    };
+                    level = n;
+                }
+                tyvars.push(TyParam { name: tv, level, span: tvsp });
                 if !matches!(self.peek(), TokKind::Comma) {
                     break;
                 }
@@ -598,7 +616,38 @@ impl Parser {
     }
 
     /// A type with no top-level arrow.
+    /// `Type` / `Type<n>` in either position. Shared by [`Self::ty_atom`] and
+    /// [`Self::atom`] so the two spellings cannot drift, and tried *before*
+    /// the applied-inductive rule, which parses its arguments with
+    /// [`Self::ty`] and would reject the numeral in `Type<0>`
+    /// (docs/surface-universe.md §3).
+    fn univ(&mut self) -> R<Option<(u64, Span)>> {
+        if !self.at_kw("Type") {
+            return Ok(None);
+        }
+        let start = self.bump().span;
+        if !matches!(self.peek(), TokKind::Lt) {
+            return Ok(Some((0, start)));
+        }
+        self.bump(); // `<`
+        let &TokKind::Num(n) = self.peek() else {
+            return self.err(
+                "a universe level must be a numeral: levels cannot be quantified over \
+                 at the surface (universe polymorphism is layer m) and joins are \
+                 computed rather than written",
+            );
+        };
+        self.bump();
+        let end = self.expect(&TokKind::Gt, "`>` to close a universe level")?;
+        Ok(Some((n, start.join(end))))
+    }
+
     fn ty_atom(&mut self) -> R<Ty> {
+        // `Type` / `Type<n>`. Before the applied-inductive rule below, which
+        // would try to parse `0` as a type.
+        if let Some((level, span)) = self.univ()? {
+            return Ok(Ty { kind: TyKind::Univ { level }, span });
+        }
         // `( ty )` — needed so `(A -> B) -> C` groups. Guarded by
         // `group_is_type`, because in type position a leading `(` far more
         // often opens an *expression*: `(a + b) + c = a + (b + c)` is a type,
@@ -664,10 +713,11 @@ impl Parser {
                 kind: TyKind::Named { name: s.clone(), args: vec![] },
                 span: lhs.span,
             }),
-            _ => Err(ParseError {
-                msg: "expected a type (`Nat`, a declared type, or `a = b`)".into(),
-                span: lhs.span,
-            }),
+            // Any other expression: a *decoded* type, checked by the
+            // elaborator to be at a universe (docs/surface-universe.md §4).
+            // `m.carrier` is why this exists. Deliberately last, so every
+            // shape that already parsed as a type still does.
+            _ => Ok(Ty { kind: TyKind::OfExpr(Box::new(lhs.clone())), span: lhs.span }),
         }
     }
 
@@ -822,6 +872,11 @@ impl Parser {
     /// `@`- or plain call, a variable, a numeral, or a parenthesised group.
     fn atom(&mut self) -> R<Expr> {
         let start = self.peek_span();
+        // `Type<n>` where a term is expected. Before the operator loop sees
+        // the `<`, which would otherwise read it as `lt`.
+        if let Some((level, span)) = self.univ()? {
+            return Ok(Expr { kind: ExprKind::Univ { level }, span });
+        }
         if self.at_kw("match") {
             return self.match_expr();
         }

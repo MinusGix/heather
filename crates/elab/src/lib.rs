@@ -172,6 +172,49 @@ fn err<T>(msg: impl Into<String>, span: Span) -> R<T> {
     Err(ElabError::Elab { msg: msg.into(), span })
 }
 
+/// Read an expression *as a type*, for a position whose expected type is a
+/// universe (docs/surface-universe.md §4). `None` when the expression is not a
+/// type by shape, which is a diagnostic rather than a failure.
+///
+/// The mirror of what `parser.rs`'s `ty_atom` already does in the other
+/// direction — it parses an expression and reinterprets a bare name as a type
+/// name — so the two readings are deliberately the same shape: a name, an
+/// applied name, or a universe. Anything structural (`Π`, `[T; n]`) has type
+/// syntax that cannot occur in an expression position in the first place.
+fn expr_as_ty(e: &Expr) -> Option<Ty> {
+    let kind = match &e.kind {
+        ExprKind::Univ { level } => TyKind::Univ { level: *level },
+        ExprKind::Var(name) if name == "Nat" => TyKind::Nat,
+        ExprKind::Var(name) => TyKind::Named { name: name.clone(), args: vec![] },
+        // `List<Nat>` — the one expression form that already carries type
+        // arguments (`ExprKind::TyApp`, ast.rs).
+        ExprKind::TyApp { head, args } => match &head.kind {
+            ExprKind::Var(name) => TyKind::Named { name: name.clone(), args: args.clone() },
+            _ => return None,
+        },
+        _ => return None,
+    };
+    Some(Ty { kind, span: e.span })
+}
+
+/// A level for a diagnostic. Every level the surface can write is a numeral,
+/// so this is exact for them and falls back to the kernel's bounded `Debug`
+/// for an elaborator-built one.
+fn show_level(l: &Level) -> String {
+    let mut n = 0u64;
+    let mut cur = l;
+    loop {
+        match cur {
+            Level::Zero => return n.to_string(),
+            Level::Succ(inner) => {
+                n += 1;
+                cur = inner;
+            }
+            _ => return format!("{l:?}"),
+        }
+    }
+}
+
 /// One parameter of a callable global, in declaration/telescope order.
 /// `implicit` flags a `{}`-parameter, filled by unification at call sites
 /// (issues/elab-stage2-metas.md). The *name* is API: it is the default name of
@@ -361,25 +404,30 @@ impl Elaborator {
         let mut cx = Cx::empty();
         let mut param_info: Vec<(Type, Level)> = Vec::new();
         for (i, tv) in decl.tyvars.iter().enumerate() {
-            if decl.tyvars[..i].contains(tv) {
-                return err(format!("duplicate type parameter `{tv}`"), decl.span);
+            let name = &tv.name;
+            if decl.tyvars[..i].iter().any(|o| o.name == *name) {
+                return err(format!("duplicate type parameter `{name}`"), decl.span);
             }
-            if decl.params.iter().any(|p| p.name == *tv) {
+            if decl.params.iter().any(|p| p.name == *name) {
                 return err(
-                    format!("`{tv}` is both a type parameter and a parameter of `{}`", decl.name),
+                    format!("`{name}` is both a type parameter and a parameter of `{}`", decl.name),
                     decl.span,
                 );
             }
-            let (ty, lvl) = (Type::Ty(Level::Zero), Level::constant(1));
-            cx.push(tv.clone(), ty.clone(), lvl.clone());
-            // `El^0 A`, scoped at the binder just pushed. `lower_named`
+            // `<A: Type<n>>`, defaulting to `Type<0>` — the binder is at
+            // `Ty n`, which is itself a type at level `n + 1`
+            // (docs/surface-universe.md §2).
+            let level = Level::constant(tv.level);
+            let (ty, lvl) = (Type::Ty(level.clone()), Level::constant(tv.level + 1));
+            cx.push(name.clone(), ty.clone(), lvl.clone());
+            // `El^n A`, scoped at the binder just pushed. `lower_named`
             // weakens by `names.len() - depth`, so recording the depth *after*
             // the push makes `Var(0)` correct here and correct everywhere
             // deeper — the device `Alias` and the inductive `TyVar` both use.
             cx.tyvars.push(TyVar {
-                name: tv.clone(),
-                ty: Type::El { level: Level::Zero, tm: Rc::new(Term::Var(LocalVar(0))) },
-                level: Level::Zero,
+                name: name.clone(),
+                ty: Type::El { level: level.clone(), tm: Rc::new(Term::Var(LocalVar(0))) },
+                level,
                 depth: cx.names.len(),
             });
             param_info.push((ty, lvl));
@@ -387,6 +435,19 @@ impl Elaborator {
         for p in &decl.params {
             let (ty, lvl) = self.elab_ty(&cx, &p.ty)?;
             cx.push(p.name.clone(), ty.clone(), lvl.clone());
+            // An ordinary parameter *at a universe* — `(A: Type<n>, x: A)` —
+            // is usable as a type for the rest of the telescope, by exactly
+            // the machinery a declaration's `<A>` uses. That generalization is
+            // the round: a type name is any binder whose type is `Type<n>`,
+            // not only one bound by `<…>` (docs/surface-universe.md §2).
+            if let Type::Ty(level) = &ty {
+                cx.tyvars.push(TyVar {
+                    name: p.name.clone(),
+                    ty: Type::El { level: level.clone(), tm: Rc::new(Term::Var(LocalVar(0))) },
+                    level: level.clone(),
+                    depth: cx.names.len(),
+                });
+            }
             param_info.push((ty, lvl));
         }
         // Result type and body (checked against it). The declaration's own
@@ -405,7 +466,7 @@ impl Elaborator {
             params: decl
                 .tyvars
                 .iter()
-                .map(|t| (t.clone(), true))
+                .map(|t| (t.name.clone(), true))
                 .chain(decl.params.iter().map(|p| (p.name.clone(), p.implicit)))
                 .collect(),
             n_tyvars: decl.tyvars.len(),
@@ -511,7 +572,7 @@ impl Elaborator {
             decl.tyvars
                 .iter()
                 .map(|t| ParamMeta {
-                    name: t.clone(),
+                    name: t.name.clone(),
                     implicit: true,
                     is_type: true,
                     is_self: false,
@@ -813,6 +874,28 @@ impl Elaborator {
     fn elab_ty(&self, cx: &Cx, ty: &Ty) -> R<(Type, Level)> {
         match &ty.kind {
             TyKind::Nat => Ok((Type::Nat, Level::Zero)),
+            // `Type<n>` is the kernel's `Ty n`, itself a type at level `n + 1`
+            // (`typing.rs:457-460`). This is the whole lowering
+            // (docs/surface-universe.md §2).
+            TyKind::Univ { level } => {
+                Ok((Type::Ty(Level::constant(*level)), Level::constant(level + 1)))
+            }
+            // An expression in type position: infer it, require its type to be
+            // a universe, and decode (docs/surface-universe.md §4). `El` is the
+            // kernel's own decoding, so nothing here is a coercion — the term
+            // *is* a code, and `El ⌜T⌝ ⇝ T` makes a written type and a decoded
+            // one convertible rather than merely equal-looking.
+            TyKind::OfExpr(e) => {
+                let (tm, tm_ty, _) = self.elab_infer(cx, e)?;
+                let Type::Ty(level) = self.whnf(cx, &tm_ty, ty.span)? else {
+                    return err(
+                        "this is not a type: only an expression whose type is a \
+                         universe (`Type<n>`) can be used where a type is expected",
+                        ty.span,
+                    );
+                };
+                Ok((Type::El { level: level.clone(), tm: Rc::new(tm) }, level))
+            }
             TyKind::Named { name, args } => self.lower_named(cx, name, args, ty.span),
             // `[T; n]` — the kernel's `Type::Vec` directly. A primitive
             // indexed type: no fording, no encoding
@@ -940,19 +1023,12 @@ impl Elaborator {
             ExprKind::Lam { binders, body } => {
                 self.elab_lam_check(cx, binders, body, expected, lvl, e.span)
             }
-            // A `Ty l` expected type means an argument has landed in a type
-            // parameter's slot positionally. Since `@` stopped making type
-            // parameters positional (issues/at-and-type-arguments.md) nothing
-            // routes here on a well-spelled call, so this is a **message**,
-            // not an elaboration: the failure mode it catches is the old
-            // spelling `@f(Nat, x)`, which would otherwise report `unbound
-            // name Nat` and point at the wrong thing entirely.
-            _ if matches!(expected, Type::Ty(_)) => err(
-                "this argument has landed where a type parameter goes: `@` makes only \
-                 the `{}`-implicits positional, so drop it (`f(x)` infers the type \
-                 argument) or write the type arguments as `f<T, …>(x)`",
-                e.span,
-            ),
+            // A universe as the expected type: a *type* has been written where
+            // a term is expected, so read it as one and quote it
+            // (docs/surface-universe.md §4).
+            _ if matches!(expected, Type::Ty(_)) => {
+                self.elab_at_universe(cx, e, expected, e.span)
+            }
             // A constructor in checking position: the expected type *is* the
             // encoding, so every annotation of the injection and the field
             // tuple is read off it (docs/inductive-tier0-lowering.md §4).
@@ -1000,10 +1076,66 @@ impl Elaborator {
         }
     }
 
+    /// An expression in a position whose expected type is a universe — a
+    /// *type* written where a term is expected. Read it as a type, elaborate
+    /// it, and quote it into its code (docs/surface-universe.md §4).
+    ///
+    /// This restores the coercion `docs/surface-polymorphism.md` §5 retired.
+    /// The retirement was right *then*: `<…>`/`@` between them left no position
+    /// with expected type `Ty l`, so the arm was dead code and a message was
+    /// all it could be. A `Type`-valued binder creates the position for a real
+    /// reason — it is stated by a declaration rather than conjured by a
+    /// spelling — so the coercion has a customer again.
+    /// The bridge is **not** a claim that every expression here is a type: a
+    /// universe is an ordinary type, so `g(A)` and a variable at `Ty n` reach
+    /// this position too. Only a reading that succeeds *as a type* is taken;
+    /// anything else falls through to ordinary inference, which is what the
+    /// position meant before universes were writable.
+    fn elab_at_universe(&self, cx: &Cx, e: &Expr, expected: &Type, span: Span) -> R<Term> {
+        if let (Type::Ty(want), Some(ty)) = (expected, expr_as_ty(e)) {
+            if let Ok((elaborated, level)) = self.elab_ty(cx, &ty) {
+                // Non-cumulative: levels compare by `≈`, never `≤`, and there
+                // is no lift (docs/surface-universe.md §6).
+                if !level.equiv(want) {
+                    return err(
+                        format!(
+                            "this type is at level {}, but a `Type<{}>` is expected \
+                             here — universes in this system are non-cumulative, so a \
+                             type does not also inhabit the universes above its own, \
+                             and there is no lift",
+                            show_level(&level),
+                            show_level(want),
+                        ),
+                        span,
+                    );
+                }
+                // `El` is the identity on codes (`code.rs`), so a `Type`-valued
+                // binder quotes back to the variable itself.
+                if let Some(code) = code::code_of(&elaborated) {
+                    return Ok(code);
+                }
+                return err(
+                    "this type has no code, so it cannot be written where a term is \
+                     expected (docs/surface-universe.md §7)",
+                    span,
+                );
+            }
+        }
+        let (t, _, _) = self.elab_infer(cx, e)?;
+        Ok(t)
+    }
+
     /// Inference mode: returns the elaborated term with its canonical type
     /// and level.
     fn elab_infer(&self, cx: &Cx, e: &Expr) -> R<(Term, Type, Level)> {
         match &e.kind {
+            // `Type<n>` as a term is the code `TmTy(n) : Ty (n+1)`
+            // (`typing.rs:756-759`) — it infers, so it needs no bridge.
+            ExprKind::Univ { level } => Ok((
+                Term::TmTy(Level::constant(*level)),
+                Type::Ty(Level::constant(level + 1)),
+                Level::constant(level + 2),
+            )),
             // A goal is its statement; with nothing to check against there is
             // no statement to defer, so holes are checking-only (like `refl`).
             ExprKind::Hole(_) => err(
@@ -2861,11 +2993,12 @@ impl Cx {
 fn count_holes(decl: &Decl) -> u32 {
     fn ty(t: &Ty, n: &mut u32) {
         match &t.kind {
-            TyKind::Nat => {}
+            TyKind::Nat | TyKind::Univ { .. } => {}
             TyKind::Eq(a, b) => {
                 expr(a, n);
                 expr(b, n);
             }
+            TyKind::OfExpr(e) => expr(e, n),
             TyKind::Named { args, .. } => args.iter().for_each(|a| ty(a, n)),
             TyKind::Fn { dom, cod, .. } => {
                 ty(dom, n);
@@ -2880,7 +3013,10 @@ fn count_holes(decl: &Decl) -> u32 {
     fn expr(e: &Expr, n: &mut u32) {
         match &e.kind {
             ExprKind::Hole(_) => *n += 1,
-            ExprKind::Var(_) | ExprKind::Num(_) | ExprKind::Refl => {}
+            ExprKind::Var(_)
+            | ExprKind::Num(_)
+            | ExprKind::Refl
+            | ExprKind::Univ { .. } => {}
             ExprKind::App { head, args, .. } => {
                 expr(head, n);
                 args.iter().for_each(|a| expr(a, n));

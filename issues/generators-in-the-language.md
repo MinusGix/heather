@@ -3,7 +3,7 @@ title: Move the declaration generators out of Rust and into the meta layer
 status: open
 labels: [metaprogramming,elaboration,design]
 created: 2026-07-26
-updated: 2026-07-26
+updated: 2026-07-27
 ---
 
 Speculative / direction issue, not scheduled. Filed 2026-07-26 in the
@@ -51,3 +51,7 @@ elimination, the `Fin`-indexed ih — or does an in-language generator need
 kernel/layer features that do not exist yet? That is a reading exercise
 against `docs/delam/07` and `crates/kernel/src/rec.rs`, not a code round, and
 it is what would turn this from "maybe" into a plan.
+
+## Log
+
+- 2026-07-27: Promoted from 'direction, not scheduled' to the ONLY route to a level-generic library, per [[surface-universe]] section 4. Checked against ch. 04 and the kernel rather than assumed: there is no encoding for universe-polymorphic functions (ch. 04 line 652) AND no code of any instantiation either, because UApp requires meta_layer (typing.rs:1425) while BoxTm checks its payload at Layer::Code (typing.rs:626) -- a layer-m term cannot sit inside a box. What IS well-formed is the flip, a polymorphic function returning code: 'forall l. box(|- T_l)', because code types live at level 0 (typing.rs:591,599) so UPi's body-at-its-declared-level requirement is met, and in_ctx preserves the universe context (typing.rs:275-277) so the boxed code may mention l. Ch. 04 (581-582) says that is WHY the layer-m restriction exists. Consequence for this issue: a universe-polymorphic library function is not compilable as such -- its generator is, once per level -- so 'fn f<l>' at the surface must elaborate to a layer-m generator plus auto-instantiation at each concrete level used. Caution: layers are not freely crossable (strict order and code promotion is a real operation), so 'a definition that moves between layers automatically' is a surface illusion the elaborator maintains and must be able to fail loudly.

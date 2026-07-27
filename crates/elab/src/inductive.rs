@@ -561,7 +561,22 @@ impl Elaborator {
         for (_, (name, ty)) in ind.ctors[i].payload() {
             let (t, l) = self.elab_ty(&fcx, ty)?;
             entries.push((t.clone(), l.clone()));
-            fcx.push(name.clone().unwrap_or_else(|| "#field".into()), t, l);
+            let fname = name.clone().unwrap_or_else(|| "#field".into());
+            fcx.push(fname.clone(), t.clone(), l);
+            // A field *at a universe* — `record Mon { carrier: Type, unit:
+            // carrier, … }` — is a type name for the fields after it, by the
+            // same rule as a `Type`-valued parameter: a type name is any
+            // binder whose type is `Type<n>` (docs/surface-universe.md §2).
+            // This is what makes the **bundled** record writable, the case
+            // docs/surface-records.md §3 named as waiting on this round.
+            if let Type::Ty(level) = t {
+                fcx.tyvars.push(TyVar {
+                    name: fname,
+                    ty: Type::El { level: level.clone(), tm: Rc::new(Term::Var(LocalVar(0))) },
+                    level,
+                    depth: fcx.names.len(),
+                });
+            }
         }
         let _ = span;
         let mut acc = Type::Unit { level: Level::Zero };
@@ -1291,9 +1306,47 @@ fn classify_field(t: &Ty, name: &str, params: &[String], ctor: &str) -> R<bool> 
 /// reaches this function is still under type constructors only, where it is
 /// necessarily positive. The strict-positivity refinement is what lifts that
 /// rejection, not what replaces this check.
+/// Does `name` appear anywhere in an expression? Used only to keep
+/// [`occurs`] conservative over [`TyKind::OfExpr`]; a false positive costs a
+/// rejection, a false negative would cost positivity, so every compound form
+/// recurses and only genuine leaves answer `false`.
+fn expr_mentions(e: &Expr, name: &str) -> bool {
+    match &e.kind {
+        ExprKind::Var(n) => n == name,
+        ExprKind::Num(_) | ExprKind::Refl | ExprKind::Hole(_) | ExprKind::Univ { .. } => false,
+        ExprKind::App { head, args, .. } => {
+            expr_mentions(head, name) || args.iter().any(|a| expr_mentions(a, name))
+        }
+        ExprKind::TyApp { head, args } => {
+            expr_mentions(head, name) || args.iter().any(|t| occurs(t, name).is_some())
+        }
+        ExprKind::Lam { body, binders } => {
+            expr_mentions(body, name)
+                || binders.iter().any(|b| b.ty.as_ref().is_some_and(|t| occurs(t, name).is_some()))
+        }
+        ExprKind::VecLit(es) => es.iter().any(|x| expr_mentions(x, name)),
+        ExprKind::Dot { recv, args, .. } => {
+            expr_mentions(recv, name)
+                || args.iter().flatten().any(|a| expr_mentions(a, name))
+        }
+        ExprKind::RecordLit { name: n, tyargs, fields } => {
+            n == name
+                || tyargs.iter().any(|t| occurs(t, name).is_some())
+                || fields.iter().any(|f| expr_mentions(&f.expr, name))
+        }
+        // Binder-carrying forms: conservative, since their motives and arms
+        // are where a self-reference would hide.
+        ExprKind::Match { .. } | ExprKind::J { .. } => true,
+    }
+}
+
 fn occurs(t: &Ty, name: &str) -> Option<Span> {
     match &t.kind {
-        TyKind::Nat => None,
+        TyKind::Nat | TyKind::Univ { .. } => None,
+        // A decoded expression (`m.carrier`). Scanned by *name*, conservatively:
+        // a mention anywhere counts as an occurrence, since there is no type
+        // structure here to read polarity off (docs/surface-universe.md §4).
+        TyKind::OfExpr(e) => expr_mentions(e, name).then_some(t.span),
         TyKind::Eq(..) => None,
         TyKind::Named { name: n, args } => {
             if n == name {
@@ -1338,7 +1391,10 @@ pub(crate) fn reject_function_fields(d: &InductiveDecl) -> Result<(), crate::Ela
             }
             TyKind::Named { args, .. } => args.iter().find_map(|a| recursive_fn(a, name)),
             TyKind::Vec { elem, .. } => recursive_fn(elem, name),
-            TyKind::Nat | TyKind::Eq(..) => None,
+            // Not a `Π` by shape, so not what this check is looking for; a
+            // self-occurrence inside it is `occurs`' business.
+            TyKind::OfExpr(..) => None,
+            TyKind::Nat | TyKind::Eq(..) | TyKind::Univ { .. } => None,
         }
     }
     for c in &d.ctors {

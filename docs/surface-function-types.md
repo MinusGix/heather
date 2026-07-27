@@ -386,12 +386,16 @@ by the real kernel.
 1. `(x: A) -> B` and `A -> B` parse and elaborate to `Type::Pi`;
    `A -> B -> C` associates right.
 
-   The level rule `Level::max(dom, cod)` is **not separately observable at the
-   surface**: `TyKind` has no universe, so every writable type sits at level
-   0 and every `max` is `max(0, 0)`. It is protected instead by construction —
-   `elab_ty`'s `Fn` arm uses the same rule as `elab_decl_inner`'s telescope
-   close (`lib.rs:376–382`) — and it becomes testable when the universe layer
-   arrives.
+   The level rule `Level::max(dom, cod)` was **not separately observable at
+   the surface** when this was written: `TyKind` had no universe, so every
+   writable type sat at level 0 and every `max` was `max(0, 0)`. It was
+   protected instead by construction — `elab_ty`'s `Fn` arm uses the same rule
+   as `elab_decl_inner`'s telescope close.
+
+   **Superseded 2026-07-27 by `docs/surface-universe.md`:** `Type<n>` is
+   writable, so `Type<0> -> Type<0>` is a level-1 function type and the rule is
+   directly observable. The claim held exactly as long as the universe was
+   unspellable.
 2. `a = b -> C` parses as `(a = b) -> C`.
 3. `D<A> -> B` parses — i.e. the `Ident '<'` early return no longer bypasses
    the arrow check (§3.1).

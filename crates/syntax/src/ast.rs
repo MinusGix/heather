@@ -78,16 +78,32 @@ pub struct FieldDecl {
 pub struct Decl {
     pub kind: DeclKind,
     pub name: String,
-    /// `fn map<A, B>(…)` — type-parameter names, in order. Each becomes a
-    /// **leading implicit parameter at `Ty 0`**, usable as a type inside this
-    /// declaration and nowhere else (docs/surface-polymorphism.md §2). Unlike
-    /// an `InductiveDecl`'s parameters these are not monomorphized: they are
-    /// real kernel binders, and a use of one is `El A`.
-    pub tyvars: Vec<String>,
+    /// `fn map<A, B>(…)` — type parameters, in order. Each becomes a
+    /// **leading implicit parameter at `Type<n>`**, usable as a type inside
+    /// this declaration and nowhere else (docs/surface-polymorphism.md §2,
+    /// docs/surface-universe.md §2). Unlike an `InductiveDecl`'s parameters
+    /// these are not monomorphized: they are real kernel binders, and a use of
+    /// one is `El A`.
+    pub tyvars: Vec<TyParam>,
     pub params: Vec<Param>,
     /// Return type of a `fn`, statement of a `theorem`.
     pub result: Ty,
     pub body: Block,
+    pub span: Span,
+}
+
+/// One type parameter: `A`, or `A: Type<1>`.
+///
+/// The level is the *universe the parameter ranges over*, defaulting to 0 —
+/// `<A>` is `<A: Type<0>>`, which is what every declaration written before
+/// docs/surface-universe.md meant. It is a numeral for the same reason
+/// [`TyKind::Univ`]'s is: a level variable is `UPi`, layer m
+/// (issues/implicit-level-polymorphism.md is the deferred alternative, where
+/// an unannotated `<A>` would instead be generic in its level).
+#[derive(Debug, Clone)]
+pub struct TyParam {
+    pub name: String,
+    pub level: u64,
     pub span: Span,
 }
 
@@ -174,6 +190,24 @@ pub struct Ty {
 pub enum TyKind {
     Nat,
     Eq(Box<Expr>, Box<Expr>),
+    /// `Type<n>`, and `Type` for `Type<0>` — the kernel's `Type::Ty(n)`, a
+    /// type at level `n + 1` (docs/surface-universe.md §2).
+    ///
+    /// The level is a **numeral**, never a name or an expression: quantifying
+    /// over a level is `UPi`, which is layer m by construction
+    /// (issues/surface-universe.md §7), and joins are computed by the
+    /// elaborator rather than written.
+    Univ { level: u64 },
+    /// An arbitrary expression in type position, decoded: `m.carrier`,
+    /// `f(x)`. Elaborated by inferring the expression and requiring its type
+    /// to be a universe, then wrapping in `El` — the dual of the `Expr`/`Ty`
+    /// bridge (docs/surface-universe.md §4), and what makes a **bundled**
+    /// record's carrier usable as a type.
+    ///
+    /// Only reached as `ty_atom`'s last resort, so a bare name is still
+    /// [`TyKind::Named`] and nothing that used to parse as a type changes
+    /// shape.
+    OfExpr(Box<Expr>),
     /// A declared inductive, applied to its type arguments (`Bool`,
     /// `Option<Nat>`), or a type parameter in scope inside an `inductive`.
     Named { name: String, args: Vec<Ty> },
@@ -251,6 +285,11 @@ impl Expr {
 pub enum ExprKind {
     /// A name: parameter, `fn`, or `theorem`.
     Var(String),
+    /// `Type<n>` where a *term* is expected — the code `TmTy(n) : Ty (n+1)`.
+    /// A universe is a type, so it is spellable in both positions; this is the
+    /// expression one, and it infers rather than needing the `Expr`/`Ty`
+    /// bridge (docs/surface-universe.md §4).
+    Univ { level: u64 },
     /// Numeral literal (desugars to `Zero`/`Succ`).
     Num(u64),
     /// `f(a, b, …)`, `@f(a, b, …)`, or an application of any expression —

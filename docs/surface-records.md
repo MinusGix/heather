@@ -177,6 +177,13 @@ non-cumulativity bites for real — it has bitten twice already
 Writing the join as a computation now is what makes that round a grammar
 change rather than a generator rewrite.
 
+> **Landed 2026-07-27** (`docs/surface-universe.md`). The prediction held: the
+> generator needed **no** change — `lower_ctor`'s `Level::max` fold already
+> computed the join, so a bundled `Mon` lands at level 1 by arithmetic that was
+> written here and never exercised until now. What the round did have to add
+> was on the *other* side: a field at a universe has to become a type name for
+> the fields after it, and `m.carrier` has to be usable as a type at all.
+
 ## 4. Field access, and the move of `.` into the elaborator
 
 This is the round's real work and its only regression risk.
