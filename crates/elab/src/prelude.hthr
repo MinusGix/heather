@@ -1,15 +1,26 @@
-// Stage-1 prelude: the J lemmas, monomorphic at Nat (the polymorphic
-// versions need layer-m universe polymorphism — a later stage). Proofs are
+// Stage-1 prelude: the J lemmas. `sym` and `trans` are polymorphic in the
+// type the equation is at (issues/surface-polymorphism.md). Proofs are
 // ordinary expressions; `refl` is just a value (docs/sketches/surface-v1.md).
+//
+// `cong_succ` is Nat-specific by name and stays so: a general `cong` needs
+// its *function* argument explicit, since an implicit one is not inferable
+// from the proof — the proof's type mentions the endpoints and not the
+// function (issues/elab-unifier-completeness.md). That is a different lemma,
+// not this one generalized.
+//
+// Universe polymorphism is still out: `A` ranges over `Ty 0`, so these live
+// at level 1. Quantifying over the *level* is layer-m `ΠΠ ℓ⃗` territory.
 
 // Endpoints are implicit `{}`-parameters: they are recovered by unification
 // from the proof argument's type (issues/elab-stage2-metas.md). `@sym(a,b,p)`
-// still supplies them positionally.
-theorem sym({a: Nat}, {b: Nat}, p: a = b): b = a {
+// still supplies them positionally *and leaves `A` inferred* — `@` controls
+// the value implicits, `<…>` the type arguments, and the two compose as
+// `@sym<A>(a, b, p)` (issues/at-and-type-arguments.md).
+theorem sym<A>({a: A}, {b: A}, p: a = b): b = a {
     j(p, (y, q) -> y = a, refl)
 }
 
-theorem trans({a: Nat}, {b: Nat}, {c: Nat}, p: a = b, q: b = c): a = c {
+theorem trans<A>({a: A}, {b: A}, {c: A}, p: a = b, q: b = c): a = c {
     j(q, (y, r) -> a = y, p)
 }
 

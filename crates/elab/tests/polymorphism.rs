@@ -98,9 +98,23 @@ fn explicit_type_arguments_work() {
 }
 
 #[test]
-fn an_at_call_reads_its_type_arguments_as_types() {
+fn at_leaves_type_parameters_inferred() {
+    // `@` makes the *value* implicits positional and says nothing about type
+    // parameters, so a callee that gains one does not break its `@`-callers
+    // (issues/at-and-type-arguments.md).
     ok("fn id<A>(x: A) -> A { x }
-        fn go(n: Nat) -> Nat { @id(Nat, n) }");
+        fn go(n: Nat) -> Nat { @id(n) }");
+}
+
+#[test]
+fn at_and_type_arguments_compose() {
+    ok("theorem sym_at<A>({a: A}, {b: A}, p: a = b): b = a {
+            j(p, (y, q) -> y = a, refl)
+        }
+        theorem inferred(n: Nat, m: Nat, p: n = m): m = n { sym_at(p) }
+        theorem endpoints(n: Nat, m: Nat, p: n = m): m = n { @sym_at(n, m, p) }
+        theorem both(n: Nat, m: Nat, p: n = m): m = n { @sym_at<Nat>(n, m, p) }
+        theorem carrier(n: Nat, m: Nat, p: n = m): m = n { sym_at<Nat>(p) }");
 }
 
 #[test]
@@ -275,11 +289,10 @@ fn an_annotated_lambda_argument_works() {
 
 #[test]
 fn an_at_call_accepts_an_applied_type_argument() {
-    // `List<Nat>` in *expression* position parses as a type application, and
-    // a `Ty 0` argument position reads it back as the type it looks like.
+    // An applied type as a written type argument, under `@`.
     ok("inductive List<A> { Nil, Cons(A, List<A>) }
         fn hd<A>(xs: List<A>, d: A) -> A { match xs { Nil => d, Cons(x, t) => x } }
-        fn go(xs: List<List<Nat>>, d: List<Nat>) -> List<Nat> { @hd(List<Nat>, xs, d) }");
+        fn go(xs: List<List<Nat>>, d: List<Nat>) -> List<Nat> { @hd<List<Nat>>(xs, d) }");
 }
 
 #[test]
@@ -306,4 +319,23 @@ fn less_than_still_parses_as_lt() {
     // fall back cleanly (docs/surface-polymorphism.md §1).
     let e = bad("fn go(a: Nat, b: Nat) -> Nat { a < b }");
     assert!(e.contains("lt"), "should have resolved to the `lt` call: {e}");
+}
+
+// -- the prelude is polymorphic now (issues/at-and-type-arguments.md) -----
+
+#[test]
+fn the_prelude_serves_a_declared_type() {
+    ok("inductive Bool { True, False }
+        theorem at_bool(a: Bool, b: Bool, p: a = b): b = a { sym(p) }
+        theorem chain(a: Bool, b: Bool, c: Bool, p: a = b, q: b = c): a = c { trans(p, q) }");
+}
+
+#[test]
+fn an_implicit_taking_call_still_checks_its_arguments() {
+    // `@sym(a, b, refl)` goes through `apply_implicit` now — the type
+    // parameter is still a meta — so the *checking* mode that `refl` and a
+    // `?`-hole need had to be restored there. `a` solves the meta before
+    // `refl`'s domain is required, which is what makes the order work.
+    ok("theorem t(n: Nat): n = n { @sym(n, n, refl) }
+        theorem u(n: Nat): n = n { @sym(n, n, ?p) on ?p := refl; }");
 }

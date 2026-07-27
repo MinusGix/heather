@@ -384,6 +384,7 @@ impl Elaborator {
                 .map(|t| (t.clone(), true))
                 .chain(decl.params.iter().map(|p| (p.name.clone(), p.implicit)))
                 .collect(),
+            n_tyvars: decl.tyvars.len(),
         }));
         // `let` bindings, then the result expression. A `let` is an inlined
         // alias (the same doctrine as a `fn` definition), not a kernel binder.
@@ -870,26 +871,19 @@ impl Elaborator {
             ExprKind::Lam { binders, body } => {
                 self.elab_lam_check(cx, binders, body, expected, lvl, e.span)
             }
-            // An expression in a `Ty l` position is read as a **type** and
-            // elaborated to its code (docs/surface-polymorphism.md §5). The
-            // only position that has this expected type is a type parameter
-            // of an `@`-marked call, where every parameter is positional —
-            // so this arm cannot perturb anything that existed before it.
-            _ if matches!(expected, Type::Ty(_)) => {
-                let Some(surface) = expr_as_ty(e) else {
-                    return err(
-                        "this argument fills a type parameter, so it has to be a type: \
-                         write a type name here, or give the type arguments with \
-                         `f<T, …>(…)`, which takes an arbitrary type",
-                        e.span,
-                    );
-                };
-                let (t, _) = self.elab_ty(cx, &surface)?;
-                let Some(c) = code::code_of(&t) else {
-                    return err("this type cannot be a type argument", e.span);
-                };
-                Ok(c)
-            }
+            // A `Ty l` expected type means an argument has landed in a type
+            // parameter's slot positionally. Since `@` stopped making type
+            // parameters positional (issues/at-and-type-arguments.md) nothing
+            // routes here on a well-spelled call, so this is a **message**,
+            // not an elaboration: the failure mode it catches is the old
+            // spelling `@f(Nat, x)`, which would otherwise report `unbound
+            // name Nat` and point at the wrong thing entirely.
+            _ if matches!(expected, Type::Ty(_)) => err(
+                "this argument has landed where a type parameter goes: `@` makes only \
+                 the `{}`-implicits positional, so drop it (`f(x)` infers the type \
+                 argument) or write the type arguments as `f<T, …>(x)`",
+                e.span,
+            ),
             // A constructor in checking position: the expected type *is* the
             // encoding, so every annotation of the injection and the field
             // tuple is read off it (docs/inductive-tier0-lowering.md §4).
@@ -948,18 +942,13 @@ impl Elaborator {
                 let (_, t, ty, lvl, _) = self.elab_ty_app(cx, head, args, e.span)?;
                 Ok((t, ty, lvl))
             }
-            // `f<T, …>(a, b)`. The type arguments are applied first; whatever
-            // `{}`-implicits remain are still inferred, so giving the type
-            // arguments does not force the rest of the call to be explicit.
+            // `f<T, …>(a, b)` and `@f<T, …>(a, b)`. The type arguments are
+            // applied first; what happens to the remaining `{}`-implicits is
+            // `@`'s business and not `<…>`'s — the two are orthogonal knobs
+            // (issues/at-and-type-arguments.md).
             ExprKind::App { head, args, explicit }
                 if matches!(head.kind, ExprKind::TyApp { .. }) =>
             {
-                if *explicit {
-                    return err(
-                        "`@` and `<…>` both give arguments explicitly: use one or the other",
-                        e.span,
-                    );
-                }
                 let ExprKind::TyApp { head: callee, args: tyargs } = &head.kind else {
                     unreachable!("just matched")
                 };
@@ -973,7 +962,7 @@ impl Elaborator {
                 }
                 let (name, t, ty, lvl, mask) =
                     self.elab_ty_app(cx, callee, tyargs, head.span)?;
-                if mask.iter().any(|&b| b) {
+                if !*explicit && mask.iter().any(|&b| b) {
                     self.apply_implicit(cx, &name, t, ty, lvl, args, &mask, e.span)
                 } else {
                     // The type arguments have consumed the leading parameters,
@@ -1075,9 +1064,22 @@ impl Elaborator {
                 }
                 let mask = self.implicit_mask(name);
                 let (head, ty, lvl) = self.resolve(cx, name, e.span)?;
-                // Fully-explicit call (`@f`, or a callee with no implicits):
-                // apply the arguments positionally down the Π spine.
-                if *explicit || !mask.iter().any(|&b| b) {
+                // `@f(…)` makes the **value** implicits positional and leaves
+                // the *type* parameters inferred; `f<T, …>(…)` is the knob for
+                // those, and the two compose
+                // (issues/at-and-type-arguments.md). So `@` narrows the mask
+                // rather than clearing it: without that, adding `<A>` to a
+                // declaration would break every `@`-call to it, at the call
+                // sites rather than at the declaration.
+                let mask = if *explicit {
+                    self.params_of(name)
+                        .iter()
+                        .map(|p| p.implicit && p.is_type)
+                        .collect()
+                } else {
+                    mask
+                };
+                if !mask.iter().any(|&b| b) {
                     self.apply_explicit(cx, Some(name), 0, head, ty, lvl, args)
                 } else {
                     self.apply_implicit(cx, name, head, ty, lvl, args, &mask, e.span)
@@ -1335,7 +1337,7 @@ impl Elaborator {
         };
         // Which parameter each surface argument fills: implicits are omitted
         // unless the call is `@`-marked.
-        let positions: Vec<usize> = (0..s.params.len())
+        let positions: Vec<usize> = (s.n_tyvars..s.params.len())
             .filter(|&j| explicit || !s.params[j].1)
             .collect();
         if !positions.contains(&g.dec) {
@@ -2175,7 +2177,14 @@ impl Elaborator {
         let mut sols: Vec<Option<Rc<Term>>> = vec![None; n as usize];
         let mut next_meta = 0u32;
         let mut args = args.iter();
-        for &is_implicit in mask {
+        // Parameter metadata for goal-name hints. `mask` may be a suffix of
+        // the parameter list (`f<T>(…)` has already consumed the leading type
+        // parameters), so index from the same offset.
+        let all_params = self.params_of(name);
+        let offset = all_params.len().saturating_sub(mask.len());
+        for (mi, &is_implicit) in mask.iter().enumerate() {
+            let i = mi + offset;
+            let params = &all_params;
             let head_ty = self.whnf(cx, &ty, span)?;
             let Type::Pi { dom_level, cod_level, dom, cod } = head_ty else {
                 return err(format!("`{name}` is applied to too many arguments"), span);
@@ -2214,11 +2223,33 @@ impl Elaborator {
                         );
                     }
                 }
-                let (arg_t, arg_ty, _) = self.elab_infer(cx, arg)?;
-                // Drive meta solutions from the argument's actual type, then
-                // splice the argument into the scratch world.
-                unify_ty(&cx.gamma, &dom, &arg_ty, n, 0, &mut sols);
-                Rc::new(arg_t.shift_global(n))
+                // If every meta this domain mentions is *already* solved,
+                // elaborate the argument in **checking** mode against the
+                // zonked domain. That is what puts `refl`, a `?`-hole and a
+                // vector literal back in a position that supplies their
+                // expected type — they are checking-only, and before this
+                // every argument of an implicit-taking callee was inferred.
+                //
+                // Load-bearing since `@` stopped clearing the mask
+                // (issues/at-and-type-arguments.md): `@sym(a, b, ?p)` still
+                // has one meta (the type parameter), so it comes through here
+                // rather than through `apply_explicit`, and `a` solves the
+                // meta before `p`'s domain is needed.
+                match zonked(&dom, n, &sols) {
+                    Some(real_dom) => {
+                        let hint = params.get(i).map(|p| (name, p.name.as_str()));
+                        let arg_t =
+                            self.elab_check_hinted(cx, arg, &real_dom, &dom_level, hint)?;
+                        Rc::new(arg_t.shift_global(n))
+                    }
+                    None => {
+                        let (arg_t, arg_ty, _) = self.elab_infer(cx, arg)?;
+                        // Drive meta solutions from the argument's actual
+                        // type, then splice it into the scratch world.
+                        unify_ty(&cx.gamma, &dom, &arg_ty, n, 0, &mut sols);
+                        Rc::new(arg_t.shift_global(n))
+                    }
+                }
             };
             ty = cod.apply_local(&LocalSubst::id(&cx.gamma).extended(Rc::clone(&arg_rc)));
             lvl = cod_level.clone();
@@ -2376,6 +2407,12 @@ struct SelfRef {
     /// `(parameter name, implicit?)` in declaration order. Parameter `j` is
     /// bound at position `j` of the body's `Cx` (the telescope goes first).
     params: Vec<(String, bool)>,
+    /// How many leading entries of [`Self::params`] are `<A, …>` type
+    /// parameters. They are never passed at a call site — neither implicitly
+    /// nor under `@`, which now controls only the *value* implicits
+    /// (issues/at-and-type-arguments.md) — so they are skipped wholesale
+    /// rather than filtered by implicitness.
+    n_tyvars: usize,
 }
 
 /// What a guarded self-call must look like inside a `match` arm, and what it
@@ -2787,6 +2824,32 @@ fn unify_tm(
     }
 }
 
+/// A parameter domain with the meta block substituted away — `Some` exactly
+/// when every metavariable it mentions is already solved, in which case the
+/// result is scoped in the *real* Ψ (a `GlobalSubst` over the `n` metas also
+/// renumbers the committed globals back down, as `strengthen_global` records).
+///
+/// "Mentions no unsolved meta" is decided by substituting **two different**
+/// markers for the unsolved ones and comparing: an unsolved occurrence makes
+/// the two results differ, and nothing else can. Same device as
+/// [`strengthen_tm`] — an exact test that needs no traversal of `Term`/`Type`
+/// and so cannot drift out of sync with the syntax.
+fn zonked(dom: &Type, n: u32, sols: &[Option<Rc<Term>>]) -> Option<Type> {
+    let with = |marker: Term| {
+        let entries = (0..n)
+            .map(|k| {
+                GlobalEntry::Tm(match &sols[(n - 1 - k) as usize] {
+                    Some(t) => Rc::clone(t),
+                    None => Rc::new(marker.clone()),
+                })
+            })
+            .collect();
+        dom.apply_global(&GlobalSubst { entries })
+    };
+    let a = with(Term::Zero);
+    (a == with(Term::Succ(Rc::new(Term::Zero)))).then_some(a)
+}
+
 /// The substitution that drops the innermost `d` binders off `gamma`,
 /// sending each to a marker. Used only by [`strengthen_ty`]/[`strengthen_tm`].
 ///
@@ -2832,26 +2895,3 @@ fn strengthen_ty(gamma: &LocalCtx, t: &Type, d: u32) -> Option<Type> {
     (s.shift_local(d) == *t).then_some(s)
 }
 
-/// A surface expression read as a **type** — the coercion a `Ty l` argument
-/// position performs (docs/surface-polymorphism.md §5). Deliberately narrow:
-/// exactly the two forms the parser could equally have produced in type
-/// position, and nothing clever.
-fn expr_as_ty(e: &Expr) -> Option<Ty> {
-    match &e.kind {
-        ExprKind::Var(s) if s == "Nat" => Some(Ty { kind: TyKind::Nat, span: e.span }),
-        ExprKind::Var(s) => Some(Ty {
-            kind: TyKind::Named { name: s.clone(), args: vec![] },
-            span: e.span,
-        }),
-        // `List<Nat>` in expression position parses as a type application;
-        // here that is exactly the applied type it looks like.
-        ExprKind::TyApp { head, args } => match &head.kind {
-            ExprKind::Var(s) => Some(Ty {
-                kind: TyKind::Named { name: s.clone(), args: args.clone() },
-                span: e.span,
-            }),
-            _ => None,
-        },
-        _ => None,
-    }
-}

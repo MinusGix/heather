@@ -27,7 +27,7 @@
 //!          | "refl" | "?" name?
 //!          | "j" "(" expr "," "(" name "," name ")" "->" type "," expr ")"
 //!          | ("λ"|"fun") binder+ "=>" expr
-//!          | "@" name "(" args ")"
+//!          | "@" name ("<" type ("," type)* ">")? "(" args ")"
 //!          | atom ("<" type ("," type)* ">")?     -- explicit type application
 //!                 (("." name)? "(" args ")")*     -- application is postfix
 //!          | "[" (expr ("," expr)*)? "]"           -- vector literal
@@ -678,16 +678,30 @@ impl Parser {
         if matches!(self.peek(), TokKind::At) {
             let at = self.bump().span;
             let (name, nsp) = self.ident("call head after `@`")?;
+            // `@f<T, …>(…)` — the two knobs compose: `<…>` writes the type
+            // arguments, `@` makes the *value* implicits positional
+            // (issues/at-and-type-arguments.md). Not speculative here, unlike
+            // `try_tyargs`: after `@` a name is always a callee, so `<` can
+            // only open a type-argument list.
+            let mut head = Expr { kind: ExprKind::Var(name), span: nsp };
             if matches!(self.peek(), TokKind::Lt) {
-                return self.err(
-                    "`@` and `<…>` both give arguments explicitly: use one or the other \
-                     (`@f(T, …)` reads a type argument as an expression; `f<T>(…)` takes \
-                     an arbitrary type)",
-                );
+                self.bump();
+                let mut targs = Vec::new();
+                loop {
+                    targs.push(self.ty()?);
+                    if !matches!(self.peek(), TokKind::Comma) {
+                        break;
+                    }
+                    self.bump();
+                }
+                let gt = self.expect(&TokKind::Gt, "`>` to close the type arguments")?;
+                head = Expr {
+                    kind: ExprKind::TyApp { head: Box::new(head), args: targs },
+                    span: nsp.join(gt),
+                };
             }
             self.expect(&TokKind::LParen, "`(` (`@` marks a call)")?;
             let (args, end) = self.call_args()?;
-            let head = Expr { kind: ExprKind::Var(name), span: nsp };
             return Ok(Expr {
                 kind: ExprKind::App { head: Box::new(head), args, explicit: true },
                 span: at.join(end),

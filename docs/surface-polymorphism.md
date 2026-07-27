@@ -257,21 +257,29 @@ Rejected, with a message naming the restriction and the escape hatch:
 - **Anything outside the pattern fragment**, pointing at
   `elab-unifier-completeness`, as `surface-function-types` did.
 
-## 5. Reading an expression as a type
+## 5. Reading an expression as a type — *retired the same day*
 
-`@f(…)` supplies every parameter positionally, including the implicit ones —
-so on a polymorphic callee it needs to spell type arguments *as expressions*.
-One arm handles it: in **checking** position at an expected `Ty l`, an
-expression is read as a type and elaborated to its code. `@map(Nat, Bool, f,
-xs)` then works, and a type variable in scope is passed through as an ordinary
-local of type `Ty 0` with no special case at all.
+**This section is superseded; kept because §7 and §10 refer to it.**
 
-This arm can only fire where the expected type is `Ty l`, which nothing in the
-language produces today, so it cannot perturb anything existing.
+It specified that in a checking position at an expected `Ty l`, an expression
+would be read as a type and elaborated to its code, so that `@map(Nat, Bool,
+f, xs)` could spell its type arguments. It was implemented and it worked.
 
-An expression that is not a nameable type there (`Nat`, a declared type, a
-type variable) is a diagnostic pointing at `f<…>(…)`, which is the form that
-takes an arbitrary type.
+Then the prelude probe showed why the position it served should not exist:
+`@` meaning "every parameter positional" makes adding `<A>` to a declaration
+break every `@`-call to it. `issues/at-and-type-arguments.md` split the two
+knobs apart — `<…>` writes the type arguments, `@` makes the *value*
+implicits positional, and `@f<T>(x)` composes them — after which **no
+position has expected type `Ty l` at all** and the coercion was dead code.
+
+What is left at that expected type is a *message*: reaching it means an
+argument landed in a type parameter's slot positionally (the old `@f(Nat,
+x)`), and saying so beats the `unbound name Nat` the arm's removal would
+otherwise produce.
+
+The general lesson is worth the section: the coercion was a feature invented
+to paper over a spelling collision, and it survived exactly as long as the
+collision did.
 
 ## 6. Interactions to observe, not assume
 
@@ -314,9 +322,9 @@ Each of these is a test, not a claim.
 | `map(λ x => …, xs)` | annotate the lambda's binder, or give the type arguments |
 | `f<Nat>(…)` where `f` has no type parameters | `f` takes no type arguments |
 | `f<Nat>(…)` with the wrong count | `f` takes *n* type argument(s) |
-| `@f<Nat>(…)` | `@` and `<…>` both give arguments explicitly; use one |
+| ~~`@f<Nat>(…)`~~ | **now legal** — `@` and `<…>` are orthogonal (§5, `at-and-type-arguments`) |
 | a type argument with no code (`Ty l`) | that type cannot be a type argument |
-| an expression at `Ty l` that is not a type | write `f<T>(…)` |
+| an argument landing at `Ty l` | drop the `@`, or write `f<T, …>(x)` |
 
 ## 8. Out of scope
 
@@ -456,3 +464,43 @@ because each was a claim rather than a reading:
   stays a special case.
 - `f<…>` cannot be written after `@` (the parser says so), and a bare `f<…>`
   with no call is a value, per §1.
+
+### 10.5 The `@` collision, and what settling it retired
+
+Found by the **prelude probe**, run before starting `surface-records` to
+check whether this round's inference was strong enough to carry a library of
+generic operations. It was — polymorphic `sym`/`trans` infer their carrier at
+`Nat`, at a declared `Bool`, through the method sugar and in chains, with not
+one implicit use failing. What broke was `@`: swapping the prelude gave
+450/16, and all 16 failures were `@`-spelled calls or `calc` (which desugars
+to `@trans`).
+
+Cause: `@f(a, b, p)` meant *every* parameter positional, and a type parameter
+is now the first one. So **adding `<A>` to a declaration was not a
+backwards-compatible change**, and it broke at the call sites rather than at
+the declaration.
+
+Settled in `issues/at-and-type-arguments.md` by making the two knobs
+orthogonal — `<…>` writes the type arguments, `@` makes the *value* implicits
+positional, `@f<T>(x)` composes them. Three consequences worth recording:
+
+1. **§5 is retired.** With `@` no longer routing types positionally, no
+   position has expected type `Ty l`, and the expression-read-as-a-type
+   coercion was dead. It had existed only to paper over the collision.
+2. **`apply_implicit` had to gain a checking mode.** `@sym(a, b, ?p)` now
+   goes through it (the type parameter is still a meta), and it *inferred*
+   every explicit argument — so `refl`, a `?`-hole and a vector literal, all
+   checking-only, lost their expected type. It now checks against the domain
+   **zonked with the solutions so far**, and infers only while metas remain
+   unsolved. `a` solves the carrier before `p`'s domain is needed, so the
+   ordering works out; that is a genuine improvement to implicit application
+   generally, not a repair.
+3. **The prelude is polymorphic.** `sym<A>` and `trans<A>` shipped, and the
+   suite is green with no test edits beyond the two that pinned the old `@`
+   spelling. `cong_succ` stays monomorphic: a general `cong` needs its
+   function argument *explicit*, since an implicit one is not inferable from
+   the proof, and `cong(f, p)` is a different lemma rather than this one
+   generalized.
+
+"Is the inference good enough?" was the question; the answer turned out to be
+"yes, and the thing in the way is a spelling". Worth the hour.
