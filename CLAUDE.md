@@ -10,6 +10,12 @@
   derived `Debug`. In property tests still prefer seed-only failures (the
   `law!` macro in `crates/kernel/tests/subst_laws.rs`) — bounded output is
   for humans debugging one case, not 300 failing seeds.
+- **Testing generated terms** (elaborator schemas, lowerings):
+  `docs/testing-generated-terms.md` — the four axes a test has to vary
+  (literal *and* neutral scrutinee, an **open** element type, a *checking*
+  position and not only computation, and a negative control). Five live
+  defects here were invisible to tests that varied none of them; three of the
+  five were hidden by a closed type alone.
 - Issue tracker: `scripts/issue` over `issues/*.md` (see `issues/README.md`).
 - Type-theory source of truth: `docs/delam/04–06`; `docs/delam/README.md`
   explains which chapters are implementation-relevant (01–03 are a
