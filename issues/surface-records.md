@@ -56,3 +56,7 @@ Most of the substrate is already there and already exercised:
 
 Not in scope: instance resolution / typeclass search
 ([[compile-typeclass-design]]), and coercions of any kind.
+
+## Log
+
+- 2026-07-26: Prelude probe (see [[at-and-type-arguments]]) says the inference this round needs is already there: polymorphic sym/trans infer their carrier at Nat and at a declared type, through the method sugar and in chains, with zero failures from implicit uses. The blocker in the way is not the unifier but the surface: '@' currently means every parameter positional, so a callee that gains a type parameter breaks every '@'-call to it. Worth settling before records, since a record of generic operations is exactly the case.
