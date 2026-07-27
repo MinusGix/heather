@@ -51,10 +51,18 @@ that must *not* be equal, a false theorem that must be rejected — sees it
 | container fields silently dropped (`container-fields.md` §9.1) | every test positive | 4 |
 | `tabulate`'s index-function shift (`container-proofs.md` §10.1) | element type `Nat`, always closed | 2 |
 | plain child's ih length (`container-proofs.md` §10.2) | mixed constructors only ever computed | 3 |
+| `wf_branch`'s container-length projection context (`surface-polymorphism.md` §10.1) | closed *type parameters* — an inductive could not be instantiated at an open type until `fn f<A>` existed | 2 |
 
-Note the shape of that table: three of five are axis 2, and in every case the
+Note the shape of that table: four of six are axis 2, and in every case the
 generalization that would have caught it costs one extra test with one extra
 context entry.
+
+The sixth is worth reading twice, because it says something the first five did
+not: for a whole phase the axis-2 control was **not writable**. `Rose<A>` at
+an open element type needs a declaration with a type parameter, and until
+`surface-polymorphism` there was no such thing. When an axis cannot be varied,
+that is itself the finding — the missing language feature is also a missing
+test.
 
 ## The minimum for a new schema
 

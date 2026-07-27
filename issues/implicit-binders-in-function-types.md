@@ -79,3 +79,4 @@ here ([[surface-function-types]] §8).
   the structural reason implicit binders could not ride along with function
   types. Kept as its own issue at the user's request: implicit arguments on a
   by-value function are a real feature, not just a symmetry with `fn`.
+- 2026-07-26: Not made structural by [[surface-polymorphism]], contrary to that issue's sequencing claim. Type parameters landed as *declaration* parameters, so they are ParamMeta.implicit -- exactly where implicitness already lives -- and every polymorphic call to a declaration infers its type arguments. What stays explicit is applying a polymorphic function VALUE, which is the same limitation surface-function-types section 5.3 already recorded. The 'not urgent while the surface has no universe' note also survives: that round added type parameters to declarations, not a Type to TyKind, so a function type still cannot quantify over a type. Stays open as ergonomics.

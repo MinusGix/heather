@@ -72,6 +72,12 @@ pub struct FieldDecl {
 pub struct Decl {
     pub kind: DeclKind,
     pub name: String,
+    /// `fn map<A, B>(…)` — type-parameter names, in order. Each becomes a
+    /// **leading implicit parameter at `Ty 0`**, usable as a type inside this
+    /// declaration and nowhere else (docs/surface-polymorphism.md §2). Unlike
+    /// an `InductiveDecl`'s parameters these are not monomorphized: they are
+    /// real kernel binders, and a use of one is `El A`.
+    pub tyvars: Vec<String>,
     pub params: Vec<Param>,
     /// Return type of a `fn`, statement of a `theorem`.
     pub result: Ty,
@@ -225,6 +231,16 @@ pub enum ExprKind {
     /// It is only ever set on a `Var` head: implicit insertion is
     /// name-directed, so there is nothing for `@` to suppress elsewhere.
     App { head: Box<Expr>, args: Vec<Expr>, explicit: bool },
+    /// `f<A, B>` — explicit type application, filling a declaration's leading
+    /// type parameters positionally (docs/surface-polymorphism.md §1). Kept
+    /// **separate** from `App` rather than a field on it: every existing
+    /// construction site of `App` stays untouched, and a type argument is a
+    /// `Ty`, not an `Expr`, so it could not share the argument list anyway.
+    ///
+    /// Also the one form that can spell an *applied* type where an expression
+    /// is expected — `@map(List<Nat>, …)` — since a `Ty 0` argument position
+    /// reads its expression as a type (§5).
+    TyApp { head: Box<Expr>, args: Vec<Ty> },
     /// `λ (x: A) (y: B) => e`, or `fun` for the ASCII spelling. Multiple
     /// binders are sugar for nesting.
     Lam { binders: Vec<LamBinder>, body: Box<Expr> },

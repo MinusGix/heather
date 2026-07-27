@@ -1,6 +1,6 @@
 ---
 title: Type parameters on fn/theorem, and inductives that are actually parametric
-status: open
+status: closed
 labels: [frontend,elaboration,design]
 created: 2026-07-26
 updated: 2026-07-26
@@ -62,6 +62,43 @@ technically complete, practically unusable. That issue is filed as
 ergonomics; alongside this one it is structural, and the two should land
 together.
 
+## Answers (2026-07-26, `docs/surface-polymorphism.md`)
+
+The scheme answered all five, and three of them differently from the way this
+issue framed them.
+
+1. **Neither option.** An `inductive`'s parameters stay expanded per
+   instantiation *and* `map` can return `List<B>` — because an instantiation
+   may now be **open**. Inside `fn map<A, B>`, `List<B>` lowers to
+   `⟦List<El B>⟧`, an ordinary kernel type with `B` free. No code-valued
+   type-level function, no parameter on any constructor or recursor, and the
+   cost this issue expected to land in the tier-0/1 generators does not
+   exist. The premise that monomorphized-inductives leaves `map` unable to
+   return a `List<B>` was wrong; what made it wrong is
+   [[tyvar-scoping-in-lowered-fields]], landed the same day.
+2. **No new `TyKind`.** A bound type variable is `Named { name, args: [] }`
+   resolving through `Cx.tyvars`, which already maps a surface type name to a
+   kernel type at a binding depth. Name resolution in type position does
+   become three-namespaced, as predicted, but the machinery was written.
+3. **Argument-driven, pattern-fragment only.** Solved from the *inferred
+   types of the explicit arguments* by structural congruence plus one rule
+   (`El ?A ≟ T ⇒ ?A := ⌜T⌝`), with depth tracking and a strengthening test.
+   Rejected with a message: a parameter appearing only in the result type
+   (`nil()`), an unannotated λ-argument, anything outside the fragment.
+   `f<T, …>(…)` is the escape hatch and always works.
+4. **The guard machinery needed no change**; type parameters are implicit, and
+   `elab_self_call` already filters positions by implicitness.
+5. **Yes, in one go, and it is not two lowerings.** `fn` and `theorem` share
+   `elab_decl_inner` end to end; the split is four lines at the very end.
+
+The sequencing claim in this issue was also wrong:
+[[implicit-binders-in-function-types]] did **not** become structural. A type
+parameter is a *declaration* parameter, so it is `ParamMeta.implicit` — where
+implicitness already lives — and no polymorphic call spells its type
+arguments positionally. What stays explicit is applying a polymorphic
+function *value*, which is exactly the limitation
+[[surface-function-types]] §5.3 already recorded.
+
 ## Open questions for the scheme doc
 
 1. **Does an `inductive`'s parameter become a real Π, or stay monomorphized
@@ -85,3 +122,8 @@ together.
 5. Whether `theorem` gets the same treatment as `fn` in one go. It should —
    a generic lemma is the point — but theorems are Ψ-globals and `fn`s are
    inlined, so the two lowerings differ.
+
+## Log
+
+- 2026-07-26: Scheme written: docs/surface-polymorphism.md (grammar, the El/Ty lowering, the inference rule with its depth/strengthening obligation, six interactions to observe, nine rejections with messages, a 19-item acceptance checklist). Three of the five open questions came back differently from the way this issue framed them, all recorded above: inductives need neither option (an open instantiation is enough, and map returns List<B> today), theorem needs no separate lowering, and implicit-binders-in-function-types does not become structural.
+- 2026-07-26: IMPLEMENTED and green: 33 acceptance tests in crates/elab/tests/polymorphism.rs, workspace at 465 passing. Landed: Decl.tyvars parsed as fn/theorem name<A, B>; type parameters lowered as leading implicit binders at Ty 0 with a use decoding through El; ExprKind::TyApp with a speculative parse that backtracks cleanly against the lt operator; crates/elab/src/code.rs quoting a kernel Type to its code; unify_ty/unify_tm grown from Id-only to full congruence with binder-depth tracking, a strengthening test (drop the inner binders to a marker, reshift, compare -- no new traversal) and the El rule that makes a type argument inferable; an expression read as a type in a Ty l position, so @f(Nat, ...) works; and constructors at a written instantiation (Nil<Nat>). fn map<A, B>(f: A -> B, xs: List<A>) -> List<B> over a declared List now parses, elaborates, kernel-checks and computes -- the issue's headline. Two live PRE-EXISTING defects found by the headline test and fixed, neither about polymorphism: (1) a declaration could not be named after a built-in eliminator, because shadowed did not count the enclosing declaration's own name, so fn map's self-call took the vector-map path; (2) wf_branch projected a container's length in cx while its arguments were shifted into bcx -- invisible at a closed instantiation, and the axis-2 control that exposes it (Rose<A> at an open element type) WAS NOT WRITABLE until this round, which is now the sixth row of docs/testing-generated-terms.md. Three scheme corrections in docs/surface-polymorphism.md section 10: constructors need type application too, ty_atom's Ident-< early return swallows a type-applied call in type position (the discriminator is a following paren), and apply_explicit needed a parameter offset for goal hints. Limit found and filed rather than fixed: an implicit function parameter still cannot be inferred from an equation (cong_at declares but does not apply), which is elab-unifier-completeness.

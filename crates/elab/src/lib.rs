@@ -41,6 +41,7 @@ use heather_syntax::{
     Span, Stmt, Ty, TyKind,
 };
 
+mod code;
 mod inductive;
 mod vec;
 mod wf;
@@ -179,6 +180,12 @@ fn err<T>(msg: impl Into<String>, span: Span) -> R<T> {
 struct ParamMeta {
     name: String,
     implicit: bool,
+    /// A `<A, B>` type parameter (docs/surface-polymorphism.md §2): a leading
+    /// implicit parameter at `Ty 0`. Flagged rather than merely counted so
+    /// that `f<T, …>` can check it is filling type parameters and not the
+    /// first few `{}`-implicits, which are a different thing that happens to
+    /// share the mask.
+    is_type: bool,
 }
 
 /// What a global name refers to.
@@ -320,9 +327,39 @@ impl Elaborator {
         // up embedded in the emitted term, so they must live in the same
         // (shifted) world as the body.
         self.goal_base = count_holes(decl);
-        // Elaborate the parameter telescope.
+        // Elaborate the parameter telescope. Type parameters come first and
+        // are ordinary kernel binders at `Ty 0` — level-0 parametric
+        // polymorphism, Tarski-style, so a *use* of one in type position is
+        // `El A` (docs/surface-polymorphism.md §2). They are registered in
+        // `cx.tyvars`, the same table an `inductive`'s parameters use while
+        // its fields are lowered; the difference is only that these survive
+        // into the kernel term.
         let mut cx = Cx::empty();
         let mut param_info: Vec<(Type, Level)> = Vec::new();
+        for (i, tv) in decl.tyvars.iter().enumerate() {
+            if decl.tyvars[..i].contains(tv) {
+                return err(format!("duplicate type parameter `{tv}`"), decl.span);
+            }
+            if decl.params.iter().any(|p| p.name == *tv) {
+                return err(
+                    format!("`{tv}` is both a type parameter and a parameter of `{}`", decl.name),
+                    decl.span,
+                );
+            }
+            let (ty, lvl) = (Type::Ty(Level::Zero), Level::constant(1));
+            cx.push(tv.clone(), ty.clone(), lvl.clone());
+            // `El^0 A`, scoped at the binder just pushed. `lower_named`
+            // weakens by `names.len() - depth`, so recording the depth *after*
+            // the push makes `Var(0)` correct here and correct everywhere
+            // deeper — the device `Alias` and the inductive `TyVar` both use.
+            cx.tyvars.push(TyVar {
+                name: tv.clone(),
+                ty: Type::El { level: Level::Zero, tm: Rc::new(Term::Var(LocalVar(0))) },
+                level: Level::Zero,
+                depth: cx.names.len(),
+            });
+            param_info.push((ty, lvl));
+        }
         for p in &decl.params {
             let (ty, lvl) = self.elab_ty(&cx, &p.ty)?;
             cx.push(p.name.clone(), ty.clone(), lvl.clone());
@@ -336,7 +373,17 @@ impl Elaborator {
         let (res_ty, res_lvl) = self.elab_ty(&cx, &decl.result)?;
         cx.selfref = Some(Rc::new(SelfRef {
             name: decl.name.clone(),
-            params: decl.params.iter().map(|p| (p.name.clone(), p.implicit)).collect(),
+            // Type parameters are part of the telescope, so they are part of
+            // the positional bookkeeping a guarded self-call does — as
+            // *implicit* parameters, which is what keeps them out of the
+            // argument list `map(f, tail)` has to match
+            // (docs/surface-polymorphism.md §6.1).
+            params: decl
+                .tyvars
+                .iter()
+                .map(|t| (t.clone(), true))
+                .chain(decl.params.iter().map(|p| (p.name.clone(), p.implicit)))
+                .collect(),
         }));
         // `let` bindings, then the result expression. A `let` is an inlined
         // alias (the same doctrine as a `fn` definition), not a kernel binder.
@@ -397,9 +444,14 @@ impl Elaborator {
             .map_err(|e| ElabError::Kernel { decl: decl.name.clone(), err: e })?;
 
         let params = Rc::new(
-            decl.params
+            decl.tyvars
                 .iter()
-                .map(|p| ParamMeta { name: p.name.clone(), implicit: p.implicit })
+                .map(|t| ParamMeta { name: t.clone(), implicit: true, is_type: true })
+                .chain(decl.params.iter().map(|p| ParamMeta {
+                    name: p.name.clone(),
+                    implicit: p.implicit,
+                    is_type: false,
+                }))
                 .collect::<Vec<_>>(),
         );
         match decl.kind {
@@ -818,6 +870,26 @@ impl Elaborator {
             ExprKind::Lam { binders, body } => {
                 self.elab_lam_check(cx, binders, body, expected, lvl, e.span)
             }
+            // An expression in a `Ty l` position is read as a **type** and
+            // elaborated to its code (docs/surface-polymorphism.md §5). The
+            // only position that has this expected type is a type parameter
+            // of an `@`-marked call, where every parameter is positional —
+            // so this arm cannot perturb anything that existed before it.
+            _ if matches!(expected, Type::Ty(_)) => {
+                let Some(surface) = expr_as_ty(e) else {
+                    return err(
+                        "this argument fills a type parameter, so it has to be a type: \
+                         write a type name here, or give the type arguments with \
+                         `f<T, …>(…)`, which takes an arbitrary type",
+                        e.span,
+                    );
+                };
+                let (t, _) = self.elab_ty(cx, &surface)?;
+                let Some(c) = code::code_of(&t) else {
+                    return err("this type cannot be a type argument", e.span);
+                };
+                Ok(c)
+            }
             // A constructor in checking position: the expected type *is* the
             // encoding, so every annotation of the injection and the field
             // tuple is read off it (docs/inductive-tier0-lowering.md §4).
@@ -867,6 +939,49 @@ impl Elaborator {
             // with no expected type there is nothing else to take the domain
             // from (docs/surface-function-types.md §5.2).
             ExprKind::Lam { binders, body } => self.elab_lam_infer(cx, binders, body),
+            // `f<T, …>` — explicit type application, with or without a call
+            // after it (docs/surface-polymorphism.md §1).
+            ExprKind::TyApp { head, args } => {
+                if let Some(r) = self.ctor_at(cx, head, args, &[], e.span) {
+                    return r;
+                }
+                let (_, t, ty, lvl, _) = self.elab_ty_app(cx, head, args, e.span)?;
+                Ok((t, ty, lvl))
+            }
+            // `f<T, …>(a, b)`. The type arguments are applied first; whatever
+            // `{}`-implicits remain are still inferred, so giving the type
+            // arguments does not force the rest of the call to be explicit.
+            ExprKind::App { head, args, explicit }
+                if matches!(head.kind, ExprKind::TyApp { .. }) =>
+            {
+                if *explicit {
+                    return err(
+                        "`@` and `<…>` both give arguments explicitly: use one or the other",
+                        e.span,
+                    );
+                }
+                let ExprKind::TyApp { head: callee, args: tyargs } = &head.kind else {
+                    unreachable!("just matched")
+                };
+                // `Cons<Nat>(1, xs)` — a constructor at a written
+                // instantiation. Not a Π-typed head, so it cannot go down the
+                // application path at all; the type arguments *are* the
+                // instantiation, which is what `infer_ctor` otherwise has to
+                // guess (docs/surface-polymorphism.md §10.3).
+                if let Some(r) = self.ctor_at(cx, callee, tyargs, args, e.span) {
+                    return r;
+                }
+                let (name, t, ty, lvl, mask) =
+                    self.elab_ty_app(cx, callee, tyargs, head.span)?;
+                if mask.iter().any(|&b| b) {
+                    self.apply_implicit(cx, &name, t, ty, lvl, args, &mask, e.span)
+                } else {
+                    // The type arguments have consumed the leading parameters,
+                    // so argument `i` is now parameter `i + |tyargs|` — which
+                    // is what the offset keeps honest for goal-name hints.
+                    self.apply_explicit(cx, Some(&name), tyargs.len(), t, ty, lvl, args)
+                }
+            }
             // A constructor applied in the curried spelling — `Cons(1)(xs)`.
             // Re-associated into one saturated application, which is what lets
             // it infer: the head alone (`Cons(1)`) has no inferable type, but
@@ -886,7 +1001,7 @@ impl Elaborator {
                     );
                 }
                 let (h, hty, hlvl) = self.elab_infer(cx, head)?;
-                self.apply_explicit(cx, None, h, hty, hlvl, args)
+                self.apply_explicit(cx, None, 0, h, hty, hlvl, args)
             }
             ExprKind::App { args, explicit, .. } => {
                 let (name, _, _) = e.as_named().expect("head is a name");
@@ -963,7 +1078,7 @@ impl Elaborator {
                 // Fully-explicit call (`@f`, or a callee with no implicits):
                 // apply the arguments positionally down the Π spine.
                 if *explicit || !mask.iter().any(|&b| b) {
-                    self.apply_explicit(cx, Some(name), head, ty, lvl, args)
+                    self.apply_explicit(cx, Some(name), 0, head, ty, lvl, args)
                 } else {
                     self.apply_implicit(cx, name, head, ty, lvl, args, &mask, e.span)
                 }
@@ -1357,6 +1472,11 @@ impl Elaborator {
         cx.names.iter().any(|n| n == name)
             || cx.aliases.iter().any(|a| a.name == *name)
             || self.globals.contains_key(name)
+            // The declaration's own name. It is not in `globals` until it is
+            // checked, so without this a `fn map` could not recurse: its
+            // self-call took the built-in vector-`map` path instead
+            // (found writing docs/surface-polymorphism.md §9's headline test).
+            || cx.selfref.as_ref().is_some_and(|s| s.name == name)
     }
 
     /// The constructor this name refers to *here* — `None` when it is not a
@@ -1881,10 +2001,16 @@ impl Elaborator {
     /// Positional application down the Π spine — the stage-1 behaviour, reused
     /// for `@`-marked calls and callees with no implicits. Supports partial
     /// application (fewer args than parameters yields a function value).
+    #[allow(clippy::too_many_arguments)]
     fn apply_explicit(
         &self,
         cx: &Cx,
         name: Option<&str>,
+        // `param_offset`: how many leading parameters the head has already
+        // consumed — the type arguments of an `f<T, …>(…)` call. Only the
+        // goal-name hints depend on it, but a hint naming the wrong parameter
+        // is user-visible, so it is threaded rather than approximated.
+        param_offset: usize,
         head: Term,
         ty: Type,
         lvl: Level,
@@ -1901,7 +2027,7 @@ impl Elaborator {
             let Type::Pi { dom_level, cod_level, dom, cod } = head else {
                 return err(format!("{what} is applied to too many arguments"), arg.span);
             };
-            let hint = name.zip(params.get(i)).map(|(n, p)| (n, p.name.as_str()));
+            let hint = name.zip(params.get(i + param_offset)).map(|(n, p)| (n, p.name.as_str()));
             let arg_t = self.elab_check_hinted(cx, arg, &dom, &dom_level, hint)?;
             let arg_rc = Rc::new(arg_t);
             ty = cod.apply_local(&LocalSubst::id(&cx.gamma).extended(Rc::clone(&arg_rc)));
@@ -1909,6 +2035,110 @@ impl Elaborator {
             t = Term::App { fun: Rc::new(t), dom_level, cod_level, dom, cod, arg: arg_rc };
         }
         Ok((t, ty, lvl))
+    }
+
+    /// `C<T, …>(a⃗)` — a constructor at a *written* instantiation. `None` when
+    /// the head is not a constructor, so the caller falls through to the
+    /// ordinary type-application path.
+    ///
+    /// This is the direct spelling of what `infer_ctor` can only recover
+    /// narrowly (from a field whose type *is* a parameter) and otherwise
+    /// refuses to guess: `Nil` alone is genuinely ambiguous, `Nil<Nat>` is not.
+    fn ctor_at(
+        &self,
+        cx: &Cx,
+        callee: &Expr,
+        tyargs: &[Ty],
+        args: &[Expr],
+        span: Span,
+    ) -> Option<R<(Term, Type, Level)>> {
+        let ExprKind::Var(name) = &callee.kind else { return None };
+        let (ind, i) = self.ctor_here(cx, name)?;
+        Some((|| {
+            if tyargs.len() != ind.params.len() {
+                return err(
+                    format!(
+                        "`{}` is a constructor of `{}`, which takes {} type argument(s), \
+                         found {}",
+                        name,
+                        ind.name,
+                        ind.params.len(),
+                        tyargs.len()
+                    ),
+                    span,
+                );
+            }
+            let mut lowered = Vec::with_capacity(tyargs.len());
+            for a in tyargs {
+                lowered.push(self.elab_ty(cx, a)?);
+            }
+            let (ty, lvl) = self.lower_instance(cx, &ind, &lowered, span)?;
+            let t = self.build_ctor_value(cx, &ind, i, args, &ty, &lvl, span)?;
+            Ok((t, ty, lvl))
+        })())
+    }
+
+    /// `f<T, …>` — fill a declaration's leading type parameters with the
+    /// codes of the written types (docs/surface-polymorphism.md §1).
+    ///
+    /// Returns the callee's name (for diagnostics downstream), the applied
+    /// head with its type and level, and the implicit mask of the parameters
+    /// that are *left* — so a call can still infer whatever `{}`-implicits
+    /// follow the type arguments.
+    fn elab_ty_app(
+        &self,
+        cx: &Cx,
+        callee: &Expr,
+        tyargs: &[Ty],
+        span: Span,
+    ) -> R<(String, Term, Type, Level, Vec<bool>)> {
+        let ExprKind::Var(name) = &callee.kind else {
+            return err(
+                "type arguments need a named callee: write `f<T, …>(…)`, where `f` is a \
+                 `fn` or `theorem` with type parameters",
+                span,
+            );
+        };
+        let params = self.params_of(name);
+        let n_ty = params.iter().take_while(|p| p.is_type).count();
+        if n_ty == 0 {
+            return err(
+                format!(
+                    "`{name}` takes no type arguments (only a `fn` or `theorem` declared \
+                     `{name}<A, …>` does)"
+                ),
+                span,
+            );
+        }
+        if tyargs.len() != n_ty {
+            return err(
+                format!(
+                    "`{name}` takes {n_ty} type argument(s), found {}",
+                    tyargs.len()
+                ),
+                span,
+            );
+        }
+        let (mut t, mut ty, mut lvl) = self.resolve(cx, name, span)?;
+        for a in tyargs {
+            let (a_ty, _) = self.elab_ty(cx, a)?;
+            let Some(c) = code::code_of(&a_ty) else {
+                return err("this type cannot be a type argument", a.span);
+            };
+            let head = self.whnf(cx, &ty, span)?;
+            let Type::Pi { dom_level, cod_level, dom, cod } = head else {
+                return err(
+                    format!("internal: `{name}`'s type parameter is not a `Π`"),
+                    span,
+                );
+            };
+            let arg = Rc::new(c);
+            ty = cod.apply_local(&LocalSubst::id(&cx.gamma).extended(Rc::clone(&arg)));
+            lvl = cod_level.clone();
+            t = Term::App { fun: Rc::new(t), dom_level, cod_level, dom, cod, arg };
+        }
+        let mask = params.iter().skip(n_ty).map(|p| p.implicit).collect();
+        Ok((name.clone(), t, ty, lvl, mask))
     }
 
     /// Application with implicit-argument insertion
@@ -1963,10 +2193,31 @@ impl Elaborator {
                     msg: format!("`{name}` is applied to too few arguments"),
                     span,
                 })?;
+                if matches!(arg.kind, ExprKind::Lam { .. }) {
+                    // An explicit argument is *inferred* here, and an
+                    // unannotated lambda has nothing to infer from. Harmless
+                    // before polymorphism (a monomorphic callee's domain was
+                    // never needed to elaborate the argument); now it is the
+                    // first thing anyone hits, so it says what to do
+                    // (docs/surface-polymorphism.md §4.1).
+                    let unannotated = matches!(&arg.kind,
+                        ExprKind::Lam { binders, .. } if binders.iter().any(|b| b.ty.is_none()));
+                    if unannotated {
+                        return err(
+                            format!(
+                                "`{name}` has implicit arguments, so this lambda is \
+                                 elaborated before they are known: annotate its binders \
+                                 (`λ (x: A) => …`), or give the type arguments \
+                                 (`{name}<T, …>(…)`)"
+                            ),
+                            arg.span,
+                        );
+                    }
+                }
                 let (arg_t, arg_ty, _) = self.elab_infer(cx, arg)?;
                 // Drive meta solutions from the argument's actual type, then
                 // splice the argument into the scratch world.
-                unify_ty(&dom, &arg_ty, n, &mut sols);
+                unify_ty(&cx.gamma, &dom, &arg_ty, n, 0, &mut sols);
                 Rc::new(arg_t.shift_global(n))
             };
             ty = cod.apply_local(&LocalSubst::id(&cx.gamma).extended(Rc::clone(&arg_rc)));
@@ -1979,9 +2230,30 @@ impl Elaborator {
         // Discharge the meta block: `entries[k]` is the payload for Ψ-index
         // `n-1-k` (apply_global's convention), so it takes `sols[n-1-k]`.
         let mut entries = Vec::with_capacity(n as usize);
+        // Which parameter each meta came from, in meta order — for the
+        // message below. `mask` may be a *suffix* of the parameter list when
+        // the call already gave its type arguments (`f<T>(…)`), so the offset
+        // is recovered rather than assumed to be zero.
+        let all = self.params_of(name);
+        let skip = all.len().saturating_sub(mask.len());
+        let meta_params: Vec<&ParamMeta> =
+            all.iter().skip(skip).zip(mask).filter(|&(_, &m)| m).map(|(p, _)| p).collect();
         for k in 0..n {
-            let sol = sols[(n - 1 - k) as usize].clone().ok_or_else(|| ElabError::Elab {
-                msg: format!("could not infer an implicit argument of `{name}`"),
+            let j = (n - 1 - k) as usize;
+            let sol = sols[j].clone().ok_or_else(|| ElabError::Elab {
+                msg: match meta_params.get(j) {
+                    Some(p) if p.is_type => format!(
+                        "cannot infer the type argument `{}` of `{name}` here — no \
+                         argument's type mentions it; write `{name}<…>(…)` to give the \
+                         type arguments",
+                        p.name
+                    ),
+                    Some(p) => format!(
+                        "could not infer the implicit argument `{}` of `{name}`",
+                        p.name
+                    ),
+                    None => format!("could not infer an implicit argument of `{name}`"),
+                },
                 span,
             })?;
             entries.push(GlobalEntry::Tm(sol));
@@ -2305,6 +2577,13 @@ fn count_holes(decl: &Decl) -> u32 {
                 expr(head, n);
                 args.iter().for_each(|a| expr(a, n));
             }
+            // A type argument can contain a hole (`f<a = ?p>(…)`), and the
+            // pre-count is the one thing the goal mechanism cannot survive
+            // under-counting (see this function's doc comment).
+            ExprKind::TyApp { head, args } => {
+                expr(head, n);
+                args.iter().for_each(|t| ty(t, n));
+            }
             ExprKind::Lam { binders, body } => {
                 binders.iter().filter_map(|b| b.ty.as_ref()).for_each(|t| ty(t, n));
                 expr(body, n);
@@ -2384,39 +2663,195 @@ fn embed(gamma: &LocalCtx, extra: u32) -> LocalSubst {
 /// solution whenever a meta meets a rigid subterm, and otherwise makes no
 /// claim — an unsolved meta is reported by the caller, a *wrong* solution is
 /// caught by the kernel's re-check. It never fails: it only ever *learns*.
-fn unify_ty(pat: &Type, subj: &Type, n: u32, sols: &mut [Option<Rc<Term>>]) {
-    if let (
-        Type::Id { ty: t1, lhs: a1, rhs: b1, .. },
-        Type::Id { ty: t2, lhs: a2, rhs: b2, .. },
-    ) = (pat, subj)
+/// Congruence through every type former the lowerings build, plus the one
+/// rule that makes polymorphism inferable:
+///
+/// > `El ?A ≟ T` solves `?A := ⌜T⌝` (docs/surface-polymorphism.md §4).
+///
+/// `d` counts the binders crossed since `gamma` — a `Σ`'s second component, a
+/// `Π`'s codomain, a `Wf`'s arity. A meta's solution is scoped in `gamma`, so
+/// a candidate found under `d` binders is accepted only if it survives
+/// [`strengthen_ty`]. Without that check `f(g)` at `g : (x : Nat) -> Vec(A;
+/// x)` would happily solve a meta to a term mentioning `x`, which is
+/// ill-scoped where it lands (the kernel would reject it, but a rejection is
+/// a worse message than a refusal to guess).
+fn unify_ty(
+    gamma: &LocalCtx,
+    pat: &Type,
+    subj: &Type,
+    n: u32,
+    d: u32,
+    sols: &mut [Option<Rc<Term>>],
+) {
+    // The `El` rule. Checked before the congruence so that `El ?A` meeting a
+    // *decoded* `El t` still solves rather than descending into the code.
+    if let Type::El { tm, .. } = pat
+        && let Term::GlobalTm { var, subst } = &**tm
+        && var.0 < n
     {
-        unify_ty(t1, t2, n, sols);
-        unify_tm(a1, a2, n, sols);
-        unify_tm(b1, b2, n, sols);
+        if sols[var.0 as usize].is_none()
+            && subst.terms.iter().all(|t| matches!(**t, Term::Var(_)))
+            && let Some(s) = strengthen_ty(gamma, subj, d)
+            && let Some(c) = code::code_of(&s)
+        {
+            sols[var.0 as usize] = Some(Rc::new(c));
+        }
+        return;
     }
-    // Nat vs Nat and every other pairing: nothing to solve here.
+    match (pat, subj) {
+        (
+            Type::Id { ty: t1, lhs: a1, rhs: b1, .. },
+            Type::Id { ty: t2, lhs: a2, rhs: b2, .. },
+        ) => {
+            unify_ty(gamma, t1, t2, n, d, sols);
+            unify_tm(gamma, a1, a2, n, d, sols);
+            unify_tm(gamma, b1, b2, n, d, sols);
+        }
+        // `Π`/`Σ`/`W` bind in their second component; `+` does not.
+        (
+            Type::Pi { dom: a1, cod: b1, .. },
+            Type::Pi { dom: a2, cod: b2, .. },
+        )
+        | (
+            Type::Sigma { fst: a1, snd: b1, .. },
+            Type::Sigma { fst: a2, snd: b2, .. },
+        )
+        | (
+            Type::W { shape: a1, pos: b1, .. },
+            Type::W { shape: a2, pos: b2, .. },
+        ) => {
+            unify_ty(gamma, a1, a2, n, d, sols);
+            unify_ty(gamma, b1, b2, n, d + 1, sols);
+        }
+        (Type::Sum { lhs: a1, rhs: b1, .. }, Type::Sum { lhs: a2, rhs: b2, .. }) => {
+            unify_ty(gamma, a1, a2, n, d, sols);
+            unify_ty(gamma, b1, b2, n, d, sols);
+        }
+        (Type::Vec { elem: e1, len: k1, .. }, Type::Vec { elem: e2, len: k2, .. }) => {
+            unify_ty(gamma, e1, e2, n, d, sols);
+            unify_tm(gamma, k1, k2, n, d, sols);
+        }
+        // A `Wf`'s arity is scoped under its shape binder — the same +1 a `Σ`
+        // tail gets, and the reason this is not a flat structural walk.
+        (
+            Type::Wf { shape: s1, arity: a1, .. },
+            Type::Wf { shape: s2, arity: a2, .. },
+        ) => {
+            unify_ty(gamma, s1, s2, n, d, sols);
+            unify_tm(gamma, a1, a2, n, d + 1, sols);
+        }
+        (Type::Fin { len: k1 }, Type::Fin { len: k2 }) => {
+            unify_tm(gamma, k1, k2, n, d, sols);
+        }
+        (Type::El { tm: t1, .. }, Type::El { tm: t2, .. }) => {
+            unify_tm(gamma, t1, t2, n, d, sols);
+        }
+        // `Nat`/`Unit`/`Empty`/`Ty` and every mismatched pairing: nothing to
+        // learn. A mismatch is not an error here — this function only ever
+        // learns, and the kernel is what decides whether the call typechecks.
+        _ => {}
+    }
 }
 
 /// Term-level companion of [`unify_ty`]. When `pat` is an unsolved
 /// metavariable under a variable renaming (the Miller pattern condition —
 /// here always the identity `id_Γ`, so the solution is the subject verbatim),
 /// record it; otherwise recurse through matching heads toward nested metas.
-fn unify_tm(pat: &Term, subj: &Term, n: u32, sols: &mut [Option<Rc<Term>>]) {
+fn unify_tm(
+    gamma: &LocalCtx,
+    pat: &Term,
+    subj: &Term,
+    n: u32,
+    d: u32,
+    sols: &mut [Option<Rc<Term>>],
+) {
     if let Term::GlobalTm { var, subst } = pat
         && var.0 < n
     {
         let is_pattern = subst.terms.iter().all(|t| matches!(**t, Term::Var(_)));
-        if is_pattern && sols[var.0 as usize].is_none() {
-            sols[var.0 as usize] = Some(Rc::new(subj.clone()));
+        if is_pattern
+            && sols[var.0 as usize].is_none()
+            && let Some(s) = strengthen_tm(gamma, subj, d)
+        {
+            sols[var.0 as usize] = Some(Rc::new(s));
         }
         return;
     }
     match (pat, subj) {
-        (Term::Succ(a), Term::Succ(b)) => unify_tm(a, b, n, sols),
+        (Term::Succ(a), Term::Succ(b)) => unify_tm(gamma, a, b, n, d, sols),
         (Term::App { fun: f1, arg: a1, .. }, Term::App { fun: f2, arg: a2, .. }) => {
-            unify_tm(f1, f2, n, sols);
-            unify_tm(a1, a2, n, sols);
+            unify_tm(gamma, f1, f2, n, d, sols);
+            unify_tm(gamma, a1, a2, n, d, sols);
         }
         _ => {}
+    }
+}
+
+/// The substitution that drops the innermost `d` binders off `gamma`,
+/// sending each to a marker. Used only by [`strengthen_ty`]/[`strengthen_tm`].
+///
+/// `terms` is indexed outermost-first over the *source* context `Γ, d`
+/// (length `m + d`), so entry `k` is the image of `Var(m + d - 1 - k)`: the
+/// first `m` are `Γ`'s own variables lowered by `d`, and the last `d` are the
+/// binders being dropped.
+fn drop_binders(gamma: &LocalCtx, d: u32) -> LocalSubst {
+    let m = gamma.entries.len() as u32;
+    let tail = match gamma.base {
+        CtxBase::Nil => SubstTail::Empty { len: m, base: CtxBase::Nil },
+        CtxBase::Var(g) => SubstTail::Wk { len: m, ctx_var: g },
+    };
+    let terms = (0..m)
+        .map(|k| Rc::new(Term::Var(LocalVar(m - 1 - k))))
+        .chain((0..d).map(|_| Rc::new(Term::Zero)))
+        .collect();
+    LocalSubst { tail, terms }
+}
+
+/// Is `t`, scoped in `Γ` plus `d` further binders, in fact scoped in `Γ`
+/// alone — and if so, what is it there?
+///
+/// Drop the `d` binders to a marker, then shift back by `d` and compare. A
+/// term that never mentioned them is restored exactly; one that did keeps a
+/// marker where a variable was, and the comparison fails. That is the whole
+/// test: no new traversal of `Term`/`Type` is needed, and it cannot drift out
+/// of sync with the syntax the way a hand-written occurrence check would.
+fn strengthen_tm(gamma: &LocalCtx, t: &Term, d: u32) -> Option<Term> {
+    if d == 0 {
+        return Some(t.clone());
+    }
+    let s = t.apply_local(&drop_binders(gamma, d));
+    (s.shift_local(d) == *t).then_some(s)
+}
+
+/// [`strengthen_tm`] at the type level.
+fn strengthen_ty(gamma: &LocalCtx, t: &Type, d: u32) -> Option<Type> {
+    if d == 0 {
+        return Some(t.clone());
+    }
+    let s = t.apply_local(&drop_binders(gamma, d));
+    (s.shift_local(d) == *t).then_some(s)
+}
+
+/// A surface expression read as a **type** — the coercion a `Ty l` argument
+/// position performs (docs/surface-polymorphism.md §5). Deliberately narrow:
+/// exactly the two forms the parser could equally have produced in type
+/// position, and nothing clever.
+fn expr_as_ty(e: &Expr) -> Option<Ty> {
+    match &e.kind {
+        ExprKind::Var(s) if s == "Nat" => Some(Ty { kind: TyKind::Nat, span: e.span }),
+        ExprKind::Var(s) => Some(Ty {
+            kind: TyKind::Named { name: s.clone(), args: vec![] },
+            span: e.span,
+        }),
+        // `List<Nat>` in expression position parses as a type application;
+        // here that is exactly the applied type it looks like.
+        ExprKind::TyApp { head, args } => match &head.kind {
+            ExprKind::Var(s) => Some(Ty {
+                kind: TyKind::Named { name: s.clone(), args: args.clone() },
+                span: e.span,
+            }),
+            _ => None,
+        },
+        _ => None,
     }
 }

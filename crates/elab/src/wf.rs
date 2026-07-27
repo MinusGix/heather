@@ -495,8 +495,19 @@ impl Elaborator {
         // indices below.
         let container_len = match ctor.container() {
             Some((_, p)) => {
+                // `bcx`, not `cx`: both arguments have been shifted by
+                // `d_body`, so they live under the two binders just pushed,
+                // and `projection` substitutes with the identity of the
+                // context it is *given*. Passing `cx` was two entries short.
+                //
+                // Invisible at a closed instantiation — the constructor
+                // encoding's Σ tail then mentions no ambient variable at all,
+                // so nothing ever addressed the missing entries. It took a
+                // container field at an *open* element type
+                // (`Rose<A>`) to make the index escape, which is axis 2 of
+                // docs/testing-generated-terms.md, again.
                 let (len, _, _) =
-                    self.projection(cx, &ctor_ty_here, &value_here, p, span)?;
+                    self.projection(&bcx, &ctor_ty_here, &value_here, p, span)?;
                 Some(len)
             }
             None => None,

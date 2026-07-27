@@ -3,8 +3,9 @@
 //! ```text
 //! file    := item*
 //! item    := decl | inductive
-//! decl    := "fn" name "(" params? ")" "->" type block
-//!          | "theorem" name "(" params? ")" ":" type block
+//! decl    := "fn" name tyvars? "(" params? ")" "->" type block
+//!          | "theorem" name tyvars? "(" params? ")" ":" type block
+//! tyvars  := "<" name ("," name)* ">"
 //! induct  := "inductive" name ("<" name ("," name)* ">")? "{" ctors? "}"
 //! ctors   := ctor ("," ctor)* ","?
 //! ctor    := name ("(" field ("," field)* ","? ")")?
@@ -27,7 +28,8 @@
 //!          | "j" "(" expr "," "(" name "," name ")" "->" type "," expr ")"
 //!          | ("λ"|"fun") binder+ "=>" expr
 //!          | "@" name "(" args ")"
-//!          | atom (("." name)? "(" args ")")*      -- application is postfix
+//!          | atom ("<" type ("," type)* ">")?     -- explicit type application
+//!                 (("." name)? "(" args ")")*     -- application is postfix
 //!          | "[" (expr ("," expr)*)? "]"           -- vector literal
 //!          | name | numeral | "(" expr ")"
 //! binder  := name | "(" name ":" type ")"
@@ -254,6 +256,21 @@ impl Parser {
             return self.err("expected `fn`, `theorem`, or `inductive`");
         };
         let (name, _) = self.ident("declaration name")?;
+        // `fn map<A, B>(…)` — type parameters (docs/surface-polymorphism.md
+        // §1). Unambiguous here: a declaration's name is always followed by
+        // `(` or `<`, and neither is an expression continuation.
+        let mut tyvars = Vec::new();
+        if matches!(self.peek(), TokKind::Lt) {
+            self.bump();
+            loop {
+                tyvars.push(self.ident("type parameter name")?.0);
+                if !matches!(self.peek(), TokKind::Comma) {
+                    break;
+                }
+                self.bump();
+            }
+            self.expect(&TokKind::Gt, "`>` to close the type parameters")?;
+        }
         self.expect(&TokKind::LParen, "`(`")?;
         let mut params = Vec::new();
         while !matches!(self.peek(), TokKind::RParen) {
@@ -288,7 +305,7 @@ impl Parser {
         let result = self.ty()?;
         let body = self.block()?;
         let span = start.join(body.span);
-        Ok(Decl { kind, name, params, result, body, span })
+        Ok(Decl { kind, name, tyvars, params, result, body, span })
     }
 
     // -- blocks and statements ----------------------------------------------
@@ -465,6 +482,7 @@ impl Parser {
         if matches!(self.peek(), TokKind::Ident(_))
             && matches!(self.toks.get(self.pos + 1).map(|t| &t.kind), Some(TokKind::Lt))
         {
+            let save = self.pos;
             let (name, start) = self.ident("type name")?;
             self.bump(); // `<`
             let mut args = Vec::new();
@@ -476,7 +494,16 @@ impl Parser {
                 self.bump();
             }
             let end = self.expect(&TokKind::Gt, "`>` to close the type arguments")?;
-            return Ok(Ty { kind: TyKind::Named { name, args }, span: start.join(end) });
+            // …unless a call follows, in which case this was an *expression*
+            // with explicit type arguments opening an equality type —
+            // `theorem t(): id<Nat>(3) = 3`. `(` is the discriminator for the
+            // same reason `->` is in `group_is_type`: an applied type is
+            // never called (docs/surface-polymorphism.md §1).
+            if matches!(self.peek(), TokKind::LParen) {
+                self.pos = save;
+            } else {
+                return Ok(Ty { kind: TyKind::Named { name, args }, span: start.join(end) });
+            }
         }
         let lhs = self.expr()?;
         if matches!(self.peek(), TokKind::Eq | TokKind::EqEq) {
@@ -550,6 +577,10 @@ impl Parser {
     /// (docs/surface-function-types.md §1.3).
     fn postfix(&mut self) -> R<Expr> {
         let mut e = self.atom()?;
+        if let Some((args, end)) = self.try_tyargs() {
+            let span = e.span.join(end);
+            e = Expr { kind: ExprKind::TyApp { head: Box::new(e), args }, span };
+        }
         loop {
             match self.peek() {
                 TokKind::Dot => {
@@ -580,6 +611,45 @@ impl Parser {
         Ok(e)
     }
 
+    /// `< T, … >` after an expression — explicit type application
+    /// (docs/surface-polymorphism.md §1). `<` is *also* the `lt` operator
+    /// (`infix_op`), so this is **speculative**: save the position, try, and
+    /// restore on any failure. Backtracking is free (the parser is a token
+    /// vector plus an index) and total, so unlike a lookahead heuristic it
+    /// cannot be wrong about a program: `a < b` fails at the missing `>` and
+    /// falls back to `lt`, `f<A>(x)` succeeds.
+    ///
+    /// The closing `>` alone is the discriminator — no `(` is required, so a
+    /// bare `nil<Nat>` is a value. That is safe because `>` is not an
+    /// expression operator (lexer.rs:28), so no `lt` expression can be
+    /// followed by one.
+    fn try_tyargs(&mut self) -> Option<(Vec<Ty>, Span)> {
+        if !matches!(self.peek(), TokKind::Lt) {
+            return None;
+        }
+        let save = self.pos;
+        self.bump();
+        let mut args = Vec::new();
+        loop {
+            match self.ty() {
+                Ok(t) => args.push(t),
+                Err(_) => {
+                    self.pos = save;
+                    return None;
+                }
+            }
+            if !matches!(self.peek(), TokKind::Comma) {
+                break;
+            }
+            self.bump();
+        }
+        if !matches!(self.peek(), TokKind::Gt) {
+            self.pos = save;
+            return None;
+        }
+        Some((args, self.bump().span))
+    }
+
     /// A primary expression: keyword forms (`match`/`refl`/`j`/`calc`), an
     /// `@`- or plain call, a variable, a numeral, or a parenthesised group.
     fn atom(&mut self) -> R<Expr> {
@@ -608,6 +678,13 @@ impl Parser {
         if matches!(self.peek(), TokKind::At) {
             let at = self.bump().span;
             let (name, nsp) = self.ident("call head after `@`")?;
+            if matches!(self.peek(), TokKind::Lt) {
+                return self.err(
+                    "`@` and `<…>` both give arguments explicitly: use one or the other \
+                     (`@f(T, …)` reads a type argument as an expression; `f<T>(…)` takes \
+                     an arbitrary type)",
+                );
+            }
             self.expect(&TokKind::LParen, "`(` (`@` marks a call)")?;
             let (args, end) = self.call_args()?;
             let head = Expr { kind: ExprKind::Var(name), span: nsp };
