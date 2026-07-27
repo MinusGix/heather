@@ -118,29 +118,101 @@ with `B` still a meta whichever order they are elaborated in, and
 postponement ([[elab-unifier-completeness]]), exactly as
 `constructor-function-values` logged it. Argument order is **orthogonal**.
 
-## Recommendation
+## Decision (2026-07-27): a `self` marker, not a convention
 
-Receiver-first plus subject-first is the better convention and the prototype
-says the *declaration* side of it is nearly free. It is gated on the special
-forms, not on the idea.
+The prototype framed this as *mechanism + convention*, and priced three ways
+past the special forms. Both halves are superseded: the receiver's position
+becomes a **declared property of the parameter**, written `self`.
 
-Two orders to do it in:
+```heather
+theorem trans<A>({a: A}, {b: A}, {c: A}, self p: a = b, q: b = c): a = c
+theorem cong<A, B>(f: A -> B, {a: A}, {b: A}, self p: a = b): f(a) = f(b)
 
-1. **Now, taking the direct-spelling churn.** Flip, move `cong`'s function
-   argument last, and decide `inj`'s direct spelling. Small, and it stops the
-   surface teaching a convention that will be reversed.
-2. **After [[generators-in-the-language]]**, when `inj`/`map`/`fold` are
-   ordinary declarations and the obstacle is gone.
+p.trans(q)    ⇒  trans(p, q)     // subject first, the common case
+p.cong(f)     ⇒  cong(f, p)      // subject last, because `cong` says so
+```
 
-Leaning (1), because the convention is user-visible and every method call
-written before the flip has to be rewritten after it — the cost grows with
-delay, unlike the obstacle, which shrinks.
+This is the end state the "either way" paragraph below predicted, reached
+directly rather than via a convention that would then be relaxed. It settles
+`cong`, which was a counterexample to *both* fixed orders, without asking the
+declaration to read backwards: `f` stays where it belongs and `p` is marked.
 
-Either way, the end state is probably neither: an explicit receiver marker in
-the declaration (`self`-style) makes the receiver **not positional at all**,
-which is the same observation [[named-arguments]] makes one layer up. If that
-is where this lands, subject-first is the right convention to be sitting on
-when it arrives.
+**Why a marker and not a `self`-*named* parameter.** Rust's `self` doubles as
+the parameter's name, which suits a record method and suits nothing else — a
+proof wants to be called `p`, and the statement it appears in already says
+`p`. So `self` prefixes a normally-named parameter. `self: T` (no name after
+it) is accepted as the shorthand that both marks and names, so a record
+method can still be written the Rust way; it is one branch in the parser and
+it keeps a bare parameter *named* `self` from being a silent non-method.
+
+### Rules
+
+- **Default is the first explicit parameter.** A declaration with no `self`
+  behaves as it does under plain receiver-first. This is what makes the
+  migration nearly free (the prototype's 1 broken test) and keeps one-premise
+  lemmas — `sym`, `absurd`, `cong_succ` — free of ceremony. The cost is two
+  spellings for the common case and therefore some drift; accepted, because
+  requiring `self` would tax every unary lemma to discipline the rare one.
+- **At most one `self` per declaration.**
+- **`self` may not be implicit** (`{self p: T}` is rejected): an implicit
+  parameter has no argument slot, so there would be nowhere for the receiver
+  to land.
+- **`self` may not be a `<A, B>` type parameter**, for the same reason — type
+  arguments are never passed at a call site ([[at-and-type-arguments]]).
+- The **direct call is unchanged**: `self` is call-site sugar only, so
+  `trans(p, q)` and `cong(f, p)` still mean exactly what their declaration
+  order says. There is one order per callee, not two.
+
+### What it costs, and where it does not reach
+
+- **Not in `Type::Pi`.** `implicit` is a flag on `syntax::ast::Param`
+  (`ast.rs:151`) and `ParamMeta` (`lib.rs:182`); `self` is a second flag in
+  the same two places. That is why this is cheap, and why it does **not** hit
+  the wall [[implicit-binders-in-function-types]] is stuck behind — that
+  issue needs its marker *inside* the kernel's function type, for by-value
+  functions. `self` never does, because a function value cannot be
+  method-called.
+- **Traits cannot impose an order on it.** `resolve_dot` tries field
+  projection before the method desugaring (`lib.rs:1607–1620`), so a
+  record-of-functions member call `m.op(x)(y)` is a projection applied, not a
+  method call. Trait members never consult `self`, so the "wrapper if the
+  typeclass wants another order" escape hatch exists but should not be
+  needed.
+- **`self` is lexically free**: it occurs as no keyword today, and the
+  recursion machinery's `SelfRef.name` (`lib.rs:2635`) is the *declaration's*
+  own name, not the string `self`.
+
+### The special forms need no table
+
+Under default-subject-first, three of the four just become receiver-first and
+read better for it (the issue's own assessment of `map`/`fold`):
+
+| form | was | becomes |
+| --- | --- | --- |
+| `xs.map(f)` | `map(f, xs)` | `map(xs, f)` |
+| `xs.fold(z, f)` | `fold(z, f, xs)` | `fold(xs, z, f)` |
+| `xs.cong(self)` | `cong(self, xs)` | `cong(xs, self)` |
+| `p.inj(k)` | `inj(k, p)` | `inj(p, k)` |
+
+Only `inj` had a documented direct spelling (tier-0 §6.3) whose order encoded
+receiver-last, and that is the entire obstacle the prototype measured. **It
+is resolved by flipping the direct spelling**, not by an order-tolerant
+handler and not by a Rust-side subject table. The earlier objection that
+`inj(p, 1)` "reads worse than `inj(1, p)`" was formed under receiver-last;
+once subject-first is the language's stated rule, `inj(1, p)` is the spelling
+swimming against it, and one paragraph of tier-0 §6.3 is the whole cost.
+
+So no exemption survives for the built-ins, and nothing has to be unwound
+when [[generators-in-the-language]] turns them into declarations that write
+`self` like anything else.
+
+### Relation to [[named-arguments]]
+
+That issue is the general form of "stop deciding this by position". `self`
+does not compete with it: it names *one* argument — the one whose call-site
+position is inverted by the `.` — and leaves the rest positional. If named
+arguments land, `self` is the marker that says which parameter the `.`
+fills, which is a question named arguments do not answer.
 
 ## Related
 
@@ -157,3 +229,4 @@ when it arrives.
   the convention change is cheap for declarations (1 test, and `trans` needed
   nothing) and awkward only for the four built-in special forms keyed on
   argument position — and that the inference bonus I expected does not exist.
+- 2026-07-27: Scheme written, superseding the mechanism+convention framing: the receiver's position becomes a declared property of the parameter (`self p: a = b`, a marker on a normally-named parameter), defaulting to the first explicit parameter when unwritten. Three consequences worth the reader's time. (a) It settles `cong`, which was a counterexample to BOTH fixed orders, without making the declaration read backwards -- `f` stays first and `p` is marked. (b) It costs one bool on Param/ParamMeta and does NOT reach Type::Pi, which is why it sidesteps the wall [[implicit-binders-in-function-types]] is stuck behind; and trait members never consult it, since a record-of-functions call is a field PROJECTION before the method path (lib.rs:1607-1620). (c) No Rust-side subject table survives: under default-subject-first, map/fold/container-cong simply become receiver-first and read better, and `inj` -- the whole measured obstacle -- is resolved by flipping its documented direct spelling to inj(p, k), since the 'inj(p,1) reads worse' objection was formed under the old convention. Code round next.
