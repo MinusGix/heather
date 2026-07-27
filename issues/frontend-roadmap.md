@@ -30,16 +30,20 @@ Design record: [[surface-syntax]] (decisions) + docs/sketches/surface-v0..3
 7. ✅ [[inductive-compiler]] tiers 0 and 1 — the latter onto `Wf`, not
    fording; [[stress-proof-suite]] item 2 done. The issue itself stays open
    for tier 2 and the surface gaps ([[nested-inductives-container-fields]]).
-8. [[surface-function-types]] — dependent `->` and `λ`; the surface type
+8. ✅ [[surface-function-types]] — dependent `->` and `λ`; the surface type
    grammar is three constructors wide and this is what widens it. No kernel
    change (Π/λ/App are v0), so no metatheory round.
-9. [[nested-inductives-container-fields]] — container field types (`Rose`),
-   which is what any IR needs and what finite sequences need on the
-   mathematics side. Smaller once 8 lands: the fold is an ordinary function.
-10. Tier 2 / `Acc` by hand ([[stress-proof-suite]] item 3) — note `Acc` is
-    not *stateable* at the surface until 8, so this is a kernel-level test of
-    the synthesized-ih β rule, not frontend progress. Then reopen
-    [[ir-simulate-design]] in-language.
+9. ✅ [[nested-inductives-container-fields]] — container field types (`Rose`),
+   phases 1–3 landed: it declares, computes and proves. What any IR needs
+   and what finite sequences need on the
+   mathematics side. The issue stays open for the phases beyond `Rose`.
+10. ✅ Tier 2 / `Acc` by hand ([[stress-proof-suite]] item 3) — a kernel-level
+    test of the synthesized-ih β rule, not frontend progress, since `Acc` is
+    not stateable at the surface (function-typed field). docs/acc-via-w.md.
+
+**Next: [[ir-simulate-design]], reopened in-language** — the focus order
+above is complete, and that is what [[stress-proof-suite]] said passing the
+suite would unlock.
 
 Later, tracked where linked: implicit quotation + modal surface
 ([[surface-syntax]] round 2), context-specific compilation / certified PE
@@ -65,3 +69,4 @@ goal-solver meta-functions (sketch round 3 §2).
 - 2026-07-26: Side round, off the focus order: [[constructors-as-function-values]] LANDED and closed (docs/constructor-function-values.md, crates/elab/tests/constructor_values.rs, 9 tests, workspace at 412). 'twice(Succ, 0)', 'ap(Wrap, 1)', 'Cons(1)' and 'Node(0, 1)' at a container type all elaborate, so a constructor is a function value wherever something is checking it. Two independent halves, worth keeping distinct: 'Succ' became an ordinary resolvable NAME (a lambda at Pi(Nat).Nat, no expected type needed) — that is the half that discharges [[surface-operators]]' '.cong(Succ)', because cong's implicit endpoints put its argument in an INFERENCE position that the other half cannot reach — and declared constructors eta-expand against the expected Pi in checking position. Nothing tier-aware was needed. Correction to the filed plan, docs §5.1: 'Cons(1)(xs)' also reaches inference (its head is an application, not a name) and is fixed by re-associating the constructor spine, not by building a field telescope; so the boundary is 'an unsaturated constructor needs a checking position only if it STAYS unsaturated'. Still open by choice: a bare unsaturated constructor in inference position ('let f = Wrap;', '.cong(Wrap)') — inferring its type is a second copy of the lowering's field layout and is impossible for a parameterized declaration; the '.cong(Wrap)' half is [[elab-unifier-completeness]]' (apply_implicit infers where it could check). Focus order unchanged: item 9 [[nested-inductives-container-fields]] phase 3, then item 10 Acc.
 - 2026-07-26: Item 9 [[nested-inductives-container-fields]] phase 3 DESIGNED (docs/container-proofs.md); implementation is the next code round. It needs no kernel change and no metatheory pass — one elim_Nat schema and a typing rule — so it stays a pure surface+elaborator round like item 8. Recorded there because it revises a standing assumption: an 'All' predicate over a vector is definable in this kernel (codes + El give large elimination at Prog layer), so the reason the design does not use it is that the SURFACE cannot eliminate a vector, which puts 'All' behind the deferred Fin/indexing layer rather than behind any kernel work. Focus order otherwise unchanged: phase 3 code, then item 10 Acc.
 - 2026-07-26: Item 9 [[nested-inductives-container-fields]] phase 3 LANDED (docs/container-proofs.md, crates/elab/tests/container_proofs.rs, workspace at 421): 'size(r) = size_plus(r)' over Rose is the first theorem here proved by induction over a container. One new elim_Nat schema (tab_cong) and one typing rule; no kernel change and no metatheory pass, as predicted. Container fields are now complete through the phases that were scoped: Rose declares, computes, and proves. Two live shift bugs fell out, one of them phase 2's and invisible to every test it shipped with, both recorded in docs/container-proofs.md §10. Next focus: item 10 — tier 2 / Acc by hand ([[stress-proof-suite]] item 3), the synthesized-ih beta rule; then [[ir-simulate-design]] reopens in-language. Note for whoever picks up Acc: the ih-annotation class of bug found this round (an annotation only compared when a PROOF forces it, never when a closed value computes) is exactly what a kernel-level Acc test is insurance against.
+- 2026-07-26: Item 10 (tier 2 / Acc by hand) DONE, closing [[stress-proof-suite]] -- docs/acc-via-w.md, crates/kernel/tests/acc.rs, 13 tests, workspace at 434. It did what the item was insurance for: elim_W's synthesized-under-a-lambda ih fires at an abstract position, with the recursor equation wfrec(a; intro(a;h)) == st a (lam b r. wfrec(b; h b r)) holding DEFINITIONALLY at open a, h and st, plus closed computation through a node of infinite arity and three negative controls (mis-indexed children rejected, wrong values inconvertible, stuck at a variable accessibility proof). The ih-annotation hazard the previous round flagged for whoever picked this up did NOT recur -- the analogous hazard here is the ih SPINE (position argument first), and it fails loudly rather than silently. Two standing claims corrected, both logged on their own issues: tier 2 needs no funext for the recursion direction ([[kernel-v1-extensions]]), and [[empty-eta-conversion]] has lost the customer it was filed with. All ten roadmap items are now done; next focus is [[ir-simulate-design]] reopening in-language, which the suite's own acceptance clause pointed at.

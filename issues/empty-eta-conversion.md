@@ -58,3 +58,7 @@ mirror image.
 4. The property suite reaches `Empty` through the generators already, so
    `conv_properties` and `ch05_06_lemmas` cover it for free once the arm
    exists.
+
+## Log
+
+- 2026-07-26: The named customer does not want it. This issue records tier-2 Acc under W as 'the concrete customer' for Empty-eta, from route A's negative test where a refl in the leaf arm is rejected. Acc is now built (docs/acc-via-w.md, crates/kernel/tests/acc.rs) and needs it nowhere: Psi is empty, and the leaf arms -- the positions under a numeral, where R reduces to Empty -- are discharged by elim_Empty because they are children functions being BUILT, not two children functions being COMPARED. Comparison is what route A's leaf arm was doing and what needs funext/Empty-eta; the fording's Acc never states an equation between trees. So the issue keeps its case (proof irrelevance at Empty is still the mirror of Unit's, still owes a ch. 07 clause, and is still right) but loses its customer: nothing open now wants it. The customer it would have is the direction Acc does not need -- proving Acc(a) a proposition, i.e. that wfrec is independent of the accessibility proof supplied. Re-file that as the motivating case if this is picked up.
