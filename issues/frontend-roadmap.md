@@ -41,9 +41,51 @@ Design record: [[surface-syntax]] (decisions) + docs/sketches/surface-v0..3
     test of the synthesized-ih β rule, not frontend progress, since `Acc` is
     not stateable at the surface (function-typed field). docs/acc-via-w.md.
 
-**Next: [[ir-simulate-design]], reopened in-language** — the focus order
-above is complete, and that is what [[stress-proof-suite]] said passing the
-suite would unlock.
+Rounds 1–10 are done. [[stress-proof-suite]] said passing the suite would
+unlock [[ir-simulate-design]] in-language; **that is deliberately not next**
+(see "Round two" below and the 2026-07-26 log entry).
+
+## Round two: language features, not elaborator features
+
+The organizing principle, agreed 2026-07-26: **fewer special features in the
+elaborator, more fundamental features in the language.** Round one bought a
+usable surface, but several of its capabilities are elaborator machinery
+wearing a syntax — generics are a substitution table consulted while lowering
+one declaration, `Vec` is a built-in type former with no eliminator, motives
+have their own binder syntax, implicitness is a side table keyed by
+declaration name. Each of those is a thing the language could simply *have*.
+The IR sits behind them, not the other way round: a typed IR written against
+magic inherits the magic.
+
+11. **[[surface-polymorphism]] + [[implicit-binders-in-function-types]]**,
+    as one round. You cannot write `map`. Biggest expressiveness gap by a
+    distance, and the kernel already has what it needs (`Π(A : Ty 0)` + `El`,
+    all v0) — so, like round 8, no trusted-base change and no ch. 07
+    obligation. Shrinks 12, 13 and 15.
+12. **[[surface-records]]** — named-field Σ sugar, then the trait layer
+    ([[compile-typeclass-design]]) on top. An algebraic structure and a
+    `Compile` instance are both records of generic functions, so this wants
+    11 first.
+13. **[[motives-as-lambdas]]** — small; `match … as x -> M` and
+    `j(p, (y,q) -> M, case)` become ordinary λs, and `->` stops meaning two
+    things. Sets up `j`/`refl`/`cong` becoming declarations rather than
+    syntax once 11 lands.
+14. **[[indexed-families]]** — retires built-in `TyKind::Vec`/`VecLit` in
+    favour of a declared family, and resolves the standing
+    indexed-`W`-vs-`Wf` contradiction the roadmap flagged as needing an
+    answer *before* a typed IR is designed.
+15. Then [[ir-simulate-design]] in-language, with [[datarepr-separation]] and
+    [[end-to-end-compile-instance]] behind it.
+
+Direction, not scheduled: [[generators-in-the-language]] — the derived
+artifacts (recursors, no-confusion, the tier lowerings) are Rust that emits
+kernel terms, and the thesis says they belong in the meta layer. Wants 11 and
+12 first, and an expressiveness reading of ch. 07 before it can be planned.
+
+Cheap and separable, pick up any time: [[cli-check-diagnostics]] (there is
+still no way to check a file outside a Rust test), the postponement slice of
+[[elab-unifier-completeness]], [[annotated-let-swallows-the-equals]],
+[[warn-bare-eq-no-effect]].
 
 Later, tracked where linked: implicit quotation + modal surface
 ([[surface-syntax]] round 2), context-specific compilation / certified PE
@@ -70,3 +112,4 @@ goal-solver meta-functions (sketch round 3 §2).
 - 2026-07-26: Item 9 [[nested-inductives-container-fields]] phase 3 DESIGNED (docs/container-proofs.md); implementation is the next code round. It needs no kernel change and no metatheory pass — one elim_Nat schema and a typing rule — so it stays a pure surface+elaborator round like item 8. Recorded there because it revises a standing assumption: an 'All' predicate over a vector is definable in this kernel (codes + El give large elimination at Prog layer), so the reason the design does not use it is that the SURFACE cannot eliminate a vector, which puts 'All' behind the deferred Fin/indexing layer rather than behind any kernel work. Focus order otherwise unchanged: phase 3 code, then item 10 Acc.
 - 2026-07-26: Item 9 [[nested-inductives-container-fields]] phase 3 LANDED (docs/container-proofs.md, crates/elab/tests/container_proofs.rs, workspace at 421): 'size(r) = size_plus(r)' over Rose is the first theorem here proved by induction over a container. One new elim_Nat schema (tab_cong) and one typing rule; no kernel change and no metatheory pass, as predicted. Container fields are now complete through the phases that were scoped: Rose declares, computes, and proves. Two live shift bugs fell out, one of them phase 2's and invisible to every test it shipped with, both recorded in docs/container-proofs.md §10. Next focus: item 10 — tier 2 / Acc by hand ([[stress-proof-suite]] item 3), the synthesized-ih beta rule; then [[ir-simulate-design]] reopens in-language. Note for whoever picks up Acc: the ih-annotation class of bug found this round (an annotation only compared when a PROOF forces it, never when a closed value computes) is exactly what a kernel-level Acc test is insurance against.
 - 2026-07-26: Item 10 (tier 2 / Acc by hand) DONE, closing [[stress-proof-suite]] -- docs/acc-via-w.md, crates/kernel/tests/acc.rs, 13 tests, workspace at 434. It did what the item was insurance for: elim_W's synthesized-under-a-lambda ih fires at an abstract position, with the recursor equation wfrec(a; intro(a;h)) == st a (lam b r. wfrec(b; h b r)) holding DEFINITIONALLY at open a, h and st, plus closed computation through a node of infinite arity and three negative controls (mis-indexed children rejected, wrong values inconvertible, stuck at a variable accessibility proof). The ih-annotation hazard the previous round flagged for whoever picked this up did NOT recur -- the analogous hazard here is the ih SPINE (position argument first), and it fails loudly rather than silently. Two standing claims corrected, both logged on their own issues: tier 2 needs no funext for the recursion direction ([[kernel-v1-extensions]]), and [[empty-eta-conversion]] has lost the customer it was filed with. All ten roadmap items are now done; next focus is [[ir-simulate-design]] reopening in-language, which the suite's own acceptance clause pointed at.
+- 2026-07-26: Round two set, and the IR deliberately deprioritized. The suite's closing line has been pointing at [[ir-simulate-design]] for three rounds; on review it is not the Next Immediate Thing, because several round-one capabilities are elaborator machinery wearing a syntax and a typed IR written against them would inherit them. Organizing principle for round two, in the user's words: fewer Special Features in the elaborator, more fundamental features in the language. New order: 11 [[surface-polymorphism]] + [[implicit-binders-in-function-types]] together (you cannot write 'fn map<A,B>' -- Decl has no type parameters at all, and an inductive's parameters are MONOMORPHIZED so List<A> is a macro, not a type-level function; the kernel has had Pi(A : Ty 0) + El since v0, so it is a pure surface+elaborator round like function types); 12 [[surface-records]] then the trait layer; 13 [[motives-as-lambdas]] (small; also un-overloads '->'); 14 [[indexed-families]] (retires built-in TyKind::Vec/VecLit and settles the indexed-W-vs-Wf contradiction this issue flagged as needing an answer before a typed IR is designed); 15 the IR. Filed as direction rather than scheduled: [[generators-in-the-language]] -- the recursors, no-confusion and tier lowerings are Rust emitting kernel terms, and the thesis says they belong in the meta layer; wants 11 and 12 plus an expressiveness read of ch. 07 first. Not filed as new work, because they already have issues: the cheap separable items (cli-check-diagnostics, unifier postponement, the two parser/diagnostic bugs).

@@ -68,3 +68,4 @@ in the abstract.
 ## Log
 
 - 2026-07-26: Filed out of container-fields phase 3 ([[nested-inductives-container-fields]]). Not blocking that round: phase 3's acceptance never mixes the two spellings, and the failing probe was an artefact of writing endpoints explicitly rather than a limit of the lifting.
+- 2026-07-26: Its stated blocker now has an issue: 'the surface cannot state it -- that needs a recursion on a length, and there is no polymorphism below layer m' is [[surface-polymorphism]], roadmap item 11. The bridging theorem is a generic statement over the element type, so it becomes writable (as a theorem, not a fourth schema) once type parameters exist on fn/theorem. Worth re-testing this issue's witness right after that round rather than treating the design options here as settled.
