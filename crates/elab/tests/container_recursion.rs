@@ -157,7 +157,11 @@ fn rejections() {
     ));
     assert!(m.contains("container field bound by the enclosing"), "{m}");
 
-    // §4.3: a *dependent* result is phase 3
+    // §4.3's boundary, as it stands after phase 3 landed: a *dependent* motive
+    // is no longer refused outright — if it is an equation, the self-call over
+    // a container proves the two children vectors equal — but it is no longer
+    // `map` either, because the result is a proof and not data. The supported
+    // spelling and its acceptance live in `container_proofs.rs`.
     let m = elab_err(&format!(
         "{d}
          theorem refl_all(r: Rose): r = r {{
@@ -166,8 +170,7 @@ fn rejections() {
              }}
          }}"
     ));
-    assert!(m.contains("independent of its argument"), "{m}");
-    assert!(m.contains("§4.3"), "{m}");
+    assert!(m.contains("write `.cong(refl_all)`"), "{m}");
 
     // map's receiver has to be a vector
     let m = elab_err("fn f(n: Nat) -> Nat { n.map(λ (x: Nat) => x) }");

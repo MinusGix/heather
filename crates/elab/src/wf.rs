@@ -574,13 +574,49 @@ impl Elaborator {
                         // a container maps to a *vector* of results, which
                         // only types when the result is independent of the
                         // child (§4.3).
+                        let result = crate::vec::strengthen(&tel.motive, tel.gamma0)
+                            .map(|t| t.shift_local(d_body));
+                        // Phase 3 (docs/container-proofs.md §5): a dependent
+                        // motive that is an equation at a `z`-independent type
+                        // still relates the children pointwise. The endpoints
+                        // are wrapped as `λ(z : ⟦D⟧). …` so the call site can
+                        // shift them like any other term.
+                        let eq = match (&result, &*tel.motive) {
+                            (None, Type::Id { level, ty, lhs, rhs }) => {
+                                crate::vec::strengthen(ty, tel.gamma0).map(|a| {
+                                    let sigma = crate::embed(tel.gamma0, d_body + 1)
+                                        .extended(Rc::new(Term::Var(LocalVar(0))));
+                                    let lam = |t: &Rc<Term>| {
+                                        Rc::new(Term::Lam {
+                                            dom_level: tel.level.clone(),
+                                            cod_level: level.clone(),
+                                            dom: Rc::clone(&d_ty_here),
+                                            body: Rc::new(t.apply_local(&sigma)),
+                                        })
+                                    };
+                                    crate::EqSplit {
+                                        level: level.clone(),
+                                        ty: a.shift_local(d_body),
+                                        lhs: lam(lhs),
+                                        rhs: lam(rhs),
+                                    }
+                                })
+                            }
+                            _ => None,
+                        };
                         container_ih = Some(crate::ContainerIh {
                             term,
                             len: tail_len,
                             ih: Rc::new(Term::Var(LocalVar(0))),
                             plain: m,
-                            result: crate::vec::strengthen(&tel.motive, tel.gamma0)
-                                .map(|t| t.shift_local(d_body)),
+                            result,
+                            eq,
+                            // `ih_dom` is scoped where `#ih` is *pushed*, one
+                            // binder before the body: `tel.at` builds it at
+                            // `d + 1` and the body sits at `d + 2`.
+                            ih_ty: ih_dom.shift_local(1),
+                            elem: (*d_ty_here).clone(),
+                            level: tel.level.clone(),
                             mlvl: tel.mlvl.clone(),
                         });
                         continue;
@@ -592,11 +628,17 @@ impl Elaborator {
                         // `M[nth(…; i)/z]` one binder deeper, and
                         // instantiating it at `ι_t` gives `M[child/z]` —
                         // which is the child term verbatim.
+                        // Everything inside `cod` sits one binder deeper (the
+                        // eliminator's `i`), *including the length* — which is
+                        // a closed literal without a container and a projection
+                        // out of the label with one, so a missing shift here is
+                        // invisible until a container constructor carries a
+                        // plain child through a proof.
                         let cod = tel.motive.apply_local(
                             &embed(tel.gamma0, d_body + 1).extended(Rc::new(nth(
                                 &tel.level,
                                 &Rc::new(tel.d_ty.shift_local(d_body + 1)),
-                                &len,
+                                &Rc::new(len.shift_local(1)),
                                 Rc::new(Term::Var(LocalVar(2))),
                                 Rc::new(Term::Var(LocalVar(0))),
                             ))),

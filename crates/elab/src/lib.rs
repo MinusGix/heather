@@ -32,7 +32,7 @@ use heather_kernel::level::Level;
 use heather_kernel::reduce::{whnf_term, whnf_type};
 use heather_kernel::subst::{GlobalEntry, GlobalSubst};
 use heather_kernel::term::{
-    CtxBase, CtxEntry, GlobalBinding, GlobalCtx, GlobalVar, LocalCtx, LocalSubst, LocalVar,
+    nth, CtxBase, CtxEntry, GlobalBinding, GlobalCtx, GlobalVar, LocalCtx, LocalSubst, LocalVar,
     SubstTail, Term, Type,
 };
 use heather_kernel::typing::{self, TypeError, DEFAULT_FUEL};
@@ -908,6 +908,23 @@ impl Elaborator {
                     };
                     return self.elab_vec_map(cx, f, xs, e.span);
                 }
+                // `xs.cong(self)` — the phase-3 lifting
+                // (docs/container-proofs.md §6). Recognized by its *self-name*
+                // argument rather than by the name `cong`, so a user-defined
+                // `cong` theorem still resolves for the ordinary `p.cong(f)`:
+                // the self-name is not a value, so it can never be an argument
+                // to one (issues/match-recursion.md).
+                if name == "cong"
+                    && let [f, xs] = args.as_slice()
+                    && let ExprKind::Var(f_name) = &f.kind
+                    && cx.selfref.as_ref().is_some_and(|s| s.name == *f_name)
+                {
+                    let (xs_t, xs_ty, _) = self.elab_infer(cx, xs)?;
+                    if !matches!(xs_ty, Type::Vec { .. }) {
+                        return err("`cong`'s receiver has to be a vector", e.span);
+                    }
+                    return self.elab_container_ih(cx, f_name, &xs_t, true, e.span);
+                }
                 if name == "fold" && !self.shadowed(cx, name) {
                     let [z, f, xs] = args.as_slice() else {
                         return err("`fold` takes `(init, f)` on a vector receiver", e.span);
@@ -1468,7 +1485,7 @@ impl Elaborator {
         if let ExprKind::Var(name) = &f.kind
             && cx.selfref.as_ref().is_some_and(|s| s.name == *name)
         {
-            return self.elab_container_ih(cx, name, &xs_t, span);
+            return self.elab_container_ih(cx, name, &xs_t, false, span);
         }
         let (f_t, f_ty, _) = self.elab_infer(cx, f)?;
         let Type::Pi { cod_level: bl, dom, cod, .. } = self.whnf(cx, &f_ty, span)? else {
@@ -1538,6 +1555,7 @@ impl Elaborator {
         cx: &Cx,
         name: &str,
         xs: &Term,
+        as_eq: bool,
         span: Span,
     ) -> R<(Term, Type, Level)> {
         let Some(g) = cx.guard.clone() else {
@@ -1565,21 +1583,45 @@ impl Elaborator {
                 span,
             );
         }
-        let Some(result) = &c.result else {
+        // The two spellings are not interchangeable: `.map` produces data and
+        // `.cong` produces a proof, so each is rejected where the other belongs
+        // (docs/container-proofs.md §6).
+        if as_eq && c.result.is_some() {
             return err(
                 format!(
-                    "recursing over a container field needs `{name}`'s result type to be \
-                     independent of its argument; a dependent one (a proof *about* the \
-                     value) is not supported yet (docs/container-fields.md §4.3)"
+                    "`{name}`'s result type does not depend on its argument, so a                      recursive call over a container produces a vector of results,                      not an equation between two: write `.map({name})`"
                 ),
                 span,
             );
-        };
-        let (result, len) = (result.shift_local(by), c.len.shift_local(by));
-        let ih = c.ih.shift_local(by);
+        }
+        if !as_eq && c.eq.is_some() {
+            return err(
+                format!(
+                    "`{name}` proves an equation, so a recursive call over a container                      proves the two children vectors equal rather than producing one:                      write `.cong({name})` (docs/container-proofs.md §6)"
+                ),
+                span,
+            );
+        }
+        if c.result.is_none() && c.eq.is_none() {
+            return err(
+                format!(
+                    "recursing over a container field needs `{name}`'s result type to be \
+                     independent of its argument, or else an equation `a = b` at a type \
+                     that is (docs/container-proofs.md §7); a dependent result of any \
+                     other shape is not supported yet"
+                ),
+                span,
+            );
+        }
+        let len = c.len.shift_local(by);
         let len_rc = Rc::new(len.clone());
-        // λ(i : Fin len). ih (inr^m i) — one binder deeper than everything
-        // above, hence the shifts.
+        let elem = c.elem.shift_local(by);
+        let ih = c.ih.shift_local(by);
+        // `h = λ(i : Fin len). ih (inr^m i)` — the index map, shared by both
+        // phases: the ih is indexed by `Fin (Succ^m len)`, so the container's
+        // own indices start at `m` (docs/container-fields.md §10.3). The
+        // application is annotated with the ih's *own* Π type rather than a
+        // rebuilt one, since phase 3's codomain is dependent.
         let unit = || Rc::new(Type::Unit { level: Level::Zero });
         let mut idx = Term::Var(LocalVar(0));
         for j in 0..c.plain {
@@ -1595,11 +1637,10 @@ impl Elaborator {
                 val: Rc::new(idx),
             };
         }
-        let mut full = len.shift_local(1);
-        for _ in 0..c.plain {
-            full = Term::Succ(Rc::new(full));
-        }
-        let f = Term::Lam {
+        let Type::Pi { dom: ih_dom, cod: ih_cod, .. } = c.ih_ty.shift_local(by + 1) else {
+            unreachable!("a `Wf` arm's ih is a Π over its index")
+        };
+        let h = Term::Lam {
             dom_level: Level::Zero,
             cod_level: c.mlvl.clone(),
             dom: Rc::new(Type::Fin { len: Rc::clone(&len_rc) }),
@@ -1607,19 +1648,72 @@ impl Elaborator {
                 fun: Rc::new(ih.shift_local(1)),
                 dom_level: Level::Zero,
                 cod_level: c.mlvl.clone(),
-                dom: Rc::new(Type::Fin { len: Rc::new(full) }),
-                cod: Rc::new(result.shift_local(2)),
+                dom: ih_dom,
+                cod: ih_cod,
                 arg: Rc::new(idx),
             }),
         };
+        // Phase 2: an independent motive tabulates into a vector of results.
+        if let Some(result) = &c.result {
+            let result = result.shift_local(by);
+            return Ok((
+                vec::tabulate(&c.mlvl, &result, &len_rc, Rc::new(h)),
+                Type::Vec {
+                    level: c.mlvl.clone(),
+                    elem: Rc::new(result),
+                    len: len_rc,
+                },
+                c.mlvl.clone(),
+            ));
+        }
+        // Phase 3: an equational motive proves the two children *vectors* equal
+        // (docs/container-proofs.md §5). `f'`/`g'` are the endpoint functions
+        // applied at each index; `h` proves them pointwise equal, verbatim.
+        let e = c.eq.as_ref().expect("checked above");
+        let (a_ty, kids) = (e.ty.shift_local(by), c.term.shift_local(by));
+        let side = |f: &Rc<Term>| {
+            let child = nth(
+                &c.level,
+                &Rc::new(elem.shift_local(1)),
+                &Rc::new(len.shift_local(1)),
+                Rc::new(kids.shift_local(1)),
+                Rc::new(Term::Var(LocalVar(0))),
+            );
+            Rc::new(Term::Lam {
+                dom_level: Level::Zero,
+                cod_level: e.level.clone(),
+                dom: Rc::new(Type::Fin { len: Rc::clone(&len_rc) }),
+                body: Rc::new(Term::App {
+                    fun: Rc::new(f.shift_local(by + 1)),
+                    dom_level: c.level.clone(),
+                    cod_level: e.level.clone(),
+                    dom: Rc::new(elem.shift_local(1)),
+                    cod: Rc::new(a_ty.shift_local(2)),
+                    arg: Rc::new(child),
+                }),
+            })
+        };
+        let (f_side, g_side) = (side(&e.lhs), side(&e.rhs));
         Ok((
-            vec::tabulate(&c.mlvl, &result, &len_rc, Rc::new(f)),
-            Type::Vec {
-                level: c.mlvl.clone(),
-                elem: Rc::new(result),
-                len: len_rc,
+            vec::tab_cong(
+                &e.level,
+                &a_ty,
+                &len_rc,
+                Rc::clone(&f_side),
+                Rc::clone(&g_side),
+                Rc::new(h),
+            ),
+            Type::Id {
+                level: e.level.clone(),
+                ty: Rc::new(Type::Vec {
+                    level: e.level.clone(),
+                    elem: Rc::new(a_ty.clone()),
+                    len: Rc::clone(&len_rc),
+                }),
+                lhs: Rc::new(vec::tabulate(&e.level, &a_ty, &len_rc, f_side)),
+                rhs: Rc::new(vec::tabulate(&e.level, &a_ty, &len_rc, g_side)),
             },
-            c.mlvl.clone(),
+            e.level.clone(),
         ))
     }
 
@@ -2067,12 +2161,44 @@ struct ContainerIh {
     /// `m`: how many plain children precede the container, and so how far the
     /// container's indices are offset inside `Fin (Succ^m len)`.
     plain: usize,
-    /// The motive, *strengthened* — a self-call over a container is phase 2,
-    /// which requires a motive independent of the scrutinee
-    /// (`docs/container-fields.md` §4.3). `None` when it depends, so the call
-    /// is diagnosed rather than mis-elaborated.
+    /// The motive, *strengthened* — a self-call over a container maps to a
+    /// `Vec` of results, which requires a motive independent of the scrutinee
+    /// (`docs/container-fields.md` §4.3). `None` when it depends, in which case
+    /// [`ContainerIh::eq`] decides whether this is phase 3 or a diagnostic.
     result: Option<Type>,
+    /// The motive read as an **equation**, when it is one — phase 3
+    /// (`docs/container-proofs.md` §5). Set only when `result` is `None`: a
+    /// dependent motive `Id^l(A; lhs(z); rhs(z))` whose *type* `A` does not
+    /// mention `z` still relates the two children vectors pointwise, which is
+    /// what `vec::tab_cong` turns into an equation between them.
+    eq: Option<EqSplit>,
+    /// The ih's own Π type, so a call site annotates its application with the
+    /// codomain the eliminator actually gave rather than rebuilding it — the
+    /// rebuild is only correct for a strengthened motive, and phase 3's is not.
+    ih_ty: Type,
+    /// `⟦D⟧`, the container's element type, for `nth` at the call site.
+    elem: Type,
+    /// `l`: the declaration's level, which is `⟦D⟧`'s. Not `mlvl`, which is the
+    /// motive's — `nth` and the endpoint applications need this one.
+    level: Level,
     mlvl: Level,
+}
+
+/// A dependent motive that is an equation, split into its two endpoints
+/// (`docs/container-proofs.md` §5).
+#[derive(Clone)]
+struct EqSplit {
+    /// The level `Id^l` is at, which is `A`'s.
+    level: Level,
+    /// `A`, the type the equation is at — strengthened, so it may not mention
+    /// the scrutinee. A heterogeneous motive is out of scope and diagnosed
+    /// (`issues/dependent-field-injectivity.md` holds the transport question).
+    ty: Type,
+    /// `λ(z : ⟦D⟧). lhs` and `λ(z : ⟦D⟧). rhs`. Kept as *functions* rather than
+    /// as open terms so that a call site can shift them like any other term and
+    /// apply them to a child; the β-redex this leaves is what conversion is for.
+    lhs: Rc<Term>,
+    rhs: Rc<Term>,
 }
 
 /// Elaboration context: kernel Γ plus the parallel name list

@@ -271,12 +271,15 @@ pub(crate) fn tabulate(
 ) -> Term {
     let unit = || Rc::new(Type::Unit { level: Level::Zero });
     let fin = |k: Rc<Term>| Rc::new(Type::Fin { len: k });
-    // `Π(i : Fin k̂). B`, with `B` shifted by `d` (it does not depend on `i`).
+    // `Π(i : Fin k̂). B` at ambient depth `d`. `B` does not depend on `i`, but
+    // it is *scoped under* the `Fin` binder, so it shifts by `d + 1` and not by
+    // `d` — the domain, which is not under it, takes `d`. Getting this wrong is
+    // invisible at a closed `B` (`tabulate_at_an_open_element_type`).
     let idx_fun = |d: u32, k: Rc<Term>| Type::Pi {
         dom_level: Level::Zero,
         cod_level: bl.clone(),
         dom: fin(k),
-        cod: Rc::new(b_ty.shift_local(d)),
+        cod: Rc::new(b_ty.shift_local(d + 1)),
     };
     // Motive in (Γ, k̂): Π(f : Π(i : Fin k̂). B). Vec(B; k̂).
     let motive = Type::Pi {
@@ -366,6 +369,413 @@ pub(crate) fn tabulate(
         dom: Rc::new(idx_fun(0, Rc::clone(len))),
         cod: Rc::new(vec(bl, b_ty, 1, Rc::new(len.shift_local(1)))),
         arg: f,
+    }
+}
+
+// -- `tab_cong` and its pieces (docs/container-proofs.md §4) ----------------
+//
+// The phase-3 schema needs four type formers repeated at half a dozen depths,
+// and its motive quantifies over *three* arguments, so the pieces are written
+// as functions rather than closures. Every one takes the ambient depth `d` and
+// terms already scoped at that depth; a piece scoped under its own binder
+// shifts what it was given by one, and says so.
+
+/// `Π(i : Fin k). A` at depth `d`. `A` is under the binder, hence `d + 1`.
+fn idx_fun(al: &Level, a_ty: &Type, d: u32, k: Rc<Term>) -> Type {
+    Type::Pi {
+        dom_level: Level::Zero,
+        cod_level: al.clone(),
+        dom: Rc::new(Type::Fin { len: k }),
+        cod: Rc::new(a_ty.shift_local(d + 1)),
+    }
+}
+
+/// `fv i` for `fv : Π(i : Fin k). A`, everything at depth `d`.
+fn idx_app(
+    al: &Level,
+    a_ty: &Type,
+    d: u32,
+    k: Rc<Term>,
+    fv: Rc<Term>,
+    i: Rc<Term>,
+) -> Term {
+    Term::App {
+        fun: fv,
+        dom_level: Level::Zero,
+        cod_level: al.clone(),
+        dom: Rc::new(Type::Fin { len: k }),
+        cod: Rc::new(a_ty.shift_local(d + 1)),
+        arg: i,
+    }
+}
+
+/// `Id^l(A; fv i; gv i)` **under** the `i` binder, for `k`/`fv`/`gv` at `d`.
+fn pw_cod(al: &Level, a_ty: &Type, d: u32, k: &Rc<Term>, fv: &Rc<Term>, gv: &Rc<Term>) -> Type {
+    let k1 = Rc::new(k.shift_local(1));
+    Type::Id {
+        level: al.clone(),
+        ty: Rc::new(a_ty.shift_local(d + 1)),
+        lhs: Rc::new(idx_app(
+            al, a_ty, d + 1, Rc::clone(&k1), Rc::new(fv.shift_local(1)), var(0),
+        )),
+        rhs: Rc::new(idx_app(al, a_ty, d + 1, k1, Rc::new(gv.shift_local(1)), var(0))),
+    }
+}
+
+/// `Π(i : Fin k). Id^l(A; fv i; gv i)` at depth `d` — the pointwise hypothesis.
+fn pointwise(al: &Level, a_ty: &Type, d: u32, k: &Rc<Term>, fv: &Rc<Term>, gv: &Rc<Term>) -> Type {
+    Type::Pi {
+        dom_level: Level::Zero,
+        cod_level: al.clone(),
+        dom: Rc::new(Type::Fin { len: Rc::clone(k) }),
+        cod: Rc::new(pw_cod(al, a_ty, d, k, fv, gv)),
+    }
+}
+
+/// `Id^l(Vec(A; k); tabulate(k; fv); tabulate(k; gv))` at depth `d`.
+fn concl(al: &Level, a_ty: &Type, d: u32, k: &Rc<Term>, fv: Rc<Term>, gv: Rc<Term>) -> Type {
+    let a = a_ty.shift_local(d);
+    Type::Id {
+        level: al.clone(),
+        ty: Rc::new(Type::Vec {
+            level: al.clone(),
+            elem: Rc::new(a.clone()),
+            len: Rc::clone(k),
+        }),
+        lhs: Rc::new(tabulate(al, &a, k, fv)),
+        rhs: Rc::new(tabulate(al, &a, k, gv)),
+    }
+}
+
+/// `Π(h : pointwise). concl` at depth `d`.
+fn m_from_h(al: &Level, a_ty: &Type, d: u32, k: &Rc<Term>, fv: &Rc<Term>, gv: &Rc<Term>) -> Type {
+    let k1 = Rc::new(k.shift_local(1));
+    Type::Pi {
+        dom_level: al.clone(),
+        cod_level: al.clone(),
+        dom: Rc::new(pointwise(al, a_ty, d, k, fv, gv)),
+        cod: Rc::new(concl(
+            al, a_ty, d + 1, &k1,
+            Rc::new(fv.shift_local(1)),
+            Rc::new(gv.shift_local(1)),
+        )),
+    }
+}
+
+/// `Π(g : Fin k → A). Π(h : …). concl` at depth `d`, for a *given* `fv`.
+fn m_from_g(al: &Level, a_ty: &Type, d: u32, k: &Rc<Term>, fv: &Rc<Term>) -> Type {
+    let k1 = Rc::new(k.shift_local(1));
+    Type::Pi {
+        dom_level: al.clone(),
+        cod_level: al.clone(),
+        dom: Rc::new(idx_fun(al, a_ty, d, Rc::clone(k))),
+        cod: Rc::new(m_from_h(
+            al, a_ty, d + 1, &k1, &Rc::new(fv.shift_local(1)), &var(0),
+        )),
+    }
+}
+
+/// The motive body `Π(f). Π(g). Π(h). concl` at depth `d` and length `k`.
+fn m_from_f(al: &Level, a_ty: &Type, d: u32, k: &Rc<Term>) -> Type {
+    let k1 = Rc::new(k.shift_local(1));
+    Type::Pi {
+        dom_level: al.clone(),
+        cod_level: al.clone(),
+        dom: Rc::new(idx_fun(al, a_ty, d, Rc::clone(k))),
+        cod: Rc::new(m_from_g(al, a_ty, d + 1, &k1, &var(0))),
+    }
+}
+
+/// `tab_cong^l(A; k; f; g; h) : Id^l(Vec(A; k); tabulate(k; f); tabulate(k; g))`
+/// for `f, g : Π(i : Fin k). A` and `h : Π(i : Fin k). Id^l(A; f i; g i)`.
+///
+/// **The phase-3 schema** (`docs/container-proofs.md` §4): pointwise equality
+/// of two index functions gives equality of the vectors they tabulate to. It is
+/// what a self-call over a container proves when the motive is an equation, and
+/// the reason phase 3 needs no `All` predicate and no new kernel machinery.
+///
+/// An `elim_Nat` on the length like every schema here, but with a motive that
+/// quantifies over `f`, `g` and `h` — it has to, because the recursion feeds
+/// itself the *shifted* index functions `λj. f (inr j)`.
+///
+/// ```text
+/// k = 0:   both sides are ⟨⟩ : Vec(A; 0) ⇝ Unit, so Unit-η closes it: refl.
+/// k = S k: tabulate(S k; f) ⇝ (f ι₀, tabulate(k; λj. f (inr j))), and
+///          Vec(A; S k) ⇝ Σ(_ : A). Vec(A; k) is *non-dependent*, so the two
+///          components move under two `J`s and no transitivity lemma.
+/// ```
+pub(crate) fn tab_cong(
+    al: &Level,
+    a_ty: &Type,
+    len: &Rc<Term>,
+    f: Rc<Term>,
+    g: Rc<Term>,
+    h: Rc<Term>,
+) -> Term {
+    let unit = || Rc::new(Type::Unit { level: Level::Zero });
+    let fin = |k: Rc<Term>| Rc::new(Type::Fin { len: k });
+    let zero = || Rc::new(Term::Zero);
+
+    // Motive in (Γ, k̂): Π(f). Π(g). Π(h). Id(Vec(A; k̂); tab(k̂; f); tab(k̂; g)).
+    let motive = m_from_f(al, a_ty, 1, &var(0));
+
+    // Base in Γ, at k̂ = 0: λf. λg. λh. refl. The two tabulates are `⟨⟩` at
+    // `Vec(A; 0) ⇝ Unit^l`, and `Unit`'s proof irrelevance makes them
+    // convertible — this is the one place the schema leans on an η rule.
+    let base = {
+        let a3 = a_ty.shift_local(3);
+        let body = Term::Refl {
+            level: al.clone(),
+            ty: Rc::new(Type::Vec {
+                level: al.clone(),
+                elem: Rc::new(a3.clone()),
+                len: zero(),
+            }),
+            tm: Rc::new(tabulate(al, &a3, &zero(), var(2))),
+        };
+        Term::Lam {
+            dom_level: al.clone(),
+            cod_level: al.clone(),
+            dom: Rc::new(idx_fun(al, a_ty, 0, zero())),
+            body: Rc::new(Term::Lam {
+                dom_level: al.clone(),
+                cod_level: al.clone(),
+                dom: Rc::new(idx_fun(al, a_ty, 1, zero())),
+                body: Rc::new(Term::Lam {
+                    dom_level: al.clone(),
+                    cod_level: al.clone(),
+                    dom: Rc::new(pointwise(al, a_ty, 2, &zero(), &var(1), &var(0))),
+                    body: Rc::new(body),
+                }),
+            }),
+        }
+    };
+
+    // Step in (Γ, k̂=1, r=0), proving M(S k̂); under its own three λs the
+    // context is (Γ, k̂=4, r=3, f=2, g=1, h=0), i.e. depth 5.
+    let step = {
+        let k = var(4);
+        let sk = Rc::new(Term::Succ(var(4)));
+        let a5 = a_ty.shift_local(5);
+        // ι₀ : Fin (S k̂), and the tail index maps `λj. f (inr j)`.
+        let zero_idx = Rc::new(Term::Inl {
+            lhs_level: Level::Zero,
+            rhs_level: Level::Zero,
+            lhs: unit(),
+            rhs: fin(Rc::clone(&k)),
+            val: Rc::new(Term::Triv { level: Level::Zero }),
+        });
+        // One binder deeper: (Γ, k̂=5, r=4, f=3, g=2, h=1, j=0).
+        let inr_j = Rc::new(Term::Inr {
+            lhs_level: Level::Zero,
+            rhs_level: Level::Zero,
+            lhs: unit(),
+            rhs: fin(var(5)),
+            val: var(0),
+        });
+        let sk6 = Rc::new(Term::Succ(var(5)));
+        let shifted = |fv: Rc<Term>| {
+            Rc::new(Term::Lam {
+                dom_level: Level::Zero,
+                cod_level: al.clone(),
+                dom: fin(Rc::clone(&k)),
+                body: Rc::new(idx_app(
+                    al, a_ty, 6, Rc::clone(&sk6), fv, Rc::clone(&inr_j),
+                )),
+            })
+        };
+        let (f_tl, g_tl) = (shifted(var(3)), shifted(var(2)));
+        // h's tail: λj. h (inr j) : Π(j : Fin k̂). Id(A; f_tl j; g_tl j) — the
+        // annotation is `pointwise` at the *unshifted* f and g, which is what
+        // the App's codomain is before the argument is substituted.
+        let h_tl = Rc::new(Term::Lam {
+            dom_level: Level::Zero,
+            cod_level: al.clone(),
+            dom: fin(Rc::clone(&k)),
+            body: Rc::new(Term::App {
+                fun: var(1),
+                dom_level: Level::Zero,
+                cod_level: al.clone(),
+                dom: fin(Rc::clone(&sk6)),
+                cod: Rc::new(pw_cod(al, a_ty, 6, &sk6, &var(3), &var(2))),
+                arg: inr_j,
+            }),
+        });
+        // The two heads and the two tails.
+        let head_f =
+            Rc::new(idx_app(al, a_ty, 5, Rc::clone(&sk), var(2), Rc::clone(&zero_idx)));
+        let head_g =
+            Rc::new(idx_app(al, a_ty, 5, Rc::clone(&sk), var(1), Rc::clone(&zero_idx)));
+        let tail_f = Rc::new(tabulate(al, &a5, &k, Rc::clone(&f_tl)));
+        let tail_g = Rc::new(tabulate(al, &a5, &k, Rc::clone(&g_tl)));
+        // p : Id(A; f ι₀; g ι₀), from the hypothesis at index 0.
+        let p = Rc::new(Term::App {
+            fun: var(0),
+            dom_level: Level::Zero,
+            cod_level: al.clone(),
+            dom: fin(Rc::clone(&sk)),
+            cod: Rc::new(pw_cod(al, a_ty, 5, &sk, &var(2), &var(1))),
+            arg: zero_idx,
+        });
+        // q : Id(Vec(A; k̂); tail_f; tail_g), from the recursive result.
+        let q = {
+            let k1 = Rc::new(k.shift_local(1));
+            let app1 = Term::App {
+                fun: var(3),
+                dom_level: al.clone(),
+                cod_level: al.clone(),
+                dom: Rc::new(idx_fun(al, a_ty, 5, Rc::clone(&k))),
+                cod: Rc::new(m_from_g(al, a_ty, 6, &k1, &var(0))),
+                arg: Rc::clone(&f_tl),
+            };
+            let app2 = Term::App {
+                fun: Rc::new(app1),
+                dom_level: al.clone(),
+                cod_level: al.clone(),
+                dom: Rc::new(idx_fun(al, a_ty, 5, Rc::clone(&k))),
+                cod: Rc::new(m_from_h(
+                    al, a_ty, 6, &k1, &Rc::new(f_tl.shift_local(1)), &var(0),
+                )),
+                arg: Rc::clone(&g_tl),
+            };
+            Rc::new(Term::App {
+                fun: Rc::new(app2),
+                dom_level: al.clone(),
+                cod_level: al.clone(),
+                dom: Rc::new(pointwise(al, a_ty, 5, &k, &f_tl, &g_tl)),
+                cod: Rc::new(concl(
+                    al, a_ty, 6, &k1,
+                    Rc::new(f_tl.shift_local(1)),
+                    Rc::new(g_tl.shift_local(1)),
+                )),
+                arg: h_tl,
+            })
+        };
+        // `(x, y) : Vec(A; S k̂)` — the snd type is under the fst binder.
+        let pair = |d: u32, x: Rc<Term>, y: Rc<Term>| {
+            Rc::new(Term::Pair {
+                fst_level: al.clone(),
+                snd_level: al.clone(),
+                fst_ty: Rc::new(a_ty.shift_local(d)),
+                snd_ty: Rc::new(Type::Vec {
+                    level: al.clone(),
+                    elem: Rc::new(a_ty.shift_local(d + 1)),
+                    // k̂ is the outermost of the step's binders, so at depth
+                    // `d` it is `var(d - 1)` — and this is under the pair's
+                    // first component, one deeper.
+                    len: var(d),
+                }),
+                fst: x,
+                snd: y,
+            })
+        };
+        let vec_sk = |d: u32| {
+            Rc::new(Type::Vec {
+                level: al.clone(),
+                elem: Rc::new(a_ty.shift_local(d)),
+                len: Rc::new(Term::Succ(var(d - 1))),
+            })
+        };
+        // e₁ moves the tail: J on q, with the head held fixed.
+        // Motive context (…, y : Vec(A; k̂), _ : Id(…)), i.e. depth 7.
+        let e1 = Rc::new(Term::J {
+            ty_level: al.clone(),
+            motive_level: al.clone(),
+            ty: Rc::new(Type::Vec {
+                level: al.clone(),
+                elem: Rc::new(a5.clone()),
+                len: Rc::clone(&k),
+            }),
+            lhs: Rc::clone(&tail_f),
+            motive: Rc::new(Type::Id {
+                level: al.clone(),
+                ty: vec_sk(7),
+                lhs: pair(7, Rc::new(head_f.shift_local(2)), Rc::new(tail_f.shift_local(2))),
+                rhs: pair(7, Rc::new(head_f.shift_local(2)), var(1)),
+            }),
+            case: Rc::new(Term::Refl {
+                level: al.clone(),
+                ty: vec_sk(5),
+                tm: pair(5, Rc::clone(&head_f), Rc::clone(&tail_f)),
+            }),
+            rhs: Rc::clone(&tail_g),
+            proof: q,
+        });
+        // e₂ moves the head: J on p, with the *new* tail held fixed. Its case
+        // is e₁, which is why no `trans` appears.
+        let e2 = Term::J {
+            ty_level: al.clone(),
+            motive_level: al.clone(),
+            ty: Rc::new(a5.clone()),
+            lhs: Rc::clone(&head_f),
+            motive: Rc::new(Type::Id {
+                level: al.clone(),
+                ty: vec_sk(7),
+                lhs: pair(7, Rc::new(head_f.shift_local(2)), Rc::new(tail_f.shift_local(2))),
+                rhs: pair(7, var(1), Rc::new(tail_g.shift_local(2))),
+            }),
+            case: e1,
+            rhs: head_g,
+            proof: p,
+        };
+        Term::Lam {
+            dom_level: al.clone(),
+            cod_level: al.clone(),
+            dom: Rc::new(idx_fun(al, a_ty, 2, Rc::new(Term::Succ(var(1))))),
+            body: Rc::new(Term::Lam {
+                dom_level: al.clone(),
+                cod_level: al.clone(),
+                dom: Rc::new(idx_fun(al, a_ty, 3, Rc::new(Term::Succ(var(2))))),
+                body: Rc::new(Term::Lam {
+                    dom_level: al.clone(),
+                    cod_level: al.clone(),
+                    dom: Rc::new(pointwise(
+                        al, a_ty, 4,
+                        &Rc::new(Term::Succ(var(3))),
+                        &var(1),
+                        &var(0),
+                    )),
+                    body: Rc::new(e2),
+                }),
+            }),
+        }
+    };
+
+    let elim = Term::ElimNat {
+        level: al.clone(),
+        motive: Rc::new(motive),
+        base: Rc::new(base),
+        step: Rc::new(step),
+        scrut: Rc::clone(len),
+    };
+    let len1 = Rc::new(len.shift_local(1));
+    let app1 = Term::App {
+        fun: Rc::new(elim),
+        dom_level: al.clone(),
+        cod_level: al.clone(),
+        dom: Rc::new(idx_fun(al, a_ty, 0, Rc::clone(len))),
+        cod: Rc::new(m_from_g(al, a_ty, 1, &len1, &var(0))),
+        arg: Rc::clone(&f),
+    };
+    let app2 = Term::App {
+        fun: Rc::new(app1),
+        dom_level: al.clone(),
+        cod_level: al.clone(),
+        dom: Rc::new(idx_fun(al, a_ty, 0, Rc::clone(len))),
+        cod: Rc::new(m_from_h(al, a_ty, 1, &len1, &Rc::new(f.shift_local(1)), &var(0))),
+        arg: Rc::clone(&g),
+    };
+    Term::App {
+        fun: Rc::new(app2),
+        dom_level: al.clone(),
+        cod_level: al.clone(),
+        dom: Rc::new(pointwise(al, a_ty, 0, len, &f, &g)),
+        cod: Rc::new(concl(
+            al, a_ty, 1, &len1,
+            Rc::new(f.shift_local(1)),
+            Rc::new(g.shift_local(1)),
+        )),
+        arg: h,
     }
 }
 
@@ -532,6 +942,225 @@ mod tests {
         let g = ctx(&[Type::Nat, idx_fun]);
         let t = tabulate(&Level::Zero, &Type::Nat, &var(1), var(0));
         ck(&g, &t, &nat_vec(var(1)));
+    }
+
+    /// Every test above uses `Nat` as the element type, which is *closed* — so
+    /// none of them can see a wrong shift on the element type inside a binder.
+    /// Here `B = Vec(Nat; m)` mentions an ambient variable, which is the case a
+    /// container recursion at a non-closed result type would hit.
+    #[test]
+    fn tabulate_at_an_open_element_type() {
+        // Γ = (m : Nat, n : Nat, f : Π(i : Fin n). Vec(Nat; m)). Note `ctx`
+        // scopes each entry in the *prefix* before it, so `f`'s type sees
+        // m = var 1, n = var 0 — and `b(d)` below is for terms in the full Γ.
+        let b = |d: u32| nat_vec(var(2 + d));
+        let idx_fun = Type::Pi {
+            dom_level: Level::Zero,
+            cod_level: Level::Zero,
+            dom: Rc::new(Type::Fin { len: var(0) }),
+            cod: Rc::new(nat_vec(var(2))),
+        };
+        let g = ctx(&[Type::Nat, Type::Nat, idx_fun]);
+        let t = tabulate(&Level::Zero, &b(0), &var(1), var(0));
+        ck(&g, &t, &Type::Vec {
+            level: Level::Zero,
+            elem: Rc::new(b(0)),
+            len: var(1),
+        });
+    }
+
+    /// The same open-element-type control for `map` and `fold`, so the shift
+    /// audit covers the module rather than the one schema that failed it.
+    #[test]
+    fn map_and_fold_at_an_open_element_type() {
+        // Γ = (m : Nat, n : Nat, xs : Vec(Vec(Nat; m); n)); `xs`'s own type is
+        // scoped in (m, n), so there m = var 1 and n = var 0.
+        let b = |d: u32| nat_vec(var(2 + d));
+        let g = ctx(&[Type::Nat, Type::Nat, Type::Vec {
+            level: Level::Zero,
+            elem: Rc::new(nat_vec(var(1))),
+            len: var(0),
+        }]);
+        // id : Vec(Nat; m) → Vec(Nat; m).
+        let id_fn = Rc::new(Term::Lam {
+            dom_level: Level::Zero,
+            cod_level: Level::Zero,
+            dom: Rc::new(b(0)),
+            body: var(0),
+        });
+        let t = map(&Level::Zero, &Level::Zero, &b(0), &b(0), &var(1), id_fn, var(0));
+        ck(&g, &t, &Type::Vec { level: Level::Zero, elem: Rc::new(b(0)), len: var(1) });
+
+        // fold at an open *result* type: λ(a : Vec(Nat;m)). λ(b : Vec(Nat;m)). b.
+        let keep = Rc::new(Term::Lam {
+            dom_level: Level::Zero,
+            cod_level: Level::Zero,
+            dom: Rc::new(b(0)),
+            body: Rc::new(Term::Lam {
+                dom_level: Level::Zero,
+                cod_level: Level::Zero,
+                dom: Rc::new(b(1)),
+                body: var(0),
+            }),
+        });
+        // The initial value has to be a `Vec(Nat; m)`; `tabulate` of a constant
+        // is the cheapest one to hand, and it exercises a schema inside a schema.
+        let zeros = Rc::new(tabulate(
+            &Level::Zero,
+            &Type::Nat,
+            &var(2),
+            Rc::new(Term::Lam {
+                dom_level: Level::Zero,
+                cod_level: Level::Zero,
+                dom: Rc::new(Type::Fin { len: var(2) }),
+                body: nat_lit(0),
+            }),
+        ));
+        let t = fold(&Level::Zero, &Level::Zero, &b(0), &b(0), &var(1), zeros, keep, var(0));
+        ck(&g, &t, &b(0));
+    }
+
+    /// `tab_cong` at a **literal** length, where everything computes.
+    #[test]
+    fn tab_cong_checks_and_computes() {
+        let g = ctx(&[]);
+        // f = λ(i : Fin 2). 5, g = the same — pointwise `refl` relates them.
+        let const_fn = |n: usize| {
+            Rc::new(Term::Lam {
+                dom_level: Level::Zero,
+                cod_level: Level::Zero,
+                dom: Rc::new(Type::Fin { len: nat_lit(2) }),
+                body: nat_lit(n),
+            })
+        };
+        let h = Rc::new(Term::Lam {
+            dom_level: Level::Zero,
+            cod_level: Level::Zero,
+            dom: Rc::new(Type::Fin { len: nat_lit(2) }),
+            body: Rc::new(Term::Refl {
+                level: Level::Zero,
+                ty: Rc::new(Type::Nat),
+                tm: nat_lit(5),
+            }),
+        });
+        let t = tab_cong(&Level::Zero, &Type::Nat, &nat_lit(2), const_fn(5), const_fn(5), h);
+        let ty = Type::Id {
+            level: Level::Zero,
+            ty: Rc::new(nat_vec(nat_lit(2))),
+            lhs: Rc::new(tabulate(&Level::Zero, &Type::Nat, &nat_lit(2), const_fn(5))),
+            rhs: Rc::new(tabulate(&Level::Zero, &Type::Nat, &nat_lit(2), const_fn(5))),
+        };
+        ck(&g, &t, &ty);
+        // …and it *computes*: the proof reduces to `refl`, not merely types.
+        let refl = Term::Refl {
+            level: Level::Zero,
+            ty: Rc::new(nat_vec(nat_lit(2))),
+            tm: Rc::new(tabulate(&Level::Zero, &Type::Nat, &nat_lit(2), const_fn(5))),
+        };
+        conv(&g, &t, &refl, &ty);
+    }
+
+    /// The case that matters: a **neutral** length, which is the situation
+    /// inside every container arm. Nothing reduces, and the schema still has to
+    /// typecheck — this is what a `Rose` proof will instantiate.
+    #[test]
+    fn tab_cong_at_a_neutral_length_still_types() {
+        // Γ = (n, f, g, h) with f, g : Π(i : Fin n). Nat and h pointwise.
+        let idx_fun = |d: u32| Type::Pi {
+            dom_level: Level::Zero,
+            cod_level: Level::Zero,
+            dom: Rc::new(Type::Fin { len: var(d) }),
+            cod: Rc::new(Type::Nat),
+        };
+        // In (n, f, g): h : Π(i : Fin n). Id(Nat; f i; g i).
+        let app = |fv: u32| {
+            Rc::new(Term::App {
+                fun: var(fv),
+                dom_level: Level::Zero,
+                cod_level: Level::Zero,
+                dom: Rc::new(Type::Fin { len: var(3) }),
+                cod: Rc::new(Type::Nat),
+                arg: var(0),
+            })
+        };
+        let pw = Type::Pi {
+            dom_level: Level::Zero,
+            cod_level: Level::Zero,
+            dom: Rc::new(Type::Fin { len: var(2) }),
+            cod: Rc::new(Type::Id {
+                level: Level::Zero,
+                ty: Rc::new(Type::Nat),
+                lhs: app(2),
+                rhs: app(1),
+            }),
+        };
+        let g = ctx(&[Type::Nat, idx_fun(0), idx_fun(1), pw]);
+        // In the full Γ: n = 3, f = 2, g = 1, h = 0.
+        let t = tab_cong(&Level::Zero, &Type::Nat, &var(3), var(2), var(1), var(0));
+        ck(&g, &t, &Type::Id {
+            level: Level::Zero,
+            ty: Rc::new(nat_vec(var(3))),
+            lhs: Rc::new(tabulate(&Level::Zero, &Type::Nat, &var(3), var(2))),
+            rhs: Rc::new(tabulate(&Level::Zero, &Type::Nat, &var(3), var(1))),
+        });
+    }
+
+    /// …and with an **open element type**, the control that caught the live
+    /// `tabulate` shift bug above.
+    #[test]
+    fn tab_cong_at_an_open_element_type() {
+        // Γ = (m, n, f, g, h) with the element type `Vec(Nat; m)`, so in the
+        // full Γ the variable `m` is `var(4)`.
+        let b = |d: u32| nat_vec(var(4 + d));
+        // `n` is the index of the length *outside* the binder, `m` that of the
+        // element type's variable *inside* it — one deeper, which is the shift
+        // the schema itself had wrong.
+        let idx_fun = |n: u32, m: u32| Type::Pi {
+            dom_level: Level::Zero,
+            cod_level: Level::Zero,
+            dom: Rc::new(Type::Fin { len: var(n) }),
+            cod: Rc::new(nat_vec(var(m))),
+        };
+        let app = |fv: u32| {
+            Rc::new(Term::App {
+                fun: var(fv),
+                dom_level: Level::Zero,
+                cod_level: Level::Zero,
+                dom: Rc::new(Type::Fin { len: var(3) }),
+                cod: Rc::new(nat_vec(var(5))),
+                arg: var(0),
+            })
+        };
+        // In (m, n, f, g): m = 3, n = 2; under the `i` binder m = 4.
+        let pw = Type::Pi {
+            dom_level: Level::Zero,
+            cod_level: Level::Zero,
+            dom: Rc::new(Type::Fin { len: var(2) }),
+            cod: Rc::new(Type::Id {
+                level: Level::Zero,
+                ty: Rc::new(nat_vec(var(4))),
+                lhs: app(2),
+                rhs: app(1),
+            }),
+        };
+        let g = ctx(&[Type::Nat, Type::Nat, idx_fun(0, 2), idx_fun(1, 3), pw]);
+        // The context and the schema must agree about what `h` proves before
+        // the schema can be blamed for anything.
+        ck(&g, &Term::Var(LocalVar(0)), &pointwise(
+            &Level::Zero, &b(0), 0, &var(3), &var(2), &var(1),
+        ));
+        // Full Γ: m = 4, n = 3, f = 2, g = 1, h = 0.
+        let t = tab_cong(&Level::Zero, &b(0), &var(3), var(2), var(1), var(0));
+        ck(&g, &t, &Type::Id {
+            level: Level::Zero,
+            ty: Rc::new(Type::Vec {
+                level: Level::Zero,
+                elem: Rc::new(b(0)),
+                len: var(3),
+            }),
+            lhs: Rc::new(tabulate(&Level::Zero, &b(0), &var(3), var(2))),
+            rhs: Rc::new(tabulate(&Level::Zero, &b(0), &var(3), var(1))),
+        });
     }
 
     #[test]

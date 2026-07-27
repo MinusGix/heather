@@ -244,6 +244,12 @@ is the classic nested-induction problem. The honest options (an `All`
 predicate over a vector, or a pointwise-equality lemma plus `Vec`
 extensionality) are a design round of their own and are **not** designed here.
 
+**Designed 2026-07-26 in `docs/container-proofs.md`**, which takes the second
+option: one more `elim_Nat` schema (`tab_cong`) plus a typing rule for the
+self-call at an `Id` motive, no `All` and no kernel change. `All` is definable
+— codes and `El` give large elimination — but nothing at the surface can
+*eliminate* a vector, so it would be evidence no proof could consume.
+
 Phase 1's tests should therefore not pretend: no theorem below is proved *by
 induction over a container*, and the acceptance checklist says so.
 
@@ -440,7 +446,16 @@ so the index map is `m` `inr`s. `a_plain_child_and_a_container_recurse_together`
 pins it with an asymmetric tree, which is what would catch an off-by-one that
 a symmetric one cannot.
 
-### 10.4 Phase 3 remains, and is now a diagnostic rather than a silence
+### 10.4 Two shift bugs, found later, that phase 2 could not see
+
+Recorded here because they are *phase 2's* code:
+`tabulate`'s index-function type shifted its element type one too few (invisible
+at a closed element type — every test used `Nat`), and the plain child's ih
+annotation in a container constructor never shifted the length (invisible while
+only *computation* was tested, since β never compares the annotation). Both are
+`docs/container-proofs.md` §10.1–10.2.
+
+### 10.5 Phase 3 remains, and is now a diagnostic rather than a silence
 
 A proof by induction over a container — `kids.map(refl_all)` at a dependent
 motive — is rejected with a message naming §4.3. That is the honest boundary:
