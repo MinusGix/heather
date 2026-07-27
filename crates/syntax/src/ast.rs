@@ -46,6 +46,12 @@ pub struct InductiveDecl {
     /// Type-parameter names, in order.
     pub params: Vec<String>,
     pub ctors: Vec<CtorDecl>,
+    /// Written `record D<…> { f: T, … }` — one constructor, named after the
+    /// declaration, every field named (docs/surface-records.md §2). The
+    /// *lowering* is the ordinary tier-0 one; this flag is what earns the
+    /// extra surface checks (non-recursive, distinct field names) and the
+    /// accessor table.
+    pub is_record: bool,
     pub span: Span,
 }
 
@@ -104,6 +110,13 @@ pub enum Stmt {
     /// right-hand side in *checking* position, so `let p: a = b = ?g;` is how
     /// a hole gets bound to a name.
     Let { name: String, ty: Option<Ty>, expr: Expr, span: Span },
+    /// `let { unit, op } = m;` — record destructuring
+    /// (docs/surface-records.md §5). Each name is bound to its projection, so
+    /// this is sugar over [`ExprKind::Dot`] and shares its code. Partial
+    /// patterns are allowed: an unmentioned field is simply not bound. No
+    /// annotation — the receiver must infer, since it is what names the
+    /// fields.
+    LetRecord { fields: Vec<(String, Span)>, expr: Expr, span: Span },
 }
 
 /// `on ?name := expr;` / `on _: P := expr;` — discharge of a goal.
@@ -170,6 +183,16 @@ pub enum TyKind {
     /// is nowhere in a function type to record it
     /// (issues/implicit-binders-in-function-types.md).
     Fn { binder: Option<String>, dom: Box<Ty>, cod: Box<Ty> },
+}
+
+/// One field of a record literal: `unit: 0`. The span is the whole
+/// `name: expr`, so a duplicate or unknown field is reported at the field
+/// rather than at the literal.
+#[derive(Debug, Clone)]
+pub struct RecordLitField {
+    pub name: String,
+    pub expr: Expr,
+    pub span: Span,
 }
 
 /// One lambda binder: `x` or `(x: A)`. An unannotated binder is only usable
@@ -264,6 +287,22 @@ pub enum ExprKind {
         motive: Option<(String, Box<Ty>)>,
         arms: Vec<Arm>,
     },
+    /// `p.f` (`args: None`) or `p.f(a, b)` (`args: Some`)
+    /// (docs/surface-records.md §4).
+    ///
+    /// **Resolved in the elaborator, not here.** Until records existed, `.`
+    /// was a parser desugaring — `p.f(a)` became `f(a, p)`, a call to a
+    /// *global* with the receiver last — which is backwards for a record of
+    /// functions, where `m.op(x)` must mean `(m.op)(x)`. Deciding between the
+    /// two needs the receiver's type, so it cannot happen here. The old
+    /// desugaring survives as the fallback for every non-field name, which is
+    /// what keeps `p.sym()`, `p.inj(1)` and `xs.map(f)` working unchanged.
+    Dot { recv: Box<Expr>, name: String, args: Option<Vec<Expr>> },
+    /// `D { f: e, … }` or `D<T, …> { f: e, … }` — a record literal
+    /// (docs/surface-records.md §6). Fields may be written in any order; they
+    /// are permuted into declaration order in front of the ordinary tier-0
+    /// constructor path, which is what actually elaborates.
+    RecordLit { name: String, tyargs: Vec<Ty>, fields: Vec<RecordLitField> },
     /// `j(proof, (y, p) -> M, case)` — based path induction. `proof`'s type
     /// fixes the endpoint and family; `M` is scoped over `y` (right endpoint)
     /// and `p` (the path).

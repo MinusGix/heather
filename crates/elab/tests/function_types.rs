@@ -449,11 +449,35 @@ mod rejections {
         assert!(lam.contains("implicit lambda binders"), "{lam}");
     }
 
+    // What makes a function field infinitary is a *self-occurrence* inside
+    // it, not the arrow (corrected 2026-07-27, docs/surface-records.md §11 —
+    // the original check keyed on the shape of the field type and so rejected
+    // `Nat -> Nat` too, which is an ordinary payload). `Acc` is still the
+    // motivating rejection, and it is one because its field mentions `Acc`.
     #[test]
-    fn a_function_field_is_the_infinitary_tier() {
-        let msg = elab_err("inductive Acc { Intro(Nat -> Nat) }");
+    fn a_recursive_function_field_is_the_infinitary_tier() {
+        let msg = elab_err("inductive Acc { Intro(h: Nat -> Acc) }");
         assert!(msg.contains("function type"), "{msg}");
         assert!(msg.contains("infinitary"), "{msg}");
+        assert!(msg.contains("Acc"), "{msg}");
+
+        // …in the domain too: that is the *negative* occurrence, which is a
+        // rejection for a second reason and must not slip past this one.
+        let neg = elab_err("inductive Bad { Mk(h: Bad -> Nat) }");
+        assert!(neg.contains("infinitary"), "{neg}");
+    }
+
+    // The other side of the same correction: a function field that does not
+    // mention the declaration is a payload, and always was one.
+    #[test]
+    fn a_non_recursive_function_field_is_a_payload() {
+        elab(
+            r#"
+            inductive Endo { Mk(f: Nat -> Nat) }
+            fn run(e: Endo, n: Nat) -> Nat { match e { Mk(f) => f(n) } }
+            theorem runs(): run(Mk(λ (x: Nat) => x), 3) = 3 { refl }
+            "#,
+        );
     }
 
     // `@` suppresses implicit insertion, which is name-directed — so it is

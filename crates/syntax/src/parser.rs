@@ -2,11 +2,13 @@
 //!
 //! ```text
 //! file    := item*
-//! item    := decl | inductive
+//! item    := decl | inductive | record
 //! decl    := "fn" name tyvars? "(" params? ")" "->" type block
 //!          | "theorem" name tyvars? "(" params? ")" ":" type block
 //! tyvars  := "<" name ("," name)* ">"
-//! induct  := "inductive" name ("<" name ("," name)* ">")? "{" ctors? "}"
+//! induct  := "inductive" name tyvars? "{" ctors? "}"
+//! record  := "record" name tyvars? "{" rfield ("," rfield)* ","? "}"
+//! rfield  := name ":" type            -- a record field is always named
 //! ctors   := ctor ("," ctor)* ","?
 //! ctor    := name ("(" field ("," field)* ","? ")")?
 //! field   := (name ":")? type
@@ -22,6 +24,7 @@
 //!          | "(" type ")"
 //! block   := "{" stmt* expr on_stmt* "}"
 //! stmt    := "let" name (":" type)? "=" expr ";"
+//!          | "let" "{" name ("," name)* ","? "}" "=" expr ";"   -- destructure
 //! on_stmt := "on" ("?" name ("." numeral)? | "_" ":" type) ":=" expr ";"
 //! expr    := "match" expr ("as" name "->" type)? "{" arms "}"
 //!          | "refl" | "?" name?
@@ -29,7 +32,8 @@
 //!          | ("λ"|"fun") binder+ "=>" expr
 //!          | "@" name ("<" type ("," type)* ">")? "(" args ")"
 //!          | atom ("<" type ("," type)* ">")?     -- explicit type application
-//!                 (("." name)? "(" args ")")*     -- application is postfix
+//!                 ("{" (name ":" expr)* "}")?     -- record literal
+//!                 (("." name ("(" args ")")?) | "(" args ")")*   -- postfix
 //!          | "[" (expr ("," expr)*)? "]"           -- vector literal
 //!          | name | numeral | "(" expr ")"
 //! binder  := name | "(" name ":" type ")"
@@ -53,7 +57,7 @@ pub struct ParseError {
 
 pub fn parse_file(src: &str) -> Result<File, ParseError> {
     let toks = lex(src).map_err(|e| ParseError { msg: e.msg, span: e.span })?;
-    let mut p = Parser { toks, pos: 0 };
+    let mut p = Parser { toks, pos: 0, no_record_lit: false };
     let mut items = Vec::new();
     while !p.at_eof() {
         items.push(p.item()?);
@@ -64,6 +68,15 @@ pub fn parse_file(src: &str) -> Result<File, ParseError> {
 struct Parser {
     toks: Vec<Tok>,
     pos: usize,
+    /// Suppress the record literal `D { … }` (docs/surface-records.md §6.1).
+    ///
+    /// `{` after an expression is ambiguous exactly where a *block* follows
+    /// one: `match m { … }` would otherwise read `m { … }` as a literal. Rust
+    /// has the same problem and the same fix — the restriction is set for the
+    /// scrutinee and the block-preceding types, and **lifted inside any
+    /// bracket**, so `match f(D { x: 1 }) { … }` is fine and a literal that
+    /// really is wanted in scrutinee position is parenthesised.
+    no_record_lit: bool,
 }
 
 type R<T> = Result<T, ParseError>;
@@ -111,6 +124,16 @@ impl Parser {
             i += 1;
         }
         false
+    }
+
+    /// Run `f` with the record-literal restriction set to `no`, restoring it
+    /// after. Every bracketed context clears it; the three block-preceding
+    /// contexts set it (see [`Parser::no_record_lit`]).
+    fn with_record_lit<T>(&mut self, no: bool, f: impl FnOnce(&mut Self) -> R<T>) -> R<T> {
+        let saved = std::mem::replace(&mut self.no_record_lit, no);
+        let r = f(self);
+        self.no_record_lit = saved;
+        r
     }
 
     fn peek(&self) -> &TokKind {
@@ -178,15 +201,50 @@ impl Parser {
         if self.at_kw("inductive") {
             return Ok(Item::Inductive(self.inductive()?));
         }
+        if self.at_kw("record") {
+            return Ok(Item::Inductive(self.record()?));
+        }
         Ok(Item::Decl(self.decl()?))
     }
 
-    /// `inductive D<p, …> { c(f: T, …), … }`. Zero constructors is legal (the
-    /// empty type); so is a constructor with no field list.
-    fn inductive(&mut self) -> R<InductiveDecl> {
+    /// `record D<p, …> { f: T, … }` — desugared here into the
+    /// one-constructor `InductiveDecl` the tier-0 generator already handles
+    /// (docs/surface-records.md §2.1), with the constructor named after the
+    /// record. What makes it a distinct *surface* form is the checks the flag
+    /// earns downstream, not a distinct lowering.
+    ///
+    /// Every field must be named: `record D { Nat }` has nothing to project.
+    fn record(&mut self) -> R<InductiveDecl> {
         let start = self.peek_span();
-        self.bump(); // `inductive`
-        let (name, _) = self.ident("inductive name")?;
+        self.bump(); // `record`
+        let (name, _) = self.ident("record name")?;
+        let params = self.tyvar_list()?;
+        self.expect(&TokKind::LBrace, "`{` (field list)")?;
+        let mut fields = Vec::new();
+        while !matches!(self.peek(), TokKind::RBrace) {
+            let f = self.field()?;
+            if f.name.is_none() {
+                return Err(ParseError {
+                    msg: "a record field needs a name (`unit: Nat`): the name is what \
+                          `m.unit` projects by"
+                        .into(),
+                    span: f.span,
+                });
+            }
+            fields.push(f);
+            if !matches!(self.peek(), TokKind::Comma) {
+                break;
+            }
+            self.bump();
+        }
+        let end = self.expect(&TokKind::RBrace, "`}` (field list)")?;
+        let span = start.join(end);
+        let ctor = CtorDecl { name: name.clone(), fields, span };
+        Ok(InductiveDecl { name, params, ctors: vec![ctor], is_record: true, span })
+    }
+
+    /// `<A, B>` after a declaration name, or nothing.
+    fn tyvar_list(&mut self) -> R<Vec<String>> {
         let mut params = Vec::new();
         if matches!(self.peek(), TokKind::Lt) {
             self.bump();
@@ -199,6 +257,16 @@ impl Parser {
             }
             self.expect(&TokKind::Gt, "`>` to close the type parameters")?;
         }
+        Ok(params)
+    }
+
+    /// `inductive D<p, …> { c(f: T, …), … }`. Zero constructors is legal (the
+    /// empty type); so is a constructor with no field list.
+    fn inductive(&mut self) -> R<InductiveDecl> {
+        let start = self.peek_span();
+        self.bump(); // `inductive`
+        let (name, _) = self.ident("inductive name")?;
+        let params = self.tyvar_list()?;
         self.expect(&TokKind::LBrace, "`{` (constructor list)")?;
         let mut ctors = Vec::new();
         while !matches!(self.peek(), TokKind::RBrace) {
@@ -223,7 +291,7 @@ impl Parser {
             self.bump();
         }
         let end = self.expect(&TokKind::RBrace, "`}` (constructor list)")?;
-        Ok(InductiveDecl { name, params, ctors, span: start.join(end) })
+        Ok(InductiveDecl { name, params, ctors, is_record: false, span: start.join(end) })
     }
 
     /// A constructor field: `name: T` or a bare `T`. Named fields are in scope
@@ -302,7 +370,10 @@ impl Parser {
                 self.expect(&TokKind::Colon, "`:`")?;
             }
         }
-        let result = self.ty()?;
+        // The declaration's body block follows immediately, so a `{` here
+        // opens it, not a record literal in the last endpoint of a
+        // `theorem t: a = D { … }` (docs/surface-records.md §6.1).
+        let result = self.with_record_lit(true, |p| p.ty())?;
         let body = self.block()?;
         let span = start.join(body.span);
         Ok(Decl { kind, name, tyvars, params, result, body, span })
@@ -312,6 +383,15 @@ impl Parser {
 
     fn block(&mut self) -> R<Block> {
         let open = self.expect(&TokKind::LBrace, "`{`")?;
+        // Inside the braces nothing is waiting for a block, so a literal is
+        // unambiguous again.
+        let saved = std::mem::replace(&mut self.no_record_lit, false);
+        let r = self.block_body(open);
+        self.no_record_lit = saved;
+        r
+    }
+
+    fn block_body(&mut self, open: Span) -> R<Block> {
         let mut stmts = Vec::new();
         while self.at_kw("let") {
             stmts.push(self.let_stmt()?);
@@ -334,6 +414,26 @@ impl Parser {
     /// because `=` is not an expression operator, so `ty()` stops after `a = b`.
     fn let_stmt(&mut self) -> R<Stmt> {
         let start = self.bump().span; // `let`
+        // `let { unit, op } = m;` — record destructuring
+        // (docs/surface-records.md §5). Unambiguous against `let x = …`: a
+        // binding name cannot start with `{`.
+        if matches!(self.peek(), TokKind::LBrace) {
+            self.bump();
+            let mut fields = Vec::new();
+            while !matches!(self.peek(), TokKind::RBrace) {
+                let (n, sp) = self.ident("field name in a `let` pattern")?;
+                fields.push((n, sp));
+                if !matches!(self.peek(), TokKind::Comma) {
+                    break;
+                }
+                self.bump();
+            }
+            self.expect(&TokKind::RBrace, "`}` (`let` pattern)")?;
+            self.expect_eq("`let` pattern")?;
+            let expr = self.expr()?;
+            let end = self.expect(&TokKind::Semi, "`;` to end the `let`")?;
+            return Ok(Stmt::LetRecord { fields, expr, span: start.join(end) });
+        }
         let (name, _) = self.ident("`let` binding name")?;
         let ty = if matches!(self.peek(), TokKind::Colon) {
             self.bump();
@@ -567,32 +667,55 @@ impl Parser {
         Ok(lhs)
     }
 
-    /// An atom followed by zero or more method calls `.f(args)`. A method call
-    /// desugars to `f(args…, receiver)` — the receiver is the *last* argument,
-    /// so with stage-2 implicit endpoints (issues/elab-stage2-metas.md) the
-    /// earlier implicit parameters are inferred from it (`p.sym()` ⇒ `sym(p)`,
-    /// `add_succ(n, k).sym()` ⇒ `sym(add_succ(n, k))`).
-    /// …and by zero or more applications `(args)`, so the head of a call can
-    /// be any expression: `g(a)(b)`, `(λ x => x)(3)`
+    /// An atom followed by zero or more field accesses `.f` / `.f(args)`, a
+    /// record literal `D { … }`, and zero or more applications `(args)` — so
+    /// the head of a call can be any expression: `g(a)(b)`, `(λ x => x)(3)`
     /// (docs/surface-function-types.md §1.3).
+    ///
+    /// `.f` is **not** desugared here any more. It used to become
+    /// `f(args…, receiver)` — a call to a global with the receiver last, which
+    /// is what lets stage-2 implicit endpoints infer from it (`p.sym()` ⇒
+    /// `sym(p)`). That reading is wrong for a record of functions, where
+    /// `m.op(x)` must be `(m.op)(x)`, and choosing between the two needs the
+    /// receiver's *type*. So the parser emits [`ExprKind::Dot`] and the
+    /// elaborator decides, keeping the old desugaring as the fallback
+    /// (docs/surface-records.md §4.2).
     fn postfix(&mut self) -> R<Expr> {
         let mut e = self.atom()?;
         if let Some((args, end)) = self.try_tyargs() {
             let span = e.span.join(end);
             e = Expr { kind: ExprKind::TyApp { head: Box::new(e), args }, span };
         }
+        // `D { … }` / `D<T> { … }` — a record literal. Only on a *name* head,
+        // and only where a block cannot follow (see `no_record_lit`).
+        if matches!(self.peek(), TokKind::LBrace) && !self.no_record_lit {
+            let (name, tyargs) = match &e.kind {
+                ExprKind::Var(n) => (Some(n.clone()), Vec::new()),
+                ExprKind::TyApp { head, args } => match &head.kind {
+                    ExprKind::Var(n) => (Some(n.clone()), args.clone()),
+                    _ => (None, Vec::new()),
+                },
+                _ => (None, Vec::new()),
+            };
+            if let Some(name) = name {
+                e = self.record_lit(name, tyargs, e.span)?;
+            }
+        }
         loop {
             match self.peek() {
                 TokKind::Dot => {
                     self.bump();
-                    let (method, _) = self.ident("method name")?;
-                    self.expect(&TokKind::LParen, "`(` (method call)")?;
-                    let (mut args, end) = self.call_args()?;
+                    let (field, fsp) = self.ident("field or method name")?;
+                    let (args, end) = if matches!(self.peek(), TokKind::LParen) {
+                        self.bump();
+                        let (args, end) = self.call_args()?;
+                        (Some(args), end)
+                    } else {
+                        (None, fsp)
+                    };
                     let span = e.span.join(end);
-                    args.push(e);
-                    let head = Expr { kind: ExprKind::Var(method), span };
                     e = Expr {
-                        kind: ExprKind::App { head: Box::new(head), args, explicit: false },
+                        kind: ExprKind::Dot { recv: Box::new(e), name: field, args },
                         span,
                     };
                 }
@@ -710,16 +833,18 @@ impl Parser {
         // `[a, b, c]` — a vector literal (docs/container-fields.md §2.2).
         if matches!(self.peek(), TokKind::LBracket) {
             let open = self.bump().span;
-            let mut elems = Vec::new();
-            while !matches!(self.peek(), TokKind::RBracket) {
-                elems.push(self.expr()?);
-                if !matches!(self.peek(), TokKind::Comma) {
-                    break;
+            return self.with_record_lit(false, |p| {
+                let mut elems = Vec::new();
+                while !matches!(p.peek(), TokKind::RBracket) {
+                    elems.push(p.expr()?);
+                    if !matches!(p.peek(), TokKind::Comma) {
+                        break;
+                    }
+                    p.bump();
                 }
-                self.bump();
-            }
-            let close = self.expect(&TokKind::RBracket, "`]` (vector literal)")?;
-            return Ok(Expr { kind: ExprKind::VecLit(elems), span: open.join(close) });
+                let close = p.expect(&TokKind::RBracket, "`]` (vector literal)")?;
+                Ok(Expr { kind: ExprKind::VecLit(elems), span: open.join(close) })
+            });
         }
         match self.peek().clone() {
             TokKind::Hole(name) => {
@@ -732,7 +857,9 @@ impl Parser {
             }
             TokKind::LParen => {
                 self.bump();
-                let e = self.expr()?;
+                // Parenthesising is the escape hatch for a record literal in
+                // scrutinee position, so the restriction must lift here.
+                let e = self.with_record_lit(false, |p| p.expr())?;
                 self.expect(&TokKind::RParen, "`)`")?;
                 Ok(e)
             }
@@ -793,26 +920,60 @@ impl Parser {
     /// `)` (the opening `(` is already consumed). Returns the args and the
     /// span of the `)`.
     fn call_args(&mut self) -> R<(Vec<Expr>, Span)> {
-        let mut args = Vec::new();
-        while !matches!(self.peek(), TokKind::RParen) {
-            args.push(self.expr()?);
-            if !matches!(self.peek(), TokKind::Comma) {
-                break;
+        // Inside brackets a `{` cannot be a block, so the record-literal
+        // restriction lifts here (and in every other bracketed context).
+        self.with_record_lit(false, |p| {
+            let mut args = Vec::new();
+            while !matches!(p.peek(), TokKind::RParen) {
+                args.push(p.expr()?);
+                if !matches!(p.peek(), TokKind::Comma) {
+                    break;
+                }
+                p.bump();
             }
-            self.bump();
-        }
-        let end = self.expect(&TokKind::RParen, "`)`")?;
-        Ok((args, end))
+            let end = p.expect(&TokKind::RParen, "`)`")?;
+            Ok((args, end))
+        })
+    }
+
+    /// `{ f: e, … }` after the record name, which the caller has consumed.
+    /// Field order is free — it is normalized against the declaration in the
+    /// elaborator (docs/surface-records.md §6), which is also where an unknown
+    /// or missing field is reported, since only it knows the declaration.
+    fn record_lit(&mut self, name: String, tyargs: Vec<Ty>, head: Span) -> R<Expr> {
+        self.expect(&TokKind::LBrace, "`{` (record literal)")?;
+        self.with_record_lit(false, |p| {
+            let mut fields = Vec::new();
+            while !matches!(p.peek(), TokKind::RBrace) {
+                let (fname, fsp) = p.ident("record field name")?;
+                p.expect(&TokKind::Colon, "`:` (record field)")?;
+                let expr = p.expr()?;
+                let span = fsp.join(expr.span);
+                fields.push(RecordLitField { name: fname, expr, span });
+                if !matches!(p.peek(), TokKind::Comma) {
+                    break;
+                }
+                p.bump();
+            }
+            let end = p.expect(&TokKind::RBrace, "`}` (record literal)")?;
+            Ok(Expr {
+                kind: ExprKind::RecordLit { name, tyargs, fields },
+                span: head.join(end),
+            })
+        })
     }
 
     fn match_expr(&mut self) -> R<Expr> {
         let start = self.peek_span();
         self.bump(); // `match`
-        let scrut = self.expr()?;
+        // The scrutinee and the motive are both immediately followed by the
+        // arm block, so a `{` here closes the `match` rather than opening a
+        // record literal (docs/surface-records.md §6.1).
+        let scrut = self.with_record_lit(true, |p| p.expr())?;
         let motive = if self.eat_kw("as") {
             let (bind, _) = self.ident("motive binder")?;
             self.expect(&TokKind::Arrow, "`->`")?;
-            let m = self.ty()?;
+            let m = self.with_record_lit(true, |p| p.ty())?;
             Some((bind, Box::new(m)))
         } else {
             None
@@ -1022,25 +1183,92 @@ mod tests {
         assert!(matches!(&args[1].kind, ExprKind::Var(v) if v == "c"));
     }
 
+    // `.f` is no longer desugared here: the parser emits `Dot` and the
+    // elaborator decides between a record projection and the method call,
+    // since only it knows the receiver's type (docs/surface-records.md §4.2).
+    // What that desugaring *becomes* is pinned in the elaborator's tests; what
+    // is pinned here is that the shape survives parsing intact.
     #[test]
-    fn method_call_puts_receiver_last() {
-        // `add_succ(n, k).sym()` ⇒ sym(add_succ(n, k)); receiver is last.
+    fn method_call_parses_as_dot_with_args() {
         let k = body("add_succ(n, k).sym()");
-        let (name, args, explicit) = as_call(&k);
+        let ExprKind::Dot { recv, name, args } = &k else { panic!("expected a Dot, got {k:?}") };
         assert_eq!(name, "sym");
-        assert!(!explicit);
-        assert_eq!(args.len(), 1);
-        assert_eq!(as_call(&args[0].kind).0, "add_succ");
+        assert_eq!(args.as_ref().expect("`()` means a call").len(), 0);
+        assert_eq!(as_call(&recv.kind).0, "add_succ");
     }
 
     #[test]
-    fn method_call_appends_receiver_after_args() {
-        // `x.f(a, b)` ⇒ f(a, b, x).
-        let k = body("x.f(a, b)");
-        let (name, args, _) = as_call(&k);
-        assert_eq!(name, "f");
-        assert_eq!(args.len(), 3);
-        assert!(matches!(&args[2].kind, ExprKind::Var(v) if v == "x"));
+    fn field_access_parses_without_parens() {
+        // `m.op` — a bare projection, which used to be a parse error.
+        let k = body("m.op");
+        let ExprKind::Dot { recv, name, args } = &k else { panic!("expected a Dot, got {k:?}") };
+        assert_eq!(name, "op");
+        assert!(args.is_none(), "no `()` means no call");
+        assert!(matches!(&recv.kind, ExprKind::Var(v) if v == "m"));
+    }
+
+    #[test]
+    fn dot_chains_left_associatively() {
+        // `m.a.b(c)` — `(m.a).b(c)`, so the receiver of `b` is `m.a`.
+        let k = body("m.a.b(c)");
+        let ExprKind::Dot { recv, name, args } = &k else { panic!("expected a Dot, got {k:?}") };
+        assert_eq!(name, "b");
+        assert_eq!(args.as_ref().expect("a call").len(), 1);
+        let ExprKind::Dot { name: inner, .. } = &recv.kind else { panic!("expected a Dot") };
+        assert_eq!(inner, "a");
+    }
+
+    #[test]
+    fn record_literal_parses_with_free_field_order() {
+        let src = "record P { x: Nat, y: Nat }
+                   fn f() -> P { P { y: 1, x: 0 } }";
+        let mut items = parse_file(src).unwrap().items;
+        let d = items.remove(1).into_decl();
+        let ExprKind::RecordLit { name, tyargs, fields } = &d.body.result.kind else {
+            panic!("expected a record literal, got {:?}", d.body.result.kind)
+        };
+        assert_eq!(name, "P");
+        assert!(tyargs.is_empty());
+        // Written order is preserved here; the permutation into declaration
+        // order happens in the elaborator, which is what knows the order.
+        assert_eq!(fields.iter().map(|f| f.name.as_str()).collect::<Vec<_>>(), ["y", "x"]);
+    }
+
+    // The `match m { … }` ambiguity (docs/surface-records.md §6.1): a `{`
+    // after the scrutinee closes the `match`, and parenthesising is the escape
+    // hatch for a literal that really is the scrutinee.
+    #[test]
+    fn a_match_scrutinee_does_not_swallow_the_arm_block() {
+        let src = "record P { x: Nat }
+                   inductive B { T, F }
+                   fn f(b: B, m: P) -> Nat { match b { T => m.x, F => 0 } }";
+        parse_file(src).expect("the arm block is not a record literal");
+    }
+
+    #[test]
+    fn a_parenthesised_literal_may_be_a_scrutinee() {
+        let src = "record P { x: Nat }
+                   inductive B { T, F }
+                   fn f(b: B) -> Nat { match (P { x: 1 }).x { Zero => 0, Succ(k) => k } }";
+        parse_file(src).expect("parens lift the restriction");
+    }
+
+    #[test]
+    fn a_record_field_must_be_named() {
+        let msg = parse_file("record P { Nat }").unwrap_err().msg;
+        assert!(msg.contains("record field needs a name"), "{msg}");
+    }
+
+    #[test]
+    fn let_destructuring_parses() {
+        let src = "record P { x: Nat, y: Nat }
+                   fn f(p: P) -> Nat { let { x, y } = p; x }";
+        let mut items = parse_file(src).unwrap().items;
+        let d = items.remove(1).into_decl();
+        let Stmt::LetRecord { fields, .. } = &d.body.stmts[0] else {
+            panic!("expected a destructuring let")
+        };
+        assert_eq!(fields.iter().map(|(n, _)| n.as_str()).collect::<Vec<_>>(), ["x", "y"]);
     }
 
     #[test]
@@ -1144,12 +1372,12 @@ mod tests {
              }",
         );
         assert_eq!(d.body.stmts.len(), 2);
-        let Stmt::Let { name, ty, .. } = &d.body.stmts[0];
+        let Stmt::Let { name, ty, .. } = &d.body.stmts[0] else { panic!("plain let") };
         assert_eq!(name, "a");
         assert!(ty.is_none());
         // `let p: n = n = refl;` — `=` is not an expression operator, so the
         // annotation stops after `n = n` and the binding `=` follows.
-        let Stmt::Let { name, ty, expr, .. } = &d.body.stmts[1];
+        let Stmt::Let { name, ty, expr, .. } = &d.body.stmts[1] else { panic!("plain let") };
         assert_eq!(name, "p");
         assert!(matches!(ty.as_ref().map(|t| &t.kind), Some(TyKind::Eq(..))));
         assert!(matches!(expr.kind, ExprKind::Refl));

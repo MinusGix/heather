@@ -45,6 +45,22 @@ pub(crate) struct Inductive {
     /// (`docs/inductive-tier1-wf-lowering.md` §1). Computed once, at
     /// declaration time; every tier-1 branch below is guarded by it.
     pub recursive: bool,
+    /// Declared with `record` (docs/surface-records.md §2): exactly one
+    /// constructor, every field named. The lowering is unchanged — this is
+    /// what makes `m.f` a projection and `D { … }` a literal.
+    pub is_record: bool,
+}
+
+impl Inductive {
+    /// The index of field `name` in this record's single constructor, or
+    /// `None`. Always `None` for a non-record: an `inductive`'s field names
+    /// are positional and are not accessors.
+    pub fn field_index(&self, name: &str) -> Option<usize> {
+        if !self.is_record {
+            return None;
+        }
+        self.ctors[0].fields.iter().position(|(n, _)| n.as_deref() == Some(name))
+    }
 }
 
 pub(crate) struct Ctor {
@@ -303,16 +319,56 @@ impl Elaborator {
         // which is the hazard class, not a rejection, so
         // `container_fields::a_container_is_not_dropped` is the observer.
         let recursive = ctors.iter().any(|c| c.kind.iter().any(|k| k.is_child()));
+        // A `record` is tier 0 by construction (docs/surface-records.md §2):
+        // a recursive one is an `inductive`, and saying so is more useful than
+        // silently lowering it onto `Wf` where the field names would still
+        // project but the declaration would no longer be a record.
+        if d.is_record && recursive {
+            return err(
+                format!(
+                    "`{}` is a `record` but mentions itself: a recursive declaration is \
+                     an `inductive` (docs/surface-records.md §2)",
+                    d.name
+                ),
+                d.span,
+            );
+        }
+        if d.is_record {
+            let fields = &ctors[0].fields;
+            for (i, (n, _)) in fields.iter().enumerate() {
+                // Field names are *accessors* on a record, so a duplicate is
+                // ambiguous rather than merely positional as it is on an
+                // `inductive` (docs/surface-records.md §2.2).
+                if fields[..i].iter().any(|(m, _)| m == n) {
+                    return err(
+                        format!(
+                            "duplicate field `{}` in record `{}`",
+                            n.as_deref().unwrap_or("_"),
+                            d.name
+                        ),
+                        d.ctors[0].fields[i].span,
+                    );
+                }
+            }
+        }
         let ind = Rc::new(Inductive {
             name: d.name.clone(),
             tag: self.next_tag,
             params: d.params.clone(),
             ctors,
             recursive,
+            is_record: d.is_record,
         });
         self.next_tag += 1;
         for i in 0..ind.ctors.len() {
             self.ctors.insert(ind.ctors[i].name.clone(), (Rc::clone(&ind), i));
+        }
+        if ind.is_record {
+            for (n, _) in &ind.ctors[0].fields {
+                if let Some(n) = n {
+                    self.record_fields.insert(n.clone());
+                }
+            }
         }
         self.by_tag.insert(ind.tag, Rc::clone(&ind));
         self.inductives.insert(d.name.clone(), ind);
@@ -1031,6 +1087,70 @@ impl Elaborator {
         }
         self.elab_check(&acx, &arm.body, expected, mlvl)
     }
+
+    /// Project field `idx` out of a record value (docs/surface-records.md
+    /// §4.3). This is [`Self::elab_arm`]'s walk with the aliasing removed:
+    /// step down the Σ spine, skipping the nominal tag, and stop at the
+    /// wanted field. `π_j = fst(snd^j(value))`, with the *j*-th `snd` carrying
+    /// the earlier projections substituted into the tail — which is what makes
+    /// a dependent field's type come out right (`m.unit_l` mentions `m.op` and
+    /// `m.unit`) with no special handling.
+    ///
+    /// Since the annotations are read off the type being projected, the result
+    /// synthesizes: nothing here introduces a checking obligation.
+    pub(crate) fn project_field(
+        &self,
+        cx: &Cx,
+        ind: &Inductive,
+        record_ty: &Type,
+        value: Rc<Term>,
+        idx: usize,
+        span: Span,
+    ) -> R<(Term, Type, Level)> {
+        let mut cur = record_ty.clone();
+        let mut pair = value;
+        // Entry 0 is the tag (§3.3), so field `idx` is spine entry `idx + 1`.
+        for step in 0..=idx + 1 {
+            let head = self.whnf(cx, &cur, span)?;
+            let Type::Sigma { fst_level, snd_level, fst, snd } = head else {
+                return err(
+                    format!(
+                        "internal: `{}` has no field spine entry {step} \
+                         (malformed record encoding)",
+                        ind.name
+                    ),
+                    span,
+                );
+            };
+            let proj = Rc::new(Term::Fst {
+                fst_level: fst_level.clone(),
+                snd_level: snd_level.clone(),
+                fst_ty: Rc::clone(&fst),
+                snd_ty: Rc::clone(&snd),
+                pair: Rc::clone(&pair),
+            });
+            if step == idx + 1 {
+                return Ok(((*proj).clone(), (*fst).clone(), fst_level));
+            }
+            let rest = Rc::new(Term::Snd {
+                fst_level,
+                snd_level,
+                fst_ty: Rc::clone(&fst),
+                snd_ty: Rc::clone(&snd),
+                pair: Rc::clone(&pair),
+            });
+            cur = snd.apply_local(&LocalSubst::id(&cx.gamma).extended(proj));
+            pair = rest;
+        }
+        unreachable!("the loop returns at step idx + 1")
+    }
+
+    /// The record declaration a lowered type belongs to, if it is one. A
+    /// non-record inductive gives `None`: its field names are positional, not
+    /// accessors (docs/surface-records.md §2).
+    pub(crate) fn record_of(&self, ty: &Type) -> Option<Rc<Inductive>> {
+        self.tag_of(ty).filter(|i| i.is_record)
+    }
 }
 
 /// Is this field a recursive occurrence of the declaration being read
@@ -1184,28 +1304,44 @@ fn occurs(t: &Ty, name: &str) -> Option<Span> {
     }
 }
 
-/// A `Π` field puts a declaration in the infinitary tier, which neither the
-/// tier-0 nor the tier-1 lowering handles: both assume finitary children
-/// throughout. Diagnosed rather than mis-lowered — the hazard class
-/// `docs/inductive-tier0-lowering.md` opens by naming
-/// (docs/surface-function-types.md §8).
+/// A `Π` field whose domain or codomain mentions the declaration puts it in
+/// the **infinitary** tier, which neither the tier-0 nor the tier-1 lowering
+/// handles: both assume finitary children throughout. Diagnosed rather than
+/// mis-lowered — the hazard class `docs/inductive-tier0-lowering.md` opens by
+/// naming (docs/surface-function-types.md §8). `Acc.intro`'s
+/// `h: (b: A) -> Acc<A>` is the motivating rejection, and stays one.
+///
+/// A function field that does **not** mention the declaration is an ordinary
+/// **payload** and is accepted (corrected 2026-07-27, docs/surface-records.md
+/// §11). Nothing about it is infinitary: it is one `Type::Pi` component of the
+/// Σ spine, and every downstream scheme treats it like any other payload. The
+/// original check keyed on the *shape* of the field type rather than on a
+/// self-occurrence, which was strictly too coarse — and it is what would
+/// otherwise reject `record Monoid<A> { op: A -> A -> A }`, i.e. the entire
+/// point of a record of functions.
 pub(crate) fn reject_function_fields(d: &InductiveDecl) -> Result<(), crate::ElabError> {
-    fn has_fn(t: &Ty) -> Option<Span> {
+    fn recursive_fn(t: &Ty, name: &str) -> Option<Span> {
         match &t.kind {
-            TyKind::Fn { .. } => Some(t.span),
-            TyKind::Named { args, .. } => args.iter().find_map(has_fn),
-            TyKind::Vec { elem, .. } => has_fn(elem),
+            TyKind::Fn { dom, cod, .. } => {
+                if occurs(dom, name).is_some() || occurs(cod, name).is_some() {
+                    return Some(t.span);
+                }
+                None
+            }
+            TyKind::Named { args, .. } => args.iter().find_map(|a| recursive_fn(a, name)),
+            TyKind::Vec { elem, .. } => recursive_fn(elem, name),
             TyKind::Nat | TyKind::Eq(..) => None,
         }
     }
     for c in &d.ctors {
         for f in &c.fields {
-            if let Some(sp) = has_fn(&f.ty) {
+            if let Some(sp) = recursive_fn(&f.ty, &d.name) {
                 return Err(crate::ElabError::Elab {
                     msg: format!(
-                        "field of `{}` has a function type: that is the infinitary \
-                         tier, which is not lowered yet (issues/inductive-compiler.md)",
-                        c.name
+                        "field of `{}` is a function type mentioning `{}`: that is the \
+                         infinitary tier, which is not lowered yet \
+                         (issues/inductive-compiler.md)",
+                        c.name, d.name
                     ),
                     span: sp,
                 });

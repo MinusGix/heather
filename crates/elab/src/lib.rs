@@ -23,7 +23,7 @@
 //! needs) so that theorems are bindable as `Trm_c` globals.
 
 use std::cell::{Cell, RefCell};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 
 use heather_kernel::conv::conv_type;
@@ -38,7 +38,7 @@ use heather_kernel::term::{
 use heather_kernel::typing::{self, TypeError, DEFAULT_FUEL};
 use heather_syntax::{
     parse_file, Arm, Decl, DeclKind, Expr, ExprKind, Item, LamBinder, OnStmt, OnTarget, ParseError,
-    Span, Stmt, Ty, TyKind,
+    Span, Stmt, RecordLitField, Ty, TyKind,
 };
 
 mod code;
@@ -213,6 +213,15 @@ pub struct Elaborator {
     inductives: HashMap<String, Rc<Inductive>>,
     by_tag: HashMap<u32, Rc<Inductive>>,
     ctors: HashMap<String, (Rc<Inductive>, usize)>,
+    /// Every field name of every declared `record`, across all of them. Not a
+    /// resolution table — which record a name belongs to is decided by the
+    /// receiver's type — but the **cheap negative test** that keeps `.`
+    /// resolution off the hot path: a name that is nobody's field takes the
+    /// method fallback without inferring the receiver at all
+    /// (docs/surface-records.md §4.2). That is every use that existed before
+    /// records, which is what makes the move of `.` into the elaborator a
+    /// no-op for them.
+    record_fields: HashSet<String>,
     next_tag: u32,
     fuel: u64,
     /// Number of Ψ slots reserved for the current declaration's goals — a
@@ -232,6 +241,17 @@ pub struct Elaborator {
     /// Set while elaborating an `on` right-hand side, where a *new* hole is
     /// refused. Load-bearing: it is what makes [`strengthen_global`] sound.
     frozen: Cell<bool>,
+}
+
+/// What a `p.f` turned out to be (docs/surface-records.md §4.2).
+enum DotResolution {
+    /// A record field: the projection, its type and level. Synthesized, since
+    /// every annotation is read off the receiver's type.
+    Project(Term, Type, Level),
+    /// Not a field: the method-call desugaring `f(args…, recv)`, to be
+    /// elaborated in whichever mode the caller is in — which is what keeps
+    /// checking-only methods like `p.absurd()` working.
+    Method(Expr),
 }
 
 /// A goal: a hole that survives to the end of its block. Represented exactly
@@ -270,6 +290,7 @@ impl Elaborator {
             inductives: HashMap::new(),
             by_tag: HashMap::new(),
             ctors: HashMap::new(),
+            record_fields: HashSet::new(),
             next_tag: 0,
             fuel: DEFAULT_FUEL,
             goal_base: 0,
@@ -389,7 +410,46 @@ impl Elaborator {
         // `let` bindings, then the result expression. A `let` is an inlined
         // alias (the same doctrine as a `fn` definition), not a kernel binder.
         for stmt in &decl.body.stmts {
-            let Stmt::Let { name, ty, expr, .. } = stmt;
+            // `let { unit, op } = m;` — each name aliased to its projection
+            // (docs/surface-records.md §5). Sugar over `m.unit` / `m.op`, and
+            // it shares their code: a partial pattern simply binds fewer.
+            let (name, ty, expr) = match stmt {
+                Stmt::Let { name, ty, expr, .. } => (name, ty, expr),
+                Stmt::LetRecord { fields, expr, span } => {
+                    let (t, rty, _) = self.elab_infer(&cx, expr)?;
+                    let Some(ind) = self.record_of(&rty) else {
+                        return err(
+                            "a `let { … }` pattern needs a record on the right",
+                            *span,
+                        );
+                    };
+                    let value = Rc::new(t);
+                    for (f, fsp) in fields {
+                        let Some(idx) = ind.field_index(f) else {
+                            return err(
+                                format!("`{}` has no field `{f}`", ind.name),
+                                *fsp,
+                            );
+                        };
+                        let (term, ty, level) = self.project_field(
+                            &cx,
+                            &ind,
+                            &rty,
+                            Rc::clone(&value),
+                            idx,
+                            *fsp,
+                        )?;
+                        cx.aliases.push(Rc::new(Alias {
+                            name: f.clone(),
+                            depth: cx.names.len(),
+                            term: Rc::new(term),
+                            ty,
+                            level,
+                        }));
+                    }
+                    continue;
+                }
+            };
             let (term, ty, level) = match ty {
                 Some(t) => {
                     let (ty, lvl) = self.elab_ty(&cx, t)?;
@@ -897,6 +957,33 @@ impl Elaborator {
                 let (ind, i, args) = self.ctor_spine(cx, e).expect("just checked");
                 self.build_ctor_value(cx, &ind, i, &args, expected, lvl, e.span)
             }
+            // A record literal *is* a constructor application once its fields
+            // are put in declaration order, so checking mode is the tier-0
+            // constructor path — which is what lets the expected type supply
+            // the instantiation and no annotation be written
+            // (docs/surface-records.md §6).
+            ExprKind::RecordLit { name, tyargs, fields } if tyargs.is_empty() => {
+                let args = self.record_lit_args(name, fields, e.span)?;
+                let Some(ind) = self.inductives.get(name).cloned() else {
+                    return err(format!("unknown type `{name}`"), e.span);
+                };
+                self.build_ctor_value(cx, &ind, 0, &args, expected, lvl, e.span)
+            }
+            // `.f` resolution has to exist in *both* modes: a projection
+            // synthesizes, but the method fallback may be checking-only
+            // (`p.absurd()`), and routing it through inference would break it.
+            ExprKind::Dot { recv, name, args } => {
+                match self.resolve_dot(cx, recv, name, args, e.span)? {
+                    DotResolution::Project(t, ty, l) => match args {
+                        None => Ok(t),
+                        Some(args) => {
+                            let (t, _, _) = self.apply_explicit(cx, None, 0, t, ty, l, args)?;
+                            Ok(t)
+                        }
+                    },
+                    DotResolution::Method(m) => self.elab_check_hinted(cx, &m, expected, lvl, hint),
+                }
+            }
             _ => {
                 let (t, _, _) = self.elab_infer(cx, e)?;
                 Ok(t)
@@ -923,6 +1010,33 @@ impl Elaborator {
                 Ok((t, Type::Nat, Level::Zero))
             }
             ExprKind::Var(name) => self.resolve(cx, name, e.span),
+            ExprKind::Dot { recv, name, args } => {
+                match self.resolve_dot(cx, recv, name, args, e.span)? {
+                    DotResolution::Project(t, ty, l) => match args {
+                        None => Ok((t, ty, l)),
+                        Some(args) => self.apply_explicit(cx, None, 0, t, ty, l, args),
+                    },
+                    DotResolution::Method(m) => self.elab_infer(cx, &m),
+                }
+            }
+            // A record literal in inference position: the fields are permuted
+            // into declaration order and the instantiation is recovered from
+            // them, exactly as for any constructor application
+            // (docs/inductive-tier0-lowering.md §2).
+            ExprKind::RecordLit { name, tyargs, fields } => {
+                let args = self.record_lit_args(name, fields, e.span)?;
+                let Some(ind) = self.inductives.get(name).cloned() else {
+                    return err(format!("unknown type `{name}`"), e.span);
+                };
+                if tyargs.is_empty() {
+                    self.infer_ctor(cx, &ind, 0, &args, e.span)
+                } else {
+                    let head = Expr { kind: ExprKind::Var(name.clone()), span: e.span };
+                    self.ctor_at(cx, &head, tyargs, &args, e.span).unwrap_or_else(|| {
+                        err(format!("unknown type `{name}`"), e.span)
+                    })
+                }
+            }
             ExprKind::VecLit(_) => err(
                 "a vector literal needs an expected type (it is checking-only, like \
                  `refl`): annotate it (`let xs: [T; 2] = [a, b];`) or use it as an \
@@ -1466,6 +1580,122 @@ impl Elaborator {
         let g = cx.gamma.entries.len() as u32;
         swap.terms[(g - 1 - i) as usize] = Rc::new(Term::Var(LocalVar(0)));
         weak.apply_local(&swap)
+    }
+
+    // -- field access (docs/surface-records.md §4) ---------------------------
+
+    /// Resolve `p.f` / `p.f(a, …)` against the receiver's type (§4.2).
+    ///
+    /// The order matters and is the whole design. The **cheap negative test**
+    /// comes first: if `f` is nobody's record field, this is the method
+    /// desugaring and the receiver is never inferred here — which is every use
+    /// that predates records (`p.sym()`, `p.inj(1)`, `xs.map(f)`), so their
+    /// elaboration is bit-for-bit what it was when the parser did this.
+    ///
+    /// Only if `f` *is* some record's field does the receiver get inferred,
+    /// and only if the receiver's own type is a record carrying `f` does this
+    /// become a projection. So a field name that shadows a global costs the
+    /// global nothing at any other receiver type.
+    fn resolve_dot(
+        &self,
+        cx: &Cx,
+        recv: &Expr,
+        name: &str,
+        args: &Option<Vec<Expr>>,
+        span: Span,
+    ) -> R<DotResolution> {
+        if self.record_fields.contains(name) {
+            // Inference failure is not an error *here*: the fallback is what
+            // handles a receiver whose type only the method call determines,
+            // and reporting this failure would regress every such call.
+            if let Ok((t, ty, lvl)) = self.elab_infer(cx, recv)
+                && let Some(ind) = self.record_of(&ty)
+                && let Some(idx) = ind.field_index(name)
+            {
+                let (t, fty, flvl) =
+                    self.project_field(cx, &ind, &ty, Rc::new(t), idx, span)?;
+                let _ = lvl;
+                return Ok(DotResolution::Project(t, fty, flvl));
+            }
+        }
+        let Some(args) = args else {
+            // A bare `p.f` is never a method call — a call needs parentheses —
+            // so there is nothing to fall back to. Name the receiver's actual
+            // type, since the usual mistake is a receiver that is not the
+            // record the writer had in mind.
+            let what = match self.elab_infer(cx, recv) {
+                Ok((_, ty, _)) => match self.record_of(&ty) {
+                    Some(ind) => format!("`{}` has no field `{name}`", ind.name),
+                    None => format!("this is not a record, so it has no field `{name}`"),
+                },
+                Err(_) => format!("no field `{name}` here (and the receiver's type \
+                                   could not be inferred)"),
+            };
+            return err(what, span);
+        };
+        // The method desugaring the parser used to perform: the receiver
+        // becomes the *last* argument, so stage-2 implicit endpoints infer
+        // from it (docs/surface-records.md §4.1).
+        let mut args = args.clone();
+        args.push(recv.clone());
+        let head = Expr { kind: ExprKind::Var(name.to_string()), span };
+        Ok(DotResolution::Method(Expr {
+            kind: ExprKind::App { head: Box::new(head), args, explicit: false },
+            span,
+        }))
+    }
+
+    /// A record literal (§6): permute the written fields into declaration
+    /// order and hand the result to the ordinary tier-0 constructor path.
+    /// Every diagnostic about *which* fields were written lives here, since
+    /// the constructor path only ever sees a positional list.
+    fn record_lit_args(
+        &self,
+        name: &str,
+        fields: &[RecordLitField],
+        span: Span,
+    ) -> R<Vec<Expr>> {
+        let Some(ind) = self.inductives.get(name) else {
+            return err(format!("unknown type `{name}`"), span);
+        };
+        if !ind.is_record {
+            return err(
+                format!(
+                    "`{name}` is an `inductive`, not a `record`: write a constructor \
+                     application (`{}(…)`) rather than `{name} {{ … }}`",
+                    ind.ctors.first().map(|c| c.name.as_str()).unwrap_or("…")
+                ),
+                span,
+            );
+        }
+        let decl: Vec<&str> =
+            ind.ctors[0].fields.iter().map(|(n, _)| n.as_deref().unwrap_or("_")).collect();
+        let mut slots: Vec<Option<&Expr>> = vec![None; decl.len()];
+        for f in fields {
+            let Some(i) = decl.iter().position(|d| *d == f.name) else {
+                return err(
+                    format!("`{name}` has no field `{}` (it has: {})", f.name, decl.join(", ")),
+                    f.span,
+                );
+            };
+            if slots[i].is_some() {
+                return err(format!("field `{}` is given twice", f.name), f.span);
+            }
+            slots[i] = Some(&f.expr);
+        }
+        let missing: Vec<&str> = decl
+            .iter()
+            .zip(&slots)
+            .filter(|(_, s)| s.is_none())
+            .map(|(d, _)| *d)
+            .collect();
+        if !missing.is_empty() {
+            return err(
+                format!("`{name}` literal is missing field(s): {}", missing.join(", ")),
+                span,
+            );
+        }
+        Ok(slots.into_iter().map(|s| s.expect("checked above").clone()).collect())
     }
 
     /// Is this name bound by something the user wrote? Builtins give way to
@@ -2626,6 +2856,18 @@ fn count_holes(decl: &Decl) -> u32 {
                 expr(body, n);
             }
             ExprKind::VecLit(elems) => elems.iter().for_each(|x| expr(x, n)),
+            // The receiver counts whether or not `.f` turns out to be a
+            // projection: the method fallback re-elaborates it as an argument,
+            // and a hole is keyed by span, so one syntactic hole stays one
+            // goal either way.
+            ExprKind::Dot { recv, args, .. } => {
+                expr(recv, n);
+                args.iter().flatten().for_each(|a| expr(a, n));
+            }
+            ExprKind::RecordLit { tyargs, fields, .. } => {
+                tyargs.iter().for_each(|t| ty(t, n));
+                fields.iter().for_each(|f| expr(&f.expr, n));
+            }
             ExprKind::Match { scrut, motive, arms } => {
                 expr(scrut, n);
                 if let Some((_, m)) = motive {
@@ -2646,11 +2888,15 @@ fn count_holes(decl: &Decl) -> u32 {
     }
     ty(&decl.result, &mut n);
     for s in &decl.body.stmts {
-        let Stmt::Let { ty: t, expr: e, .. } = s;
-        if let Some(t) = t {
-            ty(t, &mut n);
+        match s {
+            Stmt::Let { ty: t, expr: e, .. } => {
+                if let Some(t) = t {
+                    ty(t, &mut n);
+                }
+                expr(e, &mut n);
+            }
+            Stmt::LetRecord { expr: e, .. } => expr(e, &mut n),
         }
-        expr(e, &mut n);
     }
     expr(&decl.body.result, &mut n);
     for on in &decl.body.ons {
