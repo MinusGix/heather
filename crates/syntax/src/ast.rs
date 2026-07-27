@@ -149,6 +149,15 @@ pub struct Param {
     /// Written `{name: T}` — filled by unification at call sites unless the
     /// call is `@`-marked (fully explicit). See issues/elab-stage2-metas.md.
     pub implicit: bool,
+    /// Written `self name: T` — this is the parameter a method call's
+    /// *receiver* fills, so `x.f(a)` is `f(a, x)` when the second parameter
+    /// is marked and `f(x, a)` when the first is. Unmarked declarations
+    /// default to their first explicit parameter, so the flag is only ever
+    /// written where the subject is *not* first (`cong`). A marker on a
+    /// normally-named parameter rather than a name, because a proof wants to
+    /// be called `p`; `self: T` names it `self` as well, for record methods.
+    /// See issues/method-receiver-position.md.
+    pub is_self: bool,
     pub span: Span,
 }
 

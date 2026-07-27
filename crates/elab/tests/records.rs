@@ -311,13 +311,15 @@ fn the_method_desugaring_still_works() {
         inductive Opt { None, Some(v: Nat) }
 
         // `.sym()` / `.trans()` — prelude lemmas with implicit endpoints
-        // inferred from the receiver, which is why it is the *last* argument.
+        // inferred from the receiver. Insertion is name-directed, so it works
+        // wherever the receiver lands.
         theorem sym_method(a: Nat, b: Nat, p: a = b): b = a { p.sym() }
-        // The receiver is the *last* argument, so on a two-premise lemma the
-        // receiver is the second premise: `q.trans(p)` is `trans(p, q)`. That
-        // is the pre-existing convention, unchanged by this round.
+        // The receiver fills the subject parameter, which defaults to the
+        // first: `p.trans(q)` is `trans(p, q)` and reads forward. This is the
+        // inversion this file first wrote down (§11.3), fixed by
+        // `issues/method-receiver-position.md`.
         theorem trans_method(a: Nat, b: Nat, c: Nat, p: a = b, q: b = c): a = c {
-            q.trans(p)
+            p.trans(q)
         }
 
         // `.inj(k)` / `.absurd()` — the tier-0 derived lemmas, and `absurd`
@@ -330,7 +332,7 @@ fn the_method_desugaring_still_works() {
         // desugaring builds an explicit `@trans` spine. `cong` is not in the
         // prelude (its function argument is not inferable from the proof), so
         // it is declared here, as the function-types suite does.
-        theorem cong(f: Nat -> Nat, {a: Nat}, {b: Nat}, p: a = b): f(a) = f(b) {
+        theorem cong(f: Nat -> Nat, {a: Nat}, {b: Nat}, self p: a = b): f(a) = f(b) {
             j(p, (y, q) -> f(a) = f(y), refl)
         }
         theorem cong_method(a: Nat, b: Nat, p: a = b): Succ(a) = Succ(b) {
@@ -343,7 +345,7 @@ fn the_method_desugaring_still_works() {
 }
 
 // The vector eliminators arrive through the same fallback (`xs.map(f)` ⇒
-// `map(f, xs)`), and they are *built-in* rather than global, so they take a
+// `map(xs, f)`), and they are *built-in* rather than global, so they take a
 // different path out of it.
 #[test]
 fn the_vector_methods_still_work() {

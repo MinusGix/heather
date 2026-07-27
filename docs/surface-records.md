@@ -17,7 +17,9 @@ last three rounds.
 
 What is *not* already done, and is the real content of this round, is **field
 access**. `.` is currently a parser desugaring that turns `p.f(a)` into a call
-to a **global** `f` with the receiver appended last (`parser.rs:571–596`), and
+to a **global** `f` with the receiver appended last (`parser.rs:571–596`; the
+receiver's position has since become the callee's business,
+`issues/method-receiver-position.md`), and
 `p.f` with no parentheses does not parse at all. A record of functions — which
 is what a trait, an algebraic structure, a `Compile` instance and an
 optimization-pass interface all are — needs `m.op(x, y)` to mean
@@ -186,6 +188,12 @@ This is the round's real work and its only regression risk.
 `f` with the receiver appended **last**, so that stage-2 implicit endpoints
 are inferred from it (`p.sym()` ⇒ `sym(p)`, `p.inj(1)` ⇒ `inj(1, p)`,
 `x.cong(f)` ⇒ `cong(f, x)`). The `(` is mandatory: `p.f` is a parse error.
+
+> Superseded after this round: the receiver now fills the callee's `self`
+> parameter, defaulting to the *first* explicit one, so `p.inj(1)` is
+> `inj(p, 1)` and `p.trans(q)` reads forward. The inference claim above was
+> never the reason — implicit insertion is name-directed and indifferent to
+> explicit-argument order. See `issues/method-receiver-position.md` and §11.3.
 
 Both properties are wrong for records. `m.op(x, y)` must be `(m.op)(x, y)`,
 and `m.unit` must parse.
@@ -386,7 +394,7 @@ type; it should land as a small follow-up, not a round.
 Two directions, and they are not the same problem.
 
 **Destructing (`inj`) is inherited, restrictions and all.** A record
-inherits tier-0 §6.2 verbatim: `inj(k, p)` from `Monoid(a⃗) = Monoid(b⃗)` is
+inherits tier-0 §6.2 verbatim: `inj(p, k)` from `Monoid(a⃗) = Monoid(b⃗)` is
 derived at a **constant** motive, so a field whose type mentions an earlier
 field is diagnosed, not derived (`issues/dependent-field-injectivity.md`).
 For records this is the *normal* case rather than the exotic one — `unit_l`'s
@@ -544,6 +552,10 @@ must be parenthesised, which is exactly where η statements live.
   the same day: [[method-receiver-position]], which measured the flip as cheap
   for declarations and awkward only for the built-in special forms — and
   falsified the guess that it would also fix `.cong(Wrap)`.
+  **Fixed 2026-07-27**, and not by a flip: the receiver's position became a
+  declared property of the parameter (`self p: a = b`), defaulting to the
+  first explicit one. §10.12's test now asserts `p.trans(q)` forward, and the
+  backwards spelling is a rejection test in `method_receiver.rs`.
 - **A numeral above ~40 overflows a 2 MB stack.** `fn f() -> Nat { 99 }` alone
   overflows a test thread's default stack — verified against a clean tree, so
   it predates this round entirely. It cost real debugging time here because a

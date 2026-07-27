@@ -57,7 +57,7 @@ fn a_container_is_not_dropped() {
     let msg = elab_err(&format!(
         "{ROSE}
          theorem kids_inj(a: [Rose; 1], b: [Rose; 1], p: Node(0, 1, a) = Node(0, 1, b)):
-             a = b {{ inj(2, p) }}"
+             a = b {{ inj(p, 2) }}"
     ));
     assert!(msg.contains("container field"), "{msg}");
     assert!(msg.contains("definitionally equal"), "{msg}");

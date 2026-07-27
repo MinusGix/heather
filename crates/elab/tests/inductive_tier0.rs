@@ -318,10 +318,10 @@ fn constructors_are_injective() {
 
         theorem some_inj(a: Nat, b: Nat, p: Some(a) = Some(b)): a = b { inj(p) }
         theorem mk_fst(a: Nat, b: Nat, c: Nat, d: Nat, p: Mk(a, b) = Mk(c, d)): a = c {
-            inj(0, p)
+            inj(p, 0)
         }
         theorem mk_snd(a: Nat, b: Nat, c: Nat, d: Nat, p: Mk(a, b) = Mk(c, d)): b = d {
-            inj(1, p)
+            inj(p, 1)
         }
         "#,
     );
@@ -354,7 +354,7 @@ fn no_confusion_rejects_the_wrong_shape() {
     // A field index past the end.
     let msg = elab_err(
         "inductive Option<A> { None, Some(A) }
-         theorem t(a: Nat, b: Nat, p: Some(a) = Some(b)): a = b { inj(3, p) }",
+         theorem t(a: Nat, b: Nat, p: Some(a) = Some(b)): a = b { inj(p, 3) }",
     );
     assert!(msg.contains("no field 3"), "{msg}");
     // Both sides have to be constructor applications.
@@ -369,7 +369,7 @@ fn a_dependent_field_reports_the_documented_limitation() {
     let msg = elab_err(
         "inductive Witness { Mk(n: Nat, p: n = n) }
          theorem t(a: Nat, b: Nat, pa: a = a, pb: b = b, e: Mk(a, pa) = Mk(b, pb)): a = b {
-             inj(1, e)
+             inj(e, 1)
          }",
     );
     assert!(msg.contains("depends on an earlier field"), "{msg}");
@@ -383,7 +383,7 @@ fn the_independent_field_of_a_dependent_constructor_is_injective() {
         r#"
         inductive Witness { Mk(n: Nat, p: n = n) }
         theorem t(a: Nat, b: Nat, pa: a = a, pb: b = b, e: Mk(a, pa) = Mk(b, pb)): a = b {
-            inj(0, e)
+            inj(e, 0)
         }
         "#,
     );

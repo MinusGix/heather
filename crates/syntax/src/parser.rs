@@ -331,7 +331,20 @@ impl Parser {
         if matches!(self.peek(), TokKind::Lt) {
             self.bump();
             loop {
-                tyvars.push(self.ident("type parameter name")?.0);
+                let (tv, tvsp) = self.ident("type parameter name")?;
+                if tv == "self" {
+                    // Type arguments are never passed at a call site
+                    // (issues/at-and-type-arguments.md), so there is no slot
+                    // here for a receiver either.
+                    return Err(ParseError {
+                        msg: "a type parameter cannot be `self`: type arguments are \
+                              never passed at a call site, so there is nothing for a \
+                              receiver to fill"
+                            .into(),
+                        span: tvsp,
+                    });
+                }
+                tyvars.push(tv);
                 if !matches!(self.peek(), TokKind::Comma) {
                     break;
                 }
@@ -348,14 +361,45 @@ impl Parser {
             if implicit {
                 self.bump();
             }
-            let (pname, psp) = self.ident("parameter name")?;
+            // `self p: T` marks the parameter a method receiver fills
+            // (issues/method-receiver-position.md). `self: T` marks *and*
+            // names it, so a record method reads the Rust way; there is no
+            // third reading, which is what keeps a parameter merely named
+            // `self` from silently not being the subject.
+            let is_self = self.at_kw("self");
+            let self_sp = self.peek_span();
+            if is_self {
+                self.bump();
+            }
+            let (pname, psp) = if is_self && matches!(self.peek(), TokKind::Colon) {
+                ("self".to_string(), self_sp)
+            } else {
+                self.ident("parameter name")?
+            };
+            if is_self && implicit {
+                return Err(ParseError {
+                    msg: "`self` cannot be implicit: an implicit parameter has no \
+                          argument slot for the receiver to fill"
+                        .into(),
+                    span: self_sp.join(psp),
+                });
+            }
+            if is_self && let Some(prev) = params.iter().find(|p: &&Param| p.is_self) {
+                return Err(ParseError {
+                    msg: format!(
+                        "a declaration has at most one `self`, and `{}` is already it",
+                        prev.name
+                    ),
+                    span: self_sp.join(psp),
+                });
+            }
             self.expect(&TokKind::Colon, "`:`")?;
             let ty = self.ty()?;
             let mut span = psp.join(ty.span);
             if implicit {
                 span = span.join(self.expect(&TokKind::RBrace, "`}` to close implicit parameter")?);
             }
-            params.push(Param { name: pname, ty, implicit, span });
+            params.push(Param { name: pname, ty, implicit, is_self, span });
             if !matches!(self.peek(), TokKind::Comma) {
                 break;
             }
@@ -673,9 +717,10 @@ impl Parser {
     /// (docs/surface-function-types.md §1.3).
     ///
     /// `.f` is **not** desugared here any more. It used to become
-    /// `f(args…, receiver)` — a call to a global with the receiver last, which
-    /// is what lets stage-2 implicit endpoints infer from it (`p.sym()` ⇒
-    /// `sym(p)`). That reading is wrong for a record of functions, where
+    /// `f(args…, receiver)` — a call to a global with the receiver last;
+    /// where the receiver goes is now the callee's business, decided by its
+    /// `self` parameter (issues/method-receiver-position.md). That reading is
+    /// wrong anyway for a record of functions, where
     /// `m.op(x)` must be `(m.op)(x)`, and choosing between the two needs the
     /// receiver's *type*. So the parser emits [`ExprKind::Dot`] and the
     /// elaborator decides, keeping the old desugaring as the fallback

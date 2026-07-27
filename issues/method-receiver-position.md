@@ -1,6 +1,6 @@
 ---
 title: "Method calls put the receiver last, which inverts every two-premise lemma"
-status: open
+status: closed
 labels: [frontend, syntax, elaboration, design]
 created: 2026-07-27
 updated: 2026-07-27
@@ -230,3 +230,12 @@ fills, which is a question named arguments do not answer.
   nothing) and awkward only for the four built-in special forms keyed on
   argument position — and that the inference bonus I expected does not exist.
 - 2026-07-27: Scheme written, superseding the mechanism+convention framing: the receiver's position becomes a declared property of the parameter (`self p: a = b`, a marker on a normally-named parameter), defaulting to the first explicit parameter when unwritten. Three consequences worth the reader's time. (a) It settles `cong`, which was a counterexample to BOTH fixed orders, without making the declaration read backwards -- `f` stays first and `p` is marked. (b) It costs one bool on Param/ParamMeta and does NOT reach Type::Pi, which is why it sidesteps the wall [[implicit-binders-in-function-types]] is stuck behind; and trait members never consult it, since a record-of-functions call is a field PROJECTION before the method path (lib.rs:1607-1620). (c) No Rust-side subject table survives: under default-subject-first, map/fold/container-cong simply become receiver-first and read better, and `inj` -- the whole measured obstacle -- is resolved by flipping its documented direct spelling to inj(p, k), since the 'inj(p,1) reads worse' objection was formed under the old convention. Code round next.
+- 2026-07-27: LANDED (crates/elab/tests/method_receiver.rs, 12 tests, workspace 520). `self p: T` parses, `self: T` marks-and-names, and resolve_dot inserts the receiver at subject_index() -- the marked parameter's position among the EXPLICIT non-tyvar ones, or 0. Three things the round taught, none of them predicted by the scheme.
+
+(1) The prototype's cost estimate held exactly, and the marker made the one broken declaration into the round's demonstration rather than a migration: constructor_values::cong_at_succ_by_name declares cong function-first, and adding `self` to `p` keeps BOTH its spellings (p.cong(Succ) and cong(Succ, p)) working with no other edit. That is the case the issue said no fixed order could serve.
+
+(2) The obstacle dissolved as the scheme claimed, and the sweep for it was the useful part: flipping inj's direct spelling touched 9 call sites across three test files plus two docs, and nothing else -- map/fold/container-cong had no direct-call sites at all, which is exactly why the prototype found they 'would have gone quietly wrong'. They now read receiver-first in both spellings.
+
+(3) One test I wrote to be thorough found nothing, and is worth keeping for the reason it found nothing: a marked subject in the MIDDLE (`fn pick(a, self b, c)`) works because insertion is an insert rather than a prepend-or-append, so there was never an end-biased version to get wrong. The counting test (implicits on both sides of the self) is the one that could have failed -- subject_index filters to explicit params, and cong alone would not have caught an off-by-one that happened to cancel.
+
+Corrected while here: issues/surface-operators.md's landing note stated receiver-last with the inference justification, which was never load-bearing; docs/surface-records.md 4.1 and 11.3, and tier-0 6.3.

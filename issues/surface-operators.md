@@ -3,7 +3,7 @@ title: "Operators, methods, and calc for the surface"
 status: closed
 labels: [frontend,syntax]
 created: 2026-07-23
-updated: 2026-07-26
+updated: 2026-07-27
 ---
 
 The ergonomics layer the sketches use freely and stage 1 lacks
@@ -39,3 +39,4 @@ call-style spelling.
 - 2026-07-26: The deferred higher-order '.cong(Succ)' now has a scheduled home: [[surface-function-types]] (roadmap item 8), which is the function-VALUE half of what this issue's note attributed to the trait layer. cong over an arbitrary function needs only Pi + lambda, not traits, so it does not wait for [[compile-typeclass-design]].
 - 2026-07-26: Sharpening the previous note: [[surface-function-types]] landed the function-value layer, so 'cong(f: Nat -> Nat, …)' is now writable and usable — but the literal deferred spelling '.cong(Succ)' still is NOT, because constructors are saturated-only and 'Succ' is not even a resolvable name. That remainder is [[constructors-as-function-values]]. This issue's deferral is half-discharged, not discharged.
 - 2026-07-26: The deferral is now fully discharged: [[constructors-as-function-values]] landed, and 'p.cong(Succ)' elaborates as written (crates/elab/tests/constructor_values.rs::cong_at_succ_by_name). Note which half did it — 'Succ' became an ordinary resolvable name (a lambda at Pi(Nat).Nat), which is what reaches the INFERENCE position that cong's implicit endpoints put its first argument in; the eta-expansion half only covers checking positions. So '.cong(Wrap)' for a declared constructor is still not writable.
+- 2026-07-27: Correction to this issue's item (2): the method desugaring no longer puts the receiver LAST, and the stated reason for that was never load-bearing -- implicit insertion is name-directed and indifferent to explicit-argument order, so the two unary examples given (p.sym()) could not distinguish the orders. As of 2026-07-27 the receiver fills the callee's `self` parameter, defaulting to the first explicit one, so p.trans(q) means trans(p, q). See [[method-receiver-position]].

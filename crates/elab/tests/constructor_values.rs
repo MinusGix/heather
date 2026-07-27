@@ -52,11 +52,16 @@ fn succ_is_a_function_value() {
 // half-delivered. Note the position: `cong` has implicit endpoints, so the
 // argument is *inferred*, not checked — this works because `Succ`'s type is a
 // constant (§2.1), and would not for a declared constructor.
+//
+// `cong` is also the declaration that motivated the `self` marker
+// (`issues/method-receiver-position.md`): its subject is the *last*
+// parameter, because `f` reads better first. Marking `p` is what lets the
+// method and direct spellings below coexist without either reading backwards.
 #[test]
 fn cong_at_succ_by_name() {
     elab(
         r#"
-        theorem cong(f: Nat -> Nat, {a: Nat}, {b: Nat}, p: a = b): f(a) = f(b)
+        theorem cong(f: Nat -> Nat, {a: Nat}, {b: Nat}, self p: a = b): f(a) = f(b)
         { j(p, (y, q) -> f(a) = f(y), refl) }
 
         theorem method(n: Nat, m: Nat, p: n = m): Succ(n) = Succ(m)

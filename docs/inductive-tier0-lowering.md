@@ -422,13 +422,21 @@ forms, elaborated where they are used:
 
 - `absurd(p)` — checking-only (the goal is what it eliminates into), from an
   equation between two *different* constructors.
-- `inj(p)` / `inj(k, p)` — the `k`-th field equation (`k` a literal,
+- `inj(p)` / `inj(p, k)` — the `k`-th field equation (`k` a literal,
   defaulting to 0), from an equation between the *same* constructor.
 
 Both elaborate to ordinary terms that the kernel re-checks, so nothing is
 cached and nothing is trusted; and both give way to any user binding of the
 name, so neither is a keyword. Method syntax comes free from the existing
 desugaring: `p.absurd()`, `p.inj(1)`.
+
+> The proof comes **first**, so the direct and method spellings are one
+> argument order rather than two. This reversed on 2026-07-27: the index used
+> to come first (`inj(1, p)`), which only worked because the method
+> desugaring appended the receiver. Once the receiver fills the callee's
+> subject parameter — the first explicit one unless a declaration says
+> otherwise — `inj(1, p)` was the sole spelling left encoding the old rule.
+> See `issues/method-receiver-position.md`.
 
 ---
 

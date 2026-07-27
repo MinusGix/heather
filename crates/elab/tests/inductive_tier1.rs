@@ -207,7 +207,7 @@ fn no_confusion() {
 
          theorem node_injective_right(a: Tree, b: Tree, c: Tree, d: Tree,
                                       p: Node(a, b) = Node(c, d)): b = d {{
-             inj(1, p)
+             inj(p, 1)
          }}"
     ));
 }
@@ -227,10 +227,10 @@ fn injectivity_across_payload_and_children() {
                             p: Two(a, l, r) = Two(b, l2, r2)): a = b { inj(p) }
 
         theorem two_left(a: Nat, b: Nat, l: T, r: T, l2: T, r2: T,
-                         p: Two(a, l, r) = Two(b, l2, r2)): l = l2 { inj(1, p) }
+                         p: Two(a, l, r) = Two(b, l2, r2)): l = l2 { inj(p, 1) }
 
         theorem two_right(a: Nat, b: Nat, l: T, r: T, l2: T, r2: T,
-                          p: Two(a, l, r) = Two(b, l2, r2)): r = r2 { inj(2, p) }
+                          p: Two(a, l, r) = Two(b, l2, r2)): r = r2 { inj(p, 2) }
 
         theorem tip_is_not_two(a: Nat, b: Nat, l: T, r: T,
                                p: Tip(a) = Two(b, l, r)): a = b { absurd(p) }

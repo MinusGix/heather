@@ -186,6 +186,9 @@ struct ParamMeta {
     /// first few `{}`-implicits, which are a different thing that happens to
     /// share the mask.
     is_type: bool,
+    /// Written `self p: T` — the parameter a method call's receiver fills.
+    /// See [`Elab::subject_index`] and issues/method-receiver-position.md.
+    is_self: bool,
 }
 
 /// What a global name refers to.
@@ -507,11 +510,17 @@ impl Elaborator {
         let params = Rc::new(
             decl.tyvars
                 .iter()
-                .map(|t| ParamMeta { name: t.clone(), implicit: true, is_type: true })
+                .map(|t| ParamMeta {
+                    name: t.clone(),
+                    implicit: true,
+                    is_type: true,
+                    is_self: false,
+                })
                 .chain(decl.params.iter().map(|p| ParamMeta {
                     name: p.name.clone(),
                     implicit: p.implicit,
                     is_type: false,
+                    is_self: p.is_self,
                 }))
                 .collect::<Vec<_>>(),
         );
@@ -1117,11 +1126,14 @@ impl Elaborator {
                     return Ok((Term::Succ(Rc::new(arg)), Type::Nat, Level::Zero));
                 }
                 // `xs.map(f)` / `xs.fold(z, f)` — the vector eliminators
-                // (docs/container-fields.md §4.2). The method desugaring puts
-                // the receiver last, so they arrive as `map(f, xs)` and
-                // `fold(z, f, xs)`.
+                // (docs/container-fields.md §4.2). These are Rust rather than
+                // declarations, so they have no `self` to write and take the
+                // default subject position: the receiver arrives *first*, as
+                // `map(xs, f)` and `fold(xs, z, f)`, which is also how the
+                // direct spelling reads best
+                // (issues/method-receiver-position.md).
                 if name == "map" && !self.shadowed(cx, name) {
-                    let [f, xs] = args.as_slice() else {
+                    let [xs, f] = args.as_slice() else {
                         return err("`map` takes `(f)` on a vector receiver", e.span);
                     };
                     return self.elab_vec_map(cx, f, xs, e.span);
@@ -1133,7 +1145,7 @@ impl Elaborator {
                 // the self-name is not a value, so it can never be an argument
                 // to one (issues/match-recursion.md).
                 if name == "cong"
-                    && let [f, xs] = args.as_slice()
+                    && let [xs, f] = args.as_slice()
                     && let ExprKind::Var(f_name) = &f.kind
                     && cx.selfref.as_ref().is_some_and(|s| s.name == *f_name)
                 {
@@ -1144,22 +1156,25 @@ impl Elaborator {
                     return self.elab_container_ih(cx, f_name, &xs_t, true, e.span);
                 }
                 if name == "fold" && !self.shadowed(cx, name) {
-                    let [z, f, xs] = args.as_slice() else {
+                    let [xs, z, f] = args.as_slice() else {
                         return err("`fold` takes `(init, f)` on a vector receiver", e.span);
                     };
                     return self.elab_vec_fold(cx, z, f, xs, e.span);
                 }
-                // `inj(p)` / `inj(k, p)`: the field equations of an equation
+                // `inj(p)` / `inj(p, k)`: the field equations of an equation
                 // between the same constructor (§6.2). The field index is a
                 // literal, so `p.inj(1)` reads as the second field's equation.
+                // The proof comes first in the direct spelling too, so the two
+                // spellings are one order rather than two
+                // (issues/method-receiver-position.md).
                 if name == "inj" && !self.shadowed(cx, name) {
                     let (k, arg) = match args.as_slice() {
                         [arg] => (0, arg),
-                        [k, arg] => match k.kind {
+                        [arg, k] => match k.kind {
                             ExprKind::Num(k) => (k as usize, arg),
                             _ => return err("`inj`'s field index must be a numeral", k.span),
                         },
-                        _ => return err("`inj` takes `(proof)` or `(field, proof)`", e.span),
+                        _ => return err("`inj` takes `(proof)` or `(proof, field)`", e.span),
                     };
                     return self.build_inj(cx, k, arg, e.span);
                 }
@@ -1633,11 +1648,15 @@ impl Elaborator {
             };
             return err(what, span);
         };
-        // The method desugaring the parser used to perform: the receiver
-        // becomes the *last* argument, so stage-2 implicit endpoints infer
-        // from it (docs/surface-records.md §4.1).
+        // The method desugaring: the receiver fills the callee's `self`
+        // parameter, which defaults to the first explicit one
+        // (issues/method-receiver-position.md). Implicit endpoints are still
+        // inferred from it — insertion is name-directed and indifferent to
+        // explicit-argument order, which is why the old receiver-last rule
+        // was never doing the work its comment claimed.
         let mut args = args.clone();
-        args.push(recv.clone());
+        let at = self.subject_index(name).min(args.len());
+        args.insert(at, recv.clone());
         let head = Expr { kind: ExprKind::Var(name.to_string()), span };
         Ok(DotResolution::Method(Expr {
             kind: ExprKind::App { head: Box::new(head), args, explicit: false },
@@ -1801,6 +1820,28 @@ impl Elaborator {
     /// builtins, and unknown names — none of which take implicits).
     fn implicit_mask(&self, name: &str) -> Vec<bool> {
         self.params_of(name).iter().map(|p| p.implicit).collect()
+    }
+
+    /// Where a method call's receiver goes in the *explicit* argument list:
+    /// the position of the `self`-marked parameter among the explicit,
+    /// non-type-variable ones, or `0` when nothing is marked.
+    ///
+    /// Counting over explicit parameters only is the whole subtlety. The
+    /// receiver is inserted into the surface argument list, which is what the
+    /// writer typed — implicits are filled later, by the name-directed mask
+    /// ([`Self::implicit_mask`]), and type arguments are never passed at all
+    /// (issues/at-and-type-arguments.md). So a `self` sitting behind two
+    /// `{}`-implicits is still explicit-index 0.
+    ///
+    /// Unmarked is `0` rather than "no method call", so every declaration
+    /// that predates the marker keeps working and a one-premise lemma never
+    /// has to write it (issues/method-receiver-position.md).
+    fn subject_index(&self, name: &str) -> usize {
+        self.params_of(name)
+            .iter()
+            .filter(|p| !p.implicit && !p.is_type)
+            .position(|p| p.is_self)
+            .unwrap_or(0)
     }
 
     /// The parameters of a callable global, for defaulting goal names.
