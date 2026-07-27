@@ -310,6 +310,41 @@ The positional form `Monoid(0, f, p)` also works, since §2.1 generates a real
 constructor. That is not a second path — it *is* the path; the braced literal
 is a permutation in front of it.
 
+**The braced form is provisional** (decided 2026-07-27, after implementing).
+Since a record's constructor is an ordinary constructor, the moment
+[[named-arguments]] lands the same thing is sayable with no new syntax at all:
+
+```heather
+Monoid(0, f, p)                          -- works today, positional
+Monoid(unit: 0, op: f, unit_l: p)        -- named arguments: an ordinary call
+Monoid { unit: 0, op: f, unit_l: p }     -- this section's form
+⟨0, f, p⟩                                -- anonymous, head inferred
+```
+
+The second line is a *call*, so it is in parentheses, so it carries none of
+§6.1's ambiguity and needs none of its suppression flag — and it is consistent
+with every other application in the language rather than being a special form.
+That makes the braced literal plausibly **redundant with named arguments**
+rather than with the anonymous form, and retiring it would delete §6.1
+outright, along with the standing hazard that every future block-preceding
+construct has to remember the flag.
+
+So: no further investment in the braced form, and revisit it when named
+arguments land. This is also a reason to pull that issue forward — it now pays
+off in two places (there, `@`-calls and `calc`'s fragile desugaring; here, a
+whole ambiguity class).
+
+Not chosen, and worth recording why: **going all-in on `⟨…⟩`** — dropping the
+braced form now and spelling an explicit head as `Monoid ⟨unit: 0, …⟩` — is
+coherent, and its rule is cleaner than what we have ("braces are for blocks,
+angles are for structure", which would take `let ⟨x, y⟩ = p` with it). It is
+not taken because `⟨⟩` has no good ASCII twin, and every unicode form here has
+one (`λ`/`fun`). `<` is already both `lt` and the type-argument bracket, which
+is why `try_tyargs` has to be speculative, so it cannot serve. Making the only
+way to construct a record depend on editor support is a worse trade than one
+pair of parentheses in a `theorem` statement — and named arguments remove the
+need to make it at all.
+
 ### 6.1 The `match m { … }` ambiguity (added while implementing)
 
 A braced literal makes `{` able to follow an expression, and there are three
@@ -505,8 +540,10 @@ must be parenthesised, which is exactly where η statements live.
   for a one-premise lemma (`p.sym()`) and inverted for a two-premise one:
   `q.trans(p)` is `trans(p, q)`, so the receiver is trans's *second* premise.
   Pre-existing, unchanged by this round, and pinned as such in §10.12's test
-  rather than quietly worked around. It is an argument for named arguments
-  ([[named-arguments]]), which is where it should be settled.
+  rather than quietly worked around. Promoted to its own issue and prototyped
+  the same day: [[method-receiver-position]], which measured the flip as cheap
+  for declarations and awkward only for the built-in special forms — and
+  falsified the guess that it would also fix `.cong(Wrap)`.
 - **A numeral above ~40 overflows a 2 MB stack.** `fn f() -> Nat { 99 }` alone
   overflows a test thread's default stack — verified against a clean tree, so
   it predates this round entirely. It cost real debugging time here because a

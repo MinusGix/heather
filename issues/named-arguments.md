@@ -97,3 +97,25 @@ Default arguments, variadics, and any form of overloading.
   scheduled: it wants [[surface-records]] first, because the trait/record
   layer is both where argument lists get long enough to need it and where the
   trait-method naming question has to be answered anyway.
+- 2026-07-27: **[[surface-records]] landed, and it added a second payoff —
+  worth pulling this forward for.** A record's constructor is an ordinary
+  constructor, so `Monoid(unit: 0, op: f)` would be an ordinary *call* with
+  named arguments, saying exactly what the braced literal
+  `Monoid { unit: 0, op: f }` says. The braced form is now marked provisional
+  (docs/surface-records.md §6), because retiring it in favour of this would
+  delete a whole ambiguity class: `{` after an expression collides with every
+  position where a *block* follows one (`match m { … }`, a declaration's
+  result type), which currently needs a Rust-style suppression flag lifted
+  inside brackets. That flag is a standing hazard rather than a one-time cost
+  — every future block-preceding construct has to remember it, and
+  [[effects-direction]] will bring more of them. A call is in parentheses, so
+  it has none of that.
+
+  Concretely, this issue now buys: finer-grained `@`/`<…>` overrides (the
+  original motivation), `calc`'s fragile fully-explicit `@trans` desugaring,
+  and the record-literal ambiguity. Open question 4 above ("constructors and
+  `match` arms") is no longer a nice-to-have but the load-bearing case.
+
+  Also relevant to open question 4, from the same round: [[method-receiver-position]]
+  argues the receiver should stop being positional at all, which is the same
+  observation one layer up.
