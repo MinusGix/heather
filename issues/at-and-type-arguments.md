@@ -3,7 +3,7 @@ title: `@` and type parameters collide: every explicit call breaks when a callee
 status: closed
 labels: [frontend,elaboration,design]
 created: 2026-07-26
-updated: 2026-07-26
+updated: 2026-07-27
 ---
 
 Generalizing a declaration — adding `<A>` to a `theorem` that had none — is
@@ -108,3 +108,4 @@ So a polymorphic prelude is reachable in full, with `cong(f, p)` replacing
   make `@` and `<…>` orthogonal; not implemented, because it changes shipped
   surface semantics and reverses a decision that round made deliberately.
 - 2026-07-26: IMPLEMENTED as recommended: '@' and '<...>' are orthogonal knobs. Parser un-rejects '@f<T, ...>(...)'; the named-call path narrows the mask under '@' (keep the is_type entries, clear the rest) instead of jumping to apply_explicit; a self-call never passes type parameters, under '@' or not (SelfRef gained n_tyvars). Two consequences neither the issue nor docs/surface-polymorphism.md section 5 predicted. (1) The 'expression read as a type at Ty l' coercion is now DEAD -- no position has that expected type any more -- so it was retired to a diagnostic; it had existed only to paper over this collision. (2) apply_implicit had to gain a CHECKING mode: '@sym(a, b, ?p)' now routes through it, and it inferred every explicit argument, so refl / ?-holes / vector literals lost their expected type. It now checks against the domain zonked with the solutions so far and infers only while metas remain unsolved -- 'a' solves the carrier before 'p's domain is needed. That is an improvement to implicit application generally. The prelude is now polymorphic (sym<A>, trans<A>); cong_succ stays monomorphic, since a general cong needs its function argument explicit. Workspace 466 green, no test edits beyond the two that pinned the old '@' spelling.
+- 2026-07-27: Follow-on sketched as [[named-arguments]]: '@' and '<...>' are both all-or-nothing positional overrides, and a named-argument form would subsume them with finer grain -- including letting the calc desugaring name only the endpoints it cares about instead of emitting a fully-explicit @trans.
