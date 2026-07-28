@@ -3,10 +3,16 @@
 // ordinary expressions; `refl` is just a value (docs/sketches/surface-v1.md).
 //
 // `cong_succ` is Nat-specific by name and stays so: a general `cong` needs
-// its *function* argument explicit, since an implicit one is not inferable
-// from the proof — the proof's type mentions the endpoints and not the
-// function (issues/elab-unifier-completeness.md). That is a different lemma,
-// not this one generalized.
+// its *function* argument explicit today. That is a different lemma, not this
+// one generalized.
+//
+// The reason is **not** that `f` is unrecoverable — it is recoverable, from
+// the *expected type* rather than from the proof, by anti-unification
+// (issues/congruence-by-anti-unification.md). What is true is that no
+// unifier reaches it: `?f a ≟ X` is flex-rigid with `a` an arbitrary term,
+// so it is outside the Miller fragment and has several solutions. The
+// explicit spelling stays right either way, since a tactic that inferred `f`
+// would emit a call to exactly this declaration.
 //
 // Universe polymorphism is still out: `A` ranges over `Ty 0`, so these live
 // at level 1. Quantifying over the *level* is layer-m `ΠΠ ℓ⃗` territory.
