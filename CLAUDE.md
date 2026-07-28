@@ -10,6 +10,12 @@
   derived `Debug`. In property tests still prefer seed-only failures (the
   `law!` macro in `crates/kernel/tests/subst_laws.rs`) — bounded output is
   for humans debugging one case, not 300 failing seeds.
+- **Benchmarks: `scripts/bench`** (same `ulimit` discipline as `scripts/test`;
+  never bare `cargo bench`). `--check` gates against
+  `crates/kernel/benches/baseline.tsv`; the headline number is the scaling
+  exponent, not the time. `docs/benchmarking.md` explains what "regressed"
+  means and why the harness is first-party (the kernel stays at zero
+  dependencies, dev-dependencies included — so no Criterion).
 - **Testing generated terms** (elaborator schemas, lowerings):
   `docs/testing-generated-terms.md` — the four axes a test has to vary
   (literal *and* neutral scrutinee, an **open** element type, a *checking*

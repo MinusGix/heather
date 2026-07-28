@@ -3,7 +3,7 @@ title: Design FunctionIR and its simulate semantics
 status: open
 labels: [ir, compiler, design]
 created: 2026-07-22
-updated: 2026-07-26
+updated: 2026-07-28
 ---
 
 `Compiler::FunctionIR` plus its interpreter is the load-bearing spec object of
@@ -29,3 +29,4 @@ Decisions to make:
 ## Log
 
 - 2026-07-26: Deferred behind round two of [[frontend-roadmap]], deliberately. [[stress-proof-suite]] is closed and its acceptance clause says this reopens in-language, but two of its inputs are still elaborator machinery rather than language features: there is no polymorphism at all ([[surface-polymorphism]] -- an IR generic in anything cannot be written), and the surface's only indexed type is the BUILT-IN Vec, with literal-only lengths and no eliminator ([[indexed-families]], which also has to settle whether indexed finitary families ford over Wf or come from indexed W -- a contradiction this issue's typed-IR design would otherwise have to resolve on the fly). A fuel-indexed simulate does not NEED any of that, which is exactly the risk: it would be writable today and would bake the current limits into the first real consumer. Reopen after roadmap items 11-14.
+- 2026-07-28: When this lands, it owns adding the thesis-shaped bench fixture: conversion discharging `simulate ir fuel` against its result at realistic program size and fuel, into the kernel suite ([[kernel-benchmarks]], now closed -- the suite is built; a new family is a ~30-line file in crates/kernel/benches/kernel/fixtures/). Meanwhile conv/computed-numeral is the proxy, and it already carries a warning for this design: with substitution copying payloads ([[subst-copies-payloads-at-depth-zero]]) a fuel-indexed evaluator is quadratic in fuel even though its definition is linear, so simulate's cost model should be checked against that fix rather than assumed.

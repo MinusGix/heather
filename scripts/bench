@@ -1,0 +1,32 @@
+#!/usr/bin/env bash
+# Run the kernel benchmark suite under hard resource limits.
+#
+# ALWAYS use this instead of bare `cargo bench`, for the reason `scripts/test`
+# gives and then some: benchmarks deliberately push reduction and conversion
+# at size, which is exactly the workload that turns a wrong fuel bound or a
+# lost sharing invariant into an unbounded normalization. Under these limits
+# the bench process dies alone.
+#
+# Usage: scripts/bench [--check | --save] [--quick] [--filter substr] [--list]
+#        scripts/bench --help
+#
+# See docs/benchmarking.md for what the numbers mean and when to re-record.
+set -euo pipefail
+cd "$(dirname "$0")/.."
+
+# Compile without limits (rustc is memory-hungry but trusted)...
+cargo bench --package heather-kernel --bench kernel --no-run --quiet
+
+# ...then run under them: 4 GiB address space, 20 CPU minutes.
+#
+# The 4 GiB covers the bench's 256 MiB worker stack (reserved, not committed —
+# see WORKER_STACK in benches/kernel/main.rs) with room to spare. The CPU cap
+# is generous because the full suite plus the stack probe is minutes of work,
+# not seconds; a runaway is orders of magnitude beyond it either way.
+#
+# RUST_MIN_STACK is deliberately *not* set: every thread the suite depends on
+# gets an explicit stack size, and the stack probe's whole job is to measure
+# depth at a size it chose, which an ambient minimum would silently raise.
+ulimit -v 4194304
+ulimit -t 1200
+exec cargo bench --package heather-kernel --bench kernel --quiet -- "$@"

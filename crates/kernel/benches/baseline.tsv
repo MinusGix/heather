@@ -1,0 +1,82 @@
+# Heather kernel benchmark baseline — see docs/benchmarking.md
+# Regenerate with: scripts/bench --save
+env	host	minus-pc
+env	cpu	AMD Ryzen 7 5700X 8-Core Processor
+env	profile	release
+env	rustc	rustc 1.97.0 (2d8144b78 2026-07-07)
+env	commit	b97e3c3
+case	subst/shift-local	71	2174.2
+case	subst/shift-local	135	4866.2
+case	subst/shift-local	263	10319.7
+case	subst/shift-local	519	21892.8
+case	subst/shift-local	1031	44804.3
+case	subst/apply-local	71	2540.9
+case	subst/apply-local	135	5046.9
+case	subst/apply-local	263	10581.6
+case	subst/apply-local	519	21698.5
+case	subst/apply-local	1031	43829.2
+case	nat/step-once	64	8871.7
+case	nat/step-once	128	18763.9
+case	nat/step-once	256	38810.0
+case	nat/step-once	512	80251.8
+case	nat/step-once	1024	152833.6
+case	nat/add-normalize	64	856417.2
+case	nat/add-normalize	128	3539607.3
+case	nat/add-normalize	256	14413804.0
+case	nat/add-normalize	512	57580793.0
+case	nat/add-normalize	1024	232166899.0
+case	nat/mul-normalize	8	232349.8
+case	nat/mul-normalize	12	674457.8
+case	nat/mul-normalize	16	1473146.9
+case	nat/mul-normalize	24	4511059.8
+case	nat/mul-normalize	32	10298512.5
+case	nat/mul-normalize	48	32984945.0
+case	nat/check-numeral	64	6001.7
+case	nat/check-numeral	128	12058.6
+case	nat/check-numeral	256	26315.2
+case	nat/check-numeral	512	55893.0
+case	conv/computed-numeral	32	222678.5
+case	conv/computed-numeral	64	880320.9
+case	conv/computed-numeral	128	4456261.0
+case	conv/computed-numeral	256	21121740.0
+case	conv/computed-numeral	512	92042040.0
+case	conv/perturbed-pairs	25	64214.6
+case	conv/perturbed-pairs	50	235017.0
+case	conv/perturbed-pairs	100	1312647.6
+case	conv/perturbed-pairs	200	2318916.7
+case	wf/check-tree	303	89048.2
+case	wf/check-tree	683	196172.2
+case	wf/check-tree	1443	414109.6
+case	wf/check-tree	2963	859703.0
+case	wf/mirror-involution	303	17335982.0
+case	wf/mirror-involution	683	42614608.0
+case	wf/mirror-involution	1443	108703139.0
+case	wf/mirror-involution	2963	262389903.0
+case	code/check-identity-recursor	3	537087.8
+case	code/check-identity-recursor	5	539004.1
+case	code/check-identity-recursor	9	548853.1
+case	code/check-identity-recursor	17	544107.0
+case	code/check-identity-recursor	33	543138.1
+case	code/whnf-identity-recursor	3	456.2
+case	code/whnf-identity-recursor	5	569.5
+case	code/whnf-identity-recursor	9	865.9
+case	code/whnf-identity-recursor	17	1705.0
+case	code/whnf-identity-recursor	33	3566.5
+case	check/generated-terms	25	1256023.0
+case	check/generated-terms	50	2066186.9
+case	check/generated-terms	100	3310231.1
+case	check/generated-terms	200	7522658.5
+slope	subst/shift-local	1.128
+slope	subst/apply-local	1.068
+slope	nat/step-once	1.031
+slope	nat/add-normalize	2.019
+slope	nat/mul-normalize	2.769
+slope	nat/check-numeral	1.078
+slope	conv/computed-numeral	2.197
+slope	conv/perturbed-pairs	1.800
+slope	wf/check-tree	0.995
+slope	wf/mirror-involution	1.197
+slope	code/check-identity-recursor	0.005
+slope	code/whnf-identity-recursor	0.872
+slope	check/generated-terms	0.843
+stack	stack/check-numeral	4194304	1414

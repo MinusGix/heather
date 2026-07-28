@@ -3,7 +3,7 @@ title: "~47 KB of stack per `Succ` level caps numerals at ~150"
 status: open
 labels: [elaboration, kernel, tooling]
 created: 2026-07-27
-updated: 2026-07-27
+updated: 2026-07-28
 ---
 
 A numeral lowers to `Succ^n(Zero)` (`lib.rs`, `ExprKind::Num`), and something
@@ -75,3 +75,4 @@ spines arise from ordinary recursion too, not only from literals.
   `Succ` level, so ~40 at 2 MiB and ~150 at 8 MiB. Still worth fixing — the
   per-frame cost is on every recursive walk, not just numerals — but it is a
   latent limit, not a live breakage, and no test is near the bound.
+- 2026-07-28: MEASURED, by the new bench suite's stack probe ([[kernel-benchmarks]]; `scripts/bench --stack-only`, which bisects the deepest numeral that check_term survives on a thread of exactly 4 MiB). Kernel-only check walk over Succ^n Zero: 53.9 KiB/level in the dev profile (76 levels in 4 MiB) versus 2.9 KiB/level in release (1414 levels) -- an 18x frame-size difference. Two consequences for this issue. (1) The ~47 KB/level headline is a DEV-PROFILE figure, and it reproduces without the elaborator, so the fat frames are the kernel's own recursion compiled without optimization. (2) The limit binds where scripts/test runs (debug) and is ~18x weaker in a shipped checker, so "a table of constants in a generated IR" is a test-profile worry first. Whatever the fix, the probe is the before/after number, and it is baselined.
