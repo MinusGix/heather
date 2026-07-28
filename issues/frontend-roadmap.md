@@ -71,57 +71,137 @@ magic inherits the magic.
     ([[compile-typeclass-design]]) on top. An algebraic structure and a
     `Compile` instance are both records of generic functions, so this wants
     11 first.
-13. **[[motives-as-lambdas]]** — small; `match … as x -> M` and
-    `j(p, (y,q) -> M, case)` become ordinary λs, and `->` stops meaning two
-    things. Sets up `j`/`refl`/`cong` becoming declarations rather than
-    syntax once 11 lands.
-14. **[[indexed-families]]** — retires built-in `TyKind::Vec`/`VecLit` in
-    favour of a declared family, and resolves the standing
-    indexed-`W`-vs-`Wf` contradiction the roadmap flagged as needing an
-    answer *before* a typed IR is designed.
-15. Then [[ir-simulate-design]] in-language, with [[datarepr-separation]] and
+13. ✅ **[[surface-universe]]** — the Type Session, landed 2026-07-27 in five
+    phases, with [[motives-as-lambdas]] as phase 3 (closed). `Type<n>` is
+    writable, so a level join is no longer vacuous. Residue has its own homes:
+    [[implicit-level-polymorphism]] and [[special-forms-as-declarations]].
+14. **[[indexed-families]]** — a surface form for declaring an indexed
+    family, and the resolution of the standing indexed-`W`-vs-`Wf`
+    contradiction this issue flagged as needing an answer *before* a typed IR
+    is designed. It does **not** retire `TyKind::Vec`/`VecLit`; that was this
+    order's own claim and it is withdrawn (2026-07-27) — see that issue's
+    scope notes for why the container has to stay primitive.
+15. **[[cli-check-diagnostics]]** — promoted from "cheap and separable"
+    (2026-07-27): the IR round is the first that writes substantial Heather
+    files rather than test snippets, and checking them only through a Rust
+    test harness is friction on exactly that round. Also the harness
+    [[frontend-benchmarks]] assumes.
+16. Then [[ir-simulate-design]] in-language, with [[datarepr-separation]] and
     [[end-to-end-compile-instance]] behind it.
 
 Direction, not scheduled: [[generators-in-the-language]] — the derived
 artifacts (recursors, no-confusion, the tier lowerings) are Rust that emits
 kernel terms, and the thesis says they belong in the meta layer. Wants 11 and
-12 first, and an expressiveness reading of ch. 07 before it can be planned.
+12 first. Its ch. 07 expressiveness reading (can the meta layer express the
+tier-1 lowering as it stands?) **is** scheduled, as an unordered side round —
+a reading exercise, and if the answer is "missing kernel features," that is a
+metatheory round to know about before the IR stack sits on top.
 
-Cheap and separable, pick up any time: [[cli-check-diagnostics]] (there is
-still no way to check a file outside a Rust test), the postponement slice of
+Cheap and separable, pick up any time: the postponement slice of
 [[elab-unifier-completeness]], [[annotated-let-swallows-the-equals]],
-[[warn-bare-eq-no-effect]].
+[[warn-bare-eq-no-effect]], [[split-on-arms]], [[named-arguments]],
+[[kernel-benchmarks]] and [[frontend-benchmarks]] (design rounds; the
+latter's harness wants item 15).
+
+Blocked on layers not yet built, listed so they are reachable rather than
+only `ls`-able: [[implicit-level-polymorphism]] (wants level inference *and*
+[[generators-in-the-language]]), [[special-forms-as-declarations]] (bounded to
+level 0 until `UPi`, i.e. layer m).
 
 Later, tracked where linked: implicit quotation + modal surface
 ([[surface-syntax]] round 2), context-specific compilation / certified PE
 ([[compile-typeclass-design]], [[certifying-generator]] — sketch round 3),
 goal-solver meta-functions (sketch round 3 §2).
 
+
 ## Log
 
-- 2026-07-23: Opened after stage 1 landed, alongside the granular issue
-  split (stage2/match-recursion/goal-holes/surface-operators/ch07-pass).
-- 2026-07-24: Stage 2 ([[elab-stage2-metas]]) landed — focus items 3 (metas/motives) done for the level-0 Nat suite. Level-meta *inference* deferred: no level constraints exist below layer m (universe polymorphism is layer-m only), so it is naturally sequenced with the later modal/layer-m work, not with stage 2. Next focus: item 4 [[surface-operators]] (+/== operators, method calls, calc) — now unblocked and high-leverage on top of implicit endpoints — interleaved with item 2 [[metatheory-ch07-pass]] before [[inductive-compiler]] term volume.
-- 2026-07-24: Deferred stage-2 unifier work promoted to a jumpable item: [[elab-unifier-completeness]] (postponement, general pattern inversion, level-meta inference). Kernel-gated, none are correctness holes; pick up when a program needs them.
-- 2026-07-24: Item 4 [[surface-operators]] landed (operators/methods/calc as parser desugaring). Deferred within it, tied to later work: higher-order .cong(Succ) needs first-class function values/types in the surface (part of the trait/function-value layer, [[compile-typeclass-design]]); mul/lt need defs. Next focus: item 5 [[match-recursion]] (unified self-call match, drops the explicit Succ(k, ih) binder) and item 2 [[metatheory-ch07-pass]] before [[inductive-compiler]] term volume.
-- 2026-07-24: Filed [[surface-proof-automation]] (user-requested, unscheduled): auto-refl (empty-block trivial-closer; independent tiny MVP) + apply (prefix continuation application; wants goal-holes' block-statement surface). Sits after/with [[goal-holes]] in the 'later' cluster.
-- 2026-07-24: Equality notation settled ([[surface-syntax]]): single `=` for binding + propositional equality (ML-style), `==` rejected with a hint, `:=` for discharge (and future assignment, [[effects-direction]]). Follow-up diagnostic tracked: [[warn-bare-eq-no-effect]].
-- 2026-07-24: Item 5 [[match-recursion]] landed: unified `Succ(k)` match with IH = guarded self-call; Nat suite now readable as recursive theorems. Deferred within it: generalizing a *varying* non-decreasing argument into the motive (rejected with a diagnostic; additive to add later). Next focus: item 2 [[metatheory-ch07-pass]] before [[inductive-compiler]] term volume, then item 6 [[goal-holes]].
-- 2026-07-24: Item 2 [[metatheory-ch07-pass]] done and closed: full ch. 07 pass over the six extensions (docs/metatheory-ch07-extensions.md), nothing broken, no kernel-rule change, so [[inductive-compiler]] tier 1 is no longer gated on unpaid metatheory debt. Next focus: item 6 [[goal-holes]], then item 7 [[inductive-compiler]] tier 0.
-- 2026-07-24: Item 6 [[goal-holes]] landed: `?name`/`?` holes as decl-scoped Ψ-metas, `on ?name := e;` / `on _: P := e;` discharge, and the unsolved-goal listing (with the first `Display for ElabError`). Came with the block-statement grammar the roadmap had been deferring — `Block` + `let` — which is the surface [[surface-proof-automation]]'s `apply` was waiting on, so its cheap slice is now unblocked too. Deferred within it, each tested as a rejection: holes are checking-only (so `sym(?p)` needs `@sym(a,b,?p)` — the fix is postponement, i.e. [[elab-unifier-completeness]], not this issue), one occurrence per named hole, no holes inside an `on` RHS (goal payloads are not telescoped), `on` trailing-only, and auto-defer holes (`xs[i]`) still want the trait/indexing layer. Next focus: item 7 [[inductive-compiler]] tier 0 → List hand-prototype → tier 1 ([[stress-proof-suite]] item 2).
-- 2026-07-24: Item 7 [[inductive-compiler]] TIER 0 LANDED: scheme doc first (docs/inductive-tier0-lowering.md), then the mechanization (crates/elab/src/inductive.rs) plus surface support — 'inductive' decls with monomorphized type parameters, named/applied types, n-ary match arms (Nat folded into the same grammar), constructors in both modes, and no-confusion as 'absurd(p)'/'inj(k, p)'. 24 acceptance tests, every one kernel-checked. Two scheme corrections found by implementing: the nominal tag must be eta-irrelevant (Sigma-of-Units, not Id — a dependent motive needs 'inl x' to convert with the canonical constructor), and injectivity needs no large elim (the lhs's own field is the default, which keeps the motive constant and drops the level restriction). Deferred and diagnosed rather than mis-lowered: tier 1 (recursive) declarations, dependent-field injectivity, deep type-argument inference. Next focus: item 7's remainder — the List hand-prototype (exact-height fording) as the acceptance test for tier 1 ([[stress-proof-suite]] item 2), then the tier-1 generator.
-- 2026-07-26: Item 7 remainder closed on the linear side: [[stress-proof-suite]] item 2 is DONE — append_nil/append_assoc/rev_append written at the surface over a generator-produced 'inductive List' and kernel-checked (crates/elab/tests/tier1_list_proofs.rs). The tier-1 generator needed no changes to carry proof content, only definitions, which was the open question. Next focus: item 8 — tier 2 / Acc by hand ([[stress-proof-suite]] item 3), which exercises the synthesized-ih beta rule, the least battle-tested kernel machinery; then [[ir-simulate-design]] reopens in-language.
-- 2026-07-26: Focus order revised after a direction review. Items 8-10 were 'tier 2 / Acc, then the IR'; they are now [[surface-function-types]], then [[nested-inductives-container-fields]], then Acc. Reasoning: (1) Acc is not on the critical path — [[ir-simulate-design]] specifies a FUEL-INDEXED simulate, so it recurses on Nat, and the IR is first-order data that tier 1 already covers; nothing before [[end-to-end-compile-instance]] reaches W. (2) Acc is not even stateable at the surface, since Acc.intro's field is a function, so item 3 of [[stress-proof-suite]] would be a kernel-level test of the synthesized-ih beta rule rather than frontend progress — worth doing as insurance on trusted code with no end-to-end consumer, but not next. (3) The real bottleneck is that TyKind is 'Nat | a = b | Named<args>' and ExprKind's only application form takes a NAME as head. Container fields, the trait layer, user-written optimization passes, Compile instances, and the whole mathematics side all sit behind function types. (4) Function types are a pure surface+elaborator round — Pi/Lam/App landed in kernel v0 — so unlike the last two rounds there is no trusted-base change and no ch. 07 obligation. Also noted for later: [[kernel-v1-extensions]] still claims inductive families come from indexed W, but the branching argument (beta on open children) applies verbatim, so indexed FINITARY families should ford over Wf — consistent with [[inductive-compiler]]'s own scope note that indices are 'the same machinery, not a fourth tier'. That contradiction should be resolved before a typed IR is designed.
-- 2026-07-26: Item 8 [[surface-function-types]] LANDED and closed: dependent '(x: A) -> B' / 'A -> B', 'λ (x: A) => e' (with 'fun' as the ASCII synonym), postfix application so a call head is any expression, and lambda checking/inference against the kernel's Pi/Lam/App. 26 acceptance tests, workspace at 379. As predicted this needed no kernel change and no metatheory pass. The immediate payoff is cong over an ARBITRARY function, deferred since [[surface-operators]] — though see the correction: the deferred SPELLING '.cong(Succ)' still needs a lambda, because constructors are saturated-only ([[constructors-as-function-values]]). Next focus: item 9 [[nested-inductives-container-fields]], whose design fork (indexed accessor vs fold) this round was blocking — the fold is now an ordinary function taking a lambda, so no special-form eliminator is needed. Two things filed rather than folded in: [[implicit-binders-in-function-types]] (wanted on by-value functions, structurally blocked because implicitness lives in ParamMeta keyed by declaration name rather than in Type::Pi) and [[annotated-let-swallows-the-equals]] (pre-existing parser bug, found while probing hole-under-lambda).
-- 2026-07-26: Side round, off the focus order: [[constructors-as-function-values]] LANDED and closed (docs/constructor-function-values.md, crates/elab/tests/constructor_values.rs, 9 tests, workspace at 412). 'twice(Succ, 0)', 'ap(Wrap, 1)', 'Cons(1)' and 'Node(0, 1)' at a container type all elaborate, so a constructor is a function value wherever something is checking it. Two independent halves, worth keeping distinct: 'Succ' became an ordinary resolvable NAME (a lambda at Pi(Nat).Nat, no expected type needed) — that is the half that discharges [[surface-operators]]' '.cong(Succ)', because cong's implicit endpoints put its argument in an INFERENCE position that the other half cannot reach — and declared constructors eta-expand against the expected Pi in checking position. Nothing tier-aware was needed. Correction to the filed plan, docs §5.1: 'Cons(1)(xs)' also reaches inference (its head is an application, not a name) and is fixed by re-associating the constructor spine, not by building a field telescope; so the boundary is 'an unsaturated constructor needs a checking position only if it STAYS unsaturated'. Still open by choice: a bare unsaturated constructor in inference position ('let f = Wrap;', '.cong(Wrap)') — inferring its type is a second copy of the lowering's field layout and is impossible for a parameterized declaration; the '.cong(Wrap)' half is [[elab-unifier-completeness]]' (apply_implicit infers where it could check). Focus order unchanged: item 9 [[nested-inductives-container-fields]] phase 3, then item 10 Acc.
-- 2026-07-26: Item 9 [[nested-inductives-container-fields]] phase 3 DESIGNED (docs/container-proofs.md); implementation is the next code round. It needs no kernel change and no metatheory pass — one elim_Nat schema and a typing rule — so it stays a pure surface+elaborator round like item 8. Recorded there because it revises a standing assumption: an 'All' predicate over a vector is definable in this kernel (codes + El give large elimination at Prog layer), so the reason the design does not use it is that the SURFACE cannot eliminate a vector, which puts 'All' behind the deferred Fin/indexing layer rather than behind any kernel work. Focus order otherwise unchanged: phase 3 code, then item 10 Acc.
-- 2026-07-26: Item 9 [[nested-inductives-container-fields]] phase 3 LANDED (docs/container-proofs.md, crates/elab/tests/container_proofs.rs, workspace at 421): 'size(r) = size_plus(r)' over Rose is the first theorem here proved by induction over a container. One new elim_Nat schema (tab_cong) and one typing rule; no kernel change and no metatheory pass, as predicted. Container fields are now complete through the phases that were scoped: Rose declares, computes, and proves. Two live shift bugs fell out, one of them phase 2's and invisible to every test it shipped with, both recorded in docs/container-proofs.md §10. Next focus: item 10 — tier 2 / Acc by hand ([[stress-proof-suite]] item 3), the synthesized-ih beta rule; then [[ir-simulate-design]] reopens in-language. Note for whoever picks up Acc: the ih-annotation class of bug found this round (an annotation only compared when a PROOF forces it, never when a closed value computes) is exactly what a kernel-level Acc test is insurance against.
-- 2026-07-26: Item 10 (tier 2 / Acc by hand) DONE, closing [[stress-proof-suite]] -- docs/acc-via-w.md, crates/kernel/tests/acc.rs, 13 tests, workspace at 434. It did what the item was insurance for: elim_W's synthesized-under-a-lambda ih fires at an abstract position, with the recursor equation wfrec(a; intro(a;h)) == st a (lam b r. wfrec(b; h b r)) holding DEFINITIONALLY at open a, h and st, plus closed computation through a node of infinite arity and three negative controls (mis-indexed children rejected, wrong values inconvertible, stuck at a variable accessibility proof). The ih-annotation hazard the previous round flagged for whoever picked this up did NOT recur -- the analogous hazard here is the ih SPINE (position argument first), and it fails loudly rather than silently. Two standing claims corrected, both logged on their own issues: tier 2 needs no funext for the recursion direction ([[kernel-v1-extensions]]), and [[empty-eta-conversion]] has lost the customer it was filed with. All ten roadmap items are now done; next focus is [[ir-simulate-design]] reopening in-language, which the suite's own acceptance clause pointed at.
-- 2026-07-26: Round two set, and the IR deliberately deprioritized. The suite's closing line has been pointing at [[ir-simulate-design]] for three rounds; on review it is not the Next Immediate Thing, because several round-one capabilities are elaborator machinery wearing a syntax and a typed IR written against them would inherit them. Organizing principle for round two, in the user's words: fewer Special Features in the elaborator, more fundamental features in the language. New order: 11 [[surface-polymorphism]] + [[implicit-binders-in-function-types]] together (you cannot write 'fn map<A,B>' -- Decl has no type parameters at all, and an inductive's parameters are MONOMORPHIZED so List<A> is a macro, not a type-level function; the kernel has had Pi(A : Ty 0) + El since v0, so it is a pure surface+elaborator round like function types); 12 [[surface-records]] then the trait layer; 13 [[motives-as-lambdas]] (small; also un-overloads '->'); 14 [[indexed-families]] (retires built-in TyKind::Vec/VecLit and settles the indexed-W-vs-Wf contradiction this issue flagged as needing an answer before a typed IR is designed); 15 the IR. Filed as direction rather than scheduled: [[generators-in-the-language]] -- the recursors, no-confusion and tier lowerings are Rust emitting kernel terms, and the thesis says they belong in the meta layer; wants 11 and 12 plus an expressiveness read of ch. 07 first. Not filed as new work, because they already have issues: the cheap separable items (cli-check-diagnostics, unifier postponement, the two parser/diagnostic bugs).
-- 2026-07-26: Item 11 done: [[surface-polymorphism]] landed (docs/surface-polymorphism.md, 33 tests, workspace 465). Two corrections to the order's reasoning. (a) It was filed as one round with [[implicit-binders-in-function-types]]; that turned out to be unnecessary, since a type parameter is a declaration parameter and implicitness already lives there -- that issue stays open as ergonomics, for applying a polymorphic function value. (b) The round cost nothing in the tier-0/1 generators: an inductive's parameters stay expanded per instantiation, and an OPEN instantiation is all 'map' needed to return a List<B>. Next per this order: 12 [[surface-records]].
-- 2026-07-27: Item 12 [[surface-records]] SCHEME written (docs/surface-records.md), code round next. The encoding turned out to be free — a record is a one-constructor tier-0 inductive, and docs/inductive-tier0-lowering.md already treats that as its own case (§3.2's 'n = 1 collapses ... the right answer for structs', §9's acceptance item 6) — so no new generator, no kernel change, no ch. 07 pass. `record` is still its own SURFACE form over that one internal path, because a bare one-constructor inductive cannot reject recursion at the declaration, cannot expose fields outside a match arm, and has no name for the literal. The round's real work is elsewhere than the issue's four open questions: `.` is a PARSER desugaring that turns `p.f(a)` into a call to a global `f` with the receiver last (parser.rs:571-596), and `p.f` does not parse at all — so `m.op(x, y)` currently means `op(x, y, m)`, which is backwards for exactly the record-of-functions case the trait layer is made of. Decided to move `.` into the elaborator and resolve it against the receiver's inferred type, falling back to today's desugaring; that is the round's only regression risk (every landed method/calc test, and .cong(Succ) especially). Two of the issue's questions dissolved on inspection rather than being decided: the level question is not reachable yet (TyKind has no way to write `Type`, so every writable record joins to 0 — what is needed is the discipline of computing the join, with bundled records named as the later round), and dependent-field injectivity, while genuinely hit here, is the wrong direction — records want to CONSTRUCT field-wise equality, not destruct it, which lands on [[setoid-auto-lifting]] for function fields rather than on funext. Literal is braced and named; Lean's anonymous <...> deferred on lexer support, not design.
-- 2026-07-27: Item 12 [[surface-records]] LANDED (docs/surface-records.md, crates/elab/tests/records.rs, 33 tests, workspace 508). `record Monoid<A>` with a dependent law field declares, `m.op(x)(y)` projects and applies, the braced literal constructs in any field order, and `let { unit, op } = m;` destructures. No kernel change and no ch. 07 pass, as predicted -- a record is a one-constructor tier-0 inductive, and the doc's own claim that the encoding was already done held up. Three things the round taught. (1) The scheme missed a blocker on its own line one: `reject_function_fields` rejected any field containing a `->`, so `op: A -> A -> A` did not declare -- the check keyed on the field type's SHAPE when the property it wanted is a SELF-OCCURRENCE. Corrected; `Acc` stays rejected and now says why. This is the third instance of the same pattern (container fields, dependent-field injectivity, now this): a limitation written down as a property of the tier when it was a property of the check, invisible because nothing yet had a reason to hit it. (2) The braced literal collides with every block-preceding position (`match m { ... }`), needing Rust's suppression rule and paying Rust's cost: a literal in a `theorem` statement must be parenthesised, which is exactly where eta statements live. (3) The `.`-into-the-elaborator move -- the round's only flagged regression risk -- cost nothing, because the cheap negative test (is this name anybody's field?) keeps every pre-records use off the resolution path; only two parser unit tests that asserted the old desugaring changed. Filed rather than folded in: [[numeral-stack-depth]] (pre-existing, verified against a clean tree, unrelated to records). Next per this order: 13 [[motives-as-lambdas]], with the trait layer ([[compile-typeclass-design]]) now unblocked on its record dependency.
-- 2026-07-27: Side round, off the focus order: [[method-receiver-position]] LANDED and closed. `x.f(a)` no longer appends the receiver -- it fills the callee's `self` parameter, which defaults to the first explicit one, so p.trans(q) reads forward. Taken now rather than after [[generators-in-the-language]] because the convention is user-visible and its churn grows while its obstacle shrinks. Two notes for the order. (a) It is an instance of round two's organizing principle from the other side: rather than adding an elaborator special case, it moved a decision the ELABORATOR was making by fiat into something the DECLARATION states, which is also why the four built-in special forms needed no exemption -- they take the default and inj's direct spelling flipped to inj(p, k). (b) It does not touch Type::Pi, so it neither unblocks nor is blocked by [[implicit-binders-in-function-types]], whose marker has to live inside the kernel's function type; and trait members never consult `self`, since a record-of-functions call is a field projection before the method path. Focus order unchanged: 13 [[motives-as-lambdas]] next, with [[named-arguments]] still cheap and now the only remaining 'stop deciding this by position' item.
-- 2026-07-27: Item 13 revised: [[motives-as-lambdas]] is gated on a missing form and the round is now [[surface-universe]] -- 'the Type Session' -- with the motive as its first consumer (phase 3). Reason it is a session and not a nicety: the same sentence has been written four times (surface-function-types.md:124,390; surface-polymorphism.md:188-192; implicit-binders-in-function-types:65; the records log's level-join question), and item 13's own 'Watch for' is the fourth instance seen from the motive side. TyKind cannot say Type, so every writable type joins to 0 and every level join is vacuous. Kernel side is free again -- Ty(l) at 1+l and TmTy(l) : Ty(1+l) since v0 -- so it stays a surface+elaborator round like 8/9/11/12, with the real work being the level discipline. Three things settled at filing rather than left open. (1) Type<n> : Type<n+1> is already true and encodable; the earlier claim that Type's own type is unwritable was scope-drawing, not a kernel fact. (2) Non-cumulativity: NO LIFT, since ch. 04 argues against it on purpose and reversing that is a metatheory decision (first trusted-base change since item 8) rather than an ergonomics one. (3) Universe polymorphism stays out and its route around is now known: not code of a UPi function (impossible, and so is code of any instantiation), but a polymorphic function RETURNING code, which promotes [[generators-in-the-language]] from direction to the only route to a level-generic library. Order after this: 14 [[indexed-families]], 15 [[ir-simulate-design]], unchanged.
-- 2026-07-27: [[surface-universe]] phases 1/2/4 LANDED (21 tests, workspace 541): Type<n> writable in both positions, <A: Type<1>> spellable defaulting to 0, Type-valued parameters and fields, and the bundled record works end to end. No kernel change, no ch. 07 pass. Remaining in the session: phase 3 [[motives-as-lambdas]] (item 13 proper) and nothing else -- phase 5 was the scope statement, already written. Two findings that outlive the round. (a) A universe needs TWO bridges, not one: reading an expression as a type AND reading an expression in type position as a decoded type (TyKind::OfExpr, El of a code). The scheme had only the first, and with only the first a Type-valued field is a container you cannot open. (b) The round's flagged regression surface was imaginary -- lib.rs:950's message claimed to catch a spelling it had never caught, verified against a clean tree. Third instance of 'a limitation written down as a property of the tier/system when it was a property of the check', after container fields and reject_function_fields. Also discharged: docs/surface-function-types.md's 'every writable type sits at level 0' is now false and was edited, and docs/surface-records.md section 3's bundled-record prediction held exactly -- the generator needed no change because the join was already a computation.
-- 2026-07-27: The Type Session is COMPLETE: [[surface-universe]] phases 1-5, closing [[motives-as-lambdas]] (workspace 553, +33 over the round). Item 13 is done and item 14 [[indexed-families]] is next per the standing order, then 15 [[ir-simulate-design]]. Phase 3 cost more than filed and the overrun is the interesting part: motives could not become ordinary lambdas until '=' became an expression, because a motive body is a type and the commonest one is an equation. That is the session's thesis a third time -- a type is an expression whose type is a universe -- and it is the third feature this round that turned out to be one fundamental thing rather than the special case it was filed as (the others: a type name is any binder at Type<n>, not only one bound by <...>; and a type is any expression at a universe, not only the shapes ty_atom can parse). Left open by choice and now unblocked: j/refl/cong/absurd/inj as ordinary declarations rather than elaborator special forms, bounded to concrete level 0 until UPi (layer m). That is the natural next step on round two's organizing principle if it is preferred over item 14.
+**Convention (from 2026-07-27):** an entry here is *one line* — what moved in
+the focus order, and a link. The narrative of a round belongs to the issue
+that owns it and to that round's doc; this log said it a second time, in
+2026-07-27 to the tune of 3,400 words, and the second copy is what drifts.
+Order *decisions* are the exception: sequencing is what this issue owns, so
+those keep their reasoning. Entries before 2026-07-27 were compressed on that
+date; the originals are in `git log --follow issues/frontend-roadmap.md`.
+
+- 2026-07-23: Opened after stage 1 landed, alongside the granular issue split.
+- 2026-07-24: Item 3 done — [[elab-stage2-metas]]. Level-meta inference
+  deferred to [[elab-unifier-completeness]] and promoted to a jumpable item.
+- 2026-07-24: Item 4 done — [[surface-operators]].
+- 2026-07-24: Filed [[surface-proof-automation]], unscheduled.
+- 2026-07-24: Equality notation settled — [[surface-syntax]]; follow-up
+  diagnostic is [[warn-bare-eq-no-effect]].
+- 2026-07-24: Item 5 done — [[match-recursion]].
+- 2026-07-24: Item 2 done — [[metatheory-ch07-pass]]; tier 1 is no longer
+  gated on unpaid metatheory debt.
+- 2026-07-24: Item 6 done — [[goal-holes]]. Came with the block/`let` grammar,
+  which unblocks [[surface-proof-automation]]'s cheap slice.
+- 2026-07-24: Item 7 tier 0 done — [[inductive-compiler]].
+- 2026-07-26: Item 7 remainder done on the linear side; [[stress-proof-suite]]
+  item 2 closed.
+- 2026-07-26: **Order change.** Items 8–10 were "tier 2 / Acc, then the IR";
+  now [[surface-function-types]] → [[nested-inductives-container-fields]] →
+  Acc. Reasoning, which is this issue's own: (1) Acc is not on the critical
+  path — [[ir-simulate-design]] specifies a *fuel-indexed* simulate, so it
+  recurses on `Nat` and nothing before [[end-to-end-compile-instance]]
+  reaches `W`; (2) Acc is not stateable at the surface at all, so it is a
+  kernel-level test rather than frontend progress; (3) the real bottleneck is
+  that `TyKind` is `Nat | a = b | Named<args>`, and container fields, traits,
+  user-written passes and the mathematics side all sit behind function types;
+  (4) function types need no kernel change, so no ch. 07 obligation. Also
+  flagged here and now resolved on [[indexed-families]]: the standing
+  indexed-`W` claim in [[kernel-v1-extensions]].
+- 2026-07-26: Item 8 done — [[surface-function-types]]. Filed:
+  [[implicit-binders-in-function-types]], [[annotated-let-swallows-the-equals]].
+- 2026-07-26: Side round — [[constructors-as-function-values]] done.
+- 2026-07-26: Item 9 done, phases 1–3 —
+  [[nested-inductives-container-fields]].
+- 2026-07-26: Item 10 done — Acc by hand, closing [[stress-proof-suite]].
+  Corrected two standing claims, each logged on its own issue
+  ([[kernel-v1-extensions]], [[empty-eta-conversion]]).
+- 2026-07-26: **Order change — round two set, IR deliberately deprioritized.**
+  The suite's closing line had pointed at [[ir-simulate-design]] for three
+  rounds; on review several round-one capabilities are elaborator machinery
+  wearing a syntax, and a typed IR written against them inherits them.
+  Organizing principle, in the user's words: *fewer special features in the
+  elaborator, more fundamental features in the language.* New order: 11
+  [[surface-polymorphism]], 12 [[surface-records]], 13 [[motives-as-lambdas]],
+  14 [[indexed-families]], 15 the IR. [[generators-in-the-language]] filed as
+  direction, not scheduled.
+- 2026-07-26: Item 11 done — [[surface-polymorphism]]. It did *not* need
+  [[implicit-binders-in-function-types]] as filed; that stays open as
+  ergonomics for applying a polymorphic function value.
+- 2026-07-27: Item 12 done — [[surface-records]]. Filed:
+  [[numeral-stack-depth]].
+- 2026-07-27: Side round — [[method-receiver-position]] done. Leaves
+  [[named-arguments]] as the last "stop deciding this by position" item.
+- 2026-07-27: **Order change.** Item 13 is gated on a missing form, so the
+  round became [[surface-universe]] — the Type Session — with
+  [[motives-as-lambdas]] as its phase 3. The same sentence had been written
+  four times across four rounds: `TyKind` cannot say `Type`, so every writable
+  type joins to 0 and every level join is vacuous. Universe polymorphism
+  stayed out and its route around is now known, which promotes
+  [[generators-in-the-language]] from direction to the only route to a
+  level-generic library.
+- 2026-07-27: Items 12 and 13 closed — [[surface-universe]] complete through
+  phase 5, closing [[motives-as-lambdas]]. Residue re-homed rather than left
+  in a log: [[implicit-level-polymorphism]] and
+  [[special-forms-as-declarations]]. Item 14 [[indexed-families]] is next,
+  then 15 [[ir-simulate-design]].
+- 2026-07-27: Item 14 rescoped, and this log compressed. [[indexed-families]]
+  was rewritten: its acceptance criterion (retire `TyKind::Vec`/`VecLit`) is
+  **withdrawn as wrong**, not deferred, so item 14's description here changed
+  with it. The rewrite's occasion is the organizational point above — that
+  issue restated facts owned by [[nested-inductives-container-fields]] and
+  went stale within a day of filing — which is also why `scripts/issue` now
+  prints backlinks on `show`/`close`/`log`.
+- 2026-07-27: **Order change.** [[cli-check-diagnostics]] promoted to item 15,
+  between [[indexed-families]] and the IR. Reasoning, which is this issue's
+  own: the IR round writes real Heather files, and there is still no way to
+  check one outside a Rust test; a check loop should predate the round that
+  needs it, and [[frontend-benchmarks]]'s harness is "time the CLI on the
+  corpus."
+- 2026-07-27: Filed [[kernel-benchmarks]] and [[frontend-benchmarks]] —
+  evaluation cost is load-bearing (kerneltime execution, equiv-by-conversion)
+  and nothing measures it. Scheduled [[generators-in-the-language]]'s ch. 07
+  expressiveness reading as an unordered side round.

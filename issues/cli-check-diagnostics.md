@@ -3,7 +3,7 @@ title: Wire the CLI to check files and print diagnostics
 status: open
 labels: [cli,frontend,diagnostics]
 created: 2026-07-24
-updated: 2026-07-24
+updated: 2026-07-27
 ---
 
 `crates/cli/src/main.rs` is still `println!("heather: nothing to do yet")`.
@@ -36,3 +36,7 @@ The goal listing is, per [[goal-holes]], "the tooling face of the whole
 design" — and it currently has no face: it is only reachable from tests. A
 `check` subcommand is also the natural harness for [[stress-proof-suite]]
 programs, which otherwise have to be embedded as Rust string constants.
+
+## Log
+
+- 2026-07-27: Promoted to roadmap item 15, ahead of the IR round — see [[frontend-roadmap]] 2026-07-27.

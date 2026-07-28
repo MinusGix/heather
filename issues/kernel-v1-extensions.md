@@ -41,11 +41,22 @@ Candidate v1 set (order roughly = implementation order):
    elim, fording via Id+Σ+sums) provably cannot reach — `Acc.intro` puts a
    function under the constructor, so no uniform depth bound exists. Plain W
    + Id (+ funext, which the user accepts as an axiom — see log) yields
-   indexed W-types and hence `Acc`/inductive families by the standard
-   indexed-containers reduction. Note the classic "W-encodings of *first-
-   order* inductives need funext" complaint is irrelevant here: first-order
-   data stays on the finitary encodings; W is for the infinitely-branching
-   tier only.
+   indexed W-types and hence `Acc` by the standard indexed-containers
+   reduction; `docs/acc-via-w.md` is that reduction carried out, and needed
+   no funext for the recursion direction.
+
+   **Two claims in this item went false and are corrected here rather than
+   only on the issues that found them** (2026-07-27):
+
+   - *"First-order data stays on the finitary encodings"* — **false**, found
+     2026-07-24 by [[tier1-branching-constructors]]: the finitary encodings
+     reach the linear fragment and provably no further. That is what the `Wf`
+     former ([[wf-former]]) exists to fix, and it is a change to *this item's
+     former set* that this item never recorded.
+   - *"…and hence inductive families"* — **superseded**, not false. `Wf`
+     cannot express indexed W (uniform child type), so which former indexed
+     finitary families land on is an open question, not a settled reduction.
+     [[indexed-families]] owns it; do not read this item as having decided it.
 
 **Earmarked metatheory check (for the formalization): Id/Σ at □ types.**
 Ch. 06 checks `box t ≈ box t'` by converting the insides (~l. 527/535),

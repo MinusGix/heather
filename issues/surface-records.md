@@ -1,6 +1,6 @@
 ---
 title: "Records: named-field Sigma sugar"
-status: open
+status: closed
 labels: [frontend,syntax,elaboration,design]
 created: 2026-07-26
 updated: 2026-07-27

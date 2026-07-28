@@ -28,6 +28,40 @@ Link related issues as [[other-slug]].
 - History of an issue: `git log --follow issues/<slug>.md`.
 - Closing keeps the file (set `status: closed`); it stays greppable.
 
+## Ownership (added 2026-07-27, after a tracker review)
+
+Three rules, each written against a failure that had already happened.
+
+**1. An issue asserts only what it owns.** Everything else is a link naming
+the *one* assumption it makes on that owner. A restated fact is a copy, and
+the copy is what goes stale — [[indexed-families]] restated three facts about
+`[T; n]` and was wrong about all three within a day of being filed. Prefer:
+
+```markdown
+## What it assumes from elsewhere
+- **[[other-issue]]** owns X. Assumed here: only that <one specific thing>.
+```
+
+`scripts/issue show` prints `Referenced by:`, and `close`/`log` print the same
+list, so changing an issue tells you who was depending on it. That is the loop
+that makes rule 1 pay off; without it, links are write-only.
+
+**2. The narrative of a round belongs to the issue that did the work.** A
+meta/roadmap issue logs *one line* — what moved, and a link — plus any decision
+it genuinely owns (sequencing, for a roadmap). [[frontend-roadmap]]'s log had
+grown to 3,400 words re-telling rounds that each had their own issue *and*
+their own doc, and its body had drifted against its own log.
+
+**3. An issue closes when its scope is done; residue gets an owner first.**
+"Still open for a follow-on" is how an issue becomes permanent and how work
+becomes unfindable. If closing is blocked by deferred items, file them (or
+point at an existing issue, or record that a *decision* owes nothing) and then
+close. Both [[surface-records]] and [[surface-universe]] had landed in full and
+stayed open for exactly this reason.
+
+Two checks worth running by hand, since `scripts/issue check` does not:
+open issues whose last log says LANDED/DONE, and open issues nothing links to.
+
 ## CLI
 
 ```

@@ -139,8 +139,35 @@ def find(slug: str) -> Path:
     return path
 
 
+def backlinks(slug: str):
+    """Issues whose body links [[slug]] or whose blocked-by names it.
+
+    An issue's body should assert only what it owns and link everything else,
+    so this is the list that has to be re-read when this issue moves.
+    """
+    out = []
+    for m in load_all():
+        if m["slug"] == slug:
+            continue
+        if slug in m["blocked-by"]:
+            out.append((m, "blocked-by"))
+        elif f"[[{slug}]]" in m["body"]:
+            out.append((m, m["status"]))
+    return sorted(out, key=lambda r: r[0]["slug"])
+
+
+def print_backlinks(slug: str, header: str):
+    refs = backlinks(slug)
+    if not refs:
+        return
+    print(f"\n{header}")
+    for m, why in refs:
+        print(f"  {m['slug']:<40}  {why}")
+
+
 def cmd_show(args):
     print(find(args.slug).read_text(), end="")
+    print_backlinks(find(args.slug).stem, "Referenced by:")
 
 
 def cmd_new(args):
@@ -166,6 +193,7 @@ def _set_status(slug: str, status: str):
     set_field(path, "updated", today())
     write_index(load_all())
     print(f"{path.stem}: status -> {status}")
+    print_backlinks(path.stem, "Assumes something about this — re-read before moving on:")
 
 
 def cmd_close(args):
@@ -192,6 +220,7 @@ def cmd_log(args):
     set_field(path, "updated", today())
     write_index(load_all())
     print(f"{path.stem}: logged")
+    print_backlinks(path.stem, "Assumes something about this — re-read before moving on:")
 
 
 def cmd_threads(_args):
@@ -224,11 +253,30 @@ def cmd_check(_args):
             problems.append(f"{m['slug']}: unknown status '{m['status']}'")
     if not INDEX.exists() or INDEX.read_text() != render_index(issues):
         problems.append("INDEX.md is stale — run `scripts/issue index`")
+
+    # Warnings, not errors: judgement calls the README's ownership rules ask
+    # for, which were both live in the tracker on 2026-07-27.
+    warnings = []
+    linked = set()
+    for m in issues:
+        linked |= set(re.findall(r"\[\[([^\]]+)\]\]", m["body"])) | set(m["blocked-by"])
+    for m in issues:
+        if m["status"] != "open":
+            continue
+        entries = re.findall(r"^- \d{4}-\d\d-\d\d: .*", m["body"], re.M)
+        if entries and re.search(r"\b(LANDED|DONE|COMPLETE|IMPLEMENTED)\b", entries[-1]):
+            warnings.append(f"{m['slug']}: open, but its last log entry says it landed (README rule 3)")
+        if m["slug"] not in linked:
+            warnings.append(f"{m['slug']}: open and nothing links to it — unfindable (README rule 1)")
+
     for p in problems:
         print(p)
+    for w in warnings:
+        print(f"warning: {w}")
     if problems:
         sys.exit(1)
-    print(f"ok: {len(issues)} issues, no dangling links, index fresh")
+    print(f"ok: {len(issues)} issues, no dangling links, index fresh"
+          + (f" ({len(warnings)} warning(s))" if warnings else ""))
 
 
 def main():

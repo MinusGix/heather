@@ -1,9 +1,9 @@
 ---
 title: Design and build the elaborator (surface -> kernel core)
-status: open
+status: closed
 labels: [frontend,elaboration,design]
 created: 2026-07-23
-updated: 2026-07-23
+updated: 2026-07-27
 ---
 
 The frontend-first route (decided 2026-07-23, superseding "milestone next"):
@@ -101,3 +101,4 @@ the frontend generates serious term volume on those formers.
   the metas-as-globals architecture, level-unification story, definition
   split, emission invariants, and staged order of attack.
 - 2026-07-23: Stage 1 LANDED. Layer check resolved first (the flagged assumption): ch. 04 global-term-variable rule (04 tex l. 1079) requires only i' <= i with the binding invariant i' in {v,c}; kernel already enforces it (typing.rs:674) — theorems-as-Trm_c-globals is sound, with one refinement: Ψ-bindings are declarations, so the flow is check-proof-then-bind (the binding justified by the checked inhabitant); layer-m proofs can't be Ψ-bound and will fall back to inlining (irrelevant in stage 1). Implementation: crates/syntax (AST/lexer/parser for the stage-1 subset: fn/theorem, Nat, ==, numerals, calls, match-on-Nat with explicit-ih arms + optional 'as z -> M' motive, refl, j) and crates/elab (name resolution into the three namespaces; bidirectional annotation-filling, no metas, all levels 0 but tracked honestly; defs inlined with global-index shifting; theorems pushed as Trm_c globals; kernel-as-oracle via whnf_type/apply_local/LocalSubst::id; kernel check_type+check_term gates every declaration). elab_check is structural only where the expected type is load-bearing (refl, motive-less match) — everything else infers and the kernel's premise-level conversion catches mismatches. Prelude: sym/trans/cong_succ monomorphic at Nat via j. Acceptance test passing: crates/elab/tests/nat_suite.rs. Next: stage 2 (metas-as-Ψ-globals + level inference) when annotation pain justifies it.
+- 2026-07-27: Closing per README rule 3: every stage of the order of attack landed or has an owner — stage 1 here, stage 2 [[elab-stage2-metas]], stage 3 [[inductive-compiler]] (tier-2 remainder owned there), stage 4 closed [[stress-proof-suite]], stage 5 is [[ir-simulate-design]] (roadmap item 16). Residue homes: level-meta generalization → [[elab-unifier-completeness]]; ch. 07 earmark → [[metatheory-ch07-pass]] (closed); the def/theorem layer VERIFY was resolved in the stage-1 entry. Body remains the architecture design record.

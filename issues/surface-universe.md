@@ -1,6 +1,6 @@
 ---
 title: The Type Session: a surface universe hierarchy
-status: open
+status: closed
 labels: [frontend,syntax,elaboration,design]
 created: 2026-07-27
 updated: 2026-07-27
@@ -167,6 +167,18 @@ rather than silently pick a layer.
    a `Type`-valued field is in scope or rejected with a diagnostic.
 5. The scope statement of §4, written down so the modal round has a target
    rather than a surprise.
+
+## Residue, re-homed on closing (2026-07-27)
+
+Everything the session deliberately left open now has an owner, which is what
+let this close instead of staying open for follow-ons it did not own:
+
+- Universe polymorphism (§7, layer m) → [[implicit-level-polymorphism]].
+- The special forms becoming declarations (§6) → [[special-forms-as-declarations]].
+- **No lift** (§3, non-cumulativity) is a *decision*, not outstanding work:
+  ch. 04 argues against cumulativity on purpose, and reversing it is a
+  metatheory round. Recorded in `docs/surface-universe.md` §6; nothing tracks
+  it because nothing is owed.
 
 ## 6. What it unblocks
 
