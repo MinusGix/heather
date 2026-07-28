@@ -3,7 +3,7 @@ title: An annotated `let` at a non-equality type does not parse
 status: open
 labels: [frontend,syntax,parser]
 created: 2026-07-26
-updated: 2026-07-26
+updated: 2026-07-27
 ---
 
 ```heather
@@ -68,3 +68,4 @@ given [[surface-syntax]]'s settled story that `=` is binding *and* equality.
   by re-running the input against the previous commit's parser. Not fixed in
   that round because choosing between the three options above is a grammar
   decision that should not ride along inside a function-types commit.
+- 2026-07-27: Option 1 (scan for the last top-level '=') is INVALIDATED by [[surface-universe]] phase 3, which made '=' an expression former. That option's own escape clause was 'fails on a let whose VALUE contains a top-level '=', which today nothing can' -- as of 2026-07-27 something can: 'let x: Type<0> = 0 = 0;' is a well-formed binding whose value is an equation, and the last-top-level-'=' scan splits it as annotation 'Type<0> = 0' with value '0'. So the least-disruptive option is now the wrong one, and the choice is between option 2 (parenthesise an equality annotation) and option 3 (':=' as the let binder, which composes with [[effects-direction]]'s eventual assignment). Note also that the mechanism for either is now cheap and already present: the 'no_eq' suppression flag added for calc steps and ty_atom (parser.rs, mirroring no_record_lit) is exactly what an annotation position would set. What it does NOT do on its own is decide the grammar question, which is why that round left this alone.
