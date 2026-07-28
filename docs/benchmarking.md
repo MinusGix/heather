@@ -203,13 +203,23 @@ trip is what the suite is for:
    exponents being left behind.
 4. `--save`, and the bands became the new claims.
 
-| | before | after |
-|---|---|---|
-| one β-step, 1024-node annotation | 154 µs | 98 ns, flat |
-| `add n n`, n = 1024 | 232 ms | 171 µs |
-| `conv(add n n, 2n)`, n = 512 | 92 ms | 154 µs |
-| `mirror (mirror t)`, 2963 nodes | 262 ms | 89 ms |
+| | before | after | and after the sequel |
+|---|---|---|---|
+| one β-step, 1024-node annotation | 154 µs | 98 ns, flat | — |
+| `add n n`, n = 1024 | 232 ms | 171 µs | 178 µs |
+| `conv(add n n, 2n)`, n = 512 | 92 ms | 154 µs | 151 µs |
+| `mirror (mirror t)`, 2963 nodes | 262 ms | 89 ms | **30 ms** |
+| one β-step into a 1024-node closed body | — | 51 µs | 20 µs |
 
-The last row is the one to take a lesson from: nobody was looking at `Wf`
-elimination, and it got 3× faster because the fixture set was wide enough to
-show that the defect was not about numerals.
+The `mirror` row is the one to take a lesson from twice. Nobody was looking at
+`Wf` elimination, and it got 3× faster from a fix aimed at numerals, because
+the fixture set was wide enough to show the defect was not about numerals. Then
+profiling *that* row found the sequel
+(`issues/subst-rebuilds-unchanged-subterms.md`) — substitution rebuilding
+closed annotations — worth another 3× on it and 1.3–1.5× across checking and
+conversion generally.
+
+Each round also left its own follow-up filed rather than assumed: the exponent
+bands say which numbers are claims and which are records, and
+`issues/subst-visits-closed-subtrees.md` states the trigger for the next step
+instead of taking it.

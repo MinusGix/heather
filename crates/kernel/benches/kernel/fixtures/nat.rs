@@ -74,8 +74,15 @@ fn step_once() -> Family {
 ///
 /// The step-body case is the general one: a generated recursor's arm is mostly
 /// closed type annotations around a few variable occurrences, which is why
-/// `wf/mirror-involution` spends 35 µs on a single reduction step whose body
-/// is 413 nodes. See [[subst-rebuilds-unchanged-subterms]].
+/// `wf/mirror-involution` spent 35 µs on a single reduction step whose body is
+/// 413 nodes.
+///
+/// [[subst-rebuilds-unchanged-subterms]] cut the constant 2.6× (55 → 20 ns per
+/// closed node) by sharing unchanged subtrees instead of rebuilding them. The
+/// slope stays ~1 by construction: the traversal no longer *allocates* for a
+/// closed subterm but still walks it. Flattening this line needs
+/// [[subst-visits-closed-subtrees]], which is deferred on purpose — see that
+/// issue for the trigger.
 fn step_into_closed() -> Family {
     let cases = [64u64, 128, 256, 512, 1024]
         .iter()

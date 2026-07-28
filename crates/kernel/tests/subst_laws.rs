@@ -215,12 +215,69 @@ fn shifting_by_zero_preserves_sharing() {
         "substituting a payload at depth zero copied it"
     );
 
-    // A *nonzero* shift must still do the work — the fast path must not be
-    // keyed on anything looser than "by == 0".
-    assert!(
-        !shared(&t.shift_local(1)),
-        "shift_local(1) shared a subterm it had to renumber"
-    );
+    // A *nonzero* shift must still do the work where there is work: a subterm
+    // that mentions a free variable has to be rebuilt. (A *closed* one is
+    // shared even at `by = 1` — that is the subtree sharing tested below, not
+    // a fast path being too eager.)
+    let open_inner = Rc::new(Term::Succ(Rc::new(Term::Var(LocalVar(0)))));
+    let open = Term::Succ(Rc::clone(&open_inner));
+    match open.shift_local(1) {
+        Term::Succ(got) => assert!(
+            !Rc::ptr_eq(&got, &open_inner),
+            "shift_local(1) shared a subterm it had to renumber"
+        ),
+        _ => panic!("shift changed the head shape"),
+    }
+}
+
+/// A substitution must share the subterms it cannot change — the point of
+/// issues/subst-rebuilds-unchanged-subterms.md. Again on pointers: equality
+/// holds against the copying traversal too, so equality proves nothing here.
+#[test]
+fn substitution_shares_subterms_it_cannot_change() {
+    let closed_arg = Rc::new(Term::Succ(Rc::new(Term::Succ(Rc::new(Term::Zero)))));
+    let closed_dom = Rc::new(Type::Nat);
+    let closed_cod = Rc::new(Type::Pi {
+        dom_level: Level::Zero,
+        cod_level: Level::Zero,
+        dom: Rc::new(Type::Nat),
+        cod: Rc::new(Type::Nat),
+    });
+    // app(x; Nat. (Nat → Nat); 2) — the head mentions x, everything else is
+    // closed, which is the shape of a generated recursor arm in miniature.
+    let t = Term::App {
+        fun: Rc::new(Term::Var(LocalVar(0))),
+        dom_level: Level::Zero,
+        cod_level: Level::Zero,
+        dom: Rc::clone(&closed_dom),
+        cod: Rc::clone(&closed_cod),
+        arg: Rc::clone(&closed_arg),
+    };
+
+    let gamma = LocalCtx { base: CtxBase::Nil, entries: vec![] };
+    let delta = LocalSubst::id(&gamma).extended(Rc::new(Term::Zero));
+    match t.apply_local(&delta) {
+        Term::App { fun, dom, cod, arg, .. } => {
+            assert!(*fun == Term::Zero, "the substituted head is wrong");
+            assert!(Rc::ptr_eq(&arg, &closed_arg), "rebuilt a closed argument");
+            assert!(Rc::ptr_eq(&dom, &closed_dom), "rebuilt a closed domain annotation");
+            assert!(Rc::ptr_eq(&cod, &closed_cod), "rebuilt a closed codomain annotation");
+        }
+        _ => panic!("substitution changed the head shape"),
+    }
+
+    // The identity substitution changes nothing at all, so it must share the
+    // *whole* term — including the branch that does mention the variable.
+    let id = LocalSubst::id(&LocalCtx {
+        base: CtxBase::Nil,
+        entries: vec![CtxEntry { ty: Rc::new(Type::Nat), level: Level::Zero }],
+    });
+    match t.apply_local(&id) {
+        Term::App { arg, .. } => {
+            assert!(Rc::ptr_eq(&arg, &closed_arg), "t[id] rebuilt a subterm")
+        }
+        _ => panic!("t[id] changed the head shape"),
+    }
 }
 
 

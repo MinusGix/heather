@@ -51,6 +51,42 @@
 //! costs a full copy, because that shift is real work. Making *that* cheap
 //! needs a representation change (shift-annotated or hash-consed terms), a
 //! kernel design decision to take deliberately and not as a follow-on.
+//!
+//! ## Sharing unchanged subtrees
+//!
+//! The traversal reports whether it *actually changed anything*, and a subtree
+//! that came back unchanged is shared (`Rc::clone`) rather than rebuilt. That
+//! matters because the typical substituted term is mostly untouched: a
+//! generated recursor arm is closed type annotations (`Vec(Tree; 2)`, `Fin 2`,
+//! a case motive) wrapped around a handful of variable occurrences, so
+//! rebuilding all of it per β-step is most of the cost of running an
+//! eliminator (issues/subst-rebuilds-unchanged-subterms.md).
+//!
+//! The mechanism is a change counter on the mapper. Each hook calls
+//! [`Mapper::note`] when it returns something other than what it was given;
+//! [`sub_ty`]/[`sub_tm`] (and the motive/branch bundles) compare the counter
+//! before and after a child, and share when it has not moved.
+//!
+//! Two rules make this safe rather than clever:
+//!
+//! 1. **"Unchanged" propagates from the leaves.** A node is shared because
+//!    nothing *below* it reported a change — never because two terms compared
+//!    equal. Deciding no-ops by comparing terms would reintroduce the very
+//!    walk being avoided, and would hide it: the bench would look fixed while
+//!    `PartialEq` did the traversal.
+//! 2. **Every claimed no-op is verified in debug builds.** `shared_ty`/
+//!    `shared_tm` `debug_assert!` full structural equality, so a hook that
+//!    forgets to `note()` — the one dangerous mistake here — fails the test
+//!    suite (which runs in the dev profile, including the 300-seed
+//!    substitution laws) instead of silently producing a wrong term in
+//!    release. Over-reporting is merely slow, so hooks may be conservative;
+//!    under-reporting is caught.
+//!
+//! The traversal still *visits* every node and builds a temporary that it
+//! discards when sharing. Skipping closed subtrees without visiting them needs
+//! per-node free-variable metadata, whose invariant would join the trusted
+//! base — deliberately deferred, see
+//! issues/subst-visits-closed-subtrees.md.
 
 use std::rc::Rc;
 
@@ -126,6 +162,34 @@ trait Mapper {
     /// not descend into other-local-scope subtrees (see module docs).
     const LOCAL_OP: bool;
 
+    /// Name of the operation, for the change-reporting assertion only.
+    const NAME: &'static str;
+
+    /// Count of *effective* changes this mapper has made — see
+    /// §Sharing unchanged subtrees. Every hook below that returns something
+    /// other than what it was given must [`Self::note`] it.
+    fn changes(&mut self) -> &mut u64;
+
+    /// Record that this mapper actually changed something.
+    ///
+    /// Over-reporting is safe (a subtree is rebuilt that could have been
+    /// shared); under-reporting is not, and is what the `debug_assert!` in
+    /// [`shared_ty`]/[`shared_tm`] exists to catch. When in doubt, note.
+    fn note(&mut self) {
+        *self.changes() += 1;
+    }
+
+    /// Report a mapped level, noting a change only if it really moved.
+    /// Levels are tiny trees (`Zero`/`Succ`/`Var`/`Max`), so `==` here is an
+    /// exact test at leaf-ish cost — unlike comparing terms, which is the one
+    /// thing this design must never do.
+    fn mapped(&mut self, new: Level, old: &Level) -> Level {
+        if new != *old {
+            self.note();
+        }
+        new
+    }
+
     fn level(&mut self, l: &Level, _at: Depths) -> Level {
         l.clone()
     }
@@ -152,12 +216,86 @@ trait Mapper {
     }
 }
 
+/// Reuse `orig` for a subtree the traversal did not change.
+///
+/// `mapped` is dropped: its children are `Rc` clones of `orig`'s, so building
+/// it allocated nothing and dropping it is a handful of refcount decrements.
+/// What is saved is the allocation *and* the eventual deep drop of a fresh
+/// copy of the whole subtree.
+///
+/// The `debug_assert!` is the load-bearing part of the design: it verifies
+/// every claimed no-op by full structural equality, in the profile the tests
+/// run in. So an under-reported change — the one dangerous mistake a mapper
+/// hook can make — fails the suite (300-seed substitution laws included)
+/// rather than silently producing a wrong term in release.
+fn shared_ty<M: Mapper>(orig: &Rc<Type>, mapped: Type) -> Rc<Type> {
+    debug_assert!(
+        mapped == **orig,
+        "{} reported no change but the type differs — a Mapper hook is missing a \
+         `note()` (term output suppressed: see CLAUDE.md)",
+        M::NAME
+    );
+    drop(mapped);
+    Rc::clone(orig)
+}
+
+fn shared_tm<M: Mapper>(orig: &Rc<Term>, mapped: Term) -> Rc<Term> {
+    debug_assert!(
+        mapped == **orig,
+        "{} reported no change but the term differs — a Mapper hook is missing a \
+         `note()` (term output suppressed: see CLAUDE.md)",
+        M::NAME
+    );
+    drop(mapped);
+    Rc::clone(orig)
+}
+
 fn sub_ty<M: Mapper>(t: &Rc<Type>, m: &mut M, at: Depths) -> Rc<Type> {
-    Rc::new(map_type(t, m, at))
+    let before = *m.changes();
+    let mapped = map_type(t, m, at);
+    if *m.changes() == before {
+        shared_ty::<M>(t, mapped)
+    } else {
+        Rc::new(mapped)
+    }
 }
 
 fn sub_tm<M: Mapper>(t: &Rc<Term>, m: &mut M, at: Depths) -> Rc<Term> {
-    Rc::new(map_term(t, m, at))
+    let before = *m.changes();
+    let mapped = map_term(t, m, at);
+    if *m.changes() == before {
+        shared_tm::<M>(t, mapped)
+    } else {
+        Rc::new(mapped)
+    }
+}
+
+/// The motive/branch bundles of the code recursors, shared on the same rule.
+/// Worth their own functions rather than being inlined: `Branches` is 45
+/// terms under 45 telescopes, so sharing it unchanged is the single largest
+/// saving in the traversal.
+fn sub_motives<M: Mapper>(mo: &Rc<Motives>, m: &mut M, at: Depths) -> Rc<Motives> {
+    let before = *m.changes();
+    let mapped = map_motives(mo, m, at);
+    if *m.changes() == before {
+        debug_assert!(mapped == **mo, "{} reported no change but the motives differ", M::NAME);
+        drop(mapped);
+        Rc::clone(mo)
+    } else {
+        Rc::new(mapped)
+    }
+}
+
+fn sub_branches<M: Mapper>(b: &Rc<Branches>, m: &mut M, at: Depths) -> Rc<Branches> {
+    let before = *m.changes();
+    let mapped = map_branches(b, m, at);
+    if *m.changes() == before {
+        debug_assert!(mapped == **b, "{} reported no change but the branches differ", M::NAME);
+        drop(mapped);
+        Rc::clone(b)
+    } else {
+        Rc::new(mapped)
+    }
 }
 
 /// A type/term/context living in a *different* local context than the
@@ -168,7 +306,7 @@ fn other_ty<M: Mapper>(t: &Rc<Type>, m: &mut M, at: Depths) -> Rc<Type> {
     if M::LOCAL_OP {
         Rc::clone(t)
     } else {
-        Rc::new(map_type(t, m, Depths { local: 0, ..at }))
+        sub_ty(t, m, Depths { local: 0, ..at })
     }
 }
 
@@ -176,7 +314,7 @@ fn other_tm<M: Mapper>(t: &Rc<Term>, m: &mut M, at: Depths) -> Rc<Term> {
     if M::LOCAL_OP {
         Rc::clone(t)
     } else {
-        Rc::new(map_term(t, m, Depths { local: 0, ..at }))
+        sub_tm(t, m, Depths { local: 0, ..at })
     }
 }
 
@@ -533,8 +671,8 @@ fn map_term<M: Mapper>(t: &Term, m: &mut M, at: Depths) -> Term {
         } => Term::ElimCodeTy {
             ty_motive_level: m.level(ty_motive_level, at),
             tm_motive_level: m.level(tm_motive_level, at),
-            motives: Rc::new(map_motives(motives, m, at)),
-            branches: Rc::new(map_branches(branches, m, at)),
+            motives: sub_motives(motives, m, at),
+            branches: sub_branches(branches, m, at),
             code_level: m.level(code_level, at),
             ctx: other_ctx(ctx, m, at),
             scrut: sub_tm(scrut, m, at),
@@ -551,8 +689,8 @@ fn map_term<M: Mapper>(t: &Term, m: &mut M, at: Depths) -> Term {
         } => Term::ElimCodeTm {
             ty_motive_level: m.level(ty_motive_level, at),
             tm_motive_level: m.level(tm_motive_level, at),
-            motives: Rc::new(map_motives(motives, m, at)),
-            branches: Rc::new(map_branches(branches, m, at)),
+            motives: sub_motives(motives, m, at),
+            branches: sub_branches(branches, m, at),
             code_level: m.level(code_level, at),
             ctx: other_ctx(ctx, m, at),
             ty: other_ty(ty, m, at),
@@ -645,15 +783,24 @@ fn map_subst<M: Mapper>(s: &LocalSubst, m: &mut M, at: Depths) -> LocalSubst {
 /// substitution's source grows accordingly (tail length bump).
 struct ShiftLocal {
     by: u32,
+    changes: u64,
 }
 
 impl Mapper for ShiftLocal {
     const LOCAL_OP: bool = true;
+    const NAME: &'static str = "shift_local";
+
+    fn changes(&mut self) -> &mut u64 {
+        &mut self.changes
+    }
 
     fn local_var(&mut self, v: LocalVar, at: Depths) -> Term {
         if v.0 < at.local {
             Term::Var(v)
         } else {
+            // `by` is nonzero here (the entry points short-circuit zero), so
+            // a free variable is always renumbered.
+            self.note();
             Term::Var(LocalVar(v.0 + self.by))
         }
     }
@@ -663,6 +810,9 @@ impl Mapper for ShiftLocal {
             SubstTail::Empty { len, base } => SubstTail::Empty { len: len + self.by, base },
             SubstTail::Wk { len, ctx_var } => SubstTail::Wk { len: len + self.by, ctx_var },
         };
+        if t != tail {
+            self.note();
+        }
         (t, Vec::new())
     }
 }
@@ -670,16 +820,27 @@ impl Mapper for ShiftLocal {
 /// Weaken the global context by `by` bindings.
 struct ShiftGlobal {
     by: u32,
+    changes: u64,
 }
 
 impl ShiftGlobal {
-    fn var(&self, v: GlobalVar, at: Depths) -> GlobalVar {
-        if v.0 < at.global { v } else { GlobalVar(v.0 + self.by) }
+    fn var(&mut self, v: GlobalVar, at: Depths) -> GlobalVar {
+        if v.0 < at.global {
+            v
+        } else {
+            self.note();
+            GlobalVar(v.0 + self.by)
+        }
     }
 }
 
 impl Mapper for ShiftGlobal {
     const LOCAL_OP: bool = false;
+    const NAME: &'static str = "shift_global";
+
+    fn changes(&mut self) -> &mut u64 {
+        &mut self.changes
+    }
 
     fn global_ty(&mut self, var: GlobalVar, subst: LocalSubst, at: Depths) -> Type {
         Type::GlobalTy { var: self.var(var, at), subst }
@@ -714,13 +875,19 @@ impl Mapper for ShiftGlobal {
 /// Weaken the universe context by `by` variables.
 struct ShiftUniv {
     by: u32,
+    changes: u64,
 }
 
 impl Mapper for ShiftUniv {
     const LOCAL_OP: bool = false;
+    const NAME: &'static str = "shift_univ";
+
+    fn changes(&mut self) -> &mut u64 {
+        &mut self.changes
+    }
 
     fn level(&mut self, l: &Level, at: Depths) -> Level {
-        l.shift(self.by, at.univ)
+        self.mapped(l.shift(self.by, at.univ), l)
     }
 }
 
@@ -733,13 +900,20 @@ impl Mapper for ShiftUniv {
 /// equivalence* (the quotient DeLaM ch. 05's Static Code lemma takes) is
 /// plain `==` on the rewritten syntax. Depth-independent: normalization
 /// never renumbers a variable, so binders need no care.
-struct NormalizeLevels;
+struct NormalizeLevels {
+    changes: u64,
+}
 
 impl Mapper for NormalizeLevels {
     const LOCAL_OP: bool = false;
+    const NAME: &'static str = "normalize_levels";
+
+    fn changes(&mut self) -> &mut u64 {
+        &mut self.changes
+    }
 
     fn level(&mut self, l: &Level, _at: Depths) -> Level {
-        l.normalize().canonical()
+        self.mapped(l.normalize().canonical(), l)
     }
 }
 
@@ -747,13 +921,19 @@ impl Mapper for NormalizeLevels {
 /// (innermost = 0), scoped in the source universe context.
 struct SubstUniv<'a> {
     phi: &'a [Level],
+    changes: u64,
 }
 
 impl Mapper for SubstUniv<'_> {
     const LOCAL_OP: bool = false;
+    const NAME: &'static str = "apply_univ";
+
+    fn changes(&mut self) -> &mut u64 {
+        &mut self.changes
+    }
 
     fn level(&mut self, l: &Level, at: Depths) -> Level {
-        l.subst_at(self.phi, at.univ)
+        self.mapped(l.subst_at(self.phi, at.univ), l)
     }
 }
 
@@ -764,13 +944,19 @@ impl Mapper for SubstUniv<'_> {
 /// *innermost* variable.
 struct InstUniv<'a> {
     phi: &'a [Level],
+    changes: u64,
 }
 
 impl Mapper for InstUniv<'_> {
     const LOCAL_OP: bool = false;
+    const NAME: &'static str = "inst_univ";
+
+    fn changes(&mut self) -> &mut u64 {
+        &mut self.changes
+    }
 
     fn level(&mut self, l: &Level, at: Depths) -> Level {
-        l.inst_at(self.phi, at.univ)
+        self.mapped(l.inst_at(self.phi, at.univ), l)
     }
 }
 
@@ -778,10 +964,16 @@ impl Mapper for InstUniv<'_> {
 /// depth-based (payloads are shifted in all three namespaces at insertion).
 struct SubstLocal<'a> {
     delta: &'a LocalSubst,
+    changes: u64,
 }
 
 impl Mapper for SubstLocal<'_> {
     const LOCAL_OP: bool = true;
+    const NAME: &'static str = "apply_local";
+
+    fn changes(&mut self) -> &mut u64 {
+        &mut self.changes
+    }
 
     fn local_var(&mut self, v: LocalVar, at: Depths) -> Term {
         if v.0 < at.local {
@@ -797,10 +989,17 @@ impl Mapper for SubstLocal<'_> {
         );
         // terms[0] substitutes the outermost entry; index from the innermost.
         let payload = &self.delta.terms[n - 1 - i];
-        payload
+        let out = payload
             .shift_local(at.local)
             .shift_global(at.global)
-            .shift_univ(at.univ)
+            .shift_univ(at.univ);
+        // An *identity* substitution sends this variable to itself, and that
+        // is common enough to be worth the O(1) test: `t[id]` should share all
+        // of `t`, not rebuild it. Any other payload is a change.
+        if out != Term::Var(v) {
+            self.note();
+        }
+        out
     }
 
     /// Composition on tails (ch. 02/05): `wk_g^k ∘ δ = wk_g^{δ̂}`,
@@ -819,6 +1018,9 @@ impl Mapper for SubstLocal<'_> {
                 SubstTail::Empty { len, base }
             }
         };
+        if t != tail {
+            self.note();
+        }
         (t, Vec::new())
     }
 }
@@ -826,6 +1028,7 @@ impl Mapper for SubstLocal<'_> {
 /// Global substitution `σ` (instantiation form, see [`GlobalSubst`]).
 struct SubstGlobal<'a> {
     sigma: &'a GlobalSubst,
+    changes: u64,
 }
 
 enum Resolved<'a> {
@@ -863,15 +1066,23 @@ impl<'a> SubstGlobal<'a> {
 
 impl Mapper for SubstGlobal<'_> {
     const LOCAL_OP: bool = false;
+    const NAME: &'static str = "apply_global";
+
+    fn changes(&mut self) -> &mut u64 {
+        &mut self.changes
+    }
 
     fn global_ty(&mut self, var: GlobalVar, subst: LocalSubst, at: Depths) -> Type {
         match self.resolve(var, at) {
             Resolved::Bound => Type::GlobalTy { var, subst },
-            Resolved::Renumber(v) => Type::GlobalTy { var: v, subst },
-            Resolved::Payload(GlobalEntry::Ty(t)) => t
-                .shift_global(at.global)
-                .shift_univ(at.univ)
-                .apply_local(&subst),
+            Resolved::Renumber(v) => {
+                self.note();
+                Type::GlobalTy { var: v, subst }
+            }
+            Resolved::Payload(GlobalEntry::Ty(t)) => {
+                self.note();
+                t.shift_global(at.global).shift_univ(at.univ).apply_local(&subst)
+            }
             Resolved::Payload(_) => panic!(
                 "kernel invariant violated: type-level global variable substituted by a \
                  non-type payload"
@@ -882,11 +1093,14 @@ impl Mapper for SubstGlobal<'_> {
     fn global_tm(&mut self, var: GlobalVar, subst: LocalSubst, at: Depths) -> Term {
         match self.resolve(var, at) {
             Resolved::Bound => Term::GlobalTm { var, subst },
-            Resolved::Renumber(v) => Term::GlobalTm { var: v, subst },
-            Resolved::Payload(GlobalEntry::Tm(t)) => t
-                .shift_global(at.global)
-                .shift_univ(at.univ)
-                .apply_local(&subst),
+            Resolved::Renumber(v) => {
+                self.note();
+                Term::GlobalTm { var: v, subst }
+            }
+            Resolved::Payload(GlobalEntry::Tm(t)) => {
+                self.note();
+                t.shift_global(at.global).shift_univ(at.univ).apply_local(&subst)
+            }
             Resolved::Payload(_) => panic!(
                 "kernel invariant violated: term-level global variable substituted by a \
                  non-term payload"
@@ -899,8 +1113,12 @@ impl Mapper for SubstGlobal<'_> {
             CtxBase::Nil => (CtxBase::Nil, Vec::new()),
             CtxBase::Var(g) => match self.resolve(g, at) {
                 Resolved::Bound => (CtxBase::Var(g), Vec::new()),
-                Resolved::Renumber(v) => (CtxBase::Var(v), Vec::new()),
+                Resolved::Renumber(v) => {
+                    self.note();
+                    (CtxBase::Var(v), Vec::new())
+                }
                 Resolved::Payload(GlobalEntry::Ctx(c)) => {
+                    self.note();
                     let shifted = c.shift_global(at.global).shift_univ(at.univ);
                     (shifted.base, shifted.entries)
                 }
@@ -916,8 +1134,12 @@ impl Mapper for SubstGlobal<'_> {
         match tail {
             SubstTail::Wk { len, ctx_var } => match self.resolve(ctx_var, at) {
                 Resolved::Bound => (SubstTail::Wk { len, ctx_var }, Vec::new()),
-                Resolved::Renumber(v) => (SubstTail::Wk { len, ctx_var: v }, Vec::new()),
+                Resolved::Renumber(v) => {
+                    self.note();
+                    (SubstTail::Wk { len, ctx_var: v }, Vec::new())
+                }
                 Resolved::Payload(GlobalEntry::Ctx(c)) => {
+                    self.note();
                     // wk^k_g becomes the generalized weakening wk^k_{Γ'}: the
                     // spliced entries of Γ' sit below the k source entries,
                     // so entry j (outermost = 0) is variable k + m' - 1 - j.
@@ -941,9 +1163,11 @@ impl Mapper for SubstGlobal<'_> {
                     (SubstTail::Empty { len, base: CtxBase::Var(g) }, Vec::new())
                 }
                 Resolved::Renumber(v) => {
+                    self.note();
                     (SubstTail::Empty { len, base: CtxBase::Var(v) }, Vec::new())
                 }
                 Resolved::Payload(GlobalEntry::Ctx(c)) => {
+                    self.note();
                     let (base, m_prime) = Self::ctx_payload_shape(c, at);
                     (SubstTail::Empty { len: len + m_prime, base }, Vec::new())
                 }
@@ -966,23 +1190,23 @@ macro_rules! ops {
         impl $ty {
             /// Apply a universe substitution `φ`.
             pub fn apply_univ(&self, phi: &[Level]) -> $ty {
-                $map(self, &mut SubstUniv { phi }, Depths::default())
+                $map(self, &mut SubstUniv { phi, changes: 0 }, Depths::default())
             }
 
             /// Instantiate the innermost `phi.len()` universe variables
             /// (`phi[0]` innermost), renumbering deeper variables down.
             pub fn inst_univ(&self, phi: &[Level]) -> $ty {
-                $map(self, &mut InstUniv { phi }, Depths::default())
+                $map(self, &mut InstUniv { phi, changes: 0 }, Depths::default())
             }
 
             /// Apply a local substitution `δ` (`self` scoped in δ's target).
             pub fn apply_local(&self, delta: &LocalSubst) -> $ty {
-                $map(self, &mut SubstLocal { delta }, Depths::default())
+                $map(self, &mut SubstLocal { delta, changes: 0 }, Depths::default())
             }
 
             /// Apply a global substitution `σ`.
             pub fn apply_global(&self, sigma: &GlobalSubst) -> $ty {
-                $map(self, &mut SubstGlobal { sigma }, Depths::default())
+                $map(self, &mut SubstGlobal { sigma, changes: 0 }, Depths::default())
             }
 
             /// Rewrite every level to the canonical representative of its
@@ -996,7 +1220,7 @@ macro_rules! ops {
             /// `Ty (ℓ' ⊔ ℓ)` are equal **as code**. `conv.rs` uses this to
             /// compare boxed code.
             pub fn normalize_levels(&self) -> $ty {
-                $map(self, &mut NormalizeLevels, Depths::default())
+                $map(self, &mut NormalizeLevels { changes: 0 }, Depths::default())
             }
 
             /// Weaken the ambient local context by `by` entries.
@@ -1004,7 +1228,7 @@ macro_rules! ops {
                 if by == 0 {
                     return self.clone(); // see §Shifting by zero
                 }
-                $map(self, &mut ShiftLocal { by }, Depths::default())
+                $map(self, &mut ShiftLocal { by, changes: 0 }, Depths::default())
             }
 
             /// Weaken the global context by `by` bindings.
@@ -1012,7 +1236,7 @@ macro_rules! ops {
                 if by == 0 {
                     return self.clone(); // see §Shifting by zero
                 }
-                $map(self, &mut ShiftGlobal { by }, Depths::default())
+                $map(self, &mut ShiftGlobal { by, changes: 0 }, Depths::default())
             }
 
             /// Weaken the universe context by `by` variables.
@@ -1020,7 +1244,7 @@ macro_rules! ops {
                 if by == 0 {
                     return self.clone(); // see §Shifting by zero
                 }
-                $map(self, &mut ShiftUniv { by }, Depths::default())
+                $map(self, &mut ShiftUniv { by, changes: 0 }, Depths::default())
             }
 
             /// Weaken the universe context by `by` variables *between*
@@ -1033,7 +1257,7 @@ macro_rules! ops {
                 if by == 0 {
                     return self.clone(); // see §Shifting by zero
                 }
-                $map(self, &mut ShiftUniv { by }, Depths { univ: cutoff, ..Depths::default() })
+                $map(self, &mut ShiftUniv { by, changes: 0 }, Depths { univ: cutoff, ..Depths::default() })
             }
 
             /// Weaken the global context by `by` bindings between existing
@@ -1043,7 +1267,7 @@ macro_rules! ops {
                 if by == 0 {
                     return self.clone(); // see §Shifting by zero
                 }
-                $map(self, &mut ShiftGlobal { by }, Depths { global: cutoff, ..Depths::default() })
+                $map(self, &mut ShiftGlobal { by, changes: 0 }, Depths { global: cutoff, ..Depths::default() })
             }
         }
     };
@@ -1054,25 +1278,25 @@ ops!(Term, map_term);
 
 impl LocalCtx {
     pub fn apply_univ(&self, phi: &[Level]) -> LocalCtx {
-        map_ctx(self, &mut SubstUniv { phi }, Depths::default())
+        map_ctx(self, &mut SubstUniv { phi, changes: 0 }, Depths::default())
     }
 
     pub fn apply_global(&self, sigma: &GlobalSubst) -> LocalCtx {
-        map_ctx(self, &mut SubstGlobal { sigma }, Depths::default())
+        map_ctx(self, &mut SubstGlobal { sigma, changes: 0 }, Depths::default())
     }
 
     pub fn shift_global(&self, by: u32) -> LocalCtx {
         if by == 0 {
             return self.clone(); // see §Shifting by zero
         }
-        map_ctx(self, &mut ShiftGlobal { by }, Depths::default())
+        map_ctx(self, &mut ShiftGlobal { by, changes: 0 }, Depths::default())
     }
 
     pub fn shift_univ(&self, by: u32) -> LocalCtx {
         if by == 0 {
             return self.clone(); // see §Shifting by zero
         }
-        map_ctx(self, &mut ShiftUniv { by }, Depths::default())
+        map_ctx(self, &mut ShiftUniv { by, changes: 0 }, Depths::default())
     }
 }
 
@@ -1100,29 +1324,29 @@ impl LocalSubst {
 
     /// Composition `self ∘ other`: `t[self][other] == t[self.compose(other)]`.
     pub fn compose(&self, other: &LocalSubst) -> LocalSubst {
-        map_subst(self, &mut SubstLocal { delta: other }, Depths::default())
+        map_subst(self, &mut SubstLocal { delta: other, changes: 0 }, Depths::default())
     }
 
     pub fn apply_univ(&self, phi: &[Level]) -> LocalSubst {
-        map_subst(self, &mut SubstUniv { phi }, Depths::default())
+        map_subst(self, &mut SubstUniv { phi, changes: 0 }, Depths::default())
     }
 
     pub fn apply_global(&self, sigma: &GlobalSubst) -> LocalSubst {
-        map_subst(self, &mut SubstGlobal { sigma }, Depths::default())
+        map_subst(self, &mut SubstGlobal { sigma, changes: 0 }, Depths::default())
     }
 
     pub fn shift_local(&self, by: u32) -> LocalSubst {
         if by == 0 {
             return self.clone(); // see §Shifting by zero
         }
-        map_subst(self, &mut ShiftLocal { by }, Depths::default())
+        map_subst(self, &mut ShiftLocal { by, changes: 0 }, Depths::default())
     }
 
     pub fn shift_global(&self, by: u32) -> LocalSubst {
         if by == 0 {
             return self.clone(); // see §Shifting by zero
         }
-        map_subst(self, &mut ShiftGlobal { by }, Depths::default())
+        map_subst(self, &mut ShiftGlobal { by, changes: 0 }, Depths::default())
     }
 }
 
