@@ -109,7 +109,7 @@ fn at_leaves_type_parameters_inferred() {
 #[test]
 fn at_and_type_arguments_compose() {
     ok("theorem sym_at<A>({a: A}, {b: A}, p: a = b): b = a {
-            j(p, (y, q) -> y = a, refl)
+            j(p, λ y q => y = a, refl)
         }
         theorem inferred(n: Nat, m: Nat, p: n = m): m = n { sym_at(p) }
         theorem endpoints(n: Nat, m: Nat, p: n = m): m = n { @sym_at(n, m, p) }
@@ -139,7 +139,7 @@ fn a_type_argument_solved_twice_is_not_silently_kept() {
 #[test]
 fn a_polymorphic_theorem_is_a_global() {
     ok("theorem sym_at<A>({a: A}, {b: A}, p: a = b): b = a {
-            j(p, (y, q) -> y = a, refl)
+            j(p, λ y q => y = a, refl)
         }
         theorem use_at_nat(n: Nat, m: Nat, p: n = m): m = n { sym_at(p) }");
 }
@@ -148,7 +148,7 @@ fn a_polymorphic_theorem_is_a_global() {
 fn a_polymorphic_theorem_serves_two_types() {
     ok("inductive Bool { True, False }
         theorem sym_at<A>({a: A}, {b: A}, p: a = b): b = a {
-            j(p, (y, q) -> y = a, refl)
+            j(p, λ y q => y = a, refl)
         }
         theorem at_nat(n: Nat, m: Nat, p: n = m): m = n { sym_at(p) }
         theorem at_bool(a: Bool, b: Bool, p: a = b): b = a { sym_at(p) }");

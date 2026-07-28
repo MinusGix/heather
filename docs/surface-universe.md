@@ -393,3 +393,45 @@ it, and no declaration this round can write does.
   there: `Level::max(dom, cod)` is now directly observable, since
   `Type<0> -> Type<0>` is a level-1 function type. Edited in place rather than
   left to rot.
+
+## 13. Phase 3: motives are lambdas, and `=` is an expression
+
+Landed with the rest (`crates/elab/tests/motives.rs`, 12 tests). The scheme
+called this phase "nearly free once a motive is an ordinary function at
+`(z: A) -> Type`". It was not, and the reason is worth writing down.
+
+**The blocker.** A motive's body is a type, and the commonest motive body in
+this codebase is an *equation*. But `=` was deliberately kept out of the
+expression grammar — `parser.rs` uses it as punctuation in `let x = e` and in
+`calc`'s `e0 = e1 := p`. So `λ z => acc + z = n` did not parse, and "a motive
+is an ordinary `ExprKind::Lam`" could not be delivered by a parse-and-desugar
+change at all. Either the motive body stays parsed with `ty()` — a λ-shaped
+syntax that is not a λ, i.e. the second binder path surviving under a nicer
+skin — or equality becomes an expression.
+
+**Decision: equality becomes an expression.** `ExprKind::Eq`, loosest-binding
+and non-associative, suppressed in the two contexts that use `=` as
+punctuation via a `no_eq` flag mirroring the existing `no_record_lit`. This is
+the same move as the rest of the session and follows from it: a type *is* an
+expression whose type is a universe, so once `Type<n>` is writable there is no
+reason for the equality former to live only in `TyKind`. `ty_atom` now gets its
+`TyKind::Eq` from the one expression parse rather than a second one, so the two
+spellings cannot drift.
+
+**What retired.** `match … as z -> M` and `j(p, (y, q) -> M, case)`, each
+diagnosed with a migration message rather than mis-parsed. `->` is now the type
+arrow and nothing else. The elaborator takes a motive apart in one place
+(`motive_lam`), which is where "a motive is a function" is understood — there is
+no second binder syntax left in the surface.
+
+**Rejections added:** the two retired spellings, a motive of the wrong arity, an
+annotated motive binder (its type is fixed by what the motive is *for*, so an
+annotation would be a second source of truth), a non-lambda motive, and a
+chained `a = b = c`.
+
+**Cost, honestly:** every explicit motive in the workspace was rewritten. The
+mechanical migration also caught a function type — `Tip(n) = Node(k, xs) -> Nat`
+matched the `(a, b) ->` shape — which is a reminder that the old motive syntax
+was genuinely ambiguous with the type arrow, i.e. the aesthetic complaint in
+`issues/motives-as-lambdas.md` was a real parsing hazard and not only a
+readability one.

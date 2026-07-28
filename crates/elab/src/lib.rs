@@ -168,6 +168,45 @@ fn line_col(src: &str, offset: usize) -> (usize, usize) {
 
 type R<T> = Result<T, ElabError>;
 
+/// A motive written as a lambda: take it apart into its `n` binder names and
+/// its body *as a type* (docs/surface-universe.md §13).
+///
+/// The surface has exactly one binder form, so this is where "a motive is a
+/// function" is understood rather than a second binder syntax. The body is a
+/// type by the ordinary bridge: read directly where it has type syntax
+/// (`a = b`, a name, an applied name), and decoded through `El` otherwise.
+fn motive_lam(e: &Expr, n: usize, what: &str) -> R<(Vec<String>, Ty)> {
+    let ExprKind::Lam { binders, body } = &e.kind else {
+        return err(
+            format!("a motive is a lambda: {what}"),
+            e.span,
+        );
+    };
+    if binders.len() != n {
+        return err(
+            format!(
+                "this motive binds {} name(s), but {n} are needed: {what}",
+                binders.len()
+            ),
+            e.span,
+        );
+    }
+    if let Some(b) = binders.iter().find(|b| b.ty.is_some()) {
+        return err(
+            format!(
+                "a motive binder takes no annotation: `{}`'s type is fixed by what the \
+                 motive is a motive for",
+                b.name
+            ),
+            e.span,
+        );
+    }
+    let names = binders.iter().map(|b| b.name.clone()).collect();
+    let ty = expr_as_ty(body)
+        .unwrap_or_else(|| Ty { kind: TyKind::OfExpr(body.clone()), span: body.span });
+    Ok((names, ty))
+}
+
 fn err<T>(msg: impl Into<String>, span: Span) -> R<T> {
     Err(ElabError::Elab { msg: msg.into(), span })
 }
@@ -184,6 +223,7 @@ fn err<T>(msg: impl Into<String>, span: Span) -> R<T> {
 fn expr_as_ty(e: &Expr) -> Option<Ty> {
     let kind = match &e.kind {
         ExprKind::Univ { level } => TyKind::Univ { level: *level },
+        ExprKind::Eq(a, b) => TyKind::Eq(a.clone(), b.clone()),
         ExprKind::Var(name) if name == "Nat" => TyKind::Nat,
         ExprKind::Var(name) => TyKind::Named { name: name.clone(), args: vec![] },
         // `List<Nat>` — the one expression form that already carries type
@@ -1129,6 +1169,17 @@ impl Elaborator {
     /// and level.
     fn elab_infer(&self, cx: &Cx, e: &Expr) -> R<(Term, Type, Level)> {
         match &e.kind {
+            // `a = b` as a term: it is a *type*, so the term is its code
+            // `TmId : Ty l` (docs/surface-universe.md §13). Elaborated through
+            // the type path so the two spellings cannot diverge.
+            ExprKind::Eq(..) => {
+                let ty = expr_as_ty(e).expect("an equation reads as a type");
+                let (t, level) = self.elab_ty(cx, &ty)?;
+                match code::code_of(&t) {
+                    Some(code) => Ok((code, Type::Ty(level.clone()), Level::succ(level))),
+                    None => err("this equation has no code", e.span),
+                }
+            }
             // `Type<n>` as a term is the code `TmTy(n) : Ty (n+1)`
             // (`typing.rs:756-759`) — it infers, so it needs no bridge.
             ExprKind::Univ { level } => Ok((
@@ -1346,11 +1397,12 @@ impl Elaborator {
                     self.apply_implicit(cx, name, head, ty, lvl, args, &mask, e.span)
                 }
             }
-            ExprKind::Match { motive: Some((bind, m)), scrut, arms } => {
+            ExprKind::Match { motive: Some(m), scrut, arms } => {
+                let (binders, body) = motive_lam(m, 1, "write `as \u{3bb} z => T`")?;
                 let (scrut_t, scrut_ty, scrut_lvl) = self.elab_infer(cx, scrut)?;
                 let mut mcx = cx.clone();
-                mcx.push(bind.clone(), scrut_ty.clone(), scrut_lvl.clone());
-                let (motive, mlvl) = self.elab_ty(&mcx, m)?;
+                mcx.push(binders[0].clone(), scrut_ty.clone(), scrut_lvl.clone());
+                let (motive, mlvl) = self.elab_ty(&mcx, &body)?;
                 let result = motive.apply_local(
                     &LocalSubst::id(&cx.gamma).extended(Rc::new(scrut_t.clone())),
                 );
@@ -1360,10 +1412,13 @@ impl Elaborator {
                 Ok((t, result, mlvl))
             }
             ExprKind::Match { motive: None, .. } => err(
-                "`match` in inference position needs a motive: `match e as z -> T { … }`",
+                "`match` in inference position needs a motive: `match e as \u{3bb} z => T { … }`",
                 e.span,
             ),
-            ExprKind::J { proof, y, p, motive, case } => {
+            ExprKind::J { proof, motive, case } => {
+                let (mbinders, mbody) =
+                    motive_lam(motive, 2, "write `j(p, \u{3bb} y q => T, case)`")?;
+                let (y, p) = (&mbinders[0], &mbinders[1]);
                 let (proof_t, proof_ty, _) = self.elab_infer(cx, proof)?;
                 let head = self.whnf(cx, &proof_ty, proof.span)?;
                 let Type::Id { level, ty, lhs, rhs } = head else {
@@ -1379,7 +1434,7 @@ impl Elaborator {
                     rhs: Rc::new(Term::Var(LocalVar(0))),
                 };
                 mcx.push(p.clone(), p_ty, level.clone());
-                let (motive_t, mlvl) = self.elab_ty(&mcx, motive)?;
+                let (motive_t, mlvl) = self.elab_ty(&mcx, &mbody)?;
                 // case : M[a/y, refl/p]
                 let refl = Term::Refl {
                     level: level.clone(),
@@ -3013,6 +3068,10 @@ fn count_holes(decl: &Decl) -> u32 {
     fn expr(e: &Expr, n: &mut u32) {
         match &e.kind {
             ExprKind::Hole(_) => *n += 1,
+            ExprKind::Eq(a, b) => {
+                expr(a, n);
+                expr(b, n);
+            }
             ExprKind::Var(_)
             | ExprKind::Num(_)
             | ExprKind::Refl
@@ -3047,14 +3106,14 @@ fn count_holes(decl: &Decl) -> u32 {
             }
             ExprKind::Match { scrut, motive, arms } => {
                 expr(scrut, n);
-                if let Some((_, m)) = motive {
-                    ty(m, n);
+                if let Some(m) = motive {
+                    expr(m, n);
                 }
                 arms.iter().for_each(|a| expr(&a.body, n));
             }
             ExprKind::J { proof, motive, case, .. } => {
                 expr(proof, n);
-                ty(motive, n);
+                expr(motive, n);
                 expr(case, n);
             }
         }

@@ -333,7 +333,7 @@ fn the_method_desugaring_still_works() {
         // prelude (its function argument is not inferable from the proof), so
         // it is declared here, as the function-types suite does.
         theorem cong(f: Nat -> Nat, {a: Nat}, {b: Nat}, self p: a = b): f(a) = f(b) {
-            j(p, (y, q) -> f(a) = f(y), refl)
+            j(p, λ y q => f(a) = f(y), refl)
         }
         theorem cong_method(a: Nat, b: Nat, p: a = b): Succ(a) = Succ(b) {
             p.cong(Succ)

@@ -4,7 +4,7 @@
 //! `check_type` + `check_term`; the negative tests confirm the kernel gate
 //! actually rejects (elaborator soundness is by construction, not by trust).
 //!
-//! This file pins the **stage-1 explicit forms** as a regression: `as z -> M`
+//! This file pins the **stage-1 explicit forms** as a regression: `as λ z => M`
 //! motives spelled out, and endpoints to the (now implicit-parametered)
 //! prelude lemmas supplied positionally via `@` (issues/elab-stage2-metas.md).
 //! The annotation-free stage-2 forms live in `implicit_args.rs`.
@@ -20,21 +20,21 @@ fn add(m: Nat, n: Nat) -> Nat {
 }
 
 theorem add_zero(n: Nat): add(n, 0) = n {
-    match n as z -> add(z, 0) = z {
+    match n as λ z => add(z, 0) = z {
         Zero => refl,
         Succ(k, ih) => @cong_succ(add(k, 0), k, ih),
     }
 }
 
 theorem add_succ(m: Nat, n: Nat): add(m, Succ(n)) = Succ(add(m, n)) {
-    match m as z -> add(z, Succ(n)) = Succ(add(z, n)) {
+    match m as λ z => add(z, Succ(n)) = Succ(add(z, n)) {
         Zero => refl,
         Succ(k, ih) => @cong_succ(add(k, Succ(n)), Succ(add(k, n)), ih),
     }
 }
 
 theorem add_comm(m: Nat, n: Nat): add(m, n) = add(n, m) {
-    match m as z -> add(z, n) = add(n, z) {
+    match m as λ z => add(z, n) = add(n, z) {
         Zero => @sym(add(n, 0), n, add_zero(n)),
         Succ(k, ih) => @trans(
             Succ(add(k, n)),
@@ -47,7 +47,7 @@ theorem add_comm(m: Nat, n: Nat): add(m, n) = add(n, m) {
 }
 
 theorem add_assoc(a: Nat, b: Nat, c: Nat): add(add(a, b), c) = add(a, add(b, c)) {
-    match a as z -> add(add(z, b), c) = add(z, add(b, c)) {
+    match a as λ z => add(add(z, b), c) = add(z, add(b, c)) {
         Zero => refl,
         Succ(k, ih) => @cong_succ(add(add(k, b), c), add(k, add(b, c)), ih),
     }

@@ -87,13 +87,13 @@ fn dependent_motive_over_a_variable_scrutinee() {
     );
 }
 
-// The explicit `as z -> M` motive path, on an inductive rather than `Nat`.
+// The explicit `as λ z => M` motive path, on an inductive rather than `Nat`.
 #[test]
 fn explicit_motive_on_an_inductive() {
     elab(&format!(
         "{BOOL}
          theorem neg_neg(b: Bool): neg(neg(b)) = b {{
-             match b as z -> neg(neg(z)) = z {{ True => refl, False => refl }}
+             match b as λ z => neg(neg(z)) = z {{ True => refl, False => refl }}
          }}"
     ));
 }
@@ -435,6 +435,6 @@ fn a_parameter_at_a_dependent_type_is_not_captured_by_an_earlier_field() {
     // …and the field really is `n = n`: projecting it back out proves it.
     elab(
         "inductive Box2<A> { Mk(x: Nat, y: A) }
-         theorem out(n: Nat, p: n = n): n = n { match Mk(3, p) as z -> n = n { Mk(x, y) => y } }",
+         theorem out(n: Nat, p: n = n): n = n { match Mk(3, p) as λ z => n = n { Mk(x, y) => y } }",
     );
 }

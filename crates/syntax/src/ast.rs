@@ -319,20 +319,34 @@ pub enum ExprKind {
     /// expected `[T; k]` supplies both the element type and the length, and
     /// the length must be a literal (docs/container-fields.md §2.2).
     VecLit(Vec<Expr>),
+    /// `a = b` — the identity type, as an **expression**. A type is an
+    /// expression whose type is a universe, so with `Type<n>` writable there
+    /// is no reason for the equality former to live only in `TyKind`
+    /// (docs/surface-universe.md §13). This is what lets a motive be an
+    /// ordinary [`ExprKind::Lam`]: `λ z => acc + z = n`.
+    ///
+    /// Non-associative and loosest-binding, and **suppressed** in the two
+    /// contexts that use `=` as punctuation — `calc` steps and, once it has
+    /// parsed its left endpoint, `ty_atom`.
+    Eq(Box<Expr>, Box<Expr>),
     /// `refl` — checking-only.
     Refl,
     /// `?name` or `?` — a goal: a deferred obligation, discharged by an `on`
     /// statement later in the same block. Checking-only, like `refl`: a hole
     /// with no expected type has no statement to list.
     Hole(Option<String>),
-    /// `match scrut (as bind -> motive)? { C(x, …) => body, … }` — one arm per
+    /// `match scrut (as λ bind => motive)? { C(x, …) => body, … }` — one arm per
     /// constructor of the scrutinee's type, in any order. On `Nat` the arms
     /// are `Zero` and `Succ(k)` (or the low-level `Succ(k, ih)`); on a
     /// declared inductive they are its constructors.
     Match {
         scrut: Box<Expr>,
-        /// Explicit dependent motive: `(binder name, motive type)`.
-        motive: Option<(String, Box<Ty>)>,
+        /// Explicit dependent motive, as a **lambda**: `as λ z => T`. A motive
+        /// is a function from the scrutinee to a type, so with `Type<n>`
+        /// writable it can simply *be* one, and the surface keeps a single
+        /// binder form (docs/surface-universe.md §13). Retired with this: the
+        /// bespoke `as z -> T`, which overloaded `->`.
+        motive: Option<Box<Expr>>,
         arms: Vec<Arm>,
     },
     /// `p.f` (`args: None`) or `p.f(a, b)` (`args: Some`)
@@ -351,14 +365,15 @@ pub enum ExprKind {
     /// are permuted into declaration order in front of the ordinary tier-0
     /// constructor path, which is what actually elaborates.
     RecordLit { name: String, tyargs: Vec<Ty>, fields: Vec<RecordLitField> },
-    /// `j(proof, (y, p) -> M, case)` — based path induction. `proof`'s type
+    /// `j(proof, λ y p => M, case)` — based path induction. `proof`'s type
     /// fixes the endpoint and family; `M` is scoped over `y` (right endpoint)
     /// and `p` (the path).
     J {
         proof: Box<Expr>,
-        y: String,
-        p: String,
-        motive: Box<Ty>,
+        /// The motive as a **two-binder lambda**: `λ y q => T`, over the
+        /// endpoint and the path. Same move as [`ExprKind::Match`]'s
+        /// (docs/surface-universe.md §13); retires `(y, q) -> T`.
+        motive: Box<Expr>,
         case: Box<Expr>,
     },
 }

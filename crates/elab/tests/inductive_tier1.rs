@@ -142,14 +142,14 @@ fn mirror_of_mirror() {
 
          theorem cong_node_l(l1: Tree, l2: Tree, r: Tree, p: l1 = l2):
              Node(l1, r) = Node(l2, r)
-         {{ j(p, (y, q) -> Node(l1, r) = Node(y, r), refl) }}
+         {{ j(p, λ y q => Node(l1, r) = Node(y, r), refl) }}
 
          theorem cong_node_r(l: Tree, r1: Tree, r2: Tree, p: r1 = r2):
              Node(l, r1) = Node(l, r2)
-         {{ j(p, (y, q) -> Node(l, r1) = Node(l, y), refl) }}
+         {{ j(p, λ y q => Node(l, r1) = Node(l, y), refl) }}
 
          theorem trans_tree({{a: Tree}}, {{b: Tree}}, {{c: Tree}}, p: a = b, q: b = c): a = c
-         {{ j(q, (y, r) -> a = y, p) }}
+         {{ j(q, λ y r => a = y, p) }}
 
          theorem mirror_mirror(t: Tree): mirror(mirror(t)) = t {{
              match t {{
@@ -319,15 +319,15 @@ fn the_lowering_shifts_are_exercised_by_a_dependent_parameter() {
 
         theorem cong_l(n: Nat, a: n = n, l1: Tree<n = n>, l2: Tree<n = n>,
                        r: Tree<n = n>, p: l1 = l2): Node(a, l1, r) = Node(a, l2, r)
-        { j(p, (y, q) -> Node(a, l1, r) = Node(a, y, r), refl) }
+        { j(p, λ y q => Node(a, l1, r) = Node(a, y, r), refl) }
 
         theorem cong_r(n: Nat, a: n = n, l: Tree<n = n>, r1: Tree<n = n>,
                        r2: Tree<n = n>, p: r1 = r2): Node(a, l, r1) = Node(a, l, r2)
-        { j(p, (y, q) -> Node(a, l, r1) = Node(a, l, y), refl) }
+        { j(p, λ y q => Node(a, l, r1) = Node(a, l, y), refl) }
 
         theorem tr(n: Nat, {x: Tree<n = n>}, {y: Tree<n = n>}, {z: Tree<n = n>},
                    p: x = y, q: y = z): x = z
-        { j(q, (w, r) -> x = w, p) }
+        { j(q, λ w r => x = w, p) }
 
         theorem mirror_mirror(n: Nat, t: Tree<n = n>): mirror(n, mirror(n, t)) = t {
             match t {

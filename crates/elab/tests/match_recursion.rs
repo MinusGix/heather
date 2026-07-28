@@ -134,7 +134,7 @@ fn shadowing_cannot_fake_a_guard() {
         fn loop(m: Nat) -> Nat {
             match m {
                 Zero => 0,
-                Succ(k) => match m as z -> Nat { Zero => 0, Succ(k, ih) => loop(k) },
+                Succ(k) => match m as λ z => Nat { Zero => 0, Succ(k, ih) => loop(k) },
             }
         }
         "#,

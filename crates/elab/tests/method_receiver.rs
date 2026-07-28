@@ -65,7 +65,7 @@ fn a_unary_lemma_needs_no_marker() {
 #[test]
 fn a_marked_subject_can_be_last() {
     ok("theorem cong(f: Nat -> Nat, {a: Nat}, {b: Nat}, self p: a = b): f(a) = f(b) {
-            j(p, (y, q) -> f(a) = f(y), refl)
+            j(p, λ y q => f(a) = f(y), refl)
         }
         theorem method(a: Nat, b: Nat, p: a = b): Succ(a) = Succ(b) { p.cong(Succ) }
         theorem direct(a: Nat, b: Nat, p: a = b): Succ(a) = Succ(b) { cong(Succ, p) }");
@@ -80,7 +80,7 @@ fn a_marked_subject_can_be_last() {
 fn implicits_do_not_shift_the_subject_position() {
     ok("theorem mid({a: Nat}, f: Nat -> Nat, {b: Nat}, self p: a = b, {c: Nat}, r: b = c):
             f(a) = f(b)
-        { j(p, (y, q) -> f(a) = f(y), refl) }
+        { j(p, λ y q => f(a) = f(y), refl) }
         theorem method(a: Nat, b: Nat, c: Nat, p: a = b, r: b = c): Succ(a) = Succ(b) {
             p.mid(Succ, r)
         }");

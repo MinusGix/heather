@@ -189,7 +189,7 @@ fn cong_over_an_arbitrary_function() {
     elab(
         r#"
         theorem cong(f: Nat -> Nat, {a: Nat}, {b: Nat}, p: a = b): f(a) = f(b)
-        { j(p, (y, q) -> f(a) = f(y), refl) }
+        { j(p, λ y q => f(a) = f(y), refl) }
 
         fn add(a: Nat, b: Nat) -> Nat {
             match b { Zero => a, Succ(k) => Succ(add(a, k)) }

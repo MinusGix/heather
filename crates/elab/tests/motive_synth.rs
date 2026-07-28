@@ -1,5 +1,5 @@
 //! Stage-2 motive synthesis (issues/elab-stage2-metas.md): the `match` arms
-//! of the Nat suite drop their explicit `as z -> M` motives. The elaborator
+//! of the Nat suite drop their explicit `as λ z => M` motives. The elaborator
 //! recovers the dependent motive by abstracting the (variable) scrutinee out
 //! of the checking-position expected type; the kernel still gates every
 //! declaration, so a wrong synthesized motive would be a rejection, not a

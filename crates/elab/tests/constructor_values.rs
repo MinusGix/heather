@@ -62,7 +62,7 @@ fn cong_at_succ_by_name() {
     elab(
         r#"
         theorem cong(f: Nat -> Nat, {a: Nat}, {b: Nat}, self p: a = b): f(a) = f(b)
-        { j(p, (y, q) -> f(a) = f(y), refl) }
+        { j(p, λ y q => f(a) = f(y), refl) }
 
         theorem method(n: Nat, m: Nat, p: n = m): Succ(n) = Succ(m)
         { p.cong(Succ) }

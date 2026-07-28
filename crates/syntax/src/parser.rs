@@ -60,7 +60,7 @@ pub struct ParseError {
 
 pub fn parse_file(src: &str) -> Result<File, ParseError> {
     let toks = lex(src).map_err(|e| ParseError { msg: e.msg, span: e.span })?;
-    let mut p = Parser { toks, pos: 0, no_record_lit: false };
+    let mut p = Parser { toks, pos: 0, no_record_lit: false, no_eq: false };
     let mut items = Vec::new();
     while !p.at_eof() {
         items.push(p.item()?);
@@ -80,6 +80,15 @@ struct Parser {
     /// bracket**, so `match f(D { x: 1 }) { … }` is fine and a literal that
     /// really is wanted in scrutinee position is parenthesised.
     no_record_lit: bool,
+    /// Suppress `a = b` as an *expression* (docs/surface-universe.md §13).
+    ///
+    /// `=` is loosest-binding and non-associative, which is right everywhere
+    /// except the two contexts that use it as punctuation: a `calc` step
+    /// (`e0 = e1 := p`) reads its endpoints with `=` as the separator, and
+    /// [`Parser::ty_atom`] must not re-consume the `=` it is about to inspect.
+    /// Same shape as `no_record_lit`: set in the punctuation contexts, and the
+    /// escape hatch is a parenthesis.
+    no_eq: bool,
 }
 
 type R<T> = Result<T, ParseError>;
@@ -699,11 +708,12 @@ impl Parser {
             }
         }
         let lhs = self.expr()?;
-        if matches!(self.peek(), TokKind::Eq | TokKind::EqEq) {
-            self.expect_eq("equality type `a = b`")?;
-            let rhs = self.expr()?;
-            let span = lhs.span.join(rhs.span);
-            return Ok(Ty { kind: TyKind::Eq(Box::new(lhs), Box::new(rhs)), span });
+        // `a = b` is now an *expression* former too, so it arrives already
+        // built; a type position simply names it `TyKind::Eq`
+        // (docs/surface-universe.md §13). The two spellings cannot drift
+        // because there is only one parse.
+        if let ExprKind::Eq(a, b) = lhs.kind {
+            return Ok(Ty { kind: TyKind::Eq(a, b), span: lhs.span });
         }
         // A bare name in type position is `Nat` or a declared type; whether the
         // name is in fact a type is the elaborator's call, not the grammar's.
@@ -731,7 +741,25 @@ impl Parser {
     /// on a fixed name table (issues/surface-operators.md — the decorated
     /// `+_Z` grammar and trait hookup arrive with the real trait design).
     fn expr(&mut self) -> R<Expr> {
-        self.expr_bp(0)
+        let lhs = self.expr_bp(0)?;
+        if self.no_eq || !matches!(self.peek(), TokKind::Eq | TokKind::EqEq) {
+            return Ok(lhs);
+        }
+        self.expect_eq("equality type `a = b`")?;
+        // Non-associative: the right side is parsed *without* `=`, so
+        // `a = b = c` is a parse error rather than a silent grouping.
+        let rhs = self.with_eq(true, |p| p.expr_bp(0))?;
+        let span = lhs.span.join(rhs.span);
+        Ok(Expr { kind: ExprKind::Eq(Box::new(lhs), Box::new(rhs)), span })
+    }
+
+    /// Run `f` with `a = b` suppressed (or restored). Mirrors
+    /// [`Parser::with_record_lit`].
+    fn with_eq<T>(&mut self, no: bool, f: impl FnOnce(&mut Self) -> R<T>) -> R<T> {
+        let saved = std::mem::replace(&mut self.no_eq, no);
+        let r = f(self);
+        self.no_eq = saved;
+        r
     }
 
     /// Binding powers for the infix operators. `(name, left_bp, right_bp)`;
@@ -1071,10 +1099,16 @@ impl Parser {
         // record literal (docs/surface-records.md §6.1).
         let scrut = self.with_record_lit(true, |p| p.expr())?;
         let motive = if self.eat_kw("as") {
-            let (bind, _) = self.ident("motive binder")?;
-            self.expect(&TokKind::Arrow, "`->`")?;
-            let m = self.with_record_lit(true, |p| p.ty())?;
-            Some((bind, Box::new(m)))
+            // The retired spelling `as z -> T`, diagnosed rather than parsed:
+            // `->` is the type arrow and nothing else now
+            // (docs/surface-universe.md §13).
+            if matches!(self.peek(), TokKind::Ident(_)) && matches!(self.nth(1), TokKind::Arrow) {
+                return self.err(
+                    "a motive is a lambda: write `as \u{3bb} z => T` (or `as fun z => T`) \
+                     rather than `as z -> T`",
+                );
+            }
+            Some(Box::new(self.with_record_lit(true, |p| p.expr())?))
         } else {
             None
         };
@@ -1120,21 +1154,23 @@ impl Parser {
         self.expect(&TokKind::LParen, "`(`")?;
         let proof = self.expr()?;
         self.expect(&TokKind::Comma, "`,`")?;
-        self.expect(&TokKind::LParen, "`(`")?;
-        let (y, _) = self.ident("endpoint binder")?;
-        self.expect(&TokKind::Comma, "`,`")?;
-        let (p, _) = self.ident("path binder")?;
-        self.expect(&TokKind::RParen, "`)`")?;
-        self.expect(&TokKind::Arrow, "`->`")?;
-        let motive = self.ty()?;
+        // The retired spelling `(y, q) -> T`.
+        if matches!(self.peek(), TokKind::LParen)
+            && matches!(self.nth(1), TokKind::Ident(_))
+            && matches!(self.nth(2), TokKind::Comma)
+        {
+            return self.err(
+                "a motive is a lambda: write `j(p, \u{3bb} y q => T, case)` rather than \
+                 `j(p, (y, q) -> T, case)`",
+            );
+        }
+        let motive = self.expr()?;
         self.expect(&TokKind::Comma, "`,`")?;
         let case = self.expr()?;
         let end = self.expect(&TokKind::RParen, "`)`")?;
         Ok(Expr {
             kind: ExprKind::J {
                 proof: Box::new(proof),
-                y,
-                p,
                 motive: Box::new(motive),
                 case: Box::new(case),
             },
@@ -1154,11 +1190,13 @@ impl Parser {
         // The chain: terms[i] are the endpoints, proofs[i] : terms[i] = terms[i+1].
         // The first step carries both endpoints (`e0 = e1 := p1`); later steps
         // reuse the previous right endpoint (`= e_{i+1} := p_{i+1}`).
-        let mut terms = vec![self.expr()?];
+        // Endpoints are read with `=` suppressed: here it is the step
+        // separator, not the identity type (docs/surface-universe.md §13).
+        let mut terms = vec![self.with_eq(true, |p| p.expr())?];
         let mut proofs = Vec::new();
         self.expect_eq("calc step")?;
         loop {
-            terms.push(self.expr()?);
+            terms.push(self.with_eq(true, |p| p.expr())?);
             self.expect(&TokKind::ColonEq, "`:=` (calc step proof)")?;
             proofs.push(self.expr()?);
             if !matches!(self.peek(), TokKind::Comma) {

@@ -45,13 +45,13 @@ fn append(xs: List, ys: List) -> List {
 
 theorem cong_cons(h: Nat, {t1: List}, {t2: List}, p: t1 = t2):
     Cons(h, t1) = Cons(h, t2)
-{ j(p, (y, q) -> Cons(h, t1) = Cons(h, y), refl) }
+{ j(p, λ y q => Cons(h, t1) = Cons(h, y), refl) }
 
 theorem trans_list({a: List}, {b: List}, {c: List}, p: a = b, q: b = c): a = c
-{ j(q, (y, r) -> a = y, p) }
+{ j(q, λ y r => a = y, p) }
 
 theorem sym_list({a: List}, {b: List}, p: a = b): b = a
-{ j(p, (y, q) -> y = a, refl) }
+{ j(p, λ y q => y = a, refl) }
 "#;
 
 // Closed evaluation: `append` computes, so `refl` proves it.
@@ -151,7 +151,7 @@ fn rev_append_composes_the_earlier_lemmas() {
 
          theorem cong_append_l({{a: List}}, {{b: List}}, p: a = b, zs: List):
              append(a, zs) = append(b, zs)
-         {{ j(p, (y, q) -> append(a, zs) = append(y, zs), refl) }}
+         {{ j(p, λ y q => append(a, zs) = append(y, zs), refl) }}
 
          theorem rev_append(xs: List, ys: List):
              rev(append(xs, ys)) = append(rev(ys), rev(xs))

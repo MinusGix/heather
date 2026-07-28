@@ -1324,6 +1324,7 @@ fn expr_mentions(e: &Expr, name: &str) -> bool {
             expr_mentions(body, name)
                 || binders.iter().any(|b| b.ty.as_ref().is_some_and(|t| occurs(t, name).is_some()))
         }
+        ExprKind::Eq(a, b) => expr_mentions(a, name) || expr_mentions(b, name),
         ExprKind::VecLit(es) => es.iter().any(|x| expr_mentions(x, name)),
         ExprKind::Dot { recv, args, .. } => {
             expr_mentions(recv, name)

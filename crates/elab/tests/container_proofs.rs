@@ -59,7 +59,7 @@ theorem cong_fold(n: Nat, {xs: [Nat; n]}, {ys: [Nat; n]}, p: xs = ys):
     xs.fold(0, λ (a: Nat) (b: Nat) => add(a, b))
         = ys.fold(0, λ (a: Nat) (b: Nat) => add(a, b))
 {
-    j(p, (y, q) -> xs.fold(0, λ (a: Nat) (b: Nat) => add(a, b))
+    j(p, λ y q => xs.fold(0, λ (a: Nat) (b: Nat) => add(a, b))
                        = y.fold(0, λ (a: Nat) (b: Nat) => add(a, b)), refl)
 }
 "#;
@@ -130,15 +130,15 @@ fn a_plain_child_and_a_container_prove_together() {
         theorem cong_add({a: Nat}, {b: Nat}, {c: Nat}, {d: Nat}, p: a = b, q: c = d):
             add(a, c) = add(b, d)
         {
-            j(p, (y, _) -> add(a, c) = add(y, d),
-              j(q, (y, _) -> add(a, c) = add(a, y), refl))
+            j(p, λ y _ => add(a, c) = add(y, d),
+              j(q, λ y _ => add(a, c) = add(a, y), refl))
         }
 
         theorem cong_fold(n: Nat, {xs: [Nat; n]}, {ys: [Nat; n]}, p: xs = ys):
             xs.fold(0, λ (a: Nat) (b: Nat) => add(a, b))
                 = ys.fold(0, λ (a: Nat) (b: Nat) => add(a, b))
         {
-            j(p, (y, q) -> xs.fold(0, λ (a: Nat) (b: Nat) => add(a, b))
+            j(p, λ y q => xs.fold(0, λ (a: Nat) (b: Nat) => add(a, b))
                                = y.fold(0, λ (a: Nat) (b: Nat) => add(a, b)), refl)
         }
 
