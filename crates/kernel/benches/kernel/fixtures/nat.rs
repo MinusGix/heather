@@ -10,15 +10,15 @@
 
 use heather_kernel::layer::Layer;
 use heather_kernel::level::Level;
-use heather_kernel::term::{GlobalCtx, Type};
+use heather_kernel::term::{GlobalCtx, Term, Type};
 use heather_kernel::typing::check_term;
 
-use super::terms::{add, mul, nat_ctx, nat_value, nil_ctx, num};
+use super::terms::{add, mul, nat_ctx, nat_value, nil_ctx, num, rt, rty, v};
 use super::FUEL;
 use crate::harness::{Case, Family};
 
 pub fn families() -> Vec<Family> {
-    vec![step_once(), add_family(), mul_family(), check_family()]
+    vec![step_once(), step_into_closed(), add_family(), mul_family(), check_family()]
 }
 
 /// **One** β-step of `elim_Nat`, against the size of the eliminator's own
@@ -59,6 +59,50 @@ fn step_once() -> Family {
         what: "one elim_Nat β-step vs. the size of annotations it never reads",
         unit: "base nodes",
         expect_slope: Some((-0.15, 0.15)),
+        cases,
+    }
+}
+
+/// One β-step whose *body* carries a large **closed** subterm — material the
+/// substitution walks and rebuilds although nothing in it can change.
+///
+/// `nat/step-once` asked whether a step pays for annotations on the
+/// eliminator; this asks whether it pays for the parts of the body it
+/// instantiates that contain no substituted variable. The body here is
+/// `add n̄ y`, so `n̄` (a closed numeral of `n` nodes) is walked to write
+/// itself back, while the only real work is replacing `y`.
+///
+/// The step-body case is the general one: a generated recursor's arm is mostly
+/// closed type annotations around a few variable occurrences, which is why
+/// `wf/mirror-involution` spends 35 µs on a single reduction step whose body
+/// is 413 nodes. See [[subst-rebuilds-unchanged-subterms]].
+fn step_into_closed() -> Family {
+    let cases = [64u64, 128, 256, 512, 1024]
+        .iter()
+        .map(|&n| {
+            let gamma = nil_ctx();
+            // elim_Nat(_. Nat) 0 (x, y. add n̄ y) (su 0): one step fires, and
+            // instantiating its body walks n̄ for nothing.
+            let t = Term::ElimNat {
+                level: Level::Zero,
+                motive: rty(Type::Nat),
+                base: rt(Term::Zero),
+                step: rt(add(num(n), v(0))),
+                scrut: rt(num(1)),
+            };
+            let go = move || heather_kernel::reduce::step_term(&t, &gamma).is_some() as u64;
+            assert!(go() == 1, "elim_Nat on su 0 did not step");
+            Case::new(n, 1, go)
+        })
+        .collect();
+    Family {
+        name: "nat/step-into-closed-body",
+        what: "one β-step vs. the size of a closed subterm of the body it instantiates",
+        unit: "closed nodes",
+        // Should be flat — the substitution cannot change a closed subterm.
+        // Measured 1.0: it rebuilds it anyway
+        // ([[subst-rebuilds-unchanged-subterms]]). Band records what is.
+        expect_slope: Some((0.80, 1.25)),
         cases,
     }
 }
