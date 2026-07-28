@@ -118,9 +118,16 @@ fn whnf_identity_recursor() -> Family {
         name: "code/whnf-identity-recursor",
         what: "whnf of elim^Typ over code — branch instantiation per code node",
         unit: "code nodes",
-        // Linear if instantiation is per-node; the branch table is copied
-        // once per node, so the constant is large but the exponent is 1.
-        expect_slope: Some((0.80, 1.40)),
+        // A loose band on purpose, and the loosest in the suite. Cost here is
+        // a per-recursor fixed part plus a per-node part, and at 3–33 code
+        // nodes the fixed part dilutes the fit: the slope was 0.86 while
+        // branch instantiation copied its payloads and is 0.43 now that it
+        // does not ([[subst-copies-payloads-at-depth-zero]]) — the marginal
+        // cost fell, so the constant dominates more. Neither number is an
+        // exponent worth defending; what this family gates is the absolute
+        // per-node cost against the baseline. The band is here only to catch
+        // a return to superlinear.
+        expect_slope: Some((0.25, 1.20)),
         cases,
     }
 }

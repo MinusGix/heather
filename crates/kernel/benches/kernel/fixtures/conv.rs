@@ -34,11 +34,12 @@ pub fn families() -> Vec<Family> {
 /// computation the checker is asked to replay, and unary fuel makes that at
 /// least linear.
 ///
-/// Measured slope ≈ 2.2, for the same reason `nat/add-normalize` is quadratic
-/// ([[subst-copies-payloads-at-depth-zero]]); conversion pays a little more
-/// than reduction because it also compares the `2n` result nodes. The band
-/// records today's exponent, and becomes `(0.85, 1.35)` when the defect is
-/// fixed.
+/// Linear (slope 1.01, ~300 ns per level — about 1.7× the cost of reducing
+/// the same computation, the difference being the `2n` result nodes it also
+/// compares). It was quadratic (2.20) until
+/// [[subst-copies-payloads-at-depth-zero]] landed on 2026-07-28, and 512
+/// levels went from 92 ms to 154 µs, which is the single clearest statement of
+/// what that defect was costing the certifying story.
 fn computed_numeral() -> Family {
     let cases = [32u64, 64, 128, 256, 512]
         .iter()
@@ -67,7 +68,7 @@ fn computed_numeral() -> Family {
         name: "conv/computed-numeral",
         what: "conv(add n n, 2n) at Nat — an equation discharged by computation",
         unit: "Succ levels",
-        expect_slope: Some((1.85, 2.45)),
+        expect_slope: Some((0.85, 1.35)),
         cases,
     }
 }

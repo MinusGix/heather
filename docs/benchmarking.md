@@ -70,6 +70,13 @@ when the baseline's `host` and `profile` match.
 
 Improvements ≥ 20% are printed too, as a hint to re-record — not a failure.
 
+**Re-run a single-case flag before believing it.** A lone case over the
+threshold with its neighbours in the same family unmoved is usually the
+machine, not the code: this happened on the first day (`nat/mul-normalize:32`
+read 1.35× while 24 and 48 were fine, and three quiet re-runs came in 4%
+*under* baseline). A real regression moves a family, not one point in it.
+`--filter <family> --check` is the cheap way to ask again.
+
 When a regression is real and intended, `--save` and say so in the commit.
 When it is real and *not* intended, it files an issue: this suite does not own
 optimizations, only measurements (`issues/README.md` rule 3).
@@ -174,7 +181,35 @@ property of the kernel), and a family dominated by a fixed cost
 (`code/check-identity-recursor`, where the fit is ~0 and says nothing).
 
 When a band records a defect rather than a design, say so in the doc comment,
-with the issue link and the band it becomes when fixed — three families do
-today, all pointing at
-`issues/subst-copies-payloads-at-depth-zero.md`. Recording the exponent that
-exists is deliberate: a permanently red gate is a gate nobody reads.
+with the issue link and the band it becomes when fixed. Recording the exponent
+that exists is deliberate: a permanently red gate is a gate nobody reads.
+
+## The loop, once, end to end
+
+The first run of this suite found that substituting a payload deep-copied it
+three times even at depth zero
+(`issues/subst-copies-payloads-at-depth-zero.md`, since fixed), and the round
+trip is what the suite is for:
+
+1. `nat/step-once` — added to isolate the suspicion: one `elim_Nat` β-step,
+   timed against annotation size the rule never reads. 154 µs at 1024 nodes,
+   slope 1.03. A cost model claim (O(1)) contradicted by a number.
+2. Three bands were set to the exponents that *existed* (2.02, 2.77, 2.20),
+   each naming the issue and the band it would become. The suite stayed green,
+   which is the only way it stays read.
+3. The fix — a `by == 0` guard on the shift entry points, sound by a law
+   `tests/subst_laws.rs` already checked — turned `--check` red, on exactly
+   those bands and nothing else. Five "regressions", all of them the old
+   exponents being left behind.
+4. `--save`, and the bands became the new claims.
+
+| | before | after |
+|---|---|---|
+| one β-step, 1024-node annotation | 154 µs | 98 ns, flat |
+| `add n n`, n = 1024 | 232 ms | 171 µs |
+| `conv(add n n, 2n)`, n = 512 | 92 ms | 154 µs |
+| `mirror (mirror t)`, 2963 nodes | 262 ms | 89 ms |
+
+The last row is the one to take a lesson from: nobody was looking at `Wf`
+elimination, and it got 3× faster because the fixture set was wide enough to
+show that the defect was not about numerals.

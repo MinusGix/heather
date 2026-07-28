@@ -32,15 +32,13 @@ pub fn families() -> Vec<Family> {
 /// exponent is **zero**: a flat line is the claim, and any slope is a bug
 /// with a name.
 ///
-/// Today the line is not flat: `SubstLocal::local_var` (`subst.rs`) finishes
-/// with `payload.shift_local(at.local).shift_global(…).shift_univ(…)`, and
-/// none of the three has a no-op fast path, so the substituted recursive
-/// occurrence — annotations and all — is rebuilt three times per step even at
-/// depth zero. That is the root of the quadratic in `nat/add-normalize` and
-/// `conv/computed-numeral`, and it is filed as
-/// [[subst-copies-payloads-at-depth-zero]]. When that lands, this band
-/// becomes `(-0.15, 0.15)` and the two quadratics become linear; until then
-/// the band records what is, so that the suite gates the code that exists.
+/// It earned that description on its first run, when the line was not flat.
+/// `SubstLocal::local_var` weakened each payload in all three namespaces at
+/// insertion with no no-op fast path, so the substituted recursive occurrence
+/// — annotations and all — was rebuilt three times per step even at depth
+/// zero: 154 µs for one step at 1024 base nodes. Fixed 2026-07-28
+/// (`subst.rs` §Shifting by zero); the same step is now **98 ns and flat**,
+/// and this band is what holds it flat.
 fn step_once() -> Family {
     let cases = [64u64, 128, 256, 512, 1024]
         .iter()
@@ -60,24 +58,22 @@ fn step_once() -> Family {
         name: "nat/step-once",
         what: "one elim_Nat β-step vs. the size of annotations it never reads",
         unit: "base nodes",
-        expect_slope: Some((0.80, 1.25)),
+        expect_slope: Some((-0.15, 0.15)),
         cases,
     }
 }
 
-/// `add n n` normalized to a numeral. *Should* be linear in `n`: `n` β-steps
-/// of `elim_Nat`, each substituting a two-node step body, then `2n` weak-head
-/// peels to read the answer off.
+/// `add n n` normalized to a numeral: linear in `n` — `n` β-steps of
+/// `elim_Nat`, each substituting a two-node step body, then `2n` weak-head
+/// peels to read the answer off. ~170 ns per level.
 ///
-/// It is **quadratic** (slope ≈ 2.0, first measured 2026-07-28), because each
-/// step copies the eliminator it substitutes — see `nat/step-once` for the
-/// isolated measurement and [[subst-copies-payloads-at-depth-zero]] for the
-/// defect. The band below records that, deliberately: a permanently red gate
-/// is a gate nobody reads. It becomes `(0.85, 1.30)` when the defect lands
-/// fixed, and *that* is the change this family is here to confirm.
+/// It was **quadratic** when first measured (slope 2.02, 232 ms at n = 1024),
+/// for the reason `nat/step-once` isolates; both went right together on
+/// 2026-07-28 ([[subst-copies-payloads-at-depth-zero]]), and n = 1024 now
+/// costs 171 µs. This family is the reason to keep believing that.
 ///
-/// This is the number the `Compile` story cares about most: unary fuel makes
-/// a fuel-indexed evaluator at least linear in fuel by construction, and a
+/// It is the number the `Compile` story cares about most: unary fuel makes a
+/// fuel-indexed evaluator at least linear in fuel by construction, and a
 /// quadratic per-step cost on top of that is the difference between "the
 /// checker replays the program" and "the checker cannot".
 fn add_family() -> Family {
@@ -94,21 +90,21 @@ fn add_family() -> Family {
         name: "nat/add-normalize",
         what: "normalize `add n n` to a numeral — n β-steps of elim_Nat",
         unit: "Succ levels",
-        expect_slope: Some((1.75, 2.30)),
+        expect_slope: Some((0.85, 1.30)),
         cases,
     }
 }
 
 /// `mul n n` normalized: `n` additions of `n`, so quadratic **by
-/// construction** — and cubic in practice (slope ≈ 2.8), being `n` of the
-/// quadratic `add` above.
+/// construction** (slope 1.98). It was cubic (2.77) while `add` was
+/// quadratic, which is how a composite fixture reports a defect in its
+/// component.
 ///
 /// It earns its place twice. As a fixture it is the closest proxy available
 /// for a fuel-indexed evaluator (a linear driver over a linear step), and as
 /// a control it is the family that proves the scaling fit can tell one
 /// exponent from another — a suite that reports slopes should contain at
-/// least one case whose true exponent is known not to be 1. Expect this band
-/// to drop to roughly `(1.75, 2.30)` alongside `add`'s.
+/// least one case whose true exponent is known not to be 1.
 fn mul_family() -> Family {
     let cases = [8u64, 12, 16, 24, 32, 48]
         .iter()
@@ -123,7 +119,7 @@ fn mul_family() -> Family {
         name: "nat/mul-normalize",
         what: "normalize `mul n n` — quadratic by construction (fit control)",
         unit: "Succ levels",
-        expect_slope: Some((2.45, 3.15)),
+        expect_slope: Some((1.75, 2.30)),
         cases,
     }
 }

@@ -21,6 +21,36 @@
 //!   by a concrete context `Γ'` turns `wk^k_g` into the expanded weakening
 //!   `wk^k_{Γ'}` (new tail plus one variable term per entry of `Γ'`), and
 //!   `·^k_g` into `·^{k+|Γ'|}` over `Γ'`'s base.
+//!
+//! ## Shifting by zero
+//!
+//! Every `shift_*` entry point returns `self.clone()` when `by == 0`, which
+//! is an `Rc` bump of the root and keeps every subterm shared, instead of
+//! rebuilding the whole tree to write the same indices back.
+//!
+//! **Why it is sound.** `t.shift_local(0) == t` and its two siblings are laws
+//! this crate already property-tests over generated terms
+//! (`tests/subst_laws.rs`, `shift_composition`), and they hold structurally,
+//! not merely up to some equivalence: at `by = 0` each mapper's variable case
+//! is `v ↦ v`, each `tail` case adds zero to a length or renumbers by zero,
+//! and `Level::shift(0, _)` is the identity because `Level::succ`/`max` are
+//! plain constructors that normalize nothing. The `_above` variants are the
+//! same operation with a cutoff, and a cutoff only narrows *which* variables
+//! move, so at `by = 0` they are identities too. So the fast path cannot be
+//! distinguished from the traversal by any caller.
+//!
+//! **Why it matters.** `SubstLocal::local_var` weakens each payload in all
+//! three namespaces at insertion, and at depth zero — the common case,
+//! including every `elim_Nat`/`elim_Wf` β-step — all three weakenings are
+//! identities. Without this guard a β-step deep-copies the term it
+//! substitutes three times, which made `add n n` quadratic in `n`
+//! (issues/subst-copies-payloads-at-depth-zero.md, measured by
+//! `scripts/bench --filter nat`).
+//!
+//! What this does *not* fix: a payload inserted under `k > 0` binders still
+//! costs a full copy, because that shift is real work. Making *that* cheap
+//! needs a representation change (shift-annotated or hash-consed terms), a
+//! kernel design decision to take deliberately and not as a follow-on.
 
 use std::rc::Rc;
 
@@ -971,16 +1001,25 @@ macro_rules! ops {
 
             /// Weaken the ambient local context by `by` entries.
             pub fn shift_local(&self, by: u32) -> $ty {
+                if by == 0 {
+                    return self.clone(); // see §Shifting by zero
+                }
                 $map(self, &mut ShiftLocal { by }, Depths::default())
             }
 
             /// Weaken the global context by `by` bindings.
             pub fn shift_global(&self, by: u32) -> $ty {
+                if by == 0 {
+                    return self.clone(); // see §Shifting by zero
+                }
                 $map(self, &mut ShiftGlobal { by }, Depths::default())
             }
 
             /// Weaken the universe context by `by` variables.
             pub fn shift_univ(&self, by: u32) -> $ty {
+                if by == 0 {
+                    return self.clone(); // see §Shifting by zero
+                }
                 $map(self, &mut ShiftUniv { by }, Depths::default())
             }
 
@@ -991,6 +1030,9 @@ macro_rules! ops {
             /// (scoped in `L, ℓ⃗` with the motive's own binder still to be
             /// instantiated).
             pub fn shift_univ_above(&self, by: u32, cutoff: u32) -> $ty {
+                if by == 0 {
+                    return self.clone(); // see §Shifting by zero
+                }
                 $map(self, &mut ShiftUniv { by }, Depths { univ: cutoff, ..Depths::default() })
             }
 
@@ -998,6 +1040,9 @@ macro_rules! ops {
             /// binders: the innermost `cutoff` bindings stay fixed. See
             /// [`Self::shift_univ_above`].
             pub fn shift_global_above(&self, by: u32, cutoff: u32) -> $ty {
+                if by == 0 {
+                    return self.clone(); // see §Shifting by zero
+                }
                 $map(self, &mut ShiftGlobal { by }, Depths { global: cutoff, ..Depths::default() })
             }
         }
@@ -1017,10 +1062,16 @@ impl LocalCtx {
     }
 
     pub fn shift_global(&self, by: u32) -> LocalCtx {
+        if by == 0 {
+            return self.clone(); // see §Shifting by zero
+        }
         map_ctx(self, &mut ShiftGlobal { by }, Depths::default())
     }
 
     pub fn shift_univ(&self, by: u32) -> LocalCtx {
+        if by == 0 {
+            return self.clone(); // see §Shifting by zero
+        }
         map_ctx(self, &mut ShiftUniv { by }, Depths::default())
     }
 }
@@ -1061,10 +1112,16 @@ impl LocalSubst {
     }
 
     pub fn shift_local(&self, by: u32) -> LocalSubst {
+        if by == 0 {
+            return self.clone(); // see §Shifting by zero
+        }
         map_subst(self, &mut ShiftLocal { by }, Depths::default())
     }
 
     pub fn shift_global(&self, by: u32) -> LocalSubst {
+        if by == 0 {
+            return self.clone(); // see §Shifting by zero
+        }
         map_subst(self, &mut ShiftGlobal { by }, Depths::default())
     }
 }

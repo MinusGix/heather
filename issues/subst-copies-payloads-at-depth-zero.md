@@ -1,6 +1,6 @@
 ---
 title: Substituting a payload deep-copies it, three times, even at depth zero
-status: open
+status: closed
 labels: [kernel,performance]
 code: crates/kernel/src/subst.rs:770 @ b97e3c3
 created: 2026-07-28
@@ -103,3 +103,7 @@ work it has no reason to do.
   `nat/step-once` exists and isolates one β-step, so a fix has a proof.
 
 ## Log
+
+- 2026-07-28: FIXED. Every shift_* entry point (Term/Type via the ops! macro, plus LocalCtx and LocalSubst, plus the two _above cutoff variants) returns self.clone() at by == 0 -- an Rc bump that keeps every subterm shared. Soundness argument written up in subst.rs §Shifting by zero: at by = 0 each mapper's variable case is v -> v, each tail case adds zero, and Level::shift(0, _) is structurally the identity because Level::succ/max are plain constructors that normalize nothing, so the fast path is indistinguishable from the traversal -- and t.shift_local(0) == t was already a property-tested law (tests/subst_laws.rs, shift_composition), now extended to the _above variants. Put the guard in the entry points rather than at SubstLocal::local_var, so every caller benefits, the elaborator's shift-heavy walks included.
+- 2026-07-28: Effect, measured by the bench that found it (scripts/bench, baseline re-recorded): one beta-step at a 1024-node annotation 154 us -> 98 ns and FLAT (slope 1.03 -> -0.01); add n n at n=1024 232 ms -> 171 us, slope 2.02 -> 1.00; conv(add n n, 2n) at n=512 92 ms -> 154 us, slope 2.20 -> 1.02; mul n n now quadratic as designed (2.77 -> 1.98). Two effects nobody was looking for, which is the argument for a wide fixture set: wf/mirror-involution 3x faster (262 ms -> 89 ms at 2963 nodes -- generated recursors substitute a transient ih per node), and code/whnf-identity-recursor 2.6x at 33 code nodes, its slope falling 0.86 -> 0.43 as the marginal cost stopped dominating. Untouched, as predicted: subst/shift-local, subst/apply-local, nat/check-numeral, wf/check-tree -- all of those shift by nonzero, so the guard cannot help them.
+- 2026-07-28: Tests: 42 binaries green. Added shifting_by_zero_preserves_sharing (tests/subst_laws.rs) -- Rc::ptr_eq on subterms, because equality alone would have passed against the deep-copying traversal too, plus a negative control that shift_local(1) does NOT share. Extended shift_composition to the _above variants at zero. Closing: the deeper half stays out, deliberately -- a payload inserted under k > 0 binders still costs a full copy, and making that cheap is shift-annotated or hash-consed terms, which [[dependency-policy]] already records as a kernel design decision to take on purpose. Nothing in the suite currently argues for it: the two remaining large per-node costs (wf/mirror-involution ~30 us/node, code/check-identity-recursor 0.54 ms fixed) have not been attributed to it.

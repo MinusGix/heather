@@ -173,7 +173,54 @@ fn shift_composition() {
         law!(seed, t.shift_local(2).shift_local(3), t.shift_local(5));
         law!(seed, t.shift_global(2).shift_global(3), t.shift_global(5));
         law!(seed, t.shift_univ(2).shift_univ(3), t.shift_univ(5));
+        // The cutoff variants at zero, which `subst.rs` §Shifting by zero
+        // also short-circuits: a cutoff narrows which variables move, so it
+        // cannot make a zero shift do something.
+        for cutoff in 0..3 {
+            law!(seed, t.shift_global_above(0, cutoff), *t);
+            law!(seed, t.shift_univ_above(0, cutoff), *t);
+        }
     }
+}
+
+/// Shifting by zero must not just *equal* the input, it must **share** it:
+/// that is the point of the fast path, and equality alone would pass just as
+/// well against the deep-copying traversal it replaced
+/// (issues/subst-copies-payloads-at-depth-zero.md).
+///
+/// Stated on subterm pointers rather than on the root, because the root is a
+/// returned value and is necessarily a fresh `Term` either way.
+#[test]
+fn shifting_by_zero_preserves_sharing() {
+    let inner = Rc::new(Term::Succ(Rc::new(Term::Zero)));
+    let t = Term::Succ(Rc::clone(&inner));
+
+    let shared = |out: &Term| match out {
+        Term::Succ(got) => Rc::ptr_eq(got, &inner),
+        _ => false,
+    };
+    assert!(shared(&t.shift_local(0)), "shift_local(0) rebuilt the subterm");
+    assert!(shared(&t.shift_global(0)), "shift_global(0) rebuilt the subterm");
+    assert!(shared(&t.shift_univ(0)), "shift_univ(0) rebuilt the subterm");
+    assert!(shared(&t.shift_global_above(0, 1)), "shift_global_above(0, _) rebuilt the subterm");
+    assert!(shared(&t.shift_univ_above(0, 1)), "shift_univ_above(0, _) rebuilt the subterm");
+
+    // And the payload path that motivated all of this: substituting into
+    // `Var 0` at depth zero must hand back the payload's own subterms, not
+    // copies of them. `[t/x]` applied to `x` is where a β-step lands.
+    let gamma = LocalCtx { base: CtxBase::Nil, entries: vec![] };
+    let delta = LocalSubst::id(&gamma).extended(Rc::new(t.clone()));
+    assert!(
+        shared(&Term::Var(LocalVar(0)).apply_local(&delta)),
+        "substituting a payload at depth zero copied it"
+    );
+
+    // A *nonzero* shift must still do the work — the fast path must not be
+    // keyed on anything looser than "by == 0".
+    assert!(
+        !shared(&t.shift_local(1)),
+        "shift_local(1) shared a subterm it had to renumber"
+    );
 }
 
 
