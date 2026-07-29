@@ -61,6 +61,20 @@ pub enum Type {
         lhs: Rc<Term>,
         rhs: Rc<Term>,
     },
+    /// `sEq^l(I; a; b)` — strict (definitionally proof-irrelevant) equality
+    /// over `I : Typ` at level `l`; `lhs`, `rhs : I`. Field-for-field the
+    /// shape of [`Type::Id`], deliberately: `sEq` is `Id` minus proof
+    /// relevance plus strictness. Any two terms at this type are convertible
+    /// (`conv.rs` irrelevance arm); eliminated by [`Term::Transp`], whose
+    /// strip rule is what makes the equality strict. Extension beyond DeLaM
+    /// ch. 04 (docs/sprop-design.md §2.1). Gated out of layer c until the
+    /// rec.rs round (sprop-design §8 step 5).
+    SEq {
+        level: Level,
+        ty: Rc<Type>,
+        lhs: Rc<Term>,
+        rhs: Rc<Term>,
+    },
     /// `Σ^{l,l'}(x : S). T` — dependent pair type; `snd` binds one local
     /// variable (of type `fst`). Lives at `l ⊔ l'`. Extension beyond DeLaM
     /// ch. 04 (see issues/kernel-v1-extensions.md).
@@ -292,6 +306,35 @@ pub enum Term {
         case: Rc<Term>,
         rhs: Rc<Term>,
         proof: Rc<Term>,
+    },
+
+    // ---- strict equality (extension; docs/sprop-design.md) ----
+    /// `srefl^l(I; a) : sEq^l(I; a; a)`. Fully annotated so it synthesizes;
+    /// the only canonical form at [`Type::SEq`], which is what makes
+    /// β-on-`srefl` sufficient for closed computation. Mirrors
+    /// [`Term::Refl`]. Gated out of layer c with [`Type::SEq`].
+    SRefl {
+        level: Level,
+        ty: Rc<Type>,
+        tm: Rc<Term>,
+    },
+    /// `transp^{l,l'}(I; x.P; a; b; e; t) : P[b/x]` — transport along a
+    /// strict equality through a motive; J's non-dependent cousin. `motive`
+    /// binds one local variable (`x : I`); nothing else binds. `proof :
+    /// sEq^l(I; a; b)` and `tm : P[a/x]`. β fires on `srefl` only; the case
+    /// β cannot see (a *neutral* proof at convertible endpoints) is handled
+    /// by the conversion strip rule, and its stuckness is keyed on the
+    /// endpoints, not the proof — see `conv.rs` and docs/sprop-design.md
+    /// §5. Gated out of layer c with [`Type::SEq`].
+    Transp {
+        ty_level: Level,
+        motive_level: Level,
+        ty: Rc<Type>,
+        motive: Rc<Type>,
+        lhs: Rc<Term>,
+        rhs: Rc<Term>,
+        proof: Rc<Term>,
+        tm: Rc<Term>,
     },
 
     // ---- dependent pairs (extension beyond DeLaM ch. 04) ----

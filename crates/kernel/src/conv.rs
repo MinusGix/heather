@@ -269,6 +269,48 @@ impl Conv {
         Ok(cur)
     }
 
+    /// The **strip** loop: a stuck `transp(I; x.P; a; b; e; t)` whose
+    /// endpoints convert is replaced by its payload `t`, re-whnf'd, and
+    /// re-stripped — the equation `transp ≈ t` when `a ≈ b` (well-typed
+    /// by `P[a] ≈ P[b]`), which covers what β cannot: a *neutral* proof
+    /// at convertible endpoints (docs/sprop-design.md §5.2). The rule is
+    /// keyed on the *term's* head, unlike the type-keyed η family, so it
+    /// lives in the term-whnf stage of [`Conv::tm`] (which owns the
+    /// hot-path discriminant check), not in a `tm_nf` type arm.
+    ///
+    /// The guard is an ordinary conversion query caught at this call
+    /// site — not a query mode. `NotConvertible` means "keep the transp;
+    /// the neutral path decides" and is the only caught error;
+    /// `OutOfFuel` propagates (the shared budget is spent, and the
+    /// verdict must not depend on *where* it died). No fuel refund on a
+    /// failed guard: monotone-decreasing fuel is the totality argument
+    /// (module doc). Each successful strip pays `spend()` — morally a
+    /// conversion-level reduction step; the loop terminates because the
+    /// payload is a strict subterm.
+    #[cold]
+    fn strip(&mut self, mut cur: Term, env: &Env) -> R<Term> {
+        loop {
+            let Term::Transp { ty_level, ty, lhs, rhs, tm, .. } = &cur else {
+                return Ok(cur);
+            };
+            // Fast path: syntactic endpoint equality (α-equality is free
+            // under de Bruijn); the full guarded query — at the transp's
+            // own annotations — only when that misses.
+            let strip = lhs == rhs
+                || match self.tm(env, lhs, rhs, ty, ty_level) {
+                    Ok(()) => true,
+                    Err(ConvError::NotConvertible) => false,
+                    Err(e) => return Err(e),
+                };
+            if !strip {
+                return Ok(cur);
+            }
+            self.spend()?;
+            let payload = Rc::clone(tm);
+            cur = self.whnf_tm(&payload, env)?;
+        }
+    }
+
     /// `L ⊢ l ≈ l' : Level` as a premise.
     fn lev_eq(&self, a: &Level, b: &Level) -> R {
         if a.equiv(b) { Ok(()) } else { Err(NC) }
@@ -303,6 +345,18 @@ impl Conv {
             (
                 Type::Id { level: l1, ty: s1, lhs: t1, rhs: u1 },
                 Type::Id { level: l2, ty: s2, lhs: t2, rhs: u2 },
+            ) => {
+                self.lev_eq(l1, l2)?;
+                self.ty(env, s1, s2, l1)?;
+                self.tm(env, t1, t2, s1, l1)?;
+                self.tm(env, u1, u2, s1, l1)
+            }
+            // sEq congruence (extension; docs/sprop-design.md §2.1) — Id's
+            // arm verbatim. The *endpoints* are compared as ordinary terms;
+            // only proofs (terms *at* sEq type) are irrelevant.
+            (
+                Type::SEq { level: l1, ty: s1, lhs: t1, rhs: u1 },
+                Type::SEq { level: l2, ty: s2, lhs: t2, rhs: u2 },
             ) => {
                 self.lev_eq(l1, l2)?;
                 self.ty(env, s1, s2, l1)?;
@@ -522,8 +576,20 @@ impl Conv {
     fn tm(&mut self, env: &Env, a: &Term, b: &Term, ty: &Type, l: &Level) -> R {
         self.spend()?;
         let w = self.whnf_ty(ty, env)?;
-        let wa = self.whnf_tm(a, env)?;
-        let wb = self.whnf_tm(b, env)?;
+        // whnf, then strip transp heads whose endpoints convert
+        // ([`Conv::strip`]). The check is inline (not a whnf-wrapping
+        // helper) so the hot path — no transp head, i.e. every pre-sEq
+        // program — pays one discriminant read and zero extra `Term`
+        // moves; the helper layering cost 1.35× on `conv/computed-numeral`
+        // (`scripts/bench --check`, 2026-07-28).
+        let mut wa = self.whnf_tm(a, env)?;
+        if matches!(wa, Term::Transp { .. }) {
+            wa = self.strip(wa, env)?;
+        }
+        let mut wb = self.whnf_tm(b, env)?;
+        if matches!(wb, Term::Transp { .. }) {
+            wb = self.strip(wb, env)?;
+        }
         self.tm_nf(env, &wa, &wb, &w, l)
     }
 
@@ -791,6 +857,15 @@ impl Conv {
             // η, so it fires on ⟨⟩, neutrals, or mixtures without inspecting
             // either side.
             Type::Unit { .. } => Ok(()),
+            // sEq irrelevance (extension; docs/sprop-design.md §5.2): the
+            // Unit pattern generalized — any two proofs of a strict equality
+            // are definitionally equal. This arm is also what lets the
+            // transp congruence in `tm_ne` skip the proofs, and what makes
+            // UIP at sEq definitional (`p ≡ srefl`) rather than a theorem.
+            // Both of Unit's ch. 07 §4 consequences apply verbatim:
+            // presupposition holds by assumption on the caller, and the arm
+            // must sit here in `tm_nf`, ahead of any structural fallback.
+            Type::SEq { .. } => Ok(()),
             // Empty (extension): no canonical inhabitants, so only neutrals can
             // appear; compare them structurally.
             Type::Empty { .. } => self.tm_nee(env, a, b).map(drop),
@@ -1235,6 +1310,53 @@ impl Conv {
                             .extended(Rc::clone(r1))
                             .extended(Rc::clone(p1)),
                     ),
+                    ml1.clone(),
+                ))
+            }
+            // transp congruence (extension; docs/sprop-design.md §5.3) —
+            // reached only when *both* sides' strip guards failed, i.e. two
+            // genuinely stuck transports. Inverts J's discipline: J compares
+            // its proof structurally because the proof is its scrutinee and
+            // neutrality is keyed on it; transp's stuckness is keyed on the
+            // endpoints, so two stuck transps over *different* neutral
+            // proofs must still be equal — the proofs are deliberately not
+            // compared (their type is sEq, whose irrelevance arm accepts any
+            // two terms; skipping is that arm applied, not a special case).
+            (
+                Term::Transp {
+                    ty_level: al1,
+                    motive_level: ml1,
+                    ty: s1,
+                    motive: m1,
+                    lhs: a1,
+                    rhs: b1,
+                    proof: _,
+                    tm: t1,
+                },
+                Term::Transp {
+                    ty_level: al2,
+                    motive_level: ml2,
+                    ty: s2,
+                    motive: m2,
+                    lhs: a2,
+                    rhs: b2,
+                    proof: _,
+                    tm: t2,
+                },
+            ) => {
+                self.lev_eq(al1, al2)?;
+                self.lev_eq(ml1, ml2)?;
+                self.ty(env, s1, s2, al1)?;
+                self.tm(env, a1, a2, s1, al1)?;
+                self.tm(env, b1, b2, s1, al1)?;
+                // P scoped in (Γ, x : I), as in typing.rs.
+                let e_x = env.push_entry(Rc::clone(s1), al1.clone());
+                self.ty(&e_x, m1, m2, ml1)?;
+                let t_ty =
+                    m1.apply_local(&LocalSubst::id(&env.gamma).extended(Rc::clone(a1)));
+                self.tm(env, t1, t2, &t_ty, ml1)?;
+                Ok((
+                    m1.apply_local(&LocalSubst::id(&env.gamma).extended(Rc::clone(b1))),
                     ml1.clone(),
                 ))
             }

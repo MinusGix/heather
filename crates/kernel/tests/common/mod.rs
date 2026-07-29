@@ -395,7 +395,7 @@ pub fn gen_type(sc: &Sc, r: &mut Rng, b: u32) -> Rc<Type> {
     }
 
     for _ in 0..8 {
-        let arm = if b == 0 { r.below(3) } else { r.below(19) };
+        let arm = if b == 0 { r.below(3) } else { r.below(20) };
         match arm {
             0 => return Rc::new(Type::Nat),
             1 => return Rc::new(Type::Ty(gen_level(sc, r, 1))),
@@ -483,6 +483,14 @@ pub fn gen_type(sc: &Sc, r: &mut Rng, b: u32) -> Rc<Type> {
                     rhs: gen_term(sc, r, b / 2),
                 });
             }
+            19 if b > 0 => {
+                return Rc::new(Type::SEq {
+                    level: gen_level(sc, r, 1),
+                    ty: gen_type(sc, r, b / 2),
+                    lhs: gen_term(sc, r, b / 2),
+                    rhs: gen_term(sc, r, b / 2),
+                });
+            }
             11 if b > 0 => {
                 let mut inner = sc.clone();
                 inner.local.len += 1;
@@ -547,7 +555,7 @@ pub fn gen_term(sc: &Sc, r: &mut Rng, b: u32) -> Rc<Term> {
     }
 
     for _ in 0..8 {
-        let arm = if b == 0 { r.below(5) } else { r.below(39) };
+        let arm = if b == 0 { r.below(5) } else { r.below(41) };
         match arm {
             0 if sc.local.len > 0 => return Rc::new(Term::Var(LocalVar(r.below(sc.local.len)))),
             0 | 1 => return Rc::new(Term::Zero),
@@ -738,6 +746,27 @@ pub fn gen_term(sc: &Sc, r: &mut Rng, b: u32) -> Rc<Term> {
                     case: gen_term(sc, r, b / 2),
                     rhs: gen_term(sc, r, b / 2),
                     proof: gen_term(sc, r, b / 2),
+                });
+            }
+            39 if b > 0 => {
+                return Rc::new(Term::SRefl {
+                    level: gen_level(sc, r, 1),
+                    ty: gen_type(sc, r, b / 2),
+                    tm: gen_term(sc, r, b / 2),
+                });
+            }
+            40 if b > 0 => {
+                let mut in1 = sc.clone();
+                in1.local.len += 1;
+                return Rc::new(Term::Transp {
+                    ty_level: gen_level(sc, r, 1),
+                    motive_level: gen_level(sc, r, 1),
+                    ty: gen_type(sc, r, b / 2),
+                    motive: gen_type(&in1, r, b / 2),
+                    lhs: gen_term(sc, r, b / 2),
+                    rhs: gen_term(sc, r, b / 2),
+                    proof: gen_term(sc, r, b / 2),
+                    tm: gen_term(sc, r, b / 2),
                 });
             }
             19 if b > 0 => {
@@ -1009,6 +1038,7 @@ pub fn count_type(t: &Type) -> u64 {
         Type::Nat | Type::Ty(_) | Type::Unit { .. } | Type::Empty { .. } => 0,
         Type::Pi { dom, cod, .. } => count_type(dom) + count_type(cod),
         Type::Id { ty, lhs, rhs, .. } => count_type(ty) + count_term(lhs) + count_term(rhs),
+        Type::SEq { ty, lhs, rhs, .. } => count_type(ty) + count_term(lhs) + count_term(rhs),
         Type::Sigma { fst, snd, .. } => count_type(fst) + count_type(snd),
         Type::Sum { lhs, rhs, .. } => count_type(lhs) + count_type(rhs),
         Type::W { shape, pos, .. } => count_type(shape) + count_type(pos),
@@ -1064,6 +1094,11 @@ pub fn count_term(t: &Term) -> u64 {
         Term::J { ty, lhs, motive, case, rhs, proof, .. } => {
             count_type(ty) + count_term(lhs) + count_type(motive) + count_term(case)
                 + count_term(rhs) + count_term(proof)
+        }
+        Term::SRefl { ty, tm, .. } => count_type(ty) + count_term(tm),
+        Term::Transp { ty, motive, lhs, rhs, proof, tm, .. } => {
+            count_type(ty) + count_type(motive) + count_term(lhs) + count_term(rhs)
+                + count_term(proof) + count_term(tm)
         }
         Term::Pair { fst_ty, snd_ty, fst, snd, .. } => {
             count_type(fst_ty) + count_type(snd_ty) + count_term(fst) + count_term(snd)

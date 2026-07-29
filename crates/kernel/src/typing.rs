@@ -364,6 +364,18 @@ impl Tc {
         if env.layer == Layer::Meta { Ok(()) } else { Err(TypeError::LayerMismatch) }
     }
 
+    /// Phase gate for `sEq`/`srefl`/`transp` (docs/sprop-design.md §8):
+    /// no code formers and no code-recursor branches yet, so they may not
+    /// appear at layer c (or v, which c subsumes here) — boxed code stays
+    /// exhaustively recursable. Lifted when `TmSEq` + the rec.rs branches
+    /// land (§8 step 5). Same discipline `Vec`/`Fin` used pre-phase-3.
+    fn not_code_layer(&self, env: &Env) -> R {
+        match env.layer {
+            Layer::Var | Layer::Code => Err(TypeError::LayerMismatch),
+            Layer::Prog | Layer::Meta => Ok(()),
+        }
+    }
+
     // -- local contexts -----------------------------------------------------
 
     /// `⊢_i Γ` (in `env.psi`; `env.gamma` is irrelevant).
@@ -476,6 +488,17 @@ impl Tc {
             // Id-formation (extension beyond ch. 04; kernel-v1-extensions):
             // ⊢_i Id^l (S; t; u) @ l ⟸ ⊢_i S @ l, ⊢_i t : S @ l, ⊢_i u : S @ l
             Type::Id { level, ty, lhs, rhs } => {
+                self.level_wf(env, level)?;
+                self.ty_check(env, ty, level)?;
+                self.tm_check(env, lhs, ty, level)?;
+                self.tm_check(env, rhs, ty, level)?;
+                Ok(level.clone())
+            }
+            // sEq-formation (extension; docs/sprop-design.md §2.1) — Id's
+            // rule verbatim, plus the phase gate:
+            // ⊢_i sEq^l(I; a; b) @ l ⟸ ⊢_i I @ l, ⊢_i a : I @ l, ⊢_i b : I @ l
+            Type::SEq { level, ty, lhs, rhs } => {
+                self.not_code_layer(env)?;
                 self.level_wf(env, level)?;
                 self.ty_check(env, ty, level)?;
                 self.tm_check(env, lhs, ty, level)?;
@@ -965,6 +988,52 @@ impl Tc {
                             .extended(Rc::clone(rhs))
                             .extended(Rc::clone(proof)),
                     ),
+                    motive_level.clone(),
+                ))
+            }
+
+            // -- strict equality (extension; docs/sprop-design.md §3–4) -----
+            // srefl^l(I; a) : sEq^l(I; a; a) @ l.
+            Term::SRefl { level, ty, tm } => {
+                self.not_code_layer(env)?;
+                self.level_wf(env, level)?;
+                self.ty_check(env, ty, level)?;
+                self.tm_check(env, tm, ty, level)?;
+                Ok((
+                    Type::SEq {
+                        level: level.clone(),
+                        ty: Rc::clone(ty),
+                        lhs: Rc::clone(tm),
+                        rhs: Rc::clone(tm),
+                    },
+                    level.clone(),
+                ))
+            }
+            // transp^{l,l'}(I; x.P; a; b; e; t) : P[b/x] @ l'. The motive
+            // binds one local (x : I) — J's non-dependent cousin; no motive
+            // over the proof exists or is needed (proofs are irrelevant, so
+            // transp + the conv.rs irrelevance arm derive sJ).
+            Term::Transp { ty_level, motive_level, ty, motive, lhs, rhs, proof, tm } => {
+                self.not_code_layer(env)?;
+                self.level_wf(env, ty_level)?;
+                self.level_wf(env, motive_level)?;
+                self.ty_check(env, ty, ty_level)?;
+                self.tm_check(env, lhs, ty, ty_level)?;
+                self.tm_check(env, rhs, ty, ty_level)?;
+                let e_x = env.push_entry(Rc::clone(ty), ty_level.clone());
+                self.ty_check(&e_x, motive, motive_level)?;
+                let seq_ty = Type::SEq {
+                    level: ty_level.clone(),
+                    ty: Rc::clone(ty),
+                    lhs: Rc::clone(lhs),
+                    rhs: Rc::clone(rhs),
+                };
+                self.tm_check(env, proof, &seq_ty, ty_level)?;
+                let tm_ty = motive
+                    .apply_local(&LocalSubst::id(&env.gamma).extended(Rc::clone(lhs)));
+                self.tm_check(env, tm, &tm_ty, motive_level)?;
+                Ok((
+                    motive.apply_local(&LocalSubst::id(&env.gamma).extended(Rc::clone(rhs))),
                     motive_level.clone(),
                 ))
             }

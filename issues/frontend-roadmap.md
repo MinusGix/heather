@@ -3,7 +3,7 @@ title: "Meta: frontend roadmap and current focus"
 status: open
 labels: [frontend,meta]
 created: 2026-07-23
-updated: 2026-07-27
+updated: 2026-07-28
 ---
 
 Organizing issue for the frontend push (the frontend-first route,
@@ -81,6 +81,16 @@ magic inherits the magic.
     is designed. It does **not** retire `TyKind::Vec`/`VecLit`; that was this
     order's own claim and it is withdrawn (2026-07-27) — see that issue's
     scope notes for why the container has to stay primitive.
+    **Resolution direction agreed 2026-07-28** (the contradiction is answered
+    for sequencing purposes): a classification. The index-recursive fragment
+    (that issue's route 1, `Nat` *and* inductive indices) is this item and
+    unblocks 15–16; the general case fords over an irrelevant equality and
+    waits on **[[sprop-strict-prop]]**, a kernel round scheduled off-order.
+    It does not gate 15–16: [[ir-simulate-design]] specifies an ordinary
+    inductive with fuel, and if the IR wants typing intrinsically that is a
+    decision that issue has not made (an extrinsic well-typedness predicate
+    is route 1). The indexed former (route 4) stays the measured fallback,
+    to be prototyped against 2b once SProp lands.
 15. **[[cli-check-diagnostics]]** — promoted from "cheap and separable"
     (2026-07-27): the IR round is the first that writes substantial Heather
     files rather than test snippets, and checking them only through a Rust
@@ -205,3 +215,4 @@ date; the originals are in `git log --follow issues/frontend-roadmap.md`.
   evaluation cost is load-bearing (kerneltime execution, equiv-by-conversion)
   and nothing measures it. Scheduled [[generators-in-the-language]]'s ch. 07
   expressiveness reading as an unordered side round.
+- 2026-07-28: Order decision: SProp promoted from foundations-later to a scheduled kernel round — [[sprop-strict-prop]] filed; item 14 resolves as route 1 now plus SProp-then-2b for the general case, neither gating items 15-16.

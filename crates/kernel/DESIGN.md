@@ -160,6 +160,32 @@ term-motive one. `tm_elim_wf`'s step binding reuses `term::wf_step_telescope`
 verbatim, which is why the rec.rs, typing.rs and reduce.rs transcriptions of
 it cannot drift.
 
+`sEq^l(I; a; b)` (2026-07-28) is **strict equality** — `Id` minus proof
+relevance plus strictness, the SProp round's customer former
+(`docs/sprop-design.md`; the sort itself dissolved into per-former
+irrelevance arms, design doc §1). Three conversion behaviours are its
+whole content: an irrelevance arm at `Type::SEq` in `tm_nf` (`Unit`'s
+audited pattern — any two proofs convertible, so UIP is definitional and
+`sJ` is derivable rather than primitive); the **strip rule** in `Conv::tm`'s
+term-whnf stage (`Conv::strip`) — a stuck `transp^{l,l'}(I; x.P; a; b; e; t)`
+whose endpoints convert is replaced by its payload, which is what makes
+casts invisible on *open* data (`plus0(n) ≡ n` under a neutral proof) and
+is term-head-keyed, unlike the type-keyed η family, hence its placement;
+and an endpoint-keyed congruence in `tm_ne` that compares `I, P, a, b, t`
+typed and deliberately skips the proofs — the inversion of `J`'s
+discipline (J's proof is its scrutinee; transp's stuckness is keyed on the
+endpoints). Reduction gets ordinary β only (`transp(…; srefl; t) ⇝ t`,
+J's shape; canonicity makes it sufficient closed) — the strip is
+conversion's, preserving the reduce/conv separation. Guard semantics
+(settled against `Conv`'s fuel-only state): catch `NotConvertible`,
+propagate `OutOfFuel`, no refund, each strip pays `spend()`. The hot-path
+discriminant check lives inline in `tm` because a whnf-wrapping helper
+cost 1.35× on `conv/computed-numeral` (caught by `scripts/bench --check`).
+Gated out of layer c (`not_code_layer`) until `TmSEq` + rec branches land,
+Vec/Fin-style. Independent implementation evidence for the strip-in-
+conversion placement: the TYPES 2024 CCobs implementation (design doc §1
+note).
+
 **Every type has exactly one level, and this is load-bearing** (2026-07-25,
 phase 4). Not tidiness: DeLaM ch. 04 §Non-cumulativity turns on it, because
 the code eliminator must reconstruct code from its components per branch,

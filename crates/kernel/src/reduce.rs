@@ -222,6 +222,25 @@ pub fn step_term(t: &Term, gamma: &LocalCtx) -> Option<Term> {
                 }),
             }
         }
+        Term::Transp { ty_level, motive_level, ty, motive, lhs, rhs, proof, tm } => {
+            match &**proof {
+                // transp(…; srefl; t) ⇝ t   (extension; fires on head shape
+                // only, like J's β — sufficient for closed computation by
+                // canonicity; the neutral-proof case belongs to conv.rs's
+                // strip rule, never to reduction. docs/sprop-design.md §5.1)
+                Term::SRefl { .. } => Some((**tm).clone()),
+                _ => step_term(proof, gamma).map(|p| Term::Transp {
+                    ty_level: ty_level.clone(),
+                    motive_level: motive_level.clone(),
+                    ty: Rc::clone(ty),
+                    motive: Rc::clone(motive),
+                    lhs: Rc::clone(lhs),
+                    rhs: Rc::clone(rhs),
+                    proof: Rc::new(p),
+                    tm: Rc::clone(tm),
+                }),
+            }
+        }
         // fst (pair a b) ⇝ a; else reduce the pair   (extension)
         Term::Fst { fst_level, snd_level, fst_ty, snd_ty, pair } => match &**pair {
             Term::Pair { fst, .. } => Some((**fst).clone()),
@@ -856,6 +875,12 @@ fn beta_elim_ty(
         }
         // box (U^δ): blocked, neutral.
         Type::GlobalTy { .. } => None,
+        // sEq has no code former and no branch yet, and `ty_infer` rejects
+        // it at layer c (`not_code_layer`), so well-typed code never
+        // contains one; stuck rather than mis-fired if it does. The rec.rs
+        // round replaces this with a `ty_seq` branch (docs/sprop-design.md
+        // §6, §8 step 5).
+        Type::SEq { .. } => None,
         // Layer-m types cannot be layer-c code: ill-typed, stuck.
         _ => None,
     }
@@ -1802,6 +1827,7 @@ pub fn is_whnf_type(t: &Type) -> bool {
         Type::Nat
         | Type::Pi { .. }
         | Type::Id { .. }
+        | Type::SEq { .. }
         | Type::Sigma { .. }
         | Type::Unit { .. }
         | Type::Empty { .. }
@@ -1835,6 +1861,11 @@ pub fn is_neutral_term(t: &Term) -> bool {
         Term::ElimW { scrut, .. } => is_neutral_term(scrut),
         Term::ElimWf { scrut, .. } => is_neutral_term(scrut),
         Term::J { proof, .. } => is_neutral_term(proof),
+        // For *reduction* purposes a transp is stuck exactly when its proof
+        // is (β fires on srefl only); conversion additionally strips it when
+        // the endpoints convert, but that is conv.rs's business, not a
+        // reduction (docs/sprop-design.md §5.2).
+        Term::Transp { proof, .. } => is_neutral_term(proof),
         Term::Fst { pair, .. } | Term::Snd { pair, .. } => is_neutral_term(pair),
         Term::App { fun, .. }
         | Term::UApp { fun, .. }
@@ -1874,6 +1905,7 @@ pub fn is_whnf_term(t: &Term) -> bool {
         | Term::Zero
         | Term::Succ(_)
         | Term::Refl { .. }
+        | Term::SRefl { .. }
         | Term::Pair { .. }
         | Term::Triv { .. }
         | Term::Inl { .. }

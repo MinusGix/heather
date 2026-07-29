@@ -943,3 +943,164 @@ written out in full. The one place that most deserves a second look before
 any mechanization is the composite spine recursion in transitivity (§15),
 because it is the only construction in this round that appears twice and was
 written out once.
+
+---
+
+# Part III — the `sEq`/`transp` round (sketch, pre-code)
+
+Written 2026-07-28 as step 2 of `docs/sprop-design.md` §8 — *before* any
+kernel code, per the sequencing note of `issues/sprop-strict-prop.md`
+(postulates cannot de-risk a conversion feature; this sketch is the
+de-risk). Unlike parts I–II this is a pass over a design, not a landing:
+its job is to state the new obligations precisely, work the cases far
+enough to find the shape-level surprises, and check the abort criterion.
+Two genuine findings came out of working it; they are §19 and they
+*changed the design doc* (§5.2's guard premise) rather than the other way
+around.
+
+## 18. `sEq` and `sEmpty` — Id's type rule, Unit's term relation
+
+**Declarative additions (ch. 04-style)** these formers owe: formation and
+congruence rules (routine, `Id`/`Unit` shaped); `srefl`/`transp`
+congruences and `transp`-β; and two *irrelevance laws* —
+`Γ ⊢ p ≈ q : sEq^l(I; a; b)` and the same at `sEmpty^l`, premise-free like
+η-`Unit`. The strip rule is also declarative:
+
+```
+Γ ⊢ a ≈ b : I @ l
+--------------------------------------------------
+Γ ⊢ transp^{l,l'}(I; x.P; a; b; e; t) ≈ t : P[b/x]
+```
+
+**LR cases.** `sEq`'s type rule is `Id`'s verbatim (§6): whnf both sides,
+generic equivalence, `E :: ∀ψ. I ~ I'`, endpoints related at `E(ψ)`.
+`sEmpty`'s is a premise-free base case like `Unit`'s. Both **term relations
+are total** — `t ~ t'` iff both well-typed at the type, no whnf condition,
+no `NfEq` inductive. This is `Unit`'s §4 case wholesale, including both of
+its recorded consequences: escape is *not* derivable from term structure
+and must come from the irrelevance laws above (which is why they are laws),
+and presupposition holds by assumption on the caller. Every property lemma
+at these types is vacuous; layering restriction is immediate (no
+contravariant premises anywhere — `sEq`'s components are covariant like
+`Id`'s, `sEmpty` has none).
+
+## 19. `transp` — two findings from working the term relation
+
+**Finding 1: the naive neutral treatment is *wrong*, not just weak.** A
+stuck `transp(I; x.P; a; b; e; t)` does not reduce on its payload — it is
+stuck on the proof — so `transp(e; 5)` is a whnf at `Nat`. But the strip
+law demands `transp(e; 5) ≈ 5` whenever `a ≈ b`, and `NfEqNat` relates
+neutrals only to neutrals: a term relation that classifies strippable
+transps as ordinary neutrals cannot validate the strip law at any positive
+type. Adding a strip clause to each `NfEq` separately would work but
+duplicates the same clause everywhere. The uniform statement: **the LR's
+evaluation notion changes from whnf to whnf-then-strip** — evaluate to
+whnf; if the head is a `transp` whose endpoints satisfy the strip premise,
+replace it by its payload and continue; term relations are read over
+*these* normal forms. This is a global-but-uniform edit — it touches the
+evaluation notion once, not each former's clauses — and it is the exact
+semantic counterpart of the algorithm's whnf-adjacent strip loop
+(`docs/sprop-design.md` §5.2). The algorithm and the LR agree that strip
+belongs to *evaluation*, not to per-type equivalence: the pleasing
+coherence, and the piece with no precedent in parts I–II (every prior
+extension added cases; this edits a notion the cases share).
+
+**Finding 2: the strip premise must be declarative convertibility, not
+semantic relatedness.** The tempting premise "`a ~ b` at the relation for
+`I`" is circular-by-levels: the motive lives at `l'`, the index type at
+`l`, and nothing orders them — a term relation at level `l'` would appeal
+to a type relation at an arbitrary `l`. Neutrals already solve this
+problem: their congruence premises use the *generic equivalence*, not the
+LR. The strip premise does the same — `Γ ⊢ a ≈ b : I @ l`, a syntactic
+judgment, no level appeal, no circularity — and this is also exactly what
+makes the declarative strip rule above well-stated. (Design-doc
+consequence, folded back into §5.2: the algorithm's guard query *is* the
+algorithmic mirror of a declarative premise, so ch. 08-style completeness
+has the usual shape — no new proof obligation kind.)
+
+**The `transp` cases, given the two findings:**
+
+- *β / `srefl`:* weak-head expansion, `J`'s refl-case shape (§6):
+  `srefl`'s typing forces `a ≈ b`, the FT turns that into the semantic
+  equality that carries `P[a]`'s relation to `P[b]`'s, and the payload
+  premise lands.
+- *Strippable:* by strip expansion — the evaluation notion of finding 1
+  makes this literally the weak-head-expansion property lemma re-proved
+  for the extended evaluation; termination of iterated strip is the
+  payload being a strict subterm (same argument as the algorithm's).
+- *Stuck (guard fails):* an endpoint-keyed neutral clause — `I`, `P`,
+  `a`, `b`, `t` premised via generic equivalence as usual, proofs
+  **unconditionally related** (their type is `sEq`; §18's total relation).
+  Reflexivity-of-neutral and the congruence-for-neutrals law follow the
+  `J` pattern with the proof premise deleted.
+
+`elim_sEmpty`: neutral-only eliminator, no β — its arm is the `Empty`
+eliminator's with the scrutinee premise weakened to well-typedness
+(irrelevance). Nothing else changes.
+
+## 20. The code-layer observers — re-running §6's argument
+
+§6 closed with a warning naming this round: an "irrelevant/definitional-Id
+rule" would make the □-observability argument need redoing. Re-run, for
+`sEq` at each code type:
+
+- **`sEq^0(□(Δ ⊢ T); box t; box t')`.** The §6 invariant survives because
+  it never rested on `Id`'s proofs being relevant: `srefl` *synthesizes*
+  `sEq(S; u; u)`, so checking it against endpoints `box t`, `box t'` goes
+  through conversion at `□`, which is `==`. Irrelevance collapses the
+  *proofs*, not the endpoints — `sEq` at `□` is inhabited by `srefl` iff
+  the code is syntactically equal, the same equality the recursor
+  dispatches on. `transp` along a neutral such proof is stuck unless the
+  boxes are `==` (the guard runs the same syntactic comparison), so no
+  coarser equality leaks into any motive. No unbox congruence exists; the
+  recursor arms of the FT still case-analyse box *syntax* and never
+  consult an `sEq` relation.
+- **`sEq^{1+l}(Ty l; A; B)` — the earmark from the issue.** Observes
+  *definitional* equality of encodings, irrelevantly. `Id` at `Ty l`
+  already observes exactly that propositionally, and term conversion at
+  `Ty l` is unchanged by this round, so the observer is new only in that
+  its witnesses are collapsed. `transp` with motive `x. El x` moves along
+  it, stuck unless `A ≈ B` — which is precisely `El A ≈ El B` territory
+  the checker already owns. Verdict: inert, as predicted, and now argued
+  rather than flagged.
+
+The §6 strengthening gets a sharper restatement for DESIGN.md: *endpoint
+checking goes through conversion, and conversion at `□` is `==`* — a
+property `sEq` inherits from the same two facts `Id` did, so both
+observers stand or fall together.
+
+## 21. Cross-check: the new laws vs. the algorithm
+
+- Irrelevance laws ⇔ the two `Ok(())` arms (type-directed, ahead of any
+  fallback — `Unit`'s §4 ordering note applies verbatim).
+- Strip rule ⇔ the whnf-adjacent strip loop; the declarative premise
+  `a ≈ b` ⇔ the guarded query, with `NotConvertible` caught (= "premise
+  absent, take the neutral clause") and `OutOfFuel` propagated. The
+  completeness direction rests on the guard being the algorithmic mirror
+  of a declarative premise (§19 finding 2), the usual ch. 08 shape.
+- β ⇔ `reduce.rs`; congruence + congruence-for-neutrals ⇔ the `tm_ne`
+  arm with proofs skipped. The skip is *justified* by the total relation,
+  not a special case of it — one uniform principle, as designed.
+
+## 22. Verdict — against the abort criterion, pre-code
+
+| former | LR case shape | new definitional risk | layering restriction | verdict |
+|---|---|---|---|---|
+| `sEq` | `Id`'s type rule + total term relation | irrelevance laws (Unit-precedented) | covariant only | goes through |
+| `sEmpty` | base case + total term relation | none | trivial | goes through |
+| `transp` | endpoint-keyed neutral + **evaluation-notion edit** (§19) | the strip law | no contravariant premises | goes through, one global edit |
+
+**The abort criterion (`sprop-design.md` §7) is not triggered**: no
+relevance marks appear in contexts, congruences, or anywhere else — the
+strip premise is a declarative-equivalence side condition, and proof
+skipping is ordinary typed comparison at a type whose relation is total.
+
+**The standing risk, recorded honestly**: finding 1's edit is *global* —
+every term-relation case is re-read over whnf-then-strip normal forms, and
+this sketch re-read them for shape, not in full. Parts I–II only ever
+added cases; this is the first round that edits a shared notion, and the
+full FT pass (step 3 of the design doc's sequencing, with code) is where a
+case that secretly depended on "whnf = stuck-or-canonical" would surface.
+That pass, not this sketch, retires the risk. If it surfaces relevance
+marks after all, the abort criterion fires and the fallback is the
+judgmental sort, at the cost `sprop-design.md` §1 itemizes.

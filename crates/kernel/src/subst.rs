@@ -351,6 +351,12 @@ fn map_type<M: Mapper>(t: &Type, m: &mut M, at: Depths) -> Type {
             lhs: sub_tm(lhs, m, at),
             rhs: sub_tm(rhs, m, at),
         },
+        Type::SEq { level, ty, lhs, rhs } => Type::SEq {
+            level: m.level(level, at),
+            ty: sub_ty(ty, m, at),
+            lhs: sub_tm(lhs, m, at),
+            rhs: sub_tm(rhs, m, at),
+        },
         Type::Sigma { fst_level, snd_level, fst, snd } => Type::Sigma {
             fst_level: m.level(fst_level, at),
             snd_level: m.level(snd_level, at),
@@ -485,6 +491,23 @@ fn map_term<M: Mapper>(t: &Term, m: &mut M, at: Depths) -> Term {
             rhs: sub_tm(rhs, m, at),
             proof: sub_tm(proof, m, at),
         },
+        Term::SRefl { level, ty, tm } => Term::SRefl {
+            level: m.level(level, at),
+            ty: sub_ty(ty, m, at),
+            tm: sub_tm(tm, m, at),
+        },
+        Term::Transp { ty_level, motive_level, ty, motive, lhs, rhs, proof, tm } => {
+            Term::Transp {
+                ty_level: m.level(ty_level, at),
+                motive_level: m.level(motive_level, at),
+                ty: sub_ty(ty, m, at),
+                motive: sub_ty(motive, m, at + dep(0, 0, 1)),
+                lhs: sub_tm(lhs, m, at),
+                rhs: sub_tm(rhs, m, at),
+                proof: sub_tm(proof, m, at),
+                tm: sub_tm(tm, m, at),
+            }
+        }
         Term::Pair { fst_level, snd_level, fst_ty, snd_ty, fst, snd } => Term::Pair {
             fst_level: m.level(fst_level, at),
             snd_level: m.level(snd_level, at),

@@ -103,6 +103,9 @@ impl fmt::Debug for Type {
             Type::Id { level, ty, lhs, rhs } => {
                 write!(f, "Id[{level:?}]({ty:?}; {lhs:?}; {rhs:?})")
             }
+            Type::SEq { level, ty, lhs, rhs } => {
+                write!(f, "sEq[{level:?}]({ty:?}; {lhs:?}; {rhs:?})")
+            }
             Type::Sigma { fst_level, snd_level, fst, snd } => {
                 write!(f, "Σ[{fst_level:?},{snd_level:?}]({fst:?}). {snd:?}")
             }
@@ -169,6 +172,11 @@ impl fmt::Debug for Term {
                 "elimN[{level:?}](M {motive:?}; z {base:?}; s {step:?}; {scrut:?})"
             ),
             Term::Refl { level, ty, tm } => write!(f, "refl[{level:?}]({ty:?}; {tm:?})"),
+            Term::SRefl { level, ty, tm } => write!(f, "srefl[{level:?}]({ty:?}; {tm:?})"),
+            Term::Transp { ty_level, motive_level, ty, motive, lhs, rhs, proof, tm } => write!(
+                f,
+                "transp[{ty_level:?},{motive_level:?}]({ty:?}; x.{motive:?}; {lhs:?}; {rhs:?}; {proof:?}; {tm:?})"
+            ),
             Term::J { ty_level, motive_level, ty, lhs, motive, case, rhs, proof } => write!(
                 f,
                 "J[{ty_level:?},{motive_level:?}]({ty:?}; a {lhs:?}; M {motive:?}; c {case:?}; {rhs:?}; {proof:?})"

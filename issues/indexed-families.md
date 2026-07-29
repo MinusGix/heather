@@ -3,7 +3,7 @@ title: "Indexed finitary families: how an index reaches the surface"
 status: open
 labels: [frontend,elaboration,inductives,design]
 created: 2026-07-26
-updated: 2026-07-27
+updated: 2026-07-28
 ---
 
 `inductive Vec<A> : Nat -> Ty { Nil : Vec<A>(0), Cons(n: Nat, x: A, xs: Vec<A>(n)) : Vec<A>(Succ(n)) }`
@@ -89,6 +89,31 @@ two rounds of postulated-interface tests before the decision).
    child is. `Vec` and `Fin` are here; so is a height-indexed balanced tree,
    branching and all.
 2. **Ford over `Wf`** — the coherence predicate above. General; tier-2 cost.
+   Sharpened 2026-07-28, after a currency correction (see log): the cost
+   that decides is not propositional `match` β — that is mechanical residue
+   a generator can insert wherever a family is poked — but that forded
+   values *store* equality proofs, so value equality needs UIP at the index
+   type. At a decidable index (`Nat`) that is Hedberg, a definable lemma the
+   generator inserts; at an index without decidable equality there is no
+   lemma to generate, and reasoning about the encoded data goes
+   setoid-flavored. Plain-`Id` fording is therefore a fallback tier, not a
+   candidate general story.
+
+   **2b. Ford over `Wf` with an *irrelevant* index equation.** If the index
+   constraint is a definitionally proof-irrelevant strict equality
+   (SProp-style — a standing "later" foundations position, which this route
+   promotes), the stored-proof hazard dissolves: the proof component cannot
+   obstruct conversion, value equality is equality of the visible data, and
+   with a `cast` firing on convertible endpoints, β on canonical data is
+   definitional as well. Unscored anywhere; couplings worth recording:
+   predicativity (already decided) dodges the known normalization failure of
+   *impredicative* proof-irrelevant equality, and syntactic box conversion
+   (`crates/kernel/src/conv.rs:30`) is the same firewall that contains
+   funext, with `Unit`'s irrelevance arm (`conv.rs:789`) as the in-kernel
+   precedent for irrelevance coexisting with the code layer. The strict-Prop
+   round now has an owner: **[[sprop-strict-prop]]** (filed 2026-07-28, off
+   this route) — the couplings above live there; assumed here is only that
+   an irrelevant `sEq` with a convertibility-firing `cast` arrives.
 3. **Per-constructor fording inside route 1.** A constructor whose index
    pattern does not determine its children's indices
    (`Node(l: T(m), r: T(k)) : T(Succ(plus(m,k)))` — `Succ`-headed, but
@@ -146,3 +171,19 @@ two rounds of postulated-interface tests before the decision).
   route 3 named as the first check. Nothing here is measured; the branching
   round's standard for "costed" is the bar.
 - 2026-07-27: Tracker review, same day: this issue's rewrite was the trigger for three ownership rules now in issues/README.md, and for backlink printing in scripts/issue. Nothing about the design changed.
+- 2026-07-28: Currency correction, from discussion: the bar is not
+  "definitional or bust" — residue the elaborator can mechanically generate
+  when a family is poked is acceptable; setoid-like contamination is not.
+  Under that bar, route 2's real defect is the stored index proof (UIP at
+  the index type; a cliff at non-decidable indices), and route 2b — fording
+  with an SProp-style irrelevant equality — is the contender no prior scoring
+  saw, coupling this issue to the strict-Prop foundations position. Two
+  further discussion outcomes, both conjecture: route 1 is not Nat-specific
+  (large elimination over any declared inductive index works, so
+  subject-recursive judgments like typing derivations are route 1, and the
+  non-route-1 remainder shrinks to intrinsically-indexed syntax and
+  computed-value indices); and route 3's composition check is expected to
+  fail (the recursion code exists only at the predecessor index and an `Id`
+  does not relocate it — course-of-values is the rejected code-tables
+  encoding of `docs/branching-inductives-choice.md` §10).
+- 2026-07-28: SProp decided (discussion): [[sprop-strict-prop]] filed and owns the strict-Prop round; route 2b's couplings move there. Route 1 is agreed as the near-term scheme (its own round, unblocked by SProp); the general case waits for SProp, then 2b-vs-route-4 by prototype. Route 4 stays the measured fallback.
