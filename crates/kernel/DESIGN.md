@@ -184,7 +184,11 @@ cost 1.35× on `conv/computed-numeral` (caught by `scripts/bench --check`).
 Gated out of layer c (`not_code_layer`) until `TmSEq` + rec branches land,
 Vec/Fin-style. Independent implementation evidence for the strip-in-
 conversion placement: the TYPES 2024 CCobs implementation (design doc §1
-note).
+note). Its companion `sEmpty^l` (same day) is `Empty` made irrelevant as a
+*separate* former — `Empty`'s structural-neutral comparison is unchanged,
+and the contrast is pinned in tests — with `elim_sEmpty` eliminating
+anywhere (no β, neutral congruence skips the scrutinees) and the same
+layer gate.
 
 **Every type has exactly one level, and this is load-bearing** (2026-07-25,
 phase 4). Not tidiness: DeLaM ch. 04 §Non-cumulativity turns on it, because

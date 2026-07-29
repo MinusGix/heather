@@ -505,6 +505,13 @@ impl Tc {
                 self.tm_check(env, rhs, ty, level)?;
                 Ok(level.clone())
             }
+            // sEmpty-formation (extension; docs/sprop-design.md §2.2):
+            // ⊢_i sEmpty^l @ l — premise-free like Unit/Empty, plus the gate.
+            Type::SEmpty { level } => {
+                self.not_code_layer(env)?;
+                self.level_wf(env, level)?;
+                Ok(level.clone())
+            }
             // Σ-formation (extension beyond ch. 04; kernel-v1-extensions):
             // ⊢_i Σ^{l,l'}(x:S).T @ l⊔l' ⟸ ⊢_i S @ l, (Γ, x:S) ⊢_i T @ l'
             Type::Sigma { fst_level, snd_level, fst, snd } => {
@@ -1035,6 +1042,23 @@ impl Tc {
                 Ok((
                     motive.apply_local(&LocalSubst::id(&env.gamma).extended(Rc::clone(rhs))),
                     motive_level.clone(),
+                ))
+            }
+
+            // elim_sEmpty^{l,l'} (x. M; t) : M[t/x] @ l — ElimEmpty's rule
+            // with the phase gate; eliminates anywhere (the motive's level
+            // and layer are unrestricted beyond the gate).
+            Term::ElimSEmpty { level, scrut_level, motive, scrut } => {
+                self.not_code_layer(env)?;
+                self.level_wf(env, level)?;
+                self.level_wf(env, scrut_level)?;
+                let sempty = Type::SEmpty { level: scrut_level.clone() };
+                let e_x = env.push_entry(Rc::new(sempty.clone()), scrut_level.clone());
+                self.ty_check(&e_x, motive, level)?;
+                self.tm_check(env, scrut, &sempty, scrut_level)?;
+                Ok((
+                    motive.apply_local(&LocalSubst::id(&env.gamma).extended(Rc::clone(scrut))),
+                    level.clone(),
                 ))
             }
 

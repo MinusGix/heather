@@ -75,6 +75,17 @@ pub enum Type {
         lhs: Rc<Term>,
         rhs: Rc<Term>,
     },
+    /// `sEmpty^l` — the strict (definitionally irrelevant) empty type at
+    /// level `l`; no inhabitants, eliminated **anywhere** by
+    /// [`Term::ElimSEmpty`]. Level-indexed for [`Type::Unit`]'s load-bearing
+    /// reason. Unlike [`Type::Empty`] (whose neutrals compare structurally),
+    /// any two terms at this type are convertible — vacuously sound, and it
+    /// keeps absurdity proofs invisible when they ride in data
+    /// (docs/sprop-design.md §2.2; the Empty-reuse alternative is §2.2's
+    /// costed shed). Gated out of layer c with [`Type::SEq`].
+    SEmpty {
+        level: Level,
+    },
     /// `Σ^{l,l'}(x : S). T` — dependent pair type; `snd` binds one local
     /// variable (of type `fst`). Lives at `l ⊔ l'`. Extension beyond DeLaM
     /// ch. 04 (see issues/kernel-v1-extensions.md).
@@ -335,6 +346,20 @@ pub enum Term {
         rhs: Rc<Term>,
         proof: Rc<Term>,
         tm: Rc<Term>,
+    },
+    /// `elim_sEmpty^{l,l'} (x. M; t) : M[t/x]` — ex falso from a strict
+    /// absurdity; `motive` binds one local (`x : sEmpty^{l'}`),
+    /// `scrut : sEmpty^{l'}`. [`Term::ElimEmpty`]'s discipline verbatim (no
+    /// β — nothing canonical to fire on; neutral on a neutral scrutinee;
+    /// `level` is the motive's, `scrut_level` the scrutinee's) with one
+    /// deliberate difference: neutral congruence skips the scrutinees —
+    /// they sit at an irrelevant type. Gated out of layer c with
+    /// [`Type::SEq`].
+    ElimSEmpty {
+        level: Level,
+        scrut_level: Level,
+        motive: Rc<Type>,
+        scrut: Rc<Term>,
     },
 
     // ---- dependent pairs (extension beyond DeLaM ch. 04) ----

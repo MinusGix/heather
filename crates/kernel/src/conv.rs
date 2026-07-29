@@ -378,7 +378,8 @@ impl Conv {
             // Unit^l / Empty^l congruence (extension): level-indexed, so the
             // levels must agree — up to `≈`, not `==`.
             (Type::Unit { level: l1 }, Type::Unit { level: l2 })
-            | (Type::Empty { level: l1 }, Type::Empty { level: l2 }) => self.lev_eq(l1, l2),
+            | (Type::Empty { level: l1 }, Type::Empty { level: l2 })
+            | (Type::SEmpty { level: l1 }, Type::SEmpty { level: l2 }) => self.lev_eq(l1, l2),
             // Sum congruence (extension; non-dependent, so no binder push).
             (
                 Type::Sum { lhs_level: dl1, rhs_level: cl1, lhs: s1, rhs: t1 },
@@ -866,6 +867,11 @@ impl Conv {
             // presupposition holds by assumption on the caller, and the arm
             // must sit here in `tm_nf`, ahead of any structural fallback.
             Type::SEq { .. } => Ok(()),
+            // sEmpty irrelevance (extension; docs/sprop-design.md §2.2):
+            // unlike Empty (structural neutrals, above-adjacent arm), any
+            // two absurdity proofs are convertible — vacuously sound, the
+            // type is uninhabited in consistent contexts.
+            Type::SEmpty { .. } => Ok(()),
             // Empty (extension): no canonical inhabitants, so only neutrals can
             // appear; compare them structurally.
             Type::Empty { .. } => self.tm_nee(env, a, b).map(drop),
@@ -1027,6 +1033,25 @@ impl Conv {
                 let e_x = env.push_entry(Rc::new(Type::Empty { level: s1.clone() }), s1.clone());
                 self.ty(&e_x, m1, m2, v1)?;
                 self.tm_nee(env, n1, n2)?; // inferred Empty: redundant, ignored
+                Ok((
+                    m1.apply_local(&LocalSubst::id(&env.gamma).extended(Rc::clone(n1))),
+                    v1.clone(),
+                ))
+            }
+            // elim_sEmpty neutral congruence (extension) — ElimEmpty's arm
+            // with the scrutinees *skipped*: they sit at sEmpty, whose
+            // irrelevance arm accepts any two terms, so comparing them
+            // would be that arm anyway (docs/sprop-design.md §5.3). The
+            // motive instances agree for the same reason.
+            (
+                Term::ElimSEmpty { level: v1, scrut_level: s1, motive: m1, scrut: n1 },
+                Term::ElimSEmpty { level: v2, scrut_level: s2, motive: m2, scrut: _ },
+            ) => {
+                self.lev_eq(v1, v2)?;
+                self.lev_eq(s1, s2)?;
+                let e_x =
+                    env.push_entry(Rc::new(Type::SEmpty { level: s1.clone() }), s1.clone());
+                self.ty(&e_x, m1, m2, v1)?;
                 Ok((
                     m1.apply_local(&LocalSubst::id(&env.gamma).extended(Rc::clone(n1))),
                     v1.clone(),

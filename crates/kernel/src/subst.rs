@@ -357,6 +357,7 @@ fn map_type<M: Mapper>(t: &Type, m: &mut M, at: Depths) -> Type {
             lhs: sub_tm(lhs, m, at),
             rhs: sub_tm(rhs, m, at),
         },
+        Type::SEmpty { level } => Type::SEmpty { level: m.level(level, at) },
         Type::Sigma { fst_level, snd_level, fst, snd } => Type::Sigma {
             fst_level: m.level(fst_level, at),
             snd_level: m.level(snd_level, at),
@@ -508,6 +509,12 @@ fn map_term<M: Mapper>(t: &Term, m: &mut M, at: Depths) -> Term {
                 tm: sub_tm(tm, m, at),
             }
         }
+        Term::ElimSEmpty { level, scrut_level, motive, scrut } => Term::ElimSEmpty {
+            level: m.level(level, at),
+            scrut_level: m.level(scrut_level, at),
+            motive: sub_ty(motive, m, at + dep(0, 0, 1)),
+            scrut: sub_tm(scrut, m, at),
+        },
         Term::Pair { fst_level, snd_level, fst_ty, snd_ty, fst, snd } => Term::Pair {
             fst_level: m.level(fst_level, at),
             snd_level: m.level(snd_level, at),

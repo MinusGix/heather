@@ -262,6 +262,15 @@ pub fn step_term(t: &Term, gamma: &LocalCtx) -> Option<Term> {
                 scrut: Rc::new(s),
             })
         }
+        // elim_sEmpty likewise (extension; docs/sprop-design.md §5.1).
+        Term::ElimSEmpty { level, scrut_level, motive, scrut } => {
+            step_term(scrut, gamma).map(|s| Term::ElimSEmpty {
+                level: level.clone(),
+                scrut_level: scrut_level.clone(),
+                motive: Rc::clone(motive),
+                scrut: Rc::new(s),
+            })
+        }
         // case (inl a) ⇝ c_l[a/x]; case (inr b) ⇝ c_r[b/y]; else reduce the
         // scrutinee, staying neutral when it is.   (extension)
         Term::Case {
@@ -875,12 +884,12 @@ fn beta_elim_ty(
         }
         // box (U^δ): blocked, neutral.
         Type::GlobalTy { .. } => None,
-        // sEq has no code former and no branch yet, and `ty_infer` rejects
-        // it at layer c (`not_code_layer`), so well-typed code never
-        // contains one; stuck rather than mis-fired if it does. The rec.rs
-        // round replaces this with a `ty_seq` branch (docs/sprop-design.md
-        // §6, §8 step 5).
-        Type::SEq { .. } => None,
+        // sEq/sEmpty have no code formers and no branches yet, and
+        // `ty_infer` rejects them at layer c (`not_code_layer`), so
+        // well-typed code never contains one; stuck rather than mis-fired
+        // if it does. The rec.rs round replaces this with `ty_seq`/
+        // `ty_sempty` branches (docs/sprop-design.md §6, §8 step 5).
+        Type::SEq { .. } | Type::SEmpty { .. } => None,
         // Layer-m types cannot be layer-c code: ill-typed, stuck.
         _ => None,
     }
@@ -1828,6 +1837,7 @@ pub fn is_whnf_type(t: &Type) -> bool {
         | Type::Pi { .. }
         | Type::Id { .. }
         | Type::SEq { .. }
+        | Type::SEmpty { .. }
         | Type::Sigma { .. }
         | Type::Unit { .. }
         | Type::Empty { .. }
@@ -1866,6 +1876,7 @@ pub fn is_neutral_term(t: &Term) -> bool {
         // the endpoints convert, but that is conv.rs's business, not a
         // reduction (docs/sprop-design.md §5.2).
         Term::Transp { proof, .. } => is_neutral_term(proof),
+        Term::ElimSEmpty { scrut, .. } => is_neutral_term(scrut),
         Term::Fst { pair, .. } | Term::Snd { pair, .. } => is_neutral_term(pair),
         Term::App { fun, .. }
         | Term::UApp { fun, .. }

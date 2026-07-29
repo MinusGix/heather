@@ -407,7 +407,13 @@ the `Wf` round: criterion on paper before the first kernel line.
 4. ~~**Derived-closure tests** (§1)~~ Done, same file: two inhabitants of
    `Π(x:Nat). sEq(…)` convertible with no new code;
    `Vec(Nat; transp(e,k)) ≡ Vec(Nat; k)` through the neutral-`Vec` arm.
-5. **`sEmpty` + rec.rs round** (§6), or the §2.2 shed if heavy.
+5. **`sEmpty`** ~~+ rec.rs round (§6), or the §2.2 shed if heavy~~ —
+   `sEmpty` landed 2026-07-28 (same file, +3 tests): irrelevance pinned
+   *against* `Empty`'s structural neutrals so the two formers cannot
+   silently drift together, scrutinee-skipping `elim_sEmpty` congruence,
+   large elimination, the shared layer gate. The **rec.rs code round**
+   (§6: `TmSEq`/`TmSEmpty`, 7 branches, five transcriptions, gate lift)
+   is the remaining step before acceptance.
 6. **Acceptance — the 2b setoid test**: a forded constructor whose payload
    carries an `sEq` field, where (a) `match` β fires on open recursive
    data through the strip, and (b) value equality on the forded data costs

@@ -350,6 +350,68 @@ fn guard_exhaustion_is_out_of_fuel_never_a_verdict() {
 }
 
 // -------------------------------------------------------------------------
+// sEmpty (design doc §2.2)
+// -------------------------------------------------------------------------
+
+fn sempty() -> Type {
+    Type::SEmpty { level: c(0) }
+}
+
+#[test]
+fn sempty_proofs_are_irrelevant_where_empty_neutrals_are_not() {
+    // Two hypotheses at sEmpty are convertible; the same two at Empty are
+    // not (structural neutrals) — the §2.2 contrast that priced the
+    // Empty-reuse alternative, pinned so the two formers cannot drift
+    // together silently.
+    let g = ext(&nil_ctx(), sempty(), c(0));
+    let g = ext(&g, sempty(), c(0));
+    conv_tm(&g, &v(1), &v(0), &sempty(), c(0));
+    let h = ext(&nil_ctx(), Type::Empty { level: c(0) }, c(0));
+    let h = ext(&h, Type::Empty { level: c(0) }, c(0));
+    not_conv_tm(&h, &v(1), &v(0), &Type::Empty { level: c(0) }, c(0));
+}
+
+#[test]
+fn elim_sempty_congruence_skips_the_scrutinees() {
+    // Two stuck elim_sEmptys over different absurdity hypotheses are
+    // convertible: the tm_ne arm compares levels and motive, and skips
+    // the scrutinees (they sit at an irrelevant type).
+    let g = ext(&nil_ctx(), sempty(), c(0));
+    let g = ext(&g, sempty(), c(0));
+    let e1 = Term::ElimSEmpty {
+        level: c(0),
+        scrut_level: c(0),
+        motive: rty(Type::Nat),
+        scrut: rt(v(1)),
+    };
+    let e2 = Term::ElimSEmpty {
+        level: c(0),
+        scrut_level: c(0),
+        motive: rty(Type::Nat),
+        scrut: rt(v(0)),
+    };
+    ck(&g, &e1, &Type::Nat, c(0));
+    conv_tm(&g, &e1, &e2, &Type::Nat, c(0));
+    // No β: the eliminator is a whnf on a neutral scrutinee.
+    assert_eq!(whnf_term(&e1, &g, FUEL).expect("fuel"), e1);
+}
+
+#[test]
+fn elim_sempty_eliminates_anywhere() {
+    // "Eliminates anywhere": a large elimination — motive Ty 0 at level 1
+    // — checks. (SProp inductives otherwise eliminate into props only;
+    // sEmpty and sEq's transp are the two exceptions, issue decision 3.)
+    let g = ext(&nil_ctx(), sempty(), c(0));
+    let e = Term::ElimSEmpty {
+        level: c(1),
+        scrut_level: c(0),
+        motive: rty(Type::Ty(c(0))),
+        scrut: rt(v(0)),
+    };
+    ck(&g, &e, &Type::Ty(c(0)), c(1));
+}
+
+// -------------------------------------------------------------------------
 // Layer gate
 // -------------------------------------------------------------------------
 
@@ -375,4 +437,7 @@ fn seq_is_gated_out_of_layer_c() {
     // And accepted at layer m (meta), where kerneltime programs live.
     check_type(&GlobalCtx::default(), 0, Layer::Meta, &g, &ty, &c(0), FUEL)
         .unwrap_or_else(|e| panic!("sEq must check at layer m: {e:?}"));
+    // sEmpty rides the same gate.
+    check_type(&GlobalCtx::default(), 0, Layer::Code, &nil_ctx(), &sempty(), &c(0), FUEL)
+        .expect_err("sEmpty must be rejected at layer c");
 }
