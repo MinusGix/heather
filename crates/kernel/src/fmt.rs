@@ -174,6 +174,10 @@ impl fmt::Debug for Term {
             ),
             Term::Refl { level, ty, tm } => write!(f, "refl[{level:?}]({ty:?}; {tm:?})"),
             Term::SRefl { level, ty, tm } => write!(f, "srefl[{level:?}]({ty:?}; {tm:?})"),
+            Term::TmSEq { level, ty, lhs, rhs } => {
+                write!(f, "«sEq»[{level:?}]({ty:?}; {lhs:?}; {rhs:?})")
+            }
+            Term::TmSEmpty { level } => write!(f, "«sEmpty» {level:?}"),
             Term::Transp { ty_level, motive_level, ty, motive, lhs, rhs, proof, tm } => write!(
                 f,
                 "transp[{ty_level:?},{motive_level:?}]({ty:?}; x.{motive:?}; {lhs:?}; {rhs:?}; {proof:?}; {tm:?})"

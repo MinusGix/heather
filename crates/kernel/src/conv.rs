@@ -720,6 +720,19 @@ impl Conv {
                     self.tm(env, t1, t2, &el, l1)?;
                     self.tm(env, u1, u2, &el, l1)
                 }
+                // TmSEq congruence (extension; mirrors TmId — the
+                // *encoding* compares structurally like any code; only
+                // terms AT sEq type are irrelevant).
+                (
+                    Term::TmSEq { level: l1, ty: s1, lhs: t1, rhs: u1 },
+                    Term::TmSEq { level: l2, ty: s2, lhs: t2, rhs: u2 },
+                ) => {
+                    self.lev_eq(l1, l2)?;
+                    self.tm(env, s1, s2, &Type::Ty(l1.clone()), &Level::succ(l1.clone()))?;
+                    let el = Type::El { level: l1.clone(), tm: Rc::clone(s1) };
+                    self.tm(env, t1, t2, &el, l1)?;
+                    self.tm(env, u1, u2, &el, l1)
+                }
                 // TmSigma congruence (extension; mirrors TmPi).
                 (
                     Term::TmSigma { fst_level: dl1, snd_level: cl1, fst: s1, snd: t1 },
@@ -734,7 +747,8 @@ impl Conv {
                 }
                 // TmUnit/TmEmpty congruence (extension; nullary encodings).
                 (Term::TmUnit { level: l1 }, Term::TmUnit { level: l2 })
-                | (Term::TmEmpty { level: l1 }, Term::TmEmpty { level: l2 }) => {
+                | (Term::TmEmpty { level: l1 }, Term::TmEmpty { level: l2 })
+                | (Term::TmSEmpty { level: l1 }, Term::TmSEmpty { level: l2 }) => {
                     self.lev_eq(l1, l2)
                 }
                 // TmSum congruence (extension; non-dependent, mirrors TmSigma).
@@ -796,7 +810,9 @@ impl Conv {
                     | Term::TmW { .. }
                     | Term::TmVec { .. }
                     | Term::TmFin { .. }
-                    | Term::TmWf { .. },
+                    | Term::TmWf { .. }
+                    | Term::TmSEq { .. }
+                    | Term::TmSEmpty { .. },
                     _,
                 )
                 | (
@@ -812,7 +828,9 @@ impl Conv {
                     | Term::TmW { .. }
                     | Term::TmVec { .. }
                     | Term::TmFin { .. }
-                    | Term::TmWf { .. },
+                    | Term::TmWf { .. }
+                    | Term::TmSEq { .. }
+                    | Term::TmSEmpty { .. },
                 ) => Err(NC),
                 _ => self.tm_nee(env, a, b).map(drop),
             },

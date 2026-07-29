@@ -435,6 +435,13 @@ fn map_term<M: Mapper>(t: &Term, m: &mut M, at: Depths) -> Term {
             lhs: sub_tm(lhs, m, at),
             rhs: sub_tm(rhs, m, at),
         },
+        Term::TmSEq { level, ty, lhs, rhs } => Term::TmSEq {
+            level: m.level(level, at),
+            ty: sub_tm(ty, m, at),
+            lhs: sub_tm(lhs, m, at),
+            rhs: sub_tm(rhs, m, at),
+        },
+        Term::TmSEmpty { level } => Term::TmSEmpty { level: m.level(level, at) },
         Term::TmSigma { fst_level, snd_level, fst, snd } => Term::TmSigma {
             fst_level: m.level(fst_level, at),
             snd_level: m.level(snd_level, at),
@@ -787,6 +794,13 @@ fn map_branches<M: Mapper>(b: &Branches, m: &mut M, at: Depths) -> Branches {
         tm_wf: sub_tm(&b.tm_wf, m, at + dep(1, 3, 2)),
         tm_supf: sub_tm(&b.tm_supf, m, at + dep(1, 5, 4)),
         tm_elim_wf: sub_tm(&b.tm_elim_wf, m, at + dep(2, 6, 5)),
+        ty_seq: sub_tm(&b.ty_seq, m, at + dep(1, 4, 3)),
+        tm_seq: sub_tm(&b.tm_seq, m, at + dep(1, 4, 3)),
+        ty_sempty: sub_tm(&b.ty_sempty, m, at + dep(1, 1, 0)),
+        tm_sempty: sub_tm(&b.tm_sempty, m, at + dep(1, 1, 0)),
+        tm_srefl: sub_tm(&b.tm_srefl, m, at + dep(1, 3, 2)),
+        tm_transp: sub_tm(&b.tm_transp, m, at + dep(2, 7, 6)),
+        tm_elim_sempty: sub_tm(&b.tm_elim_sempty, m, at + dep(2, 3, 2)),
     }
 }
 

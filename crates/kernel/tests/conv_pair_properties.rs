@@ -137,6 +137,14 @@ fn decode(e: &Term) -> Type {
         // decoded type's.
         Term::TmUnit { level } => Type::Unit { level: level.clone() },
         Term::TmEmpty { level } => Type::Empty { level: level.clone() },
+        // sEq/sEmpty (extension; sprop-design §6): mirror Id/Empty.
+        Term::TmSEq { level, ty, lhs, rhs } => Type::SEq {
+            level: level.clone(),
+            ty: rty(Type::El { level: level.clone(), tm: Rc::clone(ty) }),
+            lhs: Rc::clone(lhs),
+            rhs: Rc::clone(rhs),
+        },
+        Term::TmSEmpty { level } => Type::SEmpty { level: level.clone() },
         Term::TmWf { level, shape, arity } => Type::Wf {
             level: level.clone(),
             shape: rty(Type::El { level: level.clone(), tm: Rc::clone(shape) }),
@@ -248,6 +256,11 @@ fn mutate_encoding(e: &Term) -> Term {
         // different head, and `Unit^l ≉ Empty^l`.
         Term::TmUnit { level } => Term::TmEmpty { level: level.clone() },
         Term::TmEmpty { level } => Term::TmUnit { level: level.clone() },
+        // sEq: drop to the carrier, TmId's mutation. sEmpty: swap to Empty —
+        // same level, different head, and the *encodings* are distinct code
+        // even though neither type has inhabitants to distinguish them by.
+        Term::TmSEq { ty, .. } => (**ty).clone(),
+        Term::TmSEmpty { level } => Term::TmEmpty { level: level.clone() },
         Term::TmWf { level, shape, arity } => Term::TmWf {
             level: level.clone(),
             shape: Rc::clone(shape),
@@ -342,9 +355,9 @@ fn neutral_recursor_compares_branches() {
         let tm_variant = r.below(2) == 1;
         let nr = gen_nat_rec(&base_env, &mut r, tm_variant);
         let env = &nr.env;
-        // Branch i holds the numeral i: all 45 pairwise distinct, so any
+        // Branch i holds the numeral i: all 52 pairwise distinct, so any
         // swap or bump must be caught by the branchwise comparison.
-        let base: [Rc<Term>; 45] = std::array::from_fn(|i| numeral(i as u32));
+        let base: [Rc<Term>; 52] = std::array::from_fn(|i| numeral(i as u32));
         let t = nr.build(&base);
         let res =
             check_term(&env.psi, env.univs, env.layer, &env.gamma, &t, &Type::Nat, &Level::Zero, FUEL);
@@ -352,7 +365,7 @@ fn neutral_recursor_compares_branches() {
         let conv = |a: &Term, b: &Term| {
             conv_term(&env.psi, &env.gamma, Layer::Meta, a, b, &Type::Nat, &Level::Zero, FUEL)
         };
-        let k = r.below(45) as usize;
+        let k = r.below(52) as usize;
         // β-wrapped branch: differing sides that are still convertible.
         let mut pos = base.clone();
         pos[k] = beta_wrap(&base[k]);

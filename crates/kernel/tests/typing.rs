@@ -551,6 +551,13 @@ fn constant_branches() -> Rc<Branches> {
         tm_wf: z(),
         tm_supf: z(),
         tm_elim_wf: z(),
+        ty_seq: z(),
+        tm_seq: z(),
+        ty_sempty: z(),
+        tm_sempty: z(),
+        tm_srefl: z(),
+        tm_transp: z(),
+        tm_elim_sempty: z(),
     })
 }
 
@@ -1015,6 +1022,59 @@ fn identity_branches() -> Rc<Branches> {
                 motive: rty(gty(2, &gz)),
                 step: rt(gtm(1, &gacsi)),
                 scrut: rt(gtm(0, &g5)),
+            })))
+        },
+        // -- strict equality (extension; sprop-design §6) --
+        ty_seq: rt(Term::BoxTy(rty(Type::SEq {
+            level: lv(0),
+            ty: rty(gty(2, &g_ctx(3))),
+            lhs: rt(gtm(1, &g_ctx(3))),
+            rhs: rt(gtm(0, &g_ctx(3))),
+        }))),
+        tm_seq: rt(Term::BoxTm(rt(Term::TmSEq {
+            level: lv(0),
+            ty: rt(gtm(2, &g_ctx(3))),
+            lhs: rt(gtm(1, &g_ctx(3))),
+            rhs: rt(gtm(0, &g_ctx(3))),
+        }))),
+        ty_sempty: rt(Term::BoxTy(rty(Type::SEmpty { level: lv(0) }))),
+        tm_sempty: rt(Term::BoxTm(rt(Term::TmSEmpty { level: lv(0) }))),
+        tm_srefl: rt(Term::BoxTm(rt(Term::SRefl {
+            level: lv(0),
+            ty: rty(gty(1, &g_ctx(2))),
+            tm: rt(gtm(0, &g_ctx(2))),
+        }))),
+        tm_transp: {
+            // view: g = 6, U_I = 5, U_P = 4, u_a = 3, u_b = 2, u_e = 1,
+            // u_t = 0; ℓ = lv(1), ℓ' = lv(0).
+            let g6 = g_ctx(6);
+            let gx = ext(&g6, gty(5, &g6), lv(1));
+            rt(Term::BoxTm(rt(Term::Transp {
+                ty_level: lv(1),
+                motive_level: lv(0),
+                ty: rty(gty(5, &g6)),
+                motive: rty(Type::GlobalTy {
+                    var: GlobalVar(4),
+                    subst: LocalSubst::id(&gx),
+                }),
+                lhs: rt(gtm(3, &g6)),
+                rhs: rt(gtm(2, &g6)),
+                proof: rt(gtm(1, &g6)),
+                tm: rt(gtm(0, &g6)),
+            })))
+        },
+        tm_elim_sempty: {
+            // view: g = 2, U_M = 1, u_t = 0; ℓ = lv(1), ℓ' = lv(0).
+            let g2s = g_ctx(2);
+            let gxe = ext(&g2s, Type::SEmpty { level: lv(0) }, lv(0));
+            rt(Term::BoxTm(rt(Term::ElimSEmpty {
+                level: lv(1),
+                scrut_level: lv(0),
+                motive: rty(Type::GlobalTy {
+                    var: GlobalVar(1),
+                    subst: LocalSubst::id(&gxe),
+                }),
+                scrut: rt(gtm(0, &g2s)),
             })))
         },
     })

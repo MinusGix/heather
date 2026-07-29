@@ -364,18 +364,6 @@ impl Tc {
         if env.layer == Layer::Meta { Ok(()) } else { Err(TypeError::LayerMismatch) }
     }
 
-    /// Phase gate for `sEq`/`srefl`/`transp` (docs/sprop-design.md §8):
-    /// no code formers and no code-recursor branches yet, so they may not
-    /// appear at layer c (or v, which c subsumes here) — boxed code stays
-    /// exhaustively recursable. Lifted when `TmSEq` + the rec.rs branches
-    /// land (§8 step 5). Same discipline `Vec`/`Fin` used pre-phase-3.
-    fn not_code_layer(&self, env: &Env) -> R {
-        match env.layer {
-            Layer::Var | Layer::Code => Err(TypeError::LayerMismatch),
-            Layer::Prog | Layer::Meta => Ok(()),
-        }
-    }
-
     // -- local contexts -----------------------------------------------------
 
     /// `⊢_i Γ` (in `env.psi`; `env.gamma` is irrelevant).
@@ -495,10 +483,9 @@ impl Tc {
                 Ok(level.clone())
             }
             // sEq-formation (extension; docs/sprop-design.md §2.1) — Id's
-            // rule verbatim, plus the phase gate:
+            // rule verbatim:
             // ⊢_i sEq^l(I; a; b) @ l ⟸ ⊢_i I @ l, ⊢_i a : I @ l, ⊢_i b : I @ l
             Type::SEq { level, ty, lhs, rhs } => {
-                self.not_code_layer(env)?;
                 self.level_wf(env, level)?;
                 self.ty_check(env, ty, level)?;
                 self.tm_check(env, lhs, ty, level)?;
@@ -506,9 +493,8 @@ impl Tc {
                 Ok(level.clone())
             }
             // sEmpty-formation (extension; docs/sprop-design.md §2.2):
-            // ⊢_i sEmpty^l @ l — premise-free like Unit/Empty, plus the gate.
+            // ⊢_i sEmpty^l @ l — premise-free like Unit/Empty.
             Type::SEmpty { level } => {
-                self.not_code_layer(env)?;
                 self.level_wf(env, level)?;
                 Ok(level.clone())
             }
@@ -823,9 +809,20 @@ impl Tc {
             // Encodings of Unit/Empty (extension): Unit^l, Empty^l : Ty l.
             // The code carries `l` for the same reason `TmTy` does — it is a
             // *term*, so its type must be determined by it.
-            Term::TmUnit { level } | Term::TmEmpty { level } => {
+            Term::TmUnit { level } | Term::TmEmpty { level } | Term::TmSEmpty { level } => {
                 self.not_var_layer(env)?;
                 self.level_wf(env, level)?;
+                Ok((Type::Ty(level.clone()), Level::succ(level.clone())))
+            }
+            // Encoding of sEq (extension; docs/sprop-design.md §6): mirrors
+            // TmId — sEq^l(s; t; u) : Ty l.
+            Term::TmSEq { level, ty, lhs, rhs } => {
+                self.not_var_layer(env)?;
+                self.level_wf(env, level)?;
+                self.tm_check(env, ty, &Type::Ty(level.clone()), &Level::succ(level.clone()))?;
+                let el = Type::El { level: level.clone(), tm: Rc::clone(ty) };
+                self.tm_check(env, lhs, &el, level)?;
+                self.tm_check(env, rhs, &el, level)?;
                 Ok((Type::Ty(level.clone()), Level::succ(level.clone())))
             }
             // Encoding of the binary sum (extension): a +^{l,l'} b : Ty (l⊔l').
@@ -1002,7 +999,7 @@ impl Tc {
             // -- strict equality (extension; docs/sprop-design.md §3–4) -----
             // srefl^l(I; a) : sEq^l(I; a; a) @ l.
             Term::SRefl { level, ty, tm } => {
-                self.not_code_layer(env)?;
+                self.not_var_layer(env)?;
                 self.level_wf(env, level)?;
                 self.ty_check(env, ty, level)?;
                 self.tm_check(env, tm, ty, level)?;
@@ -1021,7 +1018,7 @@ impl Tc {
             // over the proof exists or is needed (proofs are irrelevant, so
             // transp + the conv.rs irrelevance arm derive sJ).
             Term::Transp { ty_level, motive_level, ty, motive, lhs, rhs, proof, tm } => {
-                self.not_code_layer(env)?;
+                self.not_var_layer(env)?;
                 self.level_wf(env, ty_level)?;
                 self.level_wf(env, motive_level)?;
                 self.ty_check(env, ty, ty_level)?;
@@ -1045,11 +1042,10 @@ impl Tc {
                 ))
             }
 
-            // elim_sEmpty^{l,l'} (x. M; t) : M[t/x] @ l — ElimEmpty's rule
-            // with the phase gate; eliminates anywhere (the motive's level
-            // and layer are unrestricted beyond the gate).
+            // elim_sEmpty^{l,l'} (x. M; t) : M[t/x] @ l — ElimEmpty's rule;
+            // eliminates anywhere (the motive's level is unrestricted).
             Term::ElimSEmpty { level, scrut_level, motive, scrut } => {
-                self.not_code_layer(env)?;
+                self.not_var_layer(env)?;
                 self.level_wf(env, level)?;
                 self.level_wf(env, scrut_level)?;
                 let sempty = Type::SEmpty { level: scrut_level.clone() };

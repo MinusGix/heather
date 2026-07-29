@@ -415,7 +415,7 @@ fn gen_wt_nat(env: &WtEnv, r: &mut Rng, b: u32) -> Rc<Term> {
 
 /// Synthesize an encoding `⊢_i t : Ty l @ 1+l`, returning `(t, l)`.
 pub fn gen_encoding(env: &WtEnv, r: &mut Rng, b: u32) -> (Rc<Term>, Level) {
-    match r.below(12) {
+    match r.below(14) {
         10 => {
             let l = gen_wf_level(env.univs, r, 1);
             (rt(Term::TmUnit { level: l.clone() }), l)
@@ -423,6 +423,22 @@ pub fn gen_encoding(env: &WtEnv, r: &mut Rng, b: u32) -> (Rc<Term>, Level) {
         11 => {
             let l = gen_wf_level(env.univs, r, 1);
             (rt(Term::TmEmpty { level: l.clone() }), l)
+        }
+        12 => {
+            let l = gen_wf_level(env.univs, r, 1);
+            (rt(Term::TmSEmpty { level: l.clone() }), l)
+        }
+        13 if b > 0 => {
+            // sEq encoding (extension; sprop-design §6): mirrors the Id arm.
+            let (ty, l) = gen_encoding(env, r, b / 2);
+            let el = Type::El { level: l.clone(), tm: Rc::clone(&ty) };
+            let (Some(lhs), Some(rhs)) = (
+                gen_wt_term_at(env, r, b / 2, &el, &l),
+                gen_wt_term_at(env, r, b / 2, &el, &l),
+            ) else {
+                return (rt(Term::TmNat), Level::Zero);
+            };
+            (rt(Term::TmSEq { level: l.clone(), ty, lhs, rhs }), l)
         }
         0 => (rt(Term::TmNat), Level::Zero),
         1 => {
@@ -1304,7 +1320,7 @@ fn gen_letbox_ty(env: &WtEnv, r: &mut Rng, b: u32) -> (Rc<Term>, Rc<Type>, Level
 /// recursive-call entry has that same motive (so `Var(0)` inhabits the
 /// branch type). Order = `Branches` field order. Independent transcription
 /// of docs/delam/04 — a disagreement with `src/rec.rs` is a test failure.
-const BRANCH_DIMS: [(u32, u32, u32, bool, bool); 45] = [
+const BRANCH_DIMS: [(u32, u32, u32, bool, bool); 52] = [
     (0, 1, 0, false, false), // ty_nat
     (2, 3, 2, false, true),  // ty_pi
     (1, 1, 0, false, false), // ty_ty
@@ -1350,6 +1366,13 @@ const BRANCH_DIMS: [(u32, u32, u32, bool, bool); 45] = [
     (1, 3, 2, true, true),   // tm_wf
     (1, 5, 4, true, true),   // tm_supf
     (2, 6, 5, true, true),   // tm_elim_wf (innermost local is a term-motive call)
+    (1, 4, 3, false, false), // ty_seq (innermost local is a term-motive call)
+    (1, 4, 3, true, true),   // tm_seq
+    (1, 1, 0, false, false), // ty_sempty
+    (1, 1, 0, true, false),  // tm_sempty
+    (1, 3, 2, true, true),   // tm_srefl
+    (2, 7, 6, true, true),   // tm_transp
+    (2, 3, 2, true, true),   // tm_elim_sempty (innermost local is a term-motive call)
 ];
 
 /// A Γ-variable whose WHNF type is a contextual type matching `tm_variant`:
@@ -1405,7 +1428,7 @@ fn gen_const_rec(
         ty_motive: rty(m1ty.shift_univ(1).shift_global(1).shift_local(1)),
         tm_motive: rty(m2ty.shift_univ(1).shift_global(2).shift_local(1)),
     });
-    let mut bs: Vec<Rc<Term>> = Vec::with_capacity(45);
+    let mut bs: Vec<Rc<Term>> = Vec::with_capacity(52);
     for &(tu, tg, tl, tm_kind, var_ok) in &BRANCH_DIMS {
         if var_ok && r.below(3) == 0 {
             bs.push(rt(v(0)));
@@ -1460,6 +1483,13 @@ fn gen_const_rec(
         tm_wf: bs[42].clone(),
         tm_supf: bs[43].clone(),
         tm_elim_wf: bs[44].clone(),
+        ty_seq: bs[45].clone(),
+        tm_seq: bs[46].clone(),
+        ty_sempty: bs[47].clone(),
+        tm_sempty: bs[48].clone(),
+        tm_srefl: bs[49].clone(),
+        tm_transp: bs[50].clone(),
+        tm_elim_sempty: bs[51].clone(),
     });
     if tm_variant {
         let (scrut, delta, cty, cl) = match neutral {
@@ -1700,7 +1730,7 @@ pub fn gen_nat_rec(base: &WtEnv, r: &mut Rng, tm_variant: bool) -> NatRec {
 impl NatRec {
     /// The recursor over `Var 0` with the given branch bodies, in
     /// [`Branches`] field order. Checks at `Nat @ 0` in `self.env`.
-    pub fn build(&self, bs: &[Rc<Term>; 45]) -> Rc<Term> {
+    pub fn build(&self, bs: &[Rc<Term>; 52]) -> Rc<Term> {
         let motives = Rc::new(Motives {
             ty_motive: rty(Type::Nat),
             tm_motive: rty(Type::Nat),
@@ -1751,6 +1781,13 @@ impl NatRec {
             tm_wf: bs[42].clone(),
             tm_supf: bs[43].clone(),
             tm_elim_wf: bs[44].clone(),
+            ty_seq: bs[45].clone(),
+            tm_seq: bs[46].clone(),
+            ty_sempty: bs[47].clone(),
+            tm_sempty: bs[48].clone(),
+            tm_srefl: bs[49].clone(),
+            tm_transp: bs[50].clone(),
+            tm_elim_sempty: bs[51].clone(),
         });
         rt(if self.tm_variant {
             Term::ElimCodeTm {
@@ -2177,6 +2214,57 @@ pub fn identity_branches() -> Rc<Branches> {
                 motive: rty(gty(2, &gz)),
                 step: rt(gtm(1, &gacsi)),
                 scrut: rt(gtm(0, &g5)),
+            })))
+        },
+        // -- strict equality (extension; sprop-design §6) --
+        ty_seq: rt(Term::BoxTy(rty(Type::SEq {
+            level: lv(0),
+            ty: rty(gty(2, &g3)),
+            lhs: rt(gtm(1, &g3)),
+            rhs: rt(gtm(0, &g3)),
+        }))),
+        tm_seq: rt(Term::BoxTm(rt(Term::TmSEq {
+            level: lv(0),
+            ty: rt(gtm(2, &g3)),
+            lhs: rt(gtm(1, &g3)),
+            rhs: rt(gtm(0, &g3)),
+        }))),
+        ty_sempty: rt(Term::BoxTy(rty(Type::SEmpty { level: lv(0) }))),
+        tm_sempty: rt(Term::BoxTm(rt(Term::TmSEmpty { level: lv(0) }))),
+        tm_srefl: rt(Term::BoxTm(rt(Term::SRefl {
+            level: lv(0),
+            ty: rty(gty(1, &g2)),
+            tm: rt(gtm(0, &g2)),
+        }))),
+        tm_transp: {
+            // view: g = 6, U_I = 5, U_P = 4, u_a = 3, u_b = 2, u_e = 1,
+            // u_t = 0; ℓ = lv(1), ℓ' = lv(0).
+            let gx = ext(&g6, gty(5, &g6), lv(1));
+            rt(Term::BoxTm(rt(Term::Transp {
+                ty_level: lv(1),
+                motive_level: lv(0),
+                ty: rty(gty(5, &g6)),
+                motive: rty(Type::GlobalTy {
+                    var: GlobalVar(4),
+                    subst: LocalSubst::id(&gx),
+                }),
+                lhs: rt(gtm(3, &g6)),
+                rhs: rt(gtm(2, &g6)),
+                proof: rt(gtm(1, &g6)),
+                tm: rt(gtm(0, &g6)),
+            })))
+        },
+        tm_elim_sempty: {
+            // view: g = 2, U_M = 1, u_t = 0; ℓ = lv(1), ℓ' = lv(0).
+            let gxe = ext(&g2, Type::SEmpty { level: lv(0) }, lv(0));
+            rt(Term::BoxTm(rt(Term::ElimSEmpty {
+                level: lv(1),
+                scrut_level: lv(0),
+                motive: rty(Type::GlobalTy {
+                    var: GlobalVar(1),
+                    subst: LocalSubst::id(&gxe),
+                }),
+                scrut: rt(gtm(0, &g2)),
             })))
         },
     })

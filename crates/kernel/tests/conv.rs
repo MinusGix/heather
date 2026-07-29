@@ -465,7 +465,14 @@ fn const_branches(t: Term) -> Rc<Branches> {
         ty_wf: rt(t.clone()),
         tm_wf: rt(t.clone()),
         tm_supf: rt(t.clone()),
-        tm_elim_wf: rt(t),
+        tm_elim_wf: rt(t.clone()),
+        ty_seq: rt(t.clone()),
+        tm_seq: rt(t.clone()),
+        ty_sempty: rt(t.clone()),
+        tm_sempty: rt(t.clone()),
+        tm_srefl: rt(t.clone()),
+        tm_transp: rt(t.clone()),
+        tm_elim_sempty: rt(t),
     })
 }
 
@@ -538,7 +545,9 @@ fn recursor_branch_type_uses_motive() {
                   &mut br.tm_elim_empty, &mut br.tm_sum, &mut br.tm_inl,
                   &mut br.tm_inr, &mut br.tm_case, &mut br.tm_w, &mut br.tm_sup,
                   &mut br.tm_elim_w, &mut br.tm_vec, &mut br.tm_fin,
-                  &mut br.tm_wf, &mut br.tm_supf, &mut br.tm_elim_wf] {
+                  &mut br.tm_wf, &mut br.tm_supf, &mut br.tm_elim_wf,
+                  &mut br.tm_seq, &mut br.tm_sempty, &mut br.tm_srefl,
+                  &mut br.tm_transp, &mut br.tm_elim_sempty] {
             *f = rt(Term::Zero);
         }
         br.ty_nat = rt(v(0));
@@ -567,7 +576,9 @@ fn recursor_branch_type_uses_motive() {
                   &mut br.tm_elim_empty, &mut br.tm_sum, &mut br.tm_inl,
                   &mut br.tm_inr, &mut br.tm_case, &mut br.tm_w, &mut br.tm_sup,
                   &mut br.tm_elim_w, &mut br.tm_vec, &mut br.tm_fin,
-                  &mut br.tm_wf, &mut br.tm_supf, &mut br.tm_elim_wf] {
+                  &mut br.tm_wf, &mut br.tm_supf, &mut br.tm_elim_wf,
+                  &mut br.tm_seq, &mut br.tm_sempty, &mut br.tm_srefl,
+                  &mut br.tm_transp, &mut br.tm_elim_sempty] {
             *f = rt(Term::Zero);
         }
         *branches = Rc::new(br);

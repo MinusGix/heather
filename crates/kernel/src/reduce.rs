@@ -101,6 +101,15 @@ pub fn step_type(t: &Type, gamma: &LocalCtx) -> Option<Type> {
             // El^l (Unit^l) ⇝ Unit^l, El^l (Empty^l) ⇝ Empty^l   (extension)
             Term::TmUnit { level } => Some(Type::Unit { level: level.clone() }),
             Term::TmEmpty { level } => Some(Type::Empty { level: level.clone() }),
+            // El^l (sEq^l s t u) ⇝ sEq^l (El^l s; t; u), El^l (sEmpty^l) ⇝
+            // sEmpty^l — mirror TmId/TmEmpty.   (extension)
+            Term::TmSEq { level: l, ty, lhs, rhs } => Some(Type::SEq {
+                level: l.clone(),
+                ty: Rc::new(Type::El { level: l.clone(), tm: Rc::clone(ty) }),
+                lhs: Rc::clone(lhs),
+                rhs: Rc::clone(rhs),
+            }),
+            Term::TmSEmpty { level } => Some(Type::SEmpty { level: level.clone() }),
             // El^{l⊔l'} (s +^{l,l'} t) ⇝ El^l s +^{l,l'} El^l' t   (extension)
             Term::TmSum { lhs_level, rhs_level, lhs, rhs } => Some(Type::Sum {
                 lhs_level: lhs_level.clone(),
@@ -884,12 +893,35 @@ fn beta_elim_ty(
         }
         // box (U^δ): blocked, neutral.
         Type::GlobalTy { .. } => None,
-        // sEq/sEmpty have no code formers and no branches yet, and
-        // `ty_infer` rejects them at layer c (`not_code_layer`), so
-        // well-typed code never contains one; stuck rather than mis-fired
-        // if it does. The rec.rs round replaces this with `ty_seq`/
-        // `ty_sempty` branches (docs/sprop-design.md §6, §8 step 5).
-        Type::SEq { .. } | Type::SEmpty { .. } => None,
+        // (ℓ, g, U_S, u_t, u_u, x_S, x_t, x_u. t_sEq) — mirrors ty_id.
+        // (extension; docs/sprop-design.md §6)
+        Type::SEq { level, ty, lhs, rhs } => {
+            let s_ty = rec.elim_ty(level.clone(), delta.clone(), Rc::clone(ty));
+            let s_lhs =
+                rec.elim_tm(level.clone(), delta.clone(), Rc::clone(ty), Rc::clone(lhs));
+            let s_rhs =
+                rec.elim_tm(level.clone(), delta.clone(), Rc::clone(ty), Rc::clone(rhs));
+            Some(fire(
+                &b.ty_seq,
+                std::slice::from_ref(level),
+                vec![
+                    GlobalEntry::Ctx(delta.clone()),
+                    GlobalEntry::Ty(Rc::clone(ty)),
+                    GlobalEntry::Tm(Rc::clone(lhs)),
+                    GlobalEntry::Tm(Rc::clone(rhs)),
+                ],
+                vec![s_ty, s_lhs, s_rhs],
+                gamma,
+            ))
+        }
+        // (ℓ, g. t_sEmpty) — mirrors ty_empty.   (extension)
+        Type::SEmpty { level } => Some(fire(
+            &b.ty_sempty,
+            std::slice::from_ref(level),
+            vec![GlobalEntry::Ctx(delta.clone())],
+            vec![],
+            gamma,
+        )),
         // Layer-m types cannot be layer-c code: ill-typed, stuck.
         _ => None,
     }
@@ -1339,6 +1371,120 @@ fn beta_elim_tm(
                 rec.elim_tm(scrut_level.clone(), delta.clone(), empty(), Rc::clone(scrut));
             Some(fire(
                 &b.tm_elim_empty,
+                // innermost-first: ℓ' (scrutinee) then ℓ (motive)
+                &[scrut_level.clone(), level.clone()],
+                vec![
+                    GlobalEntry::Ctx(delta.clone()),
+                    GlobalEntry::Ty(Rc::clone(motive)),
+                    GlobalEntry::Tm(Rc::clone(scrut)),
+                ],
+                vec![s_motive, s_scrut],
+                gamma,
+            ))
+        }
+        // -- strict equality (extension; docs/sprop-design.md §6) ----------
+        // (ℓ, g, u_S, u_t, u_u, x_S, x_t, x_u. t'_sEq) — mirrors tm_id.
+        Term::TmSEq { level, ty, lhs, rhs } => {
+            let s_ty = rec.elim_tm(
+                Level::succ(level.clone()),
+                delta.clone(),
+                Rc::new(Type::Ty(level.clone())),
+                Rc::clone(ty),
+            );
+            let el = Rc::new(Type::El { level: level.clone(), tm: Rc::clone(ty) });
+            let s_lhs =
+                rec.elim_tm(level.clone(), delta.clone(), Rc::clone(&el), Rc::clone(lhs));
+            let s_rhs = rec.elim_tm(level.clone(), delta.clone(), el, Rc::clone(rhs));
+            Some(fire(
+                &b.tm_seq,
+                std::slice::from_ref(level),
+                vec![
+                    GlobalEntry::Ctx(delta.clone()),
+                    GlobalEntry::Tm(Rc::clone(ty)),
+                    GlobalEntry::Tm(Rc::clone(lhs)),
+                    GlobalEntry::Tm(Rc::clone(rhs)),
+                ],
+                vec![s_ty, s_lhs, s_rhs],
+                gamma,
+            ))
+        }
+        // (ℓ, g. t'_sEmpty) — mirrors tm_empty.
+        Term::TmSEmpty { level } => Some(fire(
+            &b.tm_sempty,
+            std::slice::from_ref(level),
+            vec![GlobalEntry::Ctx(delta.clone())],
+            vec![],
+            gamma,
+        )),
+        // (ℓ, g, U_S, u_t, x_S, x_t. t_srefl) — mirrors tm_refl.
+        Term::SRefl { level, ty, tm } => {
+            let s_ty = rec.elim_ty(level.clone(), delta.clone(), Rc::clone(ty));
+            let s_tm =
+                rec.elim_tm(level.clone(), delta.clone(), Rc::clone(ty), Rc::clone(tm));
+            Some(fire(
+                &b.tm_srefl,
+                std::slice::from_ref(level),
+                vec![
+                    GlobalEntry::Ctx(delta.clone()),
+                    GlobalEntry::Ty(Rc::clone(ty)),
+                    GlobalEntry::Tm(Rc::clone(tm)),
+                ],
+                vec![s_ty, s_tm],
+                gamma,
+            ))
+        }
+        // (ℓ, ℓ', g, U_I, U_P, u_a, u_b, u_e, u_t, x_I, x_P, x_a, x_b, x_e,
+        // x_t. t_transp) — tm_j with the motive over one binder; globals in
+        // Term::Transp field order; the proof is recursed like any subterm.
+        Term::Transp { ty_level, motive_level, ty, motive, lhs, rhs, proof, tm } => {
+            let s_ty = rec.elim_ty(ty_level.clone(), delta.clone(), Rc::clone(ty));
+            let dx = extend(delta, Rc::clone(ty), ty_level.clone());
+            let s_motive = rec.elim_ty(motive_level.clone(), dx, Rc::clone(motive));
+            let s_lhs =
+                rec.elim_tm(ty_level.clone(), delta.clone(), Rc::clone(ty), Rc::clone(lhs));
+            let s_rhs =
+                rec.elim_tm(ty_level.clone(), delta.clone(), Rc::clone(ty), Rc::clone(rhs));
+            let seq_ty = Rc::new(Type::SEq {
+                level: ty_level.clone(),
+                ty: Rc::clone(ty),
+                lhs: Rc::clone(lhs),
+                rhs: Rc::clone(rhs),
+            });
+            let s_proof =
+                rec.elim_tm(ty_level.clone(), delta.clone(), seq_ty, Rc::clone(proof));
+            let motive_at_lhs =
+                motive.apply_local(&LocalSubst::id(delta).extended(Rc::clone(lhs)));
+            let s_tm = rec.elim_tm(
+                motive_level.clone(),
+                delta.clone(),
+                Rc::new(motive_at_lhs),
+                Rc::clone(tm),
+            );
+            Some(fire(
+                &b.tm_transp,
+                &[motive_level.clone(), ty_level.clone()],
+                vec![
+                    GlobalEntry::Ctx(delta.clone()),
+                    GlobalEntry::Ty(Rc::clone(ty)),
+                    GlobalEntry::Ty(Rc::clone(motive)),
+                    GlobalEntry::Tm(Rc::clone(lhs)),
+                    GlobalEntry::Tm(Rc::clone(rhs)),
+                    GlobalEntry::Tm(Rc::clone(proof)),
+                    GlobalEntry::Tm(Rc::clone(tm)),
+                ],
+                vec![s_ty, s_motive, s_lhs, s_rhs, s_proof, s_tm],
+                gamma,
+            ))
+        }
+        // (ℓ, ℓ', g, U_M, u_t, x_M, x_t. t_elim_sE) — mirrors tm_elim_empty.
+        Term::ElimSEmpty { level, scrut_level, motive, scrut } => {
+            let sempty = || Rc::new(Type::SEmpty { level: scrut_level.clone() });
+            let dx_sempty = extend(delta, sempty(), scrut_level.clone());
+            let s_motive = rec.elim_ty(level.clone(), dx_sempty, Rc::clone(motive));
+            let s_scrut =
+                rec.elim_tm(scrut_level.clone(), delta.clone(), sempty(), Rc::clone(scrut));
+            Some(fire(
+                &b.tm_elim_sempty,
                 // innermost-first: ℓ' (scrutinee) then ℓ (motive)
                 &[scrut_level.clone(), level.clone()],
                 vec![
@@ -1908,6 +2054,8 @@ pub fn is_whnf_term(t: &Term) -> bool {
         | Term::TmSigma { .. }
         | Term::TmUnit { .. }
         | Term::TmEmpty { .. }
+        | Term::TmSEq { .. }
+        | Term::TmSEmpty { .. }
         | Term::TmSum { .. }
         | Term::TmW { .. }
         | Term::TmVec { .. }

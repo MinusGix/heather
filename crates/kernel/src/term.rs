@@ -219,6 +219,21 @@ pub enum Term {
         lhs: Rc<Term>,
         rhs: Rc<Term>,
     },
+    /// `sEq^l(s; t; u) : Ty l` where `s : Ty l`, `t, u : El^l s` — encoding
+    /// of strict equality; mirrors [`Term::TmId`]. Extension
+    /// (docs/sprop-design.md §6).
+    TmSEq {
+        level: Level,
+        ty: Rc<Term>,
+        lhs: Rc<Term>,
+        rhs: Rc<Term>,
+    },
+    /// `sEmpty^l : Ty l` — encoding of the strict empty type; mirrors
+    /// [`Term::TmEmpty`], carrying its level for the same reason. Extension
+    /// (docs/sprop-design.md §6).
+    TmSEmpty {
+        level: Level,
+    },
     /// `Σ^{l,l'}(x : s). t : Ty (l ⊔ l')` where `s : Ty l`; `snd` binds one
     /// local variable (of type `El s`) — encoding of the dependent pair
     /// type. Extension beyond DeLaM ch. 04.
@@ -892,6 +907,35 @@ pub struct Branches {
     /// `elim_Wf (x. U_S^id. u_n^id) (z. U_M^id) (a cs ih. u_s^id) u_t^id`;
     /// the step telescope is [`wf_step_telescope`], shared with typing.
     pub tm_elim_wf: Rc<Term>,
+
+    // -- strict equality (extension; docs/sprop-design.md §6) --
+    /// `(ℓ, g, U_S, u_t, u_u, x_S, x_t, x_u. t_sEq)` — mirrors `ty_id`
+    /// field-for-field (`sEq` is `Id` minus relevance; the code recursor is
+    /// structural on syntax, so irrelevance changes nothing here).
+    pub ty_seq: Rc<Term>,
+    /// `(ℓ, g, u_s, u_t, u_u, x_s, x_t, x_u. t'_sEq)` — mirrors `tm_id`.
+    pub tm_seq: Rc<Term>,
+    /// `(ℓ, g. t_sEmpty)` — mirrors `ty_empty` (level-indexed nullary).
+    pub ty_sempty: Rc<Term>,
+    /// `(ℓ, g. t'_sEmpty)` — mirrors `tm_empty`.
+    pub tm_sempty: Rc<Term>,
+    /// `(ℓ, g, U_S, u_t, x_S, x_t. t_srefl)` — mirrors `tm_refl`.
+    pub tm_srefl: Rc<Term>,
+    /// `(ℓ, ℓ', g, U_I : Typ_c(g, ℓ),
+    ///  U_P : Typ_c((g, x : U_I^id @ ℓ), ℓ'),
+    ///  u_a, u_b : Trm_c(g ⊢ U_I^id @ ℓ),
+    ///  u_e : Trm_c(g ⊢ sEq^ℓ(U_I^id; u_a^id; u_b^id) @ ℓ),
+    ///  u_t : Trm_c(g ⊢ U_P^{id, u_a/x} @ ℓ'),
+    ///  x_I, x_P, x_a, x_b, x_e, x_t. t_transp)` — `tm_j` with the motive
+    /// scoped over one binder instead of two (transp's motive does not
+    /// abstract the proof); globals in `Term::Transp` field order. The
+    /// proof *is* recursed (`x_e`): irrelevance is a conversion fact, and
+    /// code is syntax.
+    pub tm_transp: Rc<Term>,
+    /// `(ℓ, ℓ', g, U_M : Typ_c((g, x : sEmpty^{ℓ'} @ ℓ'), ℓ),
+    ///  u_t : Trm_c(g ⊢ sEmpty^{ℓ'} @ ℓ'), x_M, x_t. t_elim_sE)` — mirrors
+    /// `tm_elim_empty`.
+    pub tm_elim_sempty: Rc<Term>,
 }
 
 /// Base of a local context: empty (`·`) or a context variable `g`.

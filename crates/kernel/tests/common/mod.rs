@@ -372,6 +372,27 @@ pub fn gen_branches(sc: &Sc, r: &mut Rng, b: u32) -> Rc<Branches> {
                 GK::Tm(sh(g, 0)),
             ]
         }),
+        ty_seq: t(1, 3, &|g| {
+            vec![GK::Ctx, GK::Ty(sh(g, 0)), GK::Tm(sh(g, 0)), GK::Tm(sh(g, 0))]
+        }),
+        tm_seq: t(1, 3, &|g| {
+            vec![GK::Ctx, GK::Tm(sh(g, 0)), GK::Tm(sh(g, 0)), GK::Tm(sh(g, 0))]
+        }),
+        ty_sempty: t(1, 0, &|_| vec![GK::Ctx]),
+        tm_sempty: t(1, 0, &|_| vec![GK::Ctx]),
+        tm_srefl: t(1, 2, &|g| vec![GK::Ctx, GK::Ty(sh(g, 0)), GK::Tm(sh(g, 0))]),
+        tm_transp: t(2, 6, &|g| {
+            vec![
+                GK::Ctx,
+                GK::Ty(sh(g, 0)),
+                GK::Ty(sh(g, 1)),
+                GK::Tm(sh(g, 0)),
+                GK::Tm(sh(g, 0)),
+                GK::Tm(sh(g, 0)),
+                GK::Tm(sh(g, 0)),
+            ]
+        }),
+        tm_elim_sempty: t(2, 2, &|g| vec![GK::Ctx, GK::Ty(sh(g, 1)), GK::Tm(sh(g, 0))]),
     })
 }
 
@@ -1080,6 +1101,10 @@ pub fn count_term(t: &Term) -> u64 {
         Term::TmId { ty, lhs, rhs, .. } => {
             count_term(ty) + count_term(lhs) + count_term(rhs)
         }
+        Term::TmSEq { ty, lhs, rhs, .. } => {
+            count_term(ty) + count_term(lhs) + count_term(rhs)
+        }
+        Term::TmSEmpty { .. } => 0,
         Term::TmSigma { fst, snd, .. } => count_term(fst) + count_term(snd),
         Term::TmSum { lhs, rhs, .. } => count_term(lhs) + count_term(rhs),
         Term::TmW { shape, pos, .. } => count_term(shape) + count_term(pos),

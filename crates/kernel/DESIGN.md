@@ -181,10 +181,18 @@ conversion's, preserving the reduce/conv separation. Guard semantics
 propagate `OutOfFuel`, no refund, each strip pays `spend()`. The hot-path
 discriminant check lives inline in `tm` because a whnf-wrapping helper
 cost 1.35× on `conv/computed-numeral` (caught by `scripts/bench --check`).
-Gated out of layer c (`not_code_layer`) until `TmSEq` + rec branches land,
-Vec/Fin-style. Independent implementation evidence for the strip-in-
-conversion placement: the TYPES 2024 CCobs implementation (design doc §1
-note). Its companion `sEmpty^l` (same day) is `Empty` made irrelevant as a
+The codes landed same-day (`TmSEq`/`TmSEmpty`, decoding as
+`El (sEq^l(s;t;u)) ⇝ sEq^l(El s; t; u)` and `El (sEmpty^l) ⇝ sEmpty^l`),
+and the code recursors gained seven branches (`ty_seq`/`tm_seq` mirror
+`ty_id`/`tm_id`; `ty_sempty`/`tm_sempty`/`tm_elim_sempty` mirror the
+Empty trio; `tm_srefl` mirrors `tm_refl`; `tm_transp` is `tm_j` with the
+motive over one binder, globals in `Transp` field order, and the proof
+recursed like any subterm — irrelevance is a conversion fact, code is
+syntax; **52 total**), so the phase gate is gone. A stuck transp inside a
+box round-trips the identity recursor *as syntax*: neither the strip nor
+irrelevance reaches through `□`, the same firewall as ever. Independent
+implementation evidence for the strip-in-conversion placement: the TYPES
+2024 CCobs implementation (design doc §1 note). Its companion `sEmpty^l` (same day) is `Empty` made irrelevant as a
 *separate* former — `Empty`'s structural-neutral comparison is unchanged,
 and the contrast is pinned in tests — with `elim_sEmpty` eliminating
 anywhere (no β, neutral congruence skips the scrutinees) and the same

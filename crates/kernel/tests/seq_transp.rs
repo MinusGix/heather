@@ -412,32 +412,34 @@ fn elim_sempty_eliminates_anywhere() {
 }
 
 // -------------------------------------------------------------------------
-// Layer gate
+// Layer c (gate lifted with the rec.rs round; design doc §8 step 5)
 // -------------------------------------------------------------------------
 
 #[test]
-fn seq_is_gated_out_of_layer_c() {
-    // No code former, no rec.rs branch yet (design doc §8 step 5): sEq may
-    // not appear at layer c, so boxed code stays exhaustively recursable.
+fn seq_family_is_code() {
+    // With TmSEq/TmSEmpty and the seven rec.rs branches landed, the phase
+    // gate is gone: the family checks at layer c (and still at m), so the
+    // formers can appear inside boxed code and stay recursable.
     let g = ext(&nil_ctx(), Type::Nat, c(0));
     let ty = seq(Type::Nat, v(0), v(0));
-    check_type(&GlobalCtx::default(), 0, Layer::Code, &g, &ty, &c(0), FUEL)
-        .expect_err("sEq must be rejected at layer c");
+    for layer in [Layer::Code, Layer::Meta] {
+        check_type(&GlobalCtx::default(), 0, layer, &g, &ty, &c(0), FUEL)
+            .unwrap_or_else(|e| panic!("sEq must check at {layer:?}: {e:?}"));
+        check_term(&GlobalCtx::default(), 0, layer, &g, &srefl(Type::Nat, v(0)), &ty, &c(0), FUEL)
+            .unwrap_or_else(|e| panic!("srefl must check at {layer:?}: {e:?}"));
+        check_type(&GlobalCtx::default(), 0, layer, &nil_ctx(), &sempty(), &c(0), FUEL)
+            .unwrap_or_else(|e| panic!("sEmpty must check at {layer:?}: {e:?}"));
+    }
+    // Layer v still rejects (only variables live there).
     check_term(
         &GlobalCtx::default(),
         0,
-        Layer::Code,
+        Layer::Var,
         &g,
         &srefl(Type::Nat, v(0)),
         &ty,
         &c(0),
         FUEL,
     )
-    .expect_err("srefl must be rejected at layer c");
-    // And accepted at layer m (meta), where kerneltime programs live.
-    check_type(&GlobalCtx::default(), 0, Layer::Meta, &g, &ty, &c(0), FUEL)
-        .unwrap_or_else(|e| panic!("sEq must check at layer m: {e:?}"));
-    // sEmpty rides the same gate.
-    check_type(&GlobalCtx::default(), 0, Layer::Code, &nil_ctx(), &sempty(), &c(0), FUEL)
-        .expect_err("sEmpty must be rejected at layer c");
+    .expect_err("srefl is not a layer-v form");
 }
