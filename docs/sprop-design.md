@@ -420,8 +420,18 @@ the `Wf` round: criterion on paper before the first kernel line.
    note: `conv/perturbed-pairs` re-recorded — extending the generators
    shifts the RNG streams, so the corpus changed, not the kernel
    (`computed-numeral`, generator-free, stayed at baseline).
-6. **Acceptance — the 2b setoid test**: a forded constructor whose payload
+6. ~~**Acceptance — the 2b setoid test**: a forded constructor whose payload
    carries an `sEq` field, where (a) `match` β fires on open recursive
    data through the strip, and (b) value equality on the forded data costs
    no `Id`-transport lemmas. Route 2b's prototype
-   ([[indexed-families]]) is the customer that signs off.
+   ([[indexed-families]]) is the customer that signs off.~~ **Passed
+   2026-07-29** — `crates/elab/tests/indexed_route_2b.rs` (9 tests,
+   four-axis discipline): β definitional on open recursive data, the
+   would-be transport lemma checks as `refl`, mismatched indices reject.
+   Two findings, detailed on the issue logs: definitional open-data β
+   rides on per-constructor index *inversion* (route 1's invertibility
+   condition resurfacing inside 2b), and the strip is head-only — a
+   stuck-but-strippable transp is opaque to elimination contexts, an
+   algorithmic-vs-declarative gap confined to redundant casts; scoped
+   for the ch. 07 FT pass, and the 2b generator never emits a cast at
+   convertible endpoints.
