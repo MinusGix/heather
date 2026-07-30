@@ -52,6 +52,12 @@ pub struct InductiveDecl {
     /// extra surface checks (non-recursive, distinct field names) and the
     /// accessor table.
     pub is_record: bool,
+    /// `inductive Vec<A> : (n: Nat) -> Type { … }` — the index telescope of an
+    /// indexed family (docs/inductive-indexed-lowering.md §2). Parsed as an
+    /// ordinary [`TyKind::Fn`] and validated by the elaborator: this round it
+    /// must be one `Nat` binder into bare `Type`. `None` for every unindexed
+    /// declaration, whose grammar is unchanged.
+    pub index: Option<Ty>,
     pub span: Span,
 }
 
@@ -59,6 +65,12 @@ pub struct InductiveDecl {
 pub struct CtorDecl {
     pub name: String,
     pub fields: Vec<FieldDecl>,
+    /// `Nil : Vec<A>(0)` — the result annotation of an indexed declaration's
+    /// constructor, as the expression `D<params>(pattern)`
+    /// (docs/inductive-indexed-lowering.md §2). Mandatory when the declaration
+    /// has an index telescope, an error when it does not; the elaborator
+    /// decomposes and validates it.
+    pub result: Option<Expr>,
     pub span: Span,
 }
 

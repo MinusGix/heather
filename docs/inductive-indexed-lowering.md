@@ -8,7 +8,20 @@ fully open data, `append`'s definitional index arithmetic, `Fin`'s `Empty`
 branch and within-class no-confusion, the branching-is-free claim of §5.1
 (open-children β through `Node`, and `mirror (mirror t) = t` by induction),
 and the cross-class-vacuity claim of §7 (the equations are ill-formed).
-The generator is **not** written yet. This is the design round for
+The generator is **implemented**, 2026-07-30 same day — `crates/elab/src/indexed.rs`
+mechanizes §4–§6 (family, constructors, `match`), the surface forms of §2
+parse (`crates/syntax`), the §3/§8.1 classification rejects with the routes
+named, and `crates/elab/tests/indexed_families.rs` is §9 item 8: `append`
+with definitional index arithmetic, `Fin(0)` matched as `Empty`, the
+branching `mirror` with `mirror (mirror t) = t` by *surface* induction, and
+the rejection list, all end to end. One hazard found by the kernel gate and
+worth naming for the next reader: a family's `step` code must never be
+shifted as a *detached* term — it reads its own `m`/`rec` binders as free
+variables, and a bare shift moves them (`IndexedFam::at` shifts the whole
+`elim_Nat` node instead). Not yet generated: `absurd`/`inj` surface forms
+for indexed declarations (§7 says where they exist; nothing needed them
+yet), and an indexed family as a written *type argument* (`f<Vec<Nat>(3)>`).
+This was the design round for
 `issues/indexed-families.md` route 1 (agreed 2026-07-28 as the near-term
 scheme), written before any code per the tier discipline: a lowering bug
 produces a checked theorem about a type the user did not write, the kernel

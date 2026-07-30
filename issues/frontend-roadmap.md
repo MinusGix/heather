@@ -3,7 +3,7 @@ title: "Meta: frontend roadmap and current focus"
 status: open
 labels: [frontend,meta]
 created: 2026-07-23
-updated: 2026-07-28
+updated: 2026-07-30
 ---
 
 Organizing issue for the frontend push (the frontend-first route,
@@ -216,3 +216,4 @@ date; the originals are in `git log --follow issues/frontend-roadmap.md`.
   and nothing measures it. Scheduled [[generators-in-the-language]]'s ch. 07
   expressiveness reading as an unordered side round.
 - 2026-07-28: Order decision: SProp promoted from foundations-later to a scheduled kernel round — [[sprop-strict-prop]] filed; item 14 resolves as route 1 now plus SProp-then-2b for the general case, neither gating items 15-16.
+- 2026-07-30: Item 14's route-1 fragment landed — indexed families declare, compute and prove (scheme doc docs/inductive-indexed-lowering.md, prototype + generator; narrative on [[indexed-families]]). The general (fording) case stays with [[sprop-strict-prop]]/[[indexed-families]]; 15 is unblocked.

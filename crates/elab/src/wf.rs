@@ -700,6 +700,7 @@ impl Elaborator {
                                 children,
                                 container: container_ih.clone(),
                             },
+                            rebind: None,
                         })
                     })
                     .or_else(|| cx.guard.clone());

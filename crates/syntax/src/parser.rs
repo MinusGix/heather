@@ -251,8 +251,8 @@ impl Parser {
         }
         let end = self.expect(&TokKind::RBrace, "`}` (field list)")?;
         let span = start.join(end);
-        let ctor = CtorDecl { name: name.clone(), fields, span };
-        Ok(InductiveDecl { name, params, ctors: vec![ctor], is_record: true, span })
+        let ctor = CtorDecl { name: name.clone(), fields, result: None, span };
+        Ok(InductiveDecl { name, params, ctors: vec![ctor], is_record: true, index: None, span })
     }
 
     /// `<A, B>` after a declaration name, or nothing.
@@ -279,6 +279,15 @@ impl Parser {
         self.bump(); // `inductive`
         let (name, _) = self.ident("inductive name")?;
         let params = self.tyvar_list()?;
+        // `: (n: Nat) -> Type` — an index telescope
+        // (docs/inductive-indexed-lowering.md §2). Parsed with the ordinary
+        // type grammar; its shape is the elaborator's to validate.
+        let index = if matches!(self.peek(), TokKind::Colon) {
+            self.bump();
+            Some(self.ty()?)
+        } else {
+            None
+        };
         self.expect(&TokKind::LBrace, "`{` (constructor list)")?;
         let mut ctors = Vec::new();
         while !matches!(self.peek(), TokKind::RBrace) {
@@ -296,14 +305,26 @@ impl Parser {
                 }
                 span = span.join(self.expect(&TokKind::RParen, "`)` (field list)")?);
             }
-            ctors.push(CtorDecl { name: cname, fields, span });
+            // `Nil : Vec<A>(0)` — a constructor's result annotation, an
+            // expression by the same backtracking rule that makes `Vec<A>(0)`
+            // an expression in type position (`ty_atom`): an applied type is
+            // never called, so the call *is* the index application.
+            let result = if matches!(self.peek(), TokKind::Colon) {
+                self.bump();
+                let r = self.expr()?;
+                span = span.join(r.span);
+                Some(r)
+            } else {
+                None
+            };
+            ctors.push(CtorDecl { name: cname, fields, result, span });
             if !matches!(self.peek(), TokKind::Comma) {
                 break;
             }
             self.bump();
         }
         let end = self.expect(&TokKind::RBrace, "`}` (constructor list)")?;
-        Ok(InductiveDecl { name, params, ctors, is_record: false, span: start.join(end) })
+        Ok(InductiveDecl { name, params, ctors, is_record: false, index, span: start.join(end) })
     }
 
     /// A constructor field: `name: T` or a bare `T`. Named fields are in scope

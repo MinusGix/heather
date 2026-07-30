@@ -49,6 +49,12 @@ pub(crate) struct Inductive {
     /// constructor, every field named. The lowering is unchanged — this is
     /// what makes `m.f` a projection and `D { … }` a literal.
     pub is_record: bool,
+    /// An indexed family's index binder name (`inductive Vec<A> : (n: Nat) ->
+    /// Type`), `Nat`-typed this round (docs/inductive-indexed-lowering.md §2).
+    /// When set, the declaration lowers by recursion on the index
+    /// (`indexed.rs`), **never** onto `Wf` — every `recursive`-guarded branch
+    /// must check this first.
+    pub index: Option<String>,
 }
 
 impl Inductive {
@@ -73,6 +79,23 @@ pub(crate) struct Ctor {
     /// the shape — both are children in the `Vec` — so both are skipped by
     /// every payload walk here and reappear only in `wf.rs`.
     pub kind: Vec<FieldKind>,
+    /// An indexed declaration's result index pattern
+    /// (docs/inductive-indexed-lowering.md §2): `Some` exactly when the
+    /// declaration has an index telescope. `None` everywhere else.
+    pub res: Option<IdxPat>,
+}
+
+/// A constructor's result index, decomposed: depth-one, constructor-headed,
+/// linear (docs/inductive-indexed-lowering.md §3). Everything else was
+/// rejected at declaration time.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum IdxPat {
+    /// `: D(0)` — the `Zero` class.
+    Zero,
+    /// `: D(Succ(n))` — the `Succ` class; `field` is the position of the
+    /// pattern variable `n` among the surface fields. That field is the
+    /// index, not payload ([`FieldKind::IndexVar`]).
+    Succ { field: usize },
 }
 
 /// What a constructor field contributes to the lowering.
@@ -87,6 +110,11 @@ pub(crate) enum FieldKind {
     /// length. At most one per constructor, last among the child-contributing
     /// fields.
     Container { len_payload: usize },
+    /// An indexed constructor's pattern variable
+    /// (docs/inductive-indexed-lowering.md §4.1): the field named by the
+    /// result index. It is **not stored** — the branch's `elim_Nat` binder is
+    /// what it denotes — so it is neither payload nor child.
+    IndexVar,
 }
 
 impl FieldKind {
@@ -114,12 +142,15 @@ impl Ctor {
     }
 
     /// The payload fields — everything the *shape* carries — in declaration
-    /// order, paired with their index among the surface fields.
+    /// order, paired with their index among the surface fields. An
+    /// [`FieldKind::IndexVar`] is not payload either: it is the index, and
+    /// storing it is exactly what the indexed scheme exists to avoid
+    /// (docs/inductive-indexed-lowering.md §4.1).
     pub fn payload(&self) -> impl Iterator<Item = (usize, &(Option<String>, Ty))> {
         self.fields
             .iter()
             .enumerate()
-            .filter(|(k, _)| !self.kind[*k].is_child())
+            .filter(|(k, _)| matches!(self.kind[*k], FieldKind::Payload))
     }
 }
 
@@ -151,7 +182,7 @@ pub(crate) struct Spine {
 ///   here — `Id` has no η, so a neutral `fst x` is not convertible with
 ///   `refl`, and `match`ing a variable under a dependent motive stops
 ///   typechecking.
-fn tag_type(k: u32) -> Type {
+pub(crate) fn tag_type(k: u32) -> Type {
     if k == 0 {
         return Type::Unit { level: Level::Zero };
     }
@@ -276,6 +307,55 @@ impl Elaborator {
                 return err(format!("duplicate type parameter `{p}`"), d.span);
             }
         }
+        // The index telescope (docs/inductive-indexed-lowering.md §2): one
+        // `Nat` binder into bare `Type`, this round. The grammar parses any
+        // type; the shape is validated here so the message can say what the
+        // round supports rather than "parse error".
+        let index = match &d.index {
+            None => None,
+            Some(ty) => {
+                let TyKind::Fn { binder: Some(n), dom, cod } = &ty.kind else {
+                    return err(
+                        "an indexed declaration's head is `: (n: Nat) -> Type` \
+                         (docs/inductive-indexed-lowering.md §2)",
+                        ty.span,
+                    );
+                };
+                if !matches!(dom.kind, TyKind::Nat) {
+                    return err(
+                        "only a `Nat` index is supported this round; a declared index \
+                         type is the stated §8.2 extension \
+                         (docs/inductive-indexed-lowering.md)",
+                        dom.span,
+                    );
+                }
+                if !matches!(cod.kind, TyKind::Univ { level: 0 }) {
+                    return err(
+                        "an index telescope ends in bare `Type`; the family's level is \
+                         computed from the fields (docs/inductive-indexed-lowering.md §2)",
+                        cod.span,
+                    );
+                }
+                if d.is_record {
+                    return err(
+                        format!(
+                            "`{}` is a `record` and cannot be indexed: an index varies \
+                             per constructor result, and a record has one constructor",
+                            d.name
+                        ),
+                        ty.span,
+                    );
+                }
+                if d.ctors.is_empty() {
+                    return err(
+                        "an indexed declaration needs at least one constructor; for an \
+                         uninhabited type, declare it unindexed",
+                        d.span,
+                    );
+                }
+                Some(n.clone())
+            }
+        };
         let mut ctors = Vec::new();
         for (i, c) in d.ctors.iter().enumerate() {
             if d.ctors[..i].iter().any(|o| o.name == c.name) {
@@ -296,12 +376,45 @@ impl Elaborator {
             if self.globals.contains_key(&c.name) || self.inductives.contains_key(&c.name) {
                 return err(format!("duplicate name `{}`", c.name), c.span);
             }
+            // The result annotation: mandatory on an indexed declaration's
+            // constructors, an error elsewhere
+            // (docs/inductive-indexed-lowering.md §2).
+            let res = match (&index, &c.result) {
+                (None, None) => None,
+                (None, Some(r)) => {
+                    return err(
+                        format!(
+                            "`{}` has a result annotation, but `{}` is not indexed: only \
+                             an indexed declaration's constructors state their index",
+                            c.name, d.name
+                        ),
+                        r.span,
+                    )
+                }
+                (Some(_), None) => {
+                    return err(
+                        format!(
+                            "`{}` needs a result annotation: every constructor of an \
+                             indexed declaration states its index (`{} : {}<…>(…)`)",
+                            c.name, c.name, d.name
+                        ),
+                        c.span,
+                    )
+                }
+                (Some(_), Some(r)) => Some(parse_result_index(c, r, &d.name, &d.params)?),
+            };
             // Tier classification (tier 0 §2; tier 1 §1). With no function
             // types in field position there is no *negative* occurrence to
             // find yet, so an occurrence is either the uniform recursive one
             // — tier 1, lowered onto `Wf` — or a rejection, never a silent
-            // lowering.
-            let kind = classify_fields(c, &d.name, &d.params)?;
+            // lowering. An indexed declaration classifies by its own rules
+            // (docs/inductive-indexed-lowering.md §3): the pattern variable is
+            // the index, a recursive occurrence must sit at it, and
+            // everything else indexed rejects with the route named.
+            let kind = match res {
+                Some(pat) => classify_fields_indexed(c, &d.name, &d.params, pat)?,
+                None => classify_fields(c, &d.name, &d.params)?,
+            };
             ctors.push(Ctor {
                 name: c.name.clone(),
                 fields: c
@@ -310,6 +423,7 @@ impl Elaborator {
                     .map(|f| (f.name.clone(), f.ty.clone()))
                     .collect(),
                 kind,
+                res,
             });
         }
         // *Any* child-contributing field, not just a plain one: a constructor
@@ -358,6 +472,7 @@ impl Elaborator {
             ctors,
             recursive,
             is_record: d.is_record,
+            index,
         });
         self.next_tag += 1;
         for i in 0..ind.ctors.len() {
@@ -429,6 +544,17 @@ impl Elaborator {
         args: &[(Type, Level)],
         span: Span,
     ) -> R<(Type, Level)> {
+        if ind.index.is_some() {
+            return err(
+                format!(
+                    "`{}` is an indexed family and needs its index: write `{}{}(i)`",
+                    ind.name,
+                    ind.name,
+                    if ind.params.is_empty() { "" } else { "<…>" }
+                ),
+                span,
+            );
+        }
         let (shape, level) = self.lower_shape(cx, ind, args, span)?;
         if !ind.recursive {
             return Ok((shape, level));
@@ -756,6 +882,11 @@ impl Elaborator {
                 span,
             );
         }
+        if ind.index.is_some() {
+            // An indexed constructor reads the *family form* of the expected
+            // type, not its whnf (docs/inductive-indexed-lowering.md §5).
+            return self.build_indexed_ctor(cx, ind, i, args, expected, expected_lvl, span);
+        }
         let expected = self.whnf(cx, expected, span)?;
         match self.tag_of(&expected) {
             Some(found) if found.tag == ind.tag => {}
@@ -894,6 +1025,19 @@ impl Elaborator {
         mlvl: Level,
         span: Span,
     ) -> R<Term> {
+        if ind.index.is_some() {
+            // Reachable only when a scrutinee's type arrived pre-reduced (the
+            // family form is gone, and with it the index). Diagnosed rather
+            // than mis-matched (docs/inductive-indexed-lowering.md §6).
+            return err(
+                format!(
+                    "cannot `match` here: `{}` is an indexed family, but the \
+                     scrutinee's type is not in the `{}(i)` family form",
+                    ind.name, ind.name
+                ),
+                span,
+            );
+        }
         let n = ind.ctors.len();
         // Arms are permuted into declaration order; completeness, duplication
         // and arity are surface obligations, resolved before any lowering.
@@ -1259,6 +1403,225 @@ fn classify_fields(c: &CtorDecl, name: &str, params: &[String]) -> R<Vec<FieldKi
         payload_k += 1;
     }
     Ok(kinds)
+}
+
+/// Decompose a constructor's result annotation `D<params>(pattern)` into an
+/// [`IdxPat`] (docs/inductive-indexed-lowering.md §2–§3): the type must be
+/// the declaration at its own parameters, and the index a depth-one, linear,
+/// constructor-headed pattern over the constructor's own fields. Everything
+/// else is a rejection with the route that *does* cover it named (§8.1).
+fn parse_result_index(c: &CtorDecl, r: &Expr, name: &str, params: &[String]) -> R<IdxPat> {
+    let ExprKind::App { head, args, .. } = &r.kind else {
+        return err(
+            format!(
+                "`{}`'s result annotation must be `{name}<…>(index)` — an applied \
+                 occurrence of the declaration itself",
+                c.name
+            ),
+            r.span,
+        );
+    };
+    let (rname, targs): (&str, &[Ty]) = match &head.kind {
+        ExprKind::Var(n) => (n, &[]),
+        ExprKind::TyApp { head, args } => match &head.kind {
+            ExprKind::Var(n) => (n, args),
+            _ => return err("malformed result annotation", r.span),
+        },
+        _ => return err("malformed result annotation", r.span),
+    };
+    if rname != name {
+        return err(
+            format!("`{}` is a constructor of `{name}`, so its result must be `{name}`", c.name),
+            r.span,
+        );
+    }
+    let uniform = targs.len() == params.len()
+        && targs.iter().zip(params).all(|(a, p)| {
+            matches!(&a.kind, TyKind::Named { name: an, args } if an == p && args.is_empty())
+        });
+    if !uniform {
+        return err(
+            format!(
+                "`{}`'s result must use `{name}`'s own parameters in order (`{}`); \
+                 parameters are uniform, only the index varies per constructor",
+                c.name,
+                params.join(", ")
+            ),
+            r.span,
+        );
+    }
+    let [idx] = args.as_slice() else {
+        return err(
+            format!("`{name}` takes exactly one index this round"),
+            r.span,
+        );
+    };
+    match &idx.kind {
+        ExprKind::Num(0) => Ok(IdxPat::Zero),
+        ExprKind::Var(v) if v == "Zero" => Ok(IdxPat::Zero),
+        ExprKind::App { head, args, .. }
+            if matches!(&head.kind, ExprKind::Var(s) if s == "Succ") =>
+        {
+            let [arg] = args.as_slice() else {
+                return err("`Succ` takes one argument", idx.span);
+            };
+            let ExprKind::Var(v) = &arg.kind else {
+                return err(
+                    format!(
+                        "`{}`'s result index is deeper than one constructor: only \
+                         `Succ(x)` with `x` a field is index-recursive; a deeper or \
+                         computed index fords over `sEq` \
+                         (issues/indexed-families.md routes 2b/3), not yet generated",
+                        c.name
+                    ),
+                    idx.span,
+                );
+            };
+            let Some(field) = c
+                .fields
+                .iter()
+                .position(|f| f.name.as_deref() == Some(v.as_str()))
+            else {
+                return err(
+                    format!(
+                        "the pattern variable `{v}` must be a field of `{}` — every \
+                         result-index variable is a (named) constructor field",
+                        c.name
+                    ),
+                    arg.span,
+                );
+            };
+            if !matches!(c.fields[field].ty.kind, TyKind::Nat) {
+                return err(
+                    format!("the pattern variable `{v}` must be a `Nat` field"),
+                    arg.span,
+                );
+            }
+            Ok(IdxPat::Succ { field })
+        }
+        ExprKind::Num(_) => err(
+            format!(
+                "`{}`'s result index is a numeral above `0`, which is a pattern deeper \
+                 than one constructor — not index-recursive \
+                 (docs/inductive-indexed-lowering.md §8.1)",
+                c.name
+            ),
+            idx.span,
+        ),
+        ExprKind::Var(v) => err(
+            format!(
+                "`{}`'s result index `{v}` is not constructor-headed: a bare-variable \
+                 index means the constructor targets *every* index, which is the general \
+                 (fording) case — issues/indexed-families.md route 2b, not yet generated",
+                c.name
+            ),
+            idx.span,
+        ),
+        _ => err(
+            format!(
+                "`{}`'s result index is computed, not constructor-headed: a computed \
+                 index fords over `sEq` (issues/indexed-families.md routes 2b/3), \
+                 not yet generated",
+                c.name
+            ),
+            idx.span,
+        ),
+    }
+}
+
+/// Classify an indexed constructor's fields
+/// (docs/inductive-indexed-lowering.md §3): the pattern variable is
+/// [`FieldKind::IndexVar`], a recursive occurrence `D<params>(x)` at the
+/// pattern variable is a [`FieldKind::Plain`] child-in-the-spine, and any
+/// other self-occurrence rejects with its own message. Containers of the
+/// declaration itself are not covered this round.
+fn classify_fields_indexed(
+    c: &CtorDecl,
+    name: &str,
+    params: &[String],
+    pat: IdxPat,
+) -> R<Vec<FieldKind>> {
+    let pat_field = match pat {
+        IdxPat::Zero => None,
+        IdxPat::Succ { field } => Some(field),
+    };
+    let pat_name = pat_field.and_then(|k| c.fields[k].name.as_deref());
+    let mut kinds = Vec::with_capacity(c.fields.len());
+    for (k, f) in c.fields.iter().enumerate() {
+        if Some(k) == pat_field {
+            kinds.push(FieldKind::IndexVar);
+            continue;
+        }
+        // `D<params>(e)` — parsed as an expression in type position, so it
+        // arrives as `OfExpr` (parser.rs `ty_atom`: an applied type is never
+        // called, so the call is the index application).
+        if let TyKind::OfExpr(e) = &f.ty.kind
+            && let ExprKind::App { head, args, .. } = &e.kind
+            && let Some((rname, targs)) = named_head(head)
+            && rname == name
+        {
+            let uniform = targs.len() == params.len()
+                && targs.iter().zip(params).all(|(a, p)| {
+                    matches!(&a.kind, TyKind::Named { name: an, args } if an == p
+                             && args.is_empty())
+                });
+            if !uniform {
+                return err(
+                    format!(
+                        "field of `{}` uses `{name}` at arguments other than its own \
+                         parameters; parameters are monomorphized, so a recursive \
+                         occurrence must be uniform",
+                        c.name
+                    ),
+                    f.ty.span,
+                );
+            }
+            let at_pat = matches!((args.as_slice(), pat_name),
+                                  ([Expr { kind: ExprKind::Var(v), .. }], Some(p)) if v == p);
+            if !at_pat {
+                return err(
+                    format!(
+                        "a recursive field of `{}` must sit at the result index's \
+                         pattern variable — `rec` is the immediate subindex and nothing \
+                         else exists during the recursion \
+                         (docs/inductive-indexed-lowering.md §8.1; the general case is \
+                         issues/indexed-families.md route 2b)",
+                        c.name
+                    ),
+                    f.ty.span,
+                );
+            }
+            kinds.push(FieldKind::Plain);
+            continue;
+        }
+        // A bare `D` / `D<params>` with no index cannot inhabit anything.
+        if occurs(&f.ty, name).is_some() {
+            return err(
+                format!(
+                    "field of `{}` mentions `{name}` without supplying its index (or \
+                     nested inside another type): an indexed occurrence is \
+                     `{name}<…>(x)` at the pattern variable \
+                     (docs/inductive-indexed-lowering.md §3)",
+                    c.name
+                ),
+                f.ty.span,
+            );
+        }
+        kinds.push(FieldKind::Payload);
+    }
+    Ok(kinds)
+}
+
+/// The `(name, type args)` of `Var` / `TyApp(Var, …)` expression heads.
+pub(crate) fn named_head(e: &Expr) -> Option<(&str, &[Ty])> {
+    match &e.kind {
+        ExprKind::Var(n) => Some((n, &[])),
+        ExprKind::TyApp { head, args } => match &head.kind {
+            ExprKind::Var(n) => Some((n, args)),
+            _ => None,
+        },
+        _ => None,
+    }
 }
 
 fn classify_field(t: &Ty, name: &str, params: &[String], ctor: &str) -> R<bool> {

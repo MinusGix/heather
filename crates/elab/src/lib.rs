@@ -42,6 +42,7 @@ use heather_syntax::{
 };
 
 mod code;
+mod indexed;
 mod inductive;
 mod vec;
 mod wf;
@@ -926,6 +927,12 @@ impl Elaborator {
             // *is* a code, and `El ⌜T⌝ ⇝ T` makes a written type and a decoded
             // one convertible rather than merely equal-looking.
             TyKind::OfExpr(e) => {
+                // `Vec<A>(n)` — an indexed family applied to its index
+                // (docs/inductive-indexed-lowering.md §2), delivered here by
+                // the parser's applied-type-is-never-called backtracking.
+                if let Some(r) = self.try_indexed_ty(cx, e, ty.span)? {
+                    return Ok(r);
+                }
                 let (tm, tm_ty, _) = self.elab_infer(cx, e)?;
                 let Type::Ty(level) = self.whnf(cx, &tm_ty, ty.span)? else {
                     return err(
@@ -1398,8 +1405,31 @@ impl Elaborator {
                 }
             }
             ExprKind::Match { motive: Some(m), scrut, arms } => {
-                let (binders, body) = motive_lam(m, 1, "write `as \u{3bb} z => T`")?;
                 let (scrut_t, scrut_ty, scrut_lvl) = self.elab_infer(cx, scrut)?;
+                // An indexed scrutinee's motive binds the index too
+                // (docs/inductive-indexed-lowering.md §6.1).
+                if let Some((ind, fam)) = self.indexed_of(&scrut_ty) {
+                    let (binders, body) =
+                        motive_lam(m, 2, "write `as \u{3bb} n z => T` (index, then value)")?;
+                    let mut mcx = cx.clone();
+                    mcx.push(binders[0].clone(), Type::Nat, Level::Zero);
+                    mcx.push(
+                        binders[1].clone(),
+                        fam.el_at(Term::Var(LocalVar(0)), 1),
+                        fam.level.clone(),
+                    );
+                    let (motive2, mlvl) = self.elab_ty(&mcx, &body)?;
+                    let result = motive2.apply_local(
+                        &LocalSubst::id(&cx.gamma)
+                            .extended(Rc::clone(&fam.idx))
+                            .extended(Rc::new(scrut_t.clone())),
+                    );
+                    let t = self.elab_match_indexed(
+                        cx, &ind, &fam, arms, scrut_t, motive2, mlvl.clone(), e.span,
+                    )?;
+                    return Ok((t, result, mlvl));
+                }
+                let (binders, body) = motive_lam(m, 1, "write `as \u{3bb} z => T`")?;
                 let mut mcx = cx.clone();
                 mcx.push(binders[0].clone(), scrut_ty.clone(), scrut_lvl.clone());
                 let (motive, mlvl) = self.elab_ty(&mcx, &body)?;
@@ -1491,6 +1521,18 @@ impl Elaborator {
         span: Span,
     ) -> R<Term> {
         let head = self.whnf(cx, scrut_ty, span)?;
+        // An indexed family in family form (docs/inductive-indexed-lowering.md
+        // §6) — checked on the *raw* type, since whnf at a literal index
+        // reduces the family away, index and all. The `Empty` case wins
+        // first: a family whose branch at this literal index is `Empty`
+        // (`Fin(0)`) is matched as the empty type, arms and all.
+        if !matches!(head, Type::Empty { .. })
+            && let Some((ind, fam)) = self.indexed_of(scrut_ty)
+        {
+            let motive2 = self.generalize_index(cx, &motive, &fam.idx);
+            return self
+                .elab_match_indexed(cx, &ind, &fam, arms, scrut_t, motive2, mlvl, span);
+        }
         if let Some(ind) = self.tag_of(&head) {
             return self
                 .elab_match_data(cx, &ind, arms, scrut_t, &head, scrut_lvl, motive, mlvl, span);
@@ -1585,6 +1627,7 @@ impl Elaborator {
                             pred_pos: cx.names.len(),
                             ih_pos: cx.names.len() + 1,
                         },
+                        rebind: None,
                     })
                 })
                 .or_else(|| cx.guard.clone());
@@ -1700,8 +1743,14 @@ impl Elaborator {
                     }
                 }
                 (_, false) => {
-                    matches!(arg_t, Term::Var(LocalVar(i))
-                             if cx.names.len() - 1 - i as usize == j)
+                    let at = |pos: usize| {
+                        matches!(arg_t, Term::Var(LocalVar(i))
+                                 if cx.names.len() - 1 - i as usize == pos)
+                    };
+                    // An indexed match rebinds the index parameter to the
+                    // arm's pattern variable — the ih is at that index, so
+                    // the call must pass exactly it (§6).
+                    at(j) || g.rebind.is_some_and(|(rj, mpos)| rj == j && at(mpos))
                 }
             };
             if ok {
@@ -1996,7 +2045,23 @@ impl Elaborator {
             };
             targs.push(sol);
         }
-        let (ty, lvl) = self.lower_instance(cx, ind, &targs, span)?;
+        let (ty, lvl) = if ind.index.is_some() && args.len() == ind.ctors[i].fields.len() {
+            // The result index comes from the pattern and the written index
+            // argument (docs/inductive-indexed-lowering.md §5); the wrong-
+            // arity case falls through to `build_ctor`'s arity message.
+            let idx = match ind.ctors[i].res.expect("indexed ctor") {
+                inductive::IdxPat::Zero => Term::Zero,
+                inductive::IdxPat::Succ { field } => Term::Succ(Rc::new(self.elab_check(
+                    cx,
+                    &args[field],
+                    &Type::Nat,
+                    &Level::Zero,
+                )?)),
+            };
+            self.lower_indexed_instance(cx, ind, &targs, idx, span)?
+        } else {
+            self.lower_instance(cx, ind, &targs, span)?
+        };
         let t = self.build_ctor(cx, ind, i, args, &ty, &lvl, span)?;
         Ok((t, ty, lvl))
     }
@@ -2879,6 +2944,12 @@ struct Guard {
     /// Index of the parameter the recursion descends on.
     dec: usize,
     kind: GuardKind,
+    /// An indexed `match`'s index parameter, *rebound* by the arm
+    /// (docs/inductive-indexed-lowering.md §6): a self-call must pass the
+    /// arm's pattern variable there, not the original parameter. `(parameter
+    /// position, absolute position of the eliminator's index binder)`.
+    /// `None` for every non-indexed guard.
+    rebind: Option<(usize, usize)>,
 }
 
 /// The two arm shapes a self-call can sit in. They differ in how many
