@@ -583,7 +583,12 @@ impl Elaborator {
         };
 
         // Mot(h) = Π(v : El (fam h)). M[h, v] — the Π binder is the motive's
-        // own `z` (§6).
+        // own `z` (§6). The `elim_Nat` motive is this Π, so the eliminator's
+        // level is the Π's — `l ⊔ mlvl`, **not** `mlvl`. Every uniformly
+        // level-0 declaration hides the difference; a `Type`-valued field
+        // (`l = 1`, motive at 0) is what exposes a dropped join
+        // (`fields_above_level_zero`).
+        let elim_lvl = Level::max(l.clone(), mlvl.clone());
         let mot_pi = Type::Pi {
             dom_level: l.clone(),
             cod_level: mlvl.clone(),
@@ -677,7 +682,7 @@ impl Elaborator {
         // no repackaging (§6, "minus one composition point").
         Ok(Term::App {
             fun: Rc::new(Term::ElimNat {
-                level: mlvl.clone(),
+                level: elim_lvl,
                 motive: Rc::new(mot_pi),
                 base: Rc::new(base),
                 step: Rc::new(step),

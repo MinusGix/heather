@@ -406,3 +406,48 @@ What the checklist deliberately repeats from `tier1_fording.rs`: nothing —
 that suite stays the height-fording stress record; this scheme's prototype
 is its own file, and the overlap (`List`-shaped spines) is the unindexed
 tier's business, not this one's.
+
+## 10. Known seams, recorded at landing
+
+Not defects — every one is tested around — but each is a place where a
+future change breaks *this* scheme first, so they are written down here
+rather than remembered.
+
+1. **`indexed_of` is a structural fingerprint.** The family form is
+   recognized by shape — `El (elim_Nat(_. Ty l; …))` with a nominal-tag
+   code read out of a branch. It is the indexed analogue of `tag_of`, but
+   the pattern is far bigger, so it is far easier to break *silently*: any
+   pass that normalizes or restructures emitted terms (a kernel `def`,
+   level canonicalization à la `normalize_levels`, hash-consing that
+   rewrites) makes every indexed type unrecognizable, and the symptom is
+   "not in the family form" errors far from the cause. If such a pass
+   lands, this recognizer is the first consumer to re-audit.
+2. **Type identity depends on presentation.** A family type that arrives
+   *pre-reduced* (whnf'd at a literal index, upstream of the consumer) has
+   lost its index, and constructors/`match` against it are diagnosed, not
+   handled. Declared types flow through unreduced today, so the gap is
+   theoretical — but it is a semantic wart, and the fix when something
+   hits it is a re-synthesis path (rebuild the family from the declaration
+   and convert), not a better message.
+3. **Term size.** The whole family `elim_Nat` is inlined at every type
+   occurrence and re-instantiated several times per eliminator — the tier-1
+   cost note (`docs/inductive-tier1-lowering.md` §7), amplified, because
+   indexed types appear *in other types*. Acceptable now; a kernel `def`
+   is the eventual fix, and [[frontend-benchmarks]] is where "acceptable"
+   gets a number.
+4. **The arm walk exists twice.** `indexed_case_tree`/`elab_indexed_arm`
+   mirror `case_tree`/`elab_arm` deliberately (threading the pattern
+   variable and the guard through the shared walk would couple what the
+   tiers keep separate), which means two places must agree on the
+   projection-annotation discipline. A *third* variant is the signal to
+   extract the walk, not to copy it again.
+5. **Uniformly-level-0 tests cannot see a dropped join.** The
+   `fields_above_level_zero` test exists because everything else in the
+   acceptance suite lives at level 0, where `l ⊔ mlvl = mlvl` hides a
+   wrong level annotation. It caught two real bugs on its first run: the
+   eliminator's `elim_Nat` level must be the motive Π's level (the join),
+   and a universe expected type can hide under `El` of a quoted code
+   (`elab_check`'s type-position bridge now reduces before giving up —
+   the components of an indexed spine are exactly such `El (TmTy …)`s).
+   The rule this generalizes to: every new consumer of the family form
+   keeps one nonzero-level case in its tests.

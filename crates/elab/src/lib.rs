@@ -1117,6 +1117,19 @@ impl Elaborator {
                 }
             }
             _ => {
+                // The universe arm above matches a *syntactic* `Ty`, but a
+                // universe can hide under `El` of a quoted code — an indexed
+                // family's field components arrive exactly so
+                // (docs/inductive-indexed-lowering.md §4: the branch spine is
+                // quoted and decoded, so a `Type`-valued field reads back as
+                // `El (TmTy …)`). Reduce before giving up on the
+                // type-position reading; `elab_at_universe` still falls
+                // through to ordinary inference when the expression is not a
+                // type by shape.
+                let head = self.whnf(cx, expected, e.span)?;
+                if matches!(head, Type::Ty(_)) {
+                    return self.elab_at_universe(cx, e, &head, e.span);
+                }
                 let (t, _, _) = self.elab_infer(cx, e)?;
                 Ok(t)
             }

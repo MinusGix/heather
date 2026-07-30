@@ -226,3 +226,26 @@ fn wrong_indices_are_rejected() {
          theorem bad(n: Nat, xs: V<Nat>(n)): cmap(n, xs) = xs {{ refl }}"
     ));
 }
+
+// §9 item 8's "fields at levels above 0": a `Type`-valued field puts the
+// family at level 1, so the two-pass level computation in
+// `lower_indexed_instance` and the eliminator's `l ≠ mlvl` plumbing (motive
+// at 0, scrutinee at 1) both do real work — everything else in this file is
+// uniformly level 0 and would not notice a dropped join.
+#[test]
+fn fields_above_level_zero() {
+    elab(
+        r#"
+        inductive P : (n: Nat) -> Type {
+            P0(A: Type) : P(0),
+            PS(n: Nat, A: Type, x: A, t: P(n)) : P(Succ(n)),
+        }
+        fn depth(n: Nat, p: P(n)) -> Nat {
+            match p { P0(A) => 0, PS(k, A, x, t) => Succ(depth(k, t)) }
+        }
+        theorem depth_closed(): depth(1, PS(0, Nat, 3, P0(Nat))) = 1 { refl }
+        theorem depth_open(n: Nat, x: Nat, t: P(n)):
+            depth(Succ(n), PS(n, Nat, x, t)) = Succ(depth(n, t)) { refl }
+        "#,
+    );
+}
