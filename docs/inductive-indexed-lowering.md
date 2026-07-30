@@ -339,7 +339,7 @@ stored); equality of the *indices* is the corresponding fact and lives at
 - **A pattern variable that is not a field**, or a field of non-index type
   in pattern position: malformed head, rejected at the annotation.
 
-### 8.2 Declared index types — the stated generalization, next round
+### 8.2 Declared index types — the generalization, prototype validated
 
 Nothing in §4–§7 is `Nat`-specific: the scheme reads "one family branch
 per index constructor, `rec` at each recursive argument of the index
@@ -351,8 +351,51 @@ does *not* exist yet is generator plumbing for "eliminate a declared index
 inside a family-of-codes" and the pattern grammar over declared
 constructors — a bounded follow-on, and the reason subject-recursive
 judgments (typing derivations indexed by terms) are route 1 in the issue's
-2026-07-28 conjecture. This round lands `Nat`; the scheme is written so
-that round is an instantiation, not a redesign.
+2026-07-28 conjecture. The `Nat` round landed first; the scheme was
+written so this round is an instantiation, not a redesign.
+
+**Hand prototype landed 2026-07-30**
+(`crates/elab/tests/indexed_declared_index.rs`: an enum index, a linear
+`Wf` index — a declared `Nat`-clone — and a branching `Wf` index carrying
+a derivation-shaped family, i.e. the subject-recursive-judgment miniature).
+The instantiation claim held, with four facts the `Nat` case could not
+have shown:
+
+1. **The refined-arity device.** In the family's `elim_Wf` step, `ih` has
+   domain `Fin(arity a)` with `a` the open step binder, so no branch can
+   apply it at a literal directly — `cs` and `ih` are threaded **through
+   the `Case` motive** (`Case` at motive `Π cs' ih'. …`, then applied), so
+   each branch receives them at its constructor-refined arity. This is
+   wf.rs's own recursor device (§6.2 of the Wf lowering doc), reused at
+   motive `Ty l`; the family needs only `ih` threaded, the derived
+   eliminator threads both.
+2. **Unit η is load-bearing on the index side.** An arm's obligation
+   mentions the index constructor rebuilt from branch binders —
+   `sup_f(inl u; cs₀)` with `u : Unit` open and `cs₀` at
+   `Vec(–; 0) ⇝ Unit` — and its identity with the declared constructor
+   (`mz = sup_f(inl ⟨⟩; ⟨⟩)`) is exactly η at `Unit`, twice. The `Nat`
+   scheme's η obligations sat in the *payload* spine only, because
+   `Zero`/`Succ` are primitive; at a declared index the index constructors
+   are themselves `Σ`/`Unit` data.
+3. **Pattern variables are `nth(cs', i)`.** §4.1's "the pattern variable
+   *is* the `elim_Nat` binder" instantiates to "*is* the `i`-th projection
+   of the index constructor's children" (`nth` at a literal reduces to
+   `fst`/`snd` chains). Still no inversion machinery; a `match` arm that
+   binds a pattern variable receives the projection.
+4. **Branching stays free, per-position.** `BNode(l, r, dl: Bal(l),
+   dr: Bal(r)) : Bal(SNode(l, r))` draws its two recursive-field codes
+   from the *same* threaded `ih` at two `Fin` literals; β fires through
+   the branching index constructor with subjects and derivations all open,
+   and both value-ihs synthesize (`count ≡ ihl + ihr` on open data).
+
+One classification consequence: at an enum index no recursion is
+*expressible* (there is no recursive index-constructor argument to draw a
+`rec` from), so condition 2 of §3 generalizes verbatim — a recursive field
+must sit at a pattern variable that is a **recursive** argument of the
+index constructor. The generator round for this section remains open:
+parser/classifier acceptance of a declared index head, the family builder
+over `Case`/`elim_Wf`, the arm walk with projection-recovered pattern
+variables, and one nonzero-level case per §10.5.
 
 ### 8.3 Out of scope, unchanged owners
 
