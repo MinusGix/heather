@@ -62,8 +62,11 @@ pub enum ElabError {
     Elab { msg: String, span: Span },
     /// The kernel rejected an elaborated declaration. This is the trust
     /// boundary speaking: either the source is ill-typed or the elaborator
-    /// has a bug — the kernel does not care which.
-    Kernel { decl: String, err: TypeError },
+    /// has a bug — the kernel does not care which. The span is the whole
+    /// declaration's: a `TypeError` speaks about an elaborated term, which
+    /// has no source position — a finer span means fixing the kernel's
+    /// error type, not this one (issues/cli-check-diagnostics.md).
+    Kernel { decl: String, span: Span, err: TypeError },
     /// Goals raised in a block that no `on` statement discharged
     /// (issues/goal-holes.md). Not one error per goal: the *listing* is the
     /// point — it is how the checker shows goal state.
@@ -106,7 +109,7 @@ impl ElabError {
         match self {
             ElabError::Parse(e) => format!("{}:{}: {}", at(e.span), "parse error", e.msg),
             ElabError::Elab { msg, span } => format!("{}: {msg}", at(*span)),
-            ElabError::Kernel { .. } => self.to_string(),
+            ElabError::Kernel { span, .. } => format!("{}: {self}", at(*span)),
             ElabError::UnsolvedGoals { decl, goals } => {
                 let mut s = format!("unsolved goals in `{decl}`:\n");
                 for g in goals {
@@ -118,6 +121,58 @@ impl ElabError {
             }
         }
     }
+
+    /// The error as a full CLI diagnostic: message, `file:line:col`
+    /// location, and a caret line under the offending span. [`Self::render`]
+    /// is the compact one-line form for harnesses; this is what
+    /// `heather check` prints. The goal listing keeps its listing shape —
+    /// per-goal carets would drown the statements, which are the point.
+    pub fn render_snippet(&self, src: &str, file: &str) -> String {
+        let loc = |span: Span| {
+            let (line, col) = line_col(src, span.start);
+            format!("{file}:{line}:{col}")
+        };
+        let headed = |msg: &str, span: Span| {
+            format!("error: {msg}\n  --> {}\n{}", loc(span), snippet(src, span))
+        };
+        match self {
+            ElabError::Parse(e) => headed(&format!("parse error: {}", e.msg), e.span),
+            ElabError::Elab { msg, span } => headed(msg, *span),
+            ElabError::Kernel { span, .. } => headed(&self.to_string(), *span),
+            ElabError::UnsolvedGoals { decl, goals } => {
+                let mut s = format!("error: unsolved goals in `{decl}`:\n");
+                for g in goals {
+                    s.push('\n');
+                    s.push_str(&g.render(Some(&loc(g.span))));
+                }
+                s.push_str("\ndischarge each with `on ?name := proof;`\n");
+                s
+            }
+        }
+    }
+}
+
+/// The quoted source line with a caret run under `span` — the body of a
+/// `render_snippet` diagnostic. Columns are counted in characters, not
+/// bytes, so the carets stay aligned past non-ASCII; a span that runs past
+/// its first line is pointed at where it starts.
+fn snippet(src: &str, span: Span) -> String {
+    let offset = span.start.min(src.len());
+    let line_start = src[..offset].rfind('\n').map_or(0, |nl| nl + 1);
+    let line_end = src[offset..].find('\n').map_or(src.len(), |nl| offset + nl);
+    let text = &src[line_start..line_end];
+    let (line, _) = line_col(src, span.start);
+    let col = src[line_start..offset].chars().count();
+    let line_rest = text.chars().count().saturating_sub(col);
+    let span_chars = src[offset..span.end.clamp(offset, src.len())].chars().count();
+    let width = span_chars.clamp(1, line_rest.max(1));
+    let num = line.to_string();
+    let pad = " ".repeat(num.len());
+    format!(
+        "{pad} |\n{num} | {text}\n{pad} | {}{}\n",
+        " ".repeat(col),
+        "^".repeat(width),
+    )
 }
 
 impl GoalReport {
@@ -144,7 +199,7 @@ impl std::fmt::Display for ElabError {
         match self {
             ElabError::Parse(e) => write!(f, "parse error: {}", e.msg),
             ElabError::Elab { msg, .. } => write!(f, "{msg}"),
-            ElabError::Kernel { decl, err } => {
+            ElabError::Kernel { decl, err, .. } => {
                 write!(f, "the kernel rejected `{decl}`: {err:?}")
             }
             ElabError::UnsolvedGoals { decl, goals } => {
@@ -407,6 +462,35 @@ impl Elaborator {
         Ok(())
     }
 
+    /// Check a whole file, recovering per declaration: a failed declaration
+    /// registers nothing (globals and Ψ are touched only after the kernel
+    /// gate), so the rest of the file still checks against everything that
+    /// did succeed. Returns every diagnostic in source order; empty means
+    /// the file is good.
+    ///
+    /// [`Self::elab_source`] is the all-or-nothing form: library code wants
+    /// the first error as a `Result`, a human checking a file wants all of
+    /// them — including the unsolved-goal listing of a proof further down.
+    /// A parse error is still wholesale, since there is no recovery point
+    /// inside a half-parsed file.
+    pub fn check_source(&mut self, src: &str) -> Vec<ElabError> {
+        let file = match parse_file(src) {
+            Ok(f) => f,
+            Err(e) => return vec![e.into()],
+        };
+        let mut errs = Vec::new();
+        for item in &file.items {
+            let r = match item {
+                Item::Decl(d) => self.elab_decl(d),
+                Item::Inductive(i) => self.elab_inductive(i),
+            };
+            if let Err(e) = r {
+                errs.push(e);
+            }
+        }
+        errs
+    }
+
     /// The accumulated global context (theorem statements).
     pub fn psi(&self) -> &GlobalCtx {
         &self.psi
@@ -605,9 +689,9 @@ impl Elaborator {
         // The kernel is the gate: check the statement, then the term.
         let empty = LocalCtx { base: CtxBase::Nil, entries: vec![] };
         typing::check_type(&self.psi, 0, Layer::Prog, &empty, &stmt, &stmt_lvl, self.fuel)
-            .map_err(|e| ElabError::Kernel { decl: decl.name.clone(), err: e })?;
+            .map_err(|e| ElabError::Kernel { decl: decl.name.clone(), span: decl.span, err: e })?;
         typing::check_term(&self.psi, 0, Layer::Code, &empty, &term, &stmt, &stmt_lvl, self.fuel)
-            .map_err(|e| ElabError::Kernel { decl: decl.name.clone(), err: e })?;
+            .map_err(|e| ElabError::Kernel { decl: decl.name.clone(), span: decl.span, err: e })?;
 
         let params = Rc::new(
             decl.tyvars

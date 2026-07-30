@@ -1,0 +1,13 @@
+// A file with two independent failures around a good declaration, so the
+// CLI test sees accumulation and recovery, not just "nonzero exit".
+theorem broken(n: Nat): n = Succ(n) {
+    refl
+}
+
+fn id_nat(n: Nat) -> Nat {
+    n
+}
+
+theorem open_goal(n: Nat): id_nat(n) = id_nat(n) {
+    ?later
+}

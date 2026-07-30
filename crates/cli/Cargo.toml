@@ -11,6 +11,7 @@ path = "src/main.rs"
 [dependencies]
 heather-kernel = { path = "../kernel" }
 heather-syntax = { path = "../syntax" }
+heather-elab = { path = "../elab" }
 
 [lints]
 workspace = true

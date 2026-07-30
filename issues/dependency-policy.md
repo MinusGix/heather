@@ -3,7 +3,7 @@ title: "Dependency policy: kernel at zero, crates above it"
 status: open
 labels: [meta, kernel, tooling]
 created: 2026-07-24
-updated: 2026-07-24
+updated: 2026-07-30
 ---
 
 The tree is currently dependency-free: `Cargo.lock` has exactly the four
@@ -82,3 +82,7 @@ conversion cache, which is a kernel design change we would write ourselves
 
 `salsa` for incremental re-checking: only once something interactive exists
 — see [[lsp-from-the-meta-layer]].
+
+## Log
+
+- 2026-07-30: [[cli-check-diagnostics]] landed *without* the diagnostics-rendering dep: a single-span caret line is ~15 lines of std (`snippet` in crates/elab/src/lib.rs), so the renderer question stays open until something needs multi-label reports (the goal listing kept its listing shape instead). The candidate list stands as options, not commitments; `render_snippet` is now the thing a renderer dep would replace.
