@@ -315,6 +315,14 @@ def verdict(rows, expect):
     if expect == "exponential":
         return max(runs) >= GATE_RUN or max(means) >= GATE_RATIO
     if expect == "linear":
+        if not any(means):
+            # No quantity cleared the noise floor for long enough to have an
+            # opinion. A short sweep must not be able to certify a fix.
+            print(
+                f"  (too few levels above the noise floor to judge — "
+                f"the master curve needs --max 15)"
+            )
+            return False
         return max(runs) < GATE_RUN and max(means) < GATE_RATIO
     return True
 
