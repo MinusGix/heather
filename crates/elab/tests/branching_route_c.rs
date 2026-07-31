@@ -347,8 +347,7 @@ fn id_tree(l: Term, r: Term, depth: u32) -> Type {
 /// Ψ: the code, the constructors, the eliminator, and `mirror`'s β laws as
 /// propositional postulates (each use below = "refl under the real former").
 fn psi() -> GlobalCtx {
-    GlobalCtx {
-        bindings: vec![
+    GlobalCtx::new(vec![
             // treeCode : Ty 0
             GlobalBinding::Tm {
                 ctx: nil_ctx(),
@@ -425,8 +424,7 @@ fn psi() -> GlobalCtx {
                 level: c(0),
                 body: None,
             },
-        ],
-    }
+        ])
 }
 
 /// `mbeta_node l r`, fully annotated.

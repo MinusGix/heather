@@ -123,7 +123,7 @@ fn binding(ty: Type, body: Option<Term>) -> GlobalBinding {
 }
 
 fn psi(bindings: Vec<GlobalBinding>) -> GlobalCtx {
-    GlobalCtx { bindings }
+    GlobalCtx::new(bindings)
 }
 
 /// `two := 2 : Nat` and `succ2 := λx. Succ (Succ x) : Nat → Nat`; index 1 is

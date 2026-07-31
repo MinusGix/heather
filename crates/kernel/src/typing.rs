@@ -129,7 +129,7 @@ impl From<ConvError> for TypeError {
 pub fn check_global_ctx(psi: &GlobalCtx, univs: u32, fuel: u64) -> R {
     let tc = Tc { fuel };
     for (i, b) in psi.bindings.iter().enumerate() {
-        let prefix = GlobalCtx { bindings: psi.bindings[..i].to_vec() };
+        let prefix = GlobalCtx::new(psi.bindings[..i].to_vec());
         let env = Env {
             psi: prefix,
             gamma: LocalCtx { base: CtxBase::Nil, entries: vec![] },
@@ -301,7 +301,7 @@ impl Env {
     fn push_tele(&self, tu: u32, globals: Vec<GlobalBinding>) -> Env {
         let tg = globals.len() as u32;
         let mut psi = shift_univ_psi(&self.psi, tu);
-        psi.bindings.extend(globals);
+        psi.extend(globals);
         Env {
             psi,
             gamma: self.gamma.shift_univ(tu).shift_global(tg),

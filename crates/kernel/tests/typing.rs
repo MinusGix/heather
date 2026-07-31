@@ -291,8 +291,7 @@ fn universe_polymorphism() {
 
 /// Ψ = (g : Ctx, U : Typ_c(g, 0), u : Trm_v(g ⊢ U^id @ 0)).
 fn sample_psi() -> GlobalCtx {
-    GlobalCtx {
-        bindings: vec![
+    GlobalCtx::new(vec![
             GlobalBinding::Ctx,
             GlobalBinding::Ty { ctx: g_ctx(0), layer: Layer::Code, level: Level::Zero },
             GlobalBinding::Tm {
@@ -302,30 +301,25 @@ fn sample_psi() -> GlobalCtx {
                 level: Level::Zero,
                 body: None,
             },
-        ],
-    }
+        ])
 }
 
 #[test]
 fn global_context_formation() {
     check_global_ctx(&sample_psi(), 0, FUEL).unwrap();
     // A Ty binding may not live at layer m …
-    let bad = GlobalCtx {
-        bindings: vec![GlobalBinding::Ty {
+    let bad = GlobalCtx::new(vec![GlobalBinding::Ty {
             ctx: nil_ctx(),
             layer: Layer::Meta,
             level: Level::Zero,
-        }],
-    };
+        }]);
     assert_eq!(check_global_ctx(&bad, 0, FUEL).unwrap_err(), TypeError::LayerMismatch);
     // … and a binding's context must be well-formed in its prefix.
-    let unbound = GlobalCtx {
-        bindings: vec![GlobalBinding::Ty {
+    let unbound = GlobalCtx::new(vec![GlobalBinding::Ty {
             ctx: g_ctx(0),
             layer: Layer::Code,
             level: Level::Zero,
-        }],
-    };
+        }]);
     assert_eq!(
         check_global_ctx(&unbound, 0, FUEL).unwrap_err(),
         TypeError::UnboundGlobalVar(0)
@@ -346,8 +340,7 @@ fn global_variables_and_layer_order() {
         assert!(l.equiv(&Level::Zero));
     }
     // A layer-c term binding is not visible at layer v (i' ≤ i fails).
-    let psi_c = GlobalCtx {
-        bindings: vec![
+    let psi_c = GlobalCtx::new(vec![
             GlobalBinding::Ctx,
             GlobalBinding::Tm {
                 ctx: g_ctx(0),
@@ -356,8 +349,7 @@ fn global_variables_and_layer_order() {
                 level: Level::Zero,
                 body: None,
             },
-        ],
-    };
+        ]);
     let gamma = g_ctx(1);
     assert_eq!(
         infer_term(&psi_c, 0, Layer::Var, &gamma, &gtm(0, &gamma), FUEL).unwrap_err(),

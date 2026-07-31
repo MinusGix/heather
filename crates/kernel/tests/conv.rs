@@ -47,7 +47,7 @@ fn v(i: u32) -> Term {
 }
 
 fn psi(bindings: Vec<GlobalBinding>) -> GlobalCtx {
-    GlobalCtx { bindings }
+    GlobalCtx::new(bindings)
 }
 
 /// `(·, x₀ : Nat @ 0, …)` with `n` entries.

@@ -108,8 +108,7 @@ fn shift_univ_psi(psi: &GlobalCtx, by: u32) -> GlobalCtx {
     if by == 0 {
         return psi.clone();
     }
-    GlobalCtx {
-        bindings: psi
+    GlobalCtx::new(psi
             .bindings
             .iter()
             .map(|b| match b {
@@ -127,8 +126,7 @@ fn shift_univ_psi(psi: &GlobalCtx, by: u32) -> GlobalCtx {
                     body: body.as_ref().map(|t| Rc::new(t.shift_univ(by))),
                 },
             })
-            .collect(),
-    }
+            .collect())
 }
 
 impl WtEnv {
@@ -153,7 +151,7 @@ impl WtEnv {
 
     fn push_global(&self, b: GlobalBinding) -> WtEnv {
         let mut psi = self.psi.clone();
-        psi.bindings.push(b);
+        psi.push(b);
         WtEnv { psi, univs: self.univs, layer: self.layer, gamma: self.gamma.shift_global(1) }
     }
 
@@ -186,10 +184,9 @@ pub fn gen_wt_env(r: &mut Rng) -> WtEnv {
     let univs = r.below(3);
     let psi = match r.below(3) {
         0 => GlobalCtx::default(),
-        1 => GlobalCtx { bindings: vec![GlobalBinding::Ctx] },
+        1 => GlobalCtx::new(vec![GlobalBinding::Ctx]),
         // Ψ = (g : Ctx, U : Typ_c(g, 0), u : Trm_v(g ⊢ U^id @ 0)).
-        _ => GlobalCtx {
-            bindings: vec![
+        _ => GlobalCtx::new(vec![
                 GlobalBinding::Ctx,
                 GlobalBinding::Ty { ctx: g_ctx(0), layer: Layer::Code, level: Level::Zero },
                 GlobalBinding::Tm {
@@ -199,8 +196,7 @@ pub fn gen_wt_env(r: &mut Rng) -> WtEnv {
                     level: Level::Zero,
                     body: None,
                 },
-            ],
-        },
+            ]),
     };
     let layer = if r.below(4) == 0 { Layer::Prog } else { Layer::Meta };
     let mut env = WtEnv { psi, univs, layer, gamma: nil_ctx() };

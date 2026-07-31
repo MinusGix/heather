@@ -363,8 +363,7 @@ const FUNEXT_TWO: u32 = 0;
 
 /// Ψ = (funext at `Empty → Tree`, funext at `2 → Tree`).
 fn psi() -> GlobalCtx {
-    GlobalCtx {
-        bindings: vec![
+    GlobalCtx::new(vec![
             GlobalBinding::Tm {
                 ctx: nil_ctx(),
                 layer: Layer::Code,
@@ -379,8 +378,7 @@ fn psi() -> GlobalCtx {
                 level: c(0),
                 body: None,
             },
-        ],
-    }
+        ])
 }
 
 fn global(var: u32, depth: u32) -> Term {

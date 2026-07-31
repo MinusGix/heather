@@ -1053,9 +1053,43 @@ impl GlobalBinding {
 
 /// The global context Ψ. `bindings[0]` is outermost; [`GlobalVar`] 0 refers
 /// to the last binding.
+///
+/// The binding list is behind an [`Rc`] so that *cloning Ψ is O(1)*.
+/// Typing and conversion carry Ψ inside an environment they clone at every
+/// binder descent, and a `fn` is now a bodied binding
+/// (issues/simulate-conversion-cost.md), so a deep copy per descent was the
+/// single largest line of a real profile
+/// (issues/context-representation-clones.md). Sharing is safe here in a way
+/// it is not for Γ: Ψ never appears *inside* a term, so no conversion rule
+/// compares it structurally, and it is only ever extended at declaration
+/// granularity — [`GlobalCtx::push`] pays a copy-on-write there, which is
+/// once per declaration rather than once per binder.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct GlobalCtx {
-    pub bindings: Vec<GlobalBinding>,
+    pub bindings: Rc<Vec<GlobalBinding>>,
+}
+
+impl GlobalCtx {
+    /// Ψ from its bindings, outermost first.
+    pub fn new(bindings: Vec<GlobalBinding>) -> GlobalCtx {
+        GlobalCtx { bindings: Rc::new(bindings) }
+    }
+
+    /// Append one binding (copy-on-write if this Ψ is shared).
+    pub fn push(&mut self, b: GlobalBinding) {
+        Rc::make_mut(&mut self.bindings).push(b);
+    }
+
+    /// Append several bindings (copy-on-write if this Ψ is shared).
+    pub fn extend(&mut self, bs: impl IntoIterator<Item = GlobalBinding>) {
+        Rc::make_mut(&mut self.bindings).extend(bs);
+    }
+}
+
+impl From<Vec<GlobalBinding>> for GlobalCtx {
+    fn from(bindings: Vec<GlobalBinding>) -> GlobalCtx {
+        GlobalCtx::new(bindings)
+    }
 }
 
 // ---------------------------------------------------------------------------

@@ -856,8 +856,7 @@ fn mbeta_rhs(a: Term, cs: Term, depth: u32) -> Term {
 /// Ψ: the code, `supf`, the n-ary eliminator, and ONE generic β law for the
 /// derived `mirror` — per-constructor facts follow by kernel computation.
 fn psi() -> GlobalCtx {
-    GlobalCtx {
-        bindings: vec![
+    GlobalCtx::new(vec![
             // treeCode : Ty 0
             GlobalBinding::Tm {
                 ctx: nil_ctx(),
@@ -919,8 +918,7 @@ fn psi() -> GlobalCtx {
                 level: c(0),
                 body: None,
             },
-        ],
-    }
+        ])
 }
 
 /// `mbeta a cs`, fully annotated.

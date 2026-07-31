@@ -191,7 +191,7 @@ impl Env {
     fn push_tele(&self, tu: u32, globals: Vec<GlobalBinding>) -> Env {
         let tg = globals.len() as u32;
         let mut psi = shift_univ_psi(&self.psi, tu);
-        psi.bindings.extend(globals);
+        psi.extend(globals);
         Env {
             psi,
             gamma: self.gamma.shift_univ(tu).shift_global(tg),

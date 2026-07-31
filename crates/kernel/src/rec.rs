@@ -64,9 +64,8 @@ pub(crate) fn shift_univ_psi(psi: &GlobalCtx, by: u32) -> GlobalCtx {
     if by == 0 {
         return psi.clone();
     }
-    GlobalCtx {
-        bindings: psi
-            .bindings
+    GlobalCtx::new(
+        psi.bindings
             .iter()
             .map(|b| match b {
                 GlobalBinding::Ctx => GlobalBinding::Ctx,
@@ -86,7 +85,7 @@ pub(crate) fn shift_univ_psi(psi: &GlobalCtx, by: u32) -> GlobalCtx {
                 },
             })
             .collect(),
-    }
+    )
 }
 
 // ---------------------------------------------------------------------------

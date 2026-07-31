@@ -733,7 +733,7 @@ impl Elaborator {
         // would put the whole proof term back into every conversion that
         // mentions the theorem.
         let abs = self.psi.bindings.len() as u32;
-        self.psi.bindings.push(GlobalBinding::Tm {
+        self.psi.push(GlobalBinding::Tm {
             ctx: LocalCtx { base: CtxBase::Nil, entries: vec![] },
             layer: Layer::Code,
             ty: Rc::new(stmt),
@@ -967,8 +967,13 @@ impl Elaborator {
     /// [`Self::delta_psi`] and goals still need no real binding for the rest
     /// of elaboration.
     fn goal_psi(&self) -> GlobalCtx {
+        // No goals in flight: Ψ itself already is the goal world, and
+        // sharing its `Rc` beats rebuilding the list.
+        if self.goal_base == 0 {
+            return self.psi.clone();
+        }
         let goals = self.goals.borrow();
-        let mut bindings = self.psi.bindings.clone();
+        let mut bindings = (*self.psi.bindings).clone();
         for k in 0..self.goal_base as usize {
             bindings.push(match goals.get(k) {
                 Some(g) => GlobalBinding::Tm {
@@ -989,7 +994,7 @@ impl Elaborator {
                 },
             });
         }
-        GlobalCtx { bindings }
+        GlobalCtx::new(bindings)
     }
 
     /// The substitution discharging the whole goal block: `entries[k]` is the
@@ -3034,7 +3039,11 @@ impl Elaborator {
 
     /// Rebuild [`Self::delta_psi`]. Called wherever Ψ or `goal_base` moves.
     fn refresh_delta_psi(&mut self) {
-        let mut bindings = self.psi.bindings.clone();
+        if self.goal_base == 0 {
+            self.delta_psi = self.psi.clone();
+            return;
+        }
+        let mut bindings = (*self.psi.bindings).clone();
         bindings.resize(
             bindings.len() + self.goal_base as usize,
             GlobalBinding::Tm {
@@ -3045,7 +3054,7 @@ impl Elaborator {
                 body: None,
             },
         );
-        self.delta_psi = GlobalCtx { bindings };
+        self.delta_psi = GlobalCtx::new(bindings);
     }
 }
 
