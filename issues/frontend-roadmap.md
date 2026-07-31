@@ -110,8 +110,9 @@ metatheory round to know about before the IR stack sits on top.
 Cheap and separable, pick up any time: the postponement slice of
 [[elab-unifier-completeness]], [[annotated-let-swallows-the-equals]],
 [[warn-bare-eq-no-effect]], [[split-on-arms]], [[named-arguments]],
-[[kernel-benchmarks]] and [[frontend-benchmarks]] (design rounds; the
-latter's harness wants item 15).
+[[j-binder-parse-trap]], [[prelude-option-and-friends]] (layer 1, the
+prelude residency), [[nested-match-patterns]], and [[frontend-benchmarks]]
+(design round; its harness assumption now holds via item 15).
 
 Blocked on layers not yet built, listed so they are reachable rather than
 only `ls`-able: [[implicit-level-polymorphism]] (wants level inference *and*
