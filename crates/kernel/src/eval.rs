@@ -1095,7 +1095,7 @@ impl<'a> Eval<'a> {
             for v in &subst.terms {
                 denv = denv.push(vclo(Rc::clone(v)));
             }
-            Rc::new(TmClo::syn(denv, Rc::new(body)))
+            Rc::new(TmClo::syn(denv, body))
         });
         neutral(Head::Global { var, subst }, Vec::new(), unfold)
     }

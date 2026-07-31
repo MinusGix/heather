@@ -62,38 +62,83 @@ pub struct OutOfFuel;
 /// choice at c, and it is what every layer-c path here uses: reduction
 /// never enters a `box`, and `conv.rs` compares boxed code with `==`.
 #[derive(Clone, Copy)]
-pub struct Defs<'a>(Option<&'a GlobalCtx>);
+pub struct Defs<'a> {
+    psi: Option<&'a GlobalCtx>,
+    bodies: Option<&'a BodyCache>,
+}
+
+/// Rescoped definition bodies, memoized by [`GlobalVar`].
+///
+/// [`Defs::body`] rescopes a body with `shift_global(v + 1)`, and that
+/// rescoping is a function of the index alone — not of the occurrence, not
+/// of the δ that occurrence carries. A cache is therefore sound *for one
+/// Ψ*, which is why it is owned beside the Ψ it belongs to (`conv::Env`)
+/// and rebuilt whenever a telescope push changes Ψ, rather than being a
+/// global table keyed by an index that means different things in different
+/// scopes.
+#[derive(Default)]
+pub struct BodyCache(std::cell::RefCell<Vec<Option<Rc<Term>>>>);
+
+impl BodyCache {
+    pub fn new() -> BodyCache {
+        BodyCache::default()
+    }
+
+    fn get_or_insert(&self, v: GlobalVar, build: impl FnOnce() -> Term) -> Rc<Term> {
+        let i = v.0 as usize;
+        let mut slots = self.0.borrow_mut();
+        if slots.len() <= i {
+            slots.resize(i + 1, None);
+        }
+        if let Some(t) = &slots[i] {
+            return Rc::clone(t);
+        }
+        // `build` reads only Ψ, never the cache, so no re-entrant borrow.
+        let t = Rc::new(build());
+        slots[i] = Some(Rc::clone(&t));
+        t
+    }
+}
 
 impl<'a> Defs<'a> {
     /// Nothing unfolds: every global is an opaque neutral, exactly as in
     /// ch. 06's reduction relation. The right choice at layer c, and the
     /// meaning of the Ψ-free [`step_term`]/[`whnf_term`] entry points.
     pub fn opaque() -> Defs<'a> {
-        Defs(None)
+        Defs { psi: None, bodies: None }
     }
 
     /// Definitions of `psi` unfold. Only sound at a computing layer.
     pub fn transparent(psi: &'a GlobalCtx) -> Defs<'a> {
-        Defs(Some(psi))
+        Defs { psi: Some(psi), bodies: None }
+    }
+
+    /// [`Defs::transparent`] with a [`BodyCache`] to memoize the rescoping
+    /// in. The cache must belong to this exact `psi`.
+    pub fn transparent_cached(psi: &'a GlobalCtx, bodies: &'a BodyCache) -> Defs<'a> {
+        Defs { psi: Some(psi), bodies: Some(bodies) }
     }
 
     /// The body of `v`, rescoped from its Ψ-prefix into the ambient Ψ (the
     /// `shift_global(v + 1)` convention `typing.rs` uses for the binding's
     /// type). `None` for a declaration, an out-of-scope index, or an opaque
     /// environment.
-    pub(crate) fn body(&self, v: GlobalVar) -> Option<Term> {
-        let psi = self.0?;
+    pub(crate) fn body(&self, v: GlobalVar) -> Option<Rc<Term>> {
+        let psi = self.psi?;
         let i = psi.bindings.len().checked_sub(1 + v.0 as usize)?;
-        match psi.bindings.get(i)? {
-            GlobalBinding::Tm { body: Some(t), .. } => Some(t.shift_global(v.0 + 1)),
-            _ => None,
-        }
+        let GlobalBinding::Tm { body: Some(t), .. } = psi.bindings.get(i)? else {
+            return None;
+        };
+        Some(match self.bodies {
+            Some(c) => c.get_or_insert(v, || t.shift_global(v.0 + 1)),
+            None => Rc::new(t.shift_global(v.0 + 1)),
+        })
     }
 
     /// Whether `v` is a definition here — the head test the conversion
     /// heuristic keys on, without paying for the rescoped body.
     pub fn is_defined(&self, v: GlobalVar) -> bool {
-        let Some(psi) = self.0 else { return false };
+        let Some(psi) = self.psi else { return false };
         let Some(i) = psi.bindings.len().checked_sub(1 + v.0 as usize) else {
             return false;
         };

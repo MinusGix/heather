@@ -63,7 +63,7 @@ use std::rc::Rc;
 use crate::layer::Layer;
 use crate::level::Level;
 use crate::rec::{self, gtm, gty, shift_univ_psi};
-use crate::reduce::Defs;
+use crate::reduce::{BodyCache, Defs};
 use crate::term::{
     Branches, CtxBase, CtxEntry, GlobalBinding, GlobalCtx, GlobalVar, LocalCtx, LocalVar,
     Motives, Term, Type,
@@ -231,6 +231,10 @@ struct Env {
     /// push was ~3% of a routine `lib/ir_v1.hthr` check. Only `push_tele`
     /// changes Ψ, and it is a layer-m path.
     psi: Rc<GlobalCtx>,
+    /// Rescoped definition bodies for **this** Ψ (`reduce::BodyCache`).
+    /// Shared with every scope that shares the Ψ and rebuilt by the one
+    /// operation that does not — `push_tele`.
+    bodies: Rc<BodyCache>,
     gamma: LocalCtx,
     layer: Layer,
     /// The local environment of the value domain: entry `j` from the outer
@@ -314,6 +318,7 @@ impl Env {
         let (rho, vtys) = value_scope(gamma);
         Env {
             psi: Rc::new(psi.clone()),
+            bodies: Rc::new(BodyCache::new()),
             gamma: gamma.clone(),
             layer,
             rho,
@@ -375,6 +380,7 @@ impl Env {
         }
         Env {
             psi,
+            bodies: Rc::new(BodyCache::new()),
             gamma: self.gamma.shift_univ(tu).shift_global(tg),
             layer: self.layer,
             rho: value::shift::env(&self.rho, o),
@@ -492,7 +498,7 @@ impl<D: Dom> Conv<D> {
     /// not assumed from the call sites.
     fn defs<'a>(&self, env: &'a Env) -> Defs<'a> {
         if self.has_defs && env.layer.computes() {
-            Defs::transparent(&env.psi)
+            Defs::transparent_cached(&env.psi, &env.bodies)
         } else {
             Defs::opaque()
         }
