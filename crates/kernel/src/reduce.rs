@@ -81,7 +81,7 @@ impl<'a> Defs<'a> {
     /// `shift_global(v + 1)` convention `typing.rs` uses for the binding's
     /// type). `None` for a declaration, an out-of-scope index, or an opaque
     /// environment.
-    fn body(&self, v: GlobalVar) -> Option<Term> {
+    pub(crate) fn body(&self, v: GlobalVar) -> Option<Term> {
         let psi = self.0?;
         let i = psi.bindings.len().checked_sub(1 + v.0 as usize)?;
         match psi.bindings.get(i)? {
@@ -725,11 +725,25 @@ use crate::term::{Branches, Motives};
 
 /// The parts of a recursor that are copied verbatim into its recursive
 /// calls.
-struct Rec<'a> {
+pub(crate) struct Rec<'a> {
     ty_motive_level: &'a Level,
     tm_motive_level: &'a Level,
     motives: &'a Rc<Motives>,
     branches: &'a Rc<Branches>,
+}
+
+impl<'a> Rec<'a> {
+    /// The recursor's copied-forward parts, for [`crate::eval`]'s β: the
+    /// evaluator shares these functions rather than transcribing the 52
+    /// branch telescopes a sixth time (docs/nbe-conversion-design.md §2).
+    pub(crate) fn new(
+        ty_motive_level: &'a Level,
+        tm_motive_level: &'a Level,
+        motives: &'a Rc<Motives>,
+        branches: &'a Rc<Branches>,
+    ) -> Rec<'a> {
+        Rec { ty_motive_level, tm_motive_level, motives, branches }
+    }
 }
 
 impl Rec<'_> {
@@ -794,7 +808,7 @@ fn fire(
 /// β for `elim^Typ … (l', Δ) (box code)`, dispatching on the head of the
 /// code. `None` blocks on `U^δ` (neutral) and on layer-m heads that cannot
 /// be code (ill-typed, stuck).
-fn beta_elim_ty(
+pub(crate) fn beta_elim_ty(
     rec: &Rec,
     delta: &LocalCtx,
     code: &Rc<Type>,
@@ -1035,7 +1049,7 @@ fn beta_elim_ty(
 /// code; `ann_ty` is the recursor's type annotation, already in WHNF (the
 /// `λ` case reads its return type off it). `None` blocks on `u^δ` (neutral)
 /// and on layer-m heads that cannot be code (ill-typed, stuck).
-fn beta_elim_tm(
+pub(crate) fn beta_elim_tm(
     rec: &Rec,
     delta: &LocalCtx,
     ann_ty: &Rc<Type>,

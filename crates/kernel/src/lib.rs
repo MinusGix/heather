@@ -8,6 +8,7 @@
 
 mod bounds;
 pub mod conv;
+pub mod eval;
 mod fmt;
 pub mod layer;
 pub mod level;
@@ -16,3 +17,4 @@ pub mod reduce;
 pub mod subst;
 pub mod term;
 pub mod typing;
+pub mod value;
