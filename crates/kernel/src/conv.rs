@@ -233,9 +233,15 @@ struct Env {
     /// end is the neutral variable at level `j`, so pushing a binder assigns
     /// the level `gamma.entries.len()` and never renumbers anything.
     rho: value::Env,
-    /// Γ's entry types as domain objects, innermost first — the one thing
-    /// [`Dom::var_type`] needs and the filler `gamma` cannot supply.
+    /// The entry types of the binders **conversion itself pushed**, as domain
+    /// objects, innermost first: those are the ones with no syntax in
+    /// `gamma`. Everything older than `vbase` is still syntax there and is
+    /// read back on demand, so entering a conversion costs no work per Γ
+    /// entry (it cost O(|Γ|) allocations per query when this list was built
+    /// eagerly — `scripts/bench`, 2026-07-31).
     vtys: TyEnv,
+    /// The Γ-length at which `vtys` starts.
+    vbase: u32,
     /// The telescope [`Dom::push_spec`] pushed to build this scope, as
     /// `(univs, globals, locals)`. Read by [`Dom::embed_ty_at`], which has to
     /// carry a recursor's stored environment across exactly that telescope.
@@ -293,13 +299,10 @@ impl TyEnv {
 /// its variables, and each entry's type as a closure over the *prefix* it is
 /// scoped in.
 fn value_scope(gamma: &LocalCtx) -> (value::Env, TyEnv) {
-    let mut rho = value::Env::empty();
-    let mut vtys = TyEnv::empty();
-    for (i, e) in gamma.entries.iter().enumerate() {
-        vtys = vtys.push(Rc::new(TyClo::new(rho.clone(), Rc::clone(&e.ty))), e.level.clone());
-        rho = rho.push(Rc::new(TmClo::val(Rc::new(value::Val::var(i as u32)))));
-    }
-    (rho, vtys)
+    (
+        value::Env::identity(gamma.entries.len() as u32),
+        TyEnv::empty(),
+    )
 }
 
 impl Env {
@@ -311,6 +314,7 @@ impl Env {
             layer,
             rho,
             vtys,
+            vbase: gamma.entries.len() as u32,
             tele: (0, 0, 0),
         }
     }
@@ -325,7 +329,8 @@ impl Env {
     /// variables, at levels of its own.
     fn in_ctx(&self, gamma: LocalCtx, layer: Layer) -> Env {
         let (rho, vtys) = value_scope(&gamma);
-        Env { gamma, layer, rho, vtys, tele: (0, 0, 0), ..self.clone() }
+        let vbase = gamma.entries.len() as u32;
+        Env { gamma, layer, rho, vtys, vbase, tele: (0, 0, 0), ..self.clone() }
     }
 
     /// `Γ, x : T @ l`. Reached through [`Dom::push_entry`], never directly:
@@ -369,6 +374,7 @@ impl Env {
             layer: self.layer,
             rho: value::shift::env(&self.rho, o),
             vtys,
+            vbase: self.vbase,
             tele: (tu, tg, 0),
         }
     }

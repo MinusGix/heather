@@ -101,6 +101,9 @@ enum Work {
     Force(Rc<TmClo>),
     /// Apply a closure to its pending binders' values.
     Apply(Rc<TmClo>, Vec<Rc<TmClo>>),
+    /// [`Work::Apply`] at one binder — β's commonest shape, and the one that
+    /// must not allocate a vector to say so.
+    Apply1(Rc<TmClo>, Rc<TmClo>),
     /// Eliminate a weak head value.
     Elim(Rc<Val>, Elim),
 }
@@ -128,13 +131,18 @@ pub struct Eval<'a> {
     fuel: u64,
     defs: Defs<'a>,
     base: CtxBase,
+    /// [`Eval::drive`]'s continuation stack, kept across drives so that the
+    /// common reduction step allocates nothing for it. Nested drives (a
+    /// scrutinee evaluated before its elimination is built) use it as a
+    /// stack of stacks: each records the height it entered at.
+    frames: Vec<Frame>,
 }
 
 impl<'a> Eval<'a> {
     /// A run with `fuel` units, unfolding the definitions of `defs`, over a Γ
     /// whose base is `base`.
     pub fn new(fuel: u64, defs: Defs<'a>, base: CtxBase) -> Eval<'a> {
-        Eval { fuel, defs, base }
+        Eval { fuel, defs, base, frames: Vec::new() }
     }
 
     /// The unspent budget.
@@ -187,12 +195,26 @@ impl<'a> Eval<'a> {
     /// application's function, a type annotation) stays on the native stack,
     /// where its depth is the syntax's and the rewriter's own.
     fn drive(&mut self, start: Work) -> Res<Rc<Val>> {
+        let floor = self.frames.len();
+        let out = self.drive_from(start, floor);
+        // An error unwinds whatever this drive had pending; a thunk that
+        // never reached its frame keeps no memo (design §6).
+        self.frames.truncate(floor);
+        out
+    }
+
+    fn drive_from(&mut self, start: Work, floor: usize) -> Res<Rc<Val>> {
         let mut work = start;
-        let mut stack: Vec<Frame> = Vec::new();
         loop {
             work = match work {
                 Work::Eval(t, env) => self.step_eval(&t, &env)?,
                 Work::Elim(head, e) => self.step_elim(head, e)?,
+                Work::Apply1(c, arg) => match &*c {
+                    TmClo::Syn { env, body, .. } => {
+                        Work::Eval(Rc::clone(body), env.push(arg))
+                    }
+                    _ => Work::Force(c),
+                },
                 Work::Apply(c, args) => match &*c {
                     TmClo::Syn { env, body, .. } => {
                         Work::Eval(Rc::clone(body), env.extend(&args))
@@ -209,29 +231,32 @@ impl<'a> Eval<'a> {
                             TmClo::Val(v) => Work::Val(Rc::clone(v)),
                             TmClo::Syn { env, body, .. } => {
                                 let w = Work::Eval(Rc::clone(body), env.clone());
-                                stack.push(Frame::Memo(Rc::clone(&c)));
+                                self.frames.push(Frame::Memo(Rc::clone(&c)));
                                 w
                             }
                             TmClo::Elim { head, elim, .. } => {
                                 let w = Work::Force(Rc::clone(head));
-                                stack.push(Frame::Memo(Rc::clone(&c)));
-                                stack.push(Frame::Elim(Rc::clone(elim)));
+                                self.frames.push(Frame::Memo(Rc::clone(&c)));
+                                self.frames.push(Frame::Elim(Rc::clone(elim)));
                                 w
                             }
                         }
                     }
                 }
-                Work::Val(v) => match stack.pop() {
-                    None => return Ok(v),
-                    // A thunk records its value only on success: an error
-                    // leaves this loop without ever reaching here, which is
-                    // what makes a failed force un-poisoned (design §6).
-                    Some(Frame::Memo(c)) => {
-                        c.set_memo(&v);
-                        Work::Val(v)
+                Work::Val(v) => {
+                    if self.frames.len() == floor {
+                        return Ok(v);
                     }
-                    Some(Frame::Elim(e)) => Work::Elim(v, (*e).clone()),
-                },
+                    match self.frames.pop() {
+                        None => return Ok(v),
+                        // A thunk records its value only on success.
+                        Some(Frame::Memo(c)) => {
+                            c.set_memo(&v);
+                            Work::Val(v)
+                        }
+                        Some(Frame::Elim(e)) => Work::Elim(v, (*e).clone()),
+                    }
+                }
             };
         }
     }
@@ -274,7 +299,11 @@ impl<'a> Eval<'a> {
     /// This is the operation that replaces `apply_local`: it allocates one
     /// environment cell per binder and copies nothing.
     pub fn apply(&mut self, c: &Rc<TmClo>, args: &[Rc<TmClo>]) -> Res<Rc<Val>> {
-        self.drive(Work::Apply(Rc::clone(c), args.to_vec()))
+        let w = match args {
+            [a] => Work::Apply1(Rc::clone(c), Rc::clone(a)),
+            _ => Work::Apply(Rc::clone(c), args.to_vec()),
+        };
+        self.drive(w)
     }
 
     /// [`Eval::apply`] for type closures. A closure that is not syntactic has
@@ -365,8 +394,8 @@ impl<'a> Eval<'a> {
     // -- types --------------------------------------------------------------
 
     /// Evaluate a type to a weak head normal type value.
-    pub fn eval_ty(&mut self, t: &Rc<Type>, env: &Env) -> Res<Rc<VTy>> {
-        let v = match &**t {
+    pub fn eval_ty(&mut self, t: &Type, env: &Env) -> Res<Rc<VTy>> {
+        let v = match t {
             Type::Nat => VTy::Nat,
             Type::Ty(l) => VTy::Ty(l.clone()),
             Type::Unit { level } => VTy::Unit { level: level.clone() },
@@ -658,13 +687,22 @@ impl<'a> Eval<'a> {
 
     /// Evaluate a term to a weak head normal value.
     pub fn eval_tm(&mut self, t: &Rc<Term>, env: &Env) -> Res<Rc<Val>> {
-        self.drive(Work::Eval(Rc::clone(t), env.clone()))
+        self.eval_tm_ref(t, env)
+    }
+
+    /// [`Eval::eval_tm`] on a node the caller does not own — the **root** of a
+    /// conversion, which is syntax lent to the checker. Wrapping it in an
+    /// `Rc` just to start the machine cost 1.3× on `nat/check-numeral`, whose
+    /// every conversion is one `Nat ≈ Nat`.
+    pub fn eval_tm_ref(&mut self, t: &Term, env: &Env) -> Res<Rc<Val>> {
+        let w = self.step_eval(t, env)?;
+        self.drive(w)
     }
 
     /// One step of [`Eval::eval_tm`], with its **tail positions returned**
     /// rather than called: see [`Eval::drive`].
-    fn step_eval(&mut self, t: &Rc<Term>, env: &Env) -> Res<Work> {
-        let v = match &**t {
+    fn step_eval(&mut self, t: &Term, env: &Env) -> Res<Work> {
+        let v = match t {
             Term::Var(x) => match env.lookup(x.0) {
                 Lookup::Bound(c) => return Ok(Work::Force(c)),
                 Lookup::Base(d) => Val::base_var(d),
@@ -1092,7 +1130,7 @@ impl<'a> Eval<'a> {
             (Val::Lam { body, .. }, Elim::App { arg, .. }) => {
                 self.spend()?;
                 let (body, arg) = (Rc::clone(body), Rc::clone(arg));
-                Ok(Work::Apply(body, vec![arg]))
+                Ok(Work::Apply1(body, arg))
             }
             (Val::ULam { num_vars, body, .. }, Elim::UApp { levels })
                 if *num_vars as usize == levels.len() =>
@@ -1156,12 +1194,12 @@ impl<'a> Eval<'a> {
             (Val::Inl { val, .. }, Elim::Case { case_l, .. }) => {
                 self.spend()?;
                 let (val, case_l) = (Rc::clone(val), Rc::clone(case_l));
-                Ok(Work::Apply(case_l, vec![val]))
+                Ok(Work::Apply1(case_l, val))
             }
             (Val::Inr { val, .. }, Elim::Case { case_r, .. }) => {
                 self.spend()?;
                 let (val, case_r) = (Rc::clone(val), Rc::clone(case_r));
-                Ok(Work::Apply(case_r, vec![val]))
+                Ok(Work::Apply1(case_r, val))
             }
             (Val::Sup { label, children, .. }, Elim::ElimW { .. }) => {
                 self.spend()?;

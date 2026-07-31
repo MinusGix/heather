@@ -144,12 +144,32 @@ impl Env {
     /// The identity environment of a Γ with `n` concrete entries: entry `j`
     /// (counted from the *outer* end) is the neutral variable at level `j`.
     /// This is the environment at the root of a conversion.
+    ///
+    /// Every identity environment is a *prefix* of every longer one, so they
+    /// are built once per thread and shared: a conversion query starts by
+    /// asking for one, and rebuilding it per query made checking cost
+    /// O(|Γ|) allocations per query.
     pub fn identity(n: u32) -> Env {
-        let mut e = Env::empty();
-        for j in 0..n {
-            e = e.push(Rc::new(TmClo::val(Rc::new(Val::var(j)))));
+        IDENTITY.with(|cell| {
+            let mut cached = cell.borrow_mut();
+            while cached.len < n {
+                let j = cached.len;
+                *cached = cached.push(Rc::new(TmClo::val(Rc::new(Val::var(j)))));
+            }
+            cached.prefix(n)
+        })
+    }
+
+    /// The outermost `n` entries — the identity environment of a Γ-prefix.
+    pub fn prefix(&self, n: u32) -> Env {
+        let mut cur = self;
+        while cur.len > n {
+            match cur.node.as_ref() {
+                Some(node) => cur = &node.rest,
+                None => break,
+            }
         }
-        e
+        cur.clone()
     }
 
     /// The entries, **outermost first** — the order [`Env::extend`] wants.
@@ -164,6 +184,11 @@ impl Env {
         out.reverse();
         out
     }
+}
+
+thread_local! {
+    /// See [`Env::identity`].
+    static IDENTITY: RefCell<Env> = RefCell::new(Env::empty());
 }
 
 // ---------------------------------------------------------------------------

@@ -88,6 +88,17 @@ fn fresh(level: u32) -> Rc<TmClo> {
     Rc::new(TmClo::val(Rc::new(Val::var(level))))
 }
 
+/// The same variable, taken from the environment that already holds it
+/// rather than allocated again — `open_*` asks for it once per binder
+/// descent, which is conversion's hottest path.
+fn var_at(env: &Env, level: u32) -> Rc<TmClo> {
+    let n = env.gamma.entries.len() as u32;
+    match n.checked_sub(1 + level).map(|i| env.rho.lookup(i)) {
+        Some(value::Lookup::Bound(c)) => c,
+        _ => fresh(level),
+    }
+}
+
 impl TyC {
     /// A sub-structure that is a type **here**, in `env`.
     fn here(env: &Env, clo: Rc<TyClo>) -> TyC {
@@ -190,7 +201,7 @@ fn open_ty(env: &Env, c: &TyC, pending: u32) -> Rc<TyClo> {
     }
     let stop = sat.saturating_sub(pending).min(glen(env));
     if stop > c.home {
-        let args: Vec<Rc<TmClo>> = (c.home..stop).map(fresh).collect();
+        let args: Vec<Rc<TmClo>> = (c.home..stop).map(|l| var_at(env, l)).collect();
         clo = apply_ty_clo(&clo, &args);
     }
     clo
@@ -206,7 +217,7 @@ fn open_tm(env: &Env, c: &TmC, pending: u32) -> Rc<TmClo> {
     }
     let stop = sat.saturating_sub(pending).min(glen(env));
     if stop > c.home {
-        let args: Vec<Rc<TmClo>> = (c.home..stop).map(fresh).collect();
+        let args: Vec<Rc<TmClo>> = (c.home..stop).map(|l| var_at(env, l)).collect();
         clo = apply_tm_clo(&clo, &args);
     }
     clo
@@ -299,15 +310,11 @@ impl Dom for Values {
     }
 
     fn whnf_ty_root(cv: &mut Conv<Self>, env: &Env, t: &Type) -> R<Rc<VTy>> {
-        let t = Rc::new(t.clone());
-        let rho = env.rho.clone();
-        run(cv, env, |ev| ev.eval_ty(&t, &rho))
+        run(cv, env, |ev| ev.eval_ty(t, &env.rho))
     }
 
     fn whnf_tm_root(cv: &mut Conv<Self>, env: &Env, t: &Term) -> R<Rc<Val>> {
-        let t = Rc::new(t.clone());
-        let rho = env.rho.clone();
-        run(cv, env, |ev| ev.eval_tm(&t, &rho))
+        run(cv, env, |ev| ev.eval_tm_ref(t, &env.rho))
     }
 
     fn whnf_tm(cv: &mut Conv<Self>, env: &Env, t: &TmC) -> R<Rc<Val>> {
@@ -555,10 +562,22 @@ impl Dom for Values {
     /// A variable of the **abstract prefix** has no type here, exactly as it
     /// has none at the syntax domain, and both answer `NotConvertible`.
     fn var_type(_cv: &mut Conv<Self>, env: &Env, x: LocalVar) -> R<(TyC, Level)> {
-        let Some((clo, level)) = env.vtys.nth(x.0) else {
+        // Conversion's own binders carry their type as a domain object;
+        // everything older is still syntax in Γ, read in the identity
+        // environment of the prefix it is scoped in.
+        let n = glen(env);
+        let Some(i) = n.checked_sub(1 + x.0) else {
             return Err(NC);
         };
-        Ok((TyC::here(env, Rc::clone(clo)), level.clone()))
+        if i >= env.vbase {
+            let Some((clo, level)) = env.vtys.nth(x.0) else {
+                return Err(NC);
+            };
+            return Ok((TyC::here(env, Rc::clone(clo)), level.clone()));
+        }
+        let e = &env.gamma.entries[i as usize];
+        let clo = Rc::new(TyClo::new(value::Env::identity(i), Rc::clone(&e.ty)));
+        Ok((TyC::here(env, clo), e.level.clone()))
     }
 
     fn weaken_ty(t: &TyC, by: u32) -> TyC {
@@ -1037,7 +1056,7 @@ impl Dom for Values {
             cod_level: cod_level.clone(),
             dom: open_ty(outer, dom, 0),
             cod: open_ty(outer, cod, 1),
-            arg: fresh(glen(outer)),
+            arg: var_at(inner, glen(outer)),
         };
         let (a, b) = (Rc::clone(a), Rc::clone(b));
         let (x, y) = run(cv, inner, |ev| {
