@@ -336,9 +336,9 @@ option 2, one normal form, is the removal rather than the paper-over).
 ## 13. Implementation notes (v1 as landed — `lib/ir_v1.hthr`, 2026-07-31)
 
 The implementing round (§11 items 1, 2, 6) landed the same day the sketch
-did, and reality edited the sketch in five places. None of them changes a
-§2–§8 decision; each is recorded here with its reason so the next reader
-doesn't re-derive it.
+did, and reality edited the sketch in five places; note 6 is a later
+amendment from the same day. None of them changes a §2–§8 decision; each is
+recorded here with its reason so the next reader doesn't re-derive it.
 
 1. **Chains, not vectors.** §3 sketched `[Node; n]` container fields and
    `List(Ref)`; the landed datatype uses cons-chains throughout — `Refs`
@@ -383,6 +383,37 @@ doesn't re-derive it.
    outer slot through every gamma. References are de-Bruijn-style
    *distances* (0 = most recent), not §3's absolute indices — the natural
    reading against a cons environment.
+
+6. **The interpreter stays recursive, and that is now a decision rather
+   than a default** (amendment, 2026-07-31, second round of the day). The
+   §5 cost-model note asked whether fuel-indexed evaluation is linear under
+   conversion. It is not: `simulate` is *exponential*, ~×22 per add-loop
+   iteration, and `issues/whnf-sharing-term-growth.md` owns the mechanism.
+   The natural response — replace the recursive evaluator with a
+   defunctionalized step machine (configuration = environment ×
+   instruction × continuation frames, `step : Config -> Config`, `run`
+   iterating on fuel in tail position), so that nothing recurses in
+   scrutinee position — was **implemented and measured strictly worse**:
+   flat cases stayed flat, but every sub-region *return* became
+   exponential, so an 8-deep chain of `LetCall`s (0.76s / 10 MB recursive)
+   died at an 8 GB cap. The isolating experiment is in that issue: swapping
+   one configuration field for a semantic *identity* wrapper — same values,
+   same steps — turns flat into ~×2 per level. The cost axis is not the
+   shape of the recursion, it is whether a carried term is stored as an
+   unforced redex, and no in-language restructuring reaches that: the
+   language cannot force a value.
+
+   Consequences for this design. §5's recursive definition is both the
+   declarative reading *and* the implementation, and stays so. Fuel remains
+   a step count and stays private behind §6. The §11 item 5 bench fixture
+   is measuring the right object but the wrong axis, and owes a
+   depth-of-nesting family (`docs/testing-generated-terms.md` axis 5). The
+   real fix is a kernel that shares a forced result — NbE / a value domain,
+   the issue's lever 1, which is a design round and not a performance one;
+   **if it ever lands, nothing here has to change**, which is the argument
+   for leaving `simulate` in its pretty form and paying the discipline
+   instead: certificates keep non-tail nesting shallow, and tail chains are
+   free.
 
 **Deferred to the next round, with the route sketched:** §11 items 3–4
 (`converges`, `fuel_monotone`, `refines`, a ∀-args `equiv`). Two real

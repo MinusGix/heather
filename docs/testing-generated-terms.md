@@ -34,13 +34,32 @@ phase because phase 2's mixed-constructor test only computed
 (`docs/container-proofs.md` §10.2). It takes a **proof**, where the ih's stated
 type has to convert with the goal, to notice.
 
-And the standing fourth, which is about direction rather than instance:
+And the standing fourth and fifth. The fourth is about direction rather than
+instance:
 
 **4. Positive tests cannot distinguish a type from a quotient of it.** Building
 and projecting still work when a field has been silently dropped, because
 dropping a field makes a *smaller* type. Only a negative control — two values
 that must *not* be equal, a false theorem that must be rejected — sees it
 (`docs/container-fields.md` §9.1).
+
+The fifth is about *cost* rather than correctness, and it is the one a
+performance fixture has to vary:
+
+**5. Nesting depth of non-tail recursive calls.** A fixture that grows a
+*chain* — more fuel, more instructions, a bigger payload — measures the
+per-step constant and nothing else. The thing that explodes is depth:
+recursive calls in scrutinee position, `match f(x) { … f(y) … }`, where
+each level's work is re-done inside the level above it. `conv/simulate-depth`
+and `conv/simulate-payload` are linear and flat respectively, and they were
+*right* about what they measured; they were blind to a ~×22-per-loop-iteration
+exponential in the same interpreter, because neither varies nesting
+(`issues/whnf-sharing-term-growth.md`). The general form of the axis is
+broader than "recursive call": it is **anything the code carries forward
+stored as an unforced redex** — a configuration field, even an identity
+wrapper, does it too (same issue, the falsified step-machine section). So
+the control is a family parameterized by depth, `N = 1..8`, asserting a
+*ratio* between levels rather than an absolute time.
 
 ## The evidence
 
@@ -52,6 +71,7 @@ that must *not* be equal, a false theorem that must be rejected — sees it
 | `tabulate`'s index-function shift (`container-proofs.md` §10.1) | element type `Nat`, always closed | 2 |
 | plain child's ih length (`container-proofs.md` §10.2) | mixed constructors only ever computed | 3 |
 | `wf_branch`'s container-length projection context (`surface-polymorphism.md` §10.1) | closed *type parameters* — an inductive could not be instantiated at an open type until `fn f<A>` existed | 2 |
+| exponential conversion cost in the IR interpreter (`whnf-sharing-term-growth`) | two bench fixtures that varied fuel depth and payload, never nesting | 5 |
 
 Note the shape of that table: four of six are axis 2, and in every case the
 generalization that would have caught it costs one extra test with one extra

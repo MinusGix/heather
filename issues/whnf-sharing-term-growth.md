@@ -21,6 +21,14 @@ branch bundles nest — a depth-`d` nest is copied once per enclosing level.
 Nothing shares the copies, so the term does not merely get re-walked, it
 genuinely gets exponentially bigger.
 
+**Read the two sections together.** The paragraph above is the axis as first
+measured, and it is right about the recursive interpreter. A later round
+(§"The route that does not work") found the axis is *broader*: a
+scrutinee-position recursive call is one way to carry a term forward as an
+unforced redex, and an ordinary data field of a step machine — or a
+semantically invisible identity wrapper — is another, with the same ~×2 per
+level. The title's "non-tail eval nesting" is the instance, not the class.
+
 **This path is memory-dangerous.** See the OOM incident below; every direct
 `heather` run now goes under a `ulimit` wrapper.
 
@@ -164,6 +172,66 @@ representation in which a computed result is bound once and referred to.
    (the Γ half does not appear in this profile at all), and
    [[outer-namespace-bounds]] (2.5%).
 
+## The route that does not work: defunctionalize the interpreter (2026-07-31)
+
+The obvious in-language fix — rewrite `simulate` as a defunctionalized step
+machine (`Config` = environment × instruction × continuation-frame chain,
+`step : Config -> Config`, `run` iterating it on fuel in tail position) so
+that no `eval` ever appears in scrutinee position — was implemented and
+**measured strictly worse than the recursive interpreter it replaced**. It
+is written down here so nobody spends the day on it twice.
+
+The machine was faithful to every discipline this file and
+[[ir-simulate-design]] record: recursion on fuel alone, one syntactic ih
+occurrence, ih applied in tail position to the previous configuration,
+`run` stopping at halted configurations (unused fuel stayed free —
+verified: fuel 20 vs 400 identical). Frames: arm-return and call-return
+unified as one "rebind and continue" frame, plus a loop-iteration frame.
+
+| probe | recursive (master) | step machine |
+| --- | --- | --- |
+| declarations only | 0.55s / 8 MB | 4.9s / 10 MB |
+| `LetCon` chain, N=8 | 0.6s / 10 MB | 5.4s / 13 MB (flat) |
+| sequential `LetMatch` chain, N=4 | 0.73s / 10 MB | 5.9s / 81 MB |
+| sequential `LetMatch` chain, N=8 | 0.86s / 11 MB | **died at the 8 GB cap** |
+| `LetCall` chain, N=8 | 0.76s / 10 MB | **died at the 8 GB cap** |
+| `LetCall` chain, N=16 | 0.89s / 13 MB | **died at the 8 GB cap** |
+| `add(a,1)`, a=1 | 1.24s / 84 MB | 13.7s / 606 MB |
+| `add(a,1)`, a=2 | 14.8s / 1016 MB | **died at the 8 GB cap** |
+
+So the machine is exponential in the number of **sub-region returns** —
+frame pushes and pops — which the recursive interpreter does in *flat*
+time and memory. It bought nothing on the axis it targeted and lost a loop
+iteration overall.
+
+### What the isolation experiments say (machine, `LetCall` chain, N=4→8)
+
+| the frame-return does | N=4 | N=8 |
+| --- | --- | --- |
+| `CEval(append(vals, env), rest, next)` | 55 MB | died |
+| `CEval(env, rest, next)` (drop the rebinding) | 12 MB | 13 MB |
+| `CEval(id_val(env), rest, next)` — a semantic **identity** | 19 MB | 307 MB |
+| push one slot per machine step, carrying `vals` | died at N=3 | died |
+| the same, with a literal `VNil` in the pending field | 15 MB | 17 MB |
+
+The third row is the finding. `id_val` is `match v { VNil => VNil,
+VCons(h,t) => VCons(h,t), VCon(a,b) => VCon(a,b) }`: same values, same
+step count, same everything — one wrapper — and flat becomes ~×2 per
+level. Payload size stays irrelevant on the machine too (a 6-deep match
+chain: 7542 MB at payload 0 vs 7551 MB at payload 12).
+
+**The conclusion is stronger than the original diagnosis, and it revises
+it.** The axis is not "recursive eval in scrutinee position": it is
+whether a term the interpreter carries forward is *stored as a redex*. A
+recursive `eval` in scrutinee position is one way to store a redex; a
+configuration field is another; a semantically-invisible identity wrapper
+is a third. Each level's forcing re-forces the levels beneath it and
+nothing shares the result — which is §"The hypothesis that survived",
+restated without reference to branch bundles. **No restructuring of the
+interpreter can fix this, because the language has no way to force a
+value.** The lever list below is unchanged and lever 1 (evaluate to a
+value domain — NbE) is the only one that applies.
+
 ## The OOM incident (2026-07-31)
 
 An uncapped `heather check` on the a=3 probe reached **~22 GB RSS (~40% of
@@ -192,6 +260,11 @@ acceptance curiosity. Until then the discipline stands: **write certificates
 with shallow non-tail nesting**; tail chains are free and linear, and that
 is a fact about the interpreter's *shape*, not just its cost.
 
+The trigger deliberately does **not** say "when someone restructures the
+interpreter": that route is spent (see the section above), and the known
+consumer stays the recursive interpreter on master. What would change the
+picture is a kernel that shares a forced result — lever 1.
+
 Acceptance for a fix: the arm-nested `LetMatch` probe (N=1..8) linear in N,
 recorded as a kernel bench fixture alongside `conv/simulate-depth` and
 `conv/simulate-payload` — those two are linear/flat precisely because
@@ -202,3 +275,4 @@ should gain *nesting depth of non-tail recursive calls*.
 ## Log
 
 - 2026-07-31: Filed out of the deep-path investigation round. Reproduced 22.5s / 1.5 GB for the `add(2,3)`-through-`LetCall` theorem, established the growth law on four independent quantities with one exponent (~22 per loop iteration, ~2 per nested level), isolated the axis with four in-language probes, profiled it, killed four hypotheses including the brief's leading one, and sized the only lever that changes the exponent. Scratch instrumentation (counters in `reduce.rs`/`subst.rs`, a pointer-keyed memo experiment) lived in a throwaway worktree and is gone; nothing landed on master but this issue and the log entries it points at.
+- 2026-07-31: Primary consumer NOT restructured: the defunctionalized step-machine route was implemented against lib/ir_v1.hthr and measured strictly worse than the recursive interpreter -- flat cases stayed flat, but every sub-region return became exponential (8-deep LetCall chain: 0.76s / 10 MB recursive, dead at the 8 GB cap on the machine; add(a,1) died at a=2 rather than a=3). Recorded as its own section above with the probe table and five isolation experiments. The kernel defect is UNCHANGED and this issue stays open with its existing trigger; what changed is the diagnosis, which is now broader and stated without reference to branch bundles: the axis is a carried term stored as an UNFORCED REDEX, of which a scrutinee-position recursive call is only one instance -- a configuration field does it, and so does a semantically invisible identity wrapper (id_val(env): same values, same steps, flat becomes ~x2 per level). Since the language cannot force a value, no in-language restructuring reaches it, so the trigger now says explicitly that the interpreter-restructuring route is spent and only lever 1 (a kernel that shares a forced result) applies. docs/testing-generated-terms.md gains nesting depth as axis 5.
