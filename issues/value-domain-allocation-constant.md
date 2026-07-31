@@ -20,7 +20,16 @@ against the pre-stage baseline were:
 | `conv/perturbed-pairs` | 1.5× | the property-test corpus |
 | `check/generated-terms:50` | 1.27× | checker throughput |
 | `wf/mirror-involution` | **0.30–0.40×** | two eliminations over one tree — sharing |
-| routine `lib/ir_v1.hthr` | 1.22× (1.28 s → 1.57 s) | the user-visible one |
+| routine `lib/ir_v1.hthr` | **recovered** (1.28 s → 1.57 s → 1.26 s) | see below |
+
+The user-visible one came back on its own. Two fixes at the end of the stage
+— sharing Ψ instead of cloning it (and its bindings' local contexts) at every
+binder push, and indexing identity environments by length instead of walking
+back from the longest — put the routine check at **1.26 s**, under its
+pre-stage 1.28 s. They did nothing for the table's first six rows, and the
+reason is worth keeping: those fixtures run over an empty Ψ and an empty Γ,
+so there was no scope there to stop copying. What is left is the allocation
+below.
 
 **No slope moved and no declared band was left**, so this is a constant
 factor and not a change in the cost model. Two rounds of it were already
@@ -62,8 +71,7 @@ Worth trying, in rough order of expected yield:
    `TmClo` around a `Val` the caller already has; the neutral views do this
    once per spine node.
 
-**Trigger:** any round that needs the routine `lib/ir_v1.hthr` check back
-under ~1.35 s, or that finds a workload where the constant outweighs what the
+**Trigger:** any round that finds a workload where the constant outweighs what the
 exponent bought. Stage 4 of [[nbe-conversion-round]] re-measures `bounds.rs`
 and should re-read this at the same time — conversion no longer calls
 `apply_local` at all, so the two questions share a profile.
