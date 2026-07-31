@@ -280,9 +280,12 @@ impl<'a> Agree<'a> {
                 }
                 self.lev(la, lb, "ΠΠ level")?;
                 let phi = vec![Level::Zero; *a as usize];
+                let Some((benv, bbody)) = body.as_syn() else {
+                    return bad("ΠΠ body is not a syntactic closure");
+                };
                 let vb = self
                     .ev
-                    .eval_ty(&Rc::new(body.body.inst_univ(&phi)), &body.env.clone())
+                    .eval_ty(&Rc::new(bbody.inst_univ(&phi)), &benv.clone())
                     .map_err(|_| "evaluator out of fuel".to_string())?;
                 let vb = self
                     .ev
@@ -352,9 +355,13 @@ impl<'a> Agree<'a> {
         depth: u32,
     ) -> A {
         let sigma = GlobalSubst::single(payload);
+        let Some((benv, bbody)) = body.as_syn() else {
+            return bad("instantiated body is not a syntactic closure");
+        };
+        let (benv, bbody) = (benv.clone(), Rc::clone(bbody));
         let vb = self
             .ev
-            .eval_ty(&Rc::new(body.body.apply_global(&sigma)), &body.env.clone())
+            .eval_ty(&Rc::new(bbody.apply_global(&sigma)), &benv)
             .map_err(|_| "evaluator out of fuel".to_string())?;
         let vb = self.ev.delta_whnf_ty(vb).map_err(|_| "evaluator out of fuel".to_string())?;
         self.ty(&vb, &syn.apply_global(&sigma), gamma, depth)

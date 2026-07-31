@@ -48,6 +48,8 @@ use crate::fmt::node;
 use crate::level::Level;
 use crate::term::{Branches, CtxBase, GlobalVar, LocalCtx, Motives, SubstTail, Term, Type};
 
+pub mod shift;
+
 // ---------------------------------------------------------------------------
 // Environments
 // ---------------------------------------------------------------------------
@@ -149,6 +151,19 @@ impl Env {
         }
         e
     }
+
+    /// The entries, **outermost first** — the order [`Env::extend`] wants.
+    /// Used by the outer-namespace maps, which have to rebuild the list.
+    pub fn to_vec(&self) -> Vec<Rc<TmClo>> {
+        let mut out = Vec::with_capacity(self.len as usize);
+        let mut cur = self;
+        while let Some(n) = cur.node.as_ref() {
+            out.push(Rc::clone(&n.val));
+            cur = &n.rest;
+        }
+        out.reverse();
+        out
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -229,27 +244,73 @@ impl TmClo {
     }
 }
 
-/// A type sub-structure of a value: an environment plus unevaluated syntax.
-/// The type mirror of [`TmClo`], but with only the syntactic shape — every
-/// type inside a value comes from syntax, so there is no `Val` case and
-/// therefore no partial accessor.
-pub struct TyClo {
-    pub env: Env,
-    pub body: Rc<Type>,
-    memo: RefCell<Option<Rc<VTy>>>,
+/// A type sub-structure of a value: the type mirror of [`TmClo`].
+///
+/// [`TyClo::Syn`] is the ordinary case — an environment plus unevaluated
+/// syntax, with a memo. The other two exist because *conversion* builds
+/// types the evaluator never does (docs/nbe-conversion-design.md §13, stage
+/// 2b): the comparison rules synthesize `Π`, `Vec`, `El` … whose children are
+/// **domain objects** rather than syntax, and there is no environment in
+/// which a domain object could be written down.
+///
+/// - [`TyClo::Val`] is an already-computed type. As a *closure* it is
+///   constant: applying it to arguments ignores them, which is exactly what
+///   the rules that weaken a type into a binder position mean.
+/// - [`TyClo::Vec`] is `Vec^l(T; k)` held **unforced**, so that the Σ-tail of
+///   a vector at a canonical length stays lazy even when the element type is
+///   a value with no syntax. Forcing it is `Eval::vec_ty`.
+pub enum TyClo {
+    Syn {
+        env: Env,
+        body: Rc<Type>,
+        memo: RefCell<Option<Rc<VTy>>>,
+    },
+    Val(Rc<VTy>),
+    Vec {
+        level: Level,
+        elem: Rc<TyClo>,
+        len: Rc<TmClo>,
+        memo: RefCell<Option<Rc<VTy>>>,
+    },
 }
 
 impl TyClo {
     pub fn new(env: Env, body: Rc<Type>) -> TyClo {
-        TyClo { env, body, memo: RefCell::new(None) }
+        TyClo::Syn { env, body, memo: RefCell::new(None) }
+    }
+
+    pub fn val(v: Rc<VTy>) -> TyClo {
+        TyClo::Val(v)
+    }
+
+    pub fn vec(level: Level, elem: Rc<TyClo>, len: Rc<TmClo>) -> TyClo {
+        TyClo::Vec { level, elem, len, memo: RefCell::new(None) }
+    }
+
+    /// The environment and syntax, when this is a syntactic closure. See
+    /// [`TmClo::as_syn`]: a rule that needs the sub-structure's *syntax*
+    /// falls back to a stuck value rather than panicking.
+    pub fn as_syn(&self) -> Option<(&Env, &Rc<Type>)> {
+        match self {
+            TyClo::Syn { env, body, .. } => Some((env, body)),
+            _ => None,
+        }
     }
 
     pub fn memo(&self) -> Option<Rc<VTy>> {
-        self.memo.borrow().clone()
+        match self {
+            TyClo::Syn { memo, .. } | TyClo::Vec { memo, .. } => memo.borrow().clone(),
+            TyClo::Val(v) => Some(Rc::clone(v)),
+        }
     }
 
     pub(crate) fn set_memo(&self, v: &Rc<VTy>) {
-        *self.memo.borrow_mut() = Some(Rc::clone(v));
+        match self {
+            TyClo::Syn { memo, .. } | TyClo::Vec { memo, .. } => {
+                *memo.borrow_mut() = Some(Rc::clone(v));
+            }
+            TyClo::Val(_) => {}
+        }
     }
 }
 
@@ -803,7 +864,11 @@ impl fmt::Debug for TmClo {
 
 impl fmt::Debug for TyClo {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        node(f, |f| write!(f, "⟨{:?}⊢{:?}⟩", self.env, self.body))
+        node(f, |f| match self {
+            TyClo::Syn { env, body, .. } => write!(f, "⟨{env:?}⊢{body:?}⟩"),
+            TyClo::Val(v) => write!(f, "{v:?}"),
+            TyClo::Vec { elem, len, .. } => write!(f, "⟨Vec({elem:?}; {len:?})⟩"),
+        })
     }
 }
 

@@ -172,8 +172,18 @@ impl<'a> Eval<'a> {
         if let Some(v) = c.memo() {
             return Ok(v);
         }
-        let (env, body) = (c.env.clone(), Rc::clone(&c.body));
-        let v = self.eval_ty(&body, &env)?;
+        let v = match &**c {
+            TyClo::Val(v) => Rc::clone(v),
+            TyClo::Syn { env, body, .. } => {
+                let (env, body) = (env.clone(), Rc::clone(body));
+                self.eval_ty(&body, &env)?
+            }
+            TyClo::Vec { level, elem, len, .. } => {
+                let (level, elem, len) = (level.clone(), Rc::clone(elem), Rc::clone(len));
+                let lv = self.force(&len)?;
+                self.vec_ty(&level, elem, &lv)?
+            }
+        };
         c.set_memo(&v);
         Ok(v)
     }
@@ -193,13 +203,20 @@ impl<'a> Eval<'a> {
         }
     }
 
-    /// [`Eval::apply`] for type closures.
+    /// [`Eval::apply`] for type closures. A closure that is not syntactic has
+    /// no pending binders and ignores them (`TyClo::Val` is a *constant*
+    /// closure — the shape conversion's weakened annotations take).
     pub fn apply_ty(&mut self, c: &Rc<TyClo>, args: &[Rc<TmClo>]) -> Res<Rc<VTy>> {
         if args.is_empty() {
             return self.force_ty(c);
         }
-        let (env, body) = (c.env.extend(args), Rc::clone(&c.body));
-        self.eval_ty(&body, &env)
+        match &**c {
+            TyClo::Syn { env, body, .. } => {
+                let (env, body) = (env.extend(args), Rc::clone(body));
+                self.eval_ty(&body, &env)
+            }
+            _ => self.force_ty(c),
+        }
     }
 
     // -- δ ------------------------------------------------------------------
@@ -481,12 +498,18 @@ impl<'a> Eval<'a> {
     /// `Vec^l(T; k)`: `0 ⇝ Unit^l`, `S k ⇝ Σ(_ : T). Vec^l(T; k)`, stuck
     /// otherwise.
     ///
-    /// The tail closure reaches the predecessor by **reifying it into the
-    /// environment** under a slot the body names with a `Var`: the
-    /// predecessor is a value with no syntax of its own, and the alternative
-    /// — evaluating the tail eagerly — would unroll the whole tuple type at
-    /// a literal length.
-    fn vec_ty(&mut self, level: &Level, elem: Rc<TyClo>, len: &Rc<Val>) -> Res<Rc<VTy>> {
+    /// The Σ-tail is the **unforced** `Vec` of [`TyClo::Vec`], not syntax: the
+    /// predecessor is a value with no syntax of its own, the element type need
+    /// not have any either (conversion synthesizes `Vec`s over element types
+    /// that are values), and evaluating the tail eagerly would unroll the
+    /// whole tuple type at a literal length. Neither the tail nor the element
+    /// mentions the Σ's own binder, and a non-syntactic closure ignores it.
+    pub(crate) fn vec_ty(
+        &mut self,
+        level: &Level,
+        elem: Rc<TyClo>,
+        len: &Rc<Val>,
+    ) -> Res<Rc<VTy>> {
         let out = match &**len {
             Val::Zero => {
                 self.spend()?;
@@ -494,19 +517,12 @@ impl<'a> Eval<'a> {
             }
             Val::Succ(pred) => {
                 self.spend()?;
-                // In `(Γ, k, _)`: the pushed predecessor is `Var 1`, the Σ's
-                // own (unused) binder is `Var 0`, so `T` weakens by 2.
-                let tail_env = elem.env.push(Rc::clone(pred));
-                let tail = Rc::new(Type::Vec {
-                    level: level.clone(),
-                    elem: Rc::new(elem.body.shift_local(2)),
-                    len: Rc::new(Term::Var(LocalVar(1))),
-                });
+                let tail = TyClo::vec(level.clone(), Rc::clone(&elem), Rc::clone(pred));
                 VTy::Sigma {
                     fst_level: level.clone(),
                     snd_level: level.clone(),
                     fst: Rc::clone(&elem),
-                    snd: Rc::new(TyClo::new(tail_env, tail)),
+                    snd: Rc::new(tail),
                 }
             }
             _ => VTy::Vec {
@@ -1164,21 +1180,26 @@ impl<'a> Eval<'a> {
             return Ok(None);
         };
         let Some((_, step_body)) = step.as_syn() else { return Ok(None) };
+        let (Some((_, shape_body)), Some((_, pos_body)), Some((_, motive_body))) =
+            (shape.as_syn(), pos.as_syn(), motive.as_syn())
+        else {
+            return Ok(None);
+        };
         let rho_af = env.push(Rc::clone(label)).push(Rc::clone(children));
         let lmax = Level::max(shape_level.clone(), pos_level.clone());
         let w_syn = Type::W {
             shape_level: shape_level.clone(),
             pos_level: pos_level.clone(),
-            shape: Rc::clone(&shape.body),
-            pos: Rc::clone(&pos.body),
+            shape: Rc::clone(shape_body),
+            pos: Rc::clone(pos_body),
         };
         let template = Term::ElimW {
             shape_level: shape_level.clone(),
             pos_level: pos_level.clone(),
             motive_level: motive_level.clone(),
-            shape: Rc::clone(&shape.body),
-            pos: Rc::clone(&pos.body),
-            motive: Rc::clone(&motive.body),
+            shape: Rc::clone(shape_body),
+            pos: Rc::clone(pos_body),
+            motive: Rc::clone(motive_body),
             step: Rc::clone(step_body),
             scrut: Rc::new(Term::Zero),
         }
@@ -1192,7 +1213,7 @@ impl<'a> Eval<'a> {
             fun: Rc::new(Term::Var(LocalVar(1))),
             dom_level: pos_level.clone(),
             cod_level: lmax.clone(),
-            dom: Rc::new(pos.body.shift_local(2)),
+            dom: Rc::new(pos_body.shift_local(2)),
             cod: Rc::new(w_syn.shift_local(4)),
             arg: Rc::new(Term::Var(LocalVar(0))),
         };
@@ -1210,7 +1231,7 @@ impl<'a> Eval<'a> {
             dom_level: pos_level.clone(),
             cod_level: motive_level.clone(),
             // `T[a/x]` in `(Γ, a, f)`: `a` is slot 1.
-            dom: Rc::new(TyClo::new(rho_af.clone(), Rc::new(pos.body.shift_local(1)))),
+            dom: Rc::new(TyClo::new(rho_af.clone(), Rc::new(pos_body.shift_local(1)))),
             body: Rc::new(TmClo::syn(rho_af, Rc::new(rec))),
         });
         let step = Rc::clone(step);
@@ -1232,18 +1253,22 @@ impl<'a> Eval<'a> {
         };
         let Some((_, step_body)) = step.as_syn() else { return Ok(None) };
         let Some((_, arity_body)) = arity.as_syn() else { return Ok(None) };
+        let (Some((_, shape_body)), Some((_, motive_body))) = (shape.as_syn(), motive.as_syn())
+        else {
+            return Ok(None);
+        };
         let rho_acs = env.push(Rc::clone(label)).push(Rc::clone(children));
         let wf_syn = Type::Wf {
             level: level.clone(),
-            shape: Rc::clone(&shape.body),
+            shape: Rc::clone(shape_body),
             arity: Rc::clone(arity_body),
         };
         let template = Term::ElimWf {
             level: level.clone(),
             motive_level: motive_level.clone(),
-            shape: Rc::clone(&shape.body),
+            shape: Rc::clone(shape_body),
             arity: Rc::clone(arity_body),
-            motive: Rc::clone(&motive.body),
+            motive: Rc::clone(motive_body),
             step: Rc::clone(step_body),
             scrut: Rc::new(Term::Zero),
         }
