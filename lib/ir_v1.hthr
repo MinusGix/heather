@@ -289,19 +289,9 @@ fn add_body() -> Ir {
 fn add_prog() -> Prog { PFun(add_body(), PNil) }
 
 // a one-function Prog whose function returns its argument; LetCall is
-// exercised against it. Calling into the add loop and back used to exceed
-// 300s of conversion; since definitions landed
-// (issues/simulate-conversion-cost.md) it is ~24s — no longer prohibitive,
-// but still an order of magnitude more than this whole file, so the call
-// machinery and the loop machinery stay certified on separate paths.
-//
-// That combined path is also MEMORY-DANGEROUS, and the reason is now
-// diagnosed: issues/whnf-sharing-term-growth.md. Cost is exponential in the
-// nesting depth of scrutinee-position `ev(…)` calls — roughly ×22 per
-// add-loop iteration, in time AND in resident memory alike. add(2,3)
-// through LetCall (two iterations) peaks at ~1.5 GB; add(3,·) reaches
-// ~22 GB and will take the machine down. Run any deeper probe under a
-// ulimit cap, and prefer TAIL chains: those are linear and free.
+// exercised against it at the cheapest possible depth. The *combined* path
+// — calling into the add loop and back — is certified below, and it no
+// longer needs a separate file: see the theorems' comment.
 fn id_prog() -> Prog { PFun(Ret(RCons(0, RNil)), PNil) }
 
 // the spec function the IR is measured against
@@ -309,17 +299,29 @@ fn add(a: Nat, b: Nat) -> Nat { match b { Zero => a, Succ(k) => Succ(add(a, k)) 
 
 // ---------------------------------------------------------------------------
 // Acceptance (doc §11 items 2 and 6): simulate discharges by conversion at
-// literal fuel, against the embedded spec result. Cost is still superlinear
-// in executed depth, but the constant has moved twice
-// (issues/simulate-conversion-cost.md): the whole file was 107s, then 13.6s
-// once substitution stopped visiting closed subtrees, and is ~2s now that a
-// `fn` is a Ψ-definition instead of a copy at every use site. The loop and
-// the call are still certified on separate short paths rather than one deep
-// one — a combined `add(2,3)` through LetCall is ~24s, which the routine
-// gate should not pay. Unused fuel is free; executed steps are not — and
-// *nested* steps least of all: issues/whnf-sharing-term-growth.md measures
-// the exponent and shows the axis is nesting depth of scrutinee-position
-// recursive calls, not fuel and not the size of the values carried.
+// literal fuel, against the embedded spec result.
+//
+// COST, and why the deep theorems are here now. This file's cost model was
+// rewritten three times. It was 107s; 13.6s once substitution stopped
+// visiting closed subtrees; ~2s once a `fn` became a Ψ-definition instead
+// of a copy at every use site (issues/simulate-conversion-cost.md). All
+// three left the real defect standing: cost was EXPONENTIAL in the nesting
+// depth of scrutinee-position `ev(…)` calls, ~×22 per add-loop iteration in
+// time and in resident memory alike, because reduction copied a branch
+// bundle per level and nothing shared the copies
+// (issues/whnf-sharing-term-growth.md). A combined `add(2,3)` through
+// LetCall cost 20.9s and peaked at ~1.5 GB, and `add(3,·)` reached ~22 GB
+// and would take the machine down — so the loop and the call were certified
+// on separate short paths, and this comment used to say so.
+//
+// It no longer holds. Conversion now evaluates into a value domain where an
+// eliminator's β extends an environment instead of copying a branch
+// (issues/nbe-conversion-round.md), and the exponent is gone: measured
+// 2026-07-31, release, under the rail, the whole file including the two
+// combined theorems below checks in **1.25s at 14.4 MB peak** — 1.13s of
+// which is the declarations. `add(2,3)` through LetCall went 20.9s → ~0.05s
+// and `add(3,4)`, the shape that used to reach 22 GB, adds ~0.11s.
+// What remains true: unused fuel is free and executed steps are not.
 
 // 1 + 1 = 2 through the loop: LetLoop/LoopIter, LetMatch with BOTH arms
 // taken (Succ on iteration one, Zero on iteration two), LetCon,
@@ -334,6 +336,23 @@ theorem add_one_one():
 theorem call_identity():
     eval(9, id_prog())(VCons(VCon(4, VNil), VNil), LetCall(0, RCons(0, RNil), Ret(RCons(0, RNil))))
     = Out(VCons(VCon(4, VNil), VNil))
+{ refl }
+
+// the loop and the call on ONE path: LetCall into the add function, two
+// loop iterations inside it, results rebound and returned through the
+// caller's env. This is the theorem the cost comment above says was 20.9s
+// and ~1.5 GB before the value domain.
+theorem call_add_two_three():
+    eval(50, add_prog())(VCons(embed_nat(2), VCons(embed_nat(3), VNil)),
+        LetCall(0, RCons(0, RCons(1, RNil)), Ret(RCons(0, RNil))))
+    = Out(VCons(embed_nat(5), VNil))
+{ refl }
+
+// the same at three iterations — the shape that used to reach ~22 GB
+theorem call_add_three_four():
+    eval(80, add_prog())(VCons(embed_nat(3), VCons(embed_nat(4), VNil)),
+        LetCall(0, RCons(0, RCons(1, RNil)), Ret(RCons(0, RNil))))
+    = Out(VCons(embed_nat(7), VNil))
 { refl }
 
 // the endpoints agree with the spec function on the same literals

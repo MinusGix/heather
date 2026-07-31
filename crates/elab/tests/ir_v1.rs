@@ -1,12 +1,15 @@
 //! `lib/ir_v1.hthr` — FunctionIR v1 and `simulate` — under `scripts/test`.
 //!
 //! The library file is the deliverable of docs/ir-simulate-design.md §11
-//! items 1, 2 and 6. Both tests here run under `scripts/test` as of
-//! 2026-07-31, when definitions landed
-//! (issues/simulate-conversion-cost.md): the release check went 107s → 13.6s
-//! (closed subtrees) → ~2.4s (definitions), and the debug profile the
-//! `cargo test` build uses now fits the 300 CPU-second budget with room. The
-//! split is kept because the two tests answer different questions:
+//! items 1, 2 and 6. Both tests here run under `scripts/test`: the release
+//! check went 107s → 13.6s (closed subtrees) → ~2.4s (definitions,
+//! issues/simulate-conversion-cost.md) → **1.25s** (the value domain,
+//! issues/nbe-conversion-round.md), and this file's whole debug run is
+//! **9.2s** against the 300 CPU-second budget. That headroom is why the
+//! library now carries the two combined LetCall-into-the-loop theorems
+//! whose exponential cost used to keep them out entirely; they are ~10% of
+//! the release check. The split is kept because the two tests answer
+//! different questions:
 //!
 //! - the first elaborates every DECLARATION (datatypes, helpers, the
 //!   interpreter, the add program) and runs the one negative control the
@@ -45,8 +48,9 @@ fn declarations_check_and_a_wrong_claim_is_refuted() {
     }
 }
 
-/// The full library, acceptance theorems included. About a minute under the
-/// debug profile (was ~18); the release `heather check` is seconds.
+/// The full library, acceptance theorems included — the deep combined
+/// theorems among them. ~8s under the debug profile (was ~18, then ~60 when
+/// the file grew); the release `heather check` is 1.25s.
 #[test]
 fn the_full_ir_library_checks() {
     let mut e = Elaborator::with_prelude().expect("prelude");
