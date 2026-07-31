@@ -106,10 +106,13 @@ fn step_into_closed() -> Family {
         name: "nat/step-into-closed-body",
         what: "one β-step vs. the size of a closed subterm of the body it instantiates",
         unit: "closed nodes",
-        // Should be flat — the substitution cannot change a closed subterm.
-        // Measured 1.0: it rebuilds it anyway
-        // ([[subst-rebuilds-unchanged-subterms]]). Band records what is.
-        expect_slope: Some((0.80, 1.25)),
+        // Flat — the substitution cannot change a closed subterm, and since
+        // the bounds round ([[subst-visits-closed-subtrees]]) it does not
+        // even visit it: the closed body is skipped in O(1) from cached
+        // free-variable bounds. Measured ~0.01 (was 1.0 while the traversal
+        // rebuilt it, then walked-and-shared it). Band records what is; a
+        // slope climbing back toward 1 means the skip stopped firing.
+        expect_slope: Some((-0.20, 0.35)),
         cases,
     }
 }

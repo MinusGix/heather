@@ -121,13 +121,15 @@ fn whnf_identity_recursor() -> Family {
         // A loose band on purpose, and the loosest in the suite. Cost here is
         // a per-recursor fixed part plus a per-node part, and at 3–33 code
         // nodes the fixed part dilutes the fit: the slope was 0.86 while
-        // branch instantiation copied its payloads and is 0.43 now that it
-        // does not ([[subst-copies-payloads-at-depth-zero]]) — the marginal
-        // cost fell, so the constant dominates more. Neither number is an
+        // branch instantiation copied its payloads, 0.43 once it did not
+        // ([[subst-copies-payloads-at-depth-zero]]), and ~0.02 now that the
+        // closed branch bodies are skipped outright
+        // ([[subst-visits-closed-subtrees]]) — the marginal cost keeps
+        // falling, so the constant dominates more. Neither number is an
         // exponent worth defending; what this family gates is the absolute
         // per-node cost against the baseline. The band is here only to catch
         // a return to superlinear.
-        expect_slope: Some((0.25, 1.20)),
+        expect_slope: Some((-0.20, 1.20)),
         cases,
     }
 }

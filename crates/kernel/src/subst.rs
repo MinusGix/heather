@@ -82,14 +82,31 @@
 //!    release. Over-reporting is merely slow, so hooks may be conservative;
 //!    under-reporting is caught.
 //!
-//! The traversal still *visits* every node and builds a temporary that it
-//! discards when sharing. Skipping closed subtrees without visiting them needs
-//! per-node free-variable metadata, whose invariant would join the trusted
-//! base — deliberately deferred, see
-//! issues/subst-visits-closed-subtrees.md.
+//! ## Skipping closed subtrees
+//!
+//! Sharing alone still *visited* every node, building a temporary from
+//! `Rc`-cloned children only to compare the counter and drop it — ~70% of
+//! what a substitution did was walking material that could not change
+//! (issues/subst-visits-closed-subtrees.md). The **local** operations now
+//! skip that walk: before descending, [`sub_ty`]/[`sub_tm`] ask the mapper
+//! ([`Mapper::skip_ty`]/[`skip_tm`]) whether the subtree is provably
+//! untouchable, and `ShiftLocal`/`SubstLocal` answer from per-node
+//! free-variable bounds (`bounds.rs`: 1 + the largest free local index,
+//! plus a "contains a substitution tail" flag — tails are rewritten even
+//! when no variable moves). The bounds are a memoized pure function of the
+//! immutable subtree, not a field maintained at construction sites, so no
+//! invariant spreads to the rest of the kernel or to `elab`.
+//!
+//! The safety discipline is rule 2's, extended: a skip claims the whole
+//! traversal is a no-op on that subtree, and **debug builds verify the
+//! claim** by running the real traversal and asserting nothing changed. A
+//! binder count in `bounds.rs` that drifts from this file's dep table fails
+//! the test suite (300-seed substitution laws included) instead of silently
+//! producing a wrong term in release.
 
 use std::rc::Rc;
 
+use crate::bounds;
 use crate::level::Level;
 use crate::term::{
     Branches, CtxBase, CtxEntry, GlobalVar, LocalCtx, LocalSubst, LocalVar, Motives, SubstTail,
@@ -214,6 +231,19 @@ trait Mapper {
     fn tail(&mut self, tail: SubstTail, _at: Depths) -> (SubstTail, Vec<Rc<Term>>) {
         (tail, Vec::new())
     }
+
+    /// Whether this subtree provably cannot be changed by this mapper at
+    /// these depths, decided in O(1) from cached per-node metadata
+    /// (see §Skipping closed subtrees). `false` — the default — means
+    /// "walk it and find out", never "changed". Only the local-namespace
+    /// operations opt in; every skip taken is re-verified against the real
+    /// traversal in debug builds ([`sub_ty`]/[`sub_tm`]).
+    fn skip_ty(&mut self, _t: &Rc<Type>, _at: Depths) -> bool {
+        false
+    }
+    fn skip_tm(&mut self, _t: &Rc<Term>, _at: Depths) -> bool {
+        false
+    }
 }
 
 /// Reuse `orig` for a subtree the traversal did not change.
@@ -251,6 +281,24 @@ fn shared_tm<M: Mapper>(orig: &Rc<Term>, mapped: Term) -> Rc<Term> {
 }
 
 fn sub_ty<M: Mapper>(t: &Rc<Type>, m: &mut M, at: Depths) -> Rc<Type> {
+    if m.skip_ty(t, at) {
+        // A skip claims the whole traversal is a no-op here. Verify the
+        // claim in the profile the tests run in, exactly as shared_ty
+        // verifies the change counter; the whole cost of the walk being
+        // skipped is paid again, in debug only.
+        #[cfg(debug_assertions)]
+        {
+            let before = *m.changes();
+            let mapped = map_type(t, m, at);
+            assert!(
+                *m.changes() == before && mapped == **t,
+                "{} skipped a subtree it would have changed — bounds.rs disagrees with the \
+                 traversal (term output suppressed: see CLAUDE.md)",
+                M::NAME
+            );
+        }
+        return Rc::clone(t);
+    }
     let before = *m.changes();
     let mapped = map_type(t, m, at);
     if *m.changes() == before {
@@ -261,6 +309,20 @@ fn sub_ty<M: Mapper>(t: &Rc<Type>, m: &mut M, at: Depths) -> Rc<Type> {
 }
 
 fn sub_tm<M: Mapper>(t: &Rc<Term>, m: &mut M, at: Depths) -> Rc<Term> {
+    if m.skip_tm(t, at) {
+        #[cfg(debug_assertions)]
+        {
+            let before = *m.changes();
+            let mapped = map_term(t, m, at);
+            assert!(
+                *m.changes() == before && mapped == **t,
+                "{} skipped a subtree it would have changed — bounds.rs disagrees with the \
+                 traversal (term output suppressed: see CLAUDE.md)",
+                M::NAME
+            );
+        }
+        return Rc::clone(t);
+    }
     let before = *m.changes();
     let mapped = map_term(t, m, at);
     if *m.changes() == before {
@@ -859,6 +921,13 @@ impl Mapper for ShiftLocal {
         }
         (t, Vec::new())
     }
+
+    fn skip_ty(&mut self, t: &Rc<Type>, at: Depths) -> bool {
+        bounds::skip_type(t, at.local)
+    }
+    fn skip_tm(&mut self, t: &Rc<Term>, at: Depths) -> bool {
+        bounds::skip_term(t, at.local)
+    }
 }
 
 /// Weaken the global context by `by` bindings.
@@ -1066,6 +1135,13 @@ impl Mapper for SubstLocal<'_> {
             self.note();
         }
         (t, Vec::new())
+    }
+
+    fn skip_ty(&mut self, t: &Rc<Type>, at: Depths) -> bool {
+        bounds::skip_type(t, at.local)
+    }
+    fn skip_tm(&mut self, t: &Rc<Term>, at: Depths) -> bool {
+        bounds::skip_term(t, at.local)
     }
 }
 

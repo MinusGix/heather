@@ -285,7 +285,20 @@ paper too).
 - **Separate `Type` and `Term` enums**, mutually recursive, mirroring the
   Tarski split. Judgment functions will be similarly mutual.
 - `Rc` for sub-terms (substitution clones aggressively; sharing keeps that
-  cheap; no interior mutability anywhere).
+  cheap; no interior mutability anywhere *in the terms* — which is exactly
+  what makes the bounds memo below sound).
+- **Per-node free-local-variable bounds** (2026-07-31,
+  issues/subst-visits-closed-subtrees.md route B): the local-namespace
+  traversals skip subtrees that provably cannot change (loose de Bruijn
+  bound ≤ depth, no substitution tail in scope) in O(1) instead of walking
+  them. Deliberately *not* a field on the node — that would make the flag an
+  invariant of every construction site in kernel and elab. Instead
+  `src/bounds.rs` computes it as a memoized pure function of the immutable
+  subtree, keyed by `Rc` address with a keep-alive clone (sound because
+  terms are immutable and the entry pins the allocation). The one drift
+  hazard — its binder counts vs. `subst.rs`'s dep table — is covered by a
+  debug assertion at every skip site that re-runs the real traversal, under
+  the 300-seed law suite.
 - Local contexts are `(base, entries)` where base is `·` or a context
   variable `g`; entries carry `(T, l)`.
 - Local substitutions mirror the paper's three-form syntax including the

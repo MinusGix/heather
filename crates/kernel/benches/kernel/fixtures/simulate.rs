@@ -16,13 +16,16 @@
 //! `fst` then discards it, and the surviving `Succ` chain is the answer the
 //! conversion compares. Two families, one per axis:
 //!
-//! - `conv/simulate-payload`: fuel fixed, payload size is the unit. Today
-//!   this slope is ~1 — every step pays the whole body — and it is the
-//!   number the definitions round ([[simulate-conversion-cost]]) exists to
-//!   send toward 0: a step body that *references* its interpreter instead
-//!   of containing it makes the per-step walk independent of interpreter
-//!   size. When kernel definitions land, add the third family (payload
-//!   behind a Ψ-definition) and the win is the gap between them.
+//! - `conv/simulate-payload`: fuel fixed, payload size is the unit. This
+//!   slope was 0.91 while substitution walked the closed payload per step,
+//!   and is ~0 since the bounds round ([[subst-visits-closed-subtrees]])
+//!   made the walk an O(1) skip — this family was that round's acceptance
+//!   instrument. What the metadata cannot buy is what the definitions round
+//!   ([[simulate-conversion-cost]]) still owns: the *size* of the term
+//!   (statements, ih copies) and `.code` stability, via a step body that
+//!   *references* its interpreter instead of containing it. When kernel
+//!   definitions land, add the third family (payload behind a Ψ-definition)
+//!   and the win is the gap between them.
 //! - `conv/simulate-depth`: payload fixed, fuel is the unit. Expected ~1
 //!   (per-step work is constant here by construction); ir_v1's measured
 //!   superlinearity in depth came from state that *grows* along the run
@@ -95,9 +98,11 @@ fn payload() -> Family {
     let cases = [32u64, 64, 128, 256, 512, 1024].iter().map(|&s| case(STEPS, s, s)).collect();
     Family {
         name: "conv/simulate-payload",
-        what: "evalish at fixed fuel — cost of the step branch's dead weight, walked per step",
+        what: "evalish at fixed fuel — cost of the step branch's dead weight, skipped per step",
         unit: "payload nodes",
-        expect_slope: Some((0.7, 1.3)),
+        // Flat since [[subst-visits-closed-subtrees]]; a slope climbing back
+        // toward 1 means per-step cost depends on the body's size again.
+        expect_slope: Some((-0.20, 0.35)),
         cases,
     }
 }
