@@ -31,6 +31,21 @@
 //!   superlinearity in depth came from state that *grows* along the run
 //!   (environments, result chains), which this shape deliberately excludes
 //!   so the two effects don't confound.
+//!
+//! **Amendment, 2026-07-31** ([[nbe-conversion-round]]). `ir_v1`'s
+//! superlinearity is gone: conversion evaluates into a value domain, so an
+//! eliminator's β extends an environment instead of copying its branch, and
+//! the growing state that this shape excludes no longer costs anything to
+//! carry. Both families kept their slopes across that change (payload flat,
+//! depth ~1) and both got ~2.3–2.5× slower in constant — a lazy
+//! sub-structure is an allocation where the rewriter had an `Rc::clone`,
+//! and this is a workload with no sharing to buy it back
+//! ([[value-domain-allocation-constant]]). §11 item 5's later re-aim, a
+//! depth-of-*nesting* family, is retired rather than owed: four hand-built
+//! kernel families failed to reproduce that axis at all
+//! (`docs/nbe-conversion-design.md` §12), its instrument is
+//! `scripts/probe-whnf-sharing` at the CLI, and its subject no longer
+//! exists.
 
 use heather_kernel::conv::conv_term;
 use heather_kernel::layer::Layer;

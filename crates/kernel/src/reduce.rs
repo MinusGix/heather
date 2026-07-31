@@ -21,6 +21,13 @@
 //!   does not carry it.
 //! - Recursors block (are neutral) on neutral scrutinees and on
 //!   `box (U^δ)` / `box (u^δ)`.
+//! - **Who calls this** (since 2026-07-31): `typing.rs`, whose whnf this
+//!   still is; the shared β helpers, which the value machine reuses rather
+//!   than transcribe; and `conv::oracle`, the differential oracle.
+//!   Conversion itself evaluates (`eval.rs`) — and so this file's standing
+//!   became *the specification*: it is ch. 06's relation transcribed rule
+//!   for rule, and the machine is measured against it, which is why it is
+//!   not going anywhere. See DESIGN.md, *Algorithms*.
 //! - **δ (extension)**: the `_delta` entry points take a [`Defs`] and add
 //!   the one rule `u^δ ⇝ t[δ]` for a *defined* global. The Ψ-free names
 //!   ([`step_term`], [`whnf_term`], …) are ch. 06's relation exactly and

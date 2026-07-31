@@ -144,11 +144,20 @@ fn find_fun(prog: Prog) -> Nat -> Ir {
 // The recursion is factored so `eval(k, prog)` — the induction hypothesis,
 // a large inlined eliminator term — occurs exactly ONCE per level, passed
 // to a single dispatch function as the value `ev`; everything downstream
-// copies a bound variable, not the term. This is a measured constraint,
-// not taste: each syntactic occurrence of the self-call in the recursive
-// body costs ~50ms per fuel step at conversion time (chain-of-5-LetCons
-// probe, release build, 2026-07-31: 0.24s with one occurrence, 13.7s with
-// ~10), which is the doc §5 cost-model warning made concrete.
+// copies a bound variable, not the term.
+//
+// This was a measured CLIFF and is now a measured constant. Measured then
+// (chain-of-5-LetCons probe, release, 2026-07-31, term-rewriting
+// conversion): each syntactic occurrence of the self-call cost ~50ms per
+// fuel step — 0.24s with one occurrence, 13.7s with ~10, the doc §5
+// cost-model warning made concrete. Measured now (same day, value-domain
+// conversion, this whole file): inlining `step`'s dispatch into `eval` so
+// the self-call occurs six times instead of once costs 1.28s → 1.58s,
+// **1.24×**. Duplicating the ih no longer duplicates work, because a
+// duplicated occurrence evaluates to a shared value instead of a copied
+// term. The factoring stays — it is still free and still the clearer
+// reading — but it is no longer load-bearing, and a library that wants a
+// different shape is no longer paying orders of magnitude for it.
 
 fn step_ret(env: Val, rs: Refs) -> Res {
     match gather(rs, env) { NoneV => Stuck, SomeV(vs) => Out(vs) }

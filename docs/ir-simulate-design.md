@@ -310,6 +310,13 @@ option 2, one normal form, is the removal rather than the paper-over).
    realistic program size and fuel, into
    `crates/kernel/benches/kernel/fixtures/` (~30-line family, per the
    kernel-benchmarks round), with the linearity-in-fuel claim measured.
+   *Done as `conv/simulate-payload` and `conv/simulate-depth`; re-aimed at
+   a depth-of-nesting family when the exponent was diagnosed;* **retired
+   2026-07-31** — see note 6's second amendment. The nesting axis was never
+   reproducible as a kernel bench (four hand-built families tried,
+   `docs/nbe-conversion-design.md` §12), its instrument is
+   `scripts/probe-whnf-sharing` at the CLI, and its subject no longer
+   exists.
 6. Negative controls: a junk reference simulates to `Stuck`; an
    insufficient literal fuel yields `OutOfFuel`; a wrong-result IR's
    `equiv` statement is refuted or fails to check. (Per
@@ -365,16 +372,21 @@ recorded here with its reason so the next reader doesn't re-derive it.
    deliberately insensitive to the accounting. Corollary that matters in
    practice: *unused* fuel is free at conversion time (only taken steps
    unfold), so fuel constants in theorems are generous rather than exact.
-4. **One ih occurrence, by measurement.** Every syntactic occurrence of
-   the self-call in a recursive body costs ~50ms per executed step at
-   conversion, because `fn`s are inlined at every use and the ih term
-   carries the whole eliminator. `eval` therefore dispatches through a
-   single `step(ev, prog, env, ir)` with the recursive call passed once as
-   a value. The full numbers and the two compounding causes live in
-   `issues/simulate-conversion-cost.md` — which is this design's §5
-   cost-model warning confirmed, and now the bench fixture's real subject:
-   at ~2s per executed step, "realistic program size and fuel" (§11
-   item 5) measures that issue until it moves.
+4. **One ih occurrence, by measurement — a cliff then, a constant now.**
+   *Measured 2026-07-31 against term-rewriting conversion:* every syntactic
+   occurrence of the self-call in a recursive body cost ~50ms per executed
+   step, because `fn`s are inlined at every use and the ih term carries the
+   whole eliminator; 0.24s at one occurrence became 13.7s at ~10. `eval`
+   therefore dispatches through a single `step(ev, prog, env, ir)` with the
+   recursive call passed once as a value. *Re-measured the same day against
+   the value domain* (`issues/nbe-conversion-round.md`): six occurrences
+   instead of one costs **1.24×** on the whole library file. The multiplier
+   is gone — a duplicated occurrence now evaluates to a shared value rather
+   than a copied term — so the discipline survives as good style and not as
+   a constraint. Keep it in `lib/ir_v1.hthr` (restructuring the library to
+   exploit the change is a round of its own); stop *requiring* it of new
+   Heather code. The original numbers and the two compounding causes are in
+   `issues/simulate-conversion-cost.md`.
 5. **Scoping is mixed, deliberately.** `LetMatch` arms are lexical (fields
    prepended to the enclosing environment); `LetLoop` bodies and called
    functions are closed (carried slots / arguments only). Closed loop
@@ -414,6 +426,18 @@ recorded here with its reason so the next reader doesn't re-derive it.
    for leaving `simulate` in its pretty form and paying the discipline
    instead: certificates keep non-tail nesting shallow, and tail chains are
    free.
+
+   **It landed, and nothing here had to change** (amendment, 2026-07-31,
+   `issues/nbe-conversion-round.md`). Conversion now evaluates into a value
+   domain where an eliminator's β extends an environment instead of copying
+   a branch, and `simulate` — unmodified, in its pretty form — went from
+   exponential to flat: the arm-nested probe's N = 15 from 33.8s / 4544 MB
+   to 1.45s / 20.9 MB, and `add(2,3)` through `LetCall` from 20.9s to
+   ~0.05s. Both combined theorems are now in `lib/ir_v1.hthr` and the whole
+   file checks in 1.25s at 14.4 MB. The bet that the fix belonged in the
+   kernel and not in the interpreter's shape paid; the two consequences for
+   *this* document are note 4's discipline (a constant now, not a cliff)
+   and §11 item 5's re-aimed bench obligation, which is retired below.
 
 **Deferred to the next round, with the route sketched:** §11 items 3–4
 (`converges`, `fuel_monotone`, `refines`, a ∀-args `equiv`). Two real
