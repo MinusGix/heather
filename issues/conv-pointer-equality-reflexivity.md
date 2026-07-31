@@ -44,3 +44,7 @@ gets its own issue.
 - **[[subst-visits-closed-subtrees]]** (closed) owns the sharing-preserving
   skip machinery. Assumed here: only that substitution outputs share
   unchanged subtrees, which is what makes hits common.
+
+## Log
+
+- 2026-07-31: Denominator note after the Psi-clone and level-fast-path rounds (release heather check lib/ir_v1.hthr: 2.1s -> 1.305s). Conversion is now the top block in its own right -- Conv::ty 6.6% self, whnf_ty 3.6%, whnf_ty_opaque 2.9%, plus Rc<Term>::drop_slow at 6.9% and Type drop glue 3.8% just behind, which is the shape of a walk that re-descends structure it could have recognized. Nothing here was measured directly and the trigger is unchanged; recorded only so the percentages in this file are not read against the old 2.1s run. Adjacent evidence in favour: the same reflexivity shortcut taken for levels this round ([[level-normalization-allocation]]) was worth 11% of the whole run on its own.

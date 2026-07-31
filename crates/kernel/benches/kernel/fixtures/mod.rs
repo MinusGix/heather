@@ -15,6 +15,7 @@
 
 pub mod code;
 pub mod conv;
+pub mod level;
 pub mod nat;
 pub mod simulate;
 pub mod subst;
@@ -24,9 +25,10 @@ pub mod wf;
 use crate::harness::Family;
 
 /// Every family, in report order. Areas are ordered bottom-up through the
-/// kernel: substitution, reduction, conversion, then checking.
+/// kernel: levels, substitution, reduction, conversion, then checking.
 pub fn all() -> Vec<Family> {
     let mut v = vec![];
+    v.extend(level::families());
     v.extend(subst::families());
     v.extend(nat::families());
     v.extend(conv::families());

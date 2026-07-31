@@ -1026,6 +1026,13 @@ impl Mapper for NormalizeLevels {
     }
 
     fn level(&mut self, l: &Level, _at: Depths) -> Level {
+        // `0` and a bare `ℓ` are already their own canonical representatives,
+        // and they are almost every level a real term contains; taking them
+        // here skips a walk and a `BTreeMap` allocation apiece
+        // (issues/level-normalization-allocation.md).
+        if matches!(l, Level::Zero | Level::Var(_)) {
+            return l.clone();
+        }
         self.mapped(l.normalize().canonical(), l)
     }
 }

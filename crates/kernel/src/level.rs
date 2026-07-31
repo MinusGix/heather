@@ -105,14 +105,29 @@ impl Level {
 
     /// Decidable equivalence `L ⊢ l ≈ l' : Level` (extended so that
     /// `ω ≈ ω` only).
+    ///
+    /// The syntactic pre-check is *reflexivity*, nothing cleverer:
+    /// [`Level::normalize`] is a function, so identical syntax has identical
+    /// normal forms, and a miss falls through to the full decision — the
+    /// fast path can only make `equiv` answer sooner, never differently, and
+    /// in particular never stricter. It pays because most compared levels
+    /// are literally the same shape (very often `0`), and normalizing two of
+    /// them costs two walks and two `BTreeMap`s to reach the same answer.
+    /// `Rc`'s equality is pointer-first, so shared subtrees stop the walk
+    /// early (issues/level-normalization-allocation.md).
     pub fn equiv(&self, other: &Level) -> bool {
-        self.normalize() == other.normalize()
+        self == other || self.normalize() == other.normalize()
     }
 
     /// The induced partial order `l ≤ l' := l' ≈ l ⊔ l'`. `ω` is
     /// incomparable (returns false unless both are `ω`-free and related, or
     /// both are exactly `ω`).
     pub fn le(&self, other: &Level) -> bool {
+        // Reflexivity, before building `l ⊔ l'` and normalizing it: `≤` is
+        // reflexive on every level including `ω`.
+        if self == other {
+            return true;
+        }
         if matches!(self, Level::Omega) || matches!(other, Level::Omega) {
             return self.equiv(other);
         }
@@ -293,6 +308,60 @@ mod tests {
         // constants
         assert!(Level::constant(1).le(&Level::constant(3)));
         assert!(!Level::constant(3).le(&Level::constant(1)));
+    }
+
+    /// The reflexivity pre-check in [`Level::equiv`] must only ever answer
+    /// *sooner*, never *stricter*: every pair here is structurally distinct,
+    /// so the pre-check misses and the full normalization has to decide it —
+    /// and every one of them is equivalent.
+    #[test]
+    fn fast_path_does_not_make_equiv_stricter() {
+        let pairs = [
+            // idempotence: the fast path must not conclude "different shape,
+            // therefore different level"
+            (Level::max(var(0), var(0)), var(0)),
+            // 1 + (a ⊔ b) ≈ (1 + a) ⊔ (1 + b)
+            (
+                Level::succ(Level::max(var(0), var(1))),
+                Level::max(Level::succ(var(0)), Level::succ(var(1))),
+            ),
+            // commutativity and the unit
+            (Level::max(var(1), var(0)), Level::max(var(0), var(1))),
+            (Level::max(var(0), Level::Zero), var(0)),
+            // the dominated constant: 2 ⊔ (2 + ℓ) ≈ 2 + ℓ
+            (
+                Level::max(Level::constant(2), Level::succ(Level::succ(var(0)))),
+                Level::succ(Level::succ(var(0))),
+            ),
+            // constants written two ways round a ⊔
+            (Level::max(Level::constant(1), Level::constant(3)), Level::constant(3)),
+        ];
+        for (a, b) in pairs {
+            assert_ne!(a, b, "the pair must be structurally distinct to test the miss");
+            assert!(a.equiv(&b), "{a:?} ≉ {b:?}");
+            assert!(b.equiv(&a), "{b:?} ≉ {a:?}");
+            // and `≤` both ways, since `le` grew the same pre-check
+            assert!(a.le(&b) && b.le(&a));
+        }
+    }
+
+    /// The pre-check hits, and agrees with the slow path — including on the
+    /// levels where `equiv` is *not* mere syntactic equality downstream.
+    #[test]
+    fn fast_path_agrees_on_identical_syntax() {
+        for l in [
+            Level::Zero,
+            var(0),
+            Level::succ(var(2)),
+            Level::max(var(0), Level::succ(var(1))),
+            Level::Omega,
+            // ω-poisoned: reflexive, but equivalent to nothing else
+            Level::max(Level::Omega, Level::Zero),
+        ] {
+            assert!(l.equiv(&l.clone()));
+            assert_eq!(l.normalize(), l.clone().normalize());
+            assert!(l.le(&l.clone()));
+        }
     }
 
     #[test]

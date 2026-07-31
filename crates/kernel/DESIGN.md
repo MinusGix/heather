@@ -279,7 +279,13 @@ paper too).
   block on neutral scrutinees *and* on boxed global variables `□(U^δ)` /
   `□(u^δ)`; neutral comparison is an inference step that returns a type.
 - **Level equivalence**: normalize to `adjust(count(l))` maps and compare;
-  `ω` compares only to itself.
+  `ω` compares only to itself. `equiv`/`le` take a **reflexivity pre-check**
+  first — identical syntax is equivalent because normalization is a function,
+  so the pre-check can only answer sooner, never differently, and a miss
+  falls through to the full decision. It is not an optimization of the
+  decision procedure but a shortcut *around* it, so nothing about
+  `adjust`/`count` (in particular the dominated-constant rule `n + ℓ ⊒ n`)
+  may be weakened to make it fire more often.
 - **Propositional equality at `□` is exactly the recursor's observation.**
   `refl` *synthesizes* `Id(S; t; t)`, so checking it against `Id(S; a; b)`
   goes through conversion on the endpoints — and conversion at `□` types is
