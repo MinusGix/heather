@@ -294,6 +294,14 @@ fn add_prog() -> Prog { PFun(add_body(), PNil) }
 // (issues/simulate-conversion-cost.md) it is ~24s — no longer prohibitive,
 // but still an order of magnitude more than this whole file, so the call
 // machinery and the loop machinery stay certified on separate paths.
+//
+// That combined path is also MEMORY-DANGEROUS, and the reason is now
+// diagnosed: issues/whnf-sharing-term-growth.md. Cost is exponential in the
+// nesting depth of scrutinee-position `ev(…)` calls — roughly ×22 per
+// add-loop iteration, in time AND in resident memory alike. add(2,3)
+// through LetCall (two iterations) peaks at ~1.5 GB; add(3,·) reaches
+// ~22 GB and will take the machine down. Run any deeper probe under a
+// ulimit cap, and prefer TAIL chains: those are linear and free.
 fn id_prog() -> Prog { PFun(Ret(RCons(0, RNil)), PNil) }
 
 // the spec function the IR is measured against
@@ -308,7 +316,10 @@ fn add(a: Nat, b: Nat) -> Nat { match b { Zero => a, Succ(k) => Succ(add(a, k)) 
 // `fn` is a Ψ-definition instead of a copy at every use site. The loop and
 // the call are still certified on separate short paths rather than one deep
 // one — a combined `add(2,3)` through LetCall is ~24s, which the routine
-// gate should not pay. Unused fuel is free; executed steps are not.
+// gate should not pay. Unused fuel is free; executed steps are not — and
+// *nested* steps least of all: issues/whnf-sharing-term-growth.md measures
+// the exponent and shows the axis is nesting depth of scrutinee-position
+// recursive calls, not fuel and not the size of the values carried.
 
 // 1 + 1 = 2 through the loop: LetLoop/LoopIter, LetMatch with BOTH arms
 // taken (Succ on iteration one, Zero on iteration two), LetCon,

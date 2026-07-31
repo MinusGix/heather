@@ -62,3 +62,7 @@ an eliminator's binders) is exactly the real workload's dominant cost.
 - **[[subst-visits-closed-subtrees]]** owns the skip mechanism and its
   soundness story. Assumed here: only that skips are decided per-node from
   the memo in `bounds.rs`.
+
+## Log
+
+- 2026-07-31: Second workload measured, and it is the opposite of one-shot: on the deep IR conversion path ([[whnf-sharing-term-growth]]) the bounds machinery is ~21% of the profile -- Cache::term_use 9.7%, the skip_term thread-local 7.1%, skip_type 2.7%, type_use 1.5% -- at a 70% skip rate (52.9M skips of 75.9M sub_tm entries). So the memo is WORKING (it elides 70% of the traversal) and still costs a fifth of the run, because it pays a thread-local RefCell probe per node ENTRY on a term of millions of nodes. That is a levers-if-it-grows datapoint for the cheaper-probe options here, not an argument against the bounds round; the deep path's exponent lives elsewhere and 21% is under one loop iteration's worth.
