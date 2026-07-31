@@ -68,10 +68,11 @@ use crate::term::{
     Branches, CtxBase, CtxEntry, GlobalBinding, GlobalCtx, GlobalVar, LocalCtx, LocalVar,
     Motives, Term, Type,
 };
+use crate::value::{self, shift::Outer, TmClo, TyClo};
 
 mod dom;
 
-use dom::{Dom, Syn, TmView, TyView};
+use dom::{Dom, Syn, TmView, TyView, Values};
 
 /// Why a convertibility check did not succeed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -125,12 +126,48 @@ pub fn conv_type(
     fuel: u64,
 ) -> R {
     debug_assert!(layer.computes(), "convertibility is only invoked at computing layers");
+    Conv::<Values>::new(fuel, psi).ty_root(&Env::new(psi, gamma, layer), a, b, level)
+}
+
+/// [`conv_type`] decided by the **rewriter** instead of the value machine.
+///
+/// The two are the same algorithm over two notions of weak head normal form
+/// (`docs/nbe-conversion-design.md` §13), and this entry point exists so a
+/// test can hold them against each other: `reduce.rs` is ch. 06's relation
+/// transcribed rule for rule, and it is what the machine is measured against
+/// (`tests/eval_differential.rs`). Nothing in the kernel calls it.
+pub fn conv_type_rewriter(
+    psi: &GlobalCtx,
+    gamma: &LocalCtx,
+    layer: Layer,
+    a: &Type,
+    b: &Type,
+    level: &Level,
+    fuel: u64,
+) -> R {
+    debug_assert!(layer.computes(), "convertibility is only invoked at computing layers");
     Conv::<Syn>::new(fuel, psi).ty_root(&Env::new(psi, gamma, layer), a, b, level)
 }
 
 /// `Ψ; Γ ⊢_i t ≈ t' : T @ l` — convertibility of terms at a type.
 #[allow(clippy::too_many_arguments)]
 pub fn conv_term(
+    psi: &GlobalCtx,
+    gamma: &LocalCtx,
+    layer: Layer,
+    a: &Term,
+    b: &Term,
+    ty: &Type,
+    level: &Level,
+    fuel: u64,
+) -> R {
+    debug_assert!(layer.computes(), "convertibility is only invoked at computing layers");
+    Conv::<Values>::new(fuel, psi).tm_root(&Env::new(psi, gamma, layer), a, b, ty, level)
+}
+
+/// [`conv_term`] decided by the rewriter; see [`conv_type_rewriter`].
+#[allow(clippy::too_many_arguments)]
+pub fn conv_term_rewriter(
     psi: &GlobalCtx,
     gamma: &LocalCtx,
     layer: Layer,
@@ -154,6 +191,19 @@ pub fn conv_local_ctx(
 ) -> R {
     debug_assert!(layer.computes(), "convertibility is only invoked at computing layers");
     let env = Env::new(psi, &LocalCtx { base: CtxBase::Nil, entries: vec![] }, layer);
+    Conv::<Values>::new(fuel, psi).ctx(&env, layer, a, b)
+}
+
+/// [`conv_local_ctx`] decided by the rewriter; see [`conv_type_rewriter`].
+pub fn conv_local_ctx_rewriter(
+    psi: &GlobalCtx,
+    layer: Layer,
+    a: &LocalCtx,
+    b: &LocalCtx,
+    fuel: u64,
+) -> R {
+    debug_assert!(layer.computes(), "convertibility is only invoked at computing layers");
+    let env = Env::new(psi, &LocalCtx { base: CtxBase::Nil, entries: vec![] }, layer);
     Conv::<Syn>::new(fuel, psi).ctx(&env, layer, a, b)
 }
 
@@ -166,21 +216,103 @@ pub fn conv_local_ctx(
 /// consulted), so it is not tracked. Extending any namespace clones — the
 /// judgments extend scopes freely and correctness beats performance here.
 ///
-/// Γ is deliberately still *syntax*, and stage 2b will have to widen it (see
-/// [`dom`]'s module docs): its entry **types** are read in exactly one place
-/// ([`Dom::var_type`]), while everything else — the identity substitutions
-/// inside [`Dom::inst_ty`], the recursor telescope tables — reads only its
-/// length and base.
+/// Γ is carried **twice**, and stage 2b's log says why. The syntactic
+/// [`LocalCtx`] survives because three consumers read only its *length and
+/// base* (`rec::branch_specs`, the shared `wf_step_telescope`, the identity
+/// substitutions inside the syntax domain's [`Dom::inst_ty`]); at the value
+/// domain its entry types are fillers. The scope a *value* needs — the
+/// environment ρ of neutral variables, and each entry's type as a domain
+/// object for [`Dom::var_type`] — is [`Env::rho`] and [`Env::vtys`], which
+/// the syntax domain never reads.
 #[derive(Clone)]
 struct Env {
     psi: GlobalCtx,
     gamma: LocalCtx,
     layer: Layer,
+    /// The local environment of the value domain: entry `j` from the outer
+    /// end is the neutral variable at level `j`, so pushing a binder assigns
+    /// the level `gamma.entries.len()` and never renumbers anything.
+    rho: value::Env,
+    /// Γ's entry types as domain objects, innermost first — the one thing
+    /// [`Dom::var_type`] needs and the filler `gamma` cannot supply.
+    vtys: TyEnv,
+    /// The telescope [`Dom::push_spec`] pushed to build this scope, as
+    /// `(univs, globals, locals)`. Read by [`Dom::embed_ty_at`], which has to
+    /// carry a recursor's stored environment across exactly that telescope.
+    tele: (u32, u32, u32),
+}
+
+/// A persistent list of value-domain entry types: `Env` is cloned once per
+/// binder push on conversion's hottest path, so this must not be a `Vec`.
+#[derive(Clone)]
+struct TyEnv(Option<Rc<TyEnvNode>>);
+
+struct TyEnvNode {
+    ty: Rc<TyClo>,
+    level: Level,
+    rest: TyEnv,
+}
+
+impl TyEnv {
+    fn empty() -> TyEnv {
+        TyEnv(None)
+    }
+
+    fn push(&self, ty: Rc<TyClo>, level: Level) -> TyEnv {
+        TyEnv(Some(Rc::new(TyEnvNode { ty, level, rest: self.clone() })))
+    }
+
+    /// The entry `i` binders out from the innermost one.
+    fn nth(&self, i: u32) -> Option<(&Rc<TyClo>, &Level)> {
+        let mut cur = self;
+        let mut k = i;
+        loop {
+            let n = cur.0.as_ref()?;
+            if k == 0 {
+                return Some((&n.ty, &n.level));
+            }
+            k -= 1;
+            cur = &n.rest;
+        }
+    }
+
+    /// Outermost first.
+    fn to_vec(&self) -> Vec<(Rc<TyClo>, Level)> {
+        let mut out = Vec::new();
+        let mut cur = self;
+        while let Some(n) = cur.0.as_ref() {
+            out.push((Rc::clone(&n.ty), n.level.clone()));
+            cur = &n.rest;
+        }
+        out.reverse();
+        out
+    }
+}
+
+/// The value-domain reading of a syntactic Γ: the identity environment of
+/// its variables, and each entry's type as a closure over the *prefix* it is
+/// scoped in.
+fn value_scope(gamma: &LocalCtx) -> (value::Env, TyEnv) {
+    let mut rho = value::Env::empty();
+    let mut vtys = TyEnv::empty();
+    for (i, e) in gamma.entries.iter().enumerate() {
+        vtys = vtys.push(Rc::new(TyClo::new(rho.clone(), Rc::clone(&e.ty))), e.level.clone());
+        rho = rho.push(Rc::new(TmClo::val(Rc::new(value::Val::var(i as u32)))));
+    }
+    (rho, vtys)
 }
 
 impl Env {
     fn new(psi: &GlobalCtx, gamma: &LocalCtx, layer: Layer) -> Env {
-        Env { psi: psi.clone(), gamma: gamma.clone(), layer }
+        let (rho, vtys) = value_scope(gamma);
+        Env {
+            psi: psi.clone(),
+            gamma: gamma.clone(),
+            layer,
+            rho,
+            vtys,
+            tele: (0, 0, 0),
+        }
     }
 
     fn with_layer(&self, layer: Layer) -> Env {
@@ -188,31 +320,56 @@ impl Env {
     }
 
     /// Replace Γ (and the layer) — used where a rule compares inside a
-    /// *different* local context, e.g. `Ψ; Δ ⊢_p T ≈ T'`.
+    /// *different* local context, e.g. `Ψ; Δ ⊢_p T ≈ T'`. The value domain's
+    /// scope is rebuilt from scratch: a different Γ is a different set of
+    /// variables, at levels of its own.
     fn in_ctx(&self, gamma: LocalCtx, layer: Layer) -> Env {
-        Env { gamma, layer, ..self.clone() }
+        let (rho, vtys) = value_scope(&gamma);
+        Env { gamma, layer, rho, vtys, tele: (0, 0, 0), ..self.clone() }
     }
 
     /// `Γ, x : T @ l`. Reached through [`Dom::push_entry`], never directly:
-    /// at the value domain pushing a binder also extends the environment
-    /// with the binder's fresh neutral.
-    fn push_entry(&self, ty: Rc<Type>, level: Level) -> Env {
+    /// at the value domain pushing a binder also extends ρ with the binder's
+    /// fresh neutral, and records the entry's type as a domain object.
+    ///
+    /// The syntactic entry is a **filler** unless the caller has real syntax
+    /// (only [`Env::in_ctx`] and [`Env::new`] do): nothing reads it but the
+    /// length and the base.
+    fn push_entry_syn(&self, ty: Rc<Type>, level: Level) -> Env {
+        let vty = Rc::new(TyClo::new(self.rho.clone(), Rc::clone(&ty)));
+        self.push_entry(ty, vty, level)
+    }
+
+    fn push_entry(&self, ty: Rc<Type>, vty: Rc<TyClo>, level: Level) -> Env {
         let mut e = self.clone();
+        e.rho = e.rho.push(Rc::new(TmClo::val(Rc::new(value::Val::var(
+            self.gamma.entries.len() as u32,
+        )))));
+        e.vtys = e.vtys.push(vty, level.clone());
         e.gamma.entries.push(CtxEntry { ty, level });
         e
     }
 
     /// Push a telescope: `tu` universe binders then the given global
     /// bindings (each already scoped over `L, ℓ⃗` and its Ψ-prefix). The
-    /// ambient Ψ and Γ are weakened accordingly.
+    /// ambient Ψ and Γ are weakened accordingly — and so, at the value
+    /// domain, is every value the scope carries (`value::shift`).
     fn push_tele(&self, tu: u32, globals: Vec<GlobalBinding>) -> Env {
         let tg = globals.len() as u32;
         let mut psi = shift_univ_psi(&self.psi, tu);
         psi.extend(globals);
+        let o = Outer { univs: tu, globals: tg };
+        let mut vtys = TyEnv::empty();
+        for (t, l) in self.vtys.to_vec() {
+            vtys = vtys.push(value::shift::ty_clo(&t, o), l);
+        }
         Env {
             psi,
             gamma: self.gamma.shift_univ(tu).shift_global(tg),
             layer: self.layer,
+            rho: value::shift::env(&self.rho, o),
+            vtys,
+            tele: (tu, tg, 0),
         }
     }
 
@@ -371,7 +528,7 @@ impl<D: Dom> Conv<D> {
             if !D::is_transp(&cur) {
                 return Ok(cur);
             }
-            let (ty_level, ty, lhs, rhs, tm) = match D::view_tm(self, &cur) {
+            let (ty_level, ty, lhs, rhs, tm) = match D::view_tm(self, env, &cur) {
                 TmView::Transp { ty_level, ty, lhs, rhs, tm, .. } => {
                     (ty_level.clone(), ty, lhs, rhs, tm)
                 }
@@ -449,8 +606,8 @@ impl<D: Dom> Conv<D> {
 
     /// `Γ ⊢ W ≈ W' : l` for weak head normal types.
     fn ty_nf(&mut self, env: &Env, a: &D::Ty, b: &D::Ty, _l: &Level) -> R {
-        let va = D::view_ty(self, a);
-        let vb = D::view_ty(self, b);
+        let va = D::view_ty(self, env, a);
+        let vb = D::view_ty(self, env, b);
         match (&va, &vb) {
             (TyView::Nat, TyView::Nat) => Ok(()),
             (TyView::Ty(x), TyView::Ty(y)) => self.lev_eq(x, y),
@@ -562,7 +719,12 @@ impl<D: Dom> Conv<D> {
                 }
                 self.lev_eq(v1, v2)?;
                 let e = env.push_univs(*n1);
-                self.ty(&e, b1, b2, v1)
+                // The bodies are *under* the pushed ℓ⃗; at the value domain
+                // their captured environments are not, and have to be
+                // weakened to match (design §3.1).
+                let x = D::under_tele_ty(self, &e, b1, *n1, 0)?;
+                let y = D::under_tele_ty(self, &e, b2, *n1, 0)?;
+                self.ty(&e, &x, &y, v1)
             }
             (
                 TyView::CtxPi { level: v1, body: b1 },
@@ -573,7 +735,9 @@ impl<D: Dom> Conv<D> {
                 }
                 self.lev_eq(v1, v2)?;
                 let e = env.push_global(GlobalBinding::Ctx);
-                self.ty(&e, b1, b2, v1)
+                let x = D::under_tele_ty(self, &e, b1, 0, 1)?;
+                let y = D::under_tele_ty(self, &e, b2, 0, 1)?;
+                self.ty(&e, &x, &y, v1)
             }
             (
                 TyView::TyPi { ctx: c1, arg_level: a1, body_level: bl1, body: b1 },
@@ -590,7 +754,9 @@ impl<D: Dom> Conv<D> {
                     layer: Layer::Prog,
                     level: (*a1).clone(),
                 });
-                self.ty(&e, b1, b2, bl1)
+                let x = D::under_tele_ty(self, &e, b1, 0, 1)?;
+                let y = D::under_tele_ty(self, &e, b2, 0, 1)?;
+                self.ty(&e, &x, &y, bl1)
             }
             (
                 TyView::CodeTy { ctx: c1, level: v1 },
@@ -626,8 +792,8 @@ impl<D: Dom> Conv<D> {
     /// (left-biased) and returned.
     fn ty_ne(&mut self, env: &Env, a: &D::Ty, b: &D::Ty) -> R<Level> {
         self.spend()?;
-        let va = D::view_ty(self, a);
-        let vb = D::view_ty(self, b);
+        let va = D::view_ty(self, env, a);
+        let vb = D::view_ty(self, env, b);
         match (&va, &vb) {
             (
                 TyView::GlobalTy { var: u1, subst: d1 },
@@ -687,16 +853,16 @@ impl<D: Dom> Conv<D> {
     /// `Γ ⊢ δ ≈ δ' : Δ`, pairwise on the step terms over identical tails.
     fn subst(&mut self, env: &Env, d1: &D::Subst, d2: &D::Subst, target: &LocalCtx) -> R {
         self.spend()?;
-        let (t1, t2) = (D::subst_terms(d1), D::subst_terms(d2));
         if !D::subst_tails_agree(d1, d2)
-            || t1.len() != target.entries.len()
-            || t2.len() != target.entries.len()
+            || D::subst_len(d1) != target.entries.len()
+            || D::subst_len(d2) != target.entries.len()
         {
             return Err(NC);
         }
         for (k, e) in target.entries.iter().enumerate() {
             let ty = D::apply_subst_ty(self, env, d1, k, &e.ty)?;
-            self.tm(env, &t1[k], &t2[k], &ty, &e.level)?;
+            let (x, y) = (D::subst_term(env, d1, k), D::subst_term(env, d2, k));
+            self.tm(env, &x, &y, &ty, &e.level)?;
         }
         Ok(())
     }
@@ -776,7 +942,7 @@ impl<D: Dom> Conv<D> {
     /// `Γ ⊢ w ≈ w' : W @ l` for weak head normal terms at a WHNF type,
     /// directed by the type.
     fn tm_nf(&mut self, env: &Env, a: &D::Tm, b: &D::Tm, w: &D::Ty, _l: &Level) -> R {
-        let vw = D::view_ty(self, w);
+        let vw = D::view_ty(self, env, w);
         match &vw {
             // η: Γ, x : S ⊢ app(w↑; l,l'; x:S↑.T↑; x) ≈ app(w'↑; …; x) : T
             TyView::Pi { dom_level, cod_level, dom, cod } => {
@@ -792,7 +958,8 @@ impl<D: Dom> Conv<D> {
                 }
                 let e = env.push_univs(*num_vars);
                 let (x, y) = D::eta_uapp(self, env, &e, a, b, *num_vars)?;
-                self.tm(&e, &x, &y, body, level)
+                let t = D::under_tele_ty(self, &e, body, *num_vars, 0)?;
+                self.tm(&e, &x, &y, &t, level)
             }
             // η: Ψ, g : Ctx ⊢ w↑ @ g ≈ w'↑ @ g : T
             TyView::CtxPi { level, body } => {
@@ -801,7 +968,8 @@ impl<D: Dom> Conv<D> {
                 }
                 let e = env.push_global(GlobalBinding::Ctx);
                 let (x, y) = D::eta_ctxapp(self, env, &e, a, b)?;
-                self.tm(&e, &x, &y, body, level)
+                let t = D::under_tele_ty(self, &e, body, 0, 1)?;
+                self.tm(&e, &x, &y, &t, level)
             }
             // η: Ψ, U : Typ_p(Δ, l) ⊢ w↑ @ U^{id_Δ} ≈ w'↑ @ U^{id_Δ} : T
             TyView::TyPi { ctx, arg_level, body_level, body } => {
@@ -814,7 +982,8 @@ impl<D: Dom> Conv<D> {
                     level: (*arg_level).clone(),
                 });
                 let (x, y) = D::eta_tyapp(self, env, &e, a, b, ctx)?;
-                self.tm(&e, &x, &y, body, body_level)
+                let t = D::under_tele_ty(self, &e, body, 0, 1)?;
+                self.tm(&e, &x, &y, &t, body_level)
             }
             // Code compares syntactically — *modulo level equivalence*, which
             // is the quotient ch. 05's Static Code lemma (`lem:dt:static`)
@@ -825,27 +994,27 @@ impl<D: Dom> Conv<D> {
             // against ch. 08's Convertibility theorem, not unsoundness, but a
             // spurious error for any universe-polymorphic metaprogram.
             // Neutrals still compare structurally.
-            TyView::CodeTy { .. } => match (&D::view_tm(self, a), &D::view_tm(self, b)) {
+            TyView::CodeTy { .. } => match (&D::view_tm(self, env, a), &D::view_tm(self, env, b)) {
                 (TmView::BoxTy(t1), TmView::BoxTy(t2)) => {
                     if code_eq(&***t1, &***t2) { Ok(()) } else { Err(NC) }
                 }
                 (TmView::BoxTy(_), _) | (_, TmView::BoxTy(_)) => Err(NC),
                 _ => self.tm_nee(env, a, b).map(drop),
             },
-            TyView::CodeTm { .. } => match (&D::view_tm(self, a), &D::view_tm(self, b)) {
+            TyView::CodeTm { .. } => match (&D::view_tm(self, env, a), &D::view_tm(self, env, b)) {
                 (TmView::BoxTm(t1), TmView::BoxTm(t2)) => {
                     if code_eq(&***t1, &***t2) { Ok(()) } else { Err(NC) }
                 }
                 (TmView::BoxTm(_), _) | (_, TmView::BoxTm(_)) => Err(NC),
                 _ => self.tm_nee(env, a, b).map(drop),
             },
-            TyView::Nat => match (&D::view_tm(self, a), &D::view_tm(self, b)) {
+            TyView::Nat => match (&D::view_tm(self, env, a), &D::view_tm(self, env, b)) {
                 (TmView::Zero, TmView::Zero) => Ok(()),
                 (TmView::Succ(x), TmView::Succ(y)) => self.tm_at_nat(env, x, y),
                 (x, y) if x.is_nat_data() || y.is_nat_data() => Err(NC),
                 _ => self.tm_nee(env, a, b).map(drop),
             },
-            TyView::Ty(_) => match (&D::view_tm(self, a), &D::view_tm(self, b)) {
+            TyView::Ty(_) => match (&D::view_tm(self, env, a), &D::view_tm(self, env, b)) {
                 (TmView::TmNat, TmView::TmNat) => Ok(()),
                 (TmView::TmTy(x), TmView::TmTy(y)) => self.lev_eq(x, y),
                 (
@@ -951,7 +1120,7 @@ impl<D: Dom> Conv<D> {
             // Id (extension): refl congruence on the point; else neutral.
             // The refl annotations are forced by well-typedness at this Id
             // type, so only the point is compared.
-            TyView::Id { level, ty, .. } => match (&D::view_tm(self, a), &D::view_tm(self, b))
+            TyView::Id { level, ty, .. } => match (&D::view_tm(self, env, a), &D::view_tm(self, env, b))
             {
                 (TmView::Refl { tm: x }, TmView::Refl { tm: y }) => {
                     self.tm(env, x, y, ty, level)
@@ -1000,7 +1169,7 @@ impl<D: Dom> Conv<D> {
             // (a stuck `case`, a variable) fall through to structural
             // comparison.
             TyView::Sum { lhs_level, rhs_level, lhs, rhs } => {
-                match (&D::view_tm(self, a), &D::view_tm(self, b)) {
+                match (&D::view_tm(self, env, a), &D::view_tm(self, env, b)) {
                     (TmView::Inl { val: x }, TmView::Inl { val: y }) => {
                         self.tm(env, x, y, lhs, lhs_level)
                     }
@@ -1019,7 +1188,7 @@ impl<D: Dom> Conv<D> {
             // instantiated Π type, left-biased); neutrals (a stuck elim_W, a
             // variable) fall through to structural comparison.
             TyView::W { shape_level, pos_level, shape, pos } => {
-                match (&D::view_tm(self, a), &D::view_tm(self, b)) {
+                match (&D::view_tm(self, env, a), &D::view_tm(self, env, b)) {
                     (
                         TmView::Sup { label: a1, children: f1 },
                         TmView::Sup { label: a2, children: f2 },
@@ -1043,7 +1212,7 @@ impl<D: Dom> Conv<D> {
             // this former exists (docs/wf-former-design.md §5): no funext is
             // reachable from here, because there is no function to compare.
             TyView::Wf { level, shape, arity } => {
-                match (&D::view_tm(self, a), &D::view_tm(self, b)) {
+                match (&D::view_tm(self, env, a), &D::view_tm(self, env, b)) {
                     (
                         TmView::Supf { label: a1, children: c1 },
                         TmView::Supf { label: a2, children: c2 },
@@ -1093,8 +1262,8 @@ impl<D: Dom> Conv<D> {
     /// layer index restricts only types.
     fn tm_ne(&mut self, env: &Env, a: &D::Tm, b: &D::Tm) -> R<(D::TyC, Level)> {
         self.spend()?;
-        let va = D::view_tm(self, a);
-        let vb = D::view_tm(self, b);
+        let va = D::view_tm(self, env, a);
+        let vb = D::view_tm(self, env, b);
         match (&va, &vb) {
             (TmView::Var(x), TmView::Var(y)) => {
                 if x != y {
@@ -1122,7 +1291,7 @@ impl<D: Dom> Conv<D> {
                 let ctx = ctx.shift_global(u1.0 + 1);
                 let ty = Rc::new(ty.shift_global(u1.0 + 1));
                 self.subst(env, d1, d2, &ctx)?;
-                let n = D::subst_terms(d1).len();
+                let n = D::subst_len(d1);
                 Ok((D::apply_subst_ty(self, env, d1, n, &ty)?, level))
             }
             (
@@ -1531,7 +1700,7 @@ impl<D: Dom> Conv<D> {
             ) => {
                 let env = &env.with_layer(Layer::Meta);
                 let (w, _) = self.tm_nee_c(env, f1, f2)?;
-                let TyView::UPi { num_vars, level, body } = D::view_ty(self, &w) else {
+                let TyView::UPi { num_vars, level, body } = D::view_ty(self, env, &w) else {
                     return Err(NC);
                 };
                 if ls1.len() != ls2.len() || ls1.len() != num_vars as usize || ls1.is_empty()
@@ -1553,7 +1722,7 @@ impl<D: Dom> Conv<D> {
             ) => {
                 let env = &env.with_layer(Layer::Meta);
                 let (w, _) = self.tm_nee_c(env, f1, f2)?;
-                let TyView::CtxPi { level, body } = D::view_ty(self, &w) else {
+                let TyView::CtxPi { level, body } = D::view_ty(self, env, &w) else {
                     return Err(NC);
                 };
                 let level = level.clone();
@@ -1566,7 +1735,7 @@ impl<D: Dom> Conv<D> {
             ) => {
                 let env = &env.with_layer(Layer::Meta);
                 let (w, _) = self.tm_nee_c(env, f1, f2)?;
-                let TyView::TyPi { ctx, arg_level, body_level, body } = D::view_ty(self, &w)
+                let TyView::TyPi { ctx, arg_level, body_level, body } = D::view_ty(self, env, &w)
                 else {
                     return Err(NC);
                 };
@@ -1612,7 +1781,10 @@ impl<D: Dom> Conv<D> {
                 let box_u = D::box_ty(&e_u, Rc::new(gty(0, &d1.shift_global(1))));
                 let m_u = D::shift_global_ty(self, &e_u, m1, 1)?;
                 let body_ty = D::inst_ty(self, &e_u, &e_u, &m_u, std::slice::from_ref(&box_u))?;
-                self.tm(&e_u, b1, b2, &body_ty, ml1)?;
+                // The bodies are under `Ψ, U`; their captured scopes are not.
+                let x = D::under_tele_tm(self, &e_u, b1, 0, 1)?;
+                let y = D::under_tele_tm(self, &e_u, b2, 0, 1)?;
+                self.tm(&e_u, &x, &y, &body_ty, ml1)?;
                 Ok((D::inst_ty(self, env, env, m1, std::slice::from_ref(n1))?, (*ml1).clone()))
             }
             (
@@ -1658,7 +1830,9 @@ impl<D: Dom> Conv<D> {
                 let box_u = D::box_tm(&e_u, Rc::new(gtm(0, &d1.shift_global(1))));
                 let m_u = D::shift_global_ty(self, &e_u, m1, 1)?;
                 let body_ty = D::inst_ty(self, &e_u, &e_u, &m_u, std::slice::from_ref(&box_u))?;
-                self.tm(&e_u, b1, b2, &body_ty, ml1)?;
+                let x = D::under_tele_tm(self, &e_u, b1, 0, 1)?;
+                let y = D::under_tele_tm(self, &e_u, b2, 0, 1)?;
+                self.tm(&e_u, &x, &y, &body_ty, ml1)?;
                 Ok((D::inst_ty(self, env, env, m1, std::slice::from_ref(n1))?, (*ml1).clone()))
             }
             (

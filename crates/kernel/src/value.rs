@@ -272,6 +272,15 @@ pub enum TyClo {
         len: Rc<TmClo>,
         memo: RefCell<Option<Rc<VTy>>>,
     },
+    /// `El^l t` held **unforced**. `El` has no canonical value — it decodes
+    /// or it is stuck — but it is still a perfectly good *sub-structure*, and
+    /// keeping it lazy is what makes the decode one step deep and lets
+    /// conversion synthesize `El`s over encodings that are values.
+    El {
+        level: Level,
+        tm: Rc<TmClo>,
+        memo: RefCell<Option<Rc<VTy>>>,
+    },
 }
 
 impl TyClo {
@@ -287,6 +296,10 @@ impl TyClo {
         TyClo::Vec { level, elem, len, memo: RefCell::new(None) }
     }
 
+    pub fn el(level: Level, tm: Rc<TmClo>) -> TyClo {
+        TyClo::El { level, tm, memo: RefCell::new(None) }
+    }
+
     /// The environment and syntax, when this is a syntactic closure. See
     /// [`TmClo::as_syn`]: a rule that needs the sub-structure's *syntax*
     /// falls back to a stuck value rather than panicking.
@@ -299,14 +312,16 @@ impl TyClo {
 
     pub fn memo(&self) -> Option<Rc<VTy>> {
         match self {
-            TyClo::Syn { memo, .. } | TyClo::Vec { memo, .. } => memo.borrow().clone(),
+            TyClo::Syn { memo, .. } | TyClo::Vec { memo, .. } | TyClo::El { memo, .. } => {
+                memo.borrow().clone()
+            }
             TyClo::Val(v) => Some(Rc::clone(v)),
         }
     }
 
     pub(crate) fn set_memo(&self, v: &Rc<VTy>) {
         match self {
-            TyClo::Syn { memo, .. } | TyClo::Vec { memo, .. } => {
+            TyClo::Syn { memo, .. } | TyClo::Vec { memo, .. } | TyClo::El { memo, .. } => {
                 *memo.borrow_mut() = Some(Rc::clone(v));
             }
             TyClo::Val(_) => {}
@@ -868,6 +883,7 @@ impl fmt::Debug for TyClo {
             TyClo::Syn { env, body, .. } => write!(f, "⟨{env:?}⊢{body:?}⟩"),
             TyClo::Val(v) => write!(f, "{v:?}"),
             TyClo::Vec { elem, len, .. } => write!(f, "⟨Vec({elem:?}; {len:?})⟩"),
+            TyClo::El { level, tm, .. } => write!(f, "⟨El[{level:?}]({tm:?})⟩"),
         })
     }
 }

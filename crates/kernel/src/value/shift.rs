@@ -128,7 +128,31 @@ pub fn ty_clo(c: &Rc<TyClo>, o: Outer) -> Rc<TyClo> {
         TyClo::Vec { level: l, elem, len, .. } => {
             TyClo::vec(level(l, o), ty_clo(elem, o), tm_clo(len, o))
         }
+        TyClo::El { level: l, tm, .. } => TyClo::el(level(l, o), tm_clo(tm, o)),
     })
+}
+
+/// Weaken only the **captured environment**, leaving the body syntax alone:
+/// the body of a `ΠΠ`, a `(g:Ctx)⇒`, a `(U:Typ)⇒` or a `letbox` is already
+/// written in the extended scope, and only what it closed over is not.
+pub fn reenv_ty(c: &Rc<TyClo>, o: Outer) -> Rc<TyClo> {
+    if o.is_none() {
+        return Rc::clone(c);
+    }
+    match &**c {
+        TyClo::Syn { env: e, body, .. } => Rc::new(TyClo::new(env(e, o), Rc::clone(body))),
+        _ => ty_clo(c, o),
+    }
+}
+
+pub fn reenv_tm(c: &Rc<TmClo>, o: Outer) -> Rc<TmClo> {
+    if o.is_none() {
+        return Rc::clone(c);
+    }
+    match &**c {
+        TmClo::Syn { env: e, body, .. } => Rc::new(TmClo::syn(env(e, o), Rc::clone(body))),
+        _ => tm_clo(c, o),
+    }
 }
 
 fn vsubst(d: &VSubst, o: Outer) -> VSubst {

@@ -62,6 +62,10 @@ use crate::term::{
 
 use super::{Conv, Env, R, NC};
 
+mod values;
+
+pub(super) use values::Values;
+
 // ---------------------------------------------------------------------------
 // Views
 // ---------------------------------------------------------------------------
@@ -346,8 +350,8 @@ pub(super) trait Dom: Sized + 'static {
     /// domain has to reduce anything to name its head or hand back its
     /// children. Fallibility lives one step earlier, in the operations that
     /// reach a head at all ([`Dom::whnf_ty`], [`Dom::head_tm`]).
-    fn view_ty<'a>(cv: &mut Conv<Self>, w: &'a Self::Ty) -> TyView<'a, Self>;
-    fn view_tm<'a>(cv: &mut Conv<Self>, w: &'a Self::Tm) -> TmView<'a, Self>;
+    fn view_ty<'a>(cv: &mut Conv<Self>, env: &Env, w: &'a Self::Ty) -> TyView<'a, Self>;
+    fn view_tm<'a>(cv: &mut Conv<Self>, env: &Env, w: &'a Self::Tm) -> TmView<'a, Self>;
     /// The weak head form of a sub-structure that is **already** in weak head
     /// normal form because the form carrying it is: an eliminator's scrutinee,
     /// an application's function. At the syntax domain this is a clone; at the
@@ -424,9 +428,36 @@ pub(super) trait Dom: Sized + 'static {
         arg: &Rc<Type>,
     ) -> R<Self::TyC>;
 
+    /// Read a sub-structure that sits **under** `tu` universe and `tg`
+    /// global binders the comparison has just pushed.
+    ///
+    /// At the syntax domain this is nothing: the body of a `ΠΠ`, a
+    /// `(g:Ctx)⇒`, a `(U:Typ)⇒` or a `letbox` is already scoped in the
+    /// extended context, and de Bruijn does the rest. At the value domain
+    /// only the *body syntax* is; the environment the closure captured is
+    /// still in the outer scope, and the two have to be brought back together
+    /// (`value::shift`, and the stage-2b log for why stage 1's argument does
+    /// not cover this case).
+    fn under_tele_ty(
+        cv: &mut Conv<Self>,
+        env: &Env,
+        t: &Self::TyC,
+        tu: u32,
+        tg: u32,
+    ) -> R<Self::TyC>;
+    fn under_tele_tm(
+        cv: &mut Conv<Self>,
+        env: &Env,
+        t: &Self::TmC,
+        tu: u32,
+        tg: u32,
+    ) -> R<Self::TmC>;
+
     // -- local substitutions ------------------------------------------------
 
-    fn subst_terms(d: &Self::Subst) -> &[Self::TmC];
+    fn subst_len(d: &Self::Subst) -> usize;
+    /// The `k`th step term of a substitution, read in `env`.
+    fn subst_term(env: &Env, d: &Self::Subst, k: usize) -> Self::TmC;
     /// Do the two substitutions have the same tail? Stated as a predicate
     /// rather than as equality because the value domain's tail deliberately
     /// carries less than the syntax's (`VTail` drops the source context's
@@ -784,7 +815,7 @@ impl Dom for Syn {
     // -- views --------------------------------------------------------------
 
     #[inline]
-    fn view_ty<'a>(_cv: &mut Conv<Self>, w: &'a Type) -> TyView<'a, Self> {
+    fn view_ty<'a>(_cv: &mut Conv<Self>, _env: &Env, w: &'a Type) -> TyView<'a, Self> {
         match w {
             Type::Nat => TyView::Nat,
             Type::Ty(l) => TyView::Ty(l),
@@ -849,7 +880,7 @@ impl Dom for Syn {
     }
 
     #[inline]
-    fn view_tm<'a>(_cv: &mut Conv<Self>, w: &'a Rc<Term>) -> TmView<'a, Self> {
+    fn view_tm<'a>(_cv: &mut Conv<Self>, _env: &Env, w: &'a Rc<Term>) -> TmView<'a, Self> {
         match &**w {
             Term::TmNat => TmView::TmNat,
             Term::TmTy(l) => TmView::TmTy(l),
@@ -1118,15 +1149,16 @@ impl Dom for Syn {
 
     #[inline]
     fn push_entry(env: &Env, ty: &Rc<Type>, level: &Level) -> Env {
-        env.push_entry(Rc::clone(ty), level.clone())
+        env.push_entry_syn(Rc::clone(ty), level.clone())
     }
 
     #[inline]
     fn push_spec(env: &Env, tele: &rec::Tele) -> Env {
         let mut e = env.push_tele(tele.univs, tele.globals.clone());
         for (ty, level) in &tele.locals {
-            e = e.push_entry(Rc::clone(ty), level.clone());
+            e = e.push_entry_syn(Rc::clone(ty), level.clone());
         }
+        e.tele.2 = tele.locals.len() as u32;
         e
     }
 
@@ -1245,8 +1277,37 @@ impl Dom for Syn {
     // -- local substitutions ------------------------------------------------
 
     #[inline]
-    fn subst_terms(d: &LocalSubst) -> &[Rc<Term>] {
-        &d.terms
+    fn subst_len(d: &LocalSubst) -> usize {
+        d.terms.len()
+    }
+
+    #[inline]
+    fn subst_term(_env: &Env, d: &LocalSubst, k: usize) -> Rc<Term> {
+        Rc::clone(&d.terms[k])
+    }
+
+    /// Already in the extended scope: the syntax under a binder is written
+    /// there.
+    #[inline]
+    fn under_tele_ty(
+        _cv: &mut Conv<Self>,
+        _env: &Env,
+        t: &Rc<Type>,
+        _tu: u32,
+        _tg: u32,
+    ) -> R<Rc<Type>> {
+        Ok(Rc::clone(t))
+    }
+
+    #[inline]
+    fn under_tele_tm(
+        _cv: &mut Conv<Self>,
+        _env: &Env,
+        t: &Rc<Term>,
+        _tu: u32,
+        _tg: u32,
+    ) -> R<Rc<Term>> {
+        Ok(Rc::clone(t))
     }
 
     #[inline]
