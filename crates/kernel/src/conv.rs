@@ -440,10 +440,11 @@ impl Conv {
         let mut wb = self.whnf_ty_opaque(b, env)?;
         if self.has_defs {
             let defs = self.defs(env);
-            if let (Some(u1), Some(u2)) = (delta_head_ty(&wa, defs), delta_head_ty(&wb, defs)) {
-                if u1 == u2 && self.delta_lazy(|c| c.ty_nf(env, &wa, &wb, l))?.is_some() {
-                    return Ok(());
-                }
+            if let (Some(u1), Some(u2)) = (delta_head_ty(&wa, defs), delta_head_ty(&wb, defs))
+                && u1 == u2
+                && self.delta_lazy(|c| c.ty_nf(env, &wa, &wb, l))?.is_some()
+            {
+                return Ok(());
             }
             wa = self.whnf_ty(&wa, env)?;
             wb = self.whnf_ty(&wb, env)?;
@@ -715,10 +716,11 @@ impl Conv {
         let mut wb = self.whnf_tm_opaque(b, env)?;
         if self.has_defs {
             let defs = self.defs(env);
-            if let (Some(u1), Some(u2)) = (delta_head(&wa, defs), delta_head(&wb, defs)) {
-                if u1 == u2 && self.delta_lazy(|c| c.tm_nf(env, &wa, &wb, &w, l))?.is_some() {
-                    return Ok(());
-                }
+            if let (Some(u1), Some(u2)) = (delta_head(&wa, defs), delta_head(&wb, defs))
+                && u1 == u2
+                && self.delta_lazy(|c| c.tm_nf(env, &wa, &wb, &w, l))?.is_some()
+            {
+                return Ok(());
             }
             wa = self.whnf_tm(&wa, env)?;
             wb = self.whnf_tm(&wb, env)?;

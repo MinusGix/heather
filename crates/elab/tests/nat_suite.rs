@@ -10,6 +10,7 @@
 //! The annotation-free stage-2 forms live in `implicit_args.rs`.
 
 use heather_elab::{ElabError, Elaborator};
+use heather_kernel::term::GlobalBinding;
 
 const NAT_SUITE: &str = r#"
 fn add(m: Nat, n: Nat) -> Nat {
@@ -67,6 +68,24 @@ fn nat_suite_checks() {
     // landed as Ψ-globals (a `fn` is a *defined* one since
     // issues/simulate-conversion-cost.md).
     assert_eq!(e.psi().bindings.len(), 8);
+}
+
+#[test]
+fn a_fn_is_transparent_and_a_theorem_is_not() {
+    // The whole point of issues/simulate-conversion-cost.md's definitions
+    // round, asserted where it is decided: `add` keeps its body so that
+    // conversion can run it, and every `theorem` stays opaque so that its
+    // proof never enters a comparison. `bindings[3]` is the suite's `fn`,
+    // right after the prelude's three theorems.
+    let mut e = Elaborator::with_prelude().expect("prelude");
+    e.elab_source(NAT_SUITE).expect("Nat suite must elaborate and kernel-check");
+    let bodied: Vec<bool> = e
+        .psi()
+        .bindings
+        .iter()
+        .map(|b| matches!(b, GlobalBinding::Tm { body: Some(_), .. }))
+        .collect();
+    assert_eq!(bodied, vec![false, false, false, true, false, false, false, false]);
 }
 
 #[test]

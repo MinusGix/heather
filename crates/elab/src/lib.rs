@@ -961,9 +961,11 @@ impl Elaborator {
     /// committed ones. Well-scoped precisely because goals are numbered in
     /// creation order: goal `k`'s statement can only mention goals before it.
     ///
-    /// Needed only where the kernel must look a global *up* — conversion. The
-    /// term path never does (`whnf_type` takes no Ψ), which is why goals need
-    /// no real binding for the rest of elaboration.
+    /// Needed only where the kernel must read a global's *statement* —
+    /// conversion. Reduction reads a global's body instead, and a goal never
+    /// has one, so the term path is served by the cheaper padded
+    /// [`Self::delta_psi`] and goals still need no real binding for the rest
+    /// of elaboration.
     fn goal_psi(&self) -> GlobalCtx {
         let goals = self.goals.borrow();
         let mut bindings = self.psi.bindings.clone();

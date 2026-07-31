@@ -198,6 +198,47 @@ and the contrast is pinned in tests — with `elim_sEmpty` eliminating
 anywhere (no β, neutral congruence skips the scrutinees) and the same
 layer gate.
 
+**Global definitions with layer-indexed transparency** (2026-07-31,
+issues/simulate-conversion-cost.md) are the only extension so far that is not
+a type former. A `u : Trm_i(Δ ⊢ T @ l)` binding may carry a **body**
+(`GlobalBinding::Tm`'s `body: Option<Rc<Term>>`), making it a definition
+`u := t`. DeLaM has no definitional bindings to extend — ch. 04's global
+grammar is declarations only, and `letbox` is code *composition* that
+substitutes eagerly and leaves nothing resident — so every rule here is ours.
+
+Three choices carry the design:
+
+- **A field, not a fourth binding form.** A definition is a declaration that
+  additionally knows its term, so every ch. 04 rule mentioning `u : Trm_i(…)`
+  stays valid verbatim and no existing match arm changes meaning; only δ
+  consults `body`.
+- **Transparency is indexed by the layer, not by the binding.** The body
+  unfolds during whnf/conversion at the computing layers p/m
+  (`reduce::Defs::transparent`) and never at c (`Defs::opaque`), where a
+  global is *syntax*: ch. 06 blocks the code-recursion principles on global
+  variables and compares boxed globals syntactically, so a conversion that
+  identified `box(u)` with `box(t)` while the recursor distinguished them
+  would break coherence. Structurally this holds because reduction never
+  enters a `box` and boxed code compares with `==`; `tests/definitions.rs`
+  pins it anyway, in both directions.
+- **The body is checked at the binding's own layer** (`i = c`; a definition
+  at layer v is rejected, since v admits no term but a variable). That is
+  what makes δ layer-preserving: unfolding `u` at any layer `j ≥ i` can only
+  produce a term that was already legal at `j`.
+
+Conversion is **δ-lazy**: weak-head-reduce without δ first, and when both
+sides stop at the same defined head, compare their spines before unfolding
+anything — `f a⃗ ≈ f a⃗` never materializes `f`. A failed attempt falls
+through to unfolding, with `Conv::strip`'s guard semantics (catch
+`NotConvertible`, propagate `OutOfFuel`, no refund). The whole stage is
+gated on Ψ actually holding a definition, because paying for its second
+whnf pass unconditionally cost 1.35–1.43× on the conversion fixtures.
+
+Owed to ch. 07: the logical relation interprets a bodied `u` at p by its
+body (definitional glueing) and at c as a neutral, and the fundamental
+theorem's `u`-cases redo under that split — see
+`docs/metatheory-ch07-extensions.md` §11.
+
 **Every type has exactly one level, and this is load-bearing** (2026-07-25,
 phase 4). Not tidiness: DeLaM ch. 04 §Non-cumulativity turns on it, because
 the code eliminator must reconstruct code from its components per branch,
@@ -229,8 +270,10 @@ paper too).
 
 ## Algorithms
 
-- **Conversion is ch. 06 verbatim**: untyped weak-head reduction to
+- **Conversion is ch. 06 verbatim** *plus δ*: untyped weak-head reduction to
   WHNF/neutral, then structural comparison. Not NbE, not typed reduction.
+  The one addition is definition unfolding, which is layer-indexed and
+  δ-lazy — see the global-definitions extension above.
   Function-type comparison is η-directed (compare applications to a fresh
   variable); boxed types/terms compare by **syntactic equality**; recursors
   block on neutral scrutinees *and* on boxed global variables `□(U^δ)` /

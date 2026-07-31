@@ -30,3 +30,7 @@ that make this expensive (the inlined interpreter), so the workload that
 would justify the representation change may not survive that round.
 Trigger: a post-definitions profile where `ShiftLocal` payload copies
 dominate a real workload.
+
+## Log
+
+- 2026-07-31: Definitions landed ([[simulate-conversion-cost]]) and the prediction in the body held in the direction that matters: the inlined interpreter is gone from statements and ih terms, and heather check lib/ir_v1.hthr went 13.6s -> 2.1s without touching payload copying. The post-definitions profile this issue's trigger asks for has NOT been taken, so whether ShiftLocal payload copies still dominate anything real is open -- that measurement is the next thing this issue wants, and it is cheap.

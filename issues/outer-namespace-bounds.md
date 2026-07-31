@@ -26,3 +26,7 @@ top line on a real workload. Today they are ~1.3% on the worst bench;
 the likely first customer is the letbox/code-recursor β path
 (`SubstGlobal` payload instantiation over 52-branch bundles), which the
 definitions round ([[simulate-conversion-cost]]) will exercise harder.
+
+## Log
+
+- 2026-07-31: First named customer, from the definitions round ([[simulate-conversion-cost]]): reduce::Defs::body rescopes a definition's body with shift_global(v.0 + 1) on EVERY unfold, so a global-namespace traversal is now proportional to body size on the hot conversion path -- the one thing per-unfold cost is linear in that metadata could make O(1) for a global-closed body. Not yet profiled, so the trigger (map_*::<ShiftGlobal> as a top line) is not confirmed fired; the workload to profile is release heather check lib/ir_v1.hthr, now ~2.1s.

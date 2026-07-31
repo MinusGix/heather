@@ -1104,3 +1104,130 @@ case that secretly depended on "whnf = stuck-or-canonical" would surface.
 That pass, not this sketch, retires the risk. If it surfaces relevance
 marks after all, the abort criterion fires and the fallback is the
 judgmental sort, at the cost `sprop-design.md` §1 itemizes.
+
+# Part IV — the definitions round (rules, and the ch. 07 bill)
+
+Written 2026-07-31 alongside the code
+(issues/simulate-conversion-cost.md). This part is different in kind from
+I–III: the extension is not a type former but a **binding** form, so the
+rules below are ch. 04-shaped rather than LR-shaped, and the ch. 07 work
+is *owed*, not done. It is recorded here because the obligations are
+ch. 07's and because [[delam-extensions-writeup]]'s standalone document
+does not exist yet — when it does, §23–25 are its section on definitions.
+
+## 23. The binding form and its typing
+
+DeLaM ch. 04's global bindings are declarations only:
+
+```text
+B ::= g : Ctx | U : Typ_i(Δ, l) | u : Trm_i(Δ ⊢ T @ l)          i ∈ {c,p} / {v,c}
+```
+
+We add a body to the third:
+
+```text
+B ::= … | u : Trm_i(Δ ⊢ T @ l) := t
+```
+
+with the well-formedness rule (extending `⊢_L Ψ`):
+
+```text
+   ⊢_L Ψ        Ψ ⊢_L l : Level      Ψ ⊢_p Δ      Ψ; Δ ⊢_p T @ l
+   Ψ; Δ ⊢_i t : T @ l        i = c
+  ────────────────────────────────────────────────────────────────  (wf-def)
+   ⊢_L Ψ, u : Trm_i(Δ ⊢ T @ l) := t
+```
+
+Three deliberate constraints:
+
+1. **`i = c`.** Layer v admits only variables (ch. 04's "Note on Layer v
+   Rules"), so a definition there would be a renaming; and the binding
+   invariant already forbids p and m.
+2. **The body is checked at the binding's own layer `i`**, not at p. This
+   is what makes δ *layer-preserving*: unfolding `u` at any `j ≥ i`
+   produces a term already legal at `j`. Checking it at p instead would
+   let `box(u^δ)` be code whose unfolding is not, and preservation at p
+   would fail.
+3. **The body is scoped in `Δ` over Ψ's prefix**, exactly like `T` — so
+   an occurrence at `Ψ, Ψ'` unfolds to `t⇑^{|Ψ'|+1}[δ]`.
+
+The *use* rules are unchanged. `Ψ; Γ ⊢_j u^δ : T[δ] @ l` for `i ≤ j` is
+ch. 04 verbatim: a definition is a declaration that additionally knows its
+body, which is the whole reason this is one binding form and not two.
+
+## 24. δ, and why it is indexed by the layer
+
+The new computation rule, at the computing layers only:
+
+```text
+   u : Trm_c(Δ ⊢ T @ l) := t  ∈ Ψ        j comp
+  ─────────────────────────────────────────────────  (δ)
+   Ψ; Γ ⊢_j u^δ ⇝ t[δ] : T[δ] @ l
+```
+
+and, correspondingly, `u^δ` is **not** neutral at a computing layer when
+`u` is defined, while it stays neutral at c.
+
+The layer index is forced, not chosen. Ch. 06 blocks both code-recursion
+principles on global variables and compares `box(U^δ)` / `box(u^δ)`
+*syntactically*. If δ fired at c, then `box(u^δ) ≈ box(t)` while
+`elim^Trm` still dispatched them to different branches — the recursor
+would observe a distinction conversion had erased, which is exactly the
+coherence property §6 of Part I turns on. So:
+
+- at p/m, `u` denotes its body (definitions are prog's business, since
+  running is);
+- at c, `u` denotes itself (code is syntax).
+
+This is the run/inspect split the layers already encode, and it is
+independently wanted: `.code` carrying stable `u`-references rather than
+inlined bodies is what intensional instance keying needs
+([[compile-typeclass-design]]).
+
+Two consequences worth stating as invariants:
+
+- **Type-level bindings stay opaque at every layer.** `U : Typ_i(Δ, l)`
+  gains no body in this round, so a type reaches δ only through `El ν`.
+- **δ never enters a `box`.** Reduction does not descend into `box`, and
+  boxed code compares with syntactic equality, so the layer-c guarantee is
+  structural rather than a check that could be forgotten. The tests pin it
+  from the outside anyway (`crates/kernel/tests/definitions.rs`).
+
+## 25. Conversion: the δ-lazy order
+
+Algorithmically (`conv.rs`), weak-head reduction runs first *without* δ;
+if both sides then sit at the same defined head, their spines are compared
+first, and only a failure unfolds. Declaratively this is not a new rule —
+δ is a reduction, and the spine comparison is the ordinary neutral
+congruence — so ch. 08's soundness/completeness story is unaffected in
+shape: the heuristic changes *which* derivation the algorithm finds, not
+which pairs are related. The guard is `Conv::strip`'s (catch
+`NotConvertible`, propagate `OutOfFuel`, no refund), for the same reason:
+the verdict must not depend on where the budget died.
+
+## 26. What ch. 07 is owed
+
+Not done in this round; recorded so it is not lost.
+
+1. **Definitional glueing at p.** The logical relation must interpret a
+   bodied `u` at a computing layer *by its body*: `⟦u^δ⟧ = ⟦t[δ]⟧`, the
+   standard glued interpretation. Every place the LR reasons about a
+   global-headed neutral gains a case split on whether the global is
+   defined.
+2. **Neutral at c.** At layer c the interpretation is unchanged — `u` is
+   a neutral, and the Static Code lemma (ch. 05 `lem:dt:static`) still
+   applies to boxed occurrences. The obligation is to show the two
+   interpretations *cohere* across `box`: the c-interpretation is what
+   `□` types see, and nothing at p can reach through.
+3. **Fundamental theorem, `u`-cases.** Both recursion principles' `u`
+   branches and the variable/global cases redo under the split. Ch. 07's
+   generic equivalence is instantiated twice (ch. 04's declarative and
+   ch. 06's algorithmic); δ must be added to the first for the second to
+   be complete against it.
+4. **Termination.** Ψ is a telescope, so δ is well-founded on the global
+   index and cannot loop — the argument is one line, but it is the line
+   that keeps normalization's induction measure intact.
+
+Nothing here is a new *shape* of obligation: (1) is the textbook glueing
+case, (2) is Part I §6's argument re-run one level down, and (4) is
+structural. The risk is bulk, not novelty.

@@ -3,7 +3,7 @@ title: Write down the extended ch. 04 rules for our six formers
 status: open
 labels: [kernel,delam,metatheory,docs]
 created: 2026-07-24
-updated: 2026-07-24
+updated: 2026-07-31
 ---
 
 DeLaM ch. 04 has no `Id`, `Σ`, `Unit`, `Empty`, `+` or `W`. We added all
@@ -61,3 +61,7 @@ comes up, rather than the soundness we currently lean on. Doing it also
 front-loads the work for any *further* extensions past these six, which
 is the actual motivation: the marginal cost of the seventh former drops a
 lot once the six are written down properly.
+
+## Log
+
+- 2026-07-31: The definitions round wrote its declarative rules already: docs/metatheory-ch07-extensions.md Part IV sections 23-25 give the bodied-binding grammar, the wf-def rule, delta with the argument for why transparency must be layer-indexed, and the delta-lazy conversion order. They live in the ch. 07 document only because this document does not exist yet -- when it is written, sections 23-25 move here as its definitions section, and the seventh extension is already paid for. ([[simulate-conversion-cost]])

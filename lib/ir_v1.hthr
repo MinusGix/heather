@@ -289,9 +289,11 @@ fn add_body() -> Ir {
 fn add_prog() -> Prog { PFun(add_body(), PNil) }
 
 // a one-function Prog whose function returns its argument; LetCall is
-// exercised against it (calling into the add loop and back is measured at
-// >300s of conversion — issues/simulate-conversion-cost.md — so the call
-// machinery and the loop machinery are certified on separate paths)
+// exercised against it. Calling into the add loop and back used to exceed
+// 300s of conversion; since definitions landed
+// (issues/simulate-conversion-cost.md) it is ~24s — no longer prohibitive,
+// but still an order of magnitude more than this whole file, so the call
+// machinery and the loop machinery stay certified on separate paths.
 fn id_prog() -> Prog { PFun(Ret(RCons(0, RNil)), PNil) }
 
 // the spec function the IR is measured against
@@ -299,11 +301,14 @@ fn add(a: Nat, b: Nat) -> Nat { match b { Zero => a, Succ(k) => Succ(add(a, k)) 
 
 // ---------------------------------------------------------------------------
 // Acceptance (doc §11 items 2 and 6): simulate discharges by conversion at
-// literal fuel, against the embedded spec result. Theorems here are sized
-// against measured conversion cost — superlinear in executed depth (23s at
-// ~10 steps, 66s at ~16, >300s at ~22; issues/simulate-conversion-cost.md)
-// — so the loop and the call are certified on separate short paths rather
-// than one deep one. Unused fuel is free; executed steps are not.
+// literal fuel, against the embedded spec result. Cost is still superlinear
+// in executed depth, but the constant has moved twice
+// (issues/simulate-conversion-cost.md): the whole file was 107s, then 13.6s
+// once substitution stopped visiting closed subtrees, and is ~2s now that a
+// `fn` is a Ψ-definition instead of a copy at every use site. The loop and
+// the call are still certified on separate short paths rather than one deep
+// one — a combined `add(2,3)` through LetCall is ~24s, which the routine
+// gate should not pay. Unused fuel is free; executed steps are not.
 
 // 1 + 1 = 2 through the loop: LetLoop/LoopIter, LetMatch with BOTH arms
 // taken (Succ on iteration one, Zero on iteration two), LetCon,

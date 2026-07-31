@@ -21,6 +21,12 @@
 //!   does not carry it.
 //! - Recursors block (are neutral) on neutral scrutinees and on
 //!   `box (U^δ)` / `box (u^δ)`.
+//! - **δ (extension)**: the `_delta` entry points take a [`Defs`] and add
+//!   the one rule `u^δ ⇝ t[δ]` for a *defined* global. The Ψ-free names
+//!   ([`step_term`], [`whnf_term`], …) are ch. 06's relation exactly and
+//!   unfold nothing; so are the classification predicates, which therefore
+//!   call every global neutral — the layer-c view, and the only one that
+//!   reaches inside a `box`.
 
 use std::rc::Rc;
 
