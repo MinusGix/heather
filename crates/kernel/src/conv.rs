@@ -226,7 +226,11 @@ pub fn conv_local_ctx_rewriter(
 /// the syntax domain never reads.
 #[derive(Clone)]
 struct Env {
-    psi: GlobalCtx,
+    /// Shared, not cloned: a binder push clones the whole scope, and Ψ's
+    /// bindings each carry a local context of their own — copying them per
+    /// push was ~3% of a routine `lib/ir_v1.hthr` check. Only `push_tele`
+    /// changes Ψ, and it is a layer-m path.
+    psi: Rc<GlobalCtx>,
     gamma: LocalCtx,
     layer: Layer,
     /// The local environment of the value domain: entry `j` from the outer
@@ -309,7 +313,7 @@ impl Env {
     fn new(psi: &GlobalCtx, gamma: &LocalCtx, layer: Layer) -> Env {
         let (rho, vtys) = value_scope(gamma);
         Env {
-            psi: psi.clone(),
+            psi: Rc::new(psi.clone()),
             gamma: gamma.clone(),
             layer,
             rho,
@@ -363,6 +367,7 @@ impl Env {
         let tg = globals.len() as u32;
         let mut psi = shift_univ_psi(&self.psi, tu);
         psi.extend(globals);
+        let psi = Rc::new(psi);
         let o = Outer { univs: tu, globals: tg };
         let mut vtys = TyEnv::empty();
         for (t, l) in self.vtys.to_vec() {

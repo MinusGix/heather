@@ -152,11 +152,12 @@ impl Env {
     pub fn identity(n: u32) -> Env {
         IDENTITY.with(|cell| {
             let mut cached = cell.borrow_mut();
-            while cached.len < n {
-                let j = cached.len;
-                *cached = cached.push(Rc::new(TmClo::val(Rc::new(Val::var(j)))));
+            while cached.len() <= n as usize {
+                let j = cached.len() as u32 - 1;
+                let next = cached[j as usize].push(Rc::new(TmClo::val(Rc::new(Val::var(j)))));
+                cached.push(next);
             }
-            cached.prefix(n)
+            cached[n as usize].clone()
         })
     }
 
@@ -187,8 +188,11 @@ impl Env {
 }
 
 thread_local! {
-    /// See [`Env::identity`].
-    static IDENTITY: RefCell<Env> = RefCell::new(Env::empty());
+    /// Every identity environment, by length — `IDENTITY[n]` is the one for a
+    /// Γ with `n` entries, and each is the tail of the next. Indexing rather
+    /// than walking back from the longest, because a checker meets short
+    /// scopes long after it has met a deep one.
+    static IDENTITY: RefCell<Vec<Env>> = RefCell::new(vec![Env::empty()]);
 }
 
 // ---------------------------------------------------------------------------
