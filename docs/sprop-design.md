@@ -107,6 +107,29 @@ not involved.
 > *type structure* (CCobs); ours β's on `srefl` (GCST) — deliberate, per
 > §4.
 
+**Coupling with the NbE conversion round (2026-07-31).**
+`docs/nbe-conversion-design.md` moves conversion's *reduction engine* to a
+value domain to kill `issues/whnf-sharing-term-growth.md`'s exponential, so
+the "whnf-based syntactic kernel" clause above deserves a re-reading, and
+that document's §9 does it. Verdict: nothing here changes. The irrelevant
+semantic domain is forced by *normalization* — a proof gets evaluated and
+read back, so the domain must identify all proofs of an irrelevant type —
+and this kernel never normalizes: it reduces to weak head form and compares
+type-directed, so the three irrelevance arms still accept any two terms
+without inspecting either, and the strip loop transplants with its re-whnf
+deleted (the payload is already a value). The derived Π/Σ closure of §1
+survives unchanged, because it is the same recursion through the same η
+arms; the □ firewall becomes *structural* rather than disciplinary, since a
+box value carries raw syntax and has no environment in which its payload
+could be evaluated.
+
+The invariant that makes all of that true, shared with that document and
+with `issues/sprop-strict-prop.md`:
+
+> **The kernel has no normal-form readback.** Adding one — for a
+> `normalize` API, for diagnostics, for a cached normal form — is an SProp
+> design round with the TYPES 2024 bill attached, not a convenience.
+
 ---
 
 ## 2. New formers

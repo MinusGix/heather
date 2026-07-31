@@ -144,14 +144,17 @@ representation in which a computed result is bound once and referred to.
 1. **Sharing-preserving evaluation (NbE / closures).** Evaluate to a value
    domain with environments instead of substituting into branch bundles: a
    branch is never copied, it is closed over. This is the fix that changes
-   the exponent rather than the constant — the other levers cannot. *Danger:*
-   the largest kernel round on the board. It touches `reduce.rs` and
-   `conv.rs` wholesale, must respect layer-indexed δ transparency
-   ([[simulate-conversion-cost]]'s definitions design) and ch. 06's
-   syntactic treatment of boxed code (reduction never enters a `box`; a
-   value domain must preserve that), and has a ch. 07 bill of its own.
-   Read `docs/delam/06` before costing it. Do **not** start it as a
-   performance round; it is a design round.
+   the exponent rather than the constant — the other levers cannot.
+   **Designed 2026-07-31: `docs/nbe-conversion-design.md`**, with the staged
+   plan, the acceptance gates and the kill criteria. Headline decisions: the
+   declarative system does not change (no rule, no former, no ch. 07 bill);
+   `reduce.rs` survives as ch. 06's relation, as `typing.rs`'s whnf and as
+   the differential oracle; **there is no readback**, which is what keeps
+   the TYPES 2024 irrelevant-domain problem away from the landed SProp
+   formers; the one new obligation is machine adequacy (`eval` ≡ ch. 06
+   `⇝*`, both directions). Sized at ~5 definitions-rounds. Do **not** start
+   it as a performance round; the design round is done, the *instrument*
+   round (stage 0) is next.
 2. **Sub-lever: stop materialising branch bundles.** If β could produce a
    *delayed* substitution node (an explicit-substitution / suspension form
    in `Term`) instead of walking the branch, the copy would happen at most
@@ -265,14 +268,43 @@ interpreter": that route is spent (see the section above), and the known
 consumer stays the recursive interpreter on master. What would change the
 picture is a kernel that shares a forced result — lever 1.
 
-Acceptance for a fix: the arm-nested `LetMatch` probe (N=1..8) linear in N,
-recorded as a kernel bench fixture alongside `conv/simulate-depth` and
-`conv/simulate-payload` — those two are linear/flat precisely because
-neither varies nesting, which is why this defect was invisible to them.
-That gap is itself the lesson: `docs/testing-generated-terms.md`'s axes
-should gain *nesting depth of non-tail recursive calls*.
+**Trigger amendment 2026-07-31.** Lever 1 now has a design and a staged
+plan (`docs/nbe-conversion-design.md` §13), so the trigger gains a second,
+independent arm: **the plan is startable now, beginning at stage 0** (build
+and validate the acceptance instrument, ~0.3 of a definitions round), and
+stage 0 is worth doing ahead of any decision to fund the rest — it is cheap,
+it is the round's kill criterion, and without it no later stage can be
+gated. Stages 1 (value domain + evaluator, unwired, differential-tested)
+and 2a (make the comparison arms shape-agnostic — a no-op refactor) are
+likewise independently landable and independently valuable. Stage 2b, the
+switch of `conv.rs` to values, is the irreducible risk and should not be
+started until stage 0 has produced a validated curve.
+
+Acceptance for a fix: the arm-nested `LetMatch` probe (N=1..8) linear in N.
+`conv/simulate-depth` and `conv/simulate-payload` are linear/flat precisely
+because neither varies nesting, which is why this defect was invisible to
+them. That gap is itself the lesson: `docs/testing-generated-terms.md`'s
+axes should gain *nesting depth of non-tail recursive calls*.
+
+**Amended 2026-07-31 (design round, and this is a plan change).** The probe
+is **not** a kernel bench fixture: the bench suite is zero-dependency and
+cannot call the elaborator, and three hand-built kernel-term reconstructions
+of the shape — branch-nested, interpreter-shaped, and interpreter-shaped
+with a duplicated induction hypothesis — all measured **linear** (per-level
+ratio 0.8–1.5 over d/F = 1..14; spike in `docs/nbe-conversion-design.md`
+§12). Nesting is *necessary* for the exponent and not *sufficient*: in small
+hand-built terms `subst.rs`'s depth-zero fast path shares the duplicated
+payload as one `Rc`, whereas in the elaborated interpreter shifting under
+binders destroys that sharing — which is dead hypothesis 3's 0.05% measured
+from the other side. So the gate is the **elaborated `.hthr` probe driven at
+CLI level** under `(ulimit -v 8388608 -t 120; …)`, and it must be
+**validated on master first** (ratio ≥ 1.8 per level over ≥ 4 consecutive
+levels) before it gates anything — a family that is linear on master proves
+nothing when it is linear after. That validation is stage 0 of the plan and
+carries the round's kill criterion.
 
 ## Log
 
 - 2026-07-31: Filed out of the deep-path investigation round. Reproduced 22.5s / 1.5 GB for the `add(2,3)`-through-`LetCall` theorem, established the growth law on four independent quantities with one exponent (~22 per loop iteration, ~2 per nested level), isolated the axis with four in-language probes, profiled it, killed four hypotheses including the brief's leading one, and sized the only lever that changes the exponent. Scratch instrumentation (counters in `reduce.rs`/`subst.rs`, a pointer-keyed memo experiment) lived in a throwaway worktree and is gone; nothing landed on master but this issue and the log entries it points at.
 - 2026-07-31: Primary consumer NOT restructured: the defunctionalized step-machine route was implemented against lib/ir_v1.hthr and measured strictly worse than the recursive interpreter -- flat cases stayed flat, but every sub-region return became exponential (8-deep LetCall chain: 0.76s / 10 MB recursive, dead at the 8 GB cap on the machine; add(a,1) died at a=2 rather than a=3). Recorded as its own section above with the probe table and five isolation experiments. The kernel defect is UNCHANGED and this issue stays open with its existing trigger; what changed is the diagnosis, which is now broader and stated without reference to branch bundles: the axis is a carried term stored as an UNFORCED REDEX, of which a scrutinee-position recursive call is only one instance -- a configuration field does it, and so does a semantically invisible identity wrapper (id_val(env): same values, same steps, flat becomes ~x2 per level). Since the language cannot force a value, no in-language restructuring reaches it, so the trigger now says explicitly that the interpreter-restructuring route is spent and only lever 1 (a kernel that shares a forced result) applies. docs/testing-generated-terms.md gains nesting depth as axis 5.
+- 2026-07-31: Design round done, no kernel code: docs/nbe-conversion-design.md costs out lever 1 (sharing-preserving evaluation) with decided answers, rejected alternatives and a staged plan (~5 definitions-rounds). Headline decisions: scope is a shared-value whnf for CONVERSION only, not full NbE — reduce.rs survives verbatim as ch. 06's relation, as typing.rs's whnf (9 sites, all on types, all cold — the deep-path profile shows no typing symbols) and as the differential oracle, and beta_elim_* is shared rather than transcribed a sixth time; the value domain makes invariants unrepresentable rather than merely unviolated (El and canonical-length Vec/Fin cannot BE values, box values carry raw syntax with no environment so reduction structurally cannot enter one), locals are the only environment-based namespace while levels/globals stay syntactic, and variables need a two-part identity (level into the concrete entries, depth into the abstract CtxBase::Var prefix) because textbook de Bruijn levels break on context variables; the subtlest correctness point is that a global's local substitution must store its terms as VALUES, else u^delta reintroduces the defect class verbatim. Evaluation exists at p/m only and carries no layer index (Defs already encodes the one bit). delta becomes glued neutrals with memoized unfold thunks — the delta-lazy order and the has_defs gate survive and improve (O(1) head test, second visit free, and the rescoped body cached per GlobalVar since shift_global depends only on the index). Fuel: one unit per step ch. 06 would have counted, forcing is FALLIBLE everywhere (no infallible force, no Deref — a single one silently converts exhaustion into a verdict), no thunk memoizes a failure, and the invariant that comparison never inspects an unforced value is what keeps laziness from changing the relation; fuel accounting becomes sharing-dependent, so fuel-sensitive tests keep their property (insufficient budget dies OutOfFuel, never a verdict) and lose their numbers. THERE IS NO READBACK — every customer was checked and none needs syntax back, which is the design's largest simplification and the reason the TYPES 2024 irrelevant-domain negative result does not bite the landed sEq/sEmpty formers. Bounds metadata: conversion stops being its customer entirely (the 21% leaves rather than shrinks); re-measure at cleanup, honest prediction is deletion. The strict-let/force alternative is priced and rejected on four grounds, chief among them that head-only forcing cannot reach an identity WRAPPER and no data-directed deep force reaches a pending continuation. Metatheory: declarative system untouched, the one obligation is machine adequacy (both directions, against the unbounded relations, with fuel's property stated separately), DESIGN.md's 'ch. 06 verbatim' moves from the algorithm to the specification, and it is recorded in the design doc + ch05-06-lemma-audit rather than as a Part V of metatheory-ch07-extensions (which extends the declarative system; this does not).

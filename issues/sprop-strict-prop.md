@@ -3,7 +3,7 @@ title: "SProp: a definitionally irrelevant sort with strict equality"
 status: open
 labels: [kernel,delam,design,metatheory]
 created: 2026-07-28
-updated: 2026-07-29
+updated: 2026-07-31
 ---
 
 Decision (2026-07-28, discussion): Heather gets an SProp — a definitionally
@@ -157,6 +157,22 @@ hit — its β laws were propositional until the former landed). So the
 de-risk here is the rules doc plus the ch. 07 sketch, not a prototype.
 Does not gate [[indexed-families]] route 1.
 
+## Coupling: the NbE conversion round
+
+**2026-07-31.** [[whnf-sharing-term-growth]]'s design
+(`docs/nbe-conversion-design.md` §9) prices this issue's formers against the
+TYPES 2024 negative result (NbE for CCobs needed a bespoke *irrelevant*
+semantic domain, three designs tried). Verdict: the value-domain round does
+**not** buy that problem back, because Heather compares weak-head values
+type-directed and never normalizes — the three irrelevance arms (`Unit`,
+`sEq`, `sEmpty`) still accept any two terms without inspecting them, and the
+strip transplants with its re-whnf deleted. Nothing here needs changing.
+
+The one thing that would change it is recorded as a shared invariant: **the
+kernel has no normal-form readback, and adding one is an SProp design round,
+not a convenience** — a readback is precisely what forces irrelevance into
+the semantics.
+
 ## Log
 
 - 2026-07-28: Filed, off the [[indexed-families]] 2b coupling and the
@@ -169,3 +185,4 @@ Does not gate [[indexed-families]] route 1.
 - 2026-07-28: sEmpty landed (design doc sec 8 step 5, former half): Type::SEmpty level-indexed, ElimSEmpty eliminating anywhere with no beta, irrelevance arm in tm_nf, scrutinee-skipping congruence in tm_ne, same not_code_layer gate. Empty itself untouched — the contrast (sEmpty hypotheses convertible, Empty neutrals structural) is pinned in seq_transp.rs so the declined Empty-reuse alternative cannot happen by drift. 17 tests green, full suite 43 binaries, bench gate clean. Remaining before acceptance: the rec.rs code round (TmSEq/TmSEmpty, 7 branches, five transcriptions, gate lift), then 2b setoid.
 - 2026-07-28: rec.rs code round landed (design doc sec 8 step 5 complete): TmSEq/TmSEmpty codes with El decoding, seven recursor branches exactly as sec 6 billed (45 -> 52: ty_seq/tm_seq mirror the Id pair, the sEmpty trio mirrors Empty's, tm_srefl mirrors tm_refl, tm_transp is tm_j with a one-binder motive and the proof recursed as syntax), all five parallel transcriptions (subst deps, reduce fire arms, BRANCH_DIMS, both identity_branches, gen_branches), gate lifted. seq_codes.rs (6): El decoding, identity-recursor round-trips including a stuck transp as code in non-empty Delta (strip does not reach inside a box) and a poisoned-branch control — all first-run green, which is the telescopes agreeing with the fire wiring. Full suite 44 binaries. Bench: perturbed-pairs re-recorded (generator arm counts shifted the RNG corpus, not kernel cost; generator-free computed-numeral stayed at baseline). The kernel round is COMPLETE; remaining on the issue: 2b setoid acceptance (indexed-families prototype), ch. 07 full FT pass, sEq(Ty l) earmark.
 - 2026-07-29: 2b setoid acceptance PASSED (design doc sec 8 step 6, the last step): crates/elab/tests/indexed_route_2b.rs, the indexed-families route-2b prototype, signs off — match beta definitional on open recursive data, value equality lemma-free (would-be transport lemma checks as refl), mismatched indices reject, all through the landed sEq/transp behaviours with no kernel change. What the round's three behaviours actually carry there, measured: the irrelevance arm plus Sigma-eta do the beta and value-equality work (every stored/re-derived proof meets conversion at sEq type); the strip carries value-level casts and transp-spelled lengths; the guard's fail-then-neutral path runs (and must fail harmlessly) inside every open-data beta comparison. One measured edge for the ch. 07 with-code FT pass: the strip is head-only (Conv::strip fires on a transp at the head of a compared term), so a stuck-but-strippable transp blocking an elimination spine is invisible — cast ~ payload holds while elim(cast) ~ elim(payload) does not, an algorithmic incompleteness vs the declarative strip+congruence closure, confined to redundant terms (a cast at convertible endpoints is never needed). Pinned as a negative in the prototype; the ch. 07 completeness statement should scope the strip's congruence closure explicitly rather than inherit the eager-strip completeness remark, and the 2b generator's rule is to never emit such casts. Remaining on this issue: ch. 07 full FT pass, sEq(Ty l) earmark.
+- 2026-07-31: Coupling note added from the NbE conversion design round (docs/nbe-conversion-design.md sec 9, [[whnf-sharing-term-growth]]): the value-domain conversion round does NOT buy back the TYPES 2024 negative result. Their bespoke irrelevant semantic domain is forced by NORMALIZATION — a proof is evaluated and read back, so the domain must identify all proofs of an irrelevant type; Heather reduces to weak head form and compares type-directed, so the Unit/sEq/sEmpty arms still accept any two terms without inspecting either, the derived Pi/Sigma closure is the same recursion through the same eta arms, and Conv::strip transplants with its re-whnf deleted (endpoints and payload are already values). One structural improvement: the box firewall stops being disciplinary — a box value carries raw syntax with no environment, so there is nothing in which its payload could be evaluated. Recorded as a shared invariant in both this issue and docs/sprop-design.md sec 1: the kernel has no normal-form readback, and adding one (normalize API, diagnostics, cached normal forms) is an SProp design round with the TYPES 2024 bill attached, not a convenience. The head-only-strip gap from the 2b acceptance is neither widened nor narrowed — it is a property of where the strip is keyed, not of how reduction is implemented.

@@ -16,6 +16,20 @@ new work is bookkeeping in four known places, plus one genuinely new
 definitional shape (`W`'s infinitary constructor case) and two rules that
 the *declarative* side owes us (§7).
 
+**What is deliberately absent from this document (2026-07-31).** The NbE
+conversion round (`docs/nbe-conversion-design.md`) replaces conversion's
+reduction engine with an environment machine over a value domain, and it
+creates **no ch. 07 obligation at all** — no former, no binding form, no
+judgment, no rule changes, so the logical relations interpret exactly the
+system they interpret today. Its one new obligation is *machine adequacy*
+(`eval` ≡ ch. 06's `⇝*`, both directions), a ch. 06-level property about an
+algorithm; it is stated in that document's §11.2 and registered as a row in
+`docs/ch05-06-lemma-audit.md`. The absence is written down here so a reader
+of this document does not have to derive it. Part IV's outstanding
+definitions bill (§26) is neither discharged nor enlarged by that round:
+glued *evaluation* is an implementation of the δ rule, not a new semantics
+for it.
+
 ---
 
 ## 1. What an extension owes ch. 07
