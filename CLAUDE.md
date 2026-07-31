@@ -3,6 +3,11 @@
 - **Run tests only via `scripts/test`** (wraps `cargo test` in `ulimit -v/-t`
   plus a thread cap). Never run bare `cargo test`: a runaway test or a
   Debug-formatted kernel term can OOM the whole machine, not just the process.
+- **The same goes for direct `heather` runs**: deep conversion workloads are
+  memory-superlinear (an uncapped release `heather check` on a deep-fuel IR
+  theorem hit ~22 GB, 2026-07-31). Wrap every invocation:
+  `(ulimit -v 8388608 -t 120; target/release/heather check <file>)`,
+  loosening deliberately per run if needed — never uncapped.
 - `Debug` on kernel `Term`/`Type`/`Level` etc. is **budget-bounded**
   (`crates/kernel/src/fmt.rs`: ≤512 nodes, ≤64 depth, `…` elision), so an
   accidental `{:?}` is safe and prints compact syntax. Keep it that way: any
