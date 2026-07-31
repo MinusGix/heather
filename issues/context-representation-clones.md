@@ -28,3 +28,7 @@ Trigger: a profile where context clone/drop is a top-5 line *after* the
 schema round ([[schema-construction-caching]]) lands — much of today's
 context cloning is inside the fresh telescope construction that round
 would eliminate; measure again before paying the churn here.
+
+## Log
+
+- 2026-07-31: Post-definitions profile of release heather check lib/ir_v1.hthr (~2.1s, perf 999Hz): Vec<GlobalBinding>::clone is the #1 self line at 12.8%, plus GlobalBinding drop glue 3.5% -- Psi clone+drop ~16% combined, ahead of everything else. The clones are Env construction (typing.rs:183,202,216,233,248,266; conv.rs:168) deep-cloning Psi, and the definitions round made Psi strictly bigger (every fn is now a bodied binding), which is why this surfaced. Note the split this reveals: the wait-for-schema-round caveat in the body applies to LocalCtx telescope churn (CtxEntry clone+drop ~5.7% here), but the Psi half is different -- Psi is append-only at declaration granularity and never extended mid-check, so an Rc-shared GlobalCtx (clone = refcount bump) is a contained mini-round separable from the shared-spine question, with none of the structural-equality surface (Psi does not appear in terms). Trigger for the Psi half: fired.
