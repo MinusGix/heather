@@ -5,7 +5,7 @@
 //! `tests/eval_differential.rs` holds the value machine's *weak head normal
 //! forms* against the rewriter's. This file holds the thing the trusted base
 //! actually publishes against itself: the **verdict**. `conv_term` decides
-//! ch. 06's convertibility over values; `conv_term_rewriter` decides it over
+//! ch. 06's convertibility over values; `oracle::conv_term` decides it over
 //! `reduce.rs`, which is ch. 06 transcribed rule for rule. Over the same
 //! well-typed streams, on the same pairs, under the same budget, the two must
 //! reach the same answer.
@@ -46,8 +46,7 @@ use common::wt::{
 };
 use common::Rng;
 use heather_kernel::conv::{
-    conv_local_ctx, conv_local_ctx_rewriter, conv_term, conv_term_rewriter, conv_type,
-    conv_type_rewriter, ConvError,
+    conv_local_ctx, conv_term, conv_type, oracle, ConvError,
 };
 use heather_kernel::layer::Layer;
 use heather_kernel::level::Level;
@@ -104,7 +103,7 @@ fn both_tm(
 ) -> (R, R) {
     (
         conv_term(psi, gamma, layer, a, b, ty, l, fuel),
-        conv_term_rewriter(psi, gamma, layer, a, b, ty, l, fuel),
+        oracle::conv_term(psi, gamma, layer, a, b, ty, l, fuel),
     )
 }
 
@@ -119,7 +118,7 @@ fn both_ty(
 ) -> (R, R) {
     (
         conv_type(psi, gamma, layer, a, b, l, fuel),
-        conv_type_rewriter(psi, gamma, layer, a, b, l, fuel),
+        oracle::conv_type(psi, gamma, layer, a, b, l, fuel),
     )
 }
 
@@ -256,7 +255,7 @@ fn stream3_open_terms_and_contexts() {
             seed,
             "Γ ≈ Γ",
             conv_local_ctx(&env.psi, env.layer, &env.gamma, &env.gamma, FUEL),
-            conv_local_ctx_rewriter(&env.psi, env.layer, &env.gamma, &env.gamma, FUEL),
+            oracle::conv_local_ctx(&env.psi, env.layer, &env.gamma, &env.gamma, FUEL),
         );
     }
 }

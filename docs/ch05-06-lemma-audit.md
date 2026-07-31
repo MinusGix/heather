@@ -51,7 +51,7 @@ out individually.
 | `06:319` | **Determinacy**, weak head normal form | — | `whnf_*` iterates `step` to a fixed point. |
 | `06:310`/`:319` | *the residue that is **not** free* | ✅ | `ch05_06_lemmas::whnf_grammar_agrees_with_the_step_relation` *(new)* |
 | `06:690` | **Soundness of the convertibility algorithm** (9 clauses) | ⊘ | See note below. |
-| *(ours)* | **Machine adequacy** — `eval` ≡ ch. 06 `⇝*`, both directions | ○ | Not yet applicable: `conv.rs` still *is* ch. 06's rewriter. Becomes owed the moment `docs/nbe-conversion-design.md` stage 2b lands; see the note below. |
+| *(ours)* | **Machine adequacy** — `eval` ≡ ch. 06 `⇝*`, both directions | ◐ | **Owed since 2026-07-31**: `conv.rs` is the environment machine, `reduce.rs` is the specification. Tested, not proved — `tests/eval_differential.rs` (head-shape agreement, 5 streams × 600) and `tests/conv_differential.rs` (verdict agreement, 6 streams, both δ modes). See the note below. |
 | `06:711` | `W ≈ W'` (nf) ⇒ `T ≈ T'` | ◐ | Structural in `conv.rs`; exercised by `conv_relates_*_to_its_whnf`. |
 | `06:721` | PER (commented out; postponed to the LR) | ◐ | Reflexivity ✅; symmetry ✅ (both orientations, in the `whnf` laws); **transitivity ○**. |
 
@@ -77,20 +77,34 @@ laws, and the perturbed-positive / mutated-negative pairs in
 not another property test.
 
 **On machine adequacy (the row with no paper location).** The paper has no
-such lemma because it has no machine: ch. 06 *is* the algorithm, and
-`reduce.rs` transcribes it rule for rule, so today there is nothing between
-specification and implementation for a lemma to bridge. The row is entered
-now, ahead of the code, because `docs/nbe-conversion-design.md` proposes to
-put an environment machine there — and the moment it does, "conversion is
-ch. 06 verbatim" becomes "conversion *decides* ch. 06's relation", and the
-gap is exactly this statement: `eval(t, ρ)` is related to the ch. 06 whnf of
-`t` (completeness), and every value `eval` returns is (soundness — the half
-that forbids the machine from inventing reductions). The design doc §11.2
-states the relation; its stage 1 differential suite over the well-typed
-generator is what would move this row to ✅. Recorded here rather than in
-`docs/metatheory-ch07-extensions.md` because it is a ch. 06-level property
-about an algorithm, not a ch. 07 obligation about a declarative system —
-the declarative system does not move.
+such lemma because it has no machine: ch. 06 *is* the algorithm. Until
+2026-07-31 `reduce.rs` was conversion's engine as well as ch. 06's
+transcription, so there was nothing between specification and implementation
+for a lemma to bridge. `docs/nbe-conversion-design.md` put an environment
+machine there, and with it **"conversion is ch. 06 verbatim" became
+"conversion *decides* ch. 06's relation"**. The gap is exactly this
+statement: `eval(t, ρ)` is related to the ch. 06 whnf of `t`
+(completeness), and every value `eval` returns is (soundness — the half that
+forbids the machine from inventing reductions). The design doc §11.2 states
+the relation.
+
+The verdict is **◐, not ✅**, and the distinction is the point. What exists
+is *mechanical evidence*, at two levels and deliberately not one: the
+evaluator against the rewriter by head-shape agreement recursing through
+forcing (`tests/eval_differential.rs`), and the two whole conversions
+against each other verdict for verdict (`tests/conv_differential.rs`,
+against `conv::oracle`). Both run over `wt.rs`'s well-typed generator
+across several seed streams, in both δ modes, with fuel asserted as an
+invariant rather than a threshold. That is standing evidence and it found
+one real defect (a value-side substitution tail); it is not a proof, and the
+row stays ◐ until §11.2's logical relation is actually carried out. Keeping
+`reduce.rs` as the specification — it is also still `typing.rs`'s whnf — is
+what makes the evidence collectable at all, which is why `conv::oracle`
+exists and why deleting it would silently downgrade this row.
+
+Recorded here rather than in `docs/metatheory-ch07-extensions.md` because it
+is a ch. 06-level property about an algorithm, not a ch. 07 obligation about
+a declarative system — the declarative system does not move.
 
 ---
 

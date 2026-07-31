@@ -232,7 +232,9 @@ anything — `f a⃗ ≈ f a⃗` never materializes `f`. A failed attempt falls
 through to unfolding, with `Conv::strip`'s guard semantics (catch
 `NotConvertible`, propagate `OutOfFuel`, no refund). The whole stage is
 gated on Ψ actually holding a definition, because paying for its second
-whnf pass unconditionally cost 1.35–1.43× on the conversion fixtures.
+whnf pass unconditionally cost 1.35–1.43× on the conversion fixtures. The
+value domain implements this order with glued neutrals rather than by
+walking syntax for the head — see the conversion bullets under *Algorithms*.
 
 Owed to ch. 07: the logical relation interprets a bodied `u` at p by its
 body (definitional glueing) and at c as a neutral, and the fundamental
@@ -270,14 +272,70 @@ paper too).
 
 ## Algorithms
 
-- **Conversion is ch. 06 verbatim** *plus δ*: untyped weak-head reduction to
-  WHNF/neutral, then structural comparison. Not NbE, not typed reduction.
-  The one addition is definition unfolding, which is layer-indexed and
-  δ-lazy — see the global-definitions extension above.
+- **Conversion decides ch. 06's relation** *plus δ*: weak-head reduction to
+  WHNF/neutral, then structural comparison, still untyped and still not
+  typed reduction. The one addition is definition unfolding, which is
+  layer-indexed and δ-lazy — see the global-definitions extension above.
   Function-type comparison is η-directed (compare applications to a fresh
   variable); boxed types/terms compare by **syntactic equality**; recursors
   block on neutral scrutinees *and* on boxed global variables `□(U^δ)` /
   `□(u^δ)`; neutral comparison is an inference step that returns a type.
+- **Its reduction engine is an environment machine over a value domain**
+  (`src/value.rs`, `src/eval.rs`; `docs/nbe-conversion-design.md`), not a
+  term rewriter — adopted 2026-07-31 to kill the exponential of
+  `issues/whnf-sharing-term-growth.md`, where an eliminator's β materialized
+  a physical copy of its branch bundle and nesting multiplied the copies.
+  β now extends an environment. Still not NbE: there is **no readback** and
+  no normal form, because comparison is all the kernel ever wanted from
+  reduction.
+
+  Read the previous bullet and this one together: **"verbatim" has moved
+  from the algorithm to the specification.** `reduce.rs` remains ch. 06's
+  relation transcribed rule for rule, it is still typing's whnf, and it is
+  what the machine is measured against. That is a real weakening of the
+  trusted-base story and is stated as one; the compensating controls are the
+  differential oracle (`conv::oracle` — the same comparison arms
+  instantiated at the rewriter, run against the machine verdict for verdict
+  over `tests/conv_differential.rs` and `tests/eval_differential.rs`), the
+  adequacy statement (`docs/ch05-06-lemma-audit.md`, ch. 06), and the fact
+  that the declarative system did not move at all.
+- **The Dom boundary.** The comparison arms never name a weak head normal
+  form: they reach their inputs through the `conv::dom::Dom` accessor trait
+  (head views with typed children, plus the operations with no common
+  syntax — instantiation, the η arms, the synthesized formers), and the
+  arms are instantiated twice, at `dom::values::Values` and at `dom::Syn`.
+  This is what makes the oracle the *same algorithm* rather than a second
+  one, and what made the migration an instantiation rather than a rewrite.
+  Two invariants live on it: **views are total** (they inspect a form that
+  is already whnf and reduce nothing), and **everything that reaches a head
+  is fallible**, because at values reaching a child is a `force` and forcing
+  spends fuel.
+- **Sub-structures are lazy.** A value's children are closures
+  (environment + syntax + memo), forced only where a ch. 06 rule forces —
+  a scrutinee, a `Vec`/`Fin` length, an `El` encoding. A strict domain would
+  agree on every value and still evaluate an induction hypothesis nothing
+  reads, which is precisely the workload the round exists to fix.
+- **δ is glued.** A `u^δ` evaluates to a neutral carrying a memoized
+  `unfold` thunk, `Some` exactly when Ψ defines `u`. The δ-lazy order is
+  unchanged — compare without forcing the thunks, and on `NotConvertible`
+  at a shared defined head force both and retry — but the head test is now
+  O(1) instead of a spine walk, and a second visit to the same unfolding is
+  free. The `has_defs` gate survives. The rescoping `shift_global(v + 1)`
+  that every unfold used to recompute is memoized per `GlobalVar` in a
+  `reduce::BodyCache` owned beside the Ψ it belongs to (7.8% of a routine
+  `heather check lib/ir_v1.hthr`).
+- **Fuel is unchanged in meaning and shared.** One budget pays for both
+  reduction steps and comparison nodes, so the checker stays total on
+  ill-typed input; the evaluator spends from the checker's account and hands
+  back the remainder. Two consequences the machine forced. The machine's
+  tail positions run in a **trampoline** (`Eval::drive`): written as native
+  recursion, stack depth would be proportional to the *number of reduction
+  steps* rather than the term's depth, so a divergent term would abort the
+  process where the rewriter returned `OutOfFuel` — and a SIGABRT is not a
+  verdict. Non-tail recursion (a scrutinee, an application's function) stays
+  native, where its depth is the syntax's. And fuel thresholds are asserted
+  as **invariants, never as a cost model**: a budget that answers must agree
+  with the answer full budget gives.
 - **Level equivalence**: normalize to `adjust(count(l))` maps and compare;
   `ω` compares only to itself. `equiv`/`le` take a **reflexivity pre-check**
   first — identical syntax is equivalent because normalization is a function,
@@ -348,6 +406,23 @@ paper too).
   hazard — its binder counts vs. `subst.rs`'s dep table — is covered by a
   debug assertion at every skip site that re-runs the real traversal, under
   the 300-seed law suite.
+
+  **Kept, re-measured after the value domain** (2026-07-31). The NbE round
+  predicted that conversion's 21% of the deep-path profile would *leave*
+  rather than shrink, taking the machinery's main customer with it, and that
+  the honest outcome would then be deletion. Half the prediction held: the
+  bounds machinery is now **0.16%** of a routine `heather check
+  lib/ir_v1.hthr` profile. Deletion is nonetheless wrong, and the
+  measurement says so plainly — disabling the two skip hooks costs
+  **1.47×** on that same check and turns
+  `nat/step-into-closed-body` from slope −0.01 into slope 0.99 (150× at
+  1024 levels). It changes asymptotics, not a constant. The surviving
+  customers are `typing.rs` (which still weak-head-reduces on syntax), the
+  elaborator, and conversion's own residual syntactic operations — the
+  shared `beta_elim_*` helpers' `id_Γ` application and the `W`/`Wf` step
+  telescopes' `shift_local`, neither of which moved to environments.
+  A machinery that is invisible in a profile and load-bearing when removed
+  is exactly what a good skip test looks like.
 - Local contexts are `(base, entries)` where base is `·` or a context
   variable `g`; entries carry `(T, l)`.
 - Local substitutions mirror the paper's three-form syntax including the

@@ -17,7 +17,8 @@ definitional shape (`W`'s infinitary constructor case) and two rules that
 the *declarative* side owes us (§7).
 
 **What is deliberately absent from this document (2026-07-31).** The NbE
-conversion round (`docs/nbe-conversion-design.md`) replaces conversion's
+conversion round (`docs/nbe-conversion-design.md`; landed in full the same
+day) replaced conversion's
 reduction engine with an environment machine over a value domain, and it
 creates **no ch. 07 obligation at all** — no former, no binding form, no
 judgment, no rule changes, so the logical relations interpret exactly the

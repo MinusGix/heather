@@ -15,7 +15,8 @@
 //! | … with the type in WHNF       | [`Conv::tm_nee`]|
 //! | `Γ ⊢ δ ≈ δ' : Δ`              | [`Conv::subst`] |
 //!
-//! Shape of the algorithm (ch. 06 verbatim, per DESIGN.md):
+//! Shape of the algorithm (it **decides** ch. 06's relation; the relation
+//! itself is transcribed rule for rule in `reduce.rs`, per DESIGN.md):
 //!
 //! - **Neutral comparison is inference**: `tm_ne`/`ty_ne` return the type /
 //!   universe level of the left input (left-biased — sound by ch. 08); the
@@ -51,11 +52,14 @@
 //! codomain variable, not `u_t^id`.
 //!
 //! **What a weak head normal form *is* is abstract** ([`dom`]): the arms
-//! reach their inputs through the [`dom::Dom`] accessor boundary and are
-//! instantiated here at [`dom::Syn`], the rewriter. Nothing above depends on
-//! that choice — the rules, the fuel accounting, the left-biased inference
-//! and the layer discipline are the same for a value domain
-//! (docs/nbe-conversion-design.md §13, stages 2a/2b).
+//! reach their inputs through the [`dom::Dom`] accessor boundary. The public
+//! entry points below instantiate it at [`dom::values::Values`], an
+//! environment machine over the value domain of
+//! `docs/nbe-conversion-design.md`; [`oracle`] instantiates the same arms at
+//! [`dom::Syn`], the `reduce.rs` term rewriter, and exists only so the two
+//! can be held against each other. Nothing above depends on the choice — the
+//! rules, the fuel accounting, the left-biased inference and the layer
+//! discipline are the same either way.
 
 use std::marker::PhantomData;
 use std::rc::Rc;
@@ -129,26 +133,6 @@ pub fn conv_type(
     Conv::<Values>::new(fuel, psi).ty_root(&Env::new(psi, gamma, layer), a, b, level)
 }
 
-/// [`conv_type`] decided by the **rewriter** instead of the value machine.
-///
-/// The two are the same algorithm over two notions of weak head normal form
-/// (`docs/nbe-conversion-design.md` §13), and this entry point exists so a
-/// test can hold them against each other: `reduce.rs` is ch. 06's relation
-/// transcribed rule for rule, and it is what the machine is measured against
-/// (`tests/eval_differential.rs`). Nothing in the kernel calls it.
-pub fn conv_type_rewriter(
-    psi: &GlobalCtx,
-    gamma: &LocalCtx,
-    layer: Layer,
-    a: &Type,
-    b: &Type,
-    level: &Level,
-    fuel: u64,
-) -> R {
-    debug_assert!(layer.computes(), "convertibility is only invoked at computing layers");
-    Conv::<Syn>::new(fuel, psi).ty_root(&Env::new(psi, gamma, layer), a, b, level)
-}
-
 /// `Ψ; Γ ⊢_i t ≈ t' : T @ l` — convertibility of terms at a type.
 #[allow(clippy::too_many_arguments)]
 pub fn conv_term(
@@ -165,22 +149,6 @@ pub fn conv_term(
     Conv::<Values>::new(fuel, psi).tm_root(&Env::new(psi, gamma, layer), a, b, ty, level)
 }
 
-/// [`conv_term`] decided by the rewriter; see [`conv_type_rewriter`].
-#[allow(clippy::too_many_arguments)]
-pub fn conv_term_rewriter(
-    psi: &GlobalCtx,
-    gamma: &LocalCtx,
-    layer: Layer,
-    a: &Term,
-    b: &Term,
-    ty: &Type,
-    level: &Level,
-    fuel: u64,
-) -> R {
-    debug_assert!(layer.computes(), "convertibility is only invoked at computing layers");
-    Conv::<Syn>::new(fuel, psi).tm_root(&Env::new(psi, gamma, layer), a, b, ty, level)
-}
-
 /// `Ψ ⊢_i Γ ≈ Δ` — convertibility of local contexts.
 pub fn conv_local_ctx(
     psi: &GlobalCtx,
@@ -194,17 +162,67 @@ pub fn conv_local_ctx(
     Conv::<Values>::new(fuel, psi).ctx(&env, layer, a, b)
 }
 
-/// [`conv_local_ctx`] decided by the rewriter; see [`conv_type_rewriter`].
-pub fn conv_local_ctx_rewriter(
-    psi: &GlobalCtx,
-    layer: Layer,
-    a: &LocalCtx,
-    b: &LocalCtx,
-    fuel: u64,
-) -> R {
-    debug_assert!(layer.computes(), "convertibility is only invoked at computing layers");
-    let env = Env::new(psi, &LocalCtx { base: CtxBase::Nil, entries: vec![] }, layer);
-    Conv::<Syn>::new(fuel, psi).ctx(&env, layer, a, b)
+
+/// The **differential oracle**: conversion decided by the `reduce.rs` term
+/// rewriter instead of by the value machine.
+///
+/// Not a checking API. Nothing in the kernel calls anything here, and
+/// nothing outside a test should: the entry points above are conversion.
+/// This module exists because the trusted-base story changed when the round
+/// of `docs/nbe-conversion-design.md` landed — "ch. 06 verbatim" moved from
+/// the algorithm to the *specification*, and `reduce.rs` is now the
+/// specification. These functions are the same comparison arms instantiated
+/// at [`dom::Syn`], so a test can run the two engines over one corpus and
+/// require verdict-for-verdict agreement (`tests/conv_differential.rs`,
+/// `tests/eval_differential.rs`). That standing evidence is one of the three
+/// compensating controls the design doc §11.3 names; deleting it would
+/// remove the only mechanical check that the machine still decides the
+/// relation the paper states.
+pub mod oracle {
+    use super::*;
+
+    /// [`super::conv_type`] decided by the rewriter.
+    pub fn conv_type(
+        psi: &GlobalCtx,
+        gamma: &LocalCtx,
+        layer: Layer,
+        a: &Type,
+        b: &Type,
+        level: &Level,
+        fuel: u64,
+    ) -> R {
+        debug_assert!(layer.computes(), "convertibility is only invoked at computing layers");
+        Conv::<Syn>::new(fuel, psi).ty_root(&Env::new(psi, gamma, layer), a, b, level)
+    }
+
+    /// [`super::conv_term`] decided by the rewriter.
+    #[allow(clippy::too_many_arguments)]
+    pub fn conv_term(
+        psi: &GlobalCtx,
+        gamma: &LocalCtx,
+        layer: Layer,
+        a: &Term,
+        b: &Term,
+        ty: &Type,
+        level: &Level,
+        fuel: u64,
+    ) -> R {
+        debug_assert!(layer.computes(), "convertibility is only invoked at computing layers");
+        Conv::<Syn>::new(fuel, psi).tm_root(&Env::new(psi, gamma, layer), a, b, ty, level)
+    }
+
+    /// [`super::conv_local_ctx`] decided by the rewriter.
+    pub fn conv_local_ctx(
+        psi: &GlobalCtx,
+        layer: Layer,
+        a: &LocalCtx,
+        b: &LocalCtx,
+        fuel: u64,
+    ) -> R {
+        debug_assert!(layer.computes(), "convertibility is only invoked at computing layers");
+        let env = Env::new(psi, &LocalCtx { base: CtxBase::Nil, entries: vec![] }, layer);
+        Conv::<Syn>::new(fuel, psi).ctx(&env, layer, a, b)
+    }
 }
 
 // ---------------------------------------------------------------------------
