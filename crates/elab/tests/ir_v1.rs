@@ -49,7 +49,7 @@ fn declarations_check_and_a_wrong_claim_is_refuted() {
 }
 
 /// The full library, acceptance theorems included — the deep combined
-/// theorems among them. ~8s under the debug profile (was ~18, then ~60 when
+/// theorems among them. 9.2s under the debug profile (was ~18, then ~60 when
 /// the file grew); the release `heather check` is 1.25s.
 #[test]
 fn the_full_ir_library_checks() {
