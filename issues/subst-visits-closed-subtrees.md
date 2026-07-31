@@ -3,7 +3,7 @@ title: Substitution still visits closed subtrees; skipping them needs per-node m
 status: open
 labels: [kernel,performance]
 created: 2026-07-28
-updated: 2026-07-28
+updated: 2026-07-31
 ---
 
 **Deferred on purpose. Do not start this without the trigger below.** It is
@@ -72,3 +72,5 @@ closed node, `wf/mirror-involution` at ~10 µs per tree node.
   `nat/step-into-closed-body` exists as the isolating curve.
 
 ## Log
+
+- 2026-07-31: Promoted to the front of the [[simulate-conversion-cost]] queue by the 2026-07-31 delam reading: this is the cheap majority of that issue's cost (pure implementation, per-node free-variable bounds, no metatheory), and conv/simulate-payload (slope 0.91 today) is its acceptance instrument -- closed-subtree skipping should send that slope toward 0.

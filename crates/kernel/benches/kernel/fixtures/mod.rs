@@ -16,6 +16,7 @@
 pub mod code;
 pub mod conv;
 pub mod nat;
+pub mod simulate;
 pub mod subst;
 pub mod terms;
 pub mod wf;
@@ -29,6 +30,7 @@ pub fn all() -> Vec<Family> {
     v.extend(subst::families());
     v.extend(nat::families());
     v.extend(conv::families());
+    v.extend(simulate::families());
     v.extend(wf::families());
     v.extend(code::families());
     v
