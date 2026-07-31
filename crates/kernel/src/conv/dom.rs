@@ -1,0 +1,1780 @@
+//! The **comparison domain**: the boundary through which [`super::Conv`]'s
+//! arms reach their inputs (docs/nbe-conversion-design.md §13, stage 2a).
+//!
+//! Conversion is a structural comparison of two weak head normal forms. *What
+//! a weak head normal form is* is the only thing that changes when the checker
+//! moves from the rewriter to the value machine: the rules, the fuel, the
+//! left-biased inference and the layer discipline are all the same. This
+//! module names that difference as a trait so the arms are written once.
+//!
+//! Three kinds of thing live here.
+//!
+//! - **The five carriers** ([`Dom::Ty`], [`Dom::Tm`], [`Dom::TyC`],
+//!   [`Dom::TmC`], [`Dom::Subst`]). A `Ty`/`Tm` is a form already in weak head
+//!   normal form; a `TyC`/`TmC` is a *sub-structure* of one, which at the
+//!   syntax domain is a plain `Rc<Type>`/`Rc<Term>` and at the value domain is
+//!   an environment-plus-syntax closure. Reaching the head of a sub-structure
+//!   is therefore work, and work can run out of fuel — which is why **every
+//!   accessor that reaches a head returns [`super::R`]** even where the
+//!   syntax instantiation is total (design §6: an infallible boundary could
+//!   only be instantiated at values through `unwrap`). The two exceptions are
+//!   the views, and they are exceptions for a reason: see [`Dom::view_ty`].
+//! - **The views** ([`TyView`], [`TmView`]): the head discriminant plus typed
+//!   children, borrowed for levels and contexts (which are syntax in both
+//!   domains, design §3.1) and owned — a refcount bump — for children. Only
+//!   the forms conversion actually inspects get a variant; everything else is
+//!   [`TmView::Opaque`], which the arms treat exactly as the old catch-alls
+//!   did.
+//! - **The operations the arms cannot write as syntax**: instantiating an
+//!   annotation at a scrutinee ([`Dom::inst_ty`]), η-expanding a head
+//!   ([`Dom::eta_app`] and friends), embedding raw syntax into the domain
+//!   ([`Dom::embed_ty`]), and synthesizing the types the rules build
+//!   (`Π`, `Vec`, `El`, …). These are methods rather than call-site syntax
+//!   because at the value domain they are closure application and environment
+//!   extension, not substitution: leaving them at the call sites is what would
+//!   make stage 2b a rewrite instead of an instantiation.
+//!
+//! The syntax instantiation is asymmetric — `Ty = Type` but `Tm = Rc<Term>`
+//! — and that is a measured choice, not an oversight. A conversion's *root*
+//! is a `&Type` the caller lends us, and wrapping it cost 1.3× on
+//! `nat/check-numeral`, whose every conversion is one `Nat ≈ Nat`; a
+//! conversion's *neutral spines* hand the same term to the neutral judgment
+//! twice over, and copying it there cost as much again. See
+//! [`Dom::whnf_ty_root`].
+//!
+//! Two things are deliberately *not* abstracted, and stage 2b owns both:
+//! [`super::Env`]'s Γ stays a syntactic [`LocalCtx`] (only its length and base
+//! are read by the telescope helpers — entry *types* are read only by
+//! `tm_ne`'s variable arm, through [`Dom::var_type`]), and the recursor
+//! telescope tables in [`crate::rec`] keep producing syntax, which the arms
+//! then embed. See the stage-2a log entry in
+//! `issues/nbe-conversion-round.md`.
+
+use std::rc::Rc;
+
+use crate::level::Level;
+use crate::rec;
+use crate::reduce::{step_term, step_term_delta, step_type, step_type_delta};
+use crate::subst::{GlobalEntry, GlobalSubst};
+use crate::term::{
+    wf_step_telescope, Branches, GlobalVar, LocalCtx, LocalSubst, LocalVar, Motives, Term, Type,
+};
+
+use super::{Conv, Env, R, NC};
+
+// ---------------------------------------------------------------------------
+// Views
+// ---------------------------------------------------------------------------
+
+/// The head of a weak head normal **type**, with its children.
+///
+/// One variant per `Type` former: conversion inspects all of them (the
+/// layer-m formers included — the layer index restricts which may *match*,
+/// not which may be viewed).
+pub(super) enum TyView<'a, D: Dom> {
+    Nat,
+    Ty(&'a Level),
+    Unit { level: &'a Level },
+    Empty { level: &'a Level },
+    SEmpty { level: &'a Level },
+    Pi { dom_level: &'a Level, cod_level: &'a Level, dom: D::TyC, cod: D::TyC },
+    Sigma { fst_level: &'a Level, snd_level: &'a Level, fst: D::TyC, snd: D::TyC },
+    W { shape_level: &'a Level, pos_level: &'a Level, shape: D::TyC, pos: D::TyC },
+    Wf { level: &'a Level, shape: D::TyC, arity: D::TmC },
+    Sum { lhs_level: &'a Level, rhs_level: &'a Level, lhs: D::TyC, rhs: D::TyC },
+    Id { level: &'a Level, ty: D::TyC, lhs: D::TmC, rhs: D::TmC },
+    SEq { level: &'a Level, ty: D::TyC, lhs: D::TmC, rhs: D::TmC },
+    Vec { level: &'a Level, elem: D::TyC, len: D::TmC },
+    Fin { len: D::TmC },
+    UPi { num_vars: u32, level: &'a Level, body: D::TyC },
+    CtxPi { level: &'a Level, body: D::TyC },
+    TyPi { ctx: &'a LocalCtx, arg_level: &'a Level, body_level: &'a Level, body: D::TyC },
+    CodeTy { ctx: &'a LocalCtx, level: &'a Level },
+    CodeTm { ctx: &'a LocalCtx, ty: &'a Rc<Type>, level: &'a Level },
+    /// `El^l ν` — a neutral type.
+    El { level: &'a Level, tm: D::TmC },
+    /// `U^δ` — a neutral type.
+    GlobalTy { var: GlobalVar, subst: &'a D::Subst },
+}
+
+impl<D: Dom> TyView<'_, D> {
+    /// Is this one of ch. 06's two neutral type forms (`U^δ`, `El^l ν`)?
+    pub(super) fn is_neutral(&self) -> bool {
+        matches!(self, TyView::El { .. } | TyView::GlobalTy { .. })
+    }
+}
+
+/// The head of a weak head normal **term**, with its children.
+///
+/// Only the forms conversion inspects get a variant. `λ`, `Λ`, pairs, `⟨⟩` and
+/// `srefl` are [`TmView::Opaque`]: every rule that could see them is either
+/// type-directed η (which never looks at the term) or an irrelevance arm
+/// (which accepts anything), and the remaining paths reject them through the
+/// neutral judgment's catch-all — exactly as before this abstraction, where
+/// they fell through the same `_` arms.
+pub(super) enum TmView<'a, D: Dom> {
+    // -- encodings (compared under `Ty l`) --
+    TmNat,
+    TmTy(&'a Level),
+    TmUnit { level: &'a Level },
+    TmEmpty { level: &'a Level },
+    TmSEmpty { level: &'a Level },
+    TmPi { dom_level: &'a Level, cod_level: &'a Level, dom: D::TmC, cod: D::TmC },
+    TmSigma { fst_level: &'a Level, snd_level: &'a Level, fst: D::TmC, snd: D::TmC },
+    TmW { shape_level: &'a Level, pos_level: &'a Level, shape: D::TmC, pos: D::TmC },
+    TmWf { level: &'a Level, shape: D::TmC, arity: D::TmC },
+    TmId { level: &'a Level, ty: D::TmC, lhs: D::TmC, rhs: D::TmC },
+    TmSEq { level: &'a Level, ty: D::TmC, lhs: D::TmC, rhs: D::TmC },
+    TmSum { lhs_level: &'a Level, rhs_level: &'a Level, lhs: D::TmC, rhs: D::TmC },
+    TmVec { level: &'a Level, elem: D::TmC, len: D::TmC },
+    TmFin { len: D::TmC },
+
+    // -- data --
+    Zero,
+    Succ(D::TmC),
+    Refl { tm: D::TmC },
+    Inl { val: D::TmC },
+    Inr { val: D::TmC },
+    Sup { label: D::TmC, children: D::TmC },
+    Supf { label: D::TmC, children: D::TmC },
+    BoxTy(&'a Rc<Type>),
+    BoxTm(&'a Rc<Term>),
+
+    // -- neutrals --
+    Var(LocalVar),
+    GlobalTm { var: GlobalVar, subst: &'a D::Subst },
+    ElimNat { level: &'a Level, motive: D::TyC, base: D::TmC, step: D::TmC, scrut: D::TmC },
+    ElimEmpty { level: &'a Level, scrut_level: &'a Level, motive: D::TyC, scrut: D::TmC },
+    ElimSEmpty { level: &'a Level, scrut_level: &'a Level, motive: D::TyC, scrut: D::TmC },
+    Case {
+        lhs_level: &'a Level,
+        rhs_level: &'a Level,
+        motive_level: &'a Level,
+        lhs: D::TyC,
+        rhs: D::TyC,
+        motive: D::TyC,
+        case_l: D::TmC,
+        case_r: D::TmC,
+        scrut: D::TmC,
+    },
+    ElimW {
+        shape_level: &'a Level,
+        pos_level: &'a Level,
+        motive_level: &'a Level,
+        shape: D::TyC,
+        pos: D::TyC,
+        motive: D::TyC,
+        step: D::TmC,
+        scrut: D::TmC,
+    },
+    ElimWf {
+        level: &'a Level,
+        motive_level: &'a Level,
+        shape: D::TyC,
+        arity: D::TmC,
+        motive: D::TyC,
+        step: D::TmC,
+        scrut: D::TmC,
+    },
+    J {
+        ty_level: &'a Level,
+        motive_level: &'a Level,
+        ty: D::TyC,
+        lhs: D::TmC,
+        motive: D::TyC,
+        case: D::TmC,
+        rhs: D::TmC,
+        proof: D::TmC,
+    },
+    Transp {
+        ty_level: &'a Level,
+        motive_level: &'a Level,
+        ty: D::TyC,
+        motive: D::TyC,
+        lhs: D::TmC,
+        rhs: D::TmC,
+        tm: D::TmC,
+    },
+    App {
+        dom_level: &'a Level,
+        cod_level: &'a Level,
+        dom: D::TyC,
+        cod: D::TyC,
+        fun: D::TmC,
+        arg: D::TmC,
+    },
+    Fst { fst_level: &'a Level, snd_level: &'a Level, fst_ty: D::TyC, snd_ty: D::TyC, pair: D::TmC },
+    Snd { fst_level: &'a Level, snd_level: &'a Level, fst_ty: D::TyC, snd_ty: D::TyC, pair: D::TmC },
+    UApp { levels: &'a [Level], fun: D::TmC },
+    CtxApp { ctx: &'a LocalCtx, fun: D::TmC },
+    TyApp { arg: &'a Rc<Type>, fun: D::TmC },
+    LetBoxTy {
+        motive_level: &'a Level,
+        code_level: &'a Level,
+        ctx: &'a LocalCtx,
+        motive: D::TyC,
+        body: D::TmC,
+        scrut: D::TmC,
+    },
+    LetBoxTm {
+        motive_level: &'a Level,
+        code_level: &'a Level,
+        ctx: &'a LocalCtx,
+        ty: &'a Rc<Type>,
+        motive: D::TyC,
+        body: D::TmC,
+        scrut: D::TmC,
+    },
+    ElimCodeTy {
+        ty_motive_level: &'a Level,
+        tm_motive_level: &'a Level,
+        motives: Rc<Motives>,
+        branches: Rc<Branches>,
+        code_level: &'a Level,
+        ctx: &'a LocalCtx,
+        scrut: D::TmC,
+        rec: D::RecCtx,
+    },
+    ElimCodeTm {
+        ty_motive_level: &'a Level,
+        tm_motive_level: &'a Level,
+        motives: Rc<Motives>,
+        branches: Rc<Branches>,
+        code_level: &'a Level,
+        ctx: &'a LocalCtx,
+        ty: &'a Rc<Type>,
+        scrut: D::TmC,
+        rec: D::RecCtx,
+    },
+
+    /// A canonical form no rule inspects: `λ`, `Λ`, a pair, `⟨⟩`, `srefl`.
+    Opaque,
+}
+
+impl<D: Dom> TmView<'_, D> {
+    /// Is this one of the 14 type *encodings* — the canonical inhabitants of
+    /// `Ty l`? A mismatched pair where either side is one is not convertible;
+    /// this is the ch. 06 note that positive types reject across constructors.
+    pub(super) fn is_encoding(&self) -> bool {
+        matches!(
+            self,
+            TmView::TmNat
+                | TmView::TmTy(_)
+                | TmView::TmUnit { .. }
+                | TmView::TmEmpty { .. }
+                | TmView::TmSEmpty { .. }
+                | TmView::TmPi { .. }
+                | TmView::TmSigma { .. }
+                | TmView::TmW { .. }
+                | TmView::TmWf { .. }
+                | TmView::TmId { .. }
+                | TmView::TmSEq { .. }
+                | TmView::TmSum { .. }
+                | TmView::TmVec { .. }
+                | TmView::TmFin { .. }
+        )
+    }
+
+    /// Is this a canonical inhabitant of `Nat`?
+    pub(super) fn is_nat_data(&self) -> bool {
+        matches!(self, TmView::Zero | TmView::Succ(_))
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The domain
+// ---------------------------------------------------------------------------
+
+/// What the comparison arms are generic over.
+///
+/// Implementors are zero-sized markers; every method takes the checker
+/// explicitly, because the operations that differ between domains are the ones
+/// that spend fuel.
+pub(super) trait Dom: Sized + 'static {
+    /// A **type** in weak head normal form.
+    type Ty;
+    /// A **term** in weak head normal form.
+    type Tm;
+    /// A type sub-structure of a value, possibly under one binder of the
+    /// former that carries it. Reaching its head is [`Dom::whnf_ty`].
+    type TyC: Clone;
+    /// A term sub-structure; see [`Dom::TyC`].
+    type TmC: Clone;
+    /// The local substitution `δ` of a global variable `u^δ` / `U^δ`.
+    type Subst;
+    /// The scope a code recursor's Γ-scoped raw syntax (`motives`,
+    /// `branches`) is read in. The recursors' branch tables are the only
+    /// syntax a value carries that the *rewriter* would have rewritten at
+    /// every enclosing β, so it agrees with the value only through the
+    /// elimination's stored environment; at the syntax domain that
+    /// environment is the identity, i.e. nothing.
+    type RecCtx: Clone;
+
+    // -- reduction ----------------------------------------------------------
+
+    /// `T ⇝* W` with δ, spending one fuel per step.
+    fn whnf_ty(cv: &mut Conv<Self>, env: &Env, t: &Self::TyC) -> R<Self::Ty>;
+    /// The two **roots**: raw syntax, δ-opaquely reduced into the domain.
+    ///
+    /// A conversion starts from syntax the caller lends us, not from a
+    /// sub-structure of anything, so entering the domain is its own
+    /// operation — at the value domain, evaluation in the identity
+    /// environment of Γ (design §3.2). It exists as a method rather than as
+    /// `embed` + [`Dom::whnf_ty`] because the syntax domain can then reduce
+    /// the borrow in place: wrapping every root cost 1.3× on
+    /// `nat/check-numeral`, whose every conversion is one `Nat ≈ Nat`.
+    fn whnf_ty_root(cv: &mut Conv<Self>, env: &Env, t: &Type) -> R<Self::Ty>;
+    fn whnf_tm_root(cv: &mut Conv<Self>, env: &Env, t: &Term) -> R<Self::Tm>;
+    fn whnf_tm(cv: &mut Conv<Self>, env: &Env, t: &Self::TmC) -> R<Self::Tm>;
+    /// `T ⇝* W` **without** δ: stops at a definition's spine.
+    fn whnf_ty_opaque(cv: &mut Conv<Self>, env: &Env, t: &Self::TyC) -> R<Self::Ty>;
+    fn whnf_tm_opaque(cv: &mut Conv<Self>, env: &Env, t: &Self::TmC) -> R<Self::Tm>;
+    /// Resume δ-transparent reduction from a δ-opaque weak head normal form.
+    fn delta_ty(cv: &mut Conv<Self>, env: &Env, w: &Self::Ty) -> R<Self::Ty>;
+    fn delta_tm(cv: &mut Conv<Self>, env: &Env, w: &Self::Tm) -> R<Self::Tm>;
+    /// The definition at the head of a δ-stuck spine, if any.
+    fn delta_head(cv: &Conv<Self>, env: &Env, w: &Self::Tm) -> Option<GlobalVar>;
+    fn delta_head_ty(cv: &Conv<Self>, env: &Env, w: &Self::Ty) -> Option<GlobalVar>;
+    /// Is the head a `transp`? One discriminant read on conversion's hottest
+    /// path — the strip loop must not cost a view construction.
+    fn is_transp(w: &Self::Tm) -> bool;
+
+    // -- views --------------------------------------------------------------
+
+    /// The two views. Unlike every other accessor these are **total**: they
+    /// inspect a form that is already in weak head normal form, and neither
+    /// domain has to reduce anything to name its head or hand back its
+    /// children. Fallibility lives one step earlier, in the operations that
+    /// reach a head at all ([`Dom::whnf_ty`], [`Dom::head_tm`]).
+    fn view_ty<'a>(cv: &mut Conv<Self>, w: &'a Self::Ty) -> TyView<'a, Self>;
+    fn view_tm<'a>(cv: &mut Conv<Self>, w: &'a Self::Tm) -> TmView<'a, Self>;
+    /// The weak head form of a sub-structure that is **already** in weak head
+    /// normal form because the form carrying it is: an eliminator's scrutinee,
+    /// an application's function. At the syntax domain this is a clone; at the
+    /// value domain it is a force, which is why it is fallible.
+    fn head_tm(cv: &mut Conv<Self>, env: &Env, t: &Self::TmC) -> R<Self::Tm>;
+    /// A weak head normal type seen as a sub-structure — the `W` and `Wf` arms
+    /// build the children's types out of the type they are comparing at.
+    fn as_child_ty(cv: &mut Conv<Self>, env: &Env, w: &Self::Ty) -> R<Self::TyC>;
+
+    // -- scope --------------------------------------------------------------
+
+    /// `Γ, x : T @ l`.
+    fn push_entry(env: &Env, ty: &Self::TyC, level: &Level) -> Env;
+    /// Push a recursor telescope's universe, global and local binders.
+    fn push_spec(env: &Env, tele: &rec::Tele) -> Env;
+    /// The type and level of a local, looked up in Γ and weakened to the
+    /// variable's own scope.
+    fn var_type(cv: &mut Conv<Self>, env: &Env, x: LocalVar) -> R<(Self::TyC, Level)>;
+    /// Weaken past `by` binders pushed on the right. Free at the value domain
+    /// (variables are levels), a `shift_local` at the syntax one.
+    fn weaken_ty(t: &Self::TyC, by: u32) -> Self::TyC;
+    fn weaken_tm(t: &Self::TmC, by: u32) -> Self::TmC;
+
+    // -- embedding raw syntax -----------------------------------------------
+
+    /// Raw syntax scoped in `env`'s Γ, as a sub-structure of the domain.
+    fn embed_ty(env: &Env, t: Rc<Type>) -> Self::TyC;
+    /// Raw syntax scoped in `env`'s Γ but *read in* `rec`'s scope — the code
+    /// recursors' motives and branches, plus everything derived from them.
+    fn embed_ty_at(rec: &Self::RecCtx, env: &Env, t: Rc<Type>) -> Self::TyC;
+    fn embed_tm_at(rec: &Self::RecCtx, env: &Env, t: Rc<Term>) -> Self::TmC;
+
+    // -- instantiation ------------------------------------------------------
+
+    /// `M[a⃗/x⃗]` — instantiate an annotation at scrutinees. `home` is the
+    /// scope `M` binds over, `cur` the (possibly longer) scope the arguments
+    /// live in; at the syntax domain that difference is the weakening of the
+    /// identity substitution, at the value domain it is nothing and the
+    /// closure is simply applied.
+    ///
+    /// This is *the* operation that must not be spelled at the call sites:
+    /// substitution and closure application have no common syntax.
+    fn inst_ty(
+        cv: &mut Conv<Self>,
+        home: &Env,
+        cur: &Env,
+        m: &Self::TyC,
+        args: &[Self::TmC],
+    ) -> R<Self::TyC>;
+    /// [`Dom::inst_ty`] for a *term* annotation — `Wf`'s arity, the one
+    /// sub-structure under a former's binder that is a term.
+    fn inst_tm(
+        cv: &mut Conv<Self>,
+        home: &Env,
+        cur: &Env,
+        m: &Self::TmC,
+        args: &[Self::TmC],
+    ) -> R<Self::TmC>;
+    /// Weaken past `by` **global** binders: the `letbox` arms compare their
+    /// bodies under a Ψ extended by the code variable, and the motive they
+    /// instantiate comes from outside it.
+    fn shift_global_ty(cv: &mut Conv<Self>, env: &Env, t: &Self::TyC, by: u32) -> R<Self::TyC>;
+    /// `T[ℓ⃗/L]` under a `ΠΠ` binder.
+    fn inst_univ_ty(cv: &mut Conv<Self>, env: &Env, body: &Self::TyC, phi: &[Level])
+        -> R<Self::TyC>;
+    /// `T[Δ/g]` under a `(g : Ctx) ⇒` binder.
+    fn inst_ctx_ty(cv: &mut Conv<Self>, env: &Env, body: &Self::TyC, ctx: &LocalCtx)
+        -> R<Self::TyC>;
+    /// `T[S/U]` under a `(U : Typ) ⇒` binder.
+    fn inst_tyarg_ty(
+        cv: &mut Conv<Self>,
+        env: &Env,
+        body: &Self::TyC,
+        arg: &Rc<Type>,
+    ) -> R<Self::TyC>;
+
+    // -- local substitutions ------------------------------------------------
+
+    fn subst_terms(d: &Self::Subst) -> &[Self::TmC];
+    /// Do the two substitutions have the same tail? Stated as a predicate
+    /// rather than as equality because the value domain's tail deliberately
+    /// carries less than the syntax's (`VTail` drops the source context's
+    /// length, which an environment machine has no opportunity to renormalize
+    /// — stage 1's log).
+    fn subst_tails_agree(a: &Self::Subst, b: &Self::Subst) -> bool;
+    /// `T[δ|ₖ]` — a target-context entry type carried back along the first
+    /// `k` steps of `δ`. With `k = δ.terms.len()` this is `T[δ]`, the type of
+    /// a global variable's instance.
+    fn apply_subst_ty(
+        cv: &mut Conv<Self>,
+        env: &Env,
+        d: &Self::Subst,
+        k: usize,
+        t: &Rc<Type>,
+    ) -> R<Self::TyC>;
+
+    // -- synthesized types --------------------------------------------------
+
+    /// `Nat` and `ze`, the two closed forms conversion synthesizes on its
+    /// hottest paths (every length, arity and `elim_Nat` base). Scope-free in
+    /// both domains — they close over nothing — so the checker builds each
+    /// once and clones the handle.
+    fn nat() -> Self::TyC;
+    fn univ(env: &Env, level: &Level) -> Self::TyC;
+    fn empty(env: &Env, level: &Level) -> Self::TyC;
+    fn sempty(env: &Env, level: &Level) -> Self::TyC;
+    fn code_ty(env: &Env, ctx: &LocalCtx, level: &Level) -> Self::TyC;
+    fn code_tm(env: &Env, ctx: &LocalCtx, ty: &Rc<Type>, level: &Level) -> Self::TyC;
+    /// `El^l s` at an encoding that is a domain object — the arms that compare
+    /// under `Ty l` push its own `El` as a binder type.
+    fn el(cv: &mut Conv<Self>, env: &Env, level: &Level, tm: &Self::TmC) -> R<Self::TyC>;
+    /// `Π(x : S). T`, with `T` scoped one binder deeper.
+    fn pi(
+        cv: &mut Conv<Self>,
+        env: &Env,
+        dom_level: &Level,
+        cod_level: &Level,
+        dom: &Self::TyC,
+        cod: &Self::TyC,
+    ) -> R<Self::TyC>;
+    fn sum(
+        cv: &mut Conv<Self>,
+        env: &Env,
+        lhs_level: &Level,
+        rhs_level: &Level,
+        lhs: &Self::TyC,
+        rhs: &Self::TyC,
+    ) -> R<Self::TyC>;
+    fn w(
+        cv: &mut Conv<Self>,
+        env: &Env,
+        shape_level: &Level,
+        pos_level: &Level,
+        shape: &Self::TyC,
+        pos: &Self::TyC,
+    ) -> R<Self::TyC>;
+    fn wf(
+        cv: &mut Conv<Self>,
+        env: &Env,
+        level: &Level,
+        shape: &Self::TyC,
+        arity: &Self::TmC,
+    ) -> R<Self::TyC>;
+    fn vec(
+        cv: &mut Conv<Self>,
+        env: &Env,
+        level: &Level,
+        elem: &Self::TyC,
+        len: &Self::TmC,
+    ) -> R<Self::TyC>;
+    fn id(
+        cv: &mut Conv<Self>,
+        env: &Env,
+        level: &Level,
+        ty: &Self::TyC,
+        lhs: &Self::TmC,
+        rhs: &Self::TmC,
+    ) -> R<Self::TyC>;
+
+    // -- synthesized terms --------------------------------------------------
+
+    fn zero() -> Self::TmC;
+    fn succ(cv: &mut Conv<Self>, env: &Env, t: &Self::TmC) -> R<Self::TmC>;
+    /// The local variable `x` as a term of the domain.
+    fn local(env: &Env, x: LocalVar) -> Self::TmC;
+    fn refl(
+        cv: &mut Conv<Self>,
+        env: &Env,
+        level: &Level,
+        ty: &Self::TyC,
+        tm: &Self::TmC,
+    ) -> R<Self::TmC>;
+    /// `inl`/`inr` at the given summand types; `left` picks the injection.
+    #[allow(clippy::too_many_arguments)]
+    fn inj(
+        cv: &mut Conv<Self>,
+        env: &Env,
+        left: bool,
+        lhs_level: &Level,
+        rhs_level: &Level,
+        lhs: &Self::TyC,
+        rhs: &Self::TyC,
+        val: &Self::TmC,
+    ) -> R<Self::TmC>;
+    /// `sup(a; f)` at the annotations of the `W` type `w`, read `by` binders
+    /// deeper than `w`'s own scope.
+    ///
+    /// The annotations are taken from the type rather than passed in because
+    /// `W`'s positions are a *body under the shape binder*: weakening the
+    /// ambient scope of such a body is not the whole-node shift
+    /// [`Dom::weaken_ty`] performs, and at the value domain it is not an
+    /// operation at all. Destructuring the weakened `W` is what the rule
+    /// itself does.
+    fn sup_at(
+        cv: &mut Conv<Self>,
+        env: &Env,
+        w: &Self::TyC,
+        by: u32,
+        label: &Self::TmC,
+        children: &Self::TmC,
+    ) -> R<Self::TmC>;
+    /// Syntactic equality of two sub-structures, as a fast path only: `false`
+    /// must always be safe (the caller falls back to a full comparison).
+    fn eq_fast(a: &Self::TmC, b: &Self::TmC) -> bool;
+    #[allow(clippy::too_many_arguments)]
+    fn app(
+        cv: &mut Conv<Self>,
+        env: &Env,
+        dom_level: &Level,
+        cod_level: &Level,
+        dom: &Self::TyC,
+        cod: &Self::TyC,
+        fun: &Self::TmC,
+        arg: &Self::TmC,
+    ) -> R<Self::TmC>;
+    /// `fst`/`snd` of a sub-structure (not of a compared head — that is
+    /// [`Dom::eta_proj`]).
+    #[allow(clippy::too_many_arguments)]
+    fn proj(
+        cv: &mut Conv<Self>,
+        env: &Env,
+        first: bool,
+        fst_level: &Level,
+        snd_level: &Level,
+        fst_ty: &Self::TyC,
+        snd_ty: &Self::TyC,
+        pair: &Self::TmC,
+    ) -> R<Self::TmC>;
+    /// `box U^{id_Δ}` / `box u^{id_Δ}` for the freshly pushed global — the
+    /// `letbox` arms' payload. Code is syntax in both domains (design §3.5).
+    fn box_ty(env: &Env, code: Rc<Type>) -> Self::TmC;
+    fn box_tm(env: &Env, code: Rc<Term>) -> Self::TmC;
+    /// The payload of a `box`, if this sub-structure is one. `Ok(None)` means
+    /// "not a box", which the code recursors' scrutinee arms distinguish from
+    /// "a box of the wrong thing".
+    fn box_ty_payload(cv: &mut Conv<Self>, env: &Env, t: &Self::TmC) -> R<Option<Rc<Type>>>;
+    fn box_tm_payload(cv: &mut Conv<Self>, env: &Env, t: &Self::TmC) -> R<Option<Rc<Term>>>;
+
+    // -- η -----------------------------------------------------------------
+
+    /// `w↑ x` in `Γ, x : S` — the Π η arm, for *both* sides at once so the
+    /// codomain annotation is built once, as it was before this abstraction.
+    /// `outer` is the scope `w` lives in, `inner` the extended one.
+    #[allow(clippy::too_many_arguments)]
+    fn eta_app(
+        cv: &mut Conv<Self>,
+        outer: &Env,
+        inner: &Env,
+        a: &Self::Tm,
+        b: &Self::Tm,
+        dom_level: &Level,
+        cod_level: &Level,
+        dom: &Self::TyC,
+        cod: &Self::TyC,
+    ) -> R<(Self::TmC, Self::TmC)>;
+    /// `w↑ $ ℓ⃗` in `L, ℓ⃗`.
+    fn eta_uapp(
+        cv: &mut Conv<Self>,
+        outer: &Env,
+        inner: &Env,
+        a: &Self::Tm,
+        b: &Self::Tm,
+        num_vars: u32,
+    ) -> R<(Self::TmC, Self::TmC)>;
+    /// `w↑ @ g` in `Ψ, g : Ctx`.
+    fn eta_ctxapp(
+        cv: &mut Conv<Self>,
+        outer: &Env,
+        inner: &Env,
+        a: &Self::Tm,
+        b: &Self::Tm,
+    ) -> R<(Self::TmC, Self::TmC)>;
+    /// `w↑ @ U^{id_Δ}` in `Ψ, U : Typ_p(Δ, l)`.
+    fn eta_tyapp(
+        cv: &mut Conv<Self>,
+        outer: &Env,
+        inner: &Env,
+        a: &Self::Tm,
+        b: &Self::Tm,
+        ctx: &LocalCtx,
+    ) -> R<(Self::TmC, Self::TmC)>;
+    /// `fst w` / `snd w` — the Σ η arm, on compared heads.
+    #[allow(clippy::too_many_arguments)]
+    fn eta_proj(
+        cv: &mut Conv<Self>,
+        env: &Env,
+        first: bool,
+        a: &Self::Tm,
+        b: &Self::Tm,
+        fst_level: &Level,
+        snd_level: &Level,
+        fst_ty: &Self::TyC,
+        snd_ty: &Self::TyC,
+    ) -> R<(Self::TmC, Self::TmC)>;
+
+    // -- recursors ----------------------------------------------------------
+
+    /// The `elim_Wf` step telescope `(cs, ih, s)` of ch. 04, shared with
+    /// `typing.rs` at the syntax domain.
+    #[allow(clippy::too_many_arguments)]
+    fn wf_step_telescope(
+        cv: &mut Conv<Self>,
+        env: &Env,
+        level: &Level,
+        motive_level: &Level,
+        shape: &Self::TyC,
+        arity: &Self::TmC,
+        motive: &Self::TyC,
+    ) -> R<(Self::TyC, Self::TyC, Self::TyC)>;
+    /// `M_Typ[l/ℓ, Δ/g, t/x_T]` — the code type recursor's conclusion.
+    #[allow(clippy::too_many_arguments)]
+    fn inst_ty_motive(
+        cv: &mut Conv<Self>,
+        env: &Env,
+        rec: &Self::RecCtx,
+        motive: &Rc<Type>,
+        code_level: &Level,
+        ctx: &LocalCtx,
+        scrut: &Self::TmC,
+    ) -> R<Self::TyC>;
+    /// `M_Trm[l/ℓ, Δ/g, T/U_T, t/x_t]` — the code term recursor's conclusion.
+    #[allow(clippy::too_many_arguments)]
+    fn inst_tm_motive(
+        cv: &mut Conv<Self>,
+        env: &Env,
+        rec: &Self::RecCtx,
+        motive: &Rc<Type>,
+        code_level: &Level,
+        ctx: &LocalCtx,
+        ty: &Rc<Type>,
+        scrut: &Self::TmC,
+    ) -> R<Self::TyC>;
+}
+
+// ---------------------------------------------------------------------------
+// The syntax instantiation
+// ---------------------------------------------------------------------------
+
+/// The rewriter domain: a weak head normal form is a `Type`/`Term` that
+/// [`crate::reduce`] cannot step, and a sub-structure is the syntax itself.
+/// Every accessor is total, so every one returns `Ok`.
+///
+/// Every method is `#[inline]`: they are thin adapters that must fold into
+/// the arms, and leaving them as calls — a view returned through memory, a
+/// whnf moved twice — cost 1.3× on `nat/check-numeral`.
+pub(super) struct Syn;
+
+/// `Γ ⊢ x : T` — the identity substitution of `env`'s Γ, weakened past the
+/// `k` binders `cur` has and `home` does not.
+fn id_at(home: &Env, cur: &Env) -> LocalSubst {
+    let k = (cur.gamma.entries.len() - home.gamma.entries.len()) as u32;
+    LocalSubst::id(&home.gamma).shift_local(k)
+}
+
+fn var0() -> Rc<Term> {
+    Rc::new(Term::Var(LocalVar(0)))
+}
+
+impl Dom for Syn {
+    type Ty = Type;
+    type Tm = Rc<Term>;
+    type TyC = Rc<Type>;
+    type TmC = Rc<Term>;
+    type Subst = LocalSubst;
+    /// The syntax domain reads Γ-scoped syntax in Γ; there is nothing to
+    /// carry.
+    type RecCtx = ();
+
+    // -- reduction ----------------------------------------------------------
+
+    #[inline]
+    fn whnf_ty(cv: &mut Conv<Self>, env: &Env, t: &Rc<Type>) -> R<Type> {
+        let defs = cv.defs(env);
+        step_ty(cv, env, t, |t, g| step_type_delta(t, g, defs))
+    }
+
+    #[inline]
+    fn whnf_ty_root(cv: &mut Conv<Self>, env: &Env, t: &Type) -> R<Type> {
+        step_ty(cv, env, t, step_type)
+    }
+
+    #[inline]
+    fn whnf_tm_root(cv: &mut Conv<Self>, env: &Env, t: &Term) -> R<Rc<Term>> {
+        let mut cur = t.clone();
+        while let Some(next) = step_term(&cur, &env.gamma) {
+            cv.spend()?;
+            cur = next;
+        }
+        Ok(Rc::new(cur))
+    }
+
+    #[inline]
+    fn whnf_tm(cv: &mut Conv<Self>, env: &Env, t: &Rc<Term>) -> R<Rc<Term>> {
+        let defs = cv.defs(env);
+        step_tm(cv, env, t, |t, g| step_term_delta(t, g, defs))
+    }
+
+    #[inline]
+    fn whnf_ty_opaque(cv: &mut Conv<Self>, env: &Env, t: &Rc<Type>) -> R<Type> {
+        step_ty(cv, env, t, step_type)
+    }
+
+    #[inline]
+    fn whnf_tm_opaque(cv: &mut Conv<Self>, env: &Env, t: &Rc<Term>) -> R<Rc<Term>> {
+        step_tm(cv, env, t, step_term)
+    }
+
+    #[inline]
+    fn delta_ty(cv: &mut Conv<Self>, env: &Env, w: &Type) -> R<Type> {
+        let defs = cv.defs(env);
+        step_ty(cv, env, w, |t, g| step_type_delta(t, g, defs))
+    }
+
+    #[inline]
+    fn delta_tm(cv: &mut Conv<Self>, env: &Env, w: &Rc<Term>) -> R<Rc<Term>> {
+        Self::whnf_tm(cv, env, w)
+    }
+
+    #[inline]
+    fn delta_head(cv: &Conv<Self>, env: &Env, w: &Rc<Term>) -> Option<GlobalVar> {
+        super::delta_head(w, cv.defs(env))
+    }
+
+    #[inline]
+    fn delta_head_ty(cv: &Conv<Self>, env: &Env, w: &Type) -> Option<GlobalVar> {
+        super::delta_head_ty(w, cv.defs(env))
+    }
+
+    #[inline]
+    fn is_transp(w: &Rc<Term>) -> bool {
+        matches!(**w, Term::Transp { .. })
+    }
+
+    // -- views --------------------------------------------------------------
+
+    #[inline]
+    fn view_ty<'a>(_cv: &mut Conv<Self>, w: &'a Type) -> TyView<'a, Self> {
+        match w {
+            Type::Nat => TyView::Nat,
+            Type::Ty(l) => TyView::Ty(l),
+            Type::Unit { level } => TyView::Unit { level },
+            Type::Empty { level } => TyView::Empty { level },
+            Type::SEmpty { level } => TyView::SEmpty { level },
+            Type::Pi { dom_level, cod_level, dom, cod } => TyView::Pi {
+                dom_level,
+                cod_level,
+                dom: Rc::clone(dom),
+                cod: Rc::clone(cod),
+            },
+            Type::Sigma { fst_level, snd_level, fst, snd } => TyView::Sigma {
+                fst_level,
+                snd_level,
+                fst: Rc::clone(fst),
+                snd: Rc::clone(snd),
+            },
+            Type::W { shape_level, pos_level, shape, pos } => TyView::W {
+                shape_level,
+                pos_level,
+                shape: Rc::clone(shape),
+                pos: Rc::clone(pos),
+            },
+            Type::Wf { level, shape, arity } => {
+                TyView::Wf { level, shape: Rc::clone(shape), arity: Rc::clone(arity) }
+            }
+            Type::Sum { lhs_level, rhs_level, lhs, rhs } => TyView::Sum {
+                lhs_level,
+                rhs_level,
+                lhs: Rc::clone(lhs),
+                rhs: Rc::clone(rhs),
+            },
+            Type::Id { level, ty, lhs, rhs } => TyView::Id {
+                level,
+                ty: Rc::clone(ty),
+                lhs: Rc::clone(lhs),
+                rhs: Rc::clone(rhs),
+            },
+            Type::SEq { level, ty, lhs, rhs } => TyView::SEq {
+                level,
+                ty: Rc::clone(ty),
+                lhs: Rc::clone(lhs),
+                rhs: Rc::clone(rhs),
+            },
+            Type::Vec { level, elem, len } => {
+                TyView::Vec { level, elem: Rc::clone(elem), len: Rc::clone(len) }
+            }
+            Type::Fin { len } => TyView::Fin { len: Rc::clone(len) },
+            Type::UPi { num_vars, level, body } => {
+                TyView::UPi { num_vars: *num_vars, level, body: Rc::clone(body) }
+            }
+            Type::CtxPi { level, body } => TyView::CtxPi { level, body: Rc::clone(body) },
+            Type::TyPi { ctx, arg_level, body_level, body } => {
+                TyView::TyPi { ctx, arg_level, body_level, body: Rc::clone(body) }
+            }
+            Type::CodeTy { ctx, level } => TyView::CodeTy { ctx, level },
+            Type::CodeTm { ctx, ty, level } => TyView::CodeTm { ctx, ty, level },
+            Type::El { level, tm } => TyView::El { level, tm: Rc::clone(tm) },
+            Type::GlobalTy { var, subst } => TyView::GlobalTy { var: *var, subst },
+        }
+    }
+
+    #[inline]
+    fn view_tm<'a>(_cv: &mut Conv<Self>, w: &'a Rc<Term>) -> TmView<'a, Self> {
+        match &**w {
+            Term::TmNat => TmView::TmNat,
+            Term::TmTy(l) => TmView::TmTy(l),
+            Term::TmUnit { level } => TmView::TmUnit { level },
+            Term::TmEmpty { level } => TmView::TmEmpty { level },
+            Term::TmSEmpty { level } => TmView::TmSEmpty { level },
+            Term::TmPi { dom_level, cod_level, dom, cod } => TmView::TmPi {
+                dom_level,
+                cod_level,
+                dom: Rc::clone(dom),
+                cod: Rc::clone(cod),
+            },
+            Term::TmSigma { fst_level, snd_level, fst, snd } => TmView::TmSigma {
+                fst_level,
+                snd_level,
+                fst: Rc::clone(fst),
+                snd: Rc::clone(snd),
+            },
+            Term::TmW { shape_level, pos_level, shape, pos } => TmView::TmW {
+                shape_level,
+                pos_level,
+                shape: Rc::clone(shape),
+                pos: Rc::clone(pos),
+            },
+            Term::TmWf { level, shape, arity } => {
+                TmView::TmWf { level, shape: Rc::clone(shape), arity: Rc::clone(arity) }
+            }
+            Term::TmId { level, ty, lhs, rhs } => TmView::TmId {
+                level,
+                ty: Rc::clone(ty),
+                lhs: Rc::clone(lhs),
+                rhs: Rc::clone(rhs),
+            },
+            Term::TmSEq { level, ty, lhs, rhs } => TmView::TmSEq {
+                level,
+                ty: Rc::clone(ty),
+                lhs: Rc::clone(lhs),
+                rhs: Rc::clone(rhs),
+            },
+            Term::TmSum { lhs_level, rhs_level, lhs, rhs } => TmView::TmSum {
+                lhs_level,
+                rhs_level,
+                lhs: Rc::clone(lhs),
+                rhs: Rc::clone(rhs),
+            },
+            Term::TmVec { level, elem, len } => {
+                TmView::TmVec { level, elem: Rc::clone(elem), len: Rc::clone(len) }
+            }
+            Term::TmFin { len } => TmView::TmFin { len: Rc::clone(len) },
+
+            Term::Zero => TmView::Zero,
+            Term::Succ(t) => TmView::Succ(Rc::clone(t)),
+            Term::Refl { tm, .. } => TmView::Refl { tm: Rc::clone(tm) },
+            Term::Inl { val, .. } => TmView::Inl { val: Rc::clone(val) },
+            Term::Inr { val, .. } => TmView::Inr { val: Rc::clone(val) },
+            Term::Sup { label, children, .. } => {
+                TmView::Sup { label: Rc::clone(label), children: Rc::clone(children) }
+            }
+            Term::Supf { label, children, .. } => {
+                TmView::Supf { label: Rc::clone(label), children: Rc::clone(children) }
+            }
+            Term::BoxTy(t) => TmView::BoxTy(t),
+            Term::BoxTm(t) => TmView::BoxTm(t),
+
+            Term::Var(x) => TmView::Var(*x),
+            Term::GlobalTm { var, subst } => TmView::GlobalTm { var: *var, subst },
+            Term::ElimNat { level, motive, base, step, scrut } => TmView::ElimNat {
+                level,
+                motive: Rc::clone(motive),
+                base: Rc::clone(base),
+                step: Rc::clone(step),
+                scrut: Rc::clone(scrut),
+            },
+            Term::ElimEmpty { level, scrut_level, motive, scrut } => TmView::ElimEmpty {
+                level,
+                scrut_level,
+                motive: Rc::clone(motive),
+                scrut: Rc::clone(scrut),
+            },
+            Term::ElimSEmpty { level, scrut_level, motive, scrut } => TmView::ElimSEmpty {
+                level,
+                scrut_level,
+                motive: Rc::clone(motive),
+                scrut: Rc::clone(scrut),
+            },
+            Term::Case {
+                lhs_level,
+                rhs_level,
+                motive_level,
+                lhs,
+                rhs,
+                motive,
+                case_l,
+                case_r,
+                scrut,
+            } => TmView::Case {
+                lhs_level,
+                rhs_level,
+                motive_level,
+                lhs: Rc::clone(lhs),
+                rhs: Rc::clone(rhs),
+                motive: Rc::clone(motive),
+                case_l: Rc::clone(case_l),
+                case_r: Rc::clone(case_r),
+                scrut: Rc::clone(scrut),
+            },
+            Term::ElimW {
+                shape_level,
+                pos_level,
+                motive_level,
+                shape,
+                pos,
+                motive,
+                step,
+                scrut,
+            } => TmView::ElimW {
+                shape_level,
+                pos_level,
+                motive_level,
+                shape: Rc::clone(shape),
+                pos: Rc::clone(pos),
+                motive: Rc::clone(motive),
+                step: Rc::clone(step),
+                scrut: Rc::clone(scrut),
+            },
+            Term::ElimWf { level, motive_level, shape, arity, motive, step, scrut } => {
+                TmView::ElimWf {
+                    level,
+                    motive_level,
+                    shape: Rc::clone(shape),
+                    arity: Rc::clone(arity),
+                    motive: Rc::clone(motive),
+                    step: Rc::clone(step),
+                    scrut: Rc::clone(scrut),
+                }
+            }
+            Term::J { ty_level, motive_level, ty, lhs, motive, case, rhs, proof } => TmView::J {
+                ty_level,
+                motive_level,
+                ty: Rc::clone(ty),
+                lhs: Rc::clone(lhs),
+                motive: Rc::clone(motive),
+                case: Rc::clone(case),
+                rhs: Rc::clone(rhs),
+                proof: Rc::clone(proof),
+            },
+            Term::Transp { ty_level, motive_level, ty, motive, lhs, rhs, tm, .. } => {
+                TmView::Transp {
+                    ty_level,
+                    motive_level,
+                    ty: Rc::clone(ty),
+                    motive: Rc::clone(motive),
+                    lhs: Rc::clone(lhs),
+                    rhs: Rc::clone(rhs),
+                    tm: Rc::clone(tm),
+                }
+            }
+            Term::App { fun, dom_level, cod_level, dom, cod, arg } => TmView::App {
+                dom_level,
+                cod_level,
+                dom: Rc::clone(dom),
+                cod: Rc::clone(cod),
+                fun: Rc::clone(fun),
+                arg: Rc::clone(arg),
+            },
+            Term::Fst { fst_level, snd_level, fst_ty, snd_ty, pair } => TmView::Fst {
+                fst_level,
+                snd_level,
+                fst_ty: Rc::clone(fst_ty),
+                snd_ty: Rc::clone(snd_ty),
+                pair: Rc::clone(pair),
+            },
+            Term::Snd { fst_level, snd_level, fst_ty, snd_ty, pair } => TmView::Snd {
+                fst_level,
+                snd_level,
+                fst_ty: Rc::clone(fst_ty),
+                snd_ty: Rc::clone(snd_ty),
+                pair: Rc::clone(pair),
+            },
+            Term::UApp { fun, levels } => {
+                TmView::UApp { levels, fun: Rc::clone(fun) }
+            }
+            Term::CtxApp { fun, ctx } => TmView::CtxApp { ctx, fun: Rc::clone(fun) },
+            Term::TyApp { fun, arg } => TmView::TyApp { arg, fun: Rc::clone(fun) },
+            Term::LetBoxTy { motive_level, code_level, ctx, motive, body, scrut } => {
+                TmView::LetBoxTy {
+                    motive_level,
+                    code_level,
+                    ctx,
+                    motive: Rc::clone(motive),
+                    body: Rc::clone(body),
+                    scrut: Rc::clone(scrut),
+                }
+            }
+            Term::LetBoxTm { motive_level, code_level, ctx, ty, motive, body, scrut } => {
+                TmView::LetBoxTm {
+                    motive_level,
+                    code_level,
+                    ctx,
+                    ty,
+                    motive: Rc::clone(motive),
+                    body: Rc::clone(body),
+                    scrut: Rc::clone(scrut),
+                }
+            }
+            Term::ElimCodeTy {
+                ty_motive_level,
+                tm_motive_level,
+                motives,
+                branches,
+                code_level,
+                ctx,
+                scrut,
+            } => TmView::ElimCodeTy {
+                ty_motive_level,
+                tm_motive_level,
+                motives: Rc::clone(motives),
+                branches: Rc::clone(branches),
+                code_level,
+                ctx,
+                scrut: Rc::clone(scrut),
+                rec: (),
+            },
+            Term::ElimCodeTm {
+                ty_motive_level,
+                tm_motive_level,
+                motives,
+                branches,
+                code_level,
+                ctx,
+                ty,
+                scrut,
+            } => TmView::ElimCodeTm {
+                ty_motive_level,
+                tm_motive_level,
+                motives: Rc::clone(motives),
+                branches: Rc::clone(branches),
+                code_level,
+                ctx,
+                ty,
+                scrut: Rc::clone(scrut),
+                rec: (),
+            },
+
+            Term::Lam { .. }
+            | Term::ULam { .. }
+            | Term::CtxLam { .. }
+            | Term::TyLam { .. }
+            | Term::Pair { .. }
+            | Term::Triv { .. }
+            | Term::SRefl { .. } => TmView::Opaque,
+        }
+    }
+
+    #[inline]
+    fn head_tm(_cv: &mut Conv<Self>, _env: &Env, t: &Rc<Term>) -> R<Rc<Term>> {
+        Ok(Rc::clone(t))
+    }
+
+    #[inline]
+    fn as_child_ty(_cv: &mut Conv<Self>, _env: &Env, w: &Type) -> R<Rc<Type>> {
+        Ok(Rc::new(w.clone()))
+    }
+
+    // -- scope --------------------------------------------------------------
+
+    #[inline]
+    fn push_entry(env: &Env, ty: &Rc<Type>, level: &Level) -> Env {
+        env.push_entry(Rc::clone(ty), level.clone())
+    }
+
+    #[inline]
+    fn push_spec(env: &Env, tele: &rec::Tele) -> Env {
+        let mut e = env.push_tele(tele.univs, tele.globals.clone());
+        for (ty, level) in &tele.locals {
+            e = e.push_entry(Rc::clone(ty), level.clone());
+        }
+        e
+    }
+
+    #[inline]
+    fn var_type(_cv: &mut Conv<Self>, env: &Env, x: LocalVar) -> R<(Rc<Type>, Level)> {
+        let Some(i) = env.gamma.entries.len().checked_sub(1 + x.0 as usize) else {
+            return Err(NC);
+        };
+        let e = &env.gamma.entries[i];
+        Ok((Rc::new(e.ty.shift_local(x.0 + 1)), e.level.clone()))
+    }
+
+    #[inline]
+    fn weaken_ty(t: &Rc<Type>, by: u32) -> Rc<Type> {
+        Rc::new(t.shift_local(by))
+    }
+
+    #[inline]
+    fn weaken_tm(t: &Rc<Term>, by: u32) -> Rc<Term> {
+        Rc::new(t.shift_local(by))
+    }
+
+    // -- embedding ----------------------------------------------------------
+
+    #[inline]
+    fn embed_ty(_env: &Env, t: Rc<Type>) -> Rc<Type> {
+        t
+    }
+
+    #[inline]
+    fn embed_ty_at(_rec: &(), _env: &Env, t: Rc<Type>) -> Rc<Type> {
+        t
+    }
+
+    #[inline]
+    fn embed_tm_at(_rec: &(), _env: &Env, t: Rc<Term>) -> Rc<Term> {
+        t
+    }
+
+    // -- instantiation ------------------------------------------------------
+
+    #[inline]
+    fn inst_ty(
+        _cv: &mut Conv<Self>,
+        home: &Env,
+        cur: &Env,
+        m: &Rc<Type>,
+        args: &[Rc<Term>],
+    ) -> R<Rc<Type>> {
+        let mut d = id_at(home, cur);
+        for a in args {
+            d = d.extended(Rc::clone(a));
+        }
+        Ok(Rc::new(m.apply_local(&d)))
+    }
+
+    #[inline]
+    fn inst_tm(
+        _cv: &mut Conv<Self>,
+        home: &Env,
+        cur: &Env,
+        m: &Rc<Term>,
+        args: &[Rc<Term>],
+    ) -> R<Rc<Term>> {
+        let mut d = id_at(home, cur);
+        for a in args {
+            d = d.extended(Rc::clone(a));
+        }
+        Ok(Rc::new(m.apply_local(&d)))
+    }
+
+    #[inline]
+    fn shift_global_ty(
+        _cv: &mut Conv<Self>,
+        _env: &Env,
+        t: &Rc<Type>,
+        by: u32,
+    ) -> R<Rc<Type>> {
+        Ok(Rc::new(t.shift_global(by)))
+    }
+
+    #[inline]
+    fn inst_univ_ty(
+        _cv: &mut Conv<Self>,
+        _env: &Env,
+        body: &Rc<Type>,
+        phi: &[Level],
+    ) -> R<Rc<Type>> {
+        Ok(Rc::new(body.inst_univ(phi)))
+    }
+
+    #[inline]
+    fn inst_ctx_ty(
+        _cv: &mut Conv<Self>,
+        _env: &Env,
+        body: &Rc<Type>,
+        ctx: &LocalCtx,
+    ) -> R<Rc<Type>> {
+        Ok(Rc::new(
+            body.apply_global(&GlobalSubst::single(GlobalEntry::Ctx(ctx.clone()))),
+        ))
+    }
+
+    #[inline]
+    fn inst_tyarg_ty(
+        _cv: &mut Conv<Self>,
+        _env: &Env,
+        body: &Rc<Type>,
+        arg: &Rc<Type>,
+    ) -> R<Rc<Type>> {
+        Ok(Rc::new(
+            body.apply_global(&GlobalSubst::single(GlobalEntry::Ty(Rc::clone(arg)))),
+        ))
+    }
+
+    // -- local substitutions ------------------------------------------------
+
+    #[inline]
+    fn subst_terms(d: &LocalSubst) -> &[Rc<Term>] {
+        &d.terms
+    }
+
+    #[inline]
+    fn subst_tails_agree(a: &LocalSubst, b: &LocalSubst) -> bool {
+        a.tail == b.tail
+    }
+
+    #[inline]
+    fn apply_subst_ty(
+        _cv: &mut Conv<Self>,
+        _env: &Env,
+        d: &LocalSubst,
+        k: usize,
+        t: &Rc<Type>,
+    ) -> R<Rc<Type>> {
+        let prefix = LocalSubst { tail: d.tail, terms: d.terms[..k].to_vec() };
+        Ok(Rc::new(t.apply_local(&prefix)))
+    }
+
+    // -- synthesized types --------------------------------------------------
+
+    #[inline]
+    fn nat() -> Rc<Type> {
+        NAT.with(Rc::clone)
+    }
+
+    #[inline]
+    fn univ(_env: &Env, level: &Level) -> Rc<Type> {
+        Rc::new(Type::Ty(level.clone()))
+    }
+
+    #[inline]
+    fn empty(_env: &Env, level: &Level) -> Rc<Type> {
+        Rc::new(Type::Empty { level: level.clone() })
+    }
+
+    #[inline]
+    fn sempty(_env: &Env, level: &Level) -> Rc<Type> {
+        Rc::new(Type::SEmpty { level: level.clone() })
+    }
+
+    #[inline]
+    fn code_ty(_env: &Env, ctx: &LocalCtx, level: &Level) -> Rc<Type> {
+        Rc::new(Type::CodeTy { ctx: ctx.clone(), level: level.clone() })
+    }
+
+    #[inline]
+    fn code_tm(_env: &Env, ctx: &LocalCtx, ty: &Rc<Type>, level: &Level) -> Rc<Type> {
+        Rc::new(Type::CodeTm {
+            ctx: ctx.clone(),
+            ty: Rc::clone(ty),
+            level: level.clone(),
+        })
+    }
+
+    #[inline]
+    fn el(_cv: &mut Conv<Self>, _env: &Env, level: &Level, tm: &Rc<Term>) -> R<Rc<Type>> {
+        Ok(Rc::new(Type::El { level: level.clone(), tm: Rc::clone(tm) }))
+    }
+
+    #[inline]
+    fn pi(
+        _cv: &mut Conv<Self>,
+        _env: &Env,
+        dom_level: &Level,
+        cod_level: &Level,
+        dom: &Rc<Type>,
+        cod: &Rc<Type>,
+    ) -> R<Rc<Type>> {
+        Ok(Rc::new(Type::Pi {
+            dom_level: dom_level.clone(),
+            cod_level: cod_level.clone(),
+            dom: Rc::clone(dom),
+            cod: Rc::clone(cod),
+        }))
+    }
+
+    #[inline]
+    fn sum(
+        _cv: &mut Conv<Self>,
+        _env: &Env,
+        lhs_level: &Level,
+        rhs_level: &Level,
+        lhs: &Rc<Type>,
+        rhs: &Rc<Type>,
+    ) -> R<Rc<Type>> {
+        Ok(Rc::new(Type::Sum {
+            lhs_level: lhs_level.clone(),
+            rhs_level: rhs_level.clone(),
+            lhs: Rc::clone(lhs),
+            rhs: Rc::clone(rhs),
+        }))
+    }
+
+    #[inline]
+    fn w(
+        _cv: &mut Conv<Self>,
+        _env: &Env,
+        shape_level: &Level,
+        pos_level: &Level,
+        shape: &Rc<Type>,
+        pos: &Rc<Type>,
+    ) -> R<Rc<Type>> {
+        Ok(Rc::new(Type::W {
+            shape_level: shape_level.clone(),
+            pos_level: pos_level.clone(),
+            shape: Rc::clone(shape),
+            pos: Rc::clone(pos),
+        }))
+    }
+
+    #[inline]
+    fn wf(
+        _cv: &mut Conv<Self>,
+        _env: &Env,
+        level: &Level,
+        shape: &Rc<Type>,
+        arity: &Rc<Term>,
+    ) -> R<Rc<Type>> {
+        Ok(Rc::new(Type::Wf {
+            level: level.clone(),
+            shape: Rc::clone(shape),
+            arity: Rc::clone(arity),
+        }))
+    }
+
+    #[inline]
+    fn vec(
+        _cv: &mut Conv<Self>,
+        _env: &Env,
+        level: &Level,
+        elem: &Rc<Type>,
+        len: &Rc<Term>,
+    ) -> R<Rc<Type>> {
+        Ok(Rc::new(Type::Vec {
+            level: level.clone(),
+            elem: Rc::clone(elem),
+            len: Rc::clone(len),
+        }))
+    }
+
+    #[inline]
+    fn id(
+        _cv: &mut Conv<Self>,
+        _env: &Env,
+        level: &Level,
+        ty: &Rc<Type>,
+        lhs: &Rc<Term>,
+        rhs: &Rc<Term>,
+    ) -> R<Rc<Type>> {
+        Ok(Rc::new(Type::Id {
+            level: level.clone(),
+            ty: Rc::clone(ty),
+            lhs: Rc::clone(lhs),
+            rhs: Rc::clone(rhs),
+        }))
+    }
+
+    // -- synthesized terms --------------------------------------------------
+
+    #[inline]
+    fn zero() -> Rc<Term> {
+        ZERO.with(Rc::clone)
+    }
+
+    #[inline]
+    fn succ(_cv: &mut Conv<Self>, _env: &Env, t: &Rc<Term>) -> R<Rc<Term>> {
+        Ok(Rc::new(Term::Succ(Rc::clone(t))))
+    }
+
+    #[inline]
+    fn local(_env: &Env, x: LocalVar) -> Rc<Term> {
+        Rc::new(Term::Var(x))
+    }
+
+    #[inline]
+    fn refl(
+        _cv: &mut Conv<Self>,
+        _env: &Env,
+        level: &Level,
+        ty: &Rc<Type>,
+        tm: &Rc<Term>,
+    ) -> R<Rc<Term>> {
+        Ok(Rc::new(Term::Refl {
+            level: level.clone(),
+            ty: Rc::clone(ty),
+            tm: Rc::clone(tm),
+        }))
+    }
+
+    #[inline]
+    #[allow(clippy::too_many_arguments)]
+    fn inj(
+        _cv: &mut Conv<Self>,
+        _env: &Env,
+        left: bool,
+        lhs_level: &Level,
+        rhs_level: &Level,
+        lhs: &Rc<Type>,
+        rhs: &Rc<Type>,
+        val: &Rc<Term>,
+    ) -> R<Rc<Term>> {
+        let (ll, rl) = (lhs_level.clone(), rhs_level.clone());
+        let (l, r, v) = (Rc::clone(lhs), Rc::clone(rhs), Rc::clone(val));
+        Ok(Rc::new(if left {
+            Term::Inl { lhs_level: ll, rhs_level: rl, lhs: l, rhs: r, val: v }
+        } else {
+            Term::Inr { lhs_level: ll, rhs_level: rl, lhs: l, rhs: r, val: v }
+        }))
+    }
+
+    #[inline]
+    fn sup_at(
+        _cv: &mut Conv<Self>,
+        _env: &Env,
+        w: &Rc<Type>,
+        by: u32,
+        label: &Rc<Term>,
+        children: &Rc<Term>,
+    ) -> R<Rc<Term>> {
+        let Type::W { shape_level, pos_level, shape, pos } = w.shift_local(by) else {
+            return Err(NC);
+        };
+        Ok(Rc::new(Term::Sup {
+            shape_level,
+            pos_level,
+            shape_ty: shape,
+            pos_ty: pos,
+            label: Rc::clone(label),
+            children: Rc::clone(children),
+        }))
+    }
+
+    #[inline]
+    fn eq_fast(a: &Rc<Term>, b: &Rc<Term>) -> bool {
+        a == b
+    }
+
+    #[inline]
+    fn app(
+        _cv: &mut Conv<Self>,
+        _env: &Env,
+        dom_level: &Level,
+        cod_level: &Level,
+        dom: &Rc<Type>,
+        cod: &Rc<Type>,
+        fun: &Rc<Term>,
+        arg: &Rc<Term>,
+    ) -> R<Rc<Term>> {
+        Ok(Rc::new(Term::App {
+            fun: Rc::clone(fun),
+            dom_level: dom_level.clone(),
+            cod_level: cod_level.clone(),
+            dom: Rc::clone(dom),
+            cod: Rc::clone(cod),
+            arg: Rc::clone(arg),
+        }))
+    }
+
+    #[inline]
+    fn proj(
+        _cv: &mut Conv<Self>,
+        _env: &Env,
+        first: bool,
+        fst_level: &Level,
+        snd_level: &Level,
+        fst_ty: &Rc<Type>,
+        snd_ty: &Rc<Type>,
+        pair: &Rc<Term>,
+    ) -> R<Rc<Term>> {
+        Ok(Rc::new(proj_syn(first, fst_level, snd_level, fst_ty, snd_ty, Rc::clone(pair))))
+    }
+
+    #[inline]
+    fn box_ty(_env: &Env, code: Rc<Type>) -> Rc<Term> {
+        Rc::new(Term::BoxTy(code))
+    }
+
+    #[inline]
+    fn box_tm(_env: &Env, code: Rc<Term>) -> Rc<Term> {
+        Rc::new(Term::BoxTm(code))
+    }
+
+    #[inline]
+    fn box_ty_payload(
+        _cv: &mut Conv<Self>,
+        _env: &Env,
+        t: &Rc<Term>,
+    ) -> R<Option<Rc<Type>>> {
+        Ok(match &**t {
+            Term::BoxTy(c) => Some(Rc::clone(c)),
+            _ => None,
+        })
+    }
+
+    #[inline]
+    fn box_tm_payload(
+        _cv: &mut Conv<Self>,
+        _env: &Env,
+        t: &Rc<Term>,
+    ) -> R<Option<Rc<Term>>> {
+        Ok(match &**t {
+            Term::BoxTm(c) => Some(Rc::clone(c)),
+            _ => None,
+        })
+    }
+
+    // -- η -----------------------------------------------------------------
+
+    #[inline]
+    fn eta_app(
+        _cv: &mut Conv<Self>,
+        outer: &Env,
+        _inner: &Env,
+        a: &Rc<Term>,
+        b: &Rc<Term>,
+        dom_level: &Level,
+        cod_level: &Level,
+        dom: &Rc<Type>,
+        cod: &Rc<Type>,
+    ) -> R<(Rc<Term>, Rc<Term>)> {
+        // The `cod` annotation moves under the App binder: the Π variable maps
+        // to the App's bound variable, Γ weakens by 2. Built once and shared
+        // by the two sides.
+        let cod_ann = Rc::new(
+            cod.apply_local(&LocalSubst::id(&outer.gamma).shift_local(2).extended(var0())),
+        );
+        let dom_up = Rc::new(dom.shift_local(1));
+        let app = |t: &Rc<Term>| {
+            Rc::new(Term::App {
+                fun: Rc::new(t.shift_local(1)),
+                dom_level: dom_level.clone(),
+                cod_level: cod_level.clone(),
+                dom: Rc::clone(&dom_up),
+                cod: Rc::clone(&cod_ann),
+                arg: var0(),
+            })
+        };
+        Ok((app(a), app(b)))
+    }
+
+    #[inline]
+    fn eta_uapp(
+        _cv: &mut Conv<Self>,
+        _outer: &Env,
+        _inner: &Env,
+        a: &Rc<Term>,
+        b: &Rc<Term>,
+        num_vars: u32,
+    ) -> R<(Rc<Term>, Rc<Term>)> {
+        let levels: Vec<Level> = (0..num_vars).rev().map(rec::lvar).collect();
+        let uapp = |t: &Rc<Term>| {
+            Rc::new(Term::UApp {
+                fun: Rc::new(t.shift_univ(num_vars)),
+                levels: levels.clone(),
+            })
+        };
+        Ok((uapp(a), uapp(b)))
+    }
+
+    #[inline]
+    fn eta_ctxapp(
+        _cv: &mut Conv<Self>,
+        _outer: &Env,
+        _inner: &Env,
+        a: &Rc<Term>,
+        b: &Rc<Term>,
+    ) -> R<(Rc<Term>, Rc<Term>)> {
+        let capp = |t: &Rc<Term>| {
+            Rc::new(Term::CtxApp { fun: Rc::new(t.shift_global(1)), ctx: rec::g_ctx(0) })
+        };
+        Ok((capp(a), capp(b)))
+    }
+
+    #[inline]
+    fn eta_tyapp(
+        _cv: &mut Conv<Self>,
+        _outer: &Env,
+        _inner: &Env,
+        a: &Rc<Term>,
+        b: &Rc<Term>,
+        ctx: &LocalCtx,
+    ) -> R<(Rc<Term>, Rc<Term>)> {
+        let arg = Rc::new(rec::gty(0, &ctx.shift_global(1)));
+        let tapp = |t: &Rc<Term>| {
+            Rc::new(Term::TyApp { fun: Rc::new(t.shift_global(1)), arg: Rc::clone(&arg) })
+        };
+        Ok((tapp(a), tapp(b)))
+    }
+
+    #[inline]
+    fn eta_proj(
+        _cv: &mut Conv<Self>,
+        _env: &Env,
+        first: bool,
+        a: &Rc<Term>,
+        b: &Rc<Term>,
+        fst_level: &Level,
+        snd_level: &Level,
+        fst_ty: &Rc<Type>,
+        snd_ty: &Rc<Type>,
+    ) -> R<(Rc<Term>, Rc<Term>)> {
+        let p = |t: &Rc<Term>| {
+            Rc::new(proj_syn(first, fst_level, snd_level, fst_ty, snd_ty, Rc::clone(t)))
+        };
+        Ok((p(a), p(b)))
+    }
+
+    // -- recursors ----------------------------------------------------------
+
+    #[inline]
+    fn wf_step_telescope(
+        _cv: &mut Conv<Self>,
+        env: &Env,
+        level: &Level,
+        motive_level: &Level,
+        shape: &Rc<Type>,
+        arity: &Rc<Term>,
+        motive: &Rc<Type>,
+    ) -> R<(Rc<Type>, Rc<Type>, Rc<Type>)> {
+        let (cs, ih, step) =
+            wf_step_telescope(&env.gamma, level, motive_level, shape, arity, motive);
+        Ok((Rc::new(cs), Rc::new(ih), Rc::new(step)))
+    }
+
+    #[inline]
+    fn inst_ty_motive(
+        _cv: &mut Conv<Self>,
+        env: &Env,
+        _rec: &(),
+        motive: &Rc<Type>,
+        code_level: &Level,
+        ctx: &LocalCtx,
+        scrut: &Rc<Term>,
+    ) -> R<Rc<Type>> {
+        Ok(Rc::new(rec::inst_ty_motive(
+            motive,
+            (0, 0, 0),
+            code_level.clone(),
+            ctx.clone(),
+            (**scrut).clone(),
+            &env.gamma,
+        )))
+    }
+
+    #[inline]
+    fn inst_tm_motive(
+        _cv: &mut Conv<Self>,
+        env: &Env,
+        _rec: &(),
+        motive: &Rc<Type>,
+        code_level: &Level,
+        ctx: &LocalCtx,
+        ty: &Rc<Type>,
+        scrut: &Rc<Term>,
+    ) -> R<Rc<Type>> {
+        Ok(Rc::new(rec::inst_tm_motive(
+            motive,
+            (0, 0, 0),
+            code_level.clone(),
+            ctx.clone(),
+            (**ty).clone(),
+            (**scrut).clone(),
+            &env.gamma,
+        )))
+    }
+}
+
+thread_local! {
+    /// The two closed forms of [`Dom::nat`] / [`Dom::zero`], allocated once
+    /// per thread. Conversion synthesizes them once per comparison node on
+    /// its hottest paths, and an `Rc::new` there is measurable: building them
+    /// per checker cost 1.5× on `nat/check-numeral` (`scripts/bench --check`,
+    /// 2026-07-31).
+    static NAT: Rc<Type> = Rc::new(Type::Nat);
+    static ZERO: Rc<Term> = Rc::new(Term::Zero);
+}
+
+/// Weak-head reduce to a fixed point under `step`, spending one fuel per
+/// step. A form that does not step is returned by handle: the rewriter's
+/// normal forms are shared, not copied, which matters because most
+/// sub-structures conversion reaches are already normal.
+fn step_ty(
+    cv: &mut Conv<Syn>,
+    env: &Env,
+    t: &Type,
+    step: impl Fn(&Type, &LocalCtx) -> Option<Type>,
+) -> R<Type> {
+    let mut cur = t.clone();
+    while let Some(next) = step(&cur, &env.gamma) {
+        cv.spend()?;
+        cur = next;
+    }
+    Ok(cur)
+}
+
+fn step_tm(
+    cv: &mut Conv<Syn>,
+    env: &Env,
+    t: &Rc<Term>,
+    step: impl Fn(&Term, &LocalCtx) -> Option<Term>,
+) -> R<Rc<Term>> {
+    let Some(mut cur) = step(t, &env.gamma) else {
+        return Ok(Rc::clone(t));
+    };
+    cv.spend()?;
+    while let Some(next) = step(&cur, &env.gamma) {
+        cv.spend()?;
+        cur = next;
+    }
+    Ok(Rc::new(cur))
+}
+
+/// `fst p` / `snd p` at the given `Σ` annotations (shared by [`Dom::proj`]
+/// and [`Dom::eta_proj`]).
+fn proj_syn(
+    first: bool,
+    fst_level: &Level,
+    snd_level: &Level,
+    fst_ty: &Rc<Type>,
+    snd_ty: &Rc<Type>,
+    pair: Rc<Term>,
+) -> Term {
+    let (fl, sl) = (fst_level.clone(), snd_level.clone());
+    let (ft, st) = (Rc::clone(fst_ty), Rc::clone(snd_ty));
+    if first {
+        Term::Fst { fst_level: fl, snd_level: sl, fst_ty: ft, snd_ty: st, pair }
+    } else {
+        Term::Snd { fst_level: fl, snd_level: sl, fst_ty: ft, snd_ty: st, pair }
+    }
+}

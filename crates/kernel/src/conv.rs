@@ -49,20 +49,29 @@
 //! conclusion is at level `l₂` (the term-motive level), not `l₁`, and the
 //! `t_app` branch type substitutes `u_s^id` (the argument) for the `Π`
 //! codomain variable, not `u_t^id`.
+//!
+//! **What a weak head normal form *is* is abstract** ([`dom`]): the arms
+//! reach their inputs through the [`dom::Dom`] accessor boundary and are
+//! instantiated here at [`dom::Syn`], the rewriter. Nothing above depends on
+//! that choice — the rules, the fuel accounting, the left-biased inference
+//! and the layer discipline are the same for a value domain
+//! (docs/nbe-conversion-design.md §13, stages 2a/2b).
 
+use std::marker::PhantomData;
 use std::rc::Rc;
 
 use crate::layer::Layer;
 use crate::level::Level;
-use crate::rec::{
-    self, g_ctx, gtm, gty, inst_tm_motive, inst_ty_motive, lvar, shift_univ_psi,
-};
-use crate::reduce::{step_term, step_term_delta, step_type, step_type_delta, Defs};
-use crate::subst::{GlobalEntry, GlobalSubst};
+use crate::rec::{self, gtm, gty, shift_univ_psi};
+use crate::reduce::Defs;
 use crate::term::{
-    wf_step_telescope, Branches, CtxBase, CtxEntry, GlobalBinding, GlobalCtx, GlobalVar,
-    LocalCtx, LocalSubst, LocalVar, Motives, Term, Type,
+    Branches, CtxBase, CtxEntry, GlobalBinding, GlobalCtx, GlobalVar, LocalCtx, LocalVar,
+    Motives, Term, Type,
 };
+
+mod dom;
+
+use dom::{Dom, Syn, TmView, TyView};
 
 /// Why a convertibility check did not succeed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -116,7 +125,7 @@ pub fn conv_type(
     fuel: u64,
 ) -> R {
     debug_assert!(layer.computes(), "convertibility is only invoked at computing layers");
-    Conv::new(fuel, psi).ty(&Env::new(psi, gamma, layer), a, b, level)
+    Conv::<Syn>::new(fuel, psi).ty_root(&Env::new(psi, gamma, layer), a, b, level)
 }
 
 /// `Ψ; Γ ⊢_i t ≈ t' : T @ l` — convertibility of terms at a type.
@@ -132,7 +141,7 @@ pub fn conv_term(
     fuel: u64,
 ) -> R {
     debug_assert!(layer.computes(), "convertibility is only invoked at computing layers");
-    Conv::new(fuel, psi).tm(&Env::new(psi, gamma, layer), a, b, ty, level)
+    Conv::<Syn>::new(fuel, psi).tm_root(&Env::new(psi, gamma, layer), a, b, ty, level)
 }
 
 /// `Ψ ⊢_i Γ ≈ Δ` — convertibility of local contexts.
@@ -145,7 +154,7 @@ pub fn conv_local_ctx(
 ) -> R {
     debug_assert!(layer.computes(), "convertibility is only invoked at computing layers");
     let env = Env::new(psi, &LocalCtx { base: CtxBase::Nil, entries: vec![] }, layer);
-    Conv::new(fuel, psi).ctx(&env, layer, a, b)
+    Conv::<Syn>::new(fuel, psi).ctx(&env, layer, a, b)
 }
 
 // ---------------------------------------------------------------------------
@@ -156,6 +165,12 @@ pub fn conv_local_ctx(
 /// universe context L participates only by shifting (its length is never
 /// consulted), so it is not tracked. Extending any namespace clones — the
 /// judgments extend scopes freely and correctness beats performance here.
+///
+/// Γ is deliberately still *syntax*, and stage 2b will have to widen it (see
+/// [`dom`]'s module docs): its entry **types** are read in exactly one place
+/// ([`Dom::var_type`]), while everything else — the identity substitutions
+/// inside [`Dom::inst_ty`], the recursor telescope tables — reads only its
+/// length and base.
 #[derive(Clone)]
 struct Env {
     psi: GlobalCtx,
@@ -178,7 +193,9 @@ impl Env {
         Env { gamma, layer, ..self.clone() }
     }
 
-    /// `Γ, x : T @ l`.
+    /// `Γ, x : T @ l`. Reached through [`Dom::push_entry`], never directly:
+    /// at the value domain pushing a binder also extends the environment
+    /// with the binder's fresh neutral.
     fn push_entry(&self, ty: Rc<Type>, level: Level) -> Env {
         let mut e = self.clone();
         e.gamma.entries.push(CtxEntry { ty, level });
@@ -205,16 +222,6 @@ impl Env {
 
     fn push_global(&self, b: GlobalBinding) -> Env {
         self.push_tele(0, vec![b])
-    }
-
-    /// Push a full recursor telescope (universes, globals, then the
-    /// recursive-call local entries).
-    fn push_spec(&self, tele: &rec::Tele) -> Env {
-        let mut e = self.push_tele(tele.univs, tele.globals.clone());
-        for (ty, level) in &tele.locals {
-            e = e.push_entry(Rc::clone(ty), level.clone());
-        }
-        e
     }
 }
 
@@ -267,14 +274,21 @@ fn delta_head_ty(t: &Type, defs: Defs<'_>) -> Option<GlobalVar> {
 // ---------------------------------------------------------------------------
 
 /// Left side / right side of a recursor comparison (`C_A` inputs).
-struct RecSide<'a> {
+///
+/// `motives` and `branches` are the only Γ-scoped **raw syntax** an
+/// elimination carries, so they come with the scope they are read in
+/// ([`Dom::RecCtx`]) rather than alone: at the value domain they agree with
+/// the rewriter's rewritten copies only through the elimination's stored
+/// environment.
+struct RecSide<'a, D: Dom> {
     l1: &'a Level,
     l2: &'a Level,
-    motives: &'a Motives,
-    branches: &'a Branches,
+    motives: Rc<Motives>,
+    branches: Rc<Branches>,
+    rec: D::RecCtx,
 }
 
-struct Conv {
+struct Conv<D: Dom> {
     fuel: u64,
     /// Does Ψ contain any definition at all? Decided once, because when it
     /// does not — every program before this feature, and every fixture that
@@ -283,15 +297,16 @@ struct Conv {
     /// pushes never introduce definitions, so the answer cannot change while
     /// a comparison runs.
     has_defs: bool,
+    _dom: PhantomData<D>,
 }
 
-impl Conv {
-    fn new(fuel: u64, psi: &GlobalCtx) -> Conv {
+impl<D: Dom> Conv<D> {
+    fn new(fuel: u64, psi: &GlobalCtx) -> Conv<D> {
         let has_defs = psi
             .bindings
             .iter()
             .any(|b| matches!(b, GlobalBinding::Tm { body: Some(_), .. }));
-        Conv { fuel, has_defs }
+        Conv { fuel, has_defs, _dom: PhantomData }
     }
 
     fn spend(&mut self) -> R {
@@ -313,51 +328,6 @@ impl Conv {
         } else {
             Defs::opaque()
         }
-    }
-
-    /// `T ⇝* W`, spending one fuel per step (shared budget, unlike
-    /// [`crate::reduce::whnf_type`]'s local one).
-    fn whnf_ty(&mut self, t: &Type, env: &Env) -> R<Type> {
-        let defs = self.defs(env);
-        let mut cur = t.clone();
-        while let Some(next) = step_type_delta(&cur, &env.gamma, defs) {
-            self.spend()?;
-            cur = next;
-        }
-        Ok(cur)
-    }
-
-    fn whnf_tm(&mut self, t: &Term, env: &Env) -> R<Term> {
-        let defs = self.defs(env);
-        let mut cur = t.clone();
-        while let Some(next) = step_term_delta(&cur, &env.gamma, defs) {
-            self.spend()?;
-            cur = next;
-        }
-        Ok(cur)
-    }
-
-    /// `T ⇝* W` **without** δ: stops at a definition's spine instead of
-    /// unfolding it. The first stage of the δ-lazy order described on
-    /// [`Conv::ty`]; resuming with [`Conv::whnf_ty`] from here loses
-    /// nothing, since weak-head reduction is deterministic and the Ψ-free
-    /// relation is a sub-relation of the δ one.
-    fn whnf_ty_opaque(&mut self, t: &Type, env: &Env) -> R<Type> {
-        let mut cur = t.clone();
-        while let Some(next) = step_type(&cur, &env.gamma) {
-            self.spend()?;
-            cur = next;
-        }
-        Ok(cur)
-    }
-
-    fn whnf_tm_opaque(&mut self, t: &Term, env: &Env) -> R<Term> {
-        let mut cur = t.clone();
-        while let Some(next) = step_term(&cur, &env.gamma) {
-            self.spend()?;
-            cur = next;
-        }
-        Ok(cur)
     }
 
     /// The δ-lazy attempt: with both sides stuck at the *same* defined
@@ -396,16 +366,22 @@ impl Conv {
     /// conversion-level reduction step; the loop terminates because the
     /// payload is a strict subterm.
     #[cold]
-    fn strip(&mut self, mut cur: Term, env: &Env) -> R<Term> {
+    fn strip(&mut self, mut cur: D::Tm, env: &Env) -> R<D::Tm> {
         loop {
-            let Term::Transp { ty_level, ty, lhs, rhs, tm, .. } = &cur else {
+            if !D::is_transp(&cur) {
                 return Ok(cur);
+            }
+            let (ty_level, ty, lhs, rhs, tm) = match D::view_tm(self, &cur) {
+                TmView::Transp { ty_level, ty, lhs, rhs, tm, .. } => {
+                    (ty_level.clone(), ty, lhs, rhs, tm)
+                }
+                _ => return Ok(cur),
             };
             // Fast path: syntactic endpoint equality (α-equality is free
             // under de Bruijn); the full guarded query — at the transp's
             // own annotations — only when that misses.
-            let strip = lhs == rhs
-                || match self.tm(env, lhs, rhs, ty, ty_level) {
+            let strip = D::eq_fast(&lhs, &rhs)
+                || match self.tm(env, &lhs, &rhs, &ty, &ty_level) {
                     Ok(()) => true,
                     Err(ConvError::NotConvertible) => false,
                     Err(e) => return Err(e),
@@ -414,8 +390,7 @@ impl Conv {
                 return Ok(cur);
             }
             self.spend()?;
-            let payload = Rc::clone(tm);
-            cur = self.whnf_tm(&payload, env)?;
+            cur = D::whnf_tm(self, env, &tm)?;
         }
     }
 
@@ -434,43 +409,65 @@ impl Conv {
     /// defined head whose spines do not agree — with δ. A type reaches a
     /// definition only through `El ν`, so the head test is one hop deeper
     /// here than in [`Conv::tm`].
-    fn ty(&mut self, env: &Env, a: &Type, b: &Type, l: &Level) -> R {
+    fn ty(&mut self, env: &Env, a: &D::TyC, b: &D::TyC, l: &Level) -> R {
         self.spend()?;
-        let mut wa = self.whnf_ty_opaque(a, env)?;
-        let mut wb = self.whnf_ty_opaque(b, env)?;
+        let mut wa = D::whnf_ty_opaque(self, env, a)?;
+        let mut wb = D::whnf_ty_opaque(self, env, b)?;
+        self.ty_w(env, &mut wa, &mut wb, l)
+    }
+
+    /// [`Conv::ty`] at the **root** of a conversion, where the two sides are
+    /// raw syntax the caller lends us rather than sub-structures of a form
+    /// already in the domain (see [`Dom::whnf_ty_root`]).
+    fn ty_root(&mut self, env: &Env, a: &Type, b: &Type, l: &Level) -> R {
+        self.spend()?;
+        let mut wa = D::whnf_ty_root(self, env, a)?;
+        let mut wb = D::whnf_ty_root(self, env, b)?;
+        self.ty_w(env, &mut wa, &mut wb, l)
+    }
+
+    /// The δ stage and the comparison, shared by the two entries above. The
+    /// weak head forms are threaded by `&mut` and never by value: a `D::Ty`
+    /// is a large enum at the syntax domain, and moving the two of them once
+    /// more per node cost 1.28× on `nat/check-numeral`
+    /// (`scripts/bench --check`, 2026-07-31).
+    #[inline]
+    fn ty_w(&mut self, env: &Env, wa: &mut D::Ty, wb: &mut D::Ty, l: &Level) -> R {
         if self.has_defs {
-            let defs = self.defs(env);
-            if let (Some(u1), Some(u2)) = (delta_head_ty(&wa, defs), delta_head_ty(&wb, defs))
+            if let (Some(u1), Some(u2)) =
+                (D::delta_head_ty(self, env, wa), D::delta_head_ty(self, env, wb))
                 && u1 == u2
-                && self.delta_lazy(|c| c.ty_nf(env, &wa, &wb, l))?.is_some()
+                && self.delta_lazy(|c| c.ty_nf(env, wa, wb, l))?.is_some()
             {
                 return Ok(());
             }
-            wa = self.whnf_ty(&wa, env)?;
-            wb = self.whnf_ty(&wb, env)?;
+            *wa = D::delta_ty(self, env, wa)?;
+            *wb = D::delta_ty(self, env, wb)?;
         }
-        self.ty_nf(env, &wa, &wb, l)
+        self.ty_nf(env, wa, wb, l)
     }
 
     /// `Γ ⊢ W ≈ W' : l` for weak head normal types.
-    fn ty_nf(&mut self, env: &Env, a: &Type, b: &Type, _l: &Level) -> R {
-        match (a, b) {
-            (Type::Nat, Type::Nat) => Ok(()),
-            (Type::Ty(x), Type::Ty(y)) => self.lev_eq(x, y),
+    fn ty_nf(&mut self, env: &Env, a: &D::Ty, b: &D::Ty, _l: &Level) -> R {
+        let va = D::view_ty(self, a);
+        let vb = D::view_ty(self, b);
+        match (&va, &vb) {
+            (TyView::Nat, TyView::Nat) => Ok(()),
+            (TyView::Ty(x), TyView::Ty(y)) => self.lev_eq(x, y),
             (
-                Type::Pi { dom_level: dl1, cod_level: cl1, dom: s1, cod: t1 },
-                Type::Pi { dom_level: dl2, cod_level: cl2, dom: s2, cod: t2 },
+                TyView::Pi { dom_level: dl1, cod_level: cl1, dom: s1, cod: t1 },
+                TyView::Pi { dom_level: dl2, cod_level: cl2, dom: s2, cod: t2 },
             ) => {
                 self.lev_eq(dl1, dl2)?;
                 self.lev_eq(cl1, cl2)?;
                 self.ty(env, s1, s2, dl1)?;
-                let e = env.push_entry(Rc::clone(s1), dl1.clone());
+                let e = D::push_entry(env, s1, dl1);
                 self.ty(&e, t1, t2, cl1)
             }
             // Id congruence (extension beyond ch. 04; kernel-v1-extensions).
             (
-                Type::Id { level: l1, ty: s1, lhs: t1, rhs: u1 },
-                Type::Id { level: l2, ty: s2, lhs: t2, rhs: u2 },
+                TyView::Id { level: l1, ty: s1, lhs: t1, rhs: u1 },
+                TyView::Id { level: l2, ty: s2, lhs: t2, rhs: u2 },
             ) => {
                 self.lev_eq(l1, l2)?;
                 self.ty(env, s1, s2, l1)?;
@@ -481,8 +478,8 @@ impl Conv {
             // arm verbatim. The *endpoints* are compared as ordinary terms;
             // only proofs (terms *at* sEq type) are irrelevant.
             (
-                Type::SEq { level: l1, ty: s1, lhs: t1, rhs: u1 },
-                Type::SEq { level: l2, ty: s2, lhs: t2, rhs: u2 },
+                TyView::SEq { level: l1, ty: s1, lhs: t1, rhs: u1 },
+                TyView::SEq { level: l2, ty: s2, lhs: t2, rhs: u2 },
             ) => {
                 self.lev_eq(l1, l2)?;
                 self.ty(env, s1, s2, l1)?;
@@ -491,25 +488,27 @@ impl Conv {
             }
             // Σ congruence (extension; mirrors Π).
             (
-                Type::Sigma { fst_level: dl1, snd_level: cl1, fst: s1, snd: t1 },
-                Type::Sigma { fst_level: dl2, snd_level: cl2, fst: s2, snd: t2 },
+                TyView::Sigma { fst_level: dl1, snd_level: cl1, fst: s1, snd: t1 },
+                TyView::Sigma { fst_level: dl2, snd_level: cl2, fst: s2, snd: t2 },
             ) => {
                 self.lev_eq(dl1, dl2)?;
                 self.lev_eq(cl1, cl2)?;
                 self.ty(env, s1, s2, dl1)?;
-                let e = env.push_entry(Rc::clone(s1), dl1.clone());
+                let e = D::push_entry(env, s1, dl1);
                 self.ty(&e, t1, t2, cl1)
             }
-            // Unit/Empty congruence (extension; nullary formers).
-            // Unit^l / Empty^l congruence (extension): level-indexed, so the
-            // levels must agree — up to `≈`, not `==`.
-            (Type::Unit { level: l1 }, Type::Unit { level: l2 })
-            | (Type::Empty { level: l1 }, Type::Empty { level: l2 })
-            | (Type::SEmpty { level: l1 }, Type::SEmpty { level: l2 }) => self.lev_eq(l1, l2),
+            // Unit^l / Empty^l / sEmpty^l congruence (extension): the formers
+            // are level-indexed, so the levels must agree — up to `≈`, not
+            // `==`.
+            (TyView::Unit { level: l1 }, TyView::Unit { level: l2 })
+            | (TyView::Empty { level: l1 }, TyView::Empty { level: l2 })
+            | (TyView::SEmpty { level: l1 }, TyView::SEmpty { level: l2 }) => {
+                self.lev_eq(l1, l2)
+            }
             // Sum congruence (extension; non-dependent, so no binder push).
             (
-                Type::Sum { lhs_level: dl1, rhs_level: cl1, lhs: s1, rhs: t1 },
-                Type::Sum { lhs_level: dl2, rhs_level: cl2, lhs: s2, rhs: t2 },
+                TyView::Sum { lhs_level: dl1, rhs_level: cl1, lhs: s1, rhs: t1 },
+                TyView::Sum { lhs_level: dl2, rhs_level: cl2, lhs: s2, rhs: t2 },
             ) => {
                 self.lev_eq(dl1, dl2)?;
                 self.lev_eq(cl1, cl2)?;
@@ -521,42 +520,42 @@ impl Conv {
             // is the neutral-type comparison, structural in element and
             // length (docs/wf-former-design.md §5).
             (
-                Type::Vec { level: l1, elem: e1, len: k1 },
-                Type::Vec { level: l2, elem: e2, len: k2 },
+                TyView::Vec { level: l1, elem: e1, len: k1 },
+                TyView::Vec { level: l2, elem: e2, len: k2 },
             ) => {
                 self.lev_eq(l1, l2)?;
                 self.ty(env, e1, e2, l1)?;
-                self.tm(env, k1, k2, &Type::Nat, &Level::Zero)
+                self.tm_at_nat(env, k1, k2)
             }
-            (Type::Fin { len: k1 }, Type::Fin { len: k2 }) => {
-                self.tm(env, k1, k2, &Type::Nat, &Level::Zero)
+            (TyView::Fin { len: k1 }, TyView::Fin { len: k2 }) => {
+                self.tm_at_nat(env, k1, k2)
             }
             // Wf congruence (extension): the arity is a Nat term under the
             // shape binder, so it is compared as a term in (Γ, x : S).
             (
-                Type::Wf { level: l1, shape: s1, arity: n1 },
-                Type::Wf { level: l2, shape: s2, arity: n2 },
+                TyView::Wf { level: l1, shape: s1, arity: n1 },
+                TyView::Wf { level: l2, shape: s2, arity: n2 },
             ) => {
                 self.lev_eq(l1, l2)?;
                 self.ty(env, s1, s2, l1)?;
-                let e_x = env.push_entry(Rc::clone(s1), l1.clone());
-                self.tm(&e_x, n1, n2, &Type::Nat, &Level::Zero)
+                let e_x = D::push_entry(env, s1, l1);
+                self.tm_at_nat(&e_x, n1, n2)
             }
             // W congruence (extension; mirrors Π/Σ).
             (
-                Type::W { shape_level: dl1, pos_level: cl1, shape: s1, pos: t1 },
-                Type::W { shape_level: dl2, pos_level: cl2, shape: s2, pos: t2 },
+                TyView::W { shape_level: dl1, pos_level: cl1, shape: s1, pos: t1 },
+                TyView::W { shape_level: dl2, pos_level: cl2, shape: s2, pos: t2 },
             ) => {
                 self.lev_eq(dl1, dl2)?;
                 self.lev_eq(cl1, cl2)?;
                 self.ty(env, s1, s2, dl1)?;
-                let e = env.push_entry(Rc::clone(s1), dl1.clone());
+                let e = D::push_entry(env, s1, dl1);
                 self.ty(&e, t1, t2, cl1)
             }
             // -- layer-m type formers: mismatch outside layer m -------------
             (
-                Type::UPi { num_vars: n1, level: v1, body: b1 },
-                Type::UPi { num_vars: n2, level: v2, body: b2 },
+                TyView::UPi { num_vars: n1, level: v1, body: b1 },
+                TyView::UPi { num_vars: n2, level: v2, body: b2 },
             ) => {
                 if env.layer != Layer::Meta || n1 != n2 {
                     return Err(NC);
@@ -566,8 +565,8 @@ impl Conv {
                 self.ty(&e, b1, b2, v1)
             }
             (
-                Type::CtxPi { level: v1, body: b1 },
-                Type::CtxPi { level: v2, body: b2 },
+                TyView::CtxPi { level: v1, body: b1 },
+                TyView::CtxPi { level: v2, body: b2 },
             ) => {
                 if env.layer != Layer::Meta {
                     return Err(NC);
@@ -577,8 +576,8 @@ impl Conv {
                 self.ty(&e, b1, b2, v1)
             }
             (
-                Type::TyPi { ctx: c1, arg_level: a1, body_level: bl1, body: b1 },
-                Type::TyPi { ctx: c2, arg_level: a2, body_level: bl2, body: b2 },
+                TyView::TyPi { ctx: c1, arg_level: a1, body_level: bl1, body: b1 },
+                TyView::TyPi { ctx: c2, arg_level: a2, body_level: bl2, body: b2 },
             ) => {
                 if env.layer != Layer::Meta {
                     return Err(NC);
@@ -587,15 +586,15 @@ impl Conv {
                 self.lev_eq(bl1, bl2)?;
                 self.ctx(env, Layer::Prog, c1, c2)?;
                 let e = env.push_global(GlobalBinding::Ty {
-                    ctx: c1.clone(),
+                    ctx: (*c1).clone(),
                     layer: Layer::Prog,
-                    level: a1.clone(),
+                    level: (*a1).clone(),
                 });
                 self.ty(&e, b1, b2, bl1)
             }
             (
-                Type::CodeTy { ctx: c1, level: v1 },
-                Type::CodeTy { ctx: c2, level: v2 },
+                TyView::CodeTy { ctx: c1, level: v1 },
+                TyView::CodeTy { ctx: c2, level: v2 },
             ) => {
                 if env.layer != Layer::Meta {
                     return Err(NC);
@@ -604,34 +603,35 @@ impl Conv {
                 self.ctx(env, Layer::Prog, c1, c2)
             }
             (
-                Type::CodeTm { ctx: c1, ty: t1, level: v1 },
-                Type::CodeTm { ctx: c2, ty: t2, level: v2 },
+                TyView::CodeTm { ctx: c1, ty: t1, level: v1 },
+                TyView::CodeTm { ctx: c2, ty: t2, level: v2 },
             ) => {
                 if env.layer != Layer::Meta {
                     return Err(NC);
                 }
                 self.lev_eq(v1, v2)?;
                 self.ctx(env, Layer::Prog, c1, c2)?;
-                let e = env.in_ctx(c1.clone(), Layer::Prog);
-                self.ty(&e, t1, t2, v1)
+                let e = env.in_ctx((*c1).clone(), Layer::Prog);
+                let (x, y) =
+                    (D::embed_ty(&e, Rc::clone(t1)), D::embed_ty(&e, Rc::clone(t2)));
+                self.ty(&e, &x, &y, v1)
             }
             // -- neutrals ---------------------------------------------------
-            (
-                Type::El { .. } | Type::GlobalTy { .. },
-                Type::El { .. } | Type::GlobalTy { .. },
-            ) => self.ty_ne(env, a, b).map(drop),
+            (x, y) if x.is_neutral() && y.is_neutral() => self.ty_ne(env, a, b).map(drop),
             _ => Err(NC),
         }
     }
 
     /// `Γ ⊢ V ≈ V' : l` for neutral types; the level is *inferred*
     /// (left-biased) and returned.
-    fn ty_ne(&mut self, env: &Env, a: &Type, b: &Type) -> R<Level> {
+    fn ty_ne(&mut self, env: &Env, a: &D::Ty, b: &D::Ty) -> R<Level> {
         self.spend()?;
-        match (a, b) {
+        let va = D::view_ty(self, a);
+        let vb = D::view_ty(self, b);
+        match (&va, &vb) {
             (
-                Type::GlobalTy { var: u1, subst: d1 },
-                Type::GlobalTy { var: u2, subst: d2 },
+                TyView::GlobalTy { var: u1, subst: d1 },
+                TyView::GlobalTy { var: u2, subst: d2 },
             ) => {
                 if u1 != u2 {
                     return Err(NC);
@@ -650,12 +650,13 @@ impl Conv {
                 Ok(level)
             }
             (
-                Type::El { level: l1, tm: n1 },
-                Type::El { level: l2, tm: n2 },
+                TyView::El { level: l1, tm: n1 },
+                TyView::El { level: l2, tm: n2 },
             ) => {
                 self.lev_eq(l1, l2)?;
-                self.tm_nee(env, n1, n2)?; // inferred `Ty l`: redundant, ignored
-                Ok(l1.clone())
+                // inferred `Ty l`: redundant, ignored
+                self.tm_nee_c(env, n1, n2)?;
+                Ok((*l1).clone())
             }
             _ => Err(NC),
         }
@@ -673,25 +674,29 @@ impl Conv {
         for (k, (ea, eb)) in a.entries.iter().zip(&b.entries).enumerate() {
             let prefix = LocalCtx { base: a.base, entries: a.entries[..k].to_vec() };
             let e = env.in_ctx(prefix, layer);
-            self.ty(&e, &ea.ty, &eb.ty, &ea.level)?;
+            let (x, y) = (
+                D::embed_ty(&e, Rc::clone(&ea.ty)),
+                D::embed_ty(&e, Rc::clone(&eb.ty)),
+            );
+            self.ty(&e, &x, &y, &ea.level)?;
             self.lev_eq(&ea.level, &eb.level)?;
         }
         Ok(())
     }
 
     /// `Γ ⊢ δ ≈ δ' : Δ`, pairwise on the step terms over identical tails.
-    fn subst(&mut self, env: &Env, d1: &LocalSubst, d2: &LocalSubst, target: &LocalCtx) -> R {
+    fn subst(&mut self, env: &Env, d1: &D::Subst, d2: &D::Subst, target: &LocalCtx) -> R {
         self.spend()?;
-        if d1.tail != d2.tail
-            || d1.terms.len() != target.entries.len()
-            || d2.terms.len() != target.entries.len()
+        let (t1, t2) = (D::subst_terms(d1), D::subst_terms(d2));
+        if !D::subst_tails_agree(d1, d2)
+            || t1.len() != target.entries.len()
+            || t2.len() != target.entries.len()
         {
             return Err(NC);
         }
         for (k, e) in target.entries.iter().enumerate() {
-            let prefix = LocalSubst { tail: d1.tail, terms: d1.terms[..k].to_vec() };
-            let ty = e.ty.apply_local(&prefix);
-            self.tm(env, &d1.terms[k], &d2.terms[k], &ty, &e.level)?;
+            let ty = D::apply_subst_ty(self, env, d1, k, &e.ty)?;
+            self.tm(env, &t1[k], &t2[k], &ty, &e.level)?;
         }
         Ok(())
     }
@@ -700,9 +705,27 @@ impl Conv {
 
     /// `Γ ⊢ t ≈ t' : T @ l`: reduce the type and both terms to WHNF, then
     /// compare type-directed.
-    fn tm(&mut self, env: &Env, a: &Term, b: &Term, ty: &Type, l: &Level) -> R {
+    fn tm(&mut self, env: &Env, a: &D::TmC, b: &D::TmC, ty: &D::TyC, l: &Level) -> R {
         self.spend()?;
-        let w = self.whnf_ty(ty, env)?;
+        let w = D::whnf_ty(self, env, ty)?;
+        let wa = D::whnf_tm_opaque(self, env, a)?;
+        let wb = D::whnf_tm_opaque(self, env, b)?;
+        self.tm_w(env, wa, wb, &w, l)
+    }
+
+    /// [`Conv::tm`] at the **root**; see [`Conv::ty_root`].
+    fn tm_root(&mut self, env: &Env, a: &Term, b: &Term, ty: &Type, l: &Level) -> R {
+        self.spend()?;
+        let w = D::whnf_ty_root(self, env, ty)?;
+        let wa = D::whnf_tm_root(self, env, a)?;
+        let wb = D::whnf_tm_root(self, env, b)?;
+        self.tm_w(env, wa, wb, &w, l)
+    }
+
+    /// The δ stage, the transp strip and the comparison, shared by the two
+    /// entries above.
+    #[inline]
+    fn tm_w(&mut self, env: &Env, mut wa: D::Tm, mut wb: D::Tm, w: &D::Ty, l: &Level) -> R {
         // δ-lazy stage (extension; see [`Conv::ty`]): stop at a definition's
         // spine, and when both sides stop at the *same* one, try the spine
         // comparison before unfolding anything.
@@ -712,95 +735,86 @@ impl Conv {
         // program — pays one discriminant read and zero extra `Term`
         // moves; the helper layering cost 1.35× on `conv/computed-numeral`
         // (`scripts/bench --check`, 2026-07-28).
-        let mut wa = self.whnf_tm_opaque(a, env)?;
-        let mut wb = self.whnf_tm_opaque(b, env)?;
         if self.has_defs {
-            let defs = self.defs(env);
-            if let (Some(u1), Some(u2)) = (delta_head(&wa, defs), delta_head(&wb, defs))
+            if let (Some(u1), Some(u2)) =
+                (D::delta_head(self, env, &wa), D::delta_head(self, env, &wb))
                 && u1 == u2
-                && self.delta_lazy(|c| c.tm_nf(env, &wa, &wb, &w, l))?.is_some()
+                && self.delta_lazy(|c| c.tm_nf(env, &wa, &wb, w, l))?.is_some()
             {
                 return Ok(());
             }
-            wa = self.whnf_tm(&wa, env)?;
-            wb = self.whnf_tm(&wb, env)?;
+            wa = D::delta_tm(self, env, &wa)?;
+            wb = D::delta_tm(self, env, &wb)?;
         }
-        if matches!(wa, Term::Transp { .. }) {
+        if D::is_transp(&wa) {
             wa = self.strip(wa, env)?;
         }
-        if matches!(wb, Term::Transp { .. }) {
+        if D::is_transp(&wb) {
             wb = self.strip(wb, env)?;
         }
-        self.tm_nf(env, &wa, &wb, &w, l)
+        self.tm_nf(env, &wa, &wb, w, l)
+    }
+
+    /// `Γ ⊢ k ≈ k' : Nat @ 0` — the length/arity comparison the `Vec`, `Fin`
+    /// and `Wf` families all make.
+    fn tm_at_nat(&mut self, env: &Env, a: &D::TmC, b: &D::TmC) -> R {
+        self.tm(env, a, b, &D::nat(), &Level::Zero)
+    }
+
+    /// `Γ ⊢ s ≈ s' : Ty l @ l+1` — two type *encodings*.
+    fn tm_at_univ(&mut self, env: &Env, a: &D::TmC, b: &D::TmC, l: &Level) -> R {
+        let univ = D::univ(env, l);
+        self.tm(env, a, b, &univ, &Level::succ(l.clone()))
+    }
+
+    /// `Γ, x : El^l s` — the binder every dependent encoding pushes.
+    fn push_el(&mut self, env: &Env, l: &Level, s: &D::TmC) -> R<Env> {
+        let el = D::el(self, env, l, s)?;
+        Ok(D::push_entry(env, &el, l))
     }
 
     /// `Γ ⊢ w ≈ w' : W @ l` for weak head normal terms at a WHNF type,
     /// directed by the type.
-    fn tm_nf(&mut self, env: &Env, a: &Term, b: &Term, w: &Type, _l: &Level) -> R {
-        match w {
+    fn tm_nf(&mut self, env: &Env, a: &D::Tm, b: &D::Tm, w: &D::Ty, _l: &Level) -> R {
+        let vw = D::view_ty(self, w);
+        match &vw {
             // η: Γ, x : S ⊢ app(w↑; l,l'; x:S↑.T↑; x) ≈ app(w'↑; …; x) : T
-            Type::Pi { dom_level, cod_level, dom, cod } => {
-                // The `cod` annotation moves under the App binder: the Π
-                // variable maps to the App's bound variable, Γ weakens by 2.
-                let cod_ann = Rc::new(cod.apply_local(
-                    &LocalSubst::id(&env.gamma)
-                        .shift_local(2)
-                        .extended(Rc::new(Term::Var(LocalVar(0)))),
-                ));
-                let app = |t: &Term| Term::App {
-                    fun: Rc::new(t.shift_local(1)),
-                    dom_level: dom_level.clone(),
-                    cod_level: cod_level.clone(),
-                    dom: Rc::new(dom.shift_local(1)),
-                    cod: Rc::clone(&cod_ann),
-                    arg: Rc::new(Term::Var(LocalVar(0))),
-                };
-                let e = env.push_entry(Rc::clone(dom), dom_level.clone());
-                self.tm(&e, &app(a), &app(b), cod, cod_level)
+            TyView::Pi { dom_level, cod_level, dom, cod } => {
+                let e = D::push_entry(env, dom, dom_level);
+                let (x, y) =
+                    D::eta_app(self, env, &e, a, b, dom_level, cod_level, dom, cod)?;
+                self.tm(&e, &x, &y, cod, cod_level)
             }
             // η: L, ℓ⃗ ⊢ w↑ $ ℓ⃗ ≈ w'↑ $ ℓ⃗ : T
-            Type::UPi { num_vars, level, body } => {
+            TyView::UPi { num_vars, level, body } => {
                 if env.layer != Layer::Meta {
                     return Err(NC);
                 }
-                let n = *num_vars;
-                let levels: Vec<Level> = (0..n).rev().map(lvar).collect();
-                let uapp = |t: &Term| Term::UApp {
-                    fun: Rc::new(t.shift_univ(n)),
-                    levels: levels.clone(),
-                };
-                let e = env.push_univs(n);
-                self.tm(&e, &uapp(a), &uapp(b), body, level)
+                let e = env.push_univs(*num_vars);
+                let (x, y) = D::eta_uapp(self, env, &e, a, b, *num_vars)?;
+                self.tm(&e, &x, &y, body, level)
             }
             // η: Ψ, g : Ctx ⊢ w↑ @ g ≈ w'↑ @ g : T
-            Type::CtxPi { level, body } => {
+            TyView::CtxPi { level, body } => {
                 if env.layer != Layer::Meta {
                     return Err(NC);
                 }
-                let capp = |t: &Term| Term::CtxApp {
-                    fun: Rc::new(t.shift_global(1)),
-                    ctx: g_ctx(0),
-                };
                 let e = env.push_global(GlobalBinding::Ctx);
-                self.tm(&e, &capp(a), &capp(b), body, level)
+                let (x, y) = D::eta_ctxapp(self, env, &e, a, b)?;
+                self.tm(&e, &x, &y, body, level)
             }
             // η: Ψ, U : Typ_p(Δ, l) ⊢ w↑ @ U^{id_Δ} ≈ w'↑ @ U^{id_Δ} : T
-            Type::TyPi { ctx, arg_level, body_level, body } => {
+            TyView::TyPi { ctx, arg_level, body_level, body } => {
                 if env.layer != Layer::Meta {
                     return Err(NC);
                 }
-                let ctx_up = ctx.shift_global(1);
-                let arg = Rc::new(gty(0, &ctx_up));
-                let tapp = |t: &Term| Term::TyApp {
-                    fun: Rc::new(t.shift_global(1)),
-                    arg: Rc::clone(&arg),
-                };
                 let e = env.push_global(GlobalBinding::Ty {
-                    ctx: ctx.clone(),
+                    ctx: (*ctx).clone(),
                     layer: Layer::Prog,
-                    level: arg_level.clone(),
+                    level: (*arg_level).clone(),
                 });
-                self.tm(&e, &tapp(a), &tapp(b), body, body_level)
+                let (x, y) = D::eta_tyapp(self, env, &e, a, b, ctx)?;
+                self.tm(&e, &x, &y, body, body_level)
             }
             // Code compares syntactically — *modulo level equivalence*, which
             // is the quotient ch. 05's Static Code lemma (`lem:dt:static`)
@@ -811,52 +825,47 @@ impl Conv {
             // against ch. 08's Convertibility theorem, not unsoundness, but a
             // spurious error for any universe-polymorphic metaprogram.
             // Neutrals still compare structurally.
-            Type::CodeTy { .. } => match (a, b) {
-                (Term::BoxTy(t1), Term::BoxTy(t2)) => {
-                    if code_eq(&**t1, &**t2) { Ok(()) } else { Err(NC) }
+            TyView::CodeTy { .. } => match (&D::view_tm(self, a), &D::view_tm(self, b)) {
+                (TmView::BoxTy(t1), TmView::BoxTy(t2)) => {
+                    if code_eq(&***t1, &***t2) { Ok(()) } else { Err(NC) }
                 }
-                (Term::BoxTy(_), _) | (_, Term::BoxTy(_)) => Err(NC),
+                (TmView::BoxTy(_), _) | (_, TmView::BoxTy(_)) => Err(NC),
                 _ => self.tm_nee(env, a, b).map(drop),
             },
-            Type::CodeTm { .. } => match (a, b) {
-                (Term::BoxTm(t1), Term::BoxTm(t2)) => {
-                    if code_eq(&**t1, &**t2) { Ok(()) } else { Err(NC) }
+            TyView::CodeTm { .. } => match (&D::view_tm(self, a), &D::view_tm(self, b)) {
+                (TmView::BoxTm(t1), TmView::BoxTm(t2)) => {
+                    if code_eq(&***t1, &***t2) { Ok(()) } else { Err(NC) }
                 }
-                (Term::BoxTm(_), _) | (_, Term::BoxTm(_)) => Err(NC),
+                (TmView::BoxTm(_), _) | (_, TmView::BoxTm(_)) => Err(NC),
                 _ => self.tm_nee(env, a, b).map(drop),
             },
-            Type::Nat => match (a, b) {
-                (Term::Zero, Term::Zero) => Ok(()),
-                (Term::Succ(x), Term::Succ(y)) => {
-                    self.tm(env, x, y, &Type::Nat, &Level::Zero)
-                }
-                (Term::Zero | Term::Succ(_), _) | (_, Term::Zero | Term::Succ(_)) => {
-                    Err(NC)
-                }
+            TyView::Nat => match (&D::view_tm(self, a), &D::view_tm(self, b)) {
+                (TmView::Zero, TmView::Zero) => Ok(()),
+                (TmView::Succ(x), TmView::Succ(y)) => self.tm_at_nat(env, x, y),
+                (x, y) if x.is_nat_data() || y.is_nat_data() => Err(NC),
                 _ => self.tm_nee(env, a, b).map(drop),
             },
-            Type::Ty(_) => match (a, b) {
-                (Term::TmNat, Term::TmNat) => Ok(()),
-                (Term::TmTy(x), Term::TmTy(y)) => self.lev_eq(x, y),
+            TyView::Ty(_) => match (&D::view_tm(self, a), &D::view_tm(self, b)) {
+                (TmView::TmNat, TmView::TmNat) => Ok(()),
+                (TmView::TmTy(x), TmView::TmTy(y)) => self.lev_eq(x, y),
                 (
-                    Term::TmPi { dom_level: dl1, cod_level: cl1, dom: s1, cod: t1 },
-                    Term::TmPi { dom_level: dl2, cod_level: cl2, dom: s2, cod: t2 },
+                    TmView::TmPi { dom_level: dl1, cod_level: cl1, dom: s1, cod: t1 },
+                    TmView::TmPi { dom_level: dl2, cod_level: cl2, dom: s2, cod: t2 },
                 ) => {
                     self.lev_eq(dl1, dl2)?;
                     self.lev_eq(cl1, cl2)?;
-                    self.tm(env, s1, s2, &Type::Ty(dl1.clone()), &Level::succ(dl1.clone()))?;
-                    let el = Type::El { level: dl1.clone(), tm: Rc::clone(s1) };
-                    let e = env.push_entry(Rc::new(el), dl1.clone());
-                    self.tm(&e, t1, t2, &Type::Ty(cl1.clone()), &Level::succ(cl1.clone()))
+                    self.tm_at_univ(env, s1, s2, dl1)?;
+                    let e = self.push_el(env, dl1, s1)?;
+                    self.tm_at_univ(&e, t1, t2, cl1)
                 }
                 // TmId congruence (extension).
                 (
-                    Term::TmId { level: l1, ty: s1, lhs: t1, rhs: u1 },
-                    Term::TmId { level: l2, ty: s2, lhs: t2, rhs: u2 },
+                    TmView::TmId { level: l1, ty: s1, lhs: t1, rhs: u1 },
+                    TmView::TmId { level: l2, ty: s2, lhs: t2, rhs: u2 },
                 ) => {
                     self.lev_eq(l1, l2)?;
-                    self.tm(env, s1, s2, &Type::Ty(l1.clone()), &Level::succ(l1.clone()))?;
-                    let el = Type::El { level: l1.clone(), tm: Rc::clone(s1) };
+                    self.tm_at_univ(env, s1, s2, l1)?;
+                    let el = D::el(self, env, l1, s1)?;
                     self.tm(env, t1, t2, &el, l1)?;
                     self.tm(env, u1, u2, &el, l1)
                 }
@@ -864,158 +873,109 @@ impl Conv {
                 // *encoding* compares structurally like any code; only
                 // terms AT sEq type are irrelevant).
                 (
-                    Term::TmSEq { level: l1, ty: s1, lhs: t1, rhs: u1 },
-                    Term::TmSEq { level: l2, ty: s2, lhs: t2, rhs: u2 },
+                    TmView::TmSEq { level: l1, ty: s1, lhs: t1, rhs: u1 },
+                    TmView::TmSEq { level: l2, ty: s2, lhs: t2, rhs: u2 },
                 ) => {
                     self.lev_eq(l1, l2)?;
-                    self.tm(env, s1, s2, &Type::Ty(l1.clone()), &Level::succ(l1.clone()))?;
-                    let el = Type::El { level: l1.clone(), tm: Rc::clone(s1) };
+                    self.tm_at_univ(env, s1, s2, l1)?;
+                    let el = D::el(self, env, l1, s1)?;
                     self.tm(env, t1, t2, &el, l1)?;
                     self.tm(env, u1, u2, &el, l1)
                 }
                 // TmSigma congruence (extension; mirrors TmPi).
                 (
-                    Term::TmSigma { fst_level: dl1, snd_level: cl1, fst: s1, snd: t1 },
-                    Term::TmSigma { fst_level: dl2, snd_level: cl2, fst: s2, snd: t2 },
+                    TmView::TmSigma { fst_level: dl1, snd_level: cl1, fst: s1, snd: t1 },
+                    TmView::TmSigma { fst_level: dl2, snd_level: cl2, fst: s2, snd: t2 },
                 ) => {
                     self.lev_eq(dl1, dl2)?;
                     self.lev_eq(cl1, cl2)?;
-                    self.tm(env, s1, s2, &Type::Ty(dl1.clone()), &Level::succ(dl1.clone()))?;
-                    let el = Type::El { level: dl1.clone(), tm: Rc::clone(s1) };
-                    let e = env.push_entry(Rc::new(el), dl1.clone());
-                    self.tm(&e, t1, t2, &Type::Ty(cl1.clone()), &Level::succ(cl1.clone()))
+                    self.tm_at_univ(env, s1, s2, dl1)?;
+                    let e = self.push_el(env, dl1, s1)?;
+                    self.tm_at_univ(&e, t1, t2, cl1)
                 }
-                // TmUnit/TmEmpty congruence (extension; nullary encodings).
-                (Term::TmUnit { level: l1 }, Term::TmUnit { level: l2 })
-                | (Term::TmEmpty { level: l1 }, Term::TmEmpty { level: l2 })
-                | (Term::TmSEmpty { level: l1 }, Term::TmSEmpty { level: l2 }) => {
+                // TmUnit/TmEmpty/TmsEmpty congruence (extension; nullary
+                // encodings).
+                (TmView::TmUnit { level: l1 }, TmView::TmUnit { level: l2 })
+                | (TmView::TmEmpty { level: l1 }, TmView::TmEmpty { level: l2 })
+                | (TmView::TmSEmpty { level: l1 }, TmView::TmSEmpty { level: l2 }) => {
                     self.lev_eq(l1, l2)
                 }
                 // TmSum congruence (extension; non-dependent, mirrors TmSigma).
                 (
-                    Term::TmSum { lhs_level: dl1, rhs_level: cl1, lhs: s1, rhs: t1 },
-                    Term::TmSum { lhs_level: dl2, rhs_level: cl2, lhs: s2, rhs: t2 },
+                    TmView::TmSum { lhs_level: dl1, rhs_level: cl1, lhs: s1, rhs: t1 },
+                    TmView::TmSum { lhs_level: dl2, rhs_level: cl2, lhs: s2, rhs: t2 },
                 ) => {
                     self.lev_eq(dl1, dl2)?;
                     self.lev_eq(cl1, cl2)?;
-                    self.tm(env, s1, s2, &Type::Ty(dl1.clone()), &Level::succ(dl1.clone()))?;
-                    self.tm(env, t1, t2, &Type::Ty(cl1.clone()), &Level::succ(cl1.clone()))
+                    self.tm_at_univ(env, s1, s2, dl1)?;
+                    self.tm_at_univ(env, t1, t2, cl1)
                 }
                 // TmW congruence (extension; mirrors TmPi/TmSigma).
                 (
-                    Term::TmW { shape_level: dl1, pos_level: cl1, shape: s1, pos: t1 },
-                    Term::TmW { shape_level: dl2, pos_level: cl2, shape: s2, pos: t2 },
+                    TmView::TmW { shape_level: dl1, pos_level: cl1, shape: s1, pos: t1 },
+                    TmView::TmW { shape_level: dl2, pos_level: cl2, shape: s2, pos: t2 },
                 ) => {
                     self.lev_eq(dl1, dl2)?;
                     self.lev_eq(cl1, cl2)?;
-                    self.tm(env, s1, s2, &Type::Ty(dl1.clone()), &Level::succ(dl1.clone()))?;
-                    let el = Type::El { level: dl1.clone(), tm: Rc::clone(s1) };
-                    let e = env.push_entry(Rc::new(el), dl1.clone());
-                    self.tm(&e, t1, t2, &Type::Ty(cl1.clone()), &Level::succ(cl1.clone()))
+                    self.tm_at_univ(env, s1, s2, dl1)?;
+                    let e = self.push_el(env, dl1, s1)?;
+                    self.tm_at_univ(&e, t1, t2, cl1)
                 }
                 // TmVec/TmFin congruence (extension): the length is compared
                 // at Nat in the ambient scope — no binder, unlike TmWf.
                 (
-                    Term::TmVec { level: l1, elem: s1, len: k1 },
-                    Term::TmVec { level: l2, elem: s2, len: k2 },
+                    TmView::TmVec { level: l1, elem: s1, len: k1 },
+                    TmView::TmVec { level: l2, elem: s2, len: k2 },
                 ) => {
                     self.lev_eq(l1, l2)?;
-                    self.tm(env, s1, s2, &Type::Ty(l1.clone()), &Level::succ(l1.clone()))?;
-                    self.tm(env, k1, k2, &Type::Nat, &Level::Zero)
+                    self.tm_at_univ(env, s1, s2, l1)?;
+                    self.tm_at_nat(env, k1, k2)
                 }
-                (Term::TmFin { len: k1 }, Term::TmFin { len: k2 }) => {
-                    self.tm(env, k1, k2, &Type::Nat, &Level::Zero)
+                (TmView::TmFin { len: k1 }, TmView::TmFin { len: k2 }) => {
+                    self.tm_at_nat(env, k1, k2)
                 }
                 // TmWf congruence (extension): the arity is compared at Nat
                 // under the shape binder, mirroring TmW's positions.
                 (
-                    Term::TmWf { level: l1, shape: s1, arity: n1 },
-                    Term::TmWf { level: l2, shape: s2, arity: n2 },
+                    TmView::TmWf { level: l1, shape: s1, arity: n1 },
+                    TmView::TmWf { level: l2, shape: s2, arity: n2 },
                 ) => {
                     self.lev_eq(l1, l2)?;
-                    self.tm(env, s1, s2, &Type::Ty(l1.clone()), &Level::succ(l1.clone()))?;
-                    let el = Type::El { level: l1.clone(), tm: Rc::clone(s1) };
-                    let e = env.push_entry(Rc::new(el), l1.clone());
-                    self.tm(&e, n1, n2, &Type::Nat, &Level::Zero)
+                    self.tm_at_univ(env, s1, s2, l1)?;
+                    let e = self.push_el(env, l1, s1)?;
+                    self.tm_at_nat(&e, n1, n2)
                 }
-                (
-                    Term::TmNat
-                    | Term::TmTy(_)
-                    | Term::TmPi { .. }
-                    | Term::TmId { .. }
-                    | Term::TmSigma { .. }
-                    | Term::TmUnit { .. }
-                    | Term::TmEmpty { .. }
-                    | Term::TmSum { .. }
-                    | Term::TmW { .. }
-                    | Term::TmVec { .. }
-                    | Term::TmFin { .. }
-                    | Term::TmWf { .. }
-                    | Term::TmSEq { .. }
-                    | Term::TmSEmpty { .. },
-                    _,
-                )
-                | (
-                    _,
-                    Term::TmNat
-                    | Term::TmTy(_)
-                    | Term::TmPi { .. }
-                    | Term::TmId { .. }
-                    | Term::TmSigma { .. }
-                    | Term::TmUnit { .. }
-                    | Term::TmEmpty { .. }
-                    | Term::TmSum { .. }
-                    | Term::TmW { .. }
-                    | Term::TmVec { .. }
-                    | Term::TmFin { .. }
-                    | Term::TmWf { .. }
-                    | Term::TmSEq { .. }
-                    | Term::TmSEmpty { .. },
-                ) => Err(NC),
+                (x, y) if x.is_encoding() || y.is_encoding() => Err(NC),
                 _ => self.tm_nee(env, a, b).map(drop),
             },
             // Id (extension): refl congruence on the point; else neutral.
             // The refl annotations are forced by well-typedness at this Id
             // type, so only the point is compared.
-            Type::Id { level, ty, .. } => match (a, b) {
-                (Term::Refl { tm: x, .. }, Term::Refl { tm: y, .. }) => {
+            TyView::Id { level, ty, .. } => match (&D::view_tm(self, a), &D::view_tm(self, b))
+            {
+                (TmView::Refl { tm: x }, TmView::Refl { tm: y }) => {
                     self.tm(env, x, y, ty, level)
                 }
-                (Term::Refl { .. }, _) | (_, Term::Refl { .. }) => Err(NC),
+                (TmView::Refl { .. }, _) | (_, TmView::Refl { .. }) => Err(NC),
                 _ => self.tm_nee(env, a, b).map(drop),
             },
             // Σ η (extension): surjective pairing — type-directed like the Π
             // η arm, so it fires on literal pairs, neutrals, or mixtures.
             // Compare `fst a ≈ fst b : S` and `snd a ≈ snd b : T[fst a/x]`.
-            Type::Sigma { fst_level, snd_level, fst, snd } => {
-                let proj = |head: &Term, first: bool| {
-                    let f = |pair: Rc<Term>| {
-                        (
-                            fst_level.clone(),
-                            snd_level.clone(),
-                            Rc::clone(fst),
-                            Rc::clone(snd),
-                            pair,
-                        )
-                    };
-                    let (fl, sl, ft, st, pair) = f(Rc::new(head.clone()));
-                    if first {
-                        Term::Fst { fst_level: fl, snd_level: sl, fst_ty: ft, snd_ty: st, pair }
-                    } else {
-                        Term::Snd { fst_level: fl, snd_level: sl, fst_ty: ft, snd_ty: st, pair }
-                    }
-                };
-                self.tm(env, &proj(a, true), &proj(b, true), fst, fst_level)?;
-                let snd_ty = snd.apply_local(
-                    &LocalSubst::id(&env.gamma).extended(Rc::new(proj(a, true))),
-                );
-                self.tm(env, &proj(a, false), &proj(b, false), &snd_ty, snd_level)
+            TyView::Sigma { fst_level, snd_level, fst, snd } => {
+                let (fa, fb) =
+                    D::eta_proj(self, env, true, a, b, fst_level, snd_level, fst, snd)?;
+                self.tm(env, &fa, &fb, fst, fst_level)?;
+                let snd_ty = D::inst_ty(self, env, env, snd, &[fa])?;
+                let (sa, sb) =
+                    D::eta_proj(self, env, false, a, b, fst_level, snd_level, fst, snd)?;
+                self.tm(env, &sa, &sb, &snd_ty, snd_level)
             }
             // Unit η (extension): proof irrelevance — every term of Unit type
             // is convertible to ⟨⟩, hence to each other. Type-directed like Σ
             // η, so it fires on ⟨⟩, neutrals, or mixtures without inspecting
             // either side.
-            Type::Unit { .. } => Ok(()),
+            TyView::Unit { .. } => Ok(()),
             // sEq irrelevance (extension; docs/sprop-design.md §5.2): the
             // Unit pattern generalized — any two proofs of a strict equality
             // are definitionally equal. This arm is also what lets the
@@ -1024,126 +984,133 @@ impl Conv {
             // Both of Unit's ch. 07 §4 consequences apply verbatim:
             // presupposition holds by assumption on the caller, and the arm
             // must sit here in `tm_nf`, ahead of any structural fallback.
-            Type::SEq { .. } => Ok(()),
+            TyView::SEq { .. } => Ok(()),
             // sEmpty irrelevance (extension; docs/sprop-design.md §2.2):
-            // unlike Empty (structural neutrals, above-adjacent arm), any
-            // two absurdity proofs are convertible — vacuously sound, the
-            // type is uninhabited in consistent contexts.
-            Type::SEmpty { .. } => Ok(()),
+            // unlike Empty (structural neutrals, below), any two absurdity
+            // proofs are convertible — vacuously sound, the type is
+            // uninhabited in consistent contexts.
+            TyView::SEmpty { .. } => Ok(()),
             // Empty (extension): no canonical inhabitants, so only neutrals can
             // appear; compare them structurally.
-            Type::Empty { .. } => self.tm_nee(env, a, b).map(drop),
+            TyView::Empty { .. } => self.tm_nee(env, a, b).map(drop),
             // Sum (extension): a positive type — the two constructors match
             // like `Zero`/`Succ` at `Nat`. The annotations on inl/inr are
             // forced by well-typedness at this sum type, so only the injected
             // value is compared; a tag mismatch is `NotConvertible`; neutrals
             // (a stuck `case`, a variable) fall through to structural
             // comparison.
-            Type::Sum { lhs_level, rhs_level, lhs, rhs } => match (a, b) {
-                (Term::Inl { val: x, .. }, Term::Inl { val: y, .. }) => {
-                    self.tm(env, x, y, lhs, lhs_level)
+            TyView::Sum { lhs_level, rhs_level, lhs, rhs } => {
+                match (&D::view_tm(self, a), &D::view_tm(self, b)) {
+                    (TmView::Inl { val: x }, TmView::Inl { val: y }) => {
+                        self.tm(env, x, y, lhs, lhs_level)
+                    }
+                    (TmView::Inr { val: x }, TmView::Inr { val: y }) => {
+                        self.tm(env, x, y, rhs, rhs_level)
+                    }
+                    (TmView::Inl { .. } | TmView::Inr { .. }, _)
+                    | (_, TmView::Inl { .. } | TmView::Inr { .. }) => Err(NC),
+                    _ => self.tm_nee(env, a, b).map(drop),
                 }
-                (Term::Inr { val: x, .. }, Term::Inr { val: y, .. }) => {
-                    self.tm(env, x, y, rhs, rhs_level)
-                }
-                (Term::Inl { .. } | Term::Inr { .. }, _)
-                | (_, Term::Inl { .. } | Term::Inr { .. }) => Err(NC),
-                _ => self.tm_nee(env, a, b).map(drop),
-            },
+            }
             // W (extension): a positive type — `sup` matches like the sum
             // constructors. The annotations on sup are forced by
             // well-typedness at this W type, so only the label and the
             // subtree function are compared (the latter at the left label's
             // instantiated Π type, left-biased); neutrals (a stuck elim_W, a
             // variable) fall through to structural comparison.
-            Type::W { shape_level, pos_level, shape, pos } => match (a, b) {
-                (
-                    Term::Sup { label: a1, children: f1, .. },
-                    Term::Sup { label: a2, children: f2, .. },
-                ) => {
-                    self.tm(env, a1, a2, shape, shape_level)?;
-                    let lmax = Level::max(shape_level.clone(), pos_level.clone());
-                    let pos_at =
-                        pos.apply_local(&LocalSubst::id(&env.gamma).extended(Rc::clone(a1)));
-                    let f_ty = Type::Pi {
-                        dom_level: pos_level.clone(),
-                        cod_level: lmax.clone(),
-                        dom: Rc::new(pos_at),
-                        cod: Rc::new(w.shift_local(1)),
-                    };
-                    self.tm(env, f1, f2, &f_ty, &Level::max(pos_level.clone(), lmax))
+            TyView::W { shape_level, pos_level, shape, pos } => {
+                match (&D::view_tm(self, a), &D::view_tm(self, b)) {
+                    (
+                        TmView::Sup { label: a1, children: f1 },
+                        TmView::Sup { label: a2, children: f2 },
+                    ) => {
+                        self.tm(env, a1, a2, shape, shape_level)?;
+                        let lmax = Level::max((*shape_level).clone(), (*pos_level).clone());
+                        let pos_at = D::inst_ty(self, env, env, pos, std::slice::from_ref(a1))?;
+                        let w_c = D::as_child_ty(self, env, w)?;
+                        let cod = D::weaken_ty(&w_c, 1);
+                        let f_ty = D::pi(self, env, pos_level, &lmax, &pos_at, &cod)?;
+                        let f_l = Level::max((*pos_level).clone(), lmax);
+                        self.tm(env, f1, f2, &f_ty, &f_l)
+                    }
+                    (TmView::Sup { .. }, _) | (_, TmView::Sup { .. }) => Err(NC),
+                    _ => self.tm_nee(env, a, b).map(drop),
                 }
-                (Term::Sup { .. }, _) | (_, Term::Sup { .. }) => Err(NC),
-                _ => self.tm_nee(env, a, b).map(drop),
-            },
+            }
             // Wf (extension): positive, like W — but the children compare at
             // a `Vec`, so the comparison descends through `Σ`-η and bottoms
             // out in `Unit`'s proof irrelevance. That is the whole reason
             // this former exists (docs/wf-former-design.md §5): no funext is
             // reachable from here, because there is no function to compare.
-            Type::Wf { level, shape, arity } => match (a, b) {
-                (
-                    Term::Supf { label: a1, children: c1, .. },
-                    Term::Supf { label: a2, children: c2, .. },
-                ) => {
-                    self.tm(env, a1, a2, shape, level)?;
-                    // Children at Vec(Wf; n[a₁/x]), left-biased like W's.
-                    let arity_at =
-                        arity.apply_local(&LocalSubst::id(&env.gamma).extended(Rc::clone(a1)));
-                    let cs_ty = Type::Vec {
-                        level: level.clone(),
-                        elem: Rc::new(w.clone()),
-                        len: Rc::new(arity_at),
-                    };
-                    self.tm(env, c1, c2, &cs_ty, level)
+            TyView::Wf { level, shape, arity } => {
+                match (&D::view_tm(self, a), &D::view_tm(self, b)) {
+                    (
+                        TmView::Supf { label: a1, children: c1 },
+                        TmView::Supf { label: a2, children: c2 },
+                    ) => {
+                        self.tm(env, a1, a2, shape, level)?;
+                        // Children at Vec(Wf; n[a₁/x]), left-biased like W's.
+                        let arity_at = D::inst_tm(self, env, env, arity, std::slice::from_ref(a1))?;
+                        let w_c = D::as_child_ty(self, env, w)?;
+                        let cs_ty = D::vec(self, env, level, &w_c, &arity_at)?;
+                        self.tm(env, c1, c2, &cs_ty, level)
+                    }
+                    (TmView::Supf { .. }, _) | (_, TmView::Supf { .. }) => Err(NC),
+                    _ => self.tm_nee(env, a, b).map(drop),
                 }
-                (Term::Supf { .. }, _) | (_, Term::Supf { .. }) => Err(NC),
-                _ => self.tm_nee(env, a, b).map(drop),
-            },
+            }
             // Neutral type: only neutral terms inhabit it. `Vec`/`Fin` reach
             // here only at a neutral length (a canonical one reduces to
             // Σ/Unit resp. Sum/Empty first, and those arms then supply the
             // η) — so they behave exactly like the other neutral types.
-            Type::El { .. }
-            | Type::GlobalTy { .. }
-            | Type::Vec { .. }
-            | Type::Fin { .. } => self.tm_nee(env, a, b).map(drop),
+            TyView::El { .. }
+            | TyView::GlobalTy { .. }
+            | TyView::Vec { .. }
+            | TyView::Fin { .. } => self.tm_nee(env, a, b).map(drop),
         }
     }
 
     /// Neutral comparison with the inferred type reduced to WHNF.
-    fn tm_nee(&mut self, env: &Env, a: &Term, b: &Term) -> R<(Type, Level)> {
+    fn tm_nee(&mut self, env: &Env, a: &D::Tm, b: &D::Tm) -> R<(D::Ty, Level)> {
         let (t, l) = self.tm_ne(env, a, b)?;
-        let w = self.whnf_ty(&t, env)?;
+        let w = D::whnf_ty(self, env, &t)?;
         Ok((w, l))
+    }
+
+    /// [`Conv::tm_nee`] on two *sub-structures* — an eliminator's scrutinee,
+    /// an application's function. They are already in weak head normal form
+    /// (the form carrying them is), so reaching their heads is a no-op at the
+    /// syntax domain and a `force` at the value domain.
+    fn tm_nee_c(&mut self, env: &Env, a: &D::TmC, b: &D::TmC) -> R<(D::Ty, Level)> {
+        let x = D::head_tm(self, env, a)?;
+        let y = D::head_tm(self, env, b)?;
+        self.tm_nee(env, &x, &y)
     }
 
     /// `Γ ⊢ ν ≈ ν' : T @ l` for neutral terms; the type and level are
     /// *inferred* (left-biased) and returned. Layer-m elimination forms
     /// bump the ambient layer to m — their rules are stated there, and the
     /// layer index restricts only types.
-    fn tm_ne(&mut self, env: &Env, a: &Term, b: &Term) -> R<(Type, Level)> {
+    fn tm_ne(&mut self, env: &Env, a: &D::Tm, b: &D::Tm) -> R<(D::TyC, Level)> {
         self.spend()?;
-        match (a, b) {
-            (Term::Var(x), Term::Var(y)) => {
+        let va = D::view_tm(self, a);
+        let vb = D::view_tm(self, b);
+        match (&va, &vb) {
+            (TmView::Var(x), TmView::Var(y)) => {
                 if x != y {
                     return Err(NC);
                 }
-                let Some(i) = env.gamma.entries.len().checked_sub(1 + x.0 as usize)
-                else {
-                    return Err(NC);
-                };
-                let e = &env.gamma.entries[i];
-                Ok((e.ty.shift_local(x.0 + 1), e.level.clone()))
+                D::var_type(self, env, *x)
             }
             (
-                Term::GlobalTm { var: u1, subst: d1 },
-                Term::GlobalTm { var: u2, subst: d2 },
+                TmView::GlobalTm { var: u1, subst: d1 },
+                TmView::GlobalTm { var: u2, subst: d2 },
             ) => {
                 if u1 != u2 {
                     return Err(NC);
                 }
-                let Some(GlobalBinding::Tm { ctx, layer, ty, level, .. }) = lookup(&env.psi, *u1)
+                let Some(GlobalBinding::Tm { ctx, layer, ty, level, .. }) =
+                    lookup(&env.psi, *u1)
                 else {
                     return Err(NC);
                 };
@@ -1153,48 +1120,42 @@ impl Conv {
                 }
                 let level = level.clone();
                 let ctx = ctx.shift_global(u1.0 + 1);
-                let ty = ty.shift_global(u1.0 + 1);
+                let ty = Rc::new(ty.shift_global(u1.0 + 1));
                 self.subst(env, d1, d2, &ctx)?;
-                Ok((ty.apply_local(d1), level))
+                let n = D::subst_terms(d1).len();
+                Ok((D::apply_subst_ty(self, env, d1, n, &ty)?, level))
             }
             (
-                Term::ElimNat { level: v1, motive: m1, base: z1, step: s1, scrut: n1 },
-                Term::ElimNat { level: v2, motive: m2, base: z2, step: s2, scrut: n2 },
+                TmView::ElimNat { level: v1, motive: m1, base: z1, step: s1, scrut: n1 },
+                TmView::ElimNat { level: v2, motive: m2, base: z2, step: s2, scrut: n2 },
             ) => {
                 self.lev_eq(v1, v2)?;
-                let e_x = env.push_entry(Rc::new(Type::Nat), Level::Zero);
+                let e_x = D::push_entry(env, &D::nat(), &Level::Zero);
                 self.ty(&e_x, m1, m2, v1)?;
-                let base_ty =
-                    m1.apply_local(&LocalSubst::id(&env.gamma).extended(Rc::new(Term::Zero)));
+                let base_ty = D::inst_ty(self, env, env, m1, &[D::zero()])?;
                 self.tm(env, z1, z2, &base_ty, v1)?;
                 // M[su x/x] scoped in (Γ, x : Nat, y : M), as in reduce.rs.
-                let su_x = Term::Succ(Rc::new(Term::Var(LocalVar(1))));
-                let step_ty = m1.apply_local(
-                    &LocalSubst::id(&env.gamma).shift_local(2).extended(Rc::new(su_x)),
-                );
-                let e_xy = e_x.push_entry(Rc::clone(m1), v1.clone());
+                let e_xy = D::push_entry(&e_x, m1, v1);
+                let x1 = D::local(&e_xy, LocalVar(1));
+                let su_x = D::succ(self, &e_xy, &x1)?;
+                let step_ty = D::inst_ty(self, env, &e_xy, m1, std::slice::from_ref(&su_x))?;
                 self.tm(&e_xy, s1, s2, &step_ty, v1)?;
-                self.tm_nee(env, n1, n2)?; // inferred Nat: redundant, ignored
-                Ok((
-                    m1.apply_local(&LocalSubst::id(&env.gamma).extended(Rc::clone(n1))),
-                    v1.clone(),
-                ))
+                self.tm_nee_c(env, n1, n2)?; // inferred Nat: redundant, ignored
+                Ok((D::inst_ty(self, env, env, m1, std::slice::from_ref(n1))?, (*v1).clone()))
             }
             // elim_Empty neutral congruence (extension); mirrors ElimNat
             // minus the base/step branches.
             (
-                Term::ElimEmpty { level: v1, scrut_level: s1, motive: m1, scrut: n1 },
-                Term::ElimEmpty { level: v2, scrut_level: s2, motive: m2, scrut: n2 },
+                TmView::ElimEmpty { level: v1, scrut_level: s1, motive: m1, scrut: n1 },
+                TmView::ElimEmpty { level: v2, scrut_level: s2, motive: m2, scrut: n2 },
             ) => {
                 self.lev_eq(v1, v2)?;
                 self.lev_eq(s1, s2)?;
-                let e_x = env.push_entry(Rc::new(Type::Empty { level: s1.clone() }), s1.clone());
+                let em = D::empty(env, s1);
+                let e_x = D::push_entry(env, &em, s1);
                 self.ty(&e_x, m1, m2, v1)?;
-                self.tm_nee(env, n1, n2)?; // inferred Empty: redundant, ignored
-                Ok((
-                    m1.apply_local(&LocalSubst::id(&env.gamma).extended(Rc::clone(n1))),
-                    v1.clone(),
-                ))
+                self.tm_nee_c(env, n1, n2)?; // inferred Empty: redundant, ignored
+                Ok((D::inst_ty(self, env, env, m1, std::slice::from_ref(n1))?, (*v1).clone()))
             }
             // elim_sEmpty neutral congruence (extension) — ElimEmpty's arm
             // with the scrutinees *skipped*: they sit at sEmpty, whose
@@ -1202,25 +1163,22 @@ impl Conv {
             // would be that arm anyway (docs/sprop-design.md §5.3). The
             // motive instances agree for the same reason.
             (
-                Term::ElimSEmpty { level: v1, scrut_level: s1, motive: m1, scrut: n1 },
-                Term::ElimSEmpty { level: v2, scrut_level: s2, motive: m2, scrut: _ },
+                TmView::ElimSEmpty { level: v1, scrut_level: s1, motive: m1, scrut: n1 },
+                TmView::ElimSEmpty { level: v2, scrut_level: s2, motive: m2, scrut: _ },
             ) => {
                 self.lev_eq(v1, v2)?;
                 self.lev_eq(s1, s2)?;
-                let e_x =
-                    env.push_entry(Rc::new(Type::SEmpty { level: s1.clone() }), s1.clone());
+                let em = D::sempty(env, s1);
+                let e_x = D::push_entry(env, &em, s1);
                 self.ty(&e_x, m1, m2, v1)?;
-                Ok((
-                    m1.apply_local(&LocalSubst::id(&env.gamma).extended(Rc::clone(n1))),
-                    v1.clone(),
-                ))
+                Ok((D::inst_ty(self, env, env, m1, std::slice::from_ref(n1))?, (*v1).clone()))
             }
             // case neutral congruence (extension); mirrors ElimNat — all
             // annotations compared (branches at M[inl x/z] / M[inr y/z]), the
             // scrutinee via tm_nee, result inferred as M[scrut/z]. Fires only
             // on a neutral scrutinee (canonical inl/inr β-fired in reduce).
             (
-                Term::Case {
+                TmView::Case {
                     lhs_level: dl1,
                     rhs_level: cl1,
                     motive_level: ml1,
@@ -1231,7 +1189,7 @@ impl Conv {
                     case_r: r1,
                     scrut: n1,
                 },
-                Term::Case {
+                TmView::Case {
                     lhs_level: dl2,
                     rhs_level: cl2,
                     motive_level: ml2,
@@ -1248,47 +1206,29 @@ impl Conv {
                 self.lev_eq(ml1, ml2)?;
                 self.ty(env, s1, s2, dl1)?;
                 self.ty(env, t1, t2, cl1)?;
-                let lmax = Level::max(dl1.clone(), cl1.clone());
-                let sum = Type::Sum {
-                    lhs_level: dl1.clone(),
-                    rhs_level: cl1.clone(),
-                    lhs: Rc::clone(s1),
-                    rhs: Rc::clone(t1),
-                };
+                let lmax = Level::max((*dl1).clone(), (*cl1).clone());
+                let sum = D::sum(self, env, dl1, cl1, s1, t1)?;
                 // M scoped in (Γ, z : A + B), as in typing.rs.
-                let e_z = env.push_entry(Rc::new(sum.clone()), lmax.clone());
+                let e_z = D::push_entry(env, &sum, &lmax);
                 self.ty(&e_z, m1, m2, ml1)?;
+                let s1_up = D::weaken_ty(s1, 1);
+                let t1_up = D::weaken_ty(t1, 1);
                 // c_l at M[inl x/z] in (Γ, x : A).
-                let e_x = env.push_entry(Rc::clone(s1), dl1.clone());
-                let inl_x = Term::Inl {
-                    lhs_level: dl1.clone(),
-                    rhs_level: cl1.clone(),
-                    lhs: Rc::new(s1.shift_local(1)),
-                    rhs: Rc::new(t1.shift_local(1)),
-                    val: Rc::new(Term::Var(LocalVar(0))),
-                };
-                let left_ty = m1.apply_local(
-                    &LocalSubst::id(&env.gamma).shift_local(1).extended(Rc::new(inl_x)),
-                );
+                let e_x = D::push_entry(env, s1, dl1);
+                let x0 = D::local(&e_x, LocalVar(0));
+                let inl_x =
+                    D::inj(self, &e_x, true, dl1, cl1, &s1_up, &t1_up, &x0)?;
+                let left_ty = D::inst_ty(self, env, &e_x, m1, std::slice::from_ref(&inl_x))?;
                 self.tm(&e_x, l1, l2, &left_ty, ml1)?;
                 // c_r at M[inr y/z] in (Γ, y : B).
-                let e_y = env.push_entry(Rc::clone(t1), cl1.clone());
-                let inr_y = Term::Inr {
-                    lhs_level: dl1.clone(),
-                    rhs_level: cl1.clone(),
-                    lhs: Rc::new(s1.shift_local(1)),
-                    rhs: Rc::new(t1.shift_local(1)),
-                    val: Rc::new(Term::Var(LocalVar(0))),
-                };
-                let right_ty = m1.apply_local(
-                    &LocalSubst::id(&env.gamma).shift_local(1).extended(Rc::new(inr_y)),
-                );
+                let e_y = D::push_entry(env, t1, cl1);
+                let y0 = D::local(&e_y, LocalVar(0));
+                let inr_y =
+                    D::inj(self, &e_y, false, dl1, cl1, &s1_up, &t1_up, &y0)?;
+                let right_ty = D::inst_ty(self, env, &e_y, m1, std::slice::from_ref(&inr_y))?;
                 self.tm(&e_y, r1, r2, &right_ty, ml1)?;
-                self.tm_nee(env, n1, n2)?; // inferred A + B: redundant, ignored
-                Ok((
-                    m1.apply_local(&LocalSubst::id(&env.gamma).extended(Rc::clone(n1))),
-                    ml1.clone(),
-                ))
+                self.tm_nee_c(env, n1, n2)?; // inferred A + B: redundant, ignored
+                Ok((D::inst_ty(self, env, env, m1, std::slice::from_ref(n1))?, (*ml1).clone()))
             }
             // elim_W neutral congruence (extension); mirrors ElimNat/Case —
             // all annotations compared (the step at M[sup(a,f)/z] under the
@@ -1296,7 +1236,7 @@ impl Conv {
             // tm_nee, result inferred as M[scrut/z]. Fires only on a neutral
             // scrutinee (a canonical sup β-fired in reduce).
             (
-                Term::ElimW {
+                TmView::ElimW {
                     shape_level: dl1,
                     pos_level: cl1,
                     motive_level: ml1,
@@ -1306,7 +1246,7 @@ impl Conv {
                     step: st1,
                     scrut: n1,
                 },
-                Term::ElimW {
+                TmView::ElimW {
                     shape_level: dl2,
                     pos_level: cl2,
                     motive_level: ml2,
@@ -1321,71 +1261,57 @@ impl Conv {
                 self.lev_eq(cl1, cl2)?;
                 self.lev_eq(ml1, ml2)?;
                 self.ty(env, s1, s2, dl1)?;
-                let e_x = env.push_entry(Rc::clone(s1), dl1.clone());
+                let e_x = D::push_entry(env, s1, dl1);
                 self.ty(&e_x, t1, t2, cl1)?;
-                let lmax = Level::max(dl1.clone(), cl1.clone());
-                let w = Type::W {
-                    shape_level: dl1.clone(),
-                    pos_level: cl1.clone(),
-                    shape: Rc::clone(s1),
-                    pos: Rc::clone(t1),
-                };
+                let lmax = Level::max((*dl1).clone(), (*cl1).clone());
+                let w_ty = D::w(self, env, dl1, cl1, s1, t1)?;
                 // M scoped in (Γ, z : W).
-                let e_z = env.push_entry(Rc::new(w.clone()), lmax.clone());
+                let e_z = D::push_entry(env, &w_ty, &lmax);
                 self.ty(&e_z, m1, m2, ml1)?;
                 // Steps under (Γ, a : S, f : Π(y:T[a/x]). W,
                 // ih : Π(y:T[a/x]). M[f y/z]) at M[sup(a, f)/z] — the same
                 // construction as the typing rule.
-                let e_a = env.push_entry(Rc::clone(s1), dl1.clone());
-                let f_ty = Type::Pi {
-                    dom_level: cl1.clone(),
-                    cod_level: lmax.clone(),
-                    dom: Rc::clone(t1),
-                    cod: Rc::new(w.shift_local(2)),
-                };
+                let e_a = D::push_entry(env, s1, dl1);
+                let a_var = D::local(&e_a, LocalVar(0));
+                // T[a/x] in (Γ, a): the positions are a *body* under the
+                // shape binder, so this is instantiation, not weakening.
+                let t_at_a = D::inst_ty(self, env, &e_a, t1, &[a_var])?;
+                let f_ty =
+                    D::pi(self, &e_a, cl1, &lmax, &t_at_a, &D::weaken_ty(&w_ty, 2))?;
                 let e_af =
-                    e_a.push_entry(Rc::new(f_ty), Level::max(cl1.clone(), lmax.clone()));
-                let f_y = Term::App {
-                    fun: Rc::new(Term::Var(LocalVar(1))),
-                    dom_level: cl1.clone(),
-                    cod_level: lmax.clone(),
-                    dom: Rc::new(t1.shift_local(2)),
-                    cod: Rc::new(w.shift_local(4)),
-                    arg: Rc::new(Term::Var(LocalVar(0))),
-                };
-                let ih_cod = m1.apply_local(
-                    &LocalSubst::id(&env.gamma).shift_local(3).extended(Rc::new(f_y)),
-                );
-                let ih_ty = Type::Pi {
-                    dom_level: cl1.clone(),
-                    cod_level: ml1.clone(),
-                    dom: Rc::new(t1.shift_local(1)),
-                    cod: Rc::new(ih_cod),
-                };
+                    D::push_entry(&e_a, &f_ty, &Level::max((*cl1).clone(), lmax.clone()));
+                let a_var2 = D::local(&e_af, LocalVar(1));
+                let t_at_a_af = D::inst_ty(self, env, &e_af, t1, &[a_var2])?;
+                let e_afy = D::push_entry(&e_af, &t_at_a_af, cl1);
+                let a_var3 = D::local(&e_afy, LocalVar(2));
+                let t_at_a_afy = D::inst_ty(self, env, &e_afy, t1, &[a_var3])?;
+                let f_y = D::app(
+                    self,
+                    &e_afy,
+                    cl1,
+                    &lmax,
+                    &t_at_a_afy,
+                    &D::weaken_ty(&w_ty, 4),
+                    &D::local(&e_afy, LocalVar(1)),
+                    &D::local(&e_afy, LocalVar(0)),
+                )?;
+                let ih_cod = D::inst_ty(self, env, &e_afy, m1, std::slice::from_ref(&f_y))?;
+                let ih_ty = D::pi(self, &e_af, cl1, ml1, &t_at_a_af, &ih_cod)?;
                 let e_step =
-                    e_af.push_entry(Rc::new(ih_ty), Level::max(cl1.clone(), ml1.clone()));
-                let Type::W { shape: ws2, pos: wp2, .. } = w.shift_local(2) else {
-                    unreachable!()
-                };
-                let sup_af = Term::Sup {
-                    shape_level: dl1.clone(),
-                    pos_level: cl1.clone(),
-                    shape_ty: ws2,
-                    pos_ty: wp2,
-                    label: Rc::new(Term::Var(LocalVar(1))),
-                    children: Rc::new(Term::Var(LocalVar(0))),
-                };
-                let step_ty = m1.apply_local(
-                    &LocalSubst::id(&env.gamma)
-                        .shift_local(3)
-                        .extended(Rc::new(sup_af.shift_local(1))),
-                );
+                    D::push_entry(&e_af, &ih_ty, &Level::max((*cl1).clone(), (*ml1).clone()));
+                let sup_af = D::sup_at(
+                    self,
+                    &e_af,
+                    &w_ty,
+                    2,
+                    &D::local(&e_af, LocalVar(1)),
+                    &D::local(&e_af, LocalVar(0)),
+                )?;
+                let step_ty =
+                    D::inst_ty(self, env, &e_step, m1, &[D::weaken_tm(&sup_af, 1)])?;
                 self.tm(&e_step, st1, st2, &step_ty, ml1)?;
-                self.tm_nee(env, n1, n2)?; // inferred W: redundant, ignored
-                Ok((
-                    m1.apply_local(&LocalSubst::id(&env.gamma).extended(Rc::clone(n1))),
-                    ml1.clone(),
-                ))
+                self.tm_nee_c(env, n1, n2)?; // inferred W: redundant, ignored
+                Ok((D::inst_ty(self, env, env, m1, std::slice::from_ref(n1))?, (*ml1).clone()))
             }
             // elim_Wf neutral congruence (extension): same shape as elim_W's,
             // with the step telescope taken from `wf_step_telescope` — the
@@ -1393,7 +1319,7 @@ impl Conv {
             // Fires only on a neutral scrutinee; this is what makes two
             // inductions over the *same* open term convertible.
             (
-                Term::ElimWf {
+                TmView::ElimWf {
                     level: l1,
                     motive_level: ml1,
                     shape: s1,
@@ -1402,7 +1328,7 @@ impl Conv {
                     step: st1,
                     scrut: n1,
                 },
-                Term::ElimWf {
+                TmView::ElimWf {
                     level: l2,
                     motive_level: ml2,
                     shape: s2,
@@ -1415,31 +1341,24 @@ impl Conv {
                 self.lev_eq(l1, l2)?;
                 self.lev_eq(ml1, ml2)?;
                 self.ty(env, s1, s2, l1)?;
-                let e_x = env.push_entry(Rc::clone(s1), l1.clone());
-                self.tm(&e_x, k1, k2, &Type::Nat, &Level::Zero)?;
-                let wf = Type::Wf {
-                    level: l1.clone(),
-                    shape: Rc::clone(s1),
-                    arity: Rc::clone(k1),
-                };
-                let e_z = env.push_entry(Rc::new(wf), l1.clone());
+                let e_x = D::push_entry(env, s1, l1);
+                self.tm_at_nat(&e_x, k1, k2)?;
+                let wf = D::wf(self, env, l1, s1, k1)?;
+                let e_z = D::push_entry(env, &wf, l1);
                 self.ty(&e_z, m1, m2, ml1)?;
                 let (cs_ty, ih_ty, step_ty) =
-                    wf_step_telescope(&env.gamma, l1, ml1, s1, k1, m1);
-                let e_a = env.push_entry(Rc::clone(s1), l1.clone());
-                let e_cs = e_a.push_entry(Rc::new(cs_ty), l1.clone());
-                let e_step = e_cs.push_entry(Rc::new(ih_ty), ml1.clone());
+                    D::wf_step_telescope(self, env, l1, ml1, s1, k1, m1)?;
+                let e_a = D::push_entry(env, s1, l1);
+                let e_cs = D::push_entry(&e_a, &cs_ty, l1);
+                let e_step = D::push_entry(&e_cs, &ih_ty, ml1);
                 self.tm(&e_step, st1, st2, &step_ty, ml1)?;
-                self.tm_nee(env, n1, n2)?; // inferred Wf: redundant, ignored
-                Ok((
-                    m1.apply_local(&LocalSubst::id(&env.gamma).extended(Rc::clone(n1))),
-                    ml1.clone(),
-                ))
+                self.tm_nee_c(env, n1, n2)?; // inferred Wf: redundant, ignored
+                Ok((D::inst_ty(self, env, env, m1, std::slice::from_ref(n1))?, (*ml1).clone()))
             }
             // J neutral congruence (extension beyond ch. 04); mirrors the
             // ElimNat arm — annotations compared, scrutinee via tm_nee.
             (
-                Term::J {
+                TmView::J {
                     ty_level: al1,
                     motive_level: ml1,
                     ty: s1,
@@ -1449,7 +1368,7 @@ impl Conv {
                     rhs: r1,
                     proof: p1,
                 },
-                Term::J {
+                TmView::J {
                     ty_level: al2,
                     motive_level: ml2,
                     ty: s2,
@@ -1465,36 +1384,23 @@ impl Conv {
                 self.ty(env, s1, s2, al1)?;
                 self.tm(env, a1, a2, s1, al1)?;
                 // M scoped in (Γ, y : S, p : Id^l(S; a; y)), as in typing.rs.
-                let e_y = env.push_entry(Rc::clone(s1), al1.clone());
-                let p_ty = Type::Id {
-                    level: al1.clone(),
-                    ty: Rc::new(s1.shift_local(1)),
-                    lhs: Rc::new(a1.shift_local(1)),
-                    rhs: Rc::new(Term::Var(LocalVar(0))),
-                };
-                let e_yp = e_y.push_entry(Rc::new(p_ty), al1.clone());
+                let e_y = D::push_entry(env, s1, al1);
+                let p_ty = D::id(
+                    self,
+                    &e_y,
+                    al1,
+                    &D::weaken_ty(s1, 1),
+                    &D::weaken_tm(a1, 1),
+                    &D::local(&e_y, LocalVar(0)),
+                )?;
+                let e_yp = D::push_entry(&e_y, &p_ty, al1);
                 self.ty(&e_yp, m1, m2, ml1)?;
-                let refl_a = Term::Refl {
-                    level: al1.clone(),
-                    ty: Rc::clone(s1),
-                    tm: Rc::clone(a1),
-                };
-                let case_ty = m1.apply_local(
-                    &LocalSubst::id(&env.gamma)
-                        .extended(Rc::clone(a1))
-                        .extended(Rc::new(refl_a)),
-                );
+                let refl_a = D::refl(self, env, al1, s1, a1)?;
+                let case_ty = D::inst_ty(self, env, env, m1, &[a1.clone(), refl_a])?;
                 self.tm(env, c1, c2, &case_ty, ml1)?;
                 self.tm(env, r1, r2, s1, al1)?;
-                self.tm_nee(env, p1, p2)?; // inferred Id: redundant, ignored
-                Ok((
-                    m1.apply_local(
-                        &LocalSubst::id(&env.gamma)
-                            .extended(Rc::clone(r1))
-                            .extended(Rc::clone(p1)),
-                    ),
-                    ml1.clone(),
-                ))
+                self.tm_nee_c(env, p1, p2)?; // inferred Id: redundant, ignored
+                Ok((D::inst_ty(self, env, env, m1, &[r1.clone(), p1.clone()])?, (*ml1).clone()))
             }
             // transp congruence (extension; docs/sprop-design.md §5.3) —
             // reached only when *both* sides' strip guards failed, i.e. two
@@ -1506,24 +1412,22 @@ impl Conv {
             // compared (their type is sEq, whose irrelevance arm accepts any
             // two terms; skipping is that arm applied, not a special case).
             (
-                Term::Transp {
+                TmView::Transp {
                     ty_level: al1,
                     motive_level: ml1,
                     ty: s1,
                     motive: m1,
                     lhs: a1,
                     rhs: b1,
-                    proof: _,
                     tm: t1,
                 },
-                Term::Transp {
+                TmView::Transp {
                     ty_level: al2,
                     motive_level: ml2,
                     ty: s2,
                     motive: m2,
                     lhs: a2,
                     rhs: b2,
-                    proof: _,
                     tm: t2,
                 },
             ) => {
@@ -1533,285 +1437,366 @@ impl Conv {
                 self.tm(env, a1, a2, s1, al1)?;
                 self.tm(env, b1, b2, s1, al1)?;
                 // P scoped in (Γ, x : I), as in typing.rs.
-                let e_x = env.push_entry(Rc::clone(s1), al1.clone());
+                let e_x = D::push_entry(env, s1, al1);
                 self.ty(&e_x, m1, m2, ml1)?;
-                let t_ty =
-                    m1.apply_local(&LocalSubst::id(&env.gamma).extended(Rc::clone(a1)));
+                let t_ty = D::inst_ty(self, env, env, m1, std::slice::from_ref(a1))?;
                 self.tm(env, t1, t2, &t_ty, ml1)?;
-                Ok((
-                    m1.apply_local(&LocalSubst::id(&env.gamma).extended(Rc::clone(b1))),
-                    ml1.clone(),
-                ))
+                Ok((D::inst_ty(self, env, env, m1, std::slice::from_ref(b1))?, (*ml1).clone()))
             }
             (
-                Term::App { fun: f1, dom_level: dl1, cod_level: cl1, dom: s1, cod: t1, arg: a1 },
-                Term::App { fun: f2, dom_level: dl2, cod_level: cl2, dom: s2, cod: t2, arg: a2 },
+                TmView::App {
+                    dom_level: dl1,
+                    cod_level: cl1,
+                    dom: s1,
+                    cod: t1,
+                    fun: f1,
+                    arg: a1,
+                },
+                TmView::App {
+                    dom_level: dl2,
+                    cod_level: cl2,
+                    dom: s2,
+                    cod: t2,
+                    fun: f2,
+                    arg: a2,
+                },
             ) => {
                 self.lev_eq(dl1, dl2)?;
                 self.lev_eq(cl1, cl2)?;
                 self.ty(env, s1, s2, dl1)?;
-                let e_x = env.push_entry(Rc::clone(s1), dl1.clone());
+                let e_x = D::push_entry(env, s1, dl1);
                 self.ty(&e_x, t1, t2, cl1)?;
                 // The type inferred for the heads is ignored (ch. 06: the
                 // annotations of well-typed applications are already forced).
-                self.tm_nee(env, f1, f2)?;
+                self.tm_nee_c(env, f1, f2)?;
                 self.tm(env, a1, a2, s1, dl1)?;
-                Ok((
-                    t1.apply_local(&LocalSubst::id(&env.gamma).extended(Rc::clone(a1))),
-                    cl1.clone(),
-                ))
+                Ok((D::inst_ty(self, env, env, t1, std::slice::from_ref(a1))?, (*cl1).clone()))
             }
             // fst/snd neutral congruence (extension; mirrors App — the Σ
             // annotations forced by well-typedness are compared, the pair via
             // tm_nee). These arms fire only when the projected pair is itself
             // neutral (η already handled non-neutral pairs in tm_nf).
             (
-                Term::Fst { fst_level: dl1, snd_level: cl1, fst_ty: s1, snd_ty: t1, pair: p1 },
-                Term::Fst { fst_level: dl2, snd_level: cl2, fst_ty: s2, snd_ty: t2, pair: p2 },
+                TmView::Fst {
+                    fst_level: dl1,
+                    snd_level: cl1,
+                    fst_ty: s1,
+                    snd_ty: t1,
+                    pair: p1,
+                },
+                TmView::Fst {
+                    fst_level: dl2,
+                    snd_level: cl2,
+                    fst_ty: s2,
+                    snd_ty: t2,
+                    pair: p2,
+                },
             ) => {
                 self.lev_eq(dl1, dl2)?;
                 self.lev_eq(cl1, cl2)?;
                 self.ty(env, s1, s2, dl1)?;
-                let e_x = env.push_entry(Rc::clone(s1), dl1.clone());
+                let e_x = D::push_entry(env, s1, dl1);
                 self.ty(&e_x, t1, t2, cl1)?;
-                self.tm_nee(env, p1, p2)?; // inferred Σ: redundant, ignored
-                Ok(((**s1).clone(), dl1.clone()))
+                self.tm_nee_c(env, p1, p2)?; // inferred Σ: redundant, ignored
+                Ok((s1.clone(), (*dl1).clone()))
             }
             (
-                Term::Snd { fst_level: dl1, snd_level: cl1, fst_ty: s1, snd_ty: t1, pair: p1 },
-                Term::Snd { fst_level: dl2, snd_level: cl2, fst_ty: s2, snd_ty: t2, pair: p2 },
+                TmView::Snd {
+                    fst_level: dl1,
+                    snd_level: cl1,
+                    fst_ty: s1,
+                    snd_ty: t1,
+                    pair: p1,
+                },
+                TmView::Snd {
+                    fst_level: dl2,
+                    snd_level: cl2,
+                    fst_ty: s2,
+                    snd_ty: t2,
+                    pair: p2,
+                },
             ) => {
                 self.lev_eq(dl1, dl2)?;
                 self.lev_eq(cl1, cl2)?;
                 self.ty(env, s1, s2, dl1)?;
-                let e_x = env.push_entry(Rc::clone(s1), dl1.clone());
+                let e_x = D::push_entry(env, s1, dl1);
                 self.ty(&e_x, t1, t2, cl1)?;
-                self.tm_nee(env, p1, p2)?;
-                let fst_p = Term::Fst {
-                    fst_level: dl1.clone(),
-                    snd_level: cl1.clone(),
-                    fst_ty: Rc::clone(s1),
-                    snd_ty: Rc::clone(t1),
-                    pair: Rc::clone(p1),
-                };
-                Ok((
-                    t1.apply_local(&LocalSubst::id(&env.gamma).extended(Rc::new(fst_p))),
-                    cl1.clone(),
-                ))
+                self.tm_nee_c(env, p1, p2)?;
+                let fst_p = D::proj(self, env, true, dl1, cl1, s1, t1, p1)?;
+                Ok((D::inst_ty(self, env, env, t1, std::slice::from_ref(&fst_p))?, (*cl1).clone()))
             }
             (
-                Term::UApp { fun: f1, levels: ls1 },
-                Term::UApp { fun: f2, levels: ls2 },
+                TmView::UApp { levels: ls1, fun: f1 },
+                TmView::UApp { levels: ls2, fun: f2 },
             ) => {
                 let env = &env.with_layer(Layer::Meta);
-                let (w, _) = self.tm_nee(env, f1, f2)?;
-                let Type::UPi { num_vars, level, body } = &w else {
+                let (w, _) = self.tm_nee_c(env, f1, f2)?;
+                let TyView::UPi { num_vars, level, body } = D::view_ty(self, &w) else {
                     return Err(NC);
                 };
-                if ls1.len() != ls2.len() || ls1.len() != *num_vars as usize || ls1.is_empty()
+                if ls1.len() != ls2.len() || ls1.len() != num_vars as usize || ls1.is_empty()
                 {
                     return Err(NC);
                 }
-                for (x, y) in ls1.iter().zip(ls2) {
+                for (x, y) in ls1.iter().zip(*ls2) {
                     self.lev_eq(x, y)?;
                 }
                 // Written vectors are outermost-first; instantiation wants
                 // innermost-first (as in reduce.rs).
                 let phi: Vec<Level> = ls1.iter().rev().cloned().collect();
-                Ok((body.inst_univ(&phi), level.inst_at(&phi, 0)))
+                let l = level.inst_at(&phi, 0);
+                Ok((D::inst_univ_ty(self, env, &body, &phi)?, l))
             }
             (
-                Term::CtxApp { fun: f1, ctx: c1 },
-                Term::CtxApp { fun: f2, ctx: c2 },
+                TmView::CtxApp { ctx: c1, fun: f1 },
+                TmView::CtxApp { ctx: c2, fun: f2 },
             ) => {
                 let env = &env.with_layer(Layer::Meta);
-                let (w, _) = self.tm_nee(env, f1, f2)?;
-                let Type::CtxPi { level, body } = &w else {
+                let (w, _) = self.tm_nee_c(env, f1, f2)?;
+                let TyView::CtxPi { level, body } = D::view_ty(self, &w) else {
                     return Err(NC);
                 };
+                let level = level.clone();
                 self.ctx(env, Layer::Prog, c1, c2)?;
-                Ok((
-                    body.apply_global(&GlobalSubst::single(GlobalEntry::Ctx(c1.clone()))),
-                    level.clone(),
-                ))
-            }
-            (Term::TyApp { fun: f1, arg: t1 }, Term::TyApp { fun: f2, arg: t2 }) => {
-                let env = &env.with_layer(Layer::Meta);
-                let (w, _) = self.tm_nee(env, f1, f2)?;
-                let Type::TyPi { ctx, arg_level, body_level, body } = &w else {
-                    return Err(NC);
-                };
-                let e_d = env.in_ctx(ctx.clone(), Layer::Prog);
-                self.ty(&e_d, t1, t2, arg_level)?;
-                Ok((
-                    body.apply_global(&GlobalSubst::single(GlobalEntry::Ty(Rc::clone(t1)))),
-                    body_level.clone(),
-                ))
+                Ok((D::inst_ctx_ty(self, env, &body, c1)?, level))
             }
             (
-                Term::LetBoxTy {
-                    motive_level: ml1, code_level: cl1, ctx: d1, motive: m1, body: b1, scrut: n1,
+                TmView::TyApp { arg: t1, fun: f1 },
+                TmView::TyApp { arg: t2, fun: f2 },
+            ) => {
+                let env = &env.with_layer(Layer::Meta);
+                let (w, _) = self.tm_nee_c(env, f1, f2)?;
+                let TyView::TyPi { ctx, arg_level, body_level, body } = D::view_ty(self, &w)
+                else {
+                    return Err(NC);
+                };
+                let body_level = body_level.clone();
+                let e_d = env.in_ctx(ctx.clone(), Layer::Prog);
+                let (x, y) =
+                    (D::embed_ty(&e_d, Rc::clone(t1)), D::embed_ty(&e_d, Rc::clone(t2)));
+                self.ty(&e_d, &x, &y, arg_level)?;
+                Ok((D::inst_tyarg_ty(self, env, &body, t1)?, body_level))
+            }
+            (
+                TmView::LetBoxTy {
+                    motive_level: ml1,
+                    code_level: cl1,
+                    ctx: d1,
+                    motive: m1,
+                    body: b1,
+                    scrut: n1,
                 },
-                Term::LetBoxTy {
-                    motive_level: ml2, code_level: cl2, ctx: d2, motive: m2, body: b2, scrut: n2,
+                TmView::LetBoxTy {
+                    motive_level: ml2,
+                    code_level: cl2,
+                    ctx: d2,
+                    motive: m2,
+                    body: b2,
+                    scrut: n2,
                 },
             ) => {
                 let env = &env.with_layer(Layer::Meta);
                 self.lev_eq(ml1, ml2)?;
                 self.lev_eq(cl1, cl2)?;
                 self.ctx(env, Layer::Prog, d1, d2)?;
-                self.tm_nee(env, n1, n2)?; // inferred □(Δ ⊢ Ty l): ignored
-                let code_ty = Type::CodeTy { ctx: d1.clone(), level: cl1.clone() };
-                let e_x = env.push_entry(Rc::new(code_ty), Level::Zero);
+                self.tm_nee_c(env, n1, n2)?; // inferred □(Δ ⊢ Ty l): ignored
+                let code_ty = D::code_ty(env, d1, cl1);
+                let e_x = D::push_entry(env, &code_ty, &Level::Zero);
                 self.ty(&e_x, m1, m2, ml1)?;
                 // Bodies under Ψ, U : Typ_c(Δ, l) at M[box U/x_T].
                 let e_u = env.push_global(GlobalBinding::Ty {
-                    ctx: d1.clone(),
+                    ctx: (*d1).clone(),
                     layer: Layer::Code,
-                    level: cl1.clone(),
+                    level: (*cl1).clone(),
                 });
-                let box_u = Term::BoxTy(Rc::new(gty(0, &d1.shift_global(1))));
-                let body_ty = m1
-                    .shift_global(1)
-                    .apply_local(&LocalSubst::id(&e_u.gamma).extended(Rc::new(box_u)));
+                let box_u = D::box_ty(&e_u, Rc::new(gty(0, &d1.shift_global(1))));
+                let m_u = D::shift_global_ty(self, &e_u, m1, 1)?;
+                let body_ty = D::inst_ty(self, &e_u, &e_u, &m_u, std::slice::from_ref(&box_u))?;
                 self.tm(&e_u, b1, b2, &body_ty, ml1)?;
-                Ok((
-                    m1.apply_local(&LocalSubst::id(&env.gamma).extended(Rc::clone(n1))),
-                    ml1.clone(),
-                ))
+                Ok((D::inst_ty(self, env, env, m1, std::slice::from_ref(n1))?, (*ml1).clone()))
             }
             (
-                Term::LetBoxTm {
-                    motive_level: ml1, code_level: cl1, ctx: d1, ty: t1, motive: m1,
-                    body: b1, scrut: n1,
+                TmView::LetBoxTm {
+                    motive_level: ml1,
+                    code_level: cl1,
+                    ctx: d1,
+                    ty: t1,
+                    motive: m1,
+                    body: b1,
+                    scrut: n1,
                 },
-                Term::LetBoxTm {
-                    motive_level: ml2, code_level: cl2, ctx: d2, ty: t2, motive: m2,
-                    body: b2, scrut: n2,
+                TmView::LetBoxTm {
+                    motive_level: ml2,
+                    code_level: cl2,
+                    ctx: d2,
+                    ty: t2,
+                    motive: m2,
+                    body: b2,
+                    scrut: n2,
                 },
             ) => {
                 let env = &env.with_layer(Layer::Meta);
                 self.lev_eq(ml1, ml2)?;
                 self.lev_eq(cl1, cl2)?;
                 self.ctx(env, Layer::Prog, d1, d2)?;
-                let e_d = env.in_ctx(d1.clone(), Layer::Prog);
-                self.ty(&e_d, t1, t2, cl1)?;
-                self.tm_nee(env, n1, n2)?; // inferred □(Δ ⊢ T @ l): ignored
-                let code_ty = Type::CodeTm {
-                    ctx: d1.clone(),
-                    ty: Rc::clone(t1),
-                    level: cl1.clone(),
-                };
-                let e_x = env.push_entry(Rc::new(code_ty), Level::Zero);
+                let e_d = env.in_ctx((*d1).clone(), Layer::Prog);
+                let (x, y) =
+                    (D::embed_ty(&e_d, Rc::clone(t1)), D::embed_ty(&e_d, Rc::clone(t2)));
+                self.ty(&e_d, &x, &y, cl1)?;
+                self.tm_nee_c(env, n1, n2)?; // inferred □(Δ ⊢ T @ l): ignored
+                let code_ty = D::code_tm(env, d1, t1, cl1);
+                let e_x = D::push_entry(env, &code_ty, &Level::Zero);
                 self.ty(&e_x, m1, m2, ml1)?;
                 // Bodies under Ψ, u : Trm_c(Δ ⊢ T @ l) at M[box u/x_t].
                 let e_u = env.push_global(GlobalBinding::Tm {
-                    ctx: d1.clone(),
+                    ctx: (*d1).clone(),
                     layer: Layer::Code,
                     ty: Rc::clone(t1),
-                    level: cl1.clone(),
+                    level: (*cl1).clone(),
                     body: None,
                 });
-                let box_u = Term::BoxTm(Rc::new(gtm(0, &d1.shift_global(1))));
-                let body_ty = m1
-                    .shift_global(1)
-                    .apply_local(&LocalSubst::id(&e_u.gamma).extended(Rc::new(box_u)));
+                let box_u = D::box_tm(&e_u, Rc::new(gtm(0, &d1.shift_global(1))));
+                let m_u = D::shift_global_ty(self, &e_u, m1, 1)?;
+                let body_ty = D::inst_ty(self, &e_u, &e_u, &m_u, std::slice::from_ref(&box_u))?;
                 self.tm(&e_u, b1, b2, &body_ty, ml1)?;
-                Ok((
-                    m1.apply_local(&LocalSubst::id(&env.gamma).extended(Rc::clone(n1))),
-                    ml1.clone(),
-                ))
+                Ok((D::inst_ty(self, env, env, m1, std::slice::from_ref(n1))?, (*ml1).clone()))
             }
             (
-                Term::ElimCodeTy {
-                    ty_motive_level: al1, tm_motive_level: al2, motives: am, branches: ab,
-                    code_level: acl, ctx: actx, scrut: an,
+                TmView::ElimCodeTy {
+                    ty_motive_level: al1,
+                    tm_motive_level: al2,
+                    motives: am,
+                    branches: ab,
+                    code_level: acl,
+                    ctx: actx,
+                    scrut: an,
+                    rec: arec,
                 },
-                Term::ElimCodeTy {
-                    ty_motive_level: bl1, tm_motive_level: bl2, motives: bm, branches: bb,
-                    code_level: bcl, ctx: bctx, scrut: bn,
+                TmView::ElimCodeTy {
+                    ty_motive_level: bl1,
+                    tm_motive_level: bl2,
+                    motives: bm,
+                    branches: bb,
+                    code_level: bcl,
+                    ctx: bctx,
+                    scrut: bn,
+                    rec: brec,
                 },
             ) => {
                 let env = &env.with_layer(Layer::Meta);
                 self.rec_ca(
                     env,
-                    &RecSide { l1: al1, l2: al2, motives: am, branches: ab },
-                    &RecSide { l1: bl1, l2: bl2, motives: bm, branches: bb },
+                    &RecSide {
+                        l1: al1,
+                        l2: al2,
+                        motives: Rc::clone(am),
+                        branches: Rc::clone(ab),
+                        rec: arec.clone(),
+                    },
+                    &RecSide {
+                        l1: bl1,
+                        l2: bl2,
+                        motives: Rc::clone(bm),
+                        branches: Rc::clone(bb),
+                        rec: brec.clone(),
+                    },
                 )?;
                 self.lev_eq(acl, bcl)?;
                 self.ctx(env, Layer::Prog, actx, bctx)?;
                 // Blocked on box (U^δ): compared syntactically. Otherwise the
                 // scrutinees are neutral.
-                match (&**an, &**bn) {
-                    (Term::BoxTy(c1), Term::BoxTy(c2)) => {
-                        match (&**c1, &**c2) {
-                            (Type::GlobalTy { .. }, Type::GlobalTy { .. }) if c1 == c2 => {}
-                            _ => return Err(NC),
-                        }
-                    }
-                    (Term::BoxTy(_), _) | (_, Term::BoxTy(_)) => return Err(NC),
-                    _ => {
-                        self.tm_nee(env, an, bn)?; // inferred □(Δ ⊢ Ty l): ignored
+                match (
+                    D::box_ty_payload(self, env, an)?,
+                    D::box_ty_payload(self, env, bn)?,
+                ) {
+                    (Some(c1), Some(c2)) => match (&*c1, &*c2) {
+                        (Type::GlobalTy { .. }, Type::GlobalTy { .. }) if c1 == c2 => {}
+                        _ => return Err(NC),
+                    },
+                    (Some(_), None) | (None, Some(_)) => return Err(NC),
+                    (None, None) => {
+                        self.tm_nee_c(env, an, bn)?; // inferred □(Δ ⊢ Ty l): ignored
                     }
                 }
-                Ok((
-                    inst_ty_motive(
-                        &am.ty_motive,
-                        (0, 0, 0),
-                        acl.clone(),
-                        actx.clone(),
-                        (**an).clone(),
-                        &env.gamma,
-                    ),
-                    al1.clone(),
-                ))
+                let t = D::inst_ty_motive(self, env, arec, &am.ty_motive, acl, actx, an)?;
+                Ok((t, (*al1).clone()))
             }
             (
-                Term::ElimCodeTm {
-                    ty_motive_level: al1, tm_motive_level: al2, motives: am, branches: ab,
-                    code_level: acl, ctx: actx, ty: aty, scrut: an,
+                TmView::ElimCodeTm {
+                    ty_motive_level: al1,
+                    tm_motive_level: al2,
+                    motives: am,
+                    branches: ab,
+                    code_level: acl,
+                    ctx: actx,
+                    ty: aty,
+                    scrut: an,
+                    rec: arec,
                 },
-                Term::ElimCodeTm {
-                    ty_motive_level: bl1, tm_motive_level: bl2, motives: bm, branches: bb,
-                    code_level: bcl, ctx: bctx, ty: bty, scrut: bn,
+                TmView::ElimCodeTm {
+                    ty_motive_level: bl1,
+                    tm_motive_level: bl2,
+                    motives: bm,
+                    branches: bb,
+                    code_level: bcl,
+                    ctx: bctx,
+                    ty: bty,
+                    scrut: bn,
+                    rec: brec,
                 },
             ) => {
                 let env = &env.with_layer(Layer::Meta);
                 self.rec_ca(
                     env,
-                    &RecSide { l1: al1, l2: al2, motives: am, branches: ab },
-                    &RecSide { l1: bl1, l2: bl2, motives: bm, branches: bb },
+                    &RecSide {
+                        l1: al1,
+                        l2: al2,
+                        motives: Rc::clone(am),
+                        branches: Rc::clone(ab),
+                        rec: arec.clone(),
+                    },
+                    &RecSide {
+                        l1: bl1,
+                        l2: bl2,
+                        motives: Rc::clone(bm),
+                        branches: Rc::clone(bb),
+                        rec: brec.clone(),
+                    },
                 )?;
                 self.lev_eq(acl, bcl)?;
                 self.ctx(env, Layer::Prog, actx, bctx)?;
-                let e_d = env.in_ctx(actx.clone(), Layer::Prog);
-                self.ty(&e_d, aty, bty, &Level::succ(acl.clone()))?;
-                match (&**an, &**bn) {
-                    (Term::BoxTm(c1), Term::BoxTm(c2)) => {
-                        match (&**c1, &**c2) {
-                            (Term::GlobalTm { .. }, Term::GlobalTm { .. }) if c1 == c2 => {}
-                            _ => return Err(NC),
-                        }
-                    }
-                    (Term::BoxTm(_), _) | (_, Term::BoxTm(_)) => return Err(NC),
-                    _ => {
-                        self.tm_nee(env, an, bn)?; // inferred □(Δ ⊢ T @ l): ignored
+                let e_d = env.in_ctx((*actx).clone(), Layer::Prog);
+                let (x, y) = (
+                    D::embed_ty(&e_d, Rc::clone(aty)),
+                    D::embed_ty(&e_d, Rc::clone(bty)),
+                );
+                self.ty(&e_d, &x, &y, &Level::succ((*acl).clone()))?;
+                match (
+                    D::box_tm_payload(self, env, an)?,
+                    D::box_tm_payload(self, env, bn)?,
+                ) {
+                    (Some(c1), Some(c2)) => match (&*c1, &*c2) {
+                        (Term::GlobalTm { .. }, Term::GlobalTm { .. }) if c1 == c2 => {}
+                        _ => return Err(NC),
+                    },
+                    (Some(_), None) | (None, Some(_)) => return Err(NC),
+                    (None, None) => {
+                        self.tm_nee_c(env, an, bn)?; // inferred □(Δ ⊢ T @ l): ignored
                     }
                 }
                 // Conclusion at l₂ (the ch. 04 typing rule; the ch. 06 rule
                 // writes l₁, a typo).
-                Ok((
-                    inst_tm_motive(
-                        &am.tm_motive,
-                        (0, 0, 0),
-                        acl.clone(),
-                        actx.clone(),
-                        (**aty).clone(),
-                        (**an).clone(),
-                        &env.gamma,
-                    ),
-                    al2.clone(),
-                ))
+                let t = D::inst_tm_motive(
+                    self,
+                    env,
+                    arec,
+                    &am.tm_motive,
+                    acl,
+                    actx,
+                    aty,
+                    an,
+                )?;
+                Ok((t, (*al2).clone()))
             }
             _ => Err(NC),
         }
@@ -1825,27 +1810,36 @@ impl Conv {
     /// types are built from the *left* side (left-biased, like all
     /// inference here). The telescope tables live in [`crate::rec`],
     /// shared with the type checker.
-    fn rec_ca(&mut self, env: &Env, a: &RecSide, b: &RecSide) -> R {
+    ///
+    /// The tables produce **raw syntax** scoped in Γ-plus-telescope, which is
+    /// then embedded into the domain at the side's own [`Dom::RecCtx`]; only
+    /// Γ's length and base reach [`rec::branch_specs`].
+    fn rec_ca(&mut self, env: &Env, a: &RecSide<D>, b: &RecSide<D>) -> R {
         self.lev_eq(a.l1, b.l1)?;
         self.lev_eq(a.l2, b.l2)?;
 
         // G_M: the two motives, each under its scope.
         let motive_specs = rec::motive_specs(a.l1, a.l2);
-        let ma = rec::motive_types(a.motives);
-        let mb = rec::motive_types(b.motives);
+        let ma = rec::motive_types(&a.motives);
+        let mb = rec::motive_types(&b.motives);
         for (spec, (x, y)) in motive_specs.iter().zip(ma.into_iter().zip(mb)) {
-            let e = env.push_spec(&spec.tele);
-            self.ty(&e, x, y, &spec.level)?;
+            let e = D::push_spec(env, &spec.tele);
+            let x = D::embed_ty_at(&a.rec, &e, Rc::clone(x));
+            let y = D::embed_ty_at(&b.rec, &e, Rc::clone(y));
+            self.ty(&e, &x, &y, &spec.level)?;
         }
 
         // G_Typ G_Trm: the 45 branches, each at its instantiated motive
         // type under its telescope.
-        let branch_specs = rec::branch_specs(a.motives, a.l1, a.l2, &env.gamma);
-        let ba = rec::branch_terms(a.branches);
-        let bb = rec::branch_terms(b.branches);
+        let branch_specs = rec::branch_specs(&a.motives, a.l1, a.l2, &env.gamma);
+        let ba = rec::branch_terms(&a.branches);
+        let bb = rec::branch_terms(&b.branches);
         for (spec, (x, y)) in branch_specs.iter().zip(ba.into_iter().zip(bb)) {
-            let e = env.push_spec(&spec.tele);
-            self.tm(&e, x, y, &spec.ty, &spec.level)?;
+            let e = D::push_spec(env, &spec.tele);
+            let x = D::embed_tm_at(&a.rec, &e, Rc::clone(x));
+            let y = D::embed_tm_at(&b.rec, &e, Rc::clone(y));
+            let ty = D::embed_ty_at(&a.rec, &e, Rc::clone(&spec.ty));
+            self.tm(&e, &x, &y, &ty, &spec.level)?;
         }
         Ok(())
     }
