@@ -3,7 +3,7 @@ title: Choose the effects story (uniqueness threading vs interaction trees)
 status: open
 labels: [design, effects]
 created: 2026-07-22
-updated: 2026-07-24
+updated: 2026-07-31
 ---
 
 Effectful runtime functions never run at kerneltime, so the question is what
@@ -35,3 +35,4 @@ Related: [[ir-simulate-design]] (trace-shaped simulate), [[kernel-v0-scope]]
 ## Log
 
 - 2026-07-24: CONSTRAINT from the equality-notation decision ([[surface-syntax]], 2026-07-24): `=` is now propositional equality (and `let` binding). Any future imperative/assignment-like effect syntax must therefore NOT use bare `=` (`place = value` would be indistinguishable from asserting `place = value`, since only `let` disambiguates). Use `:=` (user's stylistic lean) or `<-`. Applies whichever way the effects story lands (interaction trees are the plan to explore); mutable-value ergonomics are wanted, so pin the assignment glyph early.
+- 2026-07-31: From the [[ir-simulate-design]] sketch (docs/ir-simulate-design.md sections 6-7): this issue now also owns the PARTIALITY futures for simulate, not only effects proper. simulate's public interface is converges (the exists-fuel closure, i.e. the Delay monad's big-step convergence) + fuel_monotone, so richer models slot in behind it without restating client theorems. Candidates, none scheduled: (1) coinductive Delay -- needs coinduction (out of kernel v0) and moves equiv toward bisimulation, the cost this issue already flags for interaction trees; (2) guarded recursion / later modality -- first-class fuel, a real kernel+metatheory round (clocks, Loeb); (3) Bove-Capretta domain predicates -- per-function fuel-free totality, wants function-typed inductive fields. Also recorded there: RVSDG state edges are uniqueness threading as an IR construct (a capability is an environment slot), so leaning 1 of this issue and the IR design reinforce each other; v1 IR defines no effect nodes but nothing in it precludes state slots.

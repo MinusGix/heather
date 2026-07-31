@@ -3,7 +3,7 @@ title: "Meta: frontend roadmap and current focus"
 status: open
 labels: [frontend,meta]
 created: 2026-07-23
-updated: 2026-07-30
+updated: 2026-07-31
 ---
 
 Organizing issue for the frontend push (the frontend-first route,
@@ -219,3 +219,5 @@ date; the originals are in `git log --follow issues/frontend-roadmap.md`.
 - 2026-07-30: Item 14's route-1 fragment landed — indexed families declare, compute and prove (scheme doc docs/inductive-indexed-lowering.md, prototype + generator; narrative on [[indexed-families]]). The general (fording) case stays with [[sprop-strict-prop]]/[[indexed-families]]; 15 is unblocked.
 - 2026-07-30: Item 15 done — [[cli-check-diagnostics]]. The goal listing has its face; [[frontend-benchmarks]]'s harness assumption now holds. Next: 16, [[ir-simulate-design]].
 - 2026-07-30: Side round off item 14: doc §8.2's instantiation claim is now measured — declared-index hand prototype green ([[indexed-families]] 2026-07-30). The IR round (16) can state extrinsic judgments over declared syntax in route 1's fragment; the declared-index generator stays on [[indexed-families]].
+- 2026-07-31: Item 16 opened -- [[ir-simulate-design]]'s design sketch landed (docs/ir-simulate-design.md); the implementing round follows the doc's section 11 acceptance list.
+- 2026-07-31: Item 16 part 1 landed -- [[ir-simulate-design]] section 11 items 1/2/6 in lib/ir_v1.hthr; [[simulate-conversion-cost]] filed off it (conversion-time evaluation is the new critical-path performance issue); items 3-4 (the converges interface and its proofs) are the round's continuation.

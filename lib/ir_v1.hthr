@@ -1,0 +1,352 @@
+// FunctionIR v1 and `simulate` — the load-bearing spec object of certifying
+// compilation, written in Heather. Design: docs/ir-simulate-design.md;
+// tracking issue: issues/ir-simulate-design.md. This is the first real
+// Heather library file in the repo; deviations of this implementation from
+// the design sketch are recorded in the doc's §13 (implementation notes).
+//
+// Shape summary (doc §2–3, adapted): term-form RVSDG in let-normal form.
+// A region is a chain of Let* instructions ending in Ret; references are
+// de-Bruijn-style distances into a cons-list environment (0 = most recent
+// binding). Control flow exists only structurally: LetMatch (gamma) and
+// LetLoop (theta). Multi-output is multi-slot binding: a sub-region's Out
+// values are prepended onto the environment, most-significant first.
+//
+// Scoping (doc §13): LetMatch arms are lexical — an arm sees the matched
+// value's fields on top of the enclosing environment. LetLoop bodies and
+// called functions are closed — a loop body sees only the carried slots,
+// a function body only its arguments. LoopIter is simulate's internal
+// re-entry form; builders never emit it (evaluating it directly is defined,
+// it just re-enters the loop protocol).
+
+// ---------------------------------------------------------------------------
+// Values: untyped constructor trees (doc §4). One inductive doubles as the
+// value form and the value-list form: a VCon's fields, an environment, and
+// an Out payload are all VCons-chains. Junk (a VCon whose fields chain ends
+// in a VCon) is representable and harmless: simulate answers Stuck.
+
+inductive Val {
+    VNil,
+    VCons(head: Val, tail: Val),
+    VCon(tag: Nat, fields: Val),
+}
+
+inductive OptVal { NoneV, SomeV(v: Val) }
+
+// ---------------------------------------------------------------------------
+// Syntax. References are Nats; argument lists are Refs-chains (in slot
+// order); a Prog is a chain of function bodies, called by position.
+
+inductive Refs { RNil, RCons(i: Nat, next: Refs) }
+
+inductive Ir {
+    // end a region: the listed slots, in order, are its outputs
+    Ret(rs: Refs),
+    // build VCon(tag, args); binds 1 slot
+    LetCon(tag: Nat, args: Refs, rest: Ir),
+    // gamma-as-match: scrutinize slot `scrut` (must be a VCon); run the
+    // arm picked by its tag with the fields prepended; bind the arm
+    // region's outputs; continue with `rest`
+    LetMatch(scrut: Nat, arms: Ir, rest: Ir),
+    // an arm-chain cell (arm for tag 0, then tag 1, ...); NoArm ends the
+    // chain. Neither is an instruction: evaluated directly they are Stuck.
+    Arm(body: Ir, next: Ir),
+    NoArm,
+    // theta: gather `init` as the carried slots; iterate `body` in a closed
+    // environment of exactly the carried slots. The body's outputs are
+    // VCons(flag, carried'): flag tag 0 stops (carried' are the loop's
+    // outputs), tag 1 continues with carried'. Binds the final carried
+    // slots; continues with `rest`.
+    LetLoop(init: Refs, body: Ir, rest: Ir),
+    // internal: one loop iteration, environment = carried slots only
+    LoopIter(body: Ir),
+    // call function `callee` of the Prog on the gathered `args` (closed);
+    // bind the call's outputs; continue with `rest`
+    LetCall(callee: Nat, args: Refs, rest: Ir),
+}
+
+inductive Prog { PNil, PFun(body: Ir, next: Prog) }
+
+// simulate's result (doc §5): explicit stuckness and fuel exhaustion.
+// Out carries the region's output slots as a VCons-chain.
+inductive Res { Stuck, OutOfFuel, Out(vals: Val) }
+
+// ---------------------------------------------------------------------------
+// Environment helpers. The termination discipline shapes every signature
+// here: a recursive fn must pass its non-decreasing parameters unchanged,
+// so where two arguments vary together the varying one is returned as a
+// function instead (lookup, pick_arm, find_fun).
+
+// slot `i` of the environment, 0 = most recent
+fn lookup(env: Val) -> Nat -> OptVal {
+    match env {
+        VNil => λ (i: Nat) => NoneV,
+        VCon(tag, fs) => λ (i: Nat) => NoneV,
+        VCons(h, t) => λ (i: Nat) => match i { Zero => SomeV(h), Succ(k) => lookup(t)(k) },
+    }
+}
+
+// read the listed slots, in order; NoneV if any is out of range
+fn gather(rs: Refs, env: Val) -> OptVal {
+    match rs {
+        RNil => SomeV(VNil),
+        RCons(i, next) =>
+            match lookup(env)(i) {
+                NoneV => NoneV,
+                SomeV(v) =>
+                    match gather(next, env) {
+                        NoneV => NoneV,
+                        SomeV(vs) => SomeV(VCons(v, vs)),
+                    },
+            },
+    }
+}
+
+// prepend the chain `a` onto `b` (a's head stays slot 0)
+fn append(a: Val, b: Val) -> Val {
+    match a {
+        VNil => b,
+        VCon(tag, fs) => b,
+        VCons(h, t) => VCons(h, append(t, b)),
+    }
+}
+
+// arm for `tag` out of an Arm-chain; NoArm when the chain is short
+fn pick_arm(arms: Ir) -> Nat -> Ir {
+    match arms {
+        Arm(body, next) => λ (tag: Nat) => match tag { Zero => body, Succ(t2) => pick_arm(next)(t2) },
+        Ret(rs) => λ (tag: Nat) => NoArm,
+        LetCon(tag2, args, rest) => λ (tag: Nat) => NoArm,
+        LetMatch(scrut, arms2, rest) => λ (tag: Nat) => NoArm,
+        NoArm => λ (tag: Nat) => NoArm,
+        LetLoop(init, body, rest) => λ (tag: Nat) => NoArm,
+        LoopIter(body) => λ (tag: Nat) => NoArm,
+        LetCall(callee, args, rest) => λ (tag: Nat) => NoArm,
+    }
+}
+
+// body of function `f` in the Prog chain; NoArm (which is Stuck to
+// evaluate) when there is no such function
+fn find_fun(prog: Prog) -> Nat -> Ir {
+    match prog {
+        PNil => λ (f: Nat) => NoArm,
+        PFun(body, next) => λ (f: Nat) => match f { Zero => body, Succ(g) => find_fun(next)(g) },
+    }
+}
+
+// ---------------------------------------------------------------------------
+// simulate (doc §5). Structured as recursion on fuel alone: the termination
+// checker wants a single decreasing argument with the rest fixed, so the
+// varying state (environment, instruction) lives in a returned function and
+// every recursive step spends one fuel. Fuel is therefore a step count in
+// v1, not a theta/apply count — private to this definition either way; the
+// stated interface is `converges` (doc §6).
+//
+// The recursion is factored so `eval(k, prog)` — the induction hypothesis,
+// a large inlined eliminator term — occurs exactly ONCE per level, passed
+// to a single dispatch function as the value `ev`; everything downstream
+// copies a bound variable, not the term. This is a measured constraint,
+// not taste: each syntactic occurrence of the self-call in the recursive
+// body costs ~50ms per fuel step at conversion time (chain-of-5-LetCons
+// probe, release build, 2026-07-31: 0.24s with one occurrence, 13.7s with
+// ~10), which is the doc §5 cost-model warning made concrete.
+
+fn step_ret(env: Val, rs: Refs) -> Res {
+    match gather(rs, env) { NoneV => Stuck, SomeV(vs) => Out(vs) }
+}
+
+fn step_letcon(ev: Val -> Ir -> Res, env: Val, tag: Nat, args: Refs, rest: Ir) -> Res {
+    match gather(args, env) {
+        NoneV => Stuck,
+        SomeV(vs) => ev(VCons(VCon(tag, vs), env), rest),
+    }
+}
+
+fn step_letmatch(ev: Val -> Ir -> Res, env: Val, scrut: Nat, arms: Ir, rest: Ir) -> Res {
+    match lookup(env)(scrut) {
+        NoneV => Stuck,
+        SomeV(v) =>
+            match v {
+                VNil => Stuck,
+                VCons(h, t) => Stuck,
+                VCon(tag, fields) =>
+                    match ev(append(fields, env), pick_arm(arms)(tag)) {
+                        Stuck => Stuck,
+                        OutOfFuel => OutOfFuel,
+                        Out(vs) => ev(append(vs, env), rest),
+                    },
+            },
+    }
+}
+
+fn step_letloop(ev: Val -> Ir -> Res, env: Val, init: Refs, body: Ir, rest: Ir) -> Res {
+    match gather(init, env) {
+        NoneV => Stuck,
+        SomeV(vs) =>
+            match ev(vs, LoopIter(body)) {
+                Stuck => Stuck,
+                OutOfFuel => OutOfFuel,
+                Out(fin) => ev(append(fin, env), rest),
+            },
+    }
+}
+
+fn step_loopiter(ev: Val -> Ir -> Res, env: Val, body: Ir) -> Res {
+    match ev(env, body) {
+        Stuck => Stuck,
+        OutOfFuel => OutOfFuel,
+        Out(vs) =>
+            match vs {
+                VNil => Stuck,
+                VCon(tag, fields) => Stuck,
+                VCons(flag, carried) =>
+                    match flag {
+                        VNil => Stuck,
+                        VCons(h, t) => Stuck,
+                        VCon(ftag, ffields) =>
+                            match ftag {
+                                Zero => Out(carried),
+                                Succ(f2) => ev(carried, LoopIter(body)),
+                            },
+                    },
+            },
+    }
+}
+
+fn step_letcall(ev: Val -> Ir -> Res, prog: Prog, env: Val, callee: Nat, args: Refs, rest: Ir) -> Res {
+    match gather(args, env) {
+        NoneV => Stuck,
+        SomeV(vs) =>
+            match ev(vs, find_fun(prog)(callee)) {
+                Stuck => Stuck,
+                OutOfFuel => OutOfFuel,
+                Out(outs) => ev(append(outs, env), rest),
+            },
+    }
+}
+
+// one step: dispatch on the instruction; `ev` is the recursive call
+fn step(ev: Val -> Ir -> Res, prog: Prog, env: Val, ir: Ir) -> Res {
+    match ir {
+        Ret(rs) => step_ret(env, rs),
+        LetCon(tag, args, rest) => step_letcon(ev, env, tag, args, rest),
+        LetMatch(scrut, arms, rest) => step_letmatch(ev, env, scrut, arms, rest),
+        Arm(body, next) => Stuck,
+        NoArm => Stuck,
+        LetLoop(init, body, rest) => step_letloop(ev, env, init, body, rest),
+        LoopIter(body) => step_loopiter(ev, env, body),
+        LetCall(callee, args, rest) => step_letcall(ev, prog, env, callee, args, rest),
+    }
+}
+
+fn eval(fuel: Nat, prog: Prog) -> Val -> Ir -> Res {
+    match fuel {
+        Zero => λ (env: Val) (ir: Ir) => OutOfFuel,
+        Succ(k) => λ (env: Val) (ir: Ir) => step(eval(k, prog), prog, env, ir),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Embedding (doc §4): spec Nat as a constructor tree. Zero is tag 0 with no
+// fields, Succ is tag 1 with one field.
+
+fn embed_nat(n: Nat) -> Val {
+    match n {
+        Zero => VCon(0, VNil),
+        Succ(k) => VCon(1, VCons(embed_nat(k), VNil)),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The first program: addition as a theta loop (doc §11 item 2). Carried
+// slots (n, acc), starting at (a, b); while n is a Succ, step to
+// (pred, Succ(acc)). Loop-body slot map: [n, acc].
+
+// Zero arm: env [n, acc]; emit stop flag; results (flag, n, acc)
+fn add_arm_zero() -> Ir { LetCon(0, RNil, Ret(RCons(0, RCons(1, RCons(2, RNil))))) }
+
+// Succ arm: env [pred, n, acc]; acc' = Succ(acc), flag = continue;
+// results (flag, pred, acc')
+fn add_arm_succ() -> Ir {
+    LetCon(1, RCons(2, RNil),
+        LetCon(1, RNil,
+            Ret(RCons(0, RCons(2, RCons(1, RNil))))))
+}
+
+// loop body: match n; the arm's three outputs are rebound, then returned —
+// exactly the VCons(flag, carried') chain LoopIter consumes
+fn add_loop_body() -> Ir {
+    LetMatch(0, Arm(add_arm_zero(), Arm(add_arm_succ(), NoArm)),
+        Ret(RCons(0, RCons(1, RCons(2, RNil)))))
+}
+
+// function body: env [a, b]; loop from (a, b); final carried is
+// [n_final, acc_final]; the answer is acc_final
+fn add_body() -> Ir {
+    LetLoop(RCons(0, RCons(1, RNil)), add_loop_body(),
+        Ret(RCons(1, RNil)))
+}
+
+fn add_prog() -> Prog { PFun(add_body(), PNil) }
+
+// a one-function Prog whose function returns its argument; LetCall is
+// exercised against it (calling into the add loop and back is measured at
+// >300s of conversion — issues/simulate-conversion-cost.md — so the call
+// machinery and the loop machinery are certified on separate paths)
+fn id_prog() -> Prog { PFun(Ret(RCons(0, RNil)), PNil) }
+
+// the spec function the IR is measured against
+fn add(a: Nat, b: Nat) -> Nat { match b { Zero => a, Succ(k) => Succ(add(a, k)) } }
+
+// ---------------------------------------------------------------------------
+// Acceptance (doc §11 items 2 and 6): simulate discharges by conversion at
+// literal fuel, against the embedded spec result. Theorems here are sized
+// against measured conversion cost — superlinear in executed depth (23s at
+// ~10 steps, 66s at ~16, >300s at ~22; issues/simulate-conversion-cost.md)
+// — so the loop and the call are certified on separate short paths rather
+// than one deep one. Unused fuel is free; executed steps are not.
+
+// 1 + 1 = 2 through the loop: LetLoop/LoopIter, LetMatch with BOTH arms
+// taken (Succ on iteration one, Zero on iteration two), LetCon,
+// multi-slot rebinding, Ret
+theorem add_one_one():
+    eval(50, add_prog())(VCons(embed_nat(1), VCons(embed_nat(1), VNil)), add_body())
+    = Out(VCons(embed_nat(2), VNil))
+{ refl }
+
+// a value survives a round-trip through LetCall: find_fun, the closed
+// call environment, output rebinding
+theorem call_identity():
+    eval(9, id_prog())(VCons(VCon(4, VNil), VNil), LetCall(0, RCons(0, RNil), Ret(RCons(0, RNil))))
+    = Out(VCons(VCon(4, VNil), VNil))
+{ refl }
+
+// the endpoints agree with the spec function on the same literals
+theorem spec_agrees(): add(1, 1) = 2 { refl }
+
+// negative controls (doc §11 item 6):
+// an out-of-range reference is Stuck, not an answer
+theorem junk_ref_sticks():
+    eval(5, PNil)(VNil, Ret(RCons(0, RNil))) = Stuck
+{ refl }
+
+// a tag with no arm is Stuck
+theorem missing_arm_sticks():
+    eval(9, PNil)(VCons(VCon(7, VNil), VNil), LetMatch(0, Arm(NoArm, NoArm), Ret(RNil)))
+    = Stuck
+{ refl }
+
+// calling a function the Prog does not have is Stuck
+theorem missing_fun_sticks():
+    eval(9, PNil)(VCons(VNil, VNil), LetCall(0, RCons(0, RNil), Ret(RCons(0, RNil))))
+    = Stuck
+{ refl }
+
+// insufficient fuel is OutOfFuel, not Stuck and not an answer
+theorem short_fuel():
+    eval(0, add_prog())(VNil, Ret(RNil)) = OutOfFuel
+{ refl }
+
+theorem short_fuel_mid_loop():
+    eval(4, add_prog())(VCons(embed_nat(2), VCons(embed_nat(3), VNil)), add_body())
+    = OutOfFuel
+{ refl }
