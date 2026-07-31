@@ -36,7 +36,7 @@ thread_local! {
 /// Wrap one node's formatting: arms the budget at the outermost call,
 /// consumes one unit per node, and prints `…` instead of recursing when
 /// either the node budget or the depth budget is spent.
-fn node(
+pub(crate) fn node(
     f: &mut fmt::Formatter<'_>,
     body: impl FnOnce(&mut fmt::Formatter<'_>) -> fmt::Result,
 ) -> fmt::Result {
