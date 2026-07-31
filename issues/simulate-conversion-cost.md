@@ -8,7 +8,7 @@ updated: 2026-07-31
 
 Found while landing lib/ir_v1.hthr ([[ir-simulate-design]]): running the IR
 interpreter under conversion costs roughly **1.5–2 seconds per executed
-fuel step** (release build, 2026-07-31). A ~20-step \`add(2,3)\` certificate
+fuel step** (release build, 2026-07-31). A ~20-step `add(2,3)` certificate
 takes ~40s; the design doc's target of "realistic program size and fuel" is
 orders of magnitude away. This is the doc §5 cost-model warning confirmed
 empirically, before the bench fixture even exists.
@@ -18,24 +18,24 @@ empirically, before the bench fixture even exists.
 | interpreter | time |
 | --- | --- |
 | 2-constructor Ir, small eval body | 0.24s |
-| 8-constructor Ir, arms mostly \`Stuck\` | 1.2s |
-| 8-constructor Ir, + \`eval(k, prog)\` in 4 untaken arms | 2.3s |
+| 8-constructor Ir, arms mostly `Stuck` | 1.2s |
+| 8-constructor Ir, + `eval(k, prog)` in 4 untaken arms | 2.3s |
 | 8-constructor Ir, full arm bodies (any factoring) | 12–15s |
 
 Factoring the interpreter into step_* helpers, or through a single
 dispatch, does NOT help beyond keeping the ih single-occurrence — because
-the elaborator **inlines every \`fn\` at every use** (crates/elab/src/lib.rs:12),
+the elaborator **inlines every `fn` at every use** (crates/elab/src/lib.rs:12),
 so the kernel term contains the whole interpreter at every call site, and
 each fuel-step unfolding substitutes into (and walks) the entire body.
 
 ## Two compounding causes, both already known in other forms
 
-1. **No definitions in the kernel term language**: \`fn\` is inlined at use,
+1. **No definitions in the kernel term language**: `fn` is inlined at use,
    so a self-call's induction-hypothesis term carries the full eliminator
    with the full body inline. Every syntactic occurrence of the self-call
    costs ~50ms per step (measured: +1.1s over 5 steps for 4 extra
    occurrences). Ψ-globals exist and theorems already live there — whether
-   computing \`fn\`s could be Ψ-referenced rather than inlined (delta
+   computing `fn`s could be Ψ-referenced rather than inlined (delta
    unfolding at conversion) is the structural question this issue owns.
 2. **Substitution still walks closed subtrees** ([[subst-visits-closed-subtrees]]):
    each step's β-substitutions traverse the whole inlined interpreter even
@@ -54,7 +54,7 @@ each fuel-step unfolding substitutes into (and walks) the entire body.
 
 Not currency here: the IR encoding's size per se (spec objects are off the
 runtime ledger, [[datarepr-separation]]) — the cost above is per *kernel
-conversion* step, which is exactly the ledger \`equiv\` discharge lives on.
+conversion* step, which is exactly the ledger `equiv` discharge lives on.
 
 ## Log
 

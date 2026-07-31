@@ -7,27 +7,27 @@ updated: 2026-07-31
 ---
 
 From the first real library file ([[ir-simulate-design]], lib/ir_v1.hthr):
-the file declares \`OptVal { NoneV, SomeV(v) }\` by hand, monomorphic,
+the file declares `OptVal { NoneV, SomeV(v) }` by hand, monomorphic,
 because there is nothing to import — every file is a whole program, so a
-generic \`Option<A>\` written in one file helps no other file. The
-declaration is trivially writable today (\`inductive Opt<A> { None, Some(A) }\`
+generic `Option<A>` written in one file helps no other file. The
+declaration is trivially writable today (`inductive Opt<A> { None, Some(A) }`
 elaborates — polymorphism round); what's missing is a HOME and the
 helpers.
 
 Three layers, separable:
 
-1. **Prelude residency.** \`Elaborator::with_prelude\` already seeds Nat and
-   friends; \`Option<A>\`, \`Result<T, E>\`, \`List<A>\` (and their basic fns:
+1. **Prelude residency.** `Elaborator::with_prelude` already seeds Nat and
+   friends; `Option<A>`, `Result<T, E>`, `List<A>` (and their basic fns:
    map, and_then, unwrap_or, append, nth) can live there long before a
    module system exists. This is the cheap 90%.
-2. **Chaining ergonomics.** ir_v1's \`gather\` is the motivating shape:
-   two nested \`NoneV => NoneV\` matches per element, pure propagation
-   noise. Rust's \`?\` (or a \`let SomeV(v) = e else ...\`/bind sugar) would
+2. **Chaining ergonomics.** ir_v1's `gather` is the motivating shape:
+   two nested `NoneV => NoneV` matches per element, pure propagation
+   noise. Rust's `?` (or a `let SomeV(v) = e else ...`/bind sugar) would
    collapse it. This is elaborator sugar — expression-level CPS into
    match chains, no kernel anything — but it wants design care in an
-   expression language with no early return (what does \`?\` scope to: the
+   expression language with no early return (what does `?` scope to: the
    fn body? the enclosing block?).
-3. **Dedicated Option syntax** (\`T?\` etc.): tempting, deliberately NOT
+3. **Dedicated Option syntax** (`T?` etc.): tempting, deliberately NOT
    leaned toward here — it is still an inductive at the end of the day,
    and the value is in layers 1–2; syntax can come later if usage says so.
 
