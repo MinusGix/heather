@@ -64,6 +64,27 @@ working term is retained, not recomputed.
 | `LetMatch` chain in `rest` | N *sequential* matches (tail continuation) | **flat**: 0.61→0.75s, 10.0→10.9 MB, N=1..5 |
 | `LetMatch` nested in the **arm** | N *nested* scrutinee-position evals | **exponential**: 10.7 k→117 k subst nodes, largest term 501→6207, ratio converging to ~1.85–2.3 per level, N=1..6 |
 
+**Refined 2026-07-31 by the stage-0 instrument, and this narrows the axis
+by one turn.** Three arm-nested variants were built at CLI level, differing
+only in what the arm and its continuation return, and only one is
+exponential (peak RSS at N = 12):
+
+| arm-nested variant | N=12 peak RSS |
+| --- | --- |
+| nesting only — every `Ret` is `Ret(RNil)`, nothing consumes anything | 13 MB |
+| nesting + a scrutinee value that deepens one constructor per level | 13 MB |
+| nesting + each continuation rebinding the nested eval's `Out` payload | **511 MB** |
+
+So *nesting is necessary and not sufficient* (which is
+`docs/nbe-conversion-design.md` §12's secondary finding, now reproduced in
+the language rather than in hand-built kernel terms), and a growing
+scrutinee payload is not the axis either. What multiplies is a nested eval
+whose **result is consumed by the pending continuation** — the continuation
+is the thing copied per level, which is §"The hypothesis that survived"
+stated as a property of the probe. The first variant is the instrument's
+negative control (`--family flat`) precisely because it holds nesting fixed
+against the one thing that turned out to matter.
+
 So: tail position is free, consuming a computed value in tail position is
 linear, and only *nesting* multiplies. The add loop contributes ~4–5 nested
 levels per iteration (`LoopIter`'s body eval, the `LetMatch` arm eval, the
@@ -280,6 +301,13 @@ likewise independently landable and independently valuable. Stage 2b, the
 switch of `conv.rs` to values, is the irreducible risk and should not be
 started until stage 0 has produced a validated curve.
 
+**The instrument now exists: `scripts/probe-whnf-sharing`** (stage 0, landed
+2026-07-31). Its docstring holds the shape, the master curve and the gate;
+`--expect linear` is what a fix has to make pass. It sweeps N = 1..15 rather
+than 1..8 because below N ≈ 9 the 0.57 s declarations baseline dominates the
+wall clock — peak RSS is already doubling per level from N = 5, and it is the
+quantity to read at small N.
+
 Acceptance for a fix: the arm-nested `LetMatch` probe (N=1..8) linear in N.
 `conv/simulate-depth` and `conv/simulate-payload` are linear/flat precisely
 because neither varies nesting, which is why this defect was invisible to
@@ -308,3 +336,4 @@ carries the round's kill criterion.
 - 2026-07-31: Filed out of the deep-path investigation round. Reproduced 22.5s / 1.5 GB for the `add(2,3)`-through-`LetCall` theorem, established the growth law on four independent quantities with one exponent (~22 per loop iteration, ~2 per nested level), isolated the axis with four in-language probes, profiled it, killed four hypotheses including the brief's leading one, and sized the only lever that changes the exponent. Scratch instrumentation (counters in `reduce.rs`/`subst.rs`, a pointer-keyed memo experiment) lived in a throwaway worktree and is gone; nothing landed on master but this issue and the log entries it points at.
 - 2026-07-31: Primary consumer NOT restructured: the defunctionalized step-machine route was implemented against lib/ir_v1.hthr and measured strictly worse than the recursive interpreter -- flat cases stayed flat, but every sub-region return became exponential (8-deep LetCall chain: 0.76s / 10 MB recursive, dead at the 8 GB cap on the machine; add(a,1) died at a=2 rather than a=3). Recorded as its own section above with the probe table and five isolation experiments. The kernel defect is UNCHANGED and this issue stays open with its existing trigger; what changed is the diagnosis, which is now broader and stated without reference to branch bundles: the axis is a carried term stored as an UNFORCED REDEX, of which a scrutinee-position recursive call is only one instance -- a configuration field does it, and so does a semantically invisible identity wrapper (id_val(env): same values, same steps, flat becomes ~x2 per level). Since the language cannot force a value, no in-language restructuring reaches it, so the trigger now says explicitly that the interpreter-restructuring route is spent and only lever 1 (a kernel that shares a forced result) applies. docs/testing-generated-terms.md gains nesting depth as axis 5.
 - 2026-07-31: Design round done, no kernel code: docs/nbe-conversion-design.md costs out lever 1 (sharing-preserving evaluation) with decided answers, rejected alternatives and a staged plan (~5 definitions-rounds). Headline decisions: scope is a shared-value whnf for CONVERSION only, not full NbE — reduce.rs survives verbatim as ch. 06's relation, as typing.rs's whnf (9 sites, all on types, all cold — the deep-path profile shows no typing symbols) and as the differential oracle, and beta_elim_* is shared rather than transcribed a sixth time; the value domain makes invariants unrepresentable rather than merely unviolated (El and canonical-length Vec/Fin cannot BE values, box values carry raw syntax with no environment so reduction structurally cannot enter one), locals are the only environment-based namespace while levels/globals stay syntactic, and variables need a two-part identity (level into the concrete entries, depth into the abstract CtxBase::Var prefix) because textbook de Bruijn levels break on context variables; the subtlest correctness point is that a global's local substitution must store its terms as VALUES, else u^delta reintroduces the defect class verbatim. Evaluation exists at p/m only and carries no layer index (Defs already encodes the one bit). delta becomes glued neutrals with memoized unfold thunks — the delta-lazy order and the has_defs gate survive and improve (O(1) head test, second visit free, and the rescoped body cached per GlobalVar since shift_global depends only on the index). Fuel: one unit per step ch. 06 would have counted, forcing is FALLIBLE everywhere (no infallible force, no Deref — a single one silently converts exhaustion into a verdict), no thunk memoizes a failure, and the invariant that comparison never inspects an unforced value is what keeps laziness from changing the relation; fuel accounting becomes sharing-dependent, so fuel-sensitive tests keep their property (insufficient budget dies OutOfFuel, never a verdict) and lose their numbers. THERE IS NO READBACK — every customer was checked and none needs syntax back, which is the design's largest simplification and the reason the TYPES 2024 irrelevant-domain negative result does not bite the landed sEq/sEmpty formers. Bounds metadata: conversion stops being its customer entirely (the 21% leaves rather than shrinks); re-measure at cleanup, honest prediction is deletion. The strict-let/force alternative is priced and rejected on four grounds, chief among them that head-only forcing cannot reach an identity WRAPPER and no data-directed deep force reaches a pending continuation. Metatheory: declarative system untouched, the one obligation is machine adequacy (both directions, against the unbounded relations, with fuel's property stated separately), DESIGN.md's 'ch. 06 verbatim' moves from the algorithm to the specification, and it is recorded in the design doc + ch05-06-lemma-audit rather than as a Part V of metatheory-ch07-extensions (which extends the declarative system; this does not).
+- 2026-07-31: Stage 0 of [[nbe-conversion-round]] landed the acceptance instrument, `scripts/probe-whnf-sharing`, and VALIDATED IT ON MASTER (4300b31) — the round's kill criterion did not fire. The probe is the arm-nested `LetMatch` shape generated on top of `lib/ir_v1.hthr`'s declarations (no import system, so it generates rather than commits a copy), driven through the release CLI under the ulimit rail, N = 1..15. Baseline-subtracted master curve: wall 0.06s -> 33.77s, peak RSS 0.0 MB -> 4544 MB; RSS ratio >= 1.8 across five consecutive levels (N = 11..15, tail geometric mean 2.12), wall across three (N = 10..12, tail geometric mean 1.91, per-level ratios +-30% noisy across repeat sweeps). The negative control -- the same nesting with nothing consuming the nested eval's payload -- never reaches 1.8 and is ~0.4 MB per level. The sweep also refined the axis: nesting alone is not sufficient (13 MB at N=12) and neither is a deepening scrutinee value (13 MB); the exponent needs the continuation to REBIND the nested eval's Out payload (511 MB), which is the surviving hypothesis isolated in-language. The optional kernel-bench variant was attempted once more, informed by subst.rs's own 'a payload inserted under k>0 binders still costs a full copy', and measured linear (slope 1.44 over twelve levels); recorded as family D in design doc section 12, so four hand-built kernel families have now failed where the elaborated probe succeeds. This issue closes when `scripts/probe-whnf-sharing --expect linear` passes.

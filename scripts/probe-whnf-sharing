@@ -1,0 +1,393 @@
+#!/usr/bin/env python3
+"""The acceptance instrument for issues/whnf-sharing-term-growth.md.
+
+Stage 0 of the shared-value whnf round (issues/nbe-conversion-round.md,
+docs/nbe-conversion-design.md §13). This is NOT part of `scripts/test` and
+NOT part of `scripts/bench`, on purpose:
+
+  * it is not a kernel bench, because the bench suite is zero-dependency and
+    cannot call the elaborator, and §12 of the design doc records that three
+    hand-built *kernel* reconstructions of this shape all measured linear —
+    small terms keep their sharing through `subst.rs`'s depth-zero fast path,
+    so the exponent needs the elaborated interpreter's binder depth;
+  * it is not a `scripts/test` assertion, because a wall-clock threshold in a
+    test rots. The assertion here is a RATIO between adjacent levels, and the
+    honest way to use it is to run it deliberately, on one machine, before
+    and after, and compare.
+
+Usage (from the repo root; needs `cargo build --release` first):
+
+    scripts/probe-whnf-sharing                  # nest family, N = 1..14
+    scripts/probe-whnf-sharing --family both    # plus the negative control
+    scripts/probe-whnf-sharing --max 8 --keep   # short sweep, keep the .hthr
+    scripts/probe-whnf-sharing --expect linear  # stage 2b's gate
+
+Every `heather` run happens under the CLAUDE.md rail — RLIMIT_AS 8 GiB,
+RLIMIT_CPU 120 s, set on the child — which is `ulimit -v 8388608 -t 120`
+expressed through `resource.setrlimit`. Nothing here may be run without it:
+the a=3 probe on this path once reached ~22 GB and OOM-pressured the host.
+
+
+THE SHAPE
+=========
+
+Probe files are generated, not committed: each one is the DECLARATIONS half
+of `lib/ir_v1.hthr` (everything before the first `theorem`, exactly the cut
+`crates/elab/tests/ir_v1.rs` makes) plus a single generated theorem. There is
+no import system — a `.hthr` file is a whole program — so generating is what
+keeps the probe honestly tracking the library instead of drifting from a
+committed copy.
+
+The theorem at level N is N `LetMatch`es nested **in the arm**, i.e. N
+recursive `eval` calls in scrutinee position, each with a continuation:
+
+    nest(0) = Ret(rs)
+    nest(k) = LetMatch(0, Arm(nest(k-1), NoArm), Ret(rs))
+
+    theorem: eval(N+1, PNil)(VCons(VCon(0, VNil), VNil), nest(N)) = Out(…)
+
+The two families differ in `rs` alone, and the difference is the whole
+finding:
+
+  nest  rs = RCons(0, RNil) — each level's continuation REBINDS the output of
+        the nested eval and returns it. Exponential on master.
+  flat  rs = RNil — same nesting, same step count, but nothing consumes the
+        nested eval's payload. Linear on master. This is the negative control
+        (docs/testing-generated-terms.md axis 4): it holds nesting depth
+        fixed against the one thing that turned out to matter.
+
+Fuel is exactly N+1, the nest's depth; unused fuel is free (measured) but
+exact fuel keeps the level index meaning one thing.
+
+The environment is the same one slot at every level — `append(VNil, env)` is
+`env` — so the values carried are constant-size across the sweep. The
+exponent is therefore not payload growth, which is the issue's finding
+restated inside the instrument.
+
+
+THE MASTER CURVE (2026-07-31, 4300b31, release, `--max 15 --family both`)
+=========================================================================
+
+Declarations-only baseline: 0.57 s wall, 9.9 MB peak RSS. Both columns are
+baseline-subtracted; `ratio` is against the previous level, `·` marks a level
+whose predecessor is under the noise floor.
+
+   N   nest Δwall  ratio    nest ΔRSS  ratio  |  flat Δwall  flat ΔRSS
+   1       0.06 s    ·          0.0 MB   ·    |     0.18 s      0.0 MB
+   2       0.09 s    ·          0.0 MB   ·    |     0.07 s      0.0 MB
+   3       0.13 s    ·          0.5 MB   ·    |     0.09 s      0.0 MB
+   4       0.28 s    ·          2.5 MB   ·    |     0.14 s      0.1 MB
+   5       0.21 s   0.75        6.4 MB  2.57  |     0.17 s      0.5 MB
+   6       0.29 s    ·         13.4 MB  2.09  |     0.20 s      1.0 MB
+   7       0.36 s   1.25       27.3 MB  2.04  |     0.23 s      1.2 MB
+   8       0.50 s   1.41       45.0 MB  1.65  |     0.26 s      1.6 MB
+   9       0.71 s   1.42       90.3 MB  2.00  |     0.31 s      1.9 MB
+  10       1.34 s   1.87      118.9 MB  1.32  |     0.36 s      2.1 MB
+  11       2.56 s   1.91      226.7 MB  1.91  |     0.38 s      2.7 MB
+  12       5.20 s   2.03      500.8 MB  2.21  |     0.42 s      3.2 MB
+  13       9.29 s   1.79     1040.1 MB  2.08  |     0.45 s      4.1 MB
+  14      16.89 s   1.82     2159.3 MB  2.08  |     0.50 s      4.7 MB
+  15      33.77 s   2.00     4543.8 MB  2.10  |     0.56 s      5.2 MB
+
+N = 15 is the last level that fits the 8 GB rail; N = 16 dies on it. The
+whole sweep is about two and a half minutes.
+
+Gate (design doc §13 stage 0: ratio ≥ 1.8 across ≥ 4 consecutive levels) —
+**held, on both quantities**:
+
+  * peak RSS: five consecutive levels at ratio ≥ 1.8 (N = 11..15), tail
+    geometric mean **2.12**. RSS is the cleaner signal at small N because it
+    is not baseline-dominated: it is already doubling per level from N = 5.
+  * wall time: three consecutive at ≥ 1.8 (N = 10..12) with N = 13 at 1.79,
+    tail geometric mean **1.91** over N = 11..15. Per-level wall ratios wander
+    ±30% with machine load — a second sweep of the same binary put the run at
+    N = 11..12 and the soft level at 13, a third at N = 9..12 with 13 soft —
+    so the geometric mean is the statistic to quote and the run is the
+    statistic to sanity-check it against.
+  * control: `flat` never reaches 1.8 anywhere on either quantity across
+    fifteen levels; tail geometric means 1.10 (wall) and 1.18 (RSS). It is
+    linear at ~0.04 s and ~0.4 MB per level.
+
+So both quantities carry the ~×2 per level the issue measured on subst
+node-visits, in a probe that needs no kernel instrumentation to see it, and
+the control says the sweep is measuring nesting rather than file size.
+
+**What the sweep additionally establishes**, and it sharpens the issue's
+diagnosis: three probe variants were built and only one is exponential.
+
+  | variant                                              | N=12 peak RSS |
+  | ---------------------------------------------------- | ------------- |
+  | nesting only (`flat`)                                 | 13 MB         |
+  | nesting + a scrutinee value that deepens per level     | 13 MB         |
+  | nesting + the continuation rebinding the Out payload   | 511 MB        |
+
+Nesting alone is not sufficient (which is §12's secondary finding, now
+reproduced at CLI level), and a growing scrutinee payload is not it either.
+What multiplies is a nested eval whose *result is consumed by the pending
+continuation* — the continuation is what gets copied per level, exactly the
+surviving hypothesis in the issue.
+
+Acceptance for the fix (stage 2b): `--expect linear` passes on `nest`.
+"""
+
+import argparse
+import os
+import resource
+import subprocess
+import sys
+import time
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent.parent
+LIB = ROOT / "lib" / "ir_v1.hthr"
+HEATHER = ROOT / "target" / "release" / "heather"
+
+# The CLAUDE.md rail, as rlimits on the child.
+AS_BYTES = 8388608 * 1024  # ulimit -v 8388608 (KiB)
+CPU_SECONDS = 120  # ulimit -t 120
+
+# The gate of design doc §13 stage 0.
+GATE_RATIO = 1.8
+GATE_RUN = 4
+
+# Noise floors on the previous level's baseline-subtracted cost. Below these
+# the ratio is a quotient of two rounding errors — at small N the 0.55 s /
+# 9 MB declarations baseline dominates the wall clock entirely, and the
+# allocator's page granularity dominates RSS. Ratios computed from a
+# below-floor predecessor are printed as `·` and never counted by the gate.
+FLOOR_WALL = 0.25  # seconds
+FLOOR_RSS = 2.0  # MB
+
+
+def declarations() -> str:
+    """`lib/ir_v1.hthr` up to its first theorem — the same cut the elab test
+    makes. A probe file is these declarations plus one generated theorem."""
+    text = LIB.read_text()
+    cut = text.find("\ntheorem ")
+    if cut < 0:
+        sys.exit("error: lib/ir_v1.hthr has no theorems; the cut is wrong")
+    return text[:cut]
+
+
+def nest(depth: int, rs: str) -> str:
+    ir = f"Ret({rs})"
+    for _ in range(depth):
+        ir = f"LetMatch(0, Arm({ir}, NoArm), Ret({rs}))"
+    return ir
+
+
+def theorem(family: str, n: int) -> str:
+    if family == "nest":
+        rs, out = "RCons(0, RNil)", "Out(VCons(VCon(0, VNil), VNil))"
+    else:
+        rs, out = "RNil", "Out(VNil)"
+    return (
+        f"theorem probe_{family}_{n}():\n"
+        f"    eval({n + 1}, PNil)(VCons(VCon(0, VNil), VNil),\n"
+        f"        {nest(n, rs)})\n"
+        f"    = {out}\n"
+        f"{{ refl }}\n"
+    )
+
+
+def write_probe(out_dir: Path, decls: str, family: str, n: int) -> Path:
+    path = out_dir / f"{family}_{n}.hthr"
+    path.write_text(f"{decls}\n{theorem(family, n)}")
+    return path
+
+
+def run(path: Path):
+    """One `heather check` under the rail. Returns (wall, cpu, peak_rss_mb,
+    status). `os.wait4` is what makes the rusage per-run: RUSAGE_CHILDREN
+    accumulates a maximum and would report the largest run seen so far."""
+    t0 = time.monotonic()
+    pid = os.fork()
+    if pid == 0:  # child
+        try:
+            resource.setrlimit(resource.RLIMIT_AS, (AS_BYTES, AS_BYTES))
+            resource.setrlimit(resource.RLIMIT_CPU, (CPU_SECONDS, CPU_SECONDS))
+            devnull = os.open(os.devnull, os.O_WRONLY)
+            os.dup2(devnull, 1)
+            os.dup2(devnull, 2)
+            os.execv(str(HEATHER), [str(HEATHER), "check", str(path)])
+        except BaseException:
+            os._exit(127)
+    _, status, ru = os.wait4(pid, 0)
+    wall = time.monotonic() - t0
+    return (
+        wall,
+        ru.ru_utime + ru.ru_stime,
+        ru.ru_maxrss / 1024.0,
+        status,
+    )
+
+
+def describe(status: int) -> str:
+    if os.WIFSIGNALED(status):
+        return f"killed by signal {os.WTERMSIG(status)} (the rail bit)"
+    code = os.WEXITSTATUS(status)
+    return "ok" if code == 0 else f"exit {code}"
+
+
+def sweep(out_dir: Path, decls: str, family: str, levels, base):
+    print(f"\n=== {family} " + ("(the probe)" if family == "nest" else "(the control)"))
+    print(
+        "   N        wall         cpu      peak RSS    "
+        "|  Δwall  ratio    ΔRSS  ratio   status"
+    )
+    rows = []
+    for n in levels:
+        path = write_probe(out_dir, decls, family, n)
+        wall, cpu, rss, status = run(path)
+        d_wall = wall - base[0]
+        d_rss = rss - base[2]
+        pw = rows[-1][1] if rows else None
+        pr = rows[-1][2] if rows else None
+        rw = d_wall / pw if pw is not None and pw >= FLOOR_WALL else None
+        rr = d_rss / pr if pr is not None and pr >= FLOOR_RSS else None
+        rows.append((n, d_wall, d_rss, rw, rr))
+        fmt = lambda x: f"{x:5.2f}" if x is not None else "    ·"
+        print(
+            f"{n:4d}  {wall:8.2f}s  {cpu:8.2f}s  {rss:9.1f} MB    "
+            f"| {d_wall:6.2f}s {fmt(rw)}  {d_rss:7.1f} {fmt(rr)}   {describe(status)}"
+        )
+        if os.WIFSIGNALED(status) or os.WEXITSTATUS(status) != 0:
+            print("   (stopping this family: the run did not check)")
+            break
+    return rows
+
+
+def longest_run(ratios) -> tuple:
+    """Longest run of consecutive levels at or above the gate ratio."""
+    best = (0, None, None)
+    cur = 0
+    start = None
+    for n, r in ratios:
+        if r is not None and r >= GATE_RATIO:
+            cur += 1
+            start = start if cur > 1 else n
+            if cur > best[0]:
+                best = (cur, start, n)
+        else:
+            cur, start = 0, None
+    return best
+
+
+def tail_geomean(rows, idx, floor):
+    """Per-level ratio averaged geometrically over the last GATE_RUN+1 levels.
+
+    The per-level ratio is what the gate is stated in, but a single level is
+    a noisy estimate of it: the wall clock on this workload wanders ±30% with
+    machine load, so an isolated 1.77 next to an isolated 3.21 is one curve,
+    not two. The geometric mean over five levels is the same quantity read
+    with a longer lever, and it is reported alongside the run so a soft level
+    is visible rather than hidden."""
+    usable = [r for r in rows if r[idx] >= floor]
+    if len(usable) < GATE_RUN + 1:
+        return None, None, None
+    lo, hi = usable[-(GATE_RUN + 1)], usable[-1]
+    span = hi[0] - lo[0]
+    if span <= 0 or lo[idx] <= 0:
+        return None, None, None
+    return (hi[idx] / lo[idx]) ** (1.0 / span), lo[0], hi[0]
+
+
+def verdict(rows, expect):
+    """Print the longest gate-passing run per quantity and judge it.
+
+    The two directions are deliberately asymmetric, each conservative for its
+    own claim: "exponential" needs only ONE quantity to reach the run (below
+    N ≈ 9 the wall clock is baseline-dominated and cannot, while RSS can),
+    "linear" needs BOTH to stay under it (one quantity still doubling is not
+    a fixed defect)."""
+    runs, means = [], []
+    for label, ridx, didx, floor in (("wall", 3, 1, FLOOR_WALL), ("RSS", 4, 2, FLOOR_RSS)):
+        run_len, lo, hi = longest_run([(r[0], r[ridx]) for r in rows])
+        span = f"N = {lo}..{hi}" if run_len else "nowhere"
+        gm, glo, ghi = tail_geomean(rows, didx, floor)
+        tail = f"{gm:.2f} over N = {glo}..{ghi}" if gm else "not enough levels above the floor"
+        print(
+            f"  {label:4}: longest run at ratio ≥ {GATE_RATIO}: "
+            f"{run_len} level(s) ({span}); tail geometric mean {tail}"
+        )
+        runs.append(run_len)
+        means.append(gm or 0.0)
+    if expect == "exponential":
+        return max(runs) >= GATE_RUN or max(means) >= GATE_RATIO
+    if expect == "linear":
+        return max(runs) < GATE_RUN and max(means) < GATE_RATIO
+    return True
+
+
+def main():
+    ap = argparse.ArgumentParser(
+        description="Arm-nested LetMatch probe for whnf-sharing-term-growth.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="See this file's docstring for the shape and the master curve.",
+    )
+    ap.add_argument("--min", type=int, default=1, help="first level (default 1)")
+    ap.add_argument(
+        "--max",
+        type=int,
+        default=14,
+        help="last level (default 14; 15 is the last that fits the 8 GB rail)",
+    )
+    ap.add_argument(
+        "--family",
+        choices=["nest", "flat", "both"],
+        default="nest",
+        help="nest = the probe, flat = the negative control (default nest)",
+    )
+    ap.add_argument(
+        "--out",
+        type=Path,
+        default=ROOT / "target" / "whnf-probe",
+        help="where the generated .hthr files go (default target/whnf-probe)",
+    )
+    ap.add_argument(
+        "--expect",
+        choices=["exponential", "linear"],
+        help=(
+            "exit nonzero unless the `nest` family shows (exponential) or does "
+            "not show (linear) a run of ≥%d levels at ratio ≥%.1f" % (GATE_RUN, GATE_RATIO)
+        ),
+    )
+    args = ap.parse_args()
+
+    if not HEATHER.is_file():
+        sys.exit("error: target/release/heather is missing; run `cargo build --release`")
+
+    args.out.mkdir(parents=True, exist_ok=True)
+    decls = declarations()
+
+    base_path = args.out / "base.hthr"
+    base_path.write_text(decls)
+    base = run(base_path)
+    if os.WEXITSTATUS(base[3]) != 0:
+        sys.exit(f"error: the declarations-only baseline did not check ({describe(base[3])})")
+    print(
+        f"baseline (declarations only): {base[0]:.2f}s wall, {base[1]:.2f}s cpu, "
+        f"{base[2]:.1f} MB peak RSS"
+    )
+    print(f"rail: RLIMIT_AS {AS_BYTES // 1024} KiB, RLIMIT_CPU {CPU_SECONDS} s")
+
+    levels = range(args.min, args.max + 1)
+    families = ["nest", "flat"] if args.family == "both" else [args.family]
+    results = {}
+    for family in families:
+        results[family] = sweep(args.out, decls, family, levels, base)
+
+    print("\n=== verdict (gate: ratio ≥ %.1f across ≥ %d consecutive levels)" % (GATE_RATIO, GATE_RUN))
+    for family in families:
+        print(f"{family}:")
+        ok = verdict(results[family], args.expect if family == "nest" else None)
+        if family == "nest" and args.expect and not ok:
+            print(f"\nFAIL: expected the nest family to be {args.expect}.")
+            return 1
+    if args.expect:
+        print(f"\nOK: the nest family is {args.expect}, as expected.")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

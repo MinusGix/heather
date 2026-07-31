@@ -789,11 +789,16 @@ timed per level. (The worktree is gone; nothing landed.)
 | A: branch-nested | `nest(d,e) = elim_Nat (_.Nat) 0 (x,y. nest(d-1,y)) (su e)`, d = 1..9 | **linear**, per-level ratio 0.8–1.5 (noise-dominated, 0.02–0.06 ms) |
 | B: interpreter-shaped | one self-referential `elim_Nat` over a fuel index, step body `λn. elim_Nat (_.Nat) 0 (a,b. CONT) (app y n)` — ih in **scrutinee** position, continuation after it, F = 1..14, pad 1 and 16 | **linear**, ratio 0.9–1.4 |
 | C: B with a second, never-forced ih occurrence in the dead branch | as B, `CONT = su^pad (app y b)` | **linear**, ratio 0.9–1.5 (max 1.87 once, not sustained) |
+| D: C's carried argument moved to **binder depth 1** (stage 0, 2026-07-31) | `E(d+1) = λw. E(d) (fst⟨w, (λu. E(d) w) 0⟩)` — the carried argument is duplicated under a λ, where the depth-zero fast path cannot share it, and `fst` discards without forcing | **linear**, slope 1.44 over d = 1..12 (1.2 → 38 µs), per-level cost flattening from 1.2 to 3.2 µs |
 
 **Finding: the exponent does not reproduce from the *shape* alone.** All
 three families have non-tail recursion, a branch that mentions free locals
 (so `bounds.rs` cannot skip it), and — in C — a duplicated induction
-hypothesis. All three are linear.
+hypothesis. All three are linear. Family D was built later, during stage 0,
+against this section's own explanation — `subst.rs`'s doc says in as many
+words that "a payload inserted under `k > 0` binders still costs a full
+copy", so D forces the duplication to happen at depth 1 — and it is linear
+too. Four families, one conclusion.
 
 **Best explanation, and it is already in the issue.** The issue's dead
 hypothesis 3 measured pointer sharing in the *real* workload at **0.05%**

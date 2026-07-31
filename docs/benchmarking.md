@@ -146,6 +146,18 @@ What is **not** here: checking the declarations the tier-1 lowering emits.
 Those come from `elab`, which sits above the kernel and cannot be reached from
 a kernel bench; `issues/frontend-benchmarks.md` owns that number.
 
+Also not here, and for a sharper reason: the arm-nested probe of
+`issues/whnf-sharing-term-growth.md`, which lives in `scripts/probe-whnf-sharing`
+and is driven through the release CLI. Four hand-built kernel reconstructions
+of that shape have now measured **linear** (three in
+`docs/nbe-conversion-design.md` §12, a fourth in stage 0's log) while the
+elaborated original doubles per level: small kernel terms keep their sharing
+through `subst.rs`'s depth-zero fast path, so the exponent needs the
+elaborator's binder depth and term bulk to appear at all. That probe is a
+ratio between adjacent levels rather than a slope, it takes minutes rather
+than milliseconds, and it is run deliberately — it is not part of
+`scripts/bench` and `--check` does not know about it.
+
 ## Profile matters more than you would guess
 
 The stack probe, same code, same machine, 4 MiB thread:
