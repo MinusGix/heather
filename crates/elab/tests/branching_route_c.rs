@@ -355,6 +355,7 @@ fn psi() -> GlobalCtx {
                 layer: Layer::Code,
                 ty: rty(Type::Ty(c(0))),
                 level: c(1),
+                body: None,
             },
             // leaf : Tree
             GlobalBinding::Tm {
@@ -362,6 +363,7 @@ fn psi() -> GlobalCtx {
                 layer: Layer::Code,
                 ty: with_visible(1, || rty(tree_c(0))),
                 level: c(0),
+                body: None,
             },
             // node : Tree → Tree → Tree
             GlobalBinding::Tm {
@@ -381,6 +383,7 @@ fn psi() -> GlobalCtx {
                     })
                 }),
                 level: c(0),
+                body: None,
             },
             // elim : Π(M). El(M leaf) → step → Π t. El(M t)
             GlobalBinding::Tm {
@@ -388,6 +391,7 @@ fn psi() -> GlobalCtx {
                 layer: Layer::Code,
                 ty: with_visible(3, || rty(elim_ty(0))),
                 level: c(1),
+                body: None,
             },
             // mirror leaf = leaf
             GlobalBinding::Tm {
@@ -395,6 +399,7 @@ fn psi() -> GlobalCtx {
                 layer: Layer::Code,
                 ty: with_visible(4, || rty(id_tree(mirror(0, gleaf(0)), gleaf(0), 0))),
                 level: c(0),
+                body: None,
             },
             // Π(l r). mirror (node l r) = node (mirror r) (mirror l)
             GlobalBinding::Tm {
@@ -418,6 +423,7 @@ fn psi() -> GlobalCtx {
                     })
                 }),
                 level: c(0),
+                body: None,
             },
         ],
     }

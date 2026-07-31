@@ -137,12 +137,21 @@ struct IdxArmEnv {
 
 impl IdxArmEnv {
     /// `M[h, z]`, with `h`/`z` scoped `extra` binders past Γ.
+    ///
+    /// `gamma` is the *current* context — Γ plus those `extra` binders — so
+    /// the substitution out of the motive's `(Γ, h, z)` is built from Γ's
+    /// own prefix, not from all of `gamma`. Using `gamma` whole would emit a
+    /// map whose source is `|gamma| + extra` long: a scope error that stayed
+    /// invisible while it only mis-tailed a motive mentioning no Γ variable
+    /// — and `fn`s inlined, so no global reference carried a `·^k` tail for
+    /// it to get wrong (issues/simulate-conversion-cost.md).
     fn mot_at(&self, gamma: &heather_kernel::term::LocalCtx, h: Term, z: Term, extra: u32) -> Type {
+        let base = heather_kernel::term::LocalCtx {
+            base: gamma.base,
+            entries: gamma.entries[..self.gamma_len].to_vec(),
+        };
         self.motive.apply_local(
-            &LocalSubst::id(gamma)
-                .shift_local(extra)
-                .extended(Rc::new(h))
-                .extended(Rc::new(z)),
+            &crate::embed(&base, extra).extended(Rc::new(h)).extended(Rc::new(z)),
         )
     }
 }

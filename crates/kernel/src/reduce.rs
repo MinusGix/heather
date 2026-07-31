@@ -27,7 +27,8 @@ use std::rc::Rc;
 use crate::level::Level;
 use crate::subst::{GlobalEntry, GlobalSubst};
 use crate::term::{
-    nth, wf_step_telescope, CtxEntry, LocalCtx, LocalSubst, LocalVar, Term, Type,
+    nth, wf_step_telescope, CtxEntry, GlobalBinding, GlobalCtx, GlobalVar, LocalCtx,
+    LocalSubst, LocalVar, Term, Type,
 };
 
 /// Reduction ran out of fuel before reaching a normal form. On well-typed
@@ -36,11 +37,80 @@ use crate::term::{
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct OutOfFuel;
 
+// ---------------------------------------------------------------------------
+// δ: definition unfolding, and the layer that owns it
+// ---------------------------------------------------------------------------
+
+/// The δ-environment of a reduction: the Ψ whose **definitions**
+/// ([`GlobalBinding::Tm`] with a body) may unfold, or [`Defs::opaque`] for
+/// the paper's Ψ-free reduction.
+///
+/// Transparency is layer-indexed (extension,
+/// issues/simulate-conversion-cost.md). At the computing layers p/m a
+/// definition is its body: `u^δ ⇝ t[δ]`, ordinary δ-reduction, which is
+/// what makes running a Ψ-referenced program cheap. At layer c a global is
+/// *syntax* — ch. 06 blocks the code-recursion principles on globals and
+/// compares boxed globals syntactically, so a code-level conversion that
+/// identified `box(u)` with `box(t)` while the recursor distinguished them
+/// would break coherence. [`Defs::opaque`] is therefore the only correct
+/// choice at c, and it is what every layer-c path here uses: reduction
+/// never enters a `box`, and `conv.rs` compares boxed code with `==`.
+#[derive(Clone, Copy)]
+pub struct Defs<'a>(Option<&'a GlobalCtx>);
+
+impl<'a> Defs<'a> {
+    /// Nothing unfolds: every global is an opaque neutral, exactly as in
+    /// ch. 06's reduction relation. The right choice at layer c, and the
+    /// meaning of the Ψ-free [`step_term`]/[`whnf_term`] entry points.
+    pub fn opaque() -> Defs<'a> {
+        Defs(None)
+    }
+
+    /// Definitions of `psi` unfold. Only sound at a computing layer.
+    pub fn transparent(psi: &'a GlobalCtx) -> Defs<'a> {
+        Defs(Some(psi))
+    }
+
+    /// The body of `v`, rescoped from its Ψ-prefix into the ambient Ψ (the
+    /// `shift_global(v + 1)` convention `typing.rs` uses for the binding's
+    /// type). `None` for a declaration, an out-of-scope index, or an opaque
+    /// environment.
+    fn body(&self, v: GlobalVar) -> Option<Term> {
+        let psi = self.0?;
+        let i = psi.bindings.len().checked_sub(1 + v.0 as usize)?;
+        match psi.bindings.get(i)? {
+            GlobalBinding::Tm { body: Some(t), .. } => Some(t.shift_global(v.0 + 1)),
+            _ => None,
+        }
+    }
+
+    /// Whether `v` is a definition here — the head test the conversion
+    /// heuristic keys on, without paying for the rescoped body.
+    pub fn is_defined(&self, v: GlobalVar) -> bool {
+        let Some(psi) = self.0 else { return false };
+        let Some(i) = psi.bindings.len().checked_sub(1 + v.0 as usize) else {
+            return false;
+        };
+        matches!(psi.bindings.get(i), Some(GlobalBinding::Tm { body: Some(_), .. }))
+    }
+}
+
 /// Reflexive-transitive closure of type reduction, to WHNF/neutral (or an
-/// ill-typed stuck form), spending one fuel per step.
-pub fn whnf_type(t: &Type, gamma: &LocalCtx, mut fuel: u64) -> Result<Type, OutOfFuel> {
+/// ill-typed stuck form), spending one fuel per step. Ψ-free: no definition
+/// unfolds (see [`Defs`]).
+pub fn whnf_type(t: &Type, gamma: &LocalCtx, fuel: u64) -> Result<Type, OutOfFuel> {
+    whnf_type_delta(t, gamma, Defs::opaque(), fuel)
+}
+
+/// [`whnf_type`] with a δ-environment.
+pub fn whnf_type_delta(
+    t: &Type,
+    gamma: &LocalCtx,
+    defs: Defs<'_>,
+    mut fuel: u64,
+) -> Result<Type, OutOfFuel> {
     let mut cur = t.clone();
-    while let Some(next) = step_type(&cur, gamma) {
+    while let Some(next) = step_type_delta(&cur, gamma, defs) {
         if fuel == 0 {
             return Err(OutOfFuel);
         }
@@ -51,10 +121,21 @@ pub fn whnf_type(t: &Type, gamma: &LocalCtx, mut fuel: u64) -> Result<Type, OutO
 }
 
 /// Reflexive-transitive closure of term reduction, to WHNF/neutral (or an
-/// ill-typed stuck form), spending one fuel per step.
-pub fn whnf_term(t: &Term, gamma: &LocalCtx, mut fuel: u64) -> Result<Term, OutOfFuel> {
+/// ill-typed stuck form), spending one fuel per step. Ψ-free: no definition
+/// unfolds (see [`Defs`]).
+pub fn whnf_term(t: &Term, gamma: &LocalCtx, fuel: u64) -> Result<Term, OutOfFuel> {
+    whnf_term_delta(t, gamma, Defs::opaque(), fuel)
+}
+
+/// [`whnf_term`] with a δ-environment.
+pub fn whnf_term_delta(
+    t: &Term,
+    gamma: &LocalCtx,
+    defs: Defs<'_>,
+    mut fuel: u64,
+) -> Result<Term, OutOfFuel> {
     let mut cur = t.clone();
-    while let Some(next) = step_term(&cur, gamma) {
+    while let Some(next) = step_term_delta(&cur, gamma, defs) {
         if fuel == 0 {
             return Err(OutOfFuel);
         }
@@ -71,6 +152,12 @@ pub fn whnf_term(t: &Term, gamma: &LocalCtx, mut fuel: u64) -> Result<Term, OutO
 /// Single-step type reduction `T ⇝ T'`: the `El` decode rules plus
 /// congruence into the encoding.
 pub fn step_type(t: &Type, gamma: &LocalCtx) -> Option<Type> {
+    step_type_delta(t, gamma, Defs::opaque())
+}
+
+/// [`step_type`] with a δ-environment. Type-level bindings have no bodies —
+/// a `U^δ` is opaque at every layer — so δ reaches types only through `El`.
+pub fn step_type_delta(t: &Type, gamma: &LocalCtx, defs: Defs<'_>) -> Option<Type> {
     match t {
         Type::El { level, tm } => match &**tm {
             // El^0 Nat ⇝ Nat
@@ -140,7 +227,7 @@ pub fn step_type(t: &Type, gamma: &LocalCtx) -> Option<Type> {
                 shape: Rc::new(Type::El { level: l.clone(), tm: Rc::clone(shape) }),
                 arity: Rc::clone(arity),
             }),
-            _ => step_term(tm, gamma)
+            _ => step_term_delta(tm, gamma, defs)
                 .map(|tm| Type::El { level: level.clone(), tm: Rc::new(tm) }),
         },
         // Vec^l(T; 0) ⇝ Unit^l, Vec^l(T; S k) ⇝ Σ^{l,l}(_ : T). Vec^l(T; k).
@@ -163,7 +250,7 @@ pub fn step_type(t: &Type, gamma: &LocalCtx) -> Option<Type> {
                     len: Rc::new(pred.shift_local(1)),
                 }),
             }),
-            _ => step_term(len, gamma).map(|len| Type::Vec {
+            _ => step_term_delta(len, gamma, defs).map(|len| Type::Vec {
                 level: level.clone(),
                 elem: Rc::clone(elem),
                 len: Rc::new(len),
@@ -180,7 +267,7 @@ pub fn step_type(t: &Type, gamma: &LocalCtx) -> Option<Type> {
                 lhs: Rc::new(Type::Unit { level: Level::Zero }),
                 rhs: Rc::new(Type::Fin { len: Rc::clone(pred) }),
             }),
-            _ => step_term(len, gamma).map(|len| Type::Fin { len: Rc::new(len) }),
+            _ => step_term_delta(len, gamma, defs).map(|len| Type::Fin { len: Rc::new(len) }),
         },
         _ => None,
     }
@@ -189,7 +276,18 @@ pub fn step_type(t: &Type, gamma: &LocalCtx) -> Option<Type> {
 /// Single-step term reduction `t ⇝ t'`: β for all elimination forms plus
 /// congruence at head positions.
 pub fn step_term(t: &Term, gamma: &LocalCtx) -> Option<Term> {
+    step_term_delta(t, gamma, Defs::opaque())
+}
+
+/// [`step_term`] with a δ-environment: the single new rule is
+/// `u^δ ⇝ t[δ]` when `u` is a definition of `defs` (extension). It needs no
+/// arm of its own anywhere else — every congruence below already steps its
+/// head/scrutinee, so a defined global unblocks the whole spine.
+pub fn step_term_delta(t: &Term, gamma: &LocalCtx, defs: Defs<'_>) -> Option<Term> {
     match t {
+        // δ: `u^δ ⇝ t[δ]` for a definition `u := t`. Opaque at layer c,
+        // where `defs` is `Defs::opaque()` — see [`Defs`].
+        Term::GlobalTm { var, subst } => Some(defs.body(*var)?.apply_local(subst)),
         Term::ElimNat { level, motive, base, step, scrut } => match &**scrut {
             // elim_Nat … ze ⇝ s
             Term::Zero => Some((**base).clone()),
@@ -207,7 +305,7 @@ pub fn step_term(t: &Term, gamma: &LocalCtx) -> Option<Term> {
                     .extended(Rc::new(rec));
                 Some(step.apply_local(&delta))
             }
-            _ => step_term(scrut, gamma).map(|s| Term::ElimNat {
+            _ => step_term_delta(scrut, gamma, defs).map(|s| Term::ElimNat {
                 level: level.clone(),
                 motive: Rc::clone(motive),
                 base: Rc::clone(base),
@@ -219,7 +317,7 @@ pub fn step_term(t: &Term, gamma: &LocalCtx) -> Option<Term> {
             match &**proof {
                 // J … refl ⇝ c   (extension; fires on head shape only)
                 Term::Refl { .. } => Some((**case).clone()),
-                _ => step_term(proof, gamma).map(|p| Term::J {
+                _ => step_term_delta(proof, gamma, defs).map(|p| Term::J {
                     ty_level: ty_level.clone(),
                     motive_level: motive_level.clone(),
                     ty: Rc::clone(ty),
@@ -238,7 +336,7 @@ pub fn step_term(t: &Term, gamma: &LocalCtx) -> Option<Term> {
                 // canonicity; the neutral-proof case belongs to conv.rs's
                 // strip rule, never to reduction. docs/sprop-design.md §5.1)
                 Term::SRefl { .. } => Some((**tm).clone()),
-                _ => step_term(proof, gamma).map(|p| Term::Transp {
+                _ => step_term_delta(proof, gamma, defs).map(|p| Term::Transp {
                     ty_level: ty_level.clone(),
                     motive_level: motive_level.clone(),
                     ty: Rc::clone(ty),
@@ -253,7 +351,7 @@ pub fn step_term(t: &Term, gamma: &LocalCtx) -> Option<Term> {
         // fst (pair a b) ⇝ a; else reduce the pair   (extension)
         Term::Fst { fst_level, snd_level, fst_ty, snd_ty, pair } => match &**pair {
             Term::Pair { fst, .. } => Some((**fst).clone()),
-            _ => step_term(pair, gamma).map(|p| Term::Fst {
+            _ => step_term_delta(pair, gamma, defs).map(|p| Term::Fst {
                 fst_level: fst_level.clone(),
                 snd_level: snd_level.clone(),
                 fst_ty: Rc::clone(fst_ty),
@@ -264,7 +362,7 @@ pub fn step_term(t: &Term, gamma: &LocalCtx) -> Option<Term> {
         // elim_Empty has no β rule (Empty has no constructors); it only ever
         // steps its scrutinee, staying neutral when the scrutinee is.
         Term::ElimEmpty { level, scrut_level, motive, scrut } => {
-            step_term(scrut, gamma).map(|s| Term::ElimEmpty {
+            step_term_delta(scrut, gamma, defs).map(|s| Term::ElimEmpty {
                 level: level.clone(),
                 scrut_level: scrut_level.clone(),
                 motive: Rc::clone(motive),
@@ -273,7 +371,7 @@ pub fn step_term(t: &Term, gamma: &LocalCtx) -> Option<Term> {
         }
         // elim_sEmpty likewise (extension; docs/sprop-design.md §5.1).
         Term::ElimSEmpty { level, scrut_level, motive, scrut } => {
-            step_term(scrut, gamma).map(|s| Term::ElimSEmpty {
+            step_term_delta(scrut, gamma, defs).map(|s| Term::ElimSEmpty {
                 level: level.clone(),
                 scrut_level: scrut_level.clone(),
                 motive: Rc::clone(motive),
@@ -299,7 +397,7 @@ pub fn step_term(t: &Term, gamma: &LocalCtx) -> Option<Term> {
             Term::Inr { val, .. } => {
                 Some(case_r.apply_local(&LocalSubst::id(gamma).extended(Rc::clone(val))))
             }
-            _ => step_term(scrut, gamma).map(|s| Term::Case {
+            _ => step_term_delta(scrut, gamma, defs).map(|s| Term::Case {
                 lhs_level: lhs_level.clone(),
                 rhs_level: rhs_level.clone(),
                 motive_level: motive_level.clone(),
@@ -314,7 +412,7 @@ pub fn step_term(t: &Term, gamma: &LocalCtx) -> Option<Term> {
         // snd (pair a b) ⇝ b; else reduce the pair   (extension)
         Term::Snd { fst_level, snd_level, fst_ty, snd_ty, pair } => match &**pair {
             Term::Pair { snd, .. } => Some((**snd).clone()),
-            _ => step_term(pair, gamma).map(|p| Term::Snd {
+            _ => step_term_delta(pair, gamma, defs).map(|p| Term::Snd {
                 fst_level: fst_level.clone(),
                 snd_level: snd_level.clone(),
                 fst_ty: Rc::clone(fst_ty),
@@ -393,7 +491,7 @@ pub fn step_term(t: &Term, gamma: &LocalCtx) -> Option<Term> {
                     .extended(Rc::new(ih));
                 Some(step.apply_local(&delta))
             }
-            _ => step_term(scrut, gamma).map(|s| Term::ElimW {
+            _ => step_term_delta(scrut, gamma, defs).map(|s| Term::ElimW {
                 shape_level: shape_level.clone(),
                 pos_level: pos_level.clone(),
                 motive_level: motive_level.clone(),
@@ -463,7 +561,7 @@ pub fn step_term(t: &Term, gamma: &LocalCtx) -> Option<Term> {
                     .extended(Rc::new(ih));
                 Some(step.apply_local(&delta))
             }
-            _ => step_term(scrut, gamma).map(|s| Term::ElimWf {
+            _ => step_term_delta(scrut, gamma, defs).map(|s| Term::ElimWf {
                 level: level.clone(),
                 motive_level: motive_level.clone(),
                 shape: Rc::clone(shape),
@@ -478,7 +576,7 @@ pub fn step_term(t: &Term, gamma: &LocalCtx) -> Option<Term> {
             Term::Lam { body, .. } => {
                 Some(body.apply_local(&LocalSubst::id(gamma).extended(Rc::clone(arg))))
             }
-            _ => step_term(fun, gamma).map(|f| Term::App {
+            _ => step_term_delta(fun, gamma, defs).map(|f| Term::App {
                 fun: Rc::new(f),
                 dom_level: dom_level.clone(),
                 cod_level: cod_level.clone(),
@@ -495,7 +593,7 @@ pub fn step_term(t: &Term, gamma: &LocalCtx) -> Option<Term> {
                 Some(body.inst_univ(&phi))
             }
             Term::ULam { .. } => None, // arity mismatch: ill-typed, stuck
-            _ => step_term(fun, gamma)
+            _ => step_term_delta(fun, gamma, defs)
                 .map(|f| Term::UApp { fun: Rc::new(f), levels: levels.clone() }),
         },
         Term::CtxApp { fun, ctx } => match &**fun {
@@ -503,7 +601,7 @@ pub fn step_term(t: &Term, gamma: &LocalCtx) -> Option<Term> {
             Term::CtxLam { body, .. } => {
                 Some(body.apply_global(&GlobalSubst::single(GlobalEntry::Ctx(ctx.clone()))))
             }
-            _ => step_term(fun, gamma)
+            _ => step_term_delta(fun, gamma, defs)
                 .map(|f| Term::CtxApp { fun: Rc::new(f), ctx: ctx.clone() }),
         },
         Term::TyApp { fun, arg } => match &**fun {
@@ -511,7 +609,7 @@ pub fn step_term(t: &Term, gamma: &LocalCtx) -> Option<Term> {
             Term::TyLam { body, .. } => {
                 Some(body.apply_global(&GlobalSubst::single(GlobalEntry::Ty(Rc::clone(arg)))))
             }
-            _ => step_term(fun, gamma)
+            _ => step_term_delta(fun, gamma, defs)
                 .map(|f| Term::TyApp { fun: Rc::new(f), arg: Rc::clone(arg) }),
         },
         Term::LetBoxTy { motive_level, code_level, ctx, motive, body, scrut } => {
@@ -520,7 +618,7 @@ pub fn step_term(t: &Term, gamma: &LocalCtx) -> Option<Term> {
                 Term::BoxTy(code) => Some(
                     body.apply_global(&GlobalSubst::single(GlobalEntry::Ty(Rc::clone(code)))),
                 ),
-                _ => step_term(scrut, gamma).map(|s| Term::LetBoxTy {
+                _ => step_term_delta(scrut, gamma, defs).map(|s| Term::LetBoxTy {
                     motive_level: motive_level.clone(),
                     code_level: code_level.clone(),
                     ctx: ctx.clone(),
@@ -536,7 +634,7 @@ pub fn step_term(t: &Term, gamma: &LocalCtx) -> Option<Term> {
                 Term::BoxTm(code) => Some(
                     body.apply_global(&GlobalSubst::single(GlobalEntry::Tm(Rc::clone(code)))),
                 ),
-                _ => step_term(scrut, gamma).map(|s| Term::LetBoxTm {
+                _ => step_term_delta(scrut, gamma, defs).map(|s| Term::LetBoxTm {
                     motive_level: motive_level.clone(),
                     code_level: code_level.clone(),
                     ctx: ctx.clone(),
@@ -559,7 +657,7 @@ pub fn step_term(t: &Term, gamma: &LocalCtx) -> Option<Term> {
             let rec = Rec { ty_motive_level, tm_motive_level, motives, branches };
             match &**scrut {
                 Term::BoxTy(code) => beta_elim_ty(&rec, ctx, code, gamma),
-                _ => step_term(scrut, gamma).map(|s| Term::ElimCodeTy {
+                _ => step_term_delta(scrut, gamma, defs).map(|s| Term::ElimCodeTy {
                     ty_motive_level: ty_motive_level.clone(),
                     tm_motive_level: tm_motive_level.clone(),
                     motives: Rc::clone(motives),
@@ -582,7 +680,7 @@ pub fn step_term(t: &Term, gamma: &LocalCtx) -> Option<Term> {
         } => {
             // Fixed order: the type annotation (scoped in Δ, not Γ) reduces
             // to weak head normal form first, then the scrutinee.
-            if let Some(ty) = step_type(ty, ctx) {
+            if let Some(ty) = step_type_delta(ty, ctx, defs) {
                 return Some(Term::ElimCodeTm {
                     ty_motive_level: ty_motive_level.clone(),
                     tm_motive_level: tm_motive_level.clone(),
@@ -597,7 +695,7 @@ pub fn step_term(t: &Term, gamma: &LocalCtx) -> Option<Term> {
             let rec = Rec { ty_motive_level, tm_motive_level, motives, branches };
             match &**scrut {
                 Term::BoxTm(code) => beta_elim_tm(&rec, ctx, ty, code_level, code, gamma),
-                _ => step_term(scrut, gamma).map(|s| Term::ElimCodeTm {
+                _ => step_term_delta(scrut, gamma, defs).map(|s| Term::ElimCodeTm {
                     ty_motive_level: ty_motive_level.clone(),
                     tm_motive_level: tm_motive_level.clone(),
                     motives: Rc::clone(motives),

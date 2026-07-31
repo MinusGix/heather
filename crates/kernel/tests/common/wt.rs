@@ -119,11 +119,12 @@ fn shift_univ_psi(psi: &GlobalCtx, by: u32) -> GlobalCtx {
                     layer: *layer,
                     level: level.shift(by, 0),
                 },
-                GlobalBinding::Tm { ctx, layer, ty, level } => GlobalBinding::Tm {
+                GlobalBinding::Tm { ctx, layer, ty, level, body } => GlobalBinding::Tm {
                     ctx: ctx.shift_univ(by),
                     layer: *layer,
                     ty: Rc::new(ty.shift_univ(by)),
                     level: level.shift(by, 0),
+                    body: body.as_ref().map(|t| Rc::new(t.shift_univ(by))),
                 },
             })
             .collect(),
@@ -196,6 +197,7 @@ pub fn gen_wt_env(r: &mut Rng) -> WtEnv {
                     layer: Layer::Var,
                     ty: rty(gty(0, &g_ctx(1))),
                     level: Level::Zero,
+                    body: None,
                 },
             ],
         },

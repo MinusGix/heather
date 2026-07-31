@@ -372,6 +372,7 @@ fn global_term_substitutions_convert_componentwise() {
         layer: Layer::Code,
         ty: rty(Type::Nat),
         level: Level::Zero,
+        body: None,
     }]);
     let g = nil_ctx(0);
     let u = |t: Term| Term::GlobalTm { var: GlobalVar(0), subst: empty_subst(vec![t]) };

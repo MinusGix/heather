@@ -64,7 +64,7 @@ use crate::conv::{conv_local_ctx, conv_type, ConvError};
 use crate::layer::Layer;
 use crate::level::Level;
 use crate::rec::{self, gtm, gty, inst_tm_motive, inst_ty_motive, shift_univ_psi};
-use crate::reduce::whnf_type;
+use crate::reduce::{whnf_type_delta, Defs};
 use crate::subst::{GlobalEntry, GlobalSubst};
 use crate::term::{
     wf_step_telescope, CtxBase, CtxEntry, GlobalBinding, GlobalCtx, GlobalVar, LocalCtx,
@@ -145,13 +145,26 @@ pub fn check_global_ctx(psi: &GlobalCtx, univs: u32, fuel: u64) -> R {
                 tc.level_wf(&env, level)?;
                 tc.ctx_wf(&env, Layer::Prog, ctx)?;
             }
-            GlobalBinding::Tm { ctx, layer, ty, level } => {
+            GlobalBinding::Tm { ctx, layer, ty, level, body } => {
                 if !matches!(layer, Layer::Var | Layer::Code) {
                     return Err(TypeError::LayerMismatch);
                 }
                 tc.level_wf(&env, level)?;
                 tc.ctx_wf(&env, Layer::Prog, ctx)?;
                 tc.ty_check(&env.in_ctx(ctx.clone(), Layer::Prog), ty, level)?;
+                // A definition's body (extension): `Ψ_{<i}; Δ ⊢_{i'} t : T @ l`
+                // — checked at the binding's *own* layer, which is what makes
+                // δ layer-preserving: unfolding `u` at a layer j ≥ i' can only
+                // produce a term that was already legal at j. Layer v admits
+                // no term but a variable, so a definition there would be a
+                // rename with extra steps; reject it and keep `v` meaning
+                // exactly what ch. 04 says.
+                if let Some(t) = body {
+                    if *layer != Layer::Code {
+                        return Err(TypeError::LayerMismatch);
+                    }
+                    tc.tm_check(&env.in_ctx(ctx.clone(), *layer), t, ty, level)?;
+                }
             }
         }
     }
@@ -349,9 +362,13 @@ impl Tc {
         Ok(())
     }
 
-    /// `T ⇝* W` under the checker's budget.
+    /// `T ⇝* W` under the checker's budget. δ-transparent unconditionally:
+    /// a *type* lives at `typeof(i)`, which is always a computing layer, so
+    /// exposing a former from behind a definition is p's business even
+    /// while the term being checked is at c.
     fn whnf(&self, env: &Env, t: &Type) -> R<Type> {
-        whnf_type(t, &env.gamma, self.fuel).map_err(|_| TypeError::OutOfFuel)
+        whnf_type_delta(t, &env.gamma, Defs::transparent(&env.psi), self.fuel)
+            .map_err(|_| TypeError::OutOfFuel)
     }
 
     /// Reject everything at layer v except the forms listed in ch. 04's
@@ -729,7 +746,7 @@ impl Tc {
                 let Some(binding) = lookup(&env.psi, *var) else {
                     return Err(TypeError::UnboundGlobalVar(var.0));
                 };
-                let GlobalBinding::Tm { ctx, layer, ty, level } = binding else {
+                let GlobalBinding::Tm { ctx, layer, ty, level, .. } = binding else {
                     return Err(TypeError::WrongGlobalBinding(var.0));
                 };
                 // i' ∈ {v, c} is the binding invariant; i' ≤ i:
@@ -1637,6 +1654,7 @@ impl Tc {
                     layer: Layer::Code,
                     ty: Rc::clone(ty),
                     level: code_level.clone(),
+                    body: None,
                 });
                 let box_u = Term::BoxTm(Rc::new(gtm(0, &ctx.shift_global(1))));
                 let body_ty = motive

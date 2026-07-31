@@ -75,11 +75,14 @@ pub(crate) fn shift_univ_psi(psi: &GlobalCtx, by: u32) -> GlobalCtx {
                     layer: *layer,
                     level: level.shift(by, 0),
                 },
-                GlobalBinding::Tm { ctx, layer, ty, level } => GlobalBinding::Tm {
+                GlobalBinding::Tm { ctx, layer, ty, level, body } => GlobalBinding::Tm {
                     ctx: ctx.shift_univ(by),
                     layer: *layer,
                     ty: Rc::new(ty.shift_univ(by)),
                     level: level.shift(by, 0),
+                    // A definition's body lives in the same universe scope
+                    // as its type, so it shifts with it.
+                    body: body.as_ref().map(|t| Rc::new(t.shift_univ(by))),
                 },
             })
             .collect(),
@@ -395,6 +398,7 @@ pub(crate) fn branch_specs(
                         layer: Layer::Code,
                         ty: Rc::new(Type::Ty(lvar(0))),
                         level: Level::succ(lvar(0)),
+                        body: None,
                     },
                 ],
                 locals: vec![(Rc::new(x_t), l2.shift(1, 0))],
@@ -461,12 +465,14 @@ pub(crate) fn branch_specs(
                         layer: Layer::Code,
                         ty: Rc::new(gty(0, &g_ctx(1))),
                         level: lvar(0),
+                        body: None,
                     },
                     GlobalBinding::Tm {
                         ctx: g_ctx(2),
                         layer: Layer::Code,
                         ty: Rc::new(gty(1, &g_ctx(2))),
                         level: lvar(0),
+                        body: None,
                     },
                 ],
                 locals: vec![
@@ -596,6 +602,7 @@ pub(crate) fn branch_specs(
                         layer: Layer::Var,
                         ty: Rc::new(gty(0, &g_ctx(1))),
                         level: lvar(0),
+                        body: None,
                     },
                 ],
                 locals: vec![],
@@ -677,6 +684,7 @@ pub(crate) fn branch_specs(
                         layer: Layer::Code,
                         ty: Rc::new(Type::Ty(lvar(1))),
                         level: Level::succ(lvar(1)),
+                        body: None,
                     },
                     GlobalBinding::Tm {
                         ctx: ext_ctx(
@@ -687,6 +695,7 @@ pub(crate) fn branch_specs(
                         layer: Layer::Code,
                         ty: Rc::new(Type::Ty(lvar(0))),
                         level: Level::succ(lvar(0)),
+                        body: None,
                     },
                 ],
                 locals: vec![
@@ -767,6 +776,7 @@ pub(crate) fn branch_specs(
                         layer: Layer::Code,
                         ty: Rc::new(Type::Nat),
                         level: Level::Zero,
+                        body: None,
                     },
                 ],
                 locals: vec![(Rc::new(x_t), l2.clone())],
@@ -869,6 +879,7 @@ pub(crate) fn branch_specs(
                             subst: LocalSubst::id(&g_ctx(1)).extended(Rc::new(Term::Zero)),
                         }),
                         level: lvar(0),
+                        body: None,
                     },
                     GlobalBinding::Tm {
                         ctx: {
@@ -889,12 +900,14 @@ pub(crate) fn branch_specs(
                                 ))))),
                         }),
                         level: lvar(0),
+                        body: None,
                     },
                     GlobalBinding::Tm {
                         ctx: g_ctx(3),
                         layer: Layer::Code,
                         ty: Rc::new(Type::Nat),
                         level: Level::Zero,
+                        body: None,
                     },
                 ],
                 locals: vec![
@@ -973,6 +986,7 @@ pub(crate) fn branch_specs(
                             &ext_ctx(&g_ctx(2), gty(1, &g_ctx(2)), lvar(1)),
                         )),
                         level: lvar(0),
+                        body: None,
                     },
                 ],
                 locals: vec![
@@ -1076,12 +1090,14 @@ pub(crate) fn branch_specs(
                         layer: Layer::Code,
                         ty: Rc::new(u_t_pi),
                         level: Level::max(lvar(1), lvar(0)),
+                        body: None,
                     },
                     GlobalBinding::Tm {
                         ctx: g_ctx(3),
                         layer: Layer::Code,
                         ty: Rc::new(gty(2, &g_ctx(3))),
                         level: lvar(1),
+                        body: None,
                     },
                 ],
                 locals: vec![
@@ -1156,6 +1172,7 @@ pub(crate) fn branch_specs(
                         layer: Layer::Code,
                         ty: Rc::new(Type::Ty(lvar(0))),
                         level: Level::succ(lvar(0)),
+                        body: None,
                     },
                     GlobalBinding::Tm {
                         ctx: g_ctx(1),
@@ -1165,6 +1182,7 @@ pub(crate) fn branch_specs(
                             tm: Rc::new(gtm(0, &g_ctx(1))),
                         }),
                         level: lvar(0),
+                        body: None,
                     },
                     GlobalBinding::Tm {
                         ctx: g_ctx(2),
@@ -1174,6 +1192,7 @@ pub(crate) fn branch_specs(
                             tm: Rc::new(gtm(1, &g_ctx(2))),
                         }),
                         level: lvar(0),
+                        body: None,
                     },
                 ],
                 locals: vec![
@@ -1240,6 +1259,7 @@ pub(crate) fn branch_specs(
                         layer: Layer::Code,
                         ty: Rc::new(gty(0, &g_ctx(1))),
                         level: lvar(0),
+                        body: None,
                     },
                 ],
                 locals: vec![
@@ -1377,6 +1397,7 @@ pub(crate) fn branch_specs(
                         layer: Layer::Code,
                         ty: Rc::new(gty(0, &g_ctx(1))),
                         level: lvar(1),
+                        body: None,
                     },
                     GlobalBinding::Ty {
                         ctx: {
@@ -1406,12 +1427,14 @@ pub(crate) fn branch_specs(
                                 })),
                         }),
                         level: lvar(0),
+                        body: None,
                     },
                     GlobalBinding::Tm {
                         ctx: g_ctx(4),
                         layer: Layer::Code,
                         ty: Rc::new(gty(3, &g_ctx(4))),
                         level: lvar(1),
+                        body: None,
                     },
                     GlobalBinding::Tm {
                         ctx: g_ctx(5),
@@ -1423,6 +1446,7 @@ pub(crate) fn branch_specs(
                             rhs: Rc::new(gtm(0, &g_ctx(5))),
                         }),
                         level: lvar(1),
+                        body: None,
                     },
                 ],
                 locals: vec![
@@ -1494,6 +1518,7 @@ pub(crate) fn branch_specs(
                         layer: Layer::Code,
                         ty: Rc::new(Type::Ty(lvar(1))),
                         level: Level::succ(lvar(1)),
+                        body: None,
                     },
                     GlobalBinding::Tm {
                         ctx: ext_ctx(
@@ -1504,6 +1529,7 @@ pub(crate) fn branch_specs(
                         layer: Layer::Code,
                         ty: Rc::new(Type::Ty(lvar(0))),
                         level: Level::succ(lvar(0)),
+                        body: None,
                     },
                 ],
                 locals: vec![
@@ -1602,6 +1628,7 @@ pub(crate) fn branch_specs(
                         layer: Layer::Code,
                         ty: Rc::new(gty(1, &g_ctx(2))),
                         level: lvar(1),
+                        body: None,
                     },
                     GlobalBinding::Tm {
                         ctx: g_ctx(3),
@@ -1612,6 +1639,7 @@ pub(crate) fn branch_specs(
                                 .extended(Rc::new(gtm(0, &g_ctx(3)))),
                         }),
                         level: lvar(0),
+                        body: None,
                     },
                 ],
                 locals: vec![
@@ -1703,6 +1731,7 @@ pub(crate) fn branch_specs(
                         layer: Layer::Code,
                         ty: Rc::new(sigma_up),
                         level: Level::max(lvar(1), lvar(0)),
+                        body: None,
                     },
                 ],
                 locals: vec![
@@ -1802,6 +1831,7 @@ pub(crate) fn branch_specs(
                         layer: Layer::Code,
                         ty: Rc::new(sigma_up),
                         level: Level::max(lvar(1), lvar(0)),
+                        body: None,
                     },
                 ],
                 locals: vec![
@@ -1936,6 +1966,7 @@ pub(crate) fn branch_specs(
                         layer: Layer::Code,
                         ty: Rc::new(Type::Empty { level: lvar(0) }),
                         level: lvar(0),
+                        body: None,
                     },
                 ],
                 locals: vec![
@@ -2047,12 +2078,14 @@ pub(crate) fn branch_specs(
                         layer: Layer::Code,
                         ty: Rc::new(Type::Ty(lvar(1))),
                         level: Level::succ(lvar(1)),
+                        body: None,
                     },
                     GlobalBinding::Tm {
                         ctx: g_ctx(1),
                         layer: Layer::Code,
                         ty: Rc::new(Type::Ty(lvar(0))),
                         level: Level::succ(lvar(0)),
+                        body: None,
                     },
                 ],
                 locals: vec![
@@ -2130,6 +2163,7 @@ pub(crate) fn branch_specs(
                         layer: Layer::Code,
                         ty: Rc::new(gty(1, &g_ctx(2))),
                         level: lvar(1),
+                        body: None,
                     },
                 ],
                 locals: vec![
@@ -2207,6 +2241,7 @@ pub(crate) fn branch_specs(
                         layer: Layer::Code,
                         ty: Rc::new(gty(0, &g_ctx(2))),
                         level: lvar(0),
+                        body: None,
                     },
                 ],
                 locals: vec![
@@ -2396,18 +2431,21 @@ pub(crate) fn branch_specs(
                         layer: Layer::Code,
                         ty: Rc::new(u_m_bind_l),
                         level: lvar(0),
+                        body: None,
                     },
                     GlobalBinding::Tm {
                         ctx: ext_ctx(&g_ctx(4), gty(2, &g_ctx(4)), lvar(1)),
                         layer: Layer::Code,
                         ty: Rc::new(u_m_bind_r),
                         level: lvar(0),
+                        body: None,
                     },
                     GlobalBinding::Tm {
                         ctx: g_ctx(5),
                         layer: Layer::Code,
                         ty: Rc::new(sum_ut),
                         level: lmax.clone(),
+                        body: None,
                     },
                 ],
                 locals: vec![
@@ -2537,6 +2575,7 @@ pub(crate) fn branch_specs(
                         layer: Layer::Code,
                         ty: Rc::new(Type::Ty(lvar(1))),
                         level: Level::succ(lvar(1)),
+                        body: None,
                     },
                     GlobalBinding::Tm {
                         ctx: ext_ctx(
@@ -2547,6 +2586,7 @@ pub(crate) fn branch_specs(
                         layer: Layer::Code,
                         ty: Rc::new(Type::Ty(lvar(0))),
                         level: Level::succ(lvar(0)),
+                        body: None,
                     },
                 ],
                 locals: vec![
@@ -2672,12 +2712,14 @@ pub(crate) fn branch_specs(
                         layer: Layer::Code,
                         ty: Rc::new(gty(1, &g_ctx(2))),
                         level: lvar(1),
+                        body: None,
                     },
                     GlobalBinding::Tm {
                         ctx: g_ctx(3),
                         layer: Layer::Code,
                         ty: Rc::new(f_ty_bind),
                         level: Level::max(lvar(0), lmax.clone()),
+                        body: None,
                     },
                 ],
                 locals: vec![
@@ -2916,12 +2958,14 @@ pub(crate) fn branch_specs(
                         layer: Layer::Code,
                         ty: Rc::new(u_m_bind_s),
                         level: lvar(0),
+                        body: None,
                     },
                     GlobalBinding::Tm {
                         ctx: g_ctx(4),
                         layer: Layer::Code,
                         ty: Rc::new(w4),
                         level: lmax.clone(),
+                        body: None,
                     },
                 ],
                 locals: vec![
@@ -2986,6 +3030,7 @@ pub(crate) fn branch_specs(
                         layer: Layer::Code,
                         ty: Rc::new(Type::Nat),
                         level: Level::Zero,
+                        body: None,
                     },
                 ],
                 locals: vec![
@@ -3044,12 +3089,14 @@ pub(crate) fn branch_specs(
                         layer: Layer::Code,
                         ty: Rc::new(Type::Ty(lvar(0))),
                         level: Level::succ(lvar(0)),
+                        body: None,
                     },
                     GlobalBinding::Tm {
                         ctx: g_ctx(1),
                         layer: Layer::Code,
                         ty: Rc::new(Type::Nat),
                         level: Level::Zero,
+                        body: None,
                     },
                 ],
                 locals: vec![
@@ -3096,6 +3143,7 @@ pub(crate) fn branch_specs(
                         layer: Layer::Code,
                         ty: Rc::new(Type::Nat),
                         level: Level::Zero,
+                        body: None,
                     },
                 ],
                 locals: vec![(Rc::new(x_k), l2.clone())],
@@ -3136,6 +3184,7 @@ pub(crate) fn branch_specs(
                         layer: Layer::Code,
                         ty: Rc::new(Type::Nat),
                         level: Level::Zero,
+                        body: None,
                     },
                 ],
                 locals: vec![(Rc::new(x_k), l2.clone())],
@@ -3194,6 +3243,7 @@ pub(crate) fn branch_specs(
                         layer: Layer::Code,
                         ty: Rc::new(Type::Nat),
                         level: Level::Zero,
+                        body: None,
                     },
                 ],
                 locals: vec![
@@ -3257,6 +3307,7 @@ pub(crate) fn branch_specs(
                         layer: Layer::Code,
                         ty: Rc::new(Type::Ty(lvar(0))),
                         level: Level::succ(lvar(0)),
+                        body: None,
                     },
                     GlobalBinding::Tm {
                         ctx: ext_ctx(
@@ -3267,6 +3318,7 @@ pub(crate) fn branch_specs(
                         layer: Layer::Code,
                         ty: Rc::new(Type::Nat),
                         level: Level::Zero,
+                        body: None,
                     },
                 ],
                 locals: vec![
@@ -3385,18 +3437,21 @@ pub(crate) fn branch_specs(
                         layer: Layer::Code,
                         ty: Rc::new(Type::Nat),
                         level: Level::Zero,
+                        body: None,
                     },
                     GlobalBinding::Tm {
                         ctx: g_ctx(2),
                         layer: Layer::Code,
                         ty: Rc::new(gty(1, &g_ctx(2))),
                         level: lvar(0),
+                        body: None,
                     },
                     GlobalBinding::Tm {
                         ctx: g_ctx(3),
                         layer: Layer::Code,
                         ty: Rc::new(cs_ty_bind),
                         level: lvar(0),
+                        body: None,
                     },
                 ],
                 locals: vec![
@@ -3551,6 +3606,7 @@ pub(crate) fn branch_specs(
                         layer: Layer::Code,
                         ty: Rc::new(Type::Nat),
                         level: Level::Zero,
+                        body: None,
                     },
                     GlobalBinding::Ty {
                         ctx: ext_ctx(&g2, wf2, lvar(1)),
@@ -3562,12 +3618,14 @@ pub(crate) fn branch_specs(
                         layer: Layer::Code,
                         ty: Rc::new(step_ty3),
                         level: lvar(0),
+                        body: None,
                     },
                     GlobalBinding::Tm {
                         ctx: g4,
                         layer: Layer::Code,
                         ty: Rc::new(wf4),
                         level: lvar(1),
+                        body: None,
                     },
                 ],
                 locals: vec![
@@ -3644,12 +3702,14 @@ pub(crate) fn branch_specs(
                         layer: Layer::Code,
                         ty: Rc::new(gty(0, &g_ctx(1))),
                         level: lvar(0),
+                        body: None,
                     },
                     GlobalBinding::Tm {
                         ctx: g_ctx(2),
                         layer: Layer::Code,
                         ty: Rc::new(gty(1, &g_ctx(2))),
                         level: lvar(0),
+                        body: None,
                     },
                 ],
                 locals: vec![
@@ -3719,6 +3779,7 @@ pub(crate) fn branch_specs(
                         layer: Layer::Code,
                         ty: Rc::new(Type::Ty(lvar(0))),
                         level: Level::succ(lvar(0)),
+                        body: None,
                     },
                     GlobalBinding::Tm {
                         ctx: g_ctx(1),
@@ -3728,6 +3789,7 @@ pub(crate) fn branch_specs(
                             tm: Rc::new(gtm(0, &g_ctx(1))),
                         }),
                         level: lvar(0),
+                        body: None,
                     },
                     GlobalBinding::Tm {
                         ctx: g_ctx(2),
@@ -3737,6 +3799,7 @@ pub(crate) fn branch_specs(
                             tm: Rc::new(gtm(1, &g_ctx(2))),
                         }),
                         level: lvar(0),
+                        body: None,
                     },
                 ],
                 locals: vec![
@@ -3842,6 +3905,7 @@ pub(crate) fn branch_specs(
                         layer: Layer::Code,
                         ty: Rc::new(gty(0, &g_ctx(1))),
                         level: lvar(0),
+                        body: None,
                     },
                 ],
                 locals: vec![
@@ -3971,12 +4035,14 @@ pub(crate) fn branch_specs(
                         layer: Layer::Code,
                         ty: Rc::new(gty(1, &g_ctx(2))),
                         level: lvar(1),
+                        body: None,
                     },
                     GlobalBinding::Tm {
                         ctx: g_ctx(3),
                         layer: Layer::Code,
                         ty: Rc::new(gty(2, &g_ctx(3))),
                         level: lvar(1),
+                        body: None,
                     },
                     GlobalBinding::Tm {
                         ctx: g_ctx(4),
@@ -3988,6 +4054,7 @@ pub(crate) fn branch_specs(
                             rhs: Rc::new(gtm(0, &g_ctx(4))),
                         }),
                         level: lvar(1),
+                        body: None,
                     },
                     GlobalBinding::Tm {
                         ctx: g_ctx(5),
@@ -3998,6 +4065,7 @@ pub(crate) fn branch_specs(
                                 .extended(Rc::new(gtm(2, &g_ctx(5)))),
                         }),
                         level: lvar(0),
+                        body: None,
                     },
                 ],
                 locals: vec![
@@ -4076,6 +4144,7 @@ pub(crate) fn branch_specs(
                         layer: Layer::Code,
                         ty: Rc::new(Type::SEmpty { level: lvar(0) }),
                         level: lvar(0),
+                        body: None,
                     },
                 ],
                 locals: vec![

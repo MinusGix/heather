@@ -72,8 +72,10 @@ fn a_body_hole_is_discharged_by_name() {
         }
         "#,
     );
-    // 3 prelude + 2 preamble + this one; goals never leak into the real Ψ.
-    assert_eq!(e.psi().bindings.len(), 6);
+    // 3 prelude + 3 preamble (`add` included: a `fn` is a *defined* Ψ-global
+    // since issues/simulate-conversion-cost.md) + this one; goals never leak
+    // into the real Ψ.
+    assert_eq!(e.psi().bindings.len(), 7);
 }
 
 #[test]

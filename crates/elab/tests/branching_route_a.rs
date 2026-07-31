@@ -370,12 +370,14 @@ fn psi() -> GlobalCtx {
                 layer: Layer::Code,
                 ty: rty(funext_ty(&Type::Empty { level: Level::Zero })),
                 level: c(0),
+                body: None,
             },
             GlobalBinding::Tm {
                 ctx: nil_ctx(),
                 layer: Layer::Code,
                 ty: rty(funext_ty(&two())),
                 level: c(0),
+                body: None,
             },
         ],
     }

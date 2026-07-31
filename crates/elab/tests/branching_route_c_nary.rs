@@ -864,6 +864,7 @@ fn psi() -> GlobalCtx {
                 layer: Layer::Code,
                 ty: rty(Type::Ty(c(0))),
                 level: c(1),
+                body: None,
             },
             // supf : Π(a : 2). El (tup (arity a)) → Tree
             GlobalBinding::Tm {
@@ -883,6 +884,7 @@ fn psi() -> GlobalCtx {
                     })
                 }),
                 level: c(0),
+                body: None,
             },
             // elim : Π(M). step → Π(t). El (M t)
             GlobalBinding::Tm {
@@ -890,6 +892,7 @@ fn psi() -> GlobalCtx {
                 layer: Layer::Code,
                 ty: with_visible(2, || rty(elim_ty(0))),
                 level: c(1),
+                body: None,
             },
             // Π(a)(cs). mirror (supf a cs) = mirror_step a cs (λi. mirror (nth _ cs i))
             GlobalBinding::Tm {
@@ -914,6 +917,7 @@ fn psi() -> GlobalCtx {
                     })
                 }),
                 level: c(0),
+                body: None,
             },
         ],
     }

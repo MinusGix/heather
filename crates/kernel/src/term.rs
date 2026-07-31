@@ -1011,12 +1011,44 @@ pub enum GlobalBinding {
     },
     /// `u : Trm_i(Δ ⊢ T @ l)` — a term at layer `i ∈ {v, c}` (layer v means
     /// only a variable can be substituted for it).
+    ///
+    /// With `body: Some(t)` this is a **definition** `u : Trm_i(Δ ⊢ T @ l) := t`
+    /// (extension, issues/simulate-conversion-cost.md). A definition is a
+    /// declaration that additionally knows its body: every ch. 04 rule
+    /// mentioning `u : Trm_i(…)` stays valid verbatim, and only δ-reduction
+    /// consults `body` — which is why this is a field on `Tm` rather than a
+    /// fourth binding form. `t` is scoped in Δ over this binding's *prefix*
+    /// of Ψ (the same convention as `ty`) and is checked at layer `i`, so
+    /// unfolding never produces a term that is illegal where the global was
+    /// legal. Transparency is **layer-indexed**: the body unfolds at the
+    /// computing layers p/m and never at c, where a global is syntax
+    /// (ch. 06 blocks code recursion on globals and compares boxed globals
+    /// syntactically). See `crate::reduce::Defs`.
     Tm {
         ctx: LocalCtx,
         layer: Layer,
         ty: Rc<Type>,
         level: Level,
+        body: Option<Rc<Term>>,
     },
+}
+
+impl GlobalBinding {
+    /// The declaration `u : Trm_i(Δ ⊢ T @ l)` — no body, hence opaque.
+    pub fn opaque_tm(ctx: LocalCtx, layer: Layer, ty: Rc<Type>, level: Level) -> GlobalBinding {
+        GlobalBinding::Tm { ctx, layer, ty, level, body: None }
+    }
+
+    /// The definition `u : Trm_i(Δ ⊢ T @ l) := t`.
+    pub fn defined_tm(
+        ctx: LocalCtx,
+        layer: Layer,
+        ty: Rc<Type>,
+        level: Level,
+        body: Rc<Term>,
+    ) -> GlobalBinding {
+        GlobalBinding::Tm { ctx, layer, ty, level, body: Some(body) }
+    }
 }
 
 /// The global context Ψ. `bindings[0]` is outermost; [`GlobalVar`] 0 refers

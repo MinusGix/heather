@@ -57,7 +57,9 @@ fn nat_suite_ergonomic() {
     let mut e = Elaborator::with_prelude().expect("prelude");
     e.elab_source(NAT_SUITE_ERGONOMIC)
         .expect("operator/method/calc Nat suite must elaborate and kernel-check");
-    assert_eq!(e.psi().bindings.len(), 7);
+    // The `fn` counts too: it is a *defined* Ψ-global since
+    // issues/simulate-conversion-cost.md.
+    assert_eq!(e.psi().bindings.len(), 8);
 }
 
 #[test]

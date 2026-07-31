@@ -57,7 +57,7 @@ use crate::level::Level;
 use crate::rec::{
     self, g_ctx, gtm, gty, inst_tm_motive, inst_ty_motive, lvar, shift_univ_psi,
 };
-use crate::reduce::{step_term, step_type};
+use crate::reduce::{step_term, step_term_delta, step_type, step_type_delta, Defs};
 use crate::subst::{GlobalEntry, GlobalSubst};
 use crate::term::{
     wf_step_telescope, Branches, CtxBase, CtxEntry, GlobalBinding, GlobalCtx, GlobalVar,
@@ -116,7 +116,7 @@ pub fn conv_type(
     fuel: u64,
 ) -> R {
     debug_assert!(layer.computes(), "convertibility is only invoked at computing layers");
-    Conv { fuel }.ty(&Env::new(psi, gamma, layer), a, b, level)
+    Conv::new(fuel, psi).ty(&Env::new(psi, gamma, layer), a, b, level)
 }
 
 /// `Ψ; Γ ⊢_i t ≈ t' : T @ l` — convertibility of terms at a type.
@@ -132,7 +132,7 @@ pub fn conv_term(
     fuel: u64,
 ) -> R {
     debug_assert!(layer.computes(), "convertibility is only invoked at computing layers");
-    Conv { fuel }.tm(&Env::new(psi, gamma, layer), a, b, ty, level)
+    Conv::new(fuel, psi).tm(&Env::new(psi, gamma, layer), a, b, ty, level)
 }
 
 /// `Ψ ⊢_i Γ ≈ Δ` — convertibility of local contexts.
@@ -145,7 +145,7 @@ pub fn conv_local_ctx(
 ) -> R {
     debug_assert!(layer.computes(), "convertibility is only invoked at computing layers");
     let env = Env::new(psi, &LocalCtx { base: CtxBase::Nil, entries: vec![] }, layer);
-    Conv { fuel }.ctx(&env, layer, a, b)
+    Conv::new(fuel, psi).ctx(&env, layer, a, b)
 }
 
 // ---------------------------------------------------------------------------
@@ -224,6 +224,44 @@ fn lookup(psi: &GlobalCtx, v: GlobalVar) -> Option<&GlobalBinding> {
     psi.bindings.len().checked_sub(1 + v.0 as usize).and_then(|i| psi.bindings.get(i))
 }
 
+/// The **definition** at the head of a δ-stuck spine, if any: the one
+/// global whose unfolding would let this term reduce further. Exactly the
+/// scrutinee/head positions [`crate::reduce::is_neutral_term`] recurses
+/// through, minus `transp`'s proof — that head belongs to [`Conv::strip`],
+/// which runs after the δ-lazy stage.
+fn delta_head(t: &Term, defs: Defs<'_>) -> Option<GlobalVar> {
+    match t {
+        Term::GlobalTm { var, .. } => defs.is_defined(*var).then_some(*var),
+        Term::ElimNat { scrut, .. }
+        | Term::ElimEmpty { scrut, .. }
+        | Term::ElimSEmpty { scrut, .. }
+        | Term::Case { scrut, .. }
+        | Term::ElimW { scrut, .. }
+        | Term::ElimWf { scrut, .. }
+        | Term::LetBoxTy { scrut, .. }
+        | Term::LetBoxTm { scrut, .. }
+        | Term::ElimCodeTy { scrut, .. }
+        | Term::ElimCodeTm { scrut, .. } => delta_head(scrut, defs),
+        Term::J { proof, .. } => delta_head(proof, defs),
+        Term::Fst { pair, .. } | Term::Snd { pair, .. } => delta_head(pair, defs),
+        Term::App { fun, .. }
+        | Term::UApp { fun, .. }
+        | Term::CtxApp { fun, .. }
+        | Term::TyApp { fun, .. } => delta_head(fun, defs),
+        _ => None,
+    }
+}
+
+/// [`delta_head`] for types: a type is δ-stuck only under `El` (type-level
+/// globals `U^δ` carry no body).
+fn delta_head_ty(t: &Type, defs: Defs<'_>) -> Option<GlobalVar> {
+    match t {
+        Type::El { tm, .. } => delta_head(tm, defs),
+        Type::Vec { len, .. } | Type::Fin { len } => delta_head(len, defs),
+        _ => None,
+    }
+}
+
 // ---------------------------------------------------------------------------
 // The checker
 // ---------------------------------------------------------------------------
@@ -238,9 +276,24 @@ struct RecSide<'a> {
 
 struct Conv {
     fuel: u64,
+    /// Does Ψ contain any definition at all? Decided once, because when it
+    /// does not — every program before this feature, and every fixture that
+    /// only declares — the δ-lazy stage below has nothing to find, and
+    /// paying for it cost 1.35–1.43× on the conversion benchmarks. Telescope
+    /// pushes never introduce definitions, so the answer cannot change while
+    /// a comparison runs.
+    has_defs: bool,
 }
 
 impl Conv {
+    fn new(fuel: u64, psi: &GlobalCtx) -> Conv {
+        let has_defs = psi
+            .bindings
+            .iter()
+            .any(|b| matches!(b, GlobalBinding::Tm { body: Some(_), .. }));
+        Conv { fuel, has_defs }
+    }
+
     fn spend(&mut self) -> R {
         if self.fuel == 0 {
             return Err(ConvError::OutOfFuel);
@@ -249,9 +302,47 @@ impl Conv {
         Ok(())
     }
 
+    /// The δ-environment of a comparison: definitions unfold exactly at the
+    /// computing layers (see [`Defs`]). Conversion is only ever invoked at
+    /// p/m, so this is transparent in practice — the gate is here so that
+    /// the one invariant that must never bend is stated where it is used,
+    /// not assumed from the call sites.
+    fn defs<'a>(&self, env: &'a Env) -> Defs<'a> {
+        if self.has_defs && env.layer.computes() {
+            Defs::transparent(&env.psi)
+        } else {
+            Defs::opaque()
+        }
+    }
+
     /// `T ⇝* W`, spending one fuel per step (shared budget, unlike
     /// [`crate::reduce::whnf_type`]'s local one).
     fn whnf_ty(&mut self, t: &Type, env: &Env) -> R<Type> {
+        let defs = self.defs(env);
+        let mut cur = t.clone();
+        while let Some(next) = step_type_delta(&cur, &env.gamma, defs) {
+            self.spend()?;
+            cur = next;
+        }
+        Ok(cur)
+    }
+
+    fn whnf_tm(&mut self, t: &Term, env: &Env) -> R<Term> {
+        let defs = self.defs(env);
+        let mut cur = t.clone();
+        while let Some(next) = step_term_delta(&cur, &env.gamma, defs) {
+            self.spend()?;
+            cur = next;
+        }
+        Ok(cur)
+    }
+
+    /// `T ⇝* W` **without** δ: stops at a definition's spine instead of
+    /// unfolding it. The first stage of the δ-lazy order described on
+    /// [`Conv::ty`]; resuming with [`Conv::whnf_ty`] from here loses
+    /// nothing, since weak-head reduction is deterministic and the Ψ-free
+    /// relation is a sub-relation of the δ one.
+    fn whnf_ty_opaque(&mut self, t: &Type, env: &Env) -> R<Type> {
         let mut cur = t.clone();
         while let Some(next) = step_type(&cur, &env.gamma) {
             self.spend()?;
@@ -260,13 +351,30 @@ impl Conv {
         Ok(cur)
     }
 
-    fn whnf_tm(&mut self, t: &Term, env: &Env) -> R<Term> {
+    fn whnf_tm_opaque(&mut self, t: &Term, env: &Env) -> R<Term> {
         let mut cur = t.clone();
         while let Some(next) = step_term(&cur, &env.gamma) {
             self.spend()?;
             cur = next;
         }
         Ok(cur)
+    }
+
+    /// The δ-lazy attempt: with both sides stuck at the *same* defined
+    /// global head, try the ordinary comparison first — `f a⃗ ≈ f a⃗`
+    /// settles on the spine, and `f`'s body is never materialized. Failure
+    /// means "unfold and retry", not "not convertible".
+    ///
+    /// Guard semantics are [`Conv::strip`]'s, for the same reason: catch
+    /// `NotConvertible`, propagate `OutOfFuel` (the shared budget is spent
+    /// and the verdict must not depend on *where* it died), and no fuel
+    /// refund — monotone-decreasing fuel is the totality argument.
+    fn delta_lazy<T>(&mut self, attempt: impl FnOnce(&mut Self) -> R<T>) -> R<Option<T>> {
+        match attempt(self) {
+            Ok(v) => Ok(Some(v)),
+            Err(ConvError::NotConvertible) => Ok(None),
+            Err(e) => Err(e),
+        }
     }
 
     /// The **strip** loop: a stuck `transp(I; x.P; a; b; e; t)` whose
@@ -319,10 +427,27 @@ impl Conv {
     // -- types --------------------------------------------------------------
 
     /// `Γ ⊢ T ≈ T' : l`: reduce both sides to WHNF, compare as normal.
+    ///
+    /// Reduction runs in two stages (extension,
+    /// issues/simulate-conversion-cost.md): first without δ, and only if
+    /// that leaves the two sides at different heads — or at the same
+    /// defined head whose spines do not agree — with δ. A type reaches a
+    /// definition only through `El ν`, so the head test is one hop deeper
+    /// here than in [`Conv::tm`].
     fn ty(&mut self, env: &Env, a: &Type, b: &Type, l: &Level) -> R {
         self.spend()?;
-        let wa = self.whnf_ty(a, env)?;
-        let wb = self.whnf_ty(b, env)?;
+        let mut wa = self.whnf_ty_opaque(a, env)?;
+        let mut wb = self.whnf_ty_opaque(b, env)?;
+        if self.has_defs {
+            let defs = self.defs(env);
+            if let (Some(u1), Some(u2)) = (delta_head_ty(&wa, defs), delta_head_ty(&wb, defs)) {
+                if u1 == u2 && self.delta_lazy(|c| c.ty_nf(env, &wa, &wb, l))?.is_some() {
+                    return Ok(());
+                }
+            }
+            wa = self.whnf_ty(&wa, env)?;
+            wb = self.whnf_ty(&wb, env)?;
+        }
         self.ty_nf(env, &wa, &wb, l)
     }
 
@@ -577,17 +702,30 @@ impl Conv {
     fn tm(&mut self, env: &Env, a: &Term, b: &Term, ty: &Type, l: &Level) -> R {
         self.spend()?;
         let w = self.whnf_ty(ty, env)?;
+        // δ-lazy stage (extension; see [`Conv::ty`]): stop at a definition's
+        // spine, and when both sides stop at the *same* one, try the spine
+        // comparison before unfolding anything.
         // whnf, then strip transp heads whose endpoints convert
         // ([`Conv::strip`]). The check is inline (not a whnf-wrapping
         // helper) so the hot path — no transp head, i.e. every pre-sEq
         // program — pays one discriminant read and zero extra `Term`
         // moves; the helper layering cost 1.35× on `conv/computed-numeral`
         // (`scripts/bench --check`, 2026-07-28).
-        let mut wa = self.whnf_tm(a, env)?;
+        let mut wa = self.whnf_tm_opaque(a, env)?;
+        let mut wb = self.whnf_tm_opaque(b, env)?;
+        if self.has_defs {
+            let defs = self.defs(env);
+            if let (Some(u1), Some(u2)) = (delta_head(&wa, defs), delta_head(&wb, defs)) {
+                if u1 == u2 && self.delta_lazy(|c| c.tm_nf(env, &wa, &wb, &w, l))?.is_some() {
+                    return Ok(());
+                }
+            }
+            wa = self.whnf_tm(&wa, env)?;
+            wb = self.whnf_tm(&wb, env)?;
+        }
         if matches!(wa, Term::Transp { .. }) {
             wa = self.strip(wa, env)?;
         }
-        let mut wb = self.whnf_tm(b, env)?;
         if matches!(wb, Term::Transp { .. }) {
             wb = self.strip(wb, env)?;
         }
@@ -1003,7 +1141,7 @@ impl Conv {
                 if u1 != u2 {
                     return Err(NC);
                 }
-                let Some(GlobalBinding::Tm { ctx, layer, ty, level }) = lookup(&env.psi, *u1)
+                let Some(GlobalBinding::Tm { ctx, layer, ty, level, .. }) = lookup(&env.psi, *u1)
                 else {
                     return Err(NC);
                 };
@@ -1570,6 +1708,7 @@ impl Conv {
                     layer: Layer::Code,
                     ty: Rc::clone(t1),
                     level: cl1.clone(),
+                    body: None,
                 });
                 let box_u = Term::BoxTm(Rc::new(gtm(0, &d1.shift_global(1))));
                 let body_ty = m1

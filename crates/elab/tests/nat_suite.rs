@@ -63,8 +63,10 @@ fn prelude_checks() {
 fn nat_suite_checks() {
     let mut e = Elaborator::with_prelude().expect("prelude");
     e.elab_source(NAT_SUITE).expect("Nat suite must elaborate and kernel-check");
-    // The prelude's 3 theorems + the suite's 4 all landed as Ψ-globals.
-    assert_eq!(e.psi().bindings.len(), 7);
+    // The prelude's 3 theorems + the suite's `fn add` and 4 theorems all
+    // landed as Ψ-globals (a `fn` is a *defined* one since
+    // issues/simulate-conversion-cost.md).
+    assert_eq!(e.psi().bindings.len(), 8);
 }
 
 #[test]

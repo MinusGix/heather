@@ -8,15 +8,19 @@
 //! re-checked from scratch by `heather_kernel::typing` before it is
 //! recorded, so nothing here is trusted.
 //!
-//! Definition story (elaborator-design):
-//! - `fn` (computes): elaborated once, then **inlined** at every use — the
-//!   emitted term is substituted in place, shifted across whatever Ψ grew
-//!   in between.
+//! Definition story (elaborator-design; revised 2026-07-31 by
+//! issues/simulate-conversion-cost.md). Both kinds bind a closed Ψ-global
+//! `u : Trm_c(· ⊢ Stmt @ l)` and are referenced by name as `u^δ` (ch. 04
+//! admits referencing a layer-c global from any layer ≥ c: `i' ≤ i`,
+//! typing.rs). They differ in one field of that binding:
+//! - `fn` (computes): the binding carries the elaborated term as its
+//!   **body**, so conversion δ-unfolds it at layer p exactly when running
+//!   it is what a comparison needs. Previously a `fn` was **inlined** at
+//!   every use, which put a copy of the whole body into every statement and
+//!   every induction hypothesis that mentioned it.
 //! - `theorem` (never computes): the proof is kernel-checked against the
-//!   statement, then the statement is bound as an **opaque Ψ-global**
-//!   `u : Trm_c(· ⊢ Stmt @ l)` (ch. 04 admits referencing a layer-c global
-//!   from any layer ≥ c: `i' ≤ i`, typing.rs:674). Later proofs refer to it
-//!   as a neutral — proofs are transported, never evaluated.
+//!   statement, then discarded — the binding stays **opaque**. Later proofs
+//!   refer to it as a neutral; proofs are transported, never evaluated.
 //!
 //! Everything is checked at layer c (full MLTT, no computation *rules* —
 //! conversion still β-reduces during checking, which is all the Nat suite
@@ -29,7 +33,7 @@ use std::rc::Rc;
 use heather_kernel::conv::conv_type;
 use heather_kernel::layer::Layer;
 use heather_kernel::level::Level;
-use heather_kernel::reduce::{whnf_term, whnf_type};
+use heather_kernel::reduce::{whnf_term, whnf_type_delta, Defs};
 use heather_kernel::subst::{GlobalEntry, GlobalSubst};
 use heather_kernel::term::{
     nth, CtxBase, CtxEntry, GlobalBinding, GlobalCtx, GlobalVar, LocalCtx, LocalSubst, LocalVar,
@@ -330,23 +334,29 @@ struct ParamMeta {
     is_self: bool,
 }
 
-/// What a global name refers to.
-enum GlobalInfo {
-    /// An inlined `fn`: the elaborated closed term, its type, level, and
-    /// `|Ψ|` at elaboration time (for global-index shifting on use).
-    Def {
-        term: Rc<Term>,
-        ty: Rc<Type>,
-        level: Level,
-        psi_len: u32,
-        params: Rc<Vec<ParamMeta>>,
-    },
-    /// A `theorem`: absolute position of its `Trm_c` binding in Ψ.
-    Theorem { abs: u32, params: Rc<Vec<ParamMeta>> },
+/// What a global name refers to: the absolute position of its `Trm_c`
+/// binding in Ψ, plus the surface parameter metadata.
+///
+/// `fn` and `theorem` differ only in whether that binding carries a *body*
+/// — a definition or a declaration (`GlobalBinding::Tm`'s `body`,
+/// issues/simulate-conversion-cost.md). Both are referenced by name as
+/// `u^δ`; a `fn` used to be substituted in whole at every use, which put a
+/// copy of its body in every theorem statement and every induction
+/// hypothesis that mentioned it.
+struct GlobalInfo {
+    abs: u32,
+    params: Rc<Vec<ParamMeta>>,
 }
 
 pub struct Elaborator {
     psi: GlobalCtx,
+    /// [`Self::psi`] padded with `goal_base` bodiless slots, so that a
+    /// `GlobalVar` as the *term* world numbers it (goals innermost) resolves
+    /// to the right binding. Only δ-unfolding reads it, and a goal never has
+    /// a body, so the padding's contents are irrelevant and it can be kept
+    /// in step with two cheap rebuilds rather than recomputed per lookup
+    /// (unlike [`Self::goal_psi`], which conversion needs statements from).
+    delta_psi: GlobalCtx,
     globals: HashMap<String, GlobalInfo>,
     /// Declared inductives by name, by nominal tag, and by constructor name.
     /// Constructor names are unqualified and globally unique — there is no
@@ -428,6 +438,7 @@ impl Elaborator {
     pub fn new() -> Self {
         Elaborator {
             psi: GlobalCtx::default(),
+            delta_psi: GlobalCtx::default(),
             globals: HashMap::new(),
             inductives: HashMap::new(),
             by_tag: HashMap::new(),
@@ -504,6 +515,7 @@ impl Elaborator {
     fn elab_decl(&mut self, decl: &Decl) -> R<()> {
         let r = self.elab_decl_inner(decl);
         self.goal_base = 0;
+        self.refresh_delta_psi();
         self.goals.borrow_mut().clear();
         self.goal_spans.borrow_mut().clear();
         self.frozen.set(false);
@@ -519,6 +531,7 @@ impl Elaborator {
         // up embedded in the emitted term, so they must live in the same
         // (shifted) world as the body.
         self.goal_base = count_holes(decl);
+        self.refresh_delta_psi();
         // Elaborate the parameter telescope. Type parameters come first and
         // are ordinary kernel binders at `Ty 0` — level-0 parametric
         // polymorphism, Tarski-style, so a *use* of one in type position is
@@ -710,30 +723,28 @@ impl Elaborator {
                 }))
                 .collect::<Vec<_>>(),
         );
-        match decl.kind {
-            DeclKind::Fn => {
-                self.globals.insert(
-                    decl.name.clone(),
-                    GlobalInfo::Def {
-                        term: Rc::new(term),
-                        ty: Rc::new(stmt),
-                        level: stmt_lvl,
-                        psi_len: self.psi.bindings.len() as u32,
-                        params,
-                    },
-                );
-            }
-            DeclKind::Theorem => {
-                let abs = self.psi.bindings.len() as u32;
-                self.psi.bindings.push(GlobalBinding::Tm {
-                    ctx: LocalCtx { base: CtxBase::Nil, entries: vec![] },
-                    layer: Layer::Code,
-                    ty: Rc::new(stmt),
-                    level: stmt_lvl,
-                });
-                self.globals.insert(decl.name.clone(), GlobalInfo::Theorem { abs, params });
-            }
-        }
+        // Both kinds bind a closed `Trm_c` global; the `fn` is the one that
+        // keeps its body, so later declarations reference it as `u^δ` and
+        // conversion δ-unfolds it at p when — and only when — running it is
+        // what the comparison needs.
+        //
+        // A `theorem` stays opaque even though its proof is right here:
+        // proofs are transported, never evaluated, and a transparent proof
+        // would put the whole proof term back into every conversion that
+        // mentions the theorem.
+        let abs = self.psi.bindings.len() as u32;
+        self.psi.bindings.push(GlobalBinding::Tm {
+            ctx: LocalCtx { base: CtxBase::Nil, entries: vec![] },
+            layer: Layer::Code,
+            ty: Rc::new(stmt),
+            level: stmt_lvl,
+            body: match decl.kind {
+                DeclKind::Fn => Some(Rc::new(term)),
+                DeclKind::Theorem => None,
+            },
+        });
+        self.globals.insert(decl.name.clone(), GlobalInfo { abs, params });
+        self.refresh_delta_psi();
         Ok(())
     }
 
@@ -963,6 +974,7 @@ impl Elaborator {
                     layer: Layer::Code,
                     ty: Rc::new(g.ty.clone()),
                     level: g.level.clone(),
+                    body: None,
                 },
                 // A reserved-but-unused slot (the pre-count is an upper
                 // bound). Nothing refers to it.
@@ -971,6 +983,7 @@ impl Elaborator {
                     layer: Layer::Code,
                     ty: Rc::new(Type::Nat),
                     level: Level::Zero,
+                    body: None,
                 },
             });
         }
@@ -2196,9 +2209,7 @@ impl Elaborator {
     /// The parameters of a callable global, for defaulting goal names.
     fn params_of(&self, name: &str) -> Rc<Vec<ParamMeta>> {
         match self.globals.get(name) {
-            Some(GlobalInfo::Def { params, .. } | GlobalInfo::Theorem { params, .. }) => {
-                Rc::clone(params)
-            }
+            Some(GlobalInfo { params, .. }) => Rc::clone(params),
             None => Rc::new(Vec::new()),
         }
     }
@@ -2974,14 +2985,7 @@ impl Elaborator {
             );
         }
         match self.globals.get(name) {
-            Some(GlobalInfo::Def { term, ty, level, psi_len, .. }) => {
-                // Shift global indices across whatever Ψ grew since the def
-                // was elaborated (GlobalVar counts from the innermost end),
-                // plus the current declaration's goal prefix.
-                let by = self.psi.bindings.len() as u32 + self.goal_base - psi_len;
-                Ok(((**term).shift_global(by), (**ty).shift_global(by), level.clone()))
-            }
-            Some(GlobalInfo::Theorem { abs, .. }) => {
+            Some(GlobalInfo { abs, .. }) => {
                 let len = self.psi.bindings.len() as u32;
                 // The goals sit innermost, so a committed binding is that much
                 // further out.
@@ -2989,13 +2993,13 @@ impl Elaborator {
                 let GlobalBinding::Tm { ty, level, .. } =
                     &self.psi.bindings[*abs as usize]
                 else {
-                    unreachable!("theorem index points at a non-Trm binding");
+                    unreachable!("global index points at a non-Trm binding");
                 };
                 // Stored scoped in its prefix of Ψ; rescope to the full Ψ
                 // (the kernel's own lookup convention, typing.rs). This needs
                 // no goal offset of its own: `var.0` already carries it.
                 let ty = ty.shift_global(var.0 + 1);
-                // The theorem is closed (· ⊢), so the delayed substitution
+                // The binding is closed (· ⊢), so the delayed substitution
                 // is the empty map out of the current Γ.
                 let subst = LocalSubst {
                     tail: SubstTail::Empty {
@@ -3004,6 +3008,15 @@ impl Elaborator {
                     },
                     terms: vec![],
                 };
+                // …and the *type* travels the same way: `T[δ]`, exactly the
+                // kernel's own rule for `u^δ` (typing.rs, `tm_infer`). A
+                // closed statement can still mention globals, and each such
+                // occurrence carries a `·^k` tail recording the Γ it was
+                // written in — `k = 0` here, so it must be re-tailed to this
+                // Γ or the kernel rejects it as a `SubstMismatch`. Invisible
+                // while `fn`s were inlined, because then a closed statement
+                // really had nothing delayed inside it.
+                let ty = ty.apply_local(&subst);
                 Ok((Term::GlobalTm { var, subst }, ty, level.clone()))
             }
             None => err(format!("unbound name `{name}`"), span),
@@ -3013,8 +3026,24 @@ impl Elaborator {
     // -- kernel oracle ------------------------------------------------------
 
     fn whnf(&self, cx: &Cx, ty: &Type, span: Span) -> R<Type> {
-        whnf_type(ty, &cx.gamma, self.fuel)
+        whnf_type_delta(ty, &cx.gamma, Defs::transparent(&self.delta_psi), self.fuel)
             .map_err(|_| ElabError::Elab { msg: "out of fuel reducing a type".into(), span })
+    }
+
+    /// Rebuild [`Self::delta_psi`]. Called wherever Ψ or `goal_base` moves.
+    fn refresh_delta_psi(&mut self) {
+        let mut bindings = self.psi.bindings.clone();
+        bindings.resize(
+            bindings.len() + self.goal_base as usize,
+            GlobalBinding::Tm {
+                ctx: LocalCtx { base: CtxBase::Nil, entries: vec![] },
+                layer: Layer::Code,
+                ty: Rc::new(Type::Nat),
+                level: Level::Zero,
+                body: None,
+            },
+        );
+        self.delta_psi = GlobalCtx { bindings };
     }
 }
 
@@ -3330,7 +3359,7 @@ fn strengthen_global(t: &Term, g: u32) -> Term {
 /// The identity substitution of `gamma`, weakened so its source is `gamma`
 /// extended by `extra` fresh entries: maps a term scoped in `gamma, z` (once
 /// `extended`) into `gamma` + the extra binders.
-fn embed(gamma: &LocalCtx, extra: u32) -> LocalSubst {
+pub(crate) fn embed(gamma: &LocalCtx, extra: u32) -> LocalSubst {
     let m = gamma.entries.len() as u32;
     let tail = match gamma.base {
         CtxBase::Nil => SubstTail::Empty { len: m + extra, base: CtxBase::Nil },

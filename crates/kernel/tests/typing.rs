@@ -300,6 +300,7 @@ fn sample_psi() -> GlobalCtx {
                 layer: Layer::Var,
                 ty: rty(gty(0, &g_ctx(1))),
                 level: Level::Zero,
+                body: None,
             },
         ],
     }
@@ -353,6 +354,7 @@ fn global_variables_and_layer_order() {
                 layer: Layer::Code,
                 ty: rty(Type::Nat),
                 level: Level::Zero,
+                body: None,
             },
         ],
     };
