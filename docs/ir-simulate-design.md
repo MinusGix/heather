@@ -306,7 +306,13 @@ option 2, one normal form, is the removal rather than the paper-over).
    amended — see note 7.* `fuel_monotone` in both the `+ k` and the `<=`
    shape; `refines` bounded, with `refines_refl`/`refines_trans` and a
    three-link concrete chain (the add loop, a `LetCall` to it, a `LetCall`
-   to that) composing at `plus2 ∘ plus2`.
+   to that) composing at `plus2 ∘ plus2`. **The full stress test —
+   two *semantically different* IRs — landed 2026-08-01**
+   (`issues/cross-ir-refinement.md`): `add_rec_body`/`add_rec_prog` is `add`
+   by recursive `Apply` (non-tail, bound `2a + 2` against the loop's `a + 5`),
+   `add_rec_runs` is its invariant over an arbitrary environment tail, and
+   `loop_refines_rec`/`rec_refines_loop` relate the two IRs in both
+   directions. Two findings are recorded in note 8.
 4. A hand-written `equiv`-shaped theorem for one function, discharged at a
    computed bound — the first end-to-end certificate, ahead of any
    `Compile` class machinery. *Done 2026-07-31:* `add_equiv` is ∀-arguments
@@ -570,6 +576,49 @@ recorded here with its reason so the next reader doesn't re-derive it.
    which scrutinizes through `k_iter` rather than `k_bind`) keeps the remember
    idiom. Net for the round the file is 27.5s → 33.7s, the increase being the
    new surface itself — two records and nine theorems — and not the rewrite.
+
+8. **A refinement between two different programs is stated on a *family* of
+   environments, not on all of them** (2026-08-01, the cross-IR round). §6 says
+   "IR₂ refines IR₁ iff every convergence of IR₁ is a convergence of IR₂", and
+   `Refines` says it with `(env: Val)` quantified over every value. Between the
+   theta-loop `add` and the recursive-`Apply` `add` that statement is **false**,
+   and `no_full_refines` in the library derives `0 = 1` from an inhabitant of
+   it. The witness is an environment whose first slot is a tag-1 node whose
+   field is a tag-0 node that itself carries a field: neither IR sticks (the
+   extra field only shifts the lexical arm environment), and they answer
+   differently, because the loop threads its accumulator *through the carried
+   slots* — where a junk field displaces it — while the recursion wraps its
+   `Succ` around the callee's answer on the way out, where nothing can. So
+   `RefinesNat2` carries the family's binders (`a`, `b` embedded, an arbitrary
+   environment tail) in place of `Refines`'s `env`. This is not a weakening of
+   §6: it is the observation that a certificate relates two IRs *on the calling
+   convention it is about* — the same convention `CompileNat2` already fixes —
+   and that well-formedness, deliberately extrinsic (§5), is exactly what the
+   family binders re-supply where a relation needs it. The clean general form
+   would be `RefinesOn(dom: Val -> Type, …)`, which does not typecheck today:
+   a record type cannot be passed as a `Val -> Type` value, since `NatEnv(e)`
+   in expression position is the record's constructor and its value parameters
+   are then uninferable (`issues/surface-existential.md`'s neighbourhood).
+
+   The proof shape is the second finding, and it is the one that generalizes.
+   The two IRs walk different environments, so there is no slot-by-slot
+   transport of one invariant into the other, and none is needed: **each side
+   is certified independently against the spec function, and functionality of
+   `eval` glues them**. `eval_functional` (two convergent runs at different
+   fuels agree — raise both to `n + m`, then `inj` on `Out`) turns the
+   hypothesis's unknown `vs` into the value the first certificate names, and
+   the second certificate discharges the conclusion. No simulation diagram, no
+   bisimulation, no relation between the two executions at all. The
+   env-independence the round expected shows up where the design predicts:
+   `LetMatch` arms are *lexical* (note 5), so the recursive IR's arm sees the
+   caller's environment underneath its own slots, and its invariant has to
+   quantify over that tail — the recursive call builds a **closed** two-slot
+   environment, so a tail-fixed statement could not be applied to its own
+   induction hypothesis. `add_rec_env_indep` / `add_loop_env_indep` state the
+   consequence equationally. Note that the general form of the claim ("the
+   answer depends only on the slots the body reads") is **false** here for the
+   same reason the unrestricted `Refines` is: junk fields shift the arm
+   environment, and a shifted read reaches into the tail.
 
 **Landed the same day** (was: deferred to the next round): §11 items 3–4.
 Both blockers were called correctly. `fuel_monotone` *is* an IH-generalizing

@@ -808,6 +808,31 @@ theorem le_add(n: Nat): (m: Nat) -> leb(n)(m) = True -> add(n, sub(m)(n)) = m {
     }
 }
 
+// the rest of the order kit, wanted by `eval_functional` below: two runs of
+// the interpreter at different fuels are compared by raising both to `n + m`,
+// which is above each of them.
+theorem le_refl(n: Nat): leb(n)(n) = True { match n { Zero => refl, Succ(k) => le_refl(k) } }
+
+theorem le_succ_r(n: Nat): (m: Nat) -> leb(n)(m) = True -> leb(n)(Succ(m)) = True {
+    match n as λ z => (m: Nat) -> leb(z)(m) = True -> leb(z)(Succ(m)) = True {
+        Zero => λ m h => refl,
+        Succ(k, ih) => λ m h =>
+            match m as λ y => leb(Succ(k))(y) = True -> leb(Succ(k))(Succ(y)) = True {
+                Zero => λ bad => absurd(bad),
+                Succ(m2) => λ good => ih(m2, good),
+            }(h),
+    }
+}
+
+theorem le_add_l(n: Nat, m: Nat): leb(n)(add(n, m)) = True {
+    match m { Zero => le_refl(n), Succ(m2) => le_succ_r(n)(add(n, m2), le_add_l(n, m2)) }
+}
+
+// `add` recurses on its second argument, so this one is the definitional side
+theorem le_add_r(n: Nat, m: Nat): leb(m)(add(n, m)) = True {
+    match m { Zero => refl, Succ(m2) => le_add_r(n, m2) }
+}
+
 // doc §6, verbatim shape: `simulate(p, f, args, n) == Out(vs) -> n <= m ->
 // simulate(p, f, args, m) == Out(vs)`, with `simulate` spelled as the landed
 // `eval` and `n <= m` as `leb(n)(m) = True`.
@@ -852,6 +877,29 @@ theorem conv_loosen(p: Prog, env: Val, ir: Ir, vs: Val, m: Nat,
                     c: Converges(p, env, ir, vs), hle: leb(c.n)(m) = True)
     : eval(m, p)(env, ir) = Out(vs)
 { fuel_monotone(p, env, ir, vs, c.n, m, c.h, hle) }
+
+// FUNCTIONALITY. `eval` is a function of its fuel, so two convergent runs of
+// the same program on the same environment answer the same thing — the two
+// fuels are raised to their sum, where the two equations meet and `inj` on
+// `Out` finishes. This is what lets a refinement be discharged from two
+// independent certificates rather than by relating the two executions
+// step-by-step: the hypothesis's unknown `vs` is *identified* with the value
+// the certificate names.
+theorem eval_functional(prog: Prog, env: Val, ir: Ir, vs: Val, ws: Val, n: Nat, m: Nat,
+                        h1: eval(n, prog)(env, ir) = Out(vs),
+                        h2: eval(m, prog)(env, ir) = Out(ws))
+    : vs = ws
+{
+    inj(trans(sym(fuel_monotone(prog, env, ir, vs, n, add(n, m), h1, le_add_l(n, m))),
+              fuel_monotone(prog, env, ir, ws, m, add(n, m), h2, le_add_r(n, m))))
+}
+
+// …and the same at the ∃-level, where it is the statement a client wants:
+// `Converges` is single-valued.
+theorem conv_functional(p: Prog, env: Val, ir: Ir, vs: Val, ws: Val,
+                        c1: Converges(p, env, ir, vs), c2: Converges(p, env, ir, ws))
+    : vs = ws
+{ eval_functional(p, env, ir, vs, ws, c1.n, c2.n, c1.h, c2.h) }
 
 // ---------------------------------------------------------------------------
 // `refines` (doc §6), in BOTH shapes.
@@ -1126,4 +1174,262 @@ fn add_instance_loop() -> CompileNat2(add_spec) {
         entry: ir_loop(),
         cert: λ (a: Nat) => λ (b: Nat) => add_converges(add_chain(), a, b),
     }
+}
+
+// ===========================================================================
+// CROSS-IR REFINEMENT (issues/cross-ir-refinement.md; doc §6's stress test in
+// full). The landed chain above relates ONE program reached through zero, one
+// and two `LetCall` wrappers — structural composition. This section relates
+// two programs that share no structure at all: the theta-loop `add`
+// (`ir_loop`/`add_body`, a tail-recursive accumulator) and a recursive-`Apply`
+// `add` (non-tail: the callee's answer is wrapped in a `Succ` on the way out).
+// Different environments, different node alphabets, different fuel profiles;
+// one refinement.
+
+// The recursive IR. Function body, env [a, b]: match `a`; the Zero arm returns
+// `b`; the Succ arm calls fun 0 on (pred, b) and wraps the answer.
+//
+// Slot maps, since they are where the two IRs stop agreeing: the loop's body
+// runs CLOSED on its two carried slots, while this body's arms are LEXICAL —
+// the Succ arm sees [pred, a, b, …caller's tail], so slot 2 is `b` and the
+// caller's environment is still underneath. That is why the invariant below is
+// stated over an arbitrary environment tail (env-independence) rather than
+// transported slot-by-slot the way `add_loop_runs` does.
+
+// Zero arm: env [a, b, …]; the answer is `b`
+fn add_rec_arm_zero() -> Ir { Ret(RCons(1, RNil)) }
+
+// Succ arm: env [pred, a, b, …]; call fun 0 on (pred, b), bind its answer at
+// slot 0, wrap it in Succ, return it
+fn add_rec_arm_succ() -> Ir {
+    LetCall(0, RCons(0, RCons(2, RNil)),
+        LetCon(1, RCons(0, RNil),
+            Ret(RCons(0, RNil))))
+}
+
+fn add_rec_body() -> Ir {
+    LetMatch(0, Arm(add_rec_arm_zero(), Arm(add_rec_arm_succ(), NoArm)),
+        Ret(RCons(0, RNil)))
+}
+
+fn add_rec_prog() -> Prog { PFun(add_rec_body(), PNil) }
+
+fn ir_rec() -> Ir { add_rec_body() }
+
+// The fuel profile is the other place the two IRs differ. The loop costs
+// `a + 5` (one step per iteration plus a constant); the recursion costs
+// `2a + 2`, two steps of nesting per level — the `LetMatch` and the `LetCall`
+// — so the bound is `add(dbl(a), 2)`. It has to be spelled so that it REDUCES
+// at an open `a`: `add(x, 2)` is `Succ(Succ(x))` for any `x` (add recurses on
+// its second argument), which is exactly the two `Succ`s the induction step
+// peels.
+fn dbl(n: Nat) -> Nat { match n { Zero => Zero, Succ(k) => Succ(Succ(dbl(k))) } }
+
+// concrete fixtures, in the style of the loop's (doc §11 item 2), plus the
+// negative control that the bound is EXACT and not merely sufficient
+theorem rec_zero_three():
+    eval(2, add_rec_prog())(VCons(embed_nat(0), VCons(embed_nat(3), VNil)), add_rec_body())
+    = Out(VCons(embed_nat(3), VNil))
+{ refl }
+
+theorem rec_two_three():
+    eval(6, add_rec_prog())(VCons(embed_nat(2), VCons(embed_nat(3), VNil)), add_rec_body())
+    = Out(VCons(embed_nat(5), VNil))
+{ refl }
+
+theorem rec_two_three_short():
+    eval(5, add_rec_prog())(VCons(embed_nat(2), VCons(embed_nat(3), VNil)), add_rec_body())
+    = OutOfFuel
+{ refl }
+
+// THE ENV-INDEPENDENCE LEMMA, as the invariant that carries it: the recursive
+// body's answer on [embed a, embed b, tail] does not mention `tail`. The
+// quantifier over `tail` is what makes the induction go through at all — the
+// recursive call builds a CLOSED environment [embed pred, embed b] (tail
+// VNil) while the caller's environment has whatever tail the theorem was
+// instantiated at, so a `tail`-fixed statement would not apply to its own
+// induction hypothesis.
+theorem add_rec_runs(a: Nat):
+    (b: Nat) -> (tail: Val)
+    -> eval(add(dbl(a), 2), add_rec_prog())(
+           VCons(embed_nat(a), VCons(embed_nat(b), tail)), add_rec_body())
+       = Out(VCons(embed_nat(add(b, a)), VNil))
+{
+    match a as λ z =>
+        (b: Nat) -> (tail: Val)
+        -> eval(add(dbl(z), 2), add_rec_prog())(
+               VCons(embed_nat(z), VCons(embed_nat(b), tail)), add_rec_body())
+           = Out(VCons(embed_nat(add(b, z)), VNil)) {
+        Zero => λ b tail => refl,
+        // the ih is used at tail = VNil (the call's closed environment); the
+        // motive is the two nested `k_bind`s the step unfolds to — the outer
+        // one is the LetMatch rebinding its arm's answer, the inner one is the
+        // LetCall rebinding the callee's
+        Succ(a2, ih) => λ b tail =>
+            j(sym(ih(b, VNil)),
+              λ r p =>
+                k_bind(eval(add(dbl(a2), 3), add_rec_prog()),
+                       VCons(embed_nat(Succ(a2)), VCons(embed_nat(b), tail)),
+                       Ret(RCons(0, RNil)),
+                       k_bind(eval(add(dbl(a2), 2), add_rec_prog()),
+                              VCons(embed_nat(a2),
+                                    VCons(embed_nat(Succ(a2)), VCons(embed_nat(b), tail))),
+                              LetCon(1, RCons(0, RNil), Ret(RCons(0, RNil))),
+                              r))
+                = Out(VCons(embed_nat(add(b, Succ(a2))), VNil)),
+              refl),
+    }
+}
+
+// the loop side at an arbitrary tail too, so the two IRs are compared on the
+// SAME family of environments. The loop needs no new induction:
+// `add_loop_runs` is already about the closed carried environment, and the
+// tail only ever sits under a `gather` of slots 0 and 1.
+theorem add_ir_runs_env(prog: Prog, a: Nat, b: Nat, tail: Val):
+    eval(add(a, 5), prog)(VCons(embed_nat(a), VCons(embed_nat(b), tail)), add_body())
+    = Out(VCons(bumps(a)(embed_nat(b)), VNil))
+{
+    j(sym(add_loop_runs(prog, a)(embed_nat(b))),
+      λ r p => k_bind(eval(add(a, 4), prog),
+                      VCons(embed_nat(a), VCons(embed_nat(b), tail)),
+                      Ret(RCons(1, RNil)), r)
+               = Out(VCons(bumps(a)(embed_nat(b)), VNil)),
+      refl)
+}
+
+theorem add_equiv_env(prog: Prog, a: Nat, b: Nat, tail: Val):
+    eval(add(a, 5), prog)(VCons(embed_nat(a), VCons(embed_nat(b), tail)), add_body())
+    = Out(VCons(embed_nat(add(b, a)), VNil))
+{
+    j(bumps_embed(a)(b),
+      λ w p => eval(add(a, 5), prog)(VCons(embed_nat(a), VCons(embed_nat(b), tail)),
+                                     add_body())
+               = Out(VCons(w, VNil)),
+      add_ir_runs_env(prog, a, b, tail))
+}
+
+// env-independence stated as such, for each IR: on this family the answer is
+// stable under replacing the unused slots wholesale. (It is a corollary of the
+// two invariants rather than a lemma feeding them — the induction needs the
+// quantified form, and the equational form is what a reader wants to see.)
+theorem add_rec_env_indep(a: Nat, b: Nat, t1: Val, t2: Val):
+    eval(add(dbl(a), 2), add_rec_prog())(
+        VCons(embed_nat(a), VCons(embed_nat(b), t1)), add_rec_body())
+    = eval(add(dbl(a), 2), add_rec_prog())(
+        VCons(embed_nat(a), VCons(embed_nat(b), t2)), add_rec_body())
+{ trans(add_rec_runs(a)(b, t1), sym(add_rec_runs(a)(b, t2))) }
+
+theorem add_loop_env_indep(prog: Prog, a: Nat, b: Nat, t1: Val, t2: Val):
+    eval(add(a, 5), prog)(VCons(embed_nat(a), VCons(embed_nat(b), t1)), add_body())
+    = eval(add(a, 5), prog)(VCons(embed_nat(a), VCons(embed_nat(b), t2)), add_body())
+{ trans(add_equiv_env(prog, a, b, t1), sym(add_equiv_env(prog, a, b, t2))) }
+
+// the recursive IR's certificate, in the ∃-form, at any tail
+theorem add_rec_converges(a: Nat, b: Nat, tail: Val)
+    : Converges(add_rec_prog(), VCons(embed_nat(a), VCons(embed_nat(b), tail)),
+                add_rec_body(), VCons(embed_nat(add(b, a)), VNil))
+{ Converges(add(dbl(a), 2), add_rec_runs(a)(b, tail)) }
+
+// ---------------------------------------------------------------------------
+// The relation. `Refines` itself is UNRESTRICTED — it quantifies over every
+// environment, junk included — and between these two IRs it is FALSE, which is
+// the round's first finding and is refuted below rather than asserted. What
+// holds is the refinement on the family the certificates are about: two
+// embedded `Nat` arguments over an arbitrary environment tail, the calling
+// convention `CompileNat2` already fixes.
+//
+// This is `Refines` with its `(env: Val)` replaced by the family's own
+// binders; a `dom: Val -> Type` parameter (a `RefinesOn(dom, …)`) would say it
+// once and generally, but a record type cannot be passed as a value of type
+// `Val -> Type` today — `NatEnv(e)` in expression position is the record's
+// CONSTRUCTOR, and its value parameters are then uninferable. Recorded as a
+// follow-up rather than worked around.
+fn RefinesNat2(p1: Prog, i1: Ir, p2: Prog, i2: Ir) -> Type {
+    (a: Nat) -> (b: Nat) -> (tail: Val) -> (vs: Val)
+    -> Converges(p1, VCons(embed_nat(a), VCons(embed_nat(b), tail)), i1, vs)
+    -> Converges(p2, VCons(embed_nat(a), VCons(embed_nat(b), tail)), i2, vs)
+}
+
+// THE CROSS-IR REFINEMENT. The proof is not a simulation diagram and not a
+// slot-by-slot transport: the hypothesis hands over an unknown `vs`,
+// `conv_functional` identifies it with the value the LOOP's certificate names,
+// and the RECURSIVE IR's certificate — proved independently, over its own
+// environments and its own fuel bound — supplies the conclusion. That is the
+// shape every `translate`/pass certificate has when both sides are certified
+// against one spec function.
+theorem loop_refines_rec(): RefinesNat2(add_prog(), ir_loop(), add_rec_prog(), ir_rec())
+{
+    λ a b tail vs c =>
+        j(sym(conv_functional(add_prog(),
+                  VCons(embed_nat(a), VCons(embed_nat(b), tail)), ir_loop(),
+                  vs, VCons(embed_nat(add(b, a)), VNil), c,
+                  converges_intro(add_prog(),
+                      VCons(embed_nat(a), VCons(embed_nat(b), tail)), ir_loop(),
+                      VCons(embed_nat(add(b, a)), VNil), add(a, 5),
+                      add_equiv_env(add_prog(), a, b, tail)))),
+          λ w p => Converges(add_rec_prog(),
+                       VCons(embed_nat(a), VCons(embed_nat(b), tail)), ir_rec(), w),
+          add_rec_converges(a, b, tail))
+}
+
+// …and back the other way, which costs one more theorem because both sides are
+// certified: the refinement is an equivalence on this family, so either IR may
+// stand for the other.
+theorem rec_refines_loop(): RefinesNat2(add_rec_prog(), ir_rec(), add_prog(), ir_loop())
+{
+    λ a b tail vs c =>
+        j(sym(conv_functional(add_rec_prog(),
+                  VCons(embed_nat(a), VCons(embed_nat(b), tail)), ir_rec(),
+                  vs, VCons(embed_nat(add(b, a)), VNil), c,
+                  add_rec_converges(a, b, tail))),
+          λ w p => Converges(add_prog(),
+                       VCons(embed_nat(a), VCons(embed_nat(b), tail)), ir_loop(), w),
+          converges_intro(add_prog(),
+              VCons(embed_nat(a), VCons(embed_nat(b), tail)), ir_loop(),
+              VCons(embed_nat(add(b, a)), VNil), add(a, 5),
+              add_equiv_env(add_prog(), a, b, tail)))
+}
+
+// ---------------------------------------------------------------------------
+// WHY THE RESTRICTION IS NOT COWARDICE (doc §11 item 6's discipline, applied
+// to a relation instead of a program): the unrestricted `Refines` between
+// these two IRs is refutable, and here is the witness.
+//
+// Feed both IRs an environment whose first slot is junk — a tag-1 node whose
+// field is a tag-0 node that itself carries a field. Neither IR sticks: the
+// extra field simply shifts the arm's environment, and both keep computing.
+// They disagree. The loop's accumulator is threaded THROUGH the carried slots,
+// so the junk field displaces it and the final `Succ` is lost; the recursion
+// wraps its `Succ` around the callee's answer on the way out, where nothing
+// can displace it. Two IRs that agree on every well-formed input differ off
+// it, which is exactly what makes `Refines`-the-unrestricted-relation the
+// wrong statement for a certificate — and why the family binders belong in
+// `RefinesNat2`.
+
+fn junk_u() -> Val { VCon(7, VNil) }
+fn junk_q() -> Val { VCon(0, VCons(junk_u(), VNil)) }
+fn junk_n() -> Val { VCon(1, VCons(junk_q(), VNil)) }
+fn junk_env() -> Val { VCons(junk_n(), VCons(VCon(8, VNil), VNil)) }
+
+theorem loop_on_junk():
+    eval(30, add_prog())(junk_env(), ir_loop()) = Out(VCons(junk_q(), VNil))
+{ refl }
+
+theorem rec_on_junk():
+    eval(30, add_rec_prog())(junk_env(), ir_rec())
+    = Out(VCons(VCon(1, VCons(junk_q(), VNil)), VNil))
+{ refl }
+
+// the refutation: an unrestricted `Refines` would make the two answers above
+// equal, and `inj` reads a false constructor equation off them
+theorem no_full_refines(r: Refines(add_prog(), ir_loop(), add_rec_prog(), ir_rec()))
+    : 0 = 1
+{
+    inj(inj(conv_functional(add_rec_prog(), junk_env(), ir_rec(),
+        VCons(junk_q(), VNil), VCons(VCon(1, VCons(junk_q(), VNil)), VNil),
+        r(junk_env(), VCons(junk_q(), VNil),
+          converges_intro(add_prog(), junk_env(), ir_loop(),
+                          VCons(junk_q(), VNil), 30, loop_on_junk())),
+        converges_intro(add_rec_prog(), junk_env(), ir_rec(),
+                        VCons(VCon(1, VCons(junk_q(), VNil)), VNil), 30, rec_on_junk()))))
 }

@@ -32,7 +32,14 @@
 //! the loop body, and two coupling controls — +5s debug, +0.35s release
 //! (34.1s), all of it repackaging landed theorems.
 //!
-//! BUDGET. This binary is **~48 CPU-seconds** against `scripts/test`'s
+//! Then **~56s** with the cross-IR refinement round
+//! (`issues/cross-ir-refinement.md`): a recursive-`Apply` `add`, its
+//! env-independent invariant, `eval_functional`, and `RefinesNat2` between the
+//! two structurally unrelated IRs — release 32.9s → 40.4s. The added time is
+//! new surface (one more fuel-indexed induction and three concrete fixtures),
+//! not a slowdown of anything landed.
+//!
+//! BUDGET. This binary is **~56 CPU-seconds** against `scripts/test`'s
 //! 300-second `ulimit -t`, and nearly all of that is the one full-library
 //! test. It was ~203s (after 9.2s, 165s, 194s) until 2026-08-01, when the
 //! workspace `[profile.dev.package.*]` overrides landed: the kernel/elab/
