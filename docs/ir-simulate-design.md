@@ -536,6 +536,32 @@ recorded here with its reason so the next reader doesn't re-derive it.
    `Type<0>` to be only half true: an *equation* body works and `P(n)` in type
    position works; what fails is `->` in an expression body.)
 
+   **Amendment, 2026-08-01 (same day, later round): the second reason is
+   retired too, and note 7 is now fully spent.** `->` and dependent binder
+   groups are expressions (`docs/types-as-expressions.md`,
+   `issues/type-definitions.md` route 2 — no kernel change, no new declaration
+   form), so a type-valued `fn` is an ordinary `fn` and
+
+   ```heather
+   fn Refines(p1: Prog, i1: Ir, p2: Prog, i2: Ir) -> Type {
+       (env: Val) -> (vs: Val)
+       -> Converges(p1, env, i1, vs) -> Converges(p2, env, i2, vs)
+   }
+   ```
+
+   is the definition §6 asked for. `refines_refl_conv`, `refines_trans_conv`
+   and `refines_of_bounded` in `lib/ir_v1.hthr` are now stated *through* the
+   name rather than spelled out — the fuel-map-free ∃-shape is the one that
+   got named, which is the right one: the bound is inside `Converges`, so
+   `Refines` has exactly the four arguments the relation is about. The bounded
+   form stays spelled out, since it is `refines_of_bounded`'s hypothesis and
+   naming it would abbreviate one use.
+
+   The cost went the other way from the guess: the file is **35.96s → 32.90s**
+   release (−8.5%), because the statement is elaborated once instead of six
+   times and conversion compares a δ-stuck head instead of the shape it
+   unfolds to. Recorded on `issues/schema-construction-caching.md`.
+
    A second consumer landed with it: `BindInv`, the inversion record for
    `k_bind` (`k_bind(ev, env, rest, r) = Out(vs) -> ∃ ws. r = Out(ws) × …`),
    proved once and consumed by `let { ws, hr, hk } = …`. It **retires three of

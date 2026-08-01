@@ -153,3 +153,4 @@ Two candidate routes, neither costed:
 - **[[indexed-families]]** owns whether declared families come from indexed W
   or ford over `Wf`. Assumed here: only that the surface has no syntax for
   declaring one today.
+- 2026-08-01: Stale-fact correction: this issue's note that '`->` in an expression body still fails (`fn Q(n: Nat) -> Type { Nat -> Nat }` is a parse error), which is why the forall-shaped half of an interface still cannot be NAMED' is false as of 2026-08-01. [[type-definitions]] landed types-as-expressions (docs/types-as-expressions.md): `->` and `(x: A) ->` are admitted in expression position, that exact spelling checks, and `Refines` is a declaration in lib/ir_v1.hthr. Nothing else here moves — this issue's own subject (the existential/Sigma half) landed with value parameters and stays as recorded.

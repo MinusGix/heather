@@ -357,7 +357,11 @@ denotes a family**, and that is where it dies today. Measured:
   "a `fn` returning `Type<0>` cannot help" is **partly stale**: the *equation*
   body works; what still fails is `->` in an expression body
   (`fn Q(n: Nat) -> Type { Nat -> Nat }` → `parse error: expected `}`, found
-  Arrow`), which is `issues/type-definitions`' scope.
+  Arrow`), which is `issues/type-definitions`' scope. **Landed 2026-08-01**
+  (`docs/types-as-expressions.md`): `->` and `(x: A) ->` are expressions, so
+  that spelling now checks and the second half of this bullet is spent. Bill
+  item (ii) below is paid; item (i) — passing a family as a *type argument* —
+  is not.
 - `theorem ex(F: Nat -> Type, n: Nat, h: F(n)): F(n) { h }` **works** — a
   family-valued *binder* in a statement is already fine.
 

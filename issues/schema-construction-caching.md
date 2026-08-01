@@ -3,7 +3,7 @@ title: Fixed syntax schemas are rebuilt fresh per check; cache or share their sk
 status: open
 labels: [kernel,performance]
 created: 2026-07-31
-updated: 2026-07-31
+updated: 2026-08-01
 ---
 
 The `code/check-identity-recursor` profiles from the
@@ -43,3 +43,7 @@ constructor, never a second transcription.
 
 - **[[bounds-metadata-taxes-one-shot-checking]]** owns the measured tax.
   Assumed here: only that one-shot fresh terms are where it is paid.
+
+## Log
+
+- 2026-08-01: Datum from [[type-definitions]], and it points the OPPOSITE way from this issue's worry about named abbreviations costing conversion time. Naming the `Refines` statement shape in lib/ir_v1.hthr as a delta-transparent type-valued `fn` — replacing three verbatim spellings and three more inside refines_trans_conv's hypotheses — took the file from 35.96s to 32.90s release (-8.5%), and the debug test binary from 204 to 194 CPU-s. Two mechanisms, both worth remembering over the number: (i) the statement is ELABORATED once instead of six times, which is elaborator work this issue does not otherwise measure; (ii) conversion compares a delta-STUCK head, and conv.rs's delta_lazy only unfolds when the comparison would otherwise fail — so a successful comparison of two identical abbreviations never touches the body at all. The implication for caching: naming is itself a sharing mechanism at the SOURCE level, and it is free. Where this issue's schemas are concerned that suggests checking whether the expensive instantiations are ones a surface-level name could have shared, before building a cache to share them after the fact.

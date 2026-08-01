@@ -21,7 +21,13 @@
 //! ~1.1s of the 34s, so the first test is a fast gate on everything that is
 //! *not* a proof, and the second is the whole acceptance.
 //!
-//! BUDGET. This binary is **~204 CPU-seconds** debug against `scripts/test`'s
+//! Then **~194s** once `Refines` became a *name* rather than a statement shape
+//! spelled out six times (`docs/types-as-expressions.md`,
+//! `issues/type-definitions.md`): release 35.96s → 32.90s, −8.5%. Naming a
+//! shape is a saving, not a cost — the statement is elaborated once, and
+//! conversion compares a δ-stuck head instead of what it unfolds to.
+//!
+//! BUDGET. This binary is **~194 CPU-seconds** debug against `scripts/test`'s
 //! 300-second `ulimit -t` (was 9.2s, then 165s), and nearly all of that is the
 //! one full-library test. That is the headroom this file has left, and it is
 //! now thin: the next theorem in `lib/ir_v1.hthr` whose motive forces a case

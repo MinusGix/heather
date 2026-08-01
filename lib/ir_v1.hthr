@@ -861,20 +861,25 @@ theorem conv_loosen(p: Prog, env: Val, ir: Ir, vs: Val, m: Nat,
 // is inside the `Converges`, so composition is ordinary implication chaining
 // and the bound arithmetic that `refines_trans` had to thread disappears.
 //
-// The relation is still a statement SHAPE rather than a definition: a `fn`
-// body is an expression and `->` is not an expression, so `refines` cannot be
-// given a name today. That is [[type-definitions]]'s to close, and it is the
-// only part of doc §13 note 7 that survives this round.
+// The relation now HAS A NAME. A type is an ordinary expression
+// (docs/types-as-expressions.md), so `Refines` is an ordinary `fn` whose
+// result type is `Type` and whose body is a function type; `Refines(…)` in
+// type position is `El` of the call, and conversion sees through it by δ.
+// This closes doc §13 note 7's "refines cannot be given a name"
+// ([[type-definitions]]).
 
-theorem refines_refl_conv(prog: Prog, ir: Ir):
-    (env: Val) -> (vs: Val) -> Converges(prog, env, ir, vs) -> Converges(prog, env, ir, vs)
+fn Refines(p1: Prog, i1: Ir, p2: Prog, i2: Ir) -> Type {
+    (env: Val) -> (vs: Val) -> Converges(p1, env, i1, vs) -> Converges(p2, env, i2, vs)
+}
+
+theorem refines_refl_conv(prog: Prog, ir: Ir): Refines(prog, ir, prog, ir)
 { λ env vs c => c }
 
 theorem refines_trans_conv(
     p1: Prog, i1: Ir, p2: Prog, i2: Ir, p3: Prog, i3: Ir,
-    r1: (env: Val) -> (vs: Val) -> Converges(p1, env, i1, vs) -> Converges(p2, env, i2, vs),
-    r2: (env: Val) -> (vs: Val) -> Converges(p2, env, i2, vs) -> Converges(p3, env, i3, vs))
-    : (env: Val) -> (vs: Val) -> Converges(p1, env, i1, vs) -> Converges(p3, env, i3, vs)
+    r1: Refines(p1, i1, p2, i2),
+    r2: Refines(p2, i2, p3, i3))
+    : Refines(p1, i1, p3, i3)
 { λ env vs c => r2(env, vs, r1(env, vs, c)) }
 
 // The ∃-CLOSURE, proved rather than asserted: a bounded refinement at any
@@ -884,7 +889,7 @@ theorem refines_trans_conv(
 theorem refines_of_bounded(p1: Prog, i1: Ir, p2: Prog, i2: Ir, b: Nat -> Nat,
     r: (env: Val) -> (vs: Val) -> (n: Nat)
        -> eval(n, p1)(env, i1) = Out(vs) -> eval(b(n), p2)(env, i2) = Out(vs))
-    : (env: Val) -> (vs: Val) -> Converges(p1, env, i1, vs) -> Converges(p2, env, i2, vs)
+    : Refines(p1, i1, p2, i2)
 { λ env vs c => Converges(b(c.n), r(env, vs, c.n, c.h)) }
 
 // ---------------------------------------------------------------------------
