@@ -34,10 +34,13 @@ hardest.
 
 ```
 item    := … | record
-record  := "record" name tyvars? "{" field ("," field)* ","? "}"
+record  := "record" name tyvars? valparams? "{" field ("," field)* ","? "}"
 field   := name ":" type
+valparams := "(" name ":" type ("," name ":" type)* ","? ")"   -- see §1.2
 
-type    := … (unchanged: a record is a `TyKind::Named`)
+type    := … (a record with no value parameters is a `TyKind::Named`; one with
+              them is written applied — `Converges(p, env, ir, vs)` — and
+              reaches the elaborator as `TyKind::OfExpr`)
 
 expr    := … | record_lit | expr "." name
 record_lit := name tyargs? "{" (name ":" expr) ("," …)* ","? "}"
@@ -68,6 +71,26 @@ Three things to notice, each a section below:
 - The literal is **braced and named**, not positional (§6).
 - `m.op(x, x)` is a projection applied to arguments, *not* a call to a global
   `op` (§4).
+
+### 1.2 Value parameters (added 2026-08-01)
+
+`record R(p: T, …)`, after the `<…>` if there is one, adds **value**
+parameters: terms the use site supplies, substituted into the field types at
+lowering. That is what makes a record usable as a *predicate* —
+
+```heather
+record Converges(p: Prog, env: Val, ir: Ir, vs: Val) {
+    n: Nat,
+    h: eval(n, p)(env, ir) = Out(vs),
+}
+```
+
+— i.e. the value-indexed Σ `issues/surface-existential.md` was filed for. The
+grammar, the substitution rule, the checking-position-only construction
+decision, and the parameters-vs-indices line are all in
+**`docs/surface-value-parameters.md`**; nothing in the sections below changed to
+accommodate it (projection, `let { }`, match arms and the level fold are all
+indifferent to where a type in the spine came from).
 
 ### 1.1 Type parameters are monomorphized, like an `inductive`'s
 

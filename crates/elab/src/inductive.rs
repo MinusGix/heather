@@ -39,6 +39,15 @@ pub(crate) struct Inductive {
     /// identical declarations do not share a kernel type.
     pub tag: u32,
     pub params: Vec<String>,
+    /// `record R(p: Prog, env: Val)` — value parameters, kept in surface form
+    /// for the same reason the field types are: they are elaborated afresh in
+    /// the *ambient* context at every use site
+    /// (docs/surface-value-parameters.md §2). Each one's type may mention the
+    /// value parameters before it, so the list is a telescope.
+    ///
+    /// Empty for every declaration without the `(…)` list, which is the state
+    /// every check below degenerates to.
+    pub valparams: Vec<(String, Ty)>,
     pub ctors: Vec<Ctor>,
     /// Tier 1: some constructor has a recursive field, so the lowering is
     /// `Wf^l(x : S). n` rather than the bare sum-of-Σs `S`
@@ -307,6 +316,51 @@ impl Elaborator {
                 return err(format!("duplicate type parameter `{p}`"), d.span);
             }
         }
+        // Value parameters (docs/surface-value-parameters.md §1). Record-only
+        // this round: a `record` has one constructor, so *every* constructor
+        // trivially targets the parameter uniformly, which is what makes
+        // "substitute at lowering" the whole lowering. On an `inductive` the
+        // same list is meaningful but needs the uniformity check per
+        // constructor, and that is deferred rather than half-done (§6).
+        if !d.valparams.is_empty() && !d.is_record {
+            return err(
+                format!(
+                    "`{}` is an `inductive` and cannot take value parameters this round: \
+                     write it as a `record` if it has one constructor, or state the \
+                     varying argument as an index \
+                     (docs/surface-value-parameters.md §6)",
+                    d.name
+                ),
+                d.valparams[0].span,
+            );
+        }
+        for (i, p) in d.valparams.iter().enumerate() {
+            if d.valparams[..i].iter().any(|o| o.name == p.name) {
+                return err(format!("duplicate value parameter `{}`", p.name), p.span);
+            }
+            if d.params.contains(&p.name) {
+                return err(
+                    format!(
+                        "`{}` is already a type parameter of `{}`: a value parameter is a \
+                         term and a type parameter is a type, so one name cannot be both",
+                        p.name, d.name
+                    ),
+                    p.span,
+                );
+            }
+            // A field shadows a value parameter of the same name in the later
+            // field types, which is legal but never what anyone means.
+            if d.ctors[0].fields.iter().any(|f| f.name.as_deref() == Some(p.name.as_str())) {
+                return err(
+                    format!(
+                        "`{}` is both a value parameter and a field of `{}`: the field \
+                         would shadow the parameter in the field types after it",
+                        p.name, d.name
+                    ),
+                    p.span,
+                );
+            }
+        }
         // The index telescope (docs/inductive-indexed-lowering.md §2): one
         // `Nat` binder into bare `Type`, this round. The grammar parses any
         // type; the shape is validated here so the message can say what the
@@ -401,7 +455,7 @@ impl Elaborator {
                         c.span,
                     )
                 }
-                (Some(_), Some(r)) => Some(parse_result_index(c, r, &d.name, &d.params)?),
+                (Some(_), Some(r)) => Some(parse_result_index(c, r, &d.name, &d.params, &d.ctors)?),
             };
             // Tier classification (tier 0 §2; tier 1 §1). With no function
             // types in field position there is no *negative* occurrence to
@@ -469,6 +523,7 @@ impl Elaborator {
             name: d.name.clone(),
             tag: self.next_tag,
             params: d.params.clone(),
+            valparams: d.valparams.iter().map(|p| (p.name.clone(), p.ty.clone())).collect(),
             ctors,
             recursive,
             is_record: d.is_record,
@@ -526,11 +581,107 @@ impl Elaborator {
                 span,
             );
         }
+        // `Converges` bare, where `Converges(p, env, ir, vs)` was meant. The
+        // value arguments are only reachable through the *applied* spelling,
+        // which arrives as `TyKind::OfExpr` and is caught upstream by
+        // [`Self::try_valparam_ty`]; getting here means none were written.
+        if !ind.valparams.is_empty() {
+            return err(
+                format!(
+                    "`{name}` takes {} value argument(s): write `{name}{}({})`",
+                    ind.valparams.len(),
+                    if ind.params.is_empty() { String::new() } else { "<…>".into() },
+                    ind.valparams.iter().map(|(n, _)| n.as_str()).collect::<Vec<_>>().join(", ")
+                ),
+                span,
+            );
+        }
         let mut lowered = Vec::with_capacity(args.len());
         for a in args {
             lowered.push(self.elab_ty(cx, a)?);
         }
-        self.lower_instance(cx, ind, &lowered, span)
+        self.lower_instance(cx, ind, &lowered, &[], span)
+    }
+
+    /// `D<ā>(v̄)` written in **type position**: a record applied to its value
+    /// parameters (docs/surface-value-parameters.md §3), which is what makes it
+    /// a predicate. The parser's applied-type-is-never-called backtracking
+    /// delivers it as a [`TyKind::OfExpr`], the same road
+    /// [`Self::try_indexed_ty`] travels; this recognizes the record case before
+    /// `OfExpr`'s generic infer-and-decode path would try to *call* `D`.
+    ///
+    /// `None` — not an error — for anything that is not a declared record with
+    /// value parameters, so every existing spelling reaches its old handler.
+    pub(crate) fn try_valparam_ty(
+        &self,
+        cx: &Cx,
+        e: &Expr,
+        span: Span,
+    ) -> R<Option<(Type, Level)>> {
+        let ExprKind::App { head, args, .. } = &e.kind else { return Ok(None) };
+        let Some((name, targs)) = named_head(head) else { return Ok(None) };
+        let Some(ind) = self.inductives.get(name).cloned() else { return Ok(None) };
+        if ind.valparams.is_empty() {
+            return Ok(None);
+        }
+        if targs.len() != ind.params.len() {
+            return err(
+                format!(
+                    "`{name}` takes {} type argument(s), found {}",
+                    ind.params.len(),
+                    targs.len()
+                ),
+                span,
+            );
+        }
+        let mut lowered = Vec::with_capacity(targs.len());
+        for a in targs {
+            lowered.push(self.elab_ty(cx, a)?);
+        }
+        let vargs = self.valparam_args(cx, &ind, args, span)?;
+        self.lower_instance(cx, &ind, &lowered, &vargs, span).map(Some)
+    }
+
+    /// Check a use site's value arguments against the declared telescope
+    /// (docs/surface-value-parameters.md §2). Parameter `j`'s declared type may
+    /// mention parameters `0..j`, so it is elaborated in a context carrying the
+    /// earlier arguments as aliases — all bound at the *ambient* depth, so no
+    /// shifting happens here. The shifting that matters happens later, in
+    /// [`Self::lower_ctor`], where the field spine pushes binders on top.
+    pub(crate) fn valparam_args(
+        &self,
+        cx: &Cx,
+        ind: &Inductive,
+        args: &[Expr],
+        span: Span,
+    ) -> R<Vec<(Term, Type, Level)>> {
+        if args.len() != ind.valparams.len() {
+            return err(
+                format!(
+                    "`{}` takes {} value argument(s), found {}",
+                    ind.name,
+                    ind.valparams.len(),
+                    args.len()
+                ),
+                span,
+            );
+        }
+        let mut tcx = cx.clone();
+        let depth = cx.names.len();
+        let mut out = Vec::with_capacity(args.len());
+        for ((pname, pty), arg) in ind.valparams.iter().zip(args) {
+            let (ty, level) = self.elab_ty(&tcx, pty)?;
+            let tm = self.elab_check(cx, arg, &ty, &level)?;
+            tcx.aliases.push(Rc::new(Alias {
+                name: pname.clone(),
+                depth,
+                term: Rc::new(tm.clone()),
+                ty: ty.clone(),
+                level: level.clone(),
+            }));
+            out.push((tm, ty, level));
+        }
+        Ok(out)
     }
 
     /// `⟦D<ā>⟧`: the tag spine at tier 0, and the `Wf` over it at tier 1
@@ -542,6 +693,7 @@ impl Elaborator {
         cx: &Cx,
         ind: &Inductive,
         args: &[(Type, Level)],
+        vargs: &[(Term, Type, Level)],
         span: Span,
     ) -> R<(Type, Level)> {
         if ind.index.is_some() {
@@ -555,7 +707,7 @@ impl Elaborator {
                 span,
             );
         }
-        let (shape, level) = self.lower_shape(cx, ind, args, span)?;
+        let (shape, level) = self.lower_shape(cx, ind, args, vargs, span)?;
         if !ind.recursive {
             return Ok((shape, level));
         }
@@ -579,11 +731,12 @@ impl Elaborator {
         cx: &Cx,
         ind: &Inductive,
         args: &[(Type, Level)],
+        vargs: &[(Term, Type, Level)],
         span: Span,
     ) -> R<(Type, Level)> {
         let mut parts = Vec::with_capacity(ind.ctors.len());
         for i in 0..ind.ctors.len() {
-            parts.push(self.lower_ctor(cx, ind, i, args, span)?);
+            parts.push(self.lower_ctor(cx, ind, i, args, vargs, span)?);
         }
         let Some((last, last_lvl)) = parts.pop() else {
             // A declaration with no constructors lowers to `Empty` (§3.3).
@@ -660,6 +813,7 @@ impl Elaborator {
         ind: &Inductive,
         i: usize,
         args: &[(Type, Level)],
+        vargs: &[(Term, Type, Level)],
         span: Span,
     ) -> R<(Type, Level)> {
         // Field types see the type parameters and the earlier *named* fields;
@@ -680,6 +834,29 @@ impl Elaborator {
                 depth,
             })
             .collect();
+        // Value parameters, bound to the terms the use site supplied
+        // (docs/surface-value-parameters.md §2). An `Alias` is exactly the
+        // right carrier: it is not a kernel binder, it is inlined at each use,
+        // and its `depth` is what a use gets weakened by — which is the whole
+        // correctness obligation here. The field spine pushes the tag and then
+        // each earlier field on top of `cx`, so a use of a parameter in field
+        // `j` sits `1 + j` binders deeper than the argument it denotes.
+        //
+        // Getting this shift wrong does **not** produce a kernel rejection: an
+        // un-shifted parameter under the Σ binder captures the field above it
+        // and writes a well-formed but *different* — typically trivially
+        // inhabited — type (`docs/surface-existential-investigation.md` §B.1
+        // test 9, §H risk 3). The observers are therefore propositional, in
+        // `crates/elab/tests/value_parameters.rs`, not merely structural.
+        for ((name, _), (tm, ty, level)) in ind.valparams.iter().zip(vargs) {
+            fcx.aliases.push(Rc::new(Alias {
+                name: name.clone(),
+                depth,
+                term: Rc::new(tm.clone()),
+                ty: ty.clone(),
+                level: level.clone(),
+            }));
+        }
         // Entry 0 is the tag; the surface has no name for it and no way to
         // bind it in a pattern.
         let mut entries = vec![(tag_type(ind.tag), Level::Zero)];
@@ -1410,7 +1587,13 @@ fn classify_fields(c: &CtorDecl, name: &str, params: &[String]) -> R<Vec<FieldKi
 /// the declaration at its own parameters, and the index a depth-one, linear,
 /// constructor-headed pattern over the constructor's own fields. Everything
 /// else is a rejection with the route that *does* cover it named (§8.1).
-fn parse_result_index(c: &CtorDecl, r: &Expr, name: &str, params: &[String]) -> R<IdxPat> {
+fn parse_result_index(
+    c: &CtorDecl,
+    r: &Expr,
+    name: &str,
+    params: &[String],
+    ctors: &[CtorDecl],
+) -> R<IdxPat> {
     let ExprKind::App { head, args, .. } = &r.kind else {
         return err(
             format!(
@@ -1504,6 +1687,31 @@ fn parse_result_index(c: &CtorDecl, r: &Expr, name: &str, params: &[String]) -> 
                 "`{}`'s result index is a numeral above `0`, which is a pattern deeper \
                  than one constructor — not index-recursive \
                  (docs/inductive-indexed-lowering.md §8.1)",
+                c.name
+            ),
+            idx.span,
+        ),
+        // A bare-variable result index. Two very different situations wear this
+        // spelling, and sending both toward fording is what
+        // `docs/surface-existential-investigation.md` §C.7 asked this round to
+        // correct:
+        //
+        // - *uniform* — every constructor's index is a bare variable. Then it
+        //   is not an index at all, it is a **parameter**: it does not vary per
+        //   constructor result, and it lowers by substitution with none of
+        //   route 2b's machinery (no fording, no stored equation, no `Wf`
+        //   skeleton, no UIP, no `Id`-transport). Say so, and name the grammar
+        //   that now exists.
+        // - *non-uniform* — some other constructor pins the index. Then it
+        //   genuinely is the general case, and the old message stands.
+        ExprKind::Var(v) if all_bare_var_indices(ctors) => err(
+            format!(
+                "`{}`'s result index `{v}` is a bare variable in *every* constructor of \
+                 `{name}`, which makes it a **parameter**, not an index — it does not \
+                 vary per constructor result. Write it as one: \
+                 `record {name}({v}: Nat) {{ … }}` if `{name}` has a single constructor \
+                 (docs/surface-value-parameters.md §1). A genuinely varying index is the \
+                 fording case (issues/indexed-families.md route 2b), and this is not it.",
                 c.name
             ),
             idx.span,
@@ -1610,6 +1818,19 @@ fn classify_fields_indexed(
         kinds.push(FieldKind::Payload);
     }
     Ok(kinds)
+}
+
+/// Is *every* constructor's result index a bare variable? Then the declaration
+/// has a parameter wearing an index's spelling — see the message at
+/// [`parse_result_index`]'s `Var` arm. One constructor that pins its index
+/// makes the family genuinely indexed, and this is `false`.
+fn all_bare_var_indices(ctors: &[CtorDecl]) -> bool {
+    ctors.iter().all(|c| {
+        let Some(Expr { kind: ExprKind::App { args, .. }, .. }) = &c.result else {
+            return false;
+        };
+        matches!(args.as_slice(), [Expr { kind: ExprKind::Var(_), .. }])
+    })
 }
 
 /// The `(name, type args)` of `Var` / `TyApp(Var, …)` expression heads.

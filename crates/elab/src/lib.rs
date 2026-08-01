@@ -1040,6 +1040,13 @@ impl Elaborator {
                 if let Some(r) = self.try_indexed_ty(cx, e, ty.span)? {
                     return Ok(r);
                 }
+                // `Converges(p, env, ir, vs)` — a record applied to its *value*
+                // parameters (docs/surface-value-parameters.md §3). Same road,
+                // same reason: the parser cannot tell formation from a call,
+                // and only the declaration can.
+                if let Some(r) = self.try_valparam_ty(cx, e, ty.span)? {
+                    return Ok(r);
+                }
                 let (tm, tm_ty, _) = self.elab_infer(cx, e)?;
                 let Type::Ty(level) = self.whnf(cx, &tm_ty, ty.span)? else {
                     return err(
@@ -2139,6 +2146,26 @@ impl Elaborator {
         // narrow: anything deeper is unification, which belongs to
         // issues/elab-unifier-completeness.md, not here. A `None` on its own
         // is genuinely ambiguous and says so.
+        // Value parameters are **not** inferred, by decision rather than by
+        // omission (docs/surface-value-parameters.md §4, closing
+        // `docs/surface-existential-investigation.md` §C.5): a parameter
+        // appears only inside a *field type*, so recovering it from the
+        // arguments is higher-order unification, not the narrow
+        // field-type-is-a-parameter reading below. Checking position supplies
+        // them; nothing else does.
+        if !ind.valparams.is_empty() {
+            return err(
+                format!(
+                    "cannot infer the value argument(s) of `{}` here — a value parameter \
+                     appears only inside a field's type, so nothing in `{}(…)` determines \
+                     it. Put the expression in a checking position: a `fn`/`theorem` \
+                     body whose declared result is `{}(…)`, or an argument of a \
+                     declaration that expects one",
+                    ind.name, ind.name, ind.name
+                ),
+                span,
+            );
+        }
         let mut sols: Vec<Option<(Type, Level)>> = vec![None; ind.params.len()];
         for (f, arg) in self.ctor_fields(ind, i).iter().zip(args) {
             let TyKind::Named { name, args: targs } = &f.kind else { continue };
@@ -2180,7 +2207,7 @@ impl Elaborator {
             };
             self.lower_indexed_instance(cx, ind, &targs, idx, span)?
         } else {
-            self.lower_instance(cx, ind, &targs, span)?
+            self.lower_instance(cx, ind, &targs, &[], span)?
         };
         let t = self.build_ctor(cx, ind, i, args, &ty, &lvl, span)?;
         Ok((t, ty, lvl))
@@ -2715,7 +2742,21 @@ impl Elaborator {
             for a in tyargs {
                 lowered.push(self.elab_ty(cx, a)?);
             }
-            let (ty, lvl) = self.lower_instance(cx, &ind, &lowered, span)?;
+            // `R<Nat>(a, b)` is not a spelling: the type arguments are
+            // explicit here but the value arguments are still only recoverable
+            // from the checking type (docs/surface-value-parameters.md §4).
+            if !ind.valparams.is_empty() {
+                return err(
+                    format!(
+                        "`{}` takes value parameters, which `<…>` cannot supply — they \
+                         are read off the expected type. Put the expression where a \
+                         `{}(…)` is expected instead",
+                        ind.name, ind.name
+                    ),
+                    span,
+                );
+            }
+            let (ty, lvl) = self.lower_instance(cx, &ind, &lowered, &[], span)?;
             let t = self.build_ctor_value(cx, &ind, i, args, &ty, &lvl, span)?;
             Ok((t, ty, lvl))
         })())

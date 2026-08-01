@@ -231,7 +231,7 @@ impl Parser {
         Ok(Item::Decl(self.decl()?))
     }
 
-    /// `record D<p, …> { f: T, … }` — desugared here into the
+    /// `record D<p, …>(v: T, …) { f: T, … }` — desugared here into the
     /// one-constructor `InductiveDecl` the tier-0 generator already handles
     /// (docs/surface-records.md §2.1), with the constructor named after the
     /// record. What makes it a distinct *surface* form is the checks the flag
@@ -243,6 +243,7 @@ impl Parser {
         self.bump(); // `record`
         let (name, _) = self.ident("record name")?;
         let params = self.tyvar_list()?;
+        let valparams = self.valparam_list()?;
         self.expect(&TokKind::LBrace, "`{` (field list)")?;
         let mut fields = Vec::new();
         while !matches!(self.peek(), TokKind::RBrace) {
@@ -264,7 +265,44 @@ impl Parser {
         let end = self.expect(&TokKind::RBrace, "`}` (field list)")?;
         let span = start.join(end);
         let ctor = CtorDecl { name: name.clone(), fields, result: None, span };
-        Ok(InductiveDecl { name, params, ctors: vec![ctor], is_record: true, index: None, span })
+        Ok(InductiveDecl {
+            name,
+            params,
+            valparams,
+            ctors: vec![ctor],
+            is_record: true,
+            index: None,
+            span,
+        })
+    }
+
+    /// `(p: T, …)` after a declaration name (and after its `<…>`), or nothing —
+    /// the **value** parameter list (docs/surface-value-parameters.md §1).
+    ///
+    /// The position is free and unambiguous: before this grammar existed, a `(`
+    /// here was `parse error: expected `{``, and `fn`/`theorem` share no
+    /// grammar with `record`/`inductive` (they have their own inline binder
+    /// loop). Every parameter must be named — a value parameter is referred to
+    /// by name inside the field types, which is the whole point of it.
+    fn valparam_list(&mut self) -> R<Vec<Param>> {
+        let mut params = Vec::new();
+        if !matches!(self.peek(), TokKind::LParen) {
+            return Ok(params);
+        }
+        self.bump();
+        while !matches!(self.peek(), TokKind::RParen) {
+            let (n, span) = self.ident("value parameter name")?;
+            self.expect(&TokKind::Colon, "`:` (a value parameter is `name: T`)")?;
+            let ty = self.ty()?;
+            let span = span.join(ty.span);
+            params.push(Param { name: n, ty, implicit: false, is_self: false, span });
+            if !matches!(self.peek(), TokKind::Comma) {
+                break;
+            }
+            self.bump();
+        }
+        self.expect(&TokKind::RParen, "`)` to close the value parameters")?;
+        Ok(params)
     }
 
     /// `<A, B>` after a declaration name, or nothing.
@@ -291,6 +329,10 @@ impl Parser {
         self.bump(); // `inductive`
         let (name, _) = self.ident("inductive name")?;
         let params = self.tyvar_list()?;
+        // Parsed, then rejected by the elaborator: value parameters are a
+        // `record` form this round (docs/surface-value-parameters.md §6), and a
+        // named rejection beats `expected `{`, found LParen`.
+        let valparams = self.valparam_list()?;
         // `: (n: Nat) -> Type` — an index telescope
         // (docs/inductive-indexed-lowering.md §2). Parsed with the ordinary
         // type grammar; its shape is the elaborator's to validate.
@@ -336,7 +378,15 @@ impl Parser {
             self.bump();
         }
         let end = self.expect(&TokKind::RBrace, "`}` (constructor list)")?;
-        Ok(InductiveDecl { name, params, ctors, is_record: false, index, span: start.join(end) })
+        Ok(InductiveDecl {
+            name,
+            params,
+            valparams,
+            ctors,
+            is_record: false,
+            index,
+            span: start.join(end),
+        })
     }
 
     /// A constructor field: `name: T` or a bare `T`. Named fields are in scope

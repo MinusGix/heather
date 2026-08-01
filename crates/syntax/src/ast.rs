@@ -45,6 +45,17 @@ pub struct InductiveDecl {
     pub name: String,
     /// Type-parameter names, in order.
     pub params: Vec<String>,
+    /// `record R(p: Prog, env: Val)` — **value** parameters, in order, written
+    /// after the type parameters (docs/surface-value-parameters.md §1). A value
+    /// parameter is a *term* the use site supplies, substituted into the field
+    /// types at lowering exactly as a type parameter's instantiation is; it is
+    /// what makes a record usable as a **predicate** over the values it is
+    /// applied to (`Converges(p, env, ir, vs)`).
+    ///
+    /// Reuses [`Param`] rather than a new node so `{implicit}` and `self` stay
+    /// available if they are ever wanted here; both are rejected for now.
+    /// Empty for every declaration written before this grammar existed.
+    pub valparams: Vec<Param>,
     pub ctors: Vec<CtorDecl>,
     /// Written `record D<…> { f: T, … }` — one constructor, named after the
     /// declaration, every field named (docs/surface-records.md §2). The

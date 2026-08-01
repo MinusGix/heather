@@ -185,7 +185,22 @@ fn rejections_carry_their_messages() {
         "inductive E : (n: Nat) -> Type { E0 : E(0), ESS(n: Nat, e: E(n)) : E(Succ(Succ(n))) }",
     );
     assert!(m.contains("deeper than one constructor"), "{m}");
+    // A bare-variable index in *every* constructor is not an index at all: it
+    // is uniform, so it is a **parameter**, and it lowers by substitution with
+    // none of fording's machinery. This message used to send it toward route
+    // 2b; `docs/surface-existential-investigation.md` §C.7 identified that as
+    // the wrong steer, and `record Q(n: Nat)` is now the grammar it names
+    // (docs/surface-value-parameters.md).
     let m = elab_err("inductive Q : (n: Nat) -> Type { Mk(n: Nat) : Q(n) }");
+    assert!(m.contains("a **parameter**, not an index"), "{m}");
+    assert!(m.contains("record Q(n: Nat)"), "{m}");
+    // Non-uniform: one constructor pins its index, so this one really does
+    // target *every* index and really is the fording case. The old message
+    // stands, which is what makes the arm above a distinction and not a
+    // blanket rewording.
+    let m = elab_err(
+        "inductive Q2 : (n: Nat) -> Type { A : Q2(0), Mk(n: Nat) : Q2(n) }",
+    );
     assert!(m.contains("not constructor-headed"), "{m}");
     let m = elab_err(
         "inductive W2 : (n: Nat) -> Type { M0 : W2(0), Mk(n: Nat, w: W2(0)) : W2(Succ(n)) }",
