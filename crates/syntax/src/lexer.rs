@@ -25,6 +25,14 @@ pub enum TokKind {
     Plus,      // +
     Star,      // *
     Lt,        // <
+    /// `<=` — the ordering comparison, desugared to `Le(n, m)` by the parser.
+    ///
+    /// Two-byte, so it is matched *before* `<`. That cannot steal a `<` from
+    /// the generics path: a type-argument list is `<` followed by a type, and
+    /// no type starts with `=` (`Foo<=` is not a program today and is not one
+    /// after this either), so the only `<=` in a well-formed file is the
+    /// operator (issues/comparison-operators.md).
+    LtEq,      // <=
     Gt,        // >   (closes a type-argument list; `>` is not an operator)
     LBracket,  // [
     RBracket,  // ]
@@ -122,6 +130,7 @@ pub fn lex(src: &str) -> Result<Vec<Tok>, LexError> {
             "->" => (TokKind::Arrow, 2),
             "=>" => (TokKind::FatArrow, 2),
             "==" => (TokKind::EqEq, 2),
+            "<=" => (TokKind::LtEq, 2),
             ":=" => (TokKind::ColonEq, 2),
             _ => match c {
                 b'(' => (TokKind::LParen, 1),

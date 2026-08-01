@@ -53,7 +53,8 @@ nil<Nat>()                 -- type arguments given explicitly
 map<Nat, Bool>(f, xs)      -- allowed but redundant; both are inferred
 ```
 
-`<` is also the `lt` infix operator (`parser.rs:520`), so this is parsed
+`<` is also the `lt` comparison operator (`Parser::comparison`;
+`docs/comparison-operators.md` §2), so this is parsed
 **speculatively**: on `Ident <`, save the position, try to parse
 `< ty (, ty)* > (`, and restore on any failure. `a < b` fails at the `>` and
 falls back to `lt`; `f<A>(x)` succeeds. Backtracking is free here — the parser

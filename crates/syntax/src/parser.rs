@@ -22,9 +22,12 @@
 //! tyatom  := univ                                    -- Type, Type<n>
 //!          | "[" type ";" expr "]"                   -- length-indexed vector
 //!          | name ("<" type ("," type)* ">")         -- applied inductive
-//!          | expr ("=" expr)?       -- bare `Nat`/`Bool` is that type; `=` is
-//!                                      propositional equality (`==` rejected)
+//!          | cmp                    -- bare `Nat`/`Bool` is that type
 //!          | "(" type ")"
+//! cmp     := expr (("=" | "<=" | "<") expr)?   -- ONE non-associative rung:
+//!                                      `=` is propositional equality (`==`
+//!                                      rejected), `<=` is `Le(a, b)`, `<` is
+//!                                      `lt(a, b)`; none of them chain
 //! block   := "{" stmt* expr on_stmt* "}"
 //! stmt    := "let" name (":" type)? "=" expr ";"
 //!          | "let" "{" name ("," name)* ","? "}" "=" expr ";"   -- destructure
@@ -80,7 +83,8 @@ struct Parser {
     /// bracket**, so `match f(D { x: 1 }) { … }` is fine and a literal that
     /// really is wanted in scrutinee position is parenthesised.
     no_record_lit: bool,
-    /// Suppress `a = b` as an *expression* (docs/surface-universe.md §13).
+    /// Suppress the whole **comparison level** — `a = b`, `a <= b`, `a < b` —
+    /// as an *expression* (docs/surface-universe.md §13).
     ///
     /// `=` is loosest-binding and non-associative, which is right everywhere
     /// except the two contexts that use it as punctuation: a `calc` step
@@ -832,13 +836,13 @@ impl Parser {
 
     // -- expressions --------------------------------------------------------
 
-    /// Expressions, with infix operators. Note `=` is *not* an expression
-    /// operator: it is the identity-type former, parsed by [`Self::ty`] and by
-    /// `calc` steps. Precedence, loosest to tightest: `<` (→ `lt`), `+`
-    /// (→ `add`), `*` (→ `mul`), then postfix `.method(args)` / calls, then
-    /// atoms. Each infix operator desugars to an ordinary [`ExprKind::Call`]
-    /// on a fixed name table (issues/surface-operators.md — the decorated
-    /// `+_Z` grammar and trait hookup arrive with the real trait design).
+    /// Expressions, with infix operators. Precedence, loosest to tightest: the
+    /// **comparison level** ([`Self::comparison`] — `=`, `<=` (→ `Le`), `<`
+    /// (→ `lt`)), then `+` (→ `add`), `*` (→ `mul`), then postfix
+    /// `.method(args)` / calls, then atoms. The arithmetic operators desugar
+    /// to an ordinary [`ExprKind::Call`] on a fixed name table
+    /// (issues/surface-operators.md — the decorated `+_Z` grammar and trait
+    /// hookup arrive with the real trait design).
     ///
     /// **Function types are expressions** (`docs/types-as-expressions.md`): a
     /// leading binder group `(x: A) -> …` and a trailing `->` both hand off to
@@ -858,16 +862,7 @@ impl Parser {
             return Ok(Expr { kind: ExprKind::TyLit(Box::new(ty)), span });
         }
         let lhs = self.expr_bp(0)?;
-        let lhs = if self.no_eq || !matches!(self.peek(), TokKind::Eq | TokKind::EqEq) {
-            lhs
-        } else {
-            self.expect_eq("equality type `a = b`")?;
-            // Non-associative: the right side is parsed *without* `=`, so
-            // `a = b = c` is a parse error rather than a silent grouping.
-            let rhs = self.with_eq(true, |p| p.expr_bp(0))?;
-            let span = lhs.span.join(rhs.span);
-            Expr { kind: ExprKind::Eq(Box::new(lhs), Box::new(rhs)), span }
-        };
+        let lhs = if self.no_eq { lhs } else { self.comparison(lhs)? };
         if !matches!(self.peek(), TokKind::Arrow) {
             return Ok(lhs);
         }
@@ -879,6 +874,61 @@ impl Parser {
         let span = lhs.span.join(cod.span);
         let kind = TyKind::Fn { binder: None, dom: Box::new(dom), cod: Box::new(cod) };
         Ok(Expr { kind: ExprKind::TyLit(Box::new(Ty { kind, span })), span })
+    }
+
+    /// The **comparison level**: one non-associative rung, loosest of all, sitting
+    /// above the arithmetic table (`a + b <= c` is `Le(add(a, b), c)`).
+    ///
+    /// Three spellings share it, because they are one notion — a relation
+    /// between two arithmetic expressions — and because sharing a rung is what
+    /// makes chaining impossible:
+    ///
+    /// - `a = b`, the identity-type former (an [`ExprKind::Eq`], not a call —
+    ///   the elaborator never sees `=` as a `Call`);
+    /// - `a <= b` ⇒ `Le(a, b)`, the *proposition* from lib/ir_v1.hthr, never
+    ///   the boolean `leb`; a computational position calls `leb` by name
+    ///   (issues/comparison-operators.md);
+    /// - `a < b` ⇒ `lt(a, b)`, which has no lib target yet — it stays here so
+    ///   `<` cannot chain either, and so the speculative type-argument parse
+    ///   keeps its documented fallback (docs/surface-polymorphism.md §1).
+    ///
+    /// Non-associativity is structural first: the right operand is read with
+    /// [`Parser::no_eq`] set, so it is an *arithmetic* expression and cannot
+    /// grow a second comparison of its own. What is left over is then a
+    /// dangling operator, which would surface as whatever error the caller
+    /// happens to raise next — so a trailing `<=`/`==` gets a targeted message
+    /// instead. A trailing `=` deliberately does **not**: `let p: a = b = pf;`
+    /// and `let h: n <= m = pf;` are annotated `let`s whose binder `=` lands
+    /// exactly there (issues/annotated-let-swallows-the-equals.md), and the
+    /// parser cannot tell those from a chain without deciding that issue.
+    fn comparison(&mut self, lhs: Expr) -> R<Expr> {
+        let out = match self.peek() {
+            TokKind::Eq | TokKind::EqEq => {
+                self.expect_eq("equality type `a = b`")?;
+                let rhs = self.with_eq(true, |p| p.expr_bp(0))?;
+                let span = lhs.span.join(rhs.span);
+                Expr { kind: ExprKind::Eq(Box::new(lhs), Box::new(rhs)), span }
+            }
+            TokKind::LtEq | TokKind::Lt => {
+                let name = if matches!(self.peek(), TokKind::LtEq) { "Le" } else { "lt" };
+                self.bump();
+                let rhs = self.with_eq(true, |p| p.expr_bp(0))?;
+                let span = lhs.span.join(rhs.span);
+                named_call(name, vec![lhs, rhs], false, span)
+            }
+            _ => return Ok(lhs),
+        };
+        const CHAIN: &str = "comparisons do not chain: `=`, `<=` and `<` share one \
+             non-associative level, so `a <= b <= c` has no reading. Write the two \
+             comparisons separately, or parenthesise the one that is meant to be an \
+             operand";
+        match self.peek() {
+            TokKind::LtEq => self.err(CHAIN),
+            TokKind::EqEq => {
+                self.err(format!("{CHAIN} (and `==` is not used in Heather: equality is `=`)"))
+            }
+            _ => Ok(out),
+        }
     }
 
     /// `( ident :` — the start of a dependent function type's binder group.
@@ -911,7 +961,6 @@ impl Parser {
     /// `right_bp > left_bp` makes every operator left-associative.
     fn infix_op(tok: &TokKind) -> Option<(&'static str, u8, u8)> {
         match tok {
-            TokKind::Lt => Some(("lt", 1, 2)),
             TokKind::Plus => Some(("add", 3, 4)),
             TokKind::Star => Some(("mul", 5, 6)),
             _ => None,
@@ -1004,7 +1053,7 @@ impl Parser {
 
     /// `< T, … >` after an expression — explicit type application
     /// (docs/surface-polymorphism.md §1). `<` is *also* the `lt` operator
-    /// (`infix_op`), so this is **speculative**: save the position, try, and
+    /// ([`Self::comparison`]), so this is **speculative**: save the position, try, and
     /// restore on any failure. Backtracking is free (the parser is a token
     /// vector plus an index) and total, so unlike a lookahead heuristic it
     /// cannot be wrong about a program: `a < b` fails at the missing `>` and
@@ -1472,6 +1521,72 @@ mod tests {
         assert_eq!(name, "add");
         assert_eq!(as_call(&args[0].kind).0, "add");
         assert!(matches!(&args[1].kind, ExprKind::Var(v) if v == "c"));
+    }
+
+    // -- the comparison level (issues/comparison-operators.md) --------------
+
+    #[test]
+    fn le_desugars_to_the_proposition_not_the_boolean() {
+        // `a <= b` ⇒ `Le(a, b)`, the Type-valued proposition. `leb` is still
+        // callable by name where a Bool is wanted; `<=` is not
+        // context-sensitive.
+        let k = body("a <= b");
+        let (name, args, explicit) = as_call(&k);
+        assert_eq!(name, "Le");
+        assert!(!explicit);
+        assert_eq!(args.len(), 2);
+        assert!(matches!(&args[0].kind, ExprKind::Var(v) if v == "a"));
+        assert!(matches!(&args[1].kind, ExprKind::Var(v) if v == "b"));
+    }
+
+    #[test]
+    fn comparison_binds_looser_than_arithmetic() {
+        // `a + b <= c * d` ⇒ Le(add(a, b), mul(c, d)) — the whole arithmetic
+        // expression on each side, no parentheses needed.
+        let k = body("a + b <= c * d");
+        let (name, args, _) = as_call(&k);
+        assert_eq!(name, "Le");
+        assert_eq!(as_call(&args[0].kind).0, "add");
+        assert_eq!(as_call(&args[1].kind).0, "mul");
+    }
+
+    #[test]
+    fn comparisons_do_not_chain() {
+        // Non-associative at their shared level: `a <= b <= c` has no reading,
+        // and says so rather than silently grouping.
+        for src in ["a <= b <= c", "a <= b == c", "a = b <= c", "a < b <= c"] {
+            let e = parse_file(&format!("fn f() -> Nat {{ {src} }}")).unwrap_err();
+            assert!(e.msg.contains("do not chain"), "{src}: {}", e.msg);
+        }
+    }
+
+    #[test]
+    fn a_comparison_still_parses_in_a_type() {
+        // The statement position is where `<=` earns its keep:
+        // `hle: n <= m` is the `Le(n, m)` hypothesis, and it composes with
+        // `->` exactly as `Le(n, m)` did (`<=` binds tighter than the arrow).
+        let f = parse_file("theorem t(n: Nat, m: Nat, h: n <= m): m <= m { h }").unwrap();
+        let d = only_decl(&f);
+        let TyKind::OfExpr(e) = &d.params[2].ty.kind else {
+            panic!("expected a decoded type, got {:?}", d.params[2].ty.kind)
+        };
+        assert_eq!(as_call(&e.kind).0, "Le");
+        let f = parse_file("theorem t(n: Nat): (m: Nat) -> n <= m -> n <= m { ?p }").unwrap();
+        assert!(matches!(only_decl(&f).result.kind, TyKind::Fn { .. }));
+    }
+
+    #[test]
+    fn a_type_argument_list_survives_the_two_char_token() {
+        // `<=` is lexed greedily, and generics must not notice: a declaration
+        // with type parameters, an applied inductive, and a `<=` all in one
+        // file (issues/comparison-operators.md, the lexer worry).
+        let f = parse_file(
+            "record Boxed<A> { v: A }
+             fn unbox<A>(b: Boxed<A>) -> A { b.v }
+             theorem t(n: Nat, m: Nat, h: n <= m): n <= m { h }",
+        )
+        .unwrap();
+        assert_eq!(f.items.len(), 3);
     }
 
     // `.f` is no longer desugared here: the parser emits `Dot` and the

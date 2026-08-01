@@ -1,6 +1,6 @@
 ---
 title: Surface <= (and <): one lexer token and one infix-table row each
-status: open
+status: closed
 labels: [frontend,syntax,ergonomics]
 created: 2026-08-01
 updated: 2026-08-01
@@ -16,3 +16,7 @@ Design points to settle (small, but real):
 - **Lexer care:** `<=` must not collide with the generics lexing of `<` (`Monoid<A>`); the tyargs path and the expression path need the usual disambiguation check.
 
 Acceptance: `fuel_monotone` and the le-kit stated with `<=`; a parse-error negative control for `a <= b <= c`; a generics declaration still parsing in the same file.
+
+## Log
+
+- 2026-08-01: Landed: TokKind::LtEq in the lexer; NOT an infix_op row (those are left-associative by construction) — a new Parser::comparison rung extracted from the existing statement-level '=' handling, one non-associative level carrying =, <= (-> Le(a,b)) and < (moved off the table; 'lt' had no definition, so a<b<c chaining silently was pure hazard). Chains all reject with a real message; a <= b = c is the one unflaggable shape, blocked on [[annotated-let-swallows-the-equals]] (documented, docs/comparison-operators.md §3). Generics untouched (tyargs never see LtEq). lib restated: <= in stated positions, explicit Le kept in the four dense motives. +10 tests, full suite green, check time unchanged. Lt stays a one-row follow-on until a use site asks.

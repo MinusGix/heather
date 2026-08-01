@@ -121,3 +121,102 @@ fn incoherent_calc_chain_is_kernel_rejected() {
     );
     assert!(r.is_err(), "an incoherent calc chain must not check, got {r:?}");
 }
+
+// -- `<=` (issues/comparison-operators.md) ---------------------------------
+
+// The order kit, cut down to what a comparison test needs: the boolean
+// decision, the *proposition* named over it, and enough of the kit to prove
+// something with. Lifted from lib/ir_v1.hthr, which is where the real ones
+// live; the elaborator has no `Le` of its own and `<=` names one by ordinary
+// global lookup, exactly like `+` names `add`.
+const ORDER_KIT: &str = r#"
+inductive Bool { False, True }
+
+fn leb(n: Nat) -> Nat -> Bool {
+    match n {
+        Zero => λ (m: Nat) => True,
+        Succ(k) => λ (m: Nat) => match m { Zero => False, Succ(l) => leb(k)(l) },
+    }
+}
+
+fn Le(n: Nat, m: Nat) -> Type { leb(n)(m) = True }
+
+fn add(m: Nat, n: Nat) -> Nat { match m { Zero => n, Succ(k, ih) => Succ(ih) } }
+"#;
+
+fn with_order_kit(src: &str) -> Result<(), String> {
+    let mut e = Elaborator::with_prelude().expect("prelude");
+    let src = format!("{ORDER_KIT}{src}");
+    e.elab_source(&src).map_err(|err| err.render(&src))
+}
+
+#[test]
+fn le_states_and_proves_an_ordering() {
+    // The kit's own shapes, written with `<=`: a statement, a hypothesis, and
+    // a recursive proof whose body never mentions the operator.
+    with_order_kit(
+        r#"
+        theorem le_refl(n: Nat): n <= n { match n { Zero => refl, Succ(k) => le_refl(k) } }
+        theorem two_le_five(): 2 <= 5 { refl }
+        theorem le_hyp(n: Nat, m: Nat, h: n <= m): n <= m { h }
+        "#,
+    )
+    .expect("`<=` states and proves an ordering");
+}
+
+#[test]
+fn le_is_the_proposition_and_not_the_boolean() {
+    // The whole design point. `n <= m` is `Le(n, m)`, the Type — so it is
+    // interchangeable with the spelled-out `Le(n, m)` in both directions, and
+    // it unfolds by δ to the reflection equation. If `<=` had desugared to
+    // `leb`, `h` would be a `Bool` and none of these three would check.
+    with_order_kit(
+        r#"
+        theorem to_named(n: Nat, m: Nat, h: n <= m): Le(n, m) { h }
+        theorem from_named(n: Nat, m: Nat, h: Le(n, m)): n <= m { h }
+        theorem unfolds(n: Nat, m: Nat, h: n <= m): leb(n)(m) = True { h }
+        "#,
+    )
+    .expect("`<=` is `Le`, transparently");
+
+    // …and the negative control on the other side: the boolean itself is not
+    // a proof of the proposition. `leb` stays callable by name precisely
+    // because the two are different things.
+    let e = with_order_kit("theorem bool_is_not_a_proof(n: Nat, m: Nat): n <= m { leb(n)(m) }")
+        .expect_err("a Bool must not inhabit the proposition");
+    assert!(e.contains("NotConvertible"), "should die in the kernel, not the parser: {e}");
+}
+
+#[test]
+fn comparison_binds_looser_than_arithmetic() {
+    // `0 + n <= m` is `Le(add(0, n), m)`, not `add(0, Le(n, m))` — so it is
+    // definitionally the `n <= m` hypothesis and passes straight through.
+    with_order_kit("theorem loose(n: Nat, m: Nat, h: 0 + n <= m): n <= m { h }")
+        .expect("`<=` binds looser than `+`");
+}
+
+#[test]
+fn chained_comparisons_are_a_parse_error() {
+    // Non-associative at its own level, with a message that says so rather
+    // than whatever the caller would have raised at the dangling operator.
+    for src in ["a <= b <= c", "a <= b == c"] {
+        let stmt = format!("theorem t(a: Nat, b: Nat, c: Nat, h: {src}): 0 = 0 {{ refl }}");
+        let e = with_order_kit(&stmt).expect_err("a chained comparison must not parse");
+        assert!(e.contains("do not chain"), "{src}: {e}");
+    }
+}
+
+#[test]
+fn generics_and_le_share_a_file() {
+    // The lexer worry: `<=` is a two-byte token, and `<` opens a
+    // type-argument list. A file with both — a generic record, a generic `fn`,
+    // an explicit type application, and a comparison — parses.
+    with_order_kit(
+        r#"
+        record Boxed<A> { v: A }
+        fn unbox<A>(b: Boxed<A>) -> A { b.v }
+        theorem boxed_le(n: Nat, m: Nat, h: n <= m): unbox<Nat>(Boxed<Nat> { v: n }) <= m { h }
+        "#,
+    )
+    .expect("generics and `<=` coexist");
+}

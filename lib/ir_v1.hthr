@@ -401,7 +401,9 @@ fn k_iter(ev: Val -> Ir -> Res, body: Ir, r: Res) -> Res {
 
 
 // ---------------------------------------------------------------------------
-// `<=` on Nat, so `fuel_monotone` can be stated in doc §6's verbatim shape.
+// `<=` on Nat, so `fuel_monotone` can be stated in doc §6's verbatim shape —
+// and since issues/comparison-operators.md, in doc §6's verbatim *spelling*
+// too: `<=` is a surface operator whose desugaring is the `Le` below.
 // There is no order on Nat in the prelude and no `exists`; `<=` is *decided*
 // here rather than declared as an indexed family (the surface has no way to
 // declare one), and `Le(n, m)` is the equation `leb(n)(m) = True`. Its two
@@ -417,13 +419,22 @@ fn leb(n: Nat) -> Nat -> Bool {
     }
 }
 
-// THE ORDER HAS A NAME. A type is an ordinary expression
-// (docs/types-as-expressions.md), so `Le` is an ordinary `fn` returning
-// `Type` — the same device `Refines` uses below. `Le(n, m)` is `n <= m`;
-// it unfolds by δ to the reflection equation, so a proof of either shape is
-// a proof of the other and the kit's bodies never mention the unfolding.
-// The boolean is now an implementation detail of the proposition rather
-// than the way every ordering hypothesis is spelled.
+// THE ORDER HAS A NAME, AND THE NAME HAS A NOTATION. A type is an ordinary
+// expression (docs/types-as-expressions.md), so `Le` is an ordinary `fn`
+// returning `Type` — the same device `Refines` uses below — and `n <= m` is
+// surface notation *for a call to it* (issues/comparison-operators.md): one
+// lexer token and one rung of the parser's comparison level, no
+// context-sensitivity, no second meaning. It unfolds by δ to the reflection
+// equation, so a proof of either shape is a proof of the other and the kit's
+// bodies never mention the unfolding. The boolean is an implementation
+// detail of the proposition rather than the way every ordering hypothesis is
+// spelled; `leb` stays callable by name where a Bool is what is wanted.
+//
+// Below, `<=` is used where the order is being *stated* — hypotheses,
+// results, the shapes a reader is meant to recognize from doc §6 — and the
+// explicit `Le` is kept inside explicit motives, where the surrounding
+// `match … as λ z => …` is already dense enough that an infix operator reads
+// as one more thing to disentangle rather than one fewer.
 fn Le(n: Nat, m: Nat) -> Type { leb(n)(m) = True }
 
 // truncated subtraction, curried for the same reason `lookup` is: both
@@ -805,7 +816,7 @@ theorem sub_zero(m: Nat): sub(m)(0) = m {
 // `Le(n, m)` gives the difference: the bridge from the `<=` shape to the
 // `+ k` shape. Induction on `n` with `m` generalized — the second explicit
 // motive.
-theorem le_add(n: Nat): (m: Nat) -> Le(n, m) -> add(n, sub(m)(n)) = m {
+theorem le_add(n: Nat): (m: Nat) -> n <= m -> add(n, sub(m)(n)) = m {
     match n as λ z => (m: Nat) -> Le(z, m) -> add(z, sub(m)(z)) = m {
         Zero => λ m hle =>
             trans(cong_nat(λ (x: Nat) => add(0, x), sub_zero(m)), add_left_zero(m)),
@@ -821,9 +832,9 @@ theorem le_add(n: Nat): (m: Nat) -> Le(n, m) -> add(n, sub(m)(n)) = m {
 // the rest of the order kit, wanted by `eval_functional` below: two runs of
 // the interpreter at different fuels are compared by raising both to `n + m`,
 // which is above each of them.
-theorem le_refl(n: Nat): Le(n, n) { match n { Zero => refl, Succ(k) => le_refl(k) } }
+theorem le_refl(n: Nat): n <= n { match n { Zero => refl, Succ(k) => le_refl(k) } }
 
-theorem le_succ_r(n: Nat): (m: Nat) -> Le(n, m) -> Le(n, Succ(m)) {
+theorem le_succ_r(n: Nat): (m: Nat) -> n <= m -> n <= Succ(m) {
     match n as λ z => (m: Nat) -> Le(z, m) -> Le(z, Succ(m)) {
         Zero => λ m h => refl,
         Succ(k, ih) => λ m h =>
@@ -834,20 +845,20 @@ theorem le_succ_r(n: Nat): (m: Nat) -> Le(n, m) -> Le(n, Succ(m)) {
     }
 }
 
-theorem le_add_l(n: Nat, m: Nat): Le(n, add(n, m)) {
+theorem le_add_l(n: Nat, m: Nat): n <= add(n, m) {
     match m { Zero => le_refl(n), Succ(m2) => le_succ_r(n)(add(n, m2), le_add_l(n, m2)) }
 }
 
 // `add` recurses on its second argument, so this one is the definitional side
-theorem le_add_r(n: Nat, m: Nat): Le(m, add(n, m)) {
+theorem le_add_r(n: Nat, m: Nat): m <= add(n, m) {
     match m { Zero => refl, Succ(m2) => le_add_r(n, m2) }
 }
 
 // doc §6, verbatim shape: `simulate(p, f, args, n) == Out(vs) -> n <= m ->
 // simulate(p, f, args, m) == Out(vs)`, with `simulate` spelled as the landed
-// `eval` and `n <= m` as `Le(n, m)`.
+// `eval` — and `n <= m` now spelled `n <= m`.
 theorem fuel_monotone(prog: Prog, env: Val, ir: Ir, vs: Val, n: Nat, m: Nat,
-                      h: eval(n, prog)(env, ir) = Out(vs), hle: Le(n, m))
+                      h: eval(n, prog)(env, ir) = Out(vs), hle: n <= m)
     : eval(m, prog)(env, ir) = Out(vs)
 {
     j(le_add(n)(m, hle),
@@ -884,7 +895,7 @@ theorem converges_intro(p: Prog, env: Val, ir: Ir, vs: Val, n: Nat,
 // `fuel_monotone` as a lemma ABOUT `Converges`: a bound may always be
 // loosened, so the ∃-form is closed under adding fuel
 theorem conv_loosen(p: Prog, env: Val, ir: Ir, vs: Val, m: Nat,
-                    c: Converges(p, env, ir, vs), hle: Le(c.n, m))
+                    c: Converges(p, env, ir, vs), hle: c.n <= m)
     : eval(m, p)(env, ir) = Out(vs)
 { fuel_monotone(p, env, ir, vs, c.n, m, c.h, hle) }
 
@@ -1097,7 +1108,7 @@ theorem add_equiv(prog: Prog, a: Nat, b: Nat):
 // computed bound, `fuel_monotone` doing the bridging. This is the shape a
 // `Compile` instance will export, since a caller has no reason to know the
 // bound the instance computed.
-theorem add_equiv_at(prog: Prog, a: Nat, b: Nat, f: Nat, hle: Le(add(a, 5), f)):
+theorem add_equiv_at(prog: Prog, a: Nat, b: Nat, f: Nat, hle: add(a, 5) <= f):
     eval(f, prog)(VCons(embed_nat(a), VCons(embed_nat(b), VNil)), add_body())
     = Out(VCons(embed_nat(add(b, a)), VNil))
 {
