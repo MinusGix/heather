@@ -1266,37 +1266,99 @@ impl Elaborator {
     /// anything else falls through to ordinary inference, which is what the
     /// position meant before universes were writable.
     fn elab_at_universe(&self, cx: &Cx, e: &Expr, expected: &Type, span: Span) -> R<Term> {
-        if let (Type::Ty(want), Some(ty)) = (expected, expr_as_ty(e)) {
-            if let Ok((elaborated, level)) = self.elab_ty(cx, &ty) {
-                // Non-cumulative: levels compare by `≈`, never `≤`, and there
-                // is no lift (docs/surface-universe.md §6).
-                if !level.equiv(want) {
-                    return err(
-                        format!(
-                            "this type is at level {}, but a `Type<{}>` is expected \
-                             here — universes in this system are non-cumulative, so a \
-                             type does not also inhabit the universes above its own, \
-                             and there is no lift",
-                            show_level(&level),
-                            show_level(want),
-                        ),
-                        span,
-                    );
-                }
-                // `El` is the identity on codes (`code.rs`), so a `Type`-valued
-                // binder quotes back to the variable itself.
-                if let Some(code) = code::code_of(&elaborated) {
-                    return Ok(code);
-                }
-                return err(
-                    "this type has no code, so it cannot be written where a term is \
-                     expected (docs/surface-universe.md §7)",
-                    span,
-                );
+        if let Type::Ty(want) = expected {
+            // `Boxed(v)` at `Type`: a declared type applied to its value
+            // arguments, written where a *term* is expected
+            // (docs/record-type-values.md). This is the only reading that can
+            // be well-typed — no constructor inhabits a universe — so it is
+            // **committed**: an error here is reported, not retried as a call,
+            // which is what keeps the arity diagnostic pointed at the value
+            // parameter telescope instead of at the constructor.
+            if let Some(ty) = self.type_former_app(cx, e)? {
+                let (elaborated, level) = self.elab_ty(cx, &ty)?;
+                return self.quote_type_at(&elaborated, &level, want, span);
+            }
+            if let Some(ty) = expr_as_ty(e)
+                && let Ok((elaborated, level)) = self.elab_ty(cx, &ty)
+            {
+                return self.quote_type_at(&elaborated, &level, want, span);
             }
         }
         let (t, _, _) = self.elab_infer(cx, e)?;
         Ok(t)
+    }
+
+    /// A lowered type quoted into its code at the universe that was expected.
+    fn quote_type_at(
+        &self,
+        elaborated: &Type,
+        level: &Level,
+        want: &Level,
+        span: Span,
+    ) -> R<Term> {
+        // Non-cumulative: levels compare by `≈`, never `≤`, and there
+        // is no lift (docs/surface-universe.md §6).
+        if !level.equiv(want) {
+            return err(
+                format!(
+                    "this type is at level {}, but a `Type<{}>` is expected \
+                     here — universes in this system are non-cumulative, so a \
+                     type does not also inhabit the universes above its own, \
+                     and there is no lift",
+                    show_level(level),
+                    show_level(want),
+                ),
+                span,
+            );
+        }
+        // `El` is the identity on codes (`code.rs`), so a `Type`-valued
+        // binder quotes back to the variable itself.
+        match code::code_of(elaborated) {
+            Some(code) => Ok(code),
+            None => err(
+                "this type has no code, so it cannot be written where a term is \
+                 expected (docs/surface-universe.md §7)",
+                span,
+            ),
+        }
+    }
+
+    /// `D<ā>(v̄)` in **expression** position, where `D` is a declared record or
+    /// inductive: the applied *type former*, read as the type-position
+    /// [`TyKind::OfExpr`] it would be one syntactic slot over. There is no
+    /// second lowering here — `elab_ty` runs `try_indexed_ty` /
+    /// `try_valparam_ty` / the generic decode exactly as it does for a type
+    /// annotation (docs/record-type-values.md §2).
+    ///
+    /// `None` for anything that is not a declared type's name, and for a name a
+    /// local binder or global shadows, so every existing spelling reaches its
+    /// old handler. The one case answered here rather than deferred is a
+    /// declaration with *no* value parameters and no index: `OfExpr`'s generic
+    /// path would try to *call* it and report the constructor's problem, which
+    /// is the misdirected diagnostic this round exists to remove.
+    fn type_former_app(&self, cx: &Cx, e: &Expr) -> R<Option<Ty>> {
+        let ExprKind::App { head, args, .. } = &e.kind else { return Ok(None) };
+        let Some((name, _)) = inductive::named_head(head) else { return Ok(None) };
+        if self.shadowed(cx, name) {
+            return Ok(None);
+        }
+        let Some(ind) = self.inductives.get(name) else { return Ok(None) };
+        // A non-empty telescope (and an index) reach their own handlers inside
+        // `elab_ty`, and those already diagnose arity against the declaration.
+        // An *empty* telescope has no handler there — `try_valparam_ty`
+        // declines — so the mismatch is said here rather than left to
+        // `OfExpr`'s generic path, which would try to call `D`.
+        if ind.index.is_none() && ind.valparams.is_empty() {
+            return err(
+                format!(
+                    "`{name}` takes 0 value argument(s), found {} — where a `Type` is \
+                     expected, `{name}` names the type itself, so write it bare",
+                    args.len()
+                ),
+                e.span,
+            );
+        }
+        Ok(Some(Ty { kind: TyKind::OfExpr(Box::new(e.clone())), span: e.span }))
     }
 
     /// Inference mode: returns the elaborated term with its canonical type
@@ -1987,7 +2049,7 @@ impl Elaborator {
             // handles a receiver whose type only the method call determines,
             // and reporting this failure would regress every such call.
             if let Ok((t, ty, lvl)) = self.elab_infer(cx, recv)
-                && let Some(ind) = self.record_of(&ty)
+                && let Some(ind) = self.record_of_at(cx, &ty, span)
                 && let Some(idx) = ind.field_index(name)
             {
                 let (t, fty, flvl) =
@@ -2002,7 +2064,7 @@ impl Elaborator {
             // type, since the usual mistake is a receiver that is not the
             // record the writer had in mind.
             let what = match self.elab_infer(cx, recv) {
-                Ok((_, ty, _)) => match self.record_of(&ty) {
+                Ok((_, ty, _)) => match self.record_of_at(cx, &ty, span) {
                     Some(ind) => format!("`{}` has no field `{name}`", ind.name),
                     None => format!("this is not a record, so it has no field `{name}`"),
                 },
@@ -3478,6 +3540,14 @@ fn unify_ty(
         }
         return;
     }
+    // The subject may be `El` of a canonical code rather than the former
+    // itself — a record field read off a type that arrived through a
+    // `Val -> Type` *value* is exactly that (docs/record-type-values.md §4).
+    // `decoded` is the same context-free strip the structural readers of
+    // `inductive.rs` use: canonical codes only, never a neutral, so this walk
+    // still does no δ. Below the pattern's own `El` rule, which must keep
+    // seeing an undecoded subject so `El ?A` solves whole.
+    let subj = &*inductive::decoded(subj);
     match (pat, subj) {
         (
             Type::Id { ty: t1, lhs: a1, rhs: b1, .. },

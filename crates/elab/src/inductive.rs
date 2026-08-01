@@ -252,7 +252,7 @@ fn read_tag(t: &Type) -> Option<u32> {
 /// `gamma` or δ. An `El` of a *neutral* code (an unapplied abbreviation, a
 /// variable at `Type<n>`) is left exactly as it is — unfolding that is
 /// conversion's job, lazily, not this walk's.
-fn decoded(t: &Type) -> Cow<'_, Type> {
+pub(crate) fn decoded(t: &Type) -> Cow<'_, Type> {
     fn is_code_former(t: &Term) -> bool {
         matches!(
             t,
@@ -1547,6 +1547,21 @@ impl Elaborator {
     /// accessors (docs/surface-records.md §2).
     pub(crate) fn record_of(&self, ty: &Type) -> Option<Rc<Inductive>> {
         self.tag_of(ty).filter(|i| i.is_record)
+    }
+
+    /// [`Self::record_of`] with a reduction step behind it, for a receiver
+    /// whose type arrived through a **`Val -> Type` value** rather than through
+    /// a type annotation: `dom(env)` with `dom := λ e => NatEnv(e)` is `El` of
+    /// a β-redex, and [`decoded`] is deliberately context-free — it strips `El`
+    /// off *canonical* codes only, because unfolding anything else is
+    /// conversion's job (docs/types-as-expressions.md §4). So the structural
+    /// read is tried first and unchanged, and `whnf` is paid only when it
+    /// fails, which is exactly the new shape.
+    pub(crate) fn record_of_at(&self, cx: &Cx, ty: &Type, span: Span) -> Option<Rc<Inductive>> {
+        if let Some(ind) = self.record_of(ty) {
+            return Some(ind);
+        }
+        self.record_of(&self.whnf(cx, ty, span).ok()?)
     }
 }
 

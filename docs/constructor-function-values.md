@@ -136,6 +136,13 @@ binder just pushed, so `Π(n : Nat). [Rose; n] -> Rose` peels correctly.
 | `Wrap` where a non-function, non-`Box` type is expected | today's "`Wrap` is a constructor of `Box`, which is not the expected type here" |
 | a domain that disagrees with the field it fills | a kernel rejection of the declaration (§2.2) |
 
+One row that *looked* like it belonged here does not: `D(v̄)` where a
+**universe** is expected is not a constructor at all. No constructor inhabits
+`Type`, so the expected type selects the declared *type former* instead, by
+the same disambiguator this round established and pointed the other way
+(`docs/record-type-values.md`, landed 2026-08-01). Nothing in §2 changes — the
+universe arm runs before the constructor arms and always did.
+
 The first is the one to justify. Inferring a constructor's function type means
 building its field telescope as a `Π` — walking the Σ spine of `⟦cᵢ⟧`, and for
 tier 1 rebuilding the child and container types outside `build_children` —

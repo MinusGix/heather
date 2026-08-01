@@ -200,6 +200,14 @@ was a kernel `NotConvertible` on a term the elaborator was happy with — the
 it, which is why `crates/elab/tests/types_as_expressions.rs` §5 varies the
 declaration *order*.
 
+**Two more joined the table on 2026-08-01** (`docs/record-type-values.md` §4),
+from a shape this round could not produce: a type reached through a
+`Val -> Type` *value* is `El` of a **β-redex**, which `decoded` declines by
+design. `record_of` (behind `resolve_dot`) now falls back to one `whnf` when
+the structural read fails, and `unify_ty` decodes its *subject* before the
+congruence walk. Treat the list as open: a new structural reader of a lowered
+type is on it until a test says otherwise.
+
 `decoded` is deliberately **context-free**: it admits only an `El` whose code
 is a canonical former, and those rules of `step_type` are pure rewrites that
 never consult the local context or δ. An `El` of a *neutral* code — an

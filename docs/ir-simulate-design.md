@@ -594,11 +594,15 @@ recorded here with its reason so the next reader doesn't re-derive it.
    §6: it is the observation that a certificate relates two IRs *on the calling
    convention it is about* — the same convention `CompileNat2` already fixes —
    and that well-formedness, deliberately extrinsic (§5), is exactly what the
-   family binders re-supply where a relation needs it. The clean general form
-   would be `RefinesOn(dom: Val -> Type, …)`, which does not typecheck today:
-   a record type cannot be passed as a `Val -> Type` value, since `NatEnv(e)`
-   in expression position is the record's constructor and its value parameters
-   are then uninferable (`issues/surface-existential.md`'s neighbourhood).
+   family binders re-supply where a relation needs it. The clean general form,
+   `RefinesOn(dom: Val -> Type, …)`, is what the library now states — a record
+   type applied to its value parameters IS a `Val -> Type` value as of
+   `docs/record-type-values.md` — with `RefinesNat2` defined as
+   `RefinesOn(λ (e: Val) => NatEnv(e), …)` over a `NatEnv` record packing `a`,
+   `b`, the tail and the shape proof. The family binders did not go away; they
+   moved into a *domain predicate*, which is where they belong, and the two
+   refinement theorems pay one transport along `NatEnv`'s shape proof for the
+   move.
 
    The proof shape is the second finding, and it is the one that generalizes.
    The two IRs walk different environments, so there is no slot-by-slot

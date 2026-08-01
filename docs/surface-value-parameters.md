@@ -95,6 +95,13 @@ A bare `Converges` where the arguments were meant is a named error listing the
 parameters. Wrong arity is an arity error. The arguments are **checked**, not
 merely counted, against their declared types.
 
+Since 2026-08-01 the same road is taken from **expression** position whenever
+the expected type is a universe: `fn BoxedT(v: Nat) -> Type { Boxed(v) }`
+routes to this `TyKind::OfExpr` handler rather than to the constructor, which
+is what makes a value-parameterized record a first-class `Val -> Type` value
+(`docs/record-type-values.md`). Everything in this section is what runs there,
+including the arity message — it is the same `valparam_args`.
+
 ---
 
 ## 4. Construction: checking position supplies the parameters

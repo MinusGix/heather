@@ -1338,16 +1338,27 @@ theorem add_rec_converges(a: Nat, b: Nat, tail: Val)
 // embedded `Nat` arguments over an arbitrary environment tail, the calling
 // convention `CompileNat2` already fixes.
 //
-// This is `Refines` with its `(env: Val)` replaced by the family's own
-// binders; a `dom: Val -> Type` parameter (a `RefinesOn(dom, …)`) would say it
-// once and generally, but a record type cannot be passed as a value of type
-// `Val -> Type` today — `NatEnv(e)` in expression position is the record's
-// CONSTRUCTOR, and its value parameters are then uninferable. Recorded as a
-// follow-up rather than worked around.
+// This is `Refines` with its unrestricted `(env: Val)` guarded by a PREDICATE
+// on the environment, said once and generally: `RefinesOn(dom, …)` takes the
+// domain as a `Val -> Type` value. The family the certificates are about is
+// then a record — `NatEnv(e)`, which packs the two embedded arguments, the
+// tail, and the proof that `e` has that shape — and a record type applied to
+// its value parameters IS a `Val -> Type` value
+// (docs/record-type-values.md, [[record-types-as-type-valued-functions]]).
+record NatEnv(e: Val) {
+    a: Nat,
+    b: Nat,
+    tail: Val,
+    shape: e = VCons(embed_nat(a), VCons(embed_nat(b), tail)),
+}
+
+fn RefinesOn(dom: Val -> Type, p1: Prog, i1: Ir, p2: Prog, i2: Ir) -> Type {
+    (env: Val) -> dom(env) -> (vs: Val)
+    -> Converges(p1, env, i1, vs) -> Converges(p2, env, i2, vs)
+}
+
 fn RefinesNat2(p1: Prog, i1: Ir, p2: Prog, i2: Ir) -> Type {
-    (a: Nat) -> (b: Nat) -> (tail: Val) -> (vs: Val)
-    -> Converges(p1, VCons(embed_nat(a), VCons(embed_nat(b), tail)), i1, vs)
-    -> Converges(p2, VCons(embed_nat(a), VCons(embed_nat(b), tail)), i2, vs)
+    RefinesOn(λ (e: Val) => NatEnv(e), p1, i1, p2, i2)
 }
 
 // THE CROSS-IR REFINEMENT. The proof is not a simulation diagram and not a
@@ -1357,37 +1368,66 @@ fn RefinesNat2(p1: Prog, i1: Ir, p2: Prog, i2: Ir) -> Type {
 // environments and its own fuel bound — supplies the conclusion. That is the
 // shape every `translate`/pass certificate has when both sides are certified
 // against one spec function.
+//
+// It is stated twice: first on an environment already IN the family's shape
+// (`…_at`, where the proof lives), then at `RefinesNat2`, which is that plus
+// one transport along `NatEnv`'s own shape proof. That transport is the whole
+// price of taking the domain as a value instead of inlining its binders.
+theorem loop_refines_rec_at(a: Nat, b: Nat, tail: Val, vs: Val,
+    c: Converges(add_prog(), VCons(embed_nat(a), VCons(embed_nat(b), tail)),
+                 ir_loop(), vs))
+    : Converges(add_rec_prog(), VCons(embed_nat(a), VCons(embed_nat(b), tail)),
+                ir_rec(), vs)
+{
+    j(sym(conv_functional(add_prog(),
+              VCons(embed_nat(a), VCons(embed_nat(b), tail)), ir_loop(),
+              vs, VCons(embed_nat(add(b, a)), VNil), c,
+              converges_intro(add_prog(),
+                  VCons(embed_nat(a), VCons(embed_nat(b), tail)), ir_loop(),
+                  VCons(embed_nat(add(b, a)), VNil), add(a, 5),
+                  add_equiv_env(add_prog(), a, b, tail)))),
+      λ w p => Converges(add_rec_prog(),
+                   VCons(embed_nat(a), VCons(embed_nat(b), tail)), ir_rec(), w),
+      add_rec_converges(a, b, tail))
+}
+
 theorem loop_refines_rec(): RefinesNat2(add_prog(), ir_loop(), add_rec_prog(), ir_rec())
 {
-    λ a b tail vs c =>
-        j(sym(conv_functional(add_prog(),
-                  VCons(embed_nat(a), VCons(embed_nat(b), tail)), ir_loop(),
-                  vs, VCons(embed_nat(add(b, a)), VNil), c,
-                  converges_intro(add_prog(),
-                      VCons(embed_nat(a), VCons(embed_nat(b), tail)), ir_loop(),
-                      VCons(embed_nat(add(b, a)), VNil), add(a, 5),
-                      add_equiv_env(add_prog(), a, b, tail)))),
-          λ w p => Converges(add_rec_prog(),
-                       VCons(embed_nat(a), VCons(embed_nat(b), tail)), ir_rec(), w),
-          add_rec_converges(a, b, tail))
+    λ env d vs =>
+        j(sym(d.shape),
+          λ z q => Converges(add_prog(), z, ir_loop(), vs)
+                   -> Converges(add_rec_prog(), z, ir_rec(), vs),
+          λ c => loop_refines_rec_at(d.a, d.b, d.tail, vs, c))
 }
 
 // …and back the other way, which costs one more theorem because both sides are
 // certified: the refinement is an equivalence on this family, so either IR may
 // stand for the other.
+theorem rec_refines_loop_at(a: Nat, b: Nat, tail: Val, vs: Val,
+    c: Converges(add_rec_prog(), VCons(embed_nat(a), VCons(embed_nat(b), tail)),
+                 ir_rec(), vs))
+    : Converges(add_prog(), VCons(embed_nat(a), VCons(embed_nat(b), tail)),
+                ir_loop(), vs)
+{
+    j(sym(conv_functional(add_rec_prog(),
+              VCons(embed_nat(a), VCons(embed_nat(b), tail)), ir_rec(),
+              vs, VCons(embed_nat(add(b, a)), VNil), c,
+              add_rec_converges(a, b, tail))),
+      λ w p => Converges(add_prog(),
+                   VCons(embed_nat(a), VCons(embed_nat(b), tail)), ir_loop(), w),
+      converges_intro(add_prog(),
+          VCons(embed_nat(a), VCons(embed_nat(b), tail)), ir_loop(),
+          VCons(embed_nat(add(b, a)), VNil), add(a, 5),
+          add_equiv_env(add_prog(), a, b, tail)))
+}
+
 theorem rec_refines_loop(): RefinesNat2(add_rec_prog(), ir_rec(), add_prog(), ir_loop())
 {
-    λ a b tail vs c =>
-        j(sym(conv_functional(add_rec_prog(),
-                  VCons(embed_nat(a), VCons(embed_nat(b), tail)), ir_rec(),
-                  vs, VCons(embed_nat(add(b, a)), VNil), c,
-                  add_rec_converges(a, b, tail))),
-          λ w p => Converges(add_prog(),
-                       VCons(embed_nat(a), VCons(embed_nat(b), tail)), ir_loop(), w),
-          converges_intro(add_prog(),
-              VCons(embed_nat(a), VCons(embed_nat(b), tail)), ir_loop(),
-              VCons(embed_nat(add(b, a)), VNil), add(a, 5),
-              add_equiv_env(add_prog(), a, b, tail)))
+    λ env d vs =>
+        j(sym(d.shape),
+          λ z q => Converges(add_rec_prog(), z, ir_rec(), vs)
+                   -> Converges(add_prog(), z, ir_loop(), vs),
+          λ c => rec_refines_loop_at(d.a, d.b, d.tail, vs, c))
 }
 
 // ---------------------------------------------------------------------------
@@ -1403,8 +1443,9 @@ theorem rec_refines_loop(): RefinesNat2(add_rec_prog(), ir_rec(), add_prog(), ir
 // wraps its `Succ` around the callee's answer on the way out, where nothing
 // can displace it. Two IRs that agree on every well-formed input differ off
 // it, which is exactly what makes `Refines`-the-unrestricted-relation the
-// wrong statement for a certificate — and why the family binders belong in
-// `RefinesNat2`.
+// wrong statement for a certificate — and why the family belongs in the
+// domain `RefinesNat2` hands to `RefinesOn`. `junk_env()` below is precisely
+// an environment with no `NatEnv` inhabitant.
 
 fn junk_u() -> Val { VCon(7, VNil) }
 fn junk_q() -> Val { VCon(0, VCons(junk_u(), VNil)) }
