@@ -11,6 +11,14 @@
 // LetLoop (theta). Multi-output is multi-slot binding: a sub-region's Out
 // values are prepended onto the environment, most-significant first.
 //
+// Contents: the datatypes and `simulate` first; then the FUEL INTERFACE
+// (doc §6) — `step_mono`, `fuel_monotone` in two shapes, `refines` bounded
+// by a fuel map, and `add_equiv`, a ∀-arguments certificate discharged at a
+// computed bound. `converges` is the one piece of §6 that is not here: the
+// surface has no `exists` (issues/surface-existential.md), so it takes the
+// computed-bound form throughout, which is what §6 says discharge uses
+// anyway. Doc §13 note 7 records that and the rest of the deviations.
+//
 // Scoping (doc §13): LetMatch arms are lexical — an arm sees the matched
 // value's fields on top of the enclosing environment. LetLoop bodies and
 // called functions are closed — a loop body sees only the carried slots,
@@ -306,6 +314,148 @@ fn id_prog() -> Prog { PFun(Ret(RCons(0, RNil)), PNil) }
 // the spec function the IR is measured against
 fn add(a: Nat, b: Nat) -> Nat { match b { Zero => a, Succ(k) => Succ(add(a, k)) } }
 
+
+// ===========================================================================
+// The fuel interface (doc §6). Continuation helpers first: each names one of
+// `step`'s intermediate scrutinees as a function of the value being
+// scrutinized, so a proof can case on that value with a SMALL motive
+// (`λ o => k(ev1, …, o) = Out(vs) -> k(ev2, …, o) = Out(vs)`) instead of
+// spelling the whole match inside the motive twice. They are definitionally
+// equal to the corresponding fragment of `step_*`, so nothing in `simulate`
+// changes and no theorem below has to be restated in terms of them.
+
+// the shared tail of LetMatch / LetLoop / LetCall: a sub-region has answered,
+// and its outputs are rebound before `rest` runs
+fn k_bind(ev: Val -> Ir -> Res, env: Val, rest: Ir, r: Res) -> Res {
+    match r {
+        Stuck => Stuck,
+        OutOfFuel => OutOfFuel,
+        Out(ws) => ev(append(ws, env), rest),
+    }
+}
+
+fn k_letcon(ev: Val -> Ir -> Res, env: Val, tag: Nat, rest: Ir, o: OptVal) -> Res {
+    match o { NoneV => Stuck, SomeV(ws) => ev(VCons(VCon(tag, ws), env), rest) }
+}
+
+fn k_letmatch_v(ev: Val -> Ir -> Res, env: Val, arms: Ir, rest: Ir, v: Val) -> Res {
+    match v {
+        VNil => Stuck,
+        VCons(h, t) => Stuck,
+        VCon(tag, fields) =>
+            k_bind(ev, env, rest, ev(append(fields, env), pick_arm(arms)(tag))),
+    }
+}
+
+fn k_letmatch(ev: Val -> Ir -> Res, env: Val, arms: Ir, rest: Ir, o: OptVal) -> Res {
+    match o { NoneV => Stuck, SomeV(v) => k_letmatch_v(ev, env, arms, rest, v) }
+}
+
+fn k_letloop(ev: Val -> Ir -> Res, env: Val, body: Ir, rest: Ir, o: OptVal) -> Res {
+    match o {
+        NoneV => Stuck,
+        SomeV(ws) => k_bind(ev, env, rest, ev(ws, LoopIter(body))),
+    }
+}
+
+fn k_letcall(ev: Val -> Ir -> Res, prog: Prog, env: Val, callee: Nat, rest: Ir, o: OptVal) -> Res {
+    match o {
+        NoneV => Stuck,
+        SomeV(ws) => k_bind(ev, env, rest, ev(ws, find_fun(prog)(callee))),
+    }
+}
+
+fn k_iter_tag(ev: Val -> Ir -> Res, body: Ir, carried: Val, ftag: Nat) -> Res {
+    match ftag { Zero => Out(carried), Succ(f2) => ev(carried, LoopIter(body)) }
+}
+
+fn k_iter_flag(ev: Val -> Ir -> Res, body: Ir, carried: Val, flag: Val) -> Res {
+    match flag {
+        VNil => Stuck,
+        VCons(h, t) => Stuck,
+        VCon(ftag, ffields) => k_iter_tag(ev, body, carried, ftag),
+    }
+}
+
+fn k_iter_vals(ev: Val -> Ir -> Res, body: Ir, ws: Val) -> Res {
+    match ws {
+        VNil => Stuck,
+        VCon(tag, fields) => Stuck,
+        VCons(flag, carried) => k_iter_flag(ev, body, carried, flag),
+    }
+}
+
+fn k_iter(ev: Val -> Ir -> Res, body: Ir, r: Res) -> Res {
+    match r {
+        Stuck => Stuck,
+        OutOfFuel => OutOfFuel,
+        Out(ws) => k_iter_vals(ev, body, ws),
+    }
+}
+
+
+// ---------------------------------------------------------------------------
+// `<=` on Nat, so `fuel_monotone` can be stated in doc §6's verbatim shape.
+// There is no order on Nat in the prelude and no `exists`; `<=` is *decided*
+// here rather than declared as an indexed family (the surface has no way to
+// declare one), and `n <= m` is the equation `leb(n)(m) = True`. Its two
+// absurd cases are then ordinary constructor equations, which `absurd`
+// already refutes — no `Empty` and no large elimination are needed.
+
+inductive Bool { False, True }
+
+fn leb(n: Nat) -> Nat -> Bool {
+    match n {
+        Zero => λ (m: Nat) => True,
+        Succ(k) => λ (m: Nat) => match m { Zero => False, Succ(l) => leb(k)(l) },
+    }
+}
+
+// truncated subtraction, curried for the same reason `lookup` is: both
+// arguments descend together
+fn sub(m: Nat) -> Nat -> Nat {
+    match m {
+        Zero => λ (n: Nat) => Zero,
+        Succ(m2) => λ (n: Nat) => match n { Zero => Succ(m2), Succ(n2) => sub(m2)(n2) },
+    }
+}
+
+
+// ---------------------------------------------------------------------------
+// The refinement chain (doc §6 stress test): the same add function reached
+// through zero, one and two levels of `LetCall`.
+// the chain: fun 0 is the add loop, fun 1 calls fun 0
+fn add_chain() -> Prog {
+    PFun(add_body(),
+        PFun(LetCall(0, RCons(0, RCons(1, RNil)), Ret(RCons(0, RNil))), PNil))
+}
+
+fn ir_loop() -> Ir { add_body() }
+fn ir_call1() -> Ir { LetCall(0, RCons(0, RCons(1, RNil)), Ret(RCons(0, RNil))) }
+fn ir_call2() -> Ir { LetCall(1, RCons(0, RCons(1, RNil)), Ret(RCons(0, RNil))) }
+
+fn plus2() -> Nat -> Nat { λ (n: Nat) => Succ(Succ(n)) }
+
+
+// ---------------------------------------------------------------------------
+// The first end-to-end certificate (doc §11 item 4): an `equiv`-shaped
+// theorem for `add`, for ALL arguments, discharged at a COMPUTED fuel bound,
+// with `fuel_monotone` bridging it to the stated form.
+//
+// `add` recurses on its second argument, so `add(k, 4)` is `k` under four
+// successors and reduces at an open `k` — which is what lets a fuel bound be
+// a term the interpreter can actually consume.
+
+// succ applied `k` times, curried because the accumulator varies with the
+// recursion (doc §13 note 2, the same reason `lookup` is curried)
+fn bumps(k: Nat) -> Val -> Val {
+    match k {
+        Zero => λ (a: Val) => a,
+        Succ(k2) => λ (a: Val) => bumps(k2)(VCon(1, VCons(a, VNil))),
+    }
+}
+
+
 // ---------------------------------------------------------------------------
 // Acceptance (doc §11 items 2 and 6): simulate discharges by conversion at
 // literal fuel, against the embedded spec result.
@@ -331,6 +481,15 @@ fn add(a: Nat, b: Nat) -> Nat { match b { Zero => a, Succ(k) => Succ(add(a, k)) 
 // which is the declarations. `add(2,3)` through LetCall went 20.9s → ~0.05s
 // and `add(3,4)`, the shape that used to reach 22 GB, adds ~0.11s.
 // What remains true: unused fuel is free and executed steps are not.
+//
+// UPDATED 2026-07-31, second round: the fuel interface below takes the file
+// from 1.31s / 14.2 MB to **26.9s / 18.6 MB**, of which the declarations are
+// still 1.07s. The added time is almost entirely `step_mono`
+// (1.79s → 19.8s for that one theorem): its motive Π-quantifies nothing at
+// all, but the eight-arm case tree it forces makes `step` unfold once per
+// constructor with two interpreters in scope. That is the measured price of
+// the manual explicit-motive route, and it is a term-SIZE price rather than
+// a reduction one — memory barely moved (issues/ih-generalization.md).
 
 // 1 + 1 = 2 through the loop: LetLoop/LoopIter, LetMatch with BOTH arms
 // taken (Succ on iteration one, Zero on iteration two), LetCon,
@@ -394,3 +553,407 @@ theorem short_fuel_mid_loop():
     eval(4, add_prog())(VCons(embed_nat(2), VCons(embed_nat(3), VNil)), add_body())
     = OutOfFuel
 { refl }
+// sanity: each helper really is the fragment of `step` it claims to be, so
+// the theorems below may move freely between the two spellings
+theorem k_letcon_is_step(ev: Val -> Ir -> Res, env: Val, tag: Nat, args: Refs, rest: Ir):
+    step_letcon(ev, env, tag, args, rest) = k_letcon(ev, env, tag, rest, gather(args, env))
+{ refl }
+
+theorem k_letmatch_is_step(ev: Val -> Ir -> Res, env: Val, scrut: Nat, arms: Ir, rest: Ir):
+    step_letmatch(ev, env, scrut, arms, rest)
+    = k_letmatch(ev, env, arms, rest, lookup(env)(scrut))
+{ refl }
+
+theorem k_letloop_is_step(ev: Val -> Ir -> Res, env: Val, init: Refs, body: Ir, rest: Ir):
+    step_letloop(ev, env, init, body, rest)
+    = k_letloop(ev, env, body, rest, gather(init, env))
+{ refl }
+
+theorem k_letcall_is_step(ev: Val -> Ir -> Res, prog: Prog, env: Val, callee: Nat, args: Refs, rest: Ir):
+    step_letcall(ev, prog, env, callee, args, rest)
+    = k_letcall(ev, prog, env, callee, rest, gather(args, env))
+{ refl }
+
+theorem k_iter_is_step(ev: Val -> Ir -> Res, env: Val, body: Ir):
+    step_loopiter(ev, env, body) = k_iter(ev, body, ev(env, body))
+{ refl }
+
+// ---------------------------------------------------------------------------
+// One step is monotone in its recursive call. This is the whole case analysis
+// of `fuel_monotone`: everything about the IR happens here, and the induction
+// on fuel below is two lines.
+//
+// Where a sub-region's answer is scrutinized, the arm needs the equation the
+// match does not hand it, so the motive carries `r = ev1(…)` and the match is
+// applied to `refl` — the "remember" idiom, the only device in this proof.
+
+theorem step_mono(prog: Prog, ev1: Val -> Ir -> Res, ev2: Val -> Ir -> Res,
+                  hyp: (e: Val) -> (i: Ir) -> (w: Val) -> ev1(e, i) = Out(w) -> ev2(e, i) = Out(w),
+                  env: Val, ir: Ir, vs: Val)
+    : step(ev1, prog, env, ir) = Out(vs) -> step(ev2, prog, env, ir) = Out(vs)
+{
+    match ir as λ z => step(ev1, prog, env, z) = Out(vs) -> step(ev2, prog, env, z) = Out(vs) {
+        // no recursive call at all
+        Ret(rs) => λ q => q,
+        Arm(abody, anext) => λ q => q,
+        NoArm => λ q => q,
+
+        // one tail call, under a gather
+        LetCon(tag, args, rest) =>
+            match gather(args, env) as λ o =>
+                k_letcon(ev1, env, tag, rest, o) = Out(vs)
+                -> k_letcon(ev2, env, tag, rest, o) = Out(vs) {
+                NoneV => λ q => q,
+                SomeV(ws) => λ q => hyp(VCons(VCon(tag, ws), env), rest, vs, q),
+            },
+
+        // a sub-region, then a tail call
+        LetMatch(scrut, arms, rest) =>
+            match lookup(env)(scrut) as λ o =>
+                k_letmatch(ev1, env, arms, rest, o) = Out(vs)
+                -> k_letmatch(ev2, env, arms, rest, o) = Out(vs) {
+                NoneV => λ q => q,
+                SomeV(v) =>
+                    match v as λ y =>
+                        k_letmatch_v(ev1, env, arms, rest, y) = Out(vs)
+                        -> k_letmatch_v(ev2, env, arms, rest, y) = Out(vs) {
+                        VNil => λ q => q,
+                        VCons(vh, vt) => λ q => q,
+                        VCon(tag, fields) =>
+                            match ev1(append(fields, env), pick_arm(arms)(tag)) as λ r =>
+                                r = ev1(append(fields, env), pick_arm(arms)(tag))
+                                -> k_bind(ev1, env, rest, r) = Out(vs)
+                                -> k_bind(ev2, env, rest,
+                                          ev2(append(fields, env), pick_arm(arms)(tag))) = Out(vs) {
+                                Stuck => λ e q => absurd(q),
+                                OutOfFuel => λ e q => absurd(q),
+                                Out(ws) => λ e q =>
+                                    j(sym(hyp(append(fields, env), pick_arm(arms)(tag), ws, sym(e))),
+                                      λ y p => k_bind(ev2, env, rest, y) = Out(vs),
+                                      hyp(append(ws, env), rest, vs, q)),
+                            }(refl),
+                    },
+            },
+
+        LetLoop(init, lbody, rest) =>
+            match gather(init, env) as λ o =>
+                k_letloop(ev1, env, lbody, rest, o) = Out(vs)
+                -> k_letloop(ev2, env, lbody, rest, o) = Out(vs) {
+                NoneV => λ q => q,
+                SomeV(cs) =>
+                    match ev1(cs, LoopIter(lbody)) as λ r =>
+                        r = ev1(cs, LoopIter(lbody))
+                        -> k_bind(ev1, env, rest, r) = Out(vs)
+                        -> k_bind(ev2, env, rest, ev2(cs, LoopIter(lbody))) = Out(vs) {
+                        Stuck => λ e q => absurd(q),
+                        OutOfFuel => λ e q => absurd(q),
+                        Out(ws) => λ e q =>
+                            j(sym(hyp(cs, LoopIter(lbody), ws, sym(e))),
+                              λ y p => k_bind(ev2, env, rest, y) = Out(vs),
+                              hyp(append(ws, env), rest, vs, q)),
+                    }(refl),
+            },
+
+        LetCall(callee, args, rest) =>
+            match gather(args, env) as λ o =>
+                k_letcall(ev1, prog, env, callee, rest, o) = Out(vs)
+                -> k_letcall(ev2, prog, env, callee, rest, o) = Out(vs) {
+                NoneV => λ q => q,
+                SomeV(cs) =>
+                    match ev1(cs, find_fun(prog)(callee)) as λ r =>
+                        r = ev1(cs, find_fun(prog)(callee))
+                        -> k_bind(ev1, env, rest, r) = Out(vs)
+                        -> k_bind(ev2, env, rest, ev2(cs, find_fun(prog)(callee))) = Out(vs) {
+                        Stuck => λ e q => absurd(q),
+                        OutOfFuel => λ e q => absurd(q),
+                        Out(ws) => λ e q =>
+                            j(sym(hyp(cs, find_fun(prog)(callee), ws, sym(e))),
+                              λ y p => k_bind(ev2, env, rest, y) = Out(vs),
+                              hyp(append(ws, env), rest, vs, q)),
+                    }(refl),
+            },
+
+        // the loop's own re-entry: a sub-region, then the protocol, then a
+        // tail call at the continue flag
+        LoopIter(lbody) =>
+            match ev1(env, lbody) as λ r =>
+                r = ev1(env, lbody)
+                -> k_iter(ev1, lbody, r) = Out(vs)
+                -> k_iter(ev2, lbody, ev2(env, lbody)) = Out(vs) {
+                Stuck => λ e q => absurd(q),
+                OutOfFuel => λ e q => absurd(q),
+                Out(ws) => λ e q =>
+                    j(sym(hyp(env, lbody, ws, sym(e))),
+                      λ y p => k_iter(ev2, lbody, y) = Out(vs),
+                      match ws as λ y =>
+                          k_iter_vals(ev1, lbody, y) = Out(vs)
+                          -> k_iter_vals(ev2, lbody, y) = Out(vs) {
+                          VNil => λ q2 => q2,
+                          VCon(t, f) => λ q2 => q2,
+                          VCons(flag, carried) =>
+                              match flag as λ g =>
+                                  k_iter_flag(ev1, lbody, carried, g) = Out(vs)
+                                  -> k_iter_flag(ev2, lbody, carried, g) = Out(vs) {
+                                  VNil => λ q2 => q2,
+                                  VCons(fh, ft) => λ q2 => q2,
+                                  VCon(ftag, ffields) =>
+                                      match ftag as λ n =>
+                                          k_iter_tag(ev1, lbody, carried, n) = Out(vs)
+                                          -> k_iter_tag(ev2, lbody, carried, n) = Out(vs) {
+                                          Zero => λ q2 => q2,
+                                          Succ(f2) => λ q2 => hyp(carried, LoopIter(lbody), vs, q2),
+                                      },
+                              },
+                      }(q)),
+            }(refl),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// fuel_monotone (doc §6). The induction is on fuel with env, ir and the answer
+// GENERALIZED — match-recursion's deferred case — so the motive is written out
+// explicitly and the arms λ-wrap (issues/ih-generalization.md).
+
+theorem eval_mono_succ(prog: Prog, n: Nat):
+    (env: Val) -> (ir: Ir) -> (vs: Val)
+    -> eval(n, prog)(env, ir) = Out(vs) -> eval(Succ(n), prog)(env, ir) = Out(vs)
+{
+    match n as λ z =>
+        (env: Val) -> (ir: Ir) -> (vs: Val)
+        -> eval(z, prog)(env, ir) = Out(vs) -> eval(Succ(z), prog)(env, ir) = Out(vs) {
+        // no fuel answered nothing: OutOfFuel is not Out
+        Zero => λ env ir vs h => absurd(h),
+        Succ(k, ih) => λ env ir vs h =>
+            step_mono(prog, eval(k, prog), eval(Succ(k), prog), ih, env, ir, vs, h),
+    }
+}
+
+// the `+ k` shape: `add` recurses on its second argument, so `add(n, k)` is
+// `n` with `k` successors on the outside and both arms are definitional
+theorem eval_mono_plus(prog: Prog, n: Nat, env: Val, ir: Ir, vs: Val,
+                       h: eval(n, prog)(env, ir) = Out(vs), k: Nat)
+    : eval(add(n, k), prog)(env, ir) = Out(vs)
+{
+    match k {
+        Zero => h,
+        Succ(k2) =>
+            eval_mono_succ(prog, add(n, k2))(env, ir, vs,
+                eval_mono_plus(prog, n, env, ir, vs, h, k2)),
+    }
+}
+// the small arithmetic kit `le_add` needs. `add` recurses on its SECOND
+// argument, so these are the two lemmas that move a `Succ`/a zero across.
+theorem cong_nat(f: Nat -> Nat, {a: Nat}, {b: Nat}, p: a = b): f(a) = f(b) {
+    j(p, λ y q => f(a) = f(y), refl)
+}
+
+theorem add_left_zero(x: Nat): add(0, x) = x {
+    match x { Zero => refl, Succ(k) => cong_succ(add_left_zero(k)) }
+}
+
+theorem add_succ_left(a: Nat, b: Nat): add(Succ(a), b) = Succ(add(a, b)) {
+    match b { Zero => refl, Succ(k) => cong_succ(add_succ_left(a, k)) }
+}
+
+theorem sub_zero(m: Nat): sub(m)(0) = m {
+    match m { Zero => refl, Succ(m2) => refl }
+}
+
+// `n <= m` gives the difference: the bridge from the `<=` shape to the `+ k`
+// shape. Induction on `n` with `m` generalized — the second explicit motive.
+theorem le_add(n: Nat): (m: Nat) -> leb(n)(m) = True -> add(n, sub(m)(n)) = m {
+    match n as λ z => (m: Nat) -> leb(z)(m) = True -> add(z, sub(m)(z)) = m {
+        Zero => λ m hle =>
+            trans(cong_nat(λ (x: Nat) => add(0, x), sub_zero(m)), add_left_zero(m)),
+        Succ(n2, ih) => λ m hle =>
+            match m as λ y => leb(Succ(n2))(y) = True -> add(Succ(n2), sub(y)(Succ(n2))) = y {
+                Zero => λ bad => absurd(bad),
+                Succ(m2) => λ good =>
+                    trans(add_succ_left(n2, sub(m2)(n2)), cong_succ(ih(m2, good))),
+            }(hle),
+    }
+}
+
+// doc §6, verbatim shape: `simulate(p, f, args, n) == Out(vs) -> n <= m ->
+// simulate(p, f, args, m) == Out(vs)`, with `simulate` spelled as the landed
+// `eval` and `n <= m` as `leb(n)(m) = True`.
+theorem fuel_monotone(prog: Prog, env: Val, ir: Ir, vs: Val, n: Nat, m: Nat,
+                      h: eval(n, prog)(env, ir) = Out(vs), hle: leb(n)(m) = True)
+    : eval(m, prog)(env, ir) = Out(vs)
+{
+    j(le_add(n)(m, hle),
+      λ y p => eval(y, prog)(env, ir) = Out(vs),
+      eval_mono_plus(prog, n, env, ir, vs, h, sub(m)(n)))
+}
+
+// ---------------------------------------------------------------------------
+// `refines` (doc §6). The surface has no `exists`, so the ∃-closure
+// `converges` is not statable as a type; what is statable — and is what the
+// discharge story of §6 actually uses — is the BOUNDED form: a refinement
+// carries a fuel map `b`, and IR₂ refines IR₁ when every convergence of IR₁
+// at `n` is a convergence of IR₂ at `b(n)`. Composition is then function
+// composition of the bounds, which is the §6 stress test; `fuel_monotone` is
+// what makes the shape robust, since a bound may always be loosened.
+//
+// The relation is a statement SHAPE rather than a definition, for the same
+// reason: a `fn` body is an expression and `->` is not an expression, so
+// `refines` cannot be given a name today (recorded in doc §13 note 7).
+
+theorem refines_refl(prog: Prog, ir: Ir):
+    (env: Val) -> (vs: Val) -> (n: Nat)
+    -> eval(n, prog)(env, ir) = Out(vs) -> eval(n, prog)(env, ir) = Out(vs)
+{ λ env vs n h => h }
+
+theorem refines_trans(
+    p1: Prog, i1: Ir, p2: Prog, i2: Ir, p3: Prog, i3: Ir,
+    b1: Nat -> Nat, b2: Nat -> Nat,
+    r1: (env: Val) -> (vs: Val) -> (n: Nat)
+        -> eval(n, p1)(env, i1) = Out(vs) -> eval(b1(n), p2)(env, i2) = Out(vs),
+    r2: (env: Val) -> (vs: Val) -> (n: Nat)
+        -> eval(n, p2)(env, i2) = Out(vs) -> eval(b2(n), p3)(env, i3) = Out(vs))
+    : (env: Val) -> (vs: Val) -> (n: Nat)
+      -> eval(n, p1)(env, i1) = Out(vs) -> eval(b2(b1(n)), p3)(env, i3) = Out(vs)
+{ λ env vs n h => r2(env, vs, b1(n), r1(env, vs, n, h)) }
+
+// ---------------------------------------------------------------------------
+// A concrete refinement, and its composition across two hand-written IRs for
+// the same function (doc §11 item 3's stress test).
+//
+// The family is the one a two-argument, one-result certificate lives in:
+// environment `[x, y]`, answer `[v]`. Wrapping a body in a `LetCall` to it
+// refines the body at bound `n ↦ n + 2` — one step for the call, one for the
+// `Ret` that rebinds its answer — and the wrapping composes.
+
+theorem call_refines(prog: Prog, callee: Nat, cbody: Ir,
+                     hfind: find_fun(prog)(callee) = cbody,
+                     x: Val, y: Val, v: Val, n: Nat,
+                     h: eval(n, prog)(VCons(x, VCons(y, VNil)), cbody) = Out(VCons(v, VNil)))
+    : eval(Succ(Succ(n)), prog)(VCons(x, VCons(y, VNil)),
+          LetCall(callee, RCons(0, RCons(1, RNil)), Ret(RCons(0, RNil))))
+      = Out(VCons(v, VNil))
+{
+    j(sym(hfind),
+      λ w p => k_bind(eval(Succ(n), prog), VCons(x, VCons(y, VNil)), Ret(RCons(0, RNil)),
+                      eval(Succ(n), prog)(VCons(x, VCons(y, VNil)), w))
+               = Out(VCons(v, VNil)),
+      j(sym(eval_mono_succ(prog, n)(VCons(x, VCons(y, VNil)), cbody, VCons(v, VNil), h)),
+        λ r p => k_bind(eval(Succ(n), prog), VCons(x, VCons(y, VNil)), Ret(RCons(0, RNil)), r)
+                 = Out(VCons(v, VNil)),
+        refl))
+}
+
+// step one: the loop is refined by a call to it, at bound `n ↦ n + 2`
+theorem loop_refined_by_call(x: Val, y: Val, v: Val, n: Nat,
+    h: eval(n, add_chain())(VCons(x, VCons(y, VNil)), ir_loop()) = Out(VCons(v, VNil)))
+    : eval(plus2()(n), add_chain())(VCons(x, VCons(y, VNil)), ir_call1()) = Out(VCons(v, VNil))
+{ call_refines(add_chain(), 0, ir_loop(), refl, x, y, v, n, h) }
+
+// step two: that call is in turn refined by a call to the function that makes
+// it — the same lemma at a different callee, which is the point of taking the
+// callee as an argument
+theorem call_refined_by_call(x: Val, y: Val, v: Val, n: Nat,
+    h: eval(n, add_chain())(VCons(x, VCons(y, VNil)), ir_call1()) = Out(VCons(v, VNil)))
+    : eval(plus2()(n), add_chain())(VCons(x, VCons(y, VNil)), ir_call2()) = Out(VCons(v, VNil))
+{ call_refines(add_chain(), 1, ir_call1(), refl, x, y, v, n, h) }
+
+// …and they compose, bounds included: no fuel arithmetic leaks out of the
+// chain, it is exactly `plus2 ∘ plus2`
+theorem loop_refined_by_call2(x: Val, y: Val, v: Val, n: Nat,
+    h: eval(n, add_chain())(VCons(x, VCons(y, VNil)), ir_loop()) = Out(VCons(v, VNil)))
+    : eval(plus2()(plus2()(n)), add_chain())(VCons(x, VCons(y, VNil)), ir_call2())
+      = Out(VCons(v, VNil))
+{ call_refined_by_call(x, y, v, plus2()(n), loop_refined_by_call(x, y, v, n, h)) }
+
+// the composite really computes: 1 + 1 = 2 two calls deep
+theorem chain_add_one_one():
+    eval(54, add_chain())(VCons(embed_nat(1), VCons(embed_nat(1), VNil)), ir_call2())
+    = Out(VCons(embed_nat(2), VNil))
+{ refl }
+theorem cong_nat_val(f: Nat -> Val, {a: Nat}, {b: Nat}, p: a = b): f(a) = f(b) {
+    j(p, λ y q => f(a) = f(y), refl)
+}
+
+// the embedding is a monoid map for the loop's accumulator: bumping an
+// embedded numeral `a` times is embedding the sum. Induction on `a` with `b`
+// generalized — the third explicit motive.
+theorem bumps_embed(a: Nat): (b: Nat) -> bumps(a)(embed_nat(b)) = embed_nat(add(b, a)) {
+    match a as λ z => (b: Nat) -> bumps(z)(embed_nat(b)) = embed_nat(add(b, z)) {
+        Zero => λ b => refl,
+        Succ(a2, ih) => λ b =>
+            trans(ih(Succ(b)),
+                  cong_nat_val(λ (x: Nat) => embed_nat(x), add_succ_left(b, a2))),
+    }
+}
+
+// The loop invariant: from carried state `(k, acc)` the theta loop halts with
+// `(0, succ^k(acc))`, at fuel `k + 4`. Induction on `k` with the accumulator
+// generalized — the fourth explicit motive, and the one the round exists for:
+// each iteration costs exactly one fuel at the LoopIter level, and the four
+// constant steps are the sub-region the arm runs.
+theorem add_loop_runs(prog: Prog, k: Nat):
+    (acc: Val)
+    -> eval(add(k, 4), prog)(VCons(embed_nat(k), VCons(acc, VNil)),
+                                   LoopIter(add_loop_body()))
+       = Out(VCons(embed_nat(0), VCons(bumps(k)(acc), VNil)))
+{
+    match k as λ z =>
+        (acc: Val)
+        -> eval(add(z, 4), prog)(VCons(embed_nat(z), VCons(acc, VNil)),
+                                       LoopIter(add_loop_body()))
+           = Out(VCons(embed_nat(0), VCons(bumps(z)(acc), VNil))) {
+        Zero => λ acc => refl,
+        Succ(k2, ih) => λ acc => ih(VCon(1, VCons(acc, VNil))),
+    }
+}
+
+// …and the function body around it: gather the two arguments, run the loop,
+// return the accumulator slot.
+theorem add_ir_runs(prog: Prog, a: Nat, b: Nat):
+    eval(add(a, 5), prog)(VCons(embed_nat(a), VCons(embed_nat(b), VNil)), add_body())
+    = Out(VCons(bumps(a)(embed_nat(b)), VNil))
+{
+    j(sym(add_loop_runs(prog, a)(embed_nat(b))),
+      λ r p => k_bind(eval(add(a, 4), prog),
+                      VCons(embed_nat(a), VCons(embed_nat(b), VNil)),
+                      Ret(RCons(1, RNil)), r)
+               = Out(VCons(bumps(a)(embed_nat(b)), VNil)),
+      refl)
+}
+
+// THE CERTIFICATE. For every pair of spec arguments, the IR simulates to the
+// embedded spec result. The loop counts `a` down onto `b`, so the function it
+// implements is `λ a b. b + a` — `add(b, a)` in the spec's own spelling,
+// which recurses on its second argument.
+theorem add_equiv(prog: Prog, a: Nat, b: Nat):
+    eval(add(a, 5), prog)(VCons(embed_nat(a), VCons(embed_nat(b), VNil)), add_body())
+    = Out(VCons(embed_nat(add(b, a)), VNil))
+{
+    j(bumps_embed(a)(b),
+      λ w p => eval(add(a, 5), prog)(VCons(embed_nat(a), VCons(embed_nat(b), VNil)),
+                                           add_body())
+               = Out(VCons(w, VNil)),
+      add_ir_runs(prog, a, b))
+}
+
+// the stated form (doc §6): the certificate holds at EVERY fuel at least the
+// computed bound, `fuel_monotone` doing the bridging. This is the shape a
+// `Compile` instance will export, since a caller has no reason to know the
+// bound the instance computed.
+theorem add_equiv_at(prog: Prog, a: Nat, b: Nat, f: Nat, hle: leb(add(a, 5))(f) = True):
+    eval(f, prog)(VCons(embed_nat(a), VCons(embed_nat(b), VNil)), add_body())
+    = Out(VCons(embed_nat(add(b, a)), VNil))
+{
+    fuel_monotone(prog, VCons(embed_nat(a), VCons(embed_nat(b), VNil)), add_body(),
+                  VCons(embed_nat(add(b, a)), VNil), add(a, 5), f, add_equiv(prog, a, b), hle)
+}
+
+// and the certificate transports along the refinement chain: the same
+// function, two calls deep, at the composed bound
+theorem add_equiv_through_calls(a: Nat, b: Nat):
+    eval(plus2()(plus2()(add(a, 5))), add_chain())(
+        VCons(embed_nat(a), VCons(embed_nat(b), VNil)), ir_call2())
+    = Out(VCons(embed_nat(add(b, a)), VNil))
+{
+    loop_refined_by_call2(embed_nat(a), embed_nat(b), embed_nat(add(b, a)), add(a, 5),
+        add_equiv(add_chain(), a, b))
+}

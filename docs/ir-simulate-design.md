@@ -302,10 +302,18 @@ option 2, one normal form, is the removal rather than the paper-over).
    result *by conversion* at literal fuel.
 3. `fuel_monotone` proved; `converges` and `refines` stated; refinement
    composes across two hand-written IRs for the same function (the §6
-   stress test, small).
+   stress test, small). *Done 2026-07-31, with the statement shapes
+   amended — see note 7.* `fuel_monotone` in both the `+ k` and the `<=`
+   shape; `refines` bounded, with `refines_refl`/`refines_trans` and a
+   three-link concrete chain (the add loop, a `LetCall` to it, a `LetCall`
+   to that) composing at `plus2 ∘ plus2`.
 4. A hand-written `equiv`-shaped theorem for one function, discharged at a
    computed bound — the first end-to-end certificate, ahead of any
-   `Compile` class machinery.
+   `Compile` class machinery. *Done 2026-07-31:* `add_equiv` is ∀-arguments
+   (`add_loop_runs` is the loop invariant, `bumps_embed` the embedding
+   lemma) at the computed bound `add(a, 5)`, `add_equiv_at` is the same at
+   any larger fuel via `fuel_monotone`, and `add_equiv_through_calls`
+   transports it along the refinement chain.
 5. The bench fixture: conversion discharging `simulate ir fuel` at
    realistic program size and fuel, into
    `crates/kernel/benches/kernel/fixtures/` (~30-line family, per the
@@ -439,13 +447,68 @@ recorded here with its reason so the next reader doesn't re-derive it.
    *this* document are note 4's discipline (a constant now, not a cliff)
    and §11 item 5's re-aimed bench obligation, which is retired below.
 
-**Deferred to the next round, with the route sketched:** §11 items 3–4
-(`converges`, `fuel_monotone`, `refines`, a ∀-args `equiv`). Two real
-blockers, both now measured rather than guessed: `fuel_monotone` is an
-IH-generalizing induction (the motive must quantify `env`/`ir`), which is
-match-recursion's known deferred case — the manual route exists via an
-explicit motive (`match fuel as λ f => (env: Val) -> …` with the
-`Succ(k, ih)` arm spelling) and is a session-sized proof through `step`'s
-case tree; and stating `converges` wants either Σ at the statement level
-or the computed-bound form. Neither blocks using the interpreter, which is
-why items 1/2/6 shipped first.
+7. **`converges` and `refines` are statement *shapes*, not definitions**
+   (amendment, 2026-07-31, third round of the day — the round that landed
+   §11 items 3–4). §6 defines `converges(p, f, args, vs) := exists n.
+   simulate(…, n) == Out(vs)` and states `refines` through it. Neither is
+   definable at the surface today, for two independent reasons, and both are
+   recorded here rather than worked around silently:
+
+   - **No `exists`.** The surface has no Σ over an arbitrary predicate: a
+     `record` may carry dependent fields but takes only *type* parameters, so
+     `Converges` cannot be indexed by `(p, env, ir, vs)` and an inhabitant of
+     an un-indexed Σ proves nothing about a particular program. Declaring an
+     indexed family would need surface syntax for one, which does not exist
+     (`issues/indexed-families.md`, and §8's ladder puts it behind SProp
+     anyway).
+   - **No `->` in expression position.** A `fn` body is an expression, and
+     the expression grammar has no function-type former, so even the
+     ∀-shaped half of the interface cannot be given a *name*. It can be
+     written in any *type* position, which is where theorem statements live.
+
+   What landed instead, and why it is the same interface:
+
+   - `converges` at a **computed bound** — `eval(bound(args), p)(env, ir) =
+     Out(vs)` — which is what §6 already says discharge uses. The ∃-closure is
+     the only part missing, and it is missing at the *statement* level only:
+     every consumer this design has (a `Compile` instance, a refinement, a
+     pass lemma) carries its bound anyway.
+   - `refines` in the **bounded** form: IR₂ refines IR₁ at fuel map `b` when
+     every convergence of IR₁ at `n` is a convergence of IR₂ at `b(n)`.
+     §6's "transitive by construction" survives exactly — composition is
+     composition of the bounds (`refines_trans` in the library, a one-liner)
+     — and `fuel_monotone` is what keeps the shape robust, since a bound may
+     always be loosened. The un-bounded ∃-form is the image of this one under
+     the ∃-closure, so nothing has to be re-proved when Σ arrives.
+   - `fuel_monotone` **verbatim**, with `n <= m` spelled `leb(n)(m) = True`:
+     the prelude has no order on `Nat` and no indexed families, so `<=` is
+     *decided* in the library rather than declared. Its two absurd cases are
+     then ordinary constructor equations, which `absurd` already refutes — no
+     `Empty` and no large elimination. The `+ k` shape (`eval_mono_plus`) is
+     proved first and is what the `<=` shape reduces to, via `le_add`.
+
+   One surface change was needed and made: a **motive body is parsed with the
+   type grammar**, so it may be a function type. An IH-generalizing motive is
+   literally `λ z => (env: Val) -> … -> P(z)`, and without it §11 item 3 is
+   not statable. Backwards compatible — the type grammar falls through to the
+   expression grammar for equations, names and applications, which is every
+   motive that parsed before (`crates/elab/tests/motives.rs`,
+   `issues/ih-generalization.md`). `absurd`/`inj` also now δι-reduce both
+   endpoints before reading constructors off them, because the base case of a
+   fuel induction reaches its equation by *computing*.
+
+   The cost, since `issues/ih-generalization.md` asked for it rather than an
+   assumption: the file goes from 1.31s / 14.2 MB to 26.9s / 18.6 MB, and
+   ~18s of that is `step_mono` alone. Note 4's "a duplicated ih is now free"
+   does not extend to a generalized motive: the tax is term *size* at each
+   arm of a case tree over the whole `Ir`, and it is large. Peak memory
+   barely moved, so this is elaboration and conversion work on big terms, not
+   the old copying blowup.
+
+**Landed the same day** (was: deferred to the next round): §11 items 3–4.
+Both blockers were called correctly. `fuel_monotone` *is* an IH-generalizing
+induction, and the manual explicit-motive route works — one session, and the
+whole case analysis lives in a single non-recursive lemma (`step_mono`) so
+that the induction on fuel is two arms. Stating `converges` did want Σ, does
+not have it, and took the computed-bound form; note 7 records what that
+costs and why it costs nothing later.
