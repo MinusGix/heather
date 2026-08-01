@@ -32,16 +32,19 @@
 //! the loop body, and two coupling controls — +5s debug, +0.35s release
 //! (34.1s), all of it repackaging landed theorems.
 //!
-//! BUDGET. This binary is **~203 CPU-seconds** debug against `scripts/test`'s
-//! 300-second `ulimit -t` (was 9.2s, then 165s, then 194s), and nearly all of that is the
-//! one full-library test. That is the headroom this file has left, and it is
-//! now thin: the next theorem in `lib/ir_v1.hthr` whose motive forces a case
-//! tree over `Ir` should be weighed against it, a second full-library
-//! elaboration does **not** fit (which is why the ∃-form's negative controls
-//! ride inside the acceptance test rather than beside it), and if the file
-//! grows another `step_mono` the answer is to make the elaborator compute
-//! generalized motives (`issues/ih-generalization.md`) rather than to raise the
-//! limit.
+//! BUDGET. This binary is **~48 CPU-seconds** against `scripts/test`'s
+//! 300-second `ulimit -t`, and nearly all of that is the one full-library
+//! test. It was ~203s (after 9.2s, 165s, 194s) until 2026-08-01, when the
+//! workspace `[profile.dev.package.*]` overrides landed: the kernel/elab/
+//! syntax crates now build at `opt-level = 3` even for dev test runs
+//! (debug-assertions stay on), which bought back the ~6x a debug-built
+//! kernel was paying on this file's conversion work. The old discipline
+//! still applies at the new scale — weigh any theorem whose motive forces a
+//! case tree over `Ir`, and if the file grows another `step_mono` the answer
+//! is to make the elaborator compute generalized motives
+//! (`issues/ih-generalization.md`) rather than to raise the limit — but a
+//! second full-library elaboration now fits again if a round truly needs
+//! one.
 //!
 //! - the first elaborates every DECLARATION (datatypes, helpers, the
 //!   interpreter, the continuation helpers, the add programs) and runs the

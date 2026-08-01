@@ -9,3 +9,16 @@ license = "MIT OR Apache-2.0"
 
 [workspace.lints.rust]
 unsafe_code = "forbid"
+
+# The full-library elab test runs deep kernel conversion against scripts/test's
+# 300 CPU-second rail; unoptimized it pays ~6x over release for no diagnostic
+# gain. Optimize the hot crates even in dev builds — debug-assertions and
+# overflow-checks stay on (profile.dev defaults), only codegen changes.
+[profile.dev.package.heather-kernel]
+opt-level = 3
+
+[profile.dev.package.heather-elab]
+opt-level = 3
+
+[profile.dev.package.heather-syntax]
+opt-level = 3

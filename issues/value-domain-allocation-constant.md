@@ -3,7 +3,7 @@ title: The value domain costs a 1.5-3x constant where there is no sharing to win
 status: open
 labels: [kernel,conversion,performance]
 created: 2026-07-31
-updated: 2026-07-31
+updated: 2026-08-01
 ---
 
 Stage 2b of [[nbe-conversion-round]] killed the exponential (the acceptance
@@ -75,3 +75,18 @@ Worth trying, in rough order of expected yield:
 exponent bought. Stage 4 of [[nbe-conversion-round]] re-measures `bounds.rs`
 and should re-read this at the same time — conversion no longer calls
 `apply_local` at all, so the two questions share a profile.
+
+## Log
+
+- 2026-08-01: Attribution datum from the release `heather check lib/ir_v1.hthr`
+  profile (~34s, fp call-graph): allocator time (malloc 4.9% + cfree 5.0% +
+  libc internals ~4% + `Rc<VTy>`/`Rc<TyClo>` drop_slow ~5% + Level/Type drop
+  glue ~3.6%) is the largest block of the run, ~18-20% combined. Immediate
+  callers of malloc, by sample count: `Values::push_entry` 85,
+  `Eval::eval_ty` 79, `open_ty` 67, `Eval::force_ty` 55, `value::Env::extend`
+  38 — i.e. exactly the closure-allocation shape this file diagnosed on
+  `conv/simulate-*`, now confirmed on the real library at 20x the scale.
+  The "worth trying" list is unchanged by this datum; items 2 (Clo1 inline —
+  `open_ty`/`push_entry` are top callers) and 4 (`TmC::value` re-wrap) look
+  like the contained first bites. Ranked against [[context-representation-clones]]'
+  Gamma half (~8%) this block is bigger but spread across more edits.
