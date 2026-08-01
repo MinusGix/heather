@@ -181,6 +181,49 @@ impl Elaborator {
         ))
     }
 
+    /// [`Self::indexed_of`] with reduction behind it, for a family that arrived
+    /// through a `Nat -> Type` **function value** — `F(n)` where
+    /// `fn F(n: Nat) -> Type { V<Nat>(n) }` is `El` of a δ/β-**redex**, not of
+    /// the `elim_Nat` the structural read wants
+    /// (`docs/record-type-values.md` §4/§6).
+    ///
+    /// The fallback is *not* `whnf`, and that is the whole subtlety: whnf of a
+    /// family form at a constructor-headed index reduces the `elim_Nat` away,
+    /// index and all — which is exactly the case `indexed_of`'s doc comment
+    /// says is lost. So this steps the **code** one reduction at a time and
+    /// re-runs the structural read after each step, stopping at the *first*
+    /// success. A redex above the `elim_Nat` is peeled; the `elim_Nat` itself
+    /// is never reached, because the read succeeds the moment it surfaces.
+    ///
+    /// As with [`Self::record_of_at`], the structural read comes first and
+    /// unchanged, so nothing that resolved before pays anything new.
+    pub(crate) fn indexed_of_at(
+        &self,
+        cx: &Cx,
+        ty: &Type,
+    ) -> Option<(Rc<Inductive>, IndexedFam)> {
+        if let Some(r) = self.indexed_of(ty) {
+            return Some(r);
+        }
+        let Type::El { level, tm } = ty else { return None };
+        let mut tm = Rc::clone(tm);
+        // Bounded by the elaborator's own fuel: peeling `F(e)` is δ then β,
+        // and a chain of wrappers is two steps each.
+        for _ in 0..self.fuel.min(1024) {
+            let next = heather_kernel::reduce::step_term_delta(
+                &tm,
+                &cx.gamma,
+                heather_kernel::reduce::Defs::transparent(&self.delta_psi),
+            )?;
+            tm = Rc::new(next);
+            let cand = Type::El { level: level.clone(), tm: Rc::clone(&tm) };
+            if let Some(r) = self.indexed_of(&cand) {
+                return Some(r);
+            }
+        }
+        None
+    }
+
     /// `D<ā>(e)` written in type position (§2). The parser's backtracking
     /// delivers it as an *expression* (an applied type is never called, so
     /// the call is the index application); this recognizes the shape before
@@ -420,7 +463,7 @@ impl Elaborator {
         span: Span,
     ) -> R<Term> {
         let ctor = &ind.ctors[i];
-        let Some((found, fam)) = self.indexed_of(expected) else {
+        let Some((found, fam)) = self.indexed_of_at(cx, expected) else {
             return err(
                 format!(
                     "`{}` constructs the indexed family `{}(i)`, but the expected type \

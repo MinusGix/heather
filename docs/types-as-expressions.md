@@ -205,8 +205,32 @@ from a shape this round could not produce: a type reached through a
 `Val -> Type` *value* is `El` of a **β-redex**, which `decoded` declines by
 design. `record_of` (behind `resolve_dot`) now falls back to one `whnf` when
 the structural read fails, and `unify_ty` decodes its *subject* before the
-congruence walk. Treat the list as open: a new structural reader of a lowered
-type is on it until a test says otherwise.
+congruence walk.
+
+**And the list is now closed** (`docs/record-type-values.md` §6, the audit —
+`issues/el-reader-decode-audit.md`). Six more readers were repaired and the
+rest of the roster is classified there, with a reason per entry. Four of the
+six were broken by *this* round rather than by the `Val -> Type` one, and the
+route is the sentence above about laziness taken one step further: because the
+children of a decoded code stay wrapped, a record's **field** types are
+`El`-headed whenever the record itself arrived as a code. That is how a
+vector literal and `map`/`fold`'s receivers were reached — with no function
+value anywhere in the program.
+
+| Reader | What went wrong | Fix |
+| --- | --- | --- |
+| `record_of` behind `Stmt::LetRecord` | `let { a } = p` declined a receiver `p.a` accepted | `record_of_at` |
+| `indexed_of` (three call sites) | an indexed family reached through a name was not a family | `indexed_of_at`, step-and-retest |
+| `elab_vec_lit` | a record's vector field is `El (TmVec …)` | `decoded` |
+| `elab_vec_map` / `elab_vec_fold` receivers | the same, projected | `decoded` |
+| the container-proof motive test (`wf.rs`) | **naming** a container induction's statement re-broke it | one `whnf`, in a rebuilt context |
+
+The two `decoded`s and the step-and-retest are not `whnf` on purpose: `Vec`
+reduces on its length and an indexed family on its index, so normalizing to
+find them destroys them (§6.3 there). The audit found no reader of
+`tag_value`'s kind — none fell through to a *default* rather than a
+diagnostic — which is the property the negative controls in
+`crates/elab/tests/el_reader_audit.rs` exist to hold.
 
 `decoded` is deliberately **context-free**: it admits only an `El` whose code
 is a canonical former, and those rules of `step_type` are pure rewrites that

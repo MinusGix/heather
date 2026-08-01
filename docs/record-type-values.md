@@ -200,3 +200,116 @@ embedded arguments, the tail, and the shape proof, and both refinement
 directions are re-proved through it. Release check time is unchanged
 (41.2s against a ~41s baseline): the added transport is one `j` per direction,
 and the δ-stuck `RefinesNat2` head compares before it unfolds.
+
+---
+
+## 6. The audit: the whole roster of `El` readers
+
+Status: **landed**, 2026-08-01. Tracking issue:
+`issues/el-reader-decode-audit.md`.
+
+§4 ended with "treat the list as open". This section closes it. Every
+structural reader of a *lowered* `Type` in `crates/elab` was enumerated and
+tried against a type that arrived wrapped, in both spellings:
+
+- **δ** — a named type-valued `fn` (`fn B(v: Nat) -> Type { Box2(v) }`), which
+  is `docs/types-as-expressions.md`'s shape: `El` of a call to a global;
+- **β** — a `Nat -> Type` (or `Val -> Type`) function *value*, applied
+  (`Dom()(n)`, `HoldsOn(λ (v: Nat) => Outer(v))`), which is §4's shape and the
+  one conversion cannot pre-collapse.
+
+Two things came out that the sweep was not looking for. First, **the shape
+reaches readers with no function value anywhere in sight**: `El ⌜T⌝ ⇝ T` leaves
+the children wrapped, so a record's *field* types are `El`-headed whenever the
+record itself was read as a code — which is how the vector readers below were
+reached. Second, four of the six repairs are for the **δ** spelling, i.e. they
+were already broken by `docs/types-as-expressions.md` and nobody had asked.
+
+### 6.1 Repaired
+
+| Reader | Reachable how | Was | Fix |
+| --- | --- | --- | --- |
+| `Stmt::LetRecord`'s `record_of` (`lib.rs`) | the right-hand side is inferred, so any `dom(n)`-typed binder | "a `let { … }` pattern needs a record on the right" | `record_of_at` — the §4 fallback, which `resolve_dot` already used. `let { a } = p` and `p.a` are one feature (`docs/surface-records.md` §5); they now read their subject the same way |
+| `indexed_of`, from `elab_match`, from inference-position `match`, and from `build_indexed_ctor` (`lib.rs`, `indexed.rs`) | `fn F(n: Nat) -> Type { V<Nat>(n) }` | "`match` needs a `Nat` or a declared inductive"; "the expected type here is not in that family form" | `indexed_of_at` — **not** a `whnf`; see §6.3 |
+| `elab_vec_lit` (`lib.rs`) | a record with a vector field, read as a code: the component is `El (TmVec …)` | "a vector literal needs a `[T; n]` expected type" | `decoded` — **not** a `whnf`; see §6.3 |
+| `elab_vec_map` / `elab_vec_fold` receivers (`lib.rs`) | the same component, projected | "`map`'s receiver has to be a vector" | `decoded`, same reason |
+| the phase-3 motive test in `wf_branch` (`wf.rs`) | **naming the statement** of a container induction — `fn Agree(r: Rose) -> Type { size(r) = size_plus(r) }` | phase 2's rejection ("needs … an equation `a = b` at a type that is") | `motive_head`: one `whnf`, in a `(Γ₀, z : ⟦D⟧)` context rebuilt from what `Tel` already holds. `Id` *is* a weak-head normal form, so here `whnf` cannot overshoot |
+| `cong`'s receiver test (`lib.rs`) | not today — the container binder's type is built by `wf.rs`, never decoded | — | `decoded` anyway: one line, and it is the third of three sibling readers of the same thing |
+
+### 6.2 Already fine, and why
+
+Everything below either reduces before reading or cannot receive a lowered
+type at all. Each was exercised at the β and δ shapes where it can receive one
+(`crates/elab/tests/el_reader_audit.rs`, the last three tests).
+
+- **Reduce at the top.** `build_ctor`, `build_ctor_value`, `elab_lam_check`,
+  `refl`'s `Id` read, `j`'s proof read, `apply_explicit` / `apply_implicit` /
+  `elab_self_call`'s Π peels, `elab_check_hinted`'s universe fall-through,
+  `equation`, `build_absurd`, `build_inj`, `elab_ty`'s `Ty l` check.
+- **Reduce at every spine step.** `build_fields`, `project_field`,
+  `projection`, the `match` arm field walks in `inductive.rs` and
+  `indexed.rs`, `build_children`.
+- **Reached only from an already-reduced subject.** `tag_of`, `spine`,
+  `read_tag`, `tag_value` (all `decoded` besides); `elab_match_data`'s
+  dispatch; `build_elim_wf` and `const_body`'s `Type::Wf` reads, which come
+  from `elab_match`'s `head`.
+- **Repaired in the previous round.** `record_of_at`, `unify_ty` (§4).
+- **Cannot receive a lowered type.** `expr_as_ty`, `type_former_app`,
+  `try_valparam_ty`, `try_indexed_ty`, `named_head`, `classify_fields`,
+  `occurs` — these read the *surface* `Expr`/`Ty` the parser produced, and the
+  lowering happens below them, not above.
+- **Indifferent to the wrapper.** `code::code_of` — `El` is its identity case,
+  so a wrapped type is already its own code. `vec::strengthen` — a scope test,
+  structural over every former including `El`. `synth_motive` — substitutes
+  and never inspects. `nat_value` and `elab_vec_lit`'s length check —
+  term-level, below the wrapper entirely.
+
+### 6.3 Why two of the repairs are not `whnf`
+
+§4's fallback pays one `whnf` when the structural read fails. That is right for
+a *record*: `Σ` is a weak-head normal form, so reducing to find one cannot go
+past it. It is **wrong** for the two readers whose shape reduces further:
+
+- `Vec` reduces **on its length**. The whnf of `[T; 0]` is `Unit` and of
+  `[T; 2]` a Σ-chain — the very shape `elab_vec_lit` exists to recognize. So
+  it uses `decoded`, the context-free single decode, which stops at `Vec`
+  exactly. (`elab_vec_lit`'s pre-existing comment "*not* whnf'd" was right for
+  a reason that has now been tested.)
+- An indexed family reduces **on its index**. The whnf of `V<Nat>(0)` is the
+  base branch's Σ-spine, index and all — which is precisely the loss
+  `indexed_of`'s doc comment already described. So `indexed_of_at` steps the
+  *code* one reduction at a time and re-runs the structural read after each,
+  stopping at the **first** success. A redex above the `elim_Nat` is peeled;
+  the `elim_Nat` itself is never reached, because the read succeeds the moment
+  it surfaces. `F(0)` and `F(Succ(n))` are the two cases a single `whnf` would
+  have destroyed, and both are pinned.
+
+So the pattern generalizes to: *structural read first; then reduce as little as
+possible, testing after each step.* §4's one-`whnf` fallback is that rule at a
+former which happens to be a normal form.
+
+### 6.4 No silent wrong results
+
+`docs/types-as-expressions.md` §4's `tag_value` is the failure mode that
+matters — a reader that falls through to a **default** (`⟨⟩` where a pair was
+needed) rather than to a diagnostic, and so produces a checked theorem about
+the wrong object. The audit found **none** of that kind. Every one of the six
+readers above declined loudly, with a message, and the two fallbacks that
+*could* have introduced the failure mode by over-reducing are exactly the two
+that do not use `whnf` (§6.3).
+
+The negative controls in `el_reader_audit.rs` are there to keep it that way:
+the false theorem of the same shape as the container induction, named the same
+way and discharged the same way, is still rejected; a named motive that is not
+an equation still gets phase 3's message rather than a term; a vector literal
+of the wrong length is still counted; a constructor of the wrong family at a
+coded expected type still names the mismatch.
+
+### 6.5 The rule of thumb, now stated once
+
+A reader is on this list if it destructures a `Type` it did not build. There is
+no shortcut for deciding whether it can receive a wrapped one — a *use* of
+anything named (`fn … -> Type`, a record read as a code, a `Val -> Type`
+parameter) puts an `El` in front, and the lazy decode keeps it in front of
+every child. So: **reduce before reading, and if reducing can overshoot, step
+and re-test.**

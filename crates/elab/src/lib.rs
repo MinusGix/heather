@@ -622,7 +622,12 @@ impl Elaborator {
                 Stmt::Let { name, ty, expr, .. } => (name, ty, expr),
                 Stmt::LetRecord { fields, expr, span } => {
                     let (t, rty, _) = self.elab_infer(&cx, expr)?;
-                    let Some(ind) = self.record_of(&rty) else {
+                    // `record_of_at`, not `record_of`: the right-hand side may
+                    // have arrived through a `Nat -> Type` function value, and
+                    // then its type is `El` of a β-redex rather than of a code
+                    // (docs/record-type-values.md §4). Same reader as
+                    // `resolve_dot`'s, so the same fallback.
+                    let Some(ind) = self.record_of_at(&cx, &rty, *span) else {
                         return err(
                             "a `let { … }` pattern needs a record on the right",
                             *span,
@@ -1529,7 +1534,8 @@ impl Elaborator {
                     && cx.selfref.as_ref().is_some_and(|s| s.name == *f_name)
                 {
                     let (xs_t, xs_ty, _) = self.elab_infer(cx, xs)?;
-                    if !matches!(xs_ty, Type::Vec { .. }) {
+                    // Decoded, as in `elab_vec_map`: a coded `Vec` is one.
+                    if !matches!(*crate::inductive::decoded(&xs_ty), Type::Vec { .. }) {
                         return err("`cong`'s receiver has to be a vector", e.span);
                     }
                     return self.elab_container_ih(cx, f_name, &xs_t, true, e.span);
@@ -1597,7 +1603,7 @@ impl Elaborator {
                 let (scrut_t, scrut_ty, scrut_lvl) = self.elab_infer(cx, scrut)?;
                 // An indexed scrutinee's motive binds the index too
                 // (docs/inductive-indexed-lowering.md §6.1).
-                if let Some((ind, fam)) = self.indexed_of(&scrut_ty) {
+                if let Some((ind, fam)) = self.indexed_of_at(cx, &scrut_ty) {
                     let (binders, body) =
                         motive_lam(m, 2, "write `as \u{3bb} n z => T` (index, then value)")?;
                     let mut mcx = cx.clone();
@@ -1716,7 +1722,7 @@ impl Elaborator {
         // first: a family whose branch at this literal index is `Empty`
         // (`Fin(0)`) is matched as the empty type, arms and all.
         if !matches!(head, Type::Empty { .. })
-            && let Some((ind, fam)) = self.indexed_of(scrut_ty)
+            && let Some((ind, fam)) = self.indexed_of_at(cx, scrut_ty)
         {
             let motive2 = self.generalize_index(cx, &motive, &fam.idx);
             return self
@@ -2330,7 +2336,14 @@ impl Elaborator {
         span: Span,
     ) -> R<(Term, Type, Level)> {
         let (xs_t, xs_ty, _) = self.elab_infer(cx, xs)?;
-        let Type::Vec { level: al, elem: a_ty, len } = &xs_ty else {
+        // `decoded`, not `whnf`: the receiver may be a vector *field* projected
+        // out of a record that arrived as a code, in which case its type is
+        // `El (TmVec …)` (docs/record-type-values.md §6). Reducing further
+        // would unfold the `Vec` into its Σ-chain and lose the element type
+        // and the length this reads off it — the same reason `elab_vec_lit`
+        // decodes rather than normalizes.
+        let xs_ty = &*crate::inductive::decoded(&xs_ty);
+        let Type::Vec { level: al, elem: a_ty, len } = xs_ty else {
             return err("`map`'s receiver has to be a vector", span);
         };
         // The self-call form.
@@ -2374,7 +2387,9 @@ impl Elaborator {
         span: Span,
     ) -> R<(Term, Type, Level)> {
         let (xs_t, xs_ty, _) = self.elab_infer(cx, xs)?;
-        let Type::Vec { level: al, elem: a_ty, len } = &xs_ty else {
+        // As in `elab_vec_map`: decode a coded `Vec`, and no further.
+        let xs_ty = &*crate::inductive::decoded(&xs_ty);
+        let Type::Vec { level: al, elem: a_ty, len } = xs_ty else {
             return err("`fold`'s receiver has to be a vector", span);
         };
         let (z_t, b_ty, bl) = self.elab_infer(cx, z)?;
@@ -2583,8 +2598,17 @@ impl Elaborator {
     ) -> R<Term> {
         // *Not* whnf'd: `Vec` reduces on its length, so the whnf of
         // `[T; 0]` is `Unit` and of `[T; 2]` a Σ-chain — the former is what
-        // this arm exists to recognise. Every `Vec` reaching here came
-        // straight from `elab_ty`, so it is already in the right shape.
+        // this arm exists to recognise.
+        //
+        // `decoded` and not `whnf` for exactly that reason. A `Vec` no longer
+        // always arrives straight from `elab_ty`: a record whose field is a
+        // vector, reached as a *code* (a type-valued `fn`, or a `Val -> Type`
+        // value), hands `build_fields` a component that is `El (TmVec …)`
+        // (docs/types-as-expressions.md §4 — the decode is lazy, so the
+        // children stay wrapped). `decoded` strips that one canonical former
+        // and stops; `whnf` would carry straight on into the Σ-chain and lose
+        // the shape this arm exists to see.
+        let expected = &*crate::inductive::decoded(expected);
         let Type::Vec { level, elem, len } = expected else {
             return err("a vector literal needs a `[T; n]` expected type", span);
         };

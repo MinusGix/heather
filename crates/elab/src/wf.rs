@@ -233,6 +233,41 @@ impl Elaborator {
         )
     }
 
+    /// The match motive's **head**, for phase 3's "is this an equation?" test
+    /// (docs/container-proofs.md §5).
+    ///
+    /// Structural first, exactly as `record_of_at`: a written `a = b` is
+    /// already an `Id` and nothing is paid. Only a motive that arrived as a
+    /// *code* — `El (Agree z)` for a named statement
+    /// (`docs/types-as-expressions.md`), or `El` of a β-redex for one reached
+    /// through a `Val -> Type` value (`docs/record-type-values.md` §6) —
+    /// reduces, and then `whnf` is the right amount: `Id` is a weak-head
+    /// normal form, so this cannot overshoot the shape it is looking for.
+    ///
+    /// The motive is scoped `(Γ₀, z : ⟦D⟧)`, which is not any context this
+    /// walk carries, so it is rebuilt here from the two pieces `Tel` already
+    /// holds. Failure is not an error: an unreducible motive is simply not an
+    /// equation, which is the answer the caller wanted anyway.
+    fn motive_head<'t>(&self, tel: &'t Tel<'_>) -> std::borrow::Cow<'t, Type> {
+        if !matches!(&*tel.motive, Type::El { .. }) {
+            return std::borrow::Cow::Borrowed(&tel.motive);
+        }
+        let mut gamma = tel.gamma0.clone();
+        gamma.entries.push(heather_kernel::term::CtxEntry {
+            ty: Rc::new(tel.d_ty.clone()),
+            level: tel.level.clone(),
+        });
+        match heather_kernel::reduce::whnf_type_delta(
+            &tel.motive,
+            &gamma,
+            heather_kernel::reduce::Defs::transparent(&self.delta_psi),
+            self.fuel,
+        ) {
+            Ok(t) => std::borrow::Cow::Owned(t),
+            Err(_) => std::borrow::Cow::Borrowed(&tel.motive),
+        }
+    }
+
     /// The eliminator both of the above are (§6.2): one `elim_Wf` whose step
     /// cases on the tag with `cs` and `ih` generalized in the case motive.
     /// Outside a tag branch the arity `n[a/x]` is stuck on a variable, so
@@ -592,7 +627,14 @@ impl Elaborator {
                         // still relates the children pointwise. The endpoints
                         // are wrapped as `λ(z : ⟦D⟧). …` so the call site can
                         // shift them like any other term.
-                        let eq = match (&result, &*tel.motive) {
+                        //
+                        // The equation is read through [`Self::motive_head`]:
+                        // a *named* statement (`fn Agree(r: Rose) -> Type
+                        // { … = … }`) arrives as `El` of a call, and the `Id`
+                        // is one δ/β step below it
+                        // (docs/record-type-values.md §6).
+                        let motive = self.motive_head(tel);
+                        let eq = match (&result, &*motive) {
                             (None, Type::Id { level, ty, lhs, rhs }) => {
                                 crate::vec::strengthen(ty, tel.gamma0).map(|a| {
                                     let sigma = crate::embed(tel.gamma0, d_body + 1)
