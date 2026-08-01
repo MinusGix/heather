@@ -3,7 +3,7 @@ title: Design FunctionIR and its simulate semantics
 status: open
 labels: [ir, compiler, design]
 created: 2026-07-22
-updated: 2026-07-31
+updated: 2026-08-01
 ---
 
 `Compiler::FunctionIR` plus its interpreter is the load-bearing spec object of
@@ -45,3 +45,44 @@ Decisions to make:
   COST: the release check goes 1.31s / 14.2 MB -> 26.9s / 18.6 MB, ~18s of which is `step_mono`; the elab test goes 9.2s -> 165 CPU-seconds against scripts/test's 300s rail. The measurement [[ih-generalization]] asked for is logged there: the generalized-motive tax is term SIZE per arm, memory barely moved, and it does NOT contradict [[nbe-conversion-round]]'s demotion of the single-ih discipline (a duplicated ih evaluates to a shared value; a bigger motive is bigger before anything evaluates). Negative controls per docs/testing-generated-terms.md are in the elab test: a false `<=` witness under fuel_monotone, the anti-monotone claim (the add IR answering below its bound), and a wrong-result equiv.
 
   DEFERRED: nothing from items 3-4. What this round did NOT do -- refinement between two *semantically different* IRs for the same function (the chain here is one IR reached through zero, one and two LetCall wrappers, which is the honest small version of the stress test; relating a theta-loop add to a recursive-Apply add wants an env-independence lemma and is a round of its own), and the exists-closure, which is [[surface-existential]].
+
+- 2026-08-01: **`converges` reaches its §6 shape.** [[surface-existential]]
+  route 1 landed (value parameters on `record`,
+  `docs/surface-value-parameters.md`), so the design's own definition is now
+  writable and is written:
+
+  ```heather
+  record Converges(p: Prog, env: Val, ir: Ir, vs: Val) {
+      n: Nat,
+      h: eval(n, p)(env, ir) = Out(vs),
+  }
+  ```
+
+  The bound is genuinely hidden, which is the part the computed-bound form
+  could only approximate. `refines` in the ∃-shape drops its fuel map
+  entirely — `refines_trans_conv` is implication chaining, no `b1`/`b2`, no
+  bound arithmetic in the statement — and `add_converges` /
+  `add_converges_through_calls` export the certificate in the shape a
+  `Compile` instance actually wants.
+
+  **Additive, not a rewrite.** Every bounded theorem stays exactly as it was,
+  and `refines_of_bounded` is the ∃-closure *proved* in one line rather than
+  asserted in a note — which is what makes "nothing re-proves" a fact about
+  the file instead of a claim about the future. Doc §13 note 7 amended
+  accordingly; the second half of that note (`refines` cannot be *named*,
+  because a `fn` body is an expression and `->` is not one) survives and is
+  [[type-definitions]]'s.
+
+  Also landed: `BindInv`, the inversion record for `k_bind`, proved once by
+  `k_bind_inv` and consumed by `k_bind_mono` through a destructuring `let`. It
+  **retires three of `step_mono`'s four convoy motives** — measured, release,
+  everything else held identical, **38.5s → 33.7s (−12.6%)**. The fourth
+  (`LoopIter`) scrutinizes through `k_iter` rather than `k_bind` and keeps the
+  remember idiom; giving it its own inversion record is the same move again
+  and is left for a second consumer.
+
+  Check time for the file: **27.5s → 33.7s** release. The +6.2s is the added
+  surface (2 records, 9 theorems), against −4.9s given back by the convoy
+  retirement. Still inside the test binary's 300 CPU-s debug rail; the header
+  of `crates/elab/tests/ir_v1.rs` carries the updated budget note, and it is
+  the thing to weigh before the next `step_mono`-shaped theorem.

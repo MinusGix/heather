@@ -505,6 +505,46 @@ recorded here with its reason so the next reader doesn't re-derive it.
    barely moved, so this is elaboration and conversion work on big terms, not
    the old copying blowup.
 
+   **Amendment, 2026-08-01: the ∃-closure is now statable, and `converges` is
+   written as §6 states it.** The first of the two reasons above is retired:
+   `record` takes **value parameters** (`docs/surface-value-parameters.md`,
+   `issues/surface-existential.md` route 1, no kernel change), so a record *is*
+   indexable by `(p, env, ir, vs)` and
+
+   ```heather
+   record Converges(p: Prog, env: Val, ir: Ir, vs: Val) {
+       n: Nat,
+       h: eval(n, p)(env, ir) = Out(vs),
+   }
+   ```
+
+   is the definition, bound genuinely hidden. `refines` in the ∃-shape then
+   loses its fuel map entirely and composition becomes ordinary implication
+   chaining (`refines_trans_conv`, no `b1`/`b2`). The bounded form **stays**,
+   additive: `refines_of_bounded` is the ∃-closure proved rather than asserted,
+   so this note's "nothing has to be re-proved when Σ arrives" is now a landed
+   one-liner rather than a claim. `add_converges` /
+   `add_converges_through_calls` are the certificate exported in the ∃-form —
+   the shape a `Compile` instance wants, since a caller has no reason to know
+   the bound.
+
+   The second reason **survives**: `refines` still cannot be given a *name*,
+   because a `fn` body is an expression and `->` is not one. That is
+   `issues/type-definitions`', not this design's, and it blocks nothing —
+   `refines` remains a statement shape written out at each use. (The
+   investigation also found the note's parenthetical about a `fn` returning
+   `Type<0>` to be only half true: an *equation* body works and `P(n)` in type
+   position works; what fails is `->` in an expression body.)
+
+   A second consumer landed with it: `BindInv`, the inversion record for
+   `k_bind` (`k_bind(ev, env, rest, r) = Out(vs) -> ∃ ws. r = Out(ws) × …`),
+   proved once and consumed by `let { ws, hr, hk } = …`. It **retires three of
+   `step_mono`'s four convoy motives**, a measured 38.5s → 33.7s on the file
+   (release, everything else held identical): −12.6%. The fourth (`LoopIter`,
+   which scrutinizes through `k_iter` rather than `k_bind`) keeps the remember
+   idiom. Net for the round the file is 27.5s → 33.7s, the increase being the
+   new surface itself — two records and nine theorems — and not the rewrite.
+
 **Landed the same day** (was: deferred to the next round): §11 items 3–4.
 Both blockers were called correctly. `fuel_monotone` *is* an IH-generalizing
 induction, and the manual explicit-motive route works — one session, and the

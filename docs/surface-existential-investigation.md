@@ -3,6 +3,18 @@
 Status: **investigation round**, 2026-08-01. No product code changed, no
 commits. Tracking issue: `issues/surface-existential.md`.
 
+> **Implemented the same day.** Route 1 landed as specified here; the grammar,
+> the substitution rule, the construction decision and the parameters-vs-indices
+> line are recorded in `docs/surface-value-parameters.md`, the acceptance in
+> `crates/elab/tests/value_parameters.rs`, and the consumers in
+> `lib/ir_v1.hthr`. Two sizings came in *cheaper* than §C: the AST split (a
+> separate `valparams` list left every existing `ind.params` zip untouched) and
+> **construction, which needed no code at all** — `build_ctor` already reads its
+> annotations off the expected type, so §C.5's "medium" was a decision, not an
+> implementation. Everything else landed as sized, and no kernel change was
+> needed, as §A and §H predicted. This document is kept as written: it is the
+> pre-round record, not a status page.
+
 The question the issue posed and could not cost: what does it take to state
 
 ```

@@ -7,19 +7,30 @@
 //! value domain, issues/nbe-conversion-round.md) → **27s** once the fuel
 //! interface landed: `step_mono`'s IH-generalizing motive is ~18s of that on
 //! its own, which is the measured cost of the manual explicit-motive route
-//! (issues/ih-generalization.md).
+//! (issues/ih-generalization.md) → **34s** with the ∃-form of the fuel
+//! interface (`Converges`, `BindInv`, issues/surface-existential.md).
+//!
+//! That last step is worth reading as two numbers, not one. The `BindInv`
+//! inversion record **retired three of `step_mono`'s four convoy motives**, and
+//! against the same file with the convoys restored that is **38.5s → 33.7s,
+//! −12.6%**. The net +6.2s is the *added surface* — two records and nine
+//! theorems, `Converges`/`refines` in ∃-form and the certificate exported
+//! through them — and not the rewrite.
 //!
 //! The split is kept, and now earns its keep twice over: the declarations are
-//! 1.1s of the 27s, so the first test is a fast gate on everything that is
+//! ~1.1s of the 34s, so the first test is a fast gate on everything that is
 //! *not* a proof, and the second is the whole acceptance.
 //!
-//! BUDGET. This binary is **165 CPU-seconds** debug against `scripts/test`'s
-//! 300-second `ulimit -t` (was 9.2s), and 155s of that is the one full-library
-//! test. That is the headroom this file has left: the next theorem in
-//! `lib/ir_v1.hthr` whose motive forces a case tree over `Ir` should be
-//! weighed against it, and if the file grows another `step_mono` the answer is
-//! to make the elaborator compute generalized motives
-//! (`issues/ih-generalization.md`) rather than to raise the limit.
+//! BUDGET. This binary is **~204 CPU-seconds** debug against `scripts/test`'s
+//! 300-second `ulimit -t` (was 9.2s, then 165s), and nearly all of that is the
+//! one full-library test. That is the headroom this file has left, and it is
+//! now thin: the next theorem in `lib/ir_v1.hthr` whose motive forces a case
+//! tree over `Ir` should be weighed against it, a second full-library
+//! elaboration does **not** fit (which is why the ∃-form's negative controls
+//! ride inside the acceptance test rather than beside it), and if the file
+//! grows another `step_mono` the answer is to make the elaborator compute
+//! generalized motives (`issues/ih-generalization.md`) rather than to raise the
+//! limit.
 //!
 //! - the first elaborates every DECLARATION (datatypes, helpers, the
 //!   interpreter, the continuation helpers, the add programs) and runs the
@@ -104,12 +115,51 @@ fn declarations_check_and_wrong_claims_are_refuted() {
 
 /// The full library, acceptance theorems included: the deep combined
 /// theorems, `step_mono`'s whole case tree, `fuel_monotone` in both shapes,
-/// the refinement chain, and the ∀-arguments `equiv`. 27s release; the debug
-/// figure is in this file's header and is the reason nothing else lives in
-/// this test binary.
+/// `Converges`/`BindInv` and the ∃-form of the refinement chain, and the
+/// ∀-arguments `equiv`. 34s release; the debug figure is in this file's header
+/// and is the reason nothing else lives in this test binary.
+///
+/// The ∃-form's negative controls ride along **in this test** rather than in
+/// one of their own, deliberately: each would otherwise re-elaborate the whole
+/// library, and two full elaborations do not fit the 300-second rail. They are
+/// the controls the library cannot state about itself —
+/// `Converges(p, env, ir, vs)` is a *predicate*, and the standing risk of the
+/// encoding (docs/surface-value-parameters.md §2) is that a mis-weakened value
+/// parameter would silently make it a vacuous one.
 #[test]
 fn the_full_ir_library_checks() {
     let mut e = Elaborator::with_prelude().expect("prelude");
     e.elab_source(LIB)
         .unwrap_or_else(|err| panic!("{}", err.render(LIB)));
+
+    // The *wrong* answer at the right program and the right witness: refused.
+    // If the `vs` parameter were captured under the Σ binder rather than
+    // substituted, this would be the same proposition as `add_converges`'s,
+    // which the library just proved.
+    refuted(
+        &mut e,
+        "theorem conv_wrong(): Converges(add_prog(), VCons(embed_nat(1), \
+         VCons(embed_nat(1), VNil)), add_body(), VCons(embed_nat(3), VNil)) \
+         { Converges(50, refl) }",
+        "converging to 3 where the IR answers 2",
+    );
+
+    // …and no witness closes a starved bound, so the `n` field is doing work
+    // rather than being ignored by the encoding.
+    refuted(
+        &mut e,
+        "theorem conv_starved(): Converges(add_prog(), VCons(embed_nat(1), \
+         VCons(embed_nat(1), VNil)), add_body(), VCons(embed_nat(2), VNil)) \
+         { Converges(1, refl) }",
+        "converging at fuel 1",
+    );
+
+    // `BindInv`'s `hr` field pins the scrutinee, so an inversion claimed at a
+    // `Stuck` sub-region — which produced no `ws` at all — must not check.
+    refuted(
+        &mut e,
+        "theorem inv_wrong(ev: Val -> Ir -> Res, env: Val, rest: Ir, vs: Val) \
+         : BindInv(ev, env, rest, Stuck, vs) { BindInv(VNil, refl, refl) }",
+        "an inversion of a Stuck sub-region",
+    );
 }

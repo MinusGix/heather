@@ -48,3 +48,27 @@ Cost note: the idiom's tax is motive size per arm ([[ih-generalization]]'s
 2026-07-31 datum: `step_mono` alone is 18 s of the file's 27 s). Elaborator
 synthesis reproduces the same term, so this feature changes who writes it,
 not what it costs; the cost lever is separate.
+
+## Log
+
+- 2026-08-01: **Motivation strength: down, but not out.** [[surface-existential]]
+  landed value parameters, and with them `BindInv` — an inversion record for
+  `k_bind` proved *once* and consumed by `let { ws, hr, hk } = …`. That retires
+  **three of the four** remember-idiom convoys this issue was filed against
+  (`lib/ir_v1.hthr`'s `LetMatch`, `LetLoop`, `LetCall` arms), and it does so
+  without any syntax change: the inversion lemma's own proof cases on the
+  answer with the *target* varying in the motive, so it does not need the
+  idiom either.
+
+  What that changes here: the idiom is no longer the thing a reader of
+  `step_mono` meets four times, and the cost this issue cited is now measured
+  as recoverable by a *library* device rather than a *language* one (−12.6% on
+  the file). What it does not change: the fourth convoy (`LoopIter`, through
+  `k_iter`) is still written out, and every *new* proof that scrutinizes a
+  sub-region still writes the idiom until someone factors an inversion record
+  for that shape too. So this issue is now about the ergonomics of writing the
+  first such lemma, not about writing one at every use site — a real
+  demotion in urgency, and an argument that the eventual syntax should be
+  measured against "how hard is the inversion lemma" rather than against the
+  old four-copies baseline.
+

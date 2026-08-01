@@ -12,12 +12,18 @@
 // values are prepended onto the environment, most-significant first.
 //
 // Contents: the datatypes and `simulate` first; then the FUEL INTERFACE
-// (doc §6) — `step_mono`, `fuel_monotone` in two shapes, `refines` bounded
-// by a fuel map, and `add_equiv`, a ∀-arguments certificate discharged at a
-// computed bound. `converges` is the one piece of §6 that is not here: the
-// surface has no `exists` (issues/surface-existential.md), so it takes the
-// computed-bound form throughout, which is what §6 says discharge uses
-// anyway. Doc §13 note 7 records that and the rest of the deviations.
+// (doc §6) — `step_mono`, `fuel_monotone` in two shapes, `converges` and
+// `refines` in BOTH the ∃-form and the bounded form, and `add_equiv`, a
+// ∀-arguments certificate exported both ways.
+//
+// `converges` is now written as §6 states it — `record Converges(p, env, ir,
+// vs) { n: Nat, h: eval(n, p)(env, ir) = Out(vs) }`, a value-parameterized
+// record (docs/surface-value-parameters.md, issues/surface-existential.md
+// route 1). The bound is genuinely hidden, so `refines_trans_conv` is
+// implication chaining with no fuel map. The computed-bound form stays
+// alongside it, additive: `refines_of_bounded` is the ∃-closure between them,
+// proved rather than asserted, which is why nothing here was re-proved.
+// Doc §13 note 7 records this amendment and the rest of the deviations.
 //
 // Scoping (doc §13): LetMatch arms are lexical — an arm sees the matched
 // value's fields on top of the enclosing environment. LetLoop bodies and
@@ -579,13 +585,71 @@ theorem k_iter_is_step(ev: Val -> Ir -> Res, env: Val, body: Ir):
 { refl }
 
 // ---------------------------------------------------------------------------
+// INVERSION for `k_bind`, as a value-parameterized record — the surface's
+// value-indexed Σ (docs/surface-value-parameters.md; issues/surface-existential
+// route 1). The statement is the existential the issue could not write:
+//
+//     k_bind(ev, env, rest, r) = Out(vs) -> ∃ ws. r = Out(ws) × ev(ws ++ env, rest) = Out(vs)
+//
+// A record with three fields IS that multi-witness Σ: the spine is
+// right-nested internally and each field's type may mention the earlier ones,
+// which is exactly what an iterated ∃ needs. The value parameters are what make
+// it a *predicate* over this particular `r` and `vs` rather than a claim that
+// some `k_bind` somewhere converged.
+//
+// `ev` is a function-valued parameter, which is fine: a record's field
+// restriction keys on self-occurrence, not on shape. (`inj` on `BindInv` would
+// not derive — it has dependent fields — and nothing needs it.)
+
+record BindInv(ev: Val -> Ir -> Res, env: Val, rest: Ir, r: Res, vs: Val) {
+    ws: Val,
+    hr: r = Out(ws),
+    hk: ev(append(ws, env), rest) = Out(vs),
+}
+
+// Proved ONCE, by casing on the answer with the *target* varying in the motive
+// — so this does not even need the remember idiom that the inline convoys did:
+// the conclusion's `r` is the scrutinee, so each arm's goal is already
+// specialized.
+theorem k_bind_inv(ev: Val -> Ir -> Res, env: Val, rest: Ir, r: Res, vs: Val,
+                   h: k_bind(ev, env, rest, r) = Out(vs))
+    : BindInv(ev, env, rest, r, vs)
+{
+    match r as λ y => k_bind(ev, env, rest, y) = Out(vs) -> BindInv(ev, env, rest, y, vs) {
+        Stuck => λ q => absurd(q),
+        OutOfFuel => λ q => absurd(q),
+        Out(ws) => λ q => BindInv(ws, refl, q),
+    }(h)
+}
+
+// …and the one consumer `step_mono` needs, three times over: a `k_bind` whose
+// scrutinee is a recursive call is monotone in that call. Destructuring the
+// inversion is a `let { }`, which is what replaces the convoy match.
+theorem k_bind_mono(ev1: Val -> Ir -> Res, ev2: Val -> Ir -> Res,
+                    hyp: (e: Val) -> (i: Ir) -> (w: Val) -> ev1(e, i) = Out(w) -> ev2(e, i) = Out(w),
+                    env: Val, rest: Ir, e0: Val, i0: Ir, vs: Val,
+                    q: k_bind(ev1, env, rest, ev1(e0, i0)) = Out(vs))
+    : k_bind(ev2, env, rest, ev2(e0, i0)) = Out(vs)
+{
+    let { ws, hr, hk } = k_bind_inv(ev1, env, rest, ev1(e0, i0), vs, q);
+    j(sym(hyp(e0, i0, ws, hr)),
+      λ y p => k_bind(ev2, env, rest, y) = Out(vs),
+      hyp(append(ws, env), rest, vs, hk))
+}
+
+// ---------------------------------------------------------------------------
 // One step is monotone in its recursive call. This is the whole case analysis
 // of `fuel_monotone`: everything about the IR happens here, and the induction
 // on fuel below is two lines.
 //
 // Where a sub-region's answer is scrutinized, the arm needs the equation the
-// match does not hand it, so the motive carries `r = ev1(…)` and the match is
-// applied to `refl` — the "remember" idiom, the only device in this proof.
+// match does not hand it. Three of the four such places are `k_bind` at a
+// recursive call and are now one call to `k_bind_mono` above — the inversion
+// record doing what four hand-rolled convoy motives used to. The fourth,
+// `LoopIter`, scrutinizes through `k_iter` rather than `k_bind` and keeps the
+// remember idiom (the motive carries `r = ev1(…)` and the match is applied to
+// `refl`); giving it its own inversion record is the same move again and is
+// left for when a second consumer wants it.
 
 theorem step_mono(prog: Prog, ev1: Val -> Ir -> Res, ev2: Val -> Ir -> Res,
                   hyp: (e: Val) -> (i: Ir) -> (w: Val) -> ev1(e, i) = Out(w) -> ev2(e, i) = Out(w),
@@ -619,19 +683,9 @@ theorem step_mono(prog: Prog, ev1: Val -> Ir -> Res, ev2: Val -> Ir -> Res,
                         -> k_letmatch_v(ev2, env, arms, rest, y) = Out(vs) {
                         VNil => λ q => q,
                         VCons(vh, vt) => λ q => q,
-                        VCon(tag, fields) =>
-                            match ev1(append(fields, env), pick_arm(arms)(tag)) as λ r =>
-                                r = ev1(append(fields, env), pick_arm(arms)(tag))
-                                -> k_bind(ev1, env, rest, r) = Out(vs)
-                                -> k_bind(ev2, env, rest,
-                                          ev2(append(fields, env), pick_arm(arms)(tag))) = Out(vs) {
-                                Stuck => λ e q => absurd(q),
-                                OutOfFuel => λ e q => absurd(q),
-                                Out(ws) => λ e q =>
-                                    j(sym(hyp(append(fields, env), pick_arm(arms)(tag), ws, sym(e))),
-                                      λ y p => k_bind(ev2, env, rest, y) = Out(vs),
-                                      hyp(append(ws, env), rest, vs, q)),
-                            }(refl),
+                        VCon(tag, fields) => λ q =>
+                            k_bind_mono(ev1, ev2, hyp, env, rest,
+                                        append(fields, env), pick_arm(arms)(tag), vs, q),
                     },
             },
 
@@ -640,18 +694,8 @@ theorem step_mono(prog: Prog, ev1: Val -> Ir -> Res, ev2: Val -> Ir -> Res,
                 k_letloop(ev1, env, lbody, rest, o) = Out(vs)
                 -> k_letloop(ev2, env, lbody, rest, o) = Out(vs) {
                 NoneV => λ q => q,
-                SomeV(cs) =>
-                    match ev1(cs, LoopIter(lbody)) as λ r =>
-                        r = ev1(cs, LoopIter(lbody))
-                        -> k_bind(ev1, env, rest, r) = Out(vs)
-                        -> k_bind(ev2, env, rest, ev2(cs, LoopIter(lbody))) = Out(vs) {
-                        Stuck => λ e q => absurd(q),
-                        OutOfFuel => λ e q => absurd(q),
-                        Out(ws) => λ e q =>
-                            j(sym(hyp(cs, LoopIter(lbody), ws, sym(e))),
-                              λ y p => k_bind(ev2, env, rest, y) = Out(vs),
-                              hyp(append(ws, env), rest, vs, q)),
-                    }(refl),
+                SomeV(cs) => λ q =>
+                    k_bind_mono(ev1, ev2, hyp, env, rest, cs, LoopIter(lbody), vs, q),
             },
 
         LetCall(callee, args, rest) =>
@@ -659,18 +703,8 @@ theorem step_mono(prog: Prog, ev1: Val -> Ir -> Res, ev2: Val -> Ir -> Res,
                 k_letcall(ev1, prog, env, callee, rest, o) = Out(vs)
                 -> k_letcall(ev2, prog, env, callee, rest, o) = Out(vs) {
                 NoneV => λ q => q,
-                SomeV(cs) =>
-                    match ev1(cs, find_fun(prog)(callee)) as λ r =>
-                        r = ev1(cs, find_fun(prog)(callee))
-                        -> k_bind(ev1, env, rest, r) = Out(vs)
-                        -> k_bind(ev2, env, rest, ev2(cs, find_fun(prog)(callee))) = Out(vs) {
-                        Stuck => λ e q => absurd(q),
-                        OutOfFuel => λ e q => absurd(q),
-                        Out(ws) => λ e q =>
-                            j(sym(hyp(cs, find_fun(prog)(callee), ws, sym(e))),
-                              λ y p => k_bind(ev2, env, rest, y) = Out(vs),
-                              hyp(append(ws, env), rest, vs, q)),
-                    }(refl),
+                SomeV(cs) => λ q =>
+                    k_bind_mono(ev1, ev2, hyp, env, rest, cs, find_fun(prog)(callee), vs, q),
             },
 
         // the loop's own re-entry: a sub-region, then the protocol, then a
@@ -787,17 +821,78 @@ theorem fuel_monotone(prog: Prog, env: Val, ir: Ir, vs: Val, n: Nat, m: Nat,
 }
 
 // ---------------------------------------------------------------------------
-// `refines` (doc §6). The surface has no `exists`, so the ∃-closure
-// `converges` is not statable as a type; what is statable — and is what the
-// discharge story of §6 actually uses — is the BOUNDED form: a refinement
-// carries a fuel map `b`, and IR₂ refines IR₁ when every convergence of IR₁
-// at `n` is a convergence of IR₂ at `b(n)`. Composition is then function
-// composition of the bounds, which is the §6 stress test; `fuel_monotone` is
-// what makes the shape robust, since a bound may always be loosened.
+// `converges` (doc §6), AS STATED — the ∃-closure, not the bounded image of
+// it. This is the surface's value-indexed Σ: a record whose value parameters
+// are the four things the predicate is *about*, and whose two fields are the
+// witness and the equation over it (docs/surface-value-parameters.md;
+// issues/surface-existential.md route 1).
 //
-// The relation is a statement SHAPE rather than a definition, for the same
-// reason: a `fn` body is an expression and `->` is not an expression, so
-// `refines` cannot be given a name today (recorded in doc §13 note 7).
+//     converges(p, env, ir, vs)  :=  ∃ n. eval(n, p)(env, ir) = Out(vs)
+//
+// The bound is now genuinely hidden: `Converges(p, env, ir, vs)` names no
+// fuel, which is what §6 wanted and what the bounded form could only
+// approximate. Every landed bounded theorem below is the image of this one
+// under the ∃-closure, so nothing there is restated or re-proved — the two
+// live side by side and `converges_intro`/`conv_loosen` are the bridge.
+
+record Converges(p: Prog, env: Val, ir: Ir, vs: Val) {
+    n: Nat,
+    h: eval(n, p)(env, ir) = Out(vs),
+}
+
+// introduction at a computed bound: the §6 discharge story verbatim
+theorem converges_intro(p: Prog, env: Val, ir: Ir, vs: Val, n: Nat,
+                        h: eval(n, p)(env, ir) = Out(vs))
+    : Converges(p, env, ir, vs)
+{ Converges(n, h) }
+
+// `fuel_monotone` as a lemma ABOUT `Converges`: a bound may always be
+// loosened, so the ∃-form is closed under adding fuel
+theorem conv_loosen(p: Prog, env: Val, ir: Ir, vs: Val, m: Nat,
+                    c: Converges(p, env, ir, vs), hle: leb(c.n)(m) = True)
+    : eval(m, p)(env, ir) = Out(vs)
+{ fuel_monotone(p, env, ir, vs, c.n, m, c.h, hle) }
+
+// ---------------------------------------------------------------------------
+// `refines` (doc §6), in BOTH shapes.
+//
+// The ∃-shape first, since it is the one §6 asked for: IR₂ refines IR₁ when
+// every convergence of IR₁ is a convergence of IR₂. No fuel map — the bound
+// is inside the `Converges`, so composition is ordinary implication chaining
+// and the bound arithmetic that `refines_trans` had to thread disappears.
+//
+// The relation is still a statement SHAPE rather than a definition: a `fn`
+// body is an expression and `->` is not an expression, so `refines` cannot be
+// given a name today. That is [[type-definitions]]'s to close, and it is the
+// only part of doc §13 note 7 that survives this round.
+
+theorem refines_refl_conv(prog: Prog, ir: Ir):
+    (env: Val) -> (vs: Val) -> Converges(prog, env, ir, vs) -> Converges(prog, env, ir, vs)
+{ λ env vs c => c }
+
+theorem refines_trans_conv(
+    p1: Prog, i1: Ir, p2: Prog, i2: Ir, p3: Prog, i3: Ir,
+    r1: (env: Val) -> (vs: Val) -> Converges(p1, env, i1, vs) -> Converges(p2, env, i2, vs),
+    r2: (env: Val) -> (vs: Val) -> Converges(p2, env, i2, vs) -> Converges(p3, env, i3, vs))
+    : (env: Val) -> (vs: Val) -> Converges(p1, env, i1, vs) -> Converges(p3, env, i3, vs)
+{ λ env vs c => r2(env, vs, r1(env, vs, c)) }
+
+// The ∃-CLOSURE, proved rather than asserted: a bounded refinement at any
+// fuel map is a refinement in the ∃-sense. This is why none of the bounded
+// theorems below has to be re-proved — `b` is applied to the hidden witness
+// and then forgotten again.
+theorem refines_of_bounded(p1: Prog, i1: Ir, p2: Prog, i2: Ir, b: Nat -> Nat,
+    r: (env: Val) -> (vs: Val) -> (n: Nat)
+       -> eval(n, p1)(env, i1) = Out(vs) -> eval(b(n), p2)(env, i2) = Out(vs))
+    : (env: Val) -> (vs: Val) -> Converges(p1, env, i1, vs) -> Converges(p2, env, i2, vs)
+{ λ env vs c => Converges(b(c.n), r(env, vs, c.n, c.h)) }
+
+// ---------------------------------------------------------------------------
+// `refines` in the BOUNDED form, kept: a refinement carries a fuel map `b`,
+// and composition is function composition of the bounds. This was the whole
+// §6 stress test before the ∃-form was statable, `fuel_monotone` is what makes
+// it robust, and `refines_of_bounded` above is the one-line bridge to the
+// ∃-form — so it stays, additive rather than replaced.
 
 theorem refines_refl(prog: Prog, ir: Ir):
     (env: Val) -> (vs: Val) -> (n: Nat)
@@ -945,6 +1040,32 @@ theorem add_equiv_at(prog: Prog, a: Nat, b: Nat, f: Nat, hle: leb(add(a, 5))(f) 
 {
     fuel_monotone(prog, VCons(embed_nat(a), VCons(embed_nat(b), VNil)), add_body(),
                   VCons(embed_nat(add(b, a)), VNil), add(a, 5), f, add_equiv(prog, a, b), hle)
+}
+
+// THE SAME CERTIFICATE, exported as the ∃-form. This is the shape a `Compile`
+// instance actually wants: the caller is told the IR converges to the spec's
+// answer and is told nothing about the fuel, which is `add_equiv_at`'s stated
+// intent finally written as a type rather than as a `∀ f ≥ bound` schema.
+theorem add_converges(prog: Prog, a: Nat, b: Nat)
+    : Converges(prog, VCons(embed_nat(a), VCons(embed_nat(b), VNil)), add_body(),
+                VCons(embed_nat(add(b, a)), VNil))
+{ Converges(add(a, 5), add_equiv(prog, a, b)) }
+
+// …and the refinement chain in ∃-form: the bound `plus2 ∘ plus2` is applied
+// to the hidden witness and hidden again, so the STATEMENT mentions no fuel
+// at all. Compare `loop_refined_by_call2`, whose statement carries the whole
+// composed bound.
+theorem loop_refines_call2_conv(x: Val, y: Val, v: Val,
+    c: Converges(add_chain(), VCons(x, VCons(y, VNil)), ir_loop(), VCons(v, VNil)))
+    : Converges(add_chain(), VCons(x, VCons(y, VNil)), ir_call2(), VCons(v, VNil))
+{ Converges(plus2()(plus2()(c.n)), loop_refined_by_call2(x, y, v, c.n, c.h)) }
+
+theorem add_converges_through_calls(a: Nat, b: Nat)
+    : Converges(add_chain(), VCons(embed_nat(a), VCons(embed_nat(b), VNil)), ir_call2(),
+                VCons(embed_nat(add(b, a)), VNil))
+{
+    loop_refines_call2_conv(embed_nat(a), embed_nat(b), embed_nat(add(b, a)),
+                            add_converges(add_chain(), a, b))
 }
 
 // and the certificate transports along the refinement chain: the same
