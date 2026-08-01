@@ -33,7 +33,7 @@ use std::rc::Rc;
 use heather_kernel::conv::conv_type;
 use heather_kernel::layer::Layer;
 use heather_kernel::level::Level;
-use heather_kernel::reduce::{whnf_term, whnf_type_delta, Defs};
+use heather_kernel::reduce::{whnf_term, whnf_term_delta, whnf_type_delta, Defs};
 use heather_kernel::subst::{GlobalEntry, GlobalSubst};
 use heather_kernel::term::{
     nth, CtxBase, CtxEntry, GlobalBinding, GlobalCtx, GlobalVar, LocalCtx, LocalSubst, LocalVar,
@@ -284,6 +284,9 @@ fn expr_as_ty(e: &Expr) -> Option<Ty> {
     let kind = match &e.kind {
         ExprKind::Univ { level } => TyKind::Univ { level: *level },
         ExprKind::Eq(a, b) => TyKind::Eq(a.clone(), b.clone()),
+        // A motive body, parsed in type syntax: it may be a *function* type,
+        // which no expression form can be (`issues/ih-generalization.md`).
+        ExprKind::TyLit(t) => return Some((**t).clone()),
         ExprKind::Var(name) if name == "Nat" => TyKind::Nat,
         ExprKind::Var(name) => TyKind::Named { name: name.clone(), args: vec![] },
         // `List<Nat>` — the one expression form that already carries type
@@ -1296,7 +1299,7 @@ impl Elaborator {
             // `a = b` as a term: it is a *type*, so the term is its code
             // `TmId : Ty l` (docs/surface-universe.md §13). Elaborated through
             // the type path so the two spellings cannot diverge.
-            ExprKind::Eq(..) => {
+            ExprKind::Eq(..) | ExprKind::TyLit(..) => {
                 let ty = expr_as_ty(e).expect("an equation reads as a type");
                 let (t, level) = self.elab_ty(cx, &ty)?;
                 match code::code_of(&t) {
@@ -3032,6 +3035,14 @@ impl Elaborator {
 
     // -- kernel oracle ------------------------------------------------------
 
+    /// [`Self::whnf`] for a term: δ against Ψ included, so a definition
+    /// unfolds. Used where a *shape* has to be read off a computed term.
+    pub(crate) fn whnf_tm(&self, cx: &Cx, t: &Term, span: Span) -> R<Rc<Term>> {
+        whnf_term_delta(t, &cx.gamma, Defs::transparent(&self.delta_psi), self.fuel)
+            .map(Rc::new)
+            .map_err(|_| ElabError::Elab { msg: "out of fuel reducing a term".into(), span })
+    }
+
     fn whnf(&self, cx: &Cx, ty: &Type, span: Span) -> R<Type> {
         whnf_type_delta(ty, &cx.gamma, Defs::transparent(&self.delta_psi), self.fuel)
             .map_err(|_| ElabError::Elab { msg: "out of fuel reducing a type".into(), span })
@@ -3280,6 +3291,7 @@ fn count_holes(decl: &Decl) -> u32 {
                 expr(a, n);
                 expr(b, n);
             }
+            ExprKind::TyLit(t) => ty(t, n),
             ExprKind::Var(_)
             | ExprKind::Num(_)
             | ExprKind::Refl

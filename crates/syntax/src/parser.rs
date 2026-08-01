@@ -60,7 +60,7 @@ pub struct ParseError {
 
 pub fn parse_file(src: &str) -> Result<File, ParseError> {
     let toks = lex(src).map_err(|e| ParseError { msg: e.msg, span: e.span })?;
-    let mut p = Parser { toks, pos: 0, no_record_lit: false, no_eq: false };
+    let mut p = Parser { toks, pos: 0, no_record_lit: false, no_eq: false, motive_body: false };
     let mut items = Vec::new();
     while !p.at_eof() {
         items.push(p.item()?);
@@ -89,6 +89,18 @@ struct Parser {
     /// Same shape as `no_record_lit`: set in the punctuation contexts, and the
     /// escape hatch is a parenthesis.
     no_eq: bool,
+    /// The next lambda body parsed is a **motive** body, so it is a type and
+    /// is parsed with [`Parser::ty`] rather than [`Parser::expr`].
+    ///
+    /// One-shot: [`Parser::lambda`] takes the flag, so only the motive's own
+    /// lambda is affected and a lambda *inside* the motive body is an
+    /// ordinary expression lambda. Needed because a motive body may be a
+    /// function type — an IH-generalizing motive is
+    /// `λ z => (env: Val) -> … -> P(z)` — and `->` is not in the expression
+    /// grammar (`issues/ih-generalization.md`). Every type the old grammar
+    /// accepted here still parses: [`Parser::ty`] falls through to
+    /// [`Parser::expr`] for `a = b`, names and applications.
+    motive_body: bool,
 }
 
 type R<T> = Result<T, ParseError>;
@@ -774,6 +786,16 @@ impl Parser {
         Ok(Expr { kind: ExprKind::Eq(Box::new(lhs), Box::new(rhs)), span })
     }
 
+    /// Run `f` with the next lambda body flagged as a motive body. Restores
+    /// the flag afterwards, so a motive that is not a lambda at all (the
+    /// elaborator's diagnostic, not the grammar's) leaves nothing set.
+    fn with_motive<T>(&mut self, f: impl FnOnce(&mut Self) -> R<T>) -> R<T> {
+        let saved = std::mem::replace(&mut self.motive_body, true);
+        let r = f(self);
+        self.motive_body = saved;
+        r
+    }
+
     /// Run `f` with `a = b` suppressed (or restored). Mirrors
     /// [`Parser::with_record_lit`].
     fn with_eq<T>(&mut self, no: bool, f: impl FnOnce(&mut Self) -> R<T>) -> R<T> {
@@ -1060,7 +1082,15 @@ impl Parser {
             return self.err("a lambda needs at least one binder");
         }
         self.expect(&TokKind::FatArrow, "`=>` (a lambda's body follows `=>`)")?;
-        let body = self.expr()?;
+        // A motive body is a *type* (docs/surface-universe.md §13), and may be
+        // a function type; nothing else in expression position may be.
+        let body = if std::mem::take(&mut self.motive_body) {
+            let ty = self.ty()?;
+            let span = ty.span;
+            Expr { kind: ExprKind::TyLit(Box::new(ty)), span }
+        } else {
+            self.expr()?
+        };
         let span = start.join(body.span);
         Ok(Expr { kind: ExprKind::Lam { binders, body: Box::new(body) }, span })
     }
@@ -1129,7 +1159,7 @@ impl Parser {
                      rather than `as z -> T`",
                 );
             }
-            Some(Box::new(self.with_record_lit(true, |p| p.expr())?))
+            Some(Box::new(self.with_motive(|p| p.with_record_lit(true, |p| p.expr()))?))
         } else {
             None
         };
@@ -1185,7 +1215,7 @@ impl Parser {
                  `j(p, (y, q) -> T, case)`",
             );
         }
-        let motive = self.expr()?;
+        let motive = self.with_motive(|p| p.expr())?;
         self.expect(&TokKind::Comma, "`,`")?;
         let case = self.expr()?;
         let end = self.expect(&TokKind::RParen, "`)`")?;

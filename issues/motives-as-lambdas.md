@@ -3,7 +3,7 @@ title: "Motives are lambdas: retire the bespoke binder syntaxes"
 status: closed
 labels: [frontend,syntax,elaboration]
 created: 2026-07-26
-updated: 2026-07-27
+updated: 2026-07-31
 ---
 
 Filed by [[surface-function-types]] as its own follow-on ("two special-form
@@ -62,3 +62,15 @@ say what it rejects.
 
 - 2026-07-27: Gated on [[surface-universe]], and that is where this issue's 'Watch for' fork gets decided rather than here. The flagged design decision -- 'the surface has no Ty-valued expression form today, and inventing one is the actual design decision in this round' -- dissolves once TyKind can say Type<n>: a motive becomes an ordinary function at '(z: A) -> Type', a lambda into it is a plain ExprKind::Lam, and the Expr/Ty bridge is the EXISTING path (checking an expression against an expected Ty l, lib.rs:950, today only a diagnostic arm) rather than a new invention. So this lands as phase 3 of that session rather than as its own round. Also recorded there: the follow-on this issue sets up (j/refl/cong/absurd/inj as ordinary declarations) can only go through at CONCRETE level 0, because a fully general motive is polymorphic in its level, which is UPi, which is layer m. Every current use is at level 0, so that is not a blocker -- but the round should state it rather than discover it.
 - 2026-07-27: LANDED as phase 3 of [[surface-universe]] (crates/elab/tests/motives.rs, 12 tests, workspace 553). 'match e as z -> M' and 'j(p, (y,q) -> M, case)' are retired with migration messages; a motive is now an ordinary ExprKind::Lam, taken apart in ONE place in the elaborator (motive_lam), and '->' is the type arrow and nothing else. This issue's 'why it is small' estimate was wrong, and instructively. A motive's body is a type and the commonest motive body here is an EQUATION, but '=' was deliberately kept out of the expression grammar (it is punctuation in 'let x = e' and in calc's 'e0 = e1 := p'), so 'lambda z => acc + z = n' did not parse and 'a motive is an ordinary lambda' could not be delivered by a parse-and-desugar change at all. The fork was: keep parsing the body with ty() -- a lambda-shaped syntax that is not a lambda, i.e. the second binder path surviving under a nicer skin -- or make equality an expression. Chose the latter, which is the same move as the rest of the session and follows from it: a type IS an expression whose type is a universe, so once Type<n> is writable there is no reason for the equality former to live only in TyKind. ExprKind::Eq is loosest-binding and non-associative, suppressed in the two punctuation contexts by a no_eq flag mirroring the existing no_record_lit, and ty_atom now takes its TyKind::Eq from the one expression parse so the spellings cannot drift. One finding worth keeping: the mechanical migration of existing motives also matched a FUNCTION TYPE ('Tip(n) = Node(k, xs) -> Nat' has the '(a, b) ->' shape), which shows the retired syntax was genuinely ambiguous with the type arrow -- this issue's complaint was a parsing hazard, not only a readability one.
+
+- 2026-07-31: Reopened only to be amended, not to be redone. The motive
+  *body* is now parsed with `ty()` again — which the closing round framed as
+  the rejected alternative, and is not: with `ExprKind::Eq` landed, `ty()`
+  falls through to the same expression parse, so `a = b`, a name and an
+  applied name take the identical path and cannot drift. A motive is still an
+  ordinary `ExprKind::Lam`. What moved is what the body may *be*: a function
+  type, which no expression is, and which an IH-generalizing motive needs
+  (`λ z => (env: Val) -> … -> P(z)`, [[ih-generalization]]). Recorded as an
+  amendment in `docs/surface-universe.md` §13; tests in
+  `crates/elab/tests/motives.rs` §6b, with the three pre-existing body shapes
+  kept as the regression. Stays closed.

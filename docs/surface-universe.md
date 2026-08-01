@@ -429,6 +429,29 @@ annotated motive binder (its type is fixed by what the motive is *for*, so an
 annotation would be a second source of truth), a non-lambda motive, and a
 chained `a = b = c`.
 
+**Amendment, 2026-07-31: the motive body is parsed with `ty()` after all —
+and that is not the rejected option.** The blocker above framed a choice: keep
+`ty()` for the motive body (a λ-shaped syntax that is not a λ), or make
+equality an expression. Equality became an expression, which was the right
+call and stands. What the framing missed is that the two are not exclusive:
+with `ExprKind::Eq` in place, `ty()`'s own fall-through *is* the expression
+parse, so parsing a motive body with `ty()` reads `a = b`, a name and an
+applied name through exactly the same code path as before and cannot drift
+from it. The motive is still an ordinary `ExprKind::Lam`; only its body's
+entry point moved.
+
+The reason to move it: a motive body may be a **function type**, and no
+expression is one. An IH-generalizing induction has motive
+`λ z => (env: Val) -> … -> P(z)` — the arms λ-wrap and `ih` is applied at the
+varied arguments (`issues/ih-generalization.md`) — and without this the
+`fuel_monotone` of `lib/ir_v1.hthr` is not statable, never mind provable.
+Mechanically: a one-shot `motive_body` flag on the parser, taken by the first
+`lambda()` it reaches, so the motive's own lambda parses its body as a type
+and a lambda *inside* the body is an ordinary expression lambda. The body is
+carried as `ExprKind::TyLit`, produced nowhere else, and read back by
+`motive_lam`. Tests: `crates/elab/tests/motives.rs` §6b, which includes the
+three old body shapes as the regression.
+
 **Cost, honestly:** every explicit motive in the workspace was rewritten. The
 mechanical migration also caught a function type — `Tip(n) = Node(k, xs) -> Nat`
 matched the `(a, b) ->` shape — which is a reminder that the old motive syntax

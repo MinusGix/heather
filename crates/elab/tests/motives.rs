@@ -103,6 +103,65 @@ fn calc_steps_still_parse() {
     ));
 }
 
+// -- 6b: a motive body is a TYPE, function types included -----------------
+
+// The motive body is read as a type (`motive_lam`), and a type may be a
+// function type — so the body is parsed with the type grammar, not the
+// expression grammar. This is what an IH-generalizing induction needs: the
+// motive Π-quantifies the arguments that vary along the recursion, and the
+// arms λ-wrap (`issues/ih-generalization.md`). Without it, `fuel_monotone`
+// (`lib/ir_v1.hthr`) cannot be stated, let alone proved.
+#[test]
+fn a_motive_body_may_be_a_function_type() {
+    ok(&format!(
+        "{ADD}
+        // the textbook accumulator: `addacc`'s second argument varies along
+        // the recursion, so the motive has to quantify it and the arms are
+        // lambdas applying `ih` at the varied value.
+        fn addacc(n: Nat) -> Nat -> Nat {{
+            match n {{ Zero => λ (a: Nat) => a, Succ(k) => λ (a: Nat) => addacc(k)(Succ(a)) }}
+        }}
+        theorem add_succ_l(a: Nat, b: Nat): add(Succ(a), b) = Succ(add(a, b)) {{
+            match b {{ Zero => refl, Succ(k) => cong_succ(add_succ_l(a, k)) }}
+        }}
+        theorem addacc_ok(n: Nat): (a: Nat) -> addacc(n)(a) = add(a, n) {{
+            match n as λ z => (a: Nat) -> addacc(z)(a) = add(a, z) {{
+                Zero => λ a => refl,
+                Succ(k, ih) => λ a => trans(ih(Succ(a)), add_succ_l(a, k)),
+            }}
+        }}"
+    ));
+}
+
+// The non-dependent arrow too, and a `j` motive — both grammar paths.
+#[test]
+fn a_motive_body_may_be_an_implication() {
+    ok("theorem imp(a: Nat, b: Nat, p: a = b): b = a {
+            j(p, λ y q => y = a -> y = a, λ (r: a = a) => r)(sym(p))
+        }");
+}
+
+// Every motive body that parsed before still parses: an equation, a bare
+// type name, and an applied type name are all reachable through the type
+// grammar's fall-through to the expression grammar.
+#[test]
+fn the_old_motive_bodies_still_parse() {
+    ok(&format!(
+        "{ADD}
+        inductive Box<A> {{ Wrap(A) }}
+        theorem eq_body(n: Nat): add(n, 0) = n {{
+            match n as λ z => add(z, 0) = z {{
+                Zero => refl,
+                Succ(k, ih) => @cong_succ(add(k, 0), k, ih),
+            }}
+        }}
+        fn name_body(n: Nat) -> Nat {{ match n as λ z => Nat {{ Zero => 0, Succ(k) => k }} }}
+        fn applied_body(n: Nat) -> Box<Nat> {{
+            match n as λ z => Box<Nat> {{ Zero => Wrap(0), Succ(k) => Wrap(k) }}
+        }}"
+    ));
+}
+
 // -- 7-11: negative controls ----------------------------------------------
 
 // The retired `match` spelling, diagnosed rather than mis-parsed.

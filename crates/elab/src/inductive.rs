@@ -1688,6 +1688,8 @@ fn expr_mentions(e: &Expr, name: &str) -> bool {
                 || binders.iter().any(|b| b.ty.as_ref().is_some_and(|t| occurs(t, name).is_some()))
         }
         ExprKind::Eq(a, b) => expr_mentions(a, name) || expr_mentions(b, name),
+        // A motive body in type syntax: read it as the type it is.
+        ExprKind::TyLit(t) => occurs(t, name).is_some(),
         ExprKind::VecLit(es) => es.iter().any(|x| expr_mentions(x, name)),
         ExprKind::Dot { recv, args, .. } => {
             expr_mentions(recv, name)
@@ -2062,6 +2064,12 @@ impl Elaborator {
                 e.span,
             );
         };
+        // Both endpoints are reduced first: an equation reached by *computing*
+        // — `eval(0, p)(env, ir) = Out(vs)`, the base case of a fuel induction
+        // (`issues/ih-generalization.md`) — is a constructor equation only
+        // after δι-reduction, and `absurd`/`inj` are about the constructors,
+        // not about the spelling.
+        let (lhs, rhs) = (self.whnf_tm(cx, &lhs, e.span)?, self.whnf_tm(cx, &rhs, e.span)?);
         let (Some(l), Some(r)) = (self.read_ctor(&ind, &lhs), self.read_ctor(&ind, &rhs)) else {
             return err(
                 format!(

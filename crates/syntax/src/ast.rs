@@ -341,6 +341,16 @@ pub enum ExprKind {
     /// contexts that use `=` as punctuation — `calc` steps and, once it has
     /// parsed its left endpoint, `ty_atom`.
     Eq(Box<Expr>, Box<Expr>),
+    /// A **type written in type syntax** where an expression node is needed.
+    ///
+    /// Produced only for a motive body (`match … as λ z => T`, `j(p, λ y q =>
+    /// T, …)`), whose body is a type by construction — `motive_lam` in the
+    /// elaborator reads it back out. It exists because a motive body may be a
+    /// *function* type, and `->` is not in the expression grammar: an
+    /// IH-generalizing motive is exactly `λ z => (env: Val) -> … -> P(z)`
+    /// (`issues/ih-generalization.md`). Everywhere else this is a rejection,
+    /// so the expression grammar is unchanged.
+    TyLit(Box<Ty>),
     /// `refl` — checking-only.
     Refl,
     /// `?name` or `?` — a goal: a deferred obligation, discharged by an `on`
