@@ -3,7 +3,7 @@ title: Option/Result/List in the prelude, with helpers and chaining
 status: open
 labels: [frontend,stdlib,elaboration,design]
 created: 2026-07-31
-updated: 2026-07-31
+updated: 2026-08-01
 ---
 
 From the first real library file ([[ir-simulate-design]], lib/ir_v1.hthr):
@@ -34,3 +34,17 @@ Three layers, separable:
 Adjacent, not owned here: a real module/import story (this issue's layer 1
 is exactly the stopgap that defers it); [[map-tabulate-convergence]] if
 List/Vec helpers grow bridging lemmas.
+
+## Log
+
+- 2026-08-01: The fuel_monotone round widens layer 1's shopping list beyond
+  containers: `lib/ir_v1.hthr` now locally defines a Nat ORDER kit —
+  `leb`, `sub`, `le_add` (`leb(n)(m) = True -> add(n, sub(m)(n)) = m`),
+  `add_left_zero`, `add_succ_left`, `sub_zero` — because the prelude has no
+  order on Nat, plus two monomorphic explicit-f congruences (`cong_nat`,
+  `cong_nat_val`). The congruence copies are the sharp datum: the prelude's
+  own comment scopes `cong_succ` to Nat because "a general cong needs its
+  function argument explicit" — but an explicit-f `cong<A, B>(f: A -> B,
+  {a}, {b}, p): f(a) = f(b)` looks definable since the polymorphism round,
+  and would have replaced both copies. Candidates for prelude residency:
+  the general cong (try it first), then leb/le_add and the add/sub lemmas.

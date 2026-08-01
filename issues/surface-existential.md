@@ -3,7 +3,7 @@ title: No existential/Σ at the statement level
 status: open
 labels: [frontend,elaboration,design]
 created: 2026-07-31
-updated: 2026-07-31
+updated: 2026-08-01
 ---
 
 Filed out of the [[ir-simulate-design]] fuel-interface round, which wanted
@@ -22,7 +22,8 @@ depends on a value the surface supplies**, usable as a *predicate*. Today:
   and `indexed_declared_index.rs` are hand-built kernel terms).
 - A `fn` returning `Type<0>` cannot help: a `fn` body is an *expression*, and
   the expression grammar has no `->` (the motive path now parses its body with
-  the type grammar, but that is one position, not the general case).
+  the type grammar, but that is one position, not the general case —
+  [[type-definitions]] owns closing it).
 
 The workaround in use, and it is a good one for its consumer: the
 **computed-bound** form. `converges` becomes `eval(bound(args), p)(env, ir) =
@@ -38,6 +39,17 @@ Two candidate routes, neither costed:
 2. **A general Σ**, which needs a type-family-valued parameter (`B: A ->
    Type<0>`) and so wants the second component's type to be an *applied*
    expression in type position. Bigger; overlaps [[surface-polymorphism]].
+
+## Log
+
+- 2026-08-01: A second customer class, from re-reading the landed round:
+  **inversion lemmas**. `step_mono`'s remember-idiom chains (four of them)
+  each re-derive by hand what one reusable lemma would give —
+  `k_bind(ev, env, rest, r) = Out(vs) -> exists ws. (r = Out(ws)) × …` —
+  and that statement is exactly a value-indexed Σ. Until this lands, every
+  proof that scrutinizes a sub-region's `Res` re-plays the case analysis
+  inline; [[match-with-equation]] owns making the inline form less scary,
+  this issue owns making it unnecessary. Priority datum, not scope change.
 
 ## What it assumes from elsewhere
 - **[[indexed-families]]** owns whether declared families come from indexed W
