@@ -3,7 +3,7 @@ title: "Meta: frontend roadmap and current focus"
 status: open
 labels: [frontend,meta]
 created: 2026-07-23
-updated: 2026-07-31
+updated: 2026-08-01
 ---
 
 Organizing issue for the frontend push (the frontend-first route,
@@ -225,3 +225,5 @@ date; the originals are in `git log --follow issues/frontend-roadmap.md`.
 - 2026-07-31: Side round off item 16: the simulate bench fixtures land (kernel suite) and the delam definitions reading is done -- verdict on [[simulate-conversion-cost]]: [[subst-visits-closed-subtrees]] first (implementation-only, fixture-gated), the definitions extension second (new-former-grade, layer-indexed transparency as its charter).
 - 2026-07-31: The subst round from that sequencing landed and closed same-day ([[subst-visits-closed-subtrees]]): simulate-payload slope 0.00, ir_v1 release check 107s -> 13.6s; the definitions round is next in line.
 - 2026-07-31: Item 16's blocking performance issue is closed: [[simulate-conversion-cost]] landed kernel definitions with layer-indexed transparency and the elaborator switch from fn-inlining to Psi-references; lib/ir_v1.hthr's full acceptance is back under scripts/test.
+- 2026-08-01: 2026-08-01: Item 16 done — [[ir-simulate-design]] closed, §11 fully discharged and re-verified (elab test green, release check 33.7s); residue re-homed to [[cross-ir-refinement]]. [[compile-typeclass-design]] and [[end-to-end-compile-instance]] unblock; the Compile design round opens.
+- 2026-08-01: 2026-08-01: The Compile round opened AND its milestone landed same-day — [[compile-typeclass-design]]'s design sketch (docs/compile-typeclass-design.md: instance = ordinary record value; class layer deferred to the resolver round with prerequisites recorded) plus its §7 acceptance in lib/ir_v1.hthr, closing [[end-to-end-compile-instance]]. The thesis milestone is checked: hand-written Compile instance for add, kernel-verified certificate, no generator. Behind it per the old item 16 note: [[datarepr-separation]] and [[certifying-generator]].

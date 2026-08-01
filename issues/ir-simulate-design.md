@@ -1,6 +1,6 @@
 ---
 title: Design FunctionIR and its simulate semantics
-status: open
+status: closed
 labels: [ir, compiler, design]
 created: 2026-07-22
 updated: 2026-08-01
@@ -87,3 +87,4 @@ Decisions to make:
   of `crates/elab/tests/ir_v1.rs` carries the updated budget note, and it is
   the thing to weigh before the next `step_mono`-shaped theorem.
 - 2026-08-01: §6's interface is now FULLY NAMEABLE, and doc §13 note 7 is fully spent. [[type-definitions]] landed route 2 (types are expressions), so `fn Refines(p1: Prog, i1: Ir, p2: Prog, i2: Ir) -> Type { (env: Val) -> (vs: Val) -> Converges(p1, env, i1, vs) -> Converges(p2, env, i2, vs) }` is a declaration in lib/ir_v1.hthr and refines_refl_conv/refines_trans_conv/refines_of_bounded are stated through it. Note 7's two reasons are now BOTH retired — the first by value parameters on 2026-08-01 morning (Converges), the second by this round. docs/ir-simulate-design.md §13 note 7 carries the amendment. Side effect worth having: the file got FASTER, 35.96s -> 32.90s release, since the shape is elaborated once instead of six times.
+- 2026-08-01: **Closing: §11 is fully discharged and re-verified today.** Items 1/2/6 landed 2026-07-31; items 3–4 landed 2026-07-31 with their statement-shape deviations since retired (Converges in the ∃-shape 2026-08-01 morning, Refines named 2026-08-01); item 5 landed as conv/simulate-payload + conv/simulate-depth and its re-aimed nesting obligation was retired with its reason recorded (§11 item 5, §13 note 6). Verified before closing: crates/elab/tests/ir_v1.rs green under scripts/test (2 passed, 198s debug against the 300 CPU-s rail) and the release CLI check ok at 33.7s. Residue re-homed rather than left here: the semantically-different-IRs stress test is [[cross-ir-refinement]] (filed today); §12's open questions already carry their homes in the doc (Prim/datarepr → [[datarepr-separation]], CallCtx descriptor → [[compile-typeclass-design]], Apply result arity → decided by v1 at arity-per-Function with Gamma/Theta the multi-slot binders, embeddings' eventual home → [[generators-in-the-language]]). docs/ir-simulate-design.md stays the specification lib/ir_v1.hthr is checked against; [[compile-typeclass-design]] and [[end-to-end-compile-instance]] unblock.

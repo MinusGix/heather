@@ -27,8 +27,13 @@
 //! shape is a saving, not a cost — the statement is elaborated once, and
 //! conversion compares a δ-stuck head instead of what it unfolds to.
 //!
-//! BUDGET. This binary is **~194 CPU-seconds** debug against `scripts/test`'s
-//! 300-second `ulimit -t` (was 9.2s, then 165s), and nearly all of that is the
+//! Then **~203s** with `Compile` v1 (docs/compile-typeclass-design.md):
+//! `CompileNat2`, the milestone `add_instance`, the second instance through
+//! the loop body, and two coupling controls — +5s debug, +0.35s release
+//! (34.1s), all of it repackaging landed theorems.
+//!
+//! BUDGET. This binary is **~203 CPU-seconds** debug against `scripts/test`'s
+//! 300-second `ulimit -t` (was 9.2s, then 165s, then 194s), and nearly all of that is the
 //! one full-library test. That is the headroom this file has left, and it is
 //! now thin: the next theorem in `lib/ir_v1.hthr` whose motive forces a case
 //! tree over `Ir` should be weighed against it, a second full-library
@@ -167,5 +172,29 @@ fn the_full_ir_library_checks() {
         "theorem inv_wrong(ev: Val -> Ir -> Res, env: Val, rest: Ir, vs: Val) \
          : BindInv(ev, env, rest, Stuck, vs) { BindInv(VNil, refl, refl) }",
         "an inversion of a Stuck sub-region",
+    );
+
+    // `Compile` v1 controls (docs/compile-typeclass-design.md §7 item 3).
+    // A wrong-result SPEC: the instance's certificate is the real theorem, so
+    // the failure is precisely the coupling — `cert`'s expected type carries
+    // `bad_spec` and the delivered convergence is to `add(b, a)`.
+    refuted(
+        &mut e,
+        "fn bad_spec(a: Nat) -> Nat -> Nat { λ (b: Nat) => add(a, a) }\n\
+         fn bad_instance() -> CompileNat2(bad_spec) {\n\
+             CompileNat2 { prog: add_chain(), entry: ir_call2(),\n\
+                 cert: λ (a: Nat) => λ (b: Nat) => add_converges_through_calls(a, b) } }",
+        "an instance for a spec the IR does not implement",
+    );
+
+    // …and a wrong IR under the right spec: the certificate is about
+    // `ir_call2()`, so an instance claiming it for the loop body must fail —
+    // `entry` is substituted into `cert`'s type, not decoration.
+    refuted(
+        &mut e,
+        "fn bad_entry() -> CompileNat2(add_spec) {\n\
+             CompileNat2 { prog: add_chain(), entry: ir_loop(),\n\
+                 cert: λ (a: Nat) => λ (b: Nat) => add_converges_through_calls(a, b) } }",
+        "an instance whose entry is not the IR the certificate is about",
     );
 }

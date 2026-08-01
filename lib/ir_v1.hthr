@@ -1083,3 +1083,47 @@ theorem add_equiv_through_calls(a: Nat, b: Nat):
     loop_refined_by_call2(embed_nat(a), embed_nat(b), embed_nat(add(b, a)), add(a, 5),
         add_equiv(add_chain(), a, b))
 }
+
+// ---------------------------------------------------------------------------
+// `Compile` v1 (docs/compile-typeclass-design.md): the certificate is an
+// ordinary record value. Per-signature and monomorphic — the value parameter
+// couples the instance to its spec function, `prog`/`entry` are the IR
+// production, and `cert` exports convergence to the embedded spec result in
+// the ∃-form. No class machinery: resolution, coherence and `[target]`
+// indexing are the operational layer and wait for a resolver (doc §5).
+
+record CompileNat2(f: Nat -> Nat -> Nat) {
+    prog: Prog,
+    entry: Ir,
+    cert: (a: Nat) -> (b: Nat)
+          -> Converges(prog, VCons(embed_nat(a), VCons(embed_nat(b), VNil)),
+                       entry, VCons(embed_nat(f(a)(b)), VNil)),
+}
+
+// The spec, spelled the way the loop computes it: the theta-loop counts `a`
+// down onto `b`, so the implemented function is `λ a b. add(b, a)`.
+fn add_spec(a: Nat) -> Nat -> Nat { λ (b: Nat) => add(b, a) }
+
+// THE MILESTONE (issues/end-to-end-compile-instance.md): one small pure
+// function, a hand-written instance producing IR for it, and the certificate
+// checked by the kernel. `cert`'s expected type asks conversion for
+// `embed_nat(add_spec(a)(b)) ≡ embed_nat(add(b, a))` — δ then β.
+fn add_instance() -> CompileNat2(add_spec) {
+    CompileNat2 {
+        prog: add_chain(),
+        entry: ir_call2(),
+        cert: λ (a: Nat) => λ (b: Nat) => add_converges_through_calls(a, b),
+    }
+}
+
+// A SECOND instance for the same spec through a different IR — the loop body
+// directly rather than two calls deep. Coherence is policy, not soundness:
+// two values of one type, either usable, semantics pinned by both
+// certificates (doc §7 item 4).
+fn add_instance_loop() -> CompileNat2(add_spec) {
+    CompileNat2 {
+        prog: add_chain(),
+        entry: ir_loop(),
+        cert: λ (a: Nat) => λ (b: Nat) => add_converges(add_chain(), a, b),
+    }
+}
