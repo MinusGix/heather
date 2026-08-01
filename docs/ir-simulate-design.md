@@ -486,9 +486,13 @@ recorded here with its reason so the next reader doesn't re-derive it.
      — and `fuel_monotone` is what keeps the shape robust, since a bound may
      always be loosened. The un-bounded ∃-form is the image of this one under
      the ∃-closure, so nothing has to be re-proved when Σ arrives.
-   - `fuel_monotone` **verbatim**, with `n <= m` spelled `leb(n)(m) = True`:
-     the prelude has no order on `Nat` and no indexed families, so `<=` is
-     *decided* in the library rather than declared. Its two absurd cases are
+   - `fuel_monotone` **verbatim**, with `n <= m` spelled `Le(n, m)`: the
+     prelude has no order on `Nat` and no indexed families, so `<=` is
+     *decided* in the library rather than declared — `Le` is a `fn`
+     returning `Type` whose body is the reflection equation
+     `leb(n)(m) = True`, and δ-unfolding makes the two interchangeable, so
+     the boolean stays an implementation detail of the proposition rather
+     than the way every ordering hypothesis is spelled. Its two absurd cases are
      then ordinary constructor equations, which `absurd` already refutes — no
      `Empty` and no large elimination. The `+ k` shape (`eval_mono_plus`) is
      proved first and is what the `<=` shape reduces to, via `le_add`.

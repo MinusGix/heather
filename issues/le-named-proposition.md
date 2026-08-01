@@ -1,6 +1,6 @@
 ---
 title: Le as a named proposition: retire the leb(n)(m) = True spelling
-status: open
+status: closed
 labels: [stdlib,elaboration,ergonomics]
 created: 2026-08-01
 updated: 2026-08-01
@@ -23,3 +23,7 @@ Three separable pieces; this issue owns the first:
 3. **`<=` at the surface**: [[comparison-operators]], which wants this issue's `Le` as its desugar target.
 
 Home question: the kit belongs in the prelude eventually ([[prelude-option-and-friends]] layer 1's shopping list already grew once for fuel_monotone); do the restatement in-file now, move when prelude residency lands.
+
+## Log
+
+- 2026-08-01: Landed, fully mechanical: fn Le(n,m) -> Type { leb(n)(m) = True } beside leb; 9 declarations / 14 sites restated (kit, fuel_monotone, conv_loosen, add_equiv_at) with ZERO proof-body edits — delta-transparency of fn-returning-Type held under absurd, record projection, and computed arguments. No Lt (no use site). Check time unchanged (~42s). This confirms the precondition [[comparison-operators]] was waiting on: <= can desugar to Le(n, m). Kit's prelude move stays with [[prelude-option-and-friends]] (shopping list updated there).

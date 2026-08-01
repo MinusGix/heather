@@ -39,7 +39,9 @@ List/Vec helpers grow bridging lemmas.
 
 - 2026-08-01: The fuel_monotone round widens layer 1's shopping list beyond
   containers: `lib/ir_v1.hthr` now locally defines a Nat ORDER kit —
-  `leb`, `sub`, `le_add` (`leb(n)(m) = True -> add(n, sub(m)(n)) = m`),
+  `leb`, `Le` (`fn Le(n: Nat, m: Nat) -> Type { leb(n)(m) = True }`, the
+  named proposition the kit is now stated over), `sub`, `le_add`
+  (`Le(n, m) -> add(n, sub(m)(n)) = m`),
   `add_left_zero`, `add_succ_left`, `sub_zero` — because the prelude has no
   order on Nat, plus two monomorphic explicit-f congruences (`cong_nat`,
   `cong_nat_val`). The congruence copies are the sharp datum: the prelude's
