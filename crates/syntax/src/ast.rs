@@ -354,13 +354,19 @@ pub enum ExprKind {
     Eq(Box<Expr>, Box<Expr>),
     /// A **type written in type syntax** where an expression node is needed.
     ///
-    /// Produced only for a motive body (`match … as λ z => T`, `j(p, λ y q =>
-    /// T, …)`), whose body is a type by construction — `motive_lam` in the
-    /// elaborator reads it back out. It exists because a motive body may be a
-    /// *function* type, and `->` is not in the expression grammar: an
-    /// IH-generalizing motive is exactly `λ z => (env: Val) -> … -> P(z)`
-    /// (`issues/ih-generalization.md`). Everywhere else this is a rejection,
-    /// so the expression grammar is unchanged.
+    /// Produced in two ways.
+    ///
+    /// 1. A motive body (`match … as λ z => T`, `j(p, λ y q => T, …)`), whose
+    ///    body is a type by construction — `motive_lam` in the elaborator reads
+    ///    it back out.
+    /// 2. A **function type in expression position** — `Parser::expr`'s arrow
+    ///    fall-through (`docs/types-as-expressions.md`). `(x: A) -> B` and
+    ///    `A -> B` are expressions whose type is a universe, which is what
+    ///    makes a type-valued `fn` an ordinary `fn`.
+    ///
+    /// Reading (2) is why (1) can be stated at all: a motive body may be a
+    /// *function* type, e.g. the IH-generalizing `λ z => (env: Val) -> … ->
+    /// P(z)` (`issues/ih-generalization.md`).
     TyLit(Box<Ty>),
     /// `refl` — checking-only.
     Refl,

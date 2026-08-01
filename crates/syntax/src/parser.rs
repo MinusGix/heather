@@ -112,6 +112,45 @@ fn named_call(name: &str, args: Vec<Expr>, explicit: bool, span: Span) -> Expr {
     Expr { kind: ExprKind::App { head: Box::new(head), args, explicit }, span }
 }
 
+/// Read an already-parsed expression **as a type**, syntactically and totally.
+///
+/// The one place the grammar decides what an expression means in type
+/// position, shared by `ty_atom`'s fall-through and by `expr`'s arrow
+/// domain, so the two cannot drift. Nothing here is a judgement about whether
+/// the thing *is* a type: a bare name becomes `TyKind::Named` whether or not a
+/// type by that name exists, and everything unrecognised becomes
+/// `TyKind::OfExpr`, a *decoded* type the elaborator checks sits at a universe
+/// (docs/surface-universe.md §4).
+fn expr_as_ty(e: &Expr) -> Ty {
+    let span = e.span;
+    let kind = match &e.kind {
+        // `a = b` is an *expression* former, so it arrives already built; a
+        // type position simply names it (docs/surface-universe.md §13).
+        ExprKind::Eq(a, b) => TyKind::Eq(a.clone(), b.clone()),
+        // A type that was written in type syntax in the first place — a
+        // function type, or a motive body. Unwrap rather than re-wrap, so
+        // `Nat -> Nat` in type position is the same `TyKind::Fn` it always was
+        // and not an `El` of its own code.
+        ExprKind::TyLit(t) => return (**t).clone(),
+        // A bare name in type position is `Nat` or a declared type; whether
+        // the name is in fact a type is the elaborator's call.
+        ExprKind::Var(s) if s == "Nat" => TyKind::Nat,
+        ExprKind::Var(s) => TyKind::Named { name: s.clone(), args: vec![] },
+        // `Type<n>` and `List<Nat>` — the two forms `atom` already parses with
+        // type syntax inside them, so reading them back costs nothing.
+        ExprKind::Univ { level } => TyKind::Univ { level: *level },
+        ExprKind::TyApp { head, args } => match &head.kind {
+            ExprKind::Var(name) => TyKind::Named { name: name.clone(), args: args.clone() },
+            _ => TyKind::OfExpr(Box::new(e.clone())),
+        },
+        // Any other expression: a decoded type. `m.carrier` is why this
+        // exists. Deliberately last, so every shape that already parsed as a
+        // type still does.
+        _ => TyKind::OfExpr(Box::new(e.clone())),
+    };
+    Ty { kind, span }
+}
+
 impl Parser {
     /// The token `k` positions ahead (`nth(0)` is [`Self::peek`]). Clamped to
     /// `Eof`, which the token stream always ends with.
@@ -661,10 +700,7 @@ impl Parser {
     fn ty(&mut self) -> R<Ty> {
         // `(x: A) -> B`. Three-token lookahead; `:` is not in the expression
         // grammar, so a binder-headed group cannot be anything else.
-        if matches!(self.peek(), TokKind::LParen)
-            && matches!(self.nth(1), TokKind::Ident(_))
-            && matches!(self.nth(2), TokKind::Colon)
-        {
+        if self.at_binder_group() {
             let start = self.bump().span; // `(`
             let (name, _) = self.ident("binder name")?;
             self.expect(&TokKind::Colon, "`:`")?;
@@ -791,27 +827,7 @@ impl Parser {
             }
         }
         let lhs = self.expr()?;
-        // `a = b` is now an *expression* former too, so it arrives already
-        // built; a type position simply names it `TyKind::Eq`
-        // (docs/surface-universe.md §13). The two spellings cannot drift
-        // because there is only one parse.
-        if let ExprKind::Eq(a, b) = lhs.kind {
-            return Ok(Ty { kind: TyKind::Eq(a, b), span: lhs.span });
-        }
-        // A bare name in type position is `Nat` or a declared type; whether the
-        // name is in fact a type is the elaborator's call, not the grammar's.
-        match &lhs.kind {
-            ExprKind::Var(s) if s == "Nat" => Ok(Ty { kind: TyKind::Nat, span: lhs.span }),
-            ExprKind::Var(s) => Ok(Ty {
-                kind: TyKind::Named { name: s.clone(), args: vec![] },
-                span: lhs.span,
-            }),
-            // Any other expression: a *decoded* type, checked by the
-            // elaborator to be at a universe (docs/surface-universe.md §4).
-            // `m.carrier` is why this exists. Deliberately last, so every
-            // shape that already parsed as a type still does.
-            _ => Ok(Ty { kind: TyKind::OfExpr(Box::new(lhs.clone())), span: lhs.span }),
-        }
+        Ok(expr_as_ty(&lhs))
     }
 
     // -- expressions --------------------------------------------------------
@@ -823,17 +839,53 @@ impl Parser {
     /// atoms. Each infix operator desugars to an ordinary [`ExprKind::Call`]
     /// on a fixed name table (issues/surface-operators.md — the decorated
     /// `+_Z` grammar and trait hookup arrive with the real trait design).
+    ///
+    /// **Function types are expressions** (`docs/types-as-expressions.md`): a
+    /// leading binder group `(x: A) -> …` and a trailing `->` both hand off to
+    /// [`Self::ty`] and come back as an [`ExprKind::TyLit`]. Neither spelling
+    /// was previously a parse — `->` after an expression was always an error,
+    /// and `:` is not in the expression grammar — so this is a pure extension
+    /// with no backtracking. `=` binds tighter than `->`, exactly as in
+    /// [`Self::ty`], where the arrow's sides are `ty_atom`s and `ty_atom`
+    /// falls through to this function.
     fn expr(&mut self) -> R<Expr> {
+        // `(x: A) -> B`. The same three-token lookahead `ty()` uses; `:` is
+        // not in the expression grammar, so a binder-headed group cannot be
+        // anything else.
+        if self.at_binder_group() {
+            let ty = self.ty()?;
+            let span = ty.span;
+            return Ok(Expr { kind: ExprKind::TyLit(Box::new(ty)), span });
+        }
         let lhs = self.expr_bp(0)?;
-        if self.no_eq || !matches!(self.peek(), TokKind::Eq | TokKind::EqEq) {
+        let lhs = if self.no_eq || !matches!(self.peek(), TokKind::Eq | TokKind::EqEq) {
+            lhs
+        } else {
+            self.expect_eq("equality type `a = b`")?;
+            // Non-associative: the right side is parsed *without* `=`, so
+            // `a = b = c` is a parse error rather than a silent grouping.
+            let rhs = self.with_eq(true, |p| p.expr_bp(0))?;
+            let span = lhs.span.join(rhs.span);
+            Expr { kind: ExprKind::Eq(Box::new(lhs), Box::new(rhs)), span }
+        };
+        if !matches!(self.peek(), TokKind::Arrow) {
             return Ok(lhs);
         }
-        self.expect_eq("equality type `a = b`")?;
-        // Non-associative: the right side is parsed *without* `=`, so
-        // `a = b = c` is a parse error rather than a silent grouping.
-        let rhs = self.with_eq(true, |p| p.expr_bp(0))?;
-        let span = lhs.span.join(rhs.span);
-        Ok(Expr { kind: ExprKind::Eq(Box::new(lhs), Box::new(rhs)), span })
+        // `A -> B`: read what we have as the domain and let `ty()` take the
+        // (right-associative) codomain, so the two spellings share one parse.
+        self.bump();
+        let dom = expr_as_ty(&lhs);
+        let cod = self.ty()?;
+        let span = lhs.span.join(cod.span);
+        let kind = TyKind::Fn { binder: None, dom: Box::new(dom), cod: Box::new(cod) };
+        Ok(Expr { kind: ExprKind::TyLit(Box::new(Ty { kind, span })), span })
+    }
+
+    /// `( ident :` — the start of a dependent function type's binder group.
+    fn at_binder_group(&self) -> bool {
+        matches!(self.peek(), TokKind::LParen)
+            && matches!(self.nth(1), TokKind::Ident(_))
+            && matches!(self.nth(2), TokKind::Colon)
     }
 
     /// Run `f` with the next lambda body flagged as a motive body. Restores

@@ -19,12 +19,13 @@
 //! Not here yet: nested recursion (`Rose`) and tier 2 (W). Both are
 //! classified and rejected, not mis-lowered.
 
+use std::borrow::Cow;
 use std::rc::Rc;
 
 use heather_kernel::conv::conv_type;
 use heather_kernel::layer::Layer;
 use heather_kernel::level::Level;
-use heather_kernel::term::{LocalSubst, LocalVar, Term, Type};
+use heather_kernel::term::{CtxBase, LocalCtx, LocalSubst, LocalVar, Term, Type};
 use heather_syntax::{Arm, CtorDecl, Expr, ExprKind, InductiveDecl, Span, Ty, TyKind};
 
 use crate::{embed, err, Alias, Cx, Elaborator, TyVar, R};
@@ -215,13 +216,14 @@ pub(crate) fn tag_type(k: u32) -> Type {
 
 /// Read a tag type back to its declaration index — the inverse of [`tag_type`].
 fn read_tag(t: &Type) -> Option<u32> {
-    match t {
+    match &*decoded(t) {
         Type::Unit { .. } => Some(0),
         Type::Sigma { fst, snd, .. } => {
-            let digit = match &**fst {
+            let digit = match &*decoded(fst) {
                 Type::Unit { .. } => 0,
                 Type::Sigma { fst, snd, .. }
-                    if matches!(**fst, Type::Unit { .. }) && matches!(**snd, Type::Unit { .. }) =>
+                    if matches!(*decoded(fst), Type::Unit { .. })
+                        && matches!(*decoded(snd), Type::Unit { .. }) =>
                 {
                     1
                 }
@@ -231,6 +233,58 @@ fn read_tag(t: &Type) -> Option<u32> {
         }
         _ => None,
     }
+}
+
+/// A lowered type's **structural** view, looking through `El` of a code.
+///
+/// `El ⌜T⌝ ⇝ T` is a *lazy* decode in the kernel: decoding a code former
+/// leaves each child still `El`-wrapped (`reduce.rs`'s `step_type`). A type
+/// that reached the elaborator through a δ-transparent type abbreviation —
+/// `Refines(p, i, q, j)` elaborated as `El` of a `fn` call
+/// (`docs/types-as-expressions.md`) — is therefore `El`-headed at *every*
+/// level below the first, and the readers above (`spine`, `tag_of`,
+/// `read_tag`) would otherwise see a code where they expect a `Σ`. So every
+/// structural step goes through this.
+///
+/// Context-free on purpose, and that is what makes the empty local context
+/// sound: the guard admits only an `El` whose code is a **canonical former**,
+/// and those rules of `step_type` are pure rewrites that never consult
+/// `gamma` or δ. An `El` of a *neutral* code (an unapplied abbreviation, a
+/// variable at `Type<n>`) is left exactly as it is — unfolding that is
+/// conversion's job, lazily, not this walk's.
+fn decoded(t: &Type) -> Cow<'_, Type> {
+    fn is_code_former(t: &Term) -> bool {
+        matches!(
+            t,
+            Term::TmNat
+                | Term::TmTy(_)
+                | Term::TmPi { .. }
+                | Term::TmId { .. }
+                | Term::TmSigma { .. }
+                | Term::TmUnit { .. }
+                | Term::TmEmpty { .. }
+                | Term::TmSum { .. }
+                | Term::TmW { .. }
+                | Term::TmVec { .. }
+                | Term::TmFin { .. }
+                | Term::TmWf { .. }
+        )
+    }
+    let empty = LocalCtx { base: CtxBase::Nil, entries: vec![] };
+    let mut cur = Cow::Borrowed(t);
+    loop {
+        let next = match &*cur {
+            Type::El { tm, .. } if is_code_former(tm) => {
+                match heather_kernel::reduce::step_type(&cur, &empty) {
+                    Some(next) => next,
+                    None => break,
+                }
+            }
+            _ => break,
+        };
+        cur = Cow::Owned(next);
+    }
+    cur
 }
 
 /// The injection path into a tag spine (§3.2/§4): `Inl` unless this is the
@@ -284,7 +338,11 @@ pub(crate) fn nat_lit(k: usize) -> Term {
 /// inhabitant hardly matters — the type is proof-irrelevant — but it has to be
 /// *an* inhabitant for the kernel to accept the constructor.
 fn tag_value(t: &Type) -> Term {
-    match t {
+    // Through [`decoded`]: the tag type of a type that arrived as *code* is
+    // `El` of a `Σ` code, and reading it as anything else emits `⟨⟩` where a
+    // pair is needed — which the kernel rejects as `NotConvertible` for every
+    // declaration whose tag is not 0 (docs/types-as-expressions.md).
+    match &*decoded(t) {
         Type::Sigma { fst_level, snd_level, fst, snd } => Term::Pair {
             fst_level: fst_level.clone(),
             snd_level: snd_level.clone(),
@@ -909,22 +967,28 @@ impl Elaborator {
     pub(crate) fn spine(&self, ty: &Type, lvl: &Level, n: usize, span: Span) -> R<Spine> {
         let mut ctors = Vec::with_capacity(n);
         let mut tails = Vec::with_capacity(n.saturating_sub(1));
-        let (cur, cur_lvl) = match ty {
+        let (cur, cur_lvl) = match &*decoded(ty) {
             // `Wf`'s shape lives at the `Wf`'s own level (kernel formation
             // rule), so there is no second level to read off.
             Type::Wf { shape, level, .. } => (Rc::clone(shape), level.clone()),
-            _ => (Rc::new(ty.clone()), lvl.clone()),
+            other => (Rc::new(other.clone()), lvl.clone()),
         };
         let mut cur = cur;
         let mut cur_lvl = cur_lvl;
         for _ in 0..n.saturating_sub(1) {
-            let Type::Sum { lhs_level, rhs_level, lhs, rhs } = &*cur else {
-                return err("internal: malformed inductive encoding (expected a `+`)", span);
+            // The inner scope ends `decoded`'s borrow of `cur` before `cur`
+            // is rebound.
+            let step = {
+                let d = decoded(&cur);
+                let Type::Sum { lhs_level, rhs_level, lhs, rhs } = &*d else {
+                    return err("internal: malformed inductive encoding (expected a `+`)", span);
+                };
+                ctors.push((Rc::clone(lhs), lhs_level.clone()));
+                tails.push((Rc::clone(rhs), rhs_level.clone()));
+                (Rc::clone(rhs), rhs_level.clone())
             };
-            ctors.push((Rc::clone(lhs), lhs_level.clone()));
-            tails.push((Rc::clone(rhs), rhs_level.clone()));
-            cur_lvl = rhs_level.clone();
-            cur = Rc::clone(rhs);
+            cur = step.0;
+            cur_lvl = step.1;
         }
         ctors.push((cur, cur_lvl));
         Ok(Spine { ctors, tails })
@@ -934,16 +998,13 @@ impl Elaborator {
     /// to the leftmost constructor and read its tag field (§3.3). `None` for
     /// anything that is not an inductive encoding.
     pub(crate) fn tag_of(&self, ty: &Type) -> Option<Rc<Inductive>> {
-        // Tier 1: the tag is in the `Wf`'s shape (tier 1 §4).
-        let mut cur = match ty {
-            Type::Wf { shape, .. } => shape,
-            _ => ty,
-        };
-        while let Type::Sum { lhs, .. } = cur {
-            cur = lhs;
+        match &*decoded(ty) {
+            // Tier 1: the tag is in the `Wf`'s shape (tier 1 §4).
+            Type::Wf { shape, .. } => self.tag_of(shape),
+            Type::Sum { lhs, .. } => self.tag_of(lhs),
+            Type::Sigma { fst, .. } => self.by_tag.get(&read_tag(fst)?).cloned(),
+            _ => None,
         }
-        let Type::Sigma { fst, .. } = cur else { return None };
-        self.by_tag.get(&read_tag(fst)?).cloned()
     }
 
     /// The surface field types of a constructor, for the narrow type-argument
