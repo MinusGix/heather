@@ -51,6 +51,40 @@ Two candidate routes, neither costed:
   inline; [[match-with-equation]] owns making the inline form less scary,
   this issue owns making it unnecessary. Priority datum, not scope change.
 
+- 2026-08-01: **Route choice settled by investigation: route 1, and it is
+  cheaper than the issue assumed.** Report:
+  `docs/surface-existential-investigation.md`. Verdict: value parameters on
+  `record` need **no kernel change, no new former, no ch. 07 obligation**,
+  and **none of [[indexed-families]]'s machinery** — the parameters-not-
+  indices claim is confirmed against the tree, and the classifier's own
+  message (`inductive.rs:1511-1519`, which pushes a uniform bare-variable
+  index toward fording) is the thing the round has to correct. Two
+  prototypes, both green: `crates/elab/tests/surface_existential_probe.rs`
+  (9 tests, hand-built kernel terms — `Σ n. dbl n = m` at an **open**
+  parameter forms, is introduced on fully open data, is *eliminated* by
+  instantiating an open type family at the witness and transporting along
+  the equation with `J`, has Σ-η at a neutral pair, and rejects a witness
+  for a different parameter); and, at the surface, the **real** `Converges`
+  over `lib/ir_v1.hthr`'s `eval`/`Prog`/`Ir`/`Val`/`Res` at concrete
+  arguments — it declares, is introduced by a computed bound with the
+  equation closed by conversion, and its projections feed `fuel_monotone`.
+  So everything except *writing the parameters as parameters* already works.
+  Dependent fields with a **computed** type (`record Small { n: Nat, h:
+  leb(n)(5) = True }`) already work too, so that gap is not on the bill.
+  Gap list: parser (small — `record R(p: T)` is a clean parse-error position
+  today and `fn` shares no grammar), AST params split (small, wide),
+  substitution into field types (small — `TyVar`/`Alias`'s `depth` +
+  `shift_local` verbatim), use-site formation (small — `Converges(a,b,c,d)`
+  in type position already parses and already reaches `try_indexed_ty`),
+  construction (**medium**, the only real design decision: checking position
+  supplies the parameters), projection/match (small). Route 2 deferred: type
+  arguments are `Ty`s and no `Ty` denotes a family, plus parameters are
+  monomorphized by design — a different round, overlapping
+  [[surface-polymorphism]]/[[type-definitions]]. One stated risk: an
+  un-shifted parameter under the Σ binder is a **well-formed but wrong**
+  proposition the kernel cannot catch, so the acceptance suite needs a
+  negative control on the proposition, not only on the encoding.
+
 ## What it assumes from elsewhere
 - **[[indexed-families]]** owns whether declared families come from indexed W
   or ford over `Wf`. Assumed here: only that the surface has no syntax for
