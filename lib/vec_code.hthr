@@ -1,0 +1,28 @@
+// The first in-language derived artifact (docs/in-language-map-design.md,
+// issues/in-language-map.md): the vector `map` template, written at layer m
+// as a `meta fn` and evaluated by the elaborator wherever `.map` elaborates
+// with this file in scope. The Rust `vec::map` schema (crates/elab/src/vec.rs)
+// is the oracle it is cross-checked against, up to conversion.
+//
+// The shape records the round's central finding: genericity lives *inside*
+// the code (Π over `Type<0>`, ordinary MLTT at layer c) because a layer-p
+// type can never appear inside layer-c code — so the template is closed, and
+// the use site applies the spliced payload to its element-type codes, the
+// function, the length, and the vector, as ordinary applications.
+//
+// The elim itself is the same one vec.rs builds by hand: recursion on the
+// length with the Π-over-the-vector motive (a vector of neutral length
+// cannot be projected, so the vector is abstracted and re-applied). Where
+// vec.rs spells fourteen `shift_local`s, this spells none — binders bind.
+meta fn map_code(g: Ctx) -> Code(g |-
+    (A: Type<0>) -> (B: Type<0>) -> (A -> B) -> (k: Nat) -> [A; k] -> [B; k]
+) {
+    code {
+        fun (A: Type<0>) => fun (B: Type<0>) => fun (f: A -> B) => fun (k: Nat) =>
+            match k as λ z => [A; z] -> [B; z] {
+                Zero => fun (v: [A; 0]) => [],
+                Succ(zk, ih) => fun (v: [A; Succ(zk)]) =>
+                    cons(f(head(v)), ih(tail(v))),
+            }
+    }
+}

@@ -100,6 +100,11 @@ pub struct FieldDecl {
 #[derive(Debug, Clone)]
 pub struct Decl {
     pub kind: DeclKind,
+    /// `meta fn` — a layer-m declaration (docs/in-language-map-design.md §3).
+    /// Its parameters may be `Ctx`/`TyCode`/`Code` binders, its body is
+    /// quotation, and it is registered elaborator-side rather than in Ψ.
+    /// Only `fn` may carry it; `meta theorem` is rejected in the parser.
+    pub is_meta: bool,
     pub name: String,
     /// `fn map<A, B>(…)` — type parameters, in order. Each becomes a
     /// **leading implicit parameter at `Type<n>`**, usable as a type inside
@@ -156,6 +161,10 @@ pub enum Stmt {
     /// annotation — the receiver must infer, since it is what names the
     /// fields.
     LetRecord { fields: Vec<(String, Span)>, expr: Expr, span: Span },
+    /// `let code x = e;` — the surface letbox (surface-v0 §4, adopted
+    /// verdict (c)). Binds `x` as *code*: a later `$x` inside a quote hoists
+    /// a `LetBoxTm` for it. Meta-layer blocks only.
+    LetCode { name: String, expr: Expr, span: Span },
 }
 
 /// `on ?name := expr;` / `on _: P := expr;` — discharge of a goal.
@@ -249,6 +258,20 @@ pub enum TyKind {
     /// is nowhere in a function type to record it
     /// (issues/implicit-binders-in-function-types.md).
     Fn { binder: Option<String>, dom: Box<Ty>, cod: Box<Ty> },
+    /// `Ctx` — the kind of a context binder in a `meta fn` signature
+    /// (docs/in-language-map-design.md §3). Layer m only; a diagnostic
+    /// anywhere else.
+    Ctx,
+    /// `TyCode(g)` — code of a type in context `g`, the kernel's
+    /// `□(g ⊢ Ty 0)`. The binder becomes a global (`TyLam`), so its splices
+    /// need no letbox. Level fixed at 0 for the slice.
+    TyCode { ctx: String },
+    /// `Code(g |- T)` — code of a term of type `T` in context `g`, the
+    /// kernel's `□(g ⊢ T)`. `T` is elaborated at `Layer::Code` in `g`.
+    Code { ctx: String, ty: Box<Ty> },
+    /// `$a` in type position — a `TyCode` binder used as a type inside a
+    /// quote payload (a `GlobalTy` reference after elaboration).
+    Splice { name: String },
 }
 
 /// One field of a record literal: `unit: 0`. The span is the whole
@@ -407,6 +430,16 @@ pub enum ExprKind {
     /// `j(proof, λ y p => M, case)` — based path induction. `proof`'s type
     /// fixes the endpoint and family; `M` is scoped over `y` (right endpoint)
     /// and `p` (the path).
+    /// `code { e }` — a quotation (docs/in-language-map-design.md §3).
+    /// Checking-only, mirroring the kernel's `BoxTm` (`NotInferable` by
+    /// design): the expected `Code(g |- T)` supplies the payload's context
+    /// and type. Splices inside hoist letboxes at this boundary.
+    Quote(Box<Expr>),
+    /// `$x` / `${e}` — a splice inside a quote payload: meta-level code,
+    /// used at its unboxing. `$x` for a `Code`-typed name and `${e}` for a
+    /// compound are one node; the distinction is elaboration bookkeeping,
+    /// not meaning (surface-v0 §4).
+    Splice(Box<Expr>),
     J {
         proof: Box<Expr>,
         /// The motive as a **two-binder lambda**: `λ y q => T`, over the

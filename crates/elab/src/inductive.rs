@@ -2000,6 +2000,9 @@ fn expr_mentions(e: &Expr, name: &str) -> bool {
         // Binder-carrying forms: conservative, since their motives and arms
         // are where a self-reference would hide.
         ExprKind::Match { .. } | ExprKind::J { .. } => true,
+        // Quotation: recurse — a mention inside a quote or splice is still a
+        // mention (and the modal forms are rejected in field types anyway).
+        ExprKind::Quote(e) | ExprKind::Splice(e) => expr_mentions(e, name),
     }
 }
 
@@ -2025,6 +2028,11 @@ fn occurs(t: &Ty, name: &str) -> Option<Span> {
         // (§3.1); an occurrence deeper inside the element type is nested and
         // still rejected.
         TyKind::Vec { elem, .. } => occurs(elem, name),
+        // Modal types (layer m) cannot be field types — they are rejected at
+        // elaboration; conservative answers here keep the walkers total.
+        TyKind::Ctx | TyKind::TyCode { .. } => None,
+        TyKind::Code { ty, .. } => occurs(ty, name),
+        TyKind::Splice { name: n } => (n == name).then_some(t.span),
     }
 }
 
@@ -2058,6 +2066,10 @@ pub(crate) fn reject_function_fields(d: &InductiveDecl) -> Result<(), crate::Ela
             // self-occurrence inside it is `occurs`' business.
             TyKind::OfExpr(..) => None,
             TyKind::Nat | TyKind::Eq(..) | TyKind::Univ { .. } => None,
+            // Modal types are rejected as field types at elaboration; none of
+            // them is a `Π` by shape.
+            TyKind::Ctx | TyKind::TyCode { .. } | TyKind::Splice { .. } => None,
+            TyKind::Code { ty, .. } => recursive_fn(ty, name),
         }
     }
     for c in &d.ctors {

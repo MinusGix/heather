@@ -38,6 +38,13 @@ pub enum TokKind {
     RBracket,  // ]
     Arrow,     // ->
     FatArrow,  // =>
+    /// `|-` — the turnstile of a contextual type `Code(g |- T)`. Two-byte like
+    /// `->`; a bare `|` stays a lex error, so nothing existing changes shape.
+    Turnstile, // |-
+    /// `$` — splice, inside a `code { … }` quote (`$x`, `${e}`) and in type
+    /// position for a `TyCode` binder (`[$a; $k]`). The splice *form* is
+    /// decided by the parser; the lexer only knows the sigil.
+    Dollar,    // $
     /// `λ` (U+03BB). `fun` is the ASCII synonym and stays an `Ident`, matched
     /// by the parser's keyword helpers (docs/surface-function-types.md §3.2).
     Lambda,
@@ -128,6 +135,7 @@ pub fn lex(src: &str) -> Result<Vec<Tok>, LexError> {
             // `fun` is the ASCII synonym and is an ordinary keyword.
             "λ" => (TokKind::Lambda, 2),
             "->" => (TokKind::Arrow, 2),
+            "|-" => (TokKind::Turnstile, 2),
             "=>" => (TokKind::FatArrow, 2),
             "==" => (TokKind::EqEq, 2),
             "<=" => (TokKind::LtEq, 2),
@@ -143,6 +151,7 @@ pub fn lex(src: &str) -> Result<Vec<Tok>, LexError> {
                 b':' => (TokKind::Colon, 1),
                 b';' => (TokKind::Semi, 1),
                 b'@' => (TokKind::At, 1),
+                b'$' => (TokKind::Dollar, 1),
                 b'.' => (TokKind::Dot, 1),
                 b'+' => (TokKind::Plus, 1),
                 b'*' => (TokKind::Star, 1),

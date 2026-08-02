@@ -454,10 +454,16 @@ impl Parser {
 
     fn decl(&mut self) -> R<Decl> {
         let start = self.peek_span();
+        // `meta fn` — a layer-m declaration (docs/in-language-map-design.md
+        // §3). Only `fn`: a theorem is an opaque Ψ-global, and meta
+        // definitions never reach Ψ, so `meta theorem` has no meaning.
+        let is_meta = self.eat_kw("meta");
         let kind = if self.eat_kw("fn") {
             DeclKind::Fn
-        } else if self.eat_kw("theorem") {
+        } else if !is_meta && self.eat_kw("theorem") {
             DeclKind::Theorem
+        } else if is_meta {
+            return self.err("`meta` marks a `fn`: write `meta fn name(…)`");
         } else {
             return self.err("expected `fn`, `theorem`, or `inductive`");
         };
@@ -573,7 +579,7 @@ impl Parser {
         let result = self.with_record_lit(true, |p| p.ty())?;
         let body = self.block()?;
         let span = start.join(body.span);
-        Ok(Decl { kind, name, tyvars, params, result, body, span })
+        Ok(Decl { kind, is_meta, name, tyvars, params, result, body, span })
     }
 
     // -- blocks and statements ----------------------------------------------
@@ -630,6 +636,16 @@ impl Parser {
             let expr = self.expr()?;
             let end = self.expect(&TokKind::Semi, "`;` to end the `let`")?;
             return Ok(Stmt::LetRecord { fields, expr, span: start.join(end) });
+        }
+        // `let code x = e;` — the surface letbox (surface-v0 §4). Unambiguous
+        // against `let code = …`: two names in a row were never a parse.
+        if self.at_kw("code") && matches!(self.nth(1), TokKind::Ident(_)) {
+            self.bump(); // `code`
+            let (name, _) = self.ident("`let code` binding name")?;
+            self.expect_eq("`let code` binding")?;
+            let expr = self.expr()?;
+            let end = self.expect(&TokKind::Semi, "`;` to end the `let code`")?;
+            return Ok(Stmt::LetCode { name, expr, span: start.join(end) });
         }
         let (name, _) = self.ident("`let` binding name")?;
         let ty = if matches!(self.peek(), TokKind::Colon) {
@@ -789,6 +805,36 @@ impl Parser {
             let inner = self.ty()?;
             let end = self.expect(&TokKind::RParen, "`)`")?;
             return Ok(Ty { kind: inner.kind, span: start.join(end) });
+        }
+        // The modal slice (docs/in-language-map-design.md §3): `Ctx`,
+        // `TyCode(g)`, `Code(g |- T)`, and `$a` for a `TyCode` binder used as
+        // a type. Keyword-shaped, so they are tried before the general rules;
+        // a user type named `Ctx`/`TyCode`/`Code` was possible before and is
+        // shadowed now, the usual cost of a keyword.
+        if self.at_kw("Ctx") && !matches!(self.nth(1), TokKind::Lt | TokKind::LParen) {
+            let span = self.bump().span;
+            return Ok(Ty { kind: TyKind::Ctx, span });
+        }
+        if self.at_kw("TyCode") && matches!(self.nth(1), TokKind::LParen) {
+            let start = self.bump().span;
+            self.bump(); // `(`
+            let (ctx, _) = self.ident("context name in `TyCode(g)`")?;
+            let end = self.expect(&TokKind::RParen, "`)` to close `TyCode(g)`")?;
+            return Ok(Ty { kind: TyKind::TyCode { ctx }, span: start.join(end) });
+        }
+        if self.at_kw("Code") && matches!(self.nth(1), TokKind::LParen) {
+            let start = self.bump().span;
+            self.bump(); // `(`
+            let (ctx, _) = self.ident("context name in `Code(g |- T)`")?;
+            self.expect(&TokKind::Turnstile, "`|-` (a code type is `Code(g |- T)`)")?;
+            let ty = self.ty()?;
+            let end = self.expect(&TokKind::RParen, "`)` to close `Code(g |- T)`")?;
+            return Ok(Ty { kind: TyKind::Code { ctx, ty: Box::new(ty) }, span: start.join(end) });
+        }
+        if matches!(self.peek(), TokKind::Dollar) {
+            let start = self.bump().span;
+            let (name, nsp) = self.ident("name after `$` in type position")?;
+            return Ok(Ty { kind: TyKind::Splice { name }, span: start.join(nsp) });
         }
         // `[T; n]` — a length-indexed vector (docs/container-fields.md §2.1).
         if matches!(self.peek(), TokKind::LBracket) {
@@ -1114,6 +1160,38 @@ impl Parser {
         }
         if matches!(self.peek(), TokKind::Lambda) || self.at_kw("fun") {
             return self.lambda();
+        }
+        // `code { e }` — a quotation (docs/in-language-map-design.md §3).
+        // Before the general `Ident` case; the `{` lookahead is what keeps a
+        // plain variable named `code` working everywhere else.
+        if self.at_kw("code") && matches!(self.nth(1), TokKind::LBrace) {
+            let start = self.bump().span; // `code`
+            self.bump(); // `{`
+            // Inside the braces nothing is waiting for a block (same reasoning
+            // as `block`), and the payload is one expression — quotes have no
+            // statements.
+            let saved = std::mem::replace(&mut self.no_record_lit, false);
+            let body = self.expr();
+            self.no_record_lit = saved;
+            let body = body?;
+            let end = self.expect(&TokKind::RBrace, "`}` to close the quote")?;
+            return Ok(Expr {
+                kind: ExprKind::Quote(Box::new(body)),
+                span: start.join(end),
+            });
+        }
+        // `$x` / `${e}` — a splice (surface-v0 §4, verdict (c)).
+        if matches!(self.peek(), TokKind::Dollar) {
+            let start = self.bump().span;
+            if matches!(self.peek(), TokKind::LBrace) {
+                self.bump();
+                let e = self.with_record_lit(false, |p| p.expr())?;
+                let end = self.expect(&TokKind::RBrace, "`}` to close `${…}`")?;
+                return Ok(Expr { kind: ExprKind::Splice(Box::new(e)), span: start.join(end) });
+            }
+            let (name, nsp) = self.ident("name after `$` (or `${expr}`)")?;
+            let inner = Expr { kind: ExprKind::Var(name), span: nsp };
+            return Ok(Expr { kind: ExprKind::Splice(Box::new(inner)), span: start.join(nsp) });
         }
         // `@f(args)` — a fully-explicit call (implicit params given
         // positionally). Stays an atom-level *named* form rather than a
@@ -1809,5 +1887,80 @@ mod tests {
         let (_, args, _) = as_call(&k);
         assert!(matches!(&args[0].kind, ExprKind::Var(n) if n == "on"));
         assert!(matches!(&args[1].kind, ExprKind::Var(n) if n == "let"));
+    }
+
+    // -- the quotation slice (docs/in-language-map-design.md §3) ------------
+
+    #[test]
+    fn meta_fn_with_modal_signature() {
+        let f = parse_file(
+            "meta fn map_code(g: Ctx, a: TyCode(g), f: Code(g |- $a -> Nat)) \
+             -> Code(g |- Nat) { code { 0 } }",
+        )
+        .unwrap();
+        let d = only_decl(&f);
+        assert!(d.is_meta);
+        assert!(matches!(d.params[0].ty.kind, TyKind::Ctx));
+        assert!(matches!(&d.params[1].ty.kind, TyKind::TyCode { ctx } if ctx == "g"));
+        let TyKind::Code { ctx, ty } = &d.params[2].ty.kind else {
+            panic!("expected a Code type, got {:?}", d.params[2].ty.kind)
+        };
+        assert_eq!(ctx, "g");
+        let TyKind::Fn { dom, .. } = &ty.kind else { panic!("expected `$a -> Nat`") };
+        assert!(matches!(&dom.kind, TyKind::Splice { name } if name == "a"));
+        assert!(matches!(&d.result.kind, TyKind::Code { .. }));
+        assert!(matches!(&d.body.result.kind, ExprKind::Quote(_)));
+    }
+
+    #[test]
+    fn meta_marks_a_fn_only() {
+        let err = parse_file("meta theorem t(): Nat { 0 }").unwrap_err();
+        assert!(err.msg.contains("meta"), "{}", err.msg);
+    }
+
+    #[test]
+    fn quote_splices_and_let_code() {
+        // `$x` and `${e}` are one node; `let code` is its own statement.
+        let d = parse_file(
+            "meta fn f(g: Ctx, x: Code(g |- Nat)) -> Code(g |- Nat) { \
+             let code y = x; code { add($y, ${x}) } }",
+        )
+        .unwrap()
+        .items
+        .remove(0)
+        .into_decl();
+        assert!(matches!(&d.body.stmts[0], Stmt::LetCode { name, .. } if name == "y"));
+        let ExprKind::Quote(payload) = &d.body.result.kind else { panic!("expected a quote") };
+        let (_, args, _) = as_call(&payload.kind);
+        assert!(matches!(&args[0].kind, ExprKind::Splice(_)));
+        assert!(matches!(&args[1].kind, ExprKind::Splice(_)));
+    }
+
+    #[test]
+    fn code_is_still_an_ordinary_name() {
+        // The `{` lookahead is what keeps `code` usable as a variable, and
+        // `Code`/`Ctx` stay ordinary type names when their follow set says so.
+        let k = body("add(code, 1)");
+        let (_, args, _) = as_call(&k);
+        assert!(matches!(&args[0].kind, ExprKind::Var(n) if n == "code"));
+        // `Code<Nat>` — a user inductive named `Code` applied to arguments
+        // still parses as a Named type (no `(` after the name).
+        let f = parse_file("fn f(x: Code<Nat>) -> Nat { 0 }").unwrap();
+        assert!(matches!(&only_decl(&f).params[0].ty.kind, TyKind::Named { name, .. } if name == "Code"));
+    }
+
+    #[test]
+    fn let_code_needs_a_name() {
+        // `let code = e;` binds a plain variable named `code`, unchanged.
+        let f = parse_file("fn f(n: Nat) -> Nat { let code = n; code }").unwrap();
+        assert!(matches!(&only_decl(&f).body.stmts[0], Stmt::Let { name, .. } if name == "code"));
+    }
+
+    #[test]
+    fn turnstile_is_required_in_code_types() {
+        let err =
+            parse_file("meta fn f(g: Ctx, x: Code(g, Nat)) -> Code(g |- Nat) { code { 0 } }")
+                .unwrap_err();
+        assert!(err.msg.contains("|-"), "{}", err.msg);
     }
 }

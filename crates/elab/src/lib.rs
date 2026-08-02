@@ -49,6 +49,7 @@ pub mod certgen;
 mod code;
 mod indexed;
 mod inductive;
+mod quote;
 mod vec;
 mod wf;
 
@@ -397,6 +398,27 @@ pub struct Elaborator {
     /// Set while elaborating an `on` right-hand side, where a *new* hole is
     /// refused. Load-bearing: it is what makes [`strengthen_global`] sound.
     frozen: Cell<bool>,
+    /// `meta fn` definitions, **elaborator-held** (docs/in-language-map-design.md
+    /// §4): kernel-checked at `Layer::Meta` against Ψ, never pushed to it —
+    /// ch. 04 admits no layer-m term in a global context. The evaluation hook
+    /// applies these to code arguments and reduces the application away.
+    meta_defs: HashMap<String, MetaDef>,
+    /// The Ψ-extending binders of the `meta fn` currently elaborating (its
+    /// `Ctx`/`TyCode` binders, plus letbox-bound code globals during quote
+    /// assembly). The whnf/conv oracles append these to Ψ so meta-bound
+    /// `GlobalVar`s resolve to the right bindings — the goal machinery's
+    /// padding trick, one layer up. Empty outside a `meta fn`.
+    meta_pushed: RefCell<Vec<GlobalBinding>>,
+}
+
+/// One registered `meta fn`: its closed layer-m term and statement type.
+/// The hook types its *evaluated payload* by kernel inference rather than by
+/// peeling `stmt`, so the statement is currently the registration's record
+/// only — kept because it is the checked fact about `term`.
+pub(crate) struct MetaDef {
+    pub(crate) term: Rc<Term>,
+    #[allow(dead_code)]
+    pub(crate) stmt: Rc<Type>,
 }
 
 /// What a `p.f` turned out to be (docs/surface-records.md §4.2).
@@ -454,6 +476,8 @@ impl Elaborator {
             goals: RefCell::new(Vec::new()),
             goal_spans: RefCell::new(HashMap::new()),
             frozen: Cell::new(false),
+            meta_defs: HashMap::new(),
+            meta_pushed: RefCell::new(Vec::new()),
         }
     }
 
@@ -517,6 +541,12 @@ impl Elaborator {
     /// `Elaborator` outlives a declaration (and an `elab_source` call), so a
     /// stale `goal_base` would silently corrupt the next one.
     fn elab_decl(&mut self, decl: &Decl) -> R<()> {
+        // A `meta fn` is a different declaration form: modal signature,
+        // quotation body, `Layer::Meta` check, elaborator-side registration
+        // (docs/in-language-map-design.md §3–4).
+        if decl.is_meta {
+            return self.elab_meta_decl(decl);
+        }
         let r = self.elab_decl_inner(decl);
         self.goal_base = 0;
         self.refresh_delta_psi();
@@ -621,6 +651,13 @@ impl Elaborator {
             // it shares their code: a partial pattern simply binds fewer.
             let (name, ty, expr) = match stmt {
                 Stmt::Let { name, ty, expr, .. } => (name, ty, expr),
+                Stmt::LetCode { span, .. } => {
+                    return err(
+                        "`let code` is meta-layer syntax: it binds code inside a \
+                         `meta fn` body (docs/in-language-map-design.md §3)",
+                        *span,
+                    )
+                }
                 Stmt::LetRecord { fields, expr, span } => {
                     let (t, rty, _) = self.elab_infer(&cx, expr)?;
                     // `record_of_at`, not `record_of`: the right-hand side may
@@ -976,6 +1013,16 @@ impl Elaborator {
     /// [`Self::delta_psi`] and goals still need no real binding for the rest
     /// of elaboration.
     fn goal_psi(&self) -> GlobalCtx {
+        // Inside a `meta fn` (goals are refused there, so the two paddings
+        // never combine): the meta binders, same reasoning as `oracle_psi`.
+        {
+            let mp = self.meta_pushed.borrow();
+            if !mp.is_empty() {
+                let mut bindings = (*self.psi.bindings).clone();
+                bindings.extend(mp.iter().cloned());
+                return GlobalCtx::new(bindings);
+            }
+        }
         // No goals in flight: Ψ itself already is the goal world, and
         // sharing its `Rc` beats rebuilding the list.
         if self.goal_base == 0 {
@@ -1090,7 +1137,21 @@ impl Elaborator {
                 // `#` marks an elaborator-introduced binder: unspellable, and
                 // filtered out of the goal listing.
                 let name = binder.clone().unwrap_or_else(|| "#arrow".to_string());
-                inner.push(name, dom_t.clone(), dom_level.clone());
+                inner.push(name.clone(), dom_t.clone(), dom_level.clone());
+                // A binder at a universe is usable as a type in the codomain
+                // (`(A: Type<0>) -> A -> A`) — the registration the telescope
+                // loop and `elab_lam_check` make, at the third binding form.
+                if let Type::Ty(level) = &dom_t {
+                    inner.tyvars.push(TyVar {
+                        name,
+                        ty: Type::El {
+                            level: level.clone(),
+                            tm: Rc::new(Term::Var(LocalVar(0))),
+                        },
+                        level: level.clone(),
+                        depth: inner.names.len(),
+                    });
+                }
                 let (cod_t, cod_level) = self.elab_ty(&inner, cod)?;
                 Ok((
                     Type::Pi {
@@ -1102,6 +1163,18 @@ impl Elaborator {
                     Level::max(dom_level, cod_level),
                 ))
             }
+            // The modal types (docs/in-language-map-design.md §3): meaningful
+            // only in a `meta fn` signature, which elaborates them itself
+            // (`elab_meta_decl`) before this general path could see them.
+            TyKind::Ctx | TyKind::TyCode { .. } | TyKind::Code { .. } => err(
+                "`Ctx`/`TyCode`/`Code` are meta-layer types: they belong in a \
+                 `meta fn` signature (docs/in-language-map-design.md §3)",
+                ty.span,
+            ),
+            // `$a` for a `TyCode` binder: its global type variable, valid at
+            // the code scope (a `meta fn` signature's payload types and quote
+            // payloads — anywhere `cx.meta` is present).
+            TyKind::Splice { name } => self.elab_ty_splice(cx, name, ty.span),
             TyKind::Eq(lhs, rhs) => {
                 let (lhs_t, lhs_ty, lvl) = self.elab_infer(cx, lhs)?;
                 let rhs_t = self.elab_check(cx, rhs, &lhs_ty, &lvl)?;
@@ -1153,6 +1226,9 @@ impl Elaborator {
                 };
                 Ok(Term::Refl { level, ty, tm: lhs })
             }
+            // A quote against its `Code(g |- T)` type — checking-only, like
+            // the kernel's `BoxTm` (docs/in-language-map-design.md §5).
+            ExprKind::Quote(payload) => self.elab_quote(cx, payload, expected, e.span),
             ExprKind::Match { motive: None, scrut, arms } => {
                 // Stage-2 motive synthesis (issues/elab-stage2-metas.md): when
                 // the scrutinee is a local variable, abstract it out of the
@@ -1523,6 +1599,24 @@ impl Elaborator {
                     };
                     return self.elab_vec_map(cx, f, xs, e.span);
                 }
+                // `head(v)` / `tail(v)` / `cons(h, t)` — the vector at a
+                // successor length *is* a `Σ` (`Vec` computes on its length),
+                // so these are its projections and pairing, annotated from
+                // the receiver's element type (docs/in-language-map-design.md
+                // — the payload of the first in-language artifact is what
+                // wanted spellings for them).
+                if (name == "head" || name == "tail") && !self.shadowed(cx, name) {
+                    let [v] = args.as_slice() else {
+                        return err(format!("`{name}` takes a vector receiver"), e.span);
+                    };
+                    return self.elab_vec_head_tail(cx, v, name == "head", e.span);
+                }
+                if name == "cons" && !self.shadowed(cx, name) {
+                    let [h, t] = args.as_slice() else {
+                        return err("`cons` takes `(head, tail)`", e.span);
+                    };
+                    return self.elab_vec_cons(cx, h, t, e.span);
+                }
                 // `xs.cong(self)` — the phase-3 lifting
                 // (docs/container-proofs.md §6). Recognized by its *self-name*
                 // argument rather than by the name `cong`, so a user-defined
@@ -1696,6 +1790,16 @@ impl Elaborator {
                 "`refl` needs an expected type (checking position or `as` motive)",
                 e.span,
             ),
+            // Checking-only, mirroring the kernel: `BoxTm` is `NotInferable`
+            // by design (docs/in-language-map-design.md §5). And a quote is
+            // only meaningful at layer m, so outside a `meta fn` the pointer
+            // is to the declaration form, not to an annotation.
+            ExprKind::Quote(_) => err(
+                "a `code { … }` quote needs an expected `Code(g |- T)` type, inside \
+                 a `meta fn` (docs/in-language-map-design.md §3)",
+                e.span,
+            ),
+            ExprKind::Splice(inner) => self.elab_splice(cx, inner, e.span),
         }
     }
 
@@ -2365,6 +2469,21 @@ impl Elaborator {
             );
         };
         let _ = dom;
+        // The evaluation hook (docs/in-language-map-design.md §4): when the
+        // in-language `map_code` is registered, the emitted term comes from
+        // evaluating it — kernel computation mid-elaboration — and the Rust
+        // schema below serves the instances the level-0 template declines
+        // (and every file that never declares `map_code`). The name is the
+        // contract; there is no attribute system in this round.
+        if let Some(t) =
+            self.try_map_code_hook(cx, al, &bl, a_ty, &b_ty, len, &f_t, &xs_t, span)?
+        {
+            return Ok((
+                t,
+                Type::Vec { level: bl.clone(), elem: Rc::new(b_ty), len: Rc::clone(len) },
+                bl,
+            ));
+        }
         Ok((
             vec::map(al, &bl, a_ty, &b_ty, len, Rc::new(f_t), Rc::new(xs_t)),
             Type::Vec {
@@ -2373,6 +2492,105 @@ impl Elaborator {
                 len: Rc::clone(len),
             },
             bl,
+        ))
+    }
+
+    /// `head(v)` / `tail(v)` on a vector whose length reduces to a successor:
+    /// the projections of the `Σ` that `Vec(A; S k)` computes to, annotated
+    /// with its components. A neutral length is a diagnostic — there is no
+    /// projection out of a vector that might be empty.
+    fn elab_vec_head_tail(
+        &self,
+        cx: &Cx,
+        v: &Expr,
+        is_head: bool,
+        span: Span,
+    ) -> R<(Term, Type, Level)> {
+        let (v_t, v_ty, _) = self.elab_infer(cx, v)?;
+        // `decoded`, as in `elab_vec_map`: a coded `Vec` field is one.
+        let v_ty = &*crate::inductive::decoded(&v_ty);
+        let Type::Vec { level, elem, len } = v_ty else {
+            let name = if is_head { "head" } else { "tail" };
+            return err(format!("`{name}`'s receiver has to be a vector"), span);
+        };
+        let len_w = self.whnf_tm(cx, len, span)?;
+        let Term::Succ(pred) = &*len_w else {
+            let name = if is_head { "head" } else { "tail" };
+            return err(
+                format!(
+                    "`{name}` needs a vector whose length reduces to a successor — \
+                     this one's does not, so it might be empty"
+                ),
+                span,
+            );
+        };
+        // `Vec(A; S k) ⇝ Σ(x: A). Vec(A↑; k↑)` — the Σ annotations, exactly
+        // as `reduce.rs` spells the reduct.
+        let snd_ty = Rc::new(Type::Vec {
+            level: level.clone(),
+            elem: Rc::new(elem.shift_local(1)),
+            len: Rc::new(pred.shift_local(1)),
+        });
+        let (term, ty) = if is_head {
+            (
+                Term::Fst {
+                    fst_level: level.clone(),
+                    snd_level: level.clone(),
+                    fst_ty: Rc::clone(elem),
+                    snd_ty,
+                    pair: Rc::new(v_t),
+                },
+                (**elem).clone(),
+            )
+        } else {
+            (
+                Term::Snd {
+                    fst_level: level.clone(),
+                    snd_level: level.clone(),
+                    fst_ty: Rc::clone(elem),
+                    snd_ty,
+                    pair: Rc::new(v_t),
+                },
+                // `snd_ty[fst p/x]` — no dependence, so the unshifted spelling.
+                Type::Vec {
+                    level: level.clone(),
+                    elem: Rc::clone(elem),
+                    len: Rc::clone(pred),
+                },
+            )
+        };
+        Ok((term, ty, level.clone()))
+    }
+
+    /// `cons(h, t)`: the pair of the same `Σ`, inferring from the tail (which
+    /// carries both the element type and the length).
+    fn elab_vec_cons(&self, cx: &Cx, h: &Expr, t: &Expr, span: Span) -> R<(Term, Type, Level)> {
+        let (t_t, t_ty, _) = self.elab_infer(cx, t)?;
+        let t_ty = &*crate::inductive::decoded(&t_ty);
+        let Type::Vec { level, elem, len } = t_ty else {
+            return err("`cons`'s second argument has to be a vector (the tail)", span);
+        };
+        let h_t = self.elab_check(cx, h, elem, level)?;
+        let snd_ty = Rc::new(Type::Vec {
+            level: level.clone(),
+            elem: Rc::new(elem.shift_local(1)),
+            len: Rc::new(len.shift_local(1)),
+        });
+        Ok((
+            Term::Pair {
+                fst_level: level.clone(),
+                snd_level: level.clone(),
+                fst_ty: Rc::clone(elem),
+                snd_ty,
+                fst: Rc::new(h_t),
+                snd: Rc::new(t_t),
+            },
+            Type::Vec {
+                level: level.clone(),
+                elem: Rc::clone(elem),
+                len: Rc::new(Term::Succ(Rc::clone(len))),
+            },
+            level.clone(),
         ))
     }
 
@@ -2701,6 +2919,20 @@ impl Elaborator {
         }
         let mut inner = cx.clone();
         inner.push(b.name.clone(), (*dom).clone(), dom_level.clone());
+        // A lambda binder *at a universe* is usable as a type in the body —
+        // the same generalization the telescope loop makes for parameters
+        // (docs/surface-universe.md §2: a type name is any binder whose type
+        // is `Type<n>`). What forced it to lambdas: a generic code template
+        // binds its element types inside the quote, `fun (A: Type<0>) => …`
+        // (docs/in-language-map-design.md §3).
+        if let Type::Ty(level) = &*dom {
+            inner.tyvars.push(TyVar {
+                name: b.name.clone(),
+                ty: Type::El { level: level.clone(), tm: Rc::new(Term::Var(LocalVar(0))) },
+                level: level.clone(),
+                depth: inner.names.len(),
+            });
+        }
         let body_t = if rest.is_empty() {
             self.elab_check(&inner, body, &cod, &cod_level)?
         } else {
@@ -2737,6 +2969,16 @@ impl Elaborator {
         let (dom, dom_level) = self.elab_ty(cx, ann)?;
         let mut inner = cx.clone();
         inner.push(b.name.clone(), dom.clone(), dom_level.clone());
+        // A binder at a universe is usable as a type in the body — see
+        // `elab_lam_check`, whose registration this mirrors.
+        if let Type::Ty(level) = &dom {
+            inner.tyvars.push(TyVar {
+                name: b.name.clone(),
+                ty: Type::El { level: level.clone(), tm: Rc::new(Term::Var(LocalVar(0))) },
+                level: level.clone(),
+                depth: inner.names.len(),
+            });
+        }
         let (body_t, cod, cod_level) = self.elab_lam_infer(&inner, rest, body)?;
         Ok((
             Term::Lam {
@@ -3111,6 +3353,22 @@ impl Elaborator {
             (Some(pos), None) => return Ok(self.local(cx, pos)),
             (None, None) => {}
         }
+        // Inside a `meta fn`, nothing beyond locals, aliases and the Nat
+        // primitives resolves: a committed global would be referenced by a
+        // `GlobalVar` whose index the meta binders above it have shifted, and
+        // the slice is pure quotation anyway (docs/in-language-map-design.md
+        // §5 — the expressiveness verdict's opaque-globals blocker gates
+        // exactly this).
+        if cx.meta.is_some() {
+            return err(
+                format!(
+                    "`{name}` is not in scope inside a `meta fn`: the slice is pure \
+                     quotation — parameters, splices, `let code` names, and the Nat \
+                     primitives only"
+                ),
+                span,
+            );
+        }
         if let Some((ind, i)) = self.ctor_of(name) {
             return self.infer_ctor(cx, &ind, i, &[], span);
         }
@@ -3166,14 +3424,31 @@ impl Elaborator {
     /// [`Self::whnf`] for a term: δ against Ψ included, so a definition
     /// unfolds. Used where a *shape* has to be read off a computed term.
     pub(crate) fn whnf_tm(&self, cx: &Cx, t: &Term, span: Span) -> R<Rc<Term>> {
-        whnf_term_delta(t, &cx.gamma, Defs::transparent(&self.delta_psi), self.fuel)
+        let psi = self.oracle_psi();
+        whnf_term_delta(t, &cx.gamma, Defs::transparent(&psi), self.fuel)
             .map(Rc::new)
             .map_err(|_| ElabError::Elab { msg: "out of fuel reducing a term".into(), span })
     }
 
     fn whnf(&self, cx: &Cx, ty: &Type, span: Span) -> R<Type> {
-        whnf_type_delta(ty, &cx.gamma, Defs::transparent(&self.delta_psi), self.fuel)
+        let psi = self.oracle_psi();
+        whnf_type_delta(ty, &cx.gamma, Defs::transparent(&psi), self.fuel)
             .map_err(|_| ElabError::Elab { msg: "out of fuel reducing a type".into(), span })
+    }
+
+    /// [`Self::delta_psi`], padded with the meta binders currently in scope
+    /// (docs/in-language-map-design.md §5): during a `meta fn`'s elaboration
+    /// the innermost `GlobalVar`s are its `Ctx`/`TyCode`/letbox binders, and
+    /// δ-consultation with an unpadded Ψ would resolve them to the wrong
+    /// bindings. Identical to `delta_psi` everywhere else.
+    fn oracle_psi(&self) -> GlobalCtx {
+        let mp = self.meta_pushed.borrow();
+        if mp.is_empty() {
+            return self.delta_psi.clone();
+        }
+        let mut bindings = (*self.delta_psi.bindings).clone();
+        bindings.extend(mp.iter().cloned());
+        GlobalCtx::new(bindings)
     }
 
     /// Rebuild [`Self::delta_psi`]. Called wherever Ψ or `goal_base` moves.
@@ -3333,6 +3608,11 @@ struct Cx {
     /// lowered at an instantiation. Empty everywhere else: type parameters are
     /// monomorphized, so they never survive into a kernel term.
     tyvars: Vec<TyVar>,
+    /// The meta-layer binder environment, present exactly while a `meta fn`'s
+    /// body — or a quote payload inside it — elaborates
+    /// (docs/in-language-map-design.md §5). `None` everywhere else, which is
+    /// what keeps the entire quotation machinery inert for ordinary code.
+    meta: Option<Rc<quote::MetaEnv>>,
 }
 
 /// One type parameter, bound to the type it is instantiated at
@@ -3378,6 +3658,7 @@ impl Cx {
             guard: None,
             aliases: vec![],
             tyvars: vec![],
+            meta: None,
         }
     }
 
@@ -3410,6 +3691,8 @@ fn count_holes(decl: &Decl) -> u32 {
                 ty(elem, n);
                 expr(len, n);
             }
+            TyKind::Ctx | TyKind::TyCode { .. } | TyKind::Splice { .. } => {}
+            TyKind::Code { ty: t, .. } => ty(t, n),
         }
     }
     fn expr(e: &Expr, n: &mut u32) {
@@ -3464,6 +3747,7 @@ fn count_holes(decl: &Decl) -> u32 {
                 expr(motive, n);
                 expr(case, n);
             }
+            ExprKind::Quote(e) | ExprKind::Splice(e) => expr(e, n),
         }
     }
     let mut n = 0;
@@ -3480,6 +3764,7 @@ fn count_holes(decl: &Decl) -> u32 {
                 expr(e, &mut n);
             }
             Stmt::LetRecord { expr: e, .. } => expr(e, &mut n),
+            Stmt::LetCode { expr: e, .. } => expr(e, &mut n),
         }
     }
     expr(&decl.body.result, &mut n);
