@@ -115,11 +115,11 @@ const FIN_K: ITy = ITy::Fin("k");
 const B_TO_B: ITy = ITy::Arrow(&EL_B, &EL_B);
 
 /// The vocabulary, one entry per Rust schema in `crates/elab/src/vec.rs` (and
-/// `nth`, whose schema is kernel-side, `term.rs`'s `nth`). `vec.tabulate` and
-/// `vec.nth` have no template yet — their payloads need a surface spelling for
-/// `Fin` and its index constructors, which is `issues/surface-fin-indexing.md`
-/// (design doc §4.4) — but their specs live here so that the round which adds
-/// them adds a template and not a third dispatch pattern.
+/// `nth`, whose schema is kernel-side, `term.rs`'s `nth`). All four slots now
+/// have templates in `lib/vec_code.hthr`; `vec.tabulate` and `vec.nth` waited
+/// on a surface spelling for `Fin` and its index constructors
+/// (`issues/surface-fin-indexing.md`), and their specs living here ahead of
+/// that round is what let it add a template and not a third dispatch pattern.
 static SLOTS: &[SlotSpec] = &[
     SlotSpec {
         slot: Slot::VecMap,

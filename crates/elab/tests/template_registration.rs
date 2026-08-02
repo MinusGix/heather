@@ -360,13 +360,31 @@ fn a_permuted_template_still_computes() {
 // them is tested above.
 //
 // A third status, recorded by the surface indexing round
-// (docs/surface-fin-indexing-design.md §7 item 15): `vec.tabulate` and
-// `vec.nth` now have live *use sites* — `elab_container_ih` and `xs[i]` — and
-// still no template, so the only path they exercise is the silent decline
-// below. A `for vec.nth` template whose payload disagrees with the slot is
-// already rejected by the registration check above, exactly as `vec.map`'s is;
-// that path first becomes *reachable* when the port round writes one
-// (`issues/quotation-stage-artifacts.md`), and the suite grows a case then.
+// (docs/surface-fin-indexing-design.md §7 item 15) and resolved by the port
+// round: `vec.tabulate` and `vec.nth` have live use sites — `elab_container_ih`
+// and `xs[i]` — and, since `lib/vec_code.hthr` grew their templates, the
+// once-unreachable "a `for vec.nth` template whose payload disagrees" path is
+// reachable and tested below.
+
+/// The registration check at `vec.nth`, now that a template for it is a thing
+/// a file can declare: names in the vocabulary, arity right, and still not the
+/// slot's type — the result here is `Fin(k)` where `vec.nth` returns `A`. The
+/// body returns the index, so this is a *well-typed* `meta fn` that simply
+/// does not fit the site, exactly `a_wrong_shape_is_rejected_by_conversion`
+/// one slot over.
+#[test]
+fn a_wrong_shape_at_nth_is_rejected_by_conversion() {
+    let wrong = "meta fn nth_code(g: Ctx) for vec.nth -> Code(g |-
+    (A: Type<0>) -> (k: Nat) -> (v: [A; k]) -> (i: Fin(k)) -> Fin(k)
+) {
+    code {
+        fun (A: Type<0>) => fun (k: Nat) => fun (v: [A; k]) => fun (i: Fin(k)) => i
+    }
+}
+";
+    let err = refusal(wrong, "returning the index is not `vec.nth`'s type");
+    assert!(err.contains("does not have `vec.nth`'s type"), "wrong failure: {err}");
+}
 
 // -- declines stay silent ---------------------------------------------------
 

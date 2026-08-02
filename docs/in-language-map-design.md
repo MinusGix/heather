@@ -295,6 +295,18 @@ at the dispatch site.
    length index force the well-typed template to *be* map. Adequacy at
    generic type is carried by the types; the conversion cross-check (item
    4) still guards the instances.
+
+   *Addendum (2026-08-02, after all four templates):* the heuristic this
+   finding suggested — genericity is free adequacy — survives, but its
+   boundary is narrower than first read. `map` is the **only** rigid
+   template of the four: `fold` loses rigidity by dropping the index,
+   `tabulate` keeps the index and loses it anyway (an indexed container
+   of unconstrained elements constrains nothing about them), and `nth`'s
+   step arm has `head(v)` in scope beside the ih. The unifying reading,
+   recorded in the `lib/vec_code.hthr` headers where each refutation
+   lives: an arm is forced when its context is too poor to offer an
+   alternative, never because the result type is indexed. The conversion
+   cross-check, not the type, is what carries adequacy in general.
 6. A file that never declares `map_code` elaborates exactly as before
    (Rust path; existing suites green).
 

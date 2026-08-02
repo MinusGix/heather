@@ -3025,10 +3025,10 @@ impl Elaborator {
         };
         let idx_t =
             self.elab_check(cx, idx, &Type::Fin { len: Rc::clone(len) }, &Level::Zero)?;
-        // The evaluation hook, as in `elab_vec_map`/`elab_vec_fold`: `vec.nth`
-        // has no template yet (`issues/quotation-stage-artifacts.md`), so this
-        // is the *silent decline* path today and the routing the port round
-        // inherits. The kernel schema stays the oracle and the fallback.
+        // The evaluation hook, as in `elab_vec_map`/`elab_vec_fold`:
+        // `lib/vec_code.hthr`'s `nth_code` claims `vec.nth` when the lib is in
+        // scope, and this declines silently when it is not. The kernel schema
+        // stays the oracle and the fallback either way.
         if let Some(t) = self.try_code_template(
             cx,
             Slot::VecNth,
@@ -3167,9 +3167,10 @@ impl Elaborator {
             };
             // The evaluation hook, as in `elab_vec_map`/`elab_vec_fold` — the
             // call `docs/meta-def-registration-design.md` §9 says this site
-            // gains once the surface can write `Fin` and its indices. No
-            // template claims `vec.tabulate` yet, so today this declines
-            // silently and the schema below runs unchanged.
+            // gains once the surface can write `Fin` and its indices.
+            // `lib/vec_code.hthr`'s `tabulate_code` claims `vec.tabulate` when
+            // the lib is in scope; without it this declines silently and the
+            // schema below runs unchanged.
             //
             // Phase 3's `tabulate`s below are deliberately *not* routed: they
             // build the two endpoints of an `Id` **type**, and a template's

@@ -604,6 +604,15 @@ step arm has no wrong inhabitant to pick; `tabulate`'s result *is* indexed
 for neither, and record it if that prediction is wrong — the last two rounds
 each refuted one such prediction, and both refutations were the payoff.
 
+*Outcome (2026-08-02, the port round): **both halves refuted.*** `tabulate`'s
+`f : Fin(Succ(zk)) -> B` accepts `FZ` wherever it accepts `FS(i)`, so the
+constant-head tabulate checks at the same signature; `nth`'s `FS` arm has
+`head(v) : A` in scope beside the ih, so the constant-first-element projection
+checks too. Only arms whose context offers no alternative are forced (`nth`'s
+`FZ` arm, by absence). The refutations and the unifying reading live in the
+`lib/vec_code.hthr` template headers and in
+`docs/in-language-map-design.md` §7's addendum.
+
 ## 10. Deferred, recorded
 
 - **Inference for `FS(j)`** (§3.1). Cheap; wanted the first time an index is

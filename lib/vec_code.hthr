@@ -65,3 +65,93 @@ meta fn fold_code(g: Ctx) for vec.fold -> Code(g |-
                 }
     }
 }
+
+// The third artifact (issues/quotation-stage-artifacts.md), and the first that
+// needed a new *surface* layer to be writable at all: `tabulate` turns an index
+// function into data, so its payload is spelled with `Fin` and its indices
+// (docs/surface-fin-indexing-design.md §9). This is where the Rust
+// hand-shifting concentrated — `vec::tabulate` has to shift `B` by `d + 1` in
+// the index function and by `d` in the domain, a distinction "invisible at a
+// closed `B`" and guarded there by its own regression test
+// (vec.rs:275-278). Here the binders do it: `B` is a binder, so no arithmetic
+// exists to get wrong, and that d+1 subtlety cannot be spelled.
+//
+// The recursion is `map_code`'s, one level up: the length carries the motive
+// and the *index function* is what the arms abstract, so the step arm feeds
+// `f` the zero index and hands the tail's recursion the shifted one.
+//
+// **The design doc's rigidity prediction for this template is refuted.**
+// §9 predicted `tabulate` would be rigid in `map`'s sense, on the grounds that
+// its result `[B; k]` is length-indexed. The index *does* pin the shape — no
+// arm can return a vector of the wrong length — but rigidity needs every
+// *element* pinned too, and here it is not: the elements come out of `f`, and
+// `f : Fin(Succ(zk)) -> B` accepts `FZ` exactly where it accepts `FS(i)`.
+// So the shift `Fin(zk) -> Fin(Succ(zk))` is a choice parametricity does not
+// make, and the constant-head tabulate — `ih(fun (i: Fin(zk)) => f(FZ))` —
+// checks at this very signature and registers for this very slot
+// (crates/elab/tests/in_language_tabulate.rs). The heuristic's real boundary is
+// therefore narrower than "is the result indexed": `fold` lost rigidity by
+// dropping the index, `tabulate` keeps the index and loses it anyway, because
+// an indexed *container* of unconstrained elements constrains nothing about
+// them. `map` stays rigid because its elements are `f`'s outputs at the only
+// argument in scope; `tabulate`'s `f` takes an index it can be lied to about.
+meta fn tabulate_code(g: Ctx) for vec.tabulate -> Code(g |-
+    (B: Type<0>) -> (k: Nat) -> (f: Fin(k) -> B) -> [B; k]
+) {
+    code {
+        fun (B: Type<0>) => fun (k: Nat) =>
+            match k as λ z => (Fin(z) -> B) -> [B; z] {
+                Zero => fun (f: Fin(0) -> B) => [],
+                Succ(zk, ih) => fun (f: Fin(Succ(zk)) -> B) =>
+                    cons(f(FZ), ih(fun (i: Fin(zk)) => f(FS(i)))),
+            }
+    }
+}
+
+// The fourth artifact, and the one whose oracle is kernel-side rather than
+// `vec.rs`: `nth` is `heather_kernel::term::nth` (term.rs:1118), which
+// `xs[i]` emits verbatim while no template claims the slot
+// (surface_fin.rs:`indexing_emits_exactly_the_kernel_nth_schema` pins that as
+// the left-hand side of this file's cross-check).
+//
+// The body is the design doc's §9 payload, modulo one rename: its `FS(j)`
+// binder cannot be written, `j` being a reserved atom keyword
+// ([[j-binder-parse-trap]]), so the binder is `jx` here and in the tests.
+//
+// `Fin` has no eliminator of its own (docs/surface-fin-indexing-design.md
+// §1.2), so the shape is forced from the outside in: recurse on the *length*,
+// and the index becomes matchable inside each arm — `Fin(0)` is `Empty`, so the
+// zero arm is the zero-arm `match i { }` (which is `elim_Empty`, and is the
+// only thing that can be written there), and `Fin(Succ(zk))` is a sum, so the
+// step arm cases.
+//
+// **The design doc's rigidity prediction for this template is also refuted**,
+// and for a reason worth keeping. §9 conceded `nth` is not rigid — the result
+// is the bare `A` — but predicted its step arm had "no wrong inhabitant to
+// pick". It has one, and the `match` on the index is what puts it there: in the
+// `FS` arm, `head(v) : A` is in scope beside `ih(tail(v), jx) : A`, so
+// `FS(jx) => head(v)` — the constant-first-element projection — checks at this
+// signature and registers for this slot
+// (crates/elab/tests/in_language_nth.rs). Only the `FZ` arm is genuinely
+// forced, and it is forced by *absence*: no `Fin(zk)` is in scope there, so the
+// ih cannot be called at all and `head(v)` is the sole inhabitant. That is the
+// pattern behind all four templates — an arm is forced when its context is too
+// poor to offer an alternative, never because the result type is indexed — and
+// three of four rounds have now found a writable mutant where §7's genericity
+// heuristic predicted none. The conversion cross-check, not the type, is what
+// carries adequacy here.
+meta fn nth_code(g: Ctx) for vec.nth -> Code(g |-
+    (A: Type<0>) -> (k: Nat) -> (v: [A; k]) -> (i: Fin(k)) -> A
+) {
+    code {
+        fun (A: Type<0>) => fun (k: Nat) =>
+            match k as λ z => [A; z] -> Fin(z) -> A {
+                Zero => fun (v: [A; 0]) => fun (i: Fin(0)) => match i { },
+                Succ(zk, ih) => fun (v: [A; Succ(zk)]) => fun (i: Fin(Succ(zk))) =>
+                    match i {
+                        FZ => head(v),
+                        FS(jx) => ih(tail(v), jx),
+                    },
+            }
+    }
+}

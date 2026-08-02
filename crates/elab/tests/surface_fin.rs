@@ -18,9 +18,9 @@
 //! Two tests are **oracle-side pins** (design doc §6.1): `xs[i]` must emit
 //! exactly `heather_kernel::term::nth`'s output and a numeral at a `Fin` must
 //! emit exactly `wf.rs`'s `fin_index`'s, each asserted by equality against a
-//! directly-built term. There is no template for `vec.nth` yet, so there is
-//! nothing to cross-check — what this round owes is the pinned left-hand side
-//! the port round's cross-check will compare against.
+//! directly-built term. These fixtures never load `lib/vec_code.hthr`, so the
+//! hook declines and the pins hold; they are the left-hand side the port
+//! round's cross-checks compare against (in_language_{tabulate,nth}.rs).
 
 use std::rc::Rc;
 
@@ -378,10 +378,10 @@ fn the_arm_diagnostics_for_a_fin_match() {
 
 // -- 4: the oracle-side pins (design doc §6.1) ------------------------------
 
-/// `xs[i]` emits **exactly** `heather_kernel::term::nth`'s output. There is no
-/// `nth_code` template yet, so there is nothing to cross-check — what this
-/// pins is the left-hand side the port round's cross-check will compare
-/// against, so a drift in either direction becomes visible there.
+/// `xs[i]` emits **exactly** `heather_kernel::term::nth`'s output when the
+/// hook declines (no lib is loaded here). This pins the left-hand side of
+/// in_language_nth.rs's cross-check, so a drift in either direction becomes
+/// visible in one suite or the other.
 #[test]
 fn indexing_emits_exactly_the_kernel_nth_schema() {
     let e = elab("fn at(n: Nat, xs: [Nat; n], i: Fin(n)) -> Nat { xs[i] }");
@@ -455,19 +455,18 @@ fn a_numeral_at_a_fin_emits_the_folded_iterated_index() {
 
 // -- 5: the slots (design doc §7 items 14-15) -------------------------------
 
-// With no template registered, `xs[i]` and `elab_container_ih` take their
-// Rust/kernel paths: the *silent decline*
+// With no template registered — these fixtures never load the lib — `xs[i]`
+// and `elab_container_ih` take their Rust/kernel paths: the *silent decline*
 // (docs/meta-def-registration-design.md §2.4's use-row). The pins above are
 // half of that claim — they assert the kernel schema verbatim, which is only
 // true while the hook declines — and `container_proofs.rs`,
 // `container_recursion.rs` and `container_fields.rs` staying green is the
 // other half, since `elab_container_ih`'s output must be byte-identical.
 //
-// `template_registration.rs` gains nothing here: a `for vec.nth` template
-// whose payload disagrees is already rejected by the registration check, and
-// that path first becomes *reachable* in the port round, when a template
-// exists to register. Recorded rather than tested, as §8.7 of that doc does
-// for its two unreachable guards.
+// The hook-taken side of both slots lives in in_language_tabulate.rs and
+// in_language_nth.rs since the port round; the once-unreachable "a `for
+// vec.nth` template whose payload disagrees" rejection is now tested in
+// template_registration.rs.
 
 /// The `Fin` former is reachable from the slot machinery's side too: the
 /// vocabulary already declares `ITy::Fin`, and this is the fixture that would
