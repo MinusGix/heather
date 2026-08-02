@@ -672,77 +672,8 @@ impl Elaborator {
                 .collect(),
             n_tyvars: decl.tyvars.len(),
         }));
-        // `let` bindings, then the result expression. A `let` is an inlined
-        // alias (the same doctrine as a `fn` definition), not a kernel binder.
-        for stmt in &decl.body.stmts {
-            // `let { unit, op } = m;` — each name aliased to its projection
-            // (docs/surface-records.md §5). Sugar over `m.unit` / `m.op`, and
-            // it shares their code: a partial pattern simply binds fewer.
-            let (name, ty, expr) = match stmt {
-                Stmt::Let { name, ty, expr, .. } => (name, ty, expr),
-                Stmt::LetCode { span, .. } => {
-                    return err(
-                        "`let code` is meta-layer syntax: it binds code inside a \
-                         `meta fn` body (docs/in-language-map-design.md §3)",
-                        *span,
-                    )
-                }
-                Stmt::LetRecord { fields, expr, span } => {
-                    let (t, rty, _) = self.elab_infer(&cx, expr)?;
-                    // `record_of_at`, not `record_of`: the right-hand side may
-                    // have arrived through a `Nat -> Type` function value, and
-                    // then its type is `El` of a β-redex rather than of a code
-                    // (docs/record-type-values.md §4). Same reader as
-                    // `resolve_dot`'s, so the same fallback.
-                    let Some(ind) = self.record_of_at(&cx, &rty, *span) else {
-                        return err(
-                            "a `let { … }` pattern needs a record on the right",
-                            *span,
-                        );
-                    };
-                    let value = Rc::new(t);
-                    for (f, fsp) in fields {
-                        let Some(idx) = ind.field_index(f) else {
-                            return err(
-                                format!("`{}` has no field `{f}`", ind.name),
-                                *fsp,
-                            );
-                        };
-                        let (term, ty, level) = self.project_field(
-                            &cx,
-                            &ind,
-                            &rty,
-                            Rc::clone(&value),
-                            idx,
-                            *fsp,
-                        )?;
-                        cx.aliases.push(Rc::new(Alias {
-                            name: f.clone(),
-                            depth: cx.names.len(),
-                            term: Rc::new(term),
-                            ty,
-                            level,
-                        }));
-                    }
-                    continue;
-                }
-            };
-            let (term, ty, level) = match ty {
-                Some(t) => {
-                    let (ty, lvl) = self.elab_ty(&cx, t)?;
-                    let tm = self.elab_check(&cx, expr, &ty, &lvl)?;
-                    (tm, ty, lvl)
-                }
-                None => self.elab_infer(&cx, expr)?,
-            };
-            cx.aliases.push(Rc::new(Alias {
-                name: name.clone(),
-                depth: cx.names.len(),
-                term: Rc::new(term),
-                ty,
-                level,
-            }));
-        }
+        // `let` bindings, then the result expression.
+        let cx = self.elab_stmts(&cx, &decl.body.stmts)?;
         let body = self.elab_check(&cx, &decl.body.result, &res_ty, &res_lvl)?;
         // Discharge every goal the block raised, then substitute them away.
         self.solve_goals(&decl.body.ons, &decl.name)?;
@@ -1101,6 +1032,89 @@ impl Elaborator {
 
     // -- types --------------------------------------------------------------
 
+    /// Push a block's statements onto a **clone** of `cx` as aliases, and
+    /// return the extended context.
+    ///
+    /// Shared by a declaration body and [`ExprKind::Block`]
+    /// (docs/let-and-blocks-design.md §4.4), so the two cannot disagree about
+    /// what a `let` means. A `let` is an inlined **alias** — the same doctrine
+    /// as a `fn` definition — not a kernel binder, which is what makes a block
+    /// in a `match` arm free: it perturbs no `Case`/`ElimNat` telescope and no
+    /// motive, and its scope dies with the clone.
+    fn elab_stmts(&self, cx: &Cx, stmts: &[Stmt]) -> R<Cx> {
+        let mut cx = cx.clone();
+        for stmt in stmts {
+            // `let { unit, op } = m;` — each name aliased to its projection
+            // (docs/surface-records.md §5). Sugar over `m.unit` / `m.op`, and
+            // it shares their code: a partial pattern simply binds fewer.
+            let (name, ty, expr) = match stmt {
+                Stmt::Let { name, ty, expr, .. } => (name, ty, expr),
+                Stmt::LetCode { span, .. } => {
+                    return err(
+                        "`let code` is meta-layer syntax: it binds code inside a \
+                         `meta fn` body (docs/in-language-map-design.md §3)",
+                        *span,
+                    )
+                }
+                Stmt::LetRecord { fields, expr, span } => {
+                    let (t, rty, _) = self.elab_infer(&cx, expr)?;
+                    // `record_of_at`, not `record_of`: the right-hand side may
+                    // have arrived through a `Nat -> Type` function value, and
+                    // then its type is `El` of a β-redex rather than of a code
+                    // (docs/record-type-values.md §4). Same reader as
+                    // `resolve_dot`'s, so the same fallback.
+                    let Some(ind) = self.record_of_at(&cx, &rty, *span) else {
+                        return err(
+                            "a `let { … }` pattern needs a record on the right",
+                            *span,
+                        );
+                    };
+                    let value = Rc::new(t);
+                    for (f, fsp) in fields {
+                        let Some(idx) = ind.field_index(f) else {
+                            return err(
+                                format!("`{}` has no field `{f}`", ind.name),
+                                *fsp,
+                            );
+                        };
+                        let (term, ty, level) = self.project_field(
+                            &cx,
+                            &ind,
+                            &rty,
+                            Rc::clone(&value),
+                            idx,
+                            *fsp,
+                        )?;
+                        cx.aliases.push(Rc::new(Alias {
+                            name: f.clone(),
+                            depth: cx.names.len(),
+                            term: Rc::new(term),
+                            ty,
+                            level,
+                        }));
+                    }
+                    continue;
+                }
+            };
+            let (term, ty, level) = match ty {
+                Some(t) => {
+                    let (ty, lvl) = self.elab_ty(&cx, t).map_err(|e| self.let_ty_hint(&cx, t, e))?;
+                    let tm = self.elab_check(&cx, expr, &ty, &lvl)?;
+                    (tm, ty, lvl)
+                }
+                None => self.elab_infer(&cx, expr)?,
+            };
+            cx.aliases.push(Rc::new(Alias {
+                name: name.clone(),
+                depth: cx.names.len(),
+                term: Rc::new(term),
+                ty,
+                level,
+            }));
+        }
+        Ok(cx)
+    }
+
     fn elab_ty(&self, cx: &Cx, ty: &Ty) -> R<(Type, Level)> {
         match &ty.kind {
             TyKind::Nat => Ok((Type::Nat, Level::Zero)),
@@ -1257,12 +1271,41 @@ impl Elaborator {
             ExprKind::Hole(name) => {
                 self.new_goal(cx, name.as_deref(), hint, expected.clone(), lvl.clone(), e.span)
             }
+            // **Rule 2** (docs/let-and-blocks-design.md §5.2): `refl` is a
+            // *nullary* special form, so its node carries no name to
+            // re-derive and the parser cannot buy the name back with a
+            // lookahead — but the elaborator can, with exactly the guard
+            // `Fin`, `absurd` and `inj` already use. Without it
+            // `let refl = n; refl` elaborated the **use** as the form and
+            // died at "`refl` needs an `=` expected type", one of the two
+            // *silent* binder traps (§5.1). A down payment on
+            // `issues/special-forms-as-declarations.md`, not a stopgap: when
+            // `refl` becomes a declaration this arm is deleted and no program
+            // changes behaviour.
+            ExprKind::Refl if self.shadowed(cx, "refl") => self.elab_check_hinted(
+                cx,
+                &Expr { kind: ExprKind::Var("refl".to_string()), span: e.span },
+                expected,
+                lvl,
+                hint,
+            ),
             ExprKind::Refl => {
                 let head = self.whnf(cx, expected, e.span)?;
                 let Type::Id { level, ty, lhs, .. } = head else {
                     return err("`refl` needs an `=` expected type", e.span);
                 };
                 Ok(Term::Refl { level, ty, tm: lhs })
+            }
+            // `{ let x = e; … result }` — **checking**-transparent, which is
+            // the property that makes the form useful: a block in a `match`
+            // arm under a dependent motive is checked at the arm's type rather
+            // than inferred and then converted
+            // (docs/let-and-blocks-design.md §4.4). The hint travels with it,
+            // so a hole in the result of a block in argument position still
+            // reports the callee and parameter it belongs to.
+            ExprKind::Block(b) => {
+                let cx = self.elab_stmts(cx, &b.stmts)?;
+                self.elab_check_hinted(&cx, &b.result, expected, lvl, hint)
             }
             // A quote against its `Code(g |- T)` type — checking-only, like
             // the kernel's `BoxTm` (docs/in-language-map-design.md §5).
@@ -1514,6 +1557,15 @@ impl Elaborator {
     /// and level.
     fn elab_infer(&self, cx: &Cx, e: &Expr) -> R<(Term, Type, Level)> {
         match &e.kind {
+            // `{ let x = e; … result }` — the block's statements extend a
+            // clone of `cx`, and its result is inferred there
+            // (docs/let-and-blocks-design.md §4.4). Inference-transparent:
+            // the block contributes no term of its own, because a `let` is an
+            // alias.
+            ExprKind::Block(b) => {
+                let cx = self.elab_stmts(cx, &b.stmts)?;
+                self.elab_infer(&cx, &b.result)
+            }
             // `a = b` as a term: it is a *type*, so the term is its code
             // `TmId : Ty l` (docs/surface-universe.md §13). Elaborated through
             // the type path so the two spellings cannot diverge.
@@ -1906,6 +1958,12 @@ impl Elaborator {
                 };
                 Ok((t, result, mlvl))
             }
+            // Rule 2 again, in inference position: a bound `refl` is the
+            // binding, and only an unbound one is the form.
+            ExprKind::Refl if self.shadowed(cx, "refl") => self.elab_infer(
+                cx,
+                &Expr { kind: ExprKind::Var("refl".to_string()), span: e.span },
+            ),
             ExprKind::Refl => err(
                 "`refl` needs an expected type (checking position or `as` motive)",
                 e.span,
@@ -2592,6 +2650,31 @@ impl Elaborator {
             );
         }
         Ok(slots.into_iter().map(|s| s.expect("checked above").clone()).collect())
+    }
+
+    /// Explain a failed `let` annotation that turned out to name a **term**.
+    ///
+    /// `let p: a = b = pf;` used to parse as annotation `a = b`, binder `=`.
+    /// The annotation position now suppresses the comparison rung
+    /// (docs/let-and-blocks-design.md §3), so it parses as annotation `a`,
+    /// binder `=`, value `b = pf` — and `a` is a term, whose only report from
+    /// `elab_ty` is `unknown type \`a\``. That is diagnosable but says nothing
+    /// about what actually happened, so this appends the spelling that works.
+    /// Pass-through for every other failure.
+    fn let_ty_hint(&self, cx: &Cx, t: &Ty, e: ElabError) -> ElabError {
+        let TyKind::Named { name, args } = &t.kind else { return e };
+        if !args.is_empty() || !self.shadowed(cx, name) {
+            return e;
+        }
+        let ElabError::Elab { msg, span } = e else { return e };
+        ElabError::Elab {
+            msg: format!(
+                "{msg} — `{name}` is a term, not a type. If this annotation was meant \
+                 to be an equation, parenthesise it: `let p: ({name} = b) = pf;`, since \
+                 an annotation does not extend across the `let`'s `=`"
+            ),
+            span,
+        }
     }
 
     /// Is this name bound by something the user wrote? Builtins give way to
@@ -4194,6 +4277,30 @@ fn count_holes(decl: &Decl) -> u32 {
                 expr(case, n);
             }
             ExprKind::Quote(e) | ExprKind::Splice(e) => expr(e, n),
+            // A block's statements **and** its result: a hole in either is a
+            // goal in the declaration's list, and an under-count is
+            // `internal: more goals than the pre-count reserved`, not a wrong
+            // answer (this function's doc comment).
+            ExprKind::Block(b) => {
+                stmts(&b.stmts, n);
+                expr(&b.result, n);
+            }
+        }
+    }
+    /// A block's statements, shared by the declaration body's own walk below
+    /// so a nested block cannot be walked differently from a top-level one.
+    fn stmts(ss: &[Stmt], n: &mut u32) {
+        for s in ss {
+            match s {
+                Stmt::Let { ty: t, expr: e, .. } => {
+                    if let Some(t) = t {
+                        ty(t, n);
+                    }
+                    expr(e, n);
+                }
+                Stmt::LetRecord { expr: e, .. } => expr(e, n),
+                Stmt::LetCode { expr: e, .. } => expr(e, n),
+            }
         }
     }
     let mut n = 0;
@@ -4201,18 +4308,7 @@ fn count_holes(decl: &Decl) -> u32 {
         ty(&p.ty, &mut n);
     }
     ty(&decl.result, &mut n);
-    for s in &decl.body.stmts {
-        match s {
-            Stmt::Let { ty: t, expr: e, .. } => {
-                if let Some(t) = t {
-                    ty(t, &mut n);
-                }
-                expr(e, &mut n);
-            }
-            Stmt::LetRecord { expr: e, .. } => expr(e, &mut n),
-            Stmt::LetCode { expr: e, .. } => expr(e, &mut n),
-        }
-    }
+    stmts(&decl.body.stmts, &mut n);
     expr(&decl.body.result, &mut n);
     for on in &decl.body.ons {
         if let OnTarget::Stmt(t) = &on.target {

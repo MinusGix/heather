@@ -140,13 +140,12 @@ fn elimination_uses_the_witness_and_the_equation() {
 /// type, an argument position — and both the call spelling and the
 /// record-literal spelling go through the same builder.
 ///
-/// Not exercised here, because it does not parse for *any* type: the annotated
-/// `let x: T = e;`. The type grammar has `a = b`, so the annotation swallows
-/// the binding `=` (`let x: Nat = 3;` is already
-/// `parse error: expected `=`, found Semi`). Pre-existing and orthogonal —
-/// recorded on `issues/surface-existential.md` rather than fixed here — but it
-/// is why the diagnostic below names a declared result rather than an
-/// annotation.
+/// One more checking position, added 2026-08-02: the annotated
+/// `let x: T = e;`. It did not parse for *any* type when this test was
+/// written, and the reason recorded here was wrong — not "the type grammar has
+/// `a = b`" but `expr()`'s comparison rung, reached through `ty_atom`'s
+/// fall-through (`docs/let-and-blocks-design.md` §1.1(1)). The annotation now
+/// suppresses that rung, so the position works and is exercised below.
 #[test]
 fn checking_position_supplies_the_parameters() {
     ok(&format!(
@@ -156,6 +155,7 @@ fn checking_position_supplies_the_parameters() {
         fn from_literal() -> Halts(4) {{ Halts {{ n: 2, h: refl }} }}
         fn takes(c: Halts(4)) -> Nat {{ c.n }}
         fn from_argument() -> Nat {{ takes(Halts(2, refl)) }}
+        fn from_annotated_let() -> Nat {{ let c: Halts(4) = Halts(2, refl); c.n }}
         "#
     ));
 }

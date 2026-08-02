@@ -822,6 +822,17 @@ fn scan_splices(e: &Expr, menv: &MetaEnv, out: &mut Vec<(String, Span)>) -> R<()
         | ExprKind::Hole(_)
         | ExprKind::Univ { .. } => Ok(()),
         ExprKind::Quote(_) => err("quotes do not nest in this slice", e.span),
+        // A block cannot reach here: the parser declines one as a quote
+        // payload's top level (docs/let-and-blocks-design.md §7.2), and a
+        // block nested deeper inside a payload would be the same unanalysed
+        // question. An `err` rather than a recursive walk, so the answer stays
+        // "filed", not "guessed" — a missed arm here is a silently non-hoisted
+        // splice (issues/let-inside-quotation.md).
+        ExprKind::Block(_) => err(
+            "a block inside a quote payload is not in this slice: `let` inside \
+             quotation is unanalysed (issues/let-inside-quotation.md)",
+            e.span,
+        ),
         ExprKind::Eq(a, b) => {
             scan_splices(a, menv, out)?;
             scan_splices(b, menv, out)

@@ -92,21 +92,23 @@ comparisons separately, or parenthesise the one that is meant to be an operand
 `a <= b == c` gets the same message plus the standing `==`-is-not-Heather
 hint. `a = b <= c` and `a < b <= c` get it too — one rung means one rule.
 
-**The exception is a trailing `=`, and it is not an oversight.** After a
-comparison, an `=` may be punctuation rather than an operator:
+**There used to be an exception for a trailing `=`** — after a comparison, an
+`=` could be punctuation rather than an operator, because
+`let p: a = b = pf;` and `let h: n <= m = pf;` put an annotated `let`'s binder
+exactly there, and the parser could not tell those from a chain without
+deciding `issues/annotated-let-swallows-the-equals.md`.
 
-```heather
-let p: a = b = pf;          -- annotated let, tested since surface-universe
-let h: n <= m = pf;         -- the same shape, and it works
-```
+**Gone as of 2026-08-02** (`docs/let-and-blocks-design.md` §3): the annotation
+position now reads its type with the whole comparison rung suppressed, so a
+`=` after a completed comparison is *always* a chain and gets the same
+message as `<=` and `==`. An equality annotation is parenthesised —
+`let p: (a = b) = pf;` — which is the escape hatch the `CHAIN` message already
+advised and, until that round, did not actually have.
 
-The parser cannot tell those from a chain without deciding
-`issues/annotated-let-swallows-the-equals.md`, which is a grammar question
-about the `let` binder token and not something a comparison round gets to
-settle. So `a <= b = c` in a *statement* position still fails at the caller
-with a duller message. The asymmetry is between `<=`/`==` (never punctuation
-anywhere in the grammar, so always a chain) and `=` (punctuation in exactly
-one place), and it will disappear when that issue picks `:=`.
+Worth recording, since this section predicted otherwise: **it was not `:=`
+that removed the exception.** Keeping `=` as the `let` binder and suppressing
+the rung in the annotation delivers the same diagnostic at a sixth of the
+migration cost, and leaves `:=` free for `issues/effects-direction.md`.
 
 ---
 

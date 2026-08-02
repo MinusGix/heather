@@ -114,9 +114,10 @@ meta fn tabulate_code(g: Ctx) for vec.tabulate -> Code(g |-
 // (surface_fin.rs:`indexing_emits_exactly_the_kernel_nth_schema` pins that as
 // the left-hand side of this file's cross-check).
 //
-// The body is the design doc's §9 payload, modulo one rename: its `FS(j)`
-// binder cannot be written, `j` being a reserved atom keyword
-// ([[j-binder-parse-trap]]), so the binder is `jx` here and in the tests.
+// The body is the design doc's §9 payload verbatim. Its `FS(j)` binder was
+// unwritable when this landed — `j` was a reserved atom keyword
+// ([[j-binder-parse-trap]]) — and was spelled `jx` here and in the tests until
+// docs/let-and-blocks-design.md §5.2's rule 1 bought the name back.
 //
 // `Fin` has no eliminator of its own (docs/surface-fin-indexing-design.md
 // §1.2), so the shape is forced from the outside in: recurse on the *length*,
@@ -129,8 +130,8 @@ meta fn tabulate_code(g: Ctx) for vec.tabulate -> Code(g |-
 // and for a reason worth keeping. §9 conceded `nth` is not rigid — the result
 // is the bare `A` — but predicted its step arm had "no wrong inhabitant to
 // pick". It has one, and the `match` on the index is what puts it there: in the
-// `FS` arm, `head(v) : A` is in scope beside `ih(tail(v), jx) : A`, so
-// `FS(jx) => head(v)` — the constant-first-element projection — checks at this
+// `FS` arm, `head(v) : A` is in scope beside `ih(tail(v), j) : A`, so
+// `FS(j) => head(v)` — the constant-first-element projection — checks at this
 // signature and registers for this slot
 // (crates/elab/tests/in_language_nth.rs). Only the `FZ` arm is genuinely
 // forced, and it is forced by *absence*: no `Fin(zk)` is in scope there, so the
@@ -150,7 +151,7 @@ meta fn nth_code(g: Ctx) for vec.nth -> Code(g |-
                 Succ(zk, ih) => fun (v: [A; Succ(zk)]) => fun (i: Fin(Succ(zk))) =>
                     match i {
                         FZ => head(v),
-                        FS(jx) => ih(tail(v), jx),
+                        FS(j) => ih(tail(v), j),
                     },
             }
     }

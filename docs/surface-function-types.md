@@ -502,12 +502,20 @@ argument is in an inference position (`cong`'s implicit endpoints send it
 through `apply_implicit`). The checking-position η-expansion is what fixes
 declared constructors, and `.cong(Wrap)` accordingly still does not work.
 
-### 10.3 A pre-existing parser bug, found in passing
+### 10.3 A pre-existing parser bug, found in passing (fixed 2026-08-02)
 
-`let n: Nat = 3;` does not parse: `ty()` takes the first `=` as the equality
-type former, leaving nothing for the statement's binder. Confirmed
-pre-existing against the parser as of `13dd25d`, so not a consequence of this
-round. Filed as `issues/annotated-let-swallows-the-equals.md` rather than
-fixed here — `let x: T = e;` versus `let p: a = b = pf;` is a genuine grammar
-ambiguity, and choosing between the resolutions is not a decision that should
-ride along inside a function-types commit.
+`let n: Nat = 3;` did not parse. Confirmed pre-existing against the parser as
+of `13dd25d`, so not a consequence of this round, and filed as
+`issues/annotated-let-swallows-the-equals.md` rather than fixed here —
+`let x: T = e;` versus `let p: a = b = pf;` is a genuine grammar ambiguity,
+and choosing between the resolutions is not a decision that should ride along
+inside a function-types commit.
+
+**The account of the cause above was wrong**, and
+`docs/let-and-blocks-design.md` §1.1(1) corrects it: it is not `ty()`'s
+equality *case* taking the first `=`, it is that `ty_atom` bottoms out in
+`expr()` and it is `expr()`'s **comparison rung** that eats the binder. So the
+gap was every annotation reaching that fall-through — a bare declared type
+name, a function type, even `(Nat)` — not the ones that look like equations.
+Fixed by reading the annotation with the rung suppressed; an equality
+annotation is now written `let p: (a = b) = pf;`.

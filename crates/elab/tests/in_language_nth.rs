@@ -149,7 +149,7 @@ fn hook_output_is_convertible_with_the_kernel_oracle() {
 /// `A`, which no index pins), but with a step arm forced anyway because the
 /// index and the recursion leave nothing else to pick. That is wrong, and the
 /// `match` on the index is what makes it wrong: inside the `FS` arm, `head(v)`
-/// is in scope at type `A` right beside `ih(tail(v), jx)`. Answering `head(v)`
+/// is in scope at type `A` right beside `ih(tail(v), j)`. Answering `head(v)`
 /// in *both* arms is the constant-first-element projection — well typed at the
 /// declared signature, and (registration checking the type and never the body,
 /// docs/meta-def-registration-design.md §2.2) registered for `vec.nth` exactly
@@ -170,7 +170,7 @@ meta fn nth_code(g: Ctx) for vec.nth -> Code(g |-
                 Succ(zk, ih) => fun (v: [A; Succ(zk)]) => fun (i: Fin(Succ(zk))) =>
                     match i {
                         FZ => head(v),
-                        FS(jx) => head(v),
+                        FS(j) => head(v),
                     },
             }
     }

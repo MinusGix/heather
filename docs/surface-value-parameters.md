@@ -130,12 +130,17 @@ Inference position is a named diagnostic that says which positions do work.
 `R<Nat>(a, b)` is *not* a spelling: `<…>` supplies type arguments, and value
 arguments are a different list it cannot reach.
 
-**Edge behaviour worth knowing.** The annotated `let x: T = e;` is *not* one of
-the working checking positions, and not because of this round — the type
-grammar has `a = b`, so the annotation swallows the binding `=`. `let x: Nat =
-3;` is already `parse error: expected `=`, found Semi`. Pre-existing and
-orthogonal; noted on `issues/surface-existential.md`, and it is why the
-diagnostic names a declared result type rather than an annotation.
+**Edge behaviour worth knowing (corrected 2026-08-02).** The annotated
+`let x: T = e;` was *not* one of the working checking positions when this was
+written — not because of this round, and not for the reason given here. The
+cause was `expr()`'s comparison rung, reached through `ty_atom`'s
+fall-through, rather than "the type grammar has `a = b`"
+(`docs/let-and-blocks-design.md` §1.1(1)); `let x: Nat = 3;` was
+`parse error: expected `=`, found Semi` along with every other annotation that
+reached that fall-through. Fixed by `docs/let-and-blocks-design.md` §3: the
+annotation is read with the rung suppressed, an equality annotation is
+parenthesised, and the annotated `let` is now a working checking position. The
+diagnostic still names a declared result type, which is no worse for it.
 
 ---
 

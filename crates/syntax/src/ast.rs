@@ -461,9 +461,27 @@ pub enum ExprKind {
     /// are permuted into declaration order in front of the ordinary tier-0
     /// constructor path, which is what actually elaborates.
     RecordLit { name: String, tyargs: Vec<Ty>, fields: Vec<RecordLitField> },
-    /// `j(proof, λ y p => M, case)` — based path induction. `proof`'s type
-    /// fixes the endpoint and family; `M` is scoped over `y` (right endpoint)
-    /// and `p` (the path).
+    /// `{ let x = e; … result }` — a **block in expression position**
+    /// (docs/let-and-blocks-design.md §4).
+    ///
+    /// Disambiguated from the record literal `D { … }` **by position, never by
+    /// lookahead**, exactly as [`ExprKind::Index`]'s `[` is: a record literal
+    /// is *postfix* on a name head and is constructed only after an expression
+    /// has been parsed, while a prefix `{` in expression position was a parse
+    /// error in every production before this node existed. A `{` where a
+    /// *statement* is expected is a declaration body or an arm list and is
+    /// reached by `block()`/`match_expr` directly, never through `atom`.
+    ///
+    /// Reuses [`Block`] rather than minting a second node, so the parser
+    /// shares `block_body` verbatim and the elaborator shares the alias loop —
+    /// a declaration body and a block expression cannot drift in what a `let`
+    /// means. The `ons` field is **parsed and then rejected**
+    /// (`InductiveDecl::valparams` is the same house style): an arm-level `on`
+    /// would mint a nested goal scope, and `goal_base`/`frozen`/
+    /// `strengthen_global` are all declaration-scoped
+    /// (issues/nested-goal-discharge.md). When that issue lands, the field is
+    /// already here and only the elaborator changes.
+    Block(Box<crate::ast::Block>),
     /// `code { e }` — a quotation (docs/in-language-map-design.md §3).
     /// Checking-only, mirroring the kernel's `BoxTm` (`NotInferable` by
     /// design): the expected `Code(g |- T)` supplies the payload's context
@@ -474,6 +492,9 @@ pub enum ExprKind {
     /// compound are one node; the distinction is elaboration bookkeeping,
     /// not meaning (surface-v0 §4).
     Splice(Box<Expr>),
+    /// `j(proof, λ y p => M, case)` — based path induction. `proof`'s type
+    /// fixes the endpoint and family; `M` is scoped over `y` (right endpoint)
+    /// and `p` (the path).
     J {
         proof: Box<Expr>,
         /// The motive as a **two-binder lambda**: `λ y q => T`, over the

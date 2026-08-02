@@ -143,7 +143,7 @@ fn let_binds_a_hole_through_its_annotation() {
     accept(
         r#"
         theorem let_hole(n: Nat): n = add(n, 0) {
-            let strong: add(n, 0) = n = ?g;
+            let strong: (add(n, 0) = n) = ?g;
             sym(strong)
             on ?g := add_zero(n);
         }

@@ -237,6 +237,14 @@ Every checking position a payload actually needs is available: an `xs[i]`
 index (§5 checks it at `Fin(len)`), a function argument, an annotated `let`, a
 `theorem` body, a `match` arm under a motive.
 
+**Correction, 2026-08-02.** The annotated `let` in that list was *not*
+available when this was written, and the implementing round recorded the
+falsification on `issues/annotated-let-swallows-the-equals.md`:
+`let i: Fin(Succ(n)) = FZ;` did not parse, and neither did `let x: Nat = 3;`.
+`docs/let-and-blocks-design.md` §3 has since fixed it, so the claim is now
+true as stated, and item 7 of §7's plan below — the axis-3 fixture — is live
+in `crates/elab/tests/surface_fin.rs::an_index_in_checking_position`.
+
 ### 3.3 Numeral sugar at a `Fin` type
 
 **Decision: a numeral checked against `Fin(m)` elaborates to the iterated

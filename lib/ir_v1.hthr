@@ -969,10 +969,10 @@ theorem letcall_conv(p: Prog, env: Val, callee: Nat, args: Refs, rest: Ir,
                      hr: Converges(p, append(ws, env), rest, vs))
     : Converges(p, env, LetCall(callee, args, rest), vs)
 {
-    let e1: eval(add(hc.n, hr.n), p)(cargs, find_fun(p)(callee)) = Out(ws)
+    let e1: (eval(add(hc.n, hr.n), p)(cargs, find_fun(p)(callee)) = Out(ws))
         = fuel_monotone(p, cargs, find_fun(p)(callee), ws,
                         hc.n, add(hc.n, hr.n), hc.h, le_add_l(hc.n, hr.n));
-    let e2: eval(add(hc.n, hr.n), p)(append(ws, env), rest) = Out(vs)
+    let e2: (eval(add(hc.n, hr.n), p)(append(ws, env), rest) = Out(vs))
         = fuel_monotone(p, append(ws, env), rest, vs,
                         hr.n, add(hc.n, hr.n), hr.h, le_add_r(hc.n, hr.n));
     Converges(Succ(add(hc.n, hr.n)),
@@ -991,10 +991,10 @@ theorem letmatch_conv(p: Prog, env: Val, scrut: Nat, arms: Ir, rest: Ir,
                       hr: Converges(p, append(ws, env), rest, vs))
     : Converges(p, env, LetMatch(scrut, arms, rest), vs)
 {
-    let e1: eval(add(ha.n, hr.n), p)(append(fields, env), pick_arm(arms)(tag)) = Out(ws)
+    let e1: (eval(add(ha.n, hr.n), p)(append(fields, env), pick_arm(arms)(tag)) = Out(ws))
         = fuel_monotone(p, append(fields, env), pick_arm(arms)(tag), ws,
                         ha.n, add(ha.n, hr.n), ha.h, le_add_l(ha.n, hr.n));
-    let e2: eval(add(ha.n, hr.n), p)(append(ws, env), rest) = Out(vs)
+    let e2: (eval(add(ha.n, hr.n), p)(append(ws, env), rest) = Out(vs))
         = fuel_monotone(p, append(ws, env), rest, vs,
                         hr.n, add(ha.n, hr.n), hr.h, le_add_r(ha.n, hr.n));
     Converges(Succ(add(ha.n, hr.n)),

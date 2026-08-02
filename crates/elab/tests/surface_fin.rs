@@ -174,11 +174,13 @@ fn indexing_at_an_open_element_type() {
 /// open length, and an index checked against `Fin(len)` by `xs[i]` itself. The
 /// annotation has to convert with the built index rather than compute it away.
 ///
-/// An *annotated `let`* would be the third such position and the design doc
-/// names it, but `let x: T = e;` does not parse for any `T` that reaches
-/// `ty_atom`'s expression fall-through — `let x: Nat = 0;` fails the same way,
-/// so this is a pre-existing surface gap and not a `Fin` one. Recorded here
-/// rather than worked around.
+/// The *annotated `let`* is the third such position. It could not be written
+/// when this test was first added — `let x: T = e;` did not parse for any `T`
+/// reaching `ty_atom`'s expression fall-through, `let x: Nat = 0;` included —
+/// and the caveat recorded here is retired by
+/// `docs/let-and-blocks-design.md` §3, which fixed it. It is exercised below,
+/// at an **open** length, so the annotation must convert with the built index
+/// rather than compute away.
 #[test]
 fn an_index_in_checking_position() {
     ok("fn take(n: Nat, i: Fin(Succ(n))) -> Nat { 0 }
@@ -189,6 +191,13 @@ fn an_index_in_checking_position() {
     // The index of an `xs[i]` is itself a checking position, at the
     // *receiver's* length.
     ok("fn at(n: Nat, xs: [Nat; Succ(Succ(n))]) -> Nat { xs[FS(FZ)] }");
+    // The annotated `let`, at an open length — the position the caveat above
+    // said was unwritable.
+    ok("fn at(n: Nat, xs: [Nat; Succ(n)]) -> Nat { let i: Fin(Succ(n)) = FZ; xs[i] }");
+    ok("fn at(n: Nat, xs: [Nat; Succ(Succ(n))]) -> Nat {
+            let i: Fin(Succ(Succ(n))) = FS(FZ);
+            xs[i]
+        }");
 }
 
 /// The two inference-position diagnostics, each naming its own form (§3.2).
@@ -256,7 +265,7 @@ fn indexing_a_non_vector_is_rejected() {
 fn distinct_indices_are_not_definitionally_equal() {
     // Both endpoints check at `Fin(2)`, and both sides compute — so if the two
     // indices were the same term, `refl` would go through and `7 = 9`.
-    let src = "fn pick(i: Fin(2)) -> Nat { match i { FZ => 7, FS(jx) => 9 } }
+    let src = "fn pick(i: Fin(2)) -> Nat { match i { FZ => 7, FS(j) => 9 } }
                theorem bad(): pick(FZ) = pick(FS(FZ)) { refl }";
     let msg = bad(src);
     assert!(!msg.is_empty(), "`7 = 9` must not be provable by `refl`");
@@ -290,7 +299,7 @@ fn a_match_on_fin_zero_is_elim_empty() {
 /// the expected reduct, not merely `check`.
 #[test]
 fn a_match_on_fin_at_a_literal_length_computes() {
-    let src = "fn pick(i: Fin(2)) -> Nat { match i { FZ => 7, FS(jx) => 9 } }
+    let src = "fn pick(i: Fin(2)) -> Nat { match i { FZ => 7, FS(j) => 9 } }
                theorem z(): pick(FZ) = 7 { refl }
                theorem s(): pick(FS(FZ)) = 9 { refl }
                theorem n(): pick(1) = 9 { refl }";
@@ -301,17 +310,19 @@ fn a_match_on_fin_at_a_literal_length_computes() {
 /// have: recurse on the *length* with `match`, and inside the successor arm
 /// the index becomes matchable while the scrutinee itself stays neutral.
 ///
-/// The predecessor binder is `jx` and not `j`: `j` is the keyword of based
-/// path induction (`j(p, λ y q => T, case)`), so a *use* of a binder named `j`
-/// parses as a `j`-expression and fails at the missing `(`. The design doc's
-/// `nth_code` sketch writes `FS(j)`; the port round has to rename it.
+/// The predecessor binder is `j`, the natural spelling, and it is the
+/// **acceptance test of rule 1** (docs/let-and-blocks-design.md §5.5). Until
+/// 2026-08-02 a *use* of a binder named `j` parsed as a `j`-expression and
+/// failed at the missing `(`, so this suite spelled it `jx`; `atom` now
+/// recognizes the form only when a `(` follows, and the workaround is
+/// reverted at the exact site that motivated it.
 #[test]
 fn a_match_on_fin_inside_a_match_on_the_length() {
     ok("fn at(k: Nat) -> Fin(k) -> Nat {
             match k as λ z => Fin(z) -> Nat {
                 Zero => fun (i: Fin(0)) => match i { },
                 Succ(zk, ih) => fun (i: Fin(Succ(zk))) =>
-                    match i { FZ => 0, FS(jx) => Succ(ih(jx)) },
+                    match i { FZ => 0, FS(j) => Succ(ih(j)) },
             }
         }");
     // The payload `nth_code` itself needs, modulo the slot plumbing: a `Vec`
@@ -322,7 +333,7 @@ fn a_match_on_fin_inside_a_match_on_the_length() {
                 Succ(zk, ih) => fun (v: [A; Succ(zk)]) => fun (i: Fin(Succ(zk))) =>
                     match i {
                         FZ => head(v),
-                        FS(jx) => ih(tail(v), jx),
+                        FS(j) => ih(tail(v), j),
                     },
             }
         }");
@@ -332,11 +343,11 @@ fn a_match_on_fin_inside_a_match_on_the_length() {
 /// arm types must convert with the goal rather than be reduced away.
 #[test]
 fn a_match_on_fin_with_a_dependent_motive() {
-    ok("fn pick(i: Fin(2)) -> Nat { match i { FZ => 7, FS(jx) => 9 } }
+    ok("fn pick(i: Fin(2)) -> Nat { match i { FZ => 7, FS(j) => 9 } }
         theorem always(i: Fin(2)): pick(i) = pick(i) {
             match i as λ w => pick(w) = pick(w) {
                 FZ => refl,
-                FS(jx) => refl,
+                FS(j) => refl,
             }
         }");
 }
@@ -346,7 +357,7 @@ fn a_match_on_fin_with_a_dependent_motive() {
 /// not read like a TODO.
 #[test]
 fn a_match_on_fin_at_a_neutral_length_names_the_fix() {
-    let msg = bad("fn f(n: Nat, i: Fin(n)) -> Nat { match i { FZ => 0, FS(jx) => 1 } }");
+    let msg = bad("fn f(n: Nat, i: Fin(n)) -> Nat { match i { FZ => 0, FS(j) => 1 } }");
     assert!(
         msg.contains("needs its length to reduce to `0` or a successor")
             && msg.contains("here it is `n`")
@@ -362,13 +373,13 @@ fn a_match_on_fin_at_a_neutral_length_names_the_fix() {
 
 #[test]
 fn the_arm_diagnostics_for_a_fin_match() {
-    let msg = bad("fn f(i: Fin(2)) -> Nat { match i { Zero => 0, FS(jx) => 1 } }");
+    let msg = bad("fn f(i: Fin(2)) -> Nat { match i { Zero => 0, FS(j) => 1 } }");
     assert!(msg.contains("`Zero` is not an index of a `Fin`"), "{msg}");
     let msg = bad("fn f(i: Fin(2)) -> Nat { match i { FZ => 0, FZ => 1 } }");
     assert!(msg.contains("duplicate arm for `FZ`"), "{msg}");
     let msg = bad("fn f(i: Fin(2)) -> Nat { match i { FZ => 0 } }");
     assert!(msg.contains("needs both an `FZ` and an `FS(i)` arm"), "{msg}");
-    let msg = bad("fn f(i: Fin(2)) -> Nat { match i { FZ(x) => 0, FS(jx) => 1 } }");
+    let msg = bad("fn f(i: Fin(2)) -> Nat { match i { FZ(x) => 0, FS(j) => 1 } }");
     assert!(msg.contains("`FZ` binds no fields"), "{msg}");
     for arms in ["FZ => 0, FS => 1", "FZ => 0, FS(j, k) => 1"] {
         let msg = bad(&format!("fn f(i: Fin(2)) -> Nat {{ match i {{ {arms} }} }}"));

@@ -41,6 +41,7 @@
 //!                 ("{" (name ":" expr)* "}")?     -- record literal
 //!                 (("." name ("(" args ")")?) | "(" args ")")*   -- postfix
 //!          | "[" (expr ("," expr)*)? "]"           -- vector literal
+//!          | "{" stmt* expr "}"                    -- block, PREFIX `{` only
 //!          | name | numeral | "(" expr ")"
 //! binder  := name | "(" name ":" type ")"
 //! arms    := arm ("," arm)* ","?    -- one per constructor, any order
@@ -87,11 +88,13 @@ struct Parser {
     /// as an *expression* (docs/surface-universe.md §13).
     ///
     /// `=` is loosest-binding and non-associative, which is right everywhere
-    /// except the two contexts that use it as punctuation: a `calc` step
-    /// (`e0 = e1 := p`) reads its endpoints with `=` as the separator, and
-    /// [`Parser::ty_atom`] must not re-consume the `=` it is about to inspect.
-    /// Same shape as `no_record_lit`: set in the punctuation contexts, and the
-    /// escape hatch is a parenthesis.
+    /// except the contexts that use it as punctuation: a `calc` step
+    /// (`e0 = e1 := p`) reads its endpoints with `=` as the separator,
+    /// [`Parser::ty_atom`] must not re-consume the `=` it is about to inspect,
+    /// and an annotated `let`'s type must stop before the binder `=`
+    /// (docs/let-and-blocks-design.md §3). Same shape as `no_record_lit`: set
+    /// in the punctuation contexts, and **lifted inside any bracket**, so the
+    /// escape hatch is a parenthesis — `let p: (a = b) = pf;`, `a = (b = c)`.
     no_eq: bool,
     /// The next lambda body parsed is a **motive** body, so it is a type and
     /// is parsed with [`Parser::ty`] rather than [`Parser::expr`].
@@ -260,6 +263,40 @@ impl Parser {
         }
     }
 
+    /// [`Self::ident`] at a **binding** position: the same read, plus rule 3.
+    ///
+    /// **Rule 3** (docs/let-and-blocks-design.md §5.2): a keyword-headed form
+    /// that is neither saturated by a fixed token (rule 1's `j`, `calc`,
+    /// `code`) nor nullary (rule 2's `refl`) is a true keyword, and a binder by
+    /// its name is rejected *at the binding site* with a message naming the
+    /// collision. `match` cannot take rule 1 because what follows it is an
+    /// arbitrary expression; `Type` cannot take rule 2 because `Type` and
+    /// `Type<0>` produce the same node, so there is no name left in the tree to
+    /// check. Two of these were **silent** before this: `let refl = n; refl`
+    /// died at "`refl` needs an `=` expected type" and `let Type = n; Type`
+    /// reached the kernel as `Type<0>` and died at `LevelMismatch`.
+    ///
+    /// Permanent, unlike rules 1 and 2: `match`, `fun` and `Type` are keywords
+    /// of the grammar, not elaborator conveniences, so
+    /// `issues/special-forms-as-declarations.md` will never make them
+    /// ordinary declarations (§5.4).
+    fn binder_ident(&mut self, what: &str) -> R<(String, Span)> {
+        let (name, span) = self.ident(what)?;
+        let reason = match name.as_str() {
+            "match" => "`match` is the eliminator keyword, so a use of it would parse \
+                        as `match scrut { … }`",
+            "fun" => "`fun` is the lambda keyword, so a use of it would parse as \
+                      `fun x => …`",
+            "Type" => "`Type` is the universe keyword, so a use of it would parse as \
+                       `Type<0>` — silently, all the way to the kernel",
+            _ => return Ok((name, span)),
+        };
+        Err(ParseError {
+            msg: format!("{reason}; it cannot be a binding name here. Pick another name"),
+            span,
+        })
+    }
+
     /// Is the next token the identifier `kw`?
     fn at_kw(&self, kw: &str) -> bool {
         matches!(self.peek(), TokKind::Ident(s) if s == kw)
@@ -346,7 +383,7 @@ impl Parser {
         }
         self.bump();
         while !matches!(self.peek(), TokKind::RParen) {
-            let (n, span) = self.ident("value parameter name")?;
+            let (n, span) = self.binder_ident("value parameter name")?;
             self.expect(&TokKind::Colon, "`:` (a value parameter is `name: T`)")?;
             let ty = self.ty()?;
             let span = span.join(ty.span);
@@ -366,7 +403,7 @@ impl Parser {
         if matches!(self.peek(), TokKind::Lt) {
             self.bump();
             loop {
-                params.push(self.ident("type parameter name")?.0);
+                params.push(self.binder_ident("type parameter name")?.0);
                 if !matches!(self.peek(), TokKind::Comma) {
                     break;
                 }
@@ -400,7 +437,7 @@ impl Parser {
         self.expect(&TokKind::LBrace, "`{` (constructor list)")?;
         let mut ctors = Vec::new();
         while !matches!(self.peek(), TokKind::RBrace) {
-            let (cname, cspan) = self.ident("constructor name")?;
+            let (cname, cspan) = self.binder_ident("constructor name")?;
             let mut fields = Vec::new();
             let mut span = cspan;
             if matches!(self.peek(), TokKind::LParen) {
@@ -453,7 +490,7 @@ impl Parser {
         let named = matches!(self.peek(), TokKind::Ident(_))
             && matches!(self.toks.get(self.pos + 1).map(|t| &t.kind), Some(TokKind::Colon));
         let name = if named {
-            let (n, _) = self.ident("field name")?;
+            let (n, _) = self.binder_ident("field name")?;
             self.bump(); // `:`
             Some(n)
         } else {
@@ -487,7 +524,7 @@ impl Parser {
         if matches!(self.peek(), TokKind::Lt) {
             self.bump();
             loop {
-                let (tv, tvsp) = self.ident("type parameter name")?;
+                let (tv, tvsp) = self.binder_ident("type parameter name")?;
                 if tv == "self" {
                     // Type arguments are never passed at a call site
                     // (issues/at-and-type-arguments.md), so there is no slot
@@ -545,7 +582,7 @@ impl Parser {
             let (pname, psp) = if is_self && matches!(self.peek(), TokKind::Colon) {
                 ("self".to_string(), self_sp)
             } else {
-                self.ident("parameter name")?
+                self.binder_ident("parameter name")?
             };
             if is_self && implicit {
                 return Err(ParseError {
@@ -649,8 +686,14 @@ impl Parser {
     }
 
     /// `let x = e;` / `let x: T = e;`. The `=` here is the same `=` as the
-    /// equality type former ([`Self::expect_eq`]); `let p: a = b = pf;` parses
-    /// because `=` is not an expression operator, so `ty()` stops after `a = b`.
+    /// equality type former ([`Self::expect_eq`]).
+    ///
+    /// The annotation is read with [`Parser::no_eq`] set, so the binder `=` is
+    /// never eaten by the comparison rung and `let x: T = e;` is writable at
+    /// **every** `T` (docs/let-and-blocks-design.md §3). An annotation that is
+    /// itself an equation is parenthesised — `let p: (a = b) = pf;` — which is
+    /// the escape hatch `no_eq`'s doc comment promises and `atom`'s `(` arm
+    /// now delivers.
     fn let_stmt(&mut self) -> R<Stmt> {
         let start = self.bump().span; // `let`
         // `let { unit, op } = m;` — record destructuring
@@ -660,7 +703,7 @@ impl Parser {
             self.bump();
             let mut fields = Vec::new();
             while !matches!(self.peek(), TokKind::RBrace) {
-                let (n, sp) = self.ident("field name in a `let` pattern")?;
+                let (n, sp) = self.binder_ident("field name in a `let` pattern")?;
                 fields.push((n, sp));
                 if !matches!(self.peek(), TokKind::Comma) {
                     break;
@@ -677,16 +720,19 @@ impl Parser {
         // against `let code = …`: two names in a row were never a parse.
         if self.at_kw("code") && matches!(self.nth(1), TokKind::Ident(_)) {
             self.bump(); // `code`
-            let (name, _) = self.ident("`let code` binding name")?;
+            let (name, _) = self.binder_ident("`let code` binding name")?;
             self.expect_eq("`let code` binding")?;
             let expr = self.expr()?;
             let end = self.expect(&TokKind::Semi, "`;` to end the `let code`")?;
             return Ok(Stmt::LetCode { name, expr, span: start.join(end) });
         }
-        let (name, _) = self.ident("`let` binding name")?;
+        let (name, _) = self.binder_ident("`let` binding name")?;
         let ty = if matches!(self.peek(), TokKind::Colon) {
             self.bump();
-            Some(self.ty()?)
+            // The annotation, and only the annotation: the value is parsed
+            // below with the flag restored, so `let x: Type<0> = a = b;` still
+            // binds the *proposition*.
+            Some(self.with_eq(true, |p| p.ty())?)
         } else {
             None
         };
@@ -838,7 +884,9 @@ impl Parser {
         // but every parenthesis in it is an arithmetic one.
         if matches!(self.peek(), TokKind::LParen) && self.group_is_type() {
             let start = self.bump().span;
-            let inner = self.ty()?;
+            // Inside the bracket the comparison rung is available again, the
+            // same escape hatch `atom`'s `(` arm opens.
+            let inner = self.with_eq(false, |p| p.ty())?;
             let end = self.expect(&TokKind::RParen, "`)`")?;
             return Ok(Ty { kind: inner.kind, span: start.join(end) });
         }
@@ -978,11 +1026,11 @@ impl Parser {
     /// [`Parser::no_eq`] set, so it is an *arithmetic* expression and cannot
     /// grow a second comparison of its own. What is left over is then a
     /// dangling operator, which would surface as whatever error the caller
-    /// happens to raise next — so a trailing `<=`/`==` gets a targeted message
-    /// instead. A trailing `=` deliberately does **not**: `let p: a = b = pf;`
-    /// and `let h: n <= m = pf;` are annotated `let`s whose binder `=` lands
-    /// exactly there (issues/annotated-let-swallows-the-equals.md), and the
-    /// parser cannot tell those from a chain without deciding that issue.
+    /// happens to raise next — so a trailing `<=`/`=`/`==` gets a targeted
+    /// message instead. A trailing `=` was exempt while an annotated `let`'s
+    /// binder could land exactly there; the annotation position now suppresses
+    /// this whole rung (docs/let-and-blocks-design.md §3), so a `=` after a
+    /// completed comparison is *always* a chain and can say so.
     fn comparison(&mut self, lhs: Expr) -> R<Expr> {
         let out = match self.peek() {
             TokKind::Eq | TokKind::EqEq => {
@@ -1005,7 +1053,7 @@ impl Parser {
              comparisons separately, or parenthesise the one that is meant to be an \
              operand";
         match self.peek() {
-            TokKind::LtEq => self.err(CHAIN),
+            TokKind::LtEq | TokKind::Eq => self.err(CHAIN),
             TokKind::EqEq => {
                 self.err(format!("{CHAIN} (and `==` is not used in Heather: equality is `=`)"))
             }
@@ -1201,14 +1249,21 @@ impl Parser {
         if self.at_kw("match") {
             return self.match_expr();
         }
-        if self.at_kw("calc") {
+        // **Rule 1** (docs/let-and-blocks-design.md §5.2): a keyword-headed
+        // form that is always introduced by a fixed token is recognized only
+        // when that token follows, so the name is bought back everywhere else.
+        // Exact, not heuristic: `calc_expr` and `j_expr` *require* the same
+        // token one line later, so nothing that parses today parses
+        // differently. This is the `code {` rule (below) and its pinned test,
+        // applied to the two other forms that qualify.
+        if self.at_kw("calc") && matches!(self.nth(1), TokKind::LBrace) {
             return self.calc_expr();
         }
         if self.at_kw("refl") {
             self.bump();
             return Ok(Expr { kind: ExprKind::Refl, span: start });
         }
-        if self.at_kw("j") {
+        if self.at_kw("j") && matches!(self.nth(1), TokKind::LParen) {
             return self.j_expr();
         }
         if matches!(self.peek(), TokKind::Lambda) || self.at_kw("fun") {
@@ -1227,6 +1282,22 @@ impl Parser {
             let body = self.expr();
             self.no_record_lit = saved;
             let body = body?;
+            // A block as the payload's top level is **declined**, not
+            // supported: its `let`s would elaborate as aliases at
+            // `Layer::Code`, which plausibly interacts with `scan_splices`'
+            // letbox hoisting and with `box-synthesis-gap`'s meta-ANF
+            // invariant in ways nobody has established. A wrong answer here is
+            // a silently mis-hoisted splice, so it is filed rather than
+            // guessed (docs/let-and-blocks-design.md §7.2).
+            if matches!(body.kind, ExprKind::Block(_)) {
+                return Err(ParseError {
+                    msg: "a quote payload is one expression, not a block: `let` inside \
+                          quotation is not in this slice \
+                          (issues/let-inside-quotation.md)"
+                        .into(),
+                    span: body.span,
+                });
+            }
             let end = self.expect(&TokKind::RBrace, "`}` to close the quote")?;
             return Ok(Expr {
                 kind: ExprKind::Quote(Box::new(body)),
@@ -1299,6 +1370,27 @@ impl Parser {
                 Ok(Expr { kind: ExprKind::VecLit(elems), span: open.join(close) })
             });
         }
+        // `{ let x = e; … result }` — a block in expression position
+        // (docs/let-and-blocks-design.md §4). **Prefix** `{` only: the record
+        // literal is postfix on a name head (`postfix`), and a `{` where a
+        // statement is expected is reached by `block()`/`match_expr` directly,
+        // so this is a pure extension — a prefix `{` was "expected an
+        // expression" in every production before it. No lookahead, no
+        // backtracking, and independent of `no_record_lit`.
+        if matches!(self.peek(), TokKind::LBrace) {
+            let b = self.block()?;
+            if let Some(on) = b.ons.first() {
+                return Err(ParseError {
+                    msg: "a block in expression position cannot discharge goals: an \
+                          `on` belongs to the declaration's own block, because a goal's \
+                          scope is the declaration (issues/nested-goal-discharge.md)"
+                        .into(),
+                    span: on.span,
+                });
+            }
+            let span = b.span;
+            return Ok(Expr { kind: ExprKind::Block(Box::new(b)), span });
+        }
         match self.peek().clone() {
             TokKind::Hole(name) => {
                 let sp = self.bump().span;
@@ -1311,8 +1403,13 @@ impl Parser {
             TokKind::LParen => {
                 self.bump();
                 // Parenthesising is the escape hatch for a record literal in
-                // scrutinee position, so the restriction must lift here.
-                let e = self.with_record_lit(false, |p| p.expr())?;
+                // scrutinee position **and for the comparison rung**, so both
+                // restrictions must lift here. The `no_eq` half is what makes
+                // `a = (b = c)` a parse (the `CHAIN` message's own advice) and
+                // what makes an equality `let` annotation writable as
+                // `let p: (a = b) = pf;`.
+                let e = self
+                    .with_eq(false, |p| p.with_record_lit(false, |p| p.expr()))?;
                 self.expect(&TokKind::RParen, "`)`")?;
                 Ok(e)
             }
@@ -1336,12 +1433,12 @@ impl Parser {
         loop {
             match self.peek() {
                 TokKind::Ident(_) => {
-                    let (name, sp) = self.ident("lambda binder")?;
+                    let (name, sp) = self.binder_ident("lambda binder")?;
                     binders.push(LamBinder { name, ty: None, span: sp });
                 }
                 TokKind::LParen => {
                     let open = self.bump().span;
-                    let (name, _) = self.ident("lambda binder")?;
+                    let (name, _) = self.binder_ident("lambda binder")?;
                     self.expect(&TokKind::Colon, "`:` (annotated lambda binder)")?;
                     let ty = self.ty()?;
                     let close = self.expect(&TokKind::RParen, "`)`")?;
@@ -1457,7 +1554,7 @@ impl Parser {
             if matches!(self.peek(), TokKind::LParen) {
                 self.bump();
                 while !matches!(self.peek(), TokKind::RParen) {
-                    binders.push(self.ident("pattern binder")?.0);
+                    binders.push(self.binder_ident("pattern binder")?.0);
                     if !matches!(self.peek(), TokKind::Comma) {
                         break;
                     }
@@ -1481,12 +1578,24 @@ impl Parser {
         })
     }
 
+    /// The residue rule 1 leaves standing (docs/let-and-blocks-design.md §5.3):
+    /// after the lookahead, a binder named `j` is an ordinary name at every use
+    /// *except* `j(x)` — a local of function type applied to arguments, which
+    /// still enters this form and fails its arity check. Loud, and inside a
+    /// form the error can name, so the arity messages say so; it dissolves
+    /// entirely under `issues/special-forms-as-declarations.md`.
+    const J_ARITY: &str = "`j` takes exactly three arguments — \
+                           `j(proof, \u{3bb} y q => T, case)`. If `j` is a local name \
+                           here, it cannot be *applied*: rename it, since a call \
+                           `j(…)` is the eliminator (issues/j-binder-parse-trap.md)";
+
     fn j_expr(&mut self) -> R<Expr> {
         let start = self.peek_span();
         self.bump(); // `j`
+        // Unreachable in practice: rule 1's lookahead is what got us here.
         self.expect(&TokKind::LParen, "`(`")?;
         let proof = self.expr()?;
-        self.expect(&TokKind::Comma, "`,`")?;
+        self.expect(&TokKind::Comma, Self::J_ARITY)?;
         // The retired spelling `(y, q) -> T`.
         if matches!(self.peek(), TokKind::LParen)
             && matches!(self.nth(1), TokKind::Ident(_))
@@ -1498,9 +1607,9 @@ impl Parser {
             );
         }
         let motive = self.with_motive(|p| p.expr())?;
-        self.expect(&TokKind::Comma, "`,`")?;
+        self.expect(&TokKind::Comma, Self::J_ARITY)?;
         let case = self.expr()?;
-        let end = self.expect(&TokKind::RParen, "`)`")?;
+        let end = self.expect(&TokKind::RParen, Self::J_ARITY)?;
         Ok(Expr {
             kind: ExprKind::J {
                 proof: Box::new(proof),
@@ -1904,20 +2013,114 @@ mod tests {
         let d = decl_of(
             "fn f(n: Nat) -> Nat {
                  let a = n;
-                 let p: n = n = refl;
+                 let p: (n = n) = refl;
+                 let q: Nat = 3;
+                 let g: Nat -> Nat = fun x => x;
+                 let r: (Nat) = 3;
                  a
              }",
         );
-        assert_eq!(d.body.stmts.len(), 2);
+        assert_eq!(d.body.stmts.len(), 5);
         let Stmt::Let { name, ty, .. } = &d.body.stmts[0] else { panic!("plain let") };
         assert_eq!(name, "a");
         assert!(ty.is_none());
-        // `let p: n = n = refl;` — `=` is not an expression operator, so the
-        // annotation stops after `n = n` and the binding `=` follows.
+        // `let p: (n = n) = refl;` — the annotation is read with the
+        // comparison rung suppressed, so an equation is parenthesised and the
+        // binder `=` is the parser's (docs/let-and-blocks-design.md §3).
         let Stmt::Let { name, ty, expr, .. } = &d.body.stmts[1] else { panic!("plain let") };
         assert_eq!(name, "p");
         assert!(matches!(ty.as_ref().map(|t| &t.kind), Some(TyKind::Eq(..))));
         assert!(matches!(expr.kind, ExprKind::Refl));
+        // The three shapes that could never be written before: a bare type
+        // name, a function type, and a parenthesised type.
+        let Stmt::Let { name, ty, .. } = &d.body.stmts[2] else { panic!("plain let") };
+        assert_eq!(name, "q");
+        assert!(matches!(ty.as_ref().map(|t| &t.kind), Some(TyKind::Nat)));
+        let Stmt::Let { name, ty, .. } = &d.body.stmts[3] else { panic!("plain let") };
+        assert_eq!(name, "g");
+        assert!(matches!(ty.as_ref().map(|t| &t.kind), Some(TyKind::Fn { .. })));
+        let Stmt::Let { name, ty, .. } = &d.body.stmts[4] else { panic!("plain let") };
+        assert_eq!(name, "r");
+        assert!(matches!(ty.as_ref().map(|t| &t.kind), Some(TyKind::Nat)));
+    }
+
+    /// The negative control for the annotation's `no_eq`: it is scoped to the
+    /// annotation, so a `let`'s *value* may still be an equation
+    /// (docs/let-and-blocks-design.md §8 item 4(b) — the `surface-universe`
+    /// counterexample that killed the last-`=`-scan option).
+    #[test]
+    fn a_let_value_may_still_be_an_equation() {
+        let d = decl_of("fn f(n: Nat) -> Nat { let x: Type<0> = a = b; n }");
+        let Stmt::Let { name, ty, expr, .. } = &d.body.stmts[0] else { panic!("plain let") };
+        assert_eq!(name, "x");
+        assert!(matches!(ty.as_ref().map(|t| &t.kind), Some(TyKind::Univ { level: 0 })));
+        assert!(matches!(expr.kind, ExprKind::Eq(..)), "the value is the proposition");
+    }
+
+    /// The parenthesis escape hatch `no_eq`'s doc comment promised and did not
+    /// have: with it, the `CHAIN` message's advice is true
+    /// (docs/let-and-blocks-design.md §1.1(3)).
+    #[test]
+    fn a_parenthesis_reopens_the_comparison_rung() {
+        assert!(parse_file("theorem t(): a = (b = c) { refl }").is_ok());
+        assert!(parse_file("fn f(n: Nat) -> Nat { calc { (a = b) = c := p } }").is_ok());
+    }
+
+    /// A trailing `=` after a completed comparison is now always a chain: the
+    /// annotation position no longer needs the exemption
+    /// (docs/let-and-blocks-design.md §3.1).
+    #[test]
+    fn comparisons_still_do_not_chain() {
+        for src in [
+            "fn f(n: Nat) -> Nat { a = b = c }",
+            "fn f(n: Nat) -> Nat { a <= b = c }",
+            "fn f(n: Nat) -> Nat { a <= b <= c }",
+        ] {
+            let e = parse_file(src).expect_err("a chain has no reading");
+            assert!(e.msg.contains("comparisons do not chain"), "{}: {}", src, e.msg);
+        }
+    }
+
+    /// The block expression's disambiguation is **positional**
+    /// (docs/let-and-blocks-design.md §4.1): a prefix `{` is a block, a
+    /// postfix `{` on a name head is still a record literal, and a `{` where a
+    /// statement is expected is still a declaration body or an arm list. Three
+    /// collision checks, not one.
+    #[test]
+    fn a_prefix_brace_is_a_block_and_a_postfix_one_is_a_literal() {
+        // Prefix, in an arm — the shape issues/match-arm-blocks.md was about.
+        let d = decl_of(
+            "fn f(n: Nat) -> Nat { match n { Zero => { let y = n; y }, Succ(k) => k } }",
+        );
+        let ExprKind::Match { arms, .. } = &d.body.result.kind else { panic!("match") };
+        let ExprKind::Block(b) = &arms[0].body.kind else {
+            panic!("expected a block, got {:?}", arms[0].body.kind)
+        };
+        assert_eq!(b.stmts.len(), 1);
+        assert!(b.ons.is_empty());
+        // Postfix on a name head, in the same position: still a literal.
+        let d = decl_of("fn f(n: Nat) -> D { match n { Zero => D { x: 1 } } }");
+        let ExprKind::Match { arms, .. } = &d.body.result.kind else { panic!("match") };
+        assert!(matches!(arms[0].body.kind, ExprKind::RecordLit { .. }));
+        // A block *as* a scrutinee is unambiguous: it consumes its own braces.
+        let d = decl_of("fn f(n: Nat) -> Nat { match { let y = n; y } { Zero => 0 } }");
+        let ExprKind::Match { scrut, .. } = &d.body.result.kind else { panic!("match") };
+        assert!(matches!(scrut.kind, ExprKind::Block(_)));
+        // A declaration body is still reached by `block()`, not through `atom`.
+        let d = decl_of("fn f(n: Nat) -> Nat { let y = n; y }");
+        assert_eq!(d.body.stmts.len(), 1);
+        assert!(matches!(d.body.result.kind, ExprKind::Var(_)));
+    }
+
+    /// A block expression declines `on` discharges (§4.3) and has no empty
+    /// form, and its `let`s all precede the result (§4.5).
+    #[test]
+    fn a_block_expression_declines_on_and_emptiness() {
+        let e = parse_file("theorem t(n: Nat): n = n { { ?g on ?g := refl; } }")
+            .expect_err("an `on` inside a block expression");
+        assert!(e.msg.contains("cannot discharge goals"), "{}", e.msg);
+        assert!(parse_file("fn f(n: Nat) -> Nat { { } }").is_err(), "an empty block");
+        assert!(parse_file("fn f(n: Nat) -> Nat { { n let y = n; } }").is_err(), "a trailing let");
     }
 
     #[test]
@@ -2022,6 +2225,68 @@ mod tests {
         // still parses as a Named type (no `(` after the name).
         let f = parse_file("fn f(x: Code<Nat>) -> Nat { 0 }").unwrap();
         assert!(matches!(&only_decl(&f).params[0].ty.kind, TyKind::Named { name, .. } if name == "Code"));
+    }
+
+    /// **Rule 1** at the two forms that qualify, on the pattern
+    /// `code_is_still_an_ordinary_name` set: the lookahead is what buys the
+    /// name back, and the form is untouched because the same token was already
+    /// required one line later (docs/let-and-blocks-design.md §5.2).
+    #[test]
+    fn j_and_calc_are_still_ordinary_names() {
+        // `j` as an ordinary name at a use — the reported bug
+        // (issues/j-binder-parse-trap.md), whose message named an eliminator
+        // the user never wrote.
+        let f = parse_file("fn f(n: Nat) -> Nat { let j = n; lookup(j, n) }");
+        assert!(f.is_ok(), "{:?}", f.err().map(|e| e.msg));
+        let k = body("add(j, 1)");
+        let (_, args, _) = as_call(&k);
+        assert!(matches!(&args[0].kind, ExprKind::Var(n) if n == "j"));
+        // …and the J form is unchanged.
+        assert!(parse_file(
+            "theorem t(a: Nat, b: Nat, p: a = b): b = a \
+             { j(p, \u{3bb} y q => y = a, refl) }"
+        )
+        .is_ok());
+        // `calc` likewise: a name without a `{`, the form with one.
+        let k = body("add(calc, 1)");
+        let (_, args, _) = as_call(&k);
+        assert!(matches!(&args[0].kind, ExprKind::Var(n) if n == "calc"));
+        assert!(parse_file("fn f(n: Nat) -> Nat { calc { a = b := p } }").is_ok());
+    }
+
+    /// The residue rule 1 leaves (§5.3): `j(x)`, a *local* `j` applied, still
+    /// enters the form — loudly, and the message now names the collision.
+    #[test]
+    fn an_applied_local_j_says_what_collided() {
+        let e = parse_file("fn f(n: Nat) -> Nat { let j = n; j(n) }")
+            .expect_err("an applied `j` is the eliminator");
+        assert!(e.msg.contains("takes exactly three arguments"), "{}", e.msg);
+        assert!(e.msg.contains("j-binder-parse-trap"), "{}", e.msg);
+    }
+
+    /// **Rule 3**: the three true keywords are rejected *at the binding site*,
+    /// each with a message naming the form. One per form across three sites is
+    /// the coverage §8 item 16 asks for; the point is that `match`/`fun`/`Type`
+    /// are keywords of the grammar and stay so (§5.4).
+    #[test]
+    fn a_true_keyword_cannot_be_a_binding_name() {
+        for form in ["match", "fun", "Type"] {
+            for src in [
+                format!("fn f(n: Nat) -> Nat {{ let {form} = n; n }}"),
+                format!("fn f(n: Nat) -> Nat {{ (\u{3bb} {form} => n)(n) }}"),
+                format!("fn f(n: Nat) -> Nat {{ match n {{ Succ({form}) => 0, Zero => 0 }} }}"),
+                format!("fn f({form}: Nat) -> Nat {{ 0 }}"),
+            ] {
+                let e = parse_file(&src)
+                    .err()
+                    .unwrap_or_else(|| panic!("`{form}` must not bind: {src}"));
+                assert!(e.msg.contains(form), "{src}: {}", e.msg);
+                assert!(e.msg.contains("cannot be a binding name"), "{src}: {}", e.msg);
+            }
+        }
+        // The two that were **silent** before rule 3 (§5.1): `refl` and
+        // `Type`. `refl` takes rule 2 instead and binds fine.
+        assert!(parse_file("fn f(n: Nat) -> Nat { let refl = n; refl }").is_ok());
     }
 
     #[test]
