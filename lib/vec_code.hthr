@@ -26,3 +26,34 @@ meta fn map_code(g: Ctx) -> Code(g |-
             }
     }
 }
+
+// The second artifact of the migration (issues/quotation-stage-artifacts.md):
+// the vector `fold` template, same elim skeleton as `map_code` with an extra
+// initial value. Right fold, matching the Rust `vec::fold` oracle —
+// `[a, b, c]` folds to `f a (f b (f c z))` — which is the direction that
+// computes on a constructor form without threading an accumulator.
+//
+// Only the motive differs in kind from `map_code`'s: the result is the plain
+// `B` rather than a vector, so the length index constrains the *domain* alone
+// — and that is exactly where the parametric-rigidity note (design doc §7)
+// stops holding. `map_code` is rigid: the length index pins every position, so
+// the well-typed template at the generic type *is* map. Here it is not. The
+// step arm has three inhabitants of `B` to hand (`z`, `ih(tail(v))`, and the
+// intended `f(head(v), ih(tail(v)))`) and no index rules the wrong two out, so
+// a well-typed `fold_code` can be the constant fold. Genericity buys less when
+// the result is not indexed — which is why the mutated-arm control the map
+// round found unwritable *is* writable here, and is written
+// (crates/elab/tests/in_language_fold.rs).
+meta fn fold_code(g: Ctx) -> Code(g |-
+    (A: Type<0>) -> (B: Type<0>) -> B -> (A -> B -> B) -> (k: Nat) -> [A; k] -> B
+) {
+    code {
+        fun (A: Type<0>) => fun (B: Type<0>) => fun (z: B) =>
+            fun (f: A -> B -> B) => fun (k: Nat) =>
+                match k as λ w => [A; w] -> B {
+                    Zero => fun (v: [A; 0]) => z,
+                    Succ(zk, ih) => fun (v: [A; Succ(zk)]) =>
+                        f(head(v), ih(tail(v))),
+                }
+    }
+}

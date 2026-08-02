@@ -466,10 +466,16 @@ impl Elaborator {
     }
 
     /// The evaluation hook (docs/in-language-map-design.md §4): apply the
-    /// registered `map_code` to the use site's context, reduce the meta-layer
-    /// application to a `box`, and apply the spliced payload to the use
-    /// site's arguments — kernel computation mid-elaboration, replacing the
-    /// Rust `vec::map` schema for the instances it covers.
+    /// registered template `name` to the use site's context, reduce the
+    /// meta-layer application to a `box`, and apply the spliced payload to the
+    /// use site's arguments — kernel computation mid-elaboration, replacing
+    /// the corresponding Rust `vec` schema for the instances it covers.
+    ///
+    /// Every template in this family is a closed generic over two `Type<0>`
+    /// binders (`map_code`, `fold_code`, …), so the shared part is: the two
+    /// element/result levels and their Tarski codes, then whatever `rest` the
+    /// use site supplies, in the template's own Π order. The name is the
+    /// contract — the registration seam is issues/meta-def-registration.md.
     ///
     /// `Ok(None)` is an honest decline (a level the level-0 template cannot
     /// take, an element type with no Tarski code) and the caller falls back
@@ -477,19 +483,18 @@ impl Elaborator {
     /// is an **error**, never a silent fallback — a half-reduced term must
     /// not be emitted.
     #[allow(clippy::too_many_arguments)]
-    pub(crate) fn try_map_code_hook(
+    pub(crate) fn try_vec_code_hook(
         &self,
         cx: &Cx,
+        name: &str,
         al: &Level,
         bl: &Level,
         a_ty: &Type,
         b_ty: &Type,
-        len: &Rc<Term>,
-        f_t: &Term,
-        xs_t: &Term,
+        rest: Vec<Term>,
         span: Span,
     ) -> R<Option<Term>> {
-        let Some(md) = self.meta_defs.get("map_code") else {
+        let Some(md) = self.meta_defs.get(name) else {
             return Ok(None);
         };
         // The template binds `(A: Type<0>) (B: Type<0>)`: element types at a
@@ -503,20 +508,22 @@ impl Elaborator {
             return Ok(None);
         };
 
-        // `map_code @ Γ`, reduced at the meta layer until the box surfaces.
+        // `name @ Γ`, reduced at the meta layer until the box surfaces.
         let applied = Term::CtxApp { fun: Rc::clone(&md.term), ctx: cx.gamma.clone() };
         let evaluated = self.whnf_tm(cx, &applied, span)?;
         let Term::BoxTm(payload) = &*evaluated else {
             return err(
-                "`map_code` is registered but its evaluation went neutral instead of \
-                 reaching a `box` — refusing to emit a half-reduced term \
-                 (docs/in-language-map-design.md §6)",
+                format!(
+                    "`{name}` is registered but its evaluation went neutral instead of \
+                     reaching a `box` — refusing to emit a half-reduced term \
+                     (docs/in-language-map-design.md §6)"
+                ),
                 span,
             );
         };
 
-        // Type the payload once, then apply the five arguments down its Π
-        // spine, annotating each `App` from the peeled domain.
+        // Type the payload once, then apply the arguments down its Π spine,
+        // annotating each `App` from the peeled domain.
         let psi = self.oracle_psi();
         let (mut ty, _) = typing::infer_term(
             &psi,
@@ -527,17 +534,20 @@ impl Elaborator {
             self.fuel,
         )
         .map_err(|_| ElabError::Elab {
-            msg: "`map_code`'s evaluated payload does not type at the use site — the \
-                  template is wrong, not the caller"
-                .into(),
+            msg: format!(
+                "`{name}`'s evaluated payload does not type at the use site — the \
+                 template is wrong, not the caller"
+            ),
             span,
         })?;
         let mut term = (**payload).clone();
-        for arg in [code_a, code_b, f_t.clone(), (**len).clone(), xs_t.clone()] {
+        for arg in [code_a, code_b].into_iter().chain(rest) {
             let Type::Pi { dom_level, cod_level, dom, cod } = self.whnf(cx, &ty, span)? else {
                 return err(
-                    "`map_code`'s payload ran out of parameters — the template's shape \
-                     does not match the hook's five arguments",
+                    format!(
+                        "`{name}`'s payload ran out of parameters — the template's shape \
+                         does not match the hook's arguments"
+                    ),
                     span,
                 );
             };

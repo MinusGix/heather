@@ -93,6 +93,16 @@ fn hook_output_is_convertible_with_the_rust_oracle() {
         let rust = elab(fixture);
         let (ht, hty, hl) = last_body(&hooked);
         let (rt, _, _) = last_body(&rust);
+        // The cross-check is only sharp if the hook actually fired: a decline
+        // would make the two bodies *identical* and conversion vacuous. The
+        // hook's output is a Π-spine application of the template's payload,
+        // never the Rust schema's bare `elim_Nat` application, so inequality
+        // is the cheap witness (back-ported from in_language_fold.rs).
+        assert!(
+            ht != rt,
+            "the hook declined on:\n{fixture}\nso the conversion below would \
+             compare the Rust term with itself"
+        );
         let empty = LocalCtx { base: CtxBase::Nil, entries: vec![] };
         conv_term(hooked.psi(), &empty, Layer::Prog, &ht, &rt, &hty, &hl, 1_000_000)
             .unwrap_or_else(|e| {

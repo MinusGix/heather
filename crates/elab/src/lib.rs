@@ -2475,9 +2475,16 @@ impl Elaborator {
         // schema below serves the instances the level-0 template declines
         // (and every file that never declares `map_code`). The name is the
         // contract; there is no attribute system in this round.
-        if let Some(t) =
-            self.try_map_code_hook(cx, al, &bl, a_ty, &b_ty, len, &f_t, &xs_t, span)?
-        {
+        if let Some(t) = self.try_vec_code_hook(
+            cx,
+            "map_code",
+            al,
+            &bl,
+            a_ty,
+            &b_ty,
+            vec![f_t.clone(), (**len).clone(), xs_t.clone()],
+            span,
+        )? {
             return Ok((
                 t,
                 Type::Vec { level: bl.clone(), elem: Rc::new(b_ty), len: Rc::clone(len) },
@@ -2624,6 +2631,22 @@ impl Elaborator {
             }),
         };
         let f_t = self.elab_check(cx, f, &step_ty, &Level::max(al.clone(), bl.clone()))?;
+        // The evaluation hook, as in `elab_vec_map`: `fold_code` serves this
+        // use site when the file declares it, and the Rust schema below serves
+        // the instances the level-0 template declines — and every file that
+        // never declares it (issues/quotation-stage-artifacts.md).
+        if let Some(t) = self.try_vec_code_hook(
+            cx,
+            "fold_code",
+            al,
+            &bl,
+            a_ty,
+            &b_ty,
+            vec![z_t.clone(), f_t.clone(), (**len).clone(), xs_t.clone()],
+            span,
+        )? {
+            return Ok((t, b_ty, bl));
+        }
         Ok((
             vec::fold(al, &bl, a_ty, &b_ty, len, Rc::new(z_t), Rc::new(f_t), Rc::new(xs_t)),
             b_ty,
