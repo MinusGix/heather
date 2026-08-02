@@ -635,3 +635,33 @@ whole case analysis lives in a single non-recursive lemma (`step_mono`) so
 that the induction on fuel is two arms. Stating `converges` did want Σ, does
 not have it, and took the computed-bound form; note 7 records what that
 costs and why it costs nothing later.
+
+9. **Fuel is internal, and the working object is the modality, not the
+   number** (2026-08-02, agreed in discussion after the certifying
+   generator's v2 round; the sharpened form of §6's "raw fuel appears in
+   `simulate`'s definition and nowhere else"). No specific fuel value
+   provides information at the statement level: what a statement is ever
+   about is membership in "computes within finite time", and `Converges`
+   *is* that possibility modality — the fuel is its hidden witness, and
+   the algebra proofs work in is the closure's (implication chaining,
+   `fuel_monotone` as the coherence lemma), not arithmetic over witnesses.
+   The v2 round is the empirical half: everywhere a number appeared in a
+   statement, composition broke — a caller's bound contains the callee's
+   at an open argument, and no reducing spelling exists for the sum —
+   and everywhere only the modality appeared, composition was the
+   ∃-composition kit folding one lemma per instruction. So the discipline
+   hardens from style to rule: *bounds in statements are compositional
+   debt; the modality is the public form.*
+
+   The flip side, recorded so this note is not read as "quantitative data
+   is worthless": some consumers genuinely want the number — complexity
+   certificates, cost-model refinements, a scheduler. That is an *opt-in
+   quantitative layer* over the same runs (the bounded `refines` form that
+   deliberately stayed in the library is its seed), not the default
+   statement shape, and its ergonomics are a proof-automation problem: a
+   bound is exactly the kind of witness a tactic synthesizes and a human
+   should not spell (`issues/surface-proof-automation.md`,
+   `issues/congruence-by-anti-unification.md`'s goal-solver shape). Until
+   that machinery exists, the split stands: modality in statements,
+   numbers in fixtures and in whatever quantitative theorems a consumer
+   explicitly asks for.

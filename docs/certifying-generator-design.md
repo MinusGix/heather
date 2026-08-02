@@ -290,7 +290,11 @@ The four axes, instantiated for this generator:
    and are kept for the record. Literal fuels survive only in the exactness
    fixtures, computed by a mini-evaluator in the generator. Uniformity
    bonus: zero arms and non-recursive bodies also go through the kit, so a
-   call in *any* position is handled identically.
+   call in *any* position is handled identically. The design reading of
+   *why* this won — fuel is internal, `Converges` is the possibility
+   modality proofs actually work in, and bounds in statements are
+   compositional debt — is recorded where the fuel interface is owned:
+   `docs/ir-simulate-design.md` §13 note 9.
 2. **Other tier-0/1 inductives**: per-type `embed_T` (a derived artifact —
    `generators-in-the-language`'s natural first in-language target),
    `CompileTK` records per signature until bundled records exist.

@@ -3,7 +3,7 @@ title: Lightweight proof automation: auto-refl and apply
 status: open
 labels: [frontend,elaboration,syntax]
 created: 2026-07-24
-updated: 2026-07-24
+updated: 2026-08-02
 ---
 
 Two ergonomic surface features (user-requested 2026-07-24; not scheduled). Both are the *same* underlying move — goal-directed elaboration, the elaborator supplying a proof for a goal it can see — so they are the ergonomic front of the goal engine [[goal-holes]] builds (a hole = an [[elab-stage2-metas]] metavariable that survives to end-of-block). Kernel-safe throughout: the elaborator is untrusted, so a wrong auto-fill is a kernel rejection or an unfilled-goal listing, never unsoundness. Filed together because they share that substrate and were requested together; split if they diverge.
@@ -33,3 +33,4 @@ Both want [[goal-holes]]' block-statement + `on` surface for their full form; in
 ## Log
 
 - 2026-07-24: Unblocked by [[goal-holes]] landing: blocks now have a statement grammar (`Block` + `let x (: T)? = e;` + trailing `on`), which was the stated dependency for even the cheap `apply` slice, and the goal engine (holes as decl-scoped Ψ-metas, `on` discharge, unfilled-goal listing) is the substrate the multi-premise `apply trans` slice wanted. Note for whoever picks this up: a hole is currently refused inside an `on` right-hand side, so `apply`'s desugaring must place its holes in the block body, not in a discharge.
+- 2026-08-02: A future consumer, recorded off the certifying-generator v2 round (2026-08-02, docs/ir-simulate-design.md section 13 note 9): quantitative fuel/cost reasoning. The design settled on 'modality in statements, numbers hidden' — Converges is a computes-in-finite-time possibility modality and specific bounds are compositional debt — but consumers that DO want the number (complexity certificates, cost-model refinements) are exactly a goal-solver workload: a fuel bound is a witness a tactic should synthesize (run the mini-evaluator / compose per-instruction costs) and a human should never spell. When the solver slot lands (goal-holes' on _: _ := solver(goal)), bound synthesis and le-discharge are natural early tactics alongside auto-refl.
