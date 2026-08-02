@@ -39,7 +39,16 @@
 //! new surface (one more fuel-indexed induction and three concrete fixtures),
 //! not a slowdown of anything landed.
 //!
-//! BUDGET. This binary is **~56 CPU-seconds** against `scripts/test`'s
+//! Then release **51s → 70s** with the ∃-COMPOSITION KIT (certifying-
+//! generator v2, docs/certifying-generator-design.md §8 item 1): `k_ret`
+//! plus `ret_conv`/`letcon_conv`/`letcall_conv`/`letmatch_conv` after
+//! `conv_functional`. Nearly all of the +19s is the two double-`j` lemmas
+//! (~9s each) — the same term-size price `step_mono` pays, two interpreters
+//! in scope under a rewritten scrutinee. Measured worth it: the kit is
+//! proved once and every *generated* certificate is a cheap fold over it
+//! (`crates/elab/tests/certgen.rs`).
+//!
+//! BUDGET. This binary is **~75 CPU-seconds** against `scripts/test`'s
 //! 300-second `ulimit -t`, and nearly all of that is the one full-library
 //! test. It was ~203s (after 9.2s, 165s, 194s) until 2026-08-01, when the
 //! workspace `[profile.dev.package.*]` overrides landed: the kernel/elab/

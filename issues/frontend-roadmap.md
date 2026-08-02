@@ -3,7 +3,7 @@ title: "Meta: frontend roadmap and current focus"
 status: open
 labels: [frontend,meta]
 created: 2026-07-23
-updated: 2026-08-01
+updated: 2026-08-02
 ---
 
 Organizing issue for the frontend push (the frontend-first route,
@@ -227,3 +227,7 @@ date; the originals are in `git log --follow issues/frontend-roadmap.md`.
 - 2026-07-31: Item 16's blocking performance issue is closed: [[simulate-conversion-cost]] landed kernel definitions with layer-indexed transparency and the elaborator switch from fn-inlining to Psi-references; lib/ir_v1.hthr's full acceptance is back under scripts/test.
 - 2026-08-01: 2026-08-01: Item 16 done — [[ir-simulate-design]] closed, §11 fully discharged and re-verified (elab test green, release check 33.7s); residue re-homed to [[cross-ir-refinement]]. [[compile-typeclass-design]] and [[end-to-end-compile-instance]] unblock; the Compile design round opens.
 - 2026-08-01: 2026-08-01: The Compile round opened AND its milestone landed same-day — [[compile-typeclass-design]]'s design sketch (docs/compile-typeclass-design.md: instance = ordinary record value; class layer deferred to the resolver round with prerequisites recorded) plus its §7 acceptance in lib/ir_v1.hthr, closing [[end-to-end-compile-instance]]. The thesis milestone is checked: hand-written Compile instance for add, kernel-verified certificate, no generator. Behind it per the old item 16 note: [[datarepr-separation]] and [[certifying-generator]].
+- 2026-08-01: The certifying-generator round opened with its design sketch (docs/certifying-generator-design.md) — v1 is a Rust surface-text transpiler reproducing the hand-run add section schematically; the implementing round follows the doc's section 9 acceptance list.
+- 2026-08-02: The generators-in-the-language ch. 07 expressiveness side round is done — verdict on that issue: missing features, enumerable (opaque globals, no oracle, no code equality, no context computation); the vec.rs schemas and the certifying generator's v1 fragment are the expressible frontier, so the Rust transpiler prototypes the in-language generator's natural first scope.
+- 2026-08-02: The certifying-generator v1 landed (crates/elab/src/certgen.rs): generated Compile instances with kernel-checked certificates for add, dbl, seven, third3 — the first machine-written certificates in the repo; narrative and the bound-spelling correction on that issue.
+- 2026-08-02: Certifying-generator v2 landed same-session: the existential-composition kit in lib/ir_v1.hthr (four lemmas, proved once) plus the generator rewritten to fold it — mul-via-add is the first machine-written CROSS-FUNCTION certificate, the callee's invariant consumed at an open argument. Filed: [[prog-extension-lemma]], [[in-language-map]], [[certgen-harness-cost]].

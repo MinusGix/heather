@@ -340,6 +340,12 @@ fn k_bind(ev: Val -> Ir -> Res, env: Val, rest: Ir, r: Res) -> Res {
     }
 }
 
+// `step_ret`'s match, as a function of the gathered slots — the same move as
+// the others, wanted by the ∃-composition kit's `ret_conv` motive
+fn k_ret(o: OptVal) -> Res {
+    match o { NoneV => Stuck, SomeV(vs) => Out(vs) }
+}
+
 fn k_letcon(ev: Val -> Ir -> Res, env: Val, tag: Nat, rest: Ir, o: OptVal) -> Res {
     match o { NoneV => Stuck, SomeV(ws) => ev(VCons(VCon(tag, ws), env), rest) }
 }
@@ -921,6 +927,84 @@ theorem conv_functional(p: Prog, env: Val, ir: Ir, vs: Val, ws: Val,
                         c1: Converges(p, env, ir, vs), c2: Converges(p, env, ir, ws))
     : vs = ws
 { eval_functional(p, env, ir, vs, ws, c1.n, c2.n, c1.h, c2.h) }
+
+// ---------------------------------------------------------------------------
+// The ∃-COMPOSITION KIT (certifying-generator v2; docs/certifying-generator-
+// design.md §8 item 1). One `Converges`-introduction lemma per straight-line
+// instruction: each takes its computation facts as equation premises (a
+// `gather`/`lookup` result over a concrete-spine environment discharges by
+// `refl`) and glues sub-certificates with `fuel_monotone`, raising the two
+// hidden fuels to their sum. A generated proof is then a fold of these over
+// the arm's instruction chain, and NO fuel bound appears in any statement —
+// which is what lets a caller's certificate compose with a callee's whose
+// bound depends on an open argument (a reducing bound spelling for that sum
+// does not exist; the v1 lvl/c0 trick stops at one function).
+
+theorem ret_conv(p: Prog, env: Val, rs: Refs, vs: Val,
+                 hg: gather(rs, env) = SomeV(vs))
+    : Converges(p, env, Ret(rs), vs)
+{ Converges(1, j(sym(hg), λ o q => k_ret(o) = Out(vs), refl)) }
+
+theorem letcon_conv(p: Prog, env: Val, tag: Nat, args: Refs, rest: Ir,
+                    fs: Val, vs: Val,
+                    hg: gather(args, env) = SomeV(fs),
+                    hr: Converges(p, VCons(VCon(tag, fs), env), rest, vs))
+    : Converges(p, env, LetCon(tag, args, rest), vs)
+{
+    Converges(Succ(hr.n),
+        j(sym(hg),
+          λ o q => k_letcon(eval(hr.n, p), env, tag, rest, o) = Out(vs),
+          hr.h))
+}
+
+// The two rebinding instructions share their shape: raise the sub-run's
+// certificate and the continuation's to the sum of their fuels, rewrite the
+// scrutinized OptVal by the computation premise, rewrite the sub-run's
+// answer by its raised certificate, and the raised continuation closes the
+// k_bind.
+theorem letcall_conv(p: Prog, env: Val, callee: Nat, args: Refs, rest: Ir,
+                     cargs: Val, ws: Val, vs: Val,
+                     hg: gather(args, env) = SomeV(cargs),
+                     hc: Converges(p, cargs, find_fun(p)(callee), ws),
+                     hr: Converges(p, append(ws, env), rest, vs))
+    : Converges(p, env, LetCall(callee, args, rest), vs)
+{
+    let e1: eval(add(hc.n, hr.n), p)(cargs, find_fun(p)(callee)) = Out(ws)
+        = fuel_monotone(p, cargs, find_fun(p)(callee), ws,
+                        hc.n, add(hc.n, hr.n), hc.h, le_add_l(hc.n, hr.n));
+    let e2: eval(add(hc.n, hr.n), p)(append(ws, env), rest) = Out(vs)
+        = fuel_monotone(p, append(ws, env), rest, vs,
+                        hr.n, add(hc.n, hr.n), hr.h, le_add_r(hc.n, hr.n));
+    Converges(Succ(add(hc.n, hr.n)),
+        j(sym(hg),
+          λ o q => k_letcall(eval(add(hc.n, hr.n), p), p, env, callee, rest, o)
+                   = Out(vs),
+          j(sym(e1),
+            λ r q2 => k_bind(eval(add(hc.n, hr.n), p), env, rest, r) = Out(vs),
+            e2)))
+}
+
+theorem letmatch_conv(p: Prog, env: Val, scrut: Nat, arms: Ir, rest: Ir,
+                      tag: Nat, fields: Val, ws: Val, vs: Val,
+                      hl: lookup(env)(scrut) = SomeV(VCon(tag, fields)),
+                      ha: Converges(p, append(fields, env), pick_arm(arms)(tag), ws),
+                      hr: Converges(p, append(ws, env), rest, vs))
+    : Converges(p, env, LetMatch(scrut, arms, rest), vs)
+{
+    let e1: eval(add(ha.n, hr.n), p)(append(fields, env), pick_arm(arms)(tag)) = Out(ws)
+        = fuel_monotone(p, append(fields, env), pick_arm(arms)(tag), ws,
+                        ha.n, add(ha.n, hr.n), ha.h, le_add_l(ha.n, hr.n));
+    let e2: eval(add(ha.n, hr.n), p)(append(ws, env), rest) = Out(vs)
+        = fuel_monotone(p, append(ws, env), rest, vs,
+                        hr.n, add(ha.n, hr.n), hr.h, le_add_r(ha.n, hr.n));
+    Converges(Succ(add(ha.n, hr.n)),
+        j(sym(hl),
+          λ o q => k_letmatch(eval(add(ha.n, hr.n), p), env, arms, rest, o)
+                   = Out(vs),
+          j(sym(e1),
+            λ r q2 => k_bind(eval(add(ha.n, hr.n), p), env, rest, r) = Out(vs),
+            e2)))
+}
 
 // ---------------------------------------------------------------------------
 // `refines` (doc §6), in BOTH shapes.

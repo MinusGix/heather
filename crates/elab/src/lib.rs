@@ -45,6 +45,7 @@ use heather_syntax::{
     Span, Stmt, RecordLitField, Ty, TyKind,
 };
 
+pub mod certgen;
 mod code;
 mod indexed;
 mod inductive;
