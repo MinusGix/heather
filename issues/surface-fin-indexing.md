@@ -30,3 +30,19 @@ gate, the registration round itself.
 Also noted by the design round: `docs/types-as-expressions.md`'s coverage
 table lists `Fin` as "reachable from the surface", which is true of its
 *code* (`TmFin`) and not of its syntax — correct that row when this lands.
+
+## Log
+
+- 2026-08-02: Design round landed: docs/surface-fin-indexing-design.md. No
+  kernel change needed. Three scope-shrinking findings: zero-arm `match` on
+  `Fin(0)` is already `elim_Empty` via the existing Empty whnf path; `Fin(n)`
+  needs no parser rule (reaches `expr_as_ty` as an App, one arm beside `Nat`
+  in each of the two functions); the slot specs already exist in slots.rs.
+  Decisions confirmed by the coordinator: index constructors spelled `FZ` /
+  `FS(i)` (checking-only; supersedes meta-def-registration-design §4.1's
+  `fin_zero`/`fin_succ` sketch spelling), the two slot use sites
+  (`elab_vec_nth`, `elab_container_ih` → VecTabulate) get wired this round,
+  and numerals check at `Fin`-headed types via `wf.rs`'s `fin_index`. One
+  permanent limitation recorded as a rule: `match` on `Fin` at a neutral
+  length is unwritable (no eliminator of its own), diagnostic names the
+  recurse-on-the-length fix.
