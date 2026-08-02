@@ -28,6 +28,54 @@ the de Bruijn arithmetic that `crates/elab/src/vec.rs` does by hand —
 binder context; `map_code` has none, because a letbox-bound global `u`
 weakens through local binders by the calculus, not by the author.
 
+### 1.1 Why code, and not just a function?
+
+The naive question deserves a written answer: `map` looks like an ordinary
+generic function, so why does the in-language version *generate code* instead
+of simply being `fn map<A, B>(…)` in a prelude?
+
+Two layers to the answer, one about the family and one about `map` itself.
+
+**The family cannot be functions.** What this migration moves is Rust whose
+job is to *write kernel terms*, and its real clients — the recursors,
+no-confusion lemmas, and tier lowerings of
+`issues/generators-in-the-language.md` — are one generated definition **per
+declaration**, produced from the declaration's shape. "The recursor of every
+inductive you will ever declare" is not a value to define once and call; it
+is a program that writes a different program for each input. That is a
+function from syntax to syntax, and `Code` is the type of syntax. `map` is
+the deliberately minimal exercise of that machinery (§1), not its
+justification.
+
+**`map` itself could be a function — and splicing is still right, today.**
+Three reasons, in force order:
+
+1. **The emitted program is self-contained.** The hook splices the
+   eliminator, so a use site contains the same computing term the Rust
+   schema emits, and a `refl` proof over a literal length computes on the
+   spot. A prelude *call* instead makes every such proof depend on unfolding
+   a bodied global during conversion — and bodied globals are exactly the
+   metatheory still owed (`issues/metatheory-ch07-definitions`: glueing at
+   p, neutral at c). Splicing does not depend on an unfinished story.
+2. **The oracle cross-check needs like against like.** The adequacy net for
+   a template is "its output is convertible with the Rust schema's output."
+   That comparison exists because both paths emit the same kind of artifact;
+   a function call and an inlined eliminator are not comparable that way.
+3. **The trust seam stays visible.** `Code(g |- T)` types the generator
+   without trusting it: the kernel re-checks every spliced term
+   (untrusted-generator property). A direct implementation blurs the seam
+   the certifying architecture is built around; code-as-data keeps it.
+
+Reason 1 is a *contingency*, not a principle: if the ch. 07 bodied-globals
+round lands and prog-layer conversion unfolds definitions, the closed-generic
+templates (`map_code`, `fold_code`, and the vec family generally) lose their
+reason to be templates, and their natural end state is mundane prelude
+functions — with `.map` elaborating to an application, the vec slots
+retiring, and the quotation machinery keeping only the clients that cannot
+be functions. That is a smaller trusted surface, not a loss; the thesis was
+always demonstrated by deletion, and it would end by deleting the templates
+too.
+
 ## 2. Where the pieces stand (surveyed 2026-08-02)
 
 - **Kernel: complete and unreachable.** Every modal former exists through

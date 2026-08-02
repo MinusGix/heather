@@ -142,73 +142,13 @@ fn hook_output_is_convertible_with_the_rust_oracle() {
 
 // -- negative controls ------------------------------------------------------
 
-/// Routing proof: a template with its type binders swapped still checks as a
-/// `meta fn` (it is well typed — of the wrong function type for the hook's
-/// argument order), so if `.fold` really evaluates it, an `A ≠ B` instance
-/// must fail the kernel gate. If the Rust path were still serving these files,
-/// this would elaborate.
-#[test]
-fn a_swapped_template_breaks_an_a_neq_b_instance() {
-    let swapped = r#"
-meta fn fold_code(g: Ctx) -> Code(g |-
-    (B: Type<0>) -> (A: Type<0>) -> B -> (A -> B -> B) -> (k: Nat) -> [A; k] -> B
-) {
-    code {
-        fun (B: Type<0>) => fun (A: Type<0>) => fun (z: B) =>
-            fun (f: A -> B -> B) => fun (k: Nat) =>
-                match k as λ w => [A; w] -> B {
-                    Zero => fun (v: [A; 0]) => z,
-                    Succ(zk, ih) => fun (v: [A; Succ(zk)]) =>
-                        f(head(v), ih(tail(v))),
-                }
-    }
-}
-"#;
-    let a_neq_b = "fn count(m: Nat, xs: [[Nat; Succ(m)]; 2]) -> Nat { \
-                       xs.fold(0, λ (v: [Nat; Succ(m)]) (b: Nat) => Succ(b)) \
-                   }";
-    let mut e = Elaborator::with_prelude().expect("prelude");
-    e.elab_source(swapped).unwrap_or_else(|err| {
-        panic!("the swapped template itself checks: {}", err.render(swapped))
-    });
-    assert!(
-        e.elab_source(a_neq_b).is_err(),
-        "the swapped template should break an A ≠ B instance — if this elaborated, \
-         the hook is not routing `.fold` through `fold_code`"
-    );
-    // The same swapped template at A = B is symmetric and must pass — the
-    // control is sharp: it is the *routing* that failed above, not the file.
-    let a_eq_b = format!(
-        "{ADD}
-         fn total(xs: [Nat; 3]) -> Nat {{ xs.fold(0, λ (a: Nat) (b: Nat) => add(a, b)) }}
-         theorem t(): total([1, 2, 3]) = 6 {{ refl }}"
-    );
-    e.elab_source(&a_eq_b)
-        .unwrap_or_else(|err| panic!("A = B is symmetric under the swap: {}", err.render(&a_eq_b)));
-}
-
-/// Loud-failure discipline (design doc §6): a registered template whose Π
-/// spine is too short errors at the use site — it never silently falls back to
-/// Rust and never emits a half-applied term.
-#[test]
-fn a_short_template_fails_loudly_not_silently() {
-    let short = r#"
-meta fn fold_code(g: Ctx) -> Code(g |-
-    (A: Type<0>) -> (B: Type<0>) -> B -> B
-) {
-    code {
-        fun (A: Type<0>) => fun (B: Type<0>) => fun (z: B) => z
-    }
-}
-"#;
-    let mut e = Elaborator::with_prelude().expect("prelude");
-    e.elab_source(short)
-        .unwrap_or_else(|err| panic!("the short template itself checks: {}", err.render(short)));
-    let use_site = "fn total(xs: [Nat; 2]) -> Nat { xs.fold(0, λ (a: Nat) (b: Nat) => a) }";
-    let err = e.elab_source(use_site).expect_err("a short template must be a loud error");
-    let msg = format!("{err:?}");
-    assert!(msg.contains("parameters"), "wrong failure: {msg}");
-}
+// Two of this suite's original controls **moved** to
+// crates/elab/tests/template_registration.rs when the registration seam landed
+// (docs/meta-def-registration-design.md §2.2): the short template no longer
+// registers at all, and the "swapped" one turned out to be a legal
+// *permutation* of the same signature — accepted, and producing the same term,
+// which is what the seam promised. The control that stays is the one about the
+// template's **body**, which registration deliberately does not police.
 
 /// The control the map round could not write. `map_code` is *rigid* at the
 /// generic type — parametricity plus the length index force it to be map, so
@@ -216,14 +156,16 @@ meta fn fold_code(g: Ctx) -> Code(g |-
 /// exist there (design doc §7 item 5). `fold_code`'s result type carries no
 /// index, so it does exist: dropping the head from the step arm leaves the
 /// **constant fold**, which checks as a `meta fn` at exactly the same
-/// signature. Adequacy at the generic type is therefore *not* carried by the
-/// types here — the conversion cross-check is doing real work, and this test
-/// is what proves it can fail.
+/// signature — and, since registration checks the *type* and not the body,
+/// registers for `vec.fold` exactly as the real one does (design doc §2.2:
+/// this is a typing gate, never a soundness one). Adequacy at the generic type
+/// is therefore *not* carried by the types here — the conversion cross-check
+/// is doing real work, and this test is what proves it can fail.
 #[test]
 fn a_mutated_arm_checks_but_fails_the_cross_check() {
     let constant_fold = r#"
-meta fn fold_code(g: Ctx) -> Code(g |-
-    (A: Type<0>) -> (B: Type<0>) -> B -> (A -> B -> B) -> (k: Nat) -> [A; k] -> B
+meta fn fold_code(g: Ctx) for vec.fold -> Code(g |-
+    (A: Type<0>) -> (B: Type<0>) -> (z: B) -> (f: A -> B -> B) -> (k: Nat) -> (v: [A; k]) -> B
 ) {
     code {
         fun (A: Type<0>) => fun (B: Type<0>) => fun (z: B) =>
@@ -273,9 +215,10 @@ meta fn fold_code(g: Ctx) -> Code(g |-
 }
 
 /// `map_code` and `fold_code` coexist: the lib declares both, and a file that
-/// uses both routes each to its own template. (The name is the contract; this
-/// is the fixture that would notice a hook keyed on the wrong one —
-/// issues/meta-def-registration.md is where that seam gets its redesign.)
+/// uses both routes each to its own template — two slots, two claims, no
+/// interference (docs/meta-def-registration-design.md §8 item 5's positive
+/// half). This is the fixture that would notice a hook dispatching on the
+/// wrong slot.
 #[test]
 fn map_and_fold_route_independently() {
     let src = format!(

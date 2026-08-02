@@ -50,10 +50,12 @@ mod code;
 mod indexed;
 mod inductive;
 mod quote;
+mod slots;
 mod vec;
 mod wf;
 
 use inductive::Inductive;
+use slots::{Ingredient, Slot};
 
 /// The stage-1 prelude: `sym`/`trans`/`cong_succ`, monomorphic at `Nat`.
 /// (The universe-polymorphic versions are layer-m `Λ ℓ⃗` territory — later
@@ -403,6 +405,13 @@ pub struct Elaborator {
     /// ch. 04 admits no layer-m term in a global context. The evaluation hook
     /// applies these to code arguments and reduces the application away.
     meta_defs: HashMap<String, MetaDef>,
+    /// Which template elaborates which slot
+    /// (docs/meta-def-registration-design.md §2). Populated by the `for`
+    /// clause and by nothing else: a `meta fn` named `map_code` without one is
+    /// not a template, which is the point at which "the name is the contract"
+    /// was retired. One slot takes one template — a second claim is an error
+    /// at its declaration, not a shadowing.
+    meta_slots: HashMap<Slot, String>,
     /// The Ψ-extending binders of the `meta fn` currently elaborating (its
     /// `Ctx`/`TyCode` binders, plus letbox-bound code globals during quote
     /// assembly). The whnf/conv oracles append these to Ψ so meta-bound
@@ -411,14 +420,26 @@ pub struct Elaborator {
     meta_pushed: RefCell<Vec<GlobalBinding>>,
 }
 
-/// One registered `meta fn`: its closed layer-m term and statement type.
+/// One registered `meta fn`: its closed layer-m term and statement type,
+/// plus — for a template that claimed a slot — the Π **order** its signature
+/// declared (docs/meta-def-registration-design.md §2.2).
+///
 /// The hook types its *evaluated payload* by kernel inference rather than by
 /// peeling `stmt`, so the statement is currently the registration's record
 /// only — kept because it is the checked fact about `term`.
+///
+/// `order` holds positions into the slot spec's ingredient list, in the
+/// template's own binder order: it is the one place that knowledge lives, and
+/// [`Elaborator::try_code_template`] is the only reader.
 pub(crate) struct MetaDef {
     pub(crate) term: Rc<Term>,
     #[allow(dead_code)]
     pub(crate) stmt: Rc<Type>,
+    /// The slot this template claimed, if any. `None` is an ordinary meta
+    /// definition: registered, never dispatched.
+    #[allow(dead_code)]
+    pub(crate) slot: Option<Slot>,
+    pub(crate) order: Vec<usize>,
 }
 
 /// What a `p.f` turned out to be (docs/surface-records.md §4.2).
@@ -477,6 +498,7 @@ impl Elaborator {
             goal_spans: RefCell::new(HashMap::new()),
             frozen: Cell::new(false),
             meta_defs: HashMap::new(),
+            meta_slots: HashMap::new(),
             meta_pushed: RefCell::new(Vec::new()),
         }
     }
@@ -2469,20 +2491,24 @@ impl Elaborator {
             );
         };
         let _ = dom;
-        // The evaluation hook (docs/in-language-map-design.md §4): when the
-        // in-language `map_code` is registered, the emitted term comes from
-        // evaluating it — kernel computation mid-elaboration — and the Rust
-        // schema below serves the instances the level-0 template declines
-        // (and every file that never declares `map_code`). The name is the
-        // contract; there is no attribute system in this round.
-        if let Some(t) = self.try_vec_code_hook(
+        // The evaluation hook (docs/in-language-map-design.md §4): when a
+        // template claims `vec.map`, the emitted term comes from evaluating it
+        // — kernel computation mid-elaboration — and the Rust schema below
+        // serves the instances the level-0 template declines, and every file
+        // that declares no template at all. What this site knows is the slot
+        // and the *names* of its ingredients; the Π order is the template's
+        // own and lives in its signature
+        // (docs/meta-def-registration-design.md §3).
+        if let Some(t) = self.try_code_template(
             cx,
-            "map_code",
-            al,
-            &bl,
-            a_ty,
-            &b_ty,
-            vec![f_t.clone(), (**len).clone(), xs_t.clone()],
+            Slot::VecMap,
+            &[
+                ("A", Ingredient::Type { level: al, ty: a_ty }),
+                ("B", Ingredient::Type { level: &bl, ty: &b_ty }),
+                ("f", Ingredient::Term(f_t.clone())),
+                ("k", Ingredient::Term((**len).clone())),
+                ("v", Ingredient::Term(xs_t.clone())),
+            ],
             span,
         )? {
             return Ok((
@@ -2631,18 +2657,21 @@ impl Elaborator {
             }),
         };
         let f_t = self.elab_check(cx, f, &step_ty, &Level::max(al.clone(), bl.clone()))?;
-        // The evaluation hook, as in `elab_vec_map`: `fold_code` serves this
-        // use site when the file declares it, and the Rust schema below serves
-        // the instances the level-0 template declines — and every file that
-        // never declares it (issues/quotation-stage-artifacts.md).
-        if let Some(t) = self.try_vec_code_hook(
+        // The evaluation hook, as in `elab_vec_map`: whichever template claims
+        // `vec.fold` serves this use site, and the Rust schema below serves the
+        // instances the level-0 template declines — and every file that
+        // declares no template (issues/quotation-stage-artifacts.md).
+        if let Some(t) = self.try_code_template(
             cx,
-            "fold_code",
-            al,
-            &bl,
-            a_ty,
-            &b_ty,
-            vec![z_t.clone(), f_t.clone(), (**len).clone(), xs_t.clone()],
+            Slot::VecFold,
+            &[
+                ("A", Ingredient::Type { level: al, ty: a_ty }),
+                ("B", Ingredient::Type { level: &bl, ty: &b_ty }),
+                ("z", Ingredient::Term(z_t.clone())),
+                ("f", Ingredient::Term(f_t.clone())),
+                ("k", Ingredient::Term((**len).clone())),
+                ("v", Ingredient::Term(xs_t.clone())),
+            ],
             span,
         )? {
             return Ok((t, b_ty, bl));

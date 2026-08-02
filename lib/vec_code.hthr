@@ -10,12 +10,20 @@
 // the use site applies the spliced payload to its element-type codes, the
 // function, the length, and the vector, as ordinary applications.
 //
+// The `for vec.map` clause is the registration seam
+// (docs/meta-def-registration-design.md): it, and not this declaration's name,
+// is what routes `.map` here, and claiming the slot means *having its type* —
+// checked by conversion when the declaration registers. Every payload binder
+// is named because the names are the argument protocol: the use site hands
+// over ingredients by name, and this signature — not the call site — fixes the
+// order they are applied in.
+//
 // The elim itself is the same one vec.rs builds by hand: recursion on the
 // length with the Π-over-the-vector motive (a vector of neutral length
 // cannot be projected, so the vector is abstracted and re-applied). Where
 // vec.rs spells fourteen `shift_local`s, this spells none — binders bind.
-meta fn map_code(g: Ctx) -> Code(g |-
-    (A: Type<0>) -> (B: Type<0>) -> (A -> B) -> (k: Nat) -> [A; k] -> [B; k]
+meta fn map_code(g: Ctx) for vec.map -> Code(g |-
+    (A: Type<0>) -> (B: Type<0>) -> (f: A -> B) -> (k: Nat) -> (v: [A; k]) -> [B; k]
 ) {
     code {
         fun (A: Type<0>) => fun (B: Type<0>) => fun (f: A -> B) => fun (k: Nat) =>
@@ -44,8 +52,8 @@ meta fn map_code(g: Ctx) -> Code(g |-
 // the result is not indexed — which is why the mutated-arm control the map
 // round found unwritable *is* writable here, and is written
 // (crates/elab/tests/in_language_fold.rs).
-meta fn fold_code(g: Ctx) -> Code(g |-
-    (A: Type<0>) -> (B: Type<0>) -> B -> (A -> B -> B) -> (k: Nat) -> [A; k] -> B
+meta fn fold_code(g: Ctx) for vec.fold -> Code(g |-
+    (A: Type<0>) -> (B: Type<0>) -> (z: B) -> (f: A -> B -> B) -> (k: Nat) -> (v: [A; k]) -> B
 ) {
     code {
         fun (A: Type<0>) => fun (B: Type<0>) => fun (z: B) =>

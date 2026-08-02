@@ -565,6 +565,30 @@ impl Parser {
             self.bump();
         }
         self.expect(&TokKind::RParen, "`)`")?;
+        // `for vec.map` — the elaboration slot this template fills
+        // (docs/meta-def-registration-design.md §2.1). The parse point is
+        // unambiguous: what follows a parameter list is `->` or `:`, never an
+        // identifier, so the contextual keyword cannot be read as anything
+        // else. The path's *vocabulary* is the elaborator's, so an unknown
+        // slot is a registration diagnostic, not a parse error.
+        let elaborates = if self.at_kw("for") {
+            let start = self.bump().span;
+            let (family, _) = self.ident("a slot family (`for vec.map`)")?;
+            self.expect(&TokKind::Dot, "`.` (a slot is written `family.name`)")?;
+            let (sname, nsp) = self.ident("a slot name (`for vec.map`)")?;
+            let span = start.join(nsp);
+            if !is_meta {
+                return Err(ParseError {
+                    msg: "`for` marks a `meta fn` as an elaboration template: an \
+                          ordinary declaration elaborates nothing but itself"
+                        .into(),
+                    span,
+                });
+            }
+            Some(SlotPath { family, name: sname, span })
+        } else {
+            None
+        };
         match kind {
             DeclKind::Fn => {
                 self.expect(&TokKind::Arrow, "`->`")?;
@@ -579,7 +603,7 @@ impl Parser {
         let result = self.with_record_lit(true, |p| p.ty())?;
         let body = self.block()?;
         let span = start.join(body.span);
-        Ok(Decl { kind, is_meta, name, tyvars, params, result, body, span })
+        Ok(Decl { kind, is_meta, elaborates, name, tyvars, params, result, body, span })
     }
 
     // -- blocks and statements ----------------------------------------------
@@ -1910,6 +1934,28 @@ mod tests {
         assert!(matches!(&dom.kind, TyKind::Splice { name } if name == "a"));
         assert!(matches!(&d.result.kind, TyKind::Code { .. }));
         assert!(matches!(&d.body.result.kind, ExprKind::Quote(_)));
+    }
+
+    /// The registration clause (docs/meta-def-registration-design.md §2.1).
+    /// The parser only shapes the path; whether `vec.map` names a slot is the
+    /// elaborator's question, where the vocabulary can be listed.
+    #[test]
+    fn meta_fn_declares_its_slot() {
+        let f =
+            parse_file("meta fn map_code(g: Ctx) for vec.map -> Code(g |- Nat) { code { 0 } }")
+                .unwrap();
+        let d = only_decl(&f);
+        let s = d.elaborates.as_ref().expect("a `for` clause");
+        assert_eq!((s.family.as_str(), s.name.as_str()), ("vec", "map"));
+        // …and a `meta fn` without one parses exactly as before.
+        let g = parse_file("meta fn m(g: Ctx) -> Code(g |- Nat) { code { 0 } }").unwrap();
+        assert!(only_decl(&g).elaborates.is_none());
+    }
+
+    #[test]
+    fn a_for_clause_marks_a_meta_fn_only() {
+        let err = parse_file("fn f(n: Nat) for vec.map -> Nat { n }").unwrap_err();
+        assert!(err.msg.contains("meta fn"), "{}", err.msg);
     }
 
     #[test]

@@ -20,11 +20,13 @@ use std::rc::Rc;
 use heather_kernel::term::{
     CtxBase, GlobalBinding, GlobalVar, LocalCtx, LocalSubst, SubstTail, Term, Type,
 };
+use heather_kernel::conv;
 use heather_kernel::layer::Layer;
 use heather_kernel::level::Level;
 use heather_kernel::typing;
-use heather_syntax::{Decl, DeclKind, Expr, ExprKind, Span, Stmt, Ty, TyKind};
+use heather_syntax::{Decl, DeclKind, Expr, ExprKind, SlotPath, Span, Stmt, Ty, TyKind};
 
+use crate::slots::{self, Ingredient, IngredientKind, Slot, SlotSpec};
 use crate::{err, Alias, Cx, ElabError, Elaborator, MetaDef, R};
 
 /// The meta-layer environment: the Ψ-extending binders currently in scope,
@@ -270,9 +272,171 @@ impl Elaborator {
         )
         .map_err(|e| ElabError::Kernel { decl: decl.name.clone(), span: decl.span, err: e })?;
 
-        self.meta_defs
-            .insert(decl.name.clone(), MetaDef { term: Rc::new(term), stmt: Rc::new(stmt) });
+        // The registration seam (docs/meta-def-registration-design.md §2.2):
+        // a `for` clause claims a slot, and claiming it means *having its
+        // type*. A `meta fn` without one registers and is never dispatched —
+        // the clause, not the name, is what routes a use site.
+        let claimed = match &decl.elaborates {
+            Some(path) => Some(self.register_slot(decl, path, &stmt)?),
+            None => None,
+        };
+        let (slot, order) = match claimed {
+            Some((spec, order)) => {
+                self.meta_slots.insert(spec.slot, decl.name.clone());
+                (Some(spec.slot), order)
+            }
+            None => (None, Vec::new()),
+        };
+        self.meta_defs.insert(
+            decl.name.clone(),
+            MetaDef { term: Rc::new(term), stmt: Rc::new(stmt), slot, order },
+        );
         Ok(())
+    }
+
+    /// Registration-time validation of a `for family.name` clause: resolve the
+    /// slot, read the template's Π **order** off its own signature, and check
+    /// the signature *is* the slot's type
+    /// (docs/meta-def-registration-design.md §2.2). Every failure here is
+    /// loud and at the declaration — the class of errors the use site used to
+    /// discover ("nothing stops a user meta fn of incompatible shape") is
+    /// rejected where it is written, before any use site exists.
+    ///
+    /// Not a soundness gate: it fixes the template's *type*, never its body.
+    /// A constant fold has `fold_code`'s type exactly, and is caught by the
+    /// conversion cross-check against the Rust oracle, not by this.
+    fn register_slot(
+        &self,
+        decl: &Decl,
+        path: &SlotPath,
+        stmt: &Type,
+    ) -> R<(&'static SlotSpec, Vec<usize>)> {
+        let Some(spec) = slots::lookup(path) else {
+            return err(
+                format!(
+                    "no elaboration slot `{}.{}`; the slots are {}",
+                    path.family,
+                    path.name,
+                    slots::known_paths()
+                ),
+                path.span,
+            );
+        };
+        if let Some(other) = self.meta_slots.get(&spec.slot) {
+            return err(
+                format!(
+                    "`{}` is already elaborated by `{other}`: one slot takes one \
+                     template, so this is two templates for one site",
+                    spec.path_str()
+                ),
+                path.span,
+            );
+        }
+        // A dispatched template is `meta fn t(g: Ctx) for … -> Code(g |- …)`:
+        // the hook applies it to the use site's context and then walks the
+        // payload's Π spine, so there is no argument position for a `Code`
+        // parameter to occupy.
+        if !matches!(decl.params.as_slice(), [p] if matches!(p.ty.kind, TyKind::Ctx)) {
+            return err(
+                "a template takes exactly one `Ctx` binder and no `Code` parameters: \
+                 the hook applies it to the use site's context and passes the slot's \
+                 ingredients down the payload's own Π spine",
+                decl.span,
+            );
+        }
+
+        // The order, read off the *surface* signature — the binder names are
+        // the argument protocol (§2.3), and they must be read from the source
+        // and not from kernel display names, which are cosmetic.
+        let TyKind::Code { ty: payload, .. } = &decl.result.kind else {
+            unreachable!("a `meta fn`'s result was checked to be `Code(g |- T)`")
+        };
+        let mut rest: &Ty = payload;
+        let mut order: Vec<usize> = Vec::new();
+        for n in 0..spec.ingredients.len() {
+            let TyKind::Fn { binder, dom, cod } = &rest.kind else {
+                return err(
+                    format!(
+                        "`{}` binds {n} of the slot's {} ingredients ({}): a template \
+                         takes all of them, in whatever order its own signature fixes",
+                        spec.path_str(),
+                        spec.ingredients.len(),
+                        spec.ingredient_names()
+                    ),
+                    rest.span,
+                );
+            };
+            let Some(name) = binder else {
+                return err(
+                    format!(
+                        "this parameter has no name, and a template's binder names are \
+                         how a use site addresses it: write `(name: …)`, naming one of \
+                         {}",
+                        spec.ingredient_names()
+                    ),
+                    dom.span,
+                );
+            };
+            let Some(pos) = spec.ingredients.iter().position(|i| i.name == *name) else {
+                return err(
+                    format!(
+                        "`{name}` is not an ingredient of `{}`; it binds {}",
+                        spec.path_str(),
+                        spec.ingredient_names()
+                    ),
+                    dom.span,
+                );
+            };
+            if order.contains(&pos) {
+                return err(
+                    format!("`{name}` is bound twice: each ingredient is one parameter"),
+                    dom.span,
+                );
+            }
+            order.push(pos);
+            rest = cod;
+        }
+
+        // The type. Built from the spec in *this template's* order — which is
+        // what makes a legally permuted template (design doc §4.3) register
+        // with no per-permutation Rust — and compared by conversion, so a
+        // definitional variant of the signature is the same signature.
+        let (want, want_level) = spec.expected_payload_ty(&order);
+        let Type::CtxPi { body, .. } = stmt else {
+            unreachable!("a template's statement was closed over its `Ctx` binder")
+        };
+        let Type::CodeTm { ctx, ty: got, level } = &**body else {
+            unreachable!("a `meta fn`'s statement is a code type")
+        };
+        if level.normalize() != want_level.normalize() {
+            return err(
+                format!(
+                    "`{}`'s payload lives at a different level than the slot's \
+                     ({level:?} vs {want_level:?})",
+                    spec.path_str()
+                ),
+                decl.result.span,
+            );
+        }
+        conv::conv_type(
+            &self.oracle_psi(),
+            ctx,
+            Layer::Prog,
+            got,
+            &want,
+            level,
+            self.fuel,
+        )
+        .map_err(|_| ElabError::Elab {
+            msg: format!(
+                "this template does not have `{}`'s type. The slot's payload is\n  \
+                 {want:?}\nand this one is\n  {got:?}\n(the binder *names* fix the \
+                 order, so a permutation is fine — a different shape is not)",
+                spec.path_str()
+            ),
+            span: decl.result.span,
+        })?;
+        Ok((spec, order))
     }
 
     /// `Code(g |- T)` in a `meta fn` signature: elaborate `T` at the payload
@@ -465,48 +629,76 @@ impl Elaborator {
         }
     }
 
-    /// The evaluation hook (docs/in-language-map-design.md §4): apply the
-    /// registered template `name` to the use site's context, reduce the
-    /// meta-layer application to a `box`, and apply the spliced payload to the
-    /// use site's arguments — kernel computation mid-elaboration, replacing
-    /// the corresponding Rust `vec` schema for the instances it covers.
+    /// The evaluation hook (docs/in-language-map-design.md §4, registration
+    /// seam docs/meta-def-registration-design.md §2.3): if a template claims
+    /// `slot`, apply it to the use site's context, reduce the meta-layer
+    /// application to a `box`, and apply the spliced payload to the use site's
+    /// ingredients — kernel computation mid-elaboration, replacing the
+    /// corresponding Rust schema for the instances it covers.
     ///
-    /// Every template in this family is a closed generic over two `Type<0>`
-    /// binders (`map_code`, `fold_code`, …), so the shared part is: the two
-    /// element/result levels and their Tarski codes, then whatever `rest` the
-    /// use site supplies, in the template's own Π order. The name is the
-    /// contract — the registration seam is issues/meta-def-registration.md.
+    /// The use site hands over a **bag of named ingredients**, in whatever
+    /// order suits the Rust that computed them. The Π order is the template's
+    /// own, recorded at registration from its signature; the permutation and
+    /// the Tarski coding of the `Type`-kind ingredients happen here, so no
+    /// call site knows either. That is the whole point of the seam: the
+    /// two-code prefix this hook used to assume is gone, and a slot with one
+    /// type parameter (`vec.tabulate`) or four ingredients in a different
+    /// order costs nothing here.
     ///
-    /// `Ok(None)` is an honest decline (a level the level-0 template cannot
-    /// take, an element type with no Tarski code) and the caller falls back
-    /// to the Rust path. A registered template whose evaluation goes neutral
-    /// is an **error**, never a silent fallback — a half-reduced term must
-    /// not be emitted.
-    #[allow(clippy::too_many_arguments)]
-    pub(crate) fn try_vec_code_hook(
+    /// `Ok(None)` is an honest decline — no template claims the slot, or a
+    /// `Type` ingredient is above level 0 or has no Tarski code — and the
+    /// caller falls back to the Rust path. Everything downstream of the first
+    /// `CtxApp` is an **error**, never a silent fallback: a half-reduced term
+    /// must not be emitted (design doc §5).
+    pub(crate) fn try_code_template(
         &self,
         cx: &Cx,
-        name: &str,
-        al: &Level,
-        bl: &Level,
-        a_ty: &Type,
-        b_ty: &Type,
-        rest: Vec<Term>,
+        slot: Slot,
+        args: &[(&'static str, Ingredient<'_>)],
         span: Span,
     ) -> R<Option<Term>> {
-        let Some(md) = self.meta_defs.get(name) else {
+        let Some(name) = self.meta_slots.get(&slot) else {
             return Ok(None);
         };
-        // The template binds `(A: Type<0>) (B: Type<0>)`: element types at a
-        // higher level, or with no code in the Tarski universe, decline.
+        let md = self.meta_defs.get(name).expect("a claimed slot has its template");
+        let spec = slots::spec(slot);
+        debug_assert_eq!(
+            args.len(),
+            spec.ingredients.len(),
+            "a use site supplies exactly its slot's ingredients"
+        );
+
+        // Permute into the template's order and materialize. A `Type`
+        // ingredient becomes its Tarski code wherever the order puts it —
+        // however many there are — which is what the old two-code prefix
+        // hard-coded.
         let zero = Level::Zero.normalize();
-        if al.normalize() != zero || bl.normalize() != zero {
-            return Ok(None);
+        let mut applied_args: Vec<Term> = Vec::with_capacity(md.order.len());
+        for &pos in &md.order {
+            let iname = spec.ingredients[pos].name;
+            let Some((_, ing)) = args.iter().find(|(n, _)| *n == iname) else {
+                unreachable!("`{iname}` is an ingredient of `{}` with no argument", spec.path_str())
+            };
+            match ing {
+                Ingredient::Term(t) => {
+                    debug_assert_eq!(spec.ingredients[pos].kind(), IngredientKind::Term);
+                    applied_args.push(t.clone());
+                }
+                Ingredient::Type { level, ty } => {
+                    debug_assert_eq!(spec.ingredients[pos].kind(), IngredientKind::Type);
+                    // The template binds `(A: Type<0>)`: a type at a higher
+                    // level, or with no code in the Tarski universe, is an
+                    // instance this level-0 slice honestly cannot take.
+                    if level.normalize() != zero {
+                        return Ok(None);
+                    }
+                    let Some(code) = crate::code::code_of(ty) else {
+                        return Ok(None);
+                    };
+                    applied_args.push(code);
+                }
+            }
         }
-        let (Some(code_a), Some(code_b)) = (crate::code::code_of(a_ty), crate::code::code_of(b_ty))
-        else {
-            return Ok(None);
-        };
 
         // `name @ Γ`, reduced at the meta layer until the box surfaces.
         let applied = Term::CtxApp { fun: Rc::clone(&md.term), ctx: cx.gamma.clone() };
@@ -541,7 +733,7 @@ impl Elaborator {
             span,
         })?;
         let mut term = (**payload).clone();
-        for arg in [code_a, code_b].into_iter().chain(rest) {
+        for arg in applied_args {
             let Type::Pi { dom_level, cod_level, dom, cod } = self.whnf(cx, &ty, span)? else {
                 return err(
                     format!(

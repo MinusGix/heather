@@ -1,6 +1,6 @@
 ---
 title: How the elaborator knows which meta fn elaborates what
-status: open
+status: closed
 labels: [metaprogramming,elaboration,design]
 created: 2026-08-02
 updated: 2026-08-02
@@ -15,3 +15,5 @@ Not scheduled; wanted when quotation-stage-artifacts reaches its second or third
 ## Log
 
 - 2026-08-02: fold_code port data: the light generalization (try_map_code_hook -> try_vec_code_hook, name + rest-args parameterized) was enough and cheap, but the CALL site did not generalize — elab_vec_fold hard-codes the name, its argument vector in the template's Pi order, and the knowledge that the first two args are Tarski Type<0> codes. That two-code prefix is now baked into the shared hook and is exactly what tabulate_code (one type parameter, Fin-indexed function) and nth_code will break: next port must widen the shared prefix or pass a full argument list. Nothing beyond the loud error stops a user meta fn of incompatible shape, as filed.
+- 2026-08-02: Design round done: docs/meta-def-registration-design.md. Decision: templates DECLARE a typed slot ('for vec.map' clause, named payload binders as the argument protocol); the elaborator checks the registered statement convertible with the slot's Rust-built generic type at registration time, and use sites hand over a named ingredient bag with no order/arity/coding knowledge. Resolver horn rejected on type theory (code types indexed by globals only — a query cannot see the instance), recorded as the deferred horn alongside user-defined slots (where declare has no contract to check against — the one place the resolver would return). Implementation round next, against §8's test plan and §9's sketch.
+- 2026-08-02: Implementation round landed: for-clause parser support, slots.rs (four-slot vocabulary, ITy ingredient-type DSL with a generic permutation-aware Pi-chain builder), register_slot with all declaration-time diagnostics, try_code_template replacing the hook, lib/vec_code.hthr migrated, 13-test template_registration.rs suite. Three doc amendments folded back (design doc §2.2, §8.3, §8.7, §9): the 'swapped' template is a legal permutation and became a positive control; expected_code_ty needed the ITy DSL to serve permuted orders; a one-Ctx-binder/no-Code-parameters rule was added; and both loud use-site guards are now surface-unreachable until a slot gains a code-typed ingredient. Deferred horns (resolver dispatch, user-defined slots, dynamic declines, multi-signature slots) recorded in design doc §10. Closing: the seam exists; what remains lives with generators-in-the-language and surface-fin-indexing.

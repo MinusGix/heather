@@ -4,8 +4,10 @@
 //! it, and the emitted terms are convertible with the Rust `vec::map`
 //! oracle's — adequacy, not just typing. Fixtures follow
 //! docs/testing-generated-terms.md: literal *and* neutral length, an open
-//! element type, a checking position, and negative controls that prove both
-//! the routing and the loud-failure discipline.
+//! element type, a checking position. The negative controls moved to
+//! crates/elab/tests/template_registration.rs when the registration seam
+//! landed (docs/meta-def-registration-design.md) — see the note at the bottom
+//! of this file for which, and why they are declaration-time now.
 
 use heather_elab::Elaborator;
 use heather_kernel::conv::conv_term;
@@ -112,66 +114,21 @@ fn hook_output_is_convertible_with_the_rust_oracle() {
 }
 
 // -- negative controls ------------------------------------------------------
-
-/// Routing proof: a template with its element binders swapped still checks
-/// as a `meta fn` (it is a well-typed template — of the wrong function type
-/// for the hook's argument order), so if `.map` really evaluates it, an
-/// `A ≠ B` instance must fail the kernel gate. If the Rust path were still
-/// serving these files, this would elaborate.
-#[test]
-fn a_swapped_template_breaks_an_a_neq_b_instance() {
-    let swapped = r#"
-meta fn map_code(g: Ctx) -> Code(g |-
-    (B: Type<0>) -> (A: Type<0>) -> (A -> B) -> (k: Nat) -> [A; k] -> [B; k]
-) {
-    code {
-        fun (B: Type<0>) => fun (A: Type<0>) => fun (f: A -> B) => fun (k: Nat) =>
-            match k as λ z => [A; z] -> [B; z] {
-                Zero => fun (v: [A; 0]) => [],
-                Succ(zk, ih) => fun (v: [A; Succ(zk)]) =>
-                    cons(f(head(v)), ih(tail(v))),
-            }
-    }
-}
-"#;
-    let a_neq_b = "fn lens(m: Nat, xs: [[Nat; Succ(m)]; 2]) -> [Nat; 2] { \
-                       xs.map(λ (v: [Nat; Succ(m)]) => head(v)) \
-                   }";
-    let mut e = Elaborator::with_prelude().expect("prelude");
-    e.elab_source(swapped)
-        .unwrap_or_else(|err| panic!("the swapped template itself checks: {}", err.render(swapped)));
-    assert!(
-        e.elab_source(a_neq_b).is_err(),
-        "the swapped template should break an A ≠ B instance — if this elaborated, \
-         the hook is not routing `.map` through `map_code`"
-    );
-    // The same swapped template at A = B is symmetric and must pass — the
-    // control is sharp: it is the *routing* that failed above, not the file.
-    let a_eq_b = "fn same(xs: [Nat; 2]) -> [Nat; 2] { xs.map(λ (n: Nat) => Succ(n)) }
-                  theorem s(): same([1, 2]) = [2, 3] { refl }";
-    e.elab_source(a_eq_b)
-        .unwrap_or_else(|err| panic!("A = B is symmetric under the swap: {}", err.render(a_eq_b)));
-}
-
-/// Loud-failure discipline (§6): a registered template whose Π spine is too
-/// short errors at the use site — it never silently falls back to Rust and
-/// never emits a half-applied term.
-#[test]
-fn a_short_template_fails_loudly_not_silently() {
-    let short = r#"
-meta fn map_code(g: Ctx) -> Code(g |-
-    (A: Type<0>) -> (k: Nat) -> [A; k] -> [A; k]
-) {
-    code {
-        fun (A: Type<0>) => fun (k: Nat) => fun (v: [A; k]) => v
-    }
-}
-"#;
-    let mut e = Elaborator::with_prelude().expect("prelude");
-    e.elab_source(short)
-        .unwrap_or_else(|err| panic!("the short template itself checks: {}", err.render(short)));
-    let use_site = "fn bump(xs: [Nat; 2]) -> [Nat; 2] { xs.map(λ (n: Nat) => Succ(n)) }";
-    let err = e.elab_source(use_site).expect_err("a short template must be a loud error");
-    let msg = format!("{err:?}");
-    assert!(msg.contains("parameters"), "wrong failure: {msg}");
-}
+//
+// Both of this suite's original controls have **moved** to
+// crates/elab/tests/template_registration.rs, and the move is the registration
+// round's point (docs/meta-def-registration-design.md §2.2): a template that
+// cannot serve `vec.map` is now rejected at its own declaration, so neither
+// failure can reach a use site any more.
+//
+// - The short template ("its Π spine is too short") no longer registers: a
+//   template's signature is checked against the slot's, so a use site cannot
+//   discover a shape problem the declaration already had.
+// - The *swapped* template turns out not to be a control at all. With the
+//   binder names carrying the order, `(B: Type<0>) -> (A: Type<0>) -> …` is a
+//   legal **permutation** of the same signature and is accepted — and produces
+//   the same term, which is exactly what the seam promised. It is now the
+//   positive control `a_permuted_template_is_the_same_template` there.
+//
+// What still proves the routing here is the cross-check above: `ht != rt` says
+// the hook fired, and conversion says it fired correctly.

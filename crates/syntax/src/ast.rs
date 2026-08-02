@@ -105,6 +105,12 @@ pub struct Decl {
     /// quotation, and it is registered elaborator-side rather than in Ψ.
     /// Only `fn` may carry it; `meta theorem` is rejected in the parser.
     pub is_meta: bool,
+    /// `meta fn map_code(g: Ctx) for vec.map -> …` — the elaboration **slot**
+    /// this template fills (docs/meta-def-registration-design.md §2.1). A
+    /// `meta fn` without one is registered but never dispatched: the clause,
+    /// not the declaration's name, is what routes a use site. Only a `meta fn`
+    /// may carry it.
+    pub elaborates: Option<SlotPath>,
     pub name: String,
     /// `fn map<A, B>(…)` — type parameters, in order. Each becomes a
     /// **leading implicit parameter at `Type<n>`**, usable as a type inside
@@ -117,6 +123,17 @@ pub struct Decl {
     /// Return type of a `fn`, statement of a `theorem`.
     pub result: Ty,
     pub body: Block,
+    pub span: Span,
+}
+
+/// `vec.map` — the dotted name of an elaboration slot. Two segments: the
+/// family and the slot within it. The vocabulary is the elaborator's
+/// ([`crates/elab/src/slots.rs`]), so the parser only shapes it — an unknown
+/// path is a *registration* diagnostic, where the known ones can be listed.
+#[derive(Debug, Clone)]
+pub struct SlotPath {
+    pub family: String,
+    pub name: String,
     pub span: Span,
 }
 
