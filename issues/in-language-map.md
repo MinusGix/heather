@@ -1,6 +1,6 @@
 ---
 title: First in-language derived artifact: map, via a quotation slice and an evaluation hook
-status: open
+status: closed
 labels: [metaprogramming,frontend,elaboration,kernel,design]
 created: 2026-08-02
 updated: 2026-08-02
