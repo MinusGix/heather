@@ -293,6 +293,13 @@ fn expr_as_ty(e: &Expr) -> Option<Ty> {
         ExprKind::TyLit(t) => return Some((**t).clone()),
         ExprKind::Var(name) if name == "Nat" => TyKind::Nat,
         ExprKind::Var(name) => TyKind::Named { name: name.clone(), args: vec![] },
+        // `Fin(n)`, as the parser's own `expr_as_ty` reads it — the two
+        // readings must not drift (docs/surface-fin-indexing-design.md §2.2).
+        ExprKind::App { head, args, explicit: false }
+            if matches!(&head.kind, ExprKind::Var(s) if s == "Fin") && args.len() == 1 =>
+        {
+            TyKind::Fin(Box::new(args[0].clone()))
+        }
         // `List<Nat>` — the one expression form that already carries type
         // arguments (`ExprKind::TyApp`, ast.rs).
         ExprKind::TyApp { head, args } => match &head.kind {
@@ -1148,6 +1155,15 @@ impl Elaborator {
                     level,
                 ))
             }
+            // `Fin(n)` — the kernel's `Type::Fin` directly
+            // (docs/surface-fin-indexing-design.md §2.3). The level is
+            // `Zero` **unconditionally**: `Fin` is the one extension former
+            // that carries no level (`term.rs:153`), so there is no `Fin` at
+            // level 1 to write and no way to ask for one.
+            TyKind::Fin(len) => {
+                let len_t = self.elab_check(cx, len, &Type::Nat, &Level::Zero)?;
+                Ok((Type::Fin { len: Rc::new(len_t) }, Level::Zero))
+            }
             // `(x: A) -> B` / `A -> B`. The level rule is `max(dom, cod)`,
             // the same one `elab_decl_inner` uses to close a declaration's
             // telescope — a written function type and a `fn`'s own type must
@@ -1280,6 +1296,35 @@ impl Elaborator {
             // literal's own length against a neutral one is unification, not
             // a check (docs/container-fields.md §2.2).
             ExprKind::VecLit(elems) => self.elab_vec_lit(cx, elems, expected, e.span),
+            // `FZ` / `FS(j)` against an expected `Fin`. Checking-only, like
+            // `refl` and a vector literal: `FZ` inhabits `Fin(Succ k)` for
+            // *every* `k`, and nothing in the term names one
+            // (docs/surface-fin-indexing-design.md §3.1). Keyed on the
+            // expected type and never on the name, so a user inductive with a
+            // constructor called `FZ`/`FS` is untouched — hence the
+            // `ctor_here` guard.
+            ExprKind::Var(name)
+                if name == "FZ"
+                    && !self.shadowed(cx, name)
+                    && self.ctor_here(cx, name).is_none() =>
+            {
+                self.elab_fin_index(cx, None, expected, e.span)
+            }
+            ExprKind::App { args, .. }
+                if matches!(e.as_named(), Some(("FS", _, false)))
+                    && !self.shadowed(cx, "FS")
+                    && self.ctor_here(cx, "FS").is_none() =>
+            {
+                let [j] = args.as_slice() else {
+                    return err("`FS` takes exactly one argument, an index", e.span);
+                };
+                self.elab_fin_index(cx, Some(j), expected, e.span)
+            }
+            // A numeral at a `Fin` type is the iterated index (§3.3): `xs[2]`
+            // is the spelling anybody reaches for first, and without this it
+            // means `xs[FS(FS(FZ))]`. Falls through to the ordinary `Nat`
+            // reading at every other expected type.
+            ExprKind::Num(t) => self.elab_num_check(cx, *t, e, expected, e.span),
             // A lambda against an expected Π: the *expected* domain is what
             // the binder is pushed with, so the emitted annotation always
             // matches the type it is checked against. A written annotation is
@@ -1501,7 +1546,24 @@ impl Elaborator {
                 }
                 Ok((t, Type::Nat, Level::Zero))
             }
+            // `FZ` cannot infer: it inhabits `Fin(Succ k)` for every `k`
+            // (docs/surface-fin-indexing-design.md §3.1). Said only where the
+            // name is neither shadowed nor some declaration's constructor.
+            ExprKind::Var(name)
+                if name == "FZ"
+                    && !self.shadowed(cx, name)
+                    && self.ctor_here(cx, name).is_none() =>
+            {
+                err(
+                    "`FZ` needs an expected `Fin` type (checking position, or an \
+                     annotated `let`)",
+                    e.span,
+                )
+            }
             ExprKind::Var(name) => self.resolve(cx, name, e.span),
+            // `xs[i]` — infers, since the element type comes off the receiver
+            // (docs/surface-fin-indexing-design.md §5.2).
+            ExprKind::Index { recv, idx } => self.elab_vec_nth(cx, recv, idx, e.span),
             ExprKind::Dot { recv, name, args } => {
                 match self.resolve_dot(cx, recv, name, args, e.span)? {
                     DotResolution::Project(t, ty, l) => match args {
@@ -1607,6 +1669,42 @@ impl Elaborator {
                     };
                     let arg = self.elab_check(cx, arg, &Type::Nat, &Level::Zero)?;
                     return Ok((Term::Succ(Rc::new(arg)), Type::Nat, Level::Zero));
+                }
+                // `Fin(n)` where a *term* is expected: the type's code,
+                // `TmFin n : Ty 0` — which is what makes
+                // `fn Idx(n: Nat) -> Type { Fin(n) }` an ordinary `fn`
+                // (docs/surface-fin-indexing-design.md §2.3). Guarded by
+                // shadowing, so a local binder or a global still wins *in
+                // expression position*, as for `map`/`head`/`cons`; type
+                // position is unguarded, and that asymmetry is deliberate.
+                if name == "Fin" && !self.shadowed(cx, name) {
+                    let [arg] = args.as_slice() else {
+                        return err(
+                            "`Fin` takes exactly one argument, a length at `Nat`",
+                            e.span,
+                        );
+                    };
+                    let len = self.elab_check(cx, arg, &Type::Nat, &Level::Zero)?;
+                    return Ok((
+                        Term::TmFin { len: Rc::new(len) },
+                        Type::Ty(Level::Zero),
+                        Level::constant(1),
+                    ));
+                }
+                // `FS(j)` is checking-only, like `refl` and a vector literal:
+                // it inhabits `Fin(Succ k)` for every `k`, and nothing in the
+                // term names one (§3.1). Said only where `FS` is not some
+                // other declaration's constructor and is not shadowed, so a
+                // user `FS` still resolves.
+                if name == "FS"
+                    && !self.shadowed(cx, name)
+                    && self.ctor_here(cx, name).is_none()
+                {
+                    return err(
+                        "`FS` needs an expected `Fin` type (checking position, or an \
+                         annotated `let`)",
+                        e.span,
+                    );
                 }
                 // `xs.map(f)` / `xs.fold(z, f)` — the vector eliminators
                 // (docs/container-fields.md §4.2). These are Rust rather than
@@ -1859,6 +1957,49 @@ impl Elaborator {
             return self
                 .elab_match_data(cx, &ind, arms, scrut_t, &head, scrut_lvl, motive, mlvl, span);
         }
+        // `Fin(n)` (docs/surface-fin-indexing-design.md §4.2). Tested on the
+        // **raw** scrutinee type for the same reason `indexed_of_at` is: the
+        // whnf of `Fin(Succ k)` is a bare `Type::Sum`, which carries no hint
+        // that its arms should be called `FZ`/`FS`. After the `tag_of` check,
+        // so a declared inductive still wins, and before the `Nat`
+        // fall-through.
+        if let Type::Fin { len } = &*crate::inductive::decoded(scrut_ty) {
+            let len_w = self.whnf_tm(cx, len, span)?;
+            match &*len_w {
+                // `Fin(0) ⇝ Empty⁰` is a whnf step, so `head` is already
+                // `Type::Empty` and `match i { }` *is* `elim_Empty` — the arm
+                // below, unchanged (§1.1 finding 1). Nothing to write here.
+                Term::Zero => {}
+                Term::Succ(k) => {
+                    return self.elab_match_fin(cx, arms, scrut_t, k, motive, mlvl, span);
+                }
+                // Permanent, not a gap: `Fin` has no eliminator of its own
+                // (§1.2), so at an open length there is no canonical form to
+                // case on. The message names the fix rather than the
+                // limitation, and the fix is the shape `nth` itself has.
+                _ => {
+                    let here = match &*len_w {
+                        Term::Var(LocalVar(i)) => cx
+                            .names
+                            .len()
+                            .checked_sub(1 + *i as usize)
+                            .and_then(|p| cx.names.get(p))
+                            .map(|n| format!("; here it is `{n}`"))
+                            .unwrap_or_default(),
+                        _ => String::new(),
+                    };
+                    return err(
+                        format!(
+                            "`match` on a `Fin` needs its length to reduce to `0` or a \
+                             successor{here}. Recurse on the length first \
+                             (`match n as \u{3bb} z => \u{2026}`), which is how the index \
+                             becomes matchable"
+                        ),
+                        span,
+                    );
+                }
+            }
+        }
         if let Type::Empty { level: empty_lvl } = &head {
             // An inductive with no constructors: absurdity elimination. All of
             // them share the kernel type `Empty` (§3.3), and none has an
@@ -1967,6 +2108,184 @@ impl Elaborator {
             step: Rc::new(step),
             scrut: Rc::new(scrut_t),
         })
+    }
+
+    /// `match` on `Fin(Succ k)`: the kernel's `Case` over the sum that
+    /// `Fin(Succ k)` unfolds to, with the arms named `FZ` and `FS(j)`
+    /// (docs/surface-fin-indexing-design.md §4.2).
+    ///
+    /// `Fin` has no eliminator of its own — it is a former whose whnf is
+    /// `Unit⁰ + Fin(k)` — so the summands are written **unfolded** here while
+    /// the scrutinee's own type stays the folded `Fin(Succ k)`, and conversion
+    /// bridges the two. That is the same asymmetry `term::nth` lives with.
+    #[allow(clippy::too_many_arguments)]
+    fn elab_match_fin(
+        &self,
+        cx: &Cx,
+        arms: &[Arm],
+        scrut_t: Term,
+        k: &Rc<Term>,
+        motive: Type,
+        mlvl: Level,
+        span: Span,
+    ) -> R<Term> {
+        let mut fz: Option<&Arm> = None;
+        let mut fs: Option<&Arm> = None;
+        for a in arms {
+            let slot = match a.ctor.as_str() {
+                "FZ" => &mut fz,
+                "FS" => &mut fs,
+                other => {
+                    return err(format!("`{other}` is not an index of a `Fin`"), a.span)
+                }
+            };
+            if slot.replace(a).is_some() {
+                return err(format!("duplicate arm for `{}`", a.ctor), a.span);
+            }
+        }
+        let (Some(fz), Some(fs)) = (fz, fs) else {
+            return err("`match` on a `Fin` needs both an `FZ` and an `FS(i)` arm", span);
+        };
+        if !fz.binders.is_empty() {
+            return err("`FZ` binds no fields", fz.span);
+        }
+        let [j] = fs.binders.as_slice() else {
+            return err("`FS` binds exactly one field, the predecessor index", fs.span)
+        };
+        let (lhs, rhs) = (Type::Unit { level: Level::Zero }, Type::Fin { len: Rc::clone(k) });
+        // The two arm types, as the kernel's `Case` rule states them:
+        // `M[inl x/z]` in `Γ, x : Unit⁰` and `M[inr y/z]` in `Γ, y : Fin(k)`.
+        let injected = |left: bool| {
+            let (lhs, rhs) = (Rc::new(lhs.shift_local(1)), Rc::new(rhs.shift_local(1)));
+            let val = Rc::new(Term::Var(LocalVar(0)));
+            let (lhs_level, rhs_level) = (Level::Zero, Level::Zero);
+            if left {
+                Term::Inl { lhs_level, rhs_level, lhs, rhs, val }
+            } else {
+                Term::Inr { lhs_level, rhs_level, lhs, rhs, val }
+            }
+        };
+        // The `FZ` arm binds nothing at the surface but the kernel's `case_l`
+        // binds one local, so a `#`-prefixed dummy stands in — the convention
+        // `build_absurd` already uses for `#y`/`#p`. Unspellable, and filtered
+        // out of the goal listing.
+        let mut lcx = cx.clone();
+        lcx.push("#fz".to_string(), lhs.clone(), Level::Zero);
+        let left_ty =
+            motive.apply_local(&embed(&cx.gamma, 1).extended(Rc::new(injected(true))));
+        let case_l = self.elab_check(&lcx, &fz.body, &left_ty, &mlvl)?;
+        let mut rcx = cx.clone();
+        rcx.push(j.clone(), rhs.clone(), Level::Zero);
+        let right_ty =
+            motive.apply_local(&embed(&cx.gamma, 1).extended(Rc::new(injected(false))));
+        let case_r = self.elab_check(&rcx, &fs.body, &right_ty, &mlvl)?;
+        Ok(Term::Case {
+            lhs_level: Level::Zero,
+            rhs_level: Level::Zero,
+            motive_level: mlvl,
+            lhs: Rc::new(lhs),
+            rhs: Rc::new(rhs),
+            motive: Rc::new(motive),
+            case_l: Rc::new(case_l),
+            case_r: Rc::new(case_r),
+            scrut: Rc::new(scrut_t),
+        })
+    }
+
+    /// `FZ` (`succ_of: None`) or `FS(j)` against an expected `Fin`
+    /// (docs/surface-fin-indexing-design.md §3.2).
+    ///
+    /// `decoded` and not `whnf`, for exactly the reason `elab_vec_lit` gives:
+    /// `Fin` *reduces on its length*, so the whnf of `Fin(Succ k)` is the sum
+    /// this arm exists to recognise the folded form of. The length alone is
+    /// reduced, and that is what the table dispatches on.
+    fn elab_fin_index(
+        &self,
+        cx: &Cx,
+        succ_of: Option<&Expr>,
+        expected: &Type,
+        span: Span,
+    ) -> R<Term> {
+        let what = if succ_of.is_some() { "FS" } else { "FZ" };
+        let expected = &*crate::inductive::decoded(expected);
+        let Type::Fin { len } = expected else {
+            return err(format!("`{what}` needs an expected `Fin` type"), span);
+        };
+        let len_w = self.whnf_tm(cx, len, span)?;
+        let Term::Succ(k) = &*len_w else {
+            return if matches!(&*len_w, Term::Zero) {
+                err("`Fin(0)` is empty, so it has no index", span)
+            } else {
+                err(
+                    "the length has to reduce to a successor here; `Fin(n)` at an open \
+                     `n` has no canonical index",
+                    span,
+                )
+            };
+        };
+        // The annotations are written **folded** (`Fin(k)`, not its unfolded
+        // sum): the kernel converts the two, and the folded form is what a
+        // goal reads back as — the property `wf.rs`'s `fin_index` exists to
+        // preserve.
+        let (lhs_level, rhs_level) = (Level::Zero, Level::Zero);
+        let lhs = Rc::new(Type::Unit { level: Level::Zero });
+        let rhs = Rc::new(Type::Fin { len: Rc::clone(k) });
+        match succ_of {
+            None => Ok(Term::Inl {
+                lhs_level,
+                rhs_level,
+                lhs,
+                rhs,
+                val: Rc::new(Term::Triv { level: Level::Zero }),
+            }),
+            Some(j) => {
+                let j_t = self.elab_check(cx, j, &rhs, &Level::Zero)?;
+                Ok(Term::Inr { lhs_level, rhs_level, lhs, rhs, val: Rc::new(j_t) })
+            }
+        }
+    }
+
+    /// A numeral in checking position. At a `Fin`-headed expected type it is
+    /// the iterated index (docs/surface-fin-indexing-design.md §3.3);
+    /// everywhere else it is the `Nat` it always was.
+    ///
+    /// The `Fin` case is a reuse and not new code: `wf::fin_index` already
+    /// builds "index `t` of `Fin(Succ^m(base))`" with the folded annotations,
+    /// and emitting *literally* the term it emits is free adequacy — the
+    /// surface numeral and the elaborator's own container indices are the same
+    /// syntax, so nothing can drift between them.
+    fn elab_num_check(
+        &self,
+        cx: &Cx,
+        t: u64,
+        e: &Expr,
+        expected: &Type,
+        span: Span,
+    ) -> R<Term> {
+        if let Type::Fin { len } = &*crate::inductive::decoded(expected) {
+            // Peel `t + 1` successors off the length; the residue is the base
+            // `fin_index` annotates its tails with.
+            let mut base = Rc::clone(len);
+            for peeled in 0..=t {
+                let w = self.whnf_tm(cx, &base, span)?;
+                let Term::Succ(pred) = &*w else {
+                    return err(
+                        format!(
+                            "`{t}` is not an index of this `Fin`: a numeral here needs the \
+                             length to reduce to at least {} successor(s), and this one \
+                             reduces to {peeled}",
+                            t + 1
+                        ),
+                        span,
+                    );
+                };
+                base = Rc::clone(pred);
+            }
+            let t = t as usize;
+            return Ok(wf::fin_index(t, t + 1, &base));
+        }
+        let (num, _, _) = self.elab_infer(cx, e)?;
+        Ok(num)
     }
 
     /// Is `scrut` (already elaborated) exactly one of the enclosing
@@ -2683,6 +3002,53 @@ impl Elaborator {
         ))
     }
 
+    /// `xs[i]` — the kernel's `nth` schema
+    /// (docs/surface-fin-indexing-design.md §5.2). Modelled on
+    /// [`Self::elab_vec_fold`], and inferring rather than checking: the
+    /// element type comes off the receiver.
+    ///
+    /// The index is **checked** at `Fin(len)` with the receiver's own length,
+    /// which is what makes an index of the wrong vector's length a diagnostic
+    /// rather than a silent coercion.
+    fn elab_vec_nth(
+        &self,
+        cx: &Cx,
+        recv: &Expr,
+        idx: &Expr,
+        span: Span,
+    ) -> R<(Term, Type, Level)> {
+        let (xs_t, xs_ty, _) = self.elab_infer(cx, recv)?;
+        // As in `elab_vec_map`: decode a coded `Vec`, and no further.
+        let xs_ty = &*crate::inductive::decoded(&xs_ty);
+        let Type::Vec { level: vl, elem, len } = xs_ty else {
+            return err("an index needs a vector receiver", span);
+        };
+        let idx_t =
+            self.elab_check(cx, idx, &Type::Fin { len: Rc::clone(len) }, &Level::Zero)?;
+        // The evaluation hook, as in `elab_vec_map`/`elab_vec_fold`: `vec.nth`
+        // has no template yet (`issues/quotation-stage-artifacts.md`), so this
+        // is the *silent decline* path today and the routing the port round
+        // inherits. The kernel schema stays the oracle and the fallback.
+        if let Some(t) = self.try_code_template(
+            cx,
+            Slot::VecNth,
+            &[
+                ("A", Ingredient::Type { level: vl, ty: elem }),
+                ("k", Ingredient::Term((**len).clone())),
+                ("v", Ingredient::Term(xs_t.clone())),
+                ("i", Ingredient::Term(idx_t.clone())),
+            ],
+            span,
+        )? {
+            return Ok((t, (**elem).clone(), vl.clone()));
+        }
+        Ok((
+            nth(vl, elem, len, Rc::new(xs_t), Rc::new(idx_t)),
+            (**elem).clone(),
+            vl.clone(),
+        ))
+    }
+
     /// The self-call over a container binder: `tabulate(len, λ(i : Fin len).
     /// ih (inr^m i))` (`docs/container-fields.md` §4.2).
     ///
@@ -2794,13 +3160,35 @@ impl Elaborator {
         // Phase 2: an independent motive tabulates into a vector of results.
         if let Some(result) = &c.result {
             let result = result.shift_local(by);
+            let ty = Type::Vec {
+                level: c.mlvl.clone(),
+                elem: Rc::new(result.clone()),
+                len: Rc::clone(&len_rc),
+            };
+            // The evaluation hook, as in `elab_vec_map`/`elab_vec_fold` — the
+            // call `docs/meta-def-registration-design.md` §9 says this site
+            // gains once the surface can write `Fin` and its indices. No
+            // template claims `vec.tabulate` yet, so today this declines
+            // silently and the schema below runs unchanged.
+            //
+            // Phase 3's `tabulate`s below are deliberately *not* routed: they
+            // build the two endpoints of an `Id` **type**, and a template's
+            // output there would change what the proof is a proof of.
+            if let Some(t) = self.try_code_template(
+                cx,
+                Slot::VecTabulate,
+                &[
+                    ("B", Ingredient::Type { level: &c.mlvl, ty: &result }),
+                    ("k", Ingredient::Term((*len_rc).clone())),
+                    ("f", Ingredient::Term(h.clone())),
+                ],
+                span,
+            )? {
+                return Ok((t, ty, c.mlvl.clone()));
+            }
             return Ok((
                 vec::tabulate(&c.mlvl, &result, &len_rc, Rc::new(h)),
-                Type::Vec {
-                    level: c.mlvl.clone(),
-                    elem: Rc::new(result),
-                    len: len_rc,
-                },
+                ty,
                 c.mlvl.clone(),
             ));
         }
@@ -3743,6 +4131,7 @@ fn count_holes(decl: &Decl) -> u32 {
                 ty(elem, n);
                 expr(len, n);
             }
+            TyKind::Fin(len) => expr(len, n),
             TyKind::Ctx | TyKind::TyCode { .. } | TyKind::Splice { .. } => {}
             TyKind::Code { ty: t, .. } => ty(t, n),
         }
@@ -3775,6 +4164,10 @@ fn count_holes(decl: &Decl) -> u32 {
                 expr(body, n);
             }
             ExprKind::VecLit(elems) => elems.iter().for_each(|x| expr(x, n)),
+            ExprKind::Index { recv, idx } => {
+                expr(recv, n);
+                expr(idx, n);
+            }
             // The receiver counts whether or not `.f` turns out to be a
             // projection: the method fallback re-elaborates it as an argument,
             // and a hole is keyed by span, so one syntactic hole stays one

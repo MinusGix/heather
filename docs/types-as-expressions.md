@@ -58,11 +58,21 @@ The audit, against `crates/kernel/src/term.rs`'s `Type` variants:
 | `Sum` | `TmSum` | yes (multi-constructor inductives) |
 | `W` | `TmW` | yes (tier 2, not yet lowered to) |
 | `Vec` | `TmVec` | yes (`[T; n]`) |
-| `Fin` | `TmFin` | yes |
+| `Fin` | `TmFin` | yes (`Fin(n)`) — **since the surface indexing layer**; before it, the code existed and no syntax did |
 | `Wf` | `TmWf` | yes (tier-1 inductives) |
 | `UPi` | — | **no**: layer m, never writable (surface-universe §7) |
 | `SEq` / `SEmpty` | — | no: `crates/elab` never builds one |
 | `GlobalTy` | — | no: `crates/elab` never builds one |
+
+> The right-hand column means *writable in source text*. The `Fin` row said
+> "yes" for a phase on the strength of `code_of` covering `Type::Fin`, which is
+> a fact about the middle column; no parse produced a `Type::Fin` until
+> `docs/surface-fin-indexing-design.md` landed
+> (`issues/surface-fin-indexing.md`, discovered in
+> `docs/meta-def-registration-design.md` §4.4). The distinction is worth
+> keeping in view for the three `no` rows, which are `no` for the *opposite*
+> reason — no code — and for `W`, whose "yes (tier 2, not yet lowered to)" is a
+> third status again.
 
 **Finding: every surface-writable type former has a code.** The three
 uncovered variants are unreachable from any source text — `UPi` by the

@@ -792,6 +792,9 @@ fn scan_splices(e: &Expr, menv: &MetaEnv, out: &mut Vec<(String, Span)>) -> R<()
                 walk_ty(elem, menv, out)?;
                 scan_splices(len, menv, out)
             }
+            // `Fin($k)`: the length is an expression, so a splice inside it
+            // hoists like any other (docs/surface-fin-indexing-design.md §6).
+            TyKind::Fin(len) => scan_splices(len, menv, out),
             TyKind::Fn { dom, cod, .. } => {
                 walk_ty(dom, menv, out)?;
                 walk_ty(cod, menv, out)
@@ -841,6 +844,11 @@ fn scan_splices(e: &Expr, menv: &MetaEnv, out: &mut Vec<(String, Span)>) -> R<()
             scan_splices(body, menv, out)
         }
         ExprKind::VecLit(elems) => elems.iter().try_for_each(|x| scan_splices(x, menv, out)),
+        // `$xs[$i]` — both sides are ordinary expressions.
+        ExprKind::Index { recv, idx } => {
+            scan_splices(recv, menv, out)?;
+            scan_splices(idx, menv, out)
+        }
         ExprKind::Match { scrut, motive, arms } => {
             scan_splices(scrut, menv, out)?;
             if let Some(m) = motive {

@@ -358,6 +358,15 @@ fn a_permuted_template_still_computes() {
 //
 // The corresponding failures now happen at the declaration, and every one of
 // them is tested above.
+//
+// A third status, recorded by the surface indexing round
+// (docs/surface-fin-indexing-design.md §7 item 15): `vec.tabulate` and
+// `vec.nth` now have live *use sites* — `elab_container_ih` and `xs[i]` — and
+// still no template, so the only path they exercise is the silent decline
+// below. A `for vec.nth` template whose payload disagrees with the slot is
+// already rejected by the registration check above, exactly as `vec.map`'s is;
+// that path first becomes *reachable* when the port round writes one
+// (`issues/quotation-stage-artifacts.md`), and the suite grows a case then.
 
 // -- declines stay silent ---------------------------------------------------
 

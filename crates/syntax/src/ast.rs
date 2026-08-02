@@ -265,6 +265,16 @@ pub enum TyKind {
     /// and no encoding (docs/container-fields.md §2.1). The length is an
     /// expression checked at `Nat`.
     Vec { elem: Box<Ty>, len: Box<Expr> },
+    /// `Fin(n)` — the kernel's `Type::Fin`, the type of indices below `n`. A
+    /// *primitive* indexed type for the same reason [`TyKind::Vec`] is: a
+    /// kernel former rather than a user declaration, so it gets a node rather
+    /// than an encoding (docs/surface-fin-indexing-design.md §2.1). The length
+    /// is an expression checked at `Nat`.
+    ///
+    /// No parser rule of its own: `Fin(n)` reaches this through `expr_as_ty`,
+    /// which claims the *name* `Fin` exactly as it claims `Nat` — so `Fin` is
+    /// a reserved type-former name in type position (§2.2).
+    Fin(Box<Expr>),
     /// `(x: A) -> B` (dependent) or `A -> B` (`binder: None`).
     /// Right-associative; one binder per parenthesis group, so `(x: A) (y: B)
     /// -> C` is written `(x: A) -> (y: B) -> C`
@@ -439,6 +449,13 @@ pub enum ExprKind {
     /// desugaring survives as the fallback for every non-field name, which is
     /// what keeps `p.sym()`, `p.inj(1)` and `xs.map(f)` working unchanged.
     Dot { recv: Box<Expr>, name: String, args: Option<Vec<Expr>> },
+    /// `xs[i]` — indexing a vector at a `Fin` index
+    /// (docs/surface-fin-indexing-design.md §5). A **postfix** form, produced
+    /// in `postfix`'s loop beside `Dot` and the call `(`, so `[1,2,3][0]` and
+    /// `xs[i].foo` chain in the order written. Both prefix readings of `[` —
+    /// `[T; n]` in type position, a vector literal in expression position —
+    /// are unaffected: `[` is disambiguated by position, never by lookahead.
+    Index { recv: Box<Expr>, idx: Box<Expr> },
     /// `D { f: e, … }` or `D<T, …> { f: e, … }` — a record literal
     /// (docs/surface-records.md §6). Fields may be written in any order; they
     /// are permuted into declaration order in front of the ordinary tier-0

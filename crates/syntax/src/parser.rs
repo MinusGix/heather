@@ -140,6 +140,18 @@ fn expr_as_ty(e: &Expr) -> Ty {
         // the name is in fact a type is the elaborator's call.
         ExprKind::Var(s) if s == "Nat" => TyKind::Nat,
         ExprKind::Var(s) => TyKind::Named { name: s.clone(), args: vec![] },
+        // `Fin(n)` — the kernel's `Type::Fin`, claimed by *name* exactly as
+        // `Nat` is, and so reserved in type position
+        // (docs/surface-fin-indexing-design.md §2.2). It arrives here as an
+        // ordinary application because `ty_atom`'s `D<A>` rule declines a `(`
+        // and the fall-through parses an expression. Any other arity falls
+        // through to `OfExpr`, where the elaborator's own `Fin` arm says what
+        // the arity is.
+        ExprKind::App { head, args, explicit: false }
+            if matches!(&head.kind, ExprKind::Var(s) if s == "Fin") && args.len() == 1 =>
+        {
+            TyKind::Fin(Box::new(args[0].clone()))
+        }
         // `Type<n>` and `List<Nat>` — the two forms `atom` already parses with
         // type syntax inside them, so reading them back costs nothing.
         ExprKind::Univ { level } => TyKind::Univ { level: *level },
@@ -1112,6 +1124,23 @@ impl Parser {
                     let span = e.span.join(end);
                     e = Expr {
                         kind: ExprKind::App { head: Box::new(e), args, explicit: false },
+                        span,
+                    };
+                }
+                // `xs[i]` — indexing (docs/surface-fin-indexing-design.md §5.1).
+                // A pure extension: `[` opens a type (`[T; n]`) or a vector
+                // literal only in *prefix* position, and it is in the follow
+                // set of no expression production (statements end with `;`,
+                // blocks with `}`, elements and arms with `,`), so an
+                // expression followed by `[` was a parse error everywhere
+                // before this arm. No lookahead, no backtracking.
+                TokKind::LBracket => {
+                    self.bump();
+                    let idx = self.with_record_lit(false, |p| p.expr())?;
+                    let end = self.expect(&TokKind::RBracket, "`]` (an index)")?;
+                    let span = e.span.join(end);
+                    e = Expr {
+                        kind: ExprKind::Index { recv: Box::new(e), idx: Box::new(idx) },
                         span,
                     };
                 }

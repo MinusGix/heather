@@ -868,7 +868,7 @@ fn succ_n(k: usize, base: &Term) -> Term {
 /// annotated with `Fin` itself rather than its unfolded sum — `Fin(S k) ⇝
 /// Unit⁰ + Fin(k)`, so the kernel converts the two, and the folded form is
 /// what a goal reads back as.
-fn fin_index(t: usize, m: usize, base: &Term) -> Term {
+pub(crate) fn fin_index(t: usize, m: usize, base: &Term) -> Term {
     let unit = || Rc::new(Type::Unit { level: Level::Zero });
     let fin = |k: usize| Rc::new(Type::Fin { len: Rc::new(succ_n(k, base)) });
     let mut v = Term::Inl {

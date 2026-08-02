@@ -1988,6 +1988,9 @@ fn expr_mentions(e: &Expr, name: &str) -> bool {
         // A motive body in type syntax: read it as the type it is.
         ExprKind::TyLit(t) => occurs(t, name).is_some(),
         ExprKind::VecLit(es) => es.iter().any(|x| expr_mentions(x, name)),
+        ExprKind::Index { recv, idx } => {
+            expr_mentions(recv, name) || expr_mentions(idx, name)
+        }
         ExprKind::Dot { recv, args, .. } => {
             expr_mentions(recv, name)
                 || args.iter().flatten().any(|a| expr_mentions(a, name))
@@ -2028,6 +2031,11 @@ fn occurs(t: &Ty, name: &str) -> Option<Span> {
         // (§3.1); an occurrence deeper inside the element type is nested and
         // still rejected.
         TyKind::Vec { elem, .. } => occurs(elem, name),
+        // `Fin(n)` has no element type — only a length, which is a *term*. A
+        // mention of the declaration there could not be well-typed, but this
+        // walk is conservative by design (see the doc comment): scanning it
+        // costs at worst a rejection, and skipping it would cost positivity.
+        TyKind::Fin(len) => expr_mentions(len, name).then_some(t.span),
         // Modal types (layer m) cannot be field types — they are rejected at
         // elaboration; conservative answers here keep the walkers total.
         TyKind::Ctx | TyKind::TyCode { .. } => None,
@@ -2065,7 +2073,9 @@ pub(crate) fn reject_function_fields(d: &InductiveDecl) -> Result<(), crate::Ela
             // Not a `Π` by shape, so not what this check is looking for; a
             // self-occurrence inside it is `occurs`' business.
             TyKind::OfExpr(..) => None,
-            TyKind::Nat | TyKind::Eq(..) | TyKind::Univ { .. } => None,
+            // `Fin(n)` is not a `Π` by shape and its length is a term, so
+            // there is no function field to find here.
+            TyKind::Nat | TyKind::Eq(..) | TyKind::Univ { .. } | TyKind::Fin(_) => None,
             // Modal types are rejected as field types at elaboration; none of
             // them is a `Π` by shape.
             TyKind::Ctx | TyKind::TyCode { .. } | TyKind::Splice { .. } => None,

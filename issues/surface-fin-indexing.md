@@ -1,6 +1,6 @@
 ---
 title: Surface indexing layer: Fin(n) as a type, index constructors, xs[i]
-status: open
+status: closed
 labels: [frontend,elaboration]
 created: 2026-08-02
 updated: 2026-08-02
@@ -46,3 +46,4 @@ table lists `Fin` as "reachable from the surface", which is true of its
   permanent limitation recorded as a rule: `match` on `Fin` at a neutral
   length is unwritable (no eliminator of its own), diagnostic names the
   recurse-on-the-length fix.
+- 2026-08-02: Implementation landed (docs/surface-fin-indexing-design.md, all of §9's 'this round'): TyKind::Fin + both expr_as_ty arms, FZ/FS(i) checking-only with the full §3.2 table, numerals at Fin via wf::fin_index, match on Fin (Zero rides the existing ElimEmpty path; neutral length gets the permanent recurse-on-the-length diagnostic), xs[i] through Slot::VecNth with term::nth as oracle/fallback, elab_container_ih phase 2 through Slot::VecTabulate (phase 3 deliberately unrouted: it builds Id endpoints, where a template would change what the proof proves). 24-test surface_fin.rs, types-as-expressions.md row corrected. scripts/test: 825/825. Deviations from the doc, recorded there in spirit: decoded-not-whnf keying (whnf of Fin(Succ k) is a bare Sum, so the doc's own Succ rows needed decoded + whnf on the length). Findings: the §9 nth_code sketch's FS(j) binder will not parse ([[j-binder-parse-trap]] — port round renames it); annotated let is not an available checking position ([[annotated-let-swallows-the-equals]] falsifies §3.2's list); the full nth payload shape elaborates and kernel-checks end to end (test a_match_on_fin_inside_a_match_on_the_length), so the port round should be .hthr-only as scoped.
