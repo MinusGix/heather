@@ -1,6 +1,6 @@
 ---
 title: "Pin the type-former face of the head-only strip gap (Vec/Fin/El at a transported canonical index)"
-status: open
+status: closed
 labels: [kernel,conversion,testing]
 created: 2026-08-03
 updated: 2026-08-03
@@ -36,3 +36,7 @@ Owed, next time someone is in `crates/kernel/tests/seq_transp.rs`:
 Generator-side consequence recorded on [[indexed-families]]: the 2b rule
 "never emit a cast at convertible endpoints" must be read as covering
 `Vec`/`Wf` **index** and code positions, not only value-level casts.
+
+## Log
+
+- 2026-08-03: Both owed tests landed, plus a third (managed sweep round): crates/kernel/tests/seq_transp.rs — vec_at_a_transported_canonical_length_does_not_strip (item 1, the literal-length axis, paired with the head-position positive it shadows), fin_at_a_transported_canonical_length_does_not_strip (item 2), and el_at_a_transported_canonical_code_does_not_strip (the third position, taken too since its mechanism differs: a code index at sEq^1(Ty 0; ...) with an elim_Nat stuck endpoint). Each section-comments that it pins an INCOMPLETENESS (sec 22.4 / sec 22.3), and that a failure means the kernel started accepting — a discovery, not a test bug. One cause, three positions, now pinned from all three angles.

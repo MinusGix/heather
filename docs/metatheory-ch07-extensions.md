@@ -1650,6 +1650,22 @@ Two rows deserve their reading spelled out.
   head only** (`conv.rs:950–955`, inside `Conv::tm_w`, after the δ stage).
   Call it `⇓ₕ`.
 
+> **Addendum (2026-08-03, from the sweep's §19 property round).** The
+> algorithm differs from `⇝ₛ` *twice*, not once: besides stripping head-only,
+> `reduce.rs` applies the `transp`-proof congruence **unconditionally**
+> (`reduce.rs:390–407` — `srefl` head ⇒ β, otherwise reduce the proof, no
+> endpoint query), i.e. it implements the unrestricted congruence of `⇝`,
+> not §19.1's restricted half of `⇝ₛ`. The two differences cancel: §19.1's
+> restriction exists solely so the strip and the congruence never overlap
+> (§19.3), and `reduce.rs` has no strip rule, so its relation is
+> deterministic without it — the proof reductions the restriction forbids
+> are exactly the ones the strip would have pre-empted, and here nothing
+> pre-empts them. Consequence for testing: determinacy of `⇝ₛ` has no
+> step-level kernel counterpart, so
+> `seq_transp.rs::strip_and_proof_reduction_have_complementary_side_conditions`
+> states it as a property of *conversion* (all proof faces of a strippable
+> `transp` identify with the payload; none does at inconvertible endpoints).
+
 `⇓ₕ` computes `⇝ₛ`-normal forms for terms whose strippable transports all
 sit at the head, and ordinary `⇝`-normal forms otherwise. It is a strict
 under-approximation of `⇝ₛ*`, and the difference is not an accident of
