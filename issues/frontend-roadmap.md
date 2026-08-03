@@ -94,7 +94,9 @@ magic inherits the magic.
     is route 1). The indexed former (route 4) lost the prototype comparison
     (2b passed the setoid bar 2026-07-29, zero new kernel machinery) and
     stays the unexercised fallback.
-15. **[[cli-check-diagnostics]]** — promoted from "cheap and separable"
+15. ✅ **[[cli-check-diagnostics]]** — landed 2026-07-30 (`heather check`,
+    snippets, per-declaration recovery). Was promoted from "cheap and
+    separable"
     (2026-07-27): the IR round is the first that writes substantial Heather
     files rather than test snippets, and checking them only through a Rust
     test harness is friction on exactly that round. Also the harness
