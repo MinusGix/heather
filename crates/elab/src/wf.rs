@@ -41,22 +41,22 @@ use crate::{embed, err, Alias, Cx, Elaborator, Guard, GuardKind, R};
 ///
 /// where `Γ` is `gamma0` — the *ambient* context of the `match`, which every
 /// substitution below is expressed relative to.
-struct Tel<'a> {
+pub(crate) struct Tel<'a> {
     /// The `match`'s ambient local context.
-    gamma0: &'a LocalCtx,
+    pub gamma0: &'a LocalCtx,
     /// `⟦D⟧`, scoped in `gamma0`.
-    d_ty: &'a Type,
+    pub d_ty: &'a Type,
     /// `l`: the declaration's level, which is also its shape's.
-    level: Level,
+    pub level: Level,
     /// `l'`: the motive's level.
-    mlvl: Level,
+    pub mlvl: Level,
     /// `M`, over `(gamma0, z : ⟦D⟧)`.
-    motive: Rc<Type>,
+    pub motive: Rc<Type>,
     cs_ty: Type,
     ih_ty: Type,
     step_ty: Type,
     /// The declaration's tag spine, scoped in `gamma0`.
-    spine: Spine,
+    pub spine: Spine,
 }
 
 impl Tel<'_> {
@@ -94,9 +94,21 @@ impl Tel<'_> {
 /// eliminator — the telescope, the case tree, the `cs`/`ih` generalization
 /// and the two trailing applications — and differ only in the body at each
 /// constructor.
-enum Branches<'a> {
+pub(crate) enum Branches<'a> {
     /// `match`: the surface arms, already in declaration order (§6.3).
     Arms(&'a [&'a Arm]),
+    /// A body the caller builds, for an eliminator on this declaration that is
+    /// not a `match` on it: the family over a declared index and its derived
+    /// eliminator both case on the *index* type here
+    /// (docs/inductive-indexed-lowering.md §8.2), so the branch body is an
+    /// indexed-family thing and only the `cs`/`ih` threading is tier 1's.
+    ///
+    /// Called as `(bcx, tel, i, value, d_body, body_ty)` with `bcx` the branch
+    /// context, `i` the constructor, `value : ⟦cᵢ⟧` and `d_body` its depth past
+    /// `gamma0`, and `body_ty` the obligation. By the branch convention the
+    /// refined `cs'` is `Var 1` and `ih'` is `Var 0` in `bcx`.
+    #[allow(clippy::type_complexity)]
+    Custom(&'a dyn Fn(&Cx, &Tel, usize, &Rc<Term>, u32, &Type) -> R<Term>),
     /// Injectivity at a recursive field (§7.2): the `t`-th child at
     /// constructor `i`, and the totality default elsewhere. It has to go
     /// through the generalization too — reading a child out of `cs` needs the
@@ -276,7 +288,7 @@ impl Elaborator {
     /// and everything unfolds. That is why the generalization is not
     /// stylistic.
     #[allow(clippy::too_many_arguments)]
-    fn build_elim_wf(
+    pub(crate) fn build_elim_wf(
         &self,
         cx: &Cx,
         ind: &Inductive,
@@ -560,6 +572,7 @@ impl Elaborator {
             |t: usize| Rc::new(nth_child(&tel.level, &d_ty_here, m, t, Rc::clone(&cs_var), &base));
 
         let body = match branches {
+            Branches::Custom(f) => f(&bcx, tel, i, &value_here, d_body, &body_ty)?,
             // §7.2: no binders, no guard — just the child, or the default at
             // every other constructor.
             Branches::Child { i: ci, t, default } => {

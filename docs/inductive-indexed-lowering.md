@@ -367,8 +367,13 @@ have shown:
    the `Case` motive** (`Case` at motive `Π cs' ih'. …`, then applied), so
    each branch receives them at its constructor-refined arity. This is
    wf.rs's own recursor device (§6.2 of the Wf lowering doc), reused at
-   motive `Ty l`; the family needs only `ih` threaded, the derived
-   eliminator threads both.
+   motive `Ty l`. The prototype claimed the family needs only `ih`
+   threaded; the generator threads **both** — corrected at landing
+   (2026-08-03), and not just for economy of reusing wf.rs's device: a
+   *payload* field whose type mentions a recursive pattern variable
+   (`TN(l, r, w: Bal(l), t: Tw(r))`) needs `nth(cs'; ι₀)` inside the
+   family's own branch code, which `ih` alone cannot supply. Pinned by
+   `a_payload_field_at_a_recursive_pattern_variable`.
 2. **Unit η is load-bearing on the index side.** An arm's obligation
    mentions the index constructor rebuilt from branch binders —
    `sup_f(inl u; cs₀)` with `u : Unit` open and `cs₀` at
@@ -381,7 +386,12 @@ have shown:
    *is* the `elim_Nat` binder" instantiates to "*is* the `i`-th projection
    of the index constructor's children" (`nth` at a literal reduces to
    `fst`/`snd` chains). Still no inversion machinery; a `match` arm that
-   binds a pattern variable receives the projection.
+   binds a pattern variable receives the projection. Widened at landing
+   (2026-08-03): a pattern variable may also sit at a **non-recursive
+   (payload) argument** of the index constructor — `Tg : (c: Col) -> Type
+   { TS(n: Nat, x: Nat) : Tg(CS(n)) }` — recovered as a projection of the
+   index constructor's *label* rather than of its children. Without this
+   a flat declared index could only be a bare enum.
 4. **Branching stays free, per-position.** `BNode(l, r, dl: Bal(l),
    dr: Bal(r)) : Bal(SNode(l, r))` draws its two recursive-field codes
    from the *same* threaded `ih` at two `Fin` literals; β fires through
@@ -392,10 +402,26 @@ One classification consequence: at an enum index no recursion is
 *expressible* (there is no recursive index-constructor argument to draw a
 `rec` from), so condition 2 of §3 generalizes verbatim — a recursive field
 must sit at a pattern variable that is a **recursive** argument of the
-index constructor. The generator round for this section remains open:
-parser/classifier acceptance of a declared index head, the family builder
-over `Case`/`elim_Wf`, the arm walk with projection-recovered pattern
-variables, and one nonzero-level case per §10.5.
+index constructor — at an enum index the rejection says so by shape.
+
+**Generator landed 2026-08-03**
+(`crates/elab/tests/indexed_declared_families.rs`, 14 tests): classifier
+acceptance of a declared index head, the family builder over
+`Case`/`elim_Wf` (dispatch on `IdxTy`, with `Nat`'s constructors numbered
+like any declared index's so the primitive case stops being special), the
+arm walk with projection-recovered pattern variables, and the §10.5
+nonzero-level case, all through wf.rs's `build_elim_wf` via one
+`Branches::Custom` variant so the `cs`/`ih` threading exists once. Two
+scheme amendments are recorded inline above (facts 1 and 3). Restrictions
+on the index type itself, each with its own diagnostic and none stated by
+the prototype: un-parameterized, not itself indexed, no container fields,
+and **at least two constructors** — the last load-bearing rather than
+taste, because a one-constructor flat index emits no `Case` node and the
+family would be a bare code with nothing for §10.1's fingerprint to key
+on. One §6 device changed shape: `Guard.rebind` carries one index term
+per descendant (compared by term, like a child), because a branching
+index constructor gives each recursive field its own pattern variable and
+the ih at descendant `t` lives at exactly that one.
 
 ### 8.3 Out of scope, unchanged owners
 
@@ -464,7 +490,13 @@ rather than remembered.
    level canonicalization à la `normalize_levels`, hash-consing that
    rewrites) makes every indexed type unrecognizable, and the symptom is
    "not in the family form" errors far from the cause. If such a pass
-   lands, this recognizer is the first consumer to re-audit.
+   lands, this recognizer is the first consumer to re-audit. **Amplified
+   at declared indices (2026-08-03):** the family head is now three shapes
+   (`elim_Nat`, a `Case` tree, `elim_Wf`), and the tag read *searches* —
+   peeling `Case`/`ElimNat`/`ElimWf`/`Lam`/`App` under a 64-step fuel to
+   find a branch code with a nominal tag, guarded by "motive is `Ty _`"
+   and "the tag resolves to an indexed declaration". The surface a
+   normalizing pass would break is much larger than the `Nat` round's.
 2. **Type identity depends on presentation.** A family type that arrives
    *pre-reduced* (whnf'd at a literal index, upstream of the consumer) has
    lost its index, and constructors/`match` against it are diagnosed, not
@@ -477,13 +509,20 @@ rather than remembered.
    cost note (`docs/inductive-tier1-lowering.md` §7), amplified, because
    indexed types appear *in other types*. Acceptable now; a kernel `def`
    is the eventual fix, and [[frontend-benchmarks]] is where "acceptable"
-   gets a number.
+   gets a number. **Amplified at declared indices (2026-08-03):** a `Wf`
+   index's inlined family is `elim_Wf` plus a `Case` tree plus the
+   `cs`/`ih` threading, at every type occurrence, built twice per instance
+   by the two-pass level computation — `Bal(SNode(l, r))` is a large
+   term, and the kernel-`def` fix matters more here than it did at `Nat`.
 4. **The arm walk exists twice.** `indexed_case_tree`/`elab_indexed_arm`
    mirror `case_tree`/`elab_arm` deliberately (threading the pattern
    variable and the guard through the shared walk would couple what the
    tiers keep separate), which means two places must agree on the
    projection-annotation discipline. A *third* variant is the signal to
-   extract the walk, not to copy it again.
+   extract the walk, not to copy it again. (Status 2026-08-03: still
+   exactly twice — the declared-index round's `idx_case_tree` is on the
+   *index* side and is shared between the family and the eliminator
+   rather than copied, so the trigger has not fired.)
 5. **Uniformly-level-0 tests cannot see a dropped join.** The
    `fields_above_level_zero` test exists because everything else in the
    acceptance suite lives at level 0, where `l ⊔ mlvl = mlvl` hides a
@@ -493,4 +532,13 @@ rather than remembered.
    (`elab_check`'s type-position bridge now reduces before giving up —
    the components of an indexed spine are exactly such `El (TmTy …)`s).
    The rule this generalizes to: every new consumer of the family form
-   keeps one nonzero-level case in its tests.
+   keeps one nonzero-level case in its tests. (The declared-index round
+   kept it: `fields_above_level_zero_at_a_declared_index`, over a
+   branching `Wf` index so the level also flows through `elim_Wf`'s
+   motive.)
+6. **The index type must survive as a declaration.** The family is
+   rebuilt from `Inductive::index_ty` at every use, and the head check is
+   a parse-level `Named` match — an index type reached through an alias
+   or abbreviation rather than by name is not handled. Nothing can hit
+   this today (there is no type-alias form); whichever round adds one
+   re-audits here.

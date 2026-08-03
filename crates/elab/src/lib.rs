@@ -1873,8 +1873,9 @@ impl Elaborator {
                 if let Some((ind, fam)) = self.indexed_of_at(cx, &scrut_ty) {
                     let (binders, body) =
                         motive_lam(m, 2, "write `as \u{3bb} n z => T` (index, then value)")?;
+                    let (ity, ilvl) = self.index_type_of(cx, &ind, e.span)?;
                     let mut mcx = cx.clone();
-                    mcx.push(binders[0].clone(), Type::Nat, Level::Zero);
+                    mcx.push(binders[0].clone(), ity, ilvl);
                     mcx.push(
                         binders[1].clone(),
                         fam.el_at(Term::Var(LocalVar(0)), 1),
@@ -2420,9 +2421,19 @@ impl Elaborator {
         }
         // Which descendant the call goes to, once the decreasing argument has
         // been matched: `Nat` has only one, a `Wf` arm has one per recursive
-        // field, so this is set inside the loop below.
+        // field, so this is set inside the loop below. The decreasing argument
+        // is checked **first** — at a branching index constructor the ih's
+        // index is the *descendant's own* pattern variable, so the rebind
+        // check below has no answer until the descendant is known.
         let mut descendant = 0usize;
-        for (arg, j) in args.iter().zip(positions) {
+        let order = {
+            let mut o: Vec<usize> = (0..args.len()).collect();
+            if let Some(p) = positions.iter().position(|&j| j == g.dec) {
+                o.swap(0, p);
+            }
+            o
+        };
+        for (arg, j) in order.iter().map(|&k| (&args[k], positions[k])) {
             // Compare by *binder* (`Nat`) or by *term* (`Wf`), never by name,
             // so shadowing cannot fake a guarded call.
             let (arg_t, _, _) = self.elab_infer(cx, arg)?;
@@ -2448,8 +2459,21 @@ impl Elaborator {
                     };
                     // An indexed match rebinds the index parameter to the
                     // arm's pattern variable — the ih is at that index, so
-                    // the call must pass exactly it (§6).
-                    at(j) || g.rebind.is_some_and(|(rj, mpos)| rj == j && at(mpos))
+                    // the call must pass exactly it (§6). Compared by *term*,
+                    // like a child: at a declared index the pattern variable
+                    // is a projection (`nth(cs'; ι_t)`), not a binder.
+                    at(j)
+                        || g.rebind.as_ref().is_some_and(|(rj, terms)| {
+                            let depth = match &g.kind {
+                                GuardKind::Wf { depth, .. } => *depth,
+                                GuardKind::Nat { .. } => return false,
+                            };
+                            let by = (cx.names.len() - depth) as u32;
+                            *rj == j
+                                && terms
+                                    .get(descendant)
+                                    .is_some_and(|t| t.shift_local(by) == arg_t)
+                        })
                 }
             };
             if ok {
@@ -2793,15 +2817,7 @@ impl Elaborator {
             // The result index comes from the pattern and the written index
             // argument (docs/inductive-indexed-lowering.md §5); the wrong-
             // arity case falls through to `build_ctor`'s arity message.
-            let idx = match ind.ctors[i].res.expect("indexed ctor") {
-                inductive::IdxPat::Zero => Term::Zero,
-                inductive::IdxPat::Succ { field } => Term::Succ(Rc::new(self.elab_check(
-                    cx,
-                    &args[field],
-                    &Type::Nat,
-                    &Level::Zero,
-                )?)),
-            };
+            let (idx, _, _) = self.indexed_ctor_index(cx, ind, i, args, span)?;
             self.lower_indexed_instance(cx, ind, &targs, idx, span)?
         } else {
             self.lower_instance(cx, ind, &targs, &[], span)?
@@ -4021,10 +4037,14 @@ struct Guard {
     kind: GuardKind,
     /// An indexed `match`'s index parameter, *rebound* by the arm
     /// (docs/inductive-indexed-lowering.md §6): a self-call must pass the
-    /// arm's pattern variable there, not the original parameter. `(parameter
-    /// position, absolute position of the eliminator's index binder)`.
-    /// `None` for every non-indexed guard.
-    rebind: Option<(usize, usize)>,
+    /// arm's pattern variable there, not the original parameter.
+    ///
+    /// `(parameter position, one index term per descendant)` — parallel to
+    /// [`GuardKind::Wf`]'s `children` and scoped at the same `depth`, because
+    /// a branching index constructor gives each recursive field its *own*
+    /// pattern variable (`Bal(SNode(l, r))`), and the ih at descendant `t`
+    /// lives at exactly that one. `None` for every non-indexed guard.
+    rebind: Option<(usize, Vec<Rc<Term>>)>,
 }
 
 /// The two arm shapes a self-call can sit in. They differ in how many

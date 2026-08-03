@@ -3,7 +3,7 @@ title: "Meta: frontend roadmap and current focus"
 status: open
 labels: [frontend,meta]
 created: 2026-07-23
-updated: 2026-08-02
+updated: 2026-08-03
 ---
 
 Organizing issue for the frontend push (the frontend-first route,
@@ -237,3 +237,4 @@ date; the originals are in `git log --follow issues/frontend-roadmap.md`.
 - 2026-08-02: The in-language-map round opened AND landed same-session (docs/in-language-map-design.md): the quotation slice (meta fn / code blocks / $-splices / let code), the elaborator-held evaluation hook, and lib/vec_code.hthr's map_code — the first in-language derived artifact, cross-checked against Rust vec::map up to conversion. Two calculus findings recorded on [[in-language-map]]: code arguments cannot index types (no meta-functions over terms), and layer-p types cannot appear inside code — so generic templates bind their types inside the quote, and TyCode binders wait for the analysis story. Next per the migration order: the certifying generator's fragment transcriber.
 - 2026-08-02: 2026-08-02: the let/blocks cluster landed (docs/let-and-blocks-design.md). [[annotated-let-swallows-the-equals]], [[match-arm-blocks]] and [[j-binder-parse-trap]] closed in one round -- an annotated `let` at every type, a prefix-`{` block expression, and three rules over the six keyword-headed atoms. One residue filed with an owner: [[let-inside-quotation]], whether a block may be a `code { … }` payload (declined for now at both the parser and scan_splices).
 - 2026-08-02: [[sprop-strict-prop]] closed complete (kernel round + 2b acceptance); residue rehomed to [[metatheory-ch07-sprop]] (FT pass) and [[sprop-squash]] (deferred formers, unscheduled). Item 14's general case now waits only on the 2b generator round at [[indexed-families]]; body updated.
+- 2026-08-03: [[indexed-families]] §8.2 generator landed (managed round): declared index types — enum, linear Wf, and branching derivation-shaped families — are declarable at the surface; subject-recursive judgments are now shipped, not just prototyped. Remaining on item 14: the 2b generator (general case), multi-index, indexed absurd/inj.
