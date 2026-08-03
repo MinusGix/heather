@@ -72,6 +72,7 @@ the control is a family parameterized by depth, `N = 1..8`, asserting a
 | plain child's ih length (`container-proofs.md` §10.2) | mixed constructors only ever computed | 3 |
 | `wf_branch`'s container-length projection context (`surface-polymorphism.md` §10.1) | closed *type parameters* — an inductive could not be instantiated at an open type until `fn f<A>` existed | 2 |
 | exponential conversion cost in the IR interpreter (`whnf-sharing-term-growth`) | two bench fixtures that varied fuel depth and payload, never nesting | 5 |
+| `Vec`/`Fin`/`El` strip-blind at canonical indices (`sprop-design.md` §5.4 correction; `seq-strip-type-former-negatives`) | `seq_transp.rs` lengths were context variables, never literals | 1 |
 
 Note the shape of that table: four of six are axis 2, and in every case the
 generalization that would have caught it costs one extra test with one extra
@@ -83,6 +84,14 @@ an open element type needs a declaration with a type parameter, and until
 `surface-polymorphism` there was no such thing. When an axis cannot be varied,
 that is itself the finding — the missing language feature is also a missing
 test.
+
+The last row (2026-08-03) widens the jurisdiction: it was hiding in the
+**kernel's own suite**, not in a generated-term schema. This doc was written
+for elaborator schemas, but the axes apply to any test whose scrutinee-like
+position can be either canonical or stuck — a `Vec` *length* is a scrutinee
+in that sense, and `seq_transp.rs` only ever made it a variable. When a test
+exercises a rule keyed on canonical-vs-neutral, vary that key; the schema/
+kernel boundary is not where the discipline stops.
 
 ## The minimum for a new schema
 

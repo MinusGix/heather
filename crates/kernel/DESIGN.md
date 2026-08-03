@@ -198,6 +198,15 @@ and the contrast is pinned in tests — with `elim_sEmpty` eliminating
 anywhere (no β, neutral congruence skips the scrutinees) and the same
 layer gate.
 
+One invariant carries both equality observers over codes (2026-08-03, the
+ch. 07 FT pass, `docs/metatheory-ch07-extensions.md` §20.6): **endpoints
+are checked by conversion, and conversion at `□` is syntactic `==` modulo
+level equivalence.** `Id` at `Ty l` (propositional) and `sEq(Ty l)`
+(definitional, irrelevant) both observe exactly what that comparison
+distinguishes — irrelevance collapses *proofs*, never endpoints — so
+neither can widen type equality, and a change to boxed-code comparison is
+a change to both observers at once, not a local tweak.
+
 **Global definitions with layer-indexed transparency** (2026-07-31,
 issues/simulate-conversion-cost.md) are the only extension so far that is not
 a type former. A `u : Trm_i(Δ ⊢ T @ l)` binding may carry a **body**
