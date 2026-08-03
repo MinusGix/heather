@@ -1,9 +1,9 @@
 ---
 title: Ch. 07 obligations for sEq/transp: the with-code FT pass
-status: open
+status: closed
 labels: [kernel,delam,metatheory]
 created: 2026-08-02
-updated: 2026-08-02
+updated: 2026-08-03
 ---
 
 The [[sprop-strict-prop]] round landed `sEq`/`srefl`/`transp`/`sEmpty` with a
@@ -59,3 +59,7 @@ judgmental sort and `docs/sprop-design.md` gets rewritten.
 - 2026-08-02: Filed as the residue owner for [[sprop-strict-prop]]'s
   remaining metatheory scope, so that issue can close.
 
+
+## Log
+
+- 2026-08-03: CLOSED — the pass is written (managed round), superseding the pre-code sketch: docs/metatheory-ch07-extensions.md Part III is now ~900 lines at Part II's standard, with a provenance table mapping every sketch claim and corrections dated in place. Bill item 1: the sketch's "whnf-then-strip" is CORRECTED — head-only is too weak for the LR (the declarative strip closes under congruence); the notion is one reduction rule (`transp ⇝ₛ payload` under a declarative endpoint-convertibility premise) plus the complementary restriction on ch. 06's proof-reducing congruence, chosen so Determinacy survives verbatim (an unrestricted rule would need confluence, i.e. the termination being proved). All 19 term relations walked: 10 strip-inert by one criterion (a strippable transp is always neutral), 9 load-bearing with one reason each; the edit reaches the type relations for free; cost is exactly one weakened lemma (substitution commutes → joins, consumed only through 07b's Reduction Expansion — flagged as the first thing to re-check before any mechanization). Bill item 2: completeness scoped to derivations using the strip only at the head, with confinement to redundant casts ARGUED via an erasure translation, not asserted; honest limit recorded (redundancy-freedom is not preserved by reduction, so the generator rule is necessary, not sufficient; the residual is always a spurious reject). Bill item 3: sEq(Ty l) inert for four independent reasons, its own section (§20.6). The design doc's §7 standing risk is RETIRED with a stated reason: no equality reflection, so an sEq hypothesis strengthens no convertibility judgment and nothing exists for a relevance mark to mark. One defect found (§22.4): sprop-design.md §5.4 overstated the type-former case — the head-only gap reaches Vec/Fin/El at canonical indices; corrected in place, pinning tests filed as [[seq-strip-type-former-negatives]], generator-rule scope note added to [[indexed-families]].

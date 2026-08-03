@@ -329,7 +329,19 @@ transps over different neutral proofs must still be equal:
 
 - `Vec(D; transp(e, n)) ≡ Vec(D; n)`: neutral `Vec` types compare
   componentwise on lengths *as terms*, where the strip fires. Stuck
-  type-level reduction needs no help.
+  type-level reduction needs no help. **Correction (2026-08-03, the ch. 07
+  FT pass — `docs/metatheory-ch07-extensions.md` §22.4):** this holds only
+  at a *stuck* length, where both sides stay neutral `Vec`s. At a
+  **canonical** one it fails: `is_neutral_term(Transp)` follows the proof
+  and the length stepper is strip-blind, so `Vec(D; transp(…; e; 0))` is a
+  whnf neutral while `Vec(D; 0) ⇝ Unit`, and the neutral-vs-canonical
+  dispatch rejects a declaratively convertible pair. Same at `Fin` and at
+  `El` of a transported code — the head-only strip gap reaching the type
+  formers, one cause in three positions. Incompleteness only, confined to
+  redundant casts by §22.3's erasure argument; the "never emit a cast at
+  convertible endpoints" rule covers **index and code positions**, not
+  only value-level casts. Pinning tests owed:
+  `issues/seq-strip-type-former-negatives.md`.
 - Derived transports through type formers (the OTT cast lemmas) are
   conversions here, not lemmas: a transp at a Σ/Π/Vec motive strips
   whenever its endpoints convert, and stays a well-behaved neutral
