@@ -84,13 +84,16 @@ magic inherits the magic.
     **Resolution direction agreed 2026-07-28** (the contradiction is answered
     for sequencing purposes): a classification. The index-recursive fragment
     (that issue's route 1, `Nat` *and* inductive indices) is this item and
-    unblocks 15–16; the general case fords over an irrelevant equality and
-    waits on **[[sprop-strict-prop]]**, a kernel round scheduled off-order.
+    unblocks 15–16; the general case fords over an irrelevant equality —
+    the SProp kernel round landed and closed ([[sprop-strict-prop]],
+    2026-08-02; metatheory residue at [[metatheory-ch07-sprop]]), so the
+    2b generator waits only on its own round at [[indexed-families]].
     It does not gate 15–16: [[ir-simulate-design]] specifies an ordinary
     inductive with fuel, and if the IR wants typing intrinsically that is a
     decision that issue has not made (an extrinsic well-typedness predicate
-    is route 1). The indexed former (route 4) stays the measured fallback,
-    to be prototyped against 2b once SProp lands.
+    is route 1). The indexed former (route 4) lost the prototype comparison
+    (2b passed the setoid bar 2026-07-29, zero new kernel machinery) and
+    stays the unexercised fallback.
 15. **[[cli-check-diagnostics]]** — promoted from "cheap and separable"
     (2026-07-27): the IR round is the first that writes substantial Heather
     files rather than test snippets, and checking them only through a Rust
@@ -233,3 +236,4 @@ date; the originals are in `git log --follow issues/frontend-roadmap.md`.
 - 2026-08-02: Certifying-generator v2 landed same-session: the existential-composition kit in lib/ir_v1.hthr (four lemmas, proved once) plus the generator rewritten to fold it — mul-via-add is the first machine-written CROSS-FUNCTION certificate, the callee's invariant consumed at an open argument. Filed: [[prog-extension-lemma]], [[in-language-map]], [[certgen-harness-cost]].
 - 2026-08-02: The in-language-map round opened AND landed same-session (docs/in-language-map-design.md): the quotation slice (meta fn / code blocks / $-splices / let code), the elaborator-held evaluation hook, and lib/vec_code.hthr's map_code — the first in-language derived artifact, cross-checked against Rust vec::map up to conversion. Two calculus findings recorded on [[in-language-map]]: code arguments cannot index types (no meta-functions over terms), and layer-p types cannot appear inside code — so generic templates bind their types inside the quote, and TyCode binders wait for the analysis story. Next per the migration order: the certifying generator's fragment transcriber.
 - 2026-08-02: 2026-08-02: the let/blocks cluster landed (docs/let-and-blocks-design.md). [[annotated-let-swallows-the-equals]], [[match-arm-blocks]] and [[j-binder-parse-trap]] closed in one round -- an annotated `let` at every type, a prefix-`{` block expression, and three rules over the six keyword-headed atoms. One residue filed with an owner: [[let-inside-quotation]], whether a block may be a `code { … }` payload (declined for now at both the parser and scan_splices).
+- 2026-08-02: [[sprop-strict-prop]] closed complete (kernel round + 2b acceptance); residue rehomed to [[metatheory-ch07-sprop]] (FT pass) and [[sprop-squash]] (deferred formers, unscheduled). Item 14's general case now waits only on the 2b generator round at [[indexed-families]]; body updated.

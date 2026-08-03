@@ -7,9 +7,11 @@ into §5.2/§7 below, and the review pass confirmed the §5.2 placement
 against `conv.rs:522–527` (`tm` whnfs the type and both terms, then
 dispatches on the type — the strip loop slots into the term-whnf stage).
 Written per the wf-former discipline (`docs/wf-former-design.md` is the
-template and the precedent). Tracking issue: `issues/sprop-strict-prop.md`;
-promoting customer: `issues/indexed-families.md` route 2b (fording's index
-equation must pass the setoid test).
+template and the precedent). Tracking issue: `issues/sprop-strict-prop.md`
+(closed 2026-08-02, round complete; the §7 with-code FT pass is
+`issues/metatheory-ch07-sprop.md`, the §2.2 deferred formers are
+`issues/sprop-squash.md`); promoting customer: `issues/indexed-families.md`
+route 2b (fording's index equation must pass the setoid test).
 
 Reference point: Gilbert–Cockx–Sozeau–Tabareau, *Definitional
 Proof-Irrelevance without K* (GCST) — the unlayered version of most of what
