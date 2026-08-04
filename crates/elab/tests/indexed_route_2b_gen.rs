@@ -299,16 +299,84 @@ fn form_b_beta_stalls_on_open_children_and_this_is_the_documented_residue() {
     // check time, never an unsound accept. This test is where that is visible
     // rather than in a bug report — and it is `count`'s *only* failing claim,
     // which is what makes it residue and not a defect.
+    //
+    // Written without the `tnode` wrapper since 2026-08-04: `Node(n, m, l, r)`
+    // now infers its instantiation from a child (§14.7), so the claim is the
+    // constructor's own and the residue cannot be blamed on the wrapper.
     let m = elab_err(&format!(
         "{ADD}{TREE}
-         fn tnode(n: Nat, m: Nat, l: Tree<Nat>(n), r: Tree<Nat>(m))
-             -> Tree<Nat>(Succ(add(n, m))) {{ Node(n, m, l, r) }}
          theorem node_beta(n: Nat, m: Nat, l: Tree<Nat>(n), r: Tree<Nat>(m)):
-             count(Succ(add(n, m)), tnode(n, m, l, r))
+             count(Succ(add(n, m)), Node(n, m, l, r))
                  = Succ(add(count(n, l), count(m, r))) {{ refl }}"
     ));
     // The shape of the failure is the claim: a kernel `NotConvertible`, not a
     // wrong answer and not a loop.
+    assert!(m.contains("NotConvertible"), "{m}");
+}
+
+// ---------------------------------------------------------------------------
+// §14.7 — type-argument inference for forded constructors
+// ---------------------------------------------------------------------------
+
+#[test]
+fn a_child_argument_determines_the_instantiation() {
+    // The seam as recorded (2026-08-04): `Node` carries no field whose surface
+    // type is a bare parameter, so `infer_ctor` could not solve `A` and the
+    // *common* forded shape — only index and child fields — was unusable in
+    // inference position. The way out is not a unifier: a child's type **is**
+    // the family, at that child's own index, and both routes keep the family in
+    // a form that re-applies at another index. So the instance comes back whole
+    // and nothing is solved.
+    //
+    // Axis 2 throughout: the children, the indices and the element type are all
+    // open, and `count<A>`'s own type argument is what the constructor's
+    // inferred type then settles.
+    elab(&format!(
+        "{ADD}{TREE}
+         fn c(n: Nat, m: Nat, l: Tree<Nat>(n), r: Tree<Nat>(m)) -> Nat {{
+             count(Succ(add(n, m)), Node(n, m, l, r))
+         }}
+         theorem node_infers(n: Nat, m: Nat, l: Tree<Nat>(n), r: Tree<Nat>(m)):
+             count(Succ(add(n, m)), Node(n, m, l, r))
+                 = count(Succ(add(n, m)), Node(n, m, l, r)) {{ refl }}"
+    ));
+}
+
+#[test]
+fn an_undetermined_instantiation_is_rejected_and_names_both_escapes() {
+    // `Leaf` has no arguments at all, so nothing determines `A` — that is
+    // genuinely ambiguous and stays a rejection. What the round owes is a
+    // message that names the two ways out, and both of them working.
+    let m = elab_err(&format!("{ADD}{TREE} theorem t(): count(0, Leaf) = 0 {{ refl }}"));
+    assert!(m.contains("cannot infer the type argument `A`"), "{m}");
+    assert!(m.contains("checking position"), "{m}");
+    assert!(m.contains("Leaf<…>"), "{m}");
+    elab(&format!(
+        "{ADD}{TREE}
+         // Escape 1: a checking position.
+         fn tleaf() -> Tree<Nat>(0) {{ Leaf }}
+         theorem a(): count(0, tleaf()) = 0 {{ refl }}
+         // Escape 2: the written type argument. New on 2026-08-04 — `ctor_at`
+         // used to lower the *unindexed* instance, so `Leaf<Nat>` failed with
+         // \"needs its index\"; the index is the constructor's own written
+         // result index, exactly as in inference position.
+         theorem b(): count(0, Leaf<Nat>) = 0 {{ refl }}
+         fn bud() -> Tree<Nat>(1) {{ Bud<Nat>(0, 7, Leaf<Nat>) }}"
+    ));
+}
+
+#[test]
+fn conflicting_children_are_rejected() {
+    // Axis 4 for the read-back: the instance comes from the *first* child, and
+    // every other argument is then checked against it — so two children at
+    // different instantiations reject rather than the second one being
+    // silently coerced into the first.
+    let m = elab_err(&format!(
+        "{ADD}{TREE}
+         inductive Col {{ CA, CB }}
+         theorem t(n: Nat, m: Nat, l: Tree<Nat>(n), r: Tree<Col>(m)):
+             count(Succ(add(n, m)), Node(n, m, l, r)) = 0 {{ refl }}"
+    ));
     assert!(m.contains("NotConvertible"), "{m}");
 }
 

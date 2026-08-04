@@ -5,10 +5,24 @@ Status: **generator implemented**, 2026-08-04 —
 the constructors, and the eliminator in both arm forms), the §3 classifier
 lives in `crates/elab/src/inductive.rs` (`classify_indexed_route` /
 `classify_forded`), and `crates/elab/tests/indexed_route_2b_gen.rs` is
-§13.2's acceptance, 17 tests. What the round did **not** build is recorded in
-§13.2's own notes and in §14: multi-index, `absurd`/`inj` on a forded family,
-and form A at a *declared* index (form A is `Nat`-only, so a declared-index
-family takes form B everywhere and §8.4's residue is wider there).
+§13.2's acceptance, 20 tests (three of them §14.7's inference row, added
+2026-08-04). What the round did **not** build is recorded in
+§13.2's own notes and in §14: multi-index and `absurd`/`inj` on a forded
+family.
+
+**Form A at a declared index landed the same day** (§8.2, §14.4): the
+inversion is carried by the index type's own eliminator — a `Case` tree at a
+flat index, `elim_Wf` at a recursive one — the `j ≠ k` branches by `wf.rs`
+§7.1's tag predicate and each child's equation by §7.2's `child_projection`.
+So a declared-index family is no longer form B everywhere, and §8.4's
+aggregate limit is no wider there than at `Nat`.
+`crates/elab/tests/indexed_route_2b_declared.rs` is its acceptance (9 tests)
+and `crates/elab/src/forded.rs`'s `decl_inversion` module the hand
+composition behind it. Two boundaries came out of that round measured rather
+than assumed, and both are §14's: form A is *not* generated when the index
+constructor has a **payload** argument (§8.2), and a **branching** index
+constructor at a **three-constructor** index puts the emitted eliminator over
+the default conversion budget (§14.9).
 
 The design round below is unchanged text: it is the design for the general
 (fording) case of `issues/indexed-families.md`, route 2b, whose
@@ -409,11 +423,40 @@ The `j ≠ k` branches are no-confusion: `μ ŝ` is `I_k`-headed and the branch'
 index is `I_j`-headed, so transporting `e'` through the tag predicate
 `is_k : I → Ty 0` lands in `Empty`. At `Nat` these are the prototype's
 `zero_pred`/`is_succ` and `pred` verbatim; at a declared index they are
-`wf.rs` §7.1's tag predicate and §7.2's `child_projection`, which exist but
-have never been used for this purpose — §14.4 records that as a seam and
-§13 defers it: **form A is generated at a `Nat` index this round; a declared
-index takes form B everywhere**, with the β consequence stated to the user
-in the doc rather than discovered.
+`wf.rs` §7.1's tag predicate (`ConstBody::TagCode` under `const_elim_wf` or
+`const_case_tree`) and §7.2's `child_projection`.
+
+**Generated at a declared index since 2026-08-04**, and the shape is the
+display above with `elim_I` read as the index type's own eliminator — the
+same dispatch `indexed.rs` makes for the route-1 family (`Case` tree / 
+`elim_Wf`), because the fording layer never inspects the index's recursion.
+Inside the matching branch:
+
+- a child-index binder is the **index constructor's own argument**,
+  `nth(cs'_I; ι_a)` — the very term route 1's declared-index family uses,
+  now one indirection further out;
+- each child's stored equation is re-derived by
+  `transp(I; z. sEq(I; μ child_t; π_{k,a}(z)); μ ŝ; ẑ; e'; srefl)`, with
+  `π_{k,a}` the child projection at that argument. Both endpoints compute:
+  `π(μ ŝ) ≡ μ child_t` because `μ ŝ` is `I_k`-headed, and `π(ẑ) ≡ nth(cs'_I;
+  ι_a)` because the branch's `ẑ` is `sup_f`-headed. `pred` is the `Nat`
+  instance of exactly this, which is why one code path serves both.
+
+The projection's **default** — `child_projection` is total — is the bound `z`
+itself. It is reached at no index the arm ever sees, and `μ ŝ` (the other
+obvious choice) costs a whole inlined `μ` per off-branch of every projection
+of every child: measured as `OutOfFuel` on the first three-constructor index
+tried, not as a slow test.
+
+**One narrowing, deliberate and recorded** (`arm_form_decl`): form A fires
+only when *every* argument of `I_k` is a recursive one. A pattern variable at
+a **payload** argument of the index constructor (`TS(n, x) : Tg(CS(n))`) is
+route-1-eligible, so §8.2's rule as stated promises form A there — but under
+fording that field is *stored in the skeleton* (§4.2 elides child indices
+only), so the arm would have to choose between the stored value and the
+inverted one, which are related by the irrelevant `sEq` and by nothing else.
+Choosing is a scheme question, not plumbing; such a constructor takes form B
+and §14.8 records the question.
 
 In form A the stored proof is **consulted nowhere**: every equation the arm
 produces sits at `sEq` type. That is what makes β definitional on open data,
@@ -475,6 +518,25 @@ file, the second and third in the *same* test so the contrast cannot drift.
 So the honest key is the *proof*, not the data: form B computes exactly
 where the index equation is `srefl`, and a forded constructor manufactures a
 non-`srefl` proof as soon as one of its children is open.
+
+**Narrowed the same day.** The sentence below was, until form A reached a
+declared index, true of *every* declared-index forded family, because every
+constructor of one was form B. It is now exactly as wide at a declared index
+as at `Nat`: a family with one route-1-eligible constructor has induction at
+that constructor, measured in
+`crates/elab/tests/indexed_route_2b_declared.rs`
+(`an_induction_whose_step_is_a_form_a_constructor_closes`), with the form-B
+contrast in the same declaration next to it.
+
+One limit is *not* narrowed and belongs here rather than in a bug report: a
+theorem whose statement is an equation between **family values** (`map(s, d)
+= d`) does not close, whatever the index. Every forded declaration has at
+least one form-B constructor by construction — a declaration whose every
+constructor is route-1-eligible takes route 1 — and at that arm the goal
+mentions the value under the arm's own `transp`, which does not β at a bound
+proof. Measured at `Nat`, on machinery no declared-index round touched; the
+smallest case is two *childless* constructors, `NfZ(x) : Nf(0)` beside
+`NfD(a, b) : Nf(add(a, b))`.
 
 **Sharper still (2026-08-04, from the generator round): a declaration all of
 whose recursive constructors are form B admits no induction over open data
@@ -666,9 +728,10 @@ index needs no relaxation, only the right term.
 - **A forded family as a written type argument** (`f<Term(3)>`): route 1's
   gap, inherited verbatim.
 - **`coh`-requiring declarations**: §3.3's two F1/F2 messages.
-- **Form A at a declared index**: not a rejection — a *β* limitation, so it
-  is documented (§8.2) rather than diagnosed. A declaration is never
-  rejected for it.
+- **Form A at an index constructor with a payload argument** (§8.2's
+  narrowing, all that is left of "form A at a declared index" since
+  2026-08-04): not a rejection — a *β* limitation, so it is documented
+  rather than diagnosed. A declaration is never rejected for it.
 
 ## 13. Acceptance checklist
 
@@ -745,6 +808,38 @@ mentions its *bound* variable (not the literal it is applied at), and a
 14. §9's structural walker over every emitted term, plus one nonzero-level
     generator test (§13.1 item 7's instance, end to end).
 
+### 13.3 Form A at a declared index (2026-08-04)
+
+`crates/elab/tests/indexed_route_2b_declared.rs`, 9 tests, plus the hand
+composition in `forded.rs`'s `decl_inversion` (4 tests: the tag predicate
+across a 3×3 grid of index constructors, the child projection at an open
+argument, and the two obligations the arm builder owes — no-confusion into
+`Empty` and a child index recovered through the projection). The list, each
+item naming the axis that makes it falsifiable:
+
+15. **A three-constructor index** (axis 6) with form A at a linear index
+    constructor: open-data β `conv`'d against the reduct, and the
+    no-confusion branches carried by the declaration's own kernel check.
+16. **An induction whose step is at that constructor**, closing — §8.4's
+    limit shrunk — with the form-B contrast in the same declaration
+    (`the_form_b_contrast_in_the_same_family_still_stalls`).
+17. **A branching index constructor**, both children open (the `Bal`-over-
+    `Shape` shape), and its two child projections kept apart by a negative
+    that swaps them.
+18. **A flat (enum) index**, where the inversion is a `Case` tree — the other
+    half of §8.2's dispatch — and a nonzero-level family over a declared
+    index (§13.1 item 7's rule at a new index).
+19. The two measured boundaries as deliberate negatives: §14.9's fuel limit,
+    and the parameter-message asymmetry a nullary index constructor exposed
+    (`a_nullary_index_constructor_is_not_a_bare_variable`).
+
+One classifier defect was found in the building and fixed:
+`all_bare_var_indices` read `Tw(SLeaf)` as a bare **variable** index, because
+a nullary index constructor wears a variable's spelling — so an enum-indexed
+family with one bare-variable constructor (§3.4's non-uniform row) was
+rejected with the *parameter* message instead of fording. The index type's
+own constructor names are now excluded from that test.
+
 ## 14. Known seams, recorded before they bite
 
 1. **`forded_of` is a structural fingerprint**, like `indexed_of` before it
@@ -763,10 +858,11 @@ mentions its *bound* variable (not the literal it is applied at), and a
    (Σ is a whnf), so this is *better* here than at route 1, but a `μ` that
    arrived reduced at a literal index is unrecognizable and takes the same
    re-synthesis fix if something hits it.
-4. **Form A at a declared index is unbuilt.** The pieces exist (`wf.rs`
-   §7.1's tag predicate, §7.2's `child_projection`) and have never been
-   composed into an inversion. Whichever round wants open-data β at a
-   declared-index forded family builds it here, and §8.2 is the shape.
+4. **Form A at a declared index — closed 2026-08-04.** The pieces (`wf.rs`
+   §7.1's tag predicate, §7.2's `child_projection`) are composed into the
+   inversion `forded_arm_a_decl` builds, §8.2 carries the shape, and
+   `crates/elab/tests/indexed_route_2b_declared.rs` is the acceptance. What
+   the round left behind is items 8 and 9 below, both measured.
 5. **β-reduction manufactures redundant casts** (§8.4). The generator emits
    `⌊·⌋`-fixed terms; reduction does not preserve that, and the head-only
    strip cannot see the result under an `App`. Bounded to spurious
@@ -779,14 +875,61 @@ mentions its *bound* variable (not the literal it is applied at), and a
    fields deleted, child types erased) and never editing it afterwards is
    what keeps that true — the same discipline as "the shape is tier 0's
    lowering with the recursive fields deleted" (tier 1 §2).
-7. **Type-argument inference does not reach forded constructors**
-   (2026-08-04). `Leaf : Tree<A>(0)` carries no field whose surface type is
-   a bare parameter, so `infer_ctor` cannot solve `A`, and a constructor
-   with only index and child fields — the *common* forded shape — is
-   unusable in inference position. Route 1's gap inherited verbatim, hit
-   more often here. Workaround visible in `indexed_route_2b_gen.rs`
-   (`tleaf`/`tnode`): route the constructor through a checking position.
-8. **`forded_ctor_index` infers payload arguments** (2026-08-04).
+7. **Type-argument inference reaches a forded constructor through its
+   children** (2026-08-04, narrowed the same day it was recorded). The seam
+   was: `Leaf : Tree<A>(0)` carries no field whose surface type is a bare
+   parameter, so `infer_ctor` could not solve `A`, and a constructor with
+   only index and child fields — the *common* forded shape — was unusable in
+   inference position.
+
+   What closed it is not a unifier. A **child** argument's type *is* the
+   family, at that child's own index, and both routes keep the family in a
+   form that re-applies at another index (`FordedFam::ty_at`,
+   `IndexedFam::el_at` — the same device `match` uses). So `ctor_from_child`
+   infers the first child, re-indexes its type at the constructor's written
+   result index, and checks the constructor there: the instantiation is never
+   *recovered*, which is what keeps monomorphization out of the way. A second
+   child at a different instantiation then fails the ordinary field check.
+
+   Two things are deliberately **not** in it, and both are
+   `issues/elab-unifier-completeness.md`'s rather than this document's:
+
+   - a parameter that occurs only *under* a field's type constructor
+     (`xs: [A; n]`, `f: A -> B`) still needs unification;
+   - a **constructor with no child and no bare-parameter field** (`Leaf`) is
+     genuinely undetermined and stays a rejection — with a message naming the
+     two escapes. The second escape is new: `Leaf<Nat>` now works, because
+     `ctor_at` builds the *indexed* instance at the constructor's own written
+     result index instead of failing in `lower_instance` with "needs its
+     index" (§12.3's "a forded family as a written type argument" row is
+     about a family in *type* position and is untouched).
+
+   Route 1's own application-side gap is unaffected and was measured while
+   testing this: `len<A>(n, v: V<A>(n))` applied to `VCons(…)` still cannot
+   solve `len`'s `A`, because `unify_ty` runs against route 1's `El (elim …)`
+   domain and finds nothing structural to match. The 2b family, being a Σ,
+   unifies.
+8. **Form A skips an index constructor with a payload argument**
+   (2026-08-04, §8.2's narrowing). `TS(n, x) : Tg(CS(n))` is
+   route-1-eligible, so §8.2's rule promises it form A, and it takes form B
+   instead: the inverted `n` and the *stored* `n` are two terms related only
+   by the irrelevant `sEq`, and which one the arm's binder denotes decides
+   whether an index-dependent motive states what the user meant. The choice
+   wants a round, not a patch. Nothing in the suite needs it — the shape
+   only arises at an index type with a payload-carrying constructor.
+9. **Form A's cost is multiplicative, and a branching constructor at a
+   three-constructor index exceeds the conversion budget** (measured
+   2026-08-04). Per arm the inversion emits one `child_projection` per child
+   and one tag predicate per *other* index constructor, each a whole
+   `elim_Wf` over the index type, and `fn`s are inlined at every use
+   (`issues/simulate-conversion-cost.md`) so conversion pays for the emitted
+   size twice over. `Bl`-over-a-2-constructor `Shape` (branching) and `Tw`
+   over a 3-constructor one (linear) both fit; their product does not — it
+   checks at twice `DEFAULT_FUEL` and is pinned as a deliberate negative
+   (`a_branching_form_a_at_a_three_constructor_index_exceeds_the_fuel_budget`).
+   This is seam 2's `μ` inlining wearing a second hat, and a kernel `def`
+   retires both.
+10. **`forded_ctor_index` infers payload arguments** (2026-08-04).
    `res_arg_cx` (`forded.rs`) calls `elab_infer` on a payload argument when
    the written result index mentions it and no checked value is available
    (the `infer_ctor` path). A payload that itself needs a *checking*

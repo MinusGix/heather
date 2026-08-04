@@ -2838,11 +2838,32 @@ impl Elaborator {
         let mut targs = Vec::with_capacity(sols.len());
         for (p, sol) in ind.params.iter().zip(sols) {
             let Some(sol) = sol else {
+                // A **child** argument determines the whole instance, and
+                // determines it without recovering the instantiation at all:
+                // its type *is* the family, at another index. `Node(n, m, l,
+                // r)`'s `l : Tree<A>(n)` is `Σ(s : ⟦Skel<A>⟧). sEq(…)` with the
+                // parameters already lowered into it, so re-indexing that type
+                // is exactly the type `Node` builds
+                // (docs/inductive-fording-lowering.md §14.7).
+                //
+                // Deliberately not the general case: a parameter that occurs
+                // only *under* a field's type constructor (`xs: [A; n]`) still
+                // needs unification, which is
+                // issues/elab-unifier-completeness.md's and not this function's.
+                if let Some(r) = self.ctor_from_child(cx, ind, i, args, span) {
+                    return r;
+                }
                 return err(
                     format!(
-                        "cannot infer the type argument `{p}` of `{}` here — annotate the \
-                         expression (`let x: {}<…> = …;`) or use it where a type is expected",
-                        ind.name, ind.name
+                        "cannot infer the type argument `{p}` of `{}` here — no argument \
+                         of `{}` determines it. Two ways out: put the expression in a \
+                         checking position (a `fn`/`theorem` body whose declared result \
+                         is `{}<…>(…)`, or an argument of a declaration that expects \
+                         one), or write the type argument (`{}<…>(…)`)",
+                        ind.name,
+                        ind.ctors[i].name,
+                        ind.name,
+                        ind.ctors[i].name
                     ),
                     span,
                 );
@@ -2866,6 +2887,57 @@ impl Elaborator {
         };
         let t = self.build_ctor(cx, ind, i, args, &ty, &lvl, span)?;
         Ok((t, ty, lvl))
+    }
+
+    /// A constructor of an **indexed** family whose type-parameter
+    /// instantiation is determined by a *child* argument
+    /// (`docs/inductive-fording-lowering.md` §14.7, and route 1's same gap).
+    ///
+    /// The child's inferred type is the family at the child's own index, and
+    /// both routes keep the family in a form that can be re-applied at another
+    /// index — `FordedFam::ty_at` and `IndexedFam::el_at`, which is what
+    /// `match` uses to name `fam 0` and `fam (S m)` from one read-back type. So
+    /// there is nothing to *solve*: the instance comes back whole and the
+    /// written result index says where to put it. `None` when no argument is a
+    /// child, or when the first child's type is not this family.
+    fn ctor_from_child(
+        &self,
+        cx: &Cx,
+        ind: &Rc<Inductive>,
+        i: usize,
+        args: &[Expr],
+        span: Span,
+    ) -> Option<R<(Term, Type, Level)>> {
+        if ind.index.is_none() || args.len() != ind.ctors[i].fields.len() {
+            return None;
+        }
+        let k = ind.ctors[i].kind.iter().position(|f| *f == inductive::FieldKind::Plain)?;
+        let (_, cty, _) = self.elab_infer(cx, &args[k]).ok()?;
+        let (ty, lvl) = if ind.skel.is_some() {
+            let (found, fam) = self.forded_of_at(cx, &cty)?;
+            if found.tag != ind.tag {
+                return None;
+            }
+            let idx = match self.forded_ctor_index(cx, ind, i, args, span) {
+                Ok((idx, _, _)) => idx,
+                Err(e) => return Some(Err(e)),
+            };
+            (fam.ty_at(idx, 0), fam.lvl())
+        } else {
+            let (found, fam) = self.indexed_of_at(cx, &cty)?;
+            if found.tag != ind.tag {
+                return None;
+            }
+            let idx = match self.indexed_ctor_index(cx, ind, i, args, span) {
+                Ok((idx, _, _)) => idx,
+                Err(e) => return Some(Err(e)),
+            };
+            (fam.el_at(idx, 0), fam.level.clone())
+        };
+        Some(
+            self.build_ctor(cx, ind, i, args, &ty, &lvl, span)
+                .map(|t| (t, ty, lvl)),
+        )
     }
 
     // -- application (explicit + implicit spines) ---------------------------
@@ -3666,6 +3738,36 @@ impl Elaborator {
                     ),
                     span,
                 );
+            }
+            // An **indexed** family at a written instantiation: the index is
+            // not written — it is the constructor's own result index at the
+            // arguments it was given, exactly as in `infer_ctor`. This is the
+            // second escape the "cannot infer the type argument" message names,
+            // and the only one a nullary constructor like `Leaf<Nat>` has
+            // (`docs/inductive-fording-lowering.md` §14.7).
+            if ind.index.is_some() {
+                if args.len() != ind.ctors[i].fields.len() {
+                    return err(
+                        format!(
+                            "`{}` takes {} argument(s), found {} — a constructor of an \
+                             indexed family cannot be partially applied at a written \
+                             instantiation, because its index is read off its arguments",
+                            name,
+                            ind.ctors[i].fields.len(),
+                            args.len()
+                        ),
+                        span,
+                    );
+                }
+                let (ty, lvl) = if ind.skel.is_some() {
+                    let (idx, _, _) = self.forded_ctor_index(cx, &ind, i, args, span)?;
+                    self.lower_forded_instance(cx, &ind, &lowered, idx, span)?
+                } else {
+                    let (idx, _, _) = self.indexed_ctor_index(cx, &ind, i, args, span)?;
+                    self.lower_indexed_instance(cx, &ind, &lowered, idx, span)?
+                };
+                let t = self.build_ctor(cx, &ind, i, args, &ty, &lvl, span)?;
+                return Ok((t, ty, lvl));
             }
             let (ty, lvl) = self.lower_instance(cx, &ind, &lowered, &[], span)?;
             let t = self.build_ctor_value(cx, &ind, i, args, &ty, &lvl, span)?;

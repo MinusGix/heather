@@ -1948,7 +1948,7 @@ fn parse_result_index<'a>(
         // - *non-uniform* — some other constructor pins the index. Then it
         //   genuinely is the general case, and route 2b generates it (§3.4's
         //   non-uniform bare-variable row).
-        ExprKind::Var(v) if matches!(ity, IdxTy::Nat) && all_bare_var_indices(ctors) => err(
+        ExprKind::Var(v) if matches!(ity, IdxTy::Nat) && all_bare_var_indices(ctors, ity) => err(
             format!(
                 "`{}`'s result index `{v}` is a bare variable in *every* constructor of \
                  `{name}`, which makes it a **parameter**, not an index — it does not \
@@ -2327,7 +2327,7 @@ fn classify_indexed_route(d: &InductiveDecl, ity: &IdxTy) -> R<IdxRoute> {
     // §3.3 row 1: a *uniform* bare-variable index is a parameter wearing an
     // index's spelling. Route 2b would happily generate it, so the route-1
     // message has to win here rather than be tried after.
-    if all_bare_var_indices(&d.ctors) {
+    if all_bare_var_indices(&d.ctors, ity) {
         return Err(e1);
     }
     let mut frows = Vec::with_capacity(d.ctors.len());
@@ -2711,12 +2711,21 @@ fn skeleton_of(d: &InductiveDecl, ctors: &[Ctor], tag: u32) -> Inductive {
 /// has a parameter wearing an index's spelling — see the message at
 /// [`parse_result_index`]'s `Var` arm. One constructor that pins its index
 /// makes the family genuinely indexed, and this is `false`.
-fn all_bare_var_indices(ctors: &[CtorDecl]) -> bool {
+///
+/// A **nullary index constructor** wears the same spelling as a variable
+/// (`Tw(SLeaf)` parses as `App(Tw, [Var("SLeaf")])`), and it pins its index as
+/// firmly as `SNode(l, r)` does — so the index type's own constructor names are
+/// excluded here. Without that, an enum-indexed family with one bare-variable
+/// constructor (§3.4's non-uniform row, at a declared index) was rejected with
+/// the *parameter* message instead of fording (found 2026-08-04).
+fn all_bare_var_indices(ctors: &[CtorDecl], ity: &IdxTy) -> bool {
+    let icts = ity.ctors();
     ctors.iter().all(|c| {
         let Some(Expr { kind: ExprKind::App { args, .. }, .. }) = &c.result else {
             return false;
         };
-        matches!(args.as_slice(), [Expr { kind: ExprKind::Var(_), .. }])
+        let [Expr { kind: ExprKind::Var(v), .. }] = args.as_slice() else { return false };
+        !icts.iter().any(|ic| ic.name == *v)
     })
 }
 

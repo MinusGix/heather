@@ -34,7 +34,9 @@ use heather_kernel::term::{LocalCtx, LocalSubst, LocalVar, Term, Type};
 use heather_syntax::ast::{Arm, Expr, ExprKind, Span};
 
 use crate::indexed::{set_scrut, wf_ih_at};
-use crate::inductive::{inject, nat_lit, tag_value, FieldKind, IdxTy, Inductive};
+use crate::inductive::{
+    inject, nat_lit, tag_value, ConstBody, FieldKind, IdxTy, Inductive, Spine,
+};
 use crate::wf::{fin_index, nth_child, Branches, Tel};
 use crate::{embed, err, Alias, Cx, Elaborator, Guard, GuardKind, R};
 
@@ -144,7 +146,7 @@ impl FordedFam {
 /// Which of §8's two arm shapes a constructor gets, and why (§8.2's rule:
 /// *inside 2b, a constructor gets definitional open-data β exactly when it
 /// would have been route-1-eligible on its own*).
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 enum Form {
     /// `e_c = 0` with no children: the motive's index is inverted by
     /// `elim_Nat` and the stored proof is consulted nowhere.
@@ -152,6 +154,17 @@ enum Form {
     /// `e_c = Succ(x)` with `x` the index variable of this constructor's one
     /// child: the same inversion, with the tail's proof re-derived at `pred`.
     ASucc,
+    /// `e_c = I_k(x̄)` at a **declared** index, with `x̄` distinct child-index
+    /// variables filling *all* of `I_k`'s arguments (§8.2, generated since
+    /// 2026-08-04): the motive's index is inverted by the index type's own
+    /// eliminator — a `Case` tree at a flat index, `elim_Wf` at a recursive
+    /// one — the `j ≠ k` branches land in `Empty` through `wf.rs` §7.1's tag
+    /// predicate, and each child's index binder is the *index constructor's*
+    /// own argument, its equation re-derived through §7.2's `child_projection`.
+    ///
+    /// `at` is the index constructor, and `args[t]` which of its arguments
+    /// child `t` sits at.
+    ADecl { at: usize, args: Vec<usize> },
     /// Everything else: §8.3's `transp` at the arm's head.
     B,
 }
@@ -1003,18 +1016,29 @@ impl Elaborator {
     ) -> R<Term> {
         match self.arm_form(env.ind, k) {
             Form::B => self.forded_arm_b(bcx, env, k, tel, value, d, sh),
+            Form::ADecl { at, args } => {
+                self.forded_arm_a_decl(bcx, env, k, tel, value, d, sh, at, &args)
+            }
             f => self.forded_arm_a(bcx, env, k, tel, value, d, sh, f),
         }
     }
 
     /// §8.2's rule, mechanized: form A exactly when the constructor would have
-    /// been route-1-eligible on its own — `e_c = 0` with no children, or
-    /// `e_c = Succ(x)` with `x` the index variable of its one child. `Nat`
-    /// only this round (§14.4).
+    /// been route-1-eligible on its own — `e_c = 0` with no children,
+    /// `e_c = Succ(x)` with `x` the index variable of its one child, or (at a
+    /// declared index) `e_c = I_k(x̄)` with `x̄` distinct child-index variables
+    /// at all of `I_k`'s arguments.
     fn arm_form(&self, ind: &Inductive, k: usize) -> Form {
-        if !matches!(ind.index_ty, Some(IdxTy::Nat)) {
-            return Form::B;
+        match ind.index_ty.as_ref() {
+            Some(IdxTy::Nat) => self.arm_form_nat(ind, k),
+            Some(IdxTy::Decl(iind)) => self.arm_form_decl(ind, k, iind),
+            None => Form::B,
         }
+    }
+
+    /// [`Self::arm_form`] at `Nat`, unchanged since the generator round: the
+    /// two primitive constructors, by shape.
+    fn arm_form_nat(&self, ind: &Inductive, k: usize) -> Form {
         let ctor = &ind.ctors[k];
         let kids = ctor.arity();
         let e = self.res_expr(ind, k);
@@ -1045,6 +1069,71 @@ impl Elaborator {
             }
             _ => Form::B,
         }
+    }
+
+    /// [`Self::arm_form`] at a **declared** index (§8.2, 2026-08-04): the
+    /// result index is that index type's own constructor applied to distinct
+    /// child-index variables, one per argument.
+    ///
+    /// Two conditions here are narrower than "route-1-eligible on its own",
+    /// and both are recorded rather than assumed:
+    ///
+    /// - **every argument of `I_k` must be a recursive one.** A pattern
+    ///   variable at a *payload* argument (`TS(n, x) : Tg(CS(n))`) is
+    ///   route-1-eligible, but under fording that field is *stored in the
+    ///   skeleton* (§4.2 stores only child indices nowhere), so the arm would
+    ///   have to choose between the stored value and the inverted one, which
+    ///   are related only by the irrelevant `sEq`. That is a scheme question,
+    ///   not plumbing, so such a constructor takes form B;
+    /// - **every child's index variable must appear in `e_c`.** Otherwise the
+    ///   inversion binds nothing for it, and the constructor is not
+    ///   route-1-eligible either (its child sits at no pattern variable).
+    fn arm_form_decl(&self, ind: &Inductive, k: usize, iind: &Inductive) -> Form {
+        let ctor = &ind.ctors[k];
+        let e = self.res_expr(ind, k);
+        let (name, args): (&str, &[Expr]) = match &e.kind {
+            ExprKind::Var(v) => (v.as_str(), &[]),
+            ExprKind::App { head, args, .. } => match &head.kind {
+                ExprKind::Var(v) => (v.as_str(), args.as_slice()),
+                _ => return Form::B,
+            },
+            _ => return Form::B,
+        };
+        let Some(at) = iind.ctors.iter().position(|c| c.name == name) else {
+            return Form::B;
+        };
+        let ic = &iind.ctors[at];
+        if ic.fields.len() != args.len() || ctor.arity() != args.len() {
+            return Form::B;
+        }
+        if ic.kind.iter().any(|f| *f != FieldKind::Plain) {
+            return Form::B;
+        }
+        // Which field of `c` fills each argument of `I_k`: a child-index
+        // variable, and a different one each time (§8.2's "distinct").
+        let mut fills: Vec<usize> = Vec::with_capacity(args.len());
+        for a in args {
+            let ExprKind::Var(v) = &a.kind else { return Form::B };
+            let Some(fi) = ctor.fields.iter().position(|(n, _)| n.as_deref() == Some(v.as_str()))
+            else {
+                return Form::B;
+            };
+            if ctor.kind[fi] != FieldKind::IndexVar || fills.contains(&fi) {
+                return Form::B;
+            }
+            fills.push(fi);
+        }
+        // …and, per child, which argument of `I_k` its index variable fills.
+        let mut per_child = Vec::with_capacity(ctor.arity());
+        for (f, kind) in ctor.kind.iter().enumerate() {
+            if *kind != FieldKind::Plain {
+                continue;
+            }
+            let ix = ctor.rec_at[f].expect("a child records its index variable");
+            let Some(a) = fills.iter().position(|x| *x == ix) else { return Form::B };
+            per_child.push(a);
+        }
+        Form::ADecl { at, args: per_child }
     }
 
     /// §8.3, the transp arm — the form available at any index.
@@ -1158,6 +1247,56 @@ impl Elaborator {
                 }),
             }),
         })
+    }
+
+    /// §8.2's tag predicate at a **declared** index: `is_k : I → Ty 0`, the
+    /// code of `Unit` at index constructor `k` and of `Empty` at every other.
+    ///
+    /// This is `wf.rs` §7.1's device — `ConstBody::TagCode` under a
+    /// constant-motive elimination — at a new client. `ity` and `spine` are
+    /// scoped in the context the caller read them back in and `d` counts the
+    /// binders pushed since; `scrut` is scoped in `cx`.
+    #[allow(clippy::too_many_arguments)]
+    fn idx_tag_pred(
+        &self,
+        cx: &Cx,
+        iind: &Inductive,
+        ity: &Type,
+        spine: &Spine,
+        k: usize,
+        scrut: Rc<Term>,
+        d: u32,
+        span: Span,
+    ) -> R<Term> {
+        let ty0 = Type::Ty(Level::Zero);
+        let l1 = Level::succ(Level::Zero);
+        if iind.recursive {
+            self.const_elim_wf(
+                cx,
+                iind,
+                ity,
+                spine,
+                &ty0,
+                &l1,
+                scrut,
+                &ConstBody::TagCode(k),
+                d,
+                span,
+            )
+        } else {
+            self.const_case_tree(
+                cx,
+                spine,
+                iind.ctors.len(),
+                &ty0,
+                &l1,
+                scrut,
+                &ConstBody::TagCode(k),
+                0,
+                d,
+                span,
+            )
+        }
     }
 
     /// §8.2, index inversion — the arm inverts the *motive's* index instead of
@@ -1275,6 +1414,10 @@ impl Elaborator {
                 fam.eq_at(sh.shift_local(3), succ_k.clone(), d + 3),
                 env.li.clone(),
             );
+            // The one child's index binder is the `elim_Nat` predecessor, and
+            // its equation is re-derived at `pred` — `Nat`'s instance of the
+            // (index binder, child projection) pair every form-A branch owes.
+            let inv = [(Term::Var(LocalVar(2)), pred(Term::Var(LocalVar(0))))];
             let inner = if form == Form::ASucc {
                 self.forded_arm_body(
                     &ecx,
@@ -1293,7 +1436,7 @@ impl Elaborator {
                     // the body sits one binder deeper, under `e'`.)
                     succ_k.shift_local(1),
                     Term::Var(LocalVar(0)),
-                    Some(()),
+                    Some(&inv),
                 )?
             } else {
                 let succ2 = Term::Succ(Rc::new(Term::Var(LocalVar(2))));
@@ -1331,16 +1474,282 @@ impl Elaborator {
         })
     }
 
+    /// §8.2 at a **declared** index (2026-08-04, §14.4's seam closed): the same
+    /// inversion, carried by the index type's *own* eliminator.
+    ///
+    /// ```text
+    /// arm_c = λ(m' : I). elim_I( ẑ. Π(e' : sEq(I; μ ŝ; ẑ)). M[ẑ, ⟨ŝ, e'⟩]
+    ///                          ; branch k ↦ λe'. ⟦arm body⟧
+    ///                          ; branch j ↦ λe'. elim_Empty(…; transp(…is_k…))
+    ///                          ) (m')
+    /// ```
+    ///
+    /// Which eliminator carries it is the index type's business and nothing
+    /// else's — a `Case` tree at a flat index, `elim_Wf` at a recursive one —
+    /// which is the same dispatch `indexed.rs` makes for the route-1 family
+    /// (§8.2 of that document). Inside the matching branch the child-index
+    /// binders are the index constructor's own arguments (`nth(cs'_I; ι_a)`,
+    /// where route 1's *family* uses the very same term) and each child's
+    /// equation is re-derived through `child_projection` at that argument.
+    #[allow(clippy::too_many_arguments)]
+    fn forded_arm_a_decl(
+        &self,
+        bcx: &Cx,
+        env: &ArmEnv,
+        k: usize,
+        tel: Option<&Tel>,
+        value: &Rc<Term>,
+        d: u32,
+        sh: &Term,
+        at: usize,
+        cargs: &[usize],
+    ) -> R<Term> {
+        let fam = env.fam;
+        let span = env.ordered[k].expect("checked at entry").span;
+        let Some(IdxTy::Decl(iind)) = env.ind.index_ty.as_ref() else {
+            return err("internal: form A at a declared index without one", span);
+        };
+        let n_i = iind.ctors.len();
+        let mut mcx = bcx.clone();
+        mcx.push("#idx".into(), fam.ity.shift_local(d), env.li.clone());
+        // The inversion motive, over (…, m', ẑ) — identical to `Nat`'s, which
+        // is the point: the fording layer never inspects the index's recursion.
+        let nmot = Type::Pi {
+            dom_level: env.li.clone(),
+            cod_level: env.mlvl.clone(),
+            dom: Rc::new(fam.eq_at(sh.shift_local(2), Term::Var(LocalVar(0)), d + 2)),
+            cod: Rc::new(env.mot_at(
+                Term::Var(LocalVar(1)),
+                fam.pair_at(
+                    Term::Var(LocalVar(1)),
+                    sh.shift_local(3),
+                    Term::Var(LocalVar(0)),
+                    d + 3,
+                ),
+                d + 3,
+            )),
+        };
+        // The index type's tag spine, scoped where `fam.ity` is: in Γ.
+        let ispine = self.spine(&fam.ity, &fam.ilvl, n_i, span)?;
+        if iind.recursive {
+            let body = |bcx2: &Cx,
+                        itel: &Tel,
+                        jj: usize,
+                        ivalue: &Rc<Term>,
+                        d_body: u32,
+                        _e: &Type|
+             -> R<Term> {
+                // `dz` is the branch body's depth past Γ: `mcx` sits at `d+1`.
+                let dz = d + 1 + d_body;
+                let Type::Wf { level, shape, arity } = fam.ity.shift_local(dz) else {
+                    return err("internal: a recursive index did not lower to a `Wf`", span);
+                };
+                // ẑ_j = sup_f(ι_j(label); cs'_I), rebuilt from the branch's own
+                // binders; its identity with the declared constructor is `Unit`
+                // η, which conversion pays (route 1 §8.2 fact 2).
+                let zj = Term::Supf {
+                    level,
+                    shape,
+                    arity,
+                    label: Rc::new(inject(&itel.spine, jj, n_i, (**ivalue).clone(), d_body)),
+                    children: Rc::new(Term::Var(LocalVar(1))),
+                };
+                self.forded_inv_branch(
+                    bcx2, env, k, tel, value, d, sh, at, cargs, iind, &ispine, jj, dz, &zj,
+                )
+            };
+            self.build_elim_wf(
+                &mcx,
+                iind,
+                &fam.ity.shift_local(d + 1),
+                nmot,
+                env.ql.clone(),
+                Term::Var(LocalVar(0)),
+                &Branches::Custom(&body),
+                None,
+                span,
+            )
+            .map(|elim| self.idx_lam(env, fam, d, elim))
+        } else {
+            // A flat index: no children anywhere (an enum constructor has no
+            // recursive argument), so the branch bodies are the arm body and
+            // the no-confusion branches, and nothing projects.
+            let body = |bcx2: &Cx, jj: usize, ivalue: &Rc<Term>, dz: u32, _e: &Type| -> R<Term> {
+                let zj = inject(&ispine, jj, n_i, (**ivalue).clone(), dz);
+                self.forded_inv_branch(
+                    bcx2, env, k, tel, value, d, sh, at, cargs, iind, &ispine, jj, dz, &zj,
+                )
+            };
+            self.idx_case_tree(
+                &mcx,
+                &ispine,
+                n_i,
+                0,
+                nmot,
+                &env.ql.clone(),
+                Rc::new(Term::Var(LocalVar(0))),
+                d + 1,
+                &body,
+            )
+            .map(|elim| self.idx_lam(env, fam, d, elim))
+        }
+    }
+
+    /// `λ(m' : I). …` — form A's outer binder, the one the inversion
+    /// scrutinizes.
+    fn idx_lam(&self, env: &ArmEnv, fam: &FordedFam, d: u32, body: Term) -> Term {
+        Term::Lam {
+            dom_level: env.li.clone(),
+            cod_level: env.ql.clone(),
+            dom: Rc::new(fam.ity.shift_local(d)),
+            body: Rc::new(body),
+        }
+    }
+
+    /// One branch of §8.2's inversion at a declared index: `λ(e'). …`, with
+    /// the arm body at the constructor's own index constructor and
+    /// no-confusion at every other.
+    ///
+    /// `dz` is the branch body's depth past Γ and `zj` the index it stands at,
+    /// scoped there.
+    #[allow(clippy::too_many_arguments)]
+    fn forded_inv_branch(
+        &self,
+        bcx2: &Cx,
+        env: &ArmEnv,
+        k: usize,
+        tel: Option<&Tel>,
+        value: &Rc<Term>,
+        d: u32,
+        sh: &Term,
+        at: usize,
+        cargs: &[usize],
+        iind: &Rc<Inductive>,
+        ispine: &Spine,
+        jj: usize,
+        dz: u32,
+        zj: &Term,
+    ) -> R<Term> {
+        let fam = env.fam;
+        let span = env.ordered[k].expect("checked at entry").span;
+        let eq = fam.eq_at(sh.shift_local(dz - d), zj.clone(), dz);
+        let mut ecx = bcx2.clone();
+        ecx.push("#eq".into(), eq.clone(), env.li.clone());
+        // The arm body sits `j` binders past the *skeleton's* branch body.
+        let j = dz + 1 - d;
+        let inner = if jj == at {
+            // Per child: the index binder — the index constructor's own
+            // argument — and the projection that recovers it from a bound `z`.
+            let m_i = iind.ctors[jj].arity();
+            let mut inv: Vec<(Term, Term)> = Vec::with_capacity(cargs.len());
+            let mut zcx = ecx.clone();
+            zcx.push("#z".into(), fam.ity.shift_local(dz + 1), env.li.clone());
+            for a in cargs {
+                let bind = nth_child(
+                    &fam.ilvl,
+                    &Rc::new(fam.ity.shift_local(dz + 1)),
+                    m_i,
+                    *a,
+                    // `cs'_I` is `Var 1` at the index branch body, so `Var 2`
+                    // under `e'`.
+                    Rc::new(Term::Var(LocalVar(2))),
+                    &Term::Zero,
+                );
+                let proj = self.child_projection(
+                    &zcx,
+                    iind,
+                    &fam.ity.shift_local(dz + 2),
+                    &fam.ilvl,
+                    jj,
+                    *a,
+                    // The default is reached at no index this arm ever sees —
+                    // `μ ŝ` and `ẑ` are both `I_at`-headed — so any term of
+                    // type `I` in scope will do, and the *bound* `z` is the
+                    // cheapest one there is. `μ ŝ` would also type, and costs a
+                    // whole inlined `μ` per off-branch of every projection of
+                    // every child (§14.2): measured as `OutOfFuel` on the very
+                    // first three-constructor index, not as a slow test.
+                    Rc::new(Term::Var(LocalVar(0))),
+                    Term::Var(LocalVar(0)),
+                    span,
+                )?;
+                inv.push((bind, proj));
+            }
+            self.forded_arm_body(
+                &ecx,
+                env,
+                k,
+                tel,
+                value,
+                d,
+                sh,
+                j,
+                zj.shift_local(1),
+                Term::Var(LocalVar(0)),
+                Some(&inv),
+            )?
+        } else {
+            // No-confusion: `μ ŝ` is `I_at`-headed and this branch's index is
+            // `I_jj`-headed, so the equation transports `⟨⟩` into `Empty`.
+            let goal = env.mot_at(
+                zj.shift_local(1),
+                fam.pair_at(
+                    zj.shift_local(1),
+                    sh.shift_local(j),
+                    Term::Var(LocalVar(0)),
+                    dz + 1,
+                ),
+                dz + 1,
+            );
+            let mut zcx = ecx.clone();
+            zcx.push("#z".into(), fam.ity.shift_local(dz + 1), env.li.clone());
+            let tag = self.idx_tag_pred(
+                &zcx,
+                iind,
+                &fam.ity,
+                ispine,
+                at,
+                Rc::new(Term::Var(LocalVar(0))),
+                dz + 2,
+                span,
+            )?;
+            Term::ElimEmpty {
+                level: env.mlvl.clone(),
+                scrut_level: Level::Zero,
+                motive: Rc::new(goal.shift_local(1)),
+                scrut: Rc::new(Term::Transp {
+                    ty_level: env.li.clone(),
+                    motive_level: Level::constant(0),
+                    ty: Rc::new(fam.ity.shift_local(dz + 1)),
+                    motive: Rc::new(Type::El {
+                        level: Level::constant(0),
+                        tm: Rc::new(tag),
+                    }),
+                    lhs: Rc::new(fam.mu_at(sh.shift_local(j), dz + 1)),
+                    rhs: Rc::new(zj.shift_local(1)),
+                    proof: Rc::new(Term::Var(LocalVar(0))),
+                    tm: Rc::new(Term::Triv { level: Level::Zero }),
+                }),
+            }
+        };
+        Ok(Term::Lam {
+            dom_level: env.li.clone(),
+            cod_level: env.mlvl.clone(),
+            dom: Rc::new(eq),
+            body: Rc::new(inner),
+        })
+    }
+
     /// The arm body itself (§8.1's table): the payload fields at their
-    /// projections, each child-index field at its child's measure (or, in form
-    /// A's `Succ` branch, at the inverted `k`), each child at
+    /// projections, each child-index field at its child's measure (or, in a
+    /// form-A branch, at the inverted index binder), each child at
     /// `⟨child, proof⟩`, and a self-call at `ihQ_t index proof`.
     ///
-    /// `j` is how many binders past the branch body this sits (form B: 3, form
-    /// A: 2 or 4), `at_m` the index the motive is instantiated at, `at_e` the
-    /// proof term in scope, and `inverted` marks form A's `Succ` branch — where
-    /// the child's index binder is the `elim_Nat` predecessor and its proof is
-    /// re-derived at `pred` rather than being `srefl`.
+    /// `j` is how many binders past the branch body this sits, `at_m` the index
+    /// the motive is instantiated at, `at_e` the proof term in scope, and
+    /// `inverted` is form A's per-child pair: the index binder (scoped at
+    /// `d + j`) and the child projection at a bound `z` (one deeper), through
+    /// which the child's equation is re-derived rather than being `srefl`.
     #[allow(clippy::too_many_arguments)]
     fn forded_arm_body(
         &self,
@@ -1354,7 +1763,7 @@ impl Elaborator {
         j: u32,
         at_m: Term,
         at_e: Term,
-        inverted: Option<()>,
+        inverted: Option<&[(Term, Term)]>,
     ) -> R<Term> {
         let fam = env.fam;
         let ind = env.ind;
@@ -1400,26 +1809,30 @@ impl Elaborator {
                     continue;
                 }
                 let child = child_of(ct, 0);
-                if inverted.is_some() {
-                    // §8.2: the tail's proof is re-derived by `transp` at the
-                    // `pred` motive; the stored proof is consulted nowhere.
-                    let e_tail = Term::Transp {
+                if let Some(inv) = inverted {
+                    // §8.2: the child's index binder is the *inverted* one, and
+                    // its proof is re-derived by `transp` at that argument's
+                    // projection — `pred` at `Nat`, `child_projection` at a
+                    // declared index. The stored proof is consulted nowhere,
+                    // which is what makes β definitional on open data.
+                    let (bind, proj) = &inv[ct];
+                    let e_child = Term::Transp {
                         ty_level: env.li.clone(),
                         motive_level: env.li.clone(),
-                        ty: Rc::new(Type::Nat),
+                        ty: Rc::new(fam.ity.shift_local(dd)),
                         motive: Rc::new(Type::SEq {
                             level: env.li.clone(),
-                            ty: Rc::new(Type::Nat),
+                            ty: Rc::new(fam.ity.shift_local(dd + 1)),
                             lhs: Rc::new(fam.mu_at(child_of(ct, 1), dd + 1)),
-                            rhs: Rc::new(pred(Term::Var(LocalVar(0)))),
+                            rhs: Rc::new(proj.clone()),
                         }),
                         lhs: Rc::new(fam.mu_at(sh.shift_local(j), dd)),
-                        rhs: Rc::new(Term::Succ(Rc::new(Term::Var(LocalVar(2))))),
+                        rhs: Rc::new(at_m.clone()),
                         proof: Rc::new(Term::Var(LocalVar(0))),
                         tm: Rc::new(fam.srefl_at(fam.mu_at(child.clone(), dd), dd)),
                     };
-                    idx_of_child[ct] = Term::Var(LocalVar(2));
-                    proof_of_child[ct] = e_tail;
+                    idx_of_child[ct] = bind.clone();
+                    proof_of_child[ct] = e_child;
                 } else {
                     let mu_c = fam.mu_at(child.clone(), dd);
                     idx_of_child[ct] = mu_c.clone();
@@ -1612,5 +2025,284 @@ impl ArmEnv<'_> {
     fn mot_at(&self, m: Term, z: Term, extra: u32) -> Type {
         self.motive
             .apply_local(&embed(self.gamma0, extra).extended(Rc::new(m)).extended(Rc::new(z)))
+    }
+}
+
+#[cfg(test)]
+mod decl_inversion {
+    //! §8.2's inversion at a **declared** index, hand-composed against the real
+    //! kernel — the tier discipline's prototype step for the round that made
+    //! form A fire there (§14.4's seam).
+    //!
+    //! What is hand-composed here is the pair of *obligations* the arm builder
+    //! then has to meet, and nothing else: the generator's own de Bruijn
+    //! plumbing is §13.2's business and is exercised end to end from the
+    //! surface in `crates/elab/tests/indexed_route_2b_gen.rs`.
+    //!
+    //!  1. **no-confusion at a declared index** — with `e` an `sEq` between two
+    //!     *different* index constructors, transporting `⟨⟩` through the tag
+    //!     predicate lands in `Empty`, so `elim_Empty` eliminates into anything.
+    //!     At `Nat` this is `zero_pred`/`is_succ`; here it is `ConstBody::TagCode`
+    //!     under `const_elim_wf`, which had never been used for this purpose;
+    //!  2. **child-index recovery** — with `e : sEq(I; I_k(ā); I_k(x̄))`,
+    //!     transporting `srefl` through `wf.rs` §7.2's `child_projection` at
+    //!     argument `t` gives `sEq(I; a_t; x_t)`, which is the equation the arm's
+    //!     child value needs. This is the step that replaces route 1's
+    //!     `nth(cs'; ι)` *inside the equation*, and the one the doc called
+    //!     unbuilt.
+    //!
+    //! Both are stated over an index type with **three** constructors and at
+    //! **open** subjects (`docs/testing-generated-terms.md` axes 2 and 6): a
+    //! two-constructor index emits no inner `Case`, and a closed subject makes
+    //! every projection compute for the wrong reason.
+
+    use super::*;
+    use heather_kernel::term::GlobalCtx;
+    use heather_kernel::typing::check_term;
+    use heather_syntax::ast::Expr;
+
+    const SPAN: Span = Span { start: 0, end: 0 };
+    const SHAPE: &str = "inductive Shape { SLeaf, SBud(s: Shape), SNode(l: Shape, r: Shape) }";
+
+    fn var(name: &str) -> Expr {
+        Expr { kind: ExprKind::Var(name.into()), span: SPAN }
+    }
+
+    struct Proto {
+        el: Elaborator,
+        ind: Rc<Inductive>,
+        ity: Type,
+        ilvl: Level,
+        spine: Spine,
+        cx: Cx,
+    }
+
+    /// `Γ = (a, b, l, r : Shape)` — every subject open.
+    fn proto() -> Proto {
+        let mut el = Elaborator::with_prelude().expect("prelude");
+        el.elab_source(SHAPE).expect("the index declaration elaborates");
+        let ind = Rc::clone(el.inductives.get("Shape").expect("declared"));
+        let cx0 = Cx::empty();
+        let (ity, ilvl) = el.lower_instance(&cx0, &ind, &[], &[], SPAN).expect("lowers");
+        let spine = el.spine(&ity, &ilvl, ind.ctors.len(), SPAN).expect("spine");
+        let mut cx = cx0;
+        for n in ["a", "b", "l", "r"] {
+            cx.push(n.into(), ity.clone(), ilvl.clone());
+        }
+        Proto { el, ind, ity, ilvl, spine, cx }
+    }
+
+    impl Proto {
+        /// `c(args)` at `Shape`, in `cx`.
+        fn ctor(&self, i: usize, args: &[Expr]) -> Term {
+            self.el
+                .build_ctor(&self.cx, &self.ind, i, args, &self.ity, &self.ilvl, SPAN)
+                .expect("a Shape constructor builds")
+        }
+
+        fn with(&self, name: &str, ty: Type, level: Level) -> Cx {
+            let mut cx = self.cx.clone();
+            cx.push(name.into(), ty, level);
+            cx
+        }
+
+        fn check(&self, cx: &Cx, tm: &Term, ty: &Type, level: &Level) {
+            check_term(
+                self.el.psi(),
+                0,
+                Layer::Prog,
+                &cx.gamma,
+                tm,
+                ty,
+                level,
+                self.el.fuel,
+            )
+            .unwrap_or_else(|e| panic!("does not check: {e:?}"));
+        }
+
+        fn conv(&self, cx: &Cx, a: &Term, b: &Term, ty: &Type, level: &Level) {
+            conv_term(self.el.psi(), &cx.gamma, Layer::Prog, a, b, ty, level, self.el.fuel)
+                .unwrap_or_else(|e| panic!("not convertible: {e:?}"));
+        }
+
+        fn seq(&self, lhs: Term, rhs: Term, by: u32) -> Type {
+            Type::SEq {
+                level: self.ilvl.clone(),
+                ty: Rc::new(self.ity.shift_local(by)),
+                lhs: Rc::new(lhs),
+                rhs: Rc::new(rhs),
+            }
+        }
+    }
+
+    // -- the two ingredients, separately ------------------------------------
+
+    #[test]
+    fn the_tag_predicate_separates_three_index_constructors() {
+        let p = proto();
+        let node = p.ctor(2, &[var("l"), var("r")]);
+        let bud = p.ctor(1, &[var("a")]);
+        let leaf = p.ctor(0, &[]);
+        let ty0 = Type::Ty(Level::Zero);
+        let l1 = Level::succ(Level::Zero);
+        let unit = Term::TmUnit { level: Level::Zero };
+        let empty = Term::TmEmpty { level: Level::Zero };
+        // Nine cells: every predicate against every constructor, so a
+        // projection that is off by one `Case` fails here and not three layers
+        // up. `SNode`'s subjects are open throughout.
+        for k in 0..3usize {
+            for (j, subject) in [(0usize, &leaf), (1, &bud), (2, &node)] {
+                let pred = p
+                    .el
+                    .idx_tag_pred(
+                        &p.cx,
+                        &p.ind,
+                        &p.ity,
+                        &p.spine,
+                        k,
+                        Rc::new((*subject).clone()),
+                        0,
+                        SPAN,
+                    )
+                    .expect("the tag predicate builds");
+                let want = if j == k { &unit } else { &empty };
+                p.conv(&p.cx, &pred, want, &ty0, &l1);
+            }
+        }
+    }
+
+    #[test]
+    fn the_child_projection_recovers_an_open_argument() {
+        let p = proto();
+        let node = p.ctor(2, &[var("l"), var("r")]);
+        let bud = p.ctor(1, &[var("a")]);
+        for (t, want) in [(0usize, "l"), (1, "r")] {
+            let proj = p
+                .el
+                .child_projection(
+                    &p.cx,
+                    &p.ind,
+                    &p.ity,
+                    &p.ilvl,
+                    2,
+                    t,
+                    Rc::new(bud.clone()),
+                    node.clone(),
+                    SPAN,
+                )
+                .expect("the child projection builds");
+            // `l` is Var 1 and `r` is Var 0 of `(a, b, l, r)`.
+            let v = Term::Var(LocalVar(if want == "l" { 1 } else { 0 }));
+            p.conv(&p.cx, &proj, &v, &p.ity, &p.ilvl);
+        }
+    }
+
+    // -- the two obligations the arm builder has to meet ---------------------
+
+    #[test]
+    fn no_confusion_at_a_declared_index_lands_in_empty() {
+        // §8.2's `j ≠ k` branch: `μ ŝ` is `SBud`-headed, the branch's index is
+        // `SNode`-headed, and the stored equation between them is absurd.
+        let p = proto();
+        let bud = p.ctor(1, &[var("a")]);
+        let node = p.ctor(2, &[var("l"), var("r")]);
+        let ecx = p.with("#e", p.seq(bud.clone(), node.clone(), 0), p.ilvl.clone());
+        let zcx = {
+            let mut cx = ecx.clone();
+            cx.push("#z".into(), p.ity.clone(), p.ilvl.clone());
+            cx
+        };
+        let tag = p
+            .el
+            .idx_tag_pred(
+                &zcx,
+                &p.ind,
+                &p.ity,
+                &p.spine,
+                1,
+                Rc::new(Term::Var(LocalVar(0))),
+                2,
+                SPAN,
+            )
+            .expect("builds");
+        let absurd = Term::Transp {
+            ty_level: p.ilvl.clone(),
+            motive_level: Level::constant(0),
+            ty: Rc::new(p.ity.shift_local(1)),
+            motive: Rc::new(Type::El { level: Level::constant(0), tm: Rc::new(tag) }),
+            lhs: Rc::new(bud.shift_local(1)),
+            rhs: Rc::new(node.shift_local(1)),
+            proof: Rc::new(Term::Var(LocalVar(0))),
+            tm: Rc::new(Term::Triv { level: Level::Zero }),
+        };
+        let elim = Term::ElimEmpty {
+            level: Level::Zero,
+            scrut_level: Level::Zero,
+            motive: Rc::new(Type::Nat),
+            scrut: Rc::new(absurd),
+        };
+        p.check(&ecx, &elim, &Type::Nat, &Level::Zero);
+    }
+
+    #[test]
+    fn a_child_index_is_recovered_through_the_projection() {
+        // §8.2's matching branch: from `e : sEq(I; SNode(a, b); SNode(l, r))`,
+        // the equation the arm's *first* child needs is `sEq(I; a; l)`, and the
+        // way to it is `transp` through the child projection — `pred` at `Nat`,
+        // `child_projection` here. Both arguments are checked, because a
+        // projection at the wrong `Fin` index is exactly the defect axis 6
+        // exists for.
+        let p = proto();
+        let bud = p.ctor(1, &[var("a")]);
+        let lhs = p.ctor(2, &[var("a"), var("b")]);
+        let rhs = p.ctor(2, &[var("l"), var("r")]);
+        let ecx = p.with("#e", p.seq(lhs.clone(), rhs.clone(), 0), p.ilvl.clone());
+        let mut zcx = ecx.clone();
+        zcx.push("#z".into(), p.ity.clone(), p.ilvl.clone());
+        // In `ecx = (a, b, l, r, e)`: `a` is Var 4, `b` is 3, `l` is 2, `r` is 1.
+        for (t, child, want) in [(0usize, 4u32, 2u32), (1, 3, 1)] {
+            let proj = p
+                .el
+                .child_projection(
+                    &zcx,
+                    &p.ind,
+                    &p.ity,
+                    &p.ilvl,
+                    2,
+                    t,
+                    Rc::new(bud.shift_local(2)),
+                    Term::Var(LocalVar(0)),
+                    SPAN,
+                )
+                .expect("builds");
+            let motive = Type::SEq {
+                level: p.ilvl.clone(),
+                ty: Rc::new(p.ity.shift_local(1)),
+                lhs: Rc::new(Term::Var(LocalVar(child + 1))),
+                rhs: Rc::new(proj),
+            };
+            let tm = Term::Transp {
+                ty_level: p.ilvl.clone(),
+                motive_level: p.ilvl.clone(),
+                ty: Rc::new(p.ity.clone()),
+                motive: Rc::new(motive),
+                lhs: Rc::new(lhs.shift_local(1)),
+                rhs: Rc::new(rhs.shift_local(1)),
+                proof: Rc::new(Term::Var(LocalVar(0))),
+                tm: Rc::new(Term::SRefl {
+                    level: p.ilvl.clone(),
+                    ty: Rc::new(p.ity.clone()),
+                    tm: Rc::new(Term::Var(LocalVar(child))),
+                }),
+            };
+            let goal = Type::SEq {
+                level: p.ilvl.clone(),
+                ty: Rc::new(p.ity.clone()),
+                lhs: Rc::new(Term::Var(LocalVar(child))),
+                rhs: Rc::new(Term::Var(LocalVar(want))),
+            };
+            p.check(&ecx, &tm, &goal, &p.ilvl);
+        }
+        let _ = GlobalCtx::default();
     }
 }
