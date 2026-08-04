@@ -3,7 +3,7 @@ title: Ch. 07 obligations for bodied globals: glueing at p, neutral at c
 status: open
 labels: [kernel,delam,metatheory]
 created: 2026-07-31
-updated: 2026-07-31
+updated: 2026-08-04
 ---
 
 
@@ -46,3 +46,7 @@ Same trigger as its predecessor: before the next thing that leans hard on
 the LR, or when the Coq formalization is far enough along to extend. The
 risk here is bulk, not novelty — none of the four is a new *shape* of
 obligation.
+
+## Log
+
+- 2026-08-04: Scope note (2026-08-04): [[generated-term-defs]] landed — the elaborator now emits MACHINE-WRITTEN bodied globals (μ, tag predicates, child projections) alongside user fns. Same obligation kind, more instances: whatever this issue settles for bodied globals covers them uniformly (they are checked and registered exactly as a fn is). The planned successor [[family-types-as-code-defs]] would add layer-c CODE definitions consumed via El at p — check that spelling against ch. 06/07 before that round starts.

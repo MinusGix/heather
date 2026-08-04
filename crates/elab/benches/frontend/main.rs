@@ -252,6 +252,9 @@ fn fixtures_index() -> Vec<(&'static str, &'static str)> {
         ("forded/computed-arms", "route 2b with n constructors — §14.2's μ multiplier"),
         ("forded/occurrences", "n uses of one forded family — the per-use cost"),
         ("forded/declared-index-tags", "form A swept along the index type — §14.9"),
+        // One line, and it has to stay one line: `the_list_table_names_every_family`
+        // matches `("<name>"` as a substring of this file.
+        ("forded/declared-index-branching", "the same at a branching index — §14.9's cliff"),
         ("meta/nested-inference", "d nested implicit instantiations"),
     ]
 }

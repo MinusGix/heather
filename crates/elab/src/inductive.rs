@@ -708,7 +708,12 @@ impl Elaborator {
             }
         }
         self.by_tag.insert(ind.tag, Rc::clone(&ind));
-        self.inductives.insert(d.name.clone(), ind);
+        self.inductives.insert(d.name.clone(), Rc::clone(&ind));
+        // The generator's own artifacts become Ψ definitions here — once, at
+        // declaration time, never edited afterwards (§14.6's discipline, the
+        // same one the skeleton above follows). Everything the declaration
+        // emits later references them; see `gendefs.rs`.
+        self.register_gen_defs(&ind, d.span);
         Ok(())
     }
 

@@ -185,9 +185,10 @@ here.
 | `corpus/check-file` | `lib/*.hthr` end to end, as `heather check` does it, with the phase split | 0.58 ms / 1.21 s / 67 s (67–88 s) |
 | `scale/declarations` | *n* independent `fn`+`theorem` pairs — file size with no pathology in it | slope 0.98 (0.98–1.12) |
 | `scale/wide-inductive` | an inductive with *n* constructors and the *n*-arm `match` | slope 1.51 (1.51–1.67) |
-| `forded/computed-arms` | a route-2b family with *n* constructors, and the *n*-arm match | **slope 3.39** (3.33–3.58) |
-| `forded/occurrences` | *n* declarations over one forded family | slope 1.03, ~119 ms **per use** |
-| `forded/declared-index-tags` | form A swept along the *index* type's constructor count | **slope 2.65** (2.65–2.90) |
+| `forded/computed-arms` | a route-2b family with *n* constructors, and the *n*-arm match | slope 2.79 (was 3.39) |
+| `forded/occurrences` | *n* declarations over one forded family | slope 0.99, ~28 ms **per use** (was ~119 ms) |
+| `forded/declared-index-tags` | form A swept along the *index* type's constructor count | slope 2.61 (was 2.65) |
+| `forded/declared-index-branching` | the same at a **branching** index constructor | slope 1.53 (new 2026-08-04) |
 | `meta/nested-inference` | *d* nested implicit instantiations, built and projected back | slope 1.84 (1.84–1.90) |
 
 The spread is the point of the noise warning above, and it is also the
@@ -199,46 +200,75 @@ unrelated files, and `lib/ir_v1.hthr` is not "a bigger `lib/vec_code.hthr`" —
 it is a file of deep proofs whose cost is conversion, not size. The printed
 slope of ~5.4 there is an artefact of exactly that and means nothing.
 
-## The three forded families, and the round that will re-record them
+## The forded families, and the round that re-recorded them
 
 `forded/computed-arms`, `forded/occurrences` and
 `forded/declared-index-tags` are the reason this suite was built when it was.
-`issues/frontend-benchmarks.md` carries two 2026-08-04 triggers, and both name
-the same lever:
+`issues/frontend-benchmarks.md` carried two 2026-08-04 triggers, and both
+named the same lever:
 
-- **§14.2** — `μ`, the index measure, is a whole `elim_Wf` **inlined at every
-  occurrence**, because the kernel term language has no definitions
-  (`issues/simulate-conversion-cost.md`). The family type has one, the
-  eliminator instantiates it several times per arm, and a forded type inside
-  another type multiplies that again.
-- **§14.9** — at a *declared* index, form A additionally emits one
+- **§14.2** — `μ`, the index measure, was a whole `elim_Wf` **inlined at every
+  occurrence**, because nothing named it. The family type had one, the
+  eliminator instantiated it several times per arm, and a forded type inside
+  another type multiplied that again.
+- **§14.9** — at a *declared* index, form A additionally emitted one
   `child_projection` per child and one tag predicate per **other** index
   constructor, each itself a whole `elim_Wf`. The product of branching and a
-  three-constructor index already exceeds `DEFAULT_FUEL`, and is pinned as a
+  three-constructor index exceeded `DEFAULT_FUEL` and was pinned as a
   deliberate negative in `crates/elab/tests/indexed_route_2b_declared.rs`.
 
-What the fixtures measured on 2026-08-04, the first day they existed:
+`issues/generated-term-defs.md` pulled that lever on 2026-08-04: `μ`, the tag
+predicates and the child projections became **Ψ definitions**, registered once
+at declaration time under machine names and referenced everywhere
+(`crates/elab/src/gendefs.rs`). Before and after, same machine, same day:
 
 | | 2 | 3 | 4 | 5 | 6 | slope |
 |---|---|---|---|---|---|---|
-| `forded/computed-arms` (arms) | 31 ms | 112 ms | 317 ms | 665 ms | 1.25 s | **3.39** |
-| `forded/declared-index-tags` (index ctors) | 18 ms | 48 ms | 104 ms | 199 ms | 328 ms | **2.65** |
+| `computed-arms` (arms) **before** | 31 ms | 112 ms | 317 ms | 665 ms | 1.25 s | **3.39** |
+| `computed-arms` **after** | 8.5 ms | 28 ms | 62 ms | 116 ms | 195 ms | **2.79** |
+| `declared-index-tags` (index ctors) **before** | 18 ms | 48 ms | 104 ms | 199 ms | 328 ms | **2.65** |
+| `declared-index-tags` **after** | 13 ms | 34 ms | 73 ms | 137 ms | 234 ms | **2.61** |
+| `declared-index-branching` **before** | 353 ms | 613 ms | 996 ms | 1.48 s | 2.08 s | ~1.4 |
+| `declared-index-branching` **after** | 116 ms | 199 ms | 310 ms | 458 ms | 645 ms | **1.53** |
 
-Read that as a user would: adding one constructor to an *index* type — a type
-the user may not think of as part of the family at all — roughly *doubles* the
-cost of every declaration over every family indexed by it. And in both
-families **97–99% of the time is the kernel gate**, not the elaborator. The
-frontend's problem here is not that it is slow; it is that it hands the kernel
-a term whose size is a product where it should be a sum.
+and `forded/occurrences` — what one *mention* of a forded family costs a user
+— went from **119 ms per use to 27–29 ms**, at an unchanged slope of ~1.0.
+That per-use figure is the round's headline.
 
-**The bands record the exponents that exist, not the ones the design wants**,
-which is the kernel doc's rule for a band that records a defect. When the
-kernel-`def` round lands, the expected outcome is that these fits fall *below*
-their bands and `--check` goes red on exactly them — five "regressions" that
-are the old exponents being left behind. The right response then is `--save`,
-a note in the commit, and the before/after table above as the round's number.
-`forded/occurrences`'s **per-use** figure (~119 ms today) is the other half of
-that number: it is what one mention of a forded family costs a user.
+**The prediction this section used to carry was half right, and the half it
+got wrong is the more interesting one.** It said the fits would fall *below*
+their bands and `--check` would go red on exactly them. `--check` stayed
+green: the round cut the **constant** by 4–7× on `computed-arms` and
+`occurrences` and 3.2–3.7× on branching, and moved the **exponents** by 0.60,
+0.04 and 0.00. The bands were wide enough to record a defect, and the defect
+turned out to be *two* defects sharing one curve.
+
+What the definitions removed is the generated **terms**. What is left is the
+generated **types**: a forded family's skeleton `⟦Skel⟧` and its index type
+`I` are `Type::Wf`s whose node count is Θ(constructors), and they are still
+written out afresh at every occurrence — once per `sEq`, per `Lam` domain, per
+`transp` annotation, per motive instantiation, of which there are
+Θ(constructors). Θ(n) copies of a Θ(n) type is the residual quadratic, and the
+same lever does not reach it: `GlobalBinding::Ty` has no body, so a *type*
+cannot be a Ψ definition at all. `docs/inductive-fording-lowering.md` §14.11
+records that as the successor seam.
+
+The one place the exponent did move is `computed-arms`, and that is consistent
+with the reading above: there the arm count multiplies both the types *and*
+the eliminator instantiations, so removing one factor of the product shows up
+in the slope; at `declared-index-tags` the swept quantity only multiplies the
+type, so it does not.
+
+Two other things stayed true across the round and are worth keeping: in every
+forded family **94–99% of the time is the kernel gate**, not the elaborator;
+and the bands here **record the exponents that exist, not the ones the design
+wants**. They were tightened around the new slopes rather than moved, so the
+next round is measured against what this one achieved.
+
+The branching row, `forded/declared-index-branching`, is new: §14.9's fuel
+cliff is what made it impossible before, and the fixture comment on
+`declared_index_tags` (which stayed deliberately linear, so that its before
+and after are the same measurement) is the pointer to why.
 
 ## The other thing the phase split said on day one
 
@@ -251,4 +281,5 @@ It does — and it also says that on the file that dominates the tree's check
 time, the frontend is 1% of the wait. Elaborator optimizations aimed at
 `lib/ir_v1.hthr` would be aimed at 1.2% of it; the leverage is entirely in
 what the elaborator *emits*, which is what the forded families measure and
-what a kernel `def` changes.
+what the kernel definitions of `issues/generated-term-defs.md` changed — by
+4–7× on the emitted terms, with the emitted *types* still to go.

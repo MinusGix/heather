@@ -1,6 +1,6 @@
 ---
 title: Route generator-emitted terms through kernel definitions
-status: open
+status: closed
 labels: [kernel,elaboration,performance,inductives]
 created: 2026-08-04
 updated: 2026-08-04
@@ -28,3 +28,7 @@ Expected outcome: the three forded fits fall *below* their bands, `--check` goes
 - [[metatheory-ch07-definitions]] owns the FT obligations for bodied globals (glueing at p, neutral at c); leaning harder on defs raises its priority but adds no new obligation kind.
 - [[frontend-benchmarks]]'s harness is the gate; re-record on a quiet machine first (2026-08-04 baseline is ~1.3–1.5× pessimistic on absolutes; exponents unaffected).
 - Route 1's `elim_Wf` families (route-1 doc §10.3) shrink for free; `context-representation-clones` and `schema-construction-caching` are adjacent but not owed here.
+
+## Log
+
+- 2026-08-04: LANDED (managed round, phase 2): crates/elab/src/gendefs.rs — GenDef::{Mu,IdxTag,IdxChild} registered at declaration time as bodied Ψ globals (kernel-checked like any fn; #skel-style names for diagnostics only, registry keyed by GenDef not string; best-effort — a piece that fails the gate is inlined as before). The child projection's default is ABSTRACTED, which is what lets one definition serve every occurrence. Exclusions measured, not assumed: μ of a parameterized family stays inlined (body needs the monomorphized skeleton lowering, unknown at declaration; one such family in the suite vs twenty); per-arm eliminator instantiations stay inline (motive is use-site). Recognizer re-keyed (forded_of: skeleton tag + the sEq lhs must be THIS declaration's μ_D by name where one exists), and the seam was TWO-SIDED — the old structural read was also credulous, accepting a Σ over F's skeleton carrying G's μ; both directions pinned in forded.rs mod fingerprint. Suite 929 → 931; exactly one outcome changed, the predicted one — the §14.9 fuel-cliff negative flipped positive and is rewritten as such. NUMBERS (same machine, same day, stash-verified): computed-arms @6 1.25s → 195ms (slope 3.39 → 2.79), occurrences 119 → 28ms per use, declared-index-tags @6 328 → 234ms (2.65 → 2.61), NEW branching family @6 2.08s → 645ms (slope 1.53); constants 4–7×, bands re-tightened around the new slopes, --save re-recorded, final --check green 47/47. THE CHARTER'S HEADLINE PREDICTION WAS WRONG in an instructive way: --check never went red — the superlinearity survives in the emitted TYPES (GlobalBinding::Ty has no body; term.rs:1005), which is a second defect, not a partial fix — the constants were the terms, the exponents are the types. Route 1 did NOT shrink for free for the same reason (its family IS a type-valued eliminator). Successor filed: [[family-types-as-code-defs]] owns both. Conv needed no change — same-name globals already compare without unfolding behind delta_head (conv.rs:626/:1310), verified before measuring. Closing complete: terms are done; types were never this issue's to fix.

@@ -33,6 +33,7 @@ use heather_kernel::level::Level;
 use heather_kernel::term::{LocalCtx, LocalSubst, LocalVar, Term, Type};
 use heather_syntax::ast::{Arm, Expr, ExprKind, Span};
 
+use crate::gendefs::GenDef;
 use crate::indexed::{set_scrut, wf_ih_at};
 use crate::inductive::{
     inject, nat_lit, tag_value, ConstBody, FieldKind, IdxTy, Inductive, Spine,
@@ -211,6 +212,20 @@ impl Elaborator {
         // The tag comes out of the *skeleton*, where `tag_of` already looks.
         let skel = self.tag_of(&fst)?;
         let ind = Rc::clone(self.forded_by_skel.get(&skel.tag)?);
+        // …and the `μ` slot is checked by **name** (§14.1, re-keyed
+        // 2026-08-04 by `issues/generated-term-defs.md`): where the
+        // declaration has a registered `μ_D`, the `sEq`'s left-hand side must
+        // be that definition applied to the Σ binder, and nothing else — not
+        // another global, not a look-alike written out by hand. Where it has
+        // none (a parameterized family keeps its inlined `μ`, `gendefs.rs`)
+        // the old structural read stands, unchanged.
+        let key = GenDef::Mu(ind.tag);
+        if self.gen_ref(cx, key).is_some() {
+            let Term::App { fun, .. } = &*lhs else { return None };
+            if !self.is_gen_ref(fun, key) {
+                return None;
+            }
+        }
         let node = set_scrut(&lhs, Rc::new(Term::Zero))?;
         // The Σ's second component is scoped under the binder; `μ`, `I` and the
         // index all mention it nowhere, so substituting a closed term for it is
@@ -288,7 +303,17 @@ impl Elaborator {
         // constructor has a child, tier 0's sum-of-Σs otherwise.
         let (skel_ty, l) = self.lower_instance(cx, skel, args, &[], span)?;
         let (ity, ilvl) = self.index_type_of(cx, ind, span)?;
-        let mu = self.build_mu(cx, ind, skel, &skel_ty, &l, &ity, &ilvl, span)?;
+        // §14.2, closed: `μ` is a Ψ definition, referenced rather than written
+        // out. `mu` is still "the node with a placeholder scrutinee" — the
+        // node is now `μ_D^δ □` and the placeholder is its argument — so
+        // everything downstream (`mu_at`, `eq_at`, the recognizer) is
+        // unchanged. Where no definition was registered (a *parameterized*
+        // forded family, `gendefs.rs`'s boundary note) the old inlined node is
+        // built exactly as before.
+        let mu = match self.gen_ref(cx, GenDef::Mu(ind.tag)) {
+            Some(f) => Self::gen_app(f, &l, &ilvl, &skel_ty, &ity, Term::Zero),
+            None => self.build_mu(cx, ind, skel, &skel_ty, &l, &ity, &ilvl, span)?,
+        };
         Ok(FordedFam {
             level: l,
             ilvl,
@@ -307,7 +332,7 @@ impl Elaborator {
     /// index expression is inspected, which is why §3.2 has no condition on its
     /// shape.
     #[allow(clippy::too_many_arguments)]
-    fn build_mu(
+    pub(crate) fn build_mu(
         &self,
         cx: &Cx,
         ind: &Inductive,
@@ -1262,6 +1287,7 @@ impl Elaborator {
         cx: &Cx,
         iind: &Inductive,
         ity: &Type,
+        ilvl: &Level,
         spine: &Spine,
         k: usize,
         scrut: Rc<Term>,
@@ -1270,6 +1296,19 @@ impl Elaborator {
     ) -> R<Term> {
         let ty0 = Type::Ty(Level::Zero);
         let l1 = Level::succ(Level::Zero);
+        // §14.9, closed: one definition per index constructor, shared by every
+        // family over that index, instead of a whole `elim_Wf` per *other*
+        // index constructor per arm.
+        if let Some(f) = self.gen_ref(cx, GenDef::IdxTag(iind.tag, k)) {
+            return Ok(Self::gen_app(
+                f,
+                ilvl,
+                &l1,
+                &ity.shift_local(d),
+                &ty0,
+                (*scrut).clone(),
+            ));
+        }
         if iind.recursive {
             self.const_elim_wf(
                 cx,
@@ -1655,7 +1694,38 @@ impl Elaborator {
                     Rc::new(Term::Var(LocalVar(2))),
                     &Term::Zero,
                 );
-                let proj = self.child_projection(
+                // §14.9, closed: the projection is a Ψ definition abstracted
+                // over its default, so one `elim_Wf` serves every child of
+                // every arm of every family over this index instead of one
+                // per occurrence. The default below is still the *bound* `z`
+                // and is passed as the definition's first argument.
+                let proj = match self.gen_ref(&zcx, GenDef::IdxChild(iind.tag, jj, *a)) {
+                    Some(f) => {
+                        let ity = fam.ity.shift_local(dz + 2);
+                        let inner = Type::Pi {
+                            dom_level: fam.ilvl.clone(),
+                            cod_level: fam.ilvl.clone(),
+                            dom: Rc::new(ity.shift_local(1)),
+                            cod: Rc::new(ity.shift_local(2)),
+                        };
+                        let applied = Term::App {
+                            fun: Rc::new(f),
+                            dom_level: fam.ilvl.clone(),
+                            cod_level: fam.ilvl.clone(),
+                            dom: Rc::new(ity.clone()),
+                            cod: Rc::new(inner),
+                            arg: Rc::new(Term::Var(LocalVar(0))),
+                        };
+                        Self::gen_app(
+                            applied,
+                            &fam.ilvl,
+                            &fam.ilvl,
+                            &ity,
+                            &ity,
+                            Term::Var(LocalVar(0)),
+                        )
+                    }
+                    None => self.child_projection(
                     &zcx,
                     iind,
                     &fam.ity.shift_local(dz + 2),
@@ -1672,7 +1742,8 @@ impl Elaborator {
                     Rc::new(Term::Var(LocalVar(0))),
                     Term::Var(LocalVar(0)),
                     span,
-                )?;
+                    )?,
+                };
                 inv.push((bind, proj));
             }
             self.forded_arm_body(
@@ -1707,6 +1778,7 @@ impl Elaborator {
                 &zcx,
                 iind,
                 &fam.ity,
+                &fam.ilvl,
                 ispine,
                 at,
                 Rc::new(Term::Var(LocalVar(0))),
@@ -2158,6 +2230,7 @@ mod decl_inversion {
                         &p.cx,
                         &p.ind,
                         &p.ity,
+                        &p.ilvl,
                         &p.spine,
                         k,
                         Rc::new((*subject).clone()),
@@ -2218,6 +2291,7 @@ mod decl_inversion {
                 &zcx,
                 &p.ind,
                 &p.ity,
+                &p.ilvl,
                 &p.spine,
                 1,
                 Rc::new(Term::Var(LocalVar(0))),
@@ -2304,5 +2378,159 @@ mod decl_inversion {
             p.check(&ecx, &tm, &goal, &p.ilvl);
         }
         let _ = GlobalCtx::default();
+    }
+}
+
+#[cfg(test)]
+mod fingerprint {
+    //! §14.1's seam, **closed 2026-08-04** by `issues/generated-term-defs.md`.
+    //!
+    //! `forded_of` used to read the `sEq`'s left-hand side purely
+    //! structurally: anything with a scrutinee slot in that position was `μ`,
+    //! and the declaration's identity came from the skeleton's tag alone. The
+    //! seam list predicted that "any pass that normalizes or restructures
+    //! emitted terms (a kernel `def`, …) breaks it, and the symptom is 'not a
+    //! forded family' far from the cause" — and it also left the reader
+    //! credulous in the other direction, since a Σ over the right skeleton
+    //! with the *wrong* measure in the `μ` slot read back as the family.
+    //!
+    //! The key is now nominal: the slot must be **this declaration's** `μ_D`,
+    //! the definition registered at its declaration (`gendefs.rs`). The two
+    //! tests below are the two directions of that.
+
+    use super::*;
+    use heather_kernel::term::GlobalVar;
+
+    const SPAN: Span = Span { start: 0, end: 0 };
+
+    /// Two forded families over `Nat`, structurally identical apart from
+    /// their nominal tags — which is what makes the negative below a genuine
+    /// look-alike rather than a straw man.
+    const SRC: &str = "
+fn add(a: Nat, b: Nat) -> Nat { match b { Zero => a, Succ(k) => Succ(add(a, k)) } }
+inductive F : (n: Nat) -> Type {
+    F0                                : F(0),
+    F1(n: Nat, x: Nat, t: F(n))       : F(Succ(add(n, 1))),
+}
+inductive G : (n: Nat) -> Type {
+    G0                                : G(0),
+    G1(n: Nat, x: Nat, t: G(n))       : G(Succ(add(n, 1))),
+}
+";
+
+    struct Two {
+        el: Elaborator,
+        f: Rc<Inductive>,
+        g: Rc<Inductive>,
+        cx: Cx,
+    }
+
+    fn two() -> Two {
+        let mut el = Elaborator::with_prelude().expect("prelude");
+        el.elab_source(SRC).expect("two forded families elaborate");
+        let f = Rc::clone(el.inductives.get("F").expect("declared"));
+        let g = Rc::clone(el.inductives.get("G").expect("declared"));
+        Two { el, f, g, cx: Cx::empty() }
+    }
+
+    /// `F`'s type as the generator emits it, taken apart.
+    struct Parts {
+        skel: Type,
+        skel_level: Level,
+        ity: Rc<Type>,
+        ilvl: Level,
+        lhs: Rc<Term>,
+        rhs: Rc<Term>,
+    }
+
+    fn parts(t: &Two) -> Parts {
+        let (ty, _) = t
+            .el
+            .lower_forded_instance(&t.cx, &t.f, &[], Term::Zero, SPAN)
+            .expect("the family lowers");
+        let Type::Sigma { fst_level, fst, snd, .. } = ty else {
+            panic!("a forded family is a Σ")
+        };
+        let Type::SEq { level, ty: ity, lhs, rhs } = (*snd).clone() else {
+            panic!("a forded family's second component is an sEq")
+        };
+        Parts { skel: (*fst).clone(), skel_level: fst_level, ity, ilvl: level, lhs, rhs }
+    }
+
+    /// Rebuild the family type with `head` in the `μ` slot.
+    fn with_head(t: &Two, head: Term) -> Type {
+        let Parts { skel, skel_level: fst_level, ity, ilvl, lhs, rhs } = parts(t);
+        let Term::App { dom_level, cod_level, dom, cod, arg, .. } = (*lhs).clone() else {
+            panic!("after `issues/generated-term-defs.md` the μ slot is an application")
+        };
+        Type::Sigma {
+            fst_level: fst_level.clone(),
+            snd_level: ilvl.clone(),
+            fst: Rc::new(skel),
+            snd: Rc::new(Type::SEq {
+                level: ilvl,
+                ty: ity,
+                lhs: Rc::new(Term::App {
+                    fun: Rc::new(head),
+                    dom_level,
+                    cod_level,
+                    dom,
+                    cod,
+                    arg,
+                }),
+                rhs,
+            }),
+        }
+    }
+
+    #[test]
+    fn the_family_is_recognized_through_its_mu_definition() {
+        let t = two();
+        let (ty, _) = t
+            .el
+            .lower_forded_instance(&t.cx, &t.f, &[], Term::Zero, SPAN)
+            .expect("the family lowers");
+        // The positive: what the generator emits still reads back, and reads
+        // back as `F` — the whole point of a re-key is that it does not cost
+        // recognition.
+        let (ind, fam) = t.el.forded_of(&t.cx, &ty).expect("reads back as a forded family");
+        assert_eq!(ind.tag, t.f.tag);
+        // …and the μ node still fills at a scrutinee, which is what every
+        // consumer downstream (`ty_at`, `eq_at`, the arm builders) needs.
+        let filled = fam.mu_at(Term::Zero, 0);
+        assert!(matches!(filled, Term::App { .. }));
+        // The slot is really a *definition*, not an inlined eliminator.
+        assert!(t.el.gen_ref(&t.cx, GenDef::Mu(t.f.tag)).is_some());
+    }
+
+    #[test]
+    fn a_structural_look_alike_is_not_the_family() {
+        let t = two();
+        // A Σ over **`F`'s skeleton** whose measure is **`G`'s** `μ`. Every
+        // structural property the old fingerprint tested is satisfied — Σ,
+        // `sEq`, a filled scrutinee slot, and `tag_of` on the first component
+        // says `F#skel` — and it is not `F`, because `μ_G` is not `F`'s
+        // measure. Under the pre-2026-08-04 reader this was accepted, and the
+        // consumer would then have built a constructor of `F` whose equation
+        // was about `G`.
+        let mut scx = t.cx.clone();
+        let p = parts(&t);
+        scx.push("#s".into(), p.skel, p.skel_level);
+        let mu_g = t.el.gen_ref(&scx, GenDef::Mu(t.g.tag)).expect("G has a μ definition");
+        assert!(t.el.forded_of(&t.cx, &with_head(&t, mu_g)).is_none());
+
+        // And a head that is no definition at all — the other half of "keyed
+        // by name": an out-of-scope global resolves to no `GenDef`.
+        let bogus = Term::GlobalTm {
+            var: GlobalVar(u32::MAX),
+            subst: LocalSubst {
+                tail: heather_kernel::term::SubstTail::Empty {
+                    len: 1,
+                    base: heather_kernel::term::CtxBase::Nil,
+                },
+                terms: vec![],
+            },
+        };
+        assert!(t.el.forded_of(&t.cx, &with_head(&t, bogus)).is_none());
     }
 }

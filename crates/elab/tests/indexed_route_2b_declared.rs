@@ -339,27 +339,31 @@ fn wrong_indices_are_rejected() {
 }
 
 #[test]
-fn a_branching_form_a_at_a_three_constructor_index_exceeds_the_fuel_budget() {
-    // **Measured 2026-08-04, and a limit rather than a defect.** Form A at a
-    // declared index emits, per arm, one child projection per child and one tag
-    // predicate per other index constructor — each of them a whole `elim_Wf`
-    // over the index type, because `fn`s are inlined at every use and the
-    // kernel term language has no definitions
-    // (`issues/simulate-conversion-cost.md`, and §14.2's `μ` seam wearing a
-    // second hat). The product of *branching* (two projections) and *three*
-    // index constructors (two tag predicates) puts the emitted eliminator over
-    // the conversion budget: the claim below is true and the kernel accepts it
-    // at twice `DEFAULT_FUEL`, but not at `DEFAULT_FUEL`.
+fn a_branching_form_a_at_a_three_constructor_index_fits_the_fuel_budget() {
+    // **The positive this test was always trying to be** (§14.9, closed
+    // 2026-08-04 by `issues/generated-term-defs.md`).
     //
-    // Everything smaller fits, and both factors are needed: the branching case
-    // at a two-constructor index passes (`form_a_through_a_branching_index_…`),
-    // and the three-constructor index passes at a linear index constructor
-    // (`form_a_at_a_declared_index_…`).
+    // History, because the shape of the claim is the history. Until the
+    // generator's artifacts became Ψ definitions, form A at a declared index
+    // emitted, per arm, one child projection per child and one tag predicate
+    // per *other* index constructor — each a whole `elim_Wf` over the index
+    // type, written out at every occurrence because the emitted term had
+    // nowhere to name it. The product of *branching* (two projections) and
+    // *three* index constructors (two tag predicates) put the eliminator over
+    // the conversion budget: the claim below was true, the kernel accepted it
+    // at twice `DEFAULT_FUEL`, and it was pinned here as a deliberate negative
+    // asserting `OutOfFuel`, with the note that "when a kernel `def` lands,
+    // the right fix is to turn it into the positive it was always trying to
+    // be". That is this.
     //
-    // When a kernel `def` (or any other cut to the emitted size) lands, this
-    // test starts failing with "expected an error" — and the right fix is to
-    // turn it into the positive it was always trying to be.
-    let m = elab_err(&format!(
+    // What it now pins is the *sum*: `μ_Tn`, `Shape#tag{0,1,2}` and
+    // `Shape#child{k}.{t}` are registered once at declaration time and
+    // referenced, so the arm's size no longer multiplies and the same claim
+    // fits inside `DEFAULT_FUEL`. Both factors are still present — branching
+    // children *and* a three-constructor index — which is what makes this the
+    // falsifier for the definition routing and not merely another passing
+    // form-A test.
+    elab(&format!(
         "{ADD}
          inductive Shape {{ SLeaf, SBud(s: Shape), SNode(l: Shape, r: Shape) }}
          inductive Tn : (s: Shape) -> Type {{
@@ -373,5 +377,4 @@ fn a_branching_form_a_at_a_three_constructor_index_exceeds_the_fuel_budget() {
          theorem open_beta(l: Shape, r: Shape, a: Tn(l), b: Tn(r)):
              tn(SNode(l, r), TnN(l, r, a, b)) = add(tn(l, a), tn(r, b)) {{ refl }}"
     ));
-    assert!(m.contains("OutOfFuel"), "{m}");
 }

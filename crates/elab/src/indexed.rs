@@ -94,6 +94,24 @@ pub(crate) fn set_scrut(t: &Term, scrut: Rc<Term>) -> Option<Term> {
                 scrut,
             }
         }
+        // A **definition applied to its scrutinee** — `μ_D^δ s`, since
+        // `issues/generated-term-defs.md` routed the generator's artifacts
+        // through Ψ. The argument is the slot. Restricted to a global head so
+        // that no ordinary application is mistaken for a family node; which
+        // global it is, is checked by the recognizer that asked
+        // (`forded_of`, via `is_gen_ref`).
+        Term::App { fun, dom_level, cod_level, dom, cod, .. }
+            if matches!(&**fun, Term::GlobalTm { .. }) =>
+        {
+            Term::App {
+                fun: Rc::clone(fun),
+                dom_level: dom_level.clone(),
+                cod_level: cod_level.clone(),
+                dom: Rc::clone(dom),
+                cod: Rc::clone(cod),
+                arg: scrut,
+            }
+        }
         _ => return None,
     })
 }
@@ -103,6 +121,7 @@ fn scrut_of(t: &Term) -> Option<&Rc<Term>> {
         Term::ElimNat { scrut, .. } | Term::ElimWf { scrut, .. } | Term::Case { scrut, .. } => {
             Some(scrut)
         }
+        Term::App { fun, arg, .. } if matches!(&**fun, Term::GlobalTm { .. }) => Some(arg),
         _ => None,
     }
 }

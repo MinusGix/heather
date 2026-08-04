@@ -1,0 +1,403 @@
+//! Machine-named Ψ **definitions** for generator-emitted artifacts
+//! (`issues/generated-term-defs.md`).
+//!
+//! The kernel has had bodied globals with layer-indexed transparency since
+//! `issues/simulate-conversion-cost.md`, and a user `fn` is Ψ-referenced
+//! rather than inlined (`lib.rs`'s header). The *generator's own* artifacts
+//! were not: `μ` — route 2b's index measure — was a whole `elim_Wf` written
+//! out afresh in the family type, twice per Σ projection and several times
+//! per eliminator arm, and form A at a declared index additionally wrote out
+//! one tag predicate per *other* index constructor and one child projection
+//! per child. That is `docs/inductive-fording-lowering.md` §14.2 and §14.9,
+//! and this module is their fix.
+//!
+//! The shape is the `#skel` precedent (§14.6): **registered once, at
+//! declaration time, under a name the surface cannot write, and never edited
+//! afterwards.** Emitted terms reference the definition; δ-unfolding at the
+//! computing layers recovers exactly the term that used to be inlined, so
+//! nothing downstream changes meaning — only size.
+//!
+//! Two properties make this safe to do blindly:
+//!
+//! - **The definitions are closed.** An *index* type is unparameterized by
+//!   `inductive.rs`'s own rule (a parameterized index is rejected at the
+//!   declaration), so a tag predicate and a child projection are closed for
+//!   every family that can exist. `μ` is closed exactly when the forded
+//!   declaration itself has no type parameters — see [`Elaborator::mu_def`]
+//!   and the boundary note there.
+//! - **Registration is best-effort.** If any piece fails to build or fails
+//!   the kernel gate here, nothing is pushed and the emission site falls back
+//!   to writing the term out inline, exactly as before. A definition is a
+//!   *size* optimization, never a semantic one, so the fallback is the old
+//!   behavior verbatim rather than an error at a span the user never wrote.
+
+use std::collections::HashMap;
+use std::rc::Rc;
+
+use heather_kernel::layer::Layer;
+use heather_kernel::level::Level;
+use heather_kernel::term::{
+    CtxBase, GlobalBinding, GlobalVar, LocalCtx, LocalSubst, LocalVar, SubstTail, Term, Type,
+};
+use heather_kernel::typing;
+use heather_syntax::ast::Span;
+
+use crate::inductive::{ConstBody, IdxTy, Inductive};
+use crate::{Cx, Elaborator, R};
+
+/// The key of a machine-named definition. Keys are **nominal**: a declaration
+/// tag plus, where the device is per-constructor, its position. That is what
+/// makes the recognizers of §6.3/§10.1 re-keyable — a reference to `μ_D` is
+/// recognized by *being* `μ_D`, not by having `μ_D`'s shape.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub(crate) enum GenDef {
+    /// `μ_D : ⟦Skel⟧ → I` for the forded declaration with this nominal tag
+    /// (`docs/inductive-fording-lowering.md` §5).
+    Mu(u32),
+    /// `is_k : I → Type⁰`, the index type's tag predicate at constructor `k`
+    /// (`docs/inductive-tier1-wf-lowering.md` §7.1). Keyed by the *index*
+    /// type's tag, so every family over that index shares one.
+    IdxTag(u32, usize),
+    /// `proj_{k,t} : I → I → I`, the index type's `t`-th child projection at
+    /// constructor `k`, abstracted over its default (§7.2). Keyed by the
+    /// index type's tag, shared as above.
+    IdxChild(u32, usize, usize),
+}
+
+impl GenDef {
+    /// The machine name, for diagnostics only — `#` is unwritable at the
+    /// surface, the same convention `skeleton_of` uses.
+    pub(crate) fn name(&self, owner: &str) -> String {
+        match self {
+            GenDef::Mu(_) => format!("{owner}#mu"),
+            GenDef::IdxTag(_, k) => format!("{owner}#tag{k}"),
+            GenDef::IdxChild(_, k, t) => format!("{owner}#child{k}.{t}"),
+        }
+    }
+}
+
+/// The registry: the two directions, kept in step by [`Elaborator::push_gen_def`].
+#[derive(Clone, Default)]
+pub(crate) struct GenDefs {
+    /// Key → absolute Ψ index (the `GlobalInfo::abs` convention).
+    by_key: HashMap<GenDef, u32>,
+    /// Absolute Ψ index → key. The recognizers' half.
+    by_abs: HashMap<u32, GenDef>,
+}
+
+impl Elaborator {
+    // -- registration -------------------------------------------------------
+
+    /// Register everything `ind` owes, at its declaration. Errors are
+    /// swallowed by design (see the module header): the emission sites all
+    /// fall back to inlining.
+    pub(crate) fn register_gen_defs(&mut self, ind: &Rc<Inductive>, span: Span) {
+        if ind.skel.is_none() {
+            return;
+        }
+        // The index type's devices first: they are closed for every family,
+        // and shared across all families over the same index.
+        if let Some(IdxTy::Decl(iind)) = ind.index_ty.as_ref() {
+            let iind = Rc::clone(iind);
+            self.register_index_devices(&iind, span);
+        }
+        let _ = self.register_mu(ind, span);
+    }
+
+    /// §7.1's tag predicates and §7.2's child projections, per index
+    /// constructor. Memoized on the *index* type's tag, so the second family
+    /// over one index pays nothing.
+    fn register_index_devices(&mut self, iind: &Rc<Inductive>, span: Span) {
+        let n = iind.ctors.len();
+        for k in 0..n {
+            let key = GenDef::IdxTag(iind.tag, k);
+            if !self.gdefs.by_key.contains_key(&key) {
+                if let Ok((ty, lvl, body)) = self.tag_pred_def(iind, k, span) {
+                    let _ = self.push_gen_def(key, &iind.name, ty, lvl, body, span);
+                }
+            }
+            // A child projection only exists at a recursive index type: a flat
+            // index constructor has no child to project.
+            if !iind.recursive {
+                continue;
+            }
+            for t in 0..iind.ctors[k].arity() {
+                let key = GenDef::IdxChild(iind.tag, k, t);
+                if self.gdefs.by_key.contains_key(&key) {
+                    continue;
+                }
+                if let Ok((ty, lvl, body)) = self.child_proj_def(iind, k, t, span) {
+                    let _ = self.push_gen_def(key, &iind.name, ty, lvl, body, span);
+                }
+            }
+        }
+    }
+
+    fn register_mu(&mut self, ind: &Rc<Inductive>, span: Span) -> R<()> {
+        let key = GenDef::Mu(ind.tag);
+        if self.gdefs.by_key.contains_key(&key) {
+            return Ok(());
+        }
+        let (ty, lvl, body) = self.mu_def(ind, span)?;
+        self.push_gen_def(key, &ind.name, ty, lvl, body, span)
+    }
+
+    /// Kernel-check and push. The gate is the same one a `fn` passes
+    /// (`elab_decl_inner`): statement at layer p, body at layer c, both in the
+    /// empty local context — so a definition is a checked term like any other
+    /// bodied global and its transparency is the kernel's layer-indexed rule,
+    /// not anything configured here.
+    fn push_gen_def(
+        &mut self,
+        key: GenDef,
+        owner: &str,
+        ty: Type,
+        level: Level,
+        body: Term,
+        span: Span,
+    ) -> R<()> {
+        let empty = LocalCtx { base: CtxBase::Nil, entries: vec![] };
+        let name = key.name(owner);
+        typing::check_type(&self.psi, 0, Layer::Prog, &empty, &ty, &level, self.fuel)
+            .map_err(|err| crate::ElabError::Kernel { decl: name.clone(), span, err })?;
+        typing::check_term(&self.psi, 0, Layer::Code, &empty, &body, &ty, &level, self.fuel)
+            .map_err(|err| crate::ElabError::Kernel { decl: name, span, err })?;
+        let abs = self.psi.bindings.len() as u32;
+        self.psi.push(GlobalBinding::defined_tm(
+            empty,
+            Layer::Code,
+            Rc::new(ty),
+            level,
+            Rc::new(body),
+        ));
+        self.gdefs.by_key.insert(key, abs);
+        self.gdefs.by_abs.insert(abs, key);
+        self.refresh_delta_psi();
+        Ok(())
+    }
+
+    // -- reference and read-back --------------------------------------------
+
+    /// `u^δ` for a registered definition, out of the current `Γ`. `None` when
+    /// the definition was not registered, which is every emission site's cue
+    /// to inline instead.
+    pub(crate) fn gen_ref(&self, cx: &Cx, key: GenDef) -> Option<Term> {
+        let abs = *self.gdefs.by_key.get(&key)?;
+        let len = self.psi.bindings.len() as u32;
+        // Goals sit innermost, exactly as in `resolve`.
+        let var = GlobalVar(len - 1 - abs + self.goal_base);
+        Some(Term::GlobalTm {
+            var,
+            subst: LocalSubst {
+                tail: SubstTail::Empty {
+                    len: cx.gamma.entries.len() as u32,
+                    base: cx.gamma.base,
+                },
+                terms: vec![],
+            },
+        })
+    }
+
+    /// The inverse of [`Self::gen_ref`]'s numbering: which definition, if any,
+    /// a `GlobalVar` occurring in a term denotes. This is the whole of the
+    /// recognizers' new key — `forded_of` asks "is the head of this `μ`
+    /// position *the* `μ_D`", not "does it have `μ`'s shape".
+    pub(crate) fn gen_def_of(&self, var: GlobalVar) -> Option<GenDef> {
+        let len = self.psi.bindings.len() as u32;
+        // Fully checked: a `GlobalVar` reaching here can be anything the term
+        // it came out of contains, including one that is out of scope.
+        let abs = len
+            .checked_add(self.goal_base)?
+            .checked_sub(var.0.checked_add(1)?)?;
+        self.gdefs.by_abs.get(&abs).copied()
+    }
+
+    /// Whether `t` is exactly `u^δ` for the definition `key` — the head test
+    /// the recognizers use.
+    pub(crate) fn is_gen_ref(&self, t: &Term, key: GenDef) -> bool {
+        matches!(t, Term::GlobalTm { var, .. } if self.gen_def_of(*var) == Some(key))
+    }
+
+    /// A non-dependent application of a registered definition. `dom`/`cod` are
+    /// the annotations the kernel's `App` carries; both are scoped where `arg`
+    /// is, and `cod` is weakened under the (vacuous) binder for it.
+    pub(crate) fn gen_app(
+        fun: Term,
+        dom_level: &Level,
+        cod_level: &Level,
+        dom: &Type,
+        cod: &Type,
+        arg: Term,
+    ) -> Term {
+        Term::App {
+            fun: Rc::new(fun),
+            dom_level: dom_level.clone(),
+            cod_level: cod_level.clone(),
+            dom: Rc::new(dom.clone()),
+            cod: Rc::new(cod.shift_local(1)),
+            arg: Rc::new(arg),
+        }
+    }
+
+    // -- the bodies ---------------------------------------------------------
+
+    /// `μ_D = λ(s : ⟦Skel⟧). μ-node[s]`, its type and level (§5).
+    ///
+    /// **Boundary.** Only a forded declaration with no type parameters gets
+    /// one. `μ`'s body mentions the skeleton's lowering, which is
+    /// monomorphized at each instantiation (`Cx::tyvars`), so a parameterized
+    /// family's `μ` is not one closed term but one per instantiation — and a
+    /// definition is registered at *declaration* time, where the
+    /// instantiations are not yet known. Abstracting over the parameter would
+    /// need a Π over `Type` in the definition's own statement and a
+    /// `Type`-argument spine at every reference; that is a scheme change, not
+    /// a registration detail. Parameterized forded families therefore keep
+    /// today's inlined `μ` verbatim.
+    fn mu_def(&self, ind: &Rc<Inductive>, span: Span) -> R<(Type, Level, Term)> {
+        if !ind.params.is_empty() || !ind.valparams.is_empty() {
+            return crate::err("internal: a parameterized forded family keeps its inlined μ", span);
+        }
+        let cx = Cx::empty();
+        let skel = ind.skel.as_ref().expect("a forded declaration has a skeleton");
+        let (skel_ty, l) = self.lower_instance(&cx, skel, &[], &[], span)?;
+        let (ity, ilvl) = self.index_type_of(&cx, ind, span)?;
+        let node = self.build_mu(&cx, ind, skel, &skel_ty, &l, &ity, &ilvl, span)?;
+        let body = Term::Lam {
+            dom_level: l.clone(),
+            cod_level: ilvl.clone(),
+            dom: Rc::new(skel_ty.clone()),
+            body: Rc::new(
+                crate::indexed::set_scrut(
+                    &node.shift_local(1),
+                    Rc::new(Term::Var(LocalVar(0))),
+                )
+                .ok_or_else(|| {
+                    crate::ElabError::Elab {
+                        msg: "internal: a μ node has a scrutinee slot".into(),
+                        span,
+                    }
+                })?,
+            ),
+        };
+        let ty = Type::Pi {
+            dom_level: l.clone(),
+            cod_level: ilvl.clone(),
+            dom: Rc::new(skel_ty),
+            cod: Rc::new(ity.shift_local(1)),
+        };
+        Ok((ty, Level::max(l, ilvl), body))
+    }
+
+    /// `is_k = λ(z : I). Case-on-tag(z) { c_k ↦ ⌜Unit⌝ ; _ ↦ ⌜Empty⌝ }` (§7.1),
+    /// at type `I → Type⁰`.
+    fn tag_pred_def(
+        &self,
+        iind: &Rc<Inductive>,
+        k: usize,
+        span: Span,
+    ) -> R<(Type, Level, Term)> {
+        let cx = Cx::empty();
+        let (ity, ilvl) = self.lower_instance(&cx, iind, &[], &[], span)?;
+        let spine = self.spine(&ity, &ilvl, iind.ctors.len(), span)?;
+        let ty0 = Type::Ty(Level::Zero);
+        let l1 = Level::succ(Level::Zero);
+        let mut zcx = cx.clone();
+        zcx.push("#z".into(), ity.clone(), ilvl.clone());
+        // `spine`/`ity` are read back in the *base* context (empty here) and
+        // `d0` counts the binders pushed since — one, the λ's.
+        let node = if iind.recursive {
+            self.const_elim_wf(
+                &zcx,
+                iind,
+                &ity,
+                &spine,
+                &ty0,
+                &l1,
+                Rc::new(Term::Var(LocalVar(0))),
+                &ConstBody::TagCode(k),
+                1,
+                span,
+            )?
+        } else {
+            self.const_case_tree(
+                &zcx,
+                &spine,
+                iind.ctors.len(),
+                &ty0,
+                &l1,
+                Rc::new(Term::Var(LocalVar(0))),
+                &ConstBody::TagCode(k),
+                0,
+                1,
+                span,
+            )?
+        };
+        let body = Term::Lam {
+            dom_level: ilvl.clone(),
+            cod_level: l1.clone(),
+            dom: Rc::new(ity.clone()),
+            body: Rc::new(node),
+        };
+        let ty = Type::Pi {
+            dom_level: ilvl.clone(),
+            cod_level: l1.clone(),
+            dom: Rc::new(ity),
+            cod: Rc::new(ty0),
+        };
+        Ok((ty, Level::max(ilvl, l1), body))
+    }
+
+    /// `proj_{k,t} = λ(d : I). λ(z : I). elim_Wf(z) { c_k ↦ nth_t ; _ ↦ d }`
+    /// (§7.2), at type `I → I → I`.
+    ///
+    /// The **default is abstracted** rather than baked in: it is the one thing
+    /// that varies per use site (`forded_inv_branch` passes the bound `z`),
+    /// and abstracting it is what lets one definition serve every occurrence.
+    fn child_proj_def(
+        &self,
+        iind: &Rc<Inductive>,
+        k: usize,
+        t: usize,
+        span: Span,
+    ) -> R<(Type, Level, Term)> {
+        let cx = Cx::empty();
+        let (ity, ilvl) = self.lower_instance(&cx, iind, &[], &[], span)?;
+        let mut zcx = cx.clone();
+        zcx.push("#default".into(), ity.clone(), ilvl.clone());
+        zcx.push("#z".into(), ity.clone(), ilvl.clone());
+        let node = self.child_projection(
+            &zcx,
+            iind,
+            &ity,
+            &ilvl,
+            k,
+            t,
+            Rc::new(Term::Var(LocalVar(1))),
+            Term::Var(LocalVar(0)),
+            span,
+        )?;
+        let body = Term::Lam {
+            dom_level: ilvl.clone(),
+            cod_level: ilvl.clone(),
+            dom: Rc::new(ity.clone()),
+            body: Rc::new(Term::Lam {
+                dom_level: ilvl.clone(),
+                cod_level: ilvl.clone(),
+                dom: Rc::new(ity.clone()),
+                body: Rc::new(node),
+            }),
+        };
+        let ty = Type::Pi {
+            dom_level: ilvl.clone(),
+            cod_level: ilvl.clone(),
+            dom: Rc::new(ity.clone()),
+            cod: Rc::new(Type::Pi {
+                dom_level: ilvl.clone(),
+                cod_level: ilvl.clone(),
+                dom: Rc::new(ity.clone()),
+                cod: Rc::new(ity),
+            }),
+        };
+        Ok((ty, ilvl, body))
+    }
+}

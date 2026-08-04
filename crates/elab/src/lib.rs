@@ -49,6 +49,7 @@ pub mod certgen;
 pub mod stats;
 mod code;
 mod forded;
+mod gendefs;
 mod indexed;
 mod inductive;
 mod quote;
@@ -393,6 +394,12 @@ pub struct Elaborator {
     /// skeleton of. A forded type is a Σ whose first component is the skeleton,
     /// so reading the declaration back is `tag_of` plus this one lookup.
     forded_by_skel: HashMap<u32, Rc<Inductive>>,
+    /// Machine-named Ψ definitions for generator-emitted artifacts
+    /// (`issues/generated-term-defs.md`, `gendefs.rs`): `μ_D`, the index
+    /// type's tag predicates, its child projections. Registered once at
+    /// declaration time; every emission site references them and falls back
+    /// to inlining when a key is absent.
+    gdefs: gendefs::GenDefs,
     ctors: HashMap<String, (Rc<Inductive>, usize)>,
     /// Every field name of every declared `record`, across all of them. Not a
     /// resolution table — which record a name belongs to is decided by the
@@ -514,6 +521,7 @@ impl Elaborator {
             inductives: HashMap::new(),
             by_tag: HashMap::new(),
             forded_by_skel: HashMap::new(),
+            gdefs: gendefs::GenDefs::default(),
             ctors: HashMap::new(),
             record_fields: HashSet::new(),
             next_tag: 0,

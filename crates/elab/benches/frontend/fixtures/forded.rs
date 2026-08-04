@@ -19,14 +19,33 @@
 //! | `forded/computed-arms` | constructors of the forded family = match arms | §14.2 |
 //! | `forded/occurrences` | uses of one forded family in other declarations | §14.2 |
 //! | `forded/declared-index-tags` | constructors of the *index* type | §14.9 |
+//! | `forded/declared-index-branching` | ditto at a **branching** index constructor | §14.9 |
 //!
-//! **The bands below record the exponents that exist today, not the ones the
-//! design wants**, which is the kernel doc's rule for a band that records a
-//! defect (docs/benchmarking.md, "Adding a family"). Two of the three are
-//! superlinear; a linear-in-arms elaborator is the outcome that would make
-//! them fail low, and when the kernel-def round lands that is exactly what
-//! should happen — the right response then is `--save` and a note that the
-//! before/after is these three families. Phase 2's "before" is here.
+//! **The bands record the exponents that exist, not the ones the design
+//! wants**, which is the kernel doc's rule for a band that records a defect
+//! (docs/benchmarking.md, "Adding a family").
+//!
+//! Re-recorded 2026-08-04 by `issues/generated-term-defs.md`, and the result
+//! is not the one the phase-1 comment predicted. Routing `μ`, the index type's
+//! tag predicates and its child projections through Ψ definitions cut the
+//! **constant** by 4–7× on the first two families and 1.35× on the third — and
+//! moved the **exponents** by 0.6, 0.0 and 0.0. So `--check` never went red:
+//! the fits stayed inside bands written to record a defect that turned out to
+//! be two defects sharing a curve.
+//!
+//! What is left is not the generated *terms* but the generated **types**. A
+//! forded family's skeleton `⟦Skel⟧` and its index type `I` are `Type::Wf`s
+//! whose node count is Θ(constructors), and they are written out afresh at
+//! every occurrence — once per `sEq`, per `Lam` domain, per `transp`
+//! annotation, per motive instantiation, of which there are Θ(constructors).
+//! Θ(n) copies of a Θ(n) type is the residual quadratic, and it is not
+//! reachable by the same lever: `GlobalBinding::Ty` has no body, so a *type*
+//! cannot be a Ψ definition at all. See `docs/inductive-fording-lowering.md`
+//! §14.11.
+//!
+//! The bands below are therefore tightened around the new exponents rather
+//! than moved: they claim what this round measured, and the next round's
+//! target is the constant they sit on top of.
 
 use crate::harness::Family;
 
@@ -35,7 +54,7 @@ use super::scale::sweep;
 const ADD: &str = "fn add(a: Nat, b: Nat) -> Nat { match b { Zero => a, Succ(k) => Succ(add(a, k)) } }\n";
 
 pub fn families() -> Vec<Family> {
-    vec![computed_arms(), occurrences(), declared_index_tags()]
+    vec![computed_arms(), occurrences(), declared_index_tags(), declared_index_branching()]
 }
 
 /// A route-2b family with `n` constructors — computed result indices,
@@ -65,12 +84,14 @@ fn computed_arms() -> Family {
         name: "forded/computed-arms",
         what: "a route-2b family with n constructors, and the n-arm match over it",
         unit: "arms",
-        // ~3.3 measured 2026-08-04 (25 ms → 1.0 s from 2 to 6 arms). Cubic
-        // in the arm count for a file whose *source* grows linearly: μ is
-        // inlined per arm, the eliminator instantiates it per arm, and the
-        // kernel re-checks the product. The band is this defect's record.
-        // §14.2's fix (a kernel `def`) should drop it towards 1–2.
-        expect_slope: Some((2.60, 4.00)),
+        // **3.39 → 2.82**, and 31 ms → 8.5 ms at 2 arms / 1.25 s → 195 ms at
+        // 6 (`issues/generated-term-defs.md`, 2026-08-04). `μ` is now one Ψ
+        // definition referenced per arm instead of a whole `elim_Wf` written
+        // out per arm, which is the 6.4× at the wide end; the exponent moved
+        // only 0.6 because the *skeleton type* is still inlined Θ(n) times
+        // and is itself Θ(n) (the module header, §14.11). Band tightened from
+        // 2.60–4.00 to claim the new slope.
+        expect_slope: Some((2.40, 3.20)),
         cases: sweep("forded/computed-arms", &[2, 3, 4, 5, 6], src),
     }
 }
@@ -108,6 +129,12 @@ fn occurrences() -> Family {
         // the fit below 1 at the small end (the family costs about as much
         // as one use). A reading above the band means a use started costing
         // more because another use exists.
+        //
+        // The slope was never the point here and did not move (1.03 → 1.01).
+        // The **per-use** figure did, and it is this round's headline: 119 ms
+        // → 29 ms per mention of a forded family
+        // (`issues/generated-term-defs.md`, 2026-08-04). That is `μ` stopping
+        // being a whole `elim_Wf` in every type that names the family.
         expect_slope: Some((0.55, 1.30)),
         cases: sweep("forded/occurrences", &[1, 2, 4, 8], src),
     }
@@ -148,13 +175,61 @@ fn declared_index_tags() -> Family {
         name: "forded/declared-index-tags",
         what: "form A at a declared index, swept along the index type's constructor count",
         unit: "index-ctors",
-        // ~2.4 measured 2026-08-04 (20 ms → 296 ms from 2 to 6). Quadratic
-        // in a quantity the user did not think they were paying for: adding
-        // an unrelated constructor to the *index* type makes every arm of
-        // every family over it more expensive. §14.9's fuel cliff is this
-        // curve hitting `DEFAULT_FUEL`, and a kernel `def` is the recorded
-        // fix for both.
-        expect_slope: Some((1.80, 3.00)),
+        // **2.65 → 2.66**, and 18 ms → 13 ms at 2 / 328 ms → 241 ms at 6
+        // (`issues/generated-term-defs.md`, 2026-08-04). The tag predicates
+        // and child projections became Ψ definitions, which is the 1.35×; the
+        // exponent did **not** move, because what is quadratic here is the
+        // *index type* — Θ(n) nodes, written out Θ(n) times, and a type cannot
+        // be a Ψ definition (§14.11 / the module header). This is the family
+        // that says the round's lever and the round's curve are not the same
+        // thing. Band tightened from 1.80–3.00 around the measured slope.
+        expect_slope: Some((2.30, 3.05)),
         cases: sweep("forded/declared-index-tags", &[2, 3, 4, 5, 6], src),
+    }
+}
+
+/// [`declared_index_tags`] at a **branching** index constructor — the row
+/// §14.9's fuel cliff used to forbid.
+///
+/// `SNode(l, r)` has two children, so each form-A arm recovers two child-index
+/// binders through two child projections, and the emitted eliminator is the
+/// *product* of that with one tag predicate per other index constructor. Until
+/// 2026-08-04 that product blew `DEFAULT_FUEL` at three index constructors
+/// (`crates/elab/tests/indexed_route_2b_declared.rs`, then a deliberate
+/// negative and now a positive), which is why the sweep above is linear and
+/// why this one could not exist.
+///
+/// First measured 2026-08-04, after the definitions landed, with the
+/// pre-definition numbers taken on the same machine for the comparison:
+/// 353 ms → 110 ms at 2 index constructors and 2.08 s → 556 ms at 6, i.e.
+/// 3.2–3.7× and a slope of ~1.47. Note the slope is *below* the linear
+/// family's 2.66: `BDup`'s non-linear result index makes it a form-B arm, and
+/// a form-B arm has no per-index-constructor inversion to pay for. The band is
+/// wide because this is one machine on one day.
+fn declared_index_branching() -> Family {
+    let src = |n: u64| {
+        let mut shape = vec!["SLeaf".to_string(), "SNode(l: Shape, r: Shape)".to_string()];
+        for i in 2..n {
+            shape.push(format!("SX{i}"));
+        }
+        format!(
+            "{ADD}inductive Shape {{ {} }}\n\
+             inductive Bl : (s: Shape) -> Type {{\n\
+             \x20   BLeaf                                            : Bl(SLeaf),\n\
+             \x20   BNode(l: Shape, r: Shape, dl: Bl(l), dr: Bl(r))  : Bl(SNode(l, r)),\n\
+             \x20   BDup(s: Shape)                                   : Bl(SNode(s, s)),\n\
+             }}\n\
+             fn count(s: Shape, d: Bl(s)) -> Nat {{\n    \
+             match d {{ BLeaf => 1, BNode(l, r, dl, dr) => add(count(l, dl), count(r, dr)), \
+             BDup(s) => 0 }}\n}}\n",
+            shape.join(", "),
+        )
+    };
+    Family {
+        name: "forded/declared-index-branching",
+        what: "form A at a branching declared index, swept along the index type's constructor count",
+        unit: "index-ctors",
+        expect_slope: Some((1.10, 2.10)),
+        cases: sweep("forded/declared-index-branching", &[2, 3, 4, 5, 6], src),
     }
 }

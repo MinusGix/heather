@@ -21,8 +21,22 @@ and `crates/elab/src/forded.rs`'s `decl_inversion` module the hand
 composition behind it. Two boundaries came out of that round measured rather
 than assumed, and both are §14's: form A is *not* generated when the index
 constructor has a **payload** argument (§8.2), and a **branching** index
-constructor at a **three-constructor** index puts the emitted eliminator over
-the default conversion budget (§14.9).
+constructor at a **three-constructor** index put the emitted eliminator over
+the default conversion budget (§14.9 — **closed 2026-08-04**, see below).
+
+**The generator's artifacts are kernel definitions, 2026-08-04**
+(`issues/generated-term-defs.md`, `crates/elab/src/gendefs.rs`). `μ_D`, the
+index type's tag predicates and its child projections are registered once at
+declaration time as bodied Ψ globals under machine names — the `#skel`
+convention of §14.6 — and referenced everywhere instead of being written out
+at every occurrence. δ-unfolding recovers the old terms exactly, so nothing
+changed meaning; what changed is size, by 4–7× (`docs/frontend-benchmarking.md`
+carries the before/after). Three §14 items close with it: the fingerprint is
+re-keyed by **name** (§14.1), `μ`'s inlining is retired (§14.2), and §14.9's
+fuel cliff is gone — its deliberate negative is now a positive test. Two new
+items open in their place, both measured: the emitted **types** are the
+residual multiplier and the same lever does not reach them (§14.11), and a
+*parameterized* forded family keeps its inlined `μ` (§14.12).
 
 The design round below is unchanged text: it is the design for the general
 (fording) case of `issues/indexed-families.md`, route 2b, whose
@@ -842,17 +856,52 @@ own constructor names are now excluded from that test.
 
 ## 14. Known seams, recorded before they bite
 
-1. **`forded_of` is a structural fingerprint**, like `indexed_of` before it
-   (route 1 §10.1) — smaller and tag-anchored (§6.3), but still a shape
-   match. Any pass that normalizes or restructures emitted terms (a kernel
-   `def`, level canonicalization, hash-consing) breaks it, and the symptom
-   is "not a forded family" far from the cause.
-2. **`μ` is inlined at every occurrence.** The family type contains a whole
-   `elim_Wf`, and the eliminator instantiates it several times per arm; a
-   forded type appearing in another type multiplies that. Route 1 §10.3's
-   note, amplified once more, with the same eventual fix (a kernel `def`)
-   and the same place for "acceptable" to get a number
-   ([[frontend-benchmarks]]).
+1. **`forded_of`'s fingerprint — re-keyed and closed, 2026-08-04**
+   (`issues/generated-term-defs.md`). It *was* a structural fingerprint, like
+   `indexed_of` before it (route 1 §10.1) — smaller and tag-anchored (§6.3),
+   but still a shape match — and this item predicted that "any pass that
+   normalizes or restructures emitted terms (a kernel `def`, level
+   canonicalization, hash-consing) breaks it, and the symptom is 'not a
+   forded family' far from the cause". The kernel `def` arrived and it did
+   exactly that: `μ` in the `sEq`'s left-hand side stopped being an
+   `elim_Wf` and became `μ_D^δ s`, which the old reader declined.
+
+   The repair is not a wider shape match, it is a **name**. The reader still
+   takes the declaration's identity from the skeleton's tag out of the Σ's
+   first component; it now additionally requires the `μ` slot to be *this
+   declaration's* `μ_D` — the definition `gendefs.rs` registered at its
+   declaration — and nothing else. That closes the seam in both directions,
+   and the second direction was not on anyone's list: before the re-key, a Σ
+   over `F`'s skeleton carrying `G`'s measure satisfied every structural
+   property the reader tested and read back as `F`. It is pinned by
+   `a_structural_look_alike_is_not_the_family` (`forded.rs`, `mod
+   fingerprint`), which builds exactly that term out of two families that
+   differ only in their tags.
+
+   Two residues, both deliberate. A **parameterized** forded family keeps its
+   inlined `μ` (§14.11's boundary), so the structural read is still the path
+   for it and the name check is skipped where no definition exists. And route
+   1's `indexed_of` was *not* re-keyed: this round did not route route 1's
+   devices through definitions, so its fingerprint is unbroken and untouched
+   — its §10.1 entry stands as written.
+2. **`μ` was inlined at every occurrence — closed 2026-08-04**
+   (`issues/generated-term-defs.md`). The family type contained a whole
+   `elim_Wf`, the eliminator instantiated it several times per arm, and a
+   forded type appearing in another type multiplied that again.
+
+   `μ_D` is now a **Ψ definition**, registered once at the declaration under
+   a machine name and referenced everywhere; δ-unfolding at the computing
+   layers recovers the term that used to be written out, so nothing changed
+   meaning and only size moved. The number, from the frontend suite
+   (`docs/frontend-benchmarking.md`): `forded/computed-arms` 1.25 s → 195 ms
+   at six arms (slope 3.39 → 2.79), and `forded/occurrences` — what one
+   *mention* of a forded family costs — **119 ms → 28 ms per use**.
+
+   Route 1 §10.3's version of this note is unaffected: its devices were left
+   inlined, because forded was this round's priority and route 1's shrink did
+   not fall out of the same mechanism (its families are reached through
+   `IndexedFam`, not through a per-declaration measure). The residual
+   superlinearity that the definitions did *not* reach is §14.11.
 3. **Pre-reduced family types are diagnosed, not handled** — route 1 §10.2's
    seam, inherited: a Σ that arrived whnf'd has lost nothing structurally
    (Σ is a whnf), so this is *better* here than at route 1, but a `μ` that
@@ -917,18 +966,35 @@ own constructor names are now excluded from that test.
    whether an index-dependent motive states what the user meant. The choice
    wants a round, not a patch. Nothing in the suite needs it — the shape
    only arises at an index type with a payload-carrying constructor.
-9. **Form A's cost is multiplicative, and a branching constructor at a
-   three-constructor index exceeds the conversion budget** (measured
-   2026-08-04). Per arm the inversion emits one `child_projection` per child
-   and one tag predicate per *other* index constructor, each a whole
-   `elim_Wf` over the index type, and `fn`s are inlined at every use
-   (`issues/simulate-conversion-cost.md`) so conversion pays for the emitted
-   size twice over. `Bl`-over-a-2-constructor `Shape` (branching) and `Tw`
-   over a 3-constructor one (linear) both fit; their product does not — it
-   checks at twice `DEFAULT_FUEL` and is pinned as a deliberate negative
-   (`a_branching_form_a_at_a_three_constructor_index_exceeds_the_fuel_budget`).
-   This is seam 2's `μ` inlining wearing a second hat, and a kernel `def`
-   retires both.
+9. **Form A's cost was multiplicative, and a branching constructor at a
+   three-constructor index exceeded the conversion budget — closed
+   2026-08-04** (`issues/generated-term-defs.md`). Per arm, the inversion
+   emitted one `child_projection` per child and one tag predicate per *other*
+   index constructor, each a whole `elim_Wf` over the index type, and the
+   emitted size was paid twice over by conversion. `Bl`-over-a-2-constructor
+   `Shape` (branching) and `Tw` over a 3-constructor one (linear) both fitted;
+   their product did not — it checked at twice `DEFAULT_FUEL` and was pinned
+   as a deliberate negative.
+
+   Both devices are now Ψ definitions, keyed on the **index type's** tag and
+   therefore shared by every family over that index: `is_k : I → Type⁰` per
+   index constructor, and `proj_{k,t} : I → I → I` per child, **abstracted
+   over its default** — the default is the one thing that varies per
+   occurrence (the arm passes its bound `z`), and abstracting it is what lets
+   one definition serve them all.
+
+   The negative flipped, as this item and the fixture comment both said it
+   would, and was rewritten as the positive it was always trying to be:
+   `a_branching_form_a_at_a_three_constructor_index_fits_the_fuel_budget`
+   (`crates/elab/tests/indexed_route_2b_declared.rs`), which still crosses
+   branching children with a three-constructor index and now checks inside
+   `DEFAULT_FUEL`. The frontend suite gained the row that cliff had forbidden,
+   `forded/declared-index-branching`: 2.08 s → 645 ms at six index
+   constructors, slope 1.53.
+
+   `forded/declared-index-tags` itself moved 328 ms → 234 ms and its slope did
+   **not** move (2.65 → 2.61). That is §14.11.
+
 10. **`forded_ctor_index` infers payload arguments** (2026-08-04).
    `res_arg_cx` (`forded.rs`) calls `elab_infer` on a payload argument when
    the written result index mentions it and no checked value is available
@@ -936,6 +1002,46 @@ own constructor names are now excluded from that test.
    position (a lambda, a `refl`) and appears in the result index would fail
    there. Nothing in the suite hits it; the checking path
    (`build_forded_ctor`) is unaffected.
+
+11. **The emitted *types* are the residual multiplier** (2026-08-04, the
+   successor to items 2 and 9). Routing the generated **terms** through Ψ
+   definitions cut the constant by 4–7× and moved the exponents by 0.60, 0.04
+   and 0.00; `forded/declared-index-tags` is the family that says why. What
+   is swept there is the *index type's* constructor count, and the index type
+   is a `Type::Wf` whose node count is Θ(constructors) — written out afresh at
+   every occurrence: once per `sEq`, per `Lam` domain, per `transp`
+   annotation, per motive instantiation, of which the inversion emits
+   Θ(constructors). Θ(n) copies of a Θ(n) type is a quadratic that no term
+   definition reaches. The same is true of the skeleton `⟦Skel⟧` in
+   `computed-arms`, where the arm count multiplies both factors, which is why
+   *that* exponent did move.
+
+   The lever does not extend: `GlobalBinding::Ty` has **no body**, so a type
+   cannot be a Ψ definition at all. The shape a fix would have to take is a
+   *code* definition — `D#code : Trm_c(· ⊢ Type_l)` with the type spelled
+   `El (D#code^δ)` — and that is a scheme change, not a registration detail:
+   every consumer that reads `Type::Wf` structurally (`spine`, `build_elim_wf`,
+   `const_elim_wf`, `tag_of`) would have to go through `decoded`/whnf first,
+   and §14.3's "pre-reduced family types are diagnosed, not handled" would
+   acquire a much larger surface. Recorded here, unscheduled, with the
+   before/after table in `docs/frontend-benchmarking.md` as its evidence.
+
+12. **A parameterized forded family keeps its inlined `μ`** (2026-08-04, the
+   boundary of `issues/generated-term-defs.md`). A definition is registered at
+   *declaration* time and must be closed; `μ`'s body mentions the skeleton's
+   lowering, which is monomorphized per instantiation (`Cx::tyvars`), so a
+   parameterized family's `μ` is not one term but one per instantiation, and
+   the instantiations are not known where the definition would be registered.
+   Abstracting over the parameter would need a Π over `Type` in the
+   definition's statement and a type-argument spine at every reference.
+
+   Measured rather than assumed: exactly **one** forded family in the whole
+   suite is parameterized (`Tree<A>`, §14.7's inference row), against twenty
+   that are not, and no forded family can have value parameters at all
+   (`inductive.rs` rejects them on any `inductive`). The index type is always
+   unparameterized by the same file's rule, so item 9's devices are closed for
+   *every* family and have no such boundary. `forded_of` skips its name check
+   where no `μ` definition exists, which is how the two paths coexist.
 
 ## 15. What this document amends elsewhere
 

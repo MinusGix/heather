@@ -498,6 +498,15 @@ rather than remembered.
    find a branch code with a nominal tag, guarded by "motive is `Ty _`"
    and "the tag resolves to an indexed declaration". The surface a
    normalizing pass would break is much larger than the `Nat` round's.
+   **Status 2026-08-04:** the pass this item feared has landed for route 2b
+   only — `issues/generated-term-defs.md` routed the *forded* generator's
+   artifacts through Ψ definitions and re-keyed `forded_of` by name
+   (`docs/inductive-fording-lowering.md` §14.1). Route 1's devices were
+   deliberately **not** routed, so `indexed_of` is unbroken and unchanged, and
+   this item stands as written. Whichever round does route 1 re-keys it the
+   same way, and `forded.rs`'s `mod fingerprint` is the shape of the negative
+   it will need — nominal identity is not enough on its own, because a Σ over
+   the right skeleton with the wrong measure satisfied every structural test.
 2. **Type identity depends on presentation.** A family type that arrives
    *pre-reduced* (whnf'd at a literal index, upstream of the consumer) has
    lost its index, and constructors/`match` against it are diagnosed, not
@@ -515,6 +524,17 @@ rather than remembered.
    `cs`/`ih` threading, at every type occurrence, built twice per instance
    by the two-pass level computation — `Bal(SNode(l, r))` is a large
    term, and the kernel-`def` fix matters more here than it did at `Nat`.
+   **Status 2026-08-04:** `issues/generated-term-defs.md` expected route 1 to
+   "shrink for free" alongside route 2b and it did **not**, so this item is
+   open and unchanged. The mechanism did not transfer: route 2b has a
+   per-declaration *term* (`μ_D`) that a Ψ definition can name, whereas route
+   1's family is a whole `elim_Nat`/`elim_Wf` **at a motive in `Type`** — the
+   thing to name is a type-valued function, and `GlobalBinding::Ty` has no
+   body. The route-2b round hit the same wall from the other side and recorded
+   it as `docs/inductive-fording-lowering.md` §14.11: naming a *type* needs a
+   code definition (`D#code : Trm_c(· ⊢ Type_l)` with `El (D#code^δ)`), which
+   is a scheme change and would break the structural readers of item 1. Route
+   1's shrink is that round's, not a follow-on to this one.
 4. **The arm walk exists twice.** `indexed_case_tree`/`elab_indexed_arm`
    mirror `case_tree`/`elab_arm` deliberately (threading the pattern
    variable and the guard through the shared walk would couple what the
