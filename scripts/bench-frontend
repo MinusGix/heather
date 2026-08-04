@@ -1,0 +1,43 @@
+#!/usr/bin/env bash
+# Run the frontend benchmark suite under hard resource limits.
+#
+# ALWAYS use this instead of bare `cargo bench`, for the reason CLAUDE.md
+# gives about direct `heather` runs and then some: this suite checks
+# `lib/ir_v1.hthr`, whose conversion workload is memory-*superlinear* (an
+# uncapped release check of a deep-fuel IR theorem once reached ~22 GB), and
+# it deliberately sweeps the forded families towards the fuel cliff of
+# docs/inductive-fording-lowering.md §14.9. Under these limits the bench
+# process dies alone.
+#
+# A sibling script rather than a `scripts/bench` subcommand: the two suites
+# are two `cargo bench` targets in two crates with two baselines and two
+# flag surfaces (this one has --no-heavy and no --stack-only), so one script
+# would spend its whole body demultiplexing and its --help would be a lie
+# about both.
+#
+# Usage: scripts/bench-frontend [--check | --save] [--quick] [--no-heavy]
+#                              [--filter substr] [--list]
+#        scripts/bench-frontend --help
+#
+# See docs/frontend-benchmarking.md for what the numbers mean and when to
+# re-record.
+set -euo pipefail
+cd "$(dirname "$0")/.."
+
+# Compile without limits (rustc is memory-hungry but trusted)...
+cargo bench --package heather-elab --bench frontend --no-run --quiet
+
+# ...then run under them: 8 GiB address space, 30 CPU minutes.
+#
+# 8 GiB rather than the kernel suite's 4: the same rail CLAUDE.md sets for a
+# direct `heather check`, because that is what the corpus family *is*. It
+# covers the 256 MiB worker stack (reserved, not committed — WORKER_STACK in
+# benches/frontend/main.rs) with room for the whole-file elaboration that is
+# the point of the suite.
+#
+# The CPU cap is generous because one full run is ~4 minutes and three of
+# those are `lib/ir_v1.hthr` alone (~59 s per round, 3 rounds); a runaway is
+# orders of magnitude beyond it either way. `--no-heavy` is the fast loop.
+ulimit -v 8388608
+ulimit -t 1800
+exec cargo bench --package heather-elab --bench frontend --quiet -- "$@"

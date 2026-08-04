@@ -1,0 +1,254 @@
+# Benchmarking the frontend: user latency, and what "regressed" means
+
+The kernel suite guards a **cost model** (`docs/benchmarking.md`). This one
+guards a **wait**: the time between saving a `.hthr` file and knowing whether
+it checks. The elaborator is allowed to be clever — it is not the trusted
+base — so the answer to a slow number here *may* be "make the elaborator
+cleverer", which is the opposite of the kernel suite's answer and the reason
+the two suites are separate.
+
+Owning issue: `issues/frontend-benchmarks.md`.
+
+## Running it
+
+```
+scripts/bench-frontend                          # measure and print
+scripts/bench-frontend --check                  # compare against the baseline; exit 1 on a regression
+scripts/bench-frontend --save                   # record a new baseline
+scripts/bench-frontend --no-heavy               # skip lib/ir_v1.hthr — the fast loop
+scripts/bench-frontend --quick --filter forded  # iterate on a fixture (shapes only)
+scripts/bench-frontend --list                   # what is in the suite
+```
+
+**Always through `scripts/bench-frontend`, never bare `cargo bench`** — the
+rule CLAUDE.md states for every direct `heather` run, for the same reason:
+whole-file checking is memory-superlinear (an uncapped release check of a
+deep-fuel IR theorem reached ~22 GB), and this suite checks the heaviest file
+in the tree *and* sweeps the forded families towards the fuel cliff of
+`docs/inductive-fording-lowering.md` §14.9. The wrapper is where the `ulimit`
+lives: 8 GiB of address space, 30 CPU minutes.
+
+A full run is ~4 minutes and three of them are `lib/ir_v1.hthr`. `--no-heavy`
+is ~40 seconds and is what to run while iterating; `--quick` on top of that is
+seconds, and its numbers are shapes, not measurements.
+
+## What gets reported
+
+Four kinds of number, in decreasing order of how much they should be trusted
+across machines.
+
+**1. The scaling exponent** — the log-log slope of time against the family's
+work unit. The headline, for the kernel suite's reason (machine-independent),
+and empirically the most robust thing here: across three full runs on a
+machine under varying load the absolute times moved by up to 1.5× while the
+fitted exponents moved by ≤0.25, and by ≤0.1 on all but the noisiest family.
+Families that make a claim declare a band, and `--check` fails when the fit
+leaves it, whether or not a baseline exists on this machine.
+
+**2. Latency budgets** — an absolute ceiling on a corpus file, checked on
+every machine, baseline or not. `lib/ir_v1.hthr` is the one that matters:
+59 s through the release CLI on a quiet machine, 67–88 s from this harness
+depending on what else the machine was doing, budget **150 s**. It is not
+derived from the baseline — a budget that moves with the recording is not a
+budget — and it is deliberately loose, because what it is for is "the
+library file now takes five minutes", not
+"the library file got 30% slower". That second question is the baseline's.
+
+**3. The phase split** — parse / elaborate / kernel gate, printed under every
+case that reports one and recorded in the baseline as `split` rows. Its job is
+to make a regression **name its layer**, so it is never a failure on its own:
+`--check` prints moved phases under the case they belong to, tagged `where`.
+
+The split is measured on one instrumented run (the same run that validates the
+fixture), not min-of-rounds, because attributing the parse costs an extra
+parse and that must not happen inside a sampled round. Read it as proportions,
+not as a measurement.
+
+What the three phases mean exactly:
+
+| phase | what is in it |
+|---|---|
+| `parse` | `heather_syntax::parse_file`, timed on its own pass |
+| `kernel` | the `typing::check_type` + `check_term` **gate** that every finished declaration passes (`crates/elab/src/stats.rs`) |
+| `elab` | the residue: everything the elaborator did, **including its own conversion and whnf calls into the kernel** |
+
+That last row is the one to remember. The elaborator calls the kernel while
+it works — unification, `whnf`, `conv_type` — and those calls are on the
+*elaborate* side, because they are elaboration deciding something rather than
+the kernel re-checking a result. `kernel` is the gate and only the gate.
+
+**4. Absolute times** — min of several rounds, with the median printed
+alongside. Min is the right statistic for deterministic work (see the kernel
+doc). Rounds are adaptive: a case whose single round costs over a second gets
+3, over ten seconds gets 2, and the report prints the count, so a two-round
+number is never mistaken for a seven-round one.
+
+## What "regressed" means
+
+`scripts/bench-frontend --check` fails on any of:
+
+| condition | threshold | why that threshold |
+|---|---|---|
+| a case is slower than baseline | ≥ 1.25× | the kernel suite's number, kept for consistency — but see the noise warning below, which matters far more here |
+| a fitted slope drifted upward | > +0.35 | as the kernel suite — but the observed run-to-run spread here reached 0.25 on `forded/declared-index-tags`, so a lone slope flag wants a re-run too |
+| a slope left its declared band | — | a standing claim about the cost model, checked on every machine |
+| a case exceeded its latency budget | — | a standing claim about the wait, checked on every machine |
+| a case blew its guard | 3× its budget | it was measured once and not sampled; something is very wrong or the fixture needs a new home |
+
+Improvements ≥ 20% are printed too, as a hint to re-record.
+
+**The noise warning.** Frontend cases are 10³–10⁶ times longer than kernel
+cases and run correspondingly fewer rounds, and the recording machine on
+2026-08-04 was carrying a load average of ~10 with the CPU at 96 °C. Under
+those conditions consecutive full runs disagreed by up to **1.5×** on
+individual cases — including cheap, many-iteration ones like
+`corpus/prelude:build`. So the kernel doc's rule ("re-run a single-case flag
+before believing it") is not a footnote here, it is the primary reading
+instruction: a regression that moves *a family* is real, a regression that
+moves one point while its neighbours sit still is the machine.
+`--check` helps by printing `[med/min 1.4×]` beside any case whose own median
+sits well above its own min — that annotation means the machine was busy
+*during this run*, so the flag beside it carries no weight.
+
+`--filter <family> --check` is the cheap way to ask again; `--no-heavy` makes
+it cheaper.
+
+## The baseline file
+
+`crates/elab/benches/baseline.tsv`, tab-separated for the kernel suite's
+reasons (greppable, diffable, parseable without a dependency). Rows are `env`
+(host, cpu, profile, rustc, commit), `case` (family, label, min ns), `split`
+(family, label, phase, ns) and `slope`. The key is a **label**, not a size —
+corpus cases are named by file.
+
+Re-record when the machine changes, the toolchain changes, or a deliberate
+change moves the numbers. A baseline from another machine still gates slopes,
+bands and budgets, and `--check` says which half it skipped.
+
+> **The baseline in the tree was recorded on a loaded machine** (2026-08-04,
+> load ~10, 96 °C) and is therefore ~1.3–1.5× pessimistic on absolute times.
+> The slopes, the phase proportions and the budgets are unaffected. Re-record
+> on a quiet machine before trusting the time half of `--check`.
+
+## Why no Criterion, and why a second harness at all
+
+Same answer as the kernel suite for the dependency (`issues/dependency-policy.md`,
+and what Criterion buys is aimed at small differences in noisy code — this
+suite's differences are 1.5× and up). The harness is a sibling of the kernel's
+rather than a shared crate because four things differ, and each of them is one
+of the differences between "cost model" and "user latency": labels instead of
+sizes, the phase split, per-case guards and budgets, and no stack probe.
+Sharing them would mean a harness with two modes and a set of options that
+mean nothing in one of them.
+
+## Fixture rules
+
+The kernel suite's two, inherited:
+
+- **Setup is not timed.** Sources are generated, prelude'd elaborators built,
+  and every generated source *validated by elaborating it*, when the family is
+  constructed. Fixture construction is where this suite's seconds actually go,
+  which is why `--list` does not build fixtures and why the smoke test builds
+  only the smallest case of each family.
+- **A fixture validates before it is timed.** Every generated source must
+  check cleanly at setup, and every case carries a checksum the harness
+  verifies. A fixture that stops doing its work gets *faster*.
+
+And one of its own:
+
+- **A timed run must be repeatable, and `check_source` mutates.** So every
+  run needs a fresh elaborator, and there are two honest ways to get one:
+  rebuild the prelude (~90 µs) or clone a prelude'd one (~108 ns — both
+  numbers are in the report, as `corpus/prelude`). The corpus rebuilds,
+  because that is what `heather check <file>` does per file and the corpus
+  number is meant to be the number a user waits for. Generated families
+  clone, because a 90 µs fixed cost against a fixture that starts at ~180 µs
+  does not merely add noise to the fit — it *flattens the exponent*, which is
+  the number this suite reports.
+
+Generated fixtures are generated in memory, not committed as `.hthr` files: a
+swept family is five files differing in a loop bound, so committing them
+commits the generator's output instead of the generator. The committed
+`.hthr` files stay what they are for — real proofs, in `lib/`.
+
+## What is in the suite, and why each is there
+
+Numbers below are the recorded baseline (2026-08-04); the parenthesised
+ranges are what the same fixture read across three full runs on the same
+machine at different loads, which is the honest width of an absolute time
+here.
+
+| family | measures | today |
+|---|---|---|
+| `corpus/prelude` | the per-file fixed cost the CLI pays, and the clone that the generated families use instead | 87 µs build / 108 ns clone |
+| `corpus/parse` | the parser alone over `lib/*.hthr` | 6–18 ns/byte |
+| `corpus/check-file` | `lib/*.hthr` end to end, as `heather check` does it, with the phase split | 0.58 ms / 1.21 s / 67 s (67–88 s) |
+| `scale/declarations` | *n* independent `fn`+`theorem` pairs — file size with no pathology in it | slope 0.98 (0.98–1.12) |
+| `scale/wide-inductive` | an inductive with *n* constructors and the *n*-arm `match` | slope 1.51 (1.51–1.67) |
+| `forded/computed-arms` | a route-2b family with *n* constructors, and the *n*-arm match | **slope 3.39** (3.33–3.58) |
+| `forded/occurrences` | *n* declarations over one forded family | slope 1.03, ~119 ms **per use** |
+| `forded/declared-index-tags` | form A swept along the *index* type's constructor count | **slope 2.65** (2.65–2.90) |
+| `meta/nested-inference` | *d* nested implicit instantiations, built and projected back | slope 1.84 (1.84–1.90) |
+
+The spread is the point of the noise warning above, and it is also the
+argument for the slope being the headline: the times moved by up to 1.5×
+between those runs, the exponents by ≤0.25.
+
+No exponent is claimed for the corpus: the x-axis is source bytes across
+unrelated files, and `lib/ir_v1.hthr` is not "a bigger `lib/vec_code.hthr`" —
+it is a file of deep proofs whose cost is conversion, not size. The printed
+slope of ~5.4 there is an artefact of exactly that and means nothing.
+
+## The three forded families, and the round that will re-record them
+
+`forded/computed-arms`, `forded/occurrences` and
+`forded/declared-index-tags` are the reason this suite was built when it was.
+`issues/frontend-benchmarks.md` carries two 2026-08-04 triggers, and both name
+the same lever:
+
+- **§14.2** — `μ`, the index measure, is a whole `elim_Wf` **inlined at every
+  occurrence**, because the kernel term language has no definitions
+  (`issues/simulate-conversion-cost.md`). The family type has one, the
+  eliminator instantiates it several times per arm, and a forded type inside
+  another type multiplies that again.
+- **§14.9** — at a *declared* index, form A additionally emits one
+  `child_projection` per child and one tag predicate per **other** index
+  constructor, each itself a whole `elim_Wf`. The product of branching and a
+  three-constructor index already exceeds `DEFAULT_FUEL`, and is pinned as a
+  deliberate negative in `crates/elab/tests/indexed_route_2b_declared.rs`.
+
+What the fixtures measured on 2026-08-04, the first day they existed:
+
+| | 2 | 3 | 4 | 5 | 6 | slope |
+|---|---|---|---|---|---|---|
+| `forded/computed-arms` (arms) | 31 ms | 112 ms | 317 ms | 665 ms | 1.25 s | **3.39** |
+| `forded/declared-index-tags` (index ctors) | 18 ms | 48 ms | 104 ms | 199 ms | 328 ms | **2.65** |
+
+Read that as a user would: adding one constructor to an *index* type — a type
+the user may not think of as part of the family at all — roughly *doubles* the
+cost of every declaration over every family indexed by it. And in both
+families **97–99% of the time is the kernel gate**, not the elaborator. The
+frontend's problem here is not that it is slow; it is that it hands the kernel
+a term whose size is a product where it should be a sum.
+
+**The bands record the exponents that exist, not the ones the design wants**,
+which is the kernel doc's rule for a band that records a defect. When the
+kernel-`def` round lands, the expected outcome is that these fits fall *below*
+their bands and `--check` goes red on exactly them — five "regressions" that
+are the old exponents being left behind. The right response then is `--save`,
+a note in the commit, and the before/after table above as the round's number.
+`forded/occurrences`'s **per-use** figure (~119 ms today) is the other half of
+that number: it is what one mention of a forded family costs a user.
+
+## The other thing the phase split said on day one
+
+`lib/ir_v1.hthr`: parse **0.0%**, elaborate **1.2%**, kernel gate **98.8%**.
+`lib/vec_code.hthr`, a file with no deep proofs in it: parse 10.6%, elaborate
+49.3%, kernel gate 40.2%.
+
+The issue guessed that a split would tell a regression which layer it was in.
+It does — and it also says that on the file that dominates the tree's check
+time, the frontend is 1% of the wait. Elaborator optimizations aimed at
+`lib/ir_v1.hthr` would be aimed at 1.2% of it; the leverage is entirely in
+what the elaborator *emits*, which is what the forded families measure and
+what a kernel `def` changes.

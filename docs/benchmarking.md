@@ -7,8 +7,11 @@ kernel cleverer" — it is to know the cost model, keep it stable, and notice
 when it changes. Consistent measurement is the substitute for complexity.
 
 Owning issue: `issues/kernel-benchmarks.md`. The frontend has a separate
-suite for a separate question (`issues/frontend-benchmarks.md`): there, user
-latency; here, the cost model.
+suite for a separate question (`issues/frontend-benchmarks.md`,
+`docs/frontend-benchmarking.md`, `scripts/bench-frontend`): there, user
+latency; here, the cost model. That suite's harness is a sibling of this
+one's rather than a shared crate, and its doc says which four things differ
+and why each of them is one of the differences between the two questions.
 
 ## Running it
 
@@ -144,7 +147,11 @@ lifting that cap costs anything.
 
 What is **not** here: checking the declarations the tier-1 lowering emits.
 Those come from `elab`, which sits above the kernel and cannot be reached from
-a kernel bench; `issues/frontend-benchmarks.md` owns that number.
+a kernel bench; `docs/frontend-benchmarking.md` now has that number, and it
+is larger than this suite's framing suggests — on `lib/ir_v1.hthr` the kernel
+gate is **98.8%** of the wall clock, and the frontend suite's forded families
+are cubic in a constructor count for the same reason (a term the elaborator
+emits, re-checked by a kernel that has no definitions).
 
 Also not here, and for a sharper reason: the arm-nested probe of
 `issues/whnf-sharing-term-growth.md`, which lives in `scripts/probe-whnf-sharing`

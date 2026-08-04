@@ -3,6 +3,10 @@ name = "heather-elab"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+# The bench target is declared explicitly below; nothing else under benches/
+# is one (the suite is a directory of modules, not a file per benchmark) —
+# same shape as the kernel's.
+autobenches = false
 
 [lib]
 name = "heather_elab"
@@ -10,6 +14,15 @@ name = "heather_elab"
 [dependencies]
 heather-kernel = { path = "../kernel" }
 heather-syntax = { path = "../syntax" }
+
+# No dev-dependencies, and no Criterion: the frontend suite reuses the
+# kernel harness's first-party estimator (issues/dependency-policy.md,
+# docs/frontend-benchmarking.md). Run through `scripts/bench-frontend`
+# (ulimit), never `cargo bench` directly.
+[[bench]]
+name = "frontend"
+path = "benches/frontend/main.rs"
+harness = false
 
 [lints]
 workspace = true

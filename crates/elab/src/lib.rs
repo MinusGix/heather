@@ -46,6 +46,7 @@ use heather_syntax::{
 };
 
 pub mod certgen;
+pub mod stats;
 mod code;
 mod forded;
 mod indexed;
@@ -358,11 +359,19 @@ struct ParamMeta {
 /// `u^δ`; a `fn` used to be substituted in whole at every use, which put a
 /// copy of its body in every theorem statement and every induction
 /// hypothesis that mentioned it.
+#[derive(Clone)]
 struct GlobalInfo {
     abs: u32,
     params: Rc<Vec<ParamMeta>>,
 }
 
+/// `Clone` is deliberate and cheap: every field is a `HashMap` of `Rc`s or a
+/// small `Vec`, so cloning a prelude'd elaborator costs microseconds where
+/// [`Self::with_prelude`] costs milliseconds. The frontend benchmark suite
+/// needs it — a timed unit of work has to be repeatable, and `check_source`
+/// mutates — and speculative elaboration (an LSP, a tactic that tries a
+/// branch) is the same need one layer up.
+#[derive(Clone)]
 pub struct Elaborator {
     psi: GlobalCtx,
     /// [`Self::psi`] padded with `goal_base` bodiless slots, so that a
@@ -444,6 +453,7 @@ pub struct Elaborator {
 /// `order` holds positions into the slot spec's ingredient list, in the
 /// template's own binder order: it is the one place that knowledge lives, and
 /// [`Elaborator::try_code_template`] is the only reader.
+#[derive(Clone)]
 pub(crate) struct MetaDef {
     pub(crate) term: Rc<Term>,
     #[allow(dead_code)]
@@ -471,6 +481,7 @@ enum DotResolution {
 /// an innermost Ψ-binding `u : Trm(Γ ⊢ T @ l)` occurring as `u^{id_Γ}` — but
 /// allocated for the whole declaration and discharged by an `on` statement
 /// rather than by unification.
+#[derive(Clone)]
 struct Goal {
     /// Discharge name (site-written `?first`, or checker-assigned).
     name: String,
@@ -713,11 +724,17 @@ impl Elaborator {
         let stmt = stmt.apply_global(&sigma);
 
         // The kernel is the gate: check the statement, then the term.
+        // `stats::time_kernel` attributes exactly this to the kernel half of
+        // the frontend suite's phase split (crates/elab/src/stats.rs).
         let empty = LocalCtx { base: CtxBase::Nil, entries: vec![] };
-        typing::check_type(&self.psi, 0, Layer::Prog, &empty, &stmt, &stmt_lvl, self.fuel)
-            .map_err(|e| ElabError::Kernel { decl: decl.name.clone(), span: decl.span, err: e })?;
-        typing::check_term(&self.psi, 0, Layer::Code, &empty, &term, &stmt, &stmt_lvl, self.fuel)
-            .map_err(|e| ElabError::Kernel { decl: decl.name.clone(), span: decl.span, err: e })?;
+        stats::time_kernel(|| {
+            typing::check_type(&self.psi, 0, Layer::Prog, &empty, &stmt, &stmt_lvl, self.fuel)
+        })
+        .map_err(|e| ElabError::Kernel { decl: decl.name.clone(), span: decl.span, err: e })?;
+        stats::time_kernel(|| {
+            typing::check_term(&self.psi, 0, Layer::Code, &empty, &term, &stmt, &stmt_lvl, self.fuel)
+        })
+        .map_err(|e| ElabError::Kernel { decl: decl.name.clone(), span: decl.span, err: e })?;
 
         let params = Rc::new(
             decl.tyvars

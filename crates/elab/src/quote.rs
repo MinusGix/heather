@@ -258,18 +258,22 @@ impl Elaborator {
 
         // The kernel is the gate, at the meta layer.
         let empty = LocalCtx { base: CtxBase::Nil, entries: vec![] };
-        typing::check_type(&self.psi, 0, Layer::Meta, &empty, &stmt, &Level::Zero, self.fuel)
-            .map_err(|e| ElabError::Kernel { decl: decl.name.clone(), span: decl.span, err: e })?;
-        typing::check_term(
-            &self.psi,
-            0,
-            Layer::Meta,
-            &empty,
-            &term,
-            &stmt,
-            &Level::Zero,
-            self.fuel,
-        )
+        crate::stats::time_kernel(|| {
+            typing::check_type(&self.psi, 0, Layer::Meta, &empty, &stmt, &Level::Zero, self.fuel)
+        })
+        .map_err(|e| ElabError::Kernel { decl: decl.name.clone(), span: decl.span, err: e })?;
+        crate::stats::time_kernel(|| {
+            typing::check_term(
+                &self.psi,
+                0,
+                Layer::Meta,
+                &empty,
+                &term,
+                &stmt,
+                &Level::Zero,
+                self.fuel,
+            )
+        })
         .map_err(|e| ElabError::Kernel { decl: decl.name.clone(), span: decl.span, err: e })?;
 
         // The registration seam (docs/meta-def-registration-design.md §2.2):
