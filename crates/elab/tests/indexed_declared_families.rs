@@ -402,23 +402,31 @@ fn declaration_rejections_carry_their_messages() {
     ));
     assert!(m.contains("pattern variable"), "{m}");
     // Non-linear pattern: one field filling two arguments.
-    let m = elab_err(
+    // A *non-linear* result index is no longer a rejection: route 1 still
+    // declines it (its pattern must be linear), but route 2b generates it —
+    // one child at `l`, and `μ` recomputes `N2(μ d, μ d)` faithfully, which is
+    // §3.2's F1–F4 with nothing left to check
+    // (docs/inductive-fording-lowering.md §3.4). What route 2b *does* reject is
+    // two children sharing one index variable (F2), and that has its own
+    // observer in `indexed_route_2b_gen.rs`.
+    elab(
         "inductive Sh2 { L2, N2(a: Sh2, b: Sh2) }
          inductive Bad : (s: Sh2) -> Type {
              D0                   : Bad(L2),
              D1(l: Sh2, d: Bad(l)) : Bad(N2(l, l)),
          }",
     );
-    assert!(m.contains("linear"), "{m}");
-    // Deeper than one constructor.
-    let m = elab_err(
+    // Deeper than one constructor: route 1 still declines it, but this is
+    // exactly §3.4's "deep pattern" row — route 2b generates it with no special
+    // case at all (`μ(d1 r) = N2(L2, μ… )`), so the declaration now lands
+    // rather than rejecting (docs/inductive-fording-lowering.md §3.4, §15.4).
+    elab(
         "inductive Sh2 { L2, N2(a: Sh2, b: Sh2) }
          inductive Bad : (s: Sh2) -> Type {
              D0                   : Bad(L2),
              D1(r: Sh2)           : Bad(N2(L2, r)),
          }",
     );
-    assert!(m.contains("deeper than one constructor"), "{m}");
     // The index constructor at the wrong arity.
     let m = elab_err(
         "inductive Sh2 { L2, N2(a: Sh2, b: Sh2) }

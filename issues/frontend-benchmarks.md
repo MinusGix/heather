@@ -3,7 +3,7 @@ title: Benchmark suite for the frontend (parse, elaborate, full-file check)
 status: open
 labels: [frontend,elaboration,performance,tooling]
 created: 2026-07-27
-updated: 2026-07-27
+updated: 2026-08-04
 ---
 
 Companion to [[kernel-benchmarks]], separate because the questions differ:
@@ -36,3 +36,5 @@ budget worth alarming on. Not any particular speedup.
   provokes retry/postponement behavior keeps quadratic blowups visible.
 
 ## Log
+
+- 2026-08-04: Trigger noted from the 2b-generator round (2026-08-04): doc §14.2's μ-inlining cost is now measurable — indexed_route_2b_gen.rs is the slowest elab test binary (~2.6 s / 17 tests; μ appears in the family type, twice per Σ projection, several times per arm, multiplied when a forded type appears inside another type). When this suite exists, a forded-family fixture belongs in it, and the recorded fix (a kernel def) gets its number here.

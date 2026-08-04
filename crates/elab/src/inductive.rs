@@ -67,6 +67,14 @@ pub(crate) struct Inductive {
     /// What the index is a value of: `Nat`, or a previously declared
     /// inductive (§8.2). `Some` exactly when [`Self::index`] is.
     pub index_ty: Option<IdxTy>,
+    /// Route 2b (`docs/inductive-fording-lowering.md` §4): the **skeleton** —
+    /// this declaration with every index erased, lowered by the unindexed
+    /// tiers verbatim. `Some` exactly for a forded family, and it is what
+    /// makes "route 1 or route 2b" one test rather than a flag.
+    ///
+    /// Built once, from the declaration, at declaration time, and never edited
+    /// afterwards (§14.6: two skeletons, one declaration).
+    pub skel: Option<Rc<Inductive>>,
 }
 
 /// The type an indexed declaration is indexed **by**
@@ -150,7 +158,19 @@ pub(crate) struct Ctor {
     /// field sits at — the position whose `rec` the recursion draws from
     /// (§8.2). `None` at every other field, and at every field of an
     /// unindexed declaration.
+    ///
+    /// Route 2b reads this slot differently, and deliberately: at a **child**
+    /// it is the surface position of that child's *index variable* field
+    /// (`docs/inductive-fording-lowering.md` §3.2, F1) — the field `μ`
+    /// recomputes and the eliminator binds. The two meanings never meet,
+    /// because a declaration is on exactly one route.
     pub rec_at: Vec<Option<usize>>,
+    /// Route 2b: the constructor's **written result index**
+    /// (`docs/inductive-fording-lowering.md` §2), any expression at the index
+    /// type over this constructor's child-index and payload fields. `None` on
+    /// route 1 (where [`Self::res`] carries the pattern instead) and on every
+    /// unindexed declaration.
+    pub res_expr: Option<Expr>,
 }
 
 /// A constructor's result index, decomposed: depth-one, constructor-headed,
@@ -330,6 +350,7 @@ pub(crate) fn decoded(t: &Type) -> Cow<'_, Type> {
                 | Term::TmVec { .. }
                 | Term::TmFin { .. }
                 | Term::TmWf { .. }
+                | Term::TmSEq { .. }
         )
     }
     let empty = LocalCtx { base: CtxBase::Nil, entries: vec![] };
@@ -399,7 +420,7 @@ pub(crate) fn nat_lit(k: usize) -> Term {
 /// The tag's inhabitant: nested `⟨⟩`s matching the tag type's shape. Which
 /// inhabitant hardly matters — the type is proof-irrelevant — but it has to be
 /// *an* inhabitant for the kernel to accept the constructor.
-fn tag_value(t: &Type) -> Term {
+pub(crate) fn tag_value(t: &Type) -> Term {
     // Through [`decoded`]: the tag type of a type that arrived as *code* is
     // `El` of a `Σ` code, and reading it as anything else emits `⟨⟩` where a
     // pair is needed — which the kernel rejects as `NotConvertible` for every
@@ -523,6 +544,15 @@ impl Elaborator {
                 (Some(n.clone()), Some(ity))
             }
         };
+        // Which indexed fragment this declaration is in
+        // (`docs/inductive-fording-lowering.md` §3): route 1, route 2b, or
+        // neither. Computed once, before the per-constructor walk, because
+        // routing is **per declaration** — a declaration with one non-route-1
+        // constructor fords whole (§3, and §10's rejected route 3).
+        let route = match &index_ty {
+            None => None,
+            Some(ity) => Some(classify_indexed_route(d, ity)?),
+        };
         let mut ctors = Vec::new();
         for (i, c) in d.ctors.iter().enumerate() {
             if d.ctors[..i].iter().any(|o| o.name == c.name) {
@@ -546,57 +576,39 @@ impl Elaborator {
             // The result annotation: mandatory on an indexed declaration's
             // constructors, an error elsewhere
             // (docs/inductive-indexed-lowering.md §2).
-            let res = match (&index, &c.result) {
-                (None, None) => None,
-                (None, Some(r)) => {
-                    return err(
-                        format!(
-                            "`{}` has a result annotation, but `{}` is not indexed: only \
-                             an indexed declaration's constructors state their index",
-                            c.name, d.name
-                        ),
-                        r.span,
-                    )
-                }
-                (Some(_), None) => {
-                    return err(
-                        format!(
-                            "`{}` needs a result annotation: every constructor of an \
-                             indexed declaration states its index (`{} : {}<…>(…)`)",
-                            c.name, c.name, d.name
-                        ),
-                        c.span,
-                    )
-                }
-                (Some(_), Some(r)) => Some(parse_result_index(
-                    c,
-                    r,
-                    &d.name,
-                    &d.params,
-                    &d.ctors,
-                    index_ty.as_ref().expect("an index binder carries its type"),
-                )?),
-            };
+            if index.is_none()
+                && let Some(r) = &c.result
+            {
+                return err(
+                    format!(
+                        "`{}` has a result annotation, but `{}` is not indexed: only \
+                         an indexed declaration's constructors state their index",
+                        c.name, d.name
+                    ),
+                    r.span,
+                );
+            }
             // Tier classification (tier 0 §2; tier 1 §1). With no function
             // types in field position there is no *negative* occurrence to
             // find yet, so an occurrence is either the uniform recursive one
             // — tier 1, lowered onto `Wf` — or a rejection, never a silent
-            // lowering. An indexed declaration classifies by its own rules
-            // (docs/inductive-indexed-lowering.md §3): the pattern variable is
-            // the index, a recursive occurrence must sit at it, and
-            // everything else indexed rejects with the route named.
-            let (kind, rec_at) = match &res {
-                Some(pat) => classify_fields_indexed(
-                    c,
-                    &d.name,
-                    &d.params,
-                    pat,
-                    index_ty.as_ref().expect("an index binder carries its type"),
-                )?,
+            // lowering. An indexed declaration classifies by its own rules —
+            // route 1's (docs/inductive-indexed-lowering.md §3) or route 2b's
+            // (docs/inductive-fording-lowering.md §3.2) — and `route` already
+            // decided which, for the declaration as a whole.
+            let (res, res_expr, kind, rec_at) = match &route {
                 None => {
                     let kind = classify_fields(c, &d.name, &d.params)?;
                     let rec_at = vec![None; kind.len()];
-                    (kind, rec_at)
+                    (None, None, kind, rec_at)
+                }
+                Some(IdxRoute::One(rows)) => {
+                    let (pat, kind, rec_at) = rows[i].clone();
+                    (Some(pat), None, kind, rec_at)
+                }
+                Some(IdxRoute::Forded(rows)) => {
+                    let (e, kind, rec_at) = rows[i].clone();
+                    (None, Some(e), kind, rec_at)
                 }
             };
             ctors.push(Ctor {
@@ -609,6 +621,7 @@ impl Elaborator {
                 kind,
                 res,
                 rec_at,
+                res_expr,
             });
         }
         // *Any* child-contributing field, not just a plain one: a constructor
@@ -650,6 +663,21 @@ impl Elaborator {
                 }
             }
         }
+        // Route 2b's skeleton (`docs/inductive-fording-lowering.md` §4): the
+        // declaration with its indices erased, registered as an ordinary
+        // declaration so that the *unindexed* tiers lower it verbatim — which
+        // is §4.1's single most consequential sentence, mechanized.
+        let skel = match &route {
+            Some(IdxRoute::Forded(_)) => {
+                let s = Rc::new(skeleton_of(d, &ctors, self.next_tag));
+                self.next_tag += 1;
+                self.by_tag.insert(s.tag, Rc::clone(&s));
+                self.inductives.insert(s.name.clone(), Rc::clone(&s));
+                Some(s)
+            }
+            _ => None,
+        };
+        let skel_tag = skel.as_ref().map(|s| s.tag);
         let ind = Rc::new(Inductive {
             name: d.name.clone(),
             tag: self.next_tag,
@@ -660,8 +688,15 @@ impl Elaborator {
             is_record: d.is_record,
             index,
             index_ty,
+            skel,
         });
         self.next_tag += 1;
+        if let Some(t) = skel_tag {
+            // §6.3's fingerprint is tag-anchored: a forded type is recognized
+            // by reading the *skeleton's* tag out of the Σ's first component,
+            // which is where `tag_of` already looks.
+            self.forded_by_skel.insert(t, Rc::clone(&ind));
+        }
         for i in 0..ind.ctors.len() {
             self.ctors.insert(ind.ctors[i].name.clone(), (Rc::clone(&ind), i));
         }
@@ -1267,7 +1302,11 @@ impl Elaborator {
         }
         if ind.index.is_some() {
             // An indexed constructor reads the *family form* of the expected
-            // type, not its whnf (docs/inductive-indexed-lowering.md §5).
+            // type, not its whnf (docs/inductive-indexed-lowering.md §5;
+            // docs/inductive-fording-lowering.md §6.3 for route 2b's).
+            if ind.skel.is_some() {
+                return self.build_forded_ctor(cx, ind, i, args, expected, expected_lvl, span);
+            }
             return self.build_indexed_ctor(cx, ind, i, args, expected, expected_lvl, span);
         }
         let expected = self.whnf(cx, expected, span)?;
@@ -1816,51 +1855,7 @@ fn parse_result_index<'a>(
     ctors: &[CtorDecl],
     ity: &IdxTy,
 ) -> R<IdxPat> {
-    let ExprKind::App { head, args, .. } = &r.kind else {
-        return err(
-            format!(
-                "`{}`'s result annotation must be `{name}<…>(index)` — an applied \
-                 occurrence of the declaration itself",
-                c.name
-            ),
-            r.span,
-        );
-    };
-    let (rname, targs): (&str, &[Ty]) = match &head.kind {
-        ExprKind::Var(n) => (n, &[]),
-        ExprKind::TyApp { head, args } => match &head.kind {
-            ExprKind::Var(n) => (n, args),
-            _ => return err("malformed result annotation", r.span),
-        },
-        _ => return err("malformed result annotation", r.span),
-    };
-    if rname != name {
-        return err(
-            format!("`{}` is a constructor of `{name}`, so its result must be `{name}`", c.name),
-            r.span,
-        );
-    }
-    let uniform = targs.len() == params.len()
-        && targs.iter().zip(params).all(|(a, p)| {
-            matches!(&a.kind, TyKind::Named { name: an, args } if an == p && args.is_empty())
-        });
-    if !uniform {
-        return err(
-            format!(
-                "`{}`'s result must use `{name}`'s own parameters in order (`{}`); \
-                 parameters are uniform, only the index varies per constructor",
-                c.name,
-                params.join(", ")
-            ),
-            r.span,
-        );
-    }
-    let [idx] = args.as_slice() else {
-        return err(
-            format!("`{name}` takes exactly one index this round"),
-            r.span,
-        );
-    };
+    let idx = parse_result_head(c, r, name, params)?;
     // A declared index's constructors are looked up by name first, so a
     // *nullary* one (`Bal(SLeaf)`) is a pattern and not the bare-variable
     // (fording) case below.
@@ -1951,7 +1946,8 @@ fn parse_result_index<'a>(
         //   skeleton, no UIP, no `Id`-transport). Say so, and name the grammar
         //   that now exists.
         // - *non-uniform* — some other constructor pins the index. Then it
-        //   genuinely is the general case, and the old message stands.
+        //   genuinely is the general case, and route 2b generates it (§3.4's
+        //   non-uniform bare-variable row).
         ExprKind::Var(v) if matches!(ity, IdxTy::Nat) && all_bare_var_indices(ctors) => err(
             format!(
                 "`{}`'s result index `{v}` is a bare variable in *every* constructor of \
@@ -1968,7 +1964,7 @@ fn parse_result_index<'a>(
             format!(
                 "`{}`'s result index `{v}` is not constructor-headed: a bare-variable \
                  index means the constructor targets *every* index, which is the general \
-                 (fording) case — issues/indexed-families.md route 2b, not yet generated",
+                 (fording) case — docs/inductive-fording-lowering.md",
                 c.name
             ),
             idx.span,
@@ -1976,13 +1972,70 @@ fn parse_result_index<'a>(
         _ => err(
             format!(
                 "`{}`'s result index is computed, not constructor-headed: a computed \
-                 index fords over `sEq` (issues/indexed-families.md routes 2b/3), \
-                 not yet generated",
+                 index fords over `sEq` (docs/inductive-fording-lowering.md)",
                 c.name
             ),
             idx.span,
         ),
     }
+}
+
+/// The `D<params>(index)` head of a result annotation, shared by both routes:
+/// the type must be the declaration at its own parameters, and what comes back
+/// is the single index expression. Route 1 then insists it is a pattern; route
+/// 2b does not constrain it at all (fording doc §2).
+fn parse_result_head<'a>(
+    c: &CtorDecl,
+    r: &'a Expr,
+    name: &str,
+    params: &[String],
+) -> R<&'a Expr> {
+    let ExprKind::App { head, args, .. } = &r.kind else {
+        return err(
+            format!(
+                "`{}`'s result annotation must be `{name}<…>(index)` — an applied \
+                 occurrence of the declaration itself",
+                c.name
+            ),
+            r.span,
+        );
+    };
+    let (rname, targs): (&str, &[Ty]) = match &head.kind {
+        ExprKind::Var(n) => (n, &[]),
+        ExprKind::TyApp { head, args } => match &head.kind {
+            ExprKind::Var(n) => (n, args),
+            _ => return err("malformed result annotation", r.span),
+        },
+        _ => return err("malformed result annotation", r.span),
+    };
+    if rname != name {
+        return err(
+            format!("`{}` is a constructor of `{name}`, so its result must be `{name}`", c.name),
+            r.span,
+        );
+    }
+    let uniform = targs.len() == params.len()
+        && targs.iter().zip(params).all(|(a, p)| {
+            matches!(&a.kind, TyKind::Named { name: an, args } if an == p && args.is_empty())
+        });
+    if !uniform {
+        return err(
+            format!(
+                "`{}`'s result must use `{name}`'s own parameters in order (`{}`); \
+                 parameters are uniform, only the index varies per constructor",
+                c.name,
+                params.join(", ")
+            ),
+            r.span,
+        );
+    }
+    let [idx] = args.as_slice() else {
+        return err(
+            format!("`{name}` takes exactly one index this round"),
+            r.span,
+        );
+    };
+    Ok(idx)
 }
 
 /// `D(I_k(x₁ … x_r))` at a **declared** index (§8.2): the index constructor is
@@ -2217,6 +2270,443 @@ fn classify_fields_indexed(
     Ok((kinds, rec_at))
 }
 
+/// Which indexed fragment a declaration is in
+/// (`docs/inductive-fording-lowering.md` §3). One value per declaration, not
+/// per constructor: route 3 (fording one branch of a route-1 family) was
+/// measured to fail on 2026-07-28, so a declaration with one non-route-1
+/// constructor fords **whole**.
+pub(crate) enum IdxRoute {
+    /// Route 1 (`docs/inductive-indexed-lowering.md`): per constructor, the
+    /// result-index pattern, the field kinds, and each child's index-constructor
+    /// argument.
+    One(Vec<(IdxPat, Vec<FieldKind>, Vec<Option<usize>>)>),
+    /// Route 2b (`docs/inductive-fording-lowering.md`): per constructor, the
+    /// written result index, the field kinds, and each child's *index variable*
+    /// field.
+    Forded(Vec<(Expr, Vec<FieldKind>, Vec<Option<usize>>)>),
+}
+
+/// §3's classifier, read in order: route 1 if every constructor is
+/// route-1-eligible, route 2b if every constructor is 2b-eligible, otherwise a
+/// rejection naming what failed where.
+fn classify_indexed_route(d: &InductiveDecl, ity: &IdxTy) -> R<IdxRoute> {
+    for c in &d.ctors {
+        if c.result.is_none() {
+            return err(
+                format!(
+                    "`{}` needs a result annotation: every constructor of an \
+                     indexed declaration states its index (`{} : {}<…>(…)`)",
+                    c.name, c.name, d.name
+                ),
+                c.span,
+            );
+        }
+    }
+    // Route 1 first: a declaration that qualifies keeps lowering by recursion
+    // on the index, which is strictly better (§3.1 — no stored equation, no
+    // measure, no cast anywhere).
+    let mut rows = Vec::with_capacity(d.ctors.len());
+    let mut r1_fail = None;
+    for c in &d.ctors {
+        let r = c.result.as_ref().expect("checked just above");
+        let attempt = parse_result_index(c, r, &d.name, &d.params, &d.ctors, ity).and_then(
+            |pat| {
+                classify_fields_indexed(c, &d.name, &d.params, &pat, ity)
+                    .map(|(k, ra)| (pat, k, ra))
+            },
+        );
+        match attempt {
+            Ok(v) => rows.push(v),
+            Err(e) => {
+                r1_fail = Some((c.name.clone(), e));
+                break;
+            }
+        }
+    }
+    let Some((c1, e1)) = r1_fail else { return Ok(IdxRoute::One(rows)) };
+    // §3.3 row 1: a *uniform* bare-variable index is a parameter wearing an
+    // index's spelling. Route 2b would happily generate it, so the route-1
+    // message has to win here rather than be tried after.
+    if all_bare_var_indices(&d.ctors) {
+        return Err(e1);
+    }
+    let mut frows = Vec::with_capacity(d.ctors.len());
+    for c in &d.ctors {
+        match classify_forded(c, &d.name, &d.params, ity) {
+            Ok(v) => frows.push(v),
+            Err(e2) => {
+                // §3.3's mixed row: the declaration is in neither fragment, and
+                // saying only one reason is what sends a user in a circle. Both
+                // are named whether one constructor failed both routes or two
+                // constructors failed one each.
+                let (crate::ElabError::Elab { msg: m1, .. }, crate::ElabError::Elab {
+                    msg: m2,
+                    span,
+                }) = (&e1, &e2)
+                else {
+                    return Err(e2);
+                };
+                let msg = if c.name == c1 {
+                    format!(
+                        "`{}` is in neither indexed fragment: `{c1}` is not \
+                         route-1-eligible ({m1}), and it is not route-2b-eligible \
+                         either ({m2}) (docs/inductive-fording-lowering.md §3.3)",
+                        d.name
+                    )
+                } else {
+                    format!(
+                        "`{}` is in neither indexed fragment: `{c1}` is not \
+                         route-1-eligible ({m1}), and `{}` is not route-2b-eligible \
+                         ({m2}) (docs/inductive-fording-lowering.md §3.3)",
+                        d.name, c.name
+                    )
+                };
+                return err(msg, *span);
+            }
+        }
+    }
+    Ok(IdxRoute::Forded(frows))
+}
+
+/// Route-2b eligibility for one constructor
+/// (`docs/inductive-fording-lowering.md` §3.2), with F1–F3's own diagnostics
+/// (§3.3). What is **absent** is the point: no condition on the shape of the
+/// result index, no bound on branching, no bound on pattern depth.
+fn classify_forded(
+    c: &CtorDecl,
+    name: &str,
+    params: &[String],
+    ity: &IdxTy,
+) -> R<(Expr, Vec<FieldKind>, Vec<Option<usize>>)> {
+    let r = c.result.as_ref().expect("checked by the caller");
+    let idx = parse_result_head(c, r, name, params)?;
+    let iname = ity.name();
+    let is_index_ty = |t: &Ty| match ity {
+        IdxTy::Nat => matches!(t.kind, TyKind::Nat),
+        IdxTy::Decl(_) => {
+            matches!(&t.kind, TyKind::Named { name: n, args } if n == iname && args.is_empty())
+        }
+    };
+    let fname = |k: usize| c.fields[k].name.clone().unwrap_or_else(|| "_".into());
+    let mut kinds = vec![FieldKind::Payload; c.fields.len()];
+    let mut rec_at: Vec<Option<usize>> = vec![None; c.fields.len()];
+    for (k, f) in c.fields.iter().enumerate() {
+        // A child: `D<params>(e)`, which the parser delivers as an expression
+        // in type position.
+        if let TyKind::OfExpr(e) = &f.ty.kind
+            && let ExprKind::App { head, args, .. } = &e.kind
+            && let Some((rname, targs)) = named_head(head)
+            && rname == name
+        {
+            let uniform = targs.len() == params.len()
+                && targs.iter().zip(params).all(|(a, p)| {
+                    matches!(&a.kind, TyKind::Named { name: an, args } if an == p
+                             && args.is_empty())
+                });
+            if !uniform {
+                return err(
+                    format!(
+                        "field of `{}` uses `{name}` at arguments other than its own \
+                         parameters; parameters are monomorphized, so a recursive \
+                         occurrence must be uniform",
+                        c.name
+                    ),
+                    f.ty.span,
+                );
+            }
+            // (F1) a child's index is a bare variable naming a field.
+            let bare = match args.as_slice() {
+                [Expr { kind: ExprKind::Var(v), .. }] => Some(v.clone()),
+                _ => None,
+            };
+            let Some(v) = bare else {
+                return err(
+                    format!(
+                        "`{}`'s index {} is not a variable: fording recomputes a child's \
+                         index from the child, so a constructor may only pin it by \
+                         *naming* it. Constraining it needs the coherence predicate of \
+                         `docs/acc-via-w.md` (docs/inductive-fording-lowering.md §10.3), \
+                         which is not generated.",
+                        fname(k),
+                        index_spelling(&args[0])
+                    ),
+                    f.ty.span,
+                );
+            };
+            let Some(fk) =
+                c.fields.iter().position(|g| g.name.as_deref() == Some(v.as_str()))
+            else {
+                return err(
+                    format!(
+                        "`{}`'s index `{v}` must be a field of `{}` — a child's index \
+                         names the field `μ` recomputes \
+                         (docs/inductive-fording-lowering.md §3.2, F1)",
+                        fname(k),
+                        c.name
+                    ),
+                    f.ty.span,
+                );
+            };
+            if !is_index_ty(&c.fields[fk].ty) {
+                return err(
+                    format!(
+                        "`{v}` indexes a child of `{}`, so it must be a `{iname}` field",
+                        c.name
+                    ),
+                    c.fields[fk].ty.span,
+                );
+            }
+            // (F2) child indices are linear.
+            if let Some(prev) = rec_at.iter().position(|a| *a == Some(fk)) {
+                return err(
+                    format!(
+                        "`{}` and `{}` share the index variable `{v}`; the skeleton \
+                         cannot record that they agree — a label cannot mention its \
+                         children (`docs/inductive-tier1-wf-lowering.md` §2) — so the \
+                         constraint would need the coherence predicate \
+                         (docs/inductive-fording-lowering.md §10.3). Give the children \
+                         separate indices, or state the family so it is \
+                         route-1-eligible.",
+                        fname(prev),
+                        fname(k)
+                    ),
+                    f.ty.span,
+                );
+            }
+            kinds[k] = FieldKind::Plain;
+            rec_at[k] = Some(fk);
+            continue;
+        }
+        if occurs(&f.ty, name).is_some() {
+            return err(
+                format!(
+                    "field of `{}` mentions `{name}` without supplying its index (or \
+                     nested inside another type): an indexed occurrence is \
+                     `{name}<…>(x)` at a field naming the child's index \
+                     (docs/inductive-fording-lowering.md §3.2)",
+                    c.name
+                ),
+                f.ty.span,
+            );
+        }
+    }
+    // The child-index fields: named as some child's index, therefore **not
+    // stored** (§4.2).
+    for k in 0..c.fields.len() {
+        if !rec_at.contains(&Some(k)) {
+            continue;
+        }
+        if kinds[k] == FieldKind::Plain {
+            return err(
+                format!(
+                    "`{}` is both a child of `{}` and another child's index; a child's \
+                     index is a field of the index type, not a recursive occurrence",
+                    fname(k),
+                    c.name
+                ),
+                c.fields[k].ty.span,
+            );
+        }
+        kinds[k] = FieldKind::IndexVar;
+    }
+    // (F3) no stored field's type mentions a child index.
+    for (k, f) in c.fields.iter().enumerate() {
+        if kinds[k] != FieldKind::Payload {
+            continue;
+        }
+        for j in 0..c.fields.len() {
+            if kinds[j] != FieldKind::IndexVar {
+                continue;
+            }
+            let Some(v) = &c.fields[j].name else { continue };
+            if !ty_mentions(&f.ty, v) {
+                continue;
+            }
+            let child = rec_at
+                .iter()
+                .position(|a| *a == Some(j))
+                .map(fname)
+                .unwrap_or_else(|| "the child".into());
+            return err(
+                format!(
+                    "`{}`'s type mentions `{v}`, which fords away: `{v}` is recomputed \
+                     from `{child}`, and a child is not in scope in a payload field's \
+                     type (`docs/inductive-tier1-wf-lowering.md` §2). This declaration \
+                     *is* route-1-eligible if every result index is a pattern — see \
+                     docs/inductive-indexed-lowering.md §3.",
+                    fname(k)
+                ),
+                f.ty.span,
+            );
+        }
+    }
+    check_index_expr(c, idx, ity)?;
+    Ok((idx.clone(), kinds, rec_at))
+}
+
+/// F4 is "the result index elaborates" (§3.2), and elaboration happens at each
+/// *use*, so a malformed index would otherwise be diagnosed far from where it
+/// was written. This is the part that can be checked at declaration time
+/// without an instantiation: wherever the index applies a constructor of the
+/// index type, its arity must match, and a bare-variable argument at a
+/// *recursive* position must be a field of the index type. Everything else —
+/// `plus(n, m)`, a payload read, an arbitrary call — is left to elaboration,
+/// where the type checker owns it.
+fn check_index_expr(c: &CtorDecl, e: &Expr, ity: &IdxTy) -> R<()> {
+    let icts = ity.ctors();
+    let iname = ity.name();
+    let arity_of = |v: &str| icts.iter().position(|k| k.name == v);
+    let (head, args): (Option<&str>, &[Expr]) = match &e.kind {
+        ExprKind::Var(v) => (Some(v.as_str()), &[]),
+        ExprKind::App { head, args, .. } => match &head.kind {
+            ExprKind::Var(v) => (Some(v.as_str()), args.as_slice()),
+            _ => (None, args.as_slice()),
+        },
+        _ => (None, &[]),
+    };
+    if let Some(h) = head
+        && let Some(k) = arity_of(h)
+    {
+        let ict = &icts[k];
+        if args.len() != ict.rec.len() {
+            return err(
+                format!(
+                    "`{}`'s result index applies `{}` to {} argument(s), but it takes {}",
+                    c.name,
+                    ict.name,
+                    args.len(),
+                    ict.rec.len()
+                ),
+                e.span,
+            );
+        }
+        for (a, arg) in args.iter().enumerate() {
+            if !ict.rec[a] {
+                continue;
+            }
+            let ExprKind::Var(v) = &arg.kind else { continue };
+            let Some(f) = c.fields.iter().position(|g| g.name.as_deref() == Some(v.as_str()))
+            else {
+                continue;
+            };
+            let ok = match ity {
+                IdxTy::Nat => matches!(c.fields[f].ty.kind, TyKind::Nat),
+                IdxTy::Decl(_) => matches!(&c.fields[f].ty.kind,
+                    TyKind::Named { name: n, args } if n == iname && args.is_empty()),
+            };
+            if !ok {
+                return err(
+                    format!(
+                        "`{v}` fills a recursive argument of `{}`, so it must be a \
+                         `{iname}` field of `{}`",
+                        ict.name, c.name
+                    ),
+                    arg.span,
+                );
+            }
+        }
+    }
+    for a in args {
+        check_index_expr(c, a, ity)?;
+    }
+    Ok(())
+}
+
+/// A child's written index, for F1's message. Only the spellings a user would
+/// plausibly write are rendered; anything else is described rather than
+/// echoed, which is better than echoing it wrong.
+fn index_spelling(e: &Expr) -> String {
+    match &e.kind {
+        ExprKind::Num(n) => format!("`{n}`"),
+        ExprKind::Var(v) => format!("`{v}`"),
+        ExprKind::App { head, .. } => match &head.kind {
+            ExprKind::Var(v) => format!("`{v}(…)`"),
+            _ => "expression".into(),
+        },
+        _ => "expression".into(),
+    }
+}
+
+/// Does a surface type mention the *term* variable `v`? [`occurs`] answers
+/// this for everything except a written equation, whose endpoints are terms
+/// it deliberately does not scan (it is looking for type occurrences).
+fn ty_mentions(t: &Ty, v: &str) -> bool {
+    match &t.kind {
+        TyKind::Eq(a, b) => expr_mentions(a, v) || expr_mentions(b, v),
+        _ => occurs(t, v).is_some(),
+    }
+}
+
+/// The **skeleton** (`docs/inductive-fording-lowering.md` §4): the declaration
+/// with every index erased — child-index fields deleted (§4.2), children's
+/// types erased to the skeleton itself, result annotations dropped. What
+/// remains is an ordinary declaration, and it takes the ordinary shape test:
+/// some constructor has a child ⇒ `Wf`, otherwise tier 0's sum-of-Σs (§4.1).
+///
+/// Built **from** the declaration, once, and never edited afterwards — which
+/// is what keeps the two from drifting (§14.6).
+fn skeleton_of(d: &InductiveDecl, ctors: &[Ctor], tag: u32) -> Inductive {
+    let sname = format!("{}#skel", d.name);
+    let self_ty = Ty {
+        kind: TyKind::Named {
+            name: sname.clone(),
+            args: d
+                .params
+                .iter()
+                .map(|p| Ty {
+                    kind: TyKind::Named { name: p.clone(), args: vec![] },
+                    span: d.span,
+                })
+                .collect(),
+        },
+        span: d.span,
+    };
+    let sctors: Vec<Ctor> = ctors
+        .iter()
+        .map(|c| {
+            let mut fields = Vec::new();
+            let mut kind = Vec::new();
+            for (k, (n, t)) in c.fields.iter().enumerate() {
+                match c.kind[k] {
+                    // §4.2: a child-index field is not stored. `n` **is**
+                    // `μ(child)`, definitionally.
+                    FieldKind::IndexVar => {}
+                    FieldKind::Plain => {
+                        fields.push((n.clone(), self_ty.clone()));
+                        kind.push(FieldKind::Plain);
+                    }
+                    _ => {
+                        fields.push((n.clone(), t.clone()));
+                        kind.push(FieldKind::Payload);
+                    }
+                }
+            }
+            let rec_at = vec![None; kind.len()];
+            Ctor {
+                name: format!("{}#skel", c.name),
+                fields,
+                kind,
+                res: None,
+                rec_at,
+                res_expr: None,
+            }
+        })
+        .collect();
+    let recursive = sctors.iter().any(|c| c.kind.iter().any(|k| k.is_child()));
+    Inductive {
+        name: sname,
+        tag,
+        params: d.params.clone(),
+        valparams: vec![],
+        ctors: sctors,
+        recursive,
+        is_record: false,
+        index: None,
+        index_ty: None,
+        skel: None,
+    }
+}
+
 /// Is *every* constructor's result index a bare variable? Then the declaration
 /// has a parameter wearing an index's spelling — see the message at
 /// [`parse_result_index`]'s `Var` arm. One constructor that pins its index
@@ -2291,7 +2781,7 @@ fn classify_field(t: &Ty, name: &str, params: &[String], ctor: &str) -> R<bool> 
 /// [`occurs`] conservative over [`TyKind::OfExpr`]; a false positive costs a
 /// rejection, a false negative would cost positivity, so every compound form
 /// recurses and only genuine leaves answer `false`.
-fn expr_mentions(e: &Expr, name: &str) -> bool {
+pub(crate) fn expr_mentions(e: &Expr, name: &str) -> bool {
     match &e.kind {
         ExprKind::Var(n) => n == name,
         ExprKind::Num(_) | ExprKind::Refl | ExprKind::Hole(_) | ExprKind::Univ { .. } => false,

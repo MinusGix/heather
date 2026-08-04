@@ -320,15 +320,16 @@ stored); equality of the *indices* is the corresponding fact and lives at
 
 ### 8.1 Rejected in this round, each with its message
 
-- **Computed result index** (`plus(m,k)`, `max(h_l,h_r)`): "not
-  constructor-headed; a computed index fords over `sEq`
-  (issues/indexed-families.md routes 2b/3), not yet generated." This is the
-  honest boundary: the 2b prototype measured exactly this case (open-data β
-  degrades to strip-guarded there), so the message points at a measured
-  fact, not a policy.
-- **Deep pattern** (`Even : … Succ(Succ(n))`): needs simultaneous recursion
-  (the `(D_ex, D_below)` device), a real extension — rejected with the
-  pattern depth named, deferred until something needs it.
+- **Computed result index** (`plus(m,k)`, `max(h_l,h_r)`): not
+  constructor-headed, so not *this* scheme — but **generated**, by fording
+  over an irrelevant `sEq` (`docs/inductive-fording-lowering.md`; landed
+  2026-08-04). The declaration is not rejected: the classifier routes it to
+  route 2b, and what the user loses is definitional `match` β at that
+  constructor (§8.4 there), not the declaration.
+- **Deep pattern** (`Even : … Succ(Succ(n))`): likewise **generated** by
+  route 2b, with no special case at all — `μ(ess p) = S (S (μ p))` — rather
+  than needing the simultaneous-recursion `(D_ex, D_below)` device this
+  document expected (`docs/inductive-fording-lowering.md` §3.4).
 - **Non-linear pattern**: single index, so unwritable until §8.4; the check
   exists from day one anyway.
 - **Recursive field at a non-pattern index** (`xs: Vec<A>(0)` under

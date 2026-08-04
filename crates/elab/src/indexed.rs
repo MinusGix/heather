@@ -63,7 +63,7 @@ pub(crate) struct IndexedFam {
 /// The scrutinee slot of a family node, replaced. For a `Case` *tree* only the
 /// outermost node scrutinizes the index; the inner ones scrutinize their own
 /// tail binders, so this is still one rewrite.
-fn set_scrut(t: &Term, scrut: Rc<Term>) -> Option<Term> {
+pub(crate) fn set_scrut(t: &Term, scrut: Rc<Term>) -> Option<Term> {
     Some(match t {
         Term::ElimNat { level, motive, base, step, .. } => Term::ElimNat {
             level: level.clone(),
@@ -195,7 +195,7 @@ fn classes(ind: &Inductive, n_idx: usize) -> Vec<Vec<usize>> {
 
 /// The body of one branch of [`Elaborator::idx_case_tree`], called as
 /// `(cx, j, value, d, obligation)`.
-type CaseBody<'a> = dyn Fn(&Cx, usize, &Rc<Term>, u32, &Type) -> R<Term> + 'a;
+pub(crate) type CaseBody<'a> = dyn Fn(&Cx, usize, &Rc<Term>, u32, &Type) -> R<Term> + 'a;
 
 /// What one branch of the family — or of the derived eliminator — knows about
 /// the index constructor it sits under: for each of that constructor's
@@ -271,7 +271,7 @@ impl IdxArmEnv {
 /// At the family's constant motive `Ty l` this *is* the recursive field's
 /// code; at the eliminator's `Mot` it is the ih function the arm applies to
 /// the stored child. One formula, because it is one device.
-fn wf_ih_at(tel: &Tel, m: usize, t: usize, d_body: u32) -> Term {
+pub(crate) fn wf_ih_at(tel: &Tel, m: usize, t: usize, d_body: u32) -> Term {
     let len = Rc::new(nat_lit(m));
     let cod = tel.motive.apply_local(
         &crate::embed(tel.gamma0, d_body + 1).extended(Rc::new(nth(
@@ -449,6 +449,12 @@ impl Elaborator {
         }
         let (ity, ilvl) = self.index_type_of(cx, &ind, span)?;
         let idx_t = self.elab_check(cx, idx, &ity, &ilvl)?;
+        // Route 2b's families are Σ+`sEq`, not `El` of an eliminator
+        // (docs/inductive-fording-lowering.md §6); the classifier decided which
+        // at declaration time, and the skeleton is the record of that decision.
+        if ind.skel.is_some() {
+            return self.lower_forded_instance(cx, &ind, &lowered, idx_t, span).map(Some);
+        }
         self.lower_indexed_instance(cx, &ind, &lowered, idx_t, span).map(Some)
     }
 
@@ -1297,7 +1303,7 @@ impl Elaborator {
     /// binders pushed since; `motive` is `P_j` over `(cx, z : R_j)`. The body
     /// is called as `(cx, j, value, d, obligation)`.
     #[allow(clippy::too_many_arguments)]
-    fn idx_case_tree(
+    pub(crate) fn idx_case_tree(
         &self,
         cx: &Cx,
         spine: &Spine,
@@ -1318,9 +1324,9 @@ impl Elaborator {
         let tail_lvl = spine.tails[j].1.clone();
         let ctor_ty = Rc::new(spine.ctors[j].0.shift_local(d));
         let tail_ty = Rc::new(spine.tails[j].0.shift_local(d));
-        let injected = |val: Term, inl: bool| {
+        let injected = |val: Term, inl: bool, by: u32| {
             let (lhs, rhs) =
-                (spine.ctors[j].0.shift_local(d + 1), spine.tails[j].0.shift_local(d + 1));
+                (spine.ctors[j].0.shift_local(d + by), spine.tails[j].0.shift_local(d + by));
             let (lhs, rhs) = (Rc::new(lhs), Rc::new(rhs));
             let (lhs_level, rhs_level) = (ctor_lvl.clone(), tail_lvl.clone());
             let val = Rc::new(val);
@@ -1334,7 +1340,7 @@ impl Elaborator {
         lcx.push("#scrut".into(), (*ctor_ty).clone(), ctor_lvl.clone());
         let l_expected = motive.apply_local(
             &crate::embed(&cx.gamma, 1)
-                .extended(Rc::new(injected(Term::Var(LocalVar(0)), true))),
+                .extended(Rc::new(injected(Term::Var(LocalVar(0)), true, 1))),
         );
         let case_l =
             body(&lcx, j, &Rc::new(Term::Var(LocalVar(0))), d + 1, &l_expected)?;
@@ -1342,7 +1348,7 @@ impl Elaborator {
         rcx.push("#rest".into(), (*tail_ty).clone(), tail_lvl.clone());
         let inner_motive = motive.apply_local(
             &crate::embed(&cx.gamma, 2)
-                .extended(Rc::new(injected(Term::Var(LocalVar(0)), false))),
+                .extended(Rc::new(injected(Term::Var(LocalVar(0)), false, 2))),
         );
         let case_r = self.idx_case_tree(
             &rcx,
@@ -1398,9 +1404,9 @@ impl Elaborator {
         let tail_lvl = spine.tails[j].1.clone();
         let ctor_ty = Rc::new(spine.ctors[j].0.shift_local(d));
         let tail_ty = Rc::new(spine.tails[j].0.shift_local(d));
-        let injected = |val: Term, inl: bool| {
+        let injected = |val: Term, inl: bool, by: u32| {
             let (lhs, rhs) =
-                (spine.ctors[j].0.shift_local(d + 1), spine.tails[j].0.shift_local(d + 1));
+                (spine.ctors[j].0.shift_local(d + by), spine.tails[j].0.shift_local(d + by));
             let (lhs, rhs) = (Rc::new(lhs), Rc::new(rhs));
             let (lhs_level, rhs_level) = (ctor_lvl.clone(), tail_lvl.clone());
             let val = Rc::new(val);
@@ -1414,7 +1420,7 @@ impl Elaborator {
         lcx.push("#scrut".into(), (*ctor_ty).clone(), ctor_lvl.clone());
         let l_expected = motive.apply_local(
             &crate::embed(&cx.gamma, 1)
-                .extended(Rc::new(injected(Term::Var(LocalVar(0)), true))),
+                .extended(Rc::new(injected(Term::Var(LocalVar(0)), true, 1))),
         );
         let case_l = self.elab_indexed_arm(
             &lcx,
@@ -1430,7 +1436,7 @@ impl Elaborator {
         rcx.push("#rest".into(), (*tail_ty).clone(), tail_lvl.clone());
         let inner_motive = motive.apply_local(
             &crate::embed(&cx.gamma, 2)
-                .extended(Rc::new(injected(Term::Var(LocalVar(0)), false))),
+                .extended(Rc::new(injected(Term::Var(LocalVar(0)), false, 2))),
         );
         let case_r = self.indexed_case_tree(
             &rcx,

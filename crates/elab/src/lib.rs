@@ -47,6 +47,7 @@ use heather_syntax::{
 
 pub mod certgen;
 mod code;
+mod forded;
 mod indexed;
 mod inductive;
 mod quote;
@@ -378,6 +379,11 @@ pub struct Elaborator {
     /// (docs/inductive-tier0-lowering.md).
     inductives: HashMap<String, Rc<Inductive>>,
     by_tag: HashMap<u32, Rc<Inductive>>,
+    /// Route 2b's fingerprint anchor (`docs/inductive-fording-lowering.md`
+    /// §6.3): the **skeleton's** nominal tag → the forded declaration it is the
+    /// skeleton of. A forded type is a Σ whose first component is the skeleton,
+    /// so reading the declaration back is `tag_of` plus this one lookup.
+    forded_by_skel: HashMap<u32, Rc<Inductive>>,
     ctors: HashMap<String, (Rc<Inductive>, usize)>,
     /// Every field name of every declared `record`, across all of them. Not a
     /// resolution table — which record a name belongs to is decided by the
@@ -496,6 +502,7 @@ impl Elaborator {
             globals: HashMap::new(),
             inductives: HashMap::new(),
             by_tag: HashMap::new(),
+            forded_by_skel: HashMap::new(),
             ctors: HashMap::new(),
             record_fields: HashSet::new(),
             next_tag: 0,
@@ -1870,6 +1877,30 @@ impl Elaborator {
                 let (scrut_t, scrut_ty, scrut_lvl) = self.elab_infer(cx, scrut)?;
                 // An indexed scrutinee's motive binds the index too
                 // (docs/inductive-indexed-lowering.md §6.1).
+                // Route 2b's forded family (docs/inductive-fording-lowering.md
+                // §12.1): the same two-binder motive rule as route 1's, over
+                // the Σ+`sEq` form instead of the eliminator's.
+                if let Some((ind, fam)) = self.forded_of_at(cx, &scrut_ty) {
+                    let (binders, body) =
+                        motive_lam(m, 2, "write `as \u{3bb} n z => T` (index, then value)")?;
+                    let mut mcx = cx.clone();
+                    mcx.push(binders[0].clone(), fam.ity.clone(), fam.ilvl.clone());
+                    mcx.push(
+                        binders[1].clone(),
+                        fam.ty_at(Term::Var(LocalVar(0)), 1),
+                        fam.lvl(),
+                    );
+                    let (motive2, mlvl) = self.elab_ty(&mcx, &body)?;
+                    let result = motive2.apply_local(
+                        &LocalSubst::id(&cx.gamma)
+                            .extended(Rc::clone(&fam.idx))
+                            .extended(Rc::new(scrut_t.clone())),
+                    );
+                    let t = self.elab_match_forded(
+                        cx, &ind, &fam, arms, scrut_t, motive2, mlvl.clone(), e.span,
+                    )?;
+                    return Ok((t, result, mlvl));
+                }
                 if let Some((ind, fam)) = self.indexed_of_at(cx, &scrut_ty) {
                     let (binders, body) =
                         motive_lam(m, 2, "write `as \u{3bb} n z => T` (index, then value)")?;
@@ -2005,6 +2036,11 @@ impl Elaborator {
         // reduces the family away, index and all. The `Empty` case wins
         // first: a family whose branch at this literal index is `Empty`
         // (`Fin(0)`) is matched as the empty type, arms and all.
+        if let Some((ind, fam)) = self.forded_of_at(cx, scrut_ty) {
+            let motive2 = self.generalize_index(cx, &motive, &fam.idx);
+            return self
+                .elab_match_forded(cx, &ind, &fam, arms, scrut_t, motive2, mlvl, span);
+        }
         if !matches!(head, Type::Empty { .. })
             && let Some((ind, fam)) = self.indexed_of_at(cx, scrut_ty)
         {
@@ -2813,7 +2849,13 @@ impl Elaborator {
             };
             targs.push(sol);
         }
-        let (ty, lvl) = if ind.index.is_some() && args.len() == ind.ctors[i].fields.len() {
+        let (ty, lvl) = if ind.skel.is_some() && args.len() == ind.ctors[i].fields.len() {
+            // Route 2b: the index is the constructor's *written* result index
+            // at the arguments it was given (docs/inductive-fording-lowering.md
+            // §2), which is the whole widening.
+            let (idx, _, _) = self.forded_ctor_index(cx, ind, i, args, span)?;
+            self.lower_forded_instance(cx, ind, &targs, idx, span)?
+        } else if ind.index.is_some() && args.len() == ind.ctors[i].fields.len() {
             // The result index comes from the pattern and the written index
             // argument (docs/inductive-indexed-lowering.md §5); the wrong-
             // arity case falls through to `build_ctor`'s arity message.

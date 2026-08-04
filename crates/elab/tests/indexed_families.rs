@@ -177,14 +177,16 @@ fn branching_tree_mirror_and_involution() {
 // index-recursive scheme is the hazard class.
 #[test]
 fn rejections_carry_their_messages() {
-    let m = elab_err(
-        "inductive P : (n: Nat) -> Type { Mk(a: Nat, b: Nat) : P(plus(a, b)) }",
-    );
-    assert!(m.contains("computed"), "{m}");
-    let m = elab_err(
+    // A computed result index and a deep pattern used to be rejections naming
+    // route 2b as "not yet generated". Route 2b **is** generated now
+    // (docs/inductive-fording-lowering.md; the observers are
+    // `indexed_route_2b_gen.rs` §13.2 items 9 and 11), so both declarations
+    // land — by fording, not by this scheme. What stays a rejection is what
+    // neither fragment covers, and the list below is that.
+    elab("inductive P : (n: Nat) -> Type { Mk(a: Nat, b: Nat) : P(plus(a, b)) }");
+    elab(
         "inductive E : (n: Nat) -> Type { E0 : E(0), ESS(n: Nat, e: E(n)) : E(Succ(Succ(n))) }",
     );
-    assert!(m.contains("deeper than one constructor"), "{m}");
     // A bare-variable index in *every* constructor is not an index at all: it
     // is uniform, so it is a **parameter**, and it lowers by substitution with
     // none of fording's machinery. This message used to send it toward route
@@ -198,10 +200,10 @@ fn rejections_carry_their_messages() {
     // target *every* index and really is the fording case. The old message
     // stands, which is what makes the arm above a distinction and not a
     // blanket rewording.
-    let m = elab_err(
-        "inductive Q2 : (n: Nat) -> Type { A : Q2(0), Mk(n: Nat) : Q2(n) }",
-    );
-    assert!(m.contains("not constructor-headed"), "{m}");
+    // Non-uniform: one constructor pins its index, so this one really does
+    // target *every* index and really is the fording case — §3.4's
+    // non-uniform-bare-variable row, which route 2b now generates.
+    elab("inductive Q2 : (n: Nat) -> Type { A : Q2(0), Mk(n: Nat) : Q2(n) }");
     let m = elab_err(
         "inductive W2 : (n: Nat) -> Type { M0 : W2(0), Mk(n: Nat, w: W2(0)) : W2(Succ(n)) }",
     );

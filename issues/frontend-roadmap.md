@@ -3,7 +3,7 @@ title: "Meta: frontend roadmap and current focus"
 status: open
 labels: [frontend,meta]
 created: 2026-07-23
-updated: 2026-08-03
+updated: 2026-08-04
 ---
 
 Organizing issue for the frontend push (the frontend-first route,
@@ -241,3 +241,4 @@ date; the originals are in `git log --follow issues/frontend-roadmap.md`.
 - 2026-08-02: [[sprop-strict-prop]] closed complete (kernel round + 2b acceptance); residue rehomed to [[metatheory-ch07-sprop]] (FT pass) and [[sprop-squash]] (deferred formers, unscheduled). Item 14's general case now waits only on the 2b generator round at [[indexed-families]]; body updated.
 - 2026-08-03: [[indexed-families]] §8.2 generator landed (managed round): declared index types — enum, linear Wf, and branching derivation-shaped families — are declarable at the surface; subject-recursive judgments are now shipped, not just prototyped. Remaining on item 14: the 2b generator (general case), multi-index, indexed absurd/inj.
 - 2026-08-03: Item 14's general case moved: route 2b's scheme doc (docs/inductive-fording-lowering.md) and Wf-composition prototype landed, closing the scheme's one untested corner and correcting the 2026-07-29 beta finding (proof-keyed, not open-data-keyed) — narrative on [[indexed-families]]. The 2b generator (doc sec 13.2) is its own next round; multi-index and indexed absurd/inj remain behind it.
+- 2026-08-04: Item 14's general case SHIPPED: the 2b generator landed (managed round; narrative on [[indexed-families]]). Computed-index, deep-pattern and non-uniform declarations now declare, match and prove at the surface; suite 891 → 908. The round also fixed a pre-existing case-tree annotation bug in wf.rs/indexed.rs (three-constructors-plus-open-payload blind spot; testing doc gains axis 6) and sharpened doc §8.4 (all-form-B declarations admit no induction over open data). Remaining on item 14: multi-index, indexed absurd/inj — both explicitly behind demand, not scheduled.

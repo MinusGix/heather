@@ -464,11 +464,22 @@ impl Elaborator {
         // motive is `P_j` composed with `inr` and weakened past `y`.
         let mut rcx = cx.clone();
         rcx.push("#rest".into(), (*tail_ty).clone(), tail_lvl.clone());
+        // `inner = P_j[inr z']` over `(cx, y, z')` — **two** binders past `cx`,
+        // not one: the `y` this branch binds *and* the inner `Case`'s own
+        // motive binder. The substitution's `extra` says 2 and the injection's
+        // annotations have to agree, or the spine's field types address `y`
+        // where they mean an ambient variable.
+        //
+        // Invisible at a closed payload type (the annotations then mention no
+        // ambient variable at all) and invisible with two constructors (there
+        // is no inner `Case`); it took three constructors *and* an open payload
+        // — `docs/testing-generated-terms.md` axis 2 — to make the index
+        // escape, and then it is a kernel `LevelMismatch`, not a wrong answer.
         let inr = Term::Inr {
             lhs_level: ctor_lvl.clone(),
             rhs_level: tail_lvl.clone(),
-            lhs: Rc::new(tel.spine.ctors[j].0.shift_local(d + 1)),
-            rhs: Rc::new(tel.spine.tails[j].0.shift_local(d + 1)),
+            lhs: Rc::new(tel.spine.ctors[j].0.shift_local(d + 2)),
+            rhs: Rc::new(tel.spine.tails[j].0.shift_local(d + 2)),
             val: Rc::new(Term::Var(LocalVar(0))),
         };
         let inner = motive.apply_local(&embed(&cx.gamma, 2).extended(Rc::new(inr)));

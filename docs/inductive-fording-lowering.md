@@ -1,7 +1,17 @@
 # Indexed families, route 2b: lowering by fording over an irrelevant `sEq`
 
-Status: **scheme, written before any code** — this is the design round for
-the general (fording) case of `issues/indexed-families.md`, route 2b, whose
+Status: **generator implemented**, 2026-08-04 —
+`crates/elab/src/forded.rs` mechanizes §4–§8 (the skeleton, `μ`, the family,
+the constructors, and the eliminator in both arm forms), the §3 classifier
+lives in `crates/elab/src/inductive.rs` (`classify_indexed_route` /
+`classify_forded`), and `crates/elab/tests/indexed_route_2b_gen.rs` is
+§13.2's acceptance, 17 tests. What the round did **not** build is recorded in
+§13.2's own notes and in §14: multi-index, `absurd`/`inj` on a forded family,
+and form A at a *declared* index (form A is `Nat`-only, so a declared-index
+family takes form B everywhere and §8.4's residue is wider there).
+
+The design round below is unchanged text: it is the design for the general
+(fording) case of `issues/indexed-families.md`, route 2b, whose
 *acceptance* prototype landed 2026-07-29
 (`crates/elab/tests/indexed_route_2b.rs`, 9 tests) and whose generator this
 document specifies. The order of work is the tiers'
@@ -158,6 +168,17 @@ nothing to key on); for 2b the fingerprint reads the nominal tag out of the
 **skeleton** (§6.3), where `tag_of` already looks, so the reason is gone.
 Kept anyway this round, so there is one classifier and not two; recorded
 here as the place to relax it if something wants a `Unit`-indexed family.
+
+**Clarification (2026-08-04, from the generator round).** F2 forbids two
+*children* sharing one index variable — nothing more. A **non-linear index
+expression** over a single child is legal and generated: `D1(l: Sh2,
+d: Bad(l)) : Bad(N2(l, l))` fords fine, because `μ` recomputes `N2(μ d, μ d)`
+from the one child faithfully. The F2 row's example happens to have a
+non-linear result index too (`plus(n,n)`), which is incidental; the
+load-bearing part is `l` and `r` sharing `n`. Pinned by the moved assertion
+in `crates/elab/tests/indexed_declared_families.rs` (the `Bad` declaration,
+formerly a rejection, now elaborates) against
+`f2_two_children_at_one_index_rejects`.
 
 ### 3.4 One worked example per class
 
@@ -455,6 +476,18 @@ So the honest key is the *proof*, not the data: form B computes exactly
 where the index equation is `srefl`, and a forded constructor manufactures a
 non-`srefl` proof as soon as one of its children is open.
 
+**Sharper still (2026-08-04, from the generator round): a declaration all of
+whose recursive constructors are form B admits no induction over open data
+at all.** At every arm the goal is a stuck `App(transp …)` on *both* sides
+of the step's equation, so a `j` there cannot close — not "the proof is
+harder", there is no proof to write. Measured on `Tm`/`Ap` (both
+constructors computed-index):
+`a_recursive_theorem_over_the_forded_family` carries the honest substitute
+(a `match`-based theorem plus literal-data recursion, with the limit stated
+in a comment), and the genuine induction lives at a form-A constructor
+(`a_theorem_by_induction_whose_step_is_a_form_a_constructor_closes`). The
+per-constructor bullets above are true but understate the aggregate.
+
 That last bullet is sharper than the issue log's "degrades to strip-guarded"
 and should replace it. It is also §9's honest limit in the wild: at the
 redex, `transp`'s endpoints `μ ŝ` and `m' := ⟦e⟧` **are** convertible (that
@@ -746,6 +779,20 @@ mentions its *bound* variable (not the literal it is applied at), and a
    fields deleted, child types erased) and never editing it afterwards is
    what keeps that true — the same discipline as "the shape is tier 0's
    lowering with the recursive fields deleted" (tier 1 §2).
+7. **Type-argument inference does not reach forded constructors**
+   (2026-08-04). `Leaf : Tree<A>(0)` carries no field whose surface type is
+   a bare parameter, so `infer_ctor` cannot solve `A`, and a constructor
+   with only index and child fields — the *common* forded shape — is
+   unusable in inference position. Route 1's gap inherited verbatim, hit
+   more often here. Workaround visible in `indexed_route_2b_gen.rs`
+   (`tleaf`/`tnode`): route the constructor through a checking position.
+8. **`forded_ctor_index` infers payload arguments** (2026-08-04).
+   `res_arg_cx` (`forded.rs`) calls `elab_infer` on a payload argument when
+   the written result index mentions it and no checked value is available
+   (the `infer_ctor` path). A payload that itself needs a *checking*
+   position (a lambda, a `refl`) and appears in the result index would fail
+   there. Nothing in the suite hits it; the checking path
+   (`build_forded_ctor`) is unaffected.
 
 ## 15. What this document amends elsewhere
 

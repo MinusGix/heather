@@ -61,6 +61,23 @@ wrapper, does it too (same issue, the falsified step-machine section). So
 the control is a family parameterized by depth, `N = 1..8`, asserting a
 *ratio* between levels rather than an absolute time.
 
+And a sixth, found 2026-08-04, about *arity* rather than instance or mode:
+
+**6. Case-tree emitters need at least three constructors.** A lowering that
+emits a `Case` *tree* (`Inl`/`Inr` over a summand spine) has an inner-`Case`
+path that two constructors never take: with two summands there is one node
+and no `#rest` branch. `wf_case_tree`'s `Inr` annotations were shifted by
+one too few for the inner context — `d + 1` where the substitution's
+`embed(…, 2)` says two binders past `cx` — and the same closure was shared
+by `idx_case_tree`/`indexed_case_tree`. Invisible at a closed payload type
+(axis 2 again, the annotations then mention no ambient variable) *and*
+invisible at ≤2 constructors; the symptom is a kernel `LevelMismatch`,
+never a wrong answer. Minimal reproducer: a three-constructor tier-1
+inductive with an open payload, `match`ed. So the control for anything that
+emits a case tree is one declaration with **three or more constructors,
+crossed with axis 2** — and the middle constructor's arm is the one that
+sits under the inner node.
+
 ## The evidence
 
 | defect | what hid it | axis |
@@ -73,6 +90,7 @@ the control is a family parameterized by depth, `N = 1..8`, asserting a
 | `wf_branch`'s container-length projection context (`surface-polymorphism.md` §10.1) | closed *type parameters* — an inductive could not be instantiated at an open type until `fn f<A>` existed | 2 |
 | exponential conversion cost in the IR interpreter (`whnf-sharing-term-growth`) | two bench fixtures that varied fuel depth and payload, never nesting | 5 |
 | `Vec`/`Fin`/`El` strip-blind at canonical indices (`sprop-design.md` §5.4 correction; `seq-strip-type-former-negatives`) | `seq_transp.rs` lengths were context variables, never literals | 1 |
+| `wf_case_tree`/`idx_case_tree` inner-`Inr` shift (fixed in the 2b-generator round, 2026-08-04) | every case-tree consumer had ≤2 constructors or a closed payload — the inner `Case` never met an ambient variable | 6 (× 2) |
 
 Note the shape of that table: four of six are axis 2, and in every case the
 generalization that would have caught it costs one extra test with one extra
