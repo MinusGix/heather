@@ -255,8 +255,16 @@ fn the_block_rejections_carry_their_messages() {
     let m = bad("meta fn q(g: Ctx) -> Code(g |- Nat) { code { { let y = 1; y } } }");
     assert!(m.contains("one expression, not a block"), "{m}");
     assert!(m.contains("let-inside-quotation"), "{m}");
-    // (e) an empty block has no result expression.
+    // (e) an empty block is no longer resultless: since
+    // issues/auto-refl-empty-block.md its result is one speculative `refl`,
+    // and at a goal `refl` cannot shape — a *value* — the speculation fails
+    // and the goal is listed. So this stays a rejection, with a different
+    // message: the open goal rather than a parse error.
     let m = bad("fn f(n: Nat) -> Nat { { } }");
+    assert!(m.contains("unsolved goals"), "{m}");
+    // …and a block with statements and no result still is resultless: `{}` is
+    // the whole trigger.
+    let m = bad("fn f(n: Nat) -> Nat { { let y = n; } }");
     assert!(m.contains("expected an expression"), "{m}");
 }
 

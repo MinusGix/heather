@@ -1,0 +1,275 @@
+// `list_algos` — small list algorithms with real proof content, written to
+// rank the surface (issues/list-algorithms-exercise.md).
+//
+// Revised (2026-08-05) onto the round's three features: receiver-reached
+// members (`xs.nth(i)`), call-site over-application (`plusl(n, m)`,
+// `leb_false_flip(x, h, e)`), and the empty proof block (`{}`). The
+// before/after of each proof is recorded in
+// issues/list-algorithms-exercise.md.
+
+import list;
+import nat;
+import option;
+import bool;
+
+// ---------------------------------------------------------------------------
+// congruences this file needs. `cong_nat` (nat) is the model: a general `cong`
+// needs its function argument explicit, so each shape is its own lemma.
+
+theorem cong_cons<A>(h: A, {a: List<A>}, {b: List<A>}, p: a = b):
+    Cons(h, a) = Cons(h, b)
+{
+    j(p, λ y q => Cons(h, a) = Cons(h, y), refl)
+}
+
+theorem cong_append_l<A>({a: List<A>}, {b: List<A>}, zs: List<A>, p: a = b):
+    append(a, zs) = append(b, zs)
+{
+    j(p, λ y q => append(a, zs) = append(y, zs), refl)
+}
+
+// ---------------------------------------------------------------------------
+// reverse and the append laws it rests on.
+
+fn rev<A>(xs: List<A>) -> List<A> {
+    match xs {
+        Nil => Nil,
+        Cons(h, t) => append(rev(t), Cons(h, Nil)),
+    }
+}
+
+theorem append_nil<A>(xs: List<A>): append(xs, Nil) = xs {
+    match xs {
+        Nil => {},
+        Cons(h, t) => cong_cons(h, append_nil(t)),
+    }
+}
+
+theorem append_assoc<A>(xs: List<A>, ys: List<A>, zs: List<A>):
+    append(append(xs, ys), zs) = append(xs, append(ys, zs))
+{
+    match xs {
+        Nil => {},
+        Cons(h, t) => cong_cons(h, append_assoc(t, ys, zs)),
+    }
+}
+
+theorem rev_append<A>(xs: List<A>, ys: List<A>):
+    rev(append(xs, ys)) = append(rev(ys), rev(xs))
+{
+    match xs {
+        Nil => sym(append_nil(rev(ys))),
+        Cons(h, t) =>
+            trans(
+                cong_append_l(Cons(h, Nil), rev_append(t, ys)),
+                append_assoc(rev(ys), rev(t), Cons(h, Nil))),
+    }
+}
+
+theorem rev_involutive<A>(xs: List<A>): rev(rev(xs)) = xs {
+    match xs {
+        Nil => {},
+        Cons(h, t) =>
+            trans(rev_append(rev(t), Cons(h, Nil)),
+                  cong_cons(h, rev_involutive(t))),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// length, and `nth` after `append`.
+//
+// `plusl` recurses on its FIRST argument, unlike `nat::add`, because the
+// index that walks off the front of `append(xs, ys)` is `len(xs) + i` and it
+// has to reduce as `xs` is peeled. Curried for the usual reason, so every
+// call site would write `plusl(n)(m)` — but over-application spells it
+// `plusl(n, m)`.
+
+fn len<A>(xs: List<A>) -> Nat {
+    match xs { Nil => 0, Cons(h, t) => Succ(len(t)) }
+}
+
+fn plusl(n: Nat) -> Nat -> Nat {
+    match n {
+        Zero => λ (m: Nat) => m,
+        Succ(k) => λ (m: Nat) => Succ(plusl(k, m)),
+    }
+}
+
+// Past the whole of `xs`, `nth` reads out of `ys`.
+theorem nth_append_r<A>(xs: List<A>, ys: List<A>, i: Nat):
+    append(xs, ys).nth(plusl(len(xs), i)) = ys.nth(i)
+{
+    match xs {
+        Nil => {},
+        Cons(h, t) => nth_append_r(t, ys, i),
+    }
+}
+
+// Inside `xs`, `append` changes nothing. The index varies with the recursion,
+// so the statement is a function of it and every use is an over-application
+// (issues/ih-generalization.md's workaround).
+theorem nth_append_l<A>(xs: List<A>, ys: List<A>):
+    (i: Nat) -> (a: A) -> xs.nth(i) = Some(a) -> append(xs, ys).nth(i) = Some(a)
+{
+    match xs {
+        Nil => λ i a p => absurd(p),
+        Cons(h, t) => λ i a =>
+            match i {
+                Zero => λ p => p,
+                Succ(k) => λ p => nth_append_l(t, ys, k, a, p),
+            },
+    }
+}
+
+// ---------------------------------------------------------------------------
+// insertion sort, and the proof that it sorts.
+//
+// Sortedness is decided rather than declared, like `nat::Le`: `sortedb` is a
+// `Bool` and the statement is `sortedb(xs) = True`.
+
+fn andb(a: Bool, b: Bool) -> Bool { match a { False => False, True => b } }
+
+fn le_head(x: Nat, xs: List<Nat>) -> Bool {
+    match xs { Nil => True, Cons(h, t) => leb(x, h) }
+}
+
+fn sortedb(xs: List<Nat>) -> Bool {
+    match xs { Nil => True, Cons(h, t) => andb(le_head(h, t), sortedb(t)) }
+}
+
+// `insert`'s branch is a separate `fn` taking the recursive result as an
+// argument. Written inline as a nested `match`, the two branches are stuck
+// under a `Bool` scrutinee that no equation can reduce, so every lemma about
+// `insert` would need the convoy pattern; hoisted, one `j` on the scrutinee
+// does it.
+fn ins_pick(b: Bool, x: Nat, h: Nat, t: List<Nat>, rec: List<Nat>) -> List<Nat> {
+    match b { False => Cons(h, rec), True => Cons(x, Cons(h, t)) }
+}
+
+fn insert(x: Nat, xs: List<Nat>) -> List<Nat> {
+    match xs {
+        Nil => Cons(x, Nil),
+        Cons(h, t) => ins_pick(leb(x, h), x, h, t, insert(x, t)),
+    }
+}
+
+fn isort(xs: List<Nat>) -> List<Nat> {
+    match xs { Nil => Nil, Cons(h, t) => insert(h, isort(t)) }
+}
+
+// Congruences, one per position that a rewrite has to reach.
+theorem cong_sortedb({a: List<Nat>}, {b: List<Nat>}, p: a = b):
+    sortedb(a) = sortedb(b)
+{
+    j(p, λ y q => sortedb(a) = sortedb(y), refl)
+}
+
+theorem cong_le_head(h: Nat, {a: List<Nat>}, {b: List<Nat>}, p: a = b):
+    le_head(h, a) = le_head(h, b)
+{
+    j(p, λ y q => le_head(h, a) = le_head(h, y), refl)
+}
+
+theorem cong_andb_l({a: Bool}, {b: Bool}, c: Bool, p: a = b):
+    andb(a, c) = andb(b, c)
+{
+    j(p, λ y q => andb(a, c) = andb(y, c), refl)
+}
+
+theorem cong_ins_pick({a: Bool}, {b: Bool}, x: Nat, h: Nat, t: List<Nat>,
+                      r: List<Nat>, p: a = b):
+    ins_pick(a, x, h, t, r) = ins_pick(b, x, h, t, r)
+{
+    j(p, λ y q => ins_pick(a, x, h, t, r) = ins_pick(y, x, h, t, r), refl)
+}
+
+// The `Bool` conjunction kit. Each of these is stated as a *function* of its
+// hypotheses so that the `match` on `a` abstracts them too: a hypothesis
+// written as a parameter would keep mentioning `a` after the split.
+theorem andb_true_l(a: Bool, b: Bool): andb(a, b) = True -> a = True {
+    match a { False => λ p => absurd(p), True => λ p => refl }
+}
+
+theorem andb_true_r(a: Bool, b: Bool): andb(a, b) = True -> b = True {
+    match a { False => λ p => absurd(p), True => λ p => p }
+}
+
+// Not by cases on `a`: in the `False` arm the hypothesis is `a = True` at
+// `a := False`, and the elaborator instantiates an arm's motive at the
+// *injected binder* rather than at the constructor literal, so `absurd` does
+// not recognize the equation (issues/absurd-on-branch-scrutinee.md). Rewriting
+// under `andb` avoids the split entirely.
+theorem andb_true(a: Bool, b: Bool): a = True -> b = True -> andb(a, b) = True {
+    λ p q => trans(cong_andb_l(b, p), q)
+}
+
+// `leb` is total: a failed comparison is the other one succeeding. Induction
+// on `x` with `y` generalized — the varying-argument shape again, so the
+// statement returns a function.
+theorem leb_false_flip(x: Nat): (y: Nat) -> leb(x, y) = False -> leb(y, x) = True {
+    match x {
+        Zero => λ y p => absurd(p),
+        Succ(k) => λ y =>
+            match y {
+                Zero => λ p => {},
+                Succ(l) => λ p => leb_false_flip(k, l, p),
+            },
+    }
+}
+
+// Inserting below a head keeps the head below everything. Two case splits and
+// no recursion: `t`, and then the `Bool` that `insert` branched on — which
+// only a convoy (`as λ b => (scrut = b) -> …`, applied to `refl`) makes
+// available as an equation.
+theorem le_head_insert(h: Nat, x: Nat, t: List<Nat>):
+    leb(h, x) = True -> le_head(h, t) = True -> le_head(h, insert(x, t)) = True
+{
+    match t {
+        Nil => λ hx ht => hx,
+        Cons(h2, t2) => λ hx ht =>
+            match leb(x, h2) as λ b =>
+                (leb(x, h2) = b) -> le_head(h, insert(x, Cons(h2, t2))) = True
+            {
+                False => λ e =>
+                    trans(cong_le_head(h,
+                              cong_ins_pick(x, h2, t2, insert(x, t2), e)), ht),
+                True => λ e =>
+                    trans(cong_le_head(h,
+                              cong_ins_pick(x, h2, t2, insert(x, t2), e)), hx),
+            }(refl),
+    }
+}
+
+theorem insert_sorted(x: Nat, xs: List<Nat>):
+    sortedb(xs) = True -> sortedb(insert(x, xs)) = True
+{
+    match xs {
+        Nil => λ hs => {},
+        Cons(h, t) => λ hs =>
+            match leb(x, h) as λ b =>
+                (leb(x, h) = b) -> sortedb(insert(x, Cons(h, t))) = True
+            {
+                False => λ e => {
+                    let ht = andb_true_l(le_head(h, t), sortedb(t), hs);
+                    let hst = andb_true_r(le_head(h, t), sortedb(t), hs);
+                    let hx = leb_false_flip(x, h, e);
+                    trans(
+                        cong_sortedb(cong_ins_pick(x, h, t, insert(x, t), e)),
+                        andb_true(le_head(h, insert(x, t)), sortedb(insert(x, t)),
+                            le_head_insert(h, x, t, hx, ht),
+                            insert_sorted(x, t, hst)))
+                },
+                True => λ e =>
+                    trans(
+                        cong_sortedb(cong_ins_pick(x, h, t, insert(x, t), e)),
+                        trans(cong_andb_l(sortedb(Cons(h, t)), e), hs)),
+            }(refl),
+    }
+}
+
+theorem isort_sorted(xs: List<Nat>): sortedb(isort(xs)) = True {
+    match xs {
+        Nil => {},
+        Cons(h, t) => insert_sorted(h, isort(t), isort_sorted(t)),
+    }
+}

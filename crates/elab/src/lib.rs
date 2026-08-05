@@ -30,7 +30,7 @@ use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 
-use heather_kernel::conv::conv_type;
+use heather_kernel::conv::{conv_term, conv_type};
 use heather_kernel::layer::Layer;
 use heather_kernel::level::Level;
 use heather_kernel::reduce::{whnf_term, whnf_term_delta, whnf_type_delta, Defs};
@@ -441,6 +441,15 @@ pub struct Elaborator {
     /// records, which is what makes the move of `.` into the elaborator a
     /// no-op for them.
     record_fields: HashSet<String>,
+    /// Every *base* name attached to some type's namespace by a `fn D::m` /
+    /// `theorem D::m` declaration, across all of them
+    /// (issues/type-owned-members-receiver-slice.md). The same cheap negative
+    /// test as [`Self::record_fields`], and for the same reason: `t.m(a)`
+    /// consults this before inferring the receiver's type, so a `.` call on a
+    /// name nobody attaches costs exactly what it cost before members existed.
+    /// Which type a base name belongs to is not recorded here — that is
+    /// decided by the receiver, against the ordinary name tables.
+    member_bases: HashSet<String>,
     next_tag: u32,
     fuel: u64,
     /// Number of Ψ slots reserved for the current declaration's goals — a
@@ -562,6 +571,7 @@ impl Elaborator {
             gdefs: gendefs::GenDefs::default(),
             ctors: HashMap::new(),
             record_fields: HashSet::new(),
+            member_bases: HashSet::new(),
             next_tag: 0,
             fuel: DEFAULT_FUEL,
             goal_base: 0,
@@ -699,7 +709,19 @@ impl Elaborator {
     /// The qualified table key a written name resolves to, if it resolves.
     fn key_of(&self, name: &str) -> Option<String> {
         match self.resolve_name(name) {
-            NameRes::Found(m) => Some(qkey(&m, Self::base_name(name))),
+            NameRes::Found(m) => {
+                // A *member* declares the qualified string itself
+                // (issues/type-owned-members-receiver-slice.md), so its key
+                // keeps both halves: `List::nth` in module `list` is
+                // `list::List::nth`. The two other qualified readings —
+                // `nat::sub` (module path) and `Option::None` (constructor by
+                // type) — declare the base name, and this is what tells them
+                // apart without a second resolution judgment.
+                if split_qual(name).is_some() && self.names.declares(&m, name) {
+                    return Some(qkey(&m, name));
+                }
+                Some(qkey(&m, Self::base_name(name)))
+            }
             _ => None,
         }
     }
@@ -850,6 +872,29 @@ impl Elaborator {
             return err(format!("duplicate name `{}`", decl.name), decl.span);
         }
         self.check_declarable(&decl.name, decl.span)?;
+        // `fn D::m(…)` — a member of `D`'s namespace. The attachment is
+        // *checked*: `D` has to name a type visible here, which is the whole
+        // difference between this and a naming convention
+        // (issues/type-owned-members-receiver-slice.md). What is declared is
+        // the qualified string, so the base name stays out of the ambient
+        // namespace and is reached through the receiver or by qualification.
+        let member = split_qual(&decl.name);
+        if let Some((owner, base)) = member {
+            if !self.names_a_type(owner) {
+                return err(
+                    format!(
+                        "`{owner}` is not a type in scope, so `{}` attaches to nothing — \
+                         a member declaration is `fn <Type>::{base}(…)` and the type \
+                         must be declared (or be a kernel type) before it",
+                        decl.name
+                    ),
+                    decl.span,
+                );
+            }
+            if base.is_empty() {
+                return err("a member needs a name after `::`", decl.span);
+            }
+        }
         // Reserve the goal prefix *before* anything is elaborated: the
         // telescope and result type are elaborated first and their types end
         // up embedded in the emitted term, so they must live in the same
@@ -919,7 +964,12 @@ impl Elaborator {
         // recursor, so there is no fixpoint and nothing new for the kernel.
         let (res_ty, res_lvl) = self.elab_ty(&cx, &decl.result)?;
         cx.selfref = Some(Rc::new(SelfRef {
-            name: decl.name.clone(),
+            // A member recurses under its **base** name: inside `fn List::nth`
+            // the recursive call is `nth(t)`, not `List::nth(t)`. The self-name
+            // is checked before globals in `resolve`, so this shadows an
+            // ambient `nth` for the body only — which is the same scoping the
+            // name has always had.
+            name: member.map_or_else(|| decl.name.clone(), |(_, base)| base.to_string()),
             // Type parameters are part of the telescope, so they are part of
             // the positional bookkeeping a guarded self-call does — as
             // *implicit* parameters, which is what keeps them out of the
@@ -1018,6 +1068,9 @@ impl Elaborator {
         });
         self.globals.insert(qkey(&self.scope.module, &decl.name), GlobalInfo { abs, params });
         self.add_name(&decl.name, NameKind::Global);
+        if let Some((_, base)) = member {
+            self.member_bases.insert(base.to_string());
+        }
         self.refresh_delta_psi();
         Ok(())
     }
@@ -1563,6 +1616,32 @@ impl Elaborator {
                     return err("`refl` needs an `=` expected type", e.span);
                 };
                 Ok(Term::Refl { level, ty, tm: lhs })
+            }
+            // `{}` — one speculative `refl`, kept iff the kernel accepts it
+            // (issues/auto-refl-empty-block.md). The conversion is run *here*
+            // rather than left to the declaration's final `check_term`,
+            // because a guess that fails there would surface as a kernel error
+            // about a term nobody wrote. A guess that fails here is an open
+            // goal instead — the same object a `?` raises, so it is listed
+            // with its statement and context and an `on` can still discharge
+            // it.
+            ExprKind::AutoRefl => {
+                if let Ok(Type::Id { level, ty, lhs, rhs }) = self.whnf(cx, expected, e.span)
+                    && conv_term(
+                        &self.goal_psi(),
+                        &cx.gamma,
+                        Layer::Prog,
+                        &lhs,
+                        &rhs,
+                        &ty,
+                        &level,
+                        self.fuel,
+                    )
+                    .is_ok()
+                {
+                    return Ok(Term::Refl { level, ty, tm: lhs });
+                }
+                self.new_goal(cx, None, hint, expected.clone(), lvl.clone(), e.span)
             }
             // `{ let x = e; … result }` — **checking**-transparent, which is
             // the property that makes the form useful: a block in a `match`
@@ -2261,6 +2340,16 @@ impl Elaborator {
                 "`refl` needs an expected type (checking position or `as` motive)",
                 e.span,
             ),
+            // Checking-only, like `refl` and for the same reason: with no
+            // expected type there is no goal to close and nothing to guess.
+            // This is where "ignored for values" falls out rather than being
+            // enforced (issues/auto-refl-empty-block.md).
+            ExprKind::AutoRefl => err(
+                "an empty block `{}` needs an expected type: it is the one \
+                 speculative `refl`, so it only means anything where a goal is \
+                 known (a `theorem` body, an annotated `let`, an argument)",
+                e.span,
+            ),
             // Checking-only, mirroring the kernel: `BoxTm` is `NotInferable`
             // by design (docs/in-language-map-design.md §5). And a quote is
             // only meaningful at layer m, so outside a `meta fn` the pointer
@@ -2706,7 +2795,7 @@ impl Elaborator {
                 span,
             );
         }
-        if args.len() != positions.len() {
+        if args.len() < positions.len() {
             return err(
                 format!(
                     "recursive call to `{name}` must pass all {} argument(s), found {}",
@@ -2716,6 +2805,14 @@ impl Elaborator {
                 span,
             );
         }
+        // The ih is saturated at the declared parameters; anything beyond them
+        // is a second spine on its *result*, exactly as at an ordinary call
+        // site (issues/call-site-overapplication.md). This is the case that
+        // matters most, because the curried-return workaround for a varying
+        // argument (issues/ih-generalization.md) makes every use of such an ih
+        // an over-application: `leb_false_flip(k, l, p)` for
+        // `leb_false_flip(k)(l, p)`.
+        let (args, spill) = args.split_at(positions.len());
         // Which descendant the call goes to, once the decreasing argument has
         // been matched: `Nat` has only one, a `Wf` arm has one per recursive
         // field, so this is set inside the loop below. The decreasing argument
@@ -2805,15 +2902,19 @@ impl Elaborator {
                 )
             };
         }
-        match &g.kind {
-            GuardKind::Nat { ih_pos, .. } => Ok(self.local(cx, *ih_pos)),
+        let (t, ty, lvl) = match &g.kind {
+            GuardKind::Nat { ih_pos, .. } => self.local(cx, *ih_pos),
             // `ih' ι_t` and its type, shifted out to wherever the call sits.
             GuardKind::Wf { depth, children, .. } => {
                 let by = (cx.names.len() - depth) as u32;
                 let (_, ih, ty, lvl) = &children[descendant];
-                Ok(((**ih).shift_local(by), ty.shift_local(by), lvl.clone()))
+                ((**ih).shift_local(by), ty.shift_local(by), lvl.clone())
             }
+        };
+        if spill.is_empty() {
+            return Ok((t, ty, lvl));
         }
+        self.apply_explicit(cx, Some(name), s.params.len(), t, ty, lvl, spill)
     }
 
     /// Synthesize the dependent motive for a motive-less `match` in checking
@@ -2910,6 +3011,11 @@ impl Elaborator {
         // inferred from it — insertion is name-directed and indifferent to
         // explicit-argument order, which is why the old receiver-last rule
         // was never doing the work its comment claimed.
+        // Which name the call is to: the bare one, or a member of the
+        // receiver's own type (issues/type-owned-members-receiver-slice.md).
+        // The `member_bases` test comes first for the same reason the record
+        // one does — no receiver is inferred for a name nobody attaches.
+        let name = &self.member_head(cx, recv, name, span)?;
         let mut args = args.clone();
         let at = self.subject_index(name).min(args.len());
         args.insert(at, recv.clone());
@@ -2918,6 +3024,56 @@ impl Elaborator {
             kind: ExprKind::App { head: Box::new(head), args, explicit: false },
             span,
         }))
+    }
+
+    /// The callee of a method call, given the receiver: `name` itself, or
+    /// `D::name` when the receiver's type `D` has a member by that name
+    /// (issues/type-owned-members-receiver-slice.md).
+    ///
+    /// Evidence **shrinks** the candidate set and never races candidates. If
+    /// both readings exist — an ambient `name` *and* a `D::name` at this
+    /// receiver — the answer is an ambiguity naming both, not a preference.
+    /// Preferring the member would mean that adding `D::name` to a library
+    /// silently reinterprets an existing `t.name(…)`, which is the one thing
+    /// the growth invariant forbids (docs/modules-design.md §4).
+    fn member_head(&self, cx: &Cx, recv: &Expr, name: &str, span: Span) -> R<String> {
+        if !self.member_bases.contains(name) {
+            return Ok(name.to_string());
+        }
+        // Inference failure is not an error here, exactly as for a field: the
+        // fallback is what handles a receiver whose type only the call fixes.
+        let Ok((_, rty, _)) = self.elab_infer(cx, recv) else {
+            return Ok(name.to_string());
+        };
+        let Some(owner) = self.type_namespace(cx, &rty, span) else {
+            return Ok(name.to_string());
+        };
+        let qualified = format!("{owner}::{name}");
+        match self.resolve_name(&qualified) {
+            NameRes::Found(_) => {}
+            // Two modules attaching the same member to the same type: the §4
+            // regime's ambiguity, reported here rather than fallen back out
+            // of — a receiver that *did* find candidates and cannot choose is
+            // not a receiver that found none.
+            NameRes::Ambiguous(_) => {
+                return Err(self.name_miss(&qualified, String::new(), span))
+            }
+            NameRes::NotFound | NameRes::NoSuchQualifier(_) => {
+                return Ok(name.to_string())
+            }
+        }
+        if self.shadowed(cx, name) {
+            return err(
+                format!(
+                    "`{name}` here is both `{qualified}`, reached through the receiver's \
+                     type, and a name in scope on its own — write one of them: \
+                     `{qualified}(…)` for the member, or the bare call `{name}(…)` with \
+                     the receiver as an argument"
+                ),
+                span,
+            );
+        }
+        Ok(qualified)
     }
 
     /// A record literal (§6): permute the written fields into declaration
@@ -3009,6 +3165,35 @@ impl Elaborator {
             // self-call took the built-in vector-`map` path instead
             // (found writing docs/surface-polymorphism.md §9's headline test).
             || cx.selfref.as_ref().is_some_and(|s| s.name == name)
+    }
+
+    /// Does this name refer to a *type* here — a declared inductive/record, or
+    /// a kernel type that has no declaration? Used only to check a member
+    /// declaration's qualifier, so a false answer costs a rejection at the
+    /// declaration and never a mis-resolution at a use.
+    fn names_a_type(&self, name: &str) -> bool {
+        self.lookup_inductive(name).is_some() || name == "Nat" || name == "Type"
+    }
+
+    /// The name of the declaration a lowered type belongs to — the type's own
+    /// namespace, for a receiver-directed member lookup. `Nat` is a kernel
+    /// type with no declaration and answers for itself; anything with no
+    /// nominal tag has no namespace and answers `None`.
+    fn type_namespace(&self, cx: &Cx, ty: &Type, span: Span) -> Option<String> {
+        if matches!(ty, Type::Nat) {
+            return Some("Nat".to_string());
+        }
+        if let Some(ind) = self.tag_of(ty) {
+            return Some(ind.name.clone());
+        }
+        // Same fallback as `record_of_at`: a receiver whose type arrived
+        // through a `Val -> Type` value is `El` of a redex, and the structural
+        // read is deliberately context-free.
+        let head = self.whnf(cx, ty, span).ok()?;
+        if matches!(head, Type::Nat) {
+            return Some("Nat".to_string());
+        }
+        self.tag_of(&head).map(|ind| ind.name.clone())
     }
 
     /// The constructor this name refers to *here* — `None` when it is not a
@@ -4211,9 +4396,15 @@ impl Elaborator {
             lvl = cod_level.clone();
             t = Term::App { fun: Rc::new(t), dom_level, cod_level, dom, cod, arg: arg_rc };
         }
-        if args.next().is_some() {
-            return err(format!("`{name}` is applied to too many arguments"), span);
-        }
+        // Arguments left over once every parameter has one are **not** partial
+        // application: they are a second spine on the *result*, so they spill
+        // into iterated application — `nth(t, k)` is `nth(t)(k)`
+        // (issues/call-site-overapplication.md). Applied after the discharge
+        // below, because only there is the head back in the committed world
+        // that `apply_explicit` elaborates its arguments in; the price is that
+        // a spilled argument cannot solve a meta, which is also true of the
+        // parenthesized spelling this is sugar for.
+        let spill: Vec<Expr> = args.cloned().collect();
         // Discharge the meta block: `entries[k]` is the payload for Ψ-index
         // `n-1-k` (apply_global's convention), so it takes `sols[n-1-k]`.
         let mut entries = Vec::with_capacity(n as usize);
@@ -4246,7 +4437,15 @@ impl Elaborator {
             entries.push(GlobalEntry::Tm(sol));
         }
         let sigma = GlobalSubst { entries };
-        Ok((t.apply_global(&sigma), ty.apply_global(&sigma), lvl))
+        let (t, ty) = (t.apply_global(&sigma), ty.apply_global(&sigma));
+        if spill.is_empty() {
+            return Ok((t, ty, lvl));
+        }
+        // Past the end of the parameter list, so no goal-name hint can be
+        // right: the offset is set beyond it rather than left at 0, which
+        // would name the first parameter for an argument that is not it.
+        let past = self.params_of(name).len();
+        self.apply_explicit(cx, Some(name), past, t, ty, lvl, &spill)
     }
 
     // -- names --------------------------------------------------------------
@@ -4660,6 +4859,12 @@ fn count_holes(decl: &Decl) -> u32 {
             | ExprKind::Num(_)
             | ExprKind::Refl
             | ExprKind::Univ { .. } => {}
+            // The empty block's speculative `refl` may fail, and then it
+            // raises a goal — so it must be counted. The pre-count is
+            // documented as an upper bound, so counting one that turns out to
+            // be discharged by `refl` costs a reserved-but-unused slot and
+            // nothing else (issues/auto-refl-empty-block.md).
+            ExprKind::AutoRefl => *n += 1,
             ExprKind::App { head, args, .. } => {
                 expr(head, n);
                 args.iter().for_each(|a| expr(a, n));

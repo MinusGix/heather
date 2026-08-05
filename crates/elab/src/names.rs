@@ -179,6 +179,18 @@ pub(crate) fn resolve(
     {
         return NameRes::Found(m);
     }
+    // `List::nth` — a *member* of a type's namespace
+    // (issues/type-owned-members-receiver-slice.md). The whole written string
+    // is the declared name, so the §4 regime applies to it unchanged: locals
+    // beat unlisted imports, and two visible modules attaching the same member
+    // to the same type are ambiguous at use with both origins named. Tried
+    // after the module-path and constructor readings, so nothing that resolved
+    // before can be reinterpreted by one.
+    match resolve_bare(index, scope, name) {
+        NameRes::Found(m) => return NameRes::Found(m),
+        NameRes::Ambiguous(origins) => return NameRes::Ambiguous(origins),
+        NameRes::NotFound | NameRes::NoSuchQualifier(_) => {}
+    }
     if visible_module {
         return NameRes::NotFound;
     }

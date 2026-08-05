@@ -2825,7 +2825,11 @@ fn classify_field(t: &Ty, name: &str, params: &[String], ctor: &str) -> R<bool> 
 pub(crate) fn expr_mentions(e: &Expr, name: &str) -> bool {
     match &e.kind {
         ExprKind::Var(n) => n == name,
-        ExprKind::Num(_) | ExprKind::Refl | ExprKind::Hole(_) | ExprKind::Univ { .. } => false,
+        ExprKind::Num(_)
+        | ExprKind::Refl
+        | ExprKind::AutoRefl
+        | ExprKind::Hole(_)
+        | ExprKind::Univ { .. } => false,
         ExprKind::App { head, args, .. } => {
             expr_mentions(head, name) || args.iter().any(|a| expr_mentions(a, name))
         }

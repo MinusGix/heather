@@ -176,7 +176,10 @@ a seam, not built.
   `sub`, `le_add`, `add_left_zero`, `add_succ_left`, `sub_zero`, and the
   add/mul lemmas the prelude discussion listed.
 - `option.hthr` — generic `Option<A>` with `map`, `and_then`, `unwrap_or`.
-- `list.hthr` — `List<A>` with `append`, `nth`, `map`.
+- `list.hthr` — `List<A>` with `append`, `nth`, `map`. (`nth` became
+  `List::nth`, the first member of a type's namespace, in the 2026-08-05
+  ergonomics round — §8's receiver-direction bullet, landed:
+  `issues/type-owned-members-receiver-slice.md`.)
 
 Acceptance is the migration: `lib/ir_v1.hthr` imports `nat` (and `option`
 where `OptVal` permits — `OptVal`'s monomorphic uses migrate only where

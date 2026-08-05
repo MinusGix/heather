@@ -840,6 +840,7 @@ fn scan_splices(e: &Expr, menv: &MetaEnv, out: &mut Vec<(String, Span)>) -> R<()
         ExprKind::Var(_)
         | ExprKind::Num(_)
         | ExprKind::Refl
+        | ExprKind::AutoRefl
         | ExprKind::Hole(_)
         | ExprKind::Univ { .. } => Ok(()),
         ExprKind::Quote(_) => err("quotes do not nest in this slice", e.span),

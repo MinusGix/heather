@@ -603,7 +603,23 @@ impl Parser {
         } else {
             return self.err("expected `fn`, `theorem`, or `inductive`");
         };
-        let (name, _) = self.ident("declaration name")?;
+        // A declaration head is the one *binding* position where a qualified
+        // name is legal: `fn List::nth(…)` attaches the declaration to a
+        // type's namespace (issues/type-owned-members-receiver-slice.md).
+        // Whether the qualifier really names a type is the elaborator's to
+        // check — the parser has no name tables — so all that happens here is
+        // that the `::` is let through, with the arity of the path fixed at
+        // one segment of qualifier.
+        let (name, name_span) = self.qual_ident("declaration name")?;
+        if name.matches("::").count() > 1 {
+            return Err(ParseError {
+                msg: format!(
+                    "`{name}` has more than one qualifier: a member is attached to \
+                     exactly one type, `Type::member`"
+                ),
+                span: name_span,
+            });
+        }
         // `fn map<A, B>(…)` — type parameters (docs/surface-polymorphism.md
         // §1). Unambiguous here: a declaration's name is always followed by
         // `(` or `<`, and neither is an expression continuation.
@@ -756,6 +772,22 @@ impl Parser {
 
     fn block_body(&mut self, open: Span) -> R<Block> {
         let mut stmts = Vec::new();
+        // `{}` — an empty proof block, whose result is the elaborator's one
+        // speculative `refl` (issues/auto-refl-empty-block.md). Read here,
+        // before the statements, so that the trigger is *exactly* empty
+        // braces: `{ let x = 1; }` is still the missing-result parse error it
+        // was, since a block with work in it that closes a goal by computation
+        // is not the case this feature is about.
+        if matches!(self.peek(), TokKind::RBrace) {
+            let close = self.expect(&TokKind::RBrace, "`}`")?;
+            let span = open.join(close);
+            return Ok(Block {
+                stmts,
+                result: Box::new(Expr { kind: ExprKind::AutoRefl, span }),
+                ons: Vec::new(),
+                span,
+            });
+        }
         while self.at_kw("let") {
             stmts.push(self.let_stmt()?);
         }
@@ -2199,14 +2231,21 @@ mod tests {
         assert!(matches!(d.body.result.kind, ExprKind::Var(_)));
     }
 
-    /// A block expression declines `on` discharges (§4.3) and has no empty
-    /// form, and its `let`s all precede the result (§4.5).
+    /// A block expression declines `on` discharges (§4.3), and its `let`s all
+    /// precede the result (§4.5). The empty form is no longer refused: `{}`
+    /// parses, with one synthetic `AutoRefl` result
+    /// (issues/auto-refl-empty-block.md). A block that has *statements* and no
+    /// result still is refused — `{}` is the whole trigger.
     #[test]
-    fn a_block_expression_declines_on_and_emptiness() {
+    fn a_block_expression_declines_on_and_a_missing_result() {
         let e = parse_file("theorem t(n: Nat): n = n { { ?g on ?g := refl; } }")
             .expect_err("an `on` inside a block expression");
         assert!(e.msg.contains("cannot discharge goals"), "{}", e.msg);
-        assert!(parse_file("fn f(n: Nat) -> Nat { { } }").is_err(), "an empty block");
+        let d = decl_of("fn f(n: Nat) -> Nat { { } }");
+        let ExprKind::Block(b) = &d.body.result.kind else { panic!("block") };
+        assert!(b.stmts.is_empty() && b.ons.is_empty());
+        assert!(matches!(b.result.kind, ExprKind::AutoRefl), "an empty block is one `AutoRefl`");
+        assert!(parse_file("fn f(n: Nat) -> Nat { { let y = n; } }").is_err(), "no result");
         assert!(parse_file("fn f(n: Nat) -> Nat { { n let y = n; } }").is_err(), "a trailing let");
     }
 

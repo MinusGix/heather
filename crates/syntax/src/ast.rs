@@ -438,6 +438,16 @@ pub enum ExprKind {
     TyLit(Box<Ty>),
     /// `refl` — checking-only.
     Refl,
+    /// The result the parser puts in an **empty** proof block, `{}`
+    /// (issues/auto-refl-empty-block.md). Not writable: it exists so that a
+    /// `Block` still has a result and every consumer of one is unchanged.
+    ///
+    /// Checking-only, and deliberately one node wide: in checking position it
+    /// gets ONE speculative `refl` attempt, kept iff the kernel accepts the
+    /// two endpoints as convertible, and otherwise it raises the same goal a
+    /// `?` would. `refl` itself is untouched — the empty block is the whole
+    /// trigger, which is [[surface-proof-automation]]'s conservative reading.
+    AutoRefl,
     /// `?name` or `?` — a goal: a deferred obligation, discharged by an `on`
     /// statement later in the same block. Checking-only, like `refl`: a hole
     /// with no expected type has no statement to list.

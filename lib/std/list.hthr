@@ -27,8 +27,15 @@ fn map<A, B>(xs: List<A>, f: A -> B) -> List<B> {
 // Curried in the index for the reason every two-argument recursion in this
 // repo is: the termination checker wants one decreasing argument with the
 // rest fixed, so the argument that varies with the recursion is returned as a
-// function instead.
-fn nth<A>(xs: List<A>) -> Nat -> Option<A> {
+// function instead. Call sites write `xs.nth(i)`: the receiver reaches the
+// member through the type and the index spills into the curried tail
+// (issues/type-owned-members-receiver-slice.md,
+// issues/call-site-overapplication.md).
+//
+// The first member of a type's namespace in the library. `nth` is *not* an
+// ambient name any more — `List::nth` or a receiver, and nothing else — which
+// is the point: the ambient namespace shrinks to genuinely ambient names.
+fn List::nth<A>(self xs: List<A>) -> Nat -> Option<A> {
     match xs {
         Nil => λ (i: Nat) => None,
         Cons(h, t) => λ (i: Nat) => match i { Zero => Some(h), Succ(k) => nth(t)(k) },

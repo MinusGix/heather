@@ -3,7 +3,7 @@ title: IH generalization: recursion whose non-decreasing arguments vary
 status: open
 labels: [frontend,elaboration,design]
 created: 2026-07-31
-updated: 2026-07-31
+updated: 2026-08-05
 ---
 
 Promoted from [[match-recursion]]'s deferred note (2026-07-24: "the one
@@ -75,3 +75,4 @@ What the ir_v1 round adds to the picture:
   `ExprKind::TyLit`; tests in `crates/elab/tests/motives.rs`.) Backwards
   compatible: the type grammar falls through to the expression grammar for
   equations, names and applications, which is every motive that parsed before.
+- 2026-08-05: The call-site half of the workaround got cheaper: [[call-site-overapplication]] landed (2026-08-05), including over-applying an induction hypothesis, so a curried-return fn is called nth(t, k) everywhere. The definition-site motive computation remains this issue's scope, cost warning unchanged.
