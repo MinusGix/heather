@@ -252,3 +252,4 @@ date; the originals are in `git log --follow issues/frontend-roadmap.md`.
   fragment transcriber was considered and deliberately deferred in its
   favor (user call: core-language and proving surface before more
   meta-layer migration). Suite 936 → 971.
+- 2026-08-05: Side round, from the cheap list: [[match-with-equation]] and [[split-on-arms]] landed and closed in one round (docs/match-equation-split-design.md) — the equation binding `match h : e` and the `split`/`on` statement, plus a live tier-0 case_tree shift fix whose sweep is [[dependent-motive-crossing-sweep]]. Suite 1035 → 1059.

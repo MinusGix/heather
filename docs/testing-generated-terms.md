@@ -78,6 +78,22 @@ emits a case tree is one declaration with **three or more constructors,
 crossed with axis 2** — and the middle constructor's arm is the one that
 sits under the inner node.
 
+Refined 2026-08-05, by the *same* defect surviving in the one case-tree
+emitter that round did not touch — tier-0's `inductive.rs::case_tree`, where
+`inner_motive`'s injection landed two binders past `cx` and was shifted by
+`d + 1`. Three constructors and an open payload are **not sufficient**: the
+control needs a third condition, a **dependent motive**, one that actually
+mentions `z`. At a non-dependent motive the injection is substituted for a
+variable that does not occur, so the mis-shifted annotations are discarded
+before the kernel is ever shown them — and every tier-0 test at three
+constructors and an open payload passed for a phase. The reproducer is that
+pair plus `as λ z => f(z) = z`
+(`docs/match-equation-split-design.md` §11.2), pinned in
+`crates/elab/tests/inductive_tier0.rs`. Note what found it: the `match h : e`
+convoy, whose motive `Π (e = z). M` is dependent *by construction* — so the
+equation binding doubles as a stress test for every motive consumer in the
+elaborator.
+
 ## The evidence
 
 | defect | what hid it | axis |
@@ -91,6 +107,7 @@ sits under the inner node.
 | exponential conversion cost in the IR interpreter (`whnf-sharing-term-growth`) | two bench fixtures that varied fuel depth and payload, never nesting | 5 |
 | `Vec`/`Fin`/`El` strip-blind at canonical indices (`sprop-design.md` §5.4 correction; `seq-strip-type-former-negatives`) | `seq_transp.rs` lengths were context variables, never literals | 1 |
 | `wf_case_tree`/`idx_case_tree` inner-`Inr` shift (fixed in the 2b-generator round, 2026-08-04) | every case-tree consumer had ≤2 constructors or a closed payload — the inner `Case` never met an ambient variable | 6 (× 2) |
+| tier-0 `case_tree`'s inner injection shift (fixed 2026-08-05) | the same, **plus** every three-constructor open-payload tier-0 test having a *non-dependent* motive, which substitutes the bad annotations away | 6 (× 2, × dependence) |
 
 Note the shape of that table: four of six are axis 2, and in every case the
 generalization that would have caught it costs one extra test with one extra

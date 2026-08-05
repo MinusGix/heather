@@ -28,11 +28,13 @@
 //!                                      `=` is propositional equality (`==`
 //!                                      rejected), `<=` is `Le(a, b)`, `<` is
 //!                                      `lt(a, b)`; none of them chain
-//! block   := "{" stmt* expr on_stmt* "}"
+//! block   := "{" stmt* (expr | split) on_stmt* "}"
 //! stmt    := "let" name (":" type)? "=" expr ";"
 //!          | "let" "{" name ("," name)* ","? "}" "=" expr ";"   -- destructure
+//! split   := "split" (name ":")? expr ("as" expr)? ";"   -- IS the result
 //! on_stmt := "on" ("?" name ("." numeral)? | "_" ":" type) ":=" expr ";"
-//! expr    := "match" expr ("as" name "->" type)? "{" arms "}"
+//!          | "on" name ("(" name ("," name)* ")")? ":=" expr ";"  -- split arm
+//! expr    := "match" (name ":")? expr ("as" expr)? "{" arms "}"
 //!          | "refl" | "?" name?
 //!          | "j" "(" expr "," "(" name "," name ")" "->" type "," expr ")"
 //!          | ("λ"|"fun") binder+ "=>" expr
@@ -52,6 +54,16 @@
 //! result expression (issues/goal-holes.md). `let`/`on` are contextual
 //! keywords like every other keyword here — an expression can never be
 //! *continued* by a bare identifier, so a statement head is unambiguous.
+//!
+//! `split` is the one statement head that sits where a *result expression*
+//! could start, so it cannot be bought back by lookahead (nothing fixed
+//! follows it) and is instead rejected as a binding name, like `match`/`fun`/
+//! `Type` — rule 3 of docs/let-and-blocks-design.md §5.2. A block that splits
+//! has no result expression: the arms are the result, and the `on Ctor(…)`
+//! heads after it are those arms rather than goal discharges
+//! (docs/match-equation-split-design.md §5). Both `split` and `match` take the
+//! optional `h :` equation binder (§3), which is exact on two tokens because
+//! `:` never continues an expression.
 
 use crate::ast::*;
 use crate::lexer::{lex, Tok, TokKind};
@@ -327,6 +339,9 @@ impl Parser {
                       `fun x => …`",
             "Type" => "`Type` is the universe keyword, so a use of it would parse as \
                        `Type<0>` — silently, all the way to the kernel",
+            "split" => "`split` is the case-split statement keyword, so a use of it at \
+                        the head of a block's result would parse as `split e;` \
+                        (docs/match-equation-split-design.md §5)",
             _ => return Ok((name, span)),
         };
         Err(ParseError {
@@ -795,13 +810,85 @@ impl Parser {
             return self
                 .err("a block's `on` discharges come after its result expression");
         }
-        let result = self.expr()?;
-        let mut ons = Vec::new();
+        // `split e;` — the statement-position case split. It *is* the block's
+        // result, so the statement list ends here and the `on Ctor(…)` arms
+        // that follow are its arms (docs/match-equation-split-design.md §5).
+        let (result, mut ons) = if self.at_kw("split") {
+            self.split_result()?
+        } else {
+            let result = self.expr()?;
+            (result, Vec::new())
+        };
         while self.at_kw("on") {
-            ons.push(self.on_stmt()?);
+            let on = self.on_stmt()?;
+            if let OnTarget::Ctor { ctor, .. } = &on.target {
+                return Err(ParseError {
+                    msg: format!(
+                        "`on {ctor}(…)` is a `split` arm, and this block has no `split`. \
+                         A goal discharge is `on ?name := …` or `on _: P := …`"
+                    ),
+                    span: on.span,
+                });
+            }
+            ons.push(on);
         }
         let close = self.expect(&TokKind::RBrace, "`}`")?;
         Ok(Block { stmts, result: Box::new(result), ons, span: open.join(close) })
+    }
+
+    /// `split (h :)? e; on C(x⃗) := b; …` — parsed here and **desugared here**,
+    /// onto the very `ExprKind::Match` a hand-written case analysis builds
+    /// (docs/match-equation-split-design.md §6). Nothing downstream learns that
+    /// `split` exists, which is what makes "it lowers to the same elimination"
+    /// a tautology rather than an obligation.
+    ///
+    /// Returns the synthesized result expression and any *goal* discharges
+    /// found among the trailing `on`s: arms and discharges share the one `on`
+    /// loop and are told apart by a single token, so arms stay order-free.
+    fn split_result(&mut self) -> R<(Expr, Vec<OnStmt>)> {
+        let start = self.bump().span; // `split`
+        let eqbind = self.eq_binder()?;
+        let scrut = self.with_record_lit(true, |p| p.expr())?;
+        let motive = if self.eat_kw("as") {
+            Some(Box::new(self.with_motive(|p| p.with_record_lit(true, |p| p.expr()))?))
+        } else {
+            None
+        };
+        let mut end = self.expect(&TokKind::Semi, "`;` to end the `split`")?;
+        if self.at_kw("let") {
+            return self.err(
+                "a `split` is the last statement of its block: its arms are the \
+                 block's result, so nothing follows them but `on`",
+            );
+        }
+        let mut arms: Vec<Arm> = Vec::new();
+        let mut ons: Vec<OnStmt> = Vec::new();
+        while self.at_kw("on") {
+            let on = self.on_stmt()?;
+            end = on.span;
+            match on.target {
+                OnTarget::Ctor { ctor, binders } => {
+                    arms.push(Arm { ctor, binders, body: on.expr, span: on.span })
+                }
+                _ => ons.push(on),
+            }
+        }
+        if arms.is_empty() {
+            return Err(ParseError {
+                msg: "a `split` needs at least one `on Ctor(…) := …;` arm — its arms \
+                      are the block's result"
+                    .to_string(),
+                span: start,
+            });
+        }
+        let span = start.join(end);
+        Ok((
+            Expr {
+                kind: ExprKind::Match { scrut: Box::new(scrut), eqbind, motive, arms },
+                span,
+            },
+            ons,
+        ))
     }
 
     /// `let x = e;` / `let x: T = e;`. The `=` here is the same `=` as the
@@ -889,7 +976,26 @@ impl Parser {
                 self.expect(&TokKind::Colon, "`:` (discharge by statement)")?;
                 OnTarget::Stmt(self.ty()?)
             }
-            _ => return self.err("expected `?name` or `_: P` after `on`"),
+            // `on Ctor(x, y) := …` — a `split` arm. An identifier head was a
+            // parse error before this, so the form is strictly additive
+            // (docs/match-equation-split-design.md §5).
+            TokKind::Ident(_) => {
+                let (ctor, _) = self.qual_ident("constructor name in an `on` arm")?;
+                let mut binders = Vec::new();
+                if matches!(self.peek(), TokKind::LParen) {
+                    self.bump();
+                    while !matches!(self.peek(), TokKind::RParen) {
+                        binders.push(self.binder_ident("pattern binder")?.0);
+                        if !matches!(self.peek(), TokKind::Comma) {
+                            break;
+                        }
+                        self.bump();
+                    }
+                    self.expect(&TokKind::RParen, "`)` (pattern binders)")?;
+                }
+                OnTarget::Ctor { ctor, binders }
+            }
+            _ => return self.err("expected `?name`, `_: P`, or `Ctor(…)` after `on`"),
         };
         self.expect(&TokKind::ColonEq, "`:=` (goal discharge)")?;
         let expr = self.expr()?;
@@ -1646,6 +1752,7 @@ impl Parser {
         // The scrutinee and the motive are both immediately followed by the
         // arm block, so a `{` here closes the `match` rather than opening a
         // record literal (docs/surface-records.md §6.1).
+        let eqbind = self.eq_binder()?;
         let scrut = self.with_record_lit(true, |p| p.expr())?;
         let motive = if self.eat_kw("as") {
             // The retired spelling `as z -> T`, diagnosed rather than parsed:
@@ -1692,9 +1799,25 @@ impl Parser {
         }
         let end = self.expect(&TokKind::RBrace, "`}`")?;
         Ok(Expr {
-            kind: ExprKind::Match { scrut: Box::new(scrut), motive, arms },
+            kind: ExprKind::Match { scrut: Box::new(scrut), eqbind, motive, arms },
             span: start.join(end),
         })
+    }
+
+    /// The optional `h :` prefix of a `match` scrutinee or a `split`
+    /// (docs/match-equation-split-design.md §3.1). Recognized on two tokens,
+    /// which is exact: `:` never *continues* an expression in this grammar
+    /// (every `Colon` is a binder annotation, a record-literal field after
+    /// `{`, or a declaration header), and `::` is its own token, so
+    /// `match A::b { … }` is untouched. Same shape as `code {`'s rule-1
+    /// lookahead (docs/let-and-blocks-design.md §5.2).
+    fn eq_binder(&mut self) -> R<Option<String>> {
+        if matches!(self.peek(), TokKind::Ident(_)) && matches!(self.nth(1), TokKind::Colon) {
+            let (name, _) = self.binder_ident("the equation binder")?;
+            self.bump(); // `:`
+            return Ok(Some(name));
+        }
+        Ok(None)
     }
 
     /// The residue rule 1 leaves standing (docs/let-and-blocks-design.md §5.3):
@@ -2338,6 +2461,89 @@ mod tests {
         let (_, args, _) = as_call(&payload.kind);
         assert!(matches!(&args[0].kind, ExprKind::Splice(_)));
         assert!(matches!(&args[1].kind, ExprKind::Splice(_)));
+    }
+
+    // -- the equation binder and `split` (docs/match-equation-split-design.md)
+
+    /// §3.1: the `h :` prefix is exact on two tokens, and it steals nothing.
+    #[test]
+    fn a_match_takes_an_equation_binder() {
+        let d = decl_of("fn f(n: Nat) -> Nat { match h : n { Zero => 0, Succ(k) => k } }");
+        let ExprKind::Match { eqbind, scrut, motive, .. } = &d.body.result.kind else {
+            panic!("match")
+        };
+        assert_eq!(eqbind.as_deref(), Some("h"));
+        assert!(matches!(&scrut.kind, ExprKind::Var(n) if n == "n"));
+        assert!(motive.is_none(), "the binder is a prefix, the motive a suffix");
+        // …and they compose.
+        let d = decl_of(
+            "fn f(n: Nat) -> Nat { match h : n as \u{3bb} z => Nat { Zero => 0, Succ(k) => k } }",
+        );
+        let ExprKind::Match { eqbind, motive, .. } = &d.body.result.kind else { panic!("match") };
+        assert_eq!(eqbind.as_deref(), Some("h"));
+        assert!(motive.is_some());
+    }
+
+    /// The collision checks §3.1 claims, done rather than asserted: a
+    /// qualified scrutinee (`::` is its own token) and an ordinary one.
+    #[test]
+    fn the_equation_binder_steals_no_scrutinee() {
+        let d = decl_of("fn f(n: Nat) -> Nat { match n { Zero => 0, Succ(k) => k } }");
+        let ExprKind::Match { eqbind, .. } = &d.body.result.kind else { panic!("match") };
+        assert!(eqbind.is_none());
+        assert!(parse_file(
+            "fn f(n: Nat) -> Nat { match Mod::val { Zero => 0, Succ(k) => k } }"
+        )
+        .is_ok());
+    }
+
+    /// §5/§6: a `split`-terminated block is desugared here, onto the very node
+    /// a hand-written `match` builds. The `on Ctor` heads become arms, so
+    /// `Block::ons` keeps only real goal discharges.
+    #[test]
+    fn a_split_block_desugars_to_a_match() {
+        let d = decl_of(
+            "fn f(m: Nat, n: Nat) -> Nat { split m; on Zero := n; on Succ(k) := n; }",
+        );
+        assert!(d.body.stmts.is_empty(), "a `split` is not left in the statement list");
+        assert!(d.body.ons.is_empty(), "its arms are arms, not discharges");
+        let ExprKind::Match { arms, eqbind, motive, .. } = &d.body.result.kind else {
+            panic!("expected a Match, got {:?}", d.body.result.kind)
+        };
+        assert!(eqbind.is_none() && motive.is_none());
+        assert_eq!(arms.len(), 2);
+        assert_eq!(arms[0].ctor, "Zero");
+        assert_eq!(arms[1].binders, vec!["k".to_string()]);
+        // A goal discharge in the same block stays a discharge, in any order.
+        let d = decl_of(
+            "fn f(m: Nat) -> Nat { split m; on ?g := 0; on Zero := ?g; on Succ(k) := k; }",
+        );
+        assert_eq!(d.body.ons.len(), 1);
+        let ExprKind::Match { arms, .. } = &d.body.result.kind else { panic!("match") };
+        assert_eq!(arms.len(), 2);
+        // `split h : e;` — §7, the same field.
+        let d = decl_of("fn f(m: Nat) -> Nat { split h : m; on Zero := 0; on Succ(k) := k; }");
+        let ExprKind::Match { eqbind, .. } = &d.body.result.kind else { panic!("match") };
+        assert_eq!(eqbind.as_deref(), Some("h"));
+    }
+
+    /// The grammar's negative controls (§8). Each is a rule the block form
+    /// gains, so each gets a message rather than a fall-through.
+    #[test]
+    fn the_split_grammar_rejects_what_it_says_it_does() {
+        for (src, want) in [
+            (
+                "fn f(m: Nat) -> Nat { split m; let x = 1; on Zero := 0; on Succ(k) := k; }",
+                "last statement",
+            ),
+            ("fn f(m: Nat) -> Nat { split m; }", "at least one"),
+            ("fn f(m: Nat) -> Nat { m on Zero := 0; }", "has no `split`"),
+            ("fn f(n: Nat) -> Nat { let split = n; split }", "case-split statement keyword"),
+            ("fn f(m: Nat) -> Nat { split m on Zero := 0; }", "`;` to end the `split`"),
+        ] {
+            let e = parse_file(src).expect_err(src);
+            assert!(e.msg.contains(want), "{src}\n  got: {}", e.msg);
+        }
     }
 
     #[test]

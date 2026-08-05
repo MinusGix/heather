@@ -22,3 +22,7 @@ two landing, and closes trivially if not.
 ## What it assumes from elsewhere
 - **[[list-algorithms-exercise]]** (closing) owns the evidence. Assumed
   here: only the ranked-list entry and its examples.
+
+## Log
+
+- 2026-08-05: [[match-with-equation]] landed (2026-08-05): `match h : e { … }` binds the equation in every arm, so the convoy half of this issue's forced combination is now one token. What remains here is the hoisting half ([[ih-generalization]]'s territory) and the question of whether the combination needs anything beyond both landing.

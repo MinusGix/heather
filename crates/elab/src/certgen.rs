@@ -151,9 +151,12 @@ fn fragment<'a>(d: &'a Decl) -> Result<Frag<'a>, String> {
     }
     let params: Vec<&str> = d.params.iter().map(|p| p.name.as_str()).collect();
     let kind = match &d.body.result.kind {
-        ExprKind::Match { scrut, motive, arms } => {
+        ExprKind::Match { scrut, eqbind, motive, arms } => {
             if motive.is_some() {
                 return Err("an explicit motive is outside the fragment".into());
+            }
+            if eqbind.is_some() {
+                return Err("an equation binder is outside the fragment".into());
             }
             let ExprKind::Var(sname) = &scrut.kind else {
                 return Err("the match scrutinee is not a parameter".into());

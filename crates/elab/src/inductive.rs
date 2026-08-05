@@ -1578,8 +1578,20 @@ impl Elaborator {
         // case_l: binder `x : ⟦c_j⟧` over Γ_j, body at `M_j[inl x/z]`.
         let mut lcx = cx.clone();
         lcx.push("#scrut".into(), (*ctor_ty).clone(), ctor_lvl.clone());
-        let injected = |val: Term, inl: bool| {
-            let (lhs, rhs) = (spine.ctors[j].0.shift_local(d + 1), spine.tails[j].0.shift_local(d + 1));
+        // The injection's own summand annotations are scoped in the *original*
+        // `\u{393}`, so they carry the shift of whatever context the injection
+        // is being placed in — which is **not** always `d + 1`. `l_expected`
+        // lands in `lcx` (one binder past `cx`, so `d + 1`); `inner_motive`
+        // lands in `rcx, z` (two, so `d + 2`), which is what
+        // `embed(\u{2026}, 2)` on the same line says. Getting this wrong is
+        // invisible at a closed payload type *and* at \u{2264} 2 constructors,
+        // and it is axis 6 of docs/testing-generated-terms.md, whose
+        // 2026-08-04 round fixed the same shift in `wf_case_tree` /
+        // `idx_case_tree` / `indexed_case_tree` and missed this one: at a
+        // *non-dependent* motive `z` never occurs, so the bad annotations are
+        // substituted away before the kernel sees them.
+        let injected = |val: Term, inl: bool, sh: u32| {
+            let (lhs, rhs) = (spine.ctors[j].0.shift_local(sh), spine.tails[j].0.shift_local(sh));
             let (lhs, rhs) = (Rc::new(lhs), Rc::new(rhs));
             let (lhs_level, rhs_level) = (ctor_lvl.clone(), tail_lvl.clone());
             let val = Rc::new(val);
@@ -1589,8 +1601,10 @@ impl Elaborator {
                 Term::Inr { lhs_level, rhs_level, lhs, rhs, val }
             }
         };
-        let l_expected = motive
-            .apply_local(&embed(&cx.gamma, 1).extended(Rc::new(injected(Term::Var(LocalVar(0)), true))));
+        let l_expected = motive.apply_local(
+            &embed(&cx.gamma, 1)
+                .extended(Rc::new(injected(Term::Var(LocalVar(0)), true, d + 1))),
+        );
         let case_l = self.elab_arm(
             &lcx,
             arms[j],
@@ -1603,8 +1617,10 @@ impl Elaborator {
         // `y`, whose motive is `M_j` composed with `inr` and weakened past `y`.
         let mut rcx = cx.clone();
         rcx.push("#rest".into(), (*tail_ty).clone(), tail_lvl.clone());
-        let inner_motive = motive
-            .apply_local(&embed(&cx.gamma, 2).extended(Rc::new(injected(Term::Var(LocalVar(0)), false))));
+        let inner_motive = motive.apply_local(
+            &embed(&cx.gamma, 2)
+                .extended(Rc::new(injected(Term::Var(LocalVar(0)), false, d + 2))),
+        );
         let case_r = self.case_tree(
             &rcx,
             arms,

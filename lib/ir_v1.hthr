@@ -634,10 +634,12 @@ theorem k_bind_mono(ev1: Val -> Ir -> Res, ev2: Val -> Ir -> Res,
 // match does not hand it. Three of the four such places are `k_bind` at a
 // recursive call and are now one call to `k_bind_mono` above — the inversion
 // record doing what four hand-rolled convoy motives used to. The fourth,
-// `LoopIter`, scrutinizes through `k_iter` rather than `k_bind` and keeps the
-// remember idiom (the motive carries `r = ev1(…)` and the match is applied to
-// `refl`); giving it its own inversion record is the same move again and is
-// left for when a second consumer wants it.
+// `LoopIter`, scrutinizes through `k_iter` rather than `k_bind`, and it now
+// says so in one token: `match h : ev1(env, lbody)` binds
+// `h : ev1(env, lbody) = Out(ws)` in each arm and the elaborator writes the
+// convoy motive and the `refl` it is applied to
+// (docs/match-equation-split-design.md §3). Giving it its own inversion record
+// as well is the same move as `k_bind_inv` and is left for a second consumer.
 
 theorem step_mono(prog: Prog, ev1: Val -> Ir -> Res, ev2: Val -> Ir -> Res,
                   hyp: (e: Val) -> (i: Ir) -> (w: Val) -> ev1(e, i) = Out(w) -> ev2(e, i) = Out(w),
@@ -698,14 +700,13 @@ theorem step_mono(prog: Prog, ev1: Val -> Ir -> Res, ev2: Val -> Ir -> Res,
         // the loop's own re-entry: a sub-region, then the protocol, then a
         // tail call at the continue flag
         LoopIter(lbody) =>
-            match ev1(env, lbody) as λ r =>
-                r = ev1(env, lbody)
-                -> k_iter(ev1, lbody, r) = Out(vs)
+            match h : ev1(env, lbody) as λ r =>
+                k_iter(ev1, lbody, r) = Out(vs)
                 -> k_iter(ev2, lbody, ev2(env, lbody)) = Out(vs) {
-                Stuck => λ e q => absurd(q),
-                OutOfFuel => λ e q => absurd(q),
-                Out(ws) => λ e q =>
-                    j(sym(hyp(env, lbody, ws, sym(e))),
+                Stuck => λ q => absurd(q),
+                OutOfFuel => λ q => absurd(q),
+                Out(ws) => λ q =>
+                    j(sym(hyp(env, lbody, ws, h)),
                       λ y p => k_iter(ev2, lbody, y) = Out(vs),
                       match ws as λ y =>
                           k_iter_vals(ev1, lbody, y) = Out(vs)
@@ -727,7 +728,7 @@ theorem step_mono(prog: Prog, ev1: Val -> Ir -> Res, ev2: Val -> Ir -> Res,
                                       },
                               },
                       }(q)),
-            }(refl),
+            },
     }
 }
 

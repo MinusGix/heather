@@ -1248,6 +1248,15 @@ impl Elaborator {
                         self.goals.borrow_mut()[k].solution = Some(Rc::new(t));
                     }
                 }
+                // A `split` arm, consumed by the parser into an `Arm`
+                // (docs/match-equation-split-design.md §6); one that reaches a
+                // block's `ons` is a parse error, not an elaboration one.
+                OnTarget::Ctor { ctor, .. } => {
+                    return err(
+                        format!("internal: `on {ctor}(…)` reached the elaborator"),
+                        on.span,
+                    )
+                }
             }
         }
         let goals = self.goals.borrow();
@@ -1659,15 +1668,21 @@ impl Elaborator {
             // A quote against its `Code(g |- T)` type — checking-only, like
             // the kernel's `BoxTm` (docs/in-language-map-design.md §5).
             ExprKind::Quote(payload) => self.elab_quote(cx, payload, expected, e.span),
-            ExprKind::Match { motive: None, scrut, arms } => {
+            ExprKind::Match { motive: None, scrut, arms, eqbind } => {
                 // Stage-2 motive synthesis (issues/elab-stage2-metas.md): when
                 // the scrutinee is a local variable, abstract it out of the
                 // expected type so the motive is genuinely dependent; otherwise
                 // fall back to the non-dependent motive (expected under `z`).
                 let (scrut_t, scrut_ty, scrut_lvl) = self.elab_infer(cx, scrut)?;
                 let motive = self.synth_motive(cx, &scrut_t, &scrut_ty, &scrut_lvl, expected);
-                self.elab_match(
-                    cx, arms, scrut_t, &scrut_ty, &scrut_lvl, motive, lvl.clone(), e.span,
+                let Some(h) = eqbind else {
+                    return self.elab_match(
+                        cx, arms, scrut_t, &scrut_ty, &scrut_lvl, motive, lvl.clone(), e.span,
+                    );
+                };
+                self.elab_convoy(
+                    cx, h, arms, scrut_t, &scrut_ty, &scrut_lvl, motive, lvl, expected,
+                    e.span,
                 )
             }
             // `absurd(p)`: from an equation between distinct constructors,
@@ -2242,7 +2257,7 @@ impl Elaborator {
                     self.apply_implicit(cx, name, head, ty, lvl, args, &mask, expected, e.span)
                 }
             }
-            ExprKind::Match { motive: Some(m), scrut, arms } => {
+            ExprKind::Match { motive: Some(m), scrut, arms, eqbind } => {
                 let (scrut_t, scrut_ty, scrut_lvl) = self.elab_infer(cx, scrut)?;
                 // An indexed scrutinee's motive binds the index too
                 // (docs/inductive-indexed-lowering.md §6.1).
@@ -2299,6 +2314,17 @@ impl Elaborator {
                 let result = motive.apply_local(
                     &LocalSubst::id(&cx.gamma).extended(Rc::new(scrut_t.clone())),
                 );
+                // `match h : e as \u{3bb} z => M { … }`: the equation decorates the
+                // *user's* motive rather than replacing it, and the result type
+                // is unchanged — the convoy is type-transparent
+                // (docs/match-equation-split-design.md \u{a7}3.3).
+                if let Some(h) = eqbind {
+                    let t = self.elab_convoy(
+                        cx, h, arms, scrut_t, &scrut_ty, &scrut_lvl, motive, &mlvl, &result,
+                        e.span,
+                    )?;
+                    return Ok((t, result, mlvl));
+                }
                 let t = self.elab_match(
                     cx, arms, scrut_t, &scrut_ty, &scrut_lvl, motive, mlvl.clone(), e.span,
                 )?;
@@ -2390,6 +2416,125 @@ impl Elaborator {
             ),
             ExprKind::Splice(inner) => self.elab_splice(cx, inner, e.span),
         }
+    }
+
+    /// `match h : e { … }` — the convoy, written for the user
+    /// (docs/match-equation-split-design.md §3.3).
+    ///
+    /// Three mechanical steps over the *unconvoyed* elaboration, and nothing
+    /// below [`Self::elab_match`] learns that any of them happened:
+    ///
+    /// 1. the motive `M` over `Γ, z` becomes `M' = Π (e = z). M`, so every arm
+    ///    is checked at `Π fields. (e = C(fields)) -> M[C(fields)/z]`;
+    /// 2. each arm's *surface* body `b` becomes `λ h => b`, unannotated — the
+    ///    arm type supplies the domain, so no equation is written twice;
+    /// 3. the eliminator is applied to `refl : e = e`, which is exactly `M'`
+    ///    at `z := e` stripped back to `M[e/z]`.
+    ///
+    /// So the convoy is **type-transparent**: `result` is the type the
+    /// unconvoyed `match` would have had, in both modes. The direction is
+    /// `scrutinee = pattern` (§3.2): it is what the one live consumer wants,
+    /// and it is the one `refl` inhabits without a `sym`.
+    #[allow(clippy::too_many_arguments)]
+    fn elab_convoy(
+        &self,
+        cx: &Cx,
+        h: &str,
+        arms: &[Arm],
+        scrut_t: Term,
+        scrut_ty: &Type,
+        scrut_lvl: &Level,
+        motive: Type,
+        mlvl: &Level,
+        result: &Type,
+        span: Span,
+    ) -> R<Term> {
+        // §4: an indexed family's arms live at *different* indices, so `e = z`
+        // would relate two values at two types. Homogeneous `Id` cannot say
+        // that, and the thing that can is the family's inversion principle —
+        // a library device, not a syntax (issues/surface-existential.md).
+        if let Some(ind) = self
+            .forded_of_at(cx, scrut_ty)
+            .map(|(ind, _)| ind)
+            .or_else(|| self.indexed_of_at(cx, scrut_ty).map(|(ind, _)| ind))
+        {
+            return err(
+                format!(
+                    "the equation binding is not available on the indexed family \
+                     `{}`: an arm's index varies with its constructor, so \
+                     `e = pat` would relate two values at different types. Case \
+                     on the index first, or state the equation you want as an \
+                     inversion lemma",
+                    ind.name
+                ),
+                span,
+            );
+        }
+        // `e = z` over `Γ, z` — every component weakened past `z`.
+        let eq_under_z = Type::Id {
+            level: scrut_lvl.clone(),
+            ty: Rc::new(scrut_ty.shift_local(1)),
+            lhs: Rc::new(scrut_t.shift_local(1)),
+            rhs: Rc::new(Term::Var(LocalVar(0))),
+        };
+        let motive2 = Type::Pi {
+            dom_level: scrut_lvl.clone(),
+            cod_level: mlvl.clone(),
+            dom: Rc::new(eq_under_z),
+            // `M` is over `Γ, z`; the codomain is over `Γ, z, h`.
+            cod: Rc::new(motive.shift_local(1)),
+        };
+        let mlvl2 = Level::max(scrut_lvl.clone(), mlvl.clone());
+        let arms: Vec<Arm> = arms
+            .iter()
+            .map(|a| Arm {
+                ctor: a.ctor.clone(),
+                binders: a.binders.clone(),
+                body: Expr {
+                    kind: ExprKind::Lam {
+                        binders: vec![LamBinder {
+                            name: h.to_string(),
+                            ty: None,
+                            span: a.body.span,
+                        }],
+                        body: Box::new(a.body.clone()),
+                    },
+                    span: a.body.span,
+                },
+                span: a.span,
+            })
+            .collect();
+        let elim = self.elab_match(
+            cx,
+            &arms,
+            scrut_t.clone(),
+            scrut_ty,
+            scrut_lvl,
+            motive2,
+            mlvl2,
+            span,
+        )?;
+        let scrut_rc = Rc::new(scrut_t);
+        let ty_rc = Rc::new(scrut_ty.clone());
+        Ok(Term::App {
+            fun: Rc::new(elim),
+            dom_level: scrut_lvl.clone(),
+            cod_level: mlvl.clone(),
+            dom: Rc::new(Type::Id {
+                level: scrut_lvl.clone(),
+                ty: Rc::clone(&ty_rc),
+                lhs: Rc::clone(&scrut_rc),
+                rhs: Rc::clone(&scrut_rc),
+            }),
+            // The Π is non-dependent, so the codomain is the result weakened
+            // past the equation binder.
+            cod: Rc::new(result.shift_local(1)),
+            arg: Rc::new(Term::Refl {
+                level: scrut_lvl.clone(),
+                ty: ty_rc,
+                tm: scrut_rc,
+            }),
+        })
     }
 
     /// Elaborate a `match` given its scrutinee and its (already elaborated)
@@ -5058,7 +5203,7 @@ fn count_holes(decl: &Decl) -> u32 {
                 tyargs.iter().for_each(|t| ty(t, n));
                 fields.iter().for_each(|f| expr(&f.expr, n));
             }
-            ExprKind::Match { scrut, motive, arms } => {
+            ExprKind::Match { scrut, motive, arms, eqbind: _ } => {
                 expr(scrut, n);
                 if let Some(m) = motive {
                     expr(m, n);

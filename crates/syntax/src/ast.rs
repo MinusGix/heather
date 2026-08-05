@@ -217,6 +217,14 @@ pub enum OnTarget {
     Name(String),
     /// By statement: discharges *every* goal whose statement is `P`.
     Stmt(Ty),
+    /// `on Ctor(x, y) := e;` — a **`split` arm**, not a goal discharge
+    /// (docs/match-equation-split-design.md §5). Told apart from the two above
+    /// by one token: a discharge head is `?name` or `_`, an arm head is an
+    /// ordinary identifier, which was a parse error before this existed.
+    ///
+    /// Never reaches the elaborator: `split_result` consumes these into
+    /// [`Arm`]s, and an arm head in a block with no `split` is a parse error.
+    Ctor { ctor: String, binders: Vec<String> },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -452,12 +460,24 @@ pub enum ExprKind {
     /// statement later in the same block. Checking-only, like `refl`: a hole
     /// with no expected type has no statement to list.
     Hole(Option<String>),
-    /// `match scrut (as λ bind => motive)? { C(x, …) => body, … }` — one arm per
-    /// constructor of the scrutinee's type, in any order. On `Nat` the arms
-    /// are `Zero` and `Succ(k)` (or the low-level `Succ(k, ih)`); on a
+    /// `match (h :)? scrut (as λ bind => motive)? { C(x, …) => body, … }` — one
+    /// arm per constructor of the scrutinee's type, in any order. On `Nat` the
+    /// arms are `Zero` and `Succ(k)` (or the low-level `Succ(k, ih)`); on a
     /// declared inductive they are its constructors.
+    ///
+    /// Also the node a `split e; on C(x⃗) := b;` block desugars to — `split` is
+    /// a *statement-position spelling* of this expression and not a second
+    /// elimination mechanism, so the parser builds one of these and nothing
+    /// downstream can tell (docs/match-equation-split-design.md §6).
     Match {
         scrut: Box<Expr>,
+        /// `match h : e { … }` — the convoy, written by the elaborator: the
+        /// motive gains `Id(S, e, z) ->` and each arm gains a binder
+        /// `h : e = pat` (docs/match-equation-split-design.md §3). Direction is
+        /// **scrutinee = pattern**, which is the direction the one live
+        /// consumer wants (§3.2). Refused on an indexed family, where it would
+        /// be heterogeneous (§4).
+        eqbind: Option<String>,
         /// Explicit dependent motive, as a **lambda**: `as λ z => T`. A motive
         /// is a function from the scrutinee to a type, so with `Type<n>`
         /// writable it can simply *be* one, and the surface keeps a single

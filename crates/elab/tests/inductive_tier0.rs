@@ -438,3 +438,56 @@ fn a_parameter_at_a_dependent_type_is_not_captured_by_an_earlier_field() {
          theorem out(n: Nat, p: n = n): n = n { match Mk(3, p) as λ z => n = n { Mk(x, y) => y } }",
     );
 }
+
+/// The tier-0 case tree's **inner** injection annotations — axis 6 of
+/// `docs/testing-generated-terms.md`, crossed with axis 2, found 2026-08-05.
+///
+/// `case_tree` composes the motive with `inr` twice: once into `l_expected`,
+/// which lands one binder past `cx`, and once into `inner_motive`, which lands
+/// **two** (the `#rest` binder and the next level's `z`, which is what the
+/// `embed(…, 2)` on the same line says). Both used `shift_local(d + 1)`, so
+/// every `Γ`-variable inside an *inner* injection's summand annotations was
+/// one short. This is the same defect the 2026-08-04 round fixed in
+/// `wf_case_tree` / `idx_case_tree` / `indexed_case_tree`; the tier-0 emitter
+/// was missed because the control needs **three** things at once, and the
+/// third is new: three constructors (so there *is* an inner node), an open
+/// payload (so an annotation mentions an ambient variable at all), and a
+/// **dependent** motive — at a non-dependent one `z` never occurs, so the bad
+/// annotations are substituted away before the kernel ever sees them.
+///
+/// The symptom is `LevelMismatch`, never a wrong answer.
+#[test]
+fn an_inner_injections_annotations_are_scoped_two_binders_deep() {
+    elab(
+        "inductive Res3<A> { Stuck, OutOfFuel, Out(v: A) }
+         fn idr<A>(r: Res3<A>) -> Res3<A> { r }
+         theorem idr_id<A>(r: Res3<A>): idr(r) = r {
+             match r as λ z => idr(z) = z {
+                 Stuck => refl,
+                 OutOfFuel => refl,
+                 Out(v) => refl,
+             }
+         }",
+    );
+    // The controls, each of which passed *before* the fix, so the test above
+    // is the only one that means anything: two constructors, and a closed
+    // payload at three.
+    elab(
+        "inductive Two<A> { L, R(v: A) }
+         fn idt<A>(r: Two<A>) -> Two<A> { r }
+         theorem idt_id<A>(r: Two<A>): idt(r) = r {
+             match r as λ z => idt(z) = z { L => refl, R(v) => refl }
+         }",
+    );
+    elab(
+        "inductive Res3n { Stuck, OutOfFuel, Out(v: Nat) }
+         fn idn(r: Res3n) -> Res3n { r }
+         theorem idn_id(r: Res3n): idn(r) = r {
+             match r as λ z => idn(z) = z {
+                 Stuck => refl,
+                 OutOfFuel => refl,
+                 Out(v) => refl,
+             }
+         }",
+    );
+}
