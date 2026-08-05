@@ -27,6 +27,7 @@ use heather_kernel::typing;
 use heather_syntax::{Decl, DeclKind, Expr, ExprKind, SlotPath, Span, Stmt, Ty, TyKind};
 
 use crate::slots::{self, Ingredient, IngredientKind, Slot, SlotSpec};
+use crate::names::{qkey, NameKind};
 use crate::{err, Alias, Cx, ElabError, Elaborator, MetaDef, R};
 
 /// The meta-layer environment: the Ψ-extending binders currently in scope,
@@ -116,7 +117,7 @@ impl Elaborator {
     }
 
     fn elab_meta_decl_inner(&mut self, decl: &Decl) -> R<()> {
-        if self.globals.contains_key(&decl.name) || self.meta_defs.contains_key(&decl.name) {
+        if self.own_declares(&decl.name, &[NameKind::Global, NameKind::Meta]) {
             return err(format!("duplicate name `{}`", decl.name), decl.span);
         }
         if !decl.tyvars.is_empty() {
@@ -286,13 +287,15 @@ impl Elaborator {
         };
         let (slot, order) = match claimed {
             Some((spec, order)) => {
-                self.meta_slots.insert(spec.slot, decl.name.clone());
+                self.meta_slots
+                    .insert(spec.slot, (self.scope.module.clone(), decl.name.clone()));
                 (Some(spec.slot), order)
             }
             None => (None, Vec::new()),
         };
+        self.declare_name(&decl.name, NameKind::Meta, decl.span)?;
         self.meta_defs.insert(
-            decl.name.clone(),
+            qkey(&self.scope.module, &decl.name),
             MetaDef { term: Rc::new(term), stmt: Rc::new(stmt), slot, order },
         );
         Ok(())
@@ -326,10 +329,21 @@ impl Elaborator {
                 path.span,
             );
         };
-        if let Some(other) = self.meta_slots.get(&spec.slot) {
+        if let Some((m, other)) = self.meta_slots.get(&spec.slot) {
+            // One template per slot **across the program**: a slot is a
+            // property of the elaborator, not of a file, so an import can
+            // trigger this. The other template is named with its module
+            // exactly when that module is not this one — a cross-module
+            // conflict has to say where to look, and a local one would only
+            // be noisier for it (docs/modules-design.md §4).
+            let who = if *m == self.scope.module {
+                format!("`{other}`")
+            } else {
+                format!("`{other}`, in module `{m}`")
+            };
             return err(
                 format!(
-                    "`{}` is already elaborated by `{other}`: one slot takes one \
+                    "`{}` is already elaborated by {who}: one slot takes one \
                      template, so this is two templates for one site",
                     spec.path_str()
                 ),
@@ -661,10 +675,13 @@ impl Elaborator {
         args: &[(&'static str, Ingredient<'_>)],
         span: Span,
     ) -> R<Option<Term>> {
-        let Some(name) = self.meta_slots.get(&slot) else {
+        let Some((m, name)) = self.meta_slots.get(&slot) else {
             return Ok(None);
         };
-        let md = self.meta_defs.get(name).expect("a claimed slot has its template");
+        let md = self
+            .meta_defs
+            .get(&qkey(m, name))
+            .expect("a claimed slot has its template");
         let spec = slots::spec(slot);
         debug_assert_eq!(
             args.len(),

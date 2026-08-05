@@ -445,7 +445,7 @@ impl Elaborator {
         let Some((name, targs)) = crate::inductive::named_head(head) else {
             return Ok(None);
         };
-        let Some(ind) = self.inductives.get(name).cloned() else { return Ok(None) };
+        let Some(ind) = self.lookup_inductive(name).cloned() else { return Ok(None) };
         if ind.index.is_none() {
             return Ok(None);
         }
@@ -943,7 +943,7 @@ impl Elaborator {
         let n = ind.ctors.len();
         let mut ordered: Vec<Option<&Arm>> = vec![None; n];
         for a in arms {
-            let Some(i) = ind.ctors.iter().position(|c| c.name == a.ctor) else {
+            let Some(i) = crate::inductive::arm_ctor_index(ind, &a.ctor) else {
                 return err(
                     format!("`{}` is not a constructor of `{}`", a.ctor, ind.name),
                     a.span,

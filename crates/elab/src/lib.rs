@@ -48,6 +48,7 @@ use heather_syntax::{
 pub mod certgen;
 pub mod stats;
 mod code;
+mod names;
 mod forded;
 mod gendefs;
 mod indexed;
@@ -58,12 +59,21 @@ mod vec;
 mod wf;
 
 use inductive::Inductive;
+use names::{
+    miss_msg, qkey, resolve, split_qual, ImportSpec, NameIndex, NameKind, NameRes,
+    Scope, DEFAULT_MODULE,
+};
 use slots::{Ingredient, Slot};
 
 /// The stage-1 prelude: `sym`/`trans`/`cong_succ`, monomorphic at `Nat`.
 /// (The universe-polymorphic versions are layer-m `Λ ℓ⃗` territory — later
 /// stage; the Nat suite only ever congs by `Succ`.)
 pub const PRELUDE: &str = include_str!("prelude.hthr");
+
+/// The prelude's module name: an implicit import of every module
+/// (docs/modules-design.md §3.2). Public so a loader can skip resolving it to
+/// a file — there is no `prelude.hthr` on disk to find.
+pub const PRELUDE_MODULE: &str = names::PRELUDE_MODULE;
 
 #[derive(Debug)]
 pub enum ElabError {
@@ -382,11 +392,32 @@ pub struct Elaborator {
     /// in step with two cheap rebuilds rather than recomputed per lookup
     /// (unlike [`Self::goal_psi`], which conversion needs statements from).
     delta_psi: GlobalCtx,
+    /// The module being elaborated and what it can see
+    /// (docs/modules-design.md §4). Every table below keys `module::name`
+    /// ([`names::qkey`]); this is what turns a written name into that key.
+    scope: Scope,
+    /// Every module elaborated into this accumulator, with the scope it was
+    /// elaborated in. Its job today is existence: `import m;` requires that
+    /// `m` already landed here, which is what the CLI's topological walk
+    /// guarantees.
+    ///
+    /// **Known seam.** An inductive keeps its field types in *surface* form
+    /// and re-lowers them at each use (§2 of docs/inductive-tier0-lowering.md),
+    /// and that lowering resolves names in the **use site's** scope, not the
+    /// declaring module's. Two visible declarations of `List` therefore make an
+    /// imported `Cons`'s `tail: List<A>` field mean the wrong one. It is loud
+    /// rather than silent — nominal tags differ, so the use fails to
+    /// typecheck — but the honest fix is a resolution environment that travels
+    /// with stored syntax (or closing that syntax over its scope at
+    /// declaration time). Recorded for its own round.
+    module_scopes: HashMap<String, Scope>,
+    /// Which module declares what: the ambiguity oracle (`names.rs`).
+    names: NameIndex,
     globals: HashMap<String, GlobalInfo>,
-    /// Declared inductives by name, by nominal tag, and by constructor name.
-    /// Constructor names are unqualified and globally unique — there is no
-    /// path syntax yet, so a clash is a declaration error
-    /// (docs/inductive-tier0-lowering.md).
+    /// Declared inductives by qualified name, by nominal tag, and by
+    /// constructor name. Constructor names are per-module and qualified by
+    /// their *type* (`Option::None`), not globally unique
+    /// (docs/inductive-tier0-lowering.md, scoped by docs/modules-design.md §4).
     inductives: HashMap<String, Rc<Inductive>>,
     by_tag: HashMap<u32, Rc<Inductive>>,
     /// Route 2b's fingerprint anchor (`docs/inductive-fording-lowering.md`
@@ -440,7 +471,11 @@ pub struct Elaborator {
     /// not a template, which is the point at which "the name is the contract"
     /// was retired. One slot takes one template — a second claim is an error
     /// at its declaration, not a shadowing.
-    meta_slots: HashMap<Slot, String>,
+    /// Global across the program, deliberately: one template per slot, and a
+    /// second claim is an error at the join. The value is
+    /// `(module, template name)` so that the error can name both modules when
+    /// the collision arrives through an import (docs/modules-design.md §4).
+    meta_slots: HashMap<Slot, (String, String)>,
     /// The Ψ-extending binders of the `meta fn` currently elaborating (its
     /// `Ctx`/`TyCode` binders, plus letbox-bound code globals during quote
     /// assembly). The whnf/conv oracles append these to Ψ so meta-bound
@@ -517,6 +552,9 @@ impl Elaborator {
         Elaborator {
             psi: GlobalCtx::default(),
             delta_psi: GlobalCtx::default(),
+            scope: Scope::new(DEFAULT_MODULE),
+            module_scopes: HashMap::new(),
+            names: NameIndex::default(),
             globals: HashMap::new(),
             inductives: HashMap::new(),
             by_tag: HashMap::new(),
@@ -538,23 +576,206 @@ impl Elaborator {
 
     /// An elaborator with the stage-1 prelude already elaborated and
     /// kernel-checked.
+    ///
+    /// The degenerate module call (docs/modules-design.md §10.2): the prelude
+    /// is an ordinary module that happens to be elaborated first and to be
+    /// implicitly imported by every other one.
     pub fn with_prelude() -> R<Self> {
         let mut e = Self::new();
-        e.elab_source(PRELUDE)?;
+        e.elab_module_source(PRELUDE_MODULE, PRELUDE)?;
         Ok(e)
     }
 
     /// Parse and elaborate a source file, kernel-checking every declaration.
     pub fn elab_source(&mut self, src: &str) -> R<()> {
+        self.elab_module_source(DEFAULT_MODULE, src)
+    }
+
+    /// [`Self::elab_source`] into a named module. The elaborator does no file
+    /// IO: an `import m;` here requires that `m` has *already* been elaborated
+    /// into this same accumulator, which is exactly what the CLI's topological
+    /// walk guarantees (docs/modules-design.md §3.2).
+    pub fn elab_module_source(&mut self, module: &str, src: &str) -> R<()> {
         let file = parse_file(src)?;
+        self.enter_module(module, &file)?;
         for item in &file.items {
             match item {
                 Item::Decl(d) => self.elab_decl(d)?,
                 Item::Inductive(i) => self.elab_inductive(i)?,
+                Item::Import(_) => {}
             }
         }
         Ok(())
     }
+
+    /// Set the scope for a module about to be elaborated: its own name plus
+    /// its written imports, each checked for existence and for the one
+    /// import-time error the regime has (two lists claiming one name).
+    fn enter_module(&mut self, module: &str, file: &heather_syntax::File) -> R<()> {
+        // Re-entering a module is *not* an error here, and it is **additive**:
+        // a caller that feeds one accumulator two chunks of the same module
+        // (every test that calls `check_source` twice, and every REPL-shaped
+        // use) is doing what one file would do, so the second chunk keeps the
+        // first's imports and may add to them. Duplicate declarations already
+        // error one layer down; two distinct *files* claiming one module name
+        // is a loader concern, where the paths are known.
+        let mut scope =
+            self.module_scopes.get(module).cloned().unwrap_or_else(|| Scope::new(module));
+        let mut written: Vec<&str> = Vec::new();
+        for item in &file.items {
+            let Item::Import(imp) = item else { continue };
+            if imp.module == module {
+                return err(format!("a module cannot import itself (`{module}`)"), imp.span);
+            }
+            if imp.module != PRELUDE_MODULE && !self.module_scopes.contains_key(&imp.module) {
+                return err(
+                    format!(
+                        "unknown module `{}`: it is not in this run's import closure",
+                        imp.module
+                    ),
+                    imp.module_span,
+                );
+            }
+            // Twice *in this file* is the error; an import repeated across
+            // two chunks of one module is the same import.
+            if written.contains(&imp.module.as_str()) {
+                return err(format!("`{}` is imported twice", imp.module), imp.span);
+            }
+            written.push(&imp.module);
+            for (n, nspan) in &imp.listed {
+                if !self.names.declares(&imp.module, n) {
+                    return err(
+                        format!("`{}` declares no `{n}`", imp.module),
+                        *nspan,
+                    );
+                }
+                if let Some(other) = scope
+                    .imports
+                    .iter()
+                    .find(|i| i.module != imp.module && i.listed.iter().any(|l| l == n))
+                    .map(|i| i.module.clone())
+                {
+                    // Both were asked for by name; there is nothing left to
+                    // prefer, so this is the error the regime promises rather
+                    // than a silent precedence.
+                    return err(
+                        format!(
+                            "`{n}` is listed by two imports (`{other}` and `{}`): a listed \
+                             name is a standing choice, so only one import may claim it",
+                            imp.module
+                        ),
+                        *nspan,
+                    );
+                }
+            }
+            let listed: Vec<String> = imp.listed.iter().map(|(n, _)| n.clone()).collect();
+            match scope.imports.iter_mut().find(|i| i.module == imp.module) {
+                Some(existing) => existing.listed.extend(listed),
+                None => scope.imports.push(ImportSpec { module: imp.module.clone(), listed }),
+            }
+        }
+        self.module_scopes.insert(module.to_string(), scope.clone());
+        self.scope = scope;
+        Ok(())
+    }
+
+    // -- name resolution (docs/modules-design.md §4) -------------------------
+
+    /// Resolve a written name to the module that declares it, by the §4
+    /// regime. Every table lookup below goes through this.
+    fn resolve_name(&self, name: &str) -> NameRes {
+        resolve(&self.names, &self.scope, name, |m, ty, ctor| {
+            self.inductives
+                .get(&qkey(m, ty))
+                .is_some_and(|i| i.ctors.iter().any(|c| c.name == ctor))
+        })
+    }
+
+    /// The base half of a written name — `nat::sub` and `sub` both name `sub`.
+    fn base_name(name: &str) -> &str {
+        split_qual(name).map(|(_, b)| b).unwrap_or(name)
+    }
+
+    /// The qualified table key a written name resolves to, if it resolves.
+    fn key_of(&self, name: &str) -> Option<String> {
+        match self.resolve_name(name) {
+            NameRes::Found(m) => Some(qkey(&m, Self::base_name(name))),
+            _ => None,
+        }
+    }
+
+    fn lookup_global(&self, name: &str) -> Option<&GlobalInfo> {
+        self.globals.get(&self.key_of(name)?)
+    }
+
+    pub(crate) fn lookup_inductive(&self, name: &str) -> Option<&Rc<Inductive>> {
+        self.inductives.get(&self.key_of(name)?)
+    }
+
+    pub(crate) fn lookup_ctor(&self, name: &str) -> Option<(Rc<Inductive>, usize)> {
+        // `Option::None` resolves through the *type*, so the key is the
+        // constructor's own name in the type's module.
+        let key = self.key_of(name)?;
+        self.ctors.get(&key).map(|(i, k)| (Rc::clone(i), *k))
+    }
+
+    /// The error for a name that did not resolve. An ambiguous name must
+    /// never be reported as an unknown one — that is the whole point of the
+    /// regime — so every "unknown X" site routes its message through here and
+    /// gets overridden when ambiguity is the real reason.
+    fn name_miss(&self, name: &str, fallback: impl Into<String>, span: Span) -> ElabError {
+        let res = self.resolve_name(name);
+        let msg = miss_msg(&res, name, fallback.into())
+            .unwrap_or_else(|| format!("`{name}` cannot be used here"));
+        ElabError::Elab { msg, span }
+    }
+
+    /// Is `name` declared in the module being elaborated, as one of `kinds`?
+    /// The duplicate-declaration test: a *module* never declares one name
+    /// twice, while two modules may.
+    fn own_declares(&self, name: &str, kinds: &[NameKind]) -> bool {
+        self.names.declares_as(&self.scope.module, name, kinds)
+    }
+
+    /// The one collision the regime turns into an error at the *declaration*:
+    /// a local name that an import listed by name. (An unlisted collision is
+    /// fine — locals win.) Checked before anything is registered, since a
+    /// failed declaration must register nothing.
+    fn check_declarable(&self, name: &str, span: Span) -> R<()> {
+        if let Some(m) = self
+            .scope
+            .imports
+            .iter()
+            .find(|i| i.listed.iter().any(|l| l == name))
+            .map(|i| i.module.clone())
+        {
+            return err(
+                format!(
+                    "`{name}` is declared here and also listed by `import {m}::{{{name}}};` \
+                     — a listed name is the file asking for that one, so the two cannot \
+                     both stand: drop it from the import list and qualify (`{m}::{name}`)"
+                ),
+                span,
+            );
+        }
+        Ok(())
+    }
+
+    /// Record a name as declared by the module being elaborated. Called at
+    /// registration time — after the kernel gate — so that the index and the
+    /// tables land together.
+    pub(crate) fn add_name(&mut self, name: &str, kind: NameKind) {
+        self.names.insert(&self.scope.module, name, kind);
+    }
+
+    /// [`Self::check_declarable`] then [`Self::add_name`], for the sites that
+    /// register in one step.
+    fn declare_name(&mut self, name: &str, kind: NameKind, span: Span) -> R<()> {
+        self.check_declarable(name, span)?;
+        self.add_name(name, kind);
+        Ok(())
+    }
+
 
     /// Check a whole file, recovering per declaration: a failed declaration
     /// registers nothing (globals and Ψ are touched only after the kernel
@@ -568,15 +789,28 @@ impl Elaborator {
     /// A parse error is still wholesale, since there is no recovery point
     /// inside a half-parsed file.
     pub fn check_source(&mut self, src: &str) -> Vec<ElabError> {
+        self.check_module_source(DEFAULT_MODULE, src)
+    }
+
+    /// [`Self::check_source`] into a named module — what the CLI's loader
+    /// calls once per file of the import closure, in topological order
+    /// (docs/modules-design.md §3.2). A module whose imports are themselves
+    /// broken reports that and checks nothing: there is no recovery point
+    /// before the scope exists.
+    pub fn check_module_source(&mut self, module: &str, src: &str) -> Vec<ElabError> {
         let file = match parse_file(src) {
             Ok(f) => f,
             Err(e) => return vec![e.into()],
         };
+        if let Err(e) = self.enter_module(module, &file) {
+            return vec![e];
+        }
         let mut errs = Vec::new();
         for item in &file.items {
             let r = match item {
                 Item::Decl(d) => self.elab_decl(d),
                 Item::Inductive(i) => self.elab_inductive(i),
+                Item::Import(_) => Ok(()),
             };
             if let Err(e) = r {
                 errs.push(e);
@@ -612,9 +846,10 @@ impl Elaborator {
     }
 
     fn elab_decl_inner(&mut self, decl: &Decl) -> R<()> {
-        if self.globals.contains_key(&decl.name) {
+        if self.own_declares(&decl.name, &[NameKind::Global]) {
             return err(format!("duplicate name `{}`", decl.name), decl.span);
         }
+        self.check_declarable(&decl.name, decl.span)?;
         // Reserve the goal prefix *before* anything is elaborated: the
         // telescope and result type are elaborated first and their types end
         // up embedded in the emitted term, so they must live in the same
@@ -781,7 +1016,8 @@ impl Elaborator {
                 DeclKind::Theorem => None,
             },
         });
-        self.globals.insert(decl.name.clone(), GlobalInfo { abs, params });
+        self.globals.insert(qkey(&self.scope.module, &decl.name), GlobalInfo { abs, params });
+        self.add_name(&decl.name, NameKind::Global);
         self.refresh_delta_psi();
         Ok(())
     }
@@ -1434,8 +1670,8 @@ impl Elaborator {
             // (docs/surface-records.md §6).
             ExprKind::RecordLit { name, tyargs, fields } if tyargs.is_empty() => {
                 let args = self.record_lit_args(name, fields, e.span)?;
-                let Some(ind) = self.inductives.get(name).cloned() else {
-                    return err(format!("unknown type `{name}`"), e.span);
+                let Some(ind) = self.lookup_inductive(name).cloned() else {
+                    return Err(self.name_miss(name, format!("unknown type `{name}`"), e.span));
                 };
                 self.build_ctor_value(cx, &ind, 0, &args, expected, lvl, e.span)
             }
@@ -1566,7 +1802,7 @@ impl Elaborator {
         if self.shadowed(cx, name) {
             return Ok(None);
         }
-        let Some(ind) = self.inductives.get(name) else { return Ok(None) };
+        let Some(ind) = self.lookup_inductive(name) else { return Ok(None) };
         // A non-empty telescope (and an index) reach their own handlers inside
         // `elab_ty`, and those already diagnose arity against the declaration.
         // An *empty* telescope has no handler there — `try_valparam_ty`
@@ -1663,8 +1899,8 @@ impl Elaborator {
             // (docs/inductive-tier0-lowering.md §2).
             ExprKind::RecordLit { name, tyargs, fields } => {
                 let args = self.record_lit_args(name, fields, e.span)?;
-                let Some(ind) = self.inductives.get(name).cloned() else {
-                    return err(format!("unknown type `{name}`"), e.span);
+                let Some(ind) = self.lookup_inductive(name).cloned() else {
+                    return Err(self.name_miss(name, format!("unknown type `{name}`"), e.span));
                 };
                 if tyargs.is_empty() {
                     self.infer_ctor(cx, &ind, 0, &args, e.span)
@@ -2694,8 +2930,8 @@ impl Elaborator {
         fields: &[RecordLitField],
         span: Span,
     ) -> R<Vec<Expr>> {
-        let Some(ind) = self.inductives.get(name) else {
-            return err(format!("unknown type `{name}`"), span);
+        let Some(ind) = self.lookup_inductive(name) else {
+            return Err(self.name_miss(name, format!("unknown type `{name}`"), span));
         };
         if !ind.is_record {
             return err(
@@ -2767,7 +3003,7 @@ impl Elaborator {
     fn shadowed(&self, cx: &Cx, name: &str) -> bool {
         cx.names.iter().any(|n| n == name)
             || cx.aliases.iter().any(|a| a.name == *name)
-            || self.globals.contains_key(name)
+            || self.lookup_global(name).is_some()
             // The declaration's own name. It is not in `globals` until it is
             // checked, so without this a `fn map` could not recurse: its
             // self-call took the built-in vector-`map` path instead
@@ -2997,7 +3233,7 @@ impl Elaborator {
 
     /// The parameters of a callable global, for defaulting goal names.
     fn params_of(&self, name: &str) -> Rc<Vec<ParamMeta>> {
-        match self.globals.get(name) {
+        match self.lookup_global(name) {
             Some(GlobalInfo { params, .. }) => Rc::clone(params),
             None => Rc::new(Vec::new()),
         }
@@ -4089,7 +4325,7 @@ impl Elaborator {
                 span,
             );
         }
-        match self.globals.get(name) {
+        match self.lookup_global(name) {
             Some(GlobalInfo { abs, .. }) => {
                 let len = self.psi.bindings.len() as u32;
                 // The goals sit innermost, so a committed binding is that much
@@ -4124,7 +4360,10 @@ impl Elaborator {
                 let ty = ty.apply_local(&subst);
                 Ok((Term::GlobalTm { var, subst }, ty, level.clone()))
             }
-            None => err(format!("unbound name `{name}`"), span),
+            // The last stop for every written name, so this is where an
+            // ambiguity has to surface as an ambiguity rather than as an
+            // absence (docs/modules-design.md §4).
+            None => Err(self.name_miss(name, format!("unbound name `{name}`"), span)),
         }
     }
 

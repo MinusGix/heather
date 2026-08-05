@@ -32,6 +32,11 @@
 // re-entry form; builders never emit it (evaluating it directly is defined,
 // it just re-enters the loop protocol).
 
+// The Nat kit — `add`, `sub`, `leb`/`Le` and the order lemmas — is `lib/std/nat`
+// now (docs/modules-design.md §7). It was declared here, verbatim, until
+// modules existed; `import nat;` puts all of it in scope unqualified.
+import nat;
+
 // ---------------------------------------------------------------------------
 // Values: untyped constructor trees (doc §4). One inductive doubles as the
 // value form and the value-list form: a VCon's fields, an environment, and
@@ -317,10 +322,6 @@ fn add_prog() -> Prog { PFun(add_body(), PNil) }
 // longer needs a separate file: see the theorems' comment.
 fn id_prog() -> Prog { PFun(Ret(RCons(0, RNil)), PNil) }
 
-// the spec function the IR is measured against
-fn add(a: Nat, b: Nat) -> Nat { match b { Zero => a, Succ(k) => Succ(add(a, k)) } }
-
-
 // ===========================================================================
 // The fuel interface (doc §6). Continuation helpers first: each names one of
 // `step`'s intermediate scrutinees as a function of the value being
@@ -406,51 +407,12 @@ fn k_iter(ev: Val -> Ir -> Res, body: Ir, r: Res) -> Res {
 }
 
 
-// ---------------------------------------------------------------------------
-// `<=` on Nat, so `fuel_monotone` can be stated in doc §6's verbatim shape —
-// and since issues/comparison-operators.md, in doc §6's verbatim *spelling*
-// too: `<=` is a surface operator whose desugaring is the `Le` below.
-// There is no order on Nat in the prelude and no `exists`; `<=` is *decided*
-// here rather than declared as an indexed family (the surface has no way to
-// declare one), and `Le(n, m)` is the equation `leb(n)(m) = True`. Its two
-// absurd cases are then ordinary constructor equations, which `absurd`
-// already refutes — no `Empty` and no large elimination are needed.
-
-inductive Bool { False, True }
-
-fn leb(n: Nat) -> Nat -> Bool {
-    match n {
-        Zero => λ (m: Nat) => True,
-        Succ(k) => λ (m: Nat) => match m { Zero => False, Succ(l) => leb(k)(l) },
-    }
-}
-
-// THE ORDER HAS A NAME, AND THE NAME HAS A NOTATION. A type is an ordinary
-// expression (docs/types-as-expressions.md), so `Le` is an ordinary `fn`
-// returning `Type` — the same device `Refines` uses below — and `n <= m` is
-// surface notation *for a call to it* (issues/comparison-operators.md): one
-// lexer token and one rung of the parser's comparison level, no
-// context-sensitivity, no second meaning. It unfolds by δ to the reflection
-// equation, so a proof of either shape is a proof of the other and the kit's
-// bodies never mention the unfolding. The boolean is an implementation
-// detail of the proposition rather than the way every ordering hypothesis is
-// spelled; `leb` stays callable by name where a Bool is what is wanted.
-//
-// Below, `<=` is used where the order is being *stated* — hypotheses,
-// results, the shapes a reader is meant to recognize from doc §6 — and the
-// explicit `Le` is kept inside explicit motives, where the surrounding
-// `match … as λ z => …` is already dense enough that an infix operator reads
-// as one more thing to disentangle rather than one fewer.
-fn Le(n: Nat, m: Nat) -> Type { leb(n)(m) = True }
-
-// truncated subtraction, curried for the same reason `lookup` is: both
-// arguments descend together
-fn sub(m: Nat) -> Nat -> Nat {
-    match m {
-        Zero => λ (n: Nat) => Zero,
-        Succ(m2) => λ (n: Nat) => match n { Zero => Succ(m2), Succ(n2) => sub(m2)(n2) },
-    }
-}
+// The order on Nat — `Bool`, `leb`, `Le`, `sub` — is `nat`'s
+// (docs/modules-design.md §7). `<=` is surface notation for a call to `Le`
+// (issues/comparison-operators.md), so the spellings below are unchanged by
+// the move: `<=` where the order is being *stated*, and the explicit `Le`
+// inside explicit motives, where an infix operator would read as one more
+// thing to disentangle rather than one fewer.
 
 
 // ---------------------------------------------------------------------------
@@ -801,64 +763,9 @@ theorem eval_mono_plus(prog: Prog, n: Nat, env: Val, ir: Ir, vs: Val,
                 eval_mono_plus(prog, n, env, ir, vs, h, k2)),
     }
 }
-// the small arithmetic kit `le_add` needs. `add` recurses on its SECOND
-// argument, so these are the two lemmas that move a `Succ`/a zero across.
-theorem cong_nat(f: Nat -> Nat, {a: Nat}, {b: Nat}, p: a = b): f(a) = f(b) {
-    j(p, λ y q => f(a) = f(y), refl)
-}
-
-theorem add_left_zero(x: Nat): add(0, x) = x {
-    match x { Zero => refl, Succ(k) => cong_succ(add_left_zero(k)) }
-}
-
-theorem add_succ_left(a: Nat, b: Nat): add(Succ(a), b) = Succ(add(a, b)) {
-    match b { Zero => refl, Succ(k) => cong_succ(add_succ_left(a, k)) }
-}
-
-theorem sub_zero(m: Nat): sub(m)(0) = m {
-    match m { Zero => refl, Succ(m2) => refl }
-}
-
-// `Le(n, m)` gives the difference: the bridge from the `<=` shape to the
-// `+ k` shape. Induction on `n` with `m` generalized — the second explicit
-// motive.
-theorem le_add(n: Nat): (m: Nat) -> n <= m -> add(n, sub(m)(n)) = m {
-    match n as λ z => (m: Nat) -> Le(z, m) -> add(z, sub(m)(z)) = m {
-        Zero => λ m hle =>
-            trans(cong_nat(λ (x: Nat) => add(0, x), sub_zero(m)), add_left_zero(m)),
-        Succ(n2, ih) => λ m hle =>
-            match m as λ y => Le(Succ(n2), y) -> add(Succ(n2), sub(y)(Succ(n2))) = y {
-                Zero => λ bad => absurd(bad),
-                Succ(m2) => λ good =>
-                    trans(add_succ_left(n2, sub(m2)(n2)), cong_succ(ih(m2, good))),
-            }(hle),
-    }
-}
-
-// the rest of the order kit, wanted by `eval_functional` below: two runs of
-// the interpreter at different fuels are compared by raising both to `n + m`,
-// which is above each of them.
-theorem le_refl(n: Nat): n <= n { match n { Zero => refl, Succ(k) => le_refl(k) } }
-
-theorem le_succ_r(n: Nat): (m: Nat) -> n <= m -> n <= Succ(m) {
-    match n as λ z => (m: Nat) -> Le(z, m) -> Le(z, Succ(m)) {
-        Zero => λ m h => refl,
-        Succ(k, ih) => λ m h =>
-            match m as λ y => Le(Succ(k), y) -> Le(Succ(k), Succ(y)) {
-                Zero => λ bad => absurd(bad),
-                Succ(m2) => λ good => ih(m2, good),
-            }(h),
-    }
-}
-
-theorem le_add_l(n: Nat, m: Nat): n <= add(n, m) {
-    match m { Zero => le_refl(n), Succ(m2) => le_succ_r(n)(add(n, m2), le_add_l(n, m2)) }
-}
-
-// `add` recurses on its second argument, so this one is the definitional side
-theorem le_add_r(n: Nat, m: Nat): m <= add(n, m) {
-    match m { Zero => refl, Succ(m2) => le_add_r(n, m2) }
-}
+// The arithmetic and order kit `le_add`, `le_refl`, `le_succ_r`, `le_add_l`
+// and `le_add_r` — with `cong_nat`, `add_left_zero`, `add_succ_left` and
+// `sub_zero` under them — is `nat`'s (docs/modules-design.md §7).
 
 // doc §6, verbatim shape: `simulate(p, f, args, n) == Out(vs) -> n <= m ->
 // simulate(p, f, args, m) == Out(vs)`, with `simulate` spelled as the landed

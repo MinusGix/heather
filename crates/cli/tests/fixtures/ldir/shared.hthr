@@ -1,0 +1,1 @@
+fn shared_five() -> Nat { 5 }

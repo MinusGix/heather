@@ -72,6 +72,19 @@
 use heather_elab::Elaborator;
 
 const LIB: &str = include_str!("../../../lib/ir_v1.hthr");
+/// `lib/ir_v1.hthr`'s one import: the Nat kit it used to declare itself
+/// (docs/modules-design.md §7). The test elaborates the **closure**, in the
+/// order the CLI's loader would — dependencies first — into one accumulator.
+const NAT: &str = include_str!("../../../lib/std/nat.hthr");
+
+/// A prelude'd elaborator with `nat` already in it, positioned in module
+/// `ir_v1`: every snippet below is therefore an *addition to the library
+/// file*, which is what a control on the library has to be.
+fn ir_v1_elaborator() -> Elaborator {
+    let mut e = Elaborator::with_prelude().expect("prelude");
+    e.elab_module_source("nat", NAT).unwrap_or_else(|err| panic!("{}", err.render(NAT)));
+    e
+}
 
 /// Everything up to the first theorem. The library keeps every `fn` and
 /// `inductive` ahead of its theorem section for exactly this reason, so this
@@ -85,7 +98,7 @@ fn decls() -> &'static str {
 /// mis-typed proof argument dies as an elaboration error. Either way the
 /// point of a negative control is that the claim does **not** land.
 fn refuted(e: &mut Elaborator, src: &str, what: &str) {
-    match e.elab_source(src) {
+    match e.elab_module_source("ir_v1", src) {
         Err(_) => {}
         Ok(()) => panic!("{what} elaborated, but it is false"),
     }
@@ -94,14 +107,14 @@ fn refuted(e: &mut Elaborator, src: &str, what: &str) {
 #[test]
 fn declarations_check_and_wrong_claims_are_refuted() {
     let src = decls();
-    let mut e = Elaborator::with_prelude().expect("prelude");
-    e.elab_source(src)
+    let mut e = ir_v1_elaborator();
+    e.elab_module_source("ir_v1", src)
         .unwrap_or_else(|err| panic!("{}", err.render(src)));
 
     // 1. Zero fuel is OutOfFuel; claiming it produced a value must fail. One
     // eval unfolding, so the control costs seconds, not minutes.
     let wrong = "theorem wrong(): eval(0, PNil)(VNil, Ret(RNil)) = Out(VNil) { refl }";
-    match e.elab_source(wrong) {
+    match e.elab_module_source("ir_v1", wrong) {
         Err(err) => {
             let msg = format!("{err}");
             assert!(msg.contains("NotConvertible"), "unexpected refutation: {msg}");
@@ -158,8 +171,8 @@ fn declarations_check_and_wrong_claims_are_refuted() {
 /// parameter would silently make it a vacuous one.
 #[test]
 fn the_full_ir_library_checks() {
-    let mut e = Elaborator::with_prelude().expect("prelude");
-    e.elab_source(LIB)
+    let mut e = ir_v1_elaborator();
+    e.elab_module_source("ir_v1", LIB)
         .unwrap_or_else(|err| panic!("{}", err.render(LIB)));
 
     // The *wrong* answer at the right program and the right witness: refused.

@@ -66,8 +66,23 @@ pub fn parse_file(src: &str) -> Result<File, ParseError> {
     let toks = lex(src).map_err(|e| ParseError { msg: e.msg, span: e.span })?;
     let mut p = Parser { toks, pos: 0, no_record_lit: false, no_eq: false, motive_body: false };
     let mut items = Vec::new();
+    // Imports come first, all of them (docs/modules-design.md §3.1). The
+    // position rule is enforced here rather than in the elaborator because it
+    // is what lets a tool read a file's import DAG without parsing bodies.
+    let mut seen_decl = false;
     while !p.at_eof() {
-        items.push(p.item()?);
+        let item = p.item()?;
+        match &item {
+            Item::Import(i) if seen_decl => {
+                return Err(ParseError {
+                    msg: "`import` must come before the first declaration".into(),
+                    span: i.span,
+                })
+            }
+            Item::Import(_) => {}
+            _ => seen_decl = true,
+        }
+        items.push(item);
     }
     Ok(File { items })
 }
@@ -253,6 +268,29 @@ impl Parser {
     /// Accept an identifier token; keywords are contextual, so any ident
     /// works where a name is demanded.
     fn ident(&mut self, what: &str) -> R<(String, Span)> {
+        let (s, sp) = self.qual_ident(what)?;
+        // A qualified name is a *reference*; nothing is ever declared or bound
+        // under one (docs/modules-design.md §4). Caught here so the message
+        // names the rule rather than surfacing as an elaborator mystery three
+        // phases later.
+        if s.contains("::") {
+            return Err(ParseError {
+                msg: format!(
+                    "`{s}` is a qualified name, which can only refer to something \
+                     declared elsewhere — it cannot be {what}"
+                ),
+                span: sp,
+            });
+        }
+        Ok((s, sp))
+    }
+
+    /// [`Self::ident`] at a **reference** position, where `m::n` is a name:
+    /// a module-qualified global (`nat::le_add`) or a type-qualified
+    /// constructor (`Option::None`). Which one it is needs the name tables,
+    /// so the parser keeps the two halves in one string and the elaborator
+    /// splits it (docs/modules-design.md §4).
+    fn qual_ident(&mut self, what: &str) -> R<(String, Span)> {
         match self.peek() {
             TokKind::Ident(s) => {
                 let s = s.clone();
@@ -314,6 +352,13 @@ impl Parser {
     // -- declarations -------------------------------------------------------
 
     fn item(&mut self) -> R<Item> {
+        // `import` is contextual like every other keyword here: a declaration
+        // named `import` is impossible anyway (`import` would have to be
+        // followed by `fn`/`theorem`), and the `;`/`::` shape below is what a
+        // real import always has.
+        if self.at_kw("import") {
+            return Ok(Item::Import(self.import()?));
+        }
         if self.at_kw("inductive") {
             return Ok(Item::Inductive(self.inductive()?));
         }
@@ -321,6 +366,48 @@ impl Parser {
             return Ok(Item::Inductive(self.record()?));
         }
         Ok(Item::Decl(self.decl()?))
+    }
+
+    /// `import nat;` or `import option::{Option, map};`
+    /// (docs/modules-design.md §3.1). Single-segment module names only: there
+    /// is no `std::nat` in v1, and no glob form — plain `import m;` already
+    /// brings all of `m` into scope unqualified, so a glob would be a second
+    /// spelling of it.
+    fn import(&mut self) -> R<ImportItem> {
+        let start = self.bump().span; // `import`
+        let (module, module_span) = self.qual_ident("module name after `import`")?;
+        if module.contains("::") {
+            return Err(ParseError {
+                msg: format!(
+                    "`import {module};` imports nothing: a single name is written as a \
+                     list, `import {}::{{{}}};`, and module names have one segment",
+                    module.split("::").next().unwrap_or(""),
+                    module.split("::").nth(1).unwrap_or("")
+                ),
+                span: module_span,
+            });
+        }
+        let mut listed = Vec::new();
+        if matches!(self.peek(), TokKind::ColonColon) {
+            self.bump();
+            self.expect(&TokKind::LBrace, "`{` (an import list is `m::{a, b}`)")?;
+            while !matches!(self.peek(), TokKind::RBrace) {
+                if matches!(self.peek(), TokKind::Star) {
+                    return self.err(
+                        "there is no glob import: `import m;` already brings all of \
+                         `m` into scope unqualified (docs/modules-design.md §3.1)",
+                    );
+                }
+                listed.push(self.ident("a name in the import list")?);
+                if !matches!(self.peek(), TokKind::Comma) {
+                    break;
+                }
+                self.bump();
+            }
+            self.expect(&TokKind::RBrace, "`}` to close the import list")?;
+        }
+        let end = self.expect(&TokKind::Semi, "`;` to end the import")?;
+        Ok(ImportItem { module, module_span, listed, span: start.join(end) })
     }
 
     /// `record D<p, …>(v: T, …) { f: T, … }` — desugared here into the
@@ -938,7 +1025,7 @@ impl Parser {
             && matches!(self.toks.get(self.pos + 1).map(|t| &t.kind), Some(TokKind::Lt))
         {
             let save = self.pos;
-            let (name, start) = self.ident("type name")?;
+            let (name, start) = self.qual_ident("type name")?;
             self.bump(); // `<`
             let mut args = Vec::new();
             loop {
@@ -1324,7 +1411,7 @@ impl Parser {
         // nothing to suppress (docs/surface-function-types.md §1.3).
         if matches!(self.peek(), TokKind::At) {
             let at = self.bump().span;
-            let (name, nsp) = self.ident("call head after `@`")?;
+            let (name, nsp) = self.qual_ident("call head after `@`")?;
             // `@f<T, …>(…)` — the two knobs compose: `<…>` writes the type
             // arguments, `@` makes the *value* implicits positional
             // (issues/at-and-type-arguments.md). Not speculative here, unlike
@@ -1549,7 +1636,7 @@ impl Parser {
         // type, and the grammar does not.
         let mut arms: Vec<Arm> = Vec::new();
         while !matches!(self.peek(), TokKind::RBrace) {
-            let (ctor, cspan) = self.ident("constructor name in a `match` arm")?;
+            let (ctor, cspan) = self.qual_ident("constructor name in a `match` arm")?;
             let mut binders = Vec::new();
             if matches!(self.peek(), TokKind::LParen) {
                 self.bump();

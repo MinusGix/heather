@@ -196,6 +196,14 @@ The spread is the point of the noise warning above, and it is also the
 argument for the slope being the headline: the times moved by up to 1.5×
 between those runs, the exponents by ≤0.25.
 
+Since modules landed (docs/modules-design.md §7), `corpus/check-file` times
+an **import closure** rather than a file: `lib/ir_v1.hthr` imports
+`lib/std/nat.hthr`, and what `heather check lib/ir_v1.hthr` makes a user wait
+for is both. The x-axis stays the root's bytes — the label names the root —
+so the two `ir_v1` cases legitimately changed *shape*, not merely time, on
+2026-08-05, and their baseline rows have to be re-recorded rather than
+compared across that boundary.
+
 No exponent is claimed for the corpus: the x-axis is source bytes across
 unrelated files, and `lib/ir_v1.hthr` is not "a bigger `lib/vec_code.hthr`" —
 it is a file of deep proofs whose cost is conversion, not size. The printed

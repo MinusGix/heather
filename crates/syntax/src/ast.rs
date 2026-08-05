@@ -23,6 +23,23 @@ pub struct File {
 pub enum Item {
     Decl(Decl),
     Inductive(InductiveDecl),
+    /// `import nat;` / `import option::{Option, map};`
+    /// (docs/modules-design.md §3.1). Allowed only before the first
+    /// declaration, so the import DAG is readable without elaborating
+    /// anything.
+    Import(ImportItem),
+}
+
+/// One `import` item. The listed names are a *standing disambiguation*, not a
+/// different mode: `import m::{…}` imports all of `m` exactly as `import m;`
+/// does, and additionally says which `m` the listed names mean when something
+/// else in scope declares them too (docs/modules-design.md §4).
+#[derive(Debug, Clone)]
+pub struct ImportItem {
+    pub module: String,
+    pub module_span: Span,
+    pub listed: Vec<(String, Span)>,
+    pub span: Span,
 }
 
 impl Item {
@@ -32,6 +49,7 @@ impl Item {
         match self {
             Item::Decl(d) => d,
             Item::Inductive(i) => panic!("expected a declaration, found `inductive {}`", i.name),
+            Item::Import(i) => panic!("expected a declaration, found `import {}`", i.module),
         }
     }
 }

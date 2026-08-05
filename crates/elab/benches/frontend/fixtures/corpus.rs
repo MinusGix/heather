@@ -12,10 +12,19 @@ use heather_elab::Elaborator;
 
 use crate::harness::{Case, Family};
 
-use super::{fresh_runner, validate};
+use super::{fresh_closure_runner, validate_closure};
 
 const VEC_CODE: &str = include_str!("../../../../../lib/vec_code.hthr");
 const IR_V1: &str = include_str!("../../../../../lib/ir_v1.hthr");
+/// `lib/ir_v1.hthr`'s one import (docs/modules-design.md §7). The corpus
+/// times the **closure**, because that is what `heather check lib/ir_v1.hthr`
+/// now does and therefore what a user waits for.
+const NAT: &str = include_str!("../../../../../lib/std/nat.hthr");
+
+/// The closure of `lib/ir_v1.hthr`, in loader order: dependencies first.
+fn ir_v1_closure(root: &str) -> Vec<(String, String)> {
+    vec![("nat".to_string(), NAT.to_string()), ("ir_v1".to_string(), root.to_string())]
+}
 
 /// Everything up to the first theorem — every datatype, helper and
 /// interpreter in the file and none of its proofs. The library keeps its
@@ -89,9 +98,16 @@ fn check_file() -> Family {
                 continue;
             }
         } else {
-            validate(label, src);
+            validate_closure(label, &[("vec_code".to_string(), src.to_string())]);
         }
-        let (run, cell) = fresh_runner(src.to_string());
+        // The `ir_v1` cases are an import **closure** now; `vec_code.hthr`
+        // is one whole file and is a one-module closure, so both go through
+        // the same runner and the corpus keeps timing what the CLI does.
+        let (run, cell) = fresh_closure_runner(if heavy {
+            ir_v1_closure(src)
+        } else {
+            vec![("vec_code".to_string(), src.to_string())]
+        });
         let mut case = Case::named(label, src.len() as u64, 0, run)
             .with_phases(cell)
             .with_budget(budget_ns);

@@ -1,0 +1,101 @@
+// `nat` — arithmetic and the decided order on `Nat`
+// (docs/modules-design.md §7). Every declaration here was local to
+// `lib/ir_v1.hthr` until modules existed; the text is that text, moved.
+//
+// `Nat` itself is a kernel type and needs no declaration. What needs one is
+// everything *about* it: addition (the spec function the IR is measured
+// against), truncated subtraction, and the order — which is **decided**
+// rather than declared, since the surface has no way to declare an indexed
+// family and `Le(n, m)` as an equation makes its two absurd cases ordinary
+// constructor equations that `absurd` already refutes.
+//
+// `Bool` lives here for the same reason: it exists so `leb` can be written.
+// It is a two-constructor tier-0 declaration and moves out the day a `bool`
+// module has a second thing to say.
+
+// ---------------------------------------------------------------------------
+// Addition and its two moving lemmas. `add` recurses on its SECOND argument,
+// so the lemmas that matter are the ones that move a `Succ` — and a zero —
+// across from the *left*.
+
+fn add(a: Nat, b: Nat) -> Nat { match b { Zero => a, Succ(k) => Succ(add(a, k)) } }
+
+theorem cong_nat(f: Nat -> Nat, {a: Nat}, {b: Nat}, p: a = b): f(a) = f(b) {
+    j(p, λ y q => f(a) = f(y), refl)
+}
+
+theorem add_left_zero(x: Nat): add(0, x) = x {
+    match x { Zero => refl, Succ(k) => cong_succ(add_left_zero(k)) }
+}
+
+theorem add_succ_left(a: Nat, b: Nat): add(Succ(a), b) = Succ(add(a, b)) {
+    match b { Zero => refl, Succ(k) => cong_succ(add_succ_left(a, k)) }
+}
+
+// ---------------------------------------------------------------------------
+// The order. `<=` is surface notation for a call to `Le`
+// (issues/comparison-operators.md), which unfolds by δ to the reflection
+// equation `leb(n)(m) = True` — so a proof of either shape is a proof of the
+// other, and the kit's bodies never mention the unfolding.
+
+inductive Bool { False, True }
+
+fn leb(n: Nat) -> Nat -> Bool {
+    match n {
+        Zero => λ (m: Nat) => True,
+        Succ(k) => λ (m: Nat) => match m { Zero => False, Succ(l) => leb(k)(l) },
+    }
+}
+
+fn Le(n: Nat, m: Nat) -> Type { leb(n)(m) = True }
+
+// truncated subtraction, curried because both arguments descend together
+fn sub(m: Nat) -> Nat -> Nat {
+    match m {
+        Zero => λ (n: Nat) => Zero,
+        Succ(m2) => λ (n: Nat) => match n { Zero => Succ(m2), Succ(n2) => sub(m2)(n2) },
+    }
+}
+
+theorem sub_zero(m: Nat): sub(m)(0) = m {
+    match m { Zero => refl, Succ(m2) => refl }
+}
+
+// `Le(n, m)` gives the difference: the bridge from the `<=` shape to the
+// `+ k` shape. Induction on `n` with `m` generalized.
+theorem le_add(n: Nat): (m: Nat) -> n <= m -> add(n, sub(m)(n)) = m {
+    match n as λ z => (m: Nat) -> Le(z, m) -> add(z, sub(m)(z)) = m {
+        Zero => λ m hle =>
+            trans(cong_nat(λ (x: Nat) => add(0, x), sub_zero(m)), add_left_zero(m)),
+        Succ(n2, ih) => λ m hle =>
+            match m as λ y => Le(Succ(n2), y) -> add(Succ(n2), sub(y)(Succ(n2))) = y {
+                Zero => λ bad => absurd(bad),
+                Succ(m2) => λ good =>
+                    trans(add_succ_left(n2, sub(m2)(n2)), cong_succ(ih(m2, good))),
+            }(hle),
+    }
+}
+
+// The rest of the order kit: two values compared by raising both to `n + m`,
+// which is above each of them.
+theorem le_refl(n: Nat): n <= n { match n { Zero => refl, Succ(k) => le_refl(k) } }
+
+theorem le_succ_r(n: Nat): (m: Nat) -> n <= m -> n <= Succ(m) {
+    match n as λ z => (m: Nat) -> Le(z, m) -> Le(z, Succ(m)) {
+        Zero => λ m h => refl,
+        Succ(k, ih) => λ m h =>
+            match m as λ y => Le(Succ(k), y) -> Le(Succ(k), Succ(y)) {
+                Zero => λ bad => absurd(bad),
+                Succ(m2) => λ good => ih(m2, good),
+            }(h),
+    }
+}
+
+theorem le_add_l(n: Nat, m: Nat): n <= add(n, m) {
+    match m { Zero => le_refl(n), Succ(m2) => le_succ_r(n)(add(n, m2), le_add_l(n, m2)) }
+}
+
+// `add` recurses on its second argument, so this one is the definitional side
+theorem le_add_r(n: Nat, m: Nat): m <= add(n, m) {
+    match m { Zero => refl, Succ(m2) => le_add_r(n, m2) }
+}

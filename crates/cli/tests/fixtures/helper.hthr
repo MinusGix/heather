@@ -1,0 +1,3 @@
+// An imported module beside its importer: resolution starts in the importing
+// file's own directory (docs/modules-design.md §3.2).
+fn triple(n: Nat) -> Nat { Succ(Succ(Succ(n))) }

@@ -3,10 +3,11 @@
 //! Both ways are real user latency, and which one a family uses is a
 //! statement about what it measures:
 //!
-//! - [`fresh_runner`] builds a **new prelude'd elaborator per run**, which is
-//!   exactly what `heather check <file>` does per file
-//!   (`crates/cli/src/main.rs`). The corpus uses it, because the corpus
-//!   number is meant to be the number a user waits for.
+//! - [`fresh_closure_runner`] builds a **new prelude'd elaborator per run**
+//!   and feeds it a whole import closure, which is exactly what
+//!   `heather check <file>` does per root file (`crates/cli/src/main.rs`).
+//!   The corpus uses it, because the corpus number is meant to be the number
+//!   a user waits for. A one-file corpus entry is a one-module closure.
 //! - [`cloned_runner`] clones a prelude'd elaborator instead. Measured
 //!   2026-08-04: building the prelude is ~100 µs, cloning one is ~104 ns —
 //!   a thousandfold, and both numbers are in the report (`corpus/prelude`
@@ -87,20 +88,50 @@ fn measure_phases(src: &str, cell: &Rc<Cell<Phases>>, total_ns: u64) {
     cell.set(Phases { parse_ns, kernel_ns: stats::kernel_ns(), total_ns });
 }
 
-/// A run that pays for the prelude, like the CLI does.
-pub fn fresh_runner(src: String) -> (impl Fn() -> u64, Rc<Cell<Phases>>) {
+/// A run over a whole **import closure**, in the order the CLI's loader
+/// produces (docs/modules-design.md §3.2): dependencies first, root last, one
+/// shared elaborator. `lib/ir_v1.hthr` became multi-file when the Nat kit
+/// moved to `lib/std/nat.hthr`, so the number a user waits for is the closure
+/// and not the root — timing the root alone would time a file that no longer
+/// checks, and a fixture that stops working gets *faster*.
+///
+/// The checksum is the total error count across the closure, so a module that
+/// stopped checking is still visible as a changed count.
+pub fn fresh_closure_runner(
+    modules: Vec<(String, String)>,
+) -> (impl Fn() -> u64, Rc<Cell<Phases>>) {
     let cell = Rc::new(Cell::new(Phases::default()));
     let out = cell.clone();
+    // The phase split is attributed against the root's source, which is the
+    // file the split is a statement about.
+    let root = modules.last().expect("a closure has a root").1.clone();
     let run = move || {
         stats::reset_kernel_ns();
         let t = Instant::now();
         let mut e = Elaborator::with_prelude().expect("prelude");
-        let errs = e.check_source(&src);
+        let mut errs = 0u64;
+        for (name, src) in &modules {
+            errs += e.check_module_source(name, src).len() as u64;
+        }
         let total_ns = t.elapsed().as_nanos() as u64;
-        measure_phases(&src, &out, total_ns);
-        errs.len() as u64
+        measure_phases(&root, &out, total_ns);
+        errs
     };
     (run, cell)
+}
+
+/// [`validate`] for a closure: every module must check, in order.
+pub fn validate_closure(what: &str, modules: &[(String, String)]) {
+    let mut e = prelude();
+    for (name, src) in modules {
+        let errs = e.check_module_source(name, src);
+        assert!(
+            errs.is_empty(),
+            "fixture `{what}` does not check at module `{name}` ({} error(s)); first:\n{}",
+            errs.len(),
+            errs[0].render(src)
+        );
+    }
 }
 
 /// A run against a warm prelude: the clone is inside the timing, because it

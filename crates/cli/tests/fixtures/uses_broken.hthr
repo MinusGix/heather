@@ -1,0 +1,3 @@
+import broken_dep;
+
+fn fine() -> Nat { 1 }

@@ -1,0 +1,3 @@
+import cyc_b;
+
+fn a() -> Nat { 0 }

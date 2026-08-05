@@ -1,0 +1,36 @@
+// `list` — `List<A>` with the three functions that make it usable
+// (docs/modules-design.md §7). Recursive, so tier 1: the lowering is
+// `Wf^l(x : S). n` rather than a bare sum-of-Σs
+// (docs/inductive-tier1-wf-lowering.md).
+//
+// `nth` is the module's cross-module dependency: it returns an
+// `option::Option<A>`, which is what an out-of-range index has to mean.
+
+import option;
+
+inductive List<A> { Nil, Cons(head: A, tail: List<A>) }
+
+fn append<A>(xs: List<A>, ys: List<A>) -> List<A> {
+    match xs {
+        Nil => ys,
+        Cons(h, t) => Cons(h, append(t, ys)),
+    }
+}
+
+fn map<A, B>(xs: List<A>, f: A -> B) -> List<B> {
+    match xs {
+        Nil => Nil,
+        Cons(h, t) => Cons(f(h), map(t, f)),
+    }
+}
+
+// Curried in the index for the reason every two-argument recursion in this
+// repo is: the termination checker wants one decreasing argument with the
+// rest fixed, so the argument that varies with the recursion is returned as a
+// function instead.
+fn nth<A>(xs: List<A>) -> Nat -> Option<A> {
+    match xs {
+        Nil => λ (i: Nat) => None,
+        Cons(h, t) => λ (i: Nat) => match i { Zero => Some(h), Succ(k) => nth(t)(k) },
+    }
+}

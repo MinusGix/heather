@@ -50,3 +50,14 @@ List/Vec helpers grow bridging lemmas.
   {a}, {b}, p): f(a) = f(b)` looks definable since the polymorphism round,
   and would have replaced both copies. Candidates for prelude residency:
   the general cong (try it first), then leb/le_add and the add/sub lemmas.
+
+- 2026-08-05: Layer 1 is satisfied by [[modules]] instead of
+  `with_prelude` seeding, as that issue's design intended:
+  `lib/std/nat.hthr` (the whole order kit plus `cong_nat`),
+  `lib/std/option.hthr` (generic `Option<A>`: map, and_then, unwrap_or),
+  `lib/std/list.hthr` (`List<A>`: append, map, nth) — written in Heather,
+  imported with `import nat;` etc. This issue stays open for layer 2
+  (`?`-chaining; still the motivating `gather` shape) and the layer-3
+  non-decision. The general-`cong` datum above is untouched and still the
+  first thing a residency round should try — its home is now `lib/std`,
+  not the Rust prelude.

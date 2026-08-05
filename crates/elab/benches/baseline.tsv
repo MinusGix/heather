@@ -4,153 +4,153 @@ env	host	minus-pc
 env	cpu	AMD Ryzen 7 5700X 8-Core Processor
 env	profile	release
 env	rustc	rustc 1.97.0 (2d8144b78 2026-07-07)
-env	commit	a898aaf
-case	corpus/prelude	build	84570.1
-case	corpus/prelude	clone	118.8
-case	corpus/parse	vec_code.hthr	51028.4
-case	corpus/parse	ir_v1.hthr	1258945.1
-case	corpus/check-file	vec_code.hthr	532807.5
-case	corpus/check-file	ir_v1.hthr:decls	1139449822.0
-case	corpus/check-file	ir_v1.hthr	60467995971.0
-case	scale/declarations	16	656997.5
-case	scale/declarations	32	1291111.5
-case	scale/declarations	64	3010050.8
-case	scale/declarations	128	8113797.0
-case	scale/wide-inductive	4	90434.5
-case	scale/wide-inductive	8	238713.9
-case	scale/wide-inductive	16	665576.0
-case	scale/wide-inductive	32	2075602.4
-case	forded/computed-arms	2	6836187.3
-case	forded/computed-arms	3	19126926.0
-case	forded/computed-arms	4	39755886.0
-case	forded/computed-arms	5	68654976.0
-case	forded/computed-arms	6	112487878.0
-case	forded/occurrences	1	20291125.0
-case	forded/occurrences	2	38581537.0
-case	forded/occurrences	4	79038010.0
-case	forded/occurrences	8	165878723.0
-case	forded/declared-index-tags	2	14638035.0
-case	forded/declared-index-tags	3	40195572.0
-case	forded/declared-index-tags	4	82990392.0
-case	forded/declared-index-tags	5	149816219.0
-case	forded/declared-index-tags	6	270782078.0
-case	forded/declared-index-branching	2	88866191.0
-case	forded/declared-index-branching	3	154804759.0
-case	forded/declared-index-branching	4	234373477.0
-case	forded/declared-index-branching	5	359903759.0
-case	forded/declared-index-branching	6	499205356.0
-case	meta/nested-inference	4	1076574.1
-case	meta/nested-inference	8	3010579.6
-case	meta/nested-inference	16	11501685.0
-case	meta/nested-inference	32	52288311.0
-split	corpus/check-file	vec_code.hthr	parse	57999
-split	corpus/check-file	vec_code.hthr	elab	321395
-split	corpus/check-file	vec_code.hthr	kernel	254619
-split	corpus/check-file	ir_v1.hthr:decls	parse	754209
-split	corpus/check-file	ir_v1.hthr:decls	elab	34103565
-split	corpus/check-file	ir_v1.hthr:decls	kernel	1127566870
-split	corpus/check-file	ir_v1.hthr	parse	3924520
-split	corpus/check-file	ir_v1.hthr	elab	825537669
-split	corpus/check-file	ir_v1.hthr	kernel	57501818736
-split	scale/declarations	16	parse	140915
-split	scale/declarations	16	elab	293856
-split	scale/declarations	16	kernel	521658
-split	scale/declarations	32	parse	219974
-split	scale/declarations	32	elab	302391
-split	scale/declarations	32	kernel	712667
-split	scale/declarations	64	parse	589880
-split	scale/declarations	64	elab	803028
-split	scale/declarations	64	kernel	1649733
-split	scale/declarations	128	parse	2206900
-split	scale/declarations	128	elab	2531110
-split	scale/declarations	128	kernel	5650104
-split	scale/wide-inductive	4	parse	25107
-split	scale/wide-inductive	4	elab	155432
-split	scale/wide-inductive	4	kernel	181111
-split	scale/wide-inductive	8	parse	31729
-split	scale/wide-inductive	8	elab	77456
-split	scale/wide-inductive	8	kernel	192873
-split	scale/wide-inductive	16	parse	52679
-split	scale/wide-inductive	16	elab	209903
-split	scale/wide-inductive	16	kernel	542982
-split	scale/wide-inductive	32	parse	82244
-split	scale/wide-inductive	32	elab	597594
-split	scale/wide-inductive	32	kernel	1624946
-split	forded/computed-arms	2	parse	23905
-split	forded/computed-arms	2	elab	728458
-split	forded/computed-arms	2	kernel	5924251
-split	forded/computed-arms	3	parse	38242
-split	forded/computed-arms	3	elab	1742605
-split	forded/computed-arms	3	kernel	17381315
-split	forded/computed-arms	4	parse	49814
-split	forded/computed-arms	4	elab	3251885
-split	forded/computed-arms	4	kernel	37465288
-split	forded/computed-arms	5	parse	57068
-split	forded/computed-arms	5	elab	7426794
-split	forded/computed-arms	5	kernel	77092773
-split	forded/computed-arms	6	parse	66726
-split	forded/computed-arms	6	elab	7989422
-split	forded/computed-arms	6	kernel	109947461
-split	forded/occurrences	1	parse	39885
-split	forded/occurrences	1	elab	2005683
-split	forded/occurrences	1	kernel	18629159
-split	forded/occurrences	2	parse	50214
-split	forded/occurrences	2	elab	2907047
-split	forded/occurrences	2	kernel	39274830
-split	forded/occurrences	4	parse	83878
-split	forded/occurrences	4	elab	4310726
-split	forded/occurrences	4	kernel	72506568
-split	forded/occurrences	8	parse	137809
-split	forded/occurrences	8	elab	8029229
-split	forded/occurrences	8	kernel	152255825
-split	forded/declared-index-tags	2	parse	26019
-split	forded/declared-index-tags	2	elab	815564
-split	forded/declared-index-tags	2	kernel	16542235
-split	forded/declared-index-tags	3	parse	28634
-split	forded/declared-index-tags	3	elab	988878
-split	forded/declared-index-tags	3	kernel	39882725
-split	forded/declared-index-tags	4	parse	32240
-split	forded/declared-index-tags	4	elab	1585763
-split	forded/declared-index-tags	4	kernel	83244109
-split	forded/declared-index-tags	5	parse	32992
-split	forded/declared-index-tags	5	elab	2747346
-split	forded/declared-index-tags	5	kernel	163087193
-split	forded/declared-index-tags	6	parse	35907
-split	forded/declared-index-tags	6	elab	4197453
-split	forded/declared-index-tags	6	kernel	275999008
-split	forded/declared-index-branching	2	parse	48411
-split	forded/declared-index-branching	2	elab	7776632
-split	forded/declared-index-branching	2	kernel	89121552
-split	forded/declared-index-branching	3	parse	48030
-split	forded/declared-index-branching	3	elab	13520545
-split	forded/declared-index-branching	3	kernel	146556819
-split	forded/declared-index-branching	4	parse	45085
-split	forded/declared-index-branching	4	elab	24489588
-split	forded/declared-index-branching	4	kernel	230917519
-split	forded/declared-index-branching	5	parse	47239
-split	forded/declared-index-branching	5	elab	30318229
-split	forded/declared-index-branching	5	kernel	339422047
-split	forded/declared-index-branching	6	parse	49163
-split	forded/declared-index-branching	6	elab	48140894
-split	forded/declared-index-branching	6	kernel	472552709
-split	meta/nested-inference	4	parse	45035
-split	meta/nested-inference	4	elab	356873
-split	meta/nested-inference	4	kernel	852471
-split	meta/nested-inference	8	parse	70803
-split	meta/nested-inference	8	elab	717638
-split	meta/nested-inference	8	kernel	2285218
-split	meta/nested-inference	16	parse	110868
-split	meta/nested-inference	16	elab	2973453
-split	meta/nested-inference	16	kernel	8598086
-split	meta/nested-inference	32	parse	155843
-split	meta/nested-inference	32	elab	18095305
-split	meta/nested-inference	32	kernel	38023769
-slope	corpus/parse	1.524
-slope	corpus/check-file	5.447
-slope	scale/declarations	1.210
-slope	scale/wide-inductive	1.504
-slope	forded/computed-arms	2.539
-slope	forded/occurrences	1.013
-slope	forded/declared-index-tags	2.623
-slope	forded/declared-index-branching	1.568
-slope	meta/nested-inference	1.874
+env	commit	1878f11
+case	corpus/prelude	build	91499.9
+case	corpus/prelude	clone	299.6
+case	corpus/parse	vec_code.hthr	54836.3
+case	corpus/parse	ir_v1.hthr	1237549.5
+case	corpus/check-file	vec_code.hthr	579591.6
+case	corpus/check-file	ir_v1.hthr:decls	1249250137.0
+case	corpus/check-file	ir_v1.hthr	67708086882.0
+case	scale/declarations	16	703478.9
+case	scale/declarations	32	1506594.0
+case	scale/declarations	64	2712408.6
+case	scale/declarations	128	5712203.7
+case	scale/wide-inductive	4	89711.7
+case	scale/wide-inductive	8	236384.5
+case	scale/wide-inductive	16	667248.6
+case	scale/wide-inductive	32	2123764.8
+case	forded/computed-arms	2	6823781.1
+case	forded/computed-arms	3	18896582.0
+case	forded/computed-arms	4	39395958.0
+case	forded/computed-arms	5	69816539.0
+case	forded/computed-arms	6	119053622.0
+case	forded/occurrences	1	21008333.0
+case	forded/occurrences	2	41470339.0
+case	forded/occurrences	4	81725783.0
+case	forded/occurrences	8	170044342.0
+case	forded/declared-index-tags	2	17011117.0
+case	forded/declared-index-tags	3	40679781.0
+case	forded/declared-index-tags	4	98759652.0
+case	forded/declared-index-tags	5	163993955.0
+case	forded/declared-index-tags	6	293699906.0
+case	forded/declared-index-branching	2	90842175.0
+case	forded/declared-index-branching	3	161604292.0
+case	forded/declared-index-branching	4	255238645.0
+case	forded/declared-index-branching	5	421131491.0
+case	forded/declared-index-branching	6	559811556.0
+case	meta/nested-inference	4	1159961.4
+case	meta/nested-inference	8	3137632.2
+case	meta/nested-inference	16	12831650.5
+case	meta/nested-inference	32	56913928.0
+split	corpus/check-file	vec_code.hthr	parse	60785
+split	corpus/check-file	vec_code.hthr	elab	344486
+split	corpus/check-file	vec_code.hthr	kernel	259649
+split	corpus/check-file	ir_v1.hthr:decls	parse	548872
+split	corpus/check-file	ir_v1.hthr:decls	elab	37895397
+split	corpus/check-file	ir_v1.hthr:decls	kernel	1227581767
+split	corpus/check-file	ir_v1.hthr	parse	3618083
+split	corpus/check-file	ir_v1.hthr	elab	930159883
+split	corpus/check-file	ir_v1.hthr	kernel	63618512176
+split	scale/declarations	16	parse	138631
+split	scale/declarations	16	elab	348494
+split	scale/declarations	16	kernel	508007
+split	scale/declarations	32	parse	224081
+split	scale/declarations	32	elab	470158
+split	scale/declarations	32	kernel	795081
+split	scale/declarations	64	parse	608173
+split	scale/declarations	64	elab	923164
+split	scale/declarations	64	kernel	1756305
+split	scale/declarations	128	parse	945007
+split	scale/declarations	128	elab	1892147
+split	scale/declarations	128	kernel	2709816
+split	scale/wide-inductive	4	parse	15509
+split	scale/wide-inductive	4	elab	61996
+split	scale/wide-inductive	4	kernel	71785
+split	scale/wide-inductive	8	parse	36429
+split	scale/wide-inductive	8	elab	95328
+split	scale/wide-inductive	8	kernel	189607
+split	scale/wide-inductive	16	parse	47860
+split	scale/wide-inductive	16	elab	205097
+split	scale/wide-inductive	16	kernel	452119
+split	scale/wide-inductive	32	parse	84529
+split	scale/wide-inductive	32	elab	639743
+split	scale/wide-inductive	32	kernel	1520289
+split	forded/computed-arms	2	parse	30287
+split	forded/computed-arms	2	elab	755810
+split	forded/computed-arms	2	kernel	5840092
+split	forded/computed-arms	3	parse	35757
+split	forded/computed-arms	3	elab	1698403
+split	forded/computed-arms	3	kernel	17020164
+split	forded/computed-arms	4	parse	52518
+split	forded/computed-arms	4	elab	3201831
+split	forded/computed-arms	4	kernel	38722392
+split	forded/computed-arms	5	parse	67507
+split	forded/computed-arms	5	elab	5748168
+split	forded/computed-arms	5	kernel	66595122
+split	forded/computed-arms	6	parse	85491
+split	forded/computed-arms	6	elab	8858797
+split	forded/computed-arms	6	kernel	119119967
+split	forded/occurrences	1	parse	44193
+split	forded/occurrences	1	elab	2156626
+split	forded/occurrences	1	kernel	19412071
+split	forded/occurrences	2	parse	52889
+split	forded/occurrences	2	elab	3094399
+split	forded/occurrences	2	kernel	39196633
+split	forded/occurrences	4	parse	99507
+split	forded/occurrences	4	elab	5986116
+split	forded/occurrences	4	kernel	90262014
+split	forded/occurrences	8	parse	165090
+split	forded/occurrences	8	elab	9867745
+split	forded/occurrences	8	kernel	177504440
+split	forded/declared-index-tags	2	parse	27592
+split	forded/declared-index-tags	2	elab	703341
+split	forded/declared-index-tags	2	kernel	16776747
+split	forded/declared-index-tags	3	parse	29926
+split	forded/declared-index-tags	3	elab	1247756
+split	forded/declared-index-tags	3	kernel	48772699
+split	forded/declared-index-tags	4	parse	38713
+split	forded/declared-index-tags	4	elab	1625115
+split	forded/declared-index-tags	4	kernel	100322261
+split	forded/declared-index-tags	5	parse	34876
+split	forded/declared-index-tags	5	elab	3032683
+split	forded/declared-index-tags	5	kernel	236554173
+split	forded/declared-index-tags	6	parse	32481
+split	forded/declared-index-tags	6	elab	4225665
+split	forded/declared-index-tags	6	kernel	276418552
+split	forded/declared-index-branching	2	parse	54803
+split	forded/declared-index-branching	2	elab	7819525
+split	forded/declared-index-branching	2	kernel	86900632
+split	forded/declared-index-branching	3	parse	52369
+split	forded/declared-index-branching	3	elab	14058054
+split	forded/declared-index-branching	3	kernel	150741095
+split	forded/declared-index-branching	4	parse	97403
+split	forded/declared-index-branching	4	elab	25390072
+split	forded/declared-index-branching	4	kernel	271686554
+split	forded/declared-index-branching	5	parse	49433
+split	forded/declared-index-branching	5	elab	33060645
+split	forded/declared-index-branching	5	kernel	376049913
+split	forded/declared-index-branching	6	parse	55304
+split	forded/declared-index-branching	6	elab	51133900
+split	forded/declared-index-branching	6	kernel	580629540
+split	meta/nested-inference	4	parse	46959
+split	meta/nested-inference	4	elab	410580
+split	meta/nested-inference	4	kernel	894774
+split	meta/nested-inference	8	parse	61716
+split	meta/nested-inference	8	elab	764768
+split	meta/nested-inference	8	kernel	2831905
+split	meta/nested-inference	16	parse	93747
+split	meta/nested-inference	16	elab	2964431
+split	meta/nested-inference	16	kernel	9000937
+split	meta/nested-inference	32	parse	168647
+split	meta/nested-inference	32	elab	17289931
+split	meta/nested-inference	32	kernel	43661098
+slope	corpus/parse	1.522
+slope	corpus/check-file	5.546
+slope	scale/declarations	0.991
+slope	scale/wide-inductive	1.519
+slope	forded/computed-arms	2.585
+slope	forded/occurrences	1.003
+slope	forded/declared-index-tags	2.598
+slope	forded/declared-index-branching	1.679
+slope	meta/nested-inference	1.888

@@ -12,12 +12,15 @@
 //!
 //! BUDGET: measured 2026-08-02 (dev profile with the workspace opt-level
 //! overrides): ~108 CPU-seconds for this binary against `scripts/test`'s
-//! 300-second per-process rail. The split is roughly: ~50s the support
-//! prelude (dominated by re-elaborating `step_mono` and the two double-`j`
-//! kit lemmas), ~50s the five emissions, the rest the controls. That is
-//! why there is exactly ONE elaborator: the prelude is paid once, mutants
-//! are renamed apart rather than re-elaborated against a fresh prelude,
-//! and the forced control reuses the same session.
+//! 300-second per-process rail, and **~128s** since 2026-08-05, when the
+//! arithmetic and order kit moved to `lib/std/nat.hthr`
+//! (docs/modules-design.md §7) and the support prelude started elaborating
+//! that module *whole* instead of slicing nine items out of it. The split is
+//! roughly: ~50s the support prelude (dominated by re-elaborating
+//! `step_mono` and the two double-`j` kit lemmas), ~50s the five emissions,
+//! the rest the controls. That is why there is exactly ONE elaborator: the
+//! prelude is paid once, mutants are renamed apart rather than re-elaborated
+//! against a fresh prelude, and the forced control reuses the same session.
 
 use heather_elab::certgen::{compile_record, generate, generate_forced, GenCtx};
 use heather_elab::Elaborator;
@@ -25,10 +28,15 @@ use heather_syntax::ast::{Decl, Item};
 use heather_syntax::parse_file;
 
 const LIB: &str = include_str!("../../../lib/ir_v1.hthr");
+/// The library's one import (docs/modules-design.md §7). Elaborated whole,
+/// which is why the arithmetic and order kit is no longer sliced out of
+/// `LIB` item by item below — `import nat;` in the declarations prefix brings
+/// all of it into scope.
+const NAT: &str = include_str!("../../../lib/std/nat.hthr");
 
 /// Items a generated emission needs beyond the declarations prefix, in
 /// dependency (file-consistent) order.
-const SUPPORT_ITEMS: [&str; 23] = [
+const SUPPORT_ITEMS: [&str; 14] = [
     "dbl",
     "BindInv",
     "k_bind_inv",
@@ -36,15 +44,6 @@ const SUPPORT_ITEMS: [&str; 23] = [
     "step_mono",
     "eval_mono_succ",
     "eval_mono_plus",
-    "cong_nat",
-    "add_left_zero",
-    "add_succ_left",
-    "sub_zero",
-    "le_add",
-    "le_refl",
-    "le_succ_r",
-    "le_add_l",
-    "le_add_r",
     "fuel_monotone",
     "Converges",
     "ret_conv",
@@ -75,9 +74,15 @@ fn support() -> String {
     s
 }
 
-/// A parsed `fn` declaration from the library by name.
+/// A parsed `fn` declaration from the library — or from `nat`, where `add`
+/// lives now — by name.
 fn lib_decl(name: &str) -> Decl {
     let file = parse_file(LIB).expect("the library parses");
+    let file = if file.items.iter().any(|i| matches!(i, Item::Decl(d) if d.name == name)) {
+        file
+    } else {
+        parse_file(NAT).expect("`nat` parses")
+    };
     file.items
         .into_iter()
         .find_map(|i| match i {
@@ -102,14 +107,25 @@ const THIRD3: &str =
 const MUL: &str =
     "fn mul(a: Nat, b: Nat) -> Nat { match b { Zero => 0, Succ(k) => add(a, mul(a, k)) } }";
 
+/// Everything here elaborates **as the library module**, so that the
+/// declarations prefix's `import nat;` means what it means in the file.
 fn elab(e: &mut Elaborator, src: &str, what: &str) {
-    e.elab_source(src).unwrap_or_else(|err| panic!("{what}:\n{}", err.render(src)));
+    e.elab_module_source("ir_v1", src)
+        .unwrap_or_else(|err| panic!("{what}:\n{}", err.render(src)));
 }
 
 fn refuted(e: &mut Elaborator, src: &str, what: &str) {
-    if e.elab_source(src).is_ok() {
+    if e.elab_module_source("ir_v1", src).is_ok() {
         panic!("{what} elaborated, but it must fail");
     }
+}
+
+/// A prelude'd elaborator with `nat` in it — the closure `heather check
+/// lib/ir_v1.hthr` walks, minus the root.
+fn base() -> Elaborator {
+    let mut e = Elaborator::with_prelude().expect("prelude");
+    e.elab_module_source("nat", NAT).unwrap_or_else(|err| panic!("{}", err.render(NAT)));
+    e
 }
 
 /// §9 item 2: the generated `add` IR is the hand-run's transcription, up to
@@ -144,7 +160,7 @@ fn generated_add_matches_the_hand_run() {
 ///   certificate consuming the callee's at an open argument.
 #[test]
 fn emissions_check_and_controls() {
-    let mut e = Elaborator::with_prelude().expect("prelude");
+    let mut e = base();
     let sup = support();
     elab(&mut e, &sup, "support prelude");
     elab(&mut e, SEVEN, "fn seven");

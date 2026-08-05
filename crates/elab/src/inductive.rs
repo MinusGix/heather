@@ -28,6 +28,7 @@ use heather_kernel::level::Level;
 use heather_kernel::term::{CtxBase, LocalCtx, LocalSubst, LocalVar, Term, Type};
 use heather_syntax::{Arm, CtorDecl, Expr, ExprKind, InductiveDecl, Span, Ty, TyKind};
 
+use crate::names::{qkey, NameKind};
 use crate::{embed, err, Alias, Cx, Elaborator, TyVar, R};
 
 /// A declared inductive, kept in surface form: the field types are lowered
@@ -445,9 +446,10 @@ impl Elaborator {
     /// and assign its nominal tag. Nothing is emitted here — an inductive has
     /// no kernel counterpart of its own; it is lowered at each use (§2).
     pub(crate) fn elab_inductive(&mut self, d: &InductiveDecl) -> R<()> {
-        if self.inductives.contains_key(&d.name) || self.globals.contains_key(&d.name) {
+        if self.own_declares(&d.name, &[NameKind::Inductive, NameKind::Global]) {
             return err(format!("duplicate name `{}`", d.name), d.span);
         }
+        self.check_declarable(&d.name, d.span)?;
         if d.name == "Nat" {
             return err("`Nat` is built in", d.span);
         }
@@ -564,15 +566,20 @@ impl Elaborator {
                     c.span,
                 );
             }
-            if let Some((other, _)) = self.ctors.get(&c.name) {
+            // Per *module* now (docs/modules-design.md §4): two modules may
+            // each declare a `Cons`, and a use picks by uniqueness, by
+            // `List::Cons`, or errors. Within one module a constructor name
+            // still belongs to one type.
+            if let Some((other, _)) = self.ctors.get(&qkey(&self.scope.module, &c.name)) {
                 return err(
                     format!("`{}` is already a constructor of `{}`", c.name, other.name),
                     c.span,
                 );
             }
-            if self.globals.contains_key(&c.name) || self.inductives.contains_key(&c.name) {
+            if self.own_declares(&c.name, &[NameKind::Global, NameKind::Inductive]) {
                 return err(format!("duplicate name `{}`", c.name), c.span);
             }
+            self.check_declarable(&c.name, c.span)?;
             // The result annotation: mandatory on an indexed declaration's
             // constructors, an error elsewhere
             // (docs/inductive-indexed-lowering.md §2).
@@ -672,7 +679,8 @@ impl Elaborator {
                 let s = Rc::new(skeleton_of(d, &ctors, self.next_tag));
                 self.next_tag += 1;
                 self.by_tag.insert(s.tag, Rc::clone(&s));
-                self.inductives.insert(s.name.clone(), Rc::clone(&s));
+                self.inductives.insert(qkey(&self.scope.module, &s.name), Rc::clone(&s));
+                self.add_name(&s.name.clone(), NameKind::Inductive);
                 Some(s)
             }
             _ => None,
@@ -698,7 +706,9 @@ impl Elaborator {
             self.forded_by_skel.insert(t, Rc::clone(&ind));
         }
         for i in 0..ind.ctors.len() {
-            self.ctors.insert(ind.ctors[i].name.clone(), (Rc::clone(&ind), i));
+            let cname = ind.ctors[i].name.clone();
+            self.ctors.insert(qkey(&self.scope.module, &cname), (Rc::clone(&ind), i));
+            self.add_name(&cname, NameKind::Ctor);
         }
         if ind.is_record {
             for (n, _) in &ind.ctors[0].fields {
@@ -708,7 +718,8 @@ impl Elaborator {
             }
         }
         self.by_tag.insert(ind.tag, Rc::clone(&ind));
-        self.inductives.insert(d.name.clone(), Rc::clone(&ind));
+        self.inductives.insert(qkey(&self.scope.module, &d.name), Rc::clone(&ind));
+        self.add_name(&d.name, NameKind::Inductive);
         // The generator's own artifacts become Ψ definitions here — once, at
         // declaration time, never edited afterwards (§14.6's discipline, the
         // same one the skeleton above follows). Everything the declaration
@@ -744,8 +755,8 @@ impl Elaborator {
                 dom.span,
             );
         }
-        let Some(ind) = self.inductives.get(iname) else {
-            return err(format!("unknown index type `{iname}`"), dom.span);
+        let Some(ind) = self.lookup_inductive(iname) else {
+            return Err(self.name_miss(iname, format!("unknown index type `{iname}`"), dom.span));
         };
         if !ind.params.is_empty() || !ind.valparams.is_empty() {
             return err(
@@ -811,8 +822,8 @@ impl Elaborator {
             let by = (cx.names.len() - p.depth) as u32;
             return Ok((p.ty.shift_local(by), p.level.clone()));
         }
-        let Some(ind) = self.inductives.get(name) else {
-            return err(format!("unknown type `{name}`"), span);
+        let Some(ind) = self.lookup_inductive(name) else {
+            return Err(self.name_miss(name, format!("unknown type `{name}`"), span));
         };
         if args.len() != ind.params.len() {
             return err(
@@ -863,7 +874,7 @@ impl Elaborator {
     ) -> R<Option<(Type, Level)>> {
         let ExprKind::App { head, args, .. } = &e.kind else { return Ok(None) };
         let Some((name, targs)) = named_head(head) else { return Ok(None) };
-        let Some(ind) = self.inductives.get(name).cloned() else { return Ok(None) };
+        let Some(ind) = self.lookup_inductive(name).cloned() else { return Ok(None) };
         if ind.valparams.is_empty() {
             return Ok(None);
         }
@@ -1199,7 +1210,7 @@ impl Elaborator {
     }
 
     pub(crate) fn ctor_of(&self, name: &str) -> Option<(Rc<Inductive>, usize)> {
-        self.ctors.get(name).map(|(i, k)| (Rc::clone(i), *k))
+        self.lookup_ctor(name)
     }
 
     // -- constructors (§4) --------------------------------------------------
@@ -1470,7 +1481,7 @@ impl Elaborator {
         // and arity are surface obligations, resolved before any lowering.
         let mut ordered: Vec<Option<&Arm>> = vec![None; n];
         for a in arms {
-            let Some(i) = ind.ctors.iter().position(|c| c.name == a.ctor) else {
+            let Some(i) = arm_ctor_index(ind, &a.ctor) else {
                 return err(
                     format!("`{}` is not a constructor of `{}`", a.ctor, ind.name),
                     a.span,
@@ -2710,6 +2721,22 @@ fn skeleton_of(d: &InductiveDecl, ctors: &[Ctor], tag: u32) -> Inductive {
         index_ty: None,
         skel: None,
     }
+}
+
+/// The constructor an arm names, **through the scrutinee's type**
+/// (docs/modules-design.md §8, the free win): a `match` arm never consults the
+/// global constructor table, because the scrutinee's declaration already says
+/// which constructors exist. An arm name is therefore unambiguous by
+/// construction even when two visible modules declare a `Cons`, and all
+/// qualification adds here is a spelling — `Option::None` is accepted exactly
+/// when the scrutinee *is* an `Option`.
+pub(crate) fn arm_ctor_index(ind: &Inductive, written: &str) -> Option<usize> {
+    let base = match written.split_once("::") {
+        Some((ty, c)) if ty == ind.name => c,
+        Some(_) => return None,
+        None => written,
+    };
+    ind.ctors.iter().position(|c| c.name == base)
 }
 
 /// Is *every* constructor's result index a bare variable? Then the declaration

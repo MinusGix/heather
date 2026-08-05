@@ -51,6 +51,14 @@ pub enum TokKind {
     Eq,        // =   (both `let x = e` binding and `a = b` equality)
     EqEq,      // ==  (lexed but rejected by the parser — see `=`)
     ColonEq,   // :=
+    /// `::` — qualification (docs/modules-design.md §4). Only ever *seen* by
+    /// the parser in `import m::{a, b};`: a `::` between two identifiers is
+    /// joined into a single qualified [`TokKind::Ident`] here (see the
+    /// identifier rule), because a qualified name is one name and no
+    /// expression may come between its halves. Two-byte, so it is matched
+    /// before `:`; `::` was a parse error everywhere before this token
+    /// existed, so nothing that lexed changes shape.
+    ColonColon, // ::
     Eof,
 }
 
@@ -89,6 +97,21 @@ pub fn lex(src: &str) -> Result<Vec<Tok>, LexError> {
         if c.is_ascii_alphabetic() || c == b'_' {
             while i < bytes.len() && (bytes[i].is_ascii_alphanumeric() || bytes[i] == b'_') {
                 i += 1;
+            }
+            // `nat::sub` is **one** identifier token (docs/modules-design.md
+            // §4). Adjacency decides, as it does for `?name`: a `::` followed
+            // by an identifier start joins, so `nat::{Le}` (the import-list
+            // form) still lexes as `nat` `::` `{`. Single-segment module
+            // names mean one join is the whole grammar — there are no
+            // compound paths in v1 — so the joined name never grows a second
+            // `::`.
+            if src.get(i..i + 2) == Some("::")
+                && bytes.get(i + 2).is_some_and(|c| c.is_ascii_alphabetic() || *c == b'_')
+            {
+                i += 2;
+                while i < bytes.len() && (bytes[i].is_ascii_alphanumeric() || bytes[i] == b'_') {
+                    i += 1;
+                }
             }
             let text = &src[start..i];
             toks.push(Tok {
@@ -140,6 +163,7 @@ pub fn lex(src: &str) -> Result<Vec<Tok>, LexError> {
             "==" => (TokKind::EqEq, 2),
             "<=" => (TokKind::LtEq, 2),
             ":=" => (TokKind::ColonEq, 2),
+            "::" => (TokKind::ColonColon, 2),
             _ => match c {
                 b'(' => (TokKind::LParen, 1),
                 b')' => (TokKind::RParen, 1),

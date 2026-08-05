@@ -1,0 +1,3 @@
+import helper;
+
+theorem t(): triple(0) = 3 { refl }
