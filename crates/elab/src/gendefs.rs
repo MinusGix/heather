@@ -62,6 +62,17 @@ pub(crate) enum GenDef {
     /// constructor `k`, abstracted over its default (§7.2). Keyed by the
     /// index type's tag, shared as above.
     IdxChild(u32, usize, usize),
+    /// `I#icode : Trm_c(· ⊢ Ty l_I)` — the index type's **code**, consumed as
+    /// `El (I#icode^δ)` (`docs/family-type-code-defs-design.md` §1). Keyed by
+    /// the *index* type's tag, shared by every family over that index, exactly
+    /// as `IdxTag`/`IdxChild`. An index type is unparameterized by
+    /// `inductive.rs`'s own rule, so this has no closedness boundary at all.
+    IdxCode(u32),
+    /// `D#code : Trm_c(· ⊢ Ty l)` — the forded declaration's **skeleton
+    /// code**, consumed as `El (D#code^δ)` (design §1). Keyed by the forded
+    /// declaration's tag. Exists only for an unparameterized declaration —
+    /// the same boundary as [`GenDef::Mu`], for the same reason (§14.12).
+    SkelCode(u32),
 }
 
 impl GenDef {
@@ -72,6 +83,8 @@ impl GenDef {
             GenDef::Mu(_) => format!("{owner}#mu"),
             GenDef::IdxTag(_, k) => format!("{owner}#tag{k}"),
             GenDef::IdxChild(_, k, t) => format!("{owner}#child{k}.{t}"),
+            GenDef::IdxCode(_) => format!("{owner}#icode"),
+            GenDef::SkelCode(_) => format!("{owner}#code"),
         }
     }
 }
@@ -96,12 +109,59 @@ impl Elaborator {
             return;
         }
         // The index type's devices first: they are closed for every family,
-        // and shared across all families over the same index.
+        // and shared across all families over the same index. The **code**
+        // comes before the rest so that a later device's statement may
+        // reference it (Ψ is a telescope — design §1.4, retro-spelling
+        // deferred but the order is kept ready for it).
         if let Some(IdxTy::Decl(iind)) = ind.index_ty.as_ref() {
             let iind = Rc::clone(iind);
+            self.register_idx_code(&iind, span);
             self.register_index_devices(&iind, span);
         }
+        // The skeleton's code before `μ`, for the same telescope reason.
+        self.register_skel_code(ind, span);
         let _ = self.register_mu(ind, span);
+    }
+
+    /// `I#icode := ⌜⟦I⟧⌝`, the index type's code (design §1.1). Best-effort:
+    /// a `None` from `code_of` or a gate failure skips registration and every
+    /// occurrence stays inline, exactly as before.
+    fn register_idx_code(&mut self, iind: &Rc<Inductive>, span: Span) {
+        let key = GenDef::IdxCode(iind.tag);
+        if self.gdefs.by_key.contains_key(&key) {
+            return;
+        }
+        let cx = Cx::empty();
+        let Ok((ity, ilvl)) = self.lower_instance(&cx, iind, &[], &[], span) else {
+            return;
+        };
+        let Some(body) = crate::code::code_of(&ity) else { return };
+        let ty = Type::Ty(ilvl.clone());
+        // A term of type `Ty l` lives at `1 + l` (the Tarski formation rule).
+        let _ = self.push_gen_def(key, &iind.name, ty, Level::succ(ilvl), body, span);
+    }
+
+    /// `D#code := ⌜⟦Skel⟧⌝`, the forded declaration's skeleton code (design
+    /// §1.1). Only an **unparameterized** declaration gets one — the same
+    /// boundary as [`Elaborator::mu_def`], because `⟦Skel⟧` of a parameterized
+    /// family is monomorphized per instantiation and a definition must be
+    /// closed at declaration time (§14.12).
+    fn register_skel_code(&mut self, ind: &Rc<Inductive>, span: Span) {
+        if !ind.params.is_empty() || !ind.valparams.is_empty() {
+            return;
+        }
+        let key = GenDef::SkelCode(ind.tag);
+        if self.gdefs.by_key.contains_key(&key) {
+            return;
+        }
+        let Some(skel) = ind.skel.as_ref() else { return };
+        let cx = Cx::empty();
+        let Ok((skel_ty, l)) = self.lower_instance(&cx, skel, &[], &[], span) else {
+            return;
+        };
+        let Some(body) = crate::code::code_of(&skel_ty) else { return };
+        let ty = Type::Ty(l.clone());
+        let _ = self.push_gen_def(key, &ind.name, ty, Level::succ(l), body, span);
     }
 
     /// §7.1's tag predicates and §7.2's child projections, per index
@@ -196,6 +256,16 @@ impl Elaborator {
                 terms: vec![],
             },
         })
+    }
+
+    /// `El (code^δ)` — the **type** occurrence of a registered code
+    /// definition (`docs/family-type-code-defs-design.md` §1.3): composition
+    /// of the existing `Type::El` former with [`Self::gen_ref`]. `level` is
+    /// the coded type's own level (`El l ν` with `ν : Ty l`). `None` when the
+    /// definition was not registered — every emission site's cue to inline.
+    pub(crate) fn gen_type_ref(&self, cx: &Cx, key: GenDef, level: &Level) -> Option<Type> {
+        self.gen_ref(cx, key)
+            .map(|tm| Type::El { level: level.clone(), tm: Rc::new(tm) })
     }
 
     /// The inverse of [`Self::gen_ref`]'s numbering: which definition, if any,

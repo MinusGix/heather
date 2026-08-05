@@ -3,7 +3,7 @@ title: Ch. 07 obligations for bodied globals: glueing at p, neutral at c
 status: open
 labels: [kernel,delam,metatheory]
 created: 2026-07-31
-updated: 2026-08-04
+updated: 2026-08-05
 ---
 
 
@@ -50,3 +50,4 @@ obligation.
 ## Log
 
 - 2026-08-04: Scope note (2026-08-04): [[generated-term-defs]] landed — the elaborator now emits MACHINE-WRITTEN bodied globals (μ, tag predicates, child projections) alongside user fns. Same obligation kind, more instances: whatever this issue settles for bodied globals covers them uniformly (they are checked and registered exactly as a fn is). The planned successor [[family-types-as-code-defs]] would add layer-c CODE definitions consumed via El at p — check that spelling against ch. 06/07 before that round starts.
+- 2026-08-05: 2026-08-05, from [[family-types-as-code-defs]]'s round (docs/family-type-code-defs-design.md §2): the layer-c CODE definitions (D#code : Trm_c(· ⊢ Ty l) := ⌜⟦Skel⟧⌝, consumed as El (D#code^δ) at p) add one case SITE, not one obligation kind — El-of-defined-global is glueing item 1 instantiated at the type interpretation's El case. At p/m the interpretation of El l (u^δ) for bodied u goes through the body via ch. 06's El congruence reduction; at c it is the neutral interpretation, unchanged (the neutral-term global rule admits layer-c globals syntactically at any i ≥ c, 06:558-560). Items 2-4 of the bill cover the new definitions verbatim: a D#code is checked and registered exactly as any bodied global. This answers the 2026-08-04 scope note's question; the spelling was checked against ch. 06 before the round, per that note.

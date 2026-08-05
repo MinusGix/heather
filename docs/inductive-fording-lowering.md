@@ -907,6 +907,21 @@ own constructor names are now excluded from that test.
    (Σ is a whnf), so this is *better* here than at route 1, but a `μ` that
    arrived reduced at a literal index is unrecognizable and takes the same
    re-synthesis fix if something hits it.
+
+   **A second axis since 2026-08-05** (`issues/family-types-as-code-defs.md`):
+   the Σ's components are now emitted as `El (code^δ)` references (§14.11),
+   so a family type can also arrive pre-**unfolded** — whnf'd back to the
+   inline `Wf`. That direction is *free*: unfolding is conservative
+   (`code_of` is decode's syntactic inverse), the structural read stays in
+   place as the no-def fallback, and
+   `a_pre_unfolded_occurrence_still_reads_back_and_converts` (`forded.rs`,
+   `mod fingerprint`) pins both the recognition and the convertibility. The
+   genuinely new diagnosis surface is **`El` of the wrong global**: "not a
+   forded family" can now mean an `El` whose head is another declaration's
+   `SkelCode`/`IdxCode`, or a user global with a byte-identical body —
+   rejected by the registry lookup, pinned by the El-headed negatives in the
+   same module. A stuck read at a forded family should name that
+   possibility, per §14.5's precedent on conversion errors.
 4. **Form A at a declared index — closed 2026-08-04.** The pieces (`wf.rs`
    §7.1's tag predicate, §7.2's `child_projection`) are composed into the
    inversion `forded_arm_a_decl` builds, §8.2 carries the shape, and
@@ -1003,28 +1018,48 @@ own constructor names are now excluded from that test.
    there. Nothing in the suite hits it; the checking path
    (`build_forded_ctor`) is unaffected.
 
-11. **The emitted *types* are the residual multiplier** (2026-08-04, the
-   successor to items 2 and 9). Routing the generated **terms** through Ψ
-   definitions cut the constant by 4–7× and moved the exponents by 0.60, 0.04
-   and 0.00; `forded/declared-index-tags` is the family that says why. What
-   is swept there is the *index type's* constructor count, and the index type
-   is a `Type::Wf` whose node count is Θ(constructors) — written out afresh at
-   every occurrence: once per `sEq`, per `Lam` domain, per `transp`
-   annotation, per motive instantiation, of which the inversion emits
-   Θ(constructors). Θ(n) copies of a Θ(n) type is a quadratic that no term
-   definition reaches. The same is true of the skeleton `⟦Skel⟧` in
-   `computed-arms`, where the arm count multiplies both factors, which is why
-   *that* exponent did move.
+11. **The emitted *types* were the residual multiplier — closed 2026-08-05,
+   narrowed** (`issues/family-types-as-code-defs.md`,
+   `docs/family-type-code-defs-design.md`; the successor to items 2 and 9).
+   Routing the generated **terms** through Ψ definitions cut the constant by
+   4–7× and moved the exponents by 0.60, 0.04 and 0.00; what survived was the
+   emitted types: `⟦Skel⟧` and `I` are `Type::Wf`s of Θ(constructors) nodes,
+   written out afresh at Θ(constructors) occurrences. `GlobalBinding::Ty` has
+   no body, so the fix is the **code definition** the entry predicted:
+   `D#code : Trm_c(· ⊢ Ty l) := ⌜⟦Skel⟧⌝` and `I#icode := ⌜⟦I⟧⌝`
+   (`gendefs.rs::{SkelCode, IdxCode}`), consumed as `El (code^δ)` — existing
+   kernel formers only, ch. 06's own neutral-type grammar (design §2).
 
-   The lever does not extend: `GlobalBinding::Ty` has **no body**, so a type
-   cannot be a Ψ definition at all. The shape a fix would have to take is a
-   *code* definition — `D#code : Trm_c(· ⊢ Type_l)` with the type spelled
-   `El (D#code^δ)` — and that is a scheme change, not a registration detail:
-   every consumer that reads `Type::Wf` structurally (`spine`, `build_elim_wf`,
-   `const_elim_wf`, `tag_of`) would have to go through `decoded`/whnf first,
-   and §14.3's "pre-reduced family types are diagnosed, not handled" would
-   acquire a much larger surface. Recorded here, unscheduled, with the
-   before/after table in `docs/frontend-benchmarking.md` as its evidence.
+   Three narrowings against what this entry predicted, all deliberate:
+
+   - **Components only; the family type itself is not a def.** The `Σ`/`sEq`
+     shell stays inline — it is O(1) once its components are references, it
+     carries the use-site index `m`, and it is the shape `forded_of`'s shell
+     fingerprint anchors on (design §1.1).
+   - **The reader migration is a nominal branch, not "everything whnfs".**
+     The four structural readers this entry listed are elaborator code; the
+     generator's own reads keep operating on the inline copies `FordedFam`
+     carries (`skel_ty`/`ity`, with `skel_ref`/`ity_ref` alongside for
+     emission), and only `forded_of` gained a branch — an `El`-of-global
+     component resolves through the registry to *this* declaration's code, or
+     the read declines (design §3.1; `decoded` was deliberately not taught to
+     δ-unfold).
+   - **The kernel needed no change at all** — conversion was built for
+     `El`-headed δ (`delta_head_ty`), the ι-rule never destructures its
+     `shape` annotation, and typing builds rather than matches `Wf`s from
+     annotation slots (design §3.3, verified against source).
+
+   The numbers (2026-08-05, `docs/frontend-benchmarking.md` for the table):
+   `computed-arms` 2.79 → 2.54 at ~0.6× the constant, `occurrences` ~28 →
+   ~19 ms per use, `declared-index-branching` ~0.75× at slope 1.57. And the
+   honest half: `forded/declared-index-tags` did **not** move (2.61 → 2.62)
+   — the design's below-2.0 claim is not met, and the residual is a *third*
+   defect, now named: the `Supf`/`ElimWf` **shape slots**. Those slots carry
+   the `Wf`'s *shape component*, not the `Wf` — and no registered code names
+   a shape, only the whole type — so the `sup_f` the declared-index
+   inversion rebuilds per index branch (`zj`) still carries a Θ(n) shape
+   annotation into Θ(n) branches. Owned by
+   `issues/wf-shape-annotation-slots.md`, unscheduled.
 
 12. **A parameterized forded family keeps its inlined `μ`** (2026-08-04, the
    boundary of `issues/generated-term-defs.md`). A definition is registered at

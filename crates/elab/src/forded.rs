@@ -66,6 +66,13 @@ pub(crate) struct FordedFam {
     pub mu: Rc<Term>,
     /// The index the family is applied at.
     pub idx: Rc<Term>,
+    /// `El (D#code^δ)` — the **reference** spelling of `⟦Skel⟧`, present when
+    /// the skeleton's code definition was registered
+    /// (`docs/family-type-code-defs-design.md` §1.4/§3.1). Emission uses it;
+    /// every structural read keeps operating on the inline `skel_ty`.
+    pub skel_ref: Option<Type>,
+    /// `El (I#icode^δ)` — the reference spelling of `I`, same contract.
+    pub ity_ref: Option<Type>,
 }
 
 impl FordedFam {
@@ -80,11 +87,24 @@ impl FordedFam {
         set_scrut(&self.mu.shift_local(by), Rc::new(s)).expect("a μ node has a scrutinee slot")
     }
 
+    /// `⟦Skel⟧` as **emitted** at `by`: the `El (D#code^δ)` reference when the
+    /// definition exists, the inline copy otherwise (design §3.1's line —
+    /// structure is read from `skel_ty`; the reference exists only in what
+    /// gets emitted).
+    pub fn skel_emit(&self, by: u32) -> Type {
+        self.skel_ref.as_ref().unwrap_or(&self.skel_ty).shift_local(by)
+    }
+
+    /// `I` as emitted at `by`, same contract as [`Self::skel_emit`].
+    pub fn ity_emit(&self, by: u32) -> Type {
+        self.ity_ref.as_ref().unwrap_or(&self.ity).shift_local(by)
+    }
+
     /// `sEq^{li}(I; μ s; m)` at `by`.
     pub fn eq_at(&self, s: Term, m: Term, by: u32) -> Type {
         Type::SEq {
             level: self.ilvl.clone(),
-            ty: Rc::new(self.ity.shift_local(by)),
+            ty: Rc::new(self.ity_emit(by)),
             lhs: Rc::new(self.mu_at(s, by)),
             rhs: Rc::new(m),
         }
@@ -94,7 +114,7 @@ impl FordedFam {
     pub fn srefl_at(&self, t: Term, by: u32) -> Term {
         Term::SRefl {
             level: self.ilvl.clone(),
-            ty: Rc::new(self.ity.shift_local(by)),
+            ty: Rc::new(self.ity_emit(by)),
             tm: Rc::new(t),
         }
     }
@@ -105,7 +125,7 @@ impl FordedFam {
         Type::Sigma {
             fst_level: self.level.clone(),
             snd_level: self.ilvl.clone(),
-            fst: Rc::new(self.skel_ty.shift_local(by)),
+            fst: Rc::new(self.skel_emit(by)),
             snd: Rc::new(self.eq_at(
                 Term::Var(LocalVar(0)),
                 m.shift_local(1),
@@ -209,9 +229,44 @@ impl Elaborator {
         let (ilvl, ity, lhs, rhs) =
             (level.clone(), (**ity).clone(), Rc::clone(lhs), Rc::clone(rhs));
         drop(sd);
-        // The tag comes out of the *skeleton*, where `tag_of` already looks.
-        let skel = self.tag_of(&fst)?;
-        let ind = Rc::clone(self.forded_by_skel.get(&skel.tag)?);
+        // The Σ's first component is either the inline skeleton — the tag
+        // comes out of it, where `tag_of` already looks — or, since
+        // `docs/family-type-code-defs-design.md`, the **reference**
+        // `El (D#code^δ)`. A reference is identified *only* by resolving
+        // through the registry to this declaration's `SkelCode` — a lookup,
+        // not a reduction: an `El` of any *other* global (another
+        // declaration's code, a user-written global with a byte-identical
+        // body) is `None` here, which is `mod fingerprint`'s look-alike
+        // discipline extended to types (design §3.1, §4).
+        let referenced = |t: &Type| -> Option<GenDef> {
+            let Type::El { tm, .. } = t else { return None };
+            let Term::GlobalTm { var, .. } = &**tm else { return None };
+            self.gen_def_of(*var)
+        };
+        let el_of_global = |t: &Type| -> bool {
+            matches!(t, Type::El { tm, .. } if matches!(&**tm, Term::GlobalTm { .. }))
+        };
+        let fst_is_ref = el_of_global(&fst);
+        let ind = if fst_is_ref {
+            let GenDef::SkelCode(tag) = referenced(&fst)? else { return None };
+            Rc::clone(self.by_tag.get(&tag)?)
+        } else {
+            let skel = self.tag_of(&fst)?;
+            Rc::clone(self.forded_by_skel.get(&skel.tag)?)
+        };
+        // The `sEq`'s `ty` slot, same rule: an `El`-of-global there must be
+        // **this** declaration's index-type code and nothing else. An inline
+        // `I` (a `Nat` index, a pre-unfolded occurrence, a parameterized
+        // family) takes the structural path unchanged — §14.12's coexistence
+        // rule, extended.
+        let ity_is_ref = el_of_global(&ity);
+        if ity_is_ref {
+            let GenDef::IdxCode(itag) = referenced(&ity)? else { return None };
+            let Some(IdxTy::Decl(iind)) = ind.index_ty.as_ref() else { return None };
+            if iind.tag != itag {
+                return None;
+            }
+        }
         // …and the `μ` slot is checked by **name** (§14.1, re-keyed
         // 2026-08-04 by `issues/generated-term-defs.md`): where the
         // declaration has a registered `μ_D`, the `sEq`'s left-hand side must
@@ -226,11 +281,35 @@ impl Elaborator {
                 return None;
             }
         }
-        let node = set_scrut(&lhs, Rc::new(Term::Zero))?;
         // The Σ's second component is scoped under the binder; `μ`, `I` and the
         // index all mention it nowhere, so substituting a closed term for it is
         // exactly the un-shift back to the ambient context.
         let down = LocalSubst::id(&cx.gamma).extended(Rc::new(Term::Zero));
+        if fst_is_ref || ity_is_ref {
+            // A reference-spelled component means the `skel_ty`/`ity` just
+            // read are *not* the inline types every structural consumer
+            // downstream (`spine`, the `Wf` destructurings) operates on. The
+            // declaration is known and unparameterized (a code definition
+            // exists only for one — gendefs.rs), so rebuild through the
+            // generator's own builder: conservative by design §1.3, because
+            // δ plus full decode of the reference is exactly what
+            // `forded_fam` builds inline.
+            let idx = rhs.apply_local(&down);
+            let fam = self
+                .forded_fam(cx, &ind, &[], idx, Span { start: 0, end: 0 })
+                .ok()?;
+            return Some((ind, fam));
+        }
+        let node = set_scrut(&lhs, Rc::new(Term::Zero))?;
+        // A pre-unfolded occurrence (design §4's free case) still gets the
+        // reference spellings for whatever it *emits*, when the defs exist.
+        let skel_ref = self.gen_type_ref(cx, GenDef::SkelCode(ind.tag), &fst_level);
+        let ity_ref = match ind.index_ty.as_ref() {
+            Some(IdxTy::Decl(iind)) => {
+                self.gen_type_ref(cx, GenDef::IdxCode(iind.tag), &ilvl)
+            }
+            _ => None,
+        };
         Some((
             ind,
             FordedFam {
@@ -240,6 +319,8 @@ impl Elaborator {
                 skel_ty: (*fst).clone(),
                 mu: Rc::new(node.apply_local(&down)),
                 idx: Rc::new(rhs.apply_local(&down)),
+                skel_ref,
+                ity_ref,
             },
         ))
     }
@@ -303,15 +384,34 @@ impl Elaborator {
         // constructor has a child, tier 0's sum-of-Σs otherwise.
         let (skel_ty, l) = self.lower_instance(cx, skel, args, &[], span)?;
         let (ity, ilvl) = self.index_type_of(cx, ind, span)?;
+        // The two **code** references (design §1.4): `El (D#code^δ)` for the
+        // skeleton, `El (I#icode^δ)` for a declared index type. `None` — a
+        // parameterized declaration, or a registration that was skipped —
+        // means every emission site below falls back to the inline copy.
+        let skel_ref = self.gen_type_ref(cx, GenDef::SkelCode(ind.tag), &l);
+        let ity_ref = match ind.index_ty.as_ref() {
+            Some(IdxTy::Decl(iind)) => {
+                self.gen_type_ref(cx, GenDef::IdxCode(iind.tag), &ilvl)
+            }
+            _ => None,
+        };
         // §14.2, closed: `μ` is a Ψ definition, referenced rather than written
         // out. `mu` is still "the node with a placeholder scrutinee" — the
         // node is now `μ_D^δ □` and the placeholder is its argument — so
         // everything downstream (`mu_at`, `eq_at`, the recognizer) is
         // unchanged. Where no definition was registered (a *parameterized*
         // forded family, `gendefs.rs`'s boundary note) the old inlined node is
-        // built exactly as before.
+        // built exactly as before. The application's `dom`/`cod` annotations
+        // are emitted at every μ mention, so they take the references too.
         let mu = match self.gen_ref(cx, GenDef::Mu(ind.tag)) {
-            Some(f) => Self::gen_app(f, &l, &ilvl, &skel_ty, &ity, Term::Zero),
+            Some(f) => Self::gen_app(
+                f,
+                &l,
+                &ilvl,
+                skel_ref.as_ref().unwrap_or(&skel_ty),
+                ity_ref.as_ref().unwrap_or(&ity),
+                Term::Zero,
+            ),
             None => self.build_mu(cx, ind, skel, &skel_ty, &l, &ity, &ilvl, span)?,
         };
         Ok(FordedFam {
@@ -321,6 +421,8 @@ impl Elaborator {
             skel_ty,
             mu: Rc::new(mu),
             idx: Rc::new(idx),
+            skel_ref,
+            ity_ref,
         })
     }
 
@@ -643,10 +745,10 @@ impl Elaborator {
                 acc = Term::Pair {
                     fst_level: level.clone(),
                     snd_level: level.clone(),
-                    fst_ty: Rc::new(fam.skel_ty.clone()),
+                    fst_ty: Rc::new(fam.skel_emit(0)),
                     snd_ty: Rc::new(Type::Vec {
                         level: level.clone(),
-                        elem: Rc::new(fam.skel_ty.shift_local(1)),
+                        elem: Rc::new(fam.skel_emit(1)),
                         len: Rc::new(tail.shift_local(1)),
                     }),
                     fst: Rc::new(child),
@@ -724,10 +826,10 @@ impl Elaborator {
             proof = Term::Transp {
                 ty_level: fam.ilvl.clone(),
                 motive_level: fam.ilvl.clone(),
-                ty: Rc::new(fam.ity.clone()),
+                ty: Rc::new(fam.ity_emit(0)),
                 motive: Rc::new(Type::SEq {
                     level: fam.ilvl.clone(),
-                    ty: Rc::new(fam.ity.shift_local(1)),
+                    ty: Rc::new(fam.ity_emit(1)),
                     lhs: Rc::new(mu_s.shift_local(1)),
                     rhs: Rc::new(motive_idx),
                 }),
@@ -885,7 +987,7 @@ impl Elaborator {
         let q = Type::Pi {
             dom_level: li.clone(),
             cod_level: ql.clone(),
-            dom: Rc::new(fam.ity.shift_local(1)),
+            dom: Rc::new(fam.ity_emit(1)),
             cod: Rc::new(Type::Pi {
                 dom_level: li.clone(),
                 cod_level: mlvl.clone(),
@@ -990,7 +1092,7 @@ impl Elaborator {
             fun: Rc::new(recursion),
             dom_level: li.clone(),
             cod_level: ql.clone(),
-            dom: Rc::new(fam.ity.clone()),
+            dom: Rc::new(fam.ity_emit(0)),
             cod: Rc::new(Type::Pi {
                 dom_level: li.clone(),
                 cod_level: mlvl.clone(),
@@ -1234,7 +1336,7 @@ impl Elaborator {
         let transp = Term::Transp {
             ty_level: env.li.clone(),
             motive_level: env.ql.clone(),
-            ty: Rc::new(fam.ity.shift_local(d + 2)),
+            ty: Rc::new(fam.ity_emit(d + 2)),
             motive: Rc::new(motive),
             lhs: Rc::new(mu_s(2)),
             rhs: Rc::new(Term::Var(LocalVar(1))),
@@ -1244,7 +1346,7 @@ impl Elaborator {
         Ok(Term::Lam {
             dom_level: env.li.clone(),
             cod_level: env.ql.clone(),
-            dom: Rc::new(fam.ity.shift_local(d)),
+            dom: Rc::new(fam.ity_emit(d)),
             body: Rc::new(Term::Lam {
                 dom_level: env.li.clone(),
                 cod_level: env.mlvl.clone(),
@@ -1300,14 +1402,14 @@ impl Elaborator {
         // family over that index, instead of a whole `elim_Wf` per *other*
         // index constructor per arm.
         if let Some(f) = self.gen_ref(cx, GenDef::IdxTag(iind.tag, k)) {
-            return Ok(Self::gen_app(
-                f,
-                ilvl,
-                &l1,
-                &ity.shift_local(d),
-                &ty0,
-                (*scrut).clone(),
-            ));
+            // The application's `dom` annotation is a copy of `I` per
+            // no-confusion branch; spell it as the code reference where the
+            // index type has one (design §1.4). `cx` is the innermost
+            // context here, so the reference needs no further shift.
+            let dom = self
+                .gen_type_ref(cx, GenDef::IdxCode(iind.tag), ilvl)
+                .unwrap_or_else(|| ity.shift_local(d));
+            return Ok(Self::gen_app(f, ilvl, &l1, &dom, &ty0, (*scrut).clone()));
         }
         if iind.recursive {
             self.const_elim_wf(
@@ -1502,7 +1604,7 @@ impl Elaborator {
         Ok(Term::Lam {
             dom_level: env.li.clone(),
             cod_level: env.ql.clone(),
-            dom: Rc::new(fam.ity.shift_local(d)),
+            dom: Rc::new(fam.ity_emit(d)),
             body: Rc::new(nat_elim(
                 nmot,
                 env.ql.clone(),
@@ -1640,7 +1742,7 @@ impl Elaborator {
         Term::Lam {
             dom_level: env.li.clone(),
             cod_level: env.ql.clone(),
-            dom: Rc::new(fam.ity.shift_local(d)),
+            dom: Rc::new(fam.ity_emit(d)),
             body: Rc::new(body),
         }
     }
@@ -1686,7 +1788,7 @@ impl Elaborator {
             for a in cargs {
                 let bind = nth_child(
                     &fam.ilvl,
-                    &Rc::new(fam.ity.shift_local(dz + 1)),
+                    &Rc::new(fam.ity_emit(dz + 1)),
                     m_i,
                     *a,
                     // `cs'_I` is `Var 1` at the index branch body, so `Var 2`
@@ -1701,7 +1803,7 @@ impl Elaborator {
                 // and is passed as the definition's first argument.
                 let proj = match self.gen_ref(&zcx, GenDef::IdxChild(iind.tag, jj, *a)) {
                     Some(f) => {
-                        let ity = fam.ity.shift_local(dz + 2);
+                        let ity = fam.ity_emit(dz + 2);
                         let inner = Type::Pi {
                             dom_level: fam.ilvl.clone(),
                             cod_level: fam.ilvl.clone(),
@@ -1792,7 +1894,7 @@ impl Elaborator {
                 scrut: Rc::new(Term::Transp {
                     ty_level: env.li.clone(),
                     motive_level: Level::constant(0),
-                    ty: Rc::new(fam.ity.shift_local(dz + 1)),
+                    ty: Rc::new(fam.ity_emit(dz + 1)),
                     motive: Rc::new(Type::El {
                         level: Level::constant(0),
                         tm: Rc::new(tag),
@@ -1856,7 +1958,7 @@ impl Elaborator {
         let child_of = |t: usize, extra: u32| -> Term {
             nth_child(
                 &fam.level,
-                &Rc::new(fam.skel_ty.shift_local(dd + extra)),
+                &Rc::new(fam.skel_emit(dd + extra)),
                 m,
                 t,
                 Rc::new(Term::Var(LocalVar(1 + j + extra))),
@@ -1891,10 +1993,10 @@ impl Elaborator {
                     let e_child = Term::Transp {
                         ty_level: env.li.clone(),
                         motive_level: env.li.clone(),
-                        ty: Rc::new(fam.ity.shift_local(dd)),
+                        ty: Rc::new(fam.ity_emit(dd)),
                         motive: Rc::new(Type::SEq {
                             level: env.li.clone(),
-                            ty: Rc::new(fam.ity.shift_local(dd + 1)),
+                            ty: Rc::new(fam.ity_emit(dd + 1)),
                             lhs: Rc::new(fam.mu_at(child_of(ct, 1), dd + 1)),
                             rhs: Rc::new(proj.clone()),
                         }),
@@ -2007,7 +2109,7 @@ impl Elaborator {
         let child_at = |extra: u32| -> Term {
             nth_child(
                 &fam.level,
-                &Rc::new(fam.skel_ty.shift_local(dd + extra)),
+                &Rc::new(fam.skel_emit(dd + extra)),
                 m,
                 t,
                 Rc::new(Term::Var(LocalVar(1 + j + extra))),
@@ -2024,7 +2126,7 @@ impl Elaborator {
             cod: Rc::new(q_at(
                 heather_kernel::term::nth(
                     &fam.level,
-                    &Rc::new(fam.skel_ty.shift_local(dd + 1)),
+                    &Rc::new(fam.skel_emit(dd + 1)),
                     &len,
                     Rc::new(Term::Var(LocalVar(1 + j + 1))),
                     Rc::new(Term::Var(LocalVar(0))),
@@ -2038,7 +2140,7 @@ impl Elaborator {
             fun: Rc::new(ihq),
             dom_level: env.li.clone(),
             cod_level: env.ql.clone(),
-            dom: Rc::new(fam.ity.shift_local(dd)),
+            dom: Rc::new(fam.ity_emit(dd)),
             cod: Rc::new(Type::Pi {
                 dom_level: env.li.clone(),
                 cod_level: env.mlvl.clone(),
@@ -2457,6 +2559,19 @@ inductive G : (n: Nat) -> Type {
         Parts { skel: (*fst).clone(), skel_level: fst_level, ity, ilvl: level, lhs, rhs }
     }
 
+    /// Rebuild the family type with `fst` in the skeleton slot, everything
+    /// else `F`'s own — the forgery constructor for the El-headed negatives
+    /// (design §4's look-alike direction).
+    fn with_fst(t: &Two, fst: Type) -> Type {
+        let Parts { skel_level: fst_level, ity, ilvl, lhs, rhs, .. } = parts(t);
+        Type::Sigma {
+            fst_level,
+            snd_level: ilvl.clone(),
+            fst: Rc::new(fst),
+            snd: Rc::new(Type::SEq { level: ilvl, ty: ity, lhs, rhs }),
+        }
+    }
+
     /// Rebuild the family type with `head` in the `μ` slot.
     fn with_head(t: &Two, head: Term) -> Type {
         let Parts { skel, skel_level: fst_level, ity, ilvl, lhs, rhs } = parts(t);
@@ -2501,6 +2616,18 @@ inductive G : (n: Nat) -> Type {
         assert!(matches!(filled, Term::App { .. }));
         // The slot is really a *definition*, not an inlined eliminator.
         assert!(t.el.gen_ref(&t.cx, GenDef::Mu(t.f.tag)).is_some());
+        // Since `docs/family-type-code-defs-design.md` the Σ's first
+        // component is the **reference** `El (F#code^δ)` rather than the
+        // inline `Wf` — and the recognizer handed back the *inline* copies
+        // regardless, because every structural consumer downstream operates
+        // on those (§3.1's line).
+        let Type::Sigma { fst, .. } = &ty else { panic!("a forded family is a Σ") };
+        let Type::El { tm, .. } = &**fst else {
+            panic!("the skeleton slot is emitted as a code reference")
+        };
+        assert!(t.el.is_gen_ref(tm, GenDef::SkelCode(t.f.tag)));
+        assert!(fam.skel_ref.is_some());
+        assert!(matches!(&fam.skel_ty, Type::Wf { .. }));
     }
 
     #[test]
@@ -2532,5 +2659,198 @@ inductive G : (n: Nat) -> Type {
             },
         };
         assert!(t.el.forded_of(&t.cx, &with_head(&t, bogus)).is_none());
+    }
+
+    // -- the El-headed direction (design §4, §9) -----------------------------
+
+    #[test]
+    fn el_of_the_wrong_declarations_code_is_not_the_family() {
+        let t = two();
+        // `G`'s code reference in `F`'s skeleton slot — the existing
+        // look-alike construction, El-headed: two real declarations differing
+        // only in their tags, every other component `F`'s own, including its
+        // `μ_D`. The reference resolves through the registry — to *`G`'s*
+        // `SkelCode` — so the components disagree nominally and the read
+        // declines.
+        let g_code = t
+            .el
+            .gen_ref(&t.cx, GenDef::SkelCode(t.g.tag))
+            .expect("G has a code definition");
+        let p = parts(&t);
+        let forged = with_fst(
+            &t,
+            Type::El { level: p.skel_level, tm: Rc::new(g_code) },
+        );
+        assert!(t.el.forded_of(&t.cx, &forged).is_none());
+    }
+
+    #[test]
+    fn el_of_a_byte_identical_user_global_is_not_the_family() {
+        let mut t = two();
+        // A bodied global whose statement, layer and body are byte-identical
+        // to `F#code`'s, pushed outside the registry the way a user `fn` is.
+        // Identity is the Ψ index, not the body: it does not read back as
+        // `F`.
+        let skel = Rc::clone(t.f.skel.as_ref().expect("forded"));
+        let (skel_ty, l) = t
+            .el
+            .lower_instance(&t.cx, &skel, &[], &[], SPAN)
+            .expect("the skeleton lowers");
+        let code = crate::code::code_of(&skel_ty).expect("the skeleton has a code");
+        let empty = heather_kernel::term::LocalCtx {
+            base: heather_kernel::term::CtxBase::Nil,
+            entries: vec![],
+        };
+        t.el.psi.push(heather_kernel::term::GlobalBinding::defined_tm(
+            empty,
+            Layer::Code,
+            Rc::new(Type::Ty(l.clone())),
+            Level::succ(l.clone()),
+            Rc::new(code),
+        ));
+        t.el.refresh_delta_psi();
+        // `gen_ref`'s numbering for the binding just pushed: abs = len − 1,
+        // so the variable is `goal_base` — in scope, resolvable, and not in
+        // the registry.
+        let dup = Term::GlobalTm {
+            var: GlobalVar(t.el.goal_base),
+            subst: LocalSubst {
+                tail: heather_kernel::term::SubstTail::Empty {
+                    len: 0,
+                    base: heather_kernel::term::CtxBase::Nil,
+                },
+                terms: vec![],
+            },
+        };
+        let forged = with_fst(&t, Type::El { level: l, tm: Rc::new(dup) });
+        assert!(t.el.forded_of(&t.cx, &forged).is_none());
+    }
+
+    /// A parameterized family keeps its inlined components (§14.12), and the
+    /// coexistence has to hold in both directions: its structural read must
+    /// not accept a reference component, and the reference must not smuggle
+    /// the type over to the declaration it names.
+    #[test]
+    fn a_parameterized_structural_read_rejects_reference_components() {
+        const PSRC: &str = "
+inductive P<A> : (n: Nat) -> Type {
+    PNil                                : P<A>(0),
+    PCons(n: Nat, x: A, t: P<A>(n))     : P<A>(Succ(add(n, 1))),
+}
+";
+        let mut el = Elaborator::with_prelude().expect("prelude");
+        el.elab_source(&format!("{SRC}{PSRC}")).expect("elaborates");
+        let f = Rc::clone(el.inductives.get("F").expect("declared"));
+        let p = Rc::clone(el.inductives.get("P").expect("declared"));
+        let cx = Cx::empty();
+        // `P<Nat>` has no code definition (§14.12's boundary), so its own
+        // type is emitted inline and reads back structurally, with no
+        // reference spellings to hand out.
+        let (pty, _) = el
+            .lower_forded_instance(&cx, &p, &[(Type::Nat, Level::Zero)], Term::Zero, SPAN)
+            .expect("the parameterized family lowers");
+        let (ind, fam) = el.forded_of(&cx, &pty).expect("reads back structurally");
+        assert_eq!(ind.tag, p.tag);
+        assert!(fam.skel_ref.is_none() && fam.ity_ref.is_none());
+        // …and `F`'s reference in its skeleton slot reads back as nothing:
+        // not as `P` (a structural component is not a reference) and not as
+        // `F` (the `μ` slot holds `P<Nat>`'s inlined measure, not `F`'s
+        // `μ_D`).
+        let Type::Sigma { fst_level, snd_level, snd, .. } = pty else {
+            panic!("a forded family is a Σ")
+        };
+        let f_code = el
+            .gen_ref(&cx, GenDef::SkelCode(f.tag))
+            .expect("F has a code definition");
+        let forged = Type::Sigma {
+            fst_level: fst_level.clone(),
+            snd_level,
+            fst: Rc::new(Type::El { level: fst_level, tm: Rc::new(f_code) }),
+            snd,
+        };
+        assert!(el.forded_of(&cx, &forged).is_none());
+    }
+
+    /// Design §4's free case: a family type whnf'd back to the inline `Wf`
+    /// (something δ-unfolded the `El`-references) is exactly yesterday's
+    /// spelling, and the structural read — kept in place as the no-def
+    /// fallback — recognizes it. And the two spellings convert, which is
+    /// §1.3's conservativity stated as a kernel fact rather than a comment.
+    #[test]
+    fn a_pre_unfolded_occurrence_still_reads_back_and_converts() {
+        let t = two();
+        let (ty, lvl) = t
+            .el
+            .lower_forded_instance(&t.cx, &t.f, &[], Term::Zero, SPAN)
+            .expect("the family lowers");
+        let (_, fam) = t.el.forded_of(&t.cx, &ty).expect("reads back");
+        // The unfold by hand: components at their inline types, the μ
+        // reference intact (δ under `El` re-materializes the type; the μ
+        // *term* stays a definition — reduce.rs's lazy decode discipline).
+        let inline = Type::Sigma {
+            fst_level: fam.level.clone(),
+            snd_level: fam.ilvl.clone(),
+            fst: Rc::new(fam.skel_ty.clone()),
+            snd: Rc::new(Type::SEq {
+                level: fam.ilvl.clone(),
+                ty: Rc::new(fam.ity.shift_local(1)),
+                lhs: Rc::new(fam.mu_at(Term::Var(LocalVar(0)), 1)),
+                rhs: Rc::new(fam.idx.shift_local(1)),
+            }),
+        };
+        let (ind, refam) = t
+            .el
+            .forded_of(&t.cx, &inline)
+            .expect("the pre-unfolded spelling still reads back");
+        assert_eq!(ind.tag, t.f.tag);
+        // The structural read hands back the reference spellings for what it
+        // will *emit* — the two-sided coexistence.
+        assert!(refam.skel_ref.is_some());
+        heather_kernel::conv::conv_type(
+            t.el.psi(),
+            &t.cx.gamma,
+            Layer::Prog,
+            &ty,
+            &inline,
+            &lvl,
+            t.el.fuel,
+        )
+        .expect("the reference and inline spellings convert");
+    }
+
+    /// At a **declared** index both codes exist, and the emitted family
+    /// carries both references — the `forded/declared-index-tags` family's
+    /// whole win. `H` is forded (its second index pattern is two constructors
+    /// deep, which route 1 rejects), so this is route 2b at a declared index.
+    #[test]
+    fn a_declared_index_family_references_both_codes() {
+        const DSRC: &str = "
+inductive Shp { SA, SB(s: Shp) }
+inductive H : (s: Shp) -> Type {
+    H0                   : H(SA),
+    H1(s: Shp, t: H(s))  : H(SB(SB(s))),
+}
+";
+        let mut el = Elaborator::with_prelude().expect("prelude");
+        el.elab_source(DSRC).expect("elaborates");
+        let h = Rc::clone(el.inductives.get("H").expect("declared"));
+        let shp = Rc::clone(el.inductives.get("Shp").expect("declared"));
+        let cx = Cx::empty();
+        let (ity, ilvl) = el.lower_instance(&cx, &shp, &[], &[], SPAN).expect("lowers");
+        let sa = el.build_ctor(&cx, &shp, 0, &[], &ity, &ilvl, SPAN).expect("SA builds");
+        let (ty, _) = el.lower_forded_instance(&cx, &h, &[], sa, SPAN).expect("lowers");
+        let Type::Sigma { fst, snd, .. } = &ty else { panic!("a forded family is a Σ") };
+        let Type::El { tm, .. } = &**fst else { panic!("the skeleton slot is a reference") };
+        assert!(el.is_gen_ref(tm, GenDef::SkelCode(h.tag)));
+        let Type::SEq { ty: seq_ty, .. } = &**snd else {
+            panic!("a forded family's second component is an sEq")
+        };
+        let Type::El { tm: ity_tm, .. } = &**seq_ty else {
+            panic!("the index slot is a reference")
+        };
+        assert!(el.is_gen_ref(ity_tm, GenDef::IdxCode(shp.tag)));
+        let (ind, fam) = el.forded_of(&cx, &ty).expect("reads back");
+        assert_eq!(ind.tag, h.tag);
+        assert!(fam.ity_ref.is_some() && fam.skel_ref.is_some());
     }
 }

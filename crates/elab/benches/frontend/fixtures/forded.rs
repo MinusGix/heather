@@ -82,6 +82,12 @@ fn computed_arms() -> Family {
     };
     Family {
         name: "forded/computed-arms",
+        // 2026-08-05, `issues/family-types-as-code-defs.md`: the emitted
+        // *types* became `El (code^δ)` references — 2.79 → 2.54 and ~0.6× on
+        // the constant. What is left quadratic is the `Supf`/`ElimWf`
+        // **shape** slots, which carry the `Wf`'s shape component and no
+        // registered code names (`docs/inductive-fording-lowering.md`
+        // §14.11's closing note). Band tightened around the measured slope.
         what: "a route-2b family with n constructors, and the n-arm match over it",
         unit: "arms",
         // **3.39 → 2.82**, and 31 ms → 8.5 ms at 2 arms / 1.25 s → 195 ms at
@@ -91,7 +97,7 @@ fn computed_arms() -> Family {
         // only 0.6 because the *skeleton type* is still inlined Θ(n) times
         // and is itself Θ(n) (the module header, §14.11). Band tightened from
         // 2.60–4.00 to claim the new slope.
-        expect_slope: Some((2.40, 3.20)),
+        expect_slope: Some((2.20, 2.85)),
         cases: sweep("forded/computed-arms", &[2, 3, 4, 5, 6], src),
     }
 }
@@ -135,7 +141,10 @@ fn occurrences() -> Family {
         // → 29 ms per mention of a forded family
         // (`issues/generated-term-defs.md`, 2026-08-04). That is `μ` stopping
         // being a whole `elim_Wf` in every type that names the family.
-        expect_slope: Some((0.55, 1.30)),
+        // 2026-08-05: ~28 ms → ~19 ms per use (the code-reference round);
+        // slope ~1.0 unchanged, as designed. Band floor raised now that two
+        // rounds have measured it at 0.99–1.01.
+        expect_slope: Some((0.70, 1.30)),
         cases: sweep("forded/occurrences", &[1, 2, 4, 8], src),
     }
 }
@@ -183,7 +192,19 @@ fn declared_index_tags() -> Family {
         // be a Ψ definition (§14.11 / the module header). This is the family
         // that says the round's lever and the round's curve are not the same
         // thing. Band tightened from 1.80–3.00 around the measured slope.
-        expect_slope: Some((2.30, 3.05)),
+        //
+        // 2026-08-05, `issues/family-types-as-code-defs.md`: the code
+        // definitions landed and the slope did **not** move again (2.61 →
+        // 2.62), while every other forded family improved. The claim that
+        // round made — below 2.0 — is NOT met and is not absorbed here: the
+        // residual is a *third* defect, the `Supf` the inversion rebuilds per
+        // index branch (`zj`), whose `shape` annotation is the index type's
+        // Θ(n) shape component and is instantiated Θ(n) times per arm — no
+        // registered code names a `Wf`'s *shape*, only the whole `Wf`
+        // (`docs/inductive-fording-lowering.md` §14.11's closing note,
+        // `issues/wf-shape-annotation-slots.md`). Band records the exponent
+        // that exists, per the suite's rule.
+        expect_slope: Some((2.30, 2.90)),
         cases: sweep("forded/declared-index-tags", &[2, 3, 4, 5, 6], src),
     }
 }
@@ -229,7 +250,9 @@ fn declared_index_branching() -> Family {
         name: "forded/declared-index-branching",
         what: "form A at a branching declared index, swept along the index type's constructor count",
         unit: "index-ctors",
-        expect_slope: Some((1.10, 2.10)),
+        // 2026-08-05: constants ~0.75× under the code-reference round, slope
+        // 1.53 → 1.57 (within the machine's spread). Band tightened.
+        expect_slope: Some((1.20, 1.90)),
         cases: sweep("forded/declared-index-branching", &[2, 3, 4, 5, 6], src),
     }
 }

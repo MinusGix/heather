@@ -125,10 +125,11 @@ Re-record when the machine changes, the toolchain changes, or a deliberate
 change moves the numbers. A baseline from another machine still gates slopes,
 bands and budgets, and `--check` says which half it skipped.
 
-> **The baseline in the tree was recorded on a loaded machine** (2026-08-04,
-> load ~10, 96 °C) and is therefore ~1.3–1.5× pessimistic on absolute times.
-> The slopes, the phase proportions and the budgets are unaffected. Re-record
-> on a quiet machine before trusting the time half of `--check`.
+> **The baseline in the tree was re-recorded 2026-08-05** (the code-definition
+> round, load ~3–6 — quieter than 2026-08-04's ~10 but not quiet). Absolute
+> times still carry a ~1.2–1.5× machine-noise width; the slopes, the phase
+> proportions and the budgets are the trustworthy half. Re-record on a quiet
+> machine before trusting the time half of `--check`.
 
 ## Why no Criterion, and why a second harness at all
 
@@ -173,10 +174,10 @@ commits the generator's output instead of the generator. The committed
 
 ## What is in the suite, and why each is there
 
-Numbers below are the recorded baseline (2026-08-04); the parenthesised
-ranges are what the same fixture read across three full runs on the same
-machine at different loads, which is the honest width of an absolute time
-here.
+Numbers below are the recorded baseline (2026-08-05 for the forded
+families, 2026-08-04 for the rest); the parenthesised ranges are what the
+same fixture read across three full runs on the same machine at different
+loads, which is the honest width of an absolute time here.
 
 | family | measures | today |
 |---|---|---|
@@ -185,10 +186,10 @@ here.
 | `corpus/check-file` | `lib/*.hthr` end to end, as `heather check` does it, with the phase split | 0.58 ms / 1.21 s / 67 s (67–88 s) |
 | `scale/declarations` | *n* independent `fn`+`theorem` pairs — file size with no pathology in it | slope 0.98 (0.98–1.12) |
 | `scale/wide-inductive` | an inductive with *n* constructors and the *n*-arm `match` | slope 1.51 (1.51–1.67) |
-| `forded/computed-arms` | a route-2b family with *n* constructors, and the *n*-arm match | slope 2.79 (was 3.39) |
-| `forded/occurrences` | *n* declarations over one forded family | slope 0.99, ~28 ms **per use** (was ~119 ms) |
-| `forded/declared-index-tags` | form A swept along the *index* type's constructor count | slope 2.61 (was 2.65) |
-| `forded/declared-index-branching` | the same at a **branching** index constructor | slope 1.53 (new 2026-08-04) |
+| `forded/computed-arms` | a route-2b family with *n* constructors, and the *n*-arm match | slope 2.54 (was 2.79) |
+| `forded/occurrences` | *n* declarations over one forded family | slope 1.01, ~19 ms **per use** (was ~28 ms) |
+| `forded/declared-index-tags` | form A swept along the *index* type's constructor count | slope 2.62 (unmoved by two rounds — see below) |
+| `forded/declared-index-branching` | the same at a **branching** index constructor | slope 1.57 (was 1.53) |
 | `meta/nested-inference` | *d* nested implicit instantiations, built and projected back | slope 1.84 (1.84–1.90) |
 
 The spread is the point of the noise warning above, and it is also the
@@ -269,6 +270,58 @@ The branching row, `forded/declared-index-branching`, is new: §14.9's fuel
 cliff is what made it impossible before, and the fixture comment on
 `declared_index_tags` (which stayed deliberately linear, so that its before
 and after are the same measurement) is the pointer to why.
+
+## The code-definition round (2026-08-05), and the family that did not move
+
+`issues/family-types-as-code-defs.md` took the "emitted *types* still to go"
+lever: `⟦Skel⟧` and `I` became **code definitions** (`D#code : Trm_c(· ⊢ Ty l)`,
+`gendefs.rs::{SkelCode, IdxCode}`), emitted as `El (code^δ)` references in the
+`Σ` components, `Lam`/`Pi`/`App`/`transp` annotations and motive
+instantiations, with the `Σ`/`sEq` shell kept inline for the recognizer
+(design doc: `docs/family-type-code-defs-design.md`). Before and after, same
+machine, same day (2026-08-05, load ~3–6 — the noise warning applies to the
+absolutes):
+
+| | 2 | 3 | 4 | 5 | 6 | slope |
+|---|---|---|---|---|---|---|
+| `computed-arms` **before** | 8.5 ms | 28 ms | 62 ms | 116 ms | 195 ms | **2.79** |
+| `computed-arms` **after** | 6.8 ms | 19 ms | 40 ms | 69 ms | 112 ms | **2.54** |
+| `declared-index-tags` **before** | 13 ms | 34 ms | 73 ms | 137 ms | 234 ms | **2.61** |
+| `declared-index-tags` **after** | 15 ms | 40 ms | 83 ms | 150 ms | 271 ms | **2.62** |
+| `declared-index-branching` **before** | 116 ms | 199 ms | 310 ms | 458 ms | 645 ms | **1.53** |
+| `declared-index-branching` **after** | 89 ms | 155 ms | 234 ms | 360 ms | 499 ms | **1.57** |
+
+and `forded/occurrences` — the per-use figure — went from **~28 ms to
+~19 ms per use** at an unchanged slope of ~1.0. `lib/ir_v1.hthr` did not
+move (60.5 s against its 150 s budget; it is 99% kernel gate on deep
+proofs, which this round does not touch).
+
+**The design's headline claim is not met, and the number is recorded rather
+than absorbed.** The design predicted `declared-index-tags` — the pure
+measurement of the type multiplier — would drop below 2.0. It moved not at
+all (2.61 → 2.62, absolutes flat within the machine's spread) while every
+other forded family improved. The residual is therefore a **third defect
+sharing the curve**, and this round's diagnosis: the `Supf`/`ElimWf`
+**shape annotation slots**. Those slots carry the `Wf`'s *shape component*
+(`term.rs:514`), not the whole `Wf`, and the registered codes name whole
+types only — so the `sup_f` the declared-index inversion rebuilds per index
+branch (`zj` in `forded_arm_a_decl`) still writes a Θ(n) shape into each of
+Θ(n) branches, several times over (the equation domain, the motive
+instantiations, the no-confusion transport). Θ(n²) survives the round
+untouched. Recorded at fording doc §14.11 (closing note) and owned by
+`issues/wf-shape-annotation-slots.md`.
+
+The re-spell step the design left contingent (§3.2/phase 3) was measured
+and **not** added: `elab_match` hands `forded_of_at` the *raw* scrutinee
+type (its whnf is used only for the non-fording dispatches), the Σ
+components arrive as references, and the recognizer rebuilds inline copies
+only for the generator's structural reads — there is no re-inlined copy
+flowing into emission for a respell to swap.
+
+Bands after the round (the suite's rule — record the exponents that exist):
+`computed-arms` 2.20–2.85, `occurrences` 0.70–1.30, `declared-index-tags`
+2.30–2.90 (the 2.0 top the design wanted is *not* the recorded claim, for
+the reason above), `declared-index-branching` 1.20–1.90.
 
 ## The other thing the phase split said on day one
 
