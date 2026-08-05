@@ -33,6 +33,7 @@ const LIB: &str = include_str!("../../../lib/ir_v1.hthr");
 /// `LIB` item by item below — `import nat;` in the declarations prefix brings
 /// all of it into scope.
 const NAT: &str = include_str!("../../../lib/std/nat.hthr");
+const BOOL: &str = include_str!("../../../lib/std/bool.hthr");
 
 /// Items a generated emission needs beyond the declarations prefix, in
 /// dependency (file-consistent) order.
@@ -124,6 +125,7 @@ fn refuted(e: &mut Elaborator, src: &str, what: &str) {
 /// lib/ir_v1.hthr` walks, minus the root.
 fn base() -> Elaborator {
     let mut e = Elaborator::with_prelude().expect("prelude");
+    e.elab_module_source("bool", BOOL).unwrap_or_else(|err| panic!("{}", err.render(BOOL)));
     e.elab_module_source("nat", NAT).unwrap_or_else(|err| panic!("{}", err.render(NAT)));
     e
 }

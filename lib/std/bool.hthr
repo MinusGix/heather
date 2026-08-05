@@ -1,0 +1,9 @@
+// `bool` — the two-constructor tier-0 declaration and nothing else yet.
+//
+// Moved out of `nat` (2026-08-05), where it lived because `leb` needed it.
+// The module earns more the day it has a second thing to say: `not`/`and`
+// and their laws, or a general reflection kit (`nat`'s decided order —
+// `Le(n, m)` as `leb(n)(m) = True` — is the pattern any decidable
+// proposition over any type repeats, and its Bool half belongs here).
+
+inductive Bool { False, True }

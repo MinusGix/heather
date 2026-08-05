@@ -8,10 +8,8 @@
 // rather than declared, since the surface has no way to declare an indexed
 // family and `Le(n, m)` as an equation makes its two absurd cases ordinary
 // constructor equations that `absurd` already refutes.
-//
-// `Bool` lives here for the same reason: it exists so `leb` can be written.
-// It is a two-constructor tier-0 declaration and moves out the day a `bool`
-// module has a second thing to say.
+
+import bool;
 
 // ---------------------------------------------------------------------------
 // Addition and its two moving lemmas. `add` recurses on its SECOND argument,
@@ -37,8 +35,6 @@ theorem add_succ_left(a: Nat, b: Nat): add(Succ(a), b) = Succ(add(a, b)) {
 // (issues/comparison-operators.md), which unfolds by δ to the reflection
 // equation `leb(n)(m) = True` — so a proof of either shape is a proof of the
 // other, and the kit's bodies never mention the unfolding.
-
-inductive Bool { False, True }
 
 fn leb(n: Nat) -> Nat -> Bool {
     match n {

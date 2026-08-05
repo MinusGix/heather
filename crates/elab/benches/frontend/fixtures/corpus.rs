@@ -20,10 +20,15 @@ const IR_V1: &str = include_str!("../../../../../lib/ir_v1.hthr");
 /// times the **closure**, because that is what `heather check lib/ir_v1.hthr`
 /// now does and therefore what a user waits for.
 const NAT: &str = include_str!("../../../../../lib/std/nat.hthr");
+const BOOL: &str = include_str!("../../../../../lib/std/bool.hthr");
 
 /// The closure of `lib/ir_v1.hthr`, in loader order: dependencies first.
 fn ir_v1_closure(root: &str) -> Vec<(String, String)> {
-    vec![("nat".to_string(), NAT.to_string()), ("ir_v1".to_string(), root.to_string())]
+    vec![
+        ("bool".to_string(), BOOL.to_string()),
+        ("nat".to_string(), NAT.to_string()),
+        ("ir_v1".to_string(), root.to_string()),
+    ]
 }
 
 /// Everything up to the first theorem — every datatype, helper and
