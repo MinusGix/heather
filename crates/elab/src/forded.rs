@@ -2033,7 +2033,7 @@ impl Elaborator {
 
         for (fi, _) in ctor.fields.iter().enumerate() {
             let kind = ctor.kind[fi];
-            let bname = arm.binders[fi].clone();
+            let bname = arm.binders[fi].name().to_string();
             match kind {
                 FieldKind::IndexVar => {
                     let child = ctor

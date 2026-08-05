@@ -49,6 +49,7 @@ pub mod certgen;
 pub mod stats;
 mod code;
 mod names;
+mod patterns;
 mod forded;
 mod gendefs;
 mod indexed;
@@ -2280,8 +2281,21 @@ impl Elaborator {
                             .extended(Rc::clone(&fam.idx))
                             .extended(Rc::new(scrut_t.clone())),
                     );
+                    // §9: the two direct entries into a family lowering need
+                    // the preprocessing too — otherwise a `_` arm reaches it
+                    // as an unknown constructor. The motive here binds *two*
+                    // things (index, then value), so non-dependence is a shift
+                    // by two (docs/nested-match-patterns-design.md §5.1).
+                    let indep = motive2 == result.shift_local(2);
+                    let prepared = self.prepare_arms(
+                        cx, arms, &scrut_t, &scrut_ty, &result, indep, &mlvl, e.span,
+                    )?;
+                    let (acx, arms) = match &prepared {
+                        Some((c, a)) => (c, a.as_slice()),
+                        None => (cx, arms.as_slice()),
+                    };
                     let t = self.elab_match_forded(
-                        cx, &ind, &fam, arms, scrut_t, motive2, mlvl.clone(), e.span,
+                        acx, &ind, &fam, arms, scrut_t, motive2, mlvl.clone(), e.span,
                     )?;
                     return Ok((t, result, mlvl));
                 }
@@ -2302,8 +2316,16 @@ impl Elaborator {
                             .extended(Rc::clone(&fam.idx))
                             .extended(Rc::new(scrut_t.clone())),
                     );
+                    let indep = motive2 == result.shift_local(2);
+                    let prepared = self.prepare_arms(
+                        cx, arms, &scrut_t, &scrut_ty, &result, indep, &mlvl, e.span,
+                    )?;
+                    let (acx, arms) = match &prepared {
+                        Some((c, a)) => (c, a.as_slice()),
+                        None => (cx, arms.as_slice()),
+                    };
                     let t = self.elab_match_indexed(
-                        cx, &ind, &fam, arms, scrut_t, motive2, mlvl.clone(), e.span,
+                        acx, &ind, &fam, arms, scrut_t, motive2, mlvl.clone(), e.span,
                     )?;
                     return Ok((t, result, mlvl));
                 }
@@ -2489,6 +2511,7 @@ impl Elaborator {
             .iter()
             .map(|a| Arm {
                 ctor: a.ctor.clone(),
+                default: a.default,
                 binders: a.binders.clone(),
                 body: Expr {
                     kind: ExprKind::Lam {
@@ -2554,6 +2577,21 @@ impl Elaborator {
         mlvl: Level,
         span: Span,
     ) -> R<Term> {
+        // Deep patterns and the `_` arm, compiled away before the dispatch
+        // below sees anything (docs/nested-match-patterns-design.md §9). The
+        // pass is idempotent and its fast path is every `match` written
+        // before it existed, so calling it here *and* at the two direct
+        // `elab_infer` entry points costs nothing.
+        let result = motive
+            .apply_local(&LocalSubst::id(&cx.gamma).extended(Rc::new(scrut_t.clone())));
+        let independent = motive == result.shift_local(1);
+        let prepared = self.prepare_arms(
+            cx, arms, &scrut_t, scrut_ty, &result, independent, &mlvl, span,
+        )?;
+        let (cx, arms) = match &prepared {
+            Some((c, a)) => (c, a.as_slice()),
+            None => (cx, arms),
+        };
         let head = self.whnf(cx, scrut_ty, span)?;
         // An indexed family in family form (docs/inductive-indexed-lowering.md
         // §6) — checked on the *raw* type, since whnf at a literal index
@@ -2676,8 +2714,8 @@ impl Elaborator {
         // `Succ(k)` is the unified form (ih = guarded self-call); `Succ(k, ih)`
         // stays as the low-level explicit fallback (issues/match-recursion.md).
         let (k, ih) = match succ.binders.as_slice() {
-            [k] => (k, None),
-            [k, ih] => (k, Some(ih)),
+            [k] => (k.name().to_string(), None),
+            [k, ih] => (k.name().to_string(), Some(ih.name().to_string())),
             _ => return err("`Succ` binds `(k)` or `(k, ih)`", succ.span),
         };
         let (zero, succ_body) = (&zero.body, &succ.body);
@@ -2694,7 +2732,7 @@ impl Elaborator {
         // The unified arm `Succ(k)` binds the ih anyway — the recursor demands
         // it — but under a name the surface cannot spell, because it is
         // reached by a guarded self-call instead.
-        scx.push(ih.cloned().unwrap_or_else(|| "#ih".into()), ih_ty, mlvl.clone());
+        scx.push(ih.clone().unwrap_or_else(|| "#ih".into()), ih_ty, mlvl.clone());
         if ih.is_none() {
             // Does this match descend on one of the declaration's own
             // parameters? If so, self-calls in the arm become the ih. If not
@@ -2771,6 +2809,7 @@ impl Elaborator {
         let [j] = fs.binders.as_slice() else {
             return err("`FS` binds exactly one field, the predecessor index", fs.span)
         };
+        let j = j.name().to_string();
         let (lhs, rhs) = (Type::Unit { level: Level::Zero }, Type::Fin { len: Rc::clone(k) });
         // The two arm types, as the kernel's `Case` rule states them:
         // `M[inl x/z]` in `Γ, x : Unit⁰` and `M[inr y/z]` in `Γ, y : Fin(k)`.
@@ -5125,13 +5164,15 @@ impl Cx {
     }
 }
 
-/// Syntactic upper bound on the goals a declaration can raise: every `?` in
-/// it. An *upper* bound, not the count — `calc` clones sub-expressions into
-/// its `@trans` spine (parser.rs) and the elaborator visits some expressions
-/// twice — which is why goals are numbered in creation order and the unused
-/// slots are padded. Under-counting is impossible: nothing invents a hole.
-fn count_holes(decl: &Decl) -> u32 {
-    fn ty(t: &Ty, n: &mut u32) {
+/// The walkers of [`count_holes`], at module level so that the pattern
+/// compiler can ask the same question of one expression
+/// (`docs/nested-match-patterns-design.md` §10.3): a body it would copy
+/// into several arms must not contain a hole, since a hole is keyed by its
+/// context and cannot be elaborated twice.
+mod count_holes_impl {
+    use super::*;
+
+    pub(super) fn ty(t: &Ty, n: &mut u32) {
         match &t.kind {
             TyKind::Nat | TyKind::Univ { .. } => {}
             TyKind::Eq(a, b) => {
@@ -5153,7 +5194,7 @@ fn count_holes(decl: &Decl) -> u32 {
             TyKind::Code { ty: t, .. } => ty(t, n),
         }
     }
-    fn expr(e: &Expr, n: &mut u32) {
+    pub(super) fn expr(e: &Expr, n: &mut u32) {
         match &e.kind {
             ExprKind::Hole(_) => *n += 1,
             ExprKind::Eq(a, b) => {
@@ -5228,7 +5269,7 @@ fn count_holes(decl: &Decl) -> u32 {
     }
     /// A block's statements, shared by the declaration body's own walk below
     /// so a nested block cannot be walked differently from a top-level one.
-    fn stmts(ss: &[Stmt], n: &mut u32) {
+    pub(super) fn stmts(ss: &[Stmt], n: &mut u32) {
         for s in ss {
             match s {
                 Stmt::Let { ty: t, expr: e, .. } => {
@@ -5242,6 +5283,22 @@ fn count_holes(decl: &Decl) -> u32 {
             }
         }
     }
+}
+
+/// Every `?` in one expression — see [`count_holes_impl`].
+pub(crate) fn count_holes_expr(e: &Expr) -> u32 {
+    let mut n = 0;
+    count_holes_impl::expr(e, &mut n);
+    n
+}
+
+/// Syntactic upper bound on the goals a declaration can raise: every `?` in
+/// it. An *upper* bound, not the count — `calc` clones sub-expressions into
+/// its `@trans` spine (parser.rs) and the elaborator visits some expressions
+/// twice — which is why goals are numbered in creation order and the unused
+/// slots are padded. Under-counting is impossible: nothing invents a hole.
+fn count_holes(decl: &Decl) -> u32 {
+    use count_holes_impl::{expr, stmts, ty};
     let mut n = 0;
     for p in &decl.params {
         ty(&p.ty, &mut n);

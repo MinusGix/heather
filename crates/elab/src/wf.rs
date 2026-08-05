@@ -600,7 +600,7 @@ impl Elaborator {
                 let mut children = Vec::with_capacity(m);
                 let mut container_ih: Option<crate::ContainerIh> = None;
                 let (mut payload_k, mut rec_t) = (0usize, 0usize);
-                for (k, name) in arm.binders.iter().enumerate() {
+                for (k, name) in arm.binders.iter().map(|p| p.name().to_string()).enumerate() {
                     // The container binder is the *tail* of the children
                     // tuple — one `snd` per preceding plain child, no `nth`
                     // and no index arithmetic (docs/container-fields.md §3.5).

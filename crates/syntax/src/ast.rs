@@ -224,7 +224,7 @@ pub enum OnTarget {
     ///
     /// Never reaches the elaborator: `split_result` consumes these into
     /// [`Arm`]s, and an arm head in a block with no `split` is a parse error.
-    Ctor { ctor: String, binders: Vec<String> },
+    Ctor { ctor: String, binders: Vec<Pat>, default: bool },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -346,14 +346,67 @@ pub struct LamBinder {
     pub span: Span,
 }
 
-/// One `match` arm: `C(x, y) => body`. The binders are the constructor's
-/// fields, positionally. `Succ(k, ih)` on `Nat` is the one place a second
-/// binder is *not* a field: it is the explicit induction hypothesis, kept as
-/// a low-level fallback (issues/match-recursion.md).
+/// One field position of a `match` arm: a binder, or a **deep pattern** —
+/// a constructor applied to more patterns
+/// (docs/nested-match-patterns-design.md §3.1).
+///
+/// A deep pattern never survives elaboration's preprocessing: the pattern
+/// matrix compiles it into a nested single-level `match` on a generated
+/// binder, so every lowering below sees only [`Pat::Var`].
+///
+/// A bare identifier is a [`Pat::Ctor`] with no arguments **iff it names a
+/// constructor** — the rule expression position already uses, where `resolve`
+/// falls through to `ctor_of`. The parser cannot tell the two apart (it has no
+/// constructor table), so it always produces [`Pat::Var`] and the elaborator
+/// reclassifies (§3.5). `_` is always a binder.
+#[derive(Debug, Clone)]
+pub enum Pat {
+    Var { name: String, span: Span },
+    Ctor { name: String, args: Vec<Pat>, span: Span },
+}
+
+impl Pat {
+    pub fn span(&self) -> Span {
+        match self {
+            Pat::Var { span, .. } | Pat::Ctor { span, .. } => *span,
+        }
+    }
+
+    /// The binder name, for the lowerings — which only ever run on patterns
+    /// the preprocessing has already flattened. A `Ctor` here is a bug in the
+    /// preprocessing, not a user error, so it reads as an unspellable name
+    /// rather than panicking in a library.
+    pub fn name(&self) -> &str {
+        match self {
+            Pat::Var { name, .. } => name,
+            Pat::Ctor { .. } => "#deep",
+        }
+    }
+
+    /// Is this pattern, or anything under it, a constructor application?
+    pub fn is_deep(&self) -> bool {
+        matches!(self, Pat::Ctor { .. })
+    }
+}
+
+/// One `match` arm: `C(x, y) => body`, or the default `_ => body`. The
+/// binders are the constructor's fields, positionally. `Succ(k, ih)` on `Nat`
+/// is the one place a second binder is *not* a field: it is the explicit
+/// induction hypothesis, kept as a low-level fallback
+/// (issues/match-recursion.md).
 #[derive(Debug, Clone)]
 pub struct Arm {
+    /// The constructor's name, or `"_"` when [`Arm::default`] is set. The
+    /// sentinel is deliberate: a default arm is expanded away before any
+    /// lowering runs, so if one ever leaked it dies at "`_` is not a
+    /// constructor of `X`" rather than silently
+    /// (docs/nested-match-patterns-design.md §3.1).
     pub ctor: String,
-    pub binders: Vec<String>,
+    /// `_ => body` — expands to the constructors with no arm of their own
+    /// (docs/nested-match-patterns-design.md §4). Binds nothing, appears last,
+    /// at most once.
+    pub default: bool,
+    pub binders: Vec<Pat>,
     pub body: Expr,
     pub span: Span,
 }

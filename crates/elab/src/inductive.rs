@@ -1661,7 +1661,7 @@ impl Elaborator {
         // alias each surface binder to `fst(snd^j value)`.
         let mut cur = ctor_ty.clone();
         let mut pair = Rc::clone(value);
-        let mut binders = arm.binders.iter();
+        let mut binders = arm.binders.iter().map(|p| p.name().to_string());
         let mut first = true;
         loop {
             let head = self.whnf(&acx, &cur, arm.span)?;

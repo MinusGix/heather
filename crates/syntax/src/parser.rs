@@ -867,8 +867,8 @@ impl Parser {
             let on = self.on_stmt()?;
             end = on.span;
             match on.target {
-                OnTarget::Ctor { ctor, binders } => {
-                    arms.push(Arm { ctor, binders, body: on.expr, span: on.span })
+                OnTarget::Ctor { ctor, binders, default } => {
+                    arms.push(Arm { ctor, default, binders, body: on.expr, span: on.span })
                 }
                 _ => ons.push(on),
             }
@@ -971,29 +971,26 @@ impl Parser {
                     "`on ?` needs a goal name; write `on _: P := …` to discharge by statement",
                 )
             }
+            // `on _: P := …` is a discharge by statement; `on _ := …` is a
+            // **default arm** of the enclosing `split`
+            // (docs/nested-match-patterns-design.md §8). One token apart, and
+            // the token is already read here.
+            _ if self.at_kw("_") && matches!(self.nth(1), TokKind::Colon) => {
+                self.bump();
+                self.bump(); // `:`
+                OnTarget::Stmt(self.ty()?)
+            }
             _ if self.at_kw("_") => {
                 self.bump();
-                self.expect(&TokKind::Colon, "`:` (discharge by statement)")?;
-                OnTarget::Stmt(self.ty()?)
+                OnTarget::Ctor { ctor: "_".to_string(), binders: vec![], default: true }
             }
             // `on Ctor(x, y) := …` — a `split` arm. An identifier head was a
             // parse error before this, so the form is strictly additive
             // (docs/match-equation-split-design.md §5).
             TokKind::Ident(_) => {
-                let (ctor, _) = self.qual_ident("constructor name in an `on` arm")?;
-                let mut binders = Vec::new();
-                if matches!(self.peek(), TokKind::LParen) {
-                    self.bump();
-                    while !matches!(self.peek(), TokKind::RParen) {
-                        binders.push(self.binder_ident("pattern binder")?.0);
-                        if !matches!(self.peek(), TokKind::Comma) {
-                            break;
-                        }
-                        self.bump();
-                    }
-                    self.expect(&TokKind::RParen, "`)` (pattern binders)")?;
-                }
-                OnTarget::Ctor { ctor, binders }
+                let (ctor, cspan) = self.qual_ident("constructor name in an `on` arm")?;
+                let binders = self.pat_args(&ctor, cspan)?;
+                OnTarget::Ctor { ctor, binders, default: false }
             }
             _ => return self.err("expected `?name`, `_: P`, or `Ctor(…)` after `on`"),
         };
@@ -1776,22 +1773,16 @@ impl Parser {
         let mut arms: Vec<Arm> = Vec::new();
         while !matches!(self.peek(), TokKind::RBrace) {
             let (ctor, cspan) = self.qual_ident("constructor name in a `match` arm")?;
-            let mut binders = Vec::new();
-            if matches!(self.peek(), TokKind::LParen) {
-                self.bump();
-                while !matches!(self.peek(), TokKind::RParen) {
-                    binders.push(self.binder_ident("pattern binder")?.0);
-                    if !matches!(self.peek(), TokKind::Comma) {
-                        break;
-                    }
-                    self.bump();
-                }
-                self.expect(&TokKind::RParen, "`)` (pattern binders)")?;
-            }
+            // `_ =>` is the default arm. It parses here rather than needing a
+            // token of its own because `_` already lexes as an identifier
+            // (`on _: P` reads it that way), so the form steals nothing
+            // (docs/nested-match-patterns-design.md §2).
+            let default = ctor == "_";
+            let binders = self.pat_args(&ctor, cspan)?;
             self.expect(&TokKind::FatArrow, "`=>`")?;
             let body = self.expr()?;
             let span = cspan.join(body.span);
-            arms.push(Arm { ctor, binders, body, span });
+            arms.push(Arm { ctor, default, binders, body, span });
             if !matches!(self.peek(), TokKind::Comma) {
                 break;
             }
@@ -1802,6 +1793,72 @@ impl Parser {
             kind: ExprKind::Match { scrut: Box::new(scrut), eqbind, motive, arms },
             span: start.join(end),
         })
+    }
+
+    /// The parenthesized argument list of a pattern — the field positions of a
+    /// `match` arm or an `on` arm (docs/nested-match-patterns-design.md §3.1).
+    /// Absent parentheses mean no fields, which is the nullary-constructor
+    /// spelling `Zero => …`.
+    ///
+    /// `head`/`hspan` are the pattern's own head, needed only for the one
+    /// error this can raise: a default arm binds nothing, so `_( … )` is
+    /// refused here rather than surviving to the elaborator as a shape no
+    /// expansion could use.
+    fn pat_args(&mut self, head: &str, hspan: Span) -> R<Vec<Pat>> {
+        let mut args = Vec::new();
+        if !matches!(self.peek(), TokKind::LParen) {
+            return Ok(args);
+        }
+        if head == "_" {
+            return Err(ParseError {
+                msg: "`_` binds no fields: it is the default arm, standing for every \
+                      constructor that has no arm of its own"
+                    .to_string(),
+                span: hspan,
+            });
+        }
+        self.bump();
+        while !matches!(self.peek(), TokKind::RParen) {
+            args.push(self.pat()?);
+            if !matches!(self.peek(), TokKind::Comma) {
+                break;
+            }
+            self.bump();
+        }
+        self.expect(&TokKind::RParen, "`)` (pattern binders)")?;
+        Ok(args)
+    }
+
+    /// One field position: a binder, or a **deep pattern**
+    /// (docs/nested-match-patterns-design.md §3.1).
+    ///
+    /// A bare identifier is read as [`Pat::Var`] unconditionally — whether it
+    /// is really a nullary constructor is a question about the constructor
+    /// table, which the parser does not have, and the elaborator reclassifies
+    /// (§3.5). So the *only* thing that distinguishes a deep pattern here is a
+    /// following `(`.
+    fn pat(&mut self) -> R<Pat> {
+        let (name, span) = self.binder_ident("pattern binder")?;
+        if !matches!(self.peek(), TokKind::LParen) {
+            return Ok(Pat::Var { name, span });
+        }
+        if name == "_" {
+            return Err(ParseError {
+                msg: "`_` is a binder, so it takes no pattern arguments".to_string(),
+                span,
+            });
+        }
+        self.bump();
+        let mut args = Vec::new();
+        while !matches!(self.peek(), TokKind::RParen) {
+            args.push(self.pat()?);
+            if !matches!(self.peek(), TokKind::Comma) {
+                break;
+            }
+            self.bump();
+        }
+        let end = self.expect(&TokKind::RParen, "`)` (pattern arguments)")?;
+        Ok(Pat::Ctor { name, args, span: span.join(end) })
     }
 
     /// The optional `h :` prefix of a `match` scrutinee or a `split`
@@ -2513,7 +2570,7 @@ mod tests {
         assert!(eqbind.is_none() && motive.is_none());
         assert_eq!(arms.len(), 2);
         assert_eq!(arms[0].ctor, "Zero");
-        assert_eq!(arms[1].binders, vec!["k".to_string()]);
+        assert_eq!(arms[1].binders.iter().map(|p| p.name()).collect::<Vec<_>>(), ["k"]);
         // A goal discharge in the same block stays a discharge, in any order.
         let d = decl_of(
             "fn f(m: Nat) -> Nat { split m; on ?g := 0; on Zero := ?g; on Succ(k) := k; }",

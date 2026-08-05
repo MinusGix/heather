@@ -1532,7 +1532,7 @@ impl Elaborator {
         let extra = |e: &IdxArmEnv| (cur_len - e.gamma_len) as u32;
         let mut children: Vec<(Rc<Term>, Rc<Term>, Type, Level)> = Vec::new();
         let mut rebind: Vec<Rc<Term>> = Vec::new();
-        for (k, name) in arm.binders.iter().enumerate() {
+        for (k, name) in arm.binders.iter().map(|p| p.name().to_string()).enumerate() {
             if matches!(ctor.kind[k], FieldKind::IndexVar) {
                 let env = env.expect("a pattern variable only occurs in a branch with one");
                 let a = pat

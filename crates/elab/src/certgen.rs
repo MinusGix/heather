@@ -170,7 +170,7 @@ fn fragment<'a>(d: &'a Decl) -> Result<Frag<'a>, String> {
                 match arm.ctor.as_str() {
                     "Zero" if arm.binders.is_empty() => zero = Some(&arm.body),
                     "Succ" if arm.binders.len() == 1 => {
-                        succ = Some((arm.binders[0].as_str(), &arm.body));
+                        succ = Some((arm.binders[0].name(), &arm.body));
                     }
                     _ => return Err(format!("arm `{}` is not a fragment Nat arm", arm.ctor)),
                 }

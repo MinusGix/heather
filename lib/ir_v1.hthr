@@ -130,16 +130,16 @@ fn append(a: Val, b: Val) -> Val {
 }
 
 // arm for `tag` out of an Arm-chain; NoArm when the chain is short
+// The seven non-`Arm` constructors all answer `NoArm`, and the `_` arm is
+// the sugar for exactly that (docs/nested-match-patterns-design.md §4). It is
+// available in the *decreasing* position — this `match` is what installs the
+// guard `pick_arm(next)` reads — because `_` binds nothing the guard looks at
+// (§6.2). The body is elaborated once and shared across the seven expanded
+// arms, since the motive here does not mention the scrutinee (§5).
 fn pick_arm(arms: Ir) -> Nat -> Ir {
     match arms {
         Arm(body, next) => λ (tag: Nat) => match tag { Zero => body, Succ(t2) => pick_arm(next)(t2) },
-        Ret(rs) => λ (tag: Nat) => NoArm,
-        LetCon(tag2, args, rest) => λ (tag: Nat) => NoArm,
-        LetMatch(scrut, arms2, rest) => λ (tag: Nat) => NoArm,
-        NoArm => λ (tag: Nat) => NoArm,
-        LetLoop(init, body, rest) => λ (tag: Nat) => NoArm,
-        LoopIter(body) => λ (tag: Nat) => NoArm,
-        LetCall(callee, args, rest) => λ (tag: Nat) => NoArm,
+        _ => λ (tag: Nat) => NoArm,
     }
 }
 
@@ -189,20 +189,19 @@ fn step_letcon(ev: Val -> Ir -> Res, env: Val, tag: Nat, args: Refs, rest: Ir) -
     }
 }
 
+// The two-level tower written as one decision tree
+// (docs/nested-match-patterns-design.md §3.2). The `_` row is the
+// fallthrough for `VNil`/`VCons` *and* for `NoneV`; the inner `match` on the
+// evaluation result stays written out, because its arms differ.
 fn step_letmatch(ev: Val -> Ir -> Res, env: Val, scrut: Nat, arms: Ir, rest: Ir) -> Res {
     match lookup(env)(scrut) {
-        NoneV => Stuck,
-        SomeV(v) =>
-            match v {
-                VNil => Stuck,
-                VCons(h, t) => Stuck,
-                VCon(tag, fields) =>
-                    match ev(append(fields, env), pick_arm(arms)(tag)) {
-                        Stuck => Stuck,
-                        OutOfFuel => OutOfFuel,
-                        Out(vs) => ev(append(vs, env), rest),
-                    },
+        SomeV(VCon(tag, fields)) =>
+            match ev(append(fields, env), pick_arm(arms)(tag)) {
+                Stuck => Stuck,
+                OutOfFuel => OutOfFuel,
+                Out(vs) => ev(append(vs, env), rest),
             },
+        _ => Stuck,
     }
 }
 
@@ -218,25 +217,16 @@ fn step_letloop(ev: Val -> Ir -> Res, env: Val, init: Refs, body: Ir, rest: Ir) 
     }
 }
 
+// Three levels of tower as one decision tree, `ftag` included: the `Nat`
+// column is split by the same machinery as the `Val` ones, and the two rows
+// that reach it carry `carried` down past two splits
+// (docs/nested-match-patterns-design.md §3.2).
 fn step_loopiter(ev: Val -> Ir -> Res, env: Val, body: Ir) -> Res {
     match ev(env, body) {
-        Stuck => Stuck,
         OutOfFuel => OutOfFuel,
-        Out(vs) =>
-            match vs {
-                VNil => Stuck,
-                VCon(tag, fields) => Stuck,
-                VCons(flag, carried) =>
-                    match flag {
-                        VNil => Stuck,
-                        VCons(h, t) => Stuck,
-                        VCon(ftag, ffields) =>
-                            match ftag {
-                                Zero => Out(carried),
-                                Succ(f2) => ev(carried, LoopIter(body)),
-                            },
-                    },
-            },
+        Out(VCons(VCon(Zero, ffields), carried)) => Out(carried),
+        Out(VCons(VCon(Succ(f2), ffields), carried)) => ev(carried, LoopIter(body)),
+        _ => Stuck,
     }
 }
 

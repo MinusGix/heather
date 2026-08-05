@@ -108,6 +108,7 @@ elaborator.
 | `Vec`/`Fin`/`El` strip-blind at canonical indices (`sprop-design.md` §5.4 correction; `seq-strip-type-former-negatives`) | `seq_transp.rs` lengths were context variables, never literals | 1 |
 | `wf_case_tree`/`idx_case_tree` inner-`Inr` shift (fixed in the 2b-generator round, 2026-08-04) | every case-tree consumer had ≤2 constructors or a closed payload — the inner `Case` never met an ambient variable | 6 (× 2) |
 | tier-0 `case_tree`'s inner injection shift (fixed 2026-08-05) | the same, **plus** every three-constructor open-payload tier-0 test having a *non-dependent* motive, which substitutes the bad annotations away | 6 (× 2, × dependence) |
+| the pattern compiler's generated column names shadowing each other across levels (fixed 2026-08-05) | every typing test — the two columns had the *same type*, so the substitution was well typed | 1 (see below) |
 | `forded.rs::ctor_spine_at` re-lowering the skeleton at **no** type arguments (fixed 2026-08-05) | a parameterized forded family always had a *recursive* skeleton in the tests, and every non-recursive one was monomorphic — the two were never crossed, and each half alone is blind | 2 (the axis was **unwritable**, see below) |
 
 Note the shape of that table: four of six are axis 2, and in every case the
@@ -121,7 +122,21 @@ an open element type needs a declaration with a type parameter, and until
 that is itself the finding — the missing language feature is also a missing
 test.
 
-The last row (2026-08-05) is the second time "the axis could not be varied"
+The pattern-compiler row (2026-08-05, `docs/nested-match-patterns-design.md`
+§13.2) is the first defect here that a **wrong variable** produced rather than
+a wrong annotation, and it sharpens axis 1 rather than adding a seventh axis.
+A generated `match` on a *neutral* scrutinee typed perfectly with the wrong
+column substituted, because the two columns were both `Val`; a *literal*
+scrutinee that had to reduce to a stated answer — `loopiter(Out(VCons(VCon(0,
+VNil), VCons(VNil, VNil)))) = Out(VCons(VNil, VNil))` — caught it in one line.
+So axis 1's "assert it **computes**, not merely that it types" is not a
+strengthening of the neutral case for tidiness: it is the only instrument that
+sees a name-capture bug in generated code, where every type-level check is
+blind by construction. Corollary for anything that generates *binders* rather
+than annotations: the fresh names must be checkably fresh against everything
+in scope, and the test that proves it is an equation between values.
+
+The `ctor_spine_at` row (2026-08-05) is the second time "the axis could not be varied"
 was itself the finding, and this time the obstacle was a *defect* rather than
 a missing feature. The sweep of `issues/dependent-motive-crossing-sweep.md`
 set out to cross axis 6 with axis 2 on the forded `idx_case_tree`, which
