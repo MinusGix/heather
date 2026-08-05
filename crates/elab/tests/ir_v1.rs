@@ -48,9 +48,14 @@
 //! proved once and every *generated* certificate is a cheap fold over it
 //! (`crates/elab/tests/certgen.rs`).
 //!
-//! BUDGET. This binary is **~75 CPU-seconds** against `scripts/test`'s
-//! 300-second `ulimit -t`, and nearly all of that is the one full-library
-//! test. It was ~203s (after 9.2s, 165s, 194s) until 2026-08-01, when the
+//! BUDGET. The full-library test alone is **120 CPU-seconds** (measured
+//! 2026-08-05, dev profile with the overrides; the release CLI check of the
+//! same closure is 80.6s) against `scripts/test`'s 300-second `ulimit -t` —
+//! up from ~75s on 2026-08-02, growth tracking the library and the std
+//! modules, not a regression (issues/suite-wall-time-two-tests.md: the
+//! "~15 min" recorded there was a loaded-machine wall-clock artifact).
+//! `scripts/test --fast` skips this test by name for the inner loop; a
+//! round's final verification runs it. It was ~203s (after 9.2s, 165s, 194s) until 2026-08-01, when the
 //! workspace `[profile.dev.package.*]` overrides landed: the kernel/elab/
 //! syntax crates now build at `opt-level = 3` even for dev test runs
 //! (debug-assertions stay on), which bought back the ~6x a debug-built

@@ -3,6 +3,10 @@
 - **Run tests only via `scripts/test`** (wraps `cargo test` in `ulimit -v/-t`
   plus a thread cap). Never run bare `cargo test`: a runaway test or a
   Debug-formatted kernel term can OOM the whole machine, not just the process.
+  `scripts/test --fast` (~30s) skips the two whole-library acceptance tests
+  (~4.7 CPU-min) for the inner loop; a round's **final** verification, and
+  any change touching `lib/`, the kit, or the generators, must run the plain
+  full `scripts/test`.
 - **The same goes for direct `heather` runs**: deep conversion workloads are
   memory-superlinear (an uncapped release `heather check` on a deep-fuel IR
   theorem hit ~22 GB, 2026-07-31). Wrap every invocation:

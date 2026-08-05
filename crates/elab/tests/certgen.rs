@@ -12,7 +12,12 @@
 //!
 //! BUDGET: measured 2026-08-02 (dev profile with the workspace opt-level
 //! overrides): ~108 CPU-seconds for this binary against `scripts/test`'s
-//! 300-second per-process rail, and **~128s** since 2026-08-05, when the
+//! 300-second per-process rail — **160s** re-measured late 2026-08-05
+//! (issues/suite-wall-time-two-tests.md; past certgen-harness-cost's 200s
+//! trigger-watch zone at 53% of the rail — the snapshot/CLI levers there
+//! are next when it crosses). `scripts/test --fast` skips
+//! `emissions_check_and_controls` by name for the inner loop; a round's
+//! final verification runs it. **~128s** earlier 2026-08-05, when the
 //! arithmetic and order kit moved to `lib/std/nat.hthr`
 //! (docs/modules-design.md §7) and the support prelude started elaborating
 //! that module *whole* instead of slicing nine items out of it. The split is
