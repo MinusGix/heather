@@ -109,3 +109,7 @@ declaration head), the evidence judgment written against the elaborator's
 actual checking/synthesis split, and the method-fallback unification.
 Triggered by the first library round that hurts without it — plausibly
 the prelude layer-2 round or the first file that wants two order kits.
+
+## Log
+
+- 2026-08-05: Receiver half scheduled as [[type-owned-members-receiver-slice]] (2026-08-05 ergonomics round); expected-type resolution and head-symbol picking stay here.
