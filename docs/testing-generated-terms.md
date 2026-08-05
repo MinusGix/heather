@@ -108,6 +108,7 @@ elaborator.
 | `Vec`/`Fin`/`El` strip-blind at canonical indices (`sprop-design.md` §5.4 correction; `seq-strip-type-former-negatives`) | `seq_transp.rs` lengths were context variables, never literals | 1 |
 | `wf_case_tree`/`idx_case_tree` inner-`Inr` shift (fixed in the 2b-generator round, 2026-08-04) | every case-tree consumer had ≤2 constructors or a closed payload — the inner `Case` never met an ambient variable | 6 (× 2) |
 | tier-0 `case_tree`'s inner injection shift (fixed 2026-08-05) | the same, **plus** every three-constructor open-payload tier-0 test having a *non-dependent* motive, which substitutes the bad annotations away | 6 (× 2, × dependence) |
+| `forded.rs::ctor_spine_at` re-lowering the skeleton at **no** type arguments (fixed 2026-08-05) | a parameterized forded family always had a *recursive* skeleton in the tests, and every non-recursive one was monomorphic — the two were never crossed, and each half alone is blind | 2 (the axis was **unwritable**, see below) |
 
 Note the shape of that table: four of six are axis 2, and in every case the
 generalization that would have caught it costs one extra test with one extra
@@ -120,7 +121,20 @@ an open element type needs a declaration with a type parameter, and until
 that is itself the finding — the missing language feature is also a missing
 test.
 
-The last row (2026-08-03) widens the jurisdiction: it was hiding in the
+The last row (2026-08-05) is the second time "the axis could not be varied"
+was itself the finding, and this time the obstacle was a *defect* rather than
+a missing feature. The sweep of `issues/dependent-motive-crossing-sweep.md`
+set out to cross axis 6 with axis 2 on the forded `idx_case_tree`, which
+means writing one declaration that is forded, non-recursive **and**
+parameterized — and that declaration did not elaborate at all. So the axis-2
+control for a lowering is worth attempting even when it looks routine: the
+attempt is a test of whether the instance exists, and here it found a
+name-resolution leak (`unknown type \`A\``, pointing at the declaration) on
+every use of a whole class of declarations. Corollary for a *crossing* sweep:
+when two conditions have each been tested alone, that is not evidence their
+product works.
+
+The 2026-08-03 row widens the jurisdiction: it was hiding in the
 **kernel's own suite**, not in a generated-term schema. This doc was written
 for elaborator schemas, but the axes apply to any test whose scrutinee-like
 position can be either canonical or stuck — a `Vec` *length* is a scrutinee

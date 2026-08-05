@@ -20,8 +20,6 @@
 //!   residue has one (a *deliberate* negative, so the gap is in a test rather
 //!   than in a bug report).
 
-use std::rc::Rc;
-
 use heather_elab::{ElabError, Elaborator};
 use heather_kernel::term::{GlobalBinding, Term, Type};
 
@@ -810,4 +808,113 @@ fn the_cast_rule_holds_over_every_emitted_term() {
     // supposed to emit: §7's `π_c` chains and §8.3's arm casts. Zero would mean
     // the sources above never reached a forded term.
     assert!(seen > 0, "the walker found no `transp` at all — it walked past the generator");
+}
+
+// ---------------------------------------------------------------------------
+// Axis 6 at the **fording** eliminator's own case tree
+// (`issues/dependent-motive-crossing-sweep.md`, 2026-08-05)
+// ---------------------------------------------------------------------------
+
+/// `a_non_uniform_bare_variable_index_declares` reaches `idx_case_tree` — the
+/// non-recursive-skeleton half of §4.1's shape test — but at **two**
+/// constructors and a closed payload, so its case tree has no inner node and
+/// no annotation mentions an ambient variable. This is that path at the axis-6
+/// crossing: **three** constructors (so there is an inner `Case`) × an open
+/// payload on the *middle* one (so its summand annotations mention `A`).
+///
+/// The motive `Q(σ) = Π(m' : I). Π(sEq(I; μ σ; m')). M[m', ⟨σ, e'⟩]` mentions
+/// `σ` in its `sEq` domain whatever the surface motive says, so the third
+/// condition of the 2026-08-05 refinement is already met here by construction
+/// — unlike tier 0's and `indexed_case_tree`'s, whose motives come from the
+/// surface. The mis-shift this would catch is a kernel `LevelMismatch`.
+///
+/// `FdA`'s bare-variable index and `FdS`'s `Succ` of a *payload* variable both
+/// decline route 1, so the declaration is genuinely forded, and no field is
+/// recursive, so the skeleton is non-recursive and the eliminator is
+/// `idx_case_tree` rather than `elim_Wf`.
+///
+/// Writing it needed a fix first — see
+/// [`a_parameterized_family_over_a_non_recursive_skeleton_is_usable`].
+#[test]
+fn the_forded_case_trees_inner_injection_is_scoped_two_binders_deep() {
+    elab(&format!(
+        "{ADD}
+         inductive Fd<A> : (n: Nat) -> Type {{
+             FdZ                                      : Fd<A>(0),
+             FdA(n: Nat, x: A)                        : Fd<A>(n),
+             FdS(n: Nat)                              : Fd<A>(Succ(n)),
+         }}
+         fn readf<A>(d: A, n: Nat, t: Fd<A>(n)) -> A {{
+             match t {{ FdZ => d, FdA(k, x) => x, FdS(k) => d }}
+         }}
+         // Axis 1/3: a literal index that computes, in a checking position.
+         theorem readf_a<A>(d: A, n: Nat, x: A): readf(d, n, FdA(n, x)) = x {{ refl }}
+         theorem readf_z<A>(d: A): readf(d, 0, FdZ) = d {{ refl }}
+         // Axis 2: a neutral scrutinee at an open index, still well typed.
+         fn thru<A>(d: A, n: Nat, t: Fd<A>(n)) -> A {{ readf(d, n, t) }}"
+    ));
+    // The controls. Three constructors at a **closed** payload…
+    elab(&format!(
+        "{ADD}
+         inductive Fdn : (n: Nat) -> Type {{
+             FdZ                                      : Fdn(0),
+             FdA(n: Nat, x: Nat)                      : Fdn(n),
+             FdS(n: Nat)                              : Fdn(Succ(n)),
+         }}
+         fn readn(n: Nat, t: Fdn(n)) -> Nat {{
+             match t {{ FdZ => 0, FdA(k, x) => x, FdS(k) => 0 }}
+         }}
+         theorem readn_a(n: Nat, x: Nat): readn(n, FdA(n, x)) = x {{ refl }}"
+    ));
+    // …and an open payload at **two** constructors, where there is no inner
+    // `Case`.
+    elab(&format!(
+        "{ADD}
+         inductive Fd2<A> : (n: Nat) -> Type {{
+             FdZ                                      : Fd2<A>(0),
+             FdA(n: Nat, x: A)                        : Fd2<A>(n),
+         }}
+         fn read2<A>(d: A, n: Nat, t: Fd2<A>(n)) -> A {{
+             match t {{ FdZ => d, FdA(k, x) => x }}
+         }}
+         theorem read2_a<A>(d: A, n: Nat, x: A): read2(d, n, FdA(n, x)) = x {{ refl }}"
+    ));
+}
+
+/// A **parameterized** forded family whose skeleton is **non-recursive**, used
+/// at all (2026-08-05, `issues/dependent-motive-crossing-sweep.md`).
+///
+/// `branching_tree_end_to_end` has `Tree<A>`, but every constructor of it has a
+/// recursive field, so its skeleton is a `Wf` and the whole match goes through
+/// `tel.spine`. `a_non_uniform_bare_variable_index_declares` has a
+/// non-recursive skeleton, but `Any` is monomorphic. Nothing crossed the two,
+/// and in the gap `μ`'s branch context re-lowered the skeleton at **no** type
+/// arguments (`forded.rs::ctor_spine_at`), so a field spelled `A` was resolved
+/// against a fresh instantiation that had never bound it. The leak was a
+/// name-resolution message from inside the generator — `unknown type `A`` —
+/// pointing at the *declaration*, on the first use of any constructor.
+///
+/// Two constructors and no `match` are enough: the failure is in `μ`, which is
+/// built for the constructor.
+#[test]
+fn a_parameterized_family_over_a_non_recursive_skeleton_is_usable() {
+    elab(&format!(
+        "{ADD}
+         inductive Fq<A> : (n: Nat) -> Type {{
+             FqZ                                      : Fq<A>(0),
+             FqA(n: Nat, x: A)                        : Fq<A>(n),
+         }}
+         // A constructor: this alone was the rejection.
+         fn mk<A>(n: Nat, x: A) -> Fq<A>(n) {{ FqA(n, x) }}
+         fn mkz<A>() -> Fq<A>(0) {{ FqZ }}
+         // …and the eliminator over it, monomorphic and polymorphic.
+         fn readm(d: Nat, n: Nat, t: Fq<Nat>(n)) -> Nat {{
+             match t {{ FqZ => d, FqA(k, x) => x }}
+         }}
+         fn readp<A>(d: A, n: Nat, t: Fq<A>(n)) -> A {{
+             match t {{ FqZ => d, FqA(k, x) => x }}
+         }}
+         theorem readm_a(n: Nat, x: Nat): readm(0, n, FqA(n, x)) = x {{ refl }}
+         theorem readp_a<A>(d: A, n: Nat, x: A): readp(d, n, FqA(n, x)) = x {{ refl }}"
+    ));
 }

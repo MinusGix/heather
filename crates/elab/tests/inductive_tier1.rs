@@ -342,3 +342,79 @@ fn the_lowering_shifts_are_exercised_by_a_dependent_parameter() {
         "#,
     );
 }
+
+// The `Wf` case tree's **inner** injection annotations — axis 6 of
+// `docs/testing-generated-terms.md`, swept by
+// `issues/dependent-motive-crossing-sweep.md` (2026-08-05).
+//
+// `wf_case_tree`'s inner `Inr` is annotated `shift_local(d + 2)`, because it
+// lands in `(cx, y, z')` — the `#rest` binder *and* the inner `Case`'s own
+// motive binder, which is what the `embed(…, 2)` on the next line says. That
+// is the shift the 2026-08-04 round fixed; nothing in *this* file pinned it,
+// because every declaration here with an open payload has **two**
+// constructors (`Tree<A>`, above) and every three-constructor one is
+// monomorphic, so the annotations mention no ambient variable. What did pin
+// it, measured by re-introducing the `d + 1`, was three tests in
+// `indexed_route_2b_gen.rs` — the *fording* file, four layers up, whose
+// `Tree<A>` happens to be three-constructor and polymorphic. That is
+// `docs/container-fields.md` §10.1's rule going unpaid: the emitter is here,
+// so its control belongs here, or the search for the next one starts from the
+// wrong end.
+//
+// Unlike tier 0's, this emitter's motive is dependent *by construction* — a
+// `Wf` step's motive is `Π(cs : Vec(⟦D⟧; arity a)). Π(ih). M[sup_f(a; cs)]`,
+// whose domains mention the tag `a` whatever the surface motive is — so the
+// 2026-08-05 third condition costs nothing here. The `as λ z` motive below is
+// written dependent anyway, so the test keeps its meaning if that ever stops
+// being true.
+//
+// `Tip` is the *middle* constructor deliberately: it is the one whose arm sits
+// under the inner node.
+#[test]
+fn an_inner_wf_injection_is_scoped_two_binders_deep() {
+    elab(
+        r#"
+        inductive Tr3<A> { Leaf, Tip(v: A), Node(l: Tr3<A>, r: Tr3<A>) }
+        fn idt<A>(t: Tr3<A>) -> Tr3<A> { t }
+        theorem idt_id<A>(t: Tr3<A>): idt(t) = t {
+            match t as λ z => idt(z) = z {
+                Leaf => refl,
+                Tip(v) => refl,
+                Node(l, r) => refl,
+            }
+        }
+        // The equation binding drives the same tree through the convoy, whose
+        // motive `Π(t = z). M` is dependent by construction.
+        fn idt2<A>(t: Tr3<A>) -> Tr3<A> { t }
+        theorem idt2_id<A>(t: Tr3<A>): idt2(t) = t {
+            match h : t as λ z => idt2(z) = z {
+                Leaf => refl,
+                Tip(v) => refl,
+                Node(l, r) => refl,
+            }
+        }
+        "#,
+    );
+    // The controls, blind to the shift by construction: three constructors at
+    // a **closed** payload (no ambient variable in any annotation)…
+    elab(
+        r#"
+        inductive Tr3n { Leaf, Tip(v: Nat), Node(l: Tr3n, r: Tr3n) }
+        fn idn(t: Tr3n) -> Tr3n { t }
+        theorem idn_id(t: Tr3n): idn(t) = t {
+            match t as λ z => idn(z) = z { Leaf => refl, Tip(v) => refl, Node(l, r) => refl }
+        }
+        "#,
+    );
+    // …and an open payload at **two** constructors, where there is no inner
+    // `Case` at all.
+    elab(
+        r#"
+        inductive Tr2<A> { Tip(v: A), Node(l: Tr2<A>, r: Tr2<A>) }
+        fn id2<A>(t: Tr2<A>) -> Tr2<A> { t }
+        theorem id2_id<A>(t: Tr2<A>): id2(t) = t {
+            match t as λ z => id2(z) = z { Tip(v) => refl, Node(l, r) => refl }
+        }
+        "#,
+    );
+}

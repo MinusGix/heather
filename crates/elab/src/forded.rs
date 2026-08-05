@@ -456,7 +456,8 @@ impl Elaborator {
                         d_body: u32,
                         _e: &Type|
              -> R<Term> {
-                let acx = self.mu_branch_cx(bcx, ind, Some(tel), k, value, d_body, ity, ilvl, span)?;
+                let acx =
+                    self.mu_branch_cx(bcx, ind, Some(tel), None, k, value, d_body, ity, ilvl, span)?;
                 self.elab_check(&acx, self.res_expr(ind, k), &ity.shift_local(d_body), ilvl)
             };
             self.build_elim_wf(
@@ -475,7 +476,8 @@ impl Elaborator {
             // child-index field and every branch reads payload only.
             let spine = self.spine(skel_ty, l, n, span)?;
             let body = |bcx: &Cx, k: usize, value: &Rc<Term>, d: u32, _e: &Type| -> R<Term> {
-                let acx = self.mu_branch_cx(bcx, ind, None, k, value, d, ity, ilvl, span)?;
+                let acx =
+                    self.mu_branch_cx(bcx, ind, None, Some(&spine), k, value, d, ity, ilvl, span)?;
                 self.elab_check(&acx, self.res_expr(ind, k), &ity.shift_local(d), ilvl)
             };
             self.idx_case_tree(
@@ -507,6 +509,7 @@ impl Elaborator {
         bcx: &Cx,
         ind: &Inductive,
         tel: Option<&Tel>,
+        flat: Option<&Spine>,
         k: usize,
         value: &Rc<Term>,
         d_body: u32,
@@ -520,9 +523,15 @@ impl Elaborator {
         acx.selfref = None;
         acx.guard = None;
         let depth = acx.names.len();
-        let ctor_ty = match tel {
-            Some(tel) => tel.spine.ctors[k].0.shift_local(d_body),
-            None => self.ctor_spine_at(bcx, ind, k, d_body, span)?,
+        // Whichever of the two the caller has, the skeleton's tag spine is one
+        // the caller **already lowered** — see [`Self::ctor_spine_at`] for why
+        // it is not re-lowered here.
+        let ctor_ty = match (tel, flat) {
+            (Some(tel), _) => tel.spine.ctors[k].0.shift_local(d_body),
+            (None, Some(spine)) => spine.ctors[k].0.shift_local(d_body),
+            (None, None) => {
+                return err("internal: a non-recursive skeleton branch has no spine", span)
+            }
         };
         let mut p = 0usize;
         for (j, (name, _)) in ctor.fields.iter().enumerate() {
@@ -565,18 +574,24 @@ impl Elaborator {
     }
 
     /// `⟦c_k⟧` of the **skeleton**, at a non-recursive skeleton, weakened by
-    /// `d`.
-    fn ctor_spine_at(
-        &self,
-        cx: &Cx,
-        ind: &Inductive,
-        k: usize,
-        d: u32,
-        span: Span,
-    ) -> R<Type> {
-        let skel = ind.skel.as_ref().expect("forded");
-        let (ty, l) = self.lower_instance(cx, skel, &[], &[], span)?;
-        let spine = self.spine(&ty, &l, ind.ctors.len(), span)?;
+    /// `d` — read out of `fam`'s *already lowered* `skel_ty`.
+    ///
+    /// It used to re-lower the skeleton here, `lower_instance(cx, skel, &[],
+    /// …)`. That is right only for a monomorphic declaration: a skeleton
+    /// inherits the family's type parameters, and lowering it at **no** type
+    /// arguments leaves a field spelled `A` looking for a type variable that
+    /// the fresh instantiation never bound. The leak was an "unknown type
+    /// `A`" — a name-resolution message, from inside the generator, on the
+    /// *first use of any constructor* of a parameterized forded family whose
+    /// skeleton is non-recursive. Only that corner: a recursive skeleton goes
+    /// through `tel.spine`, which the caller lowered at the right arguments,
+    /// and a monomorphic one has nothing to lose. Found while writing the
+    /// axis-2 control for `idx_case_tree`
+    /// (`issues/dependent-motive-crossing-sweep.md`, 2026-08-05) — the control
+    /// *is* "an open payload on a non-recursive forded skeleton", so the axis
+    /// could not be varied until this was fixed.
+    fn ctor_spine_at(&self, fam: &FordedFam, n: usize, k: usize, d: u32, span: Span) -> R<Type> {
+        let spine = self.spine(&fam.skel_ty, &fam.level, n, span)?;
         Ok(spine.ctors[k].0.shift_local(d))
     }
 
@@ -1950,7 +1965,7 @@ impl Elaborator {
         let depth = acx.names.len();
         let ctor_ty = match tel {
             Some(tel) => tel.spine.ctors[k].0.shift_local(dd),
-            None => self.ctor_spine_at(acx0, ind, k, dd, span)?,
+            None => self.ctor_spine_at(fam, ind.ctors.len(), k, dd, span)?,
         };
         let value_here = Rc::new(value.shift_local(j));
         // The `t`-th child of the skeleton: `nth(Skel; m; cs'; ι_t)` with `cs'`

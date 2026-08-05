@@ -253,3 +253,4 @@ date; the originals are in `git log --follow issues/frontend-roadmap.md`.
   favor (user call: core-language and proving surface before more
   meta-layer migration). Suite 936 → 971.
 - 2026-08-05: Side round, from the cheap list: [[match-with-equation]] and [[split-on-arms]] landed and closed in one round (docs/match-equation-split-design.md) — the equation binding `match h : e` and the `split`/`on` statement, plus a live tier-0 case_tree shift fix whose sweep is [[dependent-motive-crossing-sweep]]. Suite 1035 → 1059.
+- 2026-08-05: Side round: [[dependent-motive-crossing-sweep]] done and closed — all five case-tree emitters' shifts audited correct and pinned by mutation-verified controls; the controls uncovered and fixed a forded-lowering defect (parameterized family over a non-recursive skeleton, narrative on [[indexed-families]]). Filed: [[type-arg-inference-through-index]], [[suite-wall-time-two-tests]]. Suite 1059 → 1064.

@@ -266,3 +266,94 @@ fn fields_above_level_zero() {
         "#,
     );
 }
+
+// The class case tree's **inner** injection annotations — axis 6 of
+// `docs/testing-generated-terms.md` at its 2026-08-05 refinement, swept over
+// `indexed.rs::indexed_case_tree` by
+// `issues/dependent-motive-crossing-sweep.md`.
+//
+// `indexed_case_tree` walks the tag spine of *one index class*, so its inner
+// `Case` needs a class with **three** members, and its injections' summand
+// annotations only mention an ambient variable when the payload is open. That
+// pair is axis 6 as the 2026-08-04 round stated it — but this emitter takes
+// the motive from the surface (`motive_z = M[h, z]`), unlike `wf_case_tree`
+// and the forded `q`, whose motives are dependent *by construction* (a `Wf`
+// step's `cs`/`ih` domains mention the tag; `q`'s `sEq` mentions `σ`). So the
+// third condition applies here exactly as it did to tier 0: at a
+// non-dependent motive `z` never occurs, the injection is substituted away,
+// and a mis-shifted annotation is never shown to the kernel.
+//
+// `W3` puts three constructors in the `0` class with the payload on the
+// *middle* one — the member that sits under the inner node — and the
+// `as λ h z` motive mentions `z`.
+const W3: &str = r#"
+inductive W3<A> : (n: Nat) -> Type {
+    WNil                       : W3<A>(0),
+    WOne(x: A)                 : W3<A>(0),
+    WTwo                       : W3<A>(0),
+    WCons(n: Nat, x: A, t: W3<A>(n)) : W3<A>(Succ(n)),
+}
+"#;
+
+#[test]
+fn an_inner_class_injection_is_scoped_two_binders_deep() {
+    elab(&format!(
+        "{W3}
+         fn idw<A>(n: Nat, t: W3<A>(n)) -> W3<A>(n) {{ t }}
+         theorem idw_id<A>(n: Nat, t: W3<A>(n)): idw<A>(n, t) = t {{
+             match t as λ h z => idw<A>(h, z) = z {{
+                 WNil => refl,
+                 WOne(x) => refl,
+                 WTwo => refl,
+                 WCons(k, x, s) => refl,
+             }}
+         }}"
+    ));
+}
+
+// The two controls, which have to *pass* whatever the emitter does — they are
+// what says the test above is the one carrying the crossing.
+#[test]
+fn the_inner_class_injection_controls_are_blind_to_the_shift() {
+    // (a) the same declaration at a **closed** payload: three members in the
+    // class, a dependent motive, but no ambient variable in any annotation.
+    elab(
+        r#"
+        inductive W3n : (n: Nat) -> Type {
+            WNil                        : W3n(0),
+            WOne(x: Nat)                : W3n(0),
+            WTwo                        : W3n(0),
+            WCons(n: Nat, x: Nat, t: W3n(n)) : W3n(Succ(n)),
+        }
+        fn idn(n: Nat, t: W3n(n)) -> W3n(n) { t }
+        theorem idn_id(n: Nat, t: W3n(n)): idn(n, t) = t {
+            match t as λ h z => idn(h, z) = z {
+                WNil => refl, WOne(x) => refl, WTwo => refl, WCons(k, x, s) => refl,
+            }
+        }
+        "#,
+    );
+    // (b) an open payload and a dependent motive, but only **two** members in
+    // the class — no inner `Case` exists to get wrong.
+    elab(&format!(
+        "{VEC}
+         fn idv<A>(n: Nat, t: V<A>(n)) -> V<A>(n) {{ t }}
+         theorem idv_id<A>(n: Nat, t: V<A>(n)): idv<A>(n, t) = t {{
+             match t as λ h z => idv<A>(h, z) = z {{
+                 VNil => refl,
+                 VCons(k, x, s) => refl,
+             }}
+         }}"
+    ));
+    // (c) three members and an open payload, but a **non-dependent** motive:
+    // the motive never mentions `z`, so the injection is substituted away.
+    elab(&format!(
+        "{W3}
+         fn tag<A>(n: Nat, t: W3<A>(n)) -> Nat {{
+             match t as λ h z => Nat {{
+                 WNil => 0, WOne(x) => 1, WTwo => 2, WCons(k, x, s) => 3,
+             }}
+         }}
+         theorem tag_two<A>(): tag<A>(0, WTwo) = 2 {{ refl }}"
+    ));
+}
