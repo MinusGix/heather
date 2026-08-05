@@ -59,7 +59,7 @@ fn nat_suite_ergonomic() {
         .expect("operator/method/calc Nat suite must elaborate and kernel-check");
     // The `fn` counts too: it is a *defined* Ψ-global since
     // issues/simulate-conversion-cost.md.
-    assert_eq!(e.psi().bindings.len(), 8);
+    assert_eq!(e.psi().bindings.len(), 9);
 }
 
 #[test]

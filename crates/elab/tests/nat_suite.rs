@@ -64,10 +64,10 @@ fn prelude_checks() {
 fn nat_suite_checks() {
     let mut e = Elaborator::with_prelude().expect("prelude");
     e.elab_source(NAT_SUITE).expect("Nat suite must elaborate and kernel-check");
-    // The prelude's 3 theorems + the suite's `fn add` and 4 theorems all
+    // The prelude's 4 theorems + the suite's `fn add` and 4 theorems all
     // landed as Ψ-globals (a `fn` is a *defined* one since
     // issues/simulate-conversion-cost.md).
-    assert_eq!(e.psi().bindings.len(), 8);
+    assert_eq!(e.psi().bindings.len(), 9);
 }
 
 #[test]
@@ -75,8 +75,8 @@ fn a_fn_is_transparent_and_a_theorem_is_not() {
     // The whole point of issues/simulate-conversion-cost.md's definitions
     // round, asserted where it is decided: `add` keeps its body so that
     // conversion can run it, and every `theorem` stays opaque so that its
-    // proof never enters a comparison. `bindings[3]` is the suite's `fn`,
-    // right after the prelude's three theorems.
+    // proof never enters a comparison. `bindings[4]` is the suite's `fn`,
+    // right after the prelude's four theorems.
     let mut e = Elaborator::with_prelude().expect("prelude");
     e.elab_source(NAT_SUITE).expect("Nat suite must elaborate and kernel-check");
     let bodied: Vec<bool> = e
@@ -85,7 +85,7 @@ fn a_fn_is_transparent_and_a_theorem_is_not() {
         .iter()
         .map(|b| matches!(b, GlobalBinding::Tm { body: Some(_), .. }))
         .collect();
-    assert_eq!(bodied, vec![false, false, false, true, false, false, false, false]);
+    assert_eq!(bodied, vec![false, false, false, false, true, false, false, false, false]);
 }
 
 #[test]

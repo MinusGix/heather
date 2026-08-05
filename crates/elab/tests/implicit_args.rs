@@ -52,10 +52,10 @@ fn nat_suite_annotation_free() {
     let mut e = Elaborator::with_prelude().expect("prelude");
     e.elab_source(NAT_SUITE_IMPLICIT)
         .expect("annotation-free Nat suite must elaborate and kernel-check");
-    // prelude's 3 + the suite's `fn add` and 4 theorems, all landed as
+    // prelude's 4 + the suite's `fn add` and 4 theorems, all landed as
     // Ψ-globals (a `fn` is a *defined* one since
     // issues/simulate-conversion-cost.md).
-    assert_eq!(e.psi().bindings.len(), 8);
+    assert_eq!(e.psi().bindings.len(), 9);
 }
 
 #[test]

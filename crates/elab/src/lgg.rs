@@ -1,0 +1,783 @@
+//! Anti-unification — the least general generalization of two kernel terms,
+//! constrained to abstract **one** given pair of witnesses
+//! (issues/congruence-by-anti-unification.md §3).
+//!
+//! Given an expected equation `X = Y` and a proof `p : s = t`, the function
+//! `f` with `f(s) = X` and `f(t) = Y` is recovered by walking `X` and `Y` in
+//! parallel: agreeing nodes are kept, and a position where they *differ*
+//! becomes the abstraction variable — but **only** if the two sides there are
+//! exactly `s` and `t`. Anything else is a loud failure rather than a guess,
+//! which is what keeps this a computation rather than a heuristic (§4: the
+//! generalization is not *chosen* among candidates, it is *computed*).
+//!
+//! Deliberate properties, each of them a decision in the issue's interim
+//! design section:
+//!
+//! - **"Exactly `s`" is `==`** — structural equality on de Bruijn kernel
+//!   terms, which *is* α-equality here. No conversion call: that keeps the
+//!   solver linear and terminating, keeps failure loud, and keeps an
+//!   unbounded conversion out of every `cong` elaboration (decision 2).
+//! - **Under binders: shift or fail** (decision 3). A hole under `k` binders
+//!   matches only if the differing subterms are `s`/`t` weakened by `k`, and
+//!   the abstraction variable lands at index `k`. Nothing is captured and
+//!   nothing is strengthened by cleverness.
+//! - **Zero holes is fine** (decision 5): `X ≡ Y` gives the constant
+//!   function, which is a correct — if uninteresting — congruence.
+//!
+//! This module is deliberately standalone: it has no elaborator state, no
+//! spans and no `Cx`. The elaborator hook that calls it is scheduled for
+//! removal when the layer-m tactic surface arrives (§5), and that tactic
+//! wants exactly this function and exactly these tests.
+//!
+//! ## Two deviations from a textbook LGG, both stated
+//!
+//! 1. **The witness pair is checked at the *outermost* position where it
+//!    matches**, before descending. A textbook LGG of `Succ(0)` and `Succ(1)`
+//!    is `Succ(□)`; if the proof happens to be `p : Succ(0) = Succ(1)` this
+//!    module answers `λz. z` instead, because it tests the whole node against
+//!    `(s, t)` first. Both are correct solutions of `f(s) = X`, `f(t) = Y`;
+//!    testing outermost-first only ever *accepts more*, and the result stays
+//!    a function of the inputs alone, which is the determinism property §4
+//!    actually needs.
+//! 2. **`s ≡ t` is handled up front**: the answer is the constant function
+//!    and `X ≡ Y` is required. Abstracting occurrences would be equally
+//!    correct but less specific, and the constant is what a textbook LGG of
+//!    two identical terms gives.
+//!
+//! Unsupported heads (layer-m code formers: `box`, `letbox`, the code
+//! recursors, universe abstraction) are a *failure*, never a silent
+//! agreement — they can only be reached by terms that already differ, so
+//! declining is the conservative answer.
+
+use std::rc::Rc;
+
+use heather_kernel::term::{LocalVar, Term, Type};
+
+
+/// The body of `f = λ z. body`, scoped in `Γ, z` — `Ok` exactly when every
+/// position at which `x` and `y` differ is witnessed by `(s, t)`.
+///
+/// `x`, `y`, `s` and `t` are all scoped in `Γ`; `Err` carries a message
+/// naming the mismatching position, for the caller to attach a span to.
+pub(crate) fn lgg_body(x: &Term, y: &Term, s: &Term, t: &Term) -> Result<Term, String> {
+    // `s ≡ t`: no position can be witnessed by a *difference*, so the only
+    // generalization is the constant one — and it exists only if the goal's
+    // two sides already agree (decision 5's second sentence).
+    if s == t {
+        if x != y {
+            return Err(format!(
+                "the proof's endpoints are the same term ({s:?}), so the only \
+                 congruence is the constant one — but the goal's two sides differ \
+                 ({x:?} vs {y:?})"
+            ));
+        }
+        return Ok(x.shift_local(1));
+    }
+    let mut lgg = Lgg { s: s.clone(), t: t.clone(), witness: Vec::new() };
+    // Both sides are weakened into `Γ, z` *first*, so every subterm the walk
+    // meets is already in the body's scope and the pieces it keeps need no
+    // renumbering. The witness for depth `k` is correspondingly `s` weakened
+    // by `k + 1`.
+    lgg.tm(&x.shift_local(1), &y.shift_local(1), 0)
+}
+
+struct Lgg {
+    s: Term,
+    t: Term,
+    /// `witness[k]` is `(s, t)` weakened into `Γ, z` plus `k` further
+    /// binders. Memoized because the walk asks for it at every node.
+    witness: Vec<(Term, Term)>,
+}
+
+impl Lgg {
+    fn is_hole(&mut self, x: &Term, y: &Term, k: u32) -> bool {
+        while self.witness.len() as u32 <= k {
+            let i = self.witness.len() as u32;
+            self.witness.push((self.s.shift_local(i + 1), self.t.shift_local(i + 1)));
+        }
+        let (sw, tw) = &self.witness[k as usize];
+        x == sw && y == tw
+    }
+
+    fn mismatch<T>(&self, x: &impl std::fmt::Debug, y: &impl std::fmt::Debug) -> Result<T, String> {
+        Err(format!(
+            "cannot generalize: the two sides differ at a position whose sides are \
+             `{x:?}` and `{y:?}`, but the proof's endpoints are `{:?}` and `{:?}` — \
+             every differing position has to be exactly the proof's endpoints \
+             (issues/congruence-by-anti-unification.md §3)",
+            self.s, self.t
+        ))
+    }
+
+    /// One term node. `x`/`y` are scoped in `Γ, z` plus `k` binders; the
+    /// result is in the same scope, with `Var(k)` wherever the abstraction
+    /// variable was placed.
+    fn tm(&mut self, x: &Term, y: &Term, k: u32) -> Result<Term, String> {
+        // Agreement: keep it whole. Nothing inside can need a hole — a hole
+        // needs a *difference*, and these subtrees are identical.
+        if x == y {
+            return Ok(x.clone());
+        }
+        if self.is_hole(x, y, k) {
+            return Ok(Term::Var(LocalVar(k)));
+        }
+        match (x, y) {
+            (Term::Succ(a), Term::Succ(b)) => Ok(Term::Succ(Rc::new(self.tm(a, b, k)?))),
+            (
+                Term::TmPi { dom_level: dl1, cod_level: cl1, dom: d1, cod: c1 },
+                Term::TmPi { dom_level: dl2, cod_level: cl2, dom: d2, cod: c2 },
+            ) if dl1 == dl2 && cl1 == cl2 => Ok(Term::TmPi {
+                dom_level: dl1.clone(),
+                cod_level: cl1.clone(),
+                dom: Rc::new(self.tm(d1, d2, k)?),
+                cod: Rc::new(self.tm(c1, c2, k + 1)?),
+            }),
+            (
+                Term::TmSigma { fst_level: fl1, snd_level: sl1, fst: f1, snd: s1 },
+                Term::TmSigma { fst_level: fl2, snd_level: sl2, fst: f2, snd: s2 },
+            ) if fl1 == fl2 && sl1 == sl2 => Ok(Term::TmSigma {
+                fst_level: fl1.clone(),
+                snd_level: sl1.clone(),
+                fst: Rc::new(self.tm(f1, f2, k)?),
+                snd: Rc::new(self.tm(s1, s2, k + 1)?),
+            }),
+            (
+                Term::TmW { shape_level: sl1, pos_level: pl1, shape: s1, pos: p1 },
+                Term::TmW { shape_level: sl2, pos_level: pl2, shape: s2, pos: p2 },
+            ) if sl1 == sl2 && pl1 == pl2 => Ok(Term::TmW {
+                shape_level: sl1.clone(),
+                pos_level: pl1.clone(),
+                shape: Rc::new(self.tm(s1, s2, k)?),
+                pos: Rc::new(self.tm(p1, p2, k + 1)?),
+            }),
+            (
+                Term::TmId { level: l1, ty: t1, lhs: a1, rhs: b1 },
+                Term::TmId { level: l2, ty: t2, lhs: a2, rhs: b2 },
+            ) if l1 == l2 => Ok(Term::TmId {
+                level: l1.clone(),
+                ty: Rc::new(self.tm(t1, t2, k)?),
+                lhs: Rc::new(self.tm(a1, a2, k)?),
+                rhs: Rc::new(self.tm(b1, b2, k)?),
+            }),
+            (
+                Term::TmSEq { level: l1, ty: t1, lhs: a1, rhs: b1 },
+                Term::TmSEq { level: l2, ty: t2, lhs: a2, rhs: b2 },
+            ) if l1 == l2 => Ok(Term::TmSEq {
+                level: l1.clone(),
+                ty: Rc::new(self.tm(t1, t2, k)?),
+                lhs: Rc::new(self.tm(a1, a2, k)?),
+                rhs: Rc::new(self.tm(b1, b2, k)?),
+            }),
+            (
+                Term::TmSum { lhs_level: ll1, rhs_level: rl1, lhs: a1, rhs: b1 },
+                Term::TmSum { lhs_level: ll2, rhs_level: rl2, lhs: a2, rhs: b2 },
+            ) if ll1 == ll2 && rl1 == rl2 => Ok(Term::TmSum {
+                lhs_level: ll1.clone(),
+                rhs_level: rl1.clone(),
+                lhs: Rc::new(self.tm(a1, a2, k)?),
+                rhs: Rc::new(self.tm(b1, b2, k)?),
+            }),
+            (
+                Term::TmVec { level: l1, elem: e1, len: n1 },
+                Term::TmVec { level: l2, elem: e2, len: n2 },
+            ) if l1 == l2 => Ok(Term::TmVec {
+                level: l1.clone(),
+                elem: Rc::new(self.tm(e1, e2, k)?),
+                len: Rc::new(self.tm(n1, n2, k)?),
+            }),
+            (Term::TmFin { len: n1 }, Term::TmFin { len: n2 }) => {
+                Ok(Term::TmFin { len: Rc::new(self.tm(n1, n2, k)?) })
+            }
+            (
+                Term::TmWf { level: l1, shape: s1, arity: a1 },
+                Term::TmWf { level: l2, shape: s2, arity: a2 },
+            ) if l1 == l2 => Ok(Term::TmWf {
+                level: l1.clone(),
+                shape: Rc::new(self.tm(s1, s2, k)?),
+                // The arity binds the shape.
+                arity: Rc::new(self.tm(a1, a2, k + 1)?),
+            }),
+            (
+                Term::ElimNat { level: l1, motive: m1, base: b1, step: s1, scrut: t1 },
+                Term::ElimNat { level: l2, motive: m2, base: b2, step: s2, scrut: t2 },
+            ) if l1 == l2 => Ok(Term::ElimNat {
+                level: l1.clone(),
+                motive: Rc::new(self.ty(m1, m2, k + 1)?),
+                base: Rc::new(self.tm(b1, b2, k)?),
+                // The step binds the predecessor and the recursive result.
+                step: Rc::new(self.tm(s1, s2, k + 2)?),
+                scrut: Rc::new(self.tm(t1, t2, k)?),
+            }),
+            (
+                Term::Refl { level: l1, ty: t1, tm: a1 },
+                Term::Refl { level: l2, ty: t2, tm: a2 },
+            ) if l1 == l2 => Ok(Term::Refl {
+                level: l1.clone(),
+                ty: Rc::new(self.ty(t1, t2, k)?),
+                tm: Rc::new(self.tm(a1, a2, k)?),
+            }),
+            (
+                Term::SRefl { level: l1, ty: t1, tm: a1 },
+                Term::SRefl { level: l2, ty: t2, tm: a2 },
+            ) if l1 == l2 => Ok(Term::SRefl {
+                level: l1.clone(),
+                ty: Rc::new(self.ty(t1, t2, k)?),
+                tm: Rc::new(self.tm(a1, a2, k)?),
+            }),
+            (
+                Term::J {
+                    ty_level: tl1,
+                    motive_level: ml1,
+                    ty: t1,
+                    lhs: a1,
+                    motive: m1,
+                    case: c1,
+                    rhs: r1,
+                    proof: p1,
+                },
+                Term::J {
+                    ty_level: tl2,
+                    motive_level: ml2,
+                    ty: t2,
+                    lhs: a2,
+                    motive: m2,
+                    case: c2,
+                    rhs: r2,
+                    proof: p2,
+                },
+            ) if tl1 == tl2 && ml1 == ml2 => Ok(Term::J {
+                ty_level: tl1.clone(),
+                motive_level: ml1.clone(),
+                ty: Rc::new(self.ty(t1, t2, k)?),
+                lhs: Rc::new(self.tm(a1, a2, k)?),
+                // The motive binds the endpoint and the path.
+                motive: Rc::new(self.ty(m1, m2, k + 2)?),
+                case: Rc::new(self.tm(c1, c2, k)?),
+                rhs: Rc::new(self.tm(r1, r2, k)?),
+                proof: Rc::new(self.tm(p1, p2, k)?),
+            }),
+            (
+                Term::Transp {
+                    ty_level: tl1,
+                    motive_level: ml1,
+                    ty: i1,
+                    motive: m1,
+                    lhs: a1,
+                    rhs: b1,
+                    proof: p1,
+                    tm: u1,
+                },
+                Term::Transp {
+                    ty_level: tl2,
+                    motive_level: ml2,
+                    ty: i2,
+                    motive: m2,
+                    lhs: a2,
+                    rhs: b2,
+                    proof: p2,
+                    tm: u2,
+                },
+            ) if tl1 == tl2 && ml1 == ml2 => Ok(Term::Transp {
+                ty_level: tl1.clone(),
+                motive_level: ml1.clone(),
+                ty: Rc::new(self.ty(i1, i2, k)?),
+                motive: Rc::new(self.ty(m1, m2, k + 1)?),
+                lhs: Rc::new(self.tm(a1, a2, k)?),
+                rhs: Rc::new(self.tm(b1, b2, k)?),
+                proof: Rc::new(self.tm(p1, p2, k)?),
+                tm: Rc::new(self.tm(u1, u2, k)?),
+            }),
+            (
+                Term::ElimSEmpty { level: l1, scrut_level: sl1, motive: m1, scrut: t1 },
+                Term::ElimSEmpty { level: l2, scrut_level: sl2, motive: m2, scrut: t2 },
+            ) if l1 == l2 && sl1 == sl2 => Ok(Term::ElimSEmpty {
+                level: l1.clone(),
+                scrut_level: sl1.clone(),
+                motive: Rc::new(self.ty(m1, m2, k + 1)?),
+                scrut: Rc::new(self.tm(t1, t2, k)?),
+            }),
+            (
+                Term::ElimEmpty { level: l1, scrut_level: sl1, motive: m1, scrut: t1 },
+                Term::ElimEmpty { level: l2, scrut_level: sl2, motive: m2, scrut: t2 },
+            ) if l1 == l2 && sl1 == sl2 => Ok(Term::ElimEmpty {
+                level: l1.clone(),
+                scrut_level: sl1.clone(),
+                motive: Rc::new(self.ty(m1, m2, k + 1)?),
+                scrut: Rc::new(self.tm(t1, t2, k)?),
+            }),
+            (
+                Term::Pair {
+                    fst_level: fl1,
+                    snd_level: sl1,
+                    fst_ty: ft1,
+                    snd_ty: st1,
+                    fst: a1,
+                    snd: b1,
+                },
+                Term::Pair {
+                    fst_level: fl2,
+                    snd_level: sl2,
+                    fst_ty: ft2,
+                    snd_ty: st2,
+                    fst: a2,
+                    snd: b2,
+                },
+            ) if fl1 == fl2 && sl1 == sl2 => Ok(Term::Pair {
+                fst_level: fl1.clone(),
+                snd_level: sl1.clone(),
+                fst_ty: Rc::new(self.ty(ft1, ft2, k)?),
+                snd_ty: Rc::new(self.ty(st1, st2, k + 1)?),
+                fst: Rc::new(self.tm(a1, a2, k)?),
+                snd: Rc::new(self.tm(b1, b2, k)?),
+            }),
+            (
+                Term::Fst { fst_level: fl1, snd_level: sl1, fst_ty: ft1, snd_ty: st1, pair: p1 },
+                Term::Fst { fst_level: fl2, snd_level: sl2, fst_ty: ft2, snd_ty: st2, pair: p2 },
+            ) if fl1 == fl2 && sl1 == sl2 => Ok(Term::Fst {
+                fst_level: fl1.clone(),
+                snd_level: sl1.clone(),
+                fst_ty: Rc::new(self.ty(ft1, ft2, k)?),
+                snd_ty: Rc::new(self.ty(st1, st2, k + 1)?),
+                pair: Rc::new(self.tm(p1, p2, k)?),
+            }),
+            (
+                Term::Snd { fst_level: fl1, snd_level: sl1, fst_ty: ft1, snd_ty: st1, pair: p1 },
+                Term::Snd { fst_level: fl2, snd_level: sl2, fst_ty: ft2, snd_ty: st2, pair: p2 },
+            ) if fl1 == fl2 && sl1 == sl2 => Ok(Term::Snd {
+                fst_level: fl1.clone(),
+                snd_level: sl1.clone(),
+                fst_ty: Rc::new(self.ty(ft1, ft2, k)?),
+                snd_ty: Rc::new(self.ty(st1, st2, k + 1)?),
+                pair: Rc::new(self.tm(p1, p2, k)?),
+            }),
+            (
+                Term::Inl { lhs_level: ll1, rhs_level: rl1, lhs: a1, rhs: b1, val: v1 },
+                Term::Inl { lhs_level: ll2, rhs_level: rl2, lhs: a2, rhs: b2, val: v2 },
+            ) if ll1 == ll2 && rl1 == rl2 => Ok(Term::Inl {
+                lhs_level: ll1.clone(),
+                rhs_level: rl1.clone(),
+                lhs: Rc::new(self.ty(a1, a2, k)?),
+                rhs: Rc::new(self.ty(b1, b2, k)?),
+                val: Rc::new(self.tm(v1, v2, k)?),
+            }),
+            (
+                Term::Inr { lhs_level: ll1, rhs_level: rl1, lhs: a1, rhs: b1, val: v1 },
+                Term::Inr { lhs_level: ll2, rhs_level: rl2, lhs: a2, rhs: b2, val: v2 },
+            ) if ll1 == ll2 && rl1 == rl2 => Ok(Term::Inr {
+                lhs_level: ll1.clone(),
+                rhs_level: rl1.clone(),
+                lhs: Rc::new(self.ty(a1, a2, k)?),
+                rhs: Rc::new(self.ty(b1, b2, k)?),
+                val: Rc::new(self.tm(v1, v2, k)?),
+            }),
+            (
+                Term::Case {
+                    lhs_level: ll1,
+                    rhs_level: rl1,
+                    motive_level: ml1,
+                    lhs: a1,
+                    rhs: b1,
+                    motive: m1,
+                    case_l: cl1,
+                    case_r: cr1,
+                    scrut: t1,
+                },
+                Term::Case {
+                    lhs_level: ll2,
+                    rhs_level: rl2,
+                    motive_level: ml2,
+                    lhs: a2,
+                    rhs: b2,
+                    motive: m2,
+                    case_l: cl2,
+                    case_r: cr2,
+                    scrut: t2,
+                },
+            ) if ll1 == ll2 && rl1 == rl2 && ml1 == ml2 => Ok(Term::Case {
+                lhs_level: ll1.clone(),
+                rhs_level: rl1.clone(),
+                motive_level: ml1.clone(),
+                lhs: Rc::new(self.ty(a1, a2, k)?),
+                rhs: Rc::new(self.ty(b1, b2, k)?),
+                motive: Rc::new(self.ty(m1, m2, k + 1)?),
+                case_l: Rc::new(self.tm(cl1, cl2, k + 1)?),
+                case_r: Rc::new(self.tm(cr1, cr2, k + 1)?),
+                scrut: Rc::new(self.tm(t1, t2, k)?),
+            }),
+            (
+                Term::Sup {
+                    shape_level: sl1,
+                    pos_level: pl1,
+                    shape_ty: s1,
+                    pos_ty: p1,
+                    label: a1,
+                    children: c1,
+                },
+                Term::Sup {
+                    shape_level: sl2,
+                    pos_level: pl2,
+                    shape_ty: s2,
+                    pos_ty: p2,
+                    label: a2,
+                    children: c2,
+                },
+            ) if sl1 == sl2 && pl1 == pl2 => Ok(Term::Sup {
+                shape_level: sl1.clone(),
+                pos_level: pl1.clone(),
+                shape_ty: Rc::new(self.ty(s1, s2, k)?),
+                pos_ty: Rc::new(self.ty(p1, p2, k + 1)?),
+                label: Rc::new(self.tm(a1, a2, k)?),
+                children: Rc::new(self.tm(c1, c2, k)?),
+            }),
+            (
+                Term::ElimW {
+                    shape_level: sl1,
+                    pos_level: pl1,
+                    motive_level: ml1,
+                    shape: s1,
+                    pos: p1,
+                    motive: m1,
+                    step: st1,
+                    scrut: t1,
+                },
+                Term::ElimW {
+                    shape_level: sl2,
+                    pos_level: pl2,
+                    motive_level: ml2,
+                    shape: s2,
+                    pos: p2,
+                    motive: m2,
+                    step: st2,
+                    scrut: t2,
+                },
+            ) if sl1 == sl2 && pl1 == pl2 && ml1 == ml2 => Ok(Term::ElimW {
+                shape_level: sl1.clone(),
+                pos_level: pl1.clone(),
+                motive_level: ml1.clone(),
+                shape: Rc::new(self.ty(s1, s2, k)?),
+                pos: Rc::new(self.ty(p1, p2, k + 1)?),
+                motive: Rc::new(self.ty(m1, m2, k + 1)?),
+                // The step binds the label, the child function and the ih.
+                step: Rc::new(self.tm(st1, st2, k + 3)?),
+                scrut: Rc::new(self.tm(t1, t2, k)?),
+            }),
+            (
+                Term::Supf { level: l1, shape: s1, arity: n1, label: a1, children: c1 },
+                Term::Supf { level: l2, shape: s2, arity: n2, label: a2, children: c2 },
+            ) if l1 == l2 => Ok(Term::Supf {
+                level: l1.clone(),
+                shape: Rc::new(self.ty(s1, s2, k)?),
+                arity: Rc::new(self.tm(n1, n2, k + 1)?),
+                label: Rc::new(self.tm(a1, a2, k)?),
+                children: Rc::new(self.tm(c1, c2, k)?),
+            }),
+            (
+                Term::ElimWf {
+                    level: l1,
+                    motive_level: ml1,
+                    shape: s1,
+                    arity: n1,
+                    motive: m1,
+                    step: st1,
+                    scrut: t1,
+                },
+                Term::ElimWf {
+                    level: l2,
+                    motive_level: ml2,
+                    shape: s2,
+                    arity: n2,
+                    motive: m2,
+                    step: st2,
+                    scrut: t2,
+                },
+            ) if l1 == l2 && ml1 == ml2 => Ok(Term::ElimWf {
+                level: l1.clone(),
+                motive_level: ml1.clone(),
+                shape: Rc::new(self.ty(s1, s2, k)?),
+                arity: Rc::new(self.tm(n1, n2, k + 1)?),
+                motive: Rc::new(self.ty(m1, m2, k + 1)?),
+                // The step binds the label, the children tuple and the ih.
+                step: Rc::new(self.tm(st1, st2, k + 3)?),
+                scrut: Rc::new(self.tm(t1, t2, k)?),
+            }),
+            (
+                Term::Lam { dom_level: dl1, cod_level: cl1, dom: d1, body: b1 },
+                Term::Lam { dom_level: dl2, cod_level: cl2, dom: d2, body: b2 },
+            ) if dl1 == dl2 && cl1 == cl2 => Ok(Term::Lam {
+                dom_level: dl1.clone(),
+                cod_level: cl1.clone(),
+                dom: Rc::new(self.ty(d1, d2, k)?),
+                body: Rc::new(self.tm(b1, b2, k + 1)?),
+            }),
+            (
+                Term::App { fun: f1, dom_level: dl1, cod_level: cl1, dom: d1, cod: c1, arg: a1 },
+                Term::App { fun: f2, dom_level: dl2, cod_level: cl2, dom: d2, cod: c2, arg: a2 },
+            ) if dl1 == dl2 && cl1 == cl2 => Ok(Term::App {
+                fun: Rc::new(self.tm(f1, f2, k)?),
+                dom_level: dl1.clone(),
+                cod_level: cl1.clone(),
+                dom: Rc::new(self.ty(d1, d2, k)?),
+                cod: Rc::new(self.ty(c1, c2, k + 1)?),
+                arg: Rc::new(self.tm(a1, a2, k)?),
+            }),
+            // Everything else — mismatched heads, differing level or context
+            // annotations, and the layer-m code formers this module declines
+            // to walk into.
+            _ => self.mismatch(x, y),
+        }
+    }
+
+    /// One type node. There is no hole rule here: the abstraction variable is
+    /// a *term*, so a difference between two types can only be repaired by a
+    /// difference in a term it contains.
+    fn ty(&mut self, x: &Type, y: &Type, k: u32) -> Result<Type, String> {
+        if x == y {
+            return Ok(x.clone());
+        }
+        match (x, y) {
+            (
+                Type::Pi { dom_level: dl1, cod_level: cl1, dom: d1, cod: c1 },
+                Type::Pi { dom_level: dl2, cod_level: cl2, dom: d2, cod: c2 },
+            ) if dl1 == dl2 && cl1 == cl2 => Ok(Type::Pi {
+                dom_level: dl1.clone(),
+                cod_level: cl1.clone(),
+                dom: Rc::new(self.ty(d1, d2, k)?),
+                cod: Rc::new(self.ty(c1, c2, k + 1)?),
+            }),
+            (
+                Type::Sigma { fst_level: fl1, snd_level: sl1, fst: f1, snd: s1 },
+                Type::Sigma { fst_level: fl2, snd_level: sl2, fst: f2, snd: s2 },
+            ) if fl1 == fl2 && sl1 == sl2 => Ok(Type::Sigma {
+                fst_level: fl1.clone(),
+                snd_level: sl1.clone(),
+                fst: Rc::new(self.ty(f1, f2, k)?),
+                snd: Rc::new(self.ty(s1, s2, k + 1)?),
+            }),
+            (
+                Type::W { shape_level: sl1, pos_level: pl1, shape: s1, pos: p1 },
+                Type::W { shape_level: sl2, pos_level: pl2, shape: s2, pos: p2 },
+            ) if sl1 == sl2 && pl1 == pl2 => Ok(Type::W {
+                shape_level: sl1.clone(),
+                pos_level: pl1.clone(),
+                shape: Rc::new(self.ty(s1, s2, k)?),
+                pos: Rc::new(self.ty(p1, p2, k + 1)?),
+            }),
+            (Type::El { level: l1, tm: t1 }, Type::El { level: l2, tm: t2 }) if l1 == l2 => {
+                Ok(Type::El { level: l1.clone(), tm: Rc::new(self.tm(t1, t2, k)?) })
+            }
+            (
+                Type::Id { level: l1, ty: t1, lhs: a1, rhs: b1 },
+                Type::Id { level: l2, ty: t2, lhs: a2, rhs: b2 },
+            ) if l1 == l2 => Ok(Type::Id {
+                level: l1.clone(),
+                ty: Rc::new(self.ty(t1, t2, k)?),
+                lhs: Rc::new(self.tm(a1, a2, k)?),
+                rhs: Rc::new(self.tm(b1, b2, k)?),
+            }),
+            (
+                Type::SEq { level: l1, ty: t1, lhs: a1, rhs: b1 },
+                Type::SEq { level: l2, ty: t2, lhs: a2, rhs: b2 },
+            ) if l1 == l2 => Ok(Type::SEq {
+                level: l1.clone(),
+                ty: Rc::new(self.ty(t1, t2, k)?),
+                lhs: Rc::new(self.tm(a1, a2, k)?),
+                rhs: Rc::new(self.tm(b1, b2, k)?),
+            }),
+            (
+                Type::Sum { lhs_level: ll1, rhs_level: rl1, lhs: a1, rhs: b1 },
+                Type::Sum { lhs_level: ll2, rhs_level: rl2, lhs: a2, rhs: b2 },
+            ) if ll1 == ll2 && rl1 == rl2 => Ok(Type::Sum {
+                lhs_level: ll1.clone(),
+                rhs_level: rl1.clone(),
+                lhs: Rc::new(self.ty(a1, a2, k)?),
+                rhs: Rc::new(self.ty(b1, b2, k)?),
+            }),
+            (
+                Type::Vec { level: l1, elem: e1, len: n1 },
+                Type::Vec { level: l2, elem: e2, len: n2 },
+            ) if l1 == l2 => Ok(Type::Vec {
+                level: l1.clone(),
+                elem: Rc::new(self.ty(e1, e2, k)?),
+                len: Rc::new(self.tm(n1, n2, k)?),
+            }),
+            (Type::Fin { len: n1 }, Type::Fin { len: n2 }) => {
+                Ok(Type::Fin { len: Rc::new(self.tm(n1, n2, k)?) })
+            }
+            (
+                Type::Wf { level: l1, shape: s1, arity: n1 },
+                Type::Wf { level: l2, shape: s2, arity: n2 },
+            ) if l1 == l2 => Ok(Type::Wf {
+                level: l1.clone(),
+                shape: Rc::new(self.ty(s1, s2, k)?),
+                arity: Rc::new(self.tm(n1, n2, k + 1)?),
+            }),
+            _ => self.mismatch(x, y),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use heather_kernel::level::Level;
+
+    fn nat(n: u32) -> Term {
+        (0..n).fold(Term::Zero, |t, _| Term::Succ(Rc::new(t)))
+    }
+
+    fn var(i: u32) -> Term {
+        Term::Var(LocalVar(i))
+    }
+
+    /// `f(a)` at `Nat -> Nat`, the shape a surface `f(a)` elaborates to.
+    fn app(f: Term, a: Term) -> Term {
+        Term::App {
+            fun: Rc::new(f),
+            dom_level: Level::Zero,
+            cod_level: Level::Zero,
+            dom: Rc::new(Type::Nat),
+            cod: Rc::new(Type::Nat),
+            arg: Rc::new(a),
+        }
+    }
+
+    #[test]
+    fn succ_of_literals() {
+        // `X = Succ(0)`, `Y = Succ(1)`, `p : 0 = 1` ⟹ `λz. Succ(z)`.
+        let body = lgg_body(&nat(1), &nat(2), &nat(0), &nat(1)).expect("generalizes");
+        assert_eq!(body, Term::Succ(Rc::new(var(0))));
+    }
+
+    #[test]
+    fn succ_of_neutrals() {
+        // The same with variable endpoints — the axis a literal-only test
+        // misses (docs/testing-generated-terms.md).
+        let body = lgg_body(
+            &Term::Succ(Rc::new(var(1))),
+            &Term::Succ(Rc::new(var(0))),
+            &var(1),
+            &var(0),
+        )
+        .expect("generalizes");
+        // Both sides were weakened into `Γ, z`, so `Γ`'s vars moved up by one.
+        assert_eq!(body, Term::Succ(Rc::new(var(0))));
+    }
+
+    #[test]
+    fn multiple_occurrences_all_abstract() {
+        // `add(a, a) = add(b, b)` from `p : a = b` — every differing position
+        // is abstracted, which is §6's "a different theorem from congruence
+        // in one argument" and correct all the same.
+        let f = var(2); // some function in Γ
+        let x = app(app(f.clone(), var(1)), var(1));
+        let y = app(app(f.clone(), var(0)), var(0));
+        let body = lgg_body(&x, &y, &var(1), &var(0)).expect("generalizes");
+        let z = var(0);
+        assert_eq!(body, app(app(var(3), z.clone()), z));
+    }
+
+    #[test]
+    fn zero_holes_is_the_constant_function() {
+        // `X ≡ Y` with distinct endpoints: no position differs, so the
+        // congruence is constant (decision 5).
+        let body = lgg_body(&nat(3), &nat(3), &nat(0), &nat(1)).expect("generalizes");
+        assert_eq!(body, nat(3));
+    }
+
+    #[test]
+    fn equal_endpoints_need_equal_sides() {
+        // `s ≡ t`: the constant function is the only candidate, so `X ≢ Y`
+        // is a failure and `X ≡ Y` is the constant.
+        assert_eq!(
+            lgg_body(&nat(3), &nat(3), &nat(1), &nat(1)).expect("constant"),
+            nat(3)
+        );
+        let e = lgg_body(&nat(3), &nat(4), &nat(1), &nat(1)).expect_err("no congruence");
+        assert!(e.contains("same term"), "{e}");
+    }
+
+    #[test]
+    fn witness_mismatch_is_loud() {
+        // `Succ(0) = Succ(1)` from `p : 0 = 2`: the differing position's
+        // witness is `(0, 1)`, not the proof's `(0, 2)`.
+        let e = lgg_body(&nat(1), &nat(2), &nat(0), &nat(2)).expect_err("must not guess");
+        assert!(e.contains("cannot generalize"), "{e}");
+    }
+
+    #[test]
+    fn mismatched_heads_are_loud() {
+        let e = lgg_body(&nat(1), &var(0), &nat(0), &nat(1)).expect_err("must not guess");
+        assert!(e.contains("cannot generalize"), "{e}");
+    }
+
+    #[test]
+    fn hole_under_a_binder_shifts() {
+        // `λ(w: Nat). Succ(a)` vs `λ(w: Nat). Succ(b)` from `p : a = b`:
+        // the hole sits under one binder, so the witness is `a` weakened by
+        // one and the abstraction variable lands at index 1 (decision 3).
+        let lam = |b: Term| Term::Lam {
+            dom_level: Level::Zero,
+            cod_level: Level::Zero,
+            dom: Rc::new(Type::Nat),
+            body: Rc::new(Term::Succ(Rc::new(b))),
+        };
+        // `a = Var(1)`, `b = Var(0)` in Γ; under the λ they are 2 and 1, and
+        // once Γ is weakened by `z` they are 3 and 2.
+        let body = lgg_body(&lam(var(2)), &lam(var(1)), &var(1), &var(0)).expect("generalizes");
+        assert_eq!(body, lam(var(1)));
+    }
+
+    #[test]
+    fn a_captured_witness_is_refused() {
+        // The differing position is the λ's *own* variable, which no witness
+        // from `Γ` can be: `Var(0)` under the binder is the bound `w`, not
+        // the `a` of `p : a = b`. Refused rather than captured.
+        let lam = |b: Term| Term::Lam {
+            dom_level: Level::Zero,
+            cod_level: Level::Zero,
+            dom: Rc::new(Type::Nat),
+            body: Rc::new(Term::Succ(Rc::new(b))),
+        };
+        let e = lgg_body(&lam(var(0)), &lam(var(1)), &var(1), &var(0))
+            .expect_err("the bound variable is not the proof's endpoint");
+        assert!(e.contains("cannot generalize"), "{e}");
+    }
+
+    #[test]
+    fn is_deterministic() {
+        // §4's property, mechanically: the same inputs give the same output,
+        // because nothing here chooses.
+        let a = lgg_body(&nat(2), &nat(3), &nat(1), &nat(2)).expect("generalizes");
+        let b = lgg_body(&nat(2), &nat(3), &nat(1), &nat(2)).expect("generalizes");
+        assert_eq!(a, b);
+        assert_eq!(a, Term::Succ(Rc::new(var(0))));
+    }
+
+    #[test]
+    fn generalizes_inside_a_type_annotation() {
+        // The walk descends through *types* too — a `refl` carries the type
+        // its endpoints live at, and a difference can hide there.
+        let refl = |n: Term| Term::Refl {
+            level: Level::Zero,
+            ty: Rc::new(Type::Vec {
+                level: Level::Zero,
+                elem: Rc::new(Type::Nat),
+                len: Rc::new(n),
+            }),
+            tm: Rc::new(Term::Triv { level: Level::Zero }),
+        };
+        let body = lgg_body(&refl(nat(1)), &refl(nat(2)), &nat(1), &nat(2)).expect("generalizes");
+        assert_eq!(
+            body,
+            Term::Refl {
+                level: Level::Zero,
+                ty: Rc::new(Type::Vec {
+                    level: Level::Zero,
+                    elem: Rc::new(Type::Nat),
+                    len: Rc::new(var(0)),
+                }),
+                tm: Rc::new(Term::Triv { level: Level::Zero }),
+            }
+        );
+    }
+}

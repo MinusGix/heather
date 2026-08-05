@@ -2,17 +2,18 @@
 // type the equation is at (issues/surface-polymorphism.md). Proofs are
 // ordinary expressions; `refl` is just a value (docs/sketches/surface-v1.md).
 //
-// `cong_succ` is Nat-specific by name and stays so: a general `cong` needs
-// its *function* argument explicit today. That is a different lemma, not this
-// one generalized.
+// `cong`'s function argument is **implicit**, and in *checking* position it
+// is inferred (issues/congruence-by-anti-unification.md): `cong(p)` against
+// an expected `Succ(a) = Succ(b)` elaborates to `cong(λz => Succ(z), p)`.
+// The information was never in the proof — no unifier reaches `?f a ≟ X`,
+// which is flex-rigid with `a` an arbitrary term and so outside the Miller
+// fragment — it is in the *expected type*, and recovering it is
+// anti-unification (the least general generalization of the goal's two
+// sides) rather than unification. In *inference* position there is no
+// expected type and the function still has to be given: `@cong(λ (x: Nat)
+// => Succ(x), a, b, p)`, or an annotated `let`.
 //
-// The reason is **not** that `f` is unrecoverable — it is recoverable, from
-// the *expected type* rather than from the proof, by anti-unification
-// (issues/congruence-by-anti-unification.md). What is true is that no
-// unifier reaches it: `?f a ≟ X` is flex-rigid with `a` an arbitrary term,
-// so it is outside the Miller fragment and has several solutions. The
-// explicit spelling stays right either way, since a tactic that inferred `f`
-// would emit a call to exactly this declaration.
+// `cong_succ` stays: it is a different lemma by name, and the Nat suite's.
 //
 // Universe polymorphism is still out: `A` ranges over `Ty 0`, so these live
 // at level 1. Quantifying over the *level* is layer-m `ΠΠ ℓ⃗` territory.
@@ -32,4 +33,13 @@ theorem trans<A>({a: A}, {b: A}, {c: A}, p: a = b, q: b = c): a = c {
 
 theorem cong_succ({a: Nat}, {b: Nat}, p: a = b): Succ(a) = Succ(b) {
     j(p, λ y q => Succ(a) = Succ(y), refl)
+}
+
+// Congruence, general in the function and in both types. `f` is implicit and
+// solved by anti-unification against the expected type — see the header and
+// issues/congruence-by-anti-unification.md. The *declaration* is entirely
+// ordinary: nothing about it knows how its argument is found, which is what
+// keeps the eventual layer-m tactic a producer of calls to this very lemma.
+theorem cong<A, B>({f: A -> B}, {a: A}, {b: A}, p: a = b): f(a) = f(b) {
+    j(p, λ y q => f(a) = f(y), refl)
 }
