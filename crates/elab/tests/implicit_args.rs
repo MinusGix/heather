@@ -112,3 +112,80 @@ fn too_few_explicit_args_is_an_elab_error() {
     );
     assert!(matches!(r, Err(ElabError::Elab { .. })), "expected an elab arity error, got {r:?}");
 }
+
+// ---------------------------------------------------------------------------
+// Inference through an indexed family's type
+// (issues/type-arg-inference-through-index.md). A declared-index family's
+// type is `El` of an index recursion choosing among quoted codes, with the
+// payload type a variable *inside* the code literals — so until the walker
+// could descend `elimN` and the code constructors, `t: W3<A>(n)` could not
+// teach it `A` even though a plain `r: Res<A>` could.
+
+const W3I: &str = r#"
+inductive W3i<A> : (n: Nat) -> Type {
+    WNil                            : W3i<A>(0),
+    WOne(x: A)                      : W3i<A>(0),
+    WTwo                            : W3i<A>(0),
+    WCons(n: Nat, x: A, t: W3i<A>(n)) : W3i<A>(Succ(n)),
+}
+"#;
+
+#[test]
+fn a_declared_index_familys_argument_solves_the_type_parameter() {
+    // The reproducer from the issue: no `<A>` at either call site.
+    let mut e = Elaborator::with_prelude().expect("prelude");
+    e.elab_source(&format!(
+        "{W3I}
+         fn idw<A>(n: Nat, t: W3i<A>(n)) -> W3i<A>(n) {{ t }}
+         theorem idw_id<A>(n: Nat, t: W3i<A>(n)): idw(n, t) = t {{ refl }}"
+    ))
+    .expect("`t`'s type mentions `A`; the call must infer it");
+}
+
+#[test]
+fn a_forded_familys_argument_solves_the_type_parameter() {
+    // The other family class: a computed-index (forded) declaration over a
+    // non-recursive skeleton, whose Σ-ford the structural walk reaches
+    // directly.
+    let mut e = Elaborator::with_prelude().expect("prelude");
+    e.elab_source(
+        r#"
+        inductive Fq<A> : (n: Nat) -> Type {
+            FqZ              : Fq<A>(0),
+            FqA(n: Nat, x: A) : Fq<A>(n),
+        }
+        fn idq<A>(n: Nat, t: Fq<A>(n)) -> Fq<A>(n) { t }
+        theorem idq_id<A>(n: Nat, t: Fq<A>(n)): idq(n, t) = t { refl }
+        "#,
+    )
+    .expect("a forded family's type argument must infer the same way");
+}
+
+#[test]
+fn a_structural_look_alike_still_fails_at_the_kernel() {
+    // Negative control. A family's lowered type is *structural* — there is
+    // no name in it for the walker to compare — so against a look-alike
+    // family the walker may well learn `A`. That is fine exactly as long as
+    // the kernel still judges the call — a wrong pairing must fail
+    // *somewhere*, and the walker's license ("only learns, kernel decides")
+    // is what this pins. If these families ever become genuinely
+    // convertible, this call becomes well-typed and the learned solution
+    // correct — then the test should flip to a positive, not the walker to
+    // a refusal.
+    let mut e = Elaborator::with_prelude().expect("prelude");
+    let r = e.elab_source(
+        r#"
+        inductive P2<A> : (n: Nat) -> Type {
+            PNil            : P2<A>(0),
+            PCons(x: A)     : P2<A>(0),
+        }
+        inductive Q2<A> : (n: Nat) -> Type {
+            QNil            : Q2<A>(0),
+            QCons(x: A)     : Q2<A>(0),
+        }
+        fn fp<A>(n: Nat, t: P2<A>(n)) -> Nat { 0 }
+        fn fq(n: Nat, t: Q2<Nat>(n)) -> Nat { fp(n, t) }
+        "#,
+    );
+    assert!(r.is_err(), "a mismatched family argument must not typecheck, got {r:?}");
+}

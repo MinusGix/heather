@@ -5424,6 +5424,70 @@ fn unify_tm(
             unify_tm(gamma, f1, f2, n, d, sols);
             unify_tm(gamma, a1, a2, n, d, sols);
         }
+        // A declared-index family's type is `El` of an **index recursion
+        // choosing among quoted codes** — `elimN(M; z «Σ…+…»; s «…»; i)`
+        // with the payload type a variable *inside* the code literals
+        // (docs/inductive-indexed-lowering.md), so learning `A` from
+        // `t: W3<A>(n)` means walking the eliminator and the code
+        // constructors (issues/type-arg-inference-through-index.md). Same
+        // license as every case here: learn-only, kernel judges. Depths are
+        // each variant's own binding structure — motive and Π/Σ/W second
+        // components bind one, a step binds two, `Wf`'s arity binds one,
+        // `Vec`/`Fin`/`Id`/`sEq`/`+` bind nothing.
+        (
+            Term::ElimNat { motive: m1, base: b1, step: s1, scrut: t1, .. },
+            Term::ElimNat { motive: m2, base: b2, step: s2, scrut: t2, .. },
+        ) => {
+            unify_ty(gamma, m1, m2, n, d + 1, sols);
+            unify_tm(gamma, b1, b2, n, d, sols);
+            unify_tm(gamma, s1, s2, n, d + 2, sols);
+            unify_tm(gamma, t1, t2, n, d, sols);
+        }
+        (
+            Term::TmPi { dom: a1, cod: b1, .. },
+            Term::TmPi { dom: a2, cod: b2, .. },
+        )
+        | (
+            Term::TmSigma { fst: a1, snd: b1, .. },
+            Term::TmSigma { fst: a2, snd: b2, .. },
+        )
+        | (Term::TmW { shape: a1, pos: b1, .. }, Term::TmW { shape: a2, pos: b2, .. })
+        | (
+            Term::TmWf { shape: a1, arity: b1, .. },
+            Term::TmWf { shape: a2, arity: b2, .. },
+        ) => {
+            unify_tm(gamma, a1, a2, n, d, sols);
+            unify_tm(gamma, b1, b2, n, d + 1, sols);
+        }
+        (
+            Term::TmSum { lhs: a1, rhs: b1, .. },
+            Term::TmSum { lhs: a2, rhs: b2, .. },
+        ) => {
+            unify_tm(gamma, a1, a2, n, d, sols);
+            unify_tm(gamma, b1, b2, n, d, sols);
+        }
+        (
+            Term::TmVec { elem: e1, len: k1, .. },
+            Term::TmVec { elem: e2, len: k2, .. },
+        ) => {
+            unify_tm(gamma, e1, e2, n, d, sols);
+            unify_tm(gamma, k1, k2, n, d, sols);
+        }
+        (Term::TmFin { len: k1 }, Term::TmFin { len: k2 }) => {
+            unify_tm(gamma, k1, k2, n, d, sols);
+        }
+        (
+            Term::TmId { ty: t1, lhs: a1, rhs: b1, .. },
+            Term::TmId { ty: t2, lhs: a2, rhs: b2, .. },
+        )
+        | (
+            Term::TmSEq { ty: t1, lhs: a1, rhs: b1, .. },
+            Term::TmSEq { ty: t2, lhs: a2, rhs: b2, .. },
+        ) => {
+            unify_tm(gamma, t1, t2, n, d, sols);
+            unify_tm(gamma, a1, a2, n, d, sols);
+            unify_tm(gamma, b1, b2, n, d, sols);
+        }
         _ => {}
     }
 }
