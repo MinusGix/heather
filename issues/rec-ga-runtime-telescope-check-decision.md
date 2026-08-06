@@ -28,3 +28,7 @@ Next `DESIGN.md` pass, or the next time anyone proposes making the branch
 tables dynamic (e.g. [[generators-in-the-language]]-style work reaching the
 kernel), at which point the trust argument stops holding and this becomes a
 real check, not a note.
+
+## Log
+
+- 2026-08-06: The [[branch-telescope-type-motive-level-slots]] round sharpened what a runtime check would even assert: the layer-c Typ_c bindings and the type-motive recursive calls are an order-preserving bijection in all 52 branches (layer-p bindings are external indices and carry no call, per docs/delam-extensions.md §16.5). That invariant is cheap to state and would make rec_ga reject a mis-shaped table structurally, without re-deriving well-formedness — if the tables ever go dynamic, it is the check to reach for first.

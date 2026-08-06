@@ -4360,4 +4360,103 @@ mod tests {
             );
         }
     }
+
+    /// The `(ctx, level)` slots of the *type-motive* recursive calls
+    /// (`x_S`, `x_T`, `x_M`, …), which no well-formedness check can see.
+    ///
+    /// `M_Typ[l/ℓ, Δ/g, …]` instantiates to `□(Δ ⊢ Ty l)`, and that is a type
+    /// for *any* in-scope `l` and any well-formed `Δ` — so
+    /// [`every_branch_telescope_entry_is_a_well_formed_type`] checks the
+    /// level's **scope** and never its **value**
+    /// ([[branch-telescope-type-motive-level-slots]]). The slots are pinned
+    /// here instead, by the one thing in the same table that already knows
+    /// the answer.
+    ///
+    /// **The invariant.** A type-motive recursive call is the call on a
+    /// sub-*code* of the code being eliminated, and every sub-code a branch
+    /// destructures is bound by that branch's telescope as a **layer-c**
+    /// `Typ_c(Δ_k, l_k)` global. `reduce.rs` hands the *same* payload to
+    /// both slots — `fire` passes `GlobalEntry::Ty(dom)` for `U_S` and
+    /// `rec.elim_ty(dom_level, Δ, dom)` for `x_S` — and `typing.rs` gives
+    /// `elim^Typ(l, Δ, box X)` the type `M_Typ[l/ℓ, Δ/g, box X/x_T]`. So the
+    /// call's `(Δ, l)` *must* be the binding's `(Δ_k, l_k)`, and the two
+    /// independently hand-written halves of each branch spec — its
+    /// `globals:` list and its `inst_ty_motive` arguments — must agree.
+    ///
+    /// The correspondence is the identity on order and, in all 52 branches,
+    /// a **bijection**: `n` layer-c `Ty` globals ⟺ `n` type-motive calls, in
+    /// the same order. Layer-**p** `Ty` globals are the exception that
+    /// explains the rule, and it is the paper's own
+    /// (`docs/delam-extensions.md` §16.5): a `Typ_c` binding is a sub-code
+    /// and carries a recursive call, a `Typ_p` binding is an *external
+    /// index* and carries none. `t_x`'s and `t_λ`'s `U_T` are the only two,
+    /// because a `λ` does not store its codomain. The count assertion below
+    /// fails if any binding grows or loses a call. The remaining locals are
+    /// term-motive calls, whose slots formation already pins (see the
+    /// sibling test).
+    ///
+    /// 45 slots across 27 branches are covered; the enumeration is
+    /// `branch_specs` itself, read off by this walk rather than transcribed.
+    #[test]
+    fn every_type_motive_recursive_call_matches_its_code_layer_type_binding() {
+        let motives = identity_motives();
+        let (l1, l2) = (Level::Zero, Level::Zero);
+        let gamma = LocalCtx::nil();
+        let specs = branch_specs(&motives, &l1, &l2, &gamma);
+
+        let mut covered = 0usize;
+        for (spec, name) in specs.iter().zip(BRANCH_NAMES) {
+            let n = spec.tele.globals.len() as u32;
+            // The layer-c `Typ_c(Δ_k, l_k)` bindings, brought from the
+            // Ψ-prefix they are scoped in to the whole telescope's scope.
+            let bound_codes: Vec<Type> = spec
+                .tele
+                .globals
+                .iter()
+                .enumerate()
+                .filter_map(|(j, b)| match b {
+                    GlobalBinding::Ty { ctx, layer: Layer::Code, level } => Some(Type::CodeTy {
+                        ctx: ctx.shift_global(n - j as u32),
+                        level: level.clone(),
+                    }),
+                    _ => None,
+                })
+                .collect();
+            // The type-motive calls: under the identity `M_Typ` an entry
+            // instantiates to `□(Δ ⊢ Ty l)` exactly when it is one.
+            let calls: Vec<(usize, &Rc<Type>)> = spec
+                .tele
+                .locals
+                .iter()
+                .enumerate()
+                .filter(|(_, (ty, _))| matches!(&**ty, Type::CodeTy { .. }))
+                .map(|(i, (ty, _))| (i, ty))
+                .collect();
+
+            assert_eq!(
+                calls.len(),
+                bound_codes.len(),
+                "{name}: {} layer-c Typ_c globals but {} type-motive recursive \
+                 calls — every sub-code the branch binds gets exactly one call",
+                bound_codes.len(),
+                calls.len(),
+            );
+            for (k, ((i, got), want)) in calls.iter().zip(&bound_codes).enumerate() {
+                assert!(
+                    ***got == *want,
+                    "{name}: type-motive recursive call #{k} (telescope entry \
+                     #{i}) does not match the layer-c Typ_c binding it \
+                     recurses on — its context or universe-level slot is \
+                     wrong (declared {:?}, binding says {:?})",
+                    got,
+                    want,
+                );
+                covered += 1;
+            }
+        }
+        // A tripwire on the *scope* of this test: if a branch gains or loses
+        // a type-motive recursive call, the enumeration in the issue and the
+        // Coq `G_Typ` table both move with it.
+        assert_eq!(covered, 45, "the number of type-motive recursive calls moved");
+    }
 }

@@ -1287,6 +1287,135 @@ fn elim_empty_branch_recursive_call_is_at_the_scrutinee_level() {
         .expect_err("□(g ⊢ Empty^{ℓ'} @ ℓ) is not a well-formed contextual type");
 }
 
+/// **The `(g, ℓ)` slots of the *type-motive* recursive calls**
+/// (`issues/branch-telescope-type-motive-level-slots.md`).
+///
+/// `M_Typ[l/ℓ, Δ/g, …]` instantiates to `□(Δ ⊢ Ty l)`, which is a well-formed
+/// type for *any* in-scope `l`: no formation check can see whether the level
+/// slot of `x_S`/`x_T`/`x_M` holds the right level, only whether it holds a
+/// level. The whole table is covered generically in `rec.rs`
+/// (`every_type_motive_recursive_call_matches_its_code_layer_type_binding`),
+/// which pins each call against the layer-c `Typ_c` binding it recurses on.
+/// This is the complementary *use-site* observation for three representative
+/// slots — the branch body actually consumes the entry at a claimed type, so
+/// what is checked here is that a branch author reading the rule off
+/// `docs/delam-extensions.md` gets a bundle the kernel accepts, and gets one
+/// rejected for every other reading of the slot.
+///
+/// The pattern is `elim_empty_branch_recursive_call_is_at_the_scrutinee_level`
+/// generalised: the identity body is routed through `λ(z : claim). <body>`
+/// applied to the entry under test, so only `claim` varies. The harness
+/// recursor is `elim^Typ` on `box Nat`: `rec_ga` checks all 52 branches
+/// whatever the scrutinee is, so a single trivial scrutinee observes any
+/// branch's telescope.
+#[test]
+fn type_motive_branch_entries_are_usable_at_their_declared_context_and_level() {
+    let psi = GlobalCtx::default();
+    let g2 = g_ctx(2);
+    // ty_pi's telescope: (ℓ, ℓ', g, U_S, U_T, x_S, x_T); (g, x : U_S^id @ ℓ).
+    let gx_typi = ext(&g2, gty(1, &g2), lv(1));
+    // ty_pi's expected type: □(g ⊢ Ty (ℓ ⊔ ℓ')).
+    let ty_pi_branch_ty = Type::CodeTy { ctx: g2.clone(), level: Level::max(lv(1), lv(0)) };
+    // tm_elim_empty's telescope: (ℓ, ℓ', g, U_M, u_t, x_M, x_t), with
+    // U_M : Typ_c((g, x : Empty^{ℓ'} @ ℓ'), ℓ) and expected type
+    // □(g ⊢ U_M^{id, u_t^id/x} @ ℓ).
+    let gx_empty = ext(&g2, Type::Empty { level: lv(0) }, lv(0));
+    let u_m_at_scrut = Type::GlobalTy {
+        var: GlobalVar(1),
+        subst: LocalSubst::id(&g2).extended(rt(gtm(0, &g2))),
+    };
+    let elim_empty_branch_ty =
+        Type::CodeTm { ctx: g2.clone(), ty: rty(u_m_at_scrut), level: lv(1) };
+
+    // `body` re-checked through `λ(z : claim). body` applied to local `var`.
+    let probe = |body: &Rc<Term>, branch_ty: &Type, claim: Type, var: u32| {
+        rt(Term::App {
+            fun: rt(Term::Lam {
+                dom_level: Level::Zero,
+                cod_level: Level::Zero,
+                dom: rty(claim.clone()),
+                body: rt((**body).clone()),
+            }),
+            dom_level: Level::Zero,
+            cod_level: Level::Zero,
+            dom: rty(claim),
+            cod: rty(branch_ty.clone()),
+            arg: rt(Term::Var(LocalVar(var))),
+        })
+    };
+    // `elim^Typ` over `box Nat`, whose only job is to make `rec_ga` walk the
+    // 52 branches; it fires `ty_nat`, which no probe touches.
+    let harness = |branches: Rc<Branches>| Term::ElimCodeTy {
+        ty_motive_level: Level::Zero,
+        tm_motive_level: Level::Zero,
+        motives: identity_motives(),
+        branches,
+        code_level: Level::Zero,
+        ctx: nil_ctx(),
+        scrut: rt(Term::BoxTy(rty(Type::Nat))),
+    };
+    let accepts = |branches: Rc<Branches>| {
+        let t = harness(branches);
+        check_term(
+            &psi,
+            0,
+            Layer::Meta,
+            &nil_ctx(),
+            &t,
+            &Type::CodeTy { ctx: nil_ctx(), level: Level::Zero },
+            &Level::Zero,
+            FUEL,
+        )
+    };
+
+    // -- ty_pi's x_S : □(g ⊢ Ty ℓ) -----------------------------------------
+    // Γ' = Γ, x_S, x_T, so x_S is LocalVar(1) and x_T is LocalVar(0).
+    let with_ty_pi_probe = |claim: Type, var: u32| {
+        let base = identity_branches();
+        let mut b = (*base).clone();
+        b.ty_pi = probe(&base.ty_pi, &ty_pi_branch_ty, claim, var);
+        Rc::new(b)
+    };
+    accepts(with_ty_pi_probe(Type::CodeTy { ctx: g2.clone(), level: lv(1) }, 1))
+        .expect("x_S is the call on U_S : Typ_c(g, ℓ)");
+    // The falsifier of the issue, seen from the use site: ℓ' is a perfectly
+    // good in-scope level, and `Ty ℓ'` a perfectly good type — but it is not
+    // this sub-code's.
+    accepts(with_ty_pi_probe(Type::CodeTy { ctx: g2.clone(), level: lv(0) }, 1))
+        .expect_err("x_S does not live at ℓ'");
+
+    // -- ty_pi's x_T : □((g, x : U_S^id @ ℓ) ⊢ Ty ℓ') ----------------------
+    accepts(with_ty_pi_probe(Type::CodeTy { ctx: gx_typi.clone(), level: lv(0) }, 0))
+        .expect("x_T is the call on U_T : Typ_c((g, x : U_S^id @ ℓ), ℓ')");
+    accepts(with_ty_pi_probe(Type::CodeTy { ctx: gx_typi, level: lv(1) }, 0))
+        .expect_err("x_T does not live at ℓ");
+    // The context slot is unchecked in exactly the same way as the level:
+    // `□(g ⊢ Ty ℓ')` is well formed, just not the codomain's call.
+    accepts(with_ty_pi_probe(Type::CodeTy { ctx: g2.clone(), level: lv(0) }, 0))
+        .expect_err("x_T's call is under the Π's binder, not in g");
+
+    // -- tm_elim_empty's x_M : □((g, x : Empty^{ℓ'} @ ℓ') ⊢ Ty ℓ) ----------
+    // The motive of an eliminator branch: its level is the *motive's* ℓ while
+    // its context extends by the *scrutinee's* Empty^{ℓ'} — the one slot pair
+    // where the two universe binders of `t_elimE` must not be swapped.
+    // Γ' = Γ, x_M, x_t, so x_M is LocalVar(1).
+    let with_elim_empty_probe = |claim: Type| {
+        let base = identity_branches();
+        let mut b = (*base).clone();
+        b.tm_elim_empty = probe(&base.tm_elim_empty, &elim_empty_branch_ty, claim, 1);
+        Rc::new(b)
+    };
+    accepts(with_elim_empty_probe(Type::CodeTy { ctx: gx_empty.clone(), level: lv(1) }))
+        .expect("x_M is the call on U_M : Typ_c((g, x : Empty^{ℓ'} @ ℓ'), ℓ)");
+    accepts(with_elim_empty_probe(Type::CodeTy { ctx: gx_empty, level: lv(0) }))
+        .expect_err("the motive does not live at the scrutinee's level");
+    accepts(with_elim_empty_probe(Type::CodeTy {
+        ctx: ext(&g2, Type::Empty { level: lv(1) }, lv(1)),
+        level: lv(1),
+    }))
+    .expect_err("the motive's context extends by Empty^{ℓ'}, not Empty^ℓ");
+}
+
 #[test]
 fn identity_recursor_on_code_of_types() {
     let t = Term::ElimCodeTy {
