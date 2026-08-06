@@ -344,3 +344,77 @@ time, the frontend is 1% of the wait. Elaborator optimizations aimed at
 what the elaborator *emits*, which is what the forded families measure and
 what the kernel definitions of `issues/generated-term-defs.md` changed — by
 4–7× on the emitted terms, with the emitted *types* still to go.
+
+## Route 1's turn (2026-08-06), and the fixture that was labelled wrong
+
+Phase 5 of `docs/family-type-code-defs-design.md` §6: an unparameterized
+route-1 indexed declaration gets a **family function**
+`D#fam : Trm_c(· ⊢ Π(i : I). Ty l) := λ(i : I). elim(…; i)`, and every
+occurrence of the family type is `El l (D#fam^δ i)` instead of the whole
+type-valued eliminator written out again.
+
+The suite had no route-1 family until this round, which is why route 1's
+§10.3 entry carried "[[frontend-benchmarks]] is where 'acceptable' gets a
+number" for two rounds without one. `indexed/arms` is that family: a route-1
+declaration with `n` constructors and the `n`-arm `match` over it, swept
+2–6. Measured against its own **registration-only** build — the defs
+registered, no emission changed, which is design §8 phase 1's no-op
+measurement point:
+
+| `indexed/arms` | 2 | 3 | 4 | 5 | 6 | slope |
+|---|---|---|---|---|---|---|
+| registration only | 249 µs | 610 µs | 1.13 ms | 1.82 ms | 2.83 ms | **2.20** |
+| emitting references | 216 µs | 517 µs | 980 µs | 1.65 ms | 2.57 ms | **2.25** |
+
+The constant moves ~1.10×; **the exponent does not move**. The reason has
+the same shape as the forded suite's residual: what is still Θ(n) per arm is
+the *class* type — the tag spine of the `n − 1` members sharing the
+successor branch — which `indexed_class_body` whnfs the reference back into
+and `spine` then re-emits into every injection annotation. `D#fam` names the
+whole family; nothing names a class.
+
+**And the finding this round did not go looking for.**
+`forded/declared-index-tags` is **not a forded family**. `Tw`'s constructors
+state their indices as patterns (`Tw(SLeaf)`, `Tw(SBud(s))`), and
+`classify_indexed_route` tries route 1 **first** — so that declaration has
+never had a skeleton, a `μ`, or a form-A inversion. It is route 1 at a
+declared index, swept along the index type's constructor count. Two rounds
+read it as route 2b and explained its immovable exponent with route-2b
+mechanisms: the 2026-08-04 round with "the index type is Θ(n) and a type
+cannot be a Ψ definition", the 2026-08-05 round with a third defect in the
+`Supf` shape slots of an inversion this declaration does not emit. Neither
+round's lever touched it. Route 1's did, at once:
+
+| `declared-index-tags` | 2 | 3 | 4 | 5 | 6 | slope |
+|---|---|---|---|---|---|---|
+| before (master, this machine) | 17.0 ms | 40.7 ms | 98.8 ms | 164 ms | 294 ms | **2.79** |
+| after | 10.9 ms | 25.6 ms | 50.0 ms | 81.5 ms | 125 ms | **2.22** |
+
+2.5× at the wide end and 0.6 off the exponent. The section above stands as
+the record of what that round measured; what it does **not** stand for is
+the attribution, and `issues/wf-shape-annotation-slots.md` is now supported
+by `declared-index-branching` alone — which is genuinely forded, because
+`BDup(s) : Bl(SNode(s, s))` repeats a variable and fails route 1.
+
+The lesson for a fixture: **name the route the classifier picks, not the
+route the source looks like.** The family's *name* is left alone here
+because it is the baseline's key; renaming it is a coordinator's call.
+
+### The baseline was NOT re-recorded, and why
+
+`scripts/bench-frontend --check` is red, and it was already red on master
+before this round: prelude `build` 2×, `declared-index-branching` 1.3–2.1×,
+`meta/nested-inference` 1.3× — none of which this round can reach, all of
+which accumulated over the ~10 commits since the baseline's `commit 1878f11`
+was recorded. A re-record now would silently adopt them.
+
+Worse, the machine is not quiet: load ~5–7 from unrelated processes and
+Tctl 95 °C during the runs, and families this round cannot touch
+(`scale/declarations`, `corpus/prelude`) drifted 1.5–2× *between two runs an
+hour apart*. Per this document's own noise warning the absolutes above are
+context and the slopes are the headline — and per design §9 the re-record
+belongs on a quiet machine. So: bands updated in the fixture sources
+(`declared-index-tags` 2.30–2.90 → **1.90–2.60**, `indexed/arms` recorded at
+**1.90–2.60**), baseline file untouched, `indexed/arms` still `untracked`
+until someone re-records. That is the deviation this round is flagging, not
+absorbing.

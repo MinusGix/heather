@@ -249,22 +249,44 @@ fn wrong_indices_are_rejected() {
 // `lower_indexed_instance` and the eliminator's `l ≠ mlvl` plumbing (motive
 // at 0, scrutinee at 1) both do real work — everything else in this file is
 // uniformly level 0 and would not notice a dropped join.
+//
+// `P` is **unparameterized**, so since `docs/family-type-code-defs-design.md`
+// §6 its occurrences are `El l (P#fam^δ i)` rather than the inlined
+// `elim_Nat` — this is the fixture that crosses the new spelling with a
+// nonzero level and an open element type (`x: A` under the field `A: Type`),
+// at a literal *and* a neutral index, in checking positions.
+const LVL1: &str = r#"
+inductive P : (n: Nat) -> Type {
+    P0(A: Type) : P(0),
+    PS(n: Nat, A: Type, x: A, t: P(n)) : P(Succ(n)),
+}
+fn depth(n: Nat, p: P(n)) -> Nat {
+    match p { P0(A) => 0, PS(k, A, x, t) => Succ(depth(k, t)) }
+}
+"#;
+
 #[test]
 fn fields_above_level_zero() {
-    elab(
-        r#"
-        inductive P : (n: Nat) -> Type {
-            P0(A: Type) : P(0),
-            PS(n: Nat, A: Type, x: A, t: P(n)) : P(Succ(n)),
-        }
-        fn depth(n: Nat, p: P(n)) -> Nat {
-            match p { P0(A) => 0, PS(k, A, x, t) => Succ(depth(k, t)) }
-        }
-        theorem depth_closed(): depth(1, PS(0, Nat, 3, P0(Nat))) = 1 { refl }
-        theorem depth_open(n: Nat, x: Nat, t: P(n)):
-            depth(Succ(n), PS(n, Nat, x, t)) = Succ(depth(n, t)) { refl }
-        "#,
-    );
+    elab(&format!(
+        "{LVL1}
+         theorem depth_closed(): depth(1, PS(0, Nat, 3, P0(Nat))) = 1 {{ refl }}
+         theorem depth_open(n: Nat, x: Nat, t: P(n)):
+             depth(Succ(n), PS(n, Nat, x, t)) = Succ(depth(n, t)) {{ refl }}"
+    ));
+}
+
+// Axis 4 at the new spelling: every test above is positive, and a positive
+// cannot tell a family from a quotient of it — the more so now that an
+// occurrence is an opaque `El (P#fam^δ i)` that only conversion unfolds. So
+// the controls, at level 1: a constructor at the wrong index, and a false
+// equation that a neutral scrutinee must not prove.
+#[test]
+fn a_level_one_family_rejects_wrong_indices_and_false_equations() {
+    elab_err(&format!("{LVL1} fn bad() -> P(0) {{ PS(0, Nat, 3, P0(Nat)) }}"));
+    elab_err(&format!("{LVL1} fn bad(n: Nat) -> P(Succ(n)) {{ P0(Nat) }}"));
+    elab_err(&format!(
+        "{LVL1} theorem bad(n: Nat, p: P(n)): depth(n, p) = 0 {{ refl }}"
+    ));
 }
 
 // The class case tree's **inner** injection annotations — axis 6 of

@@ -41,6 +41,7 @@ use heather_kernel::level::Level;
 use heather_kernel::term::{nth, LocalCtx, LocalSubst, LocalVar, Term, Type};
 use heather_syntax::ast::{Arm, Expr, ExprKind, Span};
 
+use crate::gendefs::GenDef;
 use crate::inductive::{inject, nat_lit, FieldKind, IdxTy, Inductive, Spine};
 use crate::wf::{Branches, Tel};
 use crate::{code, err, Alias, Cx, Elaborator, Guard, GuardKind, R};
@@ -318,6 +319,30 @@ impl Elaborator {
     /// index and is diagnosed by the consumers that need it.
     pub(crate) fn indexed_of(&self, ty: &Type) -> Option<(Rc<Inductive>, IndexedFam)> {
         let Type::El { level, tm } = ty else { return None };
+        // The nominal read (`docs/family-type-code-defs-design.md` §6): where
+        // the declaration has a family function, its occurrences are `El l
+        // (D#fam^δ i)` and the declaration is identified by *being* that
+        // definition — a lookup, not the fueled tag search below. An `El` of
+        // any other global (another declaration's `D#fam`, a user-written
+        // global with a byte-identical body) is `None`, which is `forded.rs
+        // mod fingerprint`'s look-alike discipline at route 1. The structural
+        // search stays as the fallback: a parameterized family never had a
+        // definition, and a pre-unfolded occurrence no longer shows one (§4).
+        if let Term::App { fun, arg, .. } = &**tm
+            && let Term::GlobalTm { var, .. } = &**fun
+        {
+            let GenDef::Fam(tag) = self.gen_def_of(*var)? else { return None };
+            let ind = self.by_tag.get(&tag)?;
+            ind.index.as_ref()?;
+            return Some((
+                Rc::clone(ind),
+                IndexedFam {
+                    level: level.clone(),
+                    node: Rc::new(set_scrut(tm, Rc::new(Term::Zero))?),
+                    idx: Rc::clone(arg),
+                },
+            ));
+        }
         let motive_is_ty = match &**tm {
             Term::ElimNat { motive, .. } | Term::ElimWf { motive, .. } => {
                 matches!(&**motive, Type::Ty(_))
@@ -489,6 +514,16 @@ impl Elaborator {
         idx: Term,
         span: Span,
     ) -> R<(Type, Level)> {
+        // Where the declaration has a registered family function, the
+        // occurrence is `El l (D#fam^δ i)` and neither pass runs (design §6).
+        // `args` is empty for every declaration that has one — a definition is
+        // closed, so a parameterized family has none and takes the inline path
+        // below (§5).
+        if args.is_empty()
+            && let Some(r) = self.fam_occurrence(cx, ind, &idx, span)
+        {
+            return Ok(r);
+        }
         // The first pass never leaves this function, so its scrutinee is a
         // closed placeholder: the branches are what the level is read off, and
         // the index reaches none of them.
@@ -500,7 +535,7 @@ impl Elaborator {
     /// The family term (§4), at a given level, applied at `idx`. Also returns
     /// the level the branches actually demand, which is what the first pass of
     /// [`Self::lower_indexed_instance`] reads.
-    fn build_family(
+    pub(crate) fn build_family(
         &self,
         cx: &Cx,
         ind: &Inductive,
@@ -1626,5 +1661,276 @@ impl Elaborator {
                 .or_else(|| env.outer_guard.clone());
         }
         self.elab_check(&acx, &arm.body, expected, mlvl)
+    }
+}
+
+#[cfg(test)]
+mod fingerprint {
+    //! §10.1's seam, **closed 2026-08-06** by
+    //! `docs/family-type-code-defs-design.md` §6.
+    //!
+    //! `indexed_of` used to read the family purely structurally: an `El` of
+    //! *any* eliminator at motive `Ty _` with a nominal tag somewhere in a
+    //! branch, found by a 64-step fueled search over three head shapes. The
+    //! seam list predicted that "any pass that normalizes or restructures
+    //! emitted terms (a kernel `def`, …) makes every indexed type
+    //! unrecognizable, and the symptom is 'not in the family form' far from
+    //! the cause" — and this round is that pass.
+    //!
+    //! The key is now nominal where a family function exists: the occurrence
+    //! must be **this declaration's** `D#fam` applied to the index. The
+    //! structural search stays as the fallback, because two things still
+    //! arrive in the old spelling — a parameterized family, which has no
+    //! definition (design §5), and a pre-unfolded occurrence, which is the
+    //! conservativity case (design §4).
+
+    use super::*;
+    use heather_kernel::term::{CtxBase, GlobalVar, SubstTail};
+
+    const SPAN: Span = Span { start: 0, end: 0 };
+
+    /// Two route-1 families, structurally identical apart from their nominal
+    /// tags — which is what makes the negatives below genuine look-alikes
+    /// rather than straw men. The `A: Type` field is deliberate: it puts the
+    /// family at level **1** (§10.5's rule) and gives the class codes an open
+    /// element type, so these terms vary axes 2 and "nonzero level" of
+    /// `docs/testing-generated-terms.md` rather than sitting at the uniformly
+    /// level-0 instance everything else here uses.
+    const SRC: &str = "
+inductive V : (n: Nat) -> Type {
+    V0(A: Type)                        : V(0),
+    V1(n: Nat, A: Type, x: A, t: V(n)) : V(Succ(n)),
+}
+inductive W : (n: Nat) -> Type {
+    W0(A: Type)                        : W(0),
+    W1(n: Nat, A: Type, x: A, t: W(n)) : W(Succ(n)),
+}
+";
+
+    struct Two {
+        el: Elaborator,
+        v: Rc<Inductive>,
+        w: Rc<Inductive>,
+        cx: Cx,
+    }
+
+    fn two() -> Two {
+        let mut el = Elaborator::with_prelude().expect("prelude");
+        el.elab_source(SRC).expect("two indexed families elaborate");
+        let v = Rc::clone(el.inductives.get(&crate::names::qkey("main", "V")).expect("declared"));
+        let w = Rc::clone(el.inductives.get(&crate::names::qkey("main", "W")).expect("declared"));
+        Two { el, v, w, cx: Cx::empty() }
+    }
+
+    /// `V`'s family type as the generator emits it, taken apart.
+    fn occurrence(t: &Two, ind: &Inductive, idx: Term) -> (Type, Level) {
+        t.el
+            .lower_indexed_instance(&t.cx, ind, &[], idx, SPAN)
+            .expect("the family lowers")
+    }
+
+    /// The emitted occurrence with another term in the *head* position — the
+    /// forgery constructor, everything else `V`'s own.
+    fn with_head(ty: &Type, head: Term) -> Type {
+        let Type::El { level, tm } = ty else { panic!("a route-1 family is an El") };
+        let Term::App { dom_level, cod_level, dom, cod, arg, .. } = (**tm).clone() else {
+            panic!("the occurrence is the family function applied to the index")
+        };
+        Type::El {
+            level: level.clone(),
+            tm: Rc::new(Term::App {
+                fun: Rc::new(head),
+                dom_level,
+                cod_level,
+                dom,
+                cod,
+                arg,
+            }),
+        }
+    }
+
+    #[test]
+    fn the_family_is_recognized_through_its_fam_definition() {
+        let t = two();
+        let (ty, l) = occurrence(&t, &t.v, Term::Zero);
+        // The occurrence is `El l (V#fam^δ 0)` and nothing else — one node
+        // where the whole `elim_Nat` used to be.
+        let Type::El { tm, .. } = &ty else { panic!("a route-1 family is an El") };
+        let Term::App { fun, .. } = &**tm else { panic!("…of the family function") };
+        assert!(t.el.is_gen_ref(fun, GenDef::Fam(t.v.tag)));
+        // A `Type`-valued field puts it above level 0, which is where a
+        // dropped join would show (§10.5).
+        assert_ne!(l, Level::Zero);
+        // The positive: it still reads back, as `V`, and the node still fills
+        // at a scrutinee — what every consumer downstream (`el_at`, the arm
+        // builders) needs.
+        let (ind, fam) = t.el.indexed_of(&ty).expect("reads back as a family");
+        assert_eq!(ind.tag, t.v.tag);
+        assert_eq!(fam.level, l);
+        assert!(matches!(fam.at(Term::Succ(Rc::new(Term::Zero)), 0), Term::App { .. }));
+    }
+
+    #[test]
+    fn el_of_the_wrong_declarations_fam_def_is_not_the_family() {
+        let t = two();
+        let (ty, _) = occurrence(&t, &t.v, Term::Zero);
+        // `W`'s family function at `V`'s index, with `V`'s annotations: two
+        // real declarations differing only in their tags, which is the term
+        // round's look-alike construction. It reads back as `W` — the
+        // declaration the *name* says — and therefore not as `V`, which is
+        // what every consumer's `found.tag != ind.tag` check turns into a
+        // rejection.
+        let w_fam = t.el.gen_ref(&t.cx, GenDef::Fam(t.w.tag)).expect("W has a family definition");
+        let (ind, _) = t.el.indexed_of(&with_head(&ty, w_fam)).expect("it is W's family");
+        assert_eq!(ind.tag, t.w.tag);
+        assert_ne!(ind.tag, t.v.tag);
+    }
+
+    #[test]
+    fn el_of_a_byte_identical_user_global_is_not_the_family() {
+        let mut t = two();
+        let (ty, _) = occurrence(&t, &t.v, Term::Zero);
+        // The very binding `V#fam` is, pushed a second time outside the
+        // registry the way a user `fn` is: identity is the Ψ index, not the
+        // body, so the copy is not `V`.
+        let r = t.el.gen_ref(&t.cx, GenDef::Fam(t.v.tag)).expect("V has a family definition");
+        let Term::GlobalTm { var, .. } = &r else { panic!("a reference is a global") };
+        let len = t.el.psi.bindings.len() as u32;
+        let abs = len + t.el.goal_base - var.0 - 1;
+        let binding = t.el.psi.bindings[abs as usize].clone();
+        t.el.psi.push(binding);
+        t.el.refresh_delta_psi();
+        // `gen_ref`'s numbering for the binding just pushed: abs = len − 1,
+        // so the variable is `goal_base` — in scope, resolvable, unregistered.
+        let dup = Term::GlobalTm {
+            var: GlobalVar(t.el.goal_base),
+            subst: LocalSubst {
+                tail: SubstTail::Empty { len: 0, base: CtxBase::Nil },
+                terms: vec![],
+            },
+        };
+        assert!(t.el.indexed_of(&with_head(&ty, dup)).is_none());
+    }
+
+    /// A parameterized family keeps its inlined spelling (design §5), and the
+    /// coexistence has to hold in both directions: its own type reads back
+    /// structurally with no reference anywhere, and a reference never reads
+    /// back as it.
+    #[test]
+    fn a_parameterized_family_keeps_the_structural_read() {
+        const PSRC: &str = "
+inductive Pv<A> : (n: Nat) -> Type {
+    Pv0                              : Pv<A>(0),
+    Pv1(n: Nat, x: A, t: Pv<A>(n))   : Pv<A>(Succ(n)),
+}
+";
+        let mut el = Elaborator::with_prelude().expect("prelude");
+        el.elab_source(&format!("{SRC}{PSRC}")).expect("elaborates");
+        let v = Rc::clone(el.inductives.get(&crate::names::qkey("main", "V")).expect("declared"));
+        let p = Rc::clone(el.inductives.get(&crate::names::qkey("main", "Pv")).expect("declared"));
+        let cx = Cx::empty();
+        assert!(el.gen_ref(&cx, GenDef::Fam(p.tag)).is_none());
+        let (pty, _) = el
+            .lower_indexed_instance(&cx, &p, &[(Type::Nat, Level::Zero)], Term::Zero, SPAN)
+            .expect("the parameterized family lowers");
+        let Type::El { tm, .. } = &pty else { panic!("a route-1 family is an El") };
+        assert!(!matches!(&**tm, Term::App { .. }));
+        let (ind, _) = el.indexed_of(&pty).expect("reads back structurally");
+        assert_eq!(ind.tag, p.tag);
+        // …and `V`'s reference is `V`, never `Pv`.
+        let (vty, _) = el.lower_indexed_instance(&cx, &v, &[], Term::Zero, SPAN).expect("lowers");
+        let (ind, _) = el.indexed_of(&vty).expect("reads back nominally");
+        assert_eq!(ind.tag, v.tag);
+        assert_ne!(ind.tag, p.tag);
+    }
+
+    /// The other two head shapes (§8.2 — a flat declared index, whose family
+    /// is a `Case` tree, and a recursive one, whose family is an `elim_Wf`)
+    /// are definitions too, and their `Π` domains take the index type's own
+    /// code reference (design §1.4) rather than writing `I` out again.
+    #[test]
+    fn declared_index_families_are_definitions_too() {
+        const DSRC: &str = "
+inductive Col { CZ, CS(n: Nat) }
+inductive Tg : (c: Col) -> Type {
+    TZ                 : Tg(CZ),
+    TS(n: Nat, x: Nat) : Tg(CS(n)),
+}
+inductive Shape { SLeaf, SNode(l: Shape, r: Shape) }
+inductive Bal : (s: Shape) -> Type {
+    BLeaf                                             : Bal(SLeaf),
+    BNode(l: Shape, r: Shape, dl: Bal(l), dr: Bal(r)) : Bal(SNode(l, r)),
+}
+";
+        let mut el = Elaborator::with_prelude().expect("prelude");
+        el.elab_source(DSRC).expect("elaborates");
+        let cx = Cx::empty();
+        for (name, iname) in [("Tg", "Col"), ("Bal", "Shape")] {
+            let ind = Rc::clone(
+                el.inductives.get(&crate::names::qkey("main", name)).expect("declared"),
+            );
+            let iind = Rc::clone(
+                el.inductives.get(&crate::names::qkey("main", iname)).expect("declared"),
+            );
+            let (ity, ilvl) = el.lower_instance(&cx, &iind, &[], &[], SPAN).expect("lowers");
+            let idx = el.build_ctor(&cx, &iind, 0, &[], &ity, &ilvl, SPAN).expect("builds");
+            let (ty, _) =
+                el.lower_indexed_instance(&cx, &ind, &[], idx, SPAN).expect("the family lowers");
+            let Type::El { tm, .. } = &ty else { panic!("a route-1 family is an El") };
+            let Term::App { fun, dom, .. } = &**tm else { panic!("…of the family function") };
+            assert!(el.is_gen_ref(fun, GenDef::Fam(ind.tag)));
+            let Type::El { tm: dcode, .. } = &**dom else {
+                panic!("the domain is the index type's code reference")
+            };
+            assert!(el.is_gen_ref(dcode, GenDef::IdxCode(iind.tag)));
+            assert_eq!(el.indexed_of(&ty).expect("reads back").0.tag, ind.tag);
+        }
+    }
+
+    /// Design §4's free case at route 1: a family type whnf'd back to the
+    /// inline eliminator (something δ-unfolded and β-reduced the reference) is
+    /// exactly yesterday's spelling, and the structural read — kept in place
+    /// as the no-def fallback — recognizes it. And the two spellings convert,
+    /// which is §1.3's conservativity stated as a kernel fact rather than a
+    /// comment. The index is a **variable**, so nothing further reduces and
+    /// the annotations carry the whole burden (axis 1's neutral half).
+    #[test]
+    fn a_pre_unfolded_occurrence_still_reads_back_and_converts() {
+        let t = two();
+        let mut cx = Cx::empty();
+        cx.push("n".into(), Type::Nat, Level::Zero);
+        let idx = Term::Var(LocalVar(0));
+        let (ty, l) = t
+            .el
+            .lower_indexed_instance(&cx, &t.v, &[], idx.clone(), SPAN)
+            .expect("the family lowers");
+        // The unfold by hand: the generator's own two passes, which is what δ
+        // plus β plus decode of the reference arrives at.
+        let (_, l2) = t
+            .el
+            .build_family(&cx, &t.v, &[], &Level::Zero, idx.clone(), SPAN)
+            .expect("the level pass");
+        let (fam, _) = t
+            .el
+            .build_family(&cx, &t.v, &[], &l2, idx, SPAN)
+            .expect("the family builds");
+        assert_eq!(l, l2);
+        let inline = Type::El { level: l2, tm: Rc::new(fam) };
+        let (ind, refam) = t
+            .el
+            .indexed_of(&inline)
+            .expect("the pre-unfolded spelling still reads back");
+        assert_eq!(ind.tag, t.v.tag);
+        assert!(matches!(refam.at(Term::Zero, 0), Term::ElimNat { .. }));
+        heather_kernel::conv::conv_type(
+            t.el.psi(),
+            &cx.gamma,
+            Layer::Prog,
+            &ty,
+            &inline,
+            &l,
+            t.el.fuel,
+        )
+        .expect("the reference and inline spellings convert");
     }
 }

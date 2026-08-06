@@ -149,10 +149,31 @@ fn occurrences() -> Family {
     }
 }
 
-/// Form A at a **declared** index (`docs/inductive-fording-lowering.md`
-/// §8.2), swept along the number of constructors of the *index* type — which
-/// is §14.9's cost dimension exactly: per arm, the inversion emits one tag
-/// predicate per **other** index constructor, each a whole `elim_Wf`.
+/// **Not a forded family.** Corrected 2026-08-06, and the misattribution is
+/// the finding: `Tw`'s two constructors state their indices as *patterns*
+/// (`Tw(SLeaf)`, `Tw(SBud(s))` with `s` a field), and the classifier tries
+/// route 1 **first** (`inductive.rs::classify_indexed_route`), so this
+/// declaration has never had a skeleton, a `μ`, or a form-A inversion. It is
+/// `docs/inductive-indexed-lowering.md` §8.2 — route 1 at a declared index —
+/// swept along the index type's constructor count, which is that scheme's own
+/// cost dimension: the family node carries one branch per index constructor
+/// and is re-emitted per occurrence.
+///
+/// Two rounds read this family as route 2b and drew conclusions from it. The
+/// 2026-08-04 term round explained its flat exponent by "the index type is
+/// Θ(n) and a type cannot be a Ψ definition"; the 2026-08-05 code round
+/// explained the exponent *still* not moving by a third defect in the
+/// `Supf` shape slots of a form-A inversion this declaration does not have
+/// (`issues/wf-shape-annotation-slots.md`). Neither round's lever touched it,
+/// which is exactly why it did not move — and the route-1 round moved it at
+/// once. The lesson for a fixture: name the route the classifier picks, not
+/// the route the source looks like. The family **name** is left alone because
+/// it is the baseline's key; renaming it is a coordinator's call.
+///
+/// The name's original claim, for the record: per arm, a form-A inversion
+/// emits one tag predicate per **other** index constructor, each a whole
+/// `elim_Wf` (§14.9). That cost is real; it is measured by
+/// [`declared_index_branching`] below, which *is* forded.
 ///
 /// The data family is deliberately linear (one child), because the measured
 /// cliff is the *product* of branching and index width: branching at a
@@ -204,7 +225,14 @@ fn declared_index_tags() -> Family {
         // (`docs/inductive-fording-lowering.md` §14.11's closing note,
         // `issues/wf-shape-annotation-slots.md`). Band records the exponent
         // that exists, per the suite's rule.
-        expect_slope: Some((2.30, 2.90)),
+        //
+        // 2026-08-06, phase 5: **2.79 → 2.19**, and 17.0 ms → 10.5 ms at 2 /
+        // 294 ms → 118 ms at 6 (2.5× at the wide end). The lever was route
+        // 1's `D#fam`, because this family is route 1 — see the doc comment
+        // above. The two paragraphs before this one are what a fixture's
+        // wrong label costs: two rounds' worth of explanation for a curve
+        // whose cause was never in either round's reach.
+        expect_slope: Some((1.90, 2.60)),
         cases: sweep("forded/declared-index-tags", &[2, 3, 4, 5, 6], src),
     }
 }

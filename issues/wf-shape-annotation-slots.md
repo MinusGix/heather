@@ -3,10 +3,10 @@ title: Supf/ElimWf shape slots are the forded residual: no code names a Wf's sha
 status: open
 labels: [elaboration,performance,inductives]
 created: 2026-08-05
-updated: 2026-08-05
+updated: 2026-08-06
 ---
 
-The third defect on `forded/declared-index-tags`'s curve, named by [[family-types-as-code-defs]]'s implementing round (2026-08-05) after the code definitions moved every other forded family and left this one at slope 2.61 -> 2.62.
+The third defect on `forded/declared-index-tags`'s curve, named by [[family-types-as-code-defs]]'s implementing round (2026-08-05) after the code definitions moved every other forded family and left this one at slope 2.61 -> 2.62. **(Attribution corrected 2026-08-06 — that fixture is route 1, not forded; see the Log. The code-level cost below stands, measured now by `declared-index-branching` and `computed-arms`'s residual.)**
 
 `Term::Supf`/`Term::ElimWf` carry `shape: Rc<Type>` — the `Wf`'s **shape component** (the sum-of-Σs), not the whole `Wf` (`crates/kernel/src/term.rs:514`). The registered codes (`SkelCode`/`IdxCode`, `crates/elab/src/gendefs.rs`) name whole types, so an `El (code^δ)` reference cannot fill a shape slot: decoding the whole-type reference yields a `Wf` whose shape is `El` of the *inline* shape code, which is no smaller. The design's §1.4 `Supf`/`ElimWf` bullet (`docs/family-type-code-defs-design.md`) was therefore unimplementable as written, and those slots were left inline — the one deviation of the implementing round.
 
@@ -20,4 +20,8 @@ The fix shape, if a round takes it: a **shape code** definition per declaration 
 
 ## When
 
-Triggered: the next time `forded/declared-index-tags` or `computed-arms` matters — one deliberate round, per the accumulator discipline.
+Triggered: the next time `forded/declared-index-branching` or `computed-arms` matters — one deliberate round, per the accumulator discipline. (`declared-index-tags` no longer belongs to this issue's curve — corrected 2026-08-06.)
+
+## Log
+
+- 2026-08-06: CORRECTION (from the D#fam round, [[indexed-families]] 2026-08-06): forded/declared-index-tags — the fixture this issue's opening paragraph is argued from — is NOT a forded family. Its indices are patterns, classify_indexed_route tries route 1 first, so it has no skeleton, no μ, and no form-A inversion; the 'third defect' reading of its curve explained the flat exponent with machinery the declaration does not emit, and route 1's D#fam moved it 2.79 → 2.22 at once (docs/frontend-benchmarking.md, fording doc §14.11). The shape-slot cost analysis above is still a real reading of the CODE — zj's Θ(n) shape annotations in forded_arm_a_decl exist — but its measured evidence now rests on declared-index-branching (genuinely forded: BDup(s) : Bl(SNode(s,s)) repeats a variable and fails route 1) and computed-arms's residual alone. The trigger clause narrows accordingly: declared-index-tags no longer belongs to this issue's curve.

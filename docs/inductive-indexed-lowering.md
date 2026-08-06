@@ -507,6 +507,23 @@ rather than remembered.
    same way, and `forded.rs`'s `mod fingerprint` is the shape of the negative
    it will need — nominal identity is not enough on its own, because a Σ over
    the right skeleton with the wrong measure satisfied every structural test.
+   **Closed 2026-08-06** by `docs/family-type-code-defs-design.md` §6: the
+   pass landed for route 1 too. An **unparameterized** declaration now has a
+   family function `D#fam : Trm_c(· ⊢ Π(i : I). Ty l)`, its occurrences are
+   `El l (D#fam^δ i)`, and `indexed_of` reads them **nominally** — the head
+   must resolve through the registry to *this* declaration's `GenDef::Fam`,
+   and an `El` of any other global (another declaration's `D#fam`, a
+   user-written global with a byte-identical body) is `None`. The negatives
+   are `indexed.rs`'s own `mod fingerprint`, the sibling of `forded.rs`'s.
+   The fueled structural search is **not** removed and is not dead code: it
+   is what still reads a parameterized family (no definition — design §5)
+   and a *pre-unfolded* occurrence (δ+β of the reference is exactly the old
+   spelling, the conservativity case, pinned by
+   `a_pre_unfolded_occurrence_still_reads_back_and_converts`). The two
+   readers coexist by construction, and what this item warned about — a
+   normalizing pass making the structural read fail silently — is answered
+   by the nominal read succeeding first, not by the search having become
+   safe.
 2. **Type identity depends on presentation.** A family type that arrives
    *pre-reduced* (whnf'd at a literal index, upstream of the consumer) has
    lost its index, and constructors/`match` against it are diagnosed, not
@@ -535,6 +552,21 @@ rather than remembered.
    code definition (`D#code : Trm_c(· ⊢ Type_l)` with `El (D#code^δ)`), which
    is a scheme change and would break the structural readers of item 1. Route
    1's shrink is that round's, not a follow-on to this one.
+   **Status 2026-08-06:** that round's phase 5 landed the shrink. `D#fam`
+   names the type-valued function — the thing this entry said had no name —
+   and an occurrence is one `El` of one application. What the definition
+   does **not** do is restructure item 6: the family is still rebuilt from
+   `Inductive::index_ty`, and `indexed_class_body`/`build_indexed_ctor`
+   still whnf the reference back to the inline class type to read a spine
+   out of it, which is the elaborate phase paying a decode per read (design
+   §3.2, bounded). Measured with `indexed/arms` as the fixture and the
+   registration-only build as the no-op point: **constant ~1.10×, exponent
+   2.20 → 2.25, i.e. unmoved** (`docs/frontend-benchmarking.md`). What stays
+   Θ(n) per arm is the **class** type — the tag spine of the members sharing
+   one index branch — re-emitted into every injection annotation by `spine`.
+   No registered code names a class; the next lever for this item is there,
+   not at the family. (The same document records the fixture that *did*
+   move, and why it was labelled route 2b for two rounds.)
 4. **The arm walk exists twice.** `indexed_case_tree`/`elab_indexed_arm`
    mirror `case_tree`/`elab_arm` deliberately (threading the pattern
    variable and the guard through the shared walk would couple what the
@@ -557,9 +589,44 @@ rather than remembered.
    kept it: `fields_above_level_zero_at_a_declared_index`, over a
    branching `Wf` index so the level also flows through `elim_Wf`'s
    motive.)
+
+   **A defect this axis found, 2026-08-06 — and it is a defect, not a
+   seam.** A family whose index classes do **not** all reach the family's
+   join level is rejected by the kernel with `LevelMismatch`, at every use.
+   `fam_class` builds each class at its own level (the tag spine terminates
+   in `Type::Unit { level: Level::Zero }` and `lower_indexed_ctor` joins the
+   field levels) while the motive is `Ty l` with `l` the join over *all*
+   classes, and there is no cumulativity to bridge them. Minimal reproducer,
+   rejected on master and unchanged by the code-definition round:
+
+   ```text
+   inductive V : (n: Nat) -> Type {
+       V0                                 : V(0),          // class at level 0
+       V1(n: Nat, A: Type, x: A, t: V(n)) : V(Succ(n)),    // class at level 1
+   }
+   ```
+
+   Every nonzero-level fixture in the suite hid it by giving *every*
+   constructor a `Type`-valued field, so all classes landed at one level:
+   `fields_above_level_zero`'s `P0(A: Type)`/`PS(…, A: Type, …)` is the
+   shape, and it is one field away from the failing one. The fix is to build
+   every class code at the family's `l` — the formers all take a level
+   (`Type::Unit { level }`, `Type::Sigma`, `Type::Sum`), so it is a
+   threading change and not a theory change, but it changes the emitted type
+   of every route-1 family and belongs to its own round. Found while
+   building the level-1 fixture for the code-definition round, which routes
+   around it by keeping its classes level-homogeneous; today's symptom is
+   that such a declaration's `D#fam` fails the registration gate (the
+   occurrence then inlines, best-effort as designed) and the declaration was
+   unusable before that anyway.
 6. **The index type must survive as a declaration.** The family is
    rebuilt from `Inductive::index_ty` at every use, and the head check is
    a parse-level `Named` match — an index type reached through an alias
    or abbreviation rather than by name is not handled. Nothing can hit
    this today (there is no type-alias form); whichever round adds one
-   re-audits here.
+   re-audits here. **Unchanged 2026-08-06** by the code
+   definitions: `D#fam` is registered *from* `Inductive::index_ty` at
+   declaration time, so the emitted type is rebuilt per declaration rather
+   than per use — but every structural read (`spine`, `build_elim_wf`, the
+   recognizer's fallback) still goes through the declaration, and the
+   parse-level `Named` head check is untouched.

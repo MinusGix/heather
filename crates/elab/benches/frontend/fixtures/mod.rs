@@ -32,6 +32,7 @@ use crate::harness::{Family, Phases};
 
 pub mod corpus;
 pub mod forded;
+pub mod indexed;
 pub mod meta;
 pub mod scale;
 
@@ -44,6 +45,7 @@ pub fn all() -> Vec<Family> {
     v.extend(corpus::families());
     v.extend(scale::families());
     v.extend(forded::families());
+    v.extend(indexed::families());
     v.extend(meta::families());
     v
 }

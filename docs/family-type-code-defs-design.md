@@ -417,6 +417,69 @@ Whether route 1 lands in the same implementing round or a successor is a
 coordinator decision (§9); the design covers both, and nothing in §1–§5
 depends on it.
 
+### Landed 2026-08-06 (phase 5)
+
+Everything above is what shipped, with three corrections and one finding.
+
+- **`GenDef::Fam(tag)`**, `D#fam := λ(i : I). elim(…; i)` at
+  `Trm_c(· ⊢ Π(i : I). Ty l)`, registered through the unchanged gate for an
+  unparameterized route-1 declaration at all three head shapes (`elim_Nat`,
+  a `Case` tree, `elim_Wf`). The two-pass level computation runs **once, at
+  declaration time**, and the pair `(l, l_I)` is kept in the registry
+  because an occurrence needs `l` to spell its `El` — sound only because a
+  definition exists only where `args` is empty, so the declaration has one
+  answer forever (§5). Route-1 declarations at a *declared* index also get
+  that index type's `IdxCode`, which the `Π`'s domain annotation then takes
+  by reference (§1.4); the index type's tag predicates and child
+  projections are **not** registered for them, being route-2b inversion
+  machinery route 1 never emits.
+- **Emission** is one site — `lower_indexed_instance` returns
+  `El l (D#fam^δ i)` where the definition exists and falls through to the
+  two passes where it does not.
+- **`indexed_of`** gained the nominal branch *in the same commit*, and the
+  fueled structural search stayed, because two things still arrive in the
+  old spelling: a parameterized family and a pre-unfolded occurrence.
+  Negatives in `crates/elab/src/indexed.rs`'s `mod fingerprint`.
+
+**Correction 1 — §9's numbers were reading the wrong family.**
+`forded/declared-index-tags`, the row §9 called "the pure measurement of
+this design" and whose immovable 2.61 the 2026-08-05 round attributed to a
+third defect in the `Supf` shape slots, is **not a forded family**. `Tw`'s
+constructors state pattern indices, and `classify_indexed_route` tries route
+1 first, so it has never had a skeleton, a `μ` or a form-A inversion. It is
+route 1 at a declared index. That is why two rounds of forded levers left it
+flat, and why this round moved it at once: **2.79 → 2.22, and 2.5× off the
+constant at 6 index constructors.** The design's own claim ("slope below
+2.0… if the slope does not move, the residual is a *third* defect and this
+round's job is to say so") was therefore right about the method and wrong
+about the subject — the honest reading is that the third defect was never
+demonstrated by this family at all, and
+`issues/wf-shape-annotation-slots.md` now rests on
+`forded/declared-index-branching` alone.
+
+**Correction 2 — the route-1 win is a constant, not an exponent.** The new
+`indexed/arms` fixture, measured against its own registration-only build:
+**2.20 → 2.25** with the constant ~1.10× better. §6's "the def makes that
+cheaper but does not restructure it" is exactly what happened. What stays
+Θ(n) per arm is the *class* type, which no definition names — the route-1
+analogue of the shape-slot residual, recorded at route-1 doc §10.3.
+
+**Correction 3 — the baseline was not re-recorded.** `--check` was already
+red on master before this round (prelude 2×, `declared-index-branching`
+1.3–2.1×, `meta` 1.3×, all from commits after the baseline's), and the
+machine was not quiet (load 5–7, 95 °C, untouchable families drifting
+1.5–2× between runs an hour apart). Bands were tightened in the fixture
+sources around the measured exponents; the baseline file is untouched and
+`indexed/arms` stays `untracked` until a quiet-machine re-record.
+`docs/frontend-benchmarking.md` has the tables and the reasoning.
+
+**Finding, unrelated to this round's lever but found by its fixture.** A
+route-1 family whose index classes do not all reach the family's join level
+is rejected by the kernel (`LevelMismatch`) at every use, on master and
+after. Every nonzero-level fixture in the tree hid it by giving *every*
+constructor a `Type`-valued field. Written up with the reproducer at
+route-1 doc §10.5; it needs its own round.
+
 ## 7. What this amends elsewhere
 
 Contradictions with the recorded fix shape, flagged per the round's rules:
@@ -483,6 +546,12 @@ throughout, so no phase can regress correctness — only fail to improve.
    negatives, ideally its own bench row (route 1 currently has no swept
    family in the suite — adding one is part of this phase's acceptance, or
    an explicit decision not to).
+   **Landed 2026-08-06** — defs, re-key, five negatives/positives in
+   `indexed.rs`'s `mod fingerprint`, and the bench row (`indexed/arms`).
+   Measured: `indexed/arms` 2.20 → 2.25 with ~1.10× on the constant, and
+   `forded/declared-index-tags` — which turns out to be route 1, §6's
+   landing note — 2.79 → 2.22 with 2.5× at the wide end. Suite green, whole
+   `scripts/test`, no baseline re-record (§6's correction 3).
 
 No kernel flag is needed at any phase — phase 1 having no emission is the
 "scheme first, behind nothing" step, and the kernel is unchanged throughout.

@@ -73,6 +73,13 @@ pub(crate) enum GenDef {
     /// declaration's tag. Exists only for an unparameterized declaration —
     /// the same boundary as [`GenDef::Mu`], for the same reason (§14.12).
     SkelCode(u32),
+    /// `D#fam : Trm_c(· ⊢ Π(i : I). Ty l)` — a **route-1** indexed
+    /// declaration's family function, consumed as `El l (D#fam^δ i)` (design
+    /// §6). Keyed by the indexed declaration's tag. Route 1's family *is* a
+    /// type-valued eliminator, so unlike route 2b there is one definition and
+    /// not two: naming the function names the whole family. Same closedness
+    /// boundary as [`GenDef::Mu`] (§5).
+    Fam(u32),
 }
 
 impl GenDef {
@@ -85,6 +92,7 @@ impl GenDef {
             GenDef::IdxChild(_, k, t) => format!("{owner}#child{k}.{t}"),
             GenDef::IdxCode(_) => format!("{owner}#icode"),
             GenDef::SkelCode(_) => format!("{owner}#code"),
+            GenDef::Fam(_) => format!("{owner}#fam"),
         }
     }
 }
@@ -96,6 +104,13 @@ pub(crate) struct GenDefs {
     by_key: HashMap<GenDef, u32>,
     /// Absolute Ψ index → key. The recognizers' half.
     by_abs: HashMap<u32, GenDef>,
+    /// Per route-1 declaration tag with a registered [`GenDef::Fam`], the two
+    /// levels an occurrence needs to spell `El l (D#fam^δ i)`: the family's
+    /// own level `l` and the index type's `l_I`. They are a property of the
+    /// declaration, not of the use site — which holds only because the
+    /// definition exists solely for an unparameterized declaration, where the
+    /// two-pass level computation has one answer forever (design §5).
+    fam_lvl: HashMap<u32, (Level, Level)>,
 }
 
 impl Elaborator {
@@ -106,6 +121,17 @@ impl Elaborator {
     /// fall back to inlining.
     pub(crate) fn register_gen_defs(&mut self, ind: &Rc<Inductive>, span: Span) {
         if ind.skel.is_none() {
+            // Route 1 (design §6): the family function, and the index type's
+            // code for the `Π`'s domain. The index type's *devices* are route
+            // 2b's inversion machinery and route 1 emits none of them, so
+            // they are not registered here.
+            if ind.index.is_some() {
+                if let Some(IdxTy::Decl(iind)) = ind.index_ty.as_ref() {
+                    let iind = Rc::clone(iind);
+                    self.register_idx_code(&iind, span);
+                }
+                self.register_fam(ind, span);
+            }
             return;
         }
         // The index type's devices first: they are closed for every family,
@@ -162,6 +188,24 @@ impl Elaborator {
         let Some(body) = crate::code::code_of(&skel_ty) else { return };
         let ty = Type::Ty(l.clone());
         let _ = self.push_gen_def(key, &ind.name, ty, Level::succ(l), body, span);
+    }
+
+    /// `D#fam := λ(i : I). elim(…; i)`, a route-1 family function (design §6).
+    /// Only an **unparameterized** declaration gets one, for
+    /// [`Elaborator::mu_def`]'s reason: the family's branches mention the
+    /// argument types, which are monomorphized per instantiation.
+    fn register_fam(&mut self, ind: &Rc<Inductive>, span: Span) {
+        if !ind.params.is_empty() || !ind.valparams.is_empty() {
+            return;
+        }
+        let key = GenDef::Fam(ind.tag);
+        if self.gdefs.by_key.contains_key(&key) {
+            return;
+        }
+        let Ok((ty, level, body, l, ilvl)) = self.fam_def(ind, span) else { return };
+        if self.push_gen_def(key, &ind.name, ty, level, body, span).is_ok() {
+            self.gdefs.fam_lvl.insert(ind.tag, (l, ilvl));
+        }
     }
 
     /// §7.1's tag predicates and §7.2's child projections, per index
@@ -356,6 +400,74 @@ impl Elaborator {
             cod: Rc::new(ity.shift_local(1)),
         };
         Ok((ty, Level::max(l, ilvl), body))
+    }
+
+    /// `D#fam = λ(i : I). elim(…; i) : Π(i : I). Ty l`, its statement, its
+    /// level, and the two levels an occurrence needs (design §6).
+    ///
+    /// The two passes are [`Elaborator::lower_indexed_instance`]'s: the family
+    /// is built once at a placeholder level to *read* `l` off its branches,
+    /// then rebuilt at `l`. Both passes run at a closed placeholder index,
+    /// because the λ's binder replaces the scrutinee afterwards — the same
+    /// build-then-`set_scrut` motion [`Elaborator::mu_def`] uses.
+    fn fam_def(&self, ind: &Inductive, span: Span) -> R<(Type, Level, Term, Level, Level)> {
+        let cx = Cx::empty();
+        let (ity, ilvl) = self.index_type_of(&cx, ind, span)?;
+        let (_, l) = self.build_family(&cx, ind, &[], &Level::Zero, Term::Zero, span)?;
+        let (fam, _) = self.build_family(&cx, ind, &[], &l, Term::Zero, span)?;
+        let cod_level = Level::succ(l.clone());
+        let body = Term::Lam {
+            dom_level: ilvl.clone(),
+            cod_level: cod_level.clone(),
+            dom: Rc::new(ity.clone()),
+            body: Rc::new(
+                crate::indexed::set_scrut(&fam.shift_local(1), Rc::new(Term::Var(LocalVar(0))))
+                    .ok_or_else(|| crate::ElabError::Elab {
+                        msg: "internal: a family node has a scrutinee slot".into(),
+                        span,
+                    })?,
+            ),
+        };
+        // `Ty l` binds nothing, so the codomain needs no shift under the Π.
+        let ty = Type::Pi {
+            dom_level: ilvl.clone(),
+            cod_level: cod_level.clone(),
+            dom: Rc::new(ity),
+            cod: Rc::new(Type::Ty(l.clone())),
+        };
+        let level = Level::max(ilvl.clone(), cod_level);
+        Ok((ty, level, body, l, ilvl))
+    }
+
+    /// `El l (D#fam^δ i)` — a route-1 family occurrence at `idx`, with the
+    /// declaration's own level (design §6). `None` when no definition was
+    /// registered, which is the emission site's cue to inline.
+    pub(crate) fn fam_occurrence(
+        &self,
+        cx: &Cx,
+        ind: &Inductive,
+        idx: &Term,
+        span: Span,
+    ) -> Option<(Type, Level)> {
+        let (l, ilvl) = self.gdefs.fam_lvl.get(&ind.tag)?.clone();
+        let fun = self.gen_ref(cx, GenDef::Fam(ind.tag))?;
+        // The Π's domain is an annotation like any other, so it takes the
+        // index type's own code reference where one exists (design §1.4).
+        let dom = match ind.index_ty.as_ref() {
+            Some(IdxTy::Decl(iind)) => self
+                .gen_type_ref(cx, GenDef::IdxCode(iind.tag), &ilvl)
+                .or_else(|| self.index_type_of(cx, ind, span).ok().map(|(t, _)| t))?,
+            _ => Type::Nat,
+        };
+        let tm = Self::gen_app(
+            fun,
+            &ilvl,
+            &Level::succ(l.clone()),
+            &dom,
+            &Type::Ty(l.clone()),
+            idx.clone(),
+        );
+        Some((Type::El { level: l.clone(), tm: Rc::new(tm) }, l))
     }
 
     /// `is_k = λ(z : I). Case-on-tag(z) { c_k ↦ ⌜Unit⌝ ; _ ↦ ⌜Empty⌝ }` (§7.1),

@@ -1061,6 +1061,19 @@ own constructor names are now excluded from that test.
    annotation into Θ(n) branches. Owned by
    `issues/wf-shape-annotation-slots.md`, unscheduled.
 
+   **Corrected 2026-08-06.** That last diagnosis was drawn from a fixture
+   that is not forded. `forded/declared-index-tags`'s `Tw` states pattern
+   indices (`Tw(SLeaf)`, `Tw(SBud(s))`) and `classify_indexed_route` tries
+   route 1 first, so it has no skeleton, no `μ` and no form-A inversion —
+   there is no `zj` in it to carry a shape. Both forded rounds' levers
+   missed it because it was never in their reach, and route 1's family
+   definition (`docs/family-type-code-defs-design.md` §6, phase 5) moved it
+   at once: 2.79 → 2.22, 2.5× at 6 index constructors. The shape-slot
+   defect is a real reading of the *code*, but the family that was said to
+   demonstrate it does not; `issues/wf-shape-annotation-slots.md` now rests
+   on `forded/declared-index-branching`, which is genuinely forded
+   (`BDup(s) : Bl(SNode(s, s))` repeats a variable and fails route 1).
+
 12. **A parameterized forded family keeps its inlined `μ`** (2026-08-04, the
    boundary of `issues/generated-term-defs.md`). A definition is registered at
    *declaration* time and must be closed; `μ`'s body mentions the skeleton's

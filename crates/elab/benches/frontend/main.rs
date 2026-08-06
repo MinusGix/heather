@@ -255,6 +255,7 @@ fn fixtures_index() -> Vec<(&'static str, &'static str)> {
         // One line, and it has to stay one line: `the_list_table_names_every_family`
         // matches `("<name>"` as a substring of this file.
         ("forded/declared-index-branching", "the same at a branching index — §14.9's cliff"),
+        ("indexed/arms", "route 1 with n constructors — §10.3's per-occurrence family"),
         ("meta/nested-inference", "d nested implicit instantiations"),
     ]
 }
