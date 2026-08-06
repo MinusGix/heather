@@ -3,7 +3,7 @@ title: A grind of our own, whose failures hand back the e-graph
 status: open
 labels: [tooling,elaboration,metaprogramming,design]
 created: 2026-08-05
-updated: 2026-08-05
+updated: 2026-08-06
 ---
 
 From the 2026-08-05 riff under [[ai-facing-tooling]]: the plan to
@@ -37,3 +37,7 @@ e-graph never enters the trusted story.
 - **[[surface-proof-automation]]** owns the solver slot
   (`on _: _ := solver(goal)`). Assumed here: only that grind is one
   more solver behind that slot, not a new surface form.
+
+## Log
+
+- 2026-08-06: Cross-ref (2026-08-06): [[parallel-checking-and-caching]]'s rung-2 trace format was sharpened to a goal-keyed decision tree with a deterministic reconstructor; the e-graph this issue hands back on failure should be (a serialization of) that same object, so grind's design inherits the three format rules recorded there.
