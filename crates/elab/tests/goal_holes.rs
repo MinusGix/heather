@@ -366,6 +366,144 @@ fn a_statement_discharge_matches_up_to_conversion() {
     );
 }
 
+// -- deferred arguments (docs/unifier-completeness-design.md §4-5) ----------
+//
+// A hole is checking-only, and an implicit-taking callee used to *infer* its
+// explicit arguments — so `sym(?p)` was refused and the MVP restriction sent
+// everyone to `@sym(a, b, ?p)`. Now the argument is deferred behind a
+// stand-in meta, the expected type solves the endpoints, and the retried
+// hole is an ordinary goal with a meta-free statement.
+
+#[test]
+fn sym_of_a_hole_is_a_goal() {
+    // The round's acceptance test (D1). This retires-and-replaces the MVP
+    // refusal pinned at landing (issues/goal-holes.md, 2026-07-24 log).
+    accept(
+        r#"
+        theorem flip(n: Nat): n = add(n, 0) {
+            sym(?p)
+            on ?p := add_zero(n);
+        }
+        "#,
+    );
+}
+
+#[test]
+fn a_deferred_hole_is_named_and_stated() {
+    // Left unfilled, the goal is listed under the parameter's name with the
+    // *solved* statement — `add(n, 0) = n`, not a meta-bearing one.
+    let r = reject(
+        r#"
+        theorem flip(n: Nat): n = add(n, 0) {
+            sym(?p)
+        }
+        "#,
+    );
+    let ElabError::UnsolvedGoals { goals, .. } = r else {
+        panic!("expected an unsolved-goal listing");
+    };
+    assert_eq!(goals[0].name, "p");
+    assert!(goals[0].statement.starts_with("Id["), "statement: {}", goals[0].statement);
+}
+
+#[test]
+fn a_deferred_hole_at_neutral_endpoints() {
+    // Nothing here reduces: the endpoints are a neutral `add(n, m)` and a
+    // variable.
+    accept(
+        r#"
+        theorem t(n: Nat, m: Nat, k: Nat, q: k = add(n, m)): add(n, m) = k {
+            sym(?p)
+            on ?p := q;
+        }
+        "#,
+    );
+}
+
+#[test]
+fn a_deferred_hole_at_an_open_element_type() {
+    // The `Id`'s carrier is a bound type parameter, so the solved statement
+    // mentions an open `A`.
+    accept(
+        r#"
+        theorem t<A>(a: A, b: A, q: b = a): a = b {
+            sym(?p)
+            on ?p := q;
+        }
+        "#,
+    );
+}
+
+#[test]
+fn a_deferred_hole_is_unblocked_by_a_later_argument() {
+    // `?p`'s domain `?a = ?b` needs both a later argument (`q` solves `b`,
+    // `c`) and the expected type (`a`): the retry runs after both sources.
+    accept(
+        r#"
+        theorem t(a: Nat, b: Nat, c: Nat, p0: a = b, q: b = c): a = c {
+            trans(?p, q)
+            on ?p := p0;
+        }
+        "#,
+    );
+}
+
+#[test]
+fn two_deferred_arguments_with_a_dependency_reach_fixpoint() {
+    // Two obligations, the second's domain mentioning the first's *value*
+    // (`q`'s type is an equation between proofs). A telescope only ever
+    // depends forward, so the first retry pass solves `?x` (a goal) and the
+    // second pass finds `refl`'s domain meta-free.
+    accept(
+        r#"
+        theorem dep({x: Nat}, p: 0 = x, q: p = p): 0 = x {
+            p
+        }
+        theorem use(k: Nat, pk: 0 = k): 0 = k {
+            dep(?x, refl)
+            on ?x := pk;
+        }
+        "#,
+    );
+}
+
+#[test]
+fn a_deferred_hole_in_inference_position_is_diagnosed() {
+    // An unannotated `let` gives the call no expected type, so the endpoints
+    // never arrive and the obligation stays blocked. The failure names the
+    // argument and both escape hatches (design §7.2) — it is the deferral
+    // message, not the old inference-position hole refusal, because the
+    // argument-position route now defers instead of inferring.
+    let msg = elab_err(
+        r#"
+        theorem t(n: Nat): n = n {
+            let s = sym(?p);
+            s
+        }
+        "#,
+    );
+    assert!(msg.contains("was deferred"), "{msg}");
+    assert!(msg.contains("`sym`"), "{msg}");
+}
+
+#[test]
+fn an_undetermined_deferred_argument_gets_the_deferral_message() {
+    // Checking position, but the expected type determines only the outer
+    // endpoints: `trans`'s middle `b` is mentioned by neither, so both
+    // deferred proofs stay blocked and the first is reported, verbatim per
+    // design §7.2.
+    let msg = elab_err(
+        r#"
+        theorem t(a: Nat, c: Nat, p: a = c): a = c {
+            trans(?p, ?q)
+        }
+        "#,
+    );
+    assert!(msg.contains("was deferred"), "{msg}");
+    assert!(msg.contains("`p`"), "{msg}");
+    assert!(msg.contains("`@trans(…)`"), "{msg}");
+}
+
 // -- negatives --------------------------------------------------------------
 
 #[test]

@@ -114,6 +114,57 @@ fn too_few_explicit_args_is_an_elab_error() {
 }
 
 // ---------------------------------------------------------------------------
+// The expected-type harvest and its guards
+// (docs/unifier-completeness-design.md §5).
+
+#[test]
+fn refl_as_an_argument_is_deferred_and_retried() {
+    // `refl` is checking-only; its parameter's domain (`a = b`) still
+    // mentions the endpoint metas when the argument is reached, so it is
+    // deferred, the expected type solves the endpoints, and the retried
+    // `refl` gets a meta-free `Id`.
+    let mut e = Elaborator::with_prelude().expect("prelude");
+    e.elab_source("theorem t(n: Nat): n = n { sym(refl) }")
+        .expect("`refl` must defer until the endpoints are harvested");
+}
+
+#[test]
+fn a_vector_literal_argument_is_deferred_and_retried() {
+    // Same for a vector literal, with the retry unblocked by a *later*
+    // argument's inference rather than by the expected type.
+    let mut e = Elaborator::with_prelude().expect("prelude");
+    e.elab_source(
+        "fn pick<A>(xs: [A; 2], x: A) -> A { x }
+         fn go() -> Nat { pick([1, 2], 5) }",
+    )
+    .expect("the literal must defer until `x` solves `A`");
+}
+
+#[test]
+fn a_flex_headed_result_is_not_peeled_by_the_harvest() {
+    // The flex-head guard (design §5.4), pinned directly: `ap`'s result type
+    // is `?f(a) = a`, and both the argument's type and the expected type
+    // offer `add(n, n) = n`. First-order peeling would "solve"
+    // `?f := add(n)` — here even acceptably, which is exactly why the guard
+    // must be what refuses: flex-headed applications are outside the Miller
+    // fragment, only the LGG rule (whose both-sides trigger does not fire on
+    // this one-sided shape) is trusted for them, and the outcome is the
+    // caller's message rather than a solution nobody stated.
+    let mut e = Elaborator::with_prelude().expect("prelude");
+    let r = e.elab_source(
+        "fn add(m: Nat, n: Nat) -> Nat { match m { Zero => n, Succ(k, ih) => Succ(ih) } }
+         theorem ap<A>({f: A -> A}, a: A, p: f(a) = a): f(a) = a { p }
+         theorem use(n: Nat, q: add(n, n) = n): add(n, n) = n { ap(n, q) }",
+    );
+    match r {
+        Err(ElabError::Elab { msg, .. }) => {
+            assert!(msg.contains("could not infer the implicit argument `f`"), "{msg}");
+        }
+        other => panic!("expected the could-not-infer message, got {other:?}"),
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Inference through an indexed family's type
 // (issues/type-arg-inference-through-index.md). A declared-index family's
 // type is `El` of an index recursion choosing among quoted codes, with the

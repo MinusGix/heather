@@ -216,6 +216,19 @@ fn expected_not_an_id_leaves_the_old_error() {
 }
 
 #[test]
+fn the_lgg_trigger_precedes_the_general_harvest() {
+    // Since the expected-type harvest became general
+    // (docs/unifier-completeness-design.md §5.2), a shape matching both the
+    // flex-`Id` trigger and a would-be first-order reading must still take
+    // the LGG: `λz. add(z, 0)` is the congruence, where peeling would have
+    // guessed `add(a)` and died at the kernel.
+    ok(r#"
+    fn add(m: Nat, n: Nat) -> Nat { match m { Zero => n, Succ(k, ih) => Succ(ih) } }
+    theorem t(a: Nat, b: Nat, p: a = b): add(a, 0) = add(b, 0) { cong(p) }
+    "#);
+}
+
+#[test]
 fn other_implicits_are_untouched() {
     // A call with a *different* unsolved implicit in checking position gets
     // no help from the rule: the trigger is `?f(s) = ?f(t)` and nothing else

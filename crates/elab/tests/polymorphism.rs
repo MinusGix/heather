@@ -82,10 +82,26 @@ fn a_type_argument_is_solved_from_under_a_binder() {
 }
 
 #[test]
+fn a_nullary_calls_type_argument_comes_from_the_expected_type() {
+    // Retired-and-replaced (docs/unifier-completeness-design.md §5.1): this
+    // was the "cannot infer the type argument" pin — before the general
+    // harvest, a call with no argument mentioning `A` was refused even in
+    // checking position, where `List<Nat>` says everything. Now the expected
+    // type is consulted; the refusal moved to genuine inference position
+    // (next test).
+    ok("inductive List<A> { Nil, Cons(A, List<A>) }
+        fn nil<A>() -> List<A> { Nil }
+        fn go() -> List<Nat> { nil() }");
+}
+
+#[test]
 fn an_uninferable_type_argument_is_diagnosed() {
+    // Inference position: an unannotated `let` has no expected type, so the
+    // pre-existing message still stands — and is now literally true only
+    // after the expected type has been consulted, which is the point.
     let e = bad("inductive List<A> { Nil, Cons(A, List<A>) }
                  fn nil<A>() -> List<A> { Nil }
-                 fn go() -> List<Nat> { nil() }");
+                 fn go() -> Nat { let xs = nil(); 0 }");
     assert!(e.contains("cannot infer the type argument"), "{e}");
     assert!(e.contains("nil<"), "the message should name the escape hatch: {e}");
 }
@@ -267,13 +283,33 @@ fn recursion_over_a_container_at_an_open_element_type() {
 // -- the inference boundary, stated as a message (§4.1) -------------------
 
 #[test]
-fn an_unannotated_lambda_argument_is_diagnosed() {
+fn an_unannotated_lambda_argument_is_inferred_from_the_call() {
+    // Retired-and-replaced (docs/unifier-completeness-design.md §4.1): this
+    // was the "annotate its binders" pin — an unannotated lambda argument of
+    // an implicit-taking callee was refused unconditionally, because
+    // explicit arguments were inferred and a lambda without annotations has
+    // nothing to infer from. An unannotated lambda is checking-only, so it
+    // is now *deferred*: `xs` solves `A`, the expected type solves `B`, and
+    // the retried lambda is checked against the then-meta-free `Nat -> Nat`.
+    ok("inductive List<A> { Nil, Cons(A, List<A>) }
+        fn map<A, B>(f: A -> B, xs: List<A>) -> List<B> {
+            match xs { Nil => Nil, Cons(x, tl) => Cons(f(x), map(f, tl)) }
+        }
+        fn go(xs: List<Nat>) -> List<Nat> { map(λ x => Succ(x), xs) }");
+}
+
+#[test]
+fn an_undetermined_unannotated_lambda_is_diagnosed() {
+    // The refusal's new home (design §7.2): in inference position nothing
+    // solves `B`, so the deferred lambda stays blocked and the message names
+    // the argument, the parameter, and both escape hatches.
     let e = bad("inductive List<A> { Nil, Cons(A, List<A>) }
                  fn map<A, B>(f: A -> B, xs: List<A>) -> List<B> {
                      match xs { Nil => Nil, Cons(x, tl) => Cons(f(x), map(f, tl)) }
                  }
-                 fn go(xs: List<Nat>) -> List<Nat> { map(λ x => Succ(x), xs) }");
-    assert!(e.contains("annotate its binders"), "{e}");
+                 fn go(xs: List<Nat>) -> Nat { let ys = map(λ x => Succ(x), xs); 0 }");
+    assert!(e.contains("was deferred"), "{e}");
+    assert!(e.contains("`f`"), "the message should name the parameter: {e}");
 }
 
 #[test]
@@ -328,6 +364,101 @@ fn the_prelude_serves_a_declared_type() {
     ok("inductive Bool { True, False }
         theorem at_bool(a: Bool, b: Bool, p: a = b): b = a { sym(p) }
         theorem chain(a: Bool, b: Bool, c: Bool, p: a = b, q: b = c): a = c { trans(p, q) }");
+}
+
+// -- a polymorphic function as a first-class argument (D2, ------------------
+// docs/unifier-completeness-design.md §5.3: the bare-reference route)
+
+#[test]
+fn a_bare_polymorphic_reference_instantiates_at_a_monomorphic_domain() {
+    // The issue's repro (issues/elab-unifier-completeness.md, 2026-08-04):
+    // died as a bare kernel `LevelMismatch`, because the reference resolved
+    // verbatim at `Π (A : Ty 0). …` and no instantiation was ever attempted.
+    ok("fn id<A>(x: A) -> A { x }
+        fn app1(f: Nat -> Nat, n: Nat) -> Nat { f(n) }
+        fn probe(n: Nat) -> Nat { app1(id, n) }");
+}
+
+#[test]
+fn a_bare_reference_through_compose() {
+    // The same shape with three type parameters on the callee: the written
+    // instantiation makes every domain concrete, so both bare `id`s go down
+    // the checking route.
+    ok("fn id<A>(x: A) -> A { x }
+        fn compose<A, B, C>(g: B -> C, f: A -> B, x: A) -> C { g(f(x)) }
+        fn probe(n: Nat) -> Nat { compose<Nat, Nat, Nat>(id, id, n) }");
+}
+
+#[test]
+fn a_fully_inferred_compose_of_bare_references_is_diagnosed() {
+    // The boundary, pinned: with `compose`'s own `B` determined by *neither*
+    // `n` nor the expected type, the deferred `id`s stay blocked — their
+    // instantiation would have to flow across call worlds, which is the
+    // cross-call postponement this round deliberately does not build
+    // (docs/unifier-completeness-design.md §3.1). The failure is the §7.2
+    // message naming the argument, not the old kernel `LevelMismatch` on a
+    // junk instantiation.
+    let e = bad("fn id<A>(x: A) -> A { x }
+                 fn compose<A, B, C>(g: B -> C, f: A -> B, x: A) -> C { g(f(x)) }
+                 fn probe(n: Nat) -> Nat { compose(id, id, n) }");
+    assert!(e.contains("was deferred"), "{e}");
+}
+
+#[test]
+fn a_bare_reference_in_checking_position_under_a_theorem() {
+    // Checking position proper (a theorem statement), not just a `fn` body's
+    // computation position.
+    ok("fn id<A>(x: A) -> A { x }
+        fn app1(f: Nat -> Nat, n: Nat) -> Nat { f(n) }
+        theorem probe_id(n: Nat): app1(id, n) = id(n) { refl }");
+}
+
+#[test]
+fn a_bare_reference_at_an_open_element_type() {
+    // The expected domain is `A -> A` for a *bound* type parameter: the
+    // instantiation is a variable's code, not a closed type.
+    ok("fn id<A>(x: A) -> A { x }
+        fn call<A>(f: A -> A, x: A) -> A { f(x) }
+        fn go<A>(x: A) -> A { call(id, x) }");
+}
+
+#[test]
+fn a_bare_reference_in_inference_position_keeps_todays_behavior() {
+    // Negative: with no expected type there is nothing to solve from, so the
+    // reference still resolves to the polymorphic value verbatim and misuse
+    // is still an error (kernel-gated, as before this round).
+    let e = bad("fn id<A>(x: A) -> A { x }
+                 fn go(n: Nat) -> Nat { let f = id; f(n) }");
+    assert!(!e.is_empty(), "{e}");
+}
+
+#[test]
+fn an_undetermined_bare_reference_gets_an_elaborator_message() {
+    // Negative (design §7.1): the expected type (`Nat`) determines nothing,
+    // so the failure is the elaborator's message naming the parameter and
+    // the escape hatch — not a bare kernel error.
+    let e = bad("fn konst<A>(x: A) -> Nat { 0 }
+                 fn go() -> Nat { konst }");
+    assert!(e.contains("from the expected type here"), "{e}");
+    assert!(e.contains("konst<"), "the message should name the escape hatch: {e}");
+}
+
+#[test]
+fn a_wrongly_harvested_solution_is_still_kernel_gated() {
+    // Kernel-gate control (design §8): the harvest pairs `El ?A` with `Nat`
+    // first — learn-only never verifies — and the instantiated `id` at
+    // `Nat -> Nat` is not a `Nat -> Bool`, which the *kernel* rejects.
+    let mut e = Elaborator::with_prelude().expect("prelude");
+    let r = e.elab_source(
+        "inductive Bool { True, False }
+         fn id<A>(x: A) -> A { x }
+         fn app_nb(f: Nat -> Bool, n: Nat) -> Bool { f(n) }
+         fn go(n: Nat) -> Bool { app_nb(id, n) }",
+    );
+    assert!(
+        matches!(r, Err(heather_elab::ElabError::Kernel { .. })),
+        "expected a kernel rejection, got {r:?}"
+    );
 }
 
 #[test]

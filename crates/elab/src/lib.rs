@@ -1877,13 +1877,14 @@ impl Elaborator {
                     return self.elab_at_universe(cx, e, &head, e.span);
                 }
                 // Inference is the fallback, but the expected type is *not*
-                // discarded on the way: an implicit-inserting call whose last
-                // unsolved implicit is a function only the goal mentions is
-                // solved by anti-unification against it
-                // (issues/congruence-by-anti-unification.md, decision 7 —
-                // this line is the plumbing that decision names). Nothing
-                // else reads the hint, so every other expression elaborates
-                // exactly as before.
+                // discarded on the way: an implicit-inserting call (or a bare
+                // reference to a polymorphic declaration) with something
+                // still unsolved consults it — the anti-unification hook and
+                // the general expected-type harvest both live behind this
+                // line (issues/congruence-by-anti-unification.md decision 7;
+                // docs/unifier-completeness-design.md §5). Nothing else reads
+                // the hint, so every other expression elaborates exactly as
+                // before.
                 let (t, _, _) = self.elab_infer_at(cx, e, Some(&head))?;
                 Ok(t)
             }
@@ -2079,7 +2080,38 @@ impl Elaborator {
                     e.span,
                 )
             }
-            ExprKind::Var(name) => self.resolve(cx, name, e.span),
+            // A bare reference to a polymorphic declaration, met in
+            // *checking* position, is the zero-explicit-argument case of
+            // expected-type-directed instantiation
+            // (docs/unifier-completeness-design.md §5.3): `app1(id, n)` at
+            // `app1(f: Nat -> Nat, n: Nat)` dies as a bare kernel
+            // `LevelMismatch` without it, because the polymorphic value's
+            // leading `Π (A : Ty 0)` fails the Π–Π `dom_level` comparison
+            // before the domains are even looked at. Inference position is
+            // unchanged: with nothing to solve from, the reference still
+            // resolves to the polymorphic value verbatim.
+            ExprKind::Var(name) => {
+                if let Some(expected) = expected
+                    && let Some(prefix) = self.bare_implicit_prefix(cx, name)
+                {
+                    let (head, ty, lvl) = self.resolve(cx, name, e.span)?;
+                    let mask = vec![true; prefix];
+                    return self.apply_implicit(
+                        cx,
+                        name,
+                        0,
+                        true,
+                        head,
+                        ty,
+                        lvl,
+                        &[],
+                        &mask,
+                        Some(expected),
+                        e.span,
+                    );
+                }
+                self.resolve(cx, name, e.span)
+            }
             // `xs[i]` — infers, since the element type comes off the receiver
             // (docs/surface-fin-indexing-design.md §5.2).
             ExprKind::Index { recv, idx } => self.elab_vec_nth(cx, recv, idx, e.span),
@@ -2150,7 +2182,10 @@ impl Elaborator {
                 let (name, t, ty, lvl, mask) =
                     self.elab_ty_app(cx, callee, tyargs, head.span)?;
                 if !*explicit && mask.iter().any(|&b| b) {
-                    self.apply_implicit(cx, &name, t, ty, lvl, args, &mask, expected, e.span)
+                    self.apply_implicit(
+                        cx, &name, tyargs.len(), false, t, ty, lvl, args, &mask, expected,
+                        e.span,
+                    )
                 } else {
                     // The type arguments have consumed the leading parameters,
                     // so argument `i` is now parameter `i + |tyargs|` — which
@@ -2330,7 +2365,9 @@ impl Elaborator {
                 if !mask.iter().any(|&b| b) {
                     self.apply_explicit(cx, Some(name), 0, head, ty, lvl, args)
                 } else {
-                    self.apply_implicit(cx, name, head, ty, lvl, args, &mask, expected, e.span)
+                    self.apply_implicit(
+                        cx, name, 0, false, head, ty, lvl, args, &mask, expected, e.span,
+                    )
                 }
             }
             ExprKind::Match { motive: Some(m), scrut, arms, eqbind } => {
@@ -4572,6 +4609,58 @@ impl Elaborator {
         Ok((name.clone(), t, ty, lvl, mask))
     }
 
+    /// Is `e` a form the elaborator can only *check*, never infer — the
+    /// deferral trigger's syntactic half (docs/unifier-completeness-design.md
+    /// §4.1)? The set is closed and enumerated by the refusing arms of
+    /// [`Self::elab_infer_at`]/[`Self::elab_infer`]; deferring exactly these
+    /// forms loses no solving power, because in inference mode they *error*
+    /// rather than contribute a solution. Each variant, tied to its arm:
+    ///
+    /// - `Hole` — "a hole here has no expected type" (`elab_infer_at`).
+    /// - `Refl`, when not shadowed — "`refl` needs an `=` expected type"
+    ///   (the shadowed reading is a `Var` and infers).
+    /// - `AutoRefl` — checking-only by construction (a speculative `refl`
+    ///   against the expected `Id`).
+    /// - `VecLit` — "a vector literal needs an expected type".
+    /// - a `Lam` with any unannotated binder — nothing to take the domain
+    ///   from (`elab_lam_infer` requires every annotation; `elab_lam_check`
+    ///   reads the domain off the expected `Π`).
+    /// - `FZ` / `FS(j)`, under their existing not-shadowed/not-a-ctor
+    ///   guards — "needs an expected `Fin` type".
+    /// - `absurd(p)`, when not shadowed — "needs an expected type".
+    /// - a bare reference to a global with a leading implicit prefix
+    ///   ([`Self::bare_implicit_prefix`]). This one *can* infer — but only at
+    ///   its uninstantiated polymorphic Π, which against a meta-bearing
+    ///   domain can just mis-teach (`El ?B ≟ Ty 0` "solves" `?B := ⌜Type 0⌝`
+    ///   and the kernel rejects a term nobody meant). Checking position is
+    ///   where its instantiation is decidable (the §5.3 route), so at a
+    ///   meta-bearing domain it waits for one.
+    ///
+    /// `Num` is deliberately **excluded**: it infers at `Nat` today and that
+    /// default is load-bearing for the suite (`xs[2]`'s `Fin` reading exists
+    /// only in checking position, as before).
+    fn is_checking_only(&self, cx: &Cx, e: &Expr) -> bool {
+        match &e.kind {
+            ExprKind::Hole(_) | ExprKind::AutoRefl | ExprKind::VecLit(_) => true,
+            ExprKind::Refl => !self.shadowed(cx, "refl"),
+            ExprKind::Lam { binders, .. } => binders.iter().any(|b| b.ty.is_none()),
+            ExprKind::Var(name) => {
+                (name == "FZ"
+                    && !self.shadowed(cx, name)
+                    && self.ctor_here(cx, name).is_none())
+                    || self.bare_implicit_prefix(cx, name).is_some()
+            }
+            ExprKind::App { .. } => match e.as_named() {
+                Some(("absurd", _, _)) => !self.shadowed(cx, "absurd"),
+                Some(("FS", _, false)) => {
+                    !self.shadowed(cx, "FS") && self.ctor_here(cx, "FS").is_none()
+                }
+                _ => false,
+            },
+            _ => false,
+        }
+    }
+
     /// Application with implicit-argument insertion
     /// (issues/elab-stage2-metas.md). Each implicit parameter becomes a fresh
     /// metavariable — represented, per the architecture, as an *innermost*
@@ -4584,12 +4673,24 @@ impl Elaborator {
     ///
     /// Unlike [`Self::apply_explicit`] this requires *saturating* the spine
     /// (every explicit parameter needs an argument): mixing partial
-    /// application with implicit insertion is ambiguous, so it is refused.
+    /// application with implicit insertion is ambiguous, so it is refused —
+    /// except that `mask` may cover only a *prefix* of the remaining
+    /// parameters (the bare-reference route of
+    /// docs/unifier-completeness-design.md §5.3), in which case the
+    /// parameters past the mask are simply left unapplied.
+    ///
+    /// `param_offset` is how many leading parameters the head has already
+    /// consumed (the type arguments of an `f<T, …>(…)` call) — passed rather
+    /// than recovered from `all_params.len() - mask.len()`, which is only
+    /// right when the mask is a suffix. `bare_ref` selects the §7.1 message
+    /// flavor for the zero-argument checking-position route.
     #[allow(clippy::too_many_arguments)]
     fn apply_implicit(
         &self,
         cx: &Cx,
         name: &str,
+        param_offset: usize,
+        bare_ref: bool,
         head: Term,
         callee_ty: Type,
         callee_lvl: Level,
@@ -4598,26 +4699,45 @@ impl Elaborator {
         expected: Option<&Type>,
         span: Span,
     ) -> R<(Term, Type, Level)> {
-        let n = mask.iter().filter(|&&b| b).count() as u32;
+        // Scratch-world size, fixed up front (everything downstream of
+        // `shift_global(n)` assumes it is static): one meta per implicit
+        // parameter, plus one per explicit argument that is syntactically
+        // checking-only (design §4.2) — those *may* be deferred behind a
+        // stand-in meta. The second summand is an over-approximation: a
+        // checking-only argument whose domain turns out meta-free is checked
+        // inline exactly as before, and its pre-allocated slot is filled with
+        // the checked term immediately.
+        let n_impl = mask.iter().filter(|&&b| b).count();
+        let n_expl = mask.len() - n_impl;
+        let n_defer = args
+            .iter()
+            .take(n_expl)
+            .filter(|a| self.is_checking_only(cx, a))
+            .count();
+        let n = (n_impl + n_defer) as u32;
         // Scratch world: the `n` metas take the innermost Ψ indices `[0, n)`;
         // committed globals shift up by `n` so nothing collides.
         let mut t = head.shift_global(n);
         let mut ty = callee_ty.shift_global(n);
         let mut lvl = callee_lvl;
-        let mut sols: Vec<Option<Rc<Term>>> = vec![None; n as usize];
+        let mut sols: Vec<Sol> = vec![Sol::Unsolved; n as usize];
         // Each meta's *declared* parameter type, in meta order — the only
         // place a solution's domain can come from when no argument mentions
-        // it (see [`Self::solve_by_lgg`]).
+        // it (see [`Self::solve_from_expected`]).
         let mut meta_doms: Vec<Type> = Vec::with_capacity(n as usize);
+        // Which parameter each slot came from, in slot order — for the
+        // per-slot diagnostics at discharge.
+        let mut slot_param: Vec<usize> = Vec::with_capacity(n as usize);
+        // Deferred obligations (design §3.1): local to this activation. The
+        // scratch world is the constraint store — an obligation's domain's
+        // meta occurrences *are* its "blocked on" set, and [`zonked`] decides
+        // readiness exactly.
+        let mut deferred: Vec<DeferredArg<'_>> = Vec::new();
         let mut next_meta = 0u32;
         let mut args = args.iter();
-        // Parameter metadata for goal-name hints. `mask` may be a suffix of
-        // the parameter list (`f<T>(…)` has already consumed the leading type
-        // parameters), so index from the same offset.
         let all_params = self.params_of(name);
-        let offset = all_params.len().saturating_sub(mask.len());
         for (mi, &is_implicit) in mask.iter().enumerate() {
-            let i = mi + offset;
+            let i = mi + param_offset;
             let params = &all_params;
             let head_ty = self.whnf(cx, &ty, span)?;
             let Type::Pi { dom_level, cod_level, dom, cod } = head_ty else {
@@ -4630,6 +4750,7 @@ impl Elaborator {
                     subst: LocalSubst::id(&cx.gamma),
                 };
                 meta_doms.push((*dom).clone());
+                slot_param.push(i);
                 next_meta += 1;
                 Rc::new(m)
             } else {
@@ -4637,33 +4758,11 @@ impl Elaborator {
                     msg: format!("`{name}` is applied to too few arguments"),
                     span,
                 })?;
-                if matches!(arg.kind, ExprKind::Lam { .. }) {
-                    // An explicit argument is *inferred* here, and an
-                    // unannotated lambda has nothing to infer from. Harmless
-                    // before polymorphism (a monomorphic callee's domain was
-                    // never needed to elaborate the argument); now it is the
-                    // first thing anyone hits, so it says what to do
-                    // (docs/surface-polymorphism.md §4.1).
-                    let unannotated = matches!(&arg.kind,
-                        ExprKind::Lam { binders, .. } if binders.iter().any(|b| b.ty.is_none()));
-                    if unannotated {
-                        return err(
-                            format!(
-                                "`{name}` has implicit arguments, so this lambda is \
-                                 elaborated before they are known: annotate its binders \
-                                 (`λ (x: A) => …`), or give the type arguments \
-                                 (`{name}<T, …>(…)`)"
-                            ),
-                            arg.span,
-                        );
-                    }
-                }
                 // If every meta this domain mentions is *already* solved,
                 // elaborate the argument in **checking** mode against the
-                // zonked domain. That is what puts `refl`, a `?`-hole and a
-                // vector literal back in a position that supplies their
-                // expected type — they are checking-only, and before this
-                // every argument of an implicit-taking callee was inferred.
+                // zonked domain. That is what puts `refl`, a `?`-hole, an
+                // unannotated lambda and a vector literal in a position that
+                // supplies their expected type — they are checking-only.
                 //
                 // Load-bearing since `@` stopped clearing the mask
                 // (issues/at-and-type-arguments.md): `@sym(a, b, ?p)` still
@@ -4675,7 +4774,44 @@ impl Elaborator {
                         let hint = params.get(i).map(|p| (name, p.name.as_str()));
                         let arg_t =
                             self.elab_check_hinted(cx, arg, &real_dom, &dom_level, hint)?;
+                        if self.is_checking_only(cx, arg) {
+                            // Counted into `n` up front, so the slot exists;
+                            // fill it now (a solved slot is indistinguishable
+                            // from an unused one at discharge) and keep the
+                            // slot numbering aligned with the count.
+                            sols[next_meta as usize] = Sol::Solved(Rc::new(arg_t.clone()));
+                            meta_doms.push((*dom).clone());
+                            slot_param.push(i);
+                            next_meta += 1;
+                        }
                         Rc::new(arg_t.shift_global(n))
+                    }
+                    // Per-argument deferral (design §4): a checking-only form
+                    // cannot contribute a solution in inference mode — every
+                    // such arm in `elab_infer_at` refuses it — so at a domain
+                    // that still mentions metas it is *deferred*: its spine
+                    // position is a fresh stand-in meta, its slot is
+                    // withheld, and the obligation is retried after
+                    // expected-type solving. Later arguments whose domains
+                    // mention the deferred value see the meta and block or
+                    // infer as their own trigger says.
+                    None if self.is_checking_only(cx, arg) => {
+                        let m = Term::GlobalTm {
+                            var: GlobalVar(next_meta),
+                            subst: LocalSubst::id(&cx.gamma),
+                        };
+                        sols[next_meta as usize] = Sol::Withheld;
+                        deferred.push(DeferredArg {
+                            slot: next_meta as usize,
+                            expr: arg,
+                            dom: (*dom).clone(),
+                            dom_level: dom_level.clone(),
+                            param: i,
+                        });
+                        meta_doms.push((*dom).clone());
+                        slot_param.push(i);
+                        next_meta += 1;
+                        Rc::new(m)
                     }
                     None => {
                         let (arg_t, arg_ty, _) = self.elab_infer(cx, arg)?;
@@ -4699,35 +4835,91 @@ impl Elaborator {
         // a spilled argument cannot solve a meta, which is also true of the
         // parenthesized spelling this is sugar for.
         let spill: Vec<Expr> = args.cloned().collect();
-        // Last chance for an implicit no argument's type mentions: in
-        // *checking* position the expected type is the remaining evidence,
-        // and recovering a congruence's function from it is anti-unification
-        // (issues/congruence-by-anti-unification.md, interim design).
-        //
-        // Run only when something is still unsolved — so no call that
-        // elaborated before reaches it — and only on an unspilled spine,
-        // where `ty` really is the call's result type.
+        // Expected-type-directed solving (design §5): in checking position,
+        // with an unspilled spine (so `ty` really is the call's result type),
+        // the expected type is the remaining evidence. Run only when
+        // something is still unfilled — so no call that elaborated before
+        // reaches it.
         if let Some(expected) = expected
             && spill.is_empty()
-            && sols.iter().any(|s| s.is_none())
+            && sols.iter().any(|s| s.solved().is_none())
         {
-            self.solve_by_lgg(cx, &ty, expected, n, &mut sols, &meta_doms, span)?;
+            self.solve_from_expected(cx, &ty, expected, n, &mut sols, &meta_doms, span)?;
+        }
+        // Retry the deferred obligations, to fixpoint in argument order
+        // (design §4.3): an obligation whose domain has become meta-free is
+        // checked against it — the hole becomes an ordinary goal here, `refl`
+        // gets its `Id`, the vector literal its `Vec`. The checked term is a
+        // committed-world payload, the same convention the unifiers'
+        // strengthened subjects follow. Checking-mode elaboration never
+        // writes `sols`, so each pass either fills at least one slot or
+        // stops: at most `k` passes for `k` obligations. The multi-pass
+        // exists for an obligation whose domain mentions another deferred
+        // argument's value, which a single ordered pass could misreport.
+        loop {
+            let mut progressed = false;
+            let mut blocked = false;
+            for ob in &deferred {
+                if !matches!(sols[ob.slot], Sol::Withheld) {
+                    continue;
+                }
+                let Some(dom) = zonked(&ob.dom, n, &sols) else {
+                    blocked = true;
+                    continue;
+                };
+                let hint = all_params.get(ob.param).map(|p| (name, p.name.as_str()));
+                let arg_t = self.elab_check_hinted(cx, ob.expr, &dom, &ob.dom_level, hint)?;
+                sols[ob.slot] = Sol::Solved(Rc::new(arg_t));
+                progressed = true;
+            }
+            if !progressed || !blocked {
+                break;
+            }
+        }
+        // An obligation still blocked is reported at *its* argument, before
+        // the generic unsolved-meta report — the user should see the
+        // argument, not only the meta (design §7.2).
+        for ob in &deferred {
+            if matches!(sols[ob.slot], Sol::Withheld) {
+                let p = all_params
+                    .get(ob.param)
+                    .map(|p| p.name.as_str())
+                    .unwrap_or("?");
+                return err(
+                    format!(
+                        "this argument of `{name}` was deferred — the type of its \
+                         parameter `{p}` still mentions an implicit that could not be \
+                         inferred; give the type arguments (`{name}<…>(…)`) or write \
+                         the call fully explicitly (`@{name}(…)`)"
+                    ),
+                    ob.expr.span,
+                );
+            }
         }
         // Discharge the meta block: `entries[k]` is the payload for Ψ-index
         // `n-1-k` (apply_global's convention), so it takes `sols[n-1-k]`.
+        // Only an implicit's slot can still be `Unsolved` here — deferred
+        // slots are `Solved` or already reported above, inline-checked ones
+        // were filled at their turn.
         let mut entries = Vec::with_capacity(n as usize);
-        // Which parameter each meta came from, in meta order — for the
-        // message below. `mask` may be a *suffix* of the parameter list when
-        // the call already gave its type arguments (`f<T>(…)`), so the offset
-        // is recovered rather than assumed to be zero.
-        let all = self.params_of(name);
-        let skip = all.len().saturating_sub(mask.len());
-        let meta_params: Vec<&ParamMeta> =
-            all.iter().skip(skip).zip(mask).filter(|&(_, &m)| m).map(|(p, _)| p).collect();
         for k in 0..n {
             let j = (n - 1 - k) as usize;
-            let sol = sols[j].clone().ok_or_else(|| ElabError::Elab {
-                msg: match meta_params.get(j) {
+            let sol = sols[j].solved().cloned().ok_or_else(|| ElabError::Elab {
+                msg: match slot_param.get(j).and_then(|&i| all_params.get(i)) {
+                    // The bare-reference route (design §7.1): there is no
+                    // argument whose type could have mentioned anything, so
+                    // the message names the only evidence that was consulted.
+                    Some(p) if bare_ref && p.is_type => format!(
+                        "cannot infer the type argument `{}` of `{name}` from the \
+                         expected type here — write `{name}<…>` to give the type \
+                         arguments",
+                        p.name
+                    ),
+                    Some(p) if bare_ref => format!(
+                        "could not infer the implicit argument `{}` of `{name}` from \
+                         the expected type here",
+                        p.name
+                    ),
                     Some(p) if p.is_type => format!(
                         "cannot infer the type argument `{}` of `{name}` here — no \
                          argument's type mentions it; write `{name}<…>(…)` to give the \
@@ -4756,54 +4948,49 @@ impl Elaborator {
         self.apply_explicit(cx, Some(name), past, t, ty, lvl, &spill)
     }
 
-    /// The congruence rule of `issues/congruence-by-anti-unification.md`: the
-    /// expected type, consulted for the implicits an argument's type cannot
-    /// reach. Called from [`Self::apply_implicit`] with the call's scratch
-    /// world (`n` metas, `sols` their solutions so far) just before an
-    /// unsolved meta would be reported.
+    /// Expected-type-directed solving (docs/unifier-completeness-design.md
+    /// §5): the expected type, consulted for the implicits an argument's type
+    /// cannot reach. Called from [`Self::apply_implicit`] with the call's
+    /// scratch world (`n` metas, `sols` their solutions so far) just before
+    /// the deferred-argument retry and the discharge.
     ///
-    /// Two steps, both behind one structural trigger and no name
-    /// (decision 1): the result type is `?f(s) = ?f(t)` with the *same*
-    /// unsolved meta at both heads and `s`, `t` meta-free, and the expected
-    /// type whnf's to an `Id`.
+    /// Two rules, the LGG trigger read first and keeping priority for its
+    /// shape (design §5.2):
     ///
-    /// 1. **First-order harvest.** `unify_ty` against the result type is what
-    ///    solves the *other* implicits the same call needs and no argument
-    ///    mentions — `cong`'s codomain `B` is exactly that. It never fails
-    ///    and only ever learns.
-    /// 2. **Anti-unification**: `?f := λz. LGG(X, Y)`, every hole's witness
-    ///    pair required to be exactly `(s, t)`.
+    /// - **The LGG hook** (issues/congruence-by-anti-unification.md, interim
+    ///   round): when the result type is `?f(s) = ?f(t)` with the *same*
+    ///   unsolved meta at both heads and `s`, `t` meta-free, and the expected
+    ///   type whnf's to an `Id`, run the first-order harvest with `?f`
+    ///   withheld, then solve `?f := λz. LGG(X, Y)` with every hole's witness
+    ///   pair required to be exactly `(s, t)`. `?f(s) ≟ X` is outside the
+    ///   Miller fragment, so no first-order rule may touch it — the
+    ///   flex-head guard in [`unify_tm`] now enforces that at the source.
+    ///   Once the trigger fires the outcome is **committed**: a mismatching
+    ///   witness is reported here, not swallowed into "could not infer".
+    ///   This half is still the documented throwaway: the LGG itself lives in
+    ///   [`crate::lgg`] and outlives it, but the hook is deleted when a
+    ///   layer-m goal solver can construct the call instead.
     ///
-    /// The trigger is read off **before** the harvest, and `?f` is *withheld*
-    /// from it. That order is load-bearing rather than tidy: `unify_ty`'s
-    /// `App`-congruence happily solves `?f(?a) ≟ add(a, a)` by peeling one
-    /// argument — `?f := add(a)` — which satisfies the left endpoint and
-    /// contradicts the right, and reaches the kernel as `NotConvertible` on a
-    /// term nobody wrote. Flex heads applied to arbitrary arguments are §2's
-    /// out-of-pattern case; the *only* rule this round trusts for them is the
-    /// LGG, so first-order guessing is denied the position it would otherwise
-    /// take first.
-    ///
-    /// Once the trigger fires the outcome is **committed**: a mismatching
-    /// witness is reported here, not swallowed into "could not infer". A
-    /// shape that does not match is simply left alone, and the caller's
-    /// existing message stands.
-    ///
-    /// This hook is the throwaway half of the interim round (§5): the LGG
-    /// itself lives in [`crate::lgg`] and outlives it, but *this* function is
-    /// deleted when a layer-m goal solver can construct the call instead.
+    /// - **The general harvest** (design §5.1), the else branch: unify the
+    ///   scratch-world result type against the whnf'd expected type,
+    ///   learn-only. This is the same call the LGG path makes as its step 1,
+    ///   run also when the flex-`Id` trigger does not fire — the general rule
+    ///   of which that harvest was the special case. It is what solves
+    ///   `sym(?p)`'s endpoints and the bare polymorphic reference's type
+    ///   argument (design D1/D2), and it can only *learn*: a wrong solution
+    ///   is a kernel rejection, an absent one keeps the caller's message.
     #[allow(clippy::too_many_arguments)]
-    fn solve_by_lgg(
+    fn solve_from_expected(
         &self,
         cx: &Cx,
         result_ty: &Type,
         expected: &Type,
         n: u32,
-        sols: &mut [Option<Rc<Term>>],
+        sols: &mut [Sol],
         meta_doms: &[Type],
         span: Span,
     ) -> R<()> {
-        // The trigger, read off the scratch-world result type.
+        // The LGG trigger, read off the scratch-world result type.
         let flex = (|| {
             let Type::Id { lhs, rhs, .. } = result_ty else { return None };
             let (
@@ -4819,26 +5006,27 @@ impl Elaborator {
             // so anything else is not ours to solve.
             (f_lhs == f_rhs
                 && var.0 < n
-                && sols[var.0 as usize].is_none()
+                && matches!(sols[var.0 as usize], Sol::Unsolved)
                 && *subst == LocalSubst::id(&cx.gamma))
             .then(|| (var.0 as usize, Rc::clone(s_raw), Rc::clone(t_raw)))
         })();
-        // Nothing else gets to consult the expected type: an implicit that no
-        // argument mentions stays a "could not infer" everywhere but here.
-        // That is deliberate — solving result-only implicits *in general* is
-        // [[elab-unifier-completeness]]'s question and a much wider change
-        // (it would silently retire diagnostics like "cannot infer the type
-        // argument", which exist to send people to `f<T>(…)`). This round
-        // buys one shape.
-        let Some((m, s_raw, t_raw)) = flex else { return Ok(()) };
-        // Step 1, with `?f` withheld (see above): a placeholder makes the
-        // meta look solved to `unify_tm`, which never overwrites, and is
-        // taken back out before anything reads a solution. The pattern is in
-        // the scratch world and the subject in the committed one, exactly as
-        // at an argument's domain.
-        sols[m] = Some(Rc::new(Term::Zero));
+        // The general harvest (design §5.1): the LGG's step 1 run on its own
+        // whenever the flex-`Id` shape is not in play. This is the answer to
+        // the old "nothing else gets to consult the expected type" comment —
+        // solving result-only implicits in general *was*
+        // elab-unifier-completeness's question, and this round answered it.
+        let Some((m, s_raw, t_raw)) = flex else {
+            let head = self.whnf(cx, expected, span)?;
+            unify_ty(&cx.gamma, result_ty, &head, n, 0, sols);
+            return Ok(());
+        };
+        // Step 1, with `?f` withheld (unsolved-but-untouchable — `unify_tm`
+        // records only into `Unsolved`, and the flex-head guard skips the
+        // spines it heads). The pattern is in the scratch world and the
+        // subject in the committed one, exactly as at an argument's domain.
+        sols[m] = Sol::Withheld;
         unify_ty(&cx.gamma, result_ty, expected, n, 0, sols);
-        sols[m] = None;
+        sols[m] = Sol::Unsolved;
         // `s` and `t` must be meta-*free* once the solved metas are
         // substituted away: the witnesses are compared with `==`, and an
         // unsolved meta is not a term (decision 2).
@@ -4859,7 +5047,7 @@ impl Elaborator {
         };
         let body = lgg::lgg_body(&x, &y, &s, &t)
             .map_err(|msg| ElabError::Elab { msg, span })?;
-        sols[m] = Some(Rc::new(Term::Lam {
+        sols[m] = Sol::Solved(Rc::new(Term::Lam {
             dom_level,
             cod_level,
             dom,
@@ -4869,6 +5057,36 @@ impl Elaborator {
     }
 
     // -- names --------------------------------------------------------------
+
+    /// Does a bare `name` in this context resolve to a **committed global**
+    /// with a non-empty *leading implicit prefix* in its parameter list — the
+    /// precondition of the bare-reference route
+    /// (docs/unifier-completeness-design.md §5.3)? Returns the prefix length.
+    ///
+    /// The precedence checks replicate [`Self::resolve`]'s order exactly:
+    /// locals, aliases and constructors keep their existing wins, `Zero`/
+    /// `Succ` stay primitives, a `meta fn` slice stays pure quotation, and
+    /// the enclosing declaration's own name stays a recursion marker. The
+    /// route runs only when `resolve` would land on the global anyway.
+    fn bare_implicit_prefix(&self, cx: &Cx, name: &str) -> Option<usize> {
+        if name == "Zero" || name == "Succ" || cx.meta.is_some() {
+            return None;
+        }
+        if cx.names.iter().any(|n| n == name)
+            || cx.aliases.iter().any(|a| a.name == *name)
+            || self.ctor_of(name).is_some()
+            || cx.selfref.as_ref().is_some_and(|s| s.name == *name)
+        {
+            return None;
+        }
+        self.lookup_global(name)?;
+        let prefix = self
+            .params_of(name)
+            .iter()
+            .take_while(|p| p.implicit)
+            .count();
+        (prefix > 0).then_some(prefix)
+    }
 
     fn resolve(&self, cx: &Cx, name: &str, span: Span) -> R<(Term, Type, Level)> {
         if name == "Zero" {
@@ -5420,6 +5638,61 @@ pub(crate) fn embed(gamma: &LocalCtx, extra: u32) -> LocalSubst {
     LocalSubst { tail, terms }
 }
 
+/// A deferred explicit argument (docs/unifier-completeness-design.md §3.1):
+/// **not** a first-class constraint in a queue on the [`Elaborator`], but a
+/// record local to one [`Elaborator::apply_implicit`] activation. The scratch
+/// world is the constraint store — the domain's meta occurrences *are* the
+/// "blocked on" set, and [`zonked`] decides readiness exactly. Cross-call
+/// postponement is deliberately not built: a nested call elaborates to
+/// completion (or errors) inside its own world before the outer loop
+/// continues, so there is nothing an inner call could leave pending that the
+/// outer call could later unblock.
+struct DeferredArg<'a> {
+    /// The withheld slot: the stand-in meta holding the argument's spine
+    /// position.
+    slot: usize,
+    /// The unelaborated surface argument.
+    expr: &'a Expr,
+    /// Its declared domain, scratch world.
+    dom: Type,
+    dom_level: Level,
+    /// Parameter index, for the goal-name hint and the §7.2 message.
+    param: usize,
+}
+
+/// Per-slot state of one [`Elaborator::apply_implicit`] scratch world
+/// (docs/unifier-completeness-design.md §3). Three states, because two
+/// different "unsolved" populations exist and must not be conflated:
+///
+/// - `Unsolved` — nothing known yet; `unify_ty`/`unify_tm` may record a
+///   solution here (and only here).
+/// - `Withheld` — unsolved *and untouchable*: a deferred argument's stand-in
+///   meta, or a flex-applied meta during the LGG's harvest. [`zonked`] treats
+///   it as unsolved (its occurrences must keep blocking dependent domains),
+///   while the unifiers refuse to write into it. This replaces the old
+///   plant-a-`Term::Zero` placeholder, which made a withheld slot *look*
+///   solved to `zonked` — a lie once deferred arguments joined the world.
+/// - `Solved(t)` — `t` is a committed-world payload, the convention the
+///   unifiers' strengthened subjects already follow.
+///
+/// Discharge requires `Solved` everywhere; anything else is a per-slot
+/// diagnostic (design §7).
+#[derive(Clone)]
+enum Sol {
+    Unsolved,
+    Withheld,
+    Solved(Rc<Term>),
+}
+
+impl Sol {
+    fn solved(&self) -> Option<&Rc<Term>> {
+        match self {
+            Sol::Solved(t) => Some(t),
+            _ => None,
+        }
+    }
+}
+
 /// Best-effort structural unification driving implicit-argument solutions
 /// (issues/elab-stage2-metas.md). `pat` is a parameter domain in the scratch
 /// world (metavariables at Ψ-indices `< n`); `subj` is an argument's inferred
@@ -5446,7 +5719,7 @@ fn unify_ty(
     subj: &Type,
     n: u32,
     d: u32,
-    sols: &mut [Option<Rc<Term>>],
+    sols: &mut [Sol],
 ) {
     // The `El` rule. Checked before the congruence so that `El ?A` meeting a
     // *decoded* `El t` still solves rather than descending into the code.
@@ -5454,12 +5727,20 @@ fn unify_ty(
         && let Term::GlobalTm { var, subst } = &**tm
         && var.0 < n
     {
-        if sols[var.0 as usize].is_none()
-            && subst.terms.iter().all(|t| matches!(**t, Term::Var(_)))
+        // The Miller-pattern guard (docs/unifier-completeness-design.md §6):
+        // the delayed substitution must be exactly the weakened identity
+        // `embed(Γ, d)` — the one condition under which taking the
+        // strengthened subject verbatim *is* the pattern inversion. Every
+        // reachable renaming today is of this class (established structurally
+        // and by an instrumented full run, design §6.1); anything else — a
+        // non-variable payload, and the today-unreachable permuted or
+        // dropping renamings — is declined, which learn-only always permits.
+        if matches!(sols[var.0 as usize], Sol::Unsolved)
+            && *subst == embed(gamma, d)
             && let Some(s) = strengthen_ty(gamma, subj, d)
             && let Some(c) = code::code_of(&s)
         {
-            sols[var.0 as usize] = Some(Rc::new(c));
+            sols[var.0 as usize] = Sol::Solved(Rc::new(c));
         }
         return;
     }
@@ -5527,32 +5808,56 @@ fn unify_ty(
 }
 
 /// Term-level companion of [`unify_ty`]. When `pat` is an unsolved
-/// metavariable under a variable renaming (the Miller pattern condition —
-/// here always the identity `id_Γ`, so the solution is the subject verbatim),
-/// record it; otherwise recurse through matching heads toward nested metas.
+/// metavariable under the weakened identity renaming `embed(Γ, d)` (the
+/// Miller pattern condition, in the one class reachable today — design §6),
+/// record the strengthened subject; otherwise recurse through matching heads
+/// toward nested metas. For an occurrence `?m^{embed(Γ,d)}` and a subject `s`
+/// with `strengthen_tm(Γ, s, d) = Some(s₀)`, the recorded `?m := s₀`
+/// satisfies `s₀[embed(Γ,d)] = s₀.shift(d) = s` — the verbatim take plus the
+/// strengthening that already runs *is* the inversion for this class.
 fn unify_tm(
     gamma: &LocalCtx,
     pat: &Term,
     subj: &Term,
     n: u32,
     d: u32,
-    sols: &mut [Option<Rc<Term>>],
+    sols: &mut [Sol],
 ) {
     if let Term::GlobalTm { var, subst } = pat
         && var.0 < n
     {
-        let is_pattern = subst.terms.iter().all(|t| matches!(**t, Term::Var(_)));
-        if is_pattern
-            && sols[var.0 as usize].is_none()
+        if matches!(sols[var.0 as usize], Sol::Unsolved)
+            && *subst == embed(gamma, d)
             && let Some(s) = strengthen_tm(gamma, subj, d)
         {
-            sols[var.0 as usize] = Some(Rc::new(s));
+            sols[var.0 as usize] = Sol::Solved(Rc::new(s));
         }
         return;
     }
     match (pat, subj) {
         (Term::Succ(a), Term::Succ(b)) => unify_tm(gamma, a, b, n, d, sols),
         (Term::App { fun: f1, arg: a1, .. }, Term::App { fun: f2, arg: a2, .. }) => {
+            // The flex-head guard (design §5.4): a pattern application whose
+            // spine head is one of this call's not-yet-solved metas learns
+            // nothing here. The `App` congruence would otherwise "solve"
+            // `?f(?a) ≟ add(a, a)` by peeling one argument — `?f := add(a)` —
+            // satisfying this occurrence and contradicting the next. Flex
+            // heads applied to arbitrary terms are outside the Miller
+            // fragment; the only rule trusted for them is the LGG
+            // ([`Elaborator::solve_from_expected`]), and this guard is what
+            // keeps first-order guessing out of the position. Committed
+            // globals sit at `var.0 >= n`, so `D#fam`-headed family spines
+            // (the type-arg-inference-through-index walker) are untouched.
+            let mut head = pat;
+            while let Term::App { fun, .. } = head {
+                head = fun;
+            }
+            if let Term::GlobalTm { var, .. } = head
+                && var.0 < n
+                && sols[var.0 as usize].solved().is_none()
+            {
+                return;
+            }
             unify_tm(gamma, f1, f2, n, d, sols);
             unify_tm(gamma, a1, a2, n, d, sols);
         }
@@ -5634,12 +5939,15 @@ fn unify_tm(
 /// the two results differ, and nothing else can. Same device as
 /// [`strengthen_tm`] — an exact test that needs no traversal of `Term`/`Type`
 /// and so cannot drift out of sync with the syntax.
-fn zonked(dom: &Type, n: u32, sols: &[Option<Rc<Term>>]) -> Option<Type> {
+fn zonked(dom: &Type, n: u32, sols: &[Sol]) -> Option<Type> {
     let with = |marker: Term| {
         let entries = (0..n)
             .map(|k| {
-                GlobalEntry::Tm(match &sols[(n - 1 - k) as usize] {
+                GlobalEntry::Tm(match sols[(n - 1 - k) as usize].solved() {
                     Some(t) => Rc::clone(t),
+                    // `Unsolved` and `Withheld` alike: a withheld slot must
+                    // keep *blocking* — a deferred argument's occurrences in a
+                    // dependent domain are exactly what its retry waits on.
                     None => Rc::new(marker.clone()),
                 })
             })
@@ -5654,11 +5962,11 @@ fn zonked(dom: &Type, n: u32, sols: &[Option<Rc<Term>>]) -> Option<Type> {
 /// exactly when every metavariable the term mentions is already solved, in
 /// which case the result is scoped in the committed Ψ. Used by the congruence
 /// rule, whose witnesses are compared with `==` and so must be real terms.
-fn zonked_tm(t: &Term, n: u32, sols: &[Option<Rc<Term>>]) -> Option<Term> {
+fn zonked_tm(t: &Term, n: u32, sols: &[Sol]) -> Option<Term> {
     let with = |marker: Term| {
         let entries = (0..n)
             .map(|k| {
-                GlobalEntry::Tm(match &sols[(n - 1 - k) as usize] {
+                GlobalEntry::Tm(match sols[(n - 1 - k) as usize].solved() {
                     Some(t) => Rc::clone(t),
                     None => Rc::new(marker.clone()),
                 })
