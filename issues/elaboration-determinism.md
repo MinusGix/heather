@@ -1,6 +1,6 @@
 ---
 title: Elaboration determinism as an enforced guarantee
-status: open
+status: closed
 labels: [frontend, elaboration, testing, metaprogramming]
 created: 2026-07-24
 updated: 2026-08-06
@@ -69,3 +69,64 @@ but a reason not to let syntax-keying spread casually.
 ## Log
 
 - 2026-08-06: A second consumer filed: [[parallel-checking-and-caching]] (2026-08-06) keys its whole content-addressed cache DAG on elaborated-output hashes, so this guarantee is now the hard prerequisite for parallel checking, not only for .code instance keying.
+- 2026-08-06: **Done — all three deliverables landed, and the audit found nothing to fix.**
+
+  *Audit (every `HashMap`/`HashSet` in `crates/elab/src/`; the tokens appear in
+  exactly three files, so this is the complete set — there are no local ones).*
+  Every one is **lookup-only**: `get`/`insert`/`contains_key`/`clear`, never
+  `iter`/`values`/`keys`/`drain`/`retain`. No iteration order reaches an
+  emitted term or a diagnostic today.
+  - `names.rs by_name: HashMap<String, Vec<NameEntry>>` — lookup-only. Its
+    *values* are `Vec`s in declaration order, and the ambiguity diagnostic
+    ("declared in m1, m2") lists from that `Vec`, so even the one place a
+    collection is printed is order-stable.
+  - `gendefs.rs by_key/by_abs/fam_lvl` — lookup-only (the generated-definition
+    dedup index; allocation order is insertion order into Ψ, not map order).
+  - `lib.rs module_scopes / globals / inductives / by_tag / forded_by_skel /
+    ctors / meta_defs / meta_slots` — lookup-only.
+  - `lib.rs record_fields / member_bases` (`HashSet<String>`) — membership
+    tests only.
+  - `lib.rs goal_spans` (`RefCell<HashMap<(usize,usize), usize>>`) —
+    `get`/`insert`/`clear`. Goal *numbering* comes from `goals.len()` (a
+    `Vec`), i.e. creation order; the map only re-finds an already-numbered
+    hole. So the [[goal-holes]] ordering concern above is deterministic by
+    construction, as suspected, and is now covered by the repeat test.
+
+  *What landed.*
+  - `crates/elab/tests/determinism.rs`:
+    `same_source_elaborates_identically` runs **8 fresh `Elaborator`s** over
+    the same source and compares Ψ with derived structural `PartialEq`. The
+    repetition is the point: std's `RandomState` draws new keys **per map
+    instance**, so each fresh elaboration in this one process already hashes
+    names into a different order — no env var, subprocess, or second `cargo
+    test` invocation is needed to vary the seed.
+  - Golden hash: `NAT_SUITE_GOLDEN = 0x697538d142d9c471` in the same file,
+    over the prelude + Nat suite Ψ (9 bindings). A failure prints the new
+    value as a paste-ready `const` line, and the doc comment says plainly
+    that a failure is a *notification* ("the elaborator's output changed"),
+    to be confirmed deliberately, not a bug report.
+  - First-party hasher, since `crates/elab` has no dev-deps and `insta` has
+    not landed ([[dependency-policy]]): FNV-1a in
+    `crates/elab/tests/support/mod.rs`, which also now owns `NAT_SUITE` —
+    shared with `nat_suite.rs` so the hash pins the very source that suite
+    checks rather than a copy that can drift.
+  - The rendering hashed is **not** `{:?}`: kernel `Debug` is budget-bounded
+    and elides past 512 nodes, so hashing it would make two Ψs agreeing on a
+    prefix indistinguishable — a golden hash that cannot fail. Added
+    `heather_kernel::fmt::write_exact` (`fmt` is now a public module): the
+    same impls with both budgets disarmed, streaming into any `fmt::Write`
+    (here, straight into the hasher — no `String` of the printed tree is ever
+    built). A third test, `the_hash_sees_past_the_debug_budget`, pins that it
+    really does, by hashing two Ψs that differ only 2000 nodes deep.
+    `write_exact` is also what [[parallel-checking-and-caching]] should key
+    its cache on.
+  - `crates/elab/src/lib.rs` module docs gained a "Determinism is a
+    guarantee, not hygiene" section: the commitment, the `HashMap` rule, the
+    note that `RandomState` varies per instance, and why a fixed-seed hasher
+    is the wrong fix.
+
+  Not done, deliberately: **cross-version** determinism (the "later, harder
+  version" above) stays out of scope — the golden hash is exactly the tool
+  that makes such a change visible, which is the most that is wanted before
+  [[certifying-generator]] leans on syntax keying. Only the Nat suite is
+  hashed; extending the golden set is cheap when there is a reason.

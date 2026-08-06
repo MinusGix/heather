@@ -25,6 +25,33 @@
 //! Everything is checked at layer c (full MLTT, no computation *rules* —
 //! conversion still β-reduces during checking, which is all the Nat suite
 //! needs) so that theorems are bindable as `Trm_c` globals.
+//!
+//! # Determinism is a guarantee, not hygiene
+//!
+//! **The same source must elaborate to the same kernel terms, byte for
+//! byte, every time.** This is load-bearing, not tidiness
+//! (issues/elaboration-determinism.md): `.code` quotes the *elaborated*
+//! term and meta-programs pattern-match on it, so two elaborations that
+//! differ anywhere a `match code` can see are two different programs; and
+//! the content-addressed build cache
+//! (issues/parallel-checking-and-caching.md) keys on hashes of this
+//! crate's output, so a wobble there is a wrong cache hit, not a cosmetic
+//! diff.
+//!
+//! The rule that follows, for anyone adding a table here: **never let the
+//! iteration order of a `HashMap`/`HashSet` reach an emitted term** — or
+//! the order of diagnostics, which readers and tests also key on. Std's
+//! `RandomState` reseeds *per map instance*, so such an order varies
+//! between two elaborations in one process, not merely between runs. The
+//! maps in this crate are lookup-only today (audited 2026-08-06) and that
+//! is what makes them safe; if you need to iterate one, reach for a
+//! `BTreeMap`, a `Vec` in insertion order, or an explicit sort. Swapping
+//! in a fixed-seed hasher would work by accident and hide the intent, so
+//! don't.
+//!
+//! `crates/elab/tests/determinism.rs` enforces both halves: repeated fresh
+//! elaborations must agree, and the Nat suite's elaborated Ψ must hash to a
+//! stored golden value.
 
 use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet};

@@ -11,6 +11,11 @@
 //! The output is compact surface-ish syntax (`λ`, `Π`, `□`, `x0`, `u1^δ`),
 //! not derive-style records — meant for reading terms while debugging the
 //! kernel, not for round-tripping.
+//!
+//! [`write_exact`] is the one deliberate way out of the budget: same impls,
+//! elision disarmed, for callers that need the *whole* structure (a content
+//! hash of elaborated output, say). It streams, and the caller owns the
+//! stack-depth risk.
 
 use std::cell::Cell;
 use std::fmt;
@@ -31,6 +36,8 @@ thread_local! {
     static REMAINING: Cell<isize> = const { Cell::new(-1) };
     /// Current nesting depth within the outermost format call.
     static DEPTH: Cell<u32> = const { Cell::new(0) };
+    /// Set for the duration of [`write_exact`]: no elision at all.
+    static EXACT: Cell<bool> = const { Cell::new(false) };
 }
 
 /// Wrap one node's formatting: arms the budget at the outermost call,
@@ -42,12 +49,16 @@ pub(crate) fn node(
 ) -> fmt::Result {
     REMAINING.with(|r| {
         DEPTH.with(|d| {
+            let exact = EXACT.with(Cell::get);
             let outermost = r.get() < 0;
             if outermost {
-                r.set(NODE_BUDGET);
+                // In exact mode the counter must never reach 0, or a nested
+                // call would mistake `r < 0` for "outermost" and re-arm.
+                r.set(if exact { isize::MAX } else { NODE_BUDGET });
                 d.set(0);
             }
-            let res = if r.get() == 0 || d.get() >= DEPTH_BUDGET {
+            let spent = !exact && (r.get() == 0 || d.get() >= DEPTH_BUDGET);
+            let res = if spent {
                 f.write_str("…")
             } else {
                 r.set(r.get() - 1);
@@ -62,6 +73,43 @@ pub(crate) fn node(
             res
         })
     })
+}
+
+/// Render `value` with **no elision at all**, streaming it into `sink`.
+///
+/// The `Debug` impls below are budget-bounded on purpose (see the module
+/// docs); that makes them unusable as an identity for a term — two different
+/// terms sharing a 512-node prefix print the same. This escape hatch reuses
+/// exactly those impls with both budgets disarmed, so the result is a total,
+/// deterministic, injective-enough-for-hashing rendering of the whole
+/// structure. It is what a content hash of elaborated output must be taken
+/// over (issues/elaboration-determinism.md,
+/// issues/parallel-checking-and-caching.md).
+///
+/// Two costs the caller is accepting by choosing it, and the reason the
+/// default stays bounded:
+///
+/// - **Unbounded output.** Stream it — into a hasher, a file, a
+///   `LineWriter` — rather than into a `String`; substitution can make the
+///   printed tree astronomically larger than the term in memory.
+/// - **Unbounded recursion.** Formatter frames are several KB in a debug
+///   build, so a deep term can overflow a small stack. Callers run on a
+///   thread with a raised stack (`scripts/test` sets `RUST_MIN_STACK`).
+///
+/// Not for diagnostics, and never for a `{:?}` reached by accident: every
+/// use should be a deliberate "I want the exact structure".
+pub fn write_exact(sink: &mut impl fmt::Write, value: &impl fmt::Debug) -> fmt::Result {
+    struct Guard(bool);
+    impl Drop for Guard {
+        fn drop(&mut self) {
+            EXACT.with(|e| e.set(self.0));
+        }
+    }
+    // A guard, not a plain reset: `write!` can return early on sink error,
+    // and a leaked `EXACT` would silently unbound every later `{:?}`. It
+    // restores the previous value so a nested call re-nests correctly.
+    let _guard = Guard(EXACT.with(|e| e.replace(true)));
+    write!(sink, "{value:?}")
 }
 
 impl fmt::Debug for Level {

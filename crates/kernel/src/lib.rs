@@ -9,7 +9,7 @@
 mod bounds;
 pub mod conv;
 pub mod eval;
-mod fmt;
+pub mod fmt;
 pub mod layer;
 pub mod level;
 mod rec;
