@@ -423,6 +423,21 @@ fn a_bare_reference_at_an_open_element_type() {
 }
 
 #[test]
+fn a_bare_reference_at_a_polymorphic_expected_type_is_not_instantiated() {
+    // Regression pin (found by the implicit-binders design round's probes):
+    // when the expected type itself still quantifies over a type, the
+    // parameter wants the polymorphic function *uninstantiated* — insertion
+    // would mis-teach (`El ?A ≟ Ty 0` solves `?A := ⌜Type 0⌝`) and reach the
+    // kernel as a LevelMismatch on a term nobody wrote. Suppressed: the
+    // reference passes verbatim, exactly as before the bare-reference route
+    // existed. The skeleton rule of docs/implicit-binders-design.md §5.3
+    // refines this once implicitness travels with the type.
+    ok("fn myid<A>(x: A) -> A { x }
+        fn appnat(f: (A: Type<0>) -> A -> A, n: Nat) -> Nat { f(Nat, n) }
+        theorem t(): appnat(myid, 3) = 3 { refl }");
+}
+
+#[test]
 fn a_bare_reference_in_inference_position_keeps_todays_behavior() {
     // Negative: with no expected type there is nothing to solve from, so the
     // reference still resolves to the polymorphic value verbatim and misuse

@@ -2090,9 +2090,24 @@ impl Elaborator {
             // before the domains are even looked at. Inference position is
             // unchanged: with nothing to solve from, the reference still
             // resolves to the polymorphic value verbatim.
+            //
+            // Insertion is *suppressed* when the expected type itself still
+            // quantifies over a type (a Π with a universe domain): the
+            // parameter asked for the polymorphic function, and instantiating
+            // the reference's type parameters can only mis-teach — `El ?A ≟
+            // Ty 0` "solves" `?A := ⌜Type 0⌝` and the kernel rejects a term
+            // nobody wrote. Passing verbatim is exactly the pre-insertion
+            // behavior, and the kernel judges it as before. This is the
+            // erased-type approximation of the skeleton suppression rule
+            // (docs/implicit-binders-design.md §5.3), which refines it once
+            // implicitness travels with the type.
             ExprKind::Var(name) => {
                 if let Some(expected) = expected
                     && let Some(prefix) = self.bare_implicit_prefix(cx, name)
+                    && !matches!(
+                        self.whnf(cx, expected, e.span)?,
+                        Type::Pi { dom, .. } if matches!(*dom, Type::Ty(_))
+                    )
                 {
                     let (head, ty, lvl) = self.resolve(cx, name, e.span)?;
                     let mask = vec![true; prefix];
