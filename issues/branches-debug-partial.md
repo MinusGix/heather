@@ -1,6 +1,6 @@
 ---
 title: "fmt's Debug for Branches prints 37 of 52 fields, so write_exact is not total over it"
-status: open
+status: closed
 labels: [kernel, testing, diagnostics]
 created: 2026-08-06
 updated: 2026-08-06
@@ -47,3 +47,7 @@ recorded in the constant's comment.
 Small and contained; any session. Wants doing before the golden hash is
 next relied on to certify "output unchanged" across a refactor that
 touches recursor emission.
+
+## Log
+
+- 2026-08-06: Fixed (2026-08-06): all four struct Debug impls in fmt.rs now destructure with no `..` under #[deny(unused_variables)], so a new field fails the build until the printer learns it — the enum impls already had this by construction. Branches went from 37 to all 52 branches, labelled in declaration order matching the cache walker's destructuring; budget discipline unchanged. NAT_SUITE_GOLDEN did not move, and that is a measurement: the printer change touches every rendered Branches, so an unmoved hash proves the suite (and today's elaborator, which constructs no ElimCodeTy/ElimCodeTm) emits no code recursor — reasoning recorded on the constant. Out of scope, noted: value.rs Debug impls still use `..`; fine while nothing hashes a Val, inherits this defect if write_exact is ever pointed at values. Full scripts/test green.

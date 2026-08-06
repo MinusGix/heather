@@ -131,3 +131,4 @@ but a reason not to let syntax-keying spread casually.
   [[certifying-generator]] leans on syntax keying. Only the Nat suite is
   hashed; extending the golden set is cheap when there is a reason.
 - 2026-08-06: A blind spot in deliverable 2's instrument, found by the cache-hardening round: kernel `Debug` for `Branches` prints 37/52 fields and `write_exact` inherits that, so the golden hash cannot see changes confined to the unprinted branches (the in-process equality test is unaffected — derived `PartialEq` sees everything). Filed as [[branches-debug-partial]]; the issue stays closed, the instrument gap has its own owner.
+- 2026-08-06: The 2026-08-06 instrument blind spot is fixed same-day: [[branches-debug-partial]] closed — Branches prints all 52 branches and every fmt.rs struct impl is destructure-total under #[deny(unused_variables)]. NAT_SUITE_GOLDEN unmoved, proving the suite emits no code recursor; reasoning on the constant.

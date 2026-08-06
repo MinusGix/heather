@@ -16,13 +16,25 @@
 //! elision disarmed, for callers that need the *whole* structure (a content
 //! hash of elaborated output, say). It streams, and the caller owns the
 //! stack-depth risk.
+//!
+//! # Totality
+//!
+//! Because `write_exact` reuses these impls as an *identity* for a term, an
+//! impl that omits a field is not a rendering choice — it is a blind spot in
+//! every hash taken over it (`Branches` printed 37 of its 52 fields, and the
+//! Nat suite's golden hash inherited the gap: issues/branches-debug-partial.md).
+//! The enum impls are total by construction, since a `match` arm binding every
+//! field without `..` is checked by the compiler. The struct impls get the
+//! same property the same way: destructure the whole struct, no `..`, under
+//! `#[deny(unused_variables)]`, so a new field fails the build until this
+//! module learns to print it.
 
 use std::cell::Cell;
 use std::fmt;
 
 use crate::level::Level;
 use crate::term::{
-    Branches, CtxBase, CtxEntries, LocalCtx, LocalSubst, Motives, SubstTail, Term, Type,
+    Branches, CtxBase, CtxEntries, CtxEntry, LocalCtx, LocalSubst, Motives, SubstTail, Term, Type,
 };
 
 /// Maximum nodes printed per outermost format call (bounds output size and
@@ -366,15 +378,17 @@ impl fmt::Debug for Term {
 }
 
 impl fmt::Debug for LocalCtx {
+    #[deny(unused_variables)]
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let LocalCtx { base, entries } = self;
         node(f, |f| {
             f.write_str("(")?;
-            match self.base {
+            match base {
                 CtxBase::Nil => f.write_str("·")?,
                 CtxBase::Var(g) => write!(f, "g{}", g.0)?,
             }
-            for e in &self.entries {
-                write!(f, ", {:?}@{:?}", e.ty, e.level)?;
+            for CtxEntry { ty, level } in entries {
+                write!(f, ", {ty:?}@{level:?}")?;
             }
             f.write_str(")")
         })
@@ -386,15 +400,16 @@ impl fmt::Debug for LocalCtx {
 /// type: a spine is still a tree of types, and an accidental `{:?}` on one
 /// must stay bounded (see this module's docs).
 impl fmt::Debug for CtxEntries {
+    #[deny(unused_variables)]
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         node(f, |f| {
             let mut first = true;
-            for e in self {
+            for CtxEntry { ty, level } in self {
                 if !first {
                     f.write_str(", ")?;
                 }
                 first = false;
-                write!(f, "{:?}@{:?}", e.ty, e.level)?;
+                write!(f, "{ty:?}@{level:?}")?;
             }
             Ok(())
         })
@@ -402,17 +417,19 @@ impl fmt::Debug for CtxEntries {
 }
 
 impl fmt::Debug for LocalSubst {
+    #[deny(unused_variables)]
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let LocalSubst { tail, terms } = self;
         node(f, |f| {
             f.write_str("{")?;
-            match self.tail {
+            match *tail {
                 SubstTail::Empty { len, base: CtxBase::Nil } => write!(f, "·^{len}")?,
                 SubstTail::Empty { len, base: CtxBase::Var(g) } => {
                     write!(f, "·^{len}_g{}", g.0)?
                 }
                 SubstTail::Wk { len, ctx_var } => write!(f, "wk^{len}_g{}", ctx_var.0)?,
             }
-            for t in &self.terms {
+            for t in terms {
                 write!(f, "; {t:?}")?;
             }
             f.write_str("}")
@@ -421,57 +438,138 @@ impl fmt::Debug for LocalSubst {
 }
 
 impl fmt::Debug for Motives {
+    #[deny(unused_variables)]
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        node(f, |f| {
-            write!(f, "M⃗(Typ {:?}; Trm {:?})", self.ty_motive, self.tm_motive)
-        })
+        let Motives { ty_motive, tm_motive } = self;
+        node(f, |f| write!(f, "M⃗(Typ {ty_motive:?}; Trm {tm_motive:?})"))
     }
 }
 
+/// All 52 branches, labelled and in declaration order — the same order and
+/// the same no-`..` destructuring as the cache's structural walker
+/// (`heather_cache::merkle`), so the printed form and the content hash cannot
+/// disagree about what a recursor *is*.
 impl fmt::Debug for Branches {
+    #[deny(unused_variables)]
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let Branches {
+            ty_nat,
+            ty_pi,
+            ty_ty,
+            ty_el,
+            ty_id,
+            ty_sigma,
+            ty_unit,
+            ty_empty,
+            tm_var,
+            tm_nat,
+            tm_pi,
+            tm_ty,
+            tm_zero,
+            tm_succ,
+            tm_elim_nat,
+            tm_lam,
+            tm_app,
+            tm_id,
+            tm_refl,
+            tm_j,
+            tm_sigma,
+            tm_pair,
+            tm_fst,
+            tm_snd,
+            tm_unit,
+            tm_empty,
+            tm_triv,
+            tm_elim_empty,
+            ty_sum,
+            tm_sum,
+            tm_inl,
+            tm_inr,
+            tm_case,
+            ty_w,
+            tm_w,
+            tm_sup,
+            tm_elim_w,
+            ty_vec,
+            tm_vec,
+            ty_fin,
+            tm_fin,
+            ty_wf,
+            tm_wf,
+            tm_supf,
+            tm_elim_wf,
+            ty_seq,
+            tm_seq,
+            ty_sempty,
+            tm_sempty,
+            tm_srefl,
+            tm_transp,
+            tm_elim_sempty,
+        } = self;
         node(f, |f| {
-            write!(
-                f,
-                "b⃗(Nat {:?}; Π {:?}; Ty {:?}; El {:?}; Id {:?}; Σ {:?}; Unit {:?}; Empty {:?} | x {:?}; «Nat» {:?}; «Π» {:?}; «Ty» {:?}; 0 {:?}; S {:?}; elimN {:?}; λ {:?}; app {:?}; «Id» {:?}; refl {:?}; J {:?}; «Σ» {:?}; pair {:?}; fst {:?}; snd {:?}; «Unit» {:?}; «Empty» {:?}; ⟨⟩ {:?}; elimE {:?}; + {:?}; «+» {:?}; inl {:?}; inr {:?}; case {:?}; W {:?}; «W» {:?}; sup {:?}; elimW {:?})",
-                self.ty_nat,
-                self.ty_pi,
-                self.ty_ty,
-                self.ty_el,
-                self.ty_id,
-                self.ty_sigma,
-                self.ty_unit,
-                self.ty_empty,
-                self.tm_var,
-                self.tm_nat,
-                self.tm_pi,
-                self.tm_ty,
-                self.tm_zero,
-                self.tm_succ,
-                self.tm_elim_nat,
-                self.tm_lam,
-                self.tm_app,
-                self.tm_id,
-                self.tm_refl,
-                self.tm_j,
-                self.tm_sigma,
-                self.tm_pair,
-                self.tm_fst,
-                self.tm_snd,
-                self.tm_unit,
-                self.tm_empty,
-                self.tm_triv,
-                self.tm_elim_empty,
-                self.ty_sum,
-                self.tm_sum,
-                self.tm_inl,
-                self.tm_inr,
-                self.tm_case,
-                self.ty_w,
-                self.tm_w,
-                self.tm_sup,
-                self.tm_elim_w,
-            )
+            f.write_str("b⃗(")?;
+            let mut first = true;
+            for (label, branch) in [
+                ("Nat", ty_nat),
+                ("Π", ty_pi),
+                ("Ty", ty_ty),
+                ("El", ty_el),
+                ("Id", ty_id),
+                ("Σ", ty_sigma),
+                ("Unit", ty_unit),
+                ("Empty", ty_empty),
+                ("x", tm_var),
+                ("«Nat»", tm_nat),
+                ("«Π»", tm_pi),
+                ("«Ty»", tm_ty),
+                ("0", tm_zero),
+                ("S", tm_succ),
+                ("elimN", tm_elim_nat),
+                ("λ", tm_lam),
+                ("app", tm_app),
+                ("«Id»", tm_id),
+                ("refl", tm_refl),
+                ("J", tm_j),
+                ("«Σ»", tm_sigma),
+                ("pair", tm_pair),
+                ("fst", tm_fst),
+                ("snd", tm_snd),
+                ("«Unit»", tm_unit),
+                ("«Empty»", tm_empty),
+                ("⟨⟩", tm_triv),
+                ("elimE", tm_elim_empty),
+                ("+", ty_sum),
+                ("«+»", tm_sum),
+                ("inl", tm_inl),
+                ("inr", tm_inr),
+                ("case", tm_case),
+                ("W", ty_w),
+                ("«W»", tm_w),
+                ("sup", tm_sup),
+                ("elimW", tm_elim_w),
+                ("Vec", ty_vec),
+                ("«Vec»", tm_vec),
+                ("Fin", ty_fin),
+                ("«Fin»", tm_fin),
+                ("Wf", ty_wf),
+                ("«Wf»", tm_wf),
+                ("supf", tm_supf),
+                ("elimWf", tm_elim_wf),
+                ("sEq", ty_seq),
+                ("«sEq»", tm_seq),
+                ("sEmpty", ty_sempty),
+                ("«sEmpty»", tm_sempty),
+                ("srefl", tm_srefl),
+                ("transp", tm_transp),
+                ("elim_sEmpty", tm_elim_sempty),
+            ] {
+                if !first {
+                    f.write_str("; ")?;
+                }
+                first = false;
+                write!(f, "{label} {branch:?}")?;
+            }
+            f.write_str(")")
         })
     }
 }

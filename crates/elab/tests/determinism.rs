@@ -77,6 +77,14 @@ fn same_source_elaborates_identically() {
 ///
 /// Set 2026-08-06, over the prelude's 4 theorems + the suite's `fn add` and
 /// 4 theorems (9 Ψ bindings).
+///
+/// Unmoved by the same day's fix to the kernel's `Debug` for `Branches`,
+/// which went from printing 37 of the 52 recursor branches to all 52 and
+/// reordered the rendering (issues/branches-debug-partial.md). The hash is
+/// taken over the printed form, so *any* recursor in Ψ would have moved it:
+/// that it did not is the measurement that this suite — and today's
+/// elaborator at all, which constructs no `ElimCodeTy`/`ElimCodeTm` — emits
+/// no code recursor. The golden's blind spot was real but unexercised.
 const NAT_SUITE_GOLDEN: u64 = 0x697538d142d9c471;
 
 #[test]
