@@ -78,6 +78,24 @@ kernel on unchanged declarations saves little; a useful cache must let a run
    serialized. **The trace hook and format are designed for from day one
    even if v1 ships as rung 1** — cheap to leave room for, miserable to
    retrofit.
+
+   Two format rules, decided 2026-08-06 before any format exists, because
+   they are free now and painful after ten thousand traces:
+   - **Every trace embeds a kernel-semantics fingerprint.** A trace is
+     meaningful only against the semantics that emitted it; a new strip
+     rule or changed fuel discipline must invalidate old traces loudly,
+     not mislead silently.
+   - **Traces record *decisions*, not *steps*** — which side unfolded,
+     where a strip fired — so kernel perf rounds that change how fast a
+     decision executes leave the format valid; only rounds that change
+     *which decisions exist* touch it.
+
+   And replay buys a detector for free: **fresh-vs-replay divergence is an
+   oracle**. If a replayed trace and a fresh search ever disagree, that is
+   kernel nondeterminism, semantic drift, or an unsound trace — each worth
+   a loud failure. Comparing the two on a sample in CI makes the cache a
+   standing regression test for the kernel over real library workloads,
+   the `law!` shape at corpus scale.
 3. **Certified cache, post-bootstrap**: once the compiler is
    Heather-in-Heather, a cache artifact carries a proof about itself and
    the boundary narrows to kernel + file integrity. The build cache
@@ -188,8 +206,22 @@ with [[context-representation-clones]]) → `quickcheck` tier → replay traces
 (joint with [[ai-facing-tooling]]) → the verified-invalidation theorem.
 Each stage is independently useful; the first two pay off single-session.
 
+Sharpened 2026-08-06: the first stage and the second are the *same code*.
+The cheapest enforcement of [[elaboration-determinism]] is
+elaborate-twice-and-compare-hashes, and a stable hash of elaborated output
+is precisely the DAG's first brick — the prerequisite's enforcement
+mechanism is this design's first deliverable, not a separate errand.
+
+And the first consumer is already in the tree: the two whole-library
+acceptance tests re-check everything on every run (~5 CPU-min, the suite's
+dominant cost — [[suite-wall-time-two-tests]]). Once declarations
+are hash-identified, "acceptance test" becomes "check what changed since
+the cached frontier" — the test harness inherits incrementality before any
+agent daemon exists.
+
 ## Log
 
 - 2026-08-06: Filed from discussion. Certificate replay agreed as the
   direction to design for directly (trace hook reserved from v1); the
   kernel-vs-elaborator ratio caveat recorded the same day.
+- 2026-08-06: Amended from follow-on discussion, same day as filing: two trace-format rules decided ahead of any format (kernel-semantics fingerprint in every trace; decisions-not-steps, so kernel perf rounds cannot invalidate the format), fresh-vs-replay divergence named as a free kernel-regression oracle, the sequencing sharpened (determinism enforcement by double-elaborate-and-compare IS the DAG's first brick, not a separate errand), and the whole-library acceptance tests named as the design's first consumer — incremental checking reaches the test harness before any agent daemon exists. Sibling discipline issue filed the same day: [[bench-fixtures-assert-their-route]].
