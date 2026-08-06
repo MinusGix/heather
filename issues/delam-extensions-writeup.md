@@ -1,9 +1,9 @@
 ---
 title: Write down the extended ch. 04 rules for our six formers
-status: open
+status: closed
 labels: [kernel,delam,metatheory,docs]
 created: 2026-07-24
-updated: 2026-07-31
+updated: 2026-08-06
 ---
 
 DeLaM ch. 04 has no `Id`, `Σ`, `Unit`, `Empty`, `+` or `W`. We added all
@@ -65,3 +65,4 @@ lot once the six are written down properly.
 ## Log
 
 - 2026-07-31: The definitions round wrote its declarative rules already: docs/metatheory-ch07-extensions.md Part IV sections 23-25 give the bodied-binding grammar, the wf-def rule, delta with the argument for why transparency must be layer-indexed, and the delta-lazy conversion order. They live in the ch. 07 document only because this document does not exist yet -- when it is written, sections 23-25 move here as its definitions section, and the seventh extension is already paid for. ([[simulate-conversion-cost]])
+- 2026-08-06: LANDED (2026-08-06, managed round): docs/delam-extensions.md (~1050 lines) — DeLaM in one page, the six formers each with formation/encoding/intro/elim/β/η-or-why-not/congruences/code-recursor branches, the code-recursor β schema with all 22 extension branches tabulated (§10), the two genuinely new rules argued (§11: Σ surjective pairing — a syntactic-equivalence obligation invisible to the LR; Unit proof irrelevance — escape from a law, not from structure; plus a third argued point: both η rules must sit under ⊨ i comp, the same coherence argument that layer-indexes δ), the refl-endpoints invariant (§12), W's infinitary NfEqW (§13), and definitions restated from ch. 07 §§23–25 (§14; pointer added there). Eleven spec-vs-implementation divergence candidates recorded in §16. The issue's 'Unit η @ 0' was stale: conv.rs:1186 fires η at any level, matching the level-indexed statement — resolved in doc §7.0, no decision needed. TWO FINDS FILED: [[recursor-elim-call-level-mismatch]] — rec.rs declares elim branches' scrutinee recursive call at the motive's level while reduce.rs supplies it at the scrutinee's, verified at source (rec.rs:1934 vs reduce.rs:1541), inherited from a ch. 04 typo in t_elimN, latent only because no live motive distinguishes the levels; and [[kernel-doc-comments-stale]]. Deliberately out of scope, stated in doc §0/§17: the ch. 06 side (whnf/neutral grammars and algorithmic convertibility for the six) and explicit code-recursor congruences (ch. 04 omits them too; a follow-up if the Coq formalization needs them). CLOSING: the ch. 04 deliverable is the whole of this issue; the ch. 06 side, if wanted, is a new issue when something needs it.

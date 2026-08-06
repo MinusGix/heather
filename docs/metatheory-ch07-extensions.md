@@ -1895,7 +1895,10 @@ I–III: the extension is not a type former but a **binding** form, so the
 rules below are ch. 04-shaped rather than LR-shaped, and the ch. 07 work
 is *owed*, not done. It is recorded here because the obligations are
 ch. 07's and because [[delam-extensions-writeup]]'s standalone document
-does not exist yet — when it does, §23–25 are its section on definitions.
+did not exist yet. That document now does (`docs/delam-extensions.md`,
+2026-08-06): its §14 restates §§23–25 in the paper's rule style, and is
+the presentation to cite; this part stays as the original record, with
+the ch. 07 bill (§26) still owed and still living here.
 
 ## 23. The binding form and its typing
 
