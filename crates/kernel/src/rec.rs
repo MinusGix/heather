@@ -202,6 +202,64 @@ pub(crate) fn motive_types(m: &Motives) -> [&Rc<Type>; 2] {
     [&m.ty_motive, &m.tm_motive]
 }
 
+/// The 52 branch names, in [`branch_specs`] order — for diagnostics that
+/// must name a branch without printing a term.
+#[cfg(test)]
+pub(crate) const BRANCH_NAMES: [&str; 52] = [
+    "ty_nat",
+    "ty_pi",
+    "ty_ty",
+    "ty_el",
+    "ty_id",
+    "ty_sigma",
+    "ty_unit",
+    "ty_empty",
+    "tm_var",
+    "tm_nat",
+    "tm_pi",
+    "tm_ty",
+    "tm_zero",
+    "tm_succ",
+    "tm_elim_nat",
+    "tm_lam",
+    "tm_app",
+    "tm_id",
+    "tm_refl",
+    "tm_j",
+    "tm_sigma",
+    "tm_pair",
+    "tm_fst",
+    "tm_snd",
+    "tm_unit",
+    "tm_empty",
+    "tm_triv",
+    "tm_elim_empty",
+    "ty_sum",
+    "tm_sum",
+    "tm_inl",
+    "tm_inr",
+    "tm_case",
+    "ty_w",
+    "tm_w",
+    "tm_sup",
+    "tm_elim_w",
+    "ty_vec",
+    "tm_vec",
+    "ty_fin",
+    "tm_fin",
+    "ty_wf",
+    "tm_wf",
+    "tm_supf",
+    "tm_elim_wf",
+    "ty_seq",
+    "tm_seq",
+    "ty_sempty",
+    "tm_sempty",
+    "tm_srefl",
+    "tm_transp",
+    "tm_elim_sempty",
+];
+
 /// The 52 branches, in [`branch_specs`] order (= `Branches` field order).
 pub(crate) fn branch_terms(b: &Branches) -> [&Rc<Term>; 52] {
     [
@@ -4183,4 +4241,123 @@ pub(crate) fn branch_specs(
         ty_fin, tm_fin, ty_wf, tm_wf, tm_supf, tm_elim_wf, ty_seq, tm_seq, ty_sempty,
         tm_sempty, tm_srefl, tm_transp, tm_elim_sempty,
     ]
+}
+
+// ---------------------------------------------------------------------------
+// Well-formedness of the telescopes themselves
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::term::Motives;
+    use crate::typing::{check_global_ctx, check_type};
+
+    /// Enough for the whole 52-branch walk: every judgment here is a small
+    /// contextual type, and the walk is linear in the tables.
+    const FUEL: u64 = 1 << 16;
+
+    /// The identity motives — `M_Typ := □(g ⊢ Ty ℓ)`, `M_Trm := □(g ⊢ U_T^id
+    /// @ ℓ)` — the sharpest *well-formedness* observer of the two live motive
+    /// families (see the module test's doc comment).
+    fn identity_motives() -> Motives {
+        Motives {
+            ty_motive: Rc::new(Type::CodeTy { ctx: g_ctx(0), level: lvar(0) }),
+            tm_motive: Rc::new(Type::CodeTm {
+                ctx: g_ctx(1),
+                ty: Rc::new(gty(0, &g_ctx(1))),
+                level: lvar(0),
+            }),
+        }
+    }
+
+    /// Check one telescope: its global bindings as a Ψ, then each local entry
+    /// as a type at its declared level under the prefix that precedes it.
+    /// `label` names the site; failures report the label and the entry index
+    /// only — never a term (the kernel's `Debug` is bounded, but a
+    /// 52-telescope walk is no place to exercise it).
+    fn check_tele(label: &str, tele: &Tele) -> (GlobalCtx, LocalCtx) {
+        // The ambient scope is `(L; Ψ; Γ) = (0; ·; ·)` at layer `m`: `rec_ga`
+        // runs under `meta_layer`, and `push_spec` keeps the layer, so this
+        // is the scope the checker really uses for these entries. An empty
+        // ambient Ψ/Γ loses nothing — every telescope is closed except for
+        // its own binders, and the motive instantiations weaken the ambient
+        // Γ in uniformly.
+        let psi = {
+            let mut p = shift_univ_psi(&GlobalCtx::new(vec![]), tele.univs);
+            p.extend(tele.globals.iter().cloned());
+            p
+        };
+        assert!(
+            check_global_ctx(&psi, tele.univs, FUEL).is_ok(),
+            "{label}: telescope global bindings are not a well-formed Ψ",
+        );
+        let mut gamma = LocalCtx::nil();
+        for (i, (ty, level)) in tele.locals.iter().enumerate() {
+            let r = check_type(&psi, tele.univs, Layer::Meta, &gamma, ty, level, FUEL);
+            assert!(
+                r.is_ok(),
+                "{label}: telescope local entry #{i} is not a well-formed type \
+                 at its declared level ({:?})",
+                r.unwrap_err(),
+            );
+            gamma = gamma.extended(Rc::clone(ty), level.clone());
+        }
+        (psi, gamma)
+    }
+
+    /// Every local entry of every branch telescope must be a *type*.
+    ///
+    /// `rec_ga` checks branch bodies against their instantiated motive types
+    /// but never asks whether the telescope's own entries — the recursive
+    /// calls `x_M`, `x_t`, … — are well-formed. An ill-formed entry is dead
+    /// on arrival: nothing well-formed can be checked against it, so no
+    /// branch can use its own recursive call and nothing complains. That is
+    /// exactly how a mis-levelled `□(g ⊢ Empty^{ℓ'} @ ℓ)` survived two
+    /// level-indexing rounds ([[recursor-elim-call-level-mismatch]]).
+    ///
+    /// Under the **identity** motives the term-motive entries carry both
+    /// slots that can disagree: `M_Trm[l/ℓ, …, U/U_T, …]` instantiates to
+    /// `□(g ⊢ U @ l)`, whose well-formedness *is* the judgment `g ⊢ U @ l` —
+    /// so a recursive call declared at the motive's level when its scrutinee
+    /// lives at another is caught here as "not a type at all". A motive that
+    /// ignores `U_T` (e.g. `M_Trm := □(g ⊢ Ty ℓ)`) would make such an entry
+    /// well-formed and hence *unobservable* by this check; the identity
+    /// motives are therefore the sharper observer for well-formedness, and
+    /// the weaker one for use-site behaviour. Type-motive entries
+    /// (`□(g ⊢ Ty l)`) constrain only `g` and the level's scope, not the
+    /// level's *value* — see the report note on the `Ty ℓ`-motive bundle.
+    #[test]
+    fn every_branch_telescope_entry_is_a_well_formed_type() {
+        let motives = identity_motives();
+        let (l1, l2) = (Level::Zero, Level::Zero);
+        let gamma = LocalCtx::nil();
+
+        for (spec, label) in motive_specs(&l1, &l2).iter().zip(["M_Typ", "M_Trm"]) {
+            check_tele(label, &spec.tele);
+        }
+
+        let specs = branch_specs(&motives, &l1, &l2, &gamma);
+        assert_eq!(specs.len(), BRANCH_NAMES.len());
+        for (spec, name) in specs.iter().zip(BRANCH_NAMES) {
+            let (psi, gamma) = check_tele(name, &spec.tele);
+            // The branch's own expected type, while we are here: an
+            // ill-formed one is unsatisfiable in the same silent way.
+            let r = check_type(
+                &psi,
+                spec.tele.univs,
+                Layer::Meta,
+                &gamma,
+                &spec.ty,
+                &spec.level,
+                FUEL,
+            );
+            assert!(
+                r.is_ok(),
+                "{name}: the branch's expected type is not well formed at its \
+                 declared level ({:?})",
+                r.unwrap_err(),
+            );
+        }
+    }
 }
