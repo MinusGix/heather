@@ -1808,6 +1808,18 @@ kernel is not observably broken today only because the motives that reach these
 branches do not depend on `ℓ` in a way that distinguishes the two levels; that is
 luck, not design. It is worth an issue.
 
+**Resolved (2026-08-06, `recursor-elim-call-level-mismatch`).** The kernel now
+follows §7.7 at all three affected branches — `t_elimN` (`0/ℓ`, `Nat`'s level),
+`t_elimE` and `t_elim_sE` (`ℓ'/ℓ`). One further fact the fix turned up, worth
+recording because it explains the latency more sharply than "no motive
+distinguishes the levels" does: under the identity motives the *old* entry was
+not merely mis-levelled but **ill-formed** — `M_Trm[ℓ/ℓ, Empty^{ℓ'}/U_T, …]`
+unfolds to `□(g ⊢ Empty^{ℓ'} @ ℓ)`, and `Empty^{ℓ'}` does not live at `ℓ`. A
+branch could therefore never *use* the entry, which is why nothing ever
+complained. With an `ℓ`-dependent but `U_T`-independent motive (e.g.
+`M_Trm := □(g ⊢ Ty ℓ)`) the old entry is well-formed and the mismatch is a
+genuine subject-reduction failure, so the defect was real, not merely untidy.
+
 ### 16.2 β rules do not check the constructor's own annotations
 
 Every β rule in the kernel fires on the *head shape* of the eliminand and ignores
@@ -1921,6 +1933,12 @@ comments still say those formers are "gated out of layer c until the rec.rs
 round", a gate that no longer exists anywhere in the crate. All three are comment
 drift, not rule or code defects, and none affects anything in this document
 beyond making the telescopes harder to read off.
+
+**Resolved (2026-08-06, `kernel-doc-comments-stale`).** All three corrected in
+the same round: the `Unit`/`Empty`/`⟨⟩`/`t_elimE` telescopes in `term.rs` and
+`rec.rs` now carry their level binders, the branch count reads 52, and the
+layer-c gate wording is gone from `term.rs` (`SEq`, `SEmpty`, `SRefl`,
+`Transp`, `ElimSEmpty`, `Vec`).
 
 ---
 

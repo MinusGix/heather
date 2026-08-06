@@ -67,8 +67,8 @@ pub enum Type {
     /// relevance plus strictness. Any two terms at this type are convertible
     /// (`conv.rs` irrelevance arm); eliminated by [`Term::Transp`], whose
     /// strip rule is what makes the equality strict. Extension beyond DeLaM
-    /// ch. 04 (docs/sprop-design.md §2.1). Gated out of layer c until the
-    /// rec.rs round (sprop-design §8 step 5).
+    /// ch. 04 (docs/sprop-design.md §2.1). Admitted at layer c like every
+    /// other former: it has its own code branches (`ty_seq`/`tm_seq`).
     SEq {
         level: Level,
         ty: Rc<Type>,
@@ -82,7 +82,7 @@ pub enum Type {
     /// any two terms at this type are convertible — vacuously sound, and it
     /// keeps absurdity proofs invisible when they ride in data
     /// (docs/sprop-design.md §2.2; the Empty-reuse alternative is §2.2's
-    /// costed shed). Gated out of layer c with [`Type::SEq`].
+    /// costed shed). Admitted at layer c with [`Type::SEq`].
     SEmpty {
         level: Level,
     },
@@ -139,9 +139,8 @@ pub enum Type {
     /// former: `Vec(T; 0) ⇝ Unit`, `Vec(T; S k) ⇝ Σ(_ : T). Vec(T; k)`;
     /// neutral at a neutral length, no η of its own (η arrives through the
     /// reductions). No introduction/elimination forms — values are pairs.
-    /// Substrate for `Wf` (docs/wf-former-design.md §1.1); currently gated
-    /// out of the code layer until `TmVec` + rec.rs branches land
-    /// (issues/wf-former.md phase 3).
+    /// Substrate for `Wf` (docs/wf-former-design.md §1.1); admitted at the
+    /// code layer since phase 3 gave it `TmVec` and its rec.rs branches.
     Vec {
         level: Level,
         elem: Rc<Type>,
@@ -338,7 +337,7 @@ pub enum Term {
     /// `srefl^l(I; a) : sEq^l(I; a; a)`. Fully annotated so it synthesizes;
     /// the only canonical form at [`Type::SEq`], which is what makes
     /// β-on-`srefl` sufficient for closed computation. Mirrors
-    /// [`Term::Refl`]. Gated out of layer c with [`Type::SEq`].
+    /// [`Term::Refl`]. Admitted at layer c with [`Type::SEq`].
     SRefl {
         level: Level,
         ty: Rc<Type>,
@@ -351,7 +350,7 @@ pub enum Term {
     /// β cannot see (a *neutral* proof at convertible endpoints) is handled
     /// by the conversion strip rule, and its stuckness is keyed on the
     /// endpoints, not the proof — see `conv.rs` and docs/sprop-design.md
-    /// §5. Gated out of layer c with [`Type::SEq`].
+    /// §5. Admitted at layer c with [`Type::SEq`].
     Transp {
         ty_level: Level,
         motive_level: Level,
@@ -368,7 +367,7 @@ pub enum Term {
     /// β — nothing canonical to fire on; neutral on a neutral scrutinee;
     /// `level` is the motive's, `scrut_level` the scrutinee's) with one
     /// deliberate difference: neutral congruence skips the scrutinees —
-    /// they sit at an irrelevant type. Gated out of layer c with
+    /// they sit at an irrelevant type. Admitted at layer c with
     /// [`Type::SEq`].
     ElimSEmpty {
         level: Level,
@@ -694,11 +693,13 @@ pub struct Branches {
     /// locals: `x_S`, `x_T` (recursive calls). Mirrors `ty_pi`. Extension
     /// beyond ch. 04 (kernel-v1-extensions).
     pub ty_sigma: Rc<Term>,
-    /// `(g. t_Unit)` — globals: g. Code of the type `Unit`; mirrors `ty_nat`.
-    /// Extension beyond ch. 04 (kernel-v1-extensions).
+    /// `(ℓ, g. t_Unit)` — univs: ℓ; globals: g. Code of the type `Unit^ℓ`;
+    /// mirrors `ty_nat` plus the level binder `Unit` gained in
+    /// docs/unit-empty-level-indexing.md. Extension beyond ch. 04
+    /// (kernel-v1-extensions).
     pub ty_unit: Rc<Term>,
-    /// `(g. t_Empty)` — globals: g. Code of the type `Empty`; mirrors
-    /// `ty_nat`. Extension beyond ch. 04 (kernel-v1-extensions).
+    /// `(ℓ, g. t_Empty)` — univs: ℓ; globals: g. Code of the type `Empty^ℓ`;
+    /// mirrors `ty_unit`. Extension beyond ch. 04 (kernel-v1-extensions).
     pub ty_empty: Rc<Term>,
 
     // -- branches for code of terms (b_Trm) --
@@ -724,7 +725,9 @@ pub struct Branches {
     /// `u_s : Trm_c(g ⊢ U_M^{id,ze/x} @ ℓ)`,
     /// `u_s' : Trm_c((g, x : Nat, y : U_M^id) ⊢ U_M^{id,su x/x} @ ℓ)`,
     /// `u_t : Trm_c(g ⊢ Nat @ 0)`; locals: `x_M` (type motive!), `x_s`,
-    /// `x_s'`, `x_t`.
+    /// `x_s'`, `x_t` (at level **0**, the scrutinee's — ch. 04 writes `ℓ`
+    /// here, contradicting its own `t_ze`/`t_succ`; see
+    /// docs/delam-extensions.md §16.1).
     pub tm_elim_nat: Rc<Term>,
     /// `(ℓ, ℓ', g, U_S, U_T, u_t, x_S, x_t. t_λ)` — univs: ℓ, ℓ'; globals: g,
     /// `U_S : Typ_c(g, ℓ)`, `U_T : Typ_p((g, x : U_S^id @ ℓ), ℓ')`
@@ -777,20 +780,26 @@ pub struct Branches {
     /// `(ℓ, ℓ', g, U_S, U_T, u_p, x_S, x_T, x_p. t_snd)` — as `tm_fst`; the
     /// branch type is `U_T^{id, fst(…u_p^id)/x}` @ ℓ'. Extension.
     pub tm_snd: Rc<Term>,
-    /// `(g. t'_Unit)` — globals: g. Code of the encoding `Unit : Ty 0`;
-    /// mirrors `tm_nat`. Extension beyond ch. 04 (kernel-v1-extensions).
+    /// `(ℓ, g. t'_Unit)` — univs: ℓ; globals: g. Code of the encoding
+    /// `Unit^ℓ : Ty ℓ`; mirrors `tm_nat` plus the level binder. Extension
+    /// beyond ch. 04 (kernel-v1-extensions).
     pub tm_unit: Rc<Term>,
-    /// `(g. t'_Empty)` — globals: g. Code of the encoding `Empty : Ty 0`;
-    /// mirrors `tm_nat`. Extension beyond ch. 04 (kernel-v1-extensions).
-    pub tm_empty: Rc<Term>,
-    /// `(g. t_triv)` — globals: g. Code of the intro `⟨⟩ : Unit`; mirrors
-    /// `tm_zero`. Extension beyond ch. 04 (kernel-v1-extensions).
-    pub tm_triv: Rc<Term>,
-    /// `(ℓ, g, U_M, u_t, x_M, x_t. t_elimE)` — univs: ℓ; globals: g,
-    /// `U_M : Typ_c((g, x : Empty @ 0), ℓ)`, `u_t : Trm_c(g ⊢ Empty @ 0)`;
-    /// locals: `x_M` (type motive!), `x_t`. Code of `elim_Empty^ℓ (x. U_M^id;
-    /// u_t^id)`; mirrors `tm_elim_nat` minus base/step. Extension
+    /// `(ℓ, g. t'_Empty)` — univs: ℓ; globals: g. Code of the encoding
+    /// `Empty^ℓ : Ty ℓ`; mirrors `tm_unit`. Extension beyond ch. 04
     /// (kernel-v1-extensions).
+    pub tm_empty: Rc<Term>,
+    /// `(ℓ, g. t_triv)` — univs: ℓ; globals: g. Code of the intro
+    /// `⟨⟩^ℓ : Unit^ℓ`; mirrors `tm_zero` plus the level binder. Extension
+    /// beyond ch. 04 (kernel-v1-extensions).
+    pub tm_triv: Rc<Term>,
+    /// `(ℓ, ℓ', g, U_M, u_t, x_M, x_t. t_elimE)` — univs: ℓ (the motive's),
+    /// ℓ' (the scrutinee's); globals: g,
+    /// `U_M : Typ_c((g, x : Empty^ℓ' @ ℓ'), ℓ)`,
+    /// `u_t : Trm_c(g ⊢ Empty^ℓ' @ ℓ')`; locals: `x_M` (type motive!), `x_t`
+    /// (term motive, at **ℓ'** — the scrutinee's level, see
+    /// docs/delam-extensions.md §7.7). Code of
+    /// `elim_Empty^{ℓ,ℓ'} (x. U_M^id; u_t^id)`; mirrors `tm_elim_nat` minus
+    /// base/step. Extension (kernel-v1-extensions).
     pub tm_elim_empty: Rc<Term>,
     /// `(ℓ, ℓ', g, U_A, U_B, x_A, x_B. t_+)` — univs: ℓ, ℓ'; globals: g,
     /// `U_A : Typ_c(g, ℓ)`, `U_B : Typ_c(g, ℓ')` (both in g — non-dependent);

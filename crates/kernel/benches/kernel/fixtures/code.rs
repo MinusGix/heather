@@ -48,7 +48,7 @@ fn identity_recursor(code: &Rc<Type>) -> Term {
     }
 }
 
-/// Checking the recursor. The 45 branches are a **fixed** cost, so this
+/// Checking the recursor. The 52 branches are a **fixed** cost, so this
 /// family measures a constant plus a small marginal term, and declares no
 /// slope band: an exponent fitted through a dominant constant says nothing.
 /// The number that matters is the absolute one at the smallest size — "what

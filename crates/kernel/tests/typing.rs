@@ -4,7 +4,7 @@
 //! disciplines, global contexts and local substitutions, universe
 //! polymorphism, contextual types (box/letbox, checking-only box under
 //! binders), and the code recursors, including a full *identity recursor*
-//! whose 22 branches re-box their telescopes' code — an end-to-end exercise
+//! whose 52 branches re-box their telescopes' code — an end-to-end exercise
 //! of every `G_Typ`/`G_Trm` telescope.
 //!
 //! No generator-based properties: the generators produce ill-typed terms,
@@ -1166,6 +1166,125 @@ fn identity_recursor_round_trips_unit_and_empty_at_a_level() {
         &Level::Zero, FUEL)
         .expect("the identity recursor must accept it");
     assert_eq!(one_step(&t), Term::BoxTm(rt(code)), "identity must return its input");
+}
+
+/// **The `ℓ`-slot of the scrutinee's recursive call in `t_elimE`**
+/// (`docs/delam-extensions.md` §7.7 and §16.1;
+/// `issues/recursor-elim-call-level-mismatch.md`).
+///
+/// `elim_Empty^{ℓ,ℓ'}`'s scrutinee has type `Empty^{ℓ'} @ ℓ'`, so the branch's
+/// recursive call `x_t` is declared at `M_Trm[ℓ'/ℓ, Empty^{ℓ'}/U_T, …]` — the
+/// **scrutinee's** level, which is what `reduce.rs` supplies
+/// (`rec.elim_tm(scrut_level, …)`). The kernel used to declare it at
+/// `M_Trm[ℓ/ℓ, Empty^{ℓ'}/U_T, …]`, the *motive's* level, transcribing a typo
+/// in ch. 04's `t_elimN` (whose own `t_ze`/`t_succ` write `0/ℓ` for the same
+/// `Nat/U_T` slot).
+///
+/// Every existing branch bundle is blind to this: their `t_elimE` bodies do
+/// not *use* `x_t`, so its declared type is never observed. This is the
+/// missing observer. Each bundle below is the identity branch with its body
+/// routed through `λ(z : dom). box (elim_Empty …)` applied to `x_t`; only
+/// `dom` differs, so the assertions isolate `x_t`'s declared type and nothing
+/// else. `ℓ` and `ℓ'` are distinct universe *variables* of the telescope, so
+/// no instantiation can make the two readings agree.
+#[test]
+fn elim_empty_branch_recursive_call_is_at_the_scrutinee_level() {
+    let psi = GlobalCtx::default();
+    let g2 = g_ctx(2);
+
+    // `branches` claiming `x_t : □(g ⊢ Empty^{ty_level} @ call_level)`.
+    let branches_claiming = |ty_level: Level, call_level: Level| {
+        // box (elim_Empty^{ℓ,ℓ'} (x. U_M^id; u_t^id)) — the identity body.
+        let gx_empty = ext(&g2, Type::Empty { level: lv(0) }, lv(0));
+        let u_m_e = Type::GlobalTy { var: GlobalVar(1), subst: LocalSubst::id(&gx_empty) };
+        let boxed = Term::BoxTm(rt(Term::ElimEmpty {
+            level: lv(1),
+            scrut_level: lv(0),
+            motive: rty(u_m_e),
+            scrut: rt(gtm(0, &g2)),
+        }));
+        // The branch's own type, unchanged: □(g ⊢ U_M^{id, u_t^id/x} @ ℓ).
+        let u_m_at_scrut = Type::GlobalTy {
+            var: GlobalVar(1),
+            subst: LocalSubst::id(&g2).extended(rt(gtm(0, &g2))),
+        };
+        let branch_ty = Type::CodeTm { ctx: g2.clone(), ty: rty(u_m_at_scrut), level: lv(1) };
+        // The λ's annotation — the claim about `x_t` under test.
+        let dom = Type::CodeTm {
+            ctx: g2.clone(),
+            ty: rty(Type::Empty { level: ty_level }),
+            level: call_level,
+        };
+        let mut b = (*identity_branches()).clone();
+        b.tm_elim_empty = rt(Term::App {
+            fun: rt(Term::Lam {
+                dom_level: Level::Zero,
+                cod_level: Level::Zero,
+                dom: rty(dom.clone()),
+                body: rt(boxed),
+            }),
+            dom_level: Level::Zero,
+            cod_level: Level::Zero,
+            dom: rty(dom),
+            cod: rty(branch_ty),
+            // Γ' = Γ, x_M, x_t: the recursive call is the innermost local.
+            arg: rt(Term::Var(LocalVar(0))),
+        });
+        Rc::new(b)
+    };
+
+    // The scrutinee: box (elim_Empty^{2,1}(x. Ty 1; x)) in Δ = (·, x : Empty^1),
+    // motive level 2 ≠ scrutinee level 1 — an instantiation is not what makes
+    // the readings differ (the branch is checked under variables), but it is
+    // what makes the surrounding recursor well-typed at all.
+    let delta = ext(&nil_ctx(), Type::Empty { level: c(1) }, c(1));
+    let motive = Type::Ty(c(1));
+    let code = Term::ElimEmpty {
+        level: c(2),
+        scrut_level: c(1),
+        motive: rty(motive.clone()),
+        scrut: rt(Term::Var(LocalVar(0))),
+    };
+    let rec_at = |branches: Rc<Branches>| Term::ElimCodeTm {
+        ty_motive_level: Level::Zero,
+        tm_motive_level: Level::Zero,
+        motives: identity_motives(),
+        branches,
+        code_level: c(2),
+        ctx: delta.clone(),
+        ty: rty(motive.clone()),
+        scrut: rt(Term::BoxTm(rt(code.clone()))),
+    };
+    let want = Type::CodeTm { ctx: delta.clone(), ty: rty(motive.clone()), level: c(2) };
+
+    // □(g ⊢ Empty^{ℓ'} @ ℓ') — the corrected declaration. Accepted, and the
+    // identity round-trip survives (the λ discards its argument).
+    let good = rec_at(branches_claiming(lv(0), lv(0)));
+    check_term(&psi, 0, Layer::Meta, &nil_ctx(), &good, &want, &Level::Zero, FUEL)
+        .expect("x_t is the recursive call on the scrutinee: it lives at ℓ'");
+    assert_eq!(
+        heather_kernel::reduce::whnf_term(&good, &nil_ctx(), FUEL).expect("must fire"),
+        Term::BoxTm(rt(code.clone())),
+    );
+
+    // Negative control: □(g ⊢ Empty^ℓ @ ℓ) — a perfectly well-formed
+    // contextual type, and the recursive call on a scrutinee that lived at the
+    // motive's level would have it. This scrutinee does not, so it must be
+    // rejected; without this control the test would pass for any annotation
+    // the λ happened to accept.
+    let wrong_level = rec_at(branches_claiming(lv(1), lv(1)));
+    check_term(&psi, 0, Layer::Meta, &nil_ctx(), &wrong_level, &want, &Level::Zero, FUEL)
+        .expect_err("x_t is not the call on an Empty^ℓ");
+
+    // Second negative control: □(g ⊢ Empty^{ℓ'} @ ℓ) — *exactly* the type the
+    // kernel used to declare. It is rejected here not merely as the wrong
+    // type but as no type at all: `Empty^{ℓ'}` does not live at ℓ, so the old
+    // rule was putting an ill-formed entry into the branch's context. That is
+    // why the defect stayed latent — nothing well-formed could ever be
+    // checked against it.
+    let old_rule = rec_at(branches_claiming(lv(0), lv(1)));
+    check_term(&psi, 0, Layer::Meta, &nil_ctx(), &old_rule, &want, &Level::Zero, FUEL)
+        .expect_err("□(g ⊢ Empty^{ℓ'} @ ℓ) is not a well-formed contextual type");
 }
 
 #[test]

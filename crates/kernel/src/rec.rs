@@ -550,7 +550,8 @@ pub(crate) fn branch_specs(
         }
     };
 
-    // (g. t_Unit) : M_Typ[0/ℓ, g/g, box Unit/x_T]   (extension; mirrors ty_nat)
+    // (ℓ, g. t_Unit) : M_Typ[ℓ/ℓ, g/g, box (Unit^ℓ)/x_T]
+    //   (extension; mirrors ty_nat plus Unit's level binder)
     let ty_unit = {
         let gt = gt(1, 1);
         BranchSpec {
@@ -567,7 +568,8 @@ pub(crate) fn branch_specs(
         }
     };
 
-    // (g. t_Empty) : M_Typ[0/ℓ, g/g, box Empty/x_T]   (extension; mirrors ty_nat)
+    // (ℓ, g. t_Empty) : M_Typ[ℓ/ℓ, g/g, box (Empty^ℓ)/x_T]
+    //   (extension; mirrors ty_unit)
     let ty_empty = {
         let gt = gt(1, 1);
         BranchSpec {
@@ -840,10 +842,15 @@ pub(crate) fn branch_specs(
             Term::BoxTm(Rc::new(gtm(1, &gxy))),
             &gt,
         );
+        // The scrutinee's recursive call sits at the level of the scrutinee's
+        // *type* — `Nat @ 0` — not at the motive's ℓ. Ch. 04 writes `ℓ/ℓ`
+        // here, which contradicts its own `t_ze`/`t_succ` (both `0/ℓ` for the
+        // same `Nat/U_T` slot) and the β rule; see
+        // docs/delam-extensions.md §16.1 ([[recursor-elim-call-level-mismatch]]).
         let x_t = inst_tm_motive(
             m_tm,
             (1, 5, 3),
-            lvar(0),
+            Level::Zero,
             g_ctx(4),
             Type::Nat,
             Term::BoxTm(Rc::new(gtm(0, &g_ctx(4)))),
@@ -1852,8 +1859,8 @@ pub(crate) fn branch_specs(
         }
     };
 
-    // (g. t'_Unit) : M_Trm[1/ℓ, g/g, Ty 0/U_T, box Unit/x_t]
-    //   (extension; mirrors tm_nat — code of the encoding Unit : Ty 0)
+    // (ℓ, g. t'_Unit) : M_Trm[1+ℓ/ℓ, g/g, Ty ℓ/U_T, box (Unit^ℓ)/x_t]
+    //   (extension; mirrors tm_nat — code of the encoding Unit^ℓ : Ty ℓ)
     let tm_unit = {
         let gt = gt(1, 1);
         BranchSpec {
@@ -1871,8 +1878,8 @@ pub(crate) fn branch_specs(
         }
     };
 
-    // (g. t'_Empty) : M_Trm[1/ℓ, g/g, Ty 0/U_T, box Empty/x_t]
-    //   (extension; mirrors tm_nat)
+    // (ℓ, g. t'_Empty) : M_Trm[1+ℓ/ℓ, g/g, Ty ℓ/U_T, box (Empty^ℓ)/x_t]
+    //   (extension; mirrors tm_unit)
     let tm_empty = {
         let gt = gt(1, 1);
         BranchSpec {
@@ -1890,8 +1897,8 @@ pub(crate) fn branch_specs(
         }
     };
 
-    // (g. t_triv) : M_Trm[0/ℓ, g/g, Unit/U_T, box ⟨⟩/x_t]
-    //   (extension; mirrors tm_zero — code of the intro ⟨⟩ : Unit)
+    // (ℓ, g. t_triv) : M_Trm[ℓ/ℓ, g/g, Unit^ℓ/U_T, box (⟨⟩^ℓ)/x_t]
+    //   (extension; mirrors tm_zero — code of the intro ⟨⟩^ℓ : Unit^ℓ)
     let tm_triv = {
         let gt = gt(1, 1);
         BranchSpec {
@@ -1909,8 +1916,8 @@ pub(crate) fn branch_specs(
         }
     };
 
-    // (ℓ, g, U_M : Typ_c((g, x : Empty @ 0), ℓ), u_t : Trm_c(g ⊢ Empty @ 0),
-    //  x_M, x_t. t_elimE)
+    // (ℓ, ℓ', g, U_M : Typ_c((g, x : Empty^ℓ' @ ℓ'), ℓ),
+    //  u_t : Trm_c(g ⊢ Empty^ℓ' @ ℓ'), x_M, x_t. t_elimE)
     //   : M_Trm[ℓ/ℓ, g/g, U_M^{id, u_t^id/x}/U_T, box (elim_Empty …)/x_t]
     // Extension; mirrors tm_elim_nat minus the base/step branches.
     let tm_elim_empty = {
@@ -1931,10 +1938,13 @@ pub(crate) fn branch_specs(
             Term::BoxTy(Rc::new(motive_code.clone())),
             &gt,
         );
+        // As in `tm_elim_nat`: the scrutinee's call is at the scrutinee's own
+        // level ℓ' = lvar(0) (the level of `Empty^{ℓ'}`), not the motive's ℓ.
+        // See docs/delam-extensions.md §7.7/§16.1.
         let x_t = inst_tm_motive(
             m_tm,
             (2, 3, 1),
-            lvar(1),
+            lvar(0),
             g_ctx(2),
             empty.clone(),
             Term::BoxTm(Rc::new(gtm(0, &g_ctx(2)))),
@@ -4109,10 +4119,11 @@ pub(crate) fn branch_specs(
             Term::BoxTy(Rc::new(motive_code.clone())),
             &gt,
         );
+        // Scrutinee's call at the scrutinee's level ℓ' (as `tm_elim_empty`).
         let x_t = inst_tm_motive(
             m_tm,
             (2, 3, 1),
-            lvar(1),
+            lvar(0),
             g_ctx(2),
             sempty.clone(),
             Term::BoxTm(Rc::new(gtm(0, &g_ctx(2)))),

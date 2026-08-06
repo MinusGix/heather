@@ -31,7 +31,7 @@
 //! - **Boxed types/terms compare syntactically** (`==`; α-equality is free
 //!   under de Bruijn). Code is static data — β-convertible code is *not*
 //!   convertible.
-//! - Neutral recursors compare motives, all 45 branches (each at its
+//! - Neutral recursors compare motives, all 52 branches (each at its
 //!   instantiated motive type, the ch. 04 `G_A` telescopes), and indices —
 //!   the ch. 06 `C_A` bundle ([`Conv::rec_ca`]).
 //! - The layer index restricts *types*, not terms (ch. 06 intro): layer-m
@@ -2021,7 +2021,7 @@ impl<D: Dom> Conv<D> {
 
     // -- the C_A bundle for neutral recursors -------------------------------
 
-    /// Ch. 06 `C_A`: motive levels, both motives, and all 45 branches, each
+    /// Ch. 06 `C_A`: motive levels, both motives, and all 52 branches, each
     /// branch compared at its instantiated motive type under its ch. 04
     /// telescope (`G_M G_Typ G_Trm`). Branch types and telescope entry
     /// types are built from the *left* side (left-biased, like all
@@ -2046,7 +2046,7 @@ impl<D: Dom> Conv<D> {
             self.ty(&e, &x, &y, &spec.level)?;
         }
 
-        // G_Typ G_Trm: the 45 branches, each at its instantiated motive
+        // G_Typ G_Trm: the 52 branches, each at its instantiated motive
         // type under its telescope.
         let branch_specs = rec::branch_specs(&a.motives, a.l1, a.l2, &env.gamma);
         let ba = rec::branch_terms(&a.branches);
