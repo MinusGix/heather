@@ -1,10 +1,20 @@
 //! `heather` — the CLI face of the checker (issues/cli-check-diagnostics.md).
 //!
-//! `heather check [-L <dir>]… <file.hthr>…` elaborates each root file **and
-//! everything it imports** against a fresh prelude'd elaborator, and prints
-//! diagnostics. Exit codes: 0 every file checked, 1 some file had
-//! diagnostics, 2 the run itself failed (usage, unreadable file, an import
-//! that does not resolve, a cycle, a prelude that does not check).
+//! `heather check [-L <dir>]… [--cache] [--cache-dir <dir>] <file.hthr>…`
+//! elaborates each root file **and everything it imports** against a fresh
+//! prelude'd elaborator, and prints diagnostics. Exit codes: 0 every file
+//! checked, 1 some file had diagnostics, 2 the run itself failed (usage, an
+//! unreadable file, an import that does not resolve, a cycle, a prelude that
+//! does not check).
+//!
+//! `--cache` opts into the content-addressed declaration cache
+//! (docs/cache-v1-design.md): declarations whose interface-closure hash a
+//! previous run recorded as kernel-accepted skip the kernel gate. It is opt-in
+//! precisely so that an unflagged `heather check` — the merge gate, and what
+//! `scripts/bench-frontend` drives — keeps meaning exactly what it always
+//! meant, byte for byte. When it *is* on, the result line says so and counts
+//! what was trusted: a green partial check must never read like a green full
+//! check (the Coq `vos` scar, issues/parallel-checking-and-caching.md).
 //!
 //! The import closure is one elaboration into one shared Ψ
 //! (docs/modules-design.md §3.2): the loader orders the modules, this file
@@ -17,7 +27,9 @@
 
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
+use std::rc::Rc;
 
+use heather_cache::Cache;
 use heather_elab::Elaborator;
 
 mod loader;
@@ -31,11 +43,11 @@ fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
     match args.split_first() {
         Some((cmd, rest)) if cmd == "check" => match parse_check_args(rest) {
-            Ok((search, files)) if !files.is_empty() => check(&search, &files),
+            Ok((opts, files)) if !files.is_empty() => check(&opts, &files),
             Ok(_) => usage(),
             Err(msg) => {
                 eprintln!("error: {msg}");
-                eprintln!("usage: heather check [-L <dir>]... <file.hthr>...");
+                eprintln!("{USAGE}");
                 ExitCode::from(2)
             }
         },
@@ -43,15 +55,30 @@ fn main() -> ExitCode {
     }
 }
 
+const USAGE: &str = "usage: heather check [-L <dir>]... [--cache] [--cache-dir <dir>] <file.hthr>...";
+
 fn usage() -> ExitCode {
-    eprintln!("usage: heather check [-L <dir>]... <file.hthr>...");
+    eprintln!("{USAGE}");
     ExitCode::from(2)
 }
 
-/// `-L <dir>` (repeatable) before, after or between the files; everything
-/// else is a root file.
-fn parse_check_args(args: &[String]) -> Result<(Vec<PathBuf>, Vec<String>), String> {
-    let mut search = Vec::new();
+/// Everything the flags decide.
+struct Opts {
+    search: Vec<PathBuf>,
+    /// `--cache`: trust cache entries and record new ones. Off means the run
+    /// neither reads nor writes anything and behaves exactly as before.
+    cache: bool,
+    cache_dir: PathBuf,
+}
+
+/// `-L <dir>` (repeatable) and the cache flags may appear before, after or
+/// between the files; everything else is a root file.
+fn parse_check_args(args: &[String]) -> Result<(Opts, Vec<String>), String> {
+    let mut opts = Opts {
+        search: Vec::new(),
+        cache: false,
+        cache_dir: PathBuf::from(heather_cache::DEFAULT_DIR),
+    };
     let mut files = Vec::new();
     let mut it = args.iter();
     while let Some(a) = it.next() {
@@ -61,7 +88,25 @@ fn parse_check_args(args: &[String]) -> Result<(Vec<PathBuf>, Vec<String>), Stri
             } else {
                 dir.to_string()
             };
-            search.push(PathBuf::from(dir));
+            opts.search.push(PathBuf::from(dir));
+            continue;
+        }
+        if a == "--cache" {
+            opts.cache = true;
+            continue;
+        }
+        // `--cache-dir` implies `--cache`: naming a cache and not using it is
+        // never what anyone meant.
+        if let Some(rest) = a.strip_prefix("--cache-dir") {
+            let dir = match rest.strip_prefix('=') {
+                Some(d) if !d.is_empty() => d.to_string(),
+                _ if rest.is_empty() => {
+                    it.next().ok_or("`--cache-dir` needs a directory")?.clone()
+                }
+                _ => return Err(format!("unknown option `{a}`")),
+            };
+            opts.cache_dir = PathBuf::from(dir);
+            opts.cache = true;
             continue;
         }
         if a.starts_with('-') {
@@ -69,13 +114,25 @@ fn parse_check_args(args: &[String]) -> Result<(Vec<PathBuf>, Vec<String>), Stri
         }
         files.push(a.clone());
     }
-    if search.is_empty() && Path::new(DEFAULT_LIB).is_dir() {
-        search.push(PathBuf::from(DEFAULT_LIB));
+    if opts.search.is_empty() && Path::new(DEFAULT_LIB).is_dir() {
+        opts.search.push(PathBuf::from(DEFAULT_LIB));
     }
-    Ok((search, files))
+    Ok((opts, files))
 }
 
-fn check(search: &[PathBuf], files: &[String]) -> ExitCode {
+fn check(opts: &Opts, files: &[String]) -> ExitCode {
+    // One cache for the whole run, shared across roots: a declaration two
+    // roots have in common is checked once. Loading says out loud when it
+    // threw an existing file away (a stale kernel, a corrupted file) — the
+    // one thing a cache must never do is quietly do nothing.
+    let cache = opts.cache.then(|| {
+        let (c, rejected) = Cache::open(opts.cache_dir.clone());
+        if let Some(msg) = rejected.as_ref().and_then(|r| r.message()) {
+            eprintln!("{msg}");
+        }
+        Rc::new(c)
+    });
+
     let mut failed = false;
     for path in files {
         // A fresh elaborator per **root**: two roots re-elaborate a shared
@@ -88,7 +145,17 @@ fn check(search: &[PathBuf], files: &[String]) -> ExitCode {
                 return ExitCode::from(2);
             }
         };
-        let modules = match loader::load(Path::new(path), search) {
+        // After the prelude, deliberately: the prelude is elaborated inside
+        // `with_prelude` and is milliseconds, so it is hashed but never
+        // cached (docs/cache-v1-design.md §4).
+        let before = cache.as_ref().map(|c| {
+            // Each root is a fresh Ψ, so the cache's view of it restarts too;
+            // the recorded entries, being content-addressed, do not.
+            c.begin_run();
+            elab.set_gate(Rc::clone(c) as Rc<dyn heather_elab::gate::KernelGate>);
+            c.counts()
+        });
+        let modules = match loader::load(Path::new(path), &opts.search) {
             Ok(m) => m,
             Err(e) => {
                 eprintln!("error: {}", e.msg);
@@ -116,8 +183,31 @@ fn check(search: &[PathBuf], files: &[String]) -> ExitCode {
             eprintln!("\n{shown}: {n} error{}", if n == 1 { "" } else { "s" });
         }
         if root_ok {
-            println!("{path}: ok");
+            match (&cache, before) {
+                // The bare `ok` is reserved for a full check, so a green line
+                // from a cached run can never be mistaken for one — and a gate
+                // can mechanically demand the absence of `(cache)`.
+                (Some(c), Some(before)) => {
+                    let n = c.counts().since(&before);
+                    println!(
+                        "{path}: ok (cache) — {} declaration{} kernel-checked, {} accepted \
+                         from cache",
+                        n.checked,
+                        if n.checked == 1 { "" } else { "s" },
+                        n.hits
+                    );
+                }
+                _ => println!("{path}: ok"),
+            }
         }
+    }
+    if let Some(c) = &cache
+        && let Err(e) = c.save()
+    {
+        // Not a check failure: the answer stands, only the next run pays for
+        // it again. Loud anyway, since a cache that silently never persists
+        // looks exactly like a cache that never helps.
+        eprintln!("cache: could not write {}: {e}", opts.cache_dir.display());
     }
     ExitCode::from(if failed { 1 } else { 0 })
 }

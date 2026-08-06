@@ -73,6 +73,7 @@ use heather_syntax::{
 };
 
 pub mod certgen;
+pub mod gate;
 pub mod stats;
 mod code;
 mod names;
@@ -521,6 +522,10 @@ pub struct Elaborator {
     /// `GlobalVar`s resolve to the right bindings — the goal machinery's
     /// padding trick, one layer up. Empty outside a `meta fn`.
     meta_pushed: RefCell<Vec<GlobalBinding>>,
+    /// The oracle consulted at the kernel gate (`gate.rs`), if any. `None` —
+    /// the default, and what every test and the unflagged CLI use — means the
+    /// kernel runs on every declaration, exactly as it always has.
+    gate: Option<Rc<dyn gate::KernelGate>>,
 }
 
 /// One registered `meta fn`: its closed layer-m term and statement type,
@@ -611,7 +616,19 @@ impl Elaborator {
             meta_defs: HashMap::new(),
             meta_slots: HashMap::new(),
             meta_pushed: RefCell::new(Vec::new()),
+            gate: None,
         }
+    }
+
+    /// Install the oracle consulted at the kernel gate (`gate.rs`).
+    ///
+    /// **This is a trust decision**, not a performance knob: a gate that
+    /// admits a declaration means the kernel never sees it. The elaborator
+    /// neither audits the oracle nor knows what it is —
+    /// `docs/cache-v1-design.md` §6 is where the argument for the one shipped
+    /// implementation lives.
+    pub fn set_gate(&mut self, gate: Rc<dyn gate::KernelGate>) {
+        self.gate = Some(gate);
     }
 
     /// An elaborator with the stage-1 prelude already elaborated and
@@ -1049,15 +1066,46 @@ impl Elaborator {
         // The kernel is the gate: check the statement, then the term.
         // `stats::time_kernel` attributes exactly this to the kernel half of
         // the frontend suite's phase split (crates/elab/src/stats.rs).
+        //
+        // An installed gate oracle (`gate.rs`) may vouch for the declaration
+        // instead, in which case neither call runs. Nothing installs one by
+        // default; `heather check --cache` is the only caller today.
         let empty = LocalCtx::nil();
-        stats::time_kernel(|| {
-            typing::check_type(&self.psi, 0, Layer::Prog, &empty, &stmt, &stmt_lvl, self.fuel)
-        })
-        .map_err(|e| ElabError::Kernel { decl: decl.name.clone(), span: decl.span, err: e })?;
-        stats::time_kernel(|| {
-            typing::check_term(&self.psi, 0, Layer::Code, &empty, &term, &stmt, &stmt_lvl, self.fuel)
-        })
-        .map_err(|e| ElabError::Kernel { decl: decl.name.clone(), span: decl.span, err: e })?;
+        {
+            let item = gate::GateItem {
+                name: &decl.name,
+                ctx: &empty,
+                ty: &stmt,
+                level: &stmt_lvl,
+                body: &term,
+                opaque: matches!(decl.kind, DeclKind::Theorem),
+            };
+            if !self.gate.as_ref().is_some_and(|g| g.admits(&self.psi, &item)) {
+                stats::time_kernel(|| {
+                    typing::check_type(
+                        &self.psi, 0, Layer::Prog, &empty, &stmt, &stmt_lvl, self.fuel,
+                    )
+                })
+                .map_err(|e| ElabError::Kernel {
+                    decl: decl.name.clone(),
+                    span: decl.span,
+                    err: e,
+                })?;
+                stats::time_kernel(|| {
+                    typing::check_term(
+                        &self.psi, 0, Layer::Code, &empty, &term, &stmt, &stmt_lvl, self.fuel,
+                    )
+                })
+                .map_err(|e| ElabError::Kernel {
+                    decl: decl.name.clone(),
+                    span: decl.span,
+                    err: e,
+                })?;
+                if let Some(g) = self.gate.as_ref() {
+                    g.accepted(&self.psi, &item);
+                }
+            }
+        }
 
         let params = Rc::new(
             decl.tyvars

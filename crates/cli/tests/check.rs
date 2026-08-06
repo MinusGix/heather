@@ -116,3 +116,86 @@ fn an_error_in_an_imported_module_is_reported_against_that_file() {
     // not check.
     assert!(out.stdout.is_empty(), "{}", String::from_utf8_lossy(&out.stdout));
 }
+
+// ---------------------------------------------------------------------------
+// The declaration cache (docs/cache-v1-design.md). What is pinned here is the
+// *surface*: the flag, and the shape of the line it prints. The cache's own
+// behaviour is `crates/cache/tests`.
+
+fn cache_dir(tag: &str) -> std::path::PathBuf {
+    let d = std::env::temp_dir().join(format!("heather-cli-cache-{tag}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&d);
+    d
+}
+
+/// Without the flag, nothing about the run changes — byte for byte. This is
+/// the property that keeps the merge gate and `scripts/bench-frontend`
+/// measuring what they always measured.
+#[test]
+fn without_the_flag_the_output_is_unchanged() {
+    let out = heather(&["check", "good.hthr"]);
+    assert_eq!(String::from_utf8_lossy(&out.stdout), "good.hthr: ok\n");
+    assert!(!std::path::Path::new(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/.heather"
+    ))
+    .exists());
+}
+
+/// With the flag, the result line says what it trusted — and is never the bare
+/// `ok` a full check prints. The Coq `vos` scar, imported deliberately.
+#[test]
+fn a_cached_run_says_so_and_counts_what_it_trusted() {
+    let dir = cache_dir("says-so");
+    let arg = dir.display().to_string();
+
+    let cold = heather(&["check", "--cache-dir", &arg, "good.hthr"]);
+    assert_eq!(cold.status.code(), Some(0), "{}", String::from_utf8_lossy(&cold.stderr));
+    let cold_out = String::from_utf8_lossy(&cold.stdout).to_string();
+    assert!(cold_out.starts_with("good.hthr: ok (cache) — "), "{cold_out}");
+    assert!(cold_out.contains("0 accepted from cache"), "a cold run trusts nothing: {cold_out}");
+    assert_ne!(cold_out, "good.hthr: ok\n", "a cached run must not look like a full one");
+
+    let warm = heather(&["check", "--cache", "--cache-dir", &arg, "good.hthr"]);
+    assert_eq!(warm.status.code(), Some(0));
+    let warm_out = String::from_utf8_lossy(&warm.stdout).to_string();
+    assert!(warm_out.contains("0 declarations kernel-checked"), "{warm_out}");
+    assert!(!warm_out.contains("0 accepted from cache"), "{warm_out}");
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A cache written by a different kernel is discarded out loud, and the run
+/// that follows is a full check that says it checked everything.
+#[test]
+fn a_stale_cache_is_discarded_out_loud() {
+    let dir = cache_dir("stale");
+    let arg = dir.display().to_string();
+    assert_eq!(heather(&["check", "--cache-dir", &arg, "good.hthr"]).status.code(), Some(0));
+
+    let path = dir.join("entries-v1.tsv");
+    let text = std::fs::read_to_string(&path).expect("the cache was written");
+    let doctored: String = text
+        .lines()
+        .map(|l| {
+            if l.starts_with("kernel-semantics\t") {
+                format!("kernel-semantics\t{}\n", "0".repeat(64))
+            } else {
+                format!("{l}\n")
+            }
+        })
+        .collect();
+    std::fs::write(&path, doctored).unwrap();
+
+    let out = heather(&["check", "--cache-dir", &arg, "good.hthr"]);
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.contains("kernel semantics changed"), "{err}");
+    assert!(err.contains("full check"), "{err}");
+    assert!(
+        String::from_utf8_lossy(&out.stdout).contains("0 accepted from cache"),
+        "{}",
+        String::from_utf8_lossy(&out.stdout)
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}

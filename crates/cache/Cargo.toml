@@ -1,0 +1,20 @@
+[package]
+name = "heather-cache"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+build = "build.rs"
+
+[lib]
+name = "heather_cache"
+
+# Zero dependencies, dev-dependencies included — for this crate the reason is
+# not the workspace default but a trust argument of its own: believing a cache
+# entry is believing its hash, so the hash is first-party
+# (docs/cache-v1-design.md §2, issues/dependency-policy.md).
+[dependencies]
+heather-kernel = { path = "../kernel" }
+heather-elab = { path = "../elab" }
+
+[lints]
+workspace = true

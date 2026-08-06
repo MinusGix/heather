@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/kernel", "crates/syntax", "crates/elab", "crates/cli"]
+members = ["crates/kernel", "crates/syntax", "crates/elab", "crates/cache", "crates/cli"]
 
 [workspace.package]
 version = "0.0.1"
@@ -21,4 +21,10 @@ opt-level = 3
 opt-level = 3
 
 [profile.dev.package.heather-syntax]
+opt-level = 3
+
+# The cache renders and hashes every elaborated declaration (SHA-256 over
+# `write_exact` output), which is the same order of work as the kernel gate it
+# is meant to avoid; unoptimized it would dominate its own tests.
+[profile.dev.package.heather-cache]
 opt-level = 3

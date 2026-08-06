@@ -6,7 +6,8 @@ created: 2026-08-06
 updated: 2026-08-06
 ---
 
-Design sketch (discussion 2026-08-06, nothing prototyped): how N concurrent
+Design sketch (discussion 2026-08-06; first slice implemented the same day —
+see the log): how N concurrent
 sessions — human or agent — edit and check different parts of the library
 without copying the repo per session, and how a check's result is cached,
 trusted, and merged. Written down now so the load-bearing invariant and the
@@ -19,6 +20,12 @@ content-addressing scheme, the trust ladder (with certificate replay as the
 agreed direction), the daemon/shared-telescope architecture, the command
 split, and the merge semantics. Everything it needs from elsewhere is a
 named assumption below.
+
+What it does **not** own is the concrete shape of any one slice. v1 —
+interface hashing made real plus a cache that skips the kernel gate — landed
+2026-08-06 and its choices (hash function, canonical rendering, on-disk
+format, command surface, what the fingerprint is) live in
+`docs/cache-v1-design.md`; the log entry for that date is the summary.
 
 ## The load-bearing invariant: proofs are opaque
 
@@ -227,3 +234,11 @@ agent daemon exists.
 - 2026-08-06: Amended from follow-on discussion, same day as filing: two trace-format rules decided ahead of any format (kernel-semantics fingerprint in every trace; decisions-not-steps, so kernel perf rounds cannot invalidate the format), fresh-vs-replay divergence named as a free kernel-regression oracle, the sequencing sharpened (determinism enforcement by double-elaborate-and-compare IS the DAG's first brick, not a separate errand), and the whole-library acceptance tests named as the design's first consumer — incremental checking reaches the test harness before any agent daemon exists. Sibling discipline issue filed the same day: [[bench-fixtures-assert-their-route]].
 - 2026-08-06: The first brick exists. [[elaboration-determinism]] closed the same day with elaborate-8-times-and-compare plus a golden hash of the elaborated Nat suite (`crates/elab/tests/determinism.rs`, support in `crates/elab/tests/support/mod.rs`). Two pieces this design should build on rather than reinvent: `heather_kernel::fmt::write_exact` — the kernel's budget-bounded `Debug` impls with elision disarmed, streaming into any `fmt::Write` — is the canonical rendering a content hash must be taken over (`{:?}` elides past 512 nodes, so it silently equates terms sharing a prefix); and the audit that every `HashMap`/`HashSet` in `crates/elab/src` is lookup-only, which is *why* interface hashes are well-defined today. The test's FNV-1a is a placeholder for the real scheme — a 64-bit non-cryptographic hash is right for a regression constant, not for cache keys that must not collide adversarially.
 - 2026-08-06: The shared-spine assumption this issue names is now real: [[context-representation-clones]] closed with Psi as `Rc<Vec<GlobalBinding>>` (O(1) fork by refcount bump, copy-on-write append) and Gamma as a persistent snoc list, so "forks O(1) and appends its own suffix" is a property of the data structures rather than a plan.
+
+- 2026-08-06: **v1 of the cache landed** — `docs/cache-v1-design.md` is the design record for the concrete choices; this issue keeps the architecture. `heather check --cache [--cache-dir <dir>]` content-addresses every declaration and skips the kernel gate on a hit. On `lib/ir_v1.hthr`, paired min-of-3 through the release CLI: unflagged check **46.3 s**, cold cached run **53.3 s** (+15%), **warm run 7.5 s — 84% shed, 6.2×**. New crate `crates/cache` (kernel stays at zero deps; so does this one, dev-deps included), one new elaborator seam (`crates/elab/src/gate.rs`: a trait, an item struct, a setter), and the two kernel-gate sites (`elab_decl_inner`, `gendefs::push_gen_def`) wired to consult it. 23 new tests; full suite 1126 passing.
+
+  Settled this round, with reasoning in the doc: **hash** — first-party SHA-256, ~130 lines pinned against the NIST vectors, because this is the first thing above the kernel with a trust story (believing an entry *is* believing the hash), so `[[dependency-policy]]`'s "spend freely above the kernel" does not reach it. **Rendering** — `fmt::write_exact` streamed through a sink that rewrites `u<d>`/`U<d>`/`g<d>` into referent hashes, so the cache's notion of term identity is the same one `[[elaboration-determinism]]` guards; the assumption about the kernel's printed form is stated in `merkle.rs` and pinned by three canaries. **Declaration unit** — one `GlobalBinding`, which makes the interface split free (Ψ *already* stores a theorem without its proof) and makes gendefs hash independently rather than riding their parent. **Command surface** — a flag, not `quickcheck`: unflagged `heather check` is byte-identical to before, so the gate and `scripts/bench-frontend` keep their meaning and v1 will not need renaming when the three-command split arrives. **Fingerprint** — `build.rs` hashes `crates/kernel/src`, so "a changed kernel invalidates loudly" is a property of the build rather than of remembering to bump a constant.
+
+  Deferred, with the record: rung 2 (traces) has format room only — the entry line takes an extra column an older reader skips, and there is one fingerprint for both to read. Forgery is undetectable at rung 1 and the negative-control test says so rather than pretending; the checksum is integrity against accident. And the round's own finding: the cache's remaining cost is `std::fmt`, not SHA-256 — one `write_exact` pass is ~7 s on ir_v1, i.e. the whole of the +15% and ~90% of the warm run. A structural hash walker over `Term`/`Type`/`Level` would make the cold overhead approximately free, make the warm run elaboration-bound, and retire the printed-form assumption by exhaustive `match`; `docs/cache-v1-design.md` §10 states it, and it is the obvious next slice.
+
+  One thing noticed in passing, not fixed: `gendefs::push_gen_def`'s kernel gate is not wrapped in `stats::time_kernel`, so the frontend suite's `kernel` phase undercounts by however much the generated definitions cost — `docs/frontend-benchmarking.md` describes that phase as "the gate that **every** finished declaration passes". Nothing else about that doc or `scripts/bench-frontend` is affected by this round: the suite drives the `heather-elab` library and never installs a gate, and unflagged `heather check` is unchanged.

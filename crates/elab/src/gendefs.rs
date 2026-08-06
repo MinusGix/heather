@@ -262,10 +262,35 @@ impl Elaborator {
     ) -> R<()> {
         let empty = LocalCtx::nil();
         let name = key.name(owner);
-        typing::check_type(&self.psi, 0, Layer::Prog, &empty, &ty, &level, self.fuel)
-            .map_err(|err| crate::ElabError::Kernel { decl: name.clone(), span, err })?;
-        typing::check_term(&self.psi, 0, Layer::Code, &empty, &body, &ty, &level, self.fuel)
-            .map_err(|err| crate::ElabError::Kernel { decl: name, span, err })?;
+        {
+            // A generated definition faces the same gate as a `fn` and the same
+            // oracle (`gate.rs`): it is an ordinary bodied binding, so it gets
+            // its own cache identity rather than riding its declaration
+            // (docs/cache-v1-design.md §4).
+            let item = crate::gate::GateItem {
+                name: &name,
+                ctx: &empty,
+                ty: &ty,
+                level: &level,
+                body: &body,
+                opaque: false,
+            };
+            if !self.gate.as_ref().is_some_and(|g| g.admits(&self.psi, &item)) {
+                typing::check_type(&self.psi, 0, Layer::Prog, &empty, &ty, &level, self.fuel)
+                    .map_err(|err| crate::ElabError::Kernel {
+                        decl: name.clone(),
+                        span,
+                        err,
+                    })?;
+                typing::check_term(
+                    &self.psi, 0, Layer::Code, &empty, &body, &ty, &level, self.fuel,
+                )
+                .map_err(|err| crate::ElabError::Kernel { decl: name.clone(), span, err })?;
+                if let Some(g) = self.gate.as_ref() {
+                    g.accepted(&self.psi, &item);
+                }
+            }
+        }
         let abs = self.psi.bindings.len() as u32;
         self.psi.push(GlobalBinding::defined_tm(
             empty,

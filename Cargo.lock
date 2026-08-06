@@ -3,9 +3,18 @@
 version = 4
 
 [[package]]
+name = "heather-cache"
+version = "0.0.1"
+dependencies = [
+ "heather-elab",
+ "heather-kernel",
+]
+
+[[package]]
 name = "heather-cli"
 version = "0.0.1"
 dependencies = [
+ "heather-cache",
  "heather-elab",
  "heather-kernel",
  "heather-syntax",

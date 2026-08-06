@@ -1,0 +1,398 @@
+# The declaration cache, v1 — design
+
+First concrete slice of `issues/parallel-checking-and-caching.md`, designed and
+implemented 2026-08-06. That issue owns the architecture — the interface-split
+invariant, the Merkle-DAG scheme, the trust ladder, the daemon, the command
+split, merge. This document owns only what v1 makes *concrete*: the hash
+function, the exact rendering hashed, what a "declaration" is at today's CLI
+granularity, the on-disk format, the command surface, and what "skip" actually
+skips. Every section names the assumption it rests on, because most of them are
+the kind that fails silently.
+
+The one-line summary: `heather check --cache` keys each declaration by a
+content hash of its elaborated form with global references replaced by the
+hashes of their referents, and skips the kernel gate — and only the kernel gate
+— for keys a previous run recorded as accepted. On `lib/ir_v1.hthr` the kernel
+gate is 94% of the run (`crates/elab/benches/baseline.tsv`), so this is most of
+the wall clock.
+
+Measured on that file, paired min-of-3 through the release CLI, 2026-08-06:
+
+| run | time | |
+|---|---|---|
+| `heather check` (unflagged, unchanged) | **46.3 s** | the baseline |
+| `heather check --cache`, cold | **53.3 s** | +15%: one hash of every declaration |
+| `heather check --cache`, warm | **7.5 s** | **sheds 84%**, 6.2× |
+
+The warm number is the round's headline and the cold one is its price: v1 buys
+a 6× inner loop by making the first run 15% slower. §10 says where that 15%
+goes and what would remove it.
+
+## 1. What is cached, and what a cache hit still pays
+
+The unit is the **kernel gate**: the `typing::check_type` + `typing::check_term`
+pair that every finished declaration passes before it is pushed to Ψ. There are
+exactly two such sites in the tree, and they have the same shape — gate a
+finished `(ctx = ·, ty, level, body)` about to become a `GlobalBinding::Tm`:
+
+- `crates/elab/src/lib.rs`, `elab_decl_inner` — user `fn` and `theorem`.
+- `crates/elab/src/gendefs.rs`, `push_gen_def` — the elaborator-generated
+  definitions (`μ_D`, tag predicates, child projections, `D#code`).
+
+A hit skips both calls. It does **not** skip:
+
+- parsing,
+- elaboration, including every trip the *elaborator* makes into the kernel
+  (`whnf`, `conv_type`, unification). Those are elaboration deciding
+  something, not the kernel re-checking a result — the same line
+  `docs/frontend-benchmarking.md` draws for the phase split.
+
+So the honest claim is "a warm run pays parse, elaborate, and its own hashing,
+and nothing else". It is not a no-op re-check and must never be described as
+one. On `lib/ir_v1.hthr` that is 7.5 s against a 46.3 s check, of which
+elaboration is about 1 s and the hashing is the rest — the cache's own cost is
+now the larger half of a warm run, which is where the next round of work on
+this is (§10). A cache that also skipped elaboration would be a different,
+larger design (it would have to serialize Ψ), and it is not this round.
+
+*Assumption named*: that the elaborator's own kernel calls are not themselves
+worth caching. True today at a 94/6 split; the issue's own caveat says that
+ratio is not permanent.
+
+## 2. Hash function: first-party SHA-256
+
+**Decision: a first-party SHA-256** (`crates/cache/src/sha256.rs`, ~130 lines),
+not a dependency, and not the determinism test's FNV-1a.
+
+FNV-1a is out on its own terms: 64 bits and non-cryptographic. It is right for
+a golden regression constant, where a collision means a test does not fire.
+Here a collision means a *wrongly accepted proof* — the cache says "the kernel
+accepted this" about a declaration the kernel never saw. That is the one
+failure mode this whole design exists to not have.
+
+Dependency or first-party is the real question, and
+`issues/dependency-policy.md` does not decide it by itself. Its rule is "the
+kernel stays at zero; everything above it has no trust story to protect and
+should spend freely". The cache is the first thing above the kernel that
+*does* have a trust story: at rung 1, believing a cache entry is believing the
+hash. So the kernel's argument — a bug here is in the soundness set, and the
+primitive is first-party by nature — applies to this one module even though it
+does not apply to `crates/elab` or `crates/cli`.
+
+And SHA-256 is exactly the shape of thing the kernel argument says to write
+yourself: a fixed, frozen specification (FIPS 180-4) with published test
+vectors, no design decisions, ~130 lines of `u32` arithmetic, and a
+correctness criterion that is checkable rather than arguable. The
+implementation is pinned against the NIST vectors plus a long-message vector
+(`crates/cache/tests/sha256.rs`), which is a stronger guarantee than "we
+depend on a crate that is probably right".
+
+*Assumption named*: SHA-256's collision resistance. If that falls, so does
+every content-addressed build system; we are not distinguished here.
+
+*Not adopted*: this does not create a project policy against hash crates. It
+decides one module, for the reason that the module is trust-bearing. A later
+consumer above the kernel with no trust story should still spend freely.
+
+## 3. The rendering hashed, and the Merkle substitution
+
+**Decision: `heather_kernel::fmt::write_exact` streamed through a rewriting
+sink**, not a hand-written serializer.
+
+`write_exact` (landed 2026-08-06) is the kernel's budget-bounded `Debug` with
+the elision disarmed: total, deterministic, streaming, and already the thing
+`issues/elaboration-determinism.md`'s golden hash is taken over. Reusing it
+means the cache's notion of "same term" and the determinism guarantee's notion
+of "same term" are the same notion, by construction rather than by two
+implementations agreeing. Writing a second exhaustive renderer in the cache
+crate was considered and rejected: it would be ~500 lines tracking ~80 kernel
+variants, and its only advantage — an exhaustive `match` breaking the build on
+a new kernel variant — is bought more cheaply by §3.2's canaries.
+
+### 3.1 Why a rewriting sink
+
+The issue's decision 2 is that references are replaced by the *hash of the
+referent's interface*, so that keys are position-independent (the kernel
+telescope is positional; any key that keeps a Ψ index dies on the first merge
+that renumbers a suffix). The kernel prints a global reference as `u12^{…}`
+(term), `U12^{…}` (type), or `g12` (a context-variable base), where the number
+is a de Bruijn *level-from-the-end*: for a binding stored at absolute index
+`i`, its subterms were built when Ψ had length `i`, so `abs = i − 1 − var`.
+
+The sink is a small state machine over the character stream `write_exact`
+produces. It recognizes `u`/`U`/`g` immediately followed by ASCII digits and
+not preceded by an ASCII alphanumeric, resolves the index to an absolute Ψ
+position, and emits the 64 hex characters of that binding's **interface hash**
+in place of the digits. Everything else passes through byte-for-byte, and
+nothing is buffered beyond the digit run.
+
+The sink is **fail-closed**: if an index resolves outside the known prefix, the
+whole hash computation returns `None` and the declaration is simply not
+cacheable. A malformed reference can never produce a key.
+
+*Assumption named, loudly*: that `u<digits>` / `U<digits>` / `g<digits>` are
+the only spellings of a global reference `write_exact` can emit, and that no
+other production of `crates/kernel/src/fmt.rs` matches that pattern. Both
+halves were verified by reading every format string in that file on
+2026-08-06. Both halves are *the* fragility of this design: a kernel change to
+the printed form of `GlobalTm` would silently reintroduce positional keys, and
+positional keys can collide across contexts.
+
+### 3.2 What keeps that assumption honest
+
+Three tests, and they are the reason a hand-written renderer was not needed:
+
+- **The rewriter fires** (`rewrites_every_global_spelling`): terms containing
+  `GlobalTm`, `GlobalTy` and a `CtxBase::Var` base render with no surviving
+  `u<d>`/`U<d>`/`g<d>` and with the referent's hash present. If the kernel
+  renames the form, this fails.
+- **Position independence** (`the_same_declaration_at_two_positions_agrees`):
+  the same declaration over prefixes of different lengths hashes the same.
+  This is the property the rewriter exists for, tested end-to-end rather than
+  by inspecting the rewriter.
+- **The rewriter does not over-fire** (`unrelated_text_is_not_rewritten`): a
+  term whose rendering contains `sup`, `Unit`, `⟨⟩0`, `wk^2_g0` shapes is
+  unchanged where it should be.
+
+*Not claimed*: injectivity of `write_exact` itself. The cache inherits exactly
+the assumption the golden-hash test already makes ("injective enough for
+hashing", `crates/kernel/src/fmt.rs`). Substituting hashes for indices does not
+weaken it: two references print alike after rewriting iff they denote the same
+binding.
+
+## 4. What a "declaration" is, and how the DAG is built
+
+At today's CLI granularity a declaration is **one `GlobalBinding`**. That is a
+smaller unit than a source `fn`/`theorem`/`inductive` item, and it is the right
+one, because it is the unit the kernel gate operates on and the unit Ψ stores.
+
+Three consequences fall out for free, which is the sign the unit is right:
+
+**Theorem interfaces are already interface-shaped.** The issue's rule — a
+theorem's downstream interface is its statement, a `fn`'s includes its body —
+is *already* the shape of `GlobalBinding::Tm`: a theorem is pushed with
+`body: None` (proofs are opaque, so conversion never sees them), a `fn` with
+`body: Some(_)`. So "interface = the binding as stored in Ψ" implements decision
+1 with no extra rule, and the statement-vs-proof sensitivity of §5 is not a
+feature that had to be built.
+
+**Generated definitions hash independently.** `gendefs` pushes `μ_D`, the tag
+predicates, the child projections and `D#code` as ordinary bodied `Tm`
+bindings through the same gate. They therefore get their own keys and their own
+cache entries, rather than riding their parent inductive. This is the cheaper
+choice (no notion of "parent" is needed anywhere) and the more useful one: two
+inductives that generate an identical `μ` share one entry, and an inductive
+whose declaration changes only in a way that leaves some generated defs
+identical re-uses those. The issue's "generated defs derive deterministically
+from the declaration" is preserved either way — deriving deterministically is
+exactly what makes their independent hashes stable.
+
+**Imports and the prelude need no special case.** The CLI already flattens the
+import closure into one Ψ in topological order (`docs/modules-design.md` §3.2),
+so an imported declaration is a Ψ binding like any other and its dependents
+reference it by hash like any other. The prelude is the same (it is "the
+degenerate module"), with one wrinkle: it is elaborated inside
+`Elaborator::with_prelude()`, before the CLI can install a gate, so prelude
+declarations are never *cached* — they are only *hashed*, by the same
+sync-the-prefix path that absorbs any binding pushed outside a gate site. The
+prelude is milliseconds; paying it every run is not worth an API to avoid.
+
+**Inductives** push nothing to Ψ themselves — they register elaborator tables,
+and their kernel content is exactly the generated definitions above. So
+"inductive = the whole declaration" needs no separate treatment either: the
+declaration's kernel-visible content *is* its gendefs.
+
+*Assumption named*: that Ψ grows only by `push`, in declaration order, and that
+a binding's subterms are scoped over its own prefix. Both are stated invariants
+of `GlobalCtx` (`crates/kernel/src/term.rs`).
+
+## 5. The two hashes, and red-green
+
+Each binding gets an **interface hash**; each gate call gets a **check key**.
+
+```
+interface(i) = SHA-256( "heather/iface/1\0" ++ rewrite(render(bindings[i])) )
+
+check_key    = SHA-256( "heather/check/1\0" ++ hex(interface) ++ "|def" )
+                                                        -- a transparent decl
+check_key    = SHA-256( "heather/check/1\0" ++ hex(interface) ++ "|proof:"
+                                            ++ rewrite(render(proof term)) )
+                                                        -- a theorem
+```
+
+where `rewrite` is §3's substitution against the already-computed interface
+hashes of the prefix, and the domain-separating prefixes keep the two hash
+families from ever being confused for one another.
+
+A transparent declaration's key is its interface hash and nothing more,
+because a `fn`'s body is *in* its interface — so only a theorem is rendered
+twice, and the total rendering a declaration costs is its own content exactly
+once. That is not a micro-optimization: rendering is the whole of the warm
+run's cost, and the first cut of this hashed everything twice and made the
+cold run 29% slower instead of 15%.
+
+The proof term appears in the check key and *not* in a theorem's interface
+hash. That split is the whole design:
+
+- Editing a **proof body** under an unchanged statement changes the check key
+  (so that theorem is re-checked, correctly — the kernel has never seen this
+  proof) and changes **no** interface hash (so no dependent's key moves, and
+  nothing downstream is invalidated). Red-green, obtained structurally rather
+  than by comparing outputs after the fact.
+- Editing a **statement** changes that theorem's interface hash, hence the
+  rewritten rendering of every declaration that references it, hence their
+  check keys — and only theirs. A declaration that never mentions it is
+  untouched however far down the file it sits.
+
+For a `fn`, the body is in both, because a `fn` body is δ-relevant: a dependent
+whose conversion could unfold it must be re-checked. That is decision 1, and it
+is the only asymmetry.
+
+Fuel is deliberately **not** in the key. Success is monotone in fuel (fuel
+exhaustion is a failure, so a check that succeeded under some budget succeeded),
+so including it would cause misses without buying soundness.
+
+## 6. Trust: rung 1, and what that honestly means
+
+v1 is rung 1: an entry says "some run of this kernel accepted a declaration
+with this key", and a hit believes it. Two things follow, and both are stated
+here rather than discovered later.
+
+**The kernel-semantics fingerprint.** An entry is meaningful only against the
+kernel that produced it. v1's fingerprint is a SHA-256 over the *source text of
+`crates/kernel/src`*, computed by `crates/cache/build.rs` at build time and
+compiled in. It is deliberately conservative: a comment change in the kernel
+invalidates the cache. That is the right direction to err, and it makes
+"a changed kernel invalidates loudly" a property of the build rather than of
+someone remembering to bump a constant — which is the failure mode a
+hand-maintained epoch number has. A mismatch discards the entire file and says
+so.
+
+What it should become: a fingerprint of the kernel's *semantics* rather than
+its text — the conversion rules, the strip discipline, the layer table — so
+that a pure performance round does not invalidate a corpus of traces. That is
+the same distinction the issue's trace-format rule draws ("decisions, not
+steps"), and it is the same fingerprint; when rung 2 lands, both should read
+one value. Recorded, not built.
+
+**What is and is not detectable.** At rung 1:
+
+- *Detectable*: a stale kernel (fingerprint), a bad format version, a
+  truncated or bit-flipped file (a body checksum line), a malformed entry
+  (field count, hex shape). Any of these discards the whole file and forces a
+  full re-check, loudly.
+- *Not detectable*: a **forged** entry. Anyone who can write the cache file
+  can compute the key of a declaration with a bogus proof and insert it, and
+  can recompute the checksum while they are there. The checksum is integrity
+  against accident, not against an adversary. Rung 1's trusted base is
+  literally "the OS gave us a file nobody tampered with", exactly as `.olean`'s
+  is, and the honest statement is that `--cache` is for inner loops and the
+  unflagged `heather check` remains the gate.
+
+The negative-control test asserts the detectable half and *documents* the
+undetectable half rather than pretending to test it.
+
+## 7. Command surface
+
+**Decision: an opt-in flag on `heather check`, not a new subcommand.**
+
+`heather check [--cache] [--cache-dir <dir>] <file>…`
+
+- Without `--cache`: byte-identical to today. No reads, no writes, no output
+  change. This matters beyond conservatism — the merge/CI gate and
+  `scripts/bench-frontend` both drive plain `heather check`, and a cache that
+  changed their meaning would have changed what the benchmark measures.
+- With `--cache`: read and write `.heather/cache` (or `--cache-dir`). Hits skip
+  the gate; misses run it and are recorded.
+
+No `quickcheck` yet. The issue's eventual split is
+`quickcheck` / `check` / `build`, where `check` **re-earns** entries and only
+`quickcheck` trusts them. Shipping v1's trusting behavior *as* `heather check`
+would have to be renamed away the moment that split lands; shipping it as a
+flag means `heather check` keeps the meaning the split gives it, and `--cache`
+becomes `quickcheck`'s implementation rather than its rival. The flag is the
+smaller promise.
+
+**Trust is visible.** The Coq `vos` scar is the reason the output line changes
+whenever `--cache` is on, whether or not anything was cached:
+
+```
+lib/ir_v1.hthr: ok (cache) — 4 declarations kernel-checked, 130 accepted from cache
+```
+
+The bare `path: ok` is reserved for a full check and is unreachable under
+`--cache`, so no green line can be mistaken for a green *full* line, and a
+gate can grep for the absence of `(cache)`. A discarded cache says why:
+
+```
+cache: kernel semantics changed since these 134 entries were written — discarding
+```
+
+## 8. On-disk format
+
+`.heather/cache/entries-v1.tsv`, one repo-local directory, tab-separated,
+inspectable with `cat`, and versioned:
+
+```
+heather-cache	1
+kernel-semantics	<64 hex>
+checksum	<64 hex>
+ok	<64 hex check key>	<64 hex interface hash>	<name>
+…
+```
+
+Four decisions in that shape:
+
+- **Text, not binary.** The file is small (one line per declaration) and the
+  first question anyone asks of a cache is "what does it think it knows".
+  `grep` answering that is worth more than the bytes.
+- **A verdict column** (`ok`), not an implied one, so failures could be
+  recorded later without a format break.
+- **The name is trailing metadata**, per Unison: it is there for the human
+  reading the file and is never consulted. Two declarations with one key are
+  one entry whatever they are called.
+- **Extra fields are ignored by the reader.** That is the room rung 2 needs: a
+  trace lands as a fifth column (`ok <key> <iface> <name> trace:<path>`) read
+  by a version that understands it and skipped by one that does not. The
+  format does not have to change to make room; it already has the room.
+
+The checksum covers the entry body and is checked on load. Writing is
+whole-file, at the end of a successful run.
+
+## 9. One invariant the implementation added
+
+The cache holds a vector of interface hashes describing **one** Ψ, and the CLI
+builds a fresh elaborator — hence a fresh Ψ — per root file, while sharing one
+cache across all of them (so that a declaration two roots have in common is
+checked once). `Cache::begin_run` is what reconciles those: it clears the
+prefix and keeps the entries, which is exactly right, because entries are
+content-addressed and belong to no particular Ψ while the prefix is nothing
+but a view of one. `Inner::sync` additionally discards the prefix whenever Ψ is
+*shorter* than it, so a caller who forgets recomputes rather than hashes
+against referents that are not there.
+
+## 10. Where the remaining cost is
+
+The cache's own work is one `write_exact` rendering of every declaration, fed
+through the rewriting sink into SHA-256. On `lib/ir_v1.hthr` that is ~7 s: 15%
+on top of a cold check, and ~90% of a warm one. Two things it is *not*: it is
+not double work (§5 removed that) and it is not the hash (SHA-256 at these
+sizes is a fraction of it) — it is `std::fmt`, formatting tens of megabytes of
+tree through `Formatter` machinery to produce bytes nobody reads.
+
+The fix, when it is worth it, is a structural hash walker over `Term`/`Type`/
+`Level` that feeds the hasher without formatting. It was considered and
+declined for v1 (§3), and the reason to revisit is now a number rather than a
+preference: it would make the cold run's overhead approximately free and the
+warm run approximately elaboration-bound. It also brings the compiler-enforced
+totality an exhaustive `match` gives, which would retire §3.1's assumption
+outright. Recorded on the owning issue rather than done here.
+
+## 11. What v1 deliberately does not do
+
+Each of these is the issue's, not this document's, and none is started here:
+the daemon and the shared telescope, anything multi-session, merge semantics,
+`quickcheck`/`build` as commands, certificate replay and traces (format
+headroom only, §8), and any kernel change at all. The elaborator's only new
+surface is one trait and one setter (`crates/elab/src/gate.rs`), which is what
+"a minimal hook to expose per-declaration boundaries" was allowed to cost.
