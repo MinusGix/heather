@@ -30,14 +30,17 @@ consumers of the printed form still inherit the gap:
   term I have" that budget elision was designed to make impossible to
   mistake (elision at least prints `…`).
 
-Fix shape: extend the impl to print all fields (keeping the `node()`
+Fix shape — and the fix round should treat this as an **audit of every
+impl in `fmt.rs`**, not a one-struct patch: `Branches` was found by
+accident of the cache walker rewrite, and nothing establishes that
+`Motives` or the other multi-field impls are total. The day's lesson
+(2026-08-06, twice) is that stated assumptions pinned by canaries lose to
+exhaustiveness the compiler checks — so per impl: destructure with no
+`..` inside the impl where feasible, or add a mutate-every-field totality
+control. For `Branches` specifically: extend the impl to print all fields (keeping the `node()`
 budget discipline), then re-run the determinism suite and update
 `NAT_SUITE_GOLDEN` deliberately iff it moves, with the move's reason
-recorded in the constant's comment. While there, consider a
-totality control so the gap cannot reopen: the cache round's
-mutate-every-field test shape works for the printed form too (mutate each
-field, demand the exact rendering changes), or a compile-shaped guard via
-a no-`..` destructure inside the impl.
+recorded in the constant's comment. 
 
 ## When
 
