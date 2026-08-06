@@ -130,3 +130,4 @@ but a reason not to let syntax-keying spread casually.
   that makes such a change visible, which is the most that is wanted before
   [[certifying-generator]] leans on syntax keying. Only the Nat suite is
   hashed; extending the golden set is cheap when there is a reason.
+- 2026-08-06: A blind spot in deliverable 2's instrument, found by the cache-hardening round: kernel `Debug` for `Branches` prints 37/52 fields and `write_exact` inherits that, so the golden hash cannot see changes confined to the unprinted branches (the in-process equality test is unaffected — derived `PartialEq` sees everything). Filed as [[branches-debug-partial]]; the issue stays closed, the instrument gap has its own owner.
