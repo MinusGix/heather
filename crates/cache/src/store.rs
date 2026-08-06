@@ -29,11 +29,25 @@ use std::path::{Path, PathBuf};
 use crate::merkle::Hash;
 use crate::sha256::{hex, unhex};
 
-/// The format version. Bumped when the *file* shape changes; the kernel
-/// fingerprint below covers changes to what the entries mean.
-pub const FORMAT: &str = "1";
+/// The format version. Bumped when the *file* shape changes **or when the
+/// keys in it stop meaning what they meant** — the kernel fingerprint covers
+/// only a changed kernel, and the hashing scheme is ours, not the kernel's.
+///
+/// `2`: the structural hash walker replaced the rendering-and-rewrite path
+/// (`docs/cache-v1-design.md` §12). Every key moved, so every v1 entry is a
+/// lie about a declaration it no longer describes. The two would in fact never
+/// collide — the domain strings bumped with them — but a silently unmatchable
+/// entry is a cache that quietly does nothing, and the version line makes it
+/// say so instead.
+pub const FORMAT: &str = "2";
 
 /// The file within the cache directory.
+///
+/// **Deliberately not renamed with the format bump.** A new filename would
+/// leave the old file sitting unread and the run would look like a first run;
+/// keeping the path is what routes a stale file through `parse` and turns the
+/// bump into the message "the cache file is format 1, this build writes 2".
+/// The version lives in the header, and the `v1` in the name is a fossil.
 pub const FILE: &str = "entries-v1.tsv";
 
 /// One recorded verdict. Keyed by check key; the rest is metadata.

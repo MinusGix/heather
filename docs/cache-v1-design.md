@@ -28,6 +28,12 @@ The warm number is the round's headline and the cold one is its price: v1 buys
 a 6× inner loop by making the first run 15% slower. §10 says where that 15%
 goes and what would remove it.
 
+**Since 2026-08-06 the table above is history.** The structural hash walker of
+§12 replaced the rendering these numbers were taken over: the warm run is now
+**2.2 s** and the cold overhead is single-digit percent and near the noise
+floor, measured paired against this same binary. §12.4 has the current figures,
+and §3 is marked superseded.
+
 ## 1. What is cached, and what a cache hit still pays
 
 The unit is the **kernel gate**: the `typing::check_type` + `typing::check_term`
@@ -51,9 +57,10 @@ So the honest claim is "a warm run pays parse, elaborate, and its own hashing,
 and nothing else". It is not a no-op re-check and must never be described as
 one. On `lib/ir_v1.hthr` that is 7.5 s against a 46.3 s check, of which
 elaboration is about 1 s and the hashing is the rest — the cache's own cost is
-now the larger half of a warm run, which is where the next round of work on
-this is (§10). A cache that also skipped elaboration would be a different,
-larger design (it would have to serialize Ψ), and it is not this round.
+the larger half of a warm run, which is where the next round of work on this
+went (§10, spent in §12: 2.2 s, still ~57% hashing). A cache that also skipped
+elaboration would be a different, larger design (it would have to serialize Ψ),
+and it is not this round.
 
 *Assumption named*: that the elaborator's own kernel calls are not themselves
 worth caching. True today at a 94/6 split; the issue's own caveat says that
@@ -87,6 +94,20 @@ implementation is pinned against the NIST vectors plus a long-message vector
 (`crates/cache/tests/sha256.rs`), which is a stronger guarantee than "we
 depend on a crate that is probably right".
 
+*Strengthened 2026-08-06.* "Pinned against the published vectors" was the weak
+form of that claim — four short messages and one long one leave every length
+that is not 0, 3, 56, 112 or a million untested, and most of SHA-256's
+interesting behaviour is in the padding. The same file now runs `sha2` as a
+**differential oracle**: a dev-dependency of this crate alone, never linked
+into anything shipped, asserting byte-identical digests over every length
+0..=300 with two contents each, multi-block inputs to 1 MiB, and six
+adversarial chunkings including byte-at-a-time around empty updates. No
+divergence was found. The dependency does not weaken the argument above — it
+is adopted precisely *because* the implementation is ours, and
+`issues/dependency-policy.md`'s log records it as the general rule that a
+first-party implementation of a frozen specification should be differentially
+tested against a mainstream one.
+
 *Assumption named*: SHA-256's collision resistance. If that falls, so does
 every content-addressed build system; we are not distinguished here.
 
@@ -95,6 +116,13 @@ decides one module, for the reason that the module is trust-bearing. A later
 consumer above the kernel with no trust story should still spend freely.
 
 ## 3. The rendering hashed, and the Merkle substitution
+
+> **Superseded 2026-08-06 by §12.** This section records what v1 decided and
+> why, and the reasoning is left standing because §12 is best read as the
+> answer to it. But the code it describes is gone: the rewriting sink was
+> deleted with the structural walker, and neither the printed-form assumption
+> below nor the three canaries that pinned it exist any more. Read §3 as
+> history; read §12 for what the cache does.
 
 **Decision: `heather_kernel::fmt::write_exact` streamed through a rewriting
 sink**, not a hand-written serializer.
@@ -211,18 +239,22 @@ of `GlobalCtx` (`crates/kernel/src/term.rs`).
 Each binding gets an **interface hash**; each gate call gets a **check key**.
 
 ```
-interface(i) = SHA-256( "heather/iface/1\0" ++ rewrite(render(bindings[i])) )
+interface(i) = SHA-256( "heather/iface/2\0" ++ walk(bindings[i]) )
 
-check_key    = SHA-256( "heather/check/1\0" ++ hex(interface) ++ "|def" )
+check_key    = SHA-256( "heather/check/2\0" ++ interface ++ 0x1c )
                                                         -- a transparent decl
-check_key    = SHA-256( "heather/check/1\0" ++ hex(interface) ++ "|proof:"
-                                            ++ rewrite(render(proof term)) )
+check_key    = SHA-256( "heather/check/2\0" ++ interface ++ 0x1d
+                                            ++ walk(proof term) )
                                                         -- a theorem
 ```
 
-where `rewrite` is §3's substitution against the already-computed interface
-hashes of the prefix, and the domain-separating prefixes keep the two hash
-families from ever being confused for one another.
+where `walk` is §12's framed byte encoding, substituting referent interface
+hashes for global references against the already-computed prefix, and the
+domain-separating prefixes keep the two hash families from ever being confused
+for one another. (In v1 `walk` was `rewrite(render(…))`, the domains ended
+`/1`, and the two check-key shapes were spelled `"|def"` and `"|proof:"`; the
+*structure* of this section is unchanged, which is the point — §12 replaced
+the encoding and nothing else.)
 
 A transparent declaration's key is its interface hash and nothing more,
 because a `fn`'s body is *in* its interface — so only a theorem is rendered
@@ -371,7 +403,7 @@ but a view of one. `Inner::sync` additionally discards the prefix whenever Ψ is
 *shorter* than it, so a caller who forgets recomputes rather than hashes
 against referents that are not there.
 
-## 10. Where the remaining cost is
+## 10. Where the remaining cost is *(as of v1; §12 spent it)*
 
 The cache's own work is one `write_exact` rendering of every declaration, fed
 through the rewriting sink into SHA-256. On `lib/ir_v1.hthr` that is ~7 s: 15%
@@ -396,3 +428,122 @@ the daemon and the shared telescope, anything multi-session, merge semantics,
 headroom only, §8), and any kernel change at all. The elaborator's only new
 surface is one trait and one setter (`crates/elab/src/gate.rs`), which is what
 "a minimal hook to expose per-declaration boundaries" was allowed to cost.
+
+## 12. The structural hash walker (2026-08-06), and what it retired
+
+§10 named the successor slice and it landed the same day. `crates/cache/src/
+merkle.rs` is now an exhaustive walk over `Term`/`Type`/`Level`/`LocalCtx`/
+`LocalSubst`/`Motives`/`Branches`/`GlobalBinding`, feeding tags and fields
+straight into SHA-256. The rewriting sink, `rewritten_text`, and the three
+canaries that pinned §3.1's printed-form assumption are **deleted**: two
+definitions of cache identity is the disagreement risk v1 avoided by reusing
+`write_exact` in the first place, so the choice is one or the other, not both.
+`heather_kernel::fmt::write_exact` stays — `issues/elaboration-determinism.md`'s
+golden hash is taken over it and nothing in this round touches elaboration.
+
+### 12.1 Framing, and the injectivity argument
+
+Four kinds of piece: a one-byte **tag** unique across *all* node kinds of all
+sorts (the value space is partitioned — `0x01–0x1F` the structural sorts,
+`0x20–0x3F` `Type`, `0x40–0x7F` `Term` — not reused per sort); a fixed-width
+**`u32`** little-endian for indices, binder counts and sequence lengths; a
+32-byte **referent hash**; and a **sub-encoding**, recursively. Sequences are
+length-prefixed. Nothing else is variable-length.
+
+The encoding is prefix-free, hence injective, by induction on the tree: the
+leading tag determines the node kind, the node kind determines exactly what
+follows (how many fixed-width integers, how many sub-encodings of which sorts,
+with any repetition count read from a length field that precedes it), so a
+decoder can be written that consumes exactly the bytes one node occupies. A
+function with a left inverse is injective.
+
+That is strictly **stronger than what v1 claimed**. §3.2 explicitly did *not*
+claim `write_exact` was injective; it inherited "injective enough for hashing"
+from the golden-hash test. The gap was real and this round found it:
+`fmt`'s `Debug` for `Branches` prints **37 of the struct's 52 fields**. Every
+`Vec`/`Fin`/`Wf` branch and every strict-equality branch is absent, so under v1
+two code recursors differing only in (say) `tm_elim_wf` had **the same cache
+identity** — a hash collision by construction, not by luck. Nothing in `lib/`
+exercises it today, which is exactly the point: a stated assumption pinned by
+canaries was the wrong instrument for a totality property, and an exhaustive
+`match` is the right one. `tests/merkle.rs::every_recursor_branch_is_hashed`
+now walks all 52 fields one at a time and demands 52 distinct hashes.
+
+*The exhaustiveness is the deliverable.* Every `match` in the walker has no
+`_` arm and every struct is destructured with no `..`, so a new kernel
+constructor or a new `Branches` field is a **compile error** in the cache, not
+a silently unhashed field. §3.1's assumption is not weakened, restated or
+better tested — it no longer exists.
+
+### 12.2 The substitution sites
+
+The Merkle substitution is now keyed on constructors rather than on spellings.
+`GlobalVar` occurs at exactly five places in `crates/kernel/src/term.rs`, and
+the walker replaces the index with the referent's 32-byte interface hash at
+each: `Term::GlobalTm`, `Type::GlobalTy`, `CtxBase::Var` (a context's base),
+`SubstTail::Wk`, and `SubstTail::Empty`'s `base` (through `CtxBase`). The last
+two were reached in v1 only because they happened to print `g<digits>`.
+
+The replacement is fixed-width, so framing is untouched, and it drops the
+*position*, which is the property the scheme exists for. Fail-closed is
+unchanged and still needed: an unresolvable or **poisoned** reference (a
+binding whose own hash failed) discards the whole computation, and the
+declaration is re-checked rather than mis-keyed.
+
+### 12.3 The format bump, and why the domain strings bumped too
+
+`store::FORMAT` is **2**. `store::FILE` deliberately is *not* renamed: a new
+filename would leave a v1 file unread and the run would look like a first run,
+whereas keeping the path routes the stale file through `parse` and produces
+`cache: the cache file is format 1, this build writes 2 — discarding`. Loud
+beats tidy; the version lives in the header and the `v1` in the filename is a
+fossil.
+
+The domain strings bumped with it (`heather/iface/2\0`, `heather/check/2\0`)
+even though the format version already invalidates every stored entry. The
+reason is that the domain string names the **scheme**, not just the family:
+v1's preimage was a rewritten rendering and v2's is a framed byte stream, and a
+domain that did not move would leave "a v1 key equals a v2 key" as an
+arithmetic accident rather than an impossibility. The two costs nothing and
+the argument for content addressing is that identity is decided by
+construction.
+
+### 12.4 Numbers
+
+Interleaved A/B through the two release binaries, min-of-3 alternating so
+machine drift hits both equally, 2026-08-06 — *under a concurrent Coq build*,
+so the absolute numbers run ~10% above §0's and only the paired ratios mean
+anything:
+
+| run | v1 (rendering) | v2 (walker) |
+|---|---|---|
+| `heather check`, unflagged | 49.2 s | 48.1 s |
+| `heather check --cache`, cold | 57.2 s (**+16.3%**) | 51.4 s (**+6.8%**) |
+| `heather check --cache`, warm | 7.9 s | **2.2 s** |
+
+The warm run is **3.6× faster** and the cold overhead is more than halved. The
+warm figure is the one to read: against the frontend baseline's 0.93 s of
+parse + elaboration for this file (`crates/elab/benches/baseline.tsv`), the
+cache's own work fell from ~7.0 s to ~1.25 s — a **5.6×** on the thing §10
+said was `std::fmt` rather than SHA-256, which is now confirmed rather than
+inferred.
+
+**What the warm run is bound by now**: roughly 0.93 s elaboration (43%) and
+~1.25 s walking-and-hashing (57%). So "approximately elaboration-bound" is the
+right order of magnitude but not yet true — the walk is still the larger half,
+where it was ~90% before. The remaining walk cost is real work (it visits
+every node of every declaration and feeds SHA-256 tens of megabytes), so the
+next lever is not a faster encoder but *not walking unchanged declarations*:
+memoizing per-`Rc` subtree hashes, or a cache that skips elaboration too,
+which §1 already notes is a larger design.
+
+The cold overhead deserves one honest caveat: 6.8% is an upper bound taken
+while the machine was busiest. A tighter paired loop later the same session
+(v2 only, `plain`/`cold` alternating, five iterations, load falling) gave
+**44.07 s plain vs 46.14 s cold — +4.7%**, with individual pairs ranging from
++0.3% to a run where the cold one came in *faster* than the plain. That is
+consistent with the ~1.25 s the warm run implies (~2.8%) sitting inside the
+measurement noise of a 45-second workload. So: cold overhead is now
+**single-digit percent and near the noise floor**, against v1's reproducible
++16%. "Approximately free" is the right description; a number with two
+significant figures is not available on this machine today.

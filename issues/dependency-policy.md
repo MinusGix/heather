@@ -3,13 +3,20 @@ title: "Dependency policy: kernel at zero, crates above it"
 status: open
 labels: [meta, kernel, tooling]
 created: 2026-07-24
-updated: 2026-07-30
+updated: 2026-08-06
 ---
 
 The tree is currently dependency-free: `Cargo.lock` has exactly the four
 workspace crates. That happened by default rather than by decision; this
 issue makes it a decision, because the two halves of the tree want opposite
 answers.
+
+*(As of 2026-08-06 that first sentence is history: `Cargo.lock` carries `sha2`
+plus nine transitive crates — `digest`, `block-buffer`, `crypto-common`,
+`generic-array`, `typenum`, `cpufeatures`, `libc`, `cfg-if`, `version_check` —
+as a **dev**-dependency of `crates/cache`. See the log. The shipped graph is
+still the workspace alone, and the kernel is still at zero including
+dev-dependencies.)*
 
 ## The kernel stays at zero
 
@@ -85,4 +92,5 @@ conversion cache, which is a kernel design change we would write ourselves
 
 ## Log
 
+- 2026-08-06: **First dependency in the tree, and it is a dev-dependency: `sha2`, in `crates/cache` only.** `Cargo.lock` is no longer just the workspace crates (it gains `sha2` and nine transitive crates; the RustCrypto stack is not small, which is worth noticing even for a dev-dep). The case is the mirror image of the one that made `crates/cache`'s SHA-256 first-party (`docs/cache-v1-design.md` §2): that argument says a trust-bearing hash must be ours, and it is exactly *because* it is ours that "probably correct" is not good enough. `sha2` is therefore adopted as an **oracle to disagree with us**, never as an implementation — `crates/cache/tests/sha256.rs` asserts byte-identical digests over every length 0..=300, multi-block inputs to 1 MiB, and six adversarial chunkings, which is a stronger criterion than the five published vectors it joins. Shipped code links nothing; `cargo build -p heather-cache` still resolves to the workspace alone. The general rule this instances: *a first-party implementation of a frozen specification should be differentially tested against a mainstream one, and a dev-dependency is the cheap way to do it* — the same shape as the fresh-vs-replay oracle in [[parallel-checking-and-caching]]. It does **not** loosen the kernel's zero (dev-dependencies included, per `docs/benchmarking.md`); the kernel has no frozen-spec module to test this way. No divergence was found on adoption.
 - 2026-07-30: [[cli-check-diagnostics]] landed *without* the diagnostics-rendering dep: a single-span caret line is ~15 lines of std (`snippet` in crates/elab/src/lib.rs), so the renderer question stays open until something needs multi-label reports (the goal listing kept its listing shape instead). The candidate list stands as options, not commitments; `render_snippet` is now the thing a renderer dep would replace.

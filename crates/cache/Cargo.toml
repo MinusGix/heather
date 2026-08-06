@@ -8,13 +8,23 @@ build = "build.rs"
 [lib]
 name = "heather_cache"
 
-# Zero dependencies, dev-dependencies included — for this crate the reason is
-# not the workspace default but a trust argument of its own: believing a cache
-# entry is believing its hash, so the hash is first-party
-# (docs/cache-v1-design.md §2, issues/dependency-policy.md).
+# Zero SHIPPED dependencies — for this crate the reason is not the workspace
+# default but a trust argument of its own: believing a cache entry is believing
+# its hash, so the hash is first-party (docs/cache-v1-design.md §2,
+# issues/dependency-policy.md).
 [dependencies]
 heather-kernel = { path = "../kernel" }
 heather-elab = { path = "../elab" }
+
+# `sha2` is a DEV-dependency and exists for exactly one reason: to disagree
+# with us. `tests/sha256.rs` runs our SHA-256 against it differentially over
+# every length through the padding boundaries, multi-block inputs, and
+# adversarial chunkings. Depending on it would give away the trust argument
+# above; *testing against* it strengthens it — "pinned to the published
+# vectors" becomes "byte-identical to an independent implementation on
+# thousands of inputs the vectors do not cover". Nothing shipped links it.
+[dev-dependencies]
+sha2 = "0.10"
 
 [lints]
 workspace = true

@@ -17,7 +17,7 @@
 
 use std::rc::Rc;
 
-use heather_cache::store::{Rejected, Store};
+use heather_cache::store::{FORMAT, Rejected, Store};
 use heather_cache::{Cache, KERNEL_SEMANTICS};
 use heather_elab::Elaborator;
 
@@ -223,7 +223,10 @@ fn the_file_round_trips() {
     cache.save().expect("write");
 
     let text = std::fs::read_to_string(Store::path(&dir)).expect("read back");
-    assert!(text.starts_with("heather-cache\t1\n"), "versioned header: {text:.40}");
+    assert!(
+        text.starts_with(&format!("heather-cache\t{FORMAT}\n")),
+        "versioned header: {text:.40}"
+    );
     assert!(text.contains(KERNEL_SEMANTICS), "the fingerprint is in the header");
     assert!(text.contains("\thelper\n"), "names are there for the human reading it");
 
@@ -317,7 +320,20 @@ fn a_corrupted_cache_is_rejected_and_not_half_read() {
             lines.join("\n") + "\n"
         }),
         ("a missing header", good.lines().skip(1).collect::<Vec<_>>().join("\n")),
-        ("a future format version", good.replacen("heather-cache\t1", "heather-cache\t2", 1)),
+        // Both directions of a version mismatch. The *older* one is what a
+        // format bump actually meets in the field — a v1 file left in
+        // `.heather/cache` by the previous build — and it must be reported and
+        // discarded, never partially believed (`store::FILE` deliberately does
+        // not change with the version, so the stale file is *read* and
+        // rejected rather than orphaned and silently ignored).
+        (
+            "a past format version",
+            good.replacen(&format!("heather-cache\t{FORMAT}"), "heather-cache\t1", 1),
+        ),
+        (
+            "a future format version",
+            good.replacen(&format!("heather-cache\t{FORMAT}"), "heather-cache\t9999", 1),
+        ),
     ];
 
     for (what, text) in mutations {
