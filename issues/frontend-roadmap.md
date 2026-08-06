@@ -112,6 +112,13 @@ tier-1 lowering as it stands?) **is** scheduled, as an unordered side round —
 a reading exercise, and if the answer is "missing kernel features," that is a
 metatheory round to know about before the IR stack sits on top.
 
+Also direction, not scheduled: [[parallel-checking-and-caching]] — many
+concurrent sessions over one shared telescope, a content-addressed
+declaration cache, and the quickcheck/check/build split; certificate replay
+is the agreed trust direction. Its spine starts at
+[[elaboration-determinism]] and pays off single-session from the first
+stage.
+
 Cheap and separable, pick up any time: the postponement slice of
 [[elab-unifier-completeness]], [[annotated-let-swallows-the-equals]],
 [[warn-bare-eq-no-effect]], [[split-on-arms]], [[named-arguments]],

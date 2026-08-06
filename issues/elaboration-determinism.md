@@ -3,7 +3,7 @@ title: Elaboration determinism as an enforced guarantee
 status: open
 labels: [frontend, elaboration, testing, metaprogramming]
 created: 2026-07-24
-updated: 2026-07-24
+updated: 2026-08-06
 ---
 
 For most compilers, deterministic output is hygiene. For Heather it is a
@@ -65,3 +65,7 @@ pattern-matched on generated code. Worth knowing this is coming before
 that certified generators prove things about the code they *see*, not about
 code the elaborator promised to keep producing. Not a problem to solve now,
 but a reason not to let syntax-keying spread casually.
+
+## Log
+
+- 2026-08-06: A second consumer filed: [[parallel-checking-and-caching]] (2026-08-06) keys its whole content-addressed cache DAG on elaborated-output hashes, so this guarantee is now the hard prerequisite for parallel checking, not only for .code instance keying.
