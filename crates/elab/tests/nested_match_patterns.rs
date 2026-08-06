@@ -30,7 +30,7 @@
 use heather_elab::{ElabError, Elaborator};
 use heather_kernel::conv::conv_term;
 use heather_kernel::layer::Layer;
-use heather_kernel::term::{CtxBase, GlobalBinding, LocalCtx, Term};
+use heather_kernel::term::{GlobalBinding, LocalCtx, Term};
 use heather_kernel::typing::DEFAULT_FUEL;
 
 /// Axis 6 × axis 2: three constructors and a type-parameter payload, plus a
@@ -102,7 +102,7 @@ fn last_body(e: &Elaborator) -> Term {
 }
 
 fn empty_ctx() -> LocalCtx {
-    LocalCtx { base: CtxBase::Nil, entries: vec![] }
+    LocalCtx::nil()
 }
 
 // ---------------------------------------------------------------------------

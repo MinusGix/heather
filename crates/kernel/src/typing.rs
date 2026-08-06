@@ -67,8 +67,8 @@ use crate::rec::{self, gtm, gty, inst_tm_motive, inst_ty_motive, shift_univ_psi}
 use crate::reduce::{whnf_type_delta, Defs};
 use crate::subst::{GlobalEntry, GlobalSubst};
 use crate::term::{
-    wf_step_telescope, CtxBase, CtxEntry, GlobalBinding, GlobalCtx, GlobalVar, LocalCtx,
-    LocalSubst, LocalVar, SubstTail, Term, Type,
+    wf_step_telescope, CtxBase, CtxEntries, CtxEntry, GlobalBinding, GlobalCtx, GlobalVar,
+    LocalCtx, LocalSubst, LocalVar, SubstTail, Term, Type,
 };
 
 /// A generous per-conversion fuel budget for callers without an opinion.
@@ -132,7 +132,7 @@ pub fn check_global_ctx(psi: &GlobalCtx, univs: u32, fuel: u64) -> R {
         let prefix = GlobalCtx::new(psi.bindings[..i].to_vec());
         let env = Env {
             psi: prefix,
-            gamma: LocalCtx { base: CtxBase::Nil, entries: vec![] },
+            gamma: LocalCtx::nil(),
             layer: Layer::Prog,
             univs,
         };
@@ -181,7 +181,7 @@ pub fn check_local_ctx(
 ) -> R {
     let env = Env {
         psi: psi.clone(),
-        gamma: LocalCtx { base: CtxBase::Nil, entries: vec![] },
+        gamma: LocalCtx::nil(),
         layer,
         univs,
     };
@@ -392,12 +392,16 @@ impl Tc {
                 None => return Err(TypeError::UnboundGlobalVar(g.0)),
             }
         }
-        for k in 0..gamma.entries.len() {
-            let prefix = LocalCtx { base: gamma.base, entries: gamma.entries[..k].to_vec() };
-            let e = env.in_ctx(prefix, layer);
-            let entry = &gamma.entries[k];
+        // Each entry is checked in the prefix it is scoped in. Grown as we
+        // go rather than re-derived per `k`: `Γ` is a spine, so taking the
+        // prefix of length `k` walks `|Γ| - k` cells and the loop would be
+        // quadratic in `|Γ|` for no reason.
+        let mut prefix = LocalCtx { base: gamma.base, entries: CtxEntries::empty() };
+        for entry in &gamma.entries {
+            let e = env.in_ctx(prefix.clone(), layer);
             self.level_wf(&e, &entry.level)?;
             self.ty_check(&e, &entry.ty, &entry.level)?;
+            prefix = prefix.extended(Rc::clone(&entry.ty), entry.level.clone());
         }
         Ok(())
     }
@@ -736,10 +740,9 @@ impl Tc {
         match t {
             // The two forms layer v admits.
             Term::Var(x) => {
-                let Some(i) = env.gamma.entries.len().checked_sub(1 + x.0 as usize) else {
+                let Some(e) = env.gamma.entries.nth_inner(x.0) else {
                     return Err(TypeError::UnboundLocalVar(x.0));
                 };
-                let e = &env.gamma.entries[i];
                 Ok((e.ty.shift_local(x.0 + 1), e.level.clone()))
             }
             Term::GlobalTm { var, subst } => {

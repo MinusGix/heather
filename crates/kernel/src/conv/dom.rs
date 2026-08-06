@@ -1164,10 +1164,9 @@ impl Dom for Syn {
 
     #[inline]
     fn var_type(_cv: &mut Conv<Self>, env: &Env, x: LocalVar) -> R<(Rc<Type>, Level)> {
-        let Some(i) = env.gamma.entries.len().checked_sub(1 + x.0 as usize) else {
+        let Some(e) = env.gamma.entries.nth_inner(x.0) else {
             return Err(NC);
         };
-        let e = &env.gamma.entries[i];
         Ok((Rc::new(e.ty.shift_local(x.0 + 1)), e.level.clone()))
     }
 

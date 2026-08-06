@@ -109,8 +109,8 @@ use std::rc::Rc;
 use crate::bounds;
 use crate::level::Level;
 use crate::term::{
-    Branches, CtxBase, CtxEntry, GlobalVar, LocalCtx, LocalSubst, LocalVar, Motives, SubstTail,
-    Term, Type,
+    Branches, CtxBase, CtxEntries, CtxEntry, GlobalVar, LocalCtx, LocalSubst, LocalVar, Motives,
+    SubstTail, Term, Type,
 };
 
 /// Binder depths for the three namespaces at the current traversal point.
@@ -223,8 +223,8 @@ trait Mapper {
     }
     /// Base of a local context; the returned entries are spliced in front of
     /// the context's own (used by σ replacing `g` with a concrete context).
-    fn ctx_base(&mut self, base: CtxBase, _at: Depths) -> (CtxBase, Vec<CtxEntry>) {
-        (base, Vec::new())
+    fn ctx_base(&mut self, base: CtxBase, _at: Depths) -> (CtxBase, CtxEntries) {
+        (base, CtxEntries::empty())
     }
     /// Tail of a local substitution; the returned terms are spliced in front
     /// of the substitution's own (used by σ expanding `wk^k_g`).
@@ -963,12 +963,12 @@ impl Mapper for ShiftGlobal {
         Term::GlobalTm { var: self.var(var, at), subst }
     }
 
-    fn ctx_base(&mut self, base: CtxBase, at: Depths) -> (CtxBase, Vec<CtxEntry>) {
+    fn ctx_base(&mut self, base: CtxBase, at: Depths) -> (CtxBase, CtxEntries) {
         let b = match base {
             CtxBase::Nil => CtxBase::Nil,
             CtxBase::Var(g) => CtxBase::Var(self.var(g, at)),
         };
-        (b, Vec::new())
+        (b, CtxEntries::empty())
     }
 
     fn tail(&mut self, tail: SubstTail, at: Depths) -> (SubstTail, Vec<Rc<Term>>) {
@@ -1235,14 +1235,14 @@ impl Mapper for SubstGlobal<'_> {
         }
     }
 
-    fn ctx_base(&mut self, base: CtxBase, at: Depths) -> (CtxBase, Vec<CtxEntry>) {
+    fn ctx_base(&mut self, base: CtxBase, at: Depths) -> (CtxBase, CtxEntries) {
         match base {
-            CtxBase::Nil => (CtxBase::Nil, Vec::new()),
+            CtxBase::Nil => (CtxBase::Nil, CtxEntries::empty()),
             CtxBase::Var(g) => match self.resolve(g, at) {
-                Resolved::Bound => (CtxBase::Var(g), Vec::new()),
+                Resolved::Bound => (CtxBase::Var(g), CtxEntries::empty()),
                 Resolved::Renumber(v) => {
                     self.note();
-                    (CtxBase::Var(v), Vec::new())
+                    (CtxBase::Var(v), CtxEntries::empty())
                 }
                 Resolved::Payload(GlobalEntry::Ctx(c)) => {
                     self.note();
@@ -1491,7 +1491,7 @@ mod tests {
     }
 
     fn nil_ctx(n: u32) -> LocalCtx {
-        LocalCtx { base: CtxBase::Nil, entries: (0..n).map(|_| nat_entry()).collect() }
+        LocalCtx::from_vec(CtxBase::Nil, (0..n).map(|_| nat_entry()).collect())
     }
 
     #[test]
@@ -1570,7 +1570,7 @@ mod tests {
         let bound = Type::CtxPi {
             level: Level::Zero,
             body: Rc::new(Type::CodeTy {
-                ctx: LocalCtx { base: CtxBase::Var(GlobalVar(0)), entries: vec![] },
+                ctx: LocalCtx::ctx_var(GlobalVar(0)),
                 level: Level::Zero,
             }),
         };
@@ -1579,7 +1579,7 @@ mod tests {
         let free = Type::CtxPi {
             level: Level::Zero,
             body: Rc::new(Type::CodeTy {
-                ctx: LocalCtx { base: CtxBase::Var(GlobalVar(1)), entries: vec![] },
+                ctx: LocalCtx::ctx_var(GlobalVar(1)),
                 level: Level::Zero,
             }),
         };

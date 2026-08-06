@@ -67,11 +67,11 @@ fn v(i: u32) -> Term {
 }
 
 fn nil_ctx() -> LocalCtx {
-    LocalCtx { base: CtxBase::Nil, entries: vec![] }
+    LocalCtx::nil()
 }
 
 fn g_ctx(i: u32) -> LocalCtx {
-    LocalCtx { base: CtxBase::Var(GlobalVar(i)), entries: vec![] }
+    LocalCtx::ctx_var(GlobalVar(i))
 }
 
 fn ext(base: &LocalCtx, ty: Type, level: Level) -> LocalCtx {
@@ -220,7 +220,7 @@ pub fn gen_wt_ctx(env: &WtEnv, r: &mut Rng, b: u32, layer: Layer) -> LocalCtx {
     } else {
         CtxBase::Nil
     };
-    let mut ctx = LocalCtx { base, entries: vec![] };
+    let mut ctx = LocalCtx { base, entries: Default::default() };
     for _ in 0..r.below(3) {
         let e_env = env.in_ctx(ctx.clone(), layer);
         let (ty, level) = gen_wt_type(&e_env, r, b / 2);

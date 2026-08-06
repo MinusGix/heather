@@ -105,7 +105,7 @@ fn v(i: u32) -> Term {
 }
 
 fn nil_ctx() -> LocalCtx {
-    LocalCtx { base: CtxBase::Nil, entries: vec![] }
+    LocalCtx::nil()
 }
 
 fn ext(gamma: &LocalCtx, ty: Type, level: Level) -> LocalCtx {
@@ -127,7 +127,7 @@ fn nat(n: u64) -> Term {
 fn scope(n: u32) -> LocalCtx {
     LocalCtx {
         base: CtxBase::Nil,
-        entries: (0..n).map(|_| CtxEntry { ty: rty(Type::Nat), level: c(0) }).collect(),
+        entries: ((0..n).map(|_| CtxEntry { ty: rty(Type::Nat), level: c(0) }).collect::<Vec<_>>()).into(),
     }
 }
 

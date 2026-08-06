@@ -52,7 +52,7 @@ use crate::level::Level;
 use crate::reduce::{beta_elim_ty, beta_elim_tm, step_type_delta, Defs, OutOfFuel, Rec};
 use crate::subst::{GlobalEntry, GlobalSubst};
 use crate::term::{
-    nth, CtxBase, CtxEntry, GlobalVar, LocalCtx, LocalSubst, LocalVar, Term, Type,
+    nth, CtxBase, CtxEntries, CtxEntry, GlobalVar, LocalCtx, LocalSubst, LocalVar, Term, Type,
 };
 use crate::value::{
     Elim, Env, Head, Lookup, TmClo, TyClo, VNeTy, VNeutral, VSubst, VTail, VTy, Val,
@@ -165,10 +165,10 @@ impl<'a> Eval<'a> {
     fn scope(&self, env: &Env) -> LocalCtx {
         LocalCtx {
             base: self.base,
-            entries: vec![
-                CtxEntry { ty: Rc::new(Type::Nat), level: Level::Zero };
-                env.len() as usize
-            ],
+            entries: CtxEntries::repeat(
+                CtxEntry { ty: Rc::new(Type::Nat), level: Level::Zero },
+                env.len() as usize,
+            ),
         }
     }
 

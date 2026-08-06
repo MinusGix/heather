@@ -273,10 +273,7 @@ impl IdxArmEnv {
     /// — and `fn`s inlined, so no global reference carried a `·^k` tail for
     /// it to get wrong (issues/simulate-conversion-cost.md).
     fn mot_at(&self, gamma: &LocalCtx, h: Term, z: Term, extra: u32) -> Type {
-        let base = LocalCtx {
-            base: gamma.base,
-            entries: gamma.entries[..self.gamma_len].to_vec(),
-        };
+        let base = gamma.prefix(self.gamma_len);
         self.motive.apply_local(
             &crate::embed(&base, extra).extended(Rc::new(h)).extended(Rc::new(z)),
         )

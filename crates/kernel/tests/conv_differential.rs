@@ -244,7 +244,7 @@ fn stream3_open_terms_and_contexts() {
         // two-part variable identity is about.
         for k in 0..env.gamma.entries.len() {
             let prefix =
-                LocalCtx { base: env.gamma.base, entries: env.gamma.entries[..k].to_vec() };
+                env.gamma.prefix(k);
             let ety = Rc::clone(&env.gamma.entries[k].ty);
             let lvl = env.gamma.entries[k].level.clone();
             check_ty(seed, "Γ entry", &env.psi, &prefix, env.layer, &ety, &ety, &lvl);
@@ -374,7 +374,7 @@ fn stream4_code_recursors() {
 fn defs_psi(body: Rc<Term>) -> (GlobalCtx, LocalCtx) {
     let delta = LocalCtx {
         base: CtxBase::Nil,
-        entries: vec![CtxEntry { ty: Rc::new(Type::Nat), level: Level::Zero }],
+        entries: (vec![CtxEntry { ty: Rc::new(Type::Nat), level: Level::Zero }]).into(),
     };
     let psi = GlobalCtx::new(vec![GlobalBinding::defined_tm(
         delta.clone(),
@@ -420,7 +420,7 @@ fn stream5_definitions_and_delta() {
         let mut r = Rng::new(seed ^ 0xff51afd7ed558ccd);
         let delta = LocalCtx {
             base: CtxBase::Nil,
-            entries: vec![CtxEntry { ty: Rc::new(Type::Nat), level: Level::Zero }],
+            entries: (vec![CtxEntry { ty: Rc::new(Type::Nat), level: Level::Zero }]).into(),
         };
         let base_env = gen_wt_env(&mut r);
         let benv = base_env.in_ctx(delta.clone(), Layer::Prog);
@@ -429,7 +429,7 @@ fn stream5_definitions_and_delta() {
         let (psi, _) = defs_psi(body);
         let gamma = LocalCtx {
             base: CtxBase::Nil,
-            entries: vec![CtxEntry { ty: Rc::new(Type::Nat), level: Level::Zero }],
+            entries: (vec![CtxEntry { ty: Rc::new(Type::Nat), level: Level::Zero }]).into(),
         };
         let payloads = [
             numeral((seed % 4) as u32),

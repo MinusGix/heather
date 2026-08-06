@@ -53,12 +53,12 @@ fn v(i: u32) -> Term {
 }
 
 fn nil_ctx() -> LocalCtx {
-    LocalCtx { base: CtxBase::Nil, entries: vec![] }
+    LocalCtx::nil()
 }
 
 /// The context consisting of the context variable at index `i`.
 fn g_ctx(i: u32) -> LocalCtx {
-    LocalCtx { base: CtxBase::Var(GlobalVar(i)), entries: vec![] }
+    LocalCtx::ctx_var(GlobalVar(i))
 }
 
 /// `Δ, x : ty @ level`.

@@ -69,7 +69,7 @@ use crate::level::Level;
 use crate::rec::{self, gtm, gty, shift_univ_psi};
 use crate::reduce::{BodyCache, Defs};
 use crate::term::{
-    Branches, CtxBase, CtxEntry, GlobalBinding, GlobalCtx, GlobalVar, LocalCtx, LocalVar,
+    Branches, CtxEntries, CtxEntry, GlobalBinding, GlobalCtx, GlobalVar, LocalCtx, LocalVar,
     Motives, Term, Type,
 };
 use crate::value::{self, shift::Outer, TmClo, TyClo};
@@ -158,7 +158,7 @@ pub fn conv_local_ctx(
     fuel: u64,
 ) -> R {
     debug_assert!(layer.computes(), "convertibility is only invoked at computing layers");
-    let env = Env::new(psi, &LocalCtx { base: CtxBase::Nil, entries: vec![] }, layer);
+    let env = Env::new(psi, &LocalCtx::nil(), layer);
     Conv::<Values>::new(fuel, psi).ctx(&env, layer, a, b)
 }
 
@@ -220,7 +220,7 @@ pub mod oracle {
         fuel: u64,
     ) -> R {
         debug_assert!(layer.computes(), "convertibility is only invoked at computing layers");
-        let env = Env::new(psi, &LocalCtx { base: CtxBase::Nil, entries: vec![] }, layer);
+        let env = Env::new(psi, &LocalCtx::nil(), layer);
         Conv::<Syn>::new(fuel, psi).ctx(&env, layer, a, b)
     }
 }
@@ -253,6 +253,11 @@ struct Env {
     /// Shared with every scope that shares the Ψ and rebuilt by the one
     /// operation that does not — `push_tele`.
     bodies: Rc<BodyCache>,
+    /// Shared, not copied: a binder push clones the whole scope, and
+    /// [`crate::term::CtxEntries`] is a spine, so extending Γ costs one cell
+    /// and cloning this field costs a refcount bump. It was a `Vec`, and
+    /// copying it per push was the #1 self line of a release
+    /// `lib/ir_v1.hthr` check (issues/context-representation-clones.md).
     gamma: LocalCtx,
     layer: Layer,
     /// The local environment of the value domain: entry `j` from the outer
@@ -872,15 +877,18 @@ impl<D: Dom> Conv<D> {
         if a.base != b.base || a.entries.len() != b.entries.len() {
             return Err(NC);
         }
-        for (k, (ea, eb)) in a.entries.iter().zip(&b.entries).enumerate() {
-            let prefix = LocalCtx { base: a.base, entries: a.entries[..k].to_vec() };
-            let e = env.in_ctx(prefix, layer);
+        // The left prefix, grown as we go — see `Tc::ctx_wf` on why this is
+        // not `a.prefix(k)` per entry.
+        let mut prefix = LocalCtx { base: a.base, entries: CtxEntries::empty() };
+        for (ea, eb) in a.entries.iter().zip(&b.entries) {
+            let e = env.in_ctx(prefix.clone(), layer);
             let (x, y) = (
                 D::embed_ty(&e, Rc::clone(&ea.ty)),
                 D::embed_ty(&e, Rc::clone(&eb.ty)),
             );
             self.ty(&e, &x, &y, &ea.level)?;
             self.lev_eq(&ea.level, &eb.level)?;
+            prefix = prefix.extended(Rc::clone(&ea.ty), ea.level.clone());
         }
         Ok(())
     }

@@ -80,7 +80,7 @@ fn tables(m: &Rc<Motives>, b: &Rc<Branches>, o: Outer) -> (Rc<Motives>, Rc<Branc
         motives: Rc::clone(m),
         branches: Rc::clone(b),
         code_level: Level::Zero,
-        ctx: LocalCtx { base: crate::term::CtxBase::Nil, entries: vec![] },
+        ctx: LocalCtx::nil(),
         scrut: Rc::new(Term::Zero),
     };
     let shifted = wrapper.shift_univ(o.univs).shift_global(o.globals);

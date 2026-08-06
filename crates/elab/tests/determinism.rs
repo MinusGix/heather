@@ -102,7 +102,7 @@ fn nat_suite_golden_hash() {
 #[test]
 fn the_hash_sees_past_the_debug_budget() {
     use heather_kernel::level::Level;
-    use heather_kernel::term::{CtxBase, GlobalBinding, LocalCtx, Term, Type};
+    use heather_kernel::term::{GlobalBinding, LocalCtx, Term, Type};
     use std::rc::Rc;
 
     fn deep(n: usize, tip: Term) -> GlobalCtx {
@@ -111,7 +111,7 @@ fn the_hash_sees_past_the_debug_budget() {
             t = Term::Succ(Rc::new(t));
         }
         GlobalCtx::new(vec![GlobalBinding::defined_tm(
-            LocalCtx { base: CtxBase::Nil, entries: vec![] },
+            LocalCtx::nil(),
             heather_kernel::layer::Layer::Prog,
             Rc::new(Type::Nat),
             Level::Zero,

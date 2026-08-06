@@ -22,7 +22,7 @@ use heather_elab::{ElabError, Elaborator};
 use heather_kernel::conv::conv_term;
 use heather_kernel::layer::Layer;
 use heather_kernel::level::Level;
-use heather_kernel::term::{CtxBase, GlobalBinding, LocalCtx, Term, Type};
+use heather_kernel::term::{GlobalBinding, LocalCtx, Term, Type};
 use heather_kernel::typing::DEFAULT_FUEL;
 
 /// Axis 6 + axis 2: three constructors, and the payload is a type parameter,
@@ -77,7 +77,7 @@ fn last_body(e: &Elaborator) -> Term {
 }
 
 fn empty_ctx() -> LocalCtx {
-    LocalCtx { base: CtxBase::Nil, entries: vec![] }
+    LocalCtx::nil()
 }
 
 // -- §5/§6: the `split` statement ------------------------------------------

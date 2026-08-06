@@ -1049,7 +1049,7 @@ impl Elaborator {
         // The kernel is the gate: check the statement, then the term.
         // `stats::time_kernel` attributes exactly this to the kernel half of
         // the frontend suite's phase split (crates/elab/src/stats.rs).
-        let empty = LocalCtx { base: CtxBase::Nil, entries: vec![] };
+        let empty = LocalCtx::nil();
         stats::time_kernel(|| {
             typing::check_type(&self.psi, 0, Layer::Prog, &empty, &stmt, &stmt_lvl, self.fuel)
         })
@@ -1087,7 +1087,7 @@ impl Elaborator {
         // mentions the theorem.
         let abs = self.psi.bindings.len() as u32;
         self.psi.push(GlobalBinding::Tm {
-            ctx: LocalCtx { base: CtxBase::Nil, entries: vec![] },
+            ctx: LocalCtx::nil(),
             layer: Layer::Code,
             ty: Rc::new(stmt),
             level: stmt_lvl,
@@ -1362,7 +1362,7 @@ impl Elaborator {
                 // A reserved-but-unused slot (the pre-count is an upper
                 // bound). Nothing refers to it.
                 None => GlobalBinding::Tm {
-                    ctx: LocalCtx { base: CtxBase::Nil, entries: vec![] },
+                    ctx: LocalCtx::nil(),
                     layer: Layer::Code,
                     ty: Rc::new(Type::Nat),
                     level: Level::Zero,
@@ -4980,7 +4980,7 @@ impl Elaborator {
         bindings.resize(
             bindings.len() + self.goal_base as usize,
             GlobalBinding::Tm {
-                ctx: LocalCtx { base: CtxBase::Nil, entries: vec![] },
+                ctx: LocalCtx::nil(),
                 layer: Layer::Code,
                 ty: Rc::new(Type::Nat),
                 level: Level::Zero,
@@ -5176,7 +5176,7 @@ impl Cx {
     fn empty() -> Cx {
         Cx {
             names: vec![],
-            gamma: LocalCtx { base: CtxBase::Nil, entries: vec![] },
+            gamma: LocalCtx::nil(),
             selfref: None,
             guard: None,
             aliases: vec![],

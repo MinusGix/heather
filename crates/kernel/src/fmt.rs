@@ -21,7 +21,9 @@ use std::cell::Cell;
 use std::fmt;
 
 use crate::level::Level;
-use crate::term::{Branches, CtxBase, LocalCtx, LocalSubst, Motives, SubstTail, Term, Type};
+use crate::term::{
+    Branches, CtxBase, CtxEntries, LocalCtx, LocalSubst, Motives, SubstTail, Term, Type,
+};
 
 /// Maximum nodes printed per outermost format call (bounds output size and
 /// total work).
@@ -375,6 +377,26 @@ impl fmt::Debug for LocalCtx {
                 write!(f, ", {:?}@{:?}", e.ty, e.level)?;
             }
             f.write_str(")")
+        })
+    }
+}
+
+/// The entries alone, outermost-first, in [`LocalCtx`]'s own notation minus
+/// the base. Manual and `node()`-gated like every other recursive kernel
+/// type: a spine is still a tree of types, and an accidental `{:?}` on one
+/// must stay bounded (see this module's docs).
+impl fmt::Debug for CtxEntries {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        node(f, |f| {
+            let mut first = true;
+            for e in self {
+                if !first {
+                    f.write_str(", ")?;
+                }
+                first = false;
+                write!(f, "{:?}@{:?}", e.ty, e.level)?;
+            }
+            Ok(())
         })
     }
 }

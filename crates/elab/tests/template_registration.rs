@@ -12,7 +12,7 @@ use heather_elab::Elaborator;
 use heather_kernel::conv::conv_term;
 use heather_kernel::layer::Layer;
 use heather_kernel::level::Level;
-use heather_kernel::term::{CtxBase, GlobalBinding, LocalCtx, Term, Type};
+use heather_kernel::term::{GlobalBinding, LocalCtx, Term, Type};
 
 const LIB: &str = include_str!("../../../lib/vec_code.hthr");
 
@@ -305,7 +305,7 @@ fn a_permuted_template_is_the_same_template() {
         let hooked = elab(&format!("{template}{probe}"));
         let (ht, hty, hl) = last_body(&hooked);
         assert_ne!(ht, rt, "the hook declined — the cross-check below would be vacuous");
-        let empty = LocalCtx { base: CtxBase::Nil, entries: vec![] };
+        let empty = LocalCtx::nil();
         conv_term(hooked.psi(), &empty, Layer::Prog, &ht, &rt, &hty, &hl, 1_000_000)
             .unwrap_or_else(|e| {
                 panic!("a permuted template is not the same template:\n{template}\n{e:?}")

@@ -31,7 +31,7 @@ use heather_elab::Elaborator;
 use heather_kernel::conv::conv_term;
 use heather_kernel::layer::Layer;
 use heather_kernel::level::Level;
-use heather_kernel::term::{CtxBase, GlobalBinding, LocalCtx, Term, Type};
+use heather_kernel::term::{GlobalBinding, LocalCtx, Term, Type};
 
 const LIB: &str = include_str!("../../../lib/vec_code.hthr");
 
@@ -178,7 +178,7 @@ fn hook_output_is_convertible_with_the_rust_oracle() {
              would be testing `fold_code` and nothing else"
         );
         assert!(ht != rt, "the hook declined entirely on:\n{fixture}");
-        let empty = LocalCtx { base: CtxBase::Nil, entries: vec![] };
+        let empty = LocalCtx::nil();
         conv_term(hooked.psi(), &empty, Layer::Prog, &ht, &rt, &hty, &hl, 1_000_000)
             .unwrap_or_else(|e| panic!("hook and Rust `tabulate` disagree on:\n{fixture}\n{e:?}"));
     }
@@ -258,7 +258,7 @@ meta fn tabulate_code(g: Ctx) for vec.tabulate -> Code(g |-
     let rust = elab(&neutral);
     let (wt, wty, wl) = last_body(&wrong);
     let (rt, _, _) = last_body(&rust);
-    let empty = LocalCtx { base: CtxBase::Nil, entries: vec![] };
+    let empty = LocalCtx::nil();
     assert!(
         conv_term(wrong.psi(), &empty, Layer::Prog, &wt, &rt, &wty, &wl, 1_000_000).is_err(),
         "the constant-head tabulate is not `tabulate`: the cross-check must reject it"

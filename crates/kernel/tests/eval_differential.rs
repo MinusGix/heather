@@ -295,7 +295,7 @@ impl<'a> Agree<'a> {
             }
             (VTy::CtxPi { level: la, body }, Type::CtxPi { level: lb, body: b2 }) => {
                 self.lev(la, lb, "(g:Ctx)⇒ level")?;
-                let payload = GlobalEntry::Ctx(LocalCtx { base: CtxBase::Nil, entries: vec![] });
+                let payload = GlobalEntry::Ctx(LocalCtx::nil());
                 self.instantiated_ty(body, b2, payload, gamma, d)
             }
             (
@@ -571,14 +571,14 @@ impl<'a> Agree<'a> {
                     .ev
                     .elim(
                         Rc::clone(v),
-                        Elim::CtxApp { ctx: LocalCtx { base: CtxBase::Nil, entries: vec![] } },
+                        Elim::CtxApp { ctx: LocalCtx::nil() },
                     )
                     .map_err(|_| "evaluator out of fuel".to_string())?;
                 let vb =
                     self.ev.delta_whnf(vb).map_err(|_| "evaluator out of fuel".to_string())?;
                 let syn = Term::CtxApp {
                     fun: Rc::new(w.clone()),
-                    ctx: LocalCtx { base: CtxBase::Nil, entries: vec![] },
+                    ctx: LocalCtx::nil(),
                 };
                 self.tm(&vb, &syn, gamma, d)
             }
@@ -1148,7 +1148,7 @@ fn stream3_open_terms_at_a_checked_type() {
         // context variable's own scope.
         for k in 0..env.gamma.entries.len() {
             let prefix =
-                LocalCtx { base: env.gamma.base, entries: env.gamma.entries[..k].to_vec() };
+                env.gamma.prefix(k);
             let ety = Rc::clone(&env.gamma.entries[k].ty);
             check_ty(seed, &env.psi, &prefix, &ety, "Γ entry type");
         }
@@ -1238,7 +1238,7 @@ fn stream4_code_recursors() {
 fn defs_psi(body: Rc<Term>) -> (GlobalCtx, LocalCtx) {
     let delta = LocalCtx {
         base: CtxBase::Nil,
-        entries: vec![CtxEntry { ty: Rc::new(Type::Nat), level: Level::Zero }],
+        entries: (vec![CtxEntry { ty: Rc::new(Type::Nat), level: Level::Zero }]).into(),
     };
     let psi = GlobalCtx::new(vec![GlobalBinding::defined_tm(
         delta.clone(),
@@ -1278,7 +1278,7 @@ fn stream5_definitions_and_delta_payloads() {
         // — so the definition genuinely computes with its argument.
         let delta = LocalCtx {
             base: CtxBase::Nil,
-            entries: vec![CtxEntry { ty: Rc::new(Type::Nat), level: Level::Zero }],
+            entries: (vec![CtxEntry { ty: Rc::new(Type::Nat), level: Level::Zero }]).into(),
         };
         let base_env = gen_wt_env(&mut r);
         let benv = base_env.in_ctx(delta.clone(), Layer::Prog);
@@ -1292,7 +1292,7 @@ fn stream5_definitions_and_delta_payloads() {
         // neutral for half the cases.
         let gamma = LocalCtx {
             base: CtxBase::Nil,
-            entries: vec![CtxEntry { ty: Rc::new(Type::Nat), level: Level::Zero }],
+            entries: (vec![CtxEntry { ty: Rc::new(Type::Nat), level: Level::Zero }]).into(),
         };
         let payloads = [
             numeral((seed % 4) as u32),
@@ -1386,7 +1386,7 @@ fn nat_drain(n: u32) -> Rc<Term> {
 #[test]
 fn a_failed_thunk_is_not_poisoned() {
     let big = nat_drain(12);
-    let gamma = LocalCtx { base: CtxBase::Nil, entries: vec![] };
+    let gamma = LocalCtx::nil();
     let psi = GlobalCtx::default();
 
     // (a) an ordinary suspension.
@@ -1430,7 +1430,7 @@ fn a_failed_thunk_is_not_poisoned() {
 /// budget of zero, anything with a redex at the head fails on both.
 #[test]
 fn zero_fuel_reduces_nothing() {
-    let gamma = LocalCtx { base: CtxBase::Nil, entries: vec![] };
+    let gamma = LocalCtx::nil();
     let t = nat_rec(numeral(1));
     let mut ev = Eval::new(0, Defs::opaque(), gamma.base);
     assert!(ev.eval_tm(&t, &Env::empty()).is_err(), "a redex must cost fuel");

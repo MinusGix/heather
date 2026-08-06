@@ -72,10 +72,7 @@ impl MetaEnv {
             if let MetaBinder::Ctx { name: bn } = b
                 && bn == name
             {
-                return Ok(LocalCtx {
-                    base: CtxBase::Var(GlobalVar(n - 1 - pos as u32)),
-                    entries: vec![],
-                });
+                return Ok(LocalCtx::ctx_var(GlobalVar(n - 1 - pos as u32)));
             }
         }
         err(format!("`{name}` is not a `Ctx` binder in scope"), span)
@@ -258,7 +255,7 @@ impl Elaborator {
         }
 
         // The kernel is the gate, at the meta layer.
-        let empty = LocalCtx { base: CtxBase::Nil, entries: vec![] };
+        let empty = LocalCtx::nil();
         crate::stats::time_kernel(|| {
             typing::check_type(&self.psi, 0, Layer::Meta, &empty, &stmt, &Level::Zero, self.fuel)
         })

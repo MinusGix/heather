@@ -13,7 +13,7 @@ use heather_elab::Elaborator;
 use heather_kernel::conv::conv_term;
 use heather_kernel::layer::Layer;
 use heather_kernel::level::Level;
-use heather_kernel::term::{CtxBase, GlobalBinding, LocalCtx, Term, Type};
+use heather_kernel::term::{GlobalBinding, LocalCtx, Term, Type};
 
 const LIB: &str = include_str!("../../../lib/vec_code.hthr");
 
@@ -105,7 +105,7 @@ fn hook_output_is_convertible_with_the_rust_oracle() {
             "the hook declined on:\n{fixture}\nso the conversion below would \
              compare the Rust term with itself"
         );
-        let empty = LocalCtx { base: CtxBase::Nil, entries: vec![] };
+        let empty = LocalCtx::nil();
         conv_term(hooked.psi(), &empty, Layer::Prog, &ht, &rt, &hty, &hl, 1_000_000)
             .unwrap_or_else(|e| {
                 panic!("hook and Rust `map` disagree on:\n{fixture}\n{e:?}")

@@ -164,7 +164,7 @@ pub fn gen_ctx(sc: &Sc, r: &mut Rng, b: u32) -> (LocalCtx, Shape) {
             level: gen_level(sc, r, 1),
         });
     }
-    (LocalCtx { base: sc.base(shape.base), entries }, shape)
+    (LocalCtx::from_vec(sc.base(shape.base), entries), shape)
 }
 
 /// A substitution from the current local context onto `target`.
@@ -1000,9 +1000,9 @@ pub fn gen_scope(r: &mut Rng) -> Sc {
 pub fn materialize(sc: &Sc, shape: Shape) -> LocalCtx {
     LocalCtx {
         base: sc.base(shape.base),
-        entries: (0..shape.len)
+        entries: ((0..shape.len)
             .map(|_| CtxEntry { ty: Rc::new(Type::Nat), level: Level::Zero })
-            .collect(),
+            .collect::<Vec<_>>()).into(),
     }
 }
 

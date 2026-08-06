@@ -34,7 +34,7 @@ use std::rc::Rc;
 use heather_kernel::conv::conv_term;
 use heather_kernel::layer::Layer;
 use heather_kernel::level::Level;
-use heather_kernel::term::{CtxBase, CtxEntry, GlobalCtx, LocalCtx, LocalVar, Term, Type};
+use heather_kernel::term::{CtxEntry, GlobalCtx, LocalCtx, LocalVar, Term, Type};
 use heather_kernel::typing::{check_term, check_type};
 
 const FUEL: u64 = 1_000_000;
@@ -63,7 +63,7 @@ fn nat(n: u64) -> Term {
     t
 }
 fn nil_ctx() -> LocalCtx {
-    LocalCtx { base: CtxBase::Nil, entries: vec![] }
+    LocalCtx::nil()
 }
 fn ext(gamma: &LocalCtx, ty: Type, level: Level) -> LocalCtx {
     let mut g = gamma.clone();

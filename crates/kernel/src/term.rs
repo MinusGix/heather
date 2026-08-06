@@ -952,7 +952,45 @@ pub enum CtxBase {
 #[derive(Clone, PartialEq, Eq)]
 pub struct LocalCtx {
     pub base: CtxBase,
-    pub entries: Vec<CtxEntry>,
+    pub entries: CtxEntries,
+}
+
+impl LocalCtx {
+    /// The empty context `·`.
+    pub fn nil() -> LocalCtx {
+        LocalCtx { base: CtxBase::Nil, entries: CtxEntries::empty() }
+    }
+
+    /// The context variable `g` with no entries of its own.
+    pub fn ctx_var(g: GlobalVar) -> LocalCtx {
+        LocalCtx { base: CtxBase::Var(g), entries: CtxEntries::empty() }
+    }
+
+    /// `base` extended by `entries`, given outermost-first.
+    pub fn from_vec(base: CtxBase, entries: Vec<CtxEntry>) -> LocalCtx {
+        LocalCtx { base, entries: entries.into() }
+    }
+
+    /// `self, x : ty @ level`, sharing `self`'s spine.
+    pub fn extended(&self, ty: Rc<Type>, level: Level) -> LocalCtx {
+        LocalCtx { base: self.base, entries: self.entries.pushed(CtxEntry { ty, level }) }
+    }
+
+    /// Number of entries (the context's length as a Γ; the base contributes
+    /// nothing).
+    pub fn len(&self) -> usize {
+        self.entries.len()
+    }
+
+    /// Whether the context has no entries — `·` and `g` both qualify.
+    pub fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
+
+    /// `Γ` truncated to its outermost `k` entries, sharing the spine.
+    pub fn prefix(&self, k: usize) -> LocalCtx {
+        LocalCtx { base: self.base, entries: self.entries.prefix(k) }
+    }
 }
 
 #[derive(Clone, PartialEq, Eq)]
@@ -960,6 +998,241 @@ pub struct CtxEntry {
     pub ty: Rc<Type>,
     pub level: Level,
 }
+
+/// The entries of a [`LocalCtx`], as a persistent snoc list whose *head is
+/// the innermost* binding.
+///
+/// Binder descent extends Γ by one entry while keeping the parent Γ alive,
+/// which a `Vec` can only serve by copying the whole context. That copy was
+/// the #1 self line of a release `heather check lib/ir_v1.hthr`
+/// (`Vec<CtxEntry>::clone` 5.3%, its drop 2.6%, essentially all of it
+/// `Env::push_entry` at a binder — issues/context-representation-clones.md).
+/// Here extending is one allocation shared with the context it extends, and
+/// dropping a derived context frees one cell.
+///
+/// Positions are still quoted the paper's way: position 0 is the *outermost*
+/// entry (so [`std::ops::Index`] and [`CtxEntries::iter`] run outermost-first,
+/// as the `Vec` did), while [`LocalVar`] 0 is the innermost and is served by
+/// [`CtxEntries::nth_inner`], which runs *with* the spine. The list's own
+/// direction is therefore the variable-lookup direction; anything that wants
+/// the whole context outermost-first pays one O(|Γ|) walk, which every such
+/// site already paid to read it.
+#[derive(Clone)]
+pub struct CtxEntries(Option<Rc<CtxNode>>);
+
+struct CtxNode {
+    entry: CtxEntry,
+    /// Length of the context ending *at* this node — `rest.len() + 1`.
+    /// Cached so `len()` (read on nearly every kernel operation over Γ) and
+    /// the length half of structural equality stay O(1).
+    len: u32,
+    rest: CtxEntries,
+}
+
+impl CtxEntries {
+    pub fn empty() -> CtxEntries {
+        CtxEntries(None)
+    }
+
+    pub fn len(&self) -> usize {
+        match &self.0 {
+            None => 0,
+            Some(n) => n.len as usize,
+        }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.0.is_none()
+    }
+
+    /// `self, entry` — O(1), sharing `self`.
+    pub fn pushed(&self, entry: CtxEntry) -> CtxEntries {
+        let len = self.len() as u32 + 1;
+        CtxEntries(Some(Rc::new(CtxNode { entry, len, rest: self.clone() })))
+    }
+
+    /// In-place [`CtxEntries::pushed`], for the `Vec`-shaped callers.
+    pub fn push(&mut self, entry: CtxEntry) {
+        *self = self.pushed(entry);
+    }
+
+    /// The entry `i` binders out from the innermost one — the lookup for
+    /// `LocalVar(i)`. Walks `i` cells, i.e. with the spine.
+    pub fn nth_inner(&self, i: u32) -> Option<&CtxEntry> {
+        let mut cur = self;
+        let mut k = i;
+        loop {
+            let n = cur.0.as_ref()?;
+            if k == 0 {
+                return Some(&n.entry);
+            }
+            k -= 1;
+            cur = &n.rest;
+        }
+    }
+
+    /// The entry at position `i` counted from the *outermost* end — what
+    /// `entries[i]` meant when this was a `Vec`.
+    pub fn get(&self, i: usize) -> Option<&CtxEntry> {
+        let n = self.len();
+        if i >= n {
+            return None;
+        }
+        self.nth_inner((n - 1 - i) as u32)
+    }
+
+    /// The innermost entry.
+    pub fn last(&self) -> Option<&CtxEntry> {
+        self.nth_inner(0)
+    }
+
+    /// The outermost `k` entries — `entries[..k]`, sharing the spine (one
+    /// walk, no allocation). Panics if `k > len()`, as slicing did.
+    pub fn prefix(&self, k: usize) -> CtxEntries {
+        let n = self.len();
+        assert!(k <= n, "context prefix {k} out of range for length {n}");
+        let mut cur = self.clone();
+        for _ in 0..(n - k) {
+            let rest = cur.0.as_ref().expect("length is cached").rest.clone();
+            cur = rest;
+        }
+        cur
+    }
+
+    /// Outermost-first, as `Vec::iter` was. O(|Γ|) up front — the spine runs
+    /// the other way.
+    pub fn iter(&self) -> CtxIter<'_> {
+        let mut v: Vec<&CtxEntry> = Vec::with_capacity(self.len());
+        let mut cur = self;
+        while let Some(n) = cur.0.as_ref() {
+            v.push(&n.entry);
+            cur = &n.rest;
+        }
+        v.reverse();
+        CtxIter(v.into_iter())
+    }
+
+    /// Outermost-first, owned.
+    pub fn to_vec(&self) -> Vec<CtxEntry> {
+        self.iter().cloned().collect()
+    }
+
+    /// `n` copies of one entry — the filler contexts that the shared β
+    /// helpers read only the *length* of (`reduce.rs` module doc). One cell
+    /// per entry rather than the `Vec`'s single allocation; both callers are
+    /// off the hot path (a code recursor's scope, and `Wf`'s step
+    /// telescope), which is why this is a loop and not a shared spine.
+    pub fn repeat(entry: CtxEntry, n: usize) -> CtxEntries {
+        let mut c = CtxEntries::empty();
+        for _ in 0..n {
+            c.push(entry.clone());
+        }
+        c
+    }
+}
+
+pub struct CtxIter<'a>(std::vec::IntoIter<&'a CtxEntry>);
+
+impl<'a> Iterator for CtxIter<'a> {
+    type Item = &'a CtxEntry;
+
+    fn next(&mut self) -> Option<&'a CtxEntry> {
+        self.0.next()
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        self.0.size_hint()
+    }
+}
+
+impl ExactSizeIterator for CtxIter<'_> {}
+
+impl DoubleEndedIterator for CtxIter<'_> {
+    fn next_back(&mut self) -> Option<Self::Item> {
+        self.0.next_back()
+    }
+}
+
+impl<'a> IntoIterator for &'a CtxEntries {
+    type Item = &'a CtxEntry;
+    type IntoIter = CtxIter<'a>;
+
+    fn into_iter(self) -> CtxIter<'a> {
+        self.iter()
+    }
+}
+
+impl std::ops::Index<usize> for CtxEntries {
+    type Output = CtxEntry;
+
+    fn index(&self, i: usize) -> &CtxEntry {
+        self.get(i).unwrap_or_else(|| {
+            panic!("context entry {i} out of range for length {}", self.len())
+        })
+    }
+}
+
+impl From<Vec<CtxEntry>> for CtxEntries {
+    /// From an outermost-first `Vec`.
+    fn from(v: Vec<CtxEntry>) -> CtxEntries {
+        v.into_iter().collect()
+    }
+}
+
+impl FromIterator<CtxEntry> for CtxEntries {
+    /// From an outermost-first iterator.
+    fn from_iter<I: IntoIterator<Item = CtxEntry>>(it: I) -> CtxEntries {
+        let mut c = CtxEntries::empty();
+        for e in it {
+            c.push(e);
+        }
+        c
+    }
+}
+
+impl Extend<CtxEntry> for CtxEntries {
+    fn extend<I: IntoIterator<Item = CtxEntry>>(&mut self, it: I) {
+        for e in it {
+            self.push(e);
+        }
+    }
+}
+
+impl Default for CtxEntries {
+    fn default() -> CtxEntries {
+        CtxEntries::empty()
+    }
+}
+
+/// Structural, with a pointer-equality shortcut: two contexts that share a
+/// spine (the common case when conversion compares two scopes derived from
+/// one) settle in O(1), and a length mismatch settles in O(1) either way.
+/// `PartialEq` on `LocalCtx` is on the conversion path — boxed types compare
+/// their Γ (ch. 06).
+impl PartialEq for CtxEntries {
+    fn eq(&self, other: &CtxEntries) -> bool {
+        let mut a = self;
+        let mut b = other;
+        loop {
+            match (&a.0, &b.0) {
+                (None, None) => return true,
+                (Some(x), Some(y)) => {
+                    if Rc::ptr_eq(x, y) {
+                        return true;
+                    }
+                    if x.len != y.len || x.entry != y.entry {
+                        return false;
+                    }
+                    a = &x.rest;
+                    b = &y.rest;
+                }
+                _ => return false,
+            }
+        }
+    }
+}
+
+impl Eq for CtxEntries {}
 
 /// Local substitutions `δ := ·^k_{g?} | wk^k_g | δ, t/x`.
 ///

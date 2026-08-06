@@ -789,7 +789,7 @@ mod tests {
     use super::*;
     use heather_kernel::conv::conv_term;
     use heather_kernel::layer::Layer;
-    use heather_kernel::term::{CtxBase, CtxEntry, GlobalCtx};
+    use heather_kernel::term::{CtxEntry, GlobalCtx};
     use heather_kernel::typing::{check_term, DEFAULT_FUEL as FUEL};
 
     fn nat_lit(k: usize) -> Rc<Term> {
@@ -802,7 +802,7 @@ mod tests {
 
     /// Γ built from a list of types, outermost first.
     fn ctx(tys: &[Type]) -> LocalCtx {
-        let mut g = LocalCtx { base: CtxBase::Nil, entries: Vec::new() };
+        let mut g = LocalCtx::nil();
         for t in tys {
             g.entries.push(CtxEntry { ty: Rc::new(t.clone()), level: Level::Zero });
         }

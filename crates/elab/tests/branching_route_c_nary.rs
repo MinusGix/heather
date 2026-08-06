@@ -63,7 +63,7 @@ fn v(i: u32) -> Term {
 }
 
 fn nil_ctx() -> LocalCtx {
-    LocalCtx { base: CtxBase::Nil, entries: vec![] }
+    LocalCtx::nil()
 }
 
 fn ext(gamma: &LocalCtx, ty: Type, level: Level) -> LocalCtx {

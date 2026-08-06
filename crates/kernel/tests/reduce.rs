@@ -46,9 +46,9 @@ fn v(i: u32) -> Term {
 fn nil_ctx(n: u32) -> LocalCtx {
     LocalCtx {
         base: CtxBase::Nil,
-        entries: (0..n)
+        entries: ((0..n)
             .map(|_| CtxEntry { ty: rty(Type::Nat), level: Level::Zero })
-            .collect(),
+            .collect::<Vec<_>>()).into(),
     }
 }
 
@@ -120,7 +120,7 @@ fn box_gtm(var: u32, g: u32, k: u32) -> Term {
 fn ctx_probe(g: u32) -> Term {
     Term::CtxApp {
         fun: rt(Term::Zero),
-        ctx: LocalCtx { base: CtxBase::Var(GlobalVar(g)), entries: vec![] },
+        ctx: LocalCtx::ctx_var(GlobalVar(g)),
     }
 }
 

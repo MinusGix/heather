@@ -19,7 +19,7 @@ use heather_elab::{ElabError, Elaborator};
 use heather_kernel::conv::conv_term;
 use heather_kernel::layer::Layer;
 use heather_kernel::level::Level;
-use heather_kernel::term::{CtxBase, GlobalBinding, LocalCtx, Term, Type};
+use heather_kernel::term::{GlobalBinding, LocalCtx, Term, Type};
 
 const ADD: &str =
     "fn add(a: Nat, b: Nat) -> Nat { match b { Zero => a, Succ(k) => Succ(add(a, k)) } }\n";
@@ -229,7 +229,7 @@ fn a_block_is_the_program_without_it() {
     // A `let` is an alias, not a binder, so the *identical* term is the
     // expected outcome and inequality would mean the block minted something.
     assert!(a == b, "a block emitted a different term than the hoisted `let`");
-    let empty = LocalCtx { base: CtxBase::Nil, entries: vec![] };
+    let empty = LocalCtx::nil();
     conv_term(Elaborator::with_prelude().expect("prelude").psi(), &empty, Layer::Prog,
               &a, &b, &aty, &alvl, 1_000_000)
         .expect("the two spellings must be convertible");

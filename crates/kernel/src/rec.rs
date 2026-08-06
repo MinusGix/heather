@@ -24,7 +24,7 @@ use crate::layer::Layer;
 use crate::level::{Level, UnivVar};
 use crate::subst::{GlobalEntry, GlobalSubst};
 use crate::term::{
-    wf_step_telescope, Branches, CtxBase, CtxEntry, GlobalBinding, GlobalCtx, GlobalVar,
+    wf_step_telescope, Branches, CtxEntry, GlobalBinding, GlobalCtx, GlobalVar,
     LocalCtx, LocalSubst, LocalVar, Motives, Term, Type,
 };
 
@@ -38,7 +38,7 @@ pub(crate) fn lvar(i: u32) -> Level {
 
 /// The context `g` for the context variable at de Bruijn index `i`.
 pub(crate) fn g_ctx(i: u32) -> LocalCtx {
-    LocalCtx { base: CtxBase::Var(GlobalVar(i)), entries: vec![] }
+    LocalCtx::ctx_var(GlobalVar(i))
 }
 
 /// `Δ, x : T @ l`.

@@ -32,7 +32,7 @@ use std::rc::Rc;
 use heather_kernel::conv::{conv_term, conv_type};
 use heather_kernel::layer::Layer;
 use heather_kernel::level::Level;
-use heather_kernel::term::{CtxBase, CtxEntry, GlobalCtx, LocalCtx, LocalVar, Term, Type};
+use heather_kernel::term::{CtxEntry, GlobalCtx, LocalCtx, LocalVar, Term, Type};
 use heather_kernel::typing::{check_term, check_type};
 
 const FUEL: u64 = 1_000_000;
@@ -58,7 +58,7 @@ fn v(i: u32) -> Term {
 }
 
 fn nil_ctx() -> LocalCtx {
-    LocalCtx { base: CtxBase::Nil, entries: vec![] }
+    LocalCtx::nil()
 }
 
 fn ext(gamma: &LocalCtx, ty: Type, level: Level) -> LocalCtx {

@@ -54,9 +54,9 @@ fn psi(bindings: Vec<GlobalBinding>) -> GlobalCtx {
 fn nil_ctx(n: u32) -> LocalCtx {
     LocalCtx {
         base: CtxBase::Nil,
-        entries: (0..n)
+        entries: ((0..n)
             .map(|_| CtxEntry { ty: rty(Type::Nat), level: Level::Zero })
-            .collect(),
+            .collect::<Vec<_>>()).into(),
     }
 }
 
@@ -226,7 +226,7 @@ fn eta_ctx_pi() {
         level: Level::Zero,
         body: rt(Term::CtxApp {
             fun: rt(v(0)),
-            ctx: LocalCtx { base: CtxBase::Var(GlobalVar(0)), entries: vec![] },
+            ctx: LocalCtx::ctx_var(GlobalVar(0)),
         }),
     };
     ok_tm(&psi, &gamma, &expanded, &v(0), &cpi, &c(0));

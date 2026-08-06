@@ -2712,10 +2712,7 @@ inductive G : (n: Nat) -> Type {
             .lower_instance(&t.cx, &skel, &[], &[], SPAN)
             .expect("the skeleton lowers");
         let code = crate::code::code_of(&skel_ty).expect("the skeleton has a code");
-        let empty = heather_kernel::term::LocalCtx {
-            base: heather_kernel::term::CtxBase::Nil,
-            entries: vec![],
-        };
+        let empty = heather_kernel::term::LocalCtx::nil();
         t.el.psi.push(heather_kernel::term::GlobalBinding::defined_tm(
             empty,
             Layer::Code,

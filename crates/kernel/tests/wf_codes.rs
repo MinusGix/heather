@@ -27,7 +27,7 @@ use heather_kernel::conv::conv_type;
 use heather_kernel::layer::Layer;
 use heather_kernel::level::Level;
 use heather_kernel::reduce::whnf_term;
-use heather_kernel::term::{CtxBase, GlobalCtx, LocalCtx, LocalVar, Term, Type};
+use heather_kernel::term::{GlobalCtx, LocalCtx, LocalVar, Term, Type};
 use heather_kernel::typing::{check_term, check_type};
 
 // -------------------------------------------------------------------------
@@ -47,7 +47,7 @@ fn c(n: u64) -> Level {
 }
 
 fn nil_ctx() -> LocalCtx {
-    LocalCtx { base: CtxBase::Nil, entries: vec![] }
+    LocalCtx::nil()
 }
 
 fn nat(n: u64) -> Term {

@@ -41,7 +41,7 @@ use crate::level::Level;
 use crate::rec;
 use crate::subst::{GlobalEntry, GlobalSubst};
 use crate::term::{
-    wf_step_telescope, CtxEntry, GlobalVar, LocalCtx, LocalVar, Term, Type,
+    wf_step_telescope, CtxEntries, CtxEntry, GlobalVar, LocalCtx, LocalVar, Term, Type,
 };
 use crate::value::{
     self, shift::Outer, Elim, Head, TmClo, TyClo, VNeTy, VNeutral, VSubst, VTy, Val,
@@ -575,7 +575,9 @@ impl Dom for Values {
             };
             return Ok((TyC::here(env, Rc::clone(clo)), level.clone()));
         }
-        let e = &env.gamma.entries[i as usize];
+        let Some(e) = env.gamma.entries.nth_inner(x.0) else {
+            return Err(NC);
+        };
         let clo = Rc::new(TyClo::new(value::Env::identity(i), Rc::clone(&e.ty)));
         Ok((TyC::here(env, clo), e.level.clone()))
     }
@@ -1174,10 +1176,10 @@ impl Dom for Values {
         }
         let gamma = LocalCtx {
             base: env.gamma.base,
-            entries: vec![
-                CtxEntry { ty: FILLER.with(Rc::clone), level: Level::Zero };
-                senv.len() as usize
-            ],
+            entries: CtxEntries::repeat(
+                CtxEntry { ty: FILLER.with(Rc::clone), level: Level::Zero },
+                senv.len() as usize,
+            ),
         };
         let (cs, ih, step) =
             wf_step_telescope(&gamma, level, motive_level, sbody, abody, mbody);

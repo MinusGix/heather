@@ -24,14 +24,14 @@ pub fn v(i: u32) -> Term {
 }
 
 pub fn nil_ctx() -> LocalCtx {
-    LocalCtx { base: CtxBase::Nil, entries: vec![] }
+    LocalCtx::nil()
 }
 
 /// Γ = `x₀ : Nat, …, x_{n-1} : Nat`.
 pub fn nat_ctx(n: u32) -> LocalCtx {
     LocalCtx {
         base: CtxBase::Nil,
-        entries: (0..n).map(|_| CtxEntry { ty: rty(Type::Nat), level: Level::Zero }).collect(),
+        entries: ((0..n).map(|_| CtxEntry { ty: rty(Type::Nat), level: Level::Zero }).collect::<Vec<_>>()).into(),
     }
 }
 

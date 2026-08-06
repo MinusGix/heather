@@ -208,7 +208,7 @@ fn shifting_by_zero_preserves_sharing() {
     // And the payload path that motivated all of this: substituting into
     // `Var 0` at depth zero must hand back the payload's own subterms, not
     // copies of them. `[t/x]` applied to `x` is where a β-step lands.
-    let gamma = LocalCtx { base: CtxBase::Nil, entries: vec![] };
+    let gamma = LocalCtx::nil();
     let delta = LocalSubst::id(&gamma).extended(Rc::new(t.clone()));
     assert!(
         shared(&Term::Var(LocalVar(0)).apply_local(&delta)),
@@ -254,7 +254,7 @@ fn substitution_shares_subterms_it_cannot_change() {
         arg: Rc::clone(&closed_arg),
     };
 
-    let gamma = LocalCtx { base: CtxBase::Nil, entries: vec![] };
+    let gamma = LocalCtx::nil();
     let delta = LocalSubst::id(&gamma).extended(Rc::new(Term::Zero));
     match t.apply_local(&delta) {
         Term::App { fun, dom, cod, arg, .. } => {
@@ -270,7 +270,7 @@ fn substitution_shares_subterms_it_cannot_change() {
     // *whole* term — including the branch that does mention the variable.
     let id = LocalSubst::id(&LocalCtx {
         base: CtxBase::Nil,
-        entries: vec![CtxEntry { ty: Rc::new(Type::Nat), level: Level::Zero }],
+        entries: (vec![CtxEntry { ty: Rc::new(Type::Nat), level: Level::Zero }]).into(),
     });
     match t.apply_local(&id) {
         Term::App { arg, .. } => {
@@ -323,9 +323,9 @@ fn global_local_commute_weakening_focus() {
         // variable of its context (with g spliced, deep indices reachable).
         let gamma_p = LocalCtx {
             base: CtxBase::Nil,
-            entries: (0..m_p)
+            entries: ((0..m_p)
                 .map(|_| CtxEntry { ty: Rc::new(Type::Nat), level: Level::Zero })
-                .collect(),
+                .collect::<Vec<_>>()).into(),
         };
         let payload = Rc::new(Term::Succ(Rc::new(Term::Var(LocalVar(
             r.below(m_p + k_u),

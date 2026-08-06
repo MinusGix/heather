@@ -56,9 +56,9 @@ fn v(i: u32) -> Term {
 fn nil_ctx(n: u32) -> LocalCtx {
     LocalCtx {
         base: CtxBase::Nil,
-        entries: (0..n)
+        entries: ((0..n)
             .map(|_| CtxEntry { ty: rty(Type::Nat), level: Level::Zero })
-            .collect(),
+            .collect::<Vec<_>>()).into(),
     }
 }
 

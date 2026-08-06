@@ -25,7 +25,7 @@ use std::rc::Rc;
 use heather_kernel::conv::conv_type;
 use heather_kernel::layer::Layer;
 use heather_kernel::level::Level;
-use heather_kernel::term::{CtxBase, LocalCtx, LocalSubst, LocalVar, Term, Type};
+use heather_kernel::term::{LocalCtx, LocalSubst, LocalVar, Term, Type};
 use heather_syntax::{Arm, CtorDecl, Expr, ExprKind, InductiveDecl, Span, Ty, TyKind};
 
 use crate::names::{qkey, NameKind};
@@ -354,7 +354,7 @@ pub(crate) fn decoded(t: &Type) -> Cow<'_, Type> {
                 | Term::TmSEq { .. }
         )
     }
-    let empty = LocalCtx { base: CtxBase::Nil, entries: vec![] };
+    let empty = LocalCtx::nil();
     let mut cur = Cow::Borrowed(t);
     loop {
         let next = match &*cur {

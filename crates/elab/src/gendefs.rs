@@ -37,7 +37,7 @@ use std::rc::Rc;
 use heather_kernel::layer::Layer;
 use heather_kernel::level::Level;
 use heather_kernel::term::{
-    CtxBase, GlobalBinding, GlobalVar, LocalCtx, LocalSubst, LocalVar, SubstTail, Term, Type,
+    GlobalBinding, GlobalVar, LocalCtx, LocalSubst, LocalVar, SubstTail, Term, Type,
 };
 use heather_kernel::typing;
 use heather_syntax::ast::Span;
@@ -260,7 +260,7 @@ impl Elaborator {
         body: Term,
         span: Span,
     ) -> R<()> {
-        let empty = LocalCtx { base: CtxBase::Nil, entries: vec![] };
+        let empty = LocalCtx::nil();
         let name = key.name(owner);
         typing::check_type(&self.psi, 0, Layer::Prog, &empty, &ty, &level, self.fuel)
             .map_err(|err| crate::ElabError::Kernel { decl: name.clone(), span, err })?;

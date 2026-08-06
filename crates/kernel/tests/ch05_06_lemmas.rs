@@ -552,11 +552,11 @@ fn the_generator_oracle_holds_across_seed_streams() {
 fn code_equality_is_equality_modulo_level_equivalence() {
     use heather_kernel::conv::conv_term;
     use heather_kernel::level::UnivVar;
-    use heather_kernel::term::{CtxBase, GlobalCtx, LocalCtx};
+    use heather_kernel::term::{GlobalCtx, LocalCtx};
 
 
     let psi = GlobalCtx::default();
-    let g = LocalCtx { base: CtxBase::Nil, entries: vec![] };
+    let g = LocalCtx::nil();
     let l0 = Level::Var(UnivVar(0));
     let l1 = Level::Var(UnivVar(1));
 
