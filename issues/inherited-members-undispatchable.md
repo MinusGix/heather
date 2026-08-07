@@ -65,3 +65,7 @@ announces itself.
 - **[[traits]]** owns the class semantics and the dispatch rules. Assumed here:
   only that parent instances are synthesized and registered when a child is
   declared, and that dispatch treats two answering classes as ambiguous.
+
+## Log
+
+- 2026-08-07: 2026-08-07: PROPOSED RESOLUTION (discussion, not yet decided): dispatch on a member name should build the goal at the class that DECLARES the field — the OWNER — not at every class whose flattened list contains it. ClassInfo already stores the per-field owner (traits layer 1 slice §2), so `x.plus(y)` becomes goal AddSemigroup<typeof(x)> uniquely; two UNRELATED classes declaring one name stay ambiguous, which is the case the rule exists for. The missing half is that the resolver must then learn UPCAST DERIVATION: for goal C<args>, an in-scope dictionary of type D<args> with C an ancestor of D yields the parent projection as a candidate (registry needs nothing — synthesized canonical parents already cover it). Upcast is independently needed anyway: today `requires m: AddCommMonoid<G>` cannot discharge a lemma wanting AddMonoid<G> at open G, which will bite the first deep library proof. One small round: owner-keyed dispatch + scope upcast, retiring this issue and un-flattening the library's Monoid declaration.
