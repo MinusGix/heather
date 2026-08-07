@@ -439,6 +439,16 @@ impl Elaborator {
             span: d.span,
         };
         self.elab_inductive(&ind)?;
+        // The cheap negative test receiver dispatch consults before it infers
+        // anything (docs/traits-receiver-dispatch-design.md §3). Recorded here
+        // and not in `elab_inductive`: a plain `record`'s fields are reachable
+        // only through a receiver of that record's own type, and dispatch must
+        // stay off every call that has nothing to do with a class.
+        for f in &fields {
+            if let Some(n) = &f.name {
+                self.class_members.insert(n.clone());
+            }
+        }
         let info = ClassInfo {
             name: d.name.clone(),
             params: d.params.clone(),

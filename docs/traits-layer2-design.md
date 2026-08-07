@@ -349,8 +349,11 @@ infer`, where no such adjacency exists.
   already returns any local of the goal type, so the *behavior* exists for a
   plain `let`; the keyword form (and the "shadows without mutating the table"
   claim it makes explicit) is not built.
-- **Receiver dispatch through instances** — layer 1 §8's entry, unchanged and
-  still owned there.
+- **Receiver dispatch through instances** — layer 1 §8's entry, built as
+  `docs/traits-receiver-dispatch-design.md` (2026-08-07) by calling
+  `resolve_goal` at a goal built from the receiver's type. Nothing here
+  changed; the "trial cost" entry below gained one multiplier (dispatch resolves
+  every candidate class, since the ambiguity is the point).
 - **Trial cost** — §3.1 is O(candidates) kernel checks per goal, and a failed
   candidate's nested resolutions are wasted work. If a corpus ever notices,
   the fix is the head-keyed prefilter that §9.1 explains the cost of, filed

@@ -300,7 +300,12 @@ first failing, the second landing on the same names.
   carrier case would need `member_head` to try `T::C::op` for each class `C`
   with an instance at `T`; the generic case needs receiver sugar to consult
   in-scope dictionaries, which `docs/traits-design.md` §12 already assigns to
-  layer 1/2 ergonomics. Neither is built here.
+  layer 1/2 ergonomics. Neither is built here. **Retired** by
+  `docs/traits-receiver-dispatch-design.md` (2026-08-07), which builds both as
+  one route and takes neither guess above: dispatch is a resolution goal
+  `C<typeof(x)>` handed to layer 2, so the concrete carrier is answered by the
+  registry rather than by a `T::C::op` lookup, and the generic one by the scope
+  search that already existed.
 - **A parameterized canonical parent** offers neither fill-by-reference nor
   an override-agreement partner, for the reason in §4.3: applying its value
   needs the resolver. A generic child of a generic parent therefore writes

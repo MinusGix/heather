@@ -407,6 +407,15 @@ pub(crate) const IMPLICIT_MARK_REFUSED: &str =
      types, and lambdas; this position cannot use one — see \
      issues/implicit-binders-in-function-types.md";
 
+/// The receiver-shaped builtins: names that a `.` call reaches without any
+/// declaration behind them, so [`Elaborator::shadowed`] cannot see them. Read
+/// only by receiver dispatch (docs/traits-receiver-dispatch-design.md §3),
+/// which needs to know whether a call *had* another reading before it claims
+/// one — a class field named `map` must make `xs.map(f)` ambiguous, never
+/// silently the class's.
+const BUILTIN_METHODS: [&str; 8] =
+    ["map", "fold", "head", "tail", "cons", "cong", "inj", "absurd"];
+
 /// The implicitness skeleton of a surface-written function type
 /// (issues/implicit-binders-in-function-types.md, option 1;
 /// docs/implicit-binders-design.md §2). Positional: entry `i` speaks for the
@@ -657,6 +666,16 @@ pub struct Elaborator {
     /// Which type a base name belongs to is not recorded here — that is
     /// decided by the receiver, against the ordinary name tables.
     member_bases: HashSet<String>,
+    /// Every field name of every declared `class`, across all of them
+    /// (docs/traits-receiver-dispatch-design.md §3). The same **cheap negative
+    /// test** as [`Self::record_fields`] and [`Self::member_bases`], and for
+    /// the same reason: `x.op(y)` consults this before inferring the
+    /// receiver's type or building a resolution goal, so a `.` call on a name
+    /// that is nobody's class field costs exactly what it cost before classes
+    /// existed. Which class a name belongs to — and whether an instance exists
+    /// at the receiver's carrier — is decided by the receiver and the
+    /// resolver, never here.
+    class_members: HashSet<String>,
     /// Declared classes, by qualified name (docs/traits-layer1-design.md §2).
     /// A class *is* a record — `inductives` holds it too — so this table
     /// carries only what `extends` and the instance assembler need beyond the
@@ -768,6 +787,12 @@ enum DotResolution {
     /// field type — no new storage, keyed positionally by the same index the
     /// kernel Σ-walk uses (docs/implicit-binders-design.md §3.1).
     Project(Term, Type, Level, Option<Rc<Skel>>),
+    /// A **class member reached through an instance**
+    /// (docs/traits-receiver-dispatch-design.md §2): the projection of a
+    /// *resolved* dictionary, carrying its own argument list because the
+    /// receiver is one of the arguments (`x.op(y)` is `π_op(dict)(x, y)`) and
+    /// the written list is not.
+    Dispatch(Term, Type, Level, Option<Rc<Skel>>, Vec<Expr>),
     /// Not a field: the method-call desugaring `f(args…, recv)`, to be
     /// elaborated in whichever mode the caller is in — which is what keeps
     /// checking-only methods like `p.absurd()` working.
@@ -819,6 +844,7 @@ impl Elaborator {
             ctors: HashMap::new(),
             record_fields: HashSet::new(),
             member_bases: HashSet::new(),
+            class_members: HashSet::new(),
             classes: HashMap::new(),
             instances: HashMap::new(),
             instance_scope: Vec::new(),
@@ -2245,6 +2271,23 @@ impl Elaborator {
                             Ok(t)
                         }
                     },
+                    // Dispatch is a projection with its own arguments, so it
+                    // takes the applied route unconditionally — there is no
+                    // bare form (§4 rule 7).
+                    DotResolution::Dispatch(t, ty, l, fskel, dargs) => {
+                        let (t, _, _) = self.apply_projection(
+                            cx,
+                            name,
+                            t,
+                            ty,
+                            l,
+                            fskel,
+                            &dargs,
+                            Some(expected),
+                            e.span,
+                        )?;
+                        Ok(t)
+                    }
                     DotResolution::Method(m) => {
                         self.elab_check_skel(cx, &m, expected, lvl, hint, skel)
                     }
@@ -2585,6 +2628,9 @@ impl Elaborator {
                             self.apply_projection(cx, name, t, ty, l, fskel, args, expected, e.span)
                         }
                     },
+                    DotResolution::Dispatch(t, ty, l, fskel, dargs) => {
+                        self.apply_projection(cx, name, t, ty, l, fskel, &dargs, expected, e.span)
+                    }
                     DotResolution::Method(m) => self.elab_infer_at(cx, &m, expected),
                 }
             }
@@ -3905,7 +3951,39 @@ impl Elaborator {
         // receiver's own type (issues/type-owned-members-receiver-slice.md).
         // The `member_bases` test comes first for the same reason the record
         // one does — no receiver is inferred for a name nobody attaches.
-        let name = &self.member_head(cx, recv, name, span)?;
+        let head = self.member_head(cx, recv, name, span)?;
+        // Receiver dispatch through an instance
+        // (docs/traits-receiver-dispatch-design.md §3). Last, so nothing that
+        // resolved before this round can be reinterpreted by it: a class
+        // member is only reached when the receiver's own type has no such
+        // field and its namespace has no such member.
+        //
+        // `other` is what a *successful* dispatch would be racing (§4 rule 2)
+        // and what a *failed* one falls back to (rule 5). The builtin list is
+        // there because `map`/`fold`/… are Rust rather than declarations, so
+        // `shadowed` cannot see them.
+        let other: Option<(String, String)> = if head != name {
+            Some((
+                format!("`{head}`, a member of the receiver's own type"),
+                format!("`{head}(…)`"),
+            ))
+        } else if self.shadowed(cx, name) || self.ctor_of(name).is_some() {
+            Some((
+                format!("`{name}`, a name in scope on its own"),
+                format!("the bare call `{name}(…)` with the receiver as an argument"),
+            ))
+        } else if BUILTIN_METHODS.contains(&name) {
+            Some((
+                format!("`{name}`, a built-in method"),
+                format!("the bare call `{name}(…)`"),
+            ))
+        } else {
+            None
+        };
+        if let Some(d) = self.class_dispatch(cx, recv, name, other, args, span)? {
+            return Ok(d);
+        }
+        let name = &head;
         let mut args = args.clone();
         let at = self.subject_index(name).min(args.len());
         args.insert(at, recv.clone());
@@ -3964,6 +4042,164 @@ impl Elaborator {
             );
         }
         Ok(qualified)
+    }
+
+    /// `x.op(y)` where `op` is a class member and `x`'s type is a carrier with
+    /// an instance (docs/traits-receiver-dispatch-design.md).
+    ///
+    /// One route for every carrier, because dispatch *is* a resolution goal:
+    /// the goal `C<typeof(x)>` is built in kernel form (§2.1) and handed to
+    /// layer 2's `resolve_goal`, so a concrete carrier is answered by the
+    /// registry, a generic one by the `requires` binder in scope, and a
+    /// derivable one by backchaining — with layer 2's own scope-beats-registry
+    /// order inherited rather than re-decided.
+    ///
+    /// `None` is "this is not a dispatch", and every `None` leaves the method
+    /// desugaring to run exactly as it did (§4 rule 5).
+    fn class_dispatch(
+        &self,
+        cx: &Cx,
+        recv: &Expr,
+        name: &str,
+        other: Option<(String, String)>,
+        args: &[Expr],
+        span: Span,
+    ) -> R<Option<DotResolution>> {
+        // The cheap negative test, before anything is inferred or resolved.
+        if !self.class_members.contains(name) {
+            return Ok(None);
+        }
+        // Inference failure is not an error here, exactly as for a field and
+        // for a member: the fallback is what handles a receiver whose type
+        // only the call fixes.
+        let Ok((_, rty, rlvl)) = self.elab_infer(cx, recv) else {
+            return Ok(None);
+        };
+        // Candidates: every class **visible here** (the ordinary §4 regime,
+        // asked by resolving the class's own name) with exactly one type
+        // parameter (§2.1) and a field of this name, in sorted canonical-name
+        // order — never `HashMap` order, and never declaration order.
+        let mut with_field: Vec<(String, Rc<traits::ClassInfo>)> = self
+            .classes
+            .iter()
+            .filter(|(k, info)| {
+                info.fields.iter().any(|f| f.name.as_deref() == Some(name))
+                    && self.key_of(&info.name).as_deref() == Some(k.as_str())
+            })
+            .map(|(k, i)| (k.clone(), Rc::clone(i)))
+            .collect();
+        with_field.sort_by(|a, b| a.0.cmp(&b.0));
+        let cands: Vec<(String, Rc<traits::ClassInfo>)> =
+            with_field.iter().filter(|(_, i)| i.params.len() == 1).cloned().collect();
+        if cands.is_empty() {
+            // A multi-parameter class is refused *by name* rather than
+            // mis-dispatched (§2.1): the receiver fixes the carrier and
+            // nothing fixes the rest, and a goal with a meta in it is what
+            // layer 2 §4 declines to resolve. Silent only when the call has
+            // another reading to take (§4 rule 5).
+            if let Some((_, info)) = with_field.first()
+                && other.is_none()
+            {
+                return err(
+                    format!(
+                        "`{name}` is a member of `{}`, which takes {} type parameters: \
+                         receiver dispatch builds its goal from the receiver alone, so it \
+                         reaches a one-parameter class only — write the projection \
+                         (`⟨instance⟩.{name}(…)`)",
+                        info.name,
+                        info.params.len()
+                    ),
+                    span,
+                );
+            }
+            return Ok(None);
+        }
+        // What the trace calls the carrier. A display and never a key: an open
+        // carrier has no nominal tag to name, and saying so beats rendering a
+        // lowered type nothing can render totally (layer 2 §7).
+        let carrier = self
+            .type_namespace(cx, &rty, span)
+            .unwrap_or_else(|| "the receiver's type".to_string());
+        let mut trace: Vec<resolve::TraceLine> = Vec::new();
+        let mut hits: Vec<(Rc<Inductive>, Type, Term, String)> = Vec::new();
+        let mut tried: Vec<String> = Vec::new();
+        for (_, info) in &cands {
+            let Some(ind) = self.lookup_inductive(&info.name).cloned() else { continue };
+            let Ok((goal, glvl)) =
+                self.lower_instance(cx, &ind, &[(rty.clone(), rlvl.clone())], &[], span)
+            else {
+                continue;
+            };
+            let display = format!("{}<{carrier}>", info.name);
+            tried.push(display.clone());
+            let mut tr = Vec::new();
+            // Every candidate is tried even once one has succeeded: the
+            // ambiguity is the point, and a first hit would be a priority
+            // (§4 rule 3).
+            let found = self.resolve_goal(cx, &goal, &glvl, &display, span, &mut tr);
+            match found {
+                Some(t) => hits.push((ind, goal, t, display)),
+                None => trace.extend(tr),
+            }
+        }
+        if hits.len() > 1 {
+            let list = hits
+                .iter()
+                .map(|(_, _, _, d)| format!("`{d}`"))
+                .collect::<Vec<_>>()
+                .join(" and ");
+            return err(
+                format!(
+                    "`{name}` at this receiver is a member of {list}, and each has an \
+                     instance here — write the projection you meant \
+                     (`⟨instance⟩.{name}(…)`) rather than letting the receiver choose"
+                ),
+                span,
+            );
+        }
+        let Some((ind, goal, dict, display)) = hits.pop() else {
+            // No candidate resolved. If the call has another reading, that
+            // reading runs and this search is forgotten; if it has none, the
+            // search *is* the diagnosis and is reported instead of the
+            // "unknown name" the method desugaring would have produced.
+            if other.is_some() {
+                return Ok(None);
+            }
+            return Err(ElabError::Resolution {
+                goal: tried.join("` or `"),
+                span,
+                trace,
+            });
+        };
+        if let Some((desc, fix)) = other {
+            return err(
+                format!(
+                    "`{name}` here is both a member of `{display}`, reached through the \
+                     receiver's type, and {desc} — write one of them: \
+                     `⟨instance⟩.{name}(…)` for the class member, or {fix} for the other"
+                ),
+                span,
+            );
+        }
+        // Reported rather than asserted, though the candidate filter is what
+        // just found this field: a library must not panic to say two of its own
+        // tables disagree.
+        let Some(idx) = ind.field_index(name) else {
+            return err(
+                format!("internal: `{}` has no field `{name}` after all", ind.name),
+                span,
+            );
+        };
+        let (t, fty, flvl) = self.project_field(cx, &ind, &goal, Rc::new(dict), idx, span)?;
+        let skel = skel_of_ty(&ind.ctors[0].fields[idx].1);
+        // The receiver is the field's **first explicit argument**: a class
+        // field is a function type, not a declaration, so it has no `self`
+        // marker to consult and takes the position `subject_index` defaults to
+        // (issues/method-receiver-position.md).
+        let mut all = Vec::with_capacity(args.len() + 1);
+        all.push(recv.clone());
+        all.extend(args.iter().cloned());
+        Ok(Some(DotResolution::Dispatch(t, fty, flvl, skel, all)))
     }
 
     /// A record literal (§6): permute the written fields into declaration
