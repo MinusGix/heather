@@ -3,7 +3,7 @@ title: "Meta: frontend roadmap and current focus"
 status: open
 labels: [frontend,meta]
 created: 2026-07-23
-updated: 2026-08-05
+updated: 2026-08-07
 ---
 
 Organizing issue for the frontend push (the frontend-first route,
@@ -264,3 +264,4 @@ date; the originals are in `git log --follow issues/frontend-roadmap.md`.
 - 2026-08-05: Small round, direct: [[type-arg-inference-through-index]] fixed and closed — the walker learns type arguments through `elimN`-of-codes family types; the recorded hypothesis (reference opacity) was wrong and the correction is on the issue. Suite 1064 → 1067.
 - 2026-08-05: Small round, direct: [[suite-wall-time-two-tests]] measured, corrected (the 13/15-min figures were loaded-machine wall-clock; the real cost is 120+160 CPU-s) and closed with scripts/test --fast (skips the two by name; inner loop 27.5s wall, default stays full). Growth watch stays with [[certgen-harness-cost]].
 - 2026-08-05: From the cheap list, managed round: [[nested-match-patterns]] landed and closed (docs/nested-match-patterns-design.md) — pattern-matrix deep patterns plus the `_` arm with a shared-body rule, the three ir_v1 towers rewritten as decision trees, suite 1067 → 1093. Residue filed with owners: [[match-arm-redundancy-warning]], [[diagnostics-name-the-written-form]].
+- 2026-08-07: 2026-08-07: Traits design discussion (user-led): docs/traits-design.md recorded in full and [[traits]] filed as owner — classes as parameterized records, canonical-value inheritance, disciplined resolution, := infer, programmable layer 3. Supersedes [[compile-typeclass-design]] §5. Implementing rounds per that doc's §13, first slice unscheduled as of this entry.

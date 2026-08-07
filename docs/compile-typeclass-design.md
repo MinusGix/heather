@@ -170,6 +170,15 @@ then automation of a *value* whose type already exists.
 
 ## 5. Recorded for the class layer (not v1, each with its prerequisite)
 
+> **Superseded 2026-08-07** by the general traits design
+> (`docs/traits-design.md`, issue `traits`): resolution-from-`main` becomes
+> "the compiler is one client of the general resolver"; `[Cpu]` indexing is
+> **struck** (Compile certifies function → IR, which is arch-agnostic; arch
+> belongs to the IR→native stage, and class indexing dissolves into ordinary
+> record parameters); `let instance` and `.code` keying carry over into that
+> design. `CallCtx` stays owned here (§8). Also stale below in §6: the
+> level-1 bundled-record round landed 2026-07-27.
+
 - **Resolution-from-`main`** — the compiler walks the call graph resolving
   in-scope instances per site. Prerequisite: a compiler consuming
   instances at all (`issues/certifying-generator.md`,
