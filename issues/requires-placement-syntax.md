@@ -401,7 +401,464 @@ at once and leaves it doing exactly the one job it is best at.
 **Rejected outright**: (5), (6), (9), (10), (11), and the two-spellings
 option (d) of the problem statement.
 
+## Syntax exploration round 2 (2026-08-07): unconstrained
+
+Round 1 was too deferential — to today's grammar and to today's library. This
+round throws both constraints away. **No candidate below is judged on whether
+`crates/syntax/src/parser.rs` can parse it today**; where a collision exists it
+is a one-line footnote in §R2-G, never an argument. Round 1's rejections of
+`<A: Monoid>`, `=>` and `(using …)` on parser grounds are **void**.
+
+The axis is re-weighted, per the review: **unobtrusiveness at scale is
+primary**. A typeclass constraint is background information — "let `A` be a
+monoid" — and background information should occupy the least space the reader
+can still find it in. Round 1's finding (four of six declarations project by
+name) is a fact about a library that is currently *all* core algebra; ordinary
+downstream code skews anonymous, and the right response is not a syntax that
+makes naming cheap but a syntax that makes naming **unnecessary** — see §R2-C,
+which turns out to be where most of the leverage is.
+
+### R2-A. `<A: Monoid>`, taken seriously
+
+The reading the user names is the right one and is worth stating as the design
+principle: **`A: Monoid` is the same sentence as `A: Type<1>`.** Both answer
+"what is `A`?" — one says it is a type at a level, the other says it is a
+monoid. Mathematics writes them identically ("let `A` be a set", "let `A` be a
+monoid") and never feels the need for two punctuation marks. So the colon does
+not acquire a second meaning; it acquires a second **noun**.
+
+How the reader tells them apart: by what follows, and nothing subtler. `Type`
+and `Type<n>` are the universe nouns; every other name after `:` is a class.
+They are also *distinguishable in kind*, which is the honest version of the
+claim: a universe annotation says **where `A` lives** (it is a sort), a class
+annotation says **what `A` carries** (it is a structure). A binder can have
+both, and the natural spelling makes them a list of facts:
+
+```heather
+fn mconcat<A: Monoid>(xs: List<A>) -> A
+fn lift<A: Type<1> + Monoid>(xs: List<A>) -> A       -- level and structure
+fn sort<A: Cmp + Monoid + Default>(xs: List<A>) -> List<A>
+```
+
+`+` reads "and", stacks without ceremony, and is one token — the objection
+round 1 raised against it ("this language has no `+`") is exactly the kind of
+objection this round is not allowed to make.
+
+**The two cases the sugar cannot state, and the clause that states them.** The
+inline form works when the constrained thing *is* the binder. It is not, for
+`Monoid<List<A>>` (a constraint on a compound type) or for a class whose
+carrier is not its only parameter. The answer is to notice that the inline form
+is not the feature — the feature is a **constraint sentence**, `T: C`, and the
+inline form is that sentence written at the binder because `T` happens to be the
+binder. Everything else writes the same sentence in a clause:
+
+```heather
+fn flatten<A>(xss: List<List<A>>) -> List<A>
+    given List<A>: Monoid                       -- carrier is compound
+{ … }
+
+fn convert<A, B>(x: A) -> B
+    given A: Coe<B>                             -- extra parameters, carrier first
+{ … }
+
+fn back<A, B>(x: A) -> B
+    given B: Coe<_, A>                          -- `_` IS the binder's slot
+{ … }
+```
+
+Three rules and no exceptions: `A: C` means `C<A>`; `A: C<X, Y>` means
+`C<A, X, Y>`; and `_` moves the carrier to whichever slot it is written in
+(`B: Coe<_, A>` is `Coe<A, B>`). The inline sugar is then defined as literally
+"the clause sentence, hoisted to the binder when its subject is that binder" —
+one production, two placements, and the second placement is a *rewrite*, not a
+second feature. That is what round 1's option (d) got wrong: two spellings of
+one thing is a cost only when neither is defined in terms of the other.
+
+**Recovering a name**, three levels, cheapest first:
+
+1. **Don't.** §R2-C makes `A.unit`, `A.op(x, y)` and `x.op(y)` work without a
+   dictionary name ever appearing. This is the case that should dominate.
+2. **Canonical path.** `A::Monoid` is the dictionary, by the *existing*
+   notation — `lib/std/algebra.hthr` already writes `Nat::AddCommMonoid.plus`
+   for a registered instance, and extending that path to a constrained binder
+   is not new syntax at all, just a new thing a path can name. `A::Monoid.unit`
+   is available always, needs no declaration, and is unambiguous under two
+   constraints.
+3. **`as`, when a short name genuinely helps.** `<A: Monoid as m>`,
+   `given List<A>: Monoid as ml`. Reads as English, costs five characters, and
+   is *never required* — which is the point.
+
+**Bracket arity is untouched**, and this is `<A: Monoid>`'s decisive advantage
+over round 1's grouped generics `<A, Monoid<A>>`: the constraint is an
+*annotation on an entry*, not an entry, so `mconcat<Nat>(xs)` still has exactly
+one type argument and the declaration bracket and the call bracket keep saying
+the same thing. Round 1's arity objection was to grouped generics specifically;
+it does not touch this form.
+
+**The remaining honest weirdness**, stated rather than argued away: an
+autofilled *value* is being introduced by an annotation that looks purely
+descriptive. `<A: Monoid>` adds a runtime argument to the function, and nothing
+in the notation says so. Every language that has this feature has this problem
+(Haskell's `=>`, Rust's `:`, Scala's `using`), and the two mitigations are
+(i) §R2-C's projections, which make the added value visible at *use* sites
+where it matters, and (ii) `@mconcat(m, xs)` continuing to pass it positionally,
+which is where a writer learns it was there all along.
+
+### R2-B. Eleven new candidates
+
+Numbering continues from round 1.
+
+- **(12) Section / context variables** — `given` declared once for a file
+  region; signatures stop repeating it.
+- **(13) Named constraint bundles** — `context Sortable<A> = Cmp + Monoid + Default;`
+  then `<A: Sortable>`.
+- **(14) Functor-flavored module parameters** — the whole file is inside the
+  monoid: `module fold<A: Monoid> { … }`.
+- **(15) Dictionary opening in bodies** — `open A::Monoid;` brings `unit`,
+  `op`, `assoc` into scope as bare names.
+- **(16) Constraint at the use site inside a type** — `xs: List<A: Monoid>`.
+- **(17) Implicit generalization** — no binder bracket at all; an unbound
+  capitalized name in a parameter type binds itself, and its constraint rides
+  along: `fn mconcat(xs: List<A: Monoid>) -> A`.
+- **(18) Constraints as a row on the arrow** — `fn sum(xs: List<A>) -> A ! Monoid<A>`,
+  dictionary-passing treated as the reader effect it is.
+- **(19) The footnote line** — the constraint clause committed to its own
+  indented line under the signature, mathematician-style, brace after it.
+- **(20) Constrained regions** — `for<A: Monoid> { fn mconcat … fn sum … }`,
+  a bracketed section.
+- **(21) Extension blocks** — generic consumers declared *inside* the class's
+  own region: `extension<A: Monoid> { fn mconcat(xs: List<A>) -> A { … } }`,
+  with receiver dispatch doing the calling.
+- **(22) Constraint inference** — no syntax whatsoever; the elaborator infers
+  the context from the body and *prints* it into the interface.
+- **(23) Type-level dot projection** — not a placement at all but the thing
+  that makes placements cheap: `G.zero`, `A.op(x, y)`, `A.unit`.
+
+### R2-C. (23) first, because it changes the scoring
+
+A constrained type variable **is** a structure, so let it be projected like
+one. If `<G: AddCommMonoid>` is in scope, `G.zero` is that structure's zero and
+`G.plus(x, y)` its addition — dot on a *type*, resolving through the
+constraints that type carries.
+
+```heather
+theorem plus_zero_of_comm<G: AddCommMonoid>(x: G): G.plus(x, G.zero) = x {
+    trans(G.plus_comm(x, G.zero), G.zero_plus(x))
+}
+```
+
+Compare today's `a.plus(x, a.zero)`: identical length, and the dictionary name
+is gone. Three things fall out:
+
+- **It generalizes the notation the library already has.** `Nat::AddCommMonoid.plus`
+  is what a concrete carrier writes today; `G.plus` is the same projection with
+  the class inferred from the single constraint that provides that field. A
+  concrete carrier can use it too — `Nat.plus`, `Bool.zero` — which is a
+  readability win the library would take immediately.
+- **Ambiguity is the existing rule, not a new one.** Two constraints providing
+  the same field name is exactly receiver dispatch's ambiguity, already decided
+  (`docs/traits-receiver-dispatch-design.md`: name both readings, never pick),
+  and the escape is already spelled: `G::AddCommMonoid.plus`.
+- **It retires the naming problem that dominated round 1's scoring.** All four
+  of the library's name-projecting declarations become anonymous:
+  `m.unit` → `A.unit`, `m.unit_r(x)` → `A.unit_r(x)`, `c.le_refl(x)` →
+  `A.le_refl(x)`, `a.plus_comm` → `G.plus_comm`. **Zero** of the six then need
+  a binder name. The round-1 empirical finding was not wrong; it was a finding
+  about a language that could not project from the carrier.
+
+This is orthogonal to placement and composes with every candidate below, which
+is why it is written first: it is worth more than the placement decision.
+
+### R2-D. The other ten, developed and judged
+
+**(12) Section variables.** Lean's actual answer to signature noise, and the
+one that scales sublinearly: declare once per region, every declaration in the
+region that needs it gets it.
+
+```heather
+section {
+    given A: Monoid;
+
+    fn mconcat(xs: List<A>) -> A { match xs { Nil => A.unit, Cons(h, t) => h.op(mconcat(t)) } }
+    theorem mconcat_single(x: A): mconcat(Cons(x, Nil)) = x { A.unit_r(x) }
+}
+```
+
+The danger is Lean's, precisely: `variable` inclusion is folklore, the rules
+changed across versions, and "which variables did this theorem actually get" is
+answered by reading the elaborator. **The discipline that makes it shippable
+here is a syntactic one**: a `given` binder is included **iff the declaration's
+own signature mentions it**, never on the strength of the body. `A` is
+mentioned by `List<A>`; `A: Monoid` rides along because `A` did. Body-driven
+inclusion is refused outright — it makes a signature depend on a proof, which
+this project's determinism and interface-stability doctrine cannot accept.
+With that rule the elaborated signature is a function of the signature text,
+printable and diffable. **This is the highest-leverage candidate after (23)**:
+it is the only one whose cost per constraint *decreases* with library size, and
+`lib/std/algebra.hthr`'s consumer section is exactly the shape it is for.
+
+**(13) Named bundles.** `context Sortable<A> = Cmp + Monoid + Default;` and
+then `<A: Sortable>` everywhere. Crucially **not a class**: no instance, no
+coherence key, no registry entry — a macro over constraint sentences, expanded
+at the binder. That distinction is the whole design, because a *class* with
+three parents would drag in the flattening ambiguity the library already hit
+(`Monoid` is declared flat for that reason), whereas a bundle introduces no
+fields and therefore no member can be inherited twice. Cheap, obvious, and it
+is the honest answer to the three-constraint `merge` signature. Cost: a second
+namespace of things that can appear after `:` — mitigated by requiring bundles
+to be declared, so a name after `:` is a class or a declared bundle, never a
+guess.
+
+**(14) Functor modules.** `module fold<A: Monoid> { … }`, instantiated
+`fold<Nat>`. Genuinely the ML answer and genuinely more than this needs: it
+makes the *module* the unit of parameterization, so every use site names the
+instantiation, which is precisely the ceremony typeclasses exist to remove. It
+also collides with `docs/modules-design.md`'s file-is-a-module design at the
+root. **Reject as the mechanism**, but note what it gets right — that the
+constraint belongs to a *region*, not to each declaration — which is (12) and
+(20) with less machinery.
+
+**(15) Opening dictionaries in bodies.** `open A::Monoid;` puts `unit`, `op`,
+`assoc`, `unit_l`, `unit_r` in scope bare. The elegance is real and the
+ambivalence is warranted, and this library has already paid the exact tax
+twice, in writing: `Cmp`'s field is `le` and not `leb`, `AddSemigroup`'s is
+`plus` and not `add`, both times because a field sharing a name with an ambient
+global becomes unreachable — and the receiver-dispatch round's shadow test
+caught a class field named `map` swallowing every list's `map`. `open` takes
+that hazard, which today is a *naming* decision made once per class by the
+library author, and hands it to every function body. Verdict: **allowed,
+scoped, opt-in, and reported** — an `open` that shadows any name in scope is an
+error naming both, not a silent win. With (23) in hand its value drops sharply
+anyway: `A.unit` is one character longer than `unit` and cannot capture
+anything. **Keep as a body-side convenience, never as the answer to placement.**
+
+**(16) Use-site constraint in a type.** `fn mconcat(xs: List<A: Monoid>) -> A`.
+Reads like set-builder notation and puts the constraint at the point of use,
+which is where a reader first wonders about it. Two problems, one fatal on its
+own: if `A` occurs twice the constraint has two homes and the reader must know
+they are the same one; and the *return* type `-> A` now depends on a binder
+introduced inside a parameter type, so scope flows leftward out of a bracket.
+Fine as a **sugar for exactly one occurrence**, which is what (17) makes of it.
+
+**(17) Implicit generalization.** The maximally unobtrusive candidate: an
+unbound name in a signature binds itself, so the bracket disappears entirely.
+
+```heather
+fn mconcat(xs: List<A: Monoid>) -> A { … }
+fn merge(xs: List<A: Cmp + Monoid + Default>, ys: List<A>) -> List<A> { … }
+```
+
+Haskell, Idris and Lean's `autoBound` all do this, and all three regret pieces
+of it: a typo becomes a new type variable rather than an error, and the
+declaration's arity stops being visible in its own text. The second is the one
+that matters here, because `f<Nat>(…)` explicit type application is positional
+against a list the reader can no longer see. **Reject as the default**; note
+that if the project ever wants it, it wants it with the diagnostic that a
+single-use unbound name is a warning naming the two spellings.
+
+**(18) Effect row.** `fn sum(xs: List<A>) -> A ! Monoid<A>` — constraints as
+the reader effect they mathematically are. Honest, and it is the only
+placement whose *type* changes visibly at the arrow, which is the thing
+`<A: Monoid>` was accused of hiding. But it introduces a third concept
+(effects) into a language that has none, to spell a feature that already has a
+home; and it puts the constraint after the return type, where round 1 already
+found the brace problem. **Reject**, with the note that the day Heather has
+effects, this is where instance constraints belong.
+
+**(19) The footnote line.** Turn round 1's objection into the design: the
+clause is *supposed* to be on its own line, and the brace after it.
+
+```heather
+theorem merge_sorted<A>(xs: List<A>, ys: List<A>): sorted(merge(xs, ys)) = True
+    given A: Cmp + Monoid + Default
+{ … }
+```
+
+This is how a paper prints a theorem — statement, then "where `A` is an ordered
+monoid", then the proof — and it is the *general* clause from §R2-A given a
+canonical layout. Strong as the fallback form; weak as the only form, because
+one constraint should not cost a line.
+
+**(20) Constrained regions.** `for<A: Monoid> { … }` — (12) with a bracket
+instead of a keyword, and with the inclusion question answered by construction
+(everything inside gets it, mentioned or not). That is its advantage over (12)
+and its disadvantage: a declaration in the region that does not use `A` gets a
+spurious parameter, so the region must be drawn tightly. **Keep as (12)'s
+sibling**; if `given` inclusion rules prove hard to explain, this is the
+retreat that needs no rules at all.
+
+**(21) Extension blocks.** Declare generic consumers inside the class's region:
+
+```heather
+extension<A: Monoid> {
+    fn mconcat(xs: List<A>) -> A { … }
+    theorem mconcat_single(x: A): mconcat(Cons(x, Nil)) = x { … }
+}
+```
+
+Which is (20) wearing a name that says what the region is *for*, plus an
+implied home for receiver-dispatched members. It is the most Rust-shaped
+answer, and its cost is that it wants to become the *only* way to write generic
+code — at which point unconstrained helpers and constrained ones live in
+different syntactic worlds for no semantic reason. **Merge into (20)/(12)**.
+
+**(22) Constraint inference.** The wackiest and worth stating properly: the
+elaborator already computes exactly which dictionaries a body needed; it could
+simply *not require* the signature to say so, and print the inferred signature
+as data (this project's diagnostics doctrine makes that a `heather sig`
+command, not a mystery). Haskell shows the failure mode — inferred contexts
+make a public API change silently when a body changes — and this project has a
+certified cache whose keys are interfaces, so a body-driven signature is a
+correctness-adjacent hazard, not merely a style one. **Reject for public
+declarations. Note for local ones**: a nested `fn` inside a body, whose
+interface nobody outside can depend on, is a legitimate place to infer, and it
+is the same principle as (12)'s ban on body-driven inclusion applied to a scope
+where there is no interface to destabilize.
+
+### R2-E. Test drives
+
+**(6′) `<A: Monoid>` + (23) alone:**
+
+```heather
+fn mconcat<A: Monoid>(xs: List<A>) -> A {
+    match xs { Nil => A.unit, Cons(h, t) => h.op(mconcat(t)) }
+}
+fn sum<A: Monoid>(xs: List<A>) -> A { mconcat(xs) }
+fn or_default<A: Default>(o: Option<A>) -> A { unwrap_or(o, A.default) }
+theorem plus_zero_of_comm<G: AddCommMonoid>(x: G): G.plus(x, G.zero) = x { … }
+fn merge<A: Cmp + Monoid + Default>(xs: List<A>, ys: List<A>) -> List<A> { … }
+fn flatten<A>(xss: List<List<A>>) -> List<A> given List<A>: Monoid { … }
+```
+
+Two structures on one carrier, the case that forces names — the second monoid
+is a *value*, exactly as the library's coherence policy says, and it stays an
+ordinary parameter:
+
+```heather
+theorem xor_via<A: Monoid>(m2: Monoid<A>, x: A): A.op(x, A.unit) = m2.op(x, m2.unit) { … }
+```
+
+The asymmetry is the honest one: the registered structure is anonymous because
+it is canonical; the second is named because a reader must be told which is
+which.
+
+**(12) section variables, whole-file sketch** — the consumer half of
+`lib/std/algebra.hthr` as it would read:
+
+```heather
+section {
+    given A: Monoid;
+
+    fn mconcat(xs: List<A>) -> A { match xs { Nil => A.unit, Cons(h, t) => h.op(mconcat(t)) } }
+    theorem mconcat_single(x: A): mconcat(Cons(x, Nil)) = x { A.unit_r(x) }
+}
+
+section {
+    given A: Cmp;
+
+    fn max_of(x: A, y: A) -> A { cmp_pick(x.le(y), x, y) }
+    theorem max_of_true(x: A, y: A, p: x.le(y) = True): max_of(x, y) = y { … }
+    theorem max_of_self(x: A): max_of(x, x) = x { max_of_true(x, x, A.le_refl(x)) }
+}
+```
+
+Ten lines, and the word `Monoid` appears once for two declarations, `Cmp` once
+for three. At `std`'s current size that is a small win; at a library with
+twenty lemmas per class it is the difference between a file about algebra and a
+file about dictionaries. Note `sum`, `all_of`, `concat` sit *outside* both
+sections and are unaffected — the inclusion rule ("mentioned in the signature")
+means a section costs nothing to the declarations that ignore it.
+
+**(13) bundles, the three-constraint case:**
+
+```heather
+context Sortable<A> = Cmp + Monoid + Default;
+
+fn merge<A: Sortable>(xs: List<A>, ys: List<A>) -> List<A> { … }
+fn sort<A: Sortable>(xs: List<A>) -> List<A> { … }
+theorem sort_idem<A: Sortable>(xs: List<A>): sort(sort(xs)) = sort(xs) { … }
+```
+
+**The combination, all three, formatted:**
+
+```heather
+context Sortable<A> = Cmp + Monoid + Default;
+
+section {
+    given A: Sortable;
+
+    fn merge(xs: List<A>, ys: List<A>) -> List<A> { … }
+    fn sort(xs: List<A>) -> List<A> { … }
+    theorem sort_idem(xs: List<A>): sort(sort(xs)) = sort(xs) { … }
+}
+
+// and the one-off, outside any section, with a compound carrier:
+fn flatten<A>(xss: List<List<A>>) -> List<A>
+    given List<A>: Monoid
+{ … }
+```
+
+Three constraints, three declarations, and the word "Cmp" is written once in
+the file. That is what unobtrusiveness at scale looks like.
+
+### R2-F. Recommendation (round 2)
+
+**A combination, in this order of value:**
+
+1. **(23) type-level dot projection — `A.unit`, `G.plus(x, y)`.** Ship this
+   whichever placement wins. It removes the binder *name* from every real
+   declaration in the library, which is what makes anonymous-by-default a
+   default rather than an aspiration, and it is a generalization of a notation
+   the library already writes (`Nat::AddCommMonoid.plus`) rather than a new
+   idea. Its ambiguity rule is receiver dispatch's, already decided.
+2. **(6′) `<A: Monoid>` as the constraint sentence, inline** — with `+`
+   stacking, `as m` for the rare name, `A: C<X>` / `A: C<_, X>` for extra
+   parameters, and the identical sentence available as a **`given` clause**
+   (§R2-A, laid out per (19)) whenever the subject is not the binder. One
+   production, two placements, the second defined as a hoist of the first. The
+   colon keeps one meaning — "what `A` is" — with universes and classes as two
+   nouns under it, and the type-argument bracket keeps its arity, which is the
+   concrete advantage over grouped generics.
+3. **(12) `given` section variables**, with the syntactic inclusion rule
+   (mentioned in the *signature*, never inferred from the body), and (20)
+   `for<…> { }` held in reserve if the rule proves hard to teach. This is the
+   only mechanism whose cost per constraint falls as the library grows.
+4. **(13) bundles** when the same triple recurs — a macro over sentences, never
+   a class, so it can introduce no field and therefore no ambiguity.
+5. **(15) `open`** as a body-side convenience only, opt-in and shadow-reporting,
+   and honestly less needed once (23) exists.
+
+Rationale in one sentence: **background information should be written once and
+projected from, not carried** — (23) removes the name, `<A: Monoid>` removes
+the clause, `given` removes the repetition, and each of the four is defined in
+terms of the same constraint sentence, so the reader learns one idea and meets
+it in four positions rather than learning four features.
+
+Explicitly **not** recommended: round 1's `infer` marker (correctly judged too
+obtrusive — it makes the background the foreground on every signature line);
+grouped generics (bracket arity); implicit generalization (17) and inference
+(22) as defaults (interface stability); effect rows (18) until there are
+effects; functor modules (14) (use-site ceremony is the thing being removed).
+
+**Staging, if it helps**: (23) and (6′) inline are one round and would let
+`lib/std/algebra.hthr` be rewritten immediately; the `given` clause is the same
+round's fallback form for `flatten`; sections and bundles are a second round
+that needs no syntax the first did not already introduce.
+
+### R2-G. Implementation footnotes (not evaluation criteria)
+
+Recorded only so the eventual round is not surprised, in one line each:
+`:` in the tyvar list currently means a universe (`parser.rs:579–588`) — the
+disambiguation is "is the next token `Type`"; `+` is not a token today;
+`given`/`context`/`section`/`for`/`open`/`as` are all unused words and every
+keyword in this grammar is contextual anyway; type-level dot (23) needs `A.f`
+where `A` is a type binder, which the receiver-dispatch path already has the
+resolver call for; a `given` clause between the return type and the block is
+the same `no_record_lit` situation round 1 already checked. None of these
+changed a judgement above.
+
 ## Log
 
 - 2026-08-07: 2026-08-07: User review: ANONYMOUS binders are wanted regardless of placement (Lean experience: the dictionary is rarely referenced by name). Trailing clause tempts but encourages brace-on-own-line; in-list bracketed `[Monoid<A>]` reads naturally in multi-line parameter lists but is visually noisy; NEW option from the user: grouping in the generics list — `fn sum<A, Monoid<A>>(xs: List<A>) -> A` — typeclasses beside the type they constrain (Lean-ish grouping), at the cost of conflating a binder name and a class reference in one bracket; `fn sum<A>[Monoid<A>](…)` considered and disliked. Instance shorthand SPLIT OUT to [[instance-shorthand-syntax]]. A brainstorm round is tasked with widening the option space and evaluating against real library signatures, writing its analysis into this issue; decision after that.
 - 2026-08-07: Exploration landed above (11 candidates, parser claims checked, top three test-driven on the real `algebra.hthr` signatures). Recommends the **in-list `infer` marker with an optional name** — `fn mconcat<A>(infer m: Monoid<A>, xs: List<A>) -> A`, anonymous `infer Monoid<A>` — retiring `:= infer` into it, with the user's grouped generics offered as a later, name-free sugar; key finding: four of the library's six constrained declarations project the dictionary by name, so the *named* form is the common one and must be the short one.
+- 2026-08-07: Round 2 (unconstrained — parser reality demoted to footnotes, unobtrusiveness-at-scale made the primary axis) landed above: eleven new candidates, `<A: Monoid>` rehabilitated and developed (constraint *sentences* `T: C`, `+` stacking, `C<X>`/`C<_, X>` for extra parameters, `given` clause when the subject is not the binder, `as m` for the rare name, bracket arity untouched). Recommends a **combination**: (23) type-level dot projection `A.unit` / `G.plus(x, y)` — which removes the binder name from all six library declarations and is a generalization of the existing `Nat::AddCommMonoid.plus` path — plus `<A: Monoid>` inline with the `given` clause as its general form, plus `given` section variables (syntactic inclusion rule only) and named bundles for repetition; `open` kept as a body-side convenience. Round 1's `infer` marker withdrawn as too obtrusive.
