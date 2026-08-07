@@ -1,9 +1,73 @@
-// `bool` — the two-constructor tier-0 declaration and nothing else yet.
+// `bool` — the two-constructor tier-0 declaration, and the two monoid
+// structures it carries.
 //
 // Moved out of `nat` (2026-08-05), where it lived because `leb` needed it.
-// The module earns more the day it has a second thing to say: `not`/`and`
-// and their laws, or a general reflection kit (`nat`'s decided order —
-// `Le(n, m)` as `leb(n)(m) = True` — is the pattern any decidable
-// proposition over any type repeats, and its Bool half belongs here).
+// The module's own header asked for `not`/`and` and their laws; the traits
+// adoption round (2026-08-07) is what finally wanted them, because `Bool` is
+// the carrier that makes the "two structures on one carrier" story concrete:
+// conjunction and disjunction are both monoids on it, and the algebra module
+// registers exactly one of them (`std/algebra`, and its header for why).
+//
+// Every law here is a case split and nothing else: `match` on two Bools is
+// four `refl`s. That is the point of proving them at this carrier — the
+// generic consumers over in `algebra` are exercised at a carrier whose laws
+// cost nothing, beside `Nat`, whose laws cost induction.
 
 inductive Bool { False, True }
+
+fn not(b: Bool) -> Bool { match b { False => True, True => False } }
+
+fn and(a: Bool, b: Bool) -> Bool { match a { False => False, True => b } }
+
+fn or(a: Bool, b: Bool) -> Bool { match a { False => b, True => True } }
+
+// `and` is the conjunction monoid: unit `True`, and — because `and` recurses
+// on its *first* argument — `and(True, x)` is `x` definitionally while
+// `and(x, True) = x` is the case split.
+
+theorem and_assoc(a: Bool, b: Bool, c: Bool): and(and(a, b), c) = and(a, and(b, c)) {
+    match a { False => refl, True => refl }
+}
+
+theorem and_true_l(a: Bool): and(True, a) = a { refl }
+
+theorem and_true_r(a: Bool): and(a, True) = a {
+    match a { False => refl, True => refl }
+}
+
+theorem and_comm(a: Bool, b: Bool): and(a, b) = and(b, a) {
+    match a {
+        False => match b { False => refl, True => refl },
+        True => match b { False => refl, True => refl },
+    }
+}
+
+// `or` is the disjunction monoid: unit `False`. Same shape, dual.
+
+theorem or_assoc(a: Bool, b: Bool, c: Bool): or(or(a, b), c) = or(a, or(b, c)) {
+    match a { False => refl, True => refl }
+}
+
+theorem or_false_l(a: Bool): or(False, a) = a { refl }
+
+theorem or_false_r(a: Bool): or(a, False) = a {
+    match a { False => refl, True => refl }
+}
+
+theorem or_comm(a: Bool, b: Bool): or(a, b) = or(b, a) {
+    match a {
+        False => match b { False => refl, True => refl },
+        True => match b { False => refl, True => refl },
+    }
+}
+
+// The decided order on `Bool`, in the shape `nat`'s is: a `Bool`-valued
+// comparison whose reflexivity is an equation with `True`. `False <= True`
+// is the reading, so `leb_bool` is implication.
+fn leb_bool(a: Bool) -> Bool -> Bool {
+    match a { False => λ (b: Bool) => True, True => λ (b: Bool) => b }
+}
+
+theorem leb_bool_refl(a: Bool): leb_bool(a)(a) = True {
+    match a { False => refl, True => refl }
+}

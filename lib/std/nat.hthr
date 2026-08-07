@@ -30,6 +30,22 @@ theorem add_succ_left(a: Nat, b: Nat): add(Succ(a), b) = Succ(add(a, b)) {
     match b { Zero => refl, Succ(k) => cong_succ(add_succ_left(a, k)) }
 }
 
+// The two laws that make `add` a commutative monoid — asked for by the traits
+// adoption round (2026-08-07), which registers `AddCommMonoid<Nat>` in
+// `std/algebra` and needs exactly these as its fields. Both recurse on the
+// argument `add` itself recurses on, so both are three lines.
+
+theorem add_assoc(x: Nat, y: Nat, z: Nat): add(add(x, y), z) = add(x, add(y, z)) {
+    match z { Zero => refl, Succ(k) => cong_succ(add_assoc(x, y, k)) }
+}
+
+theorem add_comm(x: Nat, y: Nat): add(x, y) = add(y, x) {
+    match y {
+        Zero => sym(add_left_zero(x)),
+        Succ(k) => trans(cong_succ(add_comm(x, k)), sym(add_succ_left(k, x))),
+    }
+}
+
 // ---------------------------------------------------------------------------
 // The order. `<=` is surface notation for a call to `Le`
 // (issues/comparison-operators.md), which unfolds by δ to the reflection

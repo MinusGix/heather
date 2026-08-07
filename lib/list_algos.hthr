@@ -15,12 +15,11 @@ import bool;
 // ---------------------------------------------------------------------------
 // congruences this file needs. `cong_nat` (nat) is the model: a general `cong`
 // needs its function argument explicit, so each shape is its own lemma.
-
-theorem cong_cons<A>(h: A, {a: List<A>}, {b: List<A>}, p: a = b):
-    Cons(h, a) = Cons(h, b)
-{
-    j(p, λ y q => Cons(h, a) = Cons(h, y), refl)
-}
+//
+// `cong_cons` and the two append laws below it moved to `std/list`
+// (2026-08-07): `std/algebra` assembles `Monoid<List<A>>` from them, and they
+// were always list facts rather than algorithm facts. They arrive here by
+// `import list;` and are used unqualified, exactly as before.
 
 theorem cong_append_l<A>({a: List<A>}, {b: List<A>}, zs: List<A>, p: a = b):
     append(a, zs) = append(b, zs)
@@ -35,22 +34,6 @@ fn rev<A>(xs: List<A>) -> List<A> {
     match xs {
         Nil => Nil,
         Cons(h, t) => append(rev(t), Cons(h, Nil)),
-    }
-}
-
-theorem append_nil<A>(xs: List<A>): append(xs, Nil) = xs {
-    match xs {
-        Nil => {},
-        Cons(h, t) => cong_cons(h, append_nil(t)),
-    }
-}
-
-theorem append_assoc<A>(xs: List<A>, ys: List<A>, zs: List<A>):
-    append(append(xs, ys), zs) = append(xs, append(ys, zs))
-{
-    match xs {
-        Nil => {},
-        Cons(h, t) => cong_cons(h, append_assoc(t, ys, zs)),
     }
 }
 

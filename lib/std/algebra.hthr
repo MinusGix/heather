@@ -1,0 +1,292 @@
+// `algebra` — the library's first classes, and the instances the other
+// `std` modules' carriers earn (docs/traits-design.md, issues/traits.md).
+//
+// Everything here is sugar over records and globals: a `class` is the record
+// its fields describe, an `instance` is a namespace of ordinary declarations
+// with the record assembled at the end. Nothing new reaches the kernel.
+//
+// COHERENCE, and why each registered instance is the one it is. There is at
+// most one instance per (class, carrier), so a carrier with two structures
+// has to nominate one and offer the rest as *named values*:
+//
+//   * `Monoid<Bool>` is CONJUNCTION. Disjunction is just as good an answer,
+//     which is exactly why the choice has to be recorded rather than
+//     inferred: `and` is the monoid a "does every element hold" fold wants,
+//     and it is the one whose unit (`True`) is the value a vacuous fold
+//     should return. Disjunction is `bool_or_monoid` below — a plain global
+//     of type `Monoid<Bool>`, passed explicitly or `let`-bound to shadow the
+//     registry locally.
+//   * `Monoid<Nat>` is ADDITION, and it is deliberately the *same* `op` the
+//     additive hierarchy registers, so `Nat::Monoid.op` and
+//     `Nat::AddCommMonoid.plus` are one function and the two readings of a
+//     `Nat` fold agree definitionally. The day `mul` lands in `std/nat` it
+//     becomes the second structure, and by the Bool precedent above it
+//     arrives as a named value, not as a second registration.
+//   * `Monoid<List<A>>` is append at every element type — the one instance
+//     here with no competitor, and the one that is generic.
+//
+// The additive hierarchy (`AddSemigroup` → `AddMonoid` → `AddCommMonoid`)
+// is separate from `Monoid` on purpose: it is the numeric spelling, its
+// fields are `zero`/`plus`, and it exists to be *extended* downward the day
+// there are integers. `AddGroup`/`AddCommGroup` are not declared, because no
+// carrier in this library has negation — declaring a class no instance can
+// satisfy would be advertising, not library.
+
+import bool;
+import nat;
+import list;
+import option;
+
+// ---------------------------------------------------------------------------
+// The classes.
+
+// A monoid: an associative operation with a two-sided unit. Written flat
+// rather than as `Monoid<A> extends Semigroup<A>`, and the reason is an
+// ergonomic finding rather than a taste: a parent's field is flattened into
+// the child, so both classes answer `x.op(y)` at any carrier with an
+// instance — and since a child instance *synthesizes* its parents, both
+// always have one. Receiver dispatch reports that as the ambiguity it is
+// (issues/traits.md, 2026-08-07). One class, one `op`.
+class Monoid<A> {
+    unit: A,
+    op: A -> A -> A,
+    assoc: (x: A) -> (y: A) -> (z: A) -> op(op(x, y), z) = op(x, op(y, z)),
+    unit_l: (x: A) -> op(unit, x) = x,
+    unit_r: (x: A) -> op(x, unit) = x,
+}
+
+// A value every type of the class has. No laws: `Default` is the class that
+// exists to be *found*, which is the whole content of `or_default`.
+class Default<A> {
+    default: A,
+}
+
+// A decided order: a `Bool`-valued comparison, reflexive in the shape
+// `std/nat` states its order in (`Le(n, m)` is `leb(n)(m) = True`, so a
+// `Nat` proof of either shape is a proof of the other and `nat::le_refl`
+// fills `le_refl` verbatim).
+//
+// The field is `le` and NOT `leb`, which is what `std/nat` calls the function
+// filling it. A class field that shares a name with a global in scope can
+// never be reached by a receiver: `x.leb(y)` is ambiguous between the member
+// and the bare call, and the elaborator says so by name rather than picking
+// (which is right — the two are different functions at the same spelling).
+// Naming a field is therefore a *library* decision about the ambient
+// namespace, not a local one. See issues/traits.md's log for the finding.
+class Cmp<A> {
+    le: A -> A -> Bool,
+    le_refl: (x: A) -> le(x)(x) = True,
+}
+
+// The additive hierarchy. `plus` rather than `add` for the operation, for the
+// same reason `Cmp` says `le`: `add` is `std/nat`'s ambient function name.
+class AddSemigroup<G> {
+    plus: G -> G -> G,
+    plus_assoc: (x: G) -> (y: G) -> (z: G) -> plus(plus(x, y), z) = plus(x, plus(y, z)),
+}
+
+class AddMonoid<G> extends AddSemigroup<G> {
+    zero: G,
+    zero_plus: (x: G) -> plus(zero, x) = x,
+    plus_zero: (x: G) -> plus(x, zero) = x,
+}
+
+class AddCommMonoid<G> extends AddMonoid<G> {
+    plus_comm: (x: G) -> (y: G) -> plus(x, y) = plus(y, x),
+}
+
+// ---------------------------------------------------------------------------
+// Instances at the library's carriers.
+//
+// Every one of these is written in LITERAL form — `field := global` — because
+// every fact it needs was already proved in the module that owns the carrier.
+// That is the form's purpose (docs/traits-design.md §3): assembling an
+// instance out of the library's own names, rather than moving definitions
+// into a block and leaving every existing caller of `append_assoc` to find it
+// under a new one. Where a field is a one-liner nobody would name (`unit_r`
+// for `add`, which is `refl`), it is written inline.
+
+instance Monoid<Nat> {
+    unit := 0,
+    op := add,
+    assoc := add_assoc,
+    unit_l := add_left_zero,
+    unit_r := λ (x: Nat) => refl,
+}
+
+instance Monoid<Bool> {
+    unit := True,
+    op := and,
+    assoc := and_assoc,
+    unit_l := and_true_l,
+    unit_r := and_true_r,
+}
+
+// The second structure on `Bool`, as a named value rather than a second
+// registration: the coherence policy in this file's header. Nothing resolves
+// to it — a caller passes it, or `let`-binds it to shadow the registry.
+fn bool_or_monoid() -> Monoid<Bool> {
+    Monoid {
+        unit: False,
+        op: or,
+        assoc: or_assoc,
+        unit_l: or_false_l,
+        unit_r: or_false_r,
+    }
+}
+
+// The generic instance: one declaration, an instance at every element type.
+instance<A> Monoid<List<A>> {
+    unit := Nil,
+    op := append,
+    assoc := append_assoc,
+    unit_l := λ (xs: List<A>) => refl,
+    unit_r := append_nil,
+}
+
+instance Default<Nat> { default := 0 }
+instance Default<Bool> { default := False }
+instance<A> Default<List<A>> { default := Nil }
+instance<A> Default<Option<A>> { default := None }
+
+instance Cmp<Nat> { le := leb, le_refl := le_refl }
+instance Cmp<Bool> { le := leb_bool, le_refl := leb_bool_refl }
+
+// The additive hierarchy, once in each direction.
+//
+// `Nat` PARENT-FIRST: three declarations down the chain, each writing only
+// what is new. `AddMonoid<Nat>` does not restate `plus`; it fills from the
+// canonical `AddSemigroup<Nat>` by reference, so there is one `plus` on `Nat`
+// and every path to it is that one (`Nat::AddCommMonoid.plus` is
+// `Nat::AddSemigroup.plus`, by `refl` — pinned in the tests).
+
+instance AddSemigroup<Nat> {
+    plus := add,
+    plus_assoc := add_assoc,
+}
+
+instance AddMonoid<Nat> {
+    zero := 0,
+    zero_plus := add_left_zero,
+    plus_zero := λ (x: Nat) => refl,
+}
+
+instance AddCommMonoid<Nat> {
+    plus_comm := add_comm,
+}
+
+// `Bool` CHILD-FIRST, with disjunction as the addition: one declaration, and
+// the two ancestors are synthesized as its own projections and registered.
+// Which is the direction that makes a deep hierarchy writable at all — the
+// alternative is five declarations to say one thing.
+instance AddCommMonoid<Bool> {
+    plus := or,
+    plus_assoc := or_assoc,
+    zero := False,
+    zero_plus := or_false_l,
+    plus_zero := or_false_r,
+    plus_comm := or_comm,
+}
+
+// ---------------------------------------------------------------------------
+// The consumers: written once against a class, used at every carrier.
+
+// The fold every monoid is for. Two things are found rather than written: the
+// recursive call names no dictionary (the `requires` binder is in the room, so
+// resolution finds it there), and `h.op(…)` names none either — the receiver's
+// type is this function's own parameter `A`, and dispatch asks the same
+// resolver, which answers from the same binder.
+fn mconcat<A> requires m: Monoid<A> (xs: List<A>) -> A {
+    match xs {
+        Nil => m.unit,
+        Cons(h, t) => h.op(mconcat(t)),
+    }
+}
+
+// Proved once against the class. Its two uses below are at unrelated carriers
+// and neither re-proves anything.
+theorem mconcat_single<A> requires m: Monoid<A> (x: A): mconcat(Cons(x, Nil)) = x {
+    m.unit_r(x)
+}
+
+// The order consumer: the class's `le` decides which of two values to keep.
+// The branch is a separate `fn` for the reason `list_algos`'s `ins_pick` is
+// one — a `match` on a stuck `Bool` is a scrutinee no equation can reach, and
+// hoisting it makes one `j` enough. A class projection is exactly such a
+// scrutinee, so the pattern is the same one, not a new one.
+fn cmp_pick<A>(b: Bool, x: A, y: A) -> A { match b { False => x, True => y } }
+
+fn max_of<A> requires c: Cmp<A> (x: A, y: A) -> A { cmp_pick(x.le(y), x, y) }
+
+theorem max_of_true<A> requires c: Cmp<A> (x: A, y: A, p: x.le(y) = True):
+    max_of(x, y) = y
+{
+    j(sym(p), λ z q => cmp_pick(z, x, y) = y, refl)
+}
+
+theorem max_of_self<A> requires c: Cmp<A> (x: A): max_of(x, x) = x {
+    max_of_true(x, x, c.le_refl(x))
+}
+
+// `Default` earns its keep here: the caller of `or_default` names no
+// dictionary and no fallback value. Spelled `:= infer` rather than
+// `requires`, which is the same mechanism (docs/traits-layer2-design.md) with
+// the binder where a defaulted argument goes.
+fn or_default<A>(o: Option<A>, d: Default<A> := infer) -> A {
+    unwrap_or(o, d.default)
+}
+
+// The hierarchy's generic consequence: a right unit follows from commutativity
+// and the left one, so `AddMonoid`'s `plus_zero` is redundant *for a
+// commutative monoid* — proved once here, at both carriers below.
+theorem plus_zero_of_comm<G> requires a: AddCommMonoid<G> (x: G): a.plus(x, a.zero) = x {
+    trans(a.plus_comm(x, a.zero), a.zero_plus(x))
+}
+
+// ---------------------------------------------------------------------------
+// The specializations, one per way an instance can be found.
+
+// The registry, at a concrete carrier: `Monoid<Nat>` is declared, so the
+// dictionary is a reference to it and nothing is derived.
+fn sum(ns: List<Nat>) -> Nat { mconcat(ns) }
+
+fn all_of(bs: List<Bool>) -> Bool { mconcat(bs) }
+
+// The SCOPE, beating the registry: `any_of` is the same fold at the same
+// carrier under the *other* monoid, and it says so by binding it. A local of
+// the goal type is step 1 of the search, so the registered conjunction is
+// never consulted (docs/traits-layer2-design.md §4).
+fn any_of(bs: List<Bool>) -> Bool {
+    let m: Monoid<Bool> = bool_or_monoid();
+    mconcat(bs)
+}
+
+// The GENERIC instance, at an **open** element type: the goal is
+// `Monoid<List<A>>` with `A` this function's own parameter, so it is answered
+// by backchaining through `instance<A> Monoid<List<A>>` and not by any
+// declared value.
+fn concat<A>(xss: List<List<A>>) -> List<A> { mconcat(xss) }
+
+// The class lemma at two carriers. Neither of these re-proves anything: they
+// are `mconcat_single` with the dictionary found — at `Nat` through the
+// registry, at `Bool` likewise, and the two folds are different functions.
+//
+// The third carrier, `List<A>`, is NOT here: `mconcat_single` instantiated at
+// a list carrier exhausts the kernel's conversion fuel, whichever way round
+// the statement is written (issues/class-lemma-instantiation-fuel.md, with
+// the twenty-line reproducer and the three probes that place the cost). The
+// *uses* — `concat` above — are unaffected and cheap; it is the generic
+// lemma's instantiation that dies. Nothing here works around it: the missing
+// theorem is left missing so that the issue closing restores it.
+theorem sum_single(n: Nat): sum(Cons(n, Nil)) = n { mconcat_single(n) }
+
+theorem all_of_single(b: Bool): all_of(Cons(b, Nil)) = b { mconcat_single(b) }
+
+// The hierarchy lemma at both of its carriers, likewise.
+theorem nat_plus_zero(x: Nat): Nat::AddCommMonoid.plus(x, Nat::AddCommMonoid.zero) = x {
+    plus_zero_of_comm(x)
+}
+
+theorem bool_plus_zero(x: Bool): Bool::AddCommMonoid.plus(x, Bool::AddCommMonoid.zero) = x {
+    plus_zero_of_comm(x)
+}
