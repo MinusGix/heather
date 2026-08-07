@@ -23,6 +23,12 @@ pub struct File {
 pub enum Item {
     Decl(Decl),
     Inductive(InductiveDecl),
+    /// `class C<A> extends P<A> { f: T, … }` — a parameterized record plus a
+    /// class-registry entry (docs/traits-layer1-design.md §2).
+    Class(ClassDecl),
+    /// `instance C<T> { … }` — a namespace of ordinary declarations plus an
+    /// assembled record value (docs/traits-layer1-design.md §4).
+    Instance(InstanceDecl),
     /// `import nat;` / `import option::{Option, map};`
     /// (docs/modules-design.md §3.1). Allowed only before the first
     /// declaration, so the import DAG is readable without elaborating
@@ -50,8 +56,76 @@ impl Item {
             Item::Decl(d) => d,
             Item::Inductive(i) => panic!("expected a declaration, found `inductive {}`", i.name),
             Item::Import(i) => panic!("expected a declaration, found `import {}`", i.module),
+            Item::Class(c) => panic!("expected a declaration, found `class {}`", c.name),
+            Item::Instance(i) => {
+                panic!("expected a declaration, found `instance {}`", i.class.name)
+            }
         }
     }
+}
+
+/// `class C<A, …> extends P<A>, Q<A> { f: T, … }`
+/// (docs/traits-layer1-design.md §2). The lowering is a `record`'s: the
+/// elaborator concatenates the ancestors' fields in front of `fields` and
+/// hands the result to the tier-0 generator. What the keyword buys is the
+/// registry entry and the `extends` discipline, not a second encoding.
+#[derive(Debug, Clone)]
+pub struct ClassDecl {
+    pub name: String,
+    pub params: Vec<String>,
+    pub extends: Vec<ClassRef>,
+    pub fields: Vec<FieldDecl>,
+    pub span: Span,
+}
+
+/// `Monoid<A>` in an `extends` list or an `instance` head — a class applied to
+/// its arguments. Angle brackets and no `for`: the carrier is a *parameter*,
+/// and privileging one of several would break at `Coe<A, B>`
+/// (docs/traits-design.md §3).
+#[derive(Debug, Clone)]
+pub struct ClassRef {
+    pub name: String,
+    pub args: Vec<Ty>,
+    pub span: Span,
+}
+
+/// `instance<A, B> C<T> requires m: D<A> { … }`
+/// (docs/traits-layer1-design.md §4).
+#[derive(Debug, Clone)]
+pub struct InstanceDecl {
+    /// `instance<A, B> …` — the generic instance's type parameters. They
+    /// become leading implicit parameters of every member and of the assembled
+    /// value, exactly as a `fn`'s do.
+    pub tyvars: Vec<TyParam>,
+    pub class: ClassRef,
+    /// `requires ma: Monoid<A>, …` — **ordinary explicit parameters** at layer
+    /// 1: there is no resolution yet, so a caller passes them
+    /// (docs/traits-design.md §6, staged).
+    pub requires: Vec<Param>,
+    pub body: InstanceBody,
+    pub span: Span,
+}
+
+/// The two spellings of an instance body (docs/traits-design.md §3), told
+/// apart by one token: a body that starts with `fn`/`theorem`/`meta` is a
+/// block, anything else is a literal. There is no mixed form.
+#[derive(Debug, Clone)]
+pub enum InstanceBody {
+    /// Each member elaborates, in order, to a real top-level global under the
+    /// instance's namespace; the value is assembled from them at the end.
+    Block(Vec<Decl>),
+    /// `op := Rat::add` — assembled from previously declared globals.
+    Literal(Vec<InstanceField>),
+}
+
+/// One `f := e` of an instance's literal body. `:=` rather than `:` because a
+/// `:` inside instance braces would read as both a record-literal field and a
+/// class field's type ascription.
+#[derive(Debug, Clone)]
+pub struct InstanceField {
+    pub name: String,
+    pub expr: Expr,
+    pub span: Span,
 }
 
 /// `inductive D<p, …> { c(f: T, …), … }` — a datatype declaration. Tier 0

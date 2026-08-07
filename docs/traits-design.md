@@ -404,6 +404,12 @@ discipline; (b) layer 2 — the resolver with its four disciplines and the
 roadmap, when context computation lands. Bundled records need no
 scheduling — already landed.
 
+Layer 1 landed 2026-08-07; its specification slice is
+`docs/traits-layer1-design.md`, whose §7 records what implementing corrected
+(the canonical name is keyed on the carrier *head* rather than the whole
+carrier syntax, and `extends` at a non-parameter argument is refused) and
+whose §8 lists what it hands to layer 2.
+
 Layer 1's acceptance corpus, named now: the prelude types
 (Option/Result/List) for ordinary classes; a small
 `AddMonoid → AddCommGroup` hierarchy as the `extends`/canonical-value/

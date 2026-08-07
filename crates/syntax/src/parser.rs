@@ -2,7 +2,7 @@
 //!
 //! ```text
 //! file    := item*
-//! item    := decl | inductive | record
+//! item    := decl | inductive | record | class | instance
 //! decl    := "fn" name tyvars? "(" params? ")" "->" type block
 //!          | "theorem" name tyvars? "(" params? ")" ":" type block
 //! tyvars  := "<" tyvar ("," tyvar)* ">"
@@ -11,6 +11,13 @@
 //! induct  := "inductive" name tyvars? "{" ctors? "}"
 //! record  := "record" name tyvars? "{" rfield ("," rfield)* ","? "}"
 //! rfield  := name ":" type            -- a record field is always named
+//! class   := "class" name tyvars? ("extends" cref ("," cref)*)?
+//!            "{" rfield ("," rfield)* ","? "}"
+//! cref    := name "<" type ("," type)* ">"
+//! inst    := "instance" tyvars? cref ("requires" ibind ("," ibind)*)?
+//!            "{" (decl* | ifield ("," ifield)* ","?) "}"
+//! ibind   := name ":" type
+//! ifield  := name ":=" expr
 //! ctors   := ctor ("," ctor)* ","?
 //! ctor    := name ("(" field ("," field)* ","? ")")?
 //! field   := (name ":")? type
@@ -380,7 +387,183 @@ impl Parser {
         if self.at_kw("record") {
             return Ok(Item::Inductive(self.record()?));
         }
+        // `class`/`instance` are contextual like every keyword here: a
+        // declaration cannot begin with either (a `fn` named `class` is
+        // `fn class(…)`, and the keyword is only recognized at the head of an
+        // item, where `class C<…>` and `instance C<…>` are the only readings).
+        if self.at_kw("class") {
+            return Ok(Item::Class(self.class_decl()?));
+        }
+        if self.at_kw("instance") {
+            return Ok(Item::Instance(self.instance_decl()?));
+        }
         Ok(Item::Decl(self.decl()?))
+    }
+
+    /// `class C<A> extends P<A>, Q<A> { f: T, … }`
+    /// (docs/traits-layer1-design.md §1). The body is a `record`'s field list,
+    /// verbatim — a class *is* a parameterized record, and the parse says so.
+    fn class_decl(&mut self) -> R<ClassDecl> {
+        let start = self.peek_span();
+        self.bump(); // `class`
+        let (name, _) = self.ident("class name")?;
+        let params = self.tyvar_list()?;
+        let mut extends = Vec::new();
+        if self.eat_kw("extends") {
+            loop {
+                extends.push(self.class_ref("a parent class (`extends Monoid<A>`)")?);
+                if !matches!(self.peek(), TokKind::Comma) {
+                    break;
+                }
+                self.bump();
+            }
+        }
+        self.expect(&TokKind::LBrace, "`{` (field list)")?;
+        let mut fields = Vec::new();
+        while !matches!(self.peek(), TokKind::RBrace) {
+            let f = self.field()?;
+            if f.name.is_none() {
+                return Err(ParseError {
+                    msg: "a class field needs a name (`unit: A`): the name is what an \
+                          instance fills and what `m.unit` projects by"
+                        .into(),
+                    span: f.span,
+                });
+            }
+            fields.push(f);
+            if !matches!(self.peek(), TokKind::Comma) {
+                break;
+            }
+            self.bump();
+        }
+        let end = self.expect(&TokKind::RBrace, "`}` (field list)")?;
+        Ok(ClassDecl { name, params, extends, fields, span: start.join(end) })
+    }
+
+    /// `Monoid<A>` — a class applied to its arguments. The brackets are
+    /// mandatory: a class with no parameters has no carrier, so it is a
+    /// `record` and should be written as one.
+    fn class_ref(&mut self, what: &str) -> R<ClassRef> {
+        let (name, nsp) = self.qual_ident(what)?;
+        if !matches!(self.peek(), TokKind::Lt) {
+            return Err(ParseError {
+                msg: format!(
+                    "`{name}` needs its arguments here (`{name}<A>`): a class is a record \
+                     parameterized by its carrier, so the carrier is written"
+                ),
+                span: nsp,
+            });
+        }
+        self.bump();
+        let mut args = Vec::new();
+        loop {
+            args.push(self.with_record_lit(true, |p| p.ty())?);
+            if !matches!(self.peek(), TokKind::Comma) {
+                break;
+            }
+            self.bump();
+        }
+        let end = self.expect(&TokKind::Gt, "`>` to close the class arguments")?;
+        Ok(ClassRef { name, args, span: nsp.join(end) })
+    }
+
+    /// `instance<A, B> C<T> requires m: D<A> { … }`
+    /// (docs/traits-layer1-design.md §1, §4).
+    fn instance_decl(&mut self) -> R<InstanceDecl> {
+        let start = self.peek_span();
+        self.bump(); // `instance`
+        let tyvars = self.typaram_list()?;
+        let class = self.class_ref("the class this instance is of")?;
+        // `requires ma: Monoid<A>, mb: Monoid<B>` — no parentheses, because the
+        // list is not an argument list: at layer 1 these are ordinary explicit
+        // parameters of every member and of the assembled value.
+        let mut requires = Vec::new();
+        if self.eat_kw("requires") {
+            loop {
+                let (pname, psp) = self.binder_ident("a `requires` binder name")?;
+                self.expect(&TokKind::Colon, "`:` (a `requires` binder is `name: C<A>`)")?;
+                let ty = self.with_record_lit(true, |p| p.ty())?;
+                let span = psp.join(ty.span);
+                requires.push(Param { name: pname, ty, implicit: false, is_self: false, span });
+                if !matches!(self.peek(), TokKind::Comma) {
+                    break;
+                }
+                self.bump();
+            }
+        }
+        let open = self.expect(&TokKind::LBrace, "`{` (the instance body)")?;
+        // One token decides the body form (docs/traits-layer1-design.md §1):
+        // a member is a declaration, a literal field is an assignment, and one
+        // brace never holds both.
+        let is_block =
+            self.at_kw("fn") || self.at_kw("theorem") || self.at_kw("meta");
+        let body = if is_block {
+            let mut members = Vec::new();
+            while !matches!(self.peek(), TokKind::RBrace) {
+                if !(self.at_kw("fn") || self.at_kw("theorem") || self.at_kw("meta")) {
+                    return self.err(
+                        "an instance body is either a block of `fn`/`theorem` members or a \
+                         list of `field := expr`, never both \
+                         (docs/traits-layer1-design.md §1)",
+                    );
+                }
+                members.push(self.decl()?);
+            }
+            InstanceBody::Block(members)
+        } else {
+            let mut fields = Vec::new();
+            while !matches!(self.peek(), TokKind::RBrace) {
+                let (fname, fsp) = self.ident("a field name (`op := Rat::add`)")?;
+                self.expect(
+                    &TokKind::ColonEq,
+                    "`:=` (an instance's literal field is `op := e`; `:` is the record \
+                     literal's spelling and would be ambiguous here)",
+                )?;
+                let expr = self.expr()?;
+                let span = fsp.join(expr.span);
+                fields.push(InstanceField { name: fname, expr, span });
+                if !matches!(self.peek(), TokKind::Comma) {
+                    break;
+                }
+                self.bump();
+            }
+            InstanceBody::Literal(fields)
+        };
+        let end = self.expect(&TokKind::RBrace, "`}` to close the instance body")?;
+        let _ = open;
+        Ok(InstanceDecl { tyvars, class, requires, body, span: start.join(end) })
+    }
+
+    /// `<A, B: Type<1>>` after `instance`, or nothing — the same production a
+    /// `fn`'s type parameters use, factored out because two callers now want
+    /// it.
+    fn typaram_list(&mut self) -> R<Vec<TyParam>> {
+        let mut tyvars = Vec::new();
+        if !matches!(self.peek(), TokKind::Lt) {
+            return Ok(tyvars);
+        }
+        self.bump();
+        loop {
+            let (tv, tvsp) = self.binder_ident("type parameter name")?;
+            let mut level = 0;
+            if matches!(self.peek(), TokKind::Colon) {
+                self.bump();
+                let Some((n, _)) = self.univ()? else {
+                    return self.err(
+                        "a type parameter's annotation must be a universe: write \
+                         `<A: Type<n>>`, or `<A>` for `Type<0>`",
+                    );
+                };
+                level = n;
+            }
+            tyvars.push(TyParam { name: tv, level, span: tvsp });
+            if !matches!(self.peek(), TokKind::Comma) {
+                break;
+            }
+            self.bump();
+        }
+        self.expect(&TokKind::Gt, "`>` to close the type parameters")?;
+        Ok(tyvars)
     }
 
     /// `import nat;` or `import option::{Option, map};`

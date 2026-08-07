@@ -85,10 +85,12 @@ mod inductive;
 mod lgg;
 mod quote;
 mod slots;
+mod traits;
 mod vec;
 mod wf;
 
 use inductive::Inductive;
+use traits::{ClassInfo, InstanceInfo};
 use names::{
     miss_msg, qkey, resolve, split_qual, ImportSpec, NameIndex, NameKind, NameRes,
     Scope, DEFAULT_MODULE,
@@ -622,6 +624,24 @@ pub struct Elaborator {
     /// Which type a base name belongs to is not recorded here — that is
     /// decided by the receiver, against the ordinary name tables.
     member_bases: HashSet<String>,
+    /// Declared classes, by qualified name (docs/traits-layer1-design.md §2).
+    /// A class *is* a record — `inductives` holds it too — so this table
+    /// carries only what `extends` and the instance assembler need beyond the
+    /// record: the flattened field list with its per-field owner, and the
+    /// transitive ancestor list. Layer 2's resolver is the consumer it exists
+    /// for.
+    classes: HashMap<String, Rc<ClassInfo>>,
+    /// One canonical value per (class, carrier head)
+    /// (docs/traits-layer1-design.md §4.1). Declaring is registering; there is
+    /// no search over this table at layer 1, only the fill-by-reference and
+    /// parent-synthesis lookups the `extends` discipline makes.
+    instances: HashMap<(String, String), InstanceInfo>,
+    /// While an `instance` block is being elaborated: the members that have
+    /// already landed, as (written name, full name). An unqualified reference
+    /// to one of them resolves to its global, which is the whole of "later
+    /// members use earlier members by name" (docs/traits-layer1-design.md
+    /// §4.2). Empty outside a block, which makes the mechanism inert.
+    instance_scope: Vec<(String, String)>,
     next_tag: u32,
     fuel: u64,
     /// Number of Ψ slots reserved for the current declaration's goals — a
@@ -750,6 +770,9 @@ impl Elaborator {
             ctors: HashMap::new(),
             record_fields: HashSet::new(),
             member_bases: HashSet::new(),
+            classes: HashMap::new(),
+            instances: HashMap::new(),
+            instance_scope: Vec::new(),
             next_tag: 0,
             fuel: DEFAULT_FUEL,
             goal_base: 0,
@@ -802,6 +825,8 @@ impl Elaborator {
             match item {
                 Item::Decl(d) => self.elab_decl(d)?,
                 Item::Inductive(i) => self.elab_inductive(i)?,
+                Item::Class(c) => self.elab_class(c)?,
+                Item::Instance(i) => self.elab_instance(i)?,
                 Item::Import(_) => {}
             }
         }
@@ -917,7 +942,27 @@ impl Elaborator {
     }
 
     fn lookup_global(&self, name: &str) -> Option<&GlobalInfo> {
-        self.globals.get(&self.key_of(name)?)
+        self.globals.get(&self.key_of(self.instance_alias(name))?)
+    }
+
+    /// Inside an `instance` block, an unqualified name that is an *earlier*
+    /// member of this block names that member's global
+    /// (docs/traits-layer1-design.md §4.2). A name rewrite and nothing more:
+    /// the members' own parameters are unaffected, so in a *generic* instance
+    /// a cross-member call still passes the `requires` binders — layer 1 has
+    /// no resolution to fill them with.
+    ///
+    /// Consulted only from [`Self::lookup_global`], so locals, aliases,
+    /// constructors and the self-reference all shadow it exactly as they
+    /// shadow any global.
+    fn instance_alias<'a>(&'a self, name: &'a str) -> &'a str {
+        if self.instance_scope.is_empty() {
+            return name;
+        }
+        match self.instance_scope.iter().rev().find(|(base, _)| base == name) {
+            Some((_, full)) => full,
+            None => name,
+        }
     }
 
     pub(crate) fn lookup_inductive(&self, name: &str) -> Option<&Rc<Inductive>> {
@@ -1022,6 +1067,8 @@ impl Elaborator {
             let r = match item {
                 Item::Decl(d) => self.elab_decl(d),
                 Item::Inductive(i) => self.elab_inductive(i),
+                Item::Class(c) => self.elab_class(c),
+                Item::Instance(i) => self.elab_instance(i),
                 Item::Import(_) => Ok(()),
             };
             if let Err(e) = r {
