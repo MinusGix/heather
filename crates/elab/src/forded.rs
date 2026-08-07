@@ -555,7 +555,7 @@ impl Elaborator {
                         .filter(|k| **k == FieldKind::Plain)
                         .count();
                     let tel = tel.expect("a child-index field only occurs at a `Wf` skeleton");
-                    acx.aliases.push(Rc::new(Alias {
+                    acx.aliases.push(Rc::new(Alias { skel: None,
                         name,
                         depth,
                         term: Rc::new(wf_ih_at(tel, m, ct, d_body)),
@@ -565,7 +565,7 @@ impl Elaborator {
                 }
                 _ => {
                     let (term, ty, level) = self.projection(&acx, &ctor_ty, value, p, span)?;
-                    acx.aliases.push(Rc::new(Alias { name, depth, term, ty, level }));
+                    acx.aliases.push(Rc::new(Alias { skel: None, name, depth, term, ty, level }));
                     p += 1;
                 }
             }
@@ -641,7 +641,7 @@ impl Elaborator {
             match ctor.kind[k] {
                 FieldKind::IndexVar => {
                     let term = self.elab_check(cx, &args[k], ity, ilvl)?;
-                    acx.aliases.push(Rc::new(Alias {
+                    acx.aliases.push(Rc::new(Alias { skel: None,
                         name,
                         depth,
                         term: Rc::new(term),
@@ -651,7 +651,7 @@ impl Elaborator {
                 }
                 FieldKind::Payload => {
                     if let Some((_, term, ty, level)) = pays.iter().find(|(j, ..)| *j == k) {
-                        acx.aliases.push(Rc::new(Alias {
+                        acx.aliases.push(Rc::new(Alias { skel: None,
                             name,
                             depth,
                             term: Rc::clone(term),
@@ -660,7 +660,7 @@ impl Elaborator {
                         }));
                     } else if crate::inductive::expr_mentions(e, &name) {
                         let (term, ty, level) = self.elab_infer(cx, &args[k])?;
-                        acx.aliases.push(Rc::new(Alias {
+                        acx.aliases.push(Rc::new(Alias { skel: None,
                             name,
                             depth,
                             term: Rc::new(term),
@@ -880,7 +880,7 @@ impl Elaborator {
             // A bound `z` is already scoped in `zcx`; everything else is
             // scoped in `cx` and moves out by one.
             let bound = matches!(&**term, Term::Var(LocalVar(0)));
-            acx.aliases.push(Rc::new(Alias {
+            acx.aliases.push(Rc::new(Alias { skel: None,
                 name,
                 depth: if bound { zcx.names.len() } else { cx.names.len() },
                 term: Rc::clone(term),
@@ -2045,7 +2045,7 @@ impl Elaborator {
                         .iter()
                         .filter(|x| **x == FieldKind::Plain)
                         .count();
-                    acx.aliases.push(Rc::new(Alias {
+                    acx.aliases.push(Rc::new(Alias { skel: None,
                         name: bname,
                         depth,
                         term: Rc::new(idx_of_child[ct].clone()),
@@ -2060,7 +2060,7 @@ impl Elaborator {
                     let val = fam.pair_at(at.clone(), child.clone(), pf.clone(), dd);
                     let ih = self.forded_ih(env, m, t, j, dd, at.clone(), pf);
                     let ih_ty = env.mot_at(at.clone(), val.clone(), dd);
-                    acx.aliases.push(Rc::new(Alias {
+                    acx.aliases.push(Rc::new(Alias { skel: None,
                         name: bname,
                         depth,
                         term: Rc::new(val.clone()),
@@ -2079,7 +2079,7 @@ impl Elaborator {
                 _ => {
                     let (term, ty, level) =
                         self.projection(&acx, &ctor_ty, &value_here, p, span)?;
-                    acx.aliases.push(Rc::new(Alias { name: bname, depth, term, ty, level }));
+                    acx.aliases.push(Rc::new(Alias { skel: None, name: bname, depth, term, ty, level }));
                     p += 1;
                 }
             }

@@ -439,14 +439,29 @@ mod rejections {
         assert!(msg.contains("not the one expected here"), "{msg}");
     }
 
+    // Successor of `implicit_binders_are_diagnosed_not_parsed` (retired
+    // 2026-08-06): both spellings are parses now
+    // (docs/implicit-binders-design.md §8) — a `{n: Nat}` parameter type
+    // elaborates, and an implicit lambda binder is accepted where the
+    // expected skeleton says implicit. What stays refused is the mark in a
+    // *result* position, whose skeleton has no consumer (§3.4), and an
+    // implicit lambda binder against a skeleton-less expected type (§6.2).
     #[test]
-    fn implicit_binders_are_diagnosed_not_parsed() {
-        let ty = elab_err("fn f(g: {n: Nat} -> Nat) -> Nat { 0 }");
-        assert!(ty.contains("implicit binders are not supported"), "{ty}");
-        assert!(ty.contains("implicit-binders-in-function-types"), "{ty}");
+    fn implicit_binders_parse_where_a_skeleton_consumes_them() {
+        elab("fn f(g: {n: Nat} -> Nat) -> Nat { 0 }");
+        elab(
+            r#"
+            fn use1(f: {n: Nat} -> Nat) -> Nat { 0 }
+            fn go() -> Nat { use1(λ {n: Nat} => n) }
+            "#,
+        );
+
+        let res = elab_err("fn mk() -> {n: Nat} -> Nat { λ {n: Nat} => n }");
+        assert!(res.contains("this position cannot use one"), "{res}");
+        assert!(res.contains("implicit-binders-in-function-types"), "{res}");
 
         let lam = elab_err("fn f() -> Nat -> Nat { λ {x: Nat} => x }");
-        assert!(lam.contains("implicit lambda binders"), "{lam}");
+        assert!(lam.contains("carries no implicitness"), "{lam}");
     }
 
     // What makes a function field infinitary is a *self-occurrence* inside

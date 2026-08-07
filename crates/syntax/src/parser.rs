@@ -1036,23 +1036,40 @@ impl Parser {
             return Ok(Ty {
                 kind: TyKind::Fn {
                     binder: Some(name),
+                    implicit: false,
                     dom: Box::new(dom),
                     cod: Box::new(cod),
                 },
                 span,
             });
         }
-        // `{x: A} -> B` — diagnosed rather than parsed
-        // (issues/implicit-binders-in-function-types.md).
+        // `{x: A} -> B` — an *implicit* binder
+        // (docs/implicit-binders-design.md §8). The same three-token
+        // lookahead the old diagnostic used: type position has no other
+        // brace form, so `{ Ident :` is unambiguous. One binder per brace
+        // group, mirroring the paren rule; inside the braces the type parses
+        // exactly as inside `(…: …)` (an equality domain is `{p: (a = b)}`).
         if matches!(self.peek(), TokKind::LBrace)
             && matches!(self.nth(1), TokKind::Ident(_))
             && matches!(self.nth(2), TokKind::Colon)
         {
-            return self.err(
-                "implicit binders are not supported in function types yet: \
-                 implicitness is a property of a declaration's parameters \
-                 (see issues/implicit-binders-in-function-types.md)",
-            );
+            let start = self.bump().span; // `{`
+            let (name, _) = self.ident("binder name")?;
+            self.expect(&TokKind::Colon, "`:`")?;
+            let dom = self.ty()?;
+            self.expect(&TokKind::RBrace, "`}` to close the implicit binder")?;
+            self.expect(&TokKind::Arrow, "`->` after a function-type binder")?;
+            let cod = self.ty()?;
+            let span = start.join(cod.span);
+            return Ok(Ty {
+                kind: TyKind::Fn {
+                    binder: Some(name),
+                    implicit: true,
+                    dom: Box::new(dom),
+                    cod: Box::new(cod),
+                },
+                span,
+            });
         }
         let lhs = self.ty_atom()?;
         if matches!(self.peek(), TokKind::Arrow) {
@@ -1060,7 +1077,12 @@ impl Parser {
             let cod = self.ty()?; // right-associative
             let span = lhs.span.join(cod.span);
             return Ok(Ty {
-                kind: TyKind::Fn { binder: None, dom: Box::new(lhs), cod: Box::new(cod) },
+                kind: TyKind::Fn {
+                    binder: None,
+                    implicit: false,
+                    dom: Box::new(lhs),
+                    cod: Box::new(cod),
+                },
                 span,
             });
         }
@@ -1224,7 +1246,12 @@ impl Parser {
         let dom = expr_as_ty(&lhs);
         let cod = self.ty()?;
         let span = lhs.span.join(cod.span);
-        let kind = TyKind::Fn { binder: None, dom: Box::new(dom), cod: Box::new(cod) };
+        let kind = TyKind::Fn {
+            binder: None,
+            implicit: false,
+            dom: Box::new(dom),
+            cod: Box::new(cod),
+        };
         Ok(Expr { kind: ExprKind::TyLit(Box::new(Ty { kind, span })), span })
     }
 
@@ -1656,7 +1683,7 @@ impl Parser {
             match self.peek() {
                 TokKind::Ident(_) => {
                     let (name, sp) = self.binder_ident("lambda binder")?;
-                    binders.push(LamBinder { name, ty: None, span: sp });
+                    binders.push(LamBinder { name, ty: None, implicit: false, span: sp });
                 }
                 TokKind::LParen => {
                     let open = self.bump().span;
@@ -1667,14 +1694,32 @@ impl Parser {
                     binders.push(LamBinder {
                         name,
                         ty: Some(ty),
+                        implicit: false,
                         span: open.join(close),
                     });
                 }
+                // `{x}` / `{x: A}` — an implicit lambda binder
+                // (docs/implicit-binders-design.md §8). One binder per brace
+                // group, mirroring the paren rule; the annotation is optional
+                // exactly as for a bare binder (checking position supplies
+                // the domain from the expected Π).
                 TokKind::LBrace => {
-                    return self.err(
-                        "implicit lambda binders are not supported yet \
-                         (see issues/implicit-binders-in-function-types.md)",
-                    )
+                    let open = self.bump().span;
+                    let (name, _) = self.binder_ident("lambda binder")?;
+                    let ty = if matches!(self.peek(), TokKind::Colon) {
+                        self.bump();
+                        Some(self.ty()?)
+                    } else {
+                        None
+                    };
+                    let close =
+                        self.expect(&TokKind::RBrace, "`}` (implicit lambda binder)")?;
+                    binders.push(LamBinder {
+                        name,
+                        ty,
+                        implicit: true,
+                        span: open.join(close),
+                    });
                 }
                 _ => break,
             }
@@ -1994,6 +2039,47 @@ mod tests {
         assert!(ps[0].implicit, "`{{a}}` is implicit");
         assert!(!ps[1].implicit, "`b` is explicit");
         assert!(!ps[2].implicit, "`p` is explicit");
+    }
+
+    // Successors of the two implicit-binder diagnostics (retired
+    // 2026-08-06): `{x: A} -> B` and `λ {x: A} => e` are parses now
+    // (docs/implicit-binders-design.md §8), with the mark on the node.
+    #[test]
+    fn implicit_function_type_binders_parse() {
+        let f = parse_file("fn f(g: {n: Nat} -> Nat -> Nat) -> Nat { 0 }").unwrap();
+        let TyKind::Fn { binder, implicit, cod, .. } = &only_decl(&f).params[0].ty.kind
+        else {
+            panic!("expected a function type")
+        };
+        assert_eq!(binder.as_deref(), Some("n"));
+        assert!(*implicit, "`{{n: Nat}}` is implicit");
+        // The spine continues explicit past the brace group.
+        assert!(matches!(&cod.kind, TyKind::Fn { implicit: false, .. }));
+    }
+
+    #[test]
+    fn implicit_lambda_binders_parse() {
+        let f =
+            parse_file("fn f() -> Nat { g(λ {A: Type<0>} {x} (y: Nat) => y) }").unwrap();
+        let ExprKind::App { args, .. } = &only_decl(&f).body.result.kind else {
+            panic!("expected a call")
+        };
+        let ExprKind::Lam { binders, .. } = &args[0].kind else { panic!("expected a lambda") };
+        assert_eq!(binders.len(), 3);
+        assert!(binders[0].implicit && binders[0].ty.is_some());
+        assert!(binders[1].implicit && binders[1].ty.is_none(), "`{{x}}` is unannotated");
+        assert!(!binders[2].implicit);
+    }
+
+    // §8.2's residual case: a motive that *ends* in an implicit binder type
+    // parses greedily and correctly — the arms brace cannot match the
+    // `{ Ident :` lookahead (`Pat =>` / `Pat(` follows the brace instead).
+    #[test]
+    fn a_motive_ending_in_an_implicit_binder_type_leaves_the_arms_brace() {
+        parse_file(
+            "fn f(t: Nat) -> Nat { match t as λ z => {p: Nat} -> Nat { Zero => 0, Succ(k) => k } }",
+        )
+        .unwrap();
     }
 
     #[test]

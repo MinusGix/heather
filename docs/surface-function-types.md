@@ -197,10 +197,14 @@ The `j` and `match`-motive forms use `->` for *binder-to-body*, which will
 read oddly once `->` is the type arrow. That is a follow-on (§7), not part of
 this round.
 
-**One known restriction, recorded rather than discovered:** a type may not
-*begin* with `{`, so if implicit binders are ever added to function types
-(§2.1), an implicit-headed type would be ambiguous with a `match` arm brace
-in `match t as x -> {…} -> T { … }` and would need parentheses.
+**One known restriction, recorded rather than discovered — and lifted
+(2026-08-06):** the concern was that a type may not *begin* with `{`, so an
+implicit-headed type would be ambiguous with a `match` arm brace. The
+implicit-binders round (docs/implicit-binders-design.md §8.2) lifted it
+with the three-token lookahead `{ Ident :`, which no arm brace can match
+(an arm opens `Pat =>` or `Pat(`); the motive case parses greedily and
+correctly, pinned by
+`parser.rs::a_motive_ending_in_an_implicit_binder_type_leaves_the_arms_brace`.
 
 ### 3.2 Lexer
 

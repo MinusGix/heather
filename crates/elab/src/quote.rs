@@ -216,7 +216,7 @@ impl Elaborator {
                 }
             };
             let (term, ty, level) = self.elab_infer(&cx, expr)?;
-            cx.aliases.push(Rc::new(Alias {
+            cx.aliases.push(Rc::new(Alias { skel: None,
                 name: name.clone(),
                 depth: cx.names.len(),
                 term: Rc::new(term),
@@ -369,7 +369,7 @@ impl Elaborator {
         let mut rest: &Ty = payload;
         let mut order: Vec<usize> = Vec::new();
         for n in 0..spec.ingredients.len() {
-            let TyKind::Fn { binder, dom, cod } = &rest.kind else {
+            let TyKind::Fn { binder, implicit, dom, cod } = &rest.kind else {
                 return err(
                     format!(
                         "`{}` binds {n} of the slot's {} ingredients ({}): a template \
@@ -381,6 +381,12 @@ impl Elaborator {
                     rest.span,
                 );
             };
+            // Meta-layer signatures refuse implicit marks: the slice is pure
+            // quotation and carries zero implicit machinery
+            // (docs/implicit-binders-design.md §3.4).
+            if *implicit {
+                return err(crate::IMPLICIT_MARK_REFUSED, rest.span);
+            }
             let Some(name) = binder else {
                 return err(
                     format!(

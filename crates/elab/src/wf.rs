@@ -628,7 +628,7 @@ impl Elaborator {
                                 pair: term,
                             });
                         }
-                        acx.aliases.push(Rc::new(Alias {
+                        acx.aliases.push(Rc::new(Alias { skel: None,
                             name: name.clone(),
                             depth: acx.names.len(),
                             term: Rc::clone(&term),
@@ -731,7 +731,7 @@ impl Elaborator {
                         let ih_ty = tel
                             .motive
                             .apply_local(&embed(tel.gamma0, d_body).extended(Rc::clone(&c)));
-                        acx.aliases.push(Rc::new(Alias {
+                        acx.aliases.push(Rc::new(Alias { skel: None,
                             name: name.clone(),
                             depth: acx.names.len(),
                             term: Rc::clone(&c),
@@ -743,7 +743,7 @@ impl Elaborator {
                     } else {
                         let (proj, ty, level) =
                             self.projection(&acx, &ctor_ty, &value_here, payload_k, span)?;
-                        acx.aliases.push(Rc::new(Alias {
+                        acx.aliases.push(Rc::new(Alias { skel: None,
                             name: name.clone(),
                             depth: acx.names.len(),
                             term: proj,

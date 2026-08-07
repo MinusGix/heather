@@ -552,7 +552,7 @@ impl Elaborator {
                         // §5.2: elaborate once, park it in an alias, and let
                         // alias resolution do the per-arm weakening.
                         let t = self.elab_check(&cx2, &a.body, result, mlvl)?;
-                        cx2.aliases.push(Rc::new(Alias {
+                        cx2.aliases.push(Rc::new(Alias { skel: None,
                             name: slot(i),
                             depth: cx2.names.len(),
                             term: Rc::new(t),

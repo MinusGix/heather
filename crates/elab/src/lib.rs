@@ -373,6 +373,139 @@ fn show_level(l: &Level) -> String {
     }
 }
 
+/// The §3.4 shared refusal: an implicit mark whose skeleton would have no
+/// consumer must not be silently erased — the writer believes call sites
+/// will infer, and they will not (docs/implicit-binders-design.md §3.4).
+pub(crate) const IMPLICIT_MARK_REFUSED: &str =
+    "implicit binders take effect in parameter types, `let` annotations, field \
+     types, and lambdas; this position cannot use one — see \
+     issues/implicit-binders-in-function-types.md";
+
+/// The implicitness skeleton of a surface-written function type
+/// (issues/implicit-binders-in-function-types.md, option 1;
+/// docs/implicit-binders-design.md §2). Positional: entry `i` speaks for the
+/// `i`-th Π along the type's spine, and for no Π past `params.len()` —
+/// `whnf` can expose further Πs (an `OfExpr` codomain decoding to a function
+/// type), and those are explicit by the degradation rule. Contains no terms,
+/// no de Bruijn indices, and no name that resolves — binder names are
+/// carried only as goal-name hints and diagnostic labels — so substitution,
+/// shifts and discharge have nothing to act on and skeletons travel with
+/// their context entry with no update operation at all (§3.2).
+#[derive(Clone, Debug)]
+pub(crate) struct Skel {
+    params: Vec<SkelBinder>,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct SkelBinder {
+    /// The written binder name, for goal-name hints and the §7 messages.
+    name: Option<String>,
+    implicit: bool,
+    /// The surface domain was `Type<n>` — selects the "type argument"
+    /// message flavor, exactly as `ParamMeta.is_type` does for globals.
+    is_type: bool,
+    /// The domain's own skeleton, when the domain is itself a function type
+    /// carrying implicits — a lemma-shaped callback's implicits.
+    dom: Option<Rc<Skel>>,
+}
+
+impl Skel {
+    /// The leading implicit prefix — the §5.2 bare-reference mask.
+    fn leading_implicit(&self) -> usize {
+        self.params.iter().take_while(|b| b.implicit).count()
+    }
+}
+
+/// Derive a type's skeleton, purely syntactically. Sparse by rule: `None`
+/// unless an implicit mark occurs somewhere along the spine or in a nested
+/// domain, so every existing program allocates nothing and changes nothing.
+/// The codomain chain flattens (Π is right-nested and positional along the
+/// spine); the domain nests (`SkelBinder::dom`); the final result type past
+/// the last written arrow carries nothing (docs/implicit-binders-design.md
+/// §2.1).
+fn skel_of_ty(ty: &Ty) -> Option<Rc<Skel>> {
+    let mut params = Vec::new();
+    let mut any = false;
+    let mut cur = ty;
+    while let TyKind::Fn { binder, implicit, dom, cod } = &cur.kind {
+        let dom_skel = skel_of_ty(dom);
+        any |= *implicit || dom_skel.is_some();
+        params.push(SkelBinder {
+            name: binder.clone(),
+            implicit: *implicit,
+            is_type: matches!(dom.kind, TyKind::Univ { .. }),
+            dom: dom_skel,
+        });
+        cur = cod;
+    }
+    any.then(|| Rc::new(Skel { params }))
+}
+
+/// The skeleton of a *written* lambda's binder marks — the `let`-RHS harvest
+/// of docs/implicit-binders-design.md §6.3. Same sparse rule as
+/// [`skel_of_ty`]. Prefix authority: the skeleton speaks for the written
+/// binders only; whatever function type the body returns is past its end.
+fn skel_of_lam_binders(binders: &[LamBinder]) -> Option<Rc<Skel>> {
+    let mut any = false;
+    let params = binders
+        .iter()
+        .map(|b| {
+            let dom = b.ty.as_ref().and_then(skel_of_ty);
+            any |= b.implicit || dom.is_some();
+            SkelBinder {
+                name: Some(b.name.clone()),
+                implicit: b.implicit,
+                is_type: matches!(b.ty.as_ref().map(|t| &t.kind), Some(TyKind::Univ { .. })),
+                dom,
+            }
+        })
+        .collect();
+    any.then(|| Rc::new(Skel { params }))
+}
+
+/// Does an implicit mark occur anywhere in this surface type? The §3.4
+/// refusal walker, called at the `elab_ty` entry points whose skeleton would
+/// have no consumer — mirroring how `count_holes` already walks `Ty`.
+fn has_implicit_mark(ty: &Ty) -> bool {
+    match &ty.kind {
+        TyKind::Fn { implicit, dom, cod, .. } => {
+            *implicit || has_implicit_mark(dom) || has_implicit_mark(cod)
+        }
+        TyKind::Named { args, .. } => args.iter().any(has_implicit_mark),
+        TyKind::Vec { elem, .. } => has_implicit_mark(elem),
+        TyKind::Code { ty, .. } => has_implicit_mark(ty),
+        TyKind::Nat
+        | TyKind::Eq(..)
+        | TyKind::Univ { .. }
+        | TyKind::OfExpr(_)
+        | TyKind::Fin(_)
+        | TyKind::Ctx
+        | TyKind::TyCode { .. }
+        | TyKind::Splice { .. } => false,
+    }
+}
+
+/// Synthesize the [`ParamMeta`] table a *value* callee offers from its
+/// skeleton (docs/implicit-binders-design.md §4.2): goal-name hints, the
+/// deferral hint at retry, and the per-slot discharge messages all work
+/// verbatim from skeleton binder names. `#i` for an unnamed position —
+/// unspellable, so it cannot collide with a written name.
+fn skel_params(skel: &Skel) -> Rc<Vec<ParamMeta>> {
+    Rc::new(
+        skel.params
+            .iter()
+            .enumerate()
+            .map(|(i, b)| ParamMeta {
+                name: b.name.clone().unwrap_or_else(|| format!("#{i}")),
+                implicit: b.implicit,
+                is_type: b.is_type,
+                is_self: false,
+                skel: b.dom.clone(),
+            })
+            .collect(),
+    )
+}
+
 /// One parameter of a callable global, in declaration/telescope order.
 /// `implicit` flags a `{}`-parameter, filled by unification at call sites
 /// (issues/elab-stage2-metas.md). The *name* is API: it is the default name of
@@ -390,6 +523,14 @@ struct ParamMeta {
     /// Written `self p: T` — the parameter a method call's receiver fills.
     /// See [`Elab::subject_index`] and issues/method-receiver-position.md.
     is_self: bool,
+    /// The parameter's own domain skeleton, when its written type carries
+    /// implicit marks (`f: {A: Type<0>} -> A -> A`). This is what an
+    /// argument-position lambda is checked against (§6.1) and what
+    /// suppresses bare-reference insertion at the argument (§5.3) — derived
+    /// once from the same surface node the kernel domain was lowered from,
+    /// per the §3.3 pairing guard. `None` for every markless parameter, so
+    /// existing declarations store nothing new.
+    skel: Option<Rc<Skel>>,
 }
 
 /// What a global name refers to: the absolute position of its `Trm_c`
@@ -553,9 +694,11 @@ pub(crate) struct MetaDef {
 
 /// What a `p.f` turned out to be (docs/surface-records.md §4.2).
 enum DotResolution {
-    /// A record field: the projection, its type and level. Synthesized, since
-    /// every annotation is read off the receiver's type.
-    Project(Term, Type, Level),
+    /// A record field: the projection, its type and level, plus the field's
+    /// implicitness skeleton, derived on demand from the *stored surface*
+    /// field type — no new storage, keyed positionally by the same index the
+    /// kernel Σ-walk uses (docs/implicit-binders-design.md §3.1).
+    Project(Term, Type, Level, Option<Rc<Skel>>),
     /// Not a field: the method-call desugaring `f(args…, recv)`, to be
     /// elaborated in whichever mode the caller is in — which is what keeps
     /// checking-only methods like `p.absurd()` working.
@@ -988,7 +1131,7 @@ impl Elaborator {
         }
         for p in &decl.params {
             let (ty, lvl) = self.elab_ty(&cx, &p.ty)?;
-            cx.push(p.name.clone(), ty.clone(), lvl.clone());
+            cx.push_skel(p.name.clone(), ty.clone(), lvl.clone(), skel_of_ty(&p.ty));
             // An ordinary parameter *at a universe* — `(A: Type<n>, x: A)` —
             // is usable as a type for the rest of the telescope, by exactly
             // the machinery a declaration's `<A>` uses. That generalization is
@@ -1009,6 +1152,14 @@ impl Elaborator {
         // `match` on one of these parameters *is* the induction hypothesis
         // (issues/match-recursion.md), and the lowering constructs the
         // recursor, so there is no fixpoint and nothing new for the kernel.
+        //
+        // A result-position implicit mark has no consumer this round —
+        // callers of `f()` get a computed head with no skeleton — and is
+        // refused rather than dropped (docs/implicit-binders-design.md §3.4;
+        // result-position skeletons on `GlobalInfo` are the named follow-on).
+        if has_implicit_mark(&decl.result) {
+            return err(IMPLICIT_MARK_REFUSED, decl.result.span);
+        }
         let (res_ty, res_lvl) = self.elab_ty(&cx, &decl.result)?;
         cx.selfref = Some(Rc::new(SelfRef {
             // A member recurses under its **base** name: inside `fn List::nth`
@@ -1115,12 +1266,17 @@ impl Elaborator {
                     implicit: true,
                     is_type: true,
                     is_self: false,
+                    skel: None,
                 })
                 .chain(decl.params.iter().map(|p| ParamMeta {
                     name: p.name.clone(),
                     implicit: p.implicit,
                     is_type: false,
                     is_self: p.is_self,
+                    // The parameter's own domain skeleton — what argument
+                    // lambdas are checked against and what suppresses
+                    // bare-reference insertion at this argument (§5.3/§6.1).
+                    skel: skel_of_ty(&p.ty),
                 }))
                 .collect::<Vec<_>>(),
         );
@@ -1494,6 +1650,10 @@ impl Elaborator {
                             *fsp,
                         )?;
                         cx.aliases.push(Rc::new(Alias {
+                            // The projected field's skeleton travels onto
+                            // the alias (docs/implicit-binders-design.md
+                            // §3.1) — same source as `resolve_dot`'s.
+                            skel: skel_of_ty(&ind.ctors[0].fields[idx].1),
                             name: f.clone(),
                             depth: cx.names.len(),
                             term: Rc::new(term),
@@ -1504,15 +1664,34 @@ impl Elaborator {
                     continue;
                 }
             };
-            let (term, ty, level) = match ty {
+            let (term, ty, level, skel) = match ty {
                 Some(t) => {
                     let (ty, lvl) = self.elab_ty(&cx, t).map_err(|e| self.let_ty_hint(&cx, t, e))?;
-                    let tm = self.elab_check(&cx, expr, &ty, &lvl)?;
-                    (tm, ty, lvl)
+                    // The annotation's skeleton is both the expected
+                    // skeleton the RHS is checked at (§6.1's second site)
+                    // and the alias's own (§3.1).
+                    let skel = skel_of_ty(t);
+                    let tm =
+                        self.elab_check_skel(&cx, expr, &ty, &lvl, None, skel.as_deref())?;
+                    (tm, ty, lvl, skel)
                 }
-                None => self.elab_infer(&cx, expr)?,
+                // The `let`-RHS harvest (docs/implicit-binders-design.md
+                // §6.3): an implicit lambda infers here (all binders
+                // annotated, as inference already requires) and the alias
+                // records the skeleton read off the written marks.
+                None => match &expr.kind {
+                    ExprKind::Lam { binders, body } => {
+                        let (tm, ty, lvl) = self.elab_lam_infer(&cx, binders, body, true)?;
+                        (tm, ty, lvl, skel_of_lam_binders(binders))
+                    }
+                    _ => {
+                        let (tm, ty, lvl) = self.elab_infer(&cx, expr)?;
+                        (tm, ty, lvl, None)
+                    }
+                },
             };
             cx.aliases.push(Rc::new(Alias {
+                skel,
                 name: name.clone(),
                 depth: cx.names.len(),
                 term: Rc::new(term),
@@ -1561,11 +1740,23 @@ impl Elaborator {
                 };
                 Ok((Type::El { level: level.clone(), tm: Rc::new(tm) }, level))
             }
-            TyKind::Named { name, args } => self.lower_named(cx, name, args, ty.span),
+            TyKind::Named { name, args } => {
+                // A `D<…>` type argument's lowering stores kernel types and
+                // re-lowers in contexts with no skeleton slot, so a mark in
+                // one has no consumer and is refused (§3.4).
+                if let Some(a) = args.iter().find(|a| has_implicit_mark(a)) {
+                    return err(IMPLICIT_MARK_REFUSED, a.span);
+                }
+                self.lower_named(cx, name, args, ty.span)
+            }
             // `[T; n]` — the kernel's `Type::Vec` directly. A primitive
             // indexed type: no fording, no encoding
             // (docs/container-fields.md §2.1).
             TyKind::Vec { elem, len } => {
+                // A `[T; n]` element type has no skeleton slot (§3.4).
+                if has_implicit_mark(elem) {
+                    return err(IMPLICIT_MARK_REFUSED, elem.span);
+                }
                 let (elem_t, level) = self.elab_ty(cx, elem)?;
                 let len_t = self.elab_check(cx, len, &Type::Nat, &Level::Zero)?;
                 Ok((
@@ -1591,13 +1782,19 @@ impl Elaborator {
             // telescope — a written function type and a `fn`'s own type must
             // not compute levels differently
             // (docs/surface-function-types.md §5.1).
-            TyKind::Fn { binder, dom, cod } => {
+            TyKind::Fn { binder, dom, cod, .. } => {
                 let (dom_t, dom_level) = self.elab_ty(cx, dom)?;
                 let mut inner = cx.clone();
                 // `#` marks an elaborator-introduced binder: unspellable, and
                 // filtered out of the goal listing.
                 let name = binder.clone().unwrap_or_else(|| "#arrow".to_string());
-                inner.push(name.clone(), dom_t.clone(), dom_level.clone());
+                // The binder pushed for the codomain carries the *domain's*
+                // skeleton — this one line is what makes insertion work
+                // inside any written dependent type: a statement
+                // `(f: {A: Type<0>} -> A -> A) -> f(0) = 0` has `f`'s uses
+                // in the codomain inferring with no further plumbing
+                // (docs/implicit-binders-design.md §3.1).
+                inner.push_skel(name.clone(), dom_t.clone(), dom_level.clone(), skel_of_ty(dom));
                 // A binder at a universe is usable as a type in the codomain
                 // (`(A: Type<0>) -> A -> A`) — the registration the telescope
                 // loop and `elab_lam_check` make, at the third binding form.
@@ -1673,6 +1870,26 @@ impl Elaborator {
         lvl: &Level,
         hint: Option<(&str, &str)>,
     ) -> R<Term> {
+        self.elab_check_skel(cx, e, expected, lvl, hint, None)
+    }
+
+    /// [`Self::elab_check_hinted`] plus, where the caller has one, the
+    /// expected type's implicitness *skeleton*
+    /// (docs/implicit-binders-design.md §6.1). Three caller classes supply
+    /// it: argument checking in `apply_explicit`/`apply_implicit` (the
+    /// callee parameter's own skeleton), an annotated `let`, and
+    /// record-literal field checking. It is read by exactly two arms — a
+    /// lambda (the §6.2 coherence rule) and the bare-reference suppression
+    /// in the inference fallback (§5.3); everything else ignores it.
+    fn elab_check_skel(
+        &self,
+        cx: &Cx,
+        e: &Expr,
+        expected: &Type,
+        lvl: &Level,
+        hint: Option<(&str, &str)>,
+        skel: Option<&Skel>,
+    ) -> R<Term> {
         match &e.kind {
             // The expected type *is* the goal's statement, which is why holes
             // are checking-only (issues/goal-holes.md).
@@ -1690,12 +1907,13 @@ impl Elaborator {
             // `issues/special-forms-as-declarations.md`, not a stopgap: when
             // `refl` becomes a declaration this arm is deleted and no program
             // changes behaviour.
-            ExprKind::Refl if self.shadowed(cx, "refl") => self.elab_check_hinted(
+            ExprKind::Refl if self.shadowed(cx, "refl") => self.elab_check_skel(
                 cx,
                 &Expr { kind: ExprKind::Var("refl".to_string()), span: e.span },
                 expected,
                 lvl,
                 hint,
+                skel,
             ),
             ExprKind::Refl => {
                 let head = self.whnf(cx, expected, e.span)?;
@@ -1739,7 +1957,7 @@ impl Elaborator {
             // reports the callee and parameter it belongs to.
             ExprKind::Block(b) => {
                 let cx = self.elab_stmts(cx, &b.stmts)?;
-                self.elab_check_hinted(&cx, &b.result, expected, lvl, hint)
+                self.elab_check_skel(&cx, &b.result, expected, lvl, hint, skel)
             }
             // A quote against its `Code(g |- T)` type — checking-only, like
             // the kernel's `BoxTm` (docs/in-language-map-design.md §5).
@@ -1814,7 +2032,7 @@ impl Elaborator {
             // a readability aid and must be convertible with it
             // (docs/surface-function-types.md §5.2).
             ExprKind::Lam { binders, body } => {
-                self.elab_lam_check(cx, binders, body, expected, lvl, e.span)
+                self.elab_lam_check(cx, binders, body, expected, lvl, skel, e.span)
             }
             // A universe as the expected type: a *type* has been written where
             // a term is expected, so read it as one and quote it
@@ -1852,14 +2070,61 @@ impl Elaborator {
             // (`p.absurd()`), and routing it through inference would break it.
             ExprKind::Dot { recv, name, args } => {
                 match self.resolve_dot(cx, recv, name, args, e.span)? {
-                    DotResolution::Project(t, ty, l) => match args {
-                        None => Ok(t),
+                    DotResolution::Project(t, ty, l, fskel) => match args {
+                        // A bare skeletal projection in checking position:
+                        // the §5.2 route with the field's skeleton, under the
+                        // same two suppressions the `Var` arm composes — the
+                        // expected skeleton's leading implicit (§5.3) and the
+                        // erased universe-domain check.
+                        None => {
+                            if let Some(fskel) = &fskel {
+                                let prefix = fskel.leading_implicit();
+                                let suppress = skel
+                                    .is_some_and(|s| s.params.first().is_some_and(|b| b.implicit))
+                                    || matches!(
+                                        self.whnf(cx, expected, e.span)?,
+                                        Type::Pi { dom, .. } if matches!(*dom, Type::Ty(_))
+                                    );
+                                if prefix > 0 && !suppress {
+                                    let mask = vec![true; prefix];
+                                    let (t, _, _) = self.apply_implicit(
+                                        cx,
+                                        name,
+                                        skel_params(fskel),
+                                        true,
+                                        0,
+                                        true,
+                                        t,
+                                        ty,
+                                        l,
+                                        &[],
+                                        &mask,
+                                        Some(expected),
+                                        e.span,
+                                    )?;
+                                    return Ok(t);
+                                }
+                            }
+                            Ok(t)
+                        }
                         Some(args) => {
-                            let (t, _, _) = self.apply_explicit(cx, None, 0, t, ty, l, args)?;
+                            let (t, _, _) = self.apply_projection(
+                                cx,
+                                name,
+                                t,
+                                ty,
+                                l,
+                                fskel,
+                                args,
+                                Some(expected),
+                                e.span,
+                            )?;
                             Ok(t)
                         }
                     },
-                    DotResolution::Method(m) => self.elab_check_hinted(cx, &m, expected, lvl, hint),
+                    DotResolution::Method(m) => {
+                        self.elab_check_skel(cx, &m, expected, lvl, hint, skel)
+                    }
                 }
             }
             _ => {
@@ -1885,7 +2150,22 @@ impl Elaborator {
                 // docs/unifier-completeness-design.md §5). Nothing else reads
                 // the hint, so every other expression elaborates exactly as
                 // before.
-                let (t, _, _) = self.elab_infer_at(cx, e, Some(&head))?;
+                //
+                // The §5.3 suppression rule (docs/implicit-binders-design.md):
+                // a *bare reference* met where the expected type's own
+                // skeleton opens with an implicit binder is passed verbatim —
+                // the parameter asked for the implicit function itself, and
+                // instantiating it here could only mis-teach (the probe-5
+                // regression, one level up). Withholding the expected type is
+                // exactly verbatim resolution: the bare-reference routes run
+                // only in checking position. This composes with the
+                // erased-type universe check inside the `Var` arm
+                // (issues/elab-unifier-completeness.md, 2026-08-06), which
+                // stays as the fallback for skeleton-less expected types.
+                let suppress = matches!(&e.kind, ExprKind::Var(_))
+                    && skel.is_some_and(|s| s.params.first().is_some_and(|b| b.implicit));
+                let (t, _, _) =
+                    self.elab_infer_at(cx, e, if suppress { None } else { Some(&head) })?;
                 Ok(t)
             }
         }
@@ -2102,28 +2382,72 @@ impl Elaborator {
             // (docs/implicit-binders-design.md §5.3), which refines it once
             // implicitness travels with the type.
             ExprKind::Var(name) => {
+                // Which bare-reference route (if either) is live: the global
+                // one, or the value analog. Decided before the whnf so a
+                // name with neither pays nothing.
+                let global_prefix = if expected.is_some() {
+                    self.bare_implicit_prefix(cx, name)
+                } else {
+                    None
+                };
+                let value_skel = if expected.is_some() && global_prefix.is_none() {
+                    self.value_skel(cx, name).filter(|s| s.leading_implicit() > 0)
+                } else {
+                    None
+                };
                 if let Some(expected) = expected
-                    && let Some(prefix) = self.bare_implicit_prefix(cx, name)
+                    && (global_prefix.is_some() || value_skel.is_some())
                     && !matches!(
                         self.whnf(cx, expected, e.span)?,
                         Type::Pi { dom, .. } if matches!(*dom, Type::Ty(_))
                     )
                 {
-                    let (head, ty, lvl) = self.resolve(cx, name, e.span)?;
-                    let mask = vec![true; prefix];
-                    return self.apply_implicit(
-                        cx,
-                        name,
-                        0,
-                        true,
-                        head,
-                        ty,
-                        lvl,
-                        &[],
-                        &mask,
-                        Some(expected),
-                        e.span,
-                    );
+                    if let Some(prefix) = global_prefix {
+                        let (head, ty, lvl) = self.resolve(cx, name, e.span)?;
+                        let mask = vec![true; prefix];
+                        return self.apply_implicit(
+                            cx,
+                            name,
+                            self.params_of(name),
+                            false,
+                            0,
+                            true,
+                            head,
+                            ty,
+                            lvl,
+                            &[],
+                            &mask,
+                            Some(expected),
+                            e.span,
+                        );
+                    }
+                    // The value analog (docs/implicit-binders-design.md
+                    // §5.2): a bare local/alias whose *skeleton* opens with
+                    // an implicit prefix takes the same route, with the
+                    // parameter table synthesized from the skeleton. The
+                    // §5.3 skeleton suppression happens one level up (the
+                    // checking fallback withholds `expected`), so reaching
+                    // here means insertion is wanted.
+                    if let Some(skel) = value_skel {
+                        let prefix = skel.leading_implicit();
+                        let (head, ty, lvl) = self.resolve(cx, name, e.span)?;
+                        let mask = vec![true; prefix];
+                        return self.apply_implicit(
+                            cx,
+                            name,
+                            skel_params(&skel),
+                            true,
+                            0,
+                            true,
+                            head,
+                            ty,
+                            lvl,
+                            &[],
+                            &mask,
+                            Some(expected),
+                            e.span,
+                        );
+                    }
                 }
                 self.resolve(cx, name, e.span)
             }
@@ -2132,11 +2456,13 @@ impl Elaborator {
             ExprKind::Index { recv, idx } => self.elab_vec_nth(cx, recv, idx, e.span),
             ExprKind::Dot { recv, name, args } => {
                 match self.resolve_dot(cx, recv, name, args, e.span)? {
-                    DotResolution::Project(t, ty, l) => match args {
+                    DotResolution::Project(t, ty, l, fskel) => match args {
                         None => Ok((t, ty, l)),
-                        Some(args) => self.apply_explicit(cx, None, 0, t, ty, l, args),
+                        Some(args) => {
+                            self.apply_projection(cx, name, t, ty, l, fskel, args, expected, e.span)
+                        }
                     },
-                    DotResolution::Method(m) => self.elab_infer(cx, &m),
+                    DotResolution::Method(m) => self.elab_infer_at(cx, &m, expected),
                 }
             }
             // A record literal in inference position: the fields are permuted
@@ -2166,7 +2492,7 @@ impl Elaborator {
             // A lambda in inference position needs every binder annotated:
             // with no expected type there is nothing else to take the domain
             // from (docs/surface-function-types.md §5.2).
-            ExprKind::Lam { binders, body } => self.elab_lam_infer(cx, binders, body),
+            ExprKind::Lam { binders, body } => self.elab_lam_infer(cx, binders, body, false),
             // `f<T, …>` — explicit type application, with or without a call
             // after it (docs/surface-polymorphism.md §1).
             ExprKind::TyApp { head, args } => {
@@ -2198,14 +2524,34 @@ impl Elaborator {
                     self.elab_ty_app(cx, callee, tyargs, head.span)?;
                 if !*explicit && mask.iter().any(|&b| b) {
                     self.apply_implicit(
-                        cx, &name, tyargs.len(), false, t, ty, lvl, args, &mask, expected,
+                        cx,
+                        &name,
+                        self.params_of(&name),
+                        false,
+                        tyargs.len(),
+                        false,
+                        t,
+                        ty,
+                        lvl,
+                        args,
+                        &mask,
+                        expected,
                         e.span,
                     )
                 } else {
                     // The type arguments have consumed the leading parameters,
                     // so argument `i` is now parameter `i + |tyargs|` — which
                     // is what the offset keeps honest for goal-name hints.
-                    self.apply_explicit(cx, Some(&name), tyargs.len(), t, ty, lvl, args)
+                    self.apply_explicit(
+                        cx,
+                        Some(&name),
+                        self.params_of(&name),
+                        tyargs.len(),
+                        t,
+                        ty,
+                        lvl,
+                        args,
+                    )
                 }
             }
             // A constructor applied in the curried spelling — `Cons(1)(xs)`.
@@ -2227,7 +2573,7 @@ impl Elaborator {
                     );
                 }
                 let (h, hty, hlvl) = self.elab_infer(cx, head)?;
-                self.apply_explicit(cx, None, 0, h, hty, hlvl, args)
+                self.apply_explicit(cx, None, Rc::new(Vec::new()), 0, h, hty, hlvl, args)
             }
             ExprKind::App { args, explicit, .. } => {
                 let (name, _, _) = e.as_named().expect("head is a name");
@@ -2360,6 +2706,38 @@ impl Elaborator {
                 if cx.selfref.as_ref().is_some_and(|s| s.name == *name) {
                     return self.elab_self_call(cx, args, *explicit, e.span);
                 }
+                // A *value* head — a local, or an alias. With a skeleton it
+                // applies with skeleton-directed insertion
+                // (docs/implicit-binders-design.md §5.1): same machinery as
+                // a named global, with the parameter table synthesized from
+                // the skeleton and `param_offset = 0` (a value has no
+                // consumed type-argument prefix). `@f(…)` clears the whole
+                // mask (§7.1): a value has no `f<…>` spelling, so narrowing
+                // to type parameters would leave no complete escape.
+                // Without one it is today's explicit application — and never
+                // a same-named *global*'s mask or hint table, which is the
+                // §4.2 params-passed-not-recovered rule (a local `f` must
+                // not borrow a global `f`'s metadata).
+                if cx.names.iter().any(|n| n == name)
+                    || cx.aliases.iter().any(|a| a.name == *name)
+                {
+                    let (head, ty, lvl) = self.resolve(cx, name, e.span)?;
+                    let skel = self.value_skel(cx, name);
+                    let params = skel.as_deref().map_or_else(|| Rc::new(Vec::new()), skel_params);
+                    let implicit = skel
+                        .as_deref()
+                        .filter(|s| !*explicit && s.params.iter().any(|b| b.implicit));
+                    let Some(skel) = implicit else {
+                        return self.apply_explicit(
+                            cx, Some(name), params, 0, head, ty, lvl, args,
+                        );
+                    };
+                    let mask: Vec<bool> = skel.params.iter().map(|b| b.implicit).collect();
+                    return self.apply_implicit(
+                        cx, name, params, true, 0, false, head, ty, lvl, args, &mask,
+                        expected, e.span,
+                    );
+                }
                 let mask = self.implicit_mask(name);
                 let (head, ty, lvl) = self.resolve(cx, name, e.span)?;
                 // `@f(…)` makes the **value** implicits positional and leaves
@@ -2378,10 +2756,24 @@ impl Elaborator {
                     mask
                 };
                 if !mask.iter().any(|&b| b) {
-                    self.apply_explicit(cx, Some(name), 0, head, ty, lvl, args)
+                    self.apply_explicit(
+                        cx, Some(name), self.params_of(name), 0, head, ty, lvl, args,
+                    )
                 } else {
                     self.apply_implicit(
-                        cx, name, 0, false, head, ty, lvl, args, &mask, expected, e.span,
+                        cx,
+                        name,
+                        self.params_of(name),
+                        false,
+                        0,
+                        false,
+                        head,
+                        ty,
+                        lvl,
+                        args,
+                        &mask,
+                        expected,
+                        e.span,
                     )
                 }
             }
@@ -2645,6 +3037,7 @@ impl Elaborator {
                         binders: vec![LamBinder {
                             name: h.to_string(),
                             ty: None,
+                            implicit: false,
                             span: a.body.span,
                         }],
                         body: Box::new(a.body.clone()),
@@ -3254,7 +3647,7 @@ impl Elaborator {
         if spill.is_empty() {
             return Ok((t, ty, lvl));
         }
-        self.apply_explicit(cx, Some(name), s.params.len(), t, ty, lvl, spill)
+        self.apply_explicit(cx, Some(name), self.params_of(name), s.params.len(), t, ty, lvl, spill)
     }
 
     /// Synthesize the dependent motive for a motive-less `match` in checking
@@ -3327,7 +3720,8 @@ impl Elaborator {
                 let (t, fty, flvl) =
                     self.project_field(cx, &ind, &ty, Rc::new(t), idx, span)?;
                 let _ = lvl;
-                return Ok(DotResolution::Project(t, fty, flvl));
+                let skel = skel_of_ty(&ind.ctors[0].fields[idx].1);
+                return Ok(DotResolution::Project(t, fty, flvl, skel));
             }
         }
         let Some(args) = args else {
@@ -4330,6 +4724,26 @@ impl Elaborator {
         body: &Expr,
         expected: &Type,
         lvl: &Level,
+        // The expected type's skeleton, where the caller had one — positions
+        // are consumed one per binder as the recursion descends the spine
+        // (docs/implicit-binders-design.md §6.1).
+        skel: Option<&Skel>,
+        span: Span,
+    ) -> R<Term> {
+        self.lam_check_at(cx, binders, body, expected, lvl, skel.map(|s| s.params.as_slice()), span)
+    }
+
+    /// [`Self::elab_lam_check`] with the expected skeleton advanced to the
+    /// current binder: `skel_at[0]` (if any) speaks for `binders[0]`.
+    #[allow(clippy::too_many_arguments)]
+    fn lam_check_at(
+        &self,
+        cx: &Cx,
+        binders: &[LamBinder],
+        body: &Expr,
+        expected: &Type,
+        lvl: &Level,
+        skel_at: Option<&[SkelBinder]>,
         span: Span,
     ) -> R<Term> {
         let Some((b, rest)) = binders.split_first() else {
@@ -4342,6 +4756,36 @@ impl Elaborator {
                 span,
             );
         };
+        // The §6.2 coherence rule: an implicit-marked binder requires the
+        // expected position to be implicit — silently accepting would mean
+        // the writer believes uses of the function will infer, and they will
+        // not (stale intent, the §3.4 hazard at the term level). An
+        // *explicit* binder is accepted at any position, including implicit
+        // ones: insertion at uses is governed by the type's skeleton, not by
+        // the argument's spelling.
+        let pos = skel_at.and_then(|s| s.first());
+        if b.implicit {
+            match pos {
+                Some(p) if p.implicit => {}
+                Some(_) => {
+                    return err(
+                        "this binder is marked implicit, but the expected function \
+                         type spells this parameter explicit — the two must agree \
+                         position by position",
+                        b.span,
+                    )
+                }
+                None => {
+                    return err(
+                        "this binder is marked implicit, but the function type \
+                         expected here carries no implicitness — it was computed, \
+                         not written, and a computed type offers no implicit \
+                         insertion (issues/implicit-binders-in-function-types.md)",
+                        b.span,
+                    )
+                }
+            }
+        }
         if let Some(ann) = &b.ty {
             let (ann_t, _) = self.elab_ty(cx, ann)?;
             let psi = self.goal_psi();
@@ -4358,7 +4802,16 @@ impl Elaborator {
             }
         }
         let mut inner = cx.clone();
-        inner.push(b.name.clone(), (*dom).clone(), dom_level.clone());
+        // The binder carries the expected position's `dom` sub-skeleton, so
+        // a callback bound by the lambda inserts at its own uses (§3.1);
+        // the written annotation's marks are the fallback where the expected
+        // type carried no skeleton — the annotation was just proved
+        // convertible with the domain, so the pairing is with the same
+        // erased spine.
+        let bskel = pos
+            .and_then(|p| p.dom.clone())
+            .or_else(|| b.ty.as_ref().and_then(skel_of_ty));
+        inner.push_skel(b.name.clone(), (*dom).clone(), dom_level.clone(), bskel);
         // A lambda binder *at a universe* is usable as a type in the body —
         // the same generalization the telescope loop makes for parameters
         // (docs/surface-universe.md §2: a type name is any binder whose type
@@ -4376,7 +4829,8 @@ impl Elaborator {
         let body_t = if rest.is_empty() {
             self.elab_check(&inner, body, &cod, &cod_level)?
         } else {
-            self.elab_lam_check(&inner, rest, body, &cod, &cod_level, span)?
+            let rest_skel = skel_at.map(|s| s.get(1..).unwrap_or(&[]));
+            self.lam_check_at(&inner, rest, body, &cod, &cod_level, rest_skel, span)?
         };
         Ok(Term::Lam {
             dom_level,
@@ -4387,15 +4841,30 @@ impl Elaborator {
     }
 
     /// A lambda in inference position: every binder must be annotated.
+    ///
+    /// Implicit marks are **refused** here unless `harvest` — any other
+    /// inference position would infer the type and *drop* the skeleton, the
+    /// silent erasure §3.4 forbids. The one carve-out is the `let`-RHS
+    /// caller in [`Self::elab_stmts`], which records the skeleton read off
+    /// the written marks onto the alias (docs/implicit-binders-design.md
+    /// §6.3).
     fn elab_lam_infer(
         &self,
         cx: &Cx,
         binders: &[LamBinder],
         body: &Expr,
+        harvest: bool,
     ) -> R<(Term, Type, Level)> {
         let Some((b, rest)) = binders.split_first() else {
             return self.elab_infer(cx, body);
         };
+        if b.implicit && !harvest {
+            return err(
+                "an implicit lambda binder needs a checking position, or a `let` — \
+                 its implicitness has nowhere to go from here",
+                b.span,
+            );
+        }
         let Some(ann) = &b.ty else {
             return err(
                 format!(
@@ -4408,7 +4877,9 @@ impl Elaborator {
         };
         let (dom, dom_level) = self.elab_ty(cx, ann)?;
         let mut inner = cx.clone();
-        inner.push(b.name.clone(), dom.clone(), dom_level.clone());
+        // The annotation's own skeleton (docs/implicit-binders-design.md
+        // §3.1): a callback parameter's uses in the body insert.
+        inner.push_skel(b.name.clone(), dom.clone(), dom_level.clone(), skel_of_ty(ann));
         // A binder at a universe is usable as a type in the body — see
         // `elab_lam_check`, whose registration this mirrors.
         if let Type::Ty(level) = &dom {
@@ -4419,7 +4890,7 @@ impl Elaborator {
                 depth: inner.names.len(),
             });
         }
-        let (body_t, cod, cod_level) = self.elab_lam_infer(&inner, rest, body)?;
+        let (body_t, cod, cod_level) = self.elab_lam_infer(&inner, rest, body, harvest)?;
         Ok((
             Term::Lam {
                 dom_level: dom_level.clone(),
@@ -4445,6 +4916,12 @@ impl Elaborator {
         &self,
         cx: &Cx,
         name: Option<&str>,
+        // The callee's parameter table, passed by the one caller that knows
+        // it rather than recovered by name inside
+        // (docs/implicit-binders-design.md §4.2): a *value* callee's table is
+        // synthesized from its skeleton, and recovering by name here would
+        // let a local `f` borrow a global `f`'s metadata.
+        params: Rc<Vec<ParamMeta>>,
         // `param_offset`: how many leading parameters the head has already
         // consumed — the type arguments of an `f<T, …>(…)` call. Only the
         // goal-name hints depend on it, but a hint naming the wrong parameter
@@ -4459,21 +4936,67 @@ impl Elaborator {
         // Positional, so argument `i` is parameter `i`: a hole here defaults
         // its name to that parameter's ("proof-parameter names are API").
         // A head that is not a name has no parameter metadata, hence no hints.
-        let params = name.map(|n| self.params_of(n)).unwrap_or_default();
         let what = name.map_or_else(|| "this function".to_string(), |n| format!("`{n}`"));
         for (i, arg) in args.iter().enumerate() {
             let head = self.whnf(cx, &ty, arg.span)?;
             let Type::Pi { dom_level, cod_level, dom, cod } = head else {
                 return err(format!("{what} is applied to too many arguments"), arg.span);
             };
-            let hint = name.zip(params.get(i + param_offset)).map(|(n, p)| (n, p.name.as_str()));
-            let arg_t = self.elab_check_hinted(cx, arg, &dom, &dom_level, hint)?;
+            let p = params.get(i + param_offset);
+            let hint = name.zip(p).map(|(n, p)| (n, p.name.as_str()));
+            let skel = p.and_then(|p| p.skel.as_deref());
+            let arg_t = self.elab_check_skel(cx, arg, &dom, &dom_level, hint, skel)?;
             let arg_rc = Rc::new(arg_t);
             ty = cod.apply_local(&LocalSubst::id(&cx.gamma).extended(Rc::clone(&arg_rc)));
             lvl = cod_level.clone();
             t = Term::App { fun: Rc::new(t), dom_level, cod_level, dom, cod, arg: arg_rc };
         }
         Ok((t, ty, lvl))
+    }
+
+    /// A projected record field applied to arguments: `w.f(3)`. Routes to
+    /// implicit insertion when the field's stored surface type carried marks
+    /// (docs/implicit-binders-design.md §5.1), and to the explicit path —
+    /// with the skeleton-synthesized hint table when there is one —
+    /// otherwise. The field name is the display name; `@w.f(…)` stays out of
+    /// the grammar this round (§7.1), so there is no explicit flag here.
+    #[allow(clippy::too_many_arguments)]
+    fn apply_projection(
+        &self,
+        cx: &Cx,
+        name: &str,
+        t: Term,
+        ty: Type,
+        lvl: Level,
+        fskel: Option<Rc<Skel>>,
+        args: &[Expr],
+        expected: Option<&Type>,
+        span: Span,
+    ) -> R<(Term, Type, Level)> {
+        match fskel {
+            Some(skel) if skel.params.iter().any(|b| b.implicit) => {
+                let mask: Vec<bool> = skel.params.iter().map(|b| b.implicit).collect();
+                self.apply_implicit(
+                    cx,
+                    name,
+                    skel_params(&skel),
+                    true,
+                    0,
+                    false,
+                    t,
+                    ty,
+                    lvl,
+                    args,
+                    &mask,
+                    expected,
+                    span,
+                )
+            }
+            Some(skel) => {
+                self.apply_explicit(cx, Some(name), skel_params(&skel), 0, t, ty, lvl, args)
+            }
+            None => self.apply_explicit(cx, None, Rc::new(Vec::new()), 0, t, ty, lvl, args),
+        }
     }
 
     /// `C<T, …>(a⃗)` — a constructor at a *written* instantiation. `None` when
@@ -4509,6 +5032,11 @@ impl Elaborator {
             }
             let mut lowered = Vec::with_capacity(tyargs.len());
             for a in tyargs {
+                // Same refusal as `elab_ty_app`'s: the instantiation stores
+                // kernel types, so a mark in it has no consumer (§3.4).
+                if has_implicit_mark(a) {
+                    return err(IMPLICIT_MARK_REFUSED, a.span);
+                }
                 lowered.push(self.elab_ty(cx, a)?);
             }
             // `R<Nat>(a, b)` is not a spelling: the type arguments are
@@ -4604,6 +5132,11 @@ impl Elaborator {
         }
         let (mut t, mut ty, mut lvl) = self.resolve(cx, name, span)?;
         for a in tyargs {
+            // A written type argument becomes a code — a kernel value with
+            // no skeleton slot — so a mark in one is refused (§3.4).
+            if has_implicit_mark(a) {
+                return err(IMPLICIT_MARK_REFUSED, a.span);
+            }
             let (a_ty, _) = self.elab_ty(cx, a)?;
             let Some(c) = code::code_of(&a_ty) else {
                 return err("this type cannot be a type argument", a.span);
@@ -4664,6 +5197,15 @@ impl Elaborator {
                     && !self.shadowed(cx, name)
                     && self.ctor_here(cx, name).is_none())
                     || self.bare_implicit_prefix(cx, name).is_some()
+                    // The value analog (docs/implicit-binders-design.md
+                    // §4.3): a bare local/alias whose skeleton has a leading
+                    // implicit prefix is checking-only for the same reason
+                    // the bare-global member is — it *can* infer, but only
+                    // at its uninstantiated Π, which against a meta-bearing
+                    // domain mis-teaches.
+                    || self
+                        .value_skel(cx, name)
+                        .is_some_and(|s| s.leading_implicit() > 0)
             }
             ExprKind::App { .. } => match e.as_named() {
                 Some(("absurd", _, _)) => !self.shadowed(cx, "absurd"),
@@ -4704,6 +5246,17 @@ impl Elaborator {
         &self,
         cx: &Cx,
         name: &str,
+        // The callee's parameter table, passed by the caller rather than
+        // recovered by name here (docs/implicit-binders-design.md §4.2):
+        // global sites pass `params_of`, value sites synthesize the table
+        // from the head's skeleton — which is what keeps a local `f` from
+        // borrowing a global `f`'s metadata, and what names goal hints and
+        // per-slot messages after skeleton binders.
+        params: Rc<Vec<ParamMeta>>,
+        // A skeletal *value* head (a local, alias, or projection): its
+        // messages must offer only the escapes that exist — `@name(…)` and
+        // an annotated eta-expansion, never `name<…>` (§4.3).
+        value_head: bool,
         param_offset: usize,
         bare_ref: bool,
         head: Term,
@@ -4750,7 +5303,7 @@ impl Elaborator {
         let mut deferred: Vec<DeferredArg<'_>> = Vec::new();
         let mut next_meta = 0u32;
         let mut args = args.iter();
-        let all_params = self.params_of(name);
+        let all_params = params;
         for (mi, &is_implicit) in mask.iter().enumerate() {
             let i = mi + param_offset;
             let params = &all_params;
@@ -4787,8 +5340,9 @@ impl Elaborator {
                 match zonked(&dom, n, &sols) {
                     Some(real_dom) => {
                         let hint = params.get(i).map(|p| (name, p.name.as_str()));
-                        let arg_t =
-                            self.elab_check_hinted(cx, arg, &real_dom, &dom_level, hint)?;
+                        let pskel = params.get(i).and_then(|p| p.skel.as_deref());
+                        let arg_t = self
+                            .elab_check_skel(cx, arg, &real_dom, &dom_level, hint, pskel)?;
                         if self.is_checking_only(cx, arg) {
                             // Counted into `n` up front, so the slot exists;
                             // fill it now (a solved slot is indistinguishable
@@ -4883,7 +5437,9 @@ impl Elaborator {
                     continue;
                 };
                 let hint = all_params.get(ob.param).map(|p| (name, p.name.as_str()));
-                let arg_t = self.elab_check_hinted(cx, ob.expr, &dom, &ob.dom_level, hint)?;
+                let pskel = all_params.get(ob.param).and_then(|p| p.skel.as_deref());
+                let arg_t =
+                    self.elab_check_skel(cx, ob.expr, &dom, &ob.dom_level, hint, pskel)?;
                 sols[ob.slot] = Sol::Solved(Rc::new(arg_t));
                 progressed = true;
             }
@@ -4900,12 +5456,21 @@ impl Elaborator {
                     .get(ob.param)
                     .map(|p| p.name.as_str())
                     .unwrap_or("?");
+                // A value head has no `name<…>` spelling (§4.3), so its
+                // message offers only the escapes that exist.
+                let escape = if value_head {
+                    format!("write the call fully explicitly (`@{name}(…)`)")
+                } else {
+                    format!(
+                        "give the type arguments (`{name}<…>(…)`) or write \
+                         the call fully explicitly (`@{name}(…)`)"
+                    )
+                };
                 return err(
                     format!(
                         "this argument of `{name}` was deferred — the type of its \
                          parameter `{p}` still mentions an implicit that could not be \
-                         inferred; give the type arguments (`{name}<…>(…)`) or write \
-                         the call fully explicitly (`@{name}(…)`)"
+                         inferred; {escape}"
                     ),
                     ob.expr.span,
                 );
@@ -4921,6 +5486,23 @@ impl Elaborator {
             let j = (n - 1 - k) as usize;
             let sol = sols[j].solved().cloned().ok_or_else(|| ElabError::Elab {
                 msg: match slot_param.get(j).and_then(|&i| all_params.get(i)) {
+                    // A value head's escapes are `@` and an annotated
+                    // eta-expansion — `name<…>` does not exist for it
+                    // (docs/implicit-binders-design.md §7.3).
+                    Some(p) if value_head && bare_ref && p.is_type => format!(
+                        "cannot infer the type argument `{}` of `{name}` from the \
+                         expected type here — write the use fully explicitly \
+                         (`@{name}(…)`) or eta-expand with the argument written \
+                         (`λ … => {name}(T, …)`)",
+                        p.name
+                    ),
+                    Some(p) if value_head && p.is_type => format!(
+                        "cannot infer the type argument `{}` of `{name}` here — no \
+                         argument's type mentions it; write the call fully \
+                         explicitly (`@{name}(…)`) or eta-expand with the argument \
+                         written (`λ … => {name}(T, …)`)",
+                        p.name
+                    ),
                     // The bare-reference route (design §7.1): there is no
                     // argument whose type could have mentioned anything, so
                     // the message names the only evidence that was consulted.
@@ -4959,8 +5541,8 @@ impl Elaborator {
         // Past the end of the parameter list, so no goal-name hint can be
         // right: the offset is set beyond it rather than left at 0, which
         // would name the first parameter for an argument that is not it.
-        let past = self.params_of(name).len();
-        self.apply_explicit(cx, Some(name), past, t, ty, lvl, &spill)
+        let past = all_params.len();
+        self.apply_explicit(cx, Some(name), all_params, past, t, ty, lvl, &spill)
     }
 
     /// Expected-type-directed solving (docs/unifier-completeness-design.md
@@ -5083,6 +5665,27 @@ impl Elaborator {
     /// `Succ` stay primitives, a `meta fn` slice stays pure quotation, and
     /// the enclosing declaration's own name stays a recursion marker. The
     /// route runs only when `resolve` would land on the global anyway.
+    /// The implicitness skeleton a bare `name` offers as a *value* head: the
+    /// local binder's `Cx` entry or the alias's, following [`Self::resolve`]'s
+    /// precedence exactly (an alias bound at depth `d` shadows every binder
+    /// at position `< d`), so a skeleton is consulted only for the entity the
+    /// name resolves to (docs/implicit-binders-design.md §4.1). `None` for
+    /// anything that is not a local or alias — a global's metadata is
+    /// `ParamMeta`, not a skeleton.
+    fn value_skel(&self, cx: &Cx, name: &str) -> Option<Rc<Skel>> {
+        if name == "Zero" || name == "Succ" {
+            return None;
+        }
+        let local_pos = cx.names.iter().rposition(|n| n == name);
+        let alias = cx.aliases.iter().rev().find(|a| a.name == *name);
+        match (local_pos, alias) {
+            (Some(pos), Some(a)) if a.depth <= pos => cx.skels[pos].clone(),
+            (_, Some(a)) => a.skel.clone(),
+            (Some(pos), None) => cx.skels[pos].clone(),
+            (None, None) => None,
+        }
+    }
+
     fn bare_implicit_prefix(&self, cx: &Cx, name: &str) -> Option<usize> {
         if name == "Zero" || name == "Succ" || cx.meta.is_some() {
             return None;
@@ -5400,6 +6003,13 @@ struct EqSplit {
 struct Cx {
     names: Vec<String>,
     gamma: LocalCtx,
+    /// Parallel to `names`/`gamma.entries`: the implicitness skeleton of the
+    /// binder's *written* type, where it had one
+    /// (docs/implicit-binders-design.md §3.1). Maintained by [`Cx::push`]
+    /// (defaulting `None`) and [`Cx::push_skel`] — one push path, so the
+    /// vectors cannot desync. Nothing in a skeleton is subject to
+    /// substitution or shifting (§3.2), so entries are never updated.
+    skels: Vec<Option<Rc<Skel>>>,
     /// The declaration being elaborated, once its telescope is in scope.
     selfref: Option<Rc<SelfRef>>,
     /// Set inside a `Succ(k)` arm; `None` outside every such arm, where a
@@ -5451,6 +6061,10 @@ struct Alias {
     term: Rc<Term>,
     ty: Type,
     level: Level,
+    /// The alias's implicitness skeleton, when its `let` annotation, its
+    /// RHS lambda's written marks, or the record field it projects carried
+    /// one (docs/implicit-binders-design.md §3.1). `None` everywhere else.
+    skel: Option<Rc<Skel>>,
 }
 
 impl Cx {
@@ -5458,6 +6072,7 @@ impl Cx {
         Cx {
             names: vec![],
             gamma: LocalCtx::nil(),
+            skels: vec![],
             selfref: None,
             guard: None,
             aliases: vec![],
@@ -5467,8 +6082,16 @@ impl Cx {
     }
 
     fn push(&mut self, name: String, ty: Type, level: Level) {
+        self.push_skel(name, ty, level, None);
+    }
+
+    /// [`Cx::push`] for the sites that carry an implicitness skeleton: the
+    /// declaration telescope loop, `elab_ty`'s `Fn` arm, and the lambda
+    /// binder pushes (docs/implicit-binders-design.md §3.1).
+    fn push_skel(&mut self, name: String, ty: Type, level: Level, skel: Option<Rc<Skel>>) {
         self.names.push(name);
         self.gamma.entries.push(CtxEntry { ty: Rc::new(ty), level });
+        self.skels.push(skel);
     }
 }
 

@@ -788,7 +788,7 @@ impl Elaborator {
                         .position(|&f| f == k)
                         .expect("an IndexVar field fills an argument of the pattern");
                     let (term, ty, level) = branch.pat[a].clone();
-                    fcx.aliases.push(Rc::new(Alias {
+                    fcx.aliases.push(Rc::new(Alias { skel: None,
                         name: name.clone().expect("a pattern variable is a named field"),
                         depth: bdepth,
                         term,
@@ -1573,7 +1573,7 @@ impl Elaborator {
                     .position(|&f| f == k)
                     .expect("an IndexVar field fills an argument of the pattern");
                 let (term, ty, level) = &env.pat[a];
-                acx.aliases.push(Rc::new(Alias {
+                acx.aliases.push(Rc::new(Alias { skel: None,
                     name: name.clone(),
                     depth: cur_len,
                     term: Rc::new(term.shift_local(by(env))),
@@ -1631,7 +1631,7 @@ impl Elaborator {
                 children.push((Rc::clone(&proj), Rc::new(ih), ih_ty, env.mlvl.clone()));
                 rebind.push(at);
             }
-            acx.aliases.push(Rc::new(Alias {
+            acx.aliases.push(Rc::new(Alias { skel: None,
                 name: name.clone(),
                 depth: acx.names.len(),
                 term: proj,

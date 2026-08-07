@@ -140,6 +140,18 @@ impl Inductive {
     }
 }
 
+/// The per-field implicitness skeletons an arm's binder aliases carry
+/// (docs/implicit-binders-design.md §3.1), aligned with the Σ walk — which
+/// is only the declaration order when the constructor has no children, so a
+/// ctor with any recursive field gets none rather than a misaligned table.
+fn arm_field_skels(ind: &Inductive, j: usize) -> Vec<Option<Rc<crate::Skel>>> {
+    let ctor = &ind.ctors[j];
+    if ctor.kind.iter().any(|k| k.is_child()) {
+        return Vec::new();
+    }
+    ctor.fields.iter().map(|(_, t)| crate::skel_of_ty(t)).collect()
+}
+
 pub(crate) struct Ctor {
     pub name: String,
     /// `(optional field name, field type)`. A named field is in scope in the
@@ -481,6 +493,12 @@ impl Elaborator {
             if d.valparams[..i].iter().any(|o| o.name == p.name) {
                 return err(format!("duplicate value parameter `{}`", p.name), p.span);
             }
+            // A value parameter's type is re-lowered per instantiation with
+            // no skeleton slot, so an implicit mark in it has no consumer
+            // (docs/implicit-binders-design.md §3.4).
+            if crate::has_implicit_mark(&p.ty) {
+                return err(crate::IMPLICIT_MARK_REFUSED, p.ty.span);
+            }
             if d.params.contains(&p.name) {
                 return err(
                     format!(
@@ -511,13 +529,16 @@ impl Elaborator {
         let (index, index_ty) = match &d.index {
             None => (None, None),
             Some(ty) => {
-                let TyKind::Fn { binder: Some(n), dom, cod } = &ty.kind else {
+                let TyKind::Fn { binder: Some(n), implicit, dom, cod } = &ty.kind else {
                     return err(
                         "an indexed declaration's head is `: (n: I) -> Type` \
                          (docs/inductive-indexed-lowering.md §2)",
                         ty.span,
                     );
                 };
+                if *implicit {
+                    return err(crate::IMPLICIT_MARK_REFUSED, ty.span);
+                }
                 let ity = self.index_type(dom, &d.name)?;
                 if !matches!(cod.kind, TyKind::Univ { level: 0 }) {
                     return err(
@@ -926,7 +947,7 @@ impl Elaborator {
         for ((pname, pty), arg) in ind.valparams.iter().zip(args) {
             let (ty, level) = self.elab_ty(&tcx, pty)?;
             let tm = self.elab_check(cx, arg, &ty, &level)?;
-            tcx.aliases.push(Rc::new(Alias {
+            tcx.aliases.push(Rc::new(Alias { skel: None,
                 name: pname.clone(),
                 depth,
                 term: Rc::new(tm.clone()),
@@ -1103,7 +1124,7 @@ impl Elaborator {
         // test 9, §H risk 3). The observers are therefore propositional, in
         // `crates/elab/tests/value_parameters.rs`, not merely structural.
         for ((name, _), (tm, ty, level)) in ind.valparams.iter().zip(vargs) {
-            fcx.aliases.push(Rc::new(Alias {
+            fcx.aliases.push(Rc::new(Alias { skel: None,
                 name: name.clone(),
                 depth,
                 term: Rc::new(tm.clone()),
@@ -1356,7 +1377,17 @@ impl Elaborator {
             .map(|(a, _)| a.clone())
             .collect();
         let container: Option<Expr> = ctor.container().map(|(k, _)| args[k].clone());
-        let fields = self.build_fields(cx, &spine.ctors[i].0, &payload, true, span)?;
+        // The payload fields' skeletons, from their stored surface types —
+        // filtered exactly as `payload` was, so the two stay aligned.
+        let payload_skels: Vec<Option<Rc<crate::Skel>>> = ctor
+            .fields
+            .iter()
+            .zip(&ctor.kind)
+            .filter(|(_, k)| !k.is_child())
+            .map(|((_, ty), _)| crate::skel_of_ty(ty))
+            .collect();
+        let fields =
+            self.build_fields_skel(cx, &spine.ctors[i].0, &payload, true, &payload_skels, span)?;
         // A container's length, read *out of the label just built* rather than
         // re-elaborated from the argument: the arity term projects the same
         // field with the same function (`ConstBody::Arity`), so the two agree
@@ -1409,6 +1440,23 @@ impl Elaborator {
         tag: bool,
         span: Span,
     ) -> R<Term> {
+        self.build_fields_skel(cx, ctor_ty, args, tag, &[], span)
+    }
+
+    /// [`Self::build_fields`] plus, aligned positionally with `args`, each
+    /// field's implicitness skeleton derived from its *stored surface* type
+    /// (docs/implicit-binders-design.md §6.1's third site) — what lets a
+    /// record literal's field be an implicit lambda. Empty for every caller
+    /// that has no surface fields at hand.
+    pub(crate) fn build_fields_skel(
+        &self,
+        cx: &Cx,
+        ctor_ty: &Type,
+        args: &[Expr],
+        tag: bool,
+        skels: &[Option<Rc<crate::Skel>>],
+        span: Span,
+    ) -> R<Term> {
         let head = self.whnf(cx, ctor_ty, span)?;
         let Type::Sigma { fst_level, snd_level, fst, snd } = head else {
             // The Unit terminator (§3.1): every field consumed. `Unit` is
@@ -1425,17 +1473,22 @@ impl Elaborator {
         };
         // The tag's inhabitant is `refl`, with the annotations read off the
         // encoding's own `Id` rather than rebuilt.
-        let (value, rest) = if tag {
-            (tag_value(&fst), args)
+        let (value, rest, skels_rest) = if tag {
+            (tag_value(&fst), args, skels)
         } else {
             let (arg, rest) = args
                 .split_first()
                 .ok_or(crate::ElabError::Elab { msg: "too few arguments".into(), span })?;
-            (self.elab_check(cx, arg, &fst, &fst_level)?, rest)
+            let skel = skels.first().and_then(|s| s.as_deref());
+            (
+                self.elab_check_skel(cx, arg, &fst, &fst_level, None, skel)?,
+                rest,
+                skels.get(1..).unwrap_or(&[]),
+            )
         };
         let value = Rc::new(value);
         let tail = snd.apply_local(&LocalSubst::id(&cx.gamma).extended(Rc::clone(&value)));
-        let tail_tm = self.build_fields(cx, &tail, rest, false, span)?;
+        let tail_tm = self.build_fields_skel(cx, &tail, rest, false, skels_rest, span)?;
         Ok(Term::Pair {
             fst_level,
             snd_level,
@@ -1539,7 +1592,7 @@ impl Elaborator {
                 .elab_match_wf(cx, ind, &arms, scrut, scrut_ty, motive, mlvl, span);
         }
         let spine = self.spine(scrut_ty, scrut_lvl, n, span)?;
-        self.case_tree(cx, &arms, &spine, 0, motive, &mlvl, Rc::new(scrut))
+        self.case_tree(cx, ind, &arms, &spine, 0, motive, &mlvl, Rc::new(scrut))
     }
 
     /// The nested-`Case` recursion of §5.2. At depth `j` the context is `cx` —
@@ -1554,6 +1607,7 @@ impl Elaborator {
     fn case_tree(
         &self,
         cx: &Cx,
+        ind: &Inductive,
         arms: &[&Arm],
         spine: &Spine,
         j: usize,
@@ -1569,7 +1623,8 @@ impl Elaborator {
             let expected =
                 motive.apply_local(&LocalSubst::id(&cx.gamma).extended(Rc::clone(&scrut)));
             let ctor_ty = spine.ctors[j].0.shift_local(d);
-            return self.elab_arm(cx, arms[j], &ctor_ty, &scrut, &expected, mlvl);
+            let skels = arm_field_skels(ind, j);
+            return self.elab_arm(cx, arms[j], &ctor_ty, &scrut, &expected, mlvl, &skels);
         }
         let ctor_lvl = spine.ctors[j].1.clone();
         let tail_lvl = spine.tails[j].1.clone();
@@ -1605,6 +1660,7 @@ impl Elaborator {
             &embed(&cx.gamma, 1)
                 .extended(Rc::new(injected(Term::Var(LocalVar(0)), true, d + 1))),
         );
+        let l_skels = arm_field_skels(ind, j);
         let case_l = self.elab_arm(
             &lcx,
             arms[j],
@@ -1612,6 +1668,7 @@ impl Elaborator {
             &Rc::new(Term::Var(LocalVar(0))),
             &l_expected,
             mlvl,
+            &l_skels,
         )?;
         // case_r: binder `y : R_{j+1}` over Γ_j; inside it, the next `Case` on
         // `y`, whose motive is `M_j` composed with `inr` and weakened past `y`.
@@ -1623,6 +1680,7 @@ impl Elaborator {
         );
         let case_r = self.case_tree(
             &rcx,
+            ind,
             arms,
             spine,
             j + 1,
@@ -1647,6 +1705,7 @@ impl Elaborator {
     /// constructor value (§5.1). The binders are *aliases*, not kernel
     /// binders: the kernel has no `let`, so each use is the projection term.
     /// `ctor_ty` is `⟦c_i⟧` scoped in `cx`.
+    #[allow(clippy::too_many_arguments)]
     fn elab_arm(
         &self,
         cx: &Cx,
@@ -1655,6 +1714,12 @@ impl Elaborator {
         value: &Rc<Term>,
         expected: &Type,
         mlvl: &Level,
+        // Aligned with the binders: each field's implicitness skeleton from
+        // its stored surface type (docs/implicit-binders-design.md §3.1), so
+        // a matched-out function field inserts at its uses in the arm body.
+        // Empty when the caller cannot align them (a ctor with children —
+        // the Σ order is payload-then-children, not declaration order).
+        skels: &[Option<Rc<crate::Skel>>],
     ) -> R<Term> {
         let mut acx = cx.clone();
         // Walk the Σ spine of the constructor, skipping the tag (entry 0), and
@@ -1662,6 +1727,7 @@ impl Elaborator {
         let mut cur = ctor_ty.clone();
         let mut pair = Rc::clone(value);
         let mut binders = arm.binders.iter().map(|p| p.name().to_string());
+        let mut skels = skels.iter();
         let mut first = true;
         loop {
             let head = self.whnf(&acx, &cur, arm.span)?;
@@ -1691,6 +1757,7 @@ impl Elaborator {
             }
             let Some(name) = binders.next() else { break };
             acx.aliases.push(Rc::new(Alias {
+                skel: skels.next().and_then(|s| s.clone()),
                 name: name.clone(),
                 depth: acx.names.len(),
                 term: proj,

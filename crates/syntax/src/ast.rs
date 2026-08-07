@@ -306,11 +306,13 @@ pub enum TyKind {
     /// -> C` is written `(x: A) -> (y: B) -> C`
     /// (docs/surface-function-types.md §1.1).
     ///
-    /// Binders are always *explicit*: implicitness lives in the elaborator's
-    /// per-declaration `ParamMeta`, not in the kernel's `Type::Pi`, so there
-    /// is nowhere in a function type to record it
+    /// `implicit` marks a `{x: A} -> B` binder. The flag never reaches the
+    /// kernel — `Type::Pi` has no slot for it — it is read off the surface
+    /// type into the elaborator's positional implicitness *skeleton*
+    /// (docs/implicit-binders-design.md §2), which governs insertion at uses
+    /// and is erased at the kernel boundary
     /// (issues/implicit-binders-in-function-types.md).
-    Fn { binder: Option<String>, dom: Box<Ty>, cod: Box<Ty> },
+    Fn { binder: Option<String>, implicit: bool, dom: Box<Ty>, cod: Box<Ty> },
     /// `Ctx` — the kind of a context binder in a `meta fn` signature
     /// (docs/in-language-map-design.md §3). Layer m only; a diagnostic
     /// anywhere else.
@@ -337,12 +339,16 @@ pub struct RecordLitField {
     pub span: Span,
 }
 
-/// One lambda binder: `x` or `(x: A)`. An unannotated binder is only usable
-/// in checking position, where the expected Π supplies the domain.
+/// One lambda binder: `x`, `(x: A)`, `{x}` or `{x: A}`. An unannotated
+/// binder is only usable in checking position, where the expected Π supplies
+/// the domain. `implicit` marks the brace spelling; like [`TyKind::Fn`]'s
+/// flag it is surface-only — the emitted `Term::Lam` is byte-identical to
+/// the explicit spelling's (docs/implicit-binders-design.md §7.2).
 #[derive(Debug, Clone)]
 pub struct LamBinder {
     pub name: String,
     pub ty: Option<Ty>,
+    pub implicit: bool,
     pub span: Span,
 }
 
