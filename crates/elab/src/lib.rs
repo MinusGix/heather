@@ -84,6 +84,7 @@ mod indexed;
 mod inductive;
 mod lgg;
 mod quote;
+pub mod resolve;
 mod slots;
 mod traits;
 mod vec;
@@ -125,6 +126,12 @@ pub enum ElabError {
     /// (issues/goal-holes.md). Not one error per goal: the *listing* is the
     /// point — it is how the checker shows goal state.
     UnsolvedGoals { decl: String, goals: Vec<GoalReport> },
+    /// A solver parameter whose goal could not be resolved
+    /// (docs/traits-layer2-design.md §7). The search is deterministic, so its
+    /// failure has a well-defined *trace* — which scopes were consulted,
+    /// which candidates were tried, which subgoal failed — and the trace is
+    /// the diagnostic, as data rather than as prose.
+    Resolution { goal: String, span: Span, trace: Vec<resolve::TraceLine> },
 }
 
 /// One entry of the unsolved-goal listing. Types are rendered eagerly with
@@ -152,6 +159,16 @@ impl From<ParseError> for ElabError {
 }
 
 impl ElabError {
+    /// The message alone, for an error being *quoted* inside another — a
+    /// rejected resolution candidate, whose own failure is one line of the
+    /// enclosing trace.
+    pub(crate) fn message(&self) -> String {
+        match self {
+            ElabError::Elab { msg, .. } => msg.clone(),
+            other => other.to_string(),
+        }
+    }
+
     /// The error with source positions resolved — what a front-end should
     /// print. [`std::fmt::Display`] gives the same text without them, for
     /// where the source is no longer at hand.
@@ -163,6 +180,7 @@ impl ElabError {
         match self {
             ElabError::Parse(e) => format!("{}:{}: {}", at(e.span), "parse error", e.msg),
             ElabError::Elab { msg, span } => format!("{}: {msg}", at(*span)),
+            ElabError::Resolution { span, .. } => format!("{}: {self}", at(*span)),
             ElabError::Kernel { span, .. } => format!("{}: {self}", at(*span)),
             ElabError::UnsolvedGoals { decl, goals } => {
                 let mut s = format!("unsolved goals in `{decl}`:\n");
@@ -192,6 +210,7 @@ impl ElabError {
         match self {
             ElabError::Parse(e) => headed(&format!("parse error: {}", e.msg), e.span),
             ElabError::Elab { msg, span } => headed(msg, *span),
+            ElabError::Resolution { span, .. } => headed(&self.to_string(), *span),
             ElabError::Kernel { span, .. } => headed(&self.to_string(), *span),
             ElabError::UnsolvedGoals { decl, goals } => {
                 let mut s = format!("error: unsolved goals in `{decl}`:\n");
@@ -253,6 +272,11 @@ impl std::fmt::Display for ElabError {
         match self {
             ElabError::Parse(e) => write!(f, "parse error: {}", e.msg),
             ElabError::Elab { msg, .. } => write!(f, "{msg}"),
+            ElabError::Resolution { goal, trace, .. } => write!(
+                f,
+                "no instance for `{goal}` — the search:{}",
+                resolve::render_trace(trace)
+            ),
             ElabError::Kernel { decl, err, .. } => {
                 write!(f, "the kernel rejected `{decl}`: {err:?}")
             }
@@ -503,6 +527,7 @@ fn skel_params(skel: &Skel) -> Rc<Vec<ParamMeta>> {
                 is_type: b.is_type,
                 is_self: false,
                 skel: b.dom.clone(),
+                solver: None,
             })
             .collect(),
     )
@@ -533,6 +558,14 @@ struct ParamMeta {
     /// per the §3.3 pairing guard. `None` for every markless parameter, so
     /// existing declarations store nothing new.
     skel: Option<Rc<Skel>>,
+    /// A **solver parameter** (docs/traits-layer2-design.md §1): written
+    /// `requires m: C<A>` or `p: T := infer`, filled at the call site by
+    /// resolution rather than by unification. Carries the parameter's written
+    /// type, which is what the failure diagnostic displays the goal as —
+    /// nothing keys on it (§7). `None` for every ordinary parameter, and for
+    /// every skeleton-derived table (a value head has no declaration to have
+    /// written `requires` on).
+    solver: Option<Rc<Ty>>,
 }
 
 /// What a global name refers to: the absolute position of its `Trm_c`
@@ -642,6 +675,22 @@ pub struct Elaborator {
     /// members use earlier members by name" (docs/traits-layer1-design.md
     /// §4.2). Empty outside a block, which makes the mechanism inert.
     instance_scope: Vec<(String, String)>,
+    /// Canonical derived instances, minted into Ψ, one per derivation
+    /// (docs/traits-layer2-design.md §8). A `Vec` and not a map: the key is
+    /// the goal type *up to conversion*, so lookup is a scan and the table is
+    /// small by construction (one entry per distinct derived dictionary in
+    /// the program).
+    derived: Vec<resolve::DerivedInst>,
+    /// Goals this item's elaboration derived and that deserve a canonical
+    /// global. Ψ must not grow mid-declaration, so minting is a **restart**:
+    /// the item is rolled back, the queue drained, the item elaborated again
+    /// (§8). Empty for every program that resolves nothing, which is what
+    /// keeps the whole mechanism free.
+    pending_derived: RefCell<Vec<(Type, Level, u32)>>,
+    /// Backchaining depth, for the recursion cap. A `Cell` because resolution
+    /// recurses *through* `elab_check` — the nested obligation is discovered
+    /// by `apply_implicit`, not passed down.
+    resolve_depth: Cell<usize>,
     next_tag: u32,
     fuel: u64,
     /// Number of Ψ slots reserved for the current declaration's goals — a
@@ -773,6 +822,9 @@ impl Elaborator {
             classes: HashMap::new(),
             instances: HashMap::new(),
             instance_scope: Vec::new(),
+            derived: Vec::new(),
+            pending_derived: RefCell::new(Vec::new()),
+            resolve_depth: Cell::new(0),
             next_tag: 0,
             fuel: DEFAULT_FUEL,
             goal_base: 0,
@@ -822,13 +874,23 @@ impl Elaborator {
         let file = parse_file(src)?;
         self.enter_module(module, &file)?;
         for item in &file.items {
-            match item {
-                Item::Decl(d) => self.elab_decl(d)?,
-                Item::Inductive(i) => self.elab_inductive(i)?,
-                Item::Class(c) => self.elab_class(c)?,
-                Item::Instance(i) => self.elab_instance(i)?,
-                Item::Import(_) => {}
+            let r = match item {
+                Item::Decl(d) => self.elab_decl(d),
+                Item::Inductive(i) => self.elab_inductive(i),
+                Item::Class(c) => self.elab_class(c),
+                Item::Instance(i) => self.elab_instance(i),
+                Item::Import(_) => Ok(()),
+            };
+            // Canonical derived instances are minted **between** items, where
+            // Ψ may grow (docs/traits-layer2-design.md §8). A failed item
+            // mints nothing: its derivations are as speculative as the rest of
+            // it.
+            if r.is_err() {
+                self.pending_derived.borrow_mut().clear();
+            } else {
+                self.mint_pending();
             }
+            r?;
         }
         Ok(())
     }
@@ -1071,11 +1133,23 @@ impl Elaborator {
                 Item::Instance(i) => self.elab_instance(i),
                 Item::Import(_) => Ok(()),
             };
+            if r.is_err() {
+                self.pending_derived.borrow_mut().clear();
+            } else {
+                self.mint_pending();
+            }
             if let Err(e) = r {
                 errs.push(e);
             }
         }
         errs
+    }
+
+    /// The canonical derived instances minted so far, in mint order
+    /// (docs/traits-layer2-design.md §8) — one per *derivation*, not per use
+    /// site, which is the coherence invariant this table is.
+    pub fn derived_instances(&self) -> Vec<&str> {
+        self.derived.iter().map(|d| d.name.as_str()).collect()
     }
 
     /// The accumulated global context (theorem statements).
@@ -1314,6 +1388,7 @@ impl Elaborator {
                     is_type: true,
                     is_self: false,
                     skel: None,
+                    solver: None,
                 })
                 .chain(decl.params.iter().map(|p| ParamMeta {
                     name: p.name.clone(),
@@ -1324,6 +1399,7 @@ impl Elaborator {
                     // lambdas are checked against and what suppresses
                     // bare-reference insertion at this argument (§5.3/§6.1).
                     skel: skel_of_ty(&p.ty),
+                    solver: p.solver.map(|_| Rc::new(p.ty.clone())),
                 }))
                 .collect::<Vec<_>>(),
         );
@@ -2546,7 +2622,40 @@ impl Elaborator {
                 if let Some(r) = self.ctor_at(cx, head, args, &[], e.span) {
                     return r;
                 }
-                let (_, t, ty, lvl, _) = self.elab_ty_app(cx, head, args, e.span)?;
+                let (name, t, ty, lvl, mask) = self.elab_ty_app(cx, head, args, e.span)?;
+                // `f<A, B>` with nothing after it, where the parameters that
+                // follow the type arguments start with a **solver** parameter:
+                // the bare-reference route of
+                // docs/unifier-completeness-design.md §5.3, one step along.
+                // This is what makes an instance's assembled value work at
+                // layer 2 — `op<A, B>` is the member with its `requires`
+                // binders still to fill, and filling them is resolution's job
+                // (docs/traits-layer2-design.md §9.3).
+                //
+                // Deliberately narrow: only a leading prefix that *contains a
+                // solver parameter* takes it, so no call that elaborated
+                // before this round changes shape.
+                let params = self.params_of(&name);
+                let prefix = mask.iter().take_while(|&&b| b).count();
+                let solver_here = (0..prefix)
+                    .any(|k| params.get(args.len() + k).is_some_and(|p| p.solver.is_some()));
+                if expected.is_some() && solver_here {
+                    return self.apply_implicit(
+                        cx,
+                        &name,
+                        Rc::clone(&params),
+                        false,
+                        args.len(),
+                        true,
+                        t,
+                        ty,
+                        lvl,
+                        &[],
+                        &mask[..prefix],
+                        expected,
+                        e.span,
+                    );
+                }
                 Ok((t, ty, lvl))
             }
             // `f<T, …>(a, b)` and `@f<T, …>(a, b)`. The type arguments are
@@ -5348,6 +5457,12 @@ impl Elaborator {
         // meta occurrences *are* its "blocked on" set, and [`zonked`] decides
         // readiness exactly.
         let mut deferred: Vec<DeferredArg<'_>> = Vec::new();
+        // Resolution obligations (docs/traits-layer2-design.md §4): one per
+        // **solver parameter**, discharged by the same retry-to-fixpoint loop
+        // the deferred arguments use. A solver parameter's slot is minted
+        // exactly like an implicit's; what differs is where its solution comes
+        // from — search, once the goal is meta-free.
+        let mut resolves: Vec<ResolveOb> = Vec::new();
         let mut next_meta = 0u32;
         let mut args = args.iter();
         let all_params = params;
@@ -5364,6 +5479,19 @@ impl Elaborator {
                     var: GlobalVar(next_meta),
                     subst: LocalSubst::id(&cx.gamma),
                 };
+                if all_params.get(i).is_some_and(|p| p.solver.is_some()) {
+                    // A solver parameter: withheld, not unsolved. Nothing may
+                    // learn a solution for it from an argument's type — its
+                    // value is *searched for*, and a unifier-supplied one
+                    // would be a different value at the same slot.
+                    sols[next_meta as usize] = Sol::Withheld;
+                    resolves.push(ResolveOb {
+                        slot: next_meta as usize,
+                        dom: (*dom).clone(),
+                        dom_level: dom_level.clone(),
+                        param: i,
+                    });
+                }
                 meta_doms.push((*dom).clone());
                 slot_param.push(i);
                 next_meta += 1;
@@ -5475,6 +5603,38 @@ impl Elaborator {
         loop {
             let mut progressed = false;
             let mut blocked = false;
+            // Resolution obligations first: a resolved dictionary is
+            // frequently what a deferred argument's domain was waiting on,
+            // and the reverse never happens (a checked argument cannot
+            // instantiate a solver parameter's goal — its slot is withheld).
+            for ob in &resolves {
+                if !matches!(sols[ob.slot], Sol::Withheld) {
+                    continue;
+                }
+                let Some(goal) = zonked(&ob.dom, n, &sols) else {
+                    blocked = true;
+                    continue;
+                };
+                let display = all_params
+                    .get(ob.param)
+                    .and_then(|p| p.solver.as_deref())
+                    .map(traits::render_ty)
+                    .unwrap_or_else(|| "a solver parameter".to_string());
+                let mut tr = Vec::new();
+                match self.resolve_goal(cx, &goal, &ob.dom_level, &display, span, &mut tr) {
+                    Some(t) => {
+                        sols[ob.slot] = Sol::Solved(Rc::new(t));
+                        progressed = true;
+                    }
+                    None => {
+                        return Err(ElabError::Resolution {
+                            goal: display,
+                            span,
+                            trace: tr,
+                        })
+                    }
+                }
+            }
             for ob in &deferred {
                 if !matches!(sols[ob.slot], Sol::Withheld) {
                     continue;
@@ -5492,6 +5652,29 @@ impl Elaborator {
             }
             if !progressed || !blocked {
                 break;
+            }
+        }
+        // A resolution obligation whose goal never became meta-free is
+        // reported at the call, naming the parameter and what it waited on:
+        // the goal is *unknown*, not absent, and saying "no instance" would
+        // be a lie (docs/traits-layer2-design.md §4).
+        for ob in &resolves {
+            if matches!(sols[ob.slot], Sol::Withheld) {
+                let p = all_params.get(ob.param).map(|p| p.name.as_str()).unwrap_or("?");
+                let goal = all_params
+                    .get(ob.param)
+                    .and_then(|q| q.solver.as_deref())
+                    .map(traits::render_ty)
+                    .unwrap_or_else(|| "a solver parameter".to_string());
+                return err(
+                    format!(
+                        "the goal of `{p}` (`{goal}`) still mentions an implicit that \
+                         could not be inferred here, so no search can run for it: give \
+                         the type arguments (`{name}<…>(…)`) or pass `{p}` explicitly \
+                         (`@{name}(…)`)"
+                    ),
+                    span,
+                );
             }
         }
         // An obligation still blocked is reported at *its* argument, before
@@ -6332,6 +6515,17 @@ pub(crate) fn embed(gamma: &LocalCtx, extra: u32) -> LocalSubst {
 /// completion (or errors) inside its own world before the outer loop
 /// continues, so there is nothing an inner call could leave pending that the
 /// outer call could later unblock.
+struct ResolveOb {
+    /// The scratch slot standing for the argument.
+    slot: usize,
+    /// The parameter's declared domain, scratch world — the goal, once every
+    /// meta it mentions is solved (docs/traits-layer2-design.md §4).
+    dom: Type,
+    dom_level: Level,
+    /// Parameter index, for the hint and the message.
+    param: usize,
+}
+
 struct DeferredArg<'a> {
     /// The withheld slot: the stand-in meta holding the argument's spine
     /// position.

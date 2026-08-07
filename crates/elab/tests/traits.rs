@@ -464,7 +464,7 @@ instance<A, B> Mag<Pair<A, B>> requires ma: Mag<A>, mb: Mag<B> {{
     Pair {{ fst: ma.op(x.fst, y.fst), snd: mb.op(x.snd, y.snd) }}
   }}
 }}
-fn pz() -> Mag<Pair<Z, Z>> {{ Pair::Mag(Z::Mag, Z::Mag) }}
+fn pz() -> Mag<Pair<Z, Z>> {{ Pair::Mag }}
 theorem computes():
   pz().op(Pair {{ fst: Z0, snd: Z0 }}, Pair {{ fst: Z1, snd: Z1 }}).fst = Z1 {{ refl }}
 "
@@ -472,10 +472,12 @@ theorem computes():
 }
 
 #[test]
-fn a_generic_instances_cross_member_reference_passes_its_requires() {
-    // The layer-1 rule stated in design §4.2 and pinned here: inside a generic
-    // instance a cross-member call is a *name* rewrite only, so the `requires`
-    // binders are passed. Layer 2 is what makes them implicit.
+fn a_generic_instances_cross_member_reference_finds_its_requires() {
+    // Layer 1 pinned the opposite of this — a cross-member call *passed* its
+    // `requires` binders — and said in the same breath that layer 2 would
+    // change it (layer 1 §4.2, §8; layer 2 §9.3). It has: the binders are
+    // solver parameters, and resolution finds them where they are, as locals
+    // of this very declaration (the first ascending scope).
     ok(&format!(
         "class Mag<A> {{ op: A -> A -> A, twice: A -> A }}
 {PAIR}
@@ -484,16 +486,18 @@ instance<A, B> Mag<Pair<A, B>> requires ma: Mag<A>, mb: Mag<B> {{
   fn op(x: Pair<A, B>, y: Pair<A, B>) -> Pair<A, B> {{
     Pair {{ fst: ma.op(x.fst, y.fst), snd: mb.op(x.snd, y.snd) }}
   }}
-  fn twice(x: Pair<A, B>) -> Pair<A, B> {{ op(ma, mb, x, x) }}
+  fn twice(x: Pair<A, B>) -> Pair<A, B> {{ op(x, x) }}
 }}
 "
     ));
 }
 
 #[test]
-fn a_generic_instances_cross_member_reference_without_its_requires_is_refused() {
-    // The negative control for the rule above: the bare arity is what a reader
-    // sees, and it is wrong, so it is an error rather than a guess.
+fn a_cross_member_reference_passing_its_requires_positionally_is_refused() {
+    // The negative control, and the retired layer-1 spelling: a solver
+    // parameter has no positional slot, so the old `op(ma, mb, x, x)` is now
+    // an arity error rather than the way it is written. `@op(…)` is the
+    // spelling that passes one by hand.
     let e = bad(&format!(
         "class Mag<A> {{ op: A -> A -> A, twice: A -> A }}
 {PAIR}
@@ -501,7 +505,7 @@ instance<A, B> Mag<Pair<A, B>> requires ma: Mag<A>, mb: Mag<B> {{
   fn op(x: Pair<A, B>, y: Pair<A, B>) -> Pair<A, B> {{
     Pair {{ fst: ma.op(x.fst, y.fst), snd: mb.op(x.snd, y.snd) }}
   }}
-  fn twice(x: Pair<A, B>) -> Pair<A, B> {{ op(x, x) }}
+  fn twice(x: Pair<A, B>) -> Pair<A, B> {{ op(ma, mb, x, x) }}
 }}
 "
     ));

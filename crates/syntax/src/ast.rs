@@ -98,9 +98,10 @@ pub struct InstanceDecl {
     /// value, exactly as a `fn`'s do.
     pub tyvars: Vec<TyParam>,
     pub class: ClassRef,
-    /// `requires ma: Monoid<A>, …` — **ordinary explicit parameters** at layer
-    /// 1: there is no resolution yet, so a caller passes them
-    /// (docs/traits-design.md §6, staged).
+    /// `requires ma: Monoid<A>, …` — **solver parameters**
+    /// (docs/traits-layer2-design.md §1): implicit at every use site and
+    /// filled by resolution, passed by hand only under `@`. Layer 1 had them
+    /// as ordinary explicit parameters; layer 2 is what changed the use site.
     pub requires: Vec<Param>,
     pub body: InstanceBody,
     pub span: Span,
@@ -323,7 +324,22 @@ pub struct Param {
     /// be called `p`; `self: T` names it `self` as well, for record methods.
     /// See issues/method-receiver-position.md.
     pub is_self: bool,
+    /// A **solver default** (docs/traits-layer2-design.md §1): the argument is
+    /// produced by a solver run in the caller's context when the caller omits
+    /// it. Written `hx: P := infer`, or as a `requires` binder — the two
+    /// spellings desugar here, and a solver parameter is always `implicit`
+    /// (it has no positional slot; `@f(…)` is how one is passed by hand).
+    pub solver: Option<Solver>,
     pub span: Span,
+}
+
+/// The solvers a parameter default may name. One this round
+/// (docs/traits-design.md §8 enumerates the others, layer 3's).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Solver {
+    /// Search the caller's scope, then the instance registry, for a value of
+    /// the parameter's type.
+    Infer,
 }
 
 /// Surface types. `a = b` is the identity type at the (synthesized) type

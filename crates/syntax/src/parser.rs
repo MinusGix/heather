@@ -15,6 +15,8 @@
 //!            "{" rfield ("," rfield)* ","? "}"
 //! cref    := name "<" type ("," type)* ">"
 //! inst    := "instance" tyvars? cref ("requires" ibind ("," ibind)*)?
+//! decl    := ("fn"|"theorem") name tyvars? ("requires" ibind ("," ibind)*)?
+//!            "(" param* ")" …          -- param := … (":=" "infer")?
 //!            "{" (decl* | ifield ("," ifield)* ","?) "}"
 //! ibind   := name ":" type
 //! ifield  := name ":=" expr
@@ -477,20 +479,7 @@ impl Parser {
         // `requires ma: Monoid<A>, mb: Monoid<B>` — no parentheses, because the
         // list is not an argument list: at layer 1 these are ordinary explicit
         // parameters of every member and of the assembled value.
-        let mut requires = Vec::new();
-        if self.eat_kw("requires") {
-            loop {
-                let (pname, psp) = self.binder_ident("a `requires` binder name")?;
-                self.expect(&TokKind::Colon, "`:` (a `requires` binder is `name: C<A>`)")?;
-                let ty = self.with_record_lit(true, |p| p.ty())?;
-                let span = psp.join(ty.span);
-                requires.push(Param { name: pname, ty, implicit: false, is_self: false, span });
-                if !matches!(self.peek(), TokKind::Comma) {
-                    break;
-                }
-                self.bump();
-            }
-        }
+        let requires = self.requires_list()?;
         let open = self.expect(&TokKind::LBrace, "`{` (the instance body)")?;
         // One token decides the body form (docs/traits-layer1-design.md §1):
         // a member is a declaration, a literal field is an assignment, and one
@@ -532,6 +521,47 @@ impl Parser {
         let end = self.expect(&TokKind::RBrace, "`}` to close the instance body")?;
         let _ = open;
         Ok(InstanceDecl { tyvars, class, requires, body, span: start.join(end) })
+    }
+
+    /// `requires ma: Monoid<A>, mb: Monoid<B>`, or nothing — the class
+    /// spelling of a **solver parameter** (docs/traits-layer2-design.md §1).
+    /// No parentheses, because the list is not an argument list; every binder
+    /// desugars to a leading implicit parameter with `Solver::Infer`, which is
+    /// the one representation both spellings and both declaration forms share.
+    fn requires_list(&mut self) -> R<Vec<Param>> {
+        let mut requires = Vec::new();
+        if !self.eat_kw("requires") {
+            return Ok(requires);
+        }
+        loop {
+            let (pname, psp) = self.binder_ident("a `requires` binder name")?;
+            self.expect(&TokKind::Colon, "`:` (a `requires` binder is `name: C<A>`)")?;
+            // A **class reference**, not a general type: `requires` is the
+            // class spelling of a solver parameter, and the general one is
+            // `p: T := infer`. The restriction is also what keeps the list
+            // parseable in front of a parameter list — `Mag<A> (x: A)` would
+            // otherwise read as a value-parameter application
+            // (docs/surface-value-parameters.md §1).
+            let cref = self.class_ref("the class a `requires` binder is of")?;
+            let ty = Ty {
+                kind: TyKind::Named { name: cref.name, args: cref.args },
+                span: cref.span,
+            };
+            let span = psp.join(ty.span);
+            requires.push(Param {
+                name: pname,
+                ty,
+                implicit: true,
+                is_self: false,
+                solver: Some(Solver::Infer),
+                span,
+            });
+            if !matches!(self.peek(), TokKind::Comma) {
+                break;
+            }
+            self.bump();
+        }
+        Ok(requires)
     }
 
     /// `<A, B: Type<1>>` after `instance`, or nothing — the same production a
@@ -672,7 +702,14 @@ impl Parser {
             self.expect(&TokKind::Colon, "`:` (a value parameter is `name: T`)")?;
             let ty = self.ty()?;
             let span = span.join(ty.span);
-            params.push(Param { name: n, ty, implicit: false, is_self: false, span });
+            params.push(Param {
+                name: n,
+                ty,
+                implicit: false,
+                is_self: false,
+                solver: None,
+                span,
+            });
             if !matches!(self.peek(), TokKind::Comma) {
                 break;
             }
@@ -861,8 +898,14 @@ impl Parser {
             }
             self.expect(&TokKind::Gt, "`>` to close the type parameters")?;
         }
+        // `fn sum<A> requires m: Monoid<A> (xs: List<A>) -> A` — solver
+        // parameters, the class spelling (docs/traits-layer2-design.md §1).
+        // They are moved to the front of the parameter list, because they are
+        // what the later parameters' types mention; the same production the
+        // `instance` head uses, and the same desugaring.
+        let requires = self.requires_list()?;
         self.expect(&TokKind::LParen, "`(`")?;
-        let mut params = Vec::new();
+        let mut params = requires;
         while !matches!(self.peek(), TokKind::RParen) {
             // `{name: T}` marks an implicit parameter (filled by unification);
             // `name: T` is explicit.
@@ -905,10 +948,49 @@ impl Parser {
             self.expect(&TokKind::Colon, "`:`")?;
             let ty = self.ty()?;
             let mut span = psp.join(ty.span);
+            // `hx: P := infer` — a solver default
+            // (docs/traits-layer2-design.md §1). Unambiguous here: nothing
+            // else follows a parameter's type with `:=`.
+            let mut solver = None;
+            if matches!(self.peek(), TokKind::ColonEq) {
+                let eq = self.bump().span;
+                let (sname, ssp) = self.ident("a solver name (`:= infer`)")?;
+                if sname != "infer" {
+                    return Err(ParseError {
+                        msg: format!(
+                            "`{sname}` is not a solver: `infer` is the only one \
+                             (docs/traits-design.md §8)"
+                        ),
+                        span: ssp,
+                    });
+                }
+                if implicit {
+                    return Err(ParseError {
+                        msg: "an implicit parameter is already filled by unification: \
+                              `:= infer` is the other filling discipline, and a \
+                              parameter has one"
+                            .into(),
+                        span: eq.join(ssp),
+                    });
+                }
+                if is_self {
+                    return Err(ParseError {
+                        msg: "`self` cannot have a solver default: its argument is the \
+                              receiver, which is never omitted"
+                            .into(),
+                        span: eq.join(ssp),
+                    });
+                }
+                solver = Some(Solver::Infer);
+                span = span.join(ssp);
+            }
             if implicit {
                 span = span.join(self.expect(&TokKind::RBrace, "`}` to close implicit parameter")?);
             }
-            params.push(Param { name: pname, ty, implicit, is_self, span });
+            // A solver parameter has no positional slot: it is implicit, and
+            // `@f(…)` is how it is passed by hand (§1).
+            let implicit = implicit || solver.is_some();
+            params.push(Param { name: pname, ty, implicit, is_self, solver, span });
             if !matches!(self.peek(), TokKind::Comma) {
                 break;
             }

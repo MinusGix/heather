@@ -86,8 +86,28 @@ pub(crate) fn render_ty(t: &Ty) -> String {
             format!("{name}<{}>", args.iter().map(render_ty).collect::<Vec<_>>().join(", "))
         }
         TyKind::Fn { dom, cod, .. } => format!("{} -> {}", render_ty(dom), render_ty(cod)),
+        // A goal may be an ordinary proposition (`p: n = n := infer`), and
+        // "`_`" for it would make the whole diagnostic unreadable.
+        TyKind::Eq(a, b) => format!("{} = {}", render_expr(a), render_expr(b)),
         TyKind::Vec { elem, .. } => format!("[{}; _]", render_ty(elem)),
         TyKind::Fin(_) => "Fin(_)".into(),
+        _ => "_".into(),
+    }
+}
+
+/// The written form of the few expression shapes that appear inside a *type*
+/// worth displaying — an equation's endpoints. Anything larger renders as
+/// `_`: this is a diagnostic's display, and nothing keys on it.
+fn render_expr(e: &Expr) -> String {
+    match &e.kind {
+        ExprKind::Var(n) => n.clone(),
+        ExprKind::Num(n) => n.to_string(),
+        ExprKind::App { head, args, .. } => format!(
+            "{}({})",
+            render_expr(head),
+            args.iter().map(render_expr).collect::<Vec<_>>().join(", ")
+        ),
+        ExprKind::Dot { recv, name, .. } => format!("{}.{name}", render_expr(recv)),
         _ => "_".into(),
     }
 }
@@ -282,6 +302,34 @@ fn rename_block(m: &Ren, b: &Block) -> Block {
             })
             .collect(),
         span: b.span,
+    }
+}
+
+/// The size of a written type: type constructors and variable occurrences,
+/// counted the same way on both sides of the decrease check (§6). Only the
+/// *comparison* is meaningful, so a coarse walk is the honest one — anything
+/// finer would be a claim about which shapes shrink.
+fn ty_size(t: &Ty) -> usize {
+    match &t.kind {
+        TyKind::Named { args, .. } => 1 + args.iter().map(ty_size).sum::<usize>(),
+        TyKind::Vec { elem, .. } => 1 + ty_size(elem),
+        TyKind::Fn { dom, cod, .. } => 1 + ty_size(dom) + ty_size(cod),
+        _ => 1,
+    }
+}
+
+/// How often `v` occurs as a bare name in `t` — the second half of Paterson's
+/// condition, which is what refuses `C<A> requires C<Pair<A, A>>` even where
+/// the sizes happen to agree.
+fn ty_var_count(t: &Ty, v: &str) -> usize {
+    match &t.kind {
+        TyKind::Named { name, args } => {
+            (name == v && args.is_empty()) as usize
+                + args.iter().map(|a| ty_var_count(a, v)).sum::<usize>()
+        }
+        TyKind::Vec { elem, .. } => ty_var_count(elem, v),
+        TyKind::Fn { dom, cod, .. } => ty_var_count(dom, v) + ty_var_count(cod, v),
+        _ => 0,
     }
 }
 
@@ -542,6 +590,9 @@ impl Elaborator {
         }
         let parameterized = !d.tyvars.is_empty() || !d.requires.is_empty();
         let written = class_ref_written(&d.class);
+        // Termination, checked here rather than detected when it hangs
+        // (docs/traits-layer2-design.md §6).
+        self.check_decrease(d, &written)?;
 
         // The class type as a surface type: `Monoid<Rat>`.
         let class_ty = Ty {
@@ -636,18 +687,22 @@ impl Elaborator {
         written: &str,
     ) -> R<()> {
         let span = d.class.span;
-        // Arguments the instance's own parameters contribute to a reference to
-        // one of its members: the `requires` binders, by name. Type parameters
-        // stay implicit and are inferred from the expected field type.
-        let auto: Vec<Expr> = d.requires.iter().map(|p| var(&p.name, span)).collect();
+        // A reference to one of this instance's members no longer applies the
+        // `requires` binders: they are **solver parameters**
+        // (docs/traits-layer2-design.md §1, §9.3), so the reference leaves
+        // them to resolution, which finds them where they are — as locals of
+        // this very declaration, the first ascending scope. Layer 1 passed
+        // them by hand, and that is exactly the rule this round retires.
 
         // The instance's own type parameters, as type arguments. They are
         // written *explicitly* rather than left implicit because the reference
         // is a partial application — the member still wants its own arguments
         // — and mixing partial application with implicit insertion is refused
         // by the applicator (docs/unifier-completeness-design.md §5.3). Under
-        // `f<A, B>(…)` the leading type parameters are consumed by the
-        // `param_offset` route and the remainder may be a prefix.
+        // `f<A, B>` the leading type parameters are consumed by the
+        // `param_offset` route and the remainder may be a prefix — which at
+        // layer 2 is exactly the solver parameters, filled by resolution from
+        // this declaration's own binders (docs/traits-layer2-design.md §9.3).
         let tyargs: Vec<Ty> = d
             .tyvars
             .iter()
@@ -655,19 +710,11 @@ impl Elaborator {
             .collect();
         let member_ref = |name: &str| -> Expr {
             let full = format!("{prefix}::{name}");
-            let callee = if tyargs.is_empty() {
+            if tyargs.is_empty() {
                 var(&full, span)
             } else {
                 span_expr(
                     ExprKind::TyApp { head: Box::new(var(&full, span)), args: tyargs.clone() },
-                    span,
-                )
-            };
-            if auto.is_empty() {
-                callee
-            } else {
-                span_expr(
-                    ExprKind::App { head: Box::new(callee), args: auto.clone(), explicit: false },
                     span,
                 )
             }
@@ -879,6 +926,54 @@ impl Elaborator {
                     parameterized,
                 },
             );
+        }
+        Ok(())
+    }
+
+    /// Structural decrease of the `requires` subgoals against the instance
+    /// head (docs/traits-layer2-design.md §6, record §6.3): Paterson's
+    /// condition, checked at the declaration over the *written* types.
+    ///
+    /// A `requires` binder whose type is not a class is not a subgoal at all —
+    /// it is an `infer` goal, answered by the scope and never by backchaining
+    /// — so it cannot feed a loop and is skipped.
+    fn check_decrease(&self, d: &InstanceDecl, written: &str) -> R<()> {
+        let vars: Vec<&str> = d.tyvars.iter().map(|t| t.name.as_str()).collect();
+        let head: usize = d.class.args.iter().map(ty_size).sum();
+        for p in &d.requires {
+            let TyKind::Named { name, args } = &p.ty.kind else { continue };
+            if args.is_empty() || self.lookup_class(name).is_none() {
+                continue;
+            }
+            let sub: usize = args.iter().map(ty_size).sum();
+            let refuse = |why: String| {
+                err::<()>(
+                    format!(
+                        "`instance {written}` cannot be resolved for: the subgoal \
+                         `{}: {}` {why}, so a search that used this instance could \
+                         feed itself forever. Each `requires` subgoal must be \
+                         structurally smaller than the instance head \
+                         (docs/traits-layer2-design.md §6); the escape is a named \
+                         instance value, applied by hand.",
+                        p.name,
+                        render_ty(&p.ty)
+                    ),
+                    p.span,
+                )
+            };
+            // The variable condition first: where both fail it is the more
+            // specific complaint, and it is the one a reader can act on.
+            for v in &vars {
+                if ty_var_count(&p.ty, v) > d.class.args.iter().map(|a| ty_var_count(a, v)).sum() {
+                    refuse(format!("mentions `{v}` more often than the head does"))?;
+                }
+            }
+            if sub >= head {
+                refuse(format!(
+                    "is not smaller than the head `{}` ({sub} against {head})",
+                    class_ref_written(&d.class)
+                ))?;
+            }
         }
         Ok(())
     }
