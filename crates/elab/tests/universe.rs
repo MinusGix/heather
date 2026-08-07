@@ -228,12 +228,16 @@ fn a_level_expression_is_rejected() {
     assert!(e.contains("numeral"), "expected the numeral message, got: {e}");
 }
 
-// A type parameter's annotation is a *universe*, not any type: `<A: Nat>` is
-// not a stricter bound, it is a category error.
+// A type parameter's annotation is a *universe* or a *class*, never any other
+// type: `<A: Nat>` is not a stricter bound, it is a category error. Since the
+// inline constraint form landed (issues/requires-placement-syntax.md §R2-A)
+// the colon carries two nouns, so the rejection names both readings rather
+// than only the universe one.
 #[test]
 fn a_non_universe_type_parameter_annotation_is_rejected() {
     let e = bad("fn f<A: Nat>(x: A) -> A { x }");
-    assert!(e.contains("universe"), "expected the universe message, got: {e}");
+    assert!(e.contains("UNIVERSE"), "expected the universe reading, got: {e}");
+    assert!(e.contains("is not a class"), "expected the class reading, got: {e}");
 }
 
 // A term where a type is expected still fails, and the bridge does not

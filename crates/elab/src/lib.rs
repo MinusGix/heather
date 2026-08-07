@@ -1277,6 +1277,10 @@ impl Elaborator {
             param_info.push((ty, lvl));
         }
         for p in &decl.params {
+            // `<A: Monoid>` — the inline constraint form. Its class is checked
+            // before its type is elaborated, so `<A: Nat>` complains about the
+            // annotation the user wrote and not about `Nat<A>`.
+            self.check_constraint_param(p)?;
             let (ty, lvl) = self.elab_ty(&cx, &p.ty)?;
             cx.push_skel(p.name.clone(), ty.clone(), lvl.clone(), skel_of_ty(&p.ty));
             // An ordinary parameter *at a universe* — `(A: Type<n>, x: A)` —

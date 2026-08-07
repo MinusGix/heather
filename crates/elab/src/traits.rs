@@ -16,7 +16,8 @@ use std::rc::Rc;
 
 use heather_syntax::{
     Block, ClassDecl, ClassRef, CtorDecl, Decl, DeclKind, Expr, ExprKind, FieldDecl, InductiveDecl,
-    InstanceBody, InstanceDecl, InstanceField, LamBinder, RecordLitField, Span, Stmt, Ty, TyKind,
+    InstanceBody, InstanceDecl, InstanceField, LamBinder, Param, RecordLitField, Span, Stmt, Ty,
+    TyKind,
 };
 
 use crate::names::qkey;
@@ -526,6 +527,38 @@ impl Elaborator {
         self.classes.get(&self.key_of(name)?).cloned()
     }
 
+    /// The colon in a type-parameter list carries two nouns — a **universe**
+    /// (`<A: Type<n>>`, where `A` lives) and a **class** (`<A: Monoid>`, what
+    /// `A` carries) — told apart by the head word alone
+    /// (issues/requires-placement-syntax.md §R2-A). A word that is neither is
+    /// the one place that reading can go wrong, so it is reported here, naming
+    /// both readings, rather than falling out of the desugared type as
+    /// "unknown type `Nat`" — a complaint about `Nat<A>`, which the user never
+    /// wrote.
+    ///
+    /// Constraint parameters are recognized by their unspellable `#`-prefixed
+    /// binder name, which is the parser's mark that this `Param` came from the
+    /// inline form and not from a `requires` binder (whose type is checked by
+    /// the ordinary class-reference path, with the user's own name to blame).
+    pub(crate) fn check_constraint_param(&self, p: &Param) -> R<()> {
+        if !p.name.starts_with("#constraint") {
+            return Ok(());
+        }
+        let TyKind::Named { name, .. } = &p.ty.kind else { return Ok(()) };
+        if self.lookup_class(name).is_some() {
+            return Ok(());
+        }
+        err(
+            format!(
+                "`{name}` is not a class, so it cannot constrain a type parameter. \
+                 After the colon in `<A: …>` there are two readings and this is \
+                 neither: a UNIVERSE — `Type`, `Type<n>` — saying where `A` lives, or \
+                 the name of a `class`, saying what `A` carries"
+            ),
+            p.span,
+        )
+    }
+
     // -- instances ----------------------------------------------------------
 
     /// `instance C<T⃗> { … }` (design §4).
@@ -951,6 +984,9 @@ impl Elaborator {
         let vars: Vec<&str> = d.tyvars.iter().map(|t| t.name.as_str()).collect();
         let head: usize = d.class.args.iter().map(ty_size).sum();
         for p in &d.requires {
+            // `instance<A: Mag> …` — the inline form's class is checked here,
+            // the first place the instance head is known to be one.
+            self.check_constraint_param(p)?;
             let TyKind::Named { name, args } = &p.ty.kind else { continue };
             if args.is_empty() || self.lookup_class(name).is_none() {
                 continue;

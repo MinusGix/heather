@@ -857,8 +857,90 @@ resolver call for; a `given` clause between the return type and the block is
 the same `no_record_lit` situation round 1 already checked. None of these
 changed a judgement above.
 
+## What landed (2026-08-07, implementing round for §R2-A)
+
+The inline form ships. `<A: Monoid>` and `<A: C1 + C2>` are accepted in a
+`fn`/`theorem` type-parameter list and in an `instance` head's, and each
+constraint desugars **in the parser** to the parameter `requires _: C<A>` would
+have produced: implicit, `Solver::Infer`, at the front of the value-parameter
+list, in declaration order left to right across the whole bracket, constraints
+before any written `requires` binders. Not one line of the resolver, the
+dispatcher or the kernel changed.
+
+Files: `crates/syntax/src/parser.rs` (`typaram_list` now returns
+`(Vec<TyParam>, Vec<Param>)` and is the single production both brackets use —
+`decl`'s duplicated inline loop is gone; new `constraint`), the one elaborator
+addition `Elaborator::check_constraint_param` (`crates/elab/src/traits.rs`,
+called from `elab_decl_inner` and `check_decrease`),
+`crates/elab/tests/traits_inline_constraints.rs` (27 tests),
+`lib/std/algebra.hthr` (two signatures), three migrated test signatures, and
+one existing universe test whose expected message changed (below).
+
+**Evidence for "one desugaring, not two features".** The pin is
+`the_two_spellings_are_one_term`: `inline` and `spelt` are written both ways
+and `theorem same(p: Z, q: Z): inline(p, q) = spelt(p, q) { refl }` is checked
+by the kernel — at a concrete carrier and, in the twin test, at an **open** one
+where both dictionaries come from the room. `+` order is pinned where it is
+observable at all, under `@`: `@twiddle(Z::Mag, Z::Pt, z) = twiddle(z)` by
+`refl`, with the swapped spelling refused (`NotConvertible`) as its negative
+control. §R2-A's bracket-arity claim is pinned positively (`combine<Z>(p, q)`)
+and negatively (`combine<Z, Z>(…)` is still an arity error) — a constraint
+really is an annotation on an entry, not an entry.
+
+### Corrections to §R2-A, found by implementing it
+
+1. **The universe must lead the `+` list.** §R2-A wrote `<A: Type<1> + Monoid>`
+   without saying whether the order was free. It is not: `Type` is recognized
+   only as the first entry, and `<A: Mag + Type<1>>` is refused by name. The
+   reason is the one §R2-A itself gives — a universe says *where* `A` lives and
+   a class says *what it carries*, so they are not two items of one list, they
+   are a sort followed by structures on it.
+2. **The unknown-word diagnostic cannot live in the parser**, which has no name
+   tables. It is an elaborator check (`check_constraint_param`) keyed on the
+   generated binder's unspellable `#constraint…` name — that name is therefore
+   load-bearing, not merely hygienic. Consequence: `<A: Nat>` used to say "a
+   type parameter's annotation must be a universe" and now names both readings,
+   which changed `crates/elab/tests/universe.rs`'s
+   `a_non_universe_type_parameter_annotation_is_rejected`. The stronger case is
+   `<A: Box>`, where `Box` exists and "unknown type" would have been a lie.
+3. **The inline form cannot state a non-terminating instance.** An inline
+   constraint is always `C<A>` on a *binder*, so the only head that could fail
+   Paterson's size test is a bare `C<A>` — and such a carrier has no head type
+   name, so layer 1's canonical-name rule refuses it one step earlier. Nothing
+   was weakened (`instance<A> Mag<Box<A>> requires m: Mag<Box<Box<A>>>` is
+   still refused by `check_decrease`); the finding is that the inline spelling
+   is termination-safe *by construction*, and `requires` remains the only
+   spelling that can state a loop at all. Pinned as
+   `the_inline_form_cannot_state_a_nonterminating_instance`.
+4. **The migration is two declarations, not six.** §R2-A's staging expected
+   `lib/std/algebra.hthr` to be "rewritten immediately", but that was written
+   assuming type-level dot projection (candidate 23) shipped alongside; with
+   projection sequenced away, §A.5's count stands and only the declarations
+   that never name the dictionary can move. Those are `max_of` and
+   `max_of_true` — `mconcat`, `mconcat_single`, `max_of_self` and
+   `plus_zero_of_comm` project by name and keep `requires`, and `or_default`
+   keeps `:= infer`. `sum`/`all_of`/`any_of`/`concat` have no constraint to
+   migrate: they are the concrete specializations. The file now shows both
+   forms side by side, which is the honest state of the feature until (23)
+   lands.
+
+### The exclusions, refused by name
+
+Each is reachable syntactically and each says what to write instead:
+`_` in a constraint's arguments (the multi-parameter carrier slot); `as m`
+naming; a `given` clause after the return type; `section`/`given`/`context` at
+item level. Dot projection on a type binder is not refused specially — `A.unit`
+is an ordinary unbound name today. All five remain open above.
+
+Suite: 1268 → 1295 (27 new), full `scripts/test` green, `lib/` acceptance
+tests included.
+
+
 ## Log
 
 - 2026-08-07: 2026-08-07: User review: ANONYMOUS binders are wanted regardless of placement (Lean experience: the dictionary is rarely referenced by name). Trailing clause tempts but encourages brace-on-own-line; in-list bracketed `[Monoid<A>]` reads naturally in multi-line parameter lists but is visually noisy; NEW option from the user: grouping in the generics list — `fn sum<A, Monoid<A>>(xs: List<A>) -> A` — typeclasses beside the type they constrain (Lean-ish grouping), at the cost of conflating a binder name and a class reference in one bracket; `fn sum<A>[Monoid<A>](…)` considered and disliked. Instance shorthand SPLIT OUT to [[instance-shorthand-syntax]]. A brainstorm round is tasked with widening the option space and evaluating against real library signatures, writing its analysis into this issue; decision after that.
 - 2026-08-07: Exploration landed above (11 candidates, parser claims checked, top three test-driven on the real `algebra.hthr` signatures). Recommends the **in-list `infer` marker with an optional name** — `fn mconcat<A>(infer m: Monoid<A>, xs: List<A>) -> A`, anonymous `infer Monoid<A>` — retiring `:= infer` into it, with the user's grouped generics offered as a later, name-free sugar; key finding: four of the library's six constrained declarations project the dictionary by name, so the *named* form is the common one and must be the short one.
 - 2026-08-07: Round 2 (unconstrained — parser reality demoted to footnotes, unobtrusiveness-at-scale made the primary axis) landed above: eleven new candidates, `<A: Monoid>` rehabilitated and developed (constraint *sentences* `T: C`, `+` stacking, `C<X>`/`C<_, X>` for extra parameters, `given` clause when the subject is not the binder, `as m` for the rare name, bracket arity untouched). Recommends a **combination**: (23) type-level dot projection `A.unit` / `G.plus(x, y)` — which removes the binder name from all six library declarations and is a generalization of the existing `Nat::AddCommMonoid.plus` path — plus `<A: Monoid>` inline with the `given` clause as its general form, plus `given` section variables (syntactic inclusion rule only) and named bundles for repetition; `open` kept as a body-side convenience. Round 1's `infer` marker withdrawn as too obtrusive.
+- 2026-08-07: 2026-08-07: DECIDED (user): the inline colon form wins — `<A: Monoid>`, with Rust-style `+` stacking (`<A: Cmp + Monoid>`). Round 2's nouns argument accepted (A: Monoid answers 'what is A' with a structure noun as A: Type does with a sort noun). Type-level dot projection (candidate 23) is ENDORSED IN PRINCIPLE but sequenced: A.plus has the inherited-member/canonical-structure issues, so it waits behind the owner-keyed-dispatch + upcast round ([[inherited-members-undispatchable]]) and must be designed against [[operation-indexed-classes]] (dot notation is the bundled layer's surface). NOT yet decided: the `given` general clause, section variables, bundles, `_` carrier-slot for multi-parameter classes, `as m` naming — all stay open here. The `requires` prefix form STAYS as the named/general spelling until dot projection removes the need. Implementing round for the inline form dispatched 2026-08-07.
+- 2026-08-07: IMPLEMENTED (§R2-A): `<A: Monoid>` and `<A: C1 + C2>` in fn/theorem and generic-instance type-parameter lists, desugared in the parser to anonymous solver parameters (implicit, Solver::Infer, front of the value-parameter list, declaration order, constraints before `requires` binders) — zero elaborator concepts added; the two spellings are pinned as one term by refl at concrete and open carriers, `+` order pinned under `@`, bracket arity pinned both ways. Four corrections recorded above: the universe annotation must LEAD the `+` list; the unknown-word diagnostic had to move to the elaborator (keyed on the unspellable `#constraint` binder name) and changed one existing universe test's message; the inline form is termination-safe by construction (its only Paterson-failing head has no canonical name, so layer 1 refuses it first) so `requires` stays the only spelling that can state a loop; and the library migration is two declarations, not six, because dot projection was sequenced away. `_` carrier slots, `as m`, `given`, sections and bundles refused by name and still open. 1268 -> 1295 tests.
+- 2026-08-07: STAYS OPEN for the exclusions the decision deliberately did not settle: the `given` general clause, section variables, named bundles, the `_` carrier slot for multi-parameter classes, and `as m` naming. Each is refused by name with a diagnostic pointing at `requires`, so the surface is honest about what it does not yet have; closing this issue waits on those, and on type-level dot projection removing the need for named binders.

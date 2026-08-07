@@ -216,9 +216,15 @@ theorem mconcat_single<A> requires m: Monoid<A> (x: A): mconcat(Cons(x, Nil)) = 
 // scrutinee, so the pattern is the same one, not a new one.
 fn cmp_pick<A>(b: Bool, x: A, y: A) -> A { match b { False => x, True => y } }
 
-fn max_of<A> requires c: Cmp<A> (x: A, y: A) -> A { cmp_pick(x.le(y), x, y) }
+// Written in the INLINE constraint form (issues/requires-placement-syntax.md
+// §R2-A): these two never name the dictionary — `x.le(y)` dispatches from the
+// receiver, whose type is this declaration's own `A` — so there is nothing for
+// a binder name to do, and `<A: Cmp>` says the whole of what is true about `A`.
+// `max_of_self` below keeps `requires` because its proof projects `c.le_refl`;
+// the two forms are one desugaring and sit in one file deliberately.
+fn max_of<A: Cmp>(x: A, y: A) -> A { cmp_pick(x.le(y), x, y) }
 
-theorem max_of_true<A> requires c: Cmp<A> (x: A, y: A, p: x.le(y) = True):
+theorem max_of_true<A: Cmp>(x: A, y: A, p: x.le(y) = True):
     max_of(x, y) = y
 {
     j(sym(p), λ z q => cmp_pick(z, x, y) = y, refl)

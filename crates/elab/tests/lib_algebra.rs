@@ -263,7 +263,7 @@ theorem nat_default(): or_default(no_nat()) = 0 { refl }
 theorem list_default(): or_default(no_list()) = Nil { refl }
 theorem some_wins(n: Nat): or_default(Some(n)) = n { refl }
 // open element type: the dictionary is resolved at the probe's own parameter.
-fn head_or_default<A> requires d: Default<A> (o: Option<A>) -> A { or_default(o) }
+fn head_or_default<A: Default>(o: Option<A>) -> A { or_default(o) }
 ");
 }
 
@@ -338,7 +338,7 @@ fn a_member_of_one_class_dispatches() {
     ok("
 theorem concrete(a: Nat, b: Nat): a.op(b) = add(a, b) { refl }
 theorem on_bool(a: Bool, b: Bool): a.op(b) = and(a, b) { refl }
-fn generic<A> requires m: Monoid<A> (x: A, y: A) -> A { x.op(y) }
+fn generic<A: Monoid>(x: A, y: A) -> A { x.op(y) }
 theorem generic_agrees(a: Nat, b: Nat): generic(a, b) = add(a, b) { refl }
 ");
 }

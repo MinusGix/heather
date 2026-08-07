@@ -123,12 +123,14 @@ fn dispatch_works_in_checking_position() {
 /// The case layer 1 could not reach: an **open** carrier, where the
 /// dictionary is a binder and there is no registry entry to find. The pin is
 /// that the emitted term uses `m` — `refl` against the explicit `m.op(x, y)`
-/// at a neutral receiver, where nothing computes.
+/// at a neutral receiver, where nothing computes. `twice` is written in the
+/// inline constraint form and `uses_m` in the `requires` one, because the pin
+/// needs a name to project and the dispatching declaration does not.
 #[test]
 fn a_generic_carrier_dispatches_through_its_binder() {
     ok(&format!(
         "{MAG}
-         fn twice<A> requires m: Mag<A> (x: A, y: A) -> A {{ x.op(y) }}
+         fn twice<A: Mag>(x: A, y: A) -> A {{ x.op(y) }}
          theorem uses_m<A> requires m: Mag<A> (x: A, y: A) : x.op(y) = m.op(x, y) {{ refl }}
          // instantiated at the concrete carrier, it is still the instance's.
          theorem at_Z(a: Z, b: Z) : twice(a, b) = b {{ refl }}"

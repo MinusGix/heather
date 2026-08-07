@@ -6,7 +6,9 @@
 //! decl    := "fn" name tyvars? "(" params? ")" "->" type block
 //!          | "theorem" name tyvars? "(" params? ")" ":" type block
 //! tyvars  := "<" tyvar ("," tyvar)* ">"
-//! tyvar   := name (":" univ)?                        -- default `Type<0>`
+//! tyvar   := name (":" annot)?                       -- default `Type<0>`
+//! annot   := univ ("+" constr)* | constr ("+" constr)*
+//! constr  := name ("<" type ("," type)* ">")?  -- `A: C<X>` is `C<A, X>`
 //! univ    := "Type" ("<" numeral ">")?
 //! induct  := "inductive" name tyvars? "{" ctors? "}"
 //! record  := "record" name tyvars? "{" rfield ("," rfield)* ","? "}"
@@ -399,6 +401,21 @@ impl Parser {
         if self.at_kw("instance") {
             return Ok(Item::Instance(self.instance_decl()?));
         }
+        // Section variables and constraint bundles are the two ways round 2
+        // sketched of writing a constraint ONCE for many declarations. Neither
+        // is decided (issues/requires-placement-syntax.md, log 2026-08-07), and
+        // both are words a reader who met `<A: Monoid>` will reach for, so they
+        // are refused by name rather than by "expected `fn`".
+        if self.at_kw("section") || self.at_kw("given") || self.at_kw("context") {
+            let TokKind::Ident(w) = self.peek() else { unreachable!() };
+            let w = w.clone();
+            return self.err(&format!(
+                "`{w}` is not implemented: a constraint is written on the declaration \
+                 that needs it, inline as `<A: Monoid>` or as a `requires` binder. \
+                 Section variables and named bundles are open design \
+                 (issues/requires-placement-syntax.md)"
+            ));
+        }
         Ok(Item::Decl(self.decl()?))
     }
 
@@ -474,12 +491,17 @@ impl Parser {
     fn instance_decl(&mut self) -> R<InstanceDecl> {
         let start = self.peek_span();
         self.bump(); // `instance`
-        let tyvars = self.typaram_list()?;
+        let (tyvars, constraints) = self.typaram_list()?;
         let class = self.class_ref("the class this instance is of")?;
         // `requires ma: Monoid<A>, mb: Monoid<B>` — no parentheses, because the
         // list is not an argument list: at layer 1 these are ordinary explicit
         // parameters of every member and of the assembled value.
-        let requires = self.requires_list()?;
+        //
+        // `instance<A: Mag> …` is the same list written at the binder: the
+        // constraints lead, then the written `requires` binders, one order for
+        // both spellings.
+        let mut requires = constraints;
+        requires.extend(self.requires_list()?);
         let open = self.expect(&TokKind::LBrace, "`{` (the instance body)")?;
         // One token decides the body form (docs/traits-layer1-design.md §1):
         // a member is a declaration, a literal field is an assignment, and one
@@ -564,27 +586,67 @@ impl Parser {
         Ok(requires)
     }
 
-    /// `<A, B: Type<1>>` after `instance`, or nothing — the same production a
-    /// `fn`'s type parameters use, factored out because two callers now want
-    /// it.
-    fn typaram_list(&mut self) -> R<Vec<TyParam>> {
+    /// `<A, B: Type<1>, C: Monoid + Cmp>` after `instance` or a declaration
+    /// name, or nothing — the one production every type-parameter bracket uses.
+    ///
+    /// Two nouns share the colon (issues/requires-placement-syntax.md §R2-A):
+    /// `A: Type<n>` says **where** `A` lives, `A: Monoid` says **what** it
+    /// carries, and the head word tells them apart — `Type` is the universe
+    /// noun, every other name is a class. They stack with `+`, so
+    /// `<A: Type<1> + Monoid>` says both.
+    ///
+    /// A constraint is not a new elaborator concept: `A: C` desugars, here, to
+    /// the parameter `requires _: C<A>` would have produced — implicit,
+    /// `Solver::Infer`, at the front of the value-parameter list — with a
+    /// compiler-generated `#`-prefixed name, which is unspellable, because the
+    /// inline form deliberately offers no way to project the dictionary. The
+    /// body that needs a name writes `requires`; both may appear on one
+    /// declaration, and the constraints come first.
+    fn typaram_list(&mut self) -> R<(Vec<TyParam>, Vec<Param>)> {
         let mut tyvars = Vec::new();
+        let mut constraints = Vec::new();
         if !matches!(self.peek(), TokKind::Lt) {
-            return Ok(tyvars);
+            return Ok((tyvars, constraints));
         }
         self.bump();
         loop {
             let (tv, tvsp) = self.binder_ident("type parameter name")?;
+            if tv == "self" {
+                // Type arguments are never passed at a call site
+                // (issues/at-and-type-arguments.md), so there is no slot here
+                // for a receiver either.
+                return Err(ParseError {
+                    msg: "a type parameter cannot be `self`: type arguments are never \
+                          passed at a call site, so there is nothing for a receiver to \
+                          fill"
+                        .into(),
+                    span: tvsp,
+                });
+            }
             let mut level = 0;
             if matches!(self.peek(), TokKind::Colon) {
                 self.bump();
-                let Some((n, _)) = self.univ()? else {
-                    return self.err(
-                        "a type parameter's annotation must be a universe: write \
-                         `<A: Type<n>>`, or `<A>` for `Type<0>`",
-                    );
-                };
-                level = n;
+                // `Type` first, if it is there at all: the universe annotation
+                // is one entry in the `+` list and, being a statement about
+                // where `A` lives rather than about what it carries, it can
+                // only be the leading one.
+                let mut classes = true;
+                if self.at_kw("Type") {
+                    let Some((n, _)) = self.univ()? else { unreachable!() };
+                    level = n;
+                    classes = matches!(self.peek(), TokKind::Plus);
+                    if classes {
+                        self.bump(); // `+`
+                    }
+                }
+                while classes {
+                    let n = constraints.len();
+                    constraints.push(self.constraint(&tv, tvsp, n)?);
+                    classes = matches!(self.peek(), TokKind::Plus);
+                    if classes {
+                        self.bump();
+                    }
+                }
             }
             tyvars.push(TyParam { name: tv, level, span: tvsp });
             if !matches!(self.peek(), TokKind::Comma) {
@@ -593,7 +655,82 @@ impl Parser {
             self.bump();
         }
         self.expect(&TokKind::Gt, "`>` to close the type parameters")?;
-        Ok(tyvars)
+        Ok((tyvars, constraints))
+    }
+
+    /// One entry of a `<A: C1 + C2>` list: a class name, optionally with the
+    /// arguments that follow its carrier. `A: C` is `C<A>` and `A: C<X>` is
+    /// `C<A, X>` — the annotated binder is always the class's FIRST argument,
+    /// which is what makes the inline form a *hoist* of the sentence `A: C`
+    /// rather than a second feature.
+    fn constraint(&mut self, tyvar: &str, tyvar_span: Span, index: usize) -> R<Param> {
+        if !matches!(self.peek(), TokKind::Ident(_)) {
+            return self.err(&format!(
+                "a type parameter's annotation is either a universe — \
+                 `<{tyvar}: Type<n>>`, or `<{tyvar}>` for `Type<0>` — or a class \
+                 constraint, `<{tyvar}: Monoid>`, stacked with `+`"
+            ));
+        }
+        if self.at_kw("Type") {
+            return self.err(&format!(
+                "`Type` is the universe annotation and can only lead the list: write \
+                 `<{tyvar}: Type<n> + C>`, not `<{tyvar}: C + Type<n>>`"
+            ));
+        }
+        let (name, nsp) = self.qual_ident("a class name (`<A: Monoid>`)")?;
+        let mut args = vec![Ty {
+            kind: TyKind::Named { name: tyvar.to_string(), args: Vec::new() },
+            span: tyvar_span,
+        }];
+        let mut end = nsp;
+        if matches!(self.peek(), TokKind::Lt) {
+            self.bump();
+            loop {
+                let a = self.with_record_lit(true, |p| p.ty())?;
+                // `A: Coe<_, B>` — the carrier moved to a slot other than the
+                // first. Deliberately NOT decided
+                // (issues/requires-placement-syntax.md, log 2026-08-07), so it
+                // is refused by name rather than parsed into something else.
+                let wild = matches!(&a.kind, TyKind::Named { name, args }
+                    if name == "_" && args.is_empty());
+                if wild {
+                    return Err(ParseError {
+                        msg: "`_` in a constraint's arguments is not implemented: the \
+                              inline form always puts the annotated parameter in the \
+                              class's FIRST slot (`A: C<X>` is `C<A, X>`). A \
+                              multi-parameter class whose carrier sits elsewhere is \
+                              written `requires m: C<X, A>`"
+                            .into(),
+                        span: a.span,
+                    });
+                }
+                args.push(a);
+                if !matches!(self.peek(), TokKind::Comma) {
+                    break;
+                }
+                self.bump();
+            }
+            end = self.expect(&TokKind::Gt, "`>` to close the class arguments")?;
+        }
+        if self.at_kw("as") {
+            return self.err(
+                "naming a constraint (`<A: Monoid as m>`) is not implemented: an inline \
+                 constraint is always anonymous. A declaration whose body projects the \
+                 dictionary writes `requires m: Monoid<A>`, which may sit on the same \
+                 declaration as inline constraints",
+            );
+        }
+        let span = tyvar_span.join(end);
+        Ok(Param {
+            // Unspellable by construction: `#` never begins an identifier, so
+            // nothing in a body can reach this dictionary by name.
+            name: format!("#constraint{index}"),
+            ty: Ty { kind: TyKind::Named { name, args }, span },
+            implicit: true,
+            is_self: false,
+            solver: Some(Solver::Infer),
+            span,
+        })
     }
 
     /// `import nat;` or `import option::{Option, map};`
@@ -857,53 +994,20 @@ impl Parser {
         }
         // `fn map<A, B>(…)` — type parameters (docs/surface-polymorphism.md
         // §1). Unambiguous here: a declaration's name is always followed by
-        // `(` or `<`, and neither is an expression continuation.
-        let mut tyvars = Vec::new();
-        if matches!(self.peek(), TokKind::Lt) {
-            self.bump();
-            loop {
-                let (tv, tvsp) = self.binder_ident("type parameter name")?;
-                if tv == "self" {
-                    // Type arguments are never passed at a call site
-                    // (issues/at-and-type-arguments.md), so there is no slot
-                    // here for a receiver either.
-                    return Err(ParseError {
-                        msg: "a type parameter cannot be `self`: type arguments are \
-                              never passed at a call site, so there is nothing for a \
-                              receiver to fill"
-                            .into(),
-                        span: tvsp,
-                    });
-                }
-                // `<A: Type<1>>` — the universe the parameter ranges over,
-                // defaulting to `Type<0>` (docs/surface-universe.md §2). The
-                // annotation is a *universe*, not any type: a type parameter
-                // ranges over a universe by definition.
-                let mut level = 0;
-                if matches!(self.peek(), TokKind::Colon) {
-                    self.bump();
-                    let Some((n, _)) = self.univ()? else {
-                        return self.err(
-                            "a type parameter's annotation must be a universe: write \
-                             `<A: Type<n>>`, or `<A>` for `Type<0>`",
-                        );
-                    };
-                    level = n;
-                }
-                tyvars.push(TyParam { name: tv, level, span: tvsp });
-                if !matches!(self.peek(), TokKind::Comma) {
-                    break;
-                }
-                self.bump();
-            }
-            self.expect(&TokKind::Gt, "`>` to close the type parameters")?;
-        }
+        // `(` or `<`, and neither is an expression continuation. `<A: Type<1>>`
+        // annotates the universe the parameter ranges over
+        // (docs/surface-universe.md §2); `<A: Monoid>` constrains what it
+        // carries — one production, shared with the `instance` head.
+        let (tyvars, constraints) = self.typaram_list()?;
         // `fn sum<A> requires m: Monoid<A> (xs: List<A>) -> A` — solver
         // parameters, the class spelling (docs/traits-layer2-design.md §1).
         // They are moved to the front of the parameter list, because they are
         // what the later parameters' types mention; the same production the
-        // `instance` head uses, and the same desugaring.
-        let requires = self.requires_list()?;
+        // `instance` head uses, and the same desugaring. Inline constraints are
+        // those same parameters, and lead: `<A: Monoid> requires c: Cmp<A>`
+        // binds the monoid first.
+        let mut requires = constraints;
+        requires.extend(self.requires_list()?);
         self.expect(&TokKind::LParen, "`(`")?;
         let mut params = requires;
         while !matches!(self.peek(), TokKind::RParen) {
@@ -1033,6 +1137,19 @@ impl Parser {
         // opens it, not a record literal in the last endpoint of a
         // `theorem t: a = D { … }` (docs/surface-records.md §6.1).
         let result = self.with_record_lit(true, |p| p.ty())?;
+        // The `given` clause — the constraint sentence written where its
+        // subject is not a binder (`given List<A>: Monoid`) — is deliberately
+        // NOT decided (issues/requires-placement-syntax.md, log 2026-08-07).
+        // It is refused by name because this is exactly where a reader who
+        // learned `<A: Monoid>` will try to write it.
+        if self.at_kw("given") {
+            return self.err(
+                "a `given` clause is not implemented: the inline form `<A: Monoid>` \
+                 constrains a type PARAMETER, and a constraint on anything else \
+                 (`List<A>: Monoid`) is written `requires m: Monoid<List<A>>` before \
+                 the parameter list (issues/requires-placement-syntax.md)",
+            );
+        }
         let body = self.block()?;
         let span = start.join(body.span);
         Ok(Decl { kind, is_meta, elaborates, name, tyvars, params, result, body, span })

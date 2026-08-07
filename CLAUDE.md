@@ -12,6 +12,10 @@
   theorem hit ~22 GB, 2026-07-31). Wrap every invocation:
   `(ulimit -v 8388608 -t 120; target/release/heather check <file>)`,
   loosening deliberately per run if needed — never uncapped.
+- **Never run `cargo fmt`** (any scope): the repo is deliberately not
+  rustfmt-formatted (`issues/fmt-not-enforced-decision.md`); a formatting
+  pass buries a real diff under ~18k lines of churn (it happened,
+  2026-08-07). Match the surrounding style by hand.
 - `Debug` on kernel `Term`/`Type`/`Level` etc. is **budget-bounded**
   (`crates/kernel/src/fmt.rs`: ≤512 nodes, ≤64 depth, `…` elision), so an
   accidental `{:?}` is safe and prints compact syntax. Keep it that way: any
