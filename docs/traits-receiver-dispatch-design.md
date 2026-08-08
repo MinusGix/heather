@@ -107,7 +107,7 @@ only for a call (`args: Some`):
 dispatch(cx, recv, name, args, span) -> Option<DotResolution>:
   if name is no class's field           -> None            -- cheap negative test
   (recv_t, recv_ty, recv_lvl) := infer(recv)  or return None
-  owners := [ C | C in classes, visible here, name in C.fields ]
+  owners := [ C | C in classes, visible here, C DECLARES name ]
                                           sorted by qualified class name
   cands  := [ C in owners | |C.params| == 1 ]
   if cands empty -> None, or the multi-parameter refusal   -- §4 rule 7
@@ -124,6 +124,13 @@ dispatch(cx, recv, name, args, span) -> Option<DotResolution>:
                      -> error naming both
                   else Dispatch(π_name(d), [recv] ++ args)
 ```
+
+**Declares**, not "has a field of that name": as first shipped this read
+`name in C.fields`, which is the *flattened* list, so every class in an
+`extends` chain answered for an inherited member and the ambiguity rule below
+made it undispatchable forever. Owner-keying is
+`docs/traits-owner-dispatch-design.md` (2026-08-08); it changes the candidate
+set and nothing else here, and §4's rules stand verbatim.
 
 The **cheap negative test** is a `HashSet<String>` of every declared class's
 field names, maintained beside `record_fields` and `member_bases` and for the
@@ -169,8 +176,10 @@ Deterministic, no priorities, decided before implementing.
    two attached names in exactly that sense. The message names both spellings
    (`Rat::op(…)`, `Rat::Monoid.op(…)`), since writing one of them is the fix.
    Same rule, same message shape, for a bare `op` in scope or a builtin.
-3. **Two classes with the same member name, both resolving at the carrier, are
-   an error naming both** — never declaration order, never a first hit. Every
+3. **Two classes both *declaring* the same member name, both resolving at the
+   carrier, are an error naming both** — never declaration order, never a first
+   hit. (Two classes in one `extends` chain are not two candidates: only the
+   declaring one is, §3.) Every
    candidate is tried even after one succeeds, because the error is the point.
    The message names the classes and the goals (`Monoid<Rat>`, `Group<Rat>`).
 4. **Scope beats registry**, by inheritance: `resolve_goal` step 1 returns

@@ -4080,14 +4080,25 @@ impl Elaborator {
             return Ok(None);
         };
         // Candidates: every class **visible here** (the ordinary §4 regime,
-        // asked by resolving the class's own name) with exactly one type
-        // parameter (§2.1) and a field of this name, in sorted canonical-name
-        // order — never `HashMap` order, and never declaration order.
+        // asked by resolving the class's own name) that **declares** this
+        // field, with exactly one type parameter (§2.1), in sorted
+        // canonical-name order — never `HashMap` order, and never declaration
+        // order.
+        //
+        // *Declares*, and not "has": a class that merely inherits `name` never
+        // said anything about it, so it is not a candidate at all — before any
+        // instance is consulted (docs/traits-owner-dispatch-design.md §2). That
+        // is what makes an inherited member dispatchable without a tiebreak,
+        // and it leaves two *unrelated* declaring classes ambiguous, which is
+        // the case §4 rule 3 exists for.
         let mut with_field: Vec<(String, Rc<traits::ClassInfo>)> = self
             .classes
             .iter()
             .filter(|(k, info)| {
-                info.fields.iter().any(|f| f.name.as_deref() == Some(name))
+                info.fields
+                    .iter()
+                    .zip(&info.owner)
+                    .any(|(f, o)| f.name.as_deref() == Some(name) && o.is_none())
                     && self.key_of(&info.name).as_deref() == Some(k.as_str())
             })
             .map(|(k, i)| (k.clone(), Rc::clone(i)))

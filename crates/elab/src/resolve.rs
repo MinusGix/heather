@@ -122,6 +122,16 @@ impl Elaborator {
                 return Some((*a.term).shift_local(by));
             }
         }
+        // 1b. The same scope again, by **upcast**: a dictionary of a *child*
+        //     class answers an ancestor's goal, through the canonical parent
+        //     projection (docs/traits-owner-dispatch-design.md §3). After the
+        //     exact pass, because an exactly-typed value in scope is the one
+        //     the writer named; before the registry, because this is still a
+        //     scope answer and not a derivation.
+        if let Some((t, who)) = self.scope_upcast(cx, goal, lvl, span) {
+            tr.push(line(depth, "local", who));
+            return Some(t);
+        }
         tr.push(line(
             depth,
             "scope",
@@ -212,6 +222,118 @@ impl Elaborator {
     ) -> Result<Term, ElabError> {
         let e = Expr { kind: ExprKind::Var(global.to_string()), span };
         self.elab_check(cx, &e, goal, lvl)
+    }
+
+    /// Step 1b: answer the goal from a *child* dictionary in scope
+    /// (docs/traits-owner-dispatch-design.md §3).
+    ///
+    /// Owner-keyed dispatch builds its goal at the class that declared the
+    /// member, so the dictionary the writer has in hand is routinely a
+    /// descendant of the goal's class — `requires m: AddCommMonoid<G>` against
+    /// a goal `AddSemigroup<G>`, at an **open** `G` where no registry entry and
+    /// no synthesized parent global exist. Conversion cannot see through that:
+    /// the two are different records.
+    ///
+    /// Returns the proposal and what the trace should call it. `None` is
+    /// "nothing in scope upcasts", which costs one `tag_of` when the goal is
+    /// not a class at all.
+    fn scope_upcast(
+        &self,
+        cx: &Cx,
+        goal: &Type,
+        lvl: &Level,
+        span: Span,
+    ) -> Option<(Term, String)> {
+        let cind = self.tag_of(goal)?;
+        if !cind.is_record {
+            return None;
+        }
+        let ckey = self.key_of(&cind.name)?;
+        if !self.classes.contains_key(&ckey) {
+            return None;
+        }
+        // Innermost first, exactly as the exact pass: the two passes must not
+        // disagree about which binder is nearer.
+        for pos in (0..cx.names.len()).rev() {
+            let (t, ty, l) = self.local(cx, pos);
+            if let Some(u) = self.upcast_from(cx, &cind, &ckey, goal, lvl, &t, &ty, &l, span) {
+                return Some((u, format!("{} (upcast to `{}`)", cx.names[pos], cind.name)));
+            }
+        }
+        for a in cx.aliases.iter().rev() {
+            let by = (cx.names.len() - a.depth) as u32;
+            let ty = a.ty.shift_local(by);
+            let t = (*a.term).shift_local(by);
+            if let Some(u) =
+                self.upcast_from(cx, &cind, &ckey, goal, lvl, &t, &ty, &a.level, span)
+            {
+                return Some((u, format!("{} (a `let`, upcast to `{}`)", a.name, cind.name)));
+            }
+        }
+        None
+    }
+
+    /// One candidate for the upcast: is `dict_ty`'s class a descendant of the
+    /// goal's, and if so does the canonical parent record built from it check?
+    ///
+    /// The record is assembled rather than projected, because at an open
+    /// carrier there is nothing to project *from* — layer 1 §4.4 synthesizes a
+    /// canonical parent per instance declaration, not per binder. So this is
+    /// that same assembly (the parent record over the child's own components),
+    /// with the dictionary bound as an unspellable `#` alias so the fields can
+    /// be written as ordinary projections and go down the existing constructor
+    /// path. Dependent law fields need no handling: `build_ctor` substitutes
+    /// the earlier components into the later field types, and the components
+    /// here are literally the dictionary's own.
+    #[allow(clippy::too_many_arguments)]
+    fn upcast_from(
+        &self,
+        cx: &Cx,
+        cind: &crate::inductive::Inductive,
+        ckey: &str,
+        goal: &Type,
+        lvl: &Level,
+        dict: &Term,
+        dict_ty: &Type,
+        dict_lvl: &Level,
+        span: Span,
+    ) -> Option<Term> {
+        let dind = self.tag_of(dict_ty)?;
+        if dind.name == cind.name {
+            return None; // the exact pass already had its chance
+        }
+        let dkey = self.key_of(&dind.name)?;
+        let dinfo = self.classes.get(&dkey)?;
+        // `ancestors` is already transitive and deduped (layer 1 §2), so a
+        // grandparent is one membership test and never a chain walk.
+        if !dinfo.ancestors.iter().any(|r| self.key_of(&r.name).as_deref() == Some(ckey)) {
+            return None;
+        }
+        let mut tcx = cx.clone();
+        tcx.aliases.push(Rc::new(crate::Alias {
+            name: "#dict".into(),
+            depth: cx.names.len(),
+            term: Rc::new(dict.clone()),
+            ty: dict_ty.clone(),
+            level: dict_lvl.clone(),
+            skel: None,
+        }));
+        let mut args = Vec::with_capacity(cind.ctors[0].fields.len());
+        for (n, _) in &cind.ctors[0].fields {
+            args.push(Expr {
+                kind: ExprKind::Dot {
+                    recv: Box::new(Expr { kind: ExprKind::Var("#dict".into()), span }),
+                    name: n.clone()?,
+                    args: None,
+                },
+                span,
+            });
+        }
+        let t = self.build_ctor(&tcx, cind, 0, &args, goal, lvl, span).ok()?;
+        // The gate every proposal passes (design §4.4). A mismatch in the
+        // class's *arguments* — `C<Nat>` from a `D<Bool>` — is caught here and
+        // by `build_ctor` before it, and either way the answer is "not it".
+        self.checks_at(cx, &t, goal, lvl).then_some(t)
     }
 
     /// Is `ty` the goal type, here? Conversion, in the use site's context.

@@ -14,4 +14,4 @@ User decision 2026-08-07, from reviewing lib/std/algebra.hthr's `Default<A>`: ke
 
 Rationale over Lean's two-way split (Inhabited/Nonempty): Heather mixes programming and math in one library, and 'has a good default' / 'has a value' / 'is not empty' are three different claims with three different consumers. Exotic structures get Inhabited without being forced to bless a Default.
 
-Do the Default→Inhabited step whenever the library next grows; the Nonempty step waits for its former. Watch the [[inherited-members-undispatchable]] interaction if extends is used for the first step.
+Do the Default→Inhabited step whenever the library next grows; the Nonempty step waits for its former. The [[inherited-members-undispatchable]] interaction is resolved (2026-08-08, owner-keyed dispatch + scope upcast): `extends` no longer costs receiver dispatch, so the first step can use it freely.

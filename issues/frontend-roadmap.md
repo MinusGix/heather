@@ -3,7 +3,7 @@ title: "Meta: frontend roadmap and current focus"
 status: open
 labels: [frontend,meta]
 created: 2026-07-23
-updated: 2026-08-07
+updated: 2026-08-08
 ---
 
 Organizing issue for the frontend push (the frontend-first route,
@@ -271,3 +271,4 @@ date; the originals are in `git log --follow issues/frontend-roadmap.md`.
 - 2026-08-07: 2026-08-07: traits adopted by the library — lib/std/algebra.hthr declares the first classes (Monoid/Default/Cmp, an AddSemigroup→AddCommMonoid chain) and the instances lib/std's carriers earn; two findings with owners ([[inherited-members-undispatchable]], [[class-lemma-instantiation-fuel]]) and the ergonomics recorded on [[traits]].
 - 2026-08-07: Typeclass constraints got their surface: `<A: Monoid>` inline with `+` stacking, one parser desugaring onto the existing solver parameter, both spellings coexisting in lib/std/algebra.hthr (issues/requires-placement-syntax.md). The three unobtrusiveness features round 2 recommended alongside it — type-level dot projection `A.unit`, `given` section variables, constraint bundles — are all still open, and dot projection is the one that unblocks migrating the remaining four library signatures off `requires`.
 - 2026-08-07: 2026-08-07: Session close — agreed next-round order for the traits line (sequencing decision, this issue's own): owner-keyed dispatch + scope upcast ([[inherited-members-undispatchable]]) -> type-level dot projection ([[requires-placement-syntax]] round 2 candidate 23) -> [[operation-indexed-classes]] design pass -> operators-onto-classes. requires-removal intent recorded on [[requires-placement-syntax]] behind dot projection.
+- 2026-08-08: The traits-line order's first round landed: owner-keyed dispatch + scope upcast ([[inherited-members-undispatchable]] closed, docs/traits-owner-dispatch-design.md; suite 1295 -> 1299). Next per the 2026-08-07 order: type-level dot projection ([[requires-placement-syntax]] candidate 23), now unblocked.

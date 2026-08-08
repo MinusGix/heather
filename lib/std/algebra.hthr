@@ -40,17 +40,21 @@ import option;
 // ---------------------------------------------------------------------------
 // The classes.
 
-// A monoid: an associative operation with a two-sided unit. Written flat
-// rather than as `Monoid<A> extends Semigroup<A>`, and the reason is an
-// ergonomic finding rather than a taste: a parent's field is flattened into
-// the child, so both classes answer `x.op(y)` at any carrier with an
-// instance — and since a child instance *synthesizes* its parents, both
-// always have one. Receiver dispatch reports that as the ambiguity it is
-// (issues/traits.md, 2026-08-07). One class, one `op`.
-class Monoid<A> {
-    unit: A,
+// A monoid: an associative operation with a two-sided unit — and the
+// semigroup it extends, which is where `op` is *declared*. The split is
+// writable because dispatch is keyed on the field's owner
+// (docs/traits-owner-dispatch-design.md): `x.op(y)` builds the goal
+// `Semigroup<typeof(x)>` and the classes that merely inherit `op` are not
+// candidates at all, so a hierarchy and receiver sugar are no longer
+// alternatives. (They were, until 2026-08-08; this file declared `Monoid`
+// flat and said so here.)
+class Semigroup<A> {
     op: A -> A -> A,
     assoc: (x: A) -> (y: A) -> (z: A) -> op(op(x, y), z) = op(x, op(y, z)),
+}
+
+class Monoid<A> extends Semigroup<A> {
+    unit: A,
     unit_l: (x: A) -> op(unit, x) = x,
     unit_r: (x: A) -> op(x, unit) = x,
 }
@@ -195,7 +199,10 @@ instance AddCommMonoid<Bool> {
 // recursive call names no dictionary (the `requires` binder is in the room, so
 // resolution finds it there), and `h.op(…)` names none either — the receiver's
 // type is this function's own parameter `A`, and dispatch asks the same
-// resolver, which answers from the same binder.
+// resolver, which answers from the same binder. Its goal is `Semigroup<A>` and
+// the binder is a `Monoid<A>`, so what answers is the resolver's upcast
+// (docs/traits-owner-dispatch-design.md §3) — at an open carrier, where no
+// synthesized parent instance exists to be found instead.
 fn mconcat<A> requires m: Monoid<A> (xs: List<A>) -> A {
     match xs {
         Nil => m.unit,
@@ -289,10 +296,14 @@ theorem sum_single(n: Nat): sum(Cons(n, Nil)) = n { mconcat_single(n) }
 theorem all_of_single(b: Bool): all_of(Cons(b, Nil)) = b { mconcat_single(b) }
 
 // The hierarchy lemma at both of its carriers, likewise.
-theorem nat_plus_zero(x: Nat): Nat::AddCommMonoid.plus(x, Nat::AddCommMonoid.zero) = x {
+// Written with the receiver, which is what the flattening workaround cost
+// until owner-keyed dispatch landed: `plus` is declared by `AddSemigroup` and
+// inherited by the other two, so `x.plus(…)` has exactly one owner to build a
+// goal at, at either carrier.
+theorem nat_plus_zero(x: Nat): x.plus(Nat::AddMonoid.zero) = x {
     plus_zero_of_comm(x)
 }
 
-theorem bool_plus_zero(x: Bool): Bool::AddCommMonoid.plus(x, Bool::AddCommMonoid.zero) = x {
+theorem bool_plus_zero(x: Bool): x.plus(Bool::AddMonoid.zero) = x {
     plus_zero_of_comm(x)
 }

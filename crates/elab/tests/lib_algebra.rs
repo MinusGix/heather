@@ -312,27 +312,104 @@ fn f(a: Nat, b: Nat) -> Bool { a.leb(b) }",
     assert!(e.contains("write one of them"), "{e}");
 }
 
-/// The finding this corpus exists to have produced: an **inherited** field is
-/// undispatchable at every carrier, forever. `plus` is a field of all three
-/// classes in the chain (flattening), and a child instance *synthesizes* its
-/// parents, so every one of them has an instance at `Nat` and the receiver
-/// rules — rightly — refuse to choose. It is not a `Nat` accident: it holds for
-/// any `extends` hierarchy and any inherited member.
+/// The finding this corpus produced, and its answer. `plus` is a field of all
+/// three classes in the chain (flattening) and every one of them has an
+/// instance at `Nat` (synthesis), so the receiver rules used to refuse to
+/// choose — permanently, which meant a library could have a hierarchy or
+/// receiver sugar and never both.
 ///
-/// Pinned as the recorded limitation it is (`issues/traits.md`, 2026-08-07):
-/// if the resolution rules ever learn to prefer the most-derived class, this
-/// test fails and says so.
+/// Owner-keyed dispatch (`docs/traits-owner-dispatch-design.md` §2) builds the
+/// goal at `AddSemigroup<Nat>` — the class that *declares* `plus` — so the two
+/// that merely inherit it are not candidates. This is the same probe as the
+/// pin it replaces, turned positive: the pin was negative so that the decision
+/// would announce itself, and here it is.
 #[test]
-fn an_inherited_member_cannot_be_reached_by_a_receiver() {
-    let e = bad("fn f(a: Nat, b: Nat) -> Nat { a.plus(b) }");
-    assert!(e.contains("AddCommMonoid<Nat>") && e.contains("AddSemigroup<Nat>"), "{e}");
-    // …and the explicit spelling, which is what library code writes instead.
-    ok("fn f(a: Nat, b: Nat) -> Nat { Nat::AddCommMonoid.plus(a, b) }");
+fn an_inherited_member_is_reached_at_its_owner() {
+    ok("
+theorem dispatches(a: Nat, b: Nat): a.plus(b) = add(a, b) { refl }
+// …and agrees with the explicit spelling library code used to have to write,
+// at the deepest class in the chain, since they are one value.
+theorem agrees(a: Nat, b: Nat): a.plus(b) = Nat::AddCommMonoid.plus(a, b) { refl }
+theorem on_bool(a: Bool, b: Bool): a.plus(b) = or(a, b) { refl }
+");
 }
 
-/// The other half of the naming story, and the reason `Monoid` is declared
-/// flat rather than as `Monoid<A> extends Semigroup<A>`: a member of exactly
-/// one class dispatches, generically and concretely.
+/// The **open** carrier, which is what the upcast exists for: the dictionary in
+/// scope is `AddCommMonoid<G>` and the dispatched goal is `AddSemigroup<G>`,
+/// two records that no conversion relates. Nothing here is concrete, so no
+/// registry entry and no synthesized parent global can be the one answering.
+#[test]
+fn dispatch_upcasts_from_a_child_dictionary_at_an_open_carrier() {
+    ok("
+fn twice<G> requires m: AddCommMonoid<G> (x: G) -> G { x.plus(x) }
+theorem twice_is_the_dictionary<G> requires m: AddCommMonoid<G> (x: G):
+  twice(x) = m.plus(x, x) { refl }
+// checking position at the open carrier: the dispatched call is the argument
+// of a function that fixes its type, and the dictionary is never named.
+fn thrice<G> requires m: AddCommMonoid<G> (x: G) -> G { twice(x.plus(x)) }
+// and it computes at carriers the generic code never mentioned.
+theorem at_nat(a: Nat): twice(a) = add(a, a) { refl }
+theorem at_bool(a: Bool): twice(a) = or(a, a) { refl }
+");
+}
+
+/// The upcast as a *resolution* rule rather than a dispatch one, which is the
+/// half the issue said would bite the first deep library proof: a lemma stated
+/// at `AddMonoid<G>` is discharged from an `AddCommMonoid<G>` binder, at an
+/// open `G`, with the dictionary never written at the use site.
+#[test]
+fn a_parent_lemma_resolves_from_a_child_binder_at_an_open_carrier() {
+    ok("
+theorem left_unit<G> requires m: AddMonoid<G> (x: G): m.plus(m.zero, x) = x {
+  m.zero_plus(x)
+}
+// `use_it` has only the child; the goal `AddMonoid<G>` is answered by upcast.
+theorem use_it<G> requires m: AddCommMonoid<G> (x: G): m.plus(m.zero, x) = x {
+  left_unit(x)
+}
+// two steps up the chain, and the grandparent is one hop (`ancestors` is
+// transitive), still at an open carrier.
+fn assoc_of<G> requires m: AddSemigroup<G> (x: G) -> G { m.plus(x, m.plus(x, x)) }
+fn use_grandparent<G> requires m: AddCommMonoid<G> (x: G) -> G { assoc_of(x) }
+");
+}
+
+/// The negative control for the upcast: it fires between a class and its
+/// ancestors and nowhere else. `Cmp<A>` and `AddMonoid<A>` are unrelated, so a
+/// `Cmp` binder answers no `AddMonoid` goal — the goal reports its search
+/// rather than quietly building a record out of the wrong dictionary. The
+/// statement mentions no dictionary, so resolution is the *only* thing that
+/// can fail here.
+#[test]
+fn upcast_does_not_fire_between_unrelated_classes() {
+    let e = bad(
+        "fn dbl<G> requires m: AddMonoid<G> (x: G) -> G { m.plus(x, x) }
+fn nope<G> requires c: Cmp<G> (x: G) -> G { dbl(x) }",
+    );
+    assert!(e.contains("no instance for `AddMonoid<G>`"), "{e}");
+    // …and the positive control beside it: the same call with an ancestor-
+    // related binder resolves.
+    ok("fn dbl2<G> requires m: AddMonoid<G> (x: G) -> G { m.plus(x, x) }
+fn yes<G> requires m: AddCommMonoid<G> (x: G) -> G { dbl2(x) }");
+}
+
+/// Owner-keying is not a tiebreak, and this is the case that says so: two
+/// **unrelated** classes each *declaring* `plus` at one carrier are two owners,
+/// and the receiver still refuses to choose, naming both
+/// (`docs/traits-receiver-dispatch-design.md` §4 rule 3, unchanged).
+#[test]
+fn two_unrelated_owners_of_one_name_are_still_ambiguous() {
+    let e = bad(
+        "class Plusish<A> { plus: A -> A -> A }
+instance Plusish<Nat> { plus := add }
+fn f(a: Nat, b: Nat) -> Nat { a.plus(b) }",
+    );
+    assert!(e.contains("AddSemigroup<Nat>") && e.contains("Plusish<Nat>"), "{e}");
+}
+
+/// A member of exactly one class dispatches, generically and concretely — and
+/// `Monoid` is now the hierarchy it always wanted to be, with `op` declared by
+/// `Semigroup` and reached through the child dictionary by upcast.
 #[test]
 fn a_member_of_one_class_dispatches() {
     ok("
@@ -340,5 +417,8 @@ theorem concrete(a: Nat, b: Nat): a.op(b) = add(a, b) { refl }
 theorem on_bool(a: Bool, b: Bool): a.op(b) = and(a, b) { refl }
 fn generic<A: Monoid>(x: A, y: A) -> A { x.op(y) }
 theorem generic_agrees(a: Nat, b: Nat): generic(a, b) = add(a, b) { refl }
+// the chain the split created: `Semigroup<Nat>` is synthesized from
+// `Monoid<Nat>` and reaches the same `op`.
+theorem one_op(): Nat::Semigroup.op = Nat::Monoid.op { refl }
 ");
 }

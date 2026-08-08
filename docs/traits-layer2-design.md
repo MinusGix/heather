@@ -83,6 +83,12 @@ value the registry route would rebuild, so it cannot shadow anything):
    a `requires` binder is a parameter, a `let`-bound dictionary is deeper.
    *An explicit value in scope always wins over derivation*, because this step
    runs first and returns.
+1b. **The same scope again, by upcast** — a binder or alias whose class is a
+   *descendant* of the goal's answers through the canonical parent record
+   (`docs/traits-owner-dispatch-design.md` §3, 2026-08-08). After the exact
+   pass and before the registry: an exactly-typed value the writer named beats
+   one the resolver assembled, and an assembled scope answer still beats a
+   derivation. Skipped outright unless the goal's type is a class.
 2. **The registry** — the layer-1 instance table, which is the module scope
    and the wider registry both (declaring is registering, and the table is
    already subject to `docs/modules-design.md` §4's name regime through the
@@ -357,7 +363,11 @@ infer`, where no such adjacency exists.
 - **Trial cost** — §3.1 is O(candidates) kernel checks per goal, and a failed
   candidate's nested resolutions are wasted work. If a corpus ever notices,
   the fix is the head-keyed prefilter that §9.1 explains the cost of, filed
-  per the perf discipline rather than built in-round.
+  per the perf discipline rather than built in-round. One more multiplier
+  (2026-08-08): step 1b's upcast pass rescans the local scope on every class
+  goal the exact pass missed, at a `tag_of` per candidate plus a `build_ctor`
+  and kernel check when the ancestor test passes; gated on the goal's type
+  being a class, so nothing non-class pays.
 
 ## 11. Acceptance
 

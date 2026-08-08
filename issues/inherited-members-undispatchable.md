@@ -1,9 +1,9 @@
 ---
 title: An inherited class member can never be reached by a receiver
-status: open
+status: closed
 labels: [frontend,elaboration,traits,design]
 created: 2026-08-07
-updated: 2026-08-07
+updated: 2026-08-08
 ---
 
 Found by the traits **library adoption** round (2026-08-07), in the first
@@ -69,3 +69,4 @@ announces itself.
 ## Log
 
 - 2026-08-07: 2026-08-07: PROPOSED RESOLUTION (discussion, not yet decided): dispatch on a member name should build the goal at the class that DECLARES the field — the OWNER — not at every class whose flattened list contains it. ClassInfo already stores the per-field owner (traits layer 1 slice §2), so `x.plus(y)` becomes goal AddSemigroup<typeof(x)> uniquely; two UNRELATED classes declaring one name stay ambiguous, which is the case the rule exists for. The missing half is that the resolver must then learn UPCAST DERIVATION: for goal C<args>, an in-scope dictionary of type D<args> with C an ancestor of D yields the parent projection as a candidate (registry needs nothing — synthesized canonical parents already cover it). Upcast is independently needed anyway: today `requires m: AddCommMonoid<G>` cannot discharge a lemma wanting AddMonoid<G> at open G, which will bite the first deep library proof. One small round: owner-keyed dispatch + scope upcast, retiring this issue and un-flattening the library's Monoid declaration.
+- 2026-08-08: RESOLVED as the 2026-08-07 proposal, sharpened (docs/traits-owner-dispatch-design.md; managed round). Owner-keyed dispatch: class_dispatch's candidate filter requires owner[i].is_none(), so x.plus(y) builds its goal at the declaring class only — a candidate-set change computed from declarations alone, not a tiebreak (doc §2.1), and two UNRELATED declaring classes stay ambiguous. The override check holds for a reason the proposal didn't state (§2.2): a class-level redeclaration is already refused at layer 1 §3, and an instance override owes refl-convertibility, so no program observes the choice — real content only if a propositional-override fallback is ever built (cross-ref on traits). Scope upcast landed as resolver step 1b (resolve.rs: scope_upcast/upcast_from), between the exact scope pass and the registry — but ASSEMBLED as the parent record over the child dictionary's projections rather than projecting the synthesized canonical parent, because at an open carrier there is no synthesized global to project from; the concrete carrier never needed upcast (the registry already answers). Every proposal still passes checks_at. lib/std/algebra.hthr un-flattened: Semigroup declared, Monoid extends it, the receiver spellings restored; the pinned test flipped to an_inherited_member_is_reached_at_its_owner. Suite 1295 -> 1299 full. class-lemma-instantiation-fuel not hit.
