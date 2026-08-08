@@ -195,25 +195,27 @@ instance AddCommMonoid<Bool> {
 // ---------------------------------------------------------------------------
 // The consumers: written once against a class, used at every carrier.
 
-// The fold every monoid is for. Two things are found rather than written: the
-// recursive call names no dictionary (the `requires` binder is in the room, so
-// resolution finds it there), and `h.op(…)` names none either — the receiver's
-// type is this function's own parameter `A`, and dispatch asks the same
-// resolver, which answers from the same binder. Its goal is `Semigroup<A>` and
-// the binder is a `Monoid<A>`, so what answers is the resolver's upcast
+// The fold every monoid is for. NOTHING here names a dictionary: the
+// recursive call finds the constraint binder in the room, `h.op(…)` dispatches
+// from the receiver, and `A.unit` projects from the type
+// (docs/traits-type-projection-design.md) — the same goal, the same resolver,
+// the same binder answering all three. `h.op`'s goal is `Semigroup<A>` and the
+// binder is a `Monoid<A>`, so what answers is the resolver's upcast
 // (docs/traits-owner-dispatch-design.md §3) — at an open carrier, where no
 // synthesized parent instance exists to be found instead.
-fn mconcat<A> requires m: Monoid<A> (xs: List<A>) -> A {
+fn mconcat<A: Monoid>(xs: List<A>) -> A {
     match xs {
-        Nil => m.unit,
+        Nil => A.unit,
         Cons(h, t) => h.op(mconcat(t)),
     }
 }
 
 // Proved once against the class. Its two uses below are at unrelated carriers
-// and neither re-proves anything.
-theorem mconcat_single<A> requires m: Monoid<A> (x: A): mconcat(Cons(x, Nil)) = x {
-    m.unit_r(x)
+// and neither re-proves anything. `A.unit_r` is a **proof** field projected
+// from the type, which needs nothing of its own: a type projection is an
+// ordinary field projection, so an operation and a law are the same move.
+theorem mconcat_single<A: Monoid>(x: A): mconcat(Cons(x, Nil)) = x {
+    A.unit_r(x)
 }
 
 // The order consumer: the class's `le` decides which of two values to keep.
@@ -224,11 +226,15 @@ theorem mconcat_single<A> requires m: Monoid<A> (x: A): mconcat(Cons(x, Nil)) = 
 fn cmp_pick<A>(b: Bool, x: A, y: A) -> A { match b { False => x, True => y } }
 
 // Written in the INLINE constraint form (issues/requires-placement-syntax.md
-// §R2-A): these two never name the dictionary — `x.le(y)` dispatches from the
-// receiver, whose type is this declaration's own `A` — so there is nothing for
+// §R2-A): none of these names the dictionary — `x.le(y)` dispatches from the
+// receiver and `A.le_refl(x)` projects from the type — so there is nothing for
 // a binder name to do, and `<A: Cmp>` says the whole of what is true about `A`.
-// `max_of_self` below keeps `requires` because its proof projects `c.le_refl`;
-// the two forms are one desugaring and sit in one file deliberately.
+//
+// `A.le_refl` is also where the *other-reading* rule earns its keep:
+// `std/nat`'s `le_refl` is an ambient global, and `x.le_refl()` on a receiver
+// would be ambiguous against it. On a **type** subject it is not, because the
+// desugaring would put a type in `le_refl`'s `Nat` slot — a reading the
+// declaration refuses (docs/traits-type-projection-design.md §4).
 fn max_of<A: Cmp>(x: A, y: A) -> A { cmp_pick(x.le(y), x, y) }
 
 theorem max_of_true<A: Cmp>(x: A, y: A, p: x.le(y) = True):
@@ -237,8 +243,8 @@ theorem max_of_true<A: Cmp>(x: A, y: A, p: x.le(y) = True):
     j(sym(p), λ z q => cmp_pick(z, x, y) = y, refl)
 }
 
-theorem max_of_self<A> requires c: Cmp<A> (x: A): max_of(x, x) = x {
-    max_of_true(x, x, c.le_refl(x))
+theorem max_of_self<A: Cmp>(x: A): max_of(x, x) = x {
+    max_of_true(x, x, A.le_refl(x))
 }
 
 // `Default` earns its keep here: the caller of `or_default` names no
@@ -252,6 +258,24 @@ fn or_default<A>(o: Option<A>, d: Default<A> := infer) -> A {
 // The hierarchy's generic consequence: a right unit follows from commutativity
 // and the left one, so `AddMonoid`'s `plus_zero` is redundant *for a
 // commutative monoid* — proved once here, at both carriers below.
+//
+// The ONE declaration in this file that keeps `requires`, and it keeps it for
+// a measured reason rather than an expressive one. Written
+// `<G: AddCommMonoid>` with `G.plus(x, G.zero)`, it elaborates — and this
+// file's check goes from 0.7s to 25s (measured 2026-08-08, release, both
+// spellings). `plus` is declared by `AddSemigroup` and `zero` by `AddMonoid`,
+// so each type projection builds its goal at an ANCESTOR and is answered by
+// the resolver's upcast, which at an open carrier assembles a fresh parent
+// record over the child's projections (docs/traits-owner-dispatch-design.md
+// §3, §7.1) — five assemblies in one small proof, each a Σ-tuple of law types,
+// compared against one another by conversion. Naming the dictionary projects
+// the CHILD's own flattened field and assembles nothing.
+//
+// `G::AddCommMonoid.plus(x, G::AddCommMonoid.zero)` is the anonymous spelling
+// that is also fast (it names the exact dictionary, so no upcast), and it is
+// what this becomes if the cost is not fixed at its source; the readable
+// spelling is kept here as the standing motive for fixing it
+// (docs/traits-type-projection-design.md §9.3).
 theorem plus_zero_of_comm<G> requires a: AddCommMonoid<G> (x: G): a.plus(x, a.zero) = x {
     trans(a.plus_comm(x, a.zero), a.zero_plus(x))
 }
@@ -300,10 +324,15 @@ theorem all_of_single(b: Bool): all_of(Cons(b, Nil)) = b { mconcat_single(b) }
 // until owner-keyed dispatch landed: `plus` is declared by `AddSemigroup` and
 // inherited by the other two, so `x.plus(…)` has exactly one owner to build a
 // goal at, at either carrier.
-theorem nat_plus_zero(x: Nat): x.plus(Nat::AddMonoid.zero) = x {
+//
+// The unit is `Nat.zero` rather than `Nat::AddMonoid.zero`: at a **concrete**
+// carrier a type projection is the same sentence with the class inferred from
+// the one that declares the field, answered by the registry rather than by a
+// binder. The explicit spelling remains available and means the same term.
+theorem nat_plus_zero(x: Nat): x.plus(Nat.zero) = x {
     plus_zero_of_comm(x)
 }
 
-theorem bool_plus_zero(x: Bool): x.plus(Bool::AddMonoid.zero) = x {
+theorem bool_plus_zero(x: Bool): x.plus(Bool.zero) = x {
     plus_zero_of_comm(x)
 }

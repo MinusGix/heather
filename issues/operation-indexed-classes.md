@@ -3,7 +3,7 @@ title: Operation-indexed classes: Monoid<A>(op) — the structure names its oper
 status: open
 labels: [frontend,elaboration,design,traits,stdlib]
 created: 2026-08-07
-updated: 2026-08-07
+updated: 2026-08-08
 ---
 
 User insight 2026-08-07, from the add-vs-mul coherence discussion: 'kinda makes me think Monoid<R> is really Monoid<R, Op>'. The repo's own precedent is [[compile-typeclass-design]]'s `record CompileNat2(f: Nat -> Nat -> Nat)` (lib/ir_v1.hthr:1146) — a class ABOUT a value carries that value as a parameter, so 'which f is this an instance for' is kernel-checked. Applied to algebra: `class Monoid<A>(op: A -> A -> A) { unit: A, assoc: …, … }` — the operation moves from field to index; only unit and the proofs remain fields.
@@ -21,3 +21,7 @@ User insight 2026-08-07, from the add-vs-mul coherence discussion: 'kinda makes 
 
 ## When
 A design pass before the operators round would be ideal — operators want to know whether `Add` feeds bundled or indexed structure. Not scheduled.
+
+## Log
+
+- 2026-08-08: Boundary recorded by the type-projection round (docs/traits-type-projection-design.md §6), not decided: T.f at a value-indexed class would build C<T>(?op) — a meta in a value slot, ambiguous by design — so it is the same shape as the multi-parameter narrowing and should be REFUSED BY NAME when value indices land; the params.len()==1 filter gains a value-index test and inherits that diagnostic. Nothing in the projection design assumes one parameter in general. Also relevant when this designs: T::C takes no arguments, so an indexed class has no short dictionary spelling either (noted on [[traits]]).

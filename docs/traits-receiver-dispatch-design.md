@@ -306,7 +306,12 @@ this round is not it.
 - **A bare `x.op` never dispatches** — this document and
   `docs/surface-records.md` §4.2. The standing rule is that a bare `p.f` is
   never a method call; a partially applied class member would be the first
-  reason to revisit it, and no corpus asks yet.
+  reason to revisit it, and no corpus asks yet. It now has its first
+  customer, from the other side (2026-08-08): a bare **type** projection
+  `Z.op : Z -> Z -> Z` is writable and partially applicable
+  (`docs/traits-type-projection-design.md` §3.2 — a type subject is not an
+  argument, so there is no desugaring for bareness to block), so the
+  asymmetry is observable in one file.
 - **Two visible classes of one *name* disqualify each other silently** — the
   candidate filter asks `key_of`, which answers `None` for an ambiguous name,
   so neither class is a candidate and the call reports whatever its fallback

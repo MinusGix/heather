@@ -422,3 +422,32 @@ theorem generic_agrees(a: Nat, b: Nat): generic(a, b) = add(a, b) { refl }
 theorem one_op(): Nat::Semigroup.op = Nat::Monoid.op { refl }
 ");
 }
+
+/// The library's own type projections (`docs/traits-type-projection-design.md`),
+/// pinned where the file uses them: at an **open** carrier inside `mconcat`
+/// and `mconcat_single`, and at a **concrete** one in the hierarchy lemmas.
+/// The load-bearing claim is that `Nat.zero` is the very term
+/// `Nat::AddMonoid.zero` is, so the migration moved a spelling and not a value.
+#[test]
+fn the_library_projects_from_its_types() {
+    ok("
+// concrete: the class is inferred from the one that DECLARES the field, and
+// the registry answers.
+theorem the_unit_is_the_same_value(): Nat.zero = Nat::AddMonoid.zero { refl }
+theorem the_bool_unit_too(): Bool.zero = Bool::AddMonoid.zero { refl }
+theorem the_monoid_unit_too(): Nat.unit = Nat::Monoid.unit { refl }
+// open: `mconcat`'s `Nil` arm IS `A.unit`, so an empty fold at a carrier is
+// that carrier's unit — computed, not asserted.
+theorem the_empty_fold_is_the_projected_unit(): sum(Nil) = Nat.zero { refl }
+");
+}
+
+/// The negative control for the above: a type parameter with no constraint
+/// providing the field reports the *search*, not an unbound name — the
+/// diagnosis a reader needs to know which class was consulted.
+#[test]
+fn an_unconstrained_type_parameter_reports_the_search() {
+    let e = bad("fn nope<A>() -> A { A.unit }");
+    assert!(e.contains("Monoid<A>"), "{e}");
+    assert!(e.contains("binder(s) consulted"), "{e}");
+}

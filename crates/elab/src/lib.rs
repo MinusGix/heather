@@ -381,6 +381,18 @@ fn expr_as_ty(e: &Expr) -> Option<Ty> {
     Some(Ty { kind, span: e.span })
 }
 
+/// What to call a type projection's subject in a diagnostic: the text that
+/// was written, when the shape is one a reader would recognize
+/// (docs/traits-type-projection-design.md §7). `None` for anything else, which
+/// falls back to the carrier's nominal tag. A display and never a key.
+fn subject_text(e: &Expr) -> Option<String> {
+    match &e.kind {
+        ExprKind::Var(n) => Some(n.clone()),
+        ExprKind::TyApp { head, .. } => subject_text(head),
+        _ => None,
+    }
+}
+
 /// A level for a diagnostic. Every level the surface can write is a numeral,
 /// so this is exact for them and falls back to the kernel's bounded `Debug`
 /// for an elaborator-built one.
@@ -3915,6 +3927,15 @@ impl Elaborator {
         args: &Option<Vec<Expr>>,
         span: Span,
     ) -> R<DotResolution> {
+        // A **type** subject, first: `A.unit`, `G.plus(x, y)`, `Nat.zero`
+        // (docs/traits-type-projection-design.md). It is first because a type
+        // is not a record and has no namespace member and is not a method
+        // receiver, so nothing below could have read it — every reading it
+        // takes was an error before this round, and every reading it declines
+        // reaches its old handler untouched.
+        if let Some(d) = self.type_projection(cx, recv, name, args, span)? {
+            return Ok(d);
+        }
         if self.record_fields.contains(name) {
             // Inference failure is not an error *here*: the fallback is what
             // handles a receiver whose type only the method call determines,
@@ -3940,6 +3961,12 @@ impl Elaborator {
                     Some(ind) => format!("`{}` has no field `{name}`", ind.name),
                     None => format!("this is not a record, so it has no field `{name}`"),
                 },
+                // A failed **resolution** in the receiver is a diagnosis of
+                // its own — the search, as data — and is better than anything
+                // this branch could say about a field. `G::AddCommMonoid.f` at
+                // a carrier with no instance is the spelling that produces one
+                // (docs/traits-type-projection-design.md §5).
+                Err(e @ ElabError::Resolution { .. }) => return Err(e),
                 Err(_) => format!("no field `{name}` here (and the receiver's type \
                                    could not be inferred)"),
             };
@@ -4091,19 +4118,7 @@ impl Elaborator {
         // is what makes an inherited member dispatchable without a tiebreak,
         // and it leaves two *unrelated* declaring classes ambiguous, which is
         // the case §4 rule 3 exists for.
-        let mut with_field: Vec<(String, Rc<traits::ClassInfo>)> = self
-            .classes
-            .iter()
-            .filter(|(k, info)| {
-                info.fields
-                    .iter()
-                    .zip(&info.owner)
-                    .any(|(f, o)| f.name.as_deref() == Some(name) && o.is_none())
-                    && self.key_of(&info.name).as_deref() == Some(k.as_str())
-            })
-            .map(|(k, i)| (k.clone(), Rc::clone(i)))
-            .collect();
-        with_field.sort_by(|a, b| a.0.cmp(&b.0));
+        let with_field = self.declaring_classes(name);
         let cands: Vec<(String, Rc<traits::ClassInfo>)> =
             with_field.iter().filter(|(_, i)| i.params.len() == 1).cloned().collect();
         if cands.is_empty() {
@@ -4215,6 +4230,292 @@ impl Elaborator {
         all.push(recv.clone());
         all.extend(args.iter().cloned());
         Ok(Some(DotResolution::Dispatch(t, fty, flvl, skel, all)))
+    }
+
+    /// The classes that **declare** `name` — not the ones that merely inherit
+    /// it — and are visible here, in sorted canonical-name order
+    /// (docs/traits-owner-dispatch-design.md §2). Never `HashMap` order and
+    /// never declaration order.
+    ///
+    /// "Visible here" is `key_of(C.name) == the key C is stored under`: the
+    /// ordinary §4 name regime, asked by resolving the class's own name, and
+    /// not a second visibility rule.
+    fn declaring_classes(&self, name: &str) -> Vec<(String, Rc<traits::ClassInfo>)> {
+        let mut with_field: Vec<(String, Rc<traits::ClassInfo>)> = self
+            .classes
+            .iter()
+            .filter(|(k, info)| {
+                info.fields
+                    .iter()
+                    .zip(&info.owner)
+                    .any(|(f, o)| f.name.as_deref() == Some(name) && o.is_none())
+                    && self.key_of(&info.name).as_deref() == Some(k.as_str())
+            })
+            .map(|(k, i)| (k.clone(), Rc::clone(i)))
+            .collect();
+        with_field.sort_by(|a, b| a.0.cmp(&b.0));
+        with_field
+    }
+
+    /// The receiver read **as a type**, when it is one
+    /// (docs/traits-type-projection-design.md §3.1). Two shapes, and they are
+    /// exclusive by construction:
+    ///
+    /// - the receiver elaborates as a value whose type is a universe — a type
+    ///   parameter `A`, or any binder at `Type<n>`; the carrier is `El` of
+    ///   that code, which is what `lower_named` would have built for it;
+    /// - the receiver does not elaborate as a value at all, but reads as a
+    ///   type by shape (`Nat`, `Bool`, `Box<Z>`), through the same
+    ///   [`expr_as_ty`] the universe round already uses.
+    ///
+    /// A value binder therefore **shadows** the type reading — `elab_infer`
+    /// succeeds at a non-universe type and this answers `None` — which is what
+    /// keeps a parameter named like a type from being reinterpreted.
+    fn type_subject(&self, cx: &Cx, recv: &Expr, span: Span) -> Option<(Type, Level)> {
+        match self.elab_infer(cx, recv) {
+            Ok((tm, ty, _)) => {
+                let Type::Ty(level) = self.whnf(cx, &ty, span).ok()? else { return None };
+                Some((Type::El { level: level.clone(), tm: Rc::new(tm) }, level))
+            }
+            Err(_) => self.elab_ty(cx, &expr_as_ty(recv)?).ok(),
+        }
+    }
+
+    /// `T.f` / `T.f(…)` where the subject is a **type**
+    /// (docs/traits-type-projection-design.md): `A.unit`, `G.plus(x, G.zero)`,
+    /// `Nat.zero`.
+    ///
+    /// The rule is receiver dispatch's with one word changed: the goal is
+    /// built at the class that **declares** `f`, with the *subject itself* as
+    /// the carrier rather than the subject's type, and the subject is
+    /// therefore **not** an argument. So the emitted term is an ordinary field
+    /// projection — the very term `⟨dictionary⟩.f` elaborates to — and a
+    /// proof field (`A.unit_r(x)`) needs nothing of its own.
+    ///
+    /// `None` is "this is not a type projection", and every `None` leaves
+    /// every older reading to run exactly as it did.
+    fn type_projection(
+        &self,
+        cx: &Cx,
+        recv: &Expr,
+        name: &str,
+        args: &Option<Vec<Expr>>,
+        span: Span,
+    ) -> R<Option<DotResolution>> {
+        // The cheap negative test, before anything is inferred or lowered: a
+        // `.f` where `f` is nobody's class field costs one hash lookup, which
+        // is what keeps every program that predates classes at its old price.
+        if !self.class_members.contains(name) {
+            return Ok(None);
+        }
+        let Some((carrier, clvl)) = self.type_subject(cx, recv, span) else {
+            return Ok(None);
+        };
+        let ns = self.type_namespace(cx, &carrier, span);
+        let other = self.other_reading_of_a_type_subject(cx, &ns, name, args, span);
+        let with_field = self.declaring_classes(name);
+        let cands: Vec<(String, Rc<traits::ClassInfo>)> =
+            with_field.iter().filter(|(_, i)| i.params.len() == 1).cloned().collect();
+        if cands.is_empty() {
+            // The multi-parameter refusal, verbatim from receiver dispatch
+            // (§4 rule 7) and for the same reason: the subject fixes the
+            // carrier and nothing fixes the rest.
+            if let Some((_, info)) = with_field.first()
+                && other.is_none()
+            {
+                return err(
+                    format!(
+                        "`{name}` is a member of `{}`, which takes {} type parameters: a type \
+                         projection builds its goal from the subject alone, so it reaches a \
+                         one-parameter class only — write the projection \
+                         (`⟨instance⟩.{name}`)",
+                        info.name,
+                        info.params.len()
+                    ),
+                    span,
+                );
+            }
+            return Ok(None);
+        }
+        // What the trace calls the subject: the text that was written, since
+        // an open carrier has no nominal tag to name (layer 2 §7).
+        let subject = subject_text(recv).or_else(|| ns.clone()).unwrap_or_else(|| "_".into());
+        let mut trace: Vec<resolve::TraceLine> = Vec::new();
+        let mut hits: Vec<(Rc<Inductive>, Type, Term, String)> = Vec::new();
+        let mut tried: Vec<String> = Vec::new();
+        for (_, info) in &cands {
+            let Some(ind) = self.lookup_inductive(&info.name).cloned() else { continue };
+            let Ok((goal, glvl)) =
+                self.lower_instance(cx, &ind, &[(carrier.clone(), clvl.clone())], &[], span)
+            else {
+                continue;
+            };
+            let display = format!("{}<{subject}>", info.name);
+            tried.push(display.clone());
+            let mut tr = Vec::new();
+            // Every candidate is tried even once one has succeeded: the
+            // ambiguity is the point (§4 rule 3).
+            match self.resolve_goal(cx, &goal, &glvl, &display, span, &mut tr) {
+                Some(t) => hits.push((ind, goal, t, display)),
+                None => trace.extend(tr),
+            }
+        }
+        if hits.len() > 1 {
+            let list =
+                hits.iter().map(|(_, _, _, d)| format!("`{d}`")).collect::<Vec<_>>().join(" and ");
+            return err(
+                format!(
+                    "`{name}` at `{subject}` is declared by {list}, and each has an instance \
+                     here — write the class you meant (`{subject}::⟨class⟩.{name}`) rather \
+                     than letting the type choose"
+                ),
+                span,
+            );
+        }
+        let Some((ind, goal, dict, display)) = hits.pop() else {
+            if other.is_some() {
+                return Ok(None);
+            }
+            return Err(ElabError::Resolution { goal: tried.join("` or `"), span, trace });
+        };
+        if let Some((desc, fix)) = other {
+            return err(
+                format!(
+                    "`{name}` here is both a member of `{display}`, reached through the type \
+                     `{subject}`, and {desc} — write one of them: \
+                     `{subject}::{}.{name}` for the class member, or {fix} for the other",
+                    ind.name
+                ),
+                span,
+            );
+        }
+        let Some(idx) = ind.field_index(name) else {
+            return err(format!("internal: `{}` has no field `{name}` after all", ind.name), span);
+        };
+        let skel = skel_of_ty(&ind.ctors[0].fields[idx].1);
+        let (t, fty, flvl) = self.project_field(cx, &ind, &goal, Rc::new(dict), idx, span)?;
+        Ok(Some(DotResolution::Project(t, fty, flvl, skel)))
+    }
+
+    /// What a `T.f(…)` would have meant if `T` were a value — the reading a
+    /// successful type projection has to be named beside, and a failed one
+    /// falls back to (docs/traits-type-projection-design.md §4).
+    ///
+    /// Two things make this narrower than receiver dispatch's `other`, and
+    /// both are consequences of the subject being a **type**:
+    ///
+    /// - a **bare** `T.f` has no desugaring at all (a bare `p.f` is never a
+    ///   method call), so it has no other reading, ever;
+    /// - the desugaring puts the subject in the callee's *subject slot*, and a
+    ///   type there is a reading only if that slot is **at a universe**. That
+    ///   is read off the callee's own declared telescope — never by trying the
+    ///   call — so this shrinks the candidate set the way owner-keying does
+    ///   and is not a tiebreak. Undecidable (a builtin, a constructor, a
+    ///   telescope that cannot be read) counts as a reading: the caution of
+    ///   receiver-dispatch §7.2 belongs to exactly those.
+    fn other_reading_of_a_type_subject(
+        &self,
+        cx: &Cx,
+        ns: &Option<String>,
+        name: &str,
+        args: &Option<Vec<Expr>>,
+        span: Span,
+    ) -> Option<(String, String)> {
+        args.as_ref()?;
+        if let Some(t) = ns {
+            let q = format!("{t}::{name}");
+            if matches!(self.resolve_name(&q), NameRes::Found(_)) {
+                return self.subject_slot_takes_a_type(cx, &q, span).then(|| {
+                    (
+                        format!("`{q}`, a member of `{t}`'s own namespace"),
+                        format!("`{q}(…)`"),
+                    )
+                });
+            }
+        }
+        if self.shadowed(cx, name) || self.ctor_of(name).is_some() {
+            return self.subject_slot_takes_a_type(cx, name, span).then(|| {
+                (
+                    format!("`{name}`, a name in scope on its own"),
+                    format!("the bare call `{name}(…)` with the type as an argument"),
+                )
+            });
+        }
+        BUILTIN_METHODS.contains(&name).then(|| {
+            (format!("`{name}`, a built-in method"), format!("the bare call `{name}(…)`"))
+        })
+    }
+
+    /// Can `name` take a **type** where the method desugaring would put the
+    /// receiver? A purely syntactic walk of the callee's own Π-telescope to
+    /// its subject slot: no elaboration, no trial call, no context of its own.
+    ///
+    /// `true` when the answer cannot be read off a declaration, which is the
+    /// conservative direction — it makes the desugaring count as a reading and
+    /// so makes the diagnostic name both.
+    fn subject_slot_takes_a_type(&self, cx: &Cx, name: &str, span: Span) -> bool {
+        let Ok((_, ty, _)) = self.resolve(cx, name, span) else { return true };
+        let params = self.params_of(name);
+        // Where the subject lands in *declaration* order. `subject_index`
+        // counts explicit non-type parameters only, and the Π-telescope has
+        // one domain per parameter in order, so this converts between the two.
+        let mut pos = 0usize;
+        if !params.is_empty() {
+            let subj = self.subject_index(name);
+            let mut seen = 0usize;
+            let Some(i) = params.iter().position(|p| {
+                if p.implicit || p.is_type {
+                    return false;
+                }
+                let hit = seen == subj;
+                seen += 1;
+                hit
+            }) else {
+                // No such slot: the desugaring could not place the subject at
+                // all, so it is not a reading.
+                return false;
+            };
+            pos = i;
+        }
+        let mut cur = &ty;
+        for _ in 0..pos {
+            match cur {
+                Type::Pi { cod, .. } => cur = cod,
+                _ => return false,
+            }
+        }
+        matches!(cur, Type::Pi { dom, .. } if matches!(**dom, Type::Ty(_)))
+    }
+
+    /// `G::AddCommMonoid` — the escape spelling: *the* `AddCommMonoid`
+    /// dictionary at the type `G`, resolved rather than looked up
+    /// (docs/traits-type-projection-design.md §5).
+    ///
+    /// Reached only from [`Self::resolve`]'s last stop, so it fires exactly
+    /// where the answer would otherwise have been "unbound name". At a
+    /// concrete carrier the qualified name is a registered global and never
+    /// gets here, which is why `Nat::AddCommMonoid.plus` — the spelling the
+    /// library already had — is untouched: this generalizes it to the carriers
+    /// that have no global to name.
+    fn class_at_type(&self, cx: &Cx, name: &str, span: Span) -> Option<R<(Term, Type, Level)>> {
+        let (subject, class) = names::split_qual(name)?;
+        let key = self.key_of(class)?;
+        let info = Rc::clone(self.classes.get(&key)?);
+        if info.params.len() != 1 {
+            return None;
+        }
+        let ind = self.lookup_inductive(&info.name).cloned()?;
+        let kind =
+            if subject == "Nat" { TyKind::Nat } else { TyKind::Named { name: subject.into(), args: vec![] } };
+        let (carrier, clvl) = self.elab_ty(cx, &Ty { kind, span }).ok()?;
+        let (goal, glvl) =
+            self.lower_instance(cx, &ind, &[(carrier, clvl)], &[], span).ok()?;
+        let display = format!("{}<{subject}>", info.name);
+        let mut tr = Vec::new();
+        match self.resolve_goal(cx, &goal, &glvl, &display, span, &mut tr) {
+            Some(t) => Some(Ok((t, goal, glvl))),
+            None => Some(Err(ElabError::Resolution { goal: display, span, trace: tr })),
+        }
     }
 
     /// A record literal (§6): permute the written fields into declaration
@@ -6299,7 +6600,16 @@ impl Elaborator {
             // The last stop for every written name, so this is where an
             // ambiguity has to surface as an ambiguity rather than as an
             // absence (docs/modules-design.md §4).
-            None => Err(self.name_miss(name, format!("unbound name `{name}`"), span)),
+            None => {
+                // `G::AddCommMonoid` — a class **at a type**, resolved. Here
+                // and not earlier: a registered instance is an ordinary global
+                // and was found above, so this reaches only the carriers that
+                // have none (docs/traits-type-projection-design.md §5).
+                if let Some(r) = self.class_at_type(cx, name, span) {
+                    return r;
+                }
+                Err(self.name_miss(name, format!("unbound name `{name}`"), span))
+            }
         }
     }
 
