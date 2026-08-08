@@ -374,6 +374,64 @@ fn use_grandparent<G> requires m: AddCommMonoid<G> (x: G) -> G { assoc_of(x) }
 ");
 }
 
+/// A dispatched projection reads **through** the upcast
+/// (`docs/traits-named-upcast-design.md`), so the anonymous spelling and the
+/// named-dictionary one are not merely equal — they are one term.
+/// `plus_zero_of_comm` is the library's own case: `plus` is declared by
+/// `AddSemigroup` and `zero` by `AddMonoid`, so both projections in its
+/// statement go through an ancestor.
+///
+/// This is the pin that retired
+/// `issues/upcast-assembly-cost-at-open-carriers.md`: the same file checked in
+/// 35.9 s before it and 0.94 s after, because the two spellings stopped being
+/// two terms.
+#[test]
+fn a_projection_through_an_upcast_is_the_childs_own_field() {
+    ok("
+// the anonymous statement, restated with the dictionary named, by `refl`.
+theorem one_term<G> requires a: AddCommMonoid<G> (x: G):
+  plus_zero_of_comm(x) = plus_zero_of_comm(x) { refl }
+fn anon<G: AddCommMonoid>(x: G) -> G { G.plus(x, G.zero) }
+theorem anon_is_the_dictionary<G> requires a: AddCommMonoid<G> (x: G):
+  anon(x) = a.plus(x, a.zero) { refl }
+// two hops up the chain, at an open carrier, in one expression.
+fn deep<G: AddCommMonoid>(x: G) -> G { G.plus(G.plus(x, G.zero), x) }
+theorem deep_is_the_dictionary<G> requires a: AddCommMonoid<G> (x: G):
+  deep(x) = a.plus(a.plus(x, a.zero), x) { refl }
+// and it still computes at the concrete carriers the generic proof never
+// mentioned — the library's own `nat_plus_zero`/`bool_plus_zero` consume it.
+theorem at_nat(a: Nat): anon(a) = add(a, 0) { refl }
+theorem at_bool(a: Bool): anon(a) = or(a, False) { refl }
+");
+}
+
+/// An **override** with an agreement certificate, dispatched through an upcast.
+/// Reading through takes the CHILD's field, which for an overriding instance is
+/// the override; layer 1 §4.5's certificate is what makes that
+/// indistinguishable from the ancestor's value. This pins both halves — that
+/// the dispatch lands on the child's field, and that the certificate holds — so
+/// the rewrite is seen to agree with owner-dispatch §2.2 rather than to lean on
+/// it.
+#[test]
+fn an_override_still_upcasts_to_its_own_field() {
+    ok("
+class Sg<A> { sop: A -> A -> A }
+class Mn<A> extends Sg<A> { munit: A }
+instance Sg<Nat> { sop := add }
+// the child re-states the inherited field: an override, which owes `refl`
+// against the registered `Nat::Sg.sop` and gets it.
+instance Mn<Nat> { munit := 0, sop := add }
+// open carrier, dispatched at the OWNER `Sg` and answered by upcast from `Mn`.
+fn twice_over<G> requires m: Mn<G> (x: G) -> G { x.sop(x) }
+theorem twice_over_is_the_child<G> requires m: Mn<G> (x: G):
+  twice_over(x) = m.sop(x, x) { refl }
+// …and the child's field is the ancestor's, which is what the certificate says.
+theorem the_override_agrees(a: Nat, b: Nat):
+  Nat::Mn.sop(a, b) = Nat::Sg.sop(a, b) { refl }
+theorem at_nat(a: Nat, b: Nat): twice_over(a) = add(a, a) { refl }
+");
+}
+
 /// The negative control for the upcast: it fires between a class and its
 /// ancestors and nowhere else. `Cmp<A>` and `AddMonoid<A>` are unrelated, so a
 /// `Cmp` binder answers no `AddMonoid` goal — the goal reports its search

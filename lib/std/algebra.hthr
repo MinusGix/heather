@@ -259,25 +259,17 @@ fn or_default<A>(o: Option<A>, d: Default<A> := infer) -> A {
 // and the left one, so `AddMonoid`'s `plus_zero` is redundant *for a
 // commutative monoid* — proved once here, at both carriers below.
 //
-// The ONE declaration in this file that keeps `requires`, and it keeps it for
-// a measured reason rather than an expressive one. Written
-// `<G: AddCommMonoid>` with `G.plus(x, G.zero)`, it elaborates — and this
-// file's check goes from 0.7s to 25s (measured 2026-08-08, release, both
-// spellings). `plus` is declared by `AddSemigroup` and `zero` by `AddMonoid`,
-// so each type projection builds its goal at an ANCESTOR and is answered by
-// the resolver's upcast, which at an open carrier assembles a fresh parent
-// record over the child's projections (docs/traits-owner-dispatch-design.md
-// §3, §7.1) — five assemblies in one small proof, each a Σ-tuple of law types,
-// compared against one another by conversion. Naming the dictionary projects
-// the CHILD's own flattened field and assembles nothing.
-//
-// `G::AddCommMonoid.plus(x, G::AddCommMonoid.zero)` is the anonymous spelling
-// that is also fast (it names the exact dictionary, so no upcast), and it is
-// what this becomes if the cost is not fixed at its source; the readable
-// spelling is kept here as the standing motive for fixing it
-// (docs/traits-type-projection-design.md §9.3).
-theorem plus_zero_of_comm<G> requires a: AddCommMonoid<G> (x: G): a.plus(x, a.zero) = x {
-    trans(a.plus_comm(x, a.zero), a.zero_plus(x))
+// The LAST declaration in this file to shed `requires`, and the one whose
+// price paid for the mechanism that let it. `plus` is declared by
+// `AddSemigroup` and `zero` by `AddMonoid`, so each type projection here
+// builds its goal at an ANCESTOR and is answered by the resolver's upcast.
+// While the upcast's assembled parent record went into the emitted term, this
+// spelling cost 36s against the named dictionary's 0.7s (measured 2026-08-08);
+// since a dispatched projection reads *through* the upcast to the child's own
+// field (docs/traits-named-upcast-design.md), the two spellings elaborate to
+// the *same term*.
+theorem plus_zero_of_comm<G: AddCommMonoid>(x: G): G.plus(x, G.zero) = x {
+    trans(G.plus_comm(x, G.zero), G.zero_plus(x))
 }
 
 // ---------------------------------------------------------------------------

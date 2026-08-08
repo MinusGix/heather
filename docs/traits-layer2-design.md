@@ -367,7 +367,13 @@ infer`, where no such adjacency exists.
   (2026-08-08): step 1b's upcast pass rescans the local scope on every class
   goal the exact pass missed, at a `tag_of` per candidate plus a `build_ctor`
   and kernel check when the ancestor test passes; gated on the goal's type
-  being a class, so nothing non-class pays.
+  being a class, so nothing non-class pays. And one more (2026-08-08, the
+  named-upcast round): a dispatched projection that reads *through* an upcast
+  (`docs/traits-named-upcast-design.md` §2) still builds and gates the
+  assembled parent it then discards (~0.08 s per occurrence on the algebra
+  hierarchy); skipping the assembly for a projection consumer needs a
+  carrier check that is not a `build_ctor`, which the monomorphized goal
+  does not currently offer.
 
 ## 11. Acceptance
 

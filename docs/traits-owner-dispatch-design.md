@@ -109,6 +109,15 @@ they are different records. So the resolver gains one rule:
 > the dictionary's own projections, `C { f: d.f, … }` over `C`'s flattened
 > field list.
 
+**Amended 2026-08-08** (`docs/traits-named-upcast-design.md`, retiring
+`issues/upcast-assembly-cost-at-open-carriers.md`): the rule is unchanged, and
+so is the term it proposes. What changed is the *consumer*. Where the upcast
+was resolved in order to project one field — which is every dispatch, and four
+occurrences out of four in the library's motivating proof — the projection is
+taken from the **child** dictionary at the child's own index, and this record
+is built, gated and then thrown away. It is the same value: the record's slot
+for `f` is `d.f`. See §7.1, which is where building it was argued.
+
 Four things this deliberately is not:
 
 - **Not a registry change.** A *concrete* carrier never needed upcast: layer 1
@@ -219,6 +228,21 @@ bound as an unspellable `#` alias so the assembly can be written as ordinary
 surface field projections and go down the existing constructor path. The
 result is the same *value* the concrete route would have projected, which is
 why the two carriers do not need two stories.
+
+**Amended 2026-08-08** (`docs/traits-named-upcast-design.md`). Everything
+above stays true of the assembly and of when it is built. What it *cost* is
+the amendment: writing it into the emitted term per occurrence cost ~0.78 s a
+time at the kernel gate — the class's dependent Σ-type re-checked per copy,
+~100% of it in the law fields — and it was baked into the declaring theorem's
+statement, so its call sites paid too
+(`issues/upcast-assembly-cost-at-open-carriers.md`). So the assembly is now
+built only to *decide* the goal, and where the consumer is a dispatched
+projection the field is taken from the child dictionary instead, because the
+assembly's `f` slot **is** `d.f`. The library's `plus_zero_of_comm` went 35.9 s
+to 0.94 s, and the anonymous and named-dictionary spellings now elaborate to
+one term. A named Ψ definition per pair — which is what the issue's log
+proposed — was built, measured at 2.2×, and withdrawn; the numbers are in that
+document's §5.
 
 ### 7.2 Dependent fields need no handling
 

@@ -6,6 +6,11 @@
 //! the canonical derived table, the local scope innermost-first, then the
 //! layer-1 instance registry by backchaining.
 //!
+//! One consumer reads an answer rather than taking it: a dispatched
+//! projection, which asked for a dictionary only to take one field out of it.
+//! [`Elaborator::resolve_goal_from`] tells it where an **upcast** answer came
+//! from, and `docs/traits-named-upcast-design.md` is why that matters.
+//!
 //! Nothing here is trusted. Every proposal, from every source, is handed to
 //! the kernel at the goal type before it is returned (§4.4) — which is what
 //! makes selection-by-trial (§3.1) a *function* of the goal rather than a
@@ -89,6 +94,33 @@ impl Elaborator {
         span: Span,
         tr: &mut Vec<TraceLine>,
     ) -> Option<Term> {
+        self.resolve_goal_from(cx, goal, lvl, display, span, tr, &mut None)
+    }
+
+    /// [`Self::resolve_goal`], reporting **where an upcast came from**.
+    ///
+    /// When step 1b answers, `up` receives the *child* dictionary and its class
+    /// type — the two things a consumer needs to read the answer as a
+    /// projection instead of as a value
+    /// (`docs/traits-named-upcast-design.md` §2). Nothing else about the search
+    /// changes, and the upcast proposal itself is still built and still gated:
+    /// this reports a provenance, it does not open a second route.
+    ///
+    /// Only the two **dispatch** sites call this. Every other consumer wants a
+    /// dictionary value and takes the plain entry point, whose `&mut None`
+    /// makes the whole mechanism inert — including the recursive one, since
+    /// backchaining recurses through `elab_check` into [`Self::resolve_goal`]
+    /// and so can never leak a nested search's provenance into an outer one.
+    pub(crate) fn resolve_goal_from(
+        &self,
+        cx: &Cx,
+        goal: &Type,
+        lvl: &Level,
+        display: &str,
+        span: Span,
+        tr: &mut Vec<TraceLine>,
+        up: &mut Option<(Term, Type)>,
+    ) -> Option<Term> {
         let depth = self.resolve_depth.get();
         tr.push(line(depth, "goal", display.to_string()));
         if depth >= MAX_DEPTH {
@@ -128,8 +160,9 @@ impl Elaborator {
         //     exact pass, because an exactly-typed value in scope is the one
         //     the writer named; before the registry, because this is still a
         //     scope answer and not a derivation.
-        if let Some((t, who)) = self.scope_upcast(cx, goal, lvl, span) {
+        if let Some((t, who, src)) = self.scope_upcast(cx, goal, lvl, span) {
             tr.push(line(depth, "local", who));
+            *up = Some(src);
             return Some(t);
         }
         tr.push(line(
@@ -234,16 +267,19 @@ impl Elaborator {
     /// no synthesized parent global exist. Conversion cannot see through that:
     /// the two are different records.
     ///
-    /// Returns the proposal and what the trace should call it. `None` is
-    /// "nothing in scope upcasts", which costs one `tag_of` when the goal is
-    /// not a class at all.
+    /// Returns the proposal, what the trace should call it, and the **child
+    /// dictionary with its class type** — the provenance
+    /// [`Self::resolve_goal_from`] hands a dispatched projection so that it can
+    /// read the field out of the child instead of out of the assembled parent
+    /// (`docs/traits-named-upcast-design.md` §2). `None` is "nothing in scope
+    /// upcasts", which costs one `tag_of` when the goal is not a class at all.
     fn scope_upcast(
         &self,
         cx: &Cx,
         goal: &Type,
         lvl: &Level,
         span: Span,
-    ) -> Option<(Term, String)> {
+    ) -> Option<(Term, String, (Term, Type))> {
         let cind = self.tag_of(goal)?;
         if !cind.is_record {
             return None;
@@ -257,7 +293,11 @@ impl Elaborator {
         for pos in (0..cx.names.len()).rev() {
             let (t, ty, l) = self.local(cx, pos);
             if let Some(u) = self.upcast_from(cx, &cind, &ckey, goal, lvl, &t, &ty, &l, span) {
-                return Some((u, format!("{} (upcast to `{}`)", cx.names[pos], cind.name)));
+                return Some((
+                    u,
+                    format!("{} (upcast to `{}`)", cx.names[pos], cind.name),
+                    (t, ty),
+                ));
             }
         }
         for a in cx.aliases.iter().rev() {
@@ -267,7 +307,11 @@ impl Elaborator {
             if let Some(u) =
                 self.upcast_from(cx, &cind, &ckey, goal, lvl, &t, &ty, &a.level, span)
             {
-                return Some((u, format!("{} (a `let`, upcast to `{}`)", a.name, cind.name)));
+                return Some((
+                    u,
+                    format!("{} (a `let`, upcast to `{}`)", a.name, cind.name),
+                    (t, ty),
+                ));
             }
         }
         None

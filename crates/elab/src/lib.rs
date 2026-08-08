@@ -554,7 +554,14 @@ fn skel_params(skel: &Skel) -> Rc<Vec<ParamMeta>> {
     )
 }
 
+/// Where a resolved dictionary came from, when it came by **upcast**: the
+/// *child* dictionary and its class type ([`Elaborator::resolve_goal_from`],
+/// `docs/traits-named-upcast-design.md` §2.1). `None` for every other answer,
+/// which is every answer already at the goal's own class.
+type Upcast = Option<(Term, Type)>;
+
 /// One parameter of a callable global, in declaration/telescope order.
+///
 /// `implicit` flags a `{}`-parameter, filled by unification at call sites
 /// (issues/elab-stage2-metas.md). The *name* is API: it is the default name of
 /// a goal raised in that argument position (issues/goal-holes.md), so callers
@@ -4151,7 +4158,7 @@ impl Elaborator {
             .type_namespace(cx, &rty, span)
             .unwrap_or_else(|| "the receiver's type".to_string());
         let mut trace: Vec<resolve::TraceLine> = Vec::new();
-        let mut hits: Vec<(Rc<Inductive>, Type, Term, String)> = Vec::new();
+        let mut hits: Vec<(Rc<Inductive>, Type, Term, String, Upcast)> = Vec::new();
         let mut tried: Vec<String> = Vec::new();
         for (_, info) in &cands {
             let Some(ind) = self.lookup_inductive(&info.name).cloned() else { continue };
@@ -4166,16 +4173,21 @@ impl Elaborator {
             // Every candidate is tried even once one has succeeded: the
             // ambiguity is the point, and a first hit would be a priority
             // (§4 rule 3).
-            let found = self.resolve_goal(cx, &goal, &glvl, &display, span, &mut tr);
+            // `up` is the **upcast provenance** (`resolve_goal_from`): if this
+            // goal is answered from a child dictionary, the child is what the
+            // projection below reads from.
+            let mut up = None;
+            let found =
+                self.resolve_goal_from(cx, &goal, &glvl, &display, span, &mut tr, &mut up);
             match found {
-                Some(t) => hits.push((ind, goal, t, display)),
+                Some(t) => hits.push((ind, goal, t, display, up)),
                 None => trace.extend(tr),
             }
         }
         if hits.len() > 1 {
             let list = hits
                 .iter()
-                .map(|(_, _, _, d)| format!("`{d}`"))
+                .map(|(_, _, _, d, _)| format!("`{d}`"))
                 .collect::<Vec<_>>()
                 .join(" and ");
             return err(
@@ -4187,7 +4199,7 @@ impl Elaborator {
                 span,
             );
         }
-        let Some((ind, goal, dict, display)) = hits.pop() else {
+        let Some((ind, goal, dict, display, up)) = hits.pop() else {
             // No candidate resolved. If the call has another reading, that
             // reading runs and this search is forgotten; if it has none, the
             // search *is* the diagnosis and is reported instead of the
@@ -4211,6 +4223,9 @@ impl Elaborator {
                 span,
             );
         }
+        // An answer that came by **upcast** is read *through*: the field is the
+        // child's own (docs/traits-named-upcast-design.md §2).
+        let (ind, goal, dict) = self.through_upcast(ind, goal, dict, up, name);
         // Reported rather than asserted, though the candidate filter is what
         // just found this field: a library must not panic to say two of its own
         // tables disagree.
@@ -4230,6 +4245,48 @@ impl Elaborator {
         all.push(recv.clone());
         all.extend(args.iter().cloned());
         Ok(Some(DotResolution::Dispatch(t, fty, flvl, skel, all)))
+    }
+
+    /// A dispatched projection reads **through** an upcast
+    /// (`docs/traits-named-upcast-design.md` §2).
+    ///
+    /// Owner-keyed dispatch builds its goal at the class that *declares* the
+    /// field, so at a child dictionary the resolver answers by step 1b with an
+    /// assembled ancestor record and the projection would be
+    /// `⟨C { f: d.f, … }⟩.f`. But that slot **is** `d.f` — it is what the
+    /// assembly is made of — and the child has `f` in its own flattened field
+    /// list at its own index (layer 1 §3). So the projection is taken from the
+    /// child dictionary directly, and the assembled ancestor never enters the
+    /// term.
+    ///
+    /// This is not a change to the *value*: the two are equal by β and
+    /// projection, and the proposal has already passed the resolver's kernel
+    /// gate (layer 2 §4.4) before it gets here. What it changes is the
+    /// spelling the field's type is handed downstream in — the child's own
+    /// components, rather than projections of a record literal that every later
+    /// conversion has to reduce again. That residue *was* the cost
+    /// `issues/upcast-assembly-cost-at-open-carriers.md` measured.
+    ///
+    /// A `None` provenance (every answer that is not an upcast) is the
+    /// identity, which is what keeps this off every dispatch in the corpus that
+    /// resolves exactly.
+    fn through_upcast(
+        &self,
+        ind: Rc<Inductive>,
+        goal: Type,
+        dict: Term,
+        up: Upcast,
+        name: &str,
+    ) -> (Rc<Inductive>, Type, Term) {
+        // Reported by returning the input, not asserted: a child whose
+        // flattened list has lost the field would mean the flattening and the
+        // resolver disagree, and the identity is the answer that still checks.
+        let Some((child_dict, child_ty)) = up else { return (ind, goal, dict) };
+        let Some(child) = self.tag_of(&child_ty) else { return (ind, goal, dict) };
+        if child.field_index(name).is_none() {
+            return (ind, goal, dict);
+        }
+        (child, child_ty, child_dict)
     }
 
     /// The classes that **declare** `name` — not the ones that merely inherit
@@ -4341,7 +4398,7 @@ impl Elaborator {
         // an open carrier has no nominal tag to name (layer 2 §7).
         let subject = subject_text(recv).or_else(|| ns.clone()).unwrap_or_else(|| "_".into());
         let mut trace: Vec<resolve::TraceLine> = Vec::new();
-        let mut hits: Vec<(Rc<Inductive>, Type, Term, String)> = Vec::new();
+        let mut hits: Vec<(Rc<Inductive>, Type, Term, String, Upcast)> = Vec::new();
         let mut tried: Vec<String> = Vec::new();
         for (_, info) in &cands {
             let Some(ind) = self.lookup_inductive(&info.name).cloned() else { continue };
@@ -4355,14 +4412,15 @@ impl Elaborator {
             let mut tr = Vec::new();
             // Every candidate is tried even once one has succeeded: the
             // ambiguity is the point (§4 rule 3).
-            match self.resolve_goal(cx, &goal, &glvl, &display, span, &mut tr) {
-                Some(t) => hits.push((ind, goal, t, display)),
+            let mut up = None;
+            match self.resolve_goal_from(cx, &goal, &glvl, &display, span, &mut tr, &mut up) {
+                Some(t) => hits.push((ind, goal, t, display, up)),
                 None => trace.extend(tr),
             }
         }
         if hits.len() > 1 {
             let list =
-                hits.iter().map(|(_, _, _, d)| format!("`{d}`")).collect::<Vec<_>>().join(" and ");
+                hits.iter().map(|(_, _, _, d, _)| format!("`{d}`")).collect::<Vec<_>>().join(" and ");
             return err(
                 format!(
                     "`{name}` at `{subject}` is declared by {list}, and each has an instance \
@@ -4372,7 +4430,7 @@ impl Elaborator {
                 span,
             );
         }
-        let Some((ind, goal, dict, display)) = hits.pop() else {
+        let Some((ind, goal, dict, display, up)) = hits.pop() else {
             if other.is_some() {
                 return Ok(None);
             }
@@ -4389,6 +4447,9 @@ impl Elaborator {
                 span,
             );
         }
+        // As in receiver dispatch: an upcast answer is read through
+        // (docs/traits-named-upcast-design.md §2).
+        let (ind, goal, dict) = self.through_upcast(ind, goal, dict, up, name);
         let Some(idx) = ind.field_index(name) else {
             return err(format!("internal: `{}` has no field `{name}` after all", ind.name), span);
         };
