@@ -48,8 +48,9 @@
 //! target is the constant they sit on top of.
 
 use crate::harness::Family;
+use heather_elab::IndexedRoute;
 
-use super::scale::sweep;
+use super::scale::indexed_sweep;
 
 const ADD: &str = "fn add(a: Nat, b: Nat) -> Nat { match b { Zero => a, Succ(k) => Succ(add(a, k)) } }\n";
 
@@ -98,7 +99,9 @@ fn computed_arms() -> Family {
         // and is itself Θ(n) (the module header, §14.11). Band tightened from
         // 2.60–4.00 to claim the new slope.
         expect_slope: Some((2.20, 2.85)),
-        cases: sweep("forded/computed-arms", &[2, 3, 4, 5, 6], src),
+        cases: indexed_sweep(
+            "forded/computed-arms", &[2, 3, 4, 5, 6], "F", IndexedRoute::Forded, src,
+        ),
     }
 }
 
@@ -145,7 +148,9 @@ fn occurrences() -> Family {
         // slope ~1.0 unchanged, as designed. Band floor raised now that two
         // rounds have measured it at 0.99–1.01.
         expect_slope: Some((0.70, 1.30)),
-        cases: sweep("forded/occurrences", &[1, 2, 4, 8], src),
+        cases: indexed_sweep(
+            "forded/occurrences", &[1, 2, 4, 8], "F", IndexedRoute::Forded, src,
+        ),
     }
 }
 
@@ -233,7 +238,9 @@ fn declared_index_tags() -> Family {
         // wrong label costs: two rounds' worth of explanation for a curve
         // whose cause was never in either round's reach.
         expect_slope: Some((1.90, 2.60)),
-        cases: sweep("forded/declared-index-tags", &[2, 3, 4, 5, 6], src),
+        cases: indexed_sweep(
+            "forded/declared-index-tags", &[2, 3, 4, 5, 6], "Tw", IndexedRoute::One, src,
+        ),
     }
 }
 
@@ -281,6 +288,9 @@ fn declared_index_branching() -> Family {
         // 2026-08-05: constants ~0.75× under the code-reference round, slope
         // 1.53 → 1.57 (within the machine's spread). Band tightened.
         expect_slope: Some((1.20, 1.90)),
-        cases: sweep("forded/declared-index-branching", &[2, 3, 4, 5, 6], src),
+        cases: indexed_sweep(
+            "forded/declared-index-branching", &[2, 3, 4, 5, 6], "Bl",
+            IndexedRoute::Forded, src,
+        ),
     }
 }

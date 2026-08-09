@@ -152,6 +152,19 @@ pub struct GoalReport {
     pub span: Span,
 }
 
+/// The lowering selected for an indexed inductive declaration.
+///
+/// Exposed as a small piece of elaboration metadata so a benchmark or test
+/// whose subject is one route can assert that it is measuring that route.
+/// The classifier itself and its intermediate rows remain private.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum IndexedRoute {
+    /// Route 1: the family is defined by elimination on its index.
+    One,
+    /// Route 2b: indices are erased into a skeleton and recovered by fording.
+    Forded,
+}
+
 impl From<ParseError> for ElabError {
     fn from(e: ParseError) -> Self {
         ElabError::Parse(e)
@@ -1213,6 +1226,19 @@ impl Elaborator {
     /// The accumulated global context (theorem statements).
     pub fn psi(&self) -> &GlobalCtx {
         &self.psi
+    }
+
+    /// Which indexed lowering was selected for `name` in the current module.
+    /// Returns `None` when the name is absent or is not an indexed inductive.
+    pub fn indexed_route(&self, name: &str) -> Option<IndexedRoute> {
+        let key = if name.contains("::") {
+            name.to_string()
+        } else {
+            names::qkey(&self.scope.module, name)
+        };
+        let ind = self.inductives.get(&key)?;
+        ind.index.as_ref()?;
+        Some(if ind.skel.is_some() { IndexedRoute::Forded } else { IndexedRoute::One })
     }
 
     // -- declarations -------------------------------------------------------
@@ -8311,4 +8337,3 @@ fn strengthen_ty(gamma: &LocalCtx, t: &Type, d: u32) -> Option<Type> {
     let s = t.apply_local(&drop_binders(gamma, d));
     (s.shift_local(d) == *t).then_some(s)
 }
-

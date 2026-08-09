@@ -16,8 +16,9 @@
 //! re-emits the family at its branch index (Θ(n) occurrences).
 
 use crate::harness::Family;
+use heather_elab::IndexedRoute;
 
-use super::scale::sweep;
+use super::scale::indexed_sweep;
 
 pub fn families() -> Vec<Family> {
     vec![arms()]
@@ -64,6 +65,8 @@ fn arms() -> Family {
         // Band records the exponent that exists, per the suite's rule; what
         // it guards is a third power appearing.
         expect_slope: Some((1.90, 2.60)),
-        cases: sweep("indexed/arms", &[2, 3, 4, 5, 6], src),
+        cases: indexed_sweep(
+            "indexed/arms", &[2, 3, 4, 5, 6], "Vf", IndexedRoute::One, src,
+        ),
     }
 }

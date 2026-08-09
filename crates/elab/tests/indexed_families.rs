@@ -9,7 +9,7 @@
 //! `Fin(0)` as `Empty`, branching for free, and `mirror (mirror t) = t` by a
 //! surface induction. Rejections are §8.1's, each pinned by its message.
 
-use heather_elab::{ElabError, Elaborator};
+use heather_elab::{ElabError, Elaborator, IndexedRoute};
 
 fn elab(src: &str) -> Elaborator {
     let mut e = Elaborator::with_prelude().expect("prelude");
@@ -37,13 +37,14 @@ inductive V<A> : (n: Nat) -> Type {
 // fully open indices, monomorphic and polymorphic.
 #[test]
 fn vec_declares_and_constructors_check() {
-    elab(&format!(
+    let e = elab(&format!(
         "{VEC}
          fn empty() -> V<Nat>(0) {{ VNil }}
          fn three() -> V<Nat>(3) {{ VCons(2, 1, VCons(1, 2, VCons(0, 3, VNil))) }}
          fn push(n: Nat, x: Nat, xs: V<Nat>(n)) -> V<Nat>(Succ(n)) {{ VCons(n, x, xs) }}
          fn ppush<A>(n: Nat, x: A, xs: V<A>(n)) -> V<A>(Succ(n)) {{ VCons(n, x, xs) }}"
     ));
+    assert_eq!(e.indexed_route("V"), Some(IndexedRoute::One));
 }
 
 // §6.2 — match β fires on fully open data, and the arm recovers the pattern

@@ -20,7 +20,7 @@
 //!   residue has one (a *deliberate* negative, so the gap is in a test rather
 //!   than in a bug report).
 
-use heather_elab::{ElabError, Elaborator};
+use heather_elab::{ElabError, Elaborator, IndexedRoute};
 use heather_kernel::term::{GlobalBinding, Term, Type};
 
 fn elab(src: &str) -> Elaborator {
@@ -129,16 +129,17 @@ fn the_mixed_row_names_both_constructors() {
 fn every_worked_example_routes_where_section_three_says() {
     // Route 1, unchanged: a pattern result index with children at pattern
     // variables still lowers by recursion on the index.
-    elab(
+    let one = elab(
         "inductive V<A> : (n: Nat) -> Type {
              VNil                                     : V<A>(0),
              VCons(n: Nat, x: A, xs: V<A>(n))         : V<A>(Succ(n)),
          }
          fn three() -> V<Nat>(3) { VCons(2, 1, VCons(1, 2, VCons(0, 3, VNil))) }",
     );
+    assert_eq!(one.indexed_route("V"), Some(IndexedRoute::One));
     // Computed result index (the motivating class), deep pattern, branching
     // with a computed index, and a non-uniform bare variable: all route 2b.
-    elab(&format!(
+    let forded = elab(&format!(
         "{ADD}
          inductive Tm : (n: Nat) -> Type {{
              Lit                                      : Tm(Succ(0)),
@@ -157,6 +158,13 @@ fn every_worked_example_routes_where_section_three_says() {
              AA(n: Nat)                               : Any(n),
          }}"
     ));
+    for name in ["Tm", "Ev", "Br", "Any"] {
+        assert_eq!(
+            forded.indexed_route(name),
+            Some(IndexedRoute::Forded),
+            "worked example `{name}` took the wrong indexed route"
+        );
+    }
 }
 
 // ---------------------------------------------------------------------------

@@ -25,7 +25,7 @@ use std::cell::Cell;
 use std::rc::Rc;
 use std::time::Instant;
 
-use heather_elab::{Elaborator, stats};
+use heather_elab::{Elaborator, IndexedRoute, stats};
 use heather_syntax::parse_file;
 
 use crate::harness::{Family, Phases};
@@ -59,7 +59,7 @@ pub fn prelude() -> Elaborator {
 /// Panic unless `src` checks cleanly against a fresh elaborator — the
 /// fixture-validation rule, run at setup. A fixture that stopped doing its
 /// work gets *faster*, so an unvalidated benchmark reports a win for a bug.
-pub fn validate(what: &str, src: &str) {
+pub fn validate(what: &str, src: &str) -> Elaborator {
     let mut e = prelude();
     let errs = e.check_source(src);
     assert!(
@@ -68,6 +68,24 @@ pub fn validate(what: &str, src: &str) {
         errs.len(),
         errs[0].render(src)
     );
+    e
+}
+
+/// Validate a route-sensitive fixture and assert the declaration took the
+/// lowering the fixture claims to measure.
+pub fn validate_route(
+    what: &str,
+    src: &str,
+    declaration: &str,
+    expected: IndexedRoute,
+) -> Elaborator {
+    let e = validate(what, src);
+    assert_eq!(
+        e.indexed_route(declaration),
+        Some(expected),
+        "fixture `{what}` does not exercise its claimed indexed route"
+    );
+    e
 }
 
 /// Attribute this run's phases — **only on the harness's probe run**, never

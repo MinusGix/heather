@@ -1,9 +1,9 @@
 ---
 title: A fixture asserts the route the classifier picks, or it can measure the wrong scheme for rounds
-status: open
+status: closed
 labels: [testing, tooling, elaboration, inductives]
 created: 2026-08-06
-updated: 2026-08-06
+updated: 2026-08-09
 ---
 
 `forded/declared-index-tags` measured the wrong scheme for two rounds: its
@@ -58,3 +58,4 @@ route before hypothesizing a defect.
 
 - 2026-08-06: Filed, off the `declared-index-tags` misattribution
   post-mortem ([[parallel-checking-and-caching]]'s filing discussion).
+- 2026-08-09: LANDED: IndexedRoute and Elaborator::indexed_route expose only the classifier result; every route-sensitive frontend benchmark asserts its smallest generated case (including declared-index-tags as route 1), the route-1 and route-2b generator acceptance fixtures pin their claimed routes, and testing-generated-terms records axis 7. Targeted acceptance, both benchmark smoke families, and the full suite pass.

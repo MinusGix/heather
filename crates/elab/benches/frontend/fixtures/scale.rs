@@ -10,8 +10,9 @@
 //! what they are for: real proofs, in `lib/`.
 
 use crate::harness::{Case, Family};
+use heather_elab::IndexedRoute;
 
-use super::{cloned_runner, prelude, validate};
+use super::{cloned_runner, prelude, validate, validate_route};
 
 pub fn families() -> Vec<Family> {
     vec![declarations(), wide_inductive()]
@@ -94,6 +95,33 @@ pub fn sweep(
         .map(|&n| {
             let text = src(n);
             validate(&format!("{what}:{n}"), &text);
+            let (run, cell) = cloned_runner(base.clone(), text);
+            Case::new(n, 0, run).with_phases(cell)
+        })
+        .collect()
+}
+
+/// A swept indexed family whose smallest case first pins the classifier's
+/// route. Later sizes share the same source schema and only vary its width.
+pub fn indexed_sweep(
+    what: &'static str,
+    sizes: &[u64],
+    declaration: &str,
+    route: IndexedRoute,
+    src: impl Fn(u64) -> String,
+) -> Vec<Case> {
+    let base = prelude();
+    let sizes = if crate::harness::smoke() { &sizes[..1] } else { sizes };
+    sizes
+        .iter()
+        .enumerate()
+        .map(|(i, &n)| {
+            let text = src(n);
+            if i == 0 {
+                validate_route(&format!("{what}:{n}"), &text, declaration, route);
+            } else {
+                validate(&format!("{what}:{n}"), &text);
+            }
             let (run, cell) = cloned_runner(base.clone(), text);
             Case::new(n, 0, run).with_phases(cell)
         })

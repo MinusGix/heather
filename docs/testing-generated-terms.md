@@ -94,6 +94,20 @@ convoy, whose motive `Π (e = z). M` is dependent *by construction* — so the
 equation binding doubles as a stress test for every motive consumer in the
 elaborator.
 
+And a seventh, found 2026-08-06, about the subject rather than its instances:
+
+**7. A route-sensitive fixture asserts the route before measuring it.** A
+source declaration can look like one lowering scheme while the classifier's
+ordered rules select another. `forded/declared-index-tags` claimed route 2b
+for two optimization rounds, but its result indices were route-1 patterns;
+neither route-2b lever moved its curve, and both rounds invented explanations
+for machinery the fixture never emitted. Every benchmark or generated-term
+test whose point is a particular lowering must ask the elaborator which route
+the declaration took and assert that answer. For a swept benchmark, assert
+the smallest case once: the remaining cases share the schema and vary only
+its width. A route change is then a test failure, not a misleading performance
+result.
+
 ## The evidence
 
 | defect | what hid it | axis |
@@ -110,6 +124,7 @@ elaborator.
 | tier-0 `case_tree`'s inner injection shift (fixed 2026-08-05) | the same, **plus** every three-constructor open-payload tier-0 test having a *non-dependent* motive, which substitutes the bad annotations away | 6 (× 2, × dependence) |
 | the pattern compiler's generated column names shadowing each other across levels (fixed 2026-08-05) | every typing test — the two columns had the *same type*, so the substitution was well typed | 1 (see below) |
 | `forded.rs::ctor_spine_at` re-lowering the skeleton at **no** type arguments (fixed 2026-08-05) | a parameterized forded family always had a *recursive* skeleton in the tests, and every non-recursive one was monomorphic — the two were never crossed, and each half alone is blind | 2 (the axis was **unwritable**, see below) |
+| `forded/declared-index-tags` measured route 1 while labeled as route 2b (found 2026-08-06) | the fixture asserted that it checked, but never asserted which classifier branch accepted it | 7 |
 
 Note the shape of that table: four of six are axis 2, and in every case the
 generalization that would have caught it costs one extra test with one extra
