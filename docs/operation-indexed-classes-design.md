@@ -38,9 +38,10 @@ The user's insight (2026-08-07, recorded on the issue): the operation is
 > **The operation moves from field to index — `class Monoid<A>(op)` — and the
 > indexed class is the *only* law-bearing form: there is no bundled companion
 > class, and there are no default instances.** A value index is filled by
-> unification, by a scope binder, or by a designation the binder names (§7) —
-> never by search, never by priority — and a goal whose value slot survives
-> all three is refused by name.
+> unification, by a scope binder — including a linked explicit parameter,
+> §4.1 — or by a designation the binder names (§7) — never by search, never
+> by priority — and a goal whose value slot survives all three is refused by
+> name.
 
 Everything below is this sentence's consequences, plus the two obvious
 alternatives (§9) and why each lost.
@@ -128,41 +129,71 @@ says the match was by conversion (§11). The trial route being
 "accidentally future-proof here" was the issue's own observation; the keyed
 path is the fast lane in front of it, not a replacement.
 
-## 4. Constraint binders bind the indices
+## 4. Constraint binders bind the indices, and the index slot says where from
 
 Today `<A: Monoid>` desugars to one implicit solver parameter. At an indexed
 class it desugars to **the index binders, then the instance binder over
 them** — the index under its *declared* parameter name:
 
 ```heather
-fn mconcat<A: Monoid>(xs: List<A>) -> A
+fn sum_all<A: Monoid>(xs: List<A>) -> A
 // desugars to
-fn mconcat<A>(#op: A -> A -> A, #m: Monoid<A>(op) := infer)(xs: List<A>) -> A
+fn sum_all<A>(#op: A -> A -> A, #m: Monoid<A>(op) := infer)(xs: List<A>) -> A
 ```
 
 `#op` is an ordinary implicit binder — filled by unification, like a type
 argument, *not* a solver parameter — which is the direct realization of the
 insight in §1: the op rides exactly the machinery the carrier type already
-rides. Inside the body, `op` is an **ordinary bound variable**:
+rides. Inside the body the index is an **ordinary bound variable**. The index
+binder's name is the class's declared one, so it is referenceable, shadowable
+by the normal rules, and collides with a same-named explicit binder the way
+any two binders do — the diagnostic for that collision names the class
+parameter it came from (the `#`-prefix discipline from the inline-constraint
+round is the hook, as there).
 
-```heather
-fn mconcat<A: Monoid>(xs: List<A>) -> A {
-    match xs {
-        Nil => A.unit,                 // scope answers Monoid<A>(?op): the binder pins op
-        Cons(h, t) => op(h, mconcat(t)),   // no dispatch, no projection — a variable
-    }
-}
-```
+### 4.1 The three referents of the index slot (decided 2026-08-09)
 
-The recursive call's own `#op`/`#m` fill from the binders in the room, the
-existing behavior. The index binder's name is the class's declared one, so it
-is referenceable, shadowable by the normal rules, and collides with a
-same-named explicit binder the way any two binders do — the diagnostic for
-that collision names the class parameter it came from (the `#`-prefix
-discipline from the inline-constraint round is the hook, as there).
+The constraint's index slot answers "where does the op come from", and it has
+exactly three readings:
 
-Generic laws are stated over the binder and **proved once per theory, not per
-spelling**:
+- **Empty** — `<A: Monoid>` — the implicit binder above. Right for theory,
+  where the op is in the stated goal and unification pins it (§4.2). When a
+  call site does need to supply an empty-slot index, the form is a **named
+  argument** (`mconcat(bs, op = or)`) — the binders have names by
+  construction, and `issues/named-arguments.md` is the mechanism's owner; the
+  `@`-form is the interim escape until it lands. The fully-manual spelling
+  (`m: Monoid<A>(op) := infer` written out) stays legal and is nobody's
+  obligation; `requires` appears nowhere in this design.
+- **A name** — `<A: Monoid(op)>(op: A -> A -> A, …)` — the index is **linked
+  to an explicit parameter of the same declaration**, forward reference
+  allowed. Right for programs whose op *is* their interface:
+
+  ```heather
+  fn mconcat<A: Monoid(op)>(op: A -> A -> A, xs: List<A>) -> A {
+      match xs {
+          Nil => A.unit,                        // scope answers Monoid<A>(?op)
+          Cons(h, t) => op(h, mconcat(op, t)),  // a variable, positionally passed
+      }
+  }
+  // callers: mconcat(add, ns) — positional, no := infer tail, no requires
+  ```
+
+  The license is deliberately narrow: **only a constraint's index slot may
+  forward-reference, and only into its own declaration's parameter list.**
+  The elaborator solves the coherent telescope order (the instance binder
+  after the parameters it mentions) and refuses a dependency cycle by name;
+  the *written* order stays authoritative for positional call sites and for
+  every diagnostic. General forward reference in telescopes is not claimed —
+  this slot has one job.
+- **A symbol** — `<A: Monoid(+)>` — the index comes from the designation
+  table and is installed as the body's local operator (§7).
+
+The style rule the library follows: **programs link their index; theory
+leaves the slot empty.** A fold's callers choose the op, so it is a written
+parameter; a law's goal names the op, so unification recovers it.
+
+Generic laws are stated over the empty-slot binder and **proved once per
+theory, not per spelling**:
 
 ```heather
 theorem op_unit_of_comm<A: CommMonoid>(x: A): op(x, A.unit) = x {
@@ -182,6 +213,33 @@ existed to fail to say. At each corollary the goal pins `op` by unification
 sees an unpinned op in theory use, because a law's statement mentions its
 operation — that is what a law is.** The inference worry lives entirely on the
 program side, where §5's ladder answers it by refusing rather than guessing.
+
+### 4.2 The unifier rule the corollaries lean on (correction, 2026-08-09)
+
+"Pinned by unification" is **not free against the current unifier**, and the
+first draft of this document claimed it as if it were. Checked against the
+code at review: `unify_tm`'s flex-head guard (`crates/elab/src/lib.rs`, the
+App congruence case) deliberately learns *nothing* from a spine headed by an
+unsolved meta — peeling would "solve" `?f(?a) ≟ add(a, a)` as `?f := add(a)`
+and contradict the next occurrence — and the one rule trusted for flex heads,
+the LGG in `solve_from_expected`, triggers only on the shape
+`Id(?f(s), ?f(t))`, both sides the *same* flex head. A corollary's shape is
+`Id(?op(x, ?unit), x)` — one flex spine against a rigid side — so today `?op`
+survives unsolved and the ladder refuses.
+
+Round one therefore includes one unifier extension, the **equal-arity
+flex-rigid rule**: when a flex-headed spine is applied to *exactly as many*
+arguments as a rigid **global**-headed subject spine, solve the head and
+decompose the arguments. This dodges the guard's own recorded counterexample
+precisely — `?f(?a) ≟ add(a, a)` has spine lengths 1 vs 2, and the dangerous
+partial-application peel *is* the unequal-length case, which stays refused.
+The license is the one every `unify_tm` rule already claims: learn-only, the
+kernel judges. The rule must be argued against the stage-2 design that
+installed the guard, and its negative control (the unequal-length spine still
+learning nothing) is acceptance-listed in §13. Until it lands, the corollary
+spelling needs its index supplied (§4.1's forms) — which is also the
+permanent escape whenever a statement genuinely leaves the op out of the
+goal.
 
 ## 5. The resolver's value-slot ladder
 
@@ -242,7 +300,32 @@ no arguments", filed on `issues/traits.md`) is discharged by this design,
 since an indexed class otherwise has no short dictionary spelling at a carrier
 with two structures. Same fallback position in `resolve`, same
 value-not-dot-rule character, one grammar addition (an argument list on the
-qualified name).
+qualified name). The argument admits all three of §4.1's referents, so
+`A::CommMonoid(+)` is a dictionary too.
+
+### 5.2 Two constraints of one class, and the index pseudo-projection
+
+(Decided 2026-08-09.) **The bare declared index name binds only when its
+class appears once in the constraint list.** `<A: Monoid>` binds `op`;
+`<A: CommMonoid(+) + CommMonoid(*)>` binds *no* `op` — each constraint's
+symbol is its binder, the body writes `x + y` and `x * y`, and a bare `op`
+there is refused naming both constraints. Distinction without symbols is the
+linked form doing its ordinary job: `<A: Cmp(le1) + Cmp(le2)>(le1: …, le2: …)`
+— the linked names distinguish, and the dictionaries are `A::Cmp(le1)` and
+`A::Cmp(le2)`. The `as`-rename that an earlier draft reserved as the escape
+turned out to have **no needing case** once the link exists — it demotes to a
+dictionary-shortening convenience and stays unscheduled where it lives
+(`issues/requires-placement-syntax.md`).
+
+Small enabler, elaborator-provided in round one: the **index
+pseudo-projection** — `d.op` at `d: Monoid<A>(add)` is `add`, read off the
+dictionary's *type*. Definitionally trivial, and it closes the last "how do I
+refer to it" corner: anything that can name a dictionary can name its index.
+The natural eventual home is Lean-style member definitions
+(`def Monoid.blah` — getters, common-lemma spellings, per-instance
+corollaries); that is a feature with its own scope (extension members meet
+receiver dispatch's ambiguity rules) and is recorded as direction, not
+designed here.
 
 ## 6. Perf posture
 
@@ -283,14 +366,48 @@ instance: the *source is named in the signature*, per symbol, by the author —
 there is no table consulted that the code doesn't point at, and no candidate
 set to prioritize.
 
+**Parsing (decided 2026-08-09): the symbol form is unambiguous today.** An
+infix operator token can never *begin* an expression, so an operator in
+argument-initial position — directly after `(` or `,` — has exactly one
+reading. `Monoid(+)`, `Semiring(+, *)`, `A::CommMonoid(+)` parse with zero
+lookahead: an index-argument is `expr | operator-symbol`, and the two never
+overlap. The one reserved hazard is a future **prefix** operator (unary
+minus, the day negation exists): the rule reserved now is that a lone
+operator token between delimiters is always the designation reference, so a
+prefix use never appears undelimited in index position.
+
+The payoff runs past the binder: with the symbol installed locally, **generic
+theory is written in notation** —
+
+```heather
+theorem op_unit_of_comm<A: CommMonoid(+)>(x: A): x + A.unit = x { … }
+```
+
+— the statement is the mathematics, and the `+` is the bound index, not an
+ambient operator. The further step — `class Semigroup<A>(+)`, the class
+declaring its index *as* a symbol, laws written `(x + y) + z = x + (y + z)`
+in the class body — is recorded as **direction, not scheduled**, with the
+tension stated: it is maximally "what people mean", and it couples the theory
+library to notation choices at declaration time, where a class declaring `op`
+and letting use sites bridge via `(+)` keeps theory and notation separable —
+and separability is what §1's duplication argument runs on. In the same
+drawer: a dedicated declaration form for *algebraic theories* with
+auto-generated per-instance corollaries under conventional names (a
+`Semigroup` instance at `(Nat, add)` deriving `add_assoc` — the "obvious
+spelling" consumers reach for), which is `issues/generators-in-the-language`'s
+natural customer and waits for it.
+
 This document **specifies the interface and defers the implementation** to the
 operators-onto-classes round, which needed exactly this table anyway; until it
-lands the explicit-index spelling (`mconcat(add, ns)`) is the library's form,
-legal forever. Deliberately left to that round: the declaration syntax for
-designations; whether non-symbol names can be designated (a designation for
-`op` itself was considered and set aside — it is default instances wearing a
-smaller hat, and the argument in §9.2 applies); and whether `+` designations
-and any operator *class* the round wants are one table or two.
+lands the linked-index spelling (`mconcat(add, ns)`, §4.1) is the library's
+form, legal forever. Deliberately left to that round: the declaration syntax
+for designations; whether non-symbol names can be designated (a designation
+for `op` itself was considered and set aside — it is default instances
+wearing a smaller hat, and the argument in §9.2 applies); whether `+`
+designations and any operator *class* the round wants are one table or two;
+and the reconciliation with the operators that already exist — `+`/`==` from
+the original `surface-operators` round resolve *today* by their own path, and
+the table must **subsume** that resolution, not shadow it.
 
 ## 8. The diamond: multi-op classes
 
@@ -313,7 +430,10 @@ design direction is to stop it at the door:
 The recorded alternative, **structures as fields** (`add_m:
 CommMonoid<A>(add)` as a dependent field, no `extends`), dodges the collision
 at the cost of a path on every fetched law; it stays the fallback if qualified
-flattening meets something this pass didn't foresee. Held deliberately loosely:
+flattening meets something this pass didn't foresee. One spelling decision
+flagged for that round rather than improvised in it: a qualified flat name
+contains a dot (`s.additive.unit` must parse as field-path or as a flat name
+with a qualified spelling — pick one on purpose). Held deliberately loosely:
 this is the section that most deserves an adversarial pass in its implementing
 round, it is **not needed for round one** (§13), and the round that builds it
 inherits §6's measurement gate.
@@ -375,8 +495,8 @@ the comparison is on file, not because it was close.
 | `instance Monoid<Bool>` (conjunction nominated) | `instance Monoid<Bool>(and)` — an equal |
 | `fn bool_or_monoid() -> Monoid<Bool>` | `instance Monoid<Bool>(or)` — registered, findable by op |
 | `plus_zero_of_comm` (additive spelling only) | `op_unit_of_comm` — once, spent at `add`, `and`, `or` |
-| `any_of` `let`-shadows the registry | `mconcat(or, bs)` — the index, spelled |
-| `mconcat<A: Monoid>` + receiver `h.op(…)` | `<A: Monoid>` + `op(h, …)` — a variable (§4) |
+| `any_of` `let`-shadows the registry | `mconcat(or, bs)` — the index, spelled positionally |
+| `mconcat<A: Monoid>` + receiver `h.op(…)` | `<A: Monoid(op)>(op, xs)` — the linked index (§4.1); `op(h, …)` a variable |
 | `nat_plus_zero`, `bool_plus_zero` | corollary one-liners of `op_unit_of_comm` |
 | `Default`, `Cmp`, `or_default`, `max_of*` | **unchanged** — unindexed classes are untouched |
 
@@ -426,6 +546,12 @@ Trace-as-data throughout, no new vocabulary beyond one word for the ladder:
   "`T::C` takes no arguments" (discharged by §5.1), the multi-parameter
   dispatch narrowing (extended by §5.1's value-index case), and the
   read-through/upcast machinery §6 leans on.
+- **`issues/named-arguments.md`**: the empty-slot supply form (§4.1) is that
+  issue's customer — this design consumes it when it lands and does not gate
+  on it (the linked form and the `@`-escape cover round one).
+- **The stage-2 metas design** owns the flex-head guard; §4.2's equal-arity
+  rule is argued against it and lands as that unifier's extension, not a
+  fork.
 - **Kernel: nothing.** Classes are records, indices are record value
   parameters, instances are record values, resolution proposals are
   kernel-gated as always. No new former, no metatheory obligation.
@@ -434,9 +560,12 @@ Trace-as-data throughout, no new vocabulary beyond one word for the ladder:
 
 **Round one — indexed classes end to end.** Value parameters on `class` heads
 and single-op `extends` chains; instance heads with spellable indices and the
-extended registry key (§3.1); the binder desugaring (§4); the value-slot
-ladder with its refusals (§5, §5.1's scope-then-refuse for the dot sugars);
-`T::C(args)` (§5.1); the library migration (§10). Acceptance, per
+extended registry key (§3.1); the binder desugaring with the empty and
+*linked* index slots (§4, §4.1 — the symbol slot waits for the designation
+table); the equal-arity flex-rigid unifier rule (§4.2); the value-slot ladder
+with its refusals (§5, §5.1's scope-then-refuse for the dot sugars);
+`T::C(args)` (§5.1); the bare-name uniqueness rule and the index
+pseudo-projection (§5.2); the library migration (§10). Acceptance, per
 `docs/testing-generated-terms.md`'s axes:
 
 1. **The headline**: one generic law (`op_unit_of_comm<A: CommMonoid>`)
@@ -464,7 +593,19 @@ ladder with its refusals (§5, §5.1's scope-then-refuse for the dot sugars);
 6. **Checking position and neutral scrutinee** where the migrated `mconcat`
    and its lemmas land, per the testing doc; agreement pins: the explicit
    `Nat::Monoid(add).assoc` and the corollary spelling reach one term.
-7. Full `scripts/test` (a `lib/` change), suite count recorded.
+7. **The unifier rule** (§4.2): a corollary whose goal pins a flex-headed
+   equal-arity spine (`op_unit_of_comm(x)` at `add(x, 0) = x`); its negative
+   control — the unequal-length spine (`?f(?a) ≟ add(a, a)`-shaped) still
+   learns nothing, pinned as a control on the guard.
+8. **The linked slot** (§4.1): a forward reference (`<A: Monoid(op)>` before
+   `op`'s declaration), positional supply at a call, the cycle refused by
+   name, and **two constraints of one class** distinguished by linked names
+   (`<A: Cmp(le1) + Cmp(le2)>`) with the bare declared name refused naming
+   both (§5.2).
+9. **The pseudo-projection** (§5.2): `d.op` at a concrete and at an open
+   carrier's dictionary, and its negative control (a field name that is not
+   an index still resolves as a field).
+10. Full `scripts/test` (a `lib/` change), suite count recorded.
 
 **Round two — the diamond** (§8): qualified flattening with `as`-tags, a
 `Semiring<A>(add, mul)` with distributivity as the exercise, the adversarial
