@@ -304,3 +304,4 @@ Related: [[front-end-sugar]] (what the sugar layer must cover),
   notation declined, with per-file lexical `use notation` as the least-bad
   fallback if it is ever wanted.
 - 2026-08-09: The || / && question gained a customer: [[bool-operator-designations]] records the doubt about +/* meaning or/and at Bool, with the double-symbol spelling as its likely real answer — the lexicon extension would land here.
+- 2026-08-09: Second customer from the operators round's close: a RESERVED GENERIC symbol (∙ or ⋆) for generic theory — never designated at any carrier, no fallback name, so rungs 2/3 never fire and the symbol can ONLY mean a bound index: constitutionally generic, enforced by absence rather than convention. Library taste split suggested: + in the commutative chain (earned connotations), ∙ for bare Semigroup/Monoid theorems where + would whisper commutativity over append. One lexer token; no elaborator change — the constraint-symbol machinery is indifferent.
