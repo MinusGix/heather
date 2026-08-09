@@ -54,6 +54,13 @@ one.
 
 ## What it assumes from elsewhere
 
+- **[[class-alias-roles]]** owns transparent domain-role aliases that may
+  advertise their own notation and prefer an alias-named instance. This issue
+  owns the default package inherited from an ordinary class, not that
+  role-specific resolution rule.
+- **[[strict-order-presentation]]** owns whether an order's strict symbol is a
+  derived notation expression or names a second class index, and requires the
+  paired defaults to collide/override as one package.
 - **[[binder-symbol-as-notation]]** owns symbol-notation on named binders.
   Assumed here: only that the symbol slot's installation is the mechanism a
   default expands to.

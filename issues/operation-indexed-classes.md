@@ -24,6 +24,11 @@ Design pass done 2026-08-09. **Remaining here: implementing round one per the do
 
 ## Log
 
+- 2026-08-09: Follow-on exploration filed as
+  [[first-class-indexed-structures]]: keep the indexed class as the precise
+  law-bearing fiber, then probe when mathematics needs the total space that
+  packages its value index (morphisms are the first customer), and how much
+  inference/packing sugar preserves this issue's no-unpinned-choice rule.
 - 2026-08-08: Boundary recorded by the type-projection round (docs/traits-type-projection-design.md §6), not decided: T.f at a value-indexed class would build C<T>(?op) — a meta in a value slot, ambiguous by design — so it is the same shape as the multi-parameter narrowing and should be REFUSED BY NAME when value indices land; the params.len()==1 filter gains a value-index test and inherits that diagnostic. Nothing in the projection design assumes one parameter in general. Also relevant when this designs: T::C takes no arguments, so an indexed class has no short dictionary spelling either (noted on [[traits]]).
 - 2026-08-09: Design pass DONE (docs/operation-indexed-classes-design.md, user-agreed 2026-08-09): op moves from field to index and the indexed class is the ONLY law-bearing form — no bundled companion, no default instances (both drafted and rejected, doc §9, the latter on the user's call: defaults keep the nomination question alive; the ladder deletes it). Constraint binders bind indices under their declared names (§4), value slots fill by unification/scope/named-designation and are otherwise refused by name (§5), registry key extends to (class, carrier, index-spelling) with conversion fallback (§3.1). The likely-synthesis prediction in this issue's body is superseded: one class form, per-class opt-in via value parameters. T.f's boundary softens from refuse-only to scope-then-refuse; T::C gains arguments (Nat::Monoid(add)). Designation table + Monoid(+) binder specified as the operators round's interface (§7); the diamond gets qualified flattening as direction, demand-scheduled (§8). Implementing round one's acceptance list is doc §13.
 - 2026-08-09: Body rewritten to the decision; open on purpose — implementing round one (doc §13) is what remains here.

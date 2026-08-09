@@ -46,6 +46,10 @@ construction, not by resolution.
 
 Not scheduled; wants [[nested-match-patterns]] first (its elaboration is
 the substrate) and profits from [[generators-in-the-language]] thinking.
+The broader mathematical-library direction — container presentations, generic
+fold laws, free constructions, derivatives, and zippers — is owned separately
+by [[datatype-container-algebras]]; this issue owns the declaration and
+generated-artifact surface it may eventually consume.
 
 ## Sketches (2026-07-31 discussion, condensed)
 
