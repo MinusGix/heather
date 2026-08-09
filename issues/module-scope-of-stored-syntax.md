@@ -1,9 +1,9 @@
 ---
 title: Stored surface syntax resolves at the use site, not the declaring module
-status: open
+status: closed
 labels: [frontend, elaboration, modules, robustness]
 created: 2026-08-05
-updated: 2026-08-05
+updated: 2026-08-09
 ---
 
 Found by the modules implementing round (2026-08-05, [[modules]]). An
@@ -42,3 +42,7 @@ to serialize stored syntax and should not serialize an open name.
 
 - **[[modules]]** owns the resolution regime. Assumed here: only that
   resolution is per-module visibility with no import-order precedence.
+
+## Log
+
+- 2026-08-09: LANDED: every Inductive retains its declaration Scope by Rc, and an RAII resolution-scope stack installs it whenever stored value-parameter types, constructor field types, route-1 families, or route-2b result indices are re-lowered. Cross-module collision regressions cover ordinary and recursive fields, match lowering, value parameters, and a computed forded index. Fast and full suites pass.

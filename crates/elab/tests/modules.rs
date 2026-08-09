@@ -330,6 +330,71 @@ fn an_imported_inductive_is_still_a_nominal_type() {
     ]);
 }
 
+#[test]
+fn stored_field_types_keep_their_declaration_module_scope() {
+    // `a::Box` meant `base::Item` when it was declared. Importing an
+    // unrelated second `Item` must not make the stored field type ambiguous
+    // when `.value` is lowered in `user`.
+    ok(&[
+        ("base", "record Item { n: Nat }"),
+        ("a", "import base;\nrecord Box { value: Item }"),
+        ("b", "record Item { flag: Nat }"),
+        (
+            "user",
+            "import a;\nimport base;\nimport b;\nfn read(w: a::Box) -> Nat { w.value.n }",
+        ),
+    ]);
+
+    // The recursive form is the original motivating case. Match-arm
+    // lowering reads `a`'s stored `tail: List<A>` while both `List`s are
+    // visible in `user`; the self-reference must still mean `a::List`.
+    ok(&[
+        ("a", "inductive List<A> { Nil, Cons(head: A, tail: List<A>) }"),
+        ("b", "inductive List<A> { Empty, Push(head: A, tail: List<A>) }"),
+        (
+            "user",
+            "import a;\nimport b;\nfn step(n: Nat) -> Nat { Succ(n) }\n\
+             fn len<A>(xs: a::List<A>) -> Nat {\n\
+                 match xs { Nil => 0, Cons(h, t) => step(len(t)) }\n}",
+        ),
+    ]);
+}
+
+#[test]
+fn stored_value_parameter_types_keep_their_declaration_module_scope() {
+    ok(&[
+        ("base", "record Item { n: Nat }"),
+        ("a", "import base;\nrecord Holds(x: Item) { proof: x = x }"),
+        ("b", "record Item { flag: Nat }"),
+        (
+            "user",
+            "import a;\nimport base;\nimport b;\n\
+             fn make() -> base::Item { base::Item { n: 0 } }\n\
+             fn hold() -> a::Holds(make()) { a::Holds { proof: refl } }",
+        ),
+    ]);
+}
+
+#[test]
+fn stored_forded_indices_keep_their_declaration_module_scope() {
+    // Route 2b retains each constructor's result-index expression. Building
+    // the family in `user` must resolve `bump` through `a`'s import, not
+    // against the two `bump`s visible at the use site.
+    ok(&[
+        ("ops", "fn bump(n: Nat) -> Nat { Succ(n) }"),
+        (
+            "a",
+            "import ops;\ninductive F : (n: Nat) -> Type {\n\
+                 Z : F(0),\nS(n: Nat, t: F(n)) : F(bump(n)),\n}",
+        ),
+        ("b", "fn bump(n: Nat) -> Nat { n }"),
+        (
+            "user",
+            "import a;\nimport ops;\nimport b;\nfn zero() -> a::F(0) { Z }",
+        ),
+    ]);
+}
+
 // ---------------------------------------------------------------------------
 // `meta_slots` stays global: one template per slot across the whole program,
 // and a second claim through an import is an error that names both modules.

@@ -366,6 +366,7 @@ impl Elaborator {
         idx: Term,
         span: Span,
     ) -> R<(Type, Level)> {
+        let _scope = self.use_inductive_scope(ind);
         let fam = self.forded_fam(cx, ind, args, idx, span)?;
         Ok((fam.ty_at((*fam.idx).clone(), 0), fam.lvl()))
     }
@@ -445,6 +446,7 @@ impl Elaborator {
         ilvl: &Level,
         span: Span,
     ) -> R<Term> {
+        let _scope = self.use_inductive_scope(ind);
         let n = ind.ctors.len();
         if skel.recursive {
             // `wf.rs`'s recursor device at a new motive — its third client, and
@@ -610,7 +612,10 @@ impl Elaborator {
     ) -> R<(Term, Type, Level)> {
         let (ity, ilvl) = self.index_type_of(cx, ind, span)?;
         let acx = self.res_arg_cx(cx, ind, i, args, &ity, &ilvl, &[])?;
-        let t = self.elab_check(&acx, self.res_expr(ind, i), &ity, &ilvl)?;
+        let t = {
+            let _scope = self.use_inductive_scope(ind);
+            self.elab_check(&acx, self.res_expr(ind, i), &ity, &ilvl)?
+        };
         let _ = span;
         Ok((t, ity, ilvl))
     }
@@ -783,7 +788,10 @@ impl Elaborator {
         };
         // §7's index check, one conversion, exactly as route 1 does.
         let acx = self.res_arg_cx(cx, ind, i, args, &fam.ity, &fam.ilvl, &pays)?;
-        let target = self.elab_check(&acx, self.res_expr(ind, i), &fam.ity, &fam.ilvl)?;
+        let target = {
+            let _scope = self.use_inductive_scope(ind);
+            self.elab_check(&acx, self.res_expr(ind, i), &fam.ity, &fam.ilvl)?
+        };
         if conv_term(
             self.psi(),
             &cx.gamma,
@@ -888,6 +896,7 @@ impl Elaborator {
                 level: level.clone(),
             }));
         }
+        let _scope = self.use_inductive_scope(ind);
         self.elab_check(&acx, self.res_expr(ind, i), &fam.ity.shift_local(1), &fam.ilvl)
     }
 

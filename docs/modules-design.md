@@ -289,6 +289,19 @@ import), cross-module `meta fn` template dispatch, a qualified constructor
 in checking and synthesis position, and the corpus check that `ir_v1`
 post-migration proves exactly what it proved before.
 
+### 10.1 Stored declarations retain their resolution environment (2026-08-09)
+
+An inductive keeps field types, value-parameter types, and route-2b result
+indices as surface syntax because they must be re-lowered at each
+instantiation. That syntax now carries the declaration's `Scope`; every
+re-lowering temporarily installs it in the resolver, nesting when one stored
+declaration refers to another and restoring the use-site scope afterward.
+Consequently, adding a same-named declaration to a later imported module may
+make the later module's own bare use ambiguous, but cannot reinterpret or
+invalidate syntax already checked in an earlier declaration. The module
+acceptance suite crosses ordinary fields, recursive fields and matches, value
+parameters, and a forded result-index expression with same-name collisions.
+
 ## Decisions (2026-08-05, with MinusGix)
 
 1. §4's regime signed off: ambiguity-at-use, locals-beat-imports, no

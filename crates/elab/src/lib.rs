@@ -644,20 +644,15 @@ pub struct Elaborator {
     /// (docs/modules-design.md §4). Every table below keys `module::name`
     /// ([`names::qkey`]); this is what turns a written name into that key.
     scope: Scope,
+    /// Declaration scopes temporarily installed while stored inductive
+    /// syntax is re-lowered. A stack handles one stored declaration referring
+    /// to another; the innermost declaration owns the syntax being read.
+    resolution_scopes: RefCell<Vec<Rc<Scope>>>,
     /// Every module elaborated into this accumulator, with the scope it was
-    /// elaborated in. Its job today is existence: `import m;` requires that
-    /// `m` already landed here, which is what the CLI's topological walk
-    /// guarantees.
-    ///
-    /// **Known seam.** An inductive keeps its field types in *surface* form
-    /// and re-lowers them at each use (§2 of docs/inductive-tier0-lowering.md),
-    /// and that lowering resolves names in the **use site's** scope, not the
-    /// declaring module's. Two visible declarations of `List` therefore make an
-    /// imported `Cons`'s `tail: List<A>` field mean the wrong one. It is loud
-    /// rather than silent — nominal tags differ, so the use fails to
-    /// typecheck — but the honest fix is a resolution environment that travels
-    /// with stored syntax (or closing that syntax over its scope at
-    /// declaration time). Recorded for its own round.
+    /// elaborated in. `import m;` requires that `m` already landed here, which
+    /// is what the CLI's topological walk guarantees. Inductives also retain
+    /// their declaration's value from this table: their surface field syntax
+    /// is re-lowered at uses, under that scope rather than the use site's.
     module_scopes: HashMap<String, Scope>,
     /// Which module declares what: the ambiguity oracle (`names.rs`).
     names: NameIndex,
@@ -799,6 +794,18 @@ pub struct Elaborator {
     gate: Option<Rc<dyn gate::KernelGate>>,
 }
 
+/// Restores the ambient name-resolution environment after re-lowering one
+/// declaration's stored surface syntax.
+struct ResolutionScope<'a> {
+    stack: &'a RefCell<Vec<Rc<Scope>>>,
+}
+
+impl Drop for ResolutionScope<'_> {
+    fn drop(&mut self) {
+        self.stack.borrow_mut().pop().expect("a resolution scope was installed");
+    }
+}
+
 /// One registered `meta fn`: its closed layer-m term and statement type,
 /// plus — for a template that claimed a slot — the Π **order** its signature
 /// declared (docs/meta-def-registration-design.md §2.2).
@@ -876,6 +883,7 @@ impl Elaborator {
             psi: GlobalCtx::default(),
             delta_psi: GlobalCtx::default(),
             scope: Scope::new(DEFAULT_MODULE),
+            resolution_scopes: RefCell::new(Vec::new()),
             module_scopes: HashMap::new(),
             names: NameIndex::default(),
             globals: HashMap::new(),
@@ -1041,11 +1049,20 @@ impl Elaborator {
     /// Resolve a written name to the module that declares it, by the §4
     /// regime. Every table lookup below goes through this.
     fn resolve_name(&self, name: &str) -> NameRes {
-        resolve(&self.names, &self.scope, name, |m, ty, ctor| {
+        let scopes = self.resolution_scopes.borrow();
+        let scope = scopes.last().map(Rc::as_ref).unwrap_or(&self.scope);
+        resolve(&self.names, scope, name, |m, ty, ctor| {
             self.inductives
                 .get(&qkey(m, ty))
                 .is_some_and(|i| i.ctors.iter().any(|c| c.name == ctor))
         })
+    }
+
+    /// Install the declaration scope for one read of stored inductive syntax.
+    /// The guard restores the caller's scope on every return path.
+    fn use_inductive_scope<'a>(&'a self, ind: &inductive::Inductive) -> ResolutionScope<'a> {
+        self.resolution_scopes.borrow_mut().push(Rc::clone(&ind.scope));
+        ResolutionScope { stack: &self.resolution_scopes }
     }
 
     /// The base half of a written name — `nat::sub` and `sub` both name `sub`.

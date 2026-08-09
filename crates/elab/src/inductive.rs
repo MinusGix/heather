@@ -28,7 +28,7 @@ use heather_kernel::level::Level;
 use heather_kernel::term::{LocalCtx, LocalSubst, LocalVar, Term, Type};
 use heather_syntax::{Arm, CtorDecl, Expr, ExprKind, InductiveDecl, Span, Ty, TyKind};
 
-use crate::names::{qkey, NameKind};
+use crate::names::{qkey, NameKind, Scope};
 use crate::{embed, err, Alias, Cx, Elaborator, TyVar, R};
 
 /// A declared inductive, kept in surface form: the field types are lowered
@@ -36,6 +36,10 @@ use crate::{embed, err, Alias, Cx, Elaborator, TyVar, R};
 /// (§2 — `Option<Nat>` and `Option<Bool>` are unrelated kernel types).
 pub(crate) struct Inductive {
     pub name: String,
+    /// The name-resolution environment in which the stored surface field and
+    /// value-parameter types were declared. Re-lowering those nodes at a use
+    /// site must mean what they meant here, regardless of later imports.
+    pub scope: Rc<Scope>,
     /// The nominal tag (§3.3): sequential per elaborator, carried as the first
     /// field of every constructor (see [`tag_type`]) so that structurally
     /// identical declarations do not share a kernel type.
@@ -697,7 +701,9 @@ impl Elaborator {
         // is §4.1's single most consequential sentence, mechanized.
         let skel = match &route {
             Some(IdxRoute::Forded(_)) => {
-                let s = Rc::new(skeleton_of(d, &ctors, self.next_tag));
+                let s = Rc::new(skeleton_of(
+                    d, &ctors, self.next_tag, Rc::new(self.scope.clone()),
+                ));
                 self.next_tag += 1;
                 self.by_tag.insert(s.tag, Rc::clone(&s));
                 self.inductives.insert(qkey(&self.scope.module, &s.name), Rc::clone(&s));
@@ -709,6 +715,7 @@ impl Elaborator {
         let skel_tag = skel.as_ref().map(|s| s.tag);
         let ind = Rc::new(Inductive {
             name: d.name.clone(),
+            scope: Rc::new(self.scope.clone()),
             tag: self.next_tag,
             params: d.params.clone(),
             valparams: d.valparams.iter().map(|p| (p.name.clone(), p.ty.clone())).collect(),
@@ -959,7 +966,10 @@ impl Elaborator {
         }));
         let mut out = Vec::with_capacity(args.len());
         for ((pname, pty), arg) in ind.valparams.iter().zip(args) {
-            let (ty, level) = self.elab_ty(&tcx, pty)?;
+            let (ty, level) = {
+                let _scope = self.use_inductive_scope(ind);
+                self.elab_ty(&tcx, pty)?
+            };
             let tm = self.elab_check(cx, arg, &ty, &level)?;
             tcx.aliases.push(Rc::new(Alias { skel: None,
                 name: pname.clone(),
@@ -1105,6 +1115,7 @@ impl Elaborator {
         vargs: &[(Term, Type, Level)],
         span: Span,
     ) -> R<(Type, Level)> {
+        let _scope = self.use_inductive_scope(ind);
         // Field types see the type parameters and the earlier *named* fields;
         // nothing else from the ambient declaration. The arguments are scoped
         // in `cx`, so that is the depth every use of one is weakened from.
@@ -2758,7 +2769,7 @@ fn ty_mentions(t: &Ty, v: &str) -> bool {
 ///
 /// Built **from** the declaration, once, and never edited afterwards — which
 /// is what keeps the two from drifting (§14.6).
-fn skeleton_of(d: &InductiveDecl, ctors: &[Ctor], tag: u32) -> Inductive {
+fn skeleton_of(d: &InductiveDecl, ctors: &[Ctor], tag: u32, scope: Rc<Scope>) -> Inductive {
     let sname = format!("{}#skel", d.name);
     let self_ty = Ty {
         kind: TyKind::Named {
@@ -2808,6 +2819,7 @@ fn skeleton_of(d: &InductiveDecl, ctors: &[Ctor], tag: u32) -> Inductive {
     let recursive = sctors.iter().any(|c| c.kind.iter().any(|k| k.is_child()));
     Inductive {
         name: sname,
+        scope,
         tag,
         params: d.params.clone(),
         valparams: vec![],

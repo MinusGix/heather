@@ -511,6 +511,7 @@ impl Elaborator {
         idx: Term,
         span: Span,
     ) -> R<(Type, Level)> {
+        let _scope = self.use_inductive_scope(ind);
         // Where the declaration has a registered family function, the
         // occurrence is `El l (D#fam^δ i)` and neither pass runs (design §6).
         // `args` is empty for every declaration that has one — a definition is
@@ -541,6 +542,7 @@ impl Elaborator {
         idx: Term,
         span: Span,
     ) -> R<(Term, Level)> {
+        let _scope = self.use_inductive_scope(ind);
         let ity = ind.index_ty.as_ref().expect("an indexed declaration has an index type");
         let icts = ity.ctors();
         let classes = classes(ind, icts.len());
