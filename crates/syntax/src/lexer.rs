@@ -41,6 +41,13 @@ pub enum TokKind {
     /// `|-` — the turnstile of a contextual type `Code(g |- T)`. Two-byte like
     /// `->`; a bare `|` stays a lex error, so nothing existing changes shape.
     Turnstile, // |-
+    /// `&&` and `||` — the Boolean operator spellings
+    /// (issues/bool-operator-designations.md). Two-byte; the bare `&` and `|`
+    /// stay lex errors, deliberately: the single characters are unclaimed
+    /// tokens (`|` in particular is reserved against a future or-pattern),
+    /// and doubling is what keeps them so.
+    AmpAmp,    // &&
+    PipePipe,  // ||
     /// `$` — splice, inside a `code { … }` quote (`$x`, `${e}`) and in type
     /// position for a `TyCode` binder (`[$a; $k]`). The splice *form* is
     /// decided by the parser; the lexer only knows the sigil.
@@ -159,6 +166,8 @@ pub fn lex(src: &str) -> Result<Vec<Tok>, LexError> {
             "λ" => (TokKind::Lambda, 2),
             "->" => (TokKind::Arrow, 2),
             "|-" => (TokKind::Turnstile, 2),
+            "&&" => (TokKind::AmpAmp, 2),
+            "||" => (TokKind::PipePipe, 2),
             "=>" => (TokKind::FatArrow, 2),
             "==" => (TokKind::EqEq, 2),
             "<=" => (TokKind::LtEq, 2),

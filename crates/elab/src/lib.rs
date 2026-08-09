@@ -4794,41 +4794,48 @@ impl Elaborator {
         {
             return Ok(op);
         }
-        // 3. The symbol's fallback name, resolved as it always was.
-        let Some(fb) = Self::op_fallback(sym) else {
-            return err(format!("`{sym}` is not an operator of this grammar"), span);
-        };
-        if self.lookup_global(fb).is_none()
-            && self.ctor_of(fb).is_none()
-            && !cx.names.iter().any(|n| n == fb)
-            && !cx.aliases.iter().any(|a| a.name == fb)
+        // 3. The symbol's fallback name, resolved as it always was. `&&` and
+        //    `||` have no entry — they postdate the parser's fixed table, so
+        //    there is no old desugaring for the growth invariant to preserve
+        //    (issues/bool-operator-designations.md) — and refuse like a
+        //    fallback whose name is missing, not like a symbol outside the
+        //    grammar.
+        let fb = Self::op_fallback(sym);
+        if let Some(fb) = fb
+            && (self.lookup_global(fb).is_some()
+                || self.ctor_of(fb).is_some()
+                || cx.names.iter().any(|n| n == fb)
+                || cx.aliases.iter().any(|a| a.name == fb))
         {
-            // Reporting "unbound name `add`" would name something the writer
-            // never typed. Say what *was* typed, and what would have to be
-            // true for it to mean something.
-            let known = self
-                .designations
-                .iter()
-                .filter(|((s, _), _)| s == sym)
-                .map(|((_, h), d)| format!("`{h}` (`{}`)", d.op))
-                .collect::<Vec<_>>();
-            let mut known = known;
-            known.sort();
-            return err(
-                format!(
-                    "`{sym}` has no meaning here: no constraint binder named it \
-                     (`<A: Monoid({sym})>`), no `designation {sym} at …` covers this \
-                     carrier, and its fallback name `{fb}` is not in scope. {}",
-                    if known.is_empty() {
-                        format!("`{sym}` designates nothing anywhere in this program")
-                    } else {
-                        format!("`{sym}` designates something at {}", known.join(", "))
-                    }
-                ),
-                span,
-            );
+            return Ok(fb.to_string());
         }
-        Ok(fb.to_string())
+        // Reporting "unbound name `add`" would name something the writer
+        // never typed. Say what *was* typed, and what would have to be
+        // true for it to mean something.
+        let mut known = self
+            .designations
+            .iter()
+            .filter(|((s, _), _)| s == sym)
+            .map(|((_, h), d)| format!("`{h}` (`{}`)", d.op))
+            .collect::<Vec<_>>();
+        known.sort();
+        err(
+            format!(
+                "`{sym}` has no meaning here: no constraint binder named it \
+                 (`<A: Monoid({sym})>`), no `designation {sym} at …` covers this \
+                 carrier, and {}. {}",
+                match fb {
+                    Some(fb) => format!("its fallback name `{fb}` is not in scope"),
+                    None => format!("`{sym}` has no fallback name"),
+                },
+                if known.is_empty() {
+                    format!("`{sym}` designates nothing anywhere in this program")
+                } else {
+                    format!("`{sym}` designates something at {}", known.join(", "))
+                }
+            ),
+            span,
+        )
     }
 
     /// The head of the carrier an operator application is at — rung 2's probe

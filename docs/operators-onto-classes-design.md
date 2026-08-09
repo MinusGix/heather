@@ -461,3 +461,44 @@ was nominated.
 designation at all, which is the growth invariant showing up as a number.
 Suite **1354 → 1375**.
 </content>
+
+## 13. Postscript (2026-08-09): the Boolean spellings `&&`/`||`
+
+Filed the day this round closed and paid the same day
+(issues/bool-operator-designations.md): the library's Bool designations
+shipped as the semiring convention — `+` = or, `*` = and — and the review
+replaced them with the doubled programming spellings. What changed, and what
+it exercised in this design:
+
+- **Two new tokens.** `&&` and `||` lex as two-byte tokens; the single `&`
+  and `|` stay lex errors, deliberately — `|` in particular is reserved
+  against a future or-pattern, and doubling is what keeps the singles
+  unclaimed. This is a fixed-grammar lexicon addition
+  (issues/notation-extensibility.md's axis 1 at its cheapest: new symbols,
+  no new shapes, parsing still context-free).
+- **Precedence: below `+`/`*`, above the comparison rung** — deliberately
+  unlike C, where `&&` is looser than `<=`. The comparison level here is
+  propositional (`=` is the identity type, `<=` is `Le`), so a Boolean
+  operand never wants to contain one, and theorem statements want the
+  arithmetic reading whole: `x && True = x` is `(x && True) = x`, exactly as
+  §5's `x + A.unit = x` already relies on. `&&` binds tighter than `||`.
+- **No fallback rung.** §4's third rung is the parser's old table and nothing
+  else — that is the growth invariant's charter — and the doubles postdate
+  the table, so `op_fallback` has no entry for them: away from a binder or a
+  designation they refuse, the first symbols whose entire meaning is the
+  designation table. The rung-3 refusal learned to say "has no fallback
+  name" for this case instead of mislabeling the symbol as outside the
+  grammar.
+- **The library designates `&& at Bool := and`, `|| at Bool := or`** and the
+  semiring rows are deleted. `sum_all` at `Bool` therefore refuses (`+` means
+  nothing there), the two Bool folds (`any_of`/`all_of`) both name their
+  operations positionally, and the corollaries `bool_and_true`/
+  `bool_or_false` are stated in the new notation. The *mechanism* stays
+  convention-agnostic: the tests keep the semiring rows in their own table
+  (crates/elab/tests/operators_onto_classes.rs), where two symbols at one
+  carrier is the thing under test.
+
+Nothing else moved: both `CommMonoid<Bool>` instances stay registered as
+equals, nothing nominates, and `op_unit_of_comm` is untouched — the review
+was purely about what two symbols mean at one carrier, which is exactly the
+small question §3 built the table to make small. Suite 1375 → 1383.

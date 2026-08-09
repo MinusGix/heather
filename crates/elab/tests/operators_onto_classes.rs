@@ -40,9 +40,16 @@ const NAT: &str = include_str!("../../../lib/std/nat.hthr");
 const OPTION: &str = include_str!("../../../lib/std/option.hthr");
 const LIST: &str = include_str!("../../../lib/std/list.hthr");
 
-/// The test's own chain and instances, plus the four designations the library
-/// declares. `Sem` → `Mon` → `CMon` at one index each, so the upcast machinery
-/// is exercised without the library's names being the thing under test.
+/// The test's own chain and instances, plus its own designation table. `Sem` →
+/// `Mon` → `CMon` at one index each, so the upcast machinery is exercised
+/// without the library's names being the thing under test.
+///
+/// The table keeps the Boolean-semiring rows (`+` = or, `*` = and) the
+/// *library* reviewed out in favour of `&&`/`||`
+/// (issues/bool-operator-designations.md) — deliberately: the mechanism is
+/// convention-agnostic, a designation may put any operation in any symbol at
+/// any carrier, and these tests are what pin that. The doubled symbols are
+/// declared beside them, so one carrier here holds four designated symbols.
 const P: &str = r#"
 class Sem<A>(op: A -> A -> A) {
     assoc: (x: A) -> (y: A) -> (z: A) -> op(op(x, y), z) = op(x, op(y, z)),
@@ -78,6 +85,8 @@ instance<A> Mon<List<A>>(append) {
 designation + at Nat := add
 designation + at Bool := or
 designation * at Bool := and
+designation && at Bool := and
+designation || at Bool := or
 designation<A> + at List<A> := append
 
 fn fold<A: Mon(op)>(op: A -> A -> A, xs: List<A>) -> A {
@@ -481,6 +490,73 @@ fn the_dot_sugars_work_under_a_symbol_binder() {
         }
         fn unit_of<A: CMon(+)>() -> A { A.unit }
     ");
+}
+
+// -- the doubled symbols (issues/bool-operator-designations.md) ------------
+
+/// `&&` and `||` are ordinary symbols in the one table: designated at `Bool`,
+/// they resolve by rung 2 like any other, in computing and checking positions,
+/// at a literal and at a neutral operand, with `&&` binding tighter than `||`
+/// and both looser than `*`.
+#[test]
+fn the_doubled_symbols_resolve_by_designation() {
+    ok("
+        theorem and_notated(x: Bool, y: Bool): x && y = and(x, y) { refl }
+        theorem or_notated(x: Bool, y: Bool): x || y = or(x, y) { refl }
+        // A literal scrutinee, which has to compute all the way.
+        theorem lit(): (True && False) || True = True { refl }
+        // Precedence at the term level: `&&` inside `||`, `*` inside `&&`.
+        theorem prec(x: Bool, y: Bool, z: Bool): x || y && z = or(x, and(y, z)) { refl }
+        theorem prec2(x: Bool, y: Bool, z: Bool): x && y * z = and(x, and(y, z)) { refl }
+    ");
+    // The negative control: the two spellings are not interchangeable.
+    let e = bad("theorem nope(x: Bool, y: Bool): x && y = or(x, y) { refl }");
+    assert!(!e.is_empty(), "{e}");
+}
+
+/// Rung 1 covers the doubles too: a binder may name `&&`, and inside it the
+/// symbol is the bound index at every carrier — including instantiated at
+/// `or`, where the designation at `Bool` says `and` and loses to the binder.
+#[test]
+fn a_binder_can_name_a_doubled_symbol() {
+    ok("
+        fn both<A: Mon(&&)>(x: A, y: A) -> A { x && y }
+        theorem at_and(x: Bool, y: Bool): @both(and, Bool::Mon(and), x, y) = and(x, y) { refl }
+        theorem at_or(x: Bool, y: Bool): @both(or, Bool::Mon(or), x, y) = or(x, y) { refl }
+        // And the bare symbol between delimiters is that binder's index.
+        fn all_such<A: Mon(&&)>(xs: List<A>) -> A { fold(&&, xs) }
+    ");
+}
+
+/// The doubles have **no fallback rung**: they postdate the parser's fixed
+/// table, so there is no old desugaring for the growth invariant to preserve
+/// (the deliberate asymmetry with `+`/`*`/`<=`/`<`). Away from a binder and a
+/// designation they refuse — naming the symbol as written, saying there is no
+/// fallback to be missing, and listing where the symbol *does* mean something.
+#[test]
+fn a_doubled_symbol_has_no_fallback_rung() {
+    // At `Nat`, where nothing designates `&&`: refused, with the `Bool` rows
+    // as data.
+    let e = bad("theorem t(x: Nat, y: Nat): x && y = x { ?p }");
+    assert!(e.contains("`&&` has no meaning here"), "{e}");
+    assert!(e.contains("has no fallback name"), "{e}");
+    assert!(e.contains("`Bool`"), "{e}");
+    assert!(e.contains("bool::and"), "{e}");
+
+    // In a file with no designations anywhere — where `+` still means `add`
+    // by the fallback rung — `&&` means nothing at all, and says so.
+    let Err(e) = bare("
+        fn conj(a: Nat, b: Nat) -> Nat { a }
+        theorem t(x: Nat, y: Nat): x && y = conj(x, y) { refl }
+    ") else {
+        panic!("no designation and no fallback: `&&` must refuse")
+    };
+    assert!(e.contains("designates nothing anywhere"), "{e}");
+
+    // A bare `&&` between delimiters has no operand and so no carrier: only
+    // rung 1 could answer, and without a binder nothing does.
+    let e = bad("theorem c(bs: List<Bool>): fold(&&, bs) = fold(and, bs) { refl }");
+    assert!(!e.is_empty(), "{e}");
 }
 
 /// Unindexed classes are untouched, and so is every operator expression that

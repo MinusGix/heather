@@ -135,6 +135,26 @@ fn the_two_bool_monoids_are_not_interchangeable() {
     assert!(e.contains("wrong2"), "{e}");
 }
 
+/// The library's Boolean spelling is `&&`/`||`, not the semiring's `+`/`*`
+/// (issues/bool-operator-designations.md): the doubled symbols resolve by the
+/// library's designations, and `sum_all` at `Bool` — a `+`-fold — refuses,
+/// because `+` means nothing there any more. The refusal is the review's
+/// content, so it is pinned beside the spelling that replaced it.
+#[test]
+fn the_bool_spelling_is_the_doubled_symbols_not_the_semiring() {
+    ok("
+theorem and_notated(x: Bool, y: Bool): x && y = and(x, y) { refl }
+theorem or_notated(x: Bool, y: Bool): x || y = or(x, y) { refl }
+// The library's own corollaries are stated in this notation
+// (`bool_and_true`/`bool_or_false`); their content is unchanged.
+theorem consumed(x: Bool): or(x, False) = x { bool_or_false(x) }
+");
+    let e = bad("fn any2(bs: List<Bool>) -> Bool { sum_all(bs) }");
+    assert!(!e.is_empty(), "{e}");
+    let e = bad("theorem semiring(x: Bool, y: Bool): x + y = or(x, y) { refl }");
+    assert!(!e.is_empty(), "{e}");
+}
+
 // ---------------------------------------------------------------------------
 // 3. The generic instance, at an element type nobody enumerated.
 

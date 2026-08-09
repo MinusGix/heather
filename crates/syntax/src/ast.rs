@@ -52,7 +52,7 @@ pub struct DesignationDecl {
     /// `designation<A> …` — bound only so that `List<A>` parses. The key is
     /// the carrier's head, so these never reach it.
     pub tyvars: Vec<String>,
-    /// The operator, as written: `+`, `*`, `<=`, `<`.
+    /// The operator, as written: `+`, `*`, `&&`, `||`, `<=`, `<`.
     pub symbol: String,
     pub carrier: Ty,
     /// The designated operation. A **bare global name** (§3.2): it is emitted
@@ -575,7 +575,7 @@ impl Expr {
 pub enum ExprKind {
     /// A name: parameter, `fn`, or `theorem`.
     Var(String),
-    /// An **operator symbol** — `+`, `*`, `<=`, `<`
+    /// An **operator symbol** — `+`, `*`, `&&`, `||`, `<=`, `<`
     /// (docs/operators-onto-classes-design.md §4). A name in a namespace of
     /// its own: `a + b` is this node *applied*
     /// (`App { head: OpSymbol("+"), … }`) and a lone symbol between delimiters

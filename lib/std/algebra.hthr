@@ -14,9 +14,9 @@
 // "the other monoid" under different field names.
 //
 // A `designation` says what an operator SYMBOL means at a carrier
-// (docs/operators-onto-classes-design.md). It is not a nomination: `+` is `or`
-// at `Bool` and `*` is `and`, both monoids still register as equals, and the
-// symbols are what distinguish them. Notice that nothing below is written
+// (docs/operators-onto-classes-design.md). It is not a nomination: `&&` is
+// `and` at `Bool` and `||` is `or`, both monoids still register as equals, and
+// the symbols are what distinguish them. Notice that nothing below is written
 // twice — the symbol is a spelling of the index, so `sum_all` and `mconcat`
 // are one fold reached two ways.
 
@@ -137,17 +137,24 @@ instance Cmp<Bool> { le := leb_bool, le_refl := leb_bool_refl }
 //
 // One entry per (symbol, carrier head); a duplicate is a declaration error.
 // `Bool` is the case worth reading: two operations, two symbols, and the
-// Boolean-semiring convention chooses which is which — `+` is disjunction,
-// `*` is conjunction. Neither is "the" Bool monoid, because a designation says
+// programming spelling chooses which is which — `&&` is conjunction, `||` is
+// disjunction. This file briefly designated the Boolean semiring instead
+// (`+` = or, `*` = and); issues/bool-operator-designations.md is where that
+// convention was reviewed and replaced — `+` at a `Bool` read as a pun, and
+// the doubled symbols say the same thing in the language programmers already
+// speak. Neither entry is "the" Bool monoid, because a designation says
 // what a *symbol* means and never which structure a carrier has.
 //
 // `+` at `Nat` is `add`, which is what the parser hard-coded `+` to mean at
 // every carrier until this round. It is now one row of a table, and the growth
-// invariant is that a file with no row still gets it.
+// invariant is that a file with no row still gets it. `&&` and `||` have no
+// such row to inherit — they postdate the fixed table — so away from a
+// designation or a binder they refuse rather than fall back, which makes
+// these two entries the whole of what the symbols mean.
 
 designation + at Nat := add
-designation + at Bool := or
-designation * at Bool := and
+designation && at Bool := and
+designation || at Bool := or
 
 // The generic entry, at an **open** element type: `xs + ys` is concatenation
 // at every `List<A>`, keyed on the head exactly as `instance<A> Monoid<List<A>>`
@@ -224,10 +231,10 @@ fn or_default<A>(o: Option<A>, d: Default<A> := infer) -> A {
 // operator, and every corollary below still pins it **by unification** from
 // its own goal — one proof, three structures, two of them on one carrier.
 //
-// `bool_and_true` is the case that shows the ladder's order. At `Bool` the
-// symbol `+` designates `or`, and the corollary's goal says `and`: unification
-// is the ladder's first rung, so it wins, and the designation is never
-// consulted. A designation supplies an index nothing else pinned; it never
+// `bool_and_true` is the case that shows the ladder's order. The binder here
+// names `+`, which designates nothing at `Bool` — and is never asked to,
+// because the corollary's own goal says `and` and unification is the ladder's
+// first rung. A designation supplies an index nothing else pinned; it never
 // overrides one.
 theorem op_unit_of_comm<A: CommMonoid(+)>(x: A): x + A.unit = x {
     trans(A.comm(x, A.unit), A.unit_l(x))
@@ -244,23 +251,25 @@ theorem op_unit_of_comm<A: CommMonoid(+)>(x: A): x + A.unit = x {
 // third rung.
 fn sum_all<A: Monoid(+)>(xs: List<A>) -> A { mconcat(+, xs) }
 
-// One declaration, three carriers, and no caller names an operation. The
-// third is at an **open** element type, so its goal is
+// One declaration, two carriers, and no caller names an operation. The
+// second is at an **open** element type, so its goal is
 // `Monoid<List<A>>(append)` with `A` the caller's own parameter, answered by
 // backchaining through `instance<A> Monoid<List<A>>(append)`.
 fn sum(ns: List<Nat>) -> Nat { sum_all(ns) }
 
-fn any_of(bs: List<Bool>) -> Bool { sum_all(bs) }
-
 fn concat<A>(xss: List<List<A>>) -> List<A> { sum_all(xss) }
 
-// And `Bool`'s *other* monoid, reached the way it always was. `all_of` is
-// conjunction, which is the symbol `*` here — there is no `*`-fold, because a
-// second declaration of the same fold under a second symbol is the duplication
-// this whole line of design exists to delete. The positional spelling costs one
-// word and is legal forever (design §4.1), and its existence beside `any_of`
-// is the sentence that nothing was nominated: two structures at one carrier,
-// both registered, both reachable, neither preferred.
+// The `Bool` folds are NOT `sum_all`: `+` means nothing at `Bool` — the
+// semiring designation that once made `any_of` a `+`-fold was reviewed out
+// (issues/bool-operator-designations.md) — so each names its operation
+// positionally, which costs one word and is legal forever (design §4.1).
+// There is no `&&`-fold beside them, because a second declaration of the same
+// fold under a second symbol is the duplication this whole line of design
+// exists to delete; and the pair's existence side by side is the sentence
+// that nothing was nominated: two structures at one carrier, both registered,
+// both reachable, neither preferred.
+fn any_of(bs: List<Bool>) -> Bool { mconcat(or, bs) }
+
 fn all_of(bs: List<Bool>) -> Bool { mconcat(and, bs) }
 
 // The class lemma at two carriers. Neither of these re-proves anything: they
@@ -284,8 +293,15 @@ theorem any_of_single(b: Bool): any_of(Cons(b, Nil)) = b { mconcat_single(or, b)
 // what a law is — so unification pins the index and the ground goal hits the
 // registry key. Two of the three are the same carrier, which is the sentence
 // the additive hierarchy existed to fail to say.
+//
+// The Bool pair is written in the notation: `&&` and `||` in the statements
+// resolve by the designations above — no binder names either symbol here, so
+// the designation at the operand's carrier answers (resolution rung 2), and
+// the goals ARE `and(x, True) = x` and `or(x, False) = x`, spelled the way a
+// programmer reads them. Resolution happens at the statement; the index is
+// then pinned from the resolved goal by unification, exactly as at `Nat`.
 theorem nat_add_zero(x: Nat): add(x, 0) = x { op_unit_of_comm(x) }
 
-theorem bool_and_true(x: Bool): and(x, True) = x { op_unit_of_comm(x) }
+theorem bool_and_true(x: Bool): x && True = x { op_unit_of_comm(x) }
 
-theorem bool_or_false(x: Bool): or(x, False) = x { op_unit_of_comm(x) }
+theorem bool_or_false(x: Bool): x || False = x { op_unit_of_comm(x) }

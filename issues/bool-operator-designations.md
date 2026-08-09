@@ -1,9 +1,13 @@
 ---
 title: Whether + and * should mean or and and at Bool
-status: open
+status: closed
 labels: [stdlib,frontend,design,traits]
 created: 2026-08-09
 updated: 2026-08-09
 ---
 
 User doubt at the operators round's close (2026-08-09): lib/std/algebra.hthr designates +@Bool=or and *@Bool=and — the semiring convention, which some mathematics uses and which reads as weird at a Bool in a programming context. Options, with the coordinator's lean recorded: (i) delete both Bool designations now — the library already writes mconcat(or, bs)/mconcat(and, bs) explicitly, so only sum_all-at-Bool and its tests are touched; (ii) the real answer: || and && as the programming spelling, which is a lexicon extension owned by [[notation-extensibility]] (the operators round deliberately added no tokens), with the Boolean monoids designated there and +/* left to numeric-ish carriers; (iii) keep the semiring convention, documented. Lean: (i) then (ii). Note what does NOT change under any option: both CommMonoid<Bool> instances stay registered as equals, op_unit_of_comm stays generic (its (+) is the bound index's local name, not a designation), and nothing renominates — this is purely a question about what two SYMBOLS mean at one carrier, which is exactly the small question the designation table was built to make small. Trigger: next session touching lib/std or the operators line.
+
+## Log
+
+- 2026-08-09: Resolved as option (ii), built directly rather than waiting on [[notation-extensibility]]: `&&` and `||` land as fixed two-byte tokens (an axis-1 lexicon addition — new symbols, no new shapes, parsing still context-free; bare `&`/`|` stay lex errors so the singles remain unclaimed, `|` reserved against a future or-pattern). Precedence sits below `+`/`*` and ABOVE the comparison rung, deliberately unlike C: the comparison level is propositional here, and theorem statements want `x && True = x` read as `(x && True) = x` exactly as `x + A.unit = x` already relies on. The doubles are the first symbols with NO fallback rung — op_fallback keeps its charter (exactly the parser's old table) and the rung-3 refusal learned to say 'has no fallback name' instead of mislabeling the symbol as outside the grammar. The library designates `&& at Bool := and`, `|| at Bool := or`, deletes the semiring rows, respells any_of positionally (sum_all at Bool now refuses, pinned as a test), and states bool_and_true/bool_or_false in the notation. The mechanism stays convention-agnostic: the operators tests keep semiring rows in their own table where two-symbols-at-one-carrier is the thing under test. Narrative: docs/operators-onto-classes-design.md §13.

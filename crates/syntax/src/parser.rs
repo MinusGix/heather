@@ -580,7 +580,7 @@ impl Parser {
         let Some(sym) = Self::op_symbol(self.peek()) else {
             return self.err(
                 "a designation names an operator (`designation + at Nat := add`): the \
-                 symbols are `+`, `*`, `<=` and `<`. A designation for an ordinary name \
+                 symbols are `+`, `*`, `&&`, `||`, `<=` and `<`. A designation for an ordinary name \
                  is not a form — that is a default instance wearing a smaller hat \
                  (docs/operation-indexed-classes-design.md §9.2)",
             );
@@ -1728,8 +1728,8 @@ impl Parser {
     // -- expressions --------------------------------------------------------
 
     /// Expressions, with infix operators. Precedence, loosest to tightest: the
-    /// **comparison level** ([`Self::comparison`] — `=`, `<=`, `<`), then `+`,
-    /// `*`, then postfix `.method(args)` / calls, then atoms.
+    /// **comparison level** ([`Self::comparison`] — `=`, `<=`, `<`), then
+    /// `||`, `&&`, `+`, `*`, then postfix `.method(args)` / calls, then atoms.
     ///
     /// An operator application is an ordinary [`ExprKind::App`] whose head is
     /// the [`ExprKind::OpSymbol`] that was **written**. It used to be the head
@@ -1871,10 +1871,19 @@ impl Parser {
     /// (docs/operators-onto-classes-design.md §2.1) — the fixed name survives
     /// as that resolver's last rung, so nothing that parsed before this change
     /// elaborates differently.
+    /// `&&` and `||` sit *below* `+`/`*` and *above* the comparison rung —
+    /// deliberately unlike C, where `&&` is looser than `<=`. The comparison
+    /// level here is propositional (`=` is the identity type, `<=` falls back
+    /// to `Le`), so a Boolean operand never wants to contain one, and theorem
+    /// statements want the arithmetic reading: `x && True = x` is
+    /// `(x && True) = x`, exactly as `x + A.unit = x` already relies on
+    /// (issues/bool-operator-designations.md).
     fn infix_op(tok: &TokKind) -> Option<(&'static str, u8, u8)> {
         match tok {
-            TokKind::Plus => Some(("+", 3, 4)),
-            TokKind::Star => Some(("*", 5, 6)),
+            TokKind::PipePipe => Some(("||", 1, 2)),
+            TokKind::AmpAmp => Some(("&&", 3, 4)),
+            TokKind::Plus => Some(("+", 5, 6)),
+            TokKind::Star => Some(("*", 7, 8)),
             _ => None,
         }
     }
@@ -1888,6 +1897,8 @@ impl Parser {
         match tok {
             TokKind::Plus => Some("+"),
             TokKind::Star => Some("*"),
+            TokKind::AmpAmp => Some("&&"),
+            TokKind::PipePipe => Some("||"),
             TokKind::LtEq => Some("<="),
             TokKind::Lt => Some("<"),
             _ => None,
@@ -2727,6 +2738,59 @@ mod tests {
         assert_eq!(name, "+");
         assert_eq!(as_call(&args[0].kind).0, "+");
         assert!(matches!(&args[1].kind, ExprKind::Var(v) if v == "c"));
+    }
+
+    // -- the Boolean operators (issues/bool-operator-designations.md) -------
+
+    #[test]
+    fn boolean_operators_desugar_with_precedence() {
+        // `a || b && c` ⇒ `||`(a, `&&`(b, c)); `&&` binds tighter than `||`,
+        // and both sit below the arithmetic pair: `a || b + c` keeps the sum
+        // whole.
+        let k = body("a || b && c");
+        let (name, args, _) = as_call(&k);
+        assert_eq!(name, "||");
+        assert_eq!(as_call(&args[1].kind).0, "&&");
+        let k = body("a && b || c");
+        let (name, args, _) = as_call(&k);
+        assert_eq!(name, "||");
+        assert_eq!(as_call(&args[0].kind).0, "&&");
+        let k = body("a || b + c");
+        let (name, args, _) = as_call(&k);
+        assert_eq!(name, "||");
+        assert_eq!(as_call(&args[1].kind).0, "+");
+    }
+
+    #[test]
+    fn boolean_operators_bind_tighter_than_equality() {
+        // Unlike C, where `&&` is looser than the comparisons: the comparison
+        // rung here is propositional, and a theorem statement wants the
+        // Boolean reading whole — `x && True = x` is `(x && True) = x`,
+        // exactly as `x + A.unit = x` relies on for `+`.
+        let k = body("x && y = z");
+        let ExprKind::Eq(lhs, rhs) = &k else { panic!("expected `=`, got {k:?}") };
+        assert_eq!(as_call(&lhs.kind).0, "&&");
+        assert!(matches!(&rhs.kind, ExprKind::Var(v) if v == "z"));
+    }
+
+    #[test]
+    fn boolean_symbols_are_designation_references_between_delimiters() {
+        // `f(||, x)` — the lone symbol after `(` is the unapplied
+        // [`ExprKind::OpSymbol`], the same rule `Monoid(+)` reserved.
+        let k = body("f(||, x)");
+        let (name, args, _) = as_call(&k);
+        assert_eq!(name, "f");
+        assert!(matches!(&args[0].kind, ExprKind::OpSymbol(s) if s == "||"));
+    }
+
+    #[test]
+    fn bare_single_amp_and_pipe_stay_lex_errors() {
+        // The single characters are deliberately unclaimed (`|` is reserved
+        // against a future or-pattern); only the doubled spellings lex.
+        for src in ["fn f() -> Bool { a & b }", "fn f() -> Bool { a | b }"] {
+            let e = parse_file(src).unwrap_err();
+            assert!(e.msg.contains("unexpected character"), "{src}: {}", e.msg);
+        }
     }
 
     // -- the comparison level (issues/comparison-operators.md) --------------
