@@ -3,7 +3,7 @@ title: Operation-indexed classes: Monoid<A>(op) — the structure names its oper
 status: open
 labels: [frontend,elaboration,design,traits,stdlib]
 created: 2026-08-07
-updated: 2026-08-08
+updated: 2026-08-09
 ---
 
 User insight 2026-08-07, from the add-vs-mul coherence discussion: 'kinda makes me think Monoid<R> is really Monoid<R, Op>'. The repo's own precedent is [[compile-typeclass-design]]'s `record CompileNat2(f: Nat -> Nat -> Nat)` (lib/ir_v1.hthr:1146) — a class ABOUT a value carries that value as a parameter, so 'which f is this an instance for' is kernel-checked. Applied to algebra: `class Monoid<A>(op: A -> A -> A) { unit: A, assoc: …, … }` — the operation moves from field to index; only unit and the proofs remain fields.
@@ -12,16 +12,18 @@ User insight 2026-08-07, from the add-vs-mul coherence discussion: 'kinda makes 
 
 **What it costs**: (1) A consumer that today says 'give me THE monoid' (`mconcat<A> requires Monoid<A>`) becomes `mconcat<A>(op) requires Monoid<A>(op)` — a goal `Monoid<Nat>(?op)` is ambiguous BY DESIGN (add and mul both answer), so op must arrive from the caller, an argument or a default. This is the modes question wearing algebra clothes: op wants to be an INPUT position. (2) The (class, carrier-head) registry key cannot hold two instances at one head — value indices need the key extended by a spellable op name (a named-value discipline: the index must be a global reference, not an arbitrary term?) or the full-key work. (3) Resolution keying on a VALUE up to conversion — which layer 2's trial-based selection (build + kernel-check) already does by construction; the trial route is accidentally future-proof here.
 
-**The likely synthesis, not yet decided**: two class styles for two directions of information flow, both over the same record substrate — indexed `Monoid<A>(op)` for theory (no coherence problem, op flows IN), and bundled/canonical classes (today's `Monoid<A>`, or a thin wrapper with a dependent field pair) for 'the default structure' consumers where the registry's coherence policy is the point. Lean has the same split (bundled Monoid vs Std.Associative-style predicate classes); ours can be honest about it because dictionaries are ordinary values and record value-parameters already exist.
+**DECIDED (design pass, 2026-08-09)**: docs/operation-indexed-classes-design.md. The synthesis this paragraph used to predict (two class styles, indexed beside bundled) is superseded by the doc's §9.1 — the indexed class is the ONLY law-bearing form, there is no bundled companion and no default instances, and value slots fill by unification/scope/named-designation or are refused by name. The costs paragraph above resolved as: (1) the modes question narrows to a fixed rule (value slots are input-moded, doc §5); (2) the key extends by the spellable index (doc §3.1); (3) the trial route is the conversion fallback behind a keyed fast path, as predicted.
 
 ## What it assumes from elsewhere
 - **[[traits]]** owns the class/instance forms and the resolver. Assumed: classes gain value parameters the way records already have them; overlap/keying extends to value indices.
 - **[[compile-typeclass-design]]** owns the CompileNat2 precedent. Assumed: only that the pattern stays 'index by the value the class is about'.
-- **Modes** (traits layer-2 residue) own the input/output discipline this makes load-bearing.
+- **Modes** (traits layer-2 residue) own the input/output discipline; the design pass narrows this issue's need to the fixed input-mode rule (doc §12).
 
 ## When
-A design pass before the operators round would be ideal — operators want to know whether `Add` feeds bundled or indexed structure. Not scheduled.
+Design pass done 2026-08-09. **Remaining here: implementing round one per the doc's §13** (indexed classes end to end, the library migration, the acceptance list). The diamond round (§8/§13) is demand-scheduled; designations and `Monoid(+)` belong to the operators round (doc §7). The issue stays open until round one lands.
 
 ## Log
 
 - 2026-08-08: Boundary recorded by the type-projection round (docs/traits-type-projection-design.md §6), not decided: T.f at a value-indexed class would build C<T>(?op) — a meta in a value slot, ambiguous by design — so it is the same shape as the multi-parameter narrowing and should be REFUSED BY NAME when value indices land; the params.len()==1 filter gains a value-index test and inherits that diagnostic. Nothing in the projection design assumes one parameter in general. Also relevant when this designs: T::C takes no arguments, so an indexed class has no short dictionary spelling either (noted on [[traits]]).
+- 2026-08-09: Design pass DONE (docs/operation-indexed-classes-design.md, user-agreed 2026-08-09): op moves from field to index and the indexed class is the ONLY law-bearing form — no bundled companion, no default instances (both drafted and rejected, doc §9, the latter on the user's call: defaults keep the nomination question alive; the ladder deletes it). Constraint binders bind indices under their declared names (§4), value slots fill by unification/scope/named-designation and are otherwise refused by name (§5), registry key extends to (class, carrier, index-spelling) with conversion fallback (§3.1). The likely-synthesis prediction in this issue's body is superseded: one class form, per-class opt-in via value parameters. T.f's boundary softens from refuse-only to scope-then-refuse; T::C gains arguments (Nat::Monoid(add)). Designation table + Monoid(+) binder specified as the operators round's interface (§7); the diamond gets qualified flattening as direction, demand-scheduled (§8). Implementing round one's acceptance list is doc §13.
+- 2026-08-09: Body rewritten to the decision; open on purpose — implementing round one (doc §13) is what remains here.

@@ -3,7 +3,7 @@ title: "Meta: frontend roadmap and current focus"
 status: open
 labels: [frontend,meta]
 created: 2026-07-23
-updated: 2026-08-08
+updated: 2026-08-09
 ---
 
 Organizing issue for the frontend push (the frontend-first route,
@@ -274,3 +274,4 @@ date; the originals are in `git log --follow issues/frontend-roadmap.md`.
 - 2026-08-08: The traits-line order's first round landed: owner-keyed dispatch + scope upcast ([[inherited-members-undispatchable]] closed, docs/traits-owner-dispatch-design.md; suite 1295 -> 1299). Next per the 2026-08-07 order: type-level dot projection ([[requires-placement-syntax]] candidate 23), now unblocked.
 - 2026-08-08: The traits-line order's second round landed: type-level dot projection ([[requires-placement-syntax]] candidate 23; docs/traits-type-projection-design.md; suite 1299 -> 1326; five of six constrained library declarations anonymous). Filed off it: [[upcast-assembly-cost-at-open-carriers]] (0.7 s -> 25 s on plus_zero_of_comm, and a new entry on the requires-removal ledger). Next per the order: the [[operation-indexed-classes]] design pass, then operators-onto-classes.
 - 2026-08-08: Perf interlude on the traits line, both rounds today: diagnosis then fix of [[upcast-assembly-cost-at-open-carriers]] (closed) — dispatched projections read through the upcast, plus_zero_of_comm anonymous at 0.948 s vs 35.9 s, suite 1326 -> 1328; docs/traits-named-upcast-design.md records the built-and-withdrawn Ψ-mint alternative. Perf accounting: this was the session's deliberate perf round. The order resumes at the [[operation-indexed-classes]] design pass.
+- 2026-08-09: The traits-line order's third entry is done as a design pass: [[operation-indexed-classes]] designed with the user (docs/operation-indexed-classes-design.md) — indexed classes as the only law-bearing form, no bundled companion and no default instances, value slots filled by unification/scope/named-designation or refused. Implementing round one per doc §13 is next on this line; the operators round consumes doc §7 (designations, Monoid(+)).
