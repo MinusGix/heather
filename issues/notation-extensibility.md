@@ -3,7 +3,7 @@ title: "Notation: how open, and open along which axis"
 status: open
 labels: [frontend, syntax, design]
 created: 2026-07-24
-updated: 2026-07-24
+updated: 2026-08-09
 ---
 
 [[surface-syntax]] states the position as "a **fixed grammar** of common
@@ -303,3 +303,4 @@ Related: [[front-end-sugar]] (what the sugar layer must cover),
   forms removed from the notation problem entirely. Package-metadata-declared
   notation declined, with per-file lexical `use notation` as the least-bad
   fallback if it is ever wanted.
+- 2026-08-09: The || / && question gained a customer: [[bool-operator-designations]] records the doubt about +/* meaning or/and at Bool, with the double-symbol spelling as its likely real answer — the lexicon extension would land here.
