@@ -1,9 +1,9 @@
 ---
 title: scripts/test inherits cargo's cross-target fail-fast, hiding co-failing tests
-status: open
+status: closed
 labels: [testing,tooling]
 created: 2026-08-06
-updated: 2026-08-06
+updated: 2026-08-09
 ---
 
 Noticed during [[branch-telescope-type-motive-level-slots]]'s polarity
@@ -23,3 +23,12 @@ the right cut); or leave it and note the behaviour in the script's header.
 
 The next time a polarity check or red-suite triage is misread because of
 the abort; or the next `scripts/test` edit for any reason.
+
+## Log
+
+- 2026-08-09: Implemented the fast-lane cut: `scripts/test --fast` now passes
+  Cargo `--no-fail-fast`, so all test binaries run and report their failures
+  while the two expensive whole-library acceptance tests remain skipped. The
+  full lane deliberately retains Cargo's fail-fast behavior and its existing
+  final-verification cost. The Cargo flag is kept before caller arguments so
+  it cannot accidentally land after the test-harness `--` separator.

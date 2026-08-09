@@ -11,14 +11,18 @@
 # --fast skips the two whole-library acceptance tests that dominate wall
 # time (issues/suite-wall-time-two-tests.md; measured 2026-08-05 at 120 and
 # 160 CPU-s, ~80% of a full run) — the inner loop while iterating. The
+# fast lane also disables Cargo's cross-target fail-fast, so a red run shows
+# every failing test binary while the expensive acceptance tests stay skipped.
 # default runs everything: a round's FINAL verification, and anything that
 # touches lib/, the kit, or the generators, must be a plain `scripts/test`.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
 SKIP=()
+TEST_ARGS=()
 if [[ "${1:-}" == --fast ]]; then
   shift
+  TEST_ARGS=(--no-fail-fast)
   # By exact test-fn name; `cargo test -- --skip` applies the filter in
   # every test binary, where these names are unique. If the caller already
   # passed a `--`, don't add a second one.
@@ -39,4 +43,4 @@ cargo test --workspace --no-run --quiet
 # total address space.
 ulimit -v 4194304
 ulimit -t 300
-RUST_MIN_STACK=8388608 RUST_TEST_THREADS=2 exec cargo test --quiet "$@" "${SKIP[@]}"
+RUST_MIN_STACK=8388608 RUST_TEST_THREADS=2 exec cargo test --quiet "${TEST_ARGS[@]}" "$@" "${SKIP[@]}"
