@@ -1,6 +1,7 @@
 # Operation-indexed classes: design record — `Monoid<A>(op)`
 
-Status: **design pass**, the third entry in the traits-line order agreed at
+Status: **round one implemented** (2026-08-09; §14 records what implementing
+it corrected). Designed as the third entry in the traits-line order agreed at
 session close 2026-08-07 (`issues/frontend-roadmap.md`), designed with the user
 2026-08-09. Owner: `issues/operation-indexed-classes.md`. Constraints:
 `docs/traits-design.md` (classes are parameterized records; the canonical-value
@@ -615,6 +616,112 @@ current library declaration needs two ops.
 **Round three — designations and operators** (§7): owned by the
 operators-onto-classes round per the standing order; this document is its
 input, not its schedule.
+
+## 14. What implementing this corrected (round one, 2026-08-09)
+
+Eight findings, in the order they bit. None of them changes §2's sentence;
+five of them change how a section of this document has to be read.
+
+### 14.1 The empty slot's supply form is not `@` (§4.1)
+
+§4.1 offers the `@`-form as "the interim escape until named arguments land".
+It is one, but at a price the section does not name: `@` suppresses **all**
+implicit insertion, so supplying an empty slot's index by hand also means
+writing the dictionary — `@twice(and, Bool::Monoid(and), x)`. That is legal
+and pinned as a test, and it is also the strongest argument the round found
+for §4.1's own style rule (*programs link their index*): the linked slot
+is not merely tidier than the escape, it is the only spelling a program can
+use without naming a dictionary. `issues/named-arguments.md` remains the
+mechanism that fixes this, unchanged.
+
+### 14.2 The keyed fast path is a *declaration-side* key (§3.1)
+
+§3.1 describes two lookup lanes — a syntactic match on the index, with layer
+2's trial as the fallback. What shipped is the key on the **declaration**
+side only: two instances at one (class, carrier-head, index-spelling) are the
+duplicate error, two at different indices coexist, and *lookup* is layer 2's
+existing trial, kernel-gated per candidate. The reason is that a goal is a
+kernel `Type` and the index inside it is a term, so there is nothing to match
+syntactically without a reverse-engineering of the lowered record that the
+resolver has no business doing. The behaviour §13 item 5 asks for is intact —
+an alias and an eta-expansion find the instance, a genuinely different
+operation does not — because the trial *is* the conversion route. What is lost
+is §11's "matched by conversion" trace word: the trace instead names **each
+candidate's index** (`candidate: Bool::Monoid#bool#or (index `bool::or`)`),
+which is the same observability from the other end and is pinned as a test.
+A syntactic lane remains available the day a measurement wants it.
+
+### 14.3 The canonical derived table does not fire for indexed goals (§6)
+
+§6 says the design adds no conversion the current machinery does not perform.
+True, but it *removes* a sharing: layer 2's canonical derived table
+(`docs/traits-layer2-design.md` §8) never mints for a goal with a value index.
+The index is a term in the goal type, and a term elaborated at a use site
+carries that site's identity substitution, so the table's closedness test —
+asked of the kernel in the empty context, which is where a minted global has
+to live — says no. Two use sites of `mconcat(append, …)` at one carrier each
+inline their own derivation where they used to share one. It costs sharing and
+never correctness (the table's own standing bargain), and the migrated
+`algebra.hthr` checks in 0.42 s against 1.83 s before, so nothing is waiting on
+it; pinned as a test that states the fact rather than hiding it, and left for
+the coordinator to file if it is worth an issue. `strengthen_ty` was tried and
+does not help: a global reference under an identity substitution does not
+survive the strengthening round-trip.
+
+### 14.4 A value parameter's type was elaborated in the wrong context
+
+A latent defect this design was the first to reach. `record R(p: Prog)`'s
+value-parameter types are closed, so nothing noticed that
+`Elaborator::valparam_args` elaborated a declared parameter type in the *use
+site's* context with the declaration's type parameters unbound.
+`class Monoid<A>(op: A -> A -> A)` is the first declaration whose value
+parameter's type mentions a type parameter, and it reported `unknown type A`
+at the class head from every instance. Fixed by binding the type parameters at
+the instantiation, exactly as `lower_ctor` already did for field types. This
+is `docs/testing-generated-terms.md`'s axis 2 again — a closed type hid a
+scoping bug — and the axis was **unwritable** until value parameters could
+mention a type parameter, which is the fifth time that has been the finding.
+
+### 14.5 The `extends` index is restricted the way the `extends` type argument is
+
+§3 says a single-op chain "passes its own index up unchanged" without saying
+what the grammar admits. Implemented as the exact analogue of layer 1's
+type-argument restriction: an `extends` index argument must be one of the
+**child's own value parameters**, by name. That keeps instantiating a parent a
+rename rather than a substituting walk — the property layer 1 §3 exists to
+preserve — and it refuses `extends Monoid<A>(f(op))` by name, pointing at §8
+as where a parent at a *computed* index belongs. Nothing in §8 is prejudged.
+
+### 14.6 Dispatch and projection at a concrete carrier are now refusals
+
+§5.1's "scope, then refuse" is stated over the sugars in the abstract; what it
+means in practice is worth writing down, because it is the round's one visible
+regression in ergonomics. At a **concrete** carrier an indexed class has no
+scope binder, so `x.assoc(y, z)` and `Bool.unit` are refused — where the
+unindexed `Monoid` answered them from the registry. The refusal names the
+spelling that works (`Bool::Semigroup(and).assoc`), and the library needed no
+such use, but every concrete-carrier receiver call on an indexed class is a
+migration. The unindexed classes (`Default`, `Cmp`) are untouched, and the
+growth-invariant test says so.
+
+### 14.7 The bare-name uniqueness rule needed a place to hang its refusal
+
+§5.2 says a bare `op` under two same-class constraints is "refused naming
+both". Implemented by binding the repeated class's index under an unspellable
+name and recording the refusal *per declaration*, consulted at exactly the
+point where the answer would otherwise have been `unbound name`. That is the
+only new state the rule needs, and it is per-declaration rather than global.
+
+### 14.8 Three residues this round leaves
+
+- The canonical derived table at indexed goals (§14.3).
+- The syntactic lane of §3.1 (§14.2), available and unbuilt.
+- A `let`-bound dictionary answers the ladder's step 2 only when it carries a
+  written class-type **annotation**; an inferred one is invisible to the
+  index lookup. The library no longer needs the `let`-shadow trick, so nothing
+  is waiting on it.
+
+---
 
 Sequencing note: round one supersedes
 `docs/traits-type-projection-design.md` §6's refuse-only boundary (per §5.1)

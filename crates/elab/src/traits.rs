@@ -31,6 +31,11 @@ pub(crate) struct ClassInfo {
     pub name: String,
     /// Type-parameter names, in order.
     pub params: Vec<String>,
+    /// `class Monoid<A>(op: A -> A -> A)` — the declared **value indices**
+    /// (docs/operation-indexed-classes-design.md §3), types written in terms
+    /// of `params`. Empty for an unindexed class. Their names are what a
+    /// constraint binder binds the index under (§4).
+    pub valparams: Vec<Param>,
     /// The **flattened** field list — ancestors first, in `ancestors` order,
     /// then the class's own — deduped by name (design §3). This is exactly the
     /// record's field list, so a field's index here is its projection index.
@@ -54,6 +59,11 @@ pub(crate) struct InstanceInfo {
     pub global: String,
     /// The instance head as written, for diagnostics (`Monoid<Rat>`).
     pub written: String,
+    /// The **index spelling** this instance is keyed at
+    /// (docs/operation-indexed-classes-design.md §3.1) — the resolved global
+    /// key of each index argument, joined. Empty at an unindexed class. It is
+    /// part of the registry key and it is what a value-slot refusal lists.
+    pub index: String,
     /// `true` when the instance takes parameters (generic instance or
     /// `requires` binders), in which case it cannot be projected from by name
     /// alone — fill-by-reference is refused against it with a clear message.
@@ -62,8 +72,23 @@ pub(crate) struct InstanceInfo {
 
 /// The key an instance is registered under. Deliberately *not* the rendered
 /// carrier: see design §4.1 and §7.1.
-pub(crate) fn instance_key(class_key: &str, head: &str) -> (String, String) {
-    (class_key.to_string(), head.to_string())
+///
+/// The third component is the **index spelling**
+/// (docs/operation-indexed-classes-design.md §3.1): two instances at one key
+/// are the duplicate-declaration error they always were, two at different
+/// indices coexist as equals. Empty at an unindexed class, so every key that
+/// predates value indices is unchanged.
+pub(crate) type InstKey = (String, String, String);
+
+pub(crate) fn instance_key(class_key: &str, head: &str, index: &str) -> InstKey {
+    (class_key.to_string(), head.to_string(), index.to_string())
+}
+
+/// The index spelling as a *name* fragment: a key may contain `::` (a
+/// resolved global's qualifier) and a declaration name must not, since one
+/// `::` is a member qualifier and two are refused.
+fn name_suffix(index: &str) -> String {
+    index.replace("::", "#").replace(", ", "#")
 }
 
 /// The head name of a surface type — the carrier's constructor, which is what
@@ -92,6 +117,23 @@ pub(crate) fn render_ty(t: &Ty) -> String {
         TyKind::Eq(a, b) => format!("{} = {}", render_expr(a), render_expr(b)),
         TyKind::Vec { elem, .. } => format!("[{}; _]", render_ty(elem)),
         TyKind::Fin(_) => "Fin(_)".into(),
+        // `Monoid<A>(op)` — a class at its index, which arrives applied
+        // (docs/operation-indexed-classes-design.md §3). Rendering it as `_`
+        // would empty out every diagnostic the indexed classes produce.
+        TyKind::OfExpr(e) => match &e.kind {
+            ExprKind::App { head, args, .. } => {
+                let h = match &head.kind {
+                    ExprKind::TyApp { head, args } => format!(
+                        "{}<{}>",
+                        render_expr(head),
+                        args.iter().map(render_ty).collect::<Vec<_>>().join(", ")
+                    ),
+                    _ => render_expr(head),
+                };
+                format!("{h}({})", args.iter().map(render_expr).collect::<Vec<_>>().join(", "))
+            }
+            _ => render_expr(e),
+        },
         _ => "_".into(),
     }
 }
@@ -99,7 +141,7 @@ pub(crate) fn render_ty(t: &Ty) -> String {
 /// The written form of the few expression shapes that appear inside a *type*
 /// worth displaying — an equation's endpoints. Anything larger renders as
 /// `_`: this is a diagnostic's display, and nothing keys on it.
-fn render_expr(e: &Expr) -> String {
+pub(crate) fn render_expr(e: &Expr) -> String {
     match &e.kind {
         ExprKind::Var(n) => n.clone(),
         ExprKind::Num(n) => n.to_string(),
@@ -113,8 +155,13 @@ fn render_expr(e: &Expr) -> String {
     }
 }
 
-fn class_ref_written(r: &ClassRef) -> String {
-    format!("{}<{}>", r.name, r.args.iter().map(render_ty).collect::<Vec<_>>().join(", "))
+pub(crate) fn class_ref_written(r: &ClassRef) -> String {
+    let head =
+        format!("{}<{}>", r.name, r.args.iter().map(render_ty).collect::<Vec<_>>().join(", "));
+    if r.index.is_empty() {
+        return head;
+    }
+    format!("{head}({})", r.index.iter().map(render_expr).collect::<Vec<_>>().join(", "))
 }
 
 fn span_expr(kind: ExprKind, span: Span) -> Expr {
@@ -306,6 +353,72 @@ fn rename_block(m: &Ren, b: &Block) -> Block {
     }
 }
 
+/// A class's declared index type, at the constraint's arguments: the class's
+/// type parameters replaced by the types the constraint applies it to. A
+/// substitution rather than [`rename_ty`]'s rename, because a constraint may
+/// name a *composite* carrier (`requires m: Monoid<List<A>>(append)`).
+fn subst_ty(m: &HashMap<String, Ty>, t: &Ty) -> Ty {
+    if let TyKind::Named { name, args } = &t.kind
+        && args.is_empty()
+        && let Some(a) = m.get(name)
+    {
+        return a.clone();
+    }
+    let ren: Ren = Ren::new();
+    let kind = match &t.kind {
+        TyKind::Named { name, args } => TyKind::Named {
+            name: name.clone(),
+            args: args.iter().map(|a| subst_ty(m, a)).collect(),
+        },
+        TyKind::Fn { binder, implicit, dom, cod } => TyKind::Fn {
+            binder: binder.clone(),
+            implicit: *implicit,
+            dom: Box::new(subst_ty(m, dom)),
+            cod: Box::new(subst_ty(m, cod)),
+        },
+        TyKind::Vec { elem, len } => TyKind::Vec {
+            elem: Box::new(subst_ty(m, elem)),
+            len: len.clone(),
+        },
+        // Every other shape's payload is a term, and a class's index type is a
+        // type expression: `rename_ty`'s walk with an empty map is the identity
+        // and keeps this total without a wildcard clone.
+        _ => return rename_ty(&ren, t),
+    };
+    Ty { kind, span: t.span }
+}
+
+/// Does this written type mention `name` as a bare variable? Used only to spot
+/// the dependency cycle a linked index can close.
+fn ty_mentions(t: &Ty, name: &str) -> bool {
+    ty_var_count(t, name) > 0
+        || match &t.kind {
+            TyKind::Eq(a, b) => expr_mentions(a, name) || expr_mentions(b, name),
+            TyKind::OfExpr(e) => expr_mentions(e, name),
+            TyKind::Fn { dom, cod, .. } => ty_mentions(dom, name) || ty_mentions(cod, name),
+            TyKind::Named { args, .. } => args.iter().any(|a| ty_mentions(a, name)),
+            _ => false,
+        }
+}
+
+fn expr_mentions(e: &Expr, name: &str) -> bool {
+    match &e.kind {
+        ExprKind::Var(n) => n == name,
+        ExprKind::App { head, args, .. } => {
+            expr_mentions(head, name) || args.iter().any(|a| expr_mentions(a, name))
+        }
+        ExprKind::TyApp { head, args } => {
+            expr_mentions(head, name) || args.iter().any(|a| ty_mentions(a, name))
+        }
+        ExprKind::Dot { recv, args, .. } => {
+            expr_mentions(recv, name)
+                || args.iter().flatten().any(|a| expr_mentions(a, name))
+        }
+        ExprKind::Eq(a, b) => expr_mentions(a, name) || expr_mentions(b, name),
+        _ => false,
+    }
+}
+
 /// The size of a written type: type constructors and variable occurrences,
 /// counted the same way on both sides of the decrease check (§6). Only the
 /// *comparison* is meaningful, so a coarse walk is the honest one — anything
@@ -363,6 +476,7 @@ impl Elaborator {
                 let a = ClassRef {
                     name: a.name.clone(),
                     args: a.args.iter().map(|t| rename_ty(&rename, t)).collect(),
+                    index: a.index.iter().map(|e| rename_expr(&rename, e)).collect(),
                     span: parent.span,
                 };
                 if !ancestors.iter().any(|x| x.name == a.name) {
@@ -373,6 +487,7 @@ impl Elaborator {
                 ancestors.push(ClassRef {
                     name: parent.name.clone(),
                     args: parent.args.clone(),
+                    index: parent.index.clone(),
                     span: parent.span,
                 });
             }
@@ -433,7 +548,7 @@ impl Elaborator {
         let ind = InductiveDecl {
             name: d.name.clone(),
             params: d.params.clone(),
-            valparams: Vec::new(),
+            valparams: d.valparams.clone(),
             ctors: vec![ctor],
             is_record: true,
             index: None,
@@ -453,12 +568,52 @@ impl Elaborator {
         let info = ClassInfo {
             name: d.name.clone(),
             params: d.params.clone(),
+            valparams: d.valparams.clone(),
             fields,
             ancestors,
             owner,
         };
         self.classes.insert(qkey(&self.scope.module, &d.name), Rc::new(info));
         Ok(())
+    }
+
+    /// The **index spelling** of an instance head
+    /// (docs/operation-indexed-classes-design.md §3.1): each index argument's
+    /// resolved global key, joined. This is a *key*, computed from the
+    /// declaration alone, which is why the shapes it admits are exactly the
+    /// ones a name can be read off — a global reference, possibly applied to
+    /// the instance's own type parameters. An arbitrary λ is refused here, and
+    /// the alternative is stated: a structure built from an unnamed operation
+    /// is what scope is for.
+    fn index_spelling(&self, cref: &ClassRef, class: &ClassInfo) -> R<String> {
+        let mut parts = Vec::with_capacity(cref.index.len());
+        for (p, a) in class.valparams.iter().zip(cref.index.iter()) {
+            let head = match &a.kind {
+                ExprKind::Var(n) => Some(n),
+                ExprKind::TyApp { head, .. } => match &head.kind {
+                    ExprKind::Var(n) => Some(n),
+                    _ => None,
+                },
+                _ => None,
+            };
+            let Some(n) = head else {
+                return err(
+                    format!(
+                        "the index `{}` of this instance is not spellable: `{}` must be a \
+                         global reference (possibly at this instance's own type \
+                         parameters), because the registry key is computed from the \
+                         declaration alone (docs/operation-indexed-classes-design.md \
+                         §3.1). A structure built from an unnamed operation is a `let`-bound \
+                         value, found by scope rather than registered",
+                        p.name,
+                        render_expr(a)
+                    ),
+                    a.span,
+                );
+            };
+            parts.push(self.key_of(n).unwrap_or_else(|| n.clone()));
+        }
+        Ok(parts.join(", "))
     }
 
     /// A parent class reference, resolved, with the renaming that instantiates
@@ -503,6 +658,53 @@ impl Elaborator {
             };
             rename.insert(p.clone(), arg);
         }
+        // The parent's **index**, at the child's own spelling
+        // (docs/operation-indexed-classes-design.md §3): a single-op chain
+        // passes its index up unchanged, so an `extends` index argument is
+        // restricted exactly as an `extends` type argument is — to one of the
+        // child's own value parameters — which keeps instantiating the parent
+        // a rename rather than a substitution.
+        if info.valparams.len() != parent.index.len() {
+            return err(
+                format!(
+                    "`{}` takes {} index argument(s), {} given: write `extends {}<…>({})`",
+                    parent.name,
+                    info.valparams.len(),
+                    parent.index.len(),
+                    parent.name,
+                    info.valparams.iter().map(|p| p.name.as_str()).collect::<Vec<_>>().join(", ")
+                ),
+                parent.span,
+            );
+        }
+        for (p, a) in info.valparams.iter().zip(parent.index.iter()) {
+            let ExprKind::Var(n) = &a.kind else {
+                return err(
+                    format!(
+                        "an `extends` index must be one of `{}`'s own value parameters \
+                         (`{}`), and `{}` is not: a chain passes its index up unchanged, \
+                         and a parent at a *computed* index is the diamond \
+                         (docs/operation-indexed-classes-design.md §8), not this form",
+                        d.name,
+                        d.valparams.iter().map(|p| p.name.as_str()).collect::<Vec<_>>().join(", "),
+                        render_expr(a)
+                    ),
+                    a.span,
+                );
+            };
+            if !d.valparams.iter().any(|q| q.name == *n) {
+                return err(
+                    format!(
+                        "`{n}` is not a value parameter of `{}`: an `extends` index must be \
+                         one of the child's own (`{}`)",
+                        d.name,
+                        d.valparams.iter().map(|p| p.name.as_str()).collect::<Vec<_>>().join(", ")
+                    ),
+                    a.span,
+                );
+            }
+            rename.insert(p.name.clone(), n.clone());
+        }
         Ok((info, rename))
     }
 
@@ -527,6 +729,255 @@ impl Elaborator {
         self.classes.get(&self.key_of(name)?).cloned()
     }
 
+    /// A parameter's type read as a **class reference**: the class's name, its
+    /// type arguments, and its written index arguments. Both spellings — the
+    /// unindexed `Named` one and the applied `OfExpr` one
+    /// [`heather_syntax::class_ty`] builds — read back through here, so no
+    /// consumer has to know which it is holding.
+    pub(crate) fn class_ref_of_ty(&self, t: &Ty) -> Option<ClassRef> {
+        match &t.kind {
+            TyKind::Named { name, args } if self.lookup_class(name).is_some() => Some(ClassRef {
+                name: name.clone(),
+                args: args.clone(),
+                index: Vec::new(),
+                span: t.span,
+            }),
+            TyKind::OfExpr(e) => {
+                let ExprKind::App { head, args, .. } = &e.kind else { return None };
+                let (name, targs) = crate::inductive::named_head(head)?;
+                self.lookup_class(name)?;
+                Some(ClassRef {
+                    name: name.to_string(),
+                    args: targs.to_vec(),
+                    index: args.clone(),
+                    span: t.span,
+                })
+            }
+            _ => None,
+        }
+    }
+
+    /// The constraint binders' desugaring
+    /// (docs/operation-indexed-classes-design.md §4, §4.1).
+    ///
+    /// At an **indexed** class a solver parameter with an EMPTY index slot
+    /// grows the index binders in front of it, under the class's own declared
+    /// parameter names — so the body writes `op` as an ordinary variable and
+    /// the operation rides exactly the machinery the carrier type rides. A
+    /// LINKED slot (`<A: Monoid(op)>`) binds nothing and instead floats the
+    /// dictionary binder past the parameters it names, which is the whole of
+    /// the forward-reference license: only a constraint's index slot, only into
+    /// its own declaration's parameter list, written order still authoritative
+    /// for every positional call site and every diagnostic.
+    ///
+    /// A no-op for every declaration with no indexed-class constraint, which is
+    /// every declaration written before this grammar existed.
+    #[allow(clippy::type_complexity)]
+    pub(crate) fn expand_constraints(
+        &self,
+        decl: &Decl,
+    ) -> R<Option<(Vec<Param>, Vec<(String, String)>)>> {
+        let mut refs: Vec<Option<ClassRef>> = Vec::with_capacity(decl.params.len());
+        let mut indexed = false;
+        for p in &decl.params {
+            let r = p.solver.is_some().then(|| self.class_ref_of_ty(&p.ty)).flatten();
+            indexed |= r
+                .as_ref()
+                .and_then(|r| self.lookup_class(&r.name))
+                .is_some_and(|c| !c.valparams.is_empty());
+            refs.push(r);
+        }
+        if !indexed {
+            return Ok(None);
+        }
+        // Which classes appear more than once among the constraints: §5.2's
+        // uniqueness rule, decided before any binder is named.
+        let mut repeated: Vec<String> = Vec::new();
+        for (i, r) in refs.iter().enumerate() {
+            let Some(r) = r else { continue };
+            if refs[..i].iter().flatten().any(|q| q.name == r.name) {
+                repeated.push(r.name.clone());
+            }
+        }
+        // §5.2: the bare declared index name binds only when its class appears
+        // once in the constraint list. Where it does not, the name is bound by
+        // nothing and a bare use is refused *naming both constraints* — which
+        // is a better answer than "unbound name" for a name the reader has
+        // every reason to expect.
+        let mut ambiguous: Vec<(String, String)> = Vec::new();
+        for c in &repeated {
+            let Some(class) = self.lookup_class(c) else { continue };
+            let at = refs
+                .iter()
+                .flatten()
+                .filter(|r| r.name == *c)
+                .map(class_ref_written)
+                .collect::<Vec<_>>()
+                .join("` and `");
+            for v in &class.valparams {
+                ambiguous.push((
+                    v.name.clone(),
+                    format!(
+                        "`{}` is the index of `{c}`, and `{c}` constrains this \
+                         declaration twice (`{at}`): the bare name binds only where the \
+                         class appears once. Link each index to a parameter \
+                         (`<A: {c}({}1) + {c}({}2)>`) and write the one you mean",
+                        v.name, v.name, v.name
+                    ),
+                ));
+            }
+        }
+        let mut out: Vec<Param> = Vec::new();
+        // Where each written parameter ended up, so the float below can be
+        // stated over positions rather than over names.
+        for (i, p) in decl.params.iter().enumerate() {
+            let Some(r) = &refs[i] else {
+                out.push(p.clone());
+                continue;
+            };
+            let Some(class) = self.lookup_class(&r.name) else {
+                out.push(p.clone());
+                continue;
+            };
+            if class.valparams.is_empty() {
+                out.push(p.clone());
+                continue;
+            }
+            if !r.index.is_empty() {
+                if r.index.len() != class.valparams.len() {
+                    return err(
+                        format!(
+                            "`{}` takes {} index argument(s), {} given",
+                            r.name,
+                            class.valparams.len(),
+                            r.index.len()
+                        ),
+                        p.span,
+                    );
+                }
+                out.push(p.clone());
+                continue;
+            }
+            // EMPTY: the index binders, then the instance binder over them.
+            let sub: HashMap<String, Ty> =
+                class.params.iter().cloned().zip(r.args.iter().cloned()).collect();
+            let mut index: Vec<Expr> = Vec::new();
+            for (k, v) in class.valparams.iter().enumerate() {
+                let bare = !repeated.contains(&r.name);
+                let name = if bare { v.name.clone() } else { format!("#index{i}_{k}") };
+                if bare
+                    && (decl.params.iter().any(|q| q.name == name)
+                        || decl.tyvars.iter().any(|q| q.name == name))
+                {
+                    return err(
+                        format!(
+                            "`{name}` is already bound here, and `<{}: {}>` binds the index \
+                             under `{}`'s own parameter name: link the index instead \
+                             (`{}({name})`), which says the two are the same thing rather \
+                             than shadowing one with the other",
+                            render_ty(&r.args[0]),
+                            r.name,
+                            r.name,
+                            r.name
+                        ),
+                        p.span,
+                    );
+                }
+                out.push(Param {
+                    name: name.clone(),
+                    ty: subst_ty(&sub, &v.ty),
+                    implicit: true,
+                    is_self: false,
+                    solver: None,
+                    span: p.span,
+                });
+                index.push(var(&name, p.span));
+            }
+            let mut p = p.clone();
+            p.ty = heather_syntax::class_ty(r.name.clone(), r.args.clone(), index, p.ty.span);
+            out.push(p);
+        }
+        self.float_linked(decl, &mut out)?;
+        Ok(Some((out, ambiguous)))
+    }
+
+    /// The linked slot's float (§4.1): a constraint binder moves to just after
+    /// the last parameter its index names, and nothing else moves. A parameter
+    /// that mentions a constraint the constraint would have to follow is the
+    /// dependency cycle, refused by name.
+    fn float_linked(&self, decl: &Decl, params: &mut Vec<Param>) -> R<()> {
+        let pos = |name: &str| params.iter().position(|q| q.name == name);
+        let mut keys: Vec<(usize, usize)> = (0..params.len()).map(|i| (i * 2, i)).collect();
+        let mut moved: Vec<(usize, usize)> = Vec::new();
+        for (i, p) in params.iter().enumerate() {
+            if p.solver.is_none() {
+                continue;
+            }
+            let Some(r) = self.class_ref_of_ty(&p.ty) else { continue };
+            let mut want = i * 2;
+            for a in &r.index {
+                let ExprKind::Var(n) = &a.kind else { continue };
+                // A *global* index needs no float: `requires m: Mon<U>(ul)`
+                // names a declaration, not a parameter, and the slot is
+                // already ground where the binder stands.
+                if pos(n).is_none()
+                    && (self.lookup_global(n).is_some() || self.ctor_of(n).is_some())
+                {
+                    continue;
+                }
+                let Some(j) = pos(n) else {
+                    return err(
+                        format!(
+                            "`{n}` is not a parameter of `{}`: a constraint's index slot links \
+                             the index to an explicit parameter of this same declaration \
+                             (`<A: {}({n})>(…, {n}: …)`), and that is the only forward \
+                             reference the language has",
+                            decl.name, r.name
+                        ),
+                        a.span,
+                    );
+                };
+                want = want.max(j * 2 + 1);
+            }
+            if want > i * 2 {
+                moved.push((i, want));
+                keys[i].0 = want;
+            }
+        }
+        if moved.is_empty() {
+            return Ok(());
+        }
+        // A cycle: an earlier parameter's type names the very dictionary that
+        // now has to follow it. Only a `requires` binder is nameable, so this
+        // is the one shape that can close the loop.
+        for (i, want) in &moved {
+            let name = &params[*i].name;
+            if name.starts_with('#') {
+                continue;
+            }
+            for (j, q) in params.iter().enumerate() {
+                if j * 2 <= *want && j != *i && ty_mentions(&q.ty, name) {
+                    return err(
+                        format!(
+                            "`{name}` and `{}` depend on each other: `{name}`'s index names \
+                             `{}`, whose type names `{name}` — a constraint's index may look \
+                             forward, and a cycle is refused rather than ordered by guess",
+                            q.name, q.name
+                        ),
+                        params[*i].span,
+                    );
+                }
+            }
+        }
+        keys.sort();
+        let src = std::mem::take(params);
+        let mut src: Vec<Option<Param>> = src.into_iter().map(Some).collect();
+        for (_, i) in keys {
+            params.push(src[i].take().expect("each index taken once"));
+        }
+        Ok(())
+    }
+
     /// The colon in a type-parameter list carries two nouns — a **universe**
     /// (`<A: Type<n>>`, where `A` lives) and a **class** (`<A: Monoid>`, what
     /// `A` carries) — told apart by the head word alone
@@ -544,6 +995,9 @@ impl Elaborator {
         if !p.name.starts_with("#constraint") {
             return Ok(());
         }
+        // The applied spelling (`<A: Monoid(op)>`) is already a class reference
+        // by construction — nothing else parses into it — so only the bare one
+        // can name a non-class.
         let TyKind::Named { name, .. } = &p.ty.kind else { return Ok(()) };
         if self.lookup_class(name).is_some() {
             return Ok(());
@@ -617,16 +1071,52 @@ impl Elaborator {
                 carrier.span,
             );
         }
-        let prefix = format!("{head}::{}", class.name);
-        let key = instance_key(&class_key, &head);
+        // The index (docs/operation-indexed-classes-design.md §3.1). Its
+        // spelling joins the registry key, so it is computed from the
+        // declaration alone and an unspellable one is refused here.
+        if class.valparams.len() != d.class.index.len() {
+            return err(
+                format!(
+                    "`{}` takes {} index argument(s), {} given: an instance names its \
+                     index in the head (`instance {}<{}>({})`)",
+                    class.name,
+                    class.valparams.len(),
+                    d.class.index.len(),
+                    class.name,
+                    render_ty(carrier),
+                    class.valparams.iter().map(|p| p.name.as_str()).collect::<Vec<_>>().join(", ")
+                ),
+                d.class.span,
+            );
+        }
+        let index = self.index_spelling(&d.class, &class)?;
+        let prefix = if index.is_empty() {
+            format!("{head}::{}", class.name)
+        } else {
+            // Two instances of one class at one carrier are the point (§3), so
+            // the canonical name carries the index. `#` never begins an
+            // identifier, so the suffix is unwritable and `Bool::Monoid(or)`
+            // — the `T::C(args)` spelling of §5.1 — is how it is reached.
+            format!("{head}::{}#{}", class.name, name_suffix(&index))
+        };
+        let key = instance_key(&class_key, &head, &index);
         if let Some(prev) = self.instances.get(&key) {
             return err(
                 format!(
-                    "`{}` already has an instance of `{}` (`{}`), declared as `{}`: at layer \
-                     1 the canonical name is keyed on the carrier's *head*, so two carriers \
-                     with the same head collide — this is refused rather than silently \
-                     overwritten (docs/traits-layer1-design.md §4.1)",
-                    head, class.name, prev.global, prev.written
+                    "`{}` already has an instance of `{}`{} (`{}`), declared as `{}`: at \
+                     layer 1 the canonical name is keyed on the carrier's *head* and the \
+                     index spelling, so two carriers with the same head collide — this is \
+                     refused rather than silently overwritten \
+                     (docs/traits-layer1-design.md §4.1)",
+                    head,
+                    class.name,
+                    if index.is_empty() {
+                        String::new()
+                    } else {
+                        format!(" at the index `{index}`")
+                    },
+                    prev.global,
+                    prev.written
                 ),
                 d.class.span,
             );
@@ -637,11 +1127,14 @@ impl Elaborator {
         // (docs/traits-layer2-design.md §6).
         self.check_decrease(d, &written)?;
 
-        // The class type as a surface type: `Monoid<Rat>`.
-        let class_ty = Ty {
-            kind: TyKind::Named { name: d.class.name.clone(), args: d.class.args.clone() },
-            span: d.class.span,
-        };
+        // The class type as a surface type: `Monoid<Rat>`, or `Monoid<Nat>(add)`
+        // where the class is indexed.
+        let class_ty = heather_syntax::class_ty(
+            d.class.name.clone(),
+            d.class.args.clone(),
+            d.class.index.clone(),
+            d.class.span,
+        );
 
         // 1. Block members, in order, each a real global under the prefix.
         let mut member_names: Vec<String> = Vec::new();
@@ -712,7 +1205,7 @@ impl Elaborator {
         r?;
         self.instances.insert(
             key,
-            InstanceInfo { global: prefix, written, parameterized },
+            InstanceInfo { global: prefix, written, index, parameterized },
         );
         Ok(())
     }
@@ -804,6 +1297,31 @@ impl Elaborator {
                 })
                 .collect()
         };
+        // The same substitution at the index: an ancestor's index arguments are
+        // the child's own value-parameter names (`parent_view`'s restriction),
+        // so instantiating is the positional lookup again.
+        let anc_index = |a: &ClassRef| -> Vec<Expr> {
+            a.index
+                .iter()
+                .map(|arg| match &arg.kind {
+                    ExprKind::Var(name) => class
+                        .valparams
+                        .iter()
+                        .position(|p| p.name == *name)
+                        .and_then(|i| d.class.index.get(i).cloned())
+                        .unwrap_or_else(|| arg.clone()),
+                    _ => arg.clone(),
+                })
+                .collect()
+        };
+        let anc_ref = |a: &ClassRef| -> ClassRef {
+            ClassRef {
+                name: a.name.clone(),
+                args: anc_args(a),
+                index: anc_index(a),
+                span,
+            }
+        };
 
         // Ancestors that already have a canonical instance at this carrier —
         // the fill-by-reference source (design §4.3 rule 3) and the agreement
@@ -811,7 +1329,11 @@ impl Elaborator {
         let mut registered: Vec<(String, Rc<ClassInfo>, String)> = Vec::new();
         for a in &class.ancestors {
             let Some(akey) = self.key_of(&a.name) else { continue };
-            let Some(inst) = self.instances.get(&instance_key(&akey, head)) else { continue };
+            let Some(ainfo) = self.classes.get(&akey).cloned() else { continue };
+            let aindex = self.index_spelling(&anc_ref(a), &ainfo)?;
+            let Some(inst) = self.instances.get(&instance_key(&akey, head, &aindex)) else {
+                continue;
+            };
             // A *parameterized* canonical parent (a generic instance, or one
             // with `requires` binders) offers neither fill-by-reference nor an
             // agreement partner at layer 1: its value is a function, and
@@ -879,11 +1401,18 @@ impl Elaborator {
             );
         }
 
-        // 3. The value itself.
+        // 3. The value itself. At an **indexed** class the type arguments are
+        // left off: a record literal with them written is an inference-position
+        // spelling, and the index has to come from the expected type, which is
+        // exactly what checking mode against `class_ty` supplies.
         let lit = span_expr(
             ExprKind::RecordLit {
                 name: class.name.clone(),
-                tyargs: d.class.args.clone(),
+                tyargs: if class.valparams.is_empty() {
+                    d.class.args.clone()
+                } else {
+                    Vec::new()
+                },
                 fields: lit_fields.clone(),
             },
             span,
@@ -918,14 +1447,24 @@ impl Elaborator {
             let Some(akey) = self.key_of(&a.name) else {
                 return err(format!("`{}` is not a class in scope", a.name), span);
             };
-            if self.instances.contains_key(&instance_key(&akey, head)) {
+            let Some(ainfo) = self.classes.get(&akey).cloned() else { continue };
+            let aref = anc_ref(&a);
+            let aindex = self.index_spelling(&aref, &ainfo)?;
+            if self.instances.contains_key(&instance_key(&akey, head, &aindex)) {
                 continue;
             }
-            let Some(ainfo) = self.classes.get(&akey).cloned() else { continue };
-            let aname = format!("{head}::{}", ainfo.name);
+            let aname = if aindex.is_empty() {
+                format!("{head}::{}", ainfo.name)
+            } else {
+                format!("{head}::{}#{}", ainfo.name, name_suffix(&aindex))
+            };
             let aargs = anc_args(&a);
-            let aty =
-                Ty { kind: TyKind::Named { name: a.name.clone(), args: aargs.clone() }, span };
+            let aty = heather_syntax::class_ty(
+                a.name.clone(),
+                aargs.clone(),
+                aref.index.clone(),
+                span,
+            );
             // Every field of a flattened ancestor is one of the child's, by
             // construction (design §3) — so the parent's value is literally
             // built from the child's own field expressions, which is what makes
@@ -951,21 +1490,18 @@ impl Elaborator {
             let alit = span_expr(
                 ExprKind::RecordLit {
                     name: ainfo.name.clone(),
-                    tyargs: aargs.clone(),
+                    tyargs: if ainfo.valparams.is_empty() { aargs.clone() } else { Vec::new() },
                     fields: afields,
                 },
                 span,
             );
             self.synth_decl(DeclKind::Fn, &aname, d, aty, alit, span)?;
             self.instances.insert(
-                instance_key(&akey, head),
+                instance_key(&akey, head, &aindex),
                 InstanceInfo {
                     global: aname,
-                    written: class_ref_written(&ClassRef {
-                        name: a.name.clone(),
-                        args: aargs,
-                        span,
-                    }),
+                    written: class_ref_written(&aref),
+                    index: aindex,
                     parameterized,
                 },
             );

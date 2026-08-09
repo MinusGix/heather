@@ -190,30 +190,41 @@ Three consequences, all of which are why this spelling and not another:
 `::` joins exactly once, which is what makes this unambiguous: there is no
 `M::T::C` to compete with a module-qualified reading.
 
-## 6. What an operation-indexed class would change
+## 6. What an operation-indexed class changes (superseded 2026-08-09)
 
-`issues/operation-indexed-classes.md`'s likely synthesis is indexed classes for
-theory (`Monoid<A>(op)`) beside bundled classes for defaults. Dot notation is
-the **bundled** layer's surface, and this design is written so that the indexed
-form has to *add* a case rather than undo one:
+This section was written before the operation-indexed design pass and
+predicted the wrong rule. What it said: `T.f` at an indexed class would build
+`C<T>(?op)` — a goal with a meta in a value slot — and should therefore be
+**refused by name**, the same shape as the multi-parameter narrowing of §4
+rule 7. What was decided and built instead
+(`docs/operation-indexed-classes-design.md` §5.1, implemented in that
+document's round one):
 
-- **`T.f` at an indexed class would build `C<T>(?op)`** — a goal with a meta in
-  a value slot, which layer 2 §4 declines to resolve, and which is ambiguous
-  *by design* (add and mul both answer). It is therefore the same shape as the
-  multi-parameter narrowing already refused by name (§4 rule 7), and it should
-  be refused the same way rather than guessed. The candidate filter is
-  `params.len() == 1` today; the indexed round extends it with the value-index
-  test and inherits the diagnostic.
-- **Nothing here assumes a class has exactly one parameter *in general*.** The
-  filter is a narrowing on *dispatchability*, sitting where receiver dispatch's
-  identical narrowing sits, and multi-parameter classes remain reachable by the
-  explicit projection — including through §5's `T::C`, which is one goal-build
-  away from taking arguments if that is ever wanted.
-- **The op-in-the-goal reading is the one this does not pre-empt.** Under
-  indexed classes the natural spelling is not `T.f` but the operator round's
-  `a + b` with the op as the disambiguator; §R2-C's own claim is that `T.f` is
-  the *bundled* sentence. This document takes no position on which layer a
-  given class should be, and adds no rule that would have to be repealed.
+- **Scope first, then refuse.** The goal is still built at the owner with the
+  index slot open, but a binder in scope of the goal's class — or of a
+  descendant, whose `extends` chain passes the index up unchanged — answers
+  what the index is, and only a slot that survives that is refused. Inside
+  `<A: Monoid>` or `<A: Monoid(op)>` both `A.unit` and `x.assoc(y, z)` work;
+  at a concrete carrier with no binder in scope, `Bool.unit` is refused. This
+  is not new machinery: it is layer 2's own search order with the refusal at
+  the ladder's end.
+- **The refusal is richer than this section imagined.** It names the slot, the
+  class, and **every registered instance that would answer at this carrier**,
+  each with its index — at `Bool`, both monoids. The multi-parameter
+  narrowing's message is unchanged and still lives beside it; the value-index
+  case is its own diagnostic (`value_slot_refusal`), because "which structure
+  did you mean" and "which carrier did you mean" are different questions.
+- **The candidate filter is untouched.** It is still `params.len() == 1`; the
+  value index is not a filter but a slot to fill, so a class with one type
+  parameter and an index is dispatchable and a class with two type parameters
+  still is not.
+- **`T::C` took its arguments.** §5's escape is now `Nat::Monoid(add)`, which
+  is what discharges the residue this document filed on `issues/traits.md`.
+
+Unchanged from the original section, and worth keeping: nothing here assumes a
+class has exactly one parameter *in general* — the filter is a narrowing on
+dispatchability, and multi-parameter classes remain reachable by the explicit
+projection.
 
 ## 7. Diagnostics
 
@@ -306,7 +317,10 @@ So the feature is cheap and the *ancestor* case is not. The library keeps
 
 ## 10. What the library dropped, and what it kept
 
-`lib/std/algebra.hthr`, after this round:
+`lib/std/algebra.hthr`, after this round. **Historical from 2026-08-09**: the
+operation-indexed round rewrote this file — the additive hierarchy and
+`plus_zero_of_comm` are deleted, and the table below describes a state that no
+longer exists. It is kept as the record of what *this* round moved.
 
 | declaration | before | after |
 | --- | --- | --- |
@@ -334,11 +348,17 @@ to which §9.3 adds one entry) — and it stays pinned in the test corpus by
   anonymous spelling. The shape of a fix: the assembled parent is rebuilt per
   occurrence, and layer 2's canonical derived table (§8) cannot hold it because
   it depends on a local binder. `issues/traits.md`, or a perf issue of its own.
-- **`T.f` for an indexed class** (§6) — refuse by name when classes gain value
-  parameters; `issues/operation-indexed-classes.md` owns the extension.
-- **`T::C` does not take arguments**, so a multi-parameter class still has no
-  short spelling for its dictionary (`C<T, U>` would need a written type).
-  `issues/traits.md`, with the multi-parameter dispatch residue it belongs to.
+- ~~**`T.f` for an indexed class** (§6) — refuse by name when classes gain
+  value parameters.~~ **Discharged 2026-08-09** by
+  `docs/operation-indexed-classes-design.md` round one, and *not* as this
+  document predicted: the rule is scope-then-refuse, and §6 above is rewritten
+  to say so.
+- ~~**`T::C` does not take arguments**~~ — **discharged 2026-08-09** for the
+  *indexed* case: `Nat::Monoid(add)` is the goal `Monoid<Nat>(add)` resolved,
+  at the same fallback position §5 already used. A multi-parameter class still
+  has no short spelling (`C<T, U>` would need a written *type* argument, which
+  is a different grammar); that half stays on `issues/traits.md` with the
+  multi-parameter dispatch residue it belongs to.
 - **`T.f` bare partially applied** — `A.op` is a value, so a class member *can*
   now be partially applied through a type where it cannot through a receiver
   (`docs/traits-receiver-dispatch-design.md` §8's "a bare `x.op` never

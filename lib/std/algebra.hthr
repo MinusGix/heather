@@ -5,32 +5,13 @@
 // its fields describe, an `instance` is a namespace of ordinary declarations
 // with the record assembled at the end. Nothing new reaches the kernel.
 //
-// COHERENCE, and why each registered instance is the one it is. There is at
-// most one instance per (class, carrier), so a carrier with two structures
-// has to nominate one and offer the rest as *named values*:
-//
-//   * `Monoid<Bool>` is CONJUNCTION. Disjunction is just as good an answer,
-//     which is exactly why the choice has to be recorded rather than
-//     inferred: `and` is the monoid a "does every element hold" fold wants,
-//     and it is the one whose unit (`True`) is the value a vacuous fold
-//     should return. Disjunction is `bool_or_monoid` below — a plain global
-//     of type `Monoid<Bool>`, passed explicitly or `let`-bound to shadow the
-//     registry locally.
-//   * `Monoid<Nat>` is ADDITION, and it is deliberately the *same* `op` the
-//     additive hierarchy registers, so `Nat::Monoid.op` and
-//     `Nat::AddCommMonoid.plus` are one function and the two readings of a
-//     `Nat` fold agree definitionally. The day `mul` lands in `std/nat` it
-//     becomes the second structure, and by the Bool precedent above it
-//     arrives as a named value, not as a second registration.
-//   * `Monoid<List<A>>` is append at every element type — the one instance
-//     here with no competitor, and the one that is generic.
-//
-// The additive hierarchy (`AddSemigroup` → `AddMonoid` → `AddCommMonoid`)
-// is separate from `Monoid` on purpose: it is the numeric spelling, its
-// fields are `zero`/`plus`, and it exists to be *extended* downward the day
-// there are integers. `AddGroup`/`AddCommGroup` are not declared, because no
-// carrier in this library has negation — declaring a class no instance can
-// satisfy would be advertising, not library.
+// The operation is an INDEX, not a field
+// (docs/operation-indexed-classes-design.md): `Monoid<Bool>(and)` and
+// `Monoid<Bool>(or)` are different types, so both register as equals and
+// nothing here has to nominate one. That deletes the coherence essay this
+// file carried until 2026-08-09, and with it the additive hierarchy
+// (`AddSemigroup` → `AddMonoid` → `AddCommMonoid`) that existed only to say
+// "the other monoid" under different field names.
 
 import bool;
 import nat;
@@ -40,23 +21,25 @@ import option;
 // ---------------------------------------------------------------------------
 // The classes.
 
-// A monoid: an associative operation with a two-sided unit — and the
-// semigroup it extends, which is where `op` is *declared*. The split is
-// writable because dispatch is keyed on the field's owner
-// (docs/traits-owner-dispatch-design.md): `x.op(y)` builds the goal
-// `Semigroup<typeof(x)>` and the classes that merely inherit `op` are not
-// candidates at all, so a hierarchy and receiver sugar are no longer
-// alternatives. (They were, until 2026-08-08; this file declared `Monoid`
-// flat and said so here.)
-class Semigroup<A> {
-    op: A -> A -> A,
+// A monoid: an associative operation with a two-sided unit. `op` is the
+// class's index, so `A` and `op` together identify the structure, and the
+// unit — determined by the operation, definitionally at every concrete
+// instance — stays a field (design §2.1).
+class Semigroup<A>(op: A -> A -> A) {
     assoc: (x: A) -> (y: A) -> (z: A) -> op(op(x, y), z) = op(x, op(y, z)),
 }
 
-class Monoid<A> extends Semigroup<A> {
+class Monoid<A>(op: A -> A -> A) extends Semigroup<A>(op) {
     unit: A,
     unit_l: (x: A) -> op(unit, x) = x,
     unit_r: (x: A) -> op(x, unit) = x,
+}
+
+// The commutative monoid: one chain, at every operation. This is what the
+// additive hierarchy was, with the operation moved out of the field list —
+// which is why there is only one of it now.
+class CommMonoid<A>(op: A -> A -> A) extends Monoid<A>(op) {
+    comm: (x: A) -> (y: A) -> op(x, y) = op(y, x),
 }
 
 // A value every type of the class has. No laws: `Default` is the class that
@@ -77,26 +60,12 @@ class Default<A> {
 // (which is right — the two are different functions at the same spelling).
 // Naming a field is therefore a *library* decision about the ambient
 // namespace, not a local one. See issues/traits.md's log for the finding.
+//
+// `Cmp` and `Default` take no index: their structure is identified by the
+// carrier alone, and indexing is opt-in per class (design §2.1).
 class Cmp<A> {
     le: A -> A -> Bool,
     le_refl: (x: A) -> le(x)(x) = True,
-}
-
-// The additive hierarchy. `plus` rather than `add` for the operation, for the
-// same reason `Cmp` says `le`: `add` is `std/nat`'s ambient function name.
-class AddSemigroup<G> {
-    plus: G -> G -> G,
-    plus_assoc: (x: G) -> (y: G) -> (z: G) -> plus(plus(x, y), z) = plus(x, plus(y, z)),
-}
-
-class AddMonoid<G> extends AddSemigroup<G> {
-    zero: G,
-    zero_plus: (x: G) -> plus(zero, x) = x,
-    plus_zero: (x: G) -> plus(x, zero) = x,
-}
-
-class AddCommMonoid<G> extends AddMonoid<G> {
-    plus_comm: (x: G) -> (y: G) -> plus(x, y) = plus(y, x),
 }
 
 // ---------------------------------------------------------------------------
@@ -109,40 +78,39 @@ class AddCommMonoid<G> extends AddMonoid<G> {
 // into a block and leaving every existing caller of `append_assoc` to find it
 // under a new one. Where a field is a one-liner nobody would name (`unit_r`
 // for `add`, which is `refl`), it is written inline.
+//
+// Both `Bool` monoids register, as equals. Neither is "the" one, because no
+// goal with an unpinned operation ever reaches the registry (design §5).
 
-instance Monoid<Nat> {
+instance CommMonoid<Nat>(add) {
     unit := 0,
-    op := add,
     assoc := add_assoc,
     unit_l := add_left_zero,
     unit_r := λ (x: Nat) => refl,
+    comm := add_comm,
 }
 
-instance Monoid<Bool> {
+instance CommMonoid<Bool>(and) {
     unit := True,
-    op := and,
     assoc := and_assoc,
     unit_l := and_true_l,
     unit_r := and_true_r,
+    comm := and_comm,
 }
 
-// The second structure on `Bool`, as a named value rather than a second
-// registration: the coherence policy in this file's header. Nothing resolves
-// to it — a caller passes it, or `let`-binds it to shadow the registry.
-fn bool_or_monoid() -> Monoid<Bool> {
-    Monoid {
-        unit: False,
-        op: or,
-        assoc: or_assoc,
-        unit_l: or_false_l,
-        unit_r: or_false_r,
-    }
+instance CommMonoid<Bool>(or) {
+    unit := False,
+    assoc := or_assoc,
+    unit_l := or_false_l,
+    unit_r := or_false_r,
+    comm := or_comm,
 }
 
 // The generic instance: one declaration, an instance at every element type.
-instance<A> Monoid<List<A>> {
+// Not commutative, and it does not have to be — the chain is one class per
+// law, and `append` stops at `Monoid`.
+instance<A> Monoid<List<A>>(append) {
     unit := Nil,
-    op := append,
     assoc := append_assoc,
     unit_l := λ (xs: List<A>) => refl,
     unit_r := append_nil,
@@ -156,65 +124,28 @@ instance<A> Default<Option<A>> { default := None }
 instance Cmp<Nat> { le := leb, le_refl := le_refl }
 instance Cmp<Bool> { le := leb_bool, le_refl := leb_bool_refl }
 
-// The additive hierarchy, once in each direction.
-//
-// `Nat` PARENT-FIRST: three declarations down the chain, each writing only
-// what is new. `AddMonoid<Nat>` does not restate `plus`; it fills from the
-// canonical `AddSemigroup<Nat>` by reference, so there is one `plus` on `Nat`
-// and every path to it is that one (`Nat::AddCommMonoid.plus` is
-// `Nat::AddSemigroup.plus`, by `refl` — pinned in the tests).
-
-instance AddSemigroup<Nat> {
-    plus := add,
-    plus_assoc := add_assoc,
-}
-
-instance AddMonoid<Nat> {
-    zero := 0,
-    zero_plus := add_left_zero,
-    plus_zero := λ (x: Nat) => refl,
-}
-
-instance AddCommMonoid<Nat> {
-    plus_comm := add_comm,
-}
-
-// `Bool` CHILD-FIRST, with disjunction as the addition: one declaration, and
-// the two ancestors are synthesized as its own projections and registered.
-// Which is the direction that makes a deep hierarchy writable at all — the
-// alternative is five declarations to say one thing.
-instance AddCommMonoid<Bool> {
-    plus := or,
-    plus_assoc := or_assoc,
-    zero := False,
-    zero_plus := or_false_l,
-    plus_zero := or_false_r,
-    plus_comm := or_comm,
-}
-
 // ---------------------------------------------------------------------------
 // The consumers: written once against a class, used at every carrier.
 
-// The fold every monoid is for. NOTHING here names a dictionary: the
-// recursive call finds the constraint binder in the room, `h.op(…)` dispatches
-// from the receiver, and `A.unit` projects from the type
-// (docs/traits-type-projection-design.md) — the same goal, the same resolver,
-// the same binder answering all three. `h.op`'s goal is `Semigroup<A>` and the
-// binder is a `Monoid<A>`, so what answers is the resolver's upcast
-// (docs/traits-owner-dispatch-design.md §3) — at an open carrier, where no
-// synthesized parent instance exists to be found instead.
-fn mconcat<A: Monoid>(xs: List<A>) -> A {
+// The fold every monoid is for, in the LINKED form (design §4.1): the
+// operation is a written parameter and the constraint's index slot says it is
+// the same one, so callers choose the structure positionally and nothing is
+// searched for. `op` is an ordinary variable in the body; `A.unit` is answered
+// by the binder in scope, which is the value-slot ladder's step 2.
+fn mconcat<A: Monoid(op)>(op: A -> A -> A, xs: List<A>) -> A {
     match xs {
         Nil => A.unit,
-        Cons(h, t) => h.op(mconcat(t)),
+        Cons(h, t) => op(h, mconcat(op, t)),
     }
 }
 
-// Proved once against the class. Its two uses below are at unrelated carriers
-// and neither re-proves anything. `A.unit_r` is a **proof** field projected
-// from the type, which needs nothing of its own: a type projection is an
-// ordinary field projection, so an operation and a law are the same move.
-theorem mconcat_single<A: Monoid>(x: A): mconcat(Cons(x, Nil)) = x {
+// Proved once against the class. Its uses below are at unrelated carriers and
+// neither re-proves anything. `A.unit_r` is a **proof** field projected from
+// the type, which needs nothing of its own: a type projection is an ordinary
+// field projection, so an operation and a law are the same move.
+theorem mconcat_single<A: Monoid(op)>(op: A -> A -> A, x: A):
+    mconcat(op, Cons(x, Nil)) = x
+{
     A.unit_r(x)
 }
 
@@ -255,46 +186,34 @@ fn or_default<A>(o: Option<A>, d: Default<A> := infer) -> A {
     unwrap_or(o, d.default)
 }
 
-// The hierarchy's generic consequence: a right unit follows from commutativity
-// and the left one, so `AddMonoid`'s `plus_zero` is redundant *for a
-// commutative monoid* — proved once here, at both carriers below.
-//
-// The LAST declaration in this file to shed `requires`, and the one whose
-// price paid for the mechanism that let it. `plus` is declared by
-// `AddSemigroup` and `zero` by `AddMonoid`, so each type projection here
-// builds its goal at an ANCESTOR and is answered by the resolver's upcast.
-// While the upcast's assembled parent record went into the emitted term, this
-// spelling cost 36s against the named dictionary's 0.7s (measured 2026-08-08);
-// since a dispatched projection reads *through* the upcast to the child's own
-// field (docs/traits-named-upcast-design.md), the two spellings elaborate to
-// the *same term*.
-theorem plus_zero_of_comm<G: AddCommMonoid>(x: G): G.plus(x, G.zero) = x {
-    trans(G.plus_comm(x, G.zero), G.zero_plus(x))
+// The chain's generic consequence: a right unit follows from commutativity and
+// the left one, so `Monoid`'s `unit_r` is redundant *for a commutative
+// monoid*. Written in the EMPTY-slot form (design §4.1's style rule: programs
+// link their index, theory leaves the slot empty), so `op` is the binder's own
+// index and every corollary below pins it by unification from its own
+// statement — one proof, three structures, two of them on one carrier.
+theorem op_unit_of_comm<A: CommMonoid>(x: A): op(x, A.unit) = x {
+    trans(A.comm(x, A.unit), A.unit_l(x))
 }
 
 // ---------------------------------------------------------------------------
 // The specializations, one per way an instance can be found.
 
-// The registry, at a concrete carrier: `Monoid<Nat>` is declared, so the
-// dictionary is a reference to it and nothing is derived.
-fn sum(ns: List<Nat>) -> Nat { mconcat(ns) }
+// The index, spelled positionally: `sum` and `all_of` and `any_of` are the
+// same fold at three structures, and each says which. `any_of` used to
+// `let`-shadow the registry, because there was no other way to reach Bool's
+// second monoid; now it is one word.
+fn sum(ns: List<Nat>) -> Nat { mconcat(add, ns) }
 
-fn all_of(bs: List<Bool>) -> Bool { mconcat(bs) }
+fn all_of(bs: List<Bool>) -> Bool { mconcat(and, bs) }
 
-// The SCOPE, beating the registry: `any_of` is the same fold at the same
-// carrier under the *other* monoid, and it says so by binding it. A local of
-// the goal type is step 1 of the search, so the registered conjunction is
-// never consulted (docs/traits-layer2-design.md §4).
-fn any_of(bs: List<Bool>) -> Bool {
-    let m: Monoid<Bool> = bool_or_monoid();
-    mconcat(bs)
-}
+fn any_of(bs: List<Bool>) -> Bool { mconcat(or, bs) }
 
 // The GENERIC instance, at an **open** element type: the goal is
-// `Monoid<List<A>>` with `A` this function's own parameter, so it is answered
-// by backchaining through `instance<A> Monoid<List<A>>` and not by any
-// declared value.
-fn concat<A>(xss: List<List<A>>) -> List<A> { mconcat(xss) }
+// `Monoid<List<A>>(append)` with `A` this function's own parameter, so it is
+// answered by backchaining through `instance<A> Monoid<List<A>>(append)` and
+// not by any declared value.
+fn concat<A>(xss: List<List<A>>) -> List<A> { mconcat(append, xss) }
 
 // The class lemma at two carriers. Neither of these re-proves anything: they
 // are `mconcat_single` with the dictionary found — at `Nat` through the
@@ -307,24 +226,18 @@ fn concat<A>(xss: List<List<A>>) -> List<A> { mconcat(xss) }
 // *uses* — `concat` above — are unaffected and cheap; it is the generic
 // lemma's instantiation that dies. Nothing here works around it: the missing
 // theorem is left missing so that the issue closing restores it.
-theorem sum_single(n: Nat): sum(Cons(n, Nil)) = n { mconcat_single(n) }
+theorem sum_single(n: Nat): sum(Cons(n, Nil)) = n { mconcat_single(add, n) }
 
-theorem all_of_single(b: Bool): all_of(Cons(b, Nil)) = b { mconcat_single(b) }
+theorem all_of_single(b: Bool): all_of(Cons(b, Nil)) = b { mconcat_single(and, b) }
 
-// The hierarchy lemma at both of its carriers, likewise.
-// Written with the receiver, which is what the flattening workaround cost
-// until owner-keyed dispatch landed: `plus` is declared by `AddSemigroup` and
-// inherited by the other two, so `x.plus(…)` has exactly one owner to build a
-// goal at, at either carrier.
-//
-// The unit is `Nat.zero` rather than `Nat::AddMonoid.zero`: at a **concrete**
-// carrier a type projection is the same sentence with the class inferred from
-// the one that declares the field, answered by the registry rather than by a
-// binder. The explicit spelling remains available and means the same term.
-theorem nat_plus_zero(x: Nat): x.plus(Nat.zero) = x {
-    plus_zero_of_comm(x)
-}
+theorem any_of_single(b: Bool): any_of(Cons(b, Nil)) = b { mconcat_single(or, b) }
 
-theorem bool_plus_zero(x: Bool): x.plus(Bool.zero) = x {
-    plus_zero_of_comm(x)
-}
+// The generic law, spent three times. Each goal names its operation — that is
+// what a law is — so unification pins the index and the ground goal hits the
+// registry key. Two of the three are the same carrier, which is the sentence
+// the additive hierarchy existed to fail to say.
+theorem nat_add_zero(x: Nat): add(x, 0) = x { op_unit_of_comm(x) }
+
+theorem bool_and_true(x: Bool): and(x, True) = x { op_unit_of_comm(x) }
+
+theorem bool_or_false(x: Bool): or(x, False) = x { op_unit_of_comm(x) }

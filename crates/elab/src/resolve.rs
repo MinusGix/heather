@@ -192,11 +192,11 @@ impl Elaborator {
         }
         // Candidates in a *stated* order — sorted by canonical name, never
         // declaration order and never `HashMap` order (design §3.1).
-        let mut cands: Vec<(String, bool)> = self
+        let mut cands: Vec<(String, bool, String)> = self
             .instances
             .iter()
-            .filter(|((c, _), _)| *c == ckey)
-            .map(|(_, i)| (i.global.clone(), i.parameterized))
+            .filter(|((c, _, _), _)| *c == ckey)
+            .map(|(_, i)| (i.global.clone(), i.parameterized, i.index.clone()))
             .collect();
         cands.sort();
         if cands.is_empty() {
@@ -204,8 +204,16 @@ impl Elaborator {
             return None;
         }
         tr.push(line(depth, "class", format!("{} ({} instance(s))", ind.name, cands.len())));
-        for (g, parameterized) in cands {
-            tr.push(line(depth, "candidate", g.clone()));
+        for (g, parameterized, index) in cands {
+            // The index is part of the candidate line, not a separate one: at a
+            // carrier with two structures the trace has to say *which* was
+            // tried, and that is the whole observability the registry key buys
+            // (docs/operation-indexed-classes-design.md §3.1, §11).
+            tr.push(line(
+                depth,
+                "candidate",
+                if index.is_empty() { g.clone() } else { format!("{g} (index `{index}`)") },
+            ));
             self.resolve_depth.set(depth + 1);
             let built = self.build_candidate(cx, &g, goal, lvl, span);
             self.resolve_depth.set(depth);
@@ -216,6 +224,15 @@ impl Elaborator {
                     // and minting a second one for it would duplicate the very
                     // thing the table exists to keep single.
                     if parameterized {
+                        // Note (`docs/operation-indexed-classes-design.md`, the
+                        // corrections section): a goal with a **value index**
+                        // never reaches the table. The index is a *term* in the
+                        // goal type and a term elaborated at a use site carries
+                        // that site's identity substitution, so the closedness
+                        // test below — asked of the kernel in the empty context,
+                        // which is where a minted global has to live — says no.
+                        // It costs sharing and never correctness, which is this
+                        // table's standing bargain.
                         self.record_derived(goal, lvl);
                     }
                     return Some(t);
@@ -378,6 +395,12 @@ impl Elaborator {
         // class's *arguments* — `C<Nat>` from a `D<Bool>` — is caught here and
         // by `build_ctor` before it, and either way the answer is "not it".
         self.checks_at(cx, &t, goal, lvl).then_some(t)
+    }
+
+    /// [`Self::conv_here`] for consumers outside this module — the value-slot
+    /// ladder's carrier test (`docs/operation-indexed-classes-design.md` §5).
+    pub(crate) fn conv_types(&self, cx: &Cx, ty: &Type, goal: &Type, lvl: &Level) -> bool {
+        self.conv_here(cx, ty, goal, lvl)
     }
 
     /// Is `ty` the goal type, here? Conversion, in the use site's context.

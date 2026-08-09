@@ -73,6 +73,13 @@ impl Item {
 pub struct ClassDecl {
     pub name: String,
     pub params: Vec<String>,
+    /// `class Monoid<A>(op: A -> A -> A)` — the class's **value indices**
+    /// (docs/operation-indexed-classes-design.md §3). The same
+    /// [`InductiveDecl::valparams`] a `record` head takes, and lowered by the
+    /// same path: what the keyword adds is that the index joins the registry
+    /// key and the constraint binder's desugaring. Empty for an unindexed
+    /// class, which is every class written before this grammar existed.
+    pub valparams: Vec<Param>,
     pub extends: Vec<ClassRef>,
     pub fields: Vec<FieldDecl>,
     pub span: Span,
@@ -86,6 +93,11 @@ pub struct ClassDecl {
 pub struct ClassRef {
     pub name: String,
     pub args: Vec<Ty>,
+    /// `Monoid<A>(op)` — the **index arguments**
+    /// (docs/operation-indexed-classes-design.md §3, §4.1). Empty at an
+    /// unindexed class, and empty at an indexed one whose slot is left for the
+    /// binder desugaring to fill (§4.1's EMPTY referent).
+    pub index: Vec<Expr>,
     pub span: Span,
 }
 

@@ -913,7 +913,7 @@ impl Elaborator {
         for a in targs {
             lowered.push(self.elab_ty(cx, a)?);
         }
-        let vargs = self.valparam_args(cx, &ind, args, span)?;
+        let vargs = self.valparam_args(cx, &ind, &lowered, args, span)?;
         self.lower_instance(cx, &ind, &lowered, &vargs, span).map(Some)
     }
 
@@ -923,10 +923,18 @@ impl Elaborator {
     /// earlier arguments as aliases — all bound at the *ambient* depth, so no
     /// shifting happens here. The shifting that matters happens later, in
     /// [`Self::lower_ctor`], where the field spine pushes binders on top.
+    ///
+    /// The declared type may also mention the declaration's **type**
+    /// parameters — `class Monoid<A>(op: A -> A -> A)` is the case that made
+    /// this true (docs/operation-indexed-classes-design.md §3) — so they are
+    /// bound here at the instantiation, exactly as [`Self::lower_ctor`] binds
+    /// them for the field types. `record R(p: Prog, env: Val)`, whose value
+    /// parameters' types are closed, is unaffected.
     pub(crate) fn valparam_args(
         &self,
         cx: &Cx,
         ind: &Inductive,
+        targs: &[(Type, Level)],
         args: &[Expr],
         span: Span,
     ) -> R<Vec<(Term, Type, Level)>> {
@@ -943,6 +951,12 @@ impl Elaborator {
         }
         let mut tcx = cx.clone();
         let depth = cx.names.len();
+        tcx.tyvars.extend(ind.params.iter().zip(targs).map(|(name, (ty, level))| TyVar {
+            name: name.clone(),
+            ty: ty.clone(),
+            level: level.clone(),
+            depth,
+        }));
         let mut out = Vec::with_capacity(args.len());
         for ((pname, pty), arg) in ind.valparams.iter().zip(args) {
             let (ty, level) = self.elab_ty(&tcx, pty)?;

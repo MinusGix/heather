@@ -85,6 +85,29 @@ pub struct ParseError {
     pub span: Span,
 }
 
+/// A class reference *as a type*. Unindexed it is the ordinary applied name;
+/// indexed it is the applied spelling a value-parameterized record already has
+/// (`docs/surface-value-parameters.md` §3) — `Monoid<A>(op)` reaching the
+/// elaborator as [`TyKind::OfExpr`], the same road `Converges(p, env, …)`
+/// travels. There is no second encoding, which is
+/// `docs/operation-indexed-classes-design.md` §2.1 in one function.
+pub fn class_ty(name: String, args: Vec<Ty>, index: Vec<Expr>, span: Span) -> Ty {
+    if index.is_empty() {
+        return Ty { kind: TyKind::Named { name, args }, span };
+    }
+    let head = Expr { kind: ExprKind::Var(name), span };
+    let head = if args.is_empty() {
+        head
+    } else {
+        Expr { kind: ExprKind::TyApp { head: Box::new(head), args }, span }
+    };
+    let applied = Expr {
+        kind: ExprKind::App { head: Box::new(head), args: index, explicit: false },
+        span,
+    };
+    Ty { kind: TyKind::OfExpr(Box::new(applied)), span }
+}
+
 pub fn parse_file(src: &str) -> Result<File, ParseError> {
     let toks = lex(src).map_err(|e| ParseError { msg: e.msg, span: e.span })?;
     let mut p = Parser { toks, pos: 0, no_record_lit: false, no_eq: false, motive_body: false };
@@ -427,6 +450,11 @@ impl Parser {
         self.bump(); // `class`
         let (name, _) = self.ident("class name")?;
         let params = self.tyvar_list()?;
+        // `class Monoid<A>(op: A -> A -> A)` — the index list, in the position
+        // and with the grammar a `record` head already has
+        // (docs/operation-indexed-classes-design.md §2.1: there is no second
+        // class form, only a per-class choice about the parameter list).
+        let valparams = self.valparam_list()?;
         let mut extends = Vec::new();
         if self.eat_kw("extends") {
             loop {
@@ -456,7 +484,7 @@ impl Parser {
             self.bump();
         }
         let end = self.expect(&TokKind::RBrace, "`}` (field list)")?;
-        Ok(ClassDecl { name, params, extends, fields, span: start.join(end) })
+        Ok(ClassDecl { name, params, valparams, extends, fields, span: start.join(end) })
     }
 
     /// `Monoid<A>` — a class applied to its arguments. The brackets are
@@ -482,8 +510,42 @@ impl Parser {
             }
             self.bump();
         }
-        let end = self.expect(&TokKind::Gt, "`>` to close the class arguments")?;
-        Ok(ClassRef { name, args, span: nsp.join(end) })
+        let mut end = self.expect(&TokKind::Gt, "`>` to close the class arguments")?;
+        // `Monoid<A>(op)` — the index arguments
+        // (docs/operation-indexed-classes-design.md §3). An index is an
+        // ordinary expression here; which shapes an *instance head* admits is
+        // the elaborator's spellability rule (§3.1), stated where the key is
+        // computed rather than in the grammar.
+        //
+        // The `(` is the index list only when it does not open a *binder* list:
+        // `requires m: Monoid<A> (xs: List<A>)` puts the declaration's own
+        // parameters directly after the class reference, and `name :` is the
+        // one shape an index argument can never have.
+        let mut index = Vec::new();
+        // An empty `()` is a binder list too: an index list with nothing in it
+        // says nothing, and `requires m: Mag<A> () -> Nat` is the shape that
+        // has to keep parsing.
+        let binder_list = matches!(self.peek(), TokKind::LParen)
+            && (matches!(self.toks.get(self.pos + 1).map(|t| &t.kind), Some(TokKind::RParen))
+                || (matches!(
+                    self.toks.get(self.pos + 1).map(|t| &t.kind),
+                    Some(TokKind::Ident(_))
+                ) && matches!(
+                    self.toks.get(self.pos + 2).map(|t| &t.kind),
+                    Some(TokKind::Colon)
+                )));
+        if matches!(self.peek(), TokKind::LParen) && !binder_list {
+            self.bump();
+            while !matches!(self.peek(), TokKind::RParen) {
+                index.push(self.expr()?);
+                if !matches!(self.peek(), TokKind::Comma) {
+                    break;
+                }
+                self.bump();
+            }
+            end = self.expect(&TokKind::RParen, "`)` to close the class's index arguments")?;
+        }
+        Ok(ClassRef { name, args, index, span: nsp.join(end) })
     }
 
     /// `instance<A, B> C<T> requires m: D<A> { … }`
@@ -565,10 +627,7 @@ impl Parser {
             // otherwise read as a value-parameter application
             // (docs/surface-value-parameters.md §1).
             let cref = self.class_ref("the class a `requires` binder is of")?;
-            let ty = Ty {
-                kind: TyKind::Named { name: cref.name, args: cref.args },
-                span: cref.span,
-            };
+            let ty = class_ty(cref.name, cref.args, cref.index, cref.span);
             let span = psp.join(ty.span);
             requires.push(Param {
                 name: pname,
@@ -663,7 +722,7 @@ impl Parser {
     /// `C<A, X>` — the annotated binder is always the class's FIRST argument,
     /// which is what makes the inline form a *hoist* of the sentence `A: C`
     /// rather than a second feature.
-    fn constraint(&mut self, tyvar: &str, tyvar_span: Span, index: usize) -> R<Param> {
+    fn constraint(&mut self, tyvar: &str, tyvar_span: Span, ix: usize) -> R<Param> {
         if !matches!(self.peek(), TokKind::Ident(_)) {
             return self.err(&format!(
                 "a type parameter's annotation is either a universe — \
@@ -712,6 +771,23 @@ impl Parser {
             }
             end = self.expect(&TokKind::Gt, "`>` to close the class arguments")?;
         }
+        // `<A: Monoid(op)>` — the index slot's NAME referent
+        // (docs/operation-indexed-classes-design.md §4.1): the index is linked
+        // to an explicit parameter of this same declaration, forward reference
+        // allowed. An empty slot is the absence of this list, and the SYMBOL
+        // referent (`Monoid(+)`) waits for the designation table (§7).
+        let mut index = Vec::new();
+        if matches!(self.peek(), TokKind::LParen) {
+            self.bump();
+            while !matches!(self.peek(), TokKind::RParen) {
+                index.push(self.expr()?);
+                if !matches!(self.peek(), TokKind::Comma) {
+                    break;
+                }
+                self.bump();
+            }
+            end = self.expect(&TokKind::RParen, "`)` to close the constraint's index")?;
+        }
         if self.at_kw("as") {
             return self.err(
                 "naming a constraint (`<A: Monoid as m>`) is not implemented: an inline \
@@ -724,8 +800,8 @@ impl Parser {
         Ok(Param {
             // Unspellable by construction: `#` never begins an identifier, so
             // nothing in a body can reach this dictionary by name.
-            name: format!("#constraint{index}"),
-            ty: Ty { kind: TyKind::Named { name, args }, span },
+            name: format!("#constraint{ix}"),
+            ty: class_ty(name, args, index, span),
             implicit: true,
             is_self: false,
             solver: Some(Solver::Infer),

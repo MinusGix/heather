@@ -14,4 +14,4 @@ pub mod lexer;
 pub mod parser;
 
 pub use ast::*;
-pub use parser::{parse_file, ParseError};
+pub use parser::{class_ty, parse_file, ParseError};

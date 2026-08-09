@@ -706,7 +706,7 @@ pub struct Elaborator {
     /// (docs/traits-layer1-design.md §4.1). Declaring is registering; there is
     /// no search over this table at layer 1, only the fill-by-reference and
     /// parent-synthesis lookups the `extends` discipline makes.
-    instances: HashMap<(String, String), InstanceInfo>,
+    instances: HashMap<traits::InstKey, InstanceInfo>,
     /// While an `instance` block is being elaborated: the members that have
     /// already landed, as (written name, full name). An unqualified reference
     /// to one of them resolves to its global, which is the whole of "later
@@ -1224,6 +1224,20 @@ impl Elaborator {
     }
 
     fn elab_decl_inner(&mut self, decl: &Decl) -> R<()> {
+        // The constraint binders' desugaring at an **indexed** class
+        // (docs/operation-indexed-classes-design.md §4): the index binders in
+        // front of the dictionary, or the dictionary floated past the
+        // parameters its index links to. `None` — every declaration with no
+        // indexed-class constraint — is the identity and costs one walk of the
+        // parameter list.
+        let expanded;
+        let (decl, ambiguous) = match self.expand_constraints(decl)? {
+            None => (decl, Vec::new()),
+            Some((params, ambiguous)) => {
+                expanded = Decl { params, ..decl.clone() };
+                (&expanded, ambiguous)
+            }
+        };
         if self.own_declares(&decl.name, &[NameKind::Global]) {
             return err(format!("duplicate name `{}`", decl.name), decl.span);
         }
@@ -1265,6 +1279,7 @@ impl Elaborator {
         // its fields are lowered; the difference is only that these survive
         // into the kernel term.
         let mut cx = Cx::empty();
+        cx.index_ambiguity = ambiguous;
         let mut param_info: Vec<(Type, Level)> = Vec::new();
         for (i, tv) in decl.tyvars.iter().enumerate() {
             let name = &tv.name;
@@ -1301,6 +1316,20 @@ impl Elaborator {
             // annotation the user wrote and not about `Nat<A>`.
             self.check_constraint_param(p)?;
             let (ty, lvl) = self.elab_ty(&cx, &p.ty)?;
+            // A binder of a class type at a written index is what fills a value
+            // slot that unification left open (§5's ladder step 2), for the dot
+            // sugars here and for a call's goal in `apply_implicit`.
+            if let Some(r) = self.class_ref_of_ty(&p.ty)
+                && !r.index.is_empty()
+                && !r.args.is_empty()
+            {
+                cx.dicts.push(Rc::new(DictBinder {
+                    name: p.name.clone(),
+                    class: r.name,
+                    carrier: r.args[0].clone(),
+                    index: r.index,
+                }));
+            }
             cx.push_skel(p.name.clone(), ty.clone(), lvl.clone(), skel_of_ty(&p.ty));
             // An ordinary parameter *at a universe* — `(A: Type<n>, x: A)` —
             // is usable as a type for the rest of the telescope, by exactly
@@ -1836,6 +1865,7 @@ impl Elaborator {
                     continue;
                 }
             };
+            let annot = ty.clone();
             let (term, ty, level, skel) = match ty {
                 Some(t) => {
                     let (ty, lvl) = self.elab_ty(&cx, t).map_err(|e| self.let_ty_hint(&cx, t, e))?;
@@ -1862,6 +1892,21 @@ impl Elaborator {
                     }
                 },
             };
+            // A `let`-bound dictionary at a written index: the local-override
+            // case of the value-slot ladder's step 2
+            // (docs/operation-indexed-classes-design.md §5).
+            if let Some(t) = &annot
+                && let Some(r) = self.class_ref_of_ty(t)
+                && !r.index.is_empty()
+                && !r.args.is_empty()
+            {
+                cx.dicts.push(Rc::new(DictBinder {
+                    name: name.clone(),
+                    class: r.name,
+                    carrier: r.args[0].clone(),
+                    index: r.index,
+                }));
+            }
             cx.aliases.push(Rc::new(Alias {
                 skel,
                 name: name.clone(),
@@ -2803,6 +2848,17 @@ impl Elaborator {
             ExprKind::App { args, explicit, .. } => {
                 let (name, _, _) = e.as_named().expect("head is a name");
                 let name = &name.to_string();
+                // `Nat::Monoid(add)` — a class at a type, at its index
+                // (docs/operation-indexed-classes-design.md §5.1). Before the
+                // ordinary application path, because an indexed class's
+                // qualified name is not a callable global: `Bool::Monoid#or`
+                // is, and this is what names it.
+                if !self.shadowed(cx, name)
+                    && name.contains("::")
+                    && let Some(r) = self.class_at_type(cx, name, args, e.span)
+                {
+                    return r;
+                }
                 if name == "Succ" {
                     let [arg] = args.as_slice() else {
                         return err("`Succ` takes exactly one argument", e.span);
@@ -3943,6 +3999,19 @@ impl Elaborator {
         if let Some(d) = self.type_projection(cx, recv, name, args, span)? {
             return Ok(d);
         }
+        // The **index pseudo-projection** (`docs/operation-indexed-classes-
+        // design.md` §5.2): `d.op` at `d: Monoid<A>(add)` is `add`, read off
+        // the dictionary's type. Definitionally trivial, and it closes the
+        // last "how do I refer to it" corner — anything that can name a
+        // dictionary can name its index. Before the field path and harmless
+        // there: a class cannot have a field named like its own index (the
+        // record lowering refuses the collision), so the two never compete.
+        if let ExprKind::Var(d) = &recv.kind
+            && let Some(e) = self.index_of_dict(cx, d, name)
+        {
+            let (t, ty, lvl) = self.elab_infer(cx, &e)?;
+            return Ok(DotResolution::Project(t, ty, lvl, None));
+        }
         if self.record_fields.contains(name) {
             // Inference failure is not an error *here*: the fallback is what
             // handles a receiver whose type only the method call determines,
@@ -4160,11 +4229,21 @@ impl Elaborator {
         let mut trace: Vec<resolve::TraceLine> = Vec::new();
         let mut hits: Vec<(Rc<Inductive>, Type, Term, String, Upcast)> = Vec::new();
         let mut tried: Vec<String> = Vec::new();
+        let mut unpinned: Option<ElabError> = None;
         for (_, info) in &cands {
             let Some(ind) = self.lookup_inductive(&info.name).cloned() else { continue };
-            let Ok((goal, glvl)) =
-                self.lower_instance(cx, &ind, &[(rty.clone(), rlvl.clone())], &[], span)
-            else {
+            let targs = [(rty.clone(), rlvl.clone())];
+            // An indexed class's goal has a value slot, and the ladder's step 2
+            // is what fills it here (§5.1): scope, then refuse by name.
+            let vargs = match self.index_vargs(cx, info, &ind, &targs, &carrier, span) {
+                Ok(Some(v)) => v,
+                Ok(None) => continue,
+                Err(e) => {
+                    unpinned.get_or_insert(e);
+                    continue;
+                }
+            };
+            let Ok((goal, glvl)) = self.lower_instance(cx, &ind, &targs, &vargs, span) else {
                 continue;
             };
             let display = format!("{}<{carrier}>", info.name);
@@ -4206,6 +4285,9 @@ impl Elaborator {
             // "unknown name" the method desugaring would have produced.
             if other.is_some() {
                 return Ok(None);
+            }
+            if let Some(e) = unpinned {
+                return Err(e);
             }
             return Err(ElabError::Resolution {
                 goal: tried.join("` or `"),
@@ -4287,6 +4369,224 @@ impl Elaborator {
             return (ind, goal, dict);
         }
         (child, child_ty, child_dict)
+    }
+
+    /// The value-slot ladder's **step 2** at a goal the dot sugars are
+    /// building (`docs/operation-indexed-classes-design.md` §5, §5.1): a
+    /// binder in scope of the goal's class — or of a descendant, whose
+    /// `extends` chain passes the index up unchanged — answers what the index
+    /// is. Innermost first, exactly as the resolver's own scope pass.
+    ///
+    /// The index comes back as **surface** expressions at the goal's class, so
+    /// the goal is built by the ordinary value-argument path and nothing here
+    /// has to re-scope a kernel term. `None` is "no scope binder pins the
+    /// slot", and its consumer refuses by name.
+    fn scope_index(
+        &self,
+        cx: &Cx,
+        target: &str,
+        carrier: &Type,
+        clvl: &Level,
+    ) -> Option<Vec<Expr>> {
+        let tkey = self.key_of(target)?;
+        for d in cx.dicts.iter().rev() {
+            let Some(dkey) = self.key_of(&d.class) else { continue };
+            let Some(dinfo) = self.classes.get(&dkey) else { continue };
+            let index = if dkey == tkey {
+                d.index.clone()
+            } else {
+                // Not this binder's class and not one of its ancestors: try the
+                // next binder out rather than giving up on the scope.
+                let Some(anc) = dinfo
+                    .ancestors
+                    .iter()
+                    .find(|r| self.key_of(&r.name).as_deref() == Some(tkey.as_str()))
+                else {
+                    continue;
+                };
+                // The ancestor's index is written in the child's own
+                // value-parameter names (layer 1's `extends` restriction), so
+                // instantiating it is the positional lookup.
+                anc.index
+                    .iter()
+                    .map(|a| match &a.kind {
+                        ExprKind::Var(n) => dinfo
+                            .valparams
+                            .iter()
+                            .position(|p| p.name == *n)
+                            .and_then(|i| d.index.get(i).cloned())
+                            .unwrap_or_else(|| a.clone()),
+                        _ => a.clone(),
+                    })
+                    .collect()
+            };
+            // The carrier has to be *this* one: a second class binder at an
+            // unrelated type is not an answer.
+            let Ok((dc, dlvl)) = self.elab_ty(cx, &d.carrier) else { continue };
+            if !self.conv_types(cx, &dc, carrier, clvl) || dlvl != *clvl {
+                continue;
+            }
+            return Some(index);
+        }
+        None
+    }
+
+    /// The value arguments of a dot sugar's goal
+    /// (`docs/operation-indexed-classes-design.md` §5.1): empty at an
+    /// unindexed class (every goal that predates this design), the scope
+    /// binder's index at an indexed one, and the value-slot refusal where
+    /// scope has no answer. `Ok(None)` is "this candidate cannot be built at
+    /// all", which the caller skips as it always did.
+    fn index_vargs(
+        &self,
+        cx: &Cx,
+        info: &traits::ClassInfo,
+        ind: &Inductive,
+        targs: &[(Type, Level)],
+        subject: &str,
+        span: Span,
+    ) -> Result<Option<Vec<(Term, Type, Level)>>, ElabError> {
+        if info.valparams.is_empty() {
+            return Ok(Some(Vec::new()));
+        }
+        let (carrier, clvl) = &targs[0];
+        let Some(index) = self.scope_index(cx, &info.name, carrier, clvl) else {
+            // The carrier's head where it has one: at `Bool` the refusal lists
+            // the two Bool structures and not every instance of the class.
+            let head = self.type_namespace(cx, carrier, span);
+            return Err(self.value_slot_refusal(info, subject, head.as_deref(), span));
+        };
+        match self.valparam_args(cx, ind, targs, &index, span) {
+            Ok(v) => Ok(Some(v)),
+            Err(_) => Ok(None),
+        }
+    }
+
+    /// Fill a blocked goal's **index slots** from a dictionary in scope
+    /// (`docs/operation-indexed-classes-design.md` §5, ladder step 2).
+    ///
+    /// The goal's carrier is itself a scratch-world meta here, so the scope
+    /// binder is chosen by class alone — innermost first, the goal's class or
+    /// a descendant. That is a *proposal* and not a decision: the filled goal
+    /// still has to resolve, and the answer still passes the kernel gate, so a
+    /// wrong guess costs a refusal and never a wrong term.
+    ///
+    /// `true` when it filled at least one slot.
+    fn fill_index_from_scope(
+        &self,
+        cx: &Cx,
+        goal: Option<&Ty>,
+        params: &[ParamMeta],
+        slot_param: &[usize],
+        sols: &mut [Sol],
+    ) -> bool {
+        let Some(r) = goal.and_then(|t| self.class_ref_of_ty(t)) else { return false };
+        if r.index.is_empty() {
+            return false;
+        }
+        let Some(tkey) = self.key_of(&r.name) else { return false };
+        let mut filled = false;
+        for a in &r.index {
+            let ExprKind::Var(nm) = &a.kind else { continue };
+            let Some(pi) = params.iter().position(|p| p.name == *nm) else { continue };
+            let Some(slot) = slot_param.iter().position(|&s| s == pi) else { continue };
+            if sols[slot].solved().is_some() || matches!(sols[slot], Sol::Withheld) {
+                continue;
+            }
+            let Some(e) = self.scope_dict_index(cx, &tkey) else { continue };
+            let Some(idx) = r.index.iter().position(|x| std::ptr::eq(x, a)) else { continue };
+            let Some(e) = e.get(idx).cloned() else { continue };
+            let Ok((t, _, _)) = self.elab_infer(cx, &e) else { continue };
+            sols[slot] = Sol::Solved(Rc::new(t));
+            filled = true;
+        }
+        filled
+    }
+
+    /// The innermost dictionary in scope whose class is `tkey` or a descendant
+    /// of it, with its index expressed **at that class**.
+    fn scope_dict_index(&self, cx: &Cx, tkey: &str) -> Option<Vec<Expr>> {
+        for d in cx.dicts.iter().rev() {
+            let Some(dkey) = self.key_of(&d.class) else { continue };
+            let Some(dinfo) = self.classes.get(&dkey) else { continue };
+            if dkey == tkey {
+                return Some(d.index.clone());
+            }
+            let Some(anc) =
+                dinfo.ancestors.iter().find(|r| self.key_of(&r.name).as_deref() == Some(tkey))
+            else {
+                continue;
+            };
+            return Some(
+                anc.index
+                    .iter()
+                    .map(|a| match &a.kind {
+                        ExprKind::Var(nm) => dinfo
+                            .valparams
+                            .iter()
+                            .position(|p| p.name == *nm)
+                            .and_then(|i| d.index.get(i).cloned())
+                            .unwrap_or_else(|| a.clone()),
+                        _ => a.clone(),
+                    })
+                    .collect(),
+            );
+        }
+        None
+    }
+
+    /// `d.op` — the index of a named dictionary in scope, as the expression
+    /// its binder was written at (§5.2). `None` for every name that is not a
+    /// dictionary binder and every `.f` that is not one of its class's
+    /// indices, so an ordinary field projection is untouched.
+    fn index_of_dict(&self, cx: &Cx, dict: &str, name: &str) -> Option<Expr> {
+        let d = cx.dicts.iter().rev().find(|d| d.name == dict)?;
+        let info = self.lookup_class(&d.class)?;
+        let k = info.valparams.iter().position(|p| p.name == name)?;
+        d.index.get(k).cloned()
+    }
+
+    /// The value-slot refusal (`docs/operation-indexed-classes-design.md` §5,
+    /// §11): the slot, the class, and **every registered instance that would
+    /// answer**, as data. This is the diagnostic the whole design leans on —
+    /// at `Bool` it names both monoids with their indices, which is what makes
+    /// refusing better than nominating.
+    fn value_slot_refusal(
+        &self,
+        class: &traits::ClassInfo,
+        subject: &str,
+        head: Option<&str>,
+        span: Span,
+    ) -> ElabError {
+        let Some(ckey) = self.key_of(&class.name) else {
+            return ElabError::Elab { msg: format!("`{}` is not in scope", class.name), span };
+        };
+        let mut listed: Vec<String> = self
+            .instances
+            .iter()
+            .filter(|((c, h, _), _)| *c == ckey && head.is_none_or(|k| h == k))
+            .map(|(_, i)| format!("`{}`", i.written))
+            .collect();
+        listed.sort();
+        let slots = class
+            .valparams
+            .iter()
+            .map(|p| format!("`{}`", p.name))
+            .collect::<Vec<_>>()
+            .join(", ");
+        ElabError::Elab {
+            msg: format!(
+                "the index {slots} of `{}` at `{subject}` is not pinned here: a value slot \
+                 is filled by unification or by a binder in scope of the goal's class, and \
+                 never by search — nothing nominates, so nothing guesses. Registered: {}. \
+                 Write the dictionary you meant (`{subject}::{}(⟨index⟩).⟨field⟩`) or take \
+                 the class as a constraint",
+                class.name,
+                if listed.is_empty() { "no instances".into() } else { listed.join(", ") },
+                class.name
+            ),
+            span,
+        }
     }
 
     /// The classes that **declare** `name` — not the ones that merely inherit
@@ -4400,11 +4700,19 @@ impl Elaborator {
         let mut trace: Vec<resolve::TraceLine> = Vec::new();
         let mut hits: Vec<(Rc<Inductive>, Type, Term, String, Upcast)> = Vec::new();
         let mut tried: Vec<String> = Vec::new();
+        let mut unpinned: Option<ElabError> = None;
         for (_, info) in &cands {
             let Some(ind) = self.lookup_inductive(&info.name).cloned() else { continue };
-            let Ok((goal, glvl)) =
-                self.lower_instance(cx, &ind, &[(carrier.clone(), clvl.clone())], &[], span)
-            else {
+            let targs = [(carrier.clone(), clvl.clone())];
+            let vargs = match self.index_vargs(cx, info, &ind, &targs, &subject, span) {
+                Ok(Some(v)) => v,
+                Ok(None) => continue,
+                Err(e) => {
+                    unpinned.get_or_insert(e);
+                    continue;
+                }
+            };
+            let Ok((goal, glvl)) = self.lower_instance(cx, &ind, &targs, &vargs, span) else {
                 continue;
             };
             let display = format!("{}<{subject}>", info.name);
@@ -4433,6 +4741,9 @@ impl Elaborator {
         let Some((ind, goal, dict, display, up)) = hits.pop() else {
             if other.is_some() {
                 return Ok(None);
+            }
+            if let Some(e) = unpinned {
+                return Err(e);
             }
             return Err(ElabError::Resolution { goal: tried.join("` or `"), span, trace });
         };
@@ -4558,20 +4869,43 @@ impl Elaborator {
     /// gets here, which is why `Nat::AddCommMonoid.plus` — the spelling the
     /// library already had — is untouched: this generalizes it to the carriers
     /// that have no global to name.
-    fn class_at_type(&self, cx: &Cx, name: &str, span: Span) -> Option<R<(Term, Type, Level)>> {
+    /// `Nat::Monoid(add)` — the same spelling with the class's **index**
+    /// (docs/operation-indexed-classes-design.md §5.1). An indexed class
+    /// otherwise has no short dictionary spelling at a carrier with two
+    /// structures, which is what discharges the projection round's
+    /// "`T::C` takes no arguments" residue on `issues/traits.md`.
+    fn class_at_type(
+        &self,
+        cx: &Cx,
+        name: &str,
+        index: &[Expr],
+        span: Span,
+    ) -> Option<R<(Term, Type, Level)>> {
         let (subject, class) = names::split_qual(name)?;
         let key = self.key_of(class)?;
         let info = Rc::clone(self.classes.get(&key)?);
-        if info.params.len() != 1 {
+        if info.params.len() != 1 || info.valparams.len() != index.len() {
             return None;
         }
         let ind = self.lookup_inductive(&info.name).cloned()?;
         let kind =
             if subject == "Nat" { TyKind::Nat } else { TyKind::Named { name: subject.into(), args: vec![] } };
         let (carrier, clvl) = self.elab_ty(cx, &Ty { kind, span }).ok()?;
-        let (goal, glvl) =
-            self.lower_instance(cx, &ind, &[(carrier, clvl)], &[], span).ok()?;
-        let display = format!("{}<{subject}>", info.name);
+        let targs = [(carrier, clvl)];
+        let vargs = match self.valparam_args(cx, &ind, &targs, index, span) {
+            Ok(v) => v,
+            Err(e) => return Some(Err(e)),
+        };
+        let (goal, glvl) = self.lower_instance(cx, &ind, &targs, &vargs, span).ok()?;
+        let display = format!(
+            "{}<{subject}>{}",
+            info.name,
+            if index.is_empty() {
+                String::new()
+            } else {
+                format!("({})", index.iter().map(traits::render_expr).collect::<Vec<_>>().join(", "))
+            }
+        );
         let mut tr = Vec::new();
         match self.resolve_goal(cx, &goal, &glvl, &display, span, &mut tr) {
             Some(t) => Some(Ok((t, goal, glvl))),
@@ -6225,6 +6559,24 @@ impl Elaborator {
                     continue;
                 }
                 let Some(goal) = zonked(&ob.dom, n, &sols) else {
+                    // The value-slot ladder's step 2 at a *call*
+                    // (docs/operation-indexed-classes-design.md §5): the goal
+                    // is blocked on its index, and a binder in scope of the
+                    // goal's class pins it. This is what lets a generic
+                    // function call itself — `sum_all(t)` inside `sum_all`
+                    // fills the index from the room rather than from search.
+                    if self.fill_index_from_scope(
+                        cx,
+                        all_params.get(ob.param).and_then(|p| p.solver.as_deref()),
+                        &all_params,
+                        &slot_param,
+                        &mut sols,
+                    ) {
+                        // Progressed *and* still blocked: this obligation has
+                        // not been discharged, only unblocked, so the loop has
+                        // to come round again rather than fall out.
+                        progressed = true;
+                    }
                     blocked = true;
                     continue;
                 };
@@ -6274,6 +6626,18 @@ impl Elaborator {
         for ob in &resolves {
             if matches!(sols[ob.slot], Sol::Withheld) {
                 let p = all_params.get(ob.param).map(|p| p.name.as_str()).unwrap_or("?");
+                // A goal blocked on a **value slot** is refused by name, with
+                // every registered instance listed as data
+                // (docs/operation-indexed-classes-design.md §5, §11): "no
+                // instance" would be a lie and "could not infer" says nothing
+                // about which structure was wanted.
+                if let Some(t) = all_params.get(ob.param).and_then(|q| q.solver.as_deref())
+                    && let Some(r) = self.class_ref_of_ty(t)
+                    && let Some(class) = self.lookup_class(&r.name)
+                    && !class.valparams.is_empty()
+                {
+                    return Err(self.value_slot_refusal(&class, name, None, span));
+                }
                 let goal = all_params
                     .get(ob.param)
                     .and_then(|q| q.solver.as_deref())
@@ -6666,8 +7030,13 @@ impl Elaborator {
                 // and not earlier: a registered instance is an ordinary global
                 // and was found above, so this reaches only the carriers that
                 // have none (docs/traits-type-projection-design.md §5).
-                if let Some(r) = self.class_at_type(cx, name, span) {
+                if let Some(r) = self.class_at_type(cx, name, &[], span) {
                     return r;
+                }
+                // A name the constraint list bound twice over binds nothing
+                // (§5.2), and saying so names both constraints.
+                if let Some((_, why)) = cx.index_ambiguity.iter().find(|(n, _)| n == name) {
+                    return err(why.clone(), span);
                 }
                 Err(self.name_miss(name, format!("unbound name `{name}`"), span))
             }
@@ -6874,6 +7243,19 @@ struct Cx {
     /// lowered at an instantiation. Empty everywhere else: type parameters are
     /// monomorphized, so they never survive into a kernel term.
     tyvars: Vec<TyVar>,
+    /// Class dictionaries in scope, outermost first, **as written**
+    /// (docs/operation-indexed-classes-design.md §5, ladder step 2). A value
+    /// index is never searched for; where it is not already ground it comes
+    /// from a binder of the goal's class — or of a descendant — whose own index
+    /// pins it, and that index is a surface expression valid in this very
+    /// context. Empty for every declaration with no class binder, which is what
+    /// keeps the whole mechanism off code that has nothing to do with classes.
+    dicts: Vec<Rc<DictBinder>>,
+    /// Index names that a *repeated* constraint left bound to nothing
+    /// (`docs/operation-indexed-classes-design.md` §5.2), with the refusal
+    /// each one owes. Consulted only where the answer would otherwise have
+    /// been "unbound name".
+    index_ambiguity: Vec<(String, String)>,
     /// The meta-layer binder environment, present exactly while a `meta fn`'s
     /// body — or a quote payload inside it — elaborates
     /// (docs/in-language-map-design.md §5). `None` everywhere else, which is
@@ -6929,6 +7311,8 @@ impl Cx {
             guard: None,
             aliases: vec![],
             tyvars: vec![],
+            dicts: vec![],
+            index_ambiguity: vec![],
             meta: None,
         }
     }
@@ -6945,6 +7329,24 @@ impl Cx {
         self.gamma.entries.push(CtxEntry { ty: Rc::new(ty), level });
         self.skels.push(skel);
     }
+}
+
+/// A class dictionary in scope, as the declaration wrote it
+/// (`docs/operation-indexed-classes-design.md` §5). The carrier and the index
+/// are **surface** and are re-elaborated in the context that consults them,
+/// which is what keeps the index an ordinary expression of the use site rather
+/// than a kernel term that would have to be re-scoped.
+#[derive(Clone)]
+struct DictBinder {
+    /// The binder's own name, where it has a spellable one — what `d.op`
+    /// looks itself up by. `#`-prefixed for an inline constraint, which
+    /// deliberately offers no way to project the dictionary and therefore no
+    /// way to reach this either.
+    name: String,
+    /// The class, as written — resolved through the ordinary name regime.
+    class: String,
+    carrier: Ty,
+    index: Vec<Expr>,
 }
 
 /// The walkers of [`count_holes`], at module level so that the pattern
@@ -7316,6 +7718,25 @@ fn unify_ty(
 /// with `strengthen_tm(Γ, s, d) = Some(s₀)`, the recorded `?m := s₀`
 /// satisfies `s₀[embed(Γ,d)] = s₀.shift(d) = s` — the verbatim take plus the
 /// strengthening that already runs *is* the inversion for this class.
+/// How many arguments a spine applies. Used only by the equal-arity rule.
+fn spine_len(mut t: &Term) -> usize {
+    let mut k = 0;
+    while let Term::App { fun, .. } = t {
+        k += 1;
+        t = fun;
+    }
+    k
+}
+
+/// Is this spine headed by a **committed** global — one outside this call's
+/// scratch world? A meta head at either end is what the guard exists for.
+fn rigid_global_head(mut t: &Term, n: u32) -> bool {
+    while let Term::App { fun, .. } = t {
+        t = fun;
+    }
+    matches!(t, Term::GlobalTm { var, .. } if var.0 >= n)
+}
+
 fn unify_tm(
     gamma: &LocalCtx,
     pat: &Term,
@@ -7353,9 +7774,22 @@ fn unify_tm(
             while let Term::App { fun, .. } = head {
                 head = fun;
             }
+            //
+            // The **equal-arity flex-rigid rule**
+            // (docs/operation-indexed-classes-design.md §4.2): where the
+            // subject's own spine is headed by a *committed global* and has
+            // exactly as many arguments, the head is determined and the
+            // decomposition is the inversion — `?op(x, u) ≟ add(x, 0)` gives
+            // `?op := add` with `u ≟ 0` learned beside it, which is how a
+            // law's corollary pins its operation. It dodges the guard's
+            // recorded counterexample precisely: `?f(?a) ≟ add(a, a)` has
+            // spine lengths 1 against 2, and the dangerous partial-application
+            // peel *is* the unequal-length case, which stays refused. Same
+            // license as every rule here — learn-only, the kernel judges.
             if let Term::GlobalTm { var, .. } = head
                 && var.0 < n
                 && sols[var.0 as usize].solved().is_none()
+                && !(spine_len(pat) == spine_len(subj) && rigid_global_head(subj, n))
             {
                 return;
             }
