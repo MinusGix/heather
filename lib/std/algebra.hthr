@@ -12,6 +12,13 @@
 // file carried until 2026-08-09, and with it the additive hierarchy
 // (`AddSemigroup` → `AddMonoid` → `AddCommMonoid`) that existed only to say
 // "the other monoid" under different field names.
+//
+// A `designation` says what an operator SYMBOL means at a carrier
+// (docs/operators-onto-classes-design.md). It is not a nomination: `+` is `or`
+// at `Bool` and `*` is `and`, both monoids still register as equals, and the
+// symbols are what distinguish them. Notice that nothing below is written
+// twice — the symbol is a spelling of the index, so `sum_all` and `mconcat`
+// are one fold reached two ways.
 
 import bool;
 import nat;
@@ -125,6 +132,29 @@ instance Cmp<Nat> { le := leb, le_refl := le_refl }
 instance Cmp<Bool> { le := leb_bool, le_refl := leb_bool_refl }
 
 // ---------------------------------------------------------------------------
+// The designations: what a symbol means at a carrier
+// (docs/operators-onto-classes-design.md §3).
+//
+// One entry per (symbol, carrier head); a duplicate is a declaration error.
+// `Bool` is the case worth reading: two operations, two symbols, and the
+// Boolean-semiring convention chooses which is which — `+` is disjunction,
+// `*` is conjunction. Neither is "the" Bool monoid, because a designation says
+// what a *symbol* means and never which structure a carrier has.
+//
+// `+` at `Nat` is `add`, which is what the parser hard-coded `+` to mean at
+// every carrier until this round. It is now one row of a table, and the growth
+// invariant is that a file with no row still gets it.
+
+designation + at Nat := add
+designation + at Bool := or
+designation * at Bool := and
+
+// The generic entry, at an **open** element type: `xs + ys` is concatenation
+// at every `List<A>`, keyed on the head exactly as `instance<A> Monoid<List<A>>`
+// is.
+designation<A> + at List<A> := append
+
+// ---------------------------------------------------------------------------
 // The consumers: written once against a class, used at every carrier.
 
 // The fold every monoid is for, in the LINKED form (design §4.1): the
@@ -188,32 +218,50 @@ fn or_default<A>(o: Option<A>, d: Default<A> := infer) -> A {
 
 // The chain's generic consequence: a right unit follows from commutativity and
 // the left one, so `Monoid`'s `unit_r` is redundant *for a commutative
-// monoid*. Written in the EMPTY-slot form (design §4.1's style rule: programs
-// link their index, theory leaves the slot empty), so `op` is the binder's own
-// index and every corollary below pins it by unification from its own
-// statement — one proof, three structures, two of them on one carrier.
-theorem op_unit_of_comm<A: CommMonoid>(x: A): op(x, A.unit) = x {
+// monoid*. Written in the SYMBOL form
+// (docs/operators-onto-classes-design.md §5), which is what lets the statement
+// be the mathematics: the `+` here is the bound index, not an ambient
+// operator, and every corollary below still pins it **by unification** from
+// its own goal — one proof, three structures, two of them on one carrier.
+//
+// `bool_and_true` is the case that shows the ladder's order. At `Bool` the
+// symbol `+` designates `or`, and the corollary's goal says `and`: unification
+// is the ladder's first rung, so it wins, and the designation is never
+// consulted. A designation supplies an index nothing else pinned; it never
+// overrides one.
+theorem op_unit_of_comm<A: CommMonoid(+)>(x: A): x + A.unit = x {
     trans(A.comm(x, A.unit), A.unit_l(x))
 }
 
 // ---------------------------------------------------------------------------
 // The specializations, one per way an instance can be found.
 
-// The index, spelled positionally: `sum` and `all_of` and `any_of` are the
-// same fold at three structures, and each says which. `any_of` used to
-// `let`-shadow the registry, because there was no other way to reach Bool's
-// second monoid; now it is one word.
-fn sum(ns: List<Nat>) -> Nat { mconcat(add, ns) }
+// The fold under whatever `+` means here
+// (docs/operators-onto-classes-design.md §5). The body passes the symbol
+// positionally to `mconcat` — inside this declaration `+` IS the bound index,
+// so the two folds are one term — and at a call site the index is filled from
+// the designation at the caller's carrier, which is the value-slot ladder's
+// third rung.
+fn sum_all<A: Monoid(+)>(xs: List<A>) -> A { mconcat(+, xs) }
 
+// One declaration, three carriers, and no caller names an operation. The
+// third is at an **open** element type, so its goal is
+// `Monoid<List<A>>(append)` with `A` the caller's own parameter, answered by
+// backchaining through `instance<A> Monoid<List<A>>(append)`.
+fn sum(ns: List<Nat>) -> Nat { sum_all(ns) }
+
+fn any_of(bs: List<Bool>) -> Bool { sum_all(bs) }
+
+fn concat<A>(xss: List<List<A>>) -> List<A> { sum_all(xss) }
+
+// And `Bool`'s *other* monoid, reached the way it always was. `all_of` is
+// conjunction, which is the symbol `*` here — there is no `*`-fold, because a
+// second declaration of the same fold under a second symbol is the duplication
+// this whole line of design exists to delete. The positional spelling costs one
+// word and is legal forever (design §4.1), and its existence beside `any_of`
+// is the sentence that nothing was nominated: two structures at one carrier,
+// both registered, both reachable, neither preferred.
 fn all_of(bs: List<Bool>) -> Bool { mconcat(and, bs) }
-
-fn any_of(bs: List<Bool>) -> Bool { mconcat(or, bs) }
-
-// The GENERIC instance, at an **open** element type: the goal is
-// `Monoid<List<A>>(append)` with `A` this function's own parameter, so it is
-// answered by backchaining through `instance<A> Monoid<List<A>>(append)` and
-// not by any declared value.
-fn concat<A>(xss: List<List<A>>) -> List<A> { mconcat(append, xss) }
 
 // The class lemma at two carriers. Neither of these re-proves anything: they
 // are `mconcat_single` with the dictionary found — at `Nat` through the

@@ -29,11 +29,38 @@ pub enum Item {
     /// `instance C<T> { … }` — a namespace of ordinary declarations plus an
     /// assembled record value (docs/traits-layer1-design.md §4).
     Instance(InstanceDecl),
+    /// `designation + at Nat := add` — what an operator symbol means at a
+    /// carrier (docs/operators-onto-classes-design.md §3).
+    Designation(DesignationDecl),
     /// `import nat;` / `import option::{Option, map};`
     /// (docs/modules-design.md §3.1). Allowed only before the first
     /// declaration, so the import DAG is readable without elaborating
     /// anything.
     Import(ImportItem),
+}
+
+/// `designation<A> + at List<A> := append`
+/// (docs/operators-onto-classes-design.md §3.1).
+///
+/// Shaped like `instance` on purpose: the generic binder list is in
+/// `instance<A> Monoid<List<A>>(append)`'s position and does the same job — it
+/// exists to *spell* the carrier, whose **head** is the half of the key that
+/// is kept — and the right-hand side is `:=` plus a name, which is what an
+/// instance's literal field is.
+#[derive(Debug, Clone)]
+pub struct DesignationDecl {
+    /// `designation<A> …` — bound only so that `List<A>` parses. The key is
+    /// the carrier's head, so these never reach it.
+    pub tyvars: Vec<String>,
+    /// The operator, as written: `+`, `*`, `<=`, `<`.
+    pub symbol: String,
+    pub carrier: Ty,
+    /// The designated operation. A **bare global name** (§3.2): it is emitted
+    /// bare at each use site and instantiated there by ordinary implicit
+    /// inference, which is why a written type application would be wrong
+    /// rather than merely unsupported.
+    pub op: Expr,
+    pub span: Span,
 }
 
 /// One `import` item. The listed names are a *standing disambiguation*, not a
@@ -59,6 +86,9 @@ impl Item {
             Item::Class(c) => panic!("expected a declaration, found `class {}`", c.name),
             Item::Instance(i) => {
                 panic!("expected a declaration, found `instance {}`", i.class.name)
+            }
+            Item::Designation(d) => {
+                panic!("expected a declaration, found `designation {}`", d.symbol)
             }
         }
     }
@@ -545,6 +575,20 @@ impl Expr {
 pub enum ExprKind {
     /// A name: parameter, `fn`, or `theorem`.
     Var(String),
+    /// An **operator symbol** — `+`, `*`, `<=`, `<`
+    /// (docs/operators-onto-classes-design.md §4). A name in a namespace of
+    /// its own: `a + b` is this node *applied*
+    /// (`App { head: OpSymbol("+"), … }`) and a lone symbol between delimiters
+    /// — `Monoid(+)`, `A::CommMonoid(+)` — is it unapplied, which is the
+    /// designation reference §7 of the operation-indexed design specified.
+    ///
+    /// Never reaches a kernel term: the elaborator resolves it to a name at
+    /// the top of `elab_infer_at`/`elab_check_skel` and everything downstream
+    /// is the ordinary application path. Its last resolution rung is the
+    /// fixed name the parser used to desugar to, which is why every operator
+    /// expression that elaborated before this node existed still elaborates
+    /// to the same term.
+    OpSymbol(String),
     /// `Type<n>` where a *term* is expected — the code `TmTy(n) : Ty (n+1)`.
     /// A universe is a type, so it is spellable in both positions; this is the
     /// expression one, and it infers rather than needing the `Expr`/`Ty`

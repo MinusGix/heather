@@ -2922,7 +2922,10 @@ fn classify_field(t: &Ty, name: &str, params: &[String], ctor: &str) -> R<bool> 
 pub(crate) fn expr_mentions(e: &Expr, name: &str) -> bool {
     match &e.kind {
         ExprKind::Var(n) => n == name,
-        ExprKind::Num(_)
+        // An operator symbol is a name in its own namespace, never a
+        // declaration's (docs/operators-onto-classes-design.md §4).
+        ExprKind::OpSymbol(_)
+        | ExprKind::Num(_)
         | ExprKind::Refl
         | ExprKind::AutoRefl
         | ExprKind::Hole(_)

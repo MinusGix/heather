@@ -220,3 +220,40 @@ fn generics_and_le_share_a_file() {
     )
     .expect("generics and `<=` coexist");
 }
+
+// -- the growth invariant, from the operators side --------------------------
+//
+// `+`/`<=` stopped being a parser desugaring in the operators-onto-classes
+// round (docs/operators-onto-classes-design.md): the symbol survives into the
+// AST and the elaborator resolves it. Everything above is the pin — the whole
+// Nat suite written in `+`, with `ORDER_KIT`'s own `add`/`Le`, and **no
+// designation anywhere** — and it passes unchanged because the ladder's third
+// rung *is* the table this file's first paragraph described. The two tests
+// below make that explicit rather than incidental.
+
+#[test]
+fn the_symbol_resolves_to_the_files_own_name() {
+    // A file whose `add` is its own, and a `+` that means it. If the ladder
+    // were name-first-designation-second — or if a designation could reach in
+    // from another module — this is the term that would change.
+    let mut e = Elaborator::with_prelude().expect("prelude");
+    e.elab_source(
+        "fn add(a: Nat, b: Nat) -> Nat { match b { Zero => a, Succ(k) => Succ(add(a, k)) } }\n\
+         theorem written(x: Nat, y: Nat): x + y = add(x, y) { refl }\n\
+         theorem computed(): 2 + 2 = 4 { refl }\n",
+    )
+    .expect("`+` names this file's own `add`");
+}
+
+#[test]
+fn a_symbol_with_no_name_behind_it_says_so() {
+    // `*` has no designation and no `mul` in scope. Before this round the
+    // message was `unbound name \`mul\``, which named something nobody wrote.
+    let mut e = Elaborator::with_prelude().expect("prelude");
+    let err = e
+        .elab_source("theorem t(x: Nat): x * x = x { refl }")
+        .expect_err("`*` means nothing here");
+    let msg = format!("{err}");
+    assert!(msg.contains("`*` has no meaning here"), "{msg}");
+    assert!(msg.contains("mul"), "{msg}");
+}

@@ -15,7 +15,8 @@ use std::collections::HashMap;
 use std::rc::Rc;
 
 use heather_syntax::{
-    Block, ClassDecl, ClassRef, CtorDecl, Decl, DeclKind, Expr, ExprKind, FieldDecl, InductiveDecl,
+    Block, ClassDecl, ClassRef, CtorDecl, Decl, DeclKind, DesignationDecl, Expr, ExprKind, FieldDecl,
+    InductiveDecl,
     InstanceBody, InstanceDecl, InstanceField, LamBinder, Param, RecordLitField, Span, Stmt, Ty,
     TyKind,
 };
@@ -68,6 +69,18 @@ pub(crate) struct InstanceInfo {
     /// `requires` binders), in which case it cannot be projected from by name
     /// alone — fill-by-reference is refused against it with a clear message.
     pub parameterized: bool,
+}
+
+/// A registered **designation**: what one operator symbol means at one
+/// carrier head (docs/operators-onto-classes-design.md §3).
+#[derive(Clone)]
+pub(crate) struct DesignationInfo {
+    /// The designated operation, as a bare global name. Emitted bare at each
+    /// use site and instantiated there by ordinary implicit inference — which
+    /// is why the declaration refuses anything but a name (§3.2).
+    pub op: String,
+    /// The declaration as written, for the duplicate diagnostic.
+    pub written: String,
 }
 
 /// The key an instance is registered under. Deliberately *not* the rendered
@@ -144,7 +157,17 @@ pub(crate) fn render_ty(t: &Ty) -> String {
 pub(crate) fn render_expr(e: &Expr) -> String {
     match &e.kind {
         ExprKind::Var(n) => n.clone(),
+        ExprKind::OpSymbol(s) => s.clone(),
         ExprKind::Num(n) => n.to_string(),
+        // An operator application renders as what was **written**
+        // (`a + b`, never `add(a, b)`) — the standing ask of
+        // `issues/diagnostics-name-the-written-form.md`, arriving free now
+        // that the symbol survives into the AST.
+        ExprKind::App { head, args, .. }
+            if matches!(head.kind, ExprKind::OpSymbol(_)) && args.len() == 2 =>
+        {
+            format!("{} {} {}", render_expr(&args[0]), render_expr(head), render_expr(&args[1]))
+        }
         ExprKind::App { head, args, .. } => format!(
             "{}({})",
             render_expr(head),
@@ -170,6 +193,41 @@ fn span_expr(kind: ExprKind, span: Span) -> Expr {
 
 fn var(name: &str, span: Span) -> Expr {
     span_expr(ExprKind::Var(name.to_string()), span)
+}
+
+/// What [`Elaborator::expand_constraints`] produces: the rewritten parameter
+/// telescope, plus the two per-declaration facts the desugaring is the only
+/// thing that knows.
+pub(crate) struct Expanded {
+    pub params: Vec<Param>,
+    /// Index names a *repeated* constraint left bound to nothing
+    /// (docs/operation-indexed-classes-design.md §5.2), with the refusal each
+    /// one owes.
+    pub ambiguous: Vec<(String, String)>,
+    /// Operator symbols a `C(+)` slot installed, as (symbol, binder name)
+    /// (docs/operators-onto-classes-design.md §5).
+    pub symbols: Vec<(String, String)>,
+}
+
+/// The generated name of an index binder a SYMBOL slot introduced
+/// (docs/operators-onto-classes-design.md §5.1).
+///
+/// The **symbol is in the name**, because a call site fills this slot from the
+/// designation table and the only thing that reaches it about the callee's
+/// parameters is their names. Same device as `#index{i}_{k}` and
+/// `#constraint{ix}`: `#` never begins an identifier, so nothing in a body can
+/// reach it and the name is free to carry data. `@` separates because no
+/// operator symbol contains one.
+pub(crate) fn op_index_binder(sym: &str, i: usize, k: usize) -> String {
+    format!("#op{sym}@{i}_{k}")
+}
+
+/// The symbol an index binder's generated name carries, if it was made by
+/// [`op_index_binder`].
+pub(crate) fn op_index_symbol(name: &str) -> Option<&str> {
+    let rest = name.strip_prefix("#op")?;
+    let (sym, _) = rest.rsplit_once('@')?;
+    (!sym.is_empty()).then_some(sym)
 }
 
 // -- renaming a parent's type parameters ------------------------------------
@@ -224,6 +282,9 @@ fn rename_expr(m: &Ren, e: &Expr) -> Expr {
     use ExprKind::*;
     let kind = match &e.kind {
         Var(n) => Var(ren(m, n)),
+        // A symbol is never renamed: it names nothing in the telescope a
+        // parent instantiation renames.
+        OpSymbol(s) => OpSymbol(s.clone()),
         Univ { level } => Univ { level: *level },
         Num(n) => Num(*n),
         Refl => Refl,
@@ -597,6 +658,22 @@ impl Elaborator {
                 _ => None,
             };
             let Some(n) = head else {
+                // A symbol in an instance head would make the registry key
+                // depend on the designation table's state at declaration
+                // time, which the key exists not to depend on.
+                if let ExprKind::OpSymbol(s) = &a.kind {
+                    return err(
+                        format!(
+                            "an instance names its index by the **operation**, not by a \
+                             symbol: write the operation `{s}` designates here. A \
+                             designation says what a symbol means at a carrier \
+                             (`designation {s} at … := …`); the registry key is the \
+                             operation, so the two stay separable \
+                             (docs/operators-onto-classes-design.md §3.3)"
+                        ),
+                        a.span,
+                    );
+                }
                 return err(
                     format!(
                         "the index `{}` of this instance is not spellable: `{}` must be a \
@@ -773,10 +850,7 @@ impl Elaborator {
     /// A no-op for every declaration with no indexed-class constraint, which is
     /// every declaration written before this grammar existed.
     #[allow(clippy::type_complexity)]
-    pub(crate) fn expand_constraints(
-        &self,
-        decl: &Decl,
-    ) -> R<Option<(Vec<Param>, Vec<(String, String)>)>> {
+    pub(crate) fn expand_constraints(&self, decl: &Decl) -> R<Option<Expanded>> {
         let mut refs: Vec<Option<ClassRef>> = Vec::with_capacity(decl.params.len());
         let mut indexed = false;
         for p in &decl.params {
@@ -805,6 +879,9 @@ impl Elaborator {
         // is a better answer than "unbound name" for a name the reader has
         // every reason to expect.
         let mut ambiguous: Vec<(String, String)> = Vec::new();
+        // The symbols a SYMBOL slot installs, in written order — later
+        // entries shadow earlier ones, which is `Cx::op_locals`'s rule.
+        let mut symbols: Vec<(String, String)> = Vec::new();
         for c in &repeated {
             let Some(class) = self.lookup_class(c) else { continue };
             let at = refs
@@ -855,7 +932,62 @@ impl Elaborator {
                         p.span,
                     );
                 }
-                out.push(p.clone());
+                // SYMBOL (docs/operators-onto-classes-design.md §5): a slot
+                // written as an operator binds the index like an EMPTY slot
+                // does — an ordinary implicit, filled by unification — and
+                // additionally *installs* the symbol as that binder's local
+                // meaning for the whole declaration. A mixed list
+                // (`Semiring<A>(+, mul)`) is per-slot, because there is
+                // nothing to gain from refusing it.
+                if !r.index.iter().any(|a| matches!(a.kind, ExprKind::OpSymbol(_))) {
+                    out.push(p.clone());
+                    continue;
+                }
+                let sub: HashMap<String, Ty> =
+                    class.params.iter().cloned().zip(r.args.iter().cloned()).collect();
+                let mut index: Vec<Expr> = Vec::new();
+                for (k, (v, a)) in class.valparams.iter().zip(r.index.iter()).enumerate() {
+                    let ExprKind::OpSymbol(sym) = &a.kind else {
+                        index.push(a.clone());
+                        continue;
+                    };
+                    // The generated name **carries its symbol**, because the
+                    // call site has to recover "this slot was designated by
+                    // `+`" from the callee's parameter list and nothing else
+                    // travels there (§5.1). `#` never begins an identifier, so
+                    // the name is unspellable and free to be a record.
+                    let name = op_index_binder(sym, i, k);
+                    symbols.push((sym.clone(), name.clone()));
+                    // §5.1: each referent binds exactly one spelling, and a
+                    // SYMBOL slot's is the symbol. The declared name is left
+                    // bound to nothing, and a bare use of it says which
+                    // spelling does work — the same device §5.2 uses, and
+                    // consulted at the same one place.
+                    ambiguous.push((
+                        v.name.clone(),
+                        format!(
+                            "`{}` is the index of `{}`, and `<…: {}({sym})>` binds it under \
+                             the SYMBOL: write `x {sym} y`, which is the same binder. Each \
+                             of the index slot's three referents binds one spelling — the \
+                             empty slot binds `{}`, a linked slot binds your parameter's \
+                             name, and a symbol binds the symbol \
+                             (docs/operators-onto-classes-design.md §5.1)",
+                            v.name, r.name, r.name, v.name
+                        ),
+                    ));
+                    out.push(Param {
+                        name: name.clone(),
+                        ty: subst_ty(&sub, &v.ty),
+                        implicit: true,
+                        is_self: false,
+                        solver: None,
+                        span: p.span,
+                    });
+                    index.push(var(&name, p.span));
+                }
+                let mut p = p.clone();
+                p.ty = heather_syntax::class_ty(r.name.clone(), r.args.clone(), index, p.ty.span);
+                out.push(p);
                 continue;
             }
             // EMPTY: the index binders, then the instance binder over them.
@@ -898,7 +1030,7 @@ impl Elaborator {
             out.push(p);
         }
         self.float_linked(decl, &mut out)?;
-        Ok(Some((out, ambiguous)))
+        Ok(Some(Expanded { params: out, ambiguous, symbols }))
     }
 
     /// The linked slot's float (§4.1): a constraint binder moves to just after
@@ -1011,6 +1143,115 @@ impl Elaborator {
             ),
             p.span,
         )
+    }
+
+    // -- designations -------------------------------------------------------
+
+    /// `designation + at Nat := add`
+    /// (docs/operators-onto-classes-design.md §3).
+    ///
+    /// A table entry and nothing else: no global is minted, no value is
+    /// assembled, nothing reaches Ψ. What it buys is that the symbol `+` has a
+    /// meaning at that carrier, which is the half of an operator that the
+    /// parser could never supply.
+    pub(crate) fn elab_designation(&mut self, d: &DesignationDecl) -> R<()> {
+        let Some(head) = head_name(&d.carrier) else {
+            return err(
+                format!(
+                    "the carrier `{}` has no head type name, so `{}` has nothing to be \
+                     designated at: a designation is keyed on the carrier's *head*, \
+                     exactly as an instance's canonical name is",
+                    render_ty(&d.carrier),
+                    d.symbol
+                ),
+                d.carrier.span,
+            );
+        };
+        let head = head.to_string();
+        // A type parameter of this very declaration is not a carrier: it names
+        // no head, so keying on it would key on a binder.
+        if !self.names_a_type(&head) || d.tyvars.contains(&head) {
+            return err(
+                format!(
+                    "`{head}` is not a type in scope, so a designation of `{}` at it \
+                     attaches to nothing",
+                    d.symbol
+                ),
+                d.carrier.span,
+            );
+        }
+        // The right-hand side is a **bare global name** (§3.2): a designated
+        // operation is emitted bare at each use site and instantiated there by
+        // ordinary implicit inference, which is how `mconcat(append, xss)`
+        // already reaches the generic instance. A written type application
+        // would pin the wrong site's arguments, so it is refused here rather
+        // than half-supported.
+        let ExprKind::Var(op) = &d.op.kind else {
+            return err(
+                format!(
+                    "the operation `{}` designates must be a bare global name, and this \
+                     is not: it is emitted bare at each use site and instantiated there, \
+                     so a written type application — or anything unnamed — would pin this \
+                     declaration's arguments rather than the caller's \
+                     (docs/operators-onto-classes-design.md §3.2). Name the operation, or \
+                     declare one that wraps it",
+                    d.symbol
+                ),
+                d.op.span,
+            );
+        };
+        if self.lookup_global(op.as_str()).is_none() && self.ctor_of(op.as_str()).is_none() {
+            return Err(self.name_miss(
+                op.as_str(),
+                format!(
+                    "`{op}` is not in scope, so `{}` cannot designate it at `{head}`",
+                    d.symbol
+                ),
+                d.op.span,
+            ));
+        }
+        let op = self.key_of(op.as_str()).unwrap_or_else(|| op.clone());
+        let written = format!(
+            "designation {} at {} := {}",
+            d.symbol,
+            render_ty(&d.carrier),
+            render_expr(&d.op)
+        );
+        let key = (d.symbol.clone(), head.clone());
+        if let Some(prev) = self.designations.get(&key) {
+            return err(
+                format!(
+                    "`{}` already designates `{}` at `{head}` (`{}`): one entry per \
+                     (symbol, carrier head), so this is refused rather than silently \
+                     overwritten. Two operations at one carrier are two *symbols* — \
+                     which is how `+` is `or` and `*` is `and` at `Bool`",
+                    d.symbol, prev.op, prev.written
+                ),
+                d.span,
+            );
+        }
+        self.designations.insert(key, DesignationInfo { op, written });
+        Ok(())
+    }
+
+    /// The operation `sym` designates at a carrier whose head is `head`, if
+    /// any. The whole of the designation table's read side.
+    pub(crate) fn designated(&self, sym: &str, head: &str) -> Option<String> {
+        self.designations.get(&(sym.to_string(), head.to_string())).map(|d| d.op.clone())
+    }
+
+    /// Every designation at one carrier head, as `` (`+`, `or`) `` pairs
+    /// sorted by symbol — what a value-slot refusal lists so that the reader
+    /// is told which binder would have worked (§6, §7).
+    pub(crate) fn designations_at(&self, head: &str) -> Vec<(String, String)> {
+        let mut out: Vec<(String, String)> = self
+            .designations
+            .iter()
+            .filter(|((_, h), _)| h == head)
+            .map(|((s, _), d)| (s.clone(), d.op.clone()))
+            .collect();
+        out.sort();
+        out
     }
 
     // -- instances ----------------------------------------------------------

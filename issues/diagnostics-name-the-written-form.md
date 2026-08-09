@@ -3,7 +3,7 @@ title: Diagnostics inside a desugared or generated match name the wrong form and
 status: open
 labels: [frontend,diagnostics]
 created: 2026-08-05
-updated: 2026-08-05
+updated: 2026-08-09
 ---
 
 
@@ -38,3 +38,7 @@ re-deciding it every round.
   `ExprKind::Match` nodes the elaborator cannot distinguish from written ones,
   which is the property that makes the messages wrong and is also the property
   that made both rounds cheap.
+
+## Log
+
+- 2026-08-09: Partial payment from the operators round: operator applications now render as written (a + b, not add(a)(b)) via render_expr's re-sugaring.

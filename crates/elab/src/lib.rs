@@ -707,6 +707,16 @@ pub struct Elaborator {
     /// no search over this table at layer 1, only the fill-by-reference and
     /// parent-synthesis lookups the `extends` discipline makes.
     instances: HashMap<traits::InstKey, InstanceInfo>,
+    /// What an operator symbol means at a carrier: one entry per **(symbol,
+    /// carrier head)** (docs/operators-onto-classes-design.md §3.2).
+    ///
+    /// Beside `instances` and keyed the same way — on the carrier's *head*,
+    /// by the same `head_name` — for the same reason: declaring is
+    /// registering, and there is no search over it. What it is *not* is a
+    /// default-instance table: it says what a symbol means, never which
+    /// structure a carrier has, which is why `+` at `Bool` can be `or` while
+    /// both Bool monoids stay registered as equals (§3.3).
+    designations: HashMap<(String, String), traits::DesignationInfo>,
     /// While an `instance` block is being elaborated: the members that have
     /// already landed, as (written name, full name). An unqualified reference
     /// to one of them resolves to its global, which is the whole of "later
@@ -866,6 +876,7 @@ impl Elaborator {
             class_members: HashSet::new(),
             classes: HashMap::new(),
             instances: HashMap::new(),
+            designations: HashMap::new(),
             instance_scope: Vec::new(),
             derived: Vec::new(),
             pending_derived: RefCell::new(Vec::new()),
@@ -924,6 +935,7 @@ impl Elaborator {
                 Item::Inductive(i) => self.elab_inductive(i),
                 Item::Class(c) => self.elab_class(c),
                 Item::Instance(i) => self.elab_instance(i),
+                Item::Designation(d) => self.elab_designation(d),
                 Item::Import(_) => Ok(()),
             };
             // Canonical derived instances are minted **between** items, where
@@ -1176,6 +1188,7 @@ impl Elaborator {
                 Item::Inductive(i) => self.elab_inductive(i),
                 Item::Class(c) => self.elab_class(c),
                 Item::Instance(i) => self.elab_instance(i),
+                Item::Designation(d) => self.elab_designation(d),
                 Item::Import(_) => Ok(()),
             };
             if r.is_err() {
@@ -1231,11 +1244,11 @@ impl Elaborator {
         // indexed-class constraint — is the identity and costs one walk of the
         // parameter list.
         let expanded;
-        let (decl, ambiguous) = match self.expand_constraints(decl)? {
-            None => (decl, Vec::new()),
-            Some((params, ambiguous)) => {
-                expanded = Decl { params, ..decl.clone() };
-                (&expanded, ambiguous)
+        let (decl, ambiguous, symbols) = match self.expand_constraints(decl)? {
+            None => (decl, Vec::new(), Vec::new()),
+            Some(x) => {
+                expanded = Decl { params: x.params, ..decl.clone() };
+                (&expanded, x.ambiguous, x.symbols)
             }
         };
         if self.own_declares(&decl.name, &[NameKind::Global]) {
@@ -1280,6 +1293,7 @@ impl Elaborator {
         // into the kernel term.
         let mut cx = Cx::empty();
         cx.index_ambiguity = ambiguous;
+        cx.op_locals = symbols;
         let mut param_info: Vec<(Type, Level)> = Vec::new();
         for (i, tv) in decl.tyvars.iter().enumerate() {
             let name = &tv.name;
@@ -1934,6 +1948,16 @@ impl Elaborator {
             // *is* a code, and `El ⌜T⌝ ⇝ T` makes a written type and a decoded
             // one convertible rather than merely equal-looking.
             TyKind::OfExpr(e) => {
+                // An operator in **type** position — `n <= m`, and `x + A.unit`
+                // as an equation's endpoint. The symbol resolves to a name
+                // here exactly as it does in a term
+                // (docs/operators-onto-classes-design.md §4), and then every
+                // reading below applies to what it named: `Le(n, m)` is the
+                // record-at-its-value-parameters road it always was.
+                if let Some(rewritten) = self.op_rewrite(cx, e)? {
+                    let ty = Ty { kind: TyKind::OfExpr(Box::new(rewritten)), span: ty.span };
+                    return self.elab_ty(cx, &ty);
+                }
                 // `Vec<A>(n)` — an indexed family applied to its index
                 // (docs/inductive-indexed-lowering.md §2), delivered here by
                 // the parser's applied-type-is-never-called backtracking.
@@ -2107,6 +2131,9 @@ impl Elaborator {
         hint: Option<(&str, &str)>,
         skel: Option<&Skel>,
     ) -> R<Term> {
+        if let Some(rewritten) = self.op_rewrite(cx, e)? {
+            return self.elab_check_skel(cx, &rewritten, expected, lvl, hint, skel);
+        }
         match &e.kind {
             // The expected type *is* the goal's statement, which is why holes
             // are checking-only (issues/goal-holes.md).
@@ -2538,6 +2565,12 @@ impl Elaborator {
         e: &Expr,
         expected: Option<&Type>,
     ) -> R<(Term, Type, Level)> {
+        // An operator symbol resolves to a name *first*, and then this whole
+        // function is the path the written name already took
+        // (docs/operators-onto-classes-design.md §4).
+        if let Some(rewritten) = self.op_rewrite(cx, e)? {
+            return self.elab_infer_at(cx, &rewritten, expected);
+        }
         match &e.kind {
             // `{ let x = e; … result }` — the block's statements extend a
             // clone of `cx`, and its result is inferred there
@@ -3237,6 +3270,11 @@ impl Elaborator {
                 e.span,
             ),
             ExprKind::Splice(inner) => self.elab_splice(cx, inner, e.span),
+            // Unreachable: [`Self::op_rewrite`] runs at the top of this
+            // function and rewrites every symbol, bare or applied, to a name.
+            ExprKind::OpSymbol(s) => {
+                err(format!("`{s}` reached elaboration unresolved"), e.span)
+            }
         }
     }
 
@@ -4503,6 +4541,106 @@ impl Elaborator {
         filled
     }
 
+    /// Fill a blocked goal's **index slots** from the designation table —
+    /// the value-slot ladder's step 3
+    /// (`docs/operation-indexed-classes-design.md` §5, built in
+    /// `docs/operators-onto-classes-design.md` §5).
+    ///
+    /// This is what makes `sum_all(ns)` work at a caller who names no
+    /// operation: `sum_all`'s constraint was written `<A: Monoid(+)>`, so its
+    /// index binder carries the symbol `+`, the carrier is already pinned to
+    /// `Nat` by the argument, and the table says `+` at `Nat` is `add`. The
+    /// source is **named in the callee's signature** — this is not a search
+    /// over instances and not a default: with no `(+)` written there is
+    /// nothing here to consult.
+    ///
+    /// `true` when it filled at least one slot.
+    fn fill_index_from_designation(
+        &self,
+        cx: &Cx,
+        goal: Option<&Ty>,
+        params: &[ParamMeta],
+        slot_param: &[usize],
+        sols: &mut [Sol],
+        meta_doms: &[Type],
+        n: u32,
+        span: Span,
+    ) -> bool {
+        let Some(r) = goal.and_then(|t| self.class_ref_of_ty(t)) else { return false };
+        if r.index.is_empty() {
+            return false;
+        }
+        // Only a slot the callee designated is fillable, so decide that before
+        // paying for the carrier.
+        if !r.index.iter().any(|a| match &a.kind {
+            ExprKind::Var(n) => traits::op_index_symbol(n).is_some(),
+            _ => false,
+        }) {
+            return false;
+        }
+        let Some(head) = self.goal_carrier_head(cx, r.args.first(), params, slot_param, sols, span)
+        else {
+            return false;
+        };
+        let mut filled = false;
+        for a in &r.index {
+            let ExprKind::Var(nm) = &a.kind else { continue };
+            let Some(sym) = traits::op_index_symbol(nm) else { continue };
+            let Some(pi) = params.iter().position(|p| p.name == *nm) else { continue };
+            let Some(slot) = slot_param.iter().position(|&s| s == pi) else { continue };
+            if sols[slot].solved().is_some() || matches!(sols[slot], Sol::Withheld) {
+                continue;
+            }
+            let Some(op) = self.designated(sym, &head) else { continue };
+            // **Checked** against the slot's own domain, not inferred: the
+            // designated operation is emitted bare (§3.2), so a generic one
+            // — `append` at `List<B>` — has an element type that only the
+            // domain can pin. The domain is the index binder's declared type
+            // at the carrier this call solved, which is meta-free exactly
+            // when the carrier is, and a failure here is a rung that did not
+            // fire rather than an error.
+            let Some(dom) = meta_doms.get(slot).and_then(|d| zonked(d, n, sols)) else { continue };
+            let e = Expr { kind: ExprKind::Var(op), span };
+            let Ok(t) = self.elab_check(cx, &e, &dom, &Level::Zero) else { continue };
+            sols[slot] = Sol::Solved(Rc::new(t));
+            filled = true;
+        }
+        filled
+    }
+
+    /// The head of a blocked goal's carrier, where the goal's *written* carrier
+    /// is one of the callee's own type parameters and that parameter has
+    /// already been solved. The one thing step 3 needs that scope's step 2 did
+    /// not: a designation is keyed on the carrier, so the carrier has to be
+    /// known before the table can be asked.
+    ///
+    /// A solved type-parameter slot holds the carrier's **code**, so `El` of it
+    /// is the type and the kernel's own `El ⌜T⌝ ⇝ T` does the decoding — no
+    /// second decoder, and nothing to drift.
+    fn goal_carrier_head(
+        &self,
+        cx: &Cx,
+        carrier: Option<&Ty>,
+        params: &[ParamMeta],
+        slot_param: &[usize],
+        sols: &[Sol],
+        span: Span,
+    ) -> Option<String> {
+        let TyKind::Named { name, args } = &carrier?.kind else { return None };
+        if !args.is_empty() {
+            return None;
+        }
+        // A carrier written concretely in the signature needs no lookup.
+        if !params.iter().any(|p| p.name == *name) {
+            return self.names_a_type(name).then(|| name.clone());
+        }
+        let pi = params.iter().position(|p| p.name == *name)?;
+        let slot = slot_param.iter().position(|&s| s == pi)?;
+        let code = sols[slot].solved()?;
+        let ty = Type::El { level: Level::Zero, tm: Rc::clone(code) };
+        self.type_namespace(cx, &ty, span)
+    }
+
     /// The innermost dictionary in scope whose class is `tkey` or a descendant
     /// of it, with its index expressed **at that class**.
     fn scope_dict_index(&self, cx: &Cx, tkey: &str) -> Option<Vec<Expr>> {
@@ -4574,19 +4712,185 @@ impl Elaborator {
             .map(|p| format!("`{}`", p.name))
             .collect::<Vec<_>>()
             .join(", ");
+        // The designations at this carrier, where it has any
+        // (docs/operators-onto-classes-design.md §6, §7). This is §11's polish
+        // and it is the difference between a refusal reading as principled and
+        // as obtuse: a designation cannot *fill* this slot — the dot sugar
+        // names no symbol, and choosing among the symbols at a carrier would
+        // be the nomination this whole design deletes — but naming the ones
+        // that exist tells the reader, in one line, the binder that works.
+        let desig = head.map(|h| self.designations_at(h)).unwrap_or_default();
+        let fix = if desig.is_empty() {
+            String::new()
+        } else {
+            format!(
+                " Here {}: take the class as a constraint that names the symbol \
+                 (`<A: {}({})>`), which is the spelling that pins the slot.",
+                desig
+                    .iter()
+                    .map(|(s, op)| format!("`{s}` designates `{op}`"))
+                    .collect::<Vec<_>>()
+                    .join(" and "),
+                class.name,
+                desig[0].0
+            )
+        };
         ElabError::Elab {
             msg: format!(
                 "the index {slots} of `{}` at `{subject}` is not pinned here: a value slot \
-                 is filled by unification or by a binder in scope of the goal's class, and \
-                 never by search — nothing nominates, so nothing guesses. Registered: {}. \
-                 Write the dictionary you meant (`{subject}::{}(⟨index⟩).⟨field⟩`) or take \
-                 the class as a constraint",
+                 is filled by unification, by a binder in scope of the goal's class, or by \
+                 a designation the binder names — and never by search, so nothing \
+                 nominates and nothing guesses. Registered: {}.{fix} Write the dictionary \
+                 you meant (`{subject}::{}(⟨index⟩).⟨field⟩`) or take the class as a \
+                 constraint",
                 class.name,
                 if listed.is_empty() { "no instances".into() } else { listed.join(", ") },
                 class.name
             ),
             span,
         }
+    }
+
+    // -- operator symbols ---------------------------------------------------
+
+    /// The fixed name an operator symbol falls back to — the third rung of
+    /// [`Self::resolve_op_name`] and the whole of what `+` meant before this
+    /// round (docs/operators-onto-classes-design.md §4).
+    ///
+    /// This table *is* the parser desugaring it replaced, moved from
+    /// `Parser::infix_op`'s first column to the resolver's last stop. That is
+    /// the growth invariant, and it is structural rather than audited: a file
+    /// with no designation for a symbol runs exactly this.
+    fn op_fallback(sym: &str) -> Option<&'static str> {
+        match sym {
+            "+" => Some("add"),
+            "*" => Some("mul"),
+            "<=" => Some("Le"),
+            "<" => Some("lt"),
+            _ => None,
+        }
+    }
+
+    /// The name an operator symbol means here — the three-rung ladder of
+    /// docs/operators-onto-classes-design.md §4.
+    ///
+    /// `args` is the symbol's operand list, empty for a bare symbol between
+    /// delimiters (`Monoid(+)`), in which case only rungs 1 and 3 can fire:
+    /// with no operand there is no carrier to designate at.
+    fn resolve_op_name(&self, cx: &Cx, sym: &str, args: &[Expr], span: Span) -> R<String> {
+        // 1. A constraint binder that named the symbol. Innermost first, and
+        //    before any type is looked at: inside `<A: Monoid(+)>` the `+` is
+        //    the bound index and nothing else, at every carrier.
+        if let Some((_, n)) = cx.op_locals.iter().rev().find(|(s, _)| s == sym) {
+            return Ok(n.clone());
+        }
+        // 2. The designation at the operand's carrier. Probed only when the
+        //    symbol has designations at all, so a file that declares none
+        //    pays one failed lookup in a usually-empty map and no inference.
+        if !args.is_empty()
+            && self.designations.keys().any(|(s, _)| s == sym)
+            && let Some(head) = self.op_carrier_head(cx, args, span)
+            && let Some(op) = self.designated(sym, &head)
+        {
+            return Ok(op);
+        }
+        // 3. The symbol's fallback name, resolved as it always was.
+        let Some(fb) = Self::op_fallback(sym) else {
+            return err(format!("`{sym}` is not an operator of this grammar"), span);
+        };
+        if self.lookup_global(fb).is_none()
+            && self.ctor_of(fb).is_none()
+            && !cx.names.iter().any(|n| n == fb)
+            && !cx.aliases.iter().any(|a| a.name == fb)
+        {
+            // Reporting "unbound name `add`" would name something the writer
+            // never typed. Say what *was* typed, and what would have to be
+            // true for it to mean something.
+            let known = self
+                .designations
+                .iter()
+                .filter(|((s, _), _)| s == sym)
+                .map(|((_, h), d)| format!("`{h}` (`{}`)", d.op))
+                .collect::<Vec<_>>();
+            let mut known = known;
+            known.sort();
+            return err(
+                format!(
+                    "`{sym}` has no meaning here: no constraint binder named it \
+                     (`<A: Monoid({sym})>`), no `designation {sym} at …` covers this \
+                     carrier, and its fallback name `{fb}` is not in scope. {}",
+                    if known.is_empty() {
+                        format!("`{sym}` designates nothing anywhere in this program")
+                    } else {
+                        format!("`{sym}` designates something at {}", known.join(", "))
+                    }
+                ),
+                span,
+            );
+        }
+        Ok(fb.to_string())
+    }
+
+    /// The head of the carrier an operator application is at — rung 2's probe
+    /// (docs/operators-onto-classes-design.md §4.1).
+    ///
+    /// Two rules, both load-bearing. It **descends the left spine** through
+    /// operator applications to the leftmost non-operator leaf and infers that
+    /// one: `a + b + c` is `(a + b) + c`, so naively inferring `args[0]` would
+    /// re-infer the whole prefix at every rung and cost 2^d on a chain of
+    /// length d, where the descent costs d. And it is a **proposal, never a
+    /// decision**: a leaf that does not infer, or a head with no entry, falls
+    /// through to the fallback rung, so a mis-probe costs a rung and never a
+    /// wrong term. The speculative inference's goals are rolled back for the
+    /// same reason.
+    fn op_carrier_head(&self, cx: &Cx, args: &[Expr], span: Span) -> Option<String> {
+        let mut leaf = args.first()?;
+        loop {
+            let ExprKind::App { head, args, .. } = &leaf.kind else { break };
+            if !matches!(head.kind, ExprKind::OpSymbol(_)) {
+                break;
+            }
+            match args.first() {
+                Some(a) => leaf = a,
+                None => break,
+            }
+        }
+        if self.is_checking_only(cx, leaf) {
+            return None;
+        }
+        let mark = self.goals.borrow().len();
+        let inferred = self.elab_infer(cx, leaf);
+        self.goals.borrow_mut().truncate(mark);
+        let (_, ty, _) = inferred.ok()?;
+        self.type_namespace(cx, &ty, span)
+    }
+
+    /// An operator symbol, bare or applied, rewritten to the ordinary
+    /// application it means. `None` for every expression that is not one,
+    /// which is every expression written before this round.
+    ///
+    /// A *rewrite* and not an elaboration arm on purpose: everything
+    /// downstream — checking position, implicit insertion, spilling, the
+    /// call diagnostics — is the path a written name already takes, and a
+    /// symbol earns none of it separately.
+    fn op_rewrite(&self, cx: &Cx, e: &Expr) -> R<Option<Expr>> {
+        let (sym, args, explicit) = match &e.kind {
+            ExprKind::OpSymbol(s) => (s, None, false),
+            ExprKind::App { head, args, explicit } => match &head.kind {
+                ExprKind::OpSymbol(s) => (s, Some(args), *explicit),
+                _ => return Ok(None),
+            },
+            _ => return Ok(None),
+        };
+        let name = self.resolve_op_name(cx, sym, args.map_or(&[][..], |a| a), e.span)?;
+        let head = Expr { kind: ExprKind::Var(name), span: e.span };
+        Ok(Some(match args {
+            None => head,
+            Some(args) => Expr {
+                kind: ExprKind::App { head: Box::new(head), args: args.clone(), explicit },
+                span: e.span,
+            },
+        }))
     }
 
     /// The classes that **declare** `name` — not the ones that merely inherit
@@ -4892,7 +5196,23 @@ impl Elaborator {
             if subject == "Nat" { TyKind::Nat } else { TyKind::Named { name: subject.into(), args: vec![] } };
         let (carrier, clvl) = self.elab_ty(cx, &Ty { kind, span }).ok()?;
         let targs = [(carrier, clvl)];
-        let vargs = match self.valparam_args(cx, &ind, &targs, index, span) {
+        // `Bool::Mon(+)` — the designation reference as a dictionary spelling
+        // (docs/operation-indexed-classes-design.md §5.1, built in
+        // docs/operators-onto-classes-design.md §4). This is the one argument
+        // position where a bare symbol *does* have a carrier: the qualified
+        // name wrote it. A symbol the table does not cover falls through to
+        // the ordinary ladder, which reports it as written.
+        let mut written: Vec<Expr> = Vec::with_capacity(index.len());
+        for a in index {
+            match &a.kind {
+                ExprKind::OpSymbol(s) => match self.designated(s, subject) {
+                    Some(op) => written.push(Expr { kind: ExprKind::Var(op), span: a.span }),
+                    None => written.push(a.clone()),
+                },
+                _ => written.push(a.clone()),
+            }
+        }
+        let vargs = match self.valparam_args(cx, &ind, &targs, &written, span) {
             Ok(v) => v,
             Err(e) => return Some(Err(e)),
         };
@@ -6565,12 +6885,26 @@ impl Elaborator {
                     // goal's class pins it. This is what lets a generic
                     // function call itself — `sum_all(t)` inside `sum_all`
                     // fills the index from the room rather than from search.
+                    let written = all_params.get(ob.param).and_then(|p| p.solver.as_deref());
                     if self.fill_index_from_scope(
                         cx,
-                        all_params.get(ob.param).and_then(|p| p.solver.as_deref()),
+                        written,
                         &all_params,
                         &slot_param,
                         &mut sols,
+                    ) || self.fill_index_from_designation(
+                        // Step 3, after step 2: a binder in scope of the
+                        // goal's class is the writer's own answer and always
+                        // beats the table
+                        // (docs/operators-onto-classes-design.md §5).
+                        cx,
+                        written,
+                        &all_params,
+                        &slot_param,
+                        &mut sols,
+                        &meta_doms,
+                        n,
+                        span,
                     ) {
                         // Progressed *and* still blocked: this obligation has
                         // not been discharged, only unblocked, so the loop has
@@ -7256,6 +7590,17 @@ struct Cx {
     /// each one owes. Consulted only where the answer would otherwise have
     /// been "unbound name".
     index_ambiguity: Vec<(String, String)>,
+    /// Operator symbols a constraint binder **installed**, as (symbol, the
+    /// index binder's generated name) — the first rung of a symbol's
+    /// resolution (docs/operators-onto-classes-design.md §4, §5).
+    ///
+    /// `<A: Monoid(+)>` puts `("+", "#op+@0_0")` here for the whole
+    /// declaration, signature and body alike, which is what makes
+    /// `x + A.unit` in a *result type* the bound index rather than an ambient
+    /// operator. Later entries shadow earlier ones. Empty for every
+    /// declaration that names no symbol, which is every declaration written
+    /// before this round.
+    op_locals: Vec<(String, String)>,
     /// The meta-layer binder environment, present exactly while a `meta fn`'s
     /// body — or a quote payload inside it — elaborates
     /// (docs/in-language-map-design.md §5). `None` everywhere else, which is
@@ -7313,6 +7658,7 @@ impl Cx {
             tyvars: vec![],
             dicts: vec![],
             index_ambiguity: vec![],
+            op_locals: vec![],
             meta: None,
         }
     }
@@ -7388,6 +7734,7 @@ mod count_holes_impl {
             }
             ExprKind::TyLit(t) => ty(t, n),
             ExprKind::Var(_)
+            | ExprKind::OpSymbol(_)
             | ExprKind::Num(_)
             | ExprKind::Refl
             | ExprKind::Univ { .. } => {}

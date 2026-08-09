@@ -17,6 +17,9 @@
 //!            "{" rfield ("," rfield)* ","? "}"
 //! cref    := name "<" type ("," type)* ">"
 //! inst    := "instance" tyvars? cref ("requires" ibind ("," ibind)*)?
+//! desig   := "designation" tyvars? OP "at" type ":=" expr
+//!                                     -- what a symbol means at a carrier
+//!                                     (docs/operators-onto-classes-design.md)
 //! decl    := ("fn"|"theorem") name tyvars? ("requires" ibind ("," ibind)*)?
 //!            "(" param* ")" …          -- param := … (":=" "infer")?
 //!            "{" (decl* | ifield ("," ifield)* ","?) "}"
@@ -178,6 +181,16 @@ type R<T> = Result<T, ParseError>;
 fn named_call(name: &str, args: Vec<Expr>, explicit: bool, span: Span) -> Expr {
     let head = Expr { kind: ExprKind::Var(name.to_string()), span };
     Expr { kind: ExprKind::App { head: Box::new(head), args, explicit }, span }
+}
+
+/// `a + b` as an application of the **symbol**
+/// (docs/operators-onto-classes-design.md §4). The symbol is a name in a
+/// namespace of its own, so an operator expression is the ordinary
+/// [`ExprKind::App`] it has always been — only its head survives as what was
+/// written instead of as what it used to desugar to.
+fn op_call(sym: &str, args: Vec<Expr>, span: Span) -> Expr {
+    let head = Expr { kind: ExprKind::OpSymbol(sym.to_string()), span };
+    Expr { kind: ExprKind::App { head: Box::new(head), args, explicit: false }, span }
 }
 
 /// Read an already-parsed expression **as a type**, syntactically and totally.
@@ -424,6 +437,9 @@ impl Parser {
         if self.at_kw("instance") {
             return Ok(Item::Instance(self.instance_decl()?));
         }
+        if self.at_kw("designation") {
+            return Ok(Item::Designation(self.designation_decl()?));
+        }
         // Section variables and constraint bundles are the two ways round 2
         // sketched of writing a constraint ONCE for many declarations. Neither
         // is decided (issues/requires-placement-syntax.md, log 2026-08-07), and
@@ -537,7 +553,10 @@ impl Parser {
         if matches!(self.peek(), TokKind::LParen) && !binder_list {
             self.bump();
             while !matches!(self.peek(), TokKind::RParen) {
-                index.push(self.expr()?);
+                match self.op_symbol_arg() {
+                    Some(e) => index.push(e),
+                    None => index.push(self.expr()?),
+                }
                 if !matches!(self.peek(), TokKind::Comma) {
                     break;
                 }
@@ -546,6 +565,42 @@ impl Parser {
             end = self.expect(&TokKind::RParen, "`)` to close the class's index arguments")?;
         }
         Ok(ClassRef { name, args, index, span: nsp.join(end) })
+    }
+
+    /// `designation<A> + at List<A> := append`
+    /// (docs/operators-onto-classes-design.md §3.1).
+    ///
+    /// Contextual exactly as `class` and `instance` are, and for a stronger
+    /// reason than either: the token after the keyword is an *operator*, which
+    /// no declaration's name can be.
+    fn designation_decl(&mut self) -> R<DesignationDecl> {
+        let start = self.peek_span();
+        self.bump(); // `designation`
+        let tyvars = self.tyvar_list()?;
+        let Some(sym) = Self::op_symbol(self.peek()) else {
+            return self.err(
+                "a designation names an operator (`designation + at Nat := add`): the \
+                 symbols are `+`, `*`, `<=` and `<`. A designation for an ordinary name \
+                 is not a form — that is a default instance wearing a smaller hat \
+                 (docs/operation-indexed-classes-design.md §9.2)",
+            );
+        };
+        let symbol = sym.to_string();
+        self.bump();
+        if !self.eat_kw("at") {
+            return self.err(&format!(
+                "`at` and then the carrier (`designation {symbol} at Nat := …`): a \
+                 designation says what `{symbol}` means at a type, so the type is written"
+            ));
+        }
+        let carrier = self.with_record_lit(true, |p| p.ty())?;
+        self.expect(
+            &TokKind::ColonEq,
+            "`:=` and the designated operation (`designation + at Nat := add`)",
+        )?;
+        let op = self.expr()?;
+        let span = start.join(op.span);
+        Ok(DesignationDecl { tyvars, symbol, carrier, op, span })
     }
 
     /// `instance<A, B> C<T> requires m: D<A> { … }`
@@ -774,13 +829,17 @@ impl Parser {
         // `<A: Monoid(op)>` — the index slot's NAME referent
         // (docs/operation-indexed-classes-design.md §4.1): the index is linked
         // to an explicit parameter of this same declaration, forward reference
-        // allowed. An empty slot is the absence of this list, and the SYMBOL
-        // referent (`Monoid(+)`) waits for the designation table (§7).
+        // allowed. An empty slot is the absence of this list, and
+        // `<A: Monoid(+)>` is the SYMBOL referent, the designation the binder
+        // names (docs/operators-onto-classes-design.md §5).
         let mut index = Vec::new();
         if matches!(self.peek(), TokKind::LParen) {
             self.bump();
             while !matches!(self.peek(), TokKind::RParen) {
-                index.push(self.expr()?);
+                match self.op_symbol_arg() {
+                    Some(e) => index.push(e),
+                    None => index.push(self.expr()?),
+                }
                 if !matches!(self.peek(), TokKind::Comma) {
                     break;
                 }
@@ -1669,12 +1728,17 @@ impl Parser {
     // -- expressions --------------------------------------------------------
 
     /// Expressions, with infix operators. Precedence, loosest to tightest: the
-    /// **comparison level** ([`Self::comparison`] — `=`, `<=` (→ `Le`), `<`
-    /// (→ `lt`)), then `+` (→ `add`), `*` (→ `mul`), then postfix
-    /// `.method(args)` / calls, then atoms. The arithmetic operators desugar
-    /// to an ordinary [`ExprKind::Call`] on a fixed name table
-    /// (issues/surface-operators.md — the decorated `+_Z` grammar and trait
-    /// hookup arrive with the real trait design).
+    /// **comparison level** ([`Self::comparison`] — `=`, `<=`, `<`), then `+`,
+    /// `*`, then postfix `.method(args)` / calls, then atoms.
+    ///
+    /// An operator application is an ordinary [`ExprKind::App`] whose head is
+    /// the [`ExprKind::OpSymbol`] that was **written**. It used to be the head
+    /// `Var("add")` that `+` desugared to, on a fixed name table here; that
+    /// table is now the last rung of the elaborator's symbol resolution
+    /// (docs/operators-onto-classes-design.md §4), so `+` can mean a different
+    /// operation at a different carrier without the parse depending on
+    /// anything — which is `issues/notation-extensibility.md`'s standing
+    /// boundary, *parsing is context-free; only resolution consults scope*.
     ///
     /// **Function types are expressions** (`docs/types-as-expressions.md`): a
     /// leading binder group `(x: A) -> …` and a trailing `->` both hand off to
@@ -1722,12 +1786,16 @@ impl Parser {
     ///
     /// - `a = b`, the identity-type former (an [`ExprKind::Eq`], not a call —
     ///   the elaborator never sees `=` as a `Call`);
-    /// - `a <= b` ⇒ `Le(a, b)`, the *proposition* from lib/ir_v1.hthr, never
-    ///   the boolean `leb`; a computational position calls `leb` by name
-    ///   (issues/comparison-operators.md);
-    /// - `a < b` ⇒ `lt(a, b)`, which has no lib target yet — it stays here so
+    /// - `a <= b`, which falls back to `Le(a, b)`, the *proposition* from
+    ///   lib/ir_v1.hthr, never the boolean `leb`; a computational position
+    ///   calls `leb` by name (issues/comparison-operators.md);
+    /// - `a < b`, whose fallback `lt` has no lib target yet — it stays here so
     ///   `<` cannot chain either, and so the speculative type-argument parse
     ///   keeps its documented fallback (docs/surface-polymorphism.md §1).
+    ///
+    /// The two relational rungs emit their symbol like the arithmetic ones do;
+    /// the library designates neither, so both are the fallback name and
+    /// nothing about them changed.
     ///
     /// Non-associativity is structural first: the right operand is read with
     /// [`Parser::no_eq`] set, so it is an *arithmetic* expression and cannot
@@ -1747,11 +1815,11 @@ impl Parser {
                 Expr { kind: ExprKind::Eq(Box::new(lhs), Box::new(rhs)), span }
             }
             TokKind::LtEq | TokKind::Lt => {
-                let name = if matches!(self.peek(), TokKind::LtEq) { "Le" } else { "lt" };
+                let sym = if matches!(self.peek(), TokKind::LtEq) { "<=" } else { "<" };
                 self.bump();
                 let rhs = self.with_eq(true, |p| p.expr_bp(0))?;
                 let span = lhs.span.join(rhs.span);
-                named_call(name, vec![lhs, rhs], false, span)
+                op_call(sym, vec![lhs, rhs], span)
             }
             _ => return Ok(lhs),
         };
@@ -1794,28 +1862,69 @@ impl Parser {
         r
     }
 
-    /// Binding powers for the infix operators. `(name, left_bp, right_bp)`;
+    /// Binding powers for the infix operators. `(symbol, left_bp, right_bp)`;
     /// `right_bp > left_bp` makes every operator left-associative.
+    ///
+    /// The first element used to be the *name* the operator desugared to
+    /// (`add`, `mul`), which made `+` mean one global everywhere. It is now the
+    /// symbol as written, and what it means is resolution's business
+    /// (docs/operators-onto-classes-design.md §2.1) — the fixed name survives
+    /// as that resolver's last rung, so nothing that parsed before this change
+    /// elaborates differently.
     fn infix_op(tok: &TokKind) -> Option<(&'static str, u8, u8)> {
         match tok {
-            TokKind::Plus => Some(("add", 3, 4)),
-            TokKind::Star => Some(("mul", 5, 6)),
+            TokKind::Plus => Some(("+", 3, 4)),
+            TokKind::Star => Some(("*", 5, 6)),
             _ => None,
         }
+    }
+
+    /// The operator symbol a token spells, for every infix token in the
+    /// grammar — the arithmetic rung and the comparison rung alike. `=` is
+    /// **not** here: equality is a core form with a typing rule
+    /// ([`ExprKind::Eq`] → the kernel's `Id`), not a notation, which is the
+    /// test `issues/notation-extensibility.md` states for the distinction.
+    fn op_symbol(tok: &TokKind) -> Option<&'static str> {
+        match tok {
+            TokKind::Plus => Some("+"),
+            TokKind::Star => Some("*"),
+            TokKind::LtEq => Some("<="),
+            TokKind::Lt => Some("<"),
+            _ => None,
+        }
+    }
+
+    /// A **designation reference** in argument-initial position — `Monoid(+)`,
+    /// `Semiring(+, *)`, `A::CommMonoid(+)`
+    /// (docs/operation-indexed-classes-design.md §7, decided there).
+    ///
+    /// An infix operator token can never *begin* an expression, so directly
+    /// after `(` or `,` it has exactly one reading and this needs no
+    /// backtracking. The rule reserved with it: a lone operator token between
+    /// delimiters is *always* the designation reference, which is what keeps
+    /// the position free for a future prefix operator — so the symbol must be
+    /// followed by `,` or `)` to be read as one.
+    fn op_symbol_arg(&mut self) -> Option<Expr> {
+        let sym = Self::op_symbol(self.peek())?;
+        if !matches!(self.nth(1), TokKind::Comma | TokKind::RParen) {
+            return None;
+        }
+        let span = self.bump().span;
+        Some(Expr { kind: ExprKind::OpSymbol(sym.to_string()), span })
     }
 
     /// Precedence-climbing loop: parse a postfix expression, then fold in
     /// infix operators whose left binding power is at least `min_bp`.
     fn expr_bp(&mut self, min_bp: u8) -> R<Expr> {
         let mut lhs = self.postfix()?;
-        while let Some((name, l_bp, r_bp)) = Self::infix_op(self.peek()) {
+        while let Some((sym, l_bp, r_bp)) = Self::infix_op(self.peek()) {
             if l_bp < min_bp {
                 break;
             }
             self.bump();
             let rhs = self.expr_bp(r_bp)?;
             let span = lhs.span.join(rhs.span);
-            lhs = named_call(name, vec![lhs, rhs], false, span);
+            lhs = op_call(sym, vec![lhs, rhs], span);
         }
         Ok(lhs)
     }
@@ -2208,7 +2317,13 @@ impl Parser {
         self.with_record_lit(false, |p| {
             let mut args = Vec::new();
             while !matches!(p.peek(), TokKind::RParen) {
-                args.push(p.expr()?);
+                // `A::CommMonoid(+)` — a designation reference, which is what
+                // an operator token in argument-initial position always is
+                // (docs/operation-indexed-classes-design.md §7).
+                match p.op_symbol_arg() {
+                    Some(e) => args.push(e),
+                    None => args.push(p.expr()?),
+                }
                 if !matches!(p.peek(), TokKind::Comma) {
                     break;
                 }
@@ -2574,10 +2689,18 @@ mod tests {
         parse_file(&src).unwrap().items.remove(0).into_decl().body.result.kind
     }
 
+    /// The head of an application, as a string — a name or an operator
+    /// **symbol**. The symbol is what the parser now emits for `+`/`*`/`<=`,
+    /// and what it *means* is the resolver's
+    /// (docs/operators-onto-classes-design.md §2.1): the fixed names these
+    /// tests used to assert survive as that resolver's last rung, which is
+    /// where the assertion on them moved (`crates/elab/tests/operators.rs`,
+    /// the growth-invariant pins).
     fn as_call(k: &ExprKind) -> (&str, &[Expr], bool) {
         match k {
             ExprKind::App { head, args, explicit } => match &head.kind {
                 ExprKind::Var(name) => (name.as_str(), args.as_slice(), *explicit),
+                ExprKind::OpSymbol(sym) => (sym.as_str(), args.as_slice(), *explicit),
                 other => panic!("expected a named call, got {other:?}"),
             },
             other => panic!("expected a call, got {other:?}"),
@@ -2586,23 +2709,23 @@ mod tests {
 
     #[test]
     fn operators_desugar_with_precedence() {
-        // `a + b * c` ⇒ add(a, mul(b, c)); `*` binds tighter than `+`.
+        // `a + b * c` ⇒ `+`(a, `*`(b, c)); `*` binds tighter than `+`.
         let k = body("a + b * c");
         let (name, args, _) = as_call(&k);
-        assert_eq!(name, "add");
+        assert_eq!(name, "+");
         assert_eq!(args.len(), 2);
         let (inner, iargs, _) = as_call(&args[1].kind);
-        assert_eq!(inner, "mul");
+        assert_eq!(inner, "*");
         assert!(matches!(&iargs[0].kind, ExprKind::Var(v) if v == "b"));
     }
 
     #[test]
     fn addition_is_left_associative() {
-        // `a + b + c` ⇒ add(add(a, b), c).
+        // `a + b + c` ⇒ `+`(`+`(a, b), c).
         let k = body("a + b + c");
         let (name, args, _) = as_call(&k);
-        assert_eq!(name, "add");
-        assert_eq!(as_call(&args[0].kind).0, "add");
+        assert_eq!(name, "+");
+        assert_eq!(as_call(&args[0].kind).0, "+");
         assert!(matches!(&args[1].kind, ExprKind::Var(v) if v == "c"));
     }
 
@@ -2615,7 +2738,7 @@ mod tests {
         // context-sensitive.
         let k = body("a <= b");
         let (name, args, explicit) = as_call(&k);
-        assert_eq!(name, "Le");
+        assert_eq!(name, "<=");
         assert!(!explicit);
         assert_eq!(args.len(), 2);
         assert!(matches!(&args[0].kind, ExprKind::Var(v) if v == "a"));
@@ -2628,9 +2751,9 @@ mod tests {
         // expression on each side, no parentheses needed.
         let k = body("a + b <= c * d");
         let (name, args, _) = as_call(&k);
-        assert_eq!(name, "Le");
-        assert_eq!(as_call(&args[0].kind).0, "add");
-        assert_eq!(as_call(&args[1].kind).0, "mul");
+        assert_eq!(name, "<=");
+        assert_eq!(as_call(&args[0].kind).0, "+");
+        assert_eq!(as_call(&args[1].kind).0, "*");
     }
 
     #[test]
@@ -2653,7 +2776,7 @@ mod tests {
         let TyKind::OfExpr(e) = &d.params[2].ty.kind else {
             panic!("expected a decoded type, got {:?}", d.params[2].ty.kind)
         };
-        assert_eq!(as_call(&e.kind).0, "Le");
+        assert_eq!(as_call(&e.kind).0, "<=");
         let f = parse_file("theorem t(n: Nat): (m: Nat) -> n <= m -> n <= m { ?p }").unwrap();
         assert!(matches!(only_decl(&f).result.kind, TyKind::Fn { .. }));
     }
