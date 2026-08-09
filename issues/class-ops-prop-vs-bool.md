@@ -3,7 +3,7 @@ title: Class operations across the kerneltime/runtime split: Prop laws, Bool pro
 status: open
 labels: [design,traits,compiler,stdlib,delam]
 created: 2026-08-07
-updated: 2026-08-07
+updated: 2026-08-09
 ---
 
 From reviewing `Cmp<A>` (le: A -> A -> Bool with `= True` laws, 2026-08-07). The question 'should le be A -> A -> Prop (or SProp)?' dissolves differently in Heather than in Lean, because of the hard kerneltime/runtime split the whole Compile design is about: a class operation is a kerneltime value, and HOW IT RUNS is a separate, certificate-carrying claim (a Compile instance for the dictionary's operations — untouched territory, noted at [[compile-typeclass-design]]). So Bool-vs-Prop stops being one API decision and becomes two:
@@ -15,3 +15,7 @@ From reviewing `Cmp<A>` (le: A -> A -> Bool with `= True` laws, 2026-08-07). The
 The landed `Cmp` (Bool + `= True`) is the honest v1: it is the DECIDED class with the spec inlined as its own decision. When Prop-valued classes are wanted (real math: partial orders with undecidable le), add the spec-side class and make today's Cmp the decidable refinement rather than renaming.
 
 Open sub-questions, recorded not answered: whether SProp fields in classes interact with the record lowering at all today; what a Compile instance FOR A DICTIONARY looks like (per-instance? per-class-with-carrier-Compile?) — that is the 'compile instances for typeclass functions' thread, deliberately untouched by the traits rounds so far and probably the next Compile-side design round after [[datarepr-separation]].
+
+## Log
+
+- 2026-08-09: Rider from the algebra.hthr cleanup review (2026-08-09): a symbol spelling for Cmp's le belongs to this issue, not to a designation today — <= already lexes and means Le, the proposition, at the non-associative comparison rung, so designating <= at a carrier to the Bool-valued le would make x <= y a Bool in one file and a Type in another. The right home is the bridge this issue designs: the spec-side class owns <=, and the decided refinement stays named (leb/le) until then.

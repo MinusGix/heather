@@ -8,17 +8,12 @@
 // The operation is an INDEX, not a field
 // (docs/operation-indexed-classes-design.md): `Monoid<Bool>(and)` and
 // `Monoid<Bool>(or)` are different types, so both register as equals and
-// nothing here has to nominate one. That deletes the coherence essay this
-// file carried until 2026-08-09, and with it the additive hierarchy
-// (`AddSemigroup` → `AddMonoid` → `AddCommMonoid`) that existed only to say
-// "the other monoid" under different field names.
+// nothing here has to nominate one.
 //
 // A `designation` says what an operator SYMBOL means at a carrier
-// (docs/operators-onto-classes-design.md). It is not a nomination: `&&` is
-// `and` at `Bool` and `||` is `or`, both monoids still register as equals, and
-// the symbols are what distinguish them. Notice that nothing below is written
-// twice — the symbol is a spelling of the index, so `sum_all` and `mconcat`
-// are one fold reached two ways.
+// (docs/operators-onto-classes-design.md), never which structure a carrier
+// has. The symbol is a spelling of the index, so `sum_all` and `mconcat` are
+// one fold reached two ways.
 
 import bool;
 import nat;
@@ -42,9 +37,7 @@ class Monoid<A>(op: A -> A -> A) extends Semigroup<A>(op) {
     unit_r: (x: A) -> op(x, unit) = x,
 }
 
-// The commutative monoid: one chain, at every operation. This is what the
-// additive hierarchy was, with the operation moved out of the field list —
-// which is why there is only one of it now.
+// The commutative monoid: one chain, at every operation.
 class CommMonoid<A>(op: A -> A -> A) extends Monoid<A>(op) {
     comm: (x: A) -> (y: A) -> op(x, y) = op(y, x),
 }
@@ -56,35 +49,31 @@ class Default<A> {
 }
 
 // A decided order: a `Bool`-valued comparison, reflexive in the shape
-// `std/nat` states its order in (`Le(n, m)` is `leb(n)(m) = True`, so a
-// `Nat` proof of either shape is a proof of the other and `nat::le_refl`
-// fills `le_refl` verbatim).
+// `std/nat` states its order in (`Le(n, m)` is `leb(n)(m) = True`, so a `Nat`
+// proof of either shape is a proof of the other and `nat::le_refl` fills
+// `le_refl` verbatim).
 //
-// The field is `le` and NOT `leb`, which is what `std/nat` calls the function
-// filling it. A class field that shares a name with a global in scope can
-// never be reached by a receiver: `x.leb(y)` is ambiguous between the member
-// and the bare call, and the elaborator says so by name rather than picking
-// (which is right — the two are different functions at the same spelling).
-// Naming a field is therefore a *library* decision about the ambient
-// namespace, not a local one. See issues/traits.md's log for the finding.
+// The field is `le` and NOT `leb`, the name `std/nat` gives the function
+// filling it. A class field sharing a name with a global in scope can never be
+// reached by a receiver: `x.leb(y)` is ambiguous between the member and the
+// bare call, and the elaborator says so by name rather than picking. Naming a
+// field is therefore a *library* decision about the ambient namespace, not a
+// local one (issues/traits.md).
 //
 // `Cmp` and `Default` take no index: their structure is identified by the
 // carrier alone, and indexing is opt-in per class (design §2.1).
 class Cmp<A> {
     le: A -> A -> Bool,
-    le_refl: (x: A) -> le(x)(x) = True,
+    le_refl: (x: A) -> le(x, x) = True,
 }
 
 // ---------------------------------------------------------------------------
 // Instances at the library's carriers.
 //
 // Every one of these is written in LITERAL form — `field := global` — because
-// every fact it needs was already proved in the module that owns the carrier.
-// That is the form's purpose (docs/traits-design.md §3): assembling an
-// instance out of the library's own names, rather than moving definitions
-// into a block and leaving every existing caller of `append_assoc` to find it
-// under a new one. Where a field is a one-liner nobody would name (`unit_r`
-// for `add`, which is `refl`), it is written inline.
+// every fact it needs was already proved in the module that owns the carrier
+// (docs/traits-design.md §3). Where a field is a one-liner nobody would name
+// (`unit_r` for `add`, which is `refl`), it is written inline.
 //
 // Both `Bool` monoids register, as equals. Neither is "the" one, because no
 // goal with an unpinned operation ever reaches the registry (design §5).
@@ -114,8 +103,7 @@ instance CommMonoid<Bool>(or) {
 }
 
 // The generic instance: one declaration, an instance at every element type.
-// Not commutative, and it does not have to be — the chain is one class per
-// law, and `append` stops at `Monoid`.
+// The chain is one class per law, and `append` stops at `Monoid`.
 instance<A> Monoid<List<A>>(append) {
     unit := Nil,
     assoc := append_assoc,
@@ -138,19 +126,14 @@ instance Cmp<Bool> { le := leb_bool, le_refl := leb_bool_refl }
 // One entry per (symbol, carrier head); a duplicate is a declaration error.
 // `Bool` is the case worth reading: two operations, two symbols, and the
 // programming spelling chooses which is which — `&&` is conjunction, `||` is
-// disjunction. This file briefly designated the Boolean semiring instead
-// (`+` = or, `*` = and); issues/bool-operator-designations.md is where that
-// convention was reviewed and replaced — `+` at a `Bool` read as a pun, and
-// the doubled symbols say the same thing in the language programmers already
-// speak. Neither entry is "the" Bool monoid, because a designation says
+// disjunction. Neither entry is "the" Bool monoid, because a designation says
 // what a *symbol* means and never which structure a carrier has.
 //
-// `+` at `Nat` is `add`, which is what the parser hard-coded `+` to mean at
-// every carrier until this round. It is now one row of a table, and the growth
-// invariant is that a file with no row still gets it. `&&` and `||` have no
-// such row to inherit — they postdate the fixed table — so away from a
-// designation or a binder they refuse rather than fall back, which makes
-// these two entries the whole of what the symbols mean.
+// `+` has a fixed fallback meaning (`add`) that a file with no row still gets;
+// the row here is what makes it a table entry rather than a hard-coded rule.
+// `&&` and `||` have no such fallback, so away from a designation or a binder
+// they refuse — which makes these two entries the whole of what the symbols
+// mean.
 
 designation + at Nat := add
 designation && at Bool := and
@@ -167,8 +150,7 @@ designation<A> + at List<A> := append
 // The fold every monoid is for, in the LINKED form (design §4.1): the
 // operation is a written parameter and the constraint's index slot says it is
 // the same one, so callers choose the structure positionally and nothing is
-// searched for. `op` is an ordinary variable in the body; `A.unit` is answered
-// by the binder in scope, which is the value-slot ladder's step 2.
+// searched for. `A.unit` is answered by the binder in scope.
 fn mconcat<A: Monoid(op)>(op: A -> A -> A, xs: List<A>) -> A {
     match xs {
         Nil => A.unit,
@@ -176,10 +158,10 @@ fn mconcat<A: Monoid(op)>(op: A -> A -> A, xs: List<A>) -> A {
     }
 }
 
-// Proved once against the class. Its uses below are at unrelated carriers and
+// Proved once against the class; its uses below are at unrelated carriers and
 // neither re-proves anything. `A.unit_r` is a **proof** field projected from
-// the type, which needs nothing of its own: a type projection is an ordinary
-// field projection, so an operation and a law are the same move.
+// the type — a type projection is an ordinary field projection, so an
+// operation and a law are the same move.
 theorem mconcat_single<A: Monoid(op)>(op: A -> A -> A, x: A):
     mconcat(op, Cons(x, Nil)) = x
 {
@@ -189,20 +171,18 @@ theorem mconcat_single<A: Monoid(op)>(op: A -> A -> A, x: A):
 // The order consumer: the class's `le` decides which of two values to keep.
 // The branch is a separate `fn` for the reason `list_algos`'s `ins_pick` is
 // one — a `match` on a stuck `Bool` is a scrutinee no equation can reach, and
-// hoisting it makes one `j` enough. A class projection is exactly such a
-// scrutinee, so the pattern is the same one, not a new one.
+// hoisting it makes one `j` enough. A class projection is such a scrutinee.
 fn cmp_pick<A>(b: Bool, x: A, y: A) -> A { match b { False => x, True => y } }
 
 // Written in the INLINE constraint form (issues/requires-placement-syntax.md
 // §R2-A): none of these names the dictionary — `x.le(y)` dispatches from the
-// receiver and `A.le_refl(x)` projects from the type — so there is nothing for
-// a binder name to do, and `<A: Cmp>` says the whole of what is true about `A`.
+// receiver and `A.le_refl(x)` projects from the type — so `<A: Cmp>` says the
+// whole of what is true about `A`.
 //
-// `A.le_refl` is also where the *other-reading* rule earns its keep:
-// `std/nat`'s `le_refl` is an ambient global, and `x.le_refl()` on a receiver
-// would be ambiguous against it. On a **type** subject it is not, because the
-// desugaring would put a type in `le_refl`'s `Nat` slot — a reading the
-// declaration refuses (docs/traits-type-projection-design.md §4).
+// `A.le_refl` is on a **type** subject, which is what keeps it unambiguous
+// against `std/nat`'s ambient `le_refl` global: the receiver reading would put
+// a type in `le_refl`'s `Nat` slot, and the declaration refuses that
+// (docs/traits-type-projection-design.md §4).
 fn max_of<A: Cmp>(x: A, y: A) -> A { cmp_pick(x.le(y), x, y) }
 
 theorem max_of_true<A: Cmp>(x: A, y: A, p: x.le(y) = True):
@@ -216,26 +196,19 @@ theorem max_of_self<A: Cmp>(x: A): max_of(x, x) = x {
 }
 
 // `Default` earns its keep here: the caller of `or_default` names no
-// dictionary and no fallback value. Spelled `:= infer` rather than
-// `requires`, which is the same mechanism (docs/traits-layer2-design.md) with
-// the binder where a defaulted argument goes.
-fn or_default<A>(o: Option<A>, d: Default<A> := infer) -> A {
-    unwrap_or(o, d.default)
-}
+// dictionary and no fallback value. In the inline constraint form, like
+// `max_of` above — nothing names the dictionary, since `A.default` projects
+// the value straight from the type.
+fn or_default<A: Default>(o: Option<A>) -> A { unwrap_or(o, A.default) }
 
 // The chain's generic consequence: a right unit follows from commutativity and
 // the left one, so `Monoid`'s `unit_r` is redundant *for a commutative
 // monoid*. Written in the SYMBOL form
-// (docs/operators-onto-classes-design.md §5), which is what lets the statement
-// be the mathematics: the `+` here is the bound index, not an ambient
-// operator, and every corollary below still pins it **by unification** from
-// its own goal — one proof, three structures, two of them on one carrier.
-//
-// `bool_and_true` is the case that shows the ladder's order. The binder here
-// names `+`, which designates nothing at `Bool` — and is never asked to,
-// because the corollary's own goal says `and` and unification is the ladder's
-// first rung. A designation supplies an index nothing else pinned; it never
-// overrides one.
+// (docs/operators-onto-classes-design.md §5): the `+` here is the bound index,
+// not an ambient operator, and every corollary below pins it **by unification**
+// from its own goal — one proof, three structures, two of them on one carrier.
+// A designation supplies an index nothing else pinned; it never overrides one,
+// which is why the binder's `+` is never asked what it means at `Bool`.
 theorem op_unit_of_comm<A: CommMonoid(+)>(x: A): x + A.unit = x {
     trans(A.comm(x, A.unit), A.unit_l(x))
 }
@@ -244,11 +217,9 @@ theorem op_unit_of_comm<A: CommMonoid(+)>(x: A): x + A.unit = x {
 // The specializations, one per way an instance can be found.
 
 // The fold under whatever `+` means here
-// (docs/operators-onto-classes-design.md §5). The body passes the symbol
-// positionally to `mconcat` — inside this declaration `+` IS the bound index,
-// so the two folds are one term — and at a call site the index is filled from
-// the designation at the caller's carrier, which is the value-slot ladder's
-// third rung.
+// (docs/operators-onto-classes-design.md §5). Inside this declaration `+` IS
+// the bound index, so the two folds are one term; at a call site the index is
+// filled from the designation at the caller's carrier.
 fn sum_all<A: Monoid(+)>(xs: List<A>) -> A { mconcat(+, xs) }
 
 // One declaration, two carriers, and no caller names an operation. The
@@ -259,30 +230,26 @@ fn sum(ns: List<Nat>) -> Nat { sum_all(ns) }
 
 fn concat<A>(xss: List<List<A>>) -> List<A> { sum_all(xss) }
 
-// The `Bool` folds are NOT `sum_all`: `+` means nothing at `Bool` — the
-// semiring designation that once made `any_of` a `+`-fold was reviewed out
-// (issues/bool-operator-designations.md) — so each names its operation
-// positionally, which costs one word and is legal forever (design §4.1).
-// There is no `&&`-fold beside them, because a second declaration of the same
-// fold under a second symbol is the duplication this whole line of design
-// exists to delete; and the pair's existence side by side is the sentence
-// that nothing was nominated: two structures at one carrier, both registered,
-// both reachable, neither preferred.
+// The `Bool` folds are NOT `sum_all`: `+` means nothing at `Bool`, so each
+// names its operation positionally, which costs one word and is legal forever
+// (design §4.1). There is no `&&`-fold beside them — a second declaration of
+// the same fold under a second symbol is duplication. The pair side by side is
+// the sentence that nothing was nominated: two structures at one carrier, both
+// registered, both reachable, neither preferred.
 fn any_of(bs: List<Bool>) -> Bool { mconcat(or, bs) }
 
 fn all_of(bs: List<Bool>) -> Bool { mconcat(and, bs) }
 
-// The class lemma at two carriers. Neither of these re-proves anything: they
-// are `mconcat_single` with the dictionary found — at `Nat` through the
-// registry, at `Bool` likewise, and the two folds are different functions.
+// The class lemma at two carriers. Neither re-proves anything: they are
+// `mconcat_single` with the dictionary found through the registry, and the two
+// `Bool` folds are different functions.
 //
-// The third carrier, `List<A>`, is NOT here: `mconcat_single` instantiated at
-// a list carrier exhausts the kernel's conversion fuel, whichever way round
-// the statement is written (issues/class-lemma-instantiation-fuel.md, with
-// the twenty-line reproducer and the three probes that place the cost). The
-// *uses* — `concat` above — are unaffected and cheap; it is the generic
-// lemma's instantiation that dies. Nothing here works around it: the missing
-// theorem is left missing so that the issue closing restores it.
+// The third carrier, `List<A>`, is deliberately NOT here: `mconcat_single`
+// instantiated at a list carrier exhausts the kernel's conversion fuel,
+// whichever way round the statement is written
+// (issues/class-lemma-instantiation-fuel.md). The *uses* — `concat` above —
+// are unaffected and cheap. Nothing here works around it: the missing theorem
+// is left missing so that the issue closing restores it.
 theorem sum_single(n: Nat): sum(Cons(n, Nil)) = n { mconcat_single(add, n) }
 
 theorem all_of_single(b: Bool): all_of(Cons(b, Nil)) = b { mconcat_single(and, b) }
@@ -291,16 +258,14 @@ theorem any_of_single(b: Bool): any_of(Cons(b, Nil)) = b { mconcat_single(or, b)
 
 // The generic law, spent three times. Each goal names its operation — that is
 // what a law is — so unification pins the index and the ground goal hits the
-// registry key. Two of the three are the same carrier, which is the sentence
-// the additive hierarchy existed to fail to say.
+// registry key. Two of the three are the same carrier.
 //
-// The Bool pair is written in the notation: `&&` and `||` in the statements
-// resolve by the designations above — no binder names either symbol here, so
-// the designation at the operand's carrier answers (resolution rung 2), and
-// the goals ARE `and(x, True) = x` and `or(x, False) = x`, spelled the way a
-// programmer reads them. Resolution happens at the statement; the index is
-// then pinned from the resolved goal by unification, exactly as at `Nat`.
-theorem nat_add_zero(x: Nat): add(x, 0) = x { op_unit_of_comm(x) }
+// All three are written in the notation: no binder names a symbol here, so the
+// designation at the operand's carrier answers (resolution rung 2) and the
+// goals ARE `add(x, 0) = x`, `and(x, True) = x` and `or(x, False) = x`.
+// Resolution happens at the statement; the index is then pinned from the
+// resolved goal by unification.
+theorem nat_add_zero(x: Nat): x + 0 = x { op_unit_of_comm(x) }
 
 theorem bool_and_true(x: Bool): x && True = x { op_unit_of_comm(x) }
 
