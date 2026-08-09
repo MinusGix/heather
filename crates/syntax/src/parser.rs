@@ -29,10 +29,17 @@
 //! ctor    := name ("(" field ("," field)* ","? ")")?
 //! field   := (name ":")? type
 //! params  := param ("," param)* ","?
-//! param   := name ":" type | "{" name ":" type "}"   -- implicit
-//! type    := "(" name ":" type ")" "->" type         -- dependent function
+//! param   := names ":" type | "{" names ":" type "}" -- implicit
+//! names   := name ("," name)*   -- a run shares ONE annotation; a modifier
+//!                                  (`self x`) still prefixes a single name
+//! type    := "(" bgroup ("," bgroup)* ")" "->" type  -- dependent function,
+//!                                     a telescope: a later binder's type may
+//!                                     mention an earlier binder
+//!          | "{" bgroup ("," bgroup)* "}" "->" type  -- implicit binders
 //!          | tyatom "->" type                        -- right-associative
 //!          | tyatom
+//! bgroup  := names ":" type   -- `(x, y: A, z: B)` is three binders, and
+//!                                desugars to the curried chain (`curry`)
 //! tyatom  := univ                                    -- Type, Type<n>
 //!          | "[" type ";" expr "]"                   -- length-indexed vector
 //!          | name ("<" type ("," type)* ">")         -- applied inductive
@@ -242,6 +249,31 @@ fn expr_as_ty(e: &Expr) -> Ty {
         _ => TyKind::OfExpr(Box::new(e.clone())),
     };
     Ty { kind, span }
+}
+
+/// Fold a binder group's telescope into the curried Π chain it abbreviates:
+/// `(x: A, y: B) -> C` **is** `(x: A) -> (y: B) -> C`, and nothing downstream
+/// can tell which was written (issues/multi-binder-function-types.md). The
+/// sugar is discharged here, in the parser, for that reason — a second
+/// representation of the same type would be a second thing for the elaborator,
+/// the printer and every test to agree about.
+fn curry(binders: Vec<(String, Ty)>, cod: Ty, implicit: bool, span: Span) -> Ty {
+    let mut out = cod;
+    for (name, dom) in binders.into_iter().rev() {
+        let sp = dom.span.join(out.span);
+        out = Ty {
+            kind: TyKind::Fn {
+                binder: Some(name),
+                implicit,
+                dom: Box::new(dom),
+                cod: Box::new(out),
+            },
+            span: sp,
+        };
+    }
+    // The whole group's span, so a one-binder list is byte-for-byte the node
+    // the single-binder rule used to build.
+    Ty { kind: out.kind, span }
 }
 
 impl Parser {
@@ -1184,6 +1216,32 @@ impl Parser {
                     span: self_sp.join(psp),
                 });
             }
+            // `fn f(x, y: A)` — a run of names sharing one annotation, the
+            // parameter-list half of issues/multi-binder-function-types.md.
+            // A name followed by `,` was a parse error before this (every
+            // parameter is annotated), so the form is strictly additive; and
+            // the run stops at the `:`, which is why the same comma can go on
+            // separating parameters after the type.
+            let mut names = vec![(pname, psp)];
+            while matches!(self.peek(), TokKind::Comma)
+                && matches!(self.nth(1), TokKind::Ident(_))
+            {
+                // A modifier prefixes ONE name, which is the whole reason the
+                // shared annotation is spelled with commas rather than by
+                // juxtaposition: `self x, y: A` would have to decide whether
+                // the receiver mark reaches `y`, so it is refused instead.
+                if is_self {
+                    return Err(ParseError {
+                        msg: "`self` marks a single parameter: write `self x: A, y: A`, \
+                              with the receiver's own annotation, rather than sharing one \
+                              annotation across the mark"
+                            .into(),
+                        span: self_sp.join(self.peek_span()),
+                    });
+                }
+                self.bump();
+                names.push(self.binder_ident("parameter name")?);
+            }
             self.expect(&TokKind::Colon, "`:`")?;
             let ty = self.ty()?;
             let mut span = psp.join(ty.span);
@@ -1229,7 +1287,16 @@ impl Parser {
             // A solver parameter has no positional slot: it is implicit, and
             // `@f(…)` is how it is passed by hand (§1).
             let implicit = implicit || solver.is_some();
-            params.push(Param { name: pname, ty, implicit, is_self, solver, span });
+            for (name, nsp) in names {
+                params.push(Param {
+                    name,
+                    ty: ty.clone(),
+                    implicit,
+                    is_self,
+                    solver,
+                    span: nsp.join(span),
+                });
+            }
             if !matches!(self.peek(), TokKind::Comma) {
                 break;
             }
@@ -1543,22 +1610,12 @@ impl Parser {
         // grammar, so a binder-headed group cannot be anything else.
         if self.at_binder_group() {
             let start = self.bump().span; // `(`
-            let (name, _) = self.ident("binder name")?;
-            self.expect(&TokKind::Colon, "`:`")?;
-            let dom = self.ty()?;
+            let binders = self.binder_list(false)?;
             self.expect(&TokKind::RParen, "`)` to close the binder")?;
             self.expect(&TokKind::Arrow, "`->` after a function-type binder")?;
             let cod = self.ty()?;
             let span = start.join(cod.span);
-            return Ok(Ty {
-                kind: TyKind::Fn {
-                    binder: Some(name),
-                    implicit: false,
-                    dom: Box::new(dom),
-                    cod: Box::new(cod),
-                },
-                span,
-            });
+            return Ok(curry(binders, cod, false, span));
         }
         // `{x: A} -> B` — an *implicit* binder
         // (docs/implicit-binders-design.md §8). The same three-token
@@ -1568,25 +1625,15 @@ impl Parser {
         // exactly as inside `(…: …)` (an equality domain is `{p: (a = b)}`).
         if matches!(self.peek(), TokKind::LBrace)
             && matches!(self.nth(1), TokKind::Ident(_))
-            && matches!(self.nth(2), TokKind::Colon)
+            && matches!(self.nth(2), TokKind::Colon | TokKind::Comma)
         {
             let start = self.bump().span; // `{`
-            let (name, _) = self.ident("binder name")?;
-            self.expect(&TokKind::Colon, "`:`")?;
-            let dom = self.ty()?;
+            let binders = self.binder_list(true)?;
             self.expect(&TokKind::RBrace, "`}` to close the implicit binder")?;
             self.expect(&TokKind::Arrow, "`->` after a function-type binder")?;
             let cod = self.ty()?;
             let span = start.join(cod.span);
-            return Ok(Ty {
-                kind: TyKind::Fn {
-                    binder: Some(name),
-                    implicit: true,
-                    dom: Box::new(dom),
-                    cod: Box::new(cod),
-                },
-                span,
-            });
+            return Ok(curry(binders, cod, true, span));
         }
         let lhs = self.ty_atom()?;
         if matches!(self.peek(), TokKind::Arrow) {
@@ -1604,6 +1651,54 @@ impl Parser {
             });
         }
         Ok(lhs)
+    }
+
+    /// The inside of a function type's binder group: `x: A`, `x, y: A`,
+    /// `x: A, y: B`, and every mix of the two
+    /// (issues/multi-binder-function-types.md). The result is a **telescope** —
+    /// a later binder's type may mention an earlier binder — which is exactly
+    /// what falls out of parsing the domains left to right and currying at the
+    /// end, so nothing here has to enforce it.
+    ///
+    /// The two commas are one comma and the parse is still deterministic: a
+    /// *name* is only ever followed by `,` (another name in the same run) or
+    /// `:` (the run's shared annotation), and a group is only ever ended by a
+    /// *type*, so the comma after a type starts the next group. No lookahead,
+    /// no backtracking.
+    fn binder_list(&mut self, implicit: bool) -> R<Vec<(String, Ty)>> {
+        let (open, close) = if implicit { ("{", "}") } else { ("(", ")") };
+        let mut out: Vec<(String, Ty)> = Vec::new();
+        loop {
+            let mut names = vec![self.ident("binder name")?];
+            while matches!(self.peek(), TokKind::Comma) {
+                self.bump();
+                names.push(self.ident("binder name")?);
+            }
+            if !matches!(self.peek(), TokKind::Colon) {
+                let span = names[0].1.join(names[names.len() - 1].1);
+                let written =
+                    names.iter().map(|(n, _)| n.as_str()).collect::<Vec<_>>().join(", ");
+                return Err(ParseError {
+                    msg: format!(
+                        "this binder group has no type: write `{open}{written}: A{close} -> B`. \
+                         A comma-separated run of names shares ONE annotation, and the \
+                         annotation is what makes them binders rather than a grouped \
+                         expression"
+                    ),
+                    span,
+                });
+            }
+            self.bump(); // `:`
+            let dom = self.ty()?;
+            for (name, _) in names {
+                out.push((name, dom.clone()));
+            }
+            if !matches!(self.peek(), TokKind::Comma) {
+                break;
+            }
+            self.bump();
+        }
+        Ok(out)
     }
 
     /// A type with no top-level arrow.
@@ -1836,11 +1931,55 @@ impl Parser {
         }
     }
 
-    /// `( ident :` — the start of a dependent function type's binder group.
+    /// `( ident :` — the start of a dependent function type's binder group;
+    /// or `( ident ,`, the multi-binder form (issues/multi-binder-function-types.md).
+    ///
+    /// The comma form needs more than three tokens to recognise, because
+    /// `(a, b)` on its own is not a binder list and must stay whatever it was
+    /// (nothing, today — but the parenthesis rule is load-bearing enough that
+    /// the lookahead pays for itself). The discriminator is the same one
+    /// [`Self::group_is_type`] uses one level down: a `:` at the group's own
+    /// depth, which the expression grammar has nowhere to put, or a `->`
+    /// straight after the group, which no expression can be followed by. The
+    /// second disjunct is what lets `(x, y) -> C` reach the binder-list parser
+    /// and get told what it is missing, instead of failing at the comma with
+    /// `expected )`.
     fn at_binder_group(&self) -> bool {
         matches!(self.peek(), TokKind::LParen)
             && matches!(self.nth(1), TokKind::Ident(_))
-            && matches!(self.nth(2), TokKind::Colon)
+            && match self.nth(2) {
+                TokKind::Colon => true,
+                TokKind::Comma => self.group_binds(),
+                _ => false,
+            }
+    }
+
+    /// Does the parenthesised group at the cursor either carry an annotation
+    /// of its own (a `:` at the group's depth, outside any nested brace or
+    /// bracket — a record literal's `a: 1` is not this) or stand immediately
+    /// before a `->`? Either answer means a binder list is intended.
+    fn group_binds(&self) -> bool {
+        let mut depth = 0usize;
+        let mut inner = 0usize; // braces and brackets nested inside the group
+        let mut i = self.pos;
+        while i < self.toks.len() {
+            match self.toks[i].kind {
+                TokKind::LParen => depth += 1,
+                TokKind::LBrace | TokKind::LBracket if depth == 1 => inner += 1,
+                TokKind::RBrace | TokKind::RBracket if depth == 1 && inner > 0 => inner -= 1,
+                TokKind::Colon if depth == 1 && inner == 0 => return true,
+                TokKind::RParen => {
+                    depth -= 1;
+                    if depth == 0 {
+                        return matches!(self.nth(i + 1 - self.pos), TokKind::Arrow);
+                    }
+                }
+                TokKind::Eof => break,
+                _ => {}
+            }
+            i += 1;
+        }
+        false
     }
 
     /// Run `f` with the next lambda body flagged as a motive body. Restores
@@ -3422,5 +3561,170 @@ mod tests {
             parse_file("meta fn f(g: Ctx, x: Code(g, Nat)) -> Code(g |- Nat) { code { 0 } }")
                 .unwrap_err();
         assert!(err.msg.contains("|-"), "{}", err.msg);
+    }
+
+    // -- multi-binder function types ---------------------------------------
+    // issues/multi-binder-function-types.md. The sugar is discharged in the
+    // parser, so every test here asserts on the *curried chain* — if the
+    // desugaring were anything but the hand-written spelling, these would be
+    // the wrong assertions to be able to write.
+
+    /// The binder spine of a function type, outermost first: the name and the
+    /// domain's leading identifier (enough to tell `Nat` from `Bool`), then
+    /// the result type's leading identifier.
+    fn head(t: &Ty) -> String {
+        match &t.kind {
+            TyKind::Named { name, .. } => name.clone(),
+            TyKind::Univ { level } => format!("Type<{level}>"),
+            TyKind::OfExpr(e) => match &e.kind {
+                ExprKind::Var(n) => n.clone(),
+                other => format!("{other:?}"),
+            },
+            other => format!("{other:?}"),
+        }
+    }
+
+    fn spine(ty: &Ty) -> (Vec<(String, String)>, String) {
+        let mut binders = Vec::new();
+        let mut cur = ty;
+        while let TyKind::Fn { binder: Some(name), dom, cod, .. } = &cur.kind {
+            binders.push((name.clone(), head(dom)));
+            cur = cod;
+        }
+        (binders, head(cur))
+    }
+
+    /// The type of `g`, the sole parameter of the file's one declaration.
+    fn param_ty(src: &str) -> Ty {
+        let f = parse_file(src).unwrap();
+        only_decl(&f).params[0].ty.clone()
+    }
+
+    #[test]
+    fn two_binders_in_one_arrow_group_curry() {
+        let ty = param_ty("fn f(g: (x: Nat, y: Bool) -> Nat) -> Nat { 0 }");
+        let (binders, res) = spine(&ty);
+        assert_eq!(
+            binders,
+            vec![("x".into(), "Nat".into()), ("y".into(), "Bool".into())]
+        );
+        assert_eq!(res, "Nat");
+        // …and the desugaring is the hand-curried spelling, not a lookalike.
+        let hand = param_ty("fn f(g: (x: Nat) -> (y: Bool) -> Nat) -> Nat { 0 }");
+        assert_eq!(spine(&ty), spine(&hand));
+    }
+
+    #[test]
+    fn a_run_of_names_shares_one_annotation() {
+        let ty = param_ty("fn f(g: (x, y, z: Nat) -> Bool) -> Nat { 0 }");
+        let (binders, res) = spine(&ty);
+        assert_eq!(
+            binders,
+            vec![
+                ("x".into(), "Nat".into()),
+                ("y".into(), "Nat".into()),
+                ("z".into(), "Nat".into())
+            ]
+        );
+        assert_eq!(res, "Bool");
+    }
+
+    #[test]
+    fn runs_and_separate_groups_mix() {
+        let ty = param_ty("fn f(g: (x, y: Nat, z: Bool) -> Nat) -> Nat { 0 }");
+        let (binders, _) = spine(&ty);
+        assert_eq!(
+            binders,
+            vec![
+                ("x".into(), "Nat".into()),
+                ("y".into(), "Nat".into()),
+                ("z".into(), "Bool".into())
+            ]
+        );
+    }
+
+    /// It is a telescope: `A` is in scope in the next binder's type, which is
+    /// automatic once the group curries left to right.
+    #[test]
+    fn a_later_binder_may_mention_an_earlier_one() {
+        let ty = param_ty("fn f(g: (A: Type<0>, x: A) -> A) -> Nat { 0 }");
+        let (binders, res) = spine(&ty);
+        assert_eq!(
+            binders,
+            vec![("A".into(), "Type<0>".into()), ("x".into(), "A".into())]
+        );
+        assert_eq!(res, "A");
+    }
+
+    #[test]
+    fn implicit_binder_groups_take_the_run_too() {
+        let ty = param_ty("fn f(g: {A, B: Type<0>} -> Nat) -> Nat { 0 }");
+        let TyKind::Fn { binder, implicit, cod, .. } = &ty.kind else { panic!("{ty:?}") };
+        assert_eq!(binder.as_deref(), Some("A"));
+        assert!(*implicit);
+        assert!(matches!(&cod.kind, TyKind::Fn { implicit: true, .. }));
+        assert_eq!(spine(&ty).0.len(), 2);
+    }
+
+    #[test]
+    fn a_parameter_run_shares_one_annotation() {
+        let f = parse_file("fn f(x, y: Nat, z: Bool) -> Nat { 0 }").unwrap();
+        let ps = &only_decl(&f).params;
+        assert_eq!(ps.len(), 3);
+        assert_eq!(ps.iter().map(|p| p.name.as_str()).collect::<Vec<_>>(), ["x", "y", "z"]);
+        assert!(ps.iter().all(|p| !p.implicit));
+        assert_eq!(ps.iter().map(|p| head(&p.ty)).collect::<Vec<_>>(), ["Nat", "Nat", "Bool"]);
+    }
+
+    #[test]
+    fn an_implicit_parameter_run_stays_implicit() {
+        let f = parse_file("theorem t({a, b: Nat}, p: a = b): b = a { refl }").unwrap();
+        let ps = &only_decl(&f).params;
+        assert_eq!(ps.len(), 3);
+        assert!(ps[0].implicit && ps[1].implicit, "both names in the brace are implicit");
+        assert!(!ps[2].implicit);
+    }
+
+    /// A modifier prefixes ONE name — the property the comma form was chosen
+    /// for (Lean's juxtaposition cannot state it). `self x: A, y: A` is two
+    /// parameters; `self x, y: A` is refused rather than guessed at.
+    #[test]
+    fn a_modifier_prefixes_a_single_name() {
+        let f = parse_file("fn r(self x: Nat, y: Nat) -> Nat { x }").unwrap();
+        let ps = &only_decl(&f).params;
+        assert_eq!(ps.len(), 2);
+        assert!(ps[0].is_self && !ps[1].is_self);
+
+        let e = parse_file("fn r(self x, y: Nat) -> Nat { x }").unwrap_err();
+        assert!(e.msg.contains("`self` marks a single parameter"), "{}", e.msg);
+    }
+
+    /// The negative control: names with no annotation are not binders, and the
+    /// error says which form was almost written instead of failing at the
+    /// comma with `expected )`.
+    #[test]
+    fn a_binder_group_without_an_annotation_is_named() {
+        let e = parse_file("fn f(g: (x, y) -> Nat) -> Nat { 0 }").unwrap_err();
+        assert!(e.msg.contains("has no type"), "{}", e.msg);
+        assert!(e.msg.contains("(x, y: A)"), "{}", e.msg);
+    }
+
+    /// …and in expression position the same group is still not a tuple (there
+    /// are none), but the message names the missing arrow rather than
+    /// cascading.
+    #[test]
+    fn a_binder_group_in_expression_position_asks_for_the_arrow() {
+        let e = parse_file("fn f(n: Nat) -> Nat { (x, y: Nat) }").unwrap_err();
+        assert!(e.msg.contains("->"), "{}", e.msg);
+    }
+
+    /// The parenthesis rule is untouched: a leading `(` in type position that
+    /// opens an *expression* still does (`(a + b) + c = …`), and a comma
+    /// inside a call's argument list is still an argument separator.
+    #[test]
+    fn ordinary_parenthesised_expressions_still_parse() {
+        parse_file("theorem t(a: Nat, b: Nat, c: Nat): (a + b) + c = a + (b + c) { refl }")
+            .unwrap();
+        parse_file("fn f(a: Nat, b: Nat) -> Nat { g(h(a, b), a) }").unwrap();
     }
 }

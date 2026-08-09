@@ -511,3 +511,100 @@ mod rejections {
         assert!(msg.contains("too many arguments"), "{msg}");
     }
 }
+
+// Multi-binder groups (issues/multi-binder-function-types.md). The parser
+// desugars `(x: A, y: B) -> C` to the curried chain, so what is left to check
+// here is that the elaborator sees exactly the chain — every test below writes
+// the sugar and *uses* the value as the curried function it is.
+mod multi_binder_groups {
+    use super::*;
+
+    #[test]
+    fn a_higher_order_parameter_takes_two_binders_in_one_group() {
+        elab(
+            r#"
+            fn ap2(f: (x: Nat, y: Nat) -> Nat, a: Nat, b: Nat) -> Nat { f(a)(b) }
+            fn k(a: Nat) -> Nat -> Nat { λ (b: Nat) => a }
+
+            theorem t(): ap2(k, 3, 7) = 3 { refl }
+            "#,
+        );
+    }
+
+    // The shared annotation, and the mix — plus the negative control that the
+    // sugar is only sugar: the hand-curried callee is accepted at the sugared
+    // type, because they are the same type.
+    #[test]
+    fn a_run_of_names_shares_one_annotation() {
+        elab(
+            r#"
+            fn ap3(f: (x, y, z: Nat) -> Nat, a: Nat) -> Nat { f(a)(a)(a) }
+            fn mixed(f: (x, y: Nat, p: 0 = 0) -> Nat) -> Nat { f(1)(2)(refl) }
+
+            fn first(a: Nat) -> Nat -> Nat -> Nat {
+                λ (b: Nat) => λ (c: Nat) => a
+            }
+            theorem t(): ap3(first, 5) = 5 { refl }
+            "#,
+        );
+    }
+
+    // A telescope: the second binder's type mentions the first binder, which
+    // is the whole reason the group is not just a tuple of annotations.
+    #[test]
+    fn a_later_binders_type_mentions_an_earlier_binder() {
+        elab(
+            r#"
+            fn use_eq(f: (n: Nat, p: n = n) -> Nat) -> Nat { f(2)(refl) }
+            fn ignore(n: Nat) -> n = n -> Nat { λ (p: n = n) => n }
+
+            theorem t(): use_eq(ignore) = 2 { refl }
+            "#,
+        );
+    }
+
+    // A parameter list takes the same run.
+    #[test]
+    fn a_parameter_run_elaborates_to_separate_parameters() {
+        elab(
+            r#"
+            fn add(a, b: Nat) -> Nat {
+                match b { Zero => a, Succ(k) => Succ(add(a, k)) }
+            }
+            theorem t(): add(2, 3) = 5 { refl }
+
+            // …and the receiver mark still prefixes one name, beside a run.
+            record Box { n: Nat }
+            fn Box::shift(self b: Box, k, j: Nat) -> Nat { add(b.n, add(k, j)) }
+            fn one() -> Box { Box { n: 1 } }
+            theorem s(): one().shift(2, 3) = 6 { refl }
+            "#,
+        );
+    }
+
+    // Class fields are types, so they inherit the sugar; this is the case the
+    // cleanup rider in the issue is about.
+    #[test]
+    fn a_class_field_takes_a_multi_binder_law() {
+        elab(
+            r#"
+            class Semi<A> {
+                op: (a, b: A) -> A,
+                assoc: (a, b, c: A) -> op(op(a, b), c) = op(a, op(b, c))
+            }
+
+            fn add(a, b: Nat) -> Nat {
+                match b { Zero => a, Succ(k) => Succ(add(a, k)) }
+            }
+            "#,
+        );
+    }
+
+    // The negative control from the parser, seen through the real front end:
+    // names with no annotation are not binders.
+    #[test]
+    fn an_unannotated_group_is_not_a_binder_list() {
+        let msg = elab_err("fn f(g: (x, y) -> Nat) -> Nat { 0 }");
+        assert!(msg.contains("has no type"), "{msg}");
+    }
+}

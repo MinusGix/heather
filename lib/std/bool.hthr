@@ -17,15 +17,15 @@ inductive Bool { False, True }
 
 fn not(b: Bool) -> Bool { match b { False => True, True => False } }
 
-fn and(a: Bool, b: Bool) -> Bool { match a { False => False, True => b } }
+fn and(a, b: Bool) -> Bool { match a { False => False, True => b } }
 
-fn or(a: Bool, b: Bool) -> Bool { match a { False => b, True => True } }
+fn or(a, b: Bool) -> Bool { match a { False => b, True => True } }
 
 // `and` is the conjunction monoid: unit `True`, and — because `and` recurses
 // on its *first* argument — `and(True, x)` is `x` definitionally while
 // `and(x, True) = x` is the case split.
 
-theorem and_assoc(a: Bool, b: Bool, c: Bool): and(and(a, b), c) = and(a, and(b, c)) {
+theorem and_assoc(a, b, c: Bool): and(and(a, b), c) = and(a, and(b, c)) {
     match a { False => refl, True => refl }
 }
 
@@ -35,7 +35,7 @@ theorem and_true_r(a: Bool): and(a, True) = a {
     match a { False => refl, True => refl }
 }
 
-theorem and_comm(a: Bool, b: Bool): and(a, b) = and(b, a) {
+theorem and_comm(a, b: Bool): and(a, b) = and(b, a) {
     match a {
         False => match b { False => refl, True => refl },
         True => match b { False => refl, True => refl },
@@ -44,7 +44,7 @@ theorem and_comm(a: Bool, b: Bool): and(a, b) = and(b, a) {
 
 // `or` is the disjunction monoid: unit `False`. Same shape, dual.
 
-theorem or_assoc(a: Bool, b: Bool, c: Bool): or(or(a, b), c) = or(a, or(b, c)) {
+theorem or_assoc(a, b, c: Bool): or(or(a, b), c) = or(a, or(b, c)) {
     match a { False => refl, True => refl }
 }
 
@@ -54,7 +54,7 @@ theorem or_false_r(a: Bool): or(a, False) = a {
     match a { False => refl, True => refl }
 }
 
-theorem or_comm(a: Bool, b: Bool): or(a, b) = or(b, a) {
+theorem or_comm(a, b: Bool): or(a, b) = or(b, a) {
     match a {
         False => match b { False => refl, True => refl },
         True => match b { False => refl, True => refl },

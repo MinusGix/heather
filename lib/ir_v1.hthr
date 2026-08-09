@@ -604,7 +604,7 @@ theorem k_bind_inv(ev: Val -> Ir -> Res, env: Val, rest: Ir, r: Res, vs: Val,
 // scrutinee is a recursive call is monotone in that call. Destructuring the
 // inversion is a `let { }`, which is what replaces the convoy match.
 theorem k_bind_mono(ev1: Val -> Ir -> Res, ev2: Val -> Ir -> Res,
-                    hyp: (e: Val) -> (i: Ir) -> (w: Val) -> ev1(e, i) = Out(w) -> ev2(e, i) = Out(w),
+                    hyp: (e: Val, i: Ir, w: Val) -> ev1(e, i) = Out(w) -> ev2(e, i) = Out(w),
                     env: Val, rest: Ir, e0: Val, i0: Ir, vs: Val,
                     q: k_bind(ev1, env, rest, ev1(e0, i0)) = Out(vs))
     : k_bind(ev2, env, rest, ev2(e0, i0)) = Out(vs)
@@ -632,7 +632,7 @@ theorem k_bind_mono(ev1: Val -> Ir -> Res, ev2: Val -> Ir -> Res,
 // as well is the same move as `k_bind_inv` and is left for a second consumer.
 
 theorem step_mono(prog: Prog, ev1: Val -> Ir -> Res, ev2: Val -> Ir -> Res,
-                  hyp: (e: Val) -> (i: Ir) -> (w: Val) -> ev1(e, i) = Out(w) -> ev2(e, i) = Out(w),
+                  hyp: (e: Val, i: Ir, w: Val) -> ev1(e, i) = Out(w) -> ev2(e, i) = Out(w),
                   env: Val, ir: Ir, vs: Val)
     : step(ev1, prog, env, ir) = Out(vs) -> step(ev2, prog, env, ir) = Out(vs)
 {
@@ -728,11 +728,11 @@ theorem step_mono(prog: Prog, ev1: Val -> Ir -> Res, ev2: Val -> Ir -> Res,
 // explicitly and the arms λ-wrap (issues/ih-generalization.md).
 
 theorem eval_mono_succ(prog: Prog, n: Nat):
-    (env: Val) -> (ir: Ir) -> (vs: Val)
+    (env: Val, ir: Ir, vs: Val)
     -> eval(n, prog)(env, ir) = Out(vs) -> eval(Succ(n), prog)(env, ir) = Out(vs)
 {
     match n as λ z =>
-        (env: Val) -> (ir: Ir) -> (vs: Val)
+        (env: Val, ir: Ir, vs: Val)
         -> eval(z, prog)(env, ir) = Out(vs) -> eval(Succ(z), prog)(env, ir) = Out(vs) {
         // no fuel answered nothing: OutOfFuel is not Out
         Zero => λ env ir vs h => absurd(h),
@@ -920,7 +920,7 @@ theorem letmatch_conv(p: Prog, env: Val, scrut: Nat, arms: Ir, rest: Ir,
 // ([[type-definitions]]).
 
 fn Refines(p1: Prog, i1: Ir, p2: Prog, i2: Ir) -> Type {
-    (env: Val) -> (vs: Val) -> Converges(p1, env, i1, vs) -> Converges(p2, env, i2, vs)
+    (env, vs: Val) -> Converges(p1, env, i1, vs) -> Converges(p2, env, i2, vs)
 }
 
 theorem refines_refl_conv(prog: Prog, ir: Ir): Refines(prog, ir, prog, ir)
@@ -938,7 +938,7 @@ theorem refines_trans_conv(
 // theorems below has to be re-proved — `b` is applied to the hidden witness
 // and then forgotten again.
 theorem refines_of_bounded(p1: Prog, i1: Ir, p2: Prog, i2: Ir, b: Nat -> Nat,
-    r: (env: Val) -> (vs: Val) -> (n: Nat)
+    r: (env, vs: Val, n: Nat)
        -> eval(n, p1)(env, i1) = Out(vs) -> eval(b(n), p2)(env, i2) = Out(vs))
     : Refines(p1, i1, p2, i2)
 { λ env vs c => Converges(b(c.n), r(env, vs, c.n, c.h)) }
@@ -951,18 +951,18 @@ theorem refines_of_bounded(p1: Prog, i1: Ir, p2: Prog, i2: Ir, b: Nat -> Nat,
 // ∃-form — so it stays, additive rather than replaced.
 
 theorem refines_refl(prog: Prog, ir: Ir):
-    (env: Val) -> (vs: Val) -> (n: Nat)
+    (env, vs: Val, n: Nat)
     -> eval(n, prog)(env, ir) = Out(vs) -> eval(n, prog)(env, ir) = Out(vs)
 { λ env vs n h => h }
 
 theorem refines_trans(
     p1: Prog, i1: Ir, p2: Prog, i2: Ir, p3: Prog, i3: Ir,
     b1: Nat -> Nat, b2: Nat -> Nat,
-    r1: (env: Val) -> (vs: Val) -> (n: Nat)
+    r1: (env, vs: Val, n: Nat)
         -> eval(n, p1)(env, i1) = Out(vs) -> eval(b1(n), p2)(env, i2) = Out(vs),
-    r2: (env: Val) -> (vs: Val) -> (n: Nat)
+    r2: (env, vs: Val, n: Nat)
         -> eval(n, p2)(env, i2) = Out(vs) -> eval(b2(n), p3)(env, i3) = Out(vs))
-    : (env: Val) -> (vs: Val) -> (n: Nat)
+    : (env, vs: Val, n: Nat)
       -> eval(n, p1)(env, i1) = Out(vs) -> eval(b2(b1(n)), p3)(env, i3) = Out(vs)
 { λ env vs n h => r2(env, vs, b1(n), r1(env, vs, n, h)) }
 
@@ -1146,7 +1146,7 @@ theorem add_equiv_through_calls(a: Nat, b: Nat):
 record CompileNat2(f: Nat -> Nat -> Nat) {
     prog: Prog,
     entry: Ir,
-    cert: (a: Nat) -> (b: Nat)
+    cert: (a, b: Nat)
           -> Converges(prog, VCons(embed_nat(a), VCons(embed_nat(b), VNil)),
                        entry, VCons(embed_nat(f(a)(b)), VNil)),
 }
@@ -1253,13 +1253,13 @@ theorem rec_two_three_short():
 // instantiated at, so a `tail`-fixed statement would not apply to its own
 // induction hypothesis.
 theorem add_rec_runs(a: Nat):
-    (b: Nat) -> (tail: Val)
+    (b: Nat, tail: Val)
     -> eval(add(dbl(a), 2), add_rec_prog())(
            VCons(embed_nat(a), VCons(embed_nat(b), tail)), add_rec_body())
        = Out(VCons(embed_nat(add(b, a)), VNil))
 {
     match a as λ z =>
-        (b: Nat) -> (tail: Val)
+        (b: Nat, tail: Val)
         -> eval(add(dbl(z), 2), add_rec_prog())(
                VCons(embed_nat(z), VCons(embed_nat(b), tail)), add_rec_body())
            = Out(VCons(embed_nat(add(b, z)), VNil)) {

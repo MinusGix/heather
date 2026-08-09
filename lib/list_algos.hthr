@@ -92,7 +92,7 @@ theorem nth_append_r<A>(xs: List<A>, ys: List<A>, i: Nat):
 // so the statement is a function of it and every use is an over-application
 // (issues/ih-generalization.md's workaround).
 theorem nth_append_l<A>(xs: List<A>, ys: List<A>):
-    (i: Nat) -> (a: A) -> xs.nth(i) = Some(a) -> append(xs, ys).nth(i) = Some(a)
+    (i: Nat, a: A) -> xs.nth(i) = Some(a) -> append(xs, ys).nth(i) = Some(a)
 {
     match xs {
         Nil => λ i a p => absurd(p),

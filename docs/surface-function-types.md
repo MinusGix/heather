@@ -47,6 +47,22 @@ write `(x: A) -> (y: B) -> C`. Right-associativity makes the nested form
 read correctly and it needs no extra parsing. If the flat form is wanted
 later it is additive.
 
+> **Superseded 2026-08-09** (issues/multi-binder-function-types.md): the flat
+> form landed, and it was additive as predicted. A group is now a **telescope**
+> —
+>
+> ```
+> ty       ::= '(' bgroup (',' bgroup)* ')' '->' ty
+> bgroup   ::= ident (',' ident)* ':' ty
+> ```
+>
+> — so `(x: A, y: B) -> C` and the shared-annotation run `(x, y: A) -> C` both
+> parse, and both **desugar in the parser** to the curried chain this section
+> describes. Juxtaposition (`(x y: A)`) is still not grammar, and deliberately:
+> a parameter modifier prefixes a single name (`self x: A`), which only the
+> comma form leaves unambiguous. The same run is available in a parameter list
+> (`fn f(x, y: A)`) and in an implicit group (`{A, B: Type<0>} -> …`).
+
 Equality binds tighter than the arrow: `a = b -> C` is `(a = b) -> C`. This
 falls out of the parse order in §3.1 and is also the only reading that
 types, since `=`'s endpoints are *terms* and `b -> C` is a type.

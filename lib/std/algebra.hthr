@@ -28,7 +28,7 @@ import option;
 // unit — determined by the operation, definitionally at every concrete
 // instance — stays a field (design §2.1).
 class Semigroup<A>(op: A -> A -> A) {
-    assoc: (x: A) -> (y: A) -> (z: A) -> op(op(x, y), z) = op(x, op(y, z)),
+    assoc: (x, y, z: A) -> op(op(x, y), z) = op(x, op(y, z)),
 }
 
 class Monoid<A>(op: A -> A -> A) extends Semigroup<A>(op) {
@@ -39,7 +39,7 @@ class Monoid<A>(op: A -> A -> A) extends Semigroup<A>(op) {
 
 // The commutative monoid: one chain, at every operation.
 class CommMonoid<A>(op: A -> A -> A) extends Monoid<A>(op) {
-    comm: (x: A) -> (y: A) -> op(x, y) = op(y, x),
+    comm: (x, y: A) -> op(x, y) = op(y, x),
 }
 
 // A value every type of the class has. No laws: `Default` is the class that
@@ -172,7 +172,7 @@ theorem mconcat_single<A: Monoid(op)>(op: A -> A -> A, x: A):
 // The branch is a separate `fn` for the reason `list_algos`'s `ins_pick` is
 // one — a `match` on a stuck `Bool` is a scrutinee no equation can reach, and
 // hoisting it makes one `j` enough. A class projection is such a scrutinee.
-fn cmp_pick<A>(b: Bool, x: A, y: A) -> A { match b { False => x, True => y } }
+fn cmp_pick<A>(b: Bool, x, y: A) -> A { match b { False => x, True => y } }
 
 // Written in the INLINE constraint form (issues/requires-placement-syntax.md
 // §R2-A): none of these names the dictionary — `x.le(y)` dispatches from the
@@ -183,9 +183,9 @@ fn cmp_pick<A>(b: Bool, x: A, y: A) -> A { match b { False => x, True => y } }
 // against `std/nat`'s ambient `le_refl` global: the receiver reading would put
 // a type in `le_refl`'s `Nat` slot, and the declaration refuses that
 // (docs/traits-type-projection-design.md §4).
-fn max_of<A: Cmp>(x: A, y: A) -> A { cmp_pick(x.le(y), x, y) }
+fn max_of<A: Cmp>(x, y: A) -> A { cmp_pick(x.le(y), x, y) }
 
-theorem max_of_true<A: Cmp>(x: A, y: A, p: x.le(y) = True):
+theorem max_of_true<A: Cmp>(x, y: A, p: x.le(y) = True):
     max_of(x, y) = y
 {
     j(sym(p), λ z q => cmp_pick(z, x, y) = y, refl)
