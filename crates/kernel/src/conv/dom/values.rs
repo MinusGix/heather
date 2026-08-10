@@ -119,6 +119,30 @@ mod tests {
         assert!(!Values::ty_eq_fast(&a, &other_home));
         assert!(!Values::ty_eq_fast(&a, &other_sat));
     }
+
+    #[test]
+    fn term_identity_fast_path_is_scope_sensitive() {
+        let body = Term::Succ(Rc::new(Term::Zero));
+        let clo = Rc::new(TmClo::syn(value::Env::empty(), Rc::new(body)));
+        let a = TmC { clo: Rc::clone(&clo), home: 2, sat: 3 };
+        let same = TmC { clo: Rc::clone(&clo), home: 2, sat: 3 };
+        let other_home = TmC { clo: Rc::clone(&clo), home: 1, sat: 3 };
+        let other_sat = TmC { clo, home: 2, sat: 4 };
+
+        assert!(Values::tm_identity_fast(&a, &same));
+        assert!(!Values::tm_identity_fast(&a, &other_home));
+        assert!(!Values::tm_identity_fast(&a, &other_sat));
+
+        let psi = crate::term::GlobalCtx::default();
+        let gamma = LocalCtx::nil();
+        let env = Env::new(&psi, &gamma, crate::layer::Layer::Prog);
+        let ty = TyC::value(&env, Rc::new(VTy::Nat));
+        assert_eq!(Conv::<Values>::new(1, &psi).tm(&env, &a, &same, &ty, &Level::Zero), Ok(()));
+        assert_eq!(
+            Conv::<Values>::new(1, &psi).tm(&env, &a, &other_home, &ty, &Level::Zero),
+            Err(crate::conv::ConvError::OutOfFuel)
+        );
+    }
 }
 
 impl TyC {
@@ -992,10 +1016,16 @@ impl Dom for Values {
         a.home == b.home && a.sat == b.sat && Rc::ptr_eq(&a.clo, &b.clo)
     }
 
-    /// Pointer equality only: `false` is always safe, and two sub-structures
-    /// that are the same object are the commonest case the strip loop meets.
+    /// Scoped pointer identity: one closure opened with the same pending
+    /// binders denotes the same term on both sides.
+    fn tm_identity_fast(a: &TmC, b: &TmC) -> bool {
+        a.home == b.home && a.sat == b.sat && Rc::ptr_eq(&a.clo, &b.clo)
+    }
+
+    /// The same scoped identity is also the commonest endpoint equality the
+    /// strip loop meets.
     fn tm_eq_fast(a: &TmC, b: &TmC) -> bool {
-        Rc::ptr_eq(&a.clo, &b.clo)
+        Self::tm_identity_fast(a, b)
     }
 
     fn app(

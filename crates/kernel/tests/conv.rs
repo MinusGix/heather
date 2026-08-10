@@ -345,6 +345,33 @@ fn ctx_conversion() {
     );
 }
 
+#[test]
+fn shared_root_type_spends_one_fuel_unit() {
+    let psi = psi(vec![]);
+    let g = nil_ctx(0);
+    let ty = nat_to_nat();
+
+    assert_eq!(conv_type(&psi, &g, Layer::Prog, &ty, &ty, &c(0), 1), Ok(()));
+    assert_eq!(
+        conv_type(&psi, &g, Layer::Prog, &ty, &nat_to_nat(), &c(0), 1),
+        Err(ConvError::OutOfFuel)
+    );
+}
+
+#[test]
+fn syntactically_identical_context_spends_one_fuel_unit() {
+    let psi = psi(vec![]);
+    let a = nil_ctx(8);
+    let shared = a.clone();
+
+    assert_eq!(conv_local_ctx(&psi, Layer::Prog, &a, &shared, 1), Ok(()));
+
+    // Conversion remains broader than the shortcut: `El TmNat` and `Nat`
+    // are convertible contexts, but not syntactically identical ones.
+    let decoded = extend(&nil_ctx(0), Type::El { level: Level::Zero, tm: rt(Term::TmNat) }, c(0));
+    assert_eq!(conv_local_ctx(&psi, Layer::Prog, &decoded, &nil_ctx(1), FUEL), Ok(()));
+}
+
 // -------------------------------------------------------------------------
 // Boxes are syntactic; globals compare substitutions componentwise
 // -------------------------------------------------------------------------

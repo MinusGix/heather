@@ -324,15 +324,22 @@ paper too).
   a scrutinee, a `Vec`/`Fin` length, an `El` encoding. A strict domain would
   agree on every value and still evaluate an induction hypothesis nothing
   reads, which is precisely the workload the round exists to fix.
-- **Scoped closure identity is type reflexivity.** Before forcing two type
-  children, conversion accepts them when they carry the same closure pointer
-  and the same `home`/`sat` scope metadata. In the one ambient environment
-  passed to the judgment, those three equalities make `open_ty` produce the
-  same type on both sides, so this is syntactic reflexivity and not a new
-  conversion rule. A hit still spends the comparison node's one fuel unit.
-  The scope pair is load-bearing: one closure read with different pending
-  binders need not denote the same type. The syntax oracle takes the same
-  shortcut on pointer-identical type children.
+- **Shared syntax and scoped closure identity are reflexivity.** Before
+  forcing two type or term children, conversion accepts them when they carry
+  the same closure pointer and the same `home`/`sat` scope metadata. In the
+  one ambient environment passed to the judgment, those three equalities
+  make `open_ty` or `open_tm` produce identical syntax, so this is syntactic
+  reflexivity and not a new conversion rule. The scope pair is load-bearing:
+  one closure read with different pending binders need not denote the same
+  object. The syntax oracle takes the corresponding pointer-identity
+  shortcuts. At public roots, the same borrowed `Type` object returns before
+  whnf; raw term roots deliberately do not, because measurement found no hits.
+  Context conversion likewise accepts syntactically identical contexts before
+  its judgmental walk; `CtxEntries` makes the common shared-spine test O(1).
+  Every hit still spends the comparison node's one fuel unit. These shortcuts
+  preserve the □ syntactic-equality rule and Id-at-□ coincidence: pointer
+  identity implies identical syntax, and context syntax equality implies
+  entrywise conversion.
 - **δ is glued.** A `u^δ` evaluates to a neutral carrying a memoized
   `unfold` thunk, `Some` exactly when Ψ defines `u`. The δ-lazy order is
   unchanged — compare without forcing the thunks, and on `NotConvertible`

@@ -584,6 +584,10 @@ pub(super) trait Dom: Sized + 'static {
     /// `false` must always be safe (the caller falls back to a full
     /// comparison).
     fn ty_eq_fast(a: &Self::TyC, b: &Self::TyC) -> bool;
+    /// Scoped pointer identity of two term sub-structures, for the general
+    /// reflexivity shortcut. Unlike [`Dom::tm_eq_fast`], this must imply that
+    /// the two carriers denote the same term in their present scope.
+    fn tm_identity_fast(a: &Self::TmC, b: &Self::TmC) -> bool;
     /// Syntactic equality of two term sub-structures, as a fast path only:
     /// `false` must always be safe (the caller falls back to a full
     /// comparison).
@@ -1553,6 +1557,11 @@ impl Dom for Syn {
     #[inline]
     fn tm_eq_fast(a: &Rc<Term>, b: &Rc<Term>) -> bool {
         a == b
+    }
+
+    #[inline]
+    fn tm_identity_fast(a: &Rc<Term>, b: &Rc<Term>) -> bool {
+        Rc::ptr_eq(a, b)
     }
 
     #[inline]

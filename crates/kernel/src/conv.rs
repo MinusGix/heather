@@ -621,6 +621,9 @@ impl<D: Dom> Conv<D> {
     /// already in the domain (see [`Dom::whnf_ty_root`]).
     fn ty_root(&mut self, env: &Env, a: &Type, b: &Type, l: &Level) -> R {
         self.spend()?;
+        if std::ptr::eq(a, b) {
+            return Ok(());
+        }
         let mut wa = D::whnf_ty_root(self, env, a)?;
         let mut wb = D::whnf_ty_root(self, env, b)?;
         self.ty_w(env, &mut wa, &mut wb, l)
@@ -877,6 +880,9 @@ impl<D: Dom> Conv<D> {
     /// explicit because several rules compare index contexts at layer p.
     fn ctx(&mut self, env: &Env, layer: Layer, a: &LocalCtx, b: &LocalCtx) -> R {
         self.spend()?;
+        if a == b {
+            return Ok(());
+        }
         if a.base != b.base || a.entries.len() != b.entries.len() {
             return Err(NC);
         }
@@ -919,6 +925,9 @@ impl<D: Dom> Conv<D> {
     /// compare type-directed.
     fn tm(&mut self, env: &Env, a: &D::TmC, b: &D::TmC, ty: &D::TyC, l: &Level) -> R {
         self.spend()?;
+        if D::tm_identity_fast(a, b) {
+            return Ok(());
+        }
         let w = D::whnf_ty(self, env, ty)?;
         let wa = D::whnf_tm_opaque(self, env, a)?;
         let wb = D::whnf_tm_opaque(self, env, b)?;

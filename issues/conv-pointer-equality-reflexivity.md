@@ -1,22 +1,21 @@
 ---
 title: Conversion never short-circuits on pointer-equal subterms
-status: open
+status: closed
 labels: [kernel,performance]
 created: 2026-07-31
 updated: 2026-08-10
 ---
 
-`conv.rs` and `reduce.rs` contain no `Rc::ptr_eq` anywhere (checked
-2026-07-31): two literally-shared subterms are re-normalized and compared
-structurally like strangers. Pointer-equal terms are syntactically
-identical, hence convertible by reflexivity; a `ptr_eq` check at the
-`Conv::ty`/`Conv::tm` entry points — *before* whnf — would skip
-normalizing both sides.
+Conversion used to re-normalize literally shared inputs and compare them
+structurally like strangers. Pointer-identical syntax is reflexive, so it can
+settle before whnf; a shared persistent context can likewise settle before the
+entrywise judgmental walk.
 
-**Partial payment 2026-08-10:** the type-*child* entry now short-circuits on
-one scoped closure identity (pointer plus equal `home`/`sat`), prompted and
-measured by [[class-lemma-instantiation-fuel]]. Root types, general term
-comparison and contexts remain open here; the issue is therefore not closed.
+The type-child slice first landed through [[class-lemma-instantiation-fuel]].
+The completed round extends the same scoped identity invariant to term
+children, adds borrowed root-type identity and syntactically identical
+contexts, and leaves raw root terms alone because the measured workloads had
+no hits there.
 
 This compounds with the sharing rounds: [[subst-rebuilds-unchanged-subterms]]
 and [[subst-visits-closed-subtrees]] mean conversion increasingly receives
@@ -56,3 +55,4 @@ gets its own issue.
 - 2026-07-31: Scoping datapoint from the deep-path investigation ([[whnf-sharing-term-growth]]): reflexivity short-circuits cannot help the add(2,3)-through-LetCall path. Its whole cost (~56% substitution + allocate/free/drop, the rest bounds probes) is PRODUCING the normal form; by the time two terms are compared the work is already spent, and the sides are never pointer-equal. Noted so this issue is not reached for as a deep-path lever.
 - 2026-08-06: A new short-circuit site from the Γ-spine round ([[context-representation-clones]], closed): `CtxEntries` is now a persistent snoc spine whose `PartialEq` already ptr-eq-shortcuts, but `Conv::ctx` still runs the full per-entry judgmental walk even when `a.entries == b.entries` — a syntactic-equality (or spine-ptr-eq) fast path there is sound (syntactic equality implies convertibility) and would be near-free, since derived scopes now share spines by construction. Deliberately left out of that round to keep it representation-only (it changes fuel spend, and the golden-hash argument stayed airtight because behavior was untouched). Same trigger discipline as the rest of this issue.
 - 2026-08-10: Type-child slice landed from [[class-lemma-instantiation-fuel]]: its failing conversion entered `Conv::ty` 474,701 times on shared type children before exhausting `2^20` fuel; scope-aware closure identity makes the real class/Wf theorem pass and cuts the capped release check from ~0.37s to ~0.14s. A term-child shortcut was prototyped first and had no effect, locating the win specifically at types. The hit spends one comparison unit; `home`/`sat` equality is required because one closure opened under different pending binders need not denote one type. Kernel DESIGN records the soundness boundary and a unit control pins it.
+- 2026-08-10: CLOSED after measuring the remaining four candidates separately. A release `lib/ir_v1.hthr` check saw 1,465 scope-safe term-child identities and 88 identical root types, but zero raw root-term and context hits; the generated `conv/perturbed-pairs` corpus exercised term children, root types, and contexts, while root terms again stayed at zero. Landed the three demonstrated paths: general term children require equal closure pointer plus equal `home`/`sat`; borrowed root types use object identity; contexts use syntactic equality, whose persistent `CtxEntries` comparison stops in O(1) on a shared spine. Raw root terms remain unchanged. Every hit spends one fuel unit. One-unit fuel tests pin root-type and context behavior; the term unit uses the same closure under matching and mismatching scopes to pin both the shortcut and its load-bearing metadata. The full differential/workspace suite is green, and `scripts/bench --check --filter conv` passes all four scaling comparisons. No new synthetic benchmark was added: the existing generated-pair family is the representative corpus that exposed and continues to exercise all three paths.
