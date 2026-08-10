@@ -577,7 +577,7 @@ impl<D: Dom> Conv<D> {
             // Fast path: syntactic endpoint equality (α-equality is free
             // under de Bruijn); the full guarded query — at the transp's
             // own annotations — only when that misses.
-            let strip = D::eq_fast(&lhs, &rhs)
+            let strip = D::tm_eq_fast(&lhs, &rhs)
                 || match self.tm(env, &lhs, &rhs, &ty, &ty_level) {
                     Ok(()) => true,
                     Err(ConvError::NotConvertible) => false,
@@ -608,6 +608,9 @@ impl<D: Dom> Conv<D> {
     /// here than in [`Conv::tm`].
     fn ty(&mut self, env: &Env, a: &D::TyC, b: &D::TyC, l: &Level) -> R {
         self.spend()?;
+        if D::ty_eq_fast(a, b) {
+            return Ok(());
+        }
         let mut wa = D::whnf_ty_opaque(self, env, a)?;
         let mut wb = D::whnf_ty_opaque(self, env, b)?;
         self.ty_w(env, &mut wa, &mut wb, l)

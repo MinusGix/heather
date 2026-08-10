@@ -240,21 +240,21 @@ fn any_of(bs: List<Bool>) -> Bool { mconcat(or, bs) }
 
 fn all_of(bs: List<Bool>) -> Bool { mconcat(and, bs) }
 
-// The class lemma at two carriers. Neither re-proves anything: they are
+// The class lemma at three carriers. None re-proves anything: each is
 // `mconcat_single` with the dictionary found through the registry, and the two
-// `Bool` folds are different functions.
-//
-// The third carrier, `List<A>`, is deliberately NOT here: `mconcat_single`
-// instantiated at a list carrier exhausts the kernel's conversion fuel,
-// whichever way round the statement is written
-// (issues/class-lemma-instantiation-fuel.md). The *uses* — `concat` above —
-// are unaffected and cheap. Nothing here works around it: the missing theorem
-// is left missing so that the issue closing restores it.
+// `Bool` folds are different functions. `concat_single` is the Wf-carrier
+// regression for issues/class-lemma-instantiation-fuel.md: comparing the
+// instantiated generic statement used to re-walk shared type closures
+// until conversion exhausted its full budget.
 theorem sum_single(n: Nat): sum(Cons(n, Nil)) = n { mconcat_single(add, n) }
 
 theorem all_of_single(b: Bool): all_of(Cons(b, Nil)) = b { mconcat_single(and, b) }
 
 theorem any_of_single(b: Bool): any_of(Cons(b, Nil)) = b { mconcat_single(or, b) }
+
+theorem concat_single<A>(xs: List<A>): concat(Cons(xs, Nil)) = xs {
+    mconcat_single(append, xs)
+}
 
 // The generic law, spent three times. Each goal names its operation — that is
 // what a law is — so unification pins the index and the ground goal hits the

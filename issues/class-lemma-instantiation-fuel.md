@@ -1,9 +1,9 @@
 ---
 title: A generic class lemma instantiated at a Wf-lowered carrier exhausts conversion fuel
-status: open
+status: closed
 labels: [kernel,conversion,performance,elaboration,traits]
 created: 2026-08-07
-updated: 2026-08-07
+updated: 2026-08-10
 ---
 
 Found by the traits **library adoption** round (2026-08-07), which is what a
@@ -98,3 +98,7 @@ in place (the missing `concat_single`) rather than working around it.
   from the picture entirely.
 - **[[whnf-sharing-term-growth]]** owns the unforced-redex growth story;
   whether this is an instance of it is the first thing to check.
+
+## Log
+
+- 2026-08-10: LANDED: this was not repeated evaluation or the old whnf term-growth exponent. Instrumentation placed 474,701 of the exhausted budget units at recursive `Conv::ty` entries on shared type children; a general term-child identity shortcut had no effect. Conversion now accepts type children by scoped closure identity (same pointer, `home`, and `sat`) after spending one comparison unit. The syntax oracle uses pointer identity too. The capped release reproducer goes from OutOfFuel at ~0.37s to success at ~0.14s; `concat_single<A>` is restored in std/algebra, a scope-mismatch unit control pins the soundness boundary, differential/kernel/full workspace suites are green.

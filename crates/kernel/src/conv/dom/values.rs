@@ -99,6 +99,28 @@ fn var_at(env: &Env, level: u32) -> Rc<TmClo> {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn type_identity_fast_path_is_scope_sensitive() {
+        let body = Type::El {
+            level: Level::Zero,
+            tm: Rc::new(Term::Var(LocalVar(0))),
+        };
+        let clo = Rc::new(TyClo::new(value::Env::empty(), Rc::new(body)));
+        let a = TyC { clo: Rc::clone(&clo), home: 2, sat: 3 };
+        let same = TyC { clo: Rc::clone(&clo), home: 2, sat: 3 };
+        let other_home = TyC { clo: Rc::clone(&clo), home: 1, sat: 3 };
+        let other_sat = TyC { clo, home: 2, sat: 4 };
+
+        assert!(Values::ty_eq_fast(&a, &same));
+        assert!(!Values::ty_eq_fast(&a, &other_home));
+        assert!(!Values::ty_eq_fast(&a, &other_sat));
+    }
+}
+
 impl TyC {
     /// A sub-structure that is a type **here**, in `env`.
     fn here(env: &Env, clo: Rc<TyClo>) -> TyC {
@@ -965,8 +987,14 @@ impl Dom for Values {
     }
 
     /// Pointer equality only: `false` is always safe, and two sub-structures
+    /// that are the same object are definitionally the same type.
+    fn ty_eq_fast(a: &TyC, b: &TyC) -> bool {
+        a.home == b.home && a.sat == b.sat && Rc::ptr_eq(&a.clo, &b.clo)
+    }
+
+    /// Pointer equality only: `false` is always safe, and two sub-structures
     /// that are the same object are the commonest case the strip loop meets.
-    fn eq_fast(a: &TmC, b: &TmC) -> bool {
+    fn tm_eq_fast(a: &TmC, b: &TmC) -> bool {
         Rc::ptr_eq(&a.clo, &b.clo)
     }
 

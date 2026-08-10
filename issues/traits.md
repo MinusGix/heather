@@ -3,7 +3,7 @@ title: Traits and instances: classes as records, disciplined resolution, program
 status: open
 labels: [frontend,syntax,elaboration,design,metaprogramming]
 created: 2026-08-07
-updated: 2026-08-08
+updated: 2026-08-10
 ---
 
 The general typeclass/trait feature, designed 2026-08-07 in discussion; the full record is docs/traits-design.md and this issue owns its staging (doc §13). One-paragraph contract: a class is a parameterized record; an instance is a namespace of ordinary declarations plus an assembled record value (block and literal forms, `instance Monoid<Rat>`, no `for`); `extends` is flattening plus ONE CANONICAL VALUE PER (CLASS, CARRIER) — parents filled by reference when declared, synthesized as projections when not, overrides owing kernel-checked agreement proofs; resolution is an ascending-scope, deterministic, mode-directed, structurally-terminating backchainer whose every derivation is minted as a canonical named global (memoization = canonicalization), scheduled on the withheld-obligation machinery, failures returning the search trace as data; instance implicits are the default case of solver-default arguments (`:= infer`); layer 3 re-implements the resolver as a heather function over QUOTED goals when context computation lands.
@@ -65,7 +65,9 @@ WHAT THE CORPUS FOUND, in order of weight:
 2. **A generic class lemma dies at a `Wf`-lowered carrier** —
    [[class-lemma-instantiation-fuel]], reproducer and seven probes. The class
    layer buys abstraction for programs but not, at container carriers, for
-   proofs. `lib/std/algebra.hthr` leaves the missing theorem missing.
+   proofs. **RESOLVED 2026-08-10:** conversion now recognizes a shared scoped
+   type closure by reflexivity, and `lib/std/algebra.hthr` ships the restored
+   generic `concat_single` theorem at `List<A>`.
 3. **A member name that collides with an ambient global is undispatchable
    too**, for the same "name both readings" reason — `Cmp`'s field is `le`,
    not `leb`, and `AddSemigroup`'s is `plus`, not `add`, purely because

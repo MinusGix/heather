@@ -580,9 +580,14 @@ pub(super) trait Dom: Sized + 'static {
         label: &Self::TmC,
         children: &Self::TmC,
     ) -> R<Self::TmC>;
-    /// Syntactic equality of two sub-structures, as a fast path only: `false`
-    /// must always be safe (the caller falls back to a full comparison).
-    fn eq_fast(a: &Self::TmC, b: &Self::TmC) -> bool;
+    /// Syntactic equality of two type sub-structures, as a fast path only:
+    /// `false` must always be safe (the caller falls back to a full
+    /// comparison).
+    fn ty_eq_fast(a: &Self::TyC, b: &Self::TyC) -> bool;
+    /// Syntactic equality of two term sub-structures, as a fast path only:
+    /// `false` must always be safe (the caller falls back to a full
+    /// comparison).
+    fn tm_eq_fast(a: &Self::TmC, b: &Self::TmC) -> bool;
     #[allow(clippy::too_many_arguments)]
     fn app(
         cv: &mut Conv<Self>,
@@ -1541,7 +1546,12 @@ impl Dom for Syn {
     }
 
     #[inline]
-    fn eq_fast(a: &Rc<Term>, b: &Rc<Term>) -> bool {
+    fn ty_eq_fast(a: &Rc<Type>, b: &Rc<Type>) -> bool {
+        Rc::ptr_eq(a, b)
+    }
+
+    #[inline]
+    fn tm_eq_fast(a: &Rc<Term>, b: &Rc<Term>) -> bool {
         a == b
     }
 

@@ -186,6 +186,15 @@ theorem neutral(xs: List<Nat>, ys: List<Nat>):
 ");
 }
 
+#[test]
+fn a_generic_class_lemma_instantiates_at_a_wf_carrier() {
+    ok("
+theorem neutral_concat_single<A>(xs: List<A>): concat(Cons(xs, Nil)) = xs {
+    concat_single(xs)
+}
+");
+}
+
 /// The library spelling for list concatenation is `++`, not arithmetic `+`
 /// (issues/list-append-symbol.md). The generic designation must work at an
 /// open element type, and the literal control must compute.

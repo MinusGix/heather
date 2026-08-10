@@ -3,7 +3,7 @@ title: "Meta: frontend roadmap and current focus"
 status: open
 labels: [frontend,meta]
 created: 2026-07-23
-updated: 2026-08-09
+updated: 2026-08-10
 ---
 
 Organizing issue for the frontend push (the frontend-first route,
@@ -279,3 +279,4 @@ date; the originals are in `git log --follow issues/frontend-roadmap.md`.
 - 2026-08-09: The traits-line standing order (2026-08-07) is COMPLETE: operators-onto-classes landed as its final entry (design + implementation in one managed round, docs/operators-onto-classes-design.md; suite 1354 -> 1375; growth invariant pinned — no designation, same code). One table not two; the concrete-carrier terseness regression stands as a recorded decision. The traits line's remaining threads are demand-scheduled ([[operation-indexed-classes]] §8 diamond) or unscheduled ergonomics; the focus order returns to item 16's successors ([[datarepr-separation]], [[certifying-generator]]) or the cheap list.
 - 2026-08-09: The roadmap itself stays open, as ever — it is the organizing issue.
 - 2026-08-09: Small round, direct, from the cheap list: [[bool-operator-designations]] resolved and closed — `&&`/`||` as fixed tokens with designations at Bool, the semiring rows deleted, no fallback rung (docs/operators-onto-classes-design.md §13). Suite 1375 → 1383.
+- 2026-08-10: The traits-adoption fuel finding is closed — [[class-lemma-instantiation-fuel]] identifies scoped type-closure reflexivity as the missing conversion shortcut and restores `concat_single<A>` to the library.
