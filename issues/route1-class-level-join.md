@@ -1,10 +1,10 @@
 ---
 title: A route-1 family with level-heterogeneous classes is unusable
-status: open
+status: closed
 labels: [elaboration, inductives, levels]
 code: crates/elab/src/indexed.rs @ 132731d
 created: 2026-08-06
-updated: 2026-08-06
+updated: 2026-08-10
 ---
 
 A route-1 indexed family whose index classes do **not** all reach the
@@ -52,3 +52,4 @@ declaration was unusable before the gate ever saw it.
 ## Log
 
 - 2026-08-06: Filed, off the `D#fam` round's level-1 fixture work.
+- 2026-08-10: LANDED: route-1 constructor spines now terminate at the family join (`Unit^l`), so every class code inhabits the shared `Ty l` motive while payload fields retain their own levels. The asymmetric `V0`/`V1(A: Type, x: A, ...)` fixture now constructs values at both indices and pins route 1; adjacent indexed suites and full `scripts/test` are green.

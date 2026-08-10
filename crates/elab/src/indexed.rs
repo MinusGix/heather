@@ -832,8 +832,14 @@ impl Elaborator {
                 }
             }
         }
-        let mut acc = Type::Unit { level: Level::Zero };
-        let mut acc_lvl = Level::Zero;
+        // Every index class inhabits the family motive `Ty l`, even when this
+        // particular constructor's fields demand less. The system is
+        // non-cumulative, so terminating the spine at `Unit 0` would leave a
+        // low class at level 0 beside a high class at `l` and make the
+        // eliminator ill-typed. `Unit l` raises only the enclosing Σ spine;
+        // each stored field keeps its own level and type.
+        let mut acc = Type::Unit { level: l.clone() };
+        let mut acc_lvl = l.clone();
         for (ty, lvl) in entries.into_iter().rev() {
             acc = Type::Sigma {
                 fst_level: lvl.clone(),

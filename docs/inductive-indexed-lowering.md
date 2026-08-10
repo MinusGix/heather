@@ -619,6 +619,13 @@ rather than remembered.
    that such a declaration's `D#fam` fails the registration gate (the
    occurrence then inlines, best-effort as designed) and the declaration was
    unusable before that anyway.
+
+   **Resolved 2026-08-10.** `lower_indexed_ctor` now terminates every
+   constructor spine with `Unit^l`, where `l` is the already-computed family
+   join. Consequently each enclosing Σ and class Sum inhabits that same
+   level, while every stored field retains its own type and level. The
+   acceptance fixture is the asymmetric shape above: `V0` remains fieldless,
+   `V1` alone raises the join, and values at both indices pass the kernel gate.
 6. **The index type must survive as a declaration.** The family is
    rebuilt from `Inductive::index_ty` at every use, and the head check is
    a parse-level `Named` match — an index type reached through an alias

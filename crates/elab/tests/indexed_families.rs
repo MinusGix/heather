@@ -276,6 +276,25 @@ fn fields_above_level_zero() {
     ));
 }
 
+// §10.5's asymmetric control: the base class has no level-1 field while the
+// successor class does. Non-cumulativity means both class codes must still be
+// built at the family's join level; giving each class its own inferred level
+// makes both occurrences fail the kernel gate with `LevelMismatch`.
+#[test]
+fn level_heterogeneous_classes_share_the_family_join() {
+    let e = elab(
+        r#"
+        inductive V : (n: Nat) -> Type {
+            V0 : V(0),
+            V1(n: Nat, A: Type, x: A, t: V(n)) : V(Succ(n)),
+        }
+        fn zero() -> V(0) { V0 }
+        fn one() -> V(1) { V1(0, Nat, 7, V0) }
+        "#,
+    );
+    assert_eq!(e.indexed_route("V"), Some(IndexedRoute::One));
+}
+
 // Axis 4 at the new spelling: every test above is positive, and a positive
 // cannot tell a family from a quotient of it — the more so now that an
 // occurrence is an opaque `El (P#fam^δ i)` that only conversion unfolds. So
