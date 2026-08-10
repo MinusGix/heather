@@ -121,7 +121,7 @@ pub enum ElabError {
     /// declaration's: a `TypeError` speaks about an elaborated term, which
     /// has no source position — a finer span means fixing the kernel's
     /// error type, not this one (issues/cli-check-diagnostics.md).
-    Kernel { decl: String, span: Span, err: TypeError },
+    Kernel { decl: String, span: Span, err: TypeError, note: Option<String> },
     /// Goals raised in a block that no `on` statement discharged
     /// (issues/goal-holes.md). Not one error per goal: the *listing* is the
     /// point — it is how the checker shows goal state.
@@ -290,8 +290,12 @@ impl std::fmt::Display for ElabError {
                 "no instance for `{goal}` — the search:{}",
                 resolve::render_trace(trace)
             ),
-            ElabError::Kernel { decl, err, .. } => {
-                write!(f, "the kernel rejected `{decl}`: {err:?}")
+            ElabError::Kernel { decl, err, note, .. } => {
+                write!(f, "the kernel rejected `{decl}`: {err:?}")?;
+                if let Some(note) = note {
+                    write!(f, ". {note}")?;
+                }
+                Ok(())
             }
             ElabError::UnsolvedGoals { decl, goals } => {
                 writeln!(f, "unsolved goals in `{decl}`:")?;
@@ -725,6 +729,11 @@ pub struct Elaborator {
     /// structure a carrier has, which is why `+` at `Bool` can be `or` while
     /// both Bool monoids stay registered as equals (§3.3).
     designations: HashMap<(String, String), traits::DesignationInfo>,
+    /// Operator fallbacks taken while elaborating the current declaration
+    /// after a designation table was consulted at a known, uncovered carrier.
+    /// Kept only to turn an otherwise source-free kernel rejection into a
+    /// diagnostic about the notation the writer actually used.
+    op_fallback_notes: RefCell<Vec<String>>,
     /// While an `instance` block is being elaborated: the members that have
     /// already landed, as (written name, full name). An unqualified reference
     /// to one of them resolves to its global, which is the whole of "later
@@ -898,6 +907,7 @@ impl Elaborator {
             classes: HashMap::new(),
             instances: HashMap::new(),
             designations: HashMap::new(),
+            op_fallback_notes: RefCell::new(Vec::new()),
             instance_scope: Vec::new(),
             derived: Vec::new(),
             pending_derived: RefCell::new(Vec::new()),
@@ -1270,12 +1280,14 @@ impl Elaborator {
         if decl.is_meta {
             return self.elab_meta_decl(decl);
         }
+        self.op_fallback_notes.borrow_mut().clear();
         let r = self.elab_decl_inner(decl);
         self.goal_base = 0;
         self.refresh_delta_psi();
         self.goals.borrow_mut().clear();
         self.goal_spans.borrow_mut().clear();
         self.frozen.set(false);
+        self.op_fallback_notes.borrow_mut().clear();
         r
     }
 
@@ -1497,6 +1509,7 @@ impl Elaborator {
                     decl: decl.name.clone(),
                     span: decl.span,
                     err: e,
+                    note: self.operator_fallback_note(),
                 })?;
                 stats::time_kernel(|| {
                     typing::check_term(
@@ -1507,6 +1520,7 @@ impl Elaborator {
                     decl: decl.name.clone(),
                     span: decl.span,
                     err: e,
+                    note: self.operator_fallback_note(),
                 })?;
                 if let Some(g) = self.gate.as_ref() {
                     g.accepted(&self.psi, &item);
@@ -4830,15 +4844,17 @@ impl Elaborator {
         // 2. The designation at the operand's carrier. Probed only when the
         //    symbol has designations at all, so a file that declares none
         //    pays one failed lookup in a usually-empty map and no inference.
-        if !args.is_empty()
-            && self.designations.keys().any(|(s, _)| s == sym)
-            && let Some(head) = self.op_carrier_head(cx, args, span)
-            && let Some(op) = self.designated(sym, &head)
-        {
-            return Ok(op);
+        let mut uncovered_carrier = None;
+        if !args.is_empty() && self.designations.keys().any(|(s, _)| s == sym) {
+            if let Some(head) = self.op_carrier_head(cx, args, span) {
+                if let Some(op) = self.designated(sym, &head) {
+                    return Ok(op);
+                }
+                uncovered_carrier = Some(head);
+            }
         }
-        // 3. The symbol's fallback name, resolved as it always was. `&&` and
-        //    `||` have no entry — they postdate the parser's fixed table, so
+        // 3. The symbol's fallback name, resolved as it always was. `&&`,
+        //    `||` and `++` have no entry — they postdate the parser's fixed table, so
         //    there is no old desugaring for the growth invariant to preserve
         //    (issues/bool-operator-designations.md) — and refuse like a
         //    fallback whose name is missing, not like a symbol outside the
@@ -4850,6 +4866,15 @@ impl Elaborator {
                 || cx.names.iter().any(|n| n == fb)
                 || cx.aliases.iter().any(|a| a.name == fb))
         {
+            if let Some(head) = uncovered_carrier {
+                let note = format!(
+                    "`{sym}` has no designation at `{head}`, so it used its fallback name `{fb}`"
+                );
+                let mut notes = self.op_fallback_notes.borrow_mut();
+                if !notes.contains(&note) {
+                    notes.push(note);
+                }
+            }
             return Ok(fb.to_string());
         }
         // Reporting "unbound name `add`" would name something the writer
@@ -4879,6 +4904,11 @@ impl Elaborator {
             ),
             span,
         )
+    }
+
+    fn operator_fallback_note(&self) -> Option<String> {
+        let notes = self.op_fallback_notes.borrow();
+        (!notes.is_empty()).then(|| notes.join("; "))
     }
 
     /// The head of the carrier an operator application is at — rung 2's probe

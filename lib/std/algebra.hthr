@@ -131,18 +131,18 @@ instance Cmp<Bool> { le := leb_bool, le_refl := leb_bool_refl }
 //
 // `+` has a fixed fallback meaning (`add`) that a file with no row still gets;
 // the row here is what makes it a table entry rather than a hard-coded rule.
-// `&&` and `||` have no such fallback, so away from a designation or a binder
-// they refuse — which makes these two entries the whole of what the symbols
-// mean.
+// `&&`, `||` and `++` have no such fallback, so away from a designation or a
+// binder they refuse — which makes these entries the whole of what the
+// symbols mean.
 
 designation + at Nat := add
 designation && at Bool := and
 designation || at Bool := or
 
-// The generic entry, at an **open** element type: `xs + ys` is concatenation
+// The generic entry, at an **open** element type: `xs ++ ys` is concatenation
 // at every `List<A>`, keyed on the head exactly as `instance<A> Monoid<List<A>>`
-// is.
-designation<A> + at List<A> := append
+// is. `++` has no arithmetic fallback, so this row is the whole of its meaning.
+designation<A> ++ at List<A> := append
 
 // ---------------------------------------------------------------------------
 // The consumers: written once against a class, used at every carrier.
@@ -228,7 +228,7 @@ fn sum_all<A: Monoid(+)>(xs: List<A>) -> A { mconcat(+, xs) }
 // backchaining through `instance<A> Monoid<List<A>>(append)`.
 fn sum(ns: List<Nat>) -> Nat { sum_all(ns) }
 
-fn concat<A>(xss: List<List<A>>) -> List<A> { sum_all(xss) }
+fn concat<A>(xss: List<List<A>>) -> List<A> { mconcat(append, xss) }
 
 // The `Bool` folds are NOT `sum_all`: `+` means nothing at `Bool`, so each
 // names its operation positionally, which costs one word and is legal forever

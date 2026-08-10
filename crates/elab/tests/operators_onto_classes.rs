@@ -88,6 +88,7 @@ designation * at Bool := and
 designation && at Bool := and
 designation || at Bool := or
 designation<A> + at List<A> := append
+designation<A> ++ at List<A> := append
 
 fn fold<A: Mon(op)>(op: A -> A -> A, xs: List<A>) -> A {
     match xs { Nil => A.unit, Cons(h, t) => op(h, fold(op, t)) }
@@ -557,6 +558,32 @@ fn a_doubled_symbol_has_no_fallback_rung() {
     // rung 1 could answer, and without a binder nothing does.
     let e = bad("theorem c(bs: List<Bool>): fold(&&, bs) = fold(and, bs) { refl }");
     assert!(!e.is_empty(), "{e}");
+}
+
+// -- list append (issues/list-append-symbol.md) ----------------------------
+
+/// `++` follows the doubled-symbol recipe: a generic designation at the open
+/// `List<A>` carrier supplies `append`, and a binder can name the symbol at an
+/// unrelated carrier. Neither route nominates an instance.
+#[test]
+fn append_symbol_resolves_by_designation_and_binder() {
+    ok("
+        theorem neutral<A>(xs: List<A>, ys: List<A>): xs ++ ys = append(xs, ys) { refl }
+        theorem literal(): Cons(1, Nil) ++ Cons(2, Nil) = Cons(1, Cons(2, Nil)) { refl }
+        fn combine<A: Mon(++)>(x: A, y: A) -> A { x ++ y }
+        theorem at_add(x: Nat, y: Nat): @combine(add, Nat::Mon(add), x, y) = add(x, y) { refl }
+        fn fold_all<A: Mon(++)>(xs: List<A>) -> A { fold(++, xs) }
+    ");
+}
+
+/// Like `&&`/`||`, `++` has no legacy name to fall back to. At a carrier with
+/// no designation the refusal names the written symbol and the missing rung.
+#[test]
+fn append_symbol_has_no_fallback_rung() {
+    let e = bad("theorem t(x: Nat, y: Nat): x ++ y = x { ?p }");
+    assert!(e.contains("`++` has no meaning here"), "{e}");
+    assert!(e.contains("has no fallback name"), "{e}");
+    assert!(e.contains("`List`"), "{e}");
 }
 
 /// Unindexed classes are untouched, and so is every operator expression that

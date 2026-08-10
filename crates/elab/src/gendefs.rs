@@ -281,11 +281,14 @@ impl Elaborator {
                         decl: name.clone(),
                         span,
                         err,
+                        note: None,
                     })?;
                 typing::check_term(
                     &self.psi, 0, Layer::Code, &empty, &body, &ty, &level, self.fuel,
                 )
-                .map_err(|err| crate::ElabError::Kernel { decl: name.clone(), span, err })?;
+                .map_err(|err| crate::ElabError::Kernel {
+                    decl: name.clone(), span, err, note: None,
+                })?;
                 if let Some(g) = self.gate.as_ref() {
                     g.accepted(&self.psi, &item);
                 }

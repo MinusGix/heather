@@ -599,7 +599,7 @@ impl Parser {
         Ok(ClassRef { name, args, index, span: nsp.join(end) })
     }
 
-    /// `designation<A> + at List<A> := append`
+    /// `designation<A> ++ at List<A> := append`
     /// (docs/operators-onto-classes-design.md §3.1).
     ///
     /// Contextual exactly as `class` and `instance` are, and for a stronger
@@ -612,7 +612,7 @@ impl Parser {
         let Some(sym) = Self::op_symbol(self.peek()) else {
             return self.err(
                 "a designation names an operator (`designation + at Nat := add`): the \
-                 symbols are `+`, `*`, `&&`, `||`, `<=` and `<`. A designation for an ordinary name \
+                 symbols are `+`, `++`, `*`, `&&`, `||`, `<=` and `<`. A designation for an ordinary name \
                  is not a form — that is a default instance wearing a smaller hat \
                  (docs/operation-indexed-classes-design.md §9.2)",
             );
@@ -1824,7 +1824,7 @@ impl Parser {
 
     /// Expressions, with infix operators. Precedence, loosest to tightest: the
     /// **comparison level** ([`Self::comparison`] — `=`, `<=`, `<`), then
-    /// `||`, `&&`, `+`, `*`, then postfix `.method(args)` / calls, then atoms.
+    /// `||`, `&&`, `+`/`++`, `*`, then postfix `.method(args)` / calls, then atoms.
     ///
     /// An operator application is an ordinary [`ExprKind::App`] whose head is
     /// the [`ExprKind::OpSymbol`] that was **written**. It used to be the head
@@ -2022,6 +2022,7 @@ impl Parser {
             TokKind::PipePipe => Some(("||", 1, 2)),
             TokKind::AmpAmp => Some(("&&", 3, 4)),
             TokKind::Plus => Some(("+", 5, 6)),
+            TokKind::PlusPlus => Some(("++", 5, 6)),
             TokKind::Star => Some(("*", 7, 8)),
             _ => None,
         }
@@ -2035,6 +2036,7 @@ impl Parser {
     fn op_symbol(tok: &TokKind) -> Option<&'static str> {
         match tok {
             TokKind::Plus => Some("+"),
+            TokKind::PlusPlus => Some("++"),
             TokKind::Star => Some("*"),
             TokKind::AmpAmp => Some("&&"),
             TokKind::PipePipe => Some("||"),
@@ -2877,6 +2879,34 @@ mod tests {
         assert_eq!(name, "+");
         assert_eq!(as_call(&args[0].kind).0, "+");
         assert!(matches!(&args[1].kind, ExprKind::Var(v) if v == "c"));
+    }
+
+    // -- list append (issues/list-append-symbol.md) ------------------------
+
+    #[test]
+    fn append_symbol_is_a_two_byte_infix_at_additive_precedence() {
+        // No whitespace: the lexer must claim `++` before either `+` can be
+        // emitted. It shares `+`'s left-associative precedence rung.
+        let k = body("a++b + c");
+        let (name, args, _) = as_call(&k);
+        assert_eq!(name, "+");
+        assert_eq!(as_call(&args[0].kind).0, "++");
+    }
+
+    #[test]
+    fn append_symbol_parses_in_designations_binders_and_arguments() {
+        let f = parse_file(
+            "class Mon<A>(op: A -> A -> A) { unit: A }
+             designation<A> ++ at List<A> := append
+             fn fold<A: Mon(++)>(xs: List<A>) -> A { use(++, xs) }",
+        )
+        .unwrap();
+        assert_eq!(f.items.len(), 3);
+        let Item::Designation(d) = &f.items[1] else { panic!("expected designation") };
+        assert_eq!(d.symbol, "++");
+        let Item::Decl(d) = &f.items[2] else { panic!("expected declaration") };
+        let ExprKind::App { args, .. } = &d.body.result.kind else { panic!("expected call") };
+        assert!(matches!(&args[0].kind, ExprKind::OpSymbol(s) if s == "++"));
     }
 
     // -- the Boolean operators (issues/bool-operator-designations.md) -------

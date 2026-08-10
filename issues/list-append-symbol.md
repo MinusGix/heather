@@ -1,9 +1,9 @@
 ---
 title: `++` for list append: lexicon addition, and the `+` at List designation reviewed
-status: open
+status: closed
 labels: [frontend,syntax,stdlib,ergonomics]
 created: 2026-08-09
-updated: 2026-08-09
+updated: 2026-08-10
 ---
 
 `xs + ys` for concatenation reads as a pun the same way `+` = or at `Bool` did
@@ -52,3 +52,7 @@ designation, binder, and applied positions; full `scripts/test`.
 
 - **[[notation-extensibility]]** owns the user-extensible-lexicon question.
   Assumed here: only that curated additions remain the interim policy.
+
+## Log
+
+- 2026-08-10: LANDED: `++` is a two-byte operator at additive precedence with no fallback; `List<A>` designates it as `append`, `concat` is positional, old List `+` retains a fallback-aware diagnostic, and parser/elaborator/library controls cover adjacency, binders, designations, literals, neutrals, and refusals. Full `scripts/test` green.

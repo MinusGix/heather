@@ -186,6 +186,23 @@ theorem neutral(xs: List<Nat>, ys: List<Nat>):
 ");
 }
 
+/// The library spelling for list concatenation is `++`, not arithmetic `+`
+/// (issues/list-append-symbol.md). The generic designation must work at an
+/// open element type, and the literal control must compute.
+#[test]
+fn the_list_spelling_is_append_not_add() {
+    ok("
+theorem neutral<A>(xs: List<A>, ys: List<A>): xs ++ ys = append(xs, ys) { refl }
+theorem literal(): Cons(1, Nil) ++ Cons(2, Nil) = Cons(1, Cons(2, Nil)) { refl }
+theorem concat_is_positional<A>(xss: List<List<A>>):
+  concat(xss) = mconcat(append, xss) { refl }
+");
+
+    let e = bad("theorem old<A>(xs: List<A>, ys: List<A>): xs + ys = append(xs, ys) { refl }");
+    assert!(e.contains("`+` has no designation at `List`"), "{e}");
+    assert!(e.contains("fallback name `add`"), "{e}");
+}
+
 /// The canonical derived table (`docs/traits-layer2-design.md` §7.1) does
 /// **not** fire for a goal with a value index, and this pins the fact rather
 /// than hiding it: the index is a *term* in the goal type, and a term

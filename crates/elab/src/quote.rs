@@ -259,7 +259,9 @@ impl Elaborator {
         crate::stats::time_kernel(|| {
             typing::check_type(&self.psi, 0, Layer::Meta, &empty, &stmt, &Level::Zero, self.fuel)
         })
-        .map_err(|e| ElabError::Kernel { decl: decl.name.clone(), span: decl.span, err: e })?;
+        .map_err(|e| ElabError::Kernel {
+            decl: decl.name.clone(), span: decl.span, err: e, note: None,
+        })?;
         crate::stats::time_kernel(|| {
             typing::check_term(
                 &self.psi,
@@ -272,7 +274,9 @@ impl Elaborator {
                 self.fuel,
             )
         })
-        .map_err(|e| ElabError::Kernel { decl: decl.name.clone(), span: decl.span, err: e })?;
+        .map_err(|e| ElabError::Kernel {
+            decl: decl.name.clone(), span: decl.span, err: e, note: None,
+        })?;
 
         // The registration seam (docs/meta-def-registration-design.md §2.2):
         // a `for` clause claims a slot, and claiming it means *having its

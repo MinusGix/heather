@@ -23,6 +23,10 @@ pub enum TokKind {
     At,        // @
     Dot,       // .
     Plus,      // +
+    /// `++` — list append notation (issues/list-append-symbol.md). Like the
+    /// Boolean doubles, it has no single-name fallback: a designation or a
+    /// binder supplies its meaning.
+    PlusPlus,  // ++
     Star,      // *
     Lt,        // <
     /// `<=` — the ordering comparison, desugared to `Le(n, m)` by the parser.
@@ -168,6 +172,7 @@ pub fn lex(src: &str) -> Result<Vec<Tok>, LexError> {
             "|-" => (TokKind::Turnstile, 2),
             "&&" => (TokKind::AmpAmp, 2),
             "||" => (TokKind::PipePipe, 2),
+            "++" => (TokKind::PlusPlus, 2),
             "=>" => (TokKind::FatArrow, 2),
             "==" => (TokKind::EqEq, 2),
             "<=" => (TokKind::LtEq, 2),

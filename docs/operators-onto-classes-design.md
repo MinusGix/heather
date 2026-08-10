@@ -502,3 +502,23 @@ Nothing else moved: both `CommMonoid<Bool>` instances stay registered as
 equals, nothing nominates, and `op_unit_of_comm` is untouched — the review
 was purely about what two symbols mean at one carrier, which is exactly the
 small question §3 built the table to make small. Suite 1375 → 1383.
+
+## 14. Postscript (2026-08-10): `++` for List append
+
+The same curated-lexicon recipe now gives List concatenation its programming
+spelling (`issues/list-append-symbol.md`): `++` is a two-byte token at `+`'s
+precedence and associativity, has no fallback name, and is designated at the
+open carrier by `designation<A> ++ at List<A> := append`. The old `+ at List`
+row is gone; `concat` uses the positional `mconcat(append, xss)`, beside the
+Bool folds for the same reason — a fold declaration is not duplicated merely
+to follow every symbol.
+
+The migration also sharpens §12.5's diagnostic without changing its semantic
+decision. A symbol with a valid fallback still takes rung 3. If the resulting
+declaration reaches the kernel and fails, the error now retains the known
+notation fact: for example, old `xs + ys` at List reports that `+` had no List
+designation and therefore used `add`. A user-defined `add` that genuinely
+accepts lists remains legal; the note explains a failed fallback rather than
+turning designation lookup into a refusal.
+
+Suite 1400 → 1405.
