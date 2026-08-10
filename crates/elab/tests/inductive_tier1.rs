@@ -212,6 +212,25 @@ fn no_confusion() {
     ));
 }
 
+// Disjointness in an arm needs only the label's injection path. Its children
+// vector is neutral there and deliberately need not be decoded merely to see
+// that `Cons` and `Nil` are different
+// (issues/absurd-on-branch-scrutinee.md).
+#[test]
+fn absurd_reads_a_recursive_match_arms_own_scrutinee() {
+    elab(
+        r#"
+        inductive List<A> { Nil, Cons(A, List<A>) }
+        theorem branch<A>(xs: List<A>): xs = Nil -> Nat {
+            match xs {
+                Nil => λ p => 0,
+                Cons(h, t) => λ p => absurd(p),
+            }
+        }
+        "#,
+    );
+}
+
 // The payload half of injectivity, at a constructor that carries both a
 // payload field and children: the two halves are projected by different
 // mechanisms and both have to land on the declared field order.

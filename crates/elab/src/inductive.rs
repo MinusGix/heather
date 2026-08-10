@@ -3256,11 +3256,26 @@ impl Elaborator {
         err("internal: projection walked off the end", span)
     }
 
-    /// Read a canonical constructor term back: its index and its field values.
-    /// `None` if the term is not a constructor of `ind` in canonical form —
-    /// which is a diagnosable surface condition, not an internal error, since
-    /// no-confusion is only meaningful between actual constructors.
-    pub(crate) fn read_ctor(&self, ind: &Inductive, t: &Term) -> Option<(usize, Vec<Rc<Term>>)> {
+    /// Read a constructor term back: its index and its field values. Besides a
+    /// canonical constructor, accept the injected neutral that a `match` arm's
+    /// motive is instantiated at (issues/absurd-on-branch-scrutinee.md). The
+    /// injection determines the constructor; its payload fields are the
+    /// ordinary Σ projections of the neutral summand value.
+    ///
+    /// A bare neutral at a multi-constructor inductive is deliberately still
+    /// `None`: `x : D` identifies no summand, so `x = C(…)` is not yet a
+    /// constructor equation. `spine` is scoped in `cx`, as are `t` and the
+    /// projections returned here. `read_fields` is false for disjointness,
+    /// whose tag predicate deliberately ignores every field and child.
+    pub(crate) fn read_ctor(
+        &self,
+        cx: &Cx,
+        ind: &Inductive,
+        spine: &Spine,
+        t: &Term,
+        read_fields: bool,
+        span: Span,
+    ) -> R<Option<(usize, Vec<Rc<Term>>)>> {
         // Tier 1: the injections are in the *label*, and the fields are split
         // between the label's Σ spine and the children tuple (tier 1 §7).
         let (label, children) = match t {
@@ -3270,13 +3285,16 @@ impl Elaborator {
         let n = ind.ctors.len();
         let mut i = 0usize;
         let mut cur = label;
+        let mut injected = false;
         loop {
             match cur {
                 Term::Inr { val, .. } if i + 1 < n => {
+                    injected = true;
                     i += 1;
                     cur = val;
                 }
                 Term::Inl { val, .. } => {
+                    injected = true;
                     cur = val;
                     break;
                 }
@@ -3284,27 +3302,50 @@ impl Elaborator {
             }
         }
         if i >= n {
-            return None;
+            return Ok(None);
         }
         let ctor = &ind.ctors[i];
+        let canonical = matches!(cur, Term::Pair { .. });
+        if !canonical && !injected && n > 1 {
+            return Ok(None);
+        }
+        // Disjointness depends only on the injection path. In particular, a
+        // recursive arm may carry a neutral children vector, which need not
+        // be decoded merely to prove that `Cons` and `Nil` are distinct.
+        if !read_fields {
+            return Ok(Some((i, Vec::new())));
+        }
         // Skip the nominal tag, then collect one value per *payload* field.
-        let Term::Pair { snd, .. } = cur else { return None };
-        let mut p = snd;
         let mut payload = Vec::new();
-        // Not `fields.len() - arity()`: a container field is neither payload
-        // nor a *plain* child, so the two no longer partition the fields
-        // (docs/container-fields.md §3.1).
-        for _ in 0..ctor.payload().count() {
-            let Term::Pair { fst, snd, .. } = &**p else { return None };
-            payload.push(Rc::clone(fst));
-            p = snd;
+        if let Term::Pair { snd, .. } = cur {
+            let mut p = snd;
+            // Not `fields.len() - arity()`: a container field is neither
+            // payload nor a *plain* child, so the two no longer partition the
+            // fields (docs/container-fields.md §3.1).
+            for _ in 0..ctor.payload().count() {
+                let Term::Pair { fst, snd, .. } = &**p else { return Ok(None) };
+                payload.push(Rc::clone(fst));
+                p = snd;
+            }
+        } else {
+            // Every surface constructor of a sum is injected. Seeing that
+            // injection is what distinguishes an arm's neutral summand value
+            // from an arbitrary neutral of the whole inductive. With one
+            // constructor the whole type is the summand, so no injection is
+            // needed.
+            let value = Rc::new(cur.clone());
+            for k in 0..ctor.payload().count() {
+                let (field, _, _) =
+                    self.projection(cx, &spine.ctors[i].0, &value, k, span)?;
+                payload.push(field);
+            }
         }
         // …one per plain child, out of the tuple…
         let mut kids = Vec::new();
         if let Some(children) = children {
             let mut c = children;
             for _ in 0..ctor.arity() {
-                let Term::Pair { fst, snd, .. } = c else { return None };
+                let Term::Pair { fst, snd, .. } = c else { return Ok(None) };
                 kids.push(Rc::clone(fst));
                 c = snd;
             }
@@ -3316,7 +3357,7 @@ impl Elaborator {
                 kids.push(Rc::new(c.clone()));
             }
         } else if ctor.container().is_some() {
-            return None;
+            return Ok(None);
         }
         // Re-interleave into declaration order, which is the order `inj`'s
         // field index and every surface message speak in.
@@ -3332,7 +3373,7 @@ impl Elaborator {
                 }
             })
             .collect();
-        Some((i, fields))
+        Ok(Some((i, fields)))
     }
 
     /// The equation an `absurd`/`inj` argument must prove, with both sides read
@@ -3343,6 +3384,7 @@ impl Elaborator {
         cx: &Cx,
         e: &Expr,
         who: &str,
+        read_fields: bool,
     ) -> R<(Term, Rc<Inductive>, Type, Level, Rc<Term>, Rc<Term>, (usize, Vec<Rc<Term>>), (usize, Vec<Rc<Term>>))>
     {
         let (proof, proof_ty, _) = self.elab_infer(cx, e)?;
@@ -3362,7 +3404,11 @@ impl Elaborator {
         // after δι-reduction, and `absurd`/`inj` are about the constructors,
         // not about the spelling.
         let (lhs, rhs) = (self.whnf_tm(cx, &lhs, e.span)?, self.whnf_tm(cx, &rhs, e.span)?);
-        let (Some(l), Some(r)) = (self.read_ctor(&ind, &lhs), self.read_ctor(&ind, &rhs)) else {
+        let spine = self.spine(&sty, &level, ind.ctors.len(), e.span)?;
+        let (Some(l), Some(r)) = (
+            self.read_ctor(cx, &ind, &spine, &lhs, read_fields, e.span)?,
+            self.read_ctor(cx, &ind, &spine, &rhs, read_fields, e.span)?,
+        ) else {
             return err(
                 format!(
                     "`{who}` needs both sides of the equation to be constructor applications"
@@ -3426,7 +3472,7 @@ impl Elaborator {
         span: Span,
     ) -> R<Term> {
         let (proof, ind, sty, slvl, lhs, rhs, (i, _), (j, _)) =
-            self.equation(cx, arg, "absurd")?;
+            self.equation(cx, arg, "absurd", false)?;
         if i == j {
             return err(
                 format!(
@@ -3501,7 +3547,7 @@ impl Elaborator {
         span: Span,
     ) -> R<(Term, Type, Level)> {
         let (proof, ind, sty, slvl, lhs, rhs, (i, la), (j, rb)) =
-            self.equation(cx, arg, "inj")?;
+            self.equation(cx, arg, "inj", true)?;
         if i != j {
             return err(
                 format!(

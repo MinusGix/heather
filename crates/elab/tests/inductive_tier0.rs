@@ -308,6 +308,45 @@ fn distinct_constructors_are_provably_distinct() {
     );
 }
 
+// An arm's motive is instantiated at the injected summand binder, not an
+// η-expanded constructor literal. That is still enough constructor evidence:
+// the injection supplies the index and Σ projections recover payload fields
+// (issues/absurd-on-branch-scrutinee.md).
+#[test]
+fn absurd_reads_the_match_arms_own_scrutinee() {
+    elab(
+        r#"
+        inductive Bool { False, True }
+        theorem bool_branch(a: Bool): a = True -> a = True {
+            match a {
+                False => λ p => absurd(p),
+                True => λ p => p,
+            }
+        }
+
+        inductive Option<A> { None, Some(A) }
+        theorem payload_branch<A>(o: Option<A>): o = None -> Nat {
+            match o {
+                None => λ p => 0,
+                Some(x) => λ p => absurd(p),
+            }
+        }
+
+        fn value_or<A>(o: Option<A>, default: A) -> A {
+            match o { None => default, Some(x) => x }
+        }
+        theorem payload_inj<A>(o: Option<A>):
+            (y: A) -> o = Some(y) -> value_or(o, y) = y
+        {
+            match o {
+                None => λ y p => absurd(p),
+                Some(x) => λ y p => inj(p),
+            }
+        }
+        "#,
+    );
+}
+
 // §9.5 — injectivity, including a two-field constructor field by field.
 #[test]
 fn constructors_are_injective() {

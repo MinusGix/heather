@@ -1,9 +1,9 @@
 ---
 title: absurd cannot read a constructor equation whose endpoint is the match's own scrutinee
-status: open
+status: closed
 labels: [frontend,elaboration,proofs]
 created: 2026-08-05
-updated: 2026-08-05
+updated: 2026-08-10
 ---
 
 Found writing [[list-algorithms-exercise]] (2026-08-05), on the third `Bool`
@@ -52,9 +52,10 @@ the equation is not between constructors when it is).
 ## What it assumes from elsewhere
 
 - **[[list-algorithms-exercise]]** owns the exercise that found it. Assumed
-  here: only that the workaround it used (state the hypothesis over a
-  computation) is what the file does today.
+  here at filing: only that its workaround stated the hypothesis over a
+  computation. The closing round retired that workaround from the live file.
 
 ## Log
 
 - 2026-08-05: Filed 2026-08-05 off [[list-algorithms-exercise]]; the body has the reproducer, the cause (case_tree instantiates an arm's motive at the injected binder, so read_ctor can determine the constructor index but not walk the fields off it), and two candidate fixes. Ranked third in that file's still-hurts list.
+- 2026-08-10: LANDED: `read_ctor` now accepts a constructor index witnessed by an arm motive’s injection path, projects neutral payload fields when `inj` needs them, and lets `absurd` ignore neutral recursive children it never consumes. Arbitrary outer neutrals remain rejected. Bool, Option payload/injectivity, recursive List, and the real `andb_true` proof pin the boundary; suite 1405 -> 1407, full `scripts/test` green.

@@ -375,6 +375,16 @@ and `ElimEmpty` from there to the user's goal. Both reductions are
 definitional by kernel fact 4 composed with `Case` β, so the `case: ⟨⟩` is
 accepted without any transport of our own.
 
+*Update 2026-08-10.* A constructor endpoint need not have a canonical field
+tuple. Inside a `match` arm the dependent motive is instantiated at the
+summand's neutral binder, so the endpoint is `inl x`/`inr … x`. The injection
+path already determines the constructor index; disjointness reads only that
+path, because its tag predicate ignores fields. Injectivity additionally
+recovers payload fields as the ordinary Σ projections of `x`. A bare neutral
+of the whole multi-constructor type still identifies no summand and is
+refused, preserving the distinction between `x = C(…)` outside a split and
+the same equation inside `C`'s arm.
+
 ### 6.2 Injectivity (non-dependent fields)
 
 For `e : Id(⟦D⟧; c_i(a⃗); c_i(b⃗))`, derive `Id(⟦T_k⟧; a_k; b_k)` per field.

@@ -3,7 +3,7 @@ title: Prove basic list algorithms: the file that ranks the sugar
 status: closed
 labels: [frontend,stdlib,testing,ergonomics]
 created: 2026-08-05
-updated: 2026-08-05
+updated: 2026-08-10
 ---
 
 Small round item (2026-08-05 ergonomics round). Write a `lib/std`-adjacent
@@ -110,3 +110,4 @@ for any file importing both; members would fix that (`List::map`,
 
 - 2026-08-05: LANDED: lib/list_algos.hthr, 276 lines / 23 declarations, written first in today's language and then revised onto the round's three features. The body of this issue now carries the file's inventory, the per-proof before/after table, and the ranked still-hurts list; three findings are worth repeating here. (1) The exercise found a live defect nobody predicted: absurd cannot read a constructor equation whose endpoint is the match's OWN scrutinee, because an arm's motive is instantiated at the injected binder rather than at the constructor literal — filed as absurd-on-branch-scrutinee, with a workaround in the file (state the hypothesis over a computation, not over the scrutinee). (2) The three features are unevenly valuable at this size. Over-application is the big one: 19 collapsed call sites, 5 of them induction hypotheses (which needed a deviation in call-site-overapplication to reach). Receiver-reached members turned 4 nth calls round and read well. Auto-refl fired 8 times and saved nothing — every site it replaced already said refl, which is no longer than {} and says more; its real customers are whole-theorem computation lemmas, of which this file has none. (3) The ranked list puts REWRITING UNDER A CONTEXT first by a wide margin — six of the 23 declarations are congruence lemmas that exist only to move an equation into an argument position — and dependent case analysis on a decided predicate (the convoy, plus hoisting the branch into its own fn so the recursive call can be an argument) second. Option chaining, a predicted candidate, ranked LAST: nth-shaped lemmas state their result as = Some(a) and never chain. Cost datum for ih-generalization's warning: heather check is 0.83 s before and 0.86 s after, two orders below lib/ir_v1.hthr's 26.9 s; the file writes two explicit motives, both convoys, neither generalizing an argument, so the explicit-motive term-size tax does not appear at this size.
 - 2026-08-05: Still-hurts item 2 got its owner after close: [[decided-case-convoy]].
+- 2026-08-10: The branch-scrutinee workaround is retired by [[absurd-on-branch-scrutinee]]: `andb_true` now uses the direct case split originally refused. The exercise’s historical finding remains accurate; the live file no longer carries the workaround.

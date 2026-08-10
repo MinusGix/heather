@@ -315,6 +315,12 @@ label's injections for the index, then take the payload values from the
 label's Σ spine and the recursive values from the children tuple, and
 re-interleave them into declaration order.
 
+Inside an eliminator arm the label and children may be neutral. Disjointness
+needs only the label's injection path and deliberately does not decode the
+children vector; this is what lets `absurd` consume an equation between the
+arm's own scrutinee and a different constructor. Injectivity still requires
+the field values it returns.
+
 ## 8. Not covered here
 
 - **Indexed families** still ford by `Id`, tracked separately.

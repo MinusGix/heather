@@ -177,13 +177,11 @@ theorem andb_true_r(a: Bool, b: Bool): andb(a, b) = True -> b = True {
     match a { False => λ p => absurd(p), True => λ p => p }
 }
 
-// Not by cases on `a`: in the `False` arm the hypothesis is `a = True` at
-// `a := False`, and the elaborator instantiates an arm's motive at the
-// *injected binder* rather than at the constructor literal, so `absurd` does
-// not recognize the equation (issues/absurd-on-branch-scrutinee.md). Rewriting
-// under `andb` avoids the split entirely.
 theorem andb_true(a: Bool, b: Bool): a = True -> b = True -> andb(a, b) = True {
-    λ p q => trans(cong_andb_l(b, p), q)
+    match a {
+        False => λ p q => absurd(p),
+        True => λ p q => q,
+    }
 }
 
 // `leb` is total: a failed comparison is the other one succeeding. Induction
