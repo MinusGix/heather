@@ -429,6 +429,18 @@ mod rejections {
     }
 
     #[test]
+    fn a_lambda_expected_type_value_is_decoded_for_the_diagnostic() {
+        let msg = elab_err(
+            r#"
+            fn N(v: Nat) -> Type { Nat }
+            fn bad(v: Nat) -> N(v) { λ x => x }
+            "#,
+        );
+        assert!(msg.contains("found `Nat`"), "{msg}");
+        assert!(!msg.contains("El["), "{msg}");
+    }
+
+    #[test]
     fn a_wrong_binder_annotation_is_diagnosed() {
         let msg = elab_err(
             r#"

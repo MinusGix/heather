@@ -306,6 +306,35 @@ theorem unfilled(n: Nat): add(n, 0) = n {
 }
 
 #[test]
+fn a_type_value_goal_is_decoded_for_the_listing() {
+    let r = reject(
+        r#"
+        fn N(v: Nat) -> Type { Nat }
+        theorem decoded(v: Nat): N(v) { ?g }
+        "#,
+    );
+    let ElabError::UnsolvedGoals { goals, .. } = r else {
+        panic!("expected an unsolved-goal listing");
+    };
+    assert_eq!(goals[0].statement, "Nat");
+}
+
+#[test]
+fn goal_display_decode_exhaustion_falls_back_to_the_raw_type() {
+    let mut src = "fn T0(v: Nat) -> Type { Nat }\n".to_string();
+    for i in 1..=40 {
+        src.push_str(&format!("fn T{i}(v: Nat) -> Type {{ T{}(v) }}\n", i - 1));
+    }
+    src.push_str("theorem bounded(v: Nat): T40(v) { ?g }\n");
+
+    let r = reject(&src);
+    let ElabError::UnsolvedGoals { goals, .. } = r else {
+        panic!("expected an unsolved-goal listing");
+    };
+    assert!(goals[0].statement.starts_with("El["), "{}", goals[0].statement);
+}
+
+#[test]
 fn anonymous_holes_get_checker_assigned_names() {
     let r = reject(
         r#"

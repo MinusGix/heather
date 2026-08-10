@@ -60,7 +60,9 @@ use std::rc::Rc;
 use heather_kernel::conv::{conv_term, conv_type};
 use heather_kernel::layer::Layer;
 use heather_kernel::level::Level;
-use heather_kernel::reduce::{whnf_term, whnf_term_delta, whnf_type_delta, Defs};
+use heather_kernel::reduce::{
+    step_type_delta, whnf_term, whnf_term_delta, whnf_type_delta, Defs,
+};
 use heather_kernel::subst::{GlobalEntry, GlobalSubst};
 use heather_kernel::term::{
     nth, CtxBase, CtxEntry, GlobalBinding, GlobalCtx, GlobalVar, LocalCtx, LocalSubst, LocalVar,
@@ -134,9 +136,9 @@ pub enum ElabError {
     Resolution { goal: String, span: Span, trace: Vec<resolve::TraceLine> },
 }
 
-/// One entry of the unsolved-goal listing. Types are rendered eagerly with
-/// the kernel's budget-bounded `Debug` (crates/kernel/src/fmt.rs), so no
-/// kernel type escapes into the public error.
+/// One entry of the unsolved-goal listing. Types are decoded for display and
+/// rendered eagerly with the kernel's budget-bounded `Debug`
+/// (crates/kernel/src/fmt.rs), so no kernel type escapes into the public error.
 #[derive(Debug)]
 pub struct GoalReport {
     /// Discharge name: `on ?{name} := …`.
@@ -151,6 +153,10 @@ pub struct GoalReport {
     pub origin: Option<String>,
     pub span: Span,
 }
+
+/// Diagnostics get a small, independent reduction allowance. This is not
+/// elaboration fuel: exhausting it must only make the message less pretty.
+const DISPLAY_DECODE_STEPS: usize = 32;
 
 /// The lowering selected for an indexed inductive declaration.
 ///
@@ -1769,7 +1775,7 @@ impl Elaborator {
             .filter(|g| g.solution.is_none())
             .map(|g| GoalReport {
                 name: g.name.clone(),
-                statement: format!("{:?}", g.ty),
+                statement: self.display_type(&g.cx, &g.ty),
                 context: g
                     .cx
                     .names
@@ -1779,8 +1785,12 @@ impl Elaborator {
                     // arm's hidden ih); they are unspellable, so listing them
                     // would only mislead.
                     .filter(|(n, _)| !n.starts_with('#'))
-                    .map(|(n, e)| (n.clone(), format!("{:?}", e.ty)))
-                    .chain(g.cx.aliases.iter().map(|a| (a.name.clone(), format!("{:?}", a.ty))))
+                    .map(|(n, e)| (n.clone(), self.display_type(&g.cx, &e.ty)))
+                    .chain(
+                        g.cx.aliases
+                            .iter()
+                            .map(|a| (a.name.clone(), self.display_type(&g.cx, &a.ty))),
+                    )
                     .collect(),
                 origin: g
                     .origin
@@ -6255,7 +6265,10 @@ impl Elaborator {
         let head = self.whnf(cx, expected, span)?;
         let Type::Pi { dom_level, cod_level, dom, cod } = head else {
             return err(
-                format!("a lambda needs a function type here, found `{expected:?}`"),
+                format!(
+                    "a lambda needs a function type here, found `{}`",
+                    self.display_type(cx, expected)
+                ),
                 span,
             );
         };
@@ -7472,6 +7485,31 @@ impl Elaborator {
         let psi = self.oracle_psi();
         whnf_type_delta(ty, &cx.gamma, Defs::transparent(&psi), self.fuel)
             .map_err(|_| ElabError::Elab { msg: "out of fuel reducing a type".into(), span })
+    }
+
+    /// Expose just enough of a lazy `El(code)` to give a human its decoded
+    /// head. Keep this separate from checking: a hostile or merely long
+    /// definition chain falls back to the original, budget-bounded `Debug`
+    /// rendering instead of consuming elaboration fuel or changing the type.
+    fn display_type(&self, cx: &Cx, ty: &Type) -> String {
+        let raw = || format!("{ty:?}");
+        if !matches!(ty, Type::El { .. }) {
+            return raw();
+        }
+
+        let psi = self.oracle_psi();
+        let defs = Defs::transparent(&psi);
+        let mut head = ty.clone();
+        for _ in 0..DISPLAY_DECODE_STEPS {
+            let Some(next) = step_type_delta(&head, &cx.gamma, defs) else {
+                return raw();
+            };
+            head = next;
+            if !matches!(head, Type::El { .. }) {
+                return format!("{head:?}");
+            }
+        }
+        raw()
     }
 
     /// [`Self::delta_psi`], padded with the meta binders currently in scope
