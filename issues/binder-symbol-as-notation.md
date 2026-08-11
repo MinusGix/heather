@@ -141,3 +141,4 @@ no designation and no fallback exist); a duplicate-spelling negative control
   binder occurrences (class heads and value parameters), generalizing to any
   function-typed parameter as temporary local notation; and `as` decided to
   be separate from [[class-default-operators]]'s advertisement.
+- 2026-08-11: User review of the landed round left the record/inductive refusal standing but flagged the reasoning as thin: a record with a value parameter *does* have a body for a spelling — its field types mention the parameter, which is structurally the class-head case. The refusal is really about there being no customer yet plus the installation living in class lowering. If a record shows up whose fields state laws over an operation parameter, lifting the parse-time refusal (parser.rs, valparam_list symbols flag) and installing where record fields elaborate is the shape; reopen or file fresh then.
