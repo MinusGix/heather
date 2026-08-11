@@ -2,6 +2,22 @@
 //!
 //! Included by `mod support;` in more than one test target, and each target
 //! uses a different part of it, so unused-item warnings here are expected.
+//!
+//! Orientation, so nobody greps for these twice (finding the prelude took a
+//! four-call hunt in one session, 2026-08-11):
+//!
+//! - **The test prelude** is `crates/elab/src/prelude.hthr` (`PRELUDE` in
+//!   `lib.rs` includes it; `Elaborator::with_prelude` elaborates it). It is
+//!   what defines `add`, `List`, `sym`/`trans`/`cong` and friends for every
+//!   snippet test — there is no `prelude.hthr` under `lib/`.
+//! - **Harness helpers** (`ok`/`bad`/`bare`, and per-file variants) are
+//!   local `fn`s at the top of each test file, not shared here — each file
+//!   pins its own prelude-plus-fixture combination on purpose.
+//! - **The whole-library acceptance tests** (`lib/std`, `lib/ir_v1.hthr`)
+//!   live in `lib_algebra.rs` / `lib_list_algos.rs` / `ir_v1.rs` /
+//!   `certgen.rs`; the two expensive ones — the `--fast` skips named in
+//!   `scripts/test` — are in `ir_v1.rs` and `certgen.rs`.
+//! - **What a generated-term test must vary**: docs/testing-generated-terms.md.
 #![allow(dead_code)]
 
 use heather_kernel::term::GlobalCtx;

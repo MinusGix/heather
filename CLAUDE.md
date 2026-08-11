@@ -6,7 +6,15 @@
   `scripts/test --fast` (~30s) skips the two whole-library acceptance tests
   (~4.7 CPU-min) for the inner loop; a round's **final** verification, and
   any change touching `lib/`, the kit, or the generators, must run the plain
-  full `scripts/test`.
+  full `scripts/test`. The suite ends with one `== suite: N passed, … ==`
+  line — read that instead of re-running to grep failures and sum counts
+  separately. Run the full suite **in the background** and do doc/bookkeeping
+  work while it runs; don't sleep-poll it.
+- **Perf measurement is not part of an ordinary round.** Elaborator changes —
+  even complex ones, as long as they add no inference route on a hot path —
+  land without timing anything; `scripts/bench --check` against the baseline
+  is what catches regressions. Only a round whose issue names performance as
+  the point measures, and then via the recorded protocol.
 - **The same goes for direct `heather` runs**: deep conversion workloads are
   memory-superlinear (an uncapped release `heather check` on a deep-fuel IR
   theorem hit ~22 GB, 2026-07-31). Wrap every invocation:

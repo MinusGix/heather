@@ -36,6 +36,11 @@ cargo test --workspace --no-run --quiet
 
 # ...then run under them: 4 GiB address space, 5 CPU minutes, two threads.
 #
+# The awk pass-through appends one machine-readable summary line — cargo
+# scatters per-binary `test result:` lines across ~60 targets and prints no
+# total, so callers (humans and agents both) were re-running the whole suite
+# just to grep failures and sum counts separately.
+#
 # RUST_MIN_STACK raises the *test thread* stack from its 2 MiB default: the
 # `Wf` step telescope embeds the `nth` schema (a nested elim_Nat under two
 # λs), so checking the `tm_elim_wf` branch of a 52-branch recursor recurses
@@ -43,4 +48,7 @@ cargo test --workspace --no-run --quiet
 # total address space.
 ulimit -v 4194304
 ulimit -t 300
-RUST_MIN_STACK=8388608 RUST_TEST_THREADS=2 exec cargo test --quiet "${TEST_ARGS[@]}" "$@" "${SKIP[@]}"
+RUST_MIN_STACK=8388608 RUST_TEST_THREADS=2 cargo test --quiet "${TEST_ARGS[@]}" "$@" "${SKIP[@]}" |
+  awk '{ print }
+       /^test result:/ { passed += $4; failed += $6; ignored += $8 }
+       END { printf "\n== suite: %d passed, %d failed, %d ignored ==\n", passed, failed, ignored }'
