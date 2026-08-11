@@ -31,3 +31,7 @@ question.
   position. Assumed here: only that `mconcat(++, xss)` is its acceptance shape.
 - **[[notation-extensibility]]** owns the lexicon; any syntax proposal here
   pays that issue's costs.
+
+## Log
+
+- 2026-08-11: bare-symbol-checking-carrier landed 2026-08-11: mconcat(++, xss), mconcat(||, bs), mconcat(&&, bs) are legal. As predicted, 'the operation must be spelled at every call site' is now weaker as an argument for computational functions and unchanged for lemmas. Not decided here.

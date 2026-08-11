@@ -125,6 +125,12 @@ exactly one reading, because an infix operator can never *begin* an
 expression; a lone operator token between delimiters is always the designation
 reference, which reserves the position against a future prefix operator.
 
+**Amended 2026-08-11** (`docs/bare-symbol-checking-carrier-design.md`):
+*unapplied* is not the same as *carrier-less*. §12.3 found one place a bare
+symbol has a carrier — the qualified name, which wrote it down — and the
+postscript §16 found the general one, the expected type of a checking position.
+Rung 2 below is stated for both.
+
 A symbol resolves to a **name**, and then everything downstream is the ordinary
 application path — the same checking position, the same implicit insertion, the
 same spilling, the same diagnostics. Three rungs, in order:
@@ -135,9 +141,10 @@ same spilling, the same diagnostics. Three rungs, in order:
 > only rung that can fire inside generic code, and it fires without looking at
 > any type.
 >
-> **(2) The designation at the operand's carrier.** The symbol is applied, the
-> left operand's type has a head, and the table has an entry at (symbol,
-> head): the designated global.
+> **(2) The designation at the carrier.** The symbol is applied and the left
+> operand's type has a head; or the symbol is bare in a **checking** position
+> and the expected type's first domain has one (amended 2026-08-11, §16). Where
+> the table has an entry at (symbol, head): the designated global.
 >
 > **(3) The symbol's fallback name.** `+`→`add`, `*`→`mul`, `<=`→`Le`,
 > `<`→`lt`, resolved by `Elaborator::resolve` exactly as the parser's
@@ -151,7 +158,7 @@ resolve to Nat's addition and then fail in the kernel, which is precisely the
 stopgap. It is *reachable*, though: it fires for every file that declares no
 designation for the symbol, which is every file written before this round.
 
-### 4.1 The carrier probe, and why it is a proposal
+### 4.1 The carrier probe, both directions, and why it is a proposal
 
 Rung 2 needs the left operand's type head before the head of the call is
 known, which inverts the ordinary order (head first, arguments checked against
@@ -173,6 +180,19 @@ what an indexed class's index is). It is not enforced, because enforcing it
 means type-checking the designation against a carrier the declaration only
 names the head of; the failure mode is a fallback, so the enforcement would
 buy a better message and nothing else. Recorded as residue (§11).
+
+**Amended 2026-08-11.** The probe has a **second direction**, and the two are
+one rule. Applied, it *infers a leaf* and reads the head off the result. Bare
+in a checking position, it whnfs the **expected type** and reads the head off
+its **first domain** — the slot where the left operand would have sat — which
+costs no inference at all, there being no operand to infer. Both are
+**proposals**: no head, or no entry at the head, and the ladder goes on to rung
+3, so a mis-probe costs a rung and never a wrong term. The closure assumption
+above covers both, the bare direction assuming the carrier is the first domain
+exactly as the applied one assumes it is the left operand. Only a *bare* symbol
+reads the expected type: an applied one has an operand, which is the more
+specific evidence, and admitting a second source there would put something new
+in the path of every operator expression that elaborates today.
 
 ## 5. The `Monoid(+)` constraint form
 
@@ -442,6 +462,24 @@ promised `A::CommMonoid(+)` as a dictionary spelling, and it costs one loop in
 `class_at_type`: the subject *is* the head the table is keyed on. Ordinary
 arguments are unchanged, so this is a second site rather than a widened rule.
 
+**Restated 2026-08-11** (`docs/bare-symbol-checking-carrier-design.md`), because
+the surviving half is now the smaller one. The parenthesis above is wrong too:
+`fold(+, bs)` at `List<Bool>` resolves at `Bool`, because the slot's own type
+says which carrier is being asked about. What is left of §4's sentence is
+sharper than what it claimed:
+
+> A bare symbol in an **inference** position has no carrier. Everywhere else it
+> has one, and there are two places it comes from — the subject of a qualified
+> name, and the first domain of the type a checking position expects.
+
+And the grammar makes even that boundary unobservable today:
+`Parser::op_symbol_arg` is called from `call_args` alone, so a bare symbol can
+only be *written* in an argument slot, and an argument slot always has an
+expected domain. The boundary test `fold(+, bs)` was flipped to a positive in
+`crates/elab/tests/operators_onto_classes.rs`, and what replaced it is a slot
+whose domain has no nominal head — the caller's own type variable — where the
+probe declines and rung 3 is again the only rung left.
+
 ### 12.4 The symbol slot's declared name needed the §5.2 device (§5.1)
 
 §5.1 decides that a symbol slot binds under the symbol and not under the
@@ -482,7 +520,6 @@ was nominated.
 40.40 → 40.66. All within run-to-run noise (<1.5%), and the last two use no
 designation at all, which is the growth invariant showing up as a number.
 Suite **1354 → 1375**.
-</content>
 
 ## 13. Postscript (2026-08-09): the Boolean spellings `&&`/`||`
 
@@ -588,3 +625,74 @@ while claiming no default (`issues/class-default-operators.md` owns that, and
 the lean there is that `Monoid` advertises nothing).
 
 Suite 1419 → 1432.
+
+## 16. Postscript (2026-08-11): a bare symbol in a checking position
+
+`issues/bare-symbol-checking-carrier.md`, designed in
+`docs/bare-symbol-checking-carrier-design.md` and landed. §4's rung 2, §4.1 and
+§12.3 are amended above; this is what the amendment cost.
+
+- **The resolver change is three lines.** `op_rewrite` runs at the top of
+  `elab_check_skel`, whose signature has had `expected: &Type` in it since this
+  round — so the expected type was always one line above the rewrite, and rung
+  2's second source is an `Option<&Type>` threaded into `op_rewrite` and
+  `resolve_op_name`, `Some` at that one site and `None` at the two inference
+  ones. `Elaborator::expected_carrier_head` whnfs it, takes the first `Π`
+  domain, and asks `type_namespace` — which answers `None` for a variable, a
+  meta or anything else with no nominal head, so a domain that still mentions
+  an implicit declines without a separate meta test.
+- **The engineering is that a bare symbol became checking-only.** Handing
+  `elab_check_skel` the expected type is worthless if the argument never gets
+  there, and at `mconcat(++, xss)` it would not: `op` is argument 0 and its
+  domain is `?A -> ?A -> ?A` with `?A` unsolved until `xss` pins it. So a bare
+  symbol answers `is_checking_only` — gated on rung 1 missing **and** the symbol
+  being designated somewhere — and `apply_implicit`'s existing per-argument
+  **deferral** is what hands it the carrier a later argument produced. That is
+  the same sentence the bare-implicit-prefix arm beside it already makes: it can
+  infer, but only at a shape that mis-teaches (`+` infers to `add`, whose type
+  would pin a `Bool` call's carrier to `Nat`), so at a meta-bearing domain it
+  waits for one.
+- **Nothing can fill the slot behind the symbol's back.** `fill_index_from_-
+  scope` and `fill_index_from_designation` both skip a `Withheld` slot by a
+  guard that was already there — the value-slot ladder's steps 2 and 3 are for
+  a slot *nobody wrote*, and here somebody wrote a symbol — so the fixpoint
+  discharges the argument first and the goal grounds on the round after.
+- **The gate is the growth invariant.** "Designated somewhere" is rung 2's own
+  guard, reused: without it a file that designates nothing would stop inferring
+  `+` by the fallback, and the fallback's own type is sometimes what teaches the
+  call its carrier, so a program written before this round could start refusing.
+  With it such a file runs byte-identical code, and `sum_all`'s `mconcat(+, xs)`
+  — rung 1 — is never deferred either.
+- **Diagnostics.** The rung-0 refusal now **names the carrier it tried** and
+  which source it came from ("nothing designates `++` at `Nat` — the carrier
+  this position expects —"), which the applied direction gains too; the
+  fallback note of §14 gains the same clause; and a deferred bare symbol is
+  reported as a symbol rather than as a nameless deferred argument. That last
+  one sits *behind* the value-slot refusal at any callee with an indexed class's
+  solver parameter, deliberately: the older message names the class and lists
+  the instances, and is the better answer about the same situation.
+- **Two refusal tests flipped, deliberately**, with their comments rewritten
+  rather than deleted: `fold(+, bs)` and `fold(&&, bs)` at `List<Bool>` now
+  resolve at `Bool`. What must stay a refusal did: a carrier the table does not
+  cover, and a file that designates nothing anywhere.
+- **The library**: `concat`, `any_of` and `all_of` are respelled
+  `mconcat(++, xss)`, `mconcat(||, bs)`, `mconcat(&&, bs)`, and not one class,
+  instance, designation, constraint slot or proof changed —
+  `concat_single`/`all_of_single`/`any_of_single` still prove themselves against
+  the positional `mconcat_single(append, …)`, which only typechecks because the
+  respelled folds are *the same terms*. `mconcat` keeps its linked slot and its
+  `op as ∙`; `mconcat_single` keeps its plain positional parameter.
+- **What the grammar still says.** `Parser::op_symbol_arg` is called from
+  `call_args` alone, so a bare symbol is writable in an argument slot and
+  nowhere else — `let g: Bool -> Bool -> Bool = &&;` is a parse error. The
+  resolver takes no position test all the same, which is what keeps it one rule
+  with no flag; the two halves are pinned together by a test so they cannot
+  drift.
+
+- **Measurements**, release, ulimit-wrapped, best of three. The same binary on
+  the *old* and *new* `lib/std/algebra.hthr`: **0.291 s → 0.290 s**, so the
+  respelling is free; `lib/list_algos.hthr` 0.600 s, which uses no bare symbol
+  in an argument slot at all and sits in §12.7's band, so the resolver change
+  is free too.
+
+Suite 1432 → 1439.

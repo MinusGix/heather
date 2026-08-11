@@ -13,7 +13,9 @@
 // A `designation` says what an operator SYMBOL means at a carrier
 // (docs/operators-onto-classes-design.md), never which structure a carrier
 // has. The symbol is a spelling of the index, so `sum_all` and `mconcat` are
-// one fold reached two ways.
+// one fold reached two ways. Applied, a symbol reads its carrier off its
+// operand; passed — `mconcat(++, xss)` — off the carrier the position expects
+// (docs/bare-symbol-checking-carrier-design.md). One sentence, two directions.
 
 import bool;
 import nat;
@@ -151,6 +153,9 @@ designation || at Bool := or
 // The generic entry, at an **open** element type: `xs ++ ys` is concatenation
 // at every `List<A>`, keyed on the head exactly as `instance<A> Monoid<List<A>>`
 // is. `++` has no arithmetic fallback, so this row is the whole of its meaning.
+// It is also what `concat`'s `mconcat(++, xss)` below reads: there the symbol
+// is passed rather than applied, and the carrier `List<A>` arrives from the
+// slot's own type — the open-carrier case of the same row.
 designation<A> ++ at List<A> := append
 
 // ---------------------------------------------------------------------------
@@ -242,17 +247,24 @@ fn sum_all<A: Monoid(+)>(xs: List<A>) -> A { mconcat(+, xs) }
 // backchaining through `instance<A> Monoid<List<A>>(append)`.
 fn sum(ns: List<Nat>) -> Nat { sum_all(ns) }
 
-fn concat<A>(xss: List<List<A>>) -> List<A> { mconcat(append, xss) }
+// The monoid here is at `List<A>`, which is no tyvar, so no constraint slot
+// could ever name a symbol for it — and yet `++` is passed bare, because the
+// slot's own type says the carrier is `List<A>` and the generic designation
+// answers there (docs/bare-symbol-checking-carrier-design.md). Same term as
+// `mconcat(append, xss)`, which is what `concat_single` below still proves.
+fn concat<A>(xss: List<List<A>>) -> List<A> { mconcat(++, xss) }
 
-// The `Bool` folds are NOT `sum_all`: `+` means nothing at `Bool`, so each
-// names its operation positionally, which costs one word and is legal forever
-// (design §4.1). There is no `&&`-fold beside them — a second declaration of
-// the same fold under a second symbol is duplication. The pair side by side is
-// the sentence that nothing was nominated: two structures at one carrier, both
-// registered, both reachable, neither preferred.
-fn any_of(bs: List<Bool>) -> Bool { mconcat(or, bs) }
+// The `Bool` folds are still NOT `sum_all` — `+` means nothing at `Bool` — but
+// each now writes its own symbol, and the bare symbol takes its meaning from
+// the carrier the slot expects (`Bool`), not from any structure being preferred
+// there. There is still no third fold beside them: a second declaration of the
+// same fold under a second symbol is duplication. Side by side they are the
+// sentence that nothing was nominated — two symbols, two structures, one
+// carrier, both registered, both reachable, neither the default. The positional
+// spelling stays legal forever, and the `_single` lemmas below still use it.
+fn any_of(bs: List<Bool>) -> Bool { mconcat(||, bs) }
 
-fn all_of(bs: List<Bool>) -> Bool { mconcat(and, bs) }
+fn all_of(bs: List<Bool>) -> Bool { mconcat(&&, bs) }
 
 // The class lemma at three carriers. None re-proves anything: each is
 // `mconcat_single` with the dictionary found through the registry, and the two

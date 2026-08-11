@@ -2042,7 +2042,7 @@ impl Elaborator {
                 // (docs/operators-onto-classes-design.md §4), and then every
                 // reading below applies to what it named: `Le(n, m)` is the
                 // record-at-its-value-parameters road it always was.
-                if let Some(rewritten) = self.op_rewrite(cx, e)? {
+                if let Some(rewritten) = self.op_rewrite(cx, e, None)? {
                     let ty = Ty { kind: TyKind::OfExpr(Box::new(rewritten)), span: ty.span };
                     return self.elab_ty(cx, &ty);
                 }
@@ -2219,7 +2219,12 @@ impl Elaborator {
         hint: Option<(&str, &str)>,
         skel: Option<&Skel>,
     ) -> R<Term> {
-        if let Some(rewritten) = self.op_rewrite(cx, e)? {
+        // Checking position, so rung 2 has its second source: a bare symbol
+        // resolves at the carrier this type's first domain names
+        // (docs/bare-symbol-checking-carrier-design.md §3.1). The expected type
+        // is already in hand one line above the rewrite, and has been since the
+        // operators round — nothing is plumbed from a call site.
+        if let Some(rewritten) = self.op_rewrite(cx, e, Some(expected))? {
             return self.elab_check_skel(cx, &rewritten, expected, lvl, hint, skel);
         }
         match &e.kind {
@@ -2656,7 +2661,15 @@ impl Elaborator {
         // An operator symbol resolves to a name *first*, and then this whole
         // function is the path the written name already took
         // (docs/operators-onto-classes-design.md §4).
-        if let Some(rewritten) = self.op_rewrite(cx, e)? {
+        //
+        // `None`, deliberately, and not this function's `expected`: that one is
+        // the expected type of a *call's result*, reached only from
+        // `elab_check_skel`'s inference fallback — i.e. only after the rewrite
+        // at the top of `elab_check_skel` has already run. A symbol arrives
+        // here unrewritten exactly when the position is genuinely inference,
+        // which is the whole of what "a bare symbol has no carrier" still means
+        // (docs/bare-symbol-checking-carrier-design.md §5).
+        if let Some(rewritten) = self.op_rewrite(cx, e, None)? {
             return self.elab_infer_at(cx, &rewritten, expected);
         }
         match &e.kind {
@@ -4888,29 +4901,63 @@ impl Elaborator {
         )
     }
 
+    // The clause a diagnostic uses to say which of rung 2's two sources the
+    // carrier came from (docs/bare-symbol-checking-carrier-design.md §6).
+    const FROM_OPERAND: &'static str = "the carrier of its left operand";
+    const FROM_EXPECTED: &'static str = "the carrier this position expects";
+
     /// The name an operator symbol means here — the three-rung ladder of
-    /// docs/operators-onto-classes-design.md §4.
+    /// docs/operators-onto-classes-design.md §4, as
+    /// docs/bare-symbol-checking-carrier-design.md widens rung 2.
     ///
     /// `args` is the symbol's operand list, empty for a bare symbol between
-    /// delimiters (`Monoid(+)`), in which case only rungs 1 and 3 can fire:
-    /// with no operand there is no carrier to designate at.
-    fn resolve_op_name(&self, cx: &Cx, sym: &str, args: &[Expr], span: Span) -> R<String> {
+    /// delimiters (`Monoid(+)`, `mconcat(++, xss)`). Rung 2 takes its carrier
+    /// from the operand when there is one and from `expected` — the first
+    /// domain of the type this **checking** position asks for — when there is
+    /// not. Unapplied is not the same as carrier-less: in an *inference*
+    /// position (`expected` is `None`) there is genuinely nothing to probe,
+    /// and only rungs 1 and 3 can fire.
+    fn resolve_op_name(
+        &self,
+        cx: &Cx,
+        sym: &str,
+        args: &[Expr],
+        expected: Option<&Type>,
+        span: Span,
+    ) -> R<String> {
         // 1. A constraint binder that named the symbol. Innermost first, and
         //    before any type is looked at: inside `<A: Monoid(+)>` the `+` is
         //    the bound index and nothing else, at every carrier.
         if let Some((_, n)) = cx.op_locals.iter().rev().find(|(s, _)| s == sym) {
             return Ok(n.clone());
         }
-        // 2. The designation at the operand's carrier. Probed only when the
-        //    symbol has designations at all, so a file that declares none
-        //    pays one failed lookup in a usually-empty map and no inference.
+        // 2. The designation at the carrier — the operand's, or the one this
+        //    position expects. Probed only when the symbol has designations at
+        //    all, so a file that declares none pays one failed lookup in a
+        //    usually-empty map and no inference.
+        //
+        //    The two sources are exclusive, and this is the one place that
+        //    says so: only a **bare** symbol reads the expected type. An
+        //    applied one has an operand, which is the more specific evidence —
+        //    the value the operation will be applied to, where the expected
+        //    type is only what the surrounding position will accept — and
+        //    admitting a second source there would put something new in the
+        //    path of every operator expression that elaborates today
+        //    (docs/bare-symbol-checking-carrier-design.md §4.2).
         let mut uncovered_carrier = None;
-        if !args.is_empty() && self.designations.keys().any(|(s, _)| s == sym) {
-            if let Some(head) = self.op_carrier_head(cx, args, span) {
+        if self.designations.keys().any(|(s, _)| s == sym) {
+            let probed = if args.is_empty() {
+                expected
+                    .and_then(|t| self.expected_carrier_head(cx, t, span))
+                    .map(|h| (h, Self::FROM_EXPECTED))
+            } else {
+                self.op_carrier_head(cx, args, span).map(|h| (h, Self::FROM_OPERAND))
+            };
+            if let Some((head, from)) = probed {
                 if let Some(op) = self.designated(sym, &head) {
                     return Ok(op);
                 }
-                uncovered_carrier = Some(head);
+                uncovered_carrier = Some((head, from));
             }
         }
         // 3. The symbol's fallback name, resolved as it always was. `&&`,
@@ -4926,9 +4973,10 @@ impl Elaborator {
                 || cx.names.iter().any(|n| n == fb)
                 || cx.aliases.iter().any(|a| a.name == fb))
         {
-            if let Some(head) = uncovered_carrier {
+            if let Some((head, from)) = &uncovered_carrier {
                 let note = format!(
-                    "`{sym}` has no designation at `{head}`, so it used its fallback name `{fb}`"
+                    "`{sym}` has no designation at `{head}` ({from}), so it used its \
+                     fallback name `{fb}`"
                 );
                 let mut notes = self.op_fallback_notes.borrow_mut();
                 if !notes.contains(&note) {
@@ -4947,11 +4995,20 @@ impl Elaborator {
             .map(|((_, h), d)| format!("`{h}` (`{}`)", d.op))
             .collect::<Vec<_>>();
         known.sort();
+        // The carrier rung 2 tried, where it got one from either source. Naming
+        // it is the difference between "covers this carrier" — which names no
+        // carrier at all — and a sentence the reader can check against the
+        // table (docs/bare-symbol-checking-carrier-design.md §6).
+        let tried = match &uncovered_carrier {
+            Some((head, from)) => {
+                format!("nothing designates `{sym}` at `{head}` — {from} —")
+            }
+            None => format!("no `designation {sym} at …` covers this carrier,"),
+        };
         err(
             format!(
                 "`{sym}` has no meaning here: no constraint binder named it \
-                 (`<A: Monoid({sym})>`), no `designation {sym} at …` covers this \
-                 carrier, and {}. {}",
+                 (`<A: Monoid({sym})>`), {tried} and {}. {}",
                 match fb {
                     Some(fb) => format!("its fallback name `{fb}` is not in scope"),
                     None => format!("`{sym}` has no fallback name"),
@@ -5005,6 +5062,25 @@ impl Elaborator {
         self.type_namespace(cx, &ty, span)
     }
 
+    /// The head of the carrier a **checking position** is asking for — rung
+    /// 2's second source (docs/bare-symbol-checking-carrier-design.md §3, §4).
+    ///
+    /// The expected type's **first domain**, which is where the left operand
+    /// would have sat: at `A -> A -> A` with `A := List<B>` it is `List`. That
+    /// is the same fact `op_carrier_head` gets by inferring an operand,
+    /// arriving from the other side — and it costs no inference at all, since
+    /// there is no operand to infer.
+    ///
+    /// A proposal like its applied twin, and declining is cheap: an expected
+    /// type that is no `Π`, or a domain with no nominal head — a variable, a
+    /// meta, `Type` — answers `None` through `type_namespace`, so a domain
+    /// that still mentions an implicit needs no separate meta test, and the
+    /// ladder simply goes on to the fallback rung.
+    fn expected_carrier_head(&self, cx: &Cx, expected: &Type, span: Span) -> Option<String> {
+        let Type::Pi { dom, .. } = self.whnf(cx, expected, span).ok()? else { return None };
+        self.type_namespace(cx, &dom, span)
+    }
+
     /// An operator symbol, bare or applied, rewritten to the ordinary
     /// application it means. `None` for every expression that is not one,
     /// which is every expression written before this round.
@@ -5012,8 +5088,15 @@ impl Elaborator {
     /// A *rewrite* and not an elaboration arm on purpose: everything
     /// downstream — checking position, implicit insertion, spilling, the
     /// call diagnostics — is the path a written name already takes, and a
-    /// symbol earns none of it separately.
-    fn op_rewrite(&self, cx: &Cx, e: &Expr) -> R<Option<Expr>> {
+    /// symbol earns none of it separately. That is also what makes rung 2's
+    /// checking-position source free of a second lesson: the name it produces
+    /// is *checked* against `expected`, so a generic `append` gets its element
+    /// type from the same domain the carrier came from
+    /// (docs/operators-onto-classes-design.md §12.2).
+    ///
+    /// `expected` is the checking position's type where there is one, and
+    /// `None` at the two inference sites.
+    fn op_rewrite(&self, cx: &Cx, e: &Expr, expected: Option<&Type>) -> R<Option<Expr>> {
         let (sym, args, explicit) = match &e.kind {
             ExprKind::OpSymbol(s) => (s, None, false),
             ExprKind::App { head, args, explicit } => match &head.kind {
@@ -5022,7 +5105,8 @@ impl Elaborator {
             },
             _ => return Ok(None),
         };
-        let name = self.resolve_op_name(cx, sym, args.map_or(&[][..], |a| a), e.span)?;
+        let name =
+            self.resolve_op_name(cx, sym, args.map_or(&[][..], |a| a), expected, e.span)?;
         let head = Expr { kind: ExprKind::Var(name), span: e.span };
         Ok(Some(match args {
             None => head,
@@ -6749,6 +6833,12 @@ impl Elaborator {
     ///   and the kernel rejects a term nobody meant). Checking position is
     ///   where its instantiation is decidable (the §5.3 route), so at a
     ///   meta-bearing domain it waits for one.
+    /// - a **bare operator symbol** that no binder named and that some
+    ///   designation covers ([`Self::symbol_needs_a_carrier`]). The same
+    ///   sentence as the entry above, at the notation layer: `+` infers to
+    ///   `add`, whose type would pin a `Bool` call's carrier to `Nat`, so at a
+    ///   meta-bearing domain it waits for the carrier a later argument
+    ///   produces (docs/bare-symbol-checking-carrier-design.md §3.2).
     ///
     /// `Num` is deliberately **excluded**: it infers at `Nat` today and that
     /// default is load-bearing for the suite (`xs[2]`'s `Fin` reading exists
@@ -6756,6 +6846,16 @@ impl Elaborator {
     fn is_checking_only(&self, cx: &Cx, e: &Expr) -> bool {
         match &e.kind {
             ExprKind::Hole(_) | ExprKind::AutoRefl | ExprKind::VecLit(_) => true,
+            // A bare operator symbol that needs a carrier
+            // (docs/bare-symbol-checking-carrier-design.md §3.2, §4.3). Same
+            // sentence as the bare implicit prefix two arms down: it *can*
+            // infer — `+` infers to `add` — but only at a shape that
+            // mis-teaches, since `add`'s type would pin the call's carrier to
+            // `Nat` at a call whose carrier is `Bool`. Checking position is
+            // where its resolution is decidable, so at a meta-bearing domain it
+            // waits for one, and the per-argument deferral is what hands it the
+            // carrier a later argument produced.
+            ExprKind::OpSymbol(sym) => self.symbol_needs_a_carrier(cx, sym),
             ExprKind::Refl => !self.shadowed(cx, "refl"),
             ExprKind::Lam { binders, .. } => binders.iter().any(|b| b.ty.is_none()),
             ExprKind::Var(name) => {
@@ -6782,6 +6882,27 @@ impl Elaborator {
             },
             _ => false,
         }
+    }
+
+    /// A **bare** operator symbol whose meaning only a carrier can settle —
+    /// the gate on [`Self::is_checking_only`]'s new arm
+    /// (docs/bare-symbol-checking-carrier-design.md §4.3).
+    ///
+    /// Two conjuncts, both load-bearing.
+    ///
+    /// Rung 1 first, so a symbol this declaration's own binder named is never
+    /// deferred: `sum_all`'s `mconcat(+, xs)` resolves without looking at a
+    /// type and elaborates through exactly the code it did before.
+    ///
+    /// And the symbol must be designated *somewhere*, which is the growth
+    /// invariant's guard and the very guard rung 2 already carries. Without it
+    /// a file that declares no designation for a symbol would stop inferring
+    /// it by the fallback — and the fallback's own type is sometimes what
+    /// teaches the call its carrier — so a program written before this round
+    /// could start refusing. With it, such a file runs byte-identical code.
+    fn symbol_needs_a_carrier(&self, cx: &Cx, sym: &str) -> bool {
+        !cx.op_locals.iter().any(|(s, _)| s == sym)
+            && self.designations.keys().any(|(s, _)| s == sym)
     }
 
     /// Application with implicit-argument insertion
@@ -7150,6 +7271,23 @@ impl Elaborator {
                          the call fully explicitly (`@{name}(…)`)"
                     )
                 };
+                // A deferred bare symbol says why it wanted the type at all,
+                // and names the spelling that does not
+                // (docs/bare-symbol-checking-carrier-design.md §6(c)). The
+                // generic message below is true of it but explains nothing:
+                // the reader wrote a notation, not a hole.
+                if let ExprKind::OpSymbol(sym) = &ob.expr.kind {
+                    return err(
+                        format!(
+                            "`{sym}` is a bare operator symbol, so it needs the carrier \
+                             this position expects — and the type of `{name}`'s \
+                             parameter `{p}` still mentions an implicit that could not \
+                             be inferred here. Name the operation instead of the \
+                             symbol, or {escape}"
+                        ),
+                        ob.expr.span,
+                    );
+                }
                 return err(
                     format!(
                         "this argument of `{name}` was deferred — the type of its \

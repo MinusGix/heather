@@ -28,3 +28,7 @@ implicitness later touches every caller.
 
 - **[[traits]]** owns constraint slots and instance search. Assumed here: only
   that the linked slot `Monoid(op)` works unchanged when `op` is implicit.
+
+## Log
+
+- 2026-08-11: bare-symbol-checking-carrier landed 2026-08-11; the policy-split lean (computational explicit, lemmas may infer) reads the same but the computational side's explicitness is now often a symbol rather than a positional name. Not decided here.

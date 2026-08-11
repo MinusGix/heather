@@ -470,14 +470,18 @@ fn a_bare_symbol_between_delimiters_is_the_index() {
     ok("
         theorem one_term<A: Mon(+)>(xs: List<A>): sum_all(xs) = fold(+, xs) { refl }
     ");
-    // The one argument position where a bare symbol *does* have a carrier is
-    // the qualified name, which wrote it: `Bool::Mon(+)` is the `or` monoid.
+    // One place a bare symbol has a carrier is the qualified name, which wrote
+    // it: `Bool::Mon(+)` is the `or` monoid.
     ok("theorem d(): Bool::Mon(+).unit = False { refl }");
-    // Elsewhere a bare symbol has no operand and so no carrier (§4): in an
-    // ordinary argument it can only be rung 1 or the fallback, and the
-    // boundary is pinned rather than assumed away.
-    let e = bad("theorem c(bs: List<Bool>): fold(+, bs) = fold(or, bs) { refl }");
-    assert!(!e.is_empty(), "{e}");
+    // The other is a **checking** position, whose expected type names the
+    // carrier the slot is asking for
+    // (docs/bare-symbol-checking-carrier-design.md). `fold`'s `op` parameter is
+    // `A -> A -> A` with `A := Bool` pinned by `bs`, so the bare `+` resolves
+    // at `Bool` — where the table says `or` — and this used to be a refusal.
+    ok("theorem c(bs: List<Bool>): fold(+, bs) = fold(or, bs) { refl }");
+    // The boundary is now **inference** position, which is the whole of what
+    // "a bare symbol has no carrier" still means — pinned in its own test
+    // below (`the_boundary_is_inference_position`).
 }
 
 /// The receiver and type-projection sugars still work **under** a symbol
@@ -543,6 +547,11 @@ fn a_doubled_symbol_has_no_fallback_rung() {
     assert!(e.contains("has no fallback name"), "{e}");
     assert!(e.contains("`Bool`"), "{e}");
     assert!(e.contains("bool::and"), "{e}");
+    // And it names the carrier it tried, rather than saying "this carrier"
+    // and naming none (docs/bare-symbol-checking-carrier-design.md §6(a)):
+    // here rung 2 probed the left operand.
+    assert!(e.contains("nothing designates `&&` at `Nat`"), "{e}");
+    assert!(e.contains("the carrier of its left operand"), "{e}");
 
     // In a file with no designations anywhere — where `+` still means `add`
     // by the fallback rung — `&&` means nothing at all, and says so.
@@ -554,10 +563,12 @@ fn a_doubled_symbol_has_no_fallback_rung() {
     };
     assert!(e.contains("designates nothing anywhere"), "{e}");
 
-    // A bare `&&` between delimiters has no operand and so no carrier: only
-    // rung 1 could answer, and without a binder nothing does.
-    let e = bad("theorem c(bs: List<Bool>): fold(&&, bs) = fold(and, bs) { refl }");
-    assert!(!e.is_empty(), "{e}");
+    // A bare `&&` between delimiters has no operand, but in a **checking**
+    // position it has a carrier all the same — the one the slot's own type
+    // names — so this resolves at `Bool` and used to be a refusal
+    // (docs/bare-symbol-checking-carrier-design.md). What stays a refusal is
+    // the rung that was missing: a carrier the table does not cover, above.
+    ok("theorem c(bs: List<Bool>): fold(&&, bs) = fold(and, bs) { refl }");
 }
 
 // -- list append (issues/list-append-symbol.md) ----------------------------
@@ -584,6 +595,145 @@ fn append_symbol_has_no_fallback_rung() {
     assert!(e.contains("`++` has no meaning here"), "{e}");
     assert!(e.contains("has no fallback name"), "{e}");
     assert!(e.contains("`List`"), "{e}");
+}
+
+// -- the checking-position carrier -----------------------------------------
+// docs/bare-symbol-checking-carrier-design.md §10. A bare symbol has no
+// operand, so rung 2 used to be unreachable for it; in a **checking** position
+// the expected type's first domain is the carrier the slot is asking about,
+// which is the same fact the left operand supplies, arriving from the other
+// side.
+
+/// The headline, at three carriers and pinned by `refl` against the positional
+/// spelling, so the symbol and the written name are one term.
+///
+/// Two of the three are the **concrete** carrier `Bool` under two different
+/// symbols — which is also the statement that neither designation answered for
+/// the other — and the third is an **open** element type, the axis-2 case and
+/// the only one that can see whether the resolved name is *checked* against the
+/// slot's domain rather than inferred (a generic `append`'s element type comes
+/// from that domain and nowhere else — §12.2 of the operators design).
+#[test]
+fn a_bare_symbol_resolves_at_the_carrier_the_position_expects() {
+    ok("
+        theorem conj(bs: List<Bool>): fold(&&, bs) = fold(and, bs) { refl }
+        theorem disj(bs: List<Bool>): fold(||, bs) = fold(or, bs) { refl }
+        theorem open_elem<A>(xss: List<List<A>>): fold(++, xss) = fold(append, xss) { refl }
+        // A **literal** scrutinee, which has to compute all the way, beside the
+        // neutral `bs` above.
+        theorem lit(): fold(&&, Cons(True, Cons(True, Nil))) = True { refl }
+        theorem lit2(): fold(||, Cons(False, Cons(True, Nil))) = True { refl }
+    ");
+    // The same symbol at the same carrier under the *other* designation is not
+    // interchangeable: `&&` is `and`, never `or`.
+    let e = bad("theorem no(bs: List<Bool>): fold(&&, bs) = fold(or, bs) { refl }");
+    assert!(!e.is_empty(), "{e}");
+}
+
+/// The grammar, not the resolver, is what bounds where this can be written: a
+/// bare operator token is read as a symbol **only** in argument-initial
+/// position (`Parser::op_symbol_arg`, called from `call_args` alone), which is
+/// the rule §4 of the operators design reserved against a future prefix
+/// operator. So `let g: Bool -> Bool -> Bool = &&;` is a *parse* error, and an
+/// argument slot is the one place a bare symbol appears at all.
+///
+/// That is why the resolver's rule is stated without a position test — it
+/// reads whatever expected type it is handed — while every case that can be
+/// *written* is an argument slot. Pinned here so the two halves cannot drift.
+#[test]
+fn a_bare_symbol_is_grammatical_only_in_an_argument_slot() {
+    let e = bad("fn conj2(x: Bool, y: Bool) -> Bool { let g: Bool -> Bool -> Bool = &&; g(x, y) }");
+    assert!(e.contains("parse error"), "{e}");
+    let e = bad("fn conj3(x: Bool, y: Bool) -> Bool { let g = &&; g(x, y) }");
+    assert!(e.contains("parse error"), "{e}");
+}
+
+/// A carrier with **no nominal head** — the slot's domain is the caller's own
+/// type variable — declines rung 2 rather than guessing, and the ladder goes on
+/// to the fallback, which `&&` does not have. One code path with "the expected
+/// type is no `Π`": `type_namespace` answers `None` for both, which is also why
+/// a domain that still mentions an implicit needs no separate test.
+#[test]
+fn a_carrier_with_no_head_declines_the_probe() {
+    let e = bad("fn g<A>(xs: List<A>) -> A { fold(&&, xs) }");
+    assert!(e.contains("`&&` has no meaning here"), "{e}");
+    // No carrier was probed at all, so the refusal keeps its carrier-less
+    // wording rather than inventing one.
+    assert!(e.contains("no `designation && at …` covers this carrier"), "{e}");
+    // The contrast that makes it a control rather than a coincidence: the same
+    // call at `List<A>`, whose head *is* nominal, resolves.
+    ok("fn h<A>(xss: List<List<A>>) -> List<A> { fold(++, xss) }");
+}
+
+/// The negative control the design names: a **carrier with no designation**.
+/// The no-fallback refusals stay refusals, and the refusal now names the
+/// carrier it tried — which is the half that was missing, since "covers this
+/// carrier" named none.
+#[test]
+fn a_carrier_with_no_designation_still_refuses() {
+    let e = bad("theorem t(ns: List<Nat>): fold(&&, ns) = fold(add, ns) { refl }");
+    assert!(e.contains("`&&` has no meaning here"), "{e}");
+    assert!(e.contains("nothing designates `&&` at `Nat`"), "{e}");
+    assert!(e.contains("the carrier this position expects"), "{e}");
+    assert!(e.contains("has no fallback name"), "{e}");
+    // And it still lists where the symbol *does* mean something.
+    assert!(e.contains("`Bool`"), "{e}");
+
+    // A symbol that *has* a fallback takes it at an uncovered carrier, which is
+    // rung 3 keeping its guarantee: `++` is designated only at `List`, so at
+    // `Bool` the ladder falls through — and `++` has no fallback either, so it
+    // refuses naming `Bool`.
+    let e = bad("theorem u(bs: List<Bool>): fold(++, bs) = fold(and, bs) { refl }");
+    assert!(e.contains("nothing designates `++` at `Bool`"), "{e}");
+}
+
+/// Rung 1 shadows rung 2, **discriminatingly**: the binder names `||`, the call
+/// instantiates it at `and`, and the carrier is `Bool` — where the table says
+/// `||` is `or`. If the expected carrier were consulted the fold would be `or`;
+/// it is `and`, because inside a declaration a symbol its own binder named *is*
+/// the bound index, at every carrier.
+///
+/// The existing `Mon(++)`-at-`Nat` test cannot make this point: nothing
+/// designates `++` at `Nat`, so rung 2 has no answer there to lose with.
+#[test]
+fn a_binder_shadows_the_expected_carrier() {
+    ok("
+        fn fold_or<A: Mon(||)>(xs: List<A>) -> A { fold(||, xs) }
+        theorem shadowed(bs: List<Bool>):
+            @fold_or(and, Bool::Mon(and), bs) = fold(and, bs) { refl }
+    ");
+}
+
+/// A deferred symbol that never gets a carrier is reported as a *symbol*, not
+/// as a nameless deferred argument: the reader wrote a notation, and the
+/// message says which spelling would have worked.
+///
+/// The callee here has no solver parameter, deliberately: at `fold` the blocked
+/// `Mon<?A>(?op)` goal is reported first by the value-slot refusal, which is
+/// its own (older, and better) message about the same situation.
+#[test]
+fn a_symbol_with_no_carrier_in_sight_says_so() {
+    let e = bad("
+        fn apply2<A>(f: A -> A -> A, x: A) -> A { f(x, x) }
+        fn g(b: Bool) -> Bool { let r = apply2(&&, ?); b }
+    ");
+    assert!(e.contains("`&&` is a bare operator symbol"), "{e}");
+    assert!(e.contains("Name the operation instead of the symbol"), "{e}");
+}
+
+/// The growth invariant, at the new gate. A bare symbol is only ever deferred
+/// when it is designated *somewhere*; in a file that designates nothing it
+/// still infers by the fallback rung, and the fallback's own type is what
+/// teaches the call its carrier — which is the shape that would have started
+/// refusing had the gate been left off.
+#[test]
+fn an_undesignated_symbol_is_never_deferred() {
+    bare("
+        fn add(a: Nat, b: Nat) -> Nat { match b { Zero => a, Succ(k) => Succ(add(a, k)) } }
+        fn apply2<A>(f: A -> A -> A, x: A) -> A { f(x, x) }
+        theorem t(n: Nat): apply2(+, n) = add(n, n) { refl }
+    ")
+    .expect("with no designations, a bare `+` still infers to the fallback");
 }
 
 /// Unindexed classes are untouched, and so is every operator expression that

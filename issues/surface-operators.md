@@ -3,7 +3,7 @@ title: "Operators, methods, and calc for the surface"
 status: closed
 labels: [frontend,syntax]
 created: 2026-07-23
-updated: 2026-08-09
+updated: 2026-08-11
 ---
 
 The ergonomics layer the sketches use freely and stage 1 lacks
@@ -41,3 +41,4 @@ call-style spelling.
 - 2026-07-26: The deferral is now fully discharged: [[constructors-as-function-values]] landed, and 'p.cong(Succ)' elaborates as written (crates/elab/tests/constructor_values.rs::cong_at_succ_by_name). Note which half did it — 'Succ' became an ordinary resolvable name (a lambda at Pi(Nat).Nat), which is what reaches the INFERENCE position that cong's implicit endpoints put its first argument in; the eta-expansion half only covers checking positions. So '.cong(Wrap)' for a declared constructor is still not writable.
 - 2026-07-27: Correction to this issue's item (2): the method desugaring no longer puts the receiver LAST, and the stated reason for that was never load-bearing -- implicit insertion is name-directed and indifferent to explicit-argument order, so the two unary examples given (p.sym()) could not distinguish the orders. As of 2026-07-27 the receiver fills the callee's `self` parameter, defaulting to the first explicit one, so p.trans(q) means trans(p, q). See [[method-receiver-position]].
 - 2026-08-09: The 'fixed name-directed resolution does for now' stopgap is retired: symbols now resolve by a three-rung ladder (constraint binder -> designation at the operand's carrier -> the old fixed name as the last rung), docs/operators-onto-classes-design.md §4. The old table IS rung 3, so every pre-round file runs the same code — pinned by growth-invariant tests in operators.rs.
+- 2026-08-11: Residue from bare-symbol-checking-carrier (2026-08-11): the deferral cliff. A symbol designated somewhere whose argument slot never unblocks (mconcat(++, Nil)-shaped — no later argument pins the carrier) now refuses with a message naming both workable spellings, where + previously inferred add and *taught* the carrier from the fallback's type. The refusal is the better answer (the taught carrier could be wrong, which is the argument is_checking_only makes everywhere else), but it is a behaviour change, confined to files that declare a designation for that symbol.
