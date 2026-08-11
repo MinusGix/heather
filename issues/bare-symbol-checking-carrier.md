@@ -48,3 +48,7 @@ in [[mconcat-single-implicit-op]] — read better after this than before it.
 - **[[binder-symbol-as-notation]]** is adjacent but separate: `as` installs a
   spelling for a *declared* binder; this issue is about a *reference* with no
   binder at all.
+
+## Log
+
+- 2026-08-11: User review (2026-08-11): wanted. The framing to design toward — bare symbols in argument position make operators less magical, one unified presentation of "you can just talk about operators" whether applied, constrained, or passed. Acknowledged more complex than the respelling it enables; complexity budget is the probe-direction inversion already named above.
