@@ -310,6 +310,15 @@ The four axes, instantiated for this generator:
    natural first scope, and the blockers that reading enumerates (opaque
    globals, no oracle, no code equality, no context computation) gate the
    *later* stages (§8 item 1's cross-function calls onward), not this one.
+   **Landed 2026-08-11**
+   (`docs/certgen-transcriber-in-language-design.md`), with one correction
+   to the sentence above: "variables" overstated — `elim^Trm` *walks*
+   variables but cannot *distinguish* them (the `tm_var` branch abstracts
+   over the variable at layer v), so a fifth enumerable blocker gates this
+   stage too, closed Rust-side by the marker convention (occurrences
+   renamed to closed level-carrying redexes before boxing). Transcription
+   moved in-language; the certificate fold stays here for the calculus
+   reason that doc's §5 records.
 
 ## 9. Acceptance sketch — **landed 2026-08-02**, all five items
 
@@ -364,3 +373,8 @@ wrong; the hand-run always had it right.
   specified normatively here or read off the emitted `add` (acceptance
   item 2 forces them to agree); leaning: the code comments own the layout,
   this doc owns only the lexical/closed asymmetry it must respect.
+  *(Corrected 2026-08-11: with two transcribers the layout is an
+  **interface**, not a comment — `lib/certgen_code.hthr`'s header states the
+  two conventions and their meeting point, and the byte-identical-emission
+  cross-check is what enforces agreement.
+  `docs/certgen-transcriber-in-language-design.md` §§4–5.)*

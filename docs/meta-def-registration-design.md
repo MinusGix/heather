@@ -557,3 +557,72 @@ generalized, two call sites shortened.
   from `issues/quotation-stage-artifacts.md`'s candidate list.
 - **Per-template evaluation caching** — `issues/meta-hook-evaluation-cost.md`
   lever (1), whose natural home is the registration entry this round creates.
+
+---
+
+## 11. Extension, 2026-08-11: **analyzer slots**
+
+*Landed by the fragment-transcriber round
+(`docs/certgen-transcriber-in-language-design.md`); recorded here because the
+seam is this document's, not that one's.*
+
+This document's slots are **template** slots: a `meta fn` returning
+`Code(g ⊢ T)`, applied to the use site's context and then to the slot's
+ingredients down its *payload's* Π spine. The first analysis-stage artifact is
+not that shape and cannot be. A transcriber consumes code and returns a
+**value**, because its `match code` motive has to be context-free: a motive
+`Code(g ⊢ T)` would give the `lam` and `elim_nat`-step branches recursive
+results at *extended* contexts, and nothing brings a `Code((g, x) ⊢ T)` back
+down to `g`. So the analysis stage's artifacts return data, take their
+arguments as their own Π binders, and have no payload at all.
+
+Left unextended, the seam had two ways to serve them, and both were wrong.
+Routing by name is what §2 retired. Widening `ITy` until it can spell
+`Code(g ⊢ Nat)` and a library inductive re-states the whole problem: an
+inductive is *inlined*, not a Ψ global, so there is nothing for a Rust-built
+type to reference.
+
+**The extension.** A second kind of slot — an **analyzer slot** — with the same
+`for family.name` clause, the same closed Rust vocabulary, the same
+declaration-time loudness, the same one-template-per-slot rule, and the same
+not-a-soundness-gate stance. Two things differ:
+
+1. **Its contract is a whole signature, not a payload spine.** The spec carries
+   a `meta fn` signature *written in Heather*, elaborated at registration time
+   in the declaring file's scope (`slots::AnalyzerSpec::signature`,
+   `Elaborator::register_analyzer`); registration requires the declared
+   signature to be **convertible** with it. A name the file has not declared
+   fails there, loudly, with the slot named.
+2. **The caller builds the spine.** §3's crux is that the Π order must be
+   enforced somewhere the caller can rely on. For a template that is the
+   payload read-off, because a template's order is genuinely free. For an
+   analyzer, whole-signature convertibility fixes the order *outright* — there
+   is no permutation left to discover — so the invoking Rust applies the
+   arguments in the slot's canonical order and consults nothing. That is §3's
+   answer restated for a shape where the answer is stronger, not an exception
+   to it.
+
+The vocabulary gains exactly one entry, `certgen.transcribe`, and the round
+that added it added one client. Generalizing further waits for a second
+customer; **user-declared** analyzer slots are deferred with user-declared
+slots generally (§10, first bullet) and for the same reason — there is no Rust
+type to check the contract against.
+
+Two smaller consequences worth having written down, both from the same round:
+
+- A `meta fn` may now take ordinary program-layer parameters and return
+  ordinary data (`quote.rs`'s `Sig::Local`). The kernel always allowed it —
+  Π is layer-generic and a layer-c global is referenceable at m (`i' ≤ i`) —
+  and only the surface said otherwise.
+- **Elaborator-held definitions go stale, and now say so.** A `MetaDef` is not
+  in Ψ, so nothing rescopes it when Ψ grows, while a `GlobalVar` counts from
+  Ψ's end — so a definition that *references* a global means something
+  different at every later use site. `MetaDef` records `|Ψ|` at registration
+  and `MetaDef::at` shifts by the growth. A live bug when the first analyzer
+  landed; invisible before, because a pure-quotation template references no
+  globals.
+- A `meta fn` body may now name an ordinary global, inside a quote payload or
+  out of it. The obstacle was never the layer but the index arithmetic: a
+  `meta fn`'s own Ψ-extending binders sit above Ψ, and a committed global has
+  to be shifted past them (and past a `match code` branch telescope's globals,
+  which the arm's elaboration pushes onto the same padding).

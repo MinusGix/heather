@@ -3021,7 +3021,7 @@ pub(crate) fn expr_mentions(e: &Expr, name: &str) -> bool {
         }
         // Binder-carrying forms: conservative, since their motives and arms
         // are where a self-reference would hide.
-        ExprKind::Match { .. } | ExprKind::J { .. } => true,
+        ExprKind::Match { .. } | ExprKind::MatchCode { .. } | ExprKind::J { .. } => true,
         // A block: conservative for the same reason, since its statements are
         // where a self-reference would hide (docs/let-and-blocks-design.md
         // §4.4). A false positive costs a rejection; a false negative would

@@ -1,0 +1,416 @@
+// The certifying generator's fragment transcriber. Design:
+// docs/certgen-transcriber-in-language-design.md §§3–4.
+//
+// Almost all of it is the *analysis*, and the analysis is ordinary
+// program-layer Heather: inductives and `fn`s, testable and provable like any
+// other library code. The layer-m part is the last block — one `match code`
+// whose arms are calls into the `ta_*` helpers below, claiming the
+// `certgen.transcribe` slot. That split is the artifact's point: the modal
+// layer contributes the traversal and nothing else.
+//
+// Elaborated on top of `lib/ir_v1.hthr`'s declarations prefix — `Ir`, `Refs`,
+// `Prog`, `Val` and `import nat;`'s `add`/`sub` come from there, so this file
+// declares no import and redeclares nothing.
+//
+// THE TWO CONVENTIONS THIS FILE JOINS, and nothing else states them together:
+//
+// 1. MARKERS (§1). Every bound-variable occurrence in the analyzed body
+//    arrives as a closed marker carrying the binder's de Bruijn LEVEL in
+//    birth order: parameters `0 … arity-1` (outermost Lam first), then the
+//    eliminator's field `arity`, then the induction hypothesis `arity+1`.
+//    A level `≥ arity+2` is a nested eliminator's binder — outside the
+//    fragment, so `TStuck`.
+//
+// 2. THE IR ENVIRONMENT (ir_v1 doc §3). A function body runs in the
+//    environment its arguments were gathered into, slot order: parameter `i`
+//    is at DISTANCE `i`, so its level in an environment of depth `d` is
+//    `d - 1 - i`. A match arm sees the matched value's fields on top, so the
+//    field is one deeper than the parameters.
+//
+// The two meet exactly once, in `dist` and its callers: a reference is
+// carried as a level all the way through composition and converted to a
+// distance only when the instruction it sits in is being rendered, at that
+// instruction's own environment depth. Everything else in this file is
+// bookkeeping over that one sentence. A mismatch here is a non-converging
+// IR — a refused certificate, never an unsound theorem (the generator is
+// untrusted; issues/certifying-generator.md).
+
+// ---------------------------------------------------------------------------
+// The data.
+
+// A reference inside a compiled prefix. `RLvl(l)` is a level in the arm's
+// environment; `RLoc(j)` is "the j-th instruction of my own prefix, counted
+// forward from the arm's base", which at base depth `base` is level
+// `base + j`. Prefixes are concatenated and re-based during composition, and
+// carrying the two kinds apart is what makes that a no-op on the references.
+inductive PRef { RLvl(lvl: Nat), RLoc(j: Nat) }
+
+inductive PRefs { QNil, QCons(r: PRef, rest: PRefs) }
+
+// A compiled instruction prefix, stored NEWEST-INSTRUCTION-FIRST: `PCon`'s
+// `rest` holds the instructions that run *before* it. Consing at the front is
+// what makes `ta_succ` constant-time and index-stable.
+//
+// `PSelf` is the structural self-call. Its argument list is not known here —
+// it depends on the recursion index the enclosing eliminator supplies — so it
+// is not stored; the renderer fills it (§4 called this a placeholder rewrite,
+// and there is no patch pass because the argument list is a function of
+// `arity` and `j` alone).
+inductive Pre {
+    PEnd,
+    PCon(tag: Nat, args: PRefs, rest: Pre),
+    PSelf(rest: Pre),
+}
+
+// The walker's accumulator, one per code node visited. `TNum` is a numeral
+// spine (a source literal, and a marker's payload); `TVarLeaf`/`TIdLam` exist
+// only to recognize a marker; `TExp` is an expression compiled to a prefix
+// plus the reference its value lands at, with `len` the prefix's length
+// carried so nothing has to compute it; `TBody` is a whole function body,
+// which only the eliminator produces. `TStuck` is the decline, and it
+// propagates — declining is total, not partial.
+inductive TA {
+    TStuck,
+    TNum(n: Nat),
+    TVarLeaf,
+    TIdLam,
+    TExp(pre: Pre, res: PRef, len: Nat),
+    TBody(body: Ir),
+}
+
+inductive TOut { TNo, TYes(body: Ir) }
+
+// ---------------------------------------------------------------------------
+// Arithmetic. `add` and `sub` are `nat`'s; `sub` is truncated subtraction and
+// curried (`sub(m)(n)` is `m - n`).
+
+// Three-way comparison, so the marker classification below is one match
+// instead of two `leb` calls whose second is only meaningful under the first.
+inductive Cmp { CLt, CEq, CGt }
+
+// Curried because both arguments descend together — the termination
+// discipline's standard shape (ir_v1's `lookup`, `nat`'s `sub`).
+fn nat_cmp(a: Nat) -> Nat -> Cmp {
+    match a {
+        Zero => λ (b: Nat) => match b { Zero => CEq, Succ(k) => CLt },
+        Succ(a2) => λ (b: Nat) => match b { Zero => CGt, Succ(b2) => nat_cmp(a2)(b2) },
+    }
+}
+
+// level `l` seen from an environment of depth `d`. Truncating subtraction
+// makes this total; every call below is in range, because a level reaching
+// here was minted for a binder that is live at `d`.
+fn dist(d: Nat, l: Nat) -> Nat { sub(sub(d)(1))(l) }
+
+// ---------------------------------------------------------------------------
+// Rendering: levels to distances against the layout the instructions are
+// actually emitted into. Instruction `i` of a prefix (FORWARD order) sits at
+// environment depth `base + i` and its own argument references resolve at
+// THAT depth; the closing `Ret` resolves at `base + len`.
+
+fn pref_lvl(r: PRef, base: Nat) -> Nat {
+    match r { RLvl(l) => l, RLoc(j) => add(base, j) }
+}
+
+fn render_refs(rs: PRefs, base: Nat, d: Nat) -> Refs {
+    match rs {
+        QNil => RNil,
+        QCons(r, rest) => RCons(dist(d, pref_lvl(r, base)), render_refs(rest, base, d)),
+    }
+}
+
+// The self-call's argument list, in slot order `0 … k-1`: the parameters
+// unchanged, and the eliminator's field (level `k`) in the recursion position
+// `j` — the predecessor, which is what makes the call structural. Slot `i`
+// otherwise names parameter `i`, whose level is `k - 1 - i`.
+//
+// `c` counts the slots left and `i` is the slot being written, so `i` varies
+// with the recursion and rides in the returned function rather than in a
+// parameter (the `lookup`/`gather` idiom; ir_v1 doc §13 note 2).
+fn self_arg_lvl(i: Nat, j: Nat, k: Nat) -> Nat {
+    match nat_cmp(i)(j) { CEq => k, _ => sub(sub(k)(1))(i) }
+}
+
+fn self_args(c: Nat, j: Nat, k: Nat, d: Nat) -> Nat -> Refs {
+    match c {
+        Zero => λ (i: Nat) => RNil,
+        Succ(c2) => λ (i: Nat) =>
+            RCons(dist(d, self_arg_lvl(i, j, k)), self_args(c2, j, k, d)(Succ(i))),
+    }
+}
+
+// Render a prefix onto `tail`. The recursion runs newest-first — the head of
+// `pre` is the LAST instruction, so it is the innermost `Let*` and `tail`
+// grows outward as the depth `d` walks back down to `base`. Both of those
+// vary with the recursion while `base`, `j` and `k` do not, so they are the
+// returned function's arguments.
+//
+// Callee index 0 is right for `PSelf`: the in-language slice is
+// single-function, so the emitted program is `PFun(body, PNil)`.
+fn render_pre(pre: Pre, base: Nat, j: Nat, k: Nat) -> Nat -> Ir -> Ir {
+    match pre {
+        PEnd => λ (d: Nat) (tail: Ir) => tail,
+        PCon(tag, args, rest) => λ (d: Nat) (tail: Ir) =>
+            render_pre(rest, base, j, k)(sub(d)(1),
+                LetCon(tag, render_refs(args, base, d), tail)),
+        PSelf(rest) => λ (d: Nat) (tail: Ir) =>
+            render_pre(rest, base, j, k)(sub(d)(1),
+                LetCall(0, self_args(k, j, k, d)(0), tail)),
+    }
+}
+
+// `instr_0; … ; instr_{len-1}; Ret(res)` at base depth `base`. The head
+// instruction sits at `base + len - 1`; at `len = 0` that expression
+// truncates, and the value is unused because the prefix is `PEnd`.
+fn render_exp(pre: Pre, res: PRef, len: Nat, base: Nat, j: Nat, k: Nat) -> Ir {
+    render_pre(pre, base, j, k)(sub(add(base, len))(1),
+        Ret(RCons(dist(add(base, len), pref_lvl(res, base)), RNil)))
+}
+
+// A numeral used as a VALUE is instructions: `LetCon(0, RNil)` for the zero,
+// then one `LetCon(1, [previous])` per successor. Newest-first, so the
+// successors come off the front and the zero is at the end.
+fn num_pre(n: Nat) -> Pre {
+    match n {
+        Zero => PCon(0, QNil, PEnd),
+        Succ(m) => PCon(1, QCons(RLoc(m), QNil), num_pre(m)),
+    }
+}
+
+// The two renderable accumulators, and the decline for everything else: a
+// leaf, an identity lambda or a `TStuck` is not a value. `TBody` is handled
+// by its own caller, since it is already rendered.
+fn render_ta(t: TA, base: Nat, j: Nat, k: Nat) -> TOut {
+    match t {
+        TNum(n) => TYes(render_exp(num_pre(n), RLoc(n), Succ(n), base, j, k)),
+        TExp(pre, res, len) => TYes(render_exp(pre, res, len, base, j, k)),
+        _ => TNo,
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The walker's arms (§3's `match code`). One `fn` per writable branch, plus
+// the finisher; the `meta fn` shell contributes only the traversal.
+
+fn ta_stuck() -> TA { TStuck }
+
+fn ta_zero() -> TA { TNum(0) }
+
+fn ta_var() -> TA { TVarLeaf }
+
+// A successor of a numeral is a numeral; a successor of a compiled expression
+// is one more `LetCon(1, [its result])` on the front of the prefix, whose own
+// value is that new instruction — local index `len`, which is why `len` is
+// carried.
+fn ta_succ(t: TA) -> TA {
+    match t {
+        TNum(n) => TNum(Succ(n)),
+        TExp(pre, res, len) => TExp(PCon(1, QCons(res, QNil), pre), RLoc(len), Succ(len)),
+        _ => TStuck,
+    }
+}
+
+// A lambda is in the fragment only as half of a marker: the identity. `d` is
+// the domain's recursion result and is never consulted — a marker's domain is
+// `Nat`, which the type motive does not analyze (§3 restriction 1).
+fn ta_lam(d: TA, b: TA) -> TA {
+    match b { TVarLeaf => TIdLam, _ => TStuck }
+}
+
+// The MARKER RECOGNIZER, and the file's only place where a level is minted.
+// An identity lambda applied to a numeral `i` is an occurrence of binder `i`:
+// a parameter, the field, or the induction hypothesis, per convention 1.
+// Any other application is outside the fragment — cross-function calls are
+// global references, which stop the walk before they reach here (§2).
+fn ta_marker(arity: Nat, i: Nat) -> TA {
+    match nat_cmp(i)(arity) {
+        // parameter `i`, at distance `i`, so at level `arity - 1 - i`
+        CLt => TExp(PEnd, RLvl(sub(sub(arity)(1))(i)), 0),
+        // the eliminator's field, born after the parameters
+        CEq => TExp(PEnd, RLvl(arity), 0),
+        CGt => match nat_cmp(i)(Succ(arity)) {
+            // the induction hypothesis: the structural self-call, one
+            // instruction whose own value is its result
+            CEq => TExp(PSelf(PEnd), RLoc(0), 1),
+            _ => TStuck,
+        },
+    }
+}
+
+fn ta_app(arity: Nat, f: TA, a: TA) -> TA {
+    match f {
+        TIdLam => match a { TNum(i) => ta_marker(arity, i), _ => TStuck },
+        _ => TStuck,
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The eliminator: the one node that produces a whole body, accepted only with
+// a bare parameter marker as its scrutinee (the fragment's "recursion is on
+// one parameter" rule, read off the code instead of checked).
+
+// Both arms rendered and wrapped. The zero arm runs at base depth `arity` —
+// the parameters alone; the succ arm at `Succ(arity)`, the field pushed on
+// top. The arm's single output is rebound as slot 0 and returned.
+fn ta_elim_arms(arity: Nat, j: Nat, b: TA, s: TA) -> TA {
+    match render_ta(b, arity, j, arity) {
+        TNo => TStuck,
+        TYes(zero_ir) =>
+            match render_ta(s, Succ(arity), j, arity) {
+                TNo => TStuck,
+                TYes(succ_ir) =>
+                    TBody(LetMatch(j, Arm(zero_ir, Arm(succ_ir, NoArm)),
+                        Ret(RCons(0, RNil)))),
+            },
+    }
+}
+
+// The scrutinee's level `l` must name a parameter; the recursion index is
+// then `j = arity - 1 - l`, which is both that parameter's distance in the
+// body's environment (so `LetMatch(j)`) and its slot in the self-call.
+fn ta_elim_at(arity: Nat, b: TA, s: TA, l: Nat) -> TA {
+    match nat_cmp(l)(arity) {
+        CLt => ta_elim_arms(arity, sub(sub(arity)(1))(l), b, s),
+        _ => TStuck,
+    }
+}
+
+fn ta_elim(arity: Nat, base: TA, step: TA, scrut: TA) -> TA {
+    match scrut {
+        TExp(PEnd, RLvl(l), Zero) => ta_elim_at(arity, base, step, l),
+        _ => TStuck,
+    }
+}
+
+// The root. A body that is already an eliminator is done; a body that is an
+// expression is a non-recursive fragment fn (`fn seven() -> Nat { 7 }`) and
+// renders at base depth `arity` with no recursion index to speak of — `j` is
+// unused there because no `PSelf` can occur without the eliminator that mints
+// its marker.
+fn ta_finish(arity: Nat, t: TA) -> TOut {
+    match t {
+        TBody(body) => TYes(body),
+        _ => render_ta(t, arity, 0, arity),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Computation checks. These are the cross-check discipline (§5) run by
+// conversion instead of by `conv_term` from Rust: each right-hand side is
+// what `crates/elab/src/certgen.rs`'s `Compiler` emits for the same function.
+// A divergence is a failed `refl`, here, at library elaboration time.
+
+// `fn seven() -> Nat { 7 }`'s shape at 2: a numeral body is instructions.
+theorem ta_numeral_body():
+    ta_finish(1, ta_succ(ta_succ(ta_zero())))
+    = TYes(LetCon(0, RNil,
+          LetCon(1, RCons(0, RNil),
+          LetCon(1, RCons(0, RNil),
+          Ret(RCons(0, RNil))))))
+{ refl }
+
+theorem ta_zero_body():
+    ta_finish(0, ta_zero()) = TYes(LetCon(0, RNil, Ret(RCons(0, RNil))))
+{ refl }
+
+// `fn dbl(n: Nat) -> Nat { match n { Zero => Zero, Succ(k) => Succ(Succ(dbl(k))) } }`
+// — the markers spelled as the walker builds them: `ta_lam(_, ta_var())` is
+// the identity, its argument the numeral from the `zero`/`succ` arms. Level 0
+// is the parameter, level 2 = arity+1 the induction hypothesis.
+theorem dbl_transcribes():
+    ta_elim(1,
+        ta_zero(),
+        ta_succ(ta_succ(ta_app(1, ta_lam(ta_stuck(), ta_var()),
+                               ta_succ(ta_succ(ta_zero()))))),
+        ta_app(1, ta_lam(ta_stuck(), ta_var()), ta_zero()))
+    = TBody(LetMatch(0,
+          Arm(LetCon(0, RNil, Ret(RCons(0, RNil))),
+          Arm(LetCall(0, RCons(0, RNil),
+              LetCon(1, RCons(0, RNil),
+              LetCon(1, RCons(0, RNil),
+              Ret(RCons(0, RNil))))),
+          NoArm)),
+          Ret(RCons(0, RNil))))
+{ refl }
+
+// `fn add(a, b: Nat) -> Nat { match b { Zero => a, Succ(k) => Succ(add(a, k)) } }`
+// — arity 2, recursion on the SECOND parameter, so `j` is 1 and the self-call
+// carries `a` unchanged in slot 0 and the field in slot 1. This is the
+// generator's own `add` emission, `crates/elab/tests/certgen.rs`'s
+// `generated_add_matches_the_hand_run` verbatim.
+theorem add_transcribes():
+    ta_elim(2,
+        ta_app(2, ta_lam(ta_stuck(), ta_var()), ta_zero()),
+        ta_succ(ta_app(2, ta_lam(ta_stuck(), ta_var()),
+                       ta_succ(ta_succ(ta_succ(ta_zero()))))),
+        ta_app(2, ta_lam(ta_stuck(), ta_var()), ta_succ(ta_zero())))
+    = TBody(LetMatch(1,
+          Arm(Ret(RCons(0, RNil)),
+          Arm(LetCall(0, RCons(1, RCons(0, RNil)),
+              LetCon(1, RCons(0, RNil),
+              Ret(RCons(0, RNil)))),
+          NoArm)),
+          Ret(RCons(0, RNil))))
+{ refl }
+
+// The decline: a marker at `arity + 2` is a nested eliminator's binder, which
+// the fragment does not contain.
+theorem nested_binder_sticks():
+    ta_app(1, ta_lam(ta_stuck(), ta_var()),
+           ta_succ(ta_succ(ta_succ(ta_zero()))))
+    = TStuck
+{ refl }
+
+theorem nested_binder_declines():
+    ta_finish(1, ta_app(1, ta_lam(ta_stuck(), ta_var()),
+                        ta_succ(ta_succ(ta_succ(ta_zero())))))
+    = TNo
+{ refl }
+
+// …and the eliminator refuses a scrutinee that is not a bare parameter: a
+// numeral is not a variable occurrence.
+theorem elim_needs_a_parameter():
+    ta_elim(1, ta_zero(), ta_zero(), ta_zero()) = TStuck
+{ refl }
+
+// ---------------------------------------------------------------------------
+// The shell: the only part of this file that is layer m.
+//
+// One elimination over code, six arms, and a default. Everything it does is
+// call the helpers above, which is the point — the analysis is ordinary
+// Heather, and the modal layer contributes the traversal and nothing else
+// (design doc §4).
+//
+// Why the arms are what they are:
+//
+//  * the motive is `TA`, a **context-free** type. It has to be: `tm_lam`'s and
+//    `tm_elim_nat`'s recursive results live at *extended* contexts, and a
+//    motive mentioning the context would put them at `Code((g, x) |- …)` with
+//    no way back down to `g`. One constant motive is also what makes 46
+//    unwritten branches cost one `_` arm.
+//  * `tm_app` exists only to recognize a marker — an application of the
+//    identity lambda to a numeral. The fragment contains no other application:
+//    a call to another function is a global reference, and `elim^Trm` is
+//    neutral on `box (u^δ)`, so the walk would stop there anyway.
+//  * `tm_var` answers `TVarLeaf` and nothing else. A variable's *identity* is
+//    unobservable at layer m (the recursor's variable branch abstracts over it
+//    at layer v), which is exactly why occurrences arrive pre-marked.
+//  * the arms are named for `heather_kernel::rec::BRANCH_NAMES`, read at
+//    elaboration rather than restated here.
+//
+// Everything not listed declines, and declining is an answer: the generator is
+// untrusted, so a body this walker cannot read is a function that does not get
+// a `Compile` instance, never a wrong theorem.
+meta fn transcribe(g: Ctx, arity: Nat, body: Code(g |- Nat))
+    for certgen.transcribe -> TOut
+{
+    ta_finish(arity, match code body as TA {
+        tm_zero                   => ta_zero(),
+        tm_succ(t)                => ta_succ(t),
+        tm_var                    => ta_var(),
+        tm_lam(dom, b)            => ta_lam(dom, b),
+        tm_app(dom, cod, hd, arg) => ta_app(arity, hd, arg),
+        tm_elim_nat(m, z, s, sc)  => ta_elim(arity, z, s, sc),
+        _                         => ta_stuck(),
+    })
+}

@@ -255,6 +255,16 @@ Notes:
 - Verdict: the flagship holds up. The default-arm sugar is the difference
   between usable and punishing (37 arms), and its lowering is *already
   built* in the kernel test infrastructure.
+- *(Corrected 2026-08-11, when the analysis slice landed
+  (`docs/certgen-transcriber-in-language-design.md` §3): "37" is the
+  paper's branch count — the kernel's recursor has **52**
+  (`crates/kernel/src/rec.rs`, `BRANCH_NAMES`), our six extension formers
+  included. The landed slice adopts only the first default-arm flavor
+  (`_ => expr`, constant motives); `_(rebuild)` waits for the first
+  transformation pass. Splice-patterns (`$n` sub-code binders) did not
+  land either — the first slice's arms bind recursive results only. The
+  layer question resolved as **declared** (`meta fn`), per the map
+  round.)*
 
 ## 7. Teaser: where this is all headed
 

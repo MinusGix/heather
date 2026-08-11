@@ -329,6 +329,24 @@ fn rename_expr(m: &Ren, e: &Expr) -> Expr {
                 })
                 .collect(),
         },
+        // A `match code` cannot appear in a class member's body — the renamer
+        // walks program-layer declarations and `match code` is layer-m only —
+        // but a walk that silently dropped a form would rename the wrong
+        // thing, so it recurses like every other binder-carrying node.
+        MatchCode { scrut, motive, arms } => MatchCode {
+            scrut: Box::new(rename_expr(m, scrut)),
+            motive: Box::new(rename_ty(m, motive)),
+            arms: arms
+                .iter()
+                .map(|a| heather_syntax::Arm {
+                    ctor: a.ctor.clone(),
+                    default: a.default,
+                    binders: a.binders.clone(),
+                    body: rename_expr(m, &a.body),
+                    span: a.span,
+                })
+                .collect(),
+        },
         Dot { recv, name, args } => Dot {
             recv: Box::new(rename_expr(m, recv)),
             name: name.clone(),

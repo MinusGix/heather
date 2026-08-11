@@ -2607,6 +2607,13 @@ impl Parser {
     fn match_expr(&mut self) -> R<Expr> {
         let start = self.peek_span();
         self.bump(); // `match`
+        // `match code e as T { … }` — intensional analysis. `code` is a
+        // contextual keyword, so a scrutinee *named* `code` still parses:
+        // only `match code` followed by something other than the arm block is
+        // the analysis form.
+        if self.at_kw("code") && !matches!(self.nth(1), TokKind::LBrace) {
+            return self.match_code_expr(start);
+        }
         // The scrutinee and the motive are both immediately followed by the
         // arm block, so a `{` here closes the `match` rather than opening a
         // record literal (docs/surface-records.md §6.1).
@@ -2627,10 +2634,21 @@ impl Parser {
             None
         };
         self.expect(&TokKind::LBrace, "`{`")?;
-        // Arms are `C(x, …) => body`, one per constructor. Which constructors
-        // exist — and so whether the arms are complete, duplicated, or of the
-        // wrong arity — is the elaborator's business: it knows the scrutinee's
-        // type, and the grammar does not.
+        let arms = self.match_arms()?;
+        let end = self.expect(&TokKind::RBrace, "`}`")?;
+        Ok(Expr {
+            kind: ExprKind::Match { scrut: Box::new(scrut), eqbind, motive, arms },
+            span: start.join(end),
+        })
+    }
+
+    /// Arms are `C(x, …) => body`, one per constructor. Which constructors
+    /// exist — and so whether the arms are complete, duplicated, or of the
+    /// wrong arity — is the elaborator's business: it knows the scrutinee's
+    /// type, and the grammar does not. Shared with `match code`, whose arm
+    /// names are branch names and whose binders are recursive results, because
+    /// the *grammar* of an arm is the same either way.
+    fn match_arms(&mut self) -> R<Vec<Arm>> {
         let mut arms: Vec<Arm> = Vec::new();
         while !matches!(self.peek(), TokKind::RBrace) {
             let (ctor, cspan) = self.qual_ident("constructor name in a `match` arm")?;
@@ -2649,9 +2667,34 @@ impl Parser {
             }
             self.bump();
         }
+        Ok(arms)
+    }
+
+    /// `match code e as T { branch(x, …) => …, _ => … }`
+    /// (docs/certgen-transcriber-in-language-design.md §3). `start` is the
+    /// `match` keyword's span; the `code` keyword is still unconsumed.
+    ///
+    /// The motive is a **type**, not a lambda: a `match code` motive is
+    /// constant by design, and spelling it as a type is what says so.
+    fn match_code_expr(&mut self, start: Span) -> R<Expr> {
+        self.bump(); // `code`
+        let scrut = self.with_record_lit(true, |p| p.expr())?;
+        if !self.eat_kw("as") {
+            return self.err(
+                "a `match code` needs its result type: write `match code e as T { … }` \
+                 (the motive is constant — the arms all have the same type)",
+            );
+        }
+        let motive = self.with_record_lit(true, |p| p.ty())?;
+        self.expect(&TokKind::LBrace, "`{`")?;
+        let arms = self.match_arms()?;
         let end = self.expect(&TokKind::RBrace, "`}`")?;
         Ok(Expr {
-            kind: ExprKind::Match { scrut: Box::new(scrut), eqbind, motive, arms },
+            kind: ExprKind::MatchCode {
+                scrut: Box::new(scrut),
+                motive: Box::new(motive),
+                arms,
+            },
             span: start.join(end),
         })
     }

@@ -651,6 +651,20 @@ fn generate_inner(d: &Decl, ctx: &GenCtx, forced: bool) -> Result<Emission, Stri
         }
     };
 
+    emit_with_model(f, arity, model, ctx)
+}
+
+/// Everything downstream of transcription: the callee closure, the IR
+/// declarations, the fixtures, the ∃-kit folds and the instance. Shared by the
+/// Rust transcriber above and the in-language one below — the port moves one
+/// phase, and this is the seam it moves at
+/// (docs/certgen-transcriber-in-language-design.md §5).
+fn emit_with_model(
+    f: &str,
+    arity: usize,
+    model: FnIr,
+    ctx: &GenCtx,
+) -> Result<Emission, String> {
     // Closure: callees' closures (prefix-compatible), then self.
     let mut closure: Vec<String> = Vec::new();
     for callee in callees(&model) {
@@ -930,4 +944,550 @@ fn emit_instance(w: &mut String, f: &str, model: &FnIr, arity: usize) {
     writeln!(w, "        cert: {lams}{cert},").unwrap();
     writeln!(w, "    }}").unwrap();
     writeln!(w, "}}").unwrap();
+}
+
+// ---------------------------------------------------------------------------
+// The in-language path (docs/certgen-transcriber-in-language-design.md).
+//
+// The transcriber above is Rust that walks a surface AST. This section runs
+// the *same* phase in the language instead: the elaborator marks the fn's
+// elaborated body, an analyzer `meta fn` walks it with the code recursor, and
+// its `Ir` value is read back into the `FnIr` the emitters already consume.
+// Everything after `FnIr` — chain rendering, the ∃-kit fold, the fixtures, the
+// instance — is shared, so the two paths differ in exactly one phase.
+//
+// Untrusted at every step: an unrecognized shape *declines* (an `Err` with a
+// reason), and a misread one produces an emission whose certificate the kernel
+// refuses. Neither can produce a wrong theorem.
+
+use std::rc::Rc;
+
+use heather_kernel::level::Level;
+use heather_kernel::reduce::{self, Defs};
+use heather_kernel::subst::{GlobalEntry, GlobalSubst};
+use heather_kernel::term::{
+    LocalCtx, LocalSubst, LocalVar, Term, Type,
+};
+
+use crate::slots::Slot;
+use crate::Elaborator;
+
+/// Fuel for the transcriber's evaluation and readback — the kernel's own
+/// default, deliberately not a bespoke larger one. Reduction is *recursive*,
+/// so a fuel budget far above the ordinary one buys nothing but a stack
+/// overflow on a term that does not reduce the way the reader expects, and
+/// running out is a decline like any other.
+const FUEL: u64 = heather_kernel::typing::DEFAULT_FUEL;
+
+/// `(λ (x: Nat). x) ⌜n⌝` — the marker standing for the binder whose de Bruijn
+/// **level** is `n` (§1 of the design doc).
+///
+/// Why a β-redex rather than a bare numeral: the fragment's own source
+/// contains numerals, so a numeral marker would be ambiguous, while an
+/// application is a node the fragment never contains — every call in the
+/// fragment is a global reference, which the recursor goes neutral on anyway.
+/// Code does not compute (`Layer::computes` is `Prog | Meta`), so the redex is
+/// stable syntax: the recursor dispatches it to the `tm_app` branch and no
+/// reduction can collapse it first.
+fn marker(n: u32) -> Term {
+    let mut num = Term::Zero;
+    for _ in 0..n {
+        num = Term::Succ(Rc::new(num));
+    }
+    Term::App {
+        fun: Rc::new(Term::Lam {
+            dom_level: Level::Zero,
+            cod_level: Level::Zero,
+            dom: Rc::new(Type::Nat),
+            body: Rc::new(Term::Var(LocalVar(0))),
+        }),
+        dom_level: Level::Zero,
+        cod_level: Level::Zero,
+        dom: Rc::new(Type::Nat),
+        cod: Rc::new(Type::Nat),
+        arg: Rc::new(num),
+    }
+}
+
+/// Replace every variable *occurrence* by a marker carrying its binder's
+/// level, leaving closed code (§1).
+///
+/// This is scope resolution, and it stays in Rust for a kernel reason rather
+/// than for convenience: `elim^Trm`'s variable branch abstracts over the
+/// variable at layer v (rec.rs `tm_var`), so nothing at layer m can observe
+/// *which* variable an occurrence is. The pass itself is a mechanical de
+/// Bruijn→level renaming — no fragment knowledge, no declaration table.
+///
+/// `depth` is the number of binders in scope, so the occupied levels are
+/// `0..depth` and `Var(i)` is the binder at level `depth - 1 - i`.
+fn mark(t: &Term, depth: u32) -> Result<Term, String> {
+    Ok(match t {
+        Term::Var(LocalVar(i)) => {
+            if *i >= depth {
+                return Err("a variable escapes the body's own binders".into());
+            }
+            marker(depth - 1 - i)
+        }
+        Term::Zero => Term::Zero,
+        Term::Succ(p) => Term::Succ(Rc::new(mark(p, depth)?)),
+        // The fragment's one eliminator. Its motive must be `Nat` on the nose:
+        // a motive that mentioned the scrutinee would put a *type* in the
+        // walk's way, and this slice analyses terms (design doc §3).
+        Term::ElimNat { level, motive, base, step, scrut } => {
+            if !matches!(&**motive, Type::Nat) {
+                return Err("the recursion's motive is not `Nat`".into());
+            }
+            Term::ElimNat {
+                level: level.clone(),
+                motive: Rc::clone(motive),
+                base: Rc::new(mark(base, depth)?),
+                // `elim_Nat`'s step binds the predecessor and the induction
+                // hypothesis, in that order, so their levels are `depth` and
+                // `depth + 1` — which is the convention the walker reads back.
+                step: Rc::new(mark(step, depth + 2)?),
+                scrut: Rc::new(mark(scrut, depth)?),
+            }
+        }
+        // A call to another function is a *global reference*, and the recursor
+        // is neutral on `box (u^δ)` (reduce.rs `is_neutral_term`) — so the walk
+        // would stop there whatever this pass did. Named as the neutrality it
+        // is, at the head of the spine, rather than as "some application".
+        Term::GlobalTm { .. } | Term::App { .. } if global_head(t) => {
+            return Err(
+                "the body calls a global: `elim^Trm` is neutral on `box (u^δ)`, so a \
+                 cross-function call is outside the in-language fragment (the Rust \
+                 transcriber's v2 path serves it)"
+                    .into(),
+            );
+        }
+        other => return Err(format!("`{other:?}` is outside the in-language fragment")),
+    })
+}
+
+/// Is the head of this application spine a global reference?
+fn global_head(mut t: &Term) -> bool {
+    while let Term::App { fun, .. } = t {
+        t = fun;
+    }
+    matches!(t, Term::GlobalTm { .. })
+}
+
+/// The declaration's elaborated body, marked and closed, with its arity.
+///
+/// Peeling the `Lam` spine is also the signature check: the fragment is
+/// `Nat → … → Nat`, and a parameter of any other type declines here rather
+/// than confusing the walker.
+fn marked_body(e: &Elaborator, name: &str) -> Result<(usize, Term), String> {
+    let Some((ty, body)) = e.global_body(name) else {
+        return Err(format!("`{name}` has no elaborated body to analyse"));
+    };
+    let mut t = &*body;
+    let mut ty = &*ty;
+    let mut arity = 0usize;
+    while let Term::Lam { body, .. } = t {
+        let Type::Pi { dom, cod, .. } = ty else {
+            return Err("the body has more binders than its type has parameters".into());
+        };
+        if !matches!(&**dom, Type::Nat) {
+            return Err(format!("parameter {arity} of `{name}` is not `Nat`"));
+        }
+        arity += 1;
+        t = body;
+        ty = cod;
+    }
+    if !matches!(ty, Type::Nat) {
+        return Err(format!("`{name}`'s result type is not `Nat`"));
+    }
+    if arity == 0 {
+        return Err("a nullary fn has no calling convention to certify".into());
+    }
+    Ok((arity, mark(t, arity as u32)?))
+}
+
+// -- readback ---------------------------------------------------------------
+//
+// THE LOWERING SHAPES THIS READER ASSUMES, pinned here because they are an
+// interface it cannot see change (docs/inductive-tier0-lowering.md §3.3,
+// docs/inductive-tier1-wf-lowering.md §1):
+//
+//   * a tier-1 (recursive) inductive's value is `Supf { label, children }`;
+//   * `label` is the tier-0 value of the constructor with its *recursive*
+//     fields deleted: `inr^i(inl(payload))` picks constructor `i` of an
+//     n-ary right-nested sum (the last constructor has no trailing `inl`),
+//     and `payload` is `Pair(nominal tag, f₀, f₁, …, Triv)`, right-nested;
+//   * `children` is the recursive fields in declaration order, as a
+//     `Pair`-chain ending in `Triv`.
+//
+// If a lowering round changes any of that, every read here **declines** with
+// the branch it could not recognize — it cannot silently read the wrong
+// constructor, because a shape that is not one of these is not a shape it has
+// a case for. That is the property that lets the reader be this literal.
+
+/// The IR as read back: `certgen`'s own model, not the library's.
+#[derive(Debug)]
+enum RIr {
+    Ret(Vec<u64>),
+    LetCon { tag: u64, args: Vec<u64>, rest: Box<RIr> },
+    LetMatch { scrut: u64, arms: Vec<RIr>, rest: Box<RIr> },
+    LetCall { callee: u64, args: Vec<u64>, rest: Box<RIr> },
+}
+
+struct Reader<'a> {
+    psi: &'a heather_kernel::term::GlobalCtx,
+    /// Instructions read so far. The reader walks a value produced by a
+    /// *library file*, which may be wrong in any way at all, so its own
+    /// traversal is budgeted like everything else here: past the budget it
+    /// declines rather than recursing (CLAUDE.md's runaway discipline —
+    /// reduction is recursive, and a deep enough value overflows the stack
+    /// before any fuel counter notices).
+    budget: std::cell::Cell<u32>,
+}
+
+/// Instructions one transcription may contain. A fragment body compiles to a
+/// handful; four figures is generous and still nowhere near the stack.
+const READ_BUDGET: u32 = 4096;
+
+impl Reader<'_> {
+    fn whnf(&self, t: &Term) -> Result<Term, String> {
+        let empty = LocalCtx::nil();
+        reduce::whnf_term_delta(t, &empty, Defs::transparent(self.psi), FUEL)
+            .map_err(|_| "the transcriber ran out of fuel".to_string())
+    }
+
+    /// `(constructor index, non-recursive fields, recursive children)`.
+    fn ctor(&self, t: &Term, ctors: usize) -> Result<(usize, Vec<Term>, Vec<Term>), String> {
+        let w = self.whnf(t)?;
+        let (label, children) = match &w {
+            Term::Supf { label, children, .. } => {
+                ((**label).clone(), self.spine(children)?)
+            }
+            // A non-recursive inductive is the bare tier-0 value.
+            other => (other.clone(), vec![]),
+        };
+        let mut v = self.whnf(&label)?;
+        let mut idx = 0usize;
+        loop {
+            match v {
+                Term::Inl { val, .. } => {
+                    v = self.whnf(&val)?;
+                    break;
+                }
+                Term::Inr { val, .. } => {
+                    idx += 1;
+                    if idx >= ctors {
+                        return Err("a sum value deeper than the constructor list".into());
+                    }
+                    v = self.whnf(&val)?;
+                }
+                _ => break,
+            }
+        }
+        // `Pair(nominal tag, fields…)`: the tag distinguishes structurally
+        // identical declarations and says nothing about the value.
+        let Term::Pair { snd, .. } = &v else {
+            return Err(format!("a constructor payload that is not a pair: {v:?}"));
+        };
+        Ok((idx, self.spine(snd)?, children))
+    }
+
+    /// A right-nested `Pair` chain ending in `Triv`.
+    fn spine(&self, t: &Term) -> Result<Vec<Term>, String> {
+        let mut out = Vec::new();
+        let mut v = self.whnf(t)?;
+        loop {
+            match v {
+                Term::Triv { .. } => return Ok(out),
+                Term::Pair { fst, snd, .. } => {
+                    out.push((*fst).clone());
+                    v = self.whnf(&snd)?;
+                }
+                other => return Err(format!("a tuple that is not a pair chain: {other:?}")),
+            }
+        }
+    }
+
+    fn nat(&self, t: &Term) -> Result<u64, String> {
+        let mut v = self.whnf(t)?;
+        let mut n = 0;
+        loop {
+            match v {
+                Term::Zero => return Ok(n),
+                Term::Succ(p) => {
+                    n += 1;
+                    if n > 1_000_000 {
+                        return Err("an implausible numeral".into());
+                    }
+                    v = self.whnf(&p)?;
+                }
+                other => return Err(format!("a Nat that is not a numeral: {other:?}")),
+            }
+        }
+    }
+
+    /// `Refs { RNil, RCons(i: Nat, next: Refs) }`.
+    fn refs(&self, t: &Term) -> Result<Vec<u64>, String> {
+        let (idx, fields, children) = self.ctor(t, 2)?;
+        match idx {
+            0 => Ok(vec![]),
+            1 => {
+                let i = self.nat(fields.first().ok_or("RCons without its index")?)?;
+                let mut rest = self.refs(children.first().ok_or("RCons without its tail")?)?;
+                rest.insert(0, i);
+                Ok(rest)
+            }
+            _ => Err("not a `Refs` value".into()),
+        }
+    }
+
+    /// `Ir`, in `lib/ir_v1.hthr`'s declaration order. The instruction forms
+    /// outside the fragment (`LetLoop`, `LoopIter`) decline: the in-language
+    /// transcriber never emits them, so reading one means the value is not
+    /// what this reader was pointed at.
+    fn ir(&self, t: &Term) -> Result<RIr, String> {
+        let left = self.budget.get();
+        if left == 0 {
+            return Err("the transcription is implausibly large — declining".into());
+        }
+        self.budget.set(left - 1);
+        let (idx, fields, children) = self.ctor(t, 8)?;
+        let f = |i: usize| fields.get(i).ok_or_else(|| "a missing field".to_string());
+        let c = |i: usize| children.get(i).ok_or_else(|| "a missing sub-Ir".to_string());
+        match idx {
+            0 => Ok(RIr::Ret(self.refs(f(0)?)?)),
+            1 => Ok(RIr::LetCon {
+                tag: self.nat(f(0)?)?,
+                args: self.refs(f(1)?)?,
+                rest: Box::new(self.ir(c(0)?)?),
+            }),
+            2 => Ok(RIr::LetMatch {
+                scrut: self.nat(f(0)?)?,
+                arms: self.arms(c(0)?)?,
+                rest: Box::new(self.ir(c(1)?)?),
+            }),
+            3 | 4 => Err("an arm cell where an instruction was expected".into()),
+            7 => Ok(RIr::LetCall {
+                callee: self.nat(f(0)?)?,
+                args: self.refs(f(1)?)?,
+                rest: Box::new(self.ir(c(0)?)?),
+            }),
+            _ => Err("an instruction outside the transcriber's fragment".into()),
+        }
+    }
+
+    fn arms(&self, t: &Term) -> Result<Vec<RIr>, String> {
+        let (idx, _, children) = self.ctor(t, 8)?;
+        match idx {
+            4 => Ok(vec![]),
+            3 => {
+                let head = self.ir(children.first().ok_or("an arm without a body")?)?;
+                let mut rest = self.arms(children.get(1).ok_or("an arm without a tail")?)?;
+                rest.insert(0, head);
+                Ok(rest)
+            }
+            _ => Err("an arm chain that is neither `Arm` nor `NoArm`".into()),
+        }
+    }
+}
+
+// -- invocation and reconstruction ------------------------------------------
+
+/// Apply the registered analyzer to `(Γ = ·, arity, box marked)` and read its
+/// answer back.
+///
+/// The application spine is built in the **slot's** canonical order, which is
+/// what analyzer registration buys: whole-signature convertibility fixes the Π
+/// order, so this code does not consult the template's own signature at all
+/// (docs/meta-def-registration-design.md, analyzer extension).
+fn run_transcriber(e: &Elaborator, arity: usize, marked: Term) -> Result<RIr, String> {
+    let md = e
+        .analyzer_def(Slot::CertgenTranscribe)
+        .ok_or("no `meta fn … for certgen.transcribe` is registered")?;
+    let empty = LocalCtx::nil();
+    // Rescoped to the Ψ this call sees: a meta definition is elaborator-held,
+    // so its global references are stale by however much Ψ has grown since it
+    // was registered (`MetaDef::psi_len`) — and an analyzer's arms are made of
+    // calls to library globals, so every one of them is affected.
+    let (md_term, md_stmt) = md.at(e.psi().bindings.len());
+    let Type::CtxPi { body, .. } = &*md_stmt else {
+        return Err("the transcriber does not open with a `Ctx` binder".into());
+    };
+    let mut ty = body.apply_global(&GlobalSubst {
+        entries: vec![GlobalEntry::Ctx(empty.clone())],
+    });
+    let mut term = Term::CtxApp { fun: md_term, ctx: empty.clone() };
+    let mut nat = Term::Zero;
+    for _ in 0..arity {
+        nat = Term::Succ(Rc::new(nat));
+    }
+    for arg in [nat, Term::BoxTm(Rc::new(marked))] {
+        let Type::Pi { dom_level, cod_level, dom, cod } = ty else {
+            return Err("the transcriber's signature ran out of parameters".into());
+        };
+        let arg = Rc::new(arg);
+        term = Term::App {
+            fun: Rc::new(term),
+            dom_level,
+            cod_level: cod_level.clone(),
+            dom,
+            cod: Rc::clone(&cod),
+            arg: Rc::clone(&arg),
+        };
+        ty = (*cod).clone().apply_local(&LocalSubst::id(&empty).extended(arg));
+    }
+    // Evaluation is **spine-directed**: `Reader::whnf` reduces only what it is
+    // about to inspect, so nothing ever normalizes a whole IR tree at once
+    // (CLAUDE.md's memory discipline).
+    let r = Reader { psi: e.psi(), budget: std::cell::Cell::new(READ_BUDGET) };
+    let (idx, fields, _) = r.ctor(&term, 2)?;
+    match idx {
+        0 => Err("the in-language transcriber declined this body".into()),
+        1 => r.ir(fields.first().ok_or("`TYes` without its IR")?),
+        _ => Err("the transcriber's answer is not a `TOut`".into()),
+    }
+}
+
+/// The environment's spec expressions, **by distance** (0 = most recent): the
+/// parameters as the arm sees them, with the `Succ` arm's field on top. This
+/// is the layout `compile_arm` builds by pushing ids in reverse parameter
+/// order, and it is where the marker convention and the IR's slots meet.
+fn base_specs(params: &[String], field: bool) -> Vec<String> {
+    let mut v: Vec<String> = params.to_vec();
+    if field {
+        v.insert(0, "gk".to_string());
+    }
+    v
+}
+
+/// One instruction chain, with the spec expressions **derived** rather than
+/// carried: a temporary's spec is determined by its instruction and the specs
+/// of the slots it reads, so the Rust transcriber's `Instr::spec` is redundant
+/// with the IR (design doc §6, step 5) and the in-language path recomputes it
+/// from the same rules.
+fn chain_from_rir(ir: &RIr, name: &str, env: Vec<String>) -> Result<Chain, String> {
+    let mut specs = env;
+    let mut instrs = Vec::new();
+    let mut has_self_call = false;
+    let mut cur = ir;
+    loop {
+        match cur {
+            RIr::Ret(rs) => {
+                let [d] = rs[..] else {
+                    return Err("a `Ret` with other than one output".into());
+                };
+                let ret_spec = specs
+                    .get(d as usize)
+                    .ok_or("a `Ret` reading past the environment")?
+                    .clone();
+                return Ok(Chain {
+                    instrs,
+                    ret_dist: d as usize,
+                    ret_spec,
+                    has_self_call,
+                });
+            }
+            RIr::LetCon { tag, args, rest } => {
+                let dists: Vec<usize> = args.iter().map(|d| *d as usize).collect();
+                let spec = match tag {
+                    0 => "Zero".to_string(),
+                    1 => {
+                        let a = specs
+                            .get(dists[0])
+                            .ok_or("a `Succ` reading past the environment")?;
+                        format!("Succ({a})")
+                    }
+                    other => return Err(format!("constructor tag {other} is not a `Nat`")),
+                };
+                instrs.push(Instr::Con { tag: *tag, dists, spec: spec.clone() });
+                specs.insert(0, spec);
+                cur = rest;
+            }
+            RIr::LetCall { callee, args, rest } => {
+                if *callee != 0 {
+                    return Err(
+                        "a call to a callee other than 0: the in-language slice is \
+                         single-function"
+                            .into(),
+                    );
+                }
+                let dists: Vec<usize> = args.iter().map(|d| *d as usize).collect();
+                let arg_specs: Vec<String> = dists
+                    .iter()
+                    .map(|d| {
+                        specs.get(*d).cloned().ok_or("a call reading past the environment")
+                    })
+                    .collect::<Result<_, _>>()?;
+                let spec = format!("{name}({})", arg_specs.join(", "));
+                has_self_call = true;
+                instrs.push(Instr::Call {
+                    callee: name.to_string(),
+                    dists,
+                    arg_specs,
+                    spec: spec.clone(),
+                });
+                specs.insert(0, spec);
+                cur = rest;
+            }
+            RIr::LetMatch { .. } => {
+                return Err("a nested `LetMatch` is outside the fragment".into());
+            }
+        }
+    }
+}
+
+/// `FnIr` from the read-back IR. The recursion index, the arm split and every
+/// spec expression are *recovered* from the instruction chain — the walker has
+/// no names to hand over, and does not need any.
+fn fn_ir_from_rir(ir: &RIr, name: &str, params: &[String]) -> Result<FnIr, String> {
+    let params: Vec<String> = params.to_vec();
+    match ir {
+        RIr::LetMatch { scrut, arms, rest } => {
+            if !matches!(&**rest, RIr::Ret(rs) if rs[..] == [0]) {
+                return Err("a `LetMatch` whose continuation is not the rebinding `Ret`"
+                    .into());
+            }
+            let [zero, succ] = &arms[..] else {
+                return Err("a `LetMatch` with other than two arms is not a `Nat` match"
+                    .into());
+            };
+            let zc = chain_from_rir(zero, name, base_specs(&params, false))?;
+            if zc.has_self_call {
+                return Err("a self-call in the Zero arm cannot be structural".into());
+            }
+            let sc = chain_from_rir(succ, name, base_specs(&params, true))?;
+            Ok(FnIr {
+                params,
+                kind: FnIrKind::Rec(RecIr { rec_idx: *scrut as usize, zero: zc, succ: sc }),
+            })
+        }
+        _ => {
+            let c = chain_from_rir(ir, name, base_specs(&params, false))?;
+            if c.has_self_call {
+                return Err("a self-call outside a match is outside the fragment".into());
+            }
+            Ok(FnIr { params, kind: FnIrKind::Plain(c) })
+        }
+    }
+}
+
+/// Generate for `d` with the **in-language** transcriber: the elaborator marks
+/// `d`'s elaborated body, the registered analyzer walks it, and its `Ir` is
+/// read back into the model the shared emitters consume.
+///
+/// `d` must already be elaborated into `e` (it is an ordinary declaration).
+/// Every failure is a decline, and the Rust path serves the same input.
+pub fn generate_in_language(
+    e: &Elaborator,
+    d: &Decl,
+    ctx: &GenCtx,
+) -> Result<Emission, String> {
+    let frag = fragment(d)?;
+    let f = frag.name;
+    let (arity, marked) = marked_body(e, f)?;
+    if arity != frag.params.len() {
+        return Err("the elaborated body's arity disagrees with the declaration".into());
+    }
+    let rir = run_transcriber(e, arity, marked)?;
+    let params: Vec<String> = frag.params.iter().map(|s| s.to_string()).collect();
+    let model = fn_ir_from_rir(&rir, f, &params)?;
+    emit_with_model(f, arity, model, ctx)
 }

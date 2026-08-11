@@ -129,12 +129,17 @@ fn a_global_binder_after_a_local_is_refused() {
 }
 
 #[test]
-fn an_ordinary_global_is_not_in_scope_inside_a_meta_fn() {
-    let msg = elab_err(
-        "fn add(a: Nat, b: Nat) -> Nat { match b { Zero => a, Succ(k) => Succ(add(a, k)) } }
-         meta fn f(g: Ctx, x: Code(g |- Nat)) -> Code(g |- Nat) { code { add($x, 1) } }",
+fn an_ordinary_global_is_in_scope_inside_a_meta_fn() {
+    // It was not, until the analyzer round
+    // (docs/certgen-transcriber-in-language-design.md §9.1): the obstacle was
+    // never the layer — a layer-c global is referenceable from layer m and
+    // from layer-c code alike (`i' ≤ i`) — but the index arithmetic, since a
+    // `meta fn`'s own Ψ-extending binders sit above Ψ. With that offset
+    // applied, a payload may call a library function.
+    elab(
+        "fn add2(a: Nat, b: Nat) -> Nat { match b { Zero => a, Succ(k, ih) => Succ(ih) } }
+         meta fn f(g: Ctx, x: Code(g |- Nat)) -> Code(g |- Nat) { code { add2($x, 1) } }",
     );
-    assert!(msg.contains("pure"), "{msg}");
 }
 
 #[test]
@@ -172,15 +177,104 @@ fn goals_are_refused_in_a_meta_fn() {
 }
 
 #[test]
-fn a_meta_fn_must_return_code() {
-    let msg = elab_err("meta fn f(g: Ctx) -> Nat { 0 }");
-    assert!(msg.contains("Code"), "{msg}");
+fn a_meta_fn_may_return_ordinary_data() {
+    // A *template* returns code; an **analyzer** returns a value, and it has
+    // to: its `match code` motive must be context-free, which `Code(g |- T)`
+    // is not (docs/certgen-transcriber-in-language-design.md §9.1).
+    elab("meta fn f(g: Ctx) -> Nat { 0 }");
 }
 
 #[test]
 fn modal_types_outside_a_meta_fn_are_refused() {
     let msg = elab_err("fn f(g: Ctx) -> Nat { 0 }");
     assert!(msg.contains("meta"), "{msg}");
+}
+
+// -- `match code`: the analysis surface -------------------------------------
+//
+// docs/certgen-transcriber-in-language-design.md §3. The elimination itself is
+// exercised by the transcriber's own suite (certgen.rs); these are the slice's
+// mechanics and its diagnostics.
+
+#[test]
+fn a_match_code_analyses_a_code_argument() {
+    // Six arms and a default, at a constant motive. The kernel gate is the
+    // `Layer::Meta` check of the whole declaration, so this passing means a
+    // 52-branch `ElimCodeTm` was assembled and typed.
+    elab(
+        "meta fn probe(g: Ctx, body: Code(g |- Nat)) -> Nat {
+             match code body as Nat {
+                 tm_zero => 0,
+                 tm_succ(t) => t,
+                 tm_var => 1,
+                 tm_lam(dom, b) => b,
+                 tm_app(dom, cod, hd, arg) => arg,
+                 tm_elim_nat(m, z, s, sc) => sc,
+                 _ => 0,
+             }
+         }",
+    );
+}
+
+#[test]
+fn a_match_code_needs_its_default_arm() {
+    let msg = elab_err(
+        "meta fn probe(g: Ctx, body: Code(g |- Nat)) -> Nat {
+             match code body as Nat { tm_zero => 0 }
+         }",
+    );
+    assert!(msg.contains("52"), "{msg}");
+}
+
+#[test]
+fn a_match_code_arm_names_a_branch_of_the_recursor() {
+    let msg = elab_err(
+        "meta fn probe(g: Ctx, body: Code(g |- Nat)) -> Nat {
+             match code body as Nat { Zero => 0, _ => 0 }
+         }",
+    );
+    assert!(msg.contains("tm_zero"), "{msg}");
+}
+
+#[test]
+fn a_match_code_arm_binds_its_branchs_results() {
+    // `tm_succ` has exactly one recursive result; the arm's binders are those
+    // and nothing else, so a second one is a shape error rather than a name.
+    let msg = elab_err(
+        "meta fn probe(g: Ctx, body: Code(g |- Nat)) -> Nat {
+             match code body as Nat { tm_succ(t, u) => t, _ => 0 }
+         }",
+    );
+    assert!(msg.contains("recursive result"), "{msg}");
+}
+
+#[test]
+fn a_match_code_motive_is_constant() {
+    // The motive elaborates with no locals in scope, so "constant" is enforced
+    // by name resolution: a motive mentioning a parameter cannot even name it.
+    // (`Fin(k)` is the smallest type that would try.)
+    let msg = elab_err(
+        "meta fn probe(g: Ctx, k: Nat, body: Code(g |- Nat)) -> Nat {
+             match code body as Fin(k) { _ => FZ }
+         }",
+    );
+    assert!(msg.contains('k'), "{msg}");
+}
+
+#[test]
+fn match_code_is_meta_layer_machinery() {
+    let msg = elab_err("fn probe(n: Nat) -> Nat { match code n as Nat { _ => 0 } }");
+    assert!(msg.contains("meta"), "{msg}");
+}
+
+#[test]
+fn match_code_does_not_go_inside_a_quote_payload() {
+    let msg = elab_err(
+        "meta fn probe(g: Ctx, body: Code(g |- Nat)) -> Code(g |- Nat) {
+             code { match code $body as Nat { _ => 0 } }
+         }",
+    );
+    assert!(msg.contains("layer"), "{msg}");
 }
 
 // -- head/tail/cons, the vector spellings the payload wanted ---------------

@@ -21,6 +21,7 @@ use heather_kernel::term::{
     CtxBase, GlobalBinding, GlobalVar, LocalCtx, LocalSubst, SubstTail, Term, Type,
 };
 use heather_kernel::conv;
+use heather_kernel::rec;
 use heather_kernel::layer::Layer;
 use heather_kernel::level::Level;
 use heather_kernel::typing;
@@ -29,6 +30,18 @@ use heather_syntax::{Decl, DeclKind, Expr, ExprKind, SlotPath, Span, Stmt, Ty, T
 use crate::slots::{self, Ingredient, IngredientKind, Slot, SlotSpec};
 use crate::names::{qkey, NameKind};
 use crate::{err, Alias, Cx, ElabError, Elaborator, MetaDef, R};
+
+/// One binder of a `meta fn`'s signature, in written order.
+///
+/// A `Local` binder is a `Code(g |- T)` parameter *or* an ordinary
+/// program-layer one (`arity: Nat`), which layer m may bind because Π is
+/// layer-generic and a Ψ global of layer c/p is referenceable at m (`i' ≤ i`).
+/// The ordinary case is what an **analyzer** needs and a template never did
+/// (docs/certgen-transcriber-in-language-design.md §9.1).
+enum Sig {
+    Ctx,
+    Local { ty: Type, level: Level },
+}
 
 /// The meta-layer environment: the Ψ-extending binders currently in scope,
 /// outermost first. Present in a [`Cx`] exactly while a `meta fn`'s body —
@@ -113,33 +126,19 @@ impl Elaborator {
         r
     }
 
-    fn elab_meta_decl_inner(&mut self, decl: &Decl) -> R<()> {
-        if self.own_declares(&decl.name, &[NameKind::Global, NameKind::Meta]) {
-            return err(format!("duplicate name `{}`", decl.name), decl.span);
-        }
-        if !decl.tyvars.is_empty() {
-            return err(
-                "a `meta fn` has no `<A>` type parameters: type arguments are `TyCode` \
-                 binders in this slice (docs/in-language-map-design.md §3)",
-                decl.span,
-            );
-        }
-        if crate::count_holes(decl) != 0 || !decl.body.ons.is_empty() {
-            return err(
-                "no goals inside a `meta fn`: a meta body is pure quotation in this slice",
-                decl.span,
-            );
-        }
-
+    /// A `meta fn`'s signature: the binder list and the result type, in the
+    /// scope they build up. Shared by the declaration path and by analyzer-slot
+    /// registration, whose expected type is *written in Heather* and has to
+    /// mean there exactly what it means here.
+    ///
+    /// Pushes the `Ctx` binders onto the oracle padding; the caller owns
+    /// unwinding it.
+    fn meta_sig(&self, decl: &Decl) -> R<(MetaEnv, Cx, Vec<Sig>, Type, Level)> {
         // The signature. Global binders (`Ctx`, `TyCode`) extend Ψ and must
         // precede the `Code` locals — a global binder cannot be scoped under
         // a local one.
         let mut menv = MetaEnv::default();
         let mut cx = Cx::empty();
-        enum Sig {
-            Ctx,
-            Code { ty: Type },
-        }
         let mut sig: Vec<Sig> = Vec::new();
         let mut seen_local = false;
         for p in &decl.params {
@@ -176,26 +175,99 @@ impl Elaborator {
                     seen_local = true;
                     let code_ty = self.elab_code_ty(&cx, &menv, ctx, ty, p.span)?;
                     cx.push(p.name.clone(), code_ty.clone(), Level::Zero);
-                    sig.push(Sig::Code { ty: code_ty });
+                    sig.push(Sig::Local { ty: code_ty, level: Level::Zero });
                 }
                 _ => {
-                    return err(
-                        "a `meta fn` parameter is `Ctx` or `Code(g |- T)` in this slice",
-                        p.span,
-                    );
+                    seen_local = true;
+                    let (ty, level) = self.elab_ty(&cx, &p.ty)?;
+                    cx.push(p.name.clone(), ty.clone(), level.clone());
+                    sig.push(Sig::Local { ty, level });
                 }
             }
         }
         cx.meta = Some(Rc::new(menv.clone()));
 
-        // The result: `Code(g |- T)`, elaborated at full signature depth.
-        let TyKind::Code { ctx, ty } = &decl.result.kind else {
-            return err(
-                "a `meta fn` returns code: write `-> Code(g |- T)`",
-                decl.result.span,
-            );
+        // The result: a code type for a template, an ordinary type for an
+        // analyzer (§9.1 — an analyzer's motive must be *context-free*, so its
+        // result cannot be code).
+        let (result_ty, result_lvl) = match &decl.result.kind {
+            TyKind::Code { ctx, ty } => (
+                self.elab_code_ty(&cx, &menv, ctx, ty, decl.result.span)?,
+                Level::Zero,
+            ),
+            _ => self.elab_ty(&cx, &decl.result)?,
         };
-        let result_ty = self.elab_code_ty(&cx, &menv, ctx, ty, decl.result.span)?;
+        Ok((menv, cx, sig, result_ty, result_lvl))
+    }
+
+    /// The closed statement of a signature — `CtxPi`/`Π` over the binders,
+    /// inside out. Levels are tracked rather than fixed at zero: code types
+    /// live at universe 0, but an analyzer's parameters and result are
+    /// ordinary types at whatever level they compute to.
+    fn close_meta_ty(sig: &[Sig], result_ty: Type, result_lvl: Level) -> (Type, Level) {
+        let mut stmt = result_ty;
+        let mut lvl = result_lvl;
+        for b in sig.iter().rev() {
+            match b {
+                Sig::Local { ty, level } => {
+                    stmt = Type::Pi {
+                        dom_level: level.clone(),
+                        cod_level: lvl.clone(),
+                        dom: Rc::new(ty.clone()),
+                        cod: Rc::new(stmt),
+                    };
+                    lvl = Level::max(level.clone(), lvl);
+                }
+                Sig::Ctx => {
+                    stmt = Type::CtxPi { level: lvl.clone(), body: Rc::new(stmt) };
+                }
+            }
+        }
+        (stmt, lvl)
+    }
+
+    /// The same fold over the *term*, so the two cannot drift.
+    fn close_meta_term(sig: &[Sig], body: Term, result_lvl: Level) -> Term {
+        let mut term = body;
+        let mut lvl = result_lvl;
+        for b in sig.iter().rev() {
+            match b {
+                Sig::Local { ty, level } => {
+                    term = Term::Lam {
+                        dom_level: level.clone(),
+                        cod_level: lvl.clone(),
+                        dom: Rc::new(ty.clone()),
+                        body: Rc::new(term),
+                    };
+                    lvl = Level::max(level.clone(), lvl);
+                }
+                Sig::Ctx => {
+                    term = Term::CtxLam { level: lvl.clone(), body: Rc::new(term) };
+                }
+            }
+        }
+        term
+    }
+
+    fn elab_meta_decl_inner(&mut self, decl: &Decl) -> R<()> {
+        if self.own_declares(&decl.name, &[NameKind::Global, NameKind::Meta]) {
+            return err(format!("duplicate name `{}`", decl.name), decl.span);
+        }
+        if !decl.tyvars.is_empty() {
+            return err(
+                "a `meta fn` has no `<A>` type parameters: type arguments are `TyCode` \
+                 binders in this slice (docs/in-language-map-design.md §3)",
+                decl.span,
+            );
+        }
+        if crate::count_holes(decl) != 0 || !decl.body.ons.is_empty() {
+            return err(
+                "no goals inside a `meta fn`: a meta body is pure quotation in this slice",
+                decl.span,
+            );
+        }
+
+        let (_menv, mut cx, sig, result_ty, result_lvl) = self.meta_sig(decl)?;
 
         // The body: `let`/`let code` aliases, then the quote, checked against
         // the result code type. An alias is inlined at its splice, exactly as
@@ -224,55 +296,21 @@ impl Elaborator {
                 level,
             }));
         }
-        let body =
-            self.elab_check(&cx, &decl.body.result, &result_ty, &Level::Zero)?;
+        let body = self.elab_check(&cx, &decl.body.result, &result_ty, &result_lvl)?;
 
-        // Close over the signature, inside out. Everything is level 0: code
-        // types live at universe 0 and the slice fixes all levels there.
-        let mut term = body;
-        let mut stmt = result_ty;
-        for b in sig.into_iter().rev() {
-            match b {
-                Sig::Code { ty } => {
-                    term = Term::Lam {
-                        dom_level: Level::Zero,
-                        cod_level: Level::Zero,
-                        dom: Rc::new(ty.clone()),
-                        body: Rc::new(term),
-                    };
-                    stmt = Type::Pi {
-                        dom_level: Level::Zero,
-                        cod_level: Level::Zero,
-                        dom: Rc::new(ty),
-                        cod: Rc::new(stmt),
-                    };
-                }
-                Sig::Ctx => {
-                    term = Term::CtxLam { level: Level::Zero, body: Rc::new(term) };
-                    stmt = Type::CtxPi { level: Level::Zero, body: Rc::new(stmt) };
-                }
-            }
-        }
+        let (stmt, lvl) = Self::close_meta_ty(&sig, result_ty, result_lvl.clone());
+        let term = Self::close_meta_term(&sig, body, result_lvl);
 
         // The kernel is the gate, at the meta layer.
         let empty = LocalCtx::nil();
         crate::stats::time_kernel(|| {
-            typing::check_type(&self.psi, 0, Layer::Meta, &empty, &stmt, &Level::Zero, self.fuel)
+            typing::check_type(&self.psi, 0, Layer::Meta, &empty, &stmt, &lvl, self.fuel)
         })
         .map_err(|e| ElabError::Kernel {
             decl: decl.name.clone(), span: decl.span, err: e, note: None,
         })?;
         crate::stats::time_kernel(|| {
-            typing::check_term(
-                &self.psi,
-                0,
-                Layer::Meta,
-                &empty,
-                &term,
-                &stmt,
-                &Level::Zero,
-                self.fuel,
-            )
+            typing::check_term(&self.psi, 0, Layer::Meta, &empty, &term, &stmt, &lvl, self.fuel)
         })
         .map_err(|e| ElabError::Kernel {
             decl: decl.name.clone(), span: decl.span, err: e, note: None,
@@ -283,22 +321,115 @@ impl Elaborator {
         // type*. A `meta fn` without one registers and is never dispatched —
         // the clause, not the name, is what routes a use site.
         let claimed = match &decl.elaborates {
-            Some(path) => Some(self.register_slot(decl, path, &stmt)?),
+            // An analyzer slot is checked by whole-signature convertibility;
+            // a template slot by its payload's Π spine (design doc §9.1 and
+            // docs/meta-def-registration-design.md's extension section).
+            Some(path) if slots::lookup_analyzer(path).is_some() => {
+                let spec = slots::lookup_analyzer(path).expect("just looked up");
+                self.register_analyzer(spec, decl, &stmt, &lvl)?;
+                Some((spec.slot, Vec::new()))
+            }
+            Some(path) => {
+                let (spec, order) = self.register_slot(decl, path, &stmt)?;
+                Some((spec.slot, order))
+            }
             None => None,
         };
         let (slot, order) = match claimed {
-            Some((spec, order)) => {
+            Some((slot, order)) => {
                 self.meta_slots
-                    .insert(spec.slot, (self.scope.module.clone(), decl.name.clone()));
-                (Some(spec.slot), order)
+                    .insert(slot, (self.scope.module.clone(), decl.name.clone()));
+                (Some(slot), order)
             }
             None => (None, Vec::new()),
         };
         self.declare_name(&decl.name, NameKind::Meta, decl.span)?;
         self.meta_defs.insert(
             qkey(&self.scope.module, &decl.name),
-            MetaDef { term: Rc::new(term), stmt: Rc::new(stmt), slot, order },
+            MetaDef {
+                term: Rc::new(term),
+                stmt: Rc::new(stmt),
+                psi_len: self.psi.bindings.len() as u32,
+                slot,
+                order,
+            },
         );
+        Ok(())
+    }
+
+    /// Registration-time validation of an **analyzer** slot: elaborate the
+    /// slot's expected signature — written in Heather, in *this* file's scope,
+    /// so it may name the library types an analyzer traffics in — and require
+    /// the declared signature to be convertible with it.
+    ///
+    /// Whole-signature convertibility is the analyzer's answer to the question
+    /// a template answers with its payload spine: it fixes the Π **order**
+    /// outright, so the invoking Rust can build the application spine in the
+    /// slot's canonical order without any call site knowing the template's
+    /// shape. Not a soundness gate — it fixes the type, never the body, and
+    /// everything the analyzer's output produces is kernel-checked downstream.
+    fn register_analyzer(
+        &self,
+        spec: &'static slots::AnalyzerSpec,
+        decl: &Decl,
+        stmt: &Type,
+        lvl: &Level,
+    ) -> R<()> {
+        if let Some((m, other)) = self.meta_slots.get(&spec.slot) {
+            let who = if *m == self.scope.module {
+                format!("`{other}`")
+            } else {
+                format!("`{other}`, in module `{m}`")
+            };
+            return err(
+                format!(
+                    "`{}` is already elaborated by {who}: one slot takes one template",
+                    spec.path_str()
+                ),
+                decl.span,
+            );
+        }
+        // The expected signature is parsed and elaborated here rather than
+        // built in Rust: an inductive is *inlined*, not a Ψ global, so there is
+        // no global for a Rust-built type to reference — and a name that the
+        // declaring file has not declared has to fail loudly, right here.
+        let file = heather_syntax::parse_file(spec.signature)
+            .expect("a slot's expected signature parses");
+        let [heather_syntax::ast::Item::Decl(sig_decl)] = &file.items[..] else {
+            unreachable!("a slot's expected signature is one declaration")
+        };
+        let saved = self.meta_pushed.replace(Vec::new());
+        let elaborated = self.meta_sig(sig_decl);
+        self.meta_pushed.replace(saved);
+        let (_, _, sig, want_res, want_res_lvl) = elaborated.map_err(|e| ElabError::Elab {
+            msg: format!(
+                "`{}`'s expected signature does not elaborate in this file — it needs \
+                 the library it analyses in scope ({e})",
+                spec.path_str()
+            ),
+            span: decl.span,
+        })?;
+        let (want, want_lvl) = Self::close_meta_ty(&sig, want_res, want_res_lvl);
+        if want_lvl.normalize() != lvl.normalize() {
+            return err(
+                format!(
+                    "`{}` expects a signature at level {want_lvl:?}, and this one is at \
+                     {lvl:?}",
+                    spec.path_str()
+                ),
+                decl.span,
+            );
+        }
+        let empty = LocalCtx::nil();
+        conv::conv_type(&self.oracle_psi(), &empty, Layer::Meta, stmt, &want, lvl, self.fuel)
+            .map_err(|_| ElabError::Elab {
+                msg: format!(
+                    "this `meta fn` does not have `{}`'s signature. The slot's is\n  \
+                     {want:?}\nand this one is\n  {stmt:?}",
+                    spec.path_str()
+                ),
+                span: decl.span,
+            })?;
         Ok(())
     }
 
@@ -728,8 +859,11 @@ impl Elaborator {
             }
         }
 
-        // `name @ Γ`, reduced at the meta layer until the box surfaces.
-        let applied = Term::CtxApp { fun: Rc::clone(&md.term), ctx: cx.gamma.clone() };
+        // `name @ Γ`, reduced at the meta layer until the box surfaces. The
+        // template is rescoped to the Ψ of *this* use site: it was elaborated
+        // against a shorter one (`MetaDef::psi_len`).
+        let (md_term, _) = md.at(self.psi.bindings.len());
+        let applied = Term::CtxApp { fun: md_term, ctx: cx.gamma.clone() };
         let evaluated = self.whnf_tm(cx, &applied, span)?;
         let Term::BoxTm(payload) = &*evaluated else {
             return err(
@@ -785,6 +919,160 @@ impl Elaborator {
         Ok(Some(term))
     }
 
+    /// `match code e as T { branch(x, …) => …, _ => … }` — the surface of the
+    /// kernel's code recursor (docs/certgen-transcriber-in-language-design.md
+    /// §3). The elimination is `ElimCodeTm`, and the whole slice exists to make
+    /// its 52 branches writable:
+    ///
+    /// - **the motive is constant**, so all 52 branches expect the *same* type
+    ///   and one default term can fill the 46 nobody writes. It is elaborated
+    ///   with no locals in scope, so "constant" is enforced by name resolution
+    ///   rather than by a check after the fact;
+    /// - **both motives are that same type**, so the eight `ty_*` branches and
+    ///   the type-motive recursive results (`lam`'s domain, `elim_nat`'s
+    ///   motive) need no separate spelling — this slice analyses terms;
+    /// - **an arm binds only recursive results**, positionally, because a
+    ///   branch's other binders (its universe variables, its context, its
+    ///   sub-code globals) are not spellable at this surface anyway.
+    pub(crate) fn elab_match_code(
+        &self,
+        cx: &Cx,
+        scrut: &Expr,
+        motive: &Ty,
+        arms: &[heather_syntax::Arm],
+        span: Span,
+    ) -> R<(Term, Type, Level)> {
+        if cx.meta.is_none() {
+            return err(
+                "`match code` is layer-m machinery: it lives inside a `meta fn` \
+                 (docs/certgen-transcriber-in-language-design.md §3)",
+                span,
+            );
+        }
+        let (scrut_t, scrut_ty, _) = self.elab_infer(cx, scrut)?;
+        let Type::CodeTm { ctx, ty, level } = self.whnf(cx, &scrut_ty, span)? else {
+            return err(
+                format!(
+                    "`match code` analyses a `Code(g |- T)` value; this scrutinee is \
+                     `{scrut_ty:?}`"
+                ),
+                scrut.span,
+            );
+        };
+
+        // The motive, in a context with no locals: a motive that mentioned one
+        // could not be weakened into the branch telescopes that extend Γ, and
+        // the recursive results of `lam`/`elim_nat` would land at *extended*
+        // contexts with no way back down.
+        let mut mcx = Cx::empty();
+        mcx.meta = cx.meta.clone();
+        let (m_ty, m_lvl) = self.elab_ty(&mcx, motive)?;
+        // Motive scopes (rec.rs `motive_specs`): `M_Typ` under (ℓ; g),
+        // `M_Trm` under (ℓ; g, U_T). A constant motive still has to be
+        // *weakened* into them.
+        let motives = Rc::new(heather_kernel::term::Motives {
+            ty_motive: Rc::new(m_ty.shift_univ(1).shift_global(1)),
+            tm_motive: Rc::new(m_ty.shift_univ(1).shift_global(2)),
+        });
+        let shapes = rec::branch_shapes(&motives, &m_lvl, &m_lvl, &cx.gamma);
+
+        // The default arm is mandatory: the kernel recursor has no default,
+        // and a surface that let one be omitted would be asking the elaborator
+        // to invent 46 branch terms.
+        let Some(default) = arms.iter().find(|a| a.default) else {
+            return err(
+                "`match code` needs a `_ => …` arm: the recursor has 52 branches and \
+                 this is what fills the ones you did not write",
+                span,
+            );
+        };
+        if !arms.last().is_some_and(|a| a.default) || arms.iter().filter(|a| a.default).count() > 1
+        {
+            return err("the `_ => …` arm comes last, and there is one of it", span);
+        }
+        let d = self.elab_check(cx, &default.body, &m_ty, &m_lvl)?;
+        // The default binds nothing, so weakening it into each telescope *is*
+        // shifting it by that telescope's binder counts.
+        let mut terms: Vec<Rc<Term>> = shapes
+            .iter()
+            .map(|s| {
+                Rc::new(
+                    d.shift_univ(s.univs)
+                        .shift_global(s.globals.len() as u32)
+                        .shift_local(s.locals.len() as u32),
+                )
+            })
+            .collect();
+
+        for arm in arms.iter().filter(|a| !a.default) {
+            let Some(idx) = rec::BRANCH_NAMES.iter().position(|n| *n == arm.ctor) else {
+                return err(
+                    format!(
+                        "`{}` is not a branch of the code recursor; the term branches are \
+                         {}",
+                        arm.ctor,
+                        writable_branches()
+                    ),
+                    arm.span,
+                );
+            };
+            if arms.iter().filter(|a| a.ctor == arm.ctor).count() > 1 {
+                return err(format!("branch `{}` has two arms", arm.ctor), arm.span);
+            }
+            let shape = &shapes[idx];
+            if arm.binders.len() != shape.locals.len() {
+                return err(
+                    format!(
+                        "branch `{}` binds {} recursive result(s), not {}",
+                        arm.ctor,
+                        shape.locals.len(),
+                        arm.binders.len()
+                    ),
+                    arm.span,
+                );
+            }
+            if arm.binders.iter().any(|p| p.is_deep()) {
+                return err(
+                    "a `match code` arm binds plain names: a recursive result is a value \
+                     of the motive, not a constructor pattern",
+                    arm.span,
+                );
+            }
+            let mut acx = shift_cx(cx, shape.univs, shape.globals.len() as u32);
+            for (pat, (lty, llvl)) in arm.binders.iter().zip(&shape.locals) {
+                acx.push(pat.name().to_string(), (**lty).clone(), llvl.clone());
+            }
+            // The telescope's globals go into the oracle padding for the arm's
+            // elaboration: nothing can *name* them, but every ambient global an
+            // arm body does name is that many indices further out.
+            self.meta_pushed.borrow_mut().extend(shape.globals.iter().cloned());
+            let arm_t = self.elab_check(&acx, &arm.body, &shape.ty, &shape.level);
+            {
+                let mut mp = self.meta_pushed.borrow_mut();
+                let keep = mp.len() - shape.globals.len();
+                mp.truncate(keep);
+            }
+            terms[idx] = Rc::new(arm_t?);
+        }
+
+        let branches: [Rc<Term>; 52] =
+            terms.try_into().expect("one term per branch name");
+        Ok((
+            Term::ElimCodeTm {
+                ty_motive_level: m_lvl.clone(),
+                tm_motive_level: m_lvl.clone(),
+                motives,
+                branches: Rc::new(rec::branches_from(branches)),
+                code_level: level,
+                ctx,
+                ty,
+                scrut: Rc::new(scrut_t),
+            },
+            m_ty,
+            m_lvl,
+        ))
+    }
+
     /// A `$name` splice in *type* position. Out of the slice with `TyCode`
     /// (see [`MetaBinder`]); the arm stays so the diagnostic can say why.
     pub(crate) fn elab_ty_splice(&self, _cx: &Cx, name: &str, span: Span) -> R<(Type, Level)> {
@@ -797,6 +1085,44 @@ impl Elaborator {
             span,
         )
     }
+}
+
+/// The branch names an arm may use, for the unknown-branch diagnostic. Every
+/// name in the kernel's table is legal; the six the fragment transcriber needs
+/// lead, because they are the ones anyone writes.
+fn writable_branches() -> String {
+    let lead = ["tm_zero", "tm_succ", "tm_var", "tm_lam", "tm_app", "tm_elim_nat"];
+    let rest = rec::BRANCH_NAMES.len() - lead.len();
+    format!(
+        "{} (and {rest} more, all of `heather_kernel::rec::BRANCH_NAMES`)",
+        lead.map(|n| format!("`{n}`")).join(", ")
+    )
+}
+
+/// `cx` weakened under a branch telescope's universe and global binders. The
+/// telescope's *locals* are pushed by the caller, so ambient local indices move
+/// by the ordinary push path and are not touched here.
+///
+/// Aliases carry kernel terms and types, so they are weakened too: a `let` in a
+/// `meta fn` body must mean the same thing inside an arm as outside it.
+fn shift_cx(cx: &Cx, univs: u32, globals: u32) -> Cx {
+    let mut out = cx.clone();
+    out.gamma = cx.gamma.shift_univ(univs).shift_global(globals);
+    out.aliases = cx
+        .aliases
+        .iter()
+        .map(|a| {
+            Rc::new(Alias {
+                skel: a.skel.clone(),
+                name: a.name.clone(),
+                depth: a.depth,
+                term: Rc::new(a.term.shift_univ(univs).shift_global(globals)),
+                ty: a.ty.shift_univ(univs).shift_global(globals),
+                level: a.level.clone(),
+            })
+        })
+        .collect();
+    out
 }
 
 /// Collect the distinct `$name` **term** splices of a payload, in first-
@@ -858,6 +1184,13 @@ fn scan_splices(e: &Expr, menv: &MetaEnv, out: &mut Vec<(String, Span)>) -> R<()
         // question. An `err` rather than a recursive walk, so the answer stays
         // "filed", not "guessed" — a missed arm here is a silently non-hoisted
         // splice (issues/let-inside-quotation.md).
+        // A `match code` inside a quote payload would be layer-m machinery
+        // inside layer-c code: the payload is a program, and analysis is not
+        // part of one.
+        ExprKind::MatchCode { .. } => err(
+            "`match code` cannot appear inside a `code { … }` payload: a payload is a              program at layer c, and analysis is layer-m machinery",
+            e.span,
+        ),
         ExprKind::Block(_) => err(
             "a block inside a quote payload is not in this slice: `let` inside \
              quotation is unanalysed (issues/let-inside-quotation.md)",

@@ -837,11 +837,36 @@ pub(crate) struct MetaDef {
     pub(crate) term: Rc<Term>,
     #[allow(dead_code)]
     pub(crate) stmt: Rc<Type>,
+    /// `|Ψ|` when this definition was registered.
+    ///
+    /// A meta definition is **elaborator-held**, so nothing rescopes it when Ψ
+    /// grows — unlike a Ψ-resident binding, whose body is prefix-scoped and
+    /// rescoped at every lookup. A `GlobalVar` counts from the *end* of Ψ, so
+    /// every declaration elaborated after this one moves what its references
+    /// mean, and a use site has to shift by the growth
+    /// (`MetaDef::at`). Invisible while templates were pure quotation — a
+    /// template that references no global has nothing to go stale — and the
+    /// first analyzer, whose arms call library functions, hits it at once.
+    pub(crate) psi_len: u32,
     /// The slot this template claimed, if any. `None` is an ordinary meta
     /// definition: registered, never dispatched.
     #[allow(dead_code)]
     pub(crate) slot: Option<Slot>,
     pub(crate) order: Vec<usize>,
+}
+
+impl MetaDef {
+    /// This definition's term and statement, rescoped to a Ψ of length `now`.
+    pub(crate) fn at(&self, now: usize) -> (Rc<Term>, Rc<Type>) {
+        let growth = now as u32 - self.psi_len;
+        if growth == 0 {
+            return (Rc::clone(&self.term), Rc::clone(&self.stmt));
+        }
+        (
+            Rc::new(self.term.shift_global(growth)),
+            Rc::new(self.stmt.shift_global(growth)),
+        )
+    }
 }
 
 /// What a `p.f` turned out to be (docs/surface-records.md §4.2).
@@ -1254,6 +1279,28 @@ impl Elaborator {
     /// site, which is the coherence invariant this table is.
     pub fn derived_instances(&self) -> Vec<&str> {
         self.derived.iter().map(|d| d.name.as_str()).collect()
+    }
+
+    /// A declared global's elaborated statement and body, by written name —
+    /// what an analyzer's input is read out of (the fn to transcribe is an
+    /// ordinary declaration, already checked and in Ψ).
+    pub(crate) fn global_body(&self, name: &str) -> Option<(Rc<Type>, Rc<Term>)> {
+        let info = self.lookup_global(name)?;
+        match &self.psi.bindings[info.abs as usize] {
+            GlobalBinding::Tm { ty, body: Some(body), .. } => {
+                Some((Rc::clone(ty), Rc::clone(body)))
+            }
+            _ => None,
+        }
+    }
+
+    /// The `meta fn` claiming an analyzer slot, with the arity of its Π spine
+    /// fixed by the slot's own signature
+    /// (docs/certgen-transcriber-in-language-design.md §6). `None` is the
+    /// honest decline every caller falls back from: no template claimed it.
+    pub(crate) fn analyzer_def(&self, slot: Slot) -> Option<&MetaDef> {
+        let (m, name) = self.meta_slots.get(&slot)?;
+        self.meta_defs.get(&names::qkey(m, name))
     }
 
     /// The accumulated global context (theorem statements).
@@ -2692,6 +2739,12 @@ impl Elaborator {
                     Some(code) => Ok((code, Type::Ty(level.clone()), Level::succ(level))),
                     None => err("this equation has no code", e.span),
                 }
+            }
+            // Intensional analysis: the result type is written, so unlike a
+            // quote this one *infers*
+            // (docs/certgen-transcriber-in-language-design.md §3).
+            ExprKind::MatchCode { scrut, motive, arms } => {
+                self.elab_match_code(cx, scrut, motive, arms, e.span)
             }
             // `Type<n>` as a term is the code `TmTy(n) : Ty (n+1)`
             // (`typing.rs:756-759`) — it infers, so it needs no bridge.
@@ -7575,22 +7628,6 @@ impl Elaborator {
             (Some(pos), None) => return Ok(self.local(cx, pos)),
             (None, None) => {}
         }
-        // Inside a `meta fn`, nothing beyond locals, aliases and the Nat
-        // primitives resolves: a committed global would be referenced by a
-        // `GlobalVar` whose index the meta binders above it have shifted, and
-        // the slice is pure quotation anyway (docs/in-language-map-design.md
-        // §5 — the expressiveness verdict's opaque-globals blocker gates
-        // exactly this).
-        if cx.meta.is_some() {
-            return err(
-                format!(
-                    "`{name}` is not in scope inside a `meta fn`: the slice is pure \
-                     quotation — parameters, splices, `let code` names, and the Nat \
-                     primitives only"
-                ),
-                span,
-            );
-        }
         if let Some((ind, i)) = self.ctor_of(name) {
             return self.infer_ctor(cx, &ind, i, &[], span);
         }
@@ -7606,8 +7643,17 @@ impl Elaborator {
             Some(GlobalInfo { abs, .. }) => {
                 let len = self.psi.bindings.len() as u32;
                 // The goals sit innermost, so a committed binding is that much
-                // further out.
-                let var = GlobalVar(len - 1 - abs + self.goal_base);
+                // further out — and so do a `meta fn`'s Ψ-extending binders
+                // (its `Ctx` binder, each hoisted letbox global, a `match code`
+                // branch telescope). A layer-m term *may* name a layer-c
+                // global (`i' ≤ i`, typing.rs:756), which is what lets an
+                // analyzer's arms call ordinary library functions
+                // (docs/certgen-transcriber-in-language-design.md §4); the
+                // index arithmetic is the only thing that ever stopped it.
+                // The two paddings never combine: goals are refused inside a
+                // `meta fn`.
+                let meta_off = self.meta_pushed.borrow().len() as u32;
+                let var = GlobalVar(len - 1 - abs + self.goal_base + meta_off);
                 let GlobalBinding::Tm { ty, level, .. } =
                     &self.psi.bindings[*abs as usize]
                 else {
@@ -8087,6 +8133,11 @@ mod count_holes_impl {
                 if let Some(m) = motive {
                     expr(m, n);
                 }
+                arms.iter().for_each(|a| expr(&a.body, n));
+            }
+            ExprKind::MatchCode { scrut, motive, arms } => {
+                expr(scrut, n);
+                ty(motive, n);
                 arms.iter().for_each(|a| expr(&a.body, n));
             }
             ExprKind::J { proof, motive, case, .. } => {

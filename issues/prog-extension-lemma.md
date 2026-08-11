@@ -3,7 +3,7 @@ title: Program extension preserves convergence (the linking lemma)
 status: open
 labels: [ir,stdlib,compiler,design]
 created: 2026-08-02
-updated: 2026-08-02
+updated: 2026-08-11
 ---
 
 Filed off the certifying-generator v2 design discussion (2026-08-02): a
@@ -37,3 +37,7 @@ and its \`Converges\`-level corollary. Notes:
   version-bump refinements that add functions to a program.
 - Not scheduled; wanted when the re-derivation workaround starts to hurt
   (deep call DAGs) or when a second consumer appears.
+
+## Log
+
+- 2026-08-11: Cross-reference (2026-08-11): the transcriber re-homing round named the fold-as-a-lemma route — one Converges theorem in lib/ir_v1.hthr by induction over Ir, of which the per-function kit folds are instances — as the alternative future for in-language certificate emission (certgen-transcriber-in-language-design sec. 5). It would retire this workaround too, but it changes the trust story from certifying to verified, so it must be argued on certifying-generator's charter, not assumed.

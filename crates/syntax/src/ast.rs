@@ -706,6 +706,22 @@ pub enum ExprKind {
         motive: Option<Box<Expr>>,
         arms: Vec<Arm>,
     },
+    /// `match code e as T { zero => …, succ(t) => …, _ => … }` — intensional
+    /// analysis of code by the kernel's code recursor
+    /// (docs/certgen-transcriber-in-language-design.md §3).
+    ///
+    /// Three things distinguish it from [`ExprKind::Match`], and all three are
+    /// what make a 52-branch elimination writable at all:
+    ///
+    /// - the motive is a **constant type**, not a lambda: a motive that
+    ///   mentioned the scrutinee, its context or its level would give the
+    ///   branches 52 different expected types and would put the recursive
+    ///   results of the `lam`/`elim_nat` branches at *extended* contexts,
+    ///   where nothing can bring them back down;
+    /// - an arm binds only the branch's recursive-call results, positionally;
+    /// - the arms are keyed to `heather_kernel::rec::BRANCH_NAMES`, and the
+    ///   mandatory default arm stands for every branch not written.
+    MatchCode { scrut: Box<Expr>, motive: Box<Ty>, arms: Vec<Arm> },
     /// `p.f` (`args: None`) or `p.f(a, b)` (`args: Some`)
     /// (docs/surface-records.md §4).
     ///

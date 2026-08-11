@@ -27,7 +27,9 @@
 //! prelude is paid once, mutants are renamed apart rather than re-elaborated
 //! against a fresh prelude, and the forced control reuses the same session.
 
-use heather_elab::certgen::{compile_record, generate, generate_forced, GenCtx};
+use heather_elab::certgen::{
+    compile_record, generate, generate_forced, generate_in_language, GenCtx,
+};
 use heather_elab::Elaborator;
 use heather_syntax::ast::{Decl, Item};
 use heather_syntax::parse_file;
@@ -39,6 +41,10 @@ const LIB: &str = include_str!("../../../lib/ir_v1.hthr");
 /// all of it into scope.
 const NAT: &str = include_str!("../../../lib/std/nat.hthr");
 const BOOL: &str = include_str!("../../../lib/std/bool.hthr");
+/// The in-language transcriber: the data and helpers, plus the `match code`
+/// shell that claims `certgen.transcribe`
+/// (docs/certgen-transcriber-in-language-design.md).
+const CODE: &str = include_str!("../../../lib/certgen_code.hthr");
 
 /// Items a generated emission needs beyond the declarations prefix, in
 /// dependency (file-consistent) order.
@@ -78,6 +84,22 @@ fn support() -> String {
         s.push('\n');
     }
     s
+}
+
+/// One library item's source text, by name — the same span slice `support`
+/// uses, for the tests that need a single declaration rather than the prelude.
+fn lib_item(name: &str) -> String {
+    let file = parse_file(LIB).expect("the library parses");
+    let span = file
+        .items
+        .iter()
+        .find_map(|i| match i {
+            Item::Inductive(ind) if ind.name == name => Some(ind.span),
+            Item::Decl(d) if d.name == name => Some(d.span),
+            _ => None,
+        })
+        .unwrap_or_else(|| panic!("the library declares {name}"));
+    LIB[span.start..span.end].to_string()
 }
 
 /// A parsed `fn` declaration from the library — or from `nat`, where `add`
@@ -220,6 +242,21 @@ fn emissions_check_and_controls() {
     assert_ne!(m, rename(good, "m4"));
     refuted(&mut e, &m, "wrong spec function");
 
+    // The in-language path's own end-to-end item (design doc §10.4): `seven`
+    // is the one fixture whose in-language emission is a *different file* from
+    // the Rust one — its body is a numeral literal, so the walker spells the
+    // spec `Succ(…)` where the source said `7` — and it is checked here
+    // because this is the test that pays for the kit.
+    let mut il = base();
+    let cut = LIB.find("\ntheorem ").expect("the library has theorems");
+    elab(&mut il, &LIB[..cut], "declarations prefix");
+    elab(&mut il, CODE, "lib/certgen_code.hthr");
+    elab(&mut il, SEVEN, "fn seven");
+    elab(&mut il, &lib_item("dbl"), "fn dbl");
+    let em = generate_in_language(&il, &decl_of(SEVEN), &GenCtx::new())
+        .unwrap_or_else(|r| panic!("seven declined in-language: {r}"));
+    elab(&mut e, &em.text.replace("seven_gen", "sevenil_gen"), "in-language seven emission");
+
     // Fragment honesty, the forced half: `tri` calls `dbl`, unknown to an
     // empty context, so the forced transcription routes it to the self-call
     // — a different function — and the invariant's final `refl` faces
@@ -230,6 +267,129 @@ fn emissions_check_and_controls() {
     let em = generate_forced(&d, &GenCtx::new()).expect("forced emission");
     elab(&mut e, tri, "fn tri");
     refuted(&mut e, &em.text, "forced out-of-fragment emission");
+}
+
+/// The in-language transcriber (docs/certgen-transcriber-in-language-design.md
+/// §10): `lib/certgen_code.hthr` plus the `match code` shell replace the Rust
+/// `Compiler` for one phase, and the cross-check is that they transcribe the
+/// same program.
+///
+/// Cheap on purpose — the *declarations* prefix is all this needs, not the
+/// support prelude, because nothing here elaborates a certificate. The
+/// end-to-end emission check and the forced control live in
+/// `emissions_check_and_controls`, which already pays for the kit.
+#[test]
+fn in_language_transcriber() {
+    let mut e = base();
+    let cut = LIB.find("\ntheorem ").expect("the library has theorems");
+    elab(&mut e, &LIB[..cut], "declarations prefix");
+    elab(&mut e, CODE, "lib/certgen_code.hthr");
+    // `dbl` lives past the declarations cut, and the in-language path reads the
+    // *elaborated* body: a fn the elaborator has not seen has nothing to
+    // analyse, which is a decline, not a bug.
+    elab(&mut e, &lib_item("dbl"), "fn dbl");
+    elab(&mut e, SEVEN, "fn seven");
+    elab(&mut e, THIRD3, "fn third3");
+    elab(&mut e, MUL, "fn mul");
+
+    // The cross-check: same IR, function by function. Where the source has no
+    // numeral literal the whole *emission* matches too — the model is all the
+    // emitters see, so an equal IR plus equal parameter names is an equal
+    // file, which is a sharper statement than conversion and a cheaper one.
+    for d in [lib_decl("add"), lib_decl("dbl"), decl_of(THIRD3)] {
+        let rust = generate(&d, &GenCtx::new()).unwrap_or_else(|r| panic!("{r}"));
+        let inlang = generate_in_language(&e, &d, &GenCtx::new())
+            .unwrap_or_else(|r| panic!("{} declined in-language: {r}", d.name));
+        assert_eq!(inlang.ir_body, rust.ir_body, "{} transcribes differently", d.name);
+        assert_eq!(inlang.text, rust.text, "{}'s emission differs", d.name);
+    }
+
+    // `seven`'s body is a numeral literal, so the two paths agree on the IR
+    // and differ on the *spec spelling* only: the source says `7`, and a
+    // walker that never saw the source says `Succ(…)`. Both denote the same
+    // Nat, and the emission is checked in the expensive test.
+    let d = decl_of(SEVEN);
+    let rust = generate(&d, &GenCtx::new()).expect("seven");
+    let inlang = generate_in_language(&e, &d, &GenCtx::new()).expect("seven, in-language");
+    assert_eq!(inlang.ir_body, rust.ir_body);
+    assert_ne!(inlang.text, rust.text);
+
+    // Declines. The first is the fragment boundary the *kernel* draws: `mul`
+    // calls `add`, and `elim^Trm` is neutral on `box (u^δ)`, so the walk stops
+    // at the global — while the Rust v2 path generates it happily, which is
+    // what makes this the in-language path's decline and not the generator's.
+    let mul = decl_of(MUL);
+    let Err(msg) = generate_in_language(&e, &mul, &GenCtx::new()) else {
+        panic!("a cross-function call is outside the in-language fragment")
+    };
+    assert!(msg.contains("global"), "{msg}");
+    assert!(generate(&mul, &{
+        let mut c = GenCtx::new();
+        c.push(generate(&lib_decl("add"), &GenCtx::new()).expect("add"));
+        c
+    })
+    .is_ok());
+
+    // A body the marker pass cannot close: a `let` is not in the fragment, and
+    // a non-`Nat` parameter is refused at the signature peel.
+    for (src, needle) in [
+        ("fn withlet2(n: Nat) -> Nat { let m = n; m }", "let"),
+        ("fn evalish2(v: Val) -> Nat { 0 }", "Nat"),
+    ] {
+        let d = decl_of(src);
+        elab(&mut e, src, "decline fixture");
+        let Err(msg) = generate_in_language(&e, &d, &GenCtx::new()) else {
+            panic!("`{}` must decline in-language", d.name)
+        };
+        assert!(msg.contains(needle), "{msg}");
+    }
+}
+
+/// The in-language honesty control (design doc §10.6a), in a test of its own
+/// **because of the stack**: checking one `match code` shell means checking 52
+/// branch telescopes against a library-inductive motive, and two of those in
+/// one test thread overflow the 8 MiB `scripts/test` gives it. One shell per
+/// thread is also the cheaper arrangement.
+#[test]
+fn a_perturbed_transcriber_is_refused_by_the_kernel() {
+    let mut e = base();
+    let cut = LIB.find("\ntheorem ").expect("the library has theorems");
+    elab(&mut e, &LIB[..cut], "declarations prefix");
+    // The honesty control, and the whole architecture in one edit: perturb the
+    // *library* — `ta_succ` emitting the `Zero` tag — and what it produces
+    // must fail to check rather than prove anything about `dbl`.
+    //
+    // It arrives as two controls, because the file states its own acceptance:
+    // the perturbed `dist` is refused by `certgen_code.hthr`'s own theorems
+    // before anything downstream sees it. Strip those, and the emission is the
+    // only thing on trial — its *exactness fixture*, which needs nothing but
+    // the declarations prefix, so this control costs no kit.
+    let bad_code = CODE.replace(
+        "TExp(PCon(1, QCons(res, QNil), pre), RLoc(len), Succ(len))",
+        "TExp(PCon(0, QCons(res, QNil), pre), RLoc(len), Succ(len))",
+    );
+    assert_ne!(bad_code, CODE, "the mutation must apply");
+    if e.elab_module_source("ir_v1", &bad_code).is_ok() {
+        panic!("the library's own theorems must refuse a perturbed `dist`");
+    }
+    let thms = bad_code.find("\ntheorem ").expect("the file states its own acceptance");
+    let shell = bad_code.find("// The shell").expect("the shell is the file's last block");
+    let stripped = format!("{}\n{}", &bad_code[..thms], &bad_code[shell..]);
+    // The failed elaboration above stopped at a theorem, which is *before* the
+    // file's shell, so this is still the only 52-branch check in this thread.
+    let mut bad = base();
+    elab(&mut bad, &LIB[..cut], "declarations prefix");
+    elab(&mut bad, &stripped, "mutated lib/certgen_code.hthr");
+    elab(&mut bad, &lib_item("dbl"), "fn dbl");
+    let wrong = generate_in_language(&bad, &lib_decl("dbl"), &GenCtx::new())
+        .expect("a wrong transcriber still emits — that is the point");
+    let good = generate(&lib_decl("dbl"), &GenCtx::new()).expect("dbl");
+    assert_ne!(wrong.ir_body, good.ir_body, "the mutation must change the transcription");
+    // Everything up to the invariant: the IR, the program, and the two
+    // literal-fuel fixtures. The fixtures are `refl` on a concrete run, so a
+    // transcription that reads the wrong slots is `Stuck` there.
+    let upto = wrong.text.find("theorem dbl_gen_conv").expect("the emission proves an invariant");
+    refuted(&mut bad, &wrong.text[..upto], "mutated-transcriber emission");
 }
 
 fn ctx_get<'a>(ctx: &'a GenCtx, name: &str) -> &'a heather_elab::certgen::Emission {

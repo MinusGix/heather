@@ -36,6 +36,9 @@ pub(crate) enum Slot {
     VecFold,
     VecTabulate,
     VecNth,
+    /// The one **analyzer** slot (§ANALYZERS): the certifying generator's
+    /// fragment transcriber.
+    CertgenTranscribe,
 }
 
 /// What kind of thing a use site hands over for one ingredient, and hence how
@@ -169,6 +172,52 @@ static SLOTS: &[SlotSpec] = &[
     },
 ];
 
+/// An **analyzer** slot: a `meta fn` that consumes code and returns a *value*
+/// (docs/certgen-transcriber-in-language-design.md §9.1, and
+/// docs/meta-def-registration-design.md's dated extension section).
+///
+/// The difference from a template slot is what "having the slot's type" can
+/// mean. A template is applied to the use site's context and then to the
+/// slot's ingredients down its *payload's* Π spine, so the payload spine is
+/// where the order lives and `ITy` is the little language that states it. An
+/// analyzer has no payload: its arguments are its own Π binders, so whole-
+/// signature convertibility fixes the order outright, and the invoking Rust
+/// builds the application spine in the slot's canonical order. Same `for`
+/// clause, same closed vocabulary, same declaration-time loudness, same
+/// not-a-soundness-gate stance.
+///
+/// The expected signature is written **in Heather** and elaborated in the
+/// declaring file's scope, which is what lets it name library types (`TOut`)
+/// that are not Ψ globals at all — an inductive is inlined, so there is no
+/// global for a Rust-built type to reference.
+pub(crate) struct AnalyzerSpec {
+    pub(crate) slot: Slot,
+    pub(crate) path: (&'static str, &'static str),
+    /// A `meta fn` declaration whose *signature* is the contract; its name and
+    /// body are ignored.
+    pub(crate) signature: &'static str,
+}
+
+/// One slot, one client (the round's scoping). User-declared analyzer slots
+/// are deferred with user-declared slots generally
+/// (docs/meta-def-registration-design.md §10).
+static ANALYZERS: &[AnalyzerSpec] = &[AnalyzerSpec {
+    slot: Slot::CertgenTranscribe,
+    path: ("certgen", "transcribe"),
+    signature: "meta fn _sig(g: Ctx, arity: Nat, body: Code(g |- Nat)) -> TOut { TNo }",
+}];
+
+/// The analyzer slot a `for family.name` clause names, if it is one.
+pub(crate) fn lookup_analyzer(path: &SlotPath) -> Option<&'static AnalyzerSpec> {
+    ANALYZERS.iter().find(|s| s.path == (path.family.as_str(), path.name.as_str()))
+}
+
+impl AnalyzerSpec {
+    pub(crate) fn path_str(&self) -> String {
+        format!("{}.{}", self.path.0, self.path.1)
+    }
+}
+
 /// The slot a `for family.name` clause names, if it is one.
 pub(crate) fn lookup(path: &SlotPath) -> Option<&'static SlotSpec> {
     SLOTS.iter().find(|s| s.path == (path.family.as_str(), path.name.as_str()))
@@ -183,6 +232,7 @@ pub(crate) fn known_paths() -> String {
     SLOTS
         .iter()
         .map(|s| format!("`{}.{}`", s.path.0, s.path.1))
+        .chain(ANALYZERS.iter().map(|s| format!("`{}.{}`", s.path.0, s.path.1)))
         .collect::<Vec<_>>()
         .join(", ")
 }

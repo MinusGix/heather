@@ -203,9 +203,11 @@ pub(crate) fn motive_types(m: &Motives) -> [&Rc<Type>; 2] {
 }
 
 /// The 52 branch names, in [`branch_specs`] order — for diagnostics that
-/// must name a branch without printing a term.
-#[cfg(test)]
-pub(crate) const BRANCH_NAMES: [&str; 52] = [
+/// must name a branch without printing a term, and for the surface
+/// `match code`, whose arms are **keyed to these names**: the table below is
+/// the single source of truth for what branches exist and in what order, and
+/// the elaborator reads it rather than restating it.
+pub const BRANCH_NAMES: [&str; 52] = [
     "ty_nat",
     "ty_pi",
     "ty_ty",
@@ -316,6 +318,76 @@ pub(crate) fn branch_terms(b: &Branches) -> [&Rc<Term>; 52] {
         &b.tm_transp,
         &b.tm_elim_sempty,
     ]
+}
+
+/// What a caller outside the kernel needs in order to *write* a branch: how
+/// many binders the branch telescope pushes, and the types of its
+/// recursive-call locals under it. Everything else about a telescope (which
+/// globals, at which contexts) is the kernel's business, because a branch term
+/// that mentions them cannot be written at the surface anyway
+/// (docs/certgen-transcriber-in-language-design.md §3).
+pub struct BranchShape {
+    pub name: &'static str,
+    /// Universe binders the telescope pushes, innermost-last.
+    pub univs: u32,
+    /// Global binders (`g`, the `U_…`/`u_…` sub-code) the telescope pushes,
+    /// innermost-last and prefix-scoped, exactly as Ψ holds them. A client
+    /// that elaborates a branch body has to put these in scope even though
+    /// nothing can name them: the *indices* of the ambient globals move by
+    /// their count.
+    pub globals: Vec<GlobalBinding>,
+    /// The recursive-call locals, `(type, level)`, innermost-last — the only
+    /// telescope entries a surface arm may name.
+    pub locals: Vec<(Rc<Type>, Level)>,
+    /// The branch's expected type under its own telescope.
+    pub ty: Rc<Type>,
+    pub level: Level,
+}
+
+/// The 52 branch shapes at the given motives, in [`BRANCH_NAMES`] order.
+///
+/// Derived from [`branch_specs`], never restated: a client that binds arm
+/// variables by position stays correct when a branch's telescope changes,
+/// and gets a compile-time-checked count for free.
+pub fn branch_shapes(
+    motives: &Motives,
+    l1: &Level,
+    l2: &Level,
+    gamma: &LocalCtx,
+) -> Vec<BranchShape> {
+    branch_specs(motives, l1, l2, gamma)
+        .into_iter()
+        .zip(BRANCH_NAMES)
+        .map(|(spec, name)| BranchShape {
+            name,
+            univs: spec.tele.univs,
+            globals: spec.tele.globals,
+            locals: spec.tele.locals,
+            ty: spec.ty,
+            level: spec.level,
+        })
+        .collect()
+}
+
+/// [`Branches`] from 52 terms in [`BRANCH_NAMES`] order — the inverse of
+/// [`branch_terms`], for clients that build the table by index.
+pub fn branches_from(t: [Rc<Term>; 52]) -> Branches {
+    let [
+        ty_nat, ty_pi, ty_ty, ty_el, ty_id, ty_sigma, ty_unit, ty_empty, tm_var, tm_nat,
+        tm_pi, tm_ty, tm_zero, tm_succ, tm_elim_nat, tm_lam, tm_app, tm_id, tm_refl, tm_j,
+        tm_sigma, tm_pair, tm_fst, tm_snd, tm_unit, tm_empty, tm_triv, tm_elim_empty, ty_sum,
+        tm_sum, tm_inl, tm_inr, tm_case, ty_w, tm_w, tm_sup, tm_elim_w, ty_vec, tm_vec,
+        ty_fin, tm_fin, ty_wf, tm_wf, tm_supf, tm_elim_wf, ty_seq, tm_seq, ty_sempty,
+        tm_sempty, tm_srefl, tm_transp, tm_elim_sempty,
+    ] = t;
+    Branches {
+        ty_nat, ty_pi, ty_ty, ty_el, ty_id, ty_sigma, ty_unit, ty_empty, tm_var, tm_nat,
+        tm_pi, tm_ty, tm_zero, tm_succ, tm_elim_nat, tm_lam, tm_app, tm_id, tm_refl, tm_j,
+        tm_sigma, tm_pair, tm_fst, tm_snd, tm_unit, tm_empty, tm_triv, tm_elim_empty, ty_sum,
+        tm_sum, tm_inl, tm_inr, tm_case, ty_w, tm_w, tm_sup, tm_elim_w, ty_vec, tm_vec,
+        ty_fin, tm_fin, ty_wf, tm_wf, tm_supf, tm_elim_wf, ty_seq, tm_seq, ty_sempty,
+        tm_sempty, tm_srefl, tm_transp, tm_elim_sempty,
+    }
 }
 
 /// The 52 branch telescopes `G_Typ G_Trm` with their expected types, built

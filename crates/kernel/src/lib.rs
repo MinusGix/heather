@@ -12,7 +12,7 @@ pub mod eval;
 pub mod fmt;
 pub mod layer;
 pub mod level;
-mod rec;
+pub mod rec;
 pub mod reduce;
 pub mod subst;
 pub mod term;
