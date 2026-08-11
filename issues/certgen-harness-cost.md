@@ -3,7 +3,7 @@ title: Certgen harness and kit costs: recorded levers if either grows
 status: open
 labels: [elaboration,performance,compiler,testing]
 created: 2026-08-02
-updated: 2026-08-02
+updated: 2026-08-11
 ---
 
 Accumulator issue (perf convention: observations filed small and triggered,
@@ -29,3 +29,7 @@ one deliberate round per session). Two measured numbers from the v2 round
 
 Trigger: certgen harness > ~200 CPU-s, or a third consumer of the kit
 lemmas' elaboration cost appears.
+
+## Log
+
+- 2026-08-11: New rail entry (2026-08-11, signature-reflection round): the second match-code shell (check_sig) adds a second 52-branch rec_ga check per elaboration of lib/certgen_code.hthr and its registration re-elaboration. Small next to the transcriber shell's ~9s (the SigOut motive is tiny) and the full suite absorbed it (1450 green), but this file is the suite's second-most-expensive binary and each new analyzer shell adds another gate — the lever if it grows is shared-skeleton amortization, same family as schema-construction-caching.

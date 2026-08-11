@@ -14,4 +14,4 @@ Staged, because the Rust path is currently the repo's ONLY cross-function genera
 
 **Stage 2, when opaque-globals lands and the in-language path serves cross-function calls: delete the Rust walker.** The shared emitters downstream of FnIr stay — they are not the oracle. What replaces the cross-check's role, already mostly in place: lib/certgen_code.hthr's own refl-theorems pin the transcriptions in-language; the positive fixtures make silent declines loud; the exactness fixtures catch different-but-converging output; the kernel judges the rest. Before deletion, confirm those four cover everything the byte-identical comparison currently pins (the layout interface especially — the file header's two-conventions block becomes the sole normative statement).
 
-Related: certgen-transcriber-in-language-design sec. 5 (the oracle discipline being retired), issues/certifying-generator.md (owner of the v2 path), issues/generators-in-the-language.md (blockers 1-3).
+Related: certgen-transcriber-in-language-design sec. 5 (the oracle discipline being retired), [[certifying-generator]] (owner of the v2 path), [[generators-in-the-language]] (blockers 1-3).

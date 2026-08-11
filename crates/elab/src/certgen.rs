@@ -1072,12 +1072,16 @@ fn global_head(mut t: &Term) -> bool {
     matches!(t, Term::GlobalTm { .. })
 }
 
-/// The declaration's elaborated body, marked and closed, with its arity.
+/// The Rust half's signature read: peel the body's `Lam` spine against the
+/// type's Π spine, checking the fragment shape `Nat → … → Nat`, arity ≥ 1.
 ///
-/// Peeling the `Lam` spine is also the signature check: the fragment is
-/// `Nat → … → Nat`, and a parameter of any other type declines here rather
-/// than confusing the walker.
-fn marked_body(e: &Elaborator, name: &str) -> Result<(usize, Term), String> {
+/// Since the reflection round (docs/fn-signature-reflection-design.md §§4–5)
+/// this is **mechanical residue, not the fragment decision**: the decision is
+/// `lib/certgen_code.hthr`'s `check_sig`, run by [`run_sig_checker`], and this
+/// peel is kept because marking needs the body under its binders at a known
+/// depth — its checks survive as the agreement oracle `generate_in_language`
+/// compares the in-language verdict against.
+fn sig_peel(e: &Elaborator, name: &str) -> Result<(usize, Term), String> {
     let Some((ty, body)) = e.global_body(name) else {
         return Err(format!("`{name}` has no elaborated body to analyse"));
     };
@@ -1101,7 +1105,15 @@ fn marked_body(e: &Elaborator, name: &str) -> Result<(usize, Term), String> {
     if arity == 0 {
         return Err("a nullary fn has no calling convention to certify".into());
     }
-    Ok((arity, mark(t, arity as u32)?))
+    Ok((arity, t.clone()))
+}
+
+/// The declaration's elaborated body, marked and closed, with its arity —
+/// [`sig_peel`] composed with [`mark`], the transcriber round's one-call
+/// shape, still run by `generate_in_language` after the agreement gate.
+fn marked_body(e: &Elaborator, name: &str) -> Result<(usize, Term), String> {
+    let (arity, body) = sig_peel(e, name)?;
+    Ok((arity, mark(&body, arity as u32)?))
 }
 
 // -- readback ---------------------------------------------------------------
@@ -1291,17 +1303,21 @@ impl Reader<'_> {
 
 // -- invocation and reconstruction ------------------------------------------
 
-/// Apply the registered analyzer to `(Γ = ·, arity, box marked)` and read its
-/// answer back.
+/// Apply the analyzer registered at `slot` to `(Γ = ·, args…)`.
 ///
 /// The application spine is built in the **slot's** canonical order, which is
 /// what analyzer registration buys: whole-signature convertibility fixes the Π
 /// order, so this code does not consult the template's own signature at all
 /// (docs/meta-def-registration-design.md, analyzer extension).
-fn run_transcriber(e: &Elaborator, arity: usize, marked: Term) -> Result<RIr, String> {
+fn analyzer_app(
+    e: &Elaborator,
+    slot: Slot,
+    path: &str,
+    args: Vec<Term>,
+) -> Result<Term, String> {
     let md = e
-        .analyzer_def(Slot::CertgenTranscribe)
-        .ok_or("no `meta fn … for certgen.transcribe` is registered")?;
+        .analyzer_def(slot)
+        .ok_or_else(|| format!("no `meta fn … for {path}` is registered"))?;
     let empty = LocalCtx::nil();
     // Rescoped to the Ψ this call sees: a meta definition is elaborator-held,
     // so its global references are stale by however much Ψ has grown since it
@@ -1309,19 +1325,15 @@ fn run_transcriber(e: &Elaborator, arity: usize, marked: Term) -> Result<RIr, St
     // calls to library globals, so every one of them is affected.
     let (md_term, md_stmt) = md.at(e.psi().bindings.len());
     let Type::CtxPi { body, .. } = &*md_stmt else {
-        return Err("the transcriber does not open with a `Ctx` binder".into());
+        return Err(format!("the `{path}` analyzer does not open with a `Ctx` binder"));
     };
     let mut ty = body.apply_global(&GlobalSubst {
         entries: vec![GlobalEntry::Ctx(empty.clone())],
     });
     let mut term = Term::CtxApp { fun: md_term, ctx: empty.clone() };
-    let mut nat = Term::Zero;
-    for _ in 0..arity {
-        nat = Term::Succ(Rc::new(nat));
-    }
-    for arg in [nat, Term::BoxTm(Rc::new(marked))] {
+    for arg in args {
         let Type::Pi { dom_level, cod_level, dom, cod } = ty else {
-            return Err("the transcriber's signature ran out of parameters".into());
+            return Err(format!("the `{path}` analyzer's signature ran out of parameters"));
         };
         let arg = Rc::new(arg);
         term = Term::App {
@@ -1334,6 +1346,22 @@ fn run_transcriber(e: &Elaborator, arity: usize, marked: Term) -> Result<RIr, St
         };
         ty = (*cod).clone().apply_local(&LocalSubst::id(&empty).extended(arg));
     }
+    Ok(term)
+}
+
+/// Apply the registered transcriber to `(Γ = ·, arity, box marked)` and read
+/// its answer back.
+fn run_transcriber(e: &Elaborator, arity: usize, marked: Term) -> Result<RIr, String> {
+    let mut nat = Term::Zero;
+    for _ in 0..arity {
+        nat = Term::Succ(Rc::new(nat));
+    }
+    let term = analyzer_app(
+        e,
+        Slot::CertgenTranscribe,
+        "certgen.transcribe",
+        vec![nat, Term::BoxTm(Rc::new(marked))],
+    )?;
     // Evaluation is **spine-directed**: `Reader::whnf` reduces only what it is
     // about to inspect, so nothing ever normalizes a whole IR tree at once
     // (CLAUDE.md's memory discipline).
@@ -1343,6 +1371,32 @@ fn run_transcriber(e: &Elaborator, arity: usize, marked: Term) -> Result<RIr, St
         0 => Err("the in-language transcriber declined this body".into()),
         1 => r.ir(fields.first().ok_or("`TYes` without its IR")?),
         _ => Err("the transcriber's answer is not a `TOut`".into()),
+    }
+}
+
+/// The in-language fragment-signature verdict
+/// (docs/fn-signature-reflection-design.md §§1–2): **pull** the fn's type as
+/// code (`Elaborator::fn_type_code`, the reflection primitive), apply the
+/// registered `certgen.check_sig` analyzer to it, and read back its `SigOut` —
+/// the fragment arity, or a decline.
+///
+/// The decline carries one honest sentence rather than a per-shape reason:
+/// the library's decline discipline is a single value (`SigNo`, like the
+/// walker's `TStuck`), and reasons live at this rim.
+fn run_sig_checker(e: &Elaborator, name: &str) -> Result<u64, String> {
+    let sig = e
+        .fn_type_code(name)
+        .ok_or_else(|| format!("`{name}` has no declared type to reflect"))?;
+    let term = analyzer_app(e, Slot::CertgenCheckSig, "certgen.check_sig", vec![sig])?;
+    let r = Reader { psi: e.psi(), budget: std::cell::Cell::new(READ_BUDGET) };
+    let (idx, fields, _) = r.ctor(&term, 2)?;
+    match idx {
+        0 => Err(format!(
+            "the in-language signature checker declined `{name}`: the fragment \
+             signature is `Nat -> … -> Nat` with at least one parameter"
+        )),
+        1 => r.nat(fields.first().ok_or("`SigYes` without its arity")?),
+        _ => Err("the signature checker's answer is not a `SigOut`".into()),
     }
 }
 
@@ -1480,9 +1534,30 @@ pub fn generate_in_language(
     d: &Decl,
     ctx: &GenCtx,
 ) -> Result<Emission, String> {
+    // The signature DECISION is in-language (docs/fn-signature-reflection-
+    // design.md §4), consulted before `fragment`'s surface checks so a
+    // signature decline is the checker's — and compared against the Rust
+    // peel, whose checks survive as the agreement oracle. Disagreement is a
+    // fragment-definition drift: still an `Err` (the generator must not
+    // panic), but one the tests assert never fires.
+    let sig = run_sig_checker(e, &d.name);
+    let peel = sig_peel(e, &d.name);
+    let arity = match (&sig, &peel) {
+        (Ok(k), Ok((arity, _))) if *k as usize == *arity => *arity,
+        (Err(reason), Err(_)) => return Err(reason.clone()),
+        (s, p) => {
+            return Err(format!(
+                "signature disagreement between the in-language checker and the Rust \
+                 peel for `{}` — a fragment-definition drift, not a decline: \
+                 in-language {s:?}, Rust {p:?}",
+                d.name
+            ));
+        }
+    };
     let frag = fragment(d)?;
     let f = frag.name;
-    let (arity, marked) = marked_body(e, f)?;
+    let (marked_arity, marked) = marked_body(e, f)?;
+    debug_assert_eq!(marked_arity, arity);
     if arity != frag.params.len() {
         return Err("the elaborated body's arity disagrees with the declaration".into());
     }

@@ -16,7 +16,7 @@ Research direction from the transcriber round's user review (2026-08-11), sharpe
 
 **Route 3 — dependent code types over meta data.** Meta-level Pi over terms indexing code — the calculus currently has no form of it at all. Heaviest, metatheory-grade; also the route that gives analyzers scrutinee-indexed motives (code-variable-analysis-api's far rung). File the kernel round only if routes 1-2 both prove insufficient.
 
-Related: certifying-generator (owner of the staged list), prog-extension-lemma (retired by route 2, orthogonal to route 1), meta-body-statement-loop (route 1's surface prerequisite).
+Related: [[certifying-generator]] (owner of the staged list), [[prog-extension-lemma]] (retired by route 2, orthogonal to route 1), meta-body-statement-loop (route 1's surface prerequisite).
 
 ## Log
 

@@ -3,10 +3,14 @@
 //
 // Almost all of it is the *analysis*, and the analysis is ordinary
 // program-layer Heather: inductives and `fn`s, testable and provable like any
-// other library code. The layer-m part is the last block — one `match code`
-// whose arms are calls into the `ta_*` helpers below, claiming the
-// `certgen.transcribe` slot. That split is the artifact's point: the modal
-// layer contributes the traversal and nothing else.
+// other library code. The layer-m part is the last block — two `match code`
+// shells whose arms are calls into the helpers below: the transcriber
+// (claiming `certgen.transcribe`, walking the marked body) and the signature
+// checker (claiming `certgen.check_sig`, walking the fn's type as pulled by
+// the reflection API — docs/fn-signature-reflection-design.md). That split is
+// the artifact's point: the modal layer contributes the traversal and nothing
+// else. With both shells here, the whole fragment definition — signature and
+// body — reads off this one file.
 //
 // Elaborated on top of `lib/ir_v1.hthr`'s declarations prefix — `Ir`, `Refs`,
 // `Prog`, `Val` and `import nat;`'s `add`/`sub` come from there, so this file
@@ -295,6 +299,39 @@ fn ta_finish(arity: Nat, t: TA) -> TOut {
 }
 
 // ---------------------------------------------------------------------------
+// The signature checker (docs/fn-signature-reflection-design.md §2). The
+// analyzed fn's TYPE arrives as code — pulled by the elaborator's reflection
+// primitive, `TyCode(g)` in the shell below — and the fragment signature rule
+// lives here, whole: `Nat -> … -> Nat`, at least one parameter. `SigYes(a)`
+// off the raw walk means "`Nat -> … -> Nat` with `a` parameters"; only the
+// `ty_nat` arm mints `SigYes(0)`, which is what makes "the domain is exactly
+// `Nat`" a one-line test. `SigNo` is the decline, total like `TStuck`.
+
+inductive SigOut { SigNo, SigYes(arity: Nat) }
+
+// A Π is in the fragment iff its domain is a bare `Nat` — `SigYes(0)`; a
+// higher-order `Nat -> Nat` domain arrives as `SigYes(1)` and declines — and
+// its codomain is a fragment signature, one parameter shorter.
+fn sig_pi(dom: SigOut, cod: SigOut) -> SigOut {
+    match dom {
+        SigNo => SigNo,
+        SigYes(a) => match a {
+            Zero => match cod { SigNo => SigNo, SigYes(k) => SigYes(Succ(k)) },
+            Succ(a2) => SigNo,
+        },
+    }
+}
+
+// The whole-signature rule: a bare `Nat` — arity 0 — declines, because a
+// nullary fn has no calling convention to certify.
+fn sig_finish(s: SigOut) -> SigOut {
+    match s {
+        SigNo => SigNo,
+        SigYes(a) => match a { Zero => SigNo, Succ(k) => SigYes(Succ(k)) },
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Computation checks. These are the cross-check discipline (§5) run by
 // conversion instead of by `conv_term` from Rust: each right-hand side is
 // what `crates/elab/src/certgen.rs`'s `Compiler` emits for the same function.
@@ -373,13 +410,31 @@ theorem elim_needs_a_parameter():
     ta_elim(1, ta_zero(), ta_zero(), ta_zero()) = TStuck
 { refl }
 
+// The signature checker's own pins: `dbl`'s and `add`'s signatures, spelled
+// as the walker builds them (`SigYes(0)` is the `ty_nat` arm's answer), and
+// the two declines the fragment rule turns on.
+theorem sig_dbl(): sig_finish(sig_pi(SigYes(0), SigYes(0))) = SigYes(1) { refl }
+
+theorem sig_add():
+    sig_finish(sig_pi(SigYes(0), sig_pi(SigYes(0), SigYes(0)))) = SigYes(2)
+{ refl }
+
+// A bare `Nat` is a nullary fn: no calling convention to certify.
+theorem sig_nullary_declines(): sig_finish(SigYes(0)) = SigNo { refl }
+
+// A higher-order domain — `(Nat -> Nat) -> Nat` — is outside the fragment.
+theorem sig_higher_order_declines():
+    sig_pi(sig_pi(SigYes(0), SigYes(0)), SigYes(0)) = SigNo
+{ refl }
+
 // ---------------------------------------------------------------------------
-// The shell: the only part of this file that is layer m.
+// The shells: the only part of this file that is layer m.
 //
-// One elimination over code, six arms, and a default. Everything it does is
-// call the helpers above, which is the point — the analysis is ordinary
-// Heather, and the modal layer contributes the traversal and nothing else
-// (design doc §4).
+// One elimination over code each — the transcriber over the marked body, the
+// signature checker over the fn's type — arms that are calls, and a default.
+// Everything they do is call the helpers above, which is the point — the
+// analysis is ordinary Heather, and the modal layer contributes the traversal
+// and nothing else (design doc §4).
 //
 // Why the arms are what they are:
 //
@@ -412,5 +467,24 @@ meta fn transcribe(g: Ctx, arity: Nat, body: Code(g |- Nat))
         tm_app(dom, cod, hd, arg) => ta_app(arity, hd, arg),
         tm_elim_nat(m, z, s, sc)  => ta_elim(arity, z, s, sc),
         _                         => ta_stuck(),
+    })
+}
+
+// The signature checker's shell: the same `match code`, over a TYPE code —
+// the fn's signature, pulled by the elaborator's reflection primitive
+// (docs/fn-signature-reflection-design.md §1) — eliminating with the
+// recursor's `ty_*` side. `ty_pi` binds its two recursive results (the
+// domain's verdict and the codomain's; the codomain's is computed at an
+// extended local context, which is why the motive must be context-free here
+// exactly as it is above). Every other type former — Σ, W, a user
+// inductive's inlined lowering, a dependent codomain that is not a
+// `Nat`-chain — takes the default arm and declines.
+meta fn check_sig(g: Ctx, sig: TyCode(g))
+    for certgen.check_sig -> SigOut
+{
+    sig_finish(match code sig as SigOut {
+        ty_nat        => SigYes(0),
+        ty_pi(ds, dt) => sig_pi(ds, dt),
+        _             => SigNo,
     })
 }

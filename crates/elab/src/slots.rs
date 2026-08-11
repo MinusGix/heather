@@ -36,9 +36,14 @@ pub(crate) enum Slot {
     VecFold,
     VecTabulate,
     VecNth,
-    /// The one **analyzer** slot (§ANALYZERS): the certifying generator's
+    /// An **analyzer** slot (§ANALYZERS): the certifying generator's
     /// fragment transcriber.
     CertgenTranscribe,
+    /// The certifying generator's fragment *signature* checker
+    /// (docs/fn-signature-reflection-design.md §2): consumes a fn's type as
+    /// code — the pull reflection API's first datum — and answers with the
+    /// fragment arity, or declines.
+    CertgenCheckSig,
 }
 
 /// What kind of thing a use site hands over for one ingredient, and hence how
@@ -198,14 +203,26 @@ pub(crate) struct AnalyzerSpec {
     pub(crate) signature: &'static str,
 }
 
-/// One slot, one client (the round's scoping). User-declared analyzer slots
+/// One slot per client (the round's scoping). User-declared analyzer slots
 /// are deferred with user-declared slots generally
 /// (docs/meta-def-registration-design.md §10).
-static ANALYZERS: &[AnalyzerSpec] = &[AnalyzerSpec {
-    slot: Slot::CertgenTranscribe,
-    path: ("certgen", "transcribe"),
-    signature: "meta fn _sig(g: Ctx, arity: Nat, body: Code(g |- Nat)) -> TOut { TNo }",
-}];
+///
+/// A `TyCode(g)` parameter in an expected signature is where a slot's **pull**
+/// is visible (docs/fn-signature-reflection-design.md §1): the invoking Rust
+/// fills it from `Elaborator::fn_type_code`, the reflection primitive, in the
+/// slot's canonical order.
+static ANALYZERS: &[AnalyzerSpec] = &[
+    AnalyzerSpec {
+        slot: Slot::CertgenTranscribe,
+        path: ("certgen", "transcribe"),
+        signature: "meta fn _sig(g: Ctx, arity: Nat, body: Code(g |- Nat)) -> TOut { TNo }",
+    },
+    AnalyzerSpec {
+        slot: Slot::CertgenCheckSig,
+        path: ("certgen", "check_sig"),
+        signature: "meta fn _sig(g: Ctx, sig: TyCode(g)) -> SigOut { SigNo }",
+    },
+];
 
 /// The analyzer slot a `for family.name` clause names, if it is one.
 pub(crate) fn lookup_analyzer(path: &SlotPath) -> Option<&'static AnalyzerSpec> {

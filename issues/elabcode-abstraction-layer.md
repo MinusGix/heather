@@ -17,3 +17,7 @@ User plan, stated 2026-08-11: most metaprograms should eventually NOT touch raw 
 Design principle this issue carries (user, 2026-08-11): 'it is beautiful if it can elegantly be in the theory, but if it isn't elegant fundamentally, it doesn't need to be in the theory most of the time.' The underlying duality: quotients/funext are IDENTIFICATION primitives (erase distinctions globally in the semantic layer — which is why they haunt: canonicity strain, undecidabilities, lost useful distinctions), Code is an OBSERVATION primitive (adds distinctions behind a modality, fenced by the layer discipline from the equational theory — tm_var's opacity being load-bearing is this fence working). Fenced observation is conservative where global identification is not; setoid-auto-lifting is the same stance applied to quotients.
 
 Wants: fn-reflection-for-analyzers (the reflect inputs), retire-rust-transcriber (dogfooding pressure), meta-body-statement-loop (reify's surface prerequisite). Not scheduled; direction with a live first instance.
+
+## Log
+
+- 2026-08-11: Cross-link (2026-08-11, coordinator bookkeeping): [[ownership-discipline-over-code]] is this pattern's first named client — a decidable judgment over reflected code plus one soundness theorem, behind the layer fence, the kernel never learning the word. The link existed only in the 2026-08-11 commit message; it belongs here.

@@ -330,18 +330,38 @@ fn in_language_transcriber() {
     })
     .is_ok());
 
-    // A body the marker pass cannot close: a `let` is not in the fragment, and
-    // a non-`Nat` parameter is refused at the signature peel.
-    for (src, needle) in [
-        ("fn withlet2(n: Nat) -> Nat { let m = n; m }", "let"),
-        ("fn evalish2(v: Val) -> Nat { 0 }", "Nat"),
-    ] {
+    // A body the marker pass cannot close: a `let` is not in the fragment.
+    // (The signature is fine, so this decline is the *body* residue's, after
+    // the in-language signature verdict said yes.)
+    {
+        let src = "fn withlet2(n: Nat) -> Nat { let m = n; m }";
         let d = decl_of(src);
         elab(&mut e, src, "decline fixture");
         let Err(msg) = generate_in_language(&e, &d, &GenCtx::new()) else {
             panic!("`{}` must decline in-language", d.name)
         };
-        assert!(msg.contains(needle), "{msg}");
+        assert!(msg.contains("let"), "{msg}");
+    }
+
+    // The in-language signature checker
+    // (docs/fn-signature-reflection-design.md §§4, 7.5): a non-`Nat`
+    // parameter, a non-`Nat` result and a nullary fn are each declined by the
+    // LIBRARY's `check_sig` — the message says so — and none is a
+    // disagreement with the Rust peel, which is the agreement property
+    // asserted from the negative side. (The positives above assert it from
+    // the accepting side: a disagreement is an `Err`, and they demand `Ok`.)
+    for src in [
+        "fn evalish2(v: Val) -> Nat { 0 }",
+        "fn tocmp(n: Nat) -> Cmp { CLt }",
+        "fn nofn() -> Nat { 0 }",
+    ] {
+        let d = decl_of(src);
+        elab(&mut e, src, "signature decline fixture");
+        let Err(msg) = generate_in_language(&e, &d, &GenCtx::new()) else {
+            panic!("`{}`'s signature must decline in-language", d.name)
+        };
+        assert!(msg.contains("in-language signature checker"), "{msg}");
+        assert!(!msg.contains("disagreement"), "{msg}");
     }
 }
 
@@ -390,6 +410,43 @@ fn a_perturbed_transcriber_is_refused_by_the_kernel() {
     // transcription that reads the wrong slots is `Stuck` there.
     let upto = wrong.text.find("theorem dbl_gen_conv").expect("the emission proves an invariant");
     refuted(&mut bad, &wrong.text[..upto], "mutated-transcriber emission");
+}
+
+/// The agreement property's loud half (docs/fn-signature-reflection-design.md
+/// §4): perturb the LIBRARY's signature rule — `sig_finish` accepting the
+/// nullary signature — and a nullary fn's generation must fail with the
+/// **disagreement** message, never silently ride either verdict. Own test for
+/// the same stack reason as above (a second `match code` shell check per
+/// thread), and with the file's own theorems stripped first, because they
+/// refuse the mutation before anything downstream sees it — the same
+/// two-controls shape as the transcriber's honesty control.
+#[test]
+fn a_perturbed_signature_checker_is_a_loud_disagreement() {
+    let mut e = base();
+    let cut = LIB.find("\ntheorem ").expect("the library has theorems");
+    elab(&mut e, &LIB[..cut], "declarations prefix");
+    let bad_code = CODE.replace(
+        "SigYes(a) => match a { Zero => SigNo, Succ(k) => SigYes(Succ(k)) },",
+        "SigYes(a) => SigYes(a),",
+    );
+    assert_ne!(bad_code, CODE, "the mutation must apply");
+    if e.elab_module_source("ir_v1", &bad_code).is_ok() {
+        panic!("the library's own theorems must refuse a perturbed `sig_finish`");
+    }
+    let thms = bad_code.find("\ntheorem ").expect("the file states its own acceptance");
+    let shell = bad_code.find("// The shell").expect("the shells are the file's last block");
+    let stripped = format!("{}\n{}", &bad_code[..thms], &bad_code[shell..]);
+    // The failed elaboration stopped at a theorem, before either shell, so the
+    // stripped file's two shells are this thread's only 52-branch checks.
+    let mut bad = base();
+    elab(&mut bad, &LIB[..cut], "declarations prefix");
+    elab(&mut bad, &stripped, "mutated lib/certgen_code.hthr");
+    let nofn = "fn nofn2() -> Nat { 0 }";
+    elab(&mut bad, nofn, "fn nofn2");
+    let Err(msg) = generate_in_language(&bad, &decl_of(nofn), &GenCtx::new()) else {
+        panic!("a nullary fn must not generate")
+    };
+    assert!(msg.contains("disagreement"), "{msg}");
 }
 
 fn ctx_get<'a>(ctx: &'a GenCtx, name: &str) -> &'a heather_elab::certgen::Emission {

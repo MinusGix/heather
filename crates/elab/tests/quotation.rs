@@ -143,14 +143,15 @@ fn an_ordinary_global_is_in_scope_inside_a_meta_fn() {
 }
 
 #[test]
-fn tycode_binders_are_out_of_the_slice_with_the_layer_reason() {
-    // The reserved syntax parses; the elaborator declines it by naming the
-    // kernel fact (the `i' ≤ i` binding invariant) and the route around.
-    let msg = elab_err(
-        "meta fn f(g: Ctx, a: TyCode(g)) -> Code(g |- Nat) { code { 0 } }",
-    );
-    assert!(msg.contains("layer p"), "{msg}");
-    assert!(msg.contains("Type<0>"), "{msg}");
+fn a_tycode_parameter_is_an_ordinary_code_of_a_type_local() {
+    // Flipped from a refusal by the signature-reflection round
+    // (docs/fn-signature-reflection-design.md §3): `TyCode(g)` as a
+    // *parameter* is an ordinary local of kernel type `CodeTy` — an
+    // analyzer's reflected input — and extends nothing. What stays out is the
+    // Ψ-extending `TyCode` *binder* role (a `$a` type splice for building
+    // generic code), which the `i' ≤ i` binding invariant refuses — the next
+    // test still pins that.
+    elab("meta fn f(g: Ctx, a: TyCode(g)) -> Code(g |- Nat) { code { 0 } }");
 }
 
 #[test]
@@ -211,6 +212,25 @@ fn a_match_code_analyses_a_code_argument() {
                  tm_app(dom, cod, hd, arg) => arg,
                  tm_elim_nat(m, z, s, sc) => sc,
                  _ => 0,
+             }
+         }",
+    );
+}
+
+#[test]
+fn a_match_code_analyses_a_type_code_argument() {
+    // The `ty_*` side (docs/fn-signature-reflection-design.md §3): a
+    // `TyCode(g)` scrutinee assembles an `ElimCodeTy` — same motives, same 52
+    // branches — so this passing means the type-code recursor typed at the
+    // meta gate. `ty_pi` binds two recursive results (rec.rs `ty_pi`; ch. 04
+    // `G_Typ`), the codomain's at an extended local context, which the
+    // constant motive absorbs exactly as it does for `tm_lam`.
+    elab(
+        "meta fn probe(g: Ctx, sig: TyCode(g)) -> Nat {
+             match code sig as Nat {
+                 ty_nat => 0,
+                 ty_pi(s, t) => t,
+                 _ => 1,
              }
          }",
     );

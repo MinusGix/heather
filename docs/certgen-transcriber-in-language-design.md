@@ -677,7 +677,11 @@ crosses `docs/meta-def-registration-design.md`, which this round does not own):
 - **Sub-code binders and splice-patterns in arms**, **dependent motives**,
   **`ty_*` arms**, **`CodeTy`/`LetBoxTy` inputs** — all four arrive together
   with the first artifact that analyzes *types* (§8 item 2, non-Nat
-  embeddings).
+  embeddings). *[Corrected 2026-08-11 by the signature-reflection round
+  (`docs/fn-signature-reflection-design.md`): the first type-analyzing
+  artifact needed only a `CodeTy`-typed input plus the `ty_*` arms — which
+  were already writable, all 52 names, per §10.1's deviation. Sub-code
+  binders and dependent motives did not arrive and were not needed.]*
 - **Fixture fuels and the loopification pass** — unchanged homes
   (`docs/certifying-generator-design.md` §8 items 1 and 3).
 - **User-declared analyzer slots** — deferred with user-declared slots

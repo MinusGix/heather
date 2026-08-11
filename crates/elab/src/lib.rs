@@ -1294,6 +1294,30 @@ impl Elaborator {
         }
     }
 
+    /// The **pull reflection API**, first cut
+    /// (issues/fn-reflection-for-analyzers.md,
+    /// docs/fn-signature-reflection-design.md §1): a declared fn's *type as
+    /// code* — a `Term::BoxTy` of type `CodeTy(·, 0)`, ready for the
+    /// type-code recursor. Nothing is stored per declaration; the type is
+    /// read out of Ψ on request, which is what makes this pull and not push.
+    ///
+    /// THE IMPLEMENTATION IS A PLACEHOLDER for the opaque-globals kernel
+    /// round: today the elaborator reads its own table and rescopes
+    /// (`shift_global` by the Ψ growth since the binding — the same `v + 1`
+    /// convention `Defs::body` uses on prefix-scoped kernel data); later,
+    /// `u^δ` unfolding-for-analysis mints the same value under its ch. 07
+    /// obligations. The *interface* — name in, boxed type code out — is the
+    /// part that round keeps, so `lib/` never sees the swap.
+    pub(crate) fn fn_type_code(&self, name: &str) -> Option<Term> {
+        let info = self.lookup_global(name)?;
+        let abs = info.abs as usize;
+        let GlobalBinding::Tm { ty, .. } = &self.psi.bindings[abs] else {
+            return None;
+        };
+        let growth = (self.psi.bindings.len() - abs) as u32;
+        Some(Term::BoxTy(Rc::new(ty.shift_global(growth))))
+    }
+
     /// The `meta fn` claiming an analyzer slot, with the arity of its Π spine
     /// fixed by the slot's own signature
     /// (docs/certgen-transcriber-in-language-design.md §6). `None` is the

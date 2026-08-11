@@ -1,6 +1,6 @@
 ---
 title: Reflection for analyzers: signatures (and bodies) the language can see, pull not push
-status: open
+status: closed
 labels: [metaprogramming,elaboration,design,frontend]
 created: 2026-08-11
 updated: 2026-08-11
@@ -12,4 +12,9 @@ Research direction from the transcriber round's user review (2026-08-11). Today 
 
 **The API shape: PULL, not push.** Not annotations stored per declaration ('the elaborator emits extra data for every fn') but reflection primitives an analyzer requests — 'this fn's type as code', 'this fn's marked body'. Two reasons: (1) it is exactly the interface the opaque-globals kernel round must define anyway (u^delta unfolding-for-analysis with its ch. 07 obligations), so designing the pull API Rust-side now means that round later replaces the implementation, not the interface; (2) it stays honest about staging — the elaborator is destined to be Heather itself (the thesis), at which point a pull API is just an ordinary metaprogram operation, no residual magic.
 
-Related: generators-in-the-language blockers (1)-(3) (the kernel-round half), code-variable-analysis-api (the body-side data the same API hands over), certgen-transcriber-in-language-design sec. 5 (the phase split this dissolves).
+Related: generators-in-the-language blockers (1)-(3) (the kernel-round half), [[code-variable-analysis-api]] (the body-side data the same API hands over), certgen-transcriber-in-language-design sec. 5 (the phase split this dissolves).
+
+## Log
+
+- 2026-08-11: The cheap first step LANDED (2026-08-11, managed round; docs/fn-signature-reflection-design.md). The pull API's first cut: Elaborator::fn_type_code(name) -> boxed CodeTy(., 0) read from Psi per invocation, nothing stored per declaration; an analyzer declares its appetite with a TyCode(g) parameter in its slot signature (second analyzer slot, certgen.check_sig), and the harness fills it from the primitive — so the opaque-globals round swaps only the primitive's body, never the interface or lib/. The fragment signature DECISION is in-language: SigOut/sig_pi/sig_finish + a check_sig shell (ty_nat/ty_pi arms, default declines) in lib/certgen_code.hthr, four refl pins; Rust marked_body split into sig_peel + mark (behavior frozen) and kept as the agreement oracle — both verdicts must co-accept with equal arity or co-decline, and 'signature disagreement' is an Err the tests assert never fires (plus a perturbed-checker test proving it WOULD fire). The honest widening was smaller than filed: 'the type motive stops being Unit' described a state that never landed (the transcriber slice already uses one constant motive for both), so the real widening is (a) match code dispatching CodeTy scrutinees to ElimCodeTy — same 52 branches, same rec_ga gate — and (b) TyCode(g) as an ordinary meta-fn LOCAL of type CodeTy{g,0}; the Psi-extending TyCode binder role stays out. Suite 1448 -> 1450. Stays open for the body-reflection primitive (named with the opaque-globals round) and non-certgen analyzers.
+- 2026-08-11: Closing (2026-08-11): the actionable content — the cheap first step and the pull-API shape — landed above. What remains is homed, not owed here: the body-reflection primitive rides with the opaque-globals kernel round ([[generators-in-the-language]] blockers (1)-(3), and [[code-variable-analysis-api]] for the body-side data it hands over); analyzers beyond certgen are deferred with user-declared slots (docs/meta-def-registration-design.md sec. 10).

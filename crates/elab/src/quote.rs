@@ -64,8 +64,10 @@ pub(crate) struct MetaEnv {
 /// binding invariant `i' ≤ i` (typing.rs `GlobalTy`/`GlobalTm` rules) makes
 /// it unreferenceable from layer-c code — not even as a `Lam`/`App`
 /// annotation inside a payload. Genericity inside code is code-level Π over
-/// a universe (`fun (A: Type<0>) => …`), which is ordinary MLTT; `TyCode`
-/// returns with the analysis story, whose code recursors are its consumer.
+/// a universe (`fun (A: Type<0>) => …`), which is ordinary MLTT. The analysis
+/// story's consumer arrived as predicted, but as an ordinary **local** of
+/// type `CodeTy` ([`Sig::Local`], the `TyCode(g)` parameter of an analyzer),
+/// which extends nothing — the Ψ-extending binder role stays out.
 #[derive(Clone)]
 pub(crate) enum MetaBinder {
     /// `g: Ctx` — a signature context binder (`CtxLam`).
@@ -161,15 +163,22 @@ impl Elaborator {
                     self.meta_pushed.borrow_mut().push(GlobalBinding::Ctx);
                     sig.push(Sig::Ctx);
                 }
-                TyKind::TyCode { .. } => {
-                    return err(
-                        "`TyCode` is not in this slice: a `TyPi`-bound type is layer p \
-                         and cannot appear inside layer-c code (the kernel's binding \
-                         invariant) — a generic template binds its types *inside* the \
-                         code instead, `Code(g |- (A: Type<0>) -> …)` \
-                         (docs/in-language-map-design.md §3)",
-                        p.span,
-                    );
+                // `TyCode(g)` as an **ordinary parameter**: a code-of-a-type
+                // value, kernel type `CodeTy { g, 0 }`, the analyzer input the
+                // pull reflection API fills (docs/fn-signature-reflection-
+                // design.md §3). This is not the Ψ-extending `TyCode` *binder*
+                // (which would deliver `$a` type splices for building generic
+                // code) — that role stays out: a `TyPi`-bound type is layer p
+                // and cannot appear inside layer-c code, so a generic template
+                // still binds its types *inside* the code
+                // (docs/in-language-map-design.md §3). Level 0, like the
+                // `Code` locals: the slice has no level variables.
+                TyKind::TyCode { ctx } => {
+                    seen_local = true;
+                    let g = menv.ctx_ref(ctx, p.span)?;
+                    let ty = Type::CodeTy { ctx: g, level: Level::Zero };
+                    cx.push(p.name.clone(), ty.clone(), Level::Zero);
+                    sig.push(Sig::Local { ty, level: Level::Zero });
                 }
                 TyKind::Code { ctx, ty } => {
                     seen_local = true;
@@ -921,8 +930,9 @@ impl Elaborator {
 
     /// `match code e as T { branch(x, …) => …, _ => … }` — the surface of the
     /// kernel's code recursor (docs/certgen-transcriber-in-language-design.md
-    /// §3). The elimination is `ElimCodeTm`, and the whole slice exists to make
-    /// its 52 branches writable:
+    /// §3). The elimination is `ElimCodeTm` on a term-code scrutinee and
+    /// `ElimCodeTy` on a type-code one (docs/fn-signature-reflection-design.md
+    /// §3), and the whole slice exists to make the 52 branches writable:
     ///
     /// - **the motive is constant**, so all 52 branches expect the *same* type
     ///   and one default term can fill the 46 nobody writes. It is elaborated
@@ -950,14 +960,28 @@ impl Elaborator {
             );
         }
         let (scrut_t, scrut_ty, _) = self.elab_infer(cx, scrut)?;
-        let Type::CodeTm { ctx, ty, level } = self.whnf(cx, &scrut_ty, span)? else {
-            return err(
-                format!(
-                    "`match code` analyses a `Code(g |- T)` value; this scrutinee is \
-                     `{scrut_ty:?}`"
-                ),
-                scrut.span,
-            );
+        // A term code (`Code(g |- T)`) eliminates with `ElimCodeTm`; a type
+        // code (`TyCode(g)`) with `ElimCodeTy` (docs/fn-signature-reflection-
+        // design.md §3). Same motives, same 52 branches, same `rec_ga` gate —
+        // the two recursors differ only in the scrutinee's judgment and in
+        // which motive the conclusion instantiates, and a constant motive
+        // erases the second difference.
+        enum Scrutinee {
+            Tm { ctx: heather_kernel::term::LocalCtx, ty: Rc<Type>, level: Level },
+            Ty { ctx: heather_kernel::term::LocalCtx, level: Level },
+        }
+        let scrutinee = match self.whnf(cx, &scrut_ty, span)? {
+            Type::CodeTm { ctx, ty, level } => Scrutinee::Tm { ctx, ty, level },
+            Type::CodeTy { ctx, level } => Scrutinee::Ty { ctx, level },
+            other => {
+                return err(
+                    format!(
+                        "`match code` analyses a `Code(g |- T)` or `TyCode(g)` value; \
+                         this scrutinee is `{other:?}`"
+                    ),
+                    scrut.span,
+                );
+            }
         };
 
         // The motive, in a context with no locals: a motive that mentioned one
@@ -1057,20 +1081,29 @@ impl Elaborator {
 
         let branches: [Rc<Term>; 52] =
             terms.try_into().expect("one term per branch name");
-        Ok((
-            Term::ElimCodeTm {
+        let branches = Rc::new(rec::branches_from(branches));
+        let term = match scrutinee {
+            Scrutinee::Tm { ctx, ty, level } => Term::ElimCodeTm {
                 ty_motive_level: m_lvl.clone(),
                 tm_motive_level: m_lvl.clone(),
                 motives,
-                branches: Rc::new(rec::branches_from(branches)),
+                branches,
                 code_level: level,
                 ctx,
                 ty,
                 scrut: Rc::new(scrut_t),
             },
-            m_ty,
-            m_lvl,
-        ))
+            Scrutinee::Ty { ctx, level } => Term::ElimCodeTy {
+                ty_motive_level: m_lvl.clone(),
+                tm_motive_level: m_lvl.clone(),
+                motives,
+                branches,
+                code_level: level,
+                ctx,
+                scrut: Rc::new(scrut_t),
+            },
+        };
+        Ok((term, m_ty, m_lvl))
     }
 
     /// A `$name` splice in *type* position. Out of the slice with `TyCode`
