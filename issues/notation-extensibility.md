@@ -3,7 +3,7 @@ title: "Notation: how open, and open along which axis"
 status: open
 labels: [frontend, syntax, design]
 created: 2026-07-24
-updated: 2026-08-10
+updated: 2026-08-11
 ---
 
 [[surface-syntax]] states the position as "a **fixed grammar** of common
@@ -307,4 +307,17 @@ Related: [[front-end-sugar]] (what the sugar layer must cover),
 - 2026-08-09: Second customer from the operators round's close: a RESERVED GENERIC symbol (∙ or ⋆) for generic theory — never designated at any carrier, no fallback name, so rungs 2/3 never fire and the symbol can ONLY mean a bound index: constitutionally generic, enforced by absence rather than convention. Library taste split suggested: + in the commutative chain (earned connotations), ∙ for bare Semigroup/Monoid theorems where + would whisper commutativity over append. One lexer token; no elaborator change — the constraint-symbol machinery is indifferent.
 - 2026-08-09: The || / && customer was served without the mechanism: [[bool-operator-designations]] closed by adding the two symbols to the FIXED lexicon (two-byte tokens, precedence between the comparison rung and +/*, no fallback rung — meaning comes only from designations and binders). This is the cheapest possible axis-1 data point: a lexicon addition that needed no extensibility machinery because the symbol set is still small enough to curate by hand. The question this issue owns — whether users may add symbols — stands unchanged; what the round demonstrates is that a curated addition costs ~4 small edits (lexer, bp table, op_symbol, designations), which is the number an extension mechanism has to beat.
 - 2026-08-09: Two more curated-lexicon customers from the algebra cleanup review: [[list-append-symbol]] (++ on the &&/|| recipe, retiring + at List) and [[binder-symbol-as-notation]] (the reserved generic ∙, now with a concrete mechanism: as-notation on declaring binders — class heads and value parameters). [[class-default-operators]] is filed for the day the symbol-slot ceremony stops scaling (Lattice, orders); it leans on the ∙-style curated additions and on no new resolution rung.
+- 2026-08-11: The reserved generic `∙` (U+2219) lands as a curated token, via
+  [[binder-symbol-as-notation]]. Cost, measured against the four-edit estimate
+  this log has been keeping: lexer token, binding-power row, `op_symbol` row —
+  and *no* designation row and *no* fallback entry, which is the whole of what
+  makes it reserved. So three edits, one fewer than `&&`/`||`/`++`, because a
+  symbol whose only meaning is a binder needs no table. One genuinely new
+  lexical fact: `∙` is **three bytes**, where every symbol before it was one or
+  two, so the lexer grew a three-byte window beside its two-byte one — the
+  first real cost of going past ASCII, and it is a five-line one. Precedence
+  came from the class scheme above without a decision being needed (a
+  dot-shaped operator is multiplicative). The extension-mechanism question
+  stands unchanged; the running score is that a curated addition costs three to
+  four small edits, which is still the number a mechanism has to beat.
 - 2026-08-10: The second curated-lexicon data point landed via [[list-append-symbol]]: `++` costs the same lexer/binding-power/op-symbol/designation edits as predicted, shares additive precedence, and has no fallback. The extension-mechanism question remains unchanged.

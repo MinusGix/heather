@@ -434,6 +434,36 @@ impl Parser {
         matches!(self.peek(), TokKind::Ident(s) if s == kw)
     }
 
+    /// `op as ∙` — the **body spelling** a declaring binder installs
+    /// (issues/binder-symbol-as-notation.md). Read directly after the binder's
+    /// name, before its `:`.
+    ///
+    /// `as` can only install a symbol that **already lexes**, which is what
+    /// bounds the device's blast radius: the curated table
+    /// (issues/notation-extensibility.md) is the same one everything else is
+    /// bounded by, so this grammar adds a *position* for a symbol and never a
+    /// symbol. A name here — `op as mul` — is refused with the table, since it
+    /// would otherwise read as the beginning of an unrelated parse error.
+    fn binder_symbol(&mut self, name: &str) -> R<Option<String>> {
+        if !self.at_kw("as") {
+            return Ok(None);
+        }
+        let asp = self.bump().span;
+        let Some(sym) = Self::op_symbol(self.peek()) else {
+            return Err(ParseError {
+                msg: format!(
+                    "`{name} as …` installs an operator SYMBOL as this binder's body \
+                     spelling, and `as` can only install one that already lexes: the \
+                     curated table is `+`, `++`, `*`, `&&`, `||`, `∙`, `<=`, `<` \
+                     (issues/notation-extensibility.md owns the lexicon)"
+                ),
+                span: asp.join(self.peek_span()),
+            });
+        };
+        self.bump();
+        Ok(Some(sym.to_string()))
+    }
+
     fn eat_kw(&mut self, kw: &str) -> bool {
         if self.at_kw(kw) {
             self.bump();
@@ -502,7 +532,7 @@ impl Parser {
         // and with the grammar a `record` head already has
         // (docs/operation-indexed-classes-design.md §2.1: there is no second
         // class form, only a per-class choice about the parameter list).
-        let valparams = self.valparam_list()?;
+        let valparams = self.valparam_list(true)?;
         let mut extends = Vec::new();
         if self.eat_kw("extends") {
             loop {
@@ -722,6 +752,7 @@ impl Parser {
                 implicit: true,
                 is_self: false,
                 solver: Some(Solver::Infer),
+                symbol: None,
                 span,
             });
             if !matches!(self.peek(), TokKind::Comma) {
@@ -896,6 +927,7 @@ impl Parser {
             implicit: true,
             is_self: false,
             solver: Some(Solver::Infer),
+            symbol: None,
             span,
         })
     }
@@ -954,7 +986,7 @@ impl Parser {
         self.bump(); // `record`
         let (name, _) = self.ident("record name")?;
         let params = self.tyvar_list()?;
-        let valparams = self.valparam_list()?;
+        let valparams = self.valparam_list(false)?;
         self.expect(&TokKind::LBrace, "`{` (field list)")?;
         let mut fields = Vec::new();
         while !matches!(self.peek(), TokKind::RBrace) {
@@ -995,7 +1027,14 @@ impl Parser {
     /// grammar with `record`/`inductive` (they have their own inline binder
     /// loop). Every parameter must be named — a value parameter is referred to
     /// by name inside the field types, which is the whole point of it.
-    fn valparam_list(&mut self) -> R<Vec<Param>> {
+    ///
+    /// `symbols` says whether a parameter here may carry `as ∙`
+    /// (issues/binder-symbol-as-notation.md). True only at a **class** head,
+    /// whose index parameter is a declaring binder with a body — the class's
+    /// own field types — to install a spelling for. A `record`/`inductive`
+    /// value parameter is refused by name rather than parsed and dropped:
+    /// there is no customer for it, and silence would be the wrong answer.
+    fn valparam_list(&mut self, symbols: bool) -> R<Vec<Param>> {
         let mut params = Vec::new();
         if !matches!(self.peek(), TokKind::LParen) {
             return Ok(params);
@@ -1003,6 +1042,19 @@ impl Parser {
         self.bump();
         while !matches!(self.peek(), TokKind::RParen) {
             let (n, span) = self.binder_ident("value parameter name")?;
+            let asp = self.peek_span();
+            let symbol = self.binder_symbol(&n)?;
+            if symbol.is_some() && !symbols {
+                return Err(ParseError {
+                    msg: format!(
+                        "`{n} as …` is a class head's device: it installs a body spelling \
+                         for the declaration's own body, and a `record`'s value parameter \
+                         is a term its *fields* mention rather than a binder with a body \
+                         to spell (issues/binder-symbol-as-notation.md)"
+                    ),
+                    span: asp.join(self.peek_span()),
+                });
+            }
             self.expect(&TokKind::Colon, "`:` (a value parameter is `name: T`)")?;
             let ty = self.ty()?;
             let span = span.join(ty.span);
@@ -1012,6 +1064,7 @@ impl Parser {
                 implicit: false,
                 is_self: false,
                 solver: None,
+                symbol,
                 span,
             });
             if !matches!(self.peek(), TokKind::Comma) {
@@ -1050,7 +1103,7 @@ impl Parser {
         // Parsed, then rejected by the elaborator: value parameters are a
         // `record` form this round (docs/surface-value-parameters.md §6), and a
         // named rejection beats `expected `{`, found LParen`.
-        let valparams = self.valparam_list()?;
+        let valparams = self.valparam_list(false)?;
         // `: (n: Nat) -> Type` — an index telescope
         // (docs/inductive-indexed-lowering.md §2). Parsed with the ordinary
         // type grammar; its shape is the elaborator's to validate.
@@ -1216,6 +1269,14 @@ impl Parser {
                     span: self_sp.join(psp),
                 });
             }
+            // `op as ∙: A -> A -> A` — the binder's body spelling
+            // (issues/binder-symbol-as-notation.md). Read here, between the
+            // name and the annotation, because it is a property of the *name*:
+            // the identifier stays the interface (the constraint slot, every
+            // call site, every diagnostic) and the symbol is local notation for
+            // the rest of the telescope, the result type, and the body.
+            let sym_sp = self.peek_span();
+            let symbol = self.binder_symbol(&pname)?;
             // `fn f(x, y: A)` — a run of names sharing one annotation, the
             // parameter-list half of issues/multi-binder-function-types.md.
             // A name followed by `,` was a parse error before this (every
@@ -1237,6 +1298,25 @@ impl Parser {
                               annotation across the mark"
                             .into(),
                         span: self_sp.join(self.peek_span()),
+                    });
+                }
+                // `as` is a modifier too, and the same sentence decides it:
+                // one symbol shared across a run would install one body
+                // spelling for several binders, and there is no reading of
+                // `x, y: A` under `∙` that means anything. Refused by name,
+                // beside `self`, rather than silently attaching to the first
+                // (issues/binder-symbol-as-notation.md — the spec says a
+                // modifier prefixes exactly one name).
+                if let Some(sym) = &symbol {
+                    return Err(ParseError {
+                        msg: format!(
+                            "`as` marks a single parameter: `{} as {sym}` is ONE binder's \
+                             body spelling, and a shared annotation would give the one \
+                             symbol to every name in the run. Write \
+                             `{} as {sym}: A, y: A`, with each binder's own annotation",
+                            names[0].0, names[0].0
+                        ),
+                        span: sym_sp.join(self.peek_span()),
                     });
                 }
                 self.bump();
@@ -1294,6 +1374,9 @@ impl Parser {
                     implicit,
                     is_self,
                     solver,
+                    // At most one name is in the run when this is set (the
+                    // refusal above), so the clone is the whole of it.
+                    symbol: symbol.clone(),
                     span: nsp.join(span),
                 });
             }
@@ -2024,6 +2107,13 @@ impl Parser {
             TokKind::Plus => Some(("+", 5, 6)),
             TokKind::PlusPlus => Some(("++", 5, 6)),
             TokKind::Star => Some(("*", 7, 8)),
+            // `∙` sits on the multiplicative rung, which is where
+            // issues/notation-extensibility.md's precedence-by-class scheme
+            // puts a dot-shaped operator (`× ⊗ ∘ ∩`). Nothing in the library
+            // mixes it with `+` — it is the *generic* operation, so a file that
+            // writes it has one — but a rung had to be chosen and this is the
+            // one its shape asks for.
+            TokKind::Bullet => Some(("∙", 7, 8)),
             _ => None,
         }
     }
@@ -2040,6 +2130,7 @@ impl Parser {
             TokKind::Star => Some("*"),
             TokKind::AmpAmp => Some("&&"),
             TokKind::PipePipe => Some("||"),
+            TokKind::Bullet => Some("∙"),
             TokKind::LtEq => Some("<="),
             TokKind::Lt => Some("<"),
             _ => None,
@@ -2879,6 +2970,82 @@ mod tests {
         assert_eq!(name, "+");
         assert_eq!(as_call(&args[0].kind).0, "+");
         assert!(matches!(&args[1].kind, ExprKind::Var(v) if v == "c"));
+    }
+
+    // -- binder symbols (issues/binder-symbol-as-notation.md) --------------
+
+    #[test]
+    fn the_generic_symbol_is_a_three_byte_infix_at_multiplicative_precedence() {
+        // Three bytes, so the two-byte window cannot see it; no whitespace
+        // here, to say the lexer claims it on adjacency like every other
+        // symbol. It shares `*`'s left-associative rung, which is where
+        // issues/notation-extensibility.md's precedence-by-class scheme puts a
+        // dot-shaped operator.
+        let k = body("a∙b * c");
+        let (name, args, _) = as_call(&k);
+        assert_eq!(name, "*");
+        assert_eq!(as_call(&args[0].kind).0, "∙");
+        let k = body("a + b ∙ c");
+        let (name, args, _) = as_call(&k);
+        assert_eq!(name, "+");
+        assert_eq!(as_call(&args[1].kind).0, "∙");
+        // And between delimiters it is the bare designation reference, the
+        // same rule `Monoid(+)` reserved — which is what lets a constraint
+        // slot name it, and so what makes the duplicate control writable.
+        let k = body("f(∙, x)");
+        let (_, args, _) = as_call(&k);
+        assert!(matches!(&args[0].kind, ExprKind::OpSymbol(s) if s == "∙"));
+    }
+
+    #[test]
+    fn as_attaches_a_body_spelling_to_a_declaring_binder() {
+        // A class head's index parameter, and a `fn`'s value parameter. In
+        // both the *name* is untouched — that is the whole design: the
+        // identifier is the interface spelling and the symbol is the body's.
+        let f = parse_file(
+            "class Sem<A>(op as ∙: A -> A -> A) { assoc: (x: A) -> x ∙ x = x }
+             fn fold<A: Sem(op)>(op as ∙: A -> A -> A, x: A) -> A { x ∙ x }",
+        )
+        .unwrap();
+        let Item::Class(c) = &f.items[0] else { panic!("expected a class") };
+        assert_eq!(c.valparams[0].name, "op");
+        assert_eq!(c.valparams[0].symbol.as_deref(), Some("∙"));
+        let Item::Decl(d) = &f.items[1] else { panic!("expected a declaration") };
+        // The constraint slot is untouched: it is a *reference*, and its
+        // grammar is exactly what the operators round left it.
+        let op = d.params.iter().find(|p| p.name == "op").expect("`op` is still the name");
+        assert_eq!(op.symbol.as_deref(), Some("∙"));
+        assert!(d.params.iter().all(|p| p.name != "∙"));
+    }
+
+    #[test]
+    fn as_marks_a_single_parameter() {
+        // The `self` sentence, applied to the other modifier: a shared
+        // annotation across the mark would give one symbol to several
+        // binders, so the run is refused rather than guessed at.
+        let e = parse_file("fn f<A>(g as ∙, h: A -> A -> A, x: A) -> A { x ∙ x }").unwrap_err();
+        assert!(e.msg.contains("`as` marks a single parameter"), "{}", e.msg);
+        // The group *after* an `as` binder is untouched, though: the mark ends
+        // at its own annotation, and `x, y: A` is an ordinary shared run.
+        parse_file("fn f<A>(g as ∙: A -> A -> A, x, y: A) -> A { x ∙ y }").unwrap();
+    }
+
+    #[test]
+    fn as_can_only_install_a_symbol_that_already_lexes() {
+        // The curated table is what bounds the device: `as` adds a *position*
+        // for a symbol and never a symbol (issues/notation-extensibility.md).
+        let e = parse_file("fn f<A>(g as mul: A -> A -> A, x: A) -> A { x }").unwrap_err();
+        assert!(e.msg.contains("can only install one that already lexes"), "{}", e.msg);
+        assert!(e.msg.contains("`∙`"), "{}", e.msg);
+    }
+
+    #[test]
+    fn a_record_value_parameter_takes_no_body_spelling() {
+        // `as` is a declaring binder's device where the declaration has a body
+        // to spell. A `record`'s value parameter is a term its fields mention;
+        // refused by name rather than parsed and silently dropped.
+        let e = parse_file("record R(p as ∙: Nat) { q: Nat }").unwrap_err();
+        assert!(e.msg.contains("class head's device"), "{}", e.msg);
     }
 
     // -- list append (issues/list-append-symbol.md) ------------------------

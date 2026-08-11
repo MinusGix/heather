@@ -1,9 +1,9 @@
 ---
 title: Symbol notation on declaring binders: `op as ∙` in class heads and value-parameter lists
-status: open
+status: closed
 labels: [design,frontend,traits,ergonomics]
 created: 2026-08-09
-updated: 2026-08-09
+updated: 2026-08-11
 ---
 
 Two places want a binder to carry a symbol *as notation* while keeping its
@@ -99,6 +99,43 @@ no designation and no fallback exist); a duplicate-spelling negative control
 
 ## Log
 
+- 2026-08-11: **Landed**, all four acceptance rows. `Param::symbol` carries
+  the spelling (`crates/syntax/src/ast.rs`); the parser reads `as` between a
+  binder's name and its `:` in both declaring positions; the elaborator pushes
+  onto `Cx::op_locals` — the same table the constraint symbol slot pushes onto
+  (docs/operators-onto-classes-design.md §5(b)), so there is one installation
+  path and no fourth resolution rung. Value parameters install in
+  `elab_decl_inner`'s telescope loop (scope: rest of the telescope, result
+  type, body); a class head's spellings ride on `Inductive::op_symbols` and are
+  installed where the field types are actually elaborated (`lower_ctor`, per
+  instantiation), with the use site's spellings cleared first, since a class's
+  field types are the class's own source. `∙` lands in the lexer as one token
+  (three bytes, hence a three-byte window beside the two-byte one),
+  multiplicative precedence, no designation row and no `op_fallback` entry.
+  Library: the three algebra classes and `mconcat` restated in `∙`, zero
+  changes to any instance, designation, caller or proof. Tests:
+  `crates/elab/tests/binder_symbol_notation.rs` (8) and five parser tests.
+  Docs: §5.1 amended and a §15 postscript. Decisions taken in flight, all
+  three where the spec left room:
+  - **A multi-name group refuses `as`**, by the multi-binder round's own
+    sentence — a modifier prefixes exactly one name — and with a refusal
+    shaped like `self`'s, since one symbol across a shared run would install
+    one body spelling for several binders. The group *after* an `as` binder is
+    untouched: the mark ends at its own annotation.
+  - **A `record`/`inductive` value parameter refuses `as`** (parser-level, by
+    name): it is a term the *fields* mention, not a binder with a body to
+    spell. Only a class head passes `symbols: true` to `valparam_list`.
+  - **`mconcat_single` is left without `as`.** Neither its statement nor its
+    proof (`A.unit_r(x)`) spells the operation, so an installation there would
+    be a spelling with no use — the noise this issue's own "nothing downstream
+    changes" argument is against. `mconcat` carries it; the pair still reads
+    as one.
+  - **The uniqueness check is symbol-only.** §5.2 over "both namespaces" needed
+    new code for one of them: `as` mints no identifier, it gives a second role
+    to the one the binder already has, so the identifier half is the existing
+    parameter-list rules. `Elaborator::check_symbol_free` is the symbol half,
+    and it runs over slots and `as` alike (a class head has its own copy, since
+    its head *is* the declaration).
 - 2026-08-09: Filed from the algebra.hthr cleanup review; revised same day on
   user review — `as` moved off the linked constraint slot onto declaring
   binder occurrences (class heads and value parameters), generalizing to any

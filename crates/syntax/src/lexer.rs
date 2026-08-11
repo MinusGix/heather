@@ -52,6 +52,17 @@ pub enum TokKind {
     /// and doubling is what keeps them so.
     AmpAmp,    // &&
     PipePipe,  // ||
+    /// `∙` (U+2219, BULLET OPERATOR) — the **reserved generic** operator
+    /// (issues/notation-extensibility.md, log 2026-08-09). One token, no
+    /// designation row anywhere in the library, and no fallback name, so rungs
+    /// 2 and 3 of the resolution ladder can never fire for it: away from a
+    /// binder that named it, `∙` *cannot* mean anything. That is the whole
+    /// point — it is the right spelling for bare `Semigroup`/`Monoid` theory,
+    /// where `+` would whisper commutativity over `append`.
+    ///
+    /// Three bytes, so it is matched in a window of its own; the two-byte
+    /// window would land mid-codepoint and see nothing.
+    Bullet,    // ∙
     /// `$` — splice, inside a `code { … }` quote (`$x`, `${e}`) and in type
     /// position for a `TyCode` binder (`[$a; $k]`). The splice *form* is
     /// decided by the parser; the lexer only knows the sigil.
@@ -162,6 +173,17 @@ pub fn lex(src: &str) -> Result<Vec<Tok>, LexError> {
         // multi-byte codepoint (`(λ` puts `λ`'s first byte at `i + 1`), and
         // slicing there panics. A non-boundary simply means "not a two-byte
         // token".
+        // The three-byte window comes first, and for the same reason the
+        // two-byte one exists: `∙` (U+2219) is three bytes, so no shorter
+        // window can see it. `get` again rather than an index — a window that
+        // runs off the end, or lands inside a codepoint, simply means "not a
+        // token of this width".
+        let three = src.get(i..i + 3).unwrap_or("");
+        if three == "∙" {
+            toks.push(Tok { kind: TokKind::Bullet, span: Span { start, end: start + 3 } });
+            i += 3;
+            continue;
+        }
         let two = src.get(i..i + 2).unwrap_or("");
         let (kind, len) = match two {
             // `λ` (U+03BB) is two bytes and is *not* an identifier character,

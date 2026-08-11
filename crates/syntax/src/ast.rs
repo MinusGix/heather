@@ -372,6 +372,21 @@ pub struct Param {
     /// spellings desugar here, and a solver parameter is always `implicit`
     /// (it has no positional slot; `@f(…)` is how one is passed by hand).
     pub solver: Option<Solver>,
+    /// `op as ∙: A -> A -> A` — the **body spelling** this binder installs
+    /// (issues/binder-symbol-as-notation.md). The identifier stays the binder's
+    /// *interface* spelling: constraint slots, call sites, the registry and
+    /// every diagnostic go on saying `op`, and the symbol is local notation for
+    /// the binder's own scope (the rest of the telescope, the result type, and
+    /// the body — for a class head, the class body).
+    ///
+    /// Set only where a binder is **declared**: a class head's index parameter
+    /// and a `fn`/`theorem` value parameter. Never on a reference — a linked
+    /// constraint slot mentions a parameter declared elsewhere, and notation
+    /// belongs where the name is born — so the three constraint slots (empty /
+    /// linked / symbol) keep exactly the grammar the operators round left them.
+    ///
+    /// `None` for every parameter written before this grammar existed.
+    pub symbol: Option<String>,
     pub span: Span,
 }
 

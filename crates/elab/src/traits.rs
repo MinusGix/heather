@@ -981,6 +981,12 @@ impl Elaborator {
                         implicit: true,
                         is_self: false,
                         solver: None,
+                        // The generated index binder is not a declaring
+                        // occurrence the user wrote, and a class's own `as`
+                        // is strictly local to its body — it is not an
+                        // advertisement to its users' binders
+                        // (issues/class-default-operators.md owns that).
+                        symbol: None,
                         span: p.span,
                     });
                     index.push(var(&name, p.span));
@@ -1021,6 +1027,7 @@ impl Elaborator {
                     implicit: true,
                     is_self: false,
                     solver: None,
+                    symbol: None,
                     span: p.span,
                 });
                 index.push(var(&name, p.span));

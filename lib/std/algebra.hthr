@@ -27,19 +27,28 @@ import option;
 // class's index, so `A` and `op` together identify the structure, and the
 // unit — determined by the operation, definitionally at every concrete
 // instance — stays a field (design §2.1).
-class Semigroup<A>(op: A -> A -> A) {
-    assoc: (x, y, z: A) -> op(op(x, y), z) = op(x, op(y, z)),
+// The heads write `op as ∙` (issues/binder-symbol-as-notation.md): the
+// declared parameter is still `op` — the empty constraint slot binds that
+// name, a linked slot refers by the caller's own, and the registry and the
+// diagnostics never see a symbol — and `∙` is the spelling of that same index
+// inside the class body. `∙` is the RESERVED GENERIC operator: nothing
+// designates it at any carrier and it has no fallback name, so away from a
+// binder that named it it cannot mean anything, which is what makes it the
+// right symbol for bare semigroup/monoid theory where `+` would whisper
+// commutativity over `append`.
+class Semigroup<A>(op as ∙: A -> A -> A) {
+    assoc: (x, y, z: A) -> (x ∙ y) ∙ z = x ∙ (y ∙ z),
 }
 
-class Monoid<A>(op: A -> A -> A) extends Semigroup<A>(op) {
+class Monoid<A>(op as ∙: A -> A -> A) extends Semigroup<A>(op) {
     unit: A,
-    unit_l: (x: A) -> op(unit, x) = x,
-    unit_r: (x: A) -> op(x, unit) = x,
+    unit_l: (x: A) -> unit ∙ x = x,
+    unit_r: (x: A) -> x ∙ unit = x,
 }
 
 // The commutative monoid: one chain, at every operation.
-class CommMonoid<A>(op: A -> A -> A) extends Monoid<A>(op) {
-    comm: (x, y: A) -> op(x, y) = op(y, x),
+class CommMonoid<A>(op as ∙: A -> A -> A) extends Monoid<A>(op) {
+    comm: (x, y: A) -> x ∙ y = y ∙ x,
 }
 
 // A value every type of the class has. No laws: `Default` is the class that
@@ -151,10 +160,15 @@ designation<A> ++ at List<A> := append
 // operation is a written parameter and the constraint's index slot says it is
 // the same one, so callers choose the structure positionally and nothing is
 // searched for. `A.unit` is answered by the binder in scope.
-fn mconcat<A: Monoid(op)>(op: A -> A -> A, xs: List<A>) -> A {
+//
+// The parameter carries `as ∙` too, for the same reason the class heads do and
+// with the same consequence: nothing outside changes — the constraint is still
+// the plain linked slot naming `op`, callers still pass positionally — and the
+// fold's own step reads as the operation it is.
+fn mconcat<A: Monoid(op)>(op as ∙: A -> A -> A, xs: List<A>) -> A {
     match xs {
         Nil => A.unit,
-        Cons(h, t) => op(h, mconcat(op, t)),
+        Cons(h, t) => h ∙ mconcat(op, t),
     }
 }
 

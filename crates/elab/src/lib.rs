@@ -1354,7 +1354,14 @@ impl Elaborator {
         // into the kernel term.
         let mut cx = Cx::empty();
         cx.index_ambiguity = ambiguous;
-        cx.op_locals = symbols;
+        // The constraint slots' symbols, checked against each other on the way
+        // in: §5.2's uniqueness rule runs over the symbol namespace by any mix
+        // of slots and `as` (issues/binder-symbol-as-notation.md), and one loop
+        // over one table is the whole of it.
+        for s in symbols {
+            Self::check_symbol_free(&cx.op_locals, &s.0, decl.span)?;
+            cx.op_locals.push(s);
+        }
         let mut param_info: Vec<(Type, Level)> = Vec::new();
         for (i, tv) in decl.tyvars.iter().enumerate() {
             let name = &tv.name;
@@ -1406,6 +1413,20 @@ impl Elaborator {
                 }));
             }
             cx.push_skel(p.name.clone(), ty.clone(), lvl.clone(), skel_of_ty(&p.ty));
+            // `op as ∙` — the binder's **body** spelling, installed for the
+            // rest of its scope: the remaining telescope, the result type (so a
+            // theorem's *statement* may use it), and the body
+            // (issues/binder-symbol-as-notation.md). This is exactly the
+            // installation the constraint symbol slot performs
+            // (docs/operators-onto-classes-design.md §5(b)) into exactly the
+            // same table, which is the point — `as` adds a place to *write* a
+            // symbol and never a second way to resolve one. The identifier is
+            // untouched: `op` still binds the parameter, so the constraint
+            // slot, the call sites and every diagnostic go on as before.
+            if let Some(sym) = &p.symbol {
+                Self::check_symbol_free(&cx.op_locals, sym, p.span)?;
+                cx.op_locals.push((sym.clone(), p.name.clone()));
+            }
             // An ordinary parameter *at a universe* — `(A: Type<n>, x: A)` —
             // is usable as a type for the rest of the telescope, by exactly
             // the machinery a declaration's `<A>` uses. That generalization is
@@ -4836,6 +4857,35 @@ impl Elaborator {
             "<" => Some("lt"),
             _ => None,
         }
+    }
+
+    /// §5.2's uniqueness rule, over the **symbol** namespace
+    /// (docs/operators-onto-classes-design.md §5.1–§5.2, as
+    /// issues/binder-symbol-as-notation.md amends them): a declaration installs
+    /// each spelling once, by any mix of constraint symbol slots and `as`.
+    ///
+    /// Only the symbol half needs a new check. `as` mints no identifier — the
+    /// binder keeps the name it would have had, which is the whole design — so
+    /// the identifier half is the parameter-list checks that were already
+    /// there, unchanged.
+    fn check_symbol_free(installed: &[(String, String)], sym: &str, span: Span) -> R<()> {
+        let Some((_, prev)) = installed.iter().find(|(s, _)| s == sym) else { return Ok(()) };
+        // A constraint slot's binder is `#op∙@0_0` and unspellable, so it is
+        // named by what wrote it rather than by the generated name.
+        let by = match traits::op_index_symbol(prev) {
+            Some(_) => format!("a constraint that named it (`<…: C({sym})>`)"),
+            None => format!("`{prev} as {sym}`"),
+        };
+        err(
+            format!(
+                "`{sym}` is already this declaration's body spelling, installed by {by}: \
+                 each spelling binds exactly one referent, so one declaration installs a \
+                 symbol once — by a constraint's symbol slot or by `as`, not both \
+                 (docs/operators-onto-classes-design.md §5.1). Pick a second symbol, or \
+                 drop one of the two spellings"
+            ),
+            span,
+        )
     }
 
     /// The name an operator symbol means here — the three-rung ladder of

@@ -218,6 +218,28 @@ must bind two distinct things, and it does — `+` and `*` — with no bare `op`
 to be ambiguous about. A declaration that wants the identifier writes the empty
 slot, which is what theory does anyway.
 
+**Amended 2026-08-11** (`issues/binder-symbol-as-notation.md`). The rule above
+is about a *slot*, and a slot has one job; a **declaring binder** has two, so
+`op as ∙` deliberately gives one referent two spellings and the rule is
+restated by role rather than weakened:
+
+> The **identifier is the interface spelling** — what constraint slots link
+> to, what call sites pass, what the registry keys on, what every diagnostic
+> says — and the **symbol is the body spelling**, live only inside the
+> declaration whose binder installed it. One spelling per role; the sentence
+> above is the case where the roles coincide.
+
+So `class Semigroup<A>(op as ∙: …)` is still a class whose index is named
+`op`: the empty slot binds `op`, a linked slot binds the caller's own name, a
+symbol slot binds the symbol, and none of them has heard of `∙`. And §5.2's
+uniqueness check now runs over **both namespaces**: a declaration may not bind
+`∙` twice, nor `op` twice, by any mix of constraint slots and `as`. Only the
+symbol half needed new code — `as` mints no identifier, it gives a second role
+to the one the binder already has — so the identifier half is the
+parameter-list rules that were already there, unchanged
+(`Elaborator::check_symbol_free` is the symbol half, and it is one loop over
+the one table §5(b) already installs into).
+
 The index binder's generated name carries its symbol (`#op+@0_0`), because the
 call site has to recover "this slot was designated by `+`" from the callee's
 parameter list and nothing else travels there. That is the same device round
@@ -522,3 +544,47 @@ accepts lists remains legal; the note explains a failed fallback rather than
 turning designation lookup into a refusal.
 
 Suite 1400 → 1405.
+
+## 15. Postscript (2026-08-11): `op as ∙` on declaring binders
+
+`issues/binder-symbol-as-notation.md`, landed. §5.1 is amended above; this is
+what the amendment cost and what it did not.
+
+- **One installation, two places to write it.** `as` attaches to a
+  **declaring** binder occurrence — a class head's index parameter, and a
+  `fn`/`theorem` value parameter — and pushes onto `Cx::op_locals`, which is
+  the table §5(b)'s constraint symbol slot already pushes onto and rung 1 of
+  §4's ladder already reads. There is no second resolution path and no fourth
+  rung: `as` adds a *position in the grammar*, not a way for a symbol to mean
+  something. A reference never takes it — a linked constraint slot mentions a
+  parameter declared elsewhere, and notation belongs where the name is born —
+  so the three slots keep exactly the grammar this round gave them.
+- **Scope is the binder's scope.** For a value parameter: the rest of the
+  telescope, the result type, and the body — the result type being the
+  load-bearing third, since a `theorem`'s statement *is* its result type. For
+  a class head: the class body, installed where the field types are actually
+  elaborated (`lower_ctor`, per instantiation) and cleared of the *use site's*
+  spellings first, because a class's field types are the class's own source.
+- **`∙`, one curated token.** `issues/notation-extensibility.md`'s reserved
+  generic operator lands in the lexer: three bytes (U+2219), so it needed a
+  three-byte window beside the two-byte one; multiplicative precedence, by
+  that issue's precedence-by-class scheme; **no** designation row anywhere and
+  **no** `op_fallback` entry, so rungs 2 and 3 can never fire for it and away
+  from a binder it cannot mean anything. That is the reservation, enforced by
+  absence rather than convention, and it is why `Semigroup`'s laws can be
+  written in a symbol that will never whisper commutativity.
+- **The library**: the three algebra classes and `mconcat` restate their
+  bodies in `∙`, and not one instance, designation, caller or proof changed —
+  which is the whole claim, since the identifier never moved.
+- **A modifier prefixes one name** (the multi-binder round's sentence,
+  `issues/multi-binder-function-types.md`): `g as ∙, h: A -> A -> A` would
+  give one symbol to two binders, so it is refused by name beside `self`'s
+  identical refusal. A `record`'s value parameter is refused too — it is a
+  term the fields mention, not a binder with a body to spell.
+
+What is deliberately *not* here: a class **advertising** a symbol to its
+users' binders. `as` is strictly local, so `Monoid` writes `∙` in its own laws
+while claiming no default (`issues/class-default-operators.md` owns that, and
+the lean there is that `Monoid` advertises nothing).
+
+Suite 1419 → 1432.

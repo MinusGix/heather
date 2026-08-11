@@ -54,6 +54,19 @@ pub(crate) struct Inductive {
     /// Empty for every declaration without the `(…)` list, which is the state
     /// every check below degenerates to.
     pub valparams: Vec<(String, Ty)>,
+    /// `class Semigroup<A>(op as ∙: A -> A -> A)` — the **body spellings** the
+    /// value parameters install, as (symbol, value-parameter name) in written
+    /// order (issues/binder-symbol-as-notation.md).
+    ///
+    /// Kept beside [`Self::valparams`] rather than inside it because it is a
+    /// different thing about the same binder: the identifier is the
+    /// *interface* spelling — what a constraint slot links to, what a call
+    /// site passes, what every diagnostic says — and the symbol is the *body*
+    /// spelling, live only while this declaration's own field types are
+    /// lowered. Empty for every declaration whose head writes no `as`, which
+    /// is every one written before this grammar existed, and empty by
+    /// construction for a `record` (the parser refuses `as` there).
+    pub op_symbols: Vec<(String, String)>,
     pub ctors: Vec<Ctor>,
     /// Tier 1: some constructor has a recursive field, so the lowering is
     /// `Wf^l(x : S). n` rather than the bare sum-of-Σs `S`
@@ -513,6 +526,22 @@ impl Elaborator {
                     p.span,
                 );
             }
+            // §5.2's uniqueness rule over the SYMBOL namespace
+            // (issues/binder-symbol-as-notation.md): a declaration installs a
+            // spelling once. The identifier half is the duplicate-name check
+            // above — `as` adds no identifier, it adds a second *role* for the
+            // one the binder already has.
+            if let Some(sym) = &p.symbol
+                && d.valparams[..i].iter().any(|o| o.symbol.as_deref() == Some(sym.as_str()))
+            {
+                return err(
+                    format!(
+                        "`{sym}` is already a body spelling in this head: each spelling                          binds one referent, so `{}` installs a symbol at most once                          (docs/operators-onto-classes-design.md §5.2)",
+                        d.name
+                    ),
+                    p.span,
+                );
+            }
             // A field shadows a value parameter of the same name in the later
             // field types, which is legal but never what anyone means.
             if d.ctors[0].fields.iter().any(|f| f.name.as_deref() == Some(p.name.as_str())) {
@@ -719,6 +748,11 @@ impl Elaborator {
             tag: self.next_tag,
             params: d.params.clone(),
             valparams: d.valparams.iter().map(|p| (p.name.clone(), p.ty.clone())).collect(),
+            op_symbols: d
+                .valparams
+                .iter()
+                .filter_map(|p| p.symbol.clone().map(|s| (s, p.name.clone())))
+                .collect(),
             ctors,
             recursive,
             is_record: d.is_record,
@@ -964,6 +998,12 @@ impl Elaborator {
             level: level.clone(),
             depth,
         }));
+        // The declared types are the declaration's own source, so they are read
+        // under the declaration's own body spellings and never the use site's:
+        // a `∙` in this telescope is the head's `as`, or nothing
+        // (issues/binder-symbol-as-notation.md). Installed as the telescope is
+        // walked, which is what makes the scope "the rest of the telescope".
+        tcx.op_locals.clear();
         let mut out = Vec::with_capacity(args.len());
         for ((pname, pty), arg) in ind.valparams.iter().zip(args) {
             let (ty, level) = {
@@ -978,6 +1018,9 @@ impl Elaborator {
                 ty: ty.clone(),
                 level: level.clone(),
             }));
+            if let Some((sym, _)) = ind.op_symbols.iter().find(|(_, n)| n == pname) {
+                tcx.op_locals.push((sym.clone(), pname.clone()));
+            }
             out.push((tm, ty, level));
         }
         Ok(out)
@@ -1122,6 +1165,13 @@ impl Elaborator {
         let mut fcx = cx.clone();
         fcx.selfref = None;
         fcx.guard = None;
+        // The class head's `as` spellings, and *only* those: the field types
+        // are this declaration's own source, so a symbol in one means what the
+        // head said it means, never what the use site's binders say
+        // (issues/binder-symbol-as-notation.md — the symbol is scoped to the
+        // binder's scope, and for a class head that scope is the class body).
+        // Empty for every declaration whose head writes no `as`.
+        fcx.op_locals = ind.op_symbols.clone();
         let depth = cx.names.len();
         fcx.tyvars = ind
             .params
@@ -2823,6 +2873,7 @@ fn skeleton_of(d: &InductiveDecl, ctors: &[Ctor], tag: u32, scope: Rc<Scope>) ->
         tag,
         params: d.params.clone(),
         valparams: vec![],
+        op_symbols: vec![],
         ctors: sctors,
         recursive,
         is_record: false,
