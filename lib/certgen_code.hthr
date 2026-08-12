@@ -16,7 +16,8 @@
 // `Prog`, `Val` and `import nat;`'s `add`/`sub` come from there, so this file
 // declares no import and redeclares nothing.
 //
-// THE TWO CONVENTIONS THIS FILE JOINS, and nothing else states them together:
+// THE THREE CONVENTIONS THIS FILE JOINS, and nothing else states them
+// together:
 //
 // 1. MARKERS (§1). Every bound-variable occurrence in the analyzed body
 //    arrives as a closed marker carrying the binder's de Bruijn LEVEL in
@@ -30,6 +31,18 @@
 //    is at DISTANCE `i`, so its level in an environment of depth `d` is
 //    `d - 1 - i`. A match arm sees the matched value's fields on top, so the
 //    field is one deeper than the parameters.
+//
+// 3. CALLEE MARKERS AND CALL NUMBERING (docs/opaque-globals-analysis-
+//    design.md §§3–4). A cross-function call head arrives as a closed
+//    λ-chain over `Nat` ending in a numeral TAG: tag `c ≥ 1` is the `c`-th
+//    distinct foreign callee, in first-marking order, and the tag→name
+//    table travels beside the code (the reflection primitive's
+//    `BodyCode::callees`). In the `Ir` this walker emits, callee 0 is the
+//    enclosing function itself (`PSelf`, the ih marker's rendering) and a
+//    foreign call renders its tag verbatim (`PCall(c, …)` → `LetCall(c,
+//    …)`) — the walker's OWN numbering, mapped to names at readback; the
+//    program-closure indices the certificates use are computed downstream,
+//    from names, exactly as for the Rust path.
 //
 // The two meet exactly once, in `dist` and its callers: a reference is
 // carried as a level all the way through composition and converted to a
@@ -60,10 +73,13 @@ inductive PRefs { QNil, QCons(r: PRef, rest: PRefs) }
 // is not stored; the renderer fills it (§4 called this a placeholder rewrite,
 // and there is no patch pass because the argument list is a function of
 // `arity` and `j` alone).
+// `PCall` is a saturated foreign call, its callee carried as the marker TAG
+// (convention 3) and its argument references in slot order.
 inductive Pre {
     PEnd,
     PCon(tag: Nat, args: PRefs, rest: Pre),
     PSelf(rest: Pre),
+    PCall(c: Nat, args: PRefs, rest: Pre),
 }
 
 // The walker's accumulator, one per code node visited. `TNum` is a numeral
@@ -73,6 +89,12 @@ inductive Pre {
 // carried so nothing has to compute it; `TBody` is a whole function body,
 // which only the eliminator produces. `TStuck` is the decline, and it
 // propagates — declining is total, not partial.
+// … and the two call-assembly states (convention 3): `TFn(c, rem)` is a
+// callee-marker chain — `rem` lambdas around the tag numeral `c`, so `rem`
+// arguments still expected — and `TPart` is a call applied to some but not
+// all of them, carrying the arguments compiled so far as a merged prefix
+// plus their references in slot order. Neither is a value: unapplied or
+// half-applied calls decline at rendering, like every other non-value.
 inductive TA {
     TStuck,
     TNum(n: Nat),
@@ -80,6 +102,8 @@ inductive TA {
     TIdLam,
     TExp(pre: Pre, res: PRef, len: Nat),
     TBody(body: Ir),
+    TFn(c: Nat, rem: Nat),
+    TPart(c: Nat, rem: Nat, pre: Pre, len: Nat, args: PRefs),
 }
 
 inductive TOut { TNo, TYes(body: Ir) }
@@ -149,8 +173,9 @@ fn self_args(c: Nat, j: Nat, k: Nat, d: Nat) -> Nat -> Refs {
 // vary with the recursion while `base`, `j` and `k` do not, so they are the
 // returned function's arguments.
 //
-// Callee index 0 is right for `PSelf`: the in-language slice is
-// single-function, so the emitted program is `PFun(body, PNil)`.
+// Callee index 0 is `PSelf` — the enclosing function itself, by
+// convention 3 — and a foreign call renders its marker tag verbatim; the
+// readback maps tags to names.
 fn render_pre(pre: Pre, base: Nat, j: Nat, k: Nat) -> Nat -> Ir -> Ir {
     match pre {
         PEnd => λ (d: Nat) (tail: Ir) => tail,
@@ -160,6 +185,9 @@ fn render_pre(pre: Pre, base: Nat, j: Nat, k: Nat) -> Nat -> Ir -> Ir {
         PSelf(rest) => λ (d: Nat) (tail: Ir) =>
             render_pre(rest, base, j, k)(sub(d)(1),
                 LetCall(0, self_args(k, j, k, d)(0), tail)),
+        PCall(c, args, rest) => λ (d: Nat) (tail: Ir) =>
+            render_pre(rest, base, j, k)(sub(d)(1),
+                LetCall(c, render_refs(args, base, d), tail)),
     }
 }
 
@@ -214,18 +242,27 @@ fn ta_succ(t: TA) -> TA {
     }
 }
 
-// A lambda is in the fragment only as half of a marker: the identity. `d` is
-// the domain's recursion result and is never consulted — a marker's domain is
-// `Nat`, which the type motive does not analyze (§3 restriction 1).
+// A lambda is in the fragment only as half of a marker. `d` is the domain's
+// recursion result and is never consulted — a marker's domain is `Nat`,
+// which the type motive does not analyze (§3 restriction 1). Fragment
+// source contains no λ at all, so the recognizer is total over the two
+// marker shapes: a body that is a variable leaf makes the identity (a
+// variable marker's head, convention 1); a body that is a numeral — or more
+// chain — grows a callee marker (convention 3).
 fn ta_lam(d: TA, b: TA) -> TA {
-    match b { TVarLeaf => TIdLam, _ => TStuck }
+    match b {
+        TVarLeaf => TIdLam,
+        TNum(c) => TFn(c, 1),
+        TFn(c, m) => TFn(c, Succ(m)),
+        _ => TStuck,
+    }
 }
 
 // The MARKER RECOGNIZER, and the file's only place where a level is minted.
 // An identity lambda applied to a numeral `i` is an occurrence of binder `i`:
 // a parameter, the field, or the induction hypothesis, per convention 1.
-// Any other application is outside the fragment — cross-function calls are
-// global references, which stop the walk before they reach here (§2).
+// (Cross-function calls go through `ta_app`'s callee arms, convention 3;
+// any other application is outside the fragment.)
 fn ta_marker(arity: Nat, i: Nat) -> TA {
     match nat_cmp(i)(arity) {
         // parameter `i`, at distance `i`, so at level `arity - 1 - i`
@@ -241,9 +278,96 @@ fn ta_marker(arity: Nat, i: Nat) -> TA {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Call assembly (convention 3). The first place two compiled sub-expressions
+// ever meet: each argument's prefix is appended after the ones already
+// collected, so its `RLoc` indices — instruction positions counted from the
+// arm's base — shift by the instructions already there. `RLvl` references
+// name binders and never move.
+
+fn shift_ref(r: PRef, off: Nat) -> PRef {
+    match r { RLvl(l) => RLvl(l), RLoc(j) => RLoc(add(off, j)) }
+}
+
+fn shift_refs(rs: PRefs, off: Nat) -> PRefs {
+    match rs {
+        QNil => QNil,
+        QCons(r, rest) => QCons(shift_ref(r, off), shift_refs(rest, off)),
+    }
+}
+
+fn shift_pre(p: Pre, off: Nat) -> Pre {
+    match p {
+        PEnd => PEnd,
+        PCon(tag, args, rest) => PCon(tag, shift_refs(args, off), shift_pre(rest, off)),
+        PSelf(rest) => PSelf(shift_pre(rest, off)),
+        PCall(c, args, rest) => PCall(c, shift_refs(args, off), shift_pre(rest, off)),
+    }
+}
+
+// Newest-first lists: `a`'s instructions run AFTER `b`'s, so `a` keeps the
+// front and its terminal `PEnd` becomes `b`.
+fn pre_append(a: Pre, b: Pre) -> Pre {
+    match a {
+        PEnd => b,
+        PCon(tag, args, rest) => PCon(tag, args, pre_append(rest, b)),
+        PSelf(rest) => PSelf(pre_append(rest, b)),
+        PCall(c, args, rest) => PCall(c, args, pre_append(rest, b)),
+    }
+}
+
+// Slot order is application order, so arguments append at the tail.
+fn qsnoc(rs: PRefs, r: PRef) -> PRefs {
+    match rs {
+        QNil => QCons(r, QNil),
+        QCons(h, rest) => QCons(h, qsnoc(rest, r)),
+    }
+}
+
+// A call argument as `(prefix, ref, len)`: a numeral is its instructions
+// (`num_pre`, exactly as a numeral in any other value position), a compiled
+// expression is itself, and anything else — a leaf, a marker half, another
+// call's chain — is not a value.
+fn ta_val(a: TA) -> TA {
+    match a {
+        TNum(n) => TExp(num_pre(n), RLoc(n), Succ(n)),
+        TExp(pre, res, len) => TExp(pre, res, len),
+        _ => TStuck,
+    }
+}
+
+// One argument onto a call with `rem ≥ 1` slots open: merge its prefix after
+// what is collected, record its reference, and either stay partial or — on
+// the last slot — become the `PCall` instruction, whose own value is itself
+// (local index `len`, like every emitted instruction).
+fn ta_call_fin(c: Nat, rem: Nat, pre: Pre, len: Nat, args: PRefs) -> TA {
+    match rem {
+        Zero => TExp(PCall(c, args, pre), RLoc(len), Succ(len)),
+        Succ(r2) => TPart(c, rem, pre, len, args),
+    }
+}
+
+fn ta_call(c: Nat, rem: Nat, pre: Pre, len: Nat, args: PRefs, a: TA) -> TA {
+    match ta_val(a) {
+        TExp(pa, ra, la) =>
+            match rem {
+                Zero => TStuck,
+                Succ(r2) => ta_call_fin(c, r2,
+                    pre_append(shift_pre(pa, len), pre),
+                    add(len, la),
+                    qsnoc(args, shift_ref(ra, len))),
+            },
+        _ => TStuck,
+    }
+}
+
+// An application is a marker being read (convention 1) or a call being
+// assembled (convention 3); everything else is outside the fragment.
 fn ta_app(arity: Nat, f: TA, a: TA) -> TA {
     match f {
         TIdLam => match a { TNum(i) => ta_marker(arity, i), _ => TStuck },
+        TFn(c, k) => ta_call(c, k, PEnd, 0, QNil, a),
+        TPart(c, r, pre, len, args) => ta_call(c, r, pre, len, args, a),
         _ => TStuck,
     }
 }
@@ -390,6 +514,49 @@ theorem add_transcribes():
           Ret(RCons(0, RNil))))
 { refl }
 
+// `fn mul(a, b: Nat) -> Nat { match b { Zero => 0, Succ(k) => add(a, mul(a, k)) } }`
+// — the cross-function positive (docs/opaque-globals-analysis-design.md §4).
+// The foreign head arrives as the callee chain `λλ.⌜1⌝`
+// (`ta_lam(_, ta_lam(_, 1))`), applied to parameter `a` (marker level 0) and
+// to the self-call, which is the ih marker (level `arity+1 = 3`, compiling
+// to the one-`PSelf` prefix). In the walker's own numbering the succ arm is
+// self first (`LetCall(0, …)` — the recursion's result), then the foreign
+// call by its tag (`LetCall(1, …)` reading `a` at distance 2 and the
+// self-call's value at 0). This is `crates/elab/tests/certgen.rs`'s Rust v2
+// `mul` emission verbatim after the readback maps 0/1 to `mul`/`add` and
+// the closure renumbers.
+theorem mul_transcribes():
+    ta_elim(2,
+        ta_zero(),
+        ta_app(2,
+            ta_app(2,
+                ta_lam(ta_stuck(), ta_lam(ta_stuck(), ta_succ(ta_zero()))),
+                ta_app(2, ta_lam(ta_stuck(), ta_var()), ta_zero())),
+            ta_app(2, ta_lam(ta_stuck(), ta_var()),
+                   ta_succ(ta_succ(ta_succ(ta_zero()))))),
+        ta_app(2, ta_lam(ta_stuck(), ta_var()), ta_succ(ta_zero())))
+    = TBody(LetMatch(1,
+          Arm(LetCon(0, RNil, Ret(RCons(0, RNil))),
+          Arm(LetCall(0, RCons(1, RCons(0, RNil)),
+              LetCall(1, RCons(2, RCons(0, RNil)),
+              Ret(RCons(0, RNil)))),
+          NoArm)),
+          Ret(RCons(0, RNil))))
+{ refl }
+
+// A half-applied call is not a value: the chain took one argument of two.
+theorem call_partial_declines():
+    ta_finish(2,
+        ta_app(2, ta_lam(ta_stuck(), ta_lam(ta_stuck(), ta_succ(ta_zero()))),
+               ta_zero()))
+    = TNo
+{ refl }
+
+// …and an unapplied callee chain is not a value either.
+theorem callee_chain_declines():
+    ta_finish(1, ta_lam(ta_stuck(), ta_succ(ta_zero()))) = TNo
+{ refl }
+
 // The decline: a marker at `arity + 2` is a nested eliminator's binder, which
 // the fragment does not contain.
 theorem nested_binder_sticks():
@@ -443,10 +610,12 @@ theorem sig_higher_order_declines():
 //    motive mentioning the context would put them at `Code((g, x) |- …)` with
 //    no way back down to `g`. One constant motive is also what makes 46
 //    unwritten branches cost one `_` arm.
-//  * `tm_app` exists only to recognize a marker — an application of the
-//    identity lambda to a numeral. The fragment contains no other application:
-//    a call to another function is a global reference, and `elim^Trm` is
-//    neutral on `box (u^δ)`, so the walk would stop there anyway.
+//  * `tm_app` recognizes a marker — the identity lambda applied to a
+//    numeral — or assembles a call onto a callee chain (convention 3). No
+//    other application exists in marked fragment code: a raw global
+//    reference would go neutral (`elim^Trm` on `box (u^δ)`), which is
+//    exactly why the reflection primitive replaces call heads with markers
+//    before boxing.
 //  * `tm_var` answers `TVarLeaf` and nothing else. A variable's *identity* is
 //    unobservable at layer m (the recursor's variable branch abstracts over it
 //    at layer v), which is exactly why occurrences arrive pre-marked.

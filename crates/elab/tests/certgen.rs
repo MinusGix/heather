@@ -131,9 +131,13 @@ const SEVEN: &str = "fn seven(n: Nat) -> Nat { 7 }";
 const THIRD3: &str =
     "fn third3(a: Nat, b: Nat, c: Nat) -> Nat { match c { Zero => b, Succ(k) => Succ(third3(a, b, k)) } }";
 /// The v2 acceptance function: a foreign call whose argument is the
-/// self-call's result.
+/// self-call's result. The zero arm spells `Zero` rather than `0` so the
+/// in-language byte-identity comparison tests what `mul` is *for* — the
+/// cross-function call — instead of re-pinning `seven`'s known
+/// literal-spec-spelling divergence (a source-blind walker derives `Zero`
+/// where the source said `0`; both denote the same Nat).
 const MUL: &str =
-    "fn mul(a: Nat, b: Nat) -> Nat { match b { Zero => 0, Succ(k) => add(a, mul(a, k)) } }";
+    "fn mul(a: Nat, b: Nat) -> Nat { match b { Zero => Zero, Succ(k) => add(a, mul(a, k)) } }";
 
 /// Everything here elaborates **as the library module**, so that the
 /// declarations prefix's `import nat;` means what it means in the file.
@@ -314,21 +318,39 @@ fn in_language_transcriber() {
     assert_eq!(inlang.ir_body, rust.ir_body);
     assert_ne!(inlang.text, rust.text);
 
-    // Declines. The first is the fragment boundary the *kernel* draws: `mul`
-    // calls `add`, and `elim^Trm` is neutral on `box (u^δ)`, so the walk stops
-    // at the global — while the Rust v2 path generates it happily, which is
-    // what makes this the in-language path's decline and not the generator's.
+    // The cross-function positive (docs/opaque-globals-analysis-design.md
+    // §4; formerly this fixture's neutrality DECLINE): `mul` calls `add`,
+    // whose head now arrives as a callee marker through the body-reflection
+    // primitive, so with `add`'s emission in the context the in-language
+    // emission is byte-identical to the frozen Rust v2 path's — the same
+    // standard as the loop above, and the Rust `mul` emission is already
+    // checked end to end by `emissions_check_and_controls`.
     let mul = decl_of(MUL);
+    let mut cross = GenCtx::new();
+    cross.push(generate(&lib_decl("add"), &GenCtx::new()).expect("add"));
+    let rust = generate(&mul, &cross).expect("mul, Rust v2");
+    let inlang = generate_in_language(&e, &mul, &cross)
+        .unwrap_or_else(|r| panic!("mul declined in-language: {r}"));
+    assert_eq!(inlang.ir_body, rust.ir_body, "mul transcribes differently");
+    assert_eq!(inlang.text, rust.text, "mul's emission differs");
+
+    // The decline the flip re-homes: with NO generated instance for the
+    // callee in the context, the walk and readback still succeed and the
+    // decline is the closure's, downstream — the same check the Rust path
+    // makes, now reached by the in-language one.
     let Err(msg) = generate_in_language(&e, &mul, &GenCtx::new()) else {
-        panic!("a cross-function call is outside the in-language fragment")
+        panic!("mul without add's instance must decline")
     };
-    assert!(msg.contains("global"), "{msg}");
-    assert!(generate(&mul, &{
-        let mut c = GenCtx::new();
-        c.push(generate(&lib_decl("add"), &GenCtx::new()).expect("add"));
-        c
-    })
-    .is_ok());
+    assert!(msg.contains("no generated instance"), "{msg}");
+
+    // The body-less policy pin (design doc §2): a theorem's proof is
+    // deliberately opaque, so body reflection declines by saying so. The
+    // name is one of `lib/certgen_code.hthr`'s own theorems, elaborated
+    // above.
+    let Err(msg) = e.fn_body_code("sig_dbl") else {
+        panic!("a theorem has no body to reflect")
+    };
+    assert!(msg.contains("no elaborated body"), "{msg}");
 
     // A body the marker pass cannot close: a `let` is not in the fragment.
     // (The signature is fine, so this decline is the *body* residue's, after

@@ -21,3 +21,4 @@ Wants: fn-reflection-for-analyzers (the reflect inputs), retire-rust-transcriber
 ## Log
 
 - 2026-08-11: Cross-link (2026-08-11, coordinator bookkeeping): [[ownership-discipline-over-code]] is this pattern's first named client — a decidable judgment over reflected code plus one soundness theorem, behind the layer fence, the kernel never learning the word. The link existed only in the 2026-08-11 commit message; it belongs here.
+- 2026-08-11: Coordinator note (2026-08-11): the reflect direction's globals blocker is discharged fragment-scoped only — Elaborator::fn_body_code's interface is general but its DOMAIN is the certgen Nat fragment (markers typed at Nat, callee signatures Nat-chains), and each fragment widening reopens the marker recognizer's unambiguity argument; recorded in docs/opaque-globals-analysis-design.md sec. 2 so the general-reflect round prices it up front.

@@ -966,7 +966,7 @@ use heather_kernel::level::Level;
 use heather_kernel::reduce::{self, Defs};
 use heather_kernel::subst::{GlobalEntry, GlobalSubst};
 use heather_kernel::term::{
-    LocalCtx, LocalSubst, LocalVar, Term, Type,
+    GlobalBinding, GlobalVar, LocalCtx, LocalSubst, LocalVar, Term, Type,
 };
 
 use crate::slots::Slot;
@@ -983,12 +983,12 @@ const FUEL: u64 = heather_kernel::typing::DEFAULT_FUEL;
 /// **level** is `n` (§1 of the design doc).
 ///
 /// Why a β-redex rather than a bare numeral: the fragment's own source
-/// contains numerals, so a numeral marker would be ambiguous, while an
-/// application is a node the fragment never contains — every call in the
-/// fragment is a global reference, which the recursor goes neutral on anyway.
-/// Code does not compute (`Layer::computes` is `Prog | Meta`), so the redex is
-/// stable syntax: the recursor dispatches it to the `tm_app` branch and no
-/// reduction can collapse it first.
+/// contains numerals, so a numeral marker would be ambiguous, while the only
+/// applications in marked fragment code are the markers themselves and the
+/// callee-marker spines of convention 3 ([`callee_marker`]), which the walker
+/// tells apart by the λ's body. Code does not compute (`Layer::computes` is
+/// `Prog | Meta`), so the redex is stable syntax: the recursor dispatches it
+/// to the `tm_app` branch and no reduction can collapse it first.
 fn marker(n: u32) -> Term {
     let mut num = Term::Zero;
     for _ in 0..n {
@@ -1009,18 +1009,119 @@ fn marker(n: u32) -> Term {
     }
 }
 
+/// `λ (x₁ : Nat). … λ (x_k : Nat). ⌜tag⌝` — the CALLEE marker, convention 3
+/// (docs/opaque-globals-analysis-design.md §3): a closed term of the callee's
+/// own fragment type `Nat → … → Nat`, carrying which callee it is as the
+/// chain's numeral body. The argument spine stays in place around it, so the
+/// walker reads the call by assembling applications onto the chain.
+///
+/// Same stability argument as [`marker`]: code does not compute, so the chain
+/// never β-reduces against its arguments — `beta_elim_tm` dispatches the
+/// `App`s to `tm_app` and the chain to `tm_lam`. And the same recognizer
+/// stance: fragment source contains no λ at all, so a λ-chain ending in a
+/// numeral is unambiguous *within the fragment* — which is why a nullary
+/// callee (whose marker would be a bare numeral, ambiguous with literals) is
+/// refused at [`MarkCx::callee`] instead of minted.
+fn callee_marker(tag: u32, arity: usize) -> Term {
+    let mut num = Term::Zero;
+    for _ in 0..tag {
+        num = Term::Succ(Rc::new(num));
+    }
+    // Innermost-out; a `Lam` carries only its domain annotation.
+    let mut t = num;
+    for _ in 0..arity {
+        t = Term::Lam {
+            dom_level: Level::Zero,
+            cod_level: Level::Zero,
+            dom: Rc::new(Type::Nat),
+            body: Rc::new(t),
+        };
+    }
+    t
+}
+
+/// Callee resolution for [`mark`]: the caller's Ψ prefix, and the tag table
+/// minted in first-occurrence order (tag `i + 1` is `callees[i]`; tag 0 is
+/// the self-call's, which arrives as the ih marker, never through here).
+struct MarkCx<'a> {
+    e: &'a Elaborator,
+    /// The analyzed fn's own binding index: its stored body is scoped to the
+    /// Ψ prefix of this length, so `GlobalVar(v)` in it names binding
+    /// `caller_abs - 1 - v` — `Defs::body`'s `shift_global(v + 1)`
+    /// convention run backwards.
+    caller_abs: usize,
+    callees: Vec<String>,
+}
+
+impl MarkCx<'_> {
+    /// `(marker tag, arity)` for the callee `v` names — or the decline that
+    /// keeps the marker convention honest: a callee outside the fragment
+    /// signature, a nullary callee (its marker would be a bare numeral), or
+    /// a body-less global (proofs are opaque; a call to one is not fragment
+    /// code) each refuse with the policy named.
+    fn callee(&mut self, v: GlobalVar) -> Result<(u32, usize), String> {
+        let abs = self
+            .caller_abs
+            .checked_sub(1 + v.0 as usize)
+            .ok_or("a global reference outside the caller's Ψ prefix")?;
+        let name = self
+            .e
+            .global_name_at(abs)
+            .unwrap_or_else(|| format!("Ψ#{abs}"));
+        let GlobalBinding::Tm { ty, body, .. } = &self.e.psi().bindings[abs] else {
+            return Err(format!("`{name}` is not a term-level global"));
+        };
+        if body.is_none() {
+            return Err(format!(
+                "`{name}` has no elaborated body — proofs are opaque, so a call to \
+                 it is outside the fragment"
+            ));
+        }
+        let mut ty = &**ty;
+        let mut arity = 0usize;
+        while let Type::Pi { dom, cod, .. } = ty {
+            if !matches!(&**dom, Type::Nat) {
+                return Err(format!("callee `{name}`'s signature is outside the fragment"));
+            }
+            arity += 1;
+            ty = cod;
+        }
+        if !matches!(ty, Type::Nat) {
+            return Err(format!("callee `{name}`'s result type is not `Nat`"));
+        }
+        if arity == 0 {
+            return Err(format!(
+                "callee `{name}` is nullary: its marker would be a bare numeral, \
+                 and a nullary fn is outside the fragment anyway"
+            ));
+        }
+        let tag = match self.callees.iter().position(|c| *c == name) {
+            Some(i) => i + 1,
+            None => {
+                self.callees.push(name);
+                self.callees.len()
+            }
+        };
+        Ok((tag as u32, arity))
+    }
+}
+
 /// Replace every variable *occurrence* by a marker carrying its binder's
-/// level, leaving closed code (§1).
+/// level and every cross-function call head by a callee marker, leaving
+/// closed code (§1 of the transcriber design; §3 of the opaque-globals
+/// design for the callee clause).
 ///
 /// This is scope resolution, and it stays in Rust for a kernel reason rather
 /// than for convenience: `elim^Trm`'s variable branch abstracts over the
-/// variable at layer v (rec.rs `tm_var`), so nothing at layer m can observe
-/// *which* variable an occurrence is. The pass itself is a mechanical de
-/// Bruijn→level renaming — no fragment knowledge, no declaration table.
+/// variable at layer v (rec.rs `tm_var`) and its global scrutinee is neutral
+/// (reduce.rs `is_neutral_term`), so nothing at layer m can observe *which*
+/// variable or global an occurrence is. The pass itself is a mechanical
+/// renaming to closed terms — no fragment knowledge beyond the callee
+/// signature check, no walk order.
 ///
 /// `depth` is the number of binders in scope, so the occupied levels are
 /// `0..depth` and `Var(i)` is the binder at level `depth - 1 - i`.
-fn mark(t: &Term, depth: u32) -> Result<Term, String> {
+fn mark(t: &Term, depth: u32, cx: &mut MarkCx<'_>) -> Result<Term, String> {
     Ok(match t {
         Term::Var(LocalVar(i)) => {
             if *i >= depth {
@@ -1029,7 +1130,7 @@ fn mark(t: &Term, depth: u32) -> Result<Term, String> {
             marker(depth - 1 - i)
         }
         Term::Zero => Term::Zero,
-        Term::Succ(p) => Term::Succ(Rc::new(mark(p, depth)?)),
+        Term::Succ(p) => Term::Succ(Rc::new(mark(p, depth, cx)?)),
         // The fragment's one eliminator. Its motive must be `Nat` on the nose:
         // a motive that mentioned the scrutinee would put a *type* in the
         // walk's way, and this slice analyses terms (design doc §3).
@@ -1040,25 +1141,32 @@ fn mark(t: &Term, depth: u32) -> Result<Term, String> {
             Term::ElimNat {
                 level: level.clone(),
                 motive: Rc::clone(motive),
-                base: Rc::new(mark(base, depth)?),
+                base: Rc::new(mark(base, depth, cx)?),
                 // `elim_Nat`'s step binds the predecessor and the induction
                 // hypothesis, in that order, so their levels are `depth` and
                 // `depth + 1` — which is the convention the walker reads back.
-                step: Rc::new(mark(step, depth + 2)?),
-                scrut: Rc::new(mark(scrut, depth)?),
+                step: Rc::new(mark(step, depth + 2, cx)?),
+                scrut: Rc::new(mark(scrut, depth, cx)?),
             }
         }
-        // A call to another function is a *global reference*, and the recursor
-        // is neutral on `box (u^δ)` (reduce.rs `is_neutral_term`) — so the walk
-        // would stop there whatever this pass did. Named as the neutrality it
-        // is, at the head of the spine, rather than as "some application".
-        Term::GlobalTm { .. } | Term::App { .. } if global_head(t) => {
-            return Err(
-                "the body calls a global: `elim^Trm` is neutral on `box (u^δ)`, so a \
-                 cross-function call is outside the in-language fragment (the Rust \
-                 transcriber's v2 path serves it)"
-                    .into(),
-            );
+        // A cross-function call: the head is a global reference, replaced by
+        // a callee marker; the argument spine stays and is marked in place.
+        // (`elim^Trm` is neutral on `box (u^δ)`, so a surviving reference
+        // would stall the walk — the marker is what lifts the opacity, at
+        // the reflection boundary and nowhere else.)
+        Term::GlobalTm { var, .. } => {
+            let (tag, arity) = cx.callee(*var)?;
+            callee_marker(tag, arity)
+        }
+        Term::App { fun, dom_level, cod_level, dom, cod, arg } if global_head(t) => {
+            Term::App {
+                fun: Rc::new(mark(fun, depth, cx)?),
+                dom_level: dom_level.clone(),
+                cod_level: cod_level.clone(),
+                dom: Rc::clone(dom),
+                cod: Rc::clone(cod),
+                arg: Rc::new(mark(arg, depth, cx)?),
+            }
         }
         other => return Err(format!("`{other:?}` is outside the in-language fragment")),
     })
@@ -1108,12 +1216,29 @@ fn sig_peel(e: &Elaborator, name: &str) -> Result<(usize, Term), String> {
     Ok((arity, t.clone()))
 }
 
-/// The declaration's elaborated body, marked and closed, with its arity —
-/// [`sig_peel`] composed with [`mark`], the transcriber round's one-call
-/// shape, still run by `generate_in_language` after the agreement gate.
-fn marked_body(e: &Elaborator, name: &str) -> Result<(usize, Term), String> {
+/// The body half of the pull reflection API
+/// (docs/opaque-globals-analysis-design.md §2), reached publicly as
+/// [`Elaborator::fn_body_code`]: arity, the callee-marker table, and the
+/// marked body **boxed** — `Code(· ⊢ Nat)`, ready for the code recursor.
+pub struct BodyCode {
+    pub arity: usize,
+    /// Callee-marker tags in first-occurrence order: tag `i + 1` is
+    /// `callees[i]`; tag 0 is the enclosing fn itself (the ih marker's
+    /// `PSelf`), which never appears here.
+    pub callees: Vec<String>,
+    pub code: Term,
+}
+
+/// [`sig_peel`] composed with [`mark`] and boxed — the primitive's body,
+/// still run by `generate_in_language` after the agreement gate.
+pub(crate) fn body_code(e: &Elaborator, name: &str) -> Result<BodyCode, String> {
     let (arity, body) = sig_peel(e, name)?;
-    Ok((arity, mark(&body, arity as u32)?))
+    let caller_abs = e
+        .global_abs(name)
+        .ok_or_else(|| format!("`{name}` is not a declared global"))?;
+    let mut cx = MarkCx { e, caller_abs, callees: Vec::new() };
+    let marked = mark(&body, arity as u32, &mut cx)?;
+    Ok(BodyCode { arity, callees: cx.callees, code: Term::BoxTm(Rc::new(marked)) })
 }
 
 // -- readback ---------------------------------------------------------------
@@ -1349,9 +1474,9 @@ fn analyzer_app(
     Ok(term)
 }
 
-/// Apply the registered transcriber to `(Γ = ·, arity, box marked)` and read
-/// its answer back.
-fn run_transcriber(e: &Elaborator, arity: usize, marked: Term) -> Result<RIr, String> {
+/// Apply the registered transcriber to `(Γ = ·, arity, the boxed marked
+/// body)` and read its answer back.
+fn run_transcriber(e: &Elaborator, arity: usize, code: Term) -> Result<RIr, String> {
     let mut nat = Term::Zero;
     for _ in 0..arity {
         nat = Term::Succ(Rc::new(nat));
@@ -1360,7 +1485,7 @@ fn run_transcriber(e: &Elaborator, arity: usize, marked: Term) -> Result<RIr, St
         e,
         Slot::CertgenTranscribe,
         "certgen.transcribe",
-        vec![nat, Term::BoxTm(Rc::new(marked))],
+        vec![nat, code],
     )?;
     // Evaluation is **spine-directed**: `Reader::whnf` reduces only what it is
     // about to inspect, so nothing ever normalizes a whole IR tree at once
@@ -1417,7 +1542,12 @@ fn base_specs(params: &[String], field: bool) -> Vec<String> {
 /// of the slots it reads, so the Rust transcriber's `Instr::spec` is redundant
 /// with the IR (design doc §6, step 5) and the in-language path recomputes it
 /// from the same rules.
-fn chain_from_rir(ir: &RIr, name: &str, env: Vec<String>) -> Result<Chain, String> {
+fn chain_from_rir(
+    ir: &RIr,
+    name: &str,
+    callees: &[String],
+    env: Vec<String>,
+) -> Result<Chain, String> {
     let mut specs = env;
     let mut instrs = Vec::new();
     let mut has_self_call = false;
@@ -1456,13 +1586,19 @@ fn chain_from_rir(ir: &RIr, name: &str, env: Vec<String>) -> Result<Chain, Strin
                 cur = rest;
             }
             RIr::LetCall { callee, args, rest } => {
-                if *callee != 0 {
-                    return Err(
-                        "a call to a callee other than 0: the in-language slice is \
-                         single-function"
-                            .into(),
-                    );
-                }
+                // The walker's numbering (lib/certgen_code.hthr convention
+                // 3): 0 is the enclosing fn itself, `c ≥ 1` is
+                // `callees[c - 1]` from the body-reflection table. Names,
+                // not closure indices — the shared emitters compute the
+                // program closure downstream exactly as the Rust path does.
+                let cname = if *callee == 0 {
+                    name
+                } else {
+                    callees
+                        .get(*callee as usize - 1)
+                        .map(String::as_str)
+                        .ok_or("a callee tag outside the reflection table")?
+                };
                 let dists: Vec<usize> = args.iter().map(|d| *d as usize).collect();
                 let arg_specs: Vec<String> = dists
                     .iter()
@@ -1470,10 +1606,10 @@ fn chain_from_rir(ir: &RIr, name: &str, env: Vec<String>) -> Result<Chain, Strin
                         specs.get(*d).cloned().ok_or("a call reading past the environment")
                     })
                     .collect::<Result<_, _>>()?;
-                let spec = format!("{name}({})", arg_specs.join(", "));
-                has_self_call = true;
+                let spec = format!("{cname}({})", arg_specs.join(", "));
+                has_self_call |= *callee == 0;
                 instrs.push(Instr::Call {
-                    callee: name.to_string(),
+                    callee: cname.to_string(),
                     dists,
                     arg_specs,
                     spec: spec.clone(),
@@ -1491,7 +1627,12 @@ fn chain_from_rir(ir: &RIr, name: &str, env: Vec<String>) -> Result<Chain, Strin
 /// `FnIr` from the read-back IR. The recursion index, the arm split and every
 /// spec expression are *recovered* from the instruction chain — the walker has
 /// no names to hand over, and does not need any.
-fn fn_ir_from_rir(ir: &RIr, name: &str, params: &[String]) -> Result<FnIr, String> {
+fn fn_ir_from_rir(
+    ir: &RIr,
+    name: &str,
+    callees: &[String],
+    params: &[String],
+) -> Result<FnIr, String> {
     let params: Vec<String> = params.to_vec();
     match ir {
         RIr::LetMatch { scrut, arms, rest } => {
@@ -1503,18 +1644,18 @@ fn fn_ir_from_rir(ir: &RIr, name: &str, params: &[String]) -> Result<FnIr, Strin
                 return Err("a `LetMatch` with other than two arms is not a `Nat` match"
                     .into());
             };
-            let zc = chain_from_rir(zero, name, base_specs(&params, false))?;
+            let zc = chain_from_rir(zero, name, callees, base_specs(&params, false))?;
             if zc.has_self_call {
                 return Err("a self-call in the Zero arm cannot be structural".into());
             }
-            let sc = chain_from_rir(succ, name, base_specs(&params, true))?;
+            let sc = chain_from_rir(succ, name, callees, base_specs(&params, true))?;
             Ok(FnIr {
                 params,
                 kind: FnIrKind::Rec(RecIr { rec_idx: *scrut as usize, zero: zc, succ: sc }),
             })
         }
         _ => {
-            let c = chain_from_rir(ir, name, base_specs(&params, false))?;
+            let c = chain_from_rir(ir, name, callees, base_specs(&params, false))?;
             if c.has_self_call {
                 return Err("a self-call outside a match is outside the fragment".into());
             }
@@ -1556,13 +1697,16 @@ pub fn generate_in_language(
     };
     let frag = fragment(d)?;
     let f = frag.name;
-    let (marked_arity, marked) = marked_body(e, f)?;
-    debug_assert_eq!(marked_arity, arity);
+    // The pull primitive: marked, closed, boxed code plus the callee-marker
+    // table the readback resolves `LetCall` tags against
+    // (docs/opaque-globals-analysis-design.md §§2–4).
+    let body = e.fn_body_code(f)?;
+    debug_assert_eq!(body.arity, arity);
     if arity != frag.params.len() {
         return Err("the elaborated body's arity disagrees with the declaration".into());
     }
-    let rir = run_transcriber(e, arity, marked)?;
+    let rir = run_transcriber(e, arity, body.code)?;
     let params: Vec<String> = frag.params.iter().map(|s| s.to_string()).collect();
-    let model = fn_ir_from_rir(&rir, f, &params)?;
+    let model = fn_ir_from_rir(&rir, f, &body.callees, &params)?;
     emit_with_model(f, arity, model, ctx)
 }

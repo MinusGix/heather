@@ -1301,13 +1301,15 @@ impl Elaborator {
     /// type-code recursor. Nothing is stored per declaration; the type is
     /// read out of Ψ on request, which is what makes this pull and not push.
     ///
-    /// THE IMPLEMENTATION IS A PLACEHOLDER for the opaque-globals kernel
-    /// round: today the elaborator reads its own table and rescopes
-    /// (`shift_global` by the Ψ growth since the binding — the same `v + 1`
-    /// convention `Defs::body` uses on prefix-scoped kernel data); later,
-    /// `u^δ` unfolding-for-analysis mints the same value under its ch. 07
-    /// obligations. The *interface* — name in, boxed type code out — is the
-    /// part that round keeps, so `lib/` never sees the swap.
+    /// THIS IMPLEMENTATION IS FINAL, and that is a correction to what the
+    /// signature-reflection round expected here
+    /// (docs/opaque-globals-analysis-design.md §2): the opaque-globals round
+    /// settled unfolding-for-analysis *at the reflection boundary*, so the
+    /// Ψ-read + rescope below (`shift_global` by the Ψ growth since the
+    /// binding — the same `v + 1` convention `Defs::body` uses on
+    /// prefix-scoped kernel data) already *is* `u^δ` unfolding-on-request.
+    /// No kernel machinery replaces it and no ch. 07 obligation attaches,
+    /// because the kernel never learns reflection happened.
     pub(crate) fn fn_type_code(&self, name: &str) -> Option<Term> {
         let info = self.lookup_global(name)?;
         let abs = info.abs as usize;
@@ -1316,6 +1318,44 @@ impl Elaborator {
         };
         let growth = (self.psi.bindings.len() - abs) as u32;
         Some(Term::BoxTy(Rc::new(ty.shift_global(growth))))
+    }
+
+    /// The pull reflection API's **body half**
+    /// (docs/opaque-globals-analysis-design.md §2, the primitive the
+    /// fn-reflection round left "to be named with the opaque-globals
+    /// round"): a declared fn's elaborated body as *marked, closed code* —
+    /// every bound-variable occurrence a level marker, every cross-function
+    /// call head a callee marker, boxed — with the arity and the
+    /// tag→name table the markers are read against. Pull like
+    /// [`Self::fn_type_code`]: nothing stored per declaration, the body read
+    /// out of Ψ per invocation (`GlobalBinding::Tm`'s `body`, the
+    /// definitions round's field).
+    ///
+    /// Marked code IS the reflection contract: a raw body is exactly what an
+    /// analyzer cannot use (variables are opaque to `tm_var`, globals are
+    /// neutral to `elim^Trm`), so the primitive hands over the analyzable
+    /// coordinate system and the key to read it. A body-less global —
+    /// theorems' proofs are deliberately opaque — declines.
+    pub fn fn_body_code(&self, name: &str) -> Result<certgen::BodyCode, String> {
+        certgen::body_code(self, name)
+    }
+
+    /// A global's binding index by written name — the Ψ coordinate
+    /// [`Self::global_name_at`] inverts. Reflection-internal.
+    pub(crate) fn global_abs(&self, name: &str) -> Option<usize> {
+        Some(self.lookup_global(name)?.abs as usize)
+    }
+
+    /// The written (base) name of the binding at absolute Ψ index `abs` —
+    /// the reverse of [`Self::global_abs`], for resolving a stored body's
+    /// `GlobalVar`s to callee names. A linear scan of the name table: callee
+    /// resolution happens a handful of times per reflection request.
+    pub(crate) fn global_name_at(&self, abs: usize) -> Option<String> {
+        let key = self
+            .globals
+            .iter()
+            .find_map(|(k, info)| (info.abs as usize == abs).then_some(k))?;
+        Some(key.rsplit("::").next().unwrap_or(key).to_string())
     }
 
     /// The `meta fn` claiming an analyzer slot, with the arity of its Π spine
