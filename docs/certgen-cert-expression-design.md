@@ -103,6 +103,13 @@ preference:
   is another `Wf`-lowered inductive multiplies the cost of every elimination
   over the container, and a nested `match` on such a type multiplies it again.
   Carry `Nat`s and let the printer recover the rest.
+  *(Corrected 2026-08-12, `issues/wf-field-conversion-cost.md`: the mechanism
+  round could not reproduce the 163 from this recorded shape — the faithful
+  reconstruction is 8.5×, ~30 CPU-s with the six `Cert` eliminations — and
+  "Wf-lowered" is not the operative predicate; the cost is Θ(arms × |lowered
+  field type|), quadratic in the field type's constructor count, a named
+  match-lowering pathology with a sized fix. Read that issue, not this
+  paragraph, before designing around it.)*
 
 **Why `CIh` and `CCall` are different constructors.** In the rendered text the
 two hypotheses are unrelated: the ih is `gih(a, …, VNil)` — a *local* the
