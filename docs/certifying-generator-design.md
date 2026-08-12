@@ -327,7 +327,12 @@ The four axes, instantiated for this generator:
    `Elaborator`), with the four phases as written: fragment check,
    transcription, bound synthesis, proof emission. Public API:
    `generate`, `generate_forced` (the §6 honesty hook), and
-   `compile_record(k)` for the per-arity `CompileNatK` records.
+   `compile_record(k)` for the per-arity `CompileNatK` records. *Superseded
+   2026-08-12* (`issues/retire-rust-transcriber.md` stage 2): the fragment
+   check and transcription now live in `lib/certgen_code.hthr`, and the public
+   API is `generate_in_language` + `compile_record(k)`; `generate` and
+   `generate_forced` are deleted, the honesty hook replaced by the controls
+   named in docs/certgen-transcriber-in-language-design.md §5's addendum.
 2. ✅ The `add` emission checks against the library support prelude. The
    one divergence from the hand-run, documented here as required: the
    generator transcribes `add` *itself*, which recurses on its **second**

@@ -336,6 +336,32 @@ compared by `conv_term` at `Layer::Prog`. Adequacy is not soundness — a wrong
 transcriber yields a refused certificate, not a wrong theorem — but the
 conversion check is what turns "it checks" into "it is the same program".
 
+**Addendum, 2026-08-12 — the cross-check discipline is RETIRED**
+(`issues/retire-rust-transcriber.md` stage 2). The oracle is deleted: `generate`,
+`generate_forced`, `generate_inner`, `Compiler`/`compile`/`compile_arm` and the
+surface fragment walk are gone from `crates/elab/src/certgen.rs`, and
+`generate_in_language` is the only generator. What replaced the comparison,
+per the issue's four covers: (a) `lib/certgen_code.hthr`'s own `refl` theorems
+pin `add`, `dbl` and `mul` in-language, one layer below the readback; (b) the
+positive fixtures in `crates/elab/tests/certgen.rs` make a silent decline a
+panic; (c) each emission's exactness fixtures catch different-but-converging
+output at a concrete run; (d) the kernel judges the rest. The one property with
+no cover of its own — the *emitted layout*, which two independent
+implementations used to agree on — is pinned as literal expected text
+(`IR_ADD`, `IR_DBL`, `IR_THIRD3`, `IR_SEVEN`, `IR_MUL` in that test file), and
+its sole normative statement is now `lib/certgen_code.hthr`'s
+three-conventions header plus the emitters. The rows of the table above stand
+unchanged for phases 2–4; row 1's "signature" home became **in-language** at
+the fn-signature-reflection round, and what is left in Rust is the *names*
+(`surface_params`: reserved-binder collisions and implicit parameters), which
+no reflected form carries. Three Rust-only declines went with the walker: a
+non-structural self-call, refused earlier and harder by the elaborator; a
+`Succ` arm without a self-call, which is now accepted — the eliminator carries
+structural recursion, so ignoring the induction hypothesis is an ordinary
+transcribable body; and a `let` in the body, which elaborates to an alias and
+so was never a fact about the code at all — the analysis reads Ψ, and what Ψ
+holds is transcribable.
+
 ## 6. The evaluation hook, and how output re-enters elaboration
 
 **Decision: the emission stays surface text; the port's interface is `FnIr`.**

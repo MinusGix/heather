@@ -1,15 +1,32 @@
 //! The certifying generator, v2 (docs/certifying-generator-design.md §8
 //! item 1; the v1 narrative is in the issue log).
 //!
-//! A transpiler: it consumes the parsed surface AST of a `fn` in the
-//! fragment (Nat-only signature, at most one `match` on one parameter, arms
-//! built from constructors and calls with at most one structural self-call)
-//! and emits *surface text* — the IR, the ∃-form invariant, and a
-//! `CompileNatK` instance value — to be checked appended to
-//! `lib/ir_v1.hthr` by the ordinary pipeline. The generator is untrusted by
-//! architecture: everything it emits is kernel-checked, so it may decline
-//! (`Err` with a reason) and a bug in it is a check failure, never an
-//! unsound theorem.
+//! **Transcription lives in the language.** The fragment's definition — which
+//! signatures and which bodies are transcribable, and what they transcribe to
+//! — is `lib/certgen_code.hthr`, two `match code` shells over the reflected
+//! declaration; there is no Rust walker any more
+//! (`issues/retire-rust-transcriber.md` stage 2, 2026-08-12). What this module
+//! is, in the order the phases run:
+//!
+//!   1. the **reflection primitive** ([`body_code`], reached as
+//!      [`Elaborator::fn_body_code`]): a declared fn's elaborated body as
+//!      marked, closed, boxed code plus the callee tag→name table — the
+//!      coordinate system an analyzer can actually read
+//!      (docs/opaque-globals-analysis-design.md §2);
+//!   2. the **invocation and readback** ([`run_sig_checker`],
+//!      [`run_transcriber`], [`Reader`], [`fn_ir_from_rir`]): apply the
+//!      registered analyzers, read their answers back out of the kernel's
+//!      value representation, and rebuild the `FnIr` the emitters consume;
+//!   3. the **emitters** ([`emit_with_model`] and below): *surface text* — the
+//!      IR, the exactness fixtures, the ∃-form invariants and a `CompileNatK`
+//!      instance value — to be checked appended to `lib/ir_v1.hthr` by the
+//!      ordinary pipeline.
+//!
+//! The generator is untrusted by architecture: everything it emits is
+//! kernel-checked, so every stage may decline (`Err` with a reason) and a bug
+//! in any of them is a check failure, never an unsound theorem. The surface
+//! AST is still consulted for exactly one thing the reflected declaration
+//! cannot supply — the *names* ([`surface_params`]).
 //!
 //! v2's proof schema is the ∃-COMPOSITION KIT (`ret_conv` / `letcon_conv` /
 //! `letmatch_conv` / `letcall_conv` in `lib/ir_v1.hthr`): an invariant is
@@ -38,7 +55,7 @@
 
 use std::fmt::Write as _;
 
-use heather_syntax::ast::{Decl, DeclKind, Expr, ExprKind, TyKind};
+use heather_syntax::ast::{Decl, DeclKind};
 
 /// One generated emission, carrying what later generations and the harness
 /// need: the callee-closure metadata and the compiled IR model.
@@ -93,49 +110,36 @@ pub fn compile_record(arity: usize) -> Option<String> {
     ))
 }
 
-pub fn generate(d: &Decl, ctx: &GenCtx) -> Result<Emission, String> {
-    generate_inner(d, ctx, false)
-}
-
-/// Test-only in spirit: transcribe a call to an *unknown* function as if it
-/// were the self-call. The emission is wrong by construction and its
-/// certificate must fail to check — the fragment-honesty negative control.
-pub fn generate_forced(d: &Decl, ctx: &GenCtx) -> Result<Emission, String> {
-    generate_inner(d, ctx, true)
-}
-
 // ---------------------------------------------------------------------------
-// Fragment check
-
-struct Frag<'a> {
-    name: &'a str,
-    params: Vec<&'a str>,
-    kind: FragKind<'a>,
-}
-
-enum FragKind<'a> {
-    Plain(&'a Expr),
-    Rec { rec_idx: usize, zero: &'a Expr, succ_binder: &'a str, succ: &'a Expr },
-}
+// The surface residue of the fragment check.
 
 /// Names the emitted proofs bind; a source function whose parameters shadow
 /// them is declined rather than renamed around.
 const RESERVED: [&str; 3] = ["gz", "gk", "gih"];
 
-fn fragment<'a>(d: &'a Decl) -> Result<Frag<'a>, String> {
+/// Everything the fragment decision does **not** need the surface AST for is
+/// gone: the signature rule is `lib/certgen_code.hthr`'s `check_sig`
+/// (docs/fn-signature-reflection-design.md §4) and the body rule is the
+/// walker's decline set, both reached through the reflection API. What no
+/// reflected form can supply is the *names* — Ψ carries a body, not the
+/// identifiers it was written with — and the spec expressions the emitted
+/// proofs are spelled in are source identifiers. So this checks the two
+/// facts that are about the written declaration and returns the parameter
+/// names:
+///
+///   * a parameter may not shadow a binder the emitted proofs bind
+///     (`RESERVED`), because the spec text would capture;
+///   * a parameter may not be implicit, because the emitted `CompileNatK`
+///     instance applies the spec function to all of them positionally.
+///
+/// A non-`Nat` parameter, a non-`Nat` result, a nullary fn, a type parameter
+/// and every body-shape decline are the in-language verdicts', and reach the
+/// caller with the in-language attribution.
+fn surface_params(d: &Decl) -> Result<Vec<&str>, String> {
     if d.kind != DeclKind::Fn {
         return Err("not a fn".into());
     }
-    if !d.tyvars.is_empty() {
-        return Err("type parameters are outside the fragment".into());
-    }
-    if d.params.is_empty() {
-        return Err("a nullary fn has no calling convention to certify".into());
-    }
     for p in &d.params {
-        if !matches!(p.ty.kind, TyKind::Nat) {
-            return Err(format!("parameter `{}` is not Nat", p.name));
-        }
         if p.implicit {
             return Err(format!("parameter `{}` is implicit", p.name));
         }
@@ -143,58 +147,17 @@ fn fragment<'a>(d: &'a Decl) -> Result<Frag<'a>, String> {
             return Err(format!("parameter `{}` collides with an emitted binder", p.name));
         }
     }
-    if !matches!(d.result.kind, TyKind::Nat) {
-        return Err("result type is not Nat".into());
-    }
-    if !d.body.stmts.is_empty() || !d.body.ons.is_empty() {
-        return Err("let/on statements are outside the fragment".into());
-    }
-    let params: Vec<&str> = d.params.iter().map(|p| p.name.as_str()).collect();
-    let kind = match &d.body.result.kind {
-        ExprKind::Match { scrut, eqbind, motive, arms } => {
-            if motive.is_some() {
-                return Err("an explicit motive is outside the fragment".into());
-            }
-            if eqbind.is_some() {
-                return Err("an equation binder is outside the fragment".into());
-            }
-            let ExprKind::Var(sname) = &scrut.kind else {
-                return Err("the match scrutinee is not a parameter".into());
-            };
-            let Some(rec_idx) = params.iter().position(|p| p == sname) else {
-                return Err("the match scrutinee is not a parameter".into());
-            };
-            let mut zero = None;
-            let mut succ = None;
-            for arm in arms {
-                match arm.ctor.as_str() {
-                    "Zero" if arm.binders.is_empty() => zero = Some(&arm.body),
-                    "Succ" if arm.binders.len() == 1 => {
-                        succ = Some((arm.binders[0].name(), &arm.body));
-                    }
-                    _ => return Err(format!("arm `{}` is not a fragment Nat arm", arm.ctor)),
-                }
-            }
-            let (Some(zero), Some((succ_binder, succ))) = (zero, succ) else {
-                return Err("match does not have exactly Zero and Succ(k) arms".into());
-            };
-            if RESERVED.contains(&succ_binder) {
-                return Err(format!("binder `{succ_binder}` collides with an emitted binder"));
-            }
-            FragKind::Rec { rec_idx, zero, succ_binder, succ }
-        }
-        _ => FragKind::Plain(&d.body.result),
-    };
-    Ok(Frag { name: &d.name, params, kind })
+    Ok(d.params.iter().map(|p| p.name.as_str()).collect())
 }
 
 // ---------------------------------------------------------------------------
-// Transcription model. References are de Bruijn distances into a cons
-// environment (0 = most recent). Bindings are tracked by birth order — id
-// `i` at depth `d` is distance `d - 1 - i`. Each instruction carries the
-// SPEC expression its result stands for (the source sub-expression, with
-// the Succ-arm binder spelled `gk`), which is what the ∃-proof emission
-// spells into environments, gathered fields and callee certificates.
+// Transcription model — the interface the readback rebuilds and the emitters
+// consume. References are de Bruijn distances into a cons environment
+// (0 = most recent). Each instruction carries the SPEC expression its result
+// stands for (the source sub-expression it denotes, with the Succ-arm binder
+// spelled `gk`), which is what the ∃-proof emission spells into environments,
+// gathered fields and callee certificates; the specs are *derived* at readback
+// (see `chain_from_rir`), since the walker has no names to hand over.
 
 #[derive(Clone)]
 enum Instr {
@@ -209,13 +172,6 @@ struct Chain {
     /// The spec expression of the value at the return slot.
     ret_spec: String,
     has_self_call: bool,
-}
-
-#[derive(Clone)]
-enum Binding {
-    Param(usize),
-    Field,
-    Temp(String),
 }
 
 #[derive(Clone)]
@@ -235,197 +191,6 @@ enum FnIrKind {
 struct FnIr {
     params: Vec<String>,
     kind: FnIrKind,
-}
-
-struct Compiler<'a> {
-    frag: &'a Frag<'a>,
-    ctx: &'a GenCtx,
-    ids: Vec<Binding>,
-    instrs: Vec<Instr>,
-    has_self_call: bool,
-    in_succ_arm: bool,
-    forced: bool,
-}
-
-impl<'a> Compiler<'a> {
-    fn depth(&self) -> usize {
-        self.ids.len()
-    }
-
-    fn dist(&self, id: usize) -> usize {
-        self.depth() - 1 - id
-    }
-
-    fn succ_binder(&self) -> Option<&str> {
-        match &self.frag.kind {
-            FragKind::Rec { succ_binder, .. } => Some(succ_binder),
-            FragKind::Plain(_) => None,
-        }
-    }
-
-    fn lookup(&self, name: &str) -> Result<usize, String> {
-        // The field shadows a same-named parameter, so scan newest-first.
-        for (i, b) in self.ids.iter().enumerate().rev() {
-            let hit = match b {
-                Binding::Param(p) => self.frag.params[*p] == name,
-                Binding::Field => self.in_succ_arm && self.succ_binder() == Some(name),
-                Binding::Temp(_) => false,
-            };
-            if hit {
-                return Ok(i);
-            }
-        }
-        Err(format!("`{name}` is not in scope in the arm"))
-    }
-
-    /// The spec expression a binding stands for (arm binder spelled `gk`).
-    fn spec_of(&self, id: usize) -> String {
-        match &self.ids[id] {
-            Binding::Param(p) => self.frag.params[*p].to_string(),
-            Binding::Field => "gk".to_string(),
-            Binding::Temp(s) => s.clone(),
-        }
-    }
-
-    fn push(&mut self, b: Binding) -> usize {
-        self.ids.push(b);
-        self.ids.len() - 1
-    }
-
-    fn emit_con(&mut self, tag: u64, arg_ids: &[usize], spec: String) -> usize {
-        let dists = arg_ids.iter().map(|&i| self.dist(i)).collect();
-        self.instrs.push(Instr::Con { tag, dists, spec: spec.clone() });
-        self.push(Binding::Temp(spec))
-    }
-
-    fn emit_call(&mut self, callee: &str, arg_ids: &[usize], spec: String) -> usize {
-        let dists = arg_ids.iter().map(|&i| self.dist(i)).collect();
-        let arg_specs = arg_ids.iter().map(|&i| self.spec_of(i)).collect();
-        self.instrs.push(Instr::Call {
-            callee: callee.to_string(),
-            dists,
-            arg_specs,
-            spec: spec.clone(),
-        });
-        self.push(Binding::Temp(spec))
-    }
-
-    fn call_spec(&self, f: &str, arg_ids: &[usize]) -> String {
-        let args: Vec<String> = arg_ids.iter().map(|&i| self.spec_of(i)).collect();
-        format!("{f}({})", args.join(", "))
-    }
-
-    /// Compile an expression, returning the binding id of its value.
-    fn compile(&mut self, e: &Expr) -> Result<usize, String> {
-        match &e.kind {
-            ExprKind::Var(x) if x == "Zero" => Ok(self.emit_con(0, &[], "Zero".into())),
-            ExprKind::Var(x) => self.lookup(x),
-            ExprKind::Num(n) => {
-                let mut id = self.emit_con(0, &[], "0".into());
-                for k in 0..*n {
-                    id = self.emit_con(1, &[id], format!("{}", k + 1));
-                }
-                Ok(id)
-            }
-            _ => {
-                let Some((head, args, _)) = e.as_named() else {
-                    return Err("expression form outside the fragment".into());
-                };
-                match head {
-                    "Succ" if args.len() == 1 => {
-                        let a = self.compile(&args[0])?;
-                        let spec = format!("Succ({})", self.spec_of(a));
-                        Ok(self.emit_con(1, &[a], spec))
-                    }
-                    "Zero" if args.is_empty() => Ok(self.emit_con(0, &[], "Zero".into())),
-                    name if name == self.frag.name => {
-                        if self.has_self_call {
-                            return Err("more than one self-call in an arm".into());
-                        }
-                        if !self.in_succ_arm {
-                            return Err("a self-call outside the Succ arm".into());
-                        }
-                        let FragKind::Rec { rec_idx, succ_binder, .. } = &self.frag.kind else {
-                            unreachable!()
-                        };
-                        if args.len() != self.frag.params.len() {
-                            return Err("self-call arity mismatch".into());
-                        }
-                        let mut ids = Vec::new();
-                        for (i, a) in args.iter().enumerate() {
-                            let ExprKind::Var(v) = &a.kind else {
-                                return Err("self-call argument is not a variable".into());
-                            };
-                            let want = if i == *rec_idx { *succ_binder } else { self.frag.params[i] };
-                            if v != want {
-                                return Err(format!(
-                                    "self-call is not structural: argument {i} is `{v}`, wanted `{want}`"
-                                ));
-                            }
-                            ids.push(self.lookup(v)?);
-                        }
-                        let spec = self.call_spec(self.frag.name, &ids);
-                        self.has_self_call = true;
-                        Ok(self.emit_call(self.frag.name, &ids, spec))
-                    }
-                    other => {
-                        let known = self.ctx.get(other).is_some();
-                        if !known && !self.forced {
-                            return Err(format!(
-                                "call to `{other}`, which has no generated instance in the context"
-                            ));
-                        }
-                        let mut ids = Vec::new();
-                        for a in args {
-                            ids.push(self.compile(a)?);
-                        }
-                        if known {
-                            if ids.len() != self.ctx.get(other).unwrap().arity {
-                                return Err(format!("call to `{other}` has the wrong arity"));
-                            }
-                            let spec = self.call_spec(other, &ids);
-                            Ok(self.emit_call(other, &ids, spec))
-                        } else {
-                            // Forced mode: transcribe an unknown call as if
-                            // it were the self-call. Wrong on purpose.
-                            if self.has_self_call {
-                                return Err("more than one call in an arm (forced)".into());
-                            }
-                            let spec = self.call_spec(self.frag.name, &ids);
-                            self.has_self_call = true;
-                            Ok(self.emit_call(self.frag.name, &ids, spec))
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
-
-fn compile_arm(
-    frag: &Frag<'_>,
-    ctx: &GenCtx,
-    in_succ_arm: bool,
-    body: &Expr,
-    forced: bool,
-) -> Result<Chain, String> {
-    let mut ids: Vec<Binding> = (0..frag.params.len()).rev().map(Binding::Param).collect();
-    if in_succ_arm {
-        ids.push(Binding::Field);
-    }
-    let mut c = Compiler {
-        frag,
-        ctx,
-        ids,
-        instrs: Vec::new(),
-        has_self_call: false,
-        in_succ_arm,
-        forced,
-    };
-    let result = c.compile(body)?;
-    let ret_dist = c.dist(result);
-    let ret_spec = c.spec_of(result);
-    Ok(Chain { instrs: c.instrs, ret_dist, ret_spec, has_self_call: c.has_self_call })
 }
 
 // ---------------------------------------------------------------------------
@@ -617,48 +382,13 @@ fn conv_of_chain(
 }
 
 // ---------------------------------------------------------------------------
-// The generator
-
-fn generate_inner(d: &Decl, ctx: &GenCtx, forced: bool) -> Result<Emission, String> {
-    let frag = fragment(d)?;
-    let f = frag.name;
-    let arity = frag.params.len();
-
-    let model = match &frag.kind {
-        FragKind::Plain(body) => {
-            let c = compile_arm(&frag, ctx, false, body, forced)?;
-            if c.has_self_call {
-                return Err("a self-call outside a match is outside the fragment".into());
-            }
-            FnIr {
-                params: frag.params.iter().map(|s| s.to_string()).collect(),
-                kind: FnIrKind::Plain(c),
-            }
-        }
-        FragKind::Rec { zero, succ, rec_idx, .. } => {
-            let zc = compile_arm(&frag, ctx, false, zero, forced)?;
-            if zc.has_self_call {
-                return Err("a self-call in the Zero arm cannot be structural".into());
-            }
-            let sc = compile_arm(&frag, ctx, true, succ, forced)?;
-            if !sc.has_self_call && !forced {
-                return Err("a Succ arm without a self-call is outside the fragment".into());
-            }
-            FnIr {
-                params: frag.params.iter().map(|s| s.to_string()).collect(),
-                kind: FnIrKind::Rec(RecIr { rec_idx: *rec_idx, zero: zc, succ: sc }),
-            }
-        }
-    };
-
-    emit_with_model(f, arity, model, ctx)
-}
+// The emitters
 
 /// Everything downstream of transcription: the callee closure, the IR
-/// declarations, the fixtures, the ∃-kit folds and the instance. Shared by the
-/// Rust transcriber above and the in-language one below — the port moves one
-/// phase, and this is the seam it moves at
-/// (docs/certgen-transcriber-in-language-design.md §5).
+/// declarations, the fixtures, the ∃-kit folds and the instance. This was the
+/// seam the port moved at (docs/certgen-transcriber-in-language-design.md §5):
+/// the transcriber it is fed by is the in-language one, and phases 3 and 4 stay
+/// here for the reasons that section's table gives.
 fn emit_with_model(
     f: &str,
     arity: usize,
@@ -949,12 +679,12 @@ fn emit_instance(w: &mut String, f: &str, model: &FnIr, arity: usize) {
 // ---------------------------------------------------------------------------
 // The in-language path (docs/certgen-transcriber-in-language-design.md).
 //
-// The transcriber above is Rust that walks a surface AST. This section runs
-// the *same* phase in the language instead: the elaborator marks the fn's
-// elaborated body, an analyzer `meta fn` walks it with the code recursor, and
-// its `Ir` value is read back into the `FnIr` the emitters already consume.
-// Everything after `FnIr` — chain rendering, the ∃-kit fold, the fixtures, the
-// instance — is shared, so the two paths differ in exactly one phase.
+// Transcription runs in the language: the elaborator marks the fn's elaborated
+// body, an analyzer `meta fn` walks it with the code recursor, and its `Ir`
+// value is read back into the `FnIr` the emitters above consume. There is no
+// Rust walker beside it any more (issues/retire-rust-transcriber.md stage 2);
+// everything after `FnIr` — chain rendering, the ∃-kit fold, the fixtures, the
+// instance — is downstream of the seam, not an alternative to it.
 //
 // Untrusted at every step: an unrecognized shape *declines* (an `Err` with a
 // reason), and a misread one produces an emission whose certificate the kernel
@@ -1180,7 +910,7 @@ fn global_head(mut t: &Term) -> bool {
     matches!(t, Term::GlobalTm { .. })
 }
 
-/// The Rust half's signature read: peel the body's `Lam` spine against the
+/// The Rust-side signature read: peel the body's `Lam` spine against the
 /// type's Π spine, checking the fragment shape `Nat → … → Nat`, arity ≥ 1.
 ///
 /// Since the reflection round (docs/fn-signature-reflection-design.md §§4–5)
@@ -1527,8 +1257,8 @@ fn run_sig_checker(e: &Elaborator, name: &str) -> Result<u64, String> {
 
 /// The environment's spec expressions, **by distance** (0 = most recent): the
 /// parameters as the arm sees them, with the `Succ` arm's field on top. This
-/// is the layout `compile_arm` builds by pushing ids in reverse parameter
-/// order, and it is where the marker convention and the IR's slots meet.
+/// is `lib/certgen_code.hthr`'s convention 2 restated on the naming side, and
+/// it is where the marker convention and the IR's slots meet.
 fn base_specs(params: &[String], field: bool) -> Vec<String> {
     let mut v: Vec<String> = params.to_vec();
     if field {
@@ -1539,9 +1269,9 @@ fn base_specs(params: &[String], field: bool) -> Vec<String> {
 
 /// One instruction chain, with the spec expressions **derived** rather than
 /// carried: a temporary's spec is determined by its instruction and the specs
-/// of the slots it reads, so the Rust transcriber's `Instr::spec` is redundant
-/// with the IR (design doc §6, step 5) and the in-language path recomputes it
-/// from the same rules.
+/// of the slots it reads, so `Instr::spec` is redundant with the IR (design
+/// doc §6, step 5) and this is where it is recomputed — the walker hands over
+/// slots, and the names come from the declaration.
 fn chain_from_rir(
     ir: &RIr,
     name: &str,
@@ -1589,8 +1319,9 @@ fn chain_from_rir(
                 // The walker's numbering (lib/certgen_code.hthr convention
                 // 3): 0 is the enclosing fn itself, `c ≥ 1` is
                 // `callees[c - 1]` from the body-reflection table. Names,
-                // not closure indices — the shared emitters compute the
-                // program closure downstream exactly as the Rust path does.
+                // not closure indices — this is the one place the walker's
+                // numbering is converted, and the emitters compute the
+                // program closure from the names, downstream.
                 let cname = if *callee == 0 {
                     name
                 } else {
@@ -1664,19 +1395,20 @@ fn fn_ir_from_rir(
     }
 }
 
-/// Generate for `d` with the **in-language** transcriber: the elaborator marks
-/// `d`'s elaborated body, the registered analyzer walks it, and its `Ir` is
-/// read back into the model the shared emitters consume.
+/// Generate for `d`: the elaborator marks `d`'s elaborated body, the
+/// registered analyzer walks it, and its `Ir` is read back into the model the
+/// emitters consume.
 ///
-/// `d` must already be elaborated into `e` (it is an ordinary declaration).
-/// Every failure is a decline, and the Rust path serves the same input.
+/// `d` must already be elaborated into `e` (it is an ordinary declaration) —
+/// the analysis reads Ψ, not the AST, and a fn the elaborator has not seen has
+/// nothing to analyse. Every failure is a decline.
 pub fn generate_in_language(
     e: &Elaborator,
     d: &Decl,
     ctx: &GenCtx,
 ) -> Result<Emission, String> {
     // The signature DECISION is in-language (docs/fn-signature-reflection-
-    // design.md §4), consulted before `fragment`'s surface checks so a
+    // design.md §4), consulted before [`surface_params`]'s name checks so a
     // signature decline is the checker's — and compared against the Rust
     // peel, whose checks survive as the agreement oracle. Disagreement is a
     // fragment-definition drift: still an `Err` (the generator must not
@@ -1695,18 +1427,18 @@ pub fn generate_in_language(
             ));
         }
     };
-    let frag = fragment(d)?;
-    let f = frag.name;
+    let names = surface_params(d)?;
+    let f = d.name.as_str();
     // The pull primitive: marked, closed, boxed code plus the callee-marker
     // table the readback resolves `LetCall` tags against
     // (docs/opaque-globals-analysis-design.md §§2–4).
     let body = e.fn_body_code(f)?;
     debug_assert_eq!(body.arity, arity);
-    if arity != frag.params.len() {
+    if arity != names.len() {
         return Err("the elaborated body's arity disagrees with the declaration".into());
     }
     let rir = run_transcriber(e, arity, body.code)?;
-    let params: Vec<String> = frag.params.iter().map(|s| s.to_string()).collect();
+    let params: Vec<String> = names.iter().map(|s| s.to_string()).collect();
     let model = fn_ir_from_rir(&rir, f, &body.callees, &params)?;
     emit_with_model(f, arity, model, ctx)
 }

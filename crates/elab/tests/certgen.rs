@@ -1,6 +1,18 @@
 //! The certifying generator, v2 — acceptance per
 //! docs/certifying-generator-design.md §§8–9, under `scripts/test`.
 //!
+//! Since `issues/retire-rust-transcriber.md` stage 2 (2026-08-12) there is
+//! exactly ONE generator: `generate_in_language`. The Rust walker that served
+//! as its byte-identity oracle is deleted, so what that comparison pinned is
+//! carried by four covers — `lib/certgen_code.hthr`'s own `refl` theorems, the
+//! positive fixtures below (a silent decline is a panic), the exactness
+//! fixtures inside every emission (different-but-converging output is `Stuck`
+//! at a concrete run), and the kernel judging the rest. Where a property had no
+//! cover left, the expected text is pinned as a LITERAL here: the `IR_*`
+//! constants are the emitted-layout interface, whose sole normative statement
+//! is now `lib/certgen_code.hthr`'s three-conventions header plus the emitters
+//! in `crates/elab/src/certgen.rs`.
+//!
 //! Support prelude: the library's declarations section (everything up to
 //! the first theorem, the same cut `ir_v1.rs` uses) plus the named items a
 //! generated emission's *proofs* elaborate against, sliced by parse span in
@@ -25,11 +37,17 @@
 //! `step_mono` and the two double-`j` kit lemmas), ~50s the five emissions,
 //! the rest the controls. That is why there is exactly ONE elaborator: the
 //! prelude is paid once, mutants are renamed apart rather than re-elaborated
-//! against a fresh prelude, and the forced control reuses the same session.
+//! against a fresh prelude, and `lib/certgen_code.hthr` — whose two `match
+//! code` shells are the expensive part of any generation — is elaborated into
+//! that same session, once.
+//!
+//! STACK: checking one `match code` shell means checking 52 branch telescopes
+//! against a library-inductive motive, and two elaborations of
+//! `lib/certgen_code.hthr` in one test thread overflow the 8 MiB
+//! `scripts/test` gives it. One copy of the file per test, therefore — which
+//! is why the two perturbed-library controls are tests of their own.
 
-use heather_elab::certgen::{
-    compile_record, generate, generate_forced, generate_in_language, GenCtx,
-};
+use heather_elab::certgen::{compile_record, generate_in_language, GenCtx};
 use heather_elab::Elaborator;
 use heather_syntax::ast::{Decl, Item};
 use heather_syntax::parse_file;
@@ -41,9 +59,12 @@ const LIB: &str = include_str!("../../../lib/ir_v1.hthr");
 /// all of it into scope.
 const NAT: &str = include_str!("../../../lib/std/nat.hthr");
 const BOOL: &str = include_str!("../../../lib/std/bool.hthr");
-/// The in-language transcriber: the data and helpers, plus the `match code`
-/// shell that claims `certgen.transcribe`
-/// (docs/certgen-transcriber-in-language-design.md).
+/// The transcriber: the data and helpers, plus the two `match code` shells
+/// claiming `certgen.transcribe` and `certgen.check_sig`
+/// (docs/certgen-transcriber-in-language-design.md,
+/// docs/fn-signature-reflection-design.md). This file IS the fragment's
+/// definition — signature rule and body rule both — and nothing in Rust
+/// decides it.
 const CODE: &str = include_str!("../../../lib/certgen_code.hthr");
 
 /// Items a generated emission needs beyond the declarations prefix, in
@@ -131,13 +152,63 @@ const SEVEN: &str = "fn seven(n: Nat) -> Nat { 7 }";
 const THIRD3: &str =
     "fn third3(a: Nat, b: Nat, c: Nat) -> Nat { match c { Zero => b, Succ(k) => Succ(third3(a, b, k)) } }";
 /// The v2 acceptance function: a foreign call whose argument is the
-/// self-call's result. The zero arm spells `Zero` rather than `0` so the
-/// in-language byte-identity comparison tests what `mul` is *for* — the
-/// cross-function call — instead of re-pinning `seven`'s known
-/// literal-spec-spelling divergence (a source-blind walker derives `Zero`
-/// where the source said `0`; both denote the same Nat).
+/// self-call's result. The zero arm spells `Zero` rather than `0` because the
+/// walker is source-blind and derives `Zero` where the source said `0` (both
+/// denote the same Nat) — spelling it this way keeps `mul`'s pins about the
+/// cross-function call rather than about literal spelling.
 const MUL: &str =
     "fn mul(a: Nat, b: Nat) -> Nat { match b { Zero => Zero, Succ(k) => add(a, mul(a, k)) } }";
+
+// ---------------------------------------------------------------------------
+// THE LAYOUT INTERFACE, pinned as literals.
+//
+// Until 2026-08-12 the emitted layout was pinned by agreement between two
+// independent implementations (the Rust walker and the in-language one). With
+// the oracle retired these literals ARE that pin: the instruction chain, the
+// slot numbering, the arm split, and the closure's callee indices, per
+// function. `lib/certgen_code.hthr`'s `add_transcribes`, `dbl_transcribes` and
+// `mul_transcribes` pin the same three transcriptions *in-language* — before
+// the readback and before the closure renumbering — so a divergence between a
+// literal here and a theorem there is localized to the readback or to the
+// emitters, which is the seam the oracle used to cover.
+
+/// §9 item 2: `add`'s IR is the hand-run's transcription up to the recorded
+/// slot-map divergence — the generator transcribes `add` itself, which recurses
+/// on its SECOND parameter (LetMatch on slot 1, gather (1, 0)), where the
+/// hand-run transcribed the swapped spec to match the theta loop's convention
+/// (LetMatch on slot 0, gather (0, 2)).
+const IR_ADD: &str = "\
+add_gen_arm_zero() = Ret(RCons(0, RNil))
+add_gen_arm_succ() = LetCall(0, RCons(1, RCons(0, RNil)), LetCon(1, RCons(0, RNil), Ret(RCons(0, RNil))))
+add_gen_body() = LetMatch(1, Arm(add_gen_arm_zero(), Arm(add_gen_arm_succ(), NoArm)), Ret(RCons(0, RNil)))";
+
+/// 1-ary recursive, a `Succ` arm nesting two constructors around the ih.
+const IR_DBL: &str = "\
+dbl_gen_arm_zero() = LetCon(0, RNil, Ret(RCons(0, RNil)))
+dbl_gen_arm_succ() = LetCall(0, RCons(0, RNil), LetCon(1, RCons(0, RNil), LetCon(1, RCons(0, RNil), Ret(RCons(0, RNil)))))
+dbl_gen_body() = LetMatch(0, Arm(dbl_gen_arm_zero(), Arm(dbl_gen_arm_succ(), NoArm)), Ret(RCons(0, RNil)))";
+
+/// 3-ary, recursion on the LAST parameter: the `Zero` arm returns a parameter
+/// that is not the scrutinee (slot 1), and the self-call gathers the two
+/// unchanged parameters around the field.
+const IR_THIRD3: &str = "\
+third3_gen_arm_zero() = Ret(RCons(1, RNil))
+third3_gen_arm_succ() = LetCall(0, RCons(1, RCons(2, RCons(0, RNil))), LetCon(1, RCons(0, RNil), Ret(RCons(0, RNil))))
+third3_gen_body() = LetMatch(2, Arm(third3_gen_arm_zero(), Arm(third3_gen_arm_succ(), NoArm)), Ret(RCons(0, RNil)))";
+
+/// Non-recursive, a numeral-literal body: eight instructions, not a constant.
+const IR_SEVEN: &str = "\
+seven_gen_body() = LetCon(0, RNil, LetCon(1, RCons(0, RNil), LetCon(1, RCons(0, RNil), LetCon(1, RCons(0, RNil), LetCon(1, RCons(0, RNil), LetCon(1, RCons(0, RNil), LetCon(1, RCons(0, RNil), LetCon(1, RCons(0, RNil), Ret(RCons(0, RNil))))))))))";
+
+/// The cross-function acceptance: a two-member closure `[add, mul]`, so the
+/// self-call renders `LetCall(1, …)` and the foreign call `LetCall(0, …)` —
+/// the walker's own numbering (0 = self, foreign tags verbatim) renumbered
+/// against the closure at readback, which is the one place the two numbering
+/// systems meet.
+const IR_MUL: &str = "\
+mul_gen_arm_zero() = LetCon(0, RNil, Ret(RCons(0, RNil)))
+mul_gen_arm_succ() = LetCall(1, RCons(1, RCons(0, RNil)), LetCall(0, RCons(2, RCons(0, RNil)), Ret(RCons(0, RNil))))
+mul_gen_body() = LetMatch(1, Arm(mul_gen_arm_zero(), Arm(mul_gen_arm_succ(), NoArm)), Ret(RCons(0, RNil)))";
 
 /// Everything here elaborates **as the library module**, so that the
 /// declarations prefix's `import nat;` means what it means in the file.
@@ -161,41 +232,155 @@ fn base() -> Elaborator {
     e
 }
 
-/// §9 item 2: the generated `add` IR is the hand-run's transcription, up to
-/// the recorded slot-map divergence (the generator transcribes `add`
-/// itself, which recurses on its SECOND parameter — LetMatch on slot 1,
-/// gather (1, 0) — where the hand-run transcribed the swapped spec to match
-/// the theta loop's convention: LetMatch on slot 0, gather (0, 2)).
+/// The transcriber's own acceptance: what each fixture transcribes to, and
+/// what the fragment declines. Cheap on purpose — the *declarations* prefix is
+/// all this needs, not the support prelude, because nothing here elaborates a
+/// certificate. The end-to-end emissions and the kernel-refusal controls live
+/// in `emissions_check_and_controls`, which already pays for the kit.
 #[test]
-fn generated_add_matches_the_hand_run() {
-    let em = generate(&lib_decl("add"), &GenCtx::new()).expect("add is in the fragment");
-    assert_eq!(em.arity, 2);
-    assert_eq!(em.closure, vec!["add".to_string()]);
+fn in_language_transcriber() {
+    let mut e = base();
+    let cut = LIB.find("\ntheorem ").expect("the library has theorems");
+    elab(&mut e, &LIB[..cut], "declarations prefix");
+    elab(&mut e, CODE, "lib/certgen_code.hthr");
+    // `dbl` lives past the declarations cut, and the generator reads the
+    // *elaborated* body: a fn the elaborator has not seen has nothing to
+    // analyse, which is a decline, not a bug.
+    elab(&mut e, &lib_item("dbl"), "fn dbl");
+    elab(&mut e, SEVEN, "fn seven");
+    elab(&mut e, THIRD3, "fn third3");
+    elab(&mut e, MUL, "fn mul");
+
+    // The single-function positives, across the axes of
+    // docs/testing-generated-terms.md: recursion on the second parameter
+    // (`add`), on the only parameter (`dbl`), on the last of three (`third3`),
+    // and no recursion at all over a literal body (`seven`).
+    for (d, want) in [
+        (lib_decl("add"), IR_ADD),
+        (lib_decl("dbl"), IR_DBL),
+        (decl_of(THIRD3), IR_THIRD3),
+        (decl_of(SEVEN), IR_SEVEN),
+    ] {
+        let em = generate_in_language(&e, &d, &GenCtx::new())
+            .unwrap_or_else(|r| panic!("{} declined: {r}", d.name));
+        assert_eq!(em.ir_body, want, "{} transcribes differently", d.name);
+        assert_eq!(em.closure, vec![d.name.clone()], "{}'s closure", d.name);
+    }
     assert_eq!(
-        em.ir_body,
-        "add_gen_arm_zero() = Ret(RCons(0, RNil))\n\
-         add_gen_arm_succ() = LetCall(0, RCons(1, RCons(0, RNil)), LetCon(1, RCons(0, RNil), Ret(RCons(0, RNil))))\n\
-         add_gen_body() = LetMatch(1, Arm(add_gen_arm_zero(), Arm(add_gen_arm_succ(), NoArm)), Ret(RCons(0, RNil)))"
+        generate_in_language(&e, &lib_decl("add"), &GenCtx::new()).unwrap().arity,
+        2
     );
+    // The hand-run's own slot map, for the divergence `IR_ADD` records.
     assert!(LIB.contains("LetCall(0, RCons(0, RCons(2, RNil)),"));
+
+    // The cross-function positive (docs/opaque-globals-analysis-design.md §4):
+    // `mul` calls `add`, whose head arrives as a callee marker through the
+    // body-reflection primitive, and with `add`'s emission in the context the
+    // closure is the two-member program.
+    let mul = decl_of(MUL);
+    let mut cross = GenCtx::new();
+    cross.push(generate_in_language(&e, &lib_decl("add"), &GenCtx::new()).expect("add"));
+    let em = generate_in_language(&e, &mul, &cross)
+        .unwrap_or_else(|r| panic!("mul declined: {r}"));
+    assert_eq!(em.ir_body, IR_MUL, "mul transcribes differently");
+    assert_eq!(em.closure, vec!["add".to_string(), "mul".to_string()]);
+
+    // With NO generated instance for the callee in the context, the walk and
+    // readback still succeed and the decline is the closure's, downstream —
+    // the only home left for "a call to a function that has no certificate
+    // yet" now that the surface fragment check is gone.
+    let Err(msg) = generate_in_language(&e, &mul, &GenCtx::new()) else {
+        panic!("mul without add's instance must decline")
+    };
+    assert!(msg.contains("no generated instance"), "{msg}");
+
+    // The body-less policy pin (docs/opaque-globals-analysis-design.md §2): a
+    // theorem's proof is deliberately opaque, so body reflection declines by
+    // saying so. The name is one of `lib/certgen_code.hthr`'s own theorems,
+    // elaborated above.
+    let Err(msg) = e.fn_body_code("sig_dbl") else {
+        panic!("a theorem has no body to reflect")
+    };
+    assert!(msg.contains("no elaborated body"), "{msg}");
+
+    // A body decline, from the WALKER: a nested `match` binds at level
+    // `arity + 2`, which convention 1 says is outside the fragment
+    // (`lib/certgen_code.hthr`'s `nested_binder_declines` pins the same fact
+    // one layer down).
+    {
+        let src = "fn nest2(n: Nat) -> Nat { match n { Zero => 0, Succ(k) => match k { Zero => 1, Succ(j) => j } } }";
+        let d = decl_of(src);
+        elab(&mut e, src, "body decline fixture");
+        let Err(msg) = generate_in_language(&e, &d, &GenCtx::new()) else {
+            panic!("`{}` must decline", d.name)
+        };
+        assert!(msg.contains("declined this body"), "{msg}");
+    }
+
+    // The in-language signature checker
+    // (docs/fn-signature-reflection-design.md §§4, 7.5): a non-`Nat`
+    // parameter, a non-`Nat` result and a nullary fn are each declined by the
+    // LIBRARY's `check_sig` — the message says so — and none is a
+    // disagreement with the Rust peel, which is the agreement property
+    // asserted from the negative side. (The positives above assert it from
+    // the accepting side: a disagreement is an `Err`, and they demand `Ok`.)
+    for src in [
+        "fn evalish2(v: Val) -> Nat { 0 }",
+        "fn tocmp(n: Nat) -> Cmp { CLt }",
+        "fn nofn() -> Nat { 0 }",
+    ] {
+        let d = decl_of(src);
+        elab(&mut e, src, "signature decline fixture");
+        let Err(msg) = generate_in_language(&e, &d, &GenCtx::new()) else {
+            panic!("`{}`'s signature must decline", d.name)
+        };
+        assert!(msg.contains("in-language signature checker"), "{msg}");
+        assert!(!msg.contains("disagreement"), "{msg}");
+    }
+
+    // Two declines the retired Rust walker used to make, re-homed
+    // (issues/retire-rust-transcriber.md stage 2). A non-structural self-call
+    // never reaches the generator at all: the ELABORATOR refuses it, because
+    // the only recursion it lowers is the eliminator's.
+    refuted(
+        &mut e,
+        "fn tw(a: Nat, b: Nat) -> Nat { match b { Zero => a, Succ(k) => tw(k, k) } }",
+        "a non-structural self-call",
+    );
+    // And a `Succ` arm without a self-call is now IN the fragment — a
+    // widening, not a loss. The Rust walker declined it as a surface shape;
+    // the eliminator carries structural recursion, so an arm that ignores the
+    // induction hypothesis is an ordinary transcribable body.
+    {
+        let src = "fn pred2(n: Nat) -> Nat { match n { Zero => 0, Succ(k) => k } }";
+        elab(&mut e, src, "pred2");
+        let em = generate_in_language(&e, &decl_of(src), &GenCtx::new())
+            .expect("a Succ arm without a self-call is transcribable");
+        assert!(em.ir_body.contains("pred2_gen_arm_succ() = Ret(RCons(0, RNil))"), "{}", em.ir_body);
+    }
 }
 
-/// One elaborator serves the whole acceptance: the support prelude is the
-/// expensive part (the ∃-kit and its `step_mono`/`fuel_monotone` chain
-/// re-elaborate), so the positive emissions, the mutation controls (renamed
-/// apart) and the forced-emission control all share it.
+/// One elaborator serves the whole acceptance: the support prelude and
+/// `lib/certgen_code.hthr` are the expensive parts, so the positive emissions
+/// and the mutation controls (renamed apart) all share it.
 ///
-/// Positives:
+/// Positives — every one of them generated, elaborated and kernel-checked:
 /// - `add` (the hand-run reproduction), `dbl` (1-ary recursive), `seven`
 ///   (non-recursive), `third3` (3-ary recursive) — §9 item 3;
 /// - `mul` via `add` — the v2 cross-function acceptance: a two-function
 ///   program, `add`'s invariant re-derived inside it, the caller's
 ///   certificate consuming the callee's at an open argument.
+///
+/// This is cover (b) of `issues/retire-rust-transcriber.md`: with no oracle
+/// left, a transcriber that silently started declining would show up here as a
+/// panic, and one that emitted a different-but-plausible program would be
+/// refused by its own exactness fixture or by the kernel.
 #[test]
 fn emissions_check_and_controls() {
     let mut e = base();
     let sup = support();
     elab(&mut e, &sup, "support prelude");
+    elab(&mut e, CODE, "lib/certgen_code.hthr");
     elab(&mut e, SEVEN, "fn seven");
     elab(&mut e, THIRD3, "fn third3");
     elab(&mut e, MUL, "fn mul");
@@ -203,7 +388,8 @@ fn emissions_check_and_controls() {
     let mut ctx = GenCtx::new();
     let mut arities_done = vec![2usize];
     for d in [lib_decl("add"), lib_decl("dbl"), decl_of(SEVEN), decl_of(THIRD3), decl_of(MUL)] {
-        let em = generate(&d, &ctx).unwrap_or_else(|r| panic!("{} declined: {r}", d.name));
+        let em = generate_in_language(&e, &d, &ctx)
+            .unwrap_or_else(|r| panic!("{} declined: {r}", d.name));
         if !arities_done.contains(&em.arity) {
             let rec = compile_record(em.arity).expect("non-2 arity record");
             elab(&mut e, &rec, "arity record");
@@ -246,145 +432,28 @@ fn emissions_check_and_controls() {
     assert_ne!(m, rename(good, "m4"));
     refuted(&mut e, &m, "wrong spec function");
 
-    // The in-language path's own end-to-end item (design doc §10.4): `seven`
-    // is the one fixture whose in-language emission is a *different file* from
-    // the Rust one — its body is a numeral literal, so the walker spells the
-    // spec `Succ(…)` where the source said `7` — and it is checked here
-    // because this is the test that pays for the kit.
-    let mut il = base();
-    let cut = LIB.find("\ntheorem ").expect("the library has theorems");
-    elab(&mut il, &LIB[..cut], "declarations prefix");
-    elab(&mut il, CODE, "lib/certgen_code.hthr");
-    elab(&mut il, SEVEN, "fn seven");
-    elab(&mut il, &lib_item("dbl"), "fn dbl");
-    let em = generate_in_language(&il, &decl_of(SEVEN), &GenCtx::new())
-        .unwrap_or_else(|r| panic!("seven declined in-language: {r}"));
-    elab(&mut e, &em.text.replace("seven_gen", "sevenil_gen"), "in-language seven emission");
-
-    // Fragment honesty, the forced half: `tri` calls `dbl`, unknown to an
-    // empty context, so the forced transcription routes it to the self-call
-    // — a different function — and the invariant's final `refl` faces
-    // `dbl(gk) ≡ tri(gk)` at an open `gk`, which is not convertible.
-    let tri = "fn tri(n: Nat) -> Nat { match n { Zero => Zero, Succ(k) => Succ(dbl(k)) } }";
-    let d = decl_of(tri);
-    assert!(generate(&d, &GenCtx::new()).is_err(), "tri is outside the fragment");
-    let em = generate_forced(&d, &GenCtx::new()).expect("forced emission");
-    elab(&mut e, tri, "fn tri");
-    refuted(&mut e, &em.text, "forced out-of-fragment emission");
-}
-
-/// The in-language transcriber (docs/certgen-transcriber-in-language-design.md
-/// §10): `lib/certgen_code.hthr` plus the `match code` shell replace the Rust
-/// `Compiler` for one phase, and the cross-check is that they transcribe the
-/// same program.
-///
-/// Cheap on purpose — the *declarations* prefix is all this needs, not the
-/// support prelude, because nothing here elaborates a certificate. The
-/// end-to-end emission check and the forced control live in
-/// `emissions_check_and_controls`, which already pays for the kit.
-#[test]
-fn in_language_transcriber() {
-    let mut e = base();
-    let cut = LIB.find("\ntheorem ").expect("the library has theorems");
-    elab(&mut e, &LIB[..cut], "declarations prefix");
-    elab(&mut e, CODE, "lib/certgen_code.hthr");
-    // `dbl` lives past the declarations cut, and the in-language path reads the
-    // *elaborated* body: a fn the elaborator has not seen has nothing to
-    // analyse, which is a decline, not a bug.
-    elab(&mut e, &lib_item("dbl"), "fn dbl");
-    elab(&mut e, SEVEN, "fn seven");
-    elab(&mut e, THIRD3, "fn third3");
-    elab(&mut e, MUL, "fn mul");
-
-    // The cross-check: same IR, function by function. Where the source has no
-    // numeral literal the whole *emission* matches too — the model is all the
-    // emitters see, so an equal IR plus equal parameter names is an equal
-    // file, which is a sharper statement than conversion and a cheaper one.
-    for d in [lib_decl("add"), lib_decl("dbl"), decl_of(THIRD3)] {
-        let rust = generate(&d, &GenCtx::new()).unwrap_or_else(|r| panic!("{r}"));
-        let inlang = generate_in_language(&e, &d, &GenCtx::new())
-            .unwrap_or_else(|r| panic!("{} declined in-language: {r}", d.name));
-        assert_eq!(inlang.ir_body, rust.ir_body, "{} transcribes differently", d.name);
-        assert_eq!(inlang.text, rust.text, "{}'s emission differs", d.name);
-    }
-
-    // `seven`'s body is a numeral literal, so the two paths agree on the IR
-    // and differ on the *spec spelling* only: the source says `7`, and a
-    // walker that never saw the source says `Succ(…)`. Both denote the same
-    // Nat, and the emission is checked in the expensive test.
-    let d = decl_of(SEVEN);
-    let rust = generate(&d, &GenCtx::new()).expect("seven");
-    let inlang = generate_in_language(&e, &d, &GenCtx::new()).expect("seven, in-language");
-    assert_eq!(inlang.ir_body, rust.ir_body);
-    assert_ne!(inlang.text, rust.text);
-
-    // The cross-function positive (docs/opaque-globals-analysis-design.md
-    // §4; formerly this fixture's neutrality DECLINE): `mul` calls `add`,
-    // whose head now arrives as a callee marker through the body-reflection
-    // primitive, so with `add`'s emission in the context the in-language
-    // emission is byte-identical to the frozen Rust v2 path's — the same
-    // standard as the loop above, and the Rust `mul` emission is already
-    // checked end to end by `emissions_check_and_controls`.
-    let mul = decl_of(MUL);
-    let mut cross = GenCtx::new();
-    cross.push(generate(&lib_decl("add"), &GenCtx::new()).expect("add"));
-    let rust = generate(&mul, &cross).expect("mul, Rust v2");
-    let inlang = generate_in_language(&e, &mul, &cross)
-        .unwrap_or_else(|r| panic!("mul declined in-language: {r}"));
-    assert_eq!(inlang.ir_body, rust.ir_body, "mul transcribes differently");
-    assert_eq!(inlang.text, rust.text, "mul's emission differs");
-
-    // The decline the flip re-homes: with NO generated instance for the
-    // callee in the context, the walk and readback still succeed and the
-    // decline is the closure's, downstream — the same check the Rust path
-    // makes, now reached by the in-language one.
-    let Err(msg) = generate_in_language(&e, &mul, &GenCtx::new()) else {
-        panic!("mul without add's instance must decline")
-    };
-    assert!(msg.contains("no generated instance"), "{msg}");
-
-    // The body-less policy pin (design doc §2): a theorem's proof is
-    // deliberately opaque, so body reflection declines by saying so. The
-    // name is one of `lib/certgen_code.hthr`'s own theorems, elaborated
-    // above.
-    let Err(msg) = e.fn_body_code("sig_dbl") else {
-        panic!("a theorem has no body to reflect")
-    };
-    assert!(msg.contains("no elaborated body"), "{msg}");
-
-    // A body the marker pass cannot close: a `let` is not in the fragment.
-    // (The signature is fine, so this decline is the *body* residue's, after
-    // the in-language signature verdict said yes.)
-    {
-        let src = "fn withlet2(n: Nat) -> Nat { let m = n; m }";
-        let d = decl_of(src);
-        elab(&mut e, src, "decline fixture");
-        let Err(msg) = generate_in_language(&e, &d, &GenCtx::new()) else {
-            panic!("`{}` must decline in-language", d.name)
-        };
-        assert!(msg.contains("let"), "{msg}");
-    }
-
-    // The in-language signature checker
-    // (docs/fn-signature-reflection-design.md §§4, 7.5): a non-`Nat`
-    // parameter, a non-`Nat` result and a nullary fn are each declined by the
-    // LIBRARY's `check_sig` — the message says so — and none is a
-    // disagreement with the Rust peel, which is the agreement property
-    // asserted from the negative side. (The positives above assert it from
-    // the accepting side: a disagreement is an `Err`, and they demand `Ok`.)
-    for src in [
-        "fn evalish2(v: Val) -> Nat { 0 }",
-        "fn tocmp(n: Nat) -> Cmp { CLt }",
-        "fn nofn() -> Nat { 0 }",
-    ] {
-        let d = decl_of(src);
-        elab(&mut e, src, "signature decline fixture");
-        let Err(msg) = generate_in_language(&e, &d, &GenCtx::new()) else {
-            panic!("`{}`'s signature must decline in-language", d.name)
-        };
-        assert!(msg.contains("in-language signature checker"), "{msg}");
-        assert!(!msg.contains("disagreement"), "{msg}");
-    }
+    // (e) CALLEE IDENTITY, the control the retired `generate_forced` used to
+    // play (issues/retire-rust-transcriber.md stage 2): a `LetCall` names a
+    // slot in the program, so swapping the program's two members routes every
+    // call to the other function while the whole emission stays well-formed.
+    // `mul`'s self-call becomes an `add` call and vice versa, the run stops
+    // converging, and the exactness fixture — a `refl` on a concrete run —
+    // refuses it. Cheaper than the old control and cross-function, which the
+    // old one was not.
+    let mutant = ctx_get(&ctx, "mul")
+        .text
+        .replace("mul_gen", "mulm5_gen")
+        .replace("_in_mul", "_in_mulm5")
+        .replacen(
+            "PFun(add_gen_body(), PFun(mulm5_gen_body(), PNil))",
+            "PFun(mulm5_gen_body(), PFun(add_gen_body(), PNil))",
+            1,
+        );
+    assert!(
+        mutant.contains("PFun(mulm5_gen_body(), PFun(add_gen_body(), PNil))"),
+        "the mutation must apply"
+    );
+    refuted(&mut e, &mutant, "a program whose members are swapped");
 }
 
 /// The in-language honesty control (design doc §10.6a), in a test of its own
@@ -425,8 +494,7 @@ fn a_perturbed_transcriber_is_refused_by_the_kernel() {
     elab(&mut bad, &lib_item("dbl"), "fn dbl");
     let wrong = generate_in_language(&bad, &lib_decl("dbl"), &GenCtx::new())
         .expect("a wrong transcriber still emits — that is the point");
-    let good = generate(&lib_decl("dbl"), &GenCtx::new()).expect("dbl");
-    assert_ne!(wrong.ir_body, good.ir_body, "the mutation must change the transcription");
+    assert_ne!(wrong.ir_body, IR_DBL, "the mutation must change the transcription");
     // Everything up to the invariant: the IR, the program, and the two
     // literal-fuel fixtures. The fixtures are `refl` on a concrete run, so a
     // transcription that reads the wrong slots is `Stuck` there.
@@ -473,26 +541,4 @@ fn a_perturbed_signature_checker_is_a_loud_disagreement() {
 
 fn ctx_get<'a>(ctx: &'a GenCtx, name: &str) -> &'a heather_elab::certgen::Emission {
     ctx.iter().find(|e| e.name == name).expect("emission present")
-}
-
-/// Fragment honesty, the decline half — pure Rust, no elaborator.
-#[test]
-fn fragment_declines() {
-    let empty = GenCtx::new();
-    let declined = [
-        // call to a function with no generated instance in the context
-        "fn dblv(n: Nat) -> Nat { match n { Zero => Zero, Succ(k) => Succ(Succ(dbl(k))) } }",
-        // non-Nat parameter
-        "fn evalish(v: Val) -> Nat { 0 }",
-        // let statement
-        "fn withlet(n: Nat) -> Nat { let m = n; m }",
-        // Succ arm without a self-call
-        "fn pred2(n: Nat) -> Nat { match n { Zero => 0, Succ(k) => k } }",
-        // non-structural self-call argument
-        "fn tw(a: Nat, b: Nat) -> Nat { match b { Zero => a, Succ(k) => tw(k, k) } }",
-    ];
-    for src in declined {
-        let d = decl_of(src);
-        assert!(generate(&d, &empty).is_err(), "`{}` must be declined", d.name);
-    }
 }
