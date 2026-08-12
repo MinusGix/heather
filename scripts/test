@@ -9,10 +9,13 @@
 # Usage: scripts/test [--fast] [cargo-test args...]
 #
 # --fast skips the two whole-library acceptance tests that dominate wall
-# time (issues/suite-wall-time-two-tests.md; measured 2026-08-05 at 120 and
-# 160 CPU-s, ~80% of a full run) — the inner loop while iterating. The
-# fast lane also disables Cargo's cross-target fail-fast, so a red run shows
-# every failing test binary while the expensive acceptance tests stay skipped.
+# time (issues/suite-wall-time-two-tests.md) and the three perturbed-library
+# mutation controls (issues/certgen-harness-cost.md, the 2026-08-12 lever:
+# each control elaborates a `match code` shell, and their whole content is
+# kernel-refusal of mutants — acceptance-class, nothing an inner loop
+# iterates on) — the inner loop while iterating. The fast lane also disables
+# Cargo's cross-target fail-fast, so a red run shows every failing test
+# binary while the expensive acceptance tests stay skipped.
 # default runs everything: a round's FINAL verification, and anything that
 # touches lib/, the kit, or the generators, must be a plain `scripts/test`.
 set -euo pipefail
@@ -26,7 +29,10 @@ if [[ "${1:-}" == --fast ]]; then
   # By exact test-fn name; `cargo test -- --skip` applies the filter in
   # every test binary, where these names are unique. If the caller already
   # passed a `--`, don't add a second one.
-  SKIP=(--skip the_full_ir_library_checks --skip emissions_check_and_controls)
+  SKIP=(--skip the_full_ir_library_checks --skip emissions_check_and_controls
+        --skip a_perturbed_transcriber_is_refused_by_the_kernel
+        --skip a_perturbed_signature_checker_is_a_loud_disagreement
+        --skip a_perturbed_fold_is_refused_by_the_kernel)
   for a in "$@"; do [[ "$a" == -- ]] && break; done
   [[ "${a:-}" == -- ]] || SKIP=(-- "${SKIP[@]}")
 fi
