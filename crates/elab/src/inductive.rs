@@ -1494,6 +1494,7 @@ impl Elaborator {
             label: Rc::new(val),
             children: Rc::new(self.build_children(
                 cx,
+                ind.tag,
                 &expected,
                 level,
                 &children,
@@ -1667,6 +1668,18 @@ impl Elaborator {
                 .elab_match_wf(cx, ind, &arms, scrut, scrut_ty, motive, mlvl, span);
         }
         let spine = self.spine(scrut_ty, scrut_lvl, n, span)?;
+        // The tier-0 twin of `wf.rs`'s motive respell
+        // (`docs/family-type-code-defs-design.md`, 2026-08-12 extension). The
+        // motive is written into every `Case` node of the tag tree and
+        // substituted into every arm's obligation, so it is this lowering's
+        // one Θ(arms)-copied whole type; the scrutinee's own `⟦D⟧` never
+        // appears here at all (the spine's components do, and they stay
+        // inline for `spine`/`tag_of` to read). `shift_local(1)`: the motive
+        // is scoped over `(Γ, z : ⟦D⟧)` and `gen_ref` stamps `Γ`'s length.
+        let motive = self
+            .respell_ty(cx, &motive)
+            .map(|t| t.shift_local(1))
+            .unwrap_or(motive);
         self.case_tree(cx, ind, &arms, &spine, 0, motive, &mlvl, Rc::new(scrut))
     }
 

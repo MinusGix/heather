@@ -73,6 +73,18 @@ pub(crate) enum GenDef {
     /// declaration's tag. Exists only for an unparameterized declaration —
     /// the same boundary as [`GenDef::Mu`], for the same reason (§14.12).
     SkelCode(u32),
+    /// `D#tycode : Trm_c(· ⊢ Ty l)` — an **unparameterized, unindexed**
+    /// declaration's whole lowered type `⟦D⟧`, consumed as `El (D#tycode^δ)`
+    /// (`docs/family-type-code-defs-design.md` §1, dated extension of
+    /// 2026-08-12). Keyed by the declaration's tag. Recursive (a `Type::Wf`)
+    /// or not (a sum-of-Σs) — both are Θ(n²) and both are copied Θ(arms)
+    /// times by the two `match` lowerings.
+    ///
+    /// The sibling of [`GenDef::SkelCode`], and deliberately a *different*
+    /// key: `SkelCode` names a forded declaration's **skeleton**, this names a
+    /// declaration's **own** lowering. The two boundaries differ too — see
+    /// [`Elaborator::register_ty_code`].
+    TyCode(u32),
     /// `D#fam : Trm_c(· ⊢ Π(i : I). Ty l)` — a **route-1** indexed
     /// declaration's family function, consumed as `El l (D#fam^δ i)` (design
     /// §6). Keyed by the indexed declaration's tag. Route 1's family *is* a
@@ -92,6 +104,7 @@ impl GenDef {
             GenDef::IdxChild(_, k, t) => format!("{owner}#child{k}.{t}"),
             GenDef::IdxCode(_) => format!("{owner}#icode"),
             GenDef::SkelCode(_) => format!("{owner}#code"),
+            GenDef::TyCode(_) => format!("{owner}#tycode"),
             GenDef::Fam(_) => format!("{owner}#fam"),
         }
     }
@@ -111,6 +124,18 @@ pub(crate) struct GenDefs {
     /// definition exists solely for an unparameterized declaration, where the
     /// two-pass level computation has one answer forever (design §5).
     fam_lvl: HashMap<u32, (Level, Level)>,
+    /// Per declaration tag with a registered [`GenDef::TyCode`], the
+    /// **inline** `⟦D⟧` the code was minted from and its level.
+    ///
+    /// The inline copy is not a convenience: it is the use-site *guard*.
+    /// [`Elaborator::ty_type_ref`] hands out the reference only when the type
+    /// in front of it is structurally that exact lowering, so a reference can
+    /// never stand for a type it does not decode to — the tag alone would be
+    /// a nominal claim about a type the emission site read from somewhere
+    /// else. (Tags are unique per declaration and codes are minted only for
+    /// unparameterized declarations, so this can only ever *decline*; it costs
+    /// one structural comparison per `match` and buys the property outright.)
+    ty_code: HashMap<u32, (Rc<Type>, Level)>,
 }
 
 impl Elaborator {
@@ -131,7 +156,13 @@ impl Elaborator {
                     self.register_idx_code(&iind, span);
                 }
                 self.register_fam(ind, span);
+                return;
             }
+            // Unindexed, tier 1 or tier 0: the declaration's own lowered type
+            // gets a code, so that the `match` lowerings can *name* `⟦D⟧`
+            // instead of writing it out ~21 times per arm
+            // ([[wf-field-conversion-cost]], design §10).
+            self.register_ty_code(ind, span);
             return;
         }
         // The index type's devices first: they are closed for every family,
@@ -188,6 +219,90 @@ impl Elaborator {
         let Some(body) = crate::code::code_of(&skel_ty) else { return };
         let ty = Type::Ty(l.clone());
         let _ = self.push_gen_def(key, &ind.name, ty, Level::succ(l), body, span);
+    }
+
+    /// `D#tycode := ⌜⟦D⟧⌝`, a declaration's own whole lowered type
+    /// (design §1.1, §10.2 — the 2026-08-12 extension). Best-effort like every
+    /// other piece here: no code means every occurrence stays inline, exactly
+    /// as before.
+    ///
+    /// **Boundary — two conditions, each for its own reason.**
+    ///
+    /// - *Unparameterized* ([`Elaborator::mu_def`]'s reason, §14.12): `⟦D⟧` of
+    ///   a parameterized declaration is monomorphized per instantiation
+    ///   (`Cx::tyvars`), so it is not one closed type but one per
+    ///   instantiation, and a definition is registered where the
+    ///   instantiations are not yet known.
+    /// - *Unindexed*: an indexed family's use-site type mentions the index, so
+    ///   there is no single type to name (that is route 1's
+    ///   [`GenDef::Fam`], which names the *function*). This function is
+    ///   reached only off `register_gen_defs`'s unindexed branch.
+    ///
+    /// A **non-recursive** declaration gets one too, and that is deliberate
+    /// rather than incidental: its lowering is a bare sum-of-Σs, which is
+    /// exactly as large as a `Wf`'s and grows by the same quadratic law, and
+    /// it is very often the *motive* of a `match` on something else
+    /// (`cert_body : Ir -> CertOut` — the container is recursive, the answer
+    /// is not). Restricting to recursive declarations left the single largest
+    /// occurrence site in the round's own fixture untouched; measured.
+    fn register_ty_code(&mut self, ind: &Rc<Inductive>, span: Span) {
+        if !ind.params.is_empty() || !ind.valparams.is_empty() {
+            return;
+        }
+        let key = GenDef::TyCode(ind.tag);
+        if self.gdefs.by_key.contains_key(&key) {
+            return;
+        }
+        let cx = Cx::empty();
+        let Ok((d_ty, l)) = self.lower_instance(&cx, ind, &[], &[], span) else {
+            return;
+        };
+        // The recognizer's own precondition, checked here rather than assumed:
+        // `respell_ty` finds this code by running `tag_of` over a type and
+        // looking the answer up, so a lowering `tag_of` does not route back to
+        // *this* declaration must not be registered — the reference would be
+        // unreachable at best and, if some other declaration's `tag_of` landed
+        // here, wrong. (`tag_of` also rejects the shapes with no tag at all,
+        // which is the same set this used to exclude by hand.)
+        if self.tag_of(&d_ty).map(|i| i.tag) != Some(ind.tag) {
+            return;
+        }
+        let Some(body) = crate::code::code_of(&d_ty) else { return };
+        let ty = Type::Ty(l.clone());
+        if self
+            .push_gen_def(key, &ind.name, ty, Level::succ(l.clone()), body, span)
+            .is_ok()
+        {
+            self.gdefs.ty_code.insert(ind.tag, (Rc::new(d_ty), l));
+        }
+    }
+
+    /// `El l (D#tycode^δ)` for `inline`, if and only if `inline` **is** the
+    /// lowering `D#tycode` was minted from (design §1.3 + the guard note on
+    /// [`GenDefs::ty_code`]). `None` is every emission site's cue to keep
+    /// writing the type out, exactly as before.
+    pub(crate) fn ty_type_ref(&self, cx: &Cx, tag: u32, inline: &Type) -> Option<Type> {
+        let (registered, level) = self.gdefs.ty_code.get(&tag)?;
+        if **registered != *inline {
+            return None;
+        }
+        self.gen_type_ref(cx, GenDef::TyCode(tag), level)
+    }
+
+    /// [`Self::ty_type_ref`] with the tag read out of the type instead of
+    /// supplied: `Some(El (D#tycode^δ))` when `ty` **is** some declaration's
+    /// registered lowering, `None` otherwise.
+    ///
+    /// Two filters, both needed. `tag_of` is a *structural* read and will walk
+    /// into a `Sum`/`Σ` to find a tag, so it can name a declaration whose
+    /// `⟦D⟧` is not `ty` at all; the structural comparison inside
+    /// `ty_type_ref` is what turns that into a decline rather than a wrong
+    /// reference. And `tag_of` goes through `decoded`, which leaves an `El` of
+    /// a neutral code exactly as it is — so an already-reference-spelled type
+    /// declines here too, and this is idempotent.
+    pub(crate) fn respell_ty(&self, cx: &Cx, ty: &Type) -> Option<Type> {
+        let ind = self.tag_of(ty)?;
+        self.ty_type_ref(cx, ind.tag, ty)
     }
 
     /// `D#fam := λ(i : I). elim(…; i)`, a route-1 family function (design §6).
@@ -316,8 +431,15 @@ impl Elaborator {
     pub(crate) fn gen_ref(&self, cx: &Cx, key: GenDef) -> Option<Term> {
         let abs = *self.gdefs.by_key.get(&key)?;
         let len = self.psi.bindings.len() as u32;
-        // Goals sit innermost, exactly as in `resolve`.
-        let var = GlobalVar(len - 1 - abs + self.goal_base);
+        // Goals sit innermost, exactly as in `resolve` — and so do a
+        // `meta fn`'s Ψ-extending binders (`Ctx`, `lib.rs`'s `meta_pushed`),
+        // which `resolve` has always offset by and this did not. Latent until
+        // 2026-08-12: nothing emitted a generated-definition reference from
+        // inside a meta body before the tier-1 motive respell did, and the
+        // symptom was a kernel `WrongGlobalBinding` naming the context binder
+        // (`crates/elab/tests/certgen_route1_spike.rs`'s meta walk over `Ir`).
+        // The two paddings never combine: goals are refused inside a `meta fn`.
+        let var = GlobalVar(len - 1 - abs + self.goal_base + self.meta_offset());
         Some(Term::GlobalTm {
             var,
             subst: LocalSubst {
@@ -350,8 +472,15 @@ impl Elaborator {
         // it came out of contains, including one that is out of scope.
         let abs = len
             .checked_add(self.goal_base)?
+            .checked_add(self.meta_offset())?
             .checked_sub(var.0.checked_add(1)?)?;
         self.gdefs.by_abs.get(&abs).copied()
+    }
+
+    /// How far a `meta fn`'s Ψ-extending binders push the committed bindings
+    /// out, mirroring `resolve`'s `meta_off` (`lib.rs`). Zero everywhere else.
+    fn meta_offset(&self) -> u32 {
+        self.meta_pushed.borrow().len() as u32
     }
 
     /// Whether `t` is exactly `u^δ` for the definition `key` — the head test

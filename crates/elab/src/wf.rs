@@ -44,8 +44,23 @@ use crate::{embed, err, Alias, Cx, Elaborator, Guard, GuardKind, R};
 pub(crate) struct Tel<'a> {
     /// The `match`'s ambient local context.
     pub gamma0: &'a LocalCtx,
-    /// `⟦D⟧`, scoped in `gamma0`.
+    /// `⟦D⟧` **inline** — the `Type::Wf` itself, scoped in `gamma0`. This is
+    /// the structural-read copy: `spine` reads the sum-of-Σs out of it and
+    /// [`Elaborator::motive_head`] pushes it as a context entry. Never use it
+    /// for an emitted annotation; that is [`Tel::d_emit`].
     pub d_ty: &'a Type,
+    /// `⟦D⟧` as it is **written into emitted terms**: `El (D#tycode^δ)` where
+    /// the declaration has a registered code, and the inline `Type::Wf`
+    /// otherwise (`docs/family-type-code-defs-design.md`, 2026-08-12
+    /// extension).
+    ///
+    /// The two are convertible by construction — the code is `code_of` of
+    /// *this* type and [`Elaborator::ty_type_ref`] hands it out only after
+    /// checking that — so every use below is a spelling choice and nothing
+    /// else. The split is [[wf-field-conversion-cost]]'s whole fix: a tier-1
+    /// `match` writes `⟦D⟧` out ~21 times per arm, and each copy carried every
+    /// field type verbatim.
+    pub d_emit: Type,
     /// `l`: the declaration's level, which is also its shape's.
     pub level: Level,
     /// `l'`: the motive's level.
@@ -126,10 +141,19 @@ impl Elaborator {
     /// the literal, and `Vec` reduces on the whnf of its length — and the
     /// literal is the one the kernel can unfold to a Σ-chain.
     ///
-    /// `d_ty` is `⟦D⟧` (the whole `Wf`), scoped in `cx`.
+    /// `d_ty` is `⟦D⟧` (the whole `Wf`), scoped in `cx`; `tag` is the
+    /// declaration's, used to look up its code.
+    ///
+    /// The two spellings are split here for the reason §3.1 gives: the
+    /// children are **checked** against `⟦D⟧`, and a checking position is a
+    /// structural read (`Cons(x, Cons(y, Nil))` resolves its inner
+    /// constructor against the expected type), so `elab_check` keeps the
+    /// inline `Wf`; the `Vec`/`Pair` annotations the tuple carries are pure
+    /// emission and take the reference.
     pub(crate) fn build_children(
         &self,
         cx: &Cx,
+        tag: u32,
         d_ty: &Type,
         level: &Level,
         args: &[Expr],
@@ -137,6 +161,7 @@ impl Elaborator {
         span: Span,
     ) -> R<Term> {
         let _ = span;
+        let emit = self.ty_type_ref(cx, tag, d_ty).unwrap_or_else(|| d_ty.clone());
         // The tuple's terminator. Tier 1 ends with `⟨⟩ : Unit^l` — which
         // `Vec^l(T; 0) ⇝ Unit^l` makes the *zero* case of a container tail,
         // so the two are one code path (docs/container-fields.md §3.4).
@@ -145,6 +170,10 @@ impl Elaborator {
         // be exactly the defect that round closed.)
         let (mut acc, mut tail_len) = match &container {
             Some((arg, len)) => {
+                // A **checking** position (the container argument is written
+                // at the surface), so the element type stays inline: checking
+                // a vector literal checks each element against it, and that is
+                // a structural read.
                 let vec_ty = Type::Vec {
                     level: level.clone(),
                     elem: Rc::new(d_ty.clone()),
@@ -160,13 +189,13 @@ impl Elaborator {
             acc = Term::Pair {
                 fst_level: level.clone(),
                 snd_level: level.clone(),
-                fst_ty: Rc::new(d_ty.clone()),
+                fst_ty: Rc::new(emit.clone()),
                 // `Vec(T; S k) ⇝ Σ(_ : T). Vec(T; k)` and a Σ's second
                 // component *binds*, so the tail type sits one level deeper
                 // than the ambient (§5).
                 snd_ty: Rc::new(Type::Vec {
                     level: level.clone(),
-                    elem: Rc::new(d_ty.shift_local(1)),
+                    elem: Rc::new(emit.shift_local(1)),
                     len: Rc::new(tail.shift_local(1)),
                 }),
                 fst: Rc::new(child),
@@ -231,12 +260,19 @@ impl Elaborator {
         span: Span,
     ) -> R<Term> {
         // A constant motive at `⟦D⟧` — the projection is not an inductive
-        // argument, so nothing here reads `ih`.
+        // argument, so nothing here reads `ih`. The motive is an emitted
+        // annotation (it lands in the `ElimWf`'s motive slot), so it takes the
+        // reference where one exists; `d_ty` itself stays inline because
+        // `build_elim_wf` destructures it.
+        let motive = self
+            .ty_type_ref(cx, ind.tag, d_ty)
+            .unwrap_or_else(|| d_ty.clone())
+            .shift_local(1);
         self.build_elim_wf(
             cx,
             ind,
             d_ty,
-            d_ty.shift_local(1),
+            motive,
             level.clone(),
             scrut,
             &Branches::Child { i, t, default },
@@ -303,12 +339,38 @@ impl Elaborator {
         let Type::Wf { level, shape, arity } = scrut_ty else {
             return err("internal: a recursive declaration did not lower to a `Wf`", span);
         };
-        let motive = Rc::new(motive);
-        let (cs_ty, ih_ty, step_ty) =
-            wf_step_telescope(&cx.gamma, level, &mlvl, shape, arity, &motive);
+        // The *motive* is `⟦D'⟧` for whatever the arms return, and it is the
+        // single largest occurrence site of all: it is instantiated once per
+        // `Case` node of the tag tree, twice more per branch (the two λ
+        // domains), and twice again in `apply_cs_ih`. Respelling it needs no
+        // tag from the caller — `tag_of` reads it out of the type, and
+        // `ty_type_ref` declines unless the type *is* that declaration's
+        // registered lowering.
+        //
+        // The `shift_local(1)` is not cosmetic: the motive is scoped over
+        // `(Γ₀, z : ⟦D⟧)`, one binder past `cx`, and `gen_ref` stamps the
+        // reference's substitution tail with `cx`'s own length. Without it the
+        // kernel answers `SubstMismatch` at every `match` — which is the good
+        // failure mode, but a failure mode.
+        let motive = Rc::new(
+            self.respell_ty(cx, &motive)
+                .map(|t| t.shift_local(1))
+                .unwrap_or(motive),
+        );
+        // The one lookup: `El (D#tycode^δ)` if this declaration has a code and
+        // `scrut_ty` *is* the lowering it was minted from, the inline type
+        // otherwise. Everything emitted below reads `tel.d_emit`; the
+        // structural reads a line down read `scrut_ty`.
+        let d_emit = self
+            .ty_type_ref(cx, ind.tag, scrut_ty)
+            .unwrap_or_else(|| scrut_ty.clone());
+        let (cs_ty, ih_ty, step_ty) = heather_kernel::term::wf_step_telescope_at(
+            &cx.gamma, level, &mlvl, shape, arity, &motive, &d_emit,
+        );
         let tel = Tel {
             gamma0: &cx.gamma,
             d_ty: scrut_ty,
+            d_emit,
             level: level.clone(),
             mlvl: mlvl.clone(),
             motive: Rc::clone(&motive),
@@ -542,7 +604,12 @@ impl Elaborator {
         // `cx` has moved two binders out.
         let cs_var = Rc::new(Term::Var(LocalVar(1)));
         let d_body = d + 2;
-        let d_ty_here = Rc::new(tel.d_ty.shift_local(d_body));
+        // Emission spelling for every annotation this branch writes; the
+        // inline one only for the surface binders' *alias types*, which the
+        // elaborator reads structurally (a nested `match` on a child binder,
+        // `record_of`, `projection`) — §3.1's line, held per reader.
+        let d_ty_here = Rc::new(tel.d_emit.shift_local(d_body));
+        let d_inline_here = tel.d_ty.shift_local(d_body);
         let ctor_ty_here = tel.spine.ctors[i].0.shift_local(d_body);
         let value_here = Rc::new(value.shift_local(2));
         // This branch's arity. Without a container it is the literal `m`;
@@ -622,7 +689,7 @@ impl Elaborator {
                                 fst_ty: Rc::clone(&d_ty_here),
                                 snd_ty: Rc::new(Type::Vec {
                                     level: tel.level.clone(),
-                                    elem: Rc::new(tel.d_ty.shift_local(d_body + 1)),
+                                    elem: Rc::new(tel.d_emit.shift_local(d_body + 1)),
                                     len: Rc::new(rest.shift_local(1)),
                                 }),
                                 pair: term,
@@ -634,7 +701,7 @@ impl Elaborator {
                             term: Rc::clone(&term),
                             ty: Type::Vec {
                                 level: tel.level.clone(),
-                                elem: Rc::clone(&d_ty_here),
+                                elem: Rc::new(d_inline_here.clone()),
                                 len: Rc::clone(&tail_len),
                             },
                             level: tel.level.clone(),
@@ -714,7 +781,7 @@ impl Elaborator {
                         let cod = tel.motive.apply_local(
                             &embed(tel.gamma0, d_body + 1).extended(Rc::new(nth(
                                 &tel.level,
-                                &Rc::new(tel.d_ty.shift_local(d_body + 1)),
+                                &Rc::new(tel.d_emit.shift_local(d_body + 1)),
                                 &Rc::new(len.shift_local(1)),
                                 Rc::new(Term::Var(LocalVar(2))),
                                 Rc::new(Term::Var(LocalVar(0))),
@@ -735,7 +802,7 @@ impl Elaborator {
                             name: name.clone(),
                             depth: acx.names.len(),
                             term: Rc::clone(&c),
-                            ty: tel.d_ty.shift_local(d_body),
+                            ty: d_inline_here.clone(),
                             level: tel.level.clone(),
                         }));
                         children.push((c, ih_at, ih_ty, tel.mlvl.clone()));
@@ -912,4 +979,306 @@ pub(crate) fn fin_index(t: usize, m: usize, base: &Term) -> Term {
         };
     }
     v
+}
+
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tycode {
+    //! The tier-1 `D#tycode` spelling
+    //! (`docs/family-type-code-defs-design.md`, 2026-08-12 extension;
+    //! `issues/wf-field-conversion-cost.md`).
+    //!
+    //! Two obligations, and they are different in kind. The **emission** side
+    //! is checked by elaborating real source: a wrong spelling in an
+    //! annotation slot is a kernel rejection at the declaration's own gate, so
+    //! "it elaborates" *is* the assertion, and the four axes of
+    //! `docs/testing-generated-terms.md` are what make that assertion cover
+    //! anything (a literal and a neutral scrutinee, an open element type, a
+    //! checking position, a negative control). The **recognition** side is
+    //! checked structurally, with `forded.rs mod fingerprint`'s look-alike
+    //! discipline: a reference must stand for the declaration it names and for
+    //! nothing else, in both directions.
+
+    use super::*;
+    use crate::gendefs::GenDef;
+    use heather_kernel::term::{
+        CtxBase, GlobalBinding, GlobalVar, LocalSubst, SubstTail,
+    };
+
+    const SPAN: Span = Span { start: 0, end: 0 };
+
+    /// Two tier-1 declarations that are structurally identical apart from
+    /// their nominal tags (the look-alike pair, `mod fingerprint`'s
+    /// construction), one non-recursive declaration — whose lowering is a bare
+    /// sum-of-Σs and which gets a code all the same — and one *parameterized*
+    /// declaration, which must not.
+    const SRC: &str = "
+inductive T { T0, T1(x: Nat, r: T), T2(y: Nat, r: T) }
+inductive U { U0, U1(x: Nat, r: U), U2(y: Nat, r: U) }
+inductive Flat { FA, FB(n: Nat), FC(m: Nat, k: Nat) }
+inductive Box<A> { BNil, BCons(a: A, r: Box<A>) }
+";
+
+    struct Env {
+        el: Elaborator,
+        cx: Cx,
+    }
+
+    fn env() -> Env {
+        let mut el = Elaborator::with_prelude().expect("prelude");
+        el.elab_source(SRC).expect("the declarations elaborate");
+        Env { el, cx: Cx::empty() }
+    }
+
+    impl Env {
+        fn ind(&self, name: &str) -> Rc<Inductive> {
+            Rc::clone(
+                self.el
+                    .inductives
+                    .get(&crate::names::qkey("main", name))
+                    .unwrap_or_else(|| panic!("`{name}` was declared")),
+            )
+        }
+        fn lowered(&self, name: &str) -> (Type, Level) {
+            self.el
+                .lower_instance(&self.cx, &self.ind(name), &[], &[], SPAN)
+                .expect("the declaration lowers")
+        }
+    }
+
+    // -- registration boundary ----------------------------------------------
+
+    #[test]
+    fn a_closed_declaration_gets_a_code_and_a_parameterized_one_does_not() {
+        let e = env();
+        for name in ["T", "U", "Flat"] {
+            let tag = e.ind(name).tag;
+            assert!(
+                e.el.gen_ref(&e.cx, GenDef::TyCode(tag)).is_some(),
+                "`{name}` should have a `#tycode`"
+            );
+        }
+        // §14.12's boundary, verbatim: `⟦Box<A>⟧` is monomorphized per
+        // instantiation, so there is no one closed type to name.
+        assert!(e.el.gen_ref(&e.cx, GenDef::TyCode(e.ind("Box").tag)).is_none());
+    }
+
+    #[test]
+    fn the_reference_is_el_of_the_declarations_own_code() {
+        let e = env();
+        let (t_ty, l) = e.lowered("T");
+        let r = e.el.respell_ty(&e.cx, &t_ty).expect("T's lowering respells");
+        let Type::El { level, tm } = &r else { panic!("the spelling is `El` of a code") };
+        assert_eq!(*level, l);
+        assert!(e.el.is_gen_ref(tm, GenDef::TyCode(e.ind("T").tag)));
+        // Idempotent: `tag_of` goes through `decoded`, which leaves an `El` of
+        // a neutral code alone, so a reference does not respell again.
+        assert!(e.el.respell_ty(&e.cx, &r).is_none());
+        // Conservativity (design §1.3): δ + decode of the reference is the
+        // inline type, so the two convert.
+        assert!(e.el.conv_types(&e.cx, &r, &t_ty, &l));
+        assert!(e.el.conv_types(&e.cx, &t_ty, &r, &l));
+    }
+
+    // -- the look-alike negatives (design §4, §9) ---------------------------
+
+    #[test]
+    fn a_type_the_tag_read_routes_to_but_which_is_not_the_lowering_declines() {
+        let e = env();
+        // This is the guard the registry's inline copy exists for. `tag_of`
+        // walks a `Sum` into its left summand to find a tag, so a type built
+        // out of **T's first constructor** and something else names `T` — and
+        // it is not `⟦T⟧`. Without the structural comparison the emission
+        // sites would spell it `El (T#tycode^δ)`, which decodes to a
+        // different type: not a rejection, a *wrong annotation*, which is the
+        // failure mode this module's doctrine exists to prevent.
+        let (t_ty, l) = e.lowered("T");
+        let Type::Wf { shape, .. } = &t_ty else { panic!("T is recursive") };
+        let Type::Sum { lhs, lhs_level, .. } = &**shape else {
+            panic!("a tier-1 shape is a sum-of-Σs")
+        };
+        let forgery = Type::Sum {
+            lhs_level: lhs_level.clone(),
+            rhs_level: Level::Zero,
+            lhs: Rc::clone(lhs),
+            rhs: Rc::new(Type::Unit { level: Level::Zero }),
+        };
+        assert_eq!(e.el.tag_of(&forgery).map(|i| i.tag), Some(e.ind("T").tag));
+        assert!(e.el.respell_ty(&e.cx, &forgery).is_none());
+        // …and the same read keyed by hand at the tag declines too, which is
+        // the property `respell_ty` inherits rather than adds.
+        assert!(e.el.ty_type_ref(&e.cx, e.ind("T").tag, &forgery).is_none());
+        let _ = l;
+    }
+
+    #[test]
+    fn el_of_the_wrong_declarations_code_is_not_this_declaration() {
+        let e = env();
+        // `U`'s code — a real registered definition of a real declaration
+        // that differs from `T` only in its tags — offered where `T`'s
+        // lowering is expected.
+        let (_, l) = e.lowered("T");
+        let u_code = e
+            .el
+            .gen_ref(&e.cx, GenDef::TyCode(e.ind("U").tag))
+            .expect("U has a code");
+        let forged = Type::El { level: l, tm: Rc::new(u_code) };
+        // Neither by tag…
+        assert!(e.el.ty_type_ref(&e.cx, e.ind("T").tag, &forged).is_none());
+        // …nor by the structural read, which does not follow a neutral code.
+        assert!(e.el.respell_ty(&e.cx, &forged).is_none());
+    }
+
+    #[test]
+    fn el_of_a_byte_identical_user_global_is_not_the_declaration() {
+        let mut e = env();
+        // Identity is the Ψ index, not the body: a bodied global whose
+        // statement, layer and body are byte-identical to `T#tycode`'s, pushed
+        // outside the registry the way a user `fn` is, resolves to no
+        // `GenDef`.
+        let (t_ty, l) = e.lowered("T");
+        let code = crate::code::code_of(&t_ty).expect("T's lowering has a code");
+        e.el.psi.push(GlobalBinding::defined_tm(
+            LocalCtx::nil(),
+            heather_kernel::layer::Layer::Code,
+            Rc::new(Type::Ty(l.clone())),
+            Level::succ(l.clone()),
+            Rc::new(code),
+        ));
+        e.el.refresh_delta_psi();
+        let dup = Term::GlobalTm {
+            var: GlobalVar(e.el.goal_base),
+            subst: LocalSubst {
+                tail: SubstTail::Empty { len: 0, base: CtxBase::Nil },
+                terms: vec![],
+            },
+        };
+        assert!(e.el.gen_def_of(GlobalVar(e.el.goal_base)).is_none());
+        let forged = Type::El { level: l, tm: Rc::new(dup) };
+        assert!(e.el.ty_type_ref(&e.cx, e.ind("T").tag, &forged).is_none());
+        assert!(e.el.respell_ty(&e.cx, &forged).is_none());
+    }
+
+    // -- emission: the four axes --------------------------------------------
+
+    /// A `match` really does emit the reference — otherwise every "it
+    /// elaborates" below would be vacuous.
+    #[test]
+    fn a_tier1_match_emits_the_reference_in_its_motive() {
+        let mut e = env();
+        let before = e.el.psi.bindings.len();
+        e.el
+            .elab_source("fn drop2(t: T) -> T { match t { T0 => T0, T1(x, r) => r, T2(y, r) => r } }")
+            .expect("elaborates");
+        let GlobalBinding::Tm { body: Some(body), .. } =
+            e.el.psi.bindings.last().expect("a binding")
+        else {
+            panic!("a `fn` is a bodied term binding")
+        };
+        let Term::Lam { body, .. } = &**body else { panic!("one parameter, one λ") };
+        let Term::ElimWf { motive, .. } = &**body else { panic!("tier 1 lowers to `elim_Wf`") };
+        let Type::El { tm, .. } = &**motive else {
+            panic!("the motive is the reference, not the inline `Wf`")
+        };
+        // `GlobalVar` counts from the end of Ψ, so the reference the body
+        // carries was minted against the Ψ *before* the declaration's own
+        // binding; re-key it into today's Ψ before asking the registry, or the
+        // nominal test silently reads one binding over.
+        let grew = (e.el.psi.bindings.len() - before) as u32;
+        assert!(e.el.is_gen_ref(&tm.shift_global(grew), GenDef::TyCode(e.ind("T").tag)));
+    }
+
+    /// Axes 1–4 on the tier-1 path, one source: a **neutral** scrutinee (the
+    /// parameter `t`) and a **literal** one (`T1(1, T0)`), a **checking**
+    /// position (`h`'s annotated result and the `refl`), and the computation
+    /// pinned rather than merely built.
+    #[test]
+    fn the_four_axes_on_a_recursive_declaration() {
+        let mut e = env();
+        e.el
+            .elab_source(
+                "
+fn depth(t: T) -> Nat { match t { T0 => 0, T1(x, r) => Succ(depth(r)), T2(y, r) => Succ(depth(r)) } }
+fn peel(t: T) -> T { match t { T0 => T0, T1(x, r) => r, T2(y, r) => T1(y, r) } }
+fn lit() -> T { match T1(1, T0) { T0 => T0, T1(x, r) => r, T2(y, r) => r } }
+theorem lit_is_t0(): lit() = T0 { refl }
+theorem peel_computes(): peel(T2(3, T1(1, T0))) = T1(3, T1(1, T0)) { refl }
+theorem depth_computes(): depth(T1(1, T2(2, T0))) = 2 { refl }
+",
+            )
+            .expect("the reference-spelled annotations check and compute");
+    }
+
+    /// Axis 2, the one that hid three of the five live defects: an **open**
+    /// element type. `Box<A>` has no code (§14.12), so this is also the
+    /// coexistence control — a parameterized declaration's `match` still
+    /// elaborates with everything inline, beside declarations that do have
+    /// codes.
+    #[test]
+    fn a_parameterized_declaration_still_lowers_inline() {
+        let mut e = env();
+        e.el
+            .elab_source(
+                "
+fn blen<A>(b: Box<A>) -> Nat { match b { BNil => 0, BCons(a, r) => Succ(blen(r)) } }
+fn bnat(b: Box<Nat>) -> Nat { match b { BNil => 7, BCons(a, r) => a } }
+theorem bnat_computes(): bnat(BCons(4, BNil)) = 4 { refl }
+",
+            )
+            .expect("a parameterized declaration keeps its inline lowering");
+        assert!(e.el.gen_ref(&e.cx, GenDef::TyCode(e.ind("Box").tag)).is_none());
+    }
+
+    /// The tier-0 twin: a **non-recursive** declaration's `match` goes through
+    /// `case_tree`, whose one Θ(arms)-copied whole type is the motive. Both
+    /// scrutinee kinds, and a mixed pair — a recursive scrutinee at a
+    /// non-recursive motive, which is the shape (`Ir -> CertOut`) that made
+    /// the non-recursive registration worth having.
+    #[test]
+    fn the_tier0_motive_respell_checks_and_computes() {
+        let mut e = env();
+        e.el
+            .elab_source(
+                "
+fn fnext(f: Flat) -> Flat { match f { FA => FB(1), FB(n) => FC(n, n), FC(m, k) => FA } }
+fn tflat(t: T) -> Flat { match t { T0 => FA, T1(x, r) => FB(x), T2(y, r) => FC(y, y) } }
+theorem fnext_computes(): fnext(FB(2)) = FC(2, 2) { refl }
+theorem tflat_computes(): tflat(T1(5, T0)) = FB(5) { refl }
+theorem tflat_neutral(): tflat(T0) = FA { refl }
+",
+            )
+            .expect("the tier-0 motive respell checks and computes");
+    }
+
+    /// The Ψ-numbering regression this round found: a `meta fn`'s `Ctx`
+    /// binders extend Ψ, and `gen_ref` used not to offset by them the way
+    /// `resolve` always has. Nothing emitted a generated-definition reference
+    /// from inside a meta body until the motive respell did, and the symptom
+    /// was `WrongGlobalBinding` naming the context binder.
+    #[test]
+    fn a_reference_emitted_inside_a_meta_body_is_numbered_past_the_ctx_binder() {
+        let mut e = env();
+        e.el
+            .elab_source(
+                "meta fn mwalk(g: Ctx, t: T) -> Nat \
+                 { match t { T0 => 0, T1(x, r) => 1, T2(y, r) => 2 } }",
+            )
+            .expect("a meta body's `match` on a coded declaration checks at layer m");
+    }
+
+    /// The negative control the four axes ask for: a wrong arm is still a
+    /// failed `refl`. A spelling change must not make anything *more*
+    /// convertible — δ + decode is conservative, not permissive.
+    #[test]
+    fn a_wrong_computation_is_still_refused() {
+        let mut e = env();
+        let r = e.el.elab_source(
+            "
+fn peel(t: T) -> T { match t { T0 => T0, T1(x, r) => r, T2(y, r) => T1(y, r) } }
+theorem wrong(): peel(T1(1, T0)) = T1(1, T0) { refl }
+",
+        );
+        assert!(r.is_err(), "a false equation must still be refused");
+    }
 }

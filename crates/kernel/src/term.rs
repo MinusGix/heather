@@ -1553,7 +1553,36 @@ pub fn wf_step_telescope(
         shape: Rc::clone(shape),
         arity: Rc::clone(arity),
     };
-    // cs : Vec(Wf; n) in (Γ, a).
+    wf_step_telescope_at(gamma, level, motive_level, shape, arity, motive, &wf)
+}
+
+/// [`wf_step_telescope`] with the two `Wf`-typed *annotation* positions —
+/// `cs`'s `Vec` element and `nth`'s element — spelled by the caller instead of
+/// rebuilt from `shape`/`arity`.
+///
+/// The elaborator passes `El (D#tycode^δ)` here
+/// (`docs/family-type-code-defs-design.md`, 2026-08-12 extension): those two
+/// positions are ordinary type annotations, so any type convertible with
+/// `Wf(shape). arity` stands in them, and naming `⟦D⟧` once is what stops the
+/// `match` lowering from carrying every field type verbatim through Θ(arms)
+/// copies ([[wf-field-conversion-cost]]).
+///
+/// What `d_ty` does **not** reach: the `Supf` the step's type is stated at
+/// keeps `shape`/`arity` verbatim, because those are the former's own slots
+/// and not a type annotation ([[wf-shape-annotation-slots]] owns them). This
+/// function is therefore the only transcription of the telescope, still —
+/// `wf_step_telescope` is one call to it.
+pub fn wf_step_telescope_at(
+    gamma: &LocalCtx,
+    level: &Level,
+    motive_level: &Level,
+    shape: &Rc<Type>,
+    arity: &Rc<Term>,
+    motive: &Rc<Type>,
+    d_ty: &Type,
+) -> (Type, Type, Type) {
+    let wf = d_ty.clone();
+    // cs : Vec(⟦D⟧; n) in (Γ, a).
     let cs_ty = Type::Vec {
         level: level.clone(),
         elem: Rc::new(wf.shift_local(1)),
@@ -1576,8 +1605,16 @@ pub fn wf_step_telescope(
         ),
     };
     // s : M[sup_f(a; cs)/z] — the constructor built in (Γ, a, cs), then
-    // weakened past `ih`.
-    let Type::Wf { shape: s2, arity: n2, .. } = wf.shift_local(2) else {
+    // weakened past `ih`. The `Supf`'s own slots are `shape`/`arity`, never
+    // `d_ty`: they are the former's components, not an annotation — and the
+    // shift goes through the `Wf` so that `arity`, which is scoped under the
+    // shape's binder, crosses the right number of them.
+    let real_wf = Type::Wf {
+        level: level.clone(),
+        shape: Rc::clone(shape),
+        arity: Rc::clone(arity),
+    };
+    let Type::Wf { shape: s2, arity: n2, .. } = real_wf.shift_local(2) else {
         unreachable!("shifting a Wf yields a Wf")
     };
     let sup_ac = Term::Supf {

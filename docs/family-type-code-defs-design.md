@@ -620,3 +620,146 @@ Fording doc §14.1, §14.3, §14.12; route-1 doc §10.1–§10.3;
    "record the exponents that exist, not the ones the design wants" —
    proposed: tighten around whatever phase 2 measures, with
    `declared-index-tags`'s band top at 2.0 as the standing claim.
+
+---
+
+## 10. The tier-1 / tier-0 `match` lowering (2026-08-12 extension)
+
+This section extends the design above to a **new site**, and it is a dated
+addendum rather than an edit because everything in §1–§9 stands: same
+spelling, same gate, same best-effort discipline, same kernel (unchanged), and
+the same "structural reads keep inline, emission sites take the reference"
+line. What is new is one more `GenDef` code — a declaration's *own* lowered
+type — and the two `match` lowerings that consume it. The owning issue is
+`issues/wf-field-conversion-cost.md`, whose 2026-08-12 measurement round found
+the mechanism and sized the fix; this is that fix.
+
+### 10.1 What the measurement round left for this one
+
+`⟦D⟧` is written out ≈ `21a + 4` times by one total `match` on an `a`-arm
+container (that round's law 3), and each copy carries every field type
+verbatim, so a `match` is Θ(arms × Σ_fields |⟦T⟧|) with `|⟦T⟧|` quadratic in
+`T`'s constructor count (laws 1–2). The kernel is strictly linear in what it is
+handed. Naming `⟦D⟧` once is therefore the whole shape of the fix, and §1–§3's
+machinery already exists for it.
+
+### 10.2 `GenDef::TyCode(tag)`
+
+```text
+D#tycode : Trm_c(· ⊢ Ty l @ 1+l)   :=   code_of(⟦D⟧)
+```
+
+registered by `register_gen_defs` at declaration time through the unchanged
+`push_gen_def` gate, exactly as `SkelCode`/`IdxCode` are. It is a *different*
+key from `SkelCode`, which names a forded declaration's **skeleton**; this
+names a declaration's **own** lowering. (A declaration is either forded or
+tier-1, so the two never both apply, but the keys are distinct regardless —
+nominal keying is what makes the recognizers re-keyable, §1.1.)
+
+**Boundary, drawn explicitly** (the charter's question):
+
+- **Unparameterized only** — §5's rule verbatim, and for §5's reason:
+  `⟦D⟧` of a parameterized declaration is monomorphized per instantiation, so
+  it is not one closed type. `Box<A>` gets no code and its `match` lowers
+  entirely inline, beside declarations that do have codes. Pinned by
+  `a_parameterized_declaration_still_lowers_inline`.
+- **Unindexed only** — an indexed family's use-site type mentions the index;
+  naming *that* is route 1's `GenDef::Fam`, which names a function (§6).
+- **Recursive *and* non-recursive.** This is the one place the round widened
+  past its charter, and it was measured rather than assumed. A non-recursive
+  declaration's lowering is a bare sum-of-Σs, which is exactly as large as a
+  `Wf`'s and grows by the same quadratic law, and it is very often the
+  **motive** of a `match` on something else — `cert_body : Ir -> CertOut` has
+  a recursive container and a non-recursive answer. With the registration
+  restricted to recursive declarations, the single largest occurrence site in
+  the round's own fixture did not move at all (21.7 M → 21.4 M nodes); with it
+  widened, the same declaration fell to 9.2 M.
+- **The recognizer's precondition is checked, not assumed.** A code is
+  registered only if `tag_of(⟦D⟧)` routes back to *this* declaration, because
+  that is how `respell_ty` finds it. This also subsumes "the lowering has a
+  shape with a tag at all".
+
+### 10.3 Per-reader decisions
+
+The line held is §3.1's, applied one reader at a time. `Tel` now carries
+**both** spellings — `d_ty` (inline, the structural-read copy) and `d_emit`
+(the reference where one exists) — and the discipline is visible in the type.
+
+| site | spelling | why |
+|---|---|---|
+| `build_elim_wf`'s `let Type::Wf { .. } = scrut_ty` | **inline** | a structural read; the scrutinee type arrives from `lower_instance`/whnf and is never respelled by anyone |
+| `spine`, `const_elim_wf`'s destructuring, `forded_of`/`indexed_of` fingerprints | **inline** | untouched — nothing this round emits can reach them |
+| `Term::ElimWf`/`Term::Supf`'s `shape`/`arity` slots | **inline** | the former's own components, not annotations; [[wf-shape-annotation-slots]] owns them, and a per-site counter puts them at 1,271 nodes in this round's 21 M-node fixture (verdict below) |
+| the step telescope's `Vec` element and `nth` element | **reference** | ordinary annotations; `wf_step_telescope_at` takes the spelling as a parameter so there is still exactly one transcription of the telescope |
+| the `match` **motive** (both tier 1 and tier 0) | **reference** | the largest site by far — instantiated once per `Case` node, twice per branch, twice in `apply_cs_ih` |
+| `nth_child`, the container `Snd` chain's `fst_ty`/`snd_ty`, the `EqSplit` λ domains, `ContainerIh::elem` | **reference** | pure emission |
+| `build_children`'s `Pair` annotations | **reference** | pure emission |
+| `build_children`'s `elab_check` target and the container's `Vec` type | **inline** | a **checking** position: checking `Cons(x, Cons(y, Nil))` resolves the inner constructor against the expected type, which is a structural read |
+| surface binders' **alias types** in `wf_branch` | **inline** | the elaborator reads them structurally (a nested `match` on a child binder, `record_of`, `projection`); the nested `match` then respells for itself, which is §3.2's re-spell question answered in the affirmative at the one site that needed it |
+
+No recognizer was taught to resolve through the registry, because none of them
+can see a reference: every reference this round emits goes into an annotation
+slot, and every structural read is taken from a type that arrives inline. The
+look-alike negatives are therefore about `respell_ty` itself (§10.5).
+
+### 10.4 The guard, and why it is not paranoia
+
+`ty_type_ref(cx, tag, inline)` hands out `El (D#tycode^δ)` **only if `inline`
+is structurally the lowering the code was minted from**; the registry keeps
+that inline copy for exactly this. Without it, `respell_ty` — which finds the
+tag by running `tag_of` over a type — would spell a *different* type with
+`D`'s code, and `tag_of` really does route such types to `D`: it walks a `Sum`
+into its left summand, so `⟦c₀ of D⟧ + Unit` names `D`. That is not a
+rejection; it is a wrong annotation, which is the failure mode this
+elaborator's doctrine exists to prevent ("a bug here produces a checked
+theorem about the *wrong type* rather than a rejection"). Pinned by
+`a_type_the_tag_read_routes_to_but_which_is_not_the_lowering_declines`.
+
+The comparison can only ever *decline* — tags are unique per declaration and
+codes exist only for unparameterized ones — and it costs one structural
+comparison per `match`.
+
+### 10.5 Correction to a recorded expectation: the prediction was too strong
+
+`wf-field-conversion-cost`'s "predicted effect: the per-field contribution
+falls from ~130·|⟦T⟧| to ~130 references, i.e. **the whole gap**" is **not what
+happened**, and the reason is worth recording because it re-homes the residual.
+
+The `21a + 4` copies are two families, not one:
+
+1. occurrences of the **whole** `⟦D⟧` (telescope elements, `nth`, `Pair`/`Snd`
+   annotations, and above all the motive) — this round's, and they collapse to
+   references;
+2. occurrences of `⟦D⟧`'s **components** — the spine's per-constructor Σ
+   payload types and the right-nested sum tails, the `Supf`/`ElimWf` shape
+   slots — which no *whole-type* code can name, since a tail is a suffix of
+   the sum and not a declared type.
+
+Measured on the round's own reproducer, family 2 is small at the sites that
+were suspected (the spine is 38 k nodes of a 21 M body; the shape slots 1.3 k)
+— so the residual is neither of the two named suspects, and it is **not**
+[[wf-shape-annotation-slots]]'s either. What is left after this round is the
+per-application `dom`/`cod` annotations and the field-binder projection chains,
+which carry the callee's declared types and the constructor's Σ components
+respectively. Naming those is a different lever (statement-side respelling,
+design §8 phase 4, and a projection-chain code) and is filed, not taken.
+
+### 10.6 One latent bug found, and fixed
+
+`gen_ref` computed its `GlobalVar` as `len - 1 - abs + goal_base`, omitting the
+`meta_off` that `resolve` has always added for a `meta fn`'s Ψ-extending
+binders. Latent until this round: nothing emitted a generated-definition
+reference from inside a meta body before the motive respell did. The symptom
+was a kernel `WrongGlobalBinding` naming the context binder. `gen_ref` and
+`gen_def_of` now both go through `Elaborator::meta_offset`, and there is a
+regression test
+(`a_reference_emitted_inside_a_meta_body_is_numbered_past_the_ctx_binder`).
+
+### 10.7 The kernel
+
+Unchanged in behavior, as §1's headline claims and §3.3 verified. The one
+edit is a *parameterization*: `term::wf_step_telescope_at` takes the spelling
+for the two `Wf`-typed annotation positions, and `wf_step_telescope` is one
+call to it. That is deliberately in the kernel rather than transcribed in
+`wf.rs` — the module header there says a fifth transcription of the telescope
+is exactly the drift the sharing exists to prevent.
