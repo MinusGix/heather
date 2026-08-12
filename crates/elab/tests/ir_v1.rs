@@ -236,4 +236,41 @@ fn the_full_ir_library_checks() {
                  cert: λ (a: Nat) => λ (b: Nat) => add_converges_through_calls(a, b) } }",
         "an instance whose entry is not the IR the certificate is about",
     );
+
+    // The route-1 spike's item (c), against the REAL kit
+    // (issues/in-language-certificate-emission.md; the memo is
+    // docs/certgen-emission-route1-spike.md). It rides here rather than in
+    // crates/elab/tests/certgen_route1_spike.rs for this test's own stated
+    // reason: a suite of its own would re-elaborate the whole library, and two
+    // full elaborations do not fit the 300-second rail. The miniature version
+    // lives in that file; this is the sentence itself.
+    //
+    // What it pins: a `Converges` statement over Ψ-resident *globals* is a
+    // legal code-type index (ch. 04 CAPP — a contextual type may mention
+    // globals, and only globals), and the boxed payload may **apply a kit
+    // lemma** at its stated type, `gather`'s side condition discharged by a
+    // layer-c `refl` (conversion for a layer-c term runs at `typeof(c) = p`,
+    // typing.rs:360, so δ/ι still decide it). Route 1's fold is that move,
+    // repeated per instruction.
+    let staged = "fn cert_env() -> Val { VNil }\n\
+                  fn cert_ir() -> Ir { Ret(RNil) }\n\
+                  fn cert_out() -> Val { VNil }\n\
+                  meta fn ret_cert(g: Ctx)\n\
+                      -> Code(g |- Converges(add_prog(), cert_env(), cert_ir(), cert_out()))\n\
+                  { code { ret_conv(add_prog(), cert_env(), RNil, cert_out(), refl) } }";
+    e.elab_module_source("ir_v1", staged)
+        .unwrap_or_else(|err| panic!("{}", err.render(staged)));
+
+    // …and the boundary route 1 routes *around*, still closed: the same
+    // statement with the `Ir` at a meta-level LOCAL rather than a Ψ global is
+    // what docs/certgen-transcriber-in-language-design.md §5 calls unstatable,
+    // and it is unstatable against the real `Converges` too. If this ever
+    // starts elaborating, route 3 landed.
+    refuted(
+        &mut e,
+        "meta fn bad_cert(g: Ctx, ir: Ir)\n\
+             -> Code(g |- Converges(add_prog(), cert_env(), ir, cert_out()))\n\
+         { code { ret_conv(add_prog(), cert_env(), RNil, cert_out(), refl) } }",
+        "a code type indexed by a meta-level local",
+    );
 }

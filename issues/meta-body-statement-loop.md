@@ -3,7 +3,7 @@ title: The meta-fn body has its own statement loop, and annotated `let` stops at
 status: open
 labels: [metaprogramming,elaboration,frontend]
 created: 2026-08-02
-updated: 2026-08-02
+updated: 2026-08-12
 ---
 
 Found by the coordinator sweep after the let/blocks round
@@ -54,3 +54,7 @@ rediscovered the next time someone widens \`Stmt\`.
 - **[[let-inside-quotation]]** is a different question: that one is a \`let\`
   inside a quote *payload* (inside \`code { … }\`); this one is a \`let\` in the
   \`meta fn\` body *outside* the quote, which already works unannotated.
+
+## Log
+
+- 2026-08-12: Correction from the route-1 spike (2026-08-12, docs/certgen-emission-route1-spike.md sec. 5): in-language-certificate-emission had cited this issue as route 1's surface prerequisite ('ordinary match/recursion in a meta body -- meta-body-statement-loop territory'). Wrong on both halves: ordinary match in a meta body already exists (the analyzer round landed it; verified over a Wf-lowered Ir at layer m), and the missing RECURSION's home is the Psi-resident-meta-definitions deferral (docs/in-language-map-design.md sec. 8), not this issue -- this issue is about annotated let and destructuring, and route 1 needs neither. Nobody should schedule this as a certificate-emission prerequisite; it stands on its own visible-restriction merits.
