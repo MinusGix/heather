@@ -3,9 +3,10 @@
 - **Run tests only via `scripts/test`** (wraps `cargo test` in `ulimit -v/-t`
   plus a thread cap). Never run bare `cargo test`: a runaway test or a
   Debug-formatted kernel term can OOM the whole machine, not just the process.
-  `scripts/test --fast` (~4 min as of 2026-08-12; the perturbed-library
-  controls dominate it — `issues/certgen-harness-cost.md` holds the lever if
-  it grows) skips the two whole-library acceptance tests
+  `scripts/test --fast` (minutes, not seconds — the perturbed-library
+  controls dominate it; current numbers and the trim lever live in
+  `issues/certgen-harness-cost.md`) skips the two whole-library acceptance
+  tests
   (~4.7 CPU-min) for the inner loop; a round's **final** verification, and
   any change touching `lib/`, the kit, or the generators, must run the plain
   full `scripts/test`. The suite ends with one `== suite: N passed, … ==`

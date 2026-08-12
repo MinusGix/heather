@@ -3,7 +3,7 @@ title: Consistent perf measurement: a place where a regression is a signal, not 
 status: open
 labels: [performance,tooling,testing,meta]
 created: 2026-08-11
-updated: 2026-08-11
+updated: 2026-08-12
 ---
 
 Filed from the 2026-08-11 iteration-time review. Two observations met:
@@ -48,3 +48,7 @@ perf work happens; this is *where its numbers come from*.
 [[bounds-metadata-taxes-one-shot-checking]], [[certgen-harness-cost]] and
 [[synthesis-direction-cost-asymmetry]] all recorded "levers if it grows" —
 each assumes something will notice growth, which is this issue.
+
+## Log
+
+- 2026-08-12: Policy sharpened with the user (2026-08-12), triggered by CLAUDE.md's fast-lane '~30s' having gone stale unnoticed: CONCRETE PERF NUMBERS DO NOT BELONG IN DOC FILES OR CLAUDE.md, except abstractly. Docs may carry shape claims -- scaling exponents, what dominates, which lever exists -- because those survive hardware and load changes (docs/benchmarking.md's exponent headline is this policy already applied); wall-clock numbers belong in dated issue-log entries, which are diary by construction and expected to age, and in baseline.tsv behind scripts/bench --check. CLAUDE.md's fast-lane line re-edited accordingly (abstract statement + pointer to certgen-harness-cost for current numbers). This strengthens the instruction-count direction above: retired-instruction gates are the version of 'a number a doc could almost trust' -- load-immune to first order and runnable on the user's busy machine. Second user position recorded the same day, adjacent and load-bearing: perf surprises are usually pathologies or missing smarts, not laws -- do not distort designs around them; file the mechanism question instead (first instance: [[wf-field-conversion-cost]], the 163x from round A).
