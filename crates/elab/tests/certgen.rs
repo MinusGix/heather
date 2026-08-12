@@ -41,11 +41,26 @@
 //! code` shells are the expensive part of any generation — is elaborated into
 //! that same session, once.
 //!
+//! The fold that turns a transcription into a certificate is a library file
+//! too now (`lib/certgen_cert.hthr`, docs/certgen-cert-expression-design.md):
+//! elaborating it is ~1 s, but *running* it costs ~3.5 CPU-s per generated
+//! function on top of the transcriber, which is what this binary's two
+//! generating tests pay. Its perturbation control lives in
+//! `certgen_cert.rs` — a binary of its own, for the stack reason below and
+//! for a `ulimit -t` rail of its own.
+//!
 //! STACK: checking one `match code` shell means checking 52 branch telescopes
 //! against a library-inductive motive, and two elaborations of
 //! `lib/certgen_code.hthr` in one test thread overflow the 8 MiB
-//! `scripts/test` gives it. One copy of the file per test, therefore — which
-//! is why the two perturbed-library controls are tests of their own.
+//! `scripts/test` gives it. One copy of the file per test, therefore.
+//!
+//! And one *rail* per binary: `ulimit -t` is per process, so the
+//! perturbed-library controls live in `certgen_controls.rs` and the
+//! certificate fold's in `certgen_cert.rs`. They were tests of this binary
+//! until the fold's evaluation cost pushed the four of them past the
+//! 300-second rail (2026-08-12) — the split is what
+//! `issues/certgen-harness-cost.md` calls the free lever, and it is free
+//! because each control already builds its own elaborator anyway.
 
 use heather_elab::certgen::{compile_record, generate_in_language, GenCtx};
 use heather_elab::Elaborator;
@@ -66,6 +81,12 @@ const BOOL: &str = include_str!("../../../lib/std/bool.hthr");
 /// definition — signature rule and body rule both — and nothing in Rust
 /// decides it.
 const CODE: &str = include_str!("../../../lib/certgen_code.hthr");
+/// The certificate fold: the `Cert`/`CertOut` data and the `fn`s that fold an
+/// `Ir` into a chain of ∃-kit applications
+/// (docs/certgen-cert-expression-design.md). Ordinary program-layer code — no
+/// `match code`, so no 52-branch gate — and the emitters read its answer back
+/// instead of deciding the fold in Rust.
+const CERT: &str = include_str!("../../../lib/certgen_cert.hthr");
 
 /// Items a generated emission needs beyond the declarations prefix, in
 /// dependency (file-consistent) order.
@@ -243,6 +264,7 @@ fn in_language_transcriber() {
     let cut = LIB.find("\ntheorem ").expect("the library has theorems");
     elab(&mut e, &LIB[..cut], "declarations prefix");
     elab(&mut e, CODE, "lib/certgen_code.hthr");
+    elab(&mut e, CERT, "lib/certgen_cert.hthr");
     // `dbl` lives past the declarations cut, and the generator reads the
     // *elaborated* body: a fn the elaborator has not seen has nothing to
     // analyse, which is a decline, not a bug.
@@ -381,6 +403,7 @@ fn emissions_check_and_controls() {
     let sup = support();
     elab(&mut e, &sup, "support prelude");
     elab(&mut e, CODE, "lib/certgen_code.hthr");
+    elab(&mut e, CERT, "lib/certgen_cert.hthr");
     elab(&mut e, SEVEN, "fn seven");
     elab(&mut e, THIRD3, "fn third3");
     elab(&mut e, MUL, "fn mul");
@@ -454,89 +477,6 @@ fn emissions_check_and_controls() {
         "the mutation must apply"
     );
     refuted(&mut e, &mutant, "a program whose members are swapped");
-}
-
-/// The in-language honesty control (design doc §10.6a), in a test of its own
-/// **because of the stack**: checking one `match code` shell means checking 52
-/// branch telescopes against a library-inductive motive, and two of those in
-/// one test thread overflow the 8 MiB `scripts/test` gives it. One shell per
-/// thread is also the cheaper arrangement.
-#[test]
-fn a_perturbed_transcriber_is_refused_by_the_kernel() {
-    let mut e = base();
-    let cut = LIB.find("\ntheorem ").expect("the library has theorems");
-    elab(&mut e, &LIB[..cut], "declarations prefix");
-    // The honesty control, and the whole architecture in one edit: perturb the
-    // *library* — `ta_succ` emitting the `Zero` tag — and what it produces
-    // must fail to check rather than prove anything about `dbl`.
-    //
-    // It arrives as two controls, because the file states its own acceptance:
-    // the perturbed `dist` is refused by `certgen_code.hthr`'s own theorems
-    // before anything downstream sees it. Strip those, and the emission is the
-    // only thing on trial — its *exactness fixture*, which needs nothing but
-    // the declarations prefix, so this control costs no kit.
-    let bad_code = CODE.replace(
-        "TExp(PCon(1, QCons(res, QNil), pre), RLoc(len), Succ(len))",
-        "TExp(PCon(0, QCons(res, QNil), pre), RLoc(len), Succ(len))",
-    );
-    assert_ne!(bad_code, CODE, "the mutation must apply");
-    if e.elab_module_source("ir_v1", &bad_code).is_ok() {
-        panic!("the library's own theorems must refuse a perturbed `dist`");
-    }
-    let thms = bad_code.find("\ntheorem ").expect("the file states its own acceptance");
-    let shell = bad_code.find("// The shell").expect("the shell is the file's last block");
-    let stripped = format!("{}\n{}", &bad_code[..thms], &bad_code[shell..]);
-    // The failed elaboration above stopped at a theorem, which is *before* the
-    // file's shell, so this is still the only 52-branch check in this thread.
-    let mut bad = base();
-    elab(&mut bad, &LIB[..cut], "declarations prefix");
-    elab(&mut bad, &stripped, "mutated lib/certgen_code.hthr");
-    elab(&mut bad, &lib_item("dbl"), "fn dbl");
-    let wrong = generate_in_language(&bad, &lib_decl("dbl"), &GenCtx::new())
-        .expect("a wrong transcriber still emits — that is the point");
-    assert_ne!(wrong.ir_body, IR_DBL, "the mutation must change the transcription");
-    // Everything up to the invariant: the IR, the program, and the two
-    // literal-fuel fixtures. The fixtures are `refl` on a concrete run, so a
-    // transcription that reads the wrong slots is `Stuck` there.
-    let upto = wrong.text.find("theorem dbl_gen_conv").expect("the emission proves an invariant");
-    refuted(&mut bad, &wrong.text[..upto], "mutated-transcriber emission");
-}
-
-/// The agreement property's loud half (docs/fn-signature-reflection-design.md
-/// §4): perturb the LIBRARY's signature rule — `sig_finish` accepting the
-/// nullary signature — and a nullary fn's generation must fail with the
-/// **disagreement** message, never silently ride either verdict. Own test for
-/// the same stack reason as above (a second `match code` shell check per
-/// thread), and with the file's own theorems stripped first, because they
-/// refuse the mutation before anything downstream sees it — the same
-/// two-controls shape as the transcriber's honesty control.
-#[test]
-fn a_perturbed_signature_checker_is_a_loud_disagreement() {
-    let mut e = base();
-    let cut = LIB.find("\ntheorem ").expect("the library has theorems");
-    elab(&mut e, &LIB[..cut], "declarations prefix");
-    let bad_code = CODE.replace(
-        "SigYes(a) => match a { Zero => SigNo, Succ(k) => SigYes(Succ(k)) },",
-        "SigYes(a) => SigYes(a),",
-    );
-    assert_ne!(bad_code, CODE, "the mutation must apply");
-    if e.elab_module_source("ir_v1", &bad_code).is_ok() {
-        panic!("the library's own theorems must refuse a perturbed `sig_finish`");
-    }
-    let thms = bad_code.find("\ntheorem ").expect("the file states its own acceptance");
-    let shell = bad_code.find("// The shell").expect("the shells are the file's last block");
-    let stripped = format!("{}\n{}", &bad_code[..thms], &bad_code[shell..]);
-    // The failed elaboration stopped at a theorem, before either shell, so the
-    // stripped file's two shells are this thread's only 52-branch checks.
-    let mut bad = base();
-    elab(&mut bad, &LIB[..cut], "declarations prefix");
-    elab(&mut bad, &stripped, "mutated lib/certgen_code.hthr");
-    let nofn = "fn nofn2() -> Nat { 0 }";
-    elab(&mut bad, nofn, "fn nofn2");
-    let Err(msg) = generate_in_language(&bad, &decl_of(nofn), &GenCtx::new()) else {
-        panic!("a nullary fn must not generate")
-    };
-    assert!(msg.contains("disagreement"), "{msg}");
 }
 
 fn ctx_get<'a>(ctx: &'a GenCtx, name: &str) -> &'a heather_elab::certgen::Emission {

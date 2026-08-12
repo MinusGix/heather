@@ -1,0 +1,225 @@
+// The certifying generator's CERTIFICATE FOLD. Design:
+// docs/certgen-cert-expression-design.md.
+//
+// The transcriber (lib/certgen_code.hthr) turns a fn's code into an `Ir`.
+// This file turns that `Ir` into a CERTIFICATE EXPRESSION: a first-order
+// description of the chain of ∃-composition-kit applications that proves
+// `Converges(prog, env, ir, out)` for it — one constructor per kit lemma
+// (`ret_conv`, `letcon_conv`, `letcall_conv`, `letmatch_conv` in
+// lib/ir_v1.hthr), carrying the arguments a rendered application needs from
+// the IR side. The proof TEXT is rendered from Rust
+// (crates/elab/src/certgen.rs), because every remaining argument is a *name*:
+// the generated program, the source parameters the environment is spelled
+// with, the emitted `gk`/`gih`/`tail` binders, the callee invariants'
+// theorem names. Design doc §3 is that split, stated once.
+//
+// Ordinary program-layer Heather — inductives and `fn`s, no `match code`, no
+// layer-m content at all, so nothing here pays the 52-branch `rec_ga` gate.
+// Elaborated on top of `lib/ir_v1.hthr`'s declarations prefix: `Ir`, `Refs`
+// and `pick_arm` come from there, and this file declares no import and
+// redeclares nothing.
+//
+// THE CONVENTIONS IT INHERITS, none of which it may restate differently:
+//
+// 1. CALLEE NUMBERING (lib/certgen_code.hthr convention 3). The `Ir` this
+//    file folds is in the WALKER's coordinate system: callee 0 is the
+//    enclosing function itself — the structural self-call, whose certificate
+//    is the induction hypothesis — and a tag `c ≥ 1` is the `c`-th distinct
+//    foreign callee. The program-closure indices the emitted certificate
+//    actually spells are computed downstream, from names, exactly as the IR's
+//    own are. So `CIh` versus `CCall` is decided HERE, on the tag, and the
+//    readback only renders the choice.
+//
+// 2. THE BODY SHAPE (docs/certifying-generator-design.md; the fragment's "at
+//    most one match, at the root" rule). A recursive body is
+//    `LetMatch(scrut, Arm(zero, Arm(succ, NoArm)), Ret(RCons(0, RNil)))` —
+//    the two `Nat` arms and the rebinding continuation — and anything else is
+//    a straight-line body. The emitted proof is an induction over the
+//    scrutinized parameter with `letmatch_conv` applied INSIDE each arm, which
+//    is why `CRec` carries two whole certificates rather than one.
+//
+// 3. THE CHAIN IS ITS OWN IR (design doc §2). Three kit lemmas take the
+//    remaining region as an argument (`letcon_conv`'s and `letcall_conv`'s
+//    `rest`, `letmatch_conv`'s rebinding continuation), and that region is
+//    exactly what the sub-certificate is *about* — so it is not carried
+//    twice. The readback prints it off the sub-certificate, which is also the
+//    only way it could resolve the callee indices anyway (convention 1).
+//
+// The generator is untrusted (issues/certifying-generator.md): a fold that
+// picks the wrong lemma or routes the induction hypothesis to a foreign call
+// produces a certificate the kernel REFUSES, never an unsound theorem. That
+// is what makes this file safe to be a heuristic, and what
+// `crates/elab/tests/certgen_cert.rs` demonstrates with one edit to it.
+
+// ---------------------------------------------------------------------------
+// The data.
+
+// Is the induction hypothesis in scope? A property of the POSITION, not of
+// the instruction: the `Succ` arm of the root match has one, the `Zero` arm
+// and a non-recursive body do not. Threaded unchanged through a chain, so a
+// self-call outside a `Succ` arm declines rather than inventing a hypothesis.
+inductive Ihp { IhNo, IhYes }
+
+// One constructor per kit lemma, its fields the lemma's arguments that come
+// from the IR side (design doc §2's table):
+//
+//   CRet(rs)                 ret_conv(p, env, rs, vs, refl)
+//   CCon(tag, args, hr)      letcon_conv(p, env, tag, args, rest, fs, vs, refl, hr)
+//   CIh(args, hr)            letcall_conv(p, env, 0, args, rest, cargs, ws, vs,
+//                                         refl, <the induction hypothesis>, hr)
+//   CCall(c, args, hr)       letcall_conv(p, env, c, args, rest, cargs, ws, vs,
+//                                         refl, <callee c's invariant>, hr)
+//   CMatch(scrut, ctag, ha, hr)
+//                            letmatch_conv(p, env, scrut, arms, rest, ctag,
+//                                          fields, ws, vs, refl, ha, hr)
+//
+// with every `rest` read off the sub-certificate (convention 3) and every
+// remaining argument a name (design doc §3).
+//
+// `letcall_conv` gets two constructors because WHICH certificate discharges a
+// call is the most interesting decision this file makes — the difference
+// between an induction and a lie — and a constructor is what makes it
+// perturbable in one edit and readable in the pins below.
+//
+// `CStuck` is the decline. It is *not* propagated by helper functions here
+// (matching `Cert` costs elaboration time and buys nothing): a certificate
+// with a stuck node anywhere is refused whole at readback, which is the same
+// totality with the recognition at the rim — where `TNo`'s and `SigNo`'s
+// reasons already live.
+inductive Cert {
+    CStuck,
+    CRet(rs: Refs),
+    CCon(tag: Nat, args: Refs, hr: Cert),
+    CIh(args: Refs, hr: Cert),
+    CCall(c: Nat, args: Refs, hr: Cert),
+    CMatch(scrut: Nat, ctag: Nat, ha: Cert, hr: Cert),
+}
+
+// A whole invariant's shape: a straight-line body proves one chain; a
+// recursive body proves one `letmatch_conv` per constructor arm, under the
+// induction the emitted text opens.
+inductive CertOut { CPlain(c: Cert), CRec(scrut: Nat, zero: Cert, succ: Cert) }
+
+// ---------------------------------------------------------------------------
+// The fold.
+
+// One straight-line region: the instruction chain is the certificate chain,
+// each instruction's lemma chosen by its constructor.
+//
+// A call to callee 0 is the structural self-call, whose certificate is the
+// induction hypothesis — available only where `ih` says so. Every other
+// instruction form (a nested `LetMatch`, an arm cell, the loop forms) is
+// outside the fragment the emitters can prove, so it declines.
+fn cert_chain(ir: Ir, ih: Ihp) -> Cert {
+    match ir {
+        Ret(rs) => CRet(rs),
+        LetCon(tag, args, rest) => CCon(tag, args, cert_chain(rest, ih)),
+        LetCall(c, args, rest) =>
+            match c {
+                Zero => match ih {
+                    IhNo => CStuck,
+                    IhYes => CIh(args, cert_chain(rest, ih)),
+                },
+                Succ(c2) => CCall(c, args, cert_chain(rest, ih)),
+            },
+        _ => CStuck,
+    }
+}
+
+// The rebinding continuation of the root match: the arm's single output,
+// rebound as slot 0 and returned. Anything else is a body whose shape the
+// emitted induction does not describe, so it declines here rather than
+// producing a certificate about a different program.
+fn cert_rebind(after: Ir) -> Cert {
+    match after {
+        Ret(rs) => match rs {
+            RCons(i, next) => match i {
+                Zero => match next { RNil => CRet(RCons(0, RNil)), _ => CStuck },
+                Succ(k) => CStuck,
+            },
+            _ => CStuck,
+        },
+        _ => CStuck,
+    }
+}
+
+// The two `Nat` arms, each wrapped in its own `letmatch_conv`: the `Zero` arm
+// with constructor tag 0 and no induction hypothesis, the `Succ` arm with tag
+// 1 and one.
+//
+// The arms are selected with the library's own `pick_arm` — the very function
+// `letmatch_conv`'s `ha` hypothesis is stated against — rather than by
+// destructuring the arm chain here. That is both faithful (the lemma and the
+// fold agree by construction on what "the arm for tag `t`" means) and cheap;
+// an arm chain too short answers `NoArm`, which `cert_chain` declines.
+fn cert_arms(scrut: Nat, arms: Ir, after: Ir) -> CertOut {
+    CRec(scrut,
+        CMatch(scrut, 0, cert_chain(pick_arm(arms)(0), IhNo), cert_rebind(after)),
+        CMatch(scrut, 1, cert_chain(pick_arm(arms)(1), IhYes), cert_rebind(after)))
+}
+
+// The root, and the file's entry point: the elaborator applies exactly this
+// to the transcriber's `Ir` (design doc §5 — an ordinary global application,
+// no analyzer slot, because nothing here is layer m).
+fn cert_body(ir: Ir) -> CertOut {
+    match ir {
+        LetMatch(scrut, arms, after) => cert_arms(scrut, arms, after),
+        _ => CPlain(cert_chain(ir, IhNo)),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The file's own acceptance, as `lib/certgen_code.hthr` states its own: each
+// right-hand side is the certificate the emitters render for the same shape,
+// one layer below the readback. A divergence is a failed `refl`, here, at
+// library elaboration time. The fixtures are deliberately SMALL — one
+// instruction per fact — because a `refl` between two `Wf`-lowered values is
+// the expensive kind of pin (issues/certgen-harness-cost.md), and the whole
+// transcriptions are pinned end to end by the emissions themselves.
+
+// The two call constructors, which is the routing decision: callee 0 under a
+// `Succ` arm is the induction hypothesis…
+theorem self_call_is_the_ih():
+    cert_chain(LetCall(0, RNil, Ret(RCons(0, RNil))), IhYes)
+    = CIh(RNil, CRet(RCons(0, RNil)))
+{ refl }
+
+// …a foreign tag is the callee's own invariant, at the tag the reflection
+// table numbers it with…
+theorem foreign_call_is_the_callee():
+    cert_chain(LetCall(1, RNil, Ret(RCons(0, RNil))), IhYes)
+    = CCall(1, RNil, CRet(RCons(0, RNil)))
+{ refl }
+
+// …and with no hypothesis in scope — a `Zero` arm, or a body with no match —
+// the same self-call declines instead of borrowing one.
+theorem self_call_without_the_ih_declines():
+    cert_chain(LetCall(0, RNil, Ret(RCons(0, RNil))), IhNo) = CStuck
+{ refl }
+
+// A constructor instruction is `letcon_conv`, and the chain continues.
+theorem con_chains():
+    cert_chain(LetCon(1, RCons(0, RNil), Ret(RCons(0, RNil))), IhNo)
+    = CCon(1, RCons(0, RNil), CRet(RCons(0, RNil)))
+{ refl }
+
+// A recursive body: the root match becomes two `letmatch_conv`s, one per
+// constructor tag, each closing on the rebinding `Ret`. `dbl`'s shape, with
+// the arms shortened to one instruction each.
+theorem rec_body_splits_the_arms():
+    cert_body(LetMatch(0,
+        Arm(Ret(RCons(0, RNil)),
+        Arm(LetCall(0, RCons(0, RNil), Ret(RCons(0, RNil))),
+        NoArm)),
+        Ret(RCons(0, RNil))))
+    = CRec(0,
+        CMatch(0, 0, CRet(RCons(0, RNil)), CRet(RCons(0, RNil))),
+        CMatch(0, 1, CIh(RCons(0, RNil), CRet(RCons(0, RNil))),
+               CRet(RCons(0, RNil))))
+{ refl }
+
+// A continuation that is not the rebinding `Ret` describes a different
+// program from the one the emitted theorem would be about.
+theorem nonrebinding_continuation_declines():
+    cert_rebind(Ret(RCons(1, RNil))) = CStuck
+{ refl }

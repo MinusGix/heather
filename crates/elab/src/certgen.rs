@@ -5,8 +5,18 @@
 //! signatures and which bodies are transcribable, and what they transcribe to
 //! — is `lib/certgen_code.hthr`, two `match code` shells over the reflected
 //! declaration; there is no Rust walker any more
-//! (`issues/retire-rust-transcriber.md` stage 2, 2026-08-12). What this module
-//! is, in the order the phases run:
+//! (`issues/retire-rust-transcriber.md` stage 2, 2026-08-12).
+//!
+//! **And so does the certificate fold.** *Which* kit lemma proves *which*
+//! instruction, and whose certificate discharges a call, is
+//! `lib/certgen_cert.hthr` — ordinary program-layer `fn`s folding the
+//! transcriber's `Ir` into a first-order certificate expression
+//! (docs/certgen-cert-expression-design.md, Round A of
+//! `issues/in-language-certificate-emission.md`). What is left here is the
+//! *rendering*: every argument of the emitted proof that is a name, which is
+//! every argument the library could not know.
+//!
+//! What this module is, in the order the phases run:
 //!
 //!   1. the **reflection primitive** ([`body_code`], reached as
 //!      [`Elaborator::fn_body_code`]): a declared fn's elaborated body as
@@ -14,11 +24,13 @@
 //!      coordinate system an analyzer can actually read
 //!      (docs/opaque-globals-analysis-design.md §2);
 //!   2. the **invocation and readback** ([`run_sig_checker`],
-//!      [`run_transcriber`], [`Reader`], [`fn_ir_from_rir`]): apply the
-//!      registered analyzers, read their answers back out of the kernel's
-//!      value representation, and rebuild the `FnIr` the emitters consume;
+//!      [`run_transcriber`], [`run_cert_fold`], [`Reader`],
+//!      [`fn_ir_from_rir`]): apply the registered analyzers and the fold, read
+//!      their answers back out of the kernel's value representation, and
+//!      rebuild the `FnIr` and the `RCertOut` the emitters consume;
 //!   3. the **emitters** ([`emit_with_model`] and below): *surface text* — the
-//!      IR, the exactness fixtures, the ∃-form invariants and a `CompileNatK`
+//!      IR, the exactness fixtures, the ∃-form invariants ([`render_cert`],
+//!      which is the certificate expression printed) and a `CompileNatK`
 //!      instance value — to be checked appended to `lib/ir_v1.hthr` by the
 //!      ordinary pipeline.
 //!
@@ -68,6 +80,10 @@ pub struct Emission {
     pub ir_body: String,
     pub text: String,
     model: FnIr,
+    /// The certificate expression the in-language fold produced for this
+    /// function, kept because a *caller* re-derives this member's invariant
+    /// inside its own program (docs/certgen-cert-expression-design.md §6).
+    cert: RCertOut,
 }
 
 /// Previously generated emissions, consulted for foreign calls.
@@ -153,24 +169,24 @@ fn surface_params(d: &Decl) -> Result<Vec<&str>, String> {
 // ---------------------------------------------------------------------------
 // Transcription model — the interface the readback rebuilds and the emitters
 // consume. References are de Bruijn distances into a cons environment
-// (0 = most recent). Each instruction carries the SPEC expression its result
-// stands for (the source sub-expression it denotes, with the Succ-arm binder
-// spelled `gk`), which is what the ∃-proof emission spells into environments,
-// gathered fields and callee certificates; the specs are *derived* at readback
-// (see `chain_from_rir`), since the walker has no names to hand over.
+// (0 = most recent). Pure structure: the SPEC expressions the emitted proofs
+// are spelled with (the source sub-expression a slot denotes, with the
+// Succ-arm binder spelled `gk`) used to be carried here too, and are now
+// derived once, while the certificate expression is rendered
+// (docs/certgen-cert-expression-design.md §3 — one derivation, at the rim).
+// What is left is what the chain renderer, the closure and the fixture
+// evaluator consume.
 
 #[derive(Clone)]
 enum Instr {
-    Con { tag: u64, dists: Vec<usize>, spec: String },
-    Call { callee: String, dists: Vec<usize>, arg_specs: Vec<String>, spec: String },
+    Con { tag: u64, dists: Vec<usize> },
+    Call { callee: String, dists: Vec<usize> },
 }
 
 #[derive(Clone)]
 struct Chain {
     instrs: Vec<Instr>,
     ret_dist: usize,
-    /// The spec expression of the value at the return slot.
-    ret_spec: String,
     has_self_call: bool,
 }
 
@@ -209,8 +225,8 @@ fn render_chain(instrs: &[Instr], from: usize, ret_dist: usize, closure: &[Strin
     let mut s = format!("Ret(RCons({ret_dist}, RNil))");
     for i in instrs[from..].iter().rev() {
         s = match i {
-            Instr::Con { tag, dists, .. } => format!("LetCon({tag}, {}, {s})", refs(dists)),
-            Instr::Call { callee, dists, .. } => {
+            Instr::Con { tag, dists } => format!("LetCon({tag}, {}, {s})", refs(dists)),
+            Instr::Call { callee, dists } => {
                 let idx = closure.iter().position(|c| c == callee).expect("callee in closure");
                 format!("LetCall({idx}, {}, {s})", refs(dists))
             }
@@ -273,13 +289,13 @@ impl<'a> Evaluator<'a> {
             return (env[c.ret_dist].clone(), 1);
         }
         match &c.instrs[from] {
-            Instr::Con { tag, dists, .. } => {
+            Instr::Con { tag, dists } => {
                 let v = if *tag == 0 { V(0) } else { V(env[dists[0]].0 + 1) };
                 env.insert(0, v);
                 let (out, n) = self.run_from(c, from + 1, env);
                 (out, 1 + n)
             }
-            Instr::Call { callee, dists, .. } => {
+            Instr::Call { callee, dists } => {
                 let args: Vec<V> = dists.iter().map(|&d| env[d].clone()).collect();
                 let (cv, cn) = self.run_fn(callee, &args);
                 env.insert(0, cv);
@@ -291,16 +307,30 @@ impl<'a> Evaluator<'a> {
 }
 
 // ---------------------------------------------------------------------------
-// The ∃-proof emission: fold the composition kit over a chain.
+// The ∃-proof emission: RENDER the certificate expression the in-language
+// fold produced (docs/certgen-cert-expression-design.md).
+//
+// The fold itself is `lib/certgen_cert.hthr`: which kit lemma applies where,
+// the order of the chain, the arm split, and — the interesting one — whether a
+// call's hypothesis is the induction hypothesis or a callee's invariant. What
+// is left here is every *name*: the program, the environment's spec
+// expressions, the emitted `gk`/`gih`/`tail` binders, the arm-chain's
+// generated fn names, and the closure indices a `LetCall` is spelled with.
 
 struct ProofCx<'a> {
     prog: String,
     closure: &'a [String],
     conv_name: &'a dyn Fn(&str) -> String,
     ctx: &'a GenCtx,
-    /// The closure member whose invariant is being proved (its self-calls
-    /// consume `gih`); `None` outside a Succ arm.
+    /// The closure member whose invariant is being proved: its self-calls
+    /// consume `gih`, its arms are spelled `{self_name}_gen_arm_*`, and its
+    /// own position in the program is what a self-call's `LetCall` names.
     self_name: &'a str,
+    self_idx: usize,
+    /// The recursion slot, when this member is recursive — the argument
+    /// position `gih` does *not* take. `None` for a straight-line member, in
+    /// which case a certificate that consumes an induction hypothesis is a
+    /// fold/model disagreement rather than a decline.
     self_rec_idx: Option<usize>,
 }
 
@@ -322,63 +352,195 @@ fn cert_app(name: &str, model: &FnIr, arg_specs: &[String]) -> String {
     }
 }
 
-/// The `Converges` proof term for `instrs[from..] ; Ret`, in environment
+/// The spec expression at distance `d`, or a decline: a certificate that
+/// reads past its environment is one this readback cannot name, which is the
+/// shape a wrong fold takes when it drops an instruction.
+fn slot(env: &[String], d: usize) -> Result<String, String> {
+    env.get(d).cloned().ok_or_else(|| "a certificate reading past the environment".to_string())
+}
+
+fn slots(env: &[String], dists: &[usize]) -> Result<Vec<String>, String> {
+    dists.iter().map(|d| slot(env, *d)).collect()
+}
+
+/// The spec of a `letcon_conv` temporary: the fragment's constructors are
+/// `Nat`'s, so slot-and-tag determine the source expression it stands for.
+fn con_spec(tag: u64, args: &[String]) -> Result<String, String> {
+    match tag {
+        0 => Ok("Zero".to_string()),
+        1 => {
+            let a = args.first().ok_or("a `Succ` with no argument")?;
+            Ok(format!("Succ({a})"))
+        }
+        other => Err(format!("constructor tag {other} is not a `Nat`")),
+    }
+}
+
+impl ProofCx<'_> {
+    fn callee_idx(&self, name: &str) -> Result<usize, String> {
+        self.closure
+            .iter()
+            .position(|c| c == name)
+            .ok_or_else(|| format!("`{name}` is not a member of the program"))
+    }
+
+    /// The IR the certificate is about, spelled as the emitted proofs spell
+    /// it: `letcon_conv`/`letcall_conv` take the *remaining* region as an
+    /// argument, and that region is exactly what the sub-certificate proves
+    /// (`lib/certgen_cert.hthr` convention 3). Callee indices are the
+    /// program closure's, which is where the walker's numbering is converted.
+    fn cert_ir(&self, c: &RCert) -> Result<String, String> {
+        Ok(match c {
+            RCert::Ret { rs } => format!("Ret({})", refs(rs)),
+            RCert::Con { tag, args, hr } => {
+                format!("LetCon({tag}, {}, {})", refs(args), self.cert_ir(hr)?)
+            }
+            RCert::Ih { args, hr } => {
+                format!("LetCall({}, {}, {})", self.self_idx, refs(args), self.cert_ir(hr)?)
+            }
+            RCert::Call { callee, args, hr } => {
+                let idx = self.callee_idx(callee)?;
+                format!("LetCall({idx}, {}, {})", refs(args), self.cert_ir(hr)?)
+            }
+            RCert::Match { .. } => {
+                return Err("a `letmatch_conv` inside a straight-line region".into())
+            }
+        })
+    }
+
+    /// The spec of the value a straight-line certificate returns — the same
+    /// walk `render_cert` makes, run for its answer alone because
+    /// `letmatch_conv` needs it *before* its arm is rendered (it is the arm's
+    /// `ws`, and the goal the arm's own chain is proved against).
+    fn ret_spec(&self, c: &RCert, env: &[String]) -> Result<String, String> {
+        match c {
+            RCert::Ret { rs } => {
+                let [d] = rs[..] else { return Err("a `Ret` with other than one output".into()) };
+                slot(env, d)
+            }
+            RCert::Con { tag, args, hr } => {
+                let spec = con_spec(*tag, &slots(env, args)?)?;
+                let mut env2 = vec![spec];
+                env2.extend(env.iter().cloned());
+                self.ret_spec(hr, &env2)
+            }
+            RCert::Ih { args, hr } | RCert::Call { args, hr, .. } => {
+                let name = match c {
+                    RCert::Call { callee, .. } => callee.as_str(),
+                    _ => self.self_name,
+                };
+                let spec = format!("{name}({})", slots(env, args)?.join(", "));
+                let mut env2 = vec![spec];
+                env2.extend(env.iter().cloned());
+                self.ret_spec(hr, &env2)
+            }
+            RCert::Match { .. } => Err("a `letmatch_conv` inside a straight-line region".into()),
+        }
+    }
+}
+
+/// The `Converges` proof term the certificate `c` describes, in environment
 /// `env_exprs ++ tail`, converging to `Out(out_text(final_spec))`.
-fn conv_of_chain(
+///
+/// One arm per `Cert` constructor, and the format strings are the ones the
+/// Rust fold used: byte-identity to the previous output is this round's
+/// acceptance bar (docs/certgen-cert-expression-design.md §8).
+fn render_cert(
     cx: &ProofCx<'_>,
-    c: &Chain,
-    from: usize,
+    c: &RCert,
     env_exprs: &[String],
     tail: &str,
     final_spec: &str,
-) -> String {
+) -> Result<String, String> {
     let p = &cx.prog;
     let env = env_text(env_exprs, tail);
     let vs = out_text(final_spec);
-    if from == c.instrs.len() {
-        return format!("ret_conv({p}, {env}, RCons({}, RNil), {vs}, refl)", c.ret_dist);
-    }
-    let rest_ir = render_chain(&c.instrs, from + 1, c.ret_dist, cx.closure);
-    match &c.instrs[from] {
-        Instr::Con { tag, dists, spec } => {
-            let arg_exprs: Vec<String> = dists.iter().map(|&d| env_exprs[d].clone()).collect();
+    Ok(match c {
+        RCert::Ret { rs } => format!("ret_conv({p}, {env}, {}, {vs}, refl)", refs(rs)),
+        RCert::Con { tag, args, hr } => {
+            let arg_exprs = slots(env_exprs, args)?;
             let fs = env_text(&arg_exprs, "VNil");
-            let mut env2 = vec![spec.clone()];
+            let rest_ir = cx.cert_ir(hr)?;
+            let mut env2 = vec![con_spec(*tag, &arg_exprs)?];
             env2.extend(env_exprs.iter().cloned());
-            let hr = conv_of_chain(cx, c, from + 1, &env2, tail, final_spec);
+            let hr = render_cert(cx, hr, &env2, tail, final_spec)?;
             format!(
                 "letcon_conv({p}, {env}, {tag}, {}, {rest_ir},\n        {fs}, {vs},\n        refl,\n        {hr})",
-                refs(dists)
+                refs(args)
             )
         }
-        Instr::Call { callee, dists, arg_specs, spec } => {
-            let idx = cx.closure.iter().position(|m| m == callee).expect("callee in closure");
-            let arg_exprs: Vec<String> = dists.iter().map(|&d| env_exprs[d].clone()).collect();
-            let cargs = env_text(&arg_exprs, "VNil");
-            let ws = out_text(spec);
-            let hc = if callee == cx.self_name {
-                let rec_idx = cx.self_rec_idx.expect("self-call in a Succ arm");
-                let mut others: Vec<String> = arg_specs
-                    .iter()
-                    .enumerate()
-                    .filter(|(i, _)| *i != rec_idx)
-                    .map(|(_, s)| s.clone())
-                    .collect();
-                others.push("VNil".into());
-                format!("gih({})", others.join(", "))
-            } else {
-                let cal = cx.ctx.get(callee).expect("callee generated");
-                cert_app(&(cx.conv_name)(callee), &cal.model, arg_specs)
+        RCert::Ih { args, hr } | RCert::Call { args, hr, .. } => {
+            let arg_exprs = slots(env_exprs, args)?;
+            let (idx, name, hc) = match c {
+                RCert::Call { callee, .. } => {
+                    let cal = cx
+                        .ctx
+                        .get(callee)
+                        .ok_or_else(|| format!("callee `{callee}` has no generated instance"))?;
+                    (
+                        cx.callee_idx(callee)?,
+                        callee.clone(),
+                        cert_app(&(cx.conv_name)(callee), &cal.model, &arg_exprs),
+                    )
+                }
+                _ => {
+                    // The structural self-call: its certificate is the
+                    // induction hypothesis the emitted `match` binds, applied
+                    // to every argument *except* the one it recurses on.
+                    let rec_idx = cx
+                        .self_rec_idx
+                        .ok_or("a certificate consumes an induction hypothesis outside an induction")?;
+                    let mut others: Vec<String> = arg_exprs
+                        .iter()
+                        .enumerate()
+                        .filter(|(i, _)| *i != rec_idx)
+                        .map(|(_, s)| s.clone())
+                        .collect();
+                    others.push("VNil".into());
+                    (cx.self_idx, cx.self_name.to_string(), format!("gih({})", others.join(", ")))
+                }
             };
-            let mut env2 = vec![spec.clone()];
+            let cargs = env_text(&arg_exprs, "VNil");
+            let spec = format!("{name}({})", arg_exprs.join(", "));
+            let ws = out_text(&spec);
+            let rest_ir = cx.cert_ir(hr)?;
+            let mut env2 = vec![spec];
             env2.extend(env_exprs.iter().cloned());
-            let hr = conv_of_chain(cx, c, from + 1, &env2, tail, final_spec);
+            let hr = render_cert(cx, hr, &env2, tail, final_spec)?;
             format!(
                 "letcall_conv({p}, {env}, {idx}, {}, {rest_ir},\n        {cargs}, {ws}, {vs},\n        refl,\n        {hc},\n        {hr})",
-                refs(dists)
+                refs(args)
             )
         }
-    }
+        RCert::Match { scrut, ctag, ha, hr } => {
+            // The arm-chain and the field list are the two arguments the
+            // library cannot spell: the arms are named by their *generated*
+            // definitions, and the fields are the emitted induction's binder
+            // (design doc §3).
+            let m = cx.self_name;
+            let arms_text = format!("Arm({m}_gen_arm_zero(), Arm({m}_gen_arm_succ(), NoArm))");
+            let after_ret = cx.cert_ir(hr)?;
+            let fields = if *ctag == 0 {
+                "VNil".to_string()
+            } else {
+                "VCons(embed_nat(gk), VNil)".to_string()
+            };
+            let mut arm_exprs = Vec::new();
+            if *ctag != 0 {
+                arm_exprs.push("gk".to_string());
+            }
+            arm_exprs.extend(env_exprs.iter().cloned());
+            let arm_spec = cx.ret_spec(ha, &arm_exprs)?;
+            let ws = out_text(&arm_spec);
+            let arm_conv = render_cert(cx, ha, &arm_exprs, tail, &arm_spec)?;
+            let mut after_exprs = vec![arm_spec];
+            after_exprs.extend(env_exprs.iter().cloned());
+            let after_conv = render_cert(cx, hr, &after_exprs, tail, final_spec)?;
+            format!(
+                "letmatch_conv({p}, {env}, {scrut}, {arms_text}, {after_ret},\n        {ctag}, {fields},\n        {ws}, {vs},\n        refl,\n        {arm_conv},\n        {after_conv})"
+            )
+        }
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -393,6 +555,7 @@ fn emit_with_model(
     f: &str,
     arity: usize,
     model: FnIr,
+    cert: RCertOut,
     ctx: &GenCtx,
 ) -> Result<Emission, String> {
     // Closure: callees' closures (prefix-compatible), then self.
@@ -444,12 +607,17 @@ fn emit_with_model(
         }
     };
     for m in closure.clone() {
-        let mm: FnIr = if m == f { model.clone() } else { ctx.get(&m).unwrap().model.clone() };
-        emit_invariant(w, f, &m, &mm, &closure, ctx, &conv_name);
+        let (mm, mc): (FnIr, RCertOut) = if m == f {
+            (model.clone(), cert.clone())
+        } else {
+            let e = ctx.get(&m).unwrap();
+            (e.model.clone(), e.cert.clone())
+        };
+        emit_invariant(w, f, &m, &mm, &mc, &closure, ctx, &conv_name)?;
     }
 
     emit_instance(w, f, &model, arity);
-    Ok(Emission { name: f.to_string(), arity, closure, ir_body, text, model })
+    Ok(Emission { name: f.to_string(), arity, closure, ir_body, text, model, cert })
 }
 
 fn callees(model: &FnIr) -> Vec<String> {
@@ -542,32 +710,47 @@ fn emit_fixtures(w: &mut String, f: &str, model: &FnIr, closure: &[String], ctx:
 /// The invariant of closure member `m`'s body inside `f`'s program: for all
 /// spec arguments and any environment tail, the body converges to the
 /// embedded spec result.
+///
+/// The *proof* is `cert`, the certificate expression `lib/certgen_cert.hthr`
+/// folded out of `m`'s IR; what this function writes around it is the
+/// statement — binders, the induction's motive, and the `Zero`/`Succ(gk)`
+/// spelling of the scrutinized parameter — every token of which is a name.
+/// A certificate whose shape disagrees with the model's (a `CPlain` for a
+/// recursive body, a `CRec` on the wrong slot) is an `Err`, not a decline:
+/// the two come from the same `Ir`, so a disagreement is a bug in one of
+/// them rather than a function outside the fragment.
 fn emit_invariant(
     w: &mut String,
     f: &str,
     m: &str,
     model: &FnIr,
+    cert: &RCertOut,
     closure: &[String],
     ctx: &GenCtx,
     conv_name: &dyn Fn(&str) -> String,
-) {
+) -> Result<(), String> {
     let name = conv_name(m);
     let prog = format!("{f}_gen_prog()");
     let params = &model.params;
-    match &model.kind {
-        FnIrKind::Plain(c) => {
+    let self_idx = closure
+        .iter()
+        .position(|c| c == m)
+        .ok_or_else(|| format!("`{m}` is not a member of `{f}`'s program"))?;
+    match (&model.kind, cert) {
+        (FnIrKind::Plain(_), RCertOut::Plain(c)) => {
             let cx = ProofCx {
                 prog: prog.clone(),
                 closure,
                 conv_name,
                 ctx,
                 self_name: m,
+                self_idx,
                 self_rec_idx: None,
             };
             let psig: String = params.iter().map(|p| format!("{p}: Nat, ")).collect();
             let env = env_text(params, "tail");
             let call = format!("{m}({})", params.join(", "));
-            let proof = conv_of_chain(&cx, c, 0, params, "tail", &call);
+            let proof = render_cert(&cx, c, params, "tail", &call)?;
             writeln!(w, "theorem {name}({psig}tail: Val)").unwrap();
             writeln!(w, "    : Converges({prog}, {env},").unwrap();
             writeln!(w, "                {m}_gen_body(), {})", out_text(&call)).unwrap();
@@ -576,7 +759,7 @@ fn emit_invariant(
             writeln!(w, "}}").unwrap();
             writeln!(w).unwrap();
         }
-        FnIrKind::Rec(r) => {
+        (FnIrKind::Rec(r), RCertOut::Rec { scrut, zero, succ }) if *scrut == r.rec_idx => {
             let rec_name = &params[r.rec_idx];
             let others: Vec<String> = params
                 .iter()
@@ -598,47 +781,23 @@ fn emit_invariant(
             };
             let (_, env_rec, call_rec) = spell(rec_name);
             let (_, env_z, call_z) = spell("gz");
-            let arms_text = format!("Arm({m}_gen_arm_zero(), Arm({m}_gen_arm_succ(), NoArm))");
-            let after_ret = "Ret(RCons(0, RNil))";
+            let cx = ProofCx {
+                prog: prog.clone(),
+                closure,
+                conv_name,
+                ctx,
+                self_name: m,
+                self_idx,
+                self_rec_idx: Some(r.rec_idx),
+            };
 
-            // Per-constructor arm of the induction: apply `letmatch_conv`,
-            // its `ha` the kit fold over the arm chain, its `hr` the
-            // rebinding Ret.
-            let arm_proof = |ctor_tag: u64| -> String {
-                let (entry_exprs, chain, self_rec) = if ctor_tag == 0 {
-                    let (names, _, _) = spell("Zero");
-                    (names, &r.zero, None)
-                } else {
-                    let (names, _, _) = spell("Succ(gk)");
-                    (names, &r.succ, Some(r.rec_idx))
-                };
-                let cx = ProofCx {
-                    prog: prog.clone(),
-                    closure,
-                    conv_name,
-                    ctx,
-                    self_name: m,
-                    self_rec_idx: self_rec,
-                };
-                let (arm_exprs, fields): (Vec<String>, String) = if ctor_tag == 0 {
-                    (entry_exprs.clone(), "VNil".to_string())
-                } else {
-                    let mut e = vec!["gk".to_string()];
-                    e.extend(entry_exprs.iter().cloned());
-                    (e, "VCons(embed_nat(gk), VNil)".to_string())
-                };
-                let arm_conv =
-                    conv_of_chain(&cx, chain, 0, &arm_exprs, "tail", &chain.ret_spec);
-                let env_entry = env_text(&entry_exprs, "tail");
-                let mut after_exprs = vec![chain.ret_spec.clone()];
-                after_exprs.extend(entry_exprs.iter().cloned());
-                let env_after = env_text(&after_exprs, "tail");
-                let ws = out_text(&chain.ret_spec);
-                let vs = out_text(&if ctor_tag == 0 { spell("Zero").2 } else { spell("Succ(gk)").2 });
-                format!(
-                    "letmatch_conv({prog}, {env_entry}, {}, {arms_text}, {after_ret},\n        {ctor_tag}, {fields},\n        {ws}, {vs},\n        refl,\n        {arm_conv},\n        ret_conv({prog}, {env_after}, RCons(0, RNil), {vs}, refl))",
-                    r.rec_idx
-                )
+            // Per-constructor arm of the induction. The `letmatch_conv`
+            // application is the certificate's own root (`CMatch`); what the
+            // arm supplies is the environment the scrutinee is spelled into.
+            let arm_proof = |ctor_tag: u64, c: &RCert| -> Result<String, String> {
+                let (entry_exprs, _, call) =
+                    spell(if ctor_tag == 0 { "Zero" } else { "Succ(gk)" });
+                render_cert(&cx, c, &entry_exprs, "tail", &call)
             };
 
             writeln!(w, "theorem {name}({rec_name}: Nat):").unwrap();
@@ -653,14 +812,20 @@ fn emit_invariant(
             writeln!(w, "                     {env_z},").unwrap();
             writeln!(w, "                     {m}_gen_body(), {}) {{", out_text(&call_z)).unwrap();
             writeln!(w, "        Zero => λ {other_lams}tail =>").unwrap();
-            writeln!(w, "        {},", arm_proof(0)).unwrap();
+            writeln!(w, "        {},", arm_proof(0, zero)?).unwrap();
             writeln!(w, "        Succ(gk, gih) => λ {other_lams}tail =>").unwrap();
-            writeln!(w, "        {},", arm_proof(1)).unwrap();
+            writeln!(w, "        {},", arm_proof(1, succ)?).unwrap();
             writeln!(w, "    }}").unwrap();
             writeln!(w, "}}").unwrap();
             writeln!(w).unwrap();
         }
+        _ => {
+            return Err(format!(
+                "the certificate fold and the transcription model disagree about `{m}`'s shape"
+            ))
+        }
     }
+    Ok(())
 }
 
 fn emit_instance(w: &mut String, f: &str, model: &FnIr, arity: usize) {
@@ -1156,6 +1321,97 @@ impl Reader<'_> {
     }
 }
 
+// -- the certificate expression, as read back -------------------------------
+//
+// `lib/certgen_cert.hthr`'s `Cert`/`CertOut`, with the two things the readback
+// owns already applied: the walker's callee TAGS resolved to names
+// (convention 1 there), and `CStuck` turned into a decline. Everything else is
+// carried across unchanged, because everything else is the fold's answer.
+
+#[derive(Clone, Debug)]
+enum RCert {
+    Ret { rs: Vec<usize> },
+    Con { tag: u64, args: Vec<usize>, hr: Box<RCert> },
+    /// A self-call, whose certificate is the induction hypothesis.
+    Ih { args: Vec<usize>, hr: Box<RCert> },
+    Call { callee: String, args: Vec<usize>, hr: Box<RCert> },
+    Match { scrut: usize, ctag: u64, ha: Box<RCert>, hr: Box<RCert> },
+}
+
+#[derive(Clone, Debug)]
+enum RCertOut {
+    Plain(RCert),
+    Rec { scrut: usize, zero: RCert, succ: RCert },
+}
+
+impl Reader<'_> {
+    /// `Cert`, in `lib/certgen_cert.hthr`'s declaration order. `callees` is
+    /// the reflection table a foreign tag `c ≥ 1` indexes; the self-call
+    /// carries no name, because `CIh` says whose it is.
+    fn cert(&self, t: &Term, callees: &[String]) -> Result<RCert, String> {
+        let left = self.budget.get();
+        if left == 0 {
+            return Err("the certificate is implausibly large — declining".into());
+        }
+        self.budget.set(left - 1);
+        let (idx, fields, children) = self.ctor(t, 6)?;
+        let f = |i: usize| fields.get(i).ok_or_else(|| "a missing field".to_string());
+        let c = |i: usize| children.get(i).ok_or_else(|| "a missing sub-certificate".to_string());
+        let dists = |rs: Vec<u64>| rs.into_iter().map(|d| d as usize).collect::<Vec<usize>>();
+        match idx {
+            // `CStuck`: the fold's decline, and the only one it makes. The
+            // reasons live here, at the rim, as they do for `TNo`/`SigNo`.
+            0 => Err("the in-language certificate fold declined this IR".into()),
+            1 => Ok(RCert::Ret { rs: dists(self.refs(f(0)?)?) }),
+            2 => Ok(RCert::Con {
+                tag: self.nat(f(0)?)?,
+                args: dists(self.refs(f(1)?)?),
+                hr: Box::new(self.cert(c(0)?, callees)?),
+            }),
+            3 => Ok(RCert::Ih {
+                args: dists(self.refs(f(0)?)?),
+                hr: Box::new(self.cert(c(0)?, callees)?),
+            }),
+            4 => {
+                let tag = self.nat(f(0)?)?;
+                // Convention 1: tag 0 is the enclosing fn, and the fold routes
+                // it to `CIh` — a `CCall(0, …)` is a fold that lost track of
+                // whose certificate it was applying.
+                let callee = callees
+                    .get(tag.checked_sub(1).ok_or("a foreign call at the self tag")? as usize)
+                    .cloned()
+                    .ok_or("a callee tag outside the reflection table")?;
+                Ok(RCert::Call {
+                    callee,
+                    args: dists(self.refs(f(1)?)?),
+                    hr: Box::new(self.cert(c(0)?, callees)?),
+                })
+            }
+            5 => Ok(RCert::Match {
+                scrut: self.nat(f(0)?)? as usize,
+                ctag: self.nat(f(1)?)?,
+                ha: Box::new(self.cert(c(0)?, callees)?),
+                hr: Box::new(self.cert(c(1)?, callees)?),
+            }),
+            _ => Err("not a `Cert` value".into()),
+        }
+    }
+
+    fn cert_out(&self, t: &Term, callees: &[String]) -> Result<RCertOut, String> {
+        let (idx, fields, _) = self.ctor(t, 2)?;
+        let f = |i: usize| fields.get(i).ok_or_else(|| "a missing field".to_string());
+        match idx {
+            0 => Ok(RCertOut::Plain(self.cert(f(0)?, callees)?)),
+            1 => Ok(RCertOut::Rec {
+                scrut: self.nat(f(0)?)? as usize,
+                zero: self.cert(f(1)?, callees)?,
+                succ: self.cert(f(2)?, callees)?,
+            }),
+            _ => Err("the certificate fold's answer is not a `CertOut`".into()),
+        }
+    }
+}
+
 // -- invocation and reconstruction ------------------------------------------
 
 /// Apply the analyzer registered at `slot` to `(Γ = ·, args…)`.
@@ -1205,8 +1461,12 @@ fn analyzer_app(
 }
 
 /// Apply the registered transcriber to `(Γ = ·, arity, the boxed marked
-/// body)` and read its answer back.
-fn run_transcriber(e: &Elaborator, arity: usize, code: Term) -> Result<RIr, String> {
+/// body)` and read its answer back — both as `RIr`, the model the emitters
+/// consume, and as the `Ir` **term** itself, which is what the certificate
+/// fold is applied to (`run_cert_fold`). Handing the term over rather than
+/// rebuilding one is what lets the fold see exactly the value the transcriber
+/// produced: there is no second encoding of an `Ir` anywhere.
+fn run_transcriber(e: &Elaborator, arity: usize, code: Term) -> Result<(RIr, Term), String> {
     let mut nat = Term::Zero;
     for _ in 0..arity {
         nat = Term::Succ(Rc::new(nat));
@@ -1224,9 +1484,65 @@ fn run_transcriber(e: &Elaborator, arity: usize, code: Term) -> Result<RIr, Stri
     let (idx, fields, _) = r.ctor(&term, 2)?;
     match idx {
         0 => Err("the in-language transcriber declined this body".into()),
-        1 => r.ir(fields.first().ok_or("`TYes` without its IR")?),
+        1 => {
+            let ir = fields.first().ok_or("`TYes` without its IR")?;
+            Ok((r.ir(ir)?, ir.clone()))
+        }
         _ => Err("the transcriber's answer is not a `TOut`".into()),
     }
+}
+
+/// `u^δ` for a program-layer global, with its type, at the empty context —
+/// the construction `resolve.rs`'s `derived_ref` makes for a written name
+/// (`GlobalVar(|Ψ| - 1 - abs)` and the empty delayed substitution) and the
+/// `shift_global` rescope `Elaborator::fn_type_code` makes for a reflected
+/// one. A Ψ global needs no staleness bookkeeping of its own: unlike a
+/// `MetaDef` it *is* Ψ-resident.
+fn global_app(e: &Elaborator, name: &str, args: Vec<Term>) -> Result<Term, String> {
+    let abs = e
+        .global_abs(name)
+        .ok_or_else(|| format!("`{name}` is not declared — the certificate fold is a library file"))?;
+    let GlobalBinding::Tm { ty, .. } = &e.psi().bindings[abs] else {
+        return Err(format!("`{name}` is not a term-level global"));
+    };
+    let len = e.psi().bindings.len();
+    let empty = LocalCtx::nil();
+    let mut ty = Rc::new(ty.shift_global((len - abs) as u32));
+    let mut term = Term::GlobalTm {
+        var: GlobalVar((len - 1 - abs) as u32),
+        subst: LocalSubst::id(&empty),
+    };
+    for arg in args {
+        let Type::Pi { dom_level, cod_level, dom, cod } = &*ty else {
+            return Err(format!("`{name}`'s signature ran out of parameters"));
+        };
+        let arg = Rc::new(arg);
+        term = Term::App {
+            fun: Rc::new(term),
+            dom_level: dom_level.clone(),
+            cod_level: cod_level.clone(),
+            dom: Rc::clone(dom),
+            cod: Rc::clone(cod),
+            arg: Rc::clone(&arg),
+        };
+        ty = Rc::new((**cod).clone().apply_local(&LocalSubst::id(&empty).extended(arg)));
+    }
+    Ok(term)
+}
+
+/// The certificate fold (docs/certgen-cert-expression-design.md §5): apply
+/// `lib/certgen_cert.hthr`'s `cert_body` to the transcriber's `Ir` and read
+/// the certificate expression back.
+///
+/// No analyzer slot, and no `meta fn`: the fold is a program-layer function of
+/// one `Ir`, so an ordinary application is the whole invocation — which is
+/// also what keeps it off the 52-branch `rec_ga` gate every `match code` shell
+/// pays. Evaluation is the same spine-directed WHNF under the same budgets as
+/// every other readback here.
+fn run_cert_fold(e: &Elaborator, ir: Term, callees: &[String]) -> Result<RCertOut, String> {
+    let term = global_app(e, "cert_body", vec![ir])?;
+    let r = Reader { psi: e.psi(), budget: std::cell::Cell::new(READ_BUDGET) };
+    r.cert_out(&term, callees)
 }
 
 /// The in-language fragment-signature verdict
@@ -1255,64 +1571,46 @@ fn run_sig_checker(e: &Elaborator, name: &str) -> Result<u64, String> {
     }
 }
 
-/// The environment's spec expressions, **by distance** (0 = most recent): the
-/// parameters as the arm sees them, with the `Succ` arm's field on top. This
-/// is `lib/certgen_code.hthr`'s convention 2 restated on the naming side, and
-/// it is where the marker convention and the IR's slots meet.
-fn base_specs(params: &[String], field: bool) -> Vec<String> {
-    let mut v: Vec<String> = params.to_vec();
-    if field {
-        v.insert(0, "gk".to_string());
-    }
-    v
-}
-
-/// One instruction chain, with the spec expressions **derived** rather than
-/// carried: a temporary's spec is determined by its instruction and the specs
-/// of the slots it reads, so `Instr::spec` is redundant with the IR (design
-/// doc §6, step 5) and this is where it is recomputed — the walker hands over
-/// slots, and the names come from the declaration.
+/// One instruction chain as the emitters' model: slots, tags and callee
+/// *names*. The spec expressions this used to derive alongside are the
+/// certificate renderer's now (docs/certgen-cert-expression-design.md §3), so
+/// what is left is the structure the chain renderer, the closure computation
+/// and the fixture evaluator read — plus the environment-depth check, which
+/// stays because a reference past the environment is a misread value, not a
+/// naming question.
 fn chain_from_rir(
     ir: &RIr,
     name: &str,
     callees: &[String],
-    env: Vec<String>,
+    depth: usize,
 ) -> Result<Chain, String> {
-    let mut specs = env;
+    let mut depth = depth;
     let mut instrs = Vec::new();
     let mut has_self_call = false;
     let mut cur = ir;
+    let inrange = |d: u64, depth: usize| -> Result<usize, String> {
+        ((d as usize) < depth)
+            .then_some(d as usize)
+            .ok_or_else(|| "an instruction reading past the environment".to_string())
+    };
     loop {
         match cur {
             RIr::Ret(rs) => {
                 let [d] = rs[..] else {
                     return Err("a `Ret` with other than one output".into());
                 };
-                let ret_spec = specs
-                    .get(d as usize)
-                    .ok_or("a `Ret` reading past the environment")?
-                    .clone();
-                return Ok(Chain {
-                    instrs,
-                    ret_dist: d as usize,
-                    ret_spec,
-                    has_self_call,
-                });
+                return Ok(Chain { instrs, ret_dist: inrange(d, depth)?, has_self_call });
             }
             RIr::LetCon { tag, args, rest } => {
-                let dists: Vec<usize> = args.iter().map(|d| *d as usize).collect();
-                let spec = match tag {
-                    0 => "Zero".to_string(),
-                    1 => {
-                        let a = specs
-                            .get(dists[0])
-                            .ok_or("a `Succ` reading past the environment")?;
-                        format!("Succ({a})")
-                    }
-                    other => return Err(format!("constructor tag {other} is not a `Nat`")),
-                };
-                instrs.push(Instr::Con { tag: *tag, dists, spec: spec.clone() });
-                specs.insert(0, spec);
+                if !matches!(tag, 0 | 1) {
+                    return Err(format!("constructor tag {tag} is not a `Nat`"));
+                }
+                let dists: Vec<usize> = args
+                    .iter()
+                    .map(|d| inrange(*d, depth))
+                    .collect::<Result<_, _>>()?;
+                instrs.push(Instr::Con { tag: *tag, dists });
+                depth += 1;
                 cur = rest;
             }
             RIr::LetCall { callee, args, rest } => {
@@ -1330,22 +1628,13 @@ fn chain_from_rir(
                         .map(String::as_str)
                         .ok_or("a callee tag outside the reflection table")?
                 };
-                let dists: Vec<usize> = args.iter().map(|d| *d as usize).collect();
-                let arg_specs: Vec<String> = dists
+                let dists: Vec<usize> = args
                     .iter()
-                    .map(|d| {
-                        specs.get(*d).cloned().ok_or("a call reading past the environment")
-                    })
+                    .map(|d| inrange(*d, depth))
                     .collect::<Result<_, _>>()?;
-                let spec = format!("{cname}({})", arg_specs.join(", "));
                 has_self_call |= *callee == 0;
-                instrs.push(Instr::Call {
-                    callee: cname.to_string(),
-                    dists,
-                    arg_specs,
-                    spec: spec.clone(),
-                });
-                specs.insert(0, spec);
+                instrs.push(Instr::Call { callee: cname.to_string(), dists });
+                depth += 1;
                 cur = rest;
             }
             RIr::LetMatch { .. } => {
@@ -1375,18 +1664,18 @@ fn fn_ir_from_rir(
                 return Err("a `LetMatch` with other than two arms is not a `Nat` match"
                     .into());
             };
-            let zc = chain_from_rir(zero, name, callees, base_specs(&params, false))?;
+            let zc = chain_from_rir(zero, name, callees, params.len())?;
             if zc.has_self_call {
                 return Err("a self-call in the Zero arm cannot be structural".into());
             }
-            let sc = chain_from_rir(succ, name, callees, base_specs(&params, true))?;
+            let sc = chain_from_rir(succ, name, callees, params.len() + 1)?;
             Ok(FnIr {
                 params,
                 kind: FnIrKind::Rec(RecIr { rec_idx: *scrut as usize, zero: zc, succ: sc }),
             })
         }
         _ => {
-            let c = chain_from_rir(ir, name, callees, base_specs(&params, false))?;
+            let c = chain_from_rir(ir, name, callees, params.len())?;
             if c.has_self_call {
                 return Err("a self-call outside a match is outside the fragment".into());
             }
@@ -1396,8 +1685,9 @@ fn fn_ir_from_rir(
 }
 
 /// Generate for `d`: the elaborator marks `d`'s elaborated body, the
-/// registered analyzer walks it, and its `Ir` is read back into the model the
-/// emitters consume.
+/// registered analyzer walks it, its `Ir` is read back into the model the
+/// emitters consume, and the in-language fold turns that same `Ir` into the
+/// certificate expression they render.
 ///
 /// `d` must already be elaborated into `e` (it is an ordinary declaration) —
 /// the analysis reads Ψ, not the AST, and a fn the elaborator has not seen has
@@ -1437,8 +1727,14 @@ pub fn generate_in_language(
     if arity != names.len() {
         return Err("the elaborated body's arity disagrees with the declaration".into());
     }
-    let rir = run_transcriber(e, arity, body.code)?;
+    let (rir, ir) = run_transcriber(e, arity, body.code)?;
     let params: Vec<String> = names.iter().map(|s| s.to_string()).collect();
     let model = fn_ir_from_rir(&rir, f, &body.callees, &params)?;
-    emit_with_model(f, arity, model, ctx)
+    // The certificate FOLD, over the same `Ir` value the model came from
+    // (docs/certgen-cert-expression-design.md): which kit lemma applies where,
+    // and whether a call consumes the induction hypothesis, is decided in
+    // `lib/certgen_cert.hthr`; what comes back is a certificate expression the
+    // emitters render.
+    let cert = run_cert_fold(e, ir, &body.callees)?;
+    emit_with_model(f, arity, model, cert, ctx)
 }
