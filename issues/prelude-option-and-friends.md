@@ -3,7 +3,7 @@ title: Option/Result/List in the prelude, with helpers and chaining
 status: open
 labels: [frontend,stdlib,elaboration,design]
 created: 2026-07-31
-updated: 2026-08-07
+updated: 2026-08-13
 ---
 
 From the first real library file ([[ir-simulate-design]], lib/ir_v1.hthr):
@@ -90,3 +90,5 @@ closure is now checked by `crates/elab/tests/lib_algebra.rs` and
 
 Layer 2 (`?`-chaining, the `gather` shape) is untouched and remains this
 issue's open scope.
+- 2026-08-13: Verdict from the showcase critique (2026-08-13) on implicit Ok-wrapping (moving `Ok` out of every arm of a Result-returning body): NOT global T -> Result<T,_> coercion — it makes the elaborated term diverge from the written term (which is what refl unfolds, diagnostics print, and theorems are stated over; diagnostics-name-the-written-form is this wound already), and coercion in checking position is ambiguous exactly when T is itself a Result (the nested-Result footgun). The acceptable middle if the pattern proves common: an opt-in per-fn marker (try-fn shape) where the body checks at T, `?` marks failure, and wrapping is declared at the one declaration site. Rides with whatever [[effects-direction]] decides for Result-as-effect; wire the two when either moves.
+- 2026-08-13: Also filed off the same critique: [[inline-enum-types]] — per-signature anonymous enums so narrow error types are cheap to declare; the `?` embedding story there is From-style and lands in this issue's chaining kit if taken.

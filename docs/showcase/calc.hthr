@@ -1,0 +1,152 @@
+// `calc` — the REALIZED showcase (docs/showcase/README.md).
+//
+// A tiny arithmetic expression language, a compiler from it to an RPN stack
+// machine, and the proof that the compiler is correct: the project's thesis
+// in miniature, written to the limit of what the surface supports today
+// (2026-08-13). Its idealized twin is `idealized.hthr` in this directory —
+// same program, written in the language we *want* — and the README maps each
+// gap between the two files to the issue that owns it.
+//
+// Check with:
+//   (ulimit -v 8388608 -t 120; \
+//    target/release/heather check -L lib/std docs/showcase/calc.hthr)
+
+import nat;
+import list;
+import option;
+import bool;
+import algebra;
+
+// ---------------------------------------------------------------------------
+// Multiplication. `std/nat` stops at `add`; recursing on the second argument
+// keeps the same lemma economy `add` has.
+
+fn mul(a, b: Nat) -> Nat {
+    match b { Zero => 0, Succ(k) => mul(a, k) + a }
+}
+
+designation * at Nat := mul
+
+// ---------------------------------------------------------------------------
+// The source language and its meaning. `eval` is the specification: the
+// mathematics the compiled program is measured against.
+
+inductive Expr { Lit(n: Nat), Plus(l: Expr, r: Expr), Times(l: Expr, r: Expr) }
+
+fn Expr::eval(self e: Expr) -> Nat {
+    match e {
+        Lit(n) => n,
+        Plus(l, r) => l.eval() + r.eval(),
+        Times(l, r) => l.eval() * r.eval(),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The target: an RPN stack machine. A program is a token list; the stack is a
+// `List<Nat>`; an operator on a short stack is an honest `None`, not a junk
+// value.
+
+inductive Tok { TPush(n: Nat), TAdd, TMul }
+
+fn step_tok(t: Tok, s: List<Nat>) -> Option<List<Nat>> {
+    match t {
+        TPush(n) => Some(Cons(n, s)),
+        TAdd => match s { Cons(b, Cons(a, s2)) => Some(Cons(a + b, s2)), _ => None },
+        TMul => match s { Cons(b, Cons(a, s2)) => Some(Cons(a * b, s2)), _ => None },
+    }
+}
+
+// Curried in the stack for the usual reason: the recursion descends on the
+// code while the stack varies, so the varying argument is returned as a
+// function (the shape `std/list`'s `nth` documents).
+fn run(toks: List<Tok>) -> List<Nat> -> Option<List<Nat>> {
+    match toks {
+        Nil => λ (s: List<Nat>) => Some(s),
+        Cons(t, rest) => λ (s: List<Nat>) =>
+            match step_tok(t, s) { None => None, Some(s2) => run(rest)(s2) },
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The compiler. Left operand first, then right, then the operator — so the
+// right operand is on top when the operator pops.
+
+fn compile(e: Expr) -> List<Tok> {
+    match e {
+        Lit(n) => Cons(TPush(n), Nil),
+        Plus(l, r) => compile(l) ++ compile(r) ++ Cons(TAdd, Nil),
+        Times(l, r) => compile(l) ++ compile(r) ++ Cons(TMul, Nil),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Correctness. One congruence lemma (the position the rewrite has to reach),
+// then the strengthened statement — compiled code runs in *any* continuation
+// against *any* stack — and the theorem anyone would quote as a corollary.
+
+theorem cong_run({a: List<Tok>}, {b: List<Tok>}, p: a = b, s: List<Nat>):
+    run(a)(s) = run(b)(s)
+{
+    j(p, λ y q => run(a)(s) = run(y)(s), refl)
+}
+
+// `rest` and `s` vary with the recursion, so the statement returns a function
+// of them (issues/ih-generalization.md's workaround) and every use of the
+// induction hypothesis is an over-application.
+theorem compile_pushes_eval(e: Expr): (rest: List<Tok>, s: List<Nat>) ->
+    run(compile(e) ++ rest)(s) = run(rest)(Cons(e.eval(), s))
+{
+    match e {
+        Lit(n) => λ rest s => {},
+        Plus(l, r) => λ rest s => calc {
+            run((compile(l) ++ compile(r) ++ Cons(TAdd, Nil)) ++ rest)(s)
+                = run(compile(l) ++ ((compile(r) ++ Cons(TAdd, Nil)) ++ rest))(s)
+                    := cong_run(append_assoc(compile(l), compile(r) ++ Cons(TAdd, Nil), rest), s),
+                = run((compile(r) ++ Cons(TAdd, Nil)) ++ rest)(Cons(l.eval(), s))
+                    := compile_pushes_eval(l, (compile(r) ++ Cons(TAdd, Nil)) ++ rest, s),
+                = run(compile(r) ++ Cons(TAdd, rest))(Cons(l.eval(), s))
+                    := cong_run(append_assoc(compile(r), Cons(TAdd, Nil), rest), Cons(l.eval(), s)),
+                = run(rest)(Cons(l.eval() + r.eval(), s))
+                    := compile_pushes_eval(r, Cons(TAdd, rest), Cons(l.eval(), s)),
+        },
+        Times(l, r) => λ rest s => calc {
+            run((compile(l) ++ compile(r) ++ Cons(TMul, Nil)) ++ rest)(s)
+                = run(compile(l) ++ ((compile(r) ++ Cons(TMul, Nil)) ++ rest))(s)
+                    := cong_run(append_assoc(compile(l), compile(r) ++ Cons(TMul, Nil), rest), s),
+                = run((compile(r) ++ Cons(TMul, Nil)) ++ rest)(Cons(l.eval(), s))
+                    := compile_pushes_eval(l, (compile(r) ++ Cons(TMul, Nil)) ++ rest, s),
+                = run(compile(r) ++ Cons(TMul, rest))(Cons(l.eval(), s))
+                    := cong_run(append_assoc(compile(r), Cons(TMul, Nil), rest), Cons(l.eval(), s)),
+                = run(rest)(Cons(l.eval() * r.eval(), s))
+                    := compile_pushes_eval(r, Cons(TMul, rest), Cons(l.eval(), s)),
+        },
+    }
+}
+
+// `rest := Nil` is free strength: compiled code cannot underflow from ANY
+// starting stack — the discipline the negative control below pokes at, as a
+// theorem.
+theorem compile_never_underflows(e: Expr, s: List<Nat>):
+    run(compile(e))(s) = Some(Cons(e.eval(), s))
+{
+    calc {
+        run(compile(e))(s)
+            = run(compile(e) ++ Nil)(s) := cong_run(sym(append_nil(compile(e))), s),
+            = Some(Cons(e.eval(), s)) := compile_pushes_eval(e, Nil, s),
+    }
+}
+
+theorem compile_correct(e: Expr): run(compile(e))(Nil) = Some(Cons(e.eval(), Nil)) {
+    compile_never_underflows(e, Nil)
+}
+
+// ---------------------------------------------------------------------------
+// The calculator calculating: 2 + 3 * 4, by kernel computation alone. And the
+// negative control: the machine refuses a program the compiler would never
+// emit, rather than inventing an answer.
+
+theorem calc_demo():
+    run(compile(Plus(Lit(2), Times(Lit(3), Lit(4)))))(Nil) = Some(Cons(14, Nil))
+{ refl }
+
+theorem underflow_is_honest(): run(Cons(TAdd, Nil))(Nil) = None { refl }

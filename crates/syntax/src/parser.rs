@@ -2105,7 +2105,14 @@ impl Parser {
             TokKind::PipePipe => Some(("||", 1, 2)),
             TokKind::AmpAmp => Some(("&&", 3, 4)),
             TokKind::Plus => Some(("+", 5, 6)),
-            TokKind::PlusPlus => Some(("++", 5, 6)),
+            // `++` is RIGHT-associative (`left_bp > right_bp`), unlike its
+            // rung-mates: fixity is proof-relevant here. `a ++ (b ++ c)` is
+            // the shape `append`'s recursion unfolds against and the shape
+            // every append lemma is stated in; the left-nested reading walks
+            // `a` twice and meets no lemma head-on. `::`-style list notation,
+            // when it lands, is right-associative by necessity, so the list
+            // family reads uniformly (docs/showcase/README.md, friction 2).
+            TokKind::PlusPlus => Some(("++", 6, 5)),
             TokKind::Star => Some(("*", 7, 8)),
             // `∙` sits on the multiplicative rung, which is where
             // issues/notation-extensibility.md's precedence-by-class scheme
@@ -3096,11 +3103,28 @@ mod tests {
     #[test]
     fn append_symbol_is_a_two_byte_infix_at_additive_precedence() {
         // No whitespace: the lexer must claim `++` before either `+` can be
-        // emitted. It shares `+`'s left-associative precedence rung.
+        // emitted. It sits on `+`'s rung but is RIGHT-associative (the fixity
+        // table says why: fixity is proof-relevant, and append lemmas are
+        // stated right-nested), so in the mixed spelling `++` takes the whole
+        // `+`-expression as its tail. Mixing the two is type-nonsense either
+        // way; what this pins is that `++` lexed at all and where it binds.
         let k = body("a++b + c");
         let (name, args, _) = as_call(&k);
-        assert_eq!(name, "+");
-        assert_eq!(as_call(&args[0].kind).0, "++");
+        assert_eq!(name, "++");
+        assert_eq!(as_call(&args[1].kind).0, "+");
+    }
+
+    #[test]
+    fn append_symbol_chains_right_associatively() {
+        // `a ++ b ++ c` is `a ++ (b ++ c)`: the shape `append`'s recursion
+        // unfolds against and the shape every append lemma is stated in
+        // (docs/showcase/README.md, friction 2).
+        let k = body("a ++ b ++ c");
+        let (name, args, _) = as_call(&k);
+        assert_eq!(name, "++");
+        let (inner, inner_args, _) = as_call(&args[1].kind);
+        assert_eq!(inner, "++");
+        assert_eq!(inner_args.len(), 2);
     }
 
     #[test]

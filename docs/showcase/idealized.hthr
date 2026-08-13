@@ -1,0 +1,222 @@
+// `calc` — the IDEALIZED showcase (docs/showcase/README.md).
+//
+// This file does NOT check, deliberately: it is the same program as
+// `calc.hthr` written in the language we are trying to build, as of
+// 2026-08-13's understanding of it. Every construct here that the realized
+// twin cannot write is mapped to its owning issue in the README — when a
+// line of this file starts checking, a lego brick landed. Critique freely:
+// this is the file whose job is to be argued with.
+//
+// The program: a shell calculator. `calc "2 + 3 * 4"` prints `14`, the
+// arithmetic runs as certified machine code, and the parts you can prove
+// things about are proved.
+
+import std::prelude;        // Option/Result/List/String, ?, operators, derive
+
+// ---------------------------------------------------------------------------
+// The source language and its meaning. `eval` is kerneltime mathematics: the
+// specification the compiled artifact is measured against, never itself run
+// on hardware.
+
+inductive Expr {
+    Lit(n: Nat),
+    Plus(l, r: Expr),               // shared annotation in constructor fields
+    Times(l, r: Expr),
+}
+
+fn Expr::eval(self e: Expr) -> Nat {
+    match e {
+        Lit(n) => n,
+        Plus(l, r) => l.eval() + r.eval(),
+        Times(l, r) => l.eval() * r.eval(),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Parsing: tokens, then precedence climbing. Ordinary programming — Result,
+// `?`-chaining, let-else — with the recursion's measure stated where it is
+// not structural, instead of contorting the function until it is.
+
+inductive PTok { TNum(n: Nat), TPlusSym, TStarSym, TOpen, TClose }
+
+inductive ParseError { Unexpected(c: Char), BadParen, Trailing }
+
+fn tokenize(src: String) -> Result<List<PTok>, ParseError> {
+    match src.chars() {
+        [] => Ok([]),
+        [c, ..rest] if c.is_digit() => {
+            let (n, rest2) = take_number(c, rest);
+            Ok(TNum(n) :: tokenize(rest2)?)
+        },
+        ['+', ..rest] => Ok(TPlusSym :: tokenize(rest)?),
+        ['*', ..rest] => Ok(TStarSym :: tokenize(rest)?),
+        ['(', ..rest] => Ok(TOpen :: tokenize(rest)?),
+        [')', ..rest] => Ok(TClose :: tokenize(rest)?),
+        [' ', ..rest] => tokenize(rest),
+        [c, ..] => Err(Unexpected(c)),
+    }
+}
+
+// `atom < factor < expr`, mutually recursive, decreasing on the token list —
+// the measure names why it terminates, the checker verifies the claim.
+fn parse_expr(ts: List<PTok>) -> Result<(Expr, List<PTok>), ParseError>
+    decreases ts.len()
+{
+    let (lhs, rest) = parse_factor(ts)?;
+    match rest {
+        TPlusSym :: rest2 => {
+            let (rhs, rest3) = parse_expr(rest2)?;
+            Ok((Plus(lhs, rhs), rest3))
+        },
+        _ => Ok((lhs, rest)),
+    }
+}
+
+fn parse_factor(ts: List<PTok>) -> Result<(Expr, List<PTok>), ParseError>
+    decreases ts.len()
+{ … }                                // TStarSym, same shape one level down
+
+fn parse_atom(ts: List<PTok>) -> Result<(Expr, List<PTok>), ParseError>
+    decreases ts.len()
+{ … }                                // TNum, and TOpen ... TClose
+
+// The same lexer as a rule table — `tokenize` is an unfold whose every arm
+// is "recognize a prefix, emit at most one token, recurse on a strictly
+// smaller suffix". A `lex` driver owns that shape once: the termination
+// argument ("every rule consumes ≥ 1 char") and the generic lemmas (e.g.
+// lexing distributes over concatenation away from rule boundaries) are
+// proved about the driver, and every table inherits them:
+//
+//   fn calc_rules() -> List<LexRule<PTok>> {
+//       [ rule(Char::is_digit, λ span => TNum(read_number(span))),
+//         lit("+", TPlusSym), lit("*", TStarSym),
+//         lit("(", TOpen),    lit(")", TClose),
+//         skip(" ") ]
+//   }
+//
+//   fn tokenize(src: String) -> Result<List<PTok>, ParseError> {
+//       lex(calc_rules(), src)
+//   }
+
+fn parse(src: String) -> Result<Expr, ParseError> {
+    let (e, rest) = parse_expr(tokenize(src)?)?;
+    let [] = rest else { return Err(Trailing) };
+    Ok(e)
+}
+
+// ---------------------------------------------------------------------------
+// The target: an RPN stack machine. An operator on a short stack is an honest
+// `None`, not a junk value.
+
+inductive Tok { TPush(n: Nat), TAdd, TMul }
+
+fn step_tok(t: Tok, s: List<Nat>) -> Option<List<Nat>> {
+    match t {
+        TPush(n) => Some(n :: s),
+        TAdd => { let b :: a :: s2 = s else { return None }; Some(a + b :: s2) },
+        TMul => { let b :: a :: s2 = s else { return None }; Some(a * b :: s2) },
+    }
+}
+
+// Two arguments, one decreasing: the machine walks the code while the stack
+// varies. No currying, no returned-function statement — the termination
+// checker takes "decreasing in `toks`" and the elaborator generalizes the
+// rest.
+fn run(toks: List<Tok>, s: List<Nat>) -> Option<List<Nat>> {
+    match toks {
+        [] => Some(s),
+        t :: rest => run(rest, step_tok(t, s)?),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The compiler, and its correctness. The strengthened statement is the classic
+// one; the proof is the induction and *nothing else* — congruence is inferred
+// from the goal's shape, the `++` reassociations are the `Monoid<List<_>>`
+// instance's laws applied where they obviously fire, and each step names only
+// the fact that carries it.
+
+fn compile(e: Expr) -> List<Tok> {
+    match e {
+        Lit(n) => [TPush(n)],
+        Plus(l, r) => compile(l) ++ compile(r) ++ [TAdd],
+        Times(l, r) => compile(l) ++ compile(r) ++ [TMul],
+    }
+}
+
+theorem compile_pushes_eval(e: Expr, rest: List<Tok>, s: List<Nat>):
+    run(compile(e) ++ rest, s) = run(rest, e.eval() :: s)
+{
+    match e {                        // `rest`, `s` generalized per the IH's use
+        Lit(n) => {},
+        Plus(l, r) => calc {
+            run((compile(l) ++ compile(r) ++ [TAdd]) ++ rest, s)
+                = run(compile(r) ++ [TAdd] ++ rest, l.eval() :: s)   := compile_pushes_eval(l),
+                = run([TAdd] ++ rest, r.eval() :: l.eval() :: s)      := compile_pushes_eval(r),
+                = run(rest, (l.eval() + r.eval()) :: s)               := {},
+        },
+        Times(l, r) => calc {
+            run((compile(l) ++ compile(r) ++ [TMul]) ++ rest, s)
+                = run([TMul] ++ rest, r.eval() :: l.eval() :: s)      := [compile_pushes_eval(l), compile_pushes_eval(r)],
+                = run(rest, (l.eval() * r.eval()) :: s)               := {},
+        },
+    }
+}
+
+theorem compile_never_underflows(e: Expr, s: List<Nat>):
+    run(compile(e), s) = Some(e.eval() :: s)
+{ compile_pushes_eval(e, [], s) }             // `xs ++ [] = xs` fires from the instance
+
+theorem compile_correct(e: Expr): run(compile(e), []) = Some([e.eval()]) {
+    compile_never_underflows(e, [])
+}
+
+// Before anyone pays for a proof, the conjecture that is *false* dies in
+// milliseconds at the shell instead of hours in a proof state:
+//
+//   $ heather disprove 'forall (e: Expr) (s: List<Nat>).
+//                         run(compile(e), s) = run(compile(e), [])'
+//   counterexample: e := Lit(0), s := [0]
+
+theorem calc_demo(): parse("2 + 3 * 4").map(Expr::eval) = Ok(14) { refl }
+
+// ---------------------------------------------------------------------------
+// Across the boundary. Everything above is kerneltime; nothing above ever
+// runs on hardware. What runs is chosen here — and every choice carries a
+// certificate, so it is an *operational* decision, never a semantic one.
+
+// Representation: the kernel's unary `Nat` and linked `List` are spec
+// objects. The runtime representations are picked per type, linked to the
+// spec constructors by certified refinement. Naive tree representations are
+// always derivable as a fallback; these two are the smarter choices.
+datarepr Nat = repr::BigNat;         // limbs; + and * are the fast algorithms
+datarepr List<A> = repr::Vec<A>;     // contiguous, refined from Cons/Nil
+
+// Compilation: the certifying generator reads a function's code and emits IR
+// *plus the proof it agrees with the function*. The generator is untrusted —
+// heuristic, incomplete, replaceable — because every output is kernel-
+// checked; a function it cannot handle is declined, never miscompiled. An
+// instance is an ordinary value a meta-function computes (no `derive`
+// magic), and the target is a *description record*, not a tag: an instance
+// may be generic over its facts ("any 64-bit LE target"), and a
+// cross-compile holds instances at several targets at once.
+instance Compile<X64> for eval := derive_runtime_fn(eval);   // tier-1 recursion over Expr
+instance Compile<X64> for run := derive_runtime_fn(run);     // and over List<Tok>
+
+// ...or write none of these: the compiler's walk from `main` demands
+// `Compile` at every call-graph node and a default deriving rule tries the
+// generator wherever no hand instance is in scope. Writing one explicitly is
+// an eager assertion — "this must compile; tell me at this line if not".
+
+// `main` is special only to the compiler (itself a kerneltime library): it
+// walks the call graph, resolves the `Compile` and `datarepr` instances in
+// scope at each site, and links their certified IR. Effects stay at this rim.
+runtime_fn main(args: List<String>) -> IO<Unit> {
+    let Some(src) = args.nth(1) else {
+        return println("usage: calc \"<expr>\"");
+    };
+    match parse(src) {
+        Err(err) => println("parse error: {err}"),
+        Ok(e) => println("{src} = {e.eval()}"),
+    }
+}

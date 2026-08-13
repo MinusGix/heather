@@ -3,7 +3,7 @@ title: Datarepr: kernel representation vs runtime representation
 status: open
 labels: [compiler,design,runtime]
 created: 2026-07-24
-updated: 2026-07-24
+updated: 2026-08-13
 ---
 
 
@@ -76,3 +76,7 @@ owned by [[compile-typeclass-design]]; `simulate`/IR by
   declaration the same way?
 - Default instances: derived naive representation for every inductive, so
   `runtime_fn` works out of the box before anyone hand-tunes?
+
+## Log
+
+- 2026-08-13: Two notes from the showcase critique (2026-08-13). (1) The open item "default instances: derived naive representation for every inductive" is confirmed wanted, but naive need not be the DEFAULT — the default may be a smarter auto-pick; spelling sketched as `datarepr List<A> = repr::inductive_repr();` where a meta-program inspects the declaration and picks (e.g. linear vec for list-shaped, boxed tree only as fallback) — consistent with generators-in-the-language. Even naive Nat can beat unary by a general induction-pattern recognizer without reaching for GMP. (2) The iterator question landed here: [[iterators-as-list-repr]] — iterators as a lazy repr of List with certified fusion, spec side stays List; its open half is API-naturality (cost-honest signatures per repr).
