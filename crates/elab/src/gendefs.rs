@@ -85,6 +85,26 @@ pub(crate) enum GenDef {
     /// declaration's **own** lowering. The two boundaries differ too — see
     /// [`Elaborator::register_ty_code`].
     TyCode(u32),
+    /// `D#shape : Trm_c(· ⊢ Ty l)` — a **recursive** declaration's `Wf`
+    /// **shape component** (the sum-of-Σs with the recursive fields deleted),
+    /// consumed as `El (D#shape^δ)` in a `Supf`/`ElimWf`/`Type::Wf` shape slot
+    /// (`docs/wf-shape-code-design.md` §2). Keyed by the declaration's tag.
+    ///
+    /// Deliberately *not* [`GenDef::TyCode`]: that names `⟦D⟧ = Wf(S). n`
+    /// whole, and no reference to the whole can stand in a slot that holds the
+    /// **component** — which is exactly why
+    /// [[wf-shape-annotation-slots]] outlived the whole-type code round.
+    ShapeCode(u32),
+    /// `D#arity : Π(x : El (D#shape^δ)). Nat` — the same declaration's `Wf`
+    /// **arity term**, λ-abstracted over the shape binder it is scoped under,
+    /// consumed as `app(D#arity^δ; x₀)` in an arity slot (design §2).
+    ///
+    /// A *function*, not a code: the arity slot holds a `Term` in the extended
+    /// context, and the only closed thing that can stand there and reduce back
+    /// to `n` is an application of a definition to the binder. It is the
+    /// larger of the two slots by several times, measured, which is why it is
+    /// named at all rather than left as this issue's opening sentence had it.
+    ArityFn(u32),
     /// `D#fam : Trm_c(· ⊢ Π(i : I). Ty l)` — a **route-1** indexed
     /// declaration's family function, consumed as `El l (D#fam^δ i)` (design
     /// §6). Keyed by the indexed declaration's tag. Route 1's family *is* a
@@ -105,9 +125,33 @@ impl GenDef {
             GenDef::IdxCode(_) => format!("{owner}#icode"),
             GenDef::SkelCode(_) => format!("{owner}#code"),
             GenDef::TyCode(_) => format!("{owner}#tycode"),
+            GenDef::ShapeCode(_) => format!("{owner}#shape"),
+            GenDef::ArityFn(_) => format!("{owner}#arity"),
             GenDef::Fam(_) => format!("{owner}#fam"),
         }
     }
+}
+
+/// The guard copies of one declaration's `Wf` slot pair
+/// (`docs/wf-shape-code-design.md` §2.3).
+#[derive(Clone)]
+pub(crate) struct WfSlots {
+    /// The shape as `lower_instance` writes it: the raw sum-of-Σs.
+    shape: Rc<Type>,
+    /// The shape as a *decode* of the whole-type code writes it —
+    /// `El ⌜S⌝`, the lazy reduct of `El (D#tycode^δ)`
+    /// (`reduce.rs`'s `TmWf` rule). A value built at a **respelled expected
+    /// type** arrives with this spelling and no other, which is why the guard
+    /// takes two copies and not one: with only the inline copy the whole
+    /// constructor-value site — the one the measurement put first — declines
+    /// silently. Measured: statements did not move at all until this was
+    /// added.
+    shape_decoded: Rc<Type>,
+    /// The arity term, identical under both spellings (`code_of` keeps a
+    /// term slot verbatim, and the decode hands it back unchanged).
+    arity: Rc<Term>,
+    /// The declaration's level, which is also its shape's.
+    level: Level,
 }
 
 /// The registry: the two directions, kept in step by [`Elaborator::push_gen_def`].
@@ -136,6 +180,18 @@ pub(crate) struct GenDefs {
     /// unparameterized declarations, so this can only ever *decline*; it costs
     /// one structural comparison per `match` and buys the property outright.)
     ty_code: HashMap<u32, (Rc<Type>, Level)>,
+    /// Per declaration tag with a registered [`GenDef::ShapeCode`] **and**
+    /// [`GenDef::ArityFn`], the **inline** `Wf` slot pair the two were minted
+    /// from and the declaration's level.
+    ///
+    /// The pair is the use-site guard, exactly as [`GenDefs::ty_code`]'s copy
+    /// is: [`Elaborator::wf_slot_refs`] hands out the references only when the
+    /// slots in front of it are structurally *those* slots, so a reference can
+    /// never stand for a shape it does not decode to. Both entries are written
+    /// together or not at all — a spelled shape with an inline arity would be
+    /// correct but is never useful, and the pairing is what lets every use
+    /// site ask one question (design §2.3).
+    wf_slots: HashMap<u32, WfSlots>,
 }
 
 impl Elaborator {
@@ -273,9 +329,119 @@ impl Elaborator {
             .push_gen_def(key, &ind.name, ty, Level::succ(l.clone()), body, span)
             .is_ok()
         {
-            self.gdefs.ty_code.insert(ind.tag, (Rc::new(d_ty), l));
+            self.gdefs.ty_code.insert(ind.tag, (Rc::new(d_ty.clone()), l.clone()));
+        }
+        self.register_wf_slots(ind, &d_ty, &l, span);
+    }
+
+    /// `D#shape := ⌜S⌝` and `D#arity := λ(x : El (D#shape^δ)). n`, for a
+    /// **recursive** declaration whose lowering is `Wf(x : S). n`
+    /// (`docs/wf-shape-code-design.md` §2.1). Runs off `register_ty_code`'s own
+    /// lowering, so it inherits that function's boundary verbatim
+    /// (unparameterized, unindexed, `tag_of`-routes-back) and the two
+    /// registrations always agree about what `⟦D⟧` is.
+    ///
+    /// Best-effort like every other piece here, and **all-or-nothing**: the
+    /// guard entry is written only when both definitions passed the gate, so a
+    /// half-registered pair can never hand out half a spelling.
+    fn register_wf_slots(&mut self, ind: &Rc<Inductive>, d_ty: &Type, l: &Level, span: Span) {
+        let Type::Wf { shape, arity, .. } = d_ty else {
+            // Non-recursive: a sum-of-Σs has no slots to name. `TyCode` is the
+            // whole story there.
+            return;
+        };
+        let skey = GenDef::ShapeCode(ind.tag);
+        let akey = GenDef::ArityFn(ind.tag);
+        if self.gdefs.by_key.contains_key(&skey) || self.gdefs.by_key.contains_key(&akey) {
+            return;
+        }
+        let Some(scode) = crate::code::code_of(shape) else { return };
+        if self
+            .push_gen_def(
+                skey,
+                &ind.name,
+                Type::Ty(l.clone()),
+                Level::succ(l.clone()),
+                scode.clone(),
+                span,
+            )
+            .is_err()
+        {
+            return;
+        }
+        // The λ's domain is the shape *reference* just registered: the arity
+        // definition is the one place where writing the shape out again would
+        // undo half of what this pair buys.
+        let cx = Cx::empty();
+        let Some(sref) = self.gen_type_ref(&cx, skey, l) else { return };
+        let ty = Type::Pi {
+            dom_level: l.clone(),
+            cod_level: Level::Zero,
+            dom: Rc::new(sref.clone()),
+            cod: Rc::new(Type::Nat),
+        };
+        let body = Term::Lam {
+            dom_level: l.clone(),
+            cod_level: Level::Zero,
+            dom: Rc::new(sref),
+            body: Rc::clone(arity),
+        };
+        if self
+            .push_gen_def(akey, &ind.name, ty, l.clone(), body, span)
+            .is_ok()
+        {
+            let shape_decoded = Rc::new(Type::El {
+                level: l.clone(),
+                tm: Rc::new(scode),
+            });
+            self.gdefs.wf_slots.insert(
+                ind.tag,
+                WfSlots {
+                    shape: Rc::clone(shape),
+                    shape_decoded,
+                    arity: Rc::clone(arity),
+                    level: l.clone(),
+                },
+            );
         }
     }
+
+    /// `El (D#shape^δ)` and `app(D#arity^δ; x₀)` for a `Wf`'s slot pair, if and
+    /// only if the pair in front of us **is** the one the two definitions were
+    /// minted from (design §2.3's guard). `None` is every emission site's cue
+    /// to keep the slots inline, exactly as before.
+    ///
+    /// The shape reference is scoped in `cx`; the arity reference is scoped one
+    /// binder deeper, because an arity slot is always read under the shape's
+    /// own binder (`x : S`) — that asymmetry is the whole of the bookkeeping
+    /// here, and getting it wrong is a kernel `SubstMismatch`, not a wrong
+    /// answer.
+    pub(crate) fn wf_slot_refs(&self, cx: &Cx, shape: &Type, arity: &Term) -> Option<(Type, Term)> {
+        if self.gdefs.wf_slots.is_empty() {
+            return None;
+        }
+        let ind = self.tag_of(shape)?;
+        let slots = self.gdefs.wf_slots.get(&ind.tag)?;
+        let l = &slots.level;
+        if (*slots.shape != *shape && *slots.shape_decoded != *shape)
+            || *slots.arity != *arity
+        {
+            return None;
+        }
+        let sref = self.gen_type_ref(cx, GenDef::ShapeCode(ind.tag), l)?;
+        let fun = self.gen_ref_deeper(cx, GenDef::ArityFn(ind.tag), 1)?;
+        let aref = Term::App {
+            fun: Rc::new(fun),
+            dom_level: l.clone(),
+            cod_level: Level::Zero,
+            dom: Rc::new(sref.shift_local(1)),
+            // `Nat` binds nothing, so the `App`'s codomain needs no shift.
+            cod: Rc::new(Type::Nat),
+            arg: Rc::new(Term::Var(LocalVar(0))),
+        };
+        Some((sref, aref))
+    }
+
 
     /// `El l (D#tycode^δ)` for `inline`, if and only if `inline` **is** the
     /// lowering `D#tycode` was minted from (design §1.3 + the guard note on
@@ -420,6 +586,27 @@ impl Elaborator {
             }
             _ => None,
         }
+    }
+
+    /// `El (D#tycode^δ)` back to the registry's inline `⟦D⟧`, at the head only
+    /// and in the **current** Ψ world (goal and meta padding included, which is
+    /// what [`Self::gen_def_of`] knows and [`Self::unspell_ty_deep`]'s explicit
+    /// anchor deliberately does not assume).
+    ///
+    /// This is the elaborator's `whnf` of a reference
+    /// (`docs/wf-shape-code-design.md` §3.3): δ+decode gives a type that is
+    /// *convertible* to the registry's copy but spelled `Wf(El ⌜S⌝). n`, and
+    /// the inline copy is the identity every structural reader and every
+    /// use-site guard is written against. Closed by construction, so nothing
+    /// is shifted.
+    pub(crate) fn unspell_here(&self, ty: &Type) -> Option<Type> {
+        if self.gdefs.ty_code.is_empty() {
+            return None;
+        }
+        let Type::El { tm, .. } = ty else { return None };
+        let Term::GlobalTm { var, .. } = &**tm else { return None };
+        let GenDef::TyCode(tag) = self.gen_def_of(*var)? else { return None };
+        self.gdefs.ty_code.get(&tag).map(|(inline, _)| (**inline).clone())
     }
 
     /// The **inverse** of [`Self::respell_ty_deep`], for the reflection
@@ -663,6 +850,14 @@ impl Elaborator {
     /// the definition was not registered, which is every emission site's cue
     /// to inline instead.
     pub(crate) fn gen_ref(&self, cx: &Cx, key: GenDef) -> Option<Term> {
+        self.gen_ref_deeper(cx, key, 0)
+    }
+
+    /// [`Self::gen_ref`] for an occurrence sitting `extra` binders past `cx` —
+    /// the substitution tail's length is the only thing that moves, since the
+    /// definition is closed and its Ψ index is context-independent. One caller:
+    /// the arity slot, which is always read under the shape's binder.
+    fn gen_ref_deeper(&self, cx: &Cx, key: GenDef, extra: u32) -> Option<Term> {
         let abs = *self.gdefs.by_key.get(&key)?;
         let len = self.psi.bindings.len() as u32;
         // Goals sit innermost, exactly as in `resolve` — and so do a
@@ -678,7 +873,7 @@ impl Elaborator {
             var,
             subst: LocalSubst {
                 tail: SubstTail::Empty {
-                    len: cx.gamma.entries.len() as u32,
+                    len: cx.gamma.entries.len() as u32 + extra,
                     base: cx.gamma.base,
                 },
                 terms: vec![],

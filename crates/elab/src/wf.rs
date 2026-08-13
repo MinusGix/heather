@@ -70,8 +70,22 @@ pub(crate) struct Tel<'a> {
     cs_ty: Type,
     ih_ty: Type,
     step_ty: Type,
-    /// The declaration's tag spine, scoped in `gamma0`.
+    /// The declaration's tag spine, scoped in `gamma0`. The **structural-read**
+    /// copy: `projection` reads a constructor's Σ components out of it and
+    /// `build_fields` checks against them.
     pub spine: Spine,
+    /// The same spine as it is **written into emitted terms**: every component
+    /// that is a registered declaration's lowering replaced by its reference
+    /// (`Elaborator::respell_spine`, the emission copy `build_ctor` has taken
+    /// at constructor values since the component-respell round).
+    ///
+    /// The match lowering was left out of that round by its charter, and this
+    /// round's counters are why it is in now: a `match` on a declaration whose
+    /// constructors carry a `Wf`-lowered field wrote that field type verbatim
+    /// into every `Case`, every `Inr` and every injection — Θ(arms²) copies of
+    /// `⟦T⟧`, and most of a lowered body's node mass, measured
+    /// (`docs/wf-shape-code-design.md` §3.4).
+    pub spine_emit: Spine,
 }
 
 impl Tel<'_> {
@@ -352,11 +366,16 @@ impl Elaborator {
         // reference's substitution tail with `cx`'s own length. Without it the
         // kernel answers `SubstMismatch` at every `match` — which is the good
         // failure mode, but a failure mode.
-        let motive = Rc::new(
-            self.respell_ty(cx, &motive)
-                .map(|t| t.shift_local(1))
-                .unwrap_or(motive),
-        );
+        //
+        // **Component-wise**, not whole-type only: a `fn` returning a function
+        // (`pick_arm(arms: Ir) -> Nat -> Ir`) has the motive `Π(Nat). ⟦Ir⟧`,
+        // which is not itself any declaration's lowering, and the whole-type
+        // respell declined on it — leaving the single largest type in the file
+        // written out at every instantiation of the motive. `depth` is 1, the
+        // motive's own `z` binder: `respell_ty_deep` shifts the *references* by
+        // it rather than the result, which is why this is not the
+        // `shift_local(1)` the whole-type version needed.
+        let motive = Rc::new(self.respell_ty_deep(cx, &motive, 1).unwrap_or(motive));
         // The one lookup: `El (D#tycode^δ)` if this declaration has a code and
         // `scrut_ty` *is* the lowering it was minted from, the inline type
         // otherwise. Everything emitted below reads `tel.d_emit`; the
@@ -364,9 +383,22 @@ impl Elaborator {
         let d_emit = self
             .ty_type_ref(cx, ind.tag, scrut_ty)
             .unwrap_or_else(|| scrut_ty.clone());
+        // The `Wf` slot pair as it is **written into emitted terms**
+        // (`docs/wf-shape-code-design.md` §3.2): `El (D#shape^δ)` and
+        // `app(D#arity^δ; x₀)` where this declaration has the pair registered,
+        // the inline slots otherwise. The structural reads a few lines down —
+        // `cx3`'s `#a` entry, `spine` — take `shape`/`arity` themselves, per
+        // §4's line.
+        let (shape_e, arity_e) = match self.wf_slot_refs(cx, shape, arity) {
+            Some((s, a)) => (Rc::new(s), Rc::new(a)),
+            None => (Rc::clone(shape), Rc::clone(arity)),
+        };
         let (cs_ty, ih_ty, step_ty) = heather_kernel::term::wf_step_telescope_at(
             &cx.gamma, level, &mlvl, shape, arity, &motive, &d_emit,
+            Some((&shape_e, &arity_e)),
         );
+        let spine = self.spine(scrut_ty, level, ind.ctors.len(), span)?;
+        let spine_emit = self.respell_spine(cx, &spine);
         let tel = Tel {
             gamma0: &cx.gamma,
             d_ty: scrut_ty,
@@ -374,7 +406,8 @@ impl Elaborator {
             level: level.clone(),
             mlvl: mlvl.clone(),
             motive: Rc::clone(&motive),
-            spine: self.spine(scrut_ty, level, ind.ctors.len(), span)?,
+            spine,
+            spine_emit,
             cs_ty,
             ih_ty,
             step_ty,
@@ -421,8 +454,8 @@ impl Elaborator {
         Ok(Term::ElimWf {
             level: tel.level.clone(),
             motive_level: tel.mlvl.clone(),
-            shape: Rc::clone(shape),
-            arity: Rc::clone(arity),
+            shape: shape_e,
+            arity: arity_e,
             motive,
             step: Rc::new(step),
             scrut: Rc::new(scrut),
@@ -506,11 +539,17 @@ impl Elaborator {
         }
         let ctor_lvl = tel.spine.ctors[j].1.clone();
         let tail_lvl = tel.spine.tails[j].1.clone();
-        let ctor_ty = Rc::new(tel.spine.ctors[j].0.shift_local(d));
-        let tail_ty = Rc::new(tel.spine.tails[j].0.shift_local(d));
+        // Emitted annotations (this `Case`'s two component types, the `Inr`
+        // below) take the emission spine; the *binder* types pushed into the
+        // elaborator's own context stay inline, so every structural read
+        // inside the branch still sees `⟦T⟧` itself (§4's line).
+        let ctor_ty = Rc::new(tel.spine_emit.ctors[j].0.shift_local(d));
+        let tail_ty = Rc::new(tel.spine_emit.tails[j].0.shift_local(d));
+        let ctor_ty_in = tel.spine.ctors[j].0.shift_local(d);
+        let tail_ty_in = tel.spine.tails[j].0.shift_local(d);
         // case_l: binder `x : ⟦c_j⟧`, body at `P_j[inl x/z]`.
         let mut lcx = cx.clone();
-        lcx.push("#scrut".into(), (*ctor_ty).clone(), ctor_lvl.clone());
+        lcx.push("#scrut".into(), ctor_ty_in, ctor_lvl.clone());
         let case_l = self.wf_branch(
             &lcx,
             ind,
@@ -525,7 +564,7 @@ impl Elaborator {
         // case_r: binder `y : R_{j+1}`; inside it, the next `Case`, whose
         // motive is `P_j` composed with `inr` and weakened past `y`.
         let mut rcx = cx.clone();
-        rcx.push("#rest".into(), (*tail_ty).clone(), tail_lvl.clone());
+        rcx.push("#rest".into(), tail_ty_in, tail_lvl.clone());
         // `inner = P_j[inr z']` over `(cx, y, z')` — **two** binders past `cx`,
         // not one: the `y` this branch binds *and* the inner `Case`'s own
         // motive binder. The substitution's `extra` says 2 and the injection's
@@ -540,8 +579,8 @@ impl Elaborator {
         let inr = Term::Inr {
             lhs_level: ctor_lvl.clone(),
             rhs_level: tail_lvl.clone(),
-            lhs: Rc::new(tel.spine.ctors[j].0.shift_local(d + 2)),
-            rhs: Rc::new(tel.spine.tails[j].0.shift_local(d + 2)),
+            lhs: Rc::new(tel.spine_emit.ctors[j].0.shift_local(d + 2)),
+            rhs: Rc::new(tel.spine_emit.tails[j].0.shift_local(d + 2)),
             val: Rc::new(Term::Var(LocalVar(0))),
         };
         let inner = motive.apply_local(&embed(&cx.gamma, 2).extended(Rc::new(inr)));
@@ -594,7 +633,9 @@ impl Elaborator {
         let m = ctor.arity();
         // The value's full injection into `S`, which is what the telescope's
         // `a` stands for in this branch.
-        let inj = Rc::new(inject(&tel.spine, i, ind.ctors.len(), (*value).clone(), d));
+        // The injection's own `Inl`/`Inr` annotations are emitted, so they take
+        // the emission spine — the same choice `build_ctor` makes at a value.
+        let inj = Rc::new(inject(&tel.spine_emit, i, ind.ctors.len(), (*value).clone(), d));
         let (cs_dom, ih_dom, body_ty) = tel.at(&inj, d);
 
         let mut bcx = cx.clone();
@@ -1413,6 +1454,185 @@ fn peel(t: T) -> T { match t { T0 => T0, T1(x, r) => r, T2(y, r) => T1(y, r) } }
 theorem wrong(): peel(T1(1, T0)) = T1(1, T0) { refl }
 ",
         );
+        assert!(r.is_err(), "a false equation must still be refused");
+    }
+
+    // -- the Wf slot pair (docs/wf-shape-code-design.md) --------------------
+
+    /// The registration boundary of the pair, which is narrower than
+    /// `TyCode`'s in one direction: a **non-recursive** declaration lowers to
+    /// a bare sum-of-Σs and has no slots to name at all.
+    #[test]
+    fn a_recursive_declaration_gets_a_shape_and_an_arity_and_a_flat_one_does_not() {
+        let e = env();
+        for name in ["T", "U"] {
+            let tag = e.ind(name).tag;
+            assert!(
+                e.el.gen_ref(&e.cx, GenDef::ShapeCode(tag)).is_some(),
+                "`{name}` should have a `#shape`"
+            );
+            assert!(
+                e.el.gen_ref(&e.cx, GenDef::ArityFn(tag)).is_some(),
+                "`{name}` should have a `#arity`"
+            );
+        }
+        // No `Wf`, no slots — `Flat` keeps its `#tycode` and nothing else.
+        assert!(e.el.gen_ref(&e.cx, GenDef::ShapeCode(e.ind("Flat").tag)).is_none());
+        assert!(e.el.gen_ref(&e.cx, GenDef::ArityFn(e.ind("Flat").tag)).is_none());
+        // …and the monomorphization boundary is `TyCode`'s, inherited.
+        assert!(e.el.gen_ref(&e.cx, GenDef::ShapeCode(e.ind("Box").tag)).is_none());
+    }
+
+    /// What the two references *are*, structurally, and that the `Wf` rebuilt
+    /// from them is the declaration's lowering (design §6's conservativity, at
+    /// the slots rather than the whole type).
+    #[test]
+    fn the_slot_references_are_the_shape_code_and_an_application_of_the_arity() {
+        let e = env();
+        let (t_ty, l) = e.lowered("T");
+        let Type::Wf { shape, arity, .. } = &t_ty else { panic!("T is recursive") };
+        let (sref, aref) = e
+            .el
+            .wf_slot_refs(&e.cx, shape, arity)
+            .expect("T's slots respell");
+        let Type::El { tm, .. } = &sref else { panic!("a shape slot takes `El` of a code") };
+        assert!(e.el.is_gen_ref(tm, GenDef::ShapeCode(e.ind("T").tag)));
+        // The arity is an *application* to the shape's own binder, because the
+        // slot is read one binder deep — §2.1's asymmetry, pinned.
+        let Term::App { fun, arg, .. } = &aref else {
+            panic!("an arity slot takes an application, not a code")
+        };
+        assert!(e.el.is_gen_ref(fun, GenDef::ArityFn(e.ind("T").tag)));
+        assert_eq!(**arg, Term::Var(LocalVar(0)));
+        let respelled = Type::Wf {
+            level: l.clone(),
+            shape: Rc::new(sref),
+            arity: Rc::new(aref),
+        };
+        assert!(e.el.conv_types(&e.cx, &respelled, &t_ty, &l));
+        assert!(e.el.conv_types(&e.cx, &t_ty, &respelled, &l));
+    }
+
+    /// The **decode look-alike** (design §2.3), which is the copy a naive
+    /// guard misses: `El (T#tycode^δ)` reduces to `Wf(El ⌜S⌝). n`, and a value
+    /// built at that expected type carries *that* shape spelling. The guard
+    /// must accept it, or the whole constructor-value site declines silently.
+    #[test]
+    fn the_decoded_shape_spelling_respells_too() {
+        let e = env();
+        let (t_ty, l) = e.lowered("T");
+        let Type::Wf { shape, arity, .. } = &t_ty else { panic!("T is recursive") };
+        let decoded_shape = Type::El {
+            level: l.clone(),
+            tm: Rc::new(crate::code::code_of(shape).expect("a shape has a code")),
+        };
+        // It really is the kernel's own reduct, not a hand-built look-alike.
+        let whole = e
+            .el
+            .respell_ty(&e.cx, &t_ty)
+            .expect("T's lowering respells");
+        let stepped = heather_kernel::reduce::whnf_type_delta(
+            &whole,
+            &e.cx.gamma,
+            heather_kernel::reduce::Defs::transparent(&e.el.psi),
+            e.el.fuel,
+        )
+        .expect("the reference reduces");
+        let Type::Wf { shape: s2, .. } = &stepped else { panic!("it reduces to a `Wf`") };
+        assert_eq!(**s2, decoded_shape);
+        assert!(e.el.wf_slot_refs(&e.cx, &decoded_shape, arity).is_some());
+    }
+
+    /// The look-alike negative, in this round's discipline: the shape names
+    /// `T` but the arity is **not** `T`'s. Without the pair comparison the
+    /// slots would be spelled with `T`'s references and the `Wf` would mean a
+    /// different type — a wrong annotation, not a rejection.
+    #[test]
+    fn a_wf_with_the_wrong_arity_declines() {
+        let e = env();
+        let (t_ty, _) = e.lowered("T");
+        let Type::Wf { shape, arity, .. } = &t_ty else { panic!("T is recursive") };
+        // Every label gets one more child than it should.
+        let bumped = Term::Succ(Rc::clone(arity));
+        assert!(e.el.wf_slot_refs(&e.cx, shape, &bumped).is_none());
+        // …and the mirror: `U`'s shape with `T`'s arity is not `U`'s pair.
+        let (u_ty, _) = e.lowered("U");
+        let Type::Wf { shape: ushape, .. } = &u_ty else { panic!("U is recursive") };
+        assert!(e.el.wf_slot_refs(&e.cx, ushape, arity).is_none());
+    }
+
+    /// A constructor **value** carries the references — the site the
+    /// 2026-08-13 re-attribution named, pinned structurally rather than
+    /// assumed, at a *literal* value (axis 1's first half).
+    #[test]
+    fn a_constructor_value_carries_the_slot_references() {
+        let mut e = env();
+        let before = e.el.psi.bindings.len();
+        e.el.elab_source("fn mk() -> T { T1(1, T0) }").expect("elaborates");
+        let GlobalBinding::Tm { body: Some(body), .. } =
+            e.el.psi.bindings.last().expect("a binding")
+        else {
+            panic!("a `fn` keeps its body")
+        };
+        let Term::Supf { shape, arity, .. } = &**body else {
+            panic!("a tier-1 value is a `sup_f`")
+        };
+        let grew = (e.el.psi.bindings.len() - before) as u32;
+        let Type::El { tm, .. } = &**shape else { panic!("the shape slot is the reference") };
+        assert!(e.el.is_gen_ref(&tm.shift_global(grew), GenDef::ShapeCode(e.ind("T").tag)));
+        let Term::App { fun, .. } = &**arity else {
+            panic!("the arity slot is the application")
+        };
+        assert!(e.el.is_gen_ref(&fun.shift_global(grew), GenDef::ArityFn(e.ind("T").tag)));
+    }
+
+    /// …and a `match` carries them in its `elim_Wf`, over a **neutral**
+    /// scrutinee (axis 1's second half).
+    #[test]
+    fn a_match_carries_the_slot_references_in_its_elim() {
+        let mut e = env();
+        let before = e.el.psi.bindings.len();
+        e.el
+            .elab_source("fn depth2(t: T) -> Nat { match t { T0 => 0, T1(x, r) => 1, T2(y, r) => 2 } }")
+            .expect("elaborates");
+        let GlobalBinding::Tm { body: Some(body), .. } =
+            e.el.psi.bindings.last().expect("a binding")
+        else {
+            panic!("a `fn` keeps its body")
+        };
+        let Term::Lam { body, .. } = &**body else { panic!("one parameter, one λ") };
+        let Term::ElimWf { shape, arity, .. } = &**body else {
+            panic!("tier 1 lowers to `elim_Wf`")
+        };
+        let grew = (e.el.psi.bindings.len() - before) as u32;
+        let Type::El { tm, .. } = &**shape else { panic!("the shape slot is the reference") };
+        assert!(e.el.is_gen_ref(&tm.shift_global(grew), GenDef::ShapeCode(e.ind("T").tag)));
+        let Term::App { fun, .. } = &**arity else { panic!("the arity slot is an application") };
+        assert!(e.el.is_gen_ref(&fun.shift_global(grew), GenDef::ArityFn(e.ind("T").tag)));
+    }
+
+    /// The four axes with the slot spelling in place, including the one the
+    /// slots are load-bearing for: a **container** field, whose branch arity is
+    /// `Succ^m(len)` read out of the label — the one place the arity term is
+    /// not a literal, so a mis-spelled arity slot shows up as a kernel
+    /// rejection here and nowhere else.
+    #[test]
+    fn the_slot_spelling_checks_and_computes_across_the_axes() {
+        let mut e = env();
+        e.el
+            .elab_source(
+                "
+inductive Rose { RNode(label: Nat, len: Nat, kids: [Rose; len]) }
+fn rlabel(r: Rose) -> Nat { match r { RNode(label, len, kids) => label } }
+fn rmk(n: Nat) -> Rose { RNode(n, 0, []) }
+theorem rlabel_literal(): rlabel(RNode(4, 0, [])) = 4 { refl }
+theorem rlabel_nonzero(): rlabel(RNode(4, 1, [RNode(1, 0, [])])) = 4 { refl }
+theorem rlabel_neutral(n: Nat): rlabel(RNode(n, 0, [])) = n { refl }
+theorem rmk_computes(): rlabel(rmk(9)) = 9 { refl }
+",
+            )
+            .expect("a container declaration elaborates with slot references");
+        let r = e.el.elab_source("theorem rlabel_wrong(): rlabel(RNode(4, 0, [])) = 5 { refl }");
         assert!(r.is_err(), "a false equation must still be refused");
     }
 }

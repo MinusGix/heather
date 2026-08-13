@@ -1553,7 +1553,7 @@ pub fn wf_step_telescope(
         shape: Rc::clone(shape),
         arity: Rc::clone(arity),
     };
-    wf_step_telescope_at(gamma, level, motive_level, shape, arity, motive, &wf)
+    wf_step_telescope_at(gamma, level, motive_level, shape, arity, motive, &wf, None)
 }
 
 /// [`wf_step_telescope`] with the two `Wf`-typed *annotation* positions —
@@ -1567,11 +1567,17 @@ pub fn wf_step_telescope(
 /// `match` lowering from carrying every field type verbatim through Θ(arms)
 /// copies ([[wf-field-conversion-cost]]).
 ///
-/// What `d_ty` does **not** reach: the `Supf` the step's type is stated at
-/// keeps `shape`/`arity` verbatim, because those are the former's own slots
-/// and not a type annotation ([[wf-shape-annotation-slots]] owns them). This
-/// function is therefore the only transcription of the telescope, still —
+/// What `d_ty` does **not** reach: the `Supf` the step's type is stated at,
+/// whose `shape`/`arity` are the former's own slots and not a type annotation.
+/// Those are `slots`' business — the elaborator passes
+/// `El (D#shape^δ)`/`app(D#arity^δ; x₀)` there
+/// (`docs/wf-shape-code-design.md` §3.2), and `None` keeps the caller's own
+/// `shape`/`arity`, which is what every kernel caller wants: `typing.rs` and
+/// `conv.rs` build the telescope *from* the slots of the term in front of
+/// them, so re-spelling there would be inventing a term the checker never saw.
+/// This function is therefore the only transcription of the telescope, still —
 /// `wf_step_telescope` is one call to it.
+#[allow(clippy::too_many_arguments)]
 pub fn wf_step_telescope_at(
     gamma: &LocalCtx,
     level: &Level,
@@ -1580,39 +1586,48 @@ pub fn wf_step_telescope_at(
     arity: &Rc<Term>,
     motive: &Rc<Type>,
     d_ty: &Type,
+    slots: Option<(&Rc<Type>, &Rc<Term>)>,
 ) -> (Type, Type, Type) {
     let wf = d_ty.clone();
+    // Every *arity* written below is an annotation like `d_ty` is — a `Vec`
+    // length, a `Fin` length, `nth`'s length — so it takes `slots`' spelling
+    // too, and for a second reason beyond size: the `elim_Wf` these types
+    // surround carries `slots` in its own two positions, so the kernel
+    // rebuilds this very telescope from them. Spelling the two sides alike is
+    // what keeps the comparison syntactic instead of a δ-unfold per branch.
+    let (s_slot, a_slot) = slots.unwrap_or((shape, arity));
     // cs : Vec(⟦D⟧; n) in (Γ, a).
     let cs_ty = Type::Vec {
         level: level.clone(),
         elem: Rc::new(wf.shift_local(1)),
-        len: Rc::clone(arity),
+        len: Rc::clone(a_slot),
     };
     // ih in (Γ, a, cs); its body is in (Γ, a, cs, i) where cs = 1, i = 0.
     let nth_at_i = nth(
         level,
         &Rc::new(wf.shift_local(3)),
-        &Rc::new(arity.shift_local(2)),
+        &Rc::new(a_slot.shift_local(2)),
         Rc::new(Term::Var(LocalVar(1))),
         Rc::new(Term::Var(LocalVar(0))),
     );
     let ih_ty = Type::Pi {
         dom_level: Level::Zero,
         cod_level: motive_level.clone(),
-        dom: Rc::new(Type::Fin { len: Rc::new(arity.shift_local(1)) }),
+        dom: Rc::new(Type::Fin { len: Rc::new(a_slot.shift_local(1)) }),
         cod: Rc::new(
             motive.apply_local(&LocalSubst::id(gamma).shift_local(3).extended(Rc::new(nth_at_i))),
         ),
     };
     // s : M[sup_f(a; cs)/z] — the constructor built in (Γ, a, cs), then
-    // weakened past `ih`. The `Supf`'s own slots are `shape`/`arity`, never
-    // `d_ty`: they are the former's components, not an annotation — and the
-    // shift goes through the `Wf` so that `arity`, which is scoped under the
-    // shape's binder, crosses the right number of them.
+    // weakened past `ih`. The `Supf`'s own slots are `shape`/`arity` (or
+    // `slots`' spelling of them), never `d_ty`: they are the former's
+    // components, not an annotation — and the shift goes through the `Wf` so
+    // that `arity`, which is scoped under the shape's binder, crosses the
+    // right number of them.
     let real_wf = Type::Wf {
         level: level.clone(),
-        shape: Rc::clone(shape),
-        arity: Rc::clone(arity),
+        shape: Rc::clone(s_slot),
+        arity: Rc::clone(a_slot),
     };
     let Type::Wf { shape: s2, arity: n2, .. } = real_wf.shift_local(2) else {
         unreachable!("shifting a Wf yields a Wf")

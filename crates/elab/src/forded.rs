@@ -1712,6 +1712,18 @@ impl Elaborator {
                 // ẑ_j = sup_f(ι_j(label); cs'_I), rebuilt from the branch's own
                 // binders; its identity with the declared constructor is `Unit`
                 // η, which conversion pays (route 1 §8.2 fact 2).
+                // Its two slots take the shape/arity references where the index
+                // type has them registered (`docs/wf-shape-code-design.md`
+                // §4's last bullet): this is [[wf-shape-annotation-slots]]'s
+                // *original* site — the `sup_f` an inversion rebuilds per index
+                // branch, instantiated several times per branch across Θ(n)
+                // branches. Not a measured workload of that round, so no claim
+                // is made about the fixtures' exponent; the spelling is the
+                // same one every other `Supf` takes.
+                let (shape, arity) = match self.wf_slot_refs(bcx2, &shape, &arity) {
+                    Some((s, a)) => (Rc::new(s), Rc::new(a)),
+                    None => (shape, arity),
+                };
                 let zj = Term::Supf {
                     level,
                     shape,

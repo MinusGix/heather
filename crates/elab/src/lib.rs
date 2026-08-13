@@ -7819,6 +7819,22 @@ impl Elaborator {
     }
 
     fn whnf(&self, cx: &Cx, ty: &Type, span: Span) -> R<Type> {
+        // A reference to a registered lowering reduces back to the **registry's
+        // own copy**, not to the kernel's lazy decode of it
+        // (`docs/wf-shape-code-design.md` §3.3). The two are the same type; the
+        // decode's spelling is `Wf(El ⌜S⌝). n` with every component still
+        // `El`-wrapped, and the whole elaborator — every structural reader, and
+        // every *guard* that hands out a reference — anchors on the inline
+        // identity. Without this a value built at a respelled expected type
+        // carries the decode's spelling into all its annotations, where no
+        // respell can name it: measured at the constructor-value sites, half
+        // of a value-heavy statement's mass was decoded copies nothing could
+        // collapse. This is `unspell_ty_deep`'s doctrine (unfolding-for-
+        // analysis at the boundary) applied one step earlier, at the one
+        // choke point every structural read goes through.
+        if let Some(inline) = self.unspell_here(ty) {
+            return Ok(inline);
+        }
         let psi = self.oracle_psi();
         whnf_type_delta(ty, &cx.gamma, Defs::transparent(&psi), self.fuel)
             .map_err(|_| ElabError::Elab { msg: "out of fuel reducing a type".into(), span })

@@ -1521,10 +1521,23 @@ impl Elaborator {
         let Type::Wf { level, shape, arity } = &expected else {
             return err("internal: a recursive declaration did not lower to a `Wf`", span);
         };
+        // …and the `sup_f`'s own two slots take their **references**
+        // (`docs/wf-shape-code-design.md` §3.1). This is the value site the
+        // measurement put first: a constructor value carries one whole shape
+        // and one whole arity term, which for a large declaration is most of
+        // what the value costs. The slots are the former's components rather
+        // than annotations, so the kernel rebuilds `Wf(shape). arity` from
+        // them and hands the agreement to conversion — a spelling choice like
+        // every other one here. `build_children` below keeps reading the
+        // *inline* `expected`, per §4's line.
+        let (shape_e, arity_e) = match self.wf_slot_refs(cx, shape, arity) {
+            Some((s, a)) => (Rc::new(s), Rc::new(a)),
+            None => (Rc::clone(shape), Rc::clone(arity)),
+        };
         Ok(Term::Supf {
             level: level.clone(),
-            shape: Rc::clone(shape),
-            arity: Rc::clone(arity),
+            shape: shape_e,
+            arity: arity_e,
             label: Rc::new(val),
             children: Rc::new(self.build_children(
                 cx,
@@ -1728,7 +1741,13 @@ impl Elaborator {
             .respell_ty(cx, &motive)
             .map(|t| t.shift_local(1))
             .unwrap_or(motive);
-        self.case_tree(cx, ind, &arms, &spine, 0, motive, &mlvl, Rc::new(scrut))
+        // The emission copy of the spine, beside the structural one — the same
+        // split the tier-1 lowering takes (`docs/wf-shape-code-design.md`
+        // §3.4). A tier-0 `match` writes the constructor payload types into
+        // every `Case` and every injection, and a payload type embeds its
+        // fields' lowerings verbatim.
+        let spine_e = self.respell_spine(cx, &spine);
+        self.case_tree(cx, ind, &arms, &spine, &spine_e, 0, motive, &mlvl, Rc::new(scrut))
     }
 
     /// The nested-`Case` recursion of §5.2. At depth `j` the context is `cx` —
@@ -1746,6 +1765,7 @@ impl Elaborator {
         ind: &Inductive,
         arms: &[&Arm],
         spine: &Spine,
+        spine_e: &Spine,
         j: usize,
         motive: Type,
         mlvl: &Level,
@@ -1764,11 +1784,14 @@ impl Elaborator {
         }
         let ctor_lvl = spine.ctors[j].1.clone();
         let tail_lvl = spine.tails[j].1.clone();
-        let ctor_ty = Rc::new(spine.ctors[j].0.shift_local(d));
-        let tail_ty = Rc::new(spine.tails[j].0.shift_local(d));
+        // Emitted: this `Case`'s two component types and the injections below.
+        // The binder types pushed into the elaborator's own context, and every
+        // type `elab_arm` reads a field out of, stay inline (§4's line).
+        let ctor_ty = Rc::new(spine_e.ctors[j].0.shift_local(d));
+        let tail_ty = Rc::new(spine_e.tails[j].0.shift_local(d));
         // case_l: binder `x : ⟦c_j⟧` over Γ_j, body at `M_j[inl x/z]`.
         let mut lcx = cx.clone();
-        lcx.push("#scrut".into(), (*ctor_ty).clone(), ctor_lvl.clone());
+        lcx.push("#scrut".into(), spine.ctors[j].0.shift_local(d), ctor_lvl.clone());
         // The injection's own summand annotations are scoped in the *original*
         // `\u{393}`, so they carry the shift of whatever context the injection
         // is being placed in — which is **not** always `d + 1`. `l_expected`
@@ -1782,7 +1805,8 @@ impl Elaborator {
         // *non-dependent* motive `z` never occurs, so the bad annotations are
         // substituted away before the kernel sees them.
         let injected = |val: Term, inl: bool, sh: u32| {
-            let (lhs, rhs) = (spine.ctors[j].0.shift_local(sh), spine.tails[j].0.shift_local(sh));
+            let (lhs, rhs) =
+                (spine_e.ctors[j].0.shift_local(sh), spine_e.tails[j].0.shift_local(sh));
             let (lhs, rhs) = (Rc::new(lhs), Rc::new(rhs));
             let (lhs_level, rhs_level) = (ctor_lvl.clone(), tail_lvl.clone());
             let val = Rc::new(val);
@@ -1809,7 +1833,7 @@ impl Elaborator {
         // case_r: binder `y : R_{j+1}` over Γ_j; inside it, the next `Case` on
         // `y`, whose motive is `M_j` composed with `inr` and weakened past `y`.
         let mut rcx = cx.clone();
-        rcx.push("#rest".into(), (*tail_ty).clone(), tail_lvl.clone());
+        rcx.push("#rest".into(), spine.tails[j].0.shift_local(d), tail_lvl.clone());
         let inner_motive = motive.apply_local(
             &embed(&cx.gamma, 2)
                 .extended(Rc::new(injected(Term::Var(LocalVar(0)), false, d + 2))),
@@ -1819,6 +1843,7 @@ impl Elaborator {
             ind,
             arms,
             spine,
+            spine_e,
             j + 1,
             inner_motive,
             mlvl,
