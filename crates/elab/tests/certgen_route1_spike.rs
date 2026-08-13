@@ -120,9 +120,20 @@ fn ir_is_wf_lowered() {
     // question would be about `elim_Sum`, not `elim_Wf`, and the answer would
     // say nothing about route 1.
     let e = elab(&format!("{IR}{IR_SIZE}"));
-    let (_, _, ty, _) = last_body(&e);
+    let (psi, _, ty, _) = last_body(&e);
     let Type::Pi { dom, .. } = &ty else { panic!("ir_size is a function") };
-    assert!(matches!(**dom, Type::Wf { .. }), "Ir did not lower to Wf: {dom:?}");
+    // Since the component-respell round (docs/annotation-component-respell-
+    // design.md §2.1) the statement spells `⟦Ir⟧` as `El (Ir#tycode^δ)`;
+    // δ + one decode step recovers the `Wf` head, which is the premise this
+    // test pins — the lowering, not the statement's spelling of it.
+    let dom = heather_kernel::reduce::whnf_type_delta(
+        dom,
+        &LocalCtx::nil(),
+        heather_kernel::reduce::Defs::transparent(&psi),
+        FUEL,
+    )
+    .expect("the statement dom reduces");
+    assert!(matches!(dom, Type::Wf { .. }), "Ir did not lower to Wf: {dom:?}");
 }
 
 #[test]

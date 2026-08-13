@@ -1101,7 +1101,14 @@ impl Elaborator {
                 lhs: Rc::new(ty),
                 rhs: Rc::new(acc),
             };
-            acc_lvl = Level::max(lvl, acc_lvl);
+            // Canonical, not the raw `Max` tree: each summand's level embeds
+            // the accumulated one, so an uncanonicalized join grows a level
+            // *tree* quadratic in the constructor count, mirrored into every
+            // `Sum` node's level slots — measured at ~2/3 of a large lowered
+            // type's remaining node mass (issues/wf-field-conversion-cost.md,
+            // 2026-08-13). `canonical` is `equiv`-preserving by construction,
+            // so this is a spelling change only.
+            acc_lvl = Level::max(lvl, acc_lvl).normalize().canonical();
         }
         Ok((acc, acc_lvl))
     }
@@ -1241,7 +1248,9 @@ impl Elaborator {
                 fst: Rc::new(ty),
                 snd: Rc::new(acc),
             };
-            acc_lvl = Level::max(lvl, acc_lvl);
+            // Canonical join — [`Self::lower_shape`]'s note: the raw `Max`
+            // tree compounds per field and is copied into every Σ level slot.
+            acc_lvl = Level::max(lvl, acc_lvl).normalize().canonical();
         }
         Ok((acc, acc_lvl))
     }
@@ -1284,6 +1293,22 @@ impl Elaborator {
         }
         ctors.push((cur, cur_lvl));
         Ok(Spine { ctors, tails })
+    }
+
+    /// The spine with every component's registered sub-lowerings respelled as
+    /// references, for **emission** (`inject`'s annotations at a constructor
+    /// value). Components that respell nothing keep their `Rc` identity, so
+    /// a small-field declaration pays two pointer walks and no allocation.
+    pub(crate) fn respell_spine(&self, cx: &Cx, spine: &Spine) -> Spine {
+        let re = |v: &Vec<(Rc<Type>, Level)>| {
+            v.iter()
+                .map(|(t, l)| match self.respell_ty_deep(cx, t, 0) {
+                    Some(r) => (Rc::new(r), l.clone()),
+                    None => (Rc::clone(t), l.clone()),
+                })
+                .collect()
+        };
+        Spine { ctors: re(&spine.ctors), tails: re(&spine.tails) }
     }
 
     /// Which declaration a lowered type belongs to, by its nominal tag: walk
@@ -1476,8 +1501,17 @@ impl Elaborator {
             }
             _ => None,
         };
-        // …then the injection path.
-        let val = inject(&spine, i, ind.ctors.len(), fields, 0);
+        // …then the injection path — over an **emission** copy of the spine
+        // (`docs/annotation-component-respell-design.md` §2.3): the `Inl`/
+        // `Inr` annotations of a constructor value carry `⟦c_j⟧` and the sum
+        // tails verbatim, and their mass is the embedded field types — a
+        // value of an `⟦Ir⟧`-field declaration writes `⟦Ir⟧` once per payload
+        // *per injection step*. The tails themselves are not nameable (a sum
+        // suffix is not a declared type), but their components respell. The
+        // structural spine above — `build_fields`' checking, the container
+        // projection — is untouched.
+        let spine_e = self.respell_spine(cx, &spine);
+        let val = inject(&spine_e, i, ind.ctors.len(), fields, 0);
         if !ind.recursive {
             return Ok(val);
         }
@@ -1565,11 +1599,25 @@ impl Elaborator {
         let value = Rc::new(value);
         let tail = snd.apply_local(&LocalSubst::id(&cx.gamma).extended(Rc::clone(&value)));
         let tail_tm = self.build_fields_skel(cx, &tail, rest, false, skels_rest, span)?;
+        // The emitted `Pair`'s annotations are the elimination-side projection
+        // chain's dual and take the same reference spelling
+        // (`docs/annotation-component-respell-design.md` §2.3): a constructor
+        // *value* of an `⟦Ir⟧`-field declaration otherwise carries the field
+        // type verbatim in its label tuple. The field arguments themselves
+        // were checked against the inline components above, per the line.
+        let fst_e = match self.respell_ty_deep(cx, &fst, 0) {
+            Some(r) => Rc::new(r),
+            None => fst,
+        };
+        let snd_e = match self.respell_ty_deep(cx, &snd, 1) {
+            Some(r) => Rc::new(r),
+            None => snd,
+        };
         Ok(Term::Pair {
             fst_level,
             snd_level,
-            fst_ty: fst,
-            snd_ty: snd,
+            fst_ty: fst_e,
+            snd_ty: snd_e,
             fst: value,
             snd: Rc::new(tail_tm),
         })
@@ -3298,11 +3346,28 @@ impl Elaborator {
             let Type::Sigma { fst_level, snd_level, fst, snd } = head else {
                 return err("internal: constructor encoding is too short", span);
             };
+            // The **emitted** `Fst`/`Snd` annotations take the reference
+            // spelling where their components are registered lowerings
+            // (`docs/annotation-component-respell-design.md` §2.2): a field
+            // of type `⟦Ir⟧` otherwise writes 1,712 nodes into `fst_ty` *and*
+            // into every preceding step's `snd_ty`, per use of the binder the
+            // chain aliases. The loop's own `cur` and the **returned** field
+            // type stay inline — the return becomes a `match` binder's alias
+            // type, a structural-read position (family-code design §10.3).
+            let fst_e = match self.respell_ty_deep(cx, &fst, 0) {
+                Some(r) => Rc::new(r),
+                None => Rc::clone(&fst),
+            };
+            // `snd` binds the Σ's first component, hence depth 1.
+            let snd_e = match self.respell_ty_deep(cx, &snd, 1) {
+                Some(r) => Rc::new(r),
+                None => Rc::clone(&snd),
+            };
             let proj = Rc::new(Term::Fst {
                 fst_level: fst_level.clone(),
                 snd_level: snd_level.clone(),
-                fst_ty: Rc::clone(&fst),
-                snd_ty: Rc::clone(&snd),
+                fst_ty: Rc::clone(&fst_e),
+                snd_ty: Rc::clone(&snd_e),
                 pair: Rc::clone(&pair),
             });
             if step == k + 1 {
@@ -3311,8 +3376,8 @@ impl Elaborator {
             pair = Rc::new(Term::Snd {
                 fst_level,
                 snd_level,
-                fst_ty: Rc::clone(&fst),
-                snd_ty: Rc::clone(&snd),
+                fst_ty: fst_e,
+                snd_ty: snd_e,
                 pair: Rc::clone(&pair),
             });
             cur = snd.apply_local(&LocalSubst::id(&cx.gamma).extended(proj));

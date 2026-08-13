@@ -236,6 +236,56 @@ fn a_definition_unfolds_inside_a_type() {
 }
 
 #[test]
+fn canonical_values_compare_at_a_defined_el_type() {
+    // Term conversion **at** `El (u^δ)` for a defined `u` — the type, not the
+    // terms, is what δ has to unfold (conv.rs `tm_w`'s type-δ stage,
+    // 2026-08-13). Before that stage existed, the type stayed El-headed, the
+    // neutral-type arm compared the sides as neutrals, and two *identical*
+    // literals answered `NotConvertible`. Latent until `El (D#tycode^δ)`
+    // reached `Id`-type components (family-code design §10's component
+    // respell); pinned here at the kernel, where the gap was.
+    //
+    // `code := ⌜Unit⁰ + Unit⁰⌝ : Ty 0`.
+    let sum_code = Term::TmSum {
+        lhs_level: Level::Zero,
+        rhs_level: Level::Zero,
+        lhs: rt(Term::TmUnit { level: Level::Zero }),
+        rhs: rt(Term::TmUnit { level: Level::Zero }),
+    };
+    let p = psi(vec![GlobalBinding::Tm {
+        ctx: nil_ctx(0),
+        layer: Layer::Code,
+        ty: rty(Type::Ty(Level::Zero)),
+        level: Level::constant(1),
+        body: Some(rt(sum_code)),
+    }]);
+    let g = nil_ctx(0);
+    let el = Type::El { level: Level::Zero, tm: rt(glob(0, 0)) };
+    let unit = || rty(Type::Unit { level: Level::Zero });
+    let inl = Term::Inl {
+        lhs_level: Level::Zero,
+        rhs_level: Level::Zero,
+        lhs: unit(),
+        rhs: unit(),
+        val: rt(Term::Triv { level: Level::Zero }),
+    };
+    let inr = Term::Inr {
+        lhs_level: Level::Zero,
+        rhs_level: Level::Zero,
+        lhs: unit(),
+        rhs: unit(),
+        val: rt(Term::Triv { level: Level::Zero }),
+    };
+    // Two identical canonical values, and the mixed-spelling pair the decode
+    // produces (annotations play no part at a Sum — the arm compares values).
+    ok_tm(&p, &g, &inl, &inl, &el);
+    ok_tm(&p, &g, &inr, &inr, &el);
+    // The negative stays negative: δ+decode directs the comparison, it does
+    // not blur the constructors.
+    no_tm(&p, &g, &inl, &inr, &el);
+}
+
+#[test]
 fn a_definition_unfolds_in_checking_position() {
     // Not a conversion query but the *checker*: `refl` at `Id(Nat; two^·; 2)`
     // synthesizes `Id(Nat; two^·; two^·)` and is accepted only because

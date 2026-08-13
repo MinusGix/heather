@@ -1267,6 +1267,140 @@ theorem tflat_neutral(): tflat(T0) = FA { refl }
             .expect("a meta body's `match` on a coded declaration checks at layer m");
     }
 
+    // -- the component respell (docs/annotation-component-respell-design.md) --
+
+    /// `respell_ty_deep` replaces exactly the components that are registered
+    /// lowerings, at the right depths: a `Π` over two coded declarations
+    /// respells both sides, the binder-crossing side with its substitution
+    /// tail one longer.
+    #[test]
+    fn the_deep_respell_replaces_components_at_their_depths() {
+        let e = env();
+        let (t_ty, tl) = e.lowered("T");
+        let (f_ty, fl) = e.lowered("Flat");
+        let pi = Type::Pi {
+            dom_level: tl.clone(),
+            cod_level: fl.clone(),
+            dom: Rc::new(t_ty.clone()),
+            cod: Rc::new(f_ty.clone()),
+        };
+        let r = e.el.respell_ty_deep(&e.cx, &pi, 0).expect("both components respell");
+        let Type::Pi { dom, cod, .. } = &r else { panic!("the Π shell survives") };
+        let Type::El { tm: dtm, .. } = &**dom else { panic!("dom is a reference") };
+        let Type::El { tm: ctm, .. } = &**cod else { panic!("cod is a reference") };
+        assert!(e.el.is_gen_ref(dtm, GenDef::TyCode(e.ind("T").tag)));
+        assert!(e.el.is_gen_ref(ctm, GenDef::TyCode(e.ind("Flat").tag)));
+        // The respelled Π still converts with the inline one — component
+        // respelling is a spelling change, both directions.
+        let lvl = Level::max(tl, fl);
+        assert!(e.el.conv_types(&e.cx, &r, &pi, &lvl));
+        assert!(e.el.conv_types(&e.cx, &pi, &r, &lvl));
+        // Idempotent, like the whole-type respell.
+        assert!(e.el.respell_ty_deep(&e.cx, &r, 0).is_none());
+        // And a type with no registered component answers `None` — the
+        // caller keeps its original.
+        assert!(e.el.respell_ty_deep(&e.cx, &Type::Nat, 0).is_none());
+    }
+
+    /// The statement-side respell, pinned structurally rather than assumed: a
+    /// declared `fn`'s Ψ statement carries the reference in its `Π` dom, and
+    /// a *call* to it then emits an `App` whose `dom` annotation is that
+    /// reference — the cascade that makes per-application respelling
+    /// unnecessary (design §2.1).
+    #[test]
+    fn a_statement_respells_and_calls_inherit_it() {
+        let mut e = env();
+        e.el.elab_source("fn tid(t: T) -> T { t }").expect("elaborates");
+        let GlobalBinding::Tm { ty, .. } = e.el.psi.bindings.last().expect("a binding") else {
+            panic!("a `fn` is a term binding")
+        };
+        let Type::Pi { dom, cod, .. } = &**ty else { panic!("one parameter, one Π") };
+        let Type::El { tm, .. } = &**dom else {
+            panic!("the statement's dom is the reference, not the inline `Wf`")
+        };
+        assert!(e.el.is_gen_ref(&tm.shift_global(1), GenDef::TyCode(e.ind("T").tag)));
+        let Type::El { .. } = &**cod else { panic!("the result respells too") };
+        // The cascade: a later declaration's call reads its `App` annotations
+        // off that statement.
+        let before = e.el.psi.bindings.len();
+        e.el.elab_source("fn call_it(t: T) -> T { tid(t) }").expect("elaborates");
+        let GlobalBinding::Tm { body: Some(body), .. } =
+            e.el.psi.bindings.last().expect("a binding")
+        else {
+            panic!("a `fn` keeps its body")
+        };
+        let Term::Lam { body, .. } = &**body else { panic!("one λ") };
+        let Term::App { dom, .. } = &**body else { panic!("the body is the call") };
+        let Type::El { tm, .. } = &**dom else {
+            panic!("the call's dom annotation is the reference — the cascade")
+        };
+        let grew = (e.el.psi.bindings.len() - before) as u32;
+        assert!(e.el.is_gen_ref(&tm.shift_global(grew), GenDef::TyCode(e.ind("T").tag)));
+    }
+
+    /// A declaration with a coded declaration as a **field type**: the
+    /// projection chains and the value tuple's `Pair`/`Inl`/`Inr` annotations
+    /// carry `⟦T⟧` and now respell it (design §2.2/§2.3). Literal and neutral
+    /// scrutinees, a checking position, computation pinned by `refl`, and the
+    /// negative control on the same path.
+    #[test]
+    fn field_projections_and_values_respell_and_still_compute() {
+        let mut e = env();
+        e.el
+            .elab_source(
+                "
+inductive P { MkP(t: T, n: Nat), NoP }
+fn getp(p: P) -> T { match p { MkP(t, n) => t, NoP => T0 } }
+fn wrap(t: T) -> P { MkP(t, 7) }
+theorem getp_computes(): getp(MkP(T1(1, T0), 2)) = T1(1, T0) { refl }
+theorem roundtrip(t: T): getp(wrap(t)) = t { refl }
+",
+            )
+            .expect("field projections and values respell and still compute");
+        let r = e.el.elab_source(
+            "theorem wrong_field(): getp(MkP(T1(1, T0), 2)) = T0 { refl }",
+        );
+        assert!(r.is_err(), "a false field equation must still be refused");
+    }
+
+    /// Axis 2 crossed with the respell: a **parameterized** container at a
+    /// coded instantiation. `Box<T>` itself has no code (§14.12), but its
+    /// monomorphized lowering *contains* `⟦T⟧`, which the deep respell names
+    /// component-wise — the `Wf`-shape recursion arm's one live case.
+    #[test]
+    fn a_monomorphized_container_of_a_coded_declaration_respells_inside() {
+        let mut e = env();
+        e.el
+            .elab_source(
+                "
+fn bt_head(b: Box<T>) -> T { match b { BNil => T0, BCons(a, r) => a } }
+theorem bt_computes(): bt_head(BCons(T1(3, T0), BNil)) = T1(3, T0) { refl }
+",
+            )
+            .expect("a Box<T> match elaborates with component references");
+    }
+
+    /// The regression this round's respell surfaced (and whose fix lives in
+    /// the kernel — `conv.rs tm_w`'s type-δ stage, pinned kernel-side in
+    /// `crates/kernel/tests/definitions.rs`): an auto-`refl` hole (`{}`)
+    /// converts two canonical values **at** `Id`'s type component, which a
+    /// respelled statement now spells `El (T#tycode^δ)`. Before the fix the
+    /// δ-stuck type sent both literals into the neutral-type arm and the
+    /// hole went unsolved — every `{}` over a coded declaration's result
+    /// type, `lib/list_algos.hthr`'s shape.
+    #[test]
+    fn an_auto_refl_hole_solves_at_a_respelled_result_type() {
+        let mut e = env();
+        e.el
+            .elab_source(
+                "
+fn tz(t: T) -> T { T0 }
+theorem tz_computes(t: T): tz(t) = T0 { {} }
+",
+            )
+            .expect("a `{}` hole converts at the `El`-spelled Id component");
+    }
+
     /// The negative control the four axes ask for: a wrong arm is still a
     /// failed `refl`. A spelling change must not make anything *more*
     /// convertible — δ + decode is conservative, not permissive.

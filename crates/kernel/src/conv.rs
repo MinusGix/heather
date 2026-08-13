@@ -973,6 +973,22 @@ impl<D: Dom> Conv<D> {
         if D::is_transp(&wb) {
             wb = self.strip(wb, env)?;
         }
+        // A δ-stuck **type** unfolds before the comparison is directed by it
+        // — the mirror of [`Conv::ty_w`]'s δ stage, which until 2026-08-13
+        // terms never had: `tm` whnfs its type opaquely, so two canonical
+        // values at `El (u^δ)` for a *defined* `u` fell into the
+        // neutral-type arm and compared as neutrals — `NotConvertible` for
+        // any literal, even two identical ones. Unreachable while defined
+        // codes never stood in annotation slots; `El (D#tycode^δ)` in an
+        // `Id`'s type component (family-code design §10, the component
+        // respell) is checked by exactly this comparison. The same-head
+        // fast path above is unaffected: it compares spines at the stuck
+        // type, where both sides are neutral and `tm_nee` is the right
+        // judge.
+        if self.has_defs && D::delta_head_ty(self, env, w).is_some() {
+            let w = D::delta_ty(self, env, w)?;
+            return self.tm_nf(env, &wa, &wb, &w, l);
+        }
         self.tm_nf(env, &wa, &wb, w, l)
     }
 

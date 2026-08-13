@@ -305,6 +305,238 @@ impl Elaborator {
         self.ty_type_ref(cx, ind.tag, ty)
     }
 
+    /// [`Self::respell_ty`] applied **component-wise**
+    /// (`docs/annotation-component-respell-design.md`): rebuild `ty` with
+    /// every sub-type that *is* a registered declaration's lowering replaced
+    /// by its `El (D#tycode^δ)` reference. `None` when nothing respelled, so
+    /// callers keep their original (and its sharing) untouched.
+    ///
+    /// `depth` is how many binders `ty` sits under, past `cx` — the reference
+    /// is minted against `cx` and shifted by `depth` plus however many binders
+    /// the walk itself crosses (`Pi` cod, `Sigma` snd). Sound because a type
+    /// that compares equal to the registry's **closed** copy is itself closed,
+    /// so the shift only fixes the substitution tail's length, exactly as the
+    /// `match`-motive respell's `shift_local(1)` does.
+    ///
+    /// Only **type** components are walked (`Pi`, `Sigma`, `Sum`, `Vec` elem,
+    /// `Wf` shape, `Id`/`SEq` ty). Terms inside types — `Id` endpoints, `Vec`
+    /// lengths, `El` codes — are not: annotations live in type slots, and the
+    /// statement-side cascade (design §2.1) makes newly emitted terms small at
+    /// the source. An `El`-headed reference declines at the top (`respell_ty`
+    /// is idempotent) and has no walked components, so this is idempotent too.
+    pub(crate) fn respell_ty_deep(&self, cx: &Cx, ty: &Type, depth: u32) -> Option<Type> {
+        if self.gdefs.ty_code.is_empty() {
+            return None;
+        }
+        self.respell_deep_at(cx, ty, depth)
+    }
+
+    fn respell_deep_at(&self, cx: &Cx, ty: &Type, d: u32) -> Option<Type> {
+        if let Some(r) = self.respell_ty(cx, ty) {
+            return Some(if d == 0 { r } else { r.shift_local(d) });
+        }
+        // One arm per former with type components; `or` keeps the sibling
+        // untouched (sharing preserved) when only one side respells.
+        let or = |orig: &Rc<Type>, new: Option<Type>| match new {
+            Some(t) => Rc::new(t),
+            None => Rc::clone(orig),
+        };
+        match ty {
+            Type::Pi { dom_level, cod_level, dom, cod } => {
+                let ndom = self.respell_deep_at(cx, dom, d);
+                let ncod = self.respell_deep_at(cx, cod, d + 1);
+                if ndom.is_none() && ncod.is_none() {
+                    return None;
+                }
+                Some(Type::Pi {
+                    dom_level: dom_level.clone(),
+                    cod_level: cod_level.clone(),
+                    dom: or(dom, ndom),
+                    cod: or(cod, ncod),
+                })
+            }
+            Type::Sigma { fst_level, snd_level, fst, snd } => {
+                let nfst = self.respell_deep_at(cx, fst, d);
+                let nsnd = self.respell_deep_at(cx, snd, d + 1);
+                if nfst.is_none() && nsnd.is_none() {
+                    return None;
+                }
+                Some(Type::Sigma {
+                    fst_level: fst_level.clone(),
+                    snd_level: snd_level.clone(),
+                    fst: or(fst, nfst),
+                    snd: or(snd, nsnd),
+                })
+            }
+            Type::Sum { lhs_level, rhs_level, lhs, rhs } => {
+                let nl = self.respell_deep_at(cx, lhs, d);
+                let nr = self.respell_deep_at(cx, rhs, d);
+                if nl.is_none() && nr.is_none() {
+                    return None;
+                }
+                Some(Type::Sum {
+                    lhs_level: lhs_level.clone(),
+                    rhs_level: rhs_level.clone(),
+                    lhs: or(lhs, nl),
+                    rhs: or(rhs, nr),
+                })
+            }
+            Type::Vec { level, elem, len } => {
+                let ne = self.respell_deep_at(cx, elem, d)?;
+                Some(Type::Vec {
+                    level: level.clone(),
+                    elem: Rc::new(ne),
+                    len: Rc::clone(len),
+                })
+            }
+            Type::Wf { level, shape, arity } => {
+                // Reached only for a lowering the registry does not name
+                // (parameterized, hence monomorphized — `Box<Ir>`), whose
+                // *components* may still be registered lowerings.
+                let ns = self.respell_deep_at(cx, shape, d)?;
+                Some(Type::Wf {
+                    level: level.clone(),
+                    shape: Rc::new(ns),
+                    arity: Rc::clone(arity),
+                })
+            }
+            Type::Id { level, ty, lhs, rhs } => {
+                let nt = self.respell_deep_at(cx, ty, d)?;
+                Some(Type::Id {
+                    level: level.clone(),
+                    ty: Rc::new(nt),
+                    lhs: Rc::clone(lhs),
+                    rhs: Rc::clone(rhs),
+                })
+            }
+            Type::SEq { level, ty, lhs, rhs } => {
+                let nt = self.respell_deep_at(cx, ty, d)?;
+                Some(Type::SEq {
+                    level: level.clone(),
+                    ty: Rc::new(nt),
+                    lhs: Rc::clone(lhs),
+                    rhs: Rc::clone(rhs),
+                })
+            }
+            _ => None,
+        }
+    }
+
+    /// The **inverse** of [`Self::respell_ty_deep`], for the reflection
+    /// boundary (`Elaborator::fn_type_code`): rebuild `ty` with every
+    /// `El (D#tycode^δ)` reference replaced by the registry's inline lowering.
+    /// `None` when nothing unspelled.
+    ///
+    /// Why it exists: a `meta` analyzer reads a fn's statement *as code*, and
+    /// at layer m a global reference is syntax — `box (u^δ)` never unfolds,
+    /// by design — so the reference spelling that shrinks every kernel
+    /// checking of the statement makes it *opaque to analysis*. The
+    /// opaque-globals round already drew the line ("unfolding-for-analysis
+    /// happens at the reflection boundary"), and this is that unfolding for
+    /// the generated codes: the registry's copy is exactly what δ+decode of
+    /// the reference yields, so the analyzer sees the very type it saw
+    /// before the respell existed. Closed types, so no depth bookkeeping.
+    ///
+    /// `len_at` anchors the reference resolution: the Ψ length the type's
+    /// `GlobalVar`s count from — the *current* length for a type rescoped by
+    /// `shift_global` (`fn_type_code`), the binding's own `abs` for a raw
+    /// prefix-scoped statement (`sig_peel` over `global_body`). Goal and
+    /// meta padding never applies to either, which is why this does not go
+    /// through [`Self::gen_def_of`].
+    pub(crate) fn unspell_ty_deep(&self, len_at: u32, ty: &Type) -> Option<Type> {
+        if self.gdefs.ty_code.is_empty() {
+            return None;
+        }
+        if let Type::El { tm, .. } = ty
+            && let Term::GlobalTm { var, .. } = &**tm
+            && let Some(abs) = var.0.checked_add(1).and_then(|v| len_at.checked_sub(v))
+            && let Some(GenDef::TyCode(tag)) = self.gdefs.by_abs.get(&abs).copied()
+            && let Some((inline, _)) = self.gdefs.ty_code.get(&tag)
+        {
+            return Some((**inline).clone());
+        }
+        let or = |orig: &Rc<Type>, new: Option<Type>| match new {
+            Some(t) => Rc::new(t),
+            None => Rc::clone(orig),
+        };
+        match ty {
+            Type::Pi { dom_level, cod_level, dom, cod } => {
+                let ndom = self.unspell_ty_deep(len_at, dom);
+                let ncod = self.unspell_ty_deep(len_at, cod);
+                if ndom.is_none() && ncod.is_none() {
+                    return None;
+                }
+                Some(Type::Pi {
+                    dom_level: dom_level.clone(),
+                    cod_level: cod_level.clone(),
+                    dom: or(dom, ndom),
+                    cod: or(cod, ncod),
+                })
+            }
+            Type::Sigma { fst_level, snd_level, fst, snd } => {
+                let nfst = self.unspell_ty_deep(len_at, fst);
+                let nsnd = self.unspell_ty_deep(len_at, snd);
+                if nfst.is_none() && nsnd.is_none() {
+                    return None;
+                }
+                Some(Type::Sigma {
+                    fst_level: fst_level.clone(),
+                    snd_level: snd_level.clone(),
+                    fst: or(fst, nfst),
+                    snd: or(snd, nsnd),
+                })
+            }
+            Type::Sum { lhs_level, rhs_level, lhs, rhs } => {
+                let nl = self.unspell_ty_deep(len_at, lhs);
+                let nr = self.unspell_ty_deep(len_at, rhs);
+                if nl.is_none() && nr.is_none() {
+                    return None;
+                }
+                Some(Type::Sum {
+                    lhs_level: lhs_level.clone(),
+                    rhs_level: rhs_level.clone(),
+                    lhs: or(lhs, nl),
+                    rhs: or(rhs, nr),
+                })
+            }
+            Type::Vec { level, elem, len } => {
+                let ne = self.unspell_ty_deep(len_at, elem)?;
+                Some(Type::Vec {
+                    level: level.clone(),
+                    elem: Rc::new(ne),
+                    len: Rc::clone(len),
+                })
+            }
+            Type::Wf { level, shape, arity } => {
+                let ns = self.unspell_ty_deep(len_at, shape)?;
+                Some(Type::Wf {
+                    level: level.clone(),
+                    shape: Rc::new(ns),
+                    arity: Rc::clone(arity),
+                })
+            }
+            Type::Id { level, ty, lhs, rhs } => {
+                let nt = self.unspell_ty_deep(len_at, ty)?;
+                Some(Type::Id {
+                    level: level.clone(),
+                    ty: Rc::new(nt),
+                    lhs: Rc::clone(lhs),
+                    rhs: Rc::clone(rhs),
+                })
+            }
+            Type::SEq { level, ty, lhs, rhs } => {
+                let nt = self.unspell_ty_deep(len_at, ty)?;
+                Some(Type::SEq {
+                    level: level.clone(),
+                    ty: Rc::new(nt),
+                    lhs: Rc::clone(lhs),
+                    rhs: Rc::clone(rhs),
+                })
+            }
+            _ => None,
+        }
+    }
+
     /// `D#fam := λ(i : I). elim(…; i)`, a route-1 family function (design §6).
     /// Only an **unparameterized** declaration gets one, for
     /// [`Elaborator::mu_def`]'s reason: the family's branches mention the
@@ -484,6 +716,7 @@ impl Elaborator {
     fn meta_offset(&self) -> u32 {
         self.meta_pushed.borrow().len() as u32
     }
+
 
     /// Whether `t` is exactly `u^δ` for the definition `key` — the head test
     /// the recognizers use.

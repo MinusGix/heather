@@ -1393,8 +1393,23 @@ fn sig_peel(e: &Elaborator, name: &str) -> Result<(usize, bool, Term), String> {
     let Some((ty, body)) = e.global_body(name) else {
         return Err(format!("`{name}` has no elaborated body to analyse"));
     };
+    // Unfolding-for-analysis at the reflection boundary, exactly as
+    // `fn_type_code` does it: the statement spells registered lowerings as
+    // `El (D#tycode^δ)` (`docs/annotation-component-respell-design.md` §2.1),
+    // and this peel reads the result type structurally, so it un-spells
+    // first — otherwise every enumeration-result fn would decline here while
+    // the in-language checker (fed by the already-unspelled `fn_type_code`)
+    // accepts, which reads as fragment drift rather than a decline.
+    // The statement is *raw* — prefix-scoped, never `shift_global`ed — so
+    // its references resolve against the binding's own world, `abs`.
+    let unspelled = e
+        .global_abs(name)
+        .and_then(|abs| e.unspell_ty_deep(abs as u32, &ty));
     let mut t = &*body;
-    let mut ty = &*ty;
+    let mut ty: &Type = match &unspelled {
+        Some(t) => t,
+        None => &ty,
+    };
     let mut arity = 0usize;
     while let Term::Lam { body, .. } = t {
         let Type::Pi { dom, cod, .. } = ty else {

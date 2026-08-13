@@ -136,6 +136,17 @@ point at a fifth of the cost: `embed_T` is still a per-type derived artifact,
 the certificate's goal is still a non-`Nat` embedding, and the tags still run
 past 0/1.
 
+*(2026-08-13, [[wf-field-conversion-cost]]'s component-respell round: the
+size law this table prices was cut at its constant — statements, `App`
+annotations, projection chains, field tuples and injection spines now
+reference registered lowerings instead of inlining them, and the lowering's
+level joins are canonical. The with-fields configuration was not re-run (the
+first-cut walker no longer exists), but the law's cost sites measured 2–5x
+cheaper on this file's own successors, so this table's numbers describe the
+old elaborator; the feature round that picks fields back up should re-probe
+before treating the 300-second rail as binding. See that issue's 2026-08-13
+log entry.)*
+
 Two smaller findings from the same measurements, kept because they will be
 true again next time:
 

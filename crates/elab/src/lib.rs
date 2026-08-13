@@ -1317,7 +1317,22 @@ impl Elaborator {
             return None;
         };
         let growth = (self.psi.bindings.len() - abs) as u32;
-        Some(Term::BoxTy(Rc::new(ty.shift_global(growth))))
+        let ty = ty.shift_global(growth);
+        // Unfolding-for-analysis, per the doctrine above, now with a second
+        // case: a statement spells registered lowerings as `El (D#tycode^δ)`
+        // (`docs/annotation-component-respell-design.md` §2.1), and at layer
+        // m a boxed global reference is *syntax* — the analyzer cannot δ
+        // through it, so the signature checker would decline every fn whose
+        // result is a coded declaration. The reflection boundary is where
+        // that unfolds: hand the analyzer the inline lowering the reference
+        // decodes to, i.e. exactly the type it analyzed before the respell
+        // existed.
+        let len = self.psi.bindings.len() as u32;
+        let ty = match self.unspell_ty_deep(len, &ty) {
+            Some(t) => t,
+            None => ty,
+        };
+        Some(Term::BoxTy(Rc::new(ty)))
     }
 
     /// The pull reflection API's **body half**
@@ -1595,10 +1610,32 @@ impl Elaborator {
         let sigma = self.goal_subst();
 
         // Close over the telescope: statement = Π…, proof/body = λ….
-        let mut stmt = res_ty;
+        //
+        // The binder and result types are **respelled** on the way out
+        // (`docs/annotation-component-respell-design.md` §2.1): every
+        // component that is a registered declaration's lowering becomes
+        // `El (D#tycode^δ)`, in the Ψ statement and the body's outer λs both.
+        // This runs *after* the body is elaborated — every structural read
+        // during elaboration saw the inline types — and *before*
+        // `apply_global`, so the references' goal padding is renumbered with
+        // everything else. The payoff cascades: an `App` at a call site
+        // copies its `dom`/`cod` annotations out of the callee's statement,
+        // so respelling the statement once shrinks every later application
+        // for free. References are minted against the empty context (the
+        // statement's own) at each binder's depth.
+        let empty_cx = Cx::empty();
+        let n_params = param_info.len() as u32;
+        let mut stmt = match self.respell_ty_deep(&empty_cx, &res_ty, n_params) {
+            Some(r) => r,
+            None => res_ty,
+        };
         let mut stmt_lvl = res_lvl;
         let mut term = body;
-        for (dom, dom_lvl) in param_info.into_iter().rev() {
+        for (i, (dom, dom_lvl)) in param_info.into_iter().enumerate().rev() {
+            let dom = match self.respell_ty_deep(&empty_cx, &dom, i as u32) {
+                Some(r) => r,
+                None => dom,
+            };
             term = Term::Lam {
                 dom_level: dom_lvl.clone(),
                 cod_level: stmt_lvl.clone(),
