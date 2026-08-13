@@ -10,7 +10,8 @@
   any change touching `lib/`, the kit, or the generators, must run the plain
   full `scripts/test`. The suite ends with one `== suite: N passed, … ==`
   line — read that instead of re-running to grep failures and sum counts
-  separately. Run the full suite **in the background** and do doc/bookkeeping
+  separately; if it says `INCOMPLETE`, a test binary died (usually the
+  ulimit) and the counts are partial, not a smaller green suite. Run the full suite **in the background** and do doc/bookkeeping
   work while it runs; don't sleep-poll it.
 - **Perf measurement is not part of an ordinary round.** Elaborator changes —
   even complex ones, as long as they add no inference route on a hot path —

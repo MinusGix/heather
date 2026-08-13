@@ -43,10 +43,15 @@ cargo test --workspace --no-run --quiet
 
 # ...then run under them: 4 GiB address space, 5 CPU minutes, two threads.
 #
-# The awk pass-through appends one machine-readable summary line — cargo
-# scatters per-binary `test result:` lines across ~60 targets and prints no
-# total, so callers (humans and agents both) were re-running the whole suite
-# just to grep failures and sum counts separately.
+# The awk pass-through counts per-binary `test result:` lines — cargo
+# scatters them across ~60 targets and prints no total, so callers (humans
+# and agents both) were re-running the whole suite just to grep failures and
+# sum counts separately. The final summary line is printed by *bash*, not
+# awk, so it can see cargo's exit status: a ulimit-killed binary contributes
+# no `test result:` line, and summing alone printed a SMALLER passed count
+# with `0 failed` — a false green on the one line callers are told to trust
+# (issues/scripts-test-killed-binary-reads-green.md, seen twice). awk also
+# counts cargo's kill/crash lines as a second, status-independent signal.
 #
 # RUST_MIN_STACK raises the *test thread* stack from its 2 MiB default: the
 # `Wf` step telescope embeds the `nth` schema (a nested elim_Nat under two
@@ -55,7 +60,24 @@ cargo test --workspace --no-run --quiet
 # total address space.
 ulimit -v 4194304
 ulimit -t 300
-RUST_MIN_STACK=8388608 RUST_TEST_THREADS=2 cargo test --quiet "${TEST_ARGS[@]}" "$@" "${SKIP[@]}" |
-  awk '{ print }
+counts=$(mktemp)
+set +e
+RUST_MIN_STACK=8388608 RUST_TEST_THREADS=2 cargo test --quiet "${TEST_ARGS[@]}" "$@" "${SKIP[@]}" 2>&1 |
+  awk -v out="$counts" '
+       { print }
        /^test result:/ { passed += $4; failed += $6; ignored += $8 }
-       END { printf "\n== suite: %d passed, %d failed, %d ignored ==\n", passed, failed, ignored }'
+       /\(signal: [0-9]+/ || /process didn.t exit successfully/ { killed++ }
+       END { printf "%d %d %d %d\n", passed, failed, ignored, killed > out }'
+status=${PIPESTATUS[0]}
+set -e
+read -r passed failed ignored killed < "$counts"
+rm -f "$counts"
+if (( killed > 0 )) || { (( status != 0 )) && (( failed == 0 )); }; then
+  # cargo died for a reason other than ordinary test failures (a binary was
+  # killed by ulimit, crashed, etc.). Never print a green-looking count.
+  printf '\n== suite: INCOMPLETE (a test binary died, exit %d, %d kill/crash lines; %d passed before death, %d failed) ==\n' \
+    "$status" "$killed" "$passed" "$failed"
+  exit $(( status != 0 ? status : 1 ))
+fi
+printf '\n== suite: %d passed, %d failed, %d ignored ==\n' "$passed" "$failed" "$ignored"
+exit "$status"
