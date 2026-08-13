@@ -37,6 +37,8 @@ use heather_elab::Elaborator;
 use heather_syntax::ast::{Decl, Item};
 use heather_syntax::parse_file;
 
+mod support;
+
 const LIB: &str = include_str!("../../../lib/ir_v1.hthr");
 const NAT: &str = include_str!("../../../lib/std/nat.hthr");
 const BOOL: &str = include_str!("../../../lib/std/bool.hthr");
@@ -161,9 +163,13 @@ sign_gen_body() = LetMatch(0, Arm(sign_gen_arm_zero(), Arm(sign_gen_arm_succ(), 
 fn nonnat_transcriptions_and_declines() {
     let mut e = base();
     let cut = LIB.find("\ntheorem ").expect("the library has theorems");
-    elab(&mut e, &LIB[..cut], "declarations prefix");
-    elab(&mut e, CODE, "lib/certgen_code.hthr");
-    elab(&mut e, CERT, "lib/certgen_cert.hthr");
+    // Checked-in prefix through the shared declaration cache; the fixture
+    // types and everything generated face the kernel unconditionally.
+    support::with_decl_cache(&mut e, |e| {
+        elab(e, &LIB[..cut], "declarations prefix");
+        elab(e, CODE, "lib/certgen_code.hthr");
+        elab(e, CERT, "lib/certgen_cert.hthr");
+    });
     elab(&mut e, TYPES, "the non-`Nat` result types");
     elab(&mut e, ISZERO, "fn is_zero");
     elab(&mut e, SIGN, "fn sign");
@@ -225,9 +231,13 @@ fn nonnat_transcriptions_and_declines() {
 fn nonnat_emissions_and_controls() {
     let mut e = base();
     let sup = support();
-    elab(&mut e, &sup, "support prelude");
-    elab(&mut e, CODE, "lib/certgen_code.hthr");
-    elab(&mut e, CERT, "lib/certgen_cert.hthr");
+    // Checked-in prefix through the shared declaration cache; the fixture
+    // types and everything generated face the kernel unconditionally.
+    support::with_decl_cache(&mut e, |e| {
+        elab(e, &sup, "support prelude");
+        elab(e, CODE, "lib/certgen_code.hthr");
+        elab(e, CERT, "lib/certgen_cert.hthr");
+    });
     elab(&mut e, TYPES, "the non-`Nat` result types");
     elab(&mut e, ISZERO, "fn is_zero");
     elab(&mut e, SIGN, "fn sign");

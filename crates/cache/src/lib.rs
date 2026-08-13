@@ -208,7 +208,9 @@ impl Inner {
         // The `admits`/`accepted` pair asks about one declaration in one Ψ;
         // answering twice would double the run's hashing, which is the whole
         // of its overhead. Keyed on the Ψ length so a mismatched pair
-        // recomputes rather than answers about the wrong thing.
+        // recomputes rather than answers about the wrong thing. (Sound for a
+        // non-Ψ item too — two of those could share a Ψ length, so `admits`/
+        // `accepted` clear this memo the moment such an item is answered.)
         if let Some((at, iface, key)) = self.last
             && at == psi.bindings.len()
         {
@@ -218,12 +220,24 @@ impl Inner {
         let iface = merkle::interface_hash(&self.prefix, &binding);
         // Recorded for `sync` whether or not it succeeded: the binding lands
         // at this index either way, and a poisoned entry must be *stored* as
-        // poison so that its dependents fail closed too.
-        self.pending = Some((self.prefix.len(), iface));
+        // poison so that its dependents fail closed too. Only for an item
+        // that *does* land — a `meta fn` never reaches Ψ, and a pending hash
+        // left behind for it would be absorbed by whatever binding lands at
+        // this index next, mis-describing it to every dependent.
+        if item.lands_in_psi {
+            self.pending = Some((self.prefix.len(), iface));
+        }
         let iface = iface?;
         let key = merkle::check_key(&self.prefix, item.body, item.opaque, &iface)?;
         self.last = Some((psi.bindings.len(), iface, key));
         Some((iface, key))
+    }
+
+    /// Forget the `admits`/`accepted` memo. Called once a non-Ψ item's
+    /// question is fully answered: its Ψ length is not unique to it, so a
+    /// later item at the same length must never inherit its hashes.
+    fn forget(&mut self) {
+        self.last = None;
     }
 }
 
@@ -236,6 +250,12 @@ impl KernelGate for Cache {
         };
         if inner.store.contains(&key) {
             inner.counts.hits += 1;
+            // A hit ends the question: no `accepted` follows, so a non-Ψ
+            // item's memo must die here rather than answer for the next item
+            // at this Ψ length.
+            if !item.lands_in_psi {
+                inner.forget();
+            }
             true
         } else {
             inner.counts.checked += 1;
@@ -247,6 +267,10 @@ impl KernelGate for Cache {
         let mut inner = self.inner.borrow_mut();
         if let Some((iface, key)) = inner.identify(psi, item) {
             inner.store.insert(key, iface, item.name);
+        }
+        // Same reason as the hit path in `admits`: the pair is answered.
+        if !item.lands_in_psi {
+            inner.forget();
         }
     }
 }

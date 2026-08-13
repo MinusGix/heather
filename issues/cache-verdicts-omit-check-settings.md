@@ -3,7 +3,7 @@ title: "Cache verdicts don't record the fuel/univs they were earned under"
 status: open
 labels: [tooling, cli, robustness]
 created: 2026-08-06
-updated: 2026-08-06
+updated: 2026-08-13
 code: crates/cache/src/store.rs @ 33c65ef
 ---
 
@@ -34,3 +34,7 @@ holds at higher), which a fingerprint bump cannot express.
 
 Triggered: the moment fuel or univs becomes configurable from the CLI, or
 rung 2 lands — whichever is first.
+
+## Log
+
+- 2026-08-13: A second consumer of the store, and a narrowing verified while wiring it. The certgen test binaries now replay verdicts through the same store code (target/decl-cache, [[elaborator-snapshot-across-test-binaries]]'s round — which also extended the gate seam to quote.rs's Layer::Meta site, with the layer folded into the item's identity via the hashed binding). Checked 2026-08-13: DEFAULT_FUEL is a crates/kernel/src/typing.rs constant, so the kernel-semantics fingerprint already invalidates every entry on a fuel change — the gap this issue records opens only if fuel moves out of kernel source or becomes a flag. The univs bound is a hardcoded 0 at the three elab gate call sites (crates/elab/src/lib.rs, gendefs.rs, quote.rs), same compiled-in latency. Trigger unchanged; when it fires, the fix lands in the entry columns and covers the CLI store and the test store alike, since they are one code path.

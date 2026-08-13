@@ -2,11 +2,14 @@
 //! (`issues/parallel-checking-and-caching.md`, `docs/cache-v1-design.md` §1).
 //!
 //! Every finished declaration passes one `typing::check_type` +
-//! `typing::check_term` pair before it is pushed to Ψ, at exactly two sites:
-//! [`crate::Elaborator::elab_decl_inner`] (user `fn`/`theorem`) and
-//! `gendefs::push_gen_def` (the generated definitions). This module is the
-//! seam that lets something outside the elaborator watch those two sites and,
-//! if it can vouch for the declaration, say so.
+//! `typing::check_term` pair before it is committed, at exactly three sites:
+//! [`crate::Elaborator::elab_decl_inner`] (user `fn`/`theorem`),
+//! `gendefs::push_gen_def` (the generated definitions) — both of which push
+//! the checked binding to Ψ — and `quote.rs`'s `elab_meta_decl_inner` (a
+//! `meta fn`, checked at `Layer::Meta` and registered in the meta-def table
+//! rather than pushed; `lands_in_psi` is how an oracle tells the two apart).
+//! This module is the seam that lets something outside the elaborator watch
+//! those sites and, if it can vouch for the declaration, say so.
 //!
 //! It is deliberately the smallest surface that can carry a content-addressed
 //! cache: one trait, one item struct, one setter. The elaborator holds no
@@ -19,6 +22,7 @@
 
 use std::rc::Rc;
 
+use heather_kernel::layer::Layer;
 use heather_kernel::level::Level;
 use heather_kernel::term::{GlobalCtx, LocalCtx, Term, Type};
 
@@ -40,6 +44,17 @@ pub struct GateItem<'a> {
     /// `issues/parallel-checking-and-caching.md`, and the elaborator is the
     /// only place that knows it before the binding is built.
     pub opaque: bool,
+    /// The layer the body is checked at — `Layer::Code` at the two Ψ sites
+    /// (statement at `Prog`), `Layer::Meta` for a `meta fn` (statement at
+    /// `Meta` too; the pairing is a function of this field). Part of the
+    /// item's identity: the same `(ty, body)` checked at two layers is two
+    /// different kernel questions, and a cache key must never conflate them.
+    pub layer: Layer,
+    /// Whether the binding lands in Ψ when the gate passes. False for a
+    /// `meta fn`, which registers in the meta-def table instead — an oracle
+    /// tracking Ψ (the cache's prefix of interface hashes) must not expect
+    /// this item to appear there.
+    pub lands_in_psi: bool,
 }
 
 impl GateItem<'_> {
@@ -48,7 +63,7 @@ impl GateItem<'_> {
     pub fn binding(&self) -> heather_kernel::term::GlobalBinding {
         heather_kernel::term::GlobalBinding::Tm {
             ctx: self.ctx.clone(),
-            layer: heather_kernel::layer::Layer::Code,
+            layer: self.layer,
             ty: Rc::new(self.ty.clone()),
             level: self.level.clone(),
             body: if self.opaque { None } else { Some(Rc::new(self.body.clone())) },

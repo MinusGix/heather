@@ -20,6 +20,8 @@
 //! - **What a generated-term test must vary**: docs/testing-generated-terms.md.
 #![allow(dead_code)]
 
+use std::rc::Rc;
+
 use heather_kernel::term::GlobalCtx;
 
 /// The Nat arithmetic + Id lemma suite: stress-proof-suite item 1, and the
@@ -74,6 +76,70 @@ theorem add_assoc(a: Nat, b: Nat, c: Nat): add(add(a, b), c) = add(a, add(b, c))
     }
 }
 "#;
+
+/// The certgen family's shared declaration cache
+/// (`issues/elaborator-snapshot-across-test-binaries.md`).
+///
+/// Five certgen test binaries each elaborate the same checked-in prefix —
+/// `lib/ir_v1.hthr`'s declarations (or the support-prelude slice of it),
+/// `lib/certgen_code.hthr`, `lib/certgen_cert.hthr` — before their own
+/// content starts: identical work, re-kernel-checked once per binary. The CLI
+/// already owns the mechanism that makes paying it once sound — the
+/// content-addressed declaration cache behind `heather check --cache`
+/// (docs/cache-v1-design.md) — and the elaborator already exposes the seam it
+/// installs through (`Elaborator::set_gate`). This helper wires the tests to
+/// the same store shape, at `target/decl-cache`.
+///
+/// The trust argument is the cache's own (design doc §6): an entry is
+/// recorded only when *this* kernel — the `KERNEL_SEMANTICS` fingerprint,
+/// computed by the cache crate's build script over `crates/kernel/src` —
+/// accepted exactly this elaborated content against exactly these referents'
+/// interface hashes. A changed library file, prelude or elaboration output
+/// changes every downstream key (a miss, a full check); a changed kernel
+/// discards the whole store, loudly, on open. `DEFAULT_FUEL` is a
+/// `crates/kernel/src` constant, so the fuel caveat of
+/// `issues/cache-verdicts-omit-check-settings.md` is covered by the
+/// fingerprint for as long as fuel stays one.
+///
+/// Two rules keep the suite meaning what it meant:
+///
+/// - **The gate never covers generated or mutated content.** Callers wrap
+///   exactly the checked-in prefix elaborations; on return the gate is
+///   `NoGate` again, so every generated emission, fixture `fn` and
+///   perturbed-library mutant is kernel-checked in full on every run
+///   (docs/testing-generated-terms.md keeps its teeth).
+/// - **One binary takes no gate at all**: `certgen_emissions.rs` elaborates
+///   the whole prefix front-to-back against the real kernel every full-suite
+///   run, as the backstop against a defect in the cache mechanism itself.
+///
+/// Cold path: nothing to pre-run — a fresh checkout (or `cargo clean`)
+/// simply records on first use and reuses after. Concurrent tests race the
+/// final save (atomic via rename, last writer wins); a lost update costs a
+/// re-check on the next run, never a wrong answer.
+pub fn with_decl_cache(e: &mut heather_elab::Elaborator, prefix: impl FnOnce(&mut heather_elab::Elaborator)) {
+    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/decl-cache");
+    let (cache, rejected) = heather_cache::Cache::open(dir.clone());
+    // A discarded store says why (a changed kernel, a corrupt file): the one
+    // thing a cache must never do is quietly do nothing.
+    if let Some(msg) = rejected.as_ref().and_then(|r| r.message()) {
+        eprintln!("decl-cache: {msg}");
+    }
+    let cache = Rc::new(cache);
+    e.set_gate(Rc::clone(&cache) as Rc<dyn heather_elab::gate::KernelGate>);
+    prefix(e);
+    // Seal: from here on the kernel sees everything again.
+    e.set_gate(Rc::new(heather_elab::gate::NoGate));
+    let n = cache.counts();
+    eprintln!(
+        "decl-cache: {} declaration{} kernel-checked, {} accepted from cache",
+        n.checked,
+        if n.checked == 1 { "" } else { "s" },
+        n.hits
+    );
+    if let Err(err) = cache.save() {
+        eprintln!("decl-cache: could not write {}: {err}", dir.display());
+    }
+}
 
 /// A 64-bit FNV-1a over an exact rendering of Ψ.
 ///

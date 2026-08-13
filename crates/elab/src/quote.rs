@@ -310,20 +310,41 @@ impl Elaborator {
         let (stmt, lvl) = Self::close_meta_ty(&sig, result_ty, result_lvl.clone());
         let term = Self::close_meta_term(&sig, body, result_lvl);
 
-        // The kernel is the gate, at the meta layer.
+        // The kernel is the gate, at the meta layer. The same oracle seam as
+        // the two Ψ sites (`gate.rs`) — this is where a `match code` shell's
+        // 52-branch recursor check lives, the single most expensive gate in
+        // `lib/certgen_code.hthr` — with `lands_in_psi: false` because a
+        // `meta fn` registers in the meta-def table and Ψ never grows.
         let empty = LocalCtx::nil();
-        crate::stats::time_kernel(|| {
-            typing::check_type(&self.psi, 0, Layer::Meta, &empty, &stmt, &lvl, self.fuel)
-        })
-        .map_err(|e| ElabError::Kernel {
-            decl: decl.name.clone(), span: decl.span, err: e, note: None,
-        })?;
-        crate::stats::time_kernel(|| {
-            typing::check_term(&self.psi, 0, Layer::Meta, &empty, &term, &stmt, &lvl, self.fuel)
-        })
-        .map_err(|e| ElabError::Kernel {
-            decl: decl.name.clone(), span: decl.span, err: e, note: None,
-        })?;
+        {
+            let item = crate::gate::GateItem {
+                name: &decl.name,
+                ctx: &empty,
+                ty: &stmt,
+                level: &lvl,
+                body: &term,
+                opaque: false,
+                layer: Layer::Meta,
+                lands_in_psi: false,
+            };
+            if !self.gate.as_ref().is_some_and(|g| g.admits(&self.psi, &item)) {
+                crate::stats::time_kernel(|| {
+                    typing::check_type(&self.psi, 0, Layer::Meta, &empty, &stmt, &lvl, self.fuel)
+                })
+                .map_err(|e| ElabError::Kernel {
+                    decl: decl.name.clone(), span: decl.span, err: e, note: None,
+                })?;
+                crate::stats::time_kernel(|| {
+                    typing::check_term(&self.psi, 0, Layer::Meta, &empty, &term, &stmt, &lvl, self.fuel)
+                })
+                .map_err(|e| ElabError::Kernel {
+                    decl: decl.name.clone(), span: decl.span, err: e, note: None,
+                })?;
+                if let Some(g) = self.gate.as_ref() {
+                    g.accepted(&self.psi, &item);
+                }
+            }
+        }
 
         // The registration seam (docs/meta-def-registration-design.md §2.2):
         // a `for` clause claims a slot, and claiming it means *having its

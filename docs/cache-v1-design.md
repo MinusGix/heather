@@ -37,13 +37,28 @@ and §3 is marked superseded.
 ## 1. What is cached, and what a cache hit still pays
 
 The unit is the **kernel gate**: the `typing::check_type` + `typing::check_term`
-pair that every finished declaration passes before it is pushed to Ψ. There are
-exactly two such sites in the tree, and they have the same shape — gate a
-finished `(ctx = ·, ty, level, body)` about to become a `GlobalBinding::Tm`:
+pair that every finished declaration passes before it is committed. There are
+exactly three such sites in the tree, and they have the same shape — gate a
+finished `(ctx = ·, ty, level, body)`:
 
 - `crates/elab/src/lib.rs`, `elab_decl_inner` — user `fn` and `theorem`.
 - `crates/elab/src/gendefs.rs`, `push_gen_def` — the elaborator-generated
   definitions (`μ_D`, tag predicates, child projections, `D#code`).
+- `crates/elab/src/quote.rs`, `elab_meta_decl_inner` — a `meta fn`, checked at
+  `Layer::Meta`. *(Added 2026-08-13,
+  `issues/elaborator-snapshot-across-test-binaries.md`: measurement found the
+  `match code` shells' meta checks dominating warm elaborations of
+  `lib/certgen_code.hthr` — the seam's original "two sites" left the file's
+  single most expensive gate uncovered.)* Two things distinguish the site, and
+  `GateItem` carries both: the **layer** is part of the item's identity (the
+  same `(ty, body)` at two layers is two kernel questions; the hashed binding's
+  layer byte is what keeps the keys apart), and the checked item **never lands
+  in Ψ** (`lands_in_psi: false`) — it registers in the meta-def table, so the
+  cache must neither leave a pending interface hash for the next Ψ binding to
+  absorb nor let its `admits`/`accepted` memo, which is keyed on Ψ length,
+  answer for a neighbour at the same length. Both hazards are wrong-vouch
+  class; both are guarded in `crates/cache/src/lib.rs` and pinned by
+  `crates/cache/tests/end_to_end.rs`'s meta group.
 
 A hit skips both calls. It does **not** skip:
 

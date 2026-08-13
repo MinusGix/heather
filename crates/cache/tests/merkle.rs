@@ -216,6 +216,27 @@ fn opacity_is_part_of_the_interface() {
     assert_ne!(zero, one, "a definition's body is part of its interface");
 }
 
+/// The layer is part of the identity: the same `(ty, body)` checked at
+/// `Layer::Code` and at `Layer::Meta` is two different kernel questions
+/// (`gate.rs`'s `GateItem::layer`, since the meta gate joined the seam), so
+/// the bindings the two build must never hash alike.
+#[test]
+fn the_layer_is_part_of_the_interface() {
+    let p = prefix(1);
+    let mk = |layer: Layer| GlobalBinding::Tm {
+        ctx: LocalCtx::nil(),
+        layer,
+        ty: Rc::new(Type::Nat),
+        level: Level::Zero,
+        body: Some(Rc::new(Term::Zero)),
+    };
+    assert_ne!(
+        interface_hash(&p, &mk(Layer::Code)),
+        interface_hash(&p, &mk(Layer::Meta)),
+        "a verdict earned at one layer must not vouch for a check at another"
+    );
+}
+
 /// The two hash families are domain-separated: the same material fed as an
 /// interface and as a check key must not collide.
 #[test]

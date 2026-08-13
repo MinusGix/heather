@@ -23,6 +23,8 @@ use heather_elab::Elaborator;
 use heather_syntax::ast::{Decl, Item};
 use heather_syntax::parse_file;
 
+mod support;
+
 const LIB: &str = include_str!("../../../lib/ir_v1.hthr");
 const NAT: &str = include_str!("../../../lib/std/nat.hthr");
 const BOOL: &str = include_str!("../../../lib/std/bool.hthr");
@@ -132,15 +134,22 @@ fn a_perturbed_fold_is_refused_by_the_kernel() {
     {
         let mut e = base();
         let cut = LIB.find("\ntheorem ").expect("the library has theorems");
-        elab(&mut e, &LIB[..cut], "declarations prefix");
+        // Checked-in prefix through the shared declaration cache; the mutant
+        // below faces the kernel unconditionally.
+        support::with_decl_cache(&mut e, |e| elab(e, &LIB[..cut], "declarations prefix"));
         if e.elab_module_source("ir_v1", &bad_code).is_ok() {
             panic!("the library's own theorems must refuse a perturbed `cert_rebind`");
         }
     }
 
     let mut e = base();
-    elab(&mut e, &support(), "support prelude");
-    elab(&mut e, CODE, "lib/certgen_code.hthr");
+    // The support prelude and the (unmutated) transcriber are checked-in
+    // prefix too; the mutated fold and its emission face the kernel
+    // unconditionally after the seal.
+    support::with_decl_cache(&mut e, |e| {
+        elab(e, &support(), "support prelude");
+        elab(e, CODE, "lib/certgen_code.hthr");
+    });
 
     // (2) The invocation's negative control, taken here because this session
     // has a transcriber and no fold yet: generation declines by naming the

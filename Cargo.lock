@@ -79,6 +79,7 @@ dependencies = [
 name = "heather-elab"
 version = "0.0.1"
 dependencies = [
+ "heather-cache",
  "heather-kernel",
  "heather-syntax",
 ]

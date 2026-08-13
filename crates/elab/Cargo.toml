@@ -15,10 +15,19 @@ name = "heather_elab"
 heather-kernel = { path = "../kernel" }
 heather-syntax = { path = "../syntax" }
 
-# No dev-dependencies, and no Criterion: the frontend suite reuses the
-# kernel harness's first-party estimator (issues/dependency-policy.md,
+# First-party only, and no Criterion: the frontend suite reuses the kernel
+# harness's first-party estimator (issues/dependency-policy.md,
 # docs/frontend-benchmarking.md). Run through `scripts/bench-frontend`
 # (ulimit), never `cargo bench` directly.
+#
+# `heather-cache` is the workspace's own crate (a dev-dependency cycle Cargo
+# supports: the cache depends on this crate's `gate` seam, and this crate's
+# *tests* install it there): the certgen test family gates its shared library
+# prefix through the declaration cache so six binaries stop re-checking
+# identical work (issues/elaborator-snapshot-across-test-binaries.md; the
+# helper is `with_decl_cache` in tests/support/mod.rs).
+[dev-dependencies]
+heather-cache = { path = "../cache" }
 [[bench]]
 name = "frontend"
 path = "benches/frontend/main.rs"

@@ -47,6 +47,8 @@ use heather_elab::Elaborator;
 use heather_syntax::ast::{Decl, Item};
 use heather_syntax::parse_file;
 
+mod support;
+
 const LIB: &str = include_str!("../../../lib/ir_v1.hthr");
 /// The library's one import (docs/modules-design.md §7). Elaborated whole,
 /// which is why the arithmetic and order kit is no longer sliced out of
@@ -203,9 +205,14 @@ fn base() -> Elaborator {
 fn in_language_transcriber() {
     let mut e = base();
     let cut = LIB.find("\ntheorem ").expect("the library has theorems");
-    elab(&mut e, &LIB[..cut], "declarations prefix");
-    elab(&mut e, CODE, "lib/certgen_code.hthr");
-    elab(&mut e, CERT, "lib/certgen_cert.hthr");
+    // The checked-in prefix goes through the shared declaration cache
+    // (`support::with_decl_cache`'s header owns the argument); everything
+    // after the closing brace faces the kernel unconditionally.
+    support::with_decl_cache(&mut e, |e| {
+        elab(e, &LIB[..cut], "declarations prefix");
+        elab(e, CODE, "lib/certgen_code.hthr");
+        elab(e, CERT, "lib/certgen_cert.hthr");
+    });
     // `dbl` lives past the declarations cut, and the generator reads the
     // *elaborated* body: a fn the elaborator has not seen has nothing to
     // analyse, which is a decline, not a bug.

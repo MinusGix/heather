@@ -18,6 +18,8 @@ use heather_elab::Elaborator;
 use heather_syntax::ast::{Decl, Item};
 use heather_syntax::parse_file;
 
+mod support;
+
 const LIB: &str = include_str!("../../../lib/ir_v1.hthr");
 const NAT: &str = include_str!("../../../lib/std/nat.hthr");
 const BOOL: &str = include_str!("../../../lib/std/bool.hthr");
@@ -99,7 +101,11 @@ fn base() -> Elaborator {
 fn a_perturbed_transcriber_is_refused_by_the_kernel() {
     let mut e = base();
     let cut = LIB.find("\ntheorem ").expect("the library has theorems");
-    elab(&mut e, &LIB[..cut], "declarations prefix");
+    // The checked-in declarations prefix goes through the shared declaration
+    // cache; every mutant below faces the kernel unconditionally (a mutated
+    // declaration has a different content key in any case, so no cache could
+    // vouch for it — but the seal keeps the line bright).
+    support::with_decl_cache(&mut e, |e| elab(e, &LIB[..cut], "declarations prefix"));
     // The honesty control, and the whole architecture in one edit: perturb the
     // *library* — `ta_succ` emitting the `Zero` tag — and what it produces
     // must fail to check rather than prove anything about `dbl`.
@@ -133,7 +139,7 @@ fn a_perturbed_transcriber_is_refused_by_the_kernel() {
     // The failed elaboration above stopped at a theorem, which is *before* the
     // file's shell, so this is still the only 52-branch check in this thread.
     let mut bad = base();
-    elab(&mut bad, &LIB[..cut], "declarations prefix");
+    support::with_decl_cache(&mut bad, |e| elab(e, &LIB[..cut], "declarations prefix"));
     elab(&mut bad, &stripped, "mutated lib/certgen_code.hthr");
     // The fold is unperturbed here: a wrong *transcription* must still be
     // folded into a certificate, or this control would be testing the fold's
@@ -162,7 +168,11 @@ fn a_perturbed_transcriber_is_refused_by_the_kernel() {
 fn a_perturbed_signature_checker_is_a_loud_disagreement() {
     let mut e = base();
     let cut = LIB.find("\ntheorem ").expect("the library has theorems");
-    elab(&mut e, &LIB[..cut], "declarations prefix");
+    // The checked-in declarations prefix goes through the shared declaration
+    // cache; every mutant below faces the kernel unconditionally (a mutated
+    // declaration has a different content key in any case, so no cache could
+    // vouch for it — but the seal keeps the line bright).
+    support::with_decl_cache(&mut e, |e| elab(e, &LIB[..cut], "declarations prefix"));
     // `sig_finish`'s default arm is where "a bare `Nat` is a nullary fn" lives
     // (the walk only ever mints `SFn` from a Π), so accepting it at arity 0 is
     // the one-token perturbation that makes the library's verdict disagree
@@ -189,7 +199,7 @@ fn a_perturbed_signature_checker_is_a_loud_disagreement() {
     // The failed elaboration stopped at a theorem, before either shell, so the
     // stripped file's two shells are this thread's only 52-branch checks.
     let mut bad = base();
-    elab(&mut bad, &LIB[..cut], "declarations prefix");
+    support::with_decl_cache(&mut bad, |e| elab(e, &LIB[..cut], "declarations prefix"));
     elab(&mut bad, &stripped, "mutated lib/certgen_code.hthr");
     let nofn = "fn nofn2() -> Nat { 0 }";
     elab(&mut bad, nofn, "fn nofn2");

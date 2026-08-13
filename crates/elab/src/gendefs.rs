@@ -389,6 +389,8 @@ impl Elaborator {
                 level: &level,
                 body: &body,
                 opaque: false,
+                layer: Layer::Code,
+                lands_in_psi: true,
             };
             if !self.gate.as_ref().is_some_and(|g| g.admits(&self.psi, &item)) {
                 typing::check_type(&self.psi, 0, Layer::Prog, &empty, &ty, &level, self.fuel)

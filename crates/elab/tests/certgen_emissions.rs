@@ -173,6 +173,13 @@ fn base() -> Elaborator {
 fn emissions_check_and_controls() {
     let mut e = base();
     let sup = support();
+    // DELIBERATELY NO `support::with_decl_cache` HERE. The other certgen
+    // binaries gate this same checked-in prefix through the shared
+    // declaration cache (issues/elaborator-snapshot-across-test-binaries.md);
+    // this one is the designated backstop: every full-suite run contains one
+    // front-to-back kernel-checked elaboration of the support prelude,
+    // `lib/certgen_code.hthr` and `lib/certgen_cert.hthr`, so a defect in the
+    // cache mechanism itself cannot turn the whole family green.
     elab(&mut e, &sup, "support prelude");
     elab(&mut e, CODE, "lib/certgen_code.hthr");
     elab(&mut e, CERT, "lib/certgen_cert.hthr");

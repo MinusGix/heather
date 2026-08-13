@@ -1636,6 +1636,8 @@ impl Elaborator {
                 level: &stmt_lvl,
                 body: &term,
                 opaque: matches!(decl.kind, DeclKind::Theorem),
+                layer: Layer::Code,
+                lands_in_psi: true,
             };
             if !self.gate.as_ref().is_some_and(|g| g.admits(&self.psi, &item)) {
                 stats::time_kernel(|| {

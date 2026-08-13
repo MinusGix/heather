@@ -198,6 +198,90 @@ fn without_a_gate_the_kernel_runs_on_everything() {
     assert!(heather_elab::stats::kernel_ns() > 0, "the kernel gate must have run");
 }
 
+// -- 3b. the meta-layer gate ------------------------------------------------
+//
+// `quote.rs`'s `elab_meta_decl_inner` is the third gate site
+// (issues/elaborator-snapshot-across-test-binaries.md's round): a `meta fn`
+// is checked at `Layer::Meta` and registered in the meta-def table, so it
+// never lands in Ψ — `GateItem::lands_in_psi` is false and the cache must
+// neither leave a pending interface hash for the next Ψ binding to absorb
+// nor let its `admits`/`accepted` memo answer for a neighbour at the same Ψ
+// length. The fixture is `certgen_route1_spike.rs`'s miniature.
+
+/// `plus`, two proofs of `plus(n, 0) = n`, and a `three` for the meta body.
+const META_BASE: &str = r#"
+fn plus(a: Nat, b: Nat) -> Nat { match b { Zero => a, Succ(k, ih) => Succ(ih) } }
+theorem plus_zero(n: Nat): plus(n, 0) = n { refl }
+theorem plus_zero2(n: Nat): plus(n, 0) = n { plus_zero(n) }
+fn three() -> Nat { 3 }
+"#;
+
+/// A meta fn whose payload applies `plus_zero` at `arg`. Payload variants must
+/// differ in the *argument*, not in which same-statement lemma they name: two
+/// opaque theorems with one statement share an interface hash, so substituted
+/// bodies naming either coincide and so do the check keys — correctly (the
+/// kernel question is literally the same one).
+fn meta_fn(name: &str, arg: &str) -> String {
+    format!(
+        "meta fn {name}(g: Ctx) -> Code(g |- plus({arg}, 0) = {arg}) {{
+             code {{ plus_zero({arg}) }}
+         }}\n"
+    )
+}
+
+/// A `meta fn`'s verdict is recorded cold and admitted warm, like any other
+/// declaration's.
+#[test]
+fn a_meta_fn_is_cached_and_admitted_warm() {
+    let src = format!("{META_BASE}{}", meta_fn("cert", "three()"));
+    let cache = run(&src);
+    let cold = cache.counts();
+    assert!(cache.recorded().contains_key("cert"), "the meta fn must be recorded");
+
+    let cache = run_with(cache, &src);
+    let warm = cache.counts().since(&cold);
+    assert_eq!(warm.checked, 0, "a warm run must not reach the kernel gate at all");
+    assert_eq!(warm.hits, cold.checked);
+    assert_eq!(heather_elab::stats::kernel_ns(), 0, "the meta checks were really skipped");
+}
+
+/// A `meta fn` between two Ψ declarations changes no Ψ key: nothing lands in
+/// Ψ for it, so nothing downstream may hash differently. This is the
+/// regression test for the pending-hash guard — before it, the meta fn's
+/// interface hash would be absorbed by the next binding to land (here the
+/// gate-less `inductive`), mis-describing it to every dependent.
+#[test]
+fn a_meta_fn_leaves_psi_hashing_untouched() {
+    let tail = "inductive W { WA }\nfn use_w(x: W) -> W { x }\n";
+    let with = run(&format!("{META_BASE}{}{tail}", meta_fn("cert", "three()"))).recorded();
+    let without = run(&format!("{META_BASE}{tail}")).recorded();
+    assert_eq!(
+        with["use_w"], without["use_w"],
+        "a `meta fn` in the file moved a Ψ declaration's cache identity"
+    );
+}
+
+/// Two adjacent `meta fn`s sit at the *same* Ψ length, which is exactly what
+/// the `admits`/`accepted` memo is keyed on: with the memo not cleared, the
+/// second would inherit the first's verdict — a wrong vouch, not a wrong
+/// speed. Warm run with only the second one edited: one check, not zero.
+#[test]
+fn adjacent_meta_fns_do_not_share_a_verdict() {
+    let two = |arg: &str| {
+        format!("{META_BASE}{}{}", meta_fn("cert_a", "three()"), meta_fn("cert_b", arg))
+    };
+    // Distinct content cold, so both are recorded — a `cert_b` identical to
+    // `cert_a` would (correctly) hit its neighbour's entry, since names are
+    // metadata and identity is content.
+    let cache = run(&two("0"));
+    let cold = cache.counts();
+    assert_eq!(cold.hits, 0);
+    let cache = run_with(cache, &two("1"));
+    let warm = cache.counts().since(&cold);
+    assert_eq!(warm.checked, 1, "the edited meta fn must be re-checked, and only it");
+    assert_eq!(warm.hits, cold.checked - 1);
+}
+
 // -- 4. persistence, the fingerprint, and the negative controls -------------
 
 fn tempdir(tag: &str) -> std::path::PathBuf {
