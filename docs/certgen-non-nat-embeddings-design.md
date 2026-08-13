@@ -147,6 +147,15 @@ no elaborator spelling round touches. Read the "generating one fixture" column
 as the surviving half of this table and the elaboration column as history; the
 numbers, old and new, are in `issues/certgen-harness-cost.md`.)*
 
+*(2026-08-13, third and last note — **fields LANDED**, so the surviving half of
+this table is history too. The evaluation cost the note above handed the stage
+to was removed at the analyzer seam
+(`docs/analyzer-evaluation-design.md`): the elaborator runs the analyzers in
+the kernel's value domain instead of its rewriter, and every fixture in that
+column — including the two-field one that did not finish at all — now
+generates in tens of milliseconds. Neither column of this table describes the
+system any more; §8's entry is the current state.)*
+
 *(2026-08-13, [[wf-field-conversion-cost]]'s component-respell round: the
 size law this table prices was cut at its constant — statements, `App`
 annotations, projection chains, field tuples and injection spines now
@@ -451,24 +460,24 @@ on a non-`Nat` emission, not only on the `Nat` ones.
   cost — the `Converges` statement's induction would be over `T` rather than
   over `Nat`, which is a different `CertOut` shape. Home:
   `docs/certifying-generator-design.md` §8 item 2, third stage.
-- **Constructor fields** — the walker needs its payload states to carry a
-  compiled prefix again, and §2.2 is the measured price. The *emitter* side is
-  already written for them (`embed_T`'s scheme, a constructor spec's arguments,
-  the readback's arity check), so the deferred stage is a walker stage. Home:
-  **`docs/certgen-ctor-fields-design.md`** (2026-08-13), which designs it whole,
-  records that it was implemented and checked end to end, and defers it on a
-  re-measured and re-attributed cost — the transcriber's *evaluation*, not the
-  elaboration this document priced.
+- **Constructor fields** — **LANDED, 2026-08-13**, in
+  `docs/certgen-ctor-fields-design.md`'s second round, at the design that
+  document already carried: one new `TA` state, no new arm, and the emitter
+  side untouched because it was written for fields one stage early. §2.2's
+  price was never paid — the elaboration cliff it measured had been taken by
+  two spelling rounds, and the *evaluation* cliff that replaced it was removed
+  at the analyzer seam (`docs/analyzer-evaluation-design.md`) rather than
+  inside this walker.
 - **Fields of another enum**, once fields land — a composition step over §3's
   `embed_T`; no new mechanism, real emitter work. (Confirmed by the fields
   round: the *walker* reads such a field with no change at all; what is missing
   is per-field embeddings at the rim — `docs/certgen-ctor-fields-design.md` §6.)
-- **Cross-function composition at a non-`Nat` result** — §2.3; wants a per-slot
-  type on the renderer's environment, which is the same data structure the
-  fields stage needs. The two should land together. (Confirmed, and cheaper
-  than predicted: the fields round found it needs no data structure, only a
-  positional rule — `docs/certgen-ctor-fields-design.md` §5 — so it is carried
-  in that stage's scope and does not need one of its own.)
+- **Cross-function composition at a non-`Nat` result** — §2.3; **LANDED with
+  fields, 2026-08-13**, exactly as this entry predicted the two would. Cheaper
+  than predicted, and now observed rather than designed: it needs no shared
+  data structure, only the positional rule of
+  `docs/certgen-ctor-fields-design.md` §5, and `viafield` — a foreign call
+  feeding a constructor field — generates and kernel-checks end to end.
 - **Type-parameterized result types** — monomorphized at each use site
   (`docs/inductive-tier0-lowering.md` §2), so `Option<Nat>` has a lowering the
   walker could read; what it does not have is a *name* the emitter can spell

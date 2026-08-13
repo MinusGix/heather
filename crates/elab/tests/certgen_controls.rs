@@ -37,6 +37,11 @@ dbl_gen_arm_zero() = LetCon(0, RNil, Ret(RCons(0, RNil)))
 dbl_gen_arm_succ() = LetCall(0, RCons(0, RNil), LetCon(1, RCons(0, RNil), LetCon(1, RCons(0, RNil), Ret(RCons(0, RNil)))))
 dbl_gen_body() = LetMatch(0, Arm(dbl_gen_arm_zero(), Arm(dbl_gen_arm_succ(), NoArm)), Ret(RCons(0, RNil)))";
 
+/// Two fields, one of them computed — the smallest fixture that can see a
+/// field-order mutation (`certgen_nonnat.rs`'s `PACK`).
+const PACK: &str =
+    "fn pack(n: Nat) -> Both { match n { Zero => BNone, Succ(k) => BSome(k, Succ(k)) } }";
+
 fn span_of(name: &str) -> String {
     let file = parse_file(LIB).expect("the library parses");
     let span = file
@@ -209,3 +214,62 @@ fn a_perturbed_signature_checker_is_a_loud_disagreement() {
     assert!(msg.contains("disagreement"), "{msg}");
 }
 
+
+/// The FIELDS half of the transcriber's honesty control
+/// (docs/certgen-ctor-fields-design.md §4, `ta_flds_cons`): perturb the
+/// LIBRARY's field merge so a two-field constructor collects its slots in the
+/// wrong order, and the emission must fail to check.
+///
+/// Chosen, like the `dbl` control above, to be a mutation that **renders**
+/// (docs/certgen-cert-expression-design.md §8 item 3) rather than one that
+/// declines: `ta_flds_cons` keeps the tag, keeps the arity and keeps every
+/// reference — it only snocs the new field where it should cons it, which is
+/// exactly the shape `ta_call_arg` legitimately uses for a call's arguments.
+/// So the readback's arity check passes, the IR is well-formed, and what is
+/// wrong is the *value*: `pack` builds `BSome(Succ(k), k)` where its own
+/// exactness fixture says `BSome(k, Succ(k))`. A one-field constructor cannot
+/// see the mutation at all, which is why the fixture here has two.
+///
+/// Own test for the stack reason this file's header gives: one `match code`
+/// shell per thread.
+#[test]
+fn a_perturbed_field_merge_is_refused_by_the_kernel() {
+    let mut e = base();
+    let cut = LIB.find("\ntheorem ").expect("the library has theorems");
+    support::with_decl_cache(&mut e, |e| elab(e, &LIB[..cut], "declarations prefix"));
+    let bad_code = CODE.replace(
+        "QCons(shift_ref(ra, len), args)),
+        VNo => TStuck,",
+        "qsnoc(args, shift_ref(ra, len))),
+        VNo => TStuck,",
+    );
+    assert_ne!(bad_code, CODE, "the mutation must apply");
+    if e.elab_module_source("ir_v1", &bad_code).is_ok() {
+        panic!("the library's own theorems must refuse a perturbed `ta_flds_cons`");
+    }
+    let thms = bad_code.find("\ntheorem ").expect("the file states its own acceptance");
+    let shell = bad_code.find("// The shell").expect("the shell is the file's last block");
+    let stripped = format!("{}\n{}", &bad_code[..thms], &bad_code[shell..]);
+    let mut bad = base();
+    support::with_decl_cache(&mut bad, |e| elab(e, &LIB[..cut], "declarations prefix"));
+    elab(&mut bad, &stripped, "mutated lib/certgen_code.hthr");
+    // The fold is unperturbed: a wrong *transcription* must still be folded.
+    elab(&mut bad, CERT, "lib/certgen_cert.hthr");
+    elab(&mut bad, "inductive Both { BNone, BSome(a: Nat, b: Nat) }\n", "the result type");
+    elab(&mut bad, PACK, "fn pack");
+    let wrong = generate_in_language(&bad, &decl_of(PACK), &GenCtx::new())
+        .expect("a wrong field merge still emits — that is the point");
+    assert!(
+        wrong.ir_body.contains("LetCon(1, RCons(0, RCons(1, RNil))"),
+        "the mutation must swap the two field slots: {}",
+        wrong.ir_body
+    );
+    for (key, text) in &wrong.support {
+        elab(&mut bad, text, key);
+    }
+    // Everything up to the invariant: the IR, the program and the two
+    // literal-fuel fixtures, which are `refl` on a concrete run and therefore
+    // `Stuck` at a constructor built from the wrong slots.
+    let upto = wrong.text.find("theorem pack_gen_conv").expect("the emission proves an invariant");
+    refuted(&mut bad, &wrong.text[..upto], "perturbed-field-merge emission");
+}

@@ -384,6 +384,10 @@ The hook, extending the map round's:
    head, read that constructor, recurse into the fields it has. Only what is
    inspected is reduced. This matters for the memory discipline (CLAUDE.md's
    superlinear warning): no deep normalization of an encoded value.
+   *(2026-08-13: the demand order is unchanged, but the evaluation under it is
+   no longer the rewriter — `Reader` forces closures in the kernel's value
+   domain. `docs/analyzer-evaluation-design.md` has the measurement and the
+   reason; nothing about this step's contract moved.)*
 4. **Read back.** `read_ta` / `read_ir`: the encoded inductive value to Rust's
    `FnIr`. New code, and the only genuinely new *plumbing* the round adds
    (there is no existing value readback; `inductive::decoded` is types only).

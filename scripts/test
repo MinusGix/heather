@@ -9,7 +9,7 @@
 # Usage: scripts/test [--fast] [cargo-test args...]
 #
 # --fast skips the two whole-library acceptance tests that dominate wall
-# time (issues/suite-wall-time-two-tests.md) and the three perturbed-library
+# time (issues/suite-wall-time-two-tests.md) and the four perturbed-library
 # mutation controls (issues/certgen-harness-cost.md, the 2026-08-12 lever:
 # each control elaborates a `match code` shell, and their whole content is
 # kernel-refusal of mutants — acceptance-class, nothing an inner loop
@@ -33,7 +33,8 @@ if [[ "${1:-}" == --fast ]]; then
         --skip nonnat_emissions_and_controls
         --skip a_perturbed_transcriber_is_refused_by_the_kernel
         --skip a_perturbed_signature_checker_is_a_loud_disagreement
-        --skip a_perturbed_fold_is_refused_by_the_kernel)
+        --skip a_perturbed_fold_is_refused_by_the_kernel
+        --skip a_perturbed_field_merge_is_refused_by_the_kernel)
   for a in "$@"; do [[ "$a" == -- ]] && break; done
   [[ "${a:-}" == -- ]] || SKIP=(-- "${SKIP[@]}")
 fi

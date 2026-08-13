@@ -1,4 +1,16 @@
-# Constructor fields for the certifying generator — design, and a measured deferral
+# Constructor fields for the certifying generator — design, a measured deferral, and the round that landed it
+
+> **Status, 2026-08-13 (second round): LANDED.** §§2–7 are the shipped
+> design, unchanged from the deferral round — not one line of the walker or
+> the rim was redesigned. What changed is the cost §8 measured, which
+> `docs/analyzer-evaluation-design.md` removed at the analyzer seam: the
+> fixtures §8 lists at 24–135x, and the one that did not finish at all, now
+> generate in tens of milliseconds each. §9's checklist was worked through
+> in order and is recorded there with its verdicts, including the two
+> §5 predictions — `pack` and `viafield` — which held end to end on the
+> first run. The rest of the document is left as it was written, because the
+> deferral's reasoning is the reason this round existed.
+
 
 Design for `docs/certifying-generator-design.md` §8 item 2's **second stage**:
 a fragment function's result type may be a tier-0 enumeration whose
@@ -304,7 +316,26 @@ already owns as "the transcriber's own in-language evaluation, which no verdict
 cache can touch". The fields stage is the first feature to make that residual
 the *binding* constraint rather than a floor.
 
-## 9. What would unblock it
+### 8.1 What actually cost that, measured one round later
+
+The attribution above says "matches on `Pre` … inside a shell that the kernel
+reduces without sharing". The half of that sentence which is about *sharing*
+turned out to be wrong, and the correction is worth keeping beside the table
+because it is the reason the table's numbers were reachable at all:
+`docs/analyzer-evaluation-design.md` §1 counted the reader's work and found
+**no repetition to share** — `peek` is ~300 reader steps and ~2000 reduction
+steps in total. The cost was *per step*, in the size of the term the
+**rewriter** rebuilt at each one, and the largest terms in sight are the `Wf`
+shape and arity slots of the very lowerings this table's "structure" reading
+pointed at. So the mechanism named here was right about *where* and wrong
+about *why*, and the fix was an evaluator rather than a memo.
+
+The table above is therefore a record of the rewriter, not of the fragment.
+The same fixtures under the value-domain reader are in
+`issues/certgen-analyzer-evaluation-cost.md`'s log; every one of them,
+including `BSome(k, Succ(k))`, is tens of milliseconds.
+
+## 9. What would unblock it — worked through, with verdicts
 
 Owned by `issues/certgen-analyzer-evaluation-cost.md`, promoted out of
 `issues/certgen-harness-cost.md`'s log by this round's measurement. In the
@@ -329,5 +360,35 @@ order they would be worth trying, none of them this round's:
    checked during this round before the cost was measured. Nothing about it
    needs redesigning; it needs to become affordable to run.
 
-Until then the fragment's constructors stay field-free, and this document —
-not §2.2's table — is the record of why.
+**Verdicts, 2026-08-13.**
+
+1. **Taken, and it was the whole of it** — `docs/analyzer-evaluation-design.md`.
+   Not a memo: the reader is re-instantiated at the kernel's value domain, so
+   an eliminator enters its branch instead of copying it and the lowered
+   annotations are never traversed. One seam, no kernel line.
+2. **Not taken, and no longer worth taking.** A smaller `TA` was to be
+   measured after (1); after (1) the widest fixture generates in ~50 ms, so
+   there is nothing left to measure it against. It stays described on
+   `issues/certgen-analyzer-evaluation-cost.md` as available, unspent.
+3. **Re-probed, and §§2–7 needed no change.** In the order §9 asked for:
+   - the two things this document said had never been generated —
+     `pack` = `BSome(k, Succ(k))` (two fields, one computed) and `viafield`
+     (a cross-function call *in* a field, §5's rule) — were generated,
+     read back against the designed IR literally, and **kernel-checked end
+     to end** through their emissions and support artifacts. Both held on the
+     first run, so §5's positional rule is now observed rather than
+     predicted, and non-`Nat` §2.3's deferred cross-function composition is
+     discharged with it;
+   - every pre-existing emission is byte-identical, `Nat` and field-free
+     non-`Nat` alike;
+   - the third perturbed-library control this document's §8 wanted and could
+     not write exists: `certgen_controls.rs`'s
+     `a_perturbed_field_merge_is_refused_by_the_kernel` snocs where
+     `ta_flds_cons` should cons, so a two-field constructor **renders** with
+     its slots swapped — right tag, right arity, wrong value — and its own
+     exactness fixture refuses it. A one-field constructor cannot see that
+     mutation, which is why the control's fixture has two.
+
+The fragment's constructors therefore take fields, and §2's deferrals —
+non-`Nat` parameters, tier-1 result types, parameterized results, and §6's
+field at another inductive — are what is left.

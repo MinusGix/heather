@@ -4,10 +4,19 @@
 //!
 //! A fragment function's *result* type may be a tier-0 ENUMERATION: a
 //! non-recursive, unindexed, unparameterized `inductive` with at least one
-//! constructor and no constructor fields. Parameters stay `Nat` and recursion
-//! stays structural on a `Nat`, for the lowering reason the design doc's §2.1
-//! records (a match on an inductive parameter is `Term::Case`, with an
-//! `El(D#tycode^δ)` motive and Σ-projection arm binders).
+//! constructor, whose constructors may take `Nat` FIELDS
+//! (`docs/certgen-ctor-fields-design.md`, 2026-08-13 — the stage §2.2 of the
+//! non-`Nat` doc cut on a cost law that two elaborator spelling rounds have
+//! since cut). Parameters stay `Nat` and recursion stays structural on a
+//! `Nat`, for the lowering reason the design doc's §2.1 records (a match on an
+//! inductive parameter is `Term::Case`, with an `El(D#tycode^δ)` motive and
+//! Σ-projection arm binders).
+//!
+//! The fields stage also lands CROSS-FUNCTION COMPOSITION at a non-`Nat`
+//! result (non-`Nat` §2.3, deferred there for want of a per-slot type): a
+//! foreign call's temporary is a `Nat` and the returned one is the result
+//! type, which is a positional rule rather than inference, and a `Nat`
+//! temporary now has somewhere to be *used* — a constructor field.
 //!
 //! What the round had to widen, and where:
 //!
@@ -86,6 +95,20 @@ fn support() -> String {
     s
 }
 
+/// `add`, from `lib/std/nat.hthr` — the callee the cross-function fixture
+/// composes with, and the only emission here whose result is a `Nat`.
+fn nat_decl(name: &str) -> Decl {
+    parse_file(NAT)
+        .expect("`nat` parses")
+        .items
+        .into_iter()
+        .find_map(|i| match i {
+            Item::Decl(d) if d.name == name => Some(d),
+            _ => None,
+        })
+        .unwrap_or_else(|| panic!("`nat` declares fn {name}"))
+}
+
 fn decl_of(src: &str) -> Decl {
     let file = parse_file(src).unwrap_or_else(|e| panic!("test fn parses: {e:?}"));
     assert_eq!(file.items.len(), 1);
@@ -115,23 +138,44 @@ fn base() -> Elaborator {
 //
 // Declared here rather than reused from `bool`, because imports are not
 // transitive and these tests elaborate as module `ir_v1`. Between them the
-// types cover the shapes the widening turns on: two constructors, and three
-// (so a tag no `Nat` body can produce). `Peek` is the decline: a constructor
-// with a field, which this stage defers.
+// types cover the shapes the widening turns on: two constructors, three (so a
+// tag no `Nat` body can produce), one constructor with a field and one with
+// two. `Wrap` is the decline the fields stage still makes: a field at another
+// INDUCTIVE, which the walker would read but `embed_T` has no embedding for.
 
 const TYPES: &str = "\
 inductive Flag { Off, On }
 inductive Sign3 { SNeg, SZero, SPos }
 inductive Peek { PNone, PSome(k: Nat) }
+inductive Both { BNone, BSome(a: Nat, b: Nat) }
+inductive Wrap { WNone, WSome(f: Flag) }
 ";
 
 const ISZERO: &str = "fn is_zero(n: Nat) -> Flag { match n { Zero => On, Succ(k) => Off } }";
 const SIGN: &str = "fn sign(n: Nat) -> Sign3 { match n { Zero => SZero, Succ(k) => SPos } }";
+/// A constructor WITH A FIELD, the stage's headline: the arm's own binder is
+/// carried into the constructor's argument list.
 const PEEK: &str = "fn peek(n: Nat) -> Peek { match n { Zero => PNone, Succ(k) => PSome(k) } }";
-/// A cross-function call whose callee returns a non-`Nat` (§2.3, §8): the
+/// TWO fields, one of them COMPUTED — the field's own instructions are merged
+/// before the constructor's, and slot order is the source's.
+const PACK: &str =
+    "fn pack(n: Nat) -> Both { match n { Zero => BNone, Succ(k) => BSome(k, Succ(k)) } }";
+/// CROSS-FUNCTION COMPOSITION at a non-`Nat` result (non-`Nat` design §2.3):
+/// the foreign call binds a `Nat` temporary, which the constructor field is
+/// the first place in this fragment that can *use*.
+const VIAFIELD: &str =
+    "fn viafield(n: Nat) -> Peek { match n { Zero => PNone, Succ(k) => PSome(add(k, k)) } }";
+/// A field at ANOTHER INDUCTIVE: the walker would read it, but `embed_T` would
+/// have to embed it at `Flag`'s own embedding rather than at `embed_nat`, so
+/// `sig_sigma`'s field rule declines the declaration whole
+/// (docs/certgen-ctor-fields-design.md §6). This is the decline the fields
+/// stage puts where "a constructor with a field" used to be.
+const HOLDS: &str = "fn holds(n: Nat) -> Wrap { match n { Zero => WNone, Succ(k) => WNone } }";
+/// A cross-function call whose CALLEE returns a non-`Nat` (§2.3, §8): the
 /// caller's signature is in the fragment, and the decline is the MARKER pass's
 /// — a callee marker is a closed `Nat -> … -> Nat` chain, so a callee outside
-/// that signature has no marker to stand for it.
+/// that signature has no marker to stand for it. Unchanged by the fields
+/// stage, which widened the *caller* side only.
 const VIAADD: &str =
     "fn viaflag(n: Nat) -> Flag { match n { Zero => On, Succ(k) => is_zero(k) } }";
 /// A **self-call at a non-`Nat` result**: the induction hypothesis is consumed
@@ -157,6 +201,29 @@ sign_gen_arm_zero() = LetCon(1, RNil, Ret(RCons(0, RNil)))
 sign_gen_arm_succ() = LetCon(2, RNil, Ret(RCons(0, RNil)))
 sign_gen_body() = LetMatch(0, Arm(sign_gen_arm_zero(), Arm(sign_gen_arm_succ(), NoArm)), Ret(RCons(0, RNil)))";
 
+/// A constructor with ONE field: the arm's binder `k` is at distance 0, and
+/// the tag-1 instruction carries it as its single argument. Compare
+/// `IR_ISZERO`'s `LetCon(1, RNil, …)` — same tag, one argument more.
+const IR_PEEK: &str = "\
+peek_gen_arm_zero() = LetCon(0, RNil, Ret(RCons(0, RNil)))
+peek_gen_arm_succ() = LetCon(1, RCons(0, RNil), Ret(RCons(0, RNil)))
+peek_gen_body() = LetMatch(0, Arm(peek_gen_arm_zero(), Arm(peek_gen_arm_succ(), NoArm)), Ret(RCons(0, RNil)))";
+
+/// TWO fields, the second computed: `Succ(k)` is its own instruction, and the
+/// constructor reads `(k, Succ(k))` as `(1, 0)` — the field ORDER, which is
+/// what the perturbed-library control in `certgen_controls.rs` breaks.
+const IR_PACK: &str = "\
+pack_gen_arm_zero() = LetCon(0, RNil, Ret(RCons(0, RNil)))
+pack_gen_arm_succ() = LetCon(1, RCons(0, RNil), LetCon(1, RCons(1, RCons(0, RNil)), Ret(RCons(0, RNil))))
+pack_gen_body() = LetMatch(0, Arm(pack_gen_arm_zero(), Arm(pack_gen_arm_succ(), NoArm)), Ret(RCons(0, RNil)))";
+
+/// A FOREIGN CALL feeding a field: the two-member closure `[add, viafield]`
+/// puts `add` at index 0, and the constructor reads the call's result.
+const IR_VIAFIELD: &str = "\
+viafield_gen_arm_zero() = LetCon(0, RNil, Ret(RCons(0, RNil)))
+viafield_gen_arm_succ() = LetCall(0, RCons(0, RCons(0, RNil)), LetCon(1, RCons(0, RNil), Ret(RCons(0, RNil))))
+viafield_gen_body() = LetMatch(0, Arm(viafield_gen_arm_zero(), Arm(viafield_gen_arm_succ(), NoArm)), Ret(RCons(0, RNil)))";
+
 /// The transcriptions and the declines, on the *declarations* prefix alone —
 /// nothing here elaborates a certificate, so it is the cheap half.
 #[test]
@@ -173,8 +240,15 @@ fn nonnat_transcriptions_and_declines() {
     elab(&mut e, TYPES, "the non-`Nat` result types");
     elab(&mut e, ISZERO, "fn is_zero");
     elab(&mut e, SIGN, "fn sign");
+    elab(&mut e, PEEK, "fn peek");
+    elab(&mut e, PACK, "fn pack");
 
-    for (d, want) in [(decl_of(ISZERO), IR_ISZERO), (decl_of(SIGN), IR_SIGN)] {
+    for (d, want) in [
+        (decl_of(ISZERO), IR_ISZERO),
+        (decl_of(SIGN), IR_SIGN),
+        (decl_of(PEEK), IR_PEEK),
+        (decl_of(PACK), IR_PACK),
+    ] {
         let em = generate_in_language(&e, &d, &GenCtx::new())
             .unwrap_or_else(|r| panic!("{} declined: {r}", d.name));
         assert_eq!(em.ir_body, want, "{} transcribes differently", d.name);
@@ -187,25 +261,46 @@ fn nonnat_transcriptions_and_declines() {
         );
     }
 
-    // A constructor WITH A FIELD is declined by the LIBRARY's `check_sig` —
-    // `sig_sigma` refuses a payload with a value in it — and is *not* a
-    // disagreement with the Rust residue, which is the agreement property
-    // asserted from the negative side.
+    // `embed_T` embeds each field at `embed_nat`, in declaration order — the
+    // scheme `ResTy::embed_text` was written for one stage before fields
+    // landed and inherited unchanged (docs/certgen-ctor-fields-design.md §7).
     {
-        elab(&mut e, PEEK, "fn peek");
-        let d = decl_of(PEEK);
+        let em = generate_in_language(&e, &decl_of(PACK), &GenCtx::new()).expect("pack");
+        let (_, embed) = em
+            .support
+            .iter()
+            .find(|(k, _)| k == "embed:Both")
+            .expect("`Both` carries an embedding");
+        assert!(embed.contains("BNone => VCon(0, VNil)"), "{embed}");
+        assert!(
+            embed.contains("BSome(gf0, gf1) => VCon(1, VCons(embed_nat(gf0), VCons(embed_nat(gf1), VNil)))"),
+            "{embed}"
+        );
+    }
+
+    // ONE FLIP, recorded rather than hidden (the same discipline the non-`Nat`
+    // round used for `tocmp`): `peek` was this file's "a constructor with a
+    // field declines" fixture and is a POSITIVE above. Its replacement is a
+    // decline the fields stage still makes — a field at another inductive,
+    // which `embed_T` has no embedding for — and it is the LIBRARY's verdict,
+    // not a disagreement with the Rust residue, which is the agreement
+    // property asserted from the negative side.
+    {
+        elab(&mut e, HOLDS, "fn holds");
+        let d = decl_of(HOLDS);
         let Err(msg) = generate_in_language(&e, &d, &GenCtx::new()) else {
-            panic!("`peek`'s signature must decline")
+            panic!("`holds`'s signature must decline")
         };
         assert!(msg.contains("in-language signature checker"), "{msg}");
         assert!(!msg.contains("disagreement"), "{msg}");
     }
 
-    // A RIM decline (design doc §§2.3, 8): cross-function composition at a
-    // non-`Nat` result is deferred, and the boundary is the callee-marker
-    // convention — a marker is a closed `Nat -> … -> Nat` chain, so a callee
-    // returning anything else has none. The caller's own signature is in the
-    // fragment; the decline names the callee.
+    // A RIM decline (design doc §§2.3, 8), and the one the fields stage did
+    // NOT widen: the caller side of cross-function composition landed, the
+    // callee side did not, and the boundary is the callee-marker convention —
+    // a marker is a closed `Nat -> … -> Nat` chain, so a callee returning
+    // anything else has none. The caller's own signature is in the fragment;
+    // the decline names the callee.
     {
         let d = decl_of(VIAADD);
         elab(&mut e, VIAADD, "cross-function non-`Nat` fixture");
@@ -217,10 +312,12 @@ fn nonnat_transcriptions_and_declines() {
     }
 }
 
-/// The end-to-end acceptance: three generated `Compile` instances over two
-/// non-`Nat` result types — a two-constructor one, a three-constructor one
-/// (so a tag of 2), and a self-call at a non-`Nat` result — every one
-/// elaborated and kernel-checked, plus the mutation controls.
+/// The end-to-end acceptance: generated `Compile` instances over four
+/// non-`Nat` result types — a two-constructor one, a three-constructor one (so
+/// a tag of 2), a self-call at a non-`Nat` result, a constructor with a FIELD,
+/// one with two fields of which one is computed, and a constructor field fed
+/// by a CROSS-FUNCTION call — every one elaborated and kernel-checked, plus
+/// the mutation controls.
 ///
 /// The four axes of `docs/testing-generated-terms.md`: the exactness fixtures
 /// run at *literal* arguments while every invariant is *open* in its parameter
@@ -242,10 +339,23 @@ fn nonnat_emissions_and_controls() {
     elab(&mut e, ISZERO, "fn is_zero");
     elab(&mut e, SIGN, "fn sign");
     elab(&mut e, TT, "fn tt");
+    elab(&mut e, PEEK, "fn peek");
+    elab(&mut e, PACK, "fn pack");
+    elab(&mut e, VIAFIELD, "fn viafield");
 
     let mut ctx = GenCtx::new();
     let mut support_done: Vec<String> = Vec::new();
-    for d in [decl_of(ISZERO), decl_of(SIGN), decl_of(TT)] {
+    // `add` first: `viafield`'s foreign call needs its generated instance in
+    // the context, exactly as `mul`'s does in `certgen.rs`.
+    for d in [
+        decl_of(ISZERO),
+        decl_of(SIGN),
+        decl_of(TT),
+        decl_of(PEEK),
+        decl_of(PACK),
+        nat_decl("add"),
+        decl_of(VIAFIELD),
+    ] {
         let em = generate_in_language(&e, &d, &ctx)
             .unwrap_or_else(|r| panic!("{} declined: {r}", d.name));
         for (key, text) in &em.support {
@@ -277,6 +387,29 @@ fn nonnat_emissions_and_controls() {
     let tt = &ctx_get(&ctx, "tt").text;
     assert!(tt.contains("Flag_gen_embed(tt(gk))"), "{tt}");
 
+    // CONSTRUCTOR FIELDS, in the proof text: the temporary the region returns
+    // is spelled at the result type's embedding and carries its field as a
+    // source expression, while the field itself stays a `Nat`.
+    let peek = &ctx_get(&ctx, "peek").text;
+    assert!(peek.contains("Peek_gen_embed(PSome(gk))"), "{peek}");
+    assert!(peek.contains("CompileNat1Peek(peek)"), "{peek}");
+    let pack = &ctx_get(&ctx, "pack").text;
+    assert!(pack.contains("Both_gen_embed(BSome(gk, Succ(gk)))"), "{pack}");
+    // …and the computed field's OWN temporary is a `Nat`, not a `Both`: the
+    // positional rule (`ProofCx::con_res`) in one assertion.
+    assert!(pack.contains("VCons(embed_nat(Succ(gk)), VNil)"), "{pack}");
+    assert!(!pack.contains("Both_gen_embed(Succ(gk))"), "{pack}");
+
+    // CROSS-FUNCTION COMPOSITION at a non-`Nat` result (non-`Nat` §2.3): a
+    // two-member program, the callee's invariant re-derived inside it at
+    // `embed_nat`, and the caller's constructor spelled over the call.
+    let vf = ctx_get(&ctx, "viafield");
+    assert_eq!(vf.closure, vec!["add".to_string(), "viafield".to_string()]);
+    assert_eq!(vf.ir_body, IR_VIAFIELD, "viafield transcribes differently");
+    assert!(vf.text.contains("add_gen_conv_in_viafield"), "{}", vf.text);
+    assert!(vf.text.contains("Peek_gen_embed(PSome(add(gk, gk)))"), "{}", vf.text);
+    assert!(vf.text.contains("VCons(embed_nat(add(gk, gk)), VNil)"), "{}", vf.text);
+
     // (a) a wrong constructor tag: the body builds `Off` where every emitted
     // proof says `On`, so the exactness fixture's `refl` refuses it.
     let good = &ctx_get(&ctx, "is_zero").text;
@@ -297,6 +430,19 @@ fn nonnat_emissions_and_controls() {
         .replacen("Flag_gen_embed(is_zero(2))", "Flag_gen_embed(is_zero(0))", 1);
     assert!(m.contains("Flag_gen_embed(is_zero(0))"), "the mutation must apply");
     refuted(&mut e, &m, "wrong fixture result at a non-`Nat` result");
+
+    // (c) the FIELDS control: swap the two field references of `pack`'s
+    // constructor, so the IR builds `BSome(Succ(k), k)` where every emitted
+    // proof says `BSome(k, Succ(k))`. Well-formed, right tag, right arity —
+    // it RENDERS and computes the wrong value, which is the strong shape of
+    // control (docs/certgen-cert-expression-design.md §8 item 3) rather than
+    // an early decline.
+    let good = &ctx_get(&ctx, "pack").text;
+    let m = good
+        .replace("pack_gen", "packm1_gen")
+        .replacen("LetCon(1, RCons(1, RCons(0, RNil))", "LetCon(1, RCons(0, RCons(1, RNil))", 1);
+    assert!(m.contains("LetCon(1, RCons(0, RCons(1, RNil))"), "the mutation must apply");
+    refuted(&mut e, &m, "swapped constructor fields");
 }
 
 fn ctx_get<'a>(ctx: &'a GenCtx, name: &str) -> &'a heather_elab::certgen::Emission {

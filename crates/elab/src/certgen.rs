@@ -247,10 +247,10 @@ impl ResTy {
     /// per constructor, its fields embedded in declaration order. `Val` needs
     /// nothing (§1), so this is the whole of the artifact §8 item 2 named.
     ///
-    /// Written for constructor *fields* although this stage declines them
-    /// (§2.2, a measured size law on the walker's side, not on this one): the
-    /// scheme is the same at any arity, and the deferred stage inherits this
-    /// emitter unchanged.
+    /// Written for constructor *fields* one stage before they landed (§2.2's
+    /// cut was a measured size law on the walker's side, not on this one), and
+    /// the fields round inherited it **unchanged** —
+    /// `docs/certgen-ctor-fields-design.md` §7.
     fn embed_text(&self) -> String {
         let arms: String = self
             .ctors
@@ -278,9 +278,11 @@ impl ResTy {
 
     /// Resolve a declaration's result type. `Nat`, or a tier-0 enumeration:
     /// non-recursive, unindexed, unparameterized, at least one constructor,
-    /// no constructor fields (§2). Anything else is a decline — and the
-    /// *in-language* checker declines the same declarations independently,
-    /// which is the agreement property `generate_in_language` asserts.
+    /// every constructor field a `Nat`
+    /// (docs/certgen-ctor-fields-design.md §2). Anything else is a decline —
+    /// and the *in-language* checker declines the same declarations
+    /// independently, which is the agreement property
+    /// `generate_in_language` asserts.
     fn of(e: &Elaborator, d: &Decl) -> Result<ResTy, String> {
         use heather_syntax::ast::TyKind;
         match &d.result.kind {
@@ -309,17 +311,24 @@ impl ResTy {
                 }
                 let mut ctors = Vec::new();
                 for c in &ind.ctors {
-                    // Constructor FIELDS are deferred
-                    // (docs/certgen-non-nat-embeddings-design.md §8): the
-                    // in-language checker declines the same declarations, at
-                    // the payload rule, and this is the residue agreeing.
-                    if !c.fields.is_empty() {
-                        return Err(format!(
-                            "`{name}`'s constructor `{}` has fields: a constructor with \
-                             fields is deferred \
-                             (docs/certgen-non-nat-embeddings-design.md §8)",
-                            c.name
-                        ));
+                    // A constructor field must be a `Nat`
+                    // (docs/certgen-ctor-fields-design.md §6): the field's
+                    // embedding is `embed_nat` in the `embed_T` this struct
+                    // emits, and a field at another inductive would need that
+                    // type's own embedding. The in-language checker declines
+                    // the same declarations, at `sig_sigma`'s field rule, and
+                    // this is the residue agreeing — so a *disagreement* here
+                    // would be the loud kind rather than a decline.
+                    for (fname, fty) in &c.fields {
+                        if !matches!(fty.kind, TyKind::Nat) {
+                            let fname = fname.clone().unwrap_or_else(|| "_".to_string());
+                            return Err(format!(
+                                "`{name}`'s constructor `{}` has a field `{fname}` that is \
+                                 not a `Nat`: a field at another type needs that type's \
+                                 own embedding (docs/certgen-ctor-fields-design.md §6)",
+                                c.name
+                            ));
+                        }
                     }
                     ctors.push((c.name.clone(), c.fields.len()));
                 }
@@ -567,9 +576,30 @@ struct ProofCx<'a> {
     self_rec_idx: Option<usize>,
     /// How this member's *output* is embedded into `Val`, and which
     /// constructor names its `LetCon`s spell
-    /// (docs/certgen-non-nat-embeddings-design.md §3). Every temporary a
-    /// fragment body binds has this type; parameters and `gk` are `Nat`s.
+    /// (docs/certgen-non-nat-embeddings-design.md §3). Parameters and `gk` are
+    /// `Nat`s; a temporary's type is [`ProofCx::con_res`]'s positional rule.
     res: &'a ResTy,
+    /// The zero-th instance, kept beside `res` because with constructor fields
+    /// a chain holds temporaries of BOTH types and both have to be spellable
+    /// (docs/certgen-ctor-fields-design.md §5).
+    nat: ResTy,
+}
+
+/// The distance the region's closing `Ret` reads, in the environment `c`
+/// itself is proved in — `None` if the region does not end in a one-output
+/// `Ret`. Each instruction the region binds shifts it by one, so `Some(0)` at
+/// a sub-region means "the temporary just bound is what this region returns".
+fn cert_ret_dist(c: &RCert) -> Option<usize> {
+    match c {
+        RCert::Ret { rs } => match rs[..] {
+            [d] => Some(d),
+            _ => None,
+        },
+        RCert::Con { hr, .. } | RCert::Ih { hr, .. } | RCert::Call { hr, .. } => {
+            cert_ret_dist(hr).and_then(|d| d.checked_sub(1))
+        }
+        RCert::Match { .. } => None,
+    }
 }
 
 /// How a member's invariant theorem is applied at spec arguments.
@@ -602,6 +632,27 @@ fn slots(env: &[Sl], dists: &[usize]) -> Result<Vec<Sl>, String> {
 }
 
 impl ProofCx<'_> {
+    /// The type of the temporary a `LetCon` binds, and therefore which
+    /// constructor table its tag names and which embedding its spec is
+    /// written at. **Positional, never inferred** — the §2.3 sentence the
+    /// fields stage had to answer (docs/certgen-ctor-fields-design.md §5):
+    ///
+    ///   * the temporary the region RETURNS has the function's result type,
+    ///     because a region's output is the function's output;
+    ///   * every other temporary is a `Nat`, because the only other thing a
+    ///     temporary can be used for in this fragment is a constructor field
+    ///     or a call argument, and both are `Nat`s.
+    ///
+    /// For an all-`Nat` signature the two branches coincide, which is why
+    /// every pre-existing emission is byte-identical.
+    fn con_res(&self, hr: &RCert) -> &ResTy {
+        if cert_ret_dist(hr) == Some(0) {
+            self.res
+        } else {
+            &self.nat
+        }
+    }
+
     fn callee_idx(&self, name: &str) -> Result<usize, String> {
         self.closure
             .iter()
@@ -654,20 +705,24 @@ impl ProofCx<'_> {
                 Ok(sl)
             }
             RCert::Con { tag, args, hr } => {
-                let spec = self.res.ctor_spec(*tag, &slots(env, args)?)?;
-                let mut env2 = vec![self.res.at(spec)];
+                let rt = self.con_res(hr);
+                let spec = rt.ctor_spec(*tag, &slots(env, args)?)?;
+                let mut env2 = vec![rt.at(spec)];
                 env2.extend(env.iter().cloned());
                 self.ret_spec(hr, &env2)
             }
             RCert::Ih { args, hr } | RCert::Call { args, hr, .. } => {
-                let name = match c {
-                    RCert::Call { callee, .. } => callee.as_str(),
-                    _ => self.self_name,
+                // A self-call returns this function's result type; a FOREIGN
+                // callee is `Nat → … → Nat` by the marker convention, so its
+                // temporary is a `Nat` whatever this function returns.
+                let (name, rt) = match c {
+                    RCert::Call { callee, .. } => (callee.as_str(), &self.nat),
+                    _ => (self.self_name, self.res),
                 };
                 let arg_specs: Vec<String> =
                     slots(env, args)?.into_iter().map(|s| s.spec).collect();
                 let spec = format!("{name}({})", arg_specs.join(", "));
-                let mut env2 = vec![self.res.at(spec)];
+                let mut env2 = vec![rt.at(spec)];
                 env2.extend(env.iter().cloned());
                 self.ret_spec(hr, &env2)
             }
@@ -698,7 +753,8 @@ fn render_cert(
             let arg_exprs = slots(env_exprs, args)?;
             let fs = env_text(&arg_exprs, "VNil");
             let rest_ir = cx.cert_ir(hr)?;
-            let mut env2 = vec![cx.res.at(cx.res.ctor_spec(*tag, &arg_exprs)?)];
+            let rt = cx.con_res(hr);
+            let mut env2 = vec![rt.at(rt.ctor_spec(*tag, &arg_exprs)?)];
             env2.extend(env_exprs.iter().cloned());
             let hr = render_cert(cx, hr, &env2, tail, final_spec)?;
             format!(
@@ -710,7 +766,7 @@ fn render_cert(
             let arg_slots = slots(env_exprs, args)?;
             let arg_exprs: Vec<String> =
                 arg_slots.iter().map(|s| s.spec.clone()).collect();
-            let (idx, name, hc) = match c {
+            let (idx, name, hc, rt) = match c {
                 RCert::Call { callee, .. } => {
                     let cal = cx
                         .ctx
@@ -720,6 +776,11 @@ fn render_cert(
                         cx.callee_idx(callee)?,
                         callee.clone(),
                         cert_app(&(cx.conv_name)(callee), &cal.model, &arg_exprs),
+                        // A foreign callee's result is a `Nat` (the marker
+                        // convention), so its temporary is embedded at
+                        // `embed_nat` even inside an `R`-result function —
+                        // which is what lets a call feed a constructor field.
+                        &cx.nat,
                     )
                 }
                 _ => {
@@ -736,11 +797,16 @@ fn render_cert(
                         .map(|(_, s)| s.clone())
                         .collect();
                     others.push("VNil".into());
-                    (cx.self_idx, cx.self_name.to_string(), format!("gih({})", others.join(", ")))
+                    (
+                        cx.self_idx,
+                        cx.self_name.to_string(),
+                        format!("gih({})", others.join(", ")),
+                        cx.res,
+                    )
                 }
             };
             let cargs = env_text(&arg_slots, "VNil");
-            let spec = cx.res.at(format!("{name}({})", arg_exprs.join(", ")));
+            let spec = rt.at(format!("{name}({})", arg_exprs.join(", ")));
             let ws = out_text(&spec);
             let rest_ir = cx.cert_ir(hr)?;
             let mut env2 = vec![spec];
@@ -1015,6 +1081,7 @@ fn emit_invariant(
                 self_idx,
                 self_rec_idx: None,
                 res,
+                nat: ResTy::nat(),
             };
             let psig: String = params.iter().map(|p| format!("{p}: Nat, ")).collect();
             let param_sls: Vec<Sl> = params.iter().map(Sl::nat).collect();
@@ -1061,6 +1128,7 @@ fn emit_invariant(
                 self_idx,
                 self_rec_idx: Some(r.rec_idx),
                 res,
+                nat: ResTy::nat(),
             };
 
             // Per-constructor arm of the induction. The `letmatch_conv`
@@ -1129,22 +1197,29 @@ fn emit_instance(w: &mut String, f: &str, model: &FnIr, record: &str) {
 
 use std::rc::Rc;
 
+use heather_kernel::eval::Eval;
 use heather_kernel::level::Level;
 use heather_kernel::reduce::{self, Defs};
 use heather_kernel::subst::{GlobalEntry, GlobalSubst};
 use heather_kernel::term::{
-    GlobalBinding, GlobalVar, LocalCtx, LocalSubst, LocalVar, Term, Type,
+    CtxBase, GlobalBinding, GlobalVar, LocalCtx, LocalSubst, LocalVar, Term, Type,
 };
+use heather_kernel::value::{Elim, Env, TmClo, TyClo, Val};
 
 use crate::slots::Slot;
 use crate::Elaborator;
 
-/// Fuel for the transcriber's evaluation and readback — the kernel's own
-/// default, deliberately not a bespoke larger one. Reduction is *recursive*,
-/// so a fuel budget far above the ordinary one buys nothing but a stack
-/// overflow on a term that does not reduce the way the reader expects, and
+/// Fuel for **one force** of the analyzer's value graph — the kernel's own
+/// default, deliberately not a bespoke larger one.
+///
+/// The unit changed with the mechanism (docs/analyzer-evaluation-design.md
+/// §2) and the constant did not, which makes this *tighter* than the budget it
+/// replaces rather than looser: the rewriter spent this on each `whnf` of a
+/// sub-spine and there were hundreds of them per read, while the evaluator
+/// spends it on each `force` of the **shared** graph, where the memo means the
+/// work happens once. Measured headroom is three orders of magnitude, and
 /// running out is a decline like any other.
-const FUEL: u64 = heather_kernel::typing::DEFAULT_FUEL;
+const READ_FUEL: u64 = heather_kernel::typing::DEFAULT_FUEL;
 
 /// `(λ (x: Nat). x) ⌜n⌝` — the marker standing for the binder whose de Bruijn
 /// **level** is `n` (§1 of the design doc).
@@ -1495,8 +1570,18 @@ enum RIr {
     LetCall { callee: u64, args: Vec<u64>, rest: Box<RIr> },
 }
 
+/// The reader walks the analyzer's answer in the kernel's **value domain**:
+/// every sub-structure it holds is a [`TmClo`], forced on demand and
+/// memoized in place (docs/analyzer-evaluation-design.md).
 struct Reader<'a> {
     psi: &'a heather_kernel::term::GlobalCtx,
+    /// Rescoped definition bodies, memoized for the duration of one read.
+    /// Every δ-unfold rescopes the callee's whole body with `shift_global`,
+    /// and one transcription unfolds the same handful of library globals
+    /// thousands of times; the cache is owned beside the Ψ it belongs to and
+    /// dies with the read, which is the soundness condition `BodyCache`
+    /// states for itself.
+    bodies: reduce::BodyCache,
     /// Instructions read so far. The reader walks a value produced by a
     /// *library file*, which may be wrong in any way at all, so its own
     /// traversal is budgeted like everything else here: past the budget it
@@ -1510,85 +1595,121 @@ struct Reader<'a> {
 /// handful; four figures is generous and still nowhere near the stack.
 const READ_BUDGET: u32 = 4096;
 
+impl<'a> Reader<'a> {
+    fn new(psi: &'a heather_kernel::term::GlobalCtx) -> Reader<'a> {
+        Reader {
+            psi,
+            bodies: reduce::BodyCache::new(),
+            budget: std::cell::Cell::new(READ_BUDGET),
+        }
+    }
+}
+
 impl Reader<'_> {
-    fn whnf(&self, t: &Term) -> Result<Term, String> {
-        let empty = LocalCtx::nil();
-        reduce::whnf_term_delta(t, &empty, Defs::transparent(self.psi), FUEL)
-            .map_err(|_| "the transcriber ran out of fuel".to_string())
+    /// A closed term as a sub-structure of the value graph — the root a read
+    /// starts from. The empty environment is the identity environment of the
+    /// empty Γ, which is the context every analyzer application is built at.
+    fn root(&self, t: Term) -> Rc<TmClo> {
+        Rc::new(TmClo::syn(Env::empty(), Rc::new(t)))
+    }
+
+    /// The δ-transparent weak head **value** of a sub-structure.
+    ///
+    /// The memo lives in the sub-structure, not here: forcing the same
+    /// closure twice — which the walk does constantly, because a field is
+    /// read once to classify it and again to descend it — computes once.
+    /// That is the whole of this round's fix; see the design doc's §2.
+    fn force(&self, c: &Rc<TmClo>) -> Result<Rc<Val>, String> {
+        let mut ev = Eval::new(
+            READ_FUEL,
+            Defs::transparent_cached(self.psi, &self.bodies),
+            CtxBase::Nil,
+        );
+        let out = ev
+            .force(c)
+            .and_then(|v| ev.delta_whnf(v))
+            .map_err(|_| "the transcriber ran out of fuel".to_string())?;
+        Ok(out)
     }
 
     /// `(constructor index, non-recursive fields, recursive children)`.
-    fn ctor(&self, t: &Term, ctors: usize) -> Result<(usize, Vec<Term>, Vec<Term>), String> {
-        let w = self.whnf(t)?;
-        let (label, children) = match &w {
-            Term::Supf { label, children, .. } => {
-                ((**label).clone(), self.spine(children)?)
-            }
+    fn ctor(
+        &self,
+        c: &Rc<TmClo>,
+        ctors: usize,
+    ) -> Result<(usize, Vec<Rc<TmClo>>, Vec<Rc<TmClo>>), String> {
+        let w = self.force(c)?;
+        let (label, children) = match &*w {
+            Val::Supf { label, children, .. } => (Rc::clone(label), self.spine(children)?),
             // A non-recursive inductive is the bare tier-0 value.
-            other => (other.clone(), vec![]),
+            _ => (Rc::new(TmClo::val(Rc::clone(&w))), vec![]),
         };
-        let mut v = self.whnf(&label)?;
+        let mut v = self.force(&label)?;
         let mut idx = 0usize;
         loop {
-            match v {
-                Term::Inl { val, .. } => {
-                    v = self.whnf(&val)?;
-                    break;
-                }
-                Term::Inr { val, .. } => {
+            let next = match &*v {
+                Val::Inl { val, .. } => (Rc::clone(val), true),
+                Val::Inr { val, .. } => {
                     idx += 1;
                     if idx >= ctors {
                         return Err("a sum value deeper than the constructor list".into());
                     }
-                    v = self.whnf(&val)?;
+                    (Rc::clone(val), false)
                 }
                 _ => break,
+            };
+            v = self.force(&next.0)?;
+            if next.1 {
+                break;
             }
         }
         // `Pair(nominal tag, fields…)`: the tag distinguishes structurally
         // identical declarations and says nothing about the value.
-        let Term::Pair { snd, .. } = &v else {
+        let Val::Pair { snd, .. } = &*v else {
             return Err(format!("a constructor payload that is not a pair: {v:?}"));
         };
-        Ok((idx, self.spine(snd)?, children))
+        let snd = Rc::clone(snd);
+        Ok((idx, self.spine(&snd)?, children))
     }
 
     /// A right-nested `Pair` chain ending in `Triv`.
-    fn spine(&self, t: &Term) -> Result<Vec<Term>, String> {
+    fn spine(&self, c: &Rc<TmClo>) -> Result<Vec<Rc<TmClo>>, String> {
         let mut out = Vec::new();
-        let mut v = self.whnf(t)?;
+        let mut v = self.force(c)?;
         loop {
-            match v {
-                Term::Triv { .. } => return Ok(out),
-                Term::Pair { fst, snd, .. } => {
-                    out.push((*fst).clone());
-                    v = self.whnf(&snd)?;
+            let next = match &*v {
+                Val::Triv { .. } => return Ok(out),
+                Val::Pair { fst, snd, .. } => {
+                    out.push(Rc::clone(fst));
+                    Rc::clone(snd)
                 }
                 other => return Err(format!("a tuple that is not a pair chain: {other:?}")),
-            }
+            };
+            v = self.force(&next)?;
         }
     }
 
-    fn nat(&self, t: &Term) -> Result<u64, String> {
-        let mut v = self.whnf(t)?;
+    fn nat(&self, c: &Rc<TmClo>) -> Result<u64, String> {
+        let mut v = self.force(c)?;
         let mut n = 0;
         loop {
-            match v {
-                Term::Zero => return Ok(n),
-                Term::Succ(p) => {
+            let next = match &*v {
+                Val::Zero => return Ok(n),
+                Val::Succ(p) => {
                     n += 1;
                     if n > 1_000_000 {
                         return Err("an implausible numeral".into());
                     }
-                    v = self.whnf(&p)?;
+                    Rc::clone(p)
                 }
                 other => return Err(format!("a Nat that is not a numeral: {other:?}")),
-            }
+            };
+            v = self.force(&next)?;
         }
     }
 
     /// `Refs { RNil, RCons(i: Nat, next: Refs) }`.
-    fn refs(&self, t: &Term) -> Result<Vec<u64>, String> {
+    fn refs(&self, t: &Rc<TmClo>) -> Result<Vec<u64>, String> {
         let (idx, fields, children) = self.ctor(t, 2)?;
         match idx {
             0 => Ok(vec![]),
@@ -1606,7 +1727,7 @@ impl Reader<'_> {
     /// outside the fragment (`LetLoop`, `LoopIter`) decline: the in-language
     /// transcriber never emits them, so reading one means the value is not
     /// what this reader was pointed at.
-    fn ir(&self, t: &Term) -> Result<RIr, String> {
+    fn ir(&self, t: &Rc<TmClo>) -> Result<RIr, String> {
         let left = self.budget.get();
         if left == 0 {
             return Err("the transcription is implausibly large — declining".into());
@@ -1637,7 +1758,7 @@ impl Reader<'_> {
         }
     }
 
-    fn arms(&self, t: &Term) -> Result<Vec<RIr>, String> {
+    fn arms(&self, t: &Rc<TmClo>) -> Result<Vec<RIr>, String> {
         let (idx, _, children) = self.ctor(t, 8)?;
         match idx {
             4 => Ok(vec![]),
@@ -1679,7 +1800,7 @@ impl Reader<'_> {
     /// `Cert`, in `lib/certgen_cert.hthr`'s declaration order. `callees` is
     /// the reflection table a foreign tag `c ≥ 1` indexes; the self-call
     /// carries no name, because `CIh` says whose it is.
-    fn cert(&self, t: &Term, callees: &[String]) -> Result<RCert, String> {
+    fn cert(&self, t: &Rc<TmClo>, callees: &[String]) -> Result<RCert, String> {
         let left = self.budget.get();
         if left == 0 {
             return Err("the certificate is implausibly large — declining".into());
@@ -1728,7 +1849,7 @@ impl Reader<'_> {
         }
     }
 
-    fn cert_out(&self, t: &Term, callees: &[String]) -> Result<RCertOut, String> {
+    fn cert_out(&self, t: &Rc<TmClo>, callees: &[String]) -> Result<RCertOut, String> {
         let (idx, fields, _) = self.ctor(t, 2)?;
         let f = |i: usize| fields.get(i).ok_or_else(|| "a missing field".to_string());
         match idx {
@@ -1793,11 +1914,13 @@ fn analyzer_app(
 
 /// Apply the registered transcriber to `(Γ = ·, arity, the boxed marked
 /// body)` and read its answer back — both as `RIr`, the model the emitters
-/// consume, and as the `Ir` **term** itself, which is what the certificate
-/// fold is applied to (`run_cert_fold`). Handing the term over rather than
+/// consume, and as the `Ir` **value** itself, which is what the certificate
+/// fold is applied to (`run_cert_fold`). Handing the value over rather than
 /// rebuilding one is what lets the fold see exactly the value the transcriber
-/// produced: there is no second encoding of an `Ir` anywhere.
-fn run_transcriber(e: &Elaborator, arity: usize, code: Term) -> Result<(RIr, Term), String> {
+/// produced: there is no second encoding of an `Ir` anywhere — and, since the
+/// reader forced that value on the way past, the fold inherits every memo the
+/// readback wrote rather than re-reducing the `Ir` from its application.
+fn run_transcriber(e: &Elaborator, arity: usize, code: Term) -> Result<(RIr, Rc<TmClo>), String> {
     let mut nat = Term::Zero;
     for _ in 0..arity {
         nat = Term::Succ(Rc::new(nat));
@@ -1808,28 +1931,33 @@ fn run_transcriber(e: &Elaborator, arity: usize, code: Term) -> Result<(RIr, Ter
         "certgen.transcribe",
         vec![nat, code],
     )?;
-    // Evaluation is **spine-directed**: `Reader::whnf` reduces only what it is
-    // about to inspect, so nothing ever normalizes a whole IR tree at once
-    // (CLAUDE.md's memory discipline).
-    let r = Reader { psi: e.psi(), budget: std::cell::Cell::new(READ_BUDGET) };
-    let (idx, fields, _) = r.ctor(&term, 2)?;
+    // Evaluation is **demand-driven**: `Reader::force` computes only the weak
+    // head of what it is about to inspect, so nothing ever normalizes a whole
+    // IR tree at once (CLAUDE.md's memory discipline, design doc §4).
+    let r = Reader::new(e.psi());
+    let root = r.root(term);
+    let (idx, fields, _) = r.ctor(&root, 2)?;
     match idx {
         0 => Err("the in-language transcriber declined this body".into()),
         1 => {
             let ir = fields.first().ok_or("`TYes` without its IR")?;
-            Ok((r.ir(ir)?, ir.clone()))
+            Ok((r.ir(ir)?, Rc::clone(ir)))
         }
         _ => Err("the transcriber's answer is not a `TOut`".into()),
     }
 }
 
-/// `u^δ` for a program-layer global, with its type, at the empty context —
-/// the construction `resolve.rs`'s `derived_ref` makes for a written name
-/// (`GlobalVar(|Ψ| - 1 - abs)` and the empty delayed substitution) and the
-/// `shift_global` rescope `Elaborator::fn_type_code` makes for a reflected
-/// one. A Ψ global needs no staleness bookkeeping of its own: unlike a
-/// `MetaDef` it *is* Ψ-resident.
-fn global_app(e: &Elaborator, name: &str, args: Vec<Term>) -> Result<Term, String> {
+/// `u^δ v` for a program-layer global of one argument, as a **value** —
+/// the head is `resolve.rs`'s `derived_ref` construction for a written name
+/// (`GlobalVar(|Ψ| - 1 - abs)` and the empty delayed substitution), and the
+/// argument is a sub-structure of a value graph, so the application is a
+/// pending [`Elim::App`] rather than syntax. A Ψ global needs no staleness
+/// bookkeeping of its own: unlike a `MetaDef` it *is* Ψ-resident.
+///
+/// Building the elimination in the value domain is what keeps the design
+/// doc's no-round-trip rule (`docs/nbe-conversion-design.md` §7): the `Ir`
+/// never becomes syntax again on its way into the fold.
+fn global_app1(e: &Elaborator, name: &str, arg: Rc<TmClo>) -> Result<Rc<TmClo>, String> {
     let abs = e
         .global_abs(name)
         .ok_or_else(|| format!("`{name}` is not declared — the certificate fold is a library file"))?;
@@ -1838,27 +1966,25 @@ fn global_app(e: &Elaborator, name: &str, args: Vec<Term>) -> Result<Term, Strin
     };
     let len = e.psi().bindings.len();
     let empty = LocalCtx::nil();
-    let mut ty = Rc::new(ty.shift_global((len - abs) as u32));
-    let mut term = Term::GlobalTm {
+    let ty = ty.shift_global((len - abs) as u32);
+    let Type::Pi { dom_level, cod_level, dom, cod } = &ty else {
+        return Err(format!("`{name}`'s signature ran out of parameters"));
+    };
+    let head = Term::GlobalTm {
         var: GlobalVar((len - 1 - abs) as u32),
         subst: LocalSubst::id(&empty),
     };
-    for arg in args {
-        let Type::Pi { dom_level, cod_level, dom, cod } = &*ty else {
-            return Err(format!("`{name}`'s signature ran out of parameters"));
-        };
-        let arg = Rc::new(arg);
-        term = Term::App {
-            fun: Rc::new(term),
-            dom_level: dom_level.clone(),
-            cod_level: cod_level.clone(),
-            dom: Rc::clone(dom),
-            cod: Rc::clone(cod),
-            arg: Rc::clone(&arg),
-        };
-        ty = Rc::new((**cod).clone().apply_local(&LocalSubst::id(&empty).extended(arg)));
-    }
-    Ok(term)
+    let elim = Elim::App {
+        dom_level: dom_level.clone(),
+        cod_level: cod_level.clone(),
+        dom: Rc::new(TyClo::new(Env::empty(), Rc::clone(dom))),
+        cod: Rc::new(TyClo::new(Env::empty(), Rc::clone(cod))),
+        arg,
+    };
+    Ok(Rc::new(TmClo::elim(
+        Rc::new(TmClo::syn(Env::empty(), Rc::new(head))),
+        Rc::new(elim),
+    )))
 }
 
 /// The certificate fold (docs/certgen-cert-expression-design.md §5): apply
@@ -1868,12 +1994,12 @@ fn global_app(e: &Elaborator, name: &str, args: Vec<Term>) -> Result<Term, Strin
 /// No analyzer slot, and no `meta fn`: the fold is a program-layer function of
 /// one `Ir`, so an ordinary application is the whole invocation — which is
 /// also what keeps it off the 52-branch `rec_ga` gate every `match code` shell
-/// pays. Evaluation is the same spine-directed WHNF under the same budgets as
-/// every other readback here.
-fn run_cert_fold(e: &Elaborator, ir: Term, callees: &[String]) -> Result<RCertOut, String> {
-    let term = global_app(e, "cert_body", vec![ir])?;
-    let r = Reader { psi: e.psi(), budget: std::cell::Cell::new(READ_BUDGET) };
-    r.cert_out(&term, callees)
+/// pays. Evaluation is the same demand-driven forcing under the same budgets
+/// as every other readback here.
+fn run_cert_fold(e: &Elaborator, ir: Rc<TmClo>, callees: &[String]) -> Result<RCertOut, String> {
+    let app = global_app1(e, "cert_body", ir)?;
+    let r = Reader::new(e.psi());
+    r.cert_out(&app, callees)
 }
 
 /// The in-language fragment-signature verdict
@@ -1890,8 +2016,9 @@ fn run_sig_checker(e: &Elaborator, name: &str) -> Result<(u64, u64), String> {
         .fn_type_code(name)
         .ok_or_else(|| format!("`{name}` has no declared type to reflect"))?;
     let term = analyzer_app(e, Slot::CertgenCheckSig, "certgen.check_sig", vec![sig])?;
-    let r = Reader { psi: e.psi(), budget: std::cell::Cell::new(READ_BUDGET) };
-    let (idx, fields, _) = r.ctor(&term, 2)?;
+    let r = Reader::new(e.psi());
+    let root = r.root(term);
+    let (idx, fields, _) = r.ctor(&root, 2)?;
     match idx {
         0 => Err(format!(
             "the in-language signature checker declined `{name}`: the fragment \
@@ -1927,6 +2054,11 @@ fn chain_from_rir(
     let mut instrs = Vec::new();
     let mut has_self_call = false;
     let mut cur = ir;
+    // The zero-th instance, for the temporaries a chain binds that are NOT the
+    // function's result: with constructor fields, a chain holds both
+    // (docs/certgen-ctor-fields-design.md §5, and `ProofCx::con_res`, which
+    // makes the same call one layer up and must make it the same way).
+    let nat = ResTy::nat();
     let inrange = |d: u64, depth: usize| -> Result<usize, String> {
         ((d as usize) < depth)
             .then_some(d as usize)
@@ -1941,16 +2073,20 @@ fn chain_from_rir(
                 return Ok(Chain { instrs, ret_dist: inrange(d, depth)?, has_self_call });
             }
             RIr::LetCon { tag, args, rest } => {
-                // Every constructor a fragment body builds is one of the
-                // RESULT type's (§2.3), so a tag the result type cannot name —
-                // or one with the wrong number of arguments — is a
-                // certificate the renderer could not spell. For `Nat` this is
-                // exactly the `0 | 1` check it replaces.
-                let (_, fields) = res
+                // Which type's constructor this tag names is the positional
+                // rule `ProofCx::con_res` states: the temporary the region
+                // returns is the function's result, everything else is a
+                // `Nat` (a constructor field or a call argument). A tag that
+                // type cannot name — or one with the wrong number of
+                // arguments — is a certificate the renderer could not spell.
+                // For an all-`Nat` signature this is exactly the `0 | 1`
+                // check it replaces.
+                let rt = if rir_ret_dist(rest) == Some(0) { res } else { &nat };
+                let (_, fields) = rt
                     .ctors
                     .get(*tag as usize)
                     .ok_or_else(|| {
-                        format!("constructor tag {tag} is not a constructor of `{}`", res.name)
+                        format!("constructor tag {tag} is not a constructor of `{}`", rt.name)
                     })?;
                 if *fields != args.len() {
                     return Err(format!(
@@ -1973,18 +2109,15 @@ fn chain_from_rir(
                 // not closure indices — this is the one place the walker's
                 // numbering is converted, and the emitters compute the
                 // program closure from the names, downstream.
+                // A foreign callee is `Nat → … → Nat`, so its temporary is a
+                // `Nat` even in a chain whose returned temporary is an `R`.
+                // That used to be a decline — the renderer had no per-slot
+                // type (non-`Nat` design §2.3) — and the fields stage supplies
+                // one positionally, so cross-function composition at a
+                // non-`Nat` result lands here rather than in a round of its
+                // own (docs/certgen-ctor-fields-design.md §5).
                 let cname = if *callee == 0 {
                     name
-                } else if !res.is_nat() {
-                    // A foreign callee is `Nat → … → Nat`, so its temporary
-                    // would be a `Nat` in a chain whose other temporaries are
-                    // `R`s — and the renderer types slots by position, not by
-                    // inference (§2.3). Declined, with its home recorded.
-                    return Err(format!(
-                        "a cross-function call from a function returning `{}` is \
-                         deferred (docs/certgen-non-nat-embeddings-design.md §8)",
-                        res.name
-                    ));
                 } else {
                     callees
                         .get(*callee as usize - 1)
@@ -2004,6 +2137,25 @@ fn chain_from_rir(
                 return Err("a nested `LetMatch` is outside the fragment".into());
             }
         }
+    }
+}
+
+/// [`cert_ret_dist`] one layer down, on the read-back `Ir` instead of on the
+/// certificate: the distance the region's closing `Ret` reads, expressed in
+/// the environment at this point of the chain. The two walks must agree,
+/// because they type the same temporaries — and they do by construction, since
+/// the certificate fold is a per-instruction map over exactly this chain
+/// (`lib/certgen_cert.hthr` convention 3).
+fn rir_ret_dist(ir: &RIr) -> Option<usize> {
+    match ir {
+        RIr::Ret(rs) => match rs[..] {
+            [d] => Some(d as usize),
+            _ => None,
+        },
+        RIr::LetCon { rest, .. } | RIr::LetCall { rest, .. } => {
+            rir_ret_dist(rest).and_then(|d| d.checked_sub(1))
+        }
+        RIr::LetMatch { .. } => None,
     }
 }
 

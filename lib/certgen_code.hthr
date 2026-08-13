@@ -45,15 +45,15 @@
 //    from names, exactly as for the Rust path.
 //
 // 4. NON-`Nat` CONSTRUCTOR VALUES (docs/certgen-non-nat-embeddings-design.md
-//    §4). A fragment fn's RESULT type may be a tier-0 enumeration, so the
-//    body's constructor values arrive in the tier-0 lowering's shape rather
-//    than as `Zero`/`Succ`: `inr^i(inl(Pair(<nominal tag>, Triv)))` — this
-//    stage's constructors take no fields, so the payload's second component
-//    is the empty chain. The LAST constructor of an n-ary sum has no trailing
-//    `inl`, and a ONE-constructor enum is the bare payload with no sum. That
-//    reading mints the same tag `i` the emitter's `embed_T` and the
-//    readback's own `inr^i(inl(·))` walk use, so the three agree by
-//    construction rather than by comment.
+//    §4, widened by docs/certgen-ctor-fields-design.md). A fragment fn's
+//    RESULT type may be a tier-0 enumeration whose constructors take `Nat`
+//    FIELDS, so the body's constructor values arrive in the tier-0 lowering's
+//    shape rather than as `Zero`/`Succ`:
+//    `inr^i(inl(Pair(<nominal tag>, Pair(f₁, … Pair(f_k, Triv)))))`. The LAST
+//    constructor of an n-ary sum has no trailing `inl`, and a ONE-constructor
+//    enum is the bare payload with no sum. That reading mints the same tag `i`
+//    the emitter's `embed_T` and the readback's own `inr^i(inl(·))` walk use,
+//    so the three agree by construction rather than by comment.
 //
 //    The NOMINAL TAG (docs/inductive-tier0-lowering.md §3.3) is *not* a bare
 //    `Triv`: it is the declaration index's binary digits as a `Pair`-spine of
@@ -62,6 +62,13 @@
 //    component is pure" rather than "the first component is `Triv`" — a fact
 //    about the lowering that only shows up once a session declares more than
 //    one inductive.
+//
+//    The tag and the fields are told apart by POSITION, which is the whole
+//    trick: the second component of a `Pair` is always the rest of the field
+//    chain, the first is a field unless it is pure, and a pure first component
+//    is the nominal tag. So one state (`TFlds`) serves both "a field chain"
+//    and "a payload with fields", and the walker never has to know which of
+//    the two it is looking at until an `inl`/`inr` — or the fn's root — asks.
 //
 // The two meet exactly once, in `dist` and its callers: a reference is
 // carried as a level all the way through composition and converted to a
@@ -114,14 +121,21 @@ inductive Pre {
 // all of them, carrying the arguments compiled so far as a merged prefix
 // plus their references in slot order. Neither is a value: unapplied or
 // half-applied calls decline at rendering, like every other non-value.
-// … and the two NON-`Nat` CONSTRUCTOR states (convention 4): `TPure` is a
-// value built from `Triv` and `Pair` alone — the NOMINAL TAG spine, and, since
-// this stage's constructors take no fields, a whole constructor payload; and
-// `TCtor` is that payload with its index, grown one `inr` at a time. Both ARE
-// values: each renders as one `LetCon` with no arguments, which is why neither
-// carries a prefix. Keeping them field-free is deliberate — every `match` on
-// `TA` copies each of this type's field types once per arm
-// (issues/wf-field-conversion-cost.md), and `Pre` is the file's largest.
+// … and the three NON-`Nat` CONSTRUCTOR states (convention 4): `TPure` is a
+// value built from `Triv` and `Pair` alone — the NOMINAL TAG spine, and a
+// field-free constructor payload, which are the same term; `TFlds` is a field
+// chain (and, once its tag has been consumed, a payload WITH fields), carrying
+// its fields' instructions merged into one prefix and their references in slot
+// order, exactly as `TPart` carries a call's arguments; and `TCtor` is a
+// payload with its constructor index, grown one `inr` at a time. All three are
+// values: each renders as one `LetCon` over the fields it collected.
+//
+// `TFlds` and `TCtor`'s three payload fields are what the fields stage costs
+// on the file's own size law — every `match` on `TA` copies each of this
+// type's field types once per arm (issues/wf-field-conversion-cost.md), and
+// `Pre` is the file's largest. It is ONE new constructor and no new arm in any
+// existing `match`, which is the whole reason the widening is affordable
+// (docs/certgen-ctor-fields-design.md §4).
 inductive TA {
     TStuck,
     TNum(n: Nat),
@@ -132,7 +146,8 @@ inductive TA {
     TFn(c: Nat, rem: Nat),
     TPart(c: Nat, rem: Nat, pre: Pre, len: Nat, args: PRefs),
     TPure,
-    TCtor(tag: Nat),
+    TFlds(pre: Pre, len: Nat, args: PRefs),
+    TCtor(tag: Nat, pre: Pre, len: Nat, args: PRefs),
 }
 
 inductive TOut { TNo, TYes(body: Ir) }
@@ -246,22 +261,24 @@ fn num_pre(n: Nat) -> Pre {
 // `VOut` is a *small* type on purpose, and it is the file's main size lever:
 // every consumer of a value (`ta_call`, `render_ta`) matches this
 // two-constructor type instead of matching `TA` again, and `TA` is the
-// expensive one — ten constructors, carrying `Pre` and `Ir`, so a `match` on
-// it costs Θ(arms × |lowered field type|)
+// expensive one — eleven constructors, carrying `Pre` and `Ir`, so a `match`
+// on it costs Θ(arms × |lowered field type|)
 // (issues/wf-field-conversion-cost.md). One `TA` match here replaces three,
 // and the same rule is why no `match` on `TA` in this file contains another.
 inductive VOut { VNo, VYes(pre: Pre, res: PRef, len: Nat) }
 
 // A numeral is its instructions (`num_pre`, exactly as a numeral in any other
 // value position); a compiled expression is itself; a constructor value is one
-// more `LetCon` whose own value is itself — the same shape a saturated call
-// renders to — and a bare pure payload is that at index 0 with no fields
-// (convention 4).
+// more `LetCon` over the fields it collected, whose own value is itself — the
+// same shape a saturated call renders to. A payload that never met an `inl` or
+// an `inr` is a ONE-constructor enumeration's value and reads index 0, with
+// its fields (`TFlds`) or without them (`TPure`) — convention 4.
 fn ta_val(a: TA) -> VOut {
     match a {
         TNum(n) => VYes(num_pre(n), RLoc(n), Succ(n)),
         TExp(pre, res, len) => VYes(pre, res, len),
-        TCtor(tag) => VYes(PCon(tag, QNil, PEnd), RLoc(0), 1),
+        TCtor(tag, pre, len, args) => VYes(PCon(tag, args, pre), RLoc(len), Succ(len)),
+        TFlds(pre, len, args) => VYes(PCon(0, args, pre), RLoc(len), Succ(len)),
         TPure => VYes(PCon(0, QNil, PEnd), RLoc(0), 1),
         _ => VNo,
     }
@@ -424,41 +441,80 @@ fn ta_app(arity: Nat, f: TA, a: TA) -> TA {
 // ---------------------------------------------------------------------------
 // Non-`Nat` constructor values (convention 4). A fragment fn whose RESULT type
 // is a tier-0 enumeration builds its answers with the lowering's own formers,
-// so the walker recognizes `inr^i(inl(Pair(<nominal tag>, Triv)))` and mints
-// the constructor index the emitter's `embed_T` uses. Nothing here knows what
-// the type is CALLED — that is a name, and names are the rim's (design §6).
+// so the walker recognizes
+// `inr^i(inl(Pair(<nominal tag>, Pair(f₁, … Pair(f_k, Triv)))))` and mints both
+// the constructor index the emitter's `embed_T` uses and the fields' compiled
+// instructions. Nothing here knows what the type is CALLED — that is a name,
+// and names are the rim's (design §6).
 
-// `Triv` is the leaf of every field-free value: the end of a field chain, a
-// digit of the nominal tag, and the whole payload of a nullary constructor.
+// `Triv` is the leaf of every field-free value: the END of a field chain (so
+// the empty chain), a digit of the nominal tag, and the whole payload of a
+// nullary constructor.
 fn ta_triv() -> TA { TPure }
 
-// A `Pair` of two pure components is pure again: that is what a nominal-tag
-// digit is, and — because this stage's constructors take no fields — what a
-// whole constructor payload `Σ(<tag>). Unit` is too. A pair with a VALUE in it
-// is a constructor with a field, which is deferred
-// (docs/certgen-non-nat-embeddings-design.md §8), so it declines.
+// One field onto a chain, and the only place two compiled sub-expressions meet
+// outside `ta_call` — the same merge, for the same reason: the new field's
+// instructions run AFTER the ones already collected, so its own `RLoc` indices
+// shift by `len` while its `RLvl`s (binders) do not. Fields are collected
+// right-to-left, so the new one is consed at the FRONT of the slot list.
+fn ta_flds_cons(v: VOut, pre: Pre, len: Nat, args: PRefs) -> TA {
+    match v {
+        VYes(pa, ra, la) => TFlds(pre_append(shift_pre(pa, len), pre), add(len, la),
+                                  QCons(shift_ref(ra, len), args)),
+        VNo => TStuck,
+    }
+}
+
+// A `Pair` over the EMPTY chain (`Triv`). A pure first component is a
+// nominal-tag digit or a field-free payload — the same term, deliberately not
+// told apart — and anything else is the chain's last field.
+fn ta_pair_end(a: TA) -> TA {
+    match a {
+        TPure => TPure,
+        _ => ta_flds_cons(ta_val(a), PEnd, 0, QNil),
+    }
+}
+
+// A `Pair` over a non-empty chain. A pure first component is the payload's
+// NOMINAL TAG, which is not a field and contributes nothing: the chain passes
+// through unchanged and is a payload from here on. Anything else is one more
+// field.
+fn ta_pair_cons(a: TA, pre: Pre, len: Nat, args: PRefs) -> TA {
+    match a {
+        TPure => TFlds(pre, len, args),
+        _ => ta_flds_cons(ta_val(a), pre, len, args),
+    }
+}
+
+// The second component decides which of the two a `Pair` is; the first decides
+// tag-versus-field. Split into three `fn`s because the file's size rule says a
+// `match` on `TA` never contains another (`VOut`'s comment): this is one
+// two-arm `match` per function instead of one nested pair of them.
 fn ta_pair(a: TA, b: TA) -> TA {
     match b {
-        TPure => match a { TPure => TPure, _ => TStuck },
+        TPure => ta_pair_end(a),
+        TFlds(pre, len, args) => ta_pair_cons(a, pre, len, args),
         _ => TStuck,
     }
 }
 
 // `inl` wraps the payload of a non-last constructor and leaves the index at 0;
-// `inr` steps past one summand. In the lowering `inl` never wraps anything but
-// a payload, so a non-zero index under one is outside the fragment.
+// `inr` steps past one summand, carrying the payload's collected fields
+// through untouched. In the lowering `inl` never wraps anything but a payload,
+// so an already-indexed value under one is outside the fragment.
 fn ta_inl(t: TA) -> TA {
     match t {
-        TPure => TCtor(0),
-        TCtor(tag) => match tag { Zero => TCtor(0), Succ(g) => TStuck },
+        TPure => TCtor(0, PEnd, 0, QNil),
+        TFlds(pre, len, args) => TCtor(0, pre, len, args),
         _ => TStuck,
     }
 }
 
 fn ta_inr(t: TA) -> TA {
     match t {
-        TPure => TCtor(1),
-        TCtor(tag) => TCtor(Succ(tag)),
+        TPure => TCtor(1, PEnd, 0, QNil),
+        TFlds(pre, len, args) => TCtor(1, pre, len, args),
+        TCtor(tag, pre, len, args) => TCtor(Succ(tag), pre, len, args),
         _ => TStuck,
     }
 }
@@ -526,16 +582,19 @@ fn ta_finish(arity: Nat, t: TA) -> TOut {
 // of. `SNat` is the one leaf that is a `Nat`; `SPure` is anything built from
 // `Unit` and Σ alone — which covers `Unit` itself, the NOMINAL TAG type
 // (`docs/inductive-tier0-lowering.md` §3.3: the declaration index's binary
-// digits, so not a bare `Unit` in general), and, since this stage's
-// constructors take no fields, a whole payload `Σ(<tag>). Unit`. `SEnum(k)` is
-// a right-nested sum of `k` payloads — the lowering of a tier-0 enumeration
-// with `k` constructors; `SFn` is a fragment signature. `SNo` is the decline,
-// total like `TStuck`.
+// digits, so not a bare `Unit` in general), and a whole field-free payload
+// `Σ(<tag>). Unit`. `SFlds` is a Σ chain of `Nat`s — a constructor's FIELD
+// spine, and (once its tag is consumed) a payload with fields; it mirrors the
+// term side's `TFlds` exactly, position for position. `SEnum(k)` is a
+// right-nested sum of `k` payloads — the lowering of a tier-0 enumeration with
+// `k` constructors; `SFn` is a fragment signature. `SNo` is the decline, total
+// like `TStuck`.
 inductive SA {
     SNo,
     SNat,
     SPure,
     SEnum(k: Nat),
+    SFlds,
     SFn(arity: Nat, res: Nat),
 }
 
@@ -547,27 +606,59 @@ inductive SA {
 // (issues/wf-field-conversion-cost.md).
 inductive SigOut { SigNo, SigYes(arity: Nat, res: Nat) }
 
-// A Σ of two pures is pure again — a tag spine, and a no-field payload. A Σ
-// with a `Nat` in it is a constructor FIELD, which is deferred
-// (docs/certgen-non-nat-embeddings-design.md §8), so it declines here and the
-// declaration it came from is not in the fragment.
-fn sig_sigma(fst: SA, snd: SA) -> SA {
+// A Σ over `Unit` — the end of a field spine. Two pures are pure again (a tag
+// spine, a field-free payload); a `Nat` there is the last field of a
+// one-field constructor.
+//
+// A field whose type is another INDUCTIVE declines here, and that is this
+// stage's boundary rather than an accident: the term side would read such a
+// field perfectly well (it is a value like any other), but `embed_T` would
+// have to embed it at the field type's own embedding, which is emitter work
+// (docs/certgen-ctor-fields-design.md §6).
+fn sig_sigma_end(fst: SA) -> SA {
     match fst {
-        SPure => match snd { SPure => SPure, _ => SNo },
+        SPure => SPure,
+        SNat => SFlds,
+        _ => SNo,
+    }
+}
+
+// A Σ over a field spine. `SPure` in the first component is the payload's
+// NOMINAL TAG — consumed, not counted — and `SNat` is one more field; both
+// answer `SFlds`, exactly as `ta_pair_cons` answers `TFlds` for both.
+fn sig_sigma_cons(fst: SA) -> SA {
+    match fst {
+        SPure => SFlds,
+        SNat => SFlds,
+        _ => SNo,
+    }
+}
+
+fn sig_sigma(fst: SA, snd: SA) -> SA {
+    match snd {
+        SPure => sig_sigma_end(fst),
+        SFlds => sig_sigma_cons(fst),
         _ => SNo,
     }
 }
 
 // A sum is right-nested and only its LAST summand is a bare payload, so the
-// left side is always one constructor and the right side is either the last
-// one or the rest of the enumeration.
+// left side is always one constructor — with fields (`SFlds`) or without
+// (`SPure`) — and the right side is either the last one or the rest of the
+// enumeration.
+fn sig_sum_pay(rhs: SA) -> SA {
+    match rhs {
+        SPure => SEnum(2),
+        SFlds => SEnum(2),
+        SEnum(k) => SEnum(Succ(k)),
+        _ => SNo,
+    }
+}
+
 fn sig_sum(lhs: SA, rhs: SA) -> SA {
     match lhs {
-        SPure => match rhs {
-            SPure => SEnum(2),
-            SEnum(k) => SEnum(Succ(k)),
-            _ => SNo,
-        },
+        SPure => sig_sum_pay(rhs),
+        SFlds => sig_sum_pay(rhs),
         _ => SNo,
     }
 }
@@ -576,12 +667,13 @@ fn sig_sum(lhs: SA, rhs: SA) -> SA {
 // `Nat -> Nat` domain arrives as `SFn(1, 0)` and declines — and its codomain
 // is either the result type or a fragment signature one parameter shorter.
 // A one-constructor enumeration has no sum at all, so a bare payload is a
-// result too.
+// result too — with fields (`SFlds`) or without (`SPure`).
 fn sig_pi(dom: SA, cod: SA) -> SA {
     match dom {
         SNat => match cod {
             SNat => SFn(1, 0),
             SPure => SFn(1, 1),
+            SFlds => SFn(1, 1),
             SEnum(k) => SFn(1, k),
             SFn(a, r) => SFn(Succ(a), r),
             _ => SNo,
@@ -763,10 +855,61 @@ theorem inl_of_an_index_declines():
     ta_inl(ta_inr(ta_pair(ta_triv(), ta_triv()))) = TStuck
 { refl }
 
-// A constructor FIELD is a payload with a value in it, which this stage
-// defers (design doc §8): the walker declines it rather than mis-reading it.
-theorem ctor_with_a_field_declines():
-    ta_pair(ta_zero(), ta_triv()) = TStuck
+// CONSTRUCTOR FIELDS (docs/certgen-ctor-fields-design.md). A payload with a
+// value in it is a constructor with a field: the field is compiled like any
+// other expression and its reference becomes an argument of the one `LetCon`.
+// `PSome(0)` of `Peek {PNone, PSome(k: Nat)}` — the literal is its own
+// instruction, and the constructor reads it at distance 0.
+theorem ctor_with_one_field():
+    ta_finish(1, ta_inr(ta_pair(ta_triv(), ta_pair(ta_zero(), ta_triv()))))
+    = TYes(LetCon(0, RNil, LetCon(1, RCons(0, RNil), Ret(RCons(0, RNil)))))
+{ refl }
+
+// TWO fields, at two parameters of a 2-ary fn: slot order is the chain's
+// order, left to right, which is what the emitter's `embed_T` and `ctor_spec`
+// both assume. Parameter 0 is level 1 in a depth-2 environment (distance 0)
+// and parameter 1 is level 0 (distance 1), so a swapped field list is visible
+// here as `RCons(1, RCons(0, …))`.
+theorem ctor_field_order():
+    ta_finish(2, ta_inl(ta_pair(ta_triv(),
+        ta_pair(ta_app(2, ta_lam(ta_stuck(), ta_var()), ta_zero()),
+        ta_pair(ta_app(2, ta_lam(ta_stuck(), ta_var()), ta_succ(ta_zero())),
+                ta_triv())))))
+    = TYes(LetCon(0, RCons(0, RCons(1, RNil)), Ret(RCons(0, RNil))))
+{ refl }
+
+// A field is an arbitrary expression, so it carries its own INSTRUCTIONS and
+// they are merged before the constructor's: the numeral 2 is three `LetCon`s,
+// and the third constructor of a three-constructor enumeration reads their
+// result at distance 0.
+theorem ctor_field_is_computed():
+    ta_finish(1, ta_inr(ta_inr(ta_pair(ta_triv(),
+        ta_pair(ta_succ(ta_succ(ta_zero())), ta_triv())))))
+    = TYes(LetCon(0, RNil,
+          LetCon(1, RCons(0, RNil),
+          LetCon(1, RCons(0, RNil),
+          LetCon(2, RCons(0, RNil), Ret(RCons(0, RNil)))))))
+{ refl }
+
+// …and the merge is the one `ta_call` already does, so a field may be a
+// CROSS-FUNCTION CALL: the callee marker's tag rides through to the `LetCall`
+// and the constructor reads its result. This is what makes cross-function
+// composition at a non-`Nat` result land with fields rather than after them
+// (docs/certgen-ctor-fields-design.md §5).
+theorem ctor_field_is_a_call():
+    ta_finish(1, ta_inr(ta_pair(ta_triv(),
+        ta_pair(ta_app(1, ta_lam(ta_stuck(), ta_succ(ta_zero())),
+                       ta_app(1, ta_lam(ta_stuck(), ta_var()), ta_zero())),
+                ta_triv()))))
+    = TYes(LetCall(1, RCons(0, RNil),
+          LetCon(1, RCons(0, RNil), Ret(RCons(0, RNil)))))
+{ refl }
+
+// A field that is not a VALUE — a bare variable leaf, an unapplied callee
+// chain — is not a constructor argument the walker can compile, and declining
+// is total: the whole payload sticks.
+theorem ctor_field_must_be_a_value_declines():
+    ta_pair(ta_var(), ta_triv()) = TStuck
 { refl }
 
 // The signature checker's own pins: `dbl`'s and `add`'s signatures, spelled
@@ -805,16 +948,32 @@ theorem sig_three_ctors():
     sig_sum(SPure, sig_sum(SPure, SPure)) = SEnum(3)
 { refl }
 
-// A constructor FIELD — a `Nat` inside the payload's Σ chain — is deferred to
-// a later stage (docs/certgen-non-nat-embeddings-design.md §8), and the
-// decline is the payload rule's.
-theorem sig_ctor_with_a_field_declines():
-    sig_sigma(SPure, sig_sigma(SNat, SPure)) = SNo
+// A constructor FIELD — a `Nat` inside the payload's Σ chain — reads `SFlds`,
+// the type-side mirror of `TFlds`: the tag is consumed and the fields are what
+// is left (docs/certgen-ctor-fields-design.md §4).
+theorem sig_ctor_with_a_field():
+    sig_sigma(SPure, sig_sigma(SNat, SPure)) = SFlds
 { refl }
 
-// …so a declaration one of whose constructors carries a field is out whole.
-theorem sig_enum_with_a_field_declines():
-    sig_sum(SPure, sig_sigma(SPure, sig_sigma(SNat, SPure))) = SNo
+// …two fields read the same state, because the verdict counts CONSTRUCTORS and
+// the rim already knows each one's field count from the declaration (§5).
+theorem sig_ctor_with_two_fields():
+    sig_sigma(SPure, sig_sigma(SNat, sig_sigma(SNat, SPure))) = SFlds
+{ refl }
+
+// …so a declaration one of whose constructors carries a field is in whole, and
+// still counts two constructors.
+theorem sig_enum_with_a_field():
+    sig_finish(sig_pi(SNat,
+        sig_sum(SPure, sig_sigma(SPure, sig_sigma(SNat, SPure)))))
+    = SigYes(1, 2)
+{ refl }
+
+// A field whose type is another INDUCTIVE is out: the term side would read it,
+// but `embed_T` would have to embed it at that type's own embedding, which is
+// emitter work this stage does not do (docs/certgen-ctor-fields-design.md §6).
+theorem sig_ctor_with_an_enum_field_declines():
+    sig_sigma(SPure, sig_sigma(sig_sum(SPure, SPure), SPure)) = SNo
 { refl }
 
 // A ONE-constructor enumeration has no sum at all, and is still a result.

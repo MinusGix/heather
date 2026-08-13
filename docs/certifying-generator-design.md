@@ -311,18 +311,21 @@ The four axes, instantiated for this generator:
    **parameters** (blocked on `Term::Case`'s lowering, not on effort), and
    **tier-1** source types (whose `Converges` induction is over `T`, not over
    `Nat`, so it is a different `CertOut` shape).
-   **Stage 2 (fields) was designed, implemented and deferred again on
-   2026-08-13** — `docs/certgen-ctor-fields-design.md`. The re-probe that round
-   was chartered to run says the elaboration cliff the non-`Nat` round cut it on
-   is gone, and that what defers it now is the transcriber's **in-language
-   evaluation** cost: generating a fixture whose body builds a two-field
-   constructor exceeds `scripts/test`'s address-space rail, and the fragment
-   cannot decline the expensive shapes honestly because `check_sig` accepts a
-   declaration by its type. The design is worked out and was kernel-checked end
-   to end for a one-field constructor before being reverted; it also carries
-   cross-function composition at a non-`Nat` result (that doc's §5), which the
-   non-`Nat` round had deferred to land with it. The lever is on
-   `issues/certgen-harness-cost.md`.
+   **Stage 2 (fields) LANDED 2026-08-13** —
+   `docs/certgen-ctor-fields-design.md`, at its second attempt and at the same
+   design. Its first round designed, implemented, kernel-checked and then
+   *reverted* the stage on cost, having first established that the elaboration
+   cliff the non-`Nat` round cut it on was gone; what deferred it was the
+   transcriber's **in-language evaluation**, and the second round removed that
+   at the analyzer seam rather than in the walker
+   (`docs/analyzer-evaluation-design.md`,
+   `issues/certgen-analyzer-evaluation-cost.md`): the elaborator drives the
+   analyzers through the kernel's value domain instead of its rewriter. So a
+   constructor's fields are `Nat`s, arbitrary fragment expressions, and may be
+   cross-function calls — which discharges cross-function composition at a
+   non-`Nat` result (that doc's §5), the thing the non-`Nat` round deferred to
+   land with this one. Two stages remain: non-`Nat` **parameters** and
+   **tier-1** source types.
 3. **Loopification as a refinement-certified pass**, hand-run first on one
    generated function against its `add_instance_loop` analogue.
 4. **The meta-layer re-homing**, when its prerequisites land. The
