@@ -136,6 +136,17 @@ point at a fifth of the cost: `embed_T` is still a per-type derived artifact,
 the certificate's goal is still a non-`Nat` embedding, and the tags still run
 past 0/1.
 
+*(2026-08-13, second note — **this table is superseded as the reason fields are
+out**, and `docs/certgen-ctor-fields-design.md` is the record. The feature round
+re-probed as the note below told it to, with the feature implemented rather
+than extrapolated: the elaboration cliff this table prices is **gone** (the
+widened file costs ~30% more on a file an order of magnitude cheaper than the
+one measured here, nowhere near any rail), and what defers the stage instead is
+the **in-language evaluation** cost of generating a fixture with a field, which
+no elaborator spelling round touches. Read the "generating one fixture" column
+as the surviving half of this table and the elaboration column as history; the
+numbers, old and new, are in `issues/certgen-harness-cost.md`.)*
+
 *(2026-08-13, [[wf-field-conversion-cost]]'s component-respell round: the
 size law this table prices was cut at its constant — statements, `App`
 annotations, projection chains, field tuples and injection spines now
@@ -444,12 +455,20 @@ on a non-`Nat` emission, not only on the `Nat` ones.
   compiled prefix again, and §2.2 is the measured price. The *emitter* side is
   already written for them (`embed_T`'s scheme, a constructor spec's arguments,
   the readback's arity check), so the deferred stage is a walker stage. Home:
-  `docs/certifying-generator-design.md` §8 item 2, second stage.
+  **`docs/certgen-ctor-fields-design.md`** (2026-08-13), which designs it whole,
+  records that it was implemented and checked end to end, and defers it on a
+  re-measured and re-attributed cost — the transcriber's *evaluation*, not the
+  elaboration this document priced.
 - **Fields of another enum**, once fields land — a composition step over §3's
-  `embed_T`; no new mechanism, real emitter work.
+  `embed_T`; no new mechanism, real emitter work. (Confirmed by the fields
+  round: the *walker* reads such a field with no change at all; what is missing
+  is per-field embeddings at the rim — `docs/certgen-ctor-fields-design.md` §6.)
 - **Cross-function composition at a non-`Nat` result** — §2.3; wants a per-slot
   type on the renderer's environment, which is the same data structure the
-  fields stage needs. The two should land together.
+  fields stage needs. The two should land together. (Confirmed, and cheaper
+  than predicted: the fields round found it needs no data structure, only a
+  positional rule — `docs/certgen-ctor-fields-design.md` §5 — so it is carried
+  in that stage's scope and does not need one of its own.)
 - **Type-parameterized result types** — monomorphized at each use site
   (`docs/inductive-tier0-lowering.md` §2), so `Option<Nat>` has a lowering the
   walker could read; what it does not have is a *name* the emitter can spell

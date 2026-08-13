@@ -307,11 +307,22 @@ The four axes, instantiated for this generator:
    primitive. The widening is in-language (`lib/certgen_code.hthr`: four
    walker arms, three signature arms), per the frozen-walker rule, and
    `lib/certgen_cert.hthr` needed **zero** edits. Three stages remain, in the
-   order that doc's §8 argues for: constructor **fields** (cut on a measured
-   size law — see there and `issues/wf-field-conversion-cost.md`), non-`Nat`
+   order that doc's §8 argues for: constructor **fields**, non-`Nat`
    **parameters** (blocked on `Term::Case`'s lowering, not on effort), and
    **tier-1** source types (whose `Converges` induction is over `T`, not over
    `Nat`, so it is a different `CertOut` shape).
+   **Stage 2 (fields) was designed, implemented and deferred again on
+   2026-08-13** — `docs/certgen-ctor-fields-design.md`. The re-probe that round
+   was chartered to run says the elaboration cliff the non-`Nat` round cut it on
+   is gone, and that what defers it now is the transcriber's **in-language
+   evaluation** cost: generating a fixture whose body builds a two-field
+   constructor exceeds `scripts/test`'s address-space rail, and the fragment
+   cannot decline the expensive shapes honestly because `check_sig` accepts a
+   declaration by its type. The design is worked out and was kernel-checked end
+   to end for a one-field constructor before being reverted; it also carries
+   cross-function composition at a non-`Nat` result (that doc's §5), which the
+   non-`Nat` round had deferred to land with it. The lever is on
+   `issues/certgen-harness-cost.md`.
 3. **Loopification as a refinement-certified pass**, hand-run first on one
    generated function against its `add_instance_loop` analogue.
 4. **The meta-layer re-homing**, when its prerequisites land. The

@@ -409,6 +409,18 @@ tier-1 source types, because an induction over `T` rather than over `Nat` is a
 different `CertOut` — and that one is a constructor-level edit, exactly as this
 section's claim describes.
 
+**Tested a second time, 2026-08-13** (`docs/certgen-ctor-fields-design.md`):
+constructor **fields** at the result type were implemented whole — walker,
+signature checker, rim, end-to-end kernel-checked instance — and
+`lib/certgen_cert.hthr` again needed **zero** edits, verified on the
+implementation rather than assumed. Same reason, one step further along: a
+`CCon`'s arguments are a `Refs`, so the fold is already field-count-agnostic,
+and the induction is still over the scrutinized `Nat`. What moved was again the
+renderer's notion of a slot — now a *positional rule* deciding each temporary's
+type (that doc's §5) rather than a single result type for all of them. The
+tier-1 prediction above stands, and is now the only unfalsified half of it: the
+feature was deferred on cost, not on `Cert`.
+
 ## 9. Corrections to the documents this round touches
 
 Recorded here; the coordinator owns the issue edits.
