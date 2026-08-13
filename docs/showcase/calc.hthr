@@ -11,21 +11,15 @@
 //   (ulimit -v 8388608 -t 120; \
 //    target/release/heather check -L lib/std docs/showcase/calc.hthr)
 
+// `+` and `*` at `Nat` and `++` at `List<A>` are `std/algebra`'s designations.
+// `mul` and its `*` row were declared in this file until 2026-08-13, when
+// `std/nat` took them (issues/std-nat-multiplication.md); the README's
+// bookkeeping records the move and what the collision taught.
 import nat;
 import list;
 import option;
 import bool;
 import algebra;
-
-// ---------------------------------------------------------------------------
-// Multiplication. `std/nat` stops at `add`; recursing on the second argument
-// keeps the same lemma economy `add` has.
-
-fn mul(a, b: Nat) -> Nat {
-    match b { Zero => 0, Succ(k) => mul(a, k) + a }
-}
-
-designation * at Nat := mul
 
 // ---------------------------------------------------------------------------
 // The source language and its meaning. `eval` is the specification: the

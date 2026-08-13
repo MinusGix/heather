@@ -47,6 +47,92 @@ theorem add_comm(x, y: Nat): add(x, y) = add(y, x) {
 }
 
 // ---------------------------------------------------------------------------
+// Multiplication and its kit. `mul` recurses on its SECOND argument, like
+// `add`, and the step puts the recursive result on the LEFT of the `add` —
+// `add(mul(a, k), a)`, not `add(a, mul(a, k))`. That is the whole economy of
+// this section, and it is the same choice `add` made one paragraph up: put the
+// step's `add` on the argument `add` itself descends on, so that the zero
+// side stays *definitional*. `mul(a, 0)` reduces to `Zero` and `add(x, 0)` to
+// `x` with no lemma, so `mul(0, x) = 0` and the zero arm of distributivity are
+// a self-call and a `refl` respectively. Spelled the other way round every
+// proof below pays an `add_left_zero` rewrite it does not otherwise need.
+//
+// (`crates/elab/tests/certgen*.rs` has a `viaadd` fixture that IS spelled the
+// other way. That is deliberate and unrelated: it is a *generator* fixture,
+// pinned byte-for-byte, and it wants the cross-function call shape rather than
+// the cheap lemma kit. Two different programs, so two different names.)
+
+fn mul(a, b: Nat) -> Nat { match b { Zero => Zero, Succ(k) => add(mul(a, k), a) } }
+
+// The right zero — `mul(x, 0) = 0` — needs no lemma. The left one does, and it
+// is three lines because the step's `add(_, 0)` reduces away.
+theorem mul_left_zero(x: Nat): mul(0, x) = 0 {
+    match x { Zero => refl, Succ(k) => mul_left_zero(k) }
+}
+
+// The unit on the left, for the same reason: `add(mul(1, k), 1)` reduces to
+// `Succ(mul(1, k))` on its own, so this is `add_left_zero`'s shape exactly.
+theorem mul_left_one(x: Nat): mul(1, x) = x {
+    match x { Zero => refl, Succ(k) => cong_succ(mul_left_one(k)) }
+}
+
+// `add_succ_left`'s counterpart: the lemma that moves a `Succ` across from the
+// left. It is the one proof here that is not three lines, and every step of it
+// is an `add` law — which is the point of proving `add`'s kit first.
+theorem mul_succ_left(a, b: Nat): mul(Succ(a), b) = add(b, mul(a, b)) {
+    match b {
+        Zero => refl,
+        Succ(k) => trans(
+            cong_succ(trans(
+                cong_nat(λ (w: Nat) => add(w, a), mul_succ_left(a, k)),
+                add_assoc(k, mul(a, k), a),
+            )),
+            sym(add_succ_left(k, add(mul(a, k), a))),
+        ),
+    }
+}
+
+// Distributivity over the argument both functions recurse on. It comes before
+// `mul_assoc` because `mul_assoc` *is* an instance of it, not the other way
+// round — the associativity step rebuilds `mul(x, mul(y, Succ(k)))` as a sum
+// and needs this to take it apart.
+theorem mul_add_distr(a, b, c: Nat): mul(a, add(b, c)) = add(mul(a, b), mul(a, c)) {
+    match c {
+        Zero => refl,
+        Succ(k) => trans(
+            cong_nat(λ (w: Nat) => add(w, a), mul_add_distr(a, b, k)),
+            add_assoc(mul(a, b), mul(a, k), a),
+        ),
+    }
+}
+
+// The two laws `std/algebra` registers `CommMonoid<Nat>(mul)` from, in the
+// shape its fields want.
+
+theorem mul_assoc(x, y, z: Nat): mul(mul(x, y), z) = mul(x, mul(y, z)) {
+    match z {
+        Zero => refl,
+        Succ(k) => trans(
+            cong_nat(λ (w: Nat) => add(w, mul(x, y)), mul_assoc(x, y, k)),
+            sym(mul_add_distr(x, mul(y, k), y)),
+        ),
+    }
+}
+
+theorem mul_comm(x, y: Nat): mul(x, y) = mul(y, x) {
+    match y {
+        Zero => sym(mul_left_zero(x)),
+        Succ(k) => trans(
+            trans(
+                cong_nat(λ (w: Nat) => add(w, x), mul_comm(x, k)),
+                add_comm(mul(k, x), x),
+            ),
+            sym(mul_succ_left(k, x)),
+        ),
+    }
+}
+
+// ---------------------------------------------------------------------------
 // The order. `<=` is surface notation for a call to `Le`
 // (issues/comparison-operators.md), which unfolds by δ to the reflection
 // equation `leb(n)(m) = True` — so a proof of either shape is a proof of the

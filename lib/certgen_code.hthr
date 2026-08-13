@@ -751,8 +751,12 @@ theorem add_transcribes():
           Ret(RCons(0, RNil))))
 { refl }
 
-// `fn mul(a, b: Nat) -> Nat { match b { Zero => 0, Succ(k) => add(a, mul(a, k)) } }`
+// `fn viaadd(a, b: Nat) -> Nat { match b { Zero => Zero, Succ(k) => add(a, viaadd(a, k)) } }`
 // — the cross-function positive (docs/opaque-globals-analysis-design.md §4).
+// The fixture was named `mul` until 2026-08-13, when `std/nat` took that name
+// for a library function with a different body
+// (issues/std-nat-multiplication.md); this theorem is unchanged but for its
+// own name, since it pins markers and never mentions the fn.
 // The foreign head arrives as the callee chain `λλ.⌜1⌝`
 // (`ta_lam(_, ta_lam(_, 1))`), applied to parameter `a` (marker level 0) and
 // to the self-call, which is the ih marker (level `arity+1 = 3`, compiling
@@ -760,9 +764,9 @@ theorem add_transcribes():
 // self first (`LetCall(0, …)` — the recursion's result), then the foreign
 // call by its tag (`LetCall(1, …)` reading `a` at distance 2 and the
 // self-call's value at 0). This is `crates/elab/tests/certgen.rs`'s Rust v2
-// `mul` emission verbatim after the readback maps 0/1 to `mul`/`add` and
-// the closure renumbers.
-theorem mul_transcribes():
+// `viaadd` emission verbatim after the readback maps 0/1 to `viaadd`/`add`
+// and the closure renumbers.
+theorem viaadd_transcribes():
     ta_elim(2,
         ta_zero(),
         ta_app(2,

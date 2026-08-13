@@ -26,8 +26,8 @@ guess, revised freely as taste and design rounds move.
 Worth saying first, because half the idealized file **is** the realized file:
 inductives with fields and shared annotations, structural `match` recursion
 with self-call IHs, nested patterns and `_` default arms, `+`/`*`/`++` via
-designations (`*` at `Nat` is one line in the showcase itself), `calc`
-equational chains, the empty proof block `{}`, implicit `{a, b}` theorem
+designations (all three from `std/algebra` since 2026-08-13 — `*` at `Nat` was
+the showcase's own line until then), `calc` equational chains, the empty proof block `{}`, implicit `{a, b}` theorem
 binders, receiver members (`e.eval()` and `args.nth(1)` — `fn Expr::eval(self e: Expr)` checks today), honest
 `Option` failure in the machine, and the whole *shape* of the correctness
 statement. The demo theorem computes `2 + 3 * 4 = 14` by kernel reduction.
@@ -86,9 +86,14 @@ The realized file is checked by hand (command above), not by the test suite —
 so it can rot silently if the surface moves. If it earns keeping, wire it
 into a test; until then, re-check it when showing it to anyone.
 
-`mul` (and its `*` designation) belongs in `std/nat`, but moving it collides
-with `crates/elab/tests/certgen.rs`'s own `fn mul` fixture, which elaborates
-on top of the `ir_v1`+`nat` prelude and whose generated emissions are pinned
-byte-for-byte under that name. Deferred until a round is touching those pins
-anyway; the collision itself is a small argument in the module-scope story
-(fixture programs and the library share one namespace).
+**`mul` moved to `std/nat` on 2026-08-13** (`issues/std-nat-multiplication.md`),
+with the lemma kit and the `CommMonoid<Nat>(mul)` instance the library wanted
+anyway; `calc.hthr` dropped its own `mul` and its `*` row and takes both from
+`std/algebra`. The deferral paragraph that stood here was **wrong about the
+mechanism**, and the correction is the better datapoint: a module-local `fn`
+*shadows* an imported one rather than colliding with it, so the byte-pinned
+`fn mul` fixture in `crates/elab/tests/certgen.rs` would have gone on working,
+silently meaning something other than what it read as. That is the module-scope
+argument this paragraph was reaching for — fixture programs and the library
+share one namespace, and the sharing resolves without a word. The fixture was
+renamed `viaadd` for exactly that reason; the pins moved by name only.

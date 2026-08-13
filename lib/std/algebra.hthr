@@ -97,6 +97,20 @@ instance CommMonoid<Nat>(add) {
     comm := add_comm,
 }
 
+// The second `Nat` monoid, and the case that shows the unit field earns its
+// keep: `1` is not a constructor of anything the class knows about, it is just
+// a value, so nothing about `unit: A` had to bend to hold it. Worth reading
+// beside `add`'s instance for the reversal — there `unit_r` is the free side
+// and `unit_l` the lemma; here it is the other way round, and `unit_r` is
+// filled by an `add` lemma, because `mul(x, 1)` reduces to `add(0, x)`.
+instance CommMonoid<Nat>(mul) {
+    unit := 1,
+    assoc := mul_assoc,
+    unit_l := mul_left_one,
+    unit_r := add_left_zero,
+    comm := mul_comm,
+}
+
 instance CommMonoid<Bool>(and) {
     unit := True,
     assoc := and_assoc,
@@ -140,13 +154,15 @@ instance Cmp<Bool> { le := leb_bool, le_refl := leb_bool_refl }
 // disjunction. Neither entry is "the" Bool monoid, because a designation says
 // what a *symbol* means and never which structure a carrier has.
 //
-// `+` has a fixed fallback meaning (`add`) that a file with no row still gets;
-// the row here is what makes it a table entry rather than a hard-coded rule.
+// `+` and `*` have fixed fallback meanings (`add`, `mul`) that a file with no
+// row still gets; the rows here are what make them table entries rather than
+// hard-coded rules.
 // `&&`, `||` and `++` have no such fallback, so away from a designation or a
 // binder they refuse — which makes these entries the whole of what the
 // symbols mean.
 
 designation + at Nat := add
+designation * at Nat := mul
 designation && at Bool := and
 designation || at Bool := or
 

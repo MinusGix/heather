@@ -353,14 +353,38 @@ fn an_instance_head_will_not_take_a_symbol() {
     assert!(e.contains("designation"), "{e}");
 }
 
+/// A probe that deliberately does **not** import `nat`, for the one test whose
+/// premise is a fallback name that is *nowhere*. Since 2026-08-13 the library
+/// has a `mul` (`issues/std-nat-multiplication.md`), so `*`'s third rung finds
+/// something in every module that imports `nat` — which is the ladder working,
+/// and would silently turn the test below into a test of nothing. `Nat` is a
+/// kernel type and needs no import, so the carrier survives the trim; the
+/// designation table keeps the row that makes the diagnostic's "where `*`
+/// *does* mean something" half real.
+fn without_nat(extra: &str) -> String {
+    let mut e = Elaborator::with_prelude().expect("prelude");
+    for (name, src) in [("bool", BOOL), ("option", OPTION), ("list", LIST)] {
+        e.elab_module_source(name, src).unwrap_or_else(|err| panic!("{name}: {err}"));
+    }
+    let src = format!(
+        "import bool;\nimport option;\nimport list;\ndesignation * at Bool := and\n{extra}"
+    );
+    match e.elab_module_source("probe", &src) {
+        Ok(()) => panic!("expected a refusal, but it checked:\n{extra}"),
+        Err(ElabError::Elab { msg, .. }) => msg,
+        Err(other) => format!("{other}"),
+    }
+}
+
 /// A symbol with no rung at all reports the **symbol as written** and what
 /// would have had to be true — never "unbound name `mul`", which names
 /// something the writer did not type.
 #[test]
 fn a_symbol_with_no_rung_names_the_symbol() {
     // `*` at `Nat`: no binder named it, no designation covers `Nat`, and its
-    // fallback name `mul` is nowhere.
-    let e = bad("theorem t(x: Nat, y: Nat): x * y = x { ?p }");
+    // fallback name `mul` is nowhere — see `without_nat` for what "nowhere"
+    // costs now that `std/nat` owns a `mul`.
+    let e = without_nat("theorem t(x: Nat, y: Nat): x * y = x { ?p }");
     assert!(e.contains("`*` has no meaning here"), "{e}");
     assert!(e.contains("<A: Monoid(*)>"), "{e}");
     assert!(e.contains("fallback name `mul`"), "{e}");

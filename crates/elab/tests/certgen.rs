@@ -117,10 +117,22 @@ const THIRD3: &str =
 /// The v2 acceptance function: a foreign call whose argument is the
 /// self-call's result. The zero arm spells `Zero` rather than `0` because the
 /// walker is source-blind and derives `Zero` where the source said `0` (both
-/// denote the same Nat) — spelling it this way keeps `mul`'s pins about the
+/// denote the same Nat) — spelling it this way keeps the pins about the
 /// cross-function call rather than about literal spelling.
-const MUL: &str =
-    "fn mul(a: Nat, b: Nat) -> Nat { match b { Zero => Zero, Succ(k) => add(a, mul(a, k)) } }";
+///
+/// **Named `viaadd`, and until 2026-08-13 named `mul`** — every design doc
+/// that predates that date calls this fixture `mul`, and
+/// `lib/certgen_code.hthr`'s `viaadd_transcribes` was `mul_transcribes`. The
+/// rename is `issues/std-nat-multiplication.md`'s: `lib/std/nat.hthr` now owns
+/// `mul`, spelled `add(mul(a, k), a)` for its lemma kit's sake, and a byte pin
+/// must not be readable as a claim about a *library* function it does not
+/// share a body with. (It would not have errored: a module-local `fn` shadows
+/// an imported one, so the fixture would have kept working while reading as
+/// the library's. That is the whole reason to rename rather than the reason
+/// not to.) The `via…` naming is `certgen_nonnat.rs`'s — `viafield`,
+/// `viaflag` — and says what the fixture is *for*.
+const VIAADD: &str =
+    "fn viaadd(a: Nat, b: Nat) -> Nat { match b { Zero => Zero, Succ(k) => add(a, viaadd(a, k)) } }";
 
 
 // ---------------------------------------------------------------------------
@@ -131,7 +143,7 @@ const MUL: &str =
 // the oracle retired these literals ARE that pin: the instruction chain, the
 // slot numbering, the arm split, and the closure's callee indices, per
 // function. `lib/certgen_code.hthr`'s `add_transcribes`, `dbl_transcribes` and
-// `mul_transcribes` pin the same three transcriptions *in-language* — before
+// `viaadd_transcribes` pin the same three transcriptions *in-language* — before
 // the readback and before the closure renumbering — so a divergence between a
 // literal here and a theorem there is localized to the readback or to the
 // emitters, which is the seam the oracle used to cover.
@@ -164,15 +176,16 @@ third3_gen_body() = LetMatch(2, Arm(third3_gen_arm_zero(), Arm(third3_gen_arm_su
 const IR_SEVEN: &str = "\
 seven_gen_body() = LetCon(0, RNil, LetCon(1, RCons(0, RNil), LetCon(1, RCons(0, RNil), LetCon(1, RCons(0, RNil), LetCon(1, RCons(0, RNil), LetCon(1, RCons(0, RNil), LetCon(1, RCons(0, RNil), LetCon(1, RCons(0, RNil), Ret(RCons(0, RNil))))))))))";
 
-/// The cross-function acceptance: a two-member closure `[add, mul]`, so the
+/// The cross-function acceptance: a two-member closure `[add, viaadd]`, so the
 /// self-call renders `LetCall(1, …)` and the foreign call `LetCall(0, …)` —
 /// the walker's own numbering (0 = self, foreign tags verbatim) renumbered
 /// against the closure at readback, which is the one place the two numbering
-/// systems meet.
-const IR_MUL: &str = "\
-mul_gen_arm_zero() = LetCon(0, RNil, Ret(RCons(0, RNil)))
-mul_gen_arm_succ() = LetCall(1, RCons(1, RCons(0, RNil)), LetCall(0, RCons(2, RCons(0, RNil)), Ret(RCons(0, RNil))))
-mul_gen_body() = LetMatch(1, Arm(mul_gen_arm_zero(), Arm(mul_gen_arm_succ(), NoArm)), Ret(RCons(0, RNil)))";
+/// systems meet. The closure is in dependency order, callees before self, so
+/// the 2026-08-13 rename off `mul` moved no index and no instruction.
+const IR_VIAADD: &str = "\
+viaadd_gen_arm_zero() = LetCon(0, RNil, Ret(RCons(0, RNil)))
+viaadd_gen_arm_succ() = LetCall(1, RCons(1, RCons(0, RNil)), LetCall(0, RCons(2, RCons(0, RNil)), Ret(RCons(0, RNil))))
+viaadd_gen_body() = LetMatch(1, Arm(viaadd_gen_arm_zero(), Arm(viaadd_gen_arm_succ(), NoArm)), Ret(RCons(0, RNil)))";
 
 /// Everything here elaborates **as the library module**, so that the
 /// declarations prefix's `import nat;` means what it means in the file.
@@ -219,7 +232,7 @@ fn in_language_transcriber() {
     elab(&mut e, &lib_item("dbl"), "fn dbl");
     elab(&mut e, SEVEN, "fn seven");
     elab(&mut e, THIRD3, "fn third3");
-    elab(&mut e, MUL, "fn mul");
+    elab(&mut e, VIAADD, "fn viaadd");
 
     // The single-function positives, across the axes of
     // docs/testing-generated-terms.md: recursion on the second parameter
@@ -244,23 +257,23 @@ fn in_language_transcriber() {
     assert!(LIB.contains("LetCall(0, RCons(0, RCons(2, RNil)),"));
 
     // The cross-function positive (docs/opaque-globals-analysis-design.md §4):
-    // `mul` calls `add`, whose head arrives as a callee marker through the
+    // `viaadd` calls `add`, whose head arrives as a callee marker through the
     // body-reflection primitive, and with `add`'s emission in the context the
     // closure is the two-member program.
-    let mul = decl_of(MUL);
+    let viaadd = decl_of(VIAADD);
     let mut cross = GenCtx::new();
     cross.push(generate_in_language(&e, &lib_decl("add"), &GenCtx::new()).expect("add"));
-    let em = generate_in_language(&e, &mul, &cross)
-        .unwrap_or_else(|r| panic!("mul declined: {r}"));
-    assert_eq!(em.ir_body, IR_MUL, "mul transcribes differently");
-    assert_eq!(em.closure, vec!["add".to_string(), "mul".to_string()]);
+    let em = generate_in_language(&e, &viaadd, &cross)
+        .unwrap_or_else(|r| panic!("viaadd declined: {r}"));
+    assert_eq!(em.ir_body, IR_VIAADD, "viaadd transcribes differently");
+    assert_eq!(em.closure, vec!["add".to_string(), "viaadd".to_string()]);
 
     // With NO generated instance for the callee in the context, the walk and
     // readback still succeed and the decline is the closure's, downstream —
     // the only home left for "a call to a function that has no certificate
     // yet" now that the surface fragment check is gone.
-    let Err(msg) = generate_in_language(&e, &mul, &GenCtx::new()) else {
-        panic!("mul without add's instance must decline")
+    let Err(msg) = generate_in_language(&e, &viaadd, &GenCtx::new()) else {
+        panic!("viaadd without add's instance must decline")
     };
     assert!(msg.contains("no generated instance"), "{msg}");
 

@@ -3,9 +3,10 @@
 //!
 //! Every positive here is generated, elaborated and kernel-checked against the
 //! support prelude: `add` (the hand-run reproduction), `dbl` (1-ary
-//! recursive), `seven` (non-recursive), `third3` (3-ary recursive), and `mul`
-//! via `add` — the v2 cross-function acceptance, a two-function program with
-//! the callee's invariant re-derived inside it.
+//! recursive), `seven` (non-recursive), `third3` (3-ary recursive), and
+//! `viaadd` via `add` — the v2 cross-function acceptance, a two-function
+//! program with the callee's invariant re-derived inside it. (`viaadd` was
+//! named `mul` until 2026-08-13; `certgen.rs`'s `VIAADD` says why it is not.)
 //!
 //! Support prelude: the library's declarations section (everything up to the
 //! first theorem, the same cut `ir_v1.rs` uses) plus the named items a
@@ -126,10 +127,13 @@ const THIRD3: &str =
 /// The v2 acceptance function: a foreign call whose argument is the
 /// self-call's result. The zero arm spells `Zero` rather than `0` because the
 /// walker is source-blind and derives `Zero` where the source said `0` (both
-/// denote the same Nat) — spelling it this way keeps `mul`'s pins about the
-/// cross-function call rather than about literal spelling.
-const MUL: &str =
-    "fn mul(a: Nat, b: Nat) -> Nat { match b { Zero => Zero, Succ(k) => add(a, mul(a, k)) } }";
+/// denote the same Nat) — spelling it this way keeps the pins about the
+/// cross-function call rather than about literal spelling. Named `viaadd`
+/// rather than `mul` since 2026-08-13, when `lib/std/nat.hthr` took the
+/// latter name for a differently-spelled library function
+/// (`crates/elab/tests/certgen.rs`'s `VIAADD` carries the reasons).
+const VIAADD: &str =
+    "fn viaadd(a: Nat, b: Nat) -> Nat { match b { Zero => Zero, Succ(k) => add(a, viaadd(a, k)) } }";
 
 
 /// Everything here elaborates **as the library module**, so that the
@@ -161,7 +165,7 @@ fn base() -> Elaborator {
 /// Positives — every one of them generated, elaborated and kernel-checked:
 /// - `add` (the hand-run reproduction), `dbl` (1-ary recursive), `seven`
 ///   (non-recursive), `third3` (3-ary recursive) — §9 item 3;
-/// - `mul` via `add` — the v2 cross-function acceptance: a two-function
+/// - `viaadd` via `add` — the v2 cross-function acceptance: a two-function
 ///   program, `add`'s invariant re-derived inside it, the caller's
 ///   certificate consuming the callee's at an open argument.
 ///
@@ -185,7 +189,7 @@ fn emissions_check_and_controls() {
     elab(&mut e, CERT, "lib/certgen_cert.hthr");
     elab(&mut e, SEVEN, "fn seven");
     elab(&mut e, THIRD3, "fn third3");
-    elab(&mut e, MUL, "fn mul");
+    elab(&mut e, VIAADD, "fn viaadd");
 
     let mut ctx = GenCtx::new();
     // The shared declarations an emission refers to — the per-type `embed_T`
@@ -207,14 +211,14 @@ fn emissions_check_and_controls() {
         elab(e, &em.text, &format!("emission for {}", em.name));
         ctx.push(em);
     };
-    for d in [lib_decl("add"), lib_decl("dbl"), decl_of(SEVEN), decl_of(THIRD3), decl_of(MUL)] {
+    for d in [lib_decl("add"), lib_decl("dbl"), decl_of(SEVEN), decl_of(THIRD3), decl_of(VIAADD)] {
         generate(&mut e, &mut ctx, &mut support_done, &d);
     }
-    // The mul emission really is the two-function program with the
+    // The viaadd emission really is the two-function program with the
     // re-derived callee invariant.
-    let mul = ctx_get(&ctx, "mul");
-    assert_eq!(mul.closure, vec!["add".to_string(), "mul".to_string()]);
-    assert!(mul.text.contains("add_gen_conv_in_mul"));
+    let viaadd = ctx_get(&ctx, "viaadd");
+    assert_eq!(viaadd.closure, vec!["add".to_string(), "viaadd".to_string()]);
+    assert!(viaadd.text.contains("add_gen_conv_in_viaadd"));
 
     // §9 item 4, the mutation controls: perturb the known-good dbl emission
     // and the certificate refuses. Renamed apart so one elaborator serves
@@ -247,21 +251,21 @@ fn emissions_check_and_controls() {
     // play (issues/retire-rust-transcriber.md stage 2): a `LetCall` names a
     // slot in the program, so swapping the program's two members routes every
     // call to the other function while the whole emission stays well-formed.
-    // `mul`'s self-call becomes an `add` call and vice versa, the run stops
+    // `viaadd`'s self-call becomes an `add` call and vice versa, the run stops
     // converging, and the exactness fixture — a `refl` on a concrete run —
     // refuses it. Cheaper than the old control and cross-function, which the
     // old one was not.
-    let mutant = ctx_get(&ctx, "mul")
+    let mutant = ctx_get(&ctx, "viaadd")
         .text
-        .replace("mul_gen", "mulm5_gen")
-        .replace("_in_mul", "_in_mulm5")
+        .replace("viaadd_gen", "viaaddm5_gen")
+        .replace("_in_viaadd", "_in_viaaddm5")
         .replacen(
-            "PFun(add_gen_body(), PFun(mulm5_gen_body(), PNil))",
-            "PFun(mulm5_gen_body(), PFun(add_gen_body(), PNil))",
+            "PFun(add_gen_body(), PFun(viaaddm5_gen_body(), PNil))",
+            "PFun(viaaddm5_gen_body(), PFun(add_gen_body(), PNil))",
             1,
         );
     assert!(
-        mutant.contains("PFun(mulm5_gen_body(), PFun(add_gen_body(), PNil))"),
+        mutant.contains("PFun(viaaddm5_gen_body(), PFun(add_gen_body(), PNil))"),
         "the mutation must apply"
     );
     refuted(&mut e, &mutant, "a program whose members are swapped");
