@@ -10,44 +10,24 @@
 //! at a concrete run), and the kernel judging the rest. Where a property had no
 //! cover left, the expected text is pinned as a LITERAL here: the `IR_*`
 //! constants are the emitted-layout interface, whose sole normative statement
-//! is now `lib/certgen_code.hthr`'s three-conventions header plus the emitters
+//! is now `lib/certgen_code.hthr`'s four-conventions header plus the emitters
 //! in `crates/elab/src/certgen.rs`.
 //!
-//! Support prelude: the library's declarations section (everything up to
-//! the first theorem, the same cut `ir_v1.rs` uses) plus the named items a
-//! generated emission's *proofs* elaborate against, sliced by parse span in
-//! dependency order: the ∃-composition kit (`ret_conv`…`letmatch_conv`) and
-//! its chain (`BindInv` → `step_mono` → `fuel_monotone`, the `le` kit),
-//! `Converges`, `CompileNat2`, and `dbl`. Generated code references only
-//! these — never the library's IR theorems — so the harness never pays the
-//! full-file elaboration.
-//!
-//! BUDGET: measured 2026-08-02 (dev profile with the workspace opt-level
-//! overrides): ~108 CPU-seconds for this binary against `scripts/test`'s
-//! 300-second per-process rail — **160s** re-measured late 2026-08-05
-//! (issues/suite-wall-time-two-tests.md; past certgen-harness-cost's 200s
-//! trigger-watch zone at 53% of the rail — the snapshot/CLI levers there
-//! are next when it crosses). `scripts/test --fast` skips
-//! `emissions_check_and_controls` by name for the inner loop; a round's
-//! final verification runs it. **~128s** earlier 2026-08-05, when the
-//! arithmetic and order kit moved to `lib/std/nat.hthr`
-//! (docs/modules-design.md §7) and the support prelude started elaborating
-//! that module *whole* instead of slicing nine items out of it. The split is
-//! roughly: ~50s the support prelude (dominated by re-elaborating
-//! `step_mono` and the two double-`j` kit lemmas), ~50s the five emissions,
-//! the rest the controls. That is why there is exactly ONE elaborator: the
-//! prelude is paid once, mutants are renamed apart rather than re-elaborated
-//! against a fresh prelude, and `lib/certgen_code.hthr` — whose two `match
-//! code` shells are the expensive part of any generation — is elaborated into
-//! that same session, once.
+//! BUDGET. This binary holds ONE test — the transcriptions and the declines,
+//! which need only the declarations prefix, `lib/certgen_code.hthr` and
+//! `lib/certgen_cert.hthr`. The end-to-end emissions and their mutation
+//! controls moved to `certgen_emissions.rs` on 2026-08-12 (the non-`Nat`
+//! embeddings round), because `ulimit -t` is per *process* and the two
+//! together no longer fit one 300-second rail: each pays a ~40 s elaboration
+//! of `lib/certgen_code.hthr` on top of its own work, and the rest of that
+//! test is a ~50 s support prelude plus five emissions.
 //!
 //! The fold that turns a transcription into a certificate is a library file
 //! too now (`lib/certgen_cert.hthr`, docs/certgen-cert-expression-design.md):
 //! elaborating it is ~1 s, but *running* it costs ~3.5 CPU-s per generated
-//! function on top of the transcriber, which is what this binary's two
-//! generating tests pay. Its perturbation control lives in
-//! `certgen_cert.rs` — a binary of its own, for the stack reason below and
-//! for a `ulimit -t` rail of its own.
+//! function on top of the transcriber, which every generating test here pays.
+//! Its perturbation control lives in `certgen_cert.rs` — a binary of its own,
+//! for the stack reason below and for a `ulimit -t` rail of its own.
 //!
 //! STACK: checking one `match code` shell means checking 52 branch telescopes
 //! against a library-inductive motive, and two elaborations of
@@ -55,14 +35,14 @@
 //! `scripts/test` gives it. One copy of the file per test, therefore.
 //!
 //! And one *rail* per binary: `ulimit -t` is per process, so the
-//! perturbed-library controls live in `certgen_controls.rs` and the
-//! certificate fold's in `certgen_cert.rs`. They were tests of this binary
-//! until the fold's evaluation cost pushed the four of them past the
-//! 300-second rail (2026-08-12) — the split is what
+//! perturbed-library controls live in `certgen_controls.rs`, the certificate
+//! fold's in `certgen_cert.rs`, the emissions in `certgen_emissions.rs`, and
+//! the non-`Nat` acceptance in `certgen_nonnat.rs`. Every one of them was a
+//! test of this binary once; the split is what
 //! `issues/certgen-harness-cost.md` calls the free lever, and it is free
-//! because each control already builds its own elaborator anyway.
+//! because each of them already builds its own elaborator anyway.
 
-use heather_elab::certgen::{compile_record, generate_in_language, GenCtx};
+use heather_elab::certgen::{generate_in_language, GenCtx};
 use heather_elab::Elaborator;
 use heather_syntax::ast::{Decl, Item};
 use heather_syntax::parse_file;
@@ -87,46 +67,6 @@ const CODE: &str = include_str!("../../../lib/certgen_code.hthr");
 /// `match code`, so no 52-branch gate — and the emitters read its answer back
 /// instead of deciding the fold in Rust.
 const CERT: &str = include_str!("../../../lib/certgen_cert.hthr");
-
-/// Items a generated emission needs beyond the declarations prefix, in
-/// dependency (file-consistent) order.
-const SUPPORT_ITEMS: [&str; 14] = [
-    "dbl",
-    "BindInv",
-    "k_bind_inv",
-    "k_bind_mono",
-    "step_mono",
-    "eval_mono_succ",
-    "eval_mono_plus",
-    "fuel_monotone",
-    "Converges",
-    "ret_conv",
-    "letcon_conv",
-    "letcall_conv",
-    "letmatch_conv",
-    "CompileNat2",
-];
-
-fn support() -> String {
-    let cut = LIB.find("\ntheorem ").expect("the library has theorems");
-    let mut s = LIB[..cut].to_string();
-    let file = parse_file(LIB).expect("the library parses");
-    for name in SUPPORT_ITEMS {
-        let span = file
-            .items
-            .iter()
-            .find_map(|i| match i {
-                Item::Inductive(ind) if ind.name == name => Some(ind.span),
-                Item::Decl(d) if d.name == name => Some(d.span),
-                _ => None,
-            })
-            .unwrap_or_else(|| panic!("the library declares {name}"));
-        s.push('\n');
-        s.push_str(&LIB[span.start..span.end]);
-        s.push('\n');
-    }
-    s
-}
 
 /// One library item's source text, by name — the same span slice `support`
 /// uses, for the tests that need a single declaration rather than the prelude.
@@ -179,6 +119,7 @@ const THIRD3: &str =
 /// cross-function call rather than about literal spelling.
 const MUL: &str =
     "fn mul(a: Nat, b: Nat) -> Nat { match b { Zero => Zero, Succ(k) => add(a, mul(a, k)) } }";
+
 
 // ---------------------------------------------------------------------------
 // THE LAYOUT INTERFACE, pinned as literals.
@@ -346,9 +287,21 @@ fn in_language_transcriber() {
     // disagreement with the Rust peel, which is the agreement property
     // asserted from the negative side. (The positives above assert it from
     // the accepting side: a disagreement is an `Err`, and they demand `Ok`.)
+    //
+    // ONE FLIP, recorded rather than hidden
+    // (docs/certgen-non-nat-embeddings-design.md §9 item 7): this list used to
+    // contain `fn tocmp(n: Nat) -> Cmp { CLt }` as a "non-`Nat` result"
+    // decline. A three-constructor tier-0 enumeration is now IN the fragment,
+    // so that fixture became a positive and is replaced by two declines this
+    // round still makes: a TIER-1 (recursive) result type, whose `Wf` lowering no
+    // arm of the shell is written for. (The non-`Nat` positives, and the
+    // decline for a constructor with a non-`Nat` field, live in
+    // `crates/elab/tests/certgen_nonnat.rs` — its own binary, for its own
+    // `ulimit -t`, which is the free lever `issues/certgen-harness-cost.md`
+    // records.)
     for src in [
         "fn evalish2(v: Val) -> Nat { 0 }",
-        "fn tocmp(n: Nat) -> Cmp { CLt }",
+        "fn torefs(n: Nat) -> Refs { RNil }",
         "fn nofn() -> Nat { 0 }",
     ] {
         let d = decl_of(src);
@@ -382,103 +335,3 @@ fn in_language_transcriber() {
     }
 }
 
-/// One elaborator serves the whole acceptance: the support prelude and
-/// `lib/certgen_code.hthr` are the expensive parts, so the positive emissions
-/// and the mutation controls (renamed apart) all share it.
-///
-/// Positives — every one of them generated, elaborated and kernel-checked:
-/// - `add` (the hand-run reproduction), `dbl` (1-ary recursive), `seven`
-///   (non-recursive), `third3` (3-ary recursive) — §9 item 3;
-/// - `mul` via `add` — the v2 cross-function acceptance: a two-function
-///   program, `add`'s invariant re-derived inside it, the caller's
-///   certificate consuming the callee's at an open argument.
-///
-/// This is cover (b) of `issues/retire-rust-transcriber.md`: with no oracle
-/// left, a transcriber that silently started declining would show up here as a
-/// panic, and one that emitted a different-but-plausible program would be
-/// refused by its own exactness fixture or by the kernel.
-#[test]
-fn emissions_check_and_controls() {
-    let mut e = base();
-    let sup = support();
-    elab(&mut e, &sup, "support prelude");
-    elab(&mut e, CODE, "lib/certgen_code.hthr");
-    elab(&mut e, CERT, "lib/certgen_cert.hthr");
-    elab(&mut e, SEVEN, "fn seven");
-    elab(&mut e, THIRD3, "fn third3");
-    elab(&mut e, MUL, "fn mul");
-
-    let mut ctx = GenCtx::new();
-    let mut arities_done = vec![2usize];
-    for d in [lib_decl("add"), lib_decl("dbl"), decl_of(SEVEN), decl_of(THIRD3), decl_of(MUL)] {
-        let em = generate_in_language(&e, &d, &ctx)
-            .unwrap_or_else(|r| panic!("{} declined: {r}", d.name));
-        if !arities_done.contains(&em.arity) {
-            let rec = compile_record(em.arity).expect("non-2 arity record");
-            elab(&mut e, &rec, "arity record");
-            arities_done.push(em.arity);
-        }
-        elab(&mut e, &em.text, &format!("emission for {}", em.name));
-        ctx.push(em);
-    }
-
-    // The mul emission really is the two-function program with the
-    // re-derived callee invariant.
-    let mul = ctx_get(&ctx, "mul");
-    assert_eq!(mul.closure, vec!["add".to_string(), "mul".to_string()]);
-    assert!(mul.text.contains("add_gen_conv_in_mul"));
-
-    // §9 item 4, the mutation controls: perturb the known-good dbl emission
-    // and the certificate refuses. Renamed apart so one elaborator serves
-    // all of them (dbl's emission itself is already elaborated above).
-    let good = &ctx_get(&ctx, "dbl").text;
-    let rename = |s: &str, tag: &str| s.replace("dbl_gen", &format!("dbl{tag}_gen"));
-
-    // (a) a reference off by one in the IR: the emitted proofs still spell
-    // the correct chain, so the invariant no longer matches the body.
-    let m = rename(good, "m1").replacen("LetCall(0, RCons(0, RNil)", "LetCall(0, RCons(3, RNil)", 1);
-    assert_ne!(m, rename(good, "m1"));
-    refuted(&mut e, &m, "off-by-one reference");
-
-    // (b) a wrong-result fixture claim: the spec argument perturbed.
-    let m = rename(good, "m2").replacen("embed_nat(dbl(2))", "embed_nat(dbl(3))", 1);
-    assert_ne!(m, rename(good, "m2"));
-    refuted(&mut e, &m, "wrong fixture result");
-
-    // (c) the wrong constructor tag in the IR.
-    let m = rename(good, "m3").replacen("LetCon(1, RCons(0, RNil)", "LetCon(0, RCons(0, RNil)", 1);
-    assert_ne!(m, rename(good, "m3"));
-    refuted(&mut e, &m, "wrong constructor tag");
-
-    // (d) the instance claims a different spec function of the same arity.
-    let m = rename(good, "m4").replacen("CompileNat1(dbl)", "CompileNat1(seven)", 1);
-    assert_ne!(m, rename(good, "m4"));
-    refuted(&mut e, &m, "wrong spec function");
-
-    // (e) CALLEE IDENTITY, the control the retired `generate_forced` used to
-    // play (issues/retire-rust-transcriber.md stage 2): a `LetCall` names a
-    // slot in the program, so swapping the program's two members routes every
-    // call to the other function while the whole emission stays well-formed.
-    // `mul`'s self-call becomes an `add` call and vice versa, the run stops
-    // converging, and the exactness fixture — a `refl` on a concrete run —
-    // refuses it. Cheaper than the old control and cross-function, which the
-    // old one was not.
-    let mutant = ctx_get(&ctx, "mul")
-        .text
-        .replace("mul_gen", "mulm5_gen")
-        .replace("_in_mul", "_in_mulm5")
-        .replacen(
-            "PFun(add_gen_body(), PFun(mulm5_gen_body(), PNil))",
-            "PFun(mulm5_gen_body(), PFun(add_gen_body(), PNil))",
-            1,
-        );
-    assert!(
-        mutant.contains("PFun(mulm5_gen_body(), PFun(add_gen_body(), PNil))"),
-        "the mutation must apply"
-    );
-    refuted(&mut e, &mutant, "a program whose members are swapped");
-}
-
-fn ctx_get<'a>(ctx: &'a GenCtx, name: &str) -> &'a heather_elab::certgen::Emission {
-    ctx.iter().find(|e| e.name == name).expect("emission present")
-}

@@ -218,6 +218,16 @@ their existing wording.
   design.
 - **Readback and emission**: unchanged homes (transcriber design §5's table).
 
+*Widened 2026-08-12* (`docs/certgen-non-nat-embeddings-design.md` §5): the
+signature rule is still whole in `lib/certgen_code.hthr`, but `SigOut` is no
+longer its own accumulator — the walk runs on an `SA` state type and the
+verdict is `SigYes(arity, res)`, where `res = 0` is a `Nat` result and
+`res = k ≥ 1` an enumeration with `k` constructors. `sig_pi`'s domain rule is
+unchanged; `ty_unit`/`ty_sigma`/`ty_sum` arms were added. §4's agreement
+property gains the result term: the Rust residue resolves the declaration's
+result type by *name* (an identifier no reflected form carries) and the two
+verdicts must agree on the constructor count as well as on the arity.
+
 After this round the fragment definition reads off one file:
 `lib/certgen_code.hthr` decides the signature (`check_sig`) and the body
 (`transcribe`); Rust contributes coordinates, names, and the kernel-checked

@@ -109,9 +109,19 @@ fn a_perturbed_transcriber_is_refused_by_the_kernel() {
     // before anything downstream sees it. Strip those, and the emission is the
     // only thing on trial — its *exactness fixture*, which needs nothing but
     // the declarations prefix, so this control costs no kit.
+    // The mutation is chosen to be one that RENDERS
+    // (docs/certgen-cert-expression-design.md §8 item 3): `ta_succ`'s
+    // instruction keeps its tag and its argument and loses only the reference
+    // to *itself*, so the emitted IR is well-formed and computes the wrong
+    // thing — a `Succ` arm that returns the induction hypothesis's value
+    // instead of the two constructors around it. A wrong TAG would be refused
+    // one step earlier, by the readback's constructor-arity check, which is a
+    // decline and a weaker control (2026-08-12: that is what the previous
+    // mutation, `PCon(1, …)` → `PCon(0, …)`, became once the readback learned
+    // the result type's constructor table).
     let bad_code = CODE.replace(
         "TExp(PCon(1, QCons(res, QNil), pre), RLoc(len), Succ(len))",
-        "TExp(PCon(0, QCons(res, QNil), pre), RLoc(len), Succ(len))",
+        "TExp(PCon(1, QCons(res, QNil), pre), RLoc(0), Succ(len))",
     );
     assert_ne!(bad_code, CODE, "the mutation must apply");
     if e.elab_module_source("ir_v1", &bad_code).is_ok() {
@@ -153,9 +163,21 @@ fn a_perturbed_signature_checker_is_a_loud_disagreement() {
     let mut e = base();
     let cut = LIB.find("\ntheorem ").expect("the library has theorems");
     elab(&mut e, &LIB[..cut], "declarations prefix");
+    // `sig_finish`'s default arm is where "a bare `Nat` is a nullary fn" lives
+    // (the walk only ever mints `SFn` from a Π), so accepting it at arity 0 is
+    // the one-token perturbation that makes the library's verdict disagree
+    // with the Rust peel's.
     let bad_code = CODE.replace(
-        "SigYes(a) => match a { Zero => SigNo, Succ(k) => SigYes(Succ(k)) },",
-        "SigYes(a) => SigYes(a),",
+        "        _ => SigNo,
+    }
+}
+
+// ------",
+        "        _ => SigYes(0, 0),
+    }
+}
+
+// ------",
     );
     assert_ne!(bad_code, CODE, "the mutation must apply");
     if e.elab_module_source("ir_v1", &bad_code).is_ok() {

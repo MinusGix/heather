@@ -350,7 +350,8 @@ no cover of its own — the *emitted layout*, which two independent
 implementations used to agree on — is pinned as literal expected text
 (`IR_ADD`, `IR_DBL`, `IR_THIRD3`, `IR_SEVEN`, `IR_MUL` in that test file), and
 its sole normative statement is now `lib/certgen_code.hthr`'s
-three-conventions header plus the emitters. The rows of the table above stand
+three-conventions header plus the emitters (a *fourth* convention — non-`Nat`
+constructor values — was added 2026-08-12 by the non-`Nat` embeddings round). The rows of the table above stand
 unchanged for phases 2–4; row 1's "signature" home became **in-language** at
 the fn-signature-reflection round, and what is left in Rust is the *names*
 (`surface_params`: reserved-binder collisions and implicit parameters), which
@@ -708,6 +709,13 @@ crosses `docs/meta-def-registration-design.md`, which this round does not own):
   artifact needed only a `CodeTy`-typed input plus the `ty_*` arms — which
   were already writable, all 52 names, per §10.1's deviation. Sub-code
   binders and dependent motives did not arrive and were not needed.]*
+  *[Confirmed again 2026-08-12 by the non-`Nat` embeddings round
+  (`docs/certgen-non-nat-embeddings-design.md`), which IS §8 item 2: it needed
+  four more **term** arms (`tm_triv`/`tm_pair`/`tm_inl`/`tm_inr`) and three
+  more **type** arms (`ty_unit`/`ty_sigma`/`ty_sum`), all already writable
+  under the one constant motive. Sub-code binders, dependent motives and
+  `CodeTy`/`LetBoxTy` inputs still did not arrive and still were not needed;
+  this bullet's prediction can be retired.]*
 - **Fixture fuels and the loopification pass** — unchanged homes
   (`docs/certifying-generator-design.md` §8 items 1 and 3).
 - **User-declared analyzer slots** — deferred with user-declared slots
@@ -722,6 +730,14 @@ crosses `docs/meta-def-registration-design.md`, which this round does not own):
   expect to update that block. A general value readback (the thing
   `inductive::decoded` is for types) is the real answer and has no other
   customer yet.
+- **The walker's own size.** `TA` is the single constant motive, so every state
+  the analysis needs is a constructor of it and every `match` on it pays
+  Θ(arms × |lowered field type|) (`issues/wf-field-conversion-cost.md`). Two
+  rules the non-`Nat` round had to learn the hard way, and the file now states:
+  never nest a `match` on `TA` inside another (split into one-`match`
+  helpers), and never *return* `TA` from a helper whose callers only want a
+  value (`ta_val` returns a two-constructor `VOut`). Both are why that round
+  could add two states for +17% rather than +40%.
 - **The shell's check cost** (~9 s: a 52-branch `rec_ga` against a real motive,
   plus registration re-elaborating the expected signature). Left alone — this
   is not a perf round — but it lands on the suite's second-most expensive

@@ -386,6 +386,29 @@ story first because it is the round's point:
    mutated copy is elaborated into that session — which is the cheapest place
    in the suite for it to happen.
 
+## 8.1 The perturbability claim, tested — 2026-08-12
+
+Round A's value proposition was "a new fragment feature should be absorbable as
+constructor-level edits to `Cert`, in a library file a test can perturb". The
+first fragment feature after it — non-`Nat` result embeddings
+(`docs/certgen-non-nat-embeddings-design.md`) — is the test, and the answer is
+**stronger than the claim**: `lib/certgen_cert.hthr` needed *no* edits at all.
+
+Why, stated so the next feature can predict its own answer: a `Cert` describes
+a chain of kit applications over an `Ir`, and the widening changed neither the
+`Ir`'s shape nor the induction. A constructor tag was already a `Nat` field of
+`CCon` (tags 0/1 were never `Zero`/`Succ` *here* — that reading lives in the
+renderer, `ResTy::ctor_spec`), and the scrutinized parameter is still a `Nat`,
+so `CRec`'s two arms are still the two arms. What moved instead was the
+**renderer's** notion of a slot: an environment entry now carries *how it is
+embedded* beside its spec expression, decided by position rather than by
+inference.
+
+The prediction that follows: the first feature that *will* touch `Cert` is
+tier-1 source types, because an induction over `T` rather than over `Nat` is a
+different `CertOut` — and that one is a constructor-level edit, exactly as this
+section's claim describes.
+
 ## 9. Corrections to the documents this round touches
 
 Recorded here; the coordinator owns the issue edits.

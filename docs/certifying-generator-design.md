@@ -298,6 +298,20 @@ The four axes, instantiated for this generator:
 2. **Other tier-0/1 inductives**: per-type `embed_T` (a derived artifact —
    `generators-in-the-language`'s natural first in-language target),
    `CompileTK` records per signature until bundled records exist.
+   **Stage 1 landed 2026-08-12** (`docs/certgen-non-nat-embeddings-design.md`):
+   a fragment fn's **result** type may be a tier-0 *enumeration* — non-
+   recursive, unindexed, unparameterized, no constructor fields — with
+   `{T}_gen_embed` emitted per type and `CompileNatK{T}` per signature.
+   `lib/ir_v1.hthr` did not change at all: `Val` is untyped constructor trees,
+   so `embed_nat` was already one instance of the scheme rather than a
+   primitive. The widening is in-language (`lib/certgen_code.hthr`: four
+   walker arms, three signature arms), per the frozen-walker rule, and
+   `lib/certgen_cert.hthr` needed **zero** edits. Three stages remain, in the
+   order that doc's §8 argues for: constructor **fields** (cut on a measured
+   size law — see there and `issues/wf-field-conversion-cost.md`), non-`Nat`
+   **parameters** (blocked on `Term::Case`'s lowering, not on effort), and
+   **tier-1** source types (whose `Converges` induction is over `T`, not over
+   `Nat`, so it is a different `CertOut` shape).
 3. **Loopification as a refinement-certified pass**, hand-run first on one
    generated function against its `add_instance_loop` analogue.
 4. **The meta-layer re-homing**, when its prerequisites land. The

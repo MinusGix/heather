@@ -78,6 +78,12 @@ pub struct Emission {
     pub closure: Vec<String>,
     /// The rendered IR declarations (for the acceptance diff).
     pub ir_body: String,
+    /// Declarations this emission's text *refers to* and that are shared
+    /// between emissions: the per-type `embed_T` and the per-signature
+    /// `CompileNatK…` record (docs/certgen-non-nat-embeddings-design.md §3).
+    /// `(key, text)`, in dependency order; the caller elaborates each key at
+    /// most once, before the emission itself.
+    pub support: Vec<(String, String)>,
     pub text: String,
     model: FnIr,
     /// The certificate expression the in-language fold produced for this
@@ -107,23 +113,231 @@ impl GenCtx {
     }
 }
 
-/// The per-arity certificate record, `CompileNatK`. `None` for K = 2:
-/// `CompileNat2` is already declared in `lib/ir_v1.hthr`.
-pub fn compile_record(arity: usize) -> Option<String> {
-    if arity == 2 {
+/// The per-signature certificate record. `CompileNatK` when the result type is
+/// `Nat` (and `None` for K = 2, which `lib/ir_v1.hthr` already declares);
+/// `CompileNatK{T}` otherwise — "`CompileTK` records per signature until
+/// bundled records exist" (docs/certifying-generator-design.md §8 item 2).
+fn compile_record(arity: usize, res: &ResTy) -> Option<(String, String)> {
+    if arity == 2 && res.is_nat() {
         return None;
     }
-    let mut fty = String::from("Nat");
+    let rec = res.record_name(arity);
+    let mut fty = res.name.clone();
     for _ in 0..arity {
         fty = format!("Nat -> {fty}");
     }
-    let params: Vec<String> = (1..=arity).map(|i| format!("a{i}")).collect();
+    let params: Vec<Sl> = (1..=arity).map(|i| Sl::nat(format!("a{i}"))).collect();
     let env = env_text(&params, "VNil");
-    let binders: String = params.iter().map(|p| format!("({p}: Nat) -> ")).collect();
-    let app: String = params.iter().map(|p| format!("({p})")).collect();
-    Some(format!(
-        "record CompileNat{arity}(f: {fty}) {{\n    prog: Prog,\n    entry: Ir,\n    cert: {binders}Converges(prog, {env},\n                       entry, VCons(embed_nat(f{app}), VNil)),\n}}\n"
+    let binders: String = params.iter().map(|p| format!("({}: Nat) -> ", p.spec)).collect();
+    let app: String = params.iter().map(|p| format!("({})", p.spec)).collect();
+    let out = out_text(&res.at(format!("f{app}")));
+    Some((
+        format!("record:{rec}"),
+        format!(
+            "record {rec}(f: {fty}) {{\n    prog: Prog,\n    entry: Ir,\n    cert: {binders}Converges(prog, {env},\n                       entry, {out}),\n}}\n"
+        ),
     ))
+}
+
+// ---------------------------------------------------------------------------
+// The result type, as everything downstream needs to SPELL it.
+//
+// `Val` is untyped constructor trees, so *embedding* a source inductive needs
+// no library change at all: `embed_nat` is one instance of a scheme, and this
+// struct is that scheme's data (docs/certgen-non-nat-embeddings-design.md §1).
+// Everything in it is a NAME — the type's, its embedding function's, its
+// constructors' — which is why it lives here and not in `lib/certgen_code.hthr`
+// (§6): Ψ carries a lowering, not the identifiers it was written with.
+//
+// `Nat` is not a special case; it is the zero-th instance, so every format
+// string below has exactly one code path.
+
+/// A spec expression together with how the emitted proofs embed it into `Val`.
+/// Which one applies is decided by *position*, never by inference: a parameter
+/// and the `Succ` arm's `gk` are `Nat`s, and every temporary a fragment body
+/// binds has the function's result type (§2.3).
+#[derive(Clone)]
+struct Sl {
+    spec: String,
+    embed: String,
+}
+
+impl Sl {
+    fn nat(spec: impl Into<String>) -> Sl {
+        Sl { spec: spec.into(), embed: "embed_nat".to_string() }
+    }
+    fn val(&self) -> String {
+        format!("{}({})", self.embed, self.spec)
+    }
+    fn is_nat(&self) -> bool {
+        self.embed == "embed_nat"
+    }
+}
+
+struct ResTy {
+    /// The surface name, for the record's `f: Nat -> … -> {name}`.
+    name: String,
+    /// `embed_nat`, or the emitted `{T}_gen_embed`.
+    embed: String,
+    /// `(constructor name, field count)` in **declaration order**, which is
+    /// the lowering's `inr^i(inl(·))` order and therefore the tag order the
+    /// walker mints and `embed_T`'s `match` writes.
+    ctors: Vec<(String, usize)>,
+    /// The `embed_T` declaration, or `None` for `Nat` (the library owns it).
+    embed_decl: Option<String>,
+}
+
+impl ResTy {
+    fn nat() -> ResTy {
+        ResTy {
+            name: "Nat".into(),
+            embed: "embed_nat".into(),
+            ctors: vec![("Zero".into(), 0), ("Succ".into(), 1)],
+            embed_decl: None,
+        }
+    }
+
+    fn is_nat(&self) -> bool {
+        self.embed_decl.is_none()
+    }
+
+    /// This type's embedding of `spec`.
+    fn at(&self, spec: impl Into<String>) -> Sl {
+        Sl { spec: spec.into(), embed: self.embed.clone() }
+    }
+
+    fn record_name(&self, arity: usize) -> String {
+        if self.is_nat() {
+            format!("CompileNat{arity}")
+        } else {
+            format!("CompileNat{arity}{}", self.name)
+        }
+    }
+
+    /// The source expression a `LetCon(tag, args)` temporary stands for. This
+    /// is the *spelling* boundary — a tag this type cannot name is a
+    /// certificate the renderer cannot write, so it declines (§7).
+    fn ctor_spec(&self, tag: u64, args: &[Sl]) -> Result<String, String> {
+        let (name, fields) = self
+            .ctors
+            .get(tag as usize)
+            .ok_or_else(|| format!("constructor tag {tag} is not a constructor of `{}`", self.name))?;
+        if *fields != args.len() {
+            return Err(format!(
+                "constructor tag {tag} takes {fields} argument(s), not {}",
+                args.len()
+            ));
+        }
+        for a in args {
+            if !a.is_nat() {
+                return Err(format!(
+                    "a field of `{}` is spelled from a non-`Nat` slot",
+                    self.name
+                ));
+            }
+        }
+        if args.is_empty() {
+            return Ok(name.clone());
+        }
+        let inner: Vec<&str> = args.iter().map(|a| a.spec.as_str()).collect();
+        Ok(format!("{name}({})", inner.join(", ")))
+    }
+
+    /// The generator's answer to "what does `embed_T` look like": one `VCon`
+    /// per constructor, its fields embedded in declaration order. `Val` needs
+    /// nothing (§1), so this is the whole of the artifact §8 item 2 named.
+    ///
+    /// Written for constructor *fields* although this stage declines them
+    /// (§2.2, a measured size law on the walker's side, not on this one): the
+    /// scheme is the same at any arity, and the deferred stage inherits this
+    /// emitter unchanged.
+    fn embed_text(&self) -> String {
+        let arms: String = self
+            .ctors
+            .iter()
+            .enumerate()
+            .map(|(i, (cname, n))| {
+                let binders: Vec<String> = (0..*n).map(|j| format!("gf{j}")).collect();
+                let pat = if *n == 0 {
+                    cname.clone()
+                } else {
+                    format!("{cname}({})", binders.join(", "))
+                };
+                let mut fields = String::from("VNil");
+                for b in binders.iter().rev() {
+                    fields = format!("VCons(embed_nat({b}), {fields})");
+                }
+                format!("        {pat} => VCon({i}, {fields}),\n")
+            })
+            .collect();
+        format!(
+            "fn {}(gx: {}) -> Val {{\n    match gx {{\n{arms}    }}\n}}\n",
+            self.embed, self.name
+        )
+    }
+
+    /// Resolve a declaration's result type. `Nat`, or a tier-0 enumeration:
+    /// non-recursive, unindexed, unparameterized, at least one constructor,
+    /// no constructor fields (§2). Anything else is a decline — and the
+    /// *in-language* checker declines the same declarations independently,
+    /// which is the agreement property `generate_in_language` asserts.
+    fn of(e: &Elaborator, d: &Decl) -> Result<ResTy, String> {
+        use heather_syntax::ast::TyKind;
+        match &d.result.kind {
+            TyKind::Nat => Ok(ResTy::nat()),
+            TyKind::Named { name, args } => {
+                if !args.is_empty() {
+                    return Err(format!(
+                        "`{name}` is applied to type arguments: a monomorphized \
+                         lowering has no name to spell `embed_T` with"
+                    ));
+                }
+                let ind = e
+                    .lookup_inductive(name)
+                    .ok_or_else(|| format!("`{name}` is not a declared inductive"))?;
+                if ind.recursive {
+                    return Err(format!(
+                        "`{name}` is recursive: a tier-1 result type is deferred \
+                         (docs/certgen-non-nat-embeddings-design.md §8)"
+                    ));
+                }
+                if !ind.params.is_empty() || ind.index.is_some() || !ind.valparams.is_empty() {
+                    return Err(format!("`{name}` is parameterized or indexed"));
+                }
+                if ind.ctors.is_empty() {
+                    return Err(format!("`{name}` has no constructors"));
+                }
+                let mut ctors = Vec::new();
+                for c in &ind.ctors {
+                    // Constructor FIELDS are deferred
+                    // (docs/certgen-non-nat-embeddings-design.md §8): the
+                    // in-language checker declines the same declarations, at
+                    // the payload rule, and this is the residue agreeing.
+                    if !c.fields.is_empty() {
+                        return Err(format!(
+                            "`{name}`'s constructor `{}` has fields: a constructor with \
+                             fields is deferred \
+                             (docs/certgen-non-nat-embeddings-design.md §8)",
+                            c.name
+                        ));
+                    }
+                    ctors.push((c.name.clone(), c.fields.len()));
+                }
+                let mut t = ResTy {
+                    name: name.clone(),
+                    embed: format!("{name}_gen_embed"),
+                    ctors,
+                    // Filled in below: `embed_text` reads the fields above,
+                    // and `is_nat` is exactly "this is `Nat`, so the library
+                    // owns the embedding".
+                    embed_decl: None,
+                };
+                t.embed_decl = Some(t.embed_text());
+                Ok(t)
+            }
+            _ => Err("the result type is neither `Nat` nor a declared inductive".into()),
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -235,25 +449,44 @@ fn render_chain(instrs: &[Instr], from: usize, ret_dist: usize, closure: &[Strin
     s
 }
 
-/// `VCons(embed_nat(e0), … VCons(embed_nat(en), tail))` — slot 0 first.
-fn env_text(exprs: &[String], tail: &str) -> String {
+/// `VCons(embed_nat(e0), … VCons(embed_nat(en), tail))` — slot 0 first, each
+/// slot embedded at *its own* type (`Sl`), which for an all-`Nat` signature is
+/// `embed_nat` throughout and byte-identical to what this always emitted.
+fn env_text(exprs: &[Sl], tail: &str) -> String {
     let mut s = tail.to_string();
     for e in exprs.iter().rev() {
-        s = format!("VCons(embed_nat({e}), {s})");
+        s = format!("VCons({}, {s})", e.val());
     }
     s
 }
 
-fn out_text(expr: &str) -> String {
-    format!("VCons(embed_nat({expr}), VNil)")
+fn out_text(sl: &Sl) -> String {
+    format!("VCons({}, VNil)", sl.val())
 }
 
 // ---------------------------------------------------------------------------
 // The fixture evaluator: exact minimal fuel at literal arguments, under the
 // depth semantics.
 
+/// A runtime value, modelled the way `Val` actually is: an untyped
+/// constructor tree. `Nat` is the two-tag instance of it
+/// (docs/certgen-non-nat-embeddings-design.md §6 item 4) — this is arithmetic
+/// for a literal fuel, not analysis.
 #[derive(Clone)]
-struct V(u64);
+struct V {
+    tag: u64,
+    fields: Vec<V>,
+}
+
+impl V {
+    fn nat(n: u64) -> V {
+        let mut v = V { tag: 0, fields: vec![] };
+        for _ in 0..n {
+            v = V { tag: 1, fields: vec![v] };
+        }
+        v
+    }
+}
 
 struct Evaluator<'a> {
     fns: Vec<(&'a str, &'a FnIr)>,
@@ -266,10 +499,10 @@ impl<'a> Evaluator<'a> {
             FnIrKind::Plain(c) => self.run_chain(c, args.to_vec()),
             FnIrKind::Rec(r) => {
                 let scrut = args[r.rec_idx].clone();
-                let (v, n) = if scrut.0 == 0 {
+                let (v, n) = if scrut.tag == 0 {
                     self.run_chain(&r.zero, args.to_vec())
                 } else {
-                    let mut env = vec![V(scrut.0 - 1)];
+                    let mut env = vec![scrut.fields[0].clone()];
                     env.extend(args.iter().cloned());
                     self.run_chain(&r.succ, env)
                 };
@@ -290,7 +523,7 @@ impl<'a> Evaluator<'a> {
         }
         match &c.instrs[from] {
             Instr::Con { tag, dists } => {
-                let v = if *tag == 0 { V(0) } else { V(env[dists[0]].0 + 1) };
+                let v = V { tag: *tag, fields: dists.iter().map(|&d| env[d].clone()).collect() };
                 env.insert(0, v);
                 let (out, n) = self.run_from(c, from + 1, env);
                 (out, 1 + n)
@@ -332,6 +565,11 @@ struct ProofCx<'a> {
     /// which case a certificate that consumes an induction hypothesis is a
     /// fold/model disagreement rather than a decline.
     self_rec_idx: Option<usize>,
+    /// How this member's *output* is embedded into `Val`, and which
+    /// constructor names its `LetCon`s spell
+    /// (docs/certgen-non-nat-embeddings-design.md §3). Every temporary a
+    /// fragment body binds has this type; parameters and `gk` are `Nat`s.
+    res: &'a ResTy,
 }
 
 /// How a member's invariant theorem is applied at spec arguments.
@@ -355,25 +593,12 @@ fn cert_app(name: &str, model: &FnIr, arg_specs: &[String]) -> String {
 /// The spec expression at distance `d`, or a decline: a certificate that
 /// reads past its environment is one this readback cannot name, which is the
 /// shape a wrong fold takes when it drops an instruction.
-fn slot(env: &[String], d: usize) -> Result<String, String> {
+fn slot(env: &[Sl], d: usize) -> Result<Sl, String> {
     env.get(d).cloned().ok_or_else(|| "a certificate reading past the environment".to_string())
 }
 
-fn slots(env: &[String], dists: &[usize]) -> Result<Vec<String>, String> {
+fn slots(env: &[Sl], dists: &[usize]) -> Result<Vec<Sl>, String> {
     dists.iter().map(|d| slot(env, *d)).collect()
-}
-
-/// The spec of a `letcon_conv` temporary: the fragment's constructors are
-/// `Nat`'s, so slot-and-tag determine the source expression it stands for.
-fn con_spec(tag: u64, args: &[String]) -> Result<String, String> {
-    match tag {
-        0 => Ok("Zero".to_string()),
-        1 => {
-            let a = args.first().ok_or("a `Succ` with no argument")?;
-            Ok(format!("Succ({a})"))
-        }
-        other => Err(format!("constructor tag {other} is not a `Nat`")),
-    }
 }
 
 impl ProofCx<'_> {
@@ -412,15 +637,25 @@ impl ProofCx<'_> {
     /// walk `render_cert` makes, run for its answer alone because
     /// `letmatch_conv` needs it *before* its arm is rendered (it is the arm's
     /// `ws`, and the goal the arm's own chain is proved against).
-    fn ret_spec(&self, c: &RCert, env: &[String]) -> Result<String, String> {
+    fn ret_spec(&self, c: &RCert, env: &[Sl]) -> Result<Sl, String> {
         match c {
             RCert::Ret { rs } => {
                 let [d] = rs[..] else { return Err("a `Ret` with other than one output".into()) };
-                slot(env, d)
+                let sl = slot(env, d)?;
+                // The value a region returns has the function's result type.
+                // For an all-`Nat` signature this is vacuous; for any other it
+                // catches a certificate returning a parameter (§7).
+                if sl.embed != self.res.embed {
+                    return Err(format!(
+                        "a certificate returns a slot that is not a `{}`",
+                        self.res.name
+                    ));
+                }
+                Ok(sl)
             }
             RCert::Con { tag, args, hr } => {
-                let spec = con_spec(*tag, &slots(env, args)?)?;
-                let mut env2 = vec![spec];
+                let spec = self.res.ctor_spec(*tag, &slots(env, args)?)?;
+                let mut env2 = vec![self.res.at(spec)];
                 env2.extend(env.iter().cloned());
                 self.ret_spec(hr, &env2)
             }
@@ -429,8 +664,10 @@ impl ProofCx<'_> {
                     RCert::Call { callee, .. } => callee.as_str(),
                     _ => self.self_name,
                 };
-                let spec = format!("{name}({})", slots(env, args)?.join(", "));
-                let mut env2 = vec![spec];
+                let arg_specs: Vec<String> =
+                    slots(env, args)?.into_iter().map(|s| s.spec).collect();
+                let spec = format!("{name}({})", arg_specs.join(", "));
+                let mut env2 = vec![self.res.at(spec)];
                 env2.extend(env.iter().cloned());
                 self.ret_spec(hr, &env2)
             }
@@ -448,9 +685,9 @@ impl ProofCx<'_> {
 fn render_cert(
     cx: &ProofCx<'_>,
     c: &RCert,
-    env_exprs: &[String],
+    env_exprs: &[Sl],
     tail: &str,
-    final_spec: &str,
+    final_spec: &Sl,
 ) -> Result<String, String> {
     let p = &cx.prog;
     let env = env_text(env_exprs, tail);
@@ -461,7 +698,7 @@ fn render_cert(
             let arg_exprs = slots(env_exprs, args)?;
             let fs = env_text(&arg_exprs, "VNil");
             let rest_ir = cx.cert_ir(hr)?;
-            let mut env2 = vec![con_spec(*tag, &arg_exprs)?];
+            let mut env2 = vec![cx.res.at(cx.res.ctor_spec(*tag, &arg_exprs)?)];
             env2.extend(env_exprs.iter().cloned());
             let hr = render_cert(cx, hr, &env2, tail, final_spec)?;
             format!(
@@ -470,7 +707,9 @@ fn render_cert(
             )
         }
         RCert::Ih { args, hr } | RCert::Call { args, hr, .. } => {
-            let arg_exprs = slots(env_exprs, args)?;
+            let arg_slots = slots(env_exprs, args)?;
+            let arg_exprs: Vec<String> =
+                arg_slots.iter().map(|s| s.spec.clone()).collect();
             let (idx, name, hc) = match c {
                 RCert::Call { callee, .. } => {
                     let cal = cx
@@ -500,8 +739,8 @@ fn render_cert(
                     (cx.self_idx, cx.self_name.to_string(), format!("gih({})", others.join(", ")))
                 }
             };
-            let cargs = env_text(&arg_exprs, "VNil");
-            let spec = format!("{name}({})", arg_exprs.join(", "));
+            let cargs = env_text(&arg_slots, "VNil");
+            let spec = cx.res.at(format!("{name}({})", arg_exprs.join(", ")));
             let ws = out_text(&spec);
             let rest_ir = cx.cert_ir(hr)?;
             let mut env2 = vec![spec];
@@ -527,7 +766,10 @@ fn render_cert(
             };
             let mut arm_exprs = Vec::new();
             if *ctag != 0 {
-                arm_exprs.push("gk".to_string());
+                // The scrutinized parameter is a `Nat` — recursion is
+                // structural on a `Nat` in this stage — so the field the arm
+                // binds is one too, whatever the result type is.
+                arm_exprs.push(Sl::nat("gk"));
             }
             arm_exprs.extend(env_exprs.iter().cloned());
             let arm_spec = cx.ret_spec(ha, &arm_exprs)?;
@@ -554,6 +796,7 @@ fn render_cert(
 fn emit_with_model(
     f: &str,
     arity: usize,
+    res: &ResTy,
     model: FnIr,
     cert: RCertOut,
     ctx: &GenCtx,
@@ -594,7 +837,7 @@ fn emit_with_model(
     writeln!(w, "fn {f}_gen_prog() -> Prog {{ {prog} }}").unwrap();
     writeln!(w).unwrap();
 
-    emit_fixtures(w, f, &model, &closure, ctx);
+    emit_fixtures(w, f, res, &model, &closure, ctx);
 
     // Invariants: every non-self closure member's, re-derived inside this
     // program, then self's.
@@ -607,17 +850,33 @@ fn emit_with_model(
         }
     };
     for m in closure.clone() {
+        // A closure member other than `f` is a callee, and a callee is `Nat →
+        // … → Nat` (the marker pass refuses anything else), so its invariant
+        // is re-derived at the `Nat` result type — which is also why a
+        // non-`Nat`-result function has no callees at all (§2.3).
         let (mm, mc): (FnIr, RCertOut) = if m == f {
             (model.clone(), cert.clone())
         } else {
             let e = ctx.get(&m).unwrap();
             (e.model.clone(), e.cert.clone())
         };
-        emit_invariant(w, f, &m, &mm, &mc, &closure, ctx, &conv_name)?;
+        let nat = ResTy::nat();
+        let mres = if m == f { res } else { &nat };
+        emit_invariant(w, f, &m, mres, &mm, &mc, &closure, ctx, &conv_name)?;
     }
 
-    emit_instance(w, f, &model, arity);
-    Ok(Emission { name: f.to_string(), arity, closure, ir_body, text, model, cert })
+    let (support, instance_record) = {
+        let mut support: Vec<(String, String)> = Vec::new();
+        if let Some(decl) = &res.embed_decl {
+            support.push((format!("embed:{}", res.name), decl.clone()));
+        }
+        if let Some(rec) = compile_record(arity, res) {
+            support.push(rec);
+        }
+        (support, res.record_name(arity))
+    };
+    emit_instance(w, f, &model, &instance_record);
+    Ok(Emission { name: f.to_string(), arity, closure, ir_body, support, text, model, cert })
 }
 
 fn callees(model: &FnIr) -> Vec<String> {
@@ -670,7 +929,14 @@ fn emit_ir(w: &mut String, f: &str, model: &FnIr, closure: &[String]) -> String 
     }
 }
 
-fn emit_fixtures(w: &mut String, f: &str, model: &FnIr, closure: &[String], ctx: &GenCtx) {
+fn emit_fixtures(
+    w: &mut String,
+    f: &str,
+    res: &ResTy,
+    model: &FnIr,
+    closure: &[String],
+    ctx: &GenCtx,
+) {
     let mut fns: Vec<(&str, &FnIr)> = Vec::new();
     for m in closure {
         if m == f {
@@ -690,11 +956,12 @@ fn emit_fixtures(w: &mut String, f: &str, model: &FnIr, closure: &[String], ctx:
             _ => 3,
         })
         .collect();
-    let args: Vec<V> = lits.iter().map(|&n| V(n)).collect();
+    let args: Vec<V> = lits.iter().map(|&n| V::nat(n)).collect();
     let (_, fuel) = ev.run_fn(f, &args);
     let lit_strs: Vec<String> = lits.iter().map(|n| n.to_string()).collect();
-    let env = env_text(&lit_strs, "VNil");
-    let call = format!("{f}({})", lit_strs.join(", "));
+    let lit_sls: Vec<Sl> = lit_strs.iter().map(Sl::nat).collect();
+    let env = env_text(&lit_sls, "VNil");
+    let call = res.at(format!("{f}({})", lit_strs.join(", ")));
     writeln!(w, "theorem {f}_gen_fix():").unwrap();
     writeln!(w, "    eval({fuel}, {f}_gen_prog())({env}, {f}_gen_body())").unwrap();
     writeln!(w, "    = Out({})", out_text(&call)).unwrap();
@@ -723,6 +990,7 @@ fn emit_invariant(
     w: &mut String,
     f: &str,
     m: &str,
+    res: &ResTy,
     model: &FnIr,
     cert: &RCertOut,
     closure: &[String],
@@ -746,11 +1014,13 @@ fn emit_invariant(
                 self_name: m,
                 self_idx,
                 self_rec_idx: None,
+                res,
             };
             let psig: String = params.iter().map(|p| format!("{p}: Nat, ")).collect();
-            let env = env_text(params, "tail");
-            let call = format!("{m}({})", params.join(", "));
-            let proof = render_cert(&cx, c, params, "tail", &call)?;
+            let param_sls: Vec<Sl> = params.iter().map(Sl::nat).collect();
+            let env = env_text(&param_sls, "tail");
+            let call = res.at(format!("{m}({})", params.join(", ")));
+            let proof = render_cert(&cx, c, &param_sls, "tail", &call)?;
             writeln!(w, "theorem {name}({psig}tail: Val)").unwrap();
             writeln!(w, "    : Converges({prog}, {env},").unwrap();
             writeln!(w, "                {m}_gen_body(), {})", out_text(&call)).unwrap();
@@ -769,15 +1039,16 @@ fn emit_invariant(
                 .collect();
             let other_binders: String = others.iter().map(|p| format!("({p}: Nat) -> ")).collect();
             let other_lams: String = others.iter().map(|p| format!("{p} ")).collect();
-            let spell = |rec: &str| -> (Vec<String>, String, String) {
+            let spell = |rec: &str| -> (Vec<Sl>, String, Sl) {
                 let names: Vec<String> = params
                     .iter()
                     .enumerate()
                     .map(|(i, p)| if i == r.rec_idx { rec.to_string() } else { p.clone() })
                     .collect();
-                let env = env_text(&names, "tail");
-                let call = format!("{m}({})", names.join(", "));
-                (names, env, call)
+                let sls: Vec<Sl> = names.iter().map(Sl::nat).collect();
+                let env = env_text(&sls, "tail");
+                let call = res.at(format!("{m}({})", names.join(", ")));
+                (sls, env, call)
             };
             let (_, env_rec, call_rec) = spell(rec_name);
             let (_, env_z, call_z) = spell("gz");
@@ -789,6 +1060,7 @@ fn emit_invariant(
                 self_name: m,
                 self_idx,
                 self_rec_idx: Some(r.rec_idx),
+                res,
             };
 
             // Per-constructor arm of the induction. The `letmatch_conv`
@@ -828,12 +1100,12 @@ fn emit_invariant(
     Ok(())
 }
 
-fn emit_instance(w: &mut String, f: &str, model: &FnIr, arity: usize) {
+fn emit_instance(w: &mut String, f: &str, model: &FnIr, record: &str) {
     let params = &model.params;
     let lams: String = params.iter().map(|p| format!("λ ({p}: Nat) => ")).collect();
     let cert = cert_app(&format!("{f}_gen_conv"), model, params);
-    writeln!(w, "fn {f}_gen_instance() -> CompileNat{arity}({f}) {{").unwrap();
-    writeln!(w, "    CompileNat{arity} {{").unwrap();
+    writeln!(w, "fn {f}_gen_instance() -> {record}({f}) {{").unwrap();
+    writeln!(w, "    {record} {{").unwrap();
     writeln!(w, "        prog: {f}_gen_prog(),").unwrap();
     writeln!(w, "        entry: {f}_gen_body(),").unwrap();
     writeln!(w, "        cert: {lams}{cert},").unwrap();
@@ -1030,8 +1302,14 @@ fn mark(t: &Term, depth: u32, cx: &mut MarkCx<'_>) -> Result<Term, String> {
         // a motive that mentioned the scrutinee would put a *type* in the
         // walk's way, and this slice analyses terms (design doc §3).
         Term::ElimNat { level, motive, base, step, scrut } => {
-            if !matches!(&**motive, Type::Nat) {
-                return Err("the recursion's motive is not `Nat`".into());
+            // The motive is the fn's RESULT type, spelled inline: `Nat`, or a
+            // tier-0 enumeration's sum-of-Σs
+            // (docs/certgen-non-nat-embeddings-design.md §2.1). It is never
+            // marked — the walker binds it and never reads it — so this is a
+            // permission rather than a computation, and a motive this pass
+            // does not recognize is a decline.
+            if !matches!(&**motive, Type::Nat | Type::Sum { .. } | Type::Sigma { .. }) {
+                return Err("the recursion's motive is not `Nat` or a tier-0 lowering".into());
             }
             Term::ElimNat {
                 level: level.clone(),
@@ -1044,6 +1322,33 @@ fn mark(t: &Term, depth: u32, cx: &mut MarkCx<'_>) -> Result<Term, String> {
                 scrut: Rc::new(mark(scrut, depth, cx)?),
             }
         }
+        // The tier-0 constructor formers a non-`Nat` result type's values are
+        // built from (convention 4 of `lib/certgen_code.hthr`). Type
+        // annotations are carried through untouched: they are closed in the
+        // fragment, and the walker binds and ignores them.
+        Term::Triv { level } => Term::Triv { level: level.clone() },
+        Term::Pair { fst_level, snd_level, fst_ty, snd_ty, fst, snd } => Term::Pair {
+            fst_level: fst_level.clone(),
+            snd_level: snd_level.clone(),
+            fst_ty: Rc::clone(fst_ty),
+            snd_ty: Rc::clone(snd_ty),
+            fst: Rc::new(mark(fst, depth, cx)?),
+            snd: Rc::new(mark(snd, depth, cx)?),
+        },
+        Term::Inl { lhs_level, rhs_level, lhs, rhs, val } => Term::Inl {
+            lhs_level: lhs_level.clone(),
+            rhs_level: rhs_level.clone(),
+            lhs: Rc::clone(lhs),
+            rhs: Rc::clone(rhs),
+            val: Rc::new(mark(val, depth, cx)?),
+        },
+        Term::Inr { lhs_level, rhs_level, lhs, rhs, val } => Term::Inr {
+            lhs_level: lhs_level.clone(),
+            rhs_level: rhs_level.clone(),
+            lhs: Rc::clone(lhs),
+            rhs: Rc::clone(rhs),
+            val: Rc::new(mark(val, depth, cx)?),
+        },
         // A cross-function call: the head is a global reference, replaced by
         // a callee marker; the argument spine stays and is marked in place.
         // (`elim^Trm` is neutral on `box (u^δ)`, so a surviving reference
@@ -1084,7 +1389,7 @@ fn global_head(mut t: &Term) -> bool {
 /// peel is kept because marking needs the body under its binders at a known
 /// depth — its checks survive as the agreement oracle `generate_in_language`
 /// compares the in-language verdict against.
-fn sig_peel(e: &Elaborator, name: &str) -> Result<(usize, Term), String> {
+fn sig_peel(e: &Elaborator, name: &str) -> Result<(usize, bool, Term), String> {
     let Some((ty, body)) = e.global_body(name) else {
         return Err(format!("`{name}` has no elaborated body to analyse"));
     };
@@ -1102,13 +1407,24 @@ fn sig_peel(e: &Elaborator, name: &str) -> Result<(usize, Term), String> {
         t = body;
         ty = cod;
     }
-    if !matches!(ty, Type::Nat) {
-        return Err(format!("`{name}`'s result type is not `Nat`"));
-    }
+    // The result may be `Nat` or a tier-0 enumeration's lowering
+    // (docs/certgen-non-nat-embeddings-design.md §2); *which* declared type
+    // that lowering belongs to is a name, resolved from the declaration by
+    // [`ResTy::of`], and the two answers are compared as the agreement
+    // property.
+    let is_nat = match ty {
+        Type::Nat => true,
+        Type::Sum { .. } | Type::Sigma { .. } => false,
+        _ => {
+            return Err(format!(
+                "`{name}`'s result type is not `Nat` or a tier-0 enumeration"
+            ))
+        }
+    };
     if arity == 0 {
         return Err("a nullary fn has no calling convention to certify".into());
     }
-    Ok((arity, t.clone()))
+    Ok((arity, is_nat, t.clone()))
 }
 
 /// The body half of the pull reflection API
@@ -1127,7 +1443,7 @@ pub struct BodyCode {
 /// [`sig_peel`] composed with [`mark`] and boxed — the primitive's body,
 /// still run by `generate_in_language` after the agreement gate.
 pub(crate) fn body_code(e: &Elaborator, name: &str) -> Result<BodyCode, String> {
-    let (arity, body) = sig_peel(e, name)?;
+    let (arity, _, body) = sig_peel(e, name)?;
     let caller_abs = e
         .global_abs(name)
         .ok_or_else(|| format!("`{name}` is not a declared global"))?;
@@ -1554,7 +1870,7 @@ fn run_cert_fold(e: &Elaborator, ir: Term, callees: &[String]) -> Result<RCertOu
 /// The decline carries one honest sentence rather than a per-shape reason:
 /// the library's decline discipline is a single value (`SigNo`, like the
 /// walker's `TStuck`), and reasons live at this rim.
-fn run_sig_checker(e: &Elaborator, name: &str) -> Result<u64, String> {
+fn run_sig_checker(e: &Elaborator, name: &str) -> Result<(u64, u64), String> {
     let sig = e
         .fn_type_code(name)
         .ok_or_else(|| format!("`{name}` has no declared type to reflect"))?;
@@ -1564,9 +1880,16 @@ fn run_sig_checker(e: &Elaborator, name: &str) -> Result<u64, String> {
     match idx {
         0 => Err(format!(
             "the in-language signature checker declined `{name}`: the fragment \
-             signature is `Nat -> … -> Nat` with at least one parameter"
+             signature is `Nat -> … -> Nat -> R` with at least one parameter, \
+             where `R` is `Nat` or a tier-0 enumeration"
         )),
-        1 => r.nat(fields.first().ok_or("`SigYes` without its arity")?),
+        // `SigYes(arity, res)`: `res = 0` is a `Nat` result, `res = k ≥ 1` an
+        // enumeration with `k` constructors
+        // (docs/certgen-non-nat-embeddings-design.md §5).
+        1 => Ok((
+            r.nat(fields.first().ok_or("`SigYes` without its arity")?)?,
+            r.nat(fields.get(1).ok_or("`SigYes` without its result kind")?)?,
+        )),
         _ => Err("the signature checker's answer is not a `SigOut`".into()),
     }
 }
@@ -1581,6 +1904,7 @@ fn run_sig_checker(e: &Elaborator, name: &str) -> Result<u64, String> {
 fn chain_from_rir(
     ir: &RIr,
     name: &str,
+    res: &ResTy,
     callees: &[String],
     depth: usize,
 ) -> Result<Chain, String> {
@@ -1602,8 +1926,22 @@ fn chain_from_rir(
                 return Ok(Chain { instrs, ret_dist: inrange(d, depth)?, has_self_call });
             }
             RIr::LetCon { tag, args, rest } => {
-                if !matches!(tag, 0 | 1) {
-                    return Err(format!("constructor tag {tag} is not a `Nat`"));
+                // Every constructor a fragment body builds is one of the
+                // RESULT type's (§2.3), so a tag the result type cannot name —
+                // or one with the wrong number of arguments — is a
+                // certificate the renderer could not spell. For `Nat` this is
+                // exactly the `0 | 1` check it replaces.
+                let (_, fields) = res
+                    .ctors
+                    .get(*tag as usize)
+                    .ok_or_else(|| {
+                        format!("constructor tag {tag} is not a constructor of `{}`", res.name)
+                    })?;
+                if *fields != args.len() {
+                    return Err(format!(
+                        "constructor tag {tag} takes {fields} argument(s), not {}",
+                        args.len()
+                    ));
                 }
                 let dists: Vec<usize> = args
                     .iter()
@@ -1622,6 +1960,16 @@ fn chain_from_rir(
                 // program closure from the names, downstream.
                 let cname = if *callee == 0 {
                     name
+                } else if !res.is_nat() {
+                    // A foreign callee is `Nat → … → Nat`, so its temporary
+                    // would be a `Nat` in a chain whose other temporaries are
+                    // `R`s — and the renderer types slots by position, not by
+                    // inference (§2.3). Declined, with its home recorded.
+                    return Err(format!(
+                        "a cross-function call from a function returning `{}` is \
+                         deferred (docs/certgen-non-nat-embeddings-design.md §8)",
+                        res.name
+                    ));
                 } else {
                     callees
                         .get(*callee as usize - 1)
@@ -1650,6 +1998,7 @@ fn chain_from_rir(
 fn fn_ir_from_rir(
     ir: &RIr,
     name: &str,
+    res: &ResTy,
     callees: &[String],
     params: &[String],
 ) -> Result<FnIr, String> {
@@ -1664,18 +2013,18 @@ fn fn_ir_from_rir(
                 return Err("a `LetMatch` with other than two arms is not a `Nat` match"
                     .into());
             };
-            let zc = chain_from_rir(zero, name, callees, params.len())?;
+            let zc = chain_from_rir(zero, name, res, callees, params.len())?;
             if zc.has_self_call {
                 return Err("a self-call in the Zero arm cannot be structural".into());
             }
-            let sc = chain_from_rir(succ, name, callees, params.len() + 1)?;
+            let sc = chain_from_rir(succ, name, res, callees, params.len() + 1)?;
             Ok(FnIr {
                 params,
                 kind: FnIrKind::Rec(RecIr { rec_idx: *scrut as usize, zero: zc, succ: sc }),
             })
         }
         _ => {
-            let c = chain_from_rir(ir, name, callees, params.len())?;
+            let c = chain_from_rir(ir, name, res, callees, params.len())?;
             if c.has_self_call {
                 return Err("a self-call outside a match is outside the fragment".into());
             }
@@ -1705,18 +2054,41 @@ pub fn generate_in_language(
     // panic), but one the tests assert never fires.
     let sig = run_sig_checker(e, &d.name);
     let peel = sig_peel(e, &d.name);
-    let arity = match (&sig, &peel) {
-        (Ok(k), Ok((arity, _))) if *k as usize == *arity => *arity,
-        (Err(reason), Err(_)) => return Err(reason.clone()),
-        (s, p) => {
+    // The result type's NAME, its constructors and its embedding function are
+    // read off the declaration and the inductive registry — every one of them
+    // an identifier the reflected form cannot carry
+    // (docs/certgen-non-nat-embeddings-design.md §6). It is the Rust half's
+    // *result* verdict, and the constructor count is what the in-language
+    // verdict is compared against.
+    let res = ResTy::of(e, d);
+    let (arity, res) = match (&sig, &peel, res) {
+        (Ok((k, r)), Ok((a, is_nat, _)), Ok(res))
+            if *k as usize == *a
+                && *r == if res.is_nat() { 0 } else { res.ctors.len() as u64 }
+                && *is_nat == res.is_nat() =>
+        {
+            (*a, res)
+        }
+        // Both halves decline — the peel refused, or the rim cannot name the
+        // result type. The *decision* is in-language, so its wording is what
+        // the caller sees.
+        (Err(reason), Err(_), _) | (Err(reason), _, Err(_)) => return Err(reason.clone()),
+        // The checker accepts a shape whose name the rim cannot spell (a
+        // monomorphized `Option<Nat>`, say). A decline, not a drift: the two
+        // answer different questions — which lowerings are in the fragment,
+        // and which of them have a name to write `embed_T` with (§6).
+        (Ok(_), _, Err(why)) => return Err(why),
+        (s, p, r) => {
+            let named = r.map(|t| t.name).unwrap_or_default();
             return Err(format!(
                 "signature disagreement between the in-language checker and the Rust \
                  peel for `{}` — a fragment-definition drift, not a decline: \
-                 in-language {s:?}, Rust {p:?}",
+                 in-language {s:?}, Rust {p:?}, declared result `{named}`",
                 d.name
             ));
         }
     };
+    let res = &res;
     let names = surface_params(d)?;
     let f = d.name.as_str();
     // The pull primitive: marked, closed, boxed code plus the callee-marker
@@ -1729,12 +2101,12 @@ pub fn generate_in_language(
     }
     let (rir, ir) = run_transcriber(e, arity, body.code)?;
     let params: Vec<String> = names.iter().map(|s| s.to_string()).collect();
-    let model = fn_ir_from_rir(&rir, f, &body.callees, &params)?;
+    let model = fn_ir_from_rir(&rir, f, res, &body.callees, &params)?;
     // The certificate FOLD, over the same `Ir` value the model came from
     // (docs/certgen-cert-expression-design.md): which kit lemma applies where,
     // and whether a call consumes the induction hypothesis, is decided in
     // `lib/certgen_cert.hthr`; what comes back is a certificate expression the
     // emitters render.
     let cert = run_cert_fold(e, ir, &body.callees)?;
-    emit_with_model(f, arity, model, cert, ctx)
+    emit_with_model(f, arity, res, model, cert, ctx)
 }

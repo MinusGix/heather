@@ -30,6 +30,7 @@ if [[ "${1:-}" == --fast ]]; then
   # every test binary, where these names are unique. If the caller already
   # passed a `--`, don't add a second one.
   SKIP=(--skip the_full_ir_library_checks --skip emissions_check_and_controls
+        --skip nonnat_emissions_and_controls
         --skip a_perturbed_transcriber_is_refused_by_the_kernel
         --skip a_perturbed_signature_checker_is_a_loud_disagreement
         --skip a_perturbed_fold_is_refused_by_the_kernel)
