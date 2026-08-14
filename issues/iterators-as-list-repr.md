@@ -3,7 +3,7 @@ title: Iterators are a runtime representation of List, not a spec type
 status: open
 labels: [design,stdlib,runtime,compiler]
 created: 2026-08-13
-updated: 2026-08-13
+updated: 2026-08-14
 ---
 
 Decided in discussion (2026-08-13, the showcase critique): the language does
@@ -37,3 +37,7 @@ Also to check before committing further: the claim "iterators are unwieldy
 mathwise" deserves a literature pass (Agda/Coq treatments of colists and
 container morphisms) — noted in discussion as something to verify, not
 assume.
+
+## Log
+
+- 2026-08-14: docs/datarepr-design.md (§5.2) places iterators as ordinary reprs: pipeline ops are registry Impls, and certified fusion is a via-derived certificate for the fused Impl against the composed stagewise derived Impls — no new mechanism. API naturality stays this issue's open half.
