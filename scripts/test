@@ -33,6 +33,8 @@ if [[ "${1:-}" == --fast ]]; then
         --skip nonnat_emissions_and_controls
         --skip tier1_emissions_and_declines
         --skip a_perturbed_tier1_ih_value_is_refused_by_the_kernel
+        --skip t0param_emissions_and_declines
+        --skip a_perturbed_t0_dispatch_slot_is_refused_by_the_kernel
         --skip a_perturbed_transcriber_is_refused_by_the_kernel
         --skip a_perturbed_signature_checker_is_a_loud_disagreement
         --skip a_perturbed_fold_is_refused_by_the_kernel

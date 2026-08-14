@@ -447,14 +447,14 @@ on a non-`Nat` emission, not only on the `Nat` ones.
 ## 8. Deferred, with homes
 
 - **Non-`Nat` parameters** (and therefore matching on a non-`Nat` scrutinee) —
-  blocked on `Term::Case`: the `El(D#tycode^δ)` motive, the Σ-projection arm
-  binders, and the nested-`Case` shape for `n > 2`. It also wants a
-  *per-parameter* type list in `SigOut`, which the flat `(arity, res)` verdict
-  deliberately does not carry. Home:
-  `docs/certifying-generator-design.md` §8 item 2, restated as its own stage;
-  the surface work is a `tm_case` arm and a second marker convention, both of
-  which want `issues/code-variable-analysis-api.md`'s closed-term substitution
-  more than they want this round.
+  **LANDED, 2026-08-14** (`docs/certgen-tier0-params-design.md`), with three
+  corrections to this entry's forecast, each because the tier-1 round landed
+  first and paid the bill: the `Case` motive is bound-and-ignored (no type
+  walk), the arm binders arrived as the marker pass's problem rather than the
+  walker's (the tier-1 accessor conventions covered them, with payload-free
+  arms needing none), and `SigOut` gained **nothing** — the rim resolves
+  every parameter index itself, so no per-parameter list was ever needed.
+  The `tm_case` arm this entry predicted had already landed with tier-1.
 - **Tier-1 (recursive) source types** — **LANDED, 2026-08-14**
   (`docs/certgen-tier1-source-types-design.md`), with two corrections to this
   entry's forecast: the walker reads the *recursor's step*, not `Supf` values

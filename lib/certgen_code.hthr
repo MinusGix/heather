@@ -86,6 +86,17 @@
 //    `Nat` path is the degenerate instance (`Succ`'s one field recursive)
 //    and keeps its own convention-1 spellings byte for byte.
 //
+// 6. TIER-0 PARAMETER MATCHES (docs/certgen-tier0-params-design.md §§3–4).
+//    A fn may also match on a tier-0 (non-recursive, payload-free)
+//    enumeration parameter. The marker pass hands the walker convention 5's
+//    constructor case tree with NO eliminator around it: every scrutinee the
+//    same parameter marker, every branch a header-wrapped arm (field count
+//    0). A bare collected case tree at the fn's ROOT is therefore a tier-0
+//    parameter match — `ta_finish` renders it as the same `LetMatch` shape,
+//    dispatch slot `arity - 1 - lvl` — while a case tree anywhere else is
+//    not a value and declines. There is no recursion index and no `PSelf`:
+//    a tier-0 type has no structural position, so `j` is never consulted.
+//
 // The two meet exactly once, in `dist` and its callers: a reference is
 // carried as a level all the way through composition and converted to a
 // distance only when the instruction it sits in is being rendered, at that
@@ -736,7 +747,26 @@ fn ta_elim_wf(arity: Nat, step: TA, sc: TA) -> TA {
     match step { TArms(lv, parts) => ta_wf_at(arity, lv, parts, ta_scrut_lvl(sc)), _ => TStuck }
 }
 
-// The root. A body that is already an eliminator is done; a body that is an
+// A TIER-0 parameter match (convention 6): the collected case tree, arrived
+// at the fn's root with no eliminator around it. The dispatch level must
+// name a parameter — the recursion-index conversion `ta_elim_at` makes,
+// reused as the dispatch slot — and each arm renders at its own base depth
+// through the tier-1 chain renderer, every field count 0 in practice.
+// `j` is passed as the dispatch slot only because `render_exp` wants one;
+// no `PSelf` can occur here (a self-call on a tier-0 parameter is not
+// structural, and the surface refuses the recursion before this walker
+// ever sees it — a `PSelf` smuggled in anyway renders a `LetCall(0, …)`
+// whose certificate the fold declines at mask 0).
+fn ta_arms_at(arity: Nat, j: Nat, parts: Parts) -> TOut {
+    TYes(LetMatch(j, ta_wf_chain(arity, j, parts), Ret(RCons(0, RNil))))
+}
+
+fn ta_arms_finish(c: Cmp, arity: Nat, lv: Nat, parts: Parts) -> TOut {
+    match c { CLt => ta_arms_at(arity, sub(sub(arity)(1))(lv), parts), _ => TNo }
+}
+
+// The root. A body that is already an eliminator is done; a bare case tree
+// is a tier-0 parameter match (convention 6); a body that is an
 // expression is a non-recursive fragment fn (`fn seven() -> Nat { 7 }`) and
 // renders at base depth `arity` with no recursion index to speak of — `j` is
 // unused there because no `PSelf` can occur without the eliminator that mints
@@ -744,6 +774,7 @@ fn ta_elim_wf(arity: Nat, step: TA, sc: TA) -> TA {
 fn ta_finish(arity: Nat, t: TA) -> TOut {
     match t {
         TBody(body) => TYes(body),
+        TArms(lv, parts) => ta_arms_finish(nat_cmp(lv)(arity), arity, lv, parts),
         _ => render_ta(t, arity, 0, arity),
     }
 }
@@ -752,9 +783,9 @@ fn ta_finish(arity: Nat, t: TA) -> TOut {
 // The signature checker (docs/fn-signature-reflection-design.md §2). The
 // analyzed fn's TYPE arrives as code — pulled by the elaborator's reflection
 // primitive, `TyCode(g)` in the shell below — and the fragment signature rule
-// lives here, whole: `Nat -> … -> Nat -> R` with at least one parameter, at
-// most one of them a tier-1 inductive, `R` a `Nat` or a tier-0 enumeration.
-// `SigNo` is the decline, total like `TStuck`.
+// lives here, whole: at least one parameter, each a `Nat` or a payload-free
+// tier-0 enumeration, at most one of them a tier-1 inductive, `R` a `Nat` or
+// a tier-0 enumeration. `SigNo` is the decline, total like `TStuck`.
 
 // The walk's accumulator, one state per shape the fragment signature is made
 // of. `SNat` is the one leaf that is a `Nat`; `SPure` is anything built from
@@ -887,9 +918,18 @@ fn sig_pi_wf(cod: SA) -> SA {
     }
 }
 
+// A TIER-0 enumeration domain (docs/certgen-tier0-params-design.md §5): a
+// one-constructor payload (`SPure`) or a right-nested sum (`SEnum`) is a
+// parameter like a `Nat` — arity up one, the tier-1 position untouched — so
+// the continuation is `sig_pi_nat`'s. `SFlds` as a domain still declines (a
+// fielded one-constructor payload); a fielded summand inside an `SEnum` is
+// invisible to this walk by design, and the rim's field rule declines the
+// declaration — the checker-accepts/rim-declines split, not a drift.
 fn sig_pi(dom: SA, cod: SA) -> SA {
     match dom {
         SNat => sig_pi_nat(cod),
+        SPure => sig_pi_nat(cod),
+        SEnum(k) => sig_pi_nat(cod),
         SWf => sig_pi_wf(cod),
         _ => SNo,
     }
@@ -1259,6 +1299,72 @@ theorem tier1_headerless_arm_declines():
     = TStuck
 { refl }
 
+// TIER-0 PARAMETER MATCHES (convention 6). The case tree with no eliminator
+// around it, at the fn's root, is a match on a tier-0 enumeration parameter.
+// `pick(f: Flag, a, b) { match f { Off => a, On => b } }`, spelled as the
+// walker builds it: two header-wrapped arms (field count 0) dispatching on
+// parameter 0 (marker level 0, walker level 2), each arm a bare parameter
+// reference. The emitted `LetMatch(0, …)` is byte-identical to the round's
+// hand-run (docs/certgen-tier0-params-design.md §1).
+theorem t0_case_transcribes():
+    ta_finish(3,
+        ta_case(
+            ta_app(3,
+                ta_app(3,
+                    ta_lam(ta_stuck(), ta_lam(ta_stuck(), ta_lam(ta_stuck(), ta_lam(ta_stuck(), ta_var())))),
+                    ta_zero()),
+                ta_app(3, ta_lam(ta_stuck(), ta_var()), ta_succ(ta_zero()))),
+            ta_app(3,
+                ta_app(3,
+                    ta_lam(ta_stuck(), ta_lam(ta_stuck(), ta_lam(ta_stuck(), ta_lam(ta_stuck(), ta_var())))),
+                    ta_zero()),
+                ta_app(3, ta_lam(ta_stuck(), ta_var()), ta_succ(ta_succ(ta_zero())))),
+            ta_app(3, ta_lam(ta_stuck(), ta_var()), ta_zero())))
+    = TYes(LetMatch(0,
+          Arm(Ret(RCons(1, RNil)),
+          Arm(Ret(RCons(2, RNil)),
+          NoArm)),
+          Ret(RCons(0, RNil))))
+{ refl }
+
+// …the dispatch level must name a PARAMETER: a tree dispatching on the
+// eliminator-field level (`arity`) is not a tier-0 parameter match.
+theorem t0_case_on_a_nonparameter_declines():
+    ta_finish(1,
+        ta_case(
+            ta_app(1,
+                ta_app(1,
+                    ta_lam(ta_stuck(), ta_lam(ta_stuck(), ta_lam(ta_stuck(), ta_lam(ta_stuck(), ta_var())))),
+                    ta_zero()),
+                ta_zero()),
+            ta_app(1,
+                ta_app(1,
+                    ta_lam(ta_stuck(), ta_lam(ta_stuck(), ta_lam(ta_stuck(), ta_lam(ta_stuck(), ta_var())))),
+                    ta_zero()),
+                ta_zero()),
+            ta_app(1, ta_lam(ta_stuck(), ta_var()), ta_succ(ta_zero()))))
+    = TNo
+{ refl }
+
+// …and a case tree in a VALUE position is not a value: only the root may
+// match.
+theorem t0_case_in_value_position_declines():
+    ta_succ(
+        ta_case(
+            ta_app(1,
+                ta_app(1,
+                    ta_lam(ta_stuck(), ta_lam(ta_stuck(), ta_lam(ta_stuck(), ta_lam(ta_stuck(), ta_var())))),
+                    ta_zero()),
+                ta_zero()),
+            ta_app(1,
+                ta_app(1,
+                    ta_lam(ta_stuck(), ta_lam(ta_stuck(), ta_lam(ta_stuck(), ta_lam(ta_stuck(), ta_var())))),
+                    ta_zero()),
+                ta_zero()),
+            ta_app(1, ta_lam(ta_stuck(), ta_var()), ta_zero())))
+    = TStuck
+{ refl }
+
 // The signature checker's own pins: `dbl`'s and `add`'s signatures, spelled
 // as the walker builds them (`SNat` is the `ty_nat` arm's answer), and the
 // declines the fragment rule turns on.
@@ -1360,6 +1466,46 @@ theorem sig_tier1_result_declines():
 // A `Wf` whose shape is not an enumeration's is not a fragment parameter.
 theorem sig_wf_junk_shape_declines():
     sig_wf(SNat) = SNo
+{ refl }
+
+// A TIER-0 enumeration parameter (docs/certgen-tier0-params-design.md §5):
+// `Flag -> Nat`…
+theorem sig_t0_param():
+    sig_finish(sig_pi(sig_sum(SPure, SPure), SNat)) = SigYes(1, 0, 0)
+{ refl }
+
+// …`Flag -> Nat -> Nat` — a tier-0 parameter beside a `Nat` one…
+theorem sig_t0_param_beside_nat():
+    sig_finish(sig_pi(sig_sum(SPure, SPure), sig_pi(SNat, SNat))) = SigYes(2, 0, 0)
+{ refl }
+
+// …TWO tier-0 parameters, unlike the one-tier-1 rule: no position is
+// carried, so no state limits the count…
+theorem sig_t0_params_two():
+    sig_finish(sig_pi(sig_sum(SPure, SPure),
+        sig_pi(sig_sum(SPure, sig_sum(SPure, SPure)), SNat)))
+    = SigYes(2, 0, 0)
+{ refl }
+
+// …`Flag -> Flag` — the tier-0 parameter and the tier-0 RESULT composed…
+theorem sig_t0_param_enum_result():
+    sig_finish(sig_pi(sig_sum(SPure, SPure), sig_sum(SPure, SPure)))
+    = SigYes(1, 2, 0)
+{ refl }
+
+// …`Toks -> Flag -> Nat` — a tier-0 parameter beside the tier-1 one, the
+// `wf` position untouched by the tier-0 domain.
+theorem sig_t0_beside_tier1():
+    sig_finish(sig_pi(sig_wf(sig_sum(SPure, sig_sigma(SPure, sig_sigma(SNat, SPure)))),
+        sig_pi(sig_sum(SPure, SPure), SNat)))
+    = SigYes(2, 0, Succ(1))
+{ refl }
+
+// A fielded ONE-constructor payload as a domain declines here; a fielded
+// summand inside an `SEnum` is invisible to this walk by design and declines
+// at the rim's field rule (the checker-accepts/rim-declines split).
+theorem sig_t0_fielded_payload_domain_declines():
+    sig_pi(SFlds, SNat) = SNo
 { refl }
 
 // ---------------------------------------------------------------------------

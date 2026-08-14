@@ -7,10 +7,11 @@
 //! constructor, whose constructors may take `Nat` FIELDS
 //! (`docs/certgen-ctor-fields-design.md`, 2026-08-13 — the stage §2.2 of the
 //! non-`Nat` doc cut on a cost law that two elaborator spelling rounds have
-//! since cut). Parameters stay `Nat` and recursion stays structural on a
-//! `Nat`, for the lowering reason the design doc's §2.1 records (a match on an
-//! inductive parameter is `Term::Case`, with an `El(D#tycode^δ)` motive and
-//! Σ-projection arm binders).
+//! since cut). This binary's fixtures keep all-`Nat` parameters and
+//! `Nat`-structural recursion; the parameter position widened later — tier-1
+//! inductives (`certgen_tier1.rs`) and tier-0 enumerations
+//! (`certgen_t0param.rs`) — without moving a byte here, which is this file's
+//! regression role.
 //!
 //! The fields stage also lands CROSS-FUNCTION COMPOSITION at a non-`Nat`
 //! result (non-`Nat` §2.3, deferred there for want of a per-slot type): a

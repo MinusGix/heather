@@ -420,6 +420,14 @@ gained no field. Three features, three verdicts, all §8.1's: two absorbed
 untouched, the third a constructor-level edit at the one place the shape of
 the induction lives.
 
+**Tested a fourth time, 2026-08-14** (`docs/certgen-tier0-params-design.md`):
+tier-0 **parameters** — a `match` over a `Term::Case`-lowered enumeration
+parameter — needed **zero** edits again: `cert_body_w` at the all-childless
+`kids` mask (0) *is* the tier-0 certificate, every arm `IhNo`, one `CMatch`
+per constructor. The tier-1 constructor-level edit turned out to be the last
+one the parameter position needed; the running score is five features, one
+`CertOut` edit.
+
 **Tested a second time, 2026-08-13** (`docs/certgen-ctor-fields-design.md`):
 constructor **fields** at the result type were implemented whole — walker,
 signature checker, rim, end-to-end kernel-checked instance — and

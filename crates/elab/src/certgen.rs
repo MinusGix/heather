@@ -90,6 +90,12 @@ pub struct Emission {
     /// function, kept because a *caller* re-derives this member's invariant
     /// inside its own program (docs/certgen-cert-expression-design.md §6).
     cert: RCertOut,
+    /// The per-parameter type descriptions (`None` = `Nat`), kept for the
+    /// same reason as `cert`: a caller re-deriving this member's invariant
+    /// spells its binders and per-slot embeddings from them, and a caller's
+    /// `LetCall` argument slots are checked against them
+    /// (docs/certgen-tier0-params-design.md §7).
+    pts: Vec<Option<ParamTy>>,
 }
 
 /// Previously generated emissions, consulted for foreign calls.
@@ -394,17 +400,30 @@ enum PF {
     Slf,
 }
 
-/// The tier-1 **parameter** type, as everything downstream needs to SPELL it
-/// (docs/certgen-tier1-source-types-design.md §7) — `ResTy`'s sibling for the
-/// parameter position. Everything in it is a name; the walker never sees it.
+/// A non-`Nat` **parameter** type, as everything downstream needs to SPELL it
+/// — `ResTy`'s sibling for the parameter position. Everything in it is a
+/// name; the walker never sees it. Two tiers share the struct
+/// (docs/certgen-tier1-source-types-design.md §7,
+/// docs/certgen-tier0-params-design.md §7): a **tier-1** inductive is the
+/// (at most one) structural-recursion parameter, and a **tier-0** enumeration
+/// (payload-free this round) is an ordinary parameter that may be matched on,
+/// passed to a callee, or returned.
+#[derive(Clone)]
 struct ParamTy {
     /// The surface name, for binders and the record's `f: {name} -> …`.
     name: String,
-    /// The emitted `{T}_gen_embed` — a *recursive* generated fn here.
+    /// The emitted `{T}_gen_embed` — recursive exactly when the type is.
     embed: String,
     /// `(constructor name, per-field kind)` in declaration order — the
     /// lowering's tag order, the walker's arm order, and `embed_T`'s.
     ctors: Vec<(String, Vec<PF>)>,
+    /// Tier 1 (`true`) or tier 0 (`false`): whether this type is recursive,
+    /// i.e. whether a `match` on it is a structural induction with induction
+    /// hypotheses or a plain case split. Decides which parameter the
+    /// signature's one `wf` position may name, and nothing about rendering —
+    /// `kids_mask` is 0 for a tier-0 type, which makes the certificate fold's
+    /// tier-1 entry point serve both (design doc §6).
+    recursive: bool,
 }
 
 impl ParamTy {
@@ -431,16 +450,40 @@ impl ParamTy {
                 let ind = e
                     .lookup_inductive(name)
                     .ok_or_else(|| format!("`{name}` is not a declared inductive"))?;
-                if !ind.recursive {
-                    return Err(format!(
-                        "parameter `{}`'s type `{name}` is a non-recursive inductive: \
-                         its `match` lowers to a bare `Case`, a body shape this stage \
-                         does not read (docs/certgen-tier1-source-types-design.md §2)",
-                        p.name
-                    ));
-                }
                 if !ind.params.is_empty() || ind.index.is_some() || !ind.valparams.is_empty() {
                     return Err(format!("`{name}` is parameterized or indexed"));
+                }
+                // FLIP RECORDED (docs/certgen-tier0-params-design.md §10 item
+                // 5): a non-recursive inductive parameter was this fn's own
+                // decline until the tier-0-parameters round — "its `match`
+                // lowers to a bare `Case`, a body shape this stage does not
+                // read". The `Case` tree is read now (convention 6); what a
+                // tier-0 parameter's constructors may not have (this round)
+                // is FIELDS, because a tier-0 arm reads a field by
+                // `Fst(Snd^j ·)` over the branch's own binder — an accessor
+                // coordinate the marker pass does not mint (design doc §2).
+                if !ind.recursive {
+                    let mut ctors = Vec::new();
+                    for c in &ind.ctors {
+                        if !c.fields.is_empty() {
+                            return Err(format!(
+                                "parameter `{}`'s type `{name}` has a constructor `{}` \
+                                 with fields: a fielded tier-0 parameter is deferred \
+                                 (docs/certgen-tier0-params-design.md §2)",
+                                p.name, c.name
+                            ));
+                        }
+                        ctors.push((c.name.clone(), Vec::new()));
+                    }
+                    if ctors.is_empty() {
+                        return Err(format!("`{name}` has no constructors"));
+                    }
+                    return Ok(Some(ParamTy {
+                        name: name.clone(),
+                        embed: format!("{name}_gen_embed"),
+                        ctors,
+                        recursive: false,
+                    }));
                 }
                 let mut ctors = Vec::new();
                 for c in &ind.ctors {
@@ -480,6 +523,7 @@ impl ParamTy {
                     name: name.clone(),
                     embed: format!("{name}_gen_embed"),
                     ctors,
+                    recursive: true,
                 }))
             }
             _ => Err(format!(
@@ -1060,6 +1104,27 @@ fn render_cert(
                         .ctx
                         .get(callee)
                         .ok_or_else(|| format!("callee `{callee}` has no generated instance"))?;
+                    // Each argument slot must carry the embedding the
+                    // callee's declared parameter expects — `embed_nat` at a
+                    // `Nat`, the type's own at a tier-0 enumeration
+                    // (docs/certgen-tier0-params-design.md §7). This is
+                    // where a constructor VALUE at an enumeration slot, or a
+                    // mis-typed slot, declines cleanly instead of dying at
+                    // the kernel.
+                    for (j, sl) in arg_slots.iter().enumerate() {
+                        let want = cal
+                            .pts
+                            .get(j)
+                            .and_then(|p| p.as_ref())
+                            .map(|t| t.embed.as_str())
+                            .unwrap_or("embed_nat");
+                        if sl.embed != want {
+                            return Err(format!(
+                                "argument {j} of the call to `{callee}` is not a slot \
+                                 of the callee's declared parameter type"
+                            ));
+                        }
+                    }
                     (
                         cx.callee_idx(callee)?,
                         callee.clone(),
@@ -1236,23 +1301,22 @@ fn emit_with_model(
         }
     };
     for m in closure.clone() {
-        // A closure member other than `f` is a callee, and a callee is `Nat →
-        // … → Nat` (the marker pass refuses anything else), so its invariant
-        // is re-derived at the `Nat` result type — which is also why a
-        // non-`Nat`-result function has no callees at all (§2.3).
-        let (mm, mc): (FnIr, RCertOut) = if m == f {
-            (model.clone(), cert.clone())
+        // A closure member other than `f` is a callee, and a callee's RESULT
+        // is a `Nat` (the marker pass refuses anything else), so its
+        // invariant is re-derived at the `Nat` result type — which is also
+        // why a non-`Nat`-result function has no callees at all (§2.3). Its
+        // PARAMETERS may include tier-0 enumerations since the tier-0 round,
+        // so the re-derivation spells them from the callee's own stored
+        // descriptions (docs/certgen-tier0-params-design.md §7).
+        let (mm, mc, mpts): (FnIr, RCertOut, Vec<Option<ParamTy>>) = if m == f {
+            (model.clone(), cert.clone(), pts.to_vec())
         } else {
             let e = ctx.get(&m).unwrap();
-            (e.model.clone(), e.cert.clone())
+            (e.model.clone(), e.cert.clone(), e.pts.clone())
         };
         let nat = ResTy::nat();
         let mres = if m == f { res } else { &nat };
-        // A callee's parameters are all `Nat` (the marker convention), so a
-        // re-derived member's slots need no descriptions of their own.
-        let callee_pts: Vec<Option<ParamTy>> = vec![];
-        let mpts: &[Option<ParamTy>] = if m == f { pts } else { &callee_pts };
-        emit_invariant(w, f, &m, mres, mpts, &mm, &mc, &closure, ctx, &conv_name)?;
+        emit_invariant(w, f, &m, mres, &mpts, &mm, &mc, &closure, ctx, &conv_name)?;
     }
 
     let (support, instance_record) = {
@@ -1269,7 +1333,17 @@ fn emit_with_model(
         (support, record_name(pts, res, arity))
     };
     emit_instance(w, f, pts, &model, &instance_record);
-    Ok(Emission { name: f.to_string(), arity, closure, ir_body, support, text, model, cert })
+    Ok(Emission {
+        name: f.to_string(),
+        arity,
+        closure,
+        ir_body,
+        support,
+        text,
+        model,
+        cert,
+        pts: pts.to_vec(),
+    })
 }
 
 fn callees(model: &FnIr) -> Vec<String> {
@@ -1603,7 +1677,23 @@ fn emit_invariant(
                 .filter(|(i, _)| *i != r.rec_idx)
                 .map(|(_, p)| p.clone())
                 .collect();
-            let other_binders: String = others.iter().map(|p| format!("({p}: Nat) -> ")).collect();
+            // The non-recursion binders keep their OWN types — a tier-0
+            // enumeration parameter may ride beside the induction
+            // (docs/certgen-tier0-params-design.md §7); all-`Nat` others are
+            // byte-identical to what this always emitted.
+            let other_binders: String = params
+                .iter()
+                .enumerate()
+                .filter(|(i, _)| *i != r.rec_idx)
+                .map(|(i, p)| {
+                    let pn = pts
+                        .get(i)
+                        .and_then(|t| t.as_ref())
+                        .map(|t| t.name.as_str())
+                        .unwrap_or("Nat");
+                    format!("({p}: {pn}) -> ")
+                })
+                .collect();
             let other_lams: String = others.iter().map(|p| format!("{p} ")).collect();
             let spell = |rec: &str| -> (Vec<Sl>, String, Sl) {
                 let sls: Vec<Sl> = params
@@ -1613,7 +1703,10 @@ fn emit_invariant(
                         if i == r.rec_idx {
                             pt.at(rec.to_string())
                         } else {
-                            Sl::nat(p)
+                            match pts.get(i).and_then(|t| t.as_ref()) {
+                                Some(opt) => opt.at(p.clone()),
+                                None => Sl::nat(p),
+                            }
                         }
                     })
                     .collect();
@@ -1854,6 +1947,17 @@ struct MarkCx<'a> {
     /// marking reads (docs/certgen-tier1-source-types-design.md §3). Every
     /// entry is a declaration fact.
     wf: Option<WfParam>,
+    /// The tier-0 enumeration parameters, by de Bruijn level (birth order)
+    /// with their constructor counts — what the `Case` marking reads
+    /// (docs/certgen-tier0-params-design.md §3). Declaration facts, like
+    /// `wf`'s.
+    t0: Vec<T0Param>,
+}
+
+/// One tier-0 enumeration parameter's marking entry.
+struct T0Param {
+    level: u32,
+    ctors: usize,
 }
 
 /// The tier-1 parameter's marking table.
@@ -1907,10 +2011,22 @@ impl MarkCx<'_> {
                  it is outside the fragment"
             ));
         }
-        let mut ty = &**ty;
+        // Unspell first, exactly as `sig_peel` does: the stored statement
+        // spells registered lowerings as `El (D#tycode^δ)`, and a tier-0
+        // enumeration domain is only recognizable structurally.
+        let unspelled = self.e.unspell_ty_deep(abs as u32, ty);
+        let mut ty: &Type = match &unspelled {
+            Some(t) => t,
+            None => ty,
+        };
         let mut arity = 0usize;
         while let Type::Pi { dom, cod, .. } = ty {
-            if !matches!(&**dom, Type::Nat) {
+            // A callee parameter is a `Nat` or a tier-0 enumeration
+            // (docs/certgen-tier0-params-design.md §2) — the callee marker
+            // carries only the arity, so nothing else changes here. A
+            // tier-1 (`Wf`) domain keeps its decline: a tier-1-parameter
+            // callee has no marker.
+            if !matches!(&**dom, Type::Nat | Type::Sum { .. } | Type::Sigma { .. }) {
                 return Err(format!("callee `{name}`'s signature is outside the fragment"));
             }
             arity += 1;
@@ -1973,8 +2089,9 @@ fn mark(
             if let Some(a) = wfarm {
                 if *i < a.skel {
                     return Err(
-                        "an eliminator internal (a child, a children tuple, or the \
-                         induction hypothesis) is used as a value — outside the fragment"
+                        "a match internal (a payload, a child, a children tuple, or \
+                         the induction hypothesis) is used as a value — outside the \
+                         fragment"
                             .into(),
                     );
                 }
@@ -2026,6 +2143,17 @@ fn mark(
                 return Err("an induction-hypothesis index past the constructor's children".into());
             };
             chain_marker(3, surface)
+        }
+        // A tier-0 parameter match (docs/certgen-tier0-params-design.md §3):
+        // validated and re-packaged by [`mark_case_t0`]. Inside an
+        // eliminator arm it declines here; inside a `Nat` induction's arm it
+        // is marked and the WALKER declines it (a case tree is not a value),
+        // the same split the nested `ElimNat` takes.
+        Term::Case { .. } => {
+            if wfarm.is_some() {
+                return Err("a nested `match` is outside the fragment".into());
+            }
+            mark_case_t0(t, depth, cx)?
         }
         // The tier-1 eliminator (docs/certgen-tier1-source-types-design.md
         // §3): validated and re-packaged by [`mark_elim_wf`]. Nested — inside
@@ -2263,6 +2391,119 @@ fn mark_wf_arm(
     })
 }
 
+/// The tier-0 parameter match's marking
+/// (docs/certgen-tier0-params-design.md §3): the root `Case` must scrutinize
+/// a tier-0 enumeration parameter, and the tree is walked exactly as
+/// [`mark_wf_tree`] walks the tier-1 one — each nested node scrutinizes its
+/// `case_r` binder — with the one structural difference the round's probe
+/// recorded: branches bind their payload IMPLICITLY (no `λ cs'. λ ih'.`
+/// skeleton), so an arm is the branch body itself, marked with the branch
+/// internals (payload and sum-rest binders) declined as values and wrapped
+/// in the field-count header at 0. Every scrutinee is replaced by the
+/// parameter's marker; what survives is convention 5's case tree with no
+/// eliminator around it, which the walker renders as a root `LetMatch`
+/// (convention 6).
+fn mark_case_t0(t: &Term, depth: u32, cx: &mut MarkCx<'_>) -> Result<Term, String> {
+    let Term::Case { scrut, .. } = t else {
+        unreachable!("caller matched Case");
+    };
+    let Term::Var(LocalVar(v)) = &**scrut else {
+        return Err("the match's scrutinee is not a bare parameter".into());
+    };
+    if *v >= depth {
+        return Err("a variable escapes the body's own binders".into());
+    }
+    let level = depth - 1 - v;
+    let Some(n) = cx.t0.iter().find(|p| p.level == level).map(|p| p.ctors) else {
+        return Err("the match's scrutinee is not a tier-0 enumeration parameter".into());
+    };
+    if n < 2 {
+        // A one-constructor enumeration has no sum, so its `match` is not
+        // this tree; nothing needs one (the value IS its constructor).
+        return Err("a match on a one-constructor enumeration is outside the fragment".into());
+    }
+    let param_marker = marker(level);
+    mark_t0_tree(t, depth, cx, &param_marker, 0, n, Some(*v))
+}
+
+/// One node of the tier-0 case tree: constructor `i`'s branch on the left,
+/// the rest — another node, or the last constructor's branch — on the right.
+/// `root_var` is `Some(v)` at the root (the parameter's own variable) and
+/// `None` below, where each node scrutinizes the enclosing `case_r` binder
+/// at `Var 0`.
+#[allow(clippy::too_many_arguments)]
+fn mark_t0_tree(
+    t: &Term,
+    depth: u32,
+    cx: &mut MarkCx<'_>,
+    param_marker: &Term,
+    i: usize,
+    n: usize,
+    root_var: Option<u32>,
+) -> Result<Term, String> {
+    let Term::Case {
+        lhs_level,
+        rhs_level,
+        motive_level,
+        lhs,
+        rhs,
+        motive,
+        case_l,
+        case_r,
+        scrut,
+    } = t
+    else {
+        return Err("a tier-0 match whose rest is not the constructor case tree".into());
+    };
+    let want = root_var.unwrap_or(0);
+    if !matches!(&**scrut, Term::Var(LocalVar(v)) if *v == want) {
+        return Err("a case in the constructor tree scrutinizes the wrong binder".into());
+    }
+    let ys = i as u32;
+    let l = mark_t0_arm(case_l, depth, cx, ys)?;
+    let r = if i + 2 < n {
+        // case_r binds the sum rest; the next node scrutinizes it (Var 0).
+        mark_t0_tree(case_r, depth, cx, param_marker, i + 1, n, None)?
+    } else {
+        // The last constructor's branch: its binder IS the payload.
+        mark_t0_arm(case_r, depth, cx, ys)?
+    };
+    Ok(Term::Case {
+        lhs_level: lhs_level.clone(),
+        rhs_level: rhs_level.clone(),
+        motive_level: motive_level.clone(),
+        lhs: Rc::clone(lhs),
+        rhs: Rc::clone(rhs),
+        motive: Rc::clone(motive),
+        case_l: Rc::new(l),
+        case_r: Rc::new(r),
+        scrut: Rc::new(param_marker.clone()),
+    })
+}
+
+/// Constructor `i`'s tier-0 arm, under `ys` enclosing sum binders. The
+/// branch body binds its payload implicitly, so the internals below the
+/// parameters are the payload plus the `ys` rest binders (`skel = ys + 1`),
+/// every one declined as a value by the arm mode's level check; a
+/// payload-free constructor has no accessors to intercept, so the arm's
+/// constructor table is empty and any projection or ih-shaped application
+/// declines through the tier-1 arms' own checks.
+fn mark_t0_arm(arm: &Term, depth: u32, cx: &mut MarkCx<'_>, ys: u32) -> Result<Term, String> {
+    let skel = ys + 1;
+    let ctor = WfCtor { fields: 0, payload_surface: Vec::new(), rec_surface: Vec::new() };
+    let armcx = WfArmCx { skel, ctor: &ctor };
+    let marked = mark(arm, depth + skel, cx, Some(&armcx))?;
+    // The header: `App((λλλλ. z) ⌜0⌝, arm)` — field count 0, always.
+    Ok(Term::App {
+        fun: Rc::new(chain_marker(4, 0)),
+        dom_level: Level::Zero,
+        cod_level: Level::Zero,
+        dom: Rc::new(Type::Nat),
+        cod: Rc::new(Type::Nat),
+        arg: Rc::new(marked),
+    })
+}
+
 /// Is the head of this application spine a global reference?
 fn global_head(mut t: &Term) -> bool {
     while let Term::App { fun, .. } = t {
@@ -2309,6 +2550,11 @@ fn sig_peel(e: &Elaborator, name: &str) -> Result<(usize, bool, Option<usize>, T
         };
         match &**dom {
             Type::Nat => {}
+            // A tier-0 enumeration parameter
+            // (docs/certgen-tier0-params-design.md §5): any number, no
+            // position recorded — the rim resolves each index itself
+            // ([`ParamTy::of`]). Payload-freeness is the rim's rule too.
+            Type::Sum { .. } | Type::Sigma { .. } => {}
             // A tier-1 parameter (docs/certgen-tier1-source-types-design.md
             // §5): at most one, position recorded. *Which* declaration the
             // lowering belongs to is a name, resolved by [`ParamTy::of`];
@@ -2317,7 +2563,11 @@ fn sig_peel(e: &Elaborator, name: &str) -> Result<(usize, bool, Option<usize>, T
             Type::Wf { .. } => {
                 return Err(format!("`{name}` has more than one tier-1 parameter"));
             }
-            _ => return Err(format!("parameter {arity} of `{name}` is not `Nat`")),
+            _ => {
+                return Err(format!(
+                    "parameter {arity} of `{name}` is not `Nat` or a tier-0 enumeration"
+                ))
+            }
         }
         arity += 1;
         t = body;
@@ -2365,32 +2615,44 @@ pub struct BodyCode {
 /// stays a one-argument pull.
 pub(crate) fn body_code(e: &Elaborator, name: &str) -> Result<BodyCode, String> {
     let (arity, _, wf_pos, body) = sig_peel(e, name)?;
-    let wf = match wf_pos {
-        None => None,
-        Some(p) => {
-            // Re-walk the (unspelled) type to the tier-1 domain.
-            let Some((ty, _)) = e.global_body(name) else {
-                return Err(format!("`{name}` has no elaborated body to analyse"));
-            };
-            let unspelled = e
-                .global_abs(name)
-                .and_then(|abs| e.unspell_ty_deep(abs as u32, &ty));
-            let mut ty: &Type = unspelled.as_ref().unwrap_or(&ty);
-            for _ in 0..p {
-                let Type::Pi { cod, .. } = ty else { unreachable!("peeled above") };
-                ty = cod;
+    // Re-walk the (unspelled) type once, collecting the non-`Nat` parameter
+    // tables: the tier-1 domain's marking table (at `wf_pos`) and the tier-0
+    // enumeration domains' levels and constructor counts
+    // (docs/certgen-tier0-params-design.md §7). All declaration facts.
+    let mut wf = None;
+    let mut t0 = Vec::new();
+    {
+        let Some((ty, _)) = e.global_body(name) else {
+            return Err(format!("`{name}` has no elaborated body to analyse"));
+        };
+        let unspelled = e
+            .global_abs(name)
+            .and_then(|abs| e.unspell_ty_deep(abs as u32, &ty));
+        let mut ty: &Type = unspelled.as_ref().unwrap_or(&ty);
+        for p in 0..arity {
+            let Type::Pi { dom, cod, .. } = ty else { unreachable!("peeled above") };
+            match &**dom {
+                Type::Wf { .. } if wf_pos == Some(p) => {
+                    let ind = e.tag_of(dom).ok_or_else(|| {
+                        format!("`{name}`'s tier-1 parameter names no declaration")
+                    })?;
+                    wf = Some(WfParam { level: p as u32, ctors: wf_ctor_table(&ind)? });
+                }
+                Type::Sum { .. } | Type::Sigma { .. } => {
+                    let ind = e.tag_of(dom).ok_or_else(|| {
+                        format!("a tier-0 parameter of `{name}` names no declaration")
+                    })?;
+                    t0.push(T0Param { level: p as u32, ctors: ind.ctors.len() });
+                }
+                _ => {}
             }
-            let Type::Pi { dom, .. } = ty else { unreachable!("peeled above") };
-            let ind = e
-                .tag_of(dom)
-                .ok_or_else(|| format!("`{name}`'s tier-1 parameter names no declaration"))?;
-            Some(WfParam { level: p as u32, ctors: wf_ctor_table(&ind)? })
+            ty = cod;
         }
-    };
+    }
     let caller_abs = e
         .global_abs(name)
         .ok_or_else(|| format!("`{name}` is not a declared global"))?;
-    let mut cx = MarkCx { e, caller_abs, callees: Vec::new(), wf };
+    let mut cx = MarkCx { e, caller_abs, callees: Vec::new(), wf, t0 };
     let marked = mark(&body, arity as u32, &mut cx, None)?;
     Ok(BodyCode { arity, callees: cx.callees, code: Term::BoxTm(Rc::new(marked)) })
 }
@@ -2955,9 +3217,9 @@ fn run_sig_checker(e: &Elaborator, name: &str) -> Result<(u64, u64, u64), String
     match idx {
         0 => Err(format!(
             "the in-language signature checker declined `{name}`: the fragment \
-             signature is `Nat -> … -> Nat -> R` with at least one parameter — \
-             at most one of them a tier-1 inductive — where `R` is `Nat` or a \
-             tier-0 enumeration"
+             signature has at least one parameter, each a `Nat` or a tier-0 \
+             enumeration — at most one of them a tier-1 inductive — and a \
+             result `R` that is `Nat` or a tier-0 enumeration"
         )),
         // `SigYes(arity, res, wf)`: `res = 0` is a `Nat` result, `res = k ≥
         // 1` an enumeration with `k` constructors
@@ -3196,11 +3458,20 @@ pub fn generate_in_language(
     // verdict is compared against.
     let res = ResTy::of(e, d);
     // The parameter types' rim resolution
-    // (docs/certgen-tier1-source-types-design.md §7): `None` for a `Nat`,
-    // a `ParamTy` for the (at most one) tier-1 parameter.
+    // (docs/certgen-tier1-source-types-design.md §7,
+    // docs/certgen-tier0-params-design.md §7): `None` for a `Nat`, a
+    // `ParamTy` for a tier-0 enumeration or the (at most one) tier-1
+    // parameter.
     let pts: Result<Vec<Option<ParamTy>>, String> =
         (0..d.params.len()).map(|i| ParamTy::of(e, d, i)).collect();
-    let rim_wf = pts.as_ref().ok().and_then(|v| v.iter().position(|p| p.is_some()));
+    // The signature's one `wf` position names the tier-1 (RECURSIVE)
+    // parameter only; tier-0 enumeration parameters carry no position — the
+    // rim resolves every index itself (docs/certgen-tier0-params-design.md
+    // §§5, 7) — so the agreement compares the recursive residue alone.
+    let rim_wf = pts
+        .as_ref()
+        .ok()
+        .and_then(|v| v.iter().position(|p| p.as_ref().is_some_and(|t| t.recursive)));
     let (arity, res, pts) = match (&sig, &peel, res, pts) {
         (Ok((k, r, w)), Ok((a, is_nat, wf_pos, _)), Ok(res), Ok(pts))
             if *k as usize == *a
@@ -3211,7 +3482,11 @@ pub fn generate_in_language(
                 && (*w == 0) == wf_pos.is_none()
                 && (*w == 0 || Some((*a).saturating_sub(*w as usize)) == *wf_pos)
                 && *wf_pos == rim_wf
-                && pts.iter().filter(|p| p.is_some()).count() <= 1 =>
+                && pts
+                    .iter()
+                    .filter(|p| p.as_ref().is_some_and(|t| t.recursive))
+                    .count()
+                    <= 1 =>
         {
             (*a, res, pts)
         }

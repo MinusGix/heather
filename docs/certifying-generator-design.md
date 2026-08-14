@@ -341,6 +341,16 @@ The four axes, instantiated for this generator:
    `Wf` former gave it a recursor the marker pass can read — and the
    parameterized instantiations (`List<Tok>`) owned by
    `issues/datarepr-separation.md`.
+   **Stage 4 (tier-0 parameters) LANDED 2026-08-14**
+   (`docs/certgen-tier0-params-design.md`): a fragment fn's parameters may be
+   payload-free tier-0 enumerations, matched via `Term::Case` (the marker
+   pass re-packages the case tree exactly as it does the tier-1 recursor's,
+   minus the generalization skeleton) and passed to callees — the
+   callee-marker rule widens to tier-0 domains, with per-slot embeddings
+   checked at the renderer. `lib/ir_v1.hthr` again grew nothing, and
+   `lib/certgen_cert.hthr` took zero edits: the tier-1 fold at the
+   all-childless `kids` mask *is* the tier-0 certificate. What remains of
+   item 2 is the parameterized instantiations only.
 3. **Loopification as a refinement-certified pass**, hand-run first on one
    generated function against its `add_instance_loop` analogue.
 4. **The meta-layer re-homing**, when its prerequisites land. The
