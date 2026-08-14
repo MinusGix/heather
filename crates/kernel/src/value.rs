@@ -103,6 +103,18 @@ impl Env {
         self.len == 0
     }
 
+    /// Object identity: the same spine (both empty, or one shared head
+    /// node). Two identical environments answer every lookup identically,
+    /// so a closure body evaluated under either denotes the same value.
+    pub fn ptr_eq(a: &Env, b: &Env) -> bool {
+        a.len == b.len
+            && match (&a.node, &b.node) {
+                (None, None) => true,
+                (Some(x), Some(y)) => Rc::ptr_eq(x, y),
+                _ => false,
+            }
+    }
+
     /// `ρ, v` — one more binder, innermost.
     pub fn push(&self, val: Rc<TmClo>) -> Env {
         Env {

@@ -1,9 +1,9 @@
 ---
 title: Conversion's own cost on large canonical values: the residual no spelling reaches
-status: open
+status: closed
 labels: [kernel,conversion,performance]
 created: 2026-08-13
-updated: 2026-08-13
+updated: 2026-08-14
 ---
 
 The residual named by two consecutive spelling rounds and owned by neither. After [[wf-field-conversion-cost]]'s component respell and [[wf-shape-annotation-slots]]'s slot naming removed most emitted node mass, `lib/ir_v1.hthr` whole moved least of the measured workloads (~1.25x where the declarations prefix moved ~1.6x and prefix+certgen_code ~3x): its theorems' wall time is **conversion on large values** — the kernel comparing/reducing big canonical constructor trees — which no annotation spelling touches, because the cost is in the values themselves, not their type annotations.
@@ -33,3 +33,16 @@ TWO ADJACENT MECHANISMS RULED OUT while attributing, so a round here does not re
 WHAT A ROUND SHOULD DO FIRST: take the thirteen >= 10 ms conversions of k_bind_mono and say what each one is comparing. The body's own question -- whether this decomposes into [[value-domain-allocation-constant]] / the closed [[whnf-sharing-term-growth]] or is its own defect -- is now askable on thirteen concrete cases rather than on a whole library.
 
 TRIGGER RESTATED: this is now the largest single term in the certifying generator's cost AND the only one that scales with its product (each future generated function adds ~0.8-1.2 s of it), which is a stronger trigger than the one this issue was filed with.
+
+- 2026-08-14: ATTRIBUTED, FIXED, CLOSED. Design and rejected alternatives: docs/conversion-large-values-design.md; the mechanism in one line is that **the cost was reflexivity paid at full structural price** — a missed short-circuit, not the value domain's accepted constant.
+
+THE THIRTEEN (the round's mandated first question, answered by a site-tagged probe on the public `conv_type` with a deep `==` control per call; release, warm, reproducer = ir_v1.hthr truncated after k_bind_mono). All of them enter from ONE seam — `Tc::tm_check`'s fallback arm, expected-vs-inferred (zero from the Lam-domain premise, zero from elaborator unification, zero root `conv_term` calls at all) — and all of them compare `Id`-types whose endpoints are the big Wf-encoded canonical trees (supf/pair/inl/inr over Σ-tuple children under an app spine of library globals; the Debug prints of A and B are visually identical for the first 512 nodes). The split: **nine of the sixteen calls ≥ 10 ms were deep-`==` EQUAL** — two separately built copies of one type, never pointer-equal, so every landed shortcut of [[conv-pointer-equality-reflexivity]] missed them; `==` on those pairs costs 15-120 us where the structural walk cost 14-46 ms (300-1000x). The remaining seven share a giant equal prefix with a real difference deep inside — NOT a level spelling (`normalize_levels` equality tested per call, never held) — and their cost is genuine reduction + comparison. And it is not only the thirteen: of the reproducer's 153,352 `conv_type` calls, **148,680 (97%) compare syntactically equal inputs**, carrying 1.25 s of the 1.97 s total.
+
+THE FIX (kernel, three small pieces, fuel policy unchanged — every hit spends the node's one unit):
+* `Conv::ty_root` (crates/kernel/src/conv.rs): equal roots settle by syntactic reflexivity — `a == b` after the existing borrowed-object check. α-equality is `==` under de Bruijn; `==`-equal levels are trivially equiv; a failed `==` stops at the first difference.
+* `Values::ty_eq_fast` / `Values::tm_identity_fast` (conv/dom/values.rs): a hit no longer needs the same closure pointer — two Syn closures over the same environment spine (`value::Env::ptr_eq`, new, head-pointer identity) with `==`-equal bodies denote the same object; `home`/`sat` gating unchanged. Catches the equal endpoint/spine subtrees inside the root-unequal seven.
+* Raw term roots untouched (re-measured: still zero hits, matching the closed round). Entry-wise env comparison implemented, measured (zero additional wins), reverted.
+
+NUMBERS (release, warm, ulimit-wrapped): the reproducer file 2.20 -> 0.88 s, its k_bind_mono share ~1.83 -> ~0.61 s; reproducer conv_type total 1.97 -> 0.62 s, the 148,680 equal calls 1.25 s -> 9 ms; whole `lib/ir_v1.hthr` 5.44 -> 2.15 s. Certgen family per-binary warm (scripts/test --test X, three passes, 2026-08-14 vs the 2026-08-13 protocol run): certgen 0.61 -> 0.68 (noise band), cert 1.40 -> 1.27, controls 7.42 -> 6.78, emissions 15.6 -> 10.2, nonnat 7.35 -> 5.19 — **family 32.4 -> 24.1 s**. Verification: full `scripts/test` 1496 passed, 0 failed (1495 + one new closure-fast-path unit pin; the one-unit fuel pin for root types updated to the new behavior with a convertible-but-unequal OutOfFuel control); `scripts/bench --check` 18 comparisons within thresholds, including the `conv/*` families whose perturbed corpus exercises the failed-`==` path.
+
+WHAT REMAINS is the unequal ≥ 100 us band (~0.55 s of the reproducer's 0.62): real reduction and comparison of genuinely different sides, which decomposes into [[value-domain-allocation-constant]]'s accepted constant (verdict cross-logged there). If a workload ever makes THAT matter, the lever is that issue's list, not this file.

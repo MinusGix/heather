@@ -346,16 +346,24 @@ fn ctx_conversion() {
 }
 
 #[test]
-fn shared_root_type_spends_one_fuel_unit() {
+fn syntactically_equal_root_type_spends_one_fuel_unit() {
     let psi = psi(vec![]);
     let g = nil_ctx(0);
     let ty = nat_to_nat();
 
+    // The same object, and a distinct but syntactically equal root, both
+    // settle by reflexivity in one unit.
     assert_eq!(conv_type(&psi, &g, Layer::Prog, &ty, &ty, &c(0), 1), Ok(()));
+    assert_eq!(conv_type(&psi, &g, Layer::Prog, &ty, &nat_to_nat(), &c(0), 1), Ok(()));
+
+    // Conversion remains broader than the shortcut: `El TmNat` and `Nat`
+    // are convertible but not syntactically equal, and need real budget.
+    let el_nat = Type::El { level: Level::Zero, tm: rt(Term::TmNat) };
     assert_eq!(
-        conv_type(&psi, &g, Layer::Prog, &ty, &nat_to_nat(), &c(0), 1),
+        conv_type(&psi, &g, Layer::Prog, &el_nat, &Type::Nat, &c(0), 1),
         Err(ConvError::OutOfFuel)
     );
+    assert_eq!(conv_type(&psi, &g, Layer::Prog, &el_nat, &Type::Nat, &c(0), FUEL), Ok(()));
 }
 
 #[test]

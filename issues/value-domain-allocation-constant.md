@@ -3,7 +3,7 @@ title: The value domain costs a 1.5-3x constant where there is no sharing to win
 status: open
 labels: [kernel,conversion,performance]
 created: 2026-07-31
-updated: 2026-08-01
+updated: 2026-08-14
 ---
 
 Stage 2b of [[nbe-conversion-round]] killed the exponential (the acceptance
@@ -90,3 +90,15 @@ and should re-read this at the same time — conversion no longer calls
   `open_ty`/`push_entry` are top callers) and 4 (`TmC::value` re-wrap) look
   like the contained first bites. Ranked against [[context-representation-clones]]'
   Gamma half (~8%) this block is bigger but spread across more edits.
+- 2026-08-14: Verdict from [[conversion-cost-at-large-values]]'s round (closed),
+  which this file's body asked for: the large-canonical-value conversion cost
+  did **not** decompose into this constant except at the margin. ~97% of the
+  reproducer's `conv_type` calls compared syntactically equal inputs —
+  reflexivity paid at full structural price, i.e. this constant multiplied by
+  a walk that did not need to happen — and a syntactic-reflexivity
+  short-circuit (root `==`; same-env/equal-body closure fast path) removed it
+  without touching allocation at all. What that round leaves behind and hands
+  to this file: the genuinely-different comparisons (~0.55 s of the
+  k_bind_mono reproducer's remaining 0.62 s of conv), whose per-node price IS
+  this constant. The "worth trying" list above is unchanged and is the lever
+  if that residual ever triggers a round.

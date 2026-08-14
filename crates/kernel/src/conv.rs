@@ -619,9 +619,20 @@ impl<D: Dom> Conv<D> {
     /// [`Conv::ty`] at the **root** of a conversion, where the two sides are
     /// raw syntax the caller lends us rather than sub-structures of a form
     /// already in the domain (see [`Dom::whnf_ty_root`]).
+    ///
+    /// Equal roots settle by **syntactic reflexivity**, not only object
+    /// identity: α-equality is `==` under de Bruijn, `==`-equal level
+    /// annotations are trivially `equiv`, and the typing seam's
+    /// expected-vs-inferred query overwhelmingly hands this function two
+    /// separately built copies of one type — on large canonical values the
+    /// structural walk paid seconds where `==` pays microseconds
+    /// (issues/conversion-cost-at-large-values.md). A failed `==` stops at
+    /// the first difference, so its cost is bounded by a prefix of the walk
+    /// the comparison performs anyway. Same fuel policy as every
+    /// reflexivity shortcut: the hit spends this node's one unit.
     fn ty_root(&mut self, env: &Env, a: &Type, b: &Type, l: &Level) -> R {
         self.spend()?;
-        if std::ptr::eq(a, b) {
+        if std::ptr::eq(a, b) || a == b {
             return Ok(());
         }
         let mut wa = D::whnf_ty_root(self, env, a)?;

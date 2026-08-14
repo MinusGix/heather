@@ -326,20 +326,28 @@ paper too).
   reads, which is precisely the workload the round exists to fix.
 - **Shared syntax and scoped closure identity are reflexivity.** Before
   forcing two type or term children, conversion accepts them when they carry
-  the same closure pointer and the same `home`/`sat` scope metadata. In the
-  one ambient environment passed to the judgment, those three equalities
-  make `open_ty` or `open_tm` produce identical syntax, so this is syntactic
-  reflexivity and not a new conversion rule. The scope pair is load-bearing:
-  one closure read with different pending binders need not denote the same
-  object. The syntax oracle takes the corresponding pointer-identity
-  shortcuts. At public roots, the same borrowed `Type` object returns before
-  whnf; raw term roots deliberately do not, because measurement found no hits.
-  Context conversion likewise accepts syntactically identical contexts before
-  its judgmental walk; `CtxEntries` makes the common shared-spine test O(1).
+  the same `home`/`sat` scope metadata and either the same closure pointer
+  or — for syntactic closures — the same environment spine (head-pointer
+  identity) with α-equal (`==`) bodies. In the one ambient environment
+  passed to the judgment, those equalities make `open_ty` or `open_tm`
+  produce identical syntax, so this is syntactic reflexivity and not a new
+  conversion rule: evaluation is a function of the (environment, body) pair.
+  The scope pair is load-bearing: one closure read with different pending
+  binders need not denote the same object. The syntax oracle takes the
+  corresponding pointer-identity shortcuts. At public roots, type conversion
+  accepts the same borrowed `Type` object or a syntactically equal (`==`)
+  copy before whnf — the typing seam's expected-vs-inferred query mostly
+  compares two separately built copies of one type, and on large canonical
+  values the structural walk paid orders of magnitude over `==`
+  (issues/conversion-cost-at-large-values.md); a failed `==` stops at the
+  first difference. Raw term roots deliberately take no such check, because
+  measurement (re-confirmed 2026-08-14) still finds no hits there. Context
+  conversion likewise accepts syntactically identical contexts before its
+  judgmental walk; `CtxEntries` makes the common shared-spine test O(1).
   Every hit still spends the comparison node's one fuel unit. These shortcuts
-  preserve the □ syntactic-equality rule and Id-at-□ coincidence: pointer
-  identity implies identical syntax, and context syntax equality implies
-  entrywise conversion.
+  preserve the □ syntactic-equality rule and Id-at-□ coincidence: each hit
+  implies identical syntax (directly, or via an identical environment), and
+  identical syntax implies both equality-as-code and entrywise conversion.
 - **δ is glued.** A `u^δ` evaluates to a neutral carrying a memoized
   `unfold` thunk, `Some` exactly when Ψ defines `u`. The δ-lazy order is
   unchanged — compare without forcing the thunks, and on `NotConvertible`

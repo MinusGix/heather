@@ -121,6 +121,42 @@ mod tests {
     }
 
     #[test]
+    fn syntactic_closure_fast_path_needs_same_env_and_equal_body() {
+        let body = || {
+            Rc::new(Type::El { level: Level::Zero, tm: Rc::new(Term::Var(LocalVar(0))) })
+        };
+        let rho = value::Env::empty().push(fresh(0));
+        let a = TyC { clo: Rc::new(TyClo::new(rho.clone(), body())), home: 2, sat: 3 };
+
+        // Distinct closures, same environment spine, α-equal bodies: a hit.
+        let equal = TyC { clo: Rc::new(TyClo::new(rho.clone(), body())), home: 2, sat: 3 };
+        assert!(Values::ty_eq_fast(&a, &equal));
+
+        // A different environment need not denote the same type, even with
+        // an equal body — and equal *content* under a different spine node
+        // is deliberately not inspected (the head pointer is the test).
+        let other_env = TyC {
+            clo: Rc::new(TyClo::new(value::Env::empty().push(fresh(0)), body())),
+            home: 2,
+            sat: 3,
+        };
+        assert!(!Values::ty_eq_fast(&a, &other_env));
+
+        // A different body is never a hit; scope metadata still gates.
+        let other_body = TyC { clo: Rc::new(TyClo::new(rho.clone(), Rc::new(Type::Nat))), home: 2, sat: 3 };
+        assert!(!Values::ty_eq_fast(&a, &other_body));
+        let other_scope = TyC { clo: Rc::new(TyClo::new(rho, body())), home: 2, sat: 4 };
+        assert!(!Values::ty_eq_fast(&a, &other_scope));
+
+        // The term side takes the same shortcut.
+        let t = || Rc::new(Term::Succ(Rc::new(Term::Var(LocalVar(0)))));
+        let rho = value::Env::empty().push(fresh(0));
+        let ta = TmC { clo: Rc::new(TmClo::syn(rho.clone(), t())), home: 2, sat: 3 };
+        let tb = TmC { clo: Rc::new(TmClo::syn(rho, t())), home: 2, sat: 3 };
+        assert!(Values::tm_identity_fast(&ta, &tb));
+    }
+
+    #[test]
     fn term_identity_fast_path_is_scope_sensitive() {
         let body = Term::Succ(Rc::new(Term::Zero));
         let clo = Rc::new(TmClo::syn(value::Env::empty(), Rc::new(body)));
@@ -1010,16 +1046,35 @@ impl Dom for Values {
         ))
     }
 
-    /// Pointer equality only: `false` is always safe, and two sub-structures
-    /// that are the same object are definitionally the same type.
+    /// Scoped identity: `false` is always safe. Two sub-structures that are
+    /// the same object — or syntactic closures over the *same* environment
+    /// with α-equal bodies (evaluation is a function of the pair) — are
+    /// definitionally the same type.
     fn ty_eq_fast(a: &TyC, b: &TyC) -> bool {
-        a.home == b.home && a.sat == b.sat && Rc::ptr_eq(&a.clo, &b.clo)
+        a.home == b.home
+            && a.sat == b.sat
+            && (Rc::ptr_eq(&a.clo, &b.clo)
+                || match (a.clo.as_syn(), b.clo.as_syn()) {
+                    (Some((e1, b1)), Some((e2, b2))) => {
+                        value::Env::ptr_eq(e1, e2) && (Rc::ptr_eq(b1, b2) || b1 == b2)
+                    }
+                    _ => false,
+                })
     }
 
-    /// Scoped pointer identity: one closure opened with the same pending
+    /// Scoped identity ([`Values::ty_eq_fast`]) for terms: one closure — or
+    /// one (environment, body) denotation — opened with the same pending
     /// binders denotes the same term on both sides.
     fn tm_identity_fast(a: &TmC, b: &TmC) -> bool {
-        a.home == b.home && a.sat == b.sat && Rc::ptr_eq(&a.clo, &b.clo)
+        a.home == b.home
+            && a.sat == b.sat
+            && (Rc::ptr_eq(&a.clo, &b.clo)
+                || match (a.clo.as_syn(), b.clo.as_syn()) {
+                    (Some((e1, b1)), Some((e2, b2))) => {
+                        value::Env::ptr_eq(e1, e2) && (Rc::ptr_eq(b1, b2) || b1 == b2)
+                    }
+                    _ => false,
+                })
     }
 
     /// The same scoped identity is also the commonest endpoint equality the
