@@ -324,8 +324,23 @@ The four axes, instantiated for this generator:
    constructor's fields are `Nat`s, arbitrary fragment expressions, and may be
    cross-function calls — which discharges cross-function composition at a
    non-`Nat` result (that doc's §5), the thing the non-`Nat` round deferred to
-   land with this one. Two stages remain: non-`Nat` **parameters** and
+   land with this one. Two stages remained: non-`Nat` **parameters** and
    **tier-1** source types.
+   **Stage 3 (tier-1 source types) LANDED 2026-08-14**
+   (`docs/certgen-tier1-source-types-design.md`): a fragment fn may
+   structurally recurse over one unparameterized tier-1 inductive parameter —
+   any constructor arities, `Nat` payload fields, cross-function calls
+   included, so the showcase's `eval` shape is in the fragment end to end.
+   `lib/ir_v1.hthr` again grew nothing (the kit is tag- and
+   arm-count-generic; a recursive `embed_T` is an ordinary generated
+   recursive fn), and the whole proof schema was validated as a hand-run
+   before any machinery. The predicted `CertOut` widening is exactly one
+   constructor (`CRecW`) plus an arm list. What remains of item 2 is
+   non-`Nat` (tier-0) **parameters** — blocked on `Term::Case`, and now the
+   pointed observation is that the *recursive* case landed first because the
+   `Wf` former gave it a recursor the marker pass can read — and the
+   parameterized instantiations (`List<Tok>`) owned by
+   `issues/datarepr-separation.md`.
 3. **Loopification as a refinement-certified pass**, hand-run first on one
    generated function against its `add_instance_loop` analogue.
 4. **The meta-layer re-homing**, when its prerequisites land. The

@@ -49,7 +49,7 @@ statement. The demo theorem computes `2 + 3 * 4 = 14` by kernel reduction.
 | `decreases ts.len()` on mutually recursive parsers | non-structural termination measures; mutual recursion; callee consumption postconditions | `issues/termination-measures.md` |
 | `"{src} = {eval(e)}"` | string interpolation | no owner yet |
 | `datarepr Nat = repr::BigNat` | runtime representation chosen per type, linked by certified refinement | `issues/datarepr-separation.md` |
-| `derive instance Compile[Cpu] for eval` | the certifying generator at **tier-1 source types** — `eval` recurses over `Expr`, `run` over `List<Tok>`, exactly the generator's next staged feature | `issues/certifying-generator.md` |
+| `derive instance Compile[Cpu] for eval` | **half landed 2026-08-14**: tier-1 source types are in the generator's fragment (`docs/certgen-tier1-source-types-design.md` — an `eval`-shaped recursion over an `Expr`-shaped type generates a kernel-checked `Compile` instance end to end). Still missing here: the `derive` surface and the `Compile` class (their own row), and `run` — `List<Tok>` is a *parameterized* instantiation, which has no name to spell its embedding with | `issues/compile-typeclass-design.md`; `run`: `issues/datarepr-separation.md` |
 | `Compile[Cpu]` as a class | the Compile typeclass and certificate coupling | `issues/compile-typeclass-design.md` |
 | `runtime_fn main`, `IO`, `println` | the effects story and the kerneltime/runtime rim | `issues/effects-direction.md` |
 

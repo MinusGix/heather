@@ -308,19 +308,21 @@ fn in_language_transcriber() {
     // asserted from the negative side. (The positives above assert it from
     // the accepting side: a disagreement is an `Err`, and they demand `Ok`.)
     //
-    // ONE FLIP, recorded rather than hidden
-    // (docs/certgen-non-nat-embeddings-design.md §9 item 7): this list used to
-    // contain `fn tocmp(n: Nat) -> Cmp { CLt }` as a "non-`Nat` result"
-    // decline. A three-constructor tier-0 enumeration is now IN the fragment,
-    // so that fixture became a positive and is replaced by two declines this
-    // round still makes: a TIER-1 (recursive) result type, whose `Wf` lowering no
-    // arm of the shell is written for. (The non-`Nat` positives, and the
-    // decline for a constructor with a non-`Nat` field, live in
-    // `crates/elab/tests/certgen_nonnat.rs` — its own binary, for its own
+    // TWO FLIPS, recorded rather than hidden. (1) This list used to contain
+    // `fn tocmp(n: Nat) -> Cmp { CLt }` as a "non-`Nat` result" decline; a
+    // three-constructor tier-0 enumeration became a positive in the non-`Nat`
+    // round (docs/certgen-non-nat-embeddings-design.md §9 item 7). (2) It then
+    // contained `fn evalish2(v: Val) -> Nat { 0 }` as a "non-`Nat` parameter"
+    // decline; a TIER-1 parameter is in the fragment since the tier-1 round
+    // (docs/certgen-tier1-source-types-design.md), so that fixture flipped
+    // too and is replaced by a decline that round still makes — TWO tier-1
+    // parameters, which `SigOut`'s one position cannot carry. A tier-1
+    // RESULT (`Refs`) still declines. (The tier-1 positives live in
+    // `crates/elab/tests/certgen_tier1.rs` — its own binary, for its own
     // `ulimit -t`, which is the free lever `issues/certgen-harness-cost.md`
     // records.)
     for src in [
-        "fn evalish2(v: Val) -> Nat { 0 }",
+        "fn evalish2(v: Val, w: Refs) -> Nat { 0 }",
         "fn torefs(n: Nat) -> Refs { RNil }",
         "fn nofn() -> Nat { 0 }",
     ] {

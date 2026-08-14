@@ -409,6 +409,17 @@ tier-1 source types, because an induction over `T` rather than over `Nat` is a
 different `CertOut` — and that one is a constructor-level edit, exactly as this
 section's claim describes.
 
+**The prediction landed, 2026-08-14** (`docs/certgen-tier1-source-types-design.md`):
+tier-1 source types touched the certificate expression, and as predicted it
+was a constructor-level edit — on `CertOut` exactly: `CRecW(scrut, arms)`
+over a new `CArms` list, one `CMatch` per constructor, plus the `kids`-mask
+decode that gives each arm its `Ihp`. `Cert` itself needed **nothing**: a
+`CMatch` already carried an arbitrary `ctag`, and *which child* an ih is
+about is derivable from the gathered recursion-slot reference, so `CIh`
+gained no field. Three features, three verdicts, all §8.1's: two absorbed
+untouched, the third a constructor-level edit at the one place the shape of
+the induction lives.
+
 **Tested a second time, 2026-08-13** (`docs/certgen-ctor-fields-design.md`):
 constructor **fields** at the result type were implemented whole — walker,
 signature checker, rim, end-to-end kernel-checked instance — and

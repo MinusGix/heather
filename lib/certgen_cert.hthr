@@ -97,8 +97,17 @@ inductive Cert {
 
 // A whole invariant's shape: a straight-line body proves one chain; a
 // recursive body proves one `letmatch_conv` per constructor arm, under the
-// induction the emitted text opens.
-inductive CertOut { CPlain(c: Cert), CRec(scrut: Nat, zero: Cert, succ: Cert) }
+// induction the emitted text opens. A `Nat` induction has exactly the two
+// arms (`CRec`); a TIER-1 induction has one per constructor, collected in
+// declaration order (`CRecW` — docs/certgen-tier1-source-types-design.md §6,
+// the constructor-level edit §8.1 of the design doc predicted).
+inductive CArms { CANil, CACons(c: Cert, rest: CArms) }
+
+inductive CertOut {
+    CPlain(c: Cert),
+    CRec(scrut: Nat, zero: Cert, succ: Cert),
+    CRecW(scrut: Nat, arms: CArms),
+}
 
 // ---------------------------------------------------------------------------
 // The fold.
@@ -169,6 +178,67 @@ fn cert_body(ir: Ir) -> CertOut {
 }
 
 // ---------------------------------------------------------------------------
+// The TIER-1 fold (docs/certgen-tier1-source-types-design.md §6). Which arms
+// have an induction hypothesis is a fact about the scrutinized DECLARATION —
+// which constructors have recursive fields — so the tier-1 entry point takes
+// it as a `kids` bitmask (little-endian: bit `i` set iff constructor `i` has
+// children), decoded per arm. A self-call in a childless arm still declines,
+// the `Zero`-arm honesty check per constructor.
+
+fn ihp_flip(i: Ihp) -> Ihp { match i { IhNo => IhYes, IhYes => IhNo } }
+
+// Parity: the mask's bit 0.
+fn kid_bit(n: Nat) -> Ihp {
+    match n { Zero => IhNo, Succ(m) => ihp_flip(kid_bit(m)) }
+}
+
+// Floor-halving: the mask shifted right once. One step of descent per call
+// with an alternating carry, because the termination discipline wants a
+// single decreasing argument — the carry rides in the returned function
+// (the file-wide idiom).
+fn kid_shift(n: Nat) -> Ihp -> Nat {
+    match n {
+        Zero => λ (b: Ihp) => Zero,
+        Succ(m) => λ (b: Ihp) => match b {
+            IhYes => Succ(kid_shift(m)(IhNo)),
+            IhNo => kid_shift(m)(IhYes),
+        },
+    }
+}
+
+fn kid_rest(n: Nat) -> Nat { kid_shift(n)(IhNo) }
+
+// One `CMatch` per constructor arm, tags counted up in declaration order.
+// The arm chain drives the recursion (it is the structural argument, passed
+// twice so the moving copy can descend while `whole` stays for selection);
+// the arm itself is still SELECTED through the library's own `pick_arm`, so
+// the fold and `letmatch_conv`'s hypothesis agree by construction, exactly
+// as `cert_arms` does for the two `Nat` arms. The tag counter and the
+// remaining mask vary with the recursion, so they ride in the returned
+// function.
+fn cert_arms_w(scrut: Nat, whole: Ir, after: Ir, arms: Ir) -> Nat -> Nat -> CArms {
+    match arms {
+        Arm(b, next) => λ (tag: Nat) (kids: Nat) => CACons(
+            CMatch(scrut, tag, cert_chain(pick_arm(whole)(tag), kid_bit(kids)),
+                   cert_rebind(after)),
+            cert_arms_w(scrut, whole, after, next)(Succ(tag))(kid_rest(kids))),
+        _ => λ (tag: Nat) (kids: Nat) => CANil,
+    }
+}
+
+// The tier-1 entry point: the elaborator applies this — instead of
+// `cert_body` — exactly when the scrutinized parameter is tier-1, which it
+// knows from the declaration; the `Ir` alone deliberately cannot tell a
+// two-constructor tier-1 match from a `Nat` match, and nothing needs it to.
+fn cert_body_w(ir: Ir, kids: Nat) -> CertOut {
+    match ir {
+        LetMatch(scrut, arms, after) =>
+            CRecW(scrut, cert_arms_w(scrut, arms, after, arms)(0)(kids)),
+        _ => CPlain(CStuck),
+    }
+}
+
+// ---------------------------------------------------------------------------
 // The file's own acceptance, as `lib/certgen_code.hthr` states its own: each
 // right-hand side is the certificate the emitters render for the same shape,
 // one layer below the readback. A divergence is a failed `refl`, here, at
@@ -222,4 +292,31 @@ theorem rec_body_splits_the_arms():
 // program from the one the emitted theorem would be about.
 theorem nonrebinding_continuation_declines():
     cert_rebind(Ret(RCons(1, RNil))) = CStuck
+{ refl }
+
+// The tier-1 fold: `tsum`'s shape — kids mask 2 (constructor 1 has a
+// child), so the first arm folds without a hypothesis and the second's
+// self-call is the induction hypothesis.
+theorem tier1_body_splits_the_arms():
+    cert_body_w(LetMatch(0,
+        Arm(LetCon(0, RNil, Ret(RCons(0, RNil))),
+        Arm(LetCall(0, RCons(1, RNil), Ret(RCons(0, RNil))),
+        NoArm)),
+        Ret(RCons(0, RNil))), 2)
+    = CRecW(0, CACons(
+        CMatch(0, 0, CCon(0, RNil, CRet(RCons(0, RNil))), CRet(RCons(0, RNil))),
+        CACons(
+        CMatch(0, 1, CIh(RCons(1, RNil), CRet(RCons(0, RNil))), CRet(RCons(0, RNil))),
+        CANil)))
+{ refl }
+
+// …and a self-call in a CHILDLESS arm declines, per constructor — the
+// `Zero`-arm honesty check generalized: kids mask 0 makes the same arm
+// stick.
+theorem tier1_childless_self_call_declines():
+    cert_arms_w(0,
+        Arm(LetCall(0, RNil, Ret(RCons(0, RNil))), NoArm),
+        Ret(RCons(0, RNil)),
+        Arm(LetCall(0, RNil, Ret(RCons(0, RNil))), NoArm))(0)(0)
+    = CACons(CMatch(0, 0, CStuck, CRet(RCons(0, RNil))), CANil)
 { refl }

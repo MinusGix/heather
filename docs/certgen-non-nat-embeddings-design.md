@@ -455,11 +455,12 @@ on a non-`Nat` emission, not only on the `Nat` ones.
   the surface work is a `tm_case` arm and a second marker convention, both of
   which want `issues/code-variable-analysis-api.md`'s closed-term substitution
   more than they want this round.
-- **Tier-1 (recursive) source types** — the walker would have to read `Supf`
-  and its children, `embed_T` becomes structurally recursive, and — the real
-  cost — the `Converges` statement's induction would be over `T` rather than
-  over `Nat`, which is a different `CertOut` shape. Home:
-  `docs/certifying-generator-design.md` §8 item 2, third stage.
+- **Tier-1 (recursive) source types** — **LANDED, 2026-08-14**
+  (`docs/certgen-tier1-source-types-design.md`), with two corrections to this
+  entry's forecast: the walker reads the *recursor's step*, not `Supf` values
+  (fragment inputs arrive as eliminations, with the accessors as markers),
+  and the different-`CertOut`-shape cost was one constructor. `embed_T`
+  becoming structurally recursive was right.
 - **Constructor fields** — **LANDED, 2026-08-13**, in
   `docs/certgen-ctor-fields-design.md`'s second round, at the design that
   document already carried: one new `TA` state, no new arm, and the emitter

@@ -16,7 +16,7 @@
 // `Prog`, `Val` and `import nat;`'s `add`/`sub` come from there, so this file
 // declares no import and redeclares nothing.
 //
-// THE FOUR CONVENTIONS THIS FILE JOINS, and nothing else states them
+// THE FIVE CONVENTIONS THIS FILE JOINS, and nothing else states them
 // together:
 //
 // 1. MARKERS (§1). Every bound-variable occurrence in the analyzed body
@@ -70,6 +70,22 @@
 //    and "a payload with fields", and the walker never has to know which of
 //    the two it is looking at until an `inl`/`inr` — or the fn's root — asks.
 //
+// 5. TIER-1 SOURCE TYPES (docs/certgen-tier1-source-types-design.md §§3–4).
+//    A fn may recurse over ONE tier-1 (recursive) inductive parameter. The
+//    marker pass validates the `Wf` recursor's generalization skeleton by de
+//    Bruijn identity and elides it; what this walker sees is the eliminator
+//    with a bare constructor CASE TREE as its step — every case scrutinizing
+//    the recursion parameter's own marker — and the arm accessors as three
+//    more marker shapes, told apart by λ-chain ARITY (variable identity
+//    being unobservable at layer m): 2 λs over a variable = field `t` of the
+//    enclosing arm (surface declaration order), 3 λs = the induction
+//    hypothesis at recursive field `t`, 4 λs = the arm's field-count header.
+//    In the emitted `LetMatch` the matched value's fields are prepended in
+//    slot order — field `t` at distance `t` — and each arm renders at its
+//    own base depth `arity + fᵢ`, which is what the header carries. The
+//    `Nat` path is the degenerate instance (`Succ`'s one field recursive)
+//    and keeps its own convention-1 spellings byte for byte.
+//
 // The two meet exactly once, in `dist` and its callers: a reference is
 // carried as a level all the way through composition and converted to a
 // distance only when the instruction it sits in is being rendered, at that
@@ -86,7 +102,15 @@
 // forward from the arm's base", which at base depth `base` is level
 // `base + j`. Prefixes are concatenated and re-based during composition, and
 // carrying the two kinds apart is what makes that a no-op on the references.
-inductive PRef { RLvl(lvl: Nat), RLoc(j: Nat) }
+//
+// `RFld(t)` is field `t` of the ENCLOSING ARM (surface declaration order) —
+// the tier-1 marker's coordinate (convention 5). It is deferred on purpose:
+// in the IR the matched value's fields are prepended in slot order, so field
+// `t` sits at level `base - 1 - t` of an arm whose base depth the walker only
+// learns at the eliminator (the arm's field-count header). A parameter's
+// LEVEL is depth-stable and a field's DISTANCE-FROM-BASE is; each kind
+// carries the stable one.
+inductive PRef { RLvl(lvl: Nat), RLoc(j: Nat), RFld(t: Nat) }
 
 inductive PRefs { QNil, QCons(r: PRef, rest: PRefs) }
 
@@ -94,17 +118,19 @@ inductive PRefs { QNil, QCons(r: PRef, rest: PRefs) }
 // `rest` holds the instructions that run *before* it. Consing at the front is
 // what makes `ta_succ` constant-time and index-stable.
 //
-// `PSelf` is the structural self-call. Its argument list is not known here —
-// it depends on the recursion index the enclosing eliminator supplies — so it
-// is not stored; the renderer fills it (§4 called this a placeholder rewrite,
-// and there is no patch pass because the argument list is a function of
-// `arity` and `j` alone).
+// `PSelf(t)` is the structural self-call at the recursive field `t` of the
+// enclosing arm (`t = 0` for the `Nat` path — `Succ`'s one field). Its
+// argument list is not known here — it depends on the recursion index the
+// enclosing eliminator supplies — so it is not stored; the renderer fills it
+// (§4 called this a placeholder rewrite, and there is no patch pass because
+// the argument list is a function of `arity`, `j`, the arm's base and `t`
+// alone).
 // `PCall` is a saturated foreign call, its callee carried as the marker TAG
 // (convention 3) and its argument references in slot order.
 inductive Pre {
     PEnd,
     PCon(tag: Nat, args: PRefs, rest: Pre),
-    PSelf(rest: Pre),
+    PSelf(t: Nat, rest: Pre),
     PCall(c: Nat, args: PRefs, rest: Pre),
 }
 
@@ -136,6 +162,18 @@ inductive Pre {
 // `Pre` is the file's largest. It is ONE new constructor and no new arm in any
 // existing `match`, which is the whole reason the widening is affordable
 // (docs/certgen-ctor-fields-design.md §4).
+// … and the TIER-1 states (convention 5, docs/certgen-tier1-source-types-
+// design.md §4): `TIdLam2/3/4` are the accessor-marker heads — λ-chains over
+// a variable, told apart by ARITY because variable identity is unobservable
+// at layer m — reading, applied to a numeral: a field of the enclosing arm
+// (2), the induction hypothesis at a recursive field (3), and an arm's
+// field-count header (4). `THdr(f)` is that header awaiting its arm;
+// `TArm(f, …)` an arm with its base-depth information, UNRENDERED because
+// only the eliminator knows the recursion index; `TArms` the constructor
+// case tree's collected arms, with the scrutinee marker's level carried so
+// every node is checked to dispatch on the same parameter.
+inductive Parts { PsNil, PsCons(f: Nat, pre: Pre, res: PRef, len: Nat, rest: Parts) }
+
 inductive TA {
     TStuck,
     TNum(n: Nat),
@@ -148,6 +186,12 @@ inductive TA {
     TPure,
     TFlds(pre: Pre, len: Nat, args: PRefs),
     TCtor(tag: Nat, pre: Pre, len: Nat, args: PRefs),
+    TIdLam2,
+    TIdLam3,
+    TIdLam4,
+    THdr(f: Nat),
+    TArm(f: Nat, pre: Pre, res: PRef, len: Nat),
+    TArms(lvl: Nat, parts: Parts),
 }
 
 inductive TOut { TNo, TYes(body: Ir) }
@@ -181,7 +225,7 @@ fn dist(d: Nat, l: Nat) -> Nat { sub(sub(d)(1))(l) }
 // THAT depth; the closing `Ret` resolves at `base + len`.
 
 fn pref_lvl(r: PRef, base: Nat) -> Nat {
-    match r { RLvl(l) => l, RLoc(j) => add(base, j) }
+    match r { RLvl(l) => l, RLoc(j) => add(base, j), RFld(t) => sub(sub(base)(1))(t) }
 }
 
 fn render_refs(rs: PRefs, base: Nat, d: Nat) -> Refs {
@@ -192,22 +236,24 @@ fn render_refs(rs: PRefs, base: Nat, d: Nat) -> Refs {
 }
 
 // The self-call's argument list, in slot order `0 … k-1`: the parameters
-// unchanged, and the eliminator's field (level `k`) in the recursion position
-// `j` — the predecessor, which is what makes the call structural. Slot `i`
-// otherwise names parameter `i`, whose level is `k - 1 - i`.
+// unchanged, and the recursion argument — field `t` of the enclosing arm,
+// at level `base - 1 - t` — in the recursion position `j`, which is what
+// makes the call structural. Slot `i` otherwise names parameter `i`, whose
+// level is `k - 1 - i`. The `Nat` path is the `base = k + 1, t = 0`
+// instance: the field's level is `k`, exactly as it always was.
 //
 // `c` counts the slots left and `i` is the slot being written, so `i` varies
 // with the recursion and rides in the returned function rather than in a
 // parameter (the `lookup`/`gather` idiom; ir_v1 doc §13 note 2).
-fn self_arg_lvl(i: Nat, j: Nat, k: Nat) -> Nat {
-    match nat_cmp(i)(j) { CEq => k, _ => sub(sub(k)(1))(i) }
+fn self_arg_lvl(i: Nat, j: Nat, k: Nat, base: Nat, t: Nat) -> Nat {
+    match nat_cmp(i)(j) { CEq => sub(sub(base)(1))(t), _ => sub(sub(k)(1))(i) }
 }
 
-fn self_args(c: Nat, j: Nat, k: Nat, d: Nat) -> Nat -> Refs {
+fn self_args(c: Nat, j: Nat, k: Nat, base: Nat, t: Nat, d: Nat) -> Nat -> Refs {
     match c {
         Zero => λ (i: Nat) => RNil,
         Succ(c2) => λ (i: Nat) =>
-            RCons(dist(d, self_arg_lvl(i, j, k)), self_args(c2, j, k, d)(Succ(i))),
+            RCons(dist(d, self_arg_lvl(i, j, k, base, t)), self_args(c2, j, k, base, t, d)(Succ(i))),
     }
 }
 
@@ -226,9 +272,9 @@ fn render_pre(pre: Pre, base: Nat, j: Nat, k: Nat) -> Nat -> Ir -> Ir {
         PCon(tag, args, rest) => λ (d: Nat) (tail: Ir) =>
             render_pre(rest, base, j, k)(sub(d)(1),
                 LetCon(tag, render_refs(args, base, d), tail)),
-        PSelf(rest) => λ (d: Nat) (tail: Ir) =>
+        PSelf(t, rest) => λ (d: Nat) (tail: Ir) =>
             render_pre(rest, base, j, k)(sub(d)(1),
-                LetCall(0, self_args(k, j, k, d)(0), tail)),
+                LetCall(0, self_args(k, j, k, base, t, d)(0), tail)),
         PCall(c, args, rest) => λ (d: Nat) (tail: Ir) =>
             render_pre(rest, base, j, k)(sub(d)(1),
                 LetCall(c, render_refs(args, base, d), tail)),
@@ -261,7 +307,7 @@ fn num_pre(n: Nat) -> Pre {
 // `VOut` is a *small* type on purpose, and it is the file's main size lever:
 // every consumer of a value (`ta_call`, `render_ta`) matches this
 // two-constructor type instead of matching `TA` again, and `TA` is the
-// expensive one — eleven constructors, carrying `Pre` and `Ir`, so a `match`
+// expensive one — seventeen constructors, carrying `Pre` and `Ir`, so a `match`
 // on it costs Θ(arms × |lowered field type|)
 // (issues/wf-field-conversion-cost.md). One `TA` match here replaces three,
 // and the same rule is why no `match` on `TA` in this file contains another.
@@ -325,6 +371,9 @@ fn ta_lam(d: TA, b: TA) -> TA {
         TVarLeaf => TIdLam,
         TNum(c) => TFn(c, 1),
         TFn(c, m) => TFn(c, Succ(m)),
+        TIdLam => TIdLam2,
+        TIdLam2 => TIdLam3,
+        TIdLam3 => TIdLam4,
         _ => TStuck,
     }
 }
@@ -342,8 +391,9 @@ fn ta_marker(arity: Nat, i: Nat) -> TA {
         CEq => TExp(PEnd, RLvl(arity), 0),
         CGt => match nat_cmp(i)(Succ(arity)) {
             // the induction hypothesis: the structural self-call, one
-            // instruction whose own value is its result
-            CEq => TExp(PSelf(PEnd), RLoc(0), 1),
+            // instruction whose own value is its result. `Succ`'s one field
+            // is field 0 of its arm.
+            CEq => TExp(PSelf(0, PEnd), RLoc(0), 1),
             _ => TStuck,
         },
     }
@@ -357,7 +407,7 @@ fn ta_marker(arity: Nat, i: Nat) -> TA {
 // name binders and never move.
 
 fn shift_ref(r: PRef, off: Nat) -> PRef {
-    match r { RLvl(l) => RLvl(l), RLoc(j) => RLoc(add(off, j)) }
+    match r { RLvl(l) => RLvl(l), RLoc(j) => RLoc(add(off, j)), RFld(t) => RFld(t) }
 }
 
 fn shift_refs(rs: PRefs, off: Nat) -> PRefs {
@@ -371,7 +421,7 @@ fn shift_pre(p: Pre, off: Nat) -> Pre {
     match p {
         PEnd => PEnd,
         PCon(tag, args, rest) => PCon(tag, shift_refs(args, off), shift_pre(rest, off)),
-        PSelf(rest) => PSelf(shift_pre(rest, off)),
+        PSelf(t, rest) => PSelf(t, shift_pre(rest, off)),
         PCall(c, args, rest) => PCall(c, shift_refs(args, off), shift_pre(rest, off)),
     }
 }
@@ -382,7 +432,7 @@ fn pre_append(a: Pre, b: Pre) -> Pre {
     match a {
         PEnd => b,
         PCon(tag, args, rest) => PCon(tag, args, pre_append(rest, b)),
-        PSelf(rest) => PSelf(pre_append(rest, b)),
+        PSelf(t, rest) => PSelf(t, pre_append(rest, b)),
         PCall(c, args, rest) => PCall(c, args, pre_append(rest, b)),
     }
 }
@@ -429,11 +479,35 @@ fn ta_marker_at(arity: Nat, a: TA) -> TA {
     match a { TNum(i) => ta_marker(arity, i), _ => TStuck }
 }
 
+// The tier-1 accessor markers (convention 5), read by chain arity: a field
+// of the enclosing arm, deferred to `RFld` (rendered once the arm's base is
+// known); the ih at recursive field `t`, one `PSelf(t)` instruction; the
+// arm header, holding its field count until the arm value arrives.
+fn ta_fld_at(a: TA) -> TA {
+    match a { TNum(t) => TExp(PEnd, RFld(t), 0), _ => TStuck }
+}
+
+fn ta_ih_at(a: TA) -> TA {
+    match a { TNum(t) => TExp(PSelf(t, PEnd), RLoc(0), 1), _ => TStuck }
+}
+
+fn ta_hdr_at(a: TA) -> TA {
+    match a { TNum(f) => THdr(f), _ => TStuck }
+}
+
+fn ta_arm_of(f: Nat, v: VOut) -> TA {
+    match v { VYes(pre, res, len) => TArm(f, pre, res, len), VNo => TStuck }
+}
+
 fn ta_app(arity: Nat, f: TA, a: TA) -> TA {
     match f {
         TIdLam => ta_marker_at(arity, a),
         TFn(c, k) => ta_call(c, k, PEnd, 0, QNil, a),
         TPart(c, r, pre, len, args) => ta_call(c, r, pre, len, args, a),
+        TIdLam2 => ta_fld_at(a),
+        TIdLam3 => ta_ih_at(a),
+        TIdLam4 => ta_hdr_at(a),
+        THdr(fc) => ta_arm_of(fc, ta_val(a)),
         _ => TStuck,
     }
 }
@@ -557,6 +631,111 @@ fn ta_elim(arity: Nat, base: TA, step: TA, scrut: TA) -> TA {
     }
 }
 
+// ---------------------------------------------------------------------------
+// The TIER-1 eliminator (convention 5; docs/certgen-tier1-source-types-
+// design.md §4). The marker pass hands it as: an `elim_wf` node whose step is
+// the bare constructor CASE TREE — every case scrutinizing the recursion
+// parameter's own marker, every branch a header-wrapped marked arm — and
+// whose scrutinee is that same marker. The walker collects the arms with
+// their field counts, then renders each at its own base depth
+// `arity + fᵢ` and assembles the same `LetMatch` shape the `Nat` path emits,
+// with one arm per constructor.
+
+// The scrutinee-marker check, shared by the case nodes and the eliminator:
+// a bare parameter occurrence, and nothing else.
+inductive LOut { LNo, LYes(lvl: Nat) }
+
+
+
+
+
+fn scrut_lvl_len(l: Nat, len: Nat) -> LOut {
+    match len { Zero => LYes(l), _ => LNo }
+}
+
+fn scrut_lvl_ref(res: PRef, len: Nat) -> LOut {
+    match res { RLvl(l) => scrut_lvl_len(l, len), _ => LNo }
+}
+
+fn scrut_lvl_pre(pre: Pre, res: PRef, len: Nat) -> LOut {
+    match pre { PEnd => scrut_lvl_ref(res, len), _ => LNo }
+}
+
+fn ta_scrut_lvl(sc: TA) -> LOut {
+    match sc { TExp(pre, res, len) => scrut_lvl_pre(pre, res, len), _ => LNo }
+}
+
+// One case node: constructor `i`'s arm on the left, the rest — the next
+// case, or the last constructor's arm — on the right. Arms collect FRONT
+// first, so declaration order is preserved; every node's scrutinee level is
+// checked equal to the chain's.
+fn ta_arms2(f: Nat, pre: Pre, res: PRef, len: Nat, f2: Nat, p2: Pre, r2: PRef, l2: Nat, sl: LOut) -> TA {
+    match sl {
+        LYes(lv) => TArms(lv, PsCons(f, pre, res, len, PsCons(f2, p2, r2, l2, PsNil))),
+        LNo => TStuck,
+    }
+}
+
+fn ta_arms_join(c: Cmp, f: Nat, pre: Pre, res: PRef, len: Nat, lv: Nat, parts: Parts) -> TA {
+    match c { CEq => TArms(lv, PsCons(f, pre, res, len, parts)), _ => TStuck }
+}
+
+fn ta_arms_more(f: Nat, pre: Pre, res: PRef, len: Nat, lv: Nat, parts: Parts, sl: LOut) -> TA {
+    match sl {
+        LYes(lv2) => ta_arms_join(nat_cmp(lv)(lv2), f, pre, res, len, lv, parts),
+        LNo => TStuck,
+    }
+}
+
+fn ta_case_r(f: Nat, pre: Pre, res: PRef, len: Nat, r: TA, sl: LOut) -> TA {
+    match r {
+        TArm(f2, p2, r2, l2) => ta_arms2(f, pre, res, len, f2, p2, r2, l2, sl),
+        TArms(lv, parts) => ta_arms_more(f, pre, res, len, lv, parts, sl),
+        _ => TStuck,
+    }
+}
+
+fn ta_case(l: TA, r: TA, sc: TA) -> TA {
+    match l {
+        TArm(f, pre, res, len) => ta_case_r(f, pre, res, len, r, ta_scrut_lvl(sc)),
+        _ => TStuck,
+    }
+}
+
+// Render the collected arms, each at its own base depth, into the arm chain.
+// Total: the field counts ride in `Parts`, so there is nothing left to
+// disagree.
+fn ta_wf_chain(arity: Nat, j: Nat, parts: Parts) -> Ir {
+    match parts {
+        PsNil => NoArm,
+        PsCons(f, pre, res, len, rest) =>
+            Arm(render_exp(pre, res, len, add(arity, f), j, arity),
+                ta_wf_chain(arity, j, rest)),
+    }
+}
+
+fn ta_wf_arms(arity: Nat, j: Nat, parts: Parts) -> TA {
+    TBody(LetMatch(j, ta_wf_chain(arity, j, parts), Ret(RCons(0, RNil))))
+}
+
+// The recursion index off the scrutinee marker, exactly as `ta_elim` reads
+// it — required equal to the level every case node dispatched on.
+fn ta_wf_j(c: Cmp, arity: Nat, lv: Nat, parts: Parts) -> TA {
+    match c { CLt => ta_wf_arms(arity, sub(sub(arity)(1))(lv), parts), _ => TStuck }
+}
+
+fn ta_wf_lv(c: Cmp, arity: Nat, lv: Nat, parts: Parts) -> TA {
+    match c { CEq => ta_wf_j(nat_cmp(lv)(arity), arity, lv, parts), _ => TStuck }
+}
+
+fn ta_wf_at(arity: Nat, lv: Nat, parts: Parts, sl: LOut) -> TA {
+    match sl { LYes(lv2) => ta_wf_lv(nat_cmp(lv)(lv2), arity, lv, parts), LNo => TStuck }
+}
+
+fn ta_elim_wf(arity: Nat, step: TA, sc: TA) -> TA {
+    match step { TArms(lv, parts) => ta_wf_at(arity, lv, parts, ta_scrut_lvl(sc)), _ => TStuck }
+}
+
 // The root. A body that is already an eliminator is done; a body that is an
 // expression is a non-recursive fragment fn (`fn seven() -> Nat { 7 }`) and
 // renders at base depth `arity` with no recursion index to speak of — `j` is
@@ -573,10 +752,9 @@ fn ta_finish(arity: Nat, t: TA) -> TOut {
 // The signature checker (docs/fn-signature-reflection-design.md §2). The
 // analyzed fn's TYPE arrives as code — pulled by the elaborator's reflection
 // primitive, `TyCode(g)` in the shell below — and the fragment signature rule
-// lives here, whole: `Nat -> … -> Nat`, at least one parameter. `SigYes(a)`
-// off the raw walk means "`Nat -> … -> Nat` with `a` parameters"; only the
-// `ty_nat` arm mints `SigYes(0)`, which is what makes "the domain is exactly
-// `Nat`" a one-line test. `SigNo` is the decline, total like `TStuck`.
+// lives here, whole: `Nat -> … -> Nat -> R` with at least one parameter, at
+// most one of them a tier-1 inductive, `R` a `Nat` or a tier-0 enumeration.
+// `SigNo` is the decline, total like `TStuck`.
 
 // The walk's accumulator, one state per shape the fragment signature is made
 // of. `SNat` is the one leaf that is a `Nat`; `SPure` is anything built from
@@ -589,13 +767,21 @@ fn ta_finish(arity: Nat, t: TA) -> TOut {
 // right-nested sum of `k` payloads — the lowering of a tier-0 enumeration with
 // `k` constructors; `SFn` is a fragment signature. `SNo` is the decline, total
 // like `TStuck`.
+// … and `SWf`: a recognized TIER-1 parameter type — a `Wf` over an
+// enumeration-shaped payload (the shape is tier 0's lowering with the
+// recursive fields deleted, so the existing states read it verbatim). The
+// arity term is deliberately unread: which fields are recursive is a
+// declaration fact the rim owns, and its walk would drag term arms into a
+// type walk for nothing the verdict states
+// (docs/certgen-tier1-source-types-design.md §5).
 inductive SA {
     SNo,
     SNat,
     SPure,
     SEnum(k: Nat),
     SFlds,
-    SFn(arity: Nat, res: Nat),
+    SWf,
+    SFn(arity: Nat, res: Nat, wf: Nat),
 }
 
 // The verdict. `res` is a single `Nat`: 0 means the result type is `Nat`,
@@ -604,7 +790,11 @@ inductive SA {
 // has (design doc §§5–6). Flat on purpose: every field here is a `Nat`, so no
 // elimination over this type pays for a lowered inductive field
 // (issues/wf-field-conversion-cost.md).
-inductive SigOut { SigNo, SigYes(arity: Nat, res: Nat) }
+// `wf` is a single `Nat` too: 0 means every parameter is a `Nat`;
+// `Succ(d)` means the (one) tier-1 parameter sits `d` slots from the END of
+// the parameter list — suffix-counted because the walk folds from the right,
+// so a `Nat` domain leaves it unchanged and the rim converts once.
+inductive SigOut { SigNo, SigYes(arity: Nat, res: Nat, wf: Nat) }
 
 // A Σ over `Unit` — the end of a field spine. Two pures are pure again (a tag
 // spine, a field-free payload); a `Nat` there is the last field of a
@@ -668,16 +858,52 @@ fn sig_sum(lhs: SA, rhs: SA) -> SA {
 // is either the result type or a fragment signature one parameter shorter.
 // A one-constructor enumeration has no sum at all, so a bare payload is a
 // result too — with fields (`SFlds`) or without (`SPure`).
+fn sig_pi_nat(cod: SA) -> SA {
+    match cod {
+        SNat => SFn(1, 0, 0),
+        SPure => SFn(1, 1, 0),
+        SFlds => SFn(1, 1, 0),
+        SEnum(k) => SFn(1, k, 0),
+        SFn(a, r, w) => SFn(Succ(a), r, w),
+        _ => SNo,
+    }
+}
+
+// A tier-1 domain: the fragment admits ONE, so a codomain that already
+// carries one declines. `SWf` in a codomain position is not a result state,
+// which is where "a tier-1 result type declines" still lives.
+fn sig_pi_wf_fn(a: Nat, r: Nat, w: Nat) -> SA {
+    match w { Zero => SFn(Succ(a), r, Succ(a)), Succ(k) => SNo }
+}
+
+fn sig_pi_wf(cod: SA) -> SA {
+    match cod {
+        SNat => SFn(1, 0, Succ(0)),
+        SPure => SFn(1, 1, Succ(0)),
+        SFlds => SFn(1, 1, Succ(0)),
+        SEnum(k) => SFn(1, k, Succ(0)),
+        SFn(a, r, w) => sig_pi_wf_fn(a, r, w),
+        _ => SNo,
+    }
+}
+
 fn sig_pi(dom: SA, cod: SA) -> SA {
     match dom {
-        SNat => match cod {
-            SNat => SFn(1, 0),
-            SPure => SFn(1, 1),
-            SFlds => SFn(1, 1),
-            SEnum(k) => SFn(1, k),
-            SFn(a, r) => SFn(Succ(a), r),
-            _ => SNo,
-        },
+        SNat => sig_pi_nat(cod),
+        SWf => sig_pi_wf(cod),
+        _ => SNo,
+    }
+}
+
+// A `Wf` whose shape reads as an enumeration — with or without `Nat`
+// fields — is a recognized tier-1 parameter type. Which DECLARATION it is,
+// and whether that declaration is nameable, is the rim's question, exactly
+// as for a monomorphized enumeration result.
+fn sig_wf(shape: SA) -> SA {
+    match shape {
+        SPure => SWf,
+        SFlds => SWf,
+        SEnum(k) => SWf,
         _ => SNo,
     }
 }
@@ -687,7 +913,7 @@ fn sig_pi(dom: SA, cod: SA) -> SA {
 // fn, which has no calling convention to certify, so it declines here.
 fn sig_finish(s: SA) -> SigOut {
     match s {
-        SFn(a, r) => match a { Zero => SigNo, Succ(k) => SigYes(Succ(k), r) },
+        SFn(a, r, w) => match a { Zero => SigNo, Succ(k) => SigYes(Succ(k), r, w) },
         _ => SigNo,
     }
 }
@@ -916,13 +1142,130 @@ theorem ctor_field_must_be_a_value_declines():
     ta_pair(ta_var(), ta_triv()) = TStuck
 { refl }
 
+// TIER-1 SOURCE TYPES (convention 5). The accessor markers first, read by
+// λ-chain arity: two λs over a variable applied to a numeral is field `t` of
+// the enclosing arm — deferred as `RFld`, whose distance is `t` at any
+// depth…
+theorem tier1_field_marker():
+    ta_app(1, ta_lam(ta_stuck(), ta_lam(ta_stuck(), ta_var())), ta_zero())
+    = TExp(PEnd, RFld(0), 0)
+{ refl }
+
+// …three λs is the induction hypothesis at recursive field `t`, one
+// `PSelf(t)` instruction whose own value is its result…
+theorem tier1_ih_marker():
+    ta_app(1, ta_lam(ta_stuck(), ta_lam(ta_stuck(), ta_lam(ta_stuck(), ta_var()))),
+           ta_succ(ta_zero()))
+    = TExp(PSelf(1, PEnd), RLoc(0), 1)
+{ refl }
+
+// …and four λs is an arm's field-count header, holding `f` until the arm
+// value arrives.
+theorem tier1_arm_header():
+    ta_app(1,
+        ta_app(1,
+            ta_lam(ta_stuck(), ta_lam(ta_stuck(), ta_lam(ta_stuck(), ta_lam(ta_stuck(), ta_var())))),
+            ta_succ(ta_succ(ta_zero()))),
+        ta_zero())
+    = TArm(2, PCon(0, QNil, PEnd), RLoc(0), 1)
+{ refl }
+
+// The whole linear transcription, spelled as the walker builds it: a
+// two-constructor tier-1 type (`Toks { TNil, TCons(n: Nat, rest: Toks) }`),
+// a 1-ary fn recursing on it (`tsum`), the `TNil` arm a numeral and the
+// `TCons` arm `Succ(ih@field 1)`. The rendered arms sit at their own base
+// depths (`arity + 0`, `arity + 2`): the self-call gathers the child at
+// distance 1 — field 1 of the arm — and the emitted `LetMatch` is
+// byte-identical to the round's hand-run
+// (docs/certgen-tier1-source-types-design.md §1).
+theorem tier1_linear_transcribes():
+    ta_elim_wf(1,
+        ta_case(
+            ta_app(1,
+                ta_app(1,
+                    ta_lam(ta_stuck(), ta_lam(ta_stuck(), ta_lam(ta_stuck(), ta_lam(ta_stuck(), ta_var())))),
+                    ta_zero()),
+                ta_zero()),
+            ta_app(1,
+                ta_app(1,
+                    ta_lam(ta_stuck(), ta_lam(ta_stuck(), ta_lam(ta_stuck(), ta_lam(ta_stuck(), ta_var())))),
+                    ta_succ(ta_succ(ta_zero()))),
+                ta_succ(ta_app(1,
+                    ta_lam(ta_stuck(), ta_lam(ta_stuck(), ta_lam(ta_stuck(), ta_var()))),
+                    ta_succ(ta_zero())))),
+            ta_app(1, ta_lam(ta_stuck(), ta_var()), ta_zero())),
+        ta_app(1, ta_lam(ta_stuck(), ta_var()), ta_zero()))
+    = TBody(LetMatch(0,
+          Arm(LetCon(0, RNil, Ret(RCons(0, RNil))),
+          Arm(LetCall(0, RCons(1, RNil),
+              LetCon(1, RCons(0, RNil),
+              Ret(RCons(0, RNil)))),
+          NoArm)),
+          Ret(RCons(0, RNil))))
+{ refl }
+
+// A payload field used as the arm's value renders at its own distance —
+// field 0 at distance 0 whatever the arm's depth (`RFld` carries the
+// distance-from-base, the depth-stable coordinate for a prepended field).
+theorem tier1_payload_arm_renders():
+    ta_elim_wf(1,
+        ta_case(
+            ta_app(1,
+                ta_app(1,
+                    ta_lam(ta_stuck(), ta_lam(ta_stuck(), ta_lam(ta_stuck(), ta_lam(ta_stuck(), ta_var())))),
+                    ta_succ(ta_zero())),
+                ta_app(1, ta_lam(ta_stuck(), ta_lam(ta_stuck(), ta_var())), ta_zero())),
+            ta_app(1,
+                ta_app(1,
+                    ta_lam(ta_stuck(), ta_lam(ta_stuck(), ta_lam(ta_stuck(), ta_lam(ta_stuck(), ta_var())))),
+                    ta_succ(ta_succ(ta_zero()))),
+                ta_succ(ta_app(1,
+                    ta_lam(ta_stuck(), ta_lam(ta_stuck(), ta_lam(ta_stuck(), ta_var()))),
+                    ta_zero()))),
+            ta_app(1, ta_lam(ta_stuck(), ta_var()), ta_zero())),
+        ta_app(1, ta_lam(ta_stuck(), ta_var()), ta_zero()))
+    = TBody(LetMatch(0,
+          Arm(Ret(RCons(0, RNil)),
+          Arm(LetCall(0, RCons(0, RNil),
+              LetCon(1, RCons(0, RNil),
+              Ret(RCons(0, RNil)))),
+          NoArm)),
+          Ret(RCons(0, RNil))))
+{ refl }
+
+// A case node whose scrutinee is not the same parameter as the chain's
+// declines: the dispatch tree is about ONE recursion parameter.
+theorem tier1_mixed_scrutinee_declines():
+    ta_elim_wf(2,
+        ta_case(
+            ta_app(2,
+                ta_app(2,
+                    ta_lam(ta_stuck(), ta_lam(ta_stuck(), ta_lam(ta_stuck(), ta_lam(ta_stuck(), ta_var())))),
+                    ta_zero()),
+                ta_zero()),
+            ta_app(2,
+                ta_app(2,
+                    ta_lam(ta_stuck(), ta_lam(ta_stuck(), ta_lam(ta_stuck(), ta_lam(ta_stuck(), ta_var())))),
+                    ta_zero()),
+                ta_zero()),
+            ta_app(2, ta_lam(ta_stuck(), ta_var()), ta_zero())),
+        ta_app(2, ta_lam(ta_stuck(), ta_var()), ta_succ(ta_zero())))
+    = TStuck
+{ refl }
+
+// An arm that never got its header is not an arm.
+theorem tier1_headerless_arm_declines():
+    ta_case(ta_zero(), ta_zero(), ta_app(1, ta_lam(ta_stuck(), ta_var()), ta_zero()))
+    = TStuck
+{ refl }
+
 // The signature checker's own pins: `dbl`'s and `add`'s signatures, spelled
 // as the walker builds them (`SNat` is the `ty_nat` arm's answer), and the
 // declines the fragment rule turns on.
-theorem sig_dbl(): sig_finish(sig_pi(SNat, SNat)) = SigYes(1, 0) { refl }
+theorem sig_dbl(): sig_finish(sig_pi(SNat, SNat)) = SigYes(1, 0, 0) { refl }
 
 theorem sig_add():
-    sig_finish(sig_pi(SNat, sig_pi(SNat, SNat))) = SigYes(2, 0)
+    sig_finish(sig_pi(SNat, sig_pi(SNat, SNat))) = SigYes(2, 0, 0)
 { refl }
 
 // A bare `Nat` is a nullary fn: no calling convention to certify.
@@ -943,7 +1286,7 @@ theorem sig_tag_is_pure():
 // `Nat -> Flag`, two nullary constructors: the verdict carries the constructor
 // COUNT beside the arity (docs/certgen-non-nat-embeddings-design.md §5).
 theorem sig_nat_to_two_ctors():
-    sig_finish(sig_pi(SNat, sig_sum(SPure, SPure))) = SigYes(1, 2)
+    sig_finish(sig_pi(SNat, sig_sum(SPure, SPure))) = SigYes(1, 2, 0)
 { refl }
 
 // A three-constructor enumeration is right-nested, and its count comes off the
@@ -970,7 +1313,7 @@ theorem sig_ctor_with_two_fields():
 theorem sig_enum_with_a_field():
     sig_finish(sig_pi(SNat,
         sig_sum(SPure, sig_sigma(SPure, sig_sigma(SNat, SPure)))))
-    = SigYes(1, 2)
+    = SigYes(1, 2, 0)
 { refl }
 
 // A field whose type is another INDUCTIVE is out: the term side would read it,
@@ -982,11 +1325,41 @@ theorem sig_ctor_with_an_enum_field_declines():
 
 // A ONE-constructor enumeration has no sum at all, and is still a result.
 theorem sig_one_ctor_result():
-    sig_finish(sig_pi(SNat, SPure)) = SigYes(1, 1)
+    sig_finish(sig_pi(SNat, SPure)) = SigYes(1, 1, 0)
 { refl }
 
 theorem sig_unrecognized_result_declines():
     sig_finish(sig_pi(SNat, SNo)) = SigNo
+{ refl }
+
+// A tier-1 parameter: a `Wf` over an enumeration-shaped payload reads `SWf`,
+// and the verdict carries its suffix position beside the arity
+// (docs/certgen-tier1-source-types-design.md §5). `Toks -> Nat`…
+theorem sig_tier1_param():
+    sig_finish(sig_pi(sig_wf(sig_sum(SPure, sig_sigma(SPure, sig_sigma(SNat, SPure)))), SNat))
+    = SigYes(1, 0, Succ(0))
+{ refl }
+
+// …`Th -> Nat -> Nat` — the tier-1 parameter two slots from the end.
+theorem sig_tier1_param_first_of_two():
+    sig_finish(sig_pi(sig_wf(sig_sum(SPure, SFlds)), sig_pi(SNat, SNat)))
+    = SigYes(2, 0, Succ(1))
+{ refl }
+
+// Two tier-1 parameters decline: `SigOut` carries one position because the
+// fragment admits one.
+theorem sig_two_tier1_params_decline():
+    sig_pi(SWf, SFn(1, 0, Succ(0))) = SNo
+{ refl }
+
+// A tier-1 RESULT still declines — `SWf` is not a result state.
+theorem sig_tier1_result_declines():
+    sig_pi(SNat, SWf) = SNo
+{ refl }
+
+// A `Wf` whose shape is not an enumeration's is not a fragment parameter.
+theorem sig_wf_junk_shape_declines():
+    sig_wf(SNat) = SNo
 { refl }
 
 // ---------------------------------------------------------------------------
@@ -1030,6 +1403,12 @@ meta fn transcribe(g: Ctx, arity: Nat, body: Code(g |- Nat))
         tm_lam(dom, b)            => ta_lam(dom, b),
         tm_app(dom, cod, hd, arg) => ta_app(arity, hd, arg),
         tm_elim_nat(m, z, s, sc)  => ta_elim(arity, z, s, sc),
+        // Convention 5: the tier-1 eliminator and its constructor case tree.
+        // The shape/arity/motive results are bound and never consulted (they
+        // carry global references the walk must not force); everything the
+        // transcription needs arrives through the markers.
+        tm_case(a, b, m, l, r, sc) => ta_case(l, r, sc),
+        tm_elim_wf(sh, n, m, st, sc) => ta_elim_wf(arity, st, sc),
         // Convention 4: the tier-0 formers a non-`Nat` result type's
         // constructors are built from. The type arguments of each are bound
         // and ignored — this shell analyses terms, and a constructor's
@@ -1060,6 +1439,11 @@ meta fn check_sig(g: Ctx, sig: TyCode(g))
         ty_pi(ds, dt)    => sig_pi(ds, dt),
         ty_sigma(ss, st) => sig_sigma(ss, st),
         ty_sum(sl, sr)   => sig_sum(sl, sr),
+        // A tier-1 parameter type: the shape's walk is the verdict, and the
+        // arity term's recursive result is bound and never forced — it may
+        // contain global references the walk must not meet
+        // (docs/certgen-tier1-source-types-design.md §5).
+        ty_wf(ws, wn)    => sig_wf(ws),
         _                => SNo,
     })
 }

@@ -188,7 +188,7 @@ fn a_perturbed_signature_checker_is_a_loud_disagreement() {
 }
 
 // ------",
-        "        _ => SigYes(0, 0),
+        "        _ => SigYes(0, 0, 0),
     }
 }
 
