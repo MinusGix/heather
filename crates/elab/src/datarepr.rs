@@ -524,6 +524,17 @@ pub(crate) fn record_name(name: &str) -> String {
     format!("Repr_{name}")
 }
 
+/// The `Impl` record's name — the namespace holding `body`, `refines` and (at a
+/// repr-typed result) `refines_inv`. Spelled in one place because two clients
+/// need it to agree: `elab_impl`, which declares it, and the transfer
+/// generator, which resolves a callee's certificate through it. Reaching
+/// through the *namespace* rather than projecting the assembled value is not a
+/// style choice — projecting a theorem-valued field off a record value is
+/// `issues/theorem-field-projection-oom.md`.
+pub(crate) fn impl_record_name(repr: &str, op: &str) -> String {
+    format!("Impl_{repr}_{op}")
+}
+
 /// `λ (x: T) => λ (y: U) => body`, or `body` when there are no binders.
 pub(crate) fn lams(bs: &[(String, String)], body: &str) -> String {
     let mut s = String::new();
@@ -932,7 +943,7 @@ impl Elaborator {
         }
         let body_ty =
             pis(&binders, if res_is_spec { c } else { &res });
-        let rec = format!("Impl_{}_{}", d.repr, d.op);
+        let rec = impl_record_name(&d.repr, &d.op);
         let bodyg = format!("{rec}::body()");
         let call = appc(&bodyg, &binders.iter().map(|(n, _)| n.clone()).collect::<Vec<_>>());
         let fcall = format!("{}({})", d.op, spec_args.join(", "));

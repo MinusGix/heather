@@ -1,6 +1,6 @@
 ---
 title: reprgen: a self-call's non-recursion arguments are not checked
-status: open
+status: closed
 labels: [compiler,generator]
 created: 2026-08-15
 updated: 2026-08-15
@@ -46,3 +46,7 @@ check, reading the child at the recursion parameter's index. Small; the
 reason string is the work.
 
 Not urgent: nothing in the suite spells one, and the failure mode is loud.
+
+## Log
+
+- 2026-08-15: Closed by the callee-resolution stage ([[datarepr-separation]], 2026-08-15), one half fixed and the other half found unreachable. Fixed: both readers now take the recursive child at the recursion **parameter's index** rather than at `last()`, so an operation whose `S` parameter is not last transfers instead of being blamed for non-structural recursion — a positive fixture pins it (`the_recursive_child_is_read_at_the_recursion_parameters_index`). Unreachable: the headline case — a self-call passing something other than the corresponding parameter at a non-recursion position — is refused by **the elaborator's own recursion check** before the generator ever sees the declaration ("recursive call to `f` must pass `a` unchanged: the induction hypothesis fixes every non-decreasing parameter"), probed on the issue's own `replace_all` example and on a swapped-argument variant. The fragment check carries the test anyway, as defense in depth against a later widening of that rule; it has no fixture for the same reason §3.3's non-structural-recursion decline has none.

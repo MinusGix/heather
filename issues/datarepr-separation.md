@@ -70,9 +70,6 @@ owned by [[compile-typeclass-design]]; `simulate`/IR by
 
 ## Open
 
-- Callee-`Impl` registry resolution — §3.1 phase 0's other half: a callee
-  touching `S` needs its own `Impl`'s `refines` to close the step; declined
-  today.
 - Multirepr within one function (deferred with §5.3's trigger): the
   one-repr-per-closure default is an assumption, not a ceiling — any actual
   conversion function holds two reprs of one spec type, so the activation
@@ -119,3 +116,4 @@ place). The v1 charter itself is spent: both halves are in-tree.
   controlled; it shares the carrier with `Bin` in `crates/elab/tests/support`.
   Spun off rather than fixed drive-by:
   [[reprgen-self-call-args-unchecked]]. Suite 1531 → 1541, bench clean.
+- 2026-08-15: **Callee-`Impl` registry resolution lands; §3.1 phase 0 is complete.** A callee that touches `S` is now resolved against the registry, transcribed to its `Impl`'s body on the repr side, and closed in the certificate by that callee's `refines` (and `refines_inv` where it returns `S`); a callee with no `Impl` that is in the fragment is generated first, in the same emission, in topological order. Narrative and the four findings in docs/datarepr-design.md's third as-landed note on §3.1 (and the sharpened §3.3 bullets). The load-bearing one, found by the hand-run before code: an arm's algebra is spelled once and typed twice, so a callee is spelled through its `Impl` on BOTH sides and the bridge to the spec function is built in the closing induction, not at the anchor law — from which the charter's expected `inv`-hereditarity obligation turns out NOT to be owed (its only customer is the recursive-child shape, refused on typing grounds first), so no `Repr` field is added and §1.1/§1.4 are untouched. The schema-datatype verdict stands negative a second time: a resolved callee is a second spine node kind with the same four slots and the proof walk gains no branch. Provenance-indifference is tested, not asserted (byte-identical caller emission over a generated vs. a hand-written callee `Impl`). Spun down rather than fixed: [[reprgen-self-call-args-unchecked]] closed — its sibling half fixed here, its headline half unreachable (the elaborator's own recursion check refuses it first). Suite 1541 -> 1553, bench clean.
