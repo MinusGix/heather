@@ -680,6 +680,19 @@ sees (the classic quadratic-behind-your-back), and — worse for this
 project — certificates whose statements quantify over which repr a value
 is in at each program point, a complexity tax with no v1 customer.
 
+Ratified 2026-08-15, with two sharpenings from the review. (1)
+One-repr-per-spec-type-per-closure is the *default assumption*, not a
+ceiling: any function that actually performs a conversion inherently holds
+two reprs of the same spec type, so the activation round must design
+multirepr-within-one-function to be at least workable — "assume the reprs
+are the same" is the ambient default, mixing is the explicitly-entered
+mode. (2) If any conversions ever become automatic, they ride the
+language's *general* automatic-conversion mechanisms (there may be repr
+pairs close enough that swapping is near-free and livable), never
+repr-specific compiler insertion — the never-compiler-inserted guardrail
+above is about datarepr minting its own insertion channel, not about the
+language-wide coercion story, which owns that decision.
+
 ## 6. The hostile-repr falsifier, worked on paper: the sorted-multiset bag
 
 Model: the branching-inductives falsifier — push the discipline until it

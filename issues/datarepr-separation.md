@@ -3,7 +3,7 @@ title: Datarepr: kernel representation vs runtime representation
 status: open
 labels: [compiler,design,runtime]
 created: 2026-07-24
-updated: 2026-08-14
+updated: 2026-08-15
 ---
 
 
@@ -70,25 +70,26 @@ owned by [[compile-typeclass-design]]; `simulate`/IR by
 
 ## Open
 
-- User's yes/no on the design doc's RECOMMENDED items
-  (docs/datarepr-design.md): FINDING 1's resolution (constructor images
-  sit under the partiality policy; only abs/fold/inv are total — §1.3);
-  per-closure error sums minted at the runtime_fn boundary (§2.5a); rung
-  dispatch declared at Impl definition so signatures don't flap (§2.5b);
-  declaration-syntax keying at both layers (§4); multi-repr defaults bound
-  at the runtime_fn boundary (§5.3); Bin-as-repr-of-Nat as the v1 stretch
-  acceptance item (§5.1).
 - Charter the v1 landing round against §5.1's acceptance list (the
   `datarepr`/`impl` forms, naive repr official, the certgen `List<Tok>`
   customer flip, reprgen's byte-free scope).
+- Multirepr within one function (deferred with §5.3's trigger): the
+  one-repr-per-closure default is an assumption, not a ceiling — any actual
+  conversion function holds two reprs of one spec type, so the activation
+  round must make mixing at least workable ("assume same repr" ambient,
+  mixing explicitly entered). Ratified 2026-08-15, sharpenings in §5.3.
 - Decider provenance for the decide-and-bubble rung (§2.5e) — to be picked
   *with* [[class-ops-prop-vs-bool]] at the first outcome-path round.
 - Spec-side quotient types, if multiset-flavored programs arrive
   (FINDING 3, §6.4) — recorded pressure, not this issue's design.
 
-Settled by the doc (previously open here): the class shape and refinement
-statement (§1); keying (§4, RECOMMENDED); default instances (naive by fiat
-in v1, auto-pick meta-program v2+ — §5.1–5.2).
+Settled by the doc and the two review passes (previously open here): the
+class shape and refinement statement (§1, FINDING 1 ratified); keying
+(§4, ratified); default instances (naive by fiat in v1, auto-pick
+meta-program v2+, naive always mintable — §5.1–5.2, ratified); reprgen
+architecture (§3, ratified); Bin-as-repr-of-Nat v1 stretch (§5.1,
+ratified); multi-repr defaults at the runtime_fn boundary and conversions
+as ordinary certified Impls (§5.3, ratified with sharpenings — see Open).
 
 ## Log
 
@@ -98,3 +99,4 @@ in v1, auto-pick meta-program v2+ — §5.1–5.2).
 - 2026-08-14: Discussion round 3, closing the pre-charter phase: the user CONFIRMS the input-determined-vs-machine-state partiality split (noting it is forced by the fundamental alloc-like function whose IR carries the OutOfMem possibility; a push proof can erase it relative to the machine model given no-resize), and confirms the syntax and multi-repr positions. The floated THIRD class (machine-width side conditions, e.g. index-fits-isize) is resolved as a DISPATCH POLICY, not a semantic class: width conditions are preconditions in kind, but (a) most are SUBSUMED BY inv and never surface (inv already bounds len, so i < len implies i fits — the repr invariant pays for the width facts inside a maintained repr), and (b) those that genuinely surface at boundaries default to DECIDE-AND-BUBBLE — the condition is decidable, so the generated layer emits the runtime check and bubbles the failure arm through the same plumbing as OutOfMem (the user's decide_result tactic is this rung exposed to users) — with the asymmetry that a bubbled width condition is ALWAYS erasable in principle by discharging the precondition, where OutOfMem is erasable only relative to an assumed capacity. Dispatch ladder: silent discharge from context/inv > decide-and-bubble > manual; per-condition default is the knob. ALL pre-charter questions are now settled; the design round may be chartered. Edge-case semantics acknowledged as the round's roughest part — the charter should name it.
 - 2026-08-14: **Design round: docs/datarepr-design.md landed** (sections: §1 class semantics/Impl registry, §2 partiality+dispatch worked on index/push/Nat→u64, §3 the transfer generator "reprgen", §4 keying, §5 staging, §6 the sorted-bag falsifier, §7 literature, §8 rejected alternatives). Three FINDINGS: (1) constructor images cannot all be total on machine-finite carriers — resolved as *consumption total, construction under the partiality policy* (§1.3); (2) naive-repr availability is not the rejected bignum fallback — operational vs semantic (§8); (3) the bag falsifier survives by declining — order-forgetting reprs need spec-side quotients, pressure recorded at that door (§6.4). RECOMMENDED (not decided): per-closure error sums at the runtime_fn boundary; rung dispatch declared per Impl definition; declaration-syntax keying both layers; multi-repr defaults at the runtime_fn boundary; Bin-repr-of-Nat as v1 stretch. The "## Open" list above now reflects the doc. Literature verdicts in §7.5; Lifting/Transfer's right-totality (and its partial-quotients-get-no-code cost) is the clearest deliberate divergence.
 - 2026-08-14: User live-read of docs/datarepr-design.md secs. 1-2 (2026-08-14), verdicts recorded: FINDING 1 RATIFIED (constructors have to be limited; consumption-total stands). Sec. 2.5 items: (1) per-closure error sums LIKED; (2) RATIFIED as declared-per-Impl, explicitly not wholly automatic ('this API can do an out of mem' is sane); (3) not wholly sure, stays open; (4) wants a concrete sketch beyond the always-Err control note; (5) CONFIRMED with a sharpening logged on [[guarded-to-option-adapter]]: rung-2 deciders must be runtime-computable (Compile-bearing when used for compilation) — Decidable alone is not sane-to-run. Sec. 2.4 writer-declares-the-rung: confirmed (matches 2.5(2)). Smaller notes: Out flipped to Out<T, E> in the doc (done); the 'sub-repr' coinage in 2.5(3)/2.3 is questioned — prefer 'a repr with a stronger inv' or a value-plus-proof reading, no new concept; the fold algebra type deserves its own name; a more first-class 'impl fn VecList::length' spelling is wanted if the refines proof can attach cleanly; datarepr-as-metaprogram-over-inductive-fields (MultiArrayList-style) noted as the direction 1.4 should stay compatible with; Nat-as-u64 disliked as an example repr (Nat's value is unlimitedness) though the finding stands. Two issues spun off: [[unnameable-generated-names]] (generated names unnameable-by-default, # sigil sketch), [[guarded-to-option-adapter]]. Secs. 3-8 review pending; nondeterminism-of-machine-state question raised, answered in discussion (refines is arm-wise so it never predicts the arm; determinism-relative-to-threaded-machine-state is simulate's natural v2 shape; effects-direction owns the full route).
+- 2026-08-15: **Review pass 2 (secs. 3-8, user skim-read): all remaining RECOMMENDED items RATIFIED.** §3 reprgen phases ratified ("neat"), with the noted wrinkle that an eventual pure-Heather self-hosting of the generator makes the phase machinery trickier — no action now. §4 keying ratified, including the avoided instance-flapping failure mode. §5 naive repr ratified exactly as the doc stages it: always available to mint, dev-time default in v1, NOT the long-term actual default (auto-pick v2+). §5.1 Bin "a great test target". §5.3 ratified with two sharpenings (now in the doc): (a) one-repr-per-closure is the default assumption, not a ceiling — conversion functions inherently hold two reprs, so multirepr-within-one-function must be designed at-least-workable at activation (new Open item); (b) any future automatic conversions ride the language's general auto-conversion mechanisms (some repr pairs are near-free to swap), never repr-specific compiler insertion. Defaults-bind-at-runtime_fn-boundary accepted as "very typeclass-esque". The doc's RECOMMENDED items are now all decided; the Open list is reduced to the v1 charter plus the deferred design questions.
