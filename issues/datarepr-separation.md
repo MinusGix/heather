@@ -74,7 +74,7 @@ owned by [[compile-typeclass-design]]; `simulate`/IR by
   `datarepr`/`impl` forms, naive repr official, the certgen `List<Tok>`
   customer flip, reprgen's byte-free scope).
 - Via-derived's availability (FINDING in doc §1.2's as-landed note) —
-  resolution direction agreed 2026-08-15, one confirmation outstanding: the
+  RESOLVED, user-confirmed 2026-08-15: the
   official obligation is the WEAK form, `abs(body) = abs(derived)` under
   `inv` (+ `inv` of repr-typed results), chained with the derived
   certificate — always sufficient, so the abstract case is covered.

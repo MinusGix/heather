@@ -38,7 +38,11 @@ use a reserved Unicode character the way Lean marks inaccessible names
 (its `✝` style). And the bar is softened: generated names need to be
 *mostly* inaccessible — a clear visual "you should avoid depending on
 this" marker plus convention — not 100% unwritable; harder inaccessibility
-is a nicety. This dissolves the generated-source tension logged above: a
-reserved Unicode char can simply be a legal identifier character
-everywhere, so emit-as-text works unchanged and no parser mode split is
-needed. Not immediate; implement when a round wants it.
+is a nicety. Sharpened same day: the marker should NOT be literally
+typeable in ordinary source — "mostly inaccessible" means reaching such a
+name takes deliberate code-kludging (programmatic identifier construction,
+metaprogramming), not just typing the character. So the lexer rejects the
+marker in user-written files while the generated-source path may produce
+it — a mode split at the *lexer* for one character class, far smaller than
+the parser-mode split feared above. Not immediate; implement when a round
+wants it.
