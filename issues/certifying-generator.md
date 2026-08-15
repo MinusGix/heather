@@ -34,7 +34,12 @@ certgen-tier1-source-types-design.md, certgen-tier0-params-design.md,
 certgen-cert-expression-design.md (§8.1: what may touch CertOut). Remaining
 of doc §8 item 2: parameterized instantiations (with [[datarepr-separation]]);
 then loopification and [[prog-extension-lemma]]. Costs and rails live on
-[[certgen-harness-cost]].
+[[certgen-harness-cost]]. Widening ledger probed 2026-08-15 (datarepr v1
+verification, docs/datarepr-design.md §5.1 item 3 correction): beyond the
+name-minting flip, calc.hthr-`run`-shaped programs need four further
+stages — tier-1 constructor fields at a *third* inductive (the binding
+one), recursive tier-1 result types, non-Nat-field non-recursive results,
+and the curried higher-order result ([[ih-generalization]]'s row).
 
 ## Log
 

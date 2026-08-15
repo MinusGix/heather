@@ -101,10 +101,13 @@ record Repr_ListTok {
     cons_abs  : (t: Tok, r: R) -> inv(r) -> abs(mk_cons(t, r)) = Cons(t, abs(r)),
     cons_inv  : (t: Tok, r: R) -> inv(r) -> inv(mk_cons(t, r)),
 
-    // The fold anchor: a fold over R refining S's recursor.
+    // The fold anchor: a fold over R refining S's recursor. The law takes
+    // the SPEC step and adapts it repr-ward — abs at the child position;
+    // no map S -> R exists to adapt a repr step the other way.
     fold      : (B: Type) -> B -> (Tok -> R -> B -> B) -> R -> B,
-    fold_law  : (B, z, s, r) -> inv(r) ->
-                fold(B, z, s, r) = rec_List(B, z, adapt(s), abs(r)),
+    fold_law  : (B, z, s: Tok -> List<Tok> -> B -> B, r) -> inv(r) ->
+                fold(B, z, (h, t, b) => s(h, abs(t), b), r)
+                  = rec_List(B, z, s, abs(r)),
 }
 ```
 
@@ -124,11 +127,14 @@ Notes on the laws, precisely:
   or outcome-typed image case (§1.3) the law is stated on the success arm.
 - **The fold anchor** is the certificate anchor and the transfer
   generator's fuel: for any algebra, folding over `R` agrees with the spec
-  recursor applied to `abs(r)`. The `adapt(s)` in the sketch marks a real
-  wrinkle: the step function over `R` sees the repr child *and* the
-  recursive result, while the spec recursor's step sees the spec child; the
-  generated anchor statement inserts `abs` at the child position. For the
-  naive repr `adapt` is the identity and `fold_law` is `refl`.
+  recursor applied to `abs(r)`. The adaptation marks a real wrinkle, and
+  it runs one way only: the fold's step sees the repr child, the spec
+  recursor's step sees the spec child, and `abs` at the child position
+  converts repr-ward — there is no `S -> R` to adapt a repr step to the
+  recursor's side. (The sketch originally wrote `adapt(s)` on the recursor
+  side; kernel-probed `NotConvertible`, corrected 2026-08-15 — stated as
+  above, the naive instance is `refl`.) For the naive repr the adaptation
+  is the identity and `fold_law` is `refl`.
 - **The fold need not be what runs.** It must *exist* (with its law) so
   that certificates have an anchor and structural spec functions transfer;
   the cost basis (§1.2) is where speed lives. On a hostile repr the anchor
@@ -610,8 +616,16 @@ no platform model. Contents:
    is naive by fiat.
 3. **The certgen customer**: `datarepr ListTok for List<Tok> := repr::naive()`
    mints the name and the embed; certgen's parameterized-instantiation
-   decline flips to emission by the established fixture-flip discipline;
-   `calc.hthr`'s `run` compiles end to end.
+   decline flips to emission by the established fixture-flip discipline.
+   As-landed correction (verification probe, 2026-08-15): the originally
+   chartered acceptance "`calc.hthr`'s `run` compiles end to end" is NOT
+   one decline away and is dropped from v1 — even fully hand-monomorphized,
+   `run` sits behind four independent certgen widenings (tier-1 constructor
+   fields at a *third* inductive, the binding one; recursive tier-1 result
+   types; non-`Nat`-field non-recursive results like `Option<List<Nat>>`;
+   the curried higher-order result), each its own generator stage on
+   `issues/certifying-generator.md`'s ledger. The minting and the fixture
+   flip stand as this item's acceptance.
 4. **One non-identity repr, to prove the machinery is not id-only**
    (RECOMMENDED as the v1 stretch item): `Bin` (binary naturals, an
    ordinary inductive) as a repr of `Nat` — `abs` the binary-to-unary
