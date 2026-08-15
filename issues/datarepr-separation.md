@@ -70,22 +70,17 @@ owned by [[compile-typeclass-design]]; `simulate`/IR by
 
 ## Open
 
-- Charter the v1 landing round against §5.1's acceptance list (the
-  `datarepr`/`impl` forms, naive repr official, the certgen `List<Tok>`
-  customer flip, reprgen's byte-free scope).
-- Via-derived's availability (FINDING in doc §1.2's as-landed note) —
-  RESOLVED, user-confirmed 2026-08-15: the
-  official obligation is the WEAK form, `abs(body) = abs(derived)` under
-  `inv` (+ `inv` of repr-typed results), chained with the derived
-  certificate — always sufficient, so the abstract case is covered.
-  Carrier equality is not a second route: it discharges that obligation by
-  one `ap abs` congruence step, so it's the strongest proof of the same
-  statement and nothing dispatches. "Nicer types" is the repr author's
-  `inv` knob: a canonical-form `inv` (Bin without leading zeros) makes
-  `abs` injective on `inv`, restoring carrier-equality proofs (and
-  decidable carrier equality) at the price of real `inv`-closure
-  obligations. Doc §1.2 to be restated this way before the reprgen
-  charter, which emits the weak obligation.
+- The repr-typed-result transfer (doc §3.3 as-landed note, 2026-08-15):
+  hand-run and specified in crates/elab/tests/reprgen.rs, not automated. A
+  stage, not a tweak — second closing-lemma shape (`abs` through the image
+  spine), a generated `abs` congruence per repr, and a *third* lemma no
+  section previously described: `inv`-preservation of the fold (invisible
+  at `inv = True`, real at the first canonical-form invariant). Cost of
+  deferral: at `Bin`, almost every interesting operation returns `Nat`, so
+  this is what keeps arithmetic out of reprgen's reach.
+- Callee-`Impl` registry resolution — §3.1 phase 0's other half: a callee
+  touching `S` needs its own `Impl`'s `refines` to close the step; declined
+  today.
 - Multirepr within one function (deferred with §5.3's trigger): the
   one-repr-per-closure default is an assumption, not a ceiling — any actual
   conversion function holds two reprs of one spec type, so the activation
@@ -103,6 +98,10 @@ meta-program v2+, naive always mintable — §5.1–5.2, ratified); reprgen
 architecture (§3, ratified); Bin-as-repr-of-Nat v1 stretch (§5.1,
 ratified); multi-repr defaults at the runtime_fn boundary and conversions
 as ordinary certified Impls (§5.3, ratified with sharpenings — see Open).
+Also settled: via-derived's obligation is the weak abs-image form, carrier
+equality its congruence discharge, canonical-form `inv` the opt-in that
+makes them coincide (user-confirmed 2026-08-15; doc §1.2 restated in
+place). The v1 charter itself is spent: both halves are in-tree.
 
 ## Log
 
@@ -115,3 +114,4 @@ as ordinary certified Impls (§5.3, ratified with sharpenings — see Open).
 - 2026-08-15: **Review pass 2 (secs. 3-8, user skim-read): all remaining RECOMMENDED items RATIFIED.** §3 reprgen phases ratified ("neat"), with the noted wrinkle that an eventual pure-Heather self-hosting of the generator makes the phase machinery trickier — no action now. §4 keying ratified, including the avoided instance-flapping failure mode. §5 naive repr ratified exactly as the doc stages it: always available to mint, dev-time default in v1, NOT the long-term actual default (auto-pick v2+). §5.1 Bin "a great test target". §5.3 ratified with two sharpenings (now in the doc): (a) one-repr-per-closure is the default assumption, not a ceiling — conversion functions inherently hold two reprs, so multirepr-within-one-function must be designed at-least-workable at activation (new Open item); (b) any future automatic conversions ride the language's general auto-conversion mechanisms (some repr pairs are near-free to swap), never repr-specific compiler insertion. Defaults-bind-at-runtime_fn-boundary accepted as "very typeclass-esque". The doc's RECOMMENDED items are now all decided; the Open list is reduced to the v1 charter plus the deferred design questions.
 - 2026-08-15: **v1 first-half round chartered** (§5.1 items 1–4; reprgen = second half) **and its verification probe fired the stop-condition.** Probes: (a) the class/instance sugar hosts the Repr record incl. theorem-valued fields, but §1.1's fold_law sketch had `adapt` on the recursor side — kernel-probed `NotConvertible`; corrected in the doc (adaptation runs spec-step→repr-ward only, `abs` at the child; naive stays `refl`). (b) The `plen`/`TksP<Nat>` decline (crates/elab/tests/certgen_tier1.rs) is genuinely name-availability-shaped — hand-monomorphized it generates today; the flip is deliverable. (c) REFUTED: `calc.hthr`'s `run` is not one decline away — four independent certgen widenings block it even hand-monomorphized (ledger now on [[certifying-generator]]'s status header). Re-charter: item 3 narrows to mint-the-name+embed and the fixture flip; the `run` acceptance is dropped from v1 (doc §5.1 item 3 as-landed note; docs/showcase/README.md `run` row corrected). Items 1, 2, 4 unaffected; round continuing.
 - 2026-08-15: **v1 first half implemented and green; the issue stays open for the second half and the runtime seam** (crates/elab/src/datarepr.rs + tests/datarepr.rs; narrative and all deviations in docs/datarepr-design.md's as-landed notes on §1.2, §1.4, §4, §5.1). Both `datarepr` forms, `repr::naive()`, `impl f for Rp`, the certgen minting flip (`plen`/`TksP<Nat>` emits, decline preserved unminted), and the `Bin` stretch with both Impl routes. Suite 1500 → 1521, bench clean. Spun off: [[theorem-field-projection-oom]], [[receiver-method-shadows-record-field]]; new Open item above on via-derived's availability (the §1.2 as-landed FINDING); nameable-names deviation logged on [[unnameable-generated-names]]. Second half (reprgen) is the next charter.
+- 2026-08-15: **v1 second half (reprgen) implemented and green; v1 is complete except the repr-typed-result transfer** (crates/elab/src/reprgen.rs + tests/reprgen.rs; narrative in docs/datarepr-design.md's as-landed notes on §1.2 restated, §3.1, §3.3, §5.1). Phases 0–4 emit derived bodies + closing induction + refines + the registering impl over both naive and Bin reprs, §3.5's mutation controls in place (forced emission at Bin deliberately, since the naive carrier is the spec type). Three §3.1 corrections found by the hand-run before code (the closing lemma is an induction, not conversion; explicit `j` motives where anti-unifying cong can't generalize inside the algebra; phases 0/1 interleave). Five named declines at §3.3, incl. the recursive-child-outside-self-call refusal that is invisible at naive and was a live bug at Bin. New Open items above: the repr-typed-result stage (with its previously-undescribed third lemma, `inv`-preservation of the fold) and callee-Impl resolution. Suite 1521 → 1531, bench clean.

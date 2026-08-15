@@ -79,6 +79,7 @@ pub mod gate;
 pub mod stats;
 mod code;
 mod datarepr;
+pub mod reprgen;
 mod names;
 mod patterns;
 mod forded;

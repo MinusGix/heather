@@ -12,6 +12,9 @@
 
 use heather_elab::Elaborator;
 
+mod support;
+use support::{BIN_ADD, BIN_REPR as BIN};
+
 fn ok(src: &str) -> Elaborator {
     let mut e = Elaborator::with_prelude().expect("prelude");
     if let Err(err) = e.elab_source(src) {
@@ -50,101 +53,6 @@ fn a_naive_repr_of_nat() {
 // not what should run — it converts to unary and back, which is §1.1's "the
 // fold need not be what runs" made visible.
 
-const BIN: &str = r#"
-inductive Bin { BNil, B0(b: Bin), B1(b: Bin) }
-
-fn double(n: Nat) -> Nat { match n { Zero => Zero, Succ(k) => Succ(Succ(double(k))) } }
-
-// Little-endian bits, least significant first. `B0(BNil)` and `BNil` both
-// denote zero: `abs` is not injective, and nothing requires it to be.
-fn bin_abs(r: Bin) -> Nat {
-    match r {
-        BNil => Zero,
-        B0(b) => double(bin_abs(b)),
-        B1(b) => Succ(double(bin_abs(b))),
-    }
-}
-
-fn bin_inv(r: Bin) -> Type { Zero = Zero }
-
-fn binc(r: Bin) -> Bin {
-    match r { BNil => B1(BNil), B0(b) => B1(b), B1(b) => B0(binc(b)) }
-}
-
-theorem cong_double({a: Nat}, {b: Nat}, p: a = b): double(a) = double(b) {
-    j(p, λ y q => double(a) = double(y), refl)
-}
-
-// The commutation law for `Succ`'s image. The carry case is the only one with
-// content: it is where `binc` recurses and where `double(Succ n)` has to
-// unfold on the other side.
-theorem bin_succ_abs(r: Bin): bin_abs(binc(r)) = Succ(bin_abs(r)) {
-    match r { BNil => refl, B0(b) => refl, B1(b) => cong_double(bin_succ_abs(b)) }
-}
-
-theorem bin_succ_abs_law(a0: Bin, h0: (Zero = Zero)):
-    bin_abs(binc(a0)) = Succ(bin_abs(a0)) { bin_succ_abs(a0) }
-
-// `Nat`'s recursor, by hand: `match` is a form and not a global, so the
-// anchor's statement needs a name. Definitionally the generated
-// `BinNat_spec_rec`, which is what lets the hand-written law below discharge
-// the generated obligation.
-fn nat_rec_(B: Type, z: B, s: (a: Nat) -> (b: B) -> B, x: Nat) -> B {
-    match x { Zero => z, Succ(k) => s(k)(nat_rec_(B, z, s, k)) }
-}
-
-fn bin_of_nat(n: Nat) -> Bin { match n { Zero => BNil, Succ(m) => binc(bin_of_nat(m)) } }
-
-theorem bin_roundtrip(m: Nat): bin_abs(bin_of_nat(m)) = m {
-    match m {
-        Zero => refl,
-        Succ(k) => trans(bin_succ_abs(bin_of_nat(k)), cong_succ(bin_roundtrip(k))),
-    }
-}
-
-// The anchor. Slow on purpose (§1.1): it goes through the spec value, which
-// is exactly what the cost basis exists to bypass.
-fn bin_fold(B: Type, s0: B, s1: (a0: Bin) -> (b0: B) -> B, r: Bin) -> B {
-    nat_rec_(B, s0, λ (m: Nat) => λ (b: B) => s1(bin_of_nat(m))(b), bin_abs(r))
-}
-
-theorem natrec_cong(B: Type, z: B, s1: (a: Nat) -> (b: B) -> B,
-                    s2: (a: Nat) -> (b: B) -> B,
-                    h: (a: Nat) -> (b: B) -> s1(a)(b) = s2(a)(b), n: Nat):
-    nat_rec_(B, z, s1, n) = nat_rec_(B, z, s2, n)
-{
-    match n {
-        Zero => refl,
-        Succ(k) => trans(
-            j(natrec_cong(B, z, s1, s2, h, k),
-              λ y q => s1(k)(nat_rec_(B, z, s1, k)) = s1(k)(y), refl),
-            h(k)(nat_rec_(B, z, s2, k))),
-    }
-}
-
-theorem bin_fold_law(B: Type, s0: B, s1: (a0: Nat) -> (b0: B) -> B, r: Bin,
-                     h: (Zero = Zero)):
-    bin_fold(B, s0, λ (a0: Bin) => λ (b0: B) => s1(bin_abs(a0))(b0), r)
-      = nat_rec_(B, s0, s1, bin_abs(r))
-{
-    natrec_cong(B, s0, λ (m: Nat) => λ (b: B) => s1(bin_abs(bin_of_nat(m)))(b), s1,
-                λ (a: Nat) => λ (b: B) =>
-                    j(bin_roundtrip(a),
-                      λ y q => s1(bin_abs(bin_of_nat(a)))(b) = s1(y)(b), refl),
-                bin_abs(r))
-}
-
-datarepr BinNat for Nat {
-    R := Bin,
-    abs := bin_abs,
-    inv := bin_inv,
-    mk Zero := BNil,
-    mk Succ := binc,
-    Succ_abs := bin_succ_abs_law,
-    fold := bin_fold,
-    fold_law := bin_fold_law,
-}
-"#;
 
 #[test]
 fn bin_is_a_repr_of_nat() {
@@ -294,38 +202,6 @@ theorem anchor(s0: Nat, s1: (a: Nat) -> (b: Nat) -> Nat, r: Bin):
 /// `bin_of_nat` round-trip at every step, and is certified *via-derived*: the
 /// bodies are proved equal and the derived certificate is taken by
 /// transitivity (§1.2).
-const BIN_ADD: &str = r#"
-fn add(a: Nat, b: Nat) -> Nat { match b { Zero => a, Succ(k) => Succ(add(a, k)) } }
-
-fn bin_add_derived(ra: Bin, rb: Bin) -> Bin {
-    bin_fold(Bin, ra, λ (t: Bin) => λ (acc: Bin) => binc(acc), rb)
-}
-
-// `binc` iterated `n` times commutes with `abs` into `add`. The only
-// induction the cost basis needs here.
-theorem bin_iter_abs(ra: Bin, n: Nat):
-    bin_abs(nat_rec_(Bin, ra, λ (a: Nat) => λ (b: Bin) => binc(b), n))
-      = add(bin_abs(ra), n)
-{
-    match n {
-        Zero => refl,
-        Succ(k) => trans(
-            bin_succ_abs(nat_rec_(Bin, ra, λ (a: Nat) => λ (b: Bin) => binc(b), k)),
-            cong_succ(bin_iter_abs(ra, k))),
-    }
-}
-
-theorem bin_add_derived_refines(ra: Bin, rb: Bin, h0: (Zero = Zero), h1: (Zero = Zero)):
-    bin_abs(bin_add_derived(ra, rb)) = add(bin_abs(ra), bin_abs(rb))
-{ bin_iter_abs(ra, bin_abs(rb)) }
-
-theorem bin_add_derived_inv(ra: Bin, rb: Bin, h0: (Zero = Zero), h1: (Zero = Zero)):
-    bin_inv(bin_add_derived(ra, rb)) { refl }
-
-theorem cong_bin_abs({a: Bin}, {b: Bin}, p: a = b): bin_abs(a) = bin_abs(b) {
-    j(p, λ y q => bin_abs(a) = bin_abs(y), refl)
-}
-"#;
 
 const DERIVED_IMPL: &str = r#"
 impl add for BinNat {

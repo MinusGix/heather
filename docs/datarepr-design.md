@@ -180,13 +180,30 @@ The `refines` statement, precisely, for `f : X1 -> … -> Xn -> Y`:
   `True`).
 
 **Via-derived is first-class**: a custom `Impl` may discharge `refines` by
-proving same-domain equivalence to the correctness-derived implementation —
-`∀ x̄, inv → body(x̄) = f_derived(x̄)` — and taking the derived
-certificate by transitivity. The derived body plays exactly certgen's
-hand-run role: the thing you diff a clever implementation against. This is
-expected to be the *normal* proof route for hand overrides (binary search
-vs. linear member, §6.3), because equivalence of two concrete recursions is
-usually a friendlier induction than re-proving refinement from scratch.
+relating its body to the correctness-derived implementation and taking the
+derived certificate by transitivity. The obligation is the **weak, abs-image
+form** (settled 2026-08-15, resolving the first-half FINDING):
+
+> `∀ x̄, inv(x̄) → abs(body(x̄)) = abs(f_derived(x̄))`, plus `inv(body(x̄))`
+> at a repr-typed result.
+
+Weak because refinement is a statement about *spec* values: two
+implementations that agree under `abs` refine the same `f`, whether or not
+they agree at the carrier. Carrier equality — `body(x̄) = f_derived(x̄)` —
+is **not a second route**: it discharges this same obligation by one `ap abs`
+congruence step, so nothing dispatches on which one a writer proves, and the
+strongest available proof is simply the shortest. What makes carrier equality
+*available* is a **canonical-form `inv`**: a repr whose invariant forbids
+redundant representations (`Bin` ruling out leading zeros) has `abs` injective
+on `inv`-satisfying values, and there the two statements coincide. That is the
+repr author's opt-in, priced against the maintenance burden every `Impl` then
+carries, and it is why `inv` is the right place for it rather than the route.
+
+The derived body plays exactly certgen's hand-run role: the thing you diff a
+clever implementation against. This remains the expected *normal* route for
+hand overrides (binary search vs. linear member, §6.3) — under the weak form
+it is available unconditionally, which is what the first half's `Bin`
+counterexample showed the strong form was not.
 
 **As-landed (v1 first half, 2026-08-15), amending §1.2.**
 
@@ -200,19 +217,13 @@ usually a friendlier induction than re-proving refinement from scratch.
   time. The repr half is already declaration-keyed through the repr itself,
   so the weaker half is the operation's, and it is the half a later round can
   strengthen without moving anything else.
-- **FINDING (new): via-derived is not always available, and §1.2 overstates
-  it.** "Expected to be the *normal* proof route" holds only when `abs` is
-  injective on `inv`-satisfying values. Via-derived proves `body(x̄) =
-  f_derived(x̄)` **at the carrier**, which is strictly stronger than
-  refinement: on `Bin` the leading-zero representations make `B0(BNil)` and
-  `BNil` distinct carrier values with equal `abs`, so two implementations can
-  both refine `f` and *not* be equal. The v1 stretch's via-derived `add` is
-  therefore a body that is genuinely equal to the derived one (it drops the
-  anchor's `bin_of_nat` round-trip, a real cost win, and nothing else); a
-  clever implementation that merely *agrees under `abs`* has to prove
-  refinement directly, or prove `abs(body) = abs(derived)` and chain that.
-  The design should say which of those two it means before reprgen leans on
-  the route.
+- The first half's FINDING — via-derived at the *carrier* is unavailable
+  wherever `abs` is non-injective, `Bin`'s leading zeros being the
+  counterexample — is **resolved into the paragraph above**: the obligation is
+  the weak abs-image form, carrier equality is its strongest discharge rather
+  than a rival, and canonical-form `inv` is the opt-in that makes the two
+  coincide. The landed `Bin` `add` proves carrier equality and so is already
+  in the resolved shape; it is one `ap abs` step from the official statement.
 
 ### 1.3 FINDING 1: constructor images are operations, not axioms
 
@@ -589,6 +600,38 @@ checked by the full pipeline exactly as handwritten code, appended to the
 library like certgen emissions. The trust story and the debugging story
 ("read the file it wrote") carry over unchanged.
 
+**As-landed (v1 second half, 2026-08-15), amending §3.1.** Implemented in
+`crates/elab/src/reprgen.rs`; acceptance in `crates/elab/tests/reprgen.rs`.
+Three corrections, all found by the hand-run before any code:
+
+1. **Phase 4 is not only a fold over laws — it must emit an induction.** The
+   spec function does *not* definitionally equal its own recursor unfolding:
+   `f` and the generated `N_spec_rec` are two recursive globals with the same
+   arms, and conversion cannot relate them. So every transfer carries a
+   `f_is_rec` lemma proved by structural induction, and `refines` is
+   `trans(fold_law(…), f_is_rec(abs(r)))`. §1.1's transfer theorem is right
+   that the certificate is schematic; what it elides is that the schema
+   contains an induction, not just congruences over laws.
+2. **The congruence steps must be explicit `j` motives.** The prelude's
+   anti-unifying `cong` cannot solve for its function here: the two sides
+   differ *inside the recursor's own algebra arguments*, so the least general
+   generalization is not the recursive occurrence
+   (`issues/congruence-by-anti-unification.md` §3, kernel-confirmed). The
+   generator emits `j(ih, λ y q => lhs = motive, refl)` per recursive
+   occurrence, chained by `trans` when an arm has more than one.
+3. **Phases 0 and 1 interleave.** §3.1 orders resolution before eligibility,
+   but the callee set is only known once the arms are decomposed, so the
+   implementation runs the fragment check first and scans callees against the
+   registry after. The ordering is observable only in which reason a doubly
+   ineligible declaration reports.
+
+Not done, deliberately: §3.1 phase 4's "small expression datatype … worth
+putting in a perturbable library file early". At this fragment the schema is
+*two* lemma shapes, not a tree of law choices, so the datatype would be
+scaffolding with no customer until callee-`Impl` resolution and the outcome
+path give it branches. The mutation controls it was wanted for are in place
+without it (§3.5).
+
 ### 3.2 What it consumes
 
 The fold anchor + image laws (correctness basis) of every repr in play;
@@ -638,6 +681,45 @@ via-derived certificate over a *wrong* equivalence refused; the
 always-`Err` mutation of §2.5(4) refused by an exactness fixture (not by
 the weak certificate — that asymmetry is the control's point); a forced
 emission outside the fragment failing to check.
+
+**As-landed (v1 second half, 2026-08-15), amending §3.3.** The boundary as
+implemented, each decline naming its reason:
+
+- **A repr-typed result is deferred.** When `f` returns `S`, the fold's
+  algebra lives at the *carrier*, so the closing lemma is no longer "the spec
+  fn equals its recursor unfolding" but "`abs` pushed through the algebra",
+  an induction that chains the image commutation laws. The route is real and
+  composes — `hand_run_a_derived_impl_at_bin_where_the_result_is_the_spec_type`
+  in the test file is that emission written by hand, and it is the
+  specification for the round that automates it. Nothing *parallel* is needed
+  — it is the same phases — but it is a stage rather than a tweak, and the
+  size is worth recording: it needs a second closing-lemma shape (`abs`
+  pushed through the image spine, one commutation law per constructor node,
+  with a `j` chain over the argument positions), a generated `abs`
+  congruence per repr, and — the part no section currently describes — a
+  **third** lemma, `inv`-preservation of the fold, because every commutation
+  law demands `inv` at its recursive arguments and the fold's accumulator is
+  only known to satisfy it by induction. At `inv = True` that third lemma is
+  `refl`, which is exactly why the hand-run does not show it; at the first
+  canonical-form invariant it is real. Cost of the deferral, stated plainly:
+  at `Bin` (a repr of `Nat`) almost every interesting operation returns
+  `Nat`, so this is what keeps arithmetic out of reprgen's reach for now.
+- **One parameter at `S`.** A second one would have to be adapted through
+  `abs` inside the algebra, which the fold's adaptation does not do.
+- **A recursive child may only be reached through a self-call.** It is at the
+  carrier on the repr side and at `S` on the spec side, so any other use puts
+  a carrier value where the spec body has a spec value — invisible at the
+  naive repr, wrong at every other, and therefore refused at both.
+- **A callee that touches `S`** needs its own `Impl`'s `refines` to close the
+  step; resolving those against the registry is the stage after this one
+  (§3.1 phase 0's other half).
+- The match must be **total and in declaration order**, with all fields bound
+  and no default arm — an honest syntactic predicate, so it declines rather
+  than expanding.
+
+Non-structural recursion never reaches the generator: the language's own
+termination check refuses it first, which is why §3.3's first decline has no
+fixture of its own.
 
 ## 4. Instance keying
 
@@ -741,6 +823,18 @@ purpose, a `fold_law` that is a real induction over the round-trip lemma
 out of `fold_law`, and a via-derived one whose custom body drops the anchor's
 per-step `bin_of_nat`. See the FINDING on §1.2 about when via-derived is
 available at all.
+
+**As-landed (v1 second half, 2026-08-15).** Item 5 (reprgen) is in at the
+byte-free scope: phases 0–4 over the fragment §3.3's as-landed note describes,
+emitting a derived body, its closing induction, its `refines` and the `impl`
+that registers it, all checked by the ordinary pipeline. §3.5's controls are
+in place as text mutations of a green emission (perturbed algebra step,
+perturbed base value, a closing lemma over the wrong statement, a forced
+emission outside the fragment) — the forced-emission control runs at `Bin`
+rather than at the naive repr on purpose, since the naive carrier *is* the
+spec type and a body outside the fragment can still happen to check there.
+v1 is therefore complete except for the repr-typed-result transfer, which is
+hand-run and specified but not automated.
 
 ### 5.2 v2+ — bytes (trigger: the first native-lowering / platform-model round)
 

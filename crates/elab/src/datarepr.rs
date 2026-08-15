@@ -17,6 +17,7 @@
 //! see the note in `elab_datarepr`.
 
 use std::collections::HashMap;
+use std::rc::Rc;
 
 use heather_syntax::{parse_file, DatareprBody, DatareprDecl, DatareprField, Expr, ExprKind, Item, Span, Ty, TyKind};
 
@@ -38,6 +39,9 @@ pub(crate) struct DatareprInfo {
     pub carrier: String,
     /// The generated record, whose namespace holds `abs` and `inv`.
     pub record: String,
+    /// The spec constructors at this instantiation — the shape the transfer
+    /// generator reads its algebra off.
+    pub ctors: Rc<Vec<CtorView>>,
 }
 
 /// `(spec declaration identity, instantiation arguments)`. The tag is `None`
@@ -47,20 +51,20 @@ pub(crate) type DatareprKey = (Option<u32>, String);
 // -- the spec inductive, as everything downstream needs to SPELL it ----------
 
 /// One constructor field at the instantiation.
-struct FieldView {
+pub(crate) struct FieldView {
     /// The binder the generated source uses for this field.
-    binder: String,
+    pub binder: String,
     /// A recursive position — the spec type itself. This is the only place
     /// `S ↦ R` applies (v1 rule, §1.2: *all* occurrences, no per-position
     /// mixing), and the only place `abs` is inserted by the adaptation.
-    rec: bool,
+    pub rec: bool,
     /// The field's type at the instantiation, spelled at the SPEC side.
-    spell: String,
+    pub spell: String,
 }
 
-struct CtorView {
-    name: String,
-    fields: Vec<FieldView>,
+pub(crate) struct CtorView {
+    pub name: String,
+    pub fields: Vec<FieldView>,
 }
 
 /// The spec side of a `datarepr`, resolved and spelled.
@@ -216,7 +220,7 @@ impl Elaborator {
     /// declaration's qualifier has to name a type in scope and `N` names the
     /// assembled value.
     pub(crate) fn elab_datarepr(&mut self, d: &DatareprDecl) -> R<()> {
-        let spec = self.spec_view(&d.spec, d.spec.span)?;
+        let mut spec = self.spec_view(&d.spec, d.spec.span)?;
         if let Some(prev) = self.datareprs.get(&spec.key) {
             return err(
                 format!(
@@ -238,6 +242,7 @@ impl Elaborator {
             written: spec.spell.clone(),
             carrier: clauses.carrier.clone(),
             record: record_name(&d.name),
+            ctors: Rc::new(std::mem::take(&mut spec.ctors)),
         };
         self.datareprs.insert(
             spec.key.clone(),
@@ -487,7 +492,7 @@ fn is_naive_call(e: &Expr) -> bool {
 /// `_`, which here would parse back as a *hole* and could be silently
 /// inferred into something the user never wrote. Every shape this does not
 /// spell is a decline instead.
-fn spell_expr(e: &Expr) -> Option<String> {
+pub(crate) fn spell_expr(e: &Expr) -> Option<String> {
     Some(match &e.kind {
         ExprKind::Var(n) => n.clone(),
         ExprKind::Num(n) => n.to_string(),
@@ -511,16 +516,16 @@ fn spell_expr(e: &Expr) -> Option<String> {
 
 // -- spelling the generated source ------------------------------------------
 
-fn spec_rec_name(name: &str) -> String {
+pub(crate) fn spec_rec_name(name: &str) -> String {
     format!("{name}_spec_rec")
 }
 
-fn record_name(name: &str) -> String {
+pub(crate) fn record_name(name: &str) -> String {
     format!("Repr_{name}")
 }
 
 /// `λ (x: T) => λ (y: U) => body`, or `body` when there are no binders.
-fn lams(bs: &[(String, String)], body: &str) -> String {
+pub(crate) fn lams(bs: &[(String, String)], body: &str) -> String {
     let mut s = String::new();
     for (n, t) in bs {
         s.push_str(&format!("\u{3bb} ({n}: {t}) => "));
@@ -530,7 +535,7 @@ fn lams(bs: &[(String, String)], body: &str) -> String {
 }
 
 /// `(x: T) -> (y: U) -> cod`.
-fn pis(bs: &[(String, String)], cod: &str) -> String {
+pub(crate) fn pis(bs: &[(String, String)], cod: &str) -> String {
     let mut s = String::new();
     for (n, t) in bs {
         s.push_str(&format!("({n}: {t}) -> "));
@@ -541,7 +546,7 @@ fn pis(bs: &[(String, String)], cod: &str) -> String {
 
 /// `f(a)(b)` — curried application, the shape every function-typed *field* of
 /// the record has (§1.1 writes them curried).
-fn appc(head: &str, args: &[String]) -> String {
+pub(crate) fn appc(head: &str, args: &[String]) -> String {
     let mut s = head.to_string();
     for a in args {
         s.push_str(&format!("({a})"));
