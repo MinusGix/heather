@@ -112,3 +112,7 @@ round (the impl-declaration surface), the highest-value. Item 4 is a
 small self-contained round with a test-coverage bonus. Items 3 and 5 are
 design calls to settle inside whichever round touches them first. Item 6
 is meta-layer roadmap pressure, not a datarepr round.
+
+## Log
+
+- 2026-08-15: User verdicts (2026-08-15): finding 0 RATIFIED incl. docs ([[idiomatic-spelling-pass]]); item 1 discussion open — 'derived feels a bit mystical', autoderive-by-default and repr-generator-owned-vs-caller-owned to settle ([[impl-declaration-surface]], the anchor); item 2 RATIFIED, inline expressions regardless + first-class conceptualization (same anchor); item 3 delegated to coordinator recommendation ([[true-prop-trivial-hypotheses]]); item 4 RATIFIED ([[repr-fold-via-abs-default]]); item 5 confirmed wanted ([[repr-access-spellings]]); item 6 confirmed — file wanted-tactic issues ([[calc-equational-chains]], [[proof-scale-abbreviations]]). This issue is now an index over those; the impl-declaration discussion continues on its anchor.
