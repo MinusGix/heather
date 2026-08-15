@@ -27,3 +27,7 @@ trivial-`inv` reprs spell `inv` as `Zero = Zero`, so every generated
    whose type is definitionally `True` / has a registered canonical
    inhabitant) as a general ergonomic feature, not a datarepr special
    case.
+
+## Log
+
+- 2026-08-15: User ratified both halves (2026-08-15): a real True is valuable; general auto-discharge is wanted as a feature in its own right. The recommendation stands as the plan: uniform registry statement, True now, auto-discharge as a general elaborator feature later.
