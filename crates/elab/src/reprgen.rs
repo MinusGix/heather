@@ -15,6 +15,14 @@
 //! induction have to be explicit `j` motives, because the prelude's
 //! anti-unifying `cong` cannot generalize two sides that differ inside the
 //! recursor's own algebra arguments.
+//!
+//! There are **two** closing-lemma shapes, chosen by the result type. When the
+//! result is the repr'd type the fold's algebra lives at the carrier, so there
+//! is no "the spec fn equals its recursor unfolding" to state — the recursor's
+//! result is a repr value. The lemma is `abs` pushed through the image spine
+//! instead, and it costs a third lemma: every commutation law demands `inv` at
+//! its recursive arguments, and the fold's accumulator satisfies `inv` only by
+//! an induction of its own (§3.3's second as-landed note).
 
 use std::collections::HashMap;
 
@@ -40,6 +48,28 @@ struct Arm<'a> {
     binders: Vec<String>,
     /// The arm's body.
     body: &'a Expr,
+    /// At a **repr-typed result** only: the body read as an image spine, which
+    /// is what both extra lemmas recurse over. `None` when the result is not
+    /// repr-typed, where the body is spelled directly instead.
+    spine: Option<Spine>,
+}
+
+/// An arm body whose value is at the repr'd type: a spine of `S`-constructor
+/// nodes whose recursive positions bottom out in the recursion's own results.
+/// The repr side reads it with the constructor *images* and the accumulator;
+/// the spec side reads it with the constructors and the spec function; the two
+/// closing lemmas walk it in step.
+enum Spine {
+    /// The result of the recursion on this child — the fold's accumulator.
+    Acc(String),
+    /// `C(…)`, at `ctors[i]`.
+    Node(usize, Vec<SArg>),
+}
+
+enum SArg {
+    /// A non-recursive field, spelled once and identical on both sides.
+    NonRec(String),
+    Rec(Spine),
 }
 
 /// A self-call occurrence inside an arm body: the recursive child it
@@ -56,8 +86,13 @@ struct Fragment<'a> {
     rec_param: String,
     /// The other parameters, `(name, spelled type)`, none of them at `S`.
     others: Vec<(String, String)>,
-    /// The result type, spelled. Never `S` this round — see the as-landed
-    /// note on §3.3.
+    /// *All* parameters in declaration order, the recursion one spelled at
+    /// `S`. Calls to `f` are built from this and not from `others + rec`: the
+    /// `S` parameter need not be the last one, and the `Impl` record restates
+    /// the signature in declaration order.
+    params: Vec<(String, String)>,
+    /// The result type, spelled. `S` itself is the repr-typed-result case,
+    /// which takes the second closing-lemma shape (§3.3, as-landed).
     result: String,
     arms: Vec<Arm<'a>>,
 }
@@ -121,7 +156,13 @@ impl Elaborator {
         let sr = spec_rec_name(repr);
         let abs = format!("{rec}::abs()");
         let inv = format!("{rec}::inv()");
-        let b = &frag.result;
+        // The result at `S` is the repr-typed case: the fold's algebra lives at
+        // the *carrier*, so `B` is the carrier and the closing lemma is `abs`
+        // pushed through the image spine rather than the spec fn's recursor
+        // unfolding (§3.3, as-landed).
+        let res_is_spec = frag.result == *s;
+        let b = if res_is_spec { c.clone() } else { frag.result.clone() };
+        let b = &b;
 
         let mut steps: Vec<String> = Vec::new();
         let mut spec_steps_v: Vec<String> = Vec::new();
@@ -151,21 +192,28 @@ impl Elaborator {
                 bs.push((format!("b{k}"), b.clone()));
                 sbs.push((format!("b{k}"), b.clone()));
             }
-            let mut sub: HashMap<usize, String> = HashMap::new();
-            for (n, sc) in occ.iter().enumerate() {
-                let k = recs
-                    .iter()
-                    .position(|r| *r == sc.child)
-                    .expect("checked in `fragment`");
-                sub.insert(n, format!("b{k}"));
-            }
-            let Some(body) = spell_with(arm.body, op, &sub) else {
-                return Err(format!(
-                    "`{op}`'s `{}` arm is not a shape this round can spell: an arm is an \
-                     application over its binders, the other parameters, self-calls on a \
-                     recursive child, and globals that do not touch `{s}`",
-                    arm.ctor.name
-                ));
+            let slot = |child: &str| {
+                let k = recs.iter().position(|r| *r == child).expect("checked in `fragment`");
+                format!("b{k}")
+            };
+            let body = if let Some(sp) = &arm.spine {
+                // The repr side of the spine: constructor images, and the
+                // accumulator where the recursion's result belongs.
+                Spelling { ctors: rp.ctors.as_slice(), rec, abs: &abs, acc: &slot }.repr(sp)
+            } else {
+                let mut sub: HashMap<usize, String> = HashMap::new();
+                for (n, sc) in occ.iter().enumerate() {
+                    sub.insert(n, slot(&sc.child));
+                }
+                let Some(body) = spell_with(arm.body, op, &sub) else {
+                    return Err(format!(
+                        "`{op}`'s `{}` arm is not a shape this round can spell: an arm is an \
+                         application over its binders, the other parameters, self-calls on a \
+                         recursive child, and globals that do not touch `{s}`",
+                        arm.ctor.name
+                    ));
+                };
+                body
             };
             steps.push(lams(&bs, &body));
             // The SPEC-side algebra: the same body, with the recursive fields
@@ -180,19 +228,28 @@ impl Elaborator {
         let spec_steps = &spec_steps_v;
 
         // -- phase 3: obligation synthesis (§1.2's schema) -----------------
-        let mut params: Vec<(String, String)> = frag
-            .others
+        //
+        // The signature restated with `S ↦ R`, in declaration order — the same
+        // order the `Impl` record restates it in.
+        let params: Vec<(String, String)> = frag
+            .params
             .iter()
-            .cloned()
+            .map(|(n, t)| {
+                (n.clone(), if *n == frag.rec_param { c.clone() } else { t.clone() })
+            })
             .collect();
-        params.push((frag.rec_param.clone(), c.clone()));
         let derived = format!("{op}_derived");
         let arglist: Vec<String> = params.iter().map(|(n, _)| n.clone()).collect();
-        let spec_call = {
-            let mut a: Vec<String> = frag.others.iter().map(|(n, _)| n.clone()).collect();
-            a.push(appc(&abs, &[frag.rec_param.clone()]));
+        // A call to `f` itself, with `x` at the recursion parameter's position.
+        let plain_call = |x: &str| {
+            let a: Vec<String> = frag
+                .params
+                .iter()
+                .map(|(n, _)| if *n == frag.rec_param { x.to_string() } else { n.clone() })
+                .collect();
             format!("{op}({})", a.join(", "))
         };
+        let spec_call = plain_call(&appc(&abs, &[frag.rec_param.clone()]));
         let mut law_binders = params.clone();
         law_binders.push(("h0".to_string(), appc(&inv, &[frag.rec_param.clone()])));
 
@@ -204,14 +261,10 @@ impl Elaborator {
         out.push_str(&format!(
             "fn {derived}({}) -> {} {{\n    {}\n}}\n\n",
             params.iter().map(|(n, t)| format!("{n}: {t}")).collect::<Vec<_>>().join(", "),
-            frag.result,
+            if res_is_spec { c } else { &frag.result },
             appc(&format!("{rec}::fold()"), &fargs)
         ));
 
-        // The lemma §3.1 phase 4 did not name: the spec function agrees with
-        // its own recursor unfolding. An induction, one arm at a time, each
-        // recursive occurrence rewritten by an explicit `j` motive.
-        let is_rec = format!("{op}_is_rec");
         let mut rec_args = vec![b.clone()];
         rec_args.extend(spec_steps.iter().cloned());
         let spec_rec_at = |x: &str| {
@@ -219,54 +272,148 @@ impl Elaborator {
             a.push(x.to_string());
             format!("{sr}({})", a.join(", "))
         };
+        // Every closing lemma quantifies over the non-recursion parameters and
+        // the spec value it inducts on.
         let mut lem_params: Vec<(String, String)> = frag.others.clone();
         lem_params.push(("x".to_string(), s.clone()));
-        let lem_call = |x: &str| {
+        let lem_params_src =
+            lem_params.iter().map(|(n, t)| format!("{n}: {t}")).collect::<Vec<_>>().join(", ");
+        let lem_at = |name: &str, x: &str| {
             let mut a: Vec<String> = frag.others.iter().map(|(n, _)| n.clone()).collect();
             a.push(x.to_string());
-            format!("{is_rec}({})", a.join(", "))
+            format!("{name}({})", a.join(", "))
         };
-        let plain_call = |x: &str| {
-            let mut a: Vec<String> = frag.others.iter().map(|(n, _)| n.clone()).collect();
-            a.push(x.to_string());
-            format!("{op}({})", a.join(", "))
-        };
-        let mut arms_src = String::new();
-        for arm in &frag.arms {
-            let pat = if arm.binders.is_empty() {
+        let pat_of = |arm: &Arm<'_>| {
+            if arm.binders.is_empty() {
                 arm.ctor.name.clone()
             } else {
                 format!("{}({})", arm.ctor.name, arm.binders.join(", "))
-            };
-            let occ = self_calls(arm.body, op);
-            let proof = arm_proof(arm, op, &occ, &spec_rec_at, &lem_call, &plain_call)
-                .ok_or_else(|| {
-                    format!("`{op}`'s `{}` arm is not a shape this round can spell", arm.ctor.name)
-                })?;
-            arms_src.push_str(&format!("        {pat} => {proof},\n"));
-        }
-        out.push_str(&format!(
-            "theorem {is_rec}({}): {} = {} {{\n    match x {{\n{arms_src}    }}\n}}\n\n",
-            lem_params.iter().map(|(n, t)| format!("{n}: {t}")).collect::<Vec<_>>().join(", "),
-            spec_rec_at("x"),
-            plain_call("x")
-        ));
-
-        // `fold_law` opens the anchor, the lemma closes it.
+            }
+        };
+        // The anchor law at this transfer, which both routes open with.
         let mut fl_args = vec![b.clone()];
         fl_args.extend(spec_steps.iter().cloned());
         fl_args.push(frag.rec_param.clone());
         fl_args.push("h0".to_string());
+        let fold_law = appc(&format!("{rec}::fold_law()"), &fl_args);
+        let law_binders_src =
+            law_binders.iter().map(|(n, t)| format!("{n}: {t}")).collect::<Vec<_>>().join(", ");
         let refines = format!("{op}_derived_refines");
+
+        if !res_is_spec {
+            // The lemma §3.1 phase 4 did not name: the spec function agrees
+            // with its own recursor unfolding. An induction, one arm at a
+            // time, each recursive occurrence rewritten by an explicit `j`
+            // motive.
+            let is_rec = format!("{op}_is_rec");
+            let lem_call = |x: &str| lem_at(&is_rec, x);
+            let mut arms_src = String::new();
+            for arm in &frag.arms {
+                let occ = self_calls(arm.body, op);
+                let proof = arm_proof(arm, op, &occ, &spec_rec_at, &lem_call, &plain_call)
+                    .ok_or_else(|| {
+                        format!(
+                            "`{op}`'s `{}` arm is not a shape this round can spell",
+                            arm.ctor.name
+                        )
+                    })?;
+                arms_src.push_str(&format!("        {} => {proof},\n", pat_of(arm)));
+            }
+            out.push_str(&format!(
+                "theorem {is_rec}({lem_params_src}): {} = {} {{\n    match x {{\n{arms_src}    }}\n}}\n\n",
+                spec_rec_at("x"),
+                plain_call("x")
+            ));
+
+            // `fold_law` opens the anchor, the lemma closes it.
+            out.push_str(&format!(
+                "theorem {refines}({law_binders_src}):\n    {} = {spec_call}\n{{\n    trans({fold_law},\n          {})\n}}\n\n",
+                appc(&derived, &arglist),
+                lem_call(&appc(&abs, &[frag.rec_param.clone()]))
+            ));
+            out.push_str(&format!(
+                "impl {op} for {repr} {{\n    body := {derived},\n    refines := {refines},\n}}\n"
+            ));
+            return Ok(ReprEmission { op: op.to_string(), repr: repr.to_string(), text: out });
+        }
+
+        // -- the repr-typed result (§3.3, as-landed) ----------------------
+        //
+        // The fold's algebra is at the carrier, so there is no "the spec fn
+        // equals its recursor unfolding" to state: the recursor's result is a
+        // *repr* value. The closing lemma is `abs` pushed through the image
+        // spine instead, and it needs `inv` at every recursive argument of
+        // every commutation law — which the accumulator satisfies only by an
+        // induction of its own. Three lemmas, in dependency order.
+        let inv_pres = format!("{op}_inv_pres");
+        let abs_alg = format!("{op}_abs_alg");
+        let acc_repr = |child: &str| spec_rec_at(child);
+        let sp_ctx =
+            Spelling { ctors: rp.ctors.as_slice(), rec, abs: &abs, acc: &acc_repr };
+        let acc_inv = |child: &str| lem_at(&inv_pres, child);
+        let acc_abs = |child: &str| lem_at(&abs_alg, child);
+
+        // Third lemma: the fold's accumulator satisfies `inv`. At `inv = True`
+        // every arm is an image closure law applied to `refl`s and the lemma
+        // says nothing; at a canonical-form `inv` it is what the commutation
+        // laws below are paid with.
+        let mut arms_src = String::new();
+        for arm in &frag.arms {
+            let sp = arm.spine.as_ref().expect("a repr-typed result has a spine");
+            arms_src.push_str(&format!(
+                "        {} => {},\n",
+                pat_of(arm),
+                sp_ctx.inv_proof(sp, &acc_inv)
+            ));
+        }
         out.push_str(&format!(
-            "theorem {refines}({}):\n    {} = {spec_call}\n{{\n    trans({},\n          {})\n}}\n\n",
-            law_binders.iter().map(|(n, t)| format!("{n}: {t}")).collect::<Vec<_>>().join(", "),
-            appc(&derived, &arglist),
-            appc(&format!("{rec}::fold_law()"), &fl_args),
-            lem_call(&appc(&abs, &[frag.rec_param.clone()]))
+            "theorem {inv_pres}({lem_params_src}): {} {{\n    match x {{\n{arms_src}    }}\n}}\n\n",
+            appc(&inv, &[spec_rec_at("x")])
+        ));
+
+        // Second closing-lemma shape: one commutation law per constructor
+        // node, a `j` chain over the recursive argument positions.
+        let mut arms_src = String::new();
+        for arm in &frag.arms {
+            let sp = arm.spine.as_ref().expect("a repr-typed result has a spine");
+            arms_src.push_str(&format!(
+                "        {} => {},\n",
+                pat_of(arm),
+                sp_ctx.abs_proof(sp, &acc_inv, &acc_abs, &plain_call)
+            ));
+        }
+        out.push_str(&format!(
+            "theorem {abs_alg}({lem_params_src}): {} = {} {{\n    match x {{\n{arms_src}    }}\n}}\n\n",
+            appc(&abs, &[spec_rec_at("x")]),
+            plain_call("x")
+        ));
+
+        // `refines` at a repr-typed result is `abs(body(x̄)) = f(⟦x̄⟧)`
+        // (§1.2). The congruence that carries `abs` over the anchor law is an
+        // explicit `j` motive, for §3.1 correction 2's reason.
+        let derived_call = appc(&derived, &arglist);
+        out.push_str(&format!(
+            "theorem {refines}({law_binders_src}):\n    {} = {spec_call}\n{{\n    \
+             trans(j({fold_law},\n            \u{3bb} y q => {} = {}, refl),\n          {})\n}}\n\n",
+            appc(&abs, &[derived_call.clone()]),
+            appc(&abs, &[derived_call.clone()]),
+            appc(&abs, &["y".to_string()]),
+            lem_at(&abs_alg, &appc(&abs, &[frag.rec_param.clone()]))
+        ));
+        // …and the second half of §1.2's conclusion: an implementation that
+        // *builds* a repr owes `inv` of what it built. The anchor law carries
+        // the third lemma back across it.
+        let refines_inv = format!("{op}_derived_inv");
+        out.push_str(&format!(
+            "theorem {refines_inv}({law_binders_src}):\n    {}\n{{\n    \
+             j(sym({fold_law}),\n      \u{3bb} y q => {}, {})\n}}\n\n",
+            appc(&inv, &[derived_call]),
+            appc(&inv, &["y".to_string()]),
+            lem_at(&inv_pres, &appc(&abs, &[frag.rec_param.clone()]))
         ));
         out.push_str(&format!(
-            "impl {op} for {repr} {{\n    body := {derived},\n    refines := {refines},\n}}\n"
+            "impl {op} for {repr} {{\n    body := {derived},\n    refines := {refines},\n    \
+             refines_inv := {refines_inv},\n}}\n"
         ));
         Ok(ReprEmission { op: op.to_string(), repr: repr.to_string(), text: out })
     }
@@ -283,19 +430,15 @@ impl Elaborator {
         let Some(result) = spell_ty(&f.result) else {
             return Err(format!("`{op}`'s result type cannot be spelled"));
         };
-        if result == s {
-            return Err(format!(
-                "`{op}` returns `{s}`, the repr'd type: a transfer whose result is \
-                 repr-typed needs the image-law chain in its closing lemma, which is \
-                 deferred (docs/datarepr-design.md §3.3, as-landed)"
-            ));
-        }
+        let res_is_spec = result == s;
         let mut rec_param = None;
         let mut others = Vec::new();
+        let mut params = Vec::new();
         for p in &f.params {
             let Some(t) = spell_ty(&p.ty) else {
                 return Err(format!("`{op}`'s parameter `{}` has an unspellable type", p.name));
             };
+            params.push((p.name.clone(), t.clone()));
             if t == s {
                 if rec_param.is_some() {
                     return Err(format!(
@@ -387,9 +530,24 @@ impl Elaborator {
                     ));
                 }
             }
-            out.push(Arm { ctor, binders, body });
+            // At a repr-typed result the arm's *value* is at `S`, and the two
+            // closing lemmas walk it as an image spine: constructor nodes down
+            // to the recursion's own results. Anything else — a global
+            // returning `S`, a bare binder — is outside the fragment.
+            let spine = if res_is_spec {
+                Some(spine_of(body, op, ctors).ok_or_else(|| {
+                    format!(
+                        "`{op}`'s `{name}` arm is not an image spine: with the result at \
+                         `{s}` an arm is `{s}`'s constructors applied down to self-calls on \
+                         a recursive child (docs/datarepr-design.md §3.3, as-landed)"
+                    )
+                })?)
+            } else {
+                None
+            };
+            out.push(Arm { ctor, binders, body, spine });
         }
-        Ok(Fragment { rec_param, others, result, arms: out })
+        Ok(Fragment { rec_param, others, params, result, arms: out })
     }
 }
 
@@ -491,6 +649,177 @@ fn spell_go(
         ExprKind::Dot { recv, name, .. } => format!("{}.{name}", spell_go(recv, op, sub, n)?),
         _ => return None,
     })
+}
+
+/// Read an arm body as an image spine, or decline. Only reachable at a
+/// repr-typed result, where the arm's value is a constructor of `S`.
+fn spine_of(e: &Expr, op: &str, ctors: &[CtorView]) -> Option<Spine> {
+    match &e.kind {
+        // A constructor with no fields is a bare name, not an application.
+        ExprKind::Var(v) => {
+            let i = ctors.iter().position(|c| c.name == *v && c.fields.is_empty())?;
+            Some(Spine::Node(i, Vec::new()))
+        }
+        ExprKind::App { head, args, .. } => {
+            let ExprKind::Var(h) = &head.kind else { return None };
+            if h == op {
+                // The recursion's result on this child — the accumulator.
+                let ExprKind::Var(v) = &args.last()?.kind else { return None };
+                return Some(Spine::Acc(v.clone()));
+            }
+            let i = ctors.iter().position(|c| c.name == *h)?;
+            if ctors[i].fields.len() != args.len() {
+                return None;
+            }
+            let mut out = Vec::new();
+            for (fld, a) in ctors[i].fields.iter().zip(args) {
+                out.push(if fld.rec {
+                    SArg::Rec(spine_of(a, op, ctors)?)
+                } else {
+                    // A non-recursive field is ordinary data: spelled once,
+                    // identical on both sides. A self-call inside one is not
+                    // spellable (no accumulator stands for it), so it declines.
+                    SArg::NonRec(spell_with(a, op, &HashMap::new())?)
+                });
+            }
+            Some(Spine::Node(i, out))
+        }
+        _ => None,
+    }
+}
+
+/// Spelling an image spine, and the two proofs that walk it. The `acc` closure
+/// says what the recursion's result on a child *is* on the repr side: the
+/// fold's accumulator inside the derived body, the spec recursor at that child
+/// inside the lemmas.
+struct Spelling<'a> {
+    ctors: &'a [CtorView],
+    /// The generated record, whose namespace holds the images and their laws.
+    rec: &'a str,
+    abs: &'a str,
+    acc: &'a dyn Fn(&str) -> String,
+}
+
+impl Spelling<'_> {
+    /// The spine at the carrier: constructor images over the accumulator.
+    fn repr(&self, sp: &Spine) -> String {
+        match sp {
+            Spine::Acc(child) => (self.acc)(child),
+            Spine::Node(i, args) => {
+                let c = &self.ctors[*i];
+                let a: Vec<String> = args.iter().map(|x| self.arg(x, &|sp| self.repr(sp))).collect();
+                appc(&format!("{}::mk_{}()", self.rec, c.name), &a)
+            }
+        }
+    }
+
+    /// The same spine at the spec type: constructors over the spec function.
+    fn spec(&self, sp: &Spine, acc_spec: &dyn Fn(&str) -> String) -> String {
+        match sp {
+            Spine::Acc(child) => acc_spec(child),
+            Spine::Node(i, args) => {
+                let c = &self.ctors[*i];
+                let a: Vec<String> =
+                    args.iter().map(|x| self.arg(x, &|sp| self.spec(sp, acc_spec))).collect();
+                ctor_app(&c.name, &a)
+            }
+        }
+    }
+
+    fn arg(&self, a: &SArg, f: &dyn Fn(&Spine) -> String) -> String {
+        match a {
+            SArg::NonRec(t) => t.clone(),
+            SArg::Rec(sp) => f(sp),
+        }
+    }
+
+    /// `inv` of the spine's repr side: each node's closure law applied to the
+    /// `inv` proofs of its recursive arguments, bottoming out in the
+    /// `inv`-preservation lemma at the accumulator.
+    fn inv_proof(&self, sp: &Spine, acc_inv: &dyn Fn(&str) -> String) -> String {
+        match sp {
+            Spine::Acc(child) => acc_inv(child),
+            Spine::Node(i, args) => {
+                let c = &self.ctors[*i];
+                let a: Vec<String> = args.iter().map(|x| self.arg(x, &|sp| self.repr(sp))).collect();
+                let mut app = appc(&format!("{}::{}_inv()", self.rec, c.name), &a);
+                for sp in rec_args(args) {
+                    app = appc(&app, &[self.inv_proof(sp, acc_inv)]);
+                }
+                app
+            }
+        }
+    }
+
+    /// `abs` pushed through the spine: at each node the commutation law, then
+    /// one `j` step per recursive position rewriting `abs(child)` to the spec
+    /// function's value there. Explicit motives, for §3.1 correction 2's
+    /// reason — the sides differ inside the recursor's algebra arguments.
+    fn abs_proof(
+        &self,
+        sp: &Spine,
+        acc_inv: &dyn Fn(&str) -> String,
+        acc_abs: &dyn Fn(&str) -> String,
+        acc_spec: &dyn Fn(&str) -> String,
+    ) -> String {
+        let (i, args) = match sp {
+            Spine::Acc(child) => return acc_abs(child),
+            Spine::Node(i, args) => (*i, args),
+        };
+        let c = &self.ctors[i];
+        let a: Vec<String> = args.iter().map(|x| self.arg(x, &|sp| self.repr(sp))).collect();
+        let mut proof = appc(&format!("{}::{}_abs()", self.rec, c.name), &a);
+        let recs = rec_args(args);
+        for sp in &recs {
+            proof = appc(&proof, &[self.inv_proof(sp, acc_inv)]);
+        }
+        // `side(k, y)`: the spec-side node with the first `k` recursive
+        // positions already rewritten, and position `k` shown as `y` when a
+        // motive is being spelled.
+        let side = |k: usize, y: Option<&str>| -> String {
+            let mut rank = 0;
+            let a: Vec<String> = args
+                .iter()
+                .map(|x| match x {
+                    SArg::NonRec(t) => t.clone(),
+                    SArg::Rec(sp) => {
+                        let r = rank;
+                        rank += 1;
+                        match (r.cmp(&k), y) {
+                            (std::cmp::Ordering::Less, _) => self.spec(sp, acc_spec),
+                            (std::cmp::Ordering::Equal, Some(y)) => y.to_string(),
+                            _ => appc(self.abs, &[self.repr(sp)]),
+                        }
+                    }
+                })
+                .collect();
+            ctor_app(&c.name, &a)
+        };
+        for (k, sp) in recs.iter().enumerate() {
+            proof = format!(
+                "trans({proof}, j({}, \u{3bb} y q => {} = {}, refl))",
+                self.abs_proof(sp, acc_inv, acc_abs, acc_spec),
+                side(k, None),
+                side(k, Some("y"))
+            );
+        }
+        proof
+    }
+}
+
+fn rec_args(args: &[SArg]) -> Vec<&Spine> {
+    args.iter()
+        .filter_map(|a| if let SArg::Rec(sp) = a { Some(sp) } else { None })
+        .collect()
+}
+
+/// `C` or `C(a, b)` — a constructor is applied n-ary, unlike a record field.
+fn ctor_app(name: &str, args: &[String]) -> String {
+    if args.is_empty() {
+        name.to_string()
+    } else {
+        format!("{name}({})", args.join(", "))
+    }
 }
 
 /// One arm of the closing lemma's induction: rewrite each recursive

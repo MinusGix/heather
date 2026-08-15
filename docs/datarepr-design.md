@@ -632,6 +632,14 @@ scaffolding with no customer until callee-`Impl` resolution and the outcome
 path give it branches. The mutation controls it was wanted for are in place
 without it (§3.5).
 
+*(Amended by the repr-typed-result stage, 2026-08-15: half of it arrived after
+all, and was forced rather than chosen. An arm whose value is at `S` is read
+into an **image spine** — constructor nodes down to the recursion's results —
+because three artifacts have to walk the same structure in step: the repr side
+of the body, `inv` of it, and `abs` pushed through it. It is a Rust `enum` and
+not the library datatype §3.1 wants; what it settles is that the datatype's
+first branch point is the spine's, not a law-choice tree's.)*
+
 ### 3.2 What it consumes
 
 The fold anchor + image laws (correctness basis) of every repr in play;
@@ -685,7 +693,8 @@ emission outside the fragment failing to check.
 **As-landed (v1 second half, 2026-08-15), amending §3.3.** The boundary as
 implemented, each decline naming its reason:
 
-- **A repr-typed result is deferred.** When `f` returns `S`, the fold's
+- **A repr-typed result is deferred** — *spent, 2026-08-15; see the note
+  below.* When `f` returns `S`, the fold's
   algebra lives at the *carrier*, so the closing lemma is no longer "the spec
   fn equals its recursor unfolding" but "`abs` pushed through the algebra",
   an induction that chains the image commutation laws. The route is real and
@@ -720,6 +729,60 @@ implemented, each decline naming its reason:
 Non-structural recursion never reaches the generator: the language's own
 termination check refuses it first, which is why §3.3's first decline has no
 fixture of its own.
+
+**As-landed (the repr-typed-result stage, 2026-08-15), amending the first
+bullet above.** The deferral is spent: a spec fn whose result is `S` now
+transfers, and arithmetic at `Bin` is what that buys (`double_spec`, generated,
+`crates/elab/tests/reprgen.rs`). The stage's estimate above was right in shape
+and wrong in one part; hand-run-first found both before any code, as it has
+every time:
+
+1. **The third lemma is exactly as described, and it closes.** `inv`-preservation
+   of the fold is an induction over the *spec* value whose arms are the image
+   closure laws applied to the inductive hypothesis, one per constructor node of
+   the arm's spine. It was hand-run twice before the generator existed: at `Bin`,
+   where `inv` is `True` and the lemma is inhabited but says nothing, and at a
+   new fixture repr `BinC` — the same carrier under the **canonical-form**
+   invariant `bin_of_nat(bin_abs(r)) = r`, whose `Succ_inv` genuinely *consumes*
+   its hypothesis. Nothing about the shape changed between the two, which is the
+   evidence that `inv = True` was hiding a plumbing question rather than a
+   design one. `BinC` earns its keep as the fixture every future `inv`-carrying
+   obligation is controlled at; it lives in `crates/elab/tests/support`
+   alongside `Bin`, sharing the carrier so the two cannot drift.
+2. **The per-repr `abs` congruence is not needed** — the one part of the
+   estimate that was wrong. The congruence is wanted in exactly one place
+   (carrying `abs` over the anchor law inside `refines`), and there it is an
+   inline `j` whose motive is spelled against the derived body's own name:
+   `j(fold_law(…), λ y q => abs(f_derived(x̄)) = abs(y), refl)`. That is §3.1
+   correction 2's rule applied rather than worked around, and it dissolves the
+   question a named per-repr helper would have raised — who owns the name, and
+   what happens when two transfers at one repr each emit it.
+3. **The fragment predicate gains an "image spine"**: with the result at `S` an
+   arm is `S`'s constructors applied down to self-calls on a recursive child,
+   with ordinary data at the non-recursive fields. Everything else declines,
+   including a numeral where a constructor is expected — the syntactic predicate
+   stays honest rather than desugaring. Note what does *not* change: `tail_of`
+   still declines. Handing back the recursive child is the third bullet above,
+   and a repr-typed result does not rescue it; the fold's algebra does hold that
+   child at the carrier, but the anchor law quantifies over the *spec* algebra,
+   where the same binder is at `S`.
+4. Two conclusions are owed at a repr-typed result (§1.2), so the generator now
+   emits `refines_inv` as well, discharged by transporting the third lemma back
+   across the anchor law.
+5. **A control's limit, recorded because it is easy to mis-read as a control.**
+   At `Bin` (and `BinC`) `fold` is *defined* through `abs`, so for an algebra
+   that ignores the spec child both sides of `fold_law` are convertible and the
+   `refines_inv` transport's *direction* is unobservable — deleting the `sym`
+   still checks. The mutation controls therefore aim at the lemma's value rather
+   than at its direction, and say so in place. A repr whose fold is not defined
+   through `abs` would see it; none exists in the suite yet.
+
+Corrected in passing, and not a stage of its own: calls to `f` in an emission
+are now built in **declaration order** rather than as "the other parameters,
+then the recursion one". The `Impl` record restates the signature in
+declaration order, so an operation taking `S` other than last used to produce
+an emission that could not check. Nothing in the suite spelled one; every
+existing emission is byte-identical.
 
 ## 4. Instance keying
 

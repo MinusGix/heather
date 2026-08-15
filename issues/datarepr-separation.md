@@ -70,14 +70,6 @@ owned by [[compile-typeclass-design]]; `simulate`/IR by
 
 ## Open
 
-- The repr-typed-result transfer (doc §3.3 as-landed note, 2026-08-15):
-  hand-run and specified in crates/elab/tests/reprgen.rs, not automated. A
-  stage, not a tweak — second closing-lemma shape (`abs` through the image
-  spine), a generated `abs` congruence per repr, and a *third* lemma no
-  section previously described: `inv`-preservation of the fold (invisible
-  at `inv = True`, real at the first canonical-form invariant). Cost of
-  deferral: at `Bin`, almost every interesting operation returns `Nat`, so
-  this is what keeps arithmetic out of reprgen's reach.
 - Callee-`Impl` registry resolution — §3.1 phase 0's other half: a callee
   touching `S` needs its own `Impl`'s `refines` to close the step; declined
   today.
@@ -96,7 +88,8 @@ class shape and refinement statement (§1, FINDING 1 ratified); keying
 (§4, ratified); default instances (naive by fiat in v1, auto-pick
 meta-program v2+, naive always mintable — §5.1–5.2, ratified); reprgen
 architecture (§3, ratified); Bin-as-repr-of-Nat v1 stretch (§5.1,
-ratified); multi-repr defaults at the runtime_fn boundary and conversions
+ratified); the repr-typed-result transfer (implemented, §3.3's second
+as-landed note); multi-repr defaults at the runtime_fn boundary and conversions
 as ordinary certified Impls (§5.3, ratified with sharpenings — see Open).
 Also settled: via-derived's obligation is the weak abs-image form, carrier
 equality its congruence discharge, canonical-form `inv` the opt-in that
@@ -115,3 +108,14 @@ place). The v1 charter itself is spent: both halves are in-tree.
 - 2026-08-15: **v1 first-half round chartered** (§5.1 items 1–4; reprgen = second half) **and its verification probe fired the stop-condition.** Probes: (a) the class/instance sugar hosts the Repr record incl. theorem-valued fields, but §1.1's fold_law sketch had `adapt` on the recursor side — kernel-probed `NotConvertible`; corrected in the doc (adaptation runs spec-step→repr-ward only, `abs` at the child; naive stays `refl`). (b) The `plen`/`TksP<Nat>` decline (crates/elab/tests/certgen_tier1.rs) is genuinely name-availability-shaped — hand-monomorphized it generates today; the flip is deliverable. (c) REFUTED: `calc.hthr`'s `run` is not one decline away — four independent certgen widenings block it even hand-monomorphized (ledger now on [[certifying-generator]]'s status header). Re-charter: item 3 narrows to mint-the-name+embed and the fixture flip; the `run` acceptance is dropped from v1 (doc §5.1 item 3 as-landed note; docs/showcase/README.md `run` row corrected). Items 1, 2, 4 unaffected; round continuing.
 - 2026-08-15: **v1 first half implemented and green; the issue stays open for the second half and the runtime seam** (crates/elab/src/datarepr.rs + tests/datarepr.rs; narrative and all deviations in docs/datarepr-design.md's as-landed notes on §1.2, §1.4, §4, §5.1). Both `datarepr` forms, `repr::naive()`, `impl f for Rp`, the certgen minting flip (`plen`/`TksP<Nat>` emits, decline preserved unminted), and the `Bin` stretch with both Impl routes. Suite 1500 → 1521, bench clean. Spun off: [[theorem-field-projection-oom]], [[receiver-method-shadows-record-field]]; new Open item above on via-derived's availability (the §1.2 as-landed FINDING); nameable-names deviation logged on [[unnameable-generated-names]]. Second half (reprgen) is the next charter.
 - 2026-08-15: **v1 second half (reprgen) implemented and green; v1 is complete except the repr-typed-result transfer** (crates/elab/src/reprgen.rs + tests/reprgen.rs; narrative in docs/datarepr-design.md's as-landed notes on §1.2 restated, §3.1, §3.3, §5.1). Phases 0–4 emit derived bodies + closing induction + refines + the registering impl over both naive and Bin reprs, §3.5's mutation controls in place (forced emission at Bin deliberately, since the naive carrier is the spec type). Three §3.1 corrections found by the hand-run before code (the closing lemma is an induction, not conversion; explicit `j` motives where anti-unifying cong can't generalize inside the algebra; phases 0/1 interleave). Five named declines at §3.3, incl. the recursive-child-outside-self-call refusal that is invisible at naive and was a live bug at Bin. New Open items above: the repr-typed-result stage (with its previously-undescribed third lemma, `inv`-preservation of the fold) and callee-Impl resolution. Suite 1521 → 1531, bench clean.
+- 2026-08-15: **The repr-typed-result stage lands; v1 is complete.** A spec fn
+  returning `S` now transfers (`crates/elab/src/reprgen.rs`), so arithmetic at
+  `Bin` is in reach — `double_spec` generated end to end. Narrative, the three
+  lemmas, the one part of the estimate that was wrong (no per-repr `abs`
+  congruence is needed), the new image-spine fragment predicate and a recorded
+  limit of one mutation control: docs/datarepr-design.md §3.3, second as-landed
+  note (§3.1's deferred datatype note amended too). New fixture `BinC` — `Bin`
+  under a canonical-form `inv` — is where `inv`-carrying obligations are now
+  controlled; it shares the carrier with `Bin` in `crates/elab/tests/support`.
+  Spun off rather than fixed drive-by:
+  [[reprgen-self-call-args-unchecked]]. Suite 1531 → 1541, bench clean.

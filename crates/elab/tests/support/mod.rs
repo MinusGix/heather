@@ -190,11 +190,15 @@ impl std::fmt::Write for Fnv1a {
     }
 }
 
-/// `Bin` as a repr of `Nat` — the v1 stretch of `docs/datarepr-design.md`
-/// §5.1 item 4, and the one non-identity repr the suite has. Shared rather
-/// than copied because `datarepr.rs` and `reprgen.rs` both pin it and a
-/// private copy would drift from the obligations it is the fixture for.
-pub const BIN_REPR: &str = r#"
+/// The `Bin` carrier and its lemmas, without a `datarepr` declaration: the
+/// half [`BIN_REPR`] and [`BIN_CANON`] share. Two reprs of `Nat` cannot
+/// coexist in one elaborator (v1 is one repr per spec type), so the shared
+/// part is a macro and each repr concatenates its own declaration onto it —
+/// a second copy of the carrier would drift from the obligations it is the
+/// fixture for, which is the whole reason this file exists.
+macro_rules! bin_base {
+    () => {
+        r#"
 inductive Bin { BNil, B0(b: Bin), B1(b: Bin) }
 
 fn double(n: Nat) -> Nat { match n { Zero => Zero, Succ(k) => Succ(Succ(double(k))) } }
@@ -281,7 +285,19 @@ theorem bin_fold_law(B: Type, s0: B, s1: (a0: Nat) -> (b0: B) -> B, r: Bin,
 theorem cong_bin_abs({a: Bin}, {b: Bin}, p: a = b): bin_abs(a) = bin_abs(b) {
     j(p, λ y q => bin_abs(a) = bin_abs(y), refl)
 }
+"#
+    };
+}
 
+/// `Bin` as a repr of `Nat` — the v1 stretch of `docs/datarepr-design.md`
+/// §5.1 item 4, and the one non-identity repr the suite has. Shared rather
+/// than copied because `datarepr.rs` and `reprgen.rs` both pin it and a
+/// private copy would drift from the obligations it is the fixture for.
+///
+/// Its `inv` is `True`, which is what makes [`BIN_CANON`] worth having.
+pub const BIN_REPR: &str = concat!(
+    bin_base!(),
+    r#"
 datarepr BinNat for Nat {
     R := Bin,
     abs := bin_abs,
@@ -292,7 +308,56 @@ datarepr BinNat for Nat {
     fold := bin_fold,
     fold_law := bin_fold_law,
 }
-"#;
+"#
+);
+
+/// The same carrier under a **canonical-form invariant** (design §1.2): `r` is
+/// the representative `bin_of_nat` builds for its own value, which rules out
+/// `Bin`'s leading zeros and makes `abs` injective on `inv`-satisfying values.
+///
+/// It exists for one reason: at `inv = True` every `inv` obligation in a
+/// transfer is inhabited by `refl` and the machinery that carries `inv` proofs
+/// around is untested. Here `Succ_inv` genuinely *consumes* its hypothesis, so
+/// a transfer's `inv`-preservation lemma has content — the third lemma of the
+/// repr-typed-result stage (§3.3, as-landed).
+pub const BIN_CANON: &str = concat!(
+    bin_base!(),
+    r#"
+// "`r` is canonical": the round-trip through the spec value returns `r`
+// itself. `B0(BNil)` is not, `BNil` is.
+fn bin_canon(r: Bin) -> Type { bin_of_nat(bin_abs(r)) = r }
+
+theorem bin_succ_abs_canon(a0: Bin, h0: bin_canon(a0)):
+    bin_abs(binc(a0)) = Succ(bin_abs(a0)) { bin_succ_abs(a0) }
+
+// The closure law that needs its hypothesis: `binc` of a canonical value is
+// canonical, *because* the argument was.
+theorem bin_canon_succ(a0: Bin, h0: bin_canon(a0)): bin_canon(binc(a0)) {
+    trans(j(bin_succ_abs(a0),
+            λ y q => bin_of_nat(bin_abs(binc(a0))) = bin_of_nat(y), refl),
+          j(h0, λ y q => binc(bin_of_nat(bin_abs(a0))) = binc(y), refl))
+}
+
+// The anchor law, restated under the stronger `inv` (which it does not use).
+theorem bin_fold_law_canon(B: Type, s0: B, s1: (a0: Nat) -> (b0: B) -> B, r: Bin,
+                           h: bin_canon(r)):
+    bin_fold(B, s0, λ (a0: Bin) => λ (b0: B) => s1(bin_abs(a0))(b0), r)
+      = nat_rec_(B, s0, s1, bin_abs(r))
+{ bin_fold_law(B, s0, s1, r, refl) }
+
+datarepr BinC for Nat {
+    R := Bin,
+    abs := bin_abs,
+    inv := bin_canon,
+    mk Zero := BNil,
+    mk Succ := binc,
+    Succ_abs := bin_succ_abs_canon,
+    Succ_inv := bin_canon_succ,
+    fold := bin_fold,
+    fold_law := bin_fold_law_canon,
+}
+"#
+);
 
 /// `add` at `Bin`: the derived body out of the fold anchor, its certificate,
 /// and the congruence the via-derived route needs. Appended to

@@ -9,7 +9,7 @@
 use heather_elab::Elaborator;
 
 mod support;
-use support::BIN_REPR;
+use support::{BIN_CANON, BIN_REPR};
 
 fn ok(src: &str) -> Elaborator {
     let mut e = Elaborator::with_prelude().expect("prelude");
@@ -114,6 +114,147 @@ impl double_spec for BinNat {{
     ));
 }
 
+/// Hand-run (a) of the repr-typed-result stage: the same transfer as the test
+/// above, written in the spelling the *generator* uses — every law reached
+/// through the record's namespace rather than through the fixture's own
+/// theorems, the `inv` hypotheses each law demands supplied, and the third
+/// lemma (`inv`-preservation of the fold) present even though `Bin`'s `inv` is
+/// `True` and it could have been elided. This is the schema; the canonical-inv
+/// hand-run below is the same schema where the third lemma has content.
+#[test]
+fn hand_run_the_generated_shape_for_a_repr_typed_result_at_bin() {
+    ok(&format!(
+        "{BIN_REPR}
+fn double_spec(n: Nat) -> Nat {{ match n {{ Zero => Zero, Succ(k) => Succ(Succ(double_spec(k))) }} }}
+
+fn double_spec_derived(n: Bin) -> Bin {{
+    Repr_BinNat::fold()(Bin)(Repr_BinNat::mk_Zero())(λ (a0: Bin) => λ (b0: Bin) => Repr_BinNat::mk_Succ()(Repr_BinNat::mk_Succ()(b0)))(n)
+}}
+
+// The third lemma: the fold's accumulator satisfies `inv`, by induction over
+// the spec value, one image closure law per constructor node.
+theorem double_spec_inv_pres(x: Nat):
+    Repr_BinNat::inv()(BinNat_spec_rec(Bin, Repr_BinNat::mk_Zero(), λ (a0: Nat) => λ (b0: Bin) => Repr_BinNat::mk_Succ()(Repr_BinNat::mk_Succ()(b0)), x))
+{{
+    match x {{
+        Zero => Repr_BinNat::Zero_inv(),
+        Succ(a0) => Repr_BinNat::Succ_inv()(Repr_BinNat::mk_Succ()(BinNat_spec_rec(Bin, Repr_BinNat::mk_Zero(), λ (a0: Nat) => λ (b0: Bin) => Repr_BinNat::mk_Succ()(Repr_BinNat::mk_Succ()(b0)), a0)))(Repr_BinNat::Succ_inv()(BinNat_spec_rec(Bin, Repr_BinNat::mk_Zero(), λ (a0: Nat) => λ (b0: Bin) => Repr_BinNat::mk_Succ()(Repr_BinNat::mk_Succ()(b0)), a0))(double_spec_inv_pres(a0))),
+    }}
+}}
+
+// `abs` pushed through the image spine, by induction: one commutation law per
+// constructor node, a `j` chain over the recursive argument positions.
+theorem double_spec_abs_alg(x: Nat):
+    Repr_BinNat::abs()(BinNat_spec_rec(Bin, Repr_BinNat::mk_Zero(), λ (a0: Nat) => λ (b0: Bin) => Repr_BinNat::mk_Succ()(Repr_BinNat::mk_Succ()(b0)), x))
+      = double_spec(x)
+{{
+    match x {{
+        Zero => Repr_BinNat::Zero_abs(),
+        Succ(a0) => trans(
+            Repr_BinNat::Succ_abs()(Repr_BinNat::mk_Succ()(BinNat_spec_rec(Bin, Repr_BinNat::mk_Zero(), λ (a0: Nat) => λ (b0: Bin) => Repr_BinNat::mk_Succ()(Repr_BinNat::mk_Succ()(b0)), a0)))(Repr_BinNat::Succ_inv()(BinNat_spec_rec(Bin, Repr_BinNat::mk_Zero(), λ (a0: Nat) => λ (b0: Bin) => Repr_BinNat::mk_Succ()(Repr_BinNat::mk_Succ()(b0)), a0))(double_spec_inv_pres(a0))),
+            j(trans(
+                Repr_BinNat::Succ_abs()(BinNat_spec_rec(Bin, Repr_BinNat::mk_Zero(), λ (a0: Nat) => λ (b0: Bin) => Repr_BinNat::mk_Succ()(Repr_BinNat::mk_Succ()(b0)), a0))(double_spec_inv_pres(a0)),
+                j(double_spec_abs_alg(a0),
+                  λ y q => Succ(Repr_BinNat::abs()(BinNat_spec_rec(Bin, Repr_BinNat::mk_Zero(), λ (a0: Nat) => λ (b0: Bin) => Repr_BinNat::mk_Succ()(Repr_BinNat::mk_Succ()(b0)), a0))) = Succ(y),
+                  refl)),
+              λ y q => Succ(Repr_BinNat::abs()(Repr_BinNat::mk_Succ()(BinNat_spec_rec(Bin, Repr_BinNat::mk_Zero(), λ (a0: Nat) => λ (b0: Bin) => Repr_BinNat::mk_Succ()(Repr_BinNat::mk_Succ()(b0)), a0)))) = Succ(y),
+              refl)),
+    }}
+}}
+
+theorem double_spec_derived_refines(n: Bin, h0: Repr_BinNat::inv()(n)):
+    Repr_BinNat::abs()(double_spec_derived(n)) = double_spec(Repr_BinNat::abs()(n))
+{{
+    trans(j(Repr_BinNat::fold_law()(Bin)(Repr_BinNat::mk_Zero())(λ (a0: Nat) => λ (b0: Bin) => Repr_BinNat::mk_Succ()(Repr_BinNat::mk_Succ()(b0)))(n)(h0),
+            λ y q => Repr_BinNat::abs()(double_spec_derived(n)) = Repr_BinNat::abs()(y),
+            refl),
+          double_spec_abs_alg(Repr_BinNat::abs()(n)))
+}}
+
+theorem double_spec_derived_inv(n: Bin, h0: Repr_BinNat::inv()(n)):
+    Repr_BinNat::inv()(double_spec_derived(n))
+{{
+    j(sym(Repr_BinNat::fold_law()(Bin)(Repr_BinNat::mk_Zero())(λ (a0: Nat) => λ (b0: Bin) => Repr_BinNat::mk_Succ()(Repr_BinNat::mk_Succ()(b0)))(n)(h0)),
+      λ y q => Repr_BinNat::inv()(y),
+      double_spec_inv_pres(Repr_BinNat::abs()(n)))
+}}
+
+impl double_spec for BinNat {{
+    body := double_spec_derived,
+    refines := double_spec_derived_refines,
+    refines_inv := double_spec_derived_inv,
+}}
+"
+    ));
+}
+
+/// Hand-run (b): the same schema at a repr whose `inv` is a **canonical
+/// form**, where the third lemma stops being `refl`. Every `inv` obligation
+/// below is discharged by the chain of image closure laws applied to the
+/// induction's hypothesis — at `Bin`'s `True` invariant the same terms check
+/// but say nothing, which is why the stage needed this fixture before the
+/// generator was written.
+///
+/// `sr` is bound only to keep the repeated recursor spelling honest; the
+/// text is otherwise written out as the generator emits it.
+#[test]
+fn hand_run_a_repr_typed_result_where_inv_preservation_has_content() {
+    let alg = "Repr_BinC::mk_Zero(), λ (a0: Nat) => λ (b0: Bin) => Repr_BinC::mk_Succ()(Repr_BinC::mk_Succ()(b0))";
+    let sr = |x: &str| format!("BinC_spec_rec(Bin, {alg}, {x})");
+    let (sr_a0, sr_x) = (sr("a0"), sr("x"));
+    ok(&format!(
+        "{BIN_CANON}
+fn double_spec(n: Nat) -> Nat {{ match n {{ Zero => Zero, Succ(k) => Succ(Succ(double_spec(k))) }} }}
+
+fn double_spec_derived(n: Bin) -> Bin {{
+    Repr_BinC::fold()(Bin)(Repr_BinC::mk_Zero())(λ (a0: Bin) => λ (b0: Bin) => Repr_BinC::mk_Succ()(Repr_BinC::mk_Succ()(b0)))(n)
+}}
+
+theorem double_spec_inv_pres(x: Nat): Repr_BinC::inv()({sr_x}) {{
+    match x {{
+        Zero => Repr_BinC::Zero_inv(),
+        Succ(a0) => Repr_BinC::Succ_inv()(Repr_BinC::mk_Succ()({sr_a0}))(Repr_BinC::Succ_inv()({sr_a0})(double_spec_inv_pres(a0))),
+    }}
+}}
+
+theorem double_spec_abs_alg(x: Nat): Repr_BinC::abs()({sr_x}) = double_spec(x) {{
+    match x {{
+        Zero => Repr_BinC::Zero_abs(),
+        Succ(a0) => trans(
+            Repr_BinC::Succ_abs()(Repr_BinC::mk_Succ()({sr_a0}))(Repr_BinC::Succ_inv()({sr_a0})(double_spec_inv_pres(a0))),
+            j(trans(
+                Repr_BinC::Succ_abs()({sr_a0})(double_spec_inv_pres(a0)),
+                j(double_spec_abs_alg(a0),
+                  λ y q => Succ(Repr_BinC::abs()({sr_a0})) = Succ(y), refl)),
+              λ y q => Succ(Repr_BinC::abs()(Repr_BinC::mk_Succ()({sr_a0}))) = Succ(y), refl)),
+    }}
+}}
+
+theorem double_spec_derived_refines(n: Bin, h0: Repr_BinC::inv()(n)):
+    Repr_BinC::abs()(double_spec_derived(n)) = double_spec(Repr_BinC::abs()(n))
+{{
+    trans(j(Repr_BinC::fold_law()(Bin)(Repr_BinC::mk_Zero())(λ (a0: Nat) => λ (b0: Bin) => Repr_BinC::mk_Succ()(Repr_BinC::mk_Succ()(b0)))(n)(h0),
+            λ y q => Repr_BinC::abs()(double_spec_derived(n)) = Repr_BinC::abs()(y), refl),
+          double_spec_abs_alg(Repr_BinC::abs()(n)))
+}}
+
+theorem double_spec_derived_inv(n: Bin, h0: Repr_BinC::inv()(n)):
+    Repr_BinC::inv()(double_spec_derived(n))
+{{
+    j(sym(Repr_BinC::fold_law()(Bin)(Repr_BinC::mk_Zero())(λ (a0: Nat) => λ (b0: Bin) => Repr_BinC::mk_Succ()(Repr_BinC::mk_Succ()(b0)))(n)(h0)),
+      λ y q => Repr_BinC::inv()(y),
+      double_spec_inv_pres(Repr_BinC::abs()(n)))
+}}
+
+impl double_spec for BinC {{
+    body := double_spec_derived,
+    refines := double_spec_derived_refines,
+    refines_inv := double_spec_derived_inv,
+}}
+"
+    ));
+}
+
 // -- the generator ---------------------------------------------------------
 
 /// Generate, elaborate, kernel-check. The whole trust story: what comes back
@@ -210,6 +351,92 @@ fn tally(n: Nat) -> Ct {{ match n {{ Zero => CZ, Succ(k) => CS(tally(k)) }} }}
     assert_eq!(e.impl_global("BinNat", "tally"), Some("BinNat_tally_impl"));
 }
 
+/// The acceptance for the repr-typed-result stage: **arithmetic at `Bin`**,
+/// generated. `double_spec` returns `Nat`, which is the repr'd type, so the
+/// derived body's algebra is at the carrier and the certificate is the
+/// image-spine induction rather than the recursor-unfolding one.
+#[test]
+fn arithmetic_at_bin_transfers_when_the_result_is_repr_typed() {
+    let mut e = ok(&format!(
+        "{BIN_REPR}
+fn double_spec(n: Nat) -> Nat {{ match n {{ Zero => Zero, Succ(k) => Succ(Succ(double_spec(k))) }} }}
+"
+    ));
+    let text = transfer(&mut e, "double_spec", "BinNat");
+    assert!(text.contains("theorem double_spec_abs_alg"), "{text}");
+    assert!(text.contains("theorem double_spec_inv_pres"), "{text}");
+    assert!(text.contains("refines_inv := double_spec_derived_inv"), "{text}");
+    // The body is built out of the constructor *images*, not the constructors.
+    assert!(text.contains("Repr_BinNat::mk_Succ()"), "{text}");
+    assert_eq!(e.impl_global("BinNat", "double_spec"), Some("BinNat_double_spec_impl"));
+    // The literal-scrutinee axis (`docs/testing-generated-terms.md`): the
+    // derived body does not merely typecheck, it *computes* at the carrier —
+    // doubling the representation of two yields a representation of four.
+    let computes = "theorem double_at_two(): bin_abs(double_spec_derived(B0(B1(BNil)))) \
+                      = Succ(Succ(Succ(Succ(Zero)))) { refl }";
+    if let Err(err) = e.elab_source(computes) {
+        panic!("the derived body does not compute: {}", err.render(computes));
+    }
+}
+
+/// The same transfer at the canonical-form repr, where `inv` is not `True`:
+/// every commutation law in the certificate is now paid for by the
+/// `inv`-preservation lemma, which no longer holds by `refl`.
+#[test]
+fn a_repr_typed_result_transfers_at_a_repr_with_a_real_invariant() {
+    let mut e = ok(&format!(
+        "{BIN_CANON}
+fn double_spec(n: Nat) -> Nat {{ match n {{ Zero => Zero, Succ(k) => Succ(Succ(double_spec(k))) }} }}
+fn pred_spec(n: Nat) -> Nat {{ match n {{ Zero => Zero, Succ(k) => pred_spec(k) }} }}
+"
+    ));
+    let text = transfer(&mut e, "double_spec", "BinC");
+    assert!(text.contains("Repr_BinC::Succ_inv()"), "{text}");
+    // An arm that is *only* the recursion: the spine bottoms out immediately,
+    // so the certificate is the inductive hypothesis with nothing around it.
+    transfer(&mut e, "pred_spec", "BinC");
+    assert_eq!(e.impl_global("BinC", "pred_spec"), Some("BinC_pred_spec_impl"));
+}
+
+/// The four axes (`docs/testing-generated-terms.md`) for the repr-typed
+/// result: an **open** payload type carried through the spine (`Tok`), a
+/// constructor node with a non-recursive field beside the recursive one, an
+/// extra parameter used *inside* the spine, two recursive children in one arm,
+/// and a neutral scrutinee throughout (the emitted lemmas quantify).
+#[test]
+fn repr_typed_results_across_the_axes() {
+    let mut e = ok(&format!(
+        "{LIST}
+inductive Tree {{ Leaf(n: Nat), Node(l: Tree, r: Tree) }}
+datarepr TreeN for Tree := repr::naive();
+
+// A node with a payload field beside the recursion, duplicated: the spine has
+// two constructor nodes and the payload is spelled on both sides.
+fn dup(l: List<Tok>) -> List<Tok> {{
+    match l {{ Nil => Nil, Cons(h, t) => Cons(h, Cons(h, dup(t))) }}
+}}
+
+// An extra parameter, consumed inside the spine.
+fn replace_all(k: Tok, l: List<Tok>) -> List<Tok> {{
+    match l {{ Nil => Nil, Cons(h, t) => Cons(k, replace_all(k, t)) }}
+}}
+
+// TWO recursive children in one arm: the `j` chain has more than one link.
+fn mirror(x: Tree) -> Tree {{
+    match x {{ Leaf(n) => Leaf(n), Node(l, r) => Node(mirror(r), mirror(l)) }}
+}}
+"
+    ));
+    for (op, repr) in [("dup", "ListTok"), ("replace_all", "ListTok"), ("mirror", "TreeN")] {
+        transfer(&mut e, op, repr);
+        assert_eq!(
+            e.impl_global(repr, op),
+            Some(format!("{repr}_{op}_impl").as_str()),
+            "{op} at {repr}"
+        );
+    }
+}
+
 // -- negative controls (§3.5) ----------------------------------------------
 //
 // The generator is untrusted, so what matters is that a wrong emission is
@@ -291,6 +518,106 @@ fn stunted_derived(n: Bin) -> Ct {
     refused(&mut e, forced, "a forced emission outside the fragment");
 }
 
+// -- controls for the repr-typed result, at a repr with a real `inv` --------
+//
+// All four run at `BinC` and not at a naive repr, for the reason the
+// forced-emission control already records: the naive carrier IS the spec type,
+// so a wrong artifact can still happen to check there.
+
+fn base_double() -> (Elaborator, String) {
+    let e = ok(&format!(
+        "{BIN_CANON}
+fn double_spec(n: Nat) -> Nat {{ match n {{ Zero => Zero, Succ(k) => Succ(Succ(double_spec(k))) }} }}
+"
+    ));
+    let text = e.reprgen("double_spec", "BinC").expect("green emission").text;
+    (e, text)
+}
+
+#[test]
+fn a_perturbed_image_spine_is_refused() {
+    // One `Succ` image dropped from the algebra, consistently everywhere: the
+    // derived body still computes, the two closing lemmas are still about the
+    // body that is there, and `refines` is what notices that it halves.
+    let (mut e, text) = base_double();
+    let bad = text.replace(
+        "Repr_BinC::mk_Succ()(Repr_BinC::mk_Succ()(b0))",
+        "Repr_BinC::mk_Succ()(b0)",
+    );
+    assert_ne!(bad, text, "the mutation must apply");
+    refused(&mut e, &bad, "a derived body one image short");
+}
+
+#[test]
+fn a_perturbed_commutation_step_is_refused() {
+    // The `j` motive of one link in the image chain no longer abstracts the
+    // position it rewrites, so its `refl` no longer proves the base case.
+    let (mut e, text) = base_double();
+    let bad = text.replacen("= Succ(y), refl)", "= y, refl)", 1);
+    assert_ne!(bad, text, "the mutation must apply");
+    refused(&mut e, &bad, "a commutation step over the wrong motive");
+}
+
+#[test]
+fn a_perturbed_inv_preservation_proof_is_refused() {
+    // The inner closure law is applied to the accumulator instead of to the
+    // image built on top of it: `inv` of the wrong term. Invisible at
+    // `inv = True`, which is why this fixture exists.
+    let (mut e, text) = base_double();
+    let bad = text.replacen(
+        "Repr_BinC::Succ_inv()(Repr_BinC::mk_Succ()(",
+        "Repr_BinC::Succ_inv()((",
+        1,
+    );
+    assert_ne!(bad, text, "the mutation must apply");
+    refused(&mut e, &bad, "an `inv`-preservation proof at the wrong term");
+}
+
+#[test]
+fn the_third_lemma_at_the_wrong_value_is_refused() {
+    // `refines_inv` carries the `inv`-preservation lemma back across the
+    // anchor law; aimed at a *literal* instead of at the value being folded,
+    // it proves `inv` of something else.
+    //
+    // Deliberately not the mutation one would reach for first — dropping the
+    // `sym` in that same proof — which this fixture cannot refuse: `Bin`'s
+    // `fold` is *defined* through `abs`, so at an algebra that ignores the
+    // spec child both sides of `fold_law` are convertible and the transport
+    // direction is unobservable. The control is honest about what it controls.
+    let (mut e, text) = base_double();
+    let bad = text.replace(
+        "double_spec_inv_pres(Repr_BinC::abs()(n))",
+        "double_spec_inv_pres(Zero)",
+    );
+    assert_ne!(bad, text, "the mutation must apply");
+    refused(&mut e, &bad, "the `inv`-preservation lemma at the wrong value");
+}
+
+#[test]
+fn a_forced_repr_typed_emission_outside_the_fragment_fails_to_check() {
+    // `pred_bad` hands back its recursive child, so the generator declines it.
+    // Forcing the schema shows what the decline protects: the child is at the
+    // carrier on the repr side and at `S` on the spec side, so the algebra the
+    // closing lemma has to quantify over does not even typecheck.
+    let mut e = ok(&format!(
+        "{BIN_CANON}
+fn pred_bad(n: Nat) -> Nat {{ match n {{ Zero => Zero, Succ(k) => k }} }}
+"
+    ));
+    assert!(declines(&e, "pred_bad", "BinC").contains("outside a self-call"));
+    let forced = "
+fn pred_bad_derived(n: Bin) -> Bin {
+    Repr_BinC::fold()(Bin)(Repr_BinC::mk_Zero())(λ (k: Bin) => λ (b0: Bin) => k)(n)
+}
+
+theorem pred_bad_abs_alg(x: Nat):
+    Repr_BinC::abs()(BinC_spec_rec(Bin, Repr_BinC::mk_Zero(), λ (k: Nat) => λ (b0: Bin) => k, x))
+      = pred_bad(x)
+{ match x { Zero => Repr_BinC::Zero_abs(), Succ(k) => pred_bad_abs_alg(k), } }
+";
+    refused(&mut e, forced, "a forced repr-typed emission outside the fragment");
+}
+
 // -- declines (§3.3) -------------------------------------------------------
 
 #[test]
@@ -305,11 +632,16 @@ fn tail_of(l: List<Tok>) -> List<Tok> {{ match l {{ Nil => Nil, Cons(h, t) => t 
 fn uses_tail(l: List<Tok>) -> Nat {{ match l {{ Nil => Zero, Cons(h, t) => length(tail_of(Nil)) }} }}
 fn not_a_match(l: List<Tok>) -> Nat {{ Zero }}
 fn uses_child(l: List<Tok>) -> Nat {{ match l {{ Nil => Zero, Cons(h, t) => length(t) }} }}
+datarepr NatN for Nat := repr::naive();
+fn zeroish(n: Nat) -> Nat {{ match n {{ Zero => 0, Succ(k) => Succ(zeroish(k)) }} }}
 "
     ));
     for (op, frag) in [
-        // The result at the repr'd type — the round's named deferral.
-        ("tail_of", "result is repr-typed"),
+        // A repr-typed result no longer declines *for being one* — but
+        // `tail_of` hands back its recursive child, which is at the carrier on
+        // the repr side and at `S` on the spec side, so it still declines. The
+        // stage widened the fragment; it did not widen this.
+        ("tail_of", "outside a self-call"),
         // Two parameters at `S`.
         ("appended", "two parameters at"),
         // Not a structural match at all.
@@ -322,6 +654,10 @@ fn uses_child(l: List<Tok>) -> Nat {{ match l {{ Nil => Zero, Cons(h, t) => leng
         let msg = declines(&e, op, "ListTok");
         assert!(msg.contains(frag), "`{op}`: {msg}");
     }
+    // At a repr-typed result an arm has to be an *image spine*: `S`'s
+    // constructors down to the self-calls. A numeral is not one — an honest
+    // syntactic predicate, so it declines rather than desugaring.
+    assert!(declines(&e, "zeroish", "NatN").contains("not an image spine"));
     // Unknown repr and unknown operation.
     assert!(declines(&e, "length", "Nope").contains("not a `datarepr`"));
     assert!(declines(&e, "nope", "ListTok").contains("not a declared function"));
@@ -329,3 +665,4 @@ fn uses_child(l: List<Tok>) -> Nat {{ match l {{ Nil => Zero, Cons(h, t) => leng
     transfer(&mut e, "length", "ListTok");
     assert!(declines(&e, "length", "ListTok").contains("already has an `Impl`"));
 }
+
