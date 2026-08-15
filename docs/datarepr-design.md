@@ -188,6 +188,32 @@ expected to be the *normal* proof route for hand overrides (binary search
 vs. linear member, §6.3), because equivalence of two concrete recursions is
 usually a friendlier induction than re-proving refinement from scratch.
 
+**As-landed (v1 first half, 2026-08-15), amending §1.2.**
+
+- The two conclusions at `Y = S` land as **two record fields**, `refines` and
+  `refines_inv`, rather than one conjunction: there is no conjunction to be
+  had without a library, and the `impl` form refuses a repr-typed result that
+  omits `refines_inv`.
+- `Impl` keys on `(repr name, operation name)`. §4 asks for the operation's
+  `.code` identity; the resolved *name* is what v1 uses, because the
+  elaborator retains no `.code` handle for an arbitrary global at declaration
+  time. The repr half is already declaration-keyed through the repr itself,
+  so the weaker half is the operation's, and it is the half a later round can
+  strengthen without moving anything else.
+- **FINDING (new): via-derived is not always available, and §1.2 overstates
+  it.** "Expected to be the *normal* proof route" holds only when `abs` is
+  injective on `inv`-satisfying values. Via-derived proves `body(x̄) =
+  f_derived(x̄)` **at the carrier**, which is strictly stronger than
+  refinement: on `Bin` the leading-zero representations make `B0(BNil)` and
+  `BNil` distinct carrier values with equal `abs`, so two implementations can
+  both refine `f` and *not* be equal. The v1 stretch's via-derived `add` is
+  therefore a body that is genuinely equal to the derived one (it drops the
+  anchor's `bin_of_nat` round-trip, a real cost win, and nothing else); a
+  clever implementation that merely *agrees under `abs`* has to prove
+  refinement directly, or prove `abs(body) = abs(derived)` and chain that.
+  The design should say which of those two it means before reprgen leans on
+  the route.
+
 ### 1.3 FINDING 1: constructor images are operations, not axioms
 
 The settled text says the correctness basis "must exist". Read as "each
@@ -273,6 +299,53 @@ instances can hold today, `lib/std/algebra.hthr`):
 4. **The outcome sum and `+ E` sugar** — not needed for v1 (byte-free reprs
    have no partial operations, §5.1); when it lands it is surface intent
    over a plain sum (settled), adjacent to `prelude-option-and-friends`.
+
+**As-landed (v1 first half, 2026-08-15), amending §1.4.** Both forms and
+`impl` are implemented in `crates/elab/src/datarepr.rs`; acceptance in
+`crates/elab/tests/datarepr.rs`. Deviations, each forced rather than chosen:
+
+1. **The artifacts are emitted as surface source and re-parsed**, the choice
+   certgen made for its per-signature records and for the same reason: these
+   are dependent record types whose field list is computed from a constructor
+   list. The consequence is that every generated name must be **nameable** —
+   `#` never begins a surface identifier, so a name carrying the sigil
+   `issues/unnameable-generated-names.md` points at cannot be written in the
+   text that declares it. The names are `Repr_N`, `N_spec_rec`, `Repr_N::⟨clause⟩`
+   and the assembled `N`.
+2. **The namespace hangs off `Repr_N`, not off `N`** as the sketch has it: a
+   member declaration's qualifier has to name a *type* in scope, and `N` names
+   the assembled value.
+3. **The spec recursor is generated as a named global** (`N_spec_rec`).
+   `match` is a form and not a global, so the anchor law has nothing to state
+   itself against otherwise. This is what §1.4 item 2 called the monomorph's
+   "recursor specialization", and it is per-repr rather than per-type.
+4. **Every clause is 0-ary**: each becomes a declaration whose result type is
+   exactly the field's type and whose body is the clause. The existing
+   currying coercion — the one that lets `op := zop` fill an `A -> A -> A`
+   field — then does all the work, including filling a Π-typed *law* field
+   from an n-ary `theorem`. A clause must therefore be a name, a call or a
+   projection; anything larger is bound to a `fn` first, and is refused
+   rather than rendered lossily.
+5. **A law clause's binder list includes the `inv` hypotheses**, so a
+   hand-written law has to carry them even when `inv` is `True` and they are
+   never used. This is real friction on the explicit form (`Bin`'s
+   `Succ_abs` needs an `h0: (Zero = Zero)` binder it ignores) and the obvious
+   fix — letting a clause be applied to the binders the statement quantifies
+   over, rather than checked against the whole Π — is deferred, not designed.
+6. **`inv` is `(r: R) -> Type` and the naive `True` is `Zero = Zero`.** `Nat`
+   is a kernel type, so that proposition is in scope wherever a `datarepr`
+   is, and `refl` inhabits it. A prelude `True` would be better and belongs
+   with `prelude-option-and-friends`.
+7. **Two rough edges in *using* the assembled value**, both worked around by
+   reaching through the namespace, and both worth their own issue:
+   `value.fold` is claimed by the builtin vector receiver method before the
+   receiver's type is consulted (a name collision with §1.1's field name),
+   and projecting a **theorem-valued** field off the assembled record value
+   exhausts memory — a user-reachable abort, not a slow check. The namespace
+   half of the elaboration is what makes the laws usable at all, which is a
+   better argument for it than §1.4's original one.
+8. `datarepr` over **`Nat`** works by writing `Nat`'s constructor list into
+   the elaborator: it is a kernel type with no declaration to read one off.
 
 ## 2. Partiality and dispatch — the roughest part, worked concretely
 
@@ -599,6 +672,14 @@ but syntactically distinct inductives do not share reprs. Bridging them,
 if ever wanted, is an ordinary certified conversion `Impl` between their
 reprs (§5.3's guardrail machinery) — explicit, never resolver magic.
 
+**As-landed (v1 first half, 2026-08-15), amending §4.** A `Repr` keys on
+`(the spec inductive's declaration tag, the spelling of the elaborated
+arguments)` — the tag is the declaration identity §4 asks for, so editing `S`
+invalidates its repr. The argument half is a *spelling* rather than an
+elaborated type; for v1's arguments (`Nat`, a nullary inductive) the two
+agree, and the gap is worth closing when an argument can be a type expression.
+An `Impl`'s operation half is its resolved name — see the note on §1.2.
+
 ## 5. Staging
 
 ### 5.1 v1 — byte-free (trigger: already pulled — certgen's parameterized-instantiations stage is waiting on it)
@@ -650,6 +731,16 @@ whatever reprgen half lands, `scripts/test` full-suite green, no new rail.
 Explicitly **not** in v1: the outcome path and dispatch ladder
 implementation (designed in §2, first customer is the first partial `Impl`,
 which needs bytes or capacity to exist), machine-width anything, layout.
+
+**As-landed (v1 first half, 2026-08-15).** Items 1–4 are in; item 5
+(reprgen) is the second half and untouched. Item 4's `Bin` landed with a
+genuine `abs` (binary evaluation), a `Succ` commutation law that is a real
+three-case induction, an anchor fold that goes through the spec value on
+purpose, a `fold_law` that is a real induction over the round-trip lemma
+`abs(bin_of_nat(m)) = m`, and `add` at `Bin` **both** ways — the derived route
+out of `fold_law`, and a via-derived one whose custom body drops the anchor's
+per-step `bin_of_nat`. See the FINDING on §1.2 about when via-derived is
+available at all.
 
 ### 5.2 v2+ — bytes (trigger: the first native-lowering / platform-model round)
 

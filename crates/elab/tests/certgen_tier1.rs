@@ -14,7 +14,11 @@
 //! - `th` over a three-constructor type with payload fields on either side
 //!   of the children, a second `Nat` parameter, and a foreign call;
 //! - `thas` — a tier-1 parameter WITH a tier-0 enumeration result, the two
-//!   previous stages composed.
+//!   previous stages composed;
+//! - `plen` over `TksP<Nat>` — a *parameterized instantiation*, generable
+//!   since `datarepr` became the minting site for a monomorph's name
+//!   (docs/datarepr-design.md §5.1 item 3). The decline it replaced survives
+//!   beside it at an instantiation nobody minted.
 //!
 //! A binary of its own for the usual two reasons (`certgen.rs`'s header):
 //! one `match code` shell elaboration per test thread (the stack rail), and
@@ -248,20 +252,44 @@ fn tier1_emissions_and_declines() {
         assert!(msg.contains(frag), "{msg}");
         assert!(!msg.contains("disagreement"), "{msg}");
     }
-    // A parameterized instantiation (`List<Tok>`'s shape): the in-language
-    // checker accepts the lowering, the rim has no name to spell `embed_T`
-    // with — the established decline-not-drift split. `run` over `List<Tok>`
-    // stays a gap for exactly this reason (docs/showcase/README.md).
+    // FLIP RECORDED (docs/datarepr-design.md §5.1 item 3): a parameterized
+    // instantiation was a decline here — the in-language checker accepted the
+    // lowering and the rim had no name to spell `embed_T` with. `datarepr` is
+    // the minting site, so with a repr declared the same fn GENERATES, and
+    // the emission is kernel-checked like any other.
     {
         elab(&mut e, "inductive TksP<A> { PN, PC(h: A, t: TksP<A>) }", "inductive TksP");
-        let src = "fn plen(l: TksP<Nat>) -> Nat { 0 }";
-        let d = decl_of(src);
+        elab(
+            &mut e,
+            "datarepr TksPNat for TksP<Nat> := repr::naive();",
+            "datarepr TksPNat",
+        );
+        let src = "fn plen(l: TksP<Nat>) -> Nat { match l { PN => Zero, PC(h, t) => Succ(plen(t)) } }";
         elab(&mut e, src, "plen");
+        generate(&mut e, &mut ctx, &decl_of(src));
+        // The minted name is what names the artifacts; the TYPE is still
+        // written applied, which is the split the flip turned on.
+        let em = ctx.iter().find(|e| e.name == "plen").expect("emission present");
+        assert!(em.text.contains("CompileTksPNatNat"), "{}", em.text);
+        let embed = em
+            .support
+            .iter()
+            .find(|(k, _)| k == "embed:TksPNat")
+            .expect("TksPNat_gen_embed travels with the emission");
+        assert!(embed.1.contains("fn TksPNat_gen_embed(gx: TksP<Nat>)"), "{}", embed.1);
+    }
+    // The decline that REMAINS: an instantiation no `datarepr` has minted a
+    // name for. The flip turned on the minting, not the guess.
+    {
+        elab(&mut e, "inductive TksQ<A> { QN, QC(h: A, t: TksQ<A>) }", "inductive TksQ");
+        let src = "fn plen2(l: TksQ<Nat>) -> Nat { match l { QN => Zero, QC(h, t) => Succ(plen2(t)) } }";
+        let d = decl_of(src);
+        elab(&mut e, src, "plen2");
         let msg = match generate_in_language(&e, &d, &ctx) {
             Err(m) => m,
-            Ok(_) => panic!("plen must decline"),
+            Ok(_) => panic!("plen2 must decline"),
         };
-        assert!(msg.contains("type arguments"), "{msg}");
+        assert!(msg.contains("no `datarepr` has minted a name"), "{msg}");
     }
 }
 

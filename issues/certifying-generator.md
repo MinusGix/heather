@@ -31,9 +31,14 @@ lib/certgen_code.hthr, the certificate expression in lib/certgen_cert.hthr,
 the once-proved existential kit in lib/ir_v1.hthr. Design docs:
 certifying-generator-design.md (v1/v2 core), certgen-non-nat-embeddings-design.md,
 certgen-tier1-source-types-design.md, certgen-tier0-params-design.md,
-certgen-cert-expression-design.md (§8.1: what may touch CertOut). Remaining
-of doc §8 item 2: parameterized instantiations (with [[datarepr-separation]]);
-then loopification and [[prog-extension-lemma]]. Costs and rails live on
+certgen-cert-expression-design.md (§8.1: what may touch CertOut). Parameterized
+instantiations LANDED 2026-08-15 (the datarepr v1 round,
+docs/datarepr-design.md §5.1 item 3): a `datarepr` mints the monomorph
+name, the rim's `name`/`spell` split spells the type applied while the
+minted name names the functions, and the `plen`/`TksP<Nat>` fixture flipped
+to kernel-checked emission with the decline preserved at unminted
+instantiations. Remaining of doc §8 item 2: loopification and
+[[prog-extension-lemma]]. Costs and rails live on
 [[certgen-harness-cost]]. Widening ledger probed 2026-08-15 (datarepr v1
 verification, docs/datarepr-design.md §5.1 item 3 correction): beyond the
 name-minting flip, calc.hthr-`run`-shaped programs need four further

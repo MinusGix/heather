@@ -21,3 +21,14 @@ Compile instances, certgen emissions, derived tables), not a datarepr
 blocker — the datarepr landing round should merely avoid committing to
 surface-spellable generated names. Related: [[datarepr-separation]],
 [[compile-typeclass-design]].
+
+2026-08-15, datarepr v1 landing: the round DID land nameable names
+(`Repr_N`, `N_spec_rec`, `Repr_N::⟨clause⟩` — docs/datarepr-design.md §1.4
+as-landed note 1), and the constraint is structural, not an oversight: the
+artifacts are emitted as surface source and re-parsed (the certgen move,
+for the same dependent-record reason), and `#` never *begins* a surface
+identifier, so an unnameable name cannot be written in the text that
+declares it. Whatever design lands here must either give the generated-
+source path a way to declare-and-reference sigiled names (parser accepts
+`#` in generated-source mode only), or move generation off surface text.
+The datarepr names are the first standing customers to migrate.

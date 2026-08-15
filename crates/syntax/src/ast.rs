@@ -32,6 +32,13 @@ pub enum Item {
     /// `designation + at Nat := add` — what an operator symbol means at a
     /// carrier (docs/operators-onto-classes-design.md §3).
     Designation(DesignationDecl),
+    /// `datarepr N for S { … }` / `datarepr N for S := repr::naive();` — a
+    /// runtime representation of a spec inductive, linked by certified
+    /// refinement (docs/datarepr-design.md §1.4).
+    Datarepr(DatareprDecl),
+    /// `impl f for Rp { body := …, refines := … }` — one entry of the
+    /// **cost basis**, the open per-operation registry (§1.2).
+    Impl(ImplDecl),
     /// `import nat;` / `import option::{Option, map};`
     /// (docs/modules-design.md §3.1). Allowed only before the first
     /// declaration, so the import DAG is readable without elaborating
@@ -90,8 +97,71 @@ impl Item {
             Item::Designation(d) => {
                 panic!("expected a declaration, found `designation {}`", d.symbol)
             }
+            Item::Datarepr(d) => {
+                panic!("expected a declaration, found `datarepr {}`", d.name)
+            }
+            Item::Impl(i) => {
+                panic!("expected a declaration, found `impl {}`", i.op)
+            }
         }
     }
+}
+
+/// `datarepr VecList for List<Tok> { R := VecT, … }`
+/// (docs/datarepr-design.md §1.4).
+///
+/// A dedicated form rather than an `instance`, for a structural reason: the
+/// record's field list is computed from the spec inductive's constructor list,
+/// and an instance instantiates a *fixed* class shape.
+#[derive(Debug, Clone)]
+pub struct DatareprDecl {
+    /// The repr's name. Also the minting site for a parameterized
+    /// instantiation's monomorph name (§1.4 item 2), which is why it is
+    /// written rather than derived.
+    pub name: String,
+    /// The spec type this represents: `List<Tok>`, `Nat`.
+    pub spec: Ty,
+    pub body: DatareprBody,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone)]
+pub enum DatareprBody {
+    /// `{ R := …, mk Cons := …, … }`.
+    Fields(Vec<DatareprField>),
+    /// `:= repr::naive()` and, later, other repr-producing meta-programs. The
+    /// expression is kept as written; which ones are understood is the
+    /// elaborator's rule, not the grammar's.
+    Mint(Expr),
+}
+
+/// `impl length for VecList { body := …, refines := … }`
+/// (docs/datarepr-design.md §1.2). The operation is an *index*, so the
+/// registry is open by construction — there is no closed field list to amend.
+#[derive(Debug, Clone)]
+pub struct ImplDecl {
+    /// The spec function this implements.
+    pub op: String,
+    /// The repr it implements it at — a `datarepr`'s name.
+    pub repr: String,
+    /// Reuses a `datarepr`'s clause node: the shapes are the same `f := e`,
+    /// and `mk` is simply never set here.
+    pub fields: Vec<DatareprField>,
+    pub span: Span,
+}
+
+/// One clause of an explicit `datarepr` body. `:=` rather than `:` for the
+/// reason an instance's literal field uses it: a `:` here would read as a
+/// field's type ascription.
+#[derive(Debug, Clone)]
+pub struct DatareprField {
+    /// `mk Cons := vec_prepend` — this clause is a *constructor image*, and
+    /// `name` is the spec constructor's name rather than a record field's.
+    /// The elaborator checks the clause list against `S`'s declaration.
+    pub is_mk: bool,
+    pub name: String,
+    pub expr: Expr,
+    pub span: Span,
 }
 
 /// `class C<A, …> extends P<A>, Q<A> { f: T, … }`

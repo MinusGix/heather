@@ -65,6 +65,7 @@
 //! rebinding continuation) runs at the same decremented fuel — a *depth*
 //! budget, `1 + max(sub, rest)` at the branching instructions.
 
+use heather_syntax::ast::{Ty, TyKind};
 use std::fmt::Write as _;
 
 use heather_syntax::ast::{Decl, DeclKind};
@@ -133,9 +134,9 @@ fn compile_record(
         return None;
     }
     let rec = record_name(pts, res, arity);
-    let mut fty = res.name.clone();
+    let mut fty = res.spell.clone();
     for p in pts.iter().rev() {
-        let pn = p.as_ref().map(|t| t.name.as_str()).unwrap_or("Nat");
+        let pn = p.as_ref().map(|t| t.spell.as_str()).unwrap_or("Nat");
         fty = format!("{pn} -> {fty}");
     }
     let params: Vec<Sl> = pts
@@ -151,7 +152,7 @@ fn compile_record(
         .iter()
         .zip(pts)
         .map(|(p, t)| {
-            let pn = t.as_ref().map(|t| t.name.as_str()).unwrap_or("Nat");
+            let pn = t.as_ref().map(|t| t.spell.as_str()).unwrap_or("Nat");
             format!("({}: {pn}) -> ", p.spec)
         })
         .collect();
@@ -218,8 +219,15 @@ impl Sl {
 }
 
 struct ResTy {
-    /// The surface name, for the record's `f: Nat -> … -> {name}`.
+    /// The identifier this type contributes to generated NAMES — the record's
+    /// name and `{T}_gen_embed`'s. For a parameterized instantiation this is
+    /// the monomorph name a `datarepr` minted (docs/datarepr-design.md §1.4
+    /// item 2), which is the whole of what the rim was missing.
     name: String,
+    /// How the type is SPELLED in generated source. Equal to `name` except at
+    /// a minted monomorph, where the type is written applied (`TksP<Nat>`)
+    /// and only the *function* names need the minted identifier.
+    spell: String,
     /// `embed_nat`, or the emitted `{T}_gen_embed`.
     embed: String,
     /// `(constructor name, field count)` in **declaration order**, which is
@@ -230,10 +238,63 @@ struct ResTy {
     embed_decl: Option<String>,
 }
 
+/// The monomorph name a `datarepr` minted for this instantiation
+/// (docs/datarepr-design.md §1.4 item 2), or `None` for an unparameterized
+/// type. An instantiation with no minted name is the decline this round
+/// keeps: the rim would have no identifier to build `embed_T`'s name from.
+fn monomorph_of(e: &Elaborator, name: &str, args: &[Ty]) -> Result<Option<String>, String> {
+    if args.is_empty() {
+        return Ok(None);
+    }
+    match e.monomorph_name(name, args) {
+        Some(m) => Ok(Some(m.to_string())),
+        None => Err(
+            "is applied to type arguments and no `datarepr` has minted a name for that \
+             instantiation: a monomorphized lowering has no name to spell `embed_T` with \
+             (docs/datarepr-design.md §1.4 item 2)"
+                .to_string(),
+        ),
+    }
+}
+
+/// The applied spelling of a type, as generated source writes it.
+fn spell_applied(name: &str, args: &[Ty]) -> Result<String, String> {
+    let t = Ty {
+        kind: TyKind::Named { name: name.to_string(), args: args.to_vec() },
+        span: heather_syntax::Span { start: 0, end: 0 },
+    };
+    crate::datarepr::spell_ty(&t).ok_or_else(|| format!("`{name}`'s arguments cannot be spelled"))
+}
+
+/// The instantiation's substitution, for reading a stored field type at the
+/// monomorph. Type parameters are monomorphized, so this is a substitution on
+/// the surface type — the same move `datarepr` makes.
+fn subst_of<'a>(
+    params: &'a [String],
+    args: &[Ty],
+) -> Result<std::collections::HashMap<&'a str, String>, String> {
+    if params.len() != args.len() {
+        return Err(format!("takes {} type argument(s), not {}", params.len(), args.len()));
+    }
+    let mut m = std::collections::HashMap::new();
+    for (p, a) in params.iter().zip(args) {
+        let s = crate::datarepr::spell_ty(a)
+            .ok_or_else(|| "has a type argument that cannot be spelled".to_string())?;
+        m.insert(p.as_str(), s);
+    }
+    Ok(m)
+}
+
+/// A stored field type at the instantiation, spelled.
+fn field_spell(fty: &Ty, subst: &std::collections::HashMap<&str, String>) -> Option<String> {
+    crate::datarepr::spell_ty(&crate::datarepr::subst_ty(fty, subst))
+}
+
 impl ResTy {
     fn nat() -> ResTy {
         ResTy {
             name: "Nat".into(),
+            spell: "Nat".into(),
             embed: "embed_nat".into(),
             ctors: vec![("Zero".into(), 0), ("Succ".into(), 1)],
             embed_decl: None,
@@ -315,7 +376,7 @@ impl ResTy {
             .collect();
         format!(
             "fn {}(gx: {}) -> Val {{\n    match gx {{\n{arms}    }}\n}}\n",
-            self.embed, self.name
+            self.embed, self.spell
         )
     }
 
@@ -331,12 +392,15 @@ impl ResTy {
         match &d.result.kind {
             TyKind::Nat => Ok(ResTy::nat()),
             TyKind::Named { name, args } => {
-                if !args.is_empty() {
-                    return Err(format!(
-                        "`{name}` is applied to type arguments: a monomorphized \
-                         lowering has no name to spell `embed_T` with"
-                    ));
-                }
+                // FLIP RECORDED (docs/datarepr-design.md §5.1 item 3): a
+                // parameterized instantiation was this fn's own decline —
+                // "a monomorphized lowering has no name to spell `embed_T`
+                // with" — until `datarepr` became its minting site. The type
+                // was always spellable; only the *function* names were
+                // missing, which is why `spell` and `name` split here and
+                // nothing else about the rim moves.
+                let mono = monomorph_of(e, name, args)
+                    .map_err(|m| format!("the result type `{name}` {m}"))?;
                 let ind = e
                     .lookup_inductive(name)
                     .ok_or_else(|| format!("`{name}` is not a declared inductive"))?;
@@ -346,12 +410,13 @@ impl ResTy {
                          (docs/certgen-non-nat-embeddings-design.md §8)"
                     ));
                 }
-                if !ind.params.is_empty() || ind.index.is_some() || !ind.valparams.is_empty() {
-                    return Err(format!("`{name}` is parameterized or indexed"));
+                if ind.index.is_some() || !ind.valparams.is_empty() {
+                    return Err(format!("`{name}` is indexed or value-parameterized"));
                 }
                 if ind.ctors.is_empty() {
                     return Err(format!("`{name}` has no constructors"));
                 }
+                let subst = subst_of(&ind.params, args)?;
                 let mut ctors = Vec::new();
                 for c in &ind.ctors {
                     // A constructor field must be a `Nat`
@@ -363,7 +428,7 @@ impl ResTy {
                     // this is the residue agreeing — so a *disagreement* here
                     // would be the loud kind rather than a decline.
                     for (fname, fty) in &c.fields {
-                        if !matches!(fty.kind, TyKind::Nat) {
+                        if field_spell(fty, &subst).as_deref() != Some("Nat") {
                             let fname = fname.clone().unwrap_or_else(|| "_".to_string());
                             return Err(format!(
                                 "`{name}`'s constructor `{}` has a field `{fname}` that is \
@@ -375,9 +440,11 @@ impl ResTy {
                     }
                     ctors.push((c.name.clone(), c.fields.len()));
                 }
+                let id = mono.unwrap_or_else(|| name.clone());
                 let mut t = ResTy {
-                    name: name.clone(),
-                    embed: format!("{name}_gen_embed"),
+                    embed: format!("{id}_gen_embed"),
+                    spell: spell_applied(name, args)?,
+                    name: id,
                     ctors,
                     // Filled in below: `embed_text` reads the fields above,
                     // and `is_nat` is exactly "this is `Nat`, so the library
@@ -410,8 +477,15 @@ enum PF {
 /// passed to a callee, or returned.
 #[derive(Clone)]
 struct ParamTy {
-    /// The surface name, for binders and the record's `f: {name} -> …`.
+    /// The identifier this type contributes to generated NAMES — the record's
+    /// name and `{T}_gen_embed`'s. For a parameterized instantiation this is
+    /// the monomorph name a `datarepr` minted (docs/datarepr-design.md §1.4
+    /// item 2), which is the whole of what the rim was missing.
     name: String,
+    /// How the type is SPELLED in generated source. Equal to `name` except at
+    /// a minted monomorph, where the type is written applied (`TksP<Nat>`)
+    /// and only the *function* names need the minted identifier.
+    spell: String,
     /// The emitted `{T}_gen_embed` — recursive exactly when the type is.
     embed: String,
     /// `(constructor name, per-field kind)` in declaration order — the
@@ -440,19 +514,19 @@ impl ParamTy {
         match &p.ty.kind {
             TyKind::Nat => Ok(None),
             TyKind::Named { name, args } => {
-                if !args.is_empty() {
-                    return Err(format!(
-                        "parameter `{}`'s type `{name}` is applied to type arguments: a \
-                         monomorphized lowering has no name to spell `embed_T` with",
-                        p.name
-                    ));
-                }
+                // FLIP RECORDED (docs/datarepr-design.md §5.1 item 3) — see
+                // the sibling comment in `ResTy::of`.
+                let mono = monomorph_of(e, name, args)
+                    .map_err(|m| format!("parameter `{}`'s type `{name}` {m}", p.name))?;
                 let ind = e
                     .lookup_inductive(name)
                     .ok_or_else(|| format!("`{name}` is not a declared inductive"))?;
-                if !ind.params.is_empty() || ind.index.is_some() || !ind.valparams.is_empty() {
-                    return Err(format!("`{name}` is parameterized or indexed"));
+                if ind.index.is_some() || !ind.valparams.is_empty() {
+                    return Err(format!("`{name}` is indexed or value-parameterized"));
                 }
+                let subst = subst_of(&ind.params, args)?;
+                let id = mono.unwrap_or_else(|| name.clone());
+                let spell = spell_applied(name, args)?;
                 // FLIP RECORDED (docs/certgen-tier0-params-design.md §10 item
                 // 5): a non-recursive inductive parameter was this fn's own
                 // decline until the tier-0-parameters round — "its `match`
@@ -479,8 +553,9 @@ impl ParamTy {
                         return Err(format!("`{name}` has no constructors"));
                     }
                     return Ok(Some(ParamTy {
-                        name: name.clone(),
-                        embed: format!("{name}_gen_embed"),
+                        embed: format!("{id}_gen_embed"),
+                        name: id,
+                        spell,
                         ctors,
                         recursive: false,
                     }));
@@ -491,7 +566,9 @@ impl ParamTy {
                     for (fty, kind) in c.fields.iter().map(|f| &f.1).zip(&c.kind) {
                         use crate::inductive::FieldKind;
                         match kind {
-                            FieldKind::Payload if matches!(fty.kind, TyKind::Nat) => {
+                            FieldKind::Payload
+                                if field_spell(fty, &subst).as_deref() == Some("Nat") =>
+                            {
                                 fs.push(PF::Nat)
                             }
                             FieldKind::Payload => {
@@ -520,8 +597,9 @@ impl ParamTy {
                     ));
                 }
                 Ok(Some(ParamTy {
-                    name: name.clone(),
-                    embed: format!("{name}_gen_embed"),
+                    embed: format!("{id}_gen_embed"),
+                    name: id,
+                    spell,
                     ctors,
                     recursive: true,
                 }))
@@ -602,7 +680,7 @@ impl ParamTy {
             .collect();
         format!(
             "fn {}(gx: {}) -> Val {{\n    match gx {{\n{arms}    }}\n}}\n",
-            self.embed, self.name
+            self.embed, self.spell
         )
     }
 
@@ -1537,7 +1615,7 @@ fn emit_invariant(
                     let pn = pts
                         .get(i)
                         .and_then(|t| t.as_ref())
-                        .map(|t| t.name.as_str())
+                        .map(|t| t.spell.as_str())
                         .unwrap_or("Nat");
                     format!("{p}: {pn}, ")
                 })
@@ -1581,7 +1659,7 @@ fn emit_invariant(
                     let pn = pts
                         .get(i)
                         .and_then(|t| t.as_ref())
-                        .map(|t| t.name.as_str())
+                        .map(|t| t.spell.as_str())
                         .unwrap_or("Nat");
                     format!("({}: {pn}) -> ", params[i])
                 })
@@ -1689,7 +1767,7 @@ fn emit_invariant(
                     let pn = pts
                         .get(i)
                         .and_then(|t| t.as_ref())
-                        .map(|t| t.name.as_str())
+                        .map(|t| t.spell.as_str())
                         .unwrap_or("Nat");
                     format!("({p}: {pn}) -> ")
                 })
@@ -1728,7 +1806,7 @@ fn emit_invariant(
                 nat: ResTy::nat(),
                 scrut_pt: Some(pt),
             };
-            writeln!(w, "theorem {name}({rec_name}: {}):", pt.name).unwrap();
+            writeln!(w, "theorem {name}({rec_name}: {}):", pt.spell).unwrap();
             writeln!(w, "    {other_binders}(tail: Val)").unwrap();
             writeln!(w, "    -> Converges({prog},").unwrap();
             writeln!(w, "                 {env_rec},").unwrap();
@@ -1764,7 +1842,7 @@ fn emit_instance(w: &mut String, f: &str, pts: &[Option<ParamTy>], model: &FnIr,
             let pn = pts
                 .get(i)
                 .and_then(|t| t.as_ref())
-                .map(|t| t.name.as_str())
+                .map(|t| t.spell.as_str())
                 .unwrap_or("Nat");
             format!("λ ({p}: {pn}) => ")
         })

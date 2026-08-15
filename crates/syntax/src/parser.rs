@@ -17,6 +17,13 @@
 //!            "{" rfield ("," rfield)* ","? "}"
 //! cref    := name "<" type ("," type)* ">"
 //! inst    := "instance" tyvars? cref ("requires" ibind ("," ibind)*)?
+//! impl    := "impl" name "for" name "{" dclause ("," dclause)* ","? "}"
+//!                                     -- one entry of the cost basis (§1.2)
+//! drepr   := "datarepr" name "for" type
+//!            ( ":=" expr ";"? | "{" dclause ("," dclause)* ","? "}" )
+//!                                     -- a certified runtime representation
+//!                                     (docs/datarepr-design.md §1.4)
+//! dclause := "mk"? name ":=" expr     -- `mk C := …` is C's image
 //! desig   := "designation" tyvars? OP "at" type ":=" expr
 //!                                     -- what a symbol means at a carrier
 //!                                     (docs/operators-onto-classes-design.md)
@@ -502,6 +509,12 @@ impl Parser {
         if self.at_kw("designation") {
             return Ok(Item::Designation(self.designation_decl()?));
         }
+        if self.at_kw("datarepr") {
+            return Ok(Item::Datarepr(self.datarepr_decl()?));
+        }
+        if self.at_kw("impl") {
+            return Ok(Item::Impl(self.impl_decl()?));
+        }
         // Section variables and constraint bundles are the two ways round 2
         // sketched of writing a constraint ONCE for many declarations. Neither
         // is decided (issues/requires-placement-syntax.md, log 2026-08-07), and
@@ -663,6 +676,99 @@ impl Parser {
         let op = self.expr()?;
         let span = start.join(op.span);
         Ok(DesignationDecl { tyvars, symbol, carrier, op, span })
+    }
+
+    /// `datarepr N for S { R := …, mk Cons := …, … }` and
+    /// `datarepr N for S := repr::naive();` (docs/datarepr-design.md §1.4).
+    ///
+    /// Contextual like every keyword here. The two bodies are told apart by
+    /// one token after the spec type, as an instance's two bodies are.
+    fn datarepr_decl(&mut self) -> R<DatareprDecl> {
+        let start = self.peek_span();
+        self.bump(); // `datarepr`
+        let (name, _) = self.ident("the repr's name")?;
+        if !self.eat_kw("for") {
+            return self.err(&format!(
+                "`for` and then the spec type (`datarepr {name} for List<Tok> := \
+                 repr::naive();`): a repr is a representation *of* something, so the \
+                 something is written"
+            ));
+        }
+        let spec = self.with_record_lit(true, |p| p.ty())?;
+        if matches!(self.peek(), TokKind::ColonEq) {
+            self.bump();
+            let e = self.expr()?;
+            let mut end = e.span;
+            if matches!(self.peek(), TokKind::Semi) {
+                end = self.peek_span();
+                self.bump();
+            }
+            return Ok(DatareprDecl {
+                name,
+                spec,
+                body: DatareprBody::Mint(e),
+                span: start.join(end),
+            });
+        }
+        self.expect(&TokKind::LBrace, "`{` (the repr's clauses) or `:=` (a minted repr)")?;
+        let fields = self.datarepr_clauses()?;
+        let end = self.expect(&TokKind::RBrace, "`}` (the repr's clauses)")?;
+        Ok(DatareprDecl {
+            name,
+            spec,
+            body: DatareprBody::Fields(fields),
+            span: start.join(end),
+        })
+    }
+
+    /// The `name := expr` / `mk C := expr` clause list shared by `datarepr`
+    /// and `impl`. The caller owns the braces.
+    fn datarepr_clauses(&mut self) -> R<Vec<DatareprField>> {
+        let mut fields = Vec::new();
+        while !matches!(self.peek(), TokKind::RBrace) {
+            let fstart = self.peek_span();
+            // `mk Cons := …`. `mk` is contextual here too, and unambiguous:
+            // a record field named `mk` would be `mk := …`, with `:=` where
+            // the constructor's name stands.
+            let is_mk = self.at_kw("mk")
+                && matches!(self.toks.get(self.pos + 1).map(|t| &t.kind), Some(TokKind::Ident(_)));
+            if is_mk {
+                self.bump();
+            }
+            let (fname, _) = self.ident(if is_mk {
+                "the spec constructor this image is for"
+            } else {
+                "a clause name (`abs := …`)"
+            })?;
+            self.expect(&TokKind::ColonEq, "`:=` (a repr clause)")?;
+            let expr = self.expr()?;
+            let span = fstart.join(expr.span);
+            fields.push(DatareprField { is_mk, name: fname, expr, span });
+            if !matches!(self.peek(), TokKind::Comma) {
+                break;
+            }
+            self.bump();
+        }
+        Ok(fields)
+    }
+
+    /// `impl f for Rp { body := …, refines := … }`
+    /// (docs/datarepr-design.md §1.2).
+    fn impl_decl(&mut self) -> R<ImplDecl> {
+        let start = self.peek_span();
+        self.bump(); // `impl`
+        let (op, _) = self.ident("the spec function this implements")?;
+        if !self.eat_kw("for") {
+            return self.err(&format!(
+                "`for` and then the repr (`impl {op} for BinNat {{ … }}`): an \
+                 implementation is an implementation *at* a representation"
+            ));
+        }
+        let (repr, _) = self.ident("the repr's name")?;
+        self.expect(&TokKind::LBrace, "`{` (the implementation's clauses)")?;
+        let fields = self.datarepr_clauses()?;
+        let end = self.expect(&TokKind::RBrace, "`}` (the implementation's clauses)")?;
+        Ok(ImplDecl { op, repr, fields, span: start.join(end) })
     }
 
     /// `instance<A, B> C<T> requires m: D<A> { … }`

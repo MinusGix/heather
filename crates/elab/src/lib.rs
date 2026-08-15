@@ -78,6 +78,7 @@ pub mod certgen;
 pub mod gate;
 pub mod stats;
 mod code;
+mod datarepr;
 mod names;
 mod patterns;
 mod forded;
@@ -735,6 +736,25 @@ pub struct Elaborator {
     /// structure a carrier has, which is why `+` at `Bool` can be `or` while
     /// both Bool monoids stay registered as equals (§3.3).
     designations: HashMap<(String, String), traits::DesignationInfo>,
+    /// One repr per spec type, keyed per `docs/datarepr-design.md` §4: the
+    /// spec inductive's *elaborated declaration* identity plus the elaborated
+    /// arguments of the instantiation. Declaration keying and not nominal
+    /// keying, so that editing `S` invalidates its repr instead of leaving a
+    /// stale basis that still resolves (§4's failure mode).
+    datareprs: HashMap<datarepr::DatareprKey, datarepr::DatareprInfo>,
+    /// The monomorph names a `datarepr` minted for parameterized
+    /// instantiations (§1.4 item 2), keyed on (declaration tag, argument
+    /// spelling). `List<Tok>` is spellable as a *type* and unspellable as a
+    /// *name*; this table is what lets a generator name a function about it.
+    monomorphs: HashMap<(u32, String), String>,
+    /// Reprs by their own name, for `impl f for Rp` to find `Rp`'s carrier
+    /// and the namespace its `abs`/`inv` live in.
+    datarepr_by_name: HashMap<String, datarepr::DatareprInfo>,
+    /// One `Impl` per (repr, operation) — the open, per-operation registry of
+    /// design §1.2, keyed per §4.
+    impls: HashMap<(String, String), String>,
+    /// Surface declarations by name; see the note in `elab_decl`.
+    decls: HashMap<String, Decl>,
     /// Operator fallbacks taken while elaborating the current declaration
     /// after a designation table was consulted at a known, uncovered carrier.
     /// Kept only to turn an otherwise source-free kernel rejection into a
@@ -938,6 +958,11 @@ impl Elaborator {
             classes: HashMap::new(),
             instances: HashMap::new(),
             designations: HashMap::new(),
+            datareprs: HashMap::new(),
+            monomorphs: HashMap::new(),
+            datarepr_by_name: HashMap::new(),
+            impls: HashMap::new(),
+            decls: HashMap::new(),
             op_fallback_notes: RefCell::new(Vec::new()),
             instance_scope: Vec::new(),
             derived: Vec::new(),
@@ -998,6 +1023,8 @@ impl Elaborator {
                 Item::Class(c) => self.elab_class(c),
                 Item::Instance(i) => self.elab_instance(i),
                 Item::Designation(d) => self.elab_designation(d),
+                Item::Datarepr(d) => self.elab_datarepr(d),
+                Item::Impl(i) => self.elab_impl(i),
                 Item::Import(_) => Ok(()),
             };
             // Canonical derived instances are minted **between** items, where
@@ -1260,6 +1287,8 @@ impl Elaborator {
                 Item::Class(c) => self.elab_class(c),
                 Item::Instance(i) => self.elab_instance(i),
                 Item::Designation(d) => self.elab_designation(d),
+                Item::Datarepr(d) => self.elab_datarepr(d),
+                Item::Impl(i) => self.elab_impl(i),
                 Item::Import(_) => Ok(()),
             };
             if r.is_err() {
@@ -1420,6 +1449,14 @@ impl Elaborator {
         self.goal_spans.borrow_mut().clear();
         self.frozen.set(false);
         self.op_fallback_notes.borrow_mut().clear();
+        // The surface signature, kept for the declaration forms that have to
+        // *restate* it: `impl f for Rp` computes `f`'s refinement obligation
+        // by rewriting `f`'s own parameter and result types
+        // (docs/datarepr-design.md §1.2). Nothing in the ordinary path reads
+        // this table.
+        if r.is_ok() {
+            self.decls.insert(decl.name.clone(), decl.clone());
+        }
         r
     }
 
