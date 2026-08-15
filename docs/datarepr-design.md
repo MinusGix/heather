@@ -290,9 +290,9 @@ that remain genuinely rough (§2.5) — that honesty is the section's point.
 
 ### 2.1 The plumbing the rungs share
 
-The generated layer composes in a plain sum `Out<E, T> = Ok(T) | Err(E)`
+The generated layer composes in a plain sum `Out<T, E> = Ok(T) | Err(E)`
 with monadic bind; `+ E` on an `Impl` signature is surface sugar for
-`Out<E, ·>` and nothing more (no grading, no effect system — that reading
+`Out<·, E>` and nothing more (no grading, no effect system — that reading
 belongs to `effects-direction` if ever). `E` is a **per-closure error
 enumeration minted at the `runtime_fn` boundary** (RECOMMENDED, see §2.5a):
 when the compiler's walk assembles a closure, the failure constructors
@@ -367,7 +367,7 @@ possibility (the user's confirmation note: this split is *forced* by that
 function's existence). So the `Impl` is outcome-typed, no ladder choice:
 
 ```heather
-push_impl : R -> A -> Out<E, R>
+push_impl : R -> A -> Out<R, E>
 refines   : inv(r) -> match push_impl(r, a) {
     Ok(r')  => abs(r') = push(abs(r), a)  ∧  inv(r'),
     Err(_)  => True,                       // weak certificate
@@ -408,7 +408,7 @@ kind with dispatch-policy defaults — not a third semantic class. Two faces:
   arriving from outside any repr (a `runtime_fn` argument; a spec-side
   computation crossing into a `u64`-backed repr, e.g. `Nat`'s own
   `mk_succ`/`of_nat` image on the `u64` carrier per FINDING 1) has no
-  `inv` to lean on. Emitted: `narrow_u64(n) : Out<E, u64>` — the decider is
+  `inv` to lean on. Emitted: `narrow_u64(n) : Out<u64, E>` — the decider is
   the comparison against `2^64`, the sound arm's certificate is the
   injection's commutation with `abs`, the `Err(E.Width)` arm is weak. And
   the asymmetry, stated where it belongs: a bubbled width condition is
