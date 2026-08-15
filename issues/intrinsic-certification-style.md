@@ -43,3 +43,7 @@ with 2–3 worked examples (sorting is the canonical one), the surface
 spelling question (how the pair-return is written without noise), and the
 splitter's obligations. Nothing in the v1 obligation-record design may
 preclude it.
+
+## Log
+
+- 2026-08-15: Checked against the v1 design and NOT precluded (docs/obligation-records-design.md §7): obligation slots are exactly the 'somewhere' an intrinsic definition's split-out proof components have to go, and §1.1's state machine does not assume the filler is a human-written proof declaration — a route fills slots, the kernel checks the filling, provenance records which route did it. The splitter is therefore a third route beside derive() and via derived, addable without touching §1-§6.

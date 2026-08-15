@@ -3,7 +3,7 @@ title: Generated names are not ordinary identifiers: the # hygiene boundary
 status: open
 labels: [frontend,elaboration,design,ergonomics]
 created: 2026-08-14
-updated: 2026-08-14
+updated: 2026-08-15
 ---
 
 Filed from the datarepr design review (2026-08-14, user live commentary on
@@ -46,3 +46,7 @@ marker in user-written files while the generated-source path may produce
 it — a mode split at the *lexer* for one character class, far smaller than
 the parser-mode split feared above. Not immediate; implement when a round
 wants it.
+
+## Log
+
+- 2026-08-15: New standing customer, deferred to here rather than decided elsewhere (docs/obligation-records-design.md §4.4): reprgen names derived artifacts at top level (add_derived, add_is_rec, add_derived_refines), and once 'impl add for BinNat := derive()' is writable from source those land in the USER's namespace from a user-written declaration. The design deliberately does NOT namespace them in v1 (it would change emission bytes for no v1 benefit) and satisfies the provenance verdict a different way — a Provenance enum on the registry entry, printed by the obligations listing, never consulted by a certificate. Moving derived artifacts under the owner's namespace, carrying this issue's marker, is the better answer and belongs here.

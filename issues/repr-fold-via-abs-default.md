@@ -23,3 +23,7 @@ Bonus the round should collect: a repr whose fold is NOT defined through
 control point §3.3's as-landed note 5 records as missing (the
 `refines_inv` transport direction is unobservable when fold is defined
 through `abs`).
+
+## Log
+
+- 2026-08-15: Reshaped by the obligation-records design (docs/obligation-records-design.md §1.2 FINDING C, §5): this issue and the slot mechanism both want to give an OMITTED clause a meaning, and they disagree. Settled direction there: omission keeps (and gains) the meaning 'take the default', an OPEN obligation is written explicitly as 'field := ?', and a clause that is neither is checked as today — so the two rounds do not collide as long as ordering holds. If the rounds merge, that one sentence is the whole rule; if they do not, the slot round lands '?' first so this round has an unambiguous omission to define. The bonus this issue records (a repr whose fold is NOT through abs, as the missing §3.3 control) is untouched.

@@ -20,3 +20,7 @@ the ones user code is *supposed* to reach, as opposed to the internals
 (`ListTok::fold`, `ListTok::mk_Cons`, …-shaped), with the workaround
 split dissolved rather than papered over: fixing the two underlying
 defects is likely the first half of this issue.
+
+## Log
+
+- 2026-08-15: The obligation-records design (docs/obligation-records-design.md §3) hands this issue the REFERENCE spelling deliberately, and hands it a shape to extend. Probed lexer/parser facts it should build on: 'A::b' is a SINGLE lexer token with exactly one join (lexer.rs:130-137), so no three-segment '::' path exists to be spelled; '::' never follows an application (every 'Impl(f, Rp)::refines'-style candidate is a parse error today); '@' is claimed as a PREFIX (fully-explicit call, parser.rs:2492); '.'-chains ('Impl(add, BinNat).refines', 'BinNat.impl(add).refines') parse today and reach name resolution. The design takes '<owner>.<slot>' for the proof-declaration head ONLY, as a KEY resolved in the slot table rather than as an expression — precisely because a dot on an assembled repr/impl value is theorem-field-projection-oom. Consequence for this issue: a dot-shaped REFERENCE form is blocked on fixing that defect first, and until then hand-written proofs keep spelling the minted namespace paths (Impl_Rp_f::refines(), Repr_N::abs()).
