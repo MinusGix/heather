@@ -32,3 +32,13 @@ declares it. Whatever design lands here must either give the generated-
 source path a way to declare-and-reference sigiled names (parser accepts
 `#` in generated-source mode only), or move generation off surface text.
 The datarepr names are the first standing customers to migrate.
+
+2026-08-15, user verdicts on the above: `#` is WITHDRAWN as the sigil —
+use a reserved Unicode character the way Lean marks inaccessible names
+(its `✝` style). And the bar is softened: generated names need to be
+*mostly* inaccessible — a clear visual "you should avoid depending on
+this" marker plus convention — not 100% unwritable; harder inaccessibility
+is a nicety. This dissolves the generated-source tension logged above: a
+reserved Unicode char can simply be a legal identifier character
+everywhere, so emit-as-text works unchanged and no parser mode split is
+needed. Not immediate; implement when a round wants it.

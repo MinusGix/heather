@@ -73,13 +73,19 @@ owned by [[compile-typeclass-design]]; `simulate`/IR by
 - Charter the v1 landing round against §5.1's acceptance list (the
   `datarepr`/`impl` forms, naive repr official, the certgen `List<Tok>`
   customer flip, reprgen's byte-free scope).
-- Via-derived's availability (new FINDING, doc §1.2 as-landed note,
-  2026-08-15): via-derived proves body equality *at the carrier*, strictly
-  stronger than refinement — available only where `abs` is injective on
-  `inv`-satisfying values (Bin's leading zeros are the counterexample). The
-  design must say whether "the normal route" means carrier equality or
-  `abs`-image equality chained through the derived certificate, before
-  reprgen leans on it.
+- Via-derived's availability (FINDING in doc §1.2's as-landed note) —
+  resolution direction agreed 2026-08-15, one confirmation outstanding: the
+  official obligation is the WEAK form, `abs(body) = abs(derived)` under
+  `inv` (+ `inv` of repr-typed results), chained with the derived
+  certificate — always sufficient, so the abstract case is covered.
+  Carrier equality is not a second route: it discharges that obligation by
+  one `ap abs` congruence step, so it's the strongest proof of the same
+  statement and nothing dispatches. "Nicer types" is the repr author's
+  `inv` knob: a canonical-form `inv` (Bin without leading zeros) makes
+  `abs` injective on `inv`, restoring carrier-equality proofs (and
+  decidable carrier equality) at the price of real `inv`-closure
+  obligations. Doc §1.2 to be restated this way before the reprgen
+  charter, which emits the weak obligation.
 - Multirepr within one function (deferred with §5.3's trigger): the
   one-repr-per-closure default is an assumption, not a ceiling — any actual
   conversion function holds two reprs of one spec type, so the activation
