@@ -619,6 +619,16 @@ what the amendment cost and what it did not.
   identical refusal. A `record`'s value parameter is refused too — it is a
   term the fields mention, not a binder with a body to spell.
 
+  > **Amended 2026-08-16** (`issues/modifiers-in-shared-binder-runs.md`): the
+  > refusal is lifted; the sentence is not. A modifier prefixes one name — the
+  > one it is written on — so it is read *inside* the run, per name.
+  > `g as ∙, h: A -> A -> A` is `g` carrying `∙` and `h` carrying nothing,
+  > both at that type; a second name may carry its own symbol
+  > (`g as ∙, h as +: …`), and two names at the *same* symbol still hit §5.2's
+  > uniqueness rule, which is per spelling and not per group. The `record`
+  > value parameter refusal is untouched — that one is about what a binder is,
+  > not about where its modifier sits.
+
 What is deliberately *not* here: a class **advertising** a symbol to its
 users' binders. `as` is strictly local, so `Monoid` writes `∙` in its own laws
 while claiming no default (`issues/class-default-operators.md` owns that, and

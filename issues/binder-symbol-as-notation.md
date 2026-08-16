@@ -3,7 +3,7 @@ title: Symbol notation on declaring binders: `op as ∙` in class heads and valu
 status: closed
 labels: [design,frontend,traits,ergonomics]
 created: 2026-08-09
-updated: 2026-08-11
+updated: 2026-08-16
 ---
 
 Two places want a binder to carry a symbol *as notation* while keeping its
@@ -143,3 +143,4 @@ no designation and no fallback exist); a duplicate-spelling negative control
   be separate from [[class-default-operators]]'s advertisement.
 - 2026-08-11: User review of the landed round left the record/inductive refusal standing but flagged the reasoning as thin: a record with a value parameter *does* have a body for a spelling — its field types mention the parameter, which is structurally the class-head case. The refusal is really about there being no customer yet plus the installation living in class lowering. If a record shows up whose fields state laws over an operation parameter, lifting the parse-time refusal (parser.rs, valparam_list symbols flag) and installing where record fields elaborate is the shape; reopen or file fresh then.
 - 2026-08-11: Second user review pass (2026-08-11): two of the rounds refusals now have open owners. The multi-name-group refusal is REVERSED in [[modifiers-in-shared-binder-runs]] — a modifier attaches to the name it prefixes, per-name, so `g as ∙, h: T` (and `self x, y: T`) will be allowed; not urgent. The record/inductive refusal is promoted from the log entry above into [[record-value-param-symbol]], where an open question belongs.
+- 2026-08-16: The multi-name-group refusal foreseen in the 2026-08-11 review is now reversed: 'g as ∙, h: A -> A -> A' parses, with the symbol on 'g' alone and a second name free to carry its own ([[modifiers-in-shared-binder-runs]], landed 2026-08-16). This issue's assumption is untouched — a symbol's scope still starts at its own binder — and §5.2's uniqueness rule is unchanged and now pinned inside a run too: two 'as ∙' at one annotation are the same collision, named the same way. The record/inductive refusal stands with [[record-value-param-symbol]].

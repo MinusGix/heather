@@ -1378,94 +1378,85 @@ impl Parser {
             if implicit {
                 self.bump();
             }
-            // `self p: T` marks the parameter a method receiver fills
-            // (issues/method-receiver-position.md). `self: T` marks *and*
-            // names it, so a record method reads the Rust way; there is no
-            // third reading, which is what keeps a parameter merely named
-            // `self` from silently not being the subject.
-            let is_self = self.at_kw("self");
-            let self_sp = self.peek_span();
-            if is_self {
-                self.bump();
-            }
-            let (pname, psp) = if is_self && matches!(self.peek(), TokKind::Colon) {
-                ("self".to_string(), self_sp)
-            } else {
-                self.binder_ident("parameter name")?
-            };
-            if is_self && implicit {
-                return Err(ParseError {
-                    msg: "`self` cannot be implicit: an implicit parameter has no \
-                          argument slot for the receiver to fill"
-                        .into(),
-                    span: self_sp.join(psp),
-                });
-            }
-            if is_self && let Some(prev) = params.iter().find(|p: &&Param| p.is_self) {
-                return Err(ParseError {
-                    msg: format!(
-                        "a declaration has at most one `self`, and `{}` is already it",
-                        prev.name
-                    ),
-                    span: self_sp.join(psp),
-                });
-            }
-            // `op as ∙: A -> A -> A` — the binder's body spelling
-            // (issues/binder-symbol-as-notation.md). Read here, between the
-            // name and the annotation, because it is a property of the *name*:
-            // the identifier stays the interface (the constraint slot, every
-            // call site, every diagnostic) and the symbol is local notation for
-            // the rest of the telescope, the result type, and the body.
-            let sym_sp = self.peek_span();
-            let symbol = self.binder_symbol(&pname)?;
             // `fn f(x, y: A)` — a run of names sharing one annotation, the
             // parameter-list half of issues/multi-binder-function-types.md.
             // A name followed by `,` was a parse error before this (every
             // parameter is annotated), so the form is strictly additive; and
             // the run stops at the `:`, which is why the same comma can go on
             // separating parameters after the type.
-            let mut names = vec![(pname, psp)];
-            while matches!(self.peek(), TokKind::Comma)
-                && matches!(self.nth(1), TokKind::Ident(_))
-            {
-                // A modifier prefixes ONE name, which is the whole reason the
-                // shared annotation is spelled with commas rather than by
-                // juxtaposition: `self x, y: A` would have to decide whether
-                // the receiver mark reaches `y`, so it is refused instead.
+            //
+            // A modifier prefixes exactly one name — the one it is written on
+            // — so both modifiers are read per *entry*, inside the run
+            // (issues/modifiers-in-shared-binder-runs.md). `self x, y: A`
+            // marks `x` and leaves `y` an ordinary parameter of the same type,
+            // and `g as ∙, h: A -> A -> A` gives the symbol to `g` alone. The
+            // annotation is the only thing the run shares.
+            let mut names: Vec<(String, Span, bool, Option<String>)> = Vec::new();
+            loop {
+                // `self p: T` marks the parameter a method receiver fills
+                // (issues/method-receiver-position.md). `self: T` marks *and*
+                // names it, so a record method reads the Rust way; there is no
+                // third reading, which is what keeps a parameter merely named
+                // `self` from silently not being the subject.
+                let is_self = self.at_kw("self");
+                let self_sp = self.peek_span();
                 if is_self {
+                    self.bump();
+                }
+                let (pname, psp) = if is_self && matches!(self.peek(), TokKind::Colon) {
+                    ("self".to_string(), self_sp)
+                } else {
+                    self.binder_ident("parameter name")?
+                };
+                if is_self && implicit {
                     return Err(ParseError {
-                        msg: "`self` marks a single parameter: write `self x: A, y: A`, \
-                              with the receiver's own annotation, rather than sharing one \
-                              annotation across the mark"
+                        msg: "`self` cannot be implicit: an implicit parameter has no \
+                              argument slot for the receiver to fill"
                             .into(),
-                        span: self_sp.join(self.peek_span()),
+                        span: self_sp.join(psp),
                     });
                 }
-                // `as` is a modifier too, and the same sentence decides it:
-                // one symbol shared across a run would install one body
-                // spelling for several binders, and there is no reading of
-                // `x, y: A` under `∙` that means anything. Refused by name,
-                // beside `self`, rather than silently attaching to the first
-                // (issues/binder-symbol-as-notation.md — the spec says a
-                // modifier prefixes exactly one name).
-                if let Some(sym) = &symbol {
+                // At most one `self` per declaration — and the run itself has
+                // to be scanned too, since its names are not pushed onto
+                // `params` until the shared annotation is read.
+                if is_self
+                    && let Some(prev) = params
+                        .iter()
+                        .find(|p: &&Param| p.is_self)
+                        .map(|p| p.name.clone())
+                        .or_else(|| {
+                            names.iter().find(|(_, _, s, _)| *s).map(|(n, ..)| n.clone())
+                        })
+                {
                     return Err(ParseError {
                         msg: format!(
-                            "`as` marks a single parameter: `{} as {sym}` is ONE binder's \
-                             body spelling, and a shared annotation would give the one \
-                             symbol to every name in the run. Write \
-                             `{} as {sym}: A, y: A`, with each binder's own annotation",
-                            names[0].0, names[0].0
+                            "a declaration has at most one `self`, and `{prev}` is already it"
                         ),
-                        span: sym_sp.join(self.peek_span()),
+                        span: self_sp.join(psp),
                     });
                 }
+                // `op as ∙: A -> A -> A` — the binder's body spelling
+                // (issues/binder-symbol-as-notation.md). Read here, between
+                // the name and the annotation (or the run's comma), because it
+                // is a property of the *name*: the identifier stays the
+                // interface (the constraint slot, every call site, every
+                // diagnostic) and the symbol is local notation for the rest of
+                // the telescope, the result type, and the body. Two names in
+                // one run may each carry one; that two of them cannot be the
+                // *same* symbol is the ordinary uniqueness rule, which the
+                // elaborator runs per spelling.
+                let symbol = self.binder_symbol(&pname)?;
+                names.push((pname, psp, is_self, symbol));
+                if !(matches!(self.peek(), TokKind::Comma)
+                    && matches!(self.nth(1), TokKind::Ident(_)))
+                {
+                    break;
+                }
                 self.bump();
-                names.push(self.binder_ident("parameter name")?);
             }
             self.expect(&TokKind::Colon, "`:`")?;
             let ty = self.ty()?;
-            let mut span = psp.join(ty.span);
+            let mut span = names[0].1.join(ty.span);
             // `hx: P := infer` — a solver default
             // (docs/traits-layer2-design.md §1). Unambiguous here: nothing
             // else follows a parameter's type with `:=`.
@@ -1491,7 +1482,7 @@ impl Parser {
                         span: eq.join(ssp),
                     });
                 }
-                if is_self {
+                if names.iter().any(|(_, _, s, _)| *s) {
                     return Err(ParseError {
                         msg: "`self` cannot have a solver default: its argument is the \
                               receiver, which is never omitted"
@@ -1508,16 +1499,14 @@ impl Parser {
             // A solver parameter has no positional slot: it is implicit, and
             // `@f(…)` is how it is passed by hand (§1).
             let implicit = implicit || solver.is_some();
-            for (name, nsp) in names {
+            for (name, nsp, is_self, symbol) in names {
                 params.push(Param {
                     name,
                     ty: ty.clone(),
                     implicit,
                     is_self,
                     solver,
-                    // At most one name is in the run when this is set (the
-                    // refusal above), so the clone is the whole of it.
-                    symbol: symbol.clone(),
+                    symbol,
                     span: nsp.join(span),
                 });
             }
@@ -3237,14 +3226,28 @@ mod tests {
     }
 
     #[test]
-    fn as_marks_a_single_parameter() {
-        // The `self` sentence, applied to the other modifier: a shared
-        // annotation across the mark would give one symbol to several
-        // binders, so the run is refused rather than guessed at.
-        let e = parse_file("fn f<A>(g as ∙, h: A -> A -> A, x: A) -> A { x ∙ x }").unwrap_err();
-        assert!(e.msg.contains("`as` marks a single parameter"), "{}", e.msg);
-        // The group *after* an `as` binder is untouched, though: the mark ends
-        // at its own annotation, and `x, y: A` is an ordinary shared run.
+    fn as_marks_the_name_it_is_written_on_inside_a_run() {
+        // The `self` sentence, applied to the other modifier
+        // (issues/modifiers-in-shared-binder-runs.md): the symbol goes to the
+        // ONE name it prefixes, and the run shares only the annotation. So
+        // `g as ∙, h: A -> A -> A` is `g` carrying `∙` and `h` carrying
+        // nothing, both at the same type.
+        let f =
+            parse_file("fn f<A>(g as ∙, h: A -> A -> A, x: A) -> A { g(x, h(x, x)) }").unwrap();
+        let Item::Decl(d) = &f.items[0] else { panic!("expected a declaration") };
+        assert_eq!(d.params.iter().map(|p| p.name.as_str()).collect::<Vec<_>>(), [
+            "g", "h", "x"
+        ]);
+        assert_eq!(d.params[0].symbol.as_deref(), Some("∙"));
+        assert_eq!(d.params[1].symbol, None, "the symbol does not reach the rest of the run");
+        // A run's later name may carry its own, and the two are distinct
+        // spellings at one annotation.
+        let f = parse_file("fn f<A>(g as ∙, h as +: A -> A -> A, x: A) -> A { x ∙ x }").unwrap();
+        let Item::Decl(d) = &f.items[0] else { panic!("expected a declaration") };
+        assert_eq!(d.params[0].symbol.as_deref(), Some("∙"));
+        assert_eq!(d.params[1].symbol.as_deref(), Some("+"));
+        // The group *after* an `as` binder is untouched, as it always was: the
+        // mark ends at its own name, and `x, y: A` is an ordinary shared run.
         parse_file("fn f<A>(g as ∙: A -> A -> A, x, y: A) -> A { x ∙ y }").unwrap();
     }
 
@@ -4118,17 +4121,41 @@ mod tests {
     }
 
     /// A modifier prefixes ONE name — the property the comma form was chosen
-    /// for (Lean's juxtaposition cannot state it). `self x: A, y: A` is two
-    /// parameters; `self x, y: A` is refused rather than guessed at.
+    /// for (Lean's juxtaposition cannot state it) — and it is the name it is
+    /// *written on*, inside the run as well as before it
+    /// (issues/modifiers-in-shared-binder-runs.md). `self x: Nat, y: Nat` and
+    /// `self x, y: Nat` are therefore the same two parameters: the mark
+    /// reaches `x` and nothing else, and the annotation is the only thing the
+    /// run shares.
     #[test]
     fn a_modifier_prefixes_a_single_name() {
-        let f = parse_file("fn r(self x: Nat, y: Nat) -> Nat { x }").unwrap();
+        for src in ["fn r(self x: Nat, y: Nat) -> Nat { x }", "fn r(self x, y: Nat) -> Nat { x }"]
+        {
+            let f = parse_file(src).unwrap();
+            let ps = &only_decl(&f).params;
+            assert_eq!(ps.len(), 2, "{src}");
+            assert_eq!(ps.iter().map(|p| p.name.as_str()).collect::<Vec<_>>(), ["x", "y"]);
+            assert!(ps[0].is_self && !ps[1].is_self, "the mark is on `x` alone: {src}");
+            assert_eq!(ps.iter().map(|p| head(&p.ty)).collect::<Vec<_>>(), ["Nat", "Nat"]);
+        }
+        // A run's *later* name may carry the mark just as well: the modifier
+        // is read per entry, not once at the head of the group.
+        let f = parse_file("fn r(x, self y: Nat) -> Nat { y }").unwrap();
         let ps = &only_decl(&f).params;
-        assert_eq!(ps.len(), 2);
-        assert!(ps[0].is_self && !ps[1].is_self);
+        assert!(!ps[0].is_self && ps[1].is_self);
+    }
 
-        let e = parse_file("fn r(self x, y: Nat) -> Nat { x }").unwrap_err();
-        assert!(e.msg.contains("`self` marks a single parameter"), "{}", e.msg);
+    /// The rule the per-name reading does NOT relax: one `self` per
+    /// declaration. The scan has to see the run it is standing in, whose names
+    /// are not pushed until the shared annotation is read.
+    #[test]
+    fn two_selfs_in_one_run_are_still_refused() {
+        let e = parse_file("fn r(self x, self y: Nat) -> Nat { x }").unwrap_err();
+        assert!(e.msg.contains("at most one `self`"), "{}", e.msg);
+        assert!(e.msg.contains("`x` is already it"), "{}", e.msg);
+        // …and across groups, which is the case that always worked.
+        let e = parse_file("fn r(self x: Nat, self y: Nat) -> Nat { x }").unwrap_err();
+        assert!(e.msg.contains("at most one `self`"), "{}", e.msg);
     }
 
     /// The negative control: names with no annotation are not binders, and the

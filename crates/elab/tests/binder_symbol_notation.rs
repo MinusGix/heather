@@ -288,6 +288,32 @@ fn a_declaration_installs_each_spelling_once() {
     // The positive control beside them: two *different* symbols coexist, in
     // one declaration, by both routes at once.
     ok("fn h<A: Mon(+)>(g as ∙: A -> A -> A, x: A, y: A) -> A { (x + y) ∙ x }");
+
+    // Sharing an annotation changes nothing here: the rule is per spelling,
+    // not per group (issues/modifiers-in-shared-binder-runs.md). Two `as` in
+    // ONE run at the same symbol is the same collision, named the same way…
+    let e = bad("fn r<A>(f as ∙, h as ∙: A -> A -> A, x: A) -> A { x ∙ x }");
+    assert!(e.contains("`f as ∙`"), "{e}");
+    // …and two different symbols in one run are two installations, both live.
+    ok("fn s<A>(f as ∙, h as +: A -> A -> A, x: A) -> A { (x + x) ∙ x }");
+}
+
+/// The run form reaches the elaborator as the spelled-out form it abbreviates:
+/// a modifier attaches to the name it prefixes, so `f as ∙, h: T` installs
+/// `∙` for `f` and leaves `h` an ordinary parameter of the same type
+/// (issues/modifiers-in-shared-binder-runs.md). Stated where it matters — the
+/// symbol is spelled in a **checking** position (a theorem's statement) at an
+/// **open** carrier, with the negative control beside it.
+#[test]
+fn a_symbol_in_a_shared_run_reaches_only_its_own_name() {
+    ok("theorem run<A>(f as ∙, h: A -> A -> A, x: A): x ∙ x = f(x, x) { refl }");
+    // `h` is a parameter of the same type, referable by its identifier — the
+    // run really did bind two names, not one.
+    ok("theorem both<A>(f as ∙, h: A -> A -> A, x: A): h(x, x ∙ x) = h(x, f(x, x)) { refl }");
+    // The negative control: the symbol did NOT reach `h`, and `∙` names `f`
+    // wherever it is written, so nothing spells `h` as an operator.
+    let e = bad("theorem no<A>(f as ∙, h: A -> A -> A, x: A): x ∙ x = h(x, x) { refl }");
+    assert!(!e.contains("has no meaning here"), "`∙` is installed; it means `f`: {e}");
 }
 
 /// The growth invariant, from this feature's side: `as` adds a place to write

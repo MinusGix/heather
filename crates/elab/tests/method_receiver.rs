@@ -108,11 +108,32 @@ fn self_alone_marks_and_names() {
         theorem direct(c: Counter): bump(c) = Succ(c.n) { refl }");
 }
 
+// The mark may sit inside a run of names sharing one annotation
+// (`issues/modifiers-in-shared-binder-runs.md`): a modifier prefixes exactly
+// one name — the one it is written on — and the annotation is the only thing
+// the run shares. So `self b, c: Nat` is the same declaration as
+// `self b: Nat, c: Nat`, receiver position included.
+#[test]
+fn a_marked_subject_may_be_a_name_inside_a_shared_run() {
+    ok("fn add(a: Nat, b: Nat) -> Nat { match a { Zero => b, Succ(k) => Succ(add(k, b)) } }
+        fn pick(a: Nat, self b, c: Nat) -> Nat { add(add(a, b), c) }
+        theorem lands_in_the_middle(n: Nat): n.pick(1, 3) = pick(1, n, 3) { refl }");
+    // …and the mark reaches its own name only: `c` is an ordinary parameter,
+    // so the receiver is still the second slot and not the third.
+    ok("fn snd(self a, b: Nat) -> Nat { b }
+        theorem receiver_is_a(n: Nat): n.snd(3) = snd(n, 3) { refl }");
+}
+
 // -- 3: rejections --------------------------------------------------------
 
 #[test]
 fn at_most_one_self() {
     let e = bad("fn f(self a: Nat, self b: Nat) -> Nat { a }");
+    assert!(e.contains("at most one `self`"), "{e}");
+    assert!(e.contains("`a` is already it"), "{e}");
+    // The run form does not open a second door: the scan sees the group it is
+    // standing in, whose names are not parameters yet.
+    let e = bad("fn g(self a, self b: Nat) -> Nat { a }");
     assert!(e.contains("at most one `self`"), "{e}");
     assert!(e.contains("`a` is already it"), "{e}");
 }

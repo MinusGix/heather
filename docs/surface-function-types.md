@@ -59,9 +59,19 @@ later it is additive.
 > — so `(x: A, y: B) -> C` and the shared-annotation run `(x, y: A) -> C` both
 > parse, and both **desugar in the parser** to the curried chain this section
 > describes. Juxtaposition (`(x y: A)`) is still not grammar, and deliberately:
-> a parameter modifier prefixes a single name (`self x: A`), which only the
-> comma form leaves unambiguous. The same run is available in a parameter list
-> (`fn f(x, y: A)`) and in an implicit group (`{A, B: Type<0>} -> …`).
+> a parameter modifier attaches to the single name it prefixes (`self x: A`),
+> which only the comma form leaves unambiguous. The same run is available in a
+> parameter list (`fn f(x, y: A)`) and in an implicit group
+> (`{A, B: Type<0>} -> …`).
+>
+> **Amended 2026-08-16** (`issues/modifiers-in-shared-binder-runs.md`): the
+> sentence above says *attaches to*, and it always meant per-**name**, not
+> per-**group**. A modifier is therefore read inside a run, on the name it is
+> written on: `fn f(self x, y: A)` marks `x` and leaves `y` an ordinary
+> parameter of the same type, and `fn f(g as ∙, h: A -> A -> A)` gives the
+> symbol to `g` alone. The annotation is the only thing a run shares. The
+> earlier reading — a modifier anywhere in a run refuses the run — was the two
+> refusals this amendment lifts.
 
 Equality binds tighter than the arrow: `a = b -> C` is `(a = b) -> C`. This
 falls out of the parse order in §3.1 and is also the only reading that
