@@ -418,3 +418,94 @@ fn the_convoy_reaches_every_lowering() {
     ok("inductive Void { }\nfn f(x: Void) -> Nat { match h : x { } }");
     ok("fn f(k: Nat, i: Fin(Succ(k))) -> Nat { match h : i { FZ => 0, FS(jx) => 1 } }");
 }
+
+// -- §6's stated cost, paid (issues/diagnostics-name-the-written-form.md) ---
+
+/// §6 shipped with a wart written down: the desugaring's messages say
+/// `match` at a block whose text says `split`. Every message that names a
+/// form now asks the node which spelling built it.
+///
+/// Seven sites, not the five §6 estimated — the count is the *naming* sites,
+/// and three of the five it listed (unknown constructor, duplicate arm, wrong
+/// arity) never named a form at all, while `Fin`, the empty type and the
+/// motive refusal do.
+#[test]
+fn a_splits_diagnostics_name_split() {
+    let m = bad("fn f<A>(d: A, r: Res<A>) -> A { split r; on Stuck := d; on OutOfFuel := d; }");
+    assert!(m.contains("`split` is missing an arm for `Out`"), "got: {m}");
+
+    let m = bad("fn f(g: Nat -> Nat) -> Nat { split g; on Zero := 0; on Succ(k) := k; }");
+    assert!(m.contains("`split` needs a `Nat` or a declared inductive"), "got: {m}");
+
+    let m = bad("fn f(m: Nat) -> Nat { split m; on Zero := 0; }");
+    assert!(m.contains("`split` on `Nat` needs both"), "got: {m}");
+
+    let m = bad("fn f(k: Nat, i: Fin(Succ(k))) -> Nat { split i; on FZ := 0; }");
+    assert!(m.contains("`split` on a `Fin` needs both an `FZ`"), "got: {m}");
+
+    let m = bad("inductive Void { }\nfn f(x: Void) -> Nat { split x; on Zero := 0; }");
+    assert!(m.contains("so `split` takes no arms"), "got: {m}");
+
+    // Not just the form's name: the *spelling it suggests* is one a writer
+    // who typed `split` can paste. `match e as λ z => T { … }` is not.
+    let m = bad(
+        "fn f<A>(d: A, r: Res<A>) -> A {
+             let x = { split r; on Stuck := d; on OutOfFuel := d; on Out(v) := v; }; x }",
+    );
+    assert!(m.contains("`split` in inference position"), "got: {m}");
+    assert!(m.contains("`split e as \u{3bb} z => T;`"), "got: {m}");
+
+    // The one place a `match` still appears inside a `split`'s message, and
+    // deliberately: the suggestion is a *new* elimination on the length, not
+    // a respelling of the one that failed.
+    let m = bad("fn f(n: Nat, i: Fin(n)) -> Nat { split i; on FZ := 0; on FS(j) := 1; }");
+    assert!(m.contains("`split` on a `Fin` needs its length to reduce"), "got: {m}");
+    assert!(m.contains("Recurse on the length first"), "got: {m}");
+}
+
+/// The control the test above needs: a written `match` still says `match` at
+/// all seven. Without it, hard-coding `split` everywhere would pass.
+#[test]
+fn a_matchs_diagnostics_still_name_match() {
+    let m = bad("fn f<A>(d: A, r: Res<A>) -> A { match r { Stuck => d, OutOfFuel => d } }");
+    assert!(m.contains("`match` is missing an arm for `Out`"), "got: {m}");
+
+    let m = bad("fn f(g: Nat -> Nat) -> Nat { match g { Zero => 0, Succ(k) => k } }");
+    assert!(m.contains("`match` needs a `Nat` or a declared inductive"), "got: {m}");
+
+    let m = bad("fn f(m: Nat) -> Nat { match m { Zero => 0 } }");
+    assert!(m.contains("`match` on `Nat` needs both"), "got: {m}");
+
+    let m = bad("fn f(k: Nat, i: Fin(Succ(k))) -> Nat { match i { FZ => 0 } }");
+    assert!(m.contains("`match` on a `Fin` needs both an `FZ`"), "got: {m}");
+
+    let m = bad("inductive Void { }\nfn f(x: Void) -> Nat { match x { Zero => 0 } }");
+    assert!(m.contains("so `match` takes no arms"), "got: {m}");
+
+    let m = bad(
+        "fn f<A>(d: A, r: Res<A>) -> A {
+             let x = match r { Stuck => d, OutOfFuel => d, Out(v) => v }; x }",
+    );
+    assert!(m.contains("`match` in inference position"), "got: {m}");
+    assert!(m.contains("`match e as \u{3bb} z => T { … }`"), "got: {m}");
+
+    let m = bad("fn f(n: Nat, i: Fin(n)) -> Nat { match i { FZ => 0, FS(j) => 1 } }");
+    assert!(m.contains("`match` on a `Fin` needs its length to reduce"), "got: {m}");
+}
+
+/// The advice the motive message now gives is followable — which is the
+/// point of changing it, and the half a message-text assertion cannot show.
+#[test]
+fn the_suggested_split_motive_spelling_checks() {
+    ok(r#"
+       fn f<A>(d: A, r: Res<A>) -> A {
+           let x = {
+               split r as λ z => A;
+               on Stuck := d;
+               on OutOfFuel := d;
+               on Out(v) := v;
+           };
+           x
+       }
+       "#);
+}

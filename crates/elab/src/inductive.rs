@@ -26,7 +26,7 @@ use heather_kernel::conv::conv_type;
 use heather_kernel::layer::Layer;
 use heather_kernel::level::Level;
 use heather_kernel::term::{LocalCtx, LocalSubst, LocalVar, Term, Type};
-use heather_syntax::{Arm, CtorDecl, Expr, ExprKind, InductiveDecl, Span, Ty, TyKind};
+use heather_syntax::{Arm, CtorDecl, Expr, ExprKind, InductiveDecl, MatchForm, Span, Ty, TyKind};
 
 use crate::names::{qkey, NameKind, Scope};
 use crate::{embed, err, Alias, Cx, Elaborator, TyVar, R};
@@ -1662,6 +1662,7 @@ impl Elaborator {
     pub(crate) fn elab_match_data(
         &self,
         cx: &Cx,
+        form: MatchForm,
         ind: &Inductive,
         arms: &[Arm],
         scrut: Term,
@@ -1734,7 +1735,11 @@ impl Elaborator {
             .collect();
         if !missing.is_empty() {
             return err(
-                format!("`match` is missing an arm for `{}`", missing.join("`, `")),
+                format!(
+                    "`{}` is missing an arm for `{}`",
+                    form.keyword(),
+                    missing.join("`, `")
+                ),
                 span,
             );
         }

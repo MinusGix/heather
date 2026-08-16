@@ -20,7 +20,7 @@ use std::rc::Rc;
 
 use heather_kernel::level::Level;
 use heather_kernel::term::{Term, Type};
-use heather_syntax::{Arm, Block, Expr, ExprKind, Pat, Span, Stmt};
+use heather_syntax::{Arm, Block, Expr, ExprKind, MatchForm, Pat, Span, Stmt};
 
 use crate::inductive::{decoded, FieldKind};
 use crate::{err, Alias, Cx, Elaborator, R};
@@ -43,6 +43,12 @@ struct Row {
 /// census that §5 needs.
 struct Compile {
     next: usize,
+    /// The form the *written* match was spelled as, carried so that a
+    /// generated inner level names it rather than saying `match` at a block
+    /// whose text says `split` (issues/diagnostics-name-the-written-form.md).
+    /// A generated level has no spelling of its own — it stands for a pattern
+    /// column — so the one it inherits is the only honest answer available.
+    form: MatchForm,
     /// How many leaves each arm's body reached.
     uses: Vec<usize>,
     /// Whether each arm ever bound a pattern variable at a leaf. A row that
@@ -78,6 +84,7 @@ impl Elaborator {
     pub(crate) fn prepare_arms(
         &self,
         cx: &Cx,
+        form: MatchForm,
         arms: &[Arm],
         scrut_t: &Term,
         scrut_ty: &Type,
@@ -126,6 +133,7 @@ impl Elaborator {
             pat_names(&a.binders, &mut bump);
         }
         let mut st = Compile {
+            form,
             next,
             uses: vec![0; arms.len()],
             binding: vec![false; arms.len()],
@@ -482,6 +490,7 @@ impl Elaborator {
         }
         Ok(Expr {
             kind: ExprKind::Match {
+                form: st.form,
                 scrut: Box::new(Expr {
                     kind: ExprKind::Var(cols[j].clone()),
                     span,
@@ -713,8 +722,9 @@ fn fill(e: Expr, bodies: &[Option<Expr>]) -> Expr {
                 span: e.span,
             }
         }
-        ExprKind::Match { scrut, eqbind, motive, arms } => Expr {
+        ExprKind::Match { form, scrut, eqbind, motive, arms } => Expr {
             kind: ExprKind::Match {
+                form,
                 scrut,
                 eqbind,
                 motive,

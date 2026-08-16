@@ -70,8 +70,8 @@ use heather_kernel::term::{
 };
 use heather_kernel::typing::{self, TypeError, DEFAULT_FUEL};
 use heather_syntax::{
-    parse_file, Arm, Decl, DeclKind, Expr, ExprKind, Item, LamBinder, OnStmt, OnTarget, ParseError,
-    Span, Stmt, RecordLitField, Ty, TyKind,
+    parse_file, Arm, Decl, DeclKind, Expr, ExprKind, Item, LamBinder, MatchForm, OnStmt, OnTarget,
+    ParseError, Span, Stmt, RecordLitField, Ty, TyKind,
 };
 
 mod access;
@@ -2580,7 +2580,7 @@ impl Elaborator {
             // A quote against its `Code(g |- T)` type — checking-only, like
             // the kernel's `BoxTm` (docs/in-language-map-design.md §5).
             ExprKind::Quote(payload) => self.elab_quote(cx, payload, expected, e.span),
-            ExprKind::Match { motive: None, scrut, arms, eqbind } => {
+            ExprKind::Match { form, motive: None, scrut, arms, eqbind } => {
                 // Stage-2 motive synthesis (issues/elab-stage2-metas.md): when
                 // the scrutinee is a local variable, abstract it out of the
                 // expected type so the motive is genuinely dependent; otherwise
@@ -2589,11 +2589,12 @@ impl Elaborator {
                 let motive = self.synth_motive(cx, &scrut_t, &scrut_ty, &scrut_lvl, expected);
                 let Some(h) = eqbind else {
                     return self.elab_match(
-                        cx, arms, scrut_t, &scrut_ty, &scrut_lvl, motive, lvl.clone(), e.span,
+                        cx, *form, arms, scrut_t, &scrut_ty, &scrut_lvl, motive, lvl.clone(),
+                        e.span,
                     );
                 };
                 self.elab_convoy(
-                    cx, h, arms, scrut_t, &scrut_ty, &scrut_lvl, motive, lvl, expected,
+                    cx, *form, h, arms, scrut_t, &scrut_ty, &scrut_lvl, motive, lvl, expected,
                     e.span,
                 )
             }
@@ -3521,7 +3522,7 @@ impl Elaborator {
                     )
                 }
             }
-            ExprKind::Match { motive: Some(m), scrut, arms, eqbind } => {
+            ExprKind::Match { form, motive: Some(m), scrut, arms, eqbind } => {
                 let (scrut_t, scrut_ty, scrut_lvl) = self.elab_infer(cx, scrut)?;
                 // An indexed scrutinee's motive binds the index too
                 // (docs/inductive-indexed-lowering.md §6.1).
@@ -3551,14 +3552,14 @@ impl Elaborator {
                     // by two (docs/nested-match-patterns-design.md §5.1).
                     let indep = motive2 == result.shift_local(2);
                     let prepared = self.prepare_arms(
-                        cx, arms, &scrut_t, &scrut_ty, &result, indep, &mlvl, e.span,
+                        cx, *form, arms, &scrut_t, &scrut_ty, &result, indep, &mlvl, e.span,
                     )?;
                     let (acx, arms) = match &prepared {
                         Some((c, a)) => (c, a.as_slice()),
                         None => (cx, arms.as_slice()),
                     };
                     let t = self.elab_match_forded(
-                        acx, &ind, &fam, arms, scrut_t, motive2, mlvl.clone(), e.span,
+                        acx, *form, &ind, &fam, arms, scrut_t, motive2, mlvl.clone(), e.span,
                     )?;
                     return Ok((t, result, mlvl));
                 }
@@ -3581,14 +3582,14 @@ impl Elaborator {
                     );
                     let indep = motive2 == result.shift_local(2);
                     let prepared = self.prepare_arms(
-                        cx, arms, &scrut_t, &scrut_ty, &result, indep, &mlvl, e.span,
+                        cx, *form, arms, &scrut_t, &scrut_ty, &result, indep, &mlvl, e.span,
                     )?;
                     let (acx, arms) = match &prepared {
                         Some((c, a)) => (c, a.as_slice()),
                         None => (cx, arms.as_slice()),
                     };
                     let t = self.elab_match_indexed(
-                        acx, &ind, &fam, arms, scrut_t, motive2, mlvl.clone(), e.span,
+                        acx, *form, &ind, &fam, arms, scrut_t, motive2, mlvl.clone(), e.span,
                     )?;
                     return Ok((t, result, mlvl));
                 }
@@ -3605,18 +3606,29 @@ impl Elaborator {
                 // (docs/match-equation-split-design.md \u{a7}3.3).
                 if let Some(h) = eqbind {
                     let t = self.elab_convoy(
-                        cx, h, arms, scrut_t, &scrut_ty, &scrut_lvl, motive, &mlvl, &result,
-                        e.span,
+                        cx, *form, h, arms, scrut_t, &scrut_ty, &scrut_lvl, motive, &mlvl,
+                        &result, e.span,
                     )?;
                     return Ok((t, result, mlvl));
                 }
                 let t = self.elab_match(
-                    cx, arms, scrut_t, &scrut_ty, &scrut_lvl, motive, mlvl.clone(), e.span,
+                    cx, *form, arms, scrut_t, &scrut_ty, &scrut_lvl, motive, mlvl.clone(),
+                    e.span,
                 )?;
                 Ok((t, result, mlvl))
             }
-            ExprKind::Match { motive: None, .. } => err(
-                "`match` in inference position needs a motive: `match e as \u{3bb} z => T { … }`",
+            // Both the form and the *suggested spelling* are the written
+            // one: `match e as \u{3bb} z => T { … }` is not a thing a writer who
+            // typed `split` can paste (issues/diagnostics-name-the-written-form.md).
+            ExprKind::Match { form, motive: None, .. } => err(
+                format!(
+                    "`{}` in inference position needs a motive: `{}`",
+                    form.keyword(),
+                    match form {
+                        MatchForm::Match => "match e as \u{3bb} z => T { … }",
+                        MatchForm::Split => "split e as \u{3bb} z => T;",
+                    }
+                ),
                 e.span,
             ),
             ExprKind::J { proof, motive, case } => {
@@ -3729,6 +3741,7 @@ impl Elaborator {
     fn elab_convoy(
         &self,
         cx: &Cx,
+        form: MatchForm,
         h: &str,
         arms: &[Arm],
         scrut_t: Term,
@@ -3798,6 +3811,7 @@ impl Elaborator {
             .collect();
         let elim = self.elab_match(
             cx,
+            form,
             &arms,
             scrut_t.clone(),
             scrut_ty,
@@ -3838,6 +3852,7 @@ impl Elaborator {
     fn elab_match(
         &self,
         cx: &Cx,
+        form: MatchForm,
         arms: &[Arm],
         scrut_t: Term,
         scrut_ty: &Type,
@@ -3855,7 +3870,7 @@ impl Elaborator {
             .apply_local(&LocalSubst::id(&cx.gamma).extended(Rc::new(scrut_t.clone())));
         let independent = motive == result.shift_local(1);
         let prepared = self.prepare_arms(
-            cx, arms, &scrut_t, scrut_ty, &result, independent, &mlvl, span,
+            cx, form, arms, &scrut_t, scrut_ty, &result, independent, &mlvl, span,
         )?;
         let (cx, arms) = match &prepared {
             Some((c, a)) => (c, a.as_slice()),
@@ -3870,18 +3885,20 @@ impl Elaborator {
         if let Some((ind, fam)) = self.forded_of_at(cx, scrut_ty) {
             let motive2 = self.generalize_index(cx, &motive, &fam.idx);
             return self
-                .elab_match_forded(cx, &ind, &fam, arms, scrut_t, motive2, mlvl, span);
+                .elab_match_forded(cx, form, &ind, &fam, arms, scrut_t, motive2, mlvl, span);
         }
         if !matches!(head, Type::Empty { .. })
             && let Some((ind, fam)) = self.indexed_of_at(cx, scrut_ty)
         {
             let motive2 = self.generalize_index(cx, &motive, &fam.idx);
             return self
-                .elab_match_indexed(cx, &ind, &fam, arms, scrut_t, motive2, mlvl, span);
+                .elab_match_indexed(cx, form, &ind, &fam, arms, scrut_t, motive2, mlvl, span);
         }
         if let Some(ind) = self.tag_of(&head) {
             return self
-                .elab_match_data(cx, &ind, arms, scrut_t, &head, scrut_lvl, motive, mlvl, span);
+                .elab_match_data(
+                    cx, form, &ind, arms, scrut_t, &head, scrut_lvl, motive, mlvl, span,
+                );
         }
         // `Fin(n)` (docs/surface-fin-indexing-design.md §4.2). Tested on the
         // **raw** scrutinee type for the same reason `indexed_of_at` is: the
@@ -3897,7 +3914,8 @@ impl Elaborator {
                 // below, unchanged (§1.1 finding 1). Nothing to write here.
                 Term::Zero => {}
                 Term::Succ(k) => {
-                    return self.elab_match_fin(cx, arms, scrut_t, k, motive, mlvl, span);
+                    return self
+                        .elab_match_fin(cx, form, arms, scrut_t, k, motive, mlvl, span);
                 }
                 // Permanent, not a gap: `Fin` has no eliminator of its own
                 // (§1.2), so at an open length there is no canonical form to
@@ -3916,10 +3934,11 @@ impl Elaborator {
                     };
                     return err(
                         format!(
-                            "`match` on a `Fin` needs its length to reduce to `0` or a \
+                            "`{}` on a `Fin` needs its length to reduce to `0` or a \
                              successor{here}. Recurse on the length first \
                              (`match n as \u{3bb} z => \u{2026}`), which is how the index \
-                             becomes matchable"
+                             becomes matchable",
+                            form.keyword()
                         ),
                         span,
                     );
@@ -3934,7 +3953,13 @@ impl Elaborator {
             // `Empty` is level-indexed, so the scrutinee's level comes off the
             // *type* and is independent of the motive's `mlvl`.
             if !arms.is_empty() {
-                return err("this type has no constructors, so `match` takes no arms", span);
+                return err(
+                    format!(
+                        "this type has no constructors, so `{}` takes no arms",
+                        form.keyword()
+                    ),
+                    span,
+                );
             }
             return Ok(Term::ElimEmpty {
                 level: mlvl,
@@ -3944,9 +3969,12 @@ impl Elaborator {
             });
         }
         if !matches!(head, Type::Nat) {
-            return err("`match` needs a `Nat` or a declared inductive", span);
+            return err(
+                format!("`{}` needs a `Nat` or a declared inductive", form.keyword()),
+                span,
+            );
         }
-        self.elab_match_nat(cx, arms, scrut_t, motive, mlvl, span)
+        self.elab_match_nat(cx, form, arms, scrut_t, motive, mlvl, span)
     }
 
     /// `match` on `Nat`: the kernel's `elim_Nat`, with the arms named `Zero`
@@ -3954,6 +3982,7 @@ impl Elaborator {
     fn elab_match_nat(
         &self,
         cx: &Cx,
+        form: MatchForm,
         arms: &[Arm],
         scrut_t: Term,
         motive: Type,
@@ -3975,7 +4004,10 @@ impl Elaborator {
             }
         }
         let (Some(zero), Some(succ)) = (zero, succ) else {
-            return err("`match` on `Nat` needs both a `Zero` and a `Succ(k)` arm", span);
+            return err(
+                format!("`{}` on `Nat` needs both a `Zero` and a `Succ(k)` arm", form.keyword()),
+                span,
+            );
         };
         if !zero.binders.is_empty() {
             return err("`Zero` binds no fields", zero.span);
@@ -4048,6 +4080,7 @@ impl Elaborator {
     fn elab_match_fin(
         &self,
         cx: &Cx,
+        form: MatchForm,
         arms: &[Arm],
         scrut_t: Term,
         k: &Rc<Term>,
@@ -4070,7 +4103,13 @@ impl Elaborator {
             }
         }
         let (Some(fz), Some(fs)) = (fz, fs) else {
-            return err("`match` on a `Fin` needs both an `FZ` and an `FS(i)` arm", span);
+            return err(
+                format!(
+                    "`{}` on a `Fin` needs both an `FZ` and an `FS(i)` arm",
+                    form.keyword()
+                ),
+                span,
+            );
         };
         if !fz.binders.is_empty() {
             return err("`FZ` binds no fields", fz.span);
@@ -8464,7 +8503,7 @@ mod count_holes_impl {
                 tyargs.iter().for_each(|t| ty(t, n));
                 fields.iter().for_each(|f| expr(&f.expr, n));
             }
-            ExprKind::Match { scrut, motive, arms, eqbind: _ } => {
+            ExprKind::Match { scrut, motive, arms, eqbind: _, form: _ } => {
                 expr(scrut, n);
                 if let Some(m) = motive {
                     expr(m, n);

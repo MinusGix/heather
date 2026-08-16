@@ -39,7 +39,7 @@ use heather_kernel::conv::conv_term;
 use heather_kernel::layer::Layer;
 use heather_kernel::level::Level;
 use heather_kernel::term::{nth, LocalCtx, LocalSubst, LocalVar, Term, Type};
-use heather_syntax::ast::{Arm, Expr, ExprKind, Span};
+use heather_syntax::ast::{Arm, Expr, ExprKind, MatchForm, Span};
 
 use crate::gendefs::GenDef;
 use crate::inductive::{inject, nat_lit, FieldKind, IdxTy, Inductive, Spine};
@@ -966,6 +966,7 @@ impl Elaborator {
     pub(crate) fn elab_match_indexed(
         &self,
         cx: &Cx,
+        form: MatchForm,
         ind: &Inductive,
         fam: &IndexedFam,
         arms: &[Arm],
@@ -1012,7 +1013,11 @@ impl Elaborator {
             .collect();
         if !missing.is_empty() {
             return err(
-                format!("`match` is missing an arm for `{}`", missing.join("`, `")),
+                format!(
+                    "`{}` is missing an arm for `{}`",
+                    form.keyword(),
+                    missing.join("`, `")
+                ),
                 span,
             );
         }

@@ -1681,7 +1681,13 @@ impl Parser {
         let span = start.join(end);
         Ok((
             Expr {
-                kind: ExprKind::Match { scrut: Box::new(scrut), eqbind, motive, arms },
+                kind: ExprKind::Match {
+                    form: MatchForm::Split,
+                    scrut: Box::new(scrut),
+                    eqbind,
+                    motive,
+                    arms,
+                },
                 span,
             },
             ons,
@@ -2825,7 +2831,13 @@ impl Parser {
         let arms = self.match_arms()?;
         let end = self.expect(&TokKind::RBrace, "`}`")?;
         Ok(Expr {
-            kind: ExprKind::Match { scrut: Box::new(scrut), eqbind, motive, arms },
+            kind: ExprKind::Match {
+                form: MatchForm::Match,
+                scrut: Box::new(scrut),
+                eqbind,
+                motive,
+                arms,
+            },
             span: start.join(end),
         })
     }

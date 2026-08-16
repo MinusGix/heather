@@ -367,6 +367,24 @@ the five message sites, which is orthogonal to everything here. Recorded as
 candidate issue material rather than done, because doing it touches five
 messages and their tests for a cosmetic gain.
 
+**Paid 2026-08-16** (`issues/diagnostics-name-the-written-form.md`). A
+`form: MatchForm` field on the node carries the spelling that built it, and
+every message that names a form asks it. The tautology above is untouched and
+is the reason the field is safe: what §6 buys is that both spellings build the
+same *elimination*, and the elimination is built from
+`scrut`/`eqbind`/`motive`/`arms` — nothing that computes a term may read
+`form`, which is why it carries a keyword rather than a variant of behaviour.
+
+Two corrections to the paragraph above, found by doing it. **It is seven
+sites, not five**, and not the five listed: three of those (unknown
+constructor, duplicate arm, wrong arity) never named a form at all and needed
+nothing, while the `Fin` arm check, the `Fin` open-length refusal, the empty
+type's "takes no arms" and the missing-motive refusal all did. And it was
+**not only cosmetic** — the missing-motive message suggested
+`match e as λ z => T { … }`, which is not a spelling a writer who typed
+`split` can paste; it now suggests `split e as λ z => T;`, and a test checks
+that the suggestion checks.
+
 ## 7. Decision 5: `split h : e;` is accepted
 
 The equation binding and the split share one node, so a `split` gets the

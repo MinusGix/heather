@@ -1306,7 +1306,7 @@ fn mentions_free(e: &Expr, names: &[String], bound: &mut Vec<String>) -> bool {
             mentions_free(a, names, bound) || mentions_free(b, names, bound)
         }
         ExprKind::TyLit(t) => mentions_free_ty(t, names, bound),
-        ExprKind::Match { scrut, eqbind, motive, arms } => {
+        ExprKind::Match { scrut, eqbind, motive, arms, form: _ } => {
             if mentions_free(scrut, names, bound)
                 || motive.as_ref().is_some_and(|m| mentions_free(m, names, bound))
             {

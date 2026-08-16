@@ -3,7 +3,7 @@ title: "Cache verdicts don't record the fuel/univs they were earned under"
 status: open
 labels: [tooling, cli, robustness]
 created: 2026-08-06
-updated: 2026-08-13
+updated: 2026-08-16
 code: crates/cache/src/store.rs @ 33c65ef
 ---
 
@@ -38,3 +38,4 @@ rung 2 lands — whichever is first.
 ## Log
 
 - 2026-08-13: A second consumer of the store, and a narrowing verified while wiring it. The certgen test binaries now replay verdicts through the same store code (target/decl-cache, [[elaborator-snapshot-across-test-binaries]]'s round — which also extended the gate seam to quote.rs's Layer::Meta site, with the layer folded into the item's identity via the hashed binding). Checked 2026-08-13: DEFAULT_FUEL is a crates/kernel/src/typing.rs constant, so the kernel-semantics fingerprint already invalidates every entry on a fuel change — the gap this issue records opens only if fuel moves out of kernel source or becomes a flag. The univs bound is a hardcoded 0 at the three elab gate call sites (crates/elab/src/lib.rs, gendefs.rs, quote.rs), same compiled-in latency. Trigger unchanged; when it fires, the fix lands in the entry columns and covers the CLI store and the test store alike, since they are one code path.
+- 2026-08-16: Re-verified at HEAD (2026-08-16, picked up as a candidate round and put back down). The trigger is still UNFIRED and the fix is still the wrong work to do today, for a reason stronger than "not yet needed": it would be untestable. Fuel cannot vary, so no test could distinguish a build with the columns from one without — the columns would be dead weight whose only proof of correctness is reading them. Checked: no `pub` fuel API anywhere in crates/elab, no fuel flag in crates/cli (grep is empty), univs still a hardcoded 0 at the three gate sites, rung 2 not landed. ONE THING HAS MOVED since the 2026-08-13 entry and it moves this issue closer rather than further: fuel is no longer a constant read at each call site but a field on the Elaborator (crates/elab/src/lib.rs:826), initialized once from typing::DEFAULT_FUEL (:1015) and passed as self.fuel to every gate. The kernel-semantics fingerprint still covers it — the initializer is a kernel source constant, so a fuel change is a fingerprint change — but the structural distance to the trigger is now exactly one setter. That is the shape to watch for: the first `with_fuel`/`set_fuel`, or the first CLI flag threading a value into that field, fires this issue on the same commit, because from that moment two runs with the same kernel source can disagree about a verdict.

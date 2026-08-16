@@ -659,6 +659,32 @@ impl Expr {
     }
 }
 
+/// Which surface spelling built an [`ExprKind::Match`]: the expression form,
+/// or the statement-position `split e; on C(…) := …;`
+/// (docs/match-equation-split-design.md §6).
+///
+/// Both spellings build one node and one elimination — that is §6's whole
+/// point, and it stays true because this is consulted **only** where a
+/// diagnostic has to name the form the user typed
+/// (issues/diagnostics-name-the-written-form.md).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MatchForm {
+    /// `match e { … }`
+    Match,
+    /// `split e; on C(x⃗) := b;`
+    Split,
+}
+
+impl MatchForm {
+    /// The keyword the user wrote, for a message that names the form.
+    pub fn keyword(self) -> &'static str {
+        match self {
+            Self::Match => "match",
+            Self::Split => "split",
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub enum ExprKind {
     /// A name: parameter, `fn`, or `theorem`.
@@ -763,6 +789,17 @@ pub enum ExprKind {
     /// elimination mechanism, so the parser builds one of these and nothing
     /// downstream can tell (docs/match-equation-split-design.md §6).
     Match {
+        /// Which spelling this node was written as
+        /// (issues/diagnostics-name-the-written-form.md). Read by
+        /// **diagnostics only** — every message that has to name a form asks
+        /// this instead of saying `match`.
+        ///
+        /// This does not weaken §6's tautology. What that section buys is that
+        /// `split` lowers to the same *elimination*, and the elimination is
+        /// built from `scrut`/`eqbind`/`motive`/`arms`; nothing that computes
+        /// a term may consult this field, which is why it carries a keyword
+        /// and not a variant of behaviour.
+        form: MatchForm,
         scrut: Box<Expr>,
         /// `match h : e { … }` — the convoy, written by the elaborator: the
         /// motive gains `Id(S, e, z) ->` and each arm gains a binder

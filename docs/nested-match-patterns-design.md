@@ -469,6 +469,12 @@ context-keying. Refused with a message that says which arm and why, instead of
   class as the `split` design's §6 wart — the message is true and the span is
   coarse — and the fix is the same one (thread a form/site name), still not
   worth five message sites.
+  *Amended 2026-08-16* (`issues/diagnostics-name-the-written-form.md`): the
+  **form** half is paid and the **span** half is not, and they turned out to
+  be separable rather than one fix. A generated level now inherits the written
+  form, so an inner column of a `split` says `split`; what it still cannot do
+  is point at the column, because a generated level has no source text —
+  which is this bullet's own observation and is untouched.
 - **§6's rejection is on a *syntactic* mention of the declaration's own name**
   (§6.2), so a deep pattern in an arm that merely shadows that name is
   refused. Nothing in the corpus does, and narrowing it means resolving the
