@@ -112,6 +112,42 @@ pub(crate) enum GenDef {
     /// not two: naming the function names the whole family. Same closedness
     /// boundary as [`GenDef::Mu`] (§5).
     Fam(u32),
+    /// `D#projⱼ : Trm_c(· ⊢ Π(v : ⟦D⟧). Tⱼ)` — a **record**'s `j`-th field
+    /// projection, keyed by the record's tag and the field's index
+    /// (`issues/theorem-field-projection-oom.md`).
+    ///
+    /// Unlike its siblings this one is not only a size optimization. `π_j` is
+    /// `fst(sndʲ v)`, and every `fst`/`snd` node carries the Σ components at
+    /// its level as annotations, so a later field's type — which mentions the
+    /// earlier fields — inlines the earlier projections *with their
+    /// annotations*, once per occurrence: the term is exponential in the
+    /// field index. Naming each projection makes a field's type mention
+    /// `D#projᵢ^δ v` (one node) instead, so the walk, the term it produces,
+    /// and everything downstream of both stay linear.
+    ///
+    /// Same closedness boundary as [`GenDef::Mu`] and [`GenDef::TyCode`]: only
+    /// an unparameterized record, whose lowering is one closed type.
+    RecProj(u32, usize),
+    /// `D#tailⱼ : Trm_c(· ⊢ Π(v : ⟦D⟧). Σ…)` — the same record's Σ spine past
+    /// entry `j`, the companion [`GenDef::RecProj`] is read off
+    /// (`issues/theorem-field-projection-oom.md`).
+    ///
+    /// `π_j` is `fst` of a *tail*, and a raw `sndʲ` tail makes the kernel
+    /// re-check the whole spine below it — carrying the whole remaining record
+    /// type — once per level above. Naming each tail makes every one of those
+    /// checks local: the pair a `fst`/`snd` is taken of has its Σ type
+    /// straight out of Ψ. Registered with, and under the same boundary as,
+    /// the projections.
+    RecTail(u32, usize),
+    /// `D#famⱼ : Trm_c(· ⊢ Π(v : ⟦D⟧). Π(x : Fⱼ). Ty l)` — the same record's
+    /// Σ **tail family** at entry `j`, as a code
+    /// (`issues/theorem-field-projection-oom.md`).
+    ///
+    /// The annotation every projection and tail node carries is `El` of this,
+    /// which is what keeps their gate checks local: a code is checked, not
+    /// reduced, so the earlier projections it mentions stay folded until a
+    /// conversion actually needs the type behind them.
+    RecFam(u32, usize),
 }
 
 impl GenDef {
@@ -128,6 +164,9 @@ impl GenDef {
             GenDef::ShapeCode(_) => format!("{owner}#shape"),
             GenDef::ArityFn(_) => format!("{owner}#arity"),
             GenDef::Fam(_) => format!("{owner}#fam"),
+            GenDef::RecProj(_, j) => format!("{owner}#proj{j}"),
+            GenDef::RecTail(_, j) => format!("{owner}#tail{j}"),
+            GenDef::RecFam(_, j) => format!("{owner}#fam{j}"),
         }
     }
 }
@@ -219,6 +258,9 @@ impl Elaborator {
             // instead of writing it out ~21 times per arm
             // ([[wf-field-conversion-cost]], design §10).
             self.register_ty_code(ind, span);
+            // …and a record's fields get their projections, which is the one
+            // device here that a *user-written* term reaches directly.
+            self.register_rec_projs(ind, span);
             return;
         }
         // The index type's devices first: they are closed for every family,
@@ -332,6 +374,372 @@ impl Elaborator {
             self.gdefs.ty_code.insert(ind.tag, (Rc::new(d_ty.clone()), l.clone()));
         }
         self.register_wf_slots(ind, &d_ty, &l, span);
+    }
+
+    /// `D#projⱼ := λ(v : ⟦D⟧). fst(sndʲ v)`, one per field of a **record**
+    /// (`issues/theorem-field-projection-oom.md`).
+    ///
+    /// This is [`Elaborator::project_field`]'s spine walk, run once at the
+    /// declaration instead of once per use — and, crucially, run with each
+    /// field's projection replaced by a *reference* to the definition just
+    /// registered for it before it is substituted into the tail. That
+    /// substitution is where the blow-up lived: the payload is a `fst` node
+    /// carrying the Σ components at its level, so inlining it into a later
+    /// field's type copies those annotations once per occurrence, and the
+    /// annotations of *that* field are then the payload one level down. With
+    /// a reference standing in, every payload is one node and the walk is
+    /// linear — which is also what makes the definitions themselves small
+    /// enough to gate one after another.
+    ///
+    /// Three definitions per spine entry, each naming one thing the walk
+    /// would otherwise write out again at every entry above it:
+    /// [`GenDef::RecFam`] the Σ tail family (as a code — see its own note),
+    /// [`GenDef::RecProj`] the field, [`GenDef::RecTail`] the pair the entry
+    /// above is taken of.
+    ///
+    /// **Boundaries.** An unparameterized record only, [`GenDef::TyCode`]'s
+    /// reason verbatim: `⟦D⟧` of a parameterized one is monomorphized per
+    /// instantiation, and a definition is registered where the instantiations
+    /// are not yet known. A parameterized record keeps the inline walk (and
+    /// its exponent) — see the issue's log. And a record whose spine is not
+    /// *dependent* is left alone entirely
+    /// ([`Elaborator::record_spine_is_dependent`]): its walk is linear
+    /// already, so the definitions would be all cost.
+    ///
+    /// Best-effort, like everything here: a failure at field `j` stops the
+    /// walk, leaves fields `< j` registered (they are correct and useful on
+    /// their own), and every later field's projection is inlined as before.
+    fn register_rec_projs(&mut self, ind: &Rc<Inductive>, span: Span) {
+        if !ind.is_record || !ind.params.is_empty() || !ind.valparams.is_empty() {
+            return;
+        }
+        let nfields = ind.ctors[0].fields.len();
+        if nfields == 0 || self.gdefs.by_key.contains_key(&GenDef::RecProj(ind.tag, 0)) {
+            return;
+        }
+        let cx = Cx::empty();
+        let Ok((d_ty, l)) = self.lower_instance(&cx, ind, &[], &[], span) else {
+            return;
+        };
+        // The use site finds these by the tag it read off the receiver's type,
+        // exactly as `register_ty_code`'s reference does; a lowering whose tag
+        // does not route back here must not be named.
+        if self.tag_of(&d_ty).map(|i| i.tag) != Some(ind.tag) {
+            return;
+        }
+        let mut d_ty = Rc::new(d_ty);
+        // The definitions' own context: `·, v : ⟦D⟧`, which is where the whole
+        // walk lives — the field types come out of it scoped exactly as a Π's
+        // codomain needs them.
+        let mut vcx = Cx::empty();
+        vcx.push("v".to_string(), (*d_ty).clone(), l.clone());
+        let mut cur = weaken(&d_ty, &vcx.gamma);
+        if !self.record_spine_is_dependent(&vcx, &cur, nfields, span) {
+            return;
+        }
+        let mut pair: Rc<Term> = Rc::new(Term::Var(LocalVar(0)));
+        // Entry 0 of the Σ spine is the nominal tag (docs/surface-records.md
+        // §3.3), so field `j` is entry `j + 1`.
+        for step in 0..=nfields {
+            let Ok(Type::Sigma { fst_level, snd_level, fst, snd }) = self.whnf(&vcx, &cur, span)
+            else {
+                return;
+            };
+            // The Σ's *tail family* — the whole rest of the record, as a type
+            // family over this entry — named as a code, and the annotation
+            // every node below carries is the decode of it. That is what keeps
+            // the gate checks local: a type spelled `El (D#fam^δ v x)` is
+            // checked by looking one binding up in Ψ, where the spelled-out
+            // one is checked by walking the rest of the record and reducing
+            // every reference it meets, once per entry of the spine.
+            let Some(tail_fam) = self.push_tail_fam(
+                ind, step, &d_ty, &l, &fst, &fst_level, &snd, &snd_level, &vcx, span,
+            )
+            else {
+                return;
+            };
+            d_ty = Rc::new(d_ty.shift_global(1));
+            let fst = Rc::new(fst.shift_global(1));
+            let snd = Rc::new(snd.shift_global(1));
+            let pair_g = Rc::new(pair.shift_global(1));
+            let proj = Rc::new(Term::Fst {
+                fst_level: fst_level.clone(),
+                snd_level: snd_level.clone(),
+                fst_ty: Rc::clone(&fst),
+                snd_ty: Rc::clone(&tail_fam),
+                pair: Rc::clone(&pair_g),
+            });
+            let rest = Rc::new(Term::Snd {
+                fst_level: fst_level.clone(),
+                snd_level: snd_level.clone(),
+                fst_ty: Rc::clone(&fst),
+                snd_ty: Rc::clone(&tail_fam),
+                pair: pair_g,
+            });
+            // The field's own projection. The tag (entry 0) is nobody's field
+            // and gets none: it is a closed numeral, and nothing later refers
+            // to it.
+            let (payload, snd, rest, tail_fam) = if step == 0 {
+                (proj, snd, rest, tail_fam)
+            } else {
+                let key = GenDef::RecProj(ind.tag, step - 1);
+                let Some(payload) =
+                    self.push_proj_def(key, ind, &d_ty, &l, &fst, &fst_level, &proj, &vcx, span)
+                else {
+                    return;
+                };
+                // Ψ just grew by one, so everything carried past the push is
+                // one binding further out (`Defs::body`'s convention). The
+                // walk is the only thing here that keeps terms across a push,
+                // and this is what keeps the references inside them — the
+                // families, projections and tails already registered —
+                // pointing at what they did.
+                d_ty = Rc::new(d_ty.shift_global(1));
+                (
+                    payload,
+                    Rc::new(snd.shift_global(1)),
+                    Rc::new(rest.shift_global(1)),
+                    Rc::new(tail_fam.shift_global(1)),
+                )
+            };
+            if step == nfields {
+                return;
+            }
+            // The tail past this entry. Its statement is the family applied to
+            // this entry's projection — one node, where the kernel's own `snd`
+            // rule would produce the family's whole body with the projection
+            // substituted through it.
+            let cod = instantiate_fam(&tail_fam, &payload, &vcx.gamma);
+            let key = GenDef::RecTail(ind.tag, step);
+            let Some(next) =
+                self.push_proj_def(key, ind, &d_ty, &l, &cod, &snd_level, &rest, &vcx, span)
+            else {
+                return;
+            };
+            d_ty = Rc::new(d_ty.shift_global(1));
+            // The walk itself keeps the spelled-out tail: it is what the next
+            // entry's components are read off, and reading them off the code
+            // would only mean decoding it again.
+            cur = snd
+                .apply_local(&LocalSubst::id(&vcx.gamma).extended(payload))
+                .shift_global(1);
+            pair = next;
+        }
+    }
+
+    /// Does any entry of the record's Σ spine occur in the entries after it?
+    ///
+    /// This is the whole precondition of the device. The inline walk in
+    /// [`Elaborator::project_field`] duplicates its payload once per
+    /// occurrence of the entry it substitutes, so a record whose later field
+    /// types never mention the earlier fields has a walk that is already
+    /// linear and gains nothing from a name — while every record pays the
+    /// gate checks that registering the definitions costs. A plain data
+    /// record is therefore left exactly as it was.
+    ///
+    /// Occurrence is decided by *doing* the substitution twice with two
+    /// different payloads and comparing: the traversal rewrites a
+    /// substitution's tails whatever it does with the variable, so comparing
+    /// against the un-substituted tail would report every global reference as
+    /// a use. The two payloads are closed and differ, so the results differ
+    /// exactly where the binder occurs. Nothing here is type-checked — this
+    /// is a syntactic question and both probes are thrown away.
+    ///
+    /// A wrong answer is only ever a wrong *choice*: `false` keeps the walk
+    /// that has always been there, and `true` registers definitions that face
+    /// the gate like everything else. That is what makes probing with terms
+    /// of the wrong type acceptable here and nowhere else.
+    fn record_spine_is_dependent(
+        &self,
+        vcx: &Cx,
+        record_ty: &Type,
+        nfields: usize,
+        span: Span,
+    ) -> bool {
+        let mut cur = record_ty.clone();
+        let probe = |t: &Rc<Type>, x: Term| {
+            t.apply_local(&LocalSubst::id(&vcx.gamma).extended(Rc::new(x)))
+        };
+        for _ in 0..=nfields {
+            let Ok(Type::Sigma { snd, .. }) = self.whnf(vcx, &cur, span) else {
+                // Not a spine this walk understands: leave it to the walk that
+                // will meet the same wall at the use site and report there.
+                return false;
+            };
+            let one = probe(&snd, Term::Zero);
+            if one != probe(&snd, Term::TmNat) {
+                return true;
+            }
+            cur = one;
+        }
+        false
+    }
+
+    /// `D#famⱼ := λ(v : ⟦D⟧). λ(x : Fⱼ). ⌜Sⱼ⌝`, the Σ tail family at spine
+    /// entry `j`, and the annotation that stands for `Sⱼ` afterwards:
+    /// `El (D#famⱼ^δ v x)`, scoped in `·, v, x` exactly as `Sⱼ` was.
+    ///
+    /// A code and not a type, because a code is *checked* rather than
+    /// *reduced*: `Sⱼ` mentions the earlier projections, and every kernel
+    /// visit to a spelled-out `Sⱼ` reduces those references — down a chain as
+    /// long as the spine, copying the annotations at every link. Behind a code
+    /// they are terms in a body nobody unfolds until a conversion actually
+    /// needs the type.
+    #[allow(clippy::too_many_arguments)]
+    fn push_tail_fam(
+        &mut self,
+        ind: &Rc<Inductive>,
+        step: usize,
+        d_ty: &Rc<Type>,
+        l: &Level,
+        fst: &Rc<Type>,
+        fst_level: &Level,
+        snd: &Rc<Type>,
+        snd_level: &Level,
+        vcx: &Cx,
+        span: Span,
+    ) -> Option<Rc<Type>> {
+        let key = GenDef::RecFam(ind.tag, step);
+        let code_ty = Type::Ty(snd_level.clone());
+        let code_level = Level::succ(snd_level.clone());
+        let inner_level = Level::max(fst_level.clone(), code_level.clone());
+        // `Π(x : Fⱼ). Ty l'` — scoped in `·, v`, where `Fⱼ` is.
+        let inner = Type::Pi {
+            dom_level: fst_level.clone(),
+            cod_level: code_level.clone(),
+            dom: Rc::clone(fst),
+            cod: Rc::new(code_ty.clone()),
+        };
+        let ty = Type::Pi {
+            dom_level: l.clone(),
+            cod_level: inner_level.clone(),
+            dom: Rc::clone(d_ty),
+            cod: Rc::new(inner.clone()),
+        };
+        let body = Term::Lam {
+            dom_level: l.clone(),
+            cod_level: inner_level.clone(),
+            dom: Rc::clone(d_ty),
+            body: Rc::new(Term::Lam {
+                dom_level: fst_level.clone(),
+                cod_level: code_level.clone(),
+                dom: Rc::clone(fst),
+                body: Rc::new(crate::code::code_of(snd)?),
+            }),
+        };
+        let level = Level::max(l.clone(), inner_level.clone());
+        self.push_gen_def(key, &ind.name, ty, level, body, span).ok()?;
+        // The occurrence, scoped in `·, v, x` — one binder past `vcx`, which
+        // is where the Σ's tail lives.
+        let mut xcx = vcx.clone();
+        xcx.push("x".to_string(), (**fst).clone(), fst_level.clone());
+        let fun = self.gen_ref(&xcx, key)?;
+        let at_v = Term::App {
+            fun: Rc::new(fun),
+            dom_level: l.clone(),
+            cod_level: inner_level,
+            dom: Rc::new(weaken(&d_ty.shift_global(1), &xcx.gamma)),
+            cod: Rc::new(under_binder(&inner.shift_global(1), &xcx.gamma)),
+            arg: Rc::new(Term::Var(LocalVar(1))),
+        };
+        Some(Rc::new(Type::El {
+            level: snd_level.clone(),
+            tm: Rc::new(Term::App {
+                fun: Rc::new(at_v),
+                dom_level: fst_level.clone(),
+                cod_level: code_level,
+                dom: Rc::new(fst.shift_global(1).shift_local(1)),
+                cod: Rc::new(code_ty.shift_local(1)),
+                arg: Rc::new(Term::Var(LocalVar(0))),
+            }),
+        }))
+    }
+
+    /// Push one `Π(v : ⟦D⟧). cod` definition whose body is `λ(v : ⟦D⟧). node`,
+    /// and answer with `key^δ v` — the reference that stands for `node` in
+    /// everything built afterwards. `None` if the gate refused it, which is
+    /// [`Elaborator::register_rec_projs`]'s cue to stop and leave the rest
+    /// inline.
+    ///
+    /// Everything handed in is scoped in `·, v` (or, for `dom`, in `·`) and in
+    /// the Ψ *before* the push; the reference that comes back is scoped in the
+    /// Ψ after it, so a caller that keeps anything else across the call has to
+    /// [`shift_global`](Type::shift_global) it by one.
+    #[allow(clippy::too_many_arguments)]
+    fn push_proj_def(
+        &mut self,
+        key: GenDef,
+        ind: &Rc<Inductive>,
+        dom: &Rc<Type>,
+        dom_level: &Level,
+        cod: &Type,
+        cod_level: &Level,
+        node: &Rc<Term>,
+        vcx: &Cx,
+        span: Span,
+    ) -> Option<Rc<Term>> {
+        let ty = Type::Pi {
+            dom_level: dom_level.clone(),
+            cod_level: cod_level.clone(),
+            dom: Rc::clone(dom),
+            cod: Rc::new(cod.clone()),
+        };
+        let body = Term::Lam {
+            dom_level: dom_level.clone(),
+            cod_level: cod_level.clone(),
+            dom: Rc::clone(dom),
+            body: Rc::clone(node),
+        };
+        let level = Level::max(dom_level.clone(), cod_level.clone());
+        self.push_gen_def(key, &ind.name, ty, level, body, span).ok()?;
+        let fun = self.gen_ref(vcx, key)?;
+        Some(Rc::new(Term::App {
+            fun: Rc::new(fun),
+            dom_level: dom_level.clone(),
+            cod_level: cod_level.clone(),
+            dom: Rc::new(weaken(&dom.shift_global(1), &vcx.gamma)),
+            // The `App`'s codomain is scoped under its own binder, one entry
+            // past `vcx`.
+            cod: Rc::new(under_binder(&cod.shift_global(1), &vcx.gamma)),
+            arg: Rc::new(Term::Var(LocalVar(0))),
+        }))
+    }
+
+    /// `D#projⱼ^δ v` and its type, for a projection of field `idx` off `value`
+    /// (`issues/theorem-field-projection-oom.md`). `None` when the record has
+    /// no registered projection — every such site keeps the inline walk.
+    pub(crate) fn rec_proj_ref(
+        &self,
+        cx: &Cx,
+        tag: u32,
+        idx: usize,
+        value: &Rc<Term>,
+    ) -> Option<(Term, Type, Level)> {
+        let key = GenDef::RecProj(tag, idx);
+        let fun = self.gen_ref(cx, key)?;
+        // The Π is read back out of Ψ rather than remembered from the
+        // registration: a stored copy would carry the global indices of the
+        // Ψ it was built in, and every declaration since has moved them. The
+        // reference's own variable gives the rescoping, exactly as it does for
+        // a binding's type in `typing.rs` (`shift_global(v + 1)`).
+        let Term::GlobalTm { var, .. } = &fun else { return None };
+        let abs = *self.gdefs.by_key.get(&key)? as usize;
+        let GlobalBinding::Tm { ty, .. } = self.psi.bindings.get(abs)? else {
+            return None;
+        };
+        let Type::Pi { dom_level, cod_level, dom, cod } = ty.shift_global(var.0 + 1) else {
+            return None;
+        };
+        let tm = Term::App {
+            fun: Rc::new(fun),
+            dom_level: dom_level.clone(),
+            cod_level: cod_level.clone(),
+            dom: Rc::new(weaken(&dom, &cx.gamma)),
+            cod: Rc::new(under_binder(&cod, &cx.gamma)),
+            arg: Rc::clone(value),
+        };
+        let ty = instantiate(&cod, Rc::clone(value), &cx.gamma);
+        Some((tm, ty, cod_level))
     }
 
     /// `D#shape := ⌜S⌝` and `D#arity := λ(x : El (D#shape^δ)). n`, for a
@@ -1169,4 +1577,45 @@ impl Elaborator {
         };
         Ok((ty, ilvl, body))
     }
+}
+
+// -- scope moves for the record projections ---------------------------------
+//
+// A projection definition is closed and its codomain is scoped in the
+// one-entry context `·, v : ⟦D⟧`, while a use site lives in some `Γ`. All
+// three moves below are one `LocalSubst` into that context — written out
+// rather than reached through `shift_local`, which would leave the tail's
+// *base* at `·` and so cannot re-scope into a `Γ` standing on a context
+// variable (`issues/theorem-field-projection-oom.md`).
+
+/// A type scoped in `·`, seen in `Γ`.
+fn weaken(ty: &Type, gamma: &LocalCtx) -> Type {
+    ty.apply_local(&LocalSubst {
+        tail: SubstTail::Empty { len: gamma.entries.len() as u32, base: gamma.base },
+        terms: vec![],
+    })
+}
+
+/// A type scoped in `·, x`, seen in `Γ, x` — the annotation an `App` carries
+/// for a *dependent* codomain.
+fn under_binder(ty: &Type, gamma: &LocalCtx) -> Type {
+    ty.apply_local(&LocalSubst {
+        tail: SubstTail::Empty { len: gamma.entries.len() as u32 + 1, base: gamma.base },
+        terms: vec![Rc::new(Term::Var(LocalVar(0)))],
+    })
+}
+
+/// `El (D#famⱼ^δ v x)` with `x` instantiated at `arg` — the tail family's
+/// annotation applied, which is the type of the `snd` node at that entry.
+/// Both are scoped in `Γ = ·, v`.
+fn instantiate_fam(fam: &Rc<Type>, arg: &Rc<Term>, gamma: &LocalCtx) -> Type {
+    fam.apply_local(&LocalSubst::id(gamma).extended(Rc::clone(arg)))
+}
+
+/// A type scoped in `·, x`, instantiated at `arg` in `Γ`.
+fn instantiate(ty: &Type, arg: Rc<Term>, gamma: &LocalCtx) -> Type {
+    ty.apply_local(&LocalSubst {
+        tail: SubstTail::Empty { len: gamma.entries.len() as u32, base: gamma.base },
+        terms: vec![arg],
+    })
 }

@@ -1948,6 +1948,14 @@ impl Elaborator {
         idx: usize,
         span: Span,
     ) -> R<(Term, Type, Level)> {
+        // The named projection, where the declaration registered one
+        // (`gendefs.rs`, `issues/theorem-field-projection-oom.md`). It is the
+        // walk below with its exponent removed, so it comes first and the walk
+        // stays as the fallback for the records that have no definition — a
+        // parameterized one, or one whose registration declined.
+        if let Some(t) = self.rec_proj_ref(cx, ind.tag, idx, &value) {
+            return Ok(t);
+        }
         let mut cur = record_ty.clone();
         let mut pair = value;
         // Entry 0 is the tag (§3.3), so field `idx` is spine entry `idx + 1`.
