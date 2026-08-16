@@ -53,7 +53,7 @@ What that establishes:
   (`eval(2, …) = Out(…)`, `eval(1, …) = OutOfFuel`) held as computed.
 - **Composition needs per-slot embeddings and nothing else**: `route`'s
   `letcall_conv` gathers `VCons(Flag_gen_embed(f), VCons(embed_nat(n), VNil))`
-  and consumes `gate_gen_conv_in_route(f)(n, VNil)` — the callee's invariant
+  and consumes `gate_gen_conv_in_route(f, n, VNil)` — the callee's invariant
   re-derived in the caller's program, applied in the tier-0 induction-free
   shape, which is exactly `cert_app`'s existing `RecT` spelling.
 

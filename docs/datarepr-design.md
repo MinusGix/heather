@@ -1069,6 +1069,17 @@ spec type and a body outside the fragment can still happen to check there.
 v1 is therefore complete except for the repr-typed-result transfer, which is
 hand-run and specified but not automated.
 
+**Superseded the same day (2026-08-15, commit `d0e6af6`).** The exception in
+the paragraph above is spent: the repr-typed-result stage landed, so v1 is
+complete without qualification. `reprgen` carries the second closing-lemma
+shape (the image spine, `inv`-preservation, `abs` pushed through the spine)
+and `arithmetic_at_bin_transfers_when_the_result_is_repr_typed` in
+`crates/elab/tests/reprgen.rs` is that transfer generated end to end. §3.3's
+"a repr-typed result is deferred" bullet was marked *spent* at the same time;
+this sentence was not, and read as a live gap for a day. The estimate there
+was right in shape and wrong in one part — the per-repr `abs` congruence is
+not needed, an inline `j` against the derived body's own name does that job.
+
 ### 5.2 v2+ — bytes (trigger: the first native-lowering / platform-model round)
 
 - **The platform model**: the alloc primitive with reported failure, the

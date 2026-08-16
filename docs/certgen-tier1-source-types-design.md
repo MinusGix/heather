@@ -288,9 +288,17 @@ tier-1 match from a `Nat` match, and nothing needs it to.
   parameter type's constructor table, `fields` is the embedded field chain
   over fresh `gf{t}` binders, the arm-chain names are `{m}_gen_arm{i}` —
   and the ih (`RCert::Ih`) renders as the **over-applied self-call**
-  `{conv_name}(gf{t})(others…, VNil)`, the child read off the gathered
+  `{conv_name}(gf{t}, others…, VNil)`, the child read off the gathered
   recursion-slot reference. The `Nat` path keeps `gih` and its
   `zero`/`succ` arm names byte-for-byte.
+
+  *(2026-08-16, `issues/certgen-emission-idiomatic-style.md`: this line and
+  §1's `tsum_gen_conv(gf1, VNil)` described the n-ary form from the start,
+  while the emitter actually wrote `{conv_name}(gf{t})(others…, VNil)`. Same
+  term, different text, and nothing could catch the divergence — the tests pin
+  the emission against its own literal, never against this document. The
+  emitter was flipped in that round, so the form described here is now the
+  form emitted.)*
 - **`emit_invariant`** gains the tier-1 statement: the recursion parameter
   is the theorem's one declared binder, the rest curried, the body a plain
   `match` with `C_i(gf0, …)` patterns and λ-wrapped arms — no motive text

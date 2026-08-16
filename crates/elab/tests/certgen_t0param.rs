@@ -100,10 +100,11 @@ fn elab(e: &mut Elaborator, src: &str, what: &str) {
         .unwrap_or_else(|err| panic!("{what}:\n{}", err.render(src)));
 }
 
+/// Shared with the other `certgen_*` binaries, and guarded: a mutation that
+/// leaves the text unparseable must not read as a refusal
+/// (`support::refuted_by_the_kernel`).
 fn refuted(e: &mut Elaborator, src: &str, what: &str) {
-    if e.elab_module_source("ir_v1", src).is_ok() {
-        panic!("{what} elaborated, but it must fail");
-    }
+    support::refuted_by_the_kernel(e, src, what)
 }
 
 fn base() -> Elaborator {
@@ -229,10 +230,10 @@ fn t0param_emissions_and_declines() {
     // caller's program and applied at the caller's own `Flag` parameter —
     // in the tier-0 induction-free shape (`cert_app`'s `RecT` spelling).
     let route = &get("route").text;
-    assert!(route.contains("gate_gen_conv_in_route(f)(n, VNil)"), "{route}");
+    assert!(route.contains("gate_gen_conv_in_route(f, n, VNil)"), "{route}");
     // …and from under a `Nat` induction, at the enum slot's own embedding.
     let wsum = &get("wsum").text;
-    assert!(wsum.contains("gate_gen_conv_in_wsum(f)(Zero, VNil)"), "{wsum}");
+    assert!(wsum.contains("gate_gen_conv_in_wsum(f, Zero, VNil)"), "{wsum}");
     assert!(wsum.contains("VCons(Flag_gen_embed(f), VCons(embed_nat(Zero), VNil))"), "{wsum}");
 
     // Per-signature records name every parameter tier
@@ -241,8 +242,10 @@ fn t0param_emissions_and_declines() {
     assert!(get("fnot").text.contains("CompileFlagFlag(fnot)"), "{}", get("fnot").text);
     assert!(get("tsel").text.contains("CompileToksFlagNat(tsel)"), "{}", get("tsel").text);
     // The tier stages compose: the tier-1 ih is the over-applied self-call
-    // with the tier-0 parameter riding in the curried arguments.
-    assert!(get("tsel").text.contains("tsel_gen_conv(gf1)(f, VNil)"), "{}", get("tsel").text);
+    // with the tier-0 parameter riding in the argument list after the
+    // recursion parameter (one n-ary list spilled across the declaration's
+    // Π spine — `issues/certgen-emission-idiomatic-style.md`).
+    assert!(get("tsel").text.contains("tsel_gen_conv(gf1, f, VNil)"), "{}", get("tsel").text);
     // The non-recursive embedding travels once per type.
     let flag_embed = get("pick")
         .support

@@ -114,7 +114,7 @@ preference:
 **Why `CIh` and `CCall` are different constructors.** In the rendered text the
 two hypotheses are unrelated: the ih is `gih(a, …, VNil)` — a *local* the
 emitted `match` binds, with the recursion argument dropped — and a foreign call
-is `add_gen_conv_in_mul(a)(b, VNil)`, an application of a Ψ theorem whose
+is `add_gen_conv_in_mul(a, b, VNil)`, an application of a Ψ theorem whose
 spelling depends on the callee's own recursion index. Both are name-side, so
 the datatype could have carried one constructor and let the readback decide by
 `c == 0`. It does not, deliberately: *which certificate discharges a call* is
@@ -161,7 +161,7 @@ Concretely, what the readback supplies and the library cannot:
 | the environment `env` | `VCons(embed_nat(a), VCons(embed_nat(gk), tail))` | built from **spec expressions** — source parameter names, the emitted `gk`/`gz`/`tail` binders, and applications of the *source* function. |
 | the goals `vs`, `ws`, `fs`, `cargs` | `VCons(embed_nat(mul(a, gk)), VNil)` | same: spec expressions. |
 | the ih application | `gih(a, VNil)` | the binder `gih` is one the emitted proof text binds (`RESERVED`, l. 134). |
-| a foreign certificate | `add_gen_conv_in_mul(a)(gk, VNil)` | the conv-name convention (l. 602) and the callee's own recursion index. |
+| a foreign certificate | `add_gen_conv_in_mul(a, gk, VNil)` | the conv-name convention (l. 602) and the callee's own recursion index. |
 | `letmatch_conv`'s `arms` | `Arm(mul_gen_arm_zero(), Arm(mul_gen_arm_succ(), NoArm))` | the arms are spelled by *generated fn name*, not as the `Ir` value they equal. This is the one place where a structural argument is nevertheless a name. |
 | closure indices | `LetCall(1, …)` inside a `rest` | the walker numbers callees in its own coordinate system (0 = self, foreign tags verbatim — `lib/certgen_code.hthr` convention 3); the program closure is computed downstream, from names. |
 

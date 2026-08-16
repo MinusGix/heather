@@ -101,10 +101,11 @@ fn elab(e: &mut Elaborator, src: &str, what: &str) {
         .unwrap_or_else(|err| panic!("{what}:\n{}", err.render(src)));
 }
 
+/// Shared with the other `certgen_*` binaries, and guarded: a mutation that
+/// leaves the text unparseable must not read as a refusal
+/// (`support::refuted_by_the_kernel`).
 fn refuted(e: &mut Elaborator, src: &str, what: &str) {
-    if e.elab_module_source("ir_v1", src).is_ok() {
-        panic!("{what} elaborated, but it must fail");
-    }
+    support::refuted_by_the_kernel(e, src, what)
 }
 
 fn base() -> Elaborator {
@@ -223,8 +224,8 @@ fn tier1_emissions_and_declines() {
     // the tier-1 induction consumes its own over-applied self-call as the
     // ih at each child (design doc §1).
     assert!(get("esum").text.contains("add_gen_conv_in_esum"));
-    assert!(get("esum").text.contains("esum_gen_conv(gf0)(VNil)"));
-    assert!(get("esum").text.contains("esum_gen_conv(gf1)(VNil)"));
+    assert!(get("esum").text.contains("esum_gen_conv(gf0, VNil)"));
+    assert!(get("esum").text.contains("esum_gen_conv(gf1, VNil)"));
     // The recursive embedding and the per-signature records.
     let toks_embed = get("tsum")
         .support

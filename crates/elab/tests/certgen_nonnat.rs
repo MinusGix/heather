@@ -121,10 +121,11 @@ fn elab(e: &mut Elaborator, src: &str, what: &str) {
         .unwrap_or_else(|err| panic!("{what}:\n{}", err.render(src)));
 }
 
+/// Shared with the other `certgen_*` binaries, and guarded: a mutation that
+/// leaves the text unparseable must not read as a refusal
+/// (`support::refuted_by_the_kernel`).
 fn refuted(e: &mut Elaborator, src: &str, what: &str) {
-    if e.elab_module_source("ir_v1", src).is_ok() {
-        panic!("{what} elaborated, but it must fail");
-    }
+    support::refuted_by_the_kernel(e, src, what)
 }
 
 fn base() -> Elaborator {

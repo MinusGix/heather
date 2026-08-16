@@ -1012,20 +1012,24 @@ fn cert_ret_dist(c: &RCert) -> Option<usize> {
 }
 
 /// How a member's invariant theorem is applied at spec arguments.
+///
+/// One n-ary argument list, spilled across the declaration's own Π spine: an
+/// invariant over a recursion is declared 1-ary (the recursion parameter) and
+/// returns a Π over the others, so `{name}(rec, others…, VNil)` reaches past
+/// the declared binder into the returned type. That is the idiomatic surface
+/// (`issues/idiomatic-spelling-pass.md`), and it is a spelling change only —
+/// the elaborator already accepted it, probed before this flip.
 fn cert_app(name: &str, model: &FnIr, arg_specs: &[String]) -> String {
     match &model.kind {
         FnIrKind::Plain(_) => format!("{name}({}, VNil)", arg_specs.join(", ")),
         FnIrKind::Rec(RecIr { rec_idx, .. }) | FnIrKind::RecT(RecTIr { rec_idx, .. }) => {
             let r_idx = *rec_idx;
-            let rec_arg = &arg_specs[r_idx];
-            let mut others: Vec<String> = arg_specs
-                .iter()
-                .enumerate()
-                .filter(|(i, _)| *i != r_idx)
-                .map(|(_, s)| s.clone())
-                .collect();
-            others.push("VNil".into());
-            format!("{name}({rec_arg})({})", others.join(", "))
+            let mut args: Vec<String> = vec![arg_specs[r_idx].clone()];
+            args.extend(
+                arg_specs.iter().enumerate().filter(|(i, _)| *i != r_idx).map(|(_, s)| s.clone()),
+            );
+            args.push("VNil".into());
+            format!("{name}({})", args.join(", "))
         }
     }
 }
@@ -1237,8 +1241,13 @@ fn render_cert(
                             let child = arg_exprs
                                 .get(rec_idx)
                                 .ok_or("a self-call gathering no recursion argument")?;
+                            // One n-ary list, like `cert_app`'s: the child at
+                            // the recursion slot, then the others. With no
+                            // others this was already `f_gen_conv(gf1, VNil)`
+                            // — the two spellings now agree
+                            // (`issues/certgen-emission-idiomatic-style.md`).
                             format!(
-                                "{}({child})({})",
+                                "{}({child}, {})",
                                 (cx.conv_name)(cx.self_name),
                                 others.join(", ")
                             )
@@ -1410,7 +1419,7 @@ fn emit_with_model(
         }
         (support, record_name(pts, res, arity))
     };
-    emit_instance(w, f, pts, &model, &instance_record);
+    emit_instance(w, f, &model, &instance_record);
     Ok(Emission {
         name: f.to_string(),
         arity,
@@ -1551,12 +1560,14 @@ fn emit_fixtures(
     let env = env_text(&lit_sls, "VNil");
     let call = res.at(format!("{f}({})", lit_strs.join(", ")));
     writeln!(w, "theorem {f}_gen_fix():").unwrap();
-    writeln!(w, "    eval({fuel}, {f}_gen_prog())({env}, {f}_gen_body())").unwrap();
+    // `eval` is declared 2-ary returning `Val -> Ir -> Res`, so one n-ary
+    // argument list reaches the whole spine.
+    writeln!(w, "    eval({fuel}, {f}_gen_prog(), {env}, {f}_gen_body())").unwrap();
     writeln!(w, "    = Out({})", out_text(&call)).unwrap();
     writeln!(w, "{{ refl }}").unwrap();
     writeln!(w).unwrap();
     writeln!(w, "theorem {f}_gen_fix_short():").unwrap();
-    writeln!(w, "    eval({}, {f}_gen_prog())({env}, {f}_gen_body())", fuel - 1).unwrap();
+    writeln!(w, "    eval({}, {f}_gen_prog(), {env}, {f}_gen_body())", fuel - 1).unwrap();
     writeln!(w, "    = OutOfFuel").unwrap();
     writeln!(w, "{{ refl }}").unwrap();
     writeln!(w).unwrap();
@@ -1833,20 +1844,17 @@ fn emit_invariant(
     Ok(())
 }
 
-fn emit_instance(w: &mut String, f: &str, pts: &[Option<ParamTy>], model: &FnIr, record: &str) {
+// `pts` used to be a parameter here, for the λ's type annotations; the
+// idiomatic λ does not spell them, so the instance emitter no longer needs to
+// know its parameters' types at all.
+fn emit_instance(w: &mut String, f: &str, model: &FnIr, record: &str) {
     let params = &model.params;
-    let lams: String = params
-        .iter()
-        .enumerate()
-        .map(|(i, p)| {
-            let pn = pts
-                .get(i)
-                .and_then(|t| t.as_ref())
-                .map(|t| t.spell.as_str())
-                .unwrap_or("Nat");
-            format!("λ ({p}: {pn}) => ")
-        })
-        .collect();
+    // One unannotated multi-binder λ. The `cert` field sits in CHECKING
+    // position — the record's field type says what each binder's type is — so
+    // the annotations the older spelling carried were the type spelled twice.
+    // A nullary signature has no binder and the λ disappears entirely.
+    let lams =
+        if params.is_empty() { String::new() } else { format!("λ {} => ", params.join(" ")) };
     let cert = cert_app(&format!("{f}_gen_conv"), model, params);
     writeln!(w, "fn {f}_gen_instance() -> {record}({f}) {{").unwrap();
     writeln!(w, "    {record} {{").unwrap();

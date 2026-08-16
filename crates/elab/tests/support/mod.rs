@@ -141,6 +141,33 @@ pub fn with_decl_cache(e: &mut heather_elab::Elaborator, prefix: impl FnOnce(&mu
     }
 }
 
+/// A mutated emission (or mutated-library emission) elaborated into the
+/// `ir_v1` module, required to be **refused, and refused by the kernel**.
+///
+/// Shared by the six `certgen_*` test binaries, which is a departure from this
+/// file's usual rule that harness helpers stay file-local: the six had
+/// byte-identical private copies, and the guard below is exactly the kind of
+/// thing that gets added to one copy and not the other five.
+///
+/// The guard (`issues/certgen-emission-idiomatic-style.md`, inherited from the
+/// datarepr round's `refused`): a control mutates generated source with a
+/// string edit, so a pattern that has drifted away from the emission can leave
+/// the text **unparseable** — and then the control is green for a reason that
+/// has nothing to do with the property it names. A `ParseError` is therefore a
+/// failure here, not a pass. `assert_ne!` on the mutation catches a pattern
+/// that matched *nothing*; this catches a pattern that matched and cut.
+pub fn refuted_by_the_kernel(e: &mut heather_elab::Elaborator, src: &str, what: &str) {
+    match e.elab_module_source("ir_v1", src) {
+        Ok(()) => panic!("{what} elaborated, but it must fail"),
+        Err(heather_elab::ElabError::Parse(p)) => panic!(
+            "{what} was refused by the PARSER, so this control proves nothing \
+             about the mutation: {}\n{src}",
+            p.msg
+        ),
+        Err(_) => {}
+    }
+}
+
 /// A 64-bit FNV-1a over an exact rendering of Ψ.
 ///
 /// First-party on purpose: `crates/elab` has no dependencies, dev-deps
