@@ -3374,7 +3374,7 @@ impl Elaborator {
                 // (issues/method-receiver-position.md).
                 if name == "map" && !self.shadowed(cx, name) {
                     let [xs, f] = args.as_slice() else {
-                        return err("`map` takes `(f)` on a vector receiver", e.span);
+                        return self.vec_method_arity_err(cx, args, name, "`(f)`", e.span);
                     };
                     return self.elab_vec_map(cx, f, xs, e.span);
                 }
@@ -3386,7 +3386,7 @@ impl Elaborator {
                 // wanted spellings for them).
                 if (name == "head" || name == "tail") && !self.shadowed(cx, name) {
                     let [v] = args.as_slice() else {
-                        return err(format!("`{name}` takes a vector receiver"), e.span);
+                        return self.vec_method_arity_err(cx, args, name, "no arguments", e.span);
                     };
                     return self.elab_vec_head_tail(cx, v, name == "head", e.span);
                 }
@@ -3416,7 +3416,7 @@ impl Elaborator {
                 }
                 if name == "fold" && !self.shadowed(cx, name) {
                     let [xs, z, f] = args.as_slice() else {
-                        return err("`fold` takes `(init, f)` on a vector receiver", e.span);
+                        return self.vec_method_arity_err(cx, args, name, "`(init, f)`", e.span);
                     };
                     return self.elab_vec_fold(cx, z, f, xs, e.span);
                 }
@@ -6136,6 +6136,46 @@ impl Elaborator {
             Some(GlobalInfo { params, .. }) => Rc::clone(params),
             None => Rc::new(Vec::new()),
         }
+    }
+
+    /// The arity branch of a builtin vector method, which cannot say what it
+    /// is about until it has looked at the receiver
+    /// (issues/receiver-method-shadows-record-field.md).
+    ///
+    /// These builtins all open with `elab_infer` on the receiver, so a
+    /// receiver whose type does not infer can never reach one of them — but
+    /// the arity test runs *first*, and used to announce "on a vector
+    /// receiver" about a receiver nobody had read. At a record with a field
+    /// named `fold`, reached off a receiver that needs a motive, that made
+    /// the elaborator assert something false in place of the one diagnostic
+    /// the writer could act on.
+    ///
+    /// So the order here is the order the body would have taken anyway, and
+    /// the wrong-arity message is uttered only where it is true. The receiver
+    /// failing to infer is its own diagnosis and is returned as-is: it is
+    /// exactly what the writer gets when the arity is *right*, so the two
+    /// paths no longer disagree about the same receiver.
+    fn vec_method_arity_err<T>(
+        &self,
+        cx: &Cx,
+        args: &[Expr],
+        name: &str,
+        shape: &str,
+        span: Span,
+    ) -> R<T> {
+        let [recv, ..] = args else {
+            // No receiver at all — the direct spelling `fold()`, since the dot
+            // always supplies one. Nothing to read, but nothing is being
+            // guessed either: these builtins *are* the vector eliminators, so
+            // what they require is a fact about them rather than a claim about
+            // some receiver.
+            return err(format!("`{name}` needs a vector receiver"), span);
+        };
+        let (_, ty, _) = self.elab_infer(cx, recv)?;
+        if !matches!(*crate::inductive::decoded(&ty), Type::Vec { .. }) {
+            return err(format!("`{name}`'s receiver has to be a vector"), span);
+        }
+        err(format!("`{name}` takes {shape} on a vector receiver"), span)
     }
 
     /// `xs.map(f)`. Two forms, and the split is what

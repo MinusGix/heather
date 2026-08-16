@@ -356,6 +356,83 @@ fn the_vector_methods_still_work() {
         "#);
 }
 
+// The other side of that path: a builtin's *arity* branch used to run before
+// anything had read the receiver, so it announced "on a vector receiver"
+// about a receiver nobody had looked at
+// (`issues/receiver-method-shadows-record-field.md`). The shape that found
+// it is a record field named `fold` reached off a receiver whose type does
+// not infer: the field route declines (it cannot see a type), the fallback
+// reaches the builtin, and the writer was told about vectors.
+//
+// What they get instead is the receiver's own diagnosis — which is exactly
+// what the *arity-correct* spelling has always given, so the two no longer
+// disagree about the same receiver, and it is the one thing here that is
+// actionable: supply the motive and the field projects.
+#[test]
+fn a_builtin_arity_message_does_not_assert_a_vector_receiver() {
+    let e = bad(r#"
+        record Box { fold: (n: Nat) -> Nat }
+        fn mk() -> Box { Box(λ (n: Nat) => n) }
+        fn probe(n: Nat) -> Nat {
+            match n { Zero => mk(), Succ(k) => mk() }.fold(Zero)
+        }
+        "#);
+    assert!(e.contains("needs a motive"), "{e}");
+    assert!(!e.contains("vector"), "{e}");
+
+    // Not gated on the record: the message was untrue whether or not some
+    // record happened to have a field by that name, so the fix is not either.
+    let e = bad(r#"
+        fn mk() -> Nat { Zero }
+        fn probe(n: Nat) -> Nat {
+            match n { Zero => mk(), Succ(k) => mk() }.fold(Zero)
+        }
+        "#);
+    assert!(e.contains("needs a motive"), "{e}");
+    assert!(!e.contains("vector"), "{e}");
+
+    // `head`/`tail` reach the same branch by being *over*-applied, which is
+    // how a record field named `head` that takes an argument arrives there.
+    let e = bad(r#"
+        record Box { head: (n: Nat) -> Nat }
+        fn mk() -> Box { Box(λ (n: Nat) => n) }
+        fn probe(n: Nat) -> Nat {
+            match n { Zero => mk(), Succ(k) => mk() }.head(3)
+        }
+        "#);
+    assert!(e.contains("needs a motive"), "{e}");
+    assert!(!e.contains("vector"), "{e}");
+}
+
+// A receiver that *does* infer and is not a vector gets told that, rather
+// than the arity shape of a method it was never going to reach.
+#[test]
+fn a_builtin_at_a_non_vector_receiver_names_the_receiver_not_the_arity() {
+    let e = bad("fn f(n: Nat) -> Nat { n.fold(Zero) }");
+    assert!(e.contains("`fold`'s receiver has to be a vector"), "{e}");
+    assert!(!e.contains("(init, f)"), "{e}");
+
+    // The direct spelling with no arguments at all: there is no receiver to
+    // read, and what a vector eliminator requires is a fact about it.
+    let e = bad("fn f() -> Nat { fold() }");
+    assert!(e.contains("`fold` needs a vector receiver"), "{e}");
+}
+
+// The negative control the two above need: the arity message still exists
+// and still fires where it is true. Without this, deleting it outright would
+// pass both of them.
+#[test]
+fn a_genuine_vector_still_gets_the_arity_message() {
+    let e = bad("fn f(xs: [Nat; 2]) -> Nat { xs.fold(Zero) }");
+    assert!(e.contains("`fold` takes `(init, f)` on a vector receiver"), "{e}");
+
+    let e = bad("fn f(xs: [Nat; 2]) -> [Nat; 2] { xs.map() }");
+    assert!(e.contains("`map` takes `(f)` on a vector receiver"), "{e}");
+
+    let e = bad("fn f(xs: [Nat; 2]) -> Nat { xs.head(3) }");
+    assert!(e.contains("`head` takes no arguments on a vector receiver"), "{e}");
+}
+
 // -- 13: no such field -----------------------------------------------------
 
 // §10.13. A bare `p.f` is never a method call, so there is nothing to fall

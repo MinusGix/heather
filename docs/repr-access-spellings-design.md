@@ -48,6 +48,12 @@ Both were re-probed at the top of this round, against the built CLI:
   path and `fold` is claimed with a diagnostic that says "on a vector receiver".
   That shape is not a repr access point; the narrowed repro is logged on the
   issue and the defect is neither fixed nor designed around here.
+  **Fixed 2026-08-16**, after this round and independently of it: the builtins
+  all infer their receiver, so the arity test that ran *before* they did was
+  announcing a vector nobody had read. It now consults the receiver first, and
+  a receiver that does not infer gets its own diagnosis — the same one the
+  arity-correct spelling always gave. Nothing here moves either way; recorded
+  so this section is not read as a live defect.
 
 So the split was never a design; it was two workarounds, one of which had
 already evaporated. Nothing below is bent around either defect.
