@@ -41,7 +41,9 @@ use std::rc::Rc;
 
 use heather_syntax::{Decl, Expr, ExprKind};
 
-use crate::datarepr::{appc, impl_record_name, lams, spec_rec_name, spell_ty, CtorView};
+use crate::datarepr::{
+    appc, impl_record_name, lams, params_src, spec_rec_name, spell_ty, CtorView,
+};
 use crate::Elaborator;
 
 /// One transfer: the surface source, plus what a caller needs to key it.
@@ -54,6 +56,50 @@ pub struct ReprEmission {
     /// callee's artifacts come before the caller's, so elaborating the text
     /// front to back registers each `Impl` before the one that resolves it.
     pub text: String,
+    /// Where the target's own `impl` block starts in `text`.
+    ///
+    /// For the one caller that wants the transfer's **certificate** without its
+    /// **registration**: `refines := via_derived(p)` composes with the derived
+    /// `refines`, and at one `(repr, operation)` key there is only ever one
+    /// `Impl` — the declaration the user is writing (design FINDING E). So that
+    /// route elaborates `text[..impl_at]` and states the composition itself.
+    pub impl_at: usize,
+    /// The derived body, its `refines`, and (at a repr-typed result) its
+    /// `refines_inv`: the names the same caller composes with.
+    pub body: String,
+    pub refines: String,
+    pub refines_inv: Option<String>,
+    /// The parameter the transfer recursed on — the one the derived `refines`
+    /// takes its single `inv` hypothesis at.
+    pub rec_param: String,
+}
+
+/// What the *target* transfer (as opposed to a recursively generated callee's)
+/// emitted, recorded as its `impl` block is written.
+struct Target {
+    impl_at: usize,
+    body: String,
+    refines: String,
+    refines_inv: Option<String>,
+    rec_param: String,
+}
+
+impl Target {
+    fn at(
+        impl_at: usize,
+        body: &str,
+        refines: &str,
+        refines_inv: Option<&str>,
+        rec_param: &str,
+    ) -> Option<Target> {
+        Some(Target {
+            impl_at,
+            body: body.to_string(),
+            refines: refines.to_string(),
+            refines_inv: refines_inv.map(|s| s.to_string()),
+            rec_param: rec_param.to_string(),
+        })
+    }
 }
 
 /// A callee that touches `S`, resolved against the `Impl` registry (§3.1
@@ -171,8 +217,22 @@ impl Elaborator {
         let mut out = String::new();
         let mut done: Vec<String> = Vec::new();
         let mut stack: Vec<String> = Vec::new();
-        self.transfer(op, repr, &mut out, &mut done, &mut stack)?;
-        Ok(ReprEmission { op: op.to_string(), repr: repr.to_string(), text: out })
+        // The target's own `impl` block is the LAST one emitted — the recursion
+        // emits a callee's artifacts before the caller's — so the last write
+        // here is the top-level transfer's.
+        let mut target = None;
+        self.transfer(op, repr, &mut out, &mut done, &mut stack, &mut target)?;
+        let t = target.expect("a successful transfer emits its `impl` block");
+        Ok(ReprEmission {
+            op: op.to_string(),
+            repr: repr.to_string(),
+            text: out,
+            impl_at: t.impl_at,
+            body: t.body,
+            refines: t.refines,
+            refines_inv: t.refines_inv,
+            rec_param: t.rec_param,
+        })
     }
 
     /// One transfer, appended to `out` after everything it depends on.
@@ -191,6 +251,7 @@ impl Elaborator {
         out: &mut String,
         done: &mut Vec<String>,
         stack: &mut Vec<String>,
+        target: &mut Option<Target>,
     ) -> Result<(), String> {
         let rp = self
             .datarepr_by_name
@@ -235,7 +296,7 @@ impl Elaborator {
                              order to generate in (docs/datarepr-design.md §3.1 phase 0)"
                         ));
                     }
-                    if let Err(why) = self.transfer(&name, repr, out, done, stack) {
+                    if let Err(why) = self.transfer(&name, repr, out, done, stack, target) {
                         stack.pop();
                         return Err(format!(
                             "`{op}` calls `{name}`, which touches `{}` and has no `Impl` at \
@@ -349,16 +410,15 @@ impl Elaborator {
         // -- phase 3: obligation synthesis (§1.2's schema) -----------------
         //
         // The signature restated with `S ↦ R`, in declaration order — the same
-        // order the `Impl` record restates it in.
-        let params: Vec<(String, String)> = frag
-            .params
-            .iter()
-            .map(|(n, t)| {
-                (n.clone(), if *n == frag.rec_param { c.clone() } else { t.clone() })
-            })
-            .collect();
+        // order the `Impl` record restates it in. Read off the ONE schema the
+        // surface `impl` declares its obligations from
+        // (docs/obligation-records-design.md §2.1): the derived `Impl`'s
+        // statements and a hand-written one's are the same paragraph, and were
+        // written twice until this call replaced the second copy.
+        let sch = self.impl_schema(op, repr)?;
+        let params = sch.binders.clone();
         let derived = format!("{op}_derived");
-        let arglist: Vec<String> = params.iter().map(|(n, _)| n.clone()).collect();
+        let arglist: Vec<String> = sch.args();
         // A call to `f` itself, with `x` at the recursion parameter's position.
         let plain_call = |x: &str| {
             let a: Vec<String> = frag
@@ -368,9 +428,7 @@ impl Elaborator {
                 .collect();
             format!("{op}({})", a.join(", "))
         };
-        let spec_call = plain_call(&appc(&abs, &[frag.rec_param.clone()]));
-        let mut law_binders = params.clone();
-        law_binders.push(("h0".to_string(), appc(&inv, &[frag.rec_param.clone()])));
+        let law_binders = sch.law_binders();
 
         // -- phase 4: certificate emission --------------------------------
         let mut fargs = vec![b.clone()];
@@ -378,8 +436,8 @@ impl Elaborator {
         fargs.push(frag.rec_param.clone());
         out.push_str(&format!(
             "fn {derived}({}) -> {} {{\n    {}\n}}\n\n",
-            params.iter().map(|(n, t)| format!("{n}: {t}")).collect::<Vec<_>>().join(", "),
-            if res_is_spec { c } else { &frag.result },
+            params_src(&params),
+            sch.result,
             appc(&format!("{rec}::fold()"), &fargs)
         ));
 
@@ -414,8 +472,7 @@ impl Elaborator {
         fl_args.push(frag.rec_param.clone());
         fl_args.push("h0".to_string());
         let fold_law = appc(&format!("{rec}::fold_law()"), &fl_args);
-        let law_binders_src =
-            law_binders.iter().map(|(n, t)| format!("{n}: {t}")).collect::<Vec<_>>().join(", ");
+        let law_binders_src = params_src(&law_binders);
         let refines = format!("{op}_derived_refines");
 
         let inv_pres = format!("{op}_inv_pres");
@@ -460,10 +517,11 @@ impl Elaborator {
 
             // `fold_law` opens the anchor, the lemma closes it.
             out.push_str(&format!(
-                "theorem {refines}({law_binders_src}):\n    {} = {spec_call}\n{{\n    trans({fold_law},\n          {})\n}}\n\n",
-                appc(&derived, &arglist),
+                "theorem {refines}({law_binders_src}):\n    {}\n{{\n    trans({fold_law},\n          {})\n}}\n\n",
+                sch.refines_concl(&appc(&derived, &arglist)),
                 lem_call(&appc(&abs, &[frag.rec_param.clone()]))
             ));
+            *target = Target::at(out.len(), &derived, &refines, None, &frag.rec_param);
             out.push_str(&format!(
                 "impl {op} for {repr} {{\n    body := {derived},\n    refines := {refines},\n}}\n"
             ));
@@ -522,9 +580,9 @@ impl Elaborator {
         // explicit `j` motive, for §3.1 correction 2's reason.
         let derived_call = appc(&derived, &arglist);
         out.push_str(&format!(
-            "theorem {refines}({law_binders_src}):\n    {} = {spec_call}\n{{\n    \
+            "theorem {refines}({law_binders_src}):\n    {}\n{{\n    \
              trans(j({fold_law},\n            \u{3bb} y q => {} = {}, refl),\n          {})\n}}\n\n",
-            appc(&abs, &[derived_call.clone()]),
+            sch.refines_concl(&derived_call),
             appc(&abs, &[derived_call.clone()]),
             appc(&abs, &["y".to_string()]),
             lem_at(&abs_alg, &appc(&abs, &[frag.rec_param.clone()]))
@@ -536,10 +594,11 @@ impl Elaborator {
         out.push_str(&format!(
             "theorem {refines_inv}({law_binders_src}):\n    {}\n{{\n    \
              j(sym({fold_law}),\n      \u{3bb} y q => {}, {})\n}}\n\n",
-            appc(&inv, &[derived_call]),
+            sch.inv_concl(&derived_call),
             appc(&inv, &["y".to_string()]),
             lem_at(&inv_pres, &appc(&abs, &[frag.rec_param.clone()]))
         ));
+        *target = Target::at(out.len(), &derived, &refines, Some(&refines_inv), &frag.rec_param);
         out.push_str(&format!(
             "impl {op} for {repr} {{\n    body := {derived},\n    refines := {refines},\n    \
              refines_inv := {refines_inv},\n}}\n"

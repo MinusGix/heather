@@ -3,7 +3,7 @@ title: AI-facing tooling: every failure returns the search state that produced i
 status: open
 labels: [tooling,design,meta,diagnostics]
 created: 2026-08-05
-updated: 2026-08-05
+updated: 2026-08-15
 ---
 
 Direction issue, not scheduled — filed from the 2026-08-05 riff (while the
@@ -48,3 +48,7 @@ Two properties everything here inherits:
 - **Feedback latency** is owned by the perf accumulator issues; noted
   here only that agent loops multiply check time by hundreds, so they
   are quietly also AI-ergonomics issues.
+
+## Log
+
+- 2026-08-15: Two items from the obligation-records round (2026-08-15). (1) DELIVERED, small: 'heather obligations [--json] <file>' — one row per obligation-bearing field of every such declaration, with owner, the '::' path, field, state (supplied|defaulted), provenance (inline|named|derived|via) and the STATEMENT, printed as the synthesized source text rather than decoded from a kernel term. That is the property worth keeping: because the statement schema is built as surface source, the listing is legible without goal-display-decodes, and any future path that renders a statement from kernel terms inherits that problem while this one does not. The --json emitter is hand-rolled (dependency-policy) and is a fine template for the 'heather check --json' this issue owns. (2) WANT, recorded not built (round-5 verdict, 'not too important right now'): checking should CONTINUE past a failed obligation clause so that downstream breakage — a caller of the interface whose use no longer typechecks — surfaces before the proof is written. Today a '?' clause (the reporting hole: fails at its own span printing the statement it owes) stops the file there, which is exactly one fix per round-trip. This is error-tolerant elaboration, a diagnostics-mode change, and it belongs with the search-state-as-data thesis: a failure should return everything the file still has to say, not only the first thing it could not say.

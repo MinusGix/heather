@@ -79,6 +79,7 @@ pub mod gate;
 pub mod stats;
 mod code;
 mod datarepr;
+pub use datarepr::{Obligation, Provenance};
 pub mod reprgen;
 mod names;
 mod patterns;
@@ -752,8 +753,20 @@ pub struct Elaborator {
     /// and the namespace its `abs`/`inv` live in.
     datarepr_by_name: HashMap<String, datarepr::DatareprInfo>,
     /// One `Impl` per (repr, operation) — the open, per-operation registry of
-    /// design §1.2, keyed per §4.
-    impls: HashMap<(String, String), String>,
+    /// design §1.2, keyed per §4. The entry carries how it got there, which is
+    /// recorded for humans and tools and read by no certificate
+    /// (docs/obligation-records-design.md §4.4).
+    impls: HashMap<(String, String), datarepr::ImplEntry>,
+    /// Every obligation every obligation-bearing declaration stated, in
+    /// declaration order — what `heather obligations` lists
+    /// (docs/obligation-records-design.md §6). Recorded only on success, which
+    /// under inline-first is the only outcome that leaves anything behind.
+    obligations: Vec<datarepr::Obligation>,
+    /// Set while a `:= derive()` route elaborates the transfer generator's
+    /// emission, so that the `impl` block *inside* that emission records
+    /// `Derived` rather than what its own clauses look like. `None` everywhere
+    /// else, which makes the mechanism inert.
+    impl_provenance: Option<datarepr::Provenance>,
     /// Surface declarations by name; see the note in `elab_decl`.
     decls: HashMap<String, Decl>,
     /// Operator fallbacks taken while elaborating the current declaration
@@ -963,6 +976,8 @@ impl Elaborator {
             monomorphs: HashMap::new(),
             datarepr_by_name: HashMap::new(),
             impls: HashMap::new(),
+            obligations: Vec::new(),
+            impl_provenance: None,
             decls: HashMap::new(),
             op_fallback_notes: RefCell::new(Vec::new()),
             instance_scope: Vec::new(),

@@ -51,11 +51,21 @@ fn main() -> ExitCode {
                 ExitCode::from(2)
             }
         },
+        Some((cmd, rest)) if cmd == "obligations" => match parse_check_args(rest) {
+            Ok((opts, files)) if !files.is_empty() => obligations(&opts, &files),
+            Ok(_) => usage(),
+            Err(msg) => {
+                eprintln!("error: {msg}");
+                eprintln!("{USAGE}");
+                ExitCode::from(2)
+            }
+        },
         _ => usage(),
     }
 }
 
-const USAGE: &str = "usage: heather check [-L <dir>]... [--cache] [--cache-dir <dir>] <file.hthr>...";
+const USAGE: &str = "usage: heather check [-L <dir>]... [--cache] [--cache-dir <dir>] <file.hthr>...\n\
+                     \x20      heather obligations [-L <dir>]... [--json] <file.hthr>...";
 
 fn usage() -> ExitCode {
     eprintln!("{USAGE}");
@@ -69,6 +79,8 @@ struct Opts {
     /// neither reads nor writes anything and behaves exactly as before.
     cache: bool,
     cache_dir: PathBuf,
+    /// `--json`: `obligations` only, per `issues/ai-facing-tooling.md`.
+    json: bool,
 }
 
 /// `-L <dir>` (repeatable) and the cache flags may appear before, after or
@@ -78,6 +90,7 @@ fn parse_check_args(args: &[String]) -> Result<(Opts, Vec<String>), String> {
         search: Vec::new(),
         cache: false,
         cache_dir: PathBuf::from(heather_cache::DEFAULT_DIR),
+        json: false,
     };
     let mut files = Vec::new();
     let mut it = args.iter();
@@ -93,6 +106,10 @@ fn parse_check_args(args: &[String]) -> Result<(Opts, Vec<String>), String> {
         }
         if a == "--cache" {
             opts.cache = true;
+            continue;
+        }
+        if a == "--json" {
+            opts.json = true;
             continue;
         }
         // `--cache-dir` implies `--cache`: naming a cache and not using it is
@@ -210,6 +227,111 @@ fn check(opts: &Opts, files: &[String]) -> ExitCode {
         eprintln!("cache: could not write {}: {e}", opts.cache_dir.display());
     }
     ExitCode::from(if failed { 1 } else { 0 })
+}
+
+/// `heather obligations [--json] <file>` — every obligation-bearing field of
+/// every such declaration in the file, with its state, its provenance and the
+/// statement it owes (`docs/obligation-records-design.md` §6).
+///
+/// It **checks the file first**, and prints nothing if the check fails: under
+/// inline-first a listed file is a certified file, so the `state` column never
+/// says "open" and a listing is never a to-do list. What it is for is the
+/// Q2 verdict's "distinguish provenance on inspection" — and, for an AI-facing
+/// tool, knowing what a declaration owes and who discharged it before editing
+/// it.
+fn obligations(opts: &Opts, files: &[String]) -> ExitCode {
+    for path in files {
+        let mut elab = match Elaborator::with_prelude() {
+            Ok(e) => e,
+            Err(e) => {
+                eprintln!("internal error: the prelude failed to check: {e}");
+                return ExitCode::from(2);
+            }
+        };
+        let modules = match loader::load(Path::new(path), &opts.search) {
+            Ok(m) => m,
+            Err(e) => {
+                eprintln!("error: {}", e.msg);
+                return ExitCode::from(2);
+            }
+        };
+        for m in &modules {
+            let errs = elab.check_module_source(&m.name, &m.src);
+            if errs.is_empty() {
+                continue;
+            }
+            let shown = display_path(&m.path, path);
+            for e in &errs {
+                eprint!("{}", e.render_snippet(&m.src, &shown));
+            }
+            eprintln!("\n{shown}: not checked, so there is nothing to list");
+            return ExitCode::from(1);
+        }
+        let rows = elab.obligations();
+        if opts.json {
+            println!("[");
+            for (i, o) in rows.iter().enumerate() {
+                println!(
+                    "  {{\"owner\": {}, \"path\": {}, \"field\": {}, \"state\": {}, \
+                     \"provenance\": {}, \"statement\": {}}}{}",
+                    json_str(&o.owner),
+                    json_str(&o.path),
+                    json_str(&o.field),
+                    json_str(o.state),
+                    match o.provenance {
+                        Some(p) => json_str(p.as_str()),
+                        None => "null".to_string(),
+                    },
+                    json_str(&o.statement),
+                    if i + 1 == rows.len() { "" } else { "," }
+                );
+            }
+            println!("]");
+            continue;
+        }
+        let w = |f: fn(&heather_elab::Obligation) -> &str| {
+            rows.iter().map(|o| f(o).chars().count()).max().unwrap_or(0)
+        };
+        let (wo, wf, ws) = (w(|o| &o.owner).max(5), w(|o| &o.field).max(5), w(|o| o.state).max(5));
+        println!(
+            "{:wo$}  {:wf$}  {:ws$}  {:10}  statement",
+            "owner", "field", "state", "provenance"
+        );
+        for o in rows {
+            println!(
+                "{:wo$}  {:wf$}  {:ws$}  {:10}  {}",
+                o.owner,
+                o.field,
+                o.state,
+                o.provenance.map(|p| p.as_str()).unwrap_or("—"),
+                o.statement
+            );
+        }
+        if rows.is_empty() {
+            println!("(no obligation-bearing declarations)");
+        }
+    }
+    ExitCode::from(0)
+}
+
+/// JSON string escaping, by hand: the workspace above the kernel stays
+/// dependency-light (`issues/dependency-policy.md`), and this is the whole of
+/// what a serializer would do for these six fields.
+fn json_str(s: &str) -> String {
+    let mut out = String::with_capacity(s.len() + 2);
+    out.push('"');
+    for c in s.chars() {
+        match c {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\t' => out.push_str("\\t"),
+            c if (c as u32) < 0x20 => out.push_str(&format!("\\u{:04x}", c as u32)),
+            c => out.push(c),
+        }
+    }
+    out.push('"');
+    out
 }
 
 /// The root keeps the spelling the user typed; an imported module is named by

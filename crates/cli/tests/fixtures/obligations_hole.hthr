@@ -1,0 +1,12 @@
+// A `?` clause: the file must NOT check, and the listing must therefore print
+// nothing (docs/obligation-records-design.md §1.2, §6).
+inductive Tok { TPush(n: Nat), TAdd, TMul }
+inductive List<A> { Nil, Cons(head: A, tail: List<A>) }
+datarepr ListTok for List<Tok> := repr::naive();
+
+fn length(l: List<Tok>) -> Nat { match l { Nil => Zero, Cons(h, t) => Succ(length(t)) } }
+
+impl length for ListTok {
+    body := length,
+    refines := ?,
+}

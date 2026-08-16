@@ -144,9 +144,12 @@ pub struct ImplDecl {
     pub op: String,
     /// The repr it implements it at — a `datarepr`'s name.
     pub repr: String,
-    /// Reuses a `datarepr`'s clause node: the shapes are the same `f := e`,
-    /// and `mk` is simply never set here.
-    pub fields: Vec<DatareprField>,
+    /// Reuses a `datarepr`'s body node, and for the same two reasons: the
+    /// clause shapes are the same `f := e` (with `mk` simply never set here),
+    /// and the `:= <route>` form is the same one token of lookahead —
+    /// `impl length for ListTok := derive();`
+    /// (docs/obligation-records-design.md §4.1, §4.3).
+    pub body: DatareprBody,
     pub span: Span,
 }
 

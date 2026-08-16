@@ -199,3 +199,45 @@ fn a_stale_cache_is_discarded_out_loud() {
 
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+// -- `heather obligations` (docs/obligation-records-design.md §6) ------------
+
+#[test]
+fn obligations_lists_state_provenance_and_statement() {
+    let out = heather(&["obligations", "obligations.hthr"]);
+    assert_eq!(out.status.code(), Some(0), "stderr: {}", String::from_utf8_lossy(&out.stderr));
+    let text = String::from_utf8_lossy(&out.stdout);
+    assert!(text.contains("owner"), "{text}");
+    // An omitted repr law is `defaulted` with no provenance…
+    assert!(text.contains("datarepr ListTok"), "{text}");
+    assert!(text.contains("defaulted"), "{text}");
+    // …and a written `refines` is `supplied`, `inline`, with its statement.
+    assert!(text.contains("impl length for ListTok"), "{text}");
+    assert!(text.contains("supplied"), "{text}");
+    assert!(text.contains("inline"), "{text}");
+    assert!(text.contains("Impl_ListTok_length::body()(l) = length("), "{text}");
+}
+
+#[test]
+fn obligations_json_is_one_object_per_row() {
+    let out = heather(&["obligations", "--json", "obligations.hthr"]);
+    assert_eq!(out.status.code(), Some(0));
+    let text = String::from_utf8_lossy(&out.stdout);
+    assert!(text.starts_with("[\n"), "{text}");
+    assert!(text.trim_end().ends_with("]"), "{text}");
+    assert!(text.contains("\"path\": \"Impl(length, ListTok)::refines\""), "{text}");
+    assert!(text.contains("\"provenance\": \"inline\""), "{text}");
+    assert!(text.contains("\"provenance\": null"), "{text}");
+}
+
+/// A `?` is a failure, so there is nothing to list: inline-first means a listed
+/// file is a certified file (§6).
+#[test]
+fn obligations_of_an_unchecked_file_lists_nothing() {
+    let out = heather(&["obligations", "obligations_hole.hthr"]);
+    assert_eq!(out.status.code(), Some(1));
+    assert!(out.stdout.is_empty(), "{}", String::from_utf8_lossy(&out.stdout));
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.contains("Impl(length, ListTok)::refines"), "{err}");
+    assert!(err.contains("nothing to list"), "{err}");
+}

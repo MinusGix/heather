@@ -85,6 +85,161 @@ impl SpecView {
     }
 }
 
+// -- inline clause expressions, and the obligations they discharge -----------
+
+/// The clause expressions the generated source carries as **placeholders**
+/// (design §4.2, FINDING B).
+///
+/// A clause used to be turned back into text by [`spell_expr`], which declines
+/// on everything larger than a name, a call or a projection — so an inline λ,
+/// `match` or `let`-block was unwritable even though all of them check in
+/// exactly the 0-ary shape the emission uses. The answer is not a wider
+/// printer (~25 `ExprKind` variants to keep in sync forever, to reproduce text
+/// that is immediately re-parsed) but to put the user's own `Expr` back after
+/// parsing: the skeleton is generated with a placeholder name, and
+/// [`Elaborator::elab_generated`] replaces it before `elab_decl` ever sees the
+/// declaration.
+///
+/// A placeholder only ever occupies the **whole body** of a generated
+/// declaration, which is what keeps the substitution a body-root replacement
+/// rather than a general AST walk.
+#[derive(Default)]
+pub(crate) struct Splices {
+    by_key: HashMap<String, Spliced>,
+    n: usize,
+}
+
+struct Spliced {
+    /// The clause's name, for the diagnostic.
+    clause: String,
+    /// Its span **in the user's file** — where a failure is reported, rather
+    /// than at the owner declaration as before (§2.3).
+    span: Span,
+    expr: Expr,
+}
+
+impl Splices {
+    /// Reserve a placeholder for one clause and return the text the generator
+    /// writes in the body position.
+    fn add(&mut self, clause: &str, span: Span, expr: &Expr) -> String {
+        let key = format!("clause_splice_{}", self.n);
+        self.n += 1;
+        self.by_key.insert(
+            key.clone(),
+            Spliced { clause: clause.to_string(), span, expr: expr.clone() },
+        );
+        key
+    }
+}
+
+/// A `?` clause: the **reporting hole** of design §1.2. It is not deferral —
+/// it makes the declaration fail, at the `?`'s own span, printing the statement
+/// that clause owes. The author reads the statement out of the error and writes
+/// the proof where the `?` was.
+pub(crate) struct Hole {
+    owner: String,
+    path: String,
+    field: String,
+    /// `?later` — a label, which only appears in the message.
+    label: Option<String>,
+    span: Span,
+}
+
+/// The `?` diagnostic (§2.3): the owner, the `::` path and the statement.
+fn hole_error<T>(obs: &[Obligation], h: &Hole) -> R<T> {
+    let stmt = obs
+        .iter()
+        .find(|o| o.field == h.field)
+        .map(|o| o.statement.clone())
+        // Unreachable: a `?` is only accepted at a field the generator states.
+        .unwrap_or_else(|| "<the generator did not state this field>".to_string());
+    let label = match &h.label {
+        Some(l) => format!(" (labelled `{l}`)"),
+        None => String::new(),
+    };
+    err(
+        format!(
+            "`{}` of `{}` is not proved{label}: a `?` clause reports its obligation and \
+             fails — write the proof here \
+             (docs/obligation-records-design.md §1.2)\n  `{}` owes:\n    {}",
+            h.field, h.owner, h.path, stmt
+        ),
+        h.span,
+    )
+}
+
+/// Only theorem fields are obligations (§1.1): the data fields are what the
+/// statements are *computed from*, so a `?` there leaves the schema with
+/// nothing to synthesize.
+fn hole_on_data_field(clause: &str) -> String {
+    format!(
+        "`?` at clause `{clause}`, which is not an obligation: only the theorem clauses \
+         may be `?`, because the data clauses are what their statements are computed \
+         from (docs/obligation-records-design.md §1.1)"
+    )
+}
+
+/// One obligation-bearing field of a generated declaration, recorded as the
+/// generator spells it (design §1.1, §6).
+///
+/// Two consumers: a `?` at that clause, which fails printing `statement`, and
+/// `heather obligations`, which lists them. Both want the statement as the
+/// **source text** the schema is built in — decoding a kernel term back into
+/// something a human can read is `issues/goal-display-decodes`, and building
+/// the schema as source is how this design does not need it (§1.3, §6).
+#[derive(Clone, Debug)]
+pub struct Obligation {
+    /// `impl add for BinNat`, `datarepr BinC`.
+    pub owner: String,
+    /// The printed path (§3): `Impl(add, BinNat)::refines`, `BinC::Succ_inv`.
+    /// `::` because an obligation is a member of its owner's namespace;
+    /// print-only in v1, so nothing parses it.
+    pub path: String,
+    pub field: String,
+    /// `supplied` — the author wrote a proof — or `defaulted` (omitted, and
+    /// therefore `refl`). Never `open`: under inline-first a listed file is a
+    /// checked file (§6).
+    pub state: &'static str,
+    pub provenance: Option<Provenance>,
+    pub statement: String,
+}
+
+/// How an artifact came to be. Recorded on the registry entry and printed by
+/// the tooling; **never consulted by a certificate** — the registry has one
+/// entry per key and the certificate is the same names whatever produced them
+/// (design §9's last bullet, and the Q2 verdict's "distinguish provenance on
+/// inspection").
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Provenance {
+    /// Every clause is a plain name: the form generators emit.
+    Named,
+    /// At least one clause is an inline expression (§4.2).
+    Inline,
+    /// `:= derive()` — the transfer generator wrote all of it (§4.3).
+    Derived,
+    /// `refines := via_derived(p)` — the derived certificate, composed (§4.3).
+    ViaDerived,
+}
+
+impl Provenance {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Provenance::Named => "named",
+            Provenance::Inline => "inline",
+            Provenance::Derived => "derived",
+            Provenance::ViaDerived => "via",
+        }
+    }
+}
+
+/// A registered `Impl`: the global holding the assembled record value, and how
+/// it got there.
+#[derive(Clone)]
+pub(crate) struct ImplEntry {
+    pub global: String,
+    pub provenance: Provenance,
+}
+
 /// A surface type spelled back into source. Unlike `traits::render_ty` — a
 /// *diagnostic* renderer with `_` fallbacks — this declines rather than
 /// spelling something it cannot spell faithfully: the result is fed back to
@@ -234,9 +389,20 @@ impl Elaborator {
         if self.datarepr_by_name.contains_key(&d.name) {
             return err(format!("duplicate repr name `{}`", d.name), d.span);
         }
-        let clauses = self.clauses_of(d, &spec)?;
-        let src = generate(&d.name, &spec, &clauses);
-        self.elab_generated(&src, &format!("datarepr {}", d.name), d.span)?;
+        let mut sp = Splices::default();
+        let mut holes = Vec::new();
+        let clauses = self.clauses_of(d, &spec, &mut sp, &mut holes)?;
+        let owner = format!("datarepr {}", d.name);
+        let mut obs = Vec::new();
+        let src = generate(&d.name, &spec, &clauses, &owner, &mut obs);
+        // A `?` reports and fails (§1.2): the statements exist by now, and
+        // nothing has been declared, so the file is refused with the obligation
+        // printed and no artifact left behind.
+        if let Some(h) = holes.first() {
+            return hole_error(&obs, h);
+        }
+        self.elab_generated(&src, &owner, d.span, &sp)?;
+        self.obligations.extend(obs);
         let info = DatareprInfo {
             global: d.name.clone(),
             written: spec.spell.clone(),
@@ -263,7 +429,13 @@ impl Elaborator {
     /// The clause table: every field of the generated record, as the source
     /// expression that fills it. Either read off the written clauses or minted
     /// by `repr::naive()`.
-    fn clauses_of(&self, d: &DatareprDecl, spec: &SpecView) -> R<Clauses> {
+    fn clauses_of(
+        &self,
+        d: &DatareprDecl,
+        spec: &SpecView,
+        sp: &mut Splices,
+        holes: &mut Vec<Hole>,
+    ) -> R<Clauses> {
         match &d.body {
             DatareprBody::Mint(e) => {
                 if !is_naive_call(e) {
@@ -280,7 +452,7 @@ impl Elaborator {
                 }
                 Ok(naive_clauses(&d.name, spec))
             }
-            DatareprBody::Fields(fs) => self.written_clauses(d, spec, fs),
+            DatareprBody::Fields(fs) => self.written_clauses(d, spec, fs, sp, holes),
         }
     }
 
@@ -289,10 +461,13 @@ impl Elaborator {
         d: &DatareprDecl,
         spec: &SpecView,
         fs: &[DatareprField],
+        sp: &mut Splices,
+        holes: &mut Vec<Hole>,
     ) -> R<Clauses> {
         // `mk C` and a plain clause `C` are different clauses; the `mk` ones
         // key under a prefix containing a space, which no clause name has.
         let mut by_name: HashMap<String, (String, Span)> = HashMap::new();
+        let mut prov: HashMap<String, Provenance> = HashMap::new();
         for f in fs {
             if f.is_mk && !spec.ctors.iter().any(|c| c.name == f.name) {
                 return err(
@@ -309,17 +484,44 @@ impl Elaborator {
             if by_name.contains_key(&key) {
                 return err(format!("duplicate clause `{key}`"), f.span);
             }
-            let Some(text) = spell_expr(&f.expr) else {
-                return err(
-                    format!(
-                        "clause `{key}` is not a shape this round can spell into the \
-                         generated repr: write it as a name, a call or a projection, \
-                         binding anything larger to a `fn` first"
-                    ),
-                    f.span,
-                );
-            };
-            by_name.insert(key, (text, f.span));
+            // `R` is the carrier, and the generated source uses it as a *type*
+            // in a dozen positions, so it is the one clause that still has to
+            // survive as text. Everything else is spliced (§4.2).
+            if key == "R" {
+                let Some(text) = spell_expr(&f.expr) else {
+                    return err(
+                        "clause `R` is the repr's carrier and stands in *type* position \
+                         throughout the generated source, so it has to be spellable: \
+                         write it as a type name or an applied type name"
+                            .to_string(),
+                        f.span,
+                    );
+                };
+                by_name.insert(key, (text, f.span));
+                continue;
+            }
+            if let ExprKind::Hole(label) = &f.expr.kind {
+                if !is_repr_obligation(spec, &key) {
+                    return err(hole_on_data_field(&key), f.expr.span);
+                }
+                holes.push(Hole {
+                    owner: format!("datarepr {}", d.name),
+                    path: format!("{}::{key}", d.name),
+                    field: key.clone(),
+                    label: label.clone(),
+                    span: f.expr.span,
+                });
+            }
+            prov.insert(
+                key.clone(),
+                if matches!(f.expr.kind, ExprKind::Var(_)) {
+                    Provenance::Named
+                } else {
+                    Provenance::Inline
+                },
+            );
+            let placeholder = sp.add(&key, f.span, &f.expr);
+            by_name.insert(key, (placeholder, f.span));
         }
         let mut missing = Vec::new();
         let take = |k: &str, by: &mut HashMap<String, (String, Span)>| {
@@ -371,15 +573,21 @@ impl Elaborator {
                 *span,
             );
         }
-        Ok(Clauses { carrier, abs, inv, mks, laws, fold, fold_law })
+        Ok(Clauses { carrier, abs, inv, mks, laws, fold, fold_law, prov })
     }
 
     /// Parse and elaborate generated source in the *current* module and scope.
     /// A failure here is a failure of the `datarepr` declaration, reported
     /// against it — the generated text is an implementation detail, so it is
     /// named in the message rather than shown.
-    fn elab_generated(&mut self, src: &str, what: &str, span: Span) -> R<()> {
-        let file = match parse_file(src) {
+    fn elab_generated(
+        &mut self,
+        src: &str,
+        what: &str,
+        span: Span,
+        sp: &Splices,
+    ) -> R<()> {
+        let mut file = match parse_file(src) {
             Ok(f) => f,
             Err(e) => {
                 return err(
@@ -388,11 +596,30 @@ impl Elaborator {
                 )
             }
         };
-        for item in &file.items {
+        // The splice (§4.2): a generated body that is exactly a placeholder
+        // becomes the user's own expression, spans and all. Done here rather
+        // than in the generator because the generator writes *text*, and this
+        // is the one point at which that text has become an AST and has not
+        // yet been elaborated.
+        let mut wrote: Vec<Option<(&str, Span)>> = Vec::with_capacity(file.items.len());
+        for item in &mut file.items {
+            let mut from = None;
+            if let Item::Decl(d) = item
+                && d.body.stmts.is_empty()
+                && let ExprKind::Var(name) = &d.body.result.kind
+                && let Some(s) = sp.by_key.get(name.as_str())
+            {
+                from = Some((s.clause.as_str(), s.span));
+                d.body.result = Box::new(s.expr.clone());
+            }
+            wrote.push(from);
+        }
+        for (item, from) in file.items.iter().zip(wrote) {
             let (r, isp) = match item {
                 Item::Decl(d) => (self.elab_decl(d), d.span),
                 Item::Inductive(i) => (self.elab_inductive(i), i.span),
-                _ => unreachable!("the generator emits declarations and records only"),
+                Item::Impl(i) => (self.elab_impl(i), i.span),
+                _ => unreachable!("the generator emits declarations, records and impls only"),
             };
             if let Err(e) = r {
                 self.pending_derived.borrow_mut().clear();
@@ -401,13 +628,24 @@ impl Elaborator {
                 // so without it the diagnostic names a field and shows
                 // nothing, and the field's statement is exactly what is not
                 // obvious.
+                //
+                // A spliced clause reports at the CLAUSE's own span, which is
+                // in the user's file and is where they wrote the proof; an
+                // unspliced one still reports at the owner declaration, which
+                // is the only span it has (§4.2's recorded limitation: a
+                // spliced subtree's spans index the user's file, so pointing at
+                // a failing sub-term wants span provenance and is deferred).
+                let (at, lead) = match from {
+                    Some((clause, cs)) => (cs, format!("`{what}`, clause `{clause}`")),
+                    None => (span, format!("`{what}`")),
+                };
                 return err(
                     format!(
-                        "`{what}`: {}\n  in the generated declaration:\n    {}",
+                        "{lead}: {}\n  in the generated declaration:\n    {}",
                         e.message(),
                         src[isp.start..isp.end].replace('\n', "\n    ")
                     ),
-                    span,
+                    at,
                 );
             }
             self.mint_pending();
@@ -436,6 +674,10 @@ struct Clauses {
     laws: Vec<(Option<String>, Option<String>)>,
     fold: String,
     fold_law: Option<String>,
+    /// How each written clause was written, by field name — for the
+    /// obligations listing (§6). A field absent here was omitted, and is
+    /// therefore `defaulted`.
+    prov: HashMap<String, Provenance>,
 }
 
 /// `repr::naive()` (§5.1 item 2): carrier = the spec type, `abs = id`,
@@ -476,7 +718,18 @@ fn naive_clauses(name: &str, spec: &SpecView) -> Clauses {
             lams(&bs, &format!("{}(B, {}, r)", spec_rec_name(name), args.join(", ")))
         },
         fold_law: None,
+        prov: HashMap::new(),
     }
+}
+
+/// The clauses of a repr that are obligations rather than data (§1.1): the
+/// per-constructor commutation and closure laws, and the fold anchor.
+fn is_repr_obligation(spec: &SpecView, clause: &str) -> bool {
+    clause == "fold_law"
+        || spec
+            .ctors
+            .iter()
+            .any(|c| clause == format!("{}_abs", c.name) || clause == format!("{}_inv", c.name))
 }
 
 fn is_naive_call(e: &Expr) -> bool {
@@ -487,11 +740,16 @@ fn is_naive_call(e: &Expr) -> bool {
     }
 }
 
-/// A clause expression, back into source. Deliberately **not**
-/// `traits::render_expr`: that is a diagnostic renderer whose fallback is
-/// `_`, which here would parse back as a *hole* and could be silently
-/// inferred into something the user never wrote. Every shape this does not
-/// spell is a decline instead.
+/// An expression back into source. Deliberately **not** `traits::render_expr`:
+/// that is a diagnostic renderer whose fallback is `_`, which here would parse
+/// back as a *hole* and could be silently inferred into something the user
+/// never wrote. Every shape this does not spell is a decline instead.
+///
+/// Its job narrowed when clauses started splicing (§4.2): the only clause it
+/// still spells is `R`, the carrier, which stands in **type** position
+/// throughout the generated source and so cannot be an arbitrary expression.
+/// Everything else here is diagnostics — naming an expression the elaborator
+/// is refusing.
 pub(crate) fn spell_expr(e: &Expr) -> Option<String> {
     Some(match &e.kind {
         ExprKind::Var(n) => n.clone(),
@@ -555,6 +813,12 @@ pub(crate) fn pis(bs: &[(String, String)], cod: &str) -> String {
     s
 }
 
+/// `x: T, y: U` — a declaration's parameter list, the shape the transfer
+/// generator's lemmas are declared with (`pis` is the same binders as a type).
+pub(crate) fn params_src(bs: &[(String, String)]) -> String {
+    bs.iter().map(|(n, t)| format!("{n}: {t}")).collect::<Vec<_>>().join(", ")
+}
+
 /// `f(a)(b)` — curried application, the shape every function-typed *field* of
 /// the record has (§1.1 writes them curried).
 pub(crate) fn appc(head: &str, args: &[String]) -> String {
@@ -605,7 +869,13 @@ fn adapt(c: &CtorView, carrier: &str, s: &str, abs: &str) -> String {
 /// The whole artifact, in dependency order: the spec recursor specialization,
 /// the record, one declaration per clause under the record's namespace, and
 /// the assembled value.
-fn generate(name: &str, spec: &SpecView, cl: &Clauses) -> String {
+fn generate(
+    name: &str,
+    spec: &SpecView,
+    cl: &Clauses,
+    owner: &str,
+    obs: &mut Vec<Obligation>,
+) -> String {
     let s = &spec.spell;
     let c = &cl.carrier;
     let rec = record_name(name);
@@ -692,14 +962,28 @@ fn generate(name: &str, spec: &SpecView, cl: &Clauses) -> String {
         ));
     }
     let mkg = |ct: &CtorView| format!("{rec}::mk_{}()", ct.name);
+    // Each law is recorded as it is stated (§1.1's statement schema): a `?` at
+    // this clause prints the statement, and so does the obligations listing.
+    let mut note = |field: String, statement: &str, written: Option<&String>| {
+        obs.push(Obligation {
+            owner: owner.to_string(),
+            path: format!("{name}::{field}"),
+            state: if written.is_some() { "supplied" } else { "defaulted" },
+            provenance: written.and(cl.prov.get(&field).copied()),
+            field,
+            statement: statement.to_string(),
+        });
+    };
     for (ct, (la, li)) in spec.ctors.iter().zip(cl.laws.iter()) {
         let ty = abs_law_ty(ct, c, &abs, &inv, &mkg(ct));
+        note(format!("{}_abs", ct.name), &ty, la.as_ref());
         out.push_str(&format!(
             "theorem {rec}::{}_abs(): {ty} {{ {} }}\n",
             ct.name,
             la.clone().unwrap_or_else(|| refl_under(ct, c, &inv))
         ));
         let ty = inv_law_ty(ct, c, &inv, &mkg(ct));
+        note(format!("{}_inv", ct.name), &ty, li.as_ref());
         out.push_str(&format!(
             "theorem {rec}::{}_inv(): {ty} {{ {} }}\n",
             ct.name,
@@ -714,6 +998,7 @@ fn generate(name: &str, spec: &SpecView, cl: &Clauses) -> String {
     out.push_str(&format!("fn {rec}::fold() -> {} {{ {} }}\n", pis(&fb, "B"), cl.fold));
     {
         let ty = fold_law_ty(spec, c, &abs, &inv, &format!("{rec}::fold()"), &sr);
+        note("fold_law".to_string(), &ty, cl.fold_law.as_ref());
         let body = cl.fold_law.clone().unwrap_or_else(|| {
             let mut bs = vec![("B".to_string(), "Type".to_string())];
             for (j, ct) in spec.ctors.iter().enumerate() {
@@ -866,6 +1151,160 @@ pub(crate) fn subst_ty(t: &Ty, m: &HashMap<&str, String>) -> Ty {
 
 // -- the cost basis: `impl f for Rp` ----------------------------------------
 
+/// §1.2's statement schema at one `(operation, repr)` pair, as spelled source.
+///
+/// One computation, two consumers, per `docs/obligation-records-design.md` §2.1
+/// (FINDING A): `elab_impl` declares the obligations from it and the transfer
+/// generator's phase 3 states the derived ones from it, and before the
+/// extraction each had its own copy of the same paragraph. Everything is a
+/// `String` because the statements have to be *written back out* — a `?` prints
+/// one, the obligations listing prints one, and the generated declaration is
+/// checked against one — and a kernel term would have to be decoded to do any
+/// of that (§1.3, §6).
+pub(crate) struct ImplSchema {
+    pub op: String,
+    /// `Impl_<repr>_<op>`: the namespace the obligations are declared in.
+    pub record: String,
+    /// The signature with `S ↦ R` at every occurrence (v1 rule), in
+    /// declaration order.
+    pub binders: Vec<(String, String)>,
+    /// The parameters that landed at the carrier, in declaration order.
+    pub at_repr: Vec<String>,
+    /// One `inv` hypothesis per repr-typed parameter, `(h0, inv(x))` — every
+    /// law quantifies over `inv`-satisfying inputs (§1.1).
+    pub hyps: Vec<(String, String)>,
+    /// The spec-side arguments: `abs(x)` at a repr-typed parameter, the binder
+    /// itself elsewhere.
+    pub spec_args: Vec<String>,
+    /// The result spelled repr-ward — the carrier at a repr-typed result.
+    pub result: String,
+    /// The result is the spec type: the two-conclusion case (§1.2).
+    pub res_is_spec: bool,
+    /// `Repr_N::abs()`, `Repr_N::inv()`.
+    pub abs: String,
+    pub inv: String,
+}
+
+impl ImplSchema {
+    /// The binder names, in order.
+    pub fn args(&self) -> Vec<String> {
+        self.binders.iter().map(|(n, _)| n.clone()).collect()
+    }
+
+    /// `head(x1)(x2)` — an implementation applied to the signature's binders.
+    pub fn call(&self, head: &str) -> String {
+        appc(head, &self.args())
+    }
+
+    /// `f(⟦x̄⟧)` — the spec side of every conclusion.
+    pub fn spec_call(&self) -> String {
+        format!("{}({})", self.op, self.spec_args.join(", "))
+    }
+
+    /// Everything the conclusions quantify over: the signature, then the `inv`
+    /// hypotheses.
+    pub fn law_binders(&self) -> Vec<(String, String)> {
+        let mut law = self.binders.clone();
+        law.extend(self.hyps.iter().cloned());
+        law
+    }
+
+    pub fn body_ty(&self) -> String {
+        pis(&self.binders, &self.result)
+    }
+
+    /// §1.2's first conclusion, with `call` standing for the implementation:
+    /// `abs(call) = f(⟦x̄⟧)` at a repr-typed result, `call = f(⟦x̄⟧)` otherwise.
+    pub fn refines_concl(&self, call: &str) -> String {
+        if self.res_is_spec {
+            format!("{} = {}", appc(&self.abs, &[call.to_string()]), self.spec_call())
+        } else {
+            format!("{call} = {}", self.spec_call())
+        }
+    }
+
+    /// §1.2's second conclusion, which exists only at a repr-typed result: an
+    /// implementation that *builds* a repr owes `inv` of what it built.
+    pub fn inv_concl(&self, call: &str) -> String {
+        appc(&self.inv, &[call.to_string()])
+    }
+
+    pub fn refines_ty(&self, call: &str) -> String {
+        pis(&self.law_binders(), &self.refines_concl(call))
+    }
+
+    pub fn inv_ty(&self, call: &str) -> String {
+        pis(&self.law_binders(), &self.inv_concl(call))
+    }
+
+    /// The obligation's printed path (design §3): `::` because an obligation is
+    /// a member of its owner's namespace. Print-only in v1 — nothing parses it.
+    pub fn path(&self, repr: &str, field: &str) -> String {
+        format!("Impl({}, {repr})::{field}", self.op)
+    }
+}
+
+impl Elaborator {
+    /// Build §1.2's schema at `(op, repr)`. Both callers have already checked
+    /// that the repr and the declaration are in scope and that the operation is
+    /// monomorphic — with their own messages, which differ deliberately — so
+    /// what is left here is the spelling.
+    pub(crate) fn impl_schema(&self, op: &str, repr: &str) -> Result<ImplSchema, String> {
+        let rp = self
+            .datarepr_by_name
+            .get(repr)
+            .ok_or_else(|| format!("`{repr}` is not a `datarepr` in scope"))?;
+        let f = self
+            .decls
+            .get(op)
+            .ok_or_else(|| format!("`{op}` is not a declared function here"))?;
+        let s = &rp.written;
+        let c = &rp.carrier;
+        let abs = format!("{}::abs()", rp.record);
+        let inv = format!("{}::inv()", rp.record);
+        let mut binders: Vec<(String, String)> = Vec::new();
+        let mut at_repr: Vec<String> = Vec::new();
+        let mut spec_args: Vec<String> = Vec::new();
+        for p in &f.params {
+            let Some(t) = spell_ty(&p.ty) else {
+                return Err(format!(
+                    "`{op}`'s parameter `{}` has a type this round cannot spell",
+                    p.name
+                ));
+            };
+            if t == *s {
+                binders.push((p.name.clone(), c.clone()));
+                at_repr.push(p.name.clone());
+                spec_args.push(appc(&abs, &[p.name.clone()]));
+            } else {
+                binders.push((p.name.clone(), t));
+                spec_args.push(p.name.clone());
+            }
+        }
+        let Some(res) = spell_ty(&f.result) else {
+            return Err(format!("`{op}`'s result type cannot be spelled"));
+        };
+        let res_is_spec = res == *s;
+        let hyps = at_repr
+            .iter()
+            .enumerate()
+            .map(|(k, x)| (format!("h{k}"), appc(&inv, &[x.clone()])))
+            .collect();
+        Ok(ImplSchema {
+            op: op.to_string(),
+            record: impl_record_name(repr, op),
+            binders,
+            at_repr,
+            hyps,
+            spec_args,
+            result: if res_is_spec { c.clone() } else { res },
+            res_is_spec,
+            abs,
+            inv,
+        })
+    }
+}
+
 impl Elaborator {
     /// `impl f for Rp { body := …, refines := … }` (design §1.2).
     ///
@@ -908,95 +1347,116 @@ impl Elaborator {
                 d.span,
             );
         }
-        // The signature with `S ↦ R` at every occurrence (v1 rule: *all*
-        // occurrences, per-position mixing deferred).
-        let s = &rp.written;
-        let c = &rp.carrier;
-        let abs = format!("{}::abs()", rp.record);
-        let inv = format!("{}::inv()", rp.record);
-        let mut binders: Vec<(String, String)> = Vec::new();
-        let mut at_repr: Vec<String> = Vec::new();
-        let mut spec_args: Vec<String> = Vec::new();
-        for p in &f.params {
-            let Some(t) = spell_ty(&p.ty) else {
-                return err(
-                    format!("`{}`'s parameter `{}` has a type this round cannot spell", d.op, p.name),
-                    d.span,
-                );
-            };
-            if t == *s {
-                binders.push((p.name.clone(), c.clone()));
-                at_repr.push(p.name.clone());
-                spec_args.push(appc(&abs, &[p.name.clone()]));
-            } else {
-                binders.push((p.name.clone(), t));
-                spec_args.push(p.name.clone());
-            }
-        }
-        let Some(res) = spell_ty(&f.result) else {
-            return err(format!("`{}`'s result type cannot be spelled", d.op), d.span);
+        let fields = match &d.body {
+            DatareprBody::Mint(e) => return self.elab_impl_derive(d, e),
+            DatareprBody::Fields(fs) => fs,
         };
-        let res_is_spec = res == *s;
-        let mut hyps: Vec<(String, String)> = Vec::new();
-        for (k, x) in at_repr.iter().enumerate() {
-            hyps.push((format!("h{k}"), appc(&inv, &[x.clone()])));
-        }
-        let body_ty =
-            pis(&binders, if res_is_spec { c } else { &res });
-        let rec = impl_record_name(&d.repr, &d.op);
+        // The signature with `S ↦ R` at every occurrence (v1 rule: *all*
+        // occurrences, per-position mixing deferred), and §1.2's conclusions —
+        // one computation, shared with the transfer generator (§2.1).
+        let s = &rp.written;
+        let sch = match self.impl_schema(&d.op, &d.repr) {
+            Ok(sch) => sch,
+            Err(msg) => return err(msg, d.span),
+        };
+        let res_is_spec = sch.res_is_spec;
+        let body_ty = sch.body_ty();
+        let rec = sch.record.clone();
         let bodyg = format!("{rec}::body()");
-        let call = appc(&bodyg, &binders.iter().map(|(n, _)| n.clone()).collect::<Vec<_>>());
-        let fcall = format!("{}({})", d.op, spec_args.join(", "));
-        let mut law = binders.clone();
-        law.extend(hyps.clone());
-        // §1.2's conclusion, by result type. At `Y = S` there are two of them,
-        // and they are two fields rather than a conjunction because there is
-        // no conjunction to be had without a library.
-        let refines_ty = pis(
-            &law,
-            &if res_is_spec {
-                format!("{} = {fcall}", appc(&abs, &[call.clone()]))
-            } else {
-                format!("{call} = {fcall}")
-            },
-        );
-        let inv_ty = pis(&law, &appc(&inv, &[call.clone()]));
+        // At `Y = S` there are two conclusions, and they are two fields rather
+        // than a conjunction because there is no conjunction to be had without
+        // a library.
+        let refines_ty = sch.refines_ty(&sch.call(&bodyg));
+        let inv_ty = sch.inv_ty(&sch.call(&bodyg));
 
+        let owner = format!("impl {} for {}", d.op, d.repr);
+        let mut sp = Splices::default();
+        let mut holes: Vec<Hole> = Vec::new();
+        let mut prov: HashMap<String, Provenance> = HashMap::new();
         let mut by: HashMap<String, (String, Span)> = HashMap::new();
-        for cl in &d.fields {
+        // `refines := via_derived(p)` (§4.3): recognised here rather than
+        // spliced, because it is the one clause whose *statement* is not the
+        // field's — the user proves the weak abs-image equation and the
+        // certificate is composed from it.
+        let mut via: Option<(&Expr, Span)> = None;
+        for cl in fields {
             if cl.is_mk {
                 return err("an `Impl` has no `mk` clauses".to_string(), cl.span);
             }
-            let Some(text) = spell_expr(&cl.expr) else {
-                return err(
-                    format!("clause `{}` is not a shape this round can spell", cl.name),
-                    cl.span,
-                );
-            };
-            if by.insert(cl.name.clone(), (text, cl.span)).is_some() {
+            if by.contains_key(&cl.name) || (cl.name == "refines" && via.is_some()) {
                 return err(format!("duplicate clause `{}`", cl.name), cl.span);
             }
+            if cl.name == "refines"
+                && let Some(arg) = route_call(&cl.expr, "via_derived")
+            {
+                let [arg] = arg else {
+                    return err(
+                        "`via_derived` takes one argument: the proof that this \
+                         implementation and the derived one have the same image under \
+                         `abs` (docs/obligation-records-design.md §4.3)"
+                            .to_string(),
+                        cl.expr.span,
+                    );
+                };
+                via = Some((arg, cl.span));
+                prov.insert(cl.name.clone(), Provenance::ViaDerived);
+                continue;
+            }
+            if let ExprKind::Hole(label) = &cl.expr.kind {
+                if cl.name != "refines" && cl.name != "refines_inv" {
+                    return err(hole_on_data_field(&cl.name), cl.expr.span);
+                }
+                holes.push(Hole {
+                    owner: owner.clone(),
+                    path: sch.path(&d.repr, &cl.name),
+                    field: cl.name.clone(),
+                    label: label.clone(),
+                    span: cl.expr.span,
+                });
+            }
+            prov.insert(
+                cl.name.clone(),
+                if matches!(cl.expr.kind, ExprKind::Var(_)) {
+                    Provenance::Named
+                } else {
+                    Provenance::Inline
+                },
+            );
+            by.insert(cl.name.clone(), (sp.add(&cl.name, cl.span, &cl.expr), cl.span));
         }
         let Some((body, _)) = by.remove("body") else {
             return err(format!("`impl {} for {}` needs a `body`", d.op, d.repr), d.span);
         };
-        let Some((refines, _)) = by.remove("refines") else {
+        let refines = by.remove("refines").map(|(t, _)| t);
+        if refines.is_none() && via.is_none() {
             return err(
                 format!("`impl {} for {}` needs a `refines` (design §1.2)", d.op, d.repr),
                 d.span,
             );
-        };
+        }
         let refines_inv = by.remove("refines_inv").map(|(t, _)| t);
         if res_is_spec && refines_inv.is_none() {
-            return err(
+            // The via-derived route names *why* it cannot fill this one: an
+            // abs-image equation says nothing about `inv` of what was built,
+            // which is exactly what a non-injective `abs` costs (§4.3).
+            let why = if via.is_some() {
+                format!(
+                    "`impl {} for {}` returns `{s}`, so it also needs a `refines_inv`, and \
+                     `via_derived` cannot fill it: `inv(body(x̄))` does not follow from an \
+                     abs-image equation — that is what a non-injective `abs` costs \
+                     (docs/obligation-records-design.md §4.3). Write it, or prove carrier \
+                     equality instead",
+                    d.op, d.repr
+                )
+            } else {
                 format!(
                     "`impl {} for {}` returns `{s}`, so it also needs a `refines_inv`: \
                      an implementation that *builds* a repr owes `inv` of what it built \
                      (design §1.2)",
                     d.op, d.repr
-                ),
-                d.span,
-            );
+                )
+            };
+            return err(why, d.span);
         }
         if let Some((k, (_, span))) = by.iter().next() {
             return err(
@@ -1010,24 +1470,99 @@ impl Elaborator {
         let mut fields = vec![format!("    body: {body_ty}")];
         // Stated against the record's own `body` field, so the record type is
         // self-contained and reads as the obligation it is.
-        let selfcall = appc("body", &binders.iter().map(|(n, _)| n.clone()).collect::<Vec<_>>());
-        fields.push(format!(
-            "    refines: {}",
-            pis(
-                &law,
-                &if res_is_spec {
-                    format!("{} = {fcall}", appc(&abs, &[selfcall.clone()]))
-                } else {
-                    format!("{selfcall} = {fcall}")
-                }
-            )
-        ));
+        let selfcall = sch.call("body");
+        fields.push(format!("    refines: {}", sch.refines_ty(&selfcall)));
         if res_is_spec {
-            fields.push(format!("    refines_inv: {}", pis(&law, &appc(&inv, &[selfcall]))));
+            fields.push(format!("    refines_inv: {}", sch.inv_ty(&selfcall)));
+        }
+        // The obligations, recorded as they are stated (§1.1): a `?` prints one
+        // and the listing prints them all.
+        // A route that wrote the whole declaration (`derive()`) owns every
+        // field's provenance; otherwise it is per clause.
+        let route = self.impl_provenance;
+        let mut obs =
+            vec![obligation_row(&owner, &sch, &d.repr, "refines", &refines_ty, &prov, route)];
+        if res_is_spec {
+            obs.push(obligation_row(&owner, &sch, &d.repr, "refines_inv", &inv_ty, &prov, route));
+        }
+        if let Some(h) = holes.first() {
+            return hole_error(&obs, h);
         }
         src.push_str(&format!("record {rec} {{\n{}\n}}\n\n", fields.join(",\n")));
         src.push_str(&format!("fn {rec}::body() -> {body_ty} {{ {body} }}\n"));
-        src.push_str(&format!("theorem {rec}::refines(): {refines_ty} {{ {refines} }}\n"));
+        let provenance = match &via {
+            Some(_) => Provenance::ViaDerived,
+            None if prov.values().any(|p| *p == Provenance::Inline) => Provenance::Inline,
+            None => Provenance::Named,
+        };
+        match (&refines, &via) {
+            (Some(refines), _) => {
+                src.push_str(&format!(
+                    "theorem {rec}::refines(): {refines_ty} {{ {refines} }}\n"
+                ));
+            }
+            // §4.3: derive, state the weak abs-image equation, and compose.
+            (None, Some((arg, span))) => {
+                let em = match self.reprgen(&d.op, &d.repr) {
+                    Ok(em) => em,
+                    Err(why) => {
+                        return err(
+                            format!(
+                                "`refines := via_derived(…)` at `impl {} for {}` needs the \
+                                 derived `Impl` to compose with, and generating one \
+                                 declines: {why}",
+                                d.op, d.repr
+                            ),
+                            *span,
+                        )
+                    }
+                };
+                // The derived artifacts WITHOUT the transfer's own `impl`
+                // block: at one key there is only ever one `Impl` and this
+                // declaration is it (design FINDING E), so the route consumes
+                // reprgen's certificate, not its registration.
+                let mut pre = em.text[..em.impl_at].to_string();
+                pre.push('\n');
+                pre.push_str(&src);
+                src = pre;
+                let derived_call = appc(&em.body, &sch.args());
+                let obl = pis(
+                    &sch.law_binders(),
+                    &if res_is_spec {
+                        format!(
+                            "{} = {}",
+                            appc(&sch.abs, &[sch.call(&bodyg)]),
+                            appc(&sch.abs, &[derived_call.clone()])
+                        )
+                    } else {
+                        format!("{} = {derived_call}", sch.call(&bodyg))
+                    },
+                );
+                let obg = format!("{rec}::via_derived_obligation()");
+                src.push_str(&format!("theorem {obg}: {obl} {{ {} }}\n", sp.add("refines", *span, arg)));
+                // The derived certificate quantifies over ONE `inv`
+                // hypothesis, at the parameter the transfer recursed on; the
+                // schema's hypotheses are one per repr-typed parameter, so the
+                // right one is found by name and not by position.
+                let k = sch.at_repr.iter().position(|x| *x == em.rec_param).unwrap_or(0);
+                let mut dargs = sch.args();
+                dargs.push(sch.hyps[k].0.clone());
+                let law = sch.law_binders();
+                src.push_str(&format!(
+                    "theorem {rec}::refines(): {refines_ty} {{ {} }}\n",
+                    lams(
+                        &law,
+                        &format!(
+                            "trans({}, {}({}))",
+                            appc(&obg, &law.iter().map(|(n, _)| n.clone()).collect::<Vec<_>>()),
+                            em.refines,
+                            dargs.join(", ")
+                        )
+                    )
+                ));
+            }
+            (None, None) => unreachable!("checked above"),
+        }
         let mut lit = vec![
             format!("body: {rec}::body()"),
             format!("refines: {rec}::refines()"),
@@ -1038,9 +1573,56 @@ impl Elaborator {
         }
         let global = format!("{}_{}_impl", d.repr, d.op);
         src.push_str(&format!("\nfn {global}() -> {rec} {{ {rec} {{ {} }} }}\n", lit.join(", ")));
-        self.elab_generated(&src, &format!("impl {} for {}", d.op, d.repr), d.span)?;
-        self.impls.insert((d.repr.clone(), d.op.clone()), global);
+        self.elab_generated(&src, &owner, d.span, &sp)?;
+        self.register_impl(&d.repr, &d.op, global, provenance);
+        self.obligations.extend(obs);
         Ok(())
+    }
+
+    /// `impl f for Rp := derive();` (§4.3) — the pinning form, and the first
+    /// transfer requested from surface source.
+    ///
+    /// The transfer generator is already a pure function from the registries to
+    /// text, so this is a *caller*: elaborate the emission — whose own `impl`
+    /// block is what registers the result — or fail at the declaration with the
+    /// decline reason **verbatim**, which is what lets a tool tell "the fragment
+    /// does not cover this" from "you have not proved it yet" (§6).
+    fn elab_impl_derive(&mut self, d: &heather_syntax::ImplDecl, e: &Expr) -> R<()> {
+        if route_call(e, "derive").map(|a| a.is_empty()) != Some(true) {
+            return err(
+                format!(
+                    "`{}` is not a route this round knows: an `impl` body is `derive()` \
+                     (docs/obligation-records-design.md §4.3), and everything else is \
+                     written as clauses",
+                    spell_expr(e).unwrap_or_else(|| "this expression".into())
+                ),
+                e.span,
+            );
+        }
+        let em = match self.reprgen(&d.op, &d.repr) {
+            Ok(em) => em,
+            Err(why) => {
+                return err(
+                    format!("`impl {} for {} := derive()` declines: {why}", d.op, d.repr),
+                    d.span,
+                )
+            }
+        };
+        let owner = format!("impl {} for {}", d.op, d.repr);
+        // The emission's `impl` block lands through the ordinary path below,
+        // which is what records the registry entry; this says who wrote it.
+        self.impl_provenance = Some(Provenance::Derived);
+        let r = self.elab_generated(&em.text, &owner, d.span, &Splices::default());
+        self.impl_provenance = None;
+        r
+    }
+
+    fn register_impl(&mut self, repr: &str, op: &str, global: String, prov: Provenance) {
+        let provenance = self.impl_provenance.unwrap_or(prov);
+        self.impls.insert(
+            (repr.to_string(), op.to_string()),
+            ImplEntry { global, provenance },
+        );
     }
 
     /// The `Impl` registered for `op` at repr `rp`, if any — the
@@ -1048,6 +1630,54 @@ impl Elaborator {
     /// are the transfer generator and the compiler walk; nothing in the
     /// surface path reads it.
     pub fn impl_global(&self, repr: &str, op: &str) -> Option<&str> {
-        self.impls.get(&(repr.to_string(), op.to_string())).map(|s| s.as_str())
+        self.impls.get(&(repr.to_string(), op.to_string())).map(|e| e.global.as_str())
+    }
+
+    /// How that `Impl` came to be (§4.4). For humans and tools only — the Q2
+    /// verdict's "distinguish provenance on inspection"; no certificate and no
+    /// resolution consults it.
+    pub fn impl_provenance_of(&self, repr: &str, op: &str) -> Option<Provenance> {
+        self.impls.get(&(repr.to_string(), op.to_string())).map(|e| e.provenance)
+    }
+
+    /// Every obligation of every obligation-bearing declaration elaborated so
+    /// far, in declaration order — `heather obligations` (§6).
+    pub fn obligations(&self) -> &[Obligation] {
+        &self.obligations
+    }
+}
+
+/// One row of the ledger for an `impl`'s field.
+fn obligation_row(
+    owner: &str,
+    sch: &ImplSchema,
+    repr: &str,
+    field: &str,
+    statement: &str,
+    prov: &HashMap<String, Provenance>,
+    route: Option<Provenance>,
+) -> Obligation {
+    Obligation {
+        owner: owner.to_string(),
+        path: sch.path(repr, field),
+        field: field.to_string(),
+        state: "supplied",
+        provenance: route.or_else(|| prov.get(field).copied()),
+        statement: statement.to_string(),
+    }
+}
+
+/// `derive()` / `via_derived(p)` in clause position: an ordinary application of
+/// an ordinary name, which is the point (§4.3 — the two routes are written as
+/// the metafunctions they are meant to become, and the elaborator's two special
+/// powers over them, expected-type synthesis and the derive-if-absent effect,
+/// are the only things keeping them special).
+fn route_call<'a>(e: &'a Expr, name: &str) -> Option<&'a [Expr]> {
+    match &e.kind {
+        ExprKind::App { head, args, .. } => match &head.kind {
+            ExprKind::Var(n) if n == name => Some(args),
+            _ => None,
+        },
+        _ => None,
     }
 }

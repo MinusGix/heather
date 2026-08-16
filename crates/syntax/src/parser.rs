@@ -765,10 +765,27 @@ impl Parser {
             ));
         }
         let (repr, _) = self.ident("the repr's name")?;
-        self.expect(&TokKind::LBrace, "`{` (the implementation's clauses)")?;
+        // `:= derive();` — a route, told from the clause list by one token,
+        // exactly as a minted `datarepr` is.
+        if matches!(self.peek(), TokKind::ColonEq) {
+            self.bump();
+            let e = self.expr()?;
+            let mut end = e.span;
+            if matches!(self.peek(), TokKind::Semi) {
+                end = self.peek_span();
+                self.bump();
+            }
+            return Ok(ImplDecl {
+                op,
+                repr,
+                body: DatareprBody::Mint(e),
+                span: start.join(end),
+            });
+        }
+        self.expect(&TokKind::LBrace, "`{` (the implementation's clauses) or `:=` (a route)")?;
         let fields = self.datarepr_clauses()?;
         let end = self.expect(&TokKind::RBrace, "`}` (the implementation's clauses)")?;
-        Ok(ImplDecl { op, repr, fields, span: start.join(end) })
+        Ok(ImplDecl { op, repr, body: DatareprBody::Fields(fields), span: start.join(end) })
     }
 
     /// `instance<A, B> C<T> requires m: D<A> { … }`

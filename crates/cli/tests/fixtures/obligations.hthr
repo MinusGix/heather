@@ -1,0 +1,13 @@
+// The obligations listing's fixture (docs/obligation-records-design.md §6):
+// one repr whose laws are all defaulted, and one `impl` whose `refines` is
+// written inline.
+inductive Tok { TPush(n: Nat), TAdd, TMul }
+inductive List<A> { Nil, Cons(head: A, tail: List<A>) }
+datarepr ListTok for List<Tok> := repr::naive();
+
+fn length(l: List<Tok>) -> Nat { match l { Nil => Zero, Cons(h, t) => Succ(length(t)) } }
+
+impl length for ListTok {
+    body := λ (r: List<Tok>) => length(r),
+    refines := λ (r: List<Tok>) => λ (h0: (Zero = Zero)) => refl,
+}
