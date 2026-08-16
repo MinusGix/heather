@@ -364,6 +364,12 @@ instances can hold today, `lib/std/algebra.hthr`):
    where the flip of the defaulted `inv` turned the friction into duplication:
    two reprs of one spec type that disagree on `inv` can no longer share a
    law, even when both hypotheses are trivially inhabited.
+   *Spent 2026-08-16* (that issue's design section): a law clause that
+   mentions one of its statement's own binder names free (`a0…`/`h0…`; `B`,
+   `s0…`, `r`, `h` at `fold_law`) is elaborated **under** the statement's
+   binders — `Succ_abs := bin_succ_abs(a0)` — and a clause mentioning none
+   of them is the whole-Π form, unchanged. Decided syntactically before
+   elaboration, never by retry, so each form keeps its own diagnostics.
 6. **`inv` is `(r: R) -> Type` and the naive `True` is `Zero = Zero`.** `Nat`
    is a kernel type, so that proposition is in scope wherever a `datarepr`
    is, and `refl` inhabits it. A prelude `True` would be better and belongs

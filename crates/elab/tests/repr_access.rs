@@ -128,7 +128,8 @@ fn a_printed_statement_is_writable_verbatim() {
     assert_eq!(row.path, "BinNat::Succ_abs");
     assert!(!row.statement.contains("Repr_BinNat"), "{}", row.statement);
     assert!(row.statement.contains("BinNat::abs("), "{}", row.statement);
-    let restated = format!("theorem restated(): {} {{ bin_succ_abs_law }}", row.statement);
+    let restated =
+        format!("theorem restated(): {} {{ λ a0 h0 => bin_succ_abs(a0) }}", row.statement);
     let src = format!("{BIN_REPR}\n{restated}\n");
     ok(&src);
 }

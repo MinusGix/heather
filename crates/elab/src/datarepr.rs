@@ -19,7 +19,7 @@
 use std::collections::HashMap;
 use std::rc::Rc;
 
-use heather_syntax::{parse_file, DatareprBody, DatareprDecl, DatareprField, Expr, ExprKind, Item, Span, Ty, TyKind};
+use heather_syntax::{parse_file, DatareprBody, DatareprDecl, DatareprField, Expr, ExprKind, Item, LamBinder, Pat, Span, Stmt, Ty, TyKind};
 
 use crate::{err, Elaborator, R};
 
@@ -484,6 +484,7 @@ impl Elaborator {
         let mut by_name: HashMap<String, (String, Span)> = HashMap::new();
         let mut prov: HashMap<String, Provenance> = HashMap::new();
         let mut inv_trivial = false;
+        let law_bs = law_statement_binder_names(spec);
         for f in fs {
             if f.is_mk && !spec.ctors.iter().any(|c| c.name == f.name) {
                 return err(
@@ -541,7 +542,37 @@ impl Elaborator {
                     Provenance::Inline
                 },
             );
-            let placeholder = sp.add(&key, f.span, &f.expr);
+            // The applied clause form (`issues/datarepr-law-clause-inv-binders.md`):
+            // a law clause that mentions one of its statement's own binder
+            // names — free, so an inline λ binding the same names is still the
+            // whole-Π form — is elaborated UNDER those binders. The wrap
+            // happens here, on the AST and before the splice: the clause
+            // becomes `λ a0 … h0 … => clause`, spliced exactly as any inline
+            // clause is, so the emission stays byte-identical (the generated
+            // body is still one placeholder) and a failure still reports at
+            // the clause's own span. A clause mentioning none of the names is
+            // the whole-Π form, checked as before, diagnostics included: the
+            // two forms are told apart syntactically, never by retrying a
+            // failed elaboration.
+            let expr = match law_bs.get(&key) {
+                Some(ns) if mentions_free(&f.expr, ns, &mut Vec::new()) => Expr {
+                    span: f.expr.span,
+                    kind: ExprKind::Lam {
+                        binders: ns
+                            .iter()
+                            .map(|n| LamBinder {
+                                name: n.clone(),
+                                ty: None,
+                                implicit: false,
+                                span: f.expr.span,
+                            })
+                            .collect(),
+                        body: Box::new(f.expr.clone()),
+                    },
+                },
+                _ => f.expr.clone(),
+            };
+            let placeholder = sp.add(&key, f.span, &expr);
             by_name.insert(key, (placeholder, f.span));
         }
         let mut missing = Vec::new();
@@ -1211,6 +1242,204 @@ fn inv_law_ty(c: &CtorView, at: &str, inv: &str, mk: &str) -> String {
     pis(&bs, &appc(inv, &[appc(mk, &args)]))
 }
 
+/// Per law clause, the binder names its generated statement quantifies over
+/// (`issues/datarepr-law-clause-inv-binders.md`). Read off the very lists the
+/// statement schemas are built from — [`law_binders`], [`fold_law_binders`] —
+/// so the applied clause form's scope cannot drift from the statements; the
+/// type spellings are placeholders, since only the names are wanted.
+fn law_statement_binder_names(spec: &SpecView) -> HashMap<String, Vec<String>> {
+    let names =
+        |bs: Vec<(String, String)>| bs.into_iter().map(|(n, _)| n).collect::<Vec<String>>();
+    let mut m = HashMap::new();
+    for c in &spec.ctors {
+        let ns = names(law_binders(c, "R", "inv"));
+        m.insert(format!("{}_abs", c.name), ns.clone());
+        m.insert(format!("{}_inv", c.name), ns);
+    }
+    m.insert("fold_law".to_string(), names(fold_law_binders(spec, "R", "inv")));
+    m
+}
+
+/// Does `e` mention one of `names` **free** — not under a binder of the
+/// clause's own that shadows it? This is what decides between a law clause's
+/// two forms (`issues/datarepr-law-clause-inv-binders.md`): a clause that
+/// mentions a statement binder name is elaborated *under* the statement's
+/// binders, one that mentions none is a whole-Π value as before. Shadowing
+/// matters in both directions — `λ a0 h0 => bin_canon_succ(a0, h0)` is a
+/// whole-Π value whose own λ binds the same names, and wrapping it again
+/// would break it.
+fn mentions_free(e: &Expr, names: &[String], bound: &mut Vec<String>) -> bool {
+    let hit = |n: &str, bound: &Vec<String>| {
+        names.iter().any(|m| m == n) && !bound.iter().any(|m| m == n)
+    };
+    match &e.kind {
+        ExprKind::Var(n) => hit(n, bound),
+        ExprKind::OpSymbol(_)
+        | ExprKind::Univ { .. }
+        | ExprKind::Num(_)
+        | ExprKind::Refl
+        | ExprKind::AutoRefl
+        | ExprKind::Hole(_) => false,
+        ExprKind::App { head, args, .. } => {
+            mentions_free(head, names, bound)
+                || args.iter().any(|a| mentions_free(a, names, bound))
+        }
+        ExprKind::TyApp { head, args } => {
+            mentions_free(head, names, bound)
+                || args.iter().any(|t| mentions_free_ty(t, names, bound))
+        }
+        ExprKind::Lam { binders, body } => {
+            if binders
+                .iter()
+                .any(|b| b.ty.as_ref().is_some_and(|t| mentions_free_ty(t, names, bound)))
+            {
+                return true;
+            }
+            let n0 = bound.len();
+            bound.extend(binders.iter().map(|b| b.name.clone()));
+            let found = mentions_free(body, names, bound);
+            bound.truncate(n0);
+            found
+        }
+        ExprKind::VecLit(es) => es.iter().any(|a| mentions_free(a, names, bound)),
+        ExprKind::Eq(a, b) => {
+            mentions_free(a, names, bound) || mentions_free(b, names, bound)
+        }
+        ExprKind::TyLit(t) => mentions_free_ty(t, names, bound),
+        ExprKind::Match { scrut, eqbind, motive, arms } => {
+            if mentions_free(scrut, names, bound)
+                || motive.as_ref().is_some_and(|m| mentions_free(m, names, bound))
+            {
+                return true;
+            }
+            arms.iter().any(|arm| {
+                let n0 = bound.len();
+                for p in &arm.binders {
+                    pat_names(p, bound);
+                }
+                if let Some(h) = eqbind {
+                    bound.push(h.clone());
+                }
+                let found = mentions_free(&arm.body, names, bound);
+                bound.truncate(n0);
+                found
+            })
+        }
+        ExprKind::MatchCode { scrut, motive, arms } => {
+            if mentions_free(scrut, names, bound) || mentions_free_ty(motive, names, bound) {
+                return true;
+            }
+            arms.iter().any(|arm| {
+                let n0 = bound.len();
+                for p in &arm.binders {
+                    pat_names(p, bound);
+                }
+                let found = mentions_free(&arm.body, names, bound);
+                bound.truncate(n0);
+                found
+            })
+        }
+        ExprKind::Dot { recv, args, .. } => {
+            mentions_free(recv, names, bound)
+                || args.iter().flatten().any(|a| mentions_free(a, names, bound))
+        }
+        ExprKind::Index { recv, idx } => {
+            mentions_free(recv, names, bound) || mentions_free(idx, names, bound)
+        }
+        ExprKind::RecordLit { tyargs, fields, .. } => {
+            tyargs.iter().any(|t| mentions_free_ty(t, names, bound))
+                || fields.iter().any(|f| mentions_free(&f.expr, names, bound))
+        }
+        ExprKind::Block(b) => {
+            let n0 = bound.len();
+            let mut found = false;
+            for s in &b.stmts {
+                match s {
+                    Stmt::Let { name, ty, expr, .. } => {
+                        found = ty.as_ref().is_some_and(|t| mentions_free_ty(t, names, bound))
+                            || mentions_free(expr, names, bound);
+                        if found {
+                            break;
+                        }
+                        bound.push(name.clone());
+                    }
+                    Stmt::LetRecord { fields, expr, .. } => {
+                        found = mentions_free(expr, names, bound);
+                        if found {
+                            break;
+                        }
+                        bound.extend(fields.iter().map(|(n, _)| n.clone()));
+                    }
+                    Stmt::LetCode { name, expr, .. } => {
+                        found = mentions_free(expr, names, bound);
+                        if found {
+                            break;
+                        }
+                        bound.push(name.clone());
+                    }
+                }
+            }
+            let found = found
+                || mentions_free(&b.result, names, bound)
+                || b.ons.iter().any(|o| mentions_free(&o.expr, names, bound));
+            bound.truncate(n0);
+            found
+        }
+        ExprKind::Quote(inner) | ExprKind::Splice(inner) => mentions_free(inner, names, bound),
+        ExprKind::J { proof, motive, case } => {
+            mentions_free(proof, names, bound)
+                || mentions_free(motive, names, bound)
+                || mentions_free(case, names, bound)
+        }
+    }
+}
+
+fn mentions_free_ty(t: &Ty, names: &[String], bound: &mut Vec<String>) -> bool {
+    match &t.kind {
+        TyKind::Nat
+        | TyKind::Univ { .. }
+        | TyKind::Ctx
+        | TyKind::TyCode { .. }
+        | TyKind::Splice { .. } => false,
+        TyKind::Eq(a, b) => {
+            mentions_free(a, names, bound) || mentions_free(b, names, bound)
+        }
+        TyKind::OfExpr(e) => mentions_free(e, names, bound),
+        // A `Named`'s head is a *type* name; the statement's binders are
+        // values, so only the arguments can mention one.
+        TyKind::Named { args, .. } => args.iter().any(|a| mentions_free_ty(a, names, bound)),
+        TyKind::Vec { elem, len } => {
+            mentions_free_ty(elem, names, bound) || mentions_free(len, names, bound)
+        }
+        TyKind::Fin(e) => mentions_free(e, names, bound),
+        TyKind::Fn { binder, dom, cod, .. } => {
+            if mentions_free_ty(dom, names, bound) {
+                return true;
+            }
+            let n0 = bound.len();
+            if let Some(b) = binder {
+                bound.push(b.clone());
+            }
+            let found = mentions_free_ty(cod, names, bound);
+            bound.truncate(n0);
+            found
+        }
+        TyKind::Code { ty, .. } => mentions_free_ty(ty, names, bound),
+    }
+}
+
+/// Every name a pattern binds, deep patterns included.
+fn pat_names(p: &Pat, out: &mut Vec<String>) {
+    match p {
+        Pat::Var { name, .. } => out.push(name.clone()),
+        Pat::Ctor { args, .. } => {
+            for a in args {
+                pat_names(a, out);
+            }
+        }
+    }
+}
+
 /// Is this clause expression `λ (r: R) => True` — the trivial `inv` written
 /// out? Shape and not text: an inline clause is spliced into the generated
 /// source as a placeholder name, so this has to be asked of the AST while the
@@ -1239,10 +1468,11 @@ fn closer_under(c: &CtorView, at: &str, inv: &str, trivial: bool) -> String {
     lams(&law_binders(c, at, inv), if trivial { "trivial" } else { "refl" })
 }
 
-/// The fold anchor's statement (§1.1, corrected form): the law takes the SPEC
-/// step, adapts it repr-ward with `abs` at the child position, and equates the
-/// fold with the spec recursor at `abs(r)`.
-fn fold_law_ty(spec: &SpecView, at: &str, abs: &str, inv: &str, fold: &str, sr: &str) -> String {
+/// The binder list the fold anchor quantifies over: `B`, one spec step per
+/// constructor, the carrier value and its `inv`. Split out of [`fold_law_ty`]
+/// so the applied clause form reads its binder names off the same list the
+/// statement is built from (`issues/datarepr-law-clause-inv-binders.md`).
+fn fold_law_binders(spec: &SpecView, at: &str, inv: &str) -> Vec<(String, String)> {
     let s = &spec.spell;
     let mut bs = vec![("B".to_string(), "Type".to_string())];
     for (j, ct) in spec.ctors.iter().enumerate() {
@@ -1250,6 +1480,14 @@ fn fold_law_ty(spec: &SpecView, at: &str, abs: &str, inv: &str, fold: &str, sr: 
     }
     bs.push(("r".to_string(), at.to_string()));
     bs.push(("h".to_string(), appc(inv, &["r".to_string()])));
+    bs
+}
+
+/// The fold anchor's statement (§1.1, corrected form): the law takes the SPEC
+/// step, adapts it repr-ward with `abs` at the child position, and equates the
+/// fold with the spec recursor at `abs(r)`.
+fn fold_law_ty(spec: &SpecView, at: &str, abs: &str, inv: &str, fold: &str, sr: &str) -> String {
+    let bs = fold_law_binders(spec, at, inv);
     let mut fargs = vec!["B".to_string()];
     for (j, ct) in spec.ctors.iter().enumerate() {
         fargs.push(adapt(ct, at, &format!("s{j}"), abs));

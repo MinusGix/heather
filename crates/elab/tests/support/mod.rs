@@ -230,16 +230,12 @@ theorem bin_succ_abs(r: Bin): bin_abs(binc(r)) = Succ(bin_abs(r)) {
     match r { BNil => refl, B0(b) => refl, B1(b) => cong_double(bin_succ_abs(b)) }
 }
 
-theorem bin_succ_abs_law(a0: Bin, h0: (Zero = Zero)):
-    bin_abs(binc(a0)) = Succ(bin_abs(a0)) { bin_succ_abs(a0) }
-
-// The same law under the *defaulted* `inv`, which is `True`
-// (`issues/true-prop-trivial-hypotheses.md`). Two spellings and not one
-// because a law's hypothesis is the repr's own `inv`, and `BinNat` writes an
-// equation-shaped one where `BinMin` takes the default: the two are both
-// trivially inhabited and neither is convertible with the other.
-theorem bin_succ_abs_true(a0: Bin, h0: True):
-    bin_abs(binc(a0)) = Succ(bin_abs(a0)) { bin_succ_abs(a0) }
+// `bin_succ_abs` is the ONE law both reprs cite, as an applied clause
+// (`Succ_abs := bin_succ_abs(a0)`, `issues/datarepr-law-clause-inv-binders.md`):
+// a law's hypothesis is the repr's own `inv`, and `BinNat`'s equation-shaped
+// one is not convertible with `BinMin`'s defaulted `True`, so as whole-Π
+// values this fixture had to carry the same theorem twice, differing only in
+// a binder neither body mentioned.
 
 // `Nat`'s recursor, by hand: `match` is a form and not a global, so the
 // anchor's statement needs a name. Definitionally the generated
@@ -316,7 +312,7 @@ datarepr BinNat for Nat {
     inv := bin_inv,
     mk Zero := BNil,
     mk Succ := binc,
-    Succ_abs := bin_succ_abs_law,
+    Succ_abs := bin_succ_abs(a0),
     fold := bin_fold,
     fold_law := bin_fold_law,
 }
@@ -389,7 +385,7 @@ datarepr BinMin for Nat {
     abs := bin_abs,
     mk Zero := BNil,
     mk Succ := binc,
-    Succ_abs := bin_succ_abs_true,
+    Succ_abs := bin_succ_abs(a0),
 }
 "#
 );

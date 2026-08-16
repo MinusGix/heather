@@ -316,7 +316,7 @@ theorem tree_anchor(s0: (n: Nat) -> Nat, s1: (l: Tree) -> (r: Tree) -> (b0: Nat)
 /// changes nothing about that.
 #[test]
 fn a_law_that_is_not_refl_is_still_owed_by_a_minimal_repr() {
-    let without = BIN_MIN.replace("    Succ_abs := bin_succ_abs_true,\n", "");
+    let without = BIN_MIN.replace("    Succ_abs := bin_succ_abs(a0),\n", "");
     assert!(without != BIN_MIN, "the clause to delete moved");
     let msg = bad(&without);
     assert!(msg.contains("datarepr BinMin"), "{msg}");
@@ -434,6 +434,154 @@ theorem closes(h: Tok, t: Stk, ht: True): StkT::inv(StkT::mk_Cons(h, t)) {{
 }}
 "
     ));
+}
+
+// -- the applied clause form (issues/datarepr-law-clause-inv-binders.md) ----
+//
+// A law clause that mentions one of its statement's own binder names — `a0…`
+// the constructor's arguments, `h0…` the `inv` hypotheses; `B`, `s0…`, `r`,
+// `h` for `fold_law` — is elaborated UNDER those binders, so a hand-written
+// law no longer spells hypotheses it never uses. A clause mentioning none of
+// them is a whole-Π value, checked exactly as before. The fixtures are the
+// live consolidation: `BIN` and `BIN_MIN` disagree on `inv` (an equation vs
+// the defaulted `True`) and now cite the SAME `bin_succ_abs(a0)`, where the
+// whole-Π form needed the theorem twice, differing only in an unused binder.
+
+/// The applied form at a **written** `inv` and at the **defaulted** `True`
+/// one, each consumed afterwards at a **neutral** value in a **checking**
+/// position — the generated law is the statement, hypotheses included.
+#[test]
+fn an_applied_law_clause_fills_the_statement_under_both_invs() {
+    ok(&format!(
+        "{BIN}
+theorem consumed(a0: Bin, h0: (Zero = Zero)): bin_abs(binc(a0)) = Succ(bin_abs(a0))
+{{ BinNat::Succ_abs(a0, h0) }}
+"
+    ));
+    ok(&format!(
+        "{BIN_MIN}
+theorem consumed(a0: Bin, h0: True): bin_abs(binc(a0)) = Succ(bin_abs(a0))
+{{ BinMin::Succ_abs(a0, h0) }}
+"
+    ));
+}
+
+/// The applied form over an **open** element type (`Tok` is not the carrier),
+/// at a constructor with a non-recursive argument in front of the recursive
+/// one — so `a0`, `a1` and `h0` are all distinct positions.
+#[test]
+fn an_applied_clause_at_an_open_element_type() {
+    ok(&format!(
+        "{LIST}
+inductive Stk {{ SNil, SCons(h: Tok, t: Stk) }}
+fn stk_abs(r: Stk) -> List<Tok> {{ match r {{ SNil => Nil, SCons(h, t) => Cons(h, stk_abs(t)) }} }}
+theorem stk_cons_abs(h: Tok, t: Stk): stk_abs(SCons(h, t)) = Cons(h, stk_abs(t)) {{ refl }}
+
+datarepr StkTok for List<Tok> {{
+    R := Stk,
+    abs := stk_abs,
+    mk Nil := SNil,
+    mk Cons := SCons,
+    Cons_abs := stk_cons_abs(a0, a1),
+}}
+
+theorem used(h: Tok, t: Stk, ht: True):
+    StkTok::abs(StkTok::mk_Cons(h, t)) = Cons(h, StkTok::abs(t))
+{{ StkTok::Cons_abs(h, t, ht) }}
+"
+    ));
+}
+
+/// An applied clause that genuinely **consumes** its hypothesis: `BinC`'s
+/// closure law needs `h0: bin_canon(a0)` to close `bin_canon(binc(a0))`.
+#[test]
+fn an_applied_clause_that_uses_its_hypothesis() {
+    let src = support::BIN_CANON
+        .replace(
+            "    Succ_abs := bin_succ_abs_canon,",
+            "    Succ_abs := bin_succ_abs(a0),",
+        )
+        .replace(
+            "    Succ_inv := bin_canon_succ,",
+            "    Succ_inv := bin_canon_succ(a0, h0),",
+        );
+    assert!(!src.contains("bin_succ_abs_canon,") && !src.contains("bin_canon_succ,"),
+        "the clauses to flip moved");
+    ok(&src);
+}
+
+/// The applied form at the anchor: `fold_law`'s statement binds `B`, one step
+/// per constructor, `r` and `h`, and the clause is applied to them.
+#[test]
+fn an_applied_fold_law_clause() {
+    let src = BIN.replace(
+        "    fold_law := bin_fold_law,",
+        "    fold_law := bin_fold_law(B, s0, s1, r, h),",
+    );
+    assert!(src != BIN, "the clause to flip moved");
+    ok(&src);
+}
+
+/// The whole-Π form is untouched — including an inline λ that binds the
+/// statement's own names itself: the form decision is on **free** mentions,
+/// so the clause's λ shadows and nothing is wrapped around it.
+#[test]
+fn a_whole_pi_clause_binding_the_same_names_is_not_wrapped() {
+    let src = BIN.replace(
+        "    Succ_abs := bin_succ_abs(a0),",
+        "    Succ_abs := \u{3bb} a0 h0 => bin_succ_abs(a0),",
+    );
+    assert!(src != BIN, "the clause to flip moved");
+    ok(&src);
+}
+
+/// Negative control: a wrong applied clause is refused by the **kernel** — a
+/// proof of the successor's law at the wrong value — not waved through and
+/// not a parse error (the false green `issues/idiomatic-spelling-pass.md`'s
+/// controls guard against).
+#[test]
+fn a_wrong_applied_clause_is_refused_by_the_kernel() {
+    let src = BIN.replace(
+        "    Succ_abs := bin_succ_abs(a0),",
+        "    Succ_abs := bin_succ_abs(binc(a0)),",
+    );
+    assert!(src != BIN, "the clause to perturb moved");
+    let msg = bad(&src);
+    assert!(!msg.contains("does not parse"), "{msg}");
+    assert!(msg.contains("Succ_abs"), "{msg}");
+    assert!(msg.contains("NotConvertible"), "{msg}");
+}
+
+/// Negative control: the hypothesis where the value goes — a type error under
+/// the binders, reported at the clause.
+#[test]
+fn an_applied_clause_passing_the_hypothesis_as_the_value_is_refused() {
+    let src = BIN.replace(
+        "    Succ_abs := bin_succ_abs(a0),",
+        "    Succ_abs := bin_succ_abs(h0),",
+    );
+    assert!(src != BIN, "the clause to perturb moved");
+    let msg = bad(&src);
+    assert!(!msg.contains("does not parse"), "{msg}");
+    assert!(msg.contains("Succ_abs"), "{msg}");
+}
+
+/// Negative control: a name that is NOT one of the statement's binders stays
+/// on the whole-Π path and gets the ordinary unknown-name diagnostic naming
+/// it — not a confusing binder-scope error.
+#[test]
+fn a_binder_the_statement_does_not_quantify_is_an_unknown_name() {
+    let src = BIN.replace(
+        "    Succ_abs := bin_succ_abs(a0),",
+        "    Succ_abs := bin_succ_abs(a5),",
+    );
+    assert!(src != BIN, "the clause to perturb moved");
+    let msg = bad(&src);
+    assert!(!msg.contains("does not parse"), "{msg}");
+    // The ordinary unknown-name diagnostic, at the clause, with the generated
+    // statement quoted — which is what shows the binder names that DO exist.
+    assert!(msg.contains("unbound name `a5`"), "{msg}");
+    assert!(msg.contains("clause `Succ_abs`"), "{msg}");
 }
 
 // -- the cost basis on `Bin` (design §1.2, §5.1 item 4) ---------------------
