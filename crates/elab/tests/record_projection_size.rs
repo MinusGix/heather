@@ -56,7 +56,7 @@ const REC: &str = "
 fn Rp_spec_rec(B: Type, s0: B, s1: (a0: Tok) -> (a1: List<Tok>) -> (b0: B) -> B, x: List<Tok>) -> B {
     match x {
         Nil => s0,
-        Cons(a0, a1) => s1(a0)(a1)(Rp_spec_rec(B, s0, s1, a1)),
+        Cons(a0, a1) => s1(a0, a1, Rp_spec_rec(B, s0, s1, a1)),
     }
 }
 
@@ -68,26 +68,26 @@ record Rp {
     mk_Cons: (a0: Tok) -> (a1: R) -> R,
     Nil_abs: abs(mk_Nil) = Nil,
     Nil_inv: inv(mk_Nil),
-    Cons_abs: (a0: Tok) -> (a1: R) -> (h0: inv(a1)) -> abs(mk_Cons(a0)(a1)) = Cons(a0, abs(a1)),
-    Cons_inv: (a0: Tok) -> (a1: R) -> (h0: inv(a1)) -> inv(mk_Cons(a0)(a1)),
+    Cons_abs: (a0: Tok) -> (a1: R) -> (h0: inv(a1)) -> abs(mk_Cons(a0, a1)) = Cons(a0, abs(a1)),
+    Cons_inv: (a0: Tok) -> (a1: R) -> (h0: inv(a1)) -> inv(mk_Cons(a0, a1)),
     fold: (B: Type) -> (s0: B) -> (s1: (a0: Tok) -> (a1: R) -> (b0: B) -> B) -> (r: R) -> B,
-    fold_law: (B: Type) -> (s0: B) -> (s1: (a0: Tok) -> (a1: List<Tok>) -> (b0: B) -> B) -> (r: R) -> (h: inv(r)) -> fold(B)(s0)(λ (a0: Tok) => λ (a1: R) => λ (b0: B) => s1(a0)(abs(a1))(b0))(r) = Rp_spec_rec(B, s0, s1, abs(r)),
+    fold_law: (B: Type) -> (s0: B) -> (s1: (a0: Tok) -> (a1: List<Tok>) -> (b0: B) -> B) -> (r: R) -> (h: inv(r)) -> fold(B, s0, λ a0 a1 b0 => s1(a0, abs(a1), b0), r) = Rp_spec_rec(B, s0, s1, abs(r)),
 }
 ";
 
 /// The identity repr of `List<Tok>` at that record: every clause is the
 /// obvious one, so every law is `refl` and nothing here is about the proofs.
 const VAL: &str = "
-fn Rp::abs() -> (r: List<Tok>) -> List<Tok> { λ (r: List<Tok>) => r }
-fn Rp::inv() -> (r: List<Tok>) -> Type { λ (r: List<Tok>) => (Zero = Zero) }
+fn Rp::abs() -> (r: List<Tok>) -> List<Tok> { λ r => r }
+fn Rp::inv() -> (r: List<Tok>) -> Type { λ r => (Zero = Zero) }
 fn Rp::mk_Nil() -> List<Tok> { Nil }
-fn Rp::mk_Cons() -> (a0: Tok) -> (a1: List<Tok>) -> List<Tok> { λ (a0: Tok) => λ (a1: List<Tok>) => Cons(a0, a1) }
-theorem Rp::Nil_abs(): Rp::abs()(Rp::mk_Nil()) = Nil { refl }
-theorem Rp::Nil_inv(): Rp::inv()(Rp::mk_Nil()) { refl }
-theorem Rp::Cons_abs(): (a0: Tok) -> (a1: List<Tok>) -> (h0: Rp::inv()(a1)) -> Rp::abs()(Rp::mk_Cons()(a0)(a1)) = Cons(a0, Rp::abs()(a1)) { λ (a0: Tok) => λ (a1: List<Tok>) => λ (h0: Rp::inv()(a1)) => refl }
-theorem Rp::Cons_inv(): (a0: Tok) -> (a1: List<Tok>) -> (h0: Rp::inv()(a1)) -> Rp::inv()(Rp::mk_Cons()(a0)(a1)) { λ (a0: Tok) => λ (a1: List<Tok>) => λ (h0: Rp::inv()(a1)) => refl }
-fn Rp::fold() -> (B: Type) -> (s0: B) -> (s1: (a0: Tok) -> (a1: List<Tok>) -> (b0: B) -> B) -> (r: List<Tok>) -> B { λ (B: Type) => λ (s0: B) => λ (s1: (a0: Tok) -> (a1: List<Tok>) -> (b0: B) -> B) => λ (r: List<Tok>) => Rp_spec_rec(B, s0, s1, r) }
-theorem Rp::fold_law(): (B: Type) -> (s0: B) -> (s1: (a0: Tok) -> (a1: List<Tok>) -> (b0: B) -> B) -> (r: List<Tok>) -> (h: Rp::inv()(r)) -> Rp::fold()(B)(s0)(λ (a0: Tok) => λ (a1: List<Tok>) => λ (b0: B) => s1(a0)(Rp::abs()(a1))(b0))(r) = Rp_spec_rec(B, s0, s1, Rp::abs()(r)) { λ (B: Type) => λ (s0: B) => λ (s1: (a0: Tok) -> (a1: List<Tok>) -> (b0: B) -> B) => λ (r: List<Tok>) => λ (h: Rp::inv()(r)) => refl }
+fn Rp::mk_Cons() -> (a0: Tok) -> (a1: List<Tok>) -> List<Tok> { λ a0 a1 => Cons(a0, a1) }
+theorem Rp::Nil_abs(): Rp::abs(Rp::mk_Nil()) = Nil { refl }
+theorem Rp::Nil_inv(): Rp::inv(Rp::mk_Nil()) { refl }
+theorem Rp::Cons_abs(): (a0: Tok) -> (a1: List<Tok>) -> (h0: Rp::inv(a1)) -> Rp::abs(Rp::mk_Cons(a0, a1)) = Cons(a0, Rp::abs(a1)) { λ a0 a1 h0 => refl }
+theorem Rp::Cons_inv(): (a0: Tok) -> (a1: List<Tok>) -> (h0: Rp::inv(a1)) -> Rp::inv(Rp::mk_Cons(a0, a1)) { λ a0 a1 h0 => refl }
+fn Rp::fold() -> (B: Type) -> (s0: B) -> (s1: (a0: Tok) -> (a1: List<Tok>) -> (b0: B) -> B) -> (r: List<Tok>) -> B { λ B s0 s1 r => Rp_spec_rec(B, s0, s1, r) }
+theorem Rp::fold_law(): (B: Type) -> (s0: B) -> (s1: (a0: Tok) -> (a1: List<Tok>) -> (b0: B) -> B) -> (r: List<Tok>) -> (h: Rp::inv(r)) -> Rp::fold(B, s0, λ a0 a1 b0 => s1(a0, Rp::abs(a1), b0), r) = Rp_spec_rec(B, s0, s1, Rp::abs(r)) { λ B s0 s1 r h => refl }
 
 fn RpV() -> Rp { Rp { R: List<Tok>, abs: Rp::abs(), inv: Rp::inv(), mk_Nil: Rp::mk_Nil(), mk_Cons: Rp::mk_Cons(), Nil_abs: Rp::Nil_abs(), Nil_inv: Rp::Nil_inv(), Cons_abs: Rp::Cons_abs(), Cons_inv: Rp::Cons_inv(), fold: Rp::fold(), fold_law: Rp::fold_law() } }
 ";
@@ -103,9 +103,9 @@ fn a_law_field_projects_off_an_assembled_value() {
     ok(&format!(
         r#"
         {LIST}{REC}{VAL}
-        theorem proj_law(a0: Tok, a1: List<Tok>, h0: Rp::inv()(a1)):
-            Rp::abs()(Rp::mk_Cons()(a0)(a1)) = Cons(a0, Rp::abs()(a1))
-        {{ RpV().Cons_abs(a0)(a1)(h0) }}
+        theorem proj_law(a0: Tok, a1: List<Tok>, h0: Rp::inv(a1)):
+            Rp::abs(Rp::mk_Cons(a0, a1)) = Cons(a0, Rp::abs(a1))
+        {{ RpV().Cons_abs(a0, a1, h0) }}
         "#
     ));
 }
@@ -120,8 +120,8 @@ fn a_law_field_projects_off_a_neutral_receiver() {
         r#"
         {LIST}{REC}
         theorem proj_law(p: Rp, a0: Tok, a1: p.R, h0: p.inv(a1)):
-            p.abs(p.mk_Cons(a0)(a1)) = Cons(a0, p.abs(a1))
-        {{ p.Cons_abs(a0)(a1)(h0) }}
+            p.abs(p.mk_Cons(a0, a1)) = Cons(a0, p.abs(a1))
+        {{ p.Cons_abs(a0, a1, h0) }}
         "#
     ));
 }
@@ -135,10 +135,10 @@ fn the_last_field_projects() {
         {LIST}{REC}{VAL}
         theorem fold_law_of(B: Type, s0: B,
                             s1: (a0: Tok) -> (a1: List<Tok>) -> (b0: B) -> B,
-                            r: List<Tok>, h: Rp::inv()(r)):
-            Rp::fold()(B)(s0)(λ (a0: Tok) => λ (a1: List<Tok>) => λ (b0: B) => s1(a0)(Rp::abs()(a1))(b0))(r)
-              = Rp_spec_rec(B, s0, s1, Rp::abs()(r))
-        {{ RpV().fold_law(B)(s0)(s1)(r)(h) }}
+                            r: List<Tok>, h: Rp::inv(r)):
+            Rp::fold(B, s0, λ a0 a1 b0 => s1(a0, Rp::abs(a1), b0), r)
+              = Rp_spec_rec(B, s0, s1, Rp::abs(r))
+        {{ RpV().fold_law(B, s0, s1, r, h) }}
         "#
     ));
 }
@@ -154,9 +154,9 @@ fn a_generated_repr_records_law_projects_off_the_assembled_value() {
         r#"
         {LIST}
         datarepr ListTok for List<Tok> := repr::naive();
-        theorem proj_law(a0: Tok, a1: List<Tok>, h0: ListTok::inv()(a1)):
-            ListTok::abs()(ListTok::mk_Cons()(a0)(a1)) = Cons(a0, ListTok::abs()(a1))
-        {{ ListTok().Cons_abs(a0)(a1)(h0) }}
+        theorem proj_law(a0: Tok, a1: List<Tok>, h0: ListTok::inv(a1)):
+            ListTok::abs(ListTok::mk_Cons(a0, a1)) = Cons(a0, ListTok::abs(a1))
+        {{ ListTok().Cons_abs(a0, a1, h0) }}
         "#
     ));
 }
@@ -169,9 +169,9 @@ fn the_namespace_route_still_proves_the_same_law() {
         r#"
         {LIST}
         datarepr ListTok for List<Tok> := repr::naive();
-        theorem proj_law(a0: Tok, a1: List<Tok>, h0: ListTok::inv()(a1)):
-            ListTok::abs()(ListTok::mk_Cons()(a0)(a1)) = Cons(a0, ListTok::abs()(a1))
-        {{ ListTok::Cons_abs()(a0)(a1)(h0) }}
+        theorem proj_law(a0: Tok, a1: List<Tok>, h0: ListTok::inv(a1)):
+            ListTok::abs(ListTok::mk_Cons(a0, a1)) = Cons(a0, ListTok::abs(a1))
+        {{ ListTok::Cons_abs(a0, a1, h0) }}
         "#
     ));
 }
@@ -234,9 +234,9 @@ fn a_law_field_does_not_prove_a_different_equation() {
     let e = bad(&format!(
         r#"
         {LIST}{REC}{VAL}
-        theorem wrong(a0: Tok, a1: List<Tok>, h0: Rp::inv()(a1)):
-            Rp::abs()(Rp::mk_Cons()(a0)(a1)) = Cons(a0, Nil)
-        {{ RpV().Cons_abs(a0)(a1)(h0) }}
+        theorem wrong(a0: Tok, a1: List<Tok>, h0: Rp::inv(a1)):
+            Rp::abs(Rp::mk_Cons(a0, a1)) = Cons(a0, Nil)
+        {{ RpV().Cons_abs(a0, a1, h0) }}
         "#
     ));
     assert!(e.contains("wrong"), "{e}");
@@ -249,7 +249,7 @@ fn a_neighbouring_field_does_not_prove_this_law() {
     let e = bad(&format!(
         r#"
         {LIST}{REC}{VAL}
-        theorem swapped(): Rp::abs()(Rp::mk_Nil()) = Nil {{ RpV().Nil_inv }}
+        theorem swapped(): Rp::abs(Rp::mk_Nil()) = Nil {{ RpV().Nil_inv }}
         "#
     ));
     assert!(e.contains("swapped"), "{e}");
@@ -278,13 +278,13 @@ fn a_parameterized_records_dependent_field_still_projects() {
         record Monoid<A> {
             unit: A,
             op: A -> A -> A,
-            unit_l: (x: A) -> op(unit)(x) = x,
+            unit_l: (x: A) -> op(unit, x) = x,
         }
         fn nat_monoid() -> Monoid<Nat> {
-            Monoid { unit: 0, op: λ (x: Nat) => λ (y: Nat) => y, unit_l: λ (x: Nat) => refl }
+            Monoid { unit: 0, op: λ x y => y, unit_l: λ x => refl }
         }
-        theorem law_at_a_value(x: Nat): nat_monoid().op(nat_monoid().unit)(x) = x
+        theorem law_at_a_value(x: Nat): nat_monoid().op(nat_monoid().unit, x) = x
         { nat_monoid().unit_l(x) }
-        fn law_at_a_neutral<A>(m: Monoid<A>, x: A) -> m.op(m.unit)(x) = x { m.unit_l(x) }
+        fn law_at_a_neutral<A>(m: Monoid<A>, x: A) -> m.op(m.unit, x) = x { m.unit_l(x) }
         "#);
 }

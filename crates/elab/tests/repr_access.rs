@@ -56,27 +56,27 @@ fn every_designed_repr_member_checks_in_a_checking_position() {
         "{LIST}
 datarepr ListTok for List<Tok> := repr::naive();
 
-fn carrier_of(r: ListTok().R) -> List<Tok> {{ ListTok::abs()(r) }}
-fn invariant_of(r: List<Tok>) -> Type {{ ListTok::inv()(r) }}
-fn one(t: Tok) -> List<Tok> {{ ListTok::mk_Cons()(t)(ListTok::mk_Nil()) }}
+fn carrier_of(r: ListTok().R) -> List<Tok> {{ ListTok::abs(r) }}
+fn invariant_of(r: List<Tok>) -> Type {{ ListTok::inv(r) }}
+fn one(t: Tok) -> List<Tok> {{ ListTok::mk_Cons(t, ListTok::mk_Nil()) }}
 fn len(l: List<Tok>) -> Nat {{
-    ListTok::fold()(Nat)(Zero)(λ (t: Tok) => λ (r: List<Tok>) => λ (b: Nat) => Succ(b))(l)
+    ListTok::fold(Nat, Zero, λ t r b => Succ(b), l)
 }}
 fn spec_len(l: List<Tok>) -> Nat {{
-    ListTok::spec_rec(Nat, Zero, λ (t: Tok) => λ (r: List<Tok>) => λ (b: Nat) => Succ(b), l)
+    ListTok::spec_rec(Nat, Zero, λ t r b => Succ(b), l)
 }}
-theorem image_law(t: Tok): ListTok::abs()(one(t)) = Cons(t, Nil) {{
-    ListTok::Cons_abs()(t)(ListTok::mk_Nil())(ListTok::Nil_inv())
+theorem image_law(t: Tok): ListTok::abs(one(t)) = Cons(t, Nil) {{
+    ListTok::Cons_abs(t, ListTok::mk_Nil(), ListTok::Nil_inv())
 }}
-theorem closure_law(t: Tok): ListTok::inv()(one(t)) {{
-    ListTok::Cons_inv()(t)(ListTok::mk_Nil())(ListTok::Nil_inv())
+theorem closure_law(t: Tok): ListTok::inv(one(t)) {{
+    ListTok::Cons_inv(t, ListTok::mk_Nil(), ListTok::Nil_inv())
 }}
 theorem anchor(B: Type, s0: B, s1: (a0: Tok) -> (a1: List<Tok>) -> (b0: B) -> B,
-               r: List<Tok>, h: ListTok::inv()(r)):
-    ListTok::fold()(B)(s0)(λ (a0: Tok) => λ (a1: List<Tok>) => λ (b0: B) =>
-        s1(a0)(ListTok::abs()(a1))(b0))(r)
-      = ListTok::spec_rec(B, s0, s1, ListTok::abs()(r))
-{{ ListTok::fold_law()(B)(s0)(s1)(r)(h) }}
+               r: List<Tok>, h: ListTok::inv(r)):
+    ListTok::fold(B, s0, λ a0 a1 b0 =>
+        s1(a0, ListTok::abs(a1), b0), r)
+      = ListTok::spec_rec(B, s0, s1, ListTok::abs(r))
+{{ ListTok::fold_law(B, s0, s1, r, h) }}
 "
     ));
 }
@@ -88,8 +88,8 @@ fn the_designed_fold_computes_at_a_literal() {
     ok(&format!(
         "{LIST}
 datarepr ListTok for List<Tok> := repr::naive();
-theorem two(): ListTok::fold()(Nat)(Zero)
-    (λ (t: Tok) => λ (r: List<Tok>) => λ (b: Nat) => Succ(b))(Cons(TAdd, Cons(TMul, Nil)))
+theorem two(): ListTok::fold(Nat, Zero, λ t r b => Succ(b),
+                            Cons(TAdd, Cons(TMul, Nil)))
       = Succ(Succ(Zero))
 {{ refl }}
 "
@@ -103,12 +103,12 @@ fn an_impl_is_cited_through_its_applied_owner_path() {
     // out by hand in the designed vocabulary.
     ok(&format!(
         "{LIST}{DERIVED}
-fn by_impl(r: List<Tok>) -> Nat {{ Impl(length, ListTok)::body()(r) }}
-theorem by_impl_refines(r: List<Tok>, h0: ListTok::inv()(r)):
-    Impl(length, ListTok)::body()(r) = length(ListTok::abs()(r))
-{{ Impl(length, ListTok)::refines()(r)(h0) }}
+fn by_impl(r: List<Tok>) -> Nat {{ Impl(length, ListTok)::body(r) }}
+theorem by_impl_refines(r: List<Tok>, h0: ListTok::inv(r)):
+    Impl(length, ListTok)::body(r) = length(ListTok::abs(r))
+{{ Impl(length, ListTok)::refines(r, h0) }}
 theorem by_impl_at_two():
-    Impl(length, ListTok)::body()(Cons(TAdd, Cons(TMul, Nil))) = Succ(Succ(Zero))
+    Impl(length, ListTok)::body(Cons(TAdd, Cons(TMul, Nil))) = Succ(Succ(Zero))
 {{ refl }}
 "
     ));
@@ -127,7 +127,7 @@ fn a_printed_statement_is_writable_verbatim() {
         .expect("the `Succ_abs` row");
     assert_eq!(row.path, "BinNat::Succ_abs");
     assert!(!row.statement.contains("Repr_BinNat"), "{}", row.statement);
-    assert!(row.statement.contains("BinNat::abs()"), "{}", row.statement);
+    assert!(row.statement.contains("BinNat::abs("), "{}", row.statement);
     let restated = format!("theorem restated(): {} {{ bin_succ_abs_law }}", row.statement);
     let src = format!("{BIN_REPR}\n{restated}\n");
     ok(&src);
@@ -167,10 +167,10 @@ fn projection_off_the_assembled_value_agrees_with_the_designed_path() {
         "{LIST}
 datarepr ListTok for List<Tok> := repr::naive();
 theorem same(r: List<Tok>):
-    ListTok().fold(Nat)(Zero)(λ (t: Tok) => λ (l: List<Tok>) => λ (b: Nat) => Succ(b))(r)
-      = ListTok::fold()(Nat)(Zero)(λ (t: Tok) => λ (l: List<Tok>) => λ (b: Nat) => Succ(b))(r)
+    ListTok().fold(Nat, Zero, λ t l b => Succ(b), r)
+      = ListTok::fold(Nat, Zero, λ t l b => Succ(b), r)
 {{ refl }}
-theorem same_at_a_literal(t: Tok): ListTok().abs(ListTok::mk_Cons()(t)(ListTok::mk_Nil()))
+theorem same_at_a_literal(t: Tok): ListTok().abs(ListTok::mk_Cons(t, ListTok::mk_Nil()))
       = Cons(t, Nil)
 {{ refl }}
 "
@@ -190,7 +190,7 @@ fn the_minted_repr_member_is_refused_and_names_the_designed_form() {
 fn the_minted_spec_recursor_is_refused_and_names_the_designed_form() {
     let msg = bad(&format!(
         "{BIN_REPR}
-fn p() -> Nat {{ BinNat_spec_rec(Nat, Zero, λ (a: Nat) => λ (b: Nat) => Succ(b), Zero) }}
+fn p() -> Nat {{ BinNat_spec_rec(Nat, Zero, λ a b => Succ(b), Zero) }}
 "
     ));
     assert!(msg.contains("write `BinNat::spec_rec`"), "{msg}");
@@ -200,7 +200,7 @@ fn p() -> Nat {{ BinNat_spec_rec(Nat, Zero, λ (a: Nat) => λ (b: Nat) => Succ(b
 fn the_minted_impl_member_is_refused_and_names_the_designed_form() {
     let msg = bad(&format!(
         "{LIST}{DERIVED}
-fn p(r: List<Tok>) -> Nat {{ Impl_ListTok_length::body()(r) }}
+fn p(r: List<Tok>) -> Nat {{ Impl_ListTok_length::body(r) }}
 "
     ));
     assert!(msg.contains("write `Impl(length, ListTok)::body`"), "{msg}");
@@ -234,7 +234,7 @@ fn an_access_path_with_no_impl_behind_it_names_the_missing_declaration() {
         "{LIST}
 fn length(l: List<Tok>) -> Nat {{ match l {{ Nil => Zero, Cons(h, t) => Succ(length(t)) }} }}
 datarepr ListTok for List<Tok> := repr::naive();
-fn p(r: List<Tok>) -> Nat {{ Impl(length, ListTok)::body()(r) }}
+fn p(r: List<Tok>) -> Nat {{ Impl(length, ListTok)::body(r) }}
 "
     ));
     assert!(msg.contains("no `impl length for ListTok` is declared"), "{msg}");
@@ -242,7 +242,7 @@ fn p(r: List<Tok>) -> Nat {{ Impl(length, ListTok)::body()(r) }}
 
 #[test]
 fn a_path_whose_owner_is_not_an_applied_name_is_a_parse_error() {
-    let msg = bad("fn p() -> Nat { (λ (x: Nat) => x)(Zero)::refines }");
+    let msg = bad("fn p() -> Nat { (λ x => x)(Zero)::refines }");
     assert!(msg.contains("needs an owner of the form"), "{msg}");
     assert!(msg.contains("Impl(<op>, <repr>)::refines"), "{msg}");
 }
@@ -281,7 +281,7 @@ datarepr ListTok for List<Tok> := repr::naive();
 record Holder {{ n: Nat }}
 fn Holder::abs(h: Holder) -> Nat {{ h.n }}
 fn use_it(h: Holder) -> Nat {{ Holder::abs(h) }}
-fn still_the_repr(r: List<Tok>) -> List<Tok> {{ ListTok::abs()(r) }}
+fn still_the_repr(r: List<Tok>) -> List<Tok> {{ ListTok::abs(r) }}
 "
     ));
 }

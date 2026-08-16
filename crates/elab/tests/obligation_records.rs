@@ -50,8 +50,8 @@ fn an_inline_lambda_body_and_an_inline_proof() {
     ok(&format!(
         "{LIST}
 impl length for ListTok {{
-    body := \u{3bb} (r: List<Tok>) => length(r),
-    refines := \u{3bb} (r: List<Tok>) => \u{3bb} (h0: True) => refl,
+    body := \u{3bb} r => length(r),
+    refines := \u{3bb} r h0 => refl,
 }}
 "
     ));
@@ -66,8 +66,8 @@ fn an_inline_match_body() {
         "{LIST}
 fn nonempty(l: List<Tok>) -> Nat {{ match l {{ Nil => Zero, Cons(h, t) => Succ(Zero) }} }}
 impl nonempty for ListTok {{
-    body := \u{3bb} (r: List<Tok>) => match r {{ Nil => Zero, Cons(h, t) => Succ(Zero) }},
-    refines := \u{3bb} (r: List<Tok>) => \u{3bb} (h0: True) => refl,
+    body := \u{3bb} r => match r {{ Nil => Zero, Cons(h, t) => Succ(Zero) }},
+    refines := \u{3bb} r h0 => refl,
 }}
 "
     ));
@@ -81,7 +81,7 @@ fn an_inline_let_block_body() {
         "{LIST}
 impl length for ListTok {{
     body := {{ let f: (l: List<Tok>) -> Nat = length; f }},
-    refines := \u{3bb} (r: List<Tok>) => \u{3bb} (h0: True) => refl,
+    refines := \u{3bb} r h0 => refl,
 }}
 "
     ));
@@ -94,11 +94,9 @@ fn an_inline_clause_at_bin() {
     ok(&format!(
         "{BIN_REPR}{BIN_ADD}
 impl add for BinNat {{
-    body := \u{3bb} (ra: Bin) => \u{3bb} (rb: Bin) => bin_add_derived(ra, rb),
-    refines := \u{3bb} (ra: Bin) => \u{3bb} (rb: Bin) => \u{3bb} (h0: (Zero = Zero)) =>
-               \u{3bb} (h1: (Zero = Zero)) => bin_iter_abs(ra, bin_abs(rb)),
-    refines_inv := \u{3bb} (ra: Bin) => \u{3bb} (rb: Bin) => \u{3bb} (h0: (Zero = Zero)) =>
-                   \u{3bb} (h1: (Zero = Zero)) => refl,
+    body := \u{3bb} ra rb => bin_add_derived(ra, rb),
+    refines := \u{3bb} ra rb h0 h1 => bin_iter_abs(ra, bin_abs(rb)),
+    refines_inv := \u{3bb} ra rb h0 h1 => refl,
 }}
 "
     ));
@@ -113,8 +111,8 @@ fn a_wrong_inline_proof_is_refused_by_the_kernel() {
     let msg = bad(&format!(
         "{LIST}
 impl length for ListTok {{
-    body := \u{3bb} (r: List<Tok>) => Succ(length(r)),
-    refines := \u{3bb} (r: List<Tok>) => \u{3bb} (h0: True) => refl,
+    body := \u{3bb} r => Succ(length(r)),
+    refines := \u{3bb} r h0 => refl,
 }}
 "
     ));
@@ -128,8 +126,8 @@ fn an_inline_failure_is_located_at_the_clause() {
     let msg = bad(&format!(
         "{LIST}
 impl length for ListTok {{
-    body := \u{3bb} (r: List<Tok>) => Succ(length(r)),
-    refines := \u{3bb} (r: List<Tok>) => \u{3bb} (h0: True) => refl,
+    body := \u{3bb} r => Succ(length(r)),
+    refines := \u{3bb} r h0 => refl,
 }}
 "
     ));
@@ -145,9 +143,9 @@ impl length for ListTok {{
 fn an_inline_datarepr_clause_law() {
     let src = BIN_CANON.replace(
         "    Succ_inv := bin_canon_succ,",
-        "    Succ_inv := \u{3bb} (a0: Bin) => \u{3bb} (h0: bin_canon(a0)) => bin_canon_succ(a0, h0),",
+        "    Succ_inv := \u{3bb} a0 h0 => bin_canon_succ(a0, h0),",
     );
-    assert!(src.contains("\u{3bb} (a0: Bin)"), "the fixture moved");
+    assert!(src.contains("\u{3bb} a0 h0 =>"), "the fixture moved");
     ok(&src);
 }
 
@@ -156,7 +154,7 @@ fn an_inline_datarepr_clause_law() {
 /// expression, and the decline says so.
 #[test]
 fn the_carrier_clause_is_still_spelled() {
-    let msg = bad(&BIN_REPR.replace("    R := Bin,", "    R := \u{3bb} (x: Nat) => Bin,"));
+    let msg = bad(&BIN_REPR.replace("    R := Bin,", "    R := \u{3bb} x => Bin,"));
     assert!(msg.contains("carrier and stands in"), "{msg}");
 }
 
@@ -177,8 +175,8 @@ impl add for BinNat {{
     // the generated vocabulary the kernel will compare against.
     assert!(msg.contains("`refines` of `impl add for BinNat` is not proved"), "{msg}");
     assert!(msg.contains("Impl(add, BinNat)::refines"), "{msg}");
-    assert!(msg.contains("(a: Bin) -> (b: Bin) -> (h0: BinNat::inv()(a))"), "{msg}");
-    assert!(msg.contains("= add(BinNat::abs()(a), BinNat::abs()(b))"), "{msg}");
+    assert!(msg.contains("(a: Bin) -> (b: Bin) -> (h0: BinNat::inv(a))"), "{msg}");
+    assert!(msg.contains("= add(BinNat::abs(a), BinNat::abs(b))"), "{msg}");
 }
 
 #[test]
@@ -202,8 +200,8 @@ fn a_hole_at_a_datarepr_law_reports_the_law() {
     let msg = bad(&BIN_CANON.replace("    Succ_inv := bin_canon_succ,", "    Succ_inv := ?,"));
     assert!(msg.contains("`Succ_inv` of `datarepr BinC` is not proved"), "{msg}");
     assert!(msg.contains("BinC::Succ_inv"), "{msg}");
-    assert!(msg.contains("(a0: Bin) -> (h0: BinC::inv()(a0))"), "{msg}");
-    assert!(msg.contains("BinC::inv()(BinC::mk_Succ()(a0))"), "{msg}");
+    assert!(msg.contains("(a0: Bin) -> (h0: BinC::inv(a0))"), "{msg}");
+    assert!(msg.contains("BinC::inv(BinC::mk_Succ(a0))"), "{msg}");
 }
 
 /// Omission keeps meaning *take the default* — the rule the defaults round
@@ -233,7 +231,7 @@ fn a_hole_at_the_law_of_a_defaulted_fold_prints_the_anchor() {
     let msg =
         bad(&BIN_MIN.replace("    mk Zero := BNil,", "    fold_law := ?,\n    mk Zero := BNil,"));
     assert!(msg.contains("`fold_law` of `datarepr BinMin` is not proved"), "{msg}");
-    assert!(msg.contains("BinMin::fold()"), "{msg}");
+    assert!(msg.contains("BinMin::fold("), "{msg}");
     assert!(msg.contains("BinMin::spec_rec"), "{msg}");
 }
 
@@ -274,8 +272,8 @@ fn a_surface_derived_impl_is_consumable_as_a_callee() {
         "{LIST}
 fn add(a: Nat, b: Nat) -> Nat {{ match b {{ Zero => a, Succ(k) => Succ(add(a, k)) }} }}
 fn single(t: Tok) -> List<Tok> {{ Cons(t, Nil) }}
-theorem single_refines(t: Tok): ListTok::abs()(single(t)) = single(t) {{ refl }}
-theorem single_inv(t: Tok): ListTok::inv()(single(t)) {{ trivial }}
+theorem single_refines(t: Tok): ListTok::abs(single(t)) = single(t) {{ refl }}
+theorem single_inv(t: Tok): ListTok::inv(single(t)) {{ trivial }}
 impl single for ListTok {{
     body := single, refines := single_refines, refines_inv := single_inv,
 }}
@@ -293,7 +291,7 @@ impl length for ListTok := derive();
     };
     // Resolved through the registry, not regenerated: the caller's certificate
     // asks for four names and never asks who wrote them.
-    assert!(em.text.contains("Impl_ListTok_length::refines()"), "{}", em.text);
+    assert!(em.text.contains("Impl_ListTok_length::refines("), "{}", em.text);
     assert!(!em.text.contains("impl length for ListTok"), "{}", em.text);
     if let Err(err) = e.elab_generated_source(&em.text) {
         panic!("{}", err.render(&em.text));
@@ -323,8 +321,8 @@ fn via_derived_composes_at_a_plain_result() {
     let e = ok(&format!(
         "{LIST}
 impl length for ListTok {{
-    body := \u{3bb} (r: List<Tok>) => length(r),
-    refines := via_derived(\u{3bb} (r: List<Tok>) => \u{3bb} (h0: True) =>
+    body := \u{3bb} r => length(r),
+    refines := via_derived(\u{3bb} r h0 =>
         sym(length_derived_refines(r, h0))),
 }}
 "
@@ -343,10 +341,10 @@ fn via_derived_composes_at_bin_with_a_repr_typed_result() {
     ok(&format!(
         "{BIN_REPR}
 impl double for BinNat {{
-    body := \u{3bb} (r: Bin) => B0(r),
-    refines := via_derived(\u{3bb} (r: Bin) => \u{3bb} (h0: (Zero = Zero)) =>
+    body := \u{3bb} r => B0(r),
+    refines := via_derived(\u{3bb} r h0 =>
         sym(double_derived_refines(r, h0))),
-    refines_inv := \u{3bb} (r: Bin) => \u{3bb} (h0: (Zero = Zero)) => refl,
+    refines_inv := \u{3bb} r h0 => refl,
 }}
 "
     ));
@@ -360,8 +358,8 @@ fn via_derived_does_not_fill_refines_inv_and_says_why() {
     let msg = bad(&format!(
         "{BIN_REPR}
 impl double for BinNat {{
-    body := \u{3bb} (r: Bin) => B0(r),
-    refines := via_derived(\u{3bb} (r: Bin) => \u{3bb} (h0: (Zero = Zero)) =>
+    body := \u{3bb} r => B0(r),
+    refines := via_derived(\u{3bb} r h0 =>
         sym(double_derived_refines(r, h0))),
 }}
 "
@@ -378,8 +376,8 @@ fn a_wrong_via_derived_proof_is_refused() {
     let msg = bad(&format!(
         "{LIST}
 impl length for ListTok {{
-    body := \u{3bb} (r: List<Tok>) => Succ(length(r)),
-    refines := via_derived(\u{3bb} (r: List<Tok>) => \u{3bb} (h0: True) =>
+    body := \u{3bb} r => Succ(length(r)),
+    refines := via_derived(\u{3bb} r h0 =>
         sym(length_derived_refines(r, h0))),
 }}
 "
@@ -402,8 +400,8 @@ fn the_listing_records_state_provenance_and_statement() {
     let e = ok(&format!(
         "{LIST}
 impl length for ListTok {{
-    body := \u{3bb} (r: List<Tok>) => length(r),
-    refines := \u{3bb} (r: List<Tok>) => \u{3bb} (h0: True) => refl,
+    body := \u{3bb} r => length(r),
+    refines := \u{3bb} r h0 => refl,
 }}
 "
     ));
@@ -424,7 +422,7 @@ impl length for ListTok {{
     assert_eq!(refines.state, "supplied");
     assert_eq!(refines.provenance.map(|p| p.as_str()), Some("inline"));
     assert_eq!(refines.path, "Impl(length, ListTok)::refines");
-    assert!(refines.statement.contains("= length(ListTok::abs()(l))"), "{}", refines.statement);
+    assert!(refines.statement.contains("= length(ListTok::abs(l))"), "{}", refines.statement);
 }
 
 /// The two data clauses that have a default are listed too, so the listing
@@ -458,8 +456,8 @@ fn the_listing_says_which_defaultable_data_clauses_were_taken() {
 /// Also the **ascription interim** (§2.2, FINDING F): the surface has no
 /// expression ascription, so an author who wants the statement visible states
 /// it as a named theorem in their *own* vocabulary — `my_len(r) = length(r)`,
-/// not the generated `Impl_ListTok_length::body()(r) =
-/// length(ListTok::abs()(r))` — and the field type accepts it by
+/// not the generated `Impl_ListTok_length::body(r) =
+/// length(ListTok::abs(r))` — and the field type accepts it by
 /// conversion. That it works is probe 4's δ row, here as a test.
 #[test]
 fn the_listing_distinguishes_named_from_inline_and_derived() {

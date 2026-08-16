@@ -271,7 +271,7 @@ which is printed as the source text it is checked as and therefore came out
 full of minted names:
 
 ```
-BinNat  Zero_abs  Repr_BinNat::abs()(Repr_BinNat::mk_Zero()) = Zero
+BinNat  Zero_abs  Repr_BinNat::abs(Repr_BinNat::mk_Zero()) = Zero
 ```
 
 That statement is exactly what a user copies to write the proof, so under §2 it
@@ -280,7 +280,7 @@ boundary** — `Elaborator::obligations()` and the `?` reporting hole — by the
 reverse of §5's registration:
 
 ```
-BinNat  Zero_abs  BinNat::abs()(BinNat::mk_Zero()) = Zero
+BinNat  Zero_abs  BinNat::abs(BinNat::mk_Zero()) = Zero
 ```
 
 The stored strings are untouched, because the same strings are the *types* the
@@ -302,12 +302,15 @@ emissions the transfer controls feed back in — those go through
 
 The round's own tests are `crates/elab/tests/repr_access.rs`.
 
-**Emission bytes are unchanged.** Every generator still writes `Repr_N::abs()`,
-`N_spec_rec`, `Impl_R_f::body()`. The deliberate flip to the designed spelling
-in emissions belongs to `issues/idiomatic-spelling-pass.md`, and when it runs it
-is a one-line change to the spelling helpers plus a re-baseline of the emission
-assertions — the alias makes it a style choice rather than a compatibility
-event.
+**Emission bytes were unchanged by this round.** Every generator still writes
+`Repr_N::abs`, `N_spec_rec`, `Impl_R_f::body` — the minted *names* — and that is
+still true. *Amended 2026-08-16*: `issues/idiomatic-spelling-pass.md` has since
+run and changed the emission's **style** — one n-ary argument list rather than a
+curried chain, one unannotated multi-binder λ — which is why the applied forms
+above now read `Repr_N::abs(r)` rather than `Repr_N::abs()(r)`. The naming
+question this document decides was untouched by it, in both directions: the
+flip needed no alias change, and the alias needs no style. The two examples in
+§7 are rendered in the landed style.
 
 ## 9. Rejected alternatives
 

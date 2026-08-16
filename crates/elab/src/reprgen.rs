@@ -29,7 +29,7 @@
 //! *spelled once and typed twice* — at `S` for the anchor law's spec algebra,
 //! at the carrier for the fold — so the only expressions an arm may contain
 //! are those that are well-typed under both readings. A resolved callee call
-//! is spelled `Impl_Rp_g::body()(…)` on **both** sides; what bridges it to the
+//! is spelled `Impl_Rp_g::body(…)` on **both** sides; what bridges it to the
 //! spec function `g` is not the anchor law but the *closing induction*, where
 //! each callee step is discharged by that callee's own `refines` (and, at a
 //! callee returning `S`, its `refines_inv` paying the `inv` hypothesis the
@@ -1179,12 +1179,14 @@ impl Spelling<'_> {
         match sp {
             Spine::Acc(child) => acc_inv(child),
             Spine::Node(k, args) => {
-                let a: Vec<String> = args.iter().map(|x| self.arg(x, &|sp| self.repr(sp))).collect();
-                let mut app = appc(&self.inv_law(k), &a);
+                // One argument list, in the law's own binder order: the image's
+                // arguments, then one `inv` proof per repr-typed one.
+                let mut a: Vec<String> =
+                    args.iter().map(|x| self.arg(x, &|sp| self.repr(sp))).collect();
                 for sp in rec_args(args) {
-                    app = appc(&app, &[self.inv_proof(sp, acc_inv)]);
+                    a.push(self.inv_proof(sp, acc_inv));
                 }
-                app
+                appc(&self.inv_law(k), &a)
             }
         }
     }
@@ -1210,12 +1212,12 @@ impl Spelling<'_> {
             Spine::Acc(child) => return acc_abs(child),
             Spine::Node(k, args) => (k, args),
         };
-        let a: Vec<String> = args.iter().map(|x| self.arg(x, &|sp| self.repr(sp))).collect();
-        let mut proof = appc(&self.abs_law(k), &a);
+        let mut a: Vec<String> = args.iter().map(|x| self.arg(x, &|sp| self.repr(sp))).collect();
         let recs = rec_args(args);
         for sp in &recs {
-            proof = appc(&proof, &[self.inv_proof(sp, acc_inv)]);
+            a.push(self.inv_proof(sp, acc_inv));
         }
+        let mut proof = appc(&self.abs_law(k), &a);
         // `side(n, y)`: the spec-side node with the first `n` positions at `S`
         // already rewritten, and position `n` shown as `y` when a motive is
         // being spelled.

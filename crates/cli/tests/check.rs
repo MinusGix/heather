@@ -218,7 +218,7 @@ fn obligations_lists_state_provenance_and_statement() {
     // The statement is printed in the DESIGNED spelling, which is the point:
     // what the listing prints is what an author can write
     // (docs/repr-access-spellings-design.md §7).
-    assert!(text.contains("Impl(length, ListTok)::body()(l) = length("), "{text}");
+    assert!(text.contains("Impl(length, ListTok)::body(l) = length("), "{text}");
     assert!(!text.contains("Impl_ListTok_length"), "{text}");
 }
 

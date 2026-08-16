@@ -84,7 +84,7 @@ fn a_fold_that_drops_the_step_is_refused_by_the_kernel() {
     // `fold_law` is exactly what catches it (§1.1 — the anchor is the
     // certificate anchor, so a wrong one cannot be silent).
     let src = BIN.replace(
-        "    nat_rec_(B, s0, λ (m: Nat) => λ (b: B) => s1(bin_of_nat(m))(b), bin_abs(r))",
+        "    nat_rec_(B, s0, λ m b => s1(bin_of_nat(m), b), bin_abs(r))",
         "    s0",
     );
     let msg = bad(&src);
@@ -172,11 +172,11 @@ fn the_assembled_repr_projects_and_folds_at_a_neutral_scrutinee() {
         "{LIST}
 datarepr ListTok for List<Tok> := repr::naive();
 fn len(l: List<Tok>) -> Nat {{
-    ListTok::fold()(Nat)(Zero)(λ (t: Tok) => λ (r: List<Tok>) => λ (b: Nat) => Succ(b))(l)
+    ListTok::fold(Nat, Zero, λ t r b => Succ(b), l)
 }}
-fn one(t: Tok) -> List<Tok> {{ ListTok().mk_Cons(t)(ListTok().mk_Nil) }}
+fn one(t: Tok) -> List<Tok> {{ ListTok().mk_Cons(t, ListTok().mk_Nil) }}
 theorem one_abs(t: Tok): ListTok().abs(one(t)) = Cons(t, Nil) {{
-    ListTok::Cons_abs()(t)(ListTok::mk_Nil())(ListTok::Nil_inv())
+    ListTok::Cons_abs(t, ListTok::mk_Nil(), ListTok::Nil_inv())
 }}
 "
     ));
@@ -189,9 +189,43 @@ fn the_fold_law_is_usable_as_a_rewrite_at_a_neutral_repr_value() {
     ok(&format!(
         "{BIN}
 theorem anchor(s0: Nat, s1: (a: Nat) -> (b: Nat) -> Nat, r: Bin):
-    BinNat::fold()(Nat)(s0)(λ (a0: Bin) => λ (b0: Nat) => s1(bin_abs(a0))(b0))(r)
+    BinNat::fold(Nat, s0, λ a0 b0 => s1(bin_abs(a0), b0), r)
       = BinNat::spec_rec(Nat, s0, s1, bin_abs(r))
-{{ BinNat::fold_law()(Nat)(s0)(s1)(r)(refl) }}
+{{ BinNat::fold_law(Nat, s0, s1, r, refl) }}
+"
+    ));
+}
+
+/// The style flip is a *style* flip (`issues/idiomatic-spelling-pass.md`): the
+/// idiomatic spelling the emission now writes and the explicit curried
+/// fully-annotated one it used to write are the **same term**, and `refl`
+/// proves it. Both halves of the sugar are exercised in one equation — one
+/// n-ary argument list against a curried chain, one unannotated multi-binder λ
+/// against nested annotated ones — at a **neutral** carrier value over an
+/// **open** element type, and again at a **literal** where the fold computes.
+///
+/// This is what makes the flip a re-baseline rather than a change: an emission
+/// assertion that moved, moved because the text moved, not because the
+/// artifact did.
+#[test]
+fn the_idiomatic_and_the_explicit_spellings_are_the_same_term() {
+    ok(&format!(
+        "{LIST}
+datarepr ListTok for List<Tok> := repr::naive();
+theorem same_at_a_neutral(l: List<Tok>):
+    ListTok::fold(Nat, Zero, λ t r b => Succ(b), l)
+      = ListTok::fold()(Nat)(Zero)(λ (t: Tok) => λ (r: List<Tok>) => λ (b: Nat) => Succ(b))(l)
+{{ refl }}
+theorem same_at_a_literal():
+    ListTok::fold(Nat, Zero, λ t r b => Succ(b), Cons(TAdd, Cons(TMul, Nil)))
+      = ListTok::fold()(Nat)(Zero)(λ (t: Tok) => λ (r: List<Tok>) => λ (b: Nat) => Succ(b))
+          (Cons(TAdd, Cons(TMul, Nil)))
+{{ refl }}
+// …and the laws too, where the term is a proof rather than a value.
+theorem law_same(t: Tok):
+    ListTok::Cons_abs(t, ListTok::mk_Nil(), ListTok::Nil_inv())
+      = ListTok::Cons_abs()(t)(ListTok::mk_Nil())(ListTok::Nil_inv())
+{{ refl }}
 "
     ));
 }
@@ -215,7 +249,7 @@ fn the_minimal_repr_is_the_carrier_the_images_and_the_laws_that_are_not_refl() {
 // The defaulted fold *computes*, at the carrier: the representation of three
 // folded with a counting algebra is three.
 theorem counts_to_three():
-    BinMin::fold()(Nat)(Zero)(\u{3bb} (a0: Bin) => \u{3bb} (b0: Nat) => Succ(b0))(B1(B1(BNil)))
+    BinMin::fold(Nat, Zero, \u{3bb} a0 b0 => Succ(b0), B1(B1(BNil)))
       = Succ(Succ(Succ(Zero)))
 {{ refl }}
 
@@ -223,12 +257,12 @@ theorem counts_to_three():
 // generated `fold_law` is exactly the statement the transfer generator wants,
 // and its proof is the generated induction rather than `refl`.
 theorem anchor(s0: Nat, s1: (a: Nat) -> (b: Nat) -> Nat, r: Bin):
-    BinMin::fold()(Nat)(s0)(\u{3bb} (a0: Bin) => \u{3bb} (b0: Nat) => s1(bin_abs(a0))(b0))(r)
+    BinMin::fold(Nat, s0, \u{3bb} a0 b0 => s1(bin_abs(a0), b0), r)
       = BinMin::spec_rec(Nat, s0, s1, bin_abs(r))
-{{ BinMin::fold_law()(Nat)(s0)(s1)(r)(trivial) }}
+{{ BinMin::fold_law(Nat, s0, s1, r, trivial) }}
 
 // The defaulted `inv` is `True`, and `trivial` is what inhabits it.
-theorem inv_is_true(r: Bin): BinMin::inv()(r) {{ trivial }}
+theorem inv_is_true(r: Bin): BinMin::inv(r) {{ trivial }}
 
 // The embedding the default folds through is a real function `Nat -> Bin`, and
 // its round-trip is a real theorem — neither is `bin_of_nat`, which is in scope
@@ -262,17 +296,17 @@ datarepr TreeR for Tree {{ R := TreeC, abs := tc_abs, mk Leaf := CLeaf, mk Node 
 
 // A **neutral** carrier value under the defaulted fold, in a checking position.
 fn stk_len(r: Stk) -> Nat {{
-    StkTok::fold()(Nat)(Zero)(\u{3bb} (h: Tok) => \u{3bb} (t: Stk) => \u{3bb} (b: Nat) => Succ(b))(r)
+    StkTok::fold(Nat, Zero, \u{3bb} h t b => Succ(b), r)
 }}
 theorem stk_len_two(): stk_len(SCons(TAdd, SCons(TMul, SNil))) = Succ(Succ(Zero)) {{ refl }}
 
 // The two-recursive-children arm, anchored at a neutral `x`.
 theorem tree_anchor(s0: (n: Nat) -> Nat, s1: (l: Tree) -> (r: Tree) -> (b0: Nat) -> (b1: Nat) -> Nat,
                     x: TreeC):
-    TreeR::fold()(Nat)(s0)(\u{3bb} (l: TreeC) => \u{3bb} (r: TreeC) => \u{3bb} (b0: Nat) => \u{3bb} (b1: Nat) =>
-                                    s1(tc_abs(l))(tc_abs(r))(b0)(b1))(x)
+    TreeR::fold(Nat, s0, \u{3bb} l r b0 b1 =>
+                                    s1(tc_abs(l), tc_abs(r), b0, b1), x)
       = TreeR::spec_rec(Nat, s0, s1, tc_abs(x))
-{{ TreeR::fold_law()(Nat)(s0)(s1)(x)(trivial) }}
+{{ TreeR::fold_law(Nat, s0, s1, x, trivial) }}
 "
     ));
 }
@@ -310,8 +344,7 @@ fn a_written_fold_is_still_checked_against_the_anchor() {
     // step, and `fold_law` left to its `refl` default as a written fold's is.
     let msg = bad(&BIN_MIN.replace(
         "    mk Zero := BNil,",
-        "    fold := \u{3bb} (B: Type) => \u{3bb} (s0: B) => \
-         \u{3bb} (s1: (a0: Bin) -> (b0: B) -> B) => \u{3bb} (r: Bin) => s0,
+        "    fold := \u{3bb} B s0 s1 r => s0,
     mk Zero := BNil,",
     ));
     assert!(msg.contains("fold_law"), "{msg}");
@@ -332,15 +365,15 @@ fn a_written_fold_is_still_checked_against_the_anchor() {
 fn a_defaulted_inv_is_true_and_is_paid_with_trivial() {
     ok(&format!(
         "{BIN_MIN}
-theorem inv_is_true(r: Bin): BinMin::inv()(r) {{ trivial }}
+theorem inv_is_true(r: Bin): BinMin::inv(r) {{ trivial }}
 
 // The generated closure law is a real theorem at a **neutral** carrier value,
 // consumed in a **checking** position.
-theorem closure(a0: Bin, h: True): BinMin::inv()(binc(a0)) {{ BinMin::Succ_inv()(a0)(h) }}
+theorem closure(a0: Bin, h: True): BinMin::inv(binc(a0)) {{ BinMin::Succ_inv(a0, h) }}
 
 // Proof irrelevance reaches through the generated statement: the law's own
 // value and `trivial` are convertible.
-theorem irrelevant(a0: Bin, h: True): BinMin::Succ_inv()(a0)(h) = trivial {{ refl }}
+theorem irrelevant(a0: Bin, h: True): BinMin::Succ_inv(a0, h) = trivial {{ refl }}
 "
     ));
 }
@@ -352,7 +385,7 @@ theorem irrelevant(a0: Bin, h: True): BinMin::Succ_inv()(a0)(h) = trivial {{ ref
 fn refl_no_longer_pays_a_defaulted_inv() {
     let msg = bad(&format!(
         "{BIN_MIN}
-theorem inv_by_refl(r: Bin): BinMin::inv()(r) {{ refl }}
+theorem inv_by_refl(r: Bin): BinMin::inv(r) {{ refl }}
 "
     ));
     assert!(msg.contains("`refl` needs an `=` expected type"), "{msg}");
@@ -365,19 +398,19 @@ theorem inv_by_refl(r: Bin): BinMin::inv()(r) {{ refl }}
 fn a_written_inv_is_untouched_by_the_flip() {
     ok(&format!(
         "{BIN}
-theorem still_an_equation(r: Bin): BinNat::inv()(r) {{ refl }}
+theorem still_an_equation(r: Bin): BinNat::inv(r) {{ refl }}
 "
     ));
     let msg = bad(&format!(
         "{BIN}
-theorem not_true(r: Bin): BinNat::inv()(r) {{ trivial }}
+theorem not_true(r: Bin): BinNat::inv(r) {{ trivial }}
 "
     ));
     assert!(msg.contains("`trivial` proves `True`"), "{msg}");
 }
 
 /// A repr that writes the trivial `inv` **explicitly** is recognized too: the
-/// default's proofs are chosen off the clause text, so `inv := λ (r: R) =>
+/// default's proofs are chosen off the clause text, so `inv := λ r =>
 /// True` gets `trivial`-closed laws exactly as omission does. The generality
 /// axes ride along — an **open** element type (`Tok` is not the carrier) and a
 /// neutral scrutinee.
@@ -391,13 +424,13 @@ fn stk_abs(r: Stk) -> List<Tok> {{ match r {{ SNil => Nil, SCons(h, t) => Cons(h
 datarepr StkT for List<Tok> {{
     R := Stk,
     abs := stk_abs,
-    inv := \u{3bb} (r: Stk) => True,
+    inv := \u{3bb} r => True,
     mk Nil := SNil,
     mk Cons := SCons,
 }}
 
-theorem closes(h: Tok, t: Stk, ht: True): StkT::inv()(StkT::mk_Cons()(h)(t)) {{
-    StkT::Cons_inv()(h)(t)(ht)
+theorem closes(h: Tok, t: Stk, ht: True): StkT::inv(StkT::mk_Cons(h, t)) {{
+    StkT::Cons_inv(h, t, ht)
 }}
 "
     ));
@@ -434,7 +467,7 @@ fn a_via_derived_impl_takes_the_derived_certificate_by_transitivity() {
     let e = ok(&format!(
         "{BIN}{BIN_ADD}
 fn bin_add_fast(ra: Bin, rb: Bin) -> Bin {{
-    nat_rec_(Bin, ra, λ (a: Nat) => λ (b: Bin) => binc(b), bin_abs(rb))
+    nat_rec_(Bin, ra, λ a b => binc(b), bin_abs(rb))
 }}
 
 theorem bin_add_fast_is_derived(ra: Bin, rb: Bin):

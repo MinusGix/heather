@@ -166,9 +166,9 @@ registry is open by construction — no closed field list to amend.
 ```heather
 // Sketch: hand override for length on a vec-flavored repr
 impl length for VecList {                 // elaborates to Impl<VecList>(length)
-    body := λ (r) => r.len,               // signature: f's, with S ↦ R at
+    body := λ r => r.len,                 // signature: f's, with S ↦ R at
                                           // repr positions (+ outcomes per §2)
-    refines := λ (r) (h: inv(r)) => …,    // : body(r) = length(abs(r))
+    refines := λ r h => …,                // : body(r) = length(abs(r))
 }
 ```
 
@@ -333,7 +333,13 @@ instances can hold today, `lib/std/algebra.hthr`):
    `docs/repr-access-spellings-design.md` makes `N::⟨clause⟩` the one spelling
    and refuses the minted ones in user source, which is the same boundary
    `unnameable-generated-names` wants, drawn at resolution instead of at the
-   lexer.
+   lexer. *Amended again 2026-08-16* (`issues/idiomatic-spelling-pass.md`):
+   because the artifacts are re-parsed surface source, the **style** they are
+   written in is a standing exercise of the surface's sugar, so the emission
+   now writes what a person would — one n-ary argument list spilled across the
+   curried Π spine (`Repr_N::fold(B, s0, r)`, not `Repr_N::fold()(B)(s0)(r)`)
+   and one unannotated multi-binder λ (`λ B s0 s1 r => …`). The *names* are
+   untouched: style and naming are two questions and only the first moved.
 2. **The namespace hangs off `Repr_N`, not off `N`** as the sketch has it: a
    member declaration's qualifier has to name a *type* in scope, and `N` names
    the assembled value.
@@ -368,7 +374,7 @@ instances can hold today, `lib/std/algebra.hthr`):
    *judgmental* uniqueness of it — and it is what an omitted `inv` defaults
    to. A repr whose `inv` is **written** is untouched: the closure-law default
    is `trivial` exactly when the clause is the trivial one (omitted, or
-   written out as `λ (r: R) => True`), and `refl` otherwise.
+   written out as `λ r => True`), and `refl` otherwise.
 7. **Two rough edges in *using* the assembled value**, both worked around by
    reaching through the namespace, and both worth their own issue:
    `value.fold` is claimed by the builtin vector receiver method before the
@@ -730,7 +736,7 @@ any code, as it has every round:
    expressions an arm may contain are those well-typed under *both* readings.
    That is what forbids a recursive-child binder (§3.3's third bullet, now with
    its reason rather than its symptom), and it is what decides where a callee
-   step goes: a resolved callee is spelled `Impl_Rp_g::body()(…)` on **both**
+   step goes: a resolved callee is spelled `Impl_Rp_g::body(…)` on **both**
    sides — the two readings agree, because the `Impl`'s signature is the spec
    signature with `S ↦ R` and nothing at `S` reaches it from the algebra's own
    binders — and the bridge to the spec function `g` is built in the **closing

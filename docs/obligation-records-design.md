@@ -320,15 +320,23 @@ error: `refines` of `impl add for BinNat` is not proved
     |
   `Impl(add, BinNat)::refines` owes:
     (ra: Bin) -> (rb: Bin) -> (h0: bin_inv(ra)) -> (h1: bin_inv(rb)) ->
-      Repr_BinNat::abs()(Impl_BinNat_add::body()(ra)(rb))
-        = add(Repr_BinNat::abs()(ra), Repr_BinNat::abs()(rb))
+      BinNat::abs(Impl(add, BinNat)::body(ra, rb))
+        = add(BinNat::abs(ra), BinNat::abs(rb))
 ```
 
-The statement is printed in the *generated* vocabulary, because that is the
-vocabulary the schema is built in and the one the kernel will compare against;
-§2.2's interim is how an author restates it in their own. Sharpening that — a
-divergence trace, a statement re-spelled through the user's own definitions —
-is `issues/ai-facing-tooling.md`'s subject and is not v1.
+*The rendering above is amended twice since this round.* It printed the
+generated vocabulary — `Repr_BinNat::abs()(Impl_BinNat_add::body()(ra)(rb))` —
+because that is the vocabulary the schema is built in and the one the kernel
+compares against. `docs/repr-access-spellings-design.md` §7 then de-mangled it
+at the display boundary, so what is printed is what an author may write; and
+`issues/idiomatic-spelling-pass.md` moved the underlying schema to the
+idiomatic n-ary spelling, so the currying went too. The *stored* statement is
+still the source text the declaration is checked as — only its style changed —
+and §2.2's interim is still how an author restates it in their own vocabulary.
+
+Sharpening that further — a divergence trace, a statement re-spelled through
+the user's own definitions — is `issues/ai-facing-tooling.md`'s subject and is
+not v1.
 
 ## 3. The obligation path spelling: `::`, print-only — FINDING D
 
@@ -441,8 +449,8 @@ Written at `refines`, it
 
 ```
 (ra: Bin) -> (rb: Bin) -> (h0: bin_inv(ra)) -> (h1: bin_inv(rb)) ->
-    Repr_BinNat::abs()(Impl_BinNat_add::body()(ra)(rb))
-      = Repr_BinNat::abs()(add_derived(ra, rb))
+    Repr_BinNat::abs(Impl_BinNat_add::body(ra, rb))
+      = Repr_BinNat::abs(add_derived(ra, rb))
 ```
 
 3. and assembles `refines` as `trans(<proof>, <derived refines>)` — **no

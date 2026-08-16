@@ -565,7 +565,7 @@ impl Elaborator {
         // docs/obligation-records-design.md §1.2).
         let inv = take("inv", &mut by_name).unwrap_or_else(|| {
             inv_trivial = true;
-            format!("\u{3bb} (r: {carrier}) => True")
+            format!("\u{3bb} r => True")
         });
         let fold = take("fold", &mut by_name);
         let mut mks = Vec::new();
@@ -766,13 +766,13 @@ fn naive_clauses(name: &str, spec: &SpecView) -> Clauses {
         .collect();
     Clauses {
         carrier: s.clone(),
-        abs: format!("\u{3bb} (r: {s}) => r"),
+        abs: format!("\u{3bb} r => r"),
         // `True` itself, now that there is one: the kernel's `Unit^0` under a
         // surface name, inhabited by `trivial`
         // (`issues/true-prop-trivial-hypotheses.md`). It is in scope wherever
         // a `datarepr` is for the same reason `Nat` is — it is a kernel type,
         // not a library declaration.
-        inv: format!("\u{3bb} (r: {s}) => True"),
+        inv: format!("\u{3bb} r => True"),
         mks,
         laws: spec.ctors.iter().map(|_| (None, None)).collect(),
         // The naive fold is the spec recursor itself, not the via-abs default:
@@ -865,14 +865,21 @@ pub(crate) fn impl_record_name(repr: &str, op: &str) -> String {
     format!("Impl_{repr}_{op}")
 }
 
-/// `λ (x: T) => λ (y: U) => body`, or `body` when there are no binders.
+/// `λ x y => body`, or `body` when there are no binders.
+///
+/// The **idiomatic** spelling (`issues/idiomatic-spelling-pass.md`): one λ over
+/// all the binders, and no annotations. Every λ this generator emits stands in
+/// a *checking* position — a declaration body at its declared type, or an
+/// argument of a call whose head's signature is known — so the domains are
+/// determined and writing them out only made the emission unreadable. The
+/// binder types are still computed by the callers, because they are what the
+/// surrounding Π is built from; they are simply not spelled twice.
 pub(crate) fn lams(bs: &[(String, String)], body: &str) -> String {
-    let mut s = String::new();
-    for (n, t) in bs {
-        s.push_str(&format!("\u{3bb} ({n}: {t}) => "));
+    if bs.is_empty() {
+        return body.to_string();
     }
-    s.push_str(body);
-    s
+    let ns: Vec<&str> = bs.iter().map(|(n, _)| n.as_str()).collect();
+    format!("\u{3bb} {} => {body}", ns.join(" "))
 }
 
 /// `(x: T) -> (y: U) -> cod`.
@@ -891,14 +898,22 @@ pub(crate) fn params_src(bs: &[(String, String)]) -> String {
     bs.iter().map(|(n, t)| format!("{n}: {t}")).collect::<Vec<_>>().join(", ")
 }
 
-/// `f(a)(b)` — curried application, the shape every function-typed *field* of
-/// the record has (§1.1 writes them curried).
+/// `f(a, b)` — n-ary application, the **idiomatic** spelling
+/// (`issues/idiomatic-spelling-pass.md`).
+///
+/// The record's function-typed fields are still declared curried (§1.1), and
+/// each is still reached through a 0-ary declaration; what changed is only how
+/// the emission *writes* the call. One argument list spills across the whole
+/// curried Π spine, so a `()` already sitting on the head — `Repr_N::fold()` —
+/// is absorbed rather than nested: `Repr_N::fold(B, s0, r)` elaborates to the
+/// very term `Repr_N::fold()(B)(s0)(r)` did. A head with no arguments to apply
+/// keeps whatever shape it arrived with.
 pub(crate) fn appc(head: &str, args: &[String]) -> String {
-    let mut s = head.to_string();
-    for a in args {
-        s.push_str(&format!("({a})"));
+    if args.is_empty() {
+        return head.to_string();
     }
-    s
+    let h = head.strip_suffix("()").unwrap_or(head);
+    format!("{h}({})", args.join(", "))
 }
 
 /// One `fold` step's type at carrier `at`: the constructor's fields, then one

@@ -246,7 +246,7 @@ theorem bin_succ_abs_true(a0: Bin, h0: True):
 // `BinNat_spec_rec`, which is what lets the hand-written law below discharge
 // the generated obligation.
 fn nat_rec_(B: Type, z: B, s: (a: Nat) -> (b: B) -> B, x: Nat) -> B {
-    match x { Zero => z, Succ(k) => s(k)(nat_rec_(B, z, s, k)) }
+    match x { Zero => z, Succ(k) => s(k, nat_rec_(B, z, s, k)) }
 }
 
 fn bin_of_nat(n: Nat) -> Bin { match n { Zero => BNil, Succ(m) => binc(bin_of_nat(m)) } }
@@ -261,32 +261,32 @@ theorem bin_roundtrip(m: Nat): bin_abs(bin_of_nat(m)) = m {
 // The anchor. Slow on purpose (§1.1): it goes through the spec value, which
 // is exactly what the cost basis exists to bypass.
 fn bin_fold(B: Type, s0: B, s1: (a0: Bin) -> (b0: B) -> B, r: Bin) -> B {
-    nat_rec_(B, s0, λ (m: Nat) => λ (b: B) => s1(bin_of_nat(m))(b), bin_abs(r))
+    nat_rec_(B, s0, λ m b => s1(bin_of_nat(m), b), bin_abs(r))
 }
 
 theorem natrec_cong(B: Type, z: B, s1: (a: Nat) -> (b: B) -> B,
                     s2: (a: Nat) -> (b: B) -> B,
-                    h: (a: Nat) -> (b: B) -> s1(a)(b) = s2(a)(b), n: Nat):
+                    h: (a: Nat) -> (b: B) -> s1(a, b) = s2(a, b), n: Nat):
     nat_rec_(B, z, s1, n) = nat_rec_(B, z, s2, n)
 {
     match n {
         Zero => refl,
         Succ(k) => trans(
             j(natrec_cong(B, z, s1, s2, h, k),
-              λ y q => s1(k)(nat_rec_(B, z, s1, k)) = s1(k)(y), refl),
-            h(k)(nat_rec_(B, z, s2, k))),
+              λ y q => s1(k, nat_rec_(B, z, s1, k)) = s1(k, y), refl),
+            h(k, nat_rec_(B, z, s2, k))),
     }
 }
 
 theorem bin_fold_law(B: Type, s0: B, s1: (a0: Nat) -> (b0: B) -> B, r: Bin,
                      h: (Zero = Zero)):
-    bin_fold(B, s0, λ (a0: Bin) => λ (b0: B) => s1(bin_abs(a0))(b0), r)
+    bin_fold(B, s0, λ a0 b0 => s1(bin_abs(a0), b0), r)
       = nat_rec_(B, s0, s1, bin_abs(r))
 {
-    natrec_cong(B, s0, λ (m: Nat) => λ (b: B) => s1(bin_abs(bin_of_nat(m)))(b), s1,
-                λ (a: Nat) => λ (b: B) =>
+    natrec_cong(B, s0, λ m b => s1(bin_abs(bin_of_nat(m)), b), s1,
+                λ a b =>
                     j(bin_roundtrip(a),
-                      λ y q => s1(bin_abs(bin_of_nat(a)))(b) = s1(y)(b), refl),
+                      λ y q => s1(bin_abs(bin_of_nat(a)), b) = s1(y, b), refl),
                 bin_abs(r))
 }
 
@@ -353,7 +353,7 @@ theorem bin_canon_succ(a0: Bin, h0: bin_canon(a0)): bin_canon(binc(a0)) {
 // The anchor law, restated under the stronger `inv` (which it does not use).
 theorem bin_fold_law_canon(B: Type, s0: B, s1: (a0: Nat) -> (b0: B) -> B, r: Bin,
                            h: bin_canon(r)):
-    bin_fold(B, s0, λ (a0: Bin) => λ (b0: B) => s1(bin_abs(a0))(b0), r)
+    bin_fold(B, s0, λ a0 b0 => s1(bin_abs(a0), b0), r)
       = nat_rec_(B, s0, s1, bin_abs(r))
 { bin_fold_law(B, s0, s1, r, refl) }
 
@@ -408,7 +408,7 @@ pub const UNARY_CANON: &str = r#"
 inductive Un { UZ, US(u: Un) }
 
 fn nat_rec_(B: Type, z: B, s: (a: Nat) -> (b: B) -> B, x: Nat) -> B {
-    match x { Zero => z, Succ(k) => s(k)(nat_rec_(B, z, s, k)) }
+    match x { Zero => z, Succ(k) => s(k, nat_rec_(B, z, s, k)) }
 }
 
 fn un_abs(r: Un) -> Nat { match r { UZ => Zero, US(u) => Succ(un_abs(u)) } }
@@ -423,27 +423,27 @@ theorem un_canon_succ(a0: Un, h0: un_canon(a0)): un_canon(US(a0)) {
 }
 
 fn un_fold(B: Type, s0: B, s1: (a0: Un) -> (b0: B) -> B, r: Un) -> B {
-    match r { UZ => s0, US(u) => s1(u)(un_fold(B, s0, s1, u)) }
+    match r { UZ => s0, US(u) => s1(u, un_fold(B, s0, s1, u)) }
 }
 
 // The anchor law holds without the invariant, and the clause restates it under
 // one: the recursive call would otherwise owe `un_canon` of the child, which
 // only injectivity of `US` gives back.
 theorem un_fold_law_free(B: Type, s0: B, s1: (a0: Nat) -> (b0: B) -> B, r: Un):
-    un_fold(B, s0, λ (a0: Un) => λ (b0: B) => s1(un_abs(a0))(b0), r)
+    un_fold(B, s0, λ a0 b0 => s1(un_abs(a0), b0), r)
       = nat_rec_(B, s0, s1, un_abs(r))
 {
     match r {
         UZ => refl,
         US(u) => j(un_fold_law_free(B, s0, s1, u),
-                   λ y q => s1(un_abs(u))(un_fold(B, s0,
-                                λ (a0: Un) => λ (b0: B) => s1(un_abs(a0))(b0), u))
-                              = s1(un_abs(u))(y), refl),
+                   λ y q => s1(un_abs(u), un_fold(B, s0,
+                                λ a0 b0 => s1(un_abs(a0), b0), u))
+                              = s1(un_abs(u), y), refl),
     }
 }
 
 theorem un_fold_law(B: Type, s0: B, s1: (a0: Nat) -> (b0: B) -> B, r: Un, h: un_canon(r)):
-    un_fold(B, s0, λ (a0: Un) => λ (b0: B) => s1(un_abs(a0))(b0), r)
+    un_fold(B, s0, λ a0 b0 => s1(un_abs(a0), b0), r)
       = nat_rec_(B, s0, s1, un_abs(r))
 { un_fold_law_free(B, s0, s1, r) }
 
@@ -466,19 +466,19 @@ pub const BIN_ADD: &str = r#"
 fn add(a: Nat, b: Nat) -> Nat { match b { Zero => a, Succ(k) => Succ(add(a, k)) } }
 
 fn bin_add_derived(ra: Bin, rb: Bin) -> Bin {
-    bin_fold(Bin, ra, λ (t: Bin) => λ (acc: Bin) => binc(acc), rb)
+    bin_fold(Bin, ra, λ t acc => binc(acc), rb)
 }
 
 // `binc` iterated `n` times commutes with `abs` into `add`. The only
 // induction the cost basis needs here.
 theorem bin_iter_abs(ra: Bin, n: Nat):
-    bin_abs(nat_rec_(Bin, ra, λ (a: Nat) => λ (b: Bin) => binc(b), n))
+    bin_abs(nat_rec_(Bin, ra, λ a b => binc(b), n))
       = add(bin_abs(ra), n)
 {
     match n {
         Zero => refl,
         Succ(k) => trans(
-            bin_succ_abs(nat_rec_(Bin, ra, λ (a: Nat) => λ (b: Bin) => binc(b), k)),
+            bin_succ_abs(nat_rec_(Bin, ra, λ a b => binc(b), k)),
             cong_succ(bin_iter_abs(ra, k))),
     }
 }
