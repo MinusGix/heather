@@ -36,22 +36,22 @@ fn length(l: List<Tok>) -> Nat {{ match l {{ Nil => Zero, Cons(h, t) => Succ(len
 // Phase 2: the structural match becomes the anchor fold, with the algebra
 // read off the arms and the recursive occurrence at the accumulator slot.
 fn length_derived(r: List<Tok>) -> Nat {{
-    Repr_ListTok::fold()(Nat)(Zero)(λ (a0: Tok) => λ (a1: List<Tok>) => λ (b0: Nat) => Succ(b0))(r)
+    ListTok::fold()(Nat)(Zero)(λ (a0: Tok) => λ (a1: List<Tok>) => λ (b0: Nat) => Succ(b0))(r)
 }}
 
 // Phase 4, part one: the spec fn agrees with its own recursor unfolding.
 // NOT definitional — both sides are recursive globals — so this is an
 // induction the generator has to emit.
 theorem length_is_rec(l: List<Tok>):
-    ListTok_spec_rec(Nat, Zero, λ (a0: Tok) => λ (a1: List<Tok>) => λ (b0: Nat) => Succ(b0), l)
+    ListTok::spec_rec(Nat, Zero, λ (a0: Tok) => λ (a1: List<Tok>) => λ (b0: Nat) => Succ(b0), l)
       = length(l)
 {{ match l {{ Nil => refl, Cons(h, t) => cong_succ(length_is_rec(t)) }} }}
 
 // Phase 4, part two: `fold_law` opens the anchor, the lemma above closes it.
 theorem length_derived_refines(r: List<Tok>, h0: (Zero = Zero)):
-    length_derived(r) = length(Repr_ListTok::abs()(r))
+    length_derived(r) = length(ListTok::abs()(r))
 {{
-    trans(Repr_ListTok::fold_law()(Nat)(Zero)
+    trans(ListTok::fold_law()(Nat)(Zero)
             (λ (a0: Tok) => λ (a1: List<Tok>) => λ (b0: Nat) => Succ(b0))(r)(h0),
           length_is_rec(r))
 }}
@@ -77,20 +77,20 @@ fn hand_run_a_derived_impl_at_bin_where_the_result_is_the_spec_type() {
 fn double_spec(n: Nat) -> Nat {{ match n {{ Zero => Zero, Succ(k) => Succ(Succ(double_spec(k))) }} }}
 
 fn double_derived(r: Bin) -> Bin {{
-    Repr_BinNat::fold()(Bin)(BNil)(λ (a0: Bin) => λ (b0: Bin) => binc(binc(b0)))(r)
+    BinNat::fold()(Bin)(BNil)(λ (a0: Bin) => λ (b0: Bin) => binc(binc(b0)))(r)
 }}
 
 // `abs` pushed through the algebra, by induction, on the image law.
 theorem double_abs_alg(n: Nat):
-    bin_abs(BinNat_spec_rec(Bin, BNil, λ (a: Nat) => λ (b: Bin) => binc(binc(b)), n))
+    bin_abs(BinNat::spec_rec(Bin, BNil, λ (a: Nat) => λ (b: Bin) => binc(binc(b)), n))
       = double_spec(n)
 {{
     match n {{
         Zero => refl,
         Succ(k) => trans(
-            bin_succ_abs(binc(BinNat_spec_rec(Bin, BNil, λ (a: Nat) => λ (b: Bin) => binc(binc(b)), k))),
+            bin_succ_abs(binc(BinNat::spec_rec(Bin, BNil, λ (a: Nat) => λ (b: Bin) => binc(binc(b)), k))),
             cong_succ(trans(
-                bin_succ_abs(BinNat_spec_rec(Bin, BNil, λ (a: Nat) => λ (b: Bin) => binc(binc(b)), k)),
+                bin_succ_abs(BinNat::spec_rec(Bin, BNil, λ (a: Nat) => λ (b: Bin) => binc(binc(b)), k)),
                 cong_succ(double_abs_alg(k))))),
     }}
 }}
@@ -98,7 +98,7 @@ theorem double_abs_alg(n: Nat):
 theorem double_derived_refines(r: Bin, h0: (Zero = Zero)):
     bin_abs(double_derived(r)) = double_spec(bin_abs(r))
 {{
-    trans(cong_bin_abs(Repr_BinNat::fold_law()(Bin)(BNil)
+    trans(cong_bin_abs(BinNat::fold_law()(Bin)(BNil)
              (λ (a: Nat) => λ (b: Bin) => binc(binc(b)))(r)(h0)),
           double_abs_alg(bin_abs(r)))
 }}
@@ -128,55 +128,55 @@ fn hand_run_the_generated_shape_for_a_repr_typed_result_at_bin() {
 fn double_spec(n: Nat) -> Nat {{ match n {{ Zero => Zero, Succ(k) => Succ(Succ(double_spec(k))) }} }}
 
 fn double_spec_derived(n: Bin) -> Bin {{
-    Repr_BinNat::fold()(Bin)(Repr_BinNat::mk_Zero())(λ (a0: Bin) => λ (b0: Bin) => Repr_BinNat::mk_Succ()(Repr_BinNat::mk_Succ()(b0)))(n)
+    BinNat::fold()(Bin)(BinNat::mk_Zero())(λ (a0: Bin) => λ (b0: Bin) => BinNat::mk_Succ()(BinNat::mk_Succ()(b0)))(n)
 }}
 
 // The third lemma: the fold's accumulator satisfies `inv`, by induction over
 // the spec value, one image closure law per constructor node.
 theorem double_spec_inv_pres(x: Nat):
-    Repr_BinNat::inv()(BinNat_spec_rec(Bin, Repr_BinNat::mk_Zero(), λ (a0: Nat) => λ (b0: Bin) => Repr_BinNat::mk_Succ()(Repr_BinNat::mk_Succ()(b0)), x))
+    BinNat::inv()(BinNat::spec_rec(Bin, BinNat::mk_Zero(), λ (a0: Nat) => λ (b0: Bin) => BinNat::mk_Succ()(BinNat::mk_Succ()(b0)), x))
 {{
     match x {{
-        Zero => Repr_BinNat::Zero_inv(),
-        Succ(a0) => Repr_BinNat::Succ_inv()(Repr_BinNat::mk_Succ()(BinNat_spec_rec(Bin, Repr_BinNat::mk_Zero(), λ (a0: Nat) => λ (b0: Bin) => Repr_BinNat::mk_Succ()(Repr_BinNat::mk_Succ()(b0)), a0)))(Repr_BinNat::Succ_inv()(BinNat_spec_rec(Bin, Repr_BinNat::mk_Zero(), λ (a0: Nat) => λ (b0: Bin) => Repr_BinNat::mk_Succ()(Repr_BinNat::mk_Succ()(b0)), a0))(double_spec_inv_pres(a0))),
+        Zero => BinNat::Zero_inv(),
+        Succ(a0) => BinNat::Succ_inv()(BinNat::mk_Succ()(BinNat::spec_rec(Bin, BinNat::mk_Zero(), λ (a0: Nat) => λ (b0: Bin) => BinNat::mk_Succ()(BinNat::mk_Succ()(b0)), a0)))(BinNat::Succ_inv()(BinNat::spec_rec(Bin, BinNat::mk_Zero(), λ (a0: Nat) => λ (b0: Bin) => BinNat::mk_Succ()(BinNat::mk_Succ()(b0)), a0))(double_spec_inv_pres(a0))),
     }}
 }}
 
 // `abs` pushed through the image spine, by induction: one commutation law per
 // constructor node, a `j` chain over the recursive argument positions.
 theorem double_spec_abs_alg(x: Nat):
-    Repr_BinNat::abs()(BinNat_spec_rec(Bin, Repr_BinNat::mk_Zero(), λ (a0: Nat) => λ (b0: Bin) => Repr_BinNat::mk_Succ()(Repr_BinNat::mk_Succ()(b0)), x))
+    BinNat::abs()(BinNat::spec_rec(Bin, BinNat::mk_Zero(), λ (a0: Nat) => λ (b0: Bin) => BinNat::mk_Succ()(BinNat::mk_Succ()(b0)), x))
       = double_spec(x)
 {{
     match x {{
-        Zero => Repr_BinNat::Zero_abs(),
+        Zero => BinNat::Zero_abs(),
         Succ(a0) => trans(
-            Repr_BinNat::Succ_abs()(Repr_BinNat::mk_Succ()(BinNat_spec_rec(Bin, Repr_BinNat::mk_Zero(), λ (a0: Nat) => λ (b0: Bin) => Repr_BinNat::mk_Succ()(Repr_BinNat::mk_Succ()(b0)), a0)))(Repr_BinNat::Succ_inv()(BinNat_spec_rec(Bin, Repr_BinNat::mk_Zero(), λ (a0: Nat) => λ (b0: Bin) => Repr_BinNat::mk_Succ()(Repr_BinNat::mk_Succ()(b0)), a0))(double_spec_inv_pres(a0))),
+            BinNat::Succ_abs()(BinNat::mk_Succ()(BinNat::spec_rec(Bin, BinNat::mk_Zero(), λ (a0: Nat) => λ (b0: Bin) => BinNat::mk_Succ()(BinNat::mk_Succ()(b0)), a0)))(BinNat::Succ_inv()(BinNat::spec_rec(Bin, BinNat::mk_Zero(), λ (a0: Nat) => λ (b0: Bin) => BinNat::mk_Succ()(BinNat::mk_Succ()(b0)), a0))(double_spec_inv_pres(a0))),
             j(trans(
-                Repr_BinNat::Succ_abs()(BinNat_spec_rec(Bin, Repr_BinNat::mk_Zero(), λ (a0: Nat) => λ (b0: Bin) => Repr_BinNat::mk_Succ()(Repr_BinNat::mk_Succ()(b0)), a0))(double_spec_inv_pres(a0)),
+                BinNat::Succ_abs()(BinNat::spec_rec(Bin, BinNat::mk_Zero(), λ (a0: Nat) => λ (b0: Bin) => BinNat::mk_Succ()(BinNat::mk_Succ()(b0)), a0))(double_spec_inv_pres(a0)),
                 j(double_spec_abs_alg(a0),
-                  λ y q => Succ(Repr_BinNat::abs()(BinNat_spec_rec(Bin, Repr_BinNat::mk_Zero(), λ (a0: Nat) => λ (b0: Bin) => Repr_BinNat::mk_Succ()(Repr_BinNat::mk_Succ()(b0)), a0))) = Succ(y),
+                  λ y q => Succ(BinNat::abs()(BinNat::spec_rec(Bin, BinNat::mk_Zero(), λ (a0: Nat) => λ (b0: Bin) => BinNat::mk_Succ()(BinNat::mk_Succ()(b0)), a0))) = Succ(y),
                   refl)),
-              λ y q => Succ(Repr_BinNat::abs()(Repr_BinNat::mk_Succ()(BinNat_spec_rec(Bin, Repr_BinNat::mk_Zero(), λ (a0: Nat) => λ (b0: Bin) => Repr_BinNat::mk_Succ()(Repr_BinNat::mk_Succ()(b0)), a0)))) = Succ(y),
+              λ y q => Succ(BinNat::abs()(BinNat::mk_Succ()(BinNat::spec_rec(Bin, BinNat::mk_Zero(), λ (a0: Nat) => λ (b0: Bin) => BinNat::mk_Succ()(BinNat::mk_Succ()(b0)), a0)))) = Succ(y),
               refl)),
     }}
 }}
 
-theorem double_spec_derived_refines(n: Bin, h0: Repr_BinNat::inv()(n)):
-    Repr_BinNat::abs()(double_spec_derived(n)) = double_spec(Repr_BinNat::abs()(n))
+theorem double_spec_derived_refines(n: Bin, h0: BinNat::inv()(n)):
+    BinNat::abs()(double_spec_derived(n)) = double_spec(BinNat::abs()(n))
 {{
-    trans(j(Repr_BinNat::fold_law()(Bin)(Repr_BinNat::mk_Zero())(λ (a0: Nat) => λ (b0: Bin) => Repr_BinNat::mk_Succ()(Repr_BinNat::mk_Succ()(b0)))(n)(h0),
-            λ y q => Repr_BinNat::abs()(double_spec_derived(n)) = Repr_BinNat::abs()(y),
+    trans(j(BinNat::fold_law()(Bin)(BinNat::mk_Zero())(λ (a0: Nat) => λ (b0: Bin) => BinNat::mk_Succ()(BinNat::mk_Succ()(b0)))(n)(h0),
+            λ y q => BinNat::abs()(double_spec_derived(n)) = BinNat::abs()(y),
             refl),
-          double_spec_abs_alg(Repr_BinNat::abs()(n)))
+          double_spec_abs_alg(BinNat::abs()(n)))
 }}
 
-theorem double_spec_derived_inv(n: Bin, h0: Repr_BinNat::inv()(n)):
-    Repr_BinNat::inv()(double_spec_derived(n))
+theorem double_spec_derived_inv(n: Bin, h0: BinNat::inv()(n)):
+    BinNat::inv()(double_spec_derived(n))
 {{
-    j(sym(Repr_BinNat::fold_law()(Bin)(Repr_BinNat::mk_Zero())(λ (a0: Nat) => λ (b0: Bin) => Repr_BinNat::mk_Succ()(Repr_BinNat::mk_Succ()(b0)))(n)(h0)),
-      λ y q => Repr_BinNat::inv()(y),
-      double_spec_inv_pres(Repr_BinNat::abs()(n)))
+    j(sym(BinNat::fold_law()(Bin)(BinNat::mk_Zero())(λ (a0: Nat) => λ (b0: Bin) => BinNat::mk_Succ()(BinNat::mk_Succ()(b0)))(n)(h0)),
+      λ y q => BinNat::inv()(y),
+      double_spec_inv_pres(BinNat::abs()(n)))
 }}
 
 impl double_spec for BinNat {{
@@ -199,51 +199,51 @@ impl double_spec for BinNat {{
 /// text is otherwise written out as the generator emits it.
 #[test]
 fn hand_run_a_repr_typed_result_where_inv_preservation_has_content() {
-    let alg = "Repr_BinC::mk_Zero(), λ (a0: Nat) => λ (b0: Bin) => Repr_BinC::mk_Succ()(Repr_BinC::mk_Succ()(b0))";
-    let sr = |x: &str| format!("BinC_spec_rec(Bin, {alg}, {x})");
+    let alg = "BinC::mk_Zero(), λ (a0: Nat) => λ (b0: Bin) => BinC::mk_Succ()(BinC::mk_Succ()(b0))";
+    let sr = |x: &str| format!("BinC::spec_rec(Bin, {alg}, {x})");
     let (sr_a0, sr_x) = (sr("a0"), sr("x"));
     ok(&format!(
         "{BIN_CANON}
 fn double_spec(n: Nat) -> Nat {{ match n {{ Zero => Zero, Succ(k) => Succ(Succ(double_spec(k))) }} }}
 
 fn double_spec_derived(n: Bin) -> Bin {{
-    Repr_BinC::fold()(Bin)(Repr_BinC::mk_Zero())(λ (a0: Bin) => λ (b0: Bin) => Repr_BinC::mk_Succ()(Repr_BinC::mk_Succ()(b0)))(n)
+    BinC::fold()(Bin)(BinC::mk_Zero())(λ (a0: Bin) => λ (b0: Bin) => BinC::mk_Succ()(BinC::mk_Succ()(b0)))(n)
 }}
 
-theorem double_spec_inv_pres(x: Nat): Repr_BinC::inv()({sr_x}) {{
+theorem double_spec_inv_pres(x: Nat): BinC::inv()({sr_x}) {{
     match x {{
-        Zero => Repr_BinC::Zero_inv(),
-        Succ(a0) => Repr_BinC::Succ_inv()(Repr_BinC::mk_Succ()({sr_a0}))(Repr_BinC::Succ_inv()({sr_a0})(double_spec_inv_pres(a0))),
+        Zero => BinC::Zero_inv(),
+        Succ(a0) => BinC::Succ_inv()(BinC::mk_Succ()({sr_a0}))(BinC::Succ_inv()({sr_a0})(double_spec_inv_pres(a0))),
     }}
 }}
 
-theorem double_spec_abs_alg(x: Nat): Repr_BinC::abs()({sr_x}) = double_spec(x) {{
+theorem double_spec_abs_alg(x: Nat): BinC::abs()({sr_x}) = double_spec(x) {{
     match x {{
-        Zero => Repr_BinC::Zero_abs(),
+        Zero => BinC::Zero_abs(),
         Succ(a0) => trans(
-            Repr_BinC::Succ_abs()(Repr_BinC::mk_Succ()({sr_a0}))(Repr_BinC::Succ_inv()({sr_a0})(double_spec_inv_pres(a0))),
+            BinC::Succ_abs()(BinC::mk_Succ()({sr_a0}))(BinC::Succ_inv()({sr_a0})(double_spec_inv_pres(a0))),
             j(trans(
-                Repr_BinC::Succ_abs()({sr_a0})(double_spec_inv_pres(a0)),
+                BinC::Succ_abs()({sr_a0})(double_spec_inv_pres(a0)),
                 j(double_spec_abs_alg(a0),
-                  λ y q => Succ(Repr_BinC::abs()({sr_a0})) = Succ(y), refl)),
-              λ y q => Succ(Repr_BinC::abs()(Repr_BinC::mk_Succ()({sr_a0}))) = Succ(y), refl)),
+                  λ y q => Succ(BinC::abs()({sr_a0})) = Succ(y), refl)),
+              λ y q => Succ(BinC::abs()(BinC::mk_Succ()({sr_a0}))) = Succ(y), refl)),
     }}
 }}
 
-theorem double_spec_derived_refines(n: Bin, h0: Repr_BinC::inv()(n)):
-    Repr_BinC::abs()(double_spec_derived(n)) = double_spec(Repr_BinC::abs()(n))
+theorem double_spec_derived_refines(n: Bin, h0: BinC::inv()(n)):
+    BinC::abs()(double_spec_derived(n)) = double_spec(BinC::abs()(n))
 {{
-    trans(j(Repr_BinC::fold_law()(Bin)(Repr_BinC::mk_Zero())(λ (a0: Nat) => λ (b0: Bin) => Repr_BinC::mk_Succ()(Repr_BinC::mk_Succ()(b0)))(n)(h0),
-            λ y q => Repr_BinC::abs()(double_spec_derived(n)) = Repr_BinC::abs()(y), refl),
-          double_spec_abs_alg(Repr_BinC::abs()(n)))
+    trans(j(BinC::fold_law()(Bin)(BinC::mk_Zero())(λ (a0: Nat) => λ (b0: Bin) => BinC::mk_Succ()(BinC::mk_Succ()(b0)))(n)(h0),
+            λ y q => BinC::abs()(double_spec_derived(n)) = BinC::abs()(y), refl),
+          double_spec_abs_alg(BinC::abs()(n)))
 }}
 
-theorem double_spec_derived_inv(n: Bin, h0: Repr_BinC::inv()(n)):
-    Repr_BinC::inv()(double_spec_derived(n))
+theorem double_spec_derived_inv(n: Bin, h0: BinC::inv()(n)):
+    BinC::inv()(double_spec_derived(n))
 {{
-    j(sym(Repr_BinC::fold_law()(Bin)(Repr_BinC::mk_Zero())(λ (a0: Nat) => λ (b0: Bin) => Repr_BinC::mk_Succ()(Repr_BinC::mk_Succ()(b0)))(n)(h0)),
-      λ y q => Repr_BinC::inv()(y),
-      double_spec_inv_pres(Repr_BinC::abs()(n)))
+    j(sym(BinC::fold_law()(Bin)(BinC::mk_Zero())(λ (a0: Nat) => λ (b0: Bin) => BinC::mk_Succ()(BinC::mk_Succ()(b0)))(n)(h0)),
+      λ y q => BinC::inv()(y),
+      double_spec_inv_pres(BinC::abs()(n)))
 }}
 
 impl double_spec for BinC {{
@@ -264,7 +264,10 @@ fn transfer(e: &mut Elaborator, op: &str, repr: &str) -> String {
         Ok(em) => em,
         Err(r) => panic!("`{op}` at `{repr}` declined: {r}"),
     };
-    if let Err(err) = e.elab_source(&em.text) {
+    // Generated text, elaborated as generated text: the emission spells the
+    // minted names, which are not the surface
+    // (docs/repr-access-spellings-design.md §6).
+    if let Err(err) = e.elab_generated_source(&em.text) {
         panic!("emission for `{op}` did not check:\n{}\n{}", em.text, err.render(&em.text));
     }
     em.text
@@ -439,7 +442,7 @@ fn mirror(x: Tree) -> Tree {{
 
 /// The transfer machinery on top of a **defaulted** fold
 /// (`issues/repr-fold-via-abs-default.md`): the generator consumes
-/// `Repr_BinMin::fold()` and `fold_law()` without knowing that neither was
+/// `BinMin::fold()` and `fold_law()` without knowing that neither was
 /// written, and the `Impl` it registers computes at the carrier.
 #[test]
 fn a_transfer_at_a_repr_whose_fold_is_defaulted() {
@@ -509,7 +512,7 @@ fn the_same_mutation_is_invisible_where_fold_is_defined_through_abs() {
     let (mut e, text) = base_double();
     let bad = text.replacen("j(sym(", "j((", 1);
     assert_ne!(bad, text, "the mutation must apply");
-    if let Err(err) = e.elab_source(&bad) {
+    if let Err(err) = e.elab_generated_source(&bad) {
         panic!(
             "the transport direction is expected to be UNOBSERVABLE at `BinC`; \
              if this now fails, design §3.3 note 5 has changed: {}",
@@ -535,8 +538,13 @@ fn length(l: List<Tok>) -> Nat {{ match l {{ Nil => Zero, Cons(h, t) => Succ(len
     (e, text)
 }
 
+/// A perturbed — or hand-forced — *emission*, which must not check. Through
+/// the generated entry point, so that the refusal is the mutation's and not the
+/// surface's refusal to spell a generated name
+/// (docs/repr-access-spellings-design.md §6): a control that passes for the
+/// wrong reason is worse than no control.
 fn refused(e: &mut Elaborator, text: &str, what: &str) {
-    if e.elab_source(text).is_ok() {
+    if e.elab_generated_source(text).is_ok() {
         panic!("{what} elaborated, but it must be refused:\n{text}");
     }
 }
@@ -772,18 +780,18 @@ fn single(t: Tok) -> List<Tok> {{ Cons(t, Nil) }}
 
 // `length`'s `Impl`, in the shape the generator emits.
 fn length_derived(r: List<Tok>) -> Nat {{
-    Repr_ListTok::fold()(Nat)(Zero)(λ (a0: Tok) => λ (a1: List<Tok>) => λ (b0: Nat) => Succ(b0))(r)
+    ListTok::fold()(Nat)(Zero)(λ (a0: Tok) => λ (a1: List<Tok>) => λ (b0: Nat) => Succ(b0))(r)
 }}
 
 theorem length_is_rec(l: List<Tok>):
-    ListTok_spec_rec(Nat, Zero, λ (a0: Tok) => λ (a1: List<Tok>) => λ (b0: Nat) => Succ(b0), l)
+    ListTok::spec_rec(Nat, Zero, λ (a0: Tok) => λ (a1: List<Tok>) => λ (b0: Nat) => Succ(b0), l)
       = length(l)
 {{ match l {{ Nil => refl, Cons(h, t) => cong_succ(length_is_rec(t)) }} }}
 
 theorem length_derived_refines(r: List<Tok>, h0: (Zero = Zero)):
-    length_derived(r) = length(Repr_ListTok::abs()(r))
+    length_derived(r) = length(ListTok::abs()(r))
 {{
-    trans(Repr_ListTok::fold_law()(Nat)(Zero)
+    trans(ListTok::fold_law()(Nat)(Zero)
             (λ (a0: Tok) => λ (a1: List<Tok>) => λ (b0: Nat) => Succ(b0))(r)(h0),
           length_is_rec(r))
 }}
@@ -795,8 +803,8 @@ impl length for ListTok {{
 
 // `single`'s `Impl`, hand-written: a separate global that happens to agree.
 fn single_impl(t: Tok) -> List<Tok> {{ Cons(t, Nil) }}
-theorem single_impl_refines(t: Tok): Repr_ListTok::abs()(single_impl(t)) = single(t) {{ refl }}
-theorem single_impl_inv(t: Tok): Repr_ListTok::inv()(single_impl(t)) {{ refl }}
+theorem single_impl_refines(t: Tok): ListTok::abs()(single_impl(t)) = single(t) {{ refl }}
+theorem single_impl_inv(t: Tok): ListTok::inv()(single_impl(t)) {{ refl }}
 
 impl single for ListTok {{
     body := single_impl,
@@ -810,47 +818,47 @@ fn count(l: List<Tok>) -> Nat {{
 }}
 
 fn count_derived(l: List<Tok>) -> Nat {{
-    Repr_ListTok::fold()(Nat)(Zero)(λ (h: Tok) => λ (t: List<Tok>) => λ (b0: Nat) =>
-        add(Impl_ListTok_length::body()(Impl_ListTok_single::body()(h)), b0))(l)
+    ListTok::fold()(Nat)(Zero)(λ (h: Tok) => λ (t: List<Tok>) => λ (b0: Nat) =>
+        add(Impl(length, ListTok)::body()(Impl(single, ListTok)::body()(h)), b0))(l)
 }}
 
 // The closing induction, with one rewrite per *site*: the callee step first
 // (closed by the callees' own `refines`), then the recursive occurrence.
 theorem count_is_rec(x: List<Tok>):
-    ListTok_spec_rec(Nat, Zero, λ (h: Tok) => λ (t: List<Tok>) => λ (b0: Nat) =>
-        add(Impl_ListTok_length::body()(Impl_ListTok_single::body()(h)), b0), x)
+    ListTok::spec_rec(Nat, Zero, λ (h: Tok) => λ (t: List<Tok>) => λ (b0: Nat) =>
+        add(Impl(length, ListTok)::body()(Impl(single, ListTok)::body()(h)), b0), x)
       = count(x)
 {{
     match x {{
         Nil => refl,
         Cons(h, t) => trans(
-            j(trans(Impl_ListTok_length::refines()(Impl_ListTok_single::body()(h))
-                        (Impl_ListTok_single::refines_inv()(h)),
-                    j(Impl_ListTok_single::refines()(h),
-                      λ y q => length(Repr_ListTok::abs()(Impl_ListTok_single::body()(h))) = length(y),
+            j(trans(Impl(length, ListTok)::refines()(Impl(single, ListTok)::body()(h))
+                        (Impl(single, ListTok)::refines_inv()(h)),
+                    j(Impl(single, ListTok)::refines()(h),
+                      λ y q => length(ListTok::abs()(Impl(single, ListTok)::body()(h))) = length(y),
                       refl)),
-              λ y q => add(Impl_ListTok_length::body()(Impl_ListTok_single::body()(h)),
-                           ListTok_spec_rec(Nat, Zero, λ (h: Tok) => λ (t: List<Tok>) => λ (b0: Nat) =>
-                               add(Impl_ListTok_length::body()(Impl_ListTok_single::body()(h)), b0), t))
+              λ y q => add(Impl(length, ListTok)::body()(Impl(single, ListTok)::body()(h)),
+                           ListTok::spec_rec(Nat, Zero, λ (h: Tok) => λ (t: List<Tok>) => λ (b0: Nat) =>
+                               add(Impl(length, ListTok)::body()(Impl(single, ListTok)::body()(h)), b0), t))
                         = add(y,
-                           ListTok_spec_rec(Nat, Zero, λ (h: Tok) => λ (t: List<Tok>) => λ (b0: Nat) =>
-                               add(Impl_ListTok_length::body()(Impl_ListTok_single::body()(h)), b0), t)),
+                           ListTok::spec_rec(Nat, Zero, λ (h: Tok) => λ (t: List<Tok>) => λ (b0: Nat) =>
+                               add(Impl(length, ListTok)::body()(Impl(single, ListTok)::body()(h)), b0), t)),
               refl),
             j(count_is_rec(t),
               λ y q => add(length(single(h)),
-                           ListTok_spec_rec(Nat, Zero, λ (h: Tok) => λ (t: List<Tok>) => λ (b0: Nat) =>
-                               add(Impl_ListTok_length::body()(Impl_ListTok_single::body()(h)), b0), t))
+                           ListTok::spec_rec(Nat, Zero, λ (h: Tok) => λ (t: List<Tok>) => λ (b0: Nat) =>
+                               add(Impl(length, ListTok)::body()(Impl(single, ListTok)::body()(h)), b0), t))
                         = add(length(single(h)), y),
               refl)),
     }}
 }}
 
-theorem count_derived_refines(l: List<Tok>, h0: Repr_ListTok::inv()(l)):
-    count_derived(l) = count(Repr_ListTok::abs()(l))
+theorem count_derived_refines(l: List<Tok>, h0: ListTok::inv()(l)):
+    count_derived(l) = count(ListTok::abs()(l))
 {{
-    trans(Repr_ListTok::fold_law()(Nat)(Zero)(λ (h: Tok) => λ (t: List<Tok>) => λ (b0: Nat) =>
-              add(Impl_ListTok_length::body()(Impl_ListTok_single::body()(h)), b0))(l)(h0),
-          count_is_rec(Repr_ListTok::abs()(l)))
+    trans(ListTok::fold_law()(Nat)(Zero)(λ (h: Tok) => λ (t: List<Tok>) => λ (b0: Nat) =>
+              add(Impl(length, ListTok)::body()(Impl(single, ListTok)::body()(h)), b0))(l)(h0),
+          count_is_rec(ListTok::abs()(l)))
 }}
 
 impl count for ListTok {{
@@ -875,8 +883,8 @@ impl count for ListTok {{
 /// every one of those obligations has content.
 #[test]
 fn hand_run_a_resolved_callee_at_a_repr_with_a_real_invariant() {
-    let alg = "Repr_BinC::mk_Zero(), λ (k: Nat) => λ (b0: Bin) => Impl_BinC_double_spec::body()(Repr_BinC::mk_Succ()(b0))";
-    let sr = |x: &str| format!("BinC_spec_rec(Bin, {alg}, {x})");
+    let alg = "BinC::mk_Zero(), λ (k: Nat) => λ (b0: Bin) => Impl(double_spec, BinC)::body()(BinC::mk_Succ()(b0))";
+    let sr = |x: &str| format!("BinC::spec_rec(Bin, {alg}, {x})");
     let (sr_k, sr_x) = (sr("k"), sr("x"));
     let mut e = ok(&format!(
         "{BIN_CANON}
@@ -888,45 +896,45 @@ fn quad(n: Nat) -> Nat {{ match n {{ Zero => Zero, Succ(k) => double_spec(Succ(q
     let src = format!(
         "
 fn quad_derived(n: Bin) -> Bin {{
-    Repr_BinC::fold()(Bin)(Repr_BinC::mk_Zero())(λ (k: Bin) => λ (b0: Bin) =>
-        Impl_BinC_double_spec::body()(Repr_BinC::mk_Succ()(b0)))(n)
+    BinC::fold()(Bin)(BinC::mk_Zero())(λ (k: Bin) => λ (b0: Bin) =>
+        Impl(double_spec, BinC)::body()(BinC::mk_Succ()(b0)))(n)
 }}
 
-theorem quad_inv_pres(x: Nat): Repr_BinC::inv()({sr_x}) {{
+theorem quad_inv_pres(x: Nat): BinC::inv()({sr_x}) {{
     match x {{
-        Zero => Repr_BinC::Zero_inv(),
-        Succ(k) => Impl_BinC_double_spec::refines_inv()(Repr_BinC::mk_Succ()({sr_k}))
-                       (Repr_BinC::Succ_inv()({sr_k})(quad_inv_pres(k))),
+        Zero => BinC::Zero_inv(),
+        Succ(k) => Impl(double_spec, BinC)::refines_inv()(BinC::mk_Succ()({sr_k}))
+                       (BinC::Succ_inv()({sr_k})(quad_inv_pres(k))),
     }}
 }}
 
-theorem quad_abs_alg(x: Nat): Repr_BinC::abs()({sr_x}) = quad(x) {{
+theorem quad_abs_alg(x: Nat): BinC::abs()({sr_x}) = quad(x) {{
     match x {{
-        Zero => Repr_BinC::Zero_abs(),
+        Zero => BinC::Zero_abs(),
         Succ(k) => trans(
-            Impl_BinC_double_spec::refines()(Repr_BinC::mk_Succ()({sr_k}))
-                (Repr_BinC::Succ_inv()({sr_k})(quad_inv_pres(k))),
-            j(trans(Repr_BinC::Succ_abs()({sr_k})(quad_inv_pres(k)),
-                    j(quad_abs_alg(k), λ y q => Succ(Repr_BinC::abs()({sr_k})) = Succ(y), refl)),
-              λ y q => double_spec(Repr_BinC::abs()(Repr_BinC::mk_Succ()({sr_k}))) = double_spec(y),
+            Impl(double_spec, BinC)::refines()(BinC::mk_Succ()({sr_k}))
+                (BinC::Succ_inv()({sr_k})(quad_inv_pres(k))),
+            j(trans(BinC::Succ_abs()({sr_k})(quad_inv_pres(k)),
+                    j(quad_abs_alg(k), λ y q => Succ(BinC::abs()({sr_k})) = Succ(y), refl)),
+              λ y q => double_spec(BinC::abs()(BinC::mk_Succ()({sr_k}))) = double_spec(y),
               refl)),
     }}
 }}
 
-theorem quad_derived_refines(n: Bin, h0: Repr_BinC::inv()(n)):
-    Repr_BinC::abs()(quad_derived(n)) = quad(Repr_BinC::abs()(n))
+theorem quad_derived_refines(n: Bin, h0: BinC::inv()(n)):
+    BinC::abs()(quad_derived(n)) = quad(BinC::abs()(n))
 {{
-    trans(j(Repr_BinC::fold_law()(Bin)(Repr_BinC::mk_Zero())(λ (k: Nat) => λ (b0: Bin) =>
-                Impl_BinC_double_spec::body()(Repr_BinC::mk_Succ()(b0)))(n)(h0),
-            λ y q => Repr_BinC::abs()(quad_derived(n)) = Repr_BinC::abs()(y), refl),
-          quad_abs_alg(Repr_BinC::abs()(n)))
+    trans(j(BinC::fold_law()(Bin)(BinC::mk_Zero())(λ (k: Nat) => λ (b0: Bin) =>
+                Impl(double_spec, BinC)::body()(BinC::mk_Succ()(b0)))(n)(h0),
+            λ y q => BinC::abs()(quad_derived(n)) = BinC::abs()(y), refl),
+          quad_abs_alg(BinC::abs()(n)))
 }}
 
-theorem quad_derived_inv(n: Bin, h0: Repr_BinC::inv()(n)): Repr_BinC::inv()(quad_derived(n)) {{
-    j(sym(Repr_BinC::fold_law()(Bin)(Repr_BinC::mk_Zero())(λ (k: Nat) => λ (b0: Bin) =>
-              Impl_BinC_double_spec::body()(Repr_BinC::mk_Succ()(b0)))(n)(h0)),
-      λ y q => Repr_BinC::inv()(y),
-      quad_inv_pres(Repr_BinC::abs()(n)))
+theorem quad_derived_inv(n: Bin, h0: BinC::inv()(n)): BinC::inv()(quad_derived(n)) {{
+    j(sym(BinC::fold_law()(Bin)(BinC::mk_Zero())(λ (k: Nat) => λ (b0: Bin) =>
+              Impl(double_spec, BinC)::body()(BinC::mk_Succ()(b0)))(n)(h0)),
+      λ y q => BinC::inv()(y),
+      quad_inv_pres(BinC::abs()(n)))
 }}
 
 impl quad for BinC {{
@@ -952,8 +960,8 @@ fn single(t: Tok) -> List<Tok> { Cons(t, Nil) }
 // produce its `Impl`: it is a hand override, and the caller's certificate is
 // not allowed to care (§1.2, the open registry).
 fn single_impl(t: Tok) -> List<Tok> { Cons(t, Nil) }
-theorem single_impl_refines(t: Tok): Repr_ListTok::abs()(single_impl(t)) = single(t) { refl }
-theorem single_impl_inv(t: Tok): Repr_ListTok::inv()(single_impl(t)) { refl }
+theorem single_impl_refines(t: Tok): ListTok::abs()(single_impl(t)) = single(t) { refl }
+theorem single_impl_inv(t: Tok): ListTok::inv()(single_impl(t)) { refl }
 impl single for ListTok {
     body := single_impl,
     refines := single_impl_refines,
@@ -1015,8 +1023,8 @@ fn the_callers_certificate_is_indifferent_to_how_the_callee_was_implemented() {
     let mut handwritten = ok(&format!(
         "{LIST}{COUNT}
 fn length_by_hand(l: List<Tok>) -> Nat {{ match l {{ Nil => Zero, Cons(h, t) => Succ(length_by_hand(t)) }} }}
-theorem length_by_hand_refines(l: List<Tok>, h0: Repr_ListTok::inv()(l)):
-    length_by_hand(l) = length(Repr_ListTok::abs()(l))
+theorem length_by_hand_refines(l: List<Tok>, h0: ListTok::inv()(l)):
+    length_by_hand(l) = length(ListTok::abs()(l))
 {{ match l {{ Nil => refl, Cons(h, t) => cong_succ(length_by_hand_refines(t, h0)) }} }}
 impl length for ListTok {{
     body := length_by_hand,
@@ -1026,7 +1034,7 @@ impl length for ListTok {{
     ));
     let over_hand = handwritten.reprgen("count", "ListTok").expect("green").text;
     assert_eq!(over_generated, over_hand, "the caller's emission must not vary with provenance");
-    if let Err(err) = handwritten.elab_source(&over_hand) {
+    if let Err(err) = handwritten.elab_generated_source(&over_hand) {
         panic!("the emission over a hand `Impl` did not check:\n{}", err.render(&over_hand));
     }
 }

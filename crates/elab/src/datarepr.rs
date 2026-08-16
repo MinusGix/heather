@@ -389,12 +389,27 @@ impl Elaborator {
         if self.datarepr_by_name.contains_key(&d.name) {
             return err(format!("duplicate repr name `{}`", d.name), d.span);
         }
+        // The designed access spellings (`docs/repr-access-spellings-design.md`
+        // §5), registered before anything is generated: a `?` in a clause
+        // reports statements, and those are printed through the same table.
+        let ctors: Vec<String> = spec.ctors.iter().map(|c| c.name.clone()).collect();
+        self.register_repr_access(&d.name, &ctors);
         let mut sp = Splices::default();
         let mut holes = Vec::new();
         let clauses = self.clauses_of(d, &spec, &mut sp, &mut holes)?;
+        if clauses.fold.is_none() {
+            self.register_fold_default_access(&d.name);
+        }
         let owner = format!("datarepr {}", d.name);
         let mut obs = Vec::new();
         let src = generate(&d.name, &spec, &clauses, &owner, &mut obs);
+        // A statement is printed, by the listing and by a `?`, and what is
+        // printed has to be what can be written: the minted names the
+        // generated declarations are checked against become the designed
+        // paths at exactly this boundary (design §7).
+        for o in &mut obs {
+            o.statement = self.display_paths(&o.statement);
+        }
         // A `?` reports and fails (§1.2): the statements exist by now, and
         // nothing has been declared, so the file is refused with the obligation
         // printed and no artifact left behind.
@@ -589,6 +604,20 @@ impl Elaborator {
     /// against it — the generated text is an implementation detail, so it is
     /// named in the message rather than shown.
     fn elab_generated(
+        &mut self,
+        src: &str,
+        what: &str,
+        span: Span,
+        sp: &Splices,
+    ) -> R<()> {
+        // Generated mode: inside it the minted names *are* the surface, which
+        // is what the emission spells (`docs/repr-access-spellings-design.md`
+        // §6). A mode and not a property of the text, so that a generator that
+        // one day writes designed paths needs no change here.
+        self.generated_mode(|me| me.elab_generated_at(src, what, span, sp))
+    }
+
+    fn elab_generated_at(
         &mut self,
         src: &str,
         what: &str,
@@ -1695,6 +1724,9 @@ impl Elaborator {
             Err(msg) => return err(msg, d.span),
         };
         let res_is_spec = sch.res_is_spec;
+        // As in `elab_datarepr`: the paths exist as soon as the schema does,
+        // which is before the first thing that prints a statement.
+        self.register_impl_access(&d.op, &d.repr, res_is_spec);
         let body_ty = sch.body_ty();
         let rec = sch.record.clone();
         let bodyg = format!("{rec}::body()");
@@ -1819,6 +1851,9 @@ impl Elaborator {
             vec![obligation_row(&owner, &sch, &d.repr, "refines", &refines_ty, &prov, route)];
         if res_is_spec {
             obs.push(obligation_row(&owner, &sch, &d.repr, "refines_inv", &inv_ty, &prov, route));
+        }
+        for o in &mut obs {
+            o.statement = self.display_paths(&o.statement);
         }
         if let Some(h) = holes.first() {
             return hole_error(&obs, h);

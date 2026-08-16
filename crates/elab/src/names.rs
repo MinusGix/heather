@@ -98,6 +98,13 @@ pub(crate) enum NameRes {
     /// Written `m::n` where `m` is neither a visible module nor a visible
     /// type: the diagnostic wants to say which half is wrong.
     NoSuchQualifier(String),
+    /// A name the surface does not have, with the sentence that says so: a
+    /// generated name written in user source, or an access path naming no
+    /// declaration (`access.rs`,
+    /// `docs/repr-access-spellings-design.md` §6). Never produced by
+    /// [`resolve`] — the elaborator decides it before consulting the tables,
+    /// because the name may well *be* in them.
+    Restricted(String),
 }
 
 /// The key every name table uses: `module::name`. Deliberately the same
@@ -189,7 +196,7 @@ pub(crate) fn resolve(
     match resolve_bare(index, scope, name) {
         NameRes::Found(m) => return NameRes::Found(m),
         NameRes::Ambiguous(origins) => return NameRes::Ambiguous(origins),
-        NameRes::NotFound | NameRes::NoSuchQualifier(_) => {}
+        NameRes::NotFound | NameRes::NoSuchQualifier(_) | NameRes::Restricted(_) => {}
     }
     if visible_module {
         return NameRes::NotFound;
@@ -256,6 +263,7 @@ pub(crate) fn miss_msg(res: &NameRes, name: &str, fallback: String) -> Option<St
             "`{name}` is qualified by `{q}`, which is neither an imported module nor a \
              type in scope here"
         )),
+        NameRes::Restricted(msg) => Some(msg.clone()),
         NameRes::NotFound => Some(fallback),
         NameRes::Found(_) => None,
     }

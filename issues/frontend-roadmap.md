@@ -3,7 +3,7 @@ title: "Meta: frontend roadmap and current focus"
 status: open
 labels: [frontend,meta]
 created: 2026-07-23
-updated: 2026-08-15
+updated: 2026-08-16
 ---
 
 Organizing issue for the frontend push (the frontend-first route,
@@ -287,3 +287,4 @@ date; the originals are in `git log --follow issues/frontend-roadmap.md`.
 - 2026-08-15: Reality check (2026-08-15): item 16's tail advanced far while this list slept. datarepr v1 is complete end to end ([[datarepr-separation]]: both declaration forms, the Impl registry, reprgen with repr-typed results and callee-Impl resolution — arithmetic at Bin transfers, generated); and the impl declaration became a real surface ([[impl-declaration-surface]] closed; docs/obligation-records-design.md): inline clauses by AST splice, ? as a typed reporting hole, ':= derive()' as the first generator invocation ever requested from surface source, via_derived designed to degrade into a metafunction — a concrete step toward [[generators-in-the-language]]'s direction. The ergonomics thread ([[datarepr-surface-ergonomics]], closed) queued the follow-ons: [[repr-fold-via-abs-default]] (unblocked), [[idiomatic-spelling-pass]], [[repr-access-spellings]] (behind the now-raised [[theorem-field-projection-oom]]), [[proof-scale-abbreviations]], [[calc-equational-chains]], [[true-prop-trivial-hypotheses]], [[intrinsic-certification-style]].
 - 2026-08-15: The queue-jumper is paid: [[theorem-field-projection-oom]] fixed and closed (managed round; named record projections in gendefs.rs, diagnosis on the issue) — a theorem-valued field now projects off an assembled record value, unblocking [[repr-access-spellings]]' dot-shaped reference form. Cost filed as [[record-projection-defs-declaration-cost]]. Suite 1579 -> 1590.
 - 2026-08-15: From the datarepr ergonomics queue: [[repr-fold-via-abs-default]] landed and closed (managed round; narrative on the issue) — a repr's required clauses are R, abs and the mks, with fold defaulting to fold-through-abs whose anchor is DERIVED from the image laws (the round's finding: it cannot be refl), and the missing §3.3 transport-direction control is collected (UnC). Suite 1590 -> 1602.
+- 2026-08-16: From the datarepr ergonomics queue: [[repr-access-spellings]] designed and landed (managed round; docs/repr-access-spellings-design.md, narrative on the issue) — every repr/impl access point is '<owner>::<member>' at the author's written name, minted names refused in user source with the designed form named, printed paths writable verbatim. Suite 1602 -> 1619. Next per the agreed order: the True mini-round ([[true-prop-trivial-hypotheses]]), then [[idiomatic-spelling-pass]] in one sweep.

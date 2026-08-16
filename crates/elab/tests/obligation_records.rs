@@ -177,8 +177,8 @@ impl add for BinNat {{
     // the generated vocabulary the kernel will compare against.
     assert!(msg.contains("`refines` of `impl add for BinNat` is not proved"), "{msg}");
     assert!(msg.contains("Impl(add, BinNat)::refines"), "{msg}");
-    assert!(msg.contains("(a: Bin) -> (b: Bin) -> (h0: Repr_BinNat::inv()(a))"), "{msg}");
-    assert!(msg.contains("= add(Repr_BinNat::abs()(a), Repr_BinNat::abs()(b))"), "{msg}");
+    assert!(msg.contains("(a: Bin) -> (b: Bin) -> (h0: BinNat::inv()(a))"), "{msg}");
+    assert!(msg.contains("= add(BinNat::abs()(a), BinNat::abs()(b))"), "{msg}");
 }
 
 #[test]
@@ -202,8 +202,8 @@ fn a_hole_at_a_datarepr_law_reports_the_law() {
     let msg = bad(&BIN_CANON.replace("    Succ_inv := bin_canon_succ,", "    Succ_inv := ?,"));
     assert!(msg.contains("`Succ_inv` of `datarepr BinC` is not proved"), "{msg}");
     assert!(msg.contains("BinC::Succ_inv"), "{msg}");
-    assert!(msg.contains("(a0: Bin) -> (h0: Repr_BinC::inv()(a0))"), "{msg}");
-    assert!(msg.contains("Repr_BinC::inv()(Repr_BinC::mk_Succ()(a0))"), "{msg}");
+    assert!(msg.contains("(a0: Bin) -> (h0: BinC::inv()(a0))"), "{msg}");
+    assert!(msg.contains("BinC::inv()(BinC::mk_Succ()(a0))"), "{msg}");
 }
 
 /// Omission keeps meaning *take the default* — the rule the defaults round
@@ -226,15 +226,15 @@ fn a_hole_at_fold_reports_rather_than_taking_the_default() {
 }
 
 /// …and a `?` at the *law* of a defaulted fold prints the statement that fold
-/// anchors, naming the generated `Repr_BinMin::fold()` — which is how an author
+/// anchors, naming the generated `BinMin::fold()` — which is how an author
 /// discovers what the default committed them to.
 #[test]
 fn a_hole_at_the_law_of_a_defaulted_fold_prints_the_anchor() {
     let msg =
         bad(&BIN_MIN.replace("    mk Zero := BNil,", "    fold_law := ?,\n    mk Zero := BNil,"));
     assert!(msg.contains("`fold_law` of `datarepr BinMin` is not proved"), "{msg}");
-    assert!(msg.contains("Repr_BinMin::fold()"), "{msg}");
-    assert!(msg.contains("BinMin_spec_rec"), "{msg}");
+    assert!(msg.contains("BinMin::fold()"), "{msg}");
+    assert!(msg.contains("BinMin::spec_rec"), "{msg}");
 }
 
 /// A `?` at a data field is an error that says why: the statements are computed
@@ -274,8 +274,8 @@ fn a_surface_derived_impl_is_consumable_as_a_callee() {
         "{LIST}
 fn add(a: Nat, b: Nat) -> Nat {{ match b {{ Zero => a, Succ(k) => Succ(add(a, k)) }} }}
 fn single(t: Tok) -> List<Tok> {{ Cons(t, Nil) }}
-theorem single_refines(t: Tok): Repr_ListTok::abs()(single(t)) = single(t) {{ refl }}
-theorem single_inv(t: Tok): Repr_ListTok::inv()(single(t)) {{ refl }}
+theorem single_refines(t: Tok): ListTok::abs()(single(t)) = single(t) {{ refl }}
+theorem single_inv(t: Tok): ListTok::inv()(single(t)) {{ refl }}
 impl single for ListTok {{
     body := single, refines := single_refines, refines_inv := single_inv,
 }}
@@ -295,7 +295,7 @@ impl length for ListTok := derive();
     // asks for four names and never asks who wrote them.
     assert!(em.text.contains("Impl_ListTok_length::refines()"), "{}", em.text);
     assert!(!em.text.contains("impl length for ListTok"), "{}", em.text);
-    if let Err(err) = e.elab_source(&em.text) {
+    if let Err(err) = e.elab_generated_source(&em.text) {
         panic!("{}", err.render(&em.text));
     }
 }
@@ -424,7 +424,7 @@ impl length for ListTok {{
     assert_eq!(refines.state, "supplied");
     assert_eq!(refines.provenance.map(|p| p.as_str()), Some("inline"));
     assert_eq!(refines.path, "Impl(length, ListTok)::refines");
-    assert!(refines.statement.contains("= length(Repr_ListTok::abs()(l))"), "{}", refines.statement);
+    assert!(refines.statement.contains("= length(ListTok::abs()(l))"), "{}", refines.statement);
 }
 
 /// The two data clauses that have a default are listed too, so the listing
@@ -459,7 +459,7 @@ fn the_listing_says_which_defaultable_data_clauses_were_taken() {
 /// expression ascription, so an author who wants the statement visible states
 /// it as a named theorem in their *own* vocabulary — `my_len(r) = length(r)`,
 /// not the generated `Impl_ListTok_length::body()(r) =
-/// length(Repr_ListTok::abs()(r))` — and the field type accepts it by
+/// length(ListTok::abs()(r))` — and the field type accepts it by
 /// conversion. That it works is probe 4's δ row, here as a test.
 #[test]
 fn the_listing_distinguishes_named_from_inline_and_derived() {

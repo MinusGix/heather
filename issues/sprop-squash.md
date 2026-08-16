@@ -3,7 +3,7 @@ title: Squash ∥·∥ and SProp inductives: the restricted eliminator
 status: open
 labels: [kernel,delam,design]
 created: 2026-08-02
-updated: 2026-08-02
+updated: 2026-08-16
 ---
 
 Deferred from [[sprop-strict-prop]] at filing and still wanted: the
@@ -62,4 +62,4 @@ owner and the constraints already decided don't get re-derived.
   deferred formers, so that issue can close. No round scheduled; promotion
   needs a customer (a guard predicate, a side condition, an existence proof
   a user wants invisible).
-
+- 2026-08-16: Note from the true-prop discussion (2026-08-16): the 'UProp = Prop | SProp' idea — its disciplined cousin is Rocq-style sort polymorphism (definitions quantified over a sort variable). A union sort proper fails on principal sorts (the two sorts differ in conversion via the SProp strip). Currently no customer: kernel Unit eta already gives True judgmental proof irrelevance without SProp, so sort-generic machinery waits for a real demand.

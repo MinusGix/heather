@@ -3,7 +3,7 @@ title: Sketch: named arguments at call sites
 status: open
 labels: [frontend,syntax,design]
 created: 2026-07-27
-updated: 2026-07-27
+updated: 2026-08-16
 ---
 
 **Sketch, not scheduled.** Raised by the user while
@@ -119,3 +119,4 @@ Default arguments, variadics, and any form of overloading.
   Also relevant to open question 4, from the same round: [[method-receiver-position]]
   argues the receiver should stop being positional at all, which is the same
   observation one layer up.
+- 2026-08-16: Adjacent feature ratified in principle (2026-08-16, from the true-prop-trivial-hypotheses discussion): default argument values declared at the binder (x: T := e), the chosen mechanism for discharging definitionally-trivial hypotheses on generated refines signatures, and per the user a wanted general tool — including defaults that run a tactic search over the surrounding context, not just a stored term. Defaults are half the reason named arguments exist, so the two likely design together; this issue is the natural home.

@@ -197,6 +197,24 @@ fn named_call(name: &str, args: Vec<Expr>, explicit: bool, span: Span) -> Expr {
     Expr { kind: ExprKind::App { head: Box::new(head), args, explicit }, span }
 }
 
+/// The owner half of a `<owner>::<member>` path, rendered as it is *printed*
+/// (docs/repr-access-spellings-design.md §4): `Impl(add, BinNat)`. Only an
+/// application of a name to names qualifies, which is v1's one applied owner
+/// and is what keeps the rendering total — there is no expression printer
+/// here and none is wanted.
+fn render_owner(e: &Expr) -> Option<String> {
+    let ExprKind::App { head, args, explicit: false } = &e.kind else { return None };
+    let ExprKind::Var(h) = &head.kind else { return None };
+    let mut parts = Vec::with_capacity(args.len());
+    for a in args {
+        match &a.kind {
+            ExprKind::Var(n) => parts.push(n.clone()),
+            _ => return None,
+        }
+    }
+    Some(format!("{h}({})", parts.join(", ")))
+}
+
 /// `a + b` as an application of the **symbol**
 /// (docs/operators-onto-classes-design.md §4). The symbol is a name in a
 /// namespace of its own, so an operator expression is the ordinary
@@ -2354,6 +2372,33 @@ impl Parser {
                         kind: ExprKind::Dot { recv: Box::new(e), name: field, args },
                         span,
                     };
+                }
+                // `Impl(add, BinNat)::refines` — a member of an *applied*
+                // owner's namespace (docs/repr-access-spellings-design.md §4).
+                // An unapplied owner never reaches here: `A::b` is one lexer
+                // token, so the standalone `::` only appears after something
+                // the lexer could not join, and that was a parse error in
+                // every expression position before this arm.
+                //
+                // What it builds is a `Var` whose name is the path as it is
+                // *printed* — the owner rendered structurally, so the
+                // referenceable string and the string `heather obligations`
+                // prints are the same string by construction — rather than a
+                // new `ExprKind` every AST walk would have to learn.
+                TokKind::ColonColon => {
+                    self.bump();
+                    let (member, msp) = self.ident("a member name after `::`")?;
+                    let Some(owner) = render_owner(&e) else {
+                        return Err(ParseError {
+                            msg: format!(
+                                "`::` here needs an owner of the form `<name>(<name>, …)`: \
+                                 an obligation path is `Impl(<op>, <repr>)::{member}`"
+                            ),
+                            span: e.span,
+                        });
+                    };
+                    let span = e.span.join(msp);
+                    e = Expr { kind: ExprKind::Var(format!("{owner}::{member}")), span };
                 }
                 TokKind::LParen => {
                     self.bump();

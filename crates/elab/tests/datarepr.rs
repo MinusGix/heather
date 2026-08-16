@@ -172,11 +172,11 @@ fn the_assembled_repr_projects_and_folds_at_a_neutral_scrutinee() {
         "{LIST}
 datarepr ListTok for List<Tok> := repr::naive();
 fn len(l: List<Tok>) -> Nat {{
-    Repr_ListTok::fold()(Nat)(Zero)(λ (t: Tok) => λ (r: List<Tok>) => λ (b: Nat) => Succ(b))(l)
+    ListTok::fold()(Nat)(Zero)(λ (t: Tok) => λ (r: List<Tok>) => λ (b: Nat) => Succ(b))(l)
 }}
 fn one(t: Tok) -> List<Tok> {{ ListTok().mk_Cons(t)(ListTok().mk_Nil) }}
 theorem one_abs(t: Tok): ListTok().abs(one(t)) = Cons(t, Nil) {{
-    Repr_ListTok::Cons_abs()(t)(Repr_ListTok::mk_Nil())(Repr_ListTok::Nil_inv())
+    ListTok::Cons_abs()(t)(ListTok::mk_Nil())(ListTok::Nil_inv())
 }}
 "
     ));
@@ -189,9 +189,9 @@ fn the_fold_law_is_usable_as_a_rewrite_at_a_neutral_repr_value() {
     ok(&format!(
         "{BIN}
 theorem anchor(s0: Nat, s1: (a: Nat) -> (b: Nat) -> Nat, r: Bin):
-    Repr_BinNat::fold()(Nat)(s0)(λ (a0: Bin) => λ (b0: Nat) => s1(bin_abs(a0))(b0))(r)
-      = BinNat_spec_rec(Nat, s0, s1, bin_abs(r))
-{{ Repr_BinNat::fold_law()(Nat)(s0)(s1)(r)(refl) }}
+    BinNat::fold()(Nat)(s0)(λ (a0: Bin) => λ (b0: Nat) => s1(bin_abs(a0))(b0))(r)
+      = BinNat::spec_rec(Nat, s0, s1, bin_abs(r))
+{{ BinNat::fold_law()(Nat)(s0)(s1)(r)(refl) }}
 "
     ));
 }
@@ -215,7 +215,7 @@ fn the_minimal_repr_is_the_carrier_the_images_and_the_laws_that_are_not_refl() {
 // The defaulted fold *computes*, at the carrier: the representation of three
 // folded with a counting algebra is three.
 theorem counts_to_three():
-    Repr_BinMin::fold()(Nat)(Zero)(\u{3bb} (a0: Bin) => \u{3bb} (b0: Nat) => Succ(b0))(B1(B1(BNil)))
+    BinMin::fold()(Nat)(Zero)(\u{3bb} (a0: Bin) => \u{3bb} (b0: Nat) => Succ(b0))(B1(B1(BNil)))
       = Succ(Succ(Succ(Zero)))
 {{ refl }}
 
@@ -223,18 +223,18 @@ theorem counts_to_three():
 // generated `fold_law` is exactly the statement the transfer generator wants,
 // and its proof is the generated induction rather than `refl`.
 theorem anchor(s0: Nat, s1: (a: Nat) -> (b: Nat) -> Nat, r: Bin):
-    Repr_BinMin::fold()(Nat)(s0)(\u{3bb} (a0: Bin) => \u{3bb} (b0: Nat) => s1(bin_abs(a0))(b0))(r)
-      = BinMin_spec_rec(Nat, s0, s1, bin_abs(r))
-{{ Repr_BinMin::fold_law()(Nat)(s0)(s1)(r)(refl) }}
+    BinMin::fold()(Nat)(s0)(\u{3bb} (a0: Bin) => \u{3bb} (b0: Nat) => s1(bin_abs(a0))(b0))(r)
+      = BinMin::spec_rec(Nat, s0, s1, bin_abs(r))
+{{ BinMin::fold_law()(Nat)(s0)(s1)(r)(refl) }}
 
 // The defaulted `inv` is `True`, spelled as the naive repr spells it.
-theorem inv_is_true(r: Bin): Repr_BinMin::inv()(r) {{ refl }}
+theorem inv_is_true(r: Bin): BinMin::inv()(r) {{ refl }}
 
 // The embedding the default folds through is a real function `Nat -> Bin`, and
 // its round-trip is a real theorem — neither is `bin_of_nat`, which is in scope
 // and unused.
-theorem embeds_four(): bin_abs(BinMin_emb(Succ(Succ(Succ(Succ(Zero)))))) = Succ(Succ(Succ(Succ(Zero))))
-{{ BinMin_emb_abs(Succ(Succ(Succ(Succ(Zero))))) }}
+theorem embeds_four(): bin_abs(BinMin::emb(Succ(Succ(Succ(Succ(Zero)))))) = Succ(Succ(Succ(Succ(Zero))))
+{{ BinMin::emb_abs(Succ(Succ(Succ(Succ(Zero))))) }}
 "
     ));
 }
@@ -262,17 +262,17 @@ datarepr TreeR for Tree {{ R := TreeC, abs := tc_abs, mk Leaf := CLeaf, mk Node 
 
 // A **neutral** carrier value under the defaulted fold, in a checking position.
 fn stk_len(r: Stk) -> Nat {{
-    Repr_StkTok::fold()(Nat)(Zero)(\u{3bb} (h: Tok) => \u{3bb} (t: Stk) => \u{3bb} (b: Nat) => Succ(b))(r)
+    StkTok::fold()(Nat)(Zero)(\u{3bb} (h: Tok) => \u{3bb} (t: Stk) => \u{3bb} (b: Nat) => Succ(b))(r)
 }}
 theorem stk_len_two(): stk_len(SCons(TAdd, SCons(TMul, SNil))) = Succ(Succ(Zero)) {{ refl }}
 
 // The two-recursive-children arm, anchored at a neutral `x`.
 theorem tree_anchor(s0: (n: Nat) -> Nat, s1: (l: Tree) -> (r: Tree) -> (b0: Nat) -> (b1: Nat) -> Nat,
                     x: TreeC):
-    Repr_TreeR::fold()(Nat)(s0)(\u{3bb} (l: TreeC) => \u{3bb} (r: TreeC) => \u{3bb} (b0: Nat) => \u{3bb} (b1: Nat) =>
+    TreeR::fold()(Nat)(s0)(\u{3bb} (l: TreeC) => \u{3bb} (r: TreeC) => \u{3bb} (b0: Nat) => \u{3bb} (b1: Nat) =>
                                     s1(tc_abs(l))(tc_abs(r))(b0)(b1))(x)
-      = TreeR_spec_rec(Nat, s0, s1, tc_abs(x))
-{{ Repr_TreeR::fold_law()(Nat)(s0)(s1)(x)(refl) }}
+      = TreeR::spec_rec(Nat, s0, s1, tc_abs(x))
+{{ TreeR::fold_law()(Nat)(s0)(s1)(x)(refl) }}
 "
     ));
 }

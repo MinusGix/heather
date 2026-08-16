@@ -154,8 +154,8 @@ fn a_generated_repr_records_law_projects_off_the_assembled_value() {
         r#"
         {LIST}
         datarepr ListTok for List<Tok> := repr::naive();
-        theorem proj_law(a0: Tok, a1: List<Tok>, h0: Repr_ListTok::inv()(a1)):
-            Repr_ListTok::abs()(Repr_ListTok::mk_Cons()(a0)(a1)) = Cons(a0, Repr_ListTok::abs()(a1))
+        theorem proj_law(a0: Tok, a1: List<Tok>, h0: ListTok::inv()(a1)):
+            ListTok::abs()(ListTok::mk_Cons()(a0)(a1)) = Cons(a0, ListTok::abs()(a1))
         {{ ListTok().Cons_abs(a0)(a1)(h0) }}
         "#
     ));
@@ -169,9 +169,9 @@ fn the_namespace_route_still_proves_the_same_law() {
         r#"
         {LIST}
         datarepr ListTok for List<Tok> := repr::naive();
-        theorem proj_law(a0: Tok, a1: List<Tok>, h0: Repr_ListTok::inv()(a1)):
-            Repr_ListTok::abs()(Repr_ListTok::mk_Cons()(a0)(a1)) = Cons(a0, Repr_ListTok::abs()(a1))
-        {{ Repr_ListTok::Cons_abs()(a0)(a1)(h0) }}
+        theorem proj_law(a0: Tok, a1: List<Tok>, h0: ListTok::inv()(a1)):
+            ListTok::abs()(ListTok::mk_Cons()(a0)(a1)) = Cons(a0, ListTok::abs()(a1))
+        {{ ListTok::Cons_abs()(a0)(a1)(h0) }}
         "#
     ));
 }

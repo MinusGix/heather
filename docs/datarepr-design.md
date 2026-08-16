@@ -328,7 +328,12 @@ instances can hold today, `lib/std/algebra.hthr`):
    `#` never begins a surface identifier, so a name carrying the sigil
    `issues/unnameable-generated-names.md` points at cannot be written in the
    text that declares it. The names are `Repr_N`, `N_spec_rec`, `Repr_N::⟨clause⟩`
-   and the assembled `N`.
+   and the assembled `N`. *Amended 2026-08-16*: they are still the names the
+   emission declares, and they are no longer the names the **surface** has —
+   `docs/repr-access-spellings-design.md` makes `N::⟨clause⟩` the one spelling
+   and refuses the minted ones in user source, which is the same boundary
+   `unnameable-generated-names` wants, drawn at resolution instead of at the
+   lexer.
 2. **The namespace hangs off `Repr_N`, not off `N`** as the sketch has it: a
    member declaration's qualifier has to name a *type* in scope, and `N` names
    the assembled value.
@@ -361,6 +366,11 @@ instances can hold today, `lib/std/algebra.hthr`):
    exhausts memory — a user-reachable abort, not a slow check. The namespace
    half of the elaboration is what makes the laws usable at all, which is a
    better argument for it than §1.4's original one.
+   *Superseded 2026-08-16* (`docs/repr-access-spellings-design.md` §1): the
+   second is fixed and closed, and the first does not reproduce at any repr
+   access shape — `.fold` on the assembled value checks. Reaching through a
+   namespace is now the *designed* access, not a workaround, and the namespace
+   is spelled `N::…` at the author's own name.
 8. `datarepr` over **`Nat`** works by writing `Nat`'s constructor list into
    the elaborator: it is a kernel type with no declaration to read one off.
 

@@ -215,7 +215,11 @@ fn obligations_lists_state_provenance_and_statement() {
     assert!(text.contains("impl length for ListTok"), "{text}");
     assert!(text.contains("supplied"), "{text}");
     assert!(text.contains("inline"), "{text}");
-    assert!(text.contains("Impl_ListTok_length::body()(l) = length("), "{text}");
+    // The statement is printed in the DESIGNED spelling, which is the point:
+    // what the listing prints is what an author can write
+    // (docs/repr-access-spellings-design.md §7).
+    assert!(text.contains("Impl(length, ListTok)::body()(l) = length("), "{text}");
+    assert!(!text.contains("Impl_ListTok_length"), "{text}");
 }
 
 #[test]

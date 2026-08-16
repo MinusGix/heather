@@ -3,7 +3,7 @@ title: Fixtures and docs use the idiomatic surface, not the generator's explicit
 status: open
 labels: [docs,testing,ergonomics]
 created: 2026-08-15
-updated: 2026-08-15
+updated: 2026-08-16
 ---
 
 
@@ -28,3 +28,7 @@ the cost is a deliberate byte-stability flip across every pinned emission,
 so it should be its own commit with every changed emission named. The
 hand-runs are emission specs, so they follow whichever way the emissions
 go — fixtures that are *not* emission specs switch regardless.
+
+## Log
+
+- 2026-08-16: Unblocked-ish (2026-08-16, the repr-access-spellings round): generator EMISSION bytes are unchanged — every generator still writes Repr_N::abs(), N_spec_rec, Impl_R_f::body() — but the surface now has one designed spelling (N::abs, N::spec_rec, Impl(f, N)::body) that resolves to those declarations through an alias, and the minted forms are refused in user source. Two consequences for this issue's pass. First, the fixture half is already done for datarepr/reprgen/obligation-records/record-projection tests: every hand-written certificate and fixture in them now spells the designed form; what still spells minted names is exactly the assertions ABOUT emission text and the hand-forced emissions, which are generated source and should stay. Second, flipping the emissions themselves to the designed spelling is now a pure style choice rather than a compatibility event — the alias means both spellings resolve inside generated mode — so this issue can do it whenever it runs, at the cost of re-baselining the emission-text assertions.

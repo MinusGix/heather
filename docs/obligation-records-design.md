@@ -357,6 +357,12 @@ form would mean value projection and inherits
 `issues/theorem-field-projection-oom.md`; a `::` form does not, which is a
 second, independent reason the member operator is the right one.
 
+**Settled 2026-08-16** by `docs/repr-access-spellings-design.md`: the printed
+path is now the *referenceable* path, and the minted spelling this section left
+in reference position is refused in user source. The listing's `statement`
+column moved with it — it printed minted names, which under the new rule was
+printing something unwritable, and is de-mangled at the display boundary.
+
 ## 4. The `impl` surface
 
 ### 4.1 Grammar

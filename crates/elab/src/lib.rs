@@ -74,6 +74,7 @@ use heather_syntax::{
     Span, Stmt, RecordLitField, Ty, TyKind,
 };
 
+mod access;
 pub mod certgen;
 pub mod gate;
 pub mod stats;
@@ -762,6 +763,10 @@ pub struct Elaborator {
     /// (docs/obligation-records-design.md §6). Recorded only on success, which
     /// under inline-first is the only outcome that leaves anything behind.
     obligations: Vec<datarepr::Obligation>,
+    /// The designed access spellings of every repr and `Impl` declared so far,
+    /// and the generated-mode depth that exempts an emission from them
+    /// (`access.rs`, `docs/repr-access-spellings-design.md`).
+    access: access::AccessTable,
     /// Set while a `:= derive()` route elaborates the transfer generator's
     /// emission, so that the `impl` block *inside* that emission records
     /// `Derived` rather than what its own clauses look like. `None` everywhere
@@ -977,6 +982,7 @@ impl Elaborator {
             datarepr_by_name: HashMap::new(),
             impls: HashMap::new(),
             obligations: Vec::new(),
+            access: access::AccessTable::default(),
             impl_provenance: None,
             decls: HashMap::new(),
             op_fallback_notes: RefCell::new(Vec::new()),
@@ -1023,6 +1029,19 @@ impl Elaborator {
     /// Parse and elaborate a source file, kernel-checking every declaration.
     pub fn elab_source(&mut self, src: &str) -> R<()> {
         self.elab_module_source(DEFAULT_MODULE, src)
+    }
+
+    /// [`Self::elab_source`] for text a *generator* wrote: the minted names
+    /// (`Repr_N::abs`, `Impl_R_f::body`) are the surface inside it, exactly as
+    /// they are when the same text is elaborated as part of the declaration
+    /// that produced it (`docs/repr-access-spellings-design.md` §6).
+    ///
+    /// The standing customer is the perturbed-emission mutation control: it
+    /// re-checks generated text with one byte changed, and through the user
+    /// entry point it would be refused for spelling a generated name instead
+    /// of for the mutation — a control passing for the wrong reason.
+    pub fn elab_generated_source(&mut self, src: &str) -> R<()> {
+        self.generated_mode(|me| me.elab_source(src))
     }
 
     /// [`Self::elab_source`] into a named module. The elaborator does no file
@@ -1133,6 +1152,25 @@ impl Elaborator {
     /// Resolve a written name to the module that declares it, by the §4
     /// regime. Every table lookup below goes through this.
     fn resolve_name(&self, name: &str) -> NameRes {
+        // A generated name written in user source, and an access path naming
+        // no declaration, are refused *here* — before anything can report them
+        // as unknown, since "unknown" is exactly the wrong thing to say about
+        // a name that exists and is not the surface
+        // (docs/repr-access-spellings-design.md §6).
+        if let Some(msg) = self.access_refusal(name) {
+            return NameRes::Restricted(msg);
+        }
+        if let Some(msg) = self.unknown_access_path(name) {
+            return NameRes::Restricted(msg);
+        }
+        self.resolve_declared(name)
+    }
+
+    /// [`Self::resolve_name`] without the surface refusal: what the *tables*
+    /// say. The alias's target is looked up through this — a designed path
+    /// resolves to a declaration whose own name is not spellable, which is the
+    /// whole point of the alias (design §5).
+    fn resolve_declared(&self, name: &str) -> NameRes {
         let scopes = self.resolution_scopes.borrow();
         let scope = scopes.last().map(Rc::as_ref).unwrap_or(&self.scope);
         resolve(&self.names, scope, name, |m, ty, ctor| {
@@ -1155,8 +1193,27 @@ impl Elaborator {
     }
 
     /// The qualified table key a written name resolves to, if it resolves.
+    ///
+    /// A **designed access path** (`BinNat::abs`,
+    /// `Impl(add, BinNat)::refines`) resolves to the declaration it names, and
+    /// strictly as a *fallback*: only a name with no reading of its own takes
+    /// it, so nothing that resolved before the alias existed can be
+    /// reinterpreted by it (docs/repr-access-spellings-design.md §5).
     fn key_of(&self, name: &str) -> Option<String> {
-        match self.resolve_name(name) {
+        if self.access_refusal(name).is_some() {
+            return None;
+        }
+        if let Some(k) = self.key_of_declared(name) {
+            return Some(k);
+        }
+        // The alias, strictly as a fallback. Its target is resolved through
+        // `key_of_declared` and not `key_of`, because the target's own name is
+        // the one the surface refuses — that is what the alias is for.
+        self.key_of_declared(self.access_alias(name)?)
+    }
+
+    fn key_of_declared(&self, name: &str) -> Option<String> {
+        match self.resolve_declared(name) {
             NameRes::Found(m) => {
                 // A *member* declares the qualified string itself
                 // (issues/type-owned-members-receiver-slice.md), so its key
@@ -4481,7 +4538,11 @@ impl Elaborator {
             NameRes::Ambiguous(_) => {
                 return Err(self.name_miss(&qualified, String::new(), span))
             }
-            NameRes::NotFound | NameRes::NoSuchQualifier(_) => {
+            // A restricted name falls back exactly as a missing one does: the
+            // receiver's namespace is not where a generated member is
+            // reached, and the field route above already ran
+            // (docs/repr-access-spellings-design.md §3.2).
+            NameRes::NotFound | NameRes::NoSuchQualifier(_) | NameRes::Restricted(_) => {
                 return Ok(name.to_string())
             }
         }
