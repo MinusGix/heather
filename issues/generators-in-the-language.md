@@ -3,7 +3,7 @@ title: Move the declaration generators out of Rust and into the meta layer
 status: open
 labels: [metaprogramming,elaboration,design]
 created: 2026-07-26
-updated: 2026-08-12
+updated: 2026-08-15
 ---
 
 Speculative / direction issue, not scheduled. Filed 2026-07-26 in the
@@ -62,3 +62,4 @@ it is what would turn this from "maybe" into a plan.
 - 2026-08-11: Blocker (1) DISCHARGED for analyzers (2026-08-11, opaque-globals round; docs/opaque-globals-analysis-design.md): global references stay opaque INSIDE code -- the book's blocking is deliberate (ch. 06 neutral grammar, following hu2024layered) and no recursor branch lands -- but the pull reflection API now lifts opacity per name at the boundary: fn_body_code hands analyzers marked closed code with callee markers (convention 3) and the tag->name table, and mul-via-add transcribes in-language byte-identical to Rust v2. Blockers (2) (no generation-time oracle) and (3) (no code equality) stand; a generator needing callee BODIES mid-walk rather than per-name pulls would be the first customer for anything more.
 - 2026-08-12: Dogfooding milestone (2026-08-12): the Rust certgen walker is DELETED (retire-rust-transcriber stage 2, closed) -- the fragment's definition, signature and body, reads off lib/certgen_code.hthr alone, and the in-language transcriber is the only transcriber. Two behavioral notes for the migration record: the walker's surface-only declines did not survive contact with Psi-reading analysis (let-bodies elaborate to aliases and now transcribe; a Succ arm ignoring the ih is ordinary code now that the eliminator carries structural recursion), and the layout interface is pinned by literals + the library's own refl theorems instead of two-implementation agreement. Blockers (2) and (3) stand, still without a customer.
 - 2026-08-12: Dogfooding note (2026-08-12, non-Nat embeddings round): the frozen-walker rule's first live test -- the first fragment feature since the Rust walker's deletion landed with its analysis entirely in lib/certgen_code.hthr, Rust growing only names/rendering. The migration split held without amendment; narrative on certifying-generator.
+- 2026-08-15: Design pressure recorded (2026-08-15): obligation-records' via_derived(p) was deliberately made FUNCTION-SHAPED so it degrades into an ordinary metafunction under self-hosting; its two elaborator-owned special powers are now named meta-layer obligations — (1) computing an argument's expected type from a schema (ImplSchema), (2) the derive-if-absent registry effect. ':= derive()' is likewise a generator invocation the meta layer should eventually own. docs/obligation-records-design.md §4.3.

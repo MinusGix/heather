@@ -3,7 +3,7 @@ title: "Meta: frontend roadmap and current focus"
 status: open
 labels: [frontend,meta]
 created: 2026-07-23
-updated: 2026-08-12
+updated: 2026-08-15
 ---
 
 Organizing issue for the frontend push (the frontend-first route,
@@ -284,3 +284,4 @@ date; the originals are in `git log --follow issues/frontend-roadmap.md`.
 - 2026-08-11: 2026-08-11: The reflection line's cheap first step landed — in-language signature checking + the pull API's first cut (managed round; docs/fn-signature-reflection-design.md; narrative on [[fn-reflection-for-analyzers]]). The fragment definition now reads off lib/certgen_code.hthr whole; the opaque-globals kernel round now replaces an implementation, not an interface. Suite 1448 -> 1450.
 - 2026-08-11: The generators line's first kernel blocker fell without a kernel round: [[opaque-globals-analysis]] filed, designed and landed same-day (managed round; docs/opaque-globals-analysis-design.md) — route A refuted from ch. 06's deliberate blocking, unfolding-for-analysis lands at the reflection boundary (fn_body_code + callee markers, zero kernel diff), mul-via-add transcribes in-language byte-identical to Rust v2. [[retire-rust-transcriber]] stage 2's gate is open (deletion is a user call). Blockers (2)-(3) stand. Suite 1450, count unchanged (coordinator correction: the agent's 1452 was fast-lane arithmetic; the round's checks land inside existing tests and the library file, and the full post-commit run says 1450 passed, 0 failed).
 - 2026-08-12: The certgen line's fragment grows past Nat: non-Nat result embeddings landed (managed round, in-language only per the frozen-walker rule; narrative on [[certifying-generator]]). Suite 1474 -> 1476.
+- 2026-08-15: Reality check (2026-08-15): item 16's tail advanced far while this list slept. datarepr v1 is complete end to end ([[datarepr-separation]]: both declaration forms, the Impl registry, reprgen with repr-typed results and callee-Impl resolution — arithmetic at Bin transfers, generated); and the impl declaration became a real surface ([[impl-declaration-surface]] closed; docs/obligation-records-design.md): inline clauses by AST splice, ? as a typed reporting hole, ':= derive()' as the first generator invocation ever requested from surface source, via_derived designed to degrade into a metafunction — a concrete step toward [[generators-in-the-language]]'s direction. The ergonomics thread ([[datarepr-surface-ergonomics]], closed) queued the follow-ons: [[repr-fold-via-abs-default]] (unblocked), [[idiomatic-spelling-pass]], [[repr-access-spellings]] (behind the now-raised [[theorem-field-projection-oom]]), [[proof-scale-abbreviations]], [[calc-equational-chains]], [[true-prop-trivial-hypotheses]], [[intrinsic-certification-style]].

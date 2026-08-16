@@ -150,6 +150,12 @@ obligation for the derived route (§3).
 
 ### 1.2 The `Impl` registry (cost basis)
 
+*(The `impl` declaration's surface — inline clauses, the `?` reporting hole,
+the `:= derive()` and `via_derived(p)` routes, provenance — is designed and
+landed in `docs/obligation-records-design.md` (2026-08-15), which treats this
+section's obligation statements as its schema. This section stays the
+semantic source of truth for what an `Impl` is.)*
+
 The cost basis is an **open, per-operation registry**: for a spec function
 `f` touching `S` and a repr `Rp` of `S`, an `Impl` provides a runtime-side
 body and its refinement theorem. Keying reuses the operation-indexed-classes
