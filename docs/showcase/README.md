@@ -61,7 +61,13 @@ Recorded here because "it checks" hides them:
    as the quotation form `code { … }` and dies with ``expected `}` to close
    the quote`` — a baffling message for an ordinary variable name. The
    realized file renamed the parameter to `toks`. Filed:
-   `issues/match-scrutinee-named-code.md`.
+   `issues/match-scrutinee-named-code.md`. **Resolved 2026-08-16**: the
+   quotation now stands down wherever the `{` belongs to the enclosing form
+   rather than to the payload — the condition `no_record_lit` already marked
+   for record literals — and `match code as λ z => T { … }` was found to be
+   the same gap one form up. `match code { … }` and `match code as …` are
+   ordinary matches on an ordinary variable; a quotation that really is the
+   scrutinee is parenthesised, as a record literal there already was.
 2. **`++` is left-associative; `append`-based proofs are right-nested.**
    Swapping `append(a, append(b, c))` for `a ++ b ++ c` silently changed the
    term under an already-green proof to `(a ++ b) ++ c` and broke it — fixed

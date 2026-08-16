@@ -2495,7 +2495,19 @@ impl Parser {
         // `code { e }` — a quotation (docs/in-language-map-design.md §3).
         // Before the general `Ident` case; the `{` lookahead is what keeps a
         // plain variable named `code` working everywhere else.
-        if self.at_kw("code") && matches!(self.nth(1), TokKind::LBrace) {
+        //
+        // "Everywhere else" includes the positions where the `{` is not the
+        // payload's at all but the *enclosing form's* — a `match` scrutinee,
+        // a motive, a block-preceding type — and that is exactly what
+        // `no_record_lit` already marks, which is why the same flag decides
+        // this (issues/match-scrutinee-named-code.md). Without it
+        // `match code { … }` committed to a quotation and died inside the
+        // first arm at ``expected `}` to close the quote``, since `match`'s
+        // own guard had already, correctly, declined to read it as the
+        // intensional form. The escape hatch is the one the flag documents:
+        // a quotation that really is wanted there is parenthesised, and a
+        // bracket lifts the restriction.
+        if self.at_kw("code") && matches!(self.nth(1), TokKind::LBrace) && !self.no_record_lit {
             let start = self.bump().span; // `code`
             self.bump(); // `{`
             // Inside the braces nothing is waiting for a block (same reasoning
@@ -2773,9 +2785,21 @@ impl Parser {
         self.bump(); // `match`
         // `match code e as T { … }` — intensional analysis. `code` is a
         // contextual keyword, so a scrutinee *named* `code` still parses:
-        // only `match code` followed by something other than the arm block is
-        // the analysis form.
-        if self.at_kw("code") && !matches!(self.nth(1), TokKind::LBrace) {
+        // only `match code` followed by a token that could **begin its
+        // scrutinee** is the analysis form.
+        //
+        // Two tokens cannot, and both of them are how an ordinary `match` on a
+        // variable named `code` continues (issues/match-scrutinee-named-code.md):
+        // the arm block's `{`, and the motive's `as`. Declining on those costs
+        // the analysis form nothing — there is no expression they could have
+        // started — and it is the whole of what the variable needs here. A
+        // follow token that *can* begin an expression (`match code (x) as T`)
+        // still reads as the analysis form, deliberately: that one is a real
+        // ambiguity rather than a gap, and it is the issue's residue.
+        if self.at_kw("code")
+            && !matches!(self.nth(1), TokKind::LBrace)
+            && !matches!(self.nth(1), TokKind::Ident(s) if s == "as")
+        {
             return self.match_code_expr(start);
         }
         // The scrutinee and the motive are both immediately followed by the
@@ -3988,6 +4012,72 @@ mod tests {
         // `let code = e;` binds a plain variable named `code`, unchanged.
         let f = parse_file("fn f(n: Nat) -> Nat { let code = n; code }").unwrap();
         assert!(matches!(&only_decl(&f).body.stmts[0], Stmt::Let { name, .. } if name == "code"));
+    }
+
+    /// `match code { … }` on an ordinary variable named `code`
+    /// (issues/match-scrutinee-named-code.md). The `{` lookahead buys the name
+    /// back everywhere a `{` could be the quote's payload; where the `{`
+    /// belongs to the *enclosing* form instead, `no_record_lit` already says
+    /// so, and the quotation stands down.
+    #[test]
+    fn a_scrutinee_named_code_is_an_ordinary_variable() {
+        let f = parse_file("fn f(code: Nat) -> Nat { match code { Zero => 0, Succ(k) => k } }")
+            .unwrap();
+        let ExprKind::Match { scrut, arms, .. } = &only_decl(&f).body.result.kind else {
+            panic!("expected a match")
+        };
+        assert!(matches!(&scrut.kind, ExprKind::Var(n) if n == "code"), "the scrutinee is `code`");
+        assert_eq!(arms.len(), 2);
+        // The same brace in the same position, one form up: a motive's body
+        // and the arm block are both the enclosing form's.
+        parse_file("fn f(code: Nat) -> Nat { match code as λ z => Nat { Zero => 0, Succ(k) => k } }")
+            .unwrap();
+    }
+
+    /// …and the quotation is untouched wherever the `{` really is its payload:
+    /// a `let`, an argument, a block's result. These are the positions the
+    /// flag is lifted in, so this is the control that says the fix took only
+    /// the scrutinee.
+    #[test]
+    fn a_quotation_still_parses_where_the_brace_is_its_own() {
+        for src in [
+            "meta fn f(g: Ctx) -> Code(g |- Nat) { code { 0 } }",
+            "meta fn f(g: Ctx) -> Code(g |- Nat) { let q = code { 0 }; q }",
+            "meta fn f(g: Ctx, h: Code(g |- Nat) -> Code(g |- Nat)) -> Code(g |- Nat) \
+             { h(code { 0 }) }",
+        ] {
+            parse_file(src).unwrap_or_else(|e| panic!("{src}\n  got: {}", e.msg));
+        }
+        // In scrutinee position the escape hatch is the one `no_record_lit`
+        // documents for record literals, and for the same reason: a bracket
+        // lifts the restriction.
+        let f = parse_file(
+            "meta fn f(g: Ctx, c: Code(g |- Nat)) -> Nat \
+             { match (code { 0 }) { _ => 0 } }",
+        )
+        .unwrap();
+        let ExprKind::Match { scrut, .. } = &only_decl(&f).body.result.kind else {
+            panic!("expected a match")
+        };
+        assert!(matches!(&scrut.kind, ExprKind::Quote { .. }), "parens restore the quotation");
+    }
+
+    /// The negative control the fix must not disturb: `match code e as T { … }`
+    /// is the intensional form, and it was never the ambiguous shape — its own
+    /// guard reads `match code` followed by something *other* than the arm
+    /// block, which is why the variable case reached the quotation at all.
+    #[test]
+    fn the_intensional_match_is_untouched() {
+        parse_file(
+            "meta fn f(g: Ctx, c: Code(g |- Nat)) -> Nat \
+             { match code c as Nat { _ => 0 } }",
+        )
+        .unwrap();
+        let e = parse_file(
+            "meta fn f(g: Ctx, c: Code(g |- Nat)) -> Nat { match code c { _ => 0 } }",
+        )
+        .unwrap_err();
+        assert!(e.msg.contains("needs its result type"), "{}", e.msg);
     }
 
     #[test]

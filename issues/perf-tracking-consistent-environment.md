@@ -3,7 +3,7 @@ title: Consistent perf measurement: a place where a regression is a signal, not 
 status: open
 labels: [performance,tooling,testing,meta]
 created: 2026-08-11
-updated: 2026-08-12
+updated: 2026-08-16
 ---
 
 Filed from the 2026-08-11 iteration-time review. Two observations met:
@@ -52,3 +52,6 @@ each assumes something will notice growth, which is this issue.
 ## Log
 
 - 2026-08-12: Policy sharpened with the user (2026-08-12), triggered by CLAUDE.md's fast-lane '~30s' having gone stale unnoticed: CONCRETE PERF NUMBERS DO NOT BELONG IN DOC FILES OR CLAUDE.md, except abstractly. Docs may carry shape claims -- scaling exponents, what dominates, which lever exists -- because those survive hardware and load changes (docs/benchmarking.md's exponent headline is this policy already applied); wall-clock numbers belong in dated issue-log entries, which are diary by construction and expected to age, and in baseline.tsv behind scripts/bench --check. CLAUDE.md's fast-lane line re-edited accordingly (abstract statement + pointer to certgen-harness-cost for current numbers). This strengthens the instruction-count direction above: retired-instruction gates are the version of 'a number a doc could almost trust' -- load-immune to first order and runnable on the user's busy machine. Second user position recorded the same day, adjacent and load-bearing: perf surprises are usually pathologies or missing smarts, not laws -- do not distort designs around them; file the mechanism question instead (first instance: [[wf-field-conversion-cost]], the 163x from round A).
+- 2026-08-16: Datum for the 'is a regression a signal?' question, 2026-08-16: scripts/bench --check FAILED once and passed on an immediate re-run of the SAME tree (18 comparisons within thresholds), on a diff that touches only crates/syntax's parser — no kernel path at all, so a real regression was not available to it. Which comparison failed is unknown: the run's output was truncated to its last lines and the detail was lost, which is its own small lesson for anyone running the gate from a script.
+
+What this says for the directions above: the exponent discipline is doing the load-immunity work it was chosen for, but the gate still has a false-positive mode on a busy machine, and a gate that cries wolf once a session gets re-run rather than believed — which is the failure this issue exists to prevent. It is a second, independent argument for the retired-instruction direction (a false positive costs a full re-run, ~4 min, and teaches the wrong reflex), and an argument that whatever the gate becomes should print enough on failure to name the comparison without a re-run. Not investigated further and not filed separately: one occurrence, no mechanism, and the round it interrupted had no perf stake.
