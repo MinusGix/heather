@@ -535,8 +535,15 @@ impl Elaborator {
         };
         let carrier = req("R", &mut by_name, &mut missing);
         let abs = req("abs", &mut by_name, &mut missing);
-        let inv = req("inv", &mut by_name, &mut missing);
-        let fold = req("fold", &mut by_name, &mut missing);
+        // `inv` and `fold` have defaults (`issues/repr-fold-via-abs-default.md`):
+        // an omitted `inv` is `True` — the same `Zero = Zero` the naive repr
+        // spells, §1.4 note 6 — and an omitted `fold` is the fold *through*
+        // `abs`, synthesized in `generate`. Omission means "take the default"
+        // and nothing else; a `?` still reports and fails (design
+        // docs/obligation-records-design.md §1.2).
+        let inv = take("inv", &mut by_name)
+            .unwrap_or_else(|| format!("\u{3bb} (r: {carrier}) => (Zero = Zero)"));
+        let fold = take("fold", &mut by_name);
         let mut mks = Vec::new();
         for c in &spec.ctors {
             mks.push(req(&format!("mk {}", c.name), &mut by_name, &mut missing));
@@ -545,8 +552,9 @@ impl Elaborator {
             return err(
                 format!(
                     "`datarepr {}` is missing {}: a repr's correctness basis is \
-                     `R`, `abs`, `inv`, `fold` and one `mk` per constructor \
-                     (docs/datarepr-design.md §1.1)",
+                     `R`, `abs` and one `mk` per constructor \
+                     (docs/datarepr-design.md §1.1); `inv` and `fold` default \
+                     when omitted",
                     d.name,
                     missing.join(", ")
                 ),
@@ -672,7 +680,10 @@ struct Clauses {
     mks: Vec<String>,
     /// Per constructor, `(C_abs, C_inv)`.
     laws: Vec<(Option<String>, Option<String>)>,
-    fold: String,
+    /// `None` is the omitted-because-defaultable case: the fold *through*
+    /// `abs`, synthesized by [`generate`] together with the embedding and the
+    /// two lemmas its anchor law needs.
+    fold: Option<String>,
     fold_law: Option<String>,
     /// How each written clause was written, by field name — for the
     /// obligations listing (§6). A field absent here was omitted, and is
@@ -708,7 +719,11 @@ fn naive_clauses(name: &str, spec: &SpecView) -> Clauses {
         inv: format!("\u{3bb} (r: {s}) => (Zero = Zero)"),
         mks,
         laws: spec.ctors.iter().map(|_| (None, None)).collect(),
-        fold: {
+        // The naive fold is the spec recursor itself, not the via-abs default:
+        // at `abs = id` the default's embedding would be a round-trip through
+        // the constructor images where the recursor is already at hand, and
+        // every emission this generator has ever produced stays byte-identical.
+        fold: Some({
             let mut bs = vec![("B".to_string(), "Type".to_string())];
             for (j, c) in spec.ctors.iter().enumerate() {
                 bs.push((format!("s{j}"), step_ty(c, s, "B")));
@@ -716,7 +731,7 @@ fn naive_clauses(name: &str, spec: &SpecView) -> Clauses {
             bs.push(("r".to_string(), s.clone()));
             let args: Vec<String> = (0..spec.ctors.len()).map(|j| format!("s{j}")).collect();
             lams(&bs, &format!("{}(B, {}, r)", spec_rec_name(name), args.join(", ")))
-        },
+        }),
         fold_law: None,
         prov: HashMap::new(),
     }
@@ -964,41 +979,62 @@ fn generate(
     let mkg = |ct: &CtorView| format!("{rec}::mk_{}()", ct.name);
     // Each law is recorded as it is stated (§1.1's statement schema): a `?` at
     // this clause prints the statement, and so does the obligations listing.
-    let mut note = |field: String, statement: &str, written: Option<&String>| {
+    //
+    // The two *data* clauses that have a default — `inv` and `fold` — are
+    // listed alongside the laws, with the type they are checked against as
+    // their statement. They are still not obligations in §1.1's sense (a `?`
+    // at either is refused, because the statements are computed *from* them);
+    // what the row answers is the question the defaults created, "did this
+    // repr take the default here?" (`issues/repr-fold-via-abs-default.md`).
+    let mut note = |field: String, statement: &str, written: bool| {
         obs.push(Obligation {
             owner: owner.to_string(),
             path: format!("{name}::{field}"),
-            state: if written.is_some() { "supplied" } else { "defaulted" },
-            provenance: written.and(cl.prov.get(&field).copied()),
+            state: if written { "supplied" } else { "defaulted" },
+            provenance: if written { cl.prov.get(&field).copied() } else { None },
             field,
             statement: statement.to_string(),
         });
     };
+    note("inv".to_string(), &format!("(r: {c}) -> Type"), cl.prov.contains_key("inv"));
     for (ct, (la, li)) in spec.ctors.iter().zip(cl.laws.iter()) {
         let ty = abs_law_ty(ct, c, &abs, &inv, &mkg(ct));
-        note(format!("{}_abs", ct.name), &ty, la.as_ref());
+        note(format!("{}_abs", ct.name), &ty, la.is_some());
         out.push_str(&format!(
             "theorem {rec}::{}_abs(): {ty} {{ {} }}\n",
             ct.name,
             la.clone().unwrap_or_else(|| refl_under(ct, c, &inv))
         ));
         let ty = inv_law_ty(ct, c, &inv, &mkg(ct));
-        note(format!("{}_inv", ct.name), &ty, li.as_ref());
+        note(format!("{}_inv", ct.name), &ty, li.is_some());
         out.push_str(&format!(
             "theorem {rec}::{}_inv(): {ty} {{ {} }}\n",
             ct.name,
             li.clone().unwrap_or_else(|| refl_under(ct, c, &inv))
         ));
     }
+    // The via-abs default (`issues/repr-fold-via-abs-default.md`): the fold the
+    // repr did not write is `spec_rec ∘ abs`, and the three declarations it
+    // rests on go here — after the image laws, which two of them consume, and
+    // before `fold` itself, which the first one is spelled inside.
+    let fold_body = match &cl.fold {
+        Some(f) => f.clone(),
+        None => {
+            out.push_str(&emb_decls(name, spec, c, &rec, &sr, &abs, &inv));
+            via_abs_fold(name, spec, c, &sr, &abs)
+        }
+    };
     let mut fb = vec![("B".to_string(), "Type".to_string())];
     for (j, ct) in spec.ctors.iter().enumerate() {
         fb.push((format!("s{j}"), step_ty(ct, c, "B")));
     }
     fb.push(("r".to_string(), c.clone()));
-    out.push_str(&format!("fn {rec}::fold() -> {} {{ {} }}\n", pis(&fb, "B"), cl.fold));
+    let fold_ty = pis(&fb, "B");
+    note("fold".to_string(), &fold_ty, cl.prov.contains_key("fold"));
+    out.push_str(&format!("fn {rec}::fold() -> {fold_ty} {{ {fold_body} }}\n"));
     {
         let ty = fold_law_ty(spec, c, &abs, &inv, &format!("{rec}::fold()"), &sr);
-        note("fold_law".to_string(), &ty, cl.fold_law.as_ref());
+        note("fold_law".to_string(), &ty, cl.fold_law.is_some());
         let body = cl.fold_law.clone().unwrap_or_else(|| {
             let mut bs = vec![("B".to_string(), "Type".to_string())];
             for (j, ct) in spec.ctors.iter().enumerate() {
@@ -1006,7 +1042,19 @@ fn generate(
             }
             bs.push(("r".to_string(), c.clone()));
             bs.push(("h".to_string(), appc(&inv, &["r".to_string()])));
-            lams(&bs, "refl")
+            // A written fold's law is `refl` when it is definitional (the naive
+            // repr). The *defaulted* fold's is not — it is the induction
+            // `via_abs_law` states, which is why that lemma exists at all.
+            match &cl.fold {
+                Some(_) => lams(&bs, "refl"),
+                None => {
+                    out.push_str(&via_abs_law(name, spec, &sr, &abs));
+                    let mut args = vec!["B".to_string()];
+                    args.extend((0..spec.ctors.len()).map(|j| format!("s{j}")));
+                    args.push(appc(&abs, &["r".to_string()]));
+                    lams(&bs, &format!("{}({})", via_abs_law_name(name), args.join(", ")))
+                }
+            }
         });
         out.push_str(&format!("theorem {rec}::fold_law(): {ty} {{ {body} }}\n"));
     }
@@ -1116,6 +1164,293 @@ fn fold_law_ty(spec: &SpecView, at: &str, abs: &str, inv: &str, fold: &str, sr: 
     let steps: Vec<String> = (0..spec.ctors.len()).map(|j| format!("s{j}")).collect();
     let rhs = format!("{sr}(B, {}, {})", steps.join(", "), appc(abs, &["r".to_string()]));
     pis(&bs, &format!("{lhs} = {rhs}"))
+}
+
+// -- the via-abs fold default (issues/repr-fold-via-abs-default.md) ---------
+//
+// `fold` is the one clause whose canonical definition is available to every
+// repr: fold *through* `abs`, which is what `Bin` writes by hand
+// (`nat_rec_(B, s0, λ m b => s1(bin_of_nat(m))(b), bin_abs(r))`). Reading that
+// shape schematically, it needs one thing the record does not state — a map
+// `S -> R` to put the spec recursor's child back at the carrier, since the
+// repr-side step wants it there. That map is not new machinery: it is the spec
+// recursor over the constructor **images**, and `bin_of_nat` is exactly it.
+//
+// The consequence, and the round's finding: the anchor law of the defaulted
+// fold is **not** `refl`. `abs ∘ emb = id` is a theorem, not a conversion, so
+// the default owes three declarations — the embedding, `inv` of it, and the
+// round-trip — plus one induction relating the two recursor calls. All four are
+// generated from the repr's own image laws, which is the sharper statement of
+// what the default means: at a repr whose images are certified, the fold anchor
+// is derivable rather than an independent obligation.
+
+/// The embedding `S -> R`: the spec recursor with the constructor images as
+/// its algebra.
+fn emb_name(name: &str) -> String {
+    format!("{name}_emb")
+}
+
+fn emb_inv_name(name: &str) -> String {
+    format!("{name}_emb_inv")
+}
+
+fn emb_abs_name(name: &str) -> String {
+    format!("{name}_emb_abs")
+}
+
+fn via_abs_law_name(name: &str) -> String {
+    format!("{name}_fold_via_abs")
+}
+
+/// `C(a0, a1)`, or `C` — a constructor pattern and a constructor application
+/// are the same text.
+fn ctor_at(c: &CtorView, args: &[String]) -> String {
+    if args.is_empty() {
+        c.name.clone()
+    } else {
+        format!("{}({})", c.name, args.join(", "))
+    }
+}
+
+fn ctor_pat(c: &CtorView) -> String {
+    ctor_at(c, &c.fields.iter().map(|f| f.binder.clone()).collect::<Vec<_>>())
+}
+
+/// A chain of one-position rewrites, `trans`-composed. Each link is an explicit
+/// `j` whose motive abstracts exactly the position it rewrites, so its `refl`
+/// proves the link's left endpoint — the same rule reprgen's certificate chains
+/// follow (design §3.1 correction 2: the motive is spelled, never inferred).
+/// `None` when there is nothing to rewrite, and the caller supplies `refl`.
+fn rewrite_chain(
+    args: &[String],
+    edits: &[(usize, String, String)],
+    render: &dyn Fn(&[String]) -> String,
+) -> Option<String> {
+    let mut cur = args.to_vec();
+    let mut links: Vec<String> = Vec::new();
+    for (i, to, p) in edits {
+        let lhs = render(&cur);
+        let mut mot = cur.clone();
+        mot[*i] = "y".to_string();
+        links.push(format!("j({p}, \u{3bb} y q => {lhs} = {}, refl)", render(&mot)));
+        cur[*i] = to.clone();
+    }
+    let mut it = links.into_iter().rev();
+    let mut acc = it.next()?;
+    for l in it {
+        acc = format!("trans({l}, {acc})");
+    }
+    Some(acc)
+}
+
+/// The image of a constructor's arguments on each side: the field itself, or
+/// the recursive result / the embedded child at a recursive position.
+fn image_args(c: &CtorView, at_rec: &dyn Fn(usize, &str) -> String) -> Vec<String> {
+    let mut k = 0;
+    let mut args = Vec::new();
+    for f in &c.fields {
+        if f.rec {
+            args.push(at_rec(k, &f.binder));
+            k += 1;
+        } else {
+            args.push(f.binder.clone());
+        }
+    }
+    args
+}
+
+/// The three declarations the via-abs fold rests on: the embedding, its
+/// `inv`-closure and the round-trip `abs ∘ emb = id`. Both lemmas are the same
+/// induction shape — one image law per arm, applied to the inductive
+/// hypotheses — which is why they are generated together.
+fn emb_decls(
+    name: &str,
+    spec: &SpecView,
+    c: &str,
+    rec: &str,
+    sr: &str,
+    abs: &str,
+    inv: &str,
+) -> String {
+    let s = &spec.spell;
+    let emb = emb_name(name);
+    let emb_inv = emb_inv_name(name);
+    let emb_abs = emb_abs_name(name);
+    let mut out = String::new();
+
+    // The embedding itself.
+    let mut steps = Vec::new();
+    for ct in &spec.ctors {
+        let mut bs: Vec<(String, String)> =
+            ct.fields.iter().map(|f| (f.binder.clone(), f.spell.clone())).collect();
+        for (k, _) in SpecView::rec_of(ct).iter().enumerate() {
+            bs.push((format!("b{k}"), c.to_string()));
+        }
+        let args = image_args(ct, &|k, _| format!("b{k}"));
+        steps.push(lams(&bs, &appc(&format!("{rec}::mk_{}()", ct.name), &args)));
+    }
+    out.push_str(&format!(
+        "fn {emb}(x: {s}) -> {c} {{ {sr}({c}, {}, x) }}\n",
+        steps.join(", ")
+    ));
+
+    // `inv` of it: the closure law of each image, applied to the inductive
+    // hypotheses. At `inv = True` every arm is inhabited and says nothing; at a
+    // canonical-form `inv` this is what the round-trip below is paid with.
+    let mut arms = String::new();
+    for ct in &spec.ctors {
+        let args = image_args(ct, &|_, b| appc(&emb, &[b.to_string()]));
+        let mut proof_args = args.clone();
+        for i in SpecView::rec_of(ct) {
+            proof_args.push(format!("{emb_inv}({})", ct.fields[i].binder));
+        }
+        arms.push_str(&format!(
+            "        {} => {},\n",
+            ctor_pat(ct),
+            appc(&format!("{rec}::{}_inv()", ct.name), &proof_args)
+        ));
+    }
+    out.push_str(&format!(
+        "theorem {emb_inv}(x: {s}): {} {{\n    match x {{\n{arms}    }}\n}}\n",
+        appc(inv, &[format!("{emb}(x)")])
+    ));
+
+    // The round-trip. One commutation law per arm opens it — that is where the
+    // `inv` lemma above is spent — and a `j` chain closes the recursive
+    // positions with the inductive hypothesis.
+    let mut arms = String::new();
+    for ct in &spec.ctors {
+        let args = image_args(ct, &|_, b| appc(&emb, &[b.to_string()]));
+        let mut law_args = args.clone();
+        for i in SpecView::rec_of(ct) {
+            law_args.push(format!("{emb_inv}({})", ct.fields[i].binder));
+        }
+        let opened = appc(&format!("{rec}::{}_abs()", ct.name), &law_args);
+        // The law lands at `C(…, abs(emb(a_i)), …)`; each recursive position is
+        // then rewritten to `a_i` itself.
+        let state = image_args(ct, &|_, b| appc(abs, &[appc(&emb, &[b.to_string()])]));
+        let edits: Vec<(usize, String, String)> = SpecView::rec_of(ct)
+            .iter()
+            .map(|i| {
+                let b = &ct.fields[*i].binder;
+                (*i, b.clone(), format!("{emb_abs}({b})"))
+            })
+            .collect();
+        let proof = match rewrite_chain(&state, &edits, &|a| ctor_at(ct, a)) {
+            Some(chain) => format!("trans({opened}, {chain})"),
+            None => opened,
+        };
+        arms.push_str(&format!("        {} => {proof},\n", ctor_pat(ct)));
+    }
+    out.push_str(&format!(
+        "theorem {emb_abs}(x: {s}): {} = x {{\n    match x {{\n{arms}    }}\n}}\n",
+        appc(abs, &[format!("{emb}(x)")])
+    ));
+    out
+}
+
+/// The default `fold`: the spec recursor at `abs(r)`, with each repr-side step
+/// handed the embedded child. This is `Bin`'s hand-written `bin_fold`, read
+/// schematically.
+fn via_abs_fold(name: &str, spec: &SpecView, c: &str, sr: &str, abs: &str) -> String {
+    let emb = emb_name(name);
+    let mut bs = vec![("B".to_string(), "Type".to_string())];
+    for (j, ct) in spec.ctors.iter().enumerate() {
+        bs.push((format!("s{j}"), step_ty(ct, c, "B")));
+    }
+    bs.push(("r".to_string(), c.to_string()));
+    let mut args = vec!["B".to_string()];
+    args.extend(spec_steps(spec, &|_, b| appc(&emb, &[b.to_string()])));
+    args.push(appc(abs, &["r".to_string()]));
+    lams(&bs, &format!("{sr}({})", args.join(", ")))
+}
+
+/// The spec-side algebra the default fold hands to the recursor: one step per
+/// constructor, binding the constructor's fields at their **spec** types and
+/// applying the repr-side step `s_j` to `at_rec` of each recursive one.
+fn spec_steps(spec: &SpecView, at_rec: &dyn Fn(usize, &str) -> String) -> Vec<String> {
+    let mut out = Vec::new();
+    for (j, ct) in spec.ctors.iter().enumerate() {
+        let mut bs: Vec<(String, String)> =
+            ct.fields.iter().map(|f| (f.binder.clone(), f.spell.clone())).collect();
+        let recs = SpecView::rec_of(ct);
+        for (k, _) in recs.iter().enumerate() {
+            bs.push((format!("b{k}"), "B".to_string()));
+        }
+        let mut args = image_args(ct, at_rec);
+        for (k, _) in recs.iter().enumerate() {
+            args.push(format!("b{k}"));
+        }
+        out.push(lams(&bs, &appc(&format!("s{j}"), &args)));
+    }
+    out
+}
+
+/// The anchor law of the defaulted fold, generalized off the carrier.
+///
+/// Unfolding the default fold turns `fold_law`'s left-hand side into the spec
+/// recursor at `abs(r)` over an algebra that reaches its child through
+/// `abs ∘ emb`; the right-hand side is the same recursor over the plain
+/// algebra. So the law is a statement about the recursor alone, at an arbitrary
+/// spec value — an induction whose arms rewrite each `abs(emb(a))` to `a` with
+/// the round-trip and each recursive call with the inductive hypothesis.
+fn via_abs_law(name: &str, spec: &SpecView, sr: &str, abs: &str) -> String {
+    let s = &spec.spell;
+    let emb = emb_name(name);
+    let emb_abs = emb_abs_name(name);
+    let lem = via_abs_law_name(name);
+    let mut ps = vec![("B".to_string(), "Type".to_string())];
+    for (j, ct) in spec.ctors.iter().enumerate() {
+        ps.push((format!("s{j}"), step_ty(ct, s, "B")));
+    }
+    ps.push(("x".to_string(), s.clone()));
+    let plain: Vec<String> = (0..spec.ctors.len()).map(|j| format!("s{j}")).collect();
+    let through = spec_steps(spec, &|_, b| appc(abs, &[appc(&emb, &[b.to_string()])]));
+    let at = |steps: &[String], x: &str| {
+        let mut a = vec!["B".to_string()];
+        a.extend(steps.iter().cloned());
+        a.push(x.to_string());
+        format!("{sr}({})", a.join(", "))
+    };
+    let ih = |x: &str| {
+        let mut a = vec!["B".to_string()];
+        a.extend(plain.iter().cloned());
+        a.push(x.to_string());
+        format!("{lem}({})", a.join(", "))
+    };
+    let mut arms = String::new();
+    for (j, ct) in spec.ctors.iter().enumerate() {
+        let recs = SpecView::rec_of(ct);
+        // The arm's two sides, reduced: the step applied to the fields — with
+        // `abs(emb(·))` at the recursive ones on the left — and then to the
+        // recursive calls.
+        let mut state = image_args(ct, &|_, b| appc(abs, &[appc(&emb, &[b.to_string()])]));
+        for i in &recs {
+            state.push(at(&through, &ct.fields[*i].binder));
+        }
+        let nf = ct.fields.len();
+        let mut edits: Vec<(usize, String, String)> = recs
+            .iter()
+            .map(|i| {
+                let b = &ct.fields[*i].binder;
+                (*i, b.clone(), format!("{emb_abs}({b})"))
+            })
+            .collect();
+        for (k, i) in recs.iter().enumerate() {
+            let b = &ct.fields[*i].binder;
+            edits.push((nf + k, at(&plain, b), ih(b)));
+        }
+        let step = format!("s{j}");
+        let proof = rewrite_chain(&state, &edits, &|a| appc(&step, a))
+            .unwrap_or_else(|| "refl".to_string());
+        arms.push_str(&format!("        {} => {proof},\n", ctor_pat(ct)));
+    }
+    format!(
+        "theorem {lem}({}): {} = {} {{\n    match x {{\n{arms}    }}\n}}\n",
+        params_src(&ps),
+        at(&through, "x"),
+        at(&plain, "x")
+    )
 }
 
 // -- substituting an inductive's type parameters ----------------------------

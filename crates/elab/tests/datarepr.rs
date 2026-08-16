@@ -13,7 +13,7 @@
 use heather_elab::Elaborator;
 
 mod support;
-use support::{BIN_ADD, BIN_REPR as BIN};
+use support::{BIN_ADD, BIN_MIN, BIN_REPR as BIN};
 
 fn ok(src: &str) -> Elaborator {
     let mut e = Elaborator::with_prelude().expect("prelude");
@@ -119,7 +119,9 @@ fn a_missing_clause_names_every_one_that_is_missing() {
     assert!(msg.contains("abs"), "{msg}");
     assert!(msg.contains("mk Nil"), "{msg}");
     assert!(msg.contains("mk Cons"), "{msg}");
-    assert!(msg.contains("fold"), "{msg}");
+    // `inv` and `fold` are *not* named: they default
+    // (`issues/repr-fold-via-abs-default.md`), and the message says so.
+    assert!(msg.contains("`inv` and `fold` default"), "{msg}");
 }
 
 #[test]
@@ -192,6 +194,125 @@ theorem anchor(s0: Nat, s1: (a: Nat) -> (b: Nat) -> Nat, r: Bin):
 {{ Repr_BinNat::fold_law()(Nat)(s0)(s1)(r)(refl) }}
 "
     ));
+}
+
+// -- the clause defaults (issues/repr-fold-via-abs-default.md) --------------
+//
+// An omitted `inv` is `True`; an omitted `fold` is the fold *through* `abs`,
+// synthesized together with the embedding `S -> R` (the spec recursor over the
+// constructor images) and the two lemmas its anchor law rests on. The four
+// artifacts are generated terms, so the axes are varied below: an **open**
+// element type, an arm with **two** recursive children, a **neutral** carrier
+// value beside a literal one, a **checking** position (the anchor law consumed
+// where its statement is expected), and negative controls.
+
+/// The milestone: a real repr of `Nat` written as `R`, `abs`, the images and
+/// the one law that is not `refl`.
+#[test]
+fn the_minimal_repr_is_the_carrier_the_images_and_the_laws_that_are_not_refl() {
+    ok(&format!(
+        "{BIN_MIN}
+// The defaulted fold *computes*, at the carrier: the representation of three
+// folded with a counting algebra is three.
+theorem counts_to_three():
+    Repr_BinMin::fold()(Nat)(Zero)(\u{3bb} (a0: Bin) => \u{3bb} (b0: Nat) => Succ(b0))(B1(B1(BNil)))
+      = Succ(Succ(Succ(Zero)))
+{{ refl }}
+
+// …and it anchors, at a **neutral** `r` and in a **checking** position: the
+// generated `fold_law` is exactly the statement the transfer generator wants,
+// and its proof is the generated induction rather than `refl`.
+theorem anchor(s0: Nat, s1: (a: Nat) -> (b: Nat) -> Nat, r: Bin):
+    Repr_BinMin::fold()(Nat)(s0)(\u{3bb} (a0: Bin) => \u{3bb} (b0: Nat) => s1(bin_abs(a0))(b0))(r)
+      = BinMin_spec_rec(Nat, s0, s1, bin_abs(r))
+{{ Repr_BinMin::fold_law()(Nat)(s0)(s1)(r)(refl) }}
+
+// The defaulted `inv` is `True`, spelled as the naive repr spells it.
+theorem inv_is_true(r: Bin): Repr_BinMin::inv()(r) {{ refl }}
+
+// The embedding the default folds through is a real function `Nat -> Bin`, and
+// its round-trip is a real theorem — neither is `bin_of_nat`, which is in scope
+// and unused.
+theorem embeds_four(): bin_abs(BinMin_emb(Succ(Succ(Succ(Succ(Zero)))))) = Succ(Succ(Succ(Succ(Zero))))
+{{ BinMin_emb_abs(Succ(Succ(Succ(Succ(Zero))))) }}
+"
+    ));
+}
+
+/// The generality axes for the synthesized lemmas: an element type that is not
+/// the carrier (`Tok`), and an arm with **two** recursive children — where the
+/// round-trip's rewrite chain has more than one link and an off-by-one in the
+/// position it abstracts would show.
+#[test]
+fn the_defaults_hold_at_an_open_element_type_and_at_two_recursive_children() {
+    ok(&format!(
+        "{LIST}
+inductive Stk {{ SNil, SCons(h: Tok, t: Stk) }}
+fn stk_abs(r: Stk) -> List<Tok> {{ match r {{ SNil => Nil, SCons(h, t) => Cons(h, stk_abs(t)) }} }}
+
+datarepr StkTok for List<Tok> {{ R := Stk, abs := stk_abs, mk Nil := SNil, mk Cons := SCons }}
+
+inductive Tree {{ Leaf(n: Nat), Node(l: Tree, r: Tree) }}
+inductive TreeC {{ CLeaf(n: Nat), CNode(l: TreeC, r: TreeC) }}
+fn tc_abs(x: TreeC) -> Tree {{
+    match x {{ CLeaf(n) => Leaf(n), CNode(l, r) => Node(tc_abs(l), tc_abs(r)) }}
+}}
+
+datarepr TreeR for Tree {{ R := TreeC, abs := tc_abs, mk Leaf := CLeaf, mk Node := CNode }}
+
+// A **neutral** carrier value under the defaulted fold, in a checking position.
+fn stk_len(r: Stk) -> Nat {{
+    Repr_StkTok::fold()(Nat)(Zero)(\u{3bb} (h: Tok) => \u{3bb} (t: Stk) => \u{3bb} (b: Nat) => Succ(b))(r)
+}}
+theorem stk_len_two(): stk_len(SCons(TAdd, SCons(TMul, SNil))) = Succ(Succ(Zero)) {{ refl }}
+
+// The two-recursive-children arm, anchored at a neutral `x`.
+theorem tree_anchor(s0: (n: Nat) -> Nat, s1: (l: Tree) -> (r: Tree) -> (b0: Nat) -> (b1: Nat) -> Nat,
+                    x: TreeC):
+    Repr_TreeR::fold()(Nat)(s0)(\u{3bb} (l: TreeC) => \u{3bb} (r: TreeC) => \u{3bb} (b0: Nat) => \u{3bb} (b1: Nat) =>
+                                    s1(tc_abs(l))(tc_abs(r))(b0)(b1))(x)
+      = TreeR_spec_rec(Nat, s0, s1, tc_abs(x))
+{{ Repr_TreeR::fold_law()(Nat)(s0)(s1)(x)(refl) }}
+"
+    ));
+}
+
+/// Negative control: the defaults do not cascade. A law that is omitted is
+/// `refl`, and where `refl` is wrong the repr is refused — the defaulted fold
+/// changes nothing about that.
+#[test]
+fn a_law_that_is_not_refl_is_still_owed_by_a_minimal_repr() {
+    let msg = bad(&BIN_MIN.replace("    Succ_abs := bin_succ_abs_law,\n", ""));
+    assert!(msg.contains("datarepr BinMin"), "{msg}");
+    assert!(msg.contains("Succ_abs"), "{msg}");
+}
+
+/// Negative control: a wrong `abs` under a defaulted fold is still refused.
+/// There is no repr whose image laws hold and whose *defaulted* `fold_law`
+/// fails — the round's finding is that the anchor is derivable from those laws
+/// — so this is where a wrong basis surfaces.
+#[test]
+fn a_wrong_abs_is_refused_under_a_defaulted_fold() {
+    let msg = bad(&BIN_MIN.replace(
+        "        B0(b) => double(bin_abs(b)),\n        B1(b) => Succ(double(bin_abs(b))),",
+        "        B0(b) => bin_abs(b),\n        B1(b) => Succ(bin_abs(b)),",
+    ));
+    assert!(msg.contains("NotConvertible"), "{msg}");
+}
+
+/// Negative control: a *written* fold is checked exactly as before — the
+/// default is what omission means, not a fallback for a clause that fails.
+#[test]
+fn a_written_fold_is_still_checked_against_the_anchor() {
+    // `BIN_MIN` with the anchor fold written as something that ignores its
+    // step, and `fold_law` left to its `refl` default as a written fold's is.
+    let msg = bad(&BIN_MIN.replace(
+        "    mk Zero := BNil,",
+        "    fold := \u{3bb} (B: Type) => \u{3bb} (s0: B) => \
+         \u{3bb} (s1: (a0: Bin) -> (b0: B) -> B) => \u{3bb} (r: Bin) => s0,
+    mk Zero := BNil,",
+    ));
+    assert!(msg.contains("fold_law"), "{msg}");
 }
 
 // -- the cost basis on `Bin` (design §1.2, §5.1 item 4) ---------------------

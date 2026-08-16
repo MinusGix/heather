@@ -9,7 +9,7 @@
 use heather_elab::Elaborator;
 
 mod support;
-use support::{BIN_CANON, BIN_REPR};
+use support::{BIN_CANON, BIN_MIN, BIN_REPR, UNARY_CANON};
 
 fn ok(src: &str) -> Elaborator {
     let mut e = Elaborator::with_prelude().expect("prelude");
@@ -433,6 +433,87 @@ fn mirror(x: Tree) -> Tree {{
             e.impl_global(repr, op),
             Some(format!("{repr}_{op}_impl").as_str()),
             "{op} at {repr}"
+        );
+    }
+}
+
+/// The transfer machinery on top of a **defaulted** fold
+/// (`issues/repr-fold-via-abs-default.md`): the generator consumes
+/// `Repr_BinMin::fold()` and `fold_law()` without knowing that neither was
+/// written, and the `Impl` it registers computes at the carrier.
+#[test]
+fn a_transfer_at_a_repr_whose_fold_is_defaulted() {
+    let mut e = ok(&format!(
+        "{BIN_MIN}
+fn double_spec(n: Nat) -> Nat {{ match n {{ Zero => Zero, Succ(k) => Succ(Succ(double_spec(k))) }} }}
+"
+    ));
+    let text = transfer(&mut e, "double_spec", "BinMin");
+    assert!(text.contains("Repr_BinMin::fold()"), "{text}");
+    assert!(text.contains("refines_inv := double_spec_derived_inv"), "{text}");
+    assert_eq!(e.impl_global("BinMin", "double_spec"), Some("BinMin_double_spec_impl"));
+    // …and it computes: doubling the representation of two yields four.
+    let computes = "theorem double_at_two(): bin_abs(double_spec_derived(B0(B1(BNil)))) \
+                      = Succ(Succ(Succ(Succ(Zero)))) { refl }";
+    if let Err(err) = e.elab_source(computes) {
+        panic!("the derived body does not compute: {}", err.render(computes));
+    }
+}
+
+// -- the fold-not-through-`abs` control point (§3.3, as-landed note 5) ------
+//
+// Every repr the suite had defines `fold` as `spec_rec ∘ abs`, which makes one
+// thing in the certificate unobservable. `UnC` folds on the **carrier**.
+
+#[test]
+fn a_transfer_at_a_repr_whose_fold_is_not_through_abs() {
+    let mut e = ok(&format!(
+        "{UNARY_CANON}
+fn double_spec(n: Nat) -> Nat {{ match n {{ Zero => Zero, Succ(k) => Succ(Succ(double_spec(k))) }} }}
+"
+    ));
+    let text = transfer(&mut e, "double_spec", "UnC");
+    assert!(text.contains("Repr_UnC::Succ_inv()"), "{text}");
+    assert_eq!(e.impl_global("UnC", "double_spec"), Some("UnC_double_spec_impl"));
+    let computes = "theorem double_at_two(): un_abs(double_spec_derived(US(US(UZ)))) \
+                      = Succ(Succ(Succ(Succ(Zero)))) { refl }";
+    if let Err(err) = e.elab_source(computes) {
+        panic!("the derived body does not compute: {}", err.render(computes));
+    }
+}
+
+/// **The control §3.3's note 5 records as missing.** `refines_inv` transports
+/// the `inv`-preservation lemma back across the anchor law, and the direction
+/// of that transport is what `sym` supplies. At `Bin`/`BinC` deleting it still
+/// checks — `fold` is defined through `abs` there, so both sides of `fold_law`
+/// are convertible for an algebra that ignores the spec child. Here they are
+/// two different stuck terms, and the mutation is refused.
+#[test]
+fn the_refines_inv_transport_direction_is_observable_when_fold_is_not_through_abs() {
+    let mut e = ok(&format!(
+        "{UNARY_CANON}
+fn double_spec(n: Nat) -> Nat {{ match n {{ Zero => Zero, Succ(k) => Succ(Succ(double_spec(k))) }} }}
+"
+    ));
+    let text = e.reprgen("double_spec", "UnC").expect("green emission").text;
+    let bad = text.replacen("j(sym(", "j((", 1);
+    assert_ne!(bad, text, "the mutation must apply");
+    refused(&mut e, &bad, "`refines_inv` transported in the wrong direction");
+}
+
+/// The other half of the same control, stated as a fact about the *old*
+/// fixture rather than left implicit: at `BinC` the identical mutation checks.
+/// Recording it keeps a future reader from "fixing" the note above.
+#[test]
+fn the_same_mutation_is_invisible_where_fold_is_defined_through_abs() {
+    let (mut e, text) = base_double();
+    let bad = text.replacen("j(sym(", "j((", 1);
+    assert_ne!(bad, text, "the mutation must apply");
+    if let Err(err) = e.elab_source(&bad) {
+        panic!(
+            "the transport direction is expected to be UNOBSERVABLE at `BinC`; \
+             if this now fails, design §3.3 note 5 has changed: {}",
+            err.render(&bad)
         );
     }
 }

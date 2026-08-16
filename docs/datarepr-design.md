@@ -364,6 +364,44 @@ instances can hold today, `lib/std/algebra.hthr`):
 8. `datarepr` over **`Nat`** works by writing `Nat`'s constructor list into
    the elaborator: it is a kernel type with no declaration to read one off.
 
+**As-landed (the clause defaults, 2026-08-15), amending §1.4 and the sketch
+above.** A repr's *required* clauses are now `R`, `abs` and one `mk` per
+constructor; `inv` and `fold` default when omitted, which makes the sketch's
+"laws are `refl` and omitted when definitional" true of two data clauses as
+well (`issues/repr-fold-via-abs-default.md`). Omitting `fold` was previously an
+error, so this is a behaviour change and not only an addition. The rule stays
+the one sentence `docs/obligation-records-design.md` §1.2 states: **omitted
+takes the default, `?` demands and reports, anything else is checked as today.**
+
+- **Omitted `inv` is `True`**, spelled as the naive repr spells it (note 6's
+  `Zero = Zero`; a prelude `True` is still `prelude-option-and-friends`').
+- **Omitted `fold` is the fold *through* `abs`** — §1.1's "the fold need not be
+  what runs" taken as the default rather than as permission. Reading `Bin`'s
+  hand-written anchor schematically shows what the shape needs and the record
+  does not state: a map `S -> R`, because the repr-side step holds its child at
+  the carrier while the spec recursor hands it one at `S`. That map is not new
+  machinery — it is the spec recursor over the constructor **images**, and
+  `bin_of_nat` is exactly it — so the default emits it (`N_emb`) alongside the
+  fold.
+- **The defaulted anchor law is not `refl`.** `abs ∘ emb = id` is a theorem, not
+  a conversion, so `fold_law` is generated as an induction: `N_emb_inv`
+  (`inv` of the embedding, one closure law per arm), `N_emb_abs` (the round
+  trip, one commutation law per arm and a `j` chain over the recursive
+  positions), and `N_fold_via_abs`, the recursor-level equation `fold_law`
+  reduces to at `x := abs(r)`. All four come out of the repr's **own** image
+  laws, which is the sharper statement of what the default means: at a repr
+  whose images are certified, **the fold anchor is derivable rather than an
+  independent obligation**. (Consequently no negative control can exhibit a repr
+  whose image laws hold and whose defaulted `fold_law` fails; the suite's
+  controls aim at the laws instead.)
+- **The naive repr is untouched**: its fold is the spec recursor directly, not
+  the via-abs default, and every emission stays byte-identical.
+- **`fold` and `inv` are listed by `heather obligations`** with `defaulted` /
+  `supplied`, so the listing answers "did this repr take the default here?".
+  They are still not obligations in the §1.1 sense — a `?` at either is refused
+  as a data field — and their `statement` column is the type the clause is
+  checked against.
+
 ## 2. Partiality and dispatch — the roughest part, worked concretely
 
 The settled policy, restated in one line each:
@@ -863,7 +901,14 @@ every time:
    `refines_inv` transport's *direction* is unobservable — deleting the `sym`
    still checks. The mutation controls therefore aim at the lemma's value rather
    than at its direction, and say so in place. A repr whose fold is not defined
-   through `abs` would see it; none exists in the suite yet.
+   through `abs` would see it; none exists in the suite yet. — *spent,
+   2026-08-15: `UnC` (`crates/elab/tests/support`) folds on the **carrier**
+   under a canonical-form `inv`, and there the `sym` cannot be deleted. Both
+   halves are needed: at `inv = True` the transported motive is constant, so any
+   direction proves it whatever the fold does. The suite pins the control and
+   its complement — the same mutation still checking at `BinC` is itself a test,
+   so this note cannot be "fixed" by accident
+   (`issues/repr-fold-via-abs-default.md`).*
 
 Corrected in passing, and not a stage of its own: calls to `f` in an emission
 are now built in **declaration order** rather than as "the other parameters,

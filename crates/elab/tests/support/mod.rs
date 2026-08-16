@@ -359,6 +359,94 @@ datarepr BinC for Nat {
 "#
 );
 
+/// The **minimal** repr the clause defaults make writable
+/// (`issues/repr-fold-via-abs-default.md`): the carrier, `abs`, one `mk` per
+/// constructor, and the one law that is not `refl`. `inv` defaults to `True`
+/// and `fold` to the fold *through* `abs` — the shape [`BIN_REPR`] writes by
+/// hand, generated instead, together with the embedding and the two lemmas its
+/// anchor law rests on.
+///
+/// It shares [`bin_base`] with the other two, so the hand-written `bin_fold`
+/// and `bin_of_nat` are in scope and unused here on purpose: what the fixture
+/// pins is that the generated ones are *not* them.
+pub const BIN_MIN: &str = concat!(
+    bin_base!(),
+    r#"
+datarepr BinMin for Nat {
+    R := Bin,
+    abs := bin_abs,
+    mk Zero := BNil,
+    mk Succ := binc,
+    Succ_abs := bin_succ_abs_law,
+}
+"#
+);
+
+/// A repr of `Nat` whose `fold` recurses on the **carrier** — deliberately not
+/// `spec_rec ∘ abs` — under a canonical-form `inv`.
+///
+/// It is the control point design §3.3's as-landed note 5 records as missing:
+/// where `fold` is defined through `abs`, both sides of `fold_law` are
+/// convertible for an algebra that ignores the spec child, so `refines_inv`'s
+/// transport *direction* is unobservable and deleting its `sym` still checks.
+/// Here the two sides are two different stuck terms, and the direction is real.
+/// The canonical `inv` is the other half of what makes it observable: at
+/// `inv = True` the transported motive is constant and any direction proves it.
+pub const UNARY_CANON: &str = r#"
+inductive Un { UZ, US(u: Un) }
+
+fn nat_rec_(B: Type, z: B, s: (a: Nat) -> (b: B) -> B, x: Nat) -> B {
+    match x { Zero => z, Succ(k) => s(k)(nat_rec_(B, z, s, k)) }
+}
+
+fn un_abs(r: Un) -> Nat { match r { UZ => Zero, US(u) => Succ(un_abs(u)) } }
+fn un_of_nat(n: Nat) -> Un { match n { Zero => UZ, Succ(m) => US(un_of_nat(m)) } }
+
+// Every `Un` is canonical — `abs` is injective here — but the proposition is
+// still about `r`, which is what `Zero = Zero` is not.
+fn un_canon(r: Un) -> Type { un_of_nat(un_abs(r)) = r }
+
+theorem un_canon_succ(a0: Un, h0: un_canon(a0)): un_canon(US(a0)) {
+    j(h0, λ y q => US(un_of_nat(un_abs(a0))) = US(y), refl)
+}
+
+fn un_fold(B: Type, s0: B, s1: (a0: Un) -> (b0: B) -> B, r: Un) -> B {
+    match r { UZ => s0, US(u) => s1(u)(un_fold(B, s0, s1, u)) }
+}
+
+// The anchor law holds without the invariant, and the clause restates it under
+// one: the recursive call would otherwise owe `un_canon` of the child, which
+// only injectivity of `US` gives back.
+theorem un_fold_law_free(B: Type, s0: B, s1: (a0: Nat) -> (b0: B) -> B, r: Un):
+    un_fold(B, s0, λ (a0: Un) => λ (b0: B) => s1(un_abs(a0))(b0), r)
+      = nat_rec_(B, s0, s1, un_abs(r))
+{
+    match r {
+        UZ => refl,
+        US(u) => j(un_fold_law_free(B, s0, s1, u),
+                   λ y q => s1(un_abs(u))(un_fold(B, s0,
+                                λ (a0: Un) => λ (b0: B) => s1(un_abs(a0))(b0), u))
+                              = s1(un_abs(u))(y), refl),
+    }
+}
+
+theorem un_fold_law(B: Type, s0: B, s1: (a0: Nat) -> (b0: B) -> B, r: Un, h: un_canon(r)):
+    un_fold(B, s0, λ (a0: Un) => λ (b0: B) => s1(un_abs(a0))(b0), r)
+      = nat_rec_(B, s0, s1, un_abs(r))
+{ un_fold_law_free(B, s0, s1, r) }
+
+datarepr UnC for Nat {
+    R := Un,
+    abs := un_abs,
+    inv := un_canon,
+    mk Zero := UZ,
+    mk Succ := US,
+    Succ_inv := un_canon_succ,
+    fold := un_fold,
+    fold_law := un_fold_law,
+}
+"#;
+
 /// `add` at `Bin`: the derived body out of the fold anchor, its certificate,
 /// and the congruence the via-derived route needs. Appended to
 /// [`BIN_REPR`], never used alone.

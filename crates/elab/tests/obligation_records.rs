@@ -14,7 +14,7 @@
 use heather_elab::Elaborator;
 
 mod support;
-use support::{BIN_ADD, BIN_CANON, BIN_REPR};
+use support::{BIN_ADD, BIN_CANON, BIN_MIN, BIN_REPR};
 
 fn ok(src: &str) -> Elaborator {
     let mut e = Elaborator::with_prelude().expect("prelude");
@@ -214,6 +214,29 @@ fn omission_still_defaults() {
     ok(BIN_REPR);
 }
 
+/// A `?` and an omission never blur, now that `fold` has a default
+/// (`issues/repr-fold-via-abs-default.md`): omitting `fold` takes the via-abs
+/// default, and writing `fold := ?` still reports — as the data-field error,
+/// because a fold is not an obligation whose statement could be printed.
+#[test]
+fn a_hole_at_fold_reports_rather_than_taking_the_default() {
+    let msg = bad(&BIN_MIN.replace("    mk Zero := BNil,", "    fold := ?,\n    mk Zero := BNil,"));
+    assert!(msg.contains("is not an obligation"), "{msg}");
+    assert!(msg.contains("fold"), "{msg}");
+}
+
+/// …and a `?` at the *law* of a defaulted fold prints the statement that fold
+/// anchors, naming the generated `Repr_BinMin::fold()` — which is how an author
+/// discovers what the default committed them to.
+#[test]
+fn a_hole_at_the_law_of_a_defaulted_fold_prints_the_anchor() {
+    let msg =
+        bad(&BIN_MIN.replace("    mk Zero := BNil,", "    fold_law := ?,\n    mk Zero := BNil,"));
+    assert!(msg.contains("`fold_law` of `datarepr BinMin` is not proved"), "{msg}");
+    assert!(msg.contains("Repr_BinMin::fold()"), "{msg}");
+    assert!(msg.contains("BinMin_spec_rec"), "{msg}");
+}
+
 /// A `?` at a data field is an error that says why: the statements are computed
 /// *from* the data (§1.1).
 #[test]
@@ -402,6 +425,34 @@ impl length for ListTok {{
     assert_eq!(refines.provenance.map(|p| p.as_str()), Some("inline"));
     assert_eq!(refines.path, "Impl(length, ListTok)::refines");
     assert!(refines.statement.contains("= length(Repr_ListTok::abs()(l))"), "{}", refines.statement);
+}
+
+/// The two data clauses that have a default are listed too, so the listing
+/// answers the question the defaults created: did this repr write its `fold`
+/// and its `inv`, or take them (`issues/repr-fold-via-abs-default.md`)?
+#[test]
+fn the_listing_says_which_defaultable_data_clauses_were_taken() {
+    let min = ok(BIN_MIN);
+    let at = |e: &Elaborator, owner: &str, field: &str| {
+        let o = e
+            .obligations()
+            .iter()
+            .find(|o| o.owner == owner && o.field == field)
+            .unwrap_or_else(|| panic!("no row for {owner} / {field}"))
+            .clone();
+        (o.state, o.provenance.map(|p| p.as_str()), o.statement)
+    };
+    let (state, prov, stmt) = at(&min, "datarepr BinMin", "fold");
+    assert_eq!((state, prov), ("defaulted", None));
+    // The statement of a data clause is the type it is checked against.
+    assert!(stmt.starts_with("(B: Type) -> "), "{stmt}");
+    assert_eq!(at(&min, "datarepr BinMin", "inv").0, "defaulted");
+    // …and a repr that writes both says so.
+    let written = ok(BIN_REPR);
+    let (state, prov, _) = at(&written, "datarepr BinNat", "fold");
+    assert_eq!((state, prov), ("supplied", Some("named")));
+    let (state, prov, _) = at(&written, "datarepr BinNat", "inv");
+    assert_eq!((state, prov), ("supplied", Some("named")));
 }
 
 /// Also the **ascription interim** (§2.2, FINDING F): the surface has no
