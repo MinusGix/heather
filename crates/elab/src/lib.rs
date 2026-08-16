@@ -175,6 +175,41 @@ pub enum IndexedRoute {
     Forded,
 }
 
+/// A diagnostic that is **not** a failure: something true about a checked
+/// declaration that its author would want to know, said without refusing the
+/// file (`docs/diagnostic-warnings-design.md`).
+///
+/// Deliberately not a variant of [`ElabError`] and deliberately not carried in
+/// its `Vec`: `check_source`'s contract is "empty means the file is good", and
+/// every caller in the tree reads it that way (§2). A warning is read out of
+/// [`Elaborator::take_warnings`] instead, by whoever wants to show one.
+///
+/// One shape, a message at a span, because every warning anyone has asked for
+/// is one (§5). A listing-shaped warning can join `ElabError::UnsolvedGoals`
+/// in having its own rendering the day a customer needs it.
+#[derive(Debug, Clone)]
+pub struct Warning {
+    pub msg: String,
+    pub span: Span,
+}
+
+impl Warning {
+    /// One line with the source position — the compact form, matching
+    /// [`ElabError::render`].
+    pub fn render(&self, src: &str) -> String {
+        let (line, col) = line_col(src, self.span.start);
+        format!("{line}:{col}: warning: {}", self.msg)
+    }
+
+    /// The full CLI diagnostic: heading, location, caret line. The same
+    /// renderer [`ElabError::render_snippet`] uses, with `warning` in front
+    /// instead of `error` — the severity is the only thing that differs, and
+    /// a reader should not have to learn two shapes.
+    pub fn render_snippet(&self, src: &str, file: &str) -> String {
+        headed("warning", &self.msg, self.span, src, file)
+    }
+}
+
 impl From<ParseError> for ElabError {
     fn from(e: ParseError) -> Self {
         ElabError::Parse(e)
@@ -227,9 +262,7 @@ impl ElabError {
             let (line, col) = line_col(src, span.start);
             format!("{file}:{line}:{col}")
         };
-        let headed = |msg: &str, span: Span| {
-            format!("error: {msg}\n  --> {}\n{}", loc(span), snippet(src, span))
-        };
+        let headed = |msg: &str, span: Span| headed("error", msg, span, src, file);
         match self {
             ElabError::Parse(e) => headed(&format!("parse error: {}", e.msg), e.span),
             ElabError::Elab { msg, span } => headed(msg, *span),
@@ -246,6 +279,14 @@ impl ElabError {
             }
         }
     }
+}
+
+/// One `render_snippet` diagnostic: severity heading, `file:line:col`, and the
+/// caret line. Shared by [`ElabError`] and [`Warning`] so that the severity
+/// word is the only thing that can differ between them.
+fn headed(severity: &str, msg: &str, span: Span, src: &str, file: &str) -> String {
+    let (line, col) = line_col(src, span.start);
+    format!("{severity}: {msg}\n  --> {file}:{line}:{col}\n{}", snippet(src, span))
 }
 
 /// The quoted source line with a caret run under `span` — the body of a
@@ -818,6 +859,16 @@ pub struct Elaborator {
     /// (§8). Empty for every program that resolves nothing, which is what
     /// keeps the whole mechanism free.
     pending_derived: RefCell<Vec<(Type, Level, u32)>>,
+    /// Non-fatal diagnostics raised so far, in the order they were raised
+    /// (`docs/diagnostic-warnings-design.md` §3). A `RefCell` because the
+    /// places that raise one hold `&self` — the pattern compiler is the first
+    /// customer and takes `&self` throughout, exactly as `goals` and
+    /// `pending_derived` do.
+    ///
+    /// Drained by [`Self::take_warnings`], never by the elaborator: a warning
+    /// belongs to whoever has the source text to render it against, and that
+    /// is the caller (§3).
+    warnings: RefCell<Vec<Warning>>,
     /// Backchaining depth, for the recursion cap. A `Cell` because resolution
     /// recurses *through* `elab_check` — the nested obligation is discovered
     /// by `apply_implicit`, not passed down.
@@ -1010,6 +1061,7 @@ impl Elaborator {
             instance_scope: Vec::new(),
             derived: Vec::new(),
             pending_derived: RefCell::new(Vec::new()),
+            warnings: RefCell::new(Vec::new()),
             resolve_depth: Cell::new(0),
             next_tag: 0,
             fuel: DEFAULT_FUEL,
@@ -1073,6 +1125,7 @@ impl Elaborator {
         let file = parse_file(src)?;
         self.enter_module(module, &file)?;
         for item in &file.items {
+            let warn_mark = self.warnings.borrow().len();
             let r = match item {
                 Item::Decl(d) => self.elab_decl(d),
                 Item::Inductive(i) => self.elab_inductive(i),
@@ -1089,6 +1142,7 @@ impl Elaborator {
             // it.
             if r.is_err() {
                 self.pending_derived.borrow_mut().clear();
+                self.warnings.borrow_mut().truncate(warn_mark);
             } else {
                 self.mint_pending();
             }
@@ -1360,6 +1414,37 @@ impl Elaborator {
         self.check_module_source(DEFAULT_MODULE, src)
     }
 
+    /// Take the warnings raised since the last call
+    /// (`docs/diagnostic-warnings-design.md` §3). Draining rather than
+    /// borrowing is the point: the CLI renders each module against *that
+    /// module's* source, so a warning has to leave with the text its span
+    /// indexes into, before the next file is checked.
+    ///
+    /// Empty is the overwhelmingly common answer, and warnings never affect
+    /// whether a file checked — a caller that never calls this sees exactly
+    /// the behaviour it saw before warnings existed (§4).
+    pub fn take_warnings(&mut self) -> Vec<Warning> {
+        std::mem::take(&mut self.warnings.borrow_mut())
+    }
+
+    /// Raise a warning. Takes `&self`: the customers hold shared borrows.
+    ///
+    /// Nothing here decides whether the warning *survives* — a declaration
+    /// that goes on to fail drops the ones it raised, at the same site that
+    /// drops its pending derivations (§4).
+    pub(crate) fn warn(&self, msg: impl Into<String>, span: Span) {
+        // §4.1: a span into *generated* text does not index into any file a
+        // reader has, and a `datarepr`'s emission is elaborated inside an
+        // ordinary `check` of the declaration that owns it. Rendering such a
+        // span against the user's source would point a caret at an unrelated
+        // line. Generated code is the generator's problem, so it is dropped
+        // here rather than filtered by whoever renders.
+        if self.access.in_generated() {
+            return;
+        }
+        self.warnings.borrow_mut().push(Warning { msg: msg.into(), span });
+    }
+
     /// [`Self::check_source`] into a named module — what the CLI's loader
     /// calls once per file of the import closure, in topological order
     /// (docs/modules-design.md §3.2). A module whose imports are themselves
@@ -1375,6 +1460,7 @@ impl Elaborator {
         }
         let mut errs = Vec::new();
         for item in &file.items {
+            let warn_mark = self.warnings.borrow().len();
             let r = match item {
                 Item::Decl(d) => self.elab_decl(d),
                 Item::Inductive(i) => self.elab_inductive(i),
@@ -1387,6 +1473,9 @@ impl Elaborator {
             };
             if r.is_err() {
                 self.pending_derived.borrow_mut().clear();
+                // §4: a failed item's warnings are as speculative as the rest
+                // of it — it registers nothing, and it says nothing.
+                self.warnings.borrow_mut().truncate(warn_mark);
             } else {
                 self.mint_pending();
             }
@@ -2580,7 +2669,7 @@ impl Elaborator {
             // A quote against its `Code(g |- T)` type — checking-only, like
             // the kernel's `BoxTm` (docs/in-language-map-design.md §5).
             ExprKind::Quote(payload) => self.elab_quote(cx, payload, expected, e.span),
-            ExprKind::Match { form, motive: None, scrut, arms, eqbind } => {
+            ExprKind::Match { form, motive: None, scrut, arms, eqbind, generated } => {
                 // Stage-2 motive synthesis (issues/elab-stage2-metas.md): when
                 // the scrutinee is a local variable, abstract it out of the
                 // expected type so the motive is genuinely dependent; otherwise
@@ -2589,13 +2678,13 @@ impl Elaborator {
                 let motive = self.synth_motive(cx, &scrut_t, &scrut_ty, &scrut_lvl, expected);
                 let Some(h) = eqbind else {
                     return self.elab_match(
-                        cx, *form, arms, scrut_t, &scrut_ty, &scrut_lvl, motive, lvl.clone(),
-                        e.span,
+                        cx, *form, *generated, arms, scrut_t, &scrut_ty, &scrut_lvl, motive,
+                        lvl.clone(), e.span,
                     );
                 };
                 self.elab_convoy(
-                    cx, *form, h, arms, scrut_t, &scrut_ty, &scrut_lvl, motive, lvl, expected,
-                    e.span,
+                    cx, *form, *generated, h, arms, scrut_t, &scrut_ty, &scrut_lvl, motive, lvl,
+                    expected, e.span,
                 )
             }
             // `absurd(p)`: from an equation between distinct constructors,
@@ -3522,7 +3611,7 @@ impl Elaborator {
                     )
                 }
             }
-            ExprKind::Match { form, motive: Some(m), scrut, arms, eqbind } => {
+            ExprKind::Match { form, motive: Some(m), scrut, arms, eqbind, generated } => {
                 let (scrut_t, scrut_ty, scrut_lvl) = self.elab_infer(cx, scrut)?;
                 // An indexed scrutinee's motive binds the index too
                 // (docs/inductive-indexed-lowering.md §6.1).
@@ -3552,7 +3641,8 @@ impl Elaborator {
                     // by two (docs/nested-match-patterns-design.md §5.1).
                     let indep = motive2 == result.shift_local(2);
                     let prepared = self.prepare_arms(
-                        cx, *form, arms, &scrut_t, &scrut_ty, &result, indep, &mlvl, e.span,
+                        cx, *form, *generated, arms, &scrut_t, &scrut_ty, &result, indep, &mlvl,
+                        e.span,
                     )?;
                     let (acx, arms) = match &prepared {
                         Some((c, a)) => (c, a.as_slice()),
@@ -3582,7 +3672,8 @@ impl Elaborator {
                     );
                     let indep = motive2 == result.shift_local(2);
                     let prepared = self.prepare_arms(
-                        cx, *form, arms, &scrut_t, &scrut_ty, &result, indep, &mlvl, e.span,
+                        cx, *form, *generated, arms, &scrut_t, &scrut_ty, &result, indep, &mlvl,
+                        e.span,
                     )?;
                     let (acx, arms) = match &prepared {
                         Some((c, a)) => (c, a.as_slice()),
@@ -3606,14 +3697,14 @@ impl Elaborator {
                 // (docs/match-equation-split-design.md \u{a7}3.3).
                 if let Some(h) = eqbind {
                     let t = self.elab_convoy(
-                        cx, *form, h, arms, scrut_t, &scrut_ty, &scrut_lvl, motive, &mlvl,
-                        &result, e.span,
+                        cx, *form, *generated, h, arms, scrut_t, &scrut_ty, &scrut_lvl, motive,
+                        &mlvl, &result, e.span,
                     )?;
                     return Ok((t, result, mlvl));
                 }
                 let t = self.elab_match(
-                    cx, *form, arms, scrut_t, &scrut_ty, &scrut_lvl, motive, mlvl.clone(),
-                    e.span,
+                    cx, *form, *generated, arms, scrut_t, &scrut_ty, &scrut_lvl, motive,
+                    mlvl.clone(), e.span,
                 )?;
                 Ok((t, result, mlvl))
             }
@@ -3742,6 +3833,7 @@ impl Elaborator {
         &self,
         cx: &Cx,
         form: MatchForm,
+        generated: bool,
         h: &str,
         arms: &[Arm],
         scrut_t: Term,
@@ -3812,6 +3904,7 @@ impl Elaborator {
         let elim = self.elab_match(
             cx,
             form,
+            generated,
             &arms,
             scrut_t.clone(),
             scrut_ty,
@@ -3853,6 +3946,9 @@ impl Elaborator {
         &self,
         cx: &Cx,
         form: MatchForm,
+        // Diagnostics only (`docs/diagnostic-warnings-design.md` §7.1):
+        // whether the pattern compiler built this node.
+        generated: bool,
         arms: &[Arm],
         scrut_t: Term,
         scrut_ty: &Type,
@@ -3870,7 +3966,7 @@ impl Elaborator {
             .apply_local(&LocalSubst::id(&cx.gamma).extended(Rc::new(scrut_t.clone())));
         let independent = motive == result.shift_local(1);
         let prepared = self.prepare_arms(
-            cx, form, arms, &scrut_t, scrut_ty, &result, independent, &mlvl, span,
+            cx, form, generated, arms, &scrut_t, scrut_ty, &result, independent, &mlvl, span,
         )?;
         let (cx, arms) = match &prepared {
             Some((c, a)) => (c, a.as_slice()),
@@ -8503,7 +8599,7 @@ mod count_holes_impl {
                 tyargs.iter().for_each(|t| ty(t, n));
                 fields.iter().for_each(|f| expr(&f.expr, n));
             }
-            ExprKind::Match { scrut, motive, arms, eqbind: _, form: _ } => {
+            ExprKind::Match { scrut, motive, arms, eqbind: _, form: _, generated: _ } => {
                 expr(scrut, n);
                 if let Some(m) = motive {
                     expr(m, n);

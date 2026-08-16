@@ -314,8 +314,9 @@ fn rename_expr(m: &Ren, e: &Expr) -> Expr {
         VecLit(es) => VecLit(es.iter().map(|x| rename_expr(m, x)).collect()),
         Eq(a, b) => Eq(Box::new(rename_expr(m, a)), Box::new(rename_expr(m, b))),
         TyLit(t) => TyLit(Box::new(rename_ty(m, t))),
-        Match { form, scrut, eqbind, motive, arms } => Match {
+        Match { form, generated, scrut, eqbind, motive, arms } => Match {
             form: *form,
+            generated: *generated,
             scrut: Box::new(rename_expr(m, scrut)),
             eqbind: eqbind.clone(),
             motive: motive.as_ref().map(|x| Box::new(rename_expr(m, x))),

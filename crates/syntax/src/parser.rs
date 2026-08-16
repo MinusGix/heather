@@ -1683,6 +1683,7 @@ impl Parser {
             Expr {
                 kind: ExprKind::Match {
                     form: MatchForm::Split,
+                    generated: false,
                     scrut: Box::new(scrut),
                     eqbind,
                     motive,
@@ -2833,6 +2834,7 @@ impl Parser {
         Ok(Expr {
             kind: ExprKind::Match {
                 form: MatchForm::Match,
+                generated: false,
                 scrut: Box::new(scrut),
                 eqbind,
                 motive,

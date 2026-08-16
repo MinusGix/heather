@@ -49,6 +49,10 @@ struct Compile {
     /// A generated level has no spelling of its own — it stands for a pattern
     /// column — so the one it inherits is the only honest answer available.
     form: MatchForm,
+    /// Whether the arms being compiled are a generated level's (§7.1 of
+    /// `docs/diagnostic-warnings-design.md`): ours, not the writer's, so an
+    /// unreachable one is not their problem to hear about.
+    generated: bool,
     /// How many leaves each arm's body reached.
     uses: Vec<usize>,
     /// Whether each arm ever bound a pattern variable at a leaf. A row that
@@ -63,6 +67,37 @@ impl Compile {
         self.next += 1;
         format!("#p{n}")
     }
+}
+
+/// What to say about an arm that reached no leaf, given the arms *before* it —
+/// which are the only ones that can have shadowed it, first match being the
+/// rule (§3.3).
+///
+/// The two shapes are the two the redundancy issue lists, and they want
+/// different advice: a `_` that covers nothing is a spelling the writer can
+/// simply drop, while a shadowed constructor arm usually means one of the
+/// earlier patterns is wider than its author thought.
+fn unreachable_msg(a: &Arm, before: &[Arm], form: MatchForm) -> String {
+    let kw = form.keyword();
+    if a.default {
+        return format!(
+            "this `_` arm can never be reached: the arms above it already cover every \
+             constructor, so it stands for nothing. Deleting it does not change what \
+             this `{kw}` means"
+        );
+    }
+    let shadowed_by_same = before.iter().any(|b| b.ctor == a.ctor);
+    format!(
+        "this `{}` arm can never be reached: {} already matches every value it does, and \
+         first match wins (docs/nested-match-patterns-design.md §3.3), so its body is \
+         never run — and never checked",
+        a.ctor,
+        if shadowed_by_same {
+            format!("an earlier `{}` arm", a.ctor)
+        } else {
+            format!("an earlier arm of this `{kw}`")
+        }
+    )
 }
 
 /// The placeholder a leaf carries until §5 decides between sharing and
@@ -85,6 +120,10 @@ impl Elaborator {
         &self,
         cx: &Cx,
         form: MatchForm,
+        // Whether the pattern compiler built the node these arms came from.
+        // Read only to decide whether an unreachable arm is worth reporting
+        // (`docs/diagnostic-warnings-design.md` §7.1).
+        generated: bool,
         arms: &[Arm],
         scrut_t: &Term,
         scrut_ty: &Type,
@@ -134,6 +173,7 @@ impl Elaborator {
         }
         let mut st = Compile {
             form,
+            generated,
             next,
             uses: vec![0; arms.len()],
             binding: vec![false; arms.len()],
@@ -495,6 +535,8 @@ impl Elaborator {
         Ok(Expr {
             kind: ExprKind::Match {
                 form: st.form,
+                // §7.1: our level, our arms.
+                generated: true,
                 scrut: Box::new(Expr {
                     kind: ExprKind::Var(cols[j].clone()),
                     span,
@@ -558,7 +600,19 @@ impl Elaborator {
         let mut bodies: Vec<Option<Expr>> = vec![None; arms.len()];
         for (i, a) in arms.iter().enumerate() {
             match st.uses[i] {
-                0 => {}
+                // No leaf: nothing this arm matches is left by the arms above
+                // it, so its body is never elaborated and never runs. That
+                // silence was deliberate and is the redundancy half of
+                // issues/match-arm-redundancy-warning.md; with a warning
+                // channel it can finally be *said*
+                // (docs/diagnostic-warnings-design.md §7). The census is the
+                // one §5 already computes for sharing — reachability is not a
+                // new analysis, it is this number being zero.
+                0 => {
+                    if !st.generated {
+                        self.warn(unreachable_msg(a, &arms[..i], st.form), a.span);
+                    }
+                }
                 1 => bodies[i] = Some(a.body.clone()),
                 n => {
                     if independent && !st.binding[i] {
@@ -726,9 +780,10 @@ fn fill(e: Expr, bodies: &[Option<Expr>]) -> Expr {
                 span: e.span,
             }
         }
-        ExprKind::Match { form, scrut, eqbind, motive, arms } => Expr {
+        ExprKind::Match { form, generated, scrut, eqbind, motive, arms } => Expr {
             kind: ExprKind::Match {
                 form,
+                generated,
                 scrut,
                 eqbind,
                 motive,

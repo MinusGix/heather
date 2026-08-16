@@ -1278,7 +1278,7 @@ fn scan_splices(e: &Expr, menv: &MetaEnv, out: &mut Vec<(String, Span)>) -> R<()
             scan_splices(idx, menv, out)
         }
         // `eqbind` is a binding *name*, so there is nothing in it to splice.
-        ExprKind::Match { scrut, motive, arms, eqbind: _, form: _ } => {
+        ExprKind::Match { scrut, motive, arms, eqbind: _, form: _, generated: _ } => {
             scan_splices(scrut, menv, out)?;
             if let Some(m) = motive {
                 scan_splices(m, menv, out)?;

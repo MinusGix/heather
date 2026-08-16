@@ -201,12 +201,31 @@ pre-count is documented as an upper bound. Filed as its own issue rather than
 done (§11): a redundancy *warning* needs a warning channel, and
 `check_source` has only errors.
 
+*Amended 2026-08-16* (`docs/diagnostic-warnings-design.md` §7): the channel
+exists and this is **reported**. Nothing here was recomputed — `Compile.uses`,
+the census §5 keeps to choose between sharing and copying a body, is already
+"how many leaves this arm reached", so an unreachable row is that number being
+zero at a branch `settle` already had. One correction to the paragraph above:
+"harmless" is right about the emitted term and wrong about the writer — a body
+that reaches no leaf is never elaborated, so it is never **type-checked**
+either, and that is the half worth a diagnostic.
+
 That is also why a redundant `_` is **dropped silently** rather than refused:
 §3.2's generated inner `_` is redundant exactly when the sub-column's rows
 already cover its type (a `Nat` column with both `Zero` and `Succ` rows, say),
 and the compiler emits it unconditionally. Making redundancy an error would
 have meant marking generated arms, i.e. the preprocessing remembering which
 spelling produced it — the thing §6 of the `split` design exists to prevent.
+
+*Amended 2026-08-16*: a written redundant `_` is now **warned about**, and the
+marking is done — `generated: bool` on the node, set by this module's emit and
+read by diagnostics only. The last clause above conflated two things and is
+withdrawn: remembering that WE built a node is not remembering which spelling
+the user typed, and §6's tautology is about the *elimination* both spellings
+build, which no flag on the node touches. (The spelling is remembered too, and
+deliberately — `form: MatchForm`, same field group, same
+diagnostics-only rule.) Refusing a redundant `_` outright is still not done and
+still should not be: it breaks the refactor that adds a constructor.
 
 ### 3.5 A bare identifier in a sub-pattern
 
@@ -463,8 +482,11 @@ context-keying. Refused with a message that says which arm and why, instead of
 
 ## 11. Residue, with owners
 
-- **Redundancy and reachability are not reported** (§3.4). Needs a warning
-  channel; filed as its own issue.
+- ~~**Redundancy and reachability are not reported** (§3.4). Needs a warning
+  channel; filed as its own issue.~~ **Paid 2026-08-16**: the channel is
+  `docs/diagnostic-warnings-design.md` and this was its first customer. An
+  unreachable row and a `_` that stands for nothing are reported as warnings,
+  off `Compile.uses`; a generated level's own `_` is not (§7.1 there).
 - **A non-exhaustive inner column reports at the outer `match`** (§3.4). Same
   class as the `split` design's §6 wart — the message is true and the span is
   coarse — and the fix is the same one (thread a form/site name), still not

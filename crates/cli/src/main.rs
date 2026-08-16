@@ -182,6 +182,21 @@ fn check(opts: &Opts, files: &[String]) -> ExitCode {
         let mut root_ok = true;
         for m in &modules {
             let errs = elab.check_module_source(&m.name, &m.src);
+            // Warnings are drained per module, before the next one is checked:
+            // a span indexes into the source it came from
+            // (docs/diagnostic-warnings-design.md §3). They do not fail the
+            // run and they do not touch the `ok` line — a warned file is a
+            // checked file (§4).
+            let warns = elab.take_warnings();
+            if !warns.is_empty() {
+                let shown = display_path(&m.path, path);
+                for w in &warns {
+                    eprint!("{}", w.render_snippet(&m.src, &shown));
+                    eprintln!();
+                }
+                let n = warns.len();
+                eprintln!("{shown}: {n} warning{}", if n == 1 { "" } else { "s" });
+            }
             if errs.is_empty() {
                 continue;
             }

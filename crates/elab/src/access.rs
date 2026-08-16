@@ -54,6 +54,16 @@ pub(crate) struct AccessTable {
     generated: usize,
 }
 
+impl AccessTable {
+    /// Whether generated source is being elaborated right now. The one
+    /// question outside this module that the depth answers: a diagnostic about
+    /// generated text has no source file to point into
+    /// (`docs/diagnostic-warnings-design.md` §4.1).
+    pub(crate) fn in_generated(&self) -> bool {
+        self.generated > 0
+    }
+}
+
 impl Elaborator {
     /// Record a designed access path and the declaration it resolves to. The
     /// minted name becomes unspellable in user source at the same moment.

@@ -800,6 +800,19 @@ pub enum ExprKind {
         /// a term may consult this field, which is why it carries a keyword
         /// and not a variant of behaviour.
         form: MatchForm,
+        /// Whether the **pattern compiler** built this node rather than a
+        /// writer (`docs/nested-match-patterns-design.md` §3.3): a level that
+        /// stands for a pattern *column*, with machine binders and possibly a
+        /// `_` arm the compiler itself supplied.
+        ///
+        /// Read by **diagnostics only**, and for one reason
+        /// (`docs/diagnostic-warnings-design.md` §7.1): a warning about an
+        /// unreachable arm is a statement about what somebody *wrote*, and a
+        /// generated level's arms were written by us. Reachability for the
+        /// written arms is complete without it — one compilation's census
+        /// spans every level it emits — so this only ever silences a report
+        /// about our own arms, never suppresses one about the user's.
+        generated: bool,
         scrut: Box<Expr>,
         /// `match h : e { … }` — the convoy, written by the elaborator: the
         /// motive gains `Id(S, e, z) ->` and each arm gains a binder
