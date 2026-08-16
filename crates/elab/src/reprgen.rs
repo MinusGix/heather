@@ -172,7 +172,10 @@ struct Arm<'a> {
 }
 
 /// The one shape v1 transfers: `f(q⃗, x: S)` defined by a total `match` on
-/// `x`. Everything else declines with a reason (§3.3).
+/// `x` — or by the same case analysis spelled `split`, which is one node and
+/// one elimination (docs/match-equation-split-design.md §6) and so is admitted
+/// without the generator learning anything. Everything else declines with a
+/// reason (§3.3).
 struct Fragment<'a> {
     /// The recursion parameter's name.
     rec_param: String,
@@ -687,9 +690,24 @@ impl Elaborator {
         let Some((rec_param, rec_ix)) = rec_param else {
             return Err(format!("`{op}` takes no parameter at `{s}`: nothing to transfer"));
         };
-        // The body must be a bare `match` on the recursion parameter.
+        // The body must be a bare case analysis on the recursion parameter.
+        //
+        // Which *spelling* — `match` or `split` — is read off the body itself,
+        // so a body written as a `split` is declined in the words its author
+        // typed (issues/diagnostics-name-the-written-form.md). The fragment
+        // admits both, because it reads `ExprKind::Match` and the parser
+        // desugars `split` onto that very node
+        // (docs/match-equation-split-design.md §6); only these messages ever
+        // knew the difference, and until now they got it wrong.
+        let kw = match &f.body.result.kind {
+            ExprKind::Match { form, .. } => form.keyword(),
+            // No case analysis at all, so there is no spelling to name: the
+            // `match` below is the shape the fragment REQUIRES, not a claim
+            // about what the user wrote.
+            _ => "match",
+        };
         if !f.body.stmts.is_empty() {
-            return Err(format!("`{op}`'s body is not a bare `match`"));
+            return Err(format!("`{op}`'s body is not a bare `{kw}`"));
         }
         let ExprKind::Match { scrut, arms, .. } = &f.body.result.kind else {
             return Err(format!(
@@ -698,12 +716,12 @@ impl Elaborator {
             ));
         };
         if !matches!(&scrut.kind, ExprKind::Var(v) if *v == rec_param) {
-            return Err(format!("`{op}` does not match on its `{s}` parameter"));
+            return Err(format!("`{op}` does not {kw} on its `{s}` parameter"));
         }
         if arms.len() != ctors.len() {
             return Err(format!(
-                "`{op}`'s match has {} arms for {} constructors: the fragment needs a total \
-                 match in declaration order",
+                "`{op}`'s {kw} has {} arms for {} constructors: the fragment needs a total \
+                 {kw} in declaration order",
                 arms.len(),
                 ctors.len()
             ));

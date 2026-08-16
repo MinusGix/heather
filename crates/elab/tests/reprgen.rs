@@ -771,6 +771,87 @@ fn zeroish(n: Nat) -> Nat {{ match n {{ Zero => 0, Succ(k) => Succ(zeroish(k)) }
     assert!(declines(&e, "length", "ListTok").contains("already has an `Impl`"));
 }
 
+/// The fragment reads `ExprKind::Match`, and the parser desugars `split` onto
+/// that node (docs/match-equation-split-design.md §6) — so a transfer body
+/// written as a `split` is *admitted*, and used to be described back to its
+/// author as a `match` (issues/diagnostics-name-the-written-form.md, the third
+/// instance of that wart and the one in a subsystem neither of its rounds
+/// touched). The admission is the positive half of this test; the wording is
+/// the rest.
+#[test]
+fn a_split_bodied_transfer_is_admitted_and_declined_in_its_own_words() {
+    let mut e = ok(&format!(
+        "{LIST}
+fn slength(l: List<Tok>) -> Nat {{
+    split l;
+    on Nil := Zero;
+    on Cons(h, t) := Succ(slength(t));
+}}
+fn s_stmts(l: List<Tok>) -> Nat {{
+    let z = Zero;
+    split l;
+    on Nil := z;
+    on Cons(h, t) := z;
+}}
+fn s_other(l: List<Tok>, n: Nat) -> Nat {{
+    split n;
+    on Zero := Zero;
+    on Succ(k) := Zero;
+}}
+fn s_default(l: List<Tok>) -> Nat {{
+    split l;
+    on _ := Zero;
+}}
+"
+    ));
+    // A `split` body transfers, exactly as its `match` spelling does.
+    let text = transfer(&mut e, "slength", "ListTok");
+    assert!(text.contains("fn slength_derived"), "{text}");
+    assert_eq!(e.impl_global("ListTok", "slength"), Some("ListTok_slength_impl"));
+    // The three declines that describe the body the author wrote.
+    for (op, frag) in [
+        ("s_stmts", "`s_stmts`'s body is not a bare `split`"),
+        ("s_other", "`s_other` does not split on its `List<Tok>` parameter"),
+        ("s_default", "`s_default`'s split has 1 arms for 2 constructors"),
+    ] {
+        let msg = declines(&e, op, "ListTok");
+        assert!(msg.contains(frag), "`{op}`: {msg}");
+        assert!(!msg.contains("match"), "`{op}` still says `match`: {msg}");
+    }
+}
+
+/// The control the fix needs: hardcoding `split` would pass the test above.
+/// The same three shapes spelled `match` are still described as a `match`.
+#[test]
+fn a_match_bodied_transfers_declines_still_name_match() {
+    let e = ok(&format!(
+        "{LIST}
+fn m_stmts(l: List<Tok>) -> Nat {{
+    let z = Zero;
+    match l {{ Nil => z, Cons(h, t) => z }}
+}}
+fn m_other(l: List<Tok>, n: Nat) -> Nat {{
+    match n {{ Zero => Zero, Succ(k) => Zero }}
+}}
+fn m_default(l: List<Tok>) -> Nat {{ match l {{ _ => Zero }} }}
+"
+    ));
+    for (op, frag) in [
+        ("m_stmts", "`m_stmts`'s body is not a bare `match`"),
+        ("m_other", "`m_other` does not match on its `List<Tok>` parameter"),
+        ("m_default", "`m_default`'s match has 1 arms for 2 constructors"),
+    ] {
+        let msg = declines(&e, op, "ListTok");
+        assert!(msg.contains(frag), "`{op}`: {msg}");
+        assert!(!msg.contains("split"), "`{op}` says `split`: {msg}");
+    }
+    // A body that is no case analysis at all has no spelling to name, so its
+    // "not a structural `match`" is the shape the fragment REQUIRES rather
+    // than a claim about what was written — which is why that one message is
+    // not threaded. Pinned already by `not_a_match` in
+    // `the_decline_boundary_names_its_reasons`.
+}
+
 
 // -- hand-runs for callee-`Impl` resolution (§3.1 phase 0's other half) ------
 

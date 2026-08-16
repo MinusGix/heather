@@ -111,7 +111,7 @@ impl Elaborator {
             .collect();
         let deep = arms.iter().any(|a| a.binders.iter().any(|p| p.is_deep()));
         if deep {
-            self.check_deep_allowed(cx, &arms, scrut_t, scrut_ty, span)?;
+            self.check_deep_allowed(cx, form, &arms, scrut_t, scrut_ty, span)?;
         }
         let (rows, ctors) = self.matrix(cx, &arms, scrut_ty, span)?;
         // The generated column names must shadow *nothing*: a leaf deep in the
@@ -172,6 +172,7 @@ impl Elaborator {
     fn check_deep_allowed(
         &self,
         cx: &Cx,
+        form: MatchForm,
         arms: &[Arm],
         scrut_t: &Term,
         scrut_ty: &Type,
@@ -191,12 +192,14 @@ impl Elaborator {
         {
             return err(
                 format!(
-                    "a deep pattern is not available in this `match`: it descends on \
+                    "a deep pattern is not available in this `{}`: it descends on \
                      `{}`, a parameter of `{}`, so its arm binders are what the \
                      termination guard matches a recursive call's argument against. \
                      Match the field in a nested `match` inside the arm instead \
                      (docs/nested-match-patterns-design.md \u{a7}6)",
-                    s.params[dec].0, s.name
+                    form.keyword(),
+                    s.params[dec].0,
+                    s.name
                 ),
                 span,
             );
@@ -426,7 +429,8 @@ impl Elaborator {
                             return err(
                                 format!(
                                     "`{name}` binds {arity} field(s) in an earlier \
-                                     pattern of this `match`, found {}",
+                                     pattern of this `{}`, found {}",
+                                    st.form.keyword(),
                                     args.len()
                                 ),
                                 r.pats[j].span(),

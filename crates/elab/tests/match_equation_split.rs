@@ -493,6 +493,69 @@ fn a_matchs_diagnostics_still_name_match() {
     assert!(m.contains("`match` on a `Fin` needs its length to reduce"), "got: {m}");
 }
 
+/// The pattern compiler's own three, which the seven above missed.
+///
+/// The round that threaded `MatchForm` recorded the inherited form on a
+/// *generated* inner level as "honest but unobservable, because a `split`
+/// arm's binders are plain names". That premise is wrong: a `split` arm's
+/// binders come from the same `pat_args` a `match` arm's do
+/// (`crates/syntax/src/parser.rs`), so a deep pattern is writable in an `on`
+/// arm, and the inheritance is observable — the first case below is the
+/// generated level naming the form nobody wrote at.
+#[test]
+fn a_splits_deep_patterns_name_split() {
+    // The generated inner level, which has no source text of its own and so
+    // can only inherit. (Its *span* is still the outer `split` — that is
+    // issues/diagnostics-name-the-written-form.md item 2, unpaid.)
+    let m = bad(
+        "fn f<A>(d: A, r: Res<Res<A>>) -> A {
+             split r; on Stuck := d; on OutOfFuel := d; on Out(Out(v)) := v; }",
+    );
+    // Named in full: the outer column is exhaustive (all three arms are
+    // there), so only the generated inner level can be missing these two.
+    assert!(m.contains("`split` is missing an arm for `Stuck`, `OutOfFuel`"), "got: {m}");
+
+    // §6: a deep pattern under the termination guard.
+    let m = bad(
+        "fn f<A>(d: A, r: Res<Res<A>>) -> A {
+             split r; on Stuck := d; on OutOfFuel := d; on Out(Out(v)) := f(d, r); }",
+    );
+    assert!(m.contains("a deep pattern is not available in this `split`"), "got: {m}");
+    // The advice it gives is a nested `match` inside the arm, and stays one:
+    // a fresh elimination in the arm body is a spelling either form can hold.
+    assert!(m.contains("nested `match` inside the arm"), "got: {m}");
+
+    // A constructor at two arities in one column.
+    let m = bad(
+        "fn f<A>(d: A, r: Res<Res<A>>) -> A {
+             split r; on Stuck := d; on OutOfFuel := d;
+             on Out(Out(v)) := v; on Out(Out()) := d; }",
+    );
+    assert!(m.contains("in an earlier pattern of this `split`"), "got: {m}");
+}
+
+/// The control for the three above.
+#[test]
+fn a_matchs_deep_patterns_still_name_match() {
+    let m = bad(
+        "fn f<A>(d: A, r: Res<Res<A>>) -> A {
+             match r { Stuck => d, OutOfFuel => d, Out(Out(v)) => v } }",
+    );
+    assert!(m.contains("`match` is missing an arm for `Stuck`, `OutOfFuel`"), "got: {m}");
+
+    let m = bad(
+        "fn f<A>(d: A, r: Res<Res<A>>) -> A {
+             match r { Stuck => d, OutOfFuel => d, Out(Out(v)) => f(d, r) } }",
+    );
+    assert!(m.contains("a deep pattern is not available in this `match`"), "got: {m}");
+
+    let m = bad(
+        "fn f<A>(d: A, r: Res<Res<A>>) -> A {
+             match r { Stuck => d, OutOfFuel => d, Out(Out(v)) => v, Out(Out()) => d } }",
+    );
+    assert!(m.contains("in an earlier pattern of this `match`"), "got: {m}");
+}
+
 /// The advice the motive message now gives is followable — which is the
 /// point of changing it, and the half a message-text assertion cannot show.
 #[test]

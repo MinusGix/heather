@@ -475,6 +475,15 @@ context-keying. Refused with a message that says which arm and why, instead of
   form, so an inner column of a `split` says `split`; what it still cannot do
   is point at the column, because a generated level has no source text —
   which is this bullet's own observation and is untouched.
+  *Amended again 2026-08-16*: that amendment recorded the inheritance as
+  honest but **unobservable**, on the ground that a `split` arm's binders are
+  plain names. They are not — an `on` arm's binders are read by the same
+  `pat_args` a `match` arm's are, so a deep pattern is writable in a `split`
+  and the generated level is reachable from one. The inheritance is
+  observable, is correct, and is now pinned
+  (`a_splits_deep_patterns_name_split`), along with this section's own two
+  refusals, which named `match` at a `split` until the same day. The span half
+  now has its own owner, `issues/inner-column-diagnostic-span.md`.
 - **§6's rejection is on a *syntactic* mention of the declaration's own name**
   (§6.2), so a deep pattern in an arm that merely shadows that name is
   refused. Nothing in the corpus does, and narrowing it means resolving the

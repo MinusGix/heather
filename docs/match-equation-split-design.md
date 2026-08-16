@@ -385,6 +385,29 @@ type's "takes no arms" and the missing-motive refusal all did. And it was
 `split` can paste; it now suggests `split e as λ z => T;`, and a test checks
 that the suggestion checks.
 
+**Completed 2026-08-16** (same issue, second pass). "Seven sites" was itself a
+count of the *elimination* messages, and two subsystems that never came up in
+either round name a form as well; both now ask the field, and both were
+reachable from a written `split`.
+
+- `crates/elab/src/reprgen.rs`'s fragment declines — a datarepr transfer body
+  is `ExprKind::Match`, so a body written as a `split` was admitted (which is
+  §6 working) and then described back as a `match` (which is this wart).
+  Three messages, read off the body's own form. The fourth, "not a structural
+  `match`", is *not* threaded: it fires when the body is no case analysis at
+  all, so there is no spelling to name and the `match` in it is the shape the
+  fragment requires.
+- `crates/elab/src/patterns.rs`'s deep-pattern refusal (§6 of the nested-match
+  design) and its arity-disagreement message. Their advice — "a nested `match`
+  inside the arm" — deliberately stays `match`: it names a *fresh* elimination
+  in the arm body, which either spelling can hold.
+
+Not threaded, and not the same problem: `certgen.rs`'s "a nested `match` is
+outside the fragment". That pass walks **kernel terms**, where the surface
+form is long gone; naming the written spelling there means carrying it through
+elaboration into the kernel, which is a different (and much larger) question
+than reading a field off a surface node.
+
 ## 7. Decision 5: `split h : e;` is accepted
 
 The equation binding and the split share one node, so a `split` gets the
