@@ -69,7 +69,7 @@ What the three phases mean exactly:
 | phase | what is in it |
 |---|---|
 | `parse` | `heather_syntax::parse_file`, timed on its own pass |
-| `kernel` | the `typing::check_type` + `check_term` **gate** that every finished declaration passes (`crates/elab/src/stats.rs`) |
+| `kernel` | the `typing::check_type` + `check_term` **gate** that every finished declaration passes (`crates/elab/src/stats.rs`) — all three gate sites, `gate.rs`'s list being the authority: an ordinary declaration, a `meta fn`, and a **generated** definition |
 | `elab` | the residue: everything the elaborator did, **including its own conversion and whnf calls into the kernel** |
 
 That last row is the one to remember. The elaborator calls the kernel while
@@ -332,6 +332,15 @@ Bands after the round (the suite's rule — record the exponents that exist):
 the reason above), `declared-index-branching` 1.20–1.90.
 
 ## The other thing the phase split said on day one
+
+> **These are day-one numbers and they have aged** (checked 2026-08-16,
+> `issues/gendef-gate-untimed.md`). Both files have since been measured far
+> below them — the kernel-side rounds that landed in between moved the
+> absolute time by more than an order of magnitude, so the elaborator's
+> *share* grew without the elaborator getting slower. The reading below is
+> what survives (a proportion is not a measurement, and the leverage claim is
+> the point); current figures live in that issue's log, per the
+> numbers-in-docs policy on `issues/perf-tracking-consistent-environment.md`.
 
 `lib/ir_v1.hthr`: parse **0.0%**, elaborate **1.2%**, kernel gate **98.8%**.
 `lib/vec_code.hthr`, a file with no deep proofs in it: parse 10.6%, elaborate

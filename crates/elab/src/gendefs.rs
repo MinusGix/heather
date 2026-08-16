@@ -1220,16 +1220,25 @@ impl Elaborator {
                 lands_in_psi: true,
             };
             if !self.gate.as_ref().is_some_and(|g| g.admits(&self.psi, &item)) {
-                typing::check_type(&self.psi, 0, Layer::Prog, &empty, &ty, &level, self.fuel)
-                    .map_err(|err| crate::ElabError::Kernel {
-                        decl: name.clone(),
-                        span,
-                        err,
-                        note: None,
-                    })?;
-                typing::check_term(
-                    &self.psi, 0, Layer::Code, &empty, &body, &ty, &level, self.fuel,
-                )
+                // `stats::time_kernel`, as at the `elab_decl_inner` gate
+                // (lib.rs) and the `Layer::Meta` one (quote.rs): the frontend
+                // suite's `kernel` phase covers *every* finished declaration,
+                // and a generated definition is one
+                // (issues/gendef-gate-untimed.md).
+                crate::stats::time_kernel(|| {
+                    typing::check_type(&self.psi, 0, Layer::Prog, &empty, &ty, &level, self.fuel)
+                })
+                .map_err(|err| crate::ElabError::Kernel {
+                    decl: name.clone(),
+                    span,
+                    err,
+                    note: None,
+                })?;
+                crate::stats::time_kernel(|| {
+                    typing::check_term(
+                        &self.psi, 0, Layer::Code, &empty, &body, &ty, &level, self.fuel,
+                    )
+                })
                 .map_err(|err| crate::ElabError::Kernel {
                     decl: name.clone(), span, err, note: None,
                 })?;
