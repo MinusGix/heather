@@ -225,10 +225,10 @@ theorem counts_to_three():
 theorem anchor(s0: Nat, s1: (a: Nat) -> (b: Nat) -> Nat, r: Bin):
     BinMin::fold()(Nat)(s0)(\u{3bb} (a0: Bin) => \u{3bb} (b0: Nat) => s1(bin_abs(a0))(b0))(r)
       = BinMin::spec_rec(Nat, s0, s1, bin_abs(r))
-{{ BinMin::fold_law()(Nat)(s0)(s1)(r)(refl) }}
+{{ BinMin::fold_law()(Nat)(s0)(s1)(r)(trivial) }}
 
-// The defaulted `inv` is `True`, spelled as the naive repr spells it.
-theorem inv_is_true(r: Bin): BinMin::inv()(r) {{ refl }}
+// The defaulted `inv` is `True`, and `trivial` is what inhabits it.
+theorem inv_is_true(r: Bin): BinMin::inv()(r) {{ trivial }}
 
 // The embedding the default folds through is a real function `Nat -> Bin`, and
 // its round-trip is a real theorem — neither is `bin_of_nat`, which is in scope
@@ -272,7 +272,7 @@ theorem tree_anchor(s0: (n: Nat) -> Nat, s1: (l: Tree) -> (r: Tree) -> (b0: Nat)
     TreeR::fold()(Nat)(s0)(\u{3bb} (l: TreeC) => \u{3bb} (r: TreeC) => \u{3bb} (b0: Nat) => \u{3bb} (b1: Nat) =>
                                     s1(tc_abs(l))(tc_abs(r))(b0)(b1))(x)
       = TreeR::spec_rec(Nat, s0, s1, tc_abs(x))
-{{ TreeR::fold_law()(Nat)(s0)(s1)(x)(refl) }}
+{{ TreeR::fold_law()(Nat)(s0)(s1)(x)(trivial) }}
 "
     ));
 }
@@ -282,7 +282,9 @@ theorem tree_anchor(s0: (n: Nat) -> Nat, s1: (l: Tree) -> (r: Tree) -> (b0: Nat)
 /// changes nothing about that.
 #[test]
 fn a_law_that_is_not_refl_is_still_owed_by_a_minimal_repr() {
-    let msg = bad(&BIN_MIN.replace("    Succ_abs := bin_succ_abs_law,\n", ""));
+    let without = BIN_MIN.replace("    Succ_abs := bin_succ_abs_true,\n", "");
+    assert!(without != BIN_MIN, "the clause to delete moved");
+    let msg = bad(&without);
     assert!(msg.contains("datarepr BinMin"), "{msg}");
     assert!(msg.contains("Succ_abs"), "{msg}");
 }
@@ -313,6 +315,92 @@ fn a_written_fold_is_still_checked_against_the_anchor() {
     mk Zero := BNil,",
     ));
     assert!(msg.contains("fold_law"), "{msg}");
+}
+
+// -- the defaulted `inv` is the prelude `True` -------------------------------
+//
+// `issues/true-prop-trivial-hypotheses.md` half 1: the default stopped being
+// the `Zero = Zero` pun and became the real proposition, so a generated
+// `refines` signature binds `h0: True` and a consumer passes `trivial`. The
+// registry statement stays uniform — the binder is still there — which is the
+// ratified half of the same verdict.
+
+/// The flip, at a repr whose `inv` is defaulted: the clause is `True`, the
+/// generated closure laws are inhabited by `trivial`, and `refl` no longer
+/// proves them.
+#[test]
+fn a_defaulted_inv_is_true_and_is_paid_with_trivial() {
+    ok(&format!(
+        "{BIN_MIN}
+theorem inv_is_true(r: Bin): BinMin::inv()(r) {{ trivial }}
+
+// The generated closure law is a real theorem at a **neutral** carrier value,
+// consumed in a **checking** position.
+theorem closure(a0: Bin, h: True): BinMin::inv()(binc(a0)) {{ BinMin::Succ_inv()(a0)(h) }}
+
+// Proof irrelevance reaches through the generated statement: the law's own
+// value and `trivial` are convertible.
+theorem irrelevant(a0: Bin, h: True): BinMin::Succ_inv()(a0)(h) = trivial {{ refl }}
+"
+    ));
+}
+
+/// Negative control: where the defaulted `inv` is expected, `refl` is refused
+/// — and refused with the diagnostic `refl` gives everywhere else, not with a
+/// `True`-specific special case.
+#[test]
+fn refl_no_longer_pays_a_defaulted_inv() {
+    let msg = bad(&format!(
+        "{BIN_MIN}
+theorem inv_by_refl(r: Bin): BinMin::inv()(r) {{ refl }}
+"
+    ));
+    assert!(msg.contains("`refl` needs an `=` expected type"), "{msg}");
+}
+
+/// Negative control, the other direction: a repr whose `inv` is **written** is
+/// untouched by the flip. `BinNat`'s `inv` is `bin_inv`, an equation, so its
+/// omitted closure laws are still `refl` — and `trivial` does not prove them.
+#[test]
+fn a_written_inv_is_untouched_by_the_flip() {
+    ok(&format!(
+        "{BIN}
+theorem still_an_equation(r: Bin): BinNat::inv()(r) {{ refl }}
+"
+    ));
+    let msg = bad(&format!(
+        "{BIN}
+theorem not_true(r: Bin): BinNat::inv()(r) {{ trivial }}
+"
+    ));
+    assert!(msg.contains("`trivial` proves `True`"), "{msg}");
+}
+
+/// A repr that writes the trivial `inv` **explicitly** is recognized too: the
+/// default's proofs are chosen off the clause text, so `inv := λ (r: R) =>
+/// True` gets `trivial`-closed laws exactly as omission does. The generality
+/// axes ride along — an **open** element type (`Tok` is not the carrier) and a
+/// neutral scrutinee.
+#[test]
+fn an_explicitly_written_true_inv_is_recognized() {
+    ok(&format!(
+        "{LIST}
+inductive Stk {{ SNil, SCons(h: Tok, t: Stk) }}
+fn stk_abs(r: Stk) -> List<Tok> {{ match r {{ SNil => Nil, SCons(h, t) => Cons(h, stk_abs(t)) }} }}
+
+datarepr StkT for List<Tok> {{
+    R := Stk,
+    abs := stk_abs,
+    inv := \u{3bb} (r: Stk) => True,
+    mk Nil := SNil,
+    mk Cons := SCons,
+}}
+
+theorem closes(h: Tok, t: Stk, ht: True): StkT::inv()(StkT::mk_Cons()(h)(t)) {{
+    StkT::Cons_inv()(h)(t)(ht)
+}}
+"
+    ));
 }
 
 // -- the cost basis on `Bin` (design §1.2, §5.1 item 4) ---------------------

@@ -48,7 +48,7 @@ theorem length_is_rec(l: List<Tok>):
 {{ match l {{ Nil => refl, Cons(h, t) => cong_succ(length_is_rec(t)) }} }}
 
 // Phase 4, part two: `fold_law` opens the anchor, the lemma above closes it.
-theorem length_derived_refines(r: List<Tok>, h0: (Zero = Zero)):
+theorem length_derived_refines(r: List<Tok>, h0: True):
     length_derived(r) = length(ListTok::abs()(r))
 {{
     trans(ListTok::fold_law()(Nat)(Zero)
@@ -788,7 +788,7 @@ theorem length_is_rec(l: List<Tok>):
       = length(l)
 {{ match l {{ Nil => refl, Cons(h, t) => cong_succ(length_is_rec(t)) }} }}
 
-theorem length_derived_refines(r: List<Tok>, h0: (Zero = Zero)):
+theorem length_derived_refines(r: List<Tok>, h0: True):
     length_derived(r) = length(ListTok::abs()(r))
 {{
     trans(ListTok::fold_law()(Nat)(Zero)
@@ -804,7 +804,7 @@ impl length for ListTok {{
 // `single`'s `Impl`, hand-written: a separate global that happens to agree.
 fn single_impl(t: Tok) -> List<Tok> {{ Cons(t, Nil) }}
 theorem single_impl_refines(t: Tok): ListTok::abs()(single_impl(t)) = single(t) {{ refl }}
-theorem single_impl_inv(t: Tok): ListTok::inv()(single_impl(t)) {{ refl }}
+theorem single_impl_inv(t: Tok): ListTok::inv()(single_impl(t)) {{ trivial }}
 
 impl single for ListTok {{
     body := single_impl,
@@ -961,7 +961,7 @@ fn single(t: Tok) -> List<Tok> { Cons(t, Nil) }
 // not allowed to care (§1.2, the open registry).
 fn single_impl(t: Tok) -> List<Tok> { Cons(t, Nil) }
 theorem single_impl_refines(t: Tok): ListTok::abs()(single_impl(t)) = single(t) { refl }
-theorem single_impl_inv(t: Tok): ListTok::inv()(single_impl(t)) { refl }
+theorem single_impl_inv(t: Tok): ListTok::inv()(single_impl(t)) { trivial }
 impl single for ListTok {
     body := single_impl,
     refines := single_impl_refines,

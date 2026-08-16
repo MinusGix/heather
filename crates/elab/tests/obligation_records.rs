@@ -51,7 +51,7 @@ fn an_inline_lambda_body_and_an_inline_proof() {
         "{LIST}
 impl length for ListTok {{
     body := \u{3bb} (r: List<Tok>) => length(r),
-    refines := \u{3bb} (r: List<Tok>) => \u{3bb} (h0: (Zero = Zero)) => refl,
+    refines := \u{3bb} (r: List<Tok>) => \u{3bb} (h0: True) => refl,
 }}
 "
     ));
@@ -67,7 +67,7 @@ fn an_inline_match_body() {
 fn nonempty(l: List<Tok>) -> Nat {{ match l {{ Nil => Zero, Cons(h, t) => Succ(Zero) }} }}
 impl nonempty for ListTok {{
     body := \u{3bb} (r: List<Tok>) => match r {{ Nil => Zero, Cons(h, t) => Succ(Zero) }},
-    refines := \u{3bb} (r: List<Tok>) => \u{3bb} (h0: (Zero = Zero)) => refl,
+    refines := \u{3bb} (r: List<Tok>) => \u{3bb} (h0: True) => refl,
 }}
 "
     ));
@@ -81,7 +81,7 @@ fn an_inline_let_block_body() {
         "{LIST}
 impl length for ListTok {{
     body := {{ let f: (l: List<Tok>) -> Nat = length; f }},
-    refines := \u{3bb} (r: List<Tok>) => \u{3bb} (h0: (Zero = Zero)) => refl,
+    refines := \u{3bb} (r: List<Tok>) => \u{3bb} (h0: True) => refl,
 }}
 "
     ));
@@ -114,7 +114,7 @@ fn a_wrong_inline_proof_is_refused_by_the_kernel() {
         "{LIST}
 impl length for ListTok {{
     body := \u{3bb} (r: List<Tok>) => Succ(length(r)),
-    refines := \u{3bb} (r: List<Tok>) => \u{3bb} (h0: (Zero = Zero)) => refl,
+    refines := \u{3bb} (r: List<Tok>) => \u{3bb} (h0: True) => refl,
 }}
 "
     ));
@@ -129,7 +129,7 @@ fn an_inline_failure_is_located_at_the_clause() {
         "{LIST}
 impl length for ListTok {{
     body := \u{3bb} (r: List<Tok>) => Succ(length(r)),
-    refines := \u{3bb} (r: List<Tok>) => \u{3bb} (h0: (Zero = Zero)) => refl,
+    refines := \u{3bb} (r: List<Tok>) => \u{3bb} (h0: True) => refl,
 }}
 "
     ));
@@ -275,7 +275,7 @@ fn a_surface_derived_impl_is_consumable_as_a_callee() {
 fn add(a: Nat, b: Nat) -> Nat {{ match b {{ Zero => a, Succ(k) => Succ(add(a, k)) }} }}
 fn single(t: Tok) -> List<Tok> {{ Cons(t, Nil) }}
 theorem single_refines(t: Tok): ListTok::abs()(single(t)) = single(t) {{ refl }}
-theorem single_inv(t: Tok): ListTok::inv()(single(t)) {{ refl }}
+theorem single_inv(t: Tok): ListTok::inv()(single(t)) {{ trivial }}
 impl single for ListTok {{
     body := single, refines := single_refines, refines_inv := single_inv,
 }}
@@ -324,7 +324,7 @@ fn via_derived_composes_at_a_plain_result() {
         "{LIST}
 impl length for ListTok {{
     body := \u{3bb} (r: List<Tok>) => length(r),
-    refines := via_derived(\u{3bb} (r: List<Tok>) => \u{3bb} (h0: (Zero = Zero)) =>
+    refines := via_derived(\u{3bb} (r: List<Tok>) => \u{3bb} (h0: True) =>
         sym(length_derived_refines(r, h0))),
 }}
 "
@@ -379,7 +379,7 @@ fn a_wrong_via_derived_proof_is_refused() {
         "{LIST}
 impl length for ListTok {{
     body := \u{3bb} (r: List<Tok>) => Succ(length(r)),
-    refines := via_derived(\u{3bb} (r: List<Tok>) => \u{3bb} (h0: (Zero = Zero)) =>
+    refines := via_derived(\u{3bb} (r: List<Tok>) => \u{3bb} (h0: True) =>
         sym(length_derived_refines(r, h0))),
 }}
 "
@@ -403,7 +403,7 @@ fn the_listing_records_state_provenance_and_statement() {
         "{LIST}
 impl length for ListTok {{
     body := \u{3bb} (r: List<Tok>) => length(r),
-    refines := \u{3bb} (r: List<Tok>) => \u{3bb} (h0: (Zero = Zero)) => refl,
+    refines := \u{3bb} (r: List<Tok>) => \u{3bb} (h0: True) => refl,
 }}
 "
     ));
@@ -466,7 +466,7 @@ fn the_listing_distinguishes_named_from_inline_and_derived() {
     let e = ok(&format!(
         "{LIST}
 fn my_len(r: List<Tok>) -> Nat {{ length(r) }}
-theorem my_len_refines(r: List<Tok>, h0: (Zero = Zero)): my_len(r) = length(r) {{ refl }}
+theorem my_len_refines(r: List<Tok>, h0: True): my_len(r) = length(r) {{ refl }}
 impl length for ListTok {{ body := my_len, refines := my_len_refines }}
 "
     ));

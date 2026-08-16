@@ -539,7 +539,7 @@ impl Elaborator {
         // induction of its own. Three lemmas, in dependency order.
 
         // Third lemma: the fold's accumulator satisfies `inv`. At `inv = True`
-        // every arm is an image closure law applied to `refl`s and the lemma
+        // every arm is an image closure law applied to `trivial`s and the lemma
         // says nothing; at a canonical-form `inv` it is what the commutation
         // laws below are paid with — and what pays a resolved callee's own
         // `inv` hypotheses.

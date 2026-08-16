@@ -351,13 +351,24 @@ instances can hold today, `lib/std/algebra.hthr`):
 5. **A law clause's binder list includes the `inv` hypotheses**, so a
    hand-written law has to carry them even when `inv` is `True` and they are
    never used. This is real friction on the explicit form (`Bin`'s
-   `Succ_abs` needs an `h0: (Zero = Zero)` binder it ignores) and the obvious
+   `Succ_abs` needs an `h0` binder it ignores) and the obvious
    fix — letting a clause be applied to the binders the statement quantifies
    over, rather than checked against the whole Π — is deferred, not designed.
+   Filed standalone 2026-08-16 as `issues/datarepr-law-clause-inv-binders.md`,
+   where the flip of the defaulted `inv` turned the friction into duplication:
+   two reprs of one spec type that disagree on `inv` can no longer share a
+   law, even when both hypotheses are trivially inhabited.
 6. **`inv` is `(r: R) -> Type` and the naive `True` is `Zero = Zero`.** `Nat`
    is a kernel type, so that proposition is in scope wherever a `datarepr`
    is, and `refl` inhabits it. A prelude `True` would be better and belongs
    with `prelude-option-and-friends`.
+   *Superseded 2026-08-16* (`issues/true-prop-trivial-hypotheses.md`): there
+   is a real `True` now — the kernel's `Unit^0` under a surface name, with
+   `trivial` as its canonical inhabitant and η-as-proof-irrelevance giving
+   *judgmental* uniqueness of it — and it is what an omitted `inv` defaults
+   to. A repr whose `inv` is **written** is untouched: the closure-law default
+   is `trivial` exactly when the clause is the trivial one (omitted, or
+   written out as `λ (r: R) => True`), and `refl` otherwise.
 7. **Two rough edges in *using* the assembled value**, both worked around by
    reaching through the namespace, and both worth their own issue:
    `value.fold` is claimed by the builtin vector receiver method before the
@@ -383,8 +394,12 @@ error, so this is a behaviour change and not only an addition. The rule stays
 the one sentence `docs/obligation-records-design.md` §1.2 states: **omitted
 takes the default, `?` demands and reports, anything else is checked as today.**
 
-- **Omitted `inv` is `True`**, spelled as the naive repr spells it (note 6's
-  `Zero = Zero`; a prelude `True` is still `prelude-option-and-friends`').
+- **Omitted `inv` is `True`**, spelled as the naive repr spells it — since
+  2026-08-16 the real prelude `True` and no longer note 6's `Zero = Zero` pun
+  (`issues/true-prop-trivial-hypotheses.md`). A generated `refines` signature
+  therefore binds `h0: True` and its consumers pass `trivial`; the registry
+  statement is unchanged in shape, the binder still being there, which is the
+  ratified half of that issue's verdict.
 - **Omitted `fold` is the fold *through* `abs`** — §1.1's "the fold need not be
   what runs" taken as the default rather than as permission. Reading `Bin`'s
   hand-written anchor schematically shows what the shape needs and the record

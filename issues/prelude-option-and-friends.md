@@ -3,7 +3,7 @@ title: Option/Result/List in the prelude, with helpers and chaining
 status: open
 labels: [frontend,stdlib,elaboration,design]
 created: 2026-07-31
-updated: 2026-08-13
+updated: 2026-08-16
 ---
 
 From the first real library file ([[ir-simulate-design]], lib/ir_v1.hthr):
@@ -92,3 +92,4 @@ Layer 2 (`?`-chaining, the `gather` shape) is untouched and remains this
 issue's open scope.
 - 2026-08-13: Verdict from the showcase critique (2026-08-13) on implicit Ok-wrapping (moving `Ok` out of every arm of a Result-returning body): NOT global T -> Result<T,_> coercion — it makes the elaborated term diverge from the written term (which is what refl unfolds, diagnostics print, and theorems are stated over; diagnostics-name-the-written-form is this wound already), and coercion in checking position is ambiguous exactly when T is itself a Result (the nested-Result footgun). The acceptable middle if the pattern proves common: an opt-in per-fn marker (try-fn shape) where the body checks at T, `?` marks failure, and wrapping is declared at the one declaration site. Rides with whatever [[effects-direction]] decides for Result-as-effect; wire the two when either moves.
 - 2026-08-13: Also filed off the same critique: [[inline-enum-types]] — per-signature anonymous enums so narrow error types are cheap to declare; the `?` embedding story there is From-style and lands in this issue's chaining kit if taken.
+- 2026-08-16: Residency landed for `True` (2026-08-16, [[true-prop-trivial-hypotheses]] half 1). It does NOT live in `lib/std` and it is not a declaration: `True` is the kernel's `Unit^0` claimed as a surface type name in the elaborator (crates/elab/src/inductive.rs `lower_named`), with `trivial` its canonical inhabitant (crates/elab/src/lib.rs, alongside `refl`/`FZ`) — i.e. always in scope for the same reason `Nat` is, with no import. The reason is forced rather than chosen: `crates/elab/src/prelude.hthr` is surface source, and the surface has no spelling for kernel `Unit`, so a prelude-source `True` was not writable; and the whole point of `True := Unit` is η-as-proof-irrelevance, which a one-constructor `inductive True` in `lib/std` would not have. Shadowing follows the `FZ` rule in both namespaces: a declared `True` type wins, a local `trivial` wins, and `Bool`'s `True` **constructor** is untouched (a constructor is not a type name), pinned by crates/elab/tests/true_prop.rs. Nothing is owed here.

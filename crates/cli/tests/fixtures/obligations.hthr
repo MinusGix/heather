@@ -9,5 +9,5 @@ fn length(l: List<Tok>) -> Nat { match l { Nil => Zero, Cons(h, t) => Succ(lengt
 
 impl length for ListTok {
     body := λ (r: List<Tok>) => length(r),
-    refines := λ (r: List<Tok>) => λ (h0: (Zero = Zero)) => refl,
+    refines := λ (r: List<Tok>) => λ (h0: True) => refl,
 }

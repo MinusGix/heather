@@ -438,6 +438,27 @@ fn show_level(l: &Level) -> String {
     }
 }
 
+/// `True` in a rendered type, wherever the kernel wrote its `Unit^0` spelling
+/// (`issues/true-prop-trivial-hypotheses.md`: what is printed should be what
+/// can be written). A *display* transform and nothing else — the same boundary
+/// [`Elaborator::display_paths`] de-mangles minted names at, for the same
+/// reason: the stored type is the kernel's and is deliberately left alone.
+///
+/// String-level, like `display_paths`, because a kernel type is rendered by
+/// `Debug` and there is no surface printer to hook. It is not ambiguous: the
+/// kernel prints `Unit {level:?}` and a level renders as a numeral with no
+/// leading zero, so `Unit 0` occurs exactly at `Unit^0` (`Unit 10` and
+/// `Unit (0 ⊔ ℓ0)` cannot be prefixes of it). The code spelling `«Unit 0»`
+/// becomes `«True»`, which is right: `True` in expression position *is* that
+/// code.
+fn dress_true(s: &str) -> String {
+    if s.contains("Unit 0") {
+        s.replace("Unit 0", "True")
+    } else {
+        s.to_string()
+    }
+}
+
 /// The §3.4 shared refusal: an implicit mark whose skeleton would have no
 /// consumer must not be silently erased — the writer believes call sites
 /// will infer, and they will not (docs/implicit-binders-design.md §3.4).
@@ -2608,6 +2629,33 @@ impl Elaborator {
             {
                 self.elab_fin_index(cx, None, expected, e.span)
             }
+            // `trivial` — the canonical inhabitant of `True`, i.e. the kernel's
+            // `⟨⟩^l : Unit^l` (`issues/true-prop-trivial-hypotheses.md`). A
+            // *bare* name and not a `True::intro` path, because bare is what
+            // this surface already does for every inhabitant of a kernel type
+            // with no declaration (`Zero`, `Succ`, `refl`, `FZ`/`FS`), and
+            // because `A::b` is one lexer token whose owner is a module or an
+            // applied obligation owner — `True` is neither.
+            //
+            // Checking takes the level from the expected type, so a `Unit` at
+            // a level the surface cannot write is still inhabited by it; the
+            // shadowing guards are `FZ`'s, so a user `trivial` wins.
+            ExprKind::Var(name)
+                if name == "trivial"
+                    && !self.shadowed(cx, name)
+                    && self.ctor_here(cx, name).is_none() =>
+            {
+                match self.whnf(cx, expected, e.span)? {
+                    Type::Unit { level } => Ok(Term::Triv { level }),
+                    _ => err(
+                        format!(
+                            "`trivial` proves `True`, but `{}` is expected here",
+                            self.display_type(cx, expected)
+                        ),
+                        e.span,
+                    ),
+                }
+            }
             ExprKind::App { args, .. }
                 if matches!(e.as_named(), Some(("FS", _, false)))
                     && !self.shadowed(cx, "FS")
@@ -2993,6 +3041,21 @@ impl Elaborator {
                      annotated `let`)",
                     e.span,
                 )
+            }
+            // `trivial` **infers**, unlike `FZ` and `refl`: the surface spells
+            // exactly one `True` and it is `Unit^0`, so there is no level to
+            // recover and nothing the expected type could tell this term
+            // (`issues/true-prop-trivial-hypotheses.md`).
+            ExprKind::Var(name)
+                if name == "trivial"
+                    && !self.shadowed(cx, name)
+                    && self.ctor_here(cx, name).is_none() =>
+            {
+                Ok((
+                    Term::Triv { level: Level::Zero },
+                    Type::Unit { level: Level::Zero },
+                    Level::Zero,
+                ))
             }
             // A bare reference to a polymorphic declaration, met in
             // *checking* position, is the zero-explicit-argument case of
@@ -7959,7 +8022,7 @@ impl Elaborator {
     /// definition chain falls back to the original, budget-bounded `Debug`
     /// rendering instead of consuming elaboration fuel or changing the type.
     fn display_type(&self, cx: &Cx, ty: &Type) -> String {
-        let raw = || format!("{ty:?}");
+        let raw = || dress_true(&format!("{ty:?}"));
         if !matches!(ty, Type::El { .. }) {
             return raw();
         }
@@ -7973,7 +8036,7 @@ impl Elaborator {
             };
             head = next;
             if !matches!(head, Type::El { .. }) {
-                return format!("{head:?}");
+                return dress_true(&format!("{head:?}"));
             }
         }
         raw()

@@ -233,6 +233,14 @@ theorem bin_succ_abs(r: Bin): bin_abs(binc(r)) = Succ(bin_abs(r)) {
 theorem bin_succ_abs_law(a0: Bin, h0: (Zero = Zero)):
     bin_abs(binc(a0)) = Succ(bin_abs(a0)) { bin_succ_abs(a0) }
 
+// The same law under the *defaulted* `inv`, which is `True`
+// (`issues/true-prop-trivial-hypotheses.md`). Two spellings and not one
+// because a law's hypothesis is the repr's own `inv`, and `BinNat` writes an
+// equation-shaped one where `BinMin` takes the default: the two are both
+// trivially inhabited and neither is convertible with the other.
+theorem bin_succ_abs_true(a0: Bin, h0: True):
+    bin_abs(binc(a0)) = Succ(bin_abs(a0)) { bin_succ_abs(a0) }
+
 // `Nat`'s recursor, by hand: `match` is a form and not a global, so the
 // anchor's statement needs a name. Definitionally the generated
 // `BinNat_spec_rec`, which is what lets the hand-written law below discharge
@@ -294,7 +302,11 @@ theorem cong_bin_abs({a: Bin}, {b: Bin}, p: a = b): bin_abs(a) = bin_abs(b) {
 /// than copied because `datarepr.rs` and `reprgen.rs` both pin it and a
 /// private copy would drift from the obligations it is the fixture for.
 ///
-/// Its `inv` is `True`, which is what makes [`BIN_CANON`] worth having.
+/// Its `inv` is *written* and trivially true (`Zero = Zero`, an equation with
+/// no content), which is what makes [`BIN_CANON`] worth having — and, since
+/// `issues/true-prop-trivial-hypotheses.md`, what makes it the control that a
+/// repr whose `inv` is written is untouched by the defaulted `inv`'s flip to
+/// the prelude `True`. [`BIN_MIN`] is the flipped side.
 pub const BIN_REPR: &str = concat!(
     bin_base!(),
     r#"
@@ -315,9 +327,9 @@ datarepr BinNat for Nat {
 /// the representative `bin_of_nat` builds for its own value, which rules out
 /// `Bin`'s leading zeros and makes `abs` injective on `inv`-satisfying values.
 ///
-/// It exists for one reason: at `inv = True` every `inv` obligation in a
-/// transfer is inhabited by `refl` and the machinery that carries `inv` proofs
-/// around is untested. Here `Succ_inv` genuinely *consumes* its hypothesis, so
+/// It exists for one reason: at a trivial `inv` every `inv` obligation in a
+/// transfer is inhabited without looking at anything, and the machinery that
+/// carries `inv` proofs around is untested. Here `Succ_inv` genuinely *consumes* its hypothesis, so
 /// a transfer's `inv`-preservation lemma has content — the third lemma of the
 /// repr-typed-result stage (§3.3, as-landed).
 pub const BIN_CANON: &str = concat!(
@@ -377,7 +389,7 @@ datarepr BinMin for Nat {
     abs := bin_abs,
     mk Zero := BNil,
     mk Succ := binc,
-    Succ_abs := bin_succ_abs_law,
+    Succ_abs := bin_succ_abs_true,
 }
 "#
 );
@@ -403,7 +415,7 @@ fn un_abs(r: Un) -> Nat { match r { UZ => Zero, US(u) => Succ(un_abs(u)) } }
 fn un_of_nat(n: Nat) -> Un { match n { Zero => UZ, Succ(m) => US(un_of_nat(m)) } }
 
 // Every `Un` is canonical — `abs` is injective here — but the proposition is
-// still about `r`, which is what `Zero = Zero` is not.
+// still about `r`, which is what `True` is not.
 fn un_canon(r: Un) -> Type { un_of_nat(un_abs(r)) = r }
 
 theorem un_canon_succ(a0: Un, h0: un_canon(a0)): un_canon(US(a0)) {

@@ -884,7 +884,25 @@ impl Elaborator {
             let by = (cx.names.len() - p.depth) as u32;
             return Ok((p.ty.shift_local(by), p.level.clone()));
         }
+        // `True` — the kernel's `Unit^0`, the one proposition with a canonical
+        // inhabitant and *judgmental* uniqueness of it: `Unit`'s η is proof
+        // irrelevance (`crates/kernel/src/conv.rs`), so any two proofs of
+        // `True` are convertible and no `SProp`/`Prop` distinction has to be
+        // decided (`issues/true-prop-trivial-hypotheses.md`, 2026-08-16).
+        //
+        // Level 0 **unconditionally**, like `Fin`: the surface has one `True`,
+        // and the positions that want it — a `datarepr`'s `inv`, which is
+        // `(r: R) -> Type` — are level-0 positions
+        // (`docs/datarepr-design.md` §1.4 note 6). `Unit^l` at other levels is
+        // a kernel former with no surface spelling, exactly as before.
+        //
+        // Claimed only when no declaration answers, so a file that declares
+        // its own `True` keeps it; `Bool`'s `True` *constructor* is untouched
+        // because a constructor is not a type name and never reached here.
         let Some(ind) = self.lookup_inductive(name) else {
+            if name == "True" && args.is_empty() {
+                return Ok((Type::Unit { level: Level::Zero }, Level::Zero));
+            }
             return Err(self.name_miss(name, format!("unknown type `{name}`"), span));
         };
         if args.len() != ind.params.len() {

@@ -483,6 +483,7 @@ impl Elaborator {
         // key under a prefix containing a space, which no clause name has.
         let mut by_name: HashMap<String, (String, Span)> = HashMap::new();
         let mut prov: HashMap<String, Provenance> = HashMap::new();
+        let mut inv_trivial = false;
         for f in fs {
             if f.is_mk && !spec.ctors.iter().any(|c| c.name == f.name) {
                 return err(
@@ -527,6 +528,11 @@ impl Elaborator {
                     span: f.expr.span,
                 });
             }
+            // Read *before* the splice: an inline clause becomes a placeholder
+            // name here and its shape is no longer recoverable from the text.
+            if key == "inv" && lam_body_is_true(&f.expr) {
+                inv_trivial = true;
+            }
             prov.insert(
                 key.clone(),
                 if matches!(f.expr.kind, ExprKind::Var(_)) {
@@ -551,13 +557,16 @@ impl Elaborator {
         let carrier = req("R", &mut by_name, &mut missing);
         let abs = req("abs", &mut by_name, &mut missing);
         // `inv` and `fold` have defaults (`issues/repr-fold-via-abs-default.md`):
-        // an omitted `inv` is `True` — the same `Zero = Zero` the naive repr
-        // spells, §1.4 note 6 — and an omitted `fold` is the fold *through*
-        // `abs`, synthesized in `generate`. Omission means "take the default"
-        // and nothing else; a `?` still reports and fails (design
+        // an omitted `inv` is `True` — the prelude proposition, the kernel's
+        // `Unit^0`, since `issues/true-prop-trivial-hypotheses.md` half 1
+        // retired the `Zero = Zero` pun — and an omitted `fold` is the fold
+        // *through* `abs`, synthesized in `generate`. Omission means "take the
+        // default" and nothing else; a `?` still reports and fails (design
         // docs/obligation-records-design.md §1.2).
-        let inv = take("inv", &mut by_name)
-            .unwrap_or_else(|| format!("\u{3bb} (r: {carrier}) => (Zero = Zero)"));
+        let inv = take("inv", &mut by_name).unwrap_or_else(|| {
+            inv_trivial = true;
+            format!("\u{3bb} (r: {carrier}) => True")
+        });
         let fold = take("fold", &mut by_name);
         let mut mks = Vec::new();
         for c in &spec.ctors {
@@ -596,7 +605,7 @@ impl Elaborator {
                 *span,
             );
         }
-        Ok(Clauses { carrier, abs, inv, mks, laws, fold, fold_law, prov })
+        Ok(Clauses { carrier, abs, inv, mks, laws, fold, fold_law, prov, inv_trivial })
     }
 
     /// Parse and elaborate generated source in the *current* module and scope.
@@ -718,6 +727,22 @@ struct Clauses {
     /// obligations listing (§6). A field absent here was omitted, and is
     /// therefore `defaulted`.
     prov: HashMap<String, Provenance>,
+    /// Is `inv` the trivial proposition — the prelude `True`
+    /// (`issues/true-prop-trivial-hypotheses.md`)? It decides one thing: an
+    /// omitted closure law is proved by `trivial` rather than by `refl`, the
+    /// definitional case each of the two is.
+    ///
+    /// True when `inv` was **omitted** (the default is `True`) and when it was
+    /// written as `\u{3bb} (r: R) => True` — read off the clause's *expression*,
+    /// before splicing, because an inline clause reaches [`Clauses`] as a
+    /// placeholder name and its text is gone.
+    ///
+    /// An `inv` that is definitionally `True` behind a **name** is deliberately
+    /// not recognized: it gets `refl`, i.e. what every `inv` got before, and
+    /// the writer supplies the closure law. The general answer is default
+    /// argument values at the binder — half 2, at
+    /// `issues/named-arguments.md`.
+    inv_trivial: bool,
 }
 
 /// `repr::naive()` (§5.1 item 2): carrier = the spec type, `abs = id`,
@@ -742,10 +767,12 @@ fn naive_clauses(name: &str, spec: &SpecView) -> Clauses {
     Clauses {
         carrier: s.clone(),
         abs: format!("\u{3bb} (r: {s}) => r"),
-        // `True` spelled as the one proposition available without a library:
-        // `Nat` is a kernel type, so `Zero = Zero` is in scope wherever a
-        // `datarepr` is (`lib/std/nat.hthr`'s header), and `refl` inhabits it.
-        inv: format!("\u{3bb} (r: {s}) => (Zero = Zero)"),
+        // `True` itself, now that there is one: the kernel's `Unit^0` under a
+        // surface name, inhabited by `trivial`
+        // (`issues/true-prop-trivial-hypotheses.md`). It is in scope wherever
+        // a `datarepr` is for the same reason `Nat` is — it is a kernel type,
+        // not a library declaration.
+        inv: format!("\u{3bb} (r: {s}) => True"),
         mks,
         laws: spec.ctors.iter().map(|_| (None, None)).collect(),
         // The naive fold is the spec recursor itself, not the via-abs default:
@@ -763,6 +790,7 @@ fn naive_clauses(name: &str, spec: &SpecView) -> Clauses {
         }),
         fold_law: None,
         prov: HashMap::new(),
+        inv_trivial: true,
     }
 }
 
@@ -1039,7 +1067,7 @@ fn generate(
         out.push_str(&format!(
             "theorem {rec}::{}_inv(): {ty} {{ {} }}\n",
             ct.name,
-            li.clone().unwrap_or_else(|| refl_under(ct, c, &inv))
+            li.clone().unwrap_or_else(|| closer_under(ct, c, &inv, cl.inv_trivial))
         ));
     }
     // The via-abs default (`issues/repr-fold-via-abs-default.md`): the fold the
@@ -1168,9 +1196,32 @@ fn inv_law_ty(c: &CtorView, at: &str, inv: &str, mk: &str) -> String {
     pis(&bs, &appc(inv, &[appc(mk, &args)]))
 }
 
+/// Is this clause expression `λ (r: R) => True` — the trivial `inv` written
+/// out? Shape and not text: an inline clause is spliced into the generated
+/// source as a placeholder name, so this has to be asked of the AST while the
+/// AST is still at hand. `True` is read in whichever position the parser
+/// happened to put it, since a lambda body at a `Type`-valued result is a
+/// term-position type and both readings occur.
+fn lam_body_is_true(e: &Expr) -> bool {
+    let ExprKind::Lam { body, .. } = &e.kind else { return false };
+    match &body.kind {
+        ExprKind::Var(n) => n == "True",
+        ExprKind::TyLit(t) => matches!(&t.kind, TyKind::Named { name, args }
+            if name == "True" && args.is_empty()),
+        _ => false,
+    }
+}
+
 /// A law whose content is definitional: `refl` under the statement's binders.
 fn refl_under(c: &CtorView, at: &str, inv: &str) -> String {
     lams(&law_binders(c, at, inv), "refl")
+}
+
+/// The closure law's default proof: `trivial` at a `True` `inv`, `refl` at
+/// every other — the definitional case each of the two is
+/// (`issues/true-prop-trivial-hypotheses.md`).
+fn closer_under(c: &CtorView, at: &str, inv: &str, trivial: bool) -> String {
+    lams(&law_binders(c, at, inv), if trivial { "trivial" } else { "refl" })
 }
 
 /// The fold anchor's statement (§1.1, corrected form): the law takes the SPEC
