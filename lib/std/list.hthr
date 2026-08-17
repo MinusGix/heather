@@ -8,10 +8,17 @@
 // `lib/list_algos.hthr`'s and were always list facts rather than algorithm
 // facts — the same move `cong_cons` and the append laws made on 2026-08-07.
 //
-// Cross-module dependencies: `nat` (`len`, `take`/`drop`, `replicate`),
-// `option` (what an out-of-range index has to mean), `bool` (`filter`'s
-// predicate) and `pair` (`zip`).
+// Grown again by waves L2′ and L3 (issues/std-list-l2-prime-laws.md,
+// issues/std-list-mem-and-perm.md, 2026-08-17): the laws L2 left unstated —
+// `foldl`'s, `filter`'s, and `zip`'s interaction with `len` — and `Mem`, the
+// module's first relation.
+//
+// Cross-module dependencies: `logic` (`Mem` lands in `Or`/`False`, which is
+// what wave L3 added and what the module had no import for), `nat` (`len`,
+// `take`/`drop`, `replicate`, `min`), `option` (what an out-of-range index has
+// to mean), `bool` (`filter`'s predicate) and `pair` (`zip`).
 
+import logic;
 import nat;
 import option;
 import bool;
@@ -223,6 +230,57 @@ theorem foldr_append<A, B>(xs, ys: List<A>, f: A -> B -> B, z: B):
     }
 }
 
+// `foldl`'s laws (wave L2′, issues/std-list-l2-prime-laws.md). L2 left `foldl`
+// with none, and the reason is visible in every statement below: the
+// accumulator changes at each step, so a law about `foldl` is never a law about
+// one accumulator. Each one is stated as `(z: B) -> …` and each proof applies
+// its IH at a DIFFERENT `z` — the higher-order face of
+// issues/ih-generalization.md, which the L1/L2 round could only rank from the
+// definition's shape because it proved nothing about it.
+//
+// That the definition is already curried is what makes this free: `foldl`'s own
+// spelling forced the workaround, and the workaround is exactly the shape the
+// laws want.
+
+theorem foldl_append<A, B>(xs, ys: List<A>, f: B -> A -> B):
+    (z: B) -> foldl(append(xs, ys), f, z) = foldl(ys, f, foldl(xs, f, z))
+{
+    match xs {
+        Nil => λ z => {},
+        Cons(h, t) => λ z => foldl_append(t, ys, f, f(z, h)),
+    }
+}
+
+// The two folds meet: `foldl` down a reversed list is `foldr` with its function
+// flipped. This is the one law in the file that needs ANOTHER law of the same
+// function to prove it — `foldl_append` at the singleton — because `rev` is
+// defined by `append` and `foldl` has nothing to say about `append` by
+// computation.
+theorem foldl_rev<A, B>(xs: List<A>, f: B -> A -> B):
+    (z: B) -> foldl(rev(xs), f, z) = foldr(xs, λ (a: A) (b: B) => f(b, a), z)
+{
+    match xs {
+        Nil => λ z => {},
+        Cons(h, t) => λ z =>
+            trans(foldl_append(rev(t), Cons(h, Nil), f, z),
+                  cong_fn(λ (w: B) => f(w, h), foldl_rev(t, f, z))),
+    }
+}
+
+// `foldl` counts. Stated at a generalized accumulator it is not `len` but
+// `add(z, len(xs))`, and then the proof pays `std/nat`'s phase tax once, the
+// same way `len_append` does: the IH lands on `add(Succ(z), len(t))` and the
+// goal wants `Succ(add(z, len(t)))`.
+theorem foldl_len<A>(xs: List<A>):
+    (z: Nat) -> foldl(xs, λ (k: Nat) (a: A) => Succ(k), z) = add(z, len(xs))
+{
+    match xs {
+        Nil => λ z => {},
+        Cons(h, t) => λ z =>
+            trans(foldl_len(t, Succ(z)), add_succ_left(z, len(t))),
+    }
+}
+
 // ---------------------------------------------------------------------------
 // filter, and the prefix/suffix pair.
 //
@@ -298,6 +356,105 @@ theorem len_filter<A>(xs: List<A>, p: A -> Bool): len(filter(xs, p)) <= len(xs) 
     }
 }
 
+// `filter`'s laws (wave L2′). `len_filter` above is a *bound*, not a law, so
+// until now nothing said what `filter` does. Three facts, and they sort
+// themselves by one question: does the OTHER side of the equation branch on the
+// same scrutinee?
+//
+// For `filter_append` and `filter_map` it does, and then the inner motive is
+// enough — each arm's goal reduces on both sides at once. For `filter_filter`
+// it does not: the right-hand side is `filter(xs, p)` with nothing to reduce,
+// while the left has a SECOND stuck `p(h)` that the motive cannot reach, so the
+// arm needs the equation `p(h) = b` and has to rewrite by it. `match e : p(h)`
+// binds that equation (issues/match-with-equation.md, landed 2026-08-05), so
+// the convoy costs one token and not a `-> Goal` in the motive plus a trailing
+// `(refl)`; what it does NOT do is use it, and the `j` in the `True` arm is
+// three lines of hand-written motive for a rewrite under a `match` context
+// (issues/congruence-by-anti-unification.md).
+//
+// All three write their own inner motive, and writing it means unfolding
+// `filter` by hand into the `match p(h)` it reduces to. That, and not the
+// equation, is the tax this section actually pays — seven times across L2′ and
+// L3, ten counting what stood before them
+// (issues/goal-motive-by-scrutinee-abstraction.md).
+
+theorem filter_append<A>(xs, ys: List<A>, p: A -> Bool):
+    filter(append(xs, ys), p) = append(filter(xs, p), filter(ys, p))
+{
+    match xs {
+        Nil => {},
+        Cons(h, t) => match p(h) as λ b =>
+            (match b {
+                True => Cons(h, filter(append(t, ys), p)),
+                False => filter(append(t, ys), p),
+            })
+            = append(match b {
+                True => Cons(h, filter(t, p)),
+                False => filter(t, p),
+            }, filter(ys, p))
+        {
+            True => cong_cons(h, filter_append(t, ys, p)),
+            False => filter_append(t, ys, p),
+        },
+    }
+}
+
+// Idempotence, and the one proof in the file that needs the scrutinee's own
+// equation. The `(p(h) = b) ->` in the motive and the trailing `(refl)` are the
+// convoy; the `j` inside the `True` arm is what the convoy is FOR — it moves the
+// goal's second, unreachable `p(h)` to `True` so that `filter` steps there too.
+theorem filter_filter<A>(xs: List<A>, p: A -> Bool):
+    filter(filter(xs, p), p) = filter(xs, p)
+{
+    match xs {
+        Nil => {},
+        Cons(h, t) => match e : p(h) as λ b =>
+            filter(match b {
+                True => Cons(h, filter(t, p)),
+                False => filter(t, p),
+            }, p)
+            = match b {
+                True => Cons(h, filter(t, p)),
+                False => filter(t, p),
+            }
+        {
+            True =>
+                j(sym(e),
+                  λ y q =>
+                    (match y {
+                        True => Cons(h, filter(filter(t, p), p)),
+                        False => filter(filter(t, p), p),
+                    }) = Cons(h, filter(t, p)),
+                  cong_cons(h, filter_filter(t, p))),
+            False => filter_filter(t, p),
+        },
+    }
+}
+
+// Filtering a mapped list is mapping a filtered one, with the predicate pulled
+// back through `f`. Both sides branch on `p(f(h))` — the right one after a beta
+// step, since the pulled-back predicate is a literal lambda — so no convoy.
+theorem filter_map<A, B>(xs: List<A>, f: A -> B, p: B -> Bool):
+    filter(map(xs, f), p) = map(filter(xs, λ (a: A) => p(f(a))), f)
+{
+    match xs {
+        Nil => {},
+        Cons(h, t) => match p(f(h)) as λ b =>
+            (match b {
+                True => Cons(f(h), filter(map(t, f), p)),
+                False => filter(map(t, f), p),
+            })
+            = map(match b {
+                True => Cons(h, filter(t, λ (a: A) => p(f(a)))),
+                False => filter(t, λ (a: A) => p(f(a))),
+            }, f)
+        {
+            True => cong_cons(f(h), filter_map(t, f, p)),
+            False => filter_map(t, f, p),
+        },
+    }
+}
+
 // ---------------------------------------------------------------------------
 // replicate and zip.
 //
@@ -332,6 +489,209 @@ fn zip<A, B>(xs: List<A>) -> List<B> -> List<Pair<A, B>> {
             Nil => Nil,
             Cons(h2, t2) => Cons(Pair(h, h2), zip(t, t2)),
         },
+    }
+}
+
+// `zip`'s laws (wave L2′). L2 left `zip` pinned only by the computation test,
+// and the interaction the wave list asked for is with `len`: zipping truncates,
+// so the length is the `min`. That is the first law in the library to reach for
+// `std/nat`'s `min` rather than `add`, and it costs nothing — `min` descends on
+// both arguments exactly as `zip` descends on both lists, so all three arms are
+// definitional.
+//
+// The other two say what the pairs CONTAIN, which `len_zip` cannot: projecting
+// a zip is taking a prefix, and swapping it is zipping the other way round.
+// `take` appears here for the first time outside its own law, and it lines up
+// for the same reason `min` does.
+
+theorem len_zip<A, B>(xs: List<A>):
+    (ys: List<B>) -> len(zip(xs, ys)) = min(len(xs), len(ys))
+{
+    match xs {
+        Nil => λ ys => {},
+        Cons(h, t) => λ ys => match ys {
+            Nil => {},
+            Cons(h2, t2) => cong_succ(len_zip(t, t2)),
+        },
+    }
+}
+
+theorem zip_map_fst<A, B>(xs: List<A>):
+    (ys: List<B>) -> map(zip(xs, ys), λ (q: Pair<A, B>) => q.fst) = take(xs, len(ys))
+{
+    match xs {
+        Nil => λ ys => {},
+        Cons(h, t) => λ ys => match ys {
+            Nil => {},
+            Cons(h2, t2) => cong_cons(h, zip_map_fst(t, t2)),
+        },
+    }
+}
+
+// The `Nil` arm splits `ys` and both `zip`'s do not, which is not symmetry
+// lost: at `xs = Nil` the goal is `Nil = take(ys, 0)`, and `take` is curried in
+// its index (issues/ih-generalization.md), so it steps only once its LIST is a
+// constructor. The same shape is why `zip_swap`'s `Nil` arm splits too.
+theorem zip_map_snd<A, B>(xs: List<A>):
+    (ys: List<B>) -> map(zip(xs, ys), λ (q: Pair<A, B>) => q.snd) = take(ys, len(xs))
+{
+    match xs {
+        Nil => λ ys => match ys {
+            Nil => {},
+            Cons(h2, t2) => {},
+        },
+        Cons(h, t) => λ ys => match ys {
+            Nil => {},
+            Cons(h2, t2) => cong_cons(h2, zip_map_snd(t, t2)),
+        },
+    }
+}
+
+// `std/pair`'s `swap` gets its first law here, and it is not applied by name:
+// `swap` is polymorphic, so as a first-class argument it would have to spell
+// its type arguments, and the η-expanded `λ q => swap(q)` is shorter than
+// `swap<A, B>`. Nothing is lost — it is the same function.
+theorem zip_swap<A, B>(xs: List<A>):
+    (ys: List<B>) -> map(zip(xs, ys), λ (q: Pair<A, B>) => swap(q)) = zip(ys, xs)
+{
+    match xs {
+        Nil => λ ys => match ys {
+            Nil => {},
+            Cons(h2, t2) => {},
+        },
+        Cons(h, t) => λ ys => match ys {
+            Nil => {},
+            Cons(h2, t2) => cong_cons(Pair(h2, h), zip_swap(t, t2)),
+        },
+    }
+}
+
+// ---------------------------------------------------------------------------
+// membership (wave L3, issues/std-list-mem-and-perm.md).
+//
+// A recursion into `Type`, like `nat::Le` and `list_algos`'s `Sorted`, and for
+// the same three reasons: it REDUCES at closed lists (so `Mem(2, [1,2])` is
+// `Inr(Inl(refl))` and needs no search), it has no inversion machinery (the
+// `Nil` case IS `False`, so refuting it is handing the hypothesis back), and it
+// needs no indexed family (issues/indexed-families.md), which the derivation-
+// shaped spelling would.
+//
+// **`Mem` is polymorphic and `list_algos`'s `count` is not**, and that line is
+// the sharpest thing this wave found: membership needs only `=`, which every
+// type has, while counting needs to DECIDE an equation, and a class cannot be
+// keyed on one (issues/decidable-equation-carrier.md). The same algorithm's two
+// specifications sit on opposite sides of a live language gap.
+//
+// Every lemma below takes its hypothesis AFTER the arrow rather than as a
+// parameter, because a parameter whose type mentions `xs` cannot survive
+// `match xs` without being convoyed through it. That is the ordinary shape in
+// this repo (`nth_append_l`, `le_succ_r`), stated once here for the section.
+
+fn Mem<A>(a: A, xs: List<A>) -> Type {
+    match xs {
+        Nil => False,
+        Cons(h, t) => Or<a = h, Mem(a, t)>,
+    }
+}
+
+theorem not_mem_nil<A>(a: A): ¬ Mem(a, Nil) { λ (h: Mem(a, Nil)) => h }
+
+theorem mem_head<A>(a: A, xs: List<A>): Mem(a, Cons(a, xs)) { Inl(refl) }
+
+theorem mem_cons<A>(a, h: A, xs: List<A>, m: Mem(a, xs)): Mem(a, Cons(h, xs)) { Inr(m) }
+
+theorem mem_append_l<A>(xs, ys: List<A>, a: A): Mem(a, xs) -> Mem(a, append(xs, ys)) {
+    match xs {
+        Nil => λ m => false_elim(m),
+        Cons(h, t) => λ m => match m {
+            Inl(e) => Inl(e),
+            Inr(m2) => Inr(mem_append_l(t, ys, a, m2)),
+        },
+    }
+}
+
+theorem mem_append_r<A>(xs, ys: List<A>, a: A): Mem(a, ys) -> Mem(a, append(xs, ys)) {
+    match xs {
+        Nil => λ m => m,
+        Cons(h, t) => λ m => Inr(mem_append_r(t, ys, a, m)),
+    }
+}
+
+theorem mem_append<A>(xs, ys: List<A>, a: A):
+    Mem(a, append(xs, ys)) -> Or<Mem(a, xs), Mem(a, ys)>
+{
+    match xs {
+        Nil => λ m => Inr(m),
+        Cons(h, t) => λ m => match m {
+            Inl(e) => Inl(Inl(e)),
+            Inr(m2) => match mem_append(t, ys, a, m2) {
+                Inl(mt) => Inl(Inr(mt)),
+                Inr(my) => Inr(my),
+            },
+        },
+    }
+}
+
+// The `Iff` exists to be cited; the three lemmas above are what get applied.
+theorem mem_append_iff<A>(xs, ys: List<A>, a: A):
+    Iff<Mem(a, append(xs, ys)), Or<Mem(a, xs), Mem(a, ys)>>
+{
+    Iff(mem_append(xs, ys, a),
+        λ (h: Or<Mem(a, xs), Mem(a, ys)>) =>
+            or_elim(h, mem_append_l(xs, ys, a), mem_append_r(xs, ys, a)))
+}
+
+theorem mem_map<A, B>(xs: List<A>, a: A, f: A -> B): Mem(a, xs) -> Mem(f(a), map(xs, f)) {
+    match xs {
+        Nil => λ m => false_elim(m),
+        Cons(h, t) => λ m => match m {
+            Inl(e) => Inl(cong_fn(f, e)),
+            Inr(m2) => Inr(mem_map(t, a, f, m2)),
+        },
+    }
+}
+
+// Only ONE direction, and the missing one is a decision the API already made:
+// the converse needs `p(a)` as a hypothesis, and `filter`'s predicate is a
+// `Bool`, so the only spelling available is `p(a) = True` — which
+// issues/class-ops-prop-vs-bool.md bans from a specification. The
+// `Decide`-valued `filter` that issues/std-list-api.md called "a second
+// function, not a replacement" is what would state it, and this is its first
+// customer. Not encoded around: the fact is left unstated.
+theorem mem_filter<A>(xs: List<A>, a: A, p: A -> Bool):
+    Mem(a, filter(xs, p)) -> Mem(a, xs)
+{
+    match xs {
+        Nil => λ m => false_elim(m),
+        Cons(h, t) => match p(h) as λ b =>
+            Mem(a, match b {
+                True => Cons(h, filter(t, p)),
+                False => filter(t, p),
+            }) -> Or<a = h, Mem(a, t)>
+        {
+            True => λ m => match m {
+                Inl(e) => Inl(e),
+                Inr(m2) => Inr(mem_filter(t, a, p, m2)),
+            },
+            False => λ m => Inr(mem_filter(t, a, p, m)),
+        },
+    }
+}
+
+// Reversing preserves membership, and this is the lemma that shows the kit
+// working as one: `rev` is defined by `append`, so the proof is `mem_append`
+// followed by refuting the singleton's tail.
+theorem mem_rev<A>(xs: List<A>, a: A): Mem(a, rev(xs)) -> Mem(a, xs) {
+    match xs {
+        Nil => λ m => false_elim(m),
+        Cons(h, t) => λ m =>
+            match mem_append(rev(t), Cons(h, Nil), a, m) {
+                Inl(mr) => Inr(mem_rev(t, a, mr)),
+                Inr(mh) => match mh {
+                    Inl(e) => Inl(e),
+                    Inr(bad) => false_elim(bad),
+                },
+            },
     }
 }
 

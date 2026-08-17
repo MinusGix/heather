@@ -56,3 +56,7 @@ that lands.
 `instance Decide<n = m>` at `Nat` registers and does not collide with an
 equality instance at another type; `eq_dec` fills it; and a goal at a composed
 proposition mentioning an equation resolves.
+
+## Log
+
+- 2026-08-17: Second customer, and the sharpest so far (wave L3, [[std-list-mem-and-perm]], 2026-08-17): this key is what splits the two halves of one algorithm's specification. `Mem` needs only `=`, so it is polymorphic and lives in `std/list`; `count` must DECIDE `a = h`, so `decide<a = h>()` finds no instance, `nat::eq_dec` is called by name, and `count` is at `Nat` — a permanent monomorphic hole in an otherwise polymorphic list API. The dictionary-passing spelling (decider as a parameter, threaded through every call site) works and was deliberately NOT written, per the push's no-encoding-around doctrine. Ranked #2 of that round: fewest lines, largest design consequence.

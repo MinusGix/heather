@@ -78,3 +78,7 @@ types, and no longer says `the kernel rejected`. A negative control keeps the
 kernel as the judge: a declaration the elaborator accepts and the kernel
 refuses still reports as a kernel rejection, because that is the gate working.
 And the round records what the added conversion costs on the bench suite.
+
+## Log
+
+- 2026-08-17: Wave L2'/L3 datum (2026-08-17): the round ran three deliberate controls to establish what the language refuses, and all three came back as `the kernel rejected 'f': NotConvertible` with the theorem's own span and nothing else — no arm, no subterm, no side of the equation. The controls were (a) filter_filter with the convoy equation removed, (b) filter_append with the inner motive removed ([[goal-motive-by-scrutinee-abstraction]]'s control), (c) count(2, [2,1,2]) = 3, the negative control now in crates/elab/tests/lib_list_algos.rs. For (c) that message is fine — the theorem is one line. For (a) and (b) the refused thing is one arm of a twenty-line proof, and knowing WHICH arm is the whole content of the diagnosis.
