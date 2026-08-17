@@ -71,8 +71,13 @@ against 7 ms at depth 10. The rule the paragraph should have stated is
 **speculation is free only while failure is terminal**. Both sites now consult
 a shared failure memo keyed on (position, site, mode flags), which restores
 linearity without moving any boundary. `issues/retire-angle-bracket-type-arguments.md`
-asks whether `<…>` should exist at all, given that §2 below lowers it to
-ordinary leading implicit parameters.
+asked whether `<…>` should exist at all, given that §2 below lowers it to
+ordinary leading implicit parameters, and was **declined** — the notation
+demotes type arguments out of the value-argument stream, which is what a
+reader wants of them. `docs/type-argument-disambiguation.md` is the rule that
+made keeping them cheap: a `<` with whitespace before it never opens a list,
+so speculation now runs only on a tight `<`, and the nested-comparison case
+that no amount of backtracking could reach parses on its own.
 
 ## 2. The lowering
 

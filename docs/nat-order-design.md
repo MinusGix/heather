@@ -148,11 +148,15 @@ position for two narrower discriminators — a following `(`, and a following
 connective — so this is the same `save` covering the largest case: try the type
 arguments, and if that parse does not *complete*, it was the operator.
 
-**One residue, deliberately left:** a `<` nested directly inside type
-arguments still needs parentheses — `Or<(n < m), (m <= n)>`, not
-`Or<n < m, m <= n>` — because the inner `ty()` stops at the `<` before the
-outer rewind can fire. Rarer than the hypothesis position and a strictly
-smaller ambiguity; filed rather than fixed.
+**The residue this round left has since been fixed** — see
+`docs/type-argument-disambiguation.md`, which owns the rule now. As landed
+here, a `<` nested directly inside type arguments needed parentheses
+(`Or<(n < m), (m <= n)>`), and the diagnosis in this paragraph was wrong: the
+inner `ty()` does not "stop at the `<`", it *speculates and succeeds*, eating
+the outer list's closing `>`. That is why no widening of the argument grammar
+could have fixed it, and why the answer turned out to be whitespace — a `<`
+with a space before it never opens a list, so the inner one cannot take the
+outer's bracket. Parentheses still work; they are no longer required.
 
 **`∃` does not reach a type-argument slot.** `Iff<Le(n, m), ∃ (k: Nat), …>`
 cannot parse (the binder's `,` is the type-argument separator) and

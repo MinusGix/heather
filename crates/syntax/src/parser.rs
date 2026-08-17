@@ -441,10 +441,25 @@ impl Parser {
 
     fn expect(&mut self, kind: &TokKind, what: &str) -> R<Span> {
         if self.peek() == kind {
-            Ok(self.bump().span)
-        } else {
-            self.err(format!("expected {what}, found {:?}", self.peek()))
+            return Ok(self.bump().span);
         }
+        // A stray `>` has exactly one cause worth naming. `>` is not an
+        // operator anywhere in the language (lexer.rs:40) — it only ever
+        // closes a type-argument list — so meeting one where something else
+        // was due means an opening `<` was read as a comparison instead of a
+        // bracket. Under the one-directional whitespace rule ([`Self::tight`])
+        // that is almost always a space the writer did not mean: `List <Nat>`.
+        //
+        // Cheap and precise: no scanning, no guessing which `<`, just the
+        // reading that a stray `>` can have.
+        if matches!(self.peek(), TokKind::Gt) && !matches!(kind, TokKind::Gt) {
+            return self.err(format!(
+                "expected {what}, found `>` — `>` is not an operator and only ever closes a \
+                 type-argument list, so its `<` was read as a comparison. A `<` with a space \
+                 before it always is one: write `List<Nat>`, not `List <Nat>`"
+            ));
+        }
+        self.err(format!("expected {what}, found {:?}", self.peek()))
     }
 
     /// Accept an identifier token; keywords are contextual, so any ident
@@ -2100,6 +2115,7 @@ impl Parser {
         // third and largest, and it is the same `save`.
         if matches!(self.peek(), TokKind::Ident(_))
             && matches!(self.toks.get(self.pos + 1).map(|t| &t.kind), Some(TokKind::Lt))
+            && self.tight(self.pos + 1)
             && !self.spec_seen_failing(self.pos, SITE_TY_NAMED)
         {
             let save = self.pos;
@@ -2757,6 +2773,10 @@ impl Parser {
         if !matches!(self.peek(), TokKind::Lt) {
             return None;
         }
+        // A spaced `<` is a comparison, full stop — see [`Self::tight`].
+        if !self.tight(self.pos) {
+            return None;
+        }
         if self.spec_seen_failing(self.pos, SITE_EXPR_TYARGS) {
             return None;
         }
@@ -2777,6 +2797,35 @@ impl Parser {
             return self.spec_fail(save, SITE_EXPR_TYARGS);
         }
         Some((args, self.bump().span))
+    }
+
+    /// Is the token at `idx` **tight** against the one before it — no
+    /// whitespace, no comment, nothing between them?
+    ///
+    /// Read off the spans, which are byte offsets, so the lexer needs to know
+    /// nothing about this. `a<b` is tight; `a < b`, `a\n<b` and `a /*c*/< b`
+    /// are not.
+    ///
+    /// This is the whole of the **one-directional whitespace rule**
+    /// (docs/type-argument-disambiguation.md): a `<` with space before it
+    /// never opens a type-argument list. One-directional is the load-bearing
+    /// word — a *tight* `<` is not thereby a bracket, it is merely still
+    /// speculated as one, so `a<b` remains a comparison by falling back
+    /// exactly as it always did. Spacing can only ever *narrow* the ambiguity,
+    /// never decide a program's meaning against what it already meant.
+    ///
+    /// It buys the one thing speculation provably cannot: nested comparisons.
+    /// In `Or<n < m, m <= n>` the inner ` < ` is spaced, so it cannot open a
+    /// list, so it cannot steal the outer's `>` — and the outer parse, which
+    /// used to die on exactly that theft, completes
+    /// (issues/comparison-inside-type-arguments.md).
+    fn tight(&self, idx: usize) -> bool {
+        match (idx.checked_sub(1).and_then(|i| self.toks.get(i)), self.toks.get(idx)) {
+            (Some(prev), Some(here)) => prev.span.end == here.span.start,
+            // Nothing before it: a `<` cannot open type arguments anyway,
+            // since there is no head for them to apply to.
+            _ => false,
+        }
     }
 
     /// The bit-packed flag set that, with a position and a site, keys
@@ -4743,6 +4792,42 @@ mod tests {
         assert!(parse_file(&ty_pos).is_err(), "unterminated type arguments must still fail");
         let expr_pos = format!("fn g() -> Nat {{ {}b }}", "a<".repeat(200));
         assert!(parse_file(&expr_pos).is_err(), "an unterminated `<` chain must still fail");
+    }
+
+    /// The **one-directional whitespace rule**
+    /// (`docs/type-argument-disambiguation.md`): a `<` with a space before it
+    /// never opens type arguments, and a tight one is still only *speculated*
+    /// as opening them.
+    ///
+    /// The first case is the point of the whole rule — it is the one thing
+    /// speculation provably cannot do, because the inner `<` would otherwise
+    /// eat the outer's `>`. The rest are the property that makes the rule
+    /// safe: spacing narrows the ambiguity and never decides a meaning, so
+    /// everything that parsed before still parses, `a<b` included.
+    #[test]
+    fn a_spaced_lt_never_opens_type_arguments() {
+        // The residue, unparenthesized — this was a parse error until the rule.
+        parse_file("fn d(n: Nat, m: Nat, h: Or<n < m, m <= n>) -> Nat { 0 }").unwrap();
+        // …and every mixed nesting, which is what rules out "just turn inner
+        // speculation off": one argument needs it on, the other needs it off.
+        parse_file("fn e(n: Nat, h: Or<Option<Nat>, n < n>) -> Nat { 0 }").unwrap();
+        parse_file("fn f(n: Nat, h: Or<n < n, Option<Nat>>) -> Nat { 0 }").unwrap();
+        // One-directional: a TIGHT `<` is not thereby a bracket. `a<b` has no
+        // closing `>`, so it falls back to the comparison it always was.
+        parse_file("fn g(a: Nat, b: Nat) -> Type { a<b }").unwrap();
+        // Newlines are whitespace too, deliberately: the rule is one sentence,
+        // and wrapping works by breaking *inside* the brackets instead.
+        assert!(parse_file("fn h(xs: List\n<Nat>) -> Nat { 0 }").is_err());
+    }
+
+    /// A stray `>` names its own cause. `>` is not an operator anywhere, so
+    /// meeting one where something else was due means its `<` was read as a
+    /// comparison — nearly always an unintended space.
+    #[test]
+    fn a_stray_gt_blames_the_space_before_its_lt() {
+        let e = parse_file("fn f(xs: List <Nat>) -> Nat { 0 }").unwrap_err();
+        assert!(e.msg.contains("space before it"), "{}", e.msg);
+        assert!(e.msg.contains("List<Nat>"), "{}", e.msg);
     }
 
     /// The memo must not change *which* programs parse — it only skips work

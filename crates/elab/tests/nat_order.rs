@@ -242,7 +242,7 @@ fn decide_it<A: Cmp>(x, y: A) -> Or<A.le(x, y), Not(A.le(x, y))> { A.le_dec(x, y
 fn lt_parses_in_every_type_position() {
     ok("fn a(n, m: Nat, h: n < m) -> Nat { 0 }
 theorem b(n: Nat): n < Succ(n) { lt_succ_self(n) }
-theorem c(n, m: Nat, h: Or<(n < m), (m <= n)>): Nat { 0 }
+theorem c(n, m: Nat, h: Or<n < m, m <= n>): Nat { 0 }
 fn len_of(xs: List<Nat>) -> Nat { 0 }
 fn nth_lt(xs: List<Nat>, i: Nat, h: i < len_of(xs)) -> Nat { 0 }");
 }
@@ -256,11 +256,17 @@ fn e(xs: List<Option<Nat>>) -> List<Option<Nat>> { xs }
 fn f(h: Iff<And<Nat, Nat>, Nat>) -> Nat { 0 }");
 }
 
-/// The residue, pinned so it is a *known* boundary rather than a surprise
-/// ([[comparison-inside-type-arguments]]): an unparenthesized comparison
-/// directly inside type arguments is still refused. If this test starts
-/// failing, that issue has been fixed and this becomes a positive.
+/// This was the round's residue, pinned as a *refusal* with the note "if this
+/// test starts failing, that issue has been fixed and this becomes a
+/// positive". It did, so it is — `issues/comparison-inside-type-arguments.md`
+/// closed the same day under the one-directional whitespace rule
+/// (`docs/type-argument-disambiguation.md`), and an unparenthesized comparison
+/// inside type arguments now parses.
+///
+/// The parenthesized spelling is asserted beside it, because parens did not
+/// stop being correct — they stopped being *mandatory*.
 #[test]
-fn a_bare_comparison_inside_type_arguments_is_still_refused() {
-    bad("theorem c(n, m: Nat, h: Or<n < m, m <= n>): Nat { 0 }");
+fn a_bare_comparison_inside_type_arguments_now_parses() {
+    ok("theorem c(n, m: Nat, h: Or<n < m, m <= n>): Nat { 0 }
+theorem d(n, m: Nat, h: Or<(n < m), (m <= n)>): Nat { 0 }");
 }

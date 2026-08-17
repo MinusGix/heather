@@ -1,19 +1,45 @@
 ---
-title: "Retire `<…>` type arguments: the kernel has no type/term distinction to hang them on"
+title: "`<…>` type arguments: keep them (decided); allow `Or(Nat, Nat)` as a second spelling"
 status: open
 labels: [frontend,syntax,design,elaboration]
 created: 2026-08-16
 updated: 2026-08-16
 ---
 
+## Decided 2026-08-16: `<…>` stays; only `Or(Nat, Nat)` remains open
+
+The user's call, against this issue's own proposal, and the reasoning is worth
+keeping because it is a claim about *reading* that the mechanical argument
+below could not see: `<…>` **demotes type arguments out of the value-argument
+stream**, which is exactly what a reader wants of them — Lean's `List Nat`
+puts the type in the same visual position as a value, and `f({A: Type}, x: A)`
+puts a *binding* in the argument stream, which reads wrong for the same reason.
+The constraint heads (`<A: Monoid(op)>`) read naturally and are, in this
+language, genuinely just another kind of argument. Both spellings this issue
+offered as replacements were considered and rejected on those grounds.
+
+The ambiguity argument below is answered instead by
+`docs/type-argument-disambiguation.md` (the one-directional whitespace rule),
+which closed [[comparison-inside-type-arguments]] without touching the
+notation. Declaration sites — where most of the readability lives — were never
+ambiguous at all.
+
+**Still wanted, and all this issue now owns:** `Or(Nat, Nat)` in type position,
+currently refused with "`Or` cannot be used here". An *additional* spelling,
+not a replacement, and per the analysis below it is a restriction to remove
+rather than a mechanism to add, since the two elaborate to the same
+application.
+
+---
+
 `List<Nat>`, `And<P, Q>`, `fn map<A, B>(…)`, `nil<Nat>()`. Four spellings of
 one idea — *give the leading implicit parameters positionally* — in a language
 whose kernel has no notion of a type argument at all.
 
-The claim: **`<…>` is surface convention borrowed from languages that have a
-type/term distinction, Heather does not have one, and the borrowing is what
-every `<`-ambiguity round has been paying for.** Retiring it deletes grammar
-rather than adding it.
+The claim, **declined above and kept as the record**: `<…>` is surface
+convention borrowed from languages that have a type/term distinction, Heather
+does not have one, and the borrowing is what every `<`-ambiguity round has been
+paying for. Retiring it deletes grammar rather than adding it.
 
 ## Why the ambiguity is structural rather than unlucky
 
@@ -36,6 +62,13 @@ positions, and no amount of local cleverness separates them:
 
 Five mechanisms and two known-wrong positions, all to spell something the
 kernel does not have.
+
+**Overtaken by events**, and this is the bullet the decision turns on: the
+first of those two was fixed the same day without touching the notation
+(`docs/type-argument-disambiguation.md`), by supplying the one bit
+backtracking cannot recover — which `<`s are eligible to be brackets — from
+whitespace. The list above is therefore the history of the problem, not its
+current state.
 
 ## What the kernel actually has
 
@@ -107,3 +140,4 @@ should write the same file both ways and read them**, per
   the standing next thing. Filed now because the two grammar gaps the same
   round produced are both *instances* of it, and they should not be fixed
   separately if this is the answer.
+- 2026-08-16: 2026-08-16: DECLINED as filed, same day, and rescoped to the Or(Nat, Nat) half — see the decision header. The proposal's mechanical case was sound and its two probes stand (implicit binders at Type check today; @f gives implicits positionally), but it weighed only the grammar and not the reading, and the reading is why <> exists: it demotes type arguments out of the value-argument stream. The ambiguity that motivated the proposal was fixed without touching the notation (docs/type-argument-disambiguation.md), which removes the argument's urgency as well as its premise — [[comparison-inside-type-arguments]] is closed and declaration sites were never ambiguous. What survives is that <...> and (...) elaborate to the same application, so admitting the call spelling is a restriction to remove.
