@@ -98,7 +98,11 @@ fn computed_arms() -> Family {
         // only 0.6 because the *skeleton type* is still inlined Θ(n) times
         // and is itself Θ(n) (the module header, §14.11). Band tightened from
         // 2.60–4.00 to claim the new slope.
-        expect_slope: Some((2.20, 2.85)),
+        //
+        // 2026-08-17, re-recorded: **2.19** (six runs, range 2.18-2.22),
+        // against an old floor of 2.20 -- i.e. the gate was decided by the
+        // third digit of a fit. Re-centred on the measurement +/-0.35.
+        expect_slope: Some((1.85, 2.55)),
         cases: indexed_sweep(
             "forded/computed-arms", &[2, 3, 4, 5, 6], "F", IndexedRoute::Forded, src,
         ),
@@ -237,7 +241,16 @@ fn declared_index_tags() -> Family {
         // above. The two paragraphs before this one are what a fixture's
         // wrong label costs: two rounds' worth of explanation for a curve
         // whose cause was never in either round's reach.
-        expect_slope: Some((1.90, 2.60)),
+        //
+        // 2026-08-17, re-recorded: **1.06** (six runs, range 1.02-1.08). This
+        // is the one large move of the re-record -- 2.19 -> 1.06 -- and it is
+        // not this suite's doing: nothing in the fixture changed, and the
+        // exponent was already 1.09 at HEAD on 2026-08-16. The kernel-side
+        // rounds since 2026-08-06 took the wide end of this family, and the
+        // attribution paragraphs above are day-of records rather than current
+        // explanations. What the band guards is unchanged: a power coming
+        // back.
+        expect_slope: Some((0.75, 1.45)),
         cases: indexed_sweep(
             "forded/declared-index-tags", &[2, 3, 4, 5, 6], "Tw", IndexedRoute::One, src,
         ),
@@ -287,7 +300,11 @@ fn declared_index_branching() -> Family {
         unit: "index-ctors",
         // 2026-08-05: constants ~0.75× under the code-reference round, slope
         // 1.53 → 1.57 (within the machine's spread). Band tightened.
-        expect_slope: Some((1.20, 1.90)),
+        //
+        // 2026-08-17, re-recorded: **1.27** (six runs, range 1.24-1.31). Not
+        // an exit -- the old 1.20 floor held -- but by 0.04, which is inside
+        // the family's own range, so it was one round away from being one.
+        expect_slope: Some((0.90, 1.65)),
         cases: indexed_sweep(
             "forded/declared-index-branching", &[2, 3, 4, 5, 6], "Bl",
             IndexedRoute::Forded, src,

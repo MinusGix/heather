@@ -8,6 +8,8 @@
 //! is parsing, how much is the elaborator, how much is the kernel gate
 //! re-checking what the elaborator built.
 
+use std::path::{Path, PathBuf};
+
 use heather_elab::Elaborator;
 
 use crate::harness::{Case, Family};
@@ -16,19 +18,31 @@ use super::{fresh_closure_runner, validate_closure};
 
 const VEC_CODE: &str = include_str!("../../../../../lib/vec_code.hthr");
 const IR_V1: &str = include_str!("../../../../../lib/ir_v1.hthr");
-/// `lib/ir_v1.hthr`'s one import (docs/modules-design.md §7). The corpus
-/// times the **closure**, because that is what `heather check lib/ir_v1.hthr`
-/// now does and therefore what a user waits for.
-const NAT: &str = include_str!("../../../../../lib/std/nat.hthr");
-const BOOL: &str = include_str!("../../../../../lib/std/bool.hthr");
 
-/// The closure of `lib/ir_v1.hthr`, in loader order: dependencies first.
-fn ir_v1_closure(root: &str) -> Vec<(String, String)> {
-    vec![
-        ("bool".to_string(), BOOL.to_string()),
-        ("nat".to_string(), NAT.to_string()),
-        ("ir_v1".to_string(), root.to_string()),
-    ]
+fn lib_dir() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("../../lib")
+}
+
+/// The import closure of a library file, in loader order (dependencies first,
+/// root last) — computed by **the CLI's own loader**, not listed here.
+///
+/// It used to be listed (`bool`, `nat`, `ir_v1`), and the list went stale the
+/// day `lib/std/bool.hthr` gained `import logic;`
+/// (issues/frontend-bench-ir-closure-stale.md). The failure was quiet in the
+/// worst way: `bool`'s unresolvable import aborts `check_module_source`
+/// *before* the module registers a scope, so `nat` then could not see `bool`
+/// and `ir_v1` could not see `nat` — one missing name reported as three
+/// broken modules, and a corpus case timing an elaborator that did almost no
+/// work. The closure a fixture claims to time is a fact about the library, so
+/// it is read from the library.
+///
+/// `-L lib/std` matches `crates/cli/src/main.rs`'s `DEFAULT_LIB`.
+fn closure(file: &str) -> Vec<(String, String)> {
+    let root = lib_dir().join(file);
+    let search = [lib_dir().join("std")];
+    let modules = heather_cli::loader::load(&root, &search)
+        .unwrap_or_else(|e| panic!("corpus fixture `{file}`: {}", e.msg));
+    modules.into_iter().map(|m| (m.name, m.src)).collect()
 }
 
 /// Everything up to the first theorem — every datatype, helper and
@@ -36,9 +50,9 @@ fn ir_v1_closure(root: &str) -> Vec<(String, String)> {
 /// declarations ahead of its theorems, and `crates/elab/tests/ir_v1.rs`
 /// splits it at the same seam for the same reason: it is the half whose cost
 /// is *elaboration* rather than proof conversion.
-fn ir_v1_decls() -> &'static str {
-    let cut = IR_V1.find("\ntheorem ").expect("the library has theorems");
-    &IR_V1[..cut]
+fn decls_prefix(src: &str) -> String {
+    let cut = src.find("\ntheorem ").expect("the library has theorems");
+    src[..cut].to_string()
 }
 
 pub fn families() -> Vec<Family> {
@@ -72,14 +86,14 @@ fn prelude_family() -> Family {
 
 fn check_file() -> Family {
     let mut cases = vec![];
-    for (label, src, heavy, budget_ns) in [
+    for (label, file, decls_only, heavy, budget_ns) in [
         // Budgets are alarms, not gates: each is ~100× (a small file, where
         // "still instant?" is the question) or ~5× (a big one, where the
         // question is "still tolerable?") of what it measured on
         // 2026-08-04. The gate against a 30% drift is the baseline
         // comparison; these fire when a file stops being usable at all.
-        ("vec_code.hthr", VEC_CODE, false, 100_000_000u64),
-        ("ir_v1.hthr:decls", ir_v1_decls(), true, 8_000_000_000),
+        ("vec_code.hthr", "vec_code.hthr", false, false, 100_000_000u64),
+        ("ir_v1.hthr:decls", "ir_v1.hthr", true, true, 8_000_000_000),
         // The latency budget, and the suite's alarm bell. Measured
         // 2026-08-04: **59 s** through the release CLI on a quiet machine,
         // 84–88 s from this harness while the machine carried a load
@@ -89,33 +103,38 @@ fn check_file() -> Family {
         // and what it is for is "the library file now takes five minutes".
         // It is deliberately *not* derived from the baseline: a budget that
         // moves with the recording is not a budget.
-        ("ir_v1.hthr", IR_V1, true, 150_000_000_000),
+        ("ir_v1.hthr", "ir_v1.hthr", false, true, 150_000_000_000),
     ] {
-        // A heavy case is not *validated* at all: validating means checking
-        // the file, so it would add a whole extra `lib/ir_v1.hthr` (~90 s)
-        // to every run on top of the probe and the two sampled rounds. The
-        // harness's checksum still catches a file that stopped checking —
-        // it reports a count instead of a message, and the message is one
-        // `heather check lib/ir_v1.hthr` away. In smoke mode the case is
-        // not built at all (crate::harness::smoke).
-        if heavy {
-            if crate::harness::smoke() {
-                continue;
-            }
-        } else {
-            validate_closure(label, &[("vec_code".to_string(), src.to_string())]);
+        // Heavy cases were *unvalidated* for as long as validating one meant
+        // ~90 s of `lib/ir_v1.hthr`; it is seconds now, so every corpus case
+        // is validated again and its checksum is the Ψ-binding count that
+        // validation returned — a count of declarations landed, not of errors
+        // raised. That is what makes "the fixture is doing the same work"
+        // checkable without a clock, which is exactly what the stale closure
+        // (issues/frontend-bench-ir-closure-stale.md) needed and did not have.
+        // In smoke mode the heavy cases are not built at all
+        // (crate::harness::smoke).
+        if heavy && crate::harness::smoke() {
+            continue;
         }
-        // The `ir_v1` cases are an import **closure** now; `vec_code.hthr`
-        // is one whole file and is a one-module closure, so both go through
-        // the same runner and the corpus keeps timing what the CLI does.
-        let (run, cell) = fresh_closure_runner(if heavy {
-            ir_v1_closure(src)
-        } else {
-            vec![("vec_code".to_string(), src.to_string())]
-        });
-        let mut case = Case::named(label, src.len() as u64, 0, run)
+        // The `ir_v1` cases are an import **closure**; `vec_code.hthr`
+        // imports nothing and is a one-module closure, so both go through
+        // the same loader and the same runner, and the corpus keeps timing
+        // what the CLI does.
+        let mut modules = closure(file);
+        let root = &mut modules.last_mut().expect("a closure has a root").1;
+        if decls_only {
+            *root = decls_prefix(root);
+        }
+        // The x-axis stays the *root's* bytes: the label names the root, and
+        // the imports are part of the wait, not part of the size.
+        let size = root.len() as u64;
+        let bindings = validate_closure(label, &modules);
+        let (run, cell, first_error) = fresh_closure_runner(modules);
+        let mut case = Case::named(label, size, bindings, run)
             .with_phases(cell)
-            .with_budget(budget_ns);
+            .with_budget(budget_ns)
+            .with_diagnosis(first_error);
         if heavy {
             case = case.heavy();
         }

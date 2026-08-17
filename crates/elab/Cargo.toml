@@ -26,8 +26,14 @@ heather-syntax = { path = "../syntax" }
 # prefix through the declaration cache so six binaries stop re-checking
 # identical work (issues/elaborator-snapshot-across-test-binaries.md; the
 # helper is `with_decl_cache` in tests/support/mod.rs).
+#
+# `heather-cli` is here for the same kind of reason and it is the same kind of
+# cycle: the frontend bench corpus computes `lib/ir_v1.hthr`'s import closure
+# with the CLI's own loader instead of a hand-written list of module names,
+# which is what went stale in issues/frontend-bench-ir-closure-stale.md.
 [dev-dependencies]
 heather-cache = { path = "../cache" }
+heather-cli = { path = "../cli" }
 [[bench]]
 name = "frontend"
 path = "benches/frontend/main.rs"
