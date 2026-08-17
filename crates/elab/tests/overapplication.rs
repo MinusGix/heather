@@ -194,3 +194,72 @@ fn a_spilled_argument_is_still_type_checked() {
     ));
     assert!(!e.contains("too many arguments"), "should be a type error: {e}");
 }
+
+// -- 5: the spilled argument as evidence ----------------------------------
+//
+// A spilled argument's *type* solves the callee's type parameters
+// (issues/curried-tail-type-arg-inference.md, 2026-08-17). Before that, the
+// spill was applied after the metas were discharged, so a parameter occurring
+// only in the result type — which is where currying puts one
+// (issues/ih-generalization.md) — had no evidence anywhere and every call site
+// spelled it.
+
+const ZIP: &str = r#"
+inductive Bool2 { False2, True2 }
+record Pair<A, B> { fst: A, snd: B }
+inductive List<A> { Nil, Cons(head: A, tail: List<A>) }
+
+fn zip<A, B>(xs: List<A>) -> List<B> -> List<Pair<A, B>> {
+    match xs {
+        Nil => λ (ys: List<B>) => Nil,
+        Cons(h, t) => λ (ys: List<B>) => match ys {
+            Nil => Nil,
+            Cons(h2, t2) => Cons(Pair(h, h2), zip(t, t2)),
+        },
+    }
+}
+"#;
+
+#[test]
+fn a_spilled_argument_solves_a_tail_type_parameter() {
+    ok(&format!(
+        "{ZIP}
+         fn probe(xs: List<Nat>, ys: List<Bool2>) -> List<Pair<Nat, Bool2>> {{ zip(xs, ys) }}"
+    ));
+}
+
+// The two type parameters come from *different* arguments, one declared and
+// one spilled, so this fails if the spill is consumed without unifying.
+#[test]
+fn both_type_parameters_come_from_their_own_argument() {
+    ok(&format!(
+        "{ZIP}
+         fn probe<A, B>(xs: List<A>, ys: List<B>) -> List<Pair<A, B>> {{ zip(xs, ys) }}"
+    ));
+}
+
+// The parenthesized spelling is *not* covered, and deliberately: `zip(xs)` is
+// a complete expression with no evidence in it, so the type arguments are
+// still written there. Pinned as a `bad()` so that widening this later
+// surfaces as a test that must change rather than as a silent improvement.
+#[test]
+fn the_parenthesized_spelling_still_needs_its_type_arguments() {
+    let e = bad(&format!(
+        "{ZIP}
+         fn probe(xs: List<Nat>, ys: List<Bool2>) -> List<Pair<Nat, Bool2>> {{ zip(xs)(ys) }}"
+    ));
+    assert!(e.contains("cannot infer the type argument `B`"), "{e}");
+}
+
+// Negative control: a spilled argument is not a licence to guess. A type
+// parameter that no argument mentions — declared or spilled — is still
+// refused, and still names the spelling that supplies it.
+#[test]
+fn a_type_parameter_no_argument_mentions_is_still_refused() {
+    let e = bad(&format!(
+        "{ZIP}
+         fn phantom<A, B>(xs: List<A>) -> Nat -> Nat {{ λ (n: Nat) => n }}
+         fn probe(xs: List<Nat>) -> Nat {{ phantom(xs, 3) }}"
+    ));
+    assert!(e.contains("cannot infer the type argument `B`"), "{e}");
+}

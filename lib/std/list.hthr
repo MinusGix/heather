@@ -278,20 +278,19 @@ theorem take_append_drop<A>(xs: List<A>):
     }
 }
 
-// The one law about `filter`, and the file's most annotated proof. The inner
-// `as λ c => List<A>` is not doing dependent work — both arms are `List<A>` —
-// it is there because the `match` sits under `len`, whose type argument is
-// unsolved at that point, so it is read in inference position
-// (issues/match-arg-of-polymorphic-callee-needs-motive.md). Closing that issue
-// deletes those two lines and nothing else.
+// The one law about `filter`. The OUTER motive is doing real work — it is what
+// makes each arm's goal reduce to the branch that arm picked — while the inner
+// `match` needs none: both its arms are `List<A>`, and a `match` under a
+// polymorphic callee whose type argument is not yet known takes its motive from
+// an arm that binds nothing (issues/match-arg-of-polymorphic-callee-needs-motive.md,
+// closed 2026-08-17; it used to need `as λ c => List<A>` restating what `len`
+// already knew).
 theorem len_filter<A>(xs: List<A>, p: A -> Bool): len(filter(xs, p)) <= len(xs) {
     match xs {
         Nil => trivial,
         Cons(h, t) => match p(h) as λ b =>
-            len(match b as λ c => List<A> {
-                    True => Cons(h, filter(t, p)),
-                    False => filter(t, p),
-                }) <= Succ(len(t))
+            len(match b { True => Cons(h, filter(t, p)), False => filter(t, p) })
+                <= Succ(len(t))
         {
             True => len_filter(t, p),
             False => le_succ_r(len(filter(t, p)), len(t), len_filter(t, p)),
@@ -305,12 +304,12 @@ theorem len_filter<A>(xs: List<A>, p: A -> Bool): len(filter(xs, p)) <= len(xs) 
 // `replicate` recurses on the count with the element fixed, so it needs no
 // currying; `zip` walks both lists at once and therefore does.
 //
-// `zip` is where two of the language's rules meet badly, and call sites pay:
-// its `B` appears only in the CURRIED TAIL, and type arguments are solved
-// against the declared value arguments, so `zip(xs, ys)` cannot infer it and
-// every call writes `zip<A, B>(xs, ys)`. That is
-// issues/curried-tail-type-arg-inference.md, filed by this round; the
-// workaround is the explicit spelling and nothing here is blocked on it.
+// `zip(xs, ys)` infers both type arguments, and that is newer than `zip`: `B`
+// occurs only in the curried tail, where inference did not look until
+// over-application began feeding it
+// (issues/curried-tail-type-arg-inference.md, closed 2026-08-17). The
+// parenthesized spelling `zip(xs)(ys)` still needs `zip<A, B>(xs)` — there the
+// inner call is a complete expression with no evidence in it.
 
 fn replicate<A>(x: A, n: Nat) -> List<A> {
     match n {

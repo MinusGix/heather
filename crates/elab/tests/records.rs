@@ -370,11 +370,18 @@ fn the_vector_methods_still_work() {
 // actionable: supply the motive and the field projects.
 #[test]
 fn a_builtin_arity_message_does_not_assert_a_vector_receiver() {
+    // Every arm binds, which is what keeps the receiver's type from inferring
+    // at all: since 2026-08-17 a motive-less `match` with a non-binding arm
+    // takes its motive from that arm
+    // (`issues/match-arg-of-polymorphic-callee-needs-motive.md`), so the
+    // `match n { Zero => mk(), … }` this probe used to use now elaborates —
+    // and a receiver that infers is not a receiver nobody has looked at.
     let e = bad(r#"
         record Box { fold: (n: Nat) -> Nat }
+        inductive Two { L(v: Nat), R(v: Nat) }
         fn mk() -> Box { Box(λ (n: Nat) => n) }
-        fn probe(n: Nat) -> Nat {
-            match n { Zero => mk(), Succ(k) => mk() }.fold(Zero)
+        fn probe(t: Two) -> Nat {
+            match t { L(v) => mk(), R(v) => mk() }.fold(Zero)
         }
         "#);
     assert!(e.contains("needs a motive"), "{e}");
@@ -383,9 +390,10 @@ fn a_builtin_arity_message_does_not_assert_a_vector_receiver() {
     // Not gated on the record: the message was untrue whether or not some
     // record happened to have a field by that name, so the fix is not either.
     let e = bad(r#"
+        inductive Two { L(v: Nat), R(v: Nat) }
         fn mk() -> Nat { Zero }
-        fn probe(n: Nat) -> Nat {
-            match n { Zero => mk(), Succ(k) => mk() }.fold(Zero)
+        fn probe(t: Two) -> Nat {
+            match t { L(v) => mk(), R(v) => mk() }.fold(Zero)
         }
         "#);
     assert!(e.contains("needs a motive"), "{e}");
@@ -395,9 +403,10 @@ fn a_builtin_arity_message_does_not_assert_a_vector_receiver() {
     // how a record field named `head` that takes an argument arrives there.
     let e = bad(r#"
         record Box { head: (n: Nat) -> Nat }
+        inductive Two { L(v: Nat), R(v: Nat) }
         fn mk() -> Box { Box(λ (n: Nat) => n) }
-        fn probe(n: Nat) -> Nat {
-            match n { Zero => mk(), Succ(k) => mk() }.head(3)
+        fn probe(t: Two) -> Nat {
+            match t { L(v) => mk(), R(v) => mk() }.head(3)
         }
         "#);
     assert!(e.contains("needs a motive"), "{e}");

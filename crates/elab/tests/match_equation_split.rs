@@ -448,9 +448,13 @@ fn a_splits_diagnostics_name_split() {
 
     // Not just the form's name: the *spelling it suggests* is one a writer
     // who typed `split` can paste. `match e as λ z => T { … }` is not.
+    // Every arm binds, for the reason the `match` twin of this test records:
+    // a non-binding arm would now name the type and the `split` would
+    // elaborate.
     let m = bad(
-        "fn f<A>(d: A, r: Res<A>) -> A {
-             let x = { split r; on Stuck := d; on OutOfFuel := d; on Out(v) := v; }; x }",
+        "inductive Two<A> { L(v: A), R(v: A) }
+         fn f<A>(t: Two<A>) -> A {
+             let x = { split t; on L(v) := v; on R(v) := v; }; x }",
     );
     assert!(m.contains("`split` in inference position"), "got: {m}");
     assert!(m.contains("`split e as \u{3bb} z => T;`"), "got: {m}");
@@ -482,9 +486,16 @@ fn a_matchs_diagnostics_still_name_match() {
     let m = bad("inductive Void { }\nfn f(x: Void) -> Nat { match x { Zero => 0 } }");
     assert!(m.contains("so `match` takes no arms"), "got: {m}");
 
+    // Every arm binds, which is what keeps this in inference position's error
+    // path at all: since 2026-08-17 a motive-less `match` whose arms include a
+    // non-binding one takes its motive from that arm
+    // (`issues/match-arg-of-polymorphic-callee-needs-motive.md`), and the
+    // probe this test used to run — `match r { Stuck => d, … }` — now
+    // elaborates. The message is what is under test, not the refusal.
     let m = bad(
-        "fn f<A>(d: A, r: Res<A>) -> A {
-             let x = match r { Stuck => d, OutOfFuel => d, Out(v) => v }; x }",
+        "inductive Two<A> { L(v: A), R(v: A) }
+         fn f<A>(t: Two<A>) -> A {
+             let x = match t { L(v) => v, R(v) => v }; x }",
     );
     assert!(m.contains("`match` in inference position"), "got: {m}");
     assert!(m.contains("`match e as \u{3bb} z => T { … }`"), "got: {m}");

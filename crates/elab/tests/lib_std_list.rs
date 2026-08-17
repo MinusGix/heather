@@ -104,11 +104,11 @@ theorem l_len_filter<A>(xs: List<A>, p: A -> Bool): len(filter(xs, p)) <= len(xs
 /// kept everything or a `drop` that dropped nothing, since neither has a law
 /// stated about it; these ten equations are what pins the programs.
 ///
-/// `zip` is the one call here that spells its type arguments, and that is not
-/// style: `B` occurs only in the curried tail, so it cannot be inferred
-/// (`issues/curried-tail-type-arg-inference.md`). Written this way the test
-/// keeps passing when that closes, and the issue's acceptance names the
-/// unspelled form.
+/// `zip` is written unspelled since
+/// `issues/curried-tail-type-arg-inference.md` closed: the over-applied second
+/// list is what solves `B`. `crates/elab/tests/implicit_args.rs` owns the
+/// inference itself, including the spelling that still needs its type
+/// arguments.
 #[test]
 fn the_api_computes() {
     let mut e = elaborated();
@@ -131,7 +131,7 @@ theorem c_filter(): filter(three(), λ (n: Nat) => leb(2, n)) = Cons(2, Cons(3, 
 theorem c_replicate(): replicate(7, 2) = Cons(7, Cons(7, Nil)) { refl }
 theorem c_head(): three().head() = Some(1) { refl }
 theorem c_last(): three().last() = Some(3) { refl }
-theorem c_zip(): zip<Nat, Nat>(three(), Cons(4, Nil)) = Cons(Pair(1, 4), Nil) { refl }
+theorem c_zip(): zip(three(), Cons(4, Nil)) = Cons(Pair(1, 4), Nil) { refl }
 "#;
     if let Err(err) = e.elab_module_source("probe", probe) {
         let msg = match err {

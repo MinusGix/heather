@@ -108,7 +108,12 @@ Elaboration has exactly two entry points:
 - **inference**, `lib.rs:2245` — `Match { motive: Some(m) }`: three branches by
   the scrutinee's type (forded family, indexed family, plain), each elaborating
   the motive in its own extended context and calling its own lowering.
-  `Match { motive: None }` in inference position is an error (`lib.rs:2307`).
+  `Match { motive: None }` in inference position is an error (`lib.rs:2307`) —
+  **amended 2026-08-17** (`issues/match-arg-of-polymorphic-callee-needs-motive.md`):
+  it is first offered to `infer_match_constant_motive`, which takes the motive
+  from an arm that binds nothing and is constant over the scrutinee. The error
+  is what remains when that declines, so the survey below still describes
+  every `match` whose result type depends on its scrutinee.
 
 `elab_match` (`lib.rs:2401`) dispatches on the scrutinee's type to
 `elab_match_forded` / `elab_match_indexed` / `elab_match_data` /

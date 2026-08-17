@@ -255,6 +255,19 @@ round scope asks to be thought through):
    passes while at least one obligation resolved and any remain;
 4. discharge, then spill, unchanged.
 
+**Amended 2026-08-17** (`issues/curried-tail-type-arg-inference.md`): a step
+1.5 sits between 1 and 2 — *consume the spilled arguments while a meta is
+still unsolved*. Same loop shape as step 1 (whnf to `Π`, infer, `unify_ty`,
+splice), stopping at the first spilled argument that is checking-only or whose
+domain is already meta-free, and stopping outright once nothing is unsolved.
+The reason it exists: currying is the standing workaround for the termination
+guard (`issues/ih-generalization.md`), and it moves real parameters into the
+result type, where step 1 never looks — `zip<A, B>(xs: List<A>) -> List<B> →
+…` has no declared argument mentioning `B`. Two consequences for the list
+above: step 2's `spill.is_empty()` gate can now become true *by consumption*,
+which is sound for exactly the reason §5.1 states the gate (the spine is over,
+so `ty` is the call's result type); and step 4's spill is whatever 1.5 left.
+
 Termination: the obligation list is fixed after step 1; each pass either
 moves at least one slot `Withheld → Solved` or stops; slots never move back;
 so at most `k` passes for `k` obligations. Step 3 cannot create new

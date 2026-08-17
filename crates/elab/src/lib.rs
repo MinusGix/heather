@@ -892,6 +892,15 @@ pub struct Elaborator {
     /// Set while elaborating an `on` right-hand side, where a *new* hole is
     /// refused. Load-bearing: it is what makes [`strengthen_global`] sound.
     frozen: Cell<bool>,
+    /// Set while a motive-less `match` is speculatively inferring one arm's
+    /// type ([`Self::infer_match_constant_motive`]). Its only job is to keep
+    /// that speculation from *nesting*: the inner `match` declines to
+    /// speculate, so the outer attempt fails and falls back to the message
+    /// that names the motive. Without the guard the work at a `match` nested
+    /// `d` deep would be 2^d — the shape
+    /// `issues/type-argument-speculation-cost.md` was filed for, and the
+    /// reason this is a flag rather than a syntactic scan of the arm.
+    motive_speculation: Cell<bool>,
     /// `meta fn` definitions, **elaborator-held** (docs/in-language-map-design.md
     /// §4): kernel-checked at `Layer::Meta` against Ψ, never pushed to it —
     /// ch. 04 admits no layer-m term in a global context. The evaluation hook
@@ -1069,6 +1078,7 @@ impl Elaborator {
             goals: RefCell::new(Vec::new()),
             goal_spans: RefCell::new(HashMap::new()),
             frozen: Cell::new(false),
+            motive_speculation: Cell::new(false),
             meta_defs: HashMap::new(),
             meta_slots: HashMap::new(),
             meta_pushed: RefCell::new(Vec::new()),
@@ -3752,6 +3762,29 @@ impl Elaborator {
                 )?;
                 Ok((t, result, mlvl))
             }
+            // A motive-less `match` whose branches do not depend on the
+            // scrutinee: one arm names the type, and the motive is that type,
+            // constant (issues/match-arg-of-polymorphic-callee-needs-motive.md).
+            // Tried before the message below, and only ever *replaced* by it —
+            // a synthesis that does not go through leaves no trace.
+            ExprKind::Match { form, motive: None, scrut, arms, eqbind: None, generated } => {
+                if let Some(r) =
+                    self.infer_match_constant_motive(cx, *form, scrut, arms, *generated, e.span)
+                {
+                    return r;
+                }
+                err(
+                    format!(
+                        "`{}` in inference position needs a motive: `{}`",
+                        form.keyword(),
+                        match form {
+                            MatchForm::Match => "match e as \u{3bb} z => T { … }",
+                            MatchForm::Split => "split e as \u{3bb} z => T;",
+                        }
+                    ),
+                    e.span,
+                )
+            }
             // Both the form and the *suggested spelling* are the written
             // one: `match e as \u{3bb} z => T { … }` is not a thing a writer who
             // typed `split` can paste (issues/diagnostics-name-the-written-form.md).
@@ -3986,6 +4019,99 @@ impl Elaborator {
     /// recursor, a declared inductive is the tier-0 case tree
     /// (docs/inductive-tier0-lowering.md §5).
     #[allow(clippy::too_many_arguments)]
+    /// A motive-less `match` in **inference** position, read as one whose
+    /// result type does not depend on the scrutinee: an arm names the type and
+    /// the motive is that type, constant
+    /// (`issues/match-arg-of-polymorphic-callee-needs-motive.md`).
+    ///
+    /// `None` means "not this shape" and the caller reports the message that
+    /// asks for a motive — the synthesis never produces an error of its own,
+    /// so a dependent `match` that always needed a written motive still gets
+    /// told so rather than a mismatch inside an arm.
+    ///
+    /// Three properties make this a synthesis rather than a guess:
+    ///
+    ///  - **The naming arm binds nothing**, so its body is scoped in `Γ` and
+    ///    its type is available with no branch context to build. Reading a
+    ///    binding arm's type means reconstructing that arm's context, which is
+    ///    per-lowering work (`elab_arm`'s Σ-walk, the case tree, the `Wf`
+    ///    eliminator) and is not attempted here.
+    ///  - **The other arms are checked, not joined.** Once one arm names `T`,
+    ///    every arm — binding or not — goes through the ordinary path against
+    ///    it. So this widens where a motive may be *omitted*, never what a
+    ///    `match` may mean.
+    ///  - **Speculation does not nest** ([`Self::motive_speculation`]), and a
+    ///    failed attempt leaves no warnings behind.
+    fn infer_match_constant_motive(
+        &self,
+        cx: &Cx,
+        form: MatchForm,
+        scrut: &Expr,
+        arms: &[Arm],
+        generated: bool,
+        span: Span,
+    ) -> Option<R<(Term, Type, Level)>> {
+        if self.motive_speculation.get() {
+            return None;
+        }
+        let warned = self.warnings.borrow().len();
+        let goaled = self.goals.borrow().len();
+        let rollback = || {
+            self.warnings.borrow_mut().truncate(warned);
+            self.goals.borrow_mut().truncate(goaled);
+            self.goal_spans.borrow_mut().retain(|_, k| *k < goaled);
+        };
+        // *An* arm that binds nothing, not the first one: a non-binding arm
+        // whose body does not infer either (`Nil` on its own, which is the
+        // very ambiguity this is trying to resolve) teaches nothing and is
+        // stepped over. Each candidate is elaborated at most once, so the
+        // whole search is linear in the arms.
+        self.motive_speculation.set(true);
+        let named = arms
+            .iter()
+            .filter(|a| a.binders.is_empty())
+            .find_map(|a| match self.elab_infer(cx, &a.body) {
+                Ok((_, ty, lvl)) => Some((ty, lvl)),
+                Err(_) => {
+                    rollback();
+                    None
+                }
+            });
+        self.motive_speculation.set(false);
+        let (ty, lvl) = named?;
+        let attempt: R<(Term, Type, Level)> = (|| {
+            let (scrut_t, scrut_ty, scrut_lvl) = self.elab_infer(cx, scrut)?;
+            let t = self.elab_match(
+                cx,
+                form,
+                generated,
+                arms,
+                scrut_t,
+                &scrut_ty,
+                &scrut_lvl,
+                // Constant over the scrutinee binder: that *is* the reading.
+                ty.shift_local(1),
+                lvl.clone(),
+                span,
+            )?;
+            Ok((t, ty, lvl))
+        })();
+        match attempt {
+            Ok(r) => Some(Ok(r)),
+            Err(_) => {
+                // No trace: warnings raised inside the attempt, and any goal it
+                // minted, are rolled back. The goals matter more than they
+                // look — a hole is registered by *span*, and the attempt
+                // elaborates the arm in `Γ` while the real pass elaborates it
+                // inside the branch context, so a surviving registration would
+                // meet the "re-elaborated in a different context" refusal in
+                // [`Self::new_goal`] and turn a decline into an internal error.
+                rollback();
+                None
+            }
+        }
+    }
+
     fn elab_match(
         &self,
         cx: &Cx,
@@ -8257,10 +8383,50 @@ impl Elaborator {
         // into iterated application — `nth(t, k)` is `nth(t)(k)`
         // (issues/call-site-overapplication.md). Applied after the discharge
         // below, because only there is the head back in the committed world
-        // that `apply_explicit` elaborates its arguments in; the price is that
-        // a spilled argument cannot solve a meta, which is also true of the
-        // parenthesized spelling this is sugar for.
-        let spill: Vec<Expr> = args.cloned().collect();
+        // that `apply_explicit` elaborates its arguments in.
+        let mut spill: Vec<Expr> = args.cloned().collect();
+        // …*unless* a meta is still unsolved, in which case the spine is not
+        // over yet as far as inference is concerned. A declaration curried to
+        // satisfy the termination guard (issues/ih-generalization.md) puts
+        // real parameters in its result type — `zip<A, B>(xs: List<A>) ->
+        // List<B> -> …` — and `B` occurs in no *declared* parameter, so
+        // nothing above this line can solve it. The spilled argument's type is
+        // the evidence, and it is evidence of exactly the kind the declared
+        // arguments give (issues/curried-tail-type-arg-inference.md).
+        //
+        // Consumed here rather than in `apply_explicit` because a solution has
+        // to land in `sols` *before* the discharge below. Three stopping
+        // conditions keep this to the case that needs it, so a call that
+        // elaborated before this existed takes the same path it did:
+        //
+        //  - every meta solved — nothing left to learn, so the rest spills;
+        //  - a domain that is already meta-free — it teaches nothing, and
+        //    `apply_explicit` is where an argument at a known type belongs;
+        //  - a checking-only argument — it cannot contribute a solution in
+        //    inference mode (design §4), the same rule the loop above obeys.
+        //
+        // Consuming the whole spill also makes `ty` the call's real result
+        // type again, which is the condition the expected-type solving below
+        // states for itself.
+        if !spill.is_empty() && sols.iter().any(|s| s.solved().is_none()) {
+            let mut taken = 0usize;
+            while taken < spill.len() && sols.iter().any(|s| s.solved().is_none()) {
+                let head_ty = self.whnf(cx, &ty, span)?;
+                let Type::Pi { dom_level, cod_level, dom, cod } = head_ty else { break };
+                let arg = &spill[taken];
+                if zonked(&dom, n, &sols).is_some() || self.is_checking_only(cx, arg) {
+                    break;
+                }
+                let (arg_t, arg_ty, _) = self.elab_infer(cx, arg)?;
+                unify_ty(&cx.gamma, &dom, &arg_ty, n, 0, &mut sols);
+                let arg_rc = Rc::new(arg_t.shift_global(n));
+                ty = cod.apply_local(&LocalSubst::id(&cx.gamma).extended(Rc::clone(&arg_rc)));
+                lvl = cod_level.clone();
+                t = Term::App { fun: Rc::new(t), dom_level, cod_level, dom, cod, arg: arg_rc };
+                taken += 1;
+            }
+            spill.drain(..taken);
+        }
         // Expected-type-directed solving (design §5): in checking position,
         // with an unspilled spine (so `ty` really is the call's result type),
         // the expected type is the remaining evidence. Run only when

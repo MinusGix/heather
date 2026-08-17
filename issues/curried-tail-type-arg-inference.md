@@ -1,6 +1,6 @@
 ---
 title: "A type parameter that appears only in a curried tail cannot be inferred: zip<A, B>"
-status: open
+status: closed
 labels: [frontend,elaboration,inference,ergonomics,stdlib]
 created: 2026-08-17
 updated: 2026-08-17
@@ -71,6 +71,44 @@ place the two rules meet. It will not be the last: `zip_with`, `map2`, and any
   that a two-structure recursion has to be curried today.
 - **[[call-site-overapplication]]** owns the spelling. Assumed here: only that
   `f(x, y)` elaborates to `f(x)(y)` when `f` is curried.
+
+## What landed (2026-08-17)
+
+Route 1, in `apply_implicit` (`crates/elab/src/lib.rs`): the spilled arguments
+are consumed *before* the meta discharge, in the same loop shape the declared
+parameters use — whnf the running result type to a `Π`, infer the argument,
+`unify_ty` its type against the domain, splice it into the spine. Three
+conditions stop the consumption, and together they are what keeps every call
+that elaborated before this on exactly its old path:
+
+- every meta solved (nothing left to learn),
+- a domain that is already meta-free (teaches nothing; `apply_explicit` is
+  where an argument at a known type belongs),
+- a checking-only argument (cannot contribute a solution in inference mode —
+  the same rule the declared-parameter loop obeys).
+
+A side effect worth naming: consuming the *whole* spill makes the running type
+the call's real result type, which is the condition the expected-type solving
+one line below already states for itself, so that route reaches over-applied
+calls now too.
+
+**Not covered, deliberately: `zip(xs)(ys)`.** There the inner call is a
+complete expression with no evidence in it, and feeding it from the outer
+application means elaborating an application *spine* rather than a call — a
+different and much larger change. Pinned as a `bad()` in
+`crates/elab/tests/overapplication.rs` so widening it later shows up as a test
+that must change.
+
+Tests: `crates/elab/tests/overapplication.rs` §5 — the headline, both
+parameters from their own argument, the parenthesized spelling refused, and a
+phantom parameter no argument mentions still refused. Library:
+`lib/std/list.hthr`'s `zip` comment and `crates/elab/tests/lib_std_list.rs`
+now write `zip(xs, ys)`.
+
+No measurement round: the added work is one `sols.iter().any(…)` scan on a
+call that would otherwise have failed, and nothing on a call that already
+elaborated (CLAUDE.md's rule for elaborator changes that add no inference
+route to a hot path).
 
 ## Acceptance
 

@@ -70,3 +70,78 @@ fn non_dependent_motive_still_works() {
     )
     .expect("non-dependent motive");
 }
+
+// ---------------------------------------------------------------------------
+// Inference position (issues/match-arg-of-polymorphic-callee-needs-motive.md,
+// 2026-08-17). Everything above is *checking* position, where the motive comes
+// from abstracting the scrutinee out of the expected type. An argument of a
+// polymorphic callee whose type argument is still unsolved has no expected
+// type at all, so a `match` there was refused outright: it now takes its
+// motive from an arm that binds nothing, and every other arm is checked
+// against that — the reading is widened, never the meaning.
+
+const LIST: &str = "inductive Bool2 { False2, True2 }\n\
+                    inductive List<A> { Nil, Cons(head: A, tail: List<A>) }\n\
+                    fn len<A>(xs: List<A>) -> Nat { match xs { Nil => 0, Cons(h, t) => Succ(len(t)) } }\n";
+
+fn ok(src: &str) {
+    let mut e = Elaborator::with_prelude().expect("prelude");
+    if let Err(err) = e.elab_source(src) {
+        panic!("expected success, got: {}", err.render(src));
+    }
+}
+
+fn bad(src: &str) -> String {
+    let mut e = Elaborator::with_prelude().expect("prelude");
+    match e.elab_source(src) {
+        Ok(()) => panic!("expected a refusal, but it checked:\n{src}"),
+        Err(err) => err.render(src),
+    }
+}
+
+#[test]
+fn a_match_under_a_polymorphic_callee_needs_no_motive() {
+    ok(&format!(
+        "{LIST}
+         fn probe<A>(b: Bool2, xs: List<A>) -> Nat {{
+             len(match b {{ False2 => Nil, True2 => xs }})
+         }}"
+    ));
+}
+
+// The naming arm is the first that binds nothing — the *other* arms may bind,
+// and are checked against the type it named rather than joined with it.
+#[test]
+fn only_one_arm_has_to_bind_nothing() {
+    ok(&format!(
+        "{LIST}
+         fn probe<A>(ys: List<A>, xs: List<A>) -> Nat {{
+             len(match ys {{ Nil => xs, Cons(h, t) => t }})
+         }}"
+    ));
+}
+
+// Negative control: every arm binds, so no arm can name the type without a
+// branch context, and the message is the one that asks for the motive.
+#[test]
+fn every_arm_binding_still_asks_for_a_motive() {
+    let e = bad(&format!(
+        "{LIST}
+         inductive Two<A> {{ L(v: A), R(v: A) }}
+         fn probe<A>(t: Two<List<A>>) -> Nat {{
+             len(match t {{ L(v) => v, R(v) => v }})
+         }}"
+    ));
+    assert!(e.contains("needs a motive"), "{e}");
+}
+
+// Negative control: checking position is untouched — a motive-less `match`
+// there still goes through the stage-2 synthesis above, dependent motive and
+// all, which this file's first test is the acceptance for.
+#[test]
+fn the_dependent_synthesis_is_not_disturbed() {
+    ok("fn add2(m: Nat, n: Nat) -> Nat { match m { Zero => n, Succ(k, ih) => Succ(ih) } }
+        theorem t(n: Nat): add2(n, 0) = n {
+            match n { Zero => refl, Succ(k, ih) => @cong_succ(add2(k, 0), k, ih) }
+        }");
+}
