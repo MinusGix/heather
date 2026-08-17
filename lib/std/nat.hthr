@@ -777,3 +777,121 @@ theorem min_eq_l(a: Nat): (b: Nat) -> a <= b -> min(a)(b) = a {
             }(h),
     }
 }
+
+// ---------------------------------------------------------------------------
+// Exponentiation and factorial (issues/nat-pow-and-fact.md) — the third step
+// of the same progression, written the same way for the same reason. `pow`
+// recurses on its second argument and puts the recursive result on the LEFT of
+// the `mul`, exactly as `mul` does to `add`, so `pow(a, 0)` reduces to `1` and
+// `mul(x, 1)` to `add(0, x)` with no lemma. Every law below is `mul`'s kit read
+// one level up, and the resemblance is not a coincidence: `pow_add` is to
+// `mul_assoc` what `mul_add_distr` is to `add_assoc`.
+//
+// They live at the END of the file, after the order, because two of their
+// lemmas are order facts — `one_le_pow` and `one_le_fact` are `mul_le_mono`
+// applied to themselves, and there is nowhere earlier they could be stated.
+
+fn pow(a, b: Nat) -> Nat { match b { Zero => 1, Succ(k) => mul(pow(a, k), a) } }
+
+// Both small exponents, stated because the API is the kit — and they are not
+// the same kind of fact, which is the thing to notice. Exponent zero is `refl`
+// at open `a`; exponent one is not, because it is `mul(1, a)`, which descends
+// on `a` and so is stuck there. The numeral is on the wrong side.
+theorem pow_zero(a: Nat): pow(a, 0) = 1 { refl }
+theorem pow_one(a: Nat): pow(a, 1) = a { mul_left_one(a) }
+
+// The base one. `mul(w, 1)` reduces to `add(0, w)`, which is why the step is a
+// single `cong_nat` with no arithmetic after it: rewriting the IH inside the
+// `mul` lands on `mul(1, 1)`, and that is `1` by computation.
+theorem one_pow(n: Nat): pow(1, n) = 1 {
+    match n { Zero => refl, Succ(k) => cong_nat(λ (w: Nat) => mul(w, 1), one_pow(k)) }
+}
+
+// Exponents add. The zero arm is the one place the `mul`-shaped definition
+// charges anything — `mul(x, 1)` is `add(0, x)` and not `x` — and it charges
+// exactly one `add_left_zero`.
+theorem pow_add(a, b, c: Nat): pow(a, add(b, c)) = mul(pow(a, b), pow(a, c)) {
+    match c {
+        Zero => sym(add_left_zero(pow(a, b))),
+        Succ(k) => trans(
+            cong_nat(λ (w: Nat) => mul(w, a), pow_add(a, b, k)),
+            mul_assoc(pow(a, b), pow(a, k), a),
+        ),
+    }
+}
+
+// Exponents multiply, and this one is `pow_add`'s customer rather than a
+// second induction: `mul(b, Succ k)` is `add(mul(b, k), b)`, so the step is
+// `pow_add` at that sum with the IH rewritten into the left factor.
+theorem pow_mul(a, b, c: Nat): pow(a, mul(b, c)) = pow(pow(a, b), c) {
+    match c {
+        Zero => refl,
+        Succ(k) => trans(
+            pow_add(a, mul(b, k), b),
+            cong_nat(λ (w: Nat) => mul(w, pow(a, b)), pow_mul(a, b, k)),
+        ),
+    }
+}
+
+// The rearrangement `mul_pow` needs, factored out because it is about `mul`
+// alone and a reader looking for it should not have to find it inside a `pow`
+// proof. Middle-exchange: it is what commutativity and associativity say
+// together, and the only lemma here that is pure monoid algebra.
+theorem mul_shuffle(x, y, z, w: Nat): mul(mul(x, y), mul(z, w)) = mul(mul(x, z), mul(y, w)) {
+    trans(
+        trans(
+            mul_assoc(x, y, mul(z, w)),
+            cong_nat(λ (v: Nat) => mul(x, v),
+                trans(
+                    trans(sym(mul_assoc(y, z, w)), cong_nat(λ (v: Nat) => mul(v, w), mul_comm(y, z))),
+                    mul_assoc(z, y, w),
+                )),
+        ),
+        sym(mul_assoc(x, z, mul(y, w))),
+    )
+}
+
+theorem mul_pow(a, b, n: Nat): pow(mul(a, b), n) = mul(pow(a, n), pow(b, n)) {
+    match n {
+        Zero => refl,
+        Succ(k) => trans(
+            cong_nat(λ (w: Nat) => mul(w, mul(a, b)), mul_pow(a, b, k)),
+            mul_shuffle(pow(a, k), pow(b, k), a, b),
+        ),
+    }
+}
+
+// The one order fact about `pow`, and it is `mul_le_mono` applied to the IH and
+// the hypothesis — the same shape `mul_le_mono_r`'s own step has. `mul(1, 1)`
+// is `1` by computation, so the conclusion needs no repackaging.
+theorem one_le_pow(a, n: Nat, h: 1 <= a): 1 <= pow(a, n) {
+    match n {
+        Zero => trivial,
+        Succ(k) => mul_le_mono(1, pow(a, k), 1, a, one_le_pow(a, k, h), h),
+    }
+}
+
+// Factorial, which recurses on the argument itself rather than on a second
+// one, and so is the shortest definition in this file.
+fn fact(n: Nat) -> Nat { match n { Zero => 1, Succ(k) => mul(Succ(k), fact(k)) } }
+
+theorem fact_zero(): fact(0) = 1 { refl }
+
+// Positivity — the fact everything else about `fact` eventually wants, since a
+// factorial is never `0` and a proof that divides by one needs to know it.
+// `1 <= Succ(k)` is `Le(0, k)` is `True`, hence the bare `trivial` in the
+// middle of an otherwise ordinary application.
+theorem one_le_fact(n: Nat): 1 <= fact(n) {
+    match n {
+        Zero => trivial,
+        Succ(k) => mul_le_mono(1, Succ(k), 1, fact(k), trivial, one_le_fact(k)),
+    }
+}
+
+// Monotone at a single step, which is monotonicity in the only form that needs
+// no induction: `fact(Succ n)` is `fact(n)` multiplied by something at least
+// `1`, and `mul_le_mono_r` says so once `fact(n)` is spelled as `mul(1, …)`.
+theorem fact_le_succ(n: Nat): fact(n) <= fact(Succ(n)) {
+    j(mul_left_one(fact(n)), λ y q => Le(y, mul(Succ(n), fact(n))),
+      mul_le_mono_r(fact(n))(1, Succ(n), trivial))
+}

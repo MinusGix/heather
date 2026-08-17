@@ -14,7 +14,10 @@
 //! - §3 the `sub` kit, including the one lemma that needs a *hypothesis* and a
 //!   control that the hypothesis is load-bearing;
 //! - §4 monotonicity and cancellation at open arguments, and the round trip
-//!   that says they are inverse.
+//!   that says they are inverse;
+//! - §5 `pow` and `fact` (`issues/nat-pow-and-fact.md`), whose laws are
+//!   `mul`'s kit read one level up, and whose two order facts are
+//!   `mul_le_mono` applied to themselves.
 //!
 //! Every positive has a negative control beside it, per
 //! `docs/testing-generated-terms.md`: most of the positives below would pass
@@ -224,4 +227,85 @@ fn monotonicity_and_cancellation_round_trip() {
 theorem back_and_there(x, y, k: Nat, h: add(k, x) <= add(k, y)): add(k, x) <= add(k, y) {
     add_le_mono_l(k, x, y, le_of_add_le_add_l(k, x, y, h))
 }");
+}
+
+// ---------------------------------------------------------------------------
+// 5. `pow` and `fact`. Both compute, both have a kit that is `mul`'s read one
+//    level up, and both have exactly one order fact — which is where the
+//    section above pays for itself.
+
+#[test]
+fn pow_and_fact_compute() {
+    ok("theorem a(): pow(2, 5) = 32 { refl }
+theorem b(): pow(3, 3) = 27 { refl }
+theorem c(): pow(5, 0) = 1 { refl }
+theorem d(): pow(0, 4) = 0 { refl }
+theorem e(): fact(0) = 1 { refl }
+theorem f(): fact(5) = 120 { refl }");
+}
+
+#[test]
+fn pow_and_fact_compute_the_right_values() {
+    bad("theorem t(): pow(2, 5) = 64 { refl }");
+    bad("theorem t(): fact(5) = 100 { refl }");
+}
+
+/// The exponent endpoints, and the asymmetry between them: `pow(a, 0)` is
+/// `refl` at **open** `a` because the definition descends on the exponent,
+/// while `pow(a, 1)` is not — it is `mul(1, a)`, which descends on `a` — so it
+/// costs a lemma. The control is what records that this is a real difference
+/// and not an oversight in the kit.
+#[test]
+fn the_exponent_endpoints_are_not_symmetric() {
+    ok("theorem zero(a: Nat): pow(a, 0) = 1 { refl }
+theorem one(a: Nat): pow(a, 1) = a { pow_one(a) }
+theorem base_one(n: Nat): pow(1, n) = 1 { one_pow(n) }");
+    bad("theorem t(a: Nat): pow(a, 1) = a { refl }");
+}
+
+/// The three laws at open arguments, where none of them can be discharged by
+/// reduction — asserted by the controls below, which try exactly that.
+#[test]
+fn the_pow_laws_compose_at_open_arguments() {
+    ok("theorem adds(a, b, c: Nat): pow(a, add(b, c)) = mul(pow(a, b), pow(a, c)) {
+    pow_add(a, b, c)
+}
+theorem muls(a, b, c: Nat): pow(a, mul(b, c)) = pow(pow(a, b), c) { pow_mul(a, b, c) }
+theorem over_a_product(a, b, n: Nat): pow(mul(a, b), n) = mul(pow(a, n), pow(b, n)) {
+    mul_pow(a, b, n)
+}
+theorem exchange(x, y, z, w: Nat): mul(mul(x, y), mul(z, w)) = mul(mul(x, z), mul(y, w)) {
+    mul_shuffle(x, y, z, w)
+}");
+}
+
+#[test]
+fn the_pow_laws_are_not_definitional() {
+    bad("theorem t(a, b, c: Nat): pow(a, add(b, c)) = mul(pow(a, b), pow(a, c)) { refl }");
+    bad("theorem t(a, b, n: Nat): pow(mul(a, b), n) = mul(pow(a, n), pow(b, n)) { refl }");
+}
+
+/// The order facts, at open arguments and through the hypothesis. `one_le_pow`
+/// is the one lemma here that a reader might expect to hold unconditionally.
+#[test]
+fn the_order_facts_hold_at_open_arguments() {
+    ok("theorem pos(a, n: Nat, h: 1 <= a): 1 <= pow(a, n) { one_le_pow(a, n, h) }
+theorem fac(n: Nat): 1 <= fact(n) { one_le_fact(n) }
+theorem step(n: Nat): fact(n) <= fact(Succ(n)) { fact_le_succ(n) }
+theorem chained(n: Nat): fact(n) <= fact(Succ(Succ(n))) {
+    le_trans(fact(n))(fact(Succ(n)), fact(Succ(Succ(n))), fact_le_succ(n), fact_le_succ(Succ(n)))
+}");
+}
+
+/// `one_le_pow`'s hypothesis is load-bearing and the base `0` is why: `pow` at
+/// base zero is zero at every positive exponent, so the unconditional reading
+/// is false. Both the open attempt (no comparison to supply) and the closed
+/// counterexample are pinned, because the second is what makes the first more
+/// than a typing accident.
+#[test]
+fn positivity_needs_its_base_hypothesis() {
+    bad("theorem t(n: Nat): 1 <= pow(0, n) { one_le_pow(0, n, trivial) }");
+    let e = bad("theorem t(): 1 <= pow(0, 3) { trivial }");
+    assert!(e.contains("Empty"), "expected the refuted comparison to be falsity, got: {e}");
+    ok("theorem why(): pow(0, 3) = 0 { refl }");
 }
