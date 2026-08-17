@@ -122,13 +122,30 @@ fn head_name(t: &Ty) -> Option<&str> {
         // endpoints' type in the key, which is the (class, carrier-syntax) key
         // §7.1 defers to layer 2 — the one case of this round that genuinely
         // wants it (issues/decidable-equation-carrier.md).
+        //
+        // The spine is walked rather than unwrapped once, so a former written
+        // with **type** arguments — `Rep<A>(n)`, whose expression is an `App`
+        // around a `TyApp` — reaches the same `Var` as `Le(n, m)` does
+        // (issues/type-former-carrier-with-type-arguments.md). The type
+        // arguments are no more part of the head than the value arguments are:
+        // the registry has never keyed on a carrier's arguments, only on the
+        // name at the end of its spine.
         TyKind::OfExpr(e) => match &e.kind {
-            ExprKind::App { head, .. } => match &head.kind {
-                ExprKind::Var(name) => Some(name),
-                _ => None,
-            },
+            ExprKind::App { head, .. } | ExprKind::TyApp { head, .. } => spine_head(head),
             _ => None,
         },
+        _ => None,
+    }
+}
+
+/// The `Var` at the end of an application spine, through both application
+/// forms. Reached only from [`head_name`]'s *applied* case, so a bare name in
+/// type position is still not a carrier: the "at least one application" shape
+/// is what the widening admitted and this keeps it.
+fn spine_head(e: &Expr) -> Option<&str> {
+    match &e.kind {
+        ExprKind::App { head, .. } | ExprKind::TyApp { head, .. } => spine_head(head),
+        ExprKind::Var(name) => Some(name),
         _ => None,
     }
 }

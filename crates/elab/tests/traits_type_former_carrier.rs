@@ -167,3 +167,101 @@ instance Dec<Neg(Bot)> {{ d := L(λ (h: Bot) => h) }}
     ));
     assert!(e.contains("already has an instance"), "unexpected: {e}");
 }
+
+// -- 3: a former written with TYPE arguments -------------------------------
+//
+// `issues/type-former-carrier-with-type-arguments.md`. The widening walked the
+// application spine in its *value* spelling only: `Le(n, m)` is an `App` around
+// a `Var`, but `Tag<A>(n)` is an `App` around a `TyApp` around the `Var`, so the
+// head fell one node out of reach and the carrier had no name. The type
+// arguments are no more part of the head than the value arguments are — the
+// registry has never keyed on a carrier's arguments.
+//
+// Found stacked under `issues/recursive-self-call-type-arguments.md`, which
+// made the former fail to *declare* and so hid this behind it.
+
+/// A former taking a type parameter **and** a value parameter, stuck at an open
+/// `n` — the shape that reaches `head_name` as `App { head: TyApp { … } }`. The
+/// value argument is inert on purpose: what is under test is the head, and a
+/// carrier whose value argument did work would let reduction supply it.
+const TAG: &str = r#"
+fn Tag<A>(n: Nat) -> Type { match n { Zero => A, Succ(k) => A } }
+fn tag_val<A>(a: A, n: Nat) -> Tag<A>(n) {
+    match n as λ z => Tag<A>(z) { Zero => a, Succ(k) => a }
+}
+fn tag_neg<A>(f: Neg(A), n: Nat) -> Neg(Tag<A>(n)) {
+    match n as λ z => Neg(Tag<A>(z)) { Zero => f, Succ(k) => f }
+}
+instance<P: Dec>(n: Nat) Dec<Tag<P>(n)> {
+    d := match P.d { L(p) => L(tag_val<P>(p, n)), R(np) => R(tag_neg<P>(np, n)) },
+}
+"#;
+
+#[test]
+fn a_former_with_type_arguments_is_a_carrier() {
+    // Registration alone: before this the head was `None` and the instance had
+    // no canonical name.
+    ok(&format!("{LOGIC}{TAG}"));
+}
+
+#[test]
+fn it_resolves_at_an_open_type_and_an_open_value() {
+    // Both axes open at once, which is the case the head-name gap made
+    // unreachable: `B` is a constrained type parameter and `k` a binder, so
+    // neither argument can be supplied by reduction, and the answer has to come
+    // from unifying the instance head against the goal.
+    ok(&format!(
+        r#"{LOGIC}{TAG}
+fn dec_of<P: Dec>() -> Sum<P, Neg(P)> {{ P.d }}
+fn both_open<B: Dec>(k: Nat) -> Sum<Tag<B>(k), Neg(Tag<B>(k))> {{ dec_of() }}
+"#
+    ));
+}
+
+#[test]
+fn patersons_condition_measures_a_type_argument_carrier() {
+    // The lesson of the first widening, re-checked at the new syntax: a carrier
+    // the measure cannot see into has size 1, which admits no strictly smaller
+    // subgoal, so *every* instance at one refuses whatever it requires — a
+    // failure that looks like a decrease bug rather than a measurement one.
+    // `TAG` itself is the positive half (it requires `Dec<P>` and is admitted);
+    // this is the negative half, so the two together pin the measure from both
+    // sides rather than only proving it is not zero.
+    let e = bad(&format!(
+        r#"{LOGIC}
+fn Tag<A>(n: Nat) -> Type {{ match n {{ Zero => A, Succ(k) => A }} }}
+instance<P>(n: Nat) Dec<Tag<P>(n)> requires self: Dec<Tag<P>(n)> {{ d := self.d }}
+"#
+    ));
+    assert!(
+        e.contains("structurally smaller") || e.contains("forever"),
+        "unexpected: {e}"
+    );
+}
+
+#[test]
+fn the_head_ignores_the_type_arguments_for_duplicates() {
+    // The same coarsening as `Neg`, at the new spelling: `Tag<P>(n)` and
+    // `Tag<Bot>(n)` are one key, and a second instance is a declaration error
+    // naming both rather than a silent overwrite.
+    let e = bad(&format!(
+        r#"{LOGIC}{TAG}
+instance(n: Nat) Dec<Tag<Bot>(n)> {{ d := R(λ (h: Bot) => h) }}
+"#
+    ));
+    assert!(e.contains("already has an instance"), "unexpected: {e}");
+}
+
+#[test]
+fn a_type_argument_former_that_is_not_a_type_former_is_refused() {
+    // The negative control beside the positive: the owner rule is unchanged, so
+    // a global returning `Nat` is still not something a proposition can be *of*,
+    // and reaching its head does not make `Count::Dec` a sentence.
+    let e = bad(&format!(
+        r#"{LOGIC}
+fn Count<A>(n: Nat) -> Nat {{ n }}
+instance(n: Nat) Dec<Count<Bot>(n)> {{ d := R(λ (h: Bot) => h) }}
+"#
+    ));
+    assert!(e.contains("not a type or a type former"), "unexpected: {e}");
+}

@@ -76,6 +76,12 @@ which head-keying still delivers.
 ### 2.3 The widening
 
 `head_name` gains the applied-type-former case, yielding the former's own name.
+(Amended 2026-08-17: it walks the application *spine* rather than unwrapping
+one node, so a former written with **type** arguments — `Tag<A>(n)`, whose
+expression is an `App` around a `TyApp` — reaches the same `Var`. The first
+version read the value spelling only, and
+`issues/type-former-carrier-with-type-arguments.md` is where that was found:
+the type arguments are no more part of the head than the value arguments are.)
 `names_a_type` gains a companion, `names_a_type_former` — a global whose type,
 after every argument is peeled, is a universe — and the two are used through one
 predicate, `names_a_carrier`.

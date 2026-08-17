@@ -1,6 +1,6 @@
 ---
 title: A carrier whose type former takes type arguments has no head name: instance C<F<A>(n)>
-status: open
+status: closed
 labels: [frontend,elaboration,traits]
 created: 2026-08-17
 updated: 2026-08-17
@@ -57,3 +57,7 @@ at all and hid this one behind it.
 `instance<A: Inh>(n: Nat) Inh<Rep<A>(n)>` registers at head `Rep` and resolves
 at an open `A` and `n`, and a negative control confirms a former whose result is
 not a universe still refuses.
+
+## Log
+
+- 2026-08-17: Fixed, and it was the predicted few lines: `head_name` now walks the application SPINE (a shared `spine_head` through both `App` and `TyApp`) instead of unwrapping one node, so `Tag<A>(n)` — an `App` around a `TyApp` around the `Var` — reaches the same head as `Le(n, m)`. The recursion is entered only from the *applied* case, so a bare name in type position is still not a carrier; that shape is what the original widening admitted and it is unchanged. The issue said to CHECK rather than assume that `expr_size`/`expr_var_count` needed the same, and the check says they did not: both already had a `TyApp` arm, and the positive test proves it rather than the code being read — an instance at `Dec<Tag<P>(n)>` with a `requires Dec<P>` is ADMITTED, which a head measured as size 1 could never be. `names_a_type_former` needed nothing either: it peels `Pi` and `UPi` to a universe, and a type parameter is a leading `Pi` at `Ty l` like any other argument. So the whole defect was one node of unwrapping. Acceptance met and then some: the instance registers at head `Tag`, and it resolves with BOTH arguments open — `fn both_open<B: Dec>(k: Nat)`, where `B` is a constrained type parameter and `k` a binder, so neither can be supplied by reduction. Five tests in crates/elab/tests/traits_type_former_carrier.rs, including the two controls the widening's own §2.3 consequences name: duplicate detection still keys at `Tag` regardless of type arguments, and a former returning `Nat` (`Count<Bot>(n)`) still refuses because reaching a head does not make `Count::Dec` a sentence. docs/decide-class-design.md §2.3 carries the amendment, since that is where a reader looks for what a carrier's head is.
