@@ -25,7 +25,7 @@ class     := "class" name tyvars? ("extends" classref ("," classref)*)?
              "{" field ("," field)* ","? "}"
 classref  := name "<" ty ("," ty)* ">"
 
-instance  := "instance" tyvars? classref
+instance  := "instance" tyvars? valparams? classref
              ("requires" param ("," param)*)?
              "{" (member* | litfield ("," litfield)* ","?) "}"
 member    := decl                      -- an ordinary `fn` / `theorem`
@@ -33,7 +33,10 @@ member    := decl                      -- an ordinary `fn` / `theorem`
 litfield  := name ":=" expr
 ```
 
-`field`, `tyvars`, `param`, `decl` are the existing productions.
+`field`, `tyvars`, `param`, `decl` are the existing productions, and
+`valparams` — added 2026-08-17 — is the `record` head's value-parameter list,
+which is what makes an instance generic over a **value**
+(`docs/value-generic-instances-design.md`).
 
 Three notes.
 

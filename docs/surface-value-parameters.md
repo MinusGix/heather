@@ -18,8 +18,15 @@ from*.
 record   := "record" name tyvars? valparams? "{" field ("," field)* ","? "}"
 tyvars   := "<" name ("," name)* ">"
 valparams:= "(" param ("," param)* ","? ")"
-param    := name ":" type
+param    := name ("," name)* ":" type
 ```
+
+The production is shared: `class` and `inductive` heads read the same list, and
+as of 2026-08-17 so does `instance`, where it is what makes an instance generic
+over a **value** (`docs/value-generic-instances-design.md`). The run of names
+sharing one annotation — `(n, m: Nat)` — arrived with that round, for the
+reason a `fn`'s parameter list has it: a reader who has written
+`fn f(n, m: Nat)` has no way to know the head is a different production.
 
 Both lists are optional and they compose, in that order:
 

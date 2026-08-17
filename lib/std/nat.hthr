@@ -285,8 +285,7 @@ theorem le_total(n: Nat): (m: Nat) -> Or<Le(n, m), Le(m, n)> {
     }
 }
 
-// The decider (issues/decide-class.md owns the class this will one day be a
-// field of; this is the function it will be filled with). It returns
+// The decider, and the instance that puts it in the class. It returns
 // `P ∨ ¬P` and nothing else — no `Bool`, no bridge lemma — and it REDUCES at
 // closed arguments, which is what lets `algebra`'s `max_of` compute.
 //
@@ -305,6 +304,20 @@ fn le_dec(n: Nat) -> (m: Nat) -> Or<Le(n, m), ¬ Le(n, m)> {
             },
     }
 }
+
+// The order's `Decide` instance — generic in **both** of its values
+// (docs/value-generic-instances-design.md, 2026-08-17). Until value binders
+// existed the only registrable spelling was `Decide<Le(2, 5)>` at fixed
+// numerals, which is precisely the case elaboration-time computation already
+// answered; the open one, which is the only one a caller with variables in hand
+// has, had no spelling at all.
+//
+// `n` and `m` are recovered by unifying `Le(n, m)` against the goal, so a use
+// site writes neither: `decide<Le(x, h)>()` at open `x` and `h` resolves here.
+// This is what lets `list_algos`'s `insert` decide through the class instead of
+// naming `le_dec`, which is the measurement issues/value-generic-instances.md
+// was filed to take.
+instance(n, m: Nat) Decide<Le(n, m)> { dec := le_dec(n)(m) }
 
 // ---------------------------------------------------------------------------
 // The strict order. Every one of these is `Le`'s kit read at `Succ(n)`; the

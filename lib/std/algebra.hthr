@@ -72,9 +72,13 @@ class Default<A> {
 // anywhere. What is NOT retired is deciding — `max_of` still has to pick a
 // value — so the decision it used to get from the `Bool` is now a third field
 // returning `P ∨ ¬P`, which is the interface issues/decide-class.md will
-// generalize. That class does not exist yet and this does not wait for it: a
-// `le_dec` field is a local decision about `Cmp`, and when `Decide` lands the
-// field becomes a superclass constraint without the consumers below moving.
+// generalize. That class landed 2026-08-17 and this field stayed, which is the
+// outcome the sentence above predicted: a `le_dec` field is a local decision
+// about `Cmp`'s own `le`, an abstract relation with no instance to resolve
+// through, so nothing here has a goal for `Decide` to answer. What changed for
+// `Decide` is at the concrete relations — `std/nat`'s `Le` now has an instance
+// generic in both its values (docs/value-generic-instances-design.md) — and
+// none of the consumers below moved, as promised.
 //
 // The field is `le` and NOT `leb`, the name `std/nat` gives its decision
 // procedure. A class field sharing a name with a global in scope can never be

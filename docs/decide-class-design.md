@@ -122,11 +122,18 @@ the (class, carrier-syntax) key of §7.1, wanted here for real.
 `std/nat`'s `eq_dec` is therefore an ordinary `fn`, called by name.
 `issues/decidable-equation-carrier.md` owns the key.
 
-### 3.2 An instance cannot be generic over a **value**
+### 3.2 An instance cannot be generic over a **value** — closed 2026-08-17
 
-This is the sharper one, and it is what stands between `Decide` and the example
-the issue was filed for. `insert(x, Cons(h, t))` needs to decide `Le(x, h)` at
-**open** `x` and `h`, so it needs
+**Superseded the same day**, by `docs/value-generic-instances-design.md`. The
+section is kept because §4's measurement was taken under it and because it is
+the reason `Decide` shipped absent at the relations for one round. What it
+describes below is now spelled `instance(n, m: Nat) Decide<Le(n, m)>`, which
+`std/nat` declares and `list_algos` resolves to; the closing sentences of this
+section and of §5 record the boundary as it stood.
+
+This was the sharper of the two, and it is what stood between `Decide` and the
+example the issue was filed for. `insert(x, Cons(h, t))` needs to decide
+`Le(x, h)` at **open** `x` and `h`, so it needs
 
 ```heather
 instance Decide<Le(n, m)>          // generic in n, m : Nat
@@ -146,6 +153,13 @@ it.
 **The class is therefore complete over the connectives and absent at the
 relations**, and the relations keep deciding the way they already did: by
 calling `le_dec`, or through `Cmp`'s `le_dec` field.
+
+That held for one round. `issues/value-generic-instances.md` landed 2026-08-17
+and the gap it names is closed: `std/nat` declares
+`instance(n, m: Nat) Decide<Le(n, m)>`, `list_algos` reaches it by resolution
+at open arguments, and the class is complete over `Le` as well as over the
+connectives. `Cmp`'s `le_dec` field is untouched — it is a field and not an
+instance — and equations are still out (§3.1).
 
 ## 4. The measurement: `list_algos` restated
 
@@ -183,11 +197,13 @@ never a `theorem`" discipline exists to protect.
 ## 5. Residue
 
 - **The equation carrier** (§3.1) — `issues/decidable-equation-carrier.md`.
-- **Value-generic instances** (§3.2) — `issues/value-generic-instances.md`.
-  This is the one that unblocks the relations, and therefore the one that
-  matters most to `Decide`.
+- ~~**Value-generic instances** (§3.2)~~ — landed 2026-08-17,
+  `docs/value-generic-instances-design.md`. It was the one that unblocked the
+  relations, and it cost a binder list: the resolver, the registry key and the
+  unifier all needed nothing.
 - **`Decide` is now the widest class in the registry**, and selection tries
-  every candidate of a class in sorted order. Six instances today, each a
+  every candidate of a class in sorted order. Seven instances after the
+  value-generic one, each a
   checking-position elaboration per goal. Not measured — per `CLAUDE.md` this
   was not a perf round — and filed as
   `issues/resolution-candidate-fan-out.md`.

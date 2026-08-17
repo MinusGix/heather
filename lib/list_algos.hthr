@@ -151,11 +151,19 @@ fn Sorted(xs: List<Nat>) -> Type {
 //
 // `or_pick(d, x, y)` picks `y` on `Inl`, so the proved side (`Le(x, h)`, i.e.
 // `x` belongs first) is the second value.
+//
+// The decision is reached by **resolution** and not by naming `le_dec`
+// (2026-08-17, issues/value-generic-instances.md): `decide<Le(x, h)>()` states
+// the proposition and lets the class find the decider, at an `x` and an `h`
+// that are open. That was unspellable until an instance could be generic over a
+// value — `std/nat`'s `instance(n, m: Nat) Decide<Le(n, m)>` is the one this
+// resolves to, and the whole difference here is that no declaration below
+// mentions a decision procedure by name.
 fn insert(x: Nat, xs: List<Nat>) -> List<Nat> {
     match xs {
         Nil => Cons(x, Nil),
         Cons(h, t) =>
-            or_pick(le_dec(x, h), Cons(h, insert(x, t)), Cons(x, Cons(h, t))),
+            or_pick(decide<Le(x, h)>(), Cons(h, insert(x, t)), Cons(x, Cons(h, t))),
     }
 }
 
@@ -174,7 +182,7 @@ theorem le_head_insert(h: Nat, x: Nat, t: List<Nat>):
     match t {
         Nil => λ hx ht => hx,
         Cons(h2, t2) => λ hx ht =>
-            match le_dec(x, h2) as λ d =>
+            match decide<Le(x, h2)>() as λ d =>
                 LeHead(h, or_pick(d, Cons(h2, insert(x, t2)), Cons(x, Cons(h2, t2))))
             {
                 Inl(good) => hx,
@@ -191,7 +199,7 @@ theorem insert_sorted(x: Nat, xs: List<Nat>): Sorted(xs) -> Sorted(insert(x, xs)
     match xs {
         Nil => λ hs => And(trivial, trivial),
         Cons(h, t) => λ hs =>
-            match le_dec(x, h) as λ d =>
+            match decide<Le(x, h)>() as λ d =>
                 Sorted(or_pick(d, Cons(h, insert(x, t)), Cons(x, Cons(h, t))))
             {
                 Inl(good) => And(good, hs),

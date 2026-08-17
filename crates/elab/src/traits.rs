@@ -590,6 +590,31 @@ fn expr_var_count(e: &Expr, v: &str) -> usize {
     }
 }
 
+/// How often `v` occurs in the instance head's **class arguments** — the part
+/// of the head a binder may be recovered from. The index is measured separately
+/// by [`index_var_count`] and is not a substitute: see [`Elaborator::check_valparams`].
+fn head_var_count(c: &ClassRef, v: &str) -> usize {
+    c.args.iter().map(|a| ty_var_count(a, v)).sum()
+}
+
+/// How often `v` occurs in the instance head's **index arguments**. Only ever
+/// asked in order to refuse: an index joins the registry *key* as a spelling.
+fn index_var_count(c: &ClassRef, v: &str) -> usize {
+    c.index.iter().map(|e| expr_var_count(e, v)).sum()
+}
+
+/// The instance's telescope after its type parameters
+/// (docs/value-generic-instances-design.md §3): the **value binders** first,
+/// then the solver parameters.
+///
+/// Value binders lead because a `requires` type may mention one —
+/// `instance(n: Nat) C<F(n)> requires D<G(n)>` — while the converse cannot
+/// happen: a solver parameter's type is a class type, and no binder's type is
+/// written in terms of a dictionary.
+fn instance_params(d: &InstanceDecl) -> Vec<Param> {
+    d.valparams.iter().cloned().chain(d.requires.iter().cloned()).collect()
+}
+
 /// A block whose result is `e` and which binds nothing — every synthesized
 /// declaration's body.
 fn body_of(e: Expr) -> Block {
@@ -1420,6 +1445,7 @@ impl Elaborator {
                 d.class.span,
             );
         }
+        self.check_valparams(d)?;
         let index = self.index_spelling(&d.class, &class)?;
         let prefix = if index.is_empty() {
             format!("{head}::{}", class.name)
@@ -1452,7 +1478,8 @@ impl Elaborator {
                 d.class.span,
             );
         }
-        let parameterized = !d.tyvars.is_empty() || !d.requires.is_empty();
+        let parameterized =
+            !d.tyvars.is_empty() || !d.requires.is_empty() || !d.valparams.is_empty();
         let written = class_ref_written(&d.class);
         // Termination, checked here rather than detected when it hangs
         // (docs/traits-layer2-design.md §6).
@@ -1515,7 +1542,7 @@ impl Elaborator {
                     elaborates: m.elaborates.clone(),
                     name: full,
                     tyvars: d.tyvars.iter().cloned().chain(m.tyvars.iter().cloned()).collect(),
-                    params: d.requires.iter().cloned().chain(m.params.iter().cloned()).collect(),
+                    params: instance_params(d).into_iter().chain(m.params.iter().cloned()).collect(),
                     result: m.result.clone(),
                     body: m.body.clone(),
                     span: m.span,
@@ -1773,7 +1800,8 @@ impl Elaborator {
         // 5. Canonical parents not yet registered — synthesized as this
         // instance's projections, sharing its very field expressions, so a
         // diamond collapses by construction (design §4.4).
-        let parameterized = !d.tyvars.is_empty() || !d.requires.is_empty();
+        let parameterized =
+            !d.tyvars.is_empty() || !d.requires.is_empty() || !d.valparams.is_empty();
         for a in class.ancestors.clone() {
             let Some(akey) = self.key_of(&a.name) else {
                 return err(format!("`{}` is not a class in scope", a.name), span);
@@ -1840,6 +1868,70 @@ impl Elaborator {
         Ok(())
     }
 
+    /// The instance's **value binders** (docs/value-generic-instances-design.md
+    /// §4): each has to be a name of its own, and each has to occur in the head.
+    ///
+    /// The occurrence rule is what makes the binder *recoverable*. Resolution
+    /// determines a value binder in exactly one way — by unifying the instance
+    /// head against the goal — so a binder the head does not mention is a
+    /// metavariable nothing can ever solve, and the failure it causes surfaces
+    /// far from here as an uninstantiated implicit at some use site. It is
+    /// checked at the declaration instead, where the name to blame is in hand.
+    fn check_valparams(&self, d: &InstanceDecl) -> R<()> {
+        for (i, p) in d.valparams.iter().enumerate() {
+            if d.tyvars.iter().any(|t| t.name == p.name) {
+                return err(
+                    format!(
+                        "`{}` is already a type parameter of this instance: one binder \
+                         list cannot rebind the other's name",
+                        p.name
+                    ),
+                    p.span,
+                );
+            }
+            if d.valparams[..i].iter().any(|q| q.name == p.name) {
+                return err(format!("duplicate value binder `{}`", p.name), p.span);
+            }
+            if head_var_count(&d.class, &p.name) == 0 {
+                // Occurring in the *index* is not occurring in the head, and
+                // the distinction is worth its own sentence: an index joins the
+                // registry key as a **spelling**, computed from the declaration
+                // alone, and a local binder has none — `index_spelling` would
+                // key the instance under the binder's own name, so two
+                // instances differing only in what they called `k` would land
+                // at different keys and two agreeing on it would collide.
+                if index_var_count(&d.class, &p.name) > 0 {
+                    return err(
+                        format!(
+                            "the value binder `{}` occurs only in this instance's index, \
+                             which is not a position a binder can be recovered from: an \
+                             index argument joins the registry key as a spelling and must \
+                             therefore be a global reference \
+                             (docs/operation-indexed-classes-design.md §3.1). An instance \
+                             generic in its index is a different feature from one generic \
+                             in its carrier's values",
+                            p.name
+                        ),
+                        p.span,
+                    );
+                }
+                return err(
+                    format!(
+                        "the value binder `{}` does not occur in the head `{}`, so \
+                         resolution has no way to determine it: a value binder is \
+                         recovered by unifying the head against the goal, and one the \
+                         head does not mention would stay an unsolved metavariable at \
+                         every use site (docs/value-generic-instances-design.md §4)",
+                        p.name,
+                        class_ref_written(&d.class)
+                    ),
+                    p.span,
+                );
+            }
+        }
+        Ok(())
+    }
+
     /// Structural decrease of the `requires` subgoals against the instance
     /// head (docs/traits-layer2-design.md §6, record §6.3): Paterson's
     /// condition, checked at the declaration over the *written* types.
@@ -1848,7 +1940,17 @@ impl Elaborator {
     /// it is an `infer` goal, answered by the scope and never by backchaining
     /// — so it cannot feed a loop and is skipped.
     fn check_decrease(&self, d: &InstanceDecl, written: &str) -> R<()> {
-        let vars: Vec<&str> = d.tyvars.iter().map(|t| t.name.as_str()).collect();
+        // Value binders are counted alongside type parameters: Paterson's
+        // variable condition is about what a subgoal may *duplicate*, and a
+        // value binder duplicates exactly as a type parameter does —
+        // `instance(n: Nat) C<F(n)> requires D<G(n, n)>` grows the term it
+        // searches at, whichever kind of binder `n` is.
+        let vars: Vec<&str> = d
+            .tyvars
+            .iter()
+            .map(|t| t.name.as_str())
+            .chain(d.valparams.iter().map(|p| p.name.as_str()))
+            .collect();
         let head: usize = d.class.args.iter().map(ty_size).sum();
         for p in &d.requires {
             // `instance<A: Mag> …` — the inline form's class is checked here,
@@ -1907,7 +2009,7 @@ impl Elaborator {
             elaborates: None,
             name: name.to_string(),
             tyvars: d.tyvars.clone(),
-            params: d.requires.clone(),
+            params: instance_params(d),
             result,
             body: body_of(body),
             span,

@@ -45,7 +45,11 @@ that lands.
   keyed on (class, carrier-syntax) by design).
 - [[value-generic-instances]] is independent: that one is about *binders*, this
   one is about the *key*, and an equation carrier would want both — `n = m` at
-  open `n`, `m` is exactly a value-generic instance.
+  open `n`, `m` is exactly a value-generic instance. **Landed 2026-08-17**, and
+  the independence held exactly: it moved this issue not at all. The binder half
+  is now free — `instance(n, m: Nat) Decide<n = m>` would bind its two values —
+  and what still refuses is `head_name` at `TyKind::Eq`, which is this issue and
+  nothing else.
 
 ## Acceptance
 

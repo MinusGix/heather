@@ -1,6 +1,6 @@
 ---
 title: An instance cannot be generic over a value: instance Decide<Le(n, m)>
-status: open
+status: closed
 labels: [frontend,elaboration,traits,design]
 created: 2026-08-17
 updated: 2026-08-17
@@ -62,3 +62,8 @@ it looks.
 rather than by naming `le_dec`. The `list_algos` restatement is the ready-made
 regression: it should be rewritable to reach the decider by resolution with no
 other change.
+
+## Log
+
+- 2026-08-17: Landed. `instance(n, m: Nat) Decide<Le(n, m)>` — a value-parameter list at the instance head, the same production a `record` head takes; the sketch's first candidate, chosen because `(` after `instance` begins nothing else. docs/value-generic-instances-design.md is the record. The issue's guess that this is smaller than it looks was right and then some: NOTHING in the resolver, the registry key or the unifier changed. Measured before writing anything — a hand-rolled `fn ld({n: Nat}, {m: Nat}) -> Decide<Le(n, m)>` referenced bare in checking position already resolved at open arguments, which is exactly what build_candidate writes, because the unifier decomposes `Le(?n, ?m)` against `Le(x, h)` (both stuck at the same fn). What was missing was a binder list. Value binders are marked implicit in the parser and lead the telescope ahead of the solver parameters. Three things did need saying: (1) a binder must OCCUR in the head, since head-against-goal unification is the only route that determines it and one the head omits is a metavariable nothing can ever solve — refused at the declaration instead of surfacing as an uninstantiated implicit at an unrelated use site; (2) Paterson's variable condition now counts value binders, which duplicate exactly as type parameters do; (3) grouped runs `(n, m: Nat)` now parse in all four heads, because a reader who has written `fn f(n, m: Nat)` cannot know the head is a different production. std/nat gains one line and list_algos's three call sites go from `le_dec(x, h)` to `decide<Le(x, h)>()` with the proofs unchanged — the acceptance, and a substitution rather than a rewrite. Backchaining is the part that is not a rename: `decide<Not(Le(x, h))>()` and the And/Or composites now resolve at open arguments, where before every such goal died at the Le leaf. The occurrence rule is NOT imposed on type parameters (`instance<A> C<Rat>` has been legal since layer 1) — noted in §4 as the natural companion tightening.
+- 2026-08-17: Filed while writing the mixed type-and-value test: [[recursive-self-call-type-arguments]] — a recursive self-call cannot name its own type arguments (`fn Rep<A>(n: Nat) -> Type { … Rep<A>(k) … }`), and the diagnostic says the declaration "takes no type arguments" while pointing at a declaration that visibly does. Unrelated to this round's feature and not blocking it; the test was rewritten around a non-recursive former, which is why nothing in the suite covers it.

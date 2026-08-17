@@ -212,6 +212,18 @@ pub struct InstanceDecl {
     /// become leading implicit parameters of every member and of the assembled
     /// value, exactly as a `fn`'s do.
     pub tyvars: Vec<TyParam>,
+    /// `instance(n, m: Nat) Decide<Le(n, m)>` — the instance's **value
+    /// binders** (docs/value-generic-instances-design.md §2). Written after the
+    /// type parameters and in the same production a `record` head takes, they
+    /// are what lets an instance be generic over a *value* rather than only
+    /// over a type or fixed at one index.
+    ///
+    /// Every one is `implicit: true` by the time it leaves the parser: a use
+    /// site never writes them, because resolution recovers them by unifying the
+    /// instance head against the goal — the same route `instance<A>`'s type
+    /// parameters already take. Empty for every instance written before this
+    /// grammar existed.
+    pub valparams: Vec<Param>,
     pub class: ClassRef,
     /// `requires ma: Monoid<A>, …` — **solver parameters**
     /// (docs/traits-layer2-design.md §1): implicit at every use site and

@@ -16,7 +16,10 @@
 //! class   := "class" name tyvars? ("extends" cref ("," cref)*)?
 //!            "{" rfield ("," rfield)* ","? "}"
 //! cref    := name "<" type ("," type)* ">"
-//! inst    := "instance" tyvars? cref ("requires" ibind ("," ibind)*)?
+//! inst    := "instance" tyvars? vparams? cref
+//!            ("requires" ibind ("," ibind)*)?
+//!                                     -- vparams: the instance's VALUE binders
+//!                                     (docs/value-generic-instances-design.md)
 //! impl    := "impl" name "for" name "{" dclause ("," dclause)* ","? "}"
 //!                                     -- one entry of the cost basis (§1.2)
 //! drepr   := "datarepr" name "for" type
@@ -893,6 +896,21 @@ impl Parser {
         let start = self.peek_span();
         self.bump(); // `instance`
         let (tyvars, constraints) = self.typaram_list()?;
+        // `instance(n, m: Nat) Decide<Le(n, m)>` — the **value binders**
+        // (docs/value-generic-instances-design.md §2). A parameter list rather
+        // than a trailing `forall`, because `(` after `instance` begins nothing
+        // else: the head is a class reference and a class reference starts with
+        // an identifier. That is the parse constraint `requires n: Nat` fails
+        // (docs/surface-value-parameters.md §1) and this position does not.
+        //
+        // Marked implicit here, at the one place both spellings of an instance
+        // pass through: a use site never writes them, since resolution recovers
+        // them by unifying the head against the goal.
+        let valparams: Vec<Param> = self
+            .valparam_list(false)?
+            .into_iter()
+            .map(|p| Param { implicit: true, ..p })
+            .collect();
         let class = self.class_ref("the class this instance is of")?;
         // `requires ma: Monoid<A>, mb: Monoid<B>` — no parentheses, because the
         // list is not an argument list: at layer 1 these are ordinary explicit
@@ -943,7 +961,7 @@ impl Parser {
         };
         let end = self.expect(&TokKind::RBrace, "`}` to close the instance body")?;
         let _ = open;
-        Ok(InstanceDecl { tyvars, class, requires, body, span: start.join(end) })
+        Ok(InstanceDecl { tyvars, valparams, class, requires, body, span: start.join(end) })
     }
 
     /// `requires ma: Monoid<A>, mb: Monoid<B>`, or nothing — the class
@@ -1263,32 +1281,50 @@ impl Parser {
         }
         self.bump();
         while !matches!(self.peek(), TokKind::RParen) {
-            let (n, span) = self.binder_ident("value parameter name")?;
-            let asp = self.peek_span();
-            let symbol = self.binder_symbol(&n)?;
-            if symbol.is_some() && !symbols {
-                return Err(ParseError {
-                    msg: format!(
-                        "`{n} as …` is a class head's device: it installs a body spelling \
-                         for the declaration's own body, and a `record`'s value parameter \
-                         is a term its *fields* mention rather than a binder with a body \
-                         to spell (issues/binder-symbol-as-notation.md)"
-                    ),
-                    span: asp.join(self.peek_span()),
-                });
+            // `(n, m: Nat)` — a run of names sharing one annotation, exactly as
+            // a `fn`'s parameter list reads it (the run stops at the `:`, which
+            // is why the same comma goes on separating binders after the type).
+            // A name followed by `,` was a parse error here before, so the form
+            // is strictly additive; it is shared because a reader who has
+            // written `fn f(n, m: Nat)` has no way to know this list is a
+            // different production.
+            let mut names: Vec<(String, Span, Option<String>)> = Vec::new();
+            loop {
+                let (n, span) = self.binder_ident("value parameter name")?;
+                let asp = self.peek_span();
+                let symbol = self.binder_symbol(&n)?;
+                if symbol.is_some() && !symbols {
+                    return Err(ParseError {
+                        msg: format!(
+                            "`{n} as …` is a class head's device: it installs a body spelling \
+                             for the declaration's own body, and a `record`'s value parameter \
+                             is a term its *fields* mention rather than a binder with a body \
+                             to spell (issues/binder-symbol-as-notation.md)"
+                        ),
+                        span: asp.join(self.peek_span()),
+                    });
+                }
+                names.push((n, span, symbol));
+                if !(matches!(self.peek(), TokKind::Comma)
+                    && matches!(self.nth(1), TokKind::Ident(_)))
+                {
+                    break;
+                }
+                self.bump();
             }
             self.expect(&TokKind::Colon, "`:` (a value parameter is `name: T`)")?;
             let ty = self.ty()?;
-            let span = span.join(ty.span);
-            params.push(Param {
-                name: n,
-                ty,
-                implicit: false,
-                is_self: false,
-                solver: None,
-                symbol,
-                span,
-            });
+            for (n, nsp, symbol) in names {
+                params.push(Param {
+                    name: n,
+                    ty: ty.clone(),
+                    implicit: false,
+                    is_self: false,
+                    solver: None,
+                    symbol,
+                    span: nsp.join(ty.span),
+                });
+            }
             if !matches!(self.peek(), TokKind::Comma) {
                 break;
             }

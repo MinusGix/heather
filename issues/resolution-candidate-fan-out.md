@@ -51,7 +51,10 @@ outcome.
 ## Related
 
 - [[value-generic-instances]] would add instances at relations, widening
-  `Decide` further.
+  `Decide` further. **Landed 2026-08-17**: `Decide` is at seven instances, one
+  of them at `Le`. Still unmeasured, per `CLAUDE.md` — but the head-match-first
+  ordering above is now worth more, since the new candidate is the one an
+  arithmetic goal wants and it sorts in the middle.
 - The derived-instance table (`resolve.rs`'s canonical minting) already
   short-circuits repeat goals, so this is about distinct goals, not repeated
   ones.
