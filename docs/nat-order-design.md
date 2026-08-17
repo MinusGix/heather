@@ -207,3 +207,16 @@ wave 3 content deferred by the round's charter to keep one reviewable diff;
 no decision at all — they are plain structural recursions — which remains the
 standing correction to the assumption that a "decided" function needs a
 decider.
+
+**Landed 2026-08-17** under `issues/nat-arithmetic-kit.md`, which took
+ownership of the list above when the order issue closed. The prediction held
+exactly: `min`/`max` mention no decider, and every monotonicity and
+cancellation lemma is an induction on the operand being added on, where a step
+of the induction is a step of `add` and a step of `Le` cancelling — so the arm
+is the IH applied unchanged. The one shape the section pays for is the `_l`
+half of each pair, which is the `_r` half transported through commutativity
+with `j`, because `add` descends on its second argument. Nothing in that round
+was blocked by the irreducibility gap named above either, but it is now the
+most likely place to *see* it: a goal about `Le` at open arguments is an
+`El(code)` that never reaches a non-`El` head, so the display reader falls back
+to the raw form (`issues/le-diagnostics-print-raw-el.md`).
