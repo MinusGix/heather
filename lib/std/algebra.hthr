@@ -54,6 +54,26 @@ class CommMonoid<A>(op as ∙: A -> A -> A) extends Monoid<A>(op) {
     comm: (x, y: A) -> x ∙ y = y ∙ x,
 }
 
+// The group: a monoid whose every element has an inverse. Added by the `Int`
+// round (issues/std-int-encoding.md, which asked "worth checking whether `Group`
+// should exist before this lands" — this is the answer, and it is yes), and
+// `Int` under `add` is its first and so far ONLY carrier: `Nat` and `Bool` have
+// no inverses under either of their operations, and `append` has none at all.
+//
+// The laws are stated over the INHERITED `unit`, which is what makes this a
+// chain member rather than a new class with a copied unit field. Note what an
+// instance therefore does NOT write: `instance Group<Int>(add)` supplies `inv`
+// and its two laws only, and the monoid half comes from the canonical
+// `CommMonoid<Int>(add)`. Writing the inherited fields again is refused unless
+// the two terms are CONVERTIBLE, and two proofs of one equation are generally
+// not — proof relevance means an override owes something a prover cannot supply
+// (issues/inherited-field-override-owes-conversion.md).
+class Group<A>(op as ∙: A -> A -> A) extends Monoid<A>(op) {
+    inv: A -> A,
+    inv_l: (x: A) -> inv(x) ∙ x = unit,
+    inv_r: (x: A) -> x ∙ inv(x) = unit,
+}
+
 // A value every type of the class has. No laws: `Default` is the class that
 // exists to be *found*, which is the whole content of `or_default`.
 class Default<A> {
@@ -257,6 +277,22 @@ theorem max_of_le<A: Cmp>(x, y: A, p: A.le(x, y)): max_of(x, y) = y {
 
 theorem max_of_self<A: Cmp>(x: A): max_of(x, x) = x {
     max_of_le(x, x, A.le_refl(x))
+}
+
+// `Group`'s generic consequence, and the reason the class is worth declaring
+// rather than leaving `Int`'s three lemmas loose: an inverse is UNIQUE, proved
+// once here and reachable at every group. `std/int`'s `neg_unique` is this
+// theorem with the dictionary found by resolution and nothing re-proved.
+theorem op_inv_unique<A: Group(∙)>(x, y: A, h: x ∙ y = A.unit): y = A.inv(x) {
+    trans(
+        sym(A.unit_l(y)),
+        trans(
+            j(sym(A.inv_l(x)), λ w q => A.unit ∙ y = w ∙ y, refl),
+            trans(
+                A.assoc(A.inv(x), x, y),
+                trans(
+                    j(h, λ w q => A.inv(x) ∙ (x ∙ y) = A.inv(x) ∙ w, refl),
+                    A.unit_r(A.inv(x))))))
 }
 
 // `Default` earns its keep here: the caller of `or_default` names no

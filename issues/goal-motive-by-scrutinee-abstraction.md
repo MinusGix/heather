@@ -87,3 +87,7 @@ count in the two files is **ten**.
 `filter_append` and `filter_map` in `lib/std/list.hthr` lose their inner
 `as λ b => …` motive and still check; the negative control is a `match` whose
 arms genuinely disagree, which must still be refused.
+
+## Log
+
+- 2026-08-17: Verified after the diagnostics pair landed and all three of the day's rounds were merged (2026-08-17): this class is NOT localized by [[check-fallback-discards-expected-type]]'s fix. The four-line Box repro still reports exactly `the kernel rejected 'ddb_id': NotConvertible` at the declaration's span, because the arm's proof is `refl`, which has its own checking arm and is one of that round's own deliberate controls (a `refl` at a false equation stays a kernel rejection). So the control quotes in this issue remain accurate, and the diagnostics round did not reduce the cost of finding this defect — only the cost of reading a goal hole once you suspect it ([[le-diagnostics-print-raw-el]] is what both rounds actually used to localize it). Bearing on scheduling: the two motive issues are now the strongest-evidenced open items and nothing that landed today weakens the case.
