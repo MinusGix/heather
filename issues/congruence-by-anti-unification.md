@@ -3,7 +3,7 @@ title: Infer cong's function by anti-unification, in a goal-solver metaprogram
 status: open
 labels: [frontend,elaboration,metaprogramming,design]
 created: 2026-07-27
-updated: 2026-08-05
+updated: 2026-08-17
 ---
 
 A general `cong` cannot have its function argument implicit today, so the
@@ -200,3 +200,4 @@ Decisions:
   moves the work off [[elab-unifier-completeness]], where finishing the filed
   bullets could never have reached it, and onto the tactic layer, where the
   same solver also serves `subst` and `rewrite`.
+- 2026-08-17: Fourth consecutive round ranks this, and the Int round (2026-08-17, [[std-int-encoding]]) is its largest customer by a wide margin: lib/std/int.hthr declares FOUR congruence lemmas (cong_int at Int -> Int, cong_int_of at Nat -> Int, cong_ofnat, cong_negsucc) and applies them 58 times, every one of them naming a one-place context that the expected type already determines. Two shape notes for whoever takes this. (1) The Nat -> Int arrow is new: a congruence is needed per ARROW, not per type, so a two-type file needs two even before the constructors get theirs. (2) 23 of the 58 sites additionally have to spell BOTH endpoints (@cong_int(f, x, y, p)) because the proof they rewrite by is an induction hypothesis whose type is a motive application ([[motive-application-hides-hypothesis-type]]) -- so at those sites anti-unification would have to recover the context from a goal AND the endpoints from a reducible hypothesis type. The two issues compound and the second is the cheaper fix.
