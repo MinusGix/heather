@@ -3,7 +3,7 @@ title: "Unified match: termination checking, IH = self-call"
 status: closed
 labels: [frontend,elaboration,syntax]
 created: 2026-07-23
-updated: 2026-07-24
+updated: 2026-08-17
 ---
 
 The strong unification decided in docs/sketches/surface-v1.md §1
@@ -43,3 +43,6 @@ both spellings green.
 - 2026-07-24: Landed for Nat. `Succ(k)` arm parses alongside the explicit-ih `Succ(k, ih)` fallback; the declaration's own name is in scope for its body (`Cx.selfref`), and inside a `Succ(k)` arm a guarded self-call lowers to the arm's hidden ih binder (`Cx.guard`, elab/src/lib.rs `elab_self_call`). Guardedness is strict as planned: saturated call, predecessor in the decreasing position, every other parameter passed *unchanged* — compared by binder, not by name, so shadowing cannot fake a descent. Acceptance met: crates/elab/tests/match_recursion.rs has the Nat suite in recursive-theorem style plus both spellings in one file, all kernel-checked.
 
 Deferred (the one real limitation, diagnosed rather than left to the kernel): a self-call whose *non-decreasing* argument varies needs the motive to generalize it (M(z) = Pi(varying params). T), which means lambda-wrapping the arm bodies and applying `ih(e)` — and forces the match to the body root. This MVP is exactly the empty-generalized-set case of that algorithm, so widening is additive, not rework. Wanted eventually for accumulators and IH-generalizing proofs; nothing in the Nat suite needs it.
+- 2026-08-17: The strict rule this issue chose — 'self-calls only on the immediate predecessor variable(s) bound by the enclosing match, and widen only with evidence' — has been widened, on the evidence it asked for: [[recursion-at-deeper-subterms]] (closed 2026-08-17, docs/course-of-values-recursion-design.md). A self-call may now descend to a predecessor's predecessor, provided a nested `match` on the chain actually binds it.
+
+What did NOT change is the part this issue was careful about. The analysis still compares binder positions and can still only reject; the widening is an elaboration strategy — the recursion carries its last `d` values as a Σ-tuple through one `elim_Nat` — so a wrong analysis still produces a term the kernel refuses. The safety property stated here is untouched, and the deliberate strictness was right: it was the *message* that misled, by reading as a check when the gap was in what could be emitted.

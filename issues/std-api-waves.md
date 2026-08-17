@@ -28,7 +28,7 @@ laws, `map` with **none**, `List::nth`. `std/option`: three functions.
 | 0 | ✅ **landed 2026-08-16** — `Empty`/`Not`/`And`/`Or`/`Iff`/`Exists` + `¬ ∧ ∨ ↔ ∃ ∀` | [[std-logic-module]] (closed) |
 | 1 | ✅ **landed 2026-08-16** — `Le` by recursion, `Lt`, the order + strict kit, `le_dec`, `le_iff_exists_add`. The deferred `sub` kit and `min`/`max` are [[nat-arithmetic-kit]], a wave-3 item | [[nat-order-kit]] |
 | 2 | ✅ **mostly landed 2026-08-17** — `succ_inj`, `succ_ne_zero`, `zero_ne_succ`, `eq_dec`, `le_of_not_le`, and `Decide` over the connectives; `Decide` **at** `Nat` equality and order is blocked, see below | [[decide-class]] |
-| 3 | ✅ **landed 2026-08-17** except parity — `min`/`max`, the `sub` kit, `add_le_mono`, `mul_le_mono`, cancellation ([[nat-arithmetic-kit]]); `pow`, `fact` ([[nat-pow-and-fact]]). `half`/`even`/`odd` **stall on the language**, see below | both closed; [[nat-parity-and-half]] blocked |
+| 3 | ✅ **landed 2026-08-17**, in full — `min`/`max`, the `sub` kit, `add_le_mono`, `mul_le_mono`, cancellation ([[nat-arithmetic-kit]]); `pow`, `fact` ([[nat-pow-and-fact]]); `half`/`Even`/`Odd` and the parity kit ([[nat-parity-and-half]]), once [[recursion-at-deeper-subterms]] made them writable | all closed |
 | 4 | `Nat::iter`/fold with `add`/`mul`/`pow` as instances | [[datatype-container-algebras]] |
 | L1 | `len`/`rev` into `std/list`, retire `plusl`; `foldr`/`foldl`, `filter`, `take`/`drop`, `replicate`, `zip`, `head`/`tail`/`last` | unowned — file when scheduled |
 | L2 | the absent `map` laws: `map_id`, `map_map`, `map_append`, `len_map`, `len_append`, `rev_len`, `foldr_append` | unowned — file when scheduled |
@@ -60,10 +60,13 @@ whoever takes it should expect to name deciders.
    over open issues. This round already produced two rankings before any code
    — the connectives being absent (wave 0, which no design session had
    predicted) and `Decide` being the gate on every algorithmic wave. Wave 3
-   produced the third and the sharpest: `half`/`even`/`odd` cannot be *written*
-   ([[recursion-at-deeper-subterms]]), and per the doctrine one section down
-   they were stalled rather than encoded around — an encoding that works is an
-   erased ranking datum.
+   produced the third and the sharpest: `half`/`even`/`odd` could not be
+   *written* ([[recursion-at-deeper-subterms]]), and per the doctrine one
+   section down they were stalled rather than encoded around — an encoding that
+   works is an erased ranking datum. That one was acted on the day after it was
+   ranked and the wave closed behind it, which is the second time this push has
+   turned a ranking into a landed feature inside a day
+   ([[value-generic-instances]] was the first).
 2. **Checking speed on realistic shapes.** `pow`/`fact` are the cheap
    instruments (large closed values on demand, feeding
    [[conversion-cost-at-large-values]] and [[numeral-stack-depth]]); `Int`
@@ -112,3 +115,6 @@ datum.
 - 2026-08-17: Wave 2 landed ([[decide-class]], docs/decide-class-design.md). The sequencing datum it produced: Decide splits along a line the wave list did not anticipate — complete over the connectives, absent at the relations, because an instance cannot bind a value parameter ([[value-generic-instances]]). L3 is therefore UNBLOCKED rather than waiting: state the relation by recursion and call the decider by name, which is what lib/list_algos.hthr now does. The ranking this round produced, in order: value-generic instances (blocks the class from ever reaching a relation), the equation carrier key, and resolution's candidate fan-out. None was on the list before wave 2 started.
 - 2026-08-17: The ranking wave 2 produced has its top item done: [[value-generic-instances]] landed 2026-08-17 (docs/value-generic-instances-design.md), the same day it was ranked. So the algorithmic-wave choice §L3 described as two routes is now one: state the relation by recursion AND reach its decider by resolution, which is what lib/list_algos.hthr does. The two remaining ranked items are unmoved — the equation carrier key, and resolution's candidate fan-out (now seven Decide instances).
 - 2026-08-17: Wave 3 closed out except parity: min/max + sub kit + monotonicity ([[nat-arithmetic-kit]]), pow + fact ([[nat-pow-and-fact]]). half/even/odd stalled on [[recursion-at-deeper-subterms]] rather than encoded around — the decision and its reasoning are recorded there and in §Ranking the language above.
+- 2026-08-17: Wave 3 is closed in full. [[recursion-at-deeper-subterms]] landed 2026-08-17 and [[nat-parity-and-half]] went in behind it the same day, in the spellings that issue had written down as its acceptance test — so the stall cost the wave nothing and bought a language feature.
+
+The datum for the ranking function: the feature the library ranked was not the feature the feature-issue had costed. The costing named a syntactic side condition that turned out unnecessary and missed the one thing that took the round's time — a dependent motive needs the carried values convoyed through the nested `match`. Two-step *proofs* are where that bites, and the library is what has them; a language round with no library customer would have shipped the non-dependent case and called it done.

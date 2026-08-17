@@ -895,3 +895,135 @@ theorem fact_le_succ(n: Nat): fact(n) <= fact(Succ(n)) {
     j(mul_left_one(fact(n)), λ y q => Le(y, mul(Succ(n), fact(n))),
       mul_le_mono_r(fact(n))(1, Succ(n), trivial))
 }
+
+// ---------------------------------------------------------------------------
+// Halving and parity (issues/nat-parity-and-half.md). The first declarations
+// in this library whose recursion reads **two** past values rather than one:
+// `half(Succ(Succ(l)))` is `Succ(half(l))`, and the `l` it descends to is the
+// predecessor's predecessor. That shape had no lowering until
+// issues/recursion-at-deeper-subterms.md, and the spelling below is the one it
+// was built for — nothing here is encoded around the recursion.
+//
+// `Even`/`Odd` are propositional and REDUCING, like `Le`
+// (docs/nat-order-design.md §1): `Even(4)` unfolds to `True`, so the proof is
+// `trivial`, and `¬ Even(7)` is the hypothesis itself. No `Bool` appears in the
+// statement of any of it. The decision comes at the end, as `even_dec` and the
+// class instance over it, exactly as the order's does.
+//
+// `Even(n) := ∃k, add(k, k) = n` is the mathematical definition and would
+// check today, with no feature. It is not the definition here because it does
+// not reduce; it is `half_add_half` and `even_double` below, which is the
+// right relationship between the two.
+
+fn half(n: Nat) -> Nat {
+    match n {
+        Zero => 0,
+        Succ(k) => match k { Zero => 0, Succ(l) => Succ(half(l)) },
+    }
+}
+
+fn Even(n: Nat) -> Type {
+    match n {
+        Zero => True,
+        Succ(k) => match k { Zero => False, Succ(l) => Even(l) },
+    }
+}
+
+fn Odd(n: Nat) -> Type {
+    match n {
+        Zero => False,
+        Succ(k) => match k { Zero => True, Succ(l) => Odd(l) },
+    }
+}
+
+// Halving is bounded by the argument. Two-step induction, and the step is the
+// only place a lemma appears: the goal at `Succ(Succ(l))` reduces to
+// `Le(half(l), Succ(l))` and the IH gives `Le(half(l), l)`.
+theorem half_le(n: Nat): half(n) <= n {
+    match n {
+        Zero => trivial,
+        Succ(k) => match k { Zero => trivial, Succ(l) => le_succ_r(half(l))(l, half_le(l)) },
+    }
+}
+
+// Halving undoes doubling, and this one recurses **one** step, not two: it
+// descends on `n` while the doubling supplies the two `Succ`s that let `half`
+// take a step. The rewrite is `add_succ_left`, which is what turns
+// `add(Succ l, l)` into a visible successor for `half` to consume.
+theorem half_double(n: Nat): half(add(n, n)) = n {
+    match n {
+        Zero => refl,
+        Succ(l) => trans(
+            cong_nat(λ (w: Nat) => half(Succ(w)), add_succ_left(l, l)),
+            cong_succ(half_double(l)),
+        ),
+    }
+}
+
+// Doubling is even — the same rewrite as `half_double`, transported instead of
+// composed, because the conclusion is a proposition rather than an equation.
+theorem even_double(n: Nat): Even(add(n, n)) {
+    match n {
+        Zero => trivial,
+        Succ(l) => j(sym(add_succ_left(l, l)), λ y q => Even(Succ(y)), even_double(l)),
+    }
+}
+
+// Parity is total, and the step needs no repackaging for the reason `le_total`
+// gave: `Even(Succ(Succ(l)))` and `Even(l)` are the SAME type, so the goal at
+// the step and the IH's type are literally equal and the arm is the self-call.
+theorem even_or_odd(n: Nat): Or<Even(n), Odd(n)> {
+    match n {
+        Zero => Inl(trivial),
+        Succ(k) => match k { Zero => Inr(trivial), Succ(l) => even_or_odd(l) },
+    }
+}
+
+// And exclusive. Both base arms are a projection out of the conjunction — at
+// `0` the right half is already `False`, at `1` the left half is — which is
+// the same "the absurd case is the hypothesis" economy the order kit has.
+theorem not_even_and_odd(n: Nat): ¬ And<Even(n), Odd(n)> {
+    match n {
+        Zero => λ (h: And<Even(0), Odd(0)>) => h.right,
+        Succ(k) => match k {
+            Zero => λ (h: And<Even(1), Odd(1)>) => h.left,
+            Succ(l) => not_even_and_odd(l),
+        },
+    }
+}
+
+// The tie between the two halves of this section, and the reason they are one
+// issue rather than two: on an even argument, halving is exactly invertible.
+// Curried, so that the recursion descends on `n` alone and the hypothesis
+// rides along as an argument (issues/ih-generalization.md's shape).
+theorem half_add_half(n: Nat): Even(n) -> add(half(n), half(n)) = n {
+    match n {
+        Zero => λ (h: Even(0)) => refl,
+        Succ(k) => match k {
+            Zero => λ (h: Even(1)) => false_elim(h),
+            Succ(l) => λ (h: Even(Succ(Succ(l)))) => trans(
+                cong_succ(add_succ_left(half(l), half(l))),
+                cong_succ(cong_succ(half_add_half(l)(h))),
+            ),
+        },
+    }
+}
+
+// The decider, and a `fn` rather than a `theorem` for the reason `le_dec`
+// carries: a `theorem` is opaque, so a decision spelled as one never unfolds
+// in conversion and nothing built on it computes. `Even(1)` is `False`, so the
+// refutation at the odd base is the identity.
+fn even_dec(n: Nat) -> Or<Even(n), ¬ Even(n)> {
+    match n {
+        Zero => Inl(trivial),
+        Succ(k) => match k {
+            Zero => Inr(λ (bad: Even(1)) => bad),
+            Succ(l) => even_dec(l),
+        },
+    }
+}
+
+// Value-generic in `n`, like the order's instance
+// (docs/value-generic-instances-design.md): `n` is recovered by unifying
+// `Even(n)` against the goal, so a use site writes nothing.
+instance(n: Nat) Decide<Even(n)> { dec := even_dec(n) }

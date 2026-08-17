@@ -92,6 +92,23 @@ fn both_spellings_agree() {
 
 // -- the guardedness analysis rejects ---------------------------------------
 
+/// Source checked on top of the `Nat` suite above, so a test may use `add`.
+fn elab_ok(src: &str) {
+    let mut e = Elaborator::with_prelude().expect("prelude");
+    e.elab_source(&format!("{NAT_SUITE_REC}\n{src}"))
+        .unwrap_or_else(|err| panic!("expected this to check, got: {err:?}"));
+}
+
+/// Any refusal, elaborator or kernel — for a control that asserts *which*
+/// refusal it is rather than that there is one.
+fn any_err(src: &str) -> String {
+    let mut e = Elaborator::with_prelude().expect("prelude");
+    match e.elab_source(&format!("{NAT_SUITE_REC}\n{src}")) {
+        Err(other) => format!("{other:?}"),
+        Ok(()) => panic!("expected this to be refused"),
+    }
+}
+
 fn elab_err(src: &str) -> String {
     let mut e = Elaborator::with_prelude().expect("prelude");
     match e.elab_source(src) {
@@ -142,6 +159,125 @@ fn shadowing_cannot_fake_a_guard() {
         "#,
     );
     assert!(msg.contains("must descend"), "{msg}");
+}
+
+const HALF: &str = "
+        fn half(n: Nat) -> Nat {
+            match n {
+                Zero => 0,
+                Succ(k) => match k { Zero => 0, Succ(l) => Succ(half(l)) },
+            }
+        }";
+
+/// A self-call at the predecessor's predecessor, written the way anyone writes
+/// it (issues/recursion-at-deeper-subterms.md). The arm that contains it is a
+/// recursor step whose ih is the value at `k`, so the term it lowers to is a
+/// projection out of a recursion carrying its last two values.
+#[test]
+fn a_deeper_subterm_descends() {
+    elab_ok(HALF);
+}
+
+/// The property the whole transformation is for: it is still ONE `elim_Nat`,
+/// so a closed argument still computes. Half of `issues/nat-parity-and-half.md`'s
+/// acceptance is this line.
+#[test]
+fn a_course_of_values_recursion_still_reduces() {
+    elab_ok(&format!(
+        "{HALF}
+        theorem seven(): half(7) = 3 {{ refl }}
+        theorem eight(): half(8) = 4 {{ refl }}
+        theorem zero(): half(0) = 0 {{ refl }}
+        theorem one(): half(1) = 0 {{ refl }}"
+    ));
+    // The control: it computes the *right* values, not merely something.
+    let msg = any_err(&format!("{HALF}\ntheorem t(): half(7) = 4 {{ refl }}"));
+    assert!(!msg.contains("must descend"), "should be a conversion failure, got: {msg}");
+}
+
+/// `fib`, the other classic — two calls at two different depths in one arm,
+/// which is what says the window slides rather than the deepest call alone
+/// being served.
+#[test]
+fn two_depths_in_one_arm() {
+    elab_ok(
+        "
+        fn fib(n: Nat) -> Nat {
+            match n {
+                Zero => 0,
+                Succ(k) => match k { Zero => 1, Succ(l) => add(fib(k), fib(l)) },
+            }
+        }
+        theorem f7(): fib(7) = 13 { refl }
+        theorem f1(): fib(1) = 1 { refl }",
+    );
+}
+
+/// A `Type`-valued two-step recursion: the same lowering with the motive at a
+/// universe, which is what `Even`/`Odd` need. Reduces, so `P(4)` is `trivial`.
+#[test]
+fn a_deeper_recursion_at_a_type_motive() {
+    elab_ok(
+        "
+        fn P(n: Nat) -> Type {
+            match n {
+                Zero => 0 = 0,
+                Succ(k) => match k { Zero => 0 = 1, Succ(l) => P(l) },
+            }
+        }
+        theorem four(): P(4) { refl }",
+    );
+}
+
+/// A **dependent** motive, which is every two-step *proof* and the case the
+/// non-dependent ones cannot stand in for: the carried value one below `k` has
+/// type `M[pred k]`, and `pred k` is stuck at a variable. It becomes usable
+/// only because the window is convoyed through the nested `match`, where the
+/// arm knows its scrutinee is `Succ(l)` and `pred (Succ l)` reduces
+/// (docs/course-of-values-recursion-design.md §5). Nothing here is written by
+/// the author of the proof — the arms below are the ordinary ones.
+#[test]
+fn a_deeper_recursion_at_a_dependent_motive() {
+    elab_ok(
+        "
+        fn E(n: Nat) -> Type {
+            match n { Zero => True, Succ(k) => match k { Zero => 0 = 1, Succ(l) => E(l) } }
+        }
+        fn O(n: Nat) -> Type {
+            match n { Zero => 0 = 1, Succ(k) => match k { Zero => True, Succ(l) => O(l) } }
+        }
+        theorem not_both(n: Nat): E(n) -> O(n) -> 0 = 1 {
+            match n {
+                Zero => λ (e: E(0)) (o: O(0)) => o,
+                Succ(k) => match k {
+                    Zero => λ (e: E(1)) (o: O(1)) => e,
+                    Succ(l) => λ (e: E(l)) (o: O(l)) => not_both(l)(e)(o),
+                },
+            }
+        }
+        theorem four(): E(4) { trivial }
+        theorem five(): O(5) { trivial }",
+    );
+}
+
+/// The chain is followed by *binder*, not by name: a nested `match` on
+/// something else does not extend it, and a call at its pattern variable is
+/// refused — with the mechanism, not just the rule
+/// (issues/recursion-at-deeper-subterms.md).
+#[test]
+fn a_nested_match_on_another_variable_does_not_extend_the_chain() {
+    let msg = elab_err(
+        "
+        fn f(n: Nat, m: Nat) -> Nat {
+            match n {
+                Zero => 0,
+                Succ(k) => match m { Zero => 0, Succ(l) => f(l, m) },
+            }
+        }",
+    );
+    assert!(msg.contains("must descend"), "{msg}");
+    assert!(msg.contains("genuinely smaller"), "the rule without the mechanism: {msg}");
+    assert!(msg.contains("recursion-at-deeper-subterms"), "{msg}");
 }
 
 #[test]

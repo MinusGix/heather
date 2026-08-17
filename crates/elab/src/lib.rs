@@ -4161,51 +4161,301 @@ impl Elaborator {
         };
         let (zero, succ_body) = (&zero.body, &succ.body);
         let _ = span;
-        // base : M[Zero/z]
+        // Does this match descend on one of the declaration's own parameters?
+        // If so, self-calls in the arm become the ih. If not (a nested match on
+        // some other term), the enclosing arm's guard — if any — still stands,
+        // possibly *extended* by this match (§ course-of-values below).
+        let dec = if ih.is_none() { self.descends_on_param(cx, &scrut_t) } else { None };
+        // How many past values the arm reads. `1` is the ordinary recursion and
+        // emits exactly the term it always did; more makes the recursor carry a
+        // tuple (`cov_*` below, issues/recursion-at-deeper-subterms.md).
+        let d = match dec {
+            Some(dec) => self.cov_depth(cx, succ_body, &k, dec),
+            None => 1,
+        };
+        // A nested `match` on the chain's end, with values below it still
+        // uncollected: it must **convoy** them, or its arms cannot see that the
+        // value one below `k` is the value at `l`
+        // (docs/course-of-values-recursion-design.md §5).
+        let convoy = if ih.is_none() && dec.is_none() {
+            self.chain_convoy(cx, &scrut_t)
+        } else {
+            None
+        };
+        // The motive of the recursor actually emitted. Three shapes, and the
+        // first is what every ordinary `match` on `Nat` has always emitted:
+        //   d = 1, no convoy : M
+        //   d > 1            : Σ(M[z], M[pred z], …)   — the carried window
+        //   convoy           : T_outer(z) -> M[z]      — the window passed in
+        let comps_z = cov_comps(&cx.gamma, &motive, d, 1, &Term::Var(LocalVar(0)));
+        let (rec_motive, rec_lvl) = match &convoy {
+            None => (cov_ty(&comps_z, &mlvl), mlvl.clone()),
+            Some(c) => {
+                let carried = cov_ty(&cov_comps(&cx.gamma, &c.motive, c.d, 1, &Term::Var(LocalVar(0))), &c.lvl);
+                (
+                    Type::Pi {
+                        dom_level: c.lvl.clone(),
+                        cod_level: mlvl.clone(),
+                        dom: Rc::new(carried),
+                        cod: Rc::new(motive.shift_local(1)),
+                    },
+                    Level::max(c.lvl.clone(), mlvl.clone()),
+                )
+            }
+        };
+        // base : M[Zero/z] — under the convoy binder where there is one, and
+        // tupled where `d > 1`, since every component of F(0) is at the same
+        // `Zero` (`pred 0` is `0`).
         let base_ty =
             motive.apply_local(&LocalSubst::id(&cx.gamma).extended(Rc::new(Term::Zero)));
-        let base = self.elab_check(cx, zero, &base_ty, &mlvl)?;
-        // step context: Γ, k : Nat, ih : M[k/z]  (M scoped in Γ,z).
+        let base = match &convoy {
+            None => self.elab_check(cx, zero, &base_ty, &mlvl)?,
+            Some(c) => {
+                let comps = cov_comps(&cx.gamma, &c.motive, c.d, 0, &Term::Zero);
+                let dom = cov_ty(&comps, &c.lvl);
+                let mut bcx = cx.clone();
+                bcx.push("#cov".into(), dom.clone(), c.lvl.clone());
+                bcx.guard = Some(c.guard_at(&comps, bcx.names.len(), None));
+                let body = self.elab_check(&bcx, zero, &base_ty.shift_local(1), &mlvl)?;
+                Term::Lam {
+                    dom_level: c.lvl.clone(),
+                    cod_level: mlvl.clone(),
+                    dom: Rc::new(dom),
+                    body: Rc::new(body),
+                }
+            }
+        };
+        // step context: Γ, k : Nat, ih : rec_motive[k/z].
         let mut scx = cx.clone();
         scx.push(k.clone(), Type::Nat, Level::Zero);
-        let ih_ty = motive
-            .apply_local(&embed(&cx.gamma, 1).extended(Rc::new(Term::Var(LocalVar(0)))));
+        let ih_ty = rec_motive.apply_local(&embed(&cx.gamma, 1).extended(Rc::new(Term::Var(LocalVar(0)))));
         // The unified arm `Succ(k)` binds the ih anyway — the recursor demands
         // it — but under a name the surface cannot spell, because it is
         // reached by a guarded self-call instead.
-        scx.push(ih.clone().unwrap_or_else(|| "#ih".into()), ih_ty, mlvl.clone());
-        if ih.is_none() {
-            // Does this match descend on one of the declaration's own
-            // parameters? If so, self-calls in the arm become the ih. If not
-            // (a nested match on some other term), the enclosing arm's guard —
-            // if any — still stands.
-            scx.guard = self
-                .descends_on_param(cx, &scrut_t)
-                .map(|dec| {
-                    Rc::new(Guard {
-                        dec,
-                        kind: GuardKind::Nat {
-                            pred_pos: cx.names.len(),
-                            ih_pos: cx.names.len() + 1,
-                        },
-                        rebind: None,
-                    })
-                })
-                .or_else(|| cx.guard.clone());
-        }
-        // step : M[Succ k/z] in Γ, k, ih.
+        scx.push(ih.clone().unwrap_or_else(|| "#ih".into()), ih_ty, rec_lvl.clone());
+        // The window this arm carries, scoped in Γ, k, ih: the ih itself at
+        // `d = 1`, its projections above that.
+        let comps_ih: Vec<Type> = comps_z
+            .iter()
+            .map(|c| {
+                c.apply_local(&embed(&cx.gamma, 2).extended(Rc::new(Term::Var(LocalVar(1)))))
+            })
+            .collect();
+        let ih_at = |i: usize| {
+            (cov_proj(&comps_ih, &mlvl, Term::Var(LocalVar(0)), i), comps_ih[i].clone(), mlvl.clone())
+        };
+        // step : M[Succ k/z] in Γ, k, ih (+ the convoy binder) — the arm the
+        // writer wrote, whatever the recursor is carrying underneath it.
         let step_ty = motive.apply_local(
             &embed(&cx.gamma, 2)
                 .extended(Rc::new(Term::Succ(Rc::new(Term::Var(LocalVar(1)))))),
         );
-        let step = self.elab_check(&scx, succ_body, &step_ty, &mlvl)?;
-        Ok(Term::ElimNat {
-            level: mlvl,
-            motive: Rc::new(motive),
+        let step = match &convoy {
+            Some(c) => {
+                // The convoyed window at `Succ k`, where `pred (Succ k) ⇝ k`
+                // makes the component one below this arm's scrutinee *reduce*
+                // to the motive at the variable the arm binds. That reduction
+                // is the whole point of passing it in.
+                let comps = cov_comps(
+                    &cx.gamma,
+                    &c.motive,
+                    c.d,
+                    2,
+                    &Term::Succ(Rc::new(Term::Var(LocalVar(1)))),
+                );
+                let dom = cov_ty(&comps, &c.lvl);
+                let mut bcx = scx.clone();
+                bcx.push("#cov".into(), dom.clone(), c.lvl.clone());
+                bcx.guard = Some(c.guard_at(&comps, bcx.names.len(), Some(cx.names.len())));
+                let body = self.elab_check(&bcx, succ_body, &step_ty.shift_local(1), &mlvl)?;
+                Term::Lam {
+                    dom_level: c.lvl.clone(),
+                    cod_level: mlvl.clone(),
+                    dom: Rc::new(dom),
+                    body: Rc::new(body),
+                }
+            }
+            None => {
+                if ih.is_none() {
+                    scx.guard = dec
+                        .map(|dec| {
+                            Rc::new(Guard {
+                                dec,
+                                kind: GuardKind::Nat {
+                                    preds: vec![cx.names.len()],
+                                    depth: scx.names.len(),
+                                    tuple: Term::Var(LocalVar(0)),
+                                    comps: comps_ih.clone(),
+                                    mlvl: mlvl.clone(),
+                                    motive: Rc::new(motive.clone()),
+                                    gamma: cx.gamma.clone(),
+                                },
+                                rebind: None,
+                            })
+                        })
+                        .or_else(|| cx.guard.clone());
+                }
+                let step = self.elab_check(&scx, succ_body, &step_ty, &mlvl)?;
+                if d == 1 {
+                    step
+                } else {
+                    // F(Succ k) = (step, π₀ ih, …, π_{d-2} ih): the value just
+                    // computed, then the window slid by one. Annotated at
+                    // `Succ k`, where the kernel checks it; the shifted
+                    // components differ from those annotations only by
+                    // `pred (Succ k) ⇝ k`, which conversion does.
+                    let comps_succ = cov_comps(
+                        &cx.gamma,
+                        &motive,
+                        d,
+                        2,
+                        &Term::Succ(Rc::new(Term::Var(LocalVar(1)))),
+                    );
+                    let mut vals = vec![step];
+                    vals.extend((0..d - 1).map(|i| ih_at(i).0));
+                    cov_tuple(&comps_succ, &mlvl, vals)
+                }
+            }
+        };
+        // F(0) = (f(0), …, f(0)): the deeper components stand for values before
+        // the start, which no arm can read — a call at depth `i` is only in
+        // scope inside `i` nested `Succ` arms, so reaching one would need the
+        // scrutinee to be at least `i`. The `Zero` arm's own value is the one
+        // term of the right type already to hand.
+        let base = if d == 1 {
+            base
+        } else {
+            let comps_0 = cov_comps(&cx.gamma, &motive, d, 0, &Term::Zero);
+            cov_tuple(&comps_0, &mlvl, vec![base; d])
+        };
+        let elim = Term::ElimNat {
+            level: rec_lvl,
+            motive: Rc::new(rec_motive),
             base: Rc::new(base),
             step: Rc::new(step),
-            scrut: Rc::new(scrut_t),
+            scrut: Rc::new(scrut_t.clone()),
+        };
+        if let Some(c) = &convoy {
+            // …and the window goes in, which is what refines it.
+            let comps = cov_comps(&cx.gamma, &c.motive, c.d, 0, &scrut_t);
+            return Ok(Term::App {
+                fun: Rc::new(elim),
+                dom_level: c.lvl.clone(),
+                cod_level: mlvl.clone(),
+                dom: Rc::new(cov_ty(&comps, &c.lvl)),
+                cod: Rc::new(
+                    motive.apply_local(&embed(&cx.gamma, 1).extended(Rc::new(scrut_t.shift_local(1)))),
+                ),
+                arg: Rc::new(c.tuple.clone()),
+            });
+        }
+        if d == 1 {
+            return Ok(elim);
+        }
+        // The source's `match` is the *first* component of what the recursor
+        // now computes, so the transformation stays local to this expression:
+        // its type is still `M[scrut/z]`.
+        let comps_at = cov_comps(&cx.gamma, &motive, d, 0, &scrut_t);
+        Ok(cov_proj(&comps_at, &mlvl, elim, 0))
+    }
+
+    /// A nested `match` on the enclosing arm's predecessor continues the chain:
+    /// inside `match n { Succ(k) => match k { Succ(l) => … } }` the variable
+    /// `l` is the value two below `n`, and a self-call at it is guarded — but
+    /// only if the values the enclosing recursion carries are *passed through*
+    /// this match, since only then does the component one below `k` reduce, at
+    /// the arm that knows `k` is `Succ l`, to the value at `l`.
+    ///
+    /// `None` when the enclosing recursion has nothing left to hand down —
+    /// every ordinary one-step recursion, which therefore emits exactly the
+    /// term it always did.
+    fn chain_convoy(&self, cx: &Cx, scrut: &Term) -> Option<Convoy> {
+        let g = cx.guard.clone()?;
+        let GuardKind::Nat { preds, depth, tuple, comps, mlvl, motive, gamma } = &g.kind else {
+            return None;
+        };
+        // Nothing below the chain's end is carried: this is the ordinary
+        // recursion, and a nested `match` changes nothing about it.
+        if comps.len() <= preds.len() {
+            return None;
+        }
+        // By *binder*, never by name: an inner `k` that shadows the arm's own
+        // is a different variable and does not continue the chain.
+        let Term::Var(LocalVar(i)) = scrut else { return None };
+        if cx.names.len() - 1 - *i as usize != *preds.last()? {
+            return None;
+        }
+        let by = (cx.names.len() - depth) as u32;
+        Some(Convoy {
+            dec: g.dec,
+            preds: preds.clone(),
+            d: comps.len(),
+            lvl: mlvl.clone(),
+            motive: motive.apply_local(
+                &embed(gamma, by + 1).extended(Rc::new(Term::Var(LocalVar(0)))),
+            ),
+            outer_motive: Rc::clone(motive),
+            gamma: gamma.clone(),
+            tuple: tuple.shift_local(by),
         })
+    }
+
+    /// How deep into the predecessor chain the arm's self-calls reach: `1` for
+    /// `f(k)`, `2` for an `f(l)` under a nested `match k`, and so on
+    /// (issues/recursion-at-deeper-subterms.md).
+    ///
+    /// **Syntactic, and deliberately only a sizing decision.** It reads names,
+    /// so a shadowed binder can make it wrong in either direction — and
+    /// neither direction can produce a wrong term. Too small, and the real
+    /// check refuses the call for want of an ih (the same message as before
+    /// this existed); too large, and the recursor carries a component nothing
+    /// reads. What a call *lowers to* is decided by [`Self::elab_self_call`]
+    /// comparing binder positions, which no spelling can fool.
+    fn cov_depth(&self, cx: &Cx, body: &Expr, k: &str, dec: usize) -> usize {
+        let Some(s) = cx.selfref.as_ref() else { return 1 };
+        // name of a chain predecessor -> its depth, `k` being depth 1.
+        let mut chain: Vec<(String, usize)> = vec![(k.to_string(), 1)];
+        let mut found = 1usize;
+        // Descend the chain first, then look for calls: the map has to be
+        // complete before a call at `l` can be recognised as one.
+        loop {
+            let (cur, at) = chain.last().cloned().expect("seeded above");
+            let mut next: Option<String> = None;
+            walk_expr(body, &mut |e| {
+                if let ExprKind::Match { scrut, arms, .. } = &e.kind
+                    && matches!(&scrut.kind, ExprKind::Var(n) if *n == cur)
+                    && let Some(a) = arms.iter().find(|a| a.ctor == "Succ")
+                    && let [p] = a.binders.as_slice()
+                {
+                    next.get_or_insert_with(|| p.name().to_string());
+                }
+            });
+            match next {
+                Some(n) if !chain.iter().any(|(m, _)| *m == n) => chain.push((n, at + 1)),
+                _ => break,
+            }
+        }
+        walk_expr(body, &mut |e| {
+            let ExprKind::App { head, args, explicit } = &e.kind else { return };
+            let head = match &head.kind {
+                ExprKind::TyApp { head, .. } => head,
+                _ => head,
+            };
+            if !matches!(&head.kind, ExprKind::Var(n) if *n == s.name) {
+                return;
+            }
+            let positions: Vec<usize> = (s.n_tyvars..s.params.len())
+                .filter(|&j| *explicit || !s.params[j].1)
+                .collect();
+            let Some(slot) = positions.iter().position(|&j| j == dec) else { return };
+            let Some(arg) = args.get(slot) else { return };
+            if let ExprKind::Var(n) = &arg.kind
+                && let Some((_, at)) = chain.iter().find(|(m, _)| m == n)
+            {
+                found = found.max(*at);
+            }
+        });
+        found
     }
 
     /// `match` on `Fin(Succ k)`: the kernel's `Case` over the sum that
@@ -4542,6 +4792,10 @@ impl Elaborator {
         // index is the *descendant's own* pattern variable, so the rebind
         // check below has no answer until the descendant is known.
         let mut descendant = 0usize;
+        // Which link of a `Nat` guard's predecessor chain the call descends to:
+        // `0` is the immediate predecessor and anything beyond it is a
+        // course-of-values call (issues/recursion-at-deeper-subterms.md).
+        let mut cov_at = 0usize;
         let order = {
             let mut o: Vec<usize> = (0..args.len()).collect();
             if let Some(p) = positions.iter().position(|&j| j == g.dec) {
@@ -4554,10 +4808,21 @@ impl Elaborator {
             // so shadowing cannot fake a guarded call.
             let (arg_t, _, _) = self.elab_infer(cx, arg)?;
             let ok = match (&g.kind, j == g.dec) {
-                (GuardKind::Nat { pred_pos, .. }, true) => {
-                    matches!(arg_t, Term::Var(LocalVar(i))
-                             if cx.names.len() - 1 - i as usize == *pred_pos)
-                }
+                (GuardKind::Nat { preds, comps, .. }, true) => match arg_t {
+                    Term::Var(LocalVar(i)) => {
+                        let pos = cx.names.len() - 1 - i as usize;
+                        match preds.iter().position(|&p| p == pos) {
+                            // Deeper than the recursor was built for is not a
+                            // descent it can serve; the message below says so.
+                            Some(j) if j < comps.len() => {
+                                cov_at = j;
+                                true
+                            }
+                            _ => false,
+                        }
+                    }
+                    _ => false,
+                },
                 (GuardKind::Wf { depth, children, .. }, true) => {
                     let by = (cx.names.len() - depth) as u32;
                     match children.iter().position(|(c, ..)| c.shift_local(by) == arg_t) {
@@ -4596,18 +4861,67 @@ impl Elaborator {
                 continue;
             }
             return if j == g.dec {
-                let what = match &g.kind {
-                    GuardKind::Nat { pred_pos, .. } => {
-                        format!("`{}`, the predecessor bound by", cx.names[*pred_pos])
+                // The message carries the *mechanism*, not just the rule,
+                // because the commonest way to hit this is a call at a
+                // genuinely smaller subterm — the predecessor's predecessor,
+                // in a nested `match` — where the bare rule reads as a checker
+                // being needlessly strict and sends the reader here to relax
+                // the comparison above. That would only move the failure: the
+                // arm is a recursor's step, its ih is the value at the
+                // immediate descendant, and there is nothing else to emit.
+                // See issues/recursion-at-deeper-subterms.md.
+                let (what, why) = match &g.kind {
+                    // The chain the enclosing `match`es bind, cut at the depth
+                    // the recursor was actually built for: past that there is
+                    // no ih to hand back, so naming it would be an offer the
+                    // lowering cannot keep.
+                    GuardKind::Nat { preds, comps, .. } => {
+                        let usable = preds.len().min(comps.len());
+                        let names: Vec<String> =
+                            preds[..usable].iter().map(|p| format!("`{}`", cx.names[*p])).collect();
+                        if usable == 1 {
+                            (
+                                format!("{}, the predecessor bound by", names[0]),
+                                format!(
+                                    ". A deeper subterm is refused too, even though it is \
+                                     genuinely smaller: this `match` compiles to a recursor \
+                                     whose induction hypothesis is the value at {} and at \
+                                     nothing else, so a call anywhere else has no term to \
+                                     elaborate to. Reaching further needs the recursion to \
+                                     carry its earlier values \
+                                     (issues/recursion-at-deeper-subterms.md), which happens \
+                                     only where an arm scrutinizes its own predecessor",
+                                    names[0]
+                                ),
+                            )
+                        } else {
+                            (
+                                format!(
+                                    "one of {}, the predecessors bound by",
+                                    names.join(", ")
+                                ),
+                                format!(
+                                    ". The recursion carries its last {usable} values, so \
+                                     those are the subterms it can descend to; anything else \
+                                     has no term to elaborate to, even when it is genuinely \
+                                     smaller (issues/recursion-at-deeper-subterms.md)"
+                                ),
+                            )
+                        }
                     }
-                    GuardKind::Wf { .. } => {
-                        "one of the recursive fields bound by".to_string()
-                    }
+                    GuardKind::Wf { .. } => (
+                        "one of the recursive fields bound by".to_string(),
+                        ". A deeper subterm is refused too, even though it is genuinely \
+                         smaller: the induction hypothesis this `match` binds is the value \
+                         at each recursive field and at nothing else, so a call anywhere \
+                         else has no term to elaborate to"
+                            .to_string(),
+                    ),
                 };
                 err(
                     format!(
                         "recursive call to `{name}` must descend: argument `{}` has to be \
-                         {what} the enclosing `match`",
+                         {what} the enclosing `match`{why}",
                         s.params[j].0
                     ),
                     arg.span,
@@ -4625,7 +4939,14 @@ impl Elaborator {
             };
         }
         let (t, ty, lvl) = match &g.kind {
-            GuardKind::Nat { ih_pos, .. } => self.local(cx, *ih_pos),
+            // The ih at the depth the argument descended to, shifted out to
+            // wherever the call sits — a variable at depth 0, a projection out
+            // of the carried tuple below it.
+            GuardKind::Nat { tuple, comps, mlvl, depth, .. } => {
+                let by = (cx.names.len() - depth) as u32;
+                let t = cov_proj(comps, mlvl, tuple.clone(), cov_at);
+                (t.shift_local(by), comps[cov_at].shift_local(by), mlvl.clone())
+            }
             // `ih' ι_t` and its type, shifted out to wherever the call sits.
             GuardKind::Wf { depth, children, .. } => {
                 let by = (cx.names.len() - depth) as u32;
@@ -8588,6 +8909,52 @@ struct SelfRef {
     n_tyvars: usize,
 }
 
+/// The enclosing recursion's window of past values, as a nested `match` on the
+/// chain's end needs it — see [`Elaborator::chain_convoy`], which builds one,
+/// and `docs/course-of-values-recursion-design.md` §5 for why passing it
+/// through the `match` is what makes the deeper values usable.
+struct Convoy {
+    dec: usize,
+    preds: Vec<usize>,
+    /// How many values are carried.
+    d: usize,
+    lvl: Level,
+    /// The recursion's motive reindexed into the context the nested `match`
+    /// sits in, scoped in (that context, z).
+    motive: Type,
+    /// …and as it was written, for the guards this `match` hands to its arms:
+    /// they must be able to reindex it again, deeper in.
+    outer_motive: Rc<Type>,
+    gamma: LocalCtx,
+    /// The window itself, at the nested `match`'s context.
+    tuple: Term,
+}
+
+impl Convoy {
+    /// The guard for one arm: the window is now the arm's own binder, and
+    /// `new_pred` is the predecessor that arm binds — `None` for the `Zero`
+    /// arm, which extends the chain by nothing.
+    fn guard_at(&self, comps: &[Type], depth: usize, new_pred: Option<usize>) -> Rc<Guard> {
+        let mut preds = self.preds.clone();
+        preds.extend(new_pred);
+        Rc::new(Guard {
+            dec: self.dec,
+            kind: GuardKind::Nat {
+                preds,
+                // Shifted past the convoy binder itself, which every caller
+                // pushes immediately before asking for this.
+                comps: comps.iter().map(|c| c.shift_local(1)).collect(),
+                tuple: Term::Var(LocalVar(0)),
+                mlvl: self.lvl.clone(),
+                depth,
+                motive: Rc::clone(&self.outer_motive),
+                gamma: self.gamma.clone(),
+            },
+            rebind: None,
+        })
+    }
+}
+
 /// What a guarded self-call must look like inside a `match` arm, and what it
 /// lowers to (issues/match-recursion.md).
 struct Guard {
@@ -8614,10 +8981,39 @@ enum GuardKind {
     /// A `Succ(k)` arm. Positions are *absolute* (indices into `cx.names`,
     /// outermost first) so they stay valid as inner binders are pushed.
     Nat {
-        /// Position of the predecessor `k` bound by the arm.
-        pred_pos: usize,
-        /// Position of the arm's (hidden) induction-hypothesis binder.
-        ih_pos: usize,
+        /// The chain of predecessors this arm makes available, outermost
+        /// first: `preds[0]` is the `k` the arm itself binds, `preds[1]` the
+        /// `l` a nested `match k` binds, and so on
+        /// (issues/recursion-at-deeper-subterms.md). A self-call descending to
+        /// `preds[i]` lowers to the `i`-th component of [`Self::tuple`].
+        ///
+        /// One entry for the ordinary one-step recursion; the chain grows only
+        /// where the arm's own body scrutinizes the predecessor again, and
+        /// only by being convoyed through that `match`
+        /// (docs/course-of-values-recursion-design.md §5).
+        preds: Vec<usize>,
+        /// The window of past values in scope: the ih binder itself for the
+        /// ordinary recursion, a Σ-tuple of the last `comps.len()` values
+        /// above that. Scoped at [`Self::depth`] binders, like
+        /// [`GuardKind::Wf`]'s `children`, so a call from deeper inside the
+        /// arm shifts it by the difference.
+        tuple: Term,
+        /// Its component types, at the same scope. `comps.len()` is the depth
+        /// the recursion was *elaborated* for: a call below the chain's end
+        /// but within it is what a nested `match` unlocks, and a call below
+        /// `comps.len()` has no component to become — the refusal
+        /// `elab_self_call` reports.
+        comps: Vec<Type>,
+        /// The level every component lives at.
+        mlvl: Level,
+        /// Binder count at the arm's ih — the scope [`Self::tuple`] lives in.
+        depth: usize,
+        /// The recursion's motive, scoped in ([`Self::gamma`], z), kept so a
+        /// nested `match` can rebuild the window's type at *its* scrutinee.
+        /// The pair travels together because reindexing a family needs the
+        /// context it was written in, which a shift cannot recover.
+        motive: Rc<Type>,
+        gamma: LocalCtx,
     },
     /// A `Wf` arm: one entry per recursive field, as
     /// `(the child's term, `ih' ι_t`, its type, that type's level)`. All four
@@ -9006,6 +9402,148 @@ fn strengthen_global(t: &Term, g: u32) -> Term {
     }
     let entries = (0..g).map(|_| GlobalEntry::Tm(Rc::new(Term::Zero))).collect();
     t.apply_global(&GlobalSubst { entries })
+}
+
+/// Pre-order walk over an expression's subexpressions.
+///
+/// Total over the forms a *self-call* can hide in, which is what its one
+/// caller ([`Elaborator::cov_depth`]) needs; a form missed here can only
+/// under-count a depth, and an under-counted depth is the refusal that stood
+/// before course-of-values existed, never a wrong term.
+fn walk_expr(e: &Expr, f: &mut impl FnMut(&Expr)) {
+    f(e);
+    let mut go = |e: &Expr| walk_expr(e, f);
+    match &e.kind {
+        ExprKind::App { head, args, .. } => {
+            go(head);
+            args.iter().for_each(go);
+        }
+        ExprKind::TyApp { head, .. } => go(head),
+        ExprKind::Lam { body, .. } => go(body),
+        ExprKind::VecLit(xs) => xs.iter().for_each(go),
+        ExprKind::Eq(a, b) => {
+            go(a);
+            go(b);
+        }
+        ExprKind::Match { scrut, arms, .. } | ExprKind::MatchCode { scrut, arms, .. } => {
+            go(scrut);
+            arms.iter().for_each(|a| go(&a.body));
+        }
+        ExprKind::Dot { recv, args, .. } => {
+            go(recv);
+            args.iter().flatten().for_each(go);
+        }
+        ExprKind::Index { recv, idx } => {
+            go(recv);
+            go(idx);
+        }
+        ExprKind::RecordLit { fields, .. } => fields.iter().for_each(|x| go(&x.expr)),
+        ExprKind::Block(b) => {
+            for s in &b.stmts {
+                match s {
+                    Stmt::Let { expr, .. } | Stmt::LetRecord { expr, .. } => go(expr),
+                    _ => {}
+                }
+            }
+            go(&b.result);
+            b.ons.iter().for_each(|o| go(&o.expr));
+        }
+        ExprKind::Quote(x) | ExprKind::Splice(x) => go(x),
+        _ => {}
+    }
+}
+
+/// `pred(t)`, as the kernel spells it: `elim_Nat(λ _. Nat; 0; λ k ih. k; t)`.
+/// Needed because a course-of-values tuple's `i`-th component is the motive at
+/// `pred^i z` — and `pred (Succ k) ⇝ k` and `pred 0 ⇝ 0` by computation, which
+/// is what makes the step's and the base's annotations line up
+/// (issues/recursion-at-deeper-subterms.md).
+fn pred_tm(t: Term) -> Term {
+    Term::ElimNat {
+        level: Level::Zero,
+        motive: Rc::new(Type::Nat),
+        base: Rc::new(Term::Zero),
+        // Scoped in (Γ, k : Nat, ih : Nat): the predecessor, ignoring the ih.
+        step: Rc::new(Term::Var(LocalVar(1))),
+        scrut: Rc::new(t),
+    }
+}
+
+/// The component types of the course-of-values tuple at `at`: `M[pred^i at/z]`
+/// for `i < d`, scoped in `gamma` extended by `extra` binders (where `at`
+/// lives). `d = 1` gives back the plain motive, which is why every caller can
+/// use these unconditionally.
+fn cov_comps(gamma: &LocalCtx, motive: &Type, d: usize, extra: u32, at: &Term) -> Vec<Type> {
+    (0..d)
+        .map(|i| {
+            let mut t = at.clone();
+            for _ in 0..i {
+                t = pred_tm(t);
+            }
+            motive.apply_local(&embed(gamma, extra).extended(Rc::new(t)))
+        })
+        .collect()
+}
+
+/// `Σ(comps[0], Σ(comps[1], …))`, right-nested and non-dependent — the tuple
+/// the recursor carries. One component is the motive itself, so the ordinary
+/// recursion emits no `Σ` at all.
+fn cov_ty(comps: &[Type], lvl: &Level) -> Type {
+    let (last, rest) = comps.split_last().expect("a tuple has at least one component");
+    rest.iter().rev().fold(last.clone(), |snd, fst| Type::Sigma {
+        fst_level: lvl.clone(),
+        snd_level: lvl.clone(),
+        fst: Rc::new(fst.clone()),
+        snd: Rc::new(snd.shift_local(1)),
+    })
+}
+
+/// The tuple of `vals` at [`cov_ty`]'s type.
+fn cov_tuple(comps: &[Type], lvl: &Level, vals: Vec<Term>) -> Term {
+    debug_assert_eq!(comps.len(), vals.len());
+    let mut vals = vals;
+    let mut acc = vals.pop().expect("a tuple has at least one component");
+    for (i, fst) in vals.into_iter().enumerate().rev() {
+        acc = Term::Pair {
+            fst_level: lvl.clone(),
+            snd_level: lvl.clone(),
+            fst_ty: Rc::new(comps[i].clone()),
+            snd_ty: Rc::new(cov_ty(&comps[i + 1..], lvl).shift_local(1)),
+            fst: Rc::new(fst),
+            snd: Rc::new(acc),
+        };
+    }
+    acc
+}
+
+/// `π_i p` — `snd` down to the `i`-th component and `fst` off it, except at the
+/// last, which the nesting leaves bare.
+fn cov_proj(comps: &[Type], lvl: &Level, p: Term, i: usize) -> Term {
+    let ann = |at: usize| {
+        (Rc::new(comps[at].clone()), Rc::new(cov_ty(&comps[at + 1..], lvl).shift_local(1)))
+    };
+    let mut cur = p;
+    for at in 0..i {
+        let (fst_ty, snd_ty) = ann(at);
+        cur = Term::Snd {
+            fst_level: lvl.clone(),
+            snd_level: lvl.clone(),
+            fst_ty,
+            snd_ty,
+            pair: Rc::new(cur),
+        };
+    }
+    if i + 1 < comps.len() {
+        let (fst_ty, snd_ty) = ann(i);
+        cur = Term::Fst {
+            fst_level: lvl.clone(),
+            snd_level: lvl.clone(),
+            fst_ty,
+            snd_ty,
+            pair: Rc::new(cur),
+        };
+    }
+    cur
 }
 
 /// The identity substitution of `gamma`, weakened so its source is `gamma`

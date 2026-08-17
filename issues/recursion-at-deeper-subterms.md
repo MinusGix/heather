@@ -1,6 +1,6 @@
 ---
 title: Structural recursion at a subterm deeper than the immediate predecessor
-status: open
+status: closed
 labels: [frontend,elaboration,kernel,design]
 code: crates/elab/src/lib.rs:4609 @ 18c4931
 created: 2026-08-17
@@ -155,3 +155,21 @@ The `half`, `Even` and `Odd` spellings in [[nat-parity-and-half]] check as
 written; `half(7) = 3` is `refl` and `Even(4)` is `trivial`; and a genuinely
 non-descending self-call is still refused, with a message that names the
 missing base arm when that is the actual problem.
+
+## Log
+
+- 2026-08-17: LANDED (docs/course-of-values-recursion-design.md). Tupling was the right transformation and the issue's costing of it held: one `elim_Nat` carrying the last `d` values as a right-nested Σ, the body unchanged, a self-call at depth `j` becoming a projection. `half`, `fib`, `Even`/`Odd` check as written and `half(7) = 3` is `refl`.
+
+TWO PREDICTIONS OF THIS ISSUE WERE WRONG, IN OPPOSITE DIRECTIONS.
+
+The syntactic side condition (§'What it needs' 1) does not exist and was not needed. A depth-`d` recursion cannot fail to supply base arms below `d`: the deeper variable is only in scope inside the nested `Succ` arms, so the arms that name it ARE the base arms. `F(0)`'s deeper components are filled with the `Zero` arm's own value and nothing can read them — scoping, not a check.
+
+What the costing missed is bigger and is where the round's time went: a **dependent** motive needs the window CONVOYED through the nested `match` (design doc §5). The carried component one below `k` has type `M[pred k]`, and `pred k` is stuck at a variable — so the arm that knows `k` is `Succ l` still cannot use it. Passing the window as an argument to the nested match fixes it, because `pred (Succ l)` reduces. Non-dependent motives never see this, which is why `half`/`Even`/`fib` all worked while every two-step *proof* — `half_le`, `even_or_odd`, `half_add_half`, `even_dec` — failed with NotConvertible. The move is the one `le_trans` already writes by hand for hypotheses.
+
+The guard now carries the recursion's motive family and the context it was written in, since a family cannot be reindexed by shifting.
+
+Cost to ordinary code: none. A one-step recursion carries nothing below the chain's end, so `chain_convoy` declines and the emitted term is what it always was.
+
+Also here: the guard's message now carries the mechanism, not just the rule — the thing this issue said should stop implying a one-line fix.
+
+Tests: crates/elab/tests/match_recursion.rs (half, fib, a Type motive, a dependent motive, the value controls, and a nested match on another variable as the negative), crates/elab/tests/nat_parity.rs for the library side.
