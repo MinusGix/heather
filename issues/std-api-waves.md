@@ -26,7 +26,7 @@ laws, `map` with **none**, `List::nth`. `std/option`: three functions.
 | # | contents | owner |
 |---|---|---|
 | 0 | ✅ **landed 2026-08-16** — `Empty`/`Not`/`And`/`Or`/`Iff`/`Exists` + `¬ ∧ ∨ ↔ ∃ ∀` | [[std-logic-module]] (closed) |
-| 1 | ✅ **mostly landed 2026-08-16** — `Le` by recursion, `Lt`, the order + strict kit, `le_dec`, `le_iff_exists_add`; `sub` kit and `min`/`max` deferred | [[nat-order-kit]] |
+| 1 | ✅ **landed 2026-08-16** — `Le` by recursion, `Lt`, the order + strict kit, `le_dec`, `le_iff_exists_add`. The deferred `sub` kit and `min`/`max` are [[nat-arithmetic-kit]], a wave-3 item | [[nat-order-kit]] |
 | 2 | ✅ **mostly landed 2026-08-17** — `succ_inj`, `succ_ne_zero`, `zero_ne_succ`, `eq_dec`, `le_of_not_le`, and `Decide` over the connectives; `Decide` **at** `Nat` equality and order is blocked, see below | [[decide-class]] |
 | 3 | `add_le_mono`, `mul_le_mono`, cancellation; `pow`, `half`/`even`/`odd`, `fact` | [[nat-order-kit]] (arith half unowned — file when scheduled) |
 | 4 | `Nat::iter`/fold with `add`/`mul`/`pow` as instances | [[datatype-container-algebras]] |

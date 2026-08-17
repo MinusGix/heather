@@ -1,17 +1,18 @@
 ---
 title: "Nat's order stated in Prop: Le by recursion, Lt, and the lemma kit"
-status: open
+status: closed
 labels: [stdlib,frontend,proofs,orders]
 blocked-by: [std-logic-module]
 created: 2026-08-16
-updated: 2026-08-16
+updated: 2026-08-17
 ---
 
 ## Current state (rewritten 2026-08-16; the log below is archive)
 
 **The definition, `Lt`, and the order/strict/bridge kit LANDED 2026-08-16.**
-`docs/nat-order-design.md` is the reasoning; this issue stays open only for the
-deferred arithmetic content named under "What is left" below.
+`docs/nat-order-design.md` is the reasoning. **Closed 2026-08-17**: the order
+is stated, `Lt` exists, and the kit is proved — the scope of this issue in
+full. The arithmetic tail it had been holding open is [[nat-arithmetic-kit]].
 
 Landed: route (a) as the definition of `Le` (curried), `Lt(n, m) :=
 Le(Succ(n), m)`, and — in `lib/std/nat.hthr` — `zero_le`, `le_refl`,
@@ -23,13 +24,12 @@ went propositional with it (`le`, `le_refl`, `le_dec`), and `Le_bool` is the
 `Bool` carrier's relation. `leb`/`leb_bool` remain, as decision procedures that
 no specification names.
 
-**What is left, and it is arithmetic rather than order:** `min`/`max` at `Nat`
-(plain structural recursions, no decider needed), the `sub` kit beyond
-`sub_zero` — `add_sub_cancel`, `sub_add_cancel` under `n <= m`, `sub_self`,
-`sub_le` — and the interaction lemmas `add_le_mono`, `mul_le_mono`,
-`le_of_add_le_add_l` and cancellation. Deferred by the round's charter to keep
-one reviewable diff, not by any obstacle; [[std-api-waves]] wave 3 is the other
-half of the same list.
+**What was left is arithmetic rather than order, and it now has an owner:**
+[[nat-arithmetic-kit]] — `min`/`max`, the `sub` kit beyond `sub_zero`, and the
+order-interaction lemmas. Deferred by the round's charter to keep one reviewable
+diff, not by any obstacle. It was named here and in [[std-api-waves]]'s wave-1
+row, each pointing at the other, which is why this issue stayed open past its
+own scope; splitting it out is what let this one close (README rule 3).
 
 **Two grammar gaps this issue's round found have their own owners:**
 [[comparison-inside-type-arguments]] and
