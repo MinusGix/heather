@@ -96,8 +96,15 @@ classes) and loses where our invariants hold:
 - **[[modules]]** (closed) owns the base regime and the two invariants.
   Assumed here: ambiguity-at-use stays the floor; `Type::member`
   qualification stays.
-- **[[ctor-resolution-by-expected-type]]** owns the constructor special
-  case; if this issue lands first, it absorbs that one.
+- **[[ctor-resolution-by-expected-type]]** owned the constructor special
+  case and **landed first** (closed 2026-08-16), so the absorption runs the
+  other way: `Elaborator::ctor_here_expected` is the shape to generalize,
+  and the two guards it had to grow are the ones the general case inherits
+  — the route is a *fallback* after the ordinary reading, and it stands
+  down entirely when any visible declaration of the name is not a member of
+  the expected type's namespace. The second is the load-bearing one: a
+  bare name that a plain `fn` also declares is not settled by the goal,
+  because a function of the right result type is equally admissible there.
 - **[[compile-typeclass-design]]** owns instances. Assumed here: only
   that instance resolution exists someday; the second evidence relation
   waits for it.

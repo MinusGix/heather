@@ -63,6 +63,21 @@ pub enum TokKind {
     /// Three bytes, so it is matched in a window of its own; the two-byte
     /// window would land mid-codepoint and see nothing.
     Bullet,    // ∙
+    /// The propositional connectives (issues/std-logic-module.md). Unicode is
+    /// the spelling, not an alternative to an ASCII digraph set: `λ` and `∙`
+    /// already lex, so this follows the precedent rather than setting one.
+    /// `<->` is the single deliberate ASCII survivor — it is the connective
+    /// people reach for casually — and it lexes to the same [`TokKind::Iff`],
+    /// so nothing downstream can tell the two apart.
+    ///
+    /// `¬` (U+00AC) is two bytes; the other four are three, so they are
+    /// matched in the three-byte window beside `∙`.
+    Neg,       // ¬
+    Wedge,     // ∧
+    Vee,       // ∨
+    Iff,       // ↔   (and `<->`)
+    Exists,    // ∃
+    Forall,    // ∀
     /// `$` — splice, inside a `code { … }` quote (`$x`, `${e}`) and in type
     /// position for a `TyCode` binder (`[$a; $k]`). The splice *form* is
     /// decided by the parser; the lexer only knows the sigil.
@@ -179,8 +194,20 @@ pub fn lex(src: &str) -> Result<Vec<Tok>, LexError> {
         // runs off the end, or lands inside a codepoint, simply means "not a
         // token of this width".
         let three = src.get(i..i + 3).unwrap_or("");
-        if three == "∙" {
-            toks.push(Tok { kind: TokKind::Bullet, span: Span { start, end: start + 3 } });
+        // `<->` is three ASCII bytes and so is matched here, before the
+        // two-byte window could take a `<` off it. `<=` is unaffected: no
+        // three-byte window spells it.
+        let three_kind = match three {
+            "∙" => Some(TokKind::Bullet),
+            "∧" => Some(TokKind::Wedge),
+            "∨" => Some(TokKind::Vee),
+            "↔" | "<->" => Some(TokKind::Iff),
+            "∃" => Some(TokKind::Exists),
+            "∀" => Some(TokKind::Forall),
+            _ => None,
+        };
+        if let Some(kind) = three_kind {
+            toks.push(Tok { kind, span: Span { start, end: start + 3 } });
             i += 3;
             continue;
         }
@@ -190,6 +217,9 @@ pub fn lex(src: &str) -> Result<Vec<Tok>, LexError> {
             // so it lexes here rather than in the identifier rule above.
             // `fun` is the ASCII synonym and is an ordinary keyword.
             "λ" => (TokKind::Lambda, 2),
+            // `¬` (U+00AC), two bytes like `λ` and for the same reason it
+            // cannot lex as an identifier character.
+            "¬" => (TokKind::Neg, 2),
             "->" => (TokKind::Arrow, 2),
             "|-" => (TokKind::Turnstile, 2),
             "&&" => (TokKind::AmpAmp, 2),

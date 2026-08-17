@@ -143,6 +143,38 @@ the type in hand) is filed as the follow-up ergonomic, not built. It is
 the feature that finally deletes the "globally unique" constraint rather
 than merely scoping it.
 
+**Built 2026-08-16** (`issues/ctor-resolution-by-expected-type.md`), and
+§8's two invariants sized it. `Elaborator::ctor_here_expected` is the
+judgment: after the ordinary reading fails, the expected type's
+declaration is asked for the name, through the very `arm_ctor_index` a
+`match` arm uses — so the two type-directed constructor routes are one
+function, and the `Option::None` spelling costs nothing extra in either.
+Three things it is *not*, each a control in `crates/elab/tests/modules.rs`:
+
+- it is not consulted first — a name that resolves today keeps its
+  declaration, so the type only settles what the name layer left
+  unsettled;
+- it does not fire when a visible **non-constructor** declares the name.
+  A `fn None() -> Option<Nat>` is as admissible at an expected
+  `Option<Nat>` as the constructor is, so the type is not evidence
+  between them and the name stays ambiguous. Without this guard the route
+  breaks the second invariant outright: a file meaning the *function*
+  would start meaning the constructor the moment a second `None` became
+  visible;
+- it does not beat a binder. The shadowing check is repeated inside the
+  route rather than inherited, because a local `None` wins at *every*
+  expected type.
+
+Synthesis position is unchanged and still needs uniqueness or
+qualification — that is invariant 1, not an omission. One consequence of
+that worth knowing before writing a file: whether an **argument** is
+checking position depends on the parameter, not on the call. `mono(None)`
+at `fn mono(o: Option<Nat>)` is settled; `unwrap_or(None, 9)` at
+`fn unwrap_or<A>(o: Option<A>, …)` is not, because that argument is where
+`A` comes from — an argument that is the *source* of an instantiation
+cannot also be checked against it. Both are pinned in
+`crates/elab/tests/modules.rs`.
+
 `meta_slots` stays global: one template per slot across the program, a
 second claim is an error at the join (same rule as today, now possibly
 triggered by an import — the error names both modules). `record_fields`
@@ -224,6 +256,19 @@ import is their correct home either way.
   - **Synthesis position needs uniqueness; checking position may use the
     expected type to shrink the candidate set.** Bidirectionality is the
     oracle, and it is already deterministic.
+
+    *Amended 2026-08-16* (`issues/false-collides-with-bools-constructor.md`):
+    the **syntactic position** may shrink it too, on the same licence — a
+    *type* position never considers a constructor a candidate
+    (`names::resolve_kinds`, with `lookup_inductive` passing `[Inductive]`),
+    because a constructor is not a type and that reading could never have
+    elaborated. The dual now holds inside the expected-type route as well: an
+    inductive expected type does not consider a *type name* a candidate, since
+    a type name's own type is a universe. A `fn` of the same name still stands
+    the route down and must — it may genuinely return the expected type, and
+    choosing there would be a decision rather than a shrink. The rule to carry
+    forward: **shrink only where the dropped reading could not have checked**,
+    never where it merely looks less likely.
   - **Library growth may introduce errors, never reinterpretations.** A
     new declaration in an imported module can make a bare name ambiguous
     (a loud, local fix: qualify) — it must never silently change which
@@ -235,7 +280,14 @@ import is their correct home either way.
   **match patterns** never need visibility at all (the scrutinee's type
   names the inductive, so arm constructors resolve through it — worth
   doing in v1's arm walk if it falls out), and bare constructors in
-  checking position (`None` at expected `Option<A>`). Deliberately *out*:
+  checking position (`None` at expected `Option<A>`). Both are now
+  built — the arm walk with v1, checking position 2026-08-16 (§4) —
+  and the second one found the first's *third* site, which is not free
+  and is not done: a bare name in a **deep pattern's column** is
+  classified with no type evidence at all, so an ambiguous one becomes a
+  binder silently (`issues/deep-pattern-ctor-needs-column-type.md`). It
+  is the one member of this family that currently violates the second
+  invariant below. Deliberately *out*:
   expected-type-directed **lemma** resolution (picking between two
   ambiguous `le_add`s by which statement unifies) — proof text choosing
   premises by unification is a reinterpretation hazard as libraries grow,

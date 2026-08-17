@@ -99,7 +99,7 @@ mod wf;
 use inductive::Inductive;
 use traits::{ClassInfo, InstanceInfo};
 use names::{
-    miss_msg, qkey, resolve, split_qual, ImportSpec, NameIndex, NameKind, NameRes,
+    miss_msg, qkey, split_qual, ImportSpec, NameIndex, NameKind, NameRes,
     Scope, DEFAULT_MODULE,
 };
 use slots::{Ingredient, Slot};
@@ -1246,9 +1246,13 @@ impl Elaborator {
     /// resolves to a declaration whose own name is not spellable, which is the
     /// whole point of the alias (design §5).
     fn resolve_declared(&self, name: &str) -> NameRes {
+        self.resolve_declared_kinds(name, names::ANY_KIND)
+    }
+
+    fn resolve_declared_kinds(&self, name: &str, kinds: &[NameKind]) -> NameRes {
         let scopes = self.resolution_scopes.borrow();
         let scope = scopes.last().map(Rc::as_ref).unwrap_or(&self.scope);
-        resolve(&self.names, scope, name, |m, ty, ctor| {
+        names::resolve_kinds(&self.names, scope, name, kinds, |m, ty, ctor| {
             self.inductives
                 .get(&qkey(m, ty))
                 .is_some_and(|i| i.ctors.iter().any(|c| c.name == ctor))
@@ -1275,20 +1279,27 @@ impl Elaborator {
     /// it, so nothing that resolved before the alias existed can be
     /// reinterpreted by it (docs/repr-access-spellings-design.md §5).
     fn key_of(&self, name: &str) -> Option<String> {
+        self.key_of_kinds(name, names::ANY_KIND)
+    }
+
+    /// [`Self::key_of`] with the candidate set restricted by declaration kind.
+    /// See [`Self::lookup_inductive`] for the one restricted caller and why
+    /// the restriction is licensed there and nowhere else.
+    fn key_of_kinds(&self, name: &str, kinds: &[NameKind]) -> Option<String> {
         if self.access_refusal(name).is_some() {
             return None;
         }
-        if let Some(k) = self.key_of_declared(name) {
+        if let Some(k) = self.key_of_declared_kinds(name, kinds) {
             return Some(k);
         }
         // The alias, strictly as a fallback. Its target is resolved through
         // `key_of_declared` and not `key_of`, because the target's own name is
         // the one the surface refuses — that is what the alias is for.
-        self.key_of_declared(self.access_alias(name)?)
+        self.key_of_declared_kinds(self.access_alias(name)?, kinds)
     }
 
-    fn key_of_declared(&self, name: &str) -> Option<String> {
-        match self.resolve_declared(name) {
+    fn key_of_declared_kinds(&self, name: &str, kinds: &[NameKind]) -> Option<String> {
+        match self.resolve_declared_kinds(name, kinds) {
             NameRes::Found(m) => {
                 // A *member* declares the qualified string itself
                 // (issues/type-owned-members-receiver-slice.md), so its key
@@ -1330,8 +1341,16 @@ impl Elaborator {
         }
     }
 
+    /// The inductive a name denotes **in type position**.
+    ///
+    /// Resolved with the candidate set restricted to `Inductive` declarations
+    /// (`names::resolve_kinds`), which is what lets `logic::False` the type
+    /// and `bool::False` the constructor coexist under one import each: a
+    /// constructor is not a type, so it could never have been meant here, and
+    /// dropping it is a shrink rather than a choice
+    /// (issues/false-collides-with-bools-constructor.md).
     pub(crate) fn lookup_inductive(&self, name: &str) -> Option<&Rc<Inductive>> {
-        self.inductives.get(&self.key_of(name)?)
+        self.inductives.get(&self.key_of_kinds(name, &[NameKind::Inductive])?)
     }
 
     pub(crate) fn lookup_ctor(&self, name: &str) -> Option<(Rc<Inductive>, usize)> {
@@ -2715,7 +2734,7 @@ impl Elaborator {
             ExprKind::Var(name)
                 if name == "FZ"
                     && !self.shadowed(cx, name)
-                    && self.ctor_here(cx, name).is_none() =>
+                    && self.ctor_here_expected(cx, name, expected).is_none() =>
             {
                 self.elab_fin_index(cx, None, expected, e.span)
             }
@@ -2733,7 +2752,7 @@ impl Elaborator {
             ExprKind::Var(name)
                 if name == "trivial"
                     && !self.shadowed(cx, name)
-                    && self.ctor_here(cx, name).is_none() =>
+                    && self.ctor_here_expected(cx, name, expected).is_none() =>
             {
                 match self.whnf(cx, expected, e.span)? {
                     Type::Unit { level } => Ok(Term::Triv { level }),
@@ -2749,7 +2768,7 @@ impl Elaborator {
             ExprKind::App { args, .. }
                 if matches!(e.as_named(), Some(("FS", _, false)))
                     && !self.shadowed(cx, "FS")
-                    && self.ctor_here(cx, "FS").is_none() =>
+                    && self.ctor_here_expected(cx, "FS", expected).is_none() =>
             {
                 let [j] = args.as_slice() else {
                     return err("`FS` takes exactly one argument, an index", e.span);
@@ -2780,12 +2799,17 @@ impl Elaborator {
             // tuple is read off it (docs/inductive-tier0-lowering.md §4).
             // Unsaturated against an expected `Π`, it η-expands into a function
             // value (docs/constructor-function-values.md §2).
-            ExprKind::Var(name) if self.ctor_here(cx, name).is_some() => {
-                let (ind, i) = self.ctor_here(cx, name).expect("just checked");
+            // The name is read with the expected type as evidence
+            // ([`Self::ctor_here_expected`]), so a bare constructor the name
+            // layer left ambiguous is settled by the type that is checking it.
+            ExprKind::Var(name) if self.ctor_here_expected(cx, name, expected).is_some() => {
+                let (ind, i) =
+                    self.ctor_here_expected(cx, name, expected).expect("just checked");
                 self.build_ctor_value(cx, &ind, i, &[], expected, lvl, e.span)
             }
-            ExprKind::App { .. } if self.ctor_spine(cx, e).is_some() => {
-                let (ind, i, args) = self.ctor_spine(cx, e).expect("just checked");
+            ExprKind::App { .. } if self.ctor_spine_expected(cx, e, expected).is_some() => {
+                let (ind, i, args) =
+                    self.ctor_spine_expected(cx, e, expected).expect("just checked");
                 self.build_ctor_value(cx, &ind, i, &args, expected, lvl, e.span)
             }
             // A record literal *is* a constructor application once its fields
@@ -6054,6 +6078,124 @@ impl Elaborator {
         self.ctor_of(name)
     }
 
+    /// The declaration an expected type names, for the checking-position
+    /// constructor route. A `Π` is peeled first: an **unsaturated**
+    /// constructor is checked against the function type it η-expands into
+    /// (docs/constructor-function-values.md §2), so the declaration is in the
+    /// codomain, not the head.
+    fn expected_ind(&self, expected: &Type) -> Option<Rc<Inductive>> {
+        let mut ty = expected;
+        while let Type::Pi { cod, .. } = ty {
+            ty = cod;
+        }
+        self.tag_of(ty)
+    }
+
+    /// [`Self::ctor_here`], plus the **expected type** as evidence
+    /// (docs/modules-design.md §4's follow-up, §8's one resolution judgment).
+    ///
+    /// In checking position the expected type already names the declaration,
+    /// so a bare `None` at an expected `Option<A>` is that `Option`'s `None`
+    /// whatever else is in scope — the same judgment a `match` arm already
+    /// makes through the scrutinee ([`inductive::arm_ctor_index`], which this
+    /// shares, so
+    /// the `Option::None` spelling costs nothing extra here either).
+    ///
+    /// Strictly a **fallback**: the global reading is tried first, so a name
+    /// that resolves today keeps resolving to the same declaration, and the
+    /// expected type only ever *shrinks* a candidate set that the name layer
+    /// left ambiguous — never reinterprets one it settled. That is §8's second
+    /// invariant, and it is the reason this is sound to add to a library that
+    /// is still growing: a new declaration can turn a bare constructor from
+    /// unique into ambiguous, and here that is where it stops being an error,
+    /// not where it starts meaning something else.
+    ///
+    /// The shadowing guard is repeated rather than inherited from the `None`
+    /// branch above: a local binder beats a constructor at *any* expected
+    /// type, and the type evidence must not buy that precedence back.
+    ///
+    /// [`Self::only_ctors_visible`] is the other half of "shrink, never
+    /// reinterpret", and the reason this is not simply "ask the expected
+    /// type when the name did not resolve": a name may fail to resolve *as a
+    /// constructor* because it resolved to something else entirely, or
+    /// because a **function** is one of the things it is ambiguous between —
+    /// and a `fn None() -> Option<Nat>` is as admissible at an expected
+    /// `Option<Nat>` as the constructor is, so the type is not evidence there
+    /// at all. Those keep the reading they have today.
+    fn ctor_here_expected(
+        &self,
+        cx: &Cx,
+        name: &str,
+        expected: &Type,
+    ) -> Option<(Rc<Inductive>, usize)> {
+        if let Some(hit) = self.ctor_here(cx, name) {
+            return Some(hit);
+        }
+        if cx.names.iter().any(|n| n == name) || cx.aliases.iter().any(|a| a.name == *name) {
+            return None;
+        }
+        if !self.only_ctors_visible(name) {
+            return None;
+        }
+        // **Whnf first** (2026-08-16). The expected type reaches here in
+        // whatever spelling its position had: a declared result type arrives
+        // already structural, but a *parameter's* domain — which is what an
+        // argument is checked against — can still be a reference that only
+        // δ-unfolds to the lowering `tag_of` reads. Without this the route
+        // fired for `theorem t(): Bool { False }` and stood down for
+        // `idb(False)`, which is the same question asked twice
+        // (issues/false-collides-with-bools-constructor.md). The cost is
+        // confined to the fallback: this line is reached only after the
+        // ordinary reading has already failed.
+        // The span is only ever used for an out-of-fuel message, which this
+        // discards along with every other failure — the route simply stands
+        // down.
+        let expected = self.whnf(cx, expected, Span { start: 0, end: 0 }).ok()?;
+        let ind = self.expected_ind(&expected)?;
+        let i = crate::inductive::arm_ctor_index(&ind, name)?;
+        Some((ind, i))
+    }
+
+    /// Is every visible declaration of `name` a **constructor**?
+    ///
+    /// The precondition on the expected-type route. Reached only after the
+    /// ordinary reading has already failed, so this is not asking "which
+    /// declaration wins" — it is asking whether the type is allowed to be the
+    /// tie-breaker at all, and it is allowed exactly when no candidate could
+    /// have checked here *except* a constructor. One visible `fn` of the same
+    /// name and the route stands down: that reading does not live in any
+    /// declaration's constructor namespace and may well have the expected
+    /// type, so picking the constructor over it would be a reinterpretation
+    /// and not a shrink (docs/modules-design.md §8).
+    ///
+    /// **Amended 2026-08-16**: an `inductive`/`record` of the same name no
+    /// longer stands the route down. See the body for the licence.
+    ///
+    /// Visibility is spelled out rather than taken from
+    /// [`names::resolve`] because that function answers with *precedence*
+    /// applied — a listed import or a local declaration hides the collision
+    /// this has to see.
+    fn only_ctors_visible(&self, name: &str) -> bool {
+        let scopes = self.resolution_scopes.borrow();
+        let scope = scopes.last().map(Rc::as_ref).unwrap_or(&self.scope);
+        self.names.entries(name).iter().all(|e| {
+            let visible = e.module == scope.module
+                || scope.imports_module(&e.module)
+                || e.module == names::PRELUDE_MODULE;
+            // An `Inductive` candidate is admitted beside the constructors on
+            // the same licence the whole route runs on. This function's caller
+            // has already established that the expected type IS an inductive
+            // (`expected_ind`), and a type *name* denotes a value whose type is
+            // a universe — so that reading could never have checked here, and
+            // dropping it is a shrink rather than a choice. A `Global` or a
+            // `Meta` still stands the route down: a `fn` may perfectly well
+            // return the expected type, so between it and a constructor there
+            // is a real decision, and this route does not make those
+            // (issues/false-collides-with-bools-constructor.md).
+            !visible || matches!(e.kind, NameKind::Ctor | NameKind::Inductive)
+        })
+    }
+
     /// A constructor applied to its arguments, however the surface
     /// parenthesized them: `Cons(1, xs)` and `Cons(1)(xs)` flatten to the same
     /// `(declaration, index, arguments)`. Re-associating is sound because a
@@ -6074,6 +6216,35 @@ impl Elaborator {
             }
             ExprKind::App { .. } => {
                 let (ind, i, mut prefix) = self.ctor_spine(cx, head)?;
+                prefix.extend(args.iter().cloned());
+                Some((ind, i, prefix))
+            }
+            _ => None,
+        }
+    }
+
+    /// [`Self::ctor_spine`] with the expected type as evidence at the head,
+    /// which is the only place a *name* appears: the arguments are checked
+    /// against their field types downstream, and a curried spelling
+    /// (`Cons(1)(xs)`) flattens before the head is read, so the expected type
+    /// is the saturated result either way.
+    fn ctor_spine_expected(
+        &self,
+        cx: &Cx,
+        e: &Expr,
+        expected: &Type,
+    ) -> Option<(Rc<Inductive>, usize, Vec<Expr>)> {
+        let ExprKind::App { head, args, explicit } = &e.kind else { return None };
+        if *explicit {
+            return None;
+        }
+        match &head.kind {
+            ExprKind::Var(name) => {
+                let (ind, i) = self.ctor_here_expected(cx, name, expected)?;
+                Some((ind, i, args.clone()))
+            }
+            ExprKind::App { .. } => {
+                let (ind, i, mut prefix) = self.ctor_spine_expected(cx, head, expected)?;
                 prefix.extend(args.iter().cloned());
                 Some((ind, i, prefix))
             }

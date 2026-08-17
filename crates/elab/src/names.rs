@@ -154,21 +154,41 @@ pub(crate) const PRELUDE_MODULE: &str = "prelude";
 /// was already writing.
 pub(crate) const DEFAULT_MODULE: &str = "main";
 
-/// Resolve one written name against one scope, by the §4 regime.
+/// Resolve one written name against one scope, by the §4 regime, with the
+/// candidate set optionally restricted by declaration kind.
 ///
+/// Every kind — the unfiltered candidate set.
+pub(crate) const ANY_KIND: &[NameKind] = &[];
+
 /// `is_ctor_of` answers "does the inductive `t` (already resolved) have a
 /// constructor `c`?", which is what makes `Option::None` a *type*-qualified
 /// constructor rather than a module path. It is a callback because the
 /// inductive table lives on the elaborator and this function must stay
 /// testable on its own.
-pub(crate) fn resolve(
+///
+/// `kinds` restricts the candidate set; [`ANY_KIND`] is the unfiltered
+/// regime every caller but one uses.
+///
+/// The one caller is *type position* (`kinds = [Inductive]`), and the licence
+/// is impossibility rather than preference: a constructor is not a type, so a
+/// `TyKind::Named` that resolved to one could never have elaborated. Dropping
+/// it from the candidate set is therefore a **shrink** and not a
+/// reinterpretation — the invariant `docs/modules-design.md` §8 states for the
+/// expected-type route, applied to the syntactic position instead of the
+/// checked type.
+///
+/// Expression position deliberately does **not** get this treatment, and the
+/// asymmetry is the whole point: there a type name and a constructor are
+/// *both* legal readings, so shrinking would be choosing.
+pub(crate) fn resolve_kinds(
     index: &NameIndex,
     scope: &Scope,
     name: &str,
+    kinds: &[NameKind],
     is_ctor_of: impl Fn(&str, &str, &str) -> bool,
 ) -> NameRes {
     let Some((qual, base)) = split_qual(name) else {
-        return resolve_bare(index, scope, name);
+        return resolve_bare_kinds(index, scope, name, kinds);
     };
     // `nat::le_add` — a module path. Visibility is required: qualification
     // names which visible module you meant, it does not reach into a module
@@ -193,7 +213,7 @@ pub(crate) fn resolve(
     // to the same type are ambiguous at use with both origins named. Tried
     // after the module-path and constructor readings, so nothing that resolved
     // before can be reinterpreted by one.
-    match resolve_bare(index, scope, name) {
+    match resolve_bare_kinds(index, scope, name, kinds) {
         NameRes::Found(m) => return NameRes::Found(m),
         NameRes::Ambiguous(origins) => return NameRes::Ambiguous(origins),
         NameRes::NotFound | NameRes::NoSuchQualifier(_) | NameRes::Restricted(_) => {}
@@ -205,8 +225,23 @@ pub(crate) fn resolve(
 }
 
 fn resolve_bare(index: &NameIndex, scope: &Scope, name: &str) -> NameRes {
+    resolve_bare_kinds(index, scope, name, ANY_KIND)
+}
+
+fn resolve_bare_kinds(
+    index: &NameIndex,
+    scope: &Scope,
+    name: &str,
+    kinds: &[NameKind],
+) -> NameRes {
+    // The filter is applied at each use rather than collected once: this
+    // function is on the hot path of every name in every file, and an
+    // allocation per resolution is not worth saving three predicate calls.
+    // `kinds.is_empty()` is the unfiltered regime, so the closure costs one
+    // branch when nobody is filtering.
+    let of_kind = |e: &NameEntry| kinds.is_empty() || kinds.contains(&e.kind);
     let entries = index.entries(name);
-    if entries.is_empty() {
+    if !entries.iter().any(of_kind) {
         return NameRes::NotFound;
     }
     // A listed name is a standing disambiguation and wins outright. Two
@@ -215,7 +250,10 @@ fn resolve_bare(index: &NameIndex, scope: &Scope, name: &str) -> NameRes {
     let listed: Vec<String> = scope
         .imports
         .iter()
-        .filter(|i| i.listed.iter().any(|n| n == name) && index.declares(&i.module, name))
+        .filter(|i| {
+            i.listed.iter().any(|n| n == name)
+                && entries.iter().any(|e| e.module == i.module && of_kind(e))
+        })
         .map(|i| i.module.clone())
         .collect();
     if let Some(m) = listed.first() {
@@ -226,11 +264,11 @@ fn resolve_bare(index: &NameIndex, scope: &Scope, name: &str) -> NameRes {
     }
     // Locals beat unlisted imports: the file you are reading beats the file
     // you are not. This is the one precedence in the system.
-    if index.declares(&scope.module, name) {
+    if entries.iter().any(|e| e.module == scope.module && of_kind(e)) {
         return NameRes::Found(scope.module.clone());
     }
     let mut hits: Vec<String> = Vec::new();
-    for e in entries {
+    for e in entries.iter().filter(|e| of_kind(e)) {
         let visible = scope.imports_module(&e.module) || e.module == PRELUDE_MODULE;
         if visible && !hits.contains(&e.module) {
             hits.push(e.module.clone());

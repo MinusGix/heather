@@ -235,32 +235,164 @@ fn a_qualified_constructor_of_the_wrong_type_is_an_error() {
     assert!(e.contains("Option::Nope") || e.contains("Nope"), "{e}");
 }
 
-#[test]
-fn a_constructor_declared_in_two_modules_is_ambiguous_until_qualified() {
-    const OPT2: &str = "inductive Maybe<A> { None, Just(v: A) }";
-    let mods = |body: &str| {
-        [
-            ("opt".to_string(), OPT.to_string()),
-            ("opt2".to_string(), OPT2.to_string()),
-            (
-                "user".to_string(),
-                format!("import opt;\nimport opt2;\nfn f() -> Option<Nat> {{ {body} }}"),
-            ),
-        ]
-    };
-    let m = mods("None");
-    let borrowed: Vec<(&str, &str)> =
-        m.iter().map(|(a, b)| (a.as_str(), b.as_str())).collect();
-    let e = bad(&borrowed);
-    assert!(e.contains("ambiguous"), "{e}");
-    assert!(e.contains("`opt`") && e.contains("`opt2`"), "{e}");
+// Collides with `OPT` at BOTH `None` and `Some` — the nullary one and the
+// one that takes a field, so the unsaturated route has an ambiguous name to
+// be tested with — and adds a `Nothing` that `Option` does not have.
+const OPT2: &str = "inductive Maybe<A> { None, Some(v: A), Nothing }
+fn or_else<A>(m: Maybe<A>, d: A) -> A { match m { None => d, Some(v) => v, Nothing => d } }";
 
-    // …and the type qualifies it, which is the whole v1 answer for
-    // constructors: by TYPE name, not by module.
-    let m = mods("Option::None");
-    let borrowed: Vec<(&str, &str)> =
-        m.iter().map(|(a, b)| (a.as_str(), b.as_str())).collect();
-    ok(&borrowed);
+#[test]
+fn a_constructor_declared_in_two_modules_is_ambiguous_in_synthesis_position() {
+    // Was `…_until_qualified`, and rewritten deliberately when
+    // expected-type-directed resolution landed
+    // (issues/ctor-resolution-by-expected-type.md): the *checking* half of
+    // this is now the positive below, so what is left is the half the
+    // regime's first invariant keeps — synthesis position has no type
+    // evidence, so uniqueness or qualification is still the only answer.
+    // Monomorphic on purpose: a nullary constructor of a *parameterized*
+    // declaration cannot synthesize at all (nothing determines `A`), so
+    // `Option::None` would be refused here for a reason that has nothing to
+    // do with names, and the qualified half would not be testing what it says.
+    const FLAG: &str = "inductive Flag { Off, On }
+fn flag_num(f: Flag) -> Nat { match f { Off => 0, On => 1 } }";
+    const SW: &str = "inductive Sw { Off, Up }";
+    let user = |body: &str| format!("import flag;\nimport sw;\nfn f() -> Nat {{ {body} }}");
+
+    let src = user("{ let x = Off; flag_num(x) }");
+    let e = bad(&[("flag", FLAG), ("sw", SW), ("user", &src)]);
+    assert!(e.contains("ambiguous"), "{e}");
+    assert!(e.contains("`flag`") && e.contains("`sw`"), "{e}");
+
+    // …and the type qualifies it, which is the v1 answer wherever there is no
+    // expected type: by TYPE name, not by module.
+    let src = user("{ let x = Flag::Off; flag_num(x) }");
+    ok(&[("flag", FLAG), ("sw", SW), ("user", &src)]);
+}
+
+// ---------------------------------------------------------------------------
+// Expected-type-directed constructor resolution
+// (issues/ctor-resolution-by-expected-type.md, docs/modules-design.md §4's
+// follow-up and §8's "one resolution judgment").
+//
+// The claim: in checking position the expected type names the declaration, so
+// a bare constructor is that declaration's whatever else is in scope — the
+// same judgment a `match` arm already makes through the scrutinee. Every
+// positive here is written at BOTH colliding types in one file, because a
+// test at one of them passes under "pick the first `None` you find", which is
+// exactly the first-match regime §4 refuses.
+
+#[test]
+fn a_bare_constructor_is_settled_by_the_expected_type() {
+    ok(&[
+        ("opt", OPT),
+        ("opt2", OPT2),
+        (
+            "user",
+            "import opt;
+             import opt2;
+             fn n1() -> Option<Nat> { None }
+             fn n2() -> Maybe<Nat> { None }
+             fn s1() -> Option<Nat> { Some(3) }
+             fn s2() -> Maybe<Nat> { Some(3) }
+             // Which CONSTRUCTOR, not merely which declaration: each type's
+             // own eliminator distinguishes its `None` from its `Some`.
+             theorem a(): unwrap_or(n1(), 9) = 9 { refl }
+             theorem b(): or_else(n2(), 9) = 9 { refl }
+             theorem c(): unwrap_or(s1(), 9) = 3 { refl }
+             theorem d(): or_else(s2(), 9) = 3 { refl }",
+        ),
+    ]);
+}
+
+#[test]
+fn an_unsaturated_bare_constructor_is_settled_through_the_expected_pi() {
+    // The η-expansion of docs/constructor-function-values.md §2: the expected
+    // type is a `Π`, so the declaration is in its *codomain* and a route that
+    // read the head would find no declaration at all. `Some` is ambiguous
+    // across the two modules, so the arrow is carrying a name the name layer
+    // cannot settle — which is what makes this a test of the peel and not of
+    // the ordinary reading.
+    ok(&[
+        ("opt", OPT),
+        ("opt2", OPT2),
+        (
+            "user",
+            "import opt;
+             import opt2;
+             fn mk1() -> Nat -> Option<Nat> { Some }
+             fn mk2() -> Nat -> Maybe<Nat> { Some }
+             theorem a(): unwrap_or(mk1()(3), 9) = 3 { refl }
+             theorem b(): or_else(mk2()(3), 9) = 3 { refl }
+             // …and under a written λ, where the expected type is the
+             // declaration itself again: the two spellings must agree.
+             fn c1() -> Nat -> Option<Nat> { λ (n: Nat) => None }
+             theorem c(): unwrap_or(c1()(0), 9) = 9 { refl }",
+        ),
+    ]);
+}
+
+#[test]
+fn the_expected_type_shrinks_a_candidate_set_and_never_reinterprets_one() {
+    // §8's second invariant, and the control that sizes the route: a visible
+    // `fn None()` is as admissible at an expected `Option<Nat>` as the
+    // constructor is, so the expected type is not evidence between them and
+    // the name stays ambiguous. Without this the route would silently take a
+    // program that means the *function* today and make it mean the
+    // constructor the moment a second `None` is imported.
+    let e = bad(&[
+        ("opt", OPT),
+        ("fake", "fn None() -> Nat { 7 }"),
+        (
+            "user",
+            "import opt;\nimport fake;\nfn f() -> Option<Nat> { None }",
+        ),
+    ]);
+    assert!(e.contains("ambiguous"), "{e}");
+    assert!(e.contains("`opt`") && e.contains("`fake`"), "{e}");
+}
+
+#[test]
+fn a_binder_still_beats_a_constructor_at_its_own_expected_type() {
+    // The precedence the type evidence must not buy back. `None` is bound to
+    // a `Some(3)`, so the two readings are distinguishable by computation:
+    // the alias gives 3, the constructor would give 0.
+    ok(&[
+        ("opt", OPT),
+        ("opt2", OPT2),
+        (
+            "user",
+            "import opt;
+             import opt2;
+             fn f() -> Option<Nat> { { let None = Option::Some(3); None } }
+             theorem t(): unwrap_or(f(), 0) = 3 { refl }",
+        ),
+    ]);
+}
+
+#[test]
+fn a_bare_constructor_the_expected_type_does_not_have_is_still_an_error() {
+    // Two ways to be wrong, and neither becomes right by being checked: a
+    // constructor of the *other* colliding declaration, and a qualification
+    // that disagrees with the expected type (the arm rule, unchanged —
+    // `arm_ctor_index` is shared).
+    let e = bad(&[
+        ("opt", OPT),
+        ("opt2", OPT2),
+        (
+            "user",
+            "import opt;\nimport opt2;\nfn f() -> Option<Nat> { Nothing }",
+        ),
+    ]);
+    assert!(e.contains("is a constructor of `Maybe`"), "{e}");
+    let e = bad(&[
+        ("opt", OPT),
+        ("opt2", OPT2),
+        (
+            "user",
+            "import opt;\nimport opt2;\nfn f() -> Option<Nat> { Maybe::None }",
+        ),
+    ]);
+    assert!(e.contains("is a constructor of `Maybe`"), "{e}");
 }
 
 // ---------------------------------------------------------------------------
@@ -468,4 +600,39 @@ fn an_arm_qualified_by_the_wrong_type_is_an_error() {
         ),
     ]);
     assert!(e.contains("not a constructor of `Option`"), "{e}");
+}
+
+#[test]
+fn an_argument_is_checking_position_exactly_when_its_parameter_type_is_concrete() {
+    // The spelling a real file reaches for, and the boundary of the route,
+    // pinned in both directions because the difference is not visible in the
+    // source: a parameter at a **concrete** type checks its argument, so the
+    // bare constructor is settled…
+    ok(&[
+        ("opt", OPT),
+        ("opt2", OPT2),
+        (
+            "user",
+            "import opt;
+             import opt2;
+             fn mono(o: Option<Nat>) -> Nat { unwrap_or(o, 9) }
+             fn mono2(m: Maybe<Nat>) -> Nat { or_else(m, 8) }
+             theorem a(): mono(None) = 9 { refl }
+             theorem b(): mono2(None) = 8 { refl }",
+        ),
+    ]);
+    // …while a **type parameter** puts its argument in inference position —
+    // that is where `A` comes from — so there is no expected type to be
+    // evidence and invariant 1 applies unchanged. Not a gap in the route: an
+    // argument that is the *source* of the instantiation cannot also be
+    // checked against it.
+    let e = bad(&[
+        ("opt", OPT),
+        ("opt2", OPT2),
+        (
+            "user",
+            "import opt;\nimport opt2;\nfn g() -> Nat { unwrap_or(None, 9) }",
+        ),
+    ]);
+    assert!(e.contains("ambiguous"), "{e}");
 }

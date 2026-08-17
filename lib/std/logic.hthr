@@ -1,0 +1,135 @@
+// `logic` — the propositional connectives (issues/std-logic-module.md).
+//
+// The library had none of these. Every proposition in `lib/std` was either an
+// equation or a `->` chain, and that absence is *why* the order kit drifted to
+// the `leb(n, m) = True` spelling: an equation was the only available way to
+// say a non-equational thing. The direction that retires that spelling
+// (issues/class-ops-prop-vs-bool.md, 2026-08-16) needs these first.
+//
+// Propositions here are ordinary types and are PROOF-RELEVANT. There is no
+// `Prop` sort and this module does not want one: relevance is the default
+// ontology, `SProp` stays opt-in for evidence that should be invisible
+// (issues/sprop-strict-prop.md), and erasure is the compiler's business
+// (datarepr / `Compile`) rather than the type system's. A connective here is
+// therefore just a record or an inductive, and nothing in it is special.
+//
+// `True` is NOT declared here. It landed as the kernel's `Unit^0` claimed as a
+// surface type name, with `trivial` its inhabitant, always in scope
+// (issues/true-prop-trivial-hypotheses.md). Declaring an `inductive True`
+// would throw away the whole point — the kernel's η rule makes every
+// inhabitant of `Unit` convertible, i.e. `True` is *judgmentally* proof
+// irrelevant, which a one-constructor inductive is not.
+
+// ---------------------------------------------------------------------------
+// Falsity. Zero constructors, so a `match` on it has zero arms and proves
+// anything — which is the elimination rule, spelled with no special form.
+//
+// The name coexists with `bool::False`, the CONSTRUCTOR, and that took a
+// resolution round to make true (issues/false-collides-with-bools-constructor.md,
+// 2026-08-16): a *type* position never considers a constructor a candidate,
+// and an expected type that is an inductive never considers a type name one.
+// Both are shrinks rather than choices — neither dropped reading could have
+// checked where it was dropped — so `and(False, True)` and `h: False` mean
+// different declarations in one line and neither shadows the other.
+
+inductive False {}
+
+theorem false_elim(P: Type, h: False): P { match h {} }
+
+// ---------------------------------------------------------------------------
+// Negation. A `fn` into `Type`, not a declaration: `¬P` is `P -> False` and
+// wants to stay definitionally so, so that a proof of `¬P` is *applied* like
+// the function it is rather than unwrapped first.
+
+fn Not(P: Type) -> Type { P -> False }
+
+theorem not_intro(P: Type, k: P -> False): Not(P) { k }
+
+// From `P` and `¬P`, anything. The workhorse: this is what a refuted branch
+// calls, and it is why the absurd cases of a recursive predicate need no
+// special form.
+theorem absurd_of(P: Type, Q: Type, p: P, np: Not(P)): Q { false_elim(Q, np(p)) }
+
+theorem not_not_intro(P: Type, p: P): Not(Not(P)) { λ (k: Not(P)) => k(p) }
+
+// Modus tollens. Stated with the implication first, matching the order it is
+// usually applied in.
+theorem mt(P: Type, Q: Type, f: P -> Q, nq: Not(Q)): Not(P) {
+    λ (p: P) => nq(f(p))
+}
+
+// ---------------------------------------------------------------------------
+// Conjunction, as the record it is: a non-dependent Σ. `And(p, q)` builds one
+// and `h.left` / `h.right` project, so the elimination rule is field access
+// and needs no lemma.
+//
+// Type parameters rather than value parameters of type `Type`: parameters are
+// monomorphized per instantiation (docs/inductive-tier0-lowering.md §2), which
+// is exactly right for a connective — `And<P, Q>` at each pair of propositions
+// is its own record, and none of them is level-inflated by carrying a `Type`.
+
+record And<P, Q> { left: P, right: Q }
+
+theorem and_swap<P, Q>(h: And<P, Q>): And<Q, P> { And(h.right, h.left) }
+
+theorem and_curry<P, Q, R>(f: And<P, Q> -> R): P -> Q -> R {
+    λ (p: P) (q: Q) => f(And(p, q))
+}
+
+theorem and_uncurry<P, Q, R>(f: P -> Q -> R): And<P, Q> -> R {
+    λ (h: And<P, Q>) => f(h.left, h.right)
+}
+
+// ---------------------------------------------------------------------------
+// Disjunction. Two constructors, so its elimination is an ordinary `match` and
+// this module owes it no eliminator either.
+//
+// `Inl`/`Inr` are capitalized because every constructor in this library is
+// (`Nil`, `Cons`, `Some`, `Zero`), and a connective is not the place to start
+// a second convention.
+
+inductive Or<P, Q> { Inl(p: P), Inr(q: Q) }
+
+theorem or_swap<P, Q>(h: Or<P, Q>): Or<Q, P> {
+    match h { Inl(p) => Inr(p), Inr(q) => Inl(q) }
+}
+
+theorem or_elim<P, Q, R>(h: Or<P, Q>, f: P -> R, g: Q -> R): R {
+    match h { Inl(p) => f(p), Inr(q) => g(q) }
+}
+
+// A disjunction whose right side is refuted collapses to its left side. The
+// shape a decided predicate is consumed in.
+theorem or_resolve<P, Q>(h: Or<P, Q>, nq: Not(Q)): P {
+    match h { Inl(p) => p, Inr(q) => absurd_of(Q, P, q, nq) }
+}
+
+// ---------------------------------------------------------------------------
+// Bi-implication, as a record with NAMED directions rather than as
+// `And<P -> Q, Q -> P>`. Two reasons, both about use: `h.mp(p)` and
+// `h.mpr(q)` say which way they go where `h.left`/`h.right` do not, and an
+// `Iff` is applied far more often than it is taken apart generically.
+
+record Iff<P, Q> { mp: P -> Q, mpr: Q -> P }
+
+theorem iff_refl<P>(): Iff<P, P> { Iff(λ (p: P) => p, λ (p: P) => p) }
+
+theorem iff_sym<P, Q>(h: Iff<P, Q>): Iff<Q, P> { Iff(h.mpr, h.mp) }
+
+theorem iff_trans<P, Q, R>(h1: Iff<P, Q>, h2: Iff<Q, R>): Iff<P, R> {
+    Iff(λ (p: P) => h2.mp(h1.mp(p)), λ (r: R) => h1.mpr(h2.mpr(r)))
+}
+
+// ---------------------------------------------------------------------------
+// The existential: a record whose second field's type depends on its first,
+// with the predicate arriving as a value parameter
+// (docs/surface-value-parameters.md, issues/surface-existential.md — the same
+// shape `lib/ir_v1.hthr`'s `Converges` is written in, generalized).
+//
+// The type argument infers from the predicate's own binder
+// (issues/exists-type-arg-not-inferred.md, fixed 2026-08-16), so
+// `Exists(λ (k: Nat) => …)` writes and `Exists<Nat>(…)` remains available
+// where a reader wants it spelled. Introduction was always fine
+// (`Exists(2, refl)` takes it from the expected type).
+
+record Exists<A>(P: A -> Type) { witness: A, proof: P(witness) }

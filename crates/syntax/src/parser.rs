@@ -127,7 +127,8 @@ pub fn class_ty(name: String, args: Vec<Ty>, index: Vec<Expr>, span: Span) -> Ty
 
 pub fn parse_file(src: &str) -> Result<File, ParseError> {
     let toks = lex(src).map_err(|e| ParseError { msg: e.msg, span: e.span })?;
-    let mut p = Parser { toks, pos: 0, no_record_lit: false, no_eq: false, motive_body: false };
+    let mut p =
+        Parser { toks, pos: 0, no_record_lit: false, no_eq: false, no_iff: false, motive_body: false };
     let mut items = Vec::new();
     // Imports come first, all of them (docs/modules-design.md §3.1). The
     // position rule is enforced here rather than in the elaborator because it
@@ -174,6 +175,13 @@ struct Parser {
     /// in the punctuation contexts, and **lifted inside any bracket**, so the
     /// escape hatch is a parenthesis — `let p: (a = b) = pf;`, `a = (b = c)`.
     no_eq: bool,
+    /// `P ↔ Q` suppressed, exactly as [`Parser::no_eq`] suppresses `a = b`.
+    /// Set while a function type's **codomain** is read, which is what makes
+    /// `↔` looser than `->`: without it the codomain's own `ty()` reaches
+    /// `expr()` and takes the `↔` for itself, so `P -> Q ↔ Q -> P` parses as
+    /// `P -> (Q ↔ (Q -> P))` — right-associativity of the arrow beating a
+    /// rung that is supposed to be looser than it.
+    no_iff: bool,
     /// The next lambda body parsed is a **motive** body, so it is a type and
     /// is parsed with [`Parser::ty`] rather than [`Parser::expr`].
     ///
@@ -223,6 +231,27 @@ fn render_owner(e: &Expr) -> Option<String> {
 fn op_call(sym: &str, args: Vec<Expr>, span: Span) -> Expr {
     let head = Expr { kind: ExprKind::OpSymbol(sym.to_string()), span };
     Expr { kind: ExprKind::App { head: Box::new(head), args, explicit: false }, span }
+}
+
+/// A binary connective: `P ∧ Q` is `And<P, Q>`, the declared record applied to
+/// its two **type** arguments (`lib/std/logic.hthr`).
+///
+/// The target name is fixed here rather than emitted as a symbol for
+/// resolution to place, which is the opposite of what `+` does — and the test
+/// is [`Parser::op_symbol`]'s own: a connective is a *type former*, like `=`,
+/// not an operation a carrier can have. There is nothing for a designation to
+/// say about `∧` at a carrier, because its operands are propositions and not
+/// values of one.
+///
+/// [`ExprKind::TyApp`] rather than a [`ExprKind::TyLit`] wrapper: `expr_as_ty`
+/// already reads `TyApp` on a name back as [`TyKind::Named`], so the desugared
+/// node in *type* position is byte-for-byte the `And<P, Q>` a writer could
+/// have typed, and in expression position it is the same node `List<Nat>`
+/// produces.
+fn connective(name: &str, lhs: Expr, rhs: Expr, span: Span) -> Expr {
+    let head = Expr { kind: ExprKind::Var(name.to_string()), span };
+    let args = vec![expr_as_ty(&lhs), expr_as_ty(&rhs)];
+    Expr { kind: ExprKind::TyApp { head: Box::new(head), args }, span }
 }
 
 /// Read an already-parsed expression **as a type**, syntactically and totally.
@@ -1833,7 +1862,7 @@ impl Parser {
             let binders = self.binder_list(false)?;
             self.expect(&TokKind::RParen, "`)` to close the binder")?;
             self.expect(&TokKind::Arrow, "`->` after a function-type binder")?;
-            let cod = self.ty()?;
+            let cod = self.cod(|p| p.ty())?;
             let span = start.join(cod.span);
             return Ok(curry(binders, cod, false, span));
         }
@@ -1851,14 +1880,14 @@ impl Parser {
             let binders = self.binder_list(true)?;
             self.expect(&TokKind::RBrace, "`}` to close the implicit binder")?;
             self.expect(&TokKind::Arrow, "`->` after a function-type binder")?;
-            let cod = self.ty()?;
+            let cod = self.cod(|p| p.ty())?;
             let span = start.join(cod.span);
             return Ok(curry(binders, cod, true, span));
         }
         let lhs = self.ty_atom()?;
         if matches!(self.peek(), TokKind::Arrow) {
             self.bump();
-            let cod = self.ty()?; // right-associative
+            let cod = self.cod(|p| p.ty())?; // right-associative
             let span = lhs.span.join(cod.span);
             return Ok(Ty {
                 kind: TyKind::Fn {
@@ -1959,12 +1988,21 @@ impl Parser {
         // often opens an *expression*: `(a + b) + c = a + (b + c)` is a type,
         // but every parenthesis in it is an arithmetic one.
         if matches!(self.peek(), TokKind::LParen) && self.group_is_type() {
+            let save = self.pos;
             let start = self.bump().span;
             // Inside the bracket the comparison rung is available again, the
             // same escape hatch `atom`'s `(` arm opens.
             let inner = self.with_eq(false, |p| p.ty())?;
             let end = self.expect(&TokKind::RParen, "`)`")?;
-            return Ok(Ty { kind: inner.kind, span: start.join(end) });
+            // …unless a connective follows, in which case this group is that
+            // connective's left OPERAND and the whole type is built by the
+            // rung that lives in the expression grammar — the same rewind the
+            // `D<A>` rule below makes, and for the same reason
+            // (issues/std-logic-module.md).
+            if !self.at_connective() {
+                return Ok(Ty { kind: inner.kind, span: start.join(end) });
+            }
+            self.pos = save;
         }
         // The modal slice (docs/in-language-map-design.md §3): `Ctx`,
         // `TyCode(g)`, `Code(g |- T)`, and `$a` for a `TyCode` binder used as
@@ -2030,7 +2068,14 @@ impl Parser {
             // `theorem t(): id<Nat>(3) = 3`. `(` is the discriminator for the
             // same reason `->` is in `group_is_type`: an applied type is
             // never called (docs/surface-polymorphism.md §1).
-            if matches!(self.peek(), TokKind::LParen) {
+            //
+            // A connective follows for the same reason and gets the same
+            // answer: `Or<P, Q> ∧ R` is a *type* built by the connective
+            // rung, which lives in the expression grammar, so this applied
+            // type is its left operand and not the whole type. Without the
+            // rewind the `∧` would dangle here and be reported at whatever
+            // the caller expected next (issues/std-logic-module.md).
+            if matches!(self.peek(), TokKind::LParen) || self.at_connective() {
                 self.pos = save;
             } else {
                 return Ok(Ty { kind: TyKind::Named { name, args }, span: start.join(end) });
@@ -2064,6 +2109,38 @@ impl Parser {
     /// [`Self::ty`], where the arrow's sides are `ty_atom`s and `ty_atom`
     /// falls through to this function.
     fn expr(&mut self) -> R<Expr> {
+        let lhs = self.expr_no_iff()?;
+        if self.no_iff {
+            return Ok(lhs);
+        }
+        // `↔` is the loosest rung of all — looser than `->`, so `P -> Q ↔ R`
+        // is `(P -> Q) ↔ R` — and **non-associative**, for the reason the
+        // comparison rung is: `P ↔ Q ↔ R` has two readings and no reason to
+        // prefer either, and a bi-implication between bi-implications is not
+        // what anyone writing it meant.
+        if !matches!(self.peek(), TokKind::Iff) {
+            return Ok(lhs);
+        }
+        self.bump();
+        let rhs = self.expr_no_iff()?;
+        let span = lhs.span.join(rhs.span);
+        if matches!(self.peek(), TokKind::Iff) {
+            return self.err(
+                "`↔` does not chain: it is one non-associative level, so `P ↔ Q ↔ R` \
+                 has no reading. Parenthesise the one that is meant to be an operand",
+            );
+        }
+        Ok(connective("Iff", lhs, rhs, span))
+    }
+
+    /// [`Self::expr`] without its `↔` rung — the level `↔`'s two operands are
+    /// read at, and the whole of the expression grammar otherwise.
+    fn expr_no_iff(&mut self) -> R<Expr> {
+        // `∀ x: A, P` and `∃ x: A, P`. Binder forms, so they come first and
+        // their bodies run to the right as far as they can, exactly like `λ`.
+        if matches!(self.peek(), TokKind::Forall | TokKind::Exists) {
+            return self.quantifier();
+        }
         // `(x: A) -> B`. The same three-token lookahead `ty()` uses; `:` is
         // not in the expression grammar, so a binder-headed group cannot be
         // anything else.
@@ -2072,8 +2149,7 @@ impl Parser {
             let span = ty.span;
             return Ok(Expr { kind: ExprKind::TyLit(Box::new(ty)), span });
         }
-        let lhs = self.expr_bp(0)?;
-        let lhs = if self.no_eq { lhs } else { self.comparison(lhs)? };
+        let lhs = self.connectives()?;
         if !matches!(self.peek(), TokKind::Arrow) {
             return Ok(lhs);
         }
@@ -2081,7 +2157,7 @@ impl Parser {
         // (right-associative) codomain, so the two spellings share one parse.
         self.bump();
         let dom = expr_as_ty(&lhs);
-        let cod = self.ty()?;
+        let cod = self.cod(|p| p.ty())?;
         let span = lhs.span.join(cod.span);
         let kind = TyKind::Fn {
             binder: None,
@@ -2151,6 +2227,165 @@ impl Parser {
         }
     }
 
+    /// The **connective level**: `∧` and `∨`, sitting between the comparison
+    /// rung below and `->` above.
+    ///
+    /// Looser than comparison, which is what makes `n <= m ∧ m <= k` the
+    /// conjunction of two comparisons rather than a comparison against a
+    /// conjunction — and the opposite of where `&&`/`||` sit, deliberately.
+    /// The Boolean doubles are *arithmetic*: they combine `Bool` values, and
+    /// `x && True = x` wants to be `(x && True) = x`. These combine
+    /// propositions, and a proposition is what a comparison produces.
+    ///
+    /// Both are **right-associative** (`left_bp > right_bp`, the convention
+    /// `++` set), and for the same proof-relevant reason: `P ∧ (Q ∧ R)` is the
+    /// nesting `And(p, And(q, r))` builds and projects, so the fixity that
+    /// matches the term shape is the one that saves a re-association.
+    fn connectives(&mut self) -> R<Expr> {
+        self.connectives_bp(0)
+    }
+
+    /// At a binary connective — the token set `ty_atom`'s two early-returning
+    /// atom rules have to decline, since an atom before one of these is an
+    /// operand rather than a whole type. `¬` is absent on purpose: it is
+    /// prefix, so it can never follow an atom.
+    fn at_connective(&self) -> bool {
+        matches!(self.peek(), TokKind::Wedge | TokKind::Vee | TokKind::Iff)
+    }
+
+    fn connectives_bp(&mut self, min_bp: u8) -> R<Expr> {
+        let mut lhs = self.logic_operand()?;
+        loop {
+            let (name, l_bp, r_bp) = match self.peek() {
+                TokKind::Wedge => ("And", 4, 3),
+                TokKind::Vee => ("Or", 2, 1),
+                _ => break,
+            };
+            if l_bp < min_bp {
+                break;
+            }
+            self.bump();
+            let rhs = self.connectives_bp(r_bp)?;
+            let span = lhs.span.join(rhs.span);
+            lhs = connective(name, lhs, rhs, span);
+        }
+        Ok(lhs)
+    }
+
+    /// One operand of the connective level: a comparison, optionally negated.
+    ///
+    /// `¬` is prefix and binds **tighter than `∧`** but **looser than the
+    /// comparison rung**, so `¬P ∧ Q` is `(¬P) ∧ Q` and `¬ a = b` is
+    /// `¬(a = b)` — the second being the reading everyone writing it wants,
+    /// and the one Lean's precedence gives too. It recurses on itself, so
+    /// `¬¬P` is a double negation and not a parse error.
+    ///
+    /// `Not` is a `fn` taking a `Type`, so this is an ordinary call and not a
+    /// [`connective`]: unlike `∧`/`∨`/`↔` it has no type parameters to fill.
+    fn logic_operand(&mut self) -> R<Expr> {
+        if matches!(self.peek(), TokKind::Neg) {
+            let start = self.bump().span;
+            let inner = self.logic_operand()?;
+            let span = start.join(inner.span);
+            let head = Expr { kind: ExprKind::Var("Not".to_string()), span: start };
+            return Ok(Expr {
+                kind: ExprKind::App { head: Box::new(head), args: vec![inner], explicit: false },
+                span,
+            });
+        }
+        let lhs = self.expr_bp(0)?;
+        if self.no_eq {
+            Ok(lhs)
+        } else {
+            self.comparison(lhs)
+        }
+    }
+
+    /// `∀ x: A, P` and `∃ x: A, P` — one binder group, then the body, which
+    /// runs to the right as far as it can exactly as a `λ`'s does.
+    ///
+    /// `∀` is a **synonym**, not a new form: it desugars to the `(x: A) -> P`
+    /// the surface already had, so nothing downstream learns a second
+    /// spelling of the dependent function type. `∃` is a call to
+    /// `logic::Exists` with the type argument supplied *from the binder's own
+    /// annotation* — which is what makes the sugar worth having, since the
+    /// bare record spelling cannot infer it
+    /// (issues/exists-type-arg-not-inferred.md).
+    ///
+    /// **One binder group per quantifier**, names sharing one annotation:
+    /// `∀ x, y: A, P` writes, `∀ x: A, y: B, P` does not. The restriction is
+    /// forced rather than chosen — after the annotation, a comma may begin
+    /// either another group or the body, and the body may itself be a bare
+    /// name, so the two readings are genuinely ambiguous. Nest instead:
+    /// `∀ x: A, ∀ y: B, P`.
+    fn quantifier(&mut self) -> R<Expr> {
+        let exists = matches!(self.peek(), TokKind::Exists);
+        let kw = if exists { "∃" } else { "∀" };
+        let start = self.bump().span;
+        let mut names = vec![self.ident("binder name after a quantifier")?];
+        while matches!(self.peek(), TokKind::Comma) {
+            self.bump();
+            names.push(self.ident("binder name after a quantifier")?);
+        }
+        if !matches!(self.peek(), TokKind::Colon) {
+            return self.err(format!(
+                "this quantifier's binder has no type: write `{kw} x: A, P`. One binder \
+                 group per quantifier — a comma-separated run of names shares ONE \
+                 annotation, and a second group is written by nesting \
+                 (`{kw} x: A, {kw} y: B, P`), because after the annotation a comma \
+                 could begin either a group or the body"
+            ));
+        }
+        self.bump(); // `:`
+        let dom = self.ty()?;
+        self.expect(&TokKind::Comma, "`,` between a quantifier's binder and its body")?;
+        // A second binder group, written flat. `:` is not in the expression
+        // grammar, so `ident :` here cannot be the body and the mistake is
+        // unambiguous — worth catching, because the parse otherwise ends at
+        // the name and the error surfaces as whatever the *declaration*
+        // expected next, a span away from the cause.
+        if matches!(self.peek(), TokKind::Ident(_)) && matches!(self.nth(1), TokKind::Colon) {
+            return self.err(format!(
+                "one binder group per quantifier: write `{kw} x: A, {kw} y: B, P` rather \
+                 than `{kw} x: A, y: B, P`. A comma-separated run of names may share ONE \
+                 annotation (`{kw} x, y: A, P`), but after the annotation a comma could \
+                 begin either a second group or the body, so only nesting is read"
+            ));
+        }
+        let body = self.expr()?;
+        let span = start.join(body.span);
+        if !exists {
+            let binders = names.iter().map(|(n, _)| (n.clone(), dom.clone())).collect();
+            let ty = curry(binders, expr_as_ty(&body), false, span);
+            return Ok(Expr { kind: ExprKind::TyLit(Box::new(ty)), span });
+        }
+        let mut out = body;
+        for (name, nsp) in names.into_iter().rev() {
+            let lam = Expr {
+                kind: ExprKind::Lam {
+                    binders: vec![LamBinder {
+                        name,
+                        ty: Some(dom.clone()),
+                        implicit: false,
+                        span: nsp,
+                    }],
+                    body: Box::new(out),
+                },
+                span,
+            };
+            let head = Expr { kind: ExprKind::Var("Exists".to_string()), span: start };
+            let head = Expr {
+                kind: ExprKind::TyApp { head: Box::new(head), args: vec![dom.clone()] },
+                span: start,
+            };
+            out = Expr {
+                kind: ExprKind::App { head: Box::new(head), args: vec![lam], explicit: false },
+                span,
+            };
+        }
+        Ok(out)
+    }
+
     /// `( ident :` — the start of a dependent function type's binder group;
     /// or `( ident ,`, the multi-binder form (issues/multi-binder-function-types.md).
     ///
@@ -2218,6 +2453,15 @@ impl Parser {
         let saved = std::mem::replace(&mut self.no_eq, no);
         let r = f(self);
         self.no_eq = saved;
+        r
+    }
+
+    /// Run `f` with `P ↔ Q` suppressed. The codomain rule; see
+    /// [`Parser::no_iff`].
+    fn cod<T>(&mut self, f: impl FnOnce(&mut Self) -> R<T>) -> R<T> {
+        let saved = std::mem::replace(&mut self.no_iff, true);
+        let r = f(self);
+        self.no_iff = saved;
         r
     }
 
@@ -3350,6 +3594,95 @@ mod tests {
         let Item::Decl(d) = &f.items[2] else { panic!("expected declaration") };
         let ExprKind::App { args, .. } = &d.body.result.kind else { panic!("expected call") };
         assert!(matches!(&args[0].kind, ExprKind::OpSymbol(s) if s == "++"));
+    }
+
+    // -- the logical connectives (issues/std-logic-module.md) ---------------
+    //
+    // What the elaborator's `logic.rs` cannot see: the lexer windows, and the
+    // desugared node shapes. Meaning is tested there, spelling here.
+
+    /// `<->` is three ASCII bytes and is matched in the three-byte window,
+    /// which the two-byte `<=` would otherwise take a `<` off — the one place
+    /// the new tokens could have broken an old one.
+    #[test]
+    fn the_ascii_iff_does_not_disturb_the_comparison_tokens() {
+        use crate::lexer::{lex, TokKind};
+        let kinds = |s: &str| {
+            lex(s).unwrap().into_iter().map(|t| t.kind).collect::<Vec<_>>()
+        };
+        assert_eq!(kinds("a <-> b")[1], TokKind::Iff);
+        assert_eq!(kinds("a <= b")[1], TokKind::LtEq);
+        assert_eq!(kinds("a < b")[1], TokKind::Lt);
+        // `↔` and `<->` are one token, so nothing downstream can tell them
+        // apart — the property the library's casual spelling rests on.
+        assert_eq!(kinds("a ↔ b"), kinds("a <-> b"));
+    }
+
+    /// `¬` is two bytes and `∧`/`∨`/`∃`/`∀` are three, so they are matched in
+    /// different windows; a window that lands mid-codepoint must mean "not a
+    /// token of this width" rather than panic.
+    #[test]
+    fn the_connective_glyphs_lex_at_their_own_widths() {
+        use crate::lexer::{lex, TokKind};
+        let kinds =
+            |s: &str| lex(s).unwrap().into_iter().map(|t| t.kind).collect::<Vec<_>>();
+        assert_eq!(kinds("¬a")[0], TokKind::Neg);
+        assert_eq!(kinds("a ∧ b")[1], TokKind::Wedge);
+        assert_eq!(kinds("a ∨ b")[1], TokKind::Vee);
+        assert_eq!(kinds("∃ k")[0], TokKind::Exists);
+        assert_eq!(kinds("∀ k")[0], TokKind::Forall);
+        // `λ`, the other two-byte glyph, is unmoved.
+        assert_eq!(kinds("λ x")[0], TokKind::Lambda);
+    }
+
+    /// `P ∧ Q` desugars to the *type application* `And<P, Q>` — the spelling a
+    /// writer could have typed — and not to an operator symbol for the
+    /// resolver to place. A connective is a type former, like `=`.
+    #[test]
+    fn a_connective_desugars_to_its_declared_type() {
+        let ExprKind::TyApp { head, args } = body("p ∧ q") else {
+            panic!("expected a type application")
+        };
+        assert!(matches!(&head.kind, ExprKind::Var(n) if n == "And"));
+        assert_eq!(args.len(), 2);
+        let ExprKind::TyApp { head, .. } = body("p ∨ q") else { panic!("expected TyApp") };
+        assert!(matches!(&head.kind, ExprKind::Var(n) if n == "Or"));
+        let ExprKind::TyApp { head, .. } = body("p ↔ q") else { panic!("expected TyApp") };
+        assert!(matches!(&head.kind, ExprKind::Var(n) if n == "Iff"));
+        // `¬` is an ordinary call: `Not` takes a `Type` and has no type
+        // parameters to fill.
+        assert_eq!(as_call(&body("¬p")).0, "Not");
+    }
+
+    /// `∀` is a **synonym**: it produces the same `TyKind::Fn` the arrow form
+    /// does, so nothing downstream learns a second spelling.
+    #[test]
+    fn forall_desugars_to_the_dependent_function_type() {
+        let ExprKind::TyLit(ty) = body("∀ k: Nat, k = k") else { panic!("expected a type") };
+        let TyKind::Fn { binder, implicit, .. } = &ty.kind else { panic!("expected a Pi") };
+        assert_eq!(binder.as_deref(), Some("k"));
+        assert!(!implicit);
+        // Two names share one annotation and curry, exactly as a binder group
+        // does.
+        let ExprKind::TyLit(ty) = body("∀ k, l: Nat, k = l") else { panic!("expected a type") };
+        let TyKind::Fn { cod, .. } = &ty.kind else { panic!("expected a Pi") };
+        assert!(matches!(&cod.kind, TyKind::Fn { .. }));
+    }
+
+    /// `∃` supplies the type argument from its own binder, which is what the
+    /// bare record spelling cannot do
+    /// (issues/exists-type-arg-not-inferred.md).
+    #[test]
+    fn exists_desugars_to_a_type_applied_record() {
+        let ExprKind::App { head, args, .. } = body("∃ k: Nat, k = k") else {
+            panic!("expected a call")
+        };
+        let ExprKind::TyApp { head, args: targs } = &head.kind else {
+            panic!("expected the type argument to be supplied")
+        };
+        assert!(matches!(&head.kind, ExprKind::Var(n) if n == "Exists"));
+        assert!(matches!(&targs[0].kind, TyKind::Nat));
+        assert!(matches!(&args[0].kind, ExprKind::Lam { .. }));
     }
 
     // -- the Boolean operators (issues/bool-operator-designations.md) -------

@@ -958,22 +958,82 @@ impl Elaborator {
         if ind.valparams.is_empty() {
             return Ok(None);
         }
-        if targs.len() != ind.params.len() {
-            return err(
-                format!(
-                    "`{name}` takes {} type argument(s), found {}",
-                    ind.params.len(),
-                    targs.len()
-                ),
-                span,
-            );
-        }
-        let mut lowered = Vec::with_capacity(targs.len());
-        for a in targs {
-            lowered.push(self.elab_ty(cx, a)?);
-        }
+        // Written type arguments win. Omitted entirely, they may be recovered
+        // from the value arguments' own types
+        // (issues/exists-type-arg-not-inferred.md) — the case `Exists<A>(P: A
+        // -> Type)` made real, where the predicate's binder already says what
+        // `A` is. A *partial* list is still an arity error: filling some and
+        // inferring the rest is a different feature and nothing asks for it.
+        let lowered = if targs.is_empty() && !ind.params.is_empty() {
+            self.valparam_targs(cx, &ind, args, span)?
+        } else {
+            if targs.len() != ind.params.len() {
+                return err(
+                    format!(
+                        "`{name}` takes {} type argument(s), found {}",
+                        ind.params.len(),
+                        targs.len()
+                    ),
+                    span,
+                );
+            }
+            let mut lowered = Vec::with_capacity(targs.len());
+            for a in targs {
+                lowered.push(self.elab_ty(cx, a)?);
+            }
+            lowered
+        };
         let vargs = self.valparam_args(cx, &ind, &lowered, args, span)?;
         self.lower_instance(cx, &ind, &lowered, &vargs, span).map(Some)
+    }
+
+    /// The type arguments of `D(v̄)`, recovered from the value arguments'
+    /// own types (issues/exists-type-arg-not-inferred.md).
+    ///
+    /// Each value argument is **inferred**, and its type matched against the
+    /// declared surface type of the parameter it fills; wherever the declared
+    /// side is exactly a type parameter, the kernel side opposite is that
+    /// parameter's solution. For `Exists<A>(P: A -> Type)` applied to
+    /// `λ (k: Nat) => …`, the inferred `Π(Nat). Ty 0` meets the declared
+    /// `A -> Type` and `A := Nat` falls out of the domains.
+    ///
+    /// **Deliberately first-order and one-sided**, on the doctrine
+    /// [`Elaborator::infer_ctor`] already states for constructors: the
+    /// declared side is a *skeleton* with the parameter names as holes, the
+    /// actual side is inspected only where the skeleton has structure, and
+    /// anything deeper is unification
+    /// (issues/elab-unifier-completeness.md). An argument that fails to infer
+    /// is not an error here — it simply solves nothing, and the unsolved
+    /// parameter reports below.
+    fn valparam_targs(
+        &self,
+        cx: &Cx,
+        ind: &Inductive,
+        args: &[Expr],
+        span: Span,
+    ) -> R<Vec<(Type, Level)>> {
+        let mut sols: Vec<Option<(Type, Level)>> = vec![None; ind.params.len()];
+        for ((_, decl), arg) in ind.valparams.iter().zip(args) {
+            let Ok((_, ty, lvl)) = self.elab_infer(cx, arg) else { continue };
+            match_targs(decl, &ty, &lvl, &ind.params, &mut sols);
+        }
+        let mut out = Vec::with_capacity(sols.len());
+        for (p, sol) in ind.params.iter().zip(sols) {
+            let Some(sol) = sol else {
+                return err(
+                    format!(
+                        "cannot infer the type argument `{p}` of `{}` here — no value \
+                         argument's type determines it. Write it: `{}<…>({})`",
+                        ind.name,
+                        ind.name,
+                        ind.valparams.iter().map(|(n, _)| n.as_str()).collect::<Vec<_>>().join(", ")
+                    ),
+                    span,
+                );
+            };
+            out.push(sol);
+        }
+        Ok(out)
     }
 
     /// Check a use site's value arguments against the declared telescope
@@ -3879,5 +3939,38 @@ impl Elaborator {
             rhs: Rc::clone(&rb[k]),
         };
         Ok((term, result, llvl))
+    }
+}
+
+/// Match a declared surface type against an inferred kernel type, solving the
+/// declaration's type parameters where the surface side names one.
+///
+/// Structural, first-order, and **domain-only** through an arrow: a solution
+/// read out of a codomain would have been extracted from under the binder,
+/// where it may mention the bound variable and could not be lifted out
+/// soundly. `A -> Type` is the shape that motivated this and it solves from
+/// the domain, so the restriction costs nothing today and cannot be wrong
+/// later (issues/exists-type-arg-not-inferred.md).
+fn match_targs(
+    decl: &Ty,
+    actual: &Type,
+    lvl: &Level,
+    params: &[String],
+    sols: &mut [Option<(Type, Level)>],
+) {
+    match &decl.kind {
+        TyKind::Named { name, args } if args.is_empty() => {
+            if let Some(i) = params.iter().position(|p| p == name)
+                && sols[i].is_none()
+            {
+                sols[i] = Some((actual.clone(), lvl.clone()));
+            }
+        }
+        TyKind::Fn { dom, .. } => {
+            if let Type::Pi { dom_level, dom: adom, .. } = actual {
+                match_targs(dom, adom, dom_level, params, sols);
+            }
+        }
+        _ => {}
     }
 }
