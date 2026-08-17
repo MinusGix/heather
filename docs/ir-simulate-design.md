@@ -496,6 +496,13 @@ recorded here with its reason so the next reader doesn't re-derive it.
      then ordinary constructor equations, which `absurd` already refutes — no
      `Empty` and no large elimination. The `+ k` shape (`eval_mono_plus`) is
      proved first and is what the `<=` shape reduces to, via `le_add`.
+     (**Amended 2026-08-16**: `Le`'s body is now a recursion into `Type` and
+     the reflection equation is gone — `docs/nat-order-design.md`. The
+     paragraph is kept as the record of why the reflection was chosen then.
+     Nothing in this file changed with it: `fuel_monotone` and every other use
+     here goes through the lemma kit, so all of `lib/ir_v1.hthr` checked
+     unmodified across the swap, which is the evidence for the discipline that
+     made the swap safe.)
 
    One surface change was needed and made: a **motive body is parsed with the
    type grammar**, so it may be a function type. An IH-generalizing motive is

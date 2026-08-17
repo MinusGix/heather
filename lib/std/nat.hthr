@@ -4,12 +4,18 @@
 //
 // `Nat` itself is a kernel type and needs no declaration. What needs one is
 // everything *about* it: addition (the spec function the IR is measured
-// against), truncated subtraction, and the order — which is **decided**
-// rather than declared, since the surface has no way to declare an indexed
-// family and `Le(n, m)` as an equation makes its two absurd cases ordinary
-// constructor equations that `absurd` already refutes.
+// against), multiplication, truncated subtraction, and the order.
+//
+// The order used to be **decided** rather than declared — `Le(n, m)` was
+// `leb(n)(m) = True` — because the surface cannot declare an indexed family
+// and an equation was the only way to say a non-equational thing. Neither half
+// of that reasoning survives (docs/nat-order-design.md, 2026-08-16): the
+// relation is a plain recursion into `Type`, which needs no family, and it
+// reduces at closed arguments, which is the whole benefit the equation was
+// there for. `leb` stays, as a decision procedure and not as a specification.
 
 import bool;
+import logic;
 
 // ---------------------------------------------------------------------------
 // Addition and its two moving lemmas. `add` recurses on its SECOND argument,
@@ -133,19 +139,53 @@ theorem mul_comm(x, y: Nat): mul(x, y) = mul(y, x) {
 }
 
 // ---------------------------------------------------------------------------
-// The order. `<=` is surface notation for a call to `Le`
-// (issues/comparison-operators.md), which unfolds by δ to the reflection
-// equation `leb(n)(m) = True` — so a proof of either shape is a proof of the
-// other, and the kit's bodies never mention the unfolding.
+// The order, stated PROPOSITIONALLY (docs/nat-order-design.md §1). `<=` is
+// surface notation for a call to `Le` and `<` for a call to `Lt`
+// (issues/comparison-operators.md).
+//
+// Until 2026-08-16 this said `fn Le(n, m: Nat) -> Type { leb(n)(m) = True }` —
+// a *reflection* of the Bool decision below. That spelling is retired
+// (issues/class-ops-prop-vs-bool.md): the relation is stated once, as a
+// recursion into `Type`, and no `= True` appears in a specification anywhere.
+// What the reflection bought is not lost, because the recursion has it
+// outright — `Le(3, 10)` REDUCES to `True`, so the proof is `trivial` and the
+// kernel decides it by computing rather than by walking a derivation.
+//
+// Curried, and not by preference: the uncurried spelling is refused, because
+// the inner `match` makes the recursive call vary both arguments and the guard
+// requires the descending one to pass unchanged (issues/ih-generalization.md).
+// `leb` and `sub` are curried for exactly this reason. Over-application means
+// `Le(n, m)` still writes at every call site, and does below.
+//
+// Falsity is `logic::False`, which coexists with `bool::False` the constructor
+// (issues/false-collides-with-bools-constructor.md). Two lines of this file
+// hold both readings and neither is qualified.
 
+fn Le(n: Nat) -> Nat -> Type {
+    match n {
+        Zero => λ (m: Nat) => True,
+        Succ(k) => λ (m: Nat) => match m { Zero => False, Succ(l) => Le(k)(l) },
+    }
+}
+
+// Strict order, as a definition and not a second recursion. `Lt(n, m)` is
+// `Le(Succ(n), m)`, so everything `Le` computes `Lt` computes, and the two
+// facts a reader most wants — `lt_succ_iff_le` and `lt_succ_self` — are
+// definitional (see below). It is uncurried because it is not recursive, so
+// nothing forces the shape.
+fn Lt(n, m: Nat) -> Type { Le(Succ(n), m) }
+
+// The decision procedure, kept. It is NOT part of the order's specification —
+// nothing above mentions it and no lemma below is stated with it — but
+// `list_algos`'s `sortedb`/`insert` kit and `certgen_code` are written against
+// a Bool and are not this round's to restate. `le_dec` at the bottom of this
+// section is what the *propositional* side decides with.
 fn leb(n: Nat) -> Nat -> Bool {
     match n {
         Zero => λ (m: Nat) => True,
         Succ(k) => λ (m: Nat) => match m { Zero => False, Succ(l) => leb(k)(l) },
     }
 }
-
-fn Le(n, m: Nat) -> Type { leb(n)(m) = True }
 
 // truncated subtraction, curried because both arguments descend together
 fn sub(m: Nat) -> Nat -> Nat {
@@ -159,35 +199,212 @@ theorem sub_zero(m: Nat): sub(m)(0) = m {
     match m { Zero => refl, Succ(m2) => refl }
 }
 
-// `Le(n, m)` gives the difference: the bridge from the `<=` shape to the
-// `+ k` shape. Induction on `n` with `m` generalized.
+// ---------------------------------------------------------------------------
+// The order kit. Read the bodies for what the definition gives away free:
+// every fact about `Zero` on the left is `trivial`, every fact that moves a
+// `Succ` across BOTH sides is the identity, and every absurd case is a
+// hypothesis that already *is* `False`. Those three together are why this
+// section has no inversion lemmas and no no-confusion machinery.
+
+// `Zero` is below everything, by computation.
+theorem zero_le(m: Nat): 0 <= m { trivial }
+
+theorem le_refl(n: Nat): n <= n { match n { Zero => trivial, Succ(k) => le_refl(k) } }
+
+// The one absurdity, and it is not proved so much as *named*: `Le(Succ n, 0)`
+// unfolds to `False`, so the hypothesis is already the conclusion.
+theorem not_succ_le_zero(n: Nat, h: Succ(n) <= 0): False { h }
+
+// Both directions of the successor step, and both are the identity function —
+// `Le(Succ n, Succ m)` and `Le(n, m)` are the same type. This is the
+// definitional inversion the recursive definition is chosen for; stated as
+// lemmas anyway, because the API is the kit and downstream never unfolds `Le`.
+theorem le_succ_succ(n, m: Nat, h: n <= m): Succ(n) <= Succ(m) { h }
+theorem le_of_succ_succ(n, m: Nat, h: Succ(n) <= Succ(m)): n <= m { h }
+
+theorem le_succ_r(n: Nat): (m: Nat) -> n <= m -> n <= Succ(m) {
+    match n as λ z => (m: Nat) -> Le(z, m) -> Le(z, Succ(m)) {
+        Zero => λ m h => trivial,
+        Succ(k, ih) => λ m h =>
+            match m as λ y => Le(Succ(k), y) -> Le(Succ(k), Succ(y)) {
+                Zero => λ bad => false_elim(bad),
+                Succ(m2) => λ good => ih(m2, good),
+            }(h),
+    }
+}
+
+// Transitivity. Three nested case analyses and no arithmetic: the recursion is
+// on the leftmost argument, and the two inner `match`es exist only to expose
+// the successors that make the hypotheses reducible. Both inner motives convoy
+// their hypotheses through, since neither `m` nor `l` is the scrutinee of the
+// recursion that carries the IH.
+theorem le_trans(n: Nat): (m: Nat) -> (l: Nat) -> n <= m -> m <= l -> n <= l {
+    match n as λ z => (m: Nat) -> (l: Nat) -> Le(z, m) -> Le(m, l) -> Le(z, l) {
+        Zero => λ m l h1 h2 => trivial,
+        Succ(k, ih) => λ m l h1 h2 =>
+            match m as λ y => Le(Succ(k), y) -> Le(y, l) -> Le(Succ(k), l) {
+                Zero => λ bad b => false_elim(bad),
+                Succ(m2) => λ a b =>
+                    match l as λ w => Le(Succ(m2), w) -> Le(Succ(k), w) {
+                        Zero => λ bad => false_elim(bad),
+                        Succ(l2) => λ c => ih(m2, l2, a, c),
+                    }(b),
+            }(h1, h2),
+    }
+}
+
+theorem le_antisym(n: Nat): (m: Nat) -> n <= m -> m <= n -> n = m {
+    match n as λ z => (m: Nat) -> Le(z, m) -> Le(m, z) -> z = m {
+        Zero => λ m h1 h2 =>
+            match m as λ y => Le(0, y) -> Le(y, 0) -> 0 = y {
+                Zero => λ a b => refl,
+                Succ(m2) => λ a bad => false_elim(bad),
+            }(h1, h2),
+        Succ(k, ih) => λ m h1 h2 =>
+            match m as λ y => Le(Succ(k), y) -> Le(y, Succ(k)) -> Succ(k) = y {
+                Zero => λ bad b => false_elim(bad),
+                Succ(m2) => λ a b => cong_succ(ih(m2, a, b)),
+            }(h1, h2),
+    }
+}
+
+// Totality, and the successor case is where the definition pays again: the
+// goal `Or<Le(Succ k, Succ m2), Le(Succ m2, Succ k)>` and the IH's
+// `Or<Le(k, m2), Le(m2, k)>` are the SAME type, so the step is `ih(m2)` with
+// no repackaging.
+theorem le_total(n: Nat): (m: Nat) -> Or<Le(n, m), Le(m, n)> {
+    match n as λ z => (m: Nat) -> Or<Le(z, m), Le(m, z)> {
+        Zero => λ m => Inl(trivial),
+        Succ(k, ih) => λ m =>
+            match m as λ y => Or<Le(Succ(k), y), Le(y, Succ(k))> {
+                Zero => Inr(trivial),
+                Succ(m2) => ih(m2),
+            },
+    }
+}
+
+// The decider (issues/decide-class.md owns the class this will one day be a
+// field of; this is the function it will be filled with). It returns
+// `P ∨ ¬P` and nothing else — no `Bool`, no bridge lemma — and it REDUCES at
+// closed arguments, which is what lets `algebra`'s `max_of` compute.
+//
+// A `fn` and NOT a `theorem`, for exactly that reason: a `theorem` is opaque,
+// so a decision spelled as one never unfolds in conversion and
+// `max_of(2, 5) = 5` stops being `refl`. Deciding is computation, whatever it
+// returns. Found by the kernel rejecting that very `refl` rather than by
+// reasoning; `logic::or_pick` carries the same note for the same reason.
+fn le_dec(n: Nat) -> (m: Nat) -> Or<Le(n, m), ¬ Le(n, m)> {
+    match n as λ z => (m: Nat) -> Or<Le(z, m), Not(Le(z, m))> {
+        Zero => λ m => Inl(trivial),
+        Succ(k, ih) => λ m =>
+            match m as λ y => Or<Le(Succ(k), y), Not(Le(Succ(k), y))> {
+                Zero => Inr(λ (bad: Le(Succ(k), 0)) => bad),
+                Succ(m2) => ih(m2),
+            },
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The strict order. Every one of these is `Le`'s kit read at `Succ(n)`; the
+// section is short because `Lt` is a definition rather than a second relation.
+
+// `Lt(n, Succ n)` is `Le(Succ n, Succ n)` is `Le(n, n)`.
+theorem lt_succ_self(n: Nat): n < Succ(n) { le_refl(n) }
+
+// Both directions are the identity: `Lt(n, Succ m)` and `Le(n, m)` are one
+// type. The `Iff` exists to be *cited*, not to do work.
+theorem lt_succ_iff_le(n, m: Nat): Iff<Lt(n, Succ(m)), Le(n, m)> {
+    Iff(λ (h: Lt(n, Succ(m))) => h, λ (h: Le(n, m)) => h)
+}
+
+// Irreflexivity, which is `Le(Succ n, n) -> False` and recurses to the base
+// case `Le(1, 0)` — already `False`, so the whole proof is the recursion.
+theorem lt_irrefl(n: Nat): ¬ Lt(n, n) {
+    match n as λ z => Not(Lt(z, z)) {
+        Zero => λ (h: Lt(0, 0)) => h,
+        Succ(k, ih) => λ (h: Lt(Succ(k), Succ(k))) => ih(h),
+    }
+}
+
+theorem le_of_lt(n: Nat): (m: Nat) -> n < m -> n <= m {
+    match n as λ z => (m: Nat) -> Lt(z, m) -> Le(z, m) {
+        Zero => λ m h => trivial,
+        Succ(k, ih) => λ m h =>
+            match m as λ y => Lt(Succ(k), y) -> Le(Succ(k), y) {
+                Zero => λ bad => false_elim(bad),
+                Succ(m2) => λ good => ih(m2, good),
+            }(h),
+    }
+}
+
+// Transitivity of `<` is transitivity of `<=` with one side weakened, and it
+// is worth seeing why that is enough: `Lt(n, m)` IS `Le(Succ n, m)`, so the
+// chain `Succ(n) <= m <= l` is already the goal.
+theorem lt_trans(n, m, l: Nat, h1: n < m, h2: m < l): n < l {
+    le_trans(Succ(n))(m, l, h1, le_of_lt(m)(l, h2))
+}
+
+theorem lt_of_le_of_ne(n: Nat): (m: Nat) -> n <= m -> ¬ (n = m) -> n < m {
+    match n as λ z => (m: Nat) -> Le(z, m) -> Not(z = m) -> Lt(z, m) {
+        Zero => λ m h hne =>
+            match m as λ y => Not(0 = y) -> Lt(0, y) {
+                Zero => λ ne => false_elim(ne(refl)),
+                Succ(m2) => λ ne => trivial,
+            }(hne),
+        Succ(k, ih) => λ m h hne =>
+            match m as λ y => Le(Succ(k), y) -> Not(Succ(k) = y) -> Lt(Succ(k), y) {
+                Zero => λ bad ne => false_elim(bad),
+                Succ(m2) => λ a ne =>
+                    ih(m2, a, λ (e: k = m2) => ne(cong_succ(e))),
+            }(h, hne),
+    }
+}
+
+// Trichotomy. Nested `Or` rather than a three-constructor inductive, because
+// the connective is what `logic` gives and a bespoke type would need its own
+// eliminator for no gain. The successor step is again a re-use of the IH at
+// the same type, once for each of its three arms.
+theorem lt_trichotomy(n: Nat): (m: Nat) -> Or<Lt(n, m), Or<n = m, Lt(m, n)>> {
+    match n as λ z => (m: Nat) -> Or<Lt(z, m), Or<z = m, Lt(m, z)>> {
+        Zero => λ m =>
+            match m as λ y => Or<Lt(0, y), Or<0 = y, Lt(y, 0)>> {
+                Zero => Inr(Inl(refl)),
+                Succ(m2) => Inl(trivial),
+            },
+        Succ(k, ih) => λ m =>
+            match m as λ y => Or<Lt(Succ(k), y), Or<Succ(k) = y, Lt(y, Succ(k))>> {
+                Zero => Inr(Inr(trivial)),
+                Succ(m2) =>
+                    match ih(m2) {
+                        Inl(a) => Inl(a),
+                        Inr(r) => match r {
+                            Inl(e) => Inr(Inl(cong_succ(e))),
+                            Inr(b) => Inr(Inr(b)),
+                        },
+                    },
+            },
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The bridge to addition — route (c) of docs/nat-order-design.md §1, proved
+// rather than chosen. `le_add` is the forward half and was already here.
+
+// `Le(n, m)` gives the difference. Induction on `n` with `m` generalized.
 theorem le_add(n: Nat): (m: Nat) -> n <= m -> add(n, sub(m)(n)) = m {
     match n as λ z => (m: Nat) -> Le(z, m) -> add(z, sub(m)(z)) = m {
         Zero => λ m hle =>
             trans(cong_nat(λ (x: Nat) => add(0, x), sub_zero(m)), add_left_zero(m)),
         Succ(n2, ih) => λ m hle =>
             match m as λ y => Le(Succ(n2), y) -> add(Succ(n2), sub(y)(Succ(n2))) = y {
-                Zero => λ bad => absurd(bad),
+                Zero => λ bad => false_elim(bad),
                 Succ(m2) => λ good =>
                     trans(add_succ_left(n2, sub(m2)(n2)), cong_succ(ih(m2, good))),
             }(hle),
     }
 }
 
-// The rest of the order kit: two values compared by raising both to `n + m`,
-// which is above each of them.
-theorem le_refl(n: Nat): n <= n { match n { Zero => refl, Succ(k) => le_refl(k) } }
-
-theorem le_succ_r(n: Nat): (m: Nat) -> n <= m -> n <= Succ(m) {
-    match n as λ z => (m: Nat) -> Le(z, m) -> Le(z, Succ(m)) {
-        Zero => λ m h => refl,
-        Succ(k, ih) => λ m h =>
-            match m as λ y => Le(Succ(k), y) -> Le(Succ(k), Succ(y)) {
-                Zero => λ bad => absurd(bad),
-                Succ(m2) => λ good => ih(m2, good),
-            }(h),
-    }
-}
+// Two values compared by raising both to `n + m`, which is above each of them.
 
 theorem le_add_l(n, m: Nat): n <= add(n, m) {
     match m { Zero => le_refl(n), Succ(m2) => le_succ_r(n)(add(n, m2), le_add_l(n, m2)) }
@@ -195,5 +412,18 @@ theorem le_add_l(n, m: Nat): n <= add(n, m) {
 
 // `add` recurses on its second argument, so this one is the definitional side
 theorem le_add_r(n, m: Nat): m <= add(n, m) {
-    match m { Zero => refl, Succ(m2) => le_add_r(n, m2) }
+    match m { Zero => trivial, Succ(m2) => le_add_r(n, m2) }
+}
+
+// The bridge itself: `n <= m` and `∃ k, n + k = m` are interchangeable. The
+// forward direction is `le_add` with its witness named; the backward one is
+// `le_add_l` transported along the caller's equation. Route (c) of the design
+// is therefore available as a *view* at every call site, without being the
+// definition — which is what makes the definition swappable later.
+theorem le_iff_exists_add(n, m: Nat): Iff<Le(n, m), Exists(λ (k: Nat) => add(n, k) = m)> {
+    Iff(
+        λ (h: Le(n, m)) => Exists(sub(m)(n), le_add(n)(m, h)),
+        λ (h: Exists(λ (k: Nat) => add(n, k) = m)) =>
+            j(h.proof, λ y q => Le(n, y), le_add_l(n, h.witness)),
+    )
 }

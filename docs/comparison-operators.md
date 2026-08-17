@@ -16,13 +16,22 @@ theorem fuel_monotone(…, h: eval(n, prog)(env, ir) = Out(vs), hle: n <= m)
     : eval(m, prog)(env, ir) = Out(vs)
 ```
 
-`n <= m` is `Le(n, m)` — the **proposition** from `lib/ir_v1.hthr`, a `fn`
-returning `Type` whose body is the reflection equation `leb(n)(m) = True`. It
-is not the boolean and it is not context-sensitive: a computational position
+`n <= m` is `Le(n, m)` — the **proposition** from `lib/std/nat.hthr`. It is
+not the boolean and it is not context-sensitive: a computational position
 calls `leb` by name, which is exactly the split
 `issues/le-named-proposition.md` landed. `>=` and `>` are not added; an
 argument-order flip is what `issues/method-receiver-position.md` taught to be
 suspicious of, and no use site has asked.
+
+**Amended 2026-08-16** (`docs/nat-order-design.md`), on two counts. `Le`'s
+body is no longer "the reflection equation `leb(n)(m) = True`" — it is a
+recursion into `Type`, and `leb` is a decision procedure that no specification
+names. And `<` now has a target: `Lt`, declared beside `Le`, which required a
+**grammar change** this document's §2 did not anticipate. `<` and `<=` are
+different tokens and only the latter was safe from the type-argument path;
+`Parser::ty` read every `ident <` as the start of type arguments, so `<` was
+unwritable in exactly the position `Lt` exists for. That parse is speculative
+now. The fallback name also moved from `lt` to `Lt`, matching `<=`'s `Le`.
 
 ---
 

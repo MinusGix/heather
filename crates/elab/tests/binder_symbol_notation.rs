@@ -31,6 +31,7 @@
 
 use heather_elab::{ElabError, Elaborator};
 
+const LOGIC: &str = include_str!("../../../lib/std/logic.hthr");
 const BOOL: &str = include_str!("../../../lib/std/bool.hthr");
 const NAT: &str = include_str!("../../../lib/std/nat.hthr");
 const OPTION: &str = include_str!("../../../lib/std/option.hthr");
@@ -83,7 +84,7 @@ fn fold<A: Mon(op)>(op as ∙: A -> A -> A, xs: List<A>) -> A {
 
 fn run(extra: &str) -> Result<Elaborator, String> {
     let mut e = Elaborator::with_prelude().expect("prelude");
-    for (name, src) in [("bool", BOOL), ("nat", NAT), ("option", OPTION), ("list", LIST)] {
+    for (name, src) in [("logic", LOGIC), ("bool", BOOL), ("nat", NAT), ("option", OPTION), ("list", LIST)] {
         if let Err(err) = e.elab_module_source(name, src) {
             return Err(format!("{name}: {err}"));
         }

@@ -27,6 +27,7 @@
 
 use heather_elab::{ElabError, Elaborator};
 
+const LOGIC: &str = include_str!("../../../lib/std/logic.hthr");
 const BOOL: &str = include_str!("../../../lib/std/bool.hthr");
 const NAT: &str = include_str!("../../../lib/std/nat.hthr");
 const OPTION: &str = include_str!("../../../lib/std/option.hthr");
@@ -36,6 +37,7 @@ const ALGEBRA: &str = include_str!("../../../lib/std/algebra.hthr");
 /// The closure in dependency order — the order the CLI's loader would pick.
 fn modules() -> Vec<(&'static str, &'static str)> {
     vec![
+        ("logic", LOGIC),
         ("bool", BOOL),
         ("nat", NAT),
         ("option", OPTION),

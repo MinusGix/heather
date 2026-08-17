@@ -7,6 +7,36 @@ created: 2026-08-16
 updated: 2026-08-16
 ---
 
+## Current state (rewritten 2026-08-16; the log below is archive)
+
+**The definition, `Lt`, and the order/strict/bridge kit LANDED 2026-08-16.**
+`docs/nat-order-design.md` is the reasoning; this issue stays open only for the
+deferred arithmetic content named under "What is left" below.
+
+Landed: route (a) as the definition of `Le` (curried), `Lt(n, m) :=
+Le(Succ(n), m)`, and — in `lib/std/nat.hthr` — `zero_le`, `le_refl`,
+`not_succ_le_zero`, `le_succ_succ`, `le_of_succ_succ`, `le_succ_r`,
+`le_trans`, `le_antisym`, `le_total`, `le_dec`, `lt_succ_self`,
+`lt_succ_iff_le`, `lt_irrefl`, `le_of_lt`, `lt_trans`, `lt_of_le_of_ne`,
+`lt_trichotomy`, `le_add`, `le_add_l`, `le_add_r`, `le_iff_exists_add`. `Cmp`
+went propositional with it (`le`, `le_refl`, `le_dec`), and `Le_bool` is the
+`Bool` carrier's relation. `leb`/`leb_bool` remain, as decision procedures that
+no specification names.
+
+**What is left, and it is arithmetic rather than order:** `min`/`max` at `Nat`
+(plain structural recursions, no decider needed), the `sub` kit beyond
+`sub_zero` — `add_sub_cancel`, `sub_add_cancel` under `n <= m`, `sub_self`,
+`sub_le` — and the interaction lemmas `add_le_mono`, `mul_le_mono`,
+`le_of_add_le_add_l` and cancellation. Deferred by the round's charter to keep
+one reviewable diff, not by any obstacle; [[std-api-waves]] wave 3 is the other
+half of the same list.
+
+**Two grammar gaps this issue's round found have their own owners:**
+[[comparison-inside-type-arguments]] and
+[[quantifier-notation-in-type-arguments]].
+
+---
+
 `lib/std/nat.hthr` states its order as `fn Le(n, m: Nat) -> Type { leb(n)(m) =
 True }` — a *reflection* of a Bool decision. Per [[class-ops-prop-vs-bool]]'s
 recorded direction (2026-08-09, reaffirmed 2026-08-16), that is a v1 artifact:
@@ -169,3 +199,24 @@ deliberately rather than incidentally.
   `= True` idiom exists to buy in Lean — because the proposition reduces to
   `Unit` at closed arguments. That, plus definitional inversion, is why the
   recommendation is (a) rather than the Lean-shaped (b).
+- 2026-08-16: **LANDED** (see the status header). Reasoning and the measured
+  cost of the Prop-first direction are in `docs/nat-order-design.md`; four
+  corrections this file owes its own text:
+  1. **"a library declaration plus a designation row, not a grammar change"
+     was wrong about `Lt`.** `<` did not parse in *any* type position —
+     `Parser::ty` read every `ident <` as type arguments, on a comment whose
+     premise ("no expression is a type") dies precisely when the order becomes
+     propositional. Fixed by making that parse speculative; residue in
+     [[comparison-inside-type-arguments]].
+  2. The `<` **fallback name was `lt`**, which nothing was ever going to
+     define; it is `Lt` now, matching `<=`'s `Le`.
+  3. **Falsity is `False`, not `Empty`** — the §"Curried, and not by
+     preference" paragraph predates [[false-collides-with-bools-constructor]]
+     being fixed the same day.
+  4. **The migration cost this file predicted did not materialize.**
+     `lib/ir_v1.hthr` and `lib/list_algos.hthr` both check **unmodified**: the
+     "downstream never unfolds `Le`" discipline was already held, so the
+     restatement [[decide-class]] wanted to measure measured zero. What did
+     cost something was `Cmp` (three fields, two instances) and one wave-0
+     library bug — `false_elim`'s goal had to become a type parameter to be
+     usable in an absurd arm at all.

@@ -81,6 +81,7 @@ const LIB: &str = include_str!("../../../lib/ir_v1.hthr");
 /// (docs/modules-design.md §7). The test elaborates the **closure**, in the
 /// order the CLI's loader would — dependencies first — into one accumulator.
 const NAT: &str = include_str!("../../../lib/std/nat.hthr");
+const LOGIC: &str = include_str!("../../../lib/std/logic.hthr");
 const BOOL: &str = include_str!("../../../lib/std/bool.hthr");
 
 /// A prelude'd elaborator with `nat` already in it, positioned in module
@@ -88,6 +89,7 @@ const BOOL: &str = include_str!("../../../lib/std/bool.hthr");
 /// file*, which is what a control on the library has to be.
 fn ir_v1_elaborator() -> Elaborator {
     let mut e = Elaborator::with_prelude().expect("prelude");
+    e.elab_module_source("logic", LOGIC).unwrap_or_else(|err| panic!("{}", err.render(LOGIC)));
     e.elab_module_source("bool", BOOL).unwrap_or_else(|err| panic!("{}", err.render(BOOL)));
     e.elab_module_source("nat", NAT).unwrap_or_else(|err| panic!("{}", err.render(NAT)));
     e

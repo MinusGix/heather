@@ -34,7 +34,15 @@
 
 inductive False {}
 
-theorem false_elim(P: Type, h: False): P { match h {} }
+// The goal is a **type parameter**, not a value parameter of type `Type`, and
+// that is the difference between usable and not (found by writing the order
+// kit, 2026-08-16). An absurd arm's goal is whatever the match's motive says
+// at that constructor — `or_pick(Inr(bad), x, y) = y`, say — and a value
+// parameter makes the writer spell it, which is both long and, where the
+// spelling needs a type argument nothing determines, sometimes impossible.
+// A type parameter is filled from the checking position the arm already is in,
+// so `elim(bad(p))` writes.
+theorem false_elim<P>(h: False): P { match h {} }
 
 // ---------------------------------------------------------------------------
 // Negation. A `fn` into `Type`, not a declaration: `¬P` is `P -> False` and
@@ -48,7 +56,7 @@ theorem not_intro(P: Type, k: P -> False): Not(P) { k }
 // From `P` and `¬P`, anything. The workhorse: this is what a refuted branch
 // calls, and it is why the absurd cases of a recursive predicate need no
 // special form.
-theorem absurd_of(P: Type, Q: Type, p: P, np: Not(P)): Q { false_elim(Q, np(p)) }
+theorem absurd_of<P, Q>(p: P, np: Not(P)): Q { false_elim(np(p)) }
 
 theorem not_not_intro(P: Type, p: P): Not(Not(P)) { λ (k: Not(P)) => k(p) }
 
@@ -101,7 +109,33 @@ theorem or_elim<P, Q, R>(h: Or<P, Q>, f: P -> R, g: Q -> R): R {
 // A disjunction whose right side is refuted collapses to its left side. The
 // shape a decided predicate is consumed in.
 theorem or_resolve<P, Q>(h: Or<P, Q>, nq: Not(Q)): P {
-    match h { Inl(p) => p, Inr(q) => absurd_of(Q, P, q, nq) }
+    match h { Inl(p) => p, Inr(q) => absurd_of(q, nq) }
+}
+
+// Branching on a disjunction to pick a *value* — the `Or` counterpart of
+// `list_algos`'s `ins_pick` and the successor to `algebra`'s `cmp_pick`, which
+// picked on a `Bool`. It is a `fn` and NOT a `theorem` for a reason that is
+// easy to lose: a `theorem` is opaque, so `or_elim` above — which computes the
+// same thing — never unfolds in conversion, and `max_of(2, 5) = 5` would stop
+// being `refl`. Deciding is computation, so its eliminator has to be a `fn`.
+//
+// The right side is the FIRST result and the left the second, matching
+// `cmp_pick`'s `False => x, True => y` so that `Inl` (the relation holds)
+// keeps `y` exactly as `True` did.
+fn or_pick<P, Q, A>(d: Or<P, Q>, x, y: A) -> A {
+    match d { Inl(p) => y, Inr(q) => x }
+}
+
+// A decided disjunction whose left side is proved picks the left value — the
+// lemma every `max_of`-shaped consumer needs, and the reason the decider is
+// allowed to be a stuck term at open arguments. There is no equation to
+// rewrite by and none is wanted: the match's own motive reaches the scrutinee,
+// and the refuting branch is closed by the proof the caller already holds.
+theorem or_pick_dec<P, A>(d: Or<P, Not(P)>, x, y: A, p: P): or_pick(d, x, y) = y {
+    match d as λ z => or_pick(z, x, y) = y {
+        Inl(good) => refl,
+        Inr(bad) => false_elim(bad(p)),
+    }
 }
 
 // ---------------------------------------------------------------------------

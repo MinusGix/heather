@@ -5359,7 +5359,11 @@ impl Elaborator {
             "+" => Some("add"),
             "*" => Some("mul"),
             "<=" => Some("Le"),
-            "<" => Some("lt"),
+            // `Lt`, not `lt`: the row was written when nothing defined either
+            // and the lowercase spelling was a guess. `std/nat` declares `Lt`
+            // beside `Le`, and a relation is capitalized here for the same
+            // reason `Le` is (issues/nat-order-kit.md, 2026-08-16).
+            "<" => Some("Lt"),
             _ => None,
         }
     }

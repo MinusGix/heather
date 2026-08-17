@@ -35,6 +35,7 @@
 
 use heather_elab::{ElabError, Elaborator};
 
+const LOGIC: &str = include_str!("../../../lib/std/logic.hthr");
 const BOOL: &str = include_str!("../../../lib/std/bool.hthr");
 const NAT: &str = include_str!("../../../lib/std/nat.hthr");
 const OPTION: &str = include_str!("../../../lib/std/option.hthr");
@@ -99,7 +100,7 @@ fn sum_all<A: Mon(+)>(xs: List<A>) -> A { fold(+, xs) }
 
 fn run(extra: &str) -> Result<Elaborator, String> {
     let mut e = Elaborator::with_prelude().expect("prelude");
-    for (name, src) in [("bool", BOOL), ("nat", NAT), ("option", OPTION), ("list", LIST)] {
+    for (name, src) in [("logic", LOGIC), ("bool", BOOL), ("nat", NAT), ("option", OPTION), ("list", LIST)] {
         if let Err(err) = e.elab_module_source(name, src) {
             return Err(format!("{name}: {err}"));
         }
@@ -363,7 +364,7 @@ fn an_instance_head_will_not_take_a_symbol() {
 /// *does* mean something" half real.
 fn without_nat(extra: &str) -> String {
     let mut e = Elaborator::with_prelude().expect("prelude");
-    for (name, src) in [("bool", BOOL), ("option", OPTION), ("list", LIST)] {
+    for (name, src) in [("logic", LOGIC), ("bool", BOOL), ("option", OPTION), ("list", LIST)] {
         e.elab_module_source(name, src).unwrap_or_else(|err| panic!("{name}: {err}"));
     }
     let src = format!(

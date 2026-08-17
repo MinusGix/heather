@@ -351,10 +351,18 @@ fn a_declaration_named_map_can_recurse() {
 
 #[test]
 fn less_than_still_parses_as_lt() {
-    // `<` is the `lt` operator too; the speculative type-argument parse must
+    // `<` is the `Lt` operator too; the speculative type-argument parse must
     // fall back cleanly (docs/surface-polymorphism.md §1).
+    //
+    // The fallback name was `lt` until 2026-08-16 and is `Lt` now, matching
+    // `<=`'s `Le` — `std/nat` declares the relation capitalized
+    // (issues/nat-order-kit.md). The assertion is what caught the rename, and
+    // what it pins is unchanged: the `<` reached name resolution as an
+    // operator rather than dying in the parser as an unterminated `a<b …>`.
+    // No module is loaded here, so `Lt` is genuinely absent and the refusal is
+    // the resolver's.
     let e = bad("fn go(a: Nat, b: Nat) -> Nat { a < b }");
-    assert!(e.contains("lt"), "should have resolved to the `lt` call: {e}");
+    assert!(e.contains("Lt"), "should have resolved to the `Lt` call: {e}");
 }
 
 // -- the prelude is polymorphic now (issues/at-and-type-arguments.md) -----

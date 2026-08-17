@@ -24,7 +24,7 @@ const LOGIC: &str = include_str!("../../../lib/std/logic.hthr");
 
 fn run(extra: &str) -> Result<Elaborator, String> {
     let mut e = Elaborator::with_prelude().expect("prelude");
-    for (name, src) in [("bool", BOOL), ("nat", NAT), ("logic", LOGIC)] {
+    for (name, src) in [("logic", LOGIC), ("bool", BOOL), ("nat", NAT)] {
         if let Err(err) = e.elab_module_source(name, src) {
             return Err(match err {
                 ElabError::Elab { msg, .. } => format!("{name}: {msg}"),
@@ -73,7 +73,7 @@ fn the_connectives_work_without_notation() {
 theorem a(P: Type, Q: Type, h: And<P, Q>): And<Q, P> { and_swap(h) }
 theorem b(P: Type, Q: Type, h: Or<P, Q>): Or<Q, P> { or_swap(h) }
 theorem c(P: Type, p: P): Not(Not(P)) { not_not_intro(P, p) }
-theorem d(P: Type, h: False): P { false_elim(P, h) }
+theorem d(P: Type, h: False): P { false_elim(h) }
 theorem e(P: Type): Iff<P, P> { iff_refl() }
 ");
 }
@@ -121,6 +121,7 @@ theorem nested(b: Bool): Bool { and(False, or(b, False)) }
 #[test]
 fn a_global_of_the_same_name_still_stands_the_route_down() {
     let mut e = Elaborator::with_prelude().expect("prelude");
+    e.elab_module_source("logic", LOGIC).expect("logic");
     e.elab_module_source("bool", BOOL).expect("bool");
     e.elab_module_source("shadow", "import bool;\nfn False() -> Bool { True }")
         .expect("shadow");

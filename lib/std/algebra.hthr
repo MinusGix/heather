@@ -18,6 +18,7 @@
 // (docs/bare-symbol-checking-carrier-design.md). One sentence, two directions.
 
 import bool;
+import logic;
 import nat;
 import list;
 import option;
@@ -59,13 +60,24 @@ class Default<A> {
     default: A,
 }
 
-// A decided order: a `Bool`-valued comparison, reflexive in the shape
-// `std/nat` states its order in (`Le(n, m)` is `leb(n)(m) = True`, so a `Nat`
-// proof of either shape is a proof of the other and `nat::le_refl` fills
-// `le_refl` verbatim).
+// A decided order — and as of 2026-08-16 a **propositional** one
+// (docs/nat-order-design.md §3). `le` returns a `Type`, the law is the
+// relation itself rather than an equation with `True`, and the decision moved
+// into its own field.
 //
-// The field is `le` and NOT `leb`, the name `std/nat` gives the function
-// filling it. A class field sharing a name with a global in scope can never be
+// The version this replaces was `le: A -> A -> Bool` with
+// `le_refl: (x: A) -> le(x, x) = True`, matching the `leb(n)(m) = True`
+// spelling `std/nat` then used. Both halves of that are retired by
+// issues/class-ops-prop-vs-bool.md: no `Bool` in a specification, no `= True`
+// anywhere. What is NOT retired is deciding — `max_of` still has to pick a
+// value — so the decision it used to get from the `Bool` is now a third field
+// returning `P ∨ ¬P`, which is the interface issues/decide-class.md will
+// generalize. That class does not exist yet and this does not wait for it: a
+// `le_dec` field is a local decision about `Cmp`, and when `Decide` lands the
+// field becomes a superclass constraint without the consumers below moving.
+//
+// The field is `le` and NOT `leb`, the name `std/nat` gives its decision
+// procedure. A class field sharing a name with a global in scope can never be
 // reached by a receiver: `x.leb(y)` is ambiguous between the member and the
 // bare call, and the elaborator says so by name rather than picking. Naming a
 // field is therefore a *library* decision about the ambient namespace, not a
@@ -74,8 +86,9 @@ class Default<A> {
 // `Cmp` and `Default` take no index: their structure is identified by the
 // carrier alone, and indexing is opt-in per class (design §2.1).
 class Cmp<A> {
-    le: A -> A -> Bool,
-    le_refl: (x: A) -> le(x, x) = True,
+    le: A -> A -> Type,
+    le_refl: (x: A) -> le(x, x),
+    le_dec: (x, y: A) -> Or<le(x, y), Not(le(x, y))>,
 }
 
 // ---------------------------------------------------------------------------
@@ -141,8 +154,8 @@ instance Default<Bool> { default := False }
 instance<A> Default<List<A>> { default := Nil }
 instance<A> Default<Option<A>> { default := None }
 
-instance Cmp<Nat> { le := leb, le_refl := le_refl }
-instance Cmp<Bool> { le := leb_bool, le_refl := leb_bool_refl }
+instance Cmp<Nat> { le := Le, le_refl := le_refl, le_dec := le_dec }
+instance Cmp<Bool> { le := Le_bool, le_refl := le_bool_refl, le_dec := le_bool_dec }
 
 // ---------------------------------------------------------------------------
 // The designations: what a symbol means at a carrier
@@ -203,11 +216,18 @@ theorem mconcat_single<A: Monoid(op)>(op: A -> A -> A, x: A):
     A.unit_r(x)
 }
 
-// The order consumer: the class's `le` decides which of two values to keep.
-// The branch is a separate `fn` for the reason `list_algos`'s `ins_pick` is
-// one — a `match` on a stuck `Bool` is a scrutinee no equation can reach, and
-// hoisting it makes one `j` enough. A class projection is such a scrutinee.
-fn cmp_pick<A>(b: Bool, x, y: A) -> A { match b { False => x, True => y } }
+// The order consumer: the class's `le_dec` decides which of two values to
+// keep. The branch is hoisted into a separate `fn` for the reason
+// `list_algos`'s `ins_pick` is one — a `match` on a stuck scrutinee is
+// unreachable from the goal — and that `fn` is now `logic::or_pick`, because
+// what is being branched on is a disjunction rather than a `Bool`.
+//
+// This replaced `fn cmp_pick<A>(b: Bool, x, y: A) -> A` when `Cmp` went
+// propositional. The proof side got SIMPLER in the swap and it is worth
+// saying why: `cmp_pick`'s lemma needed a `j` to rewrite the stuck `Bool` to
+// `True` before the branch would reduce, whereas `or_pick`'s motive reaches
+// its own scrutinee directly and the refuting arm is closed by the caller's
+// proof. No equation, no transport.
 
 // Written in the INLINE constraint form (issues/requires-placement-syntax.md
 // §R2-A): none of these names the dictionary — `x.le(y)` dispatches from the
@@ -218,16 +238,19 @@ fn cmp_pick<A>(b: Bool, x, y: A) -> A { match b { False => x, True => y } }
 // against `std/nat`'s ambient `le_refl` global: the receiver reading would put
 // a type in `le_refl`'s `Nat` slot, and the declaration refuses that
 // (docs/traits-type-projection-design.md §4).
-fn max_of<A: Cmp>(x, y: A) -> A { cmp_pick(x.le(y), x, y) }
+fn max_of<A: Cmp>(x, y: A) -> A { or_pick(A.le_dec(x, y), x, y) }
 
-theorem max_of_true<A: Cmp>(x, y: A, p: x.le(y) = True):
-    max_of(x, y) = y
-{
-    j(sym(p), λ z q => cmp_pick(z, x, y) = y, refl)
+// `max_of_true`'s successor, and the rename is the content: the hypothesis is
+// no longer "the comparison returned `True`" but the RELATION ITSELF. That is
+// the whole of what going propositional buys a caller — `p : x.le(y)` is the
+// fact you have, where `p : x.le(y) = True` was a fact about a decision
+// procedure you had to run first.
+theorem max_of_le<A: Cmp>(x, y: A, p: A.le(x, y)): max_of(x, y) = y {
+    or_pick_dec(A.le_dec(x, y), x, y, p)
 }
 
 theorem max_of_self<A: Cmp>(x: A): max_of(x, x) = x {
-    max_of_true(x, x, A.le_refl(x))
+    max_of_le(x, x, A.le_refl(x))
 }
 
 // `Default` earns its keep here: the caller of `or_default` names no

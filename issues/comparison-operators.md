@@ -3,7 +3,7 @@ title: Surface <= (and <): one lexer token and one infix-table row each
 status: closed
 labels: [frontend,syntax,ergonomics]
 created: 2026-08-01
-updated: 2026-08-01
+updated: 2026-08-16
 ---
 
 The infix machinery from [[surface-operators]] is a desugar table: `infix_op` (crates/syntax/src/parser.rs:912) maps a token to a global name and binding powers, and the parser emits an ordinary `ExprKind::Call` — `Plus => ("add", 3, 4)`. Adding an ordering comparison is therefore one lexer token plus one table row, NOT a reopening of [[surface-operators]] and NOT the open-ended [[notation-extensibility]] question.
@@ -20,3 +20,4 @@ Acceptance: `fuel_monotone` and the le-kit stated with `<=`; a parse-error negat
 ## Log
 
 - 2026-08-01: Landed: TokKind::LtEq in the lexer; NOT an infix_op row (those are left-associative by construction) — a new Parser::comparison rung extracted from the existing statement-level '=' handling, one non-associative level carrying =, <= (-> Le(a,b)) and < (moved off the table; 'lt' had no definition, so a<b<c chaining silently was pure hazard). Chains all reject with a real message; a <= b = c is the one unflaggable shape, blocked on [[annotated-let-swallows-the-equals]] (documented, docs/comparison-operators.md §3). Generics untouched (tyargs never see LtEq). lib restated: <= in stated positions, explicit Le kept in the four dense motives. +10 tests, full suite green, check time unchanged. Lt stays a one-row follow-on until a use site asks.
+- 2026-08-16: 2026-08-16: The last line's prediction — 'Lt stays a one-row follow-on until a use site asks' — was wrong, and this issue's own 'Lexer care' bullet is why. It worried that <= must not collide with the generics lexing of <, and the landing round noted 'generics untouched (tyargs never see LtEq)'. The bare < is a different token and tyargs DO see it: Parser::ty read every 'ident <' as type arguments, so Lt was unwritable in any type position — h: i < len(xs) failed to parse. Fixed in [[nat-order-kit]]'s round by making that parse speculative (docs/nat-order-design.md §4); the < fallback name also moved from lt to Lt. Residue: [[comparison-inside-type-arguments]].

@@ -27,6 +27,7 @@ mod support;
 
 const LIB: &str = include_str!("../../../lib/ir_v1.hthr");
 const NAT: &str = include_str!("../../../lib/std/nat.hthr");
+const LOGIC: &str = include_str!("../../../lib/std/logic.hthr");
 const BOOL: &str = include_str!("../../../lib/std/bool.hthr");
 const CODE: &str = include_str!("../../../lib/certgen_code.hthr");
 const CERT: &str = include_str!("../../../lib/certgen_cert.hthr");
@@ -95,6 +96,7 @@ fn elab(e: &mut Elaborator, src: &str, what: &str) {
 
 fn base() -> Elaborator {
     let mut e = Elaborator::with_prelude().expect("prelude");
+    e.elab_module_source("logic", LOGIC).unwrap_or_else(|err| panic!("{}", err.render(LOGIC)));
     e.elab_module_source("bool", BOOL).unwrap_or_else(|err| panic!("{}", err.render(BOOL)));
     e.elab_module_source("nat", NAT).unwrap_or_else(|err| panic!("{}", err.render(NAT)));
     e

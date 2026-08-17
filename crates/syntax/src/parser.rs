@@ -2046,8 +2046,21 @@ impl Parser {
                 span: start.join(end),
             });
         }
-        // `D<A, B>` — an applied inductive. Unambiguous: `<` is the `lt`
-        // operator only in *expression* position, and no expression is a type.
+        // `D<A, B>` — an applied inductive. This was once annotated
+        // "unambiguous: `<` is the `lt` operator only in *expression*
+        // position, and no expression is a type". **That premise died with
+        // the propositional order** (issues/nat-order-kit.md, 2026-08-16):
+        // `n < m` is `Lt(n, m)`, a proposition, so it is a type, and it is
+        // written exactly where a hypothesis is — `h: i < len(xs)`. The two
+        // readings are genuinely ambiguous at the `<` and are told apart the
+        // only way they can be: try the type arguments, and if that parse does
+        // not *complete*, it was the operator.
+        //
+        // Speculative parsing rather than lookahead, because no bounded
+        // lookahead decides it — `D<A, B>` and `a < b` agree for arbitrarily
+        // many tokens (`f(x) < g(y)` against `Vec<Pair<A, B>>`). The rewind
+        // below already existed for two other discriminators; this adds the
+        // third and largest, and it is the same `save`.
         if matches!(self.peek(), TokKind::Ident(_))
             && matches!(self.toks.get(self.pos + 1).map(|t| &t.kind), Some(TokKind::Lt))
         {
@@ -2055,12 +2068,30 @@ impl Parser {
             let (name, start) = self.qual_ident("type name")?;
             self.bump(); // `<`
             let mut args = Vec::new();
+            let mut ok = true;
             loop {
-                args.push(self.ty()?);
+                match self.ty() {
+                    Ok(t) => args.push(t),
+                    Err(_) => {
+                        ok = false;
+                        break;
+                    }
+                }
                 if !matches!(self.peek(), TokKind::Comma) {
                     break;
                 }
                 self.bump();
+            }
+            // A failed argument, or no `>` where one was due, means this was
+            // never a type application. Rewind and let the expression grammar
+            // have it; if THAT fails too the error the user sees is the
+            // expression's, which is the right one — an unterminated `D<A, B`
+            // reports at the `<` as "unbound name / expected …" rather than
+            // pretending to know which reading was intended.
+            if !ok || !matches!(self.peek(), TokKind::Gt) {
+                self.pos = save;
+                let lhs = self.expr()?;
+                return Ok(expr_as_ty(&lhs));
             }
             let end = self.expect(&TokKind::Gt, "`>` to close the type arguments")?;
             // …unless a call follows, in which case this was an *expression*

@@ -26,7 +26,7 @@ laws, `map` with **none**, `List::nth`. `std/option`: three functions.
 | # | contents | owner |
 |---|---|---|
 | 0 | ✅ **landed 2026-08-16** — `Empty`/`Not`/`And`/`Or`/`Iff`/`Exists` + `¬ ∧ ∨ ↔ ∃ ∀` | [[std-logic-module]] (closed) |
-| 1 | `Le` by recursion, `Lt`, the order kit, `le_iff_exists_add`, `sub` kit, `min`/`max` | [[nat-order-kit]] |
+| 1 | ✅ **mostly landed 2026-08-16** — `Le` by recursion, `Lt`, the order + strict kit, `le_dec`, `le_iff_exists_add`; `sub` kit and `min`/`max` deferred | [[nat-order-kit]] |
 | 2 | `succ_inj`, `succ_ne_zero`, `Decide` at `Nat` equality and order | [[decide-class]] |
 | 3 | `add_le_mono`, `mul_le_mono`, cancellation; `pow`, `half`/`even`/`odd`, `fact` | [[nat-order-kit]] (arith half unowned — file when scheduled) |
 | 4 | `Nat::iter`/fold with `add`/`mul`/`pow` as instances | [[datatype-container-algebras]] |
@@ -76,6 +76,16 @@ datum.
   existing one ([[ih-generalization]]: the Prop-first `Le` must be curried, so
   wave 1's whole kit is stated against a curried relation). Wave 1 is next and
   its dependency is met.
+- 2026-08-16: Wave 1 landed except its arithmetic tail ([[nat-order-kit]],
+  `docs/nat-order-design.md`). The sequencing datum it produced: the *migration*
+  this push was braced for cost **nothing** — `ir_v1` and `list_algos` check
+  unmodified — while the unbudgeted cost was two grammar gaps
+  ([[comparison-inside-type-arguments]],
+  [[quantifier-notation-in-type-arguments]]) and one wave-0 library bug. Both
+  patterns argue the same way about what remains: the risk in L1/L2 is in the
+  *notation and grammar* the statements need, not in restating the library.
+  Sequencing unchanged; wave 2 ([[decide-class]]) is next and its `le_dec` is
+  now written rather than assumed.
 - 2026-08-16: Both language gaps wave 0 turned up are **fixed the same day**
   and closed: [[false-collides-with-bools-constructor]] (resolve by position,
   in two rules plus a whnf the plan did not predict — `lib/std/logic.hthr`

@@ -13,6 +13,10 @@
 // generic consumers over in `algebra` are exercised at a carrier whose laws
 // cost nothing, beside `Nat`, whose laws cost induction.
 
+// `logic` for the connectives the propositional order below is stated with.
+// It imports nothing, so this is a leaf-to-leaf edge and not a cycle.
+import logic;
+
 inductive Bool { False, True }
 
 fn not(b: Bool) -> Bool { match b { False => True, True => False } }
@@ -61,13 +65,46 @@ theorem or_comm(a, b: Bool): or(a, b) = or(b, a) {
     }
 }
 
-// The decided order on `Bool`, in the shape `nat`'s is: a `Bool`-valued
-// comparison whose reflexivity is an equation with `True`. `False <= True`
-// is the reading, so `leb_bool` is implication.
+// The decided order on `Bool`. `False <= True` is the reading, so the relation
+// is implication.
+//
+// `leb_bool` is the Bool-valued decision and `Le_bool` the PROPOSITION, in the
+// shape `nat`'s order took on 2026-08-16 (docs/nat-order-design.md): the
+// specification is a recursion into `Type` with no `= True` in it, and the
+// decision procedure is a separate function nothing above mentions. This
+// module needs both for the reason `nat` does — `Bool` is where Booleans are
+// genuinely the subject.
 fn leb_bool(a: Bool) -> Bool -> Bool {
     match a { False => λ (b: Bool) => True, True => λ (b: Bool) => b }
 }
 
 theorem leb_bool_refl(a: Bool): leb_bool(a)(a) = True {
     match a { False => refl, True => refl }
+}
+
+// Two constructors and no recursion, so all four cases are immediate: only
+// `True <= False` is refuted. `logic::False` is the falsity and `bool::False`
+// the constructor, one line apart and neither qualified
+// (issues/false-collides-with-bools-constructor.md).
+fn Le_bool(a: Bool) -> Bool -> Type {
+    match a {
+        False => λ (b: Bool) => True,
+        True => λ (b: Bool) => match b { False => False, True => True },
+    }
+}
+
+theorem le_bool_refl(a: Bool): Le_bool(a)(a) {
+    match a { False => trivial, True => trivial }
+}
+
+// A `fn`, not a `theorem`: a decision has to unfold in conversion
+// (docs/nat-order-design.md §2).
+fn le_bool_dec(a, b: Bool) -> Or<Le_bool(a)(b), ¬ Le_bool(a)(b)> {
+    match a as λ z => Or<Le_bool(z)(b), Not(Le_bool(z)(b))> {
+        False => Inl(trivial),
+        True => match b as λ y => Or<Le_bool(True)(y), Not(Le_bool(True)(y))> {
+            False => Inr(λ (bad: Le_bool(True)(False)) => bad),
+            True => Inl(trivial),
+        },
+    }
 }
