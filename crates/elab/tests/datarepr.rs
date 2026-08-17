@@ -88,7 +88,10 @@ fn a_fold_that_drops_the_step_is_refused_by_the_kernel() {
         "    s0",
     );
     let msg = bad(&src);
-    assert!(msg.contains("NotConvertible"), "{msg}");
+    // The rejection names the anchor law it failed, both sides spelled
+    // (issues/check-fallback-discards-expected-type.md).
+    assert!(msg.contains("is expected here"), "{msg}");
+    assert!(msg.contains("nat_rec_(B, s0,"), "{msg}");
 }
 
 /// The control that lands *inside* the generated record: every hand-written
@@ -549,7 +552,7 @@ fn a_wrong_applied_clause_is_refused_by_the_kernel() {
     let msg = bad(&src);
     assert!(!msg.contains("does not parse"), "{msg}");
     assert!(msg.contains("Succ_abs"), "{msg}");
-    assert!(msg.contains("NotConvertible"), "{msg}");
+    assert!(msg.contains("is expected here"), "{msg}");
 }
 
 /// Negative control: the hypothesis where the value goes — a type error under

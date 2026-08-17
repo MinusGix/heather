@@ -73,17 +73,17 @@ fn kernel_rejects_wrong_proof() {
     );
 }
 
+/// Renamed 2026-08-17: the rejection is still the gate's, but the *message* is
+/// the elaborator's precise one (issues/check-fallback-discards-expected-type.md).
 #[test]
-fn kernel_rejects_wrong_lemma_use() {
+fn a_wrong_lemma_use_is_rejected_naming_both_statements() {
     // sym applied with swapped endpoints: types don't line up.
     let mut e = Elaborator::with_prelude().expect("prelude");
     let r = e.elab_source(
         "theorem bogus(a: Nat, b: Nat, p: a = b): b = a { @sym(b, a, p) }",
     );
-    assert!(
-        matches!(r, Err(ElabError::Kernel { .. })),
-        "expected a kernel rejection, got {r:?}"
-    );
+    let Err(ElabError::Elab { msg, .. }) = r else { panic!("expected a rejection, got {r:?}") };
+    assert!(msg.contains("this has type `a = b`, but `b = a` is expected here"), "{msg}");
 }
 
 #[test]

@@ -99,7 +99,13 @@ fn wrong_implicit_proof_is_kernel_rejected() {
         theorem bogus(n: Nat): add(n, 0) = add(n, 0) { sym(add_zero(n)) }
         "#,
     );
-    assert!(matches!(r, Err(ElabError::Kernel { .. })), "expected a kernel rejection, got {r:?}");
+    // Reported by the gate either way; the message now names both statements
+    // (issues/check-fallback-discards-expected-type.md).
+    let Err(ElabError::Elab { msg, .. }) = r else { panic!("expected a rejection, got {r:?}") };
+    assert!(
+        msg.contains("this has type `n = add(n, 0)`, but `add(n, 0) = add(n, 0)` is expected here"),
+        "{msg}"
+    );
 }
 
 #[test]

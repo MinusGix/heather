@@ -478,9 +478,15 @@ fn a_wrongly_harvested_solution_is_still_kernel_gated() {
          fn app_nb(f: Nat -> Bool, n: Nat) -> Bool { f(n) }
          fn go(n: Nat) -> Bool { app_nb(id, n) }",
     );
+    // Still gated rather than verified by the harvest; the gate's rejection now
+    // arrives as the precise message
+    // (issues/check-fallback-discards-expected-type.md).
+    let Err(heather_elab::ElabError::Elab { msg, .. }) = r else {
+        panic!("expected a rejection, got {r:?}")
+    };
     assert!(
-        matches!(r, Err(heather_elab::ElabError::Kernel { .. })),
-        "expected a kernel rejection, got {r:?}"
+        msg.contains("this has type `Nat -> Nat`, but `Nat -> Bool` is expected here"),
+        "{msg}"
     );
 }
 

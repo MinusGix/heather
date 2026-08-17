@@ -306,6 +306,8 @@ theorem chained(n: Nat): fact(n) <= fact(Succ(Succ(n))) {
 fn positivity_needs_its_base_hypothesis() {
     bad("theorem t(n: Nat): 1 <= pow(0, n) { one_le_pow(0, n, trivial) }");
     let e = bad("theorem t(): 1 <= pow(0, 3) { trivial }");
-    assert!(e.contains("Empty"), "expected the refuted comparison to be falsity, got: {e}");
+    // `False` rather than the kernel's `Empty`: the display spells the surface
+    // name (docs/surface-type-display-design.md).
+    assert!(e.contains("False"), "expected the refuted comparison to be falsity, got: {e}");
     ok("theorem why(): pow(0, 3) = 0 { refl }");
 }

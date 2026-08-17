@@ -80,6 +80,7 @@ pub mod gate;
 pub mod stats;
 mod code;
 mod datarepr;
+mod display;
 pub use datarepr::{Obligation, Provenance};
 pub mod reprgen;
 mod names;
@@ -841,6 +842,22 @@ pub struct Elaborator {
     /// Kept only to turn an otherwise source-free kernel rejection into a
     /// diagnostic about the notation the writer actually used.
     op_fallback_notes: RefCell<Vec<String>>,
+    /// The first type mismatch this declaration's checking *noticed* but did
+    /// not raise (`issues/check-fallback-discards-expected-type.md`): the
+    /// message and the span of the expression it belongs to.
+    ///
+    /// Held rather than raised, because raising it would make the elaborator
+    /// the judge in a race it should not enter. A more specific diagnostic
+    /// further down — an arity error, an injectivity refusal, an operator
+    /// designation — is a *better* message about the same declaration, and it
+    /// is raised in the ordinary way, which now still wins. This slot is
+    /// consulted at exactly one place: the kernel gate, when the gate rejects
+    /// with `NotConvertible`, which is the case this slot has an explanation
+    /// for. Cleared per declaration next to [`Self::op_fallback_notes`], and
+    /// first-writer-wins — which names the *innermost* expression that
+    /// disagreed, since checking records on the way back out of the descent,
+    /// and the innermost one is the most specific thing to point at.
+    pending_mismatch: RefCell<Option<(String, Span)>>,
     /// While an `instance` block is being elaborated: the members that have
     /// already landed, as (written name, full name). An unqualified reference
     /// to one of them resolves to its global, which is the whole of "later
@@ -1067,6 +1084,7 @@ impl Elaborator {
             impl_provenance: None,
             decls: HashMap::new(),
             op_fallback_notes: RefCell::new(Vec::new()),
+            pending_mismatch: RefCell::new(None),
             instance_scope: Vec::new(),
             derived: Vec::new(),
             pending_derived: RefCell::new(Vec::new()),
@@ -1614,6 +1632,30 @@ impl Elaborator {
         Some(key.rsplit("::").next().unwrap_or(key).to_string())
     }
 
+    /// The absolute Ψ index a `GlobalVar` *occurring in a term being
+    /// displayed* refers to. Same inversion as [`Self::gen_def_of`]'s, and for
+    /// the same reason: the index counts from the innermost end of the padded
+    /// Ψ, so the goal region and a `meta fn`'s pushed binders both shift it.
+    /// Fully checked — a `GlobalVar` reaching here can be anything the term it
+    /// came out of contains, including one that is out of scope.
+    pub(crate) fn global_abs_of(&self, var: GlobalVar) -> Option<usize> {
+        let len = self.psi.bindings.len() as u32;
+        let abs = len
+            .checked_add(self.goal_base)?
+            .checked_add(self.meta_pushed.borrow().len() as u32)?
+            .checked_sub(var.0.checked_add(1)?)?;
+        Some(abs as usize)
+    }
+
+    /// The parameter table of the binding at absolute Ψ index `abs`, empty for
+    /// a binding that has none. The by-index companion of [`Self::params_of`].
+    pub(crate) fn params_at(&self, abs: usize) -> Rc<Vec<ParamMeta>> {
+        match self.globals.values().find(|info| info.abs as usize == abs) {
+            Some(info) => Rc::clone(&info.params),
+            None => Rc::new(Vec::new()),
+        }
+    }
+
     /// The `meta fn` claiming an analyzer slot, with the arity of its Π spine
     /// fixed by the slot's own signature
     /// (docs/certgen-transcriber-in-language-design.md §6). `None` is the
@@ -1654,6 +1696,7 @@ impl Elaborator {
             return self.elab_meta_decl(decl);
         }
         self.op_fallback_notes.borrow_mut().clear();
+        self.pending_mismatch.borrow_mut().take();
         let r = self.elab_decl_inner(decl);
         self.goal_base = 0;
         self.refresh_delta_psi();
@@ -1661,6 +1704,7 @@ impl Elaborator {
         self.goal_spans.borrow_mut().clear();
         self.frozen.set(false);
         self.op_fallback_notes.borrow_mut().clear();
+        self.pending_mismatch.borrow_mut().take();
         // The surface signature, kept for the declaration forms that have to
         // *restate* it: `impl f for Rp` computes `f`'s refinement obligation
         // by rewriting `f`'s own parameter and result types
@@ -1940,23 +1984,13 @@ impl Elaborator {
                         &self.psi, 0, Layer::Prog, &empty, &stmt, &stmt_lvl, self.fuel,
                     )
                 })
-                .map_err(|e| ElabError::Kernel {
-                    decl: decl.name.clone(),
-                    span: decl.span,
-                    err: e,
-                    note: self.operator_fallback_note(),
-                })?;
+                .map_err(|e| self.kernel_error(&decl.name, decl.span, e))?;
                 stats::time_kernel(|| {
                     typing::check_term(
                         &self.psi, 0, Layer::Code, &empty, &term, &stmt, &stmt_lvl, self.fuel,
                     )
                 })
-                .map_err(|e| ElabError::Kernel {
-                    decl: decl.name.clone(),
-                    span: decl.span,
-                    err: e,
-                    note: self.operator_fallback_note(),
-                })?;
+                .map_err(|e| self.kernel_error(&decl.name, decl.span, e))?;
                 if let Some(g) = self.gate.as_ref() {
                     g.accepted(&self.psi, &item);
                 }
@@ -2959,10 +2993,82 @@ impl Elaborator {
                 // stays as the fallback for skeleton-less expected types.
                 let suppress = matches!(&e.kind, ExprKind::Var(_))
                     && skel.is_some_and(|s| s.params.first().is_some_and(|b| b.implicit));
-                let (t, _, _) =
+                let (t, got, _) =
                     self.elab_infer_at(cx, e, if suppress { None } else { Some(&head) })?;
+                // The inferred type is *not* thrown away any more
+                // (`issues/check-fallback-discards-expected-type.md`): it is
+                // compared with what was expected, and a disagreement is
+                // recorded for the gate to report at this span. Recorded rather
+                // than raised — see [`Self::note_check_mismatch`] — so the
+                // elaborator says what it saw without becoming the judge.
+                //
+                // The cost was measured rather than assumed, because this arm
+                // is on every checking path: on the frontend suite the added
+                // conversion moves total time by less than the run-to-run noise
+                // of the suite itself (the issue's 2026-08-17 log), so the
+                // cheap variants the issue proposed — leaves only, whnf'd types
+                // only — buy nothing worth the narrowing.
+                self.note_check_mismatch(cx, &got, &head, lvl, e.span);
                 Ok(t)
             }
+        }
+    }
+
+    /// Notice what the kernel is going to reject, and where
+    /// (`issues/check-fallback-discards-expected-type.md`). Checking that ends
+    /// in inference holds an inferred type and used to drop it, so the simplest
+    /// type error in the language — a literal at the wrong type — was
+    /// discovered by the decl-final gate: at the declaration, with no span and
+    /// no types, as a bare `NotConvertible`.
+    ///
+    /// The kernel stays the judge, and this method does not even raise an error:
+    /// it fills [`Self::pending_mismatch`], which only the gate reads and only
+    /// when the gate itself rejects. `Layer::Prog` against
+    /// [`Self::goal_psi`] is [[auto-refl-empty-block]]'s gate, for its reason
+    /// (a type mentioning an outstanding goal must still be well-scoped).
+    ///
+    /// **One outcome is silence rather than an error**, and it is the
+    /// difference between reporting and judging: out of fuel is *inconclusive*
+    /// — the gate has a fresh budget and may well succeed, and a message about
+    /// two types that might yet convert is worse than no message. Only
+    /// `NotConvertible`, which is the decided answer, is reported.
+    fn note_check_mismatch(
+        &self,
+        cx: &Cx,
+        got: &Type,
+        expected: &Type,
+        lvl: &Level,
+        span: Span,
+    ) {
+        let psi = self.goal_psi();
+        if conv_type(&psi, &cx.gamma, Layer::Prog, got, expected, lvl, self.fuel)
+            != Err(heather_kernel::conv::ConvError::NotConvertible)
+        {
+            return;
+        }
+        // **Readable or silent.** This message makes a claim about two types,
+        // and a claim the reader cannot check is worse than no claim: below the
+        // bar, the gate's crisp `NotConvertible` at the declaration says less
+        // but says it honestly. So both types must spell *entirely* in surface
+        // — no raw node anywhere — and they must not spell **alike**. The
+        // look-alike case is real and is where the display's own limit shows:
+        // `And<…>` against `And<…>`, whose type arguments are the whole
+        // difference ([[display-inductive-type-arguments]]). Both filters are
+        // silence, not error: the declaration is still rejected, by the gate.
+        let Some(got_s) = self.display_type_clean(cx, got) else { return };
+        let Some(want_s) = self.display_type_clean(cx, expected) else { return };
+        if got_s == want_s {
+            return;
+        }
+        // Recorded, not raised: see [`Self::pending_mismatch`]. The gate is
+        // still the judge, and a more specific diagnostic downstream still
+        // wins the message.
+        let mut slot = self.pending_mismatch.borrow_mut();
+        if slot.is_none() {
+            *slot = Some((
+                format!("this has type `{got_s}`, but `{want_s}` is expected here"),
+                span,
+            ));
         }
     }
 
@@ -4770,7 +4876,12 @@ impl Elaborator {
             let t = t as usize;
             return Ok(wf::fin_index(t, t + 1, &base));
         }
-        let (num, _, _) = self.elab_infer(cx, e)?;
+        // A numeral is the leaf case of
+        // `issues/check-fallback-discards-expected-type.md`: its inferred type
+        // is `Nat` without any work at all, so comparing costs one conversion
+        // against a type the caller already had.
+        let (num, num_ty, _) = self.elab_infer(cx, e)?;
+        self.note_check_mismatch(cx, &num_ty, expected, &Level::Zero, span);
         Ok(num)
     }
 
@@ -6054,6 +6165,35 @@ impl Elaborator {
     fn operator_fallback_note(&self) -> Option<String> {
         let notes = self.op_fallback_notes.borrow();
         (!notes.is_empty()).then(|| notes.join("; "))
+    }
+
+    /// The gate's rejection, said as well as it can be said
+    /// (`issues/check-fallback-discards-expected-type.md`). A bare
+    /// `NotConvertible` at the declaration is what this exists to avoid: when
+    /// checking noticed *which* expression disagreed and could state both
+    /// types, that report replaces the kernel one — same rejection, at a span,
+    /// with the types. Any other `TypeError` keeps the kernel's own report,
+    /// because this slot has no claim about it.
+    ///
+    /// The operator note travels either way: it explains a designation that was
+    /// resolved by fallback, which is as relevant to the precise message as to
+    /// the bare one.
+    fn kernel_error(&self, decl: &str, span: Span, e: TypeError) -> ElabError {
+        if e == TypeError::NotConvertible
+            && let Some((msg, at)) = self.pending_mismatch.borrow().clone()
+        {
+            let msg = match self.operator_fallback_note() {
+                Some(note) => format!("{msg} (note: {note})"),
+                None => msg,
+            };
+            return ElabError::Elab { msg, span: at };
+        }
+        ElabError::Kernel {
+            decl: decl.to_string(),
+            span,
+            err: e,
+            note: self.operator_fallback_note(),
+        }
     }
 
     /// The head of the carrier an operator application is at — rung 2's probe
@@ -9001,29 +9141,58 @@ impl Elaborator {
             .map_err(|_| ElabError::Elab { msg: "out of fuel reducing a type".into(), span })
     }
 
-    /// Expose just enough of a lazy `El(code)` to give a human its decoded
-    /// head. Keep this separate from checking: a hostile or merely long
-    /// definition chain falls back to the original, budget-bounded `Debug`
-    /// rendering instead of consuming elaboration fuel or changing the type.
+    /// A type as a human should read it (docs/surface-type-display-design.md
+    /// §3). Three stages, in this order:
+    ///
+    /// 1. **The reader.** Expose just enough of a lazy `El(code)` to give its
+    ///    decoded head. Where a head exists it is the more informative answer —
+    ///    `fn N(v: Nat) -> Type { Nat }` at `N(v)` prints `Nat`, which is what
+    ///    the type *is*.
+    /// 2. **The speller** ([`Self::spell_type`]), on the decoded head when
+    ///    there was one and on the original otherwise. This is what a `fn … ->
+    ///    Type` relation at open arguments needs (no head exists, irreducibly)
+    ///    and what an `Id` between two calls needs (never `El`-headed, so
+    ///    stage 1 declines in its first line).
+    /// 3. The original, budget-bounded `Debug`.
+    ///
+    /// Keep all of this separate from checking: a hostile or merely long
+    /// definition chain degrades the message instead of consuming elaboration
+    /// fuel or changing the type.
     fn display_type(&self, cx: &Cx, ty: &Type) -> String {
-        let raw = || dress_true(&format!("{ty:?}"));
-        if !matches!(ty, Type::El { .. }) {
-            return raw();
+        let decoded = self.display_decode(cx, ty);
+        let target = decoded.as_ref().unwrap_or(ty);
+        match self.spell_type(cx, target) {
+            Some(s) => s,
+            None => dress_true(&format!("{target:?}")),
         }
+    }
 
+    /// [`Self::display_type`] for a message that *claims* something about the
+    /// type rather than merely showing it: `None` unless the whole type spelled
+    /// as surface. Same two stages, no raw fallback.
+    fn display_type_clean(&self, cx: &Cx, ty: &Type) -> Option<String> {
+        let decoded = self.display_decode(cx, ty);
+        self.spell_type_clean(cx, decoded.as_ref().unwrap_or(ty))
+    }
+
+    /// Stage 1 of [`Self::display_type`]: the [[goal-display-decodes]] reader,
+    /// unchanged. `None` when `ty` is not `El`-headed, when a step gets stuck,
+    /// or when the budget runs out — the three cases where there is no head to
+    /// have.
+    fn display_decode(&self, cx: &Cx, ty: &Type) -> Option<Type> {
+        if !matches!(ty, Type::El { .. }) {
+            return None;
+        }
         let psi = self.oracle_psi();
         let defs = Defs::transparent(&psi);
         let mut head = ty.clone();
         for _ in 0..DISPLAY_DECODE_STEPS {
-            let Some(next) = step_type_delta(&head, &cx.gamma, defs) else {
-                return raw();
-            };
-            head = next;
+            head = step_type_delta(&head, &cx.gamma, defs)?;
             if !matches!(head, Type::El { .. }) {
-                return dress_true(&format!("{head:?}"));
+                return Some(head);
             }
         }
-        raw()
+        None
     }
 
     /// [`Self::delta_psi`], padded with the meta binders currently in scope

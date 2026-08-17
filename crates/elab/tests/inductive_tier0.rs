@@ -467,8 +467,10 @@ fn a_parameter_at_a_dependent_type_is_not_captured_by_an_earlier_field() {
         "inductive Box2<A> { Mk(x: Nat, y: A) }
          fn mk(n: Nat, q: 3 = 3) -> Box2<n = n> { Mk(3, q) }",
     );
+    // And the message now tells the two apart itself, which is the property
+    // this test is about (issues/check-fallback-discards-expected-type.md).
     assert!(
-        msg.contains("rejected"),
+        msg.contains("this has type `3 = 3`, but `n = n` is expected here"),
         "a proof of `3 = 3` was accepted where `n = n` was written: {msg}"
     );
     // …and the field really is `n = n`: projecting it back out proves it.

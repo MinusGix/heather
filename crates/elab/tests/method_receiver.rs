@@ -46,7 +46,9 @@ fn the_old_backwards_spelling_is_now_rejected() {
     let e = bad("theorem backwards(a: Nat, b: Nat, c: Nat, p: a = b, q: b = c): a = c {
                      q.trans(p)
                  }");
-    assert!(e.contains("NotConvertible"), "{e}");
+    // The receiver is `q : b = c`, so `q.trans(p)` proves `b = b`, not `a = c`
+    // (issues/check-fallback-discards-expected-type.md names both).
+    assert!(e.contains("this has type `b = b`, but `a = c` is expected here"), "{e}");
 }
 
 // A unary lemma is indifferent to the whole question, and must stay free of

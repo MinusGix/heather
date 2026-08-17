@@ -250,5 +250,9 @@ fn a_domain_that_disagrees_with_its_field_is_rejected() {
         fn bad(b: Bool) -> Box { ap(Wrap, b) }
         "#,
     );
-    assert!(msg.contains("NotConvertible") || msg.contains("kernel"), "{msg}");
+    // The rejection now names the two types at the offending argument rather
+    // than arriving as a bare kernel `NotConvertible`
+    // (issues/check-fallback-discards-expected-type.md) — which is a sharper
+    // pin on *this* hazard: the field is a `Nat` and the domain a `Bool`.
+    assert!(msg.contains("this has type `Bool`, but `Nat` is expected here"), "{msg}");
 }

@@ -382,7 +382,8 @@ impl length for ListTok {{
 }}
 "
     ));
-    assert!(msg.contains("NotConvertible"), "{msg}");
+    assert!(msg.contains("is expected here"), "{msg}");
+    assert!(msg.contains("length_derived(r)"), "{msg}");
 }
 
 /// A route that is not a route is not silently a name: the `:=` body form takes

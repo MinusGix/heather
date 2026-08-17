@@ -304,7 +304,9 @@ theorem u(P: Type, Q: Type, h: Iff<(n: Nat) -> P, Q>): ((n: Nat) -> P) ↔ Q { h
     let err = bad(
         "theorem t(P: Type, Q: Type, h: P -> Iff<Q, Q -> P>): P -> Q ↔ Q -> P { h }",
     );
-    assert!(err.contains("NotConvertible") || err.contains("mismatch"), "got: {err}");
+    // The rival reading is refused with both readings spelled
+    // (issues/check-fallback-discards-expected-type.md).
+    assert!(err.contains("this has type `P -> Iff<…>`"), "got: {err}");
 }
 
 /// A type-argument-applied type as a connective's left operand. `ty_atom`

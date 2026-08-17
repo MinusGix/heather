@@ -236,9 +236,10 @@ fn an_undischarged_goal_is_listed() {
     assert_eq!(goals[0].name, "step");
     // The listing carries the statement and the context the discharge may use
     // — including the arm's `k`, which is the non-obvious part.
-    // Rendered with the kernel's budget-bounded `Debug` (kernel/src/fmt.rs),
-    // so an equality goal reads as `Id[l](A; lhs; rhs)`.
-    assert!(goals[0].statement.starts_with("Id["), "statement: {}", goals[0].statement);
+    // Rendered as surface (docs/surface-type-display-design.md), so an
+    // equality goal reads the way it was written rather than as
+    // `Id[l](A; lhs; rhs)`.
+    assert_eq!(goals[0].statement, "add(Succ(k), 0) = Succ(k)");
     let ctx: Vec<&str> = goals[0].context.iter().map(|(n, _)| n.as_str()).collect();
     assert!(ctx.contains(&"n") && ctx.contains(&"k"), "context: {ctx:?}");
     // The elaborator's own hidden ih binder is unspellable, so it is not
@@ -319,8 +320,14 @@ fn a_type_value_goal_is_decoded_for_the_listing() {
     assert_eq!(goals[0].statement, "Nat");
 }
 
+/// Exhausting the display reader no longer means printing raw: the **speller**
+/// takes over and prints the code as the call it is
+/// (docs/surface-type-display-design.md §3, which states this consequence).
+/// The refusal-rather-than-guess control moved to the speller's own tests in
+/// `crates/elab/src/display.rs`, since a type it cannot spell is not writable
+/// in the surface language.
 #[test]
-fn goal_display_decode_exhaustion_falls_back_to_the_raw_type() {
+fn goal_display_decode_exhaustion_falls_back_to_the_speller() {
     let mut src = "fn T0(v: Nat) -> Type { Nat }\n".to_string();
     for i in 1..=40 {
         src.push_str(&format!("fn T{i}(v: Nat) -> Type {{ T{}(v) }}\n", i - 1));
@@ -331,7 +338,7 @@ fn goal_display_decode_exhaustion_falls_back_to_the_raw_type() {
     let ElabError::UnsolvedGoals { goals, .. } = r else {
         panic!("expected an unsolved-goal listing");
     };
-    assert!(goals[0].statement.starts_with("El["), "{}", goals[0].statement);
+    assert_eq!(goals[0].statement, "T40(v)");
 }
 
 #[test]
@@ -432,7 +439,7 @@ fn a_deferred_hole_is_named_and_stated() {
         panic!("expected an unsolved-goal listing");
     };
     assert_eq!(goals[0].name, "p");
-    assert!(goals[0].statement.starts_with("Id["), "statement: {}", goals[0].statement);
+    assert_eq!(goals[0].statement, "add(n, 0) = n");
 }
 
 #[test]

@@ -184,7 +184,12 @@ fn le_is_the_proposition_and_not_the_boolean() {
     // because the two are different things.
     let e = with_order_kit("theorem bool_is_not_a_proof(n: Nat, m: Nat): n <= m { leb(n)(m) }")
         .expect_err("a Bool must not inhabit the proposition");
-    assert!(e.contains("NotConvertible"), "should die in the kernel, not the parser: {e}");
+    // Rejected at the gate, not by the parser, and the message says which two
+    // things were confused (issues/check-fallback-discards-expected-type.md).
+    assert!(
+        e.contains("this has type `Bool`, but `leb(n, m) = True` is expected here"),
+        "should die in the kernel, not the parser: {e}"
+    );
 }
 
 #[test]
