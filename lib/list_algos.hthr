@@ -3,14 +3,19 @@
 //
 // Revised (2026-08-05) onto the round's three features: receiver-reached
 // members (`xs.nth(i)`), call-site over-application (`plusl(n, m)`,
-// `leb_false_flip(x, h, e)`), and the empty proof block (`{}`). The
+// `nth_append_l(t, ys, k, a, p)`), and the empty proof block (`{}`). The
 // before/after of each proof is recorded in
 // issues/list-algorithms-exercise.md.
+//
+// Revised again (2026-08-17): the insertion-sort half went PROPOSITIONAL, and
+// the `Bool` kit it rested on is gone. That section carries its own
+// before/after, because it is the measurement issues/decide-class.md was
+// filed to take.
 
 import list;
 import nat;
 import option;
-import bool;
+import logic;
 
 // ---------------------------------------------------------------------------
 // congruences this file needs. `cong_nat` (nat) is the model: a general `cong`
@@ -107,32 +112,50 @@ theorem nth_append_l<A>(xs: List<A>, ys: List<A>):
 // ---------------------------------------------------------------------------
 // insertion sort, and the proof that it sorts.
 //
-// Sortedness is decided rather than declared, like `nat::Le`: `sortedb` is a
-// `Bool` and the statement is `sortedb(xs) = True`.
+// Sortedness is DECLARED, not decided (restated 2026-08-17,
+// issues/decide-class.md's acceptance). It used to be a `Bool` — `sortedb` —
+// with every statement in the section reading `sortedb(xs) = True`, matching
+// the `leb(n, m) = True` spelling `std/nat` used before its order went
+// propositional. Both halves are retired by issues/class-ops-prop-vs-bool.md:
+// no `Bool` in a specification and no `= True` anywhere.
+//
+// What that cost and what it bought is the measurement this section exists to
+// record, and it is one-sided. GONE: `andb`, `le_head`, `sortedb`, `ins_pick`,
+// the four `cong_*` congruences, the three `andb_true*` lemmas, and
+// `leb_false_flip` — thirteen declarations. ARRIVED: `LeHead` and `Sorted`,
+// two recursions into `Type`, plus one line in `std/nat` (`le_of_not_le`).
+// The proofs below lost every `j`, every `trans`, and every congruence: the
+// decided branch is reached by a `match` whose motive names the scrutinee, so
+// there is no equation to rewrite along and nothing to transport.
 
-fn andb(a: Bool, b: Bool) -> Bool { match a { False => False, True => b } }
-
-fn le_head(x: Nat, xs: List<Nat>) -> Bool {
-    match xs { Nil => True, Cons(h, t) => leb(x, h) }
+// `LeHead(x, xs)` — `x` is below `xs`'s head, vacuously at `Nil`. The `True`
+// here is the kernel's `Unit^0`, so the vacuous case is proof-irrelevant for
+// free and `trivial` closes it.
+fn LeHead(x: Nat, xs: List<Nat>) -> Type {
+    match xs { Nil => True, Cons(h, t) => Le(x, h) }
 }
 
-fn sortedb(xs: List<Nat>) -> Bool {
-    match xs { Nil => True, Cons(h, t) => andb(le_head(h, t), sortedb(t)) }
+// Sortedness as a conjunction rather than an `andb`. `And` is a record, so its
+// elimination is field access — which is precisely what retires `andb_true_l`
+// and `andb_true_r`: `hs.left` and `hs.right` are the same two facts with no
+// lemma between them.
+fn Sorted(xs: List<Nat>) -> Type {
+    match xs { Nil => True, Cons(h, t) => And<LeHead(h, t), Sorted(t)> }
 }
 
-// `insert`'s branch is a separate `fn` taking the recursive result as an
-// argument. Written inline as a nested `match`, the two branches are stuck
-// under a `Bool` scrutinee that no equation can reduce, so every lemma about
-// `insert` would need the convoy pattern; hoisted, one `j` on the scrutinee
-// does it.
-fn ins_pick(b: Bool, x: Nat, h: Nat, t: List<Nat>, rec: List<Nat>) -> List<Nat> {
-    match b { False => Cons(h, rec), True => Cons(x, Cons(h, t)) }
-}
-
+// `insert` branches through `logic::or_pick`, and needs no hoisted `ins_pick`
+// of its own any more. The reason the old one existed — a `match` on a stuck
+// `Bool` scrutinee is unreachable from the goal, so every lemma needed a
+// convoy — is answered generically by `or_pick`, whose consumers reach the
+// branch by a motive that names the scrutinee directly.
+//
+// `or_pick(d, x, y)` picks `y` on `Inl`, so the proved side (`Le(x, h)`, i.e.
+// `x` belongs first) is the second value.
 fn insert(x: Nat, xs: List<Nat>) -> List<Nat> {
     match xs {
         Nil => Cons(x, Nil),
-        Cons(h, t) => ins_pick(leb(x, h), x, h, t, insert(x, t)),
+        Cons(h, t) =>
+            or_pick(le_dec(x, h), Cons(h, insert(x, t)), Cons(x, Cons(h, t))),
     }
 }
 
@@ -140,117 +163,48 @@ fn isort(xs: List<Nat>) -> List<Nat> {
     match xs { Nil => Nil, Cons(h, t) => insert(h, isort(t)) }
 }
 
-// Congruences, one per position that a rewrite has to reach.
-theorem cong_sortedb({a: List<Nat>}, {b: List<Nat>}, p: a = b):
-    sortedb(a) = sortedb(b)
-{
-    j(p, λ y q => sortedb(a) = sortedb(y), refl)
-}
-
-theorem cong_le_head(h: Nat, {a: List<Nat>}, {b: List<Nat>}, p: a = b):
-    le_head(h, a) = le_head(h, b)
-{
-    j(p, λ y q => le_head(h, a) = le_head(h, y), refl)
-}
-
-theorem cong_andb_l({a: Bool}, {b: Bool}, c: Bool, p: a = b):
-    andb(a, c) = andb(b, c)
-{
-    j(p, λ y q => andb(a, c) = andb(y, c), refl)
-}
-
-theorem cong_ins_pick({a: Bool}, {b: Bool}, x: Nat, h: Nat, t: List<Nat>,
-                      r: List<Nat>, p: a = b):
-    ins_pick(a, x, h, t, r) = ins_pick(b, x, h, t, r)
-{
-    j(p, λ y q => ins_pick(a, x, h, t, r) = ins_pick(y, x, h, t, r), refl)
-}
-
-// The `Bool` conjunction kit. Each of these is stated as a *function* of its
-// hypotheses so that the `match` on `a` abstracts them too: a hypothesis
-// written as a parameter would keep mentioning `a` after the split.
-theorem andb_true_l(a: Bool, b: Bool): andb(a, b) = True -> a = True {
-    match a { False => λ p => absurd(p), True => λ p => refl }
-}
-
-theorem andb_true_r(a: Bool, b: Bool): andb(a, b) = True -> b = True {
-    match a { False => λ p => absurd(p), True => λ p => p }
-}
-
-theorem andb_true(a: Bool, b: Bool): a = True -> b = True -> andb(a, b) = True {
-    match a {
-        False => λ p q => absurd(p),
-        True => λ p q => q,
-    }
-}
-
-// `leb` is total: a failed comparison is the other one succeeding. Induction
-// on `x` with `y` generalized — the varying-argument shape again, so the
-// statement returns a function.
-theorem leb_false_flip(x: Nat): (y: Nat) -> leb(x, y) = False -> leb(y, x) = True {
-    match x {
-        Zero => λ y p => absurd(p),
-        Succ(k) => λ y =>
-            match y {
-                Zero => λ p => {},
-                Succ(l) => λ p => leb_false_flip(k, l, p),
-            },
-    }
-}
-
 // Inserting below a head keeps the head below everything. Two case splits and
-// no recursion: `t`, and then the `Bool` that `insert` branched on — which
-// only a convoy (`as λ b => (scrut = b) -> …`, applied to `refl`) makes
-// available as an equation.
+// no recursion, exactly as before — but the second split is on the DECISION,
+// and its motive reaches `or_pick`'s own scrutinee, so each arm's goal has
+// already reduced to the branch that arm picked. Both arms are a hypothesis
+// handed back unchanged.
 theorem le_head_insert(h: Nat, x: Nat, t: List<Nat>):
-    leb(h, x) = True -> le_head(h, t) = True -> le_head(h, insert(x, t)) = True
+    Le(h, x) -> LeHead(h, t) -> LeHead(h, insert(x, t))
 {
     match t {
         Nil => λ hx ht => hx,
         Cons(h2, t2) => λ hx ht =>
-            match leb(x, h2) as λ b =>
-                (leb(x, h2) = b) -> le_head(h, insert(x, Cons(h2, t2))) = True
+            match le_dec(x, h2) as λ d =>
+                LeHead(h, or_pick(d, Cons(h2, insert(x, t2)), Cons(x, Cons(h2, t2))))
             {
-                False => λ e =>
-                    trans(cong_le_head(h,
-                              cong_ins_pick(x, h2, t2, insert(x, t2), e)), ht),
-                True => λ e =>
-                    trans(cong_le_head(h,
-                              cong_ins_pick(x, h2, t2, insert(x, t2), e)), hx),
-            }(refl),
+                Inl(good) => hx,
+                Inr(bad) => ht,
+            },
     }
 }
 
-theorem insert_sorted(x: Nat, xs: List<Nat>):
-    sortedb(xs) = True -> sortedb(insert(x, xs)) = True
-{
+// The main lemma. `hs.left` and `hs.right` replace the two `andb_true_*`
+// projections; `le_of_not_le` replaces `leb_false_flip`; and `And(…, …)`
+// replaces `andb_true`. The refuting branch is the only one that works, and
+// what it does is assemble the conjunction the goal already asks for.
+theorem insert_sorted(x: Nat, xs: List<Nat>): Sorted(xs) -> Sorted(insert(x, xs)) {
     match xs {
-        Nil => λ hs => {},
+        Nil => λ hs => And(trivial, trivial),
         Cons(h, t) => λ hs =>
-            match leb(x, h) as λ b =>
-                (leb(x, h) = b) -> sortedb(insert(x, Cons(h, t))) = True
+            match le_dec(x, h) as λ d =>
+                Sorted(or_pick(d, Cons(h, insert(x, t)), Cons(x, Cons(h, t))))
             {
-                False => λ e => {
-                    let ht = andb_true_l(le_head(h, t), sortedb(t), hs);
-                    let hst = andb_true_r(le_head(h, t), sortedb(t), hs);
-                    let hx = leb_false_flip(x, h, e);
-                    trans(
-                        cong_sortedb(cong_ins_pick(x, h, t, insert(x, t), e)),
-                        andb_true(le_head(h, insert(x, t)), sortedb(insert(x, t)),
-                            le_head_insert(h, x, t, hx, ht),
-                            insert_sorted(x, t, hst)))
-                },
-                True => λ e =>
-                    trans(
-                        cong_sortedb(cong_ins_pick(x, h, t, insert(x, t), e)),
-                        trans(cong_andb_l(sortedb(Cons(h, t)), e), hs)),
-            }(refl),
+                Inl(good) => And(good, hs),
+                Inr(bad) => And(
+                    le_head_insert(h, x, t, le_of_not_le(x, h, bad), hs.left),
+                    insert_sorted(x, t, hs.right)),
+            },
     }
 }
 
-theorem isort_sorted(xs: List<Nat>): sortedb(isort(xs)) = True {
+theorem isort_sorted(xs: List<Nat>): Sorted(isort(xs)) {
     match xs {
-        Nil => {},
+        Nil => trivial,
         Cons(h, t) => insert_sorted(h, isort(t), isort_sorted(t)),
     }
 }

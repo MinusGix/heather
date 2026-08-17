@@ -405,8 +405,11 @@ fn magop<A: Mag>(x: A, y: A) -> A {{ x.op(y) }}
 instance<A: Mag> Mag<A> {{ op := magop }}
 "
     ));
+    // The owner rule's wording widened 2026-08-17 ("a type or a type former",
+    // `docs/decide-class-design.md` §2.3); a bare type parameter is neither, so
+    // this is refused on exactly the path it always was.
     assert!(
-        e.contains("head type name") || e.contains("not a type in scope"),
+        e.contains("head type name") || e.contains("not a type"),
         "{e}"
     );
 }

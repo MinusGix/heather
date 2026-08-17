@@ -3,7 +3,7 @@ title: "Meta: the std API waves for Nat, List and Int"
 status: open
 labels: [stdlib,meta,design]
 created: 2026-08-16
-updated: 2026-08-16
+updated: 2026-08-17
 ---
 
 Organizing issue for a deliberate **library** push rather than a feature push
@@ -27,19 +27,31 @@ laws, `map` with **none**, `List::nth`. `std/option`: three functions.
 |---|---|---|
 | 0 | ✅ **landed 2026-08-16** — `Empty`/`Not`/`And`/`Or`/`Iff`/`Exists` + `¬ ∧ ∨ ↔ ∃ ∀` | [[std-logic-module]] (closed) |
 | 1 | ✅ **mostly landed 2026-08-16** — `Le` by recursion, `Lt`, the order + strict kit, `le_dec`, `le_iff_exists_add`; `sub` kit and `min`/`max` deferred | [[nat-order-kit]] |
-| 2 | `succ_inj`, `succ_ne_zero`, `Decide` at `Nat` equality and order | [[decide-class]] |
+| 2 | ✅ **mostly landed 2026-08-17** — `succ_inj`, `succ_ne_zero`, `zero_ne_succ`, `eq_dec`, `le_of_not_le`, and `Decide` over the connectives; `Decide` **at** `Nat` equality and order is blocked, see below | [[decide-class]] |
 | 3 | `add_le_mono`, `mul_le_mono`, cancellation; `pow`, `half`/`even`/`odd`, `fact` | [[nat-order-kit]] (arith half unowned — file when scheduled) |
 | 4 | `Nat::iter`/fold with `add`/`mul`/`pow` as instances | [[datatype-container-algebras]] |
 | L1 | `len`/`rev` into `std/list`, retire `plusl`; `foldr`/`foldl`, `filter`, `take`/`drop`, `replicate`, `zip`, `head`/`tail`/`last` | unowned — file when scheduled |
 | L2 | the absent `map` laws: `map_id`, `map_map`, `map_append`, `len_map`, `len_append`, `rev_len`, `foldr_append` | unowned — file when scheduled |
-| L3 | `Mem` and `Sorted` by recursion into Prop; `insert`/`isort` restated with both correctness halves | [[decide-class]] (acceptance) |
+| L3 | `Mem` by recursion into Prop; the **permutation** half of `insert`/`isort` correctness. `Sorted` and the sortedness half landed 2026-08-17 in `lib/list_algos.hthr` | unowned — file when scheduled |
 | L4 | permutation | unowned; forks on `count`-with-decidable-eq vs a `Perm` relation needing [[indexed-families]] |
 | I | `Int` | [[std-int-encoding]] |
 
-**Sequencing: 0 → 1 → 2 → L1 → L2, then reassess.** Wave 0 landed 2026-08-16;
-the rest are writable today. L3 and everything algorithmic sit behind [[decide-class]]; L4 and any
-derivation-shaped relation sit behind [[indexed-families]]; `Int` is
-deliberately last because it is the stress round, not an API round.
+**Sequencing: 0 → 1 → 2 → L1 → L2, then reassess.** Waves 0, 1 and 2 landed
+2026-08-16/17; the rest are writable today. L4 and any derivation-shaped
+relation sit behind [[indexed-families]]; `Int` is deliberately last because it
+is the stress round, not an API round.
+
+**L3 is no longer simply "behind `Decide`", and that is wave 2's main
+sequencing datum.** `Decide` landed complete over the *connectives* and absent
+at the *relations*, because an instance cannot be generic over a value
+([[value-generic-instances]]). So an algorithmic wave has two routes and they
+have different costs: state `Mem`/`Sorted` by recursion and decide by **calling
+`le_dec`/`eq_dec` directly**, which works today and is exactly what the
+`list_algos` restatement does; or wait for the class to reach relations, which
+wants [[value-generic-instances]] and, for anything mentioning an equation,
+[[decidable-equation-carrier]]. The first route costs nothing and loses only
+that the decider is named rather than found — so **L3 is unblocked**, and
+whoever takes it should expect to name deciders.
 
 ## Two things this push is *for*, beyond the API
 
@@ -93,3 +105,4 @@ datum.
   (type arguments recovered from the value arguments' own types, first-order
   and domain-only). [[ih-generalization]] stands as the one gap wave 1 has to
   live with, and it shapes the spelling rather than blocking the work.
+- 2026-08-17: Wave 2 landed ([[decide-class]], docs/decide-class-design.md). The sequencing datum it produced: Decide splits along a line the wave list did not anticipate — complete over the connectives, absent at the relations, because an instance cannot bind a value parameter ([[value-generic-instances]]). L3 is therefore UNBLOCKED rather than waiting: state the relation by recursion and call the decider by name, which is what lib/list_algos.hthr now does. The ranking this round produced, in order: value-generic instances (blocks the class from ever reaching a relation), the equation carrier key, and resolution's candidate fan-out. None was on the list before wave 2 started.

@@ -110,6 +110,25 @@ fn head_name(t: &Ty) -> Option<&str> {
     match &t.kind {
         TyKind::Nat => Some("Nat"),
         TyKind::Named { name, .. } => Some(name),
+        // An **applied type former** — `Le(n, m)`, `Not(P)` — whose head is the
+        // former's own name (widened 2026-08-17, docs/decide-class-design.md §2).
+        // A proposition stated by recursion into `Type` is the carrier a
+        // decidability class is *for*, and it arrives here as an ordinary
+        // application rather than as a `Named` type, because `Le` is a `fn`.
+        //
+        // Deliberately NOT `TyKind::Eq`: an equation's head would have to be one
+        // reserved key for every equality at every type, so `Decide<n = m>` at
+        // `Nat` and at `Bool` would collide as duplicates. Keying that needs the
+        // endpoints' type in the key, which is the (class, carrier-syntax) key
+        // §7.1 defers to layer 2 — the one case of this round that genuinely
+        // wants it (issues/decidable-equation-carrier.md).
+        TyKind::OfExpr(e) => match &e.kind {
+            ExprKind::App { head, .. } => match &head.kind {
+                ExprKind::Var(name) => Some(name),
+                _ => None,
+            },
+            _ => None,
+        },
         _ => None,
     }
 }
@@ -509,6 +528,27 @@ fn ty_size(t: &Ty) -> usize {
         TyKind::Named { args, .. } => 1 + args.iter().map(ty_size).sum::<usize>(),
         TyKind::Vec { elem, .. } => 1 + ty_size(elem),
         TyKind::Fn { dom, cod, .. } => 1 + ty_size(dom) + ty_size(cod),
+        // An applied type former (`Not(P)`, `Le(n, m)`) is a carrier as of the
+        // 2026-08-17 widening, so the measure has to see into it. Falling
+        // through to `1` was harmless only while such a carrier could not be
+        // declared: a head of size 1 admits no strictly smaller subgoal, so
+        // every instance at one refused, whatever it required.
+        TyKind::OfExpr(e) => expr_size(e),
+        _ => 1,
+    }
+}
+
+/// [`ty_size`] through an application's expression spine. An argument that is
+/// itself a type (a `TyApp`'s) re-enters [`ty_size`], so `Not(P)` and `And<P, Q>`
+/// are measured on one scale and a mixed carrier cannot game the comparison.
+fn expr_size(e: &Expr) -> usize {
+    match &e.kind {
+        ExprKind::App { head, args, .. } => {
+            expr_size(head) + args.iter().map(expr_size).sum::<usize>()
+        }
+        ExprKind::TyApp { head, args } => {
+            expr_size(head) + args.iter().map(ty_size).sum::<usize>()
+        }
         _ => 1,
     }
 }
@@ -524,6 +564,28 @@ fn ty_var_count(t: &Ty, v: &str) -> usize {
         }
         TyKind::Vec { elem, .. } => ty_var_count(elem, v),
         TyKind::Fn { dom, cod, .. } => ty_var_count(dom, v) + ty_var_count(cod, v),
+        // The occurrence half of the same widening: a parameter of an applied
+        // former (`Not(P)`'s `P`) is a bare occurrence exactly as `And<P, Q>`'s
+        // is, and Paterson's second condition has to count it.
+        TyKind::OfExpr(e) => expr_var_count(e, v),
+        _ => 0,
+    }
+}
+
+/// [`ty_var_count`] through an application's expression spine.
+fn expr_var_count(e: &Expr, v: &str) -> usize {
+    match &e.kind {
+        // The head is walked rather than skipped. A former's own name is never
+        // one of the carrier's variables, so in practice this adds zero; if it
+        // ever did not, a higher count on the *subgoal* side is the direction
+        // that refuses, which is the safe way to be wrong.
+        ExprKind::App { head, args, .. } => {
+            expr_var_count(head, v) + args.iter().map(|a| expr_var_count(a, v)).sum::<usize>()
+        }
+        ExprKind::TyApp { head, args } => {
+            expr_var_count(head, v) + args.iter().map(|a| ty_var_count(a, v)).sum::<usize>()
+        }
+        ExprKind::Var(name) => (name == v) as usize,
         _ => 0,
     }
 }
@@ -1197,11 +1259,11 @@ impl Elaborator {
         let head = head.to_string();
         // A type parameter of this very declaration is not a carrier: it names
         // no head, so keying on it would key on a binder.
-        if !self.names_a_type(&head) || d.tyvars.contains(&head) {
+        if !self.names_a_carrier(&head) || d.tyvars.contains(&head) {
             return err(
                 format!(
-                    "`{head}` is not a type in scope, so a designation of `{}` at it \
-                     attaches to nothing",
+                    "`{head}` is not a type or a type former in scope, so a designation \
+                     of `{}` at it attaches to nothing",
                     d.symbol
                 ),
                 d.carrier.span,
@@ -1330,10 +1392,11 @@ impl Elaborator {
             );
         };
         let head = head.to_string();
-        if !self.names_a_type(&head) {
+        if !self.names_a_carrier(&head) {
             return err(
                 format!(
-                    "`{head}` is not a type in scope, so `{head}::{}` attaches to nothing",
+                    "`{head}` is not a type or a type former in scope, so `{head}::{}` \
+                     attaches to nothing",
                     d.class.name
                 ),
                 carrier.span,

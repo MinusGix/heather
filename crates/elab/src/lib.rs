@@ -1689,12 +1689,21 @@ impl Elaborator {
         // namespace and is reached through the receiver or by qualification.
         let member = split_qual(&decl.name);
         if let Some((owner, base)) = member {
-            if !self.names_a_type(owner) {
+            // A **type former** owns a namespace too, as of the 2026-08-17
+            // carrier widening (docs/decide-class-design.md §2): `Le::Decide` is
+            // the canonical name of the decidability instance at `Le`, and it is
+            // an ordinary member declaration like every other instance value.
+            // Widened here rather than only on the instance path, so that the
+            // owner rule is one rule — an instance's canonical name has never
+            // been a special kind of declaration, and making it one to avoid
+            // this line would be the first time it was.
+            if !self.names_a_carrier(owner) {
                 return err(
                     format!(
-                        "`{owner}` is not a type in scope, so `{}` attaches to nothing — \
-                         a member declaration is `fn <Type>::{base}(…)` and the type \
-                         must be declared (or be a kernel type) before it",
+                        "`{owner}` is not a type or a type former in scope, so `{}` \
+                         attaches to nothing — a member declaration is \
+                         `fn <Type>::{base}(…)` and the type must be declared (or be a \
+                         kernel type) before it",
                         decl.name
                     ),
                     decl.span,
@@ -4451,8 +4460,8 @@ impl Elaborator {
         // site (issues/call-site-overapplication.md). This is the case that
         // matters most, because the curried-return workaround for a varying
         // argument (issues/ih-generalization.md) makes every use of such an ih
-        // an over-application: `leb_false_flip(k, l, p)` for
-        // `leb_false_flip(k)(l, p)`.
+        // an over-application: `le_add(n2, m2, good)` for `le_add(n2)(m2, good)`
+        // (`lib/std/nat.hthr`).
         let (args, spill) = args.split_at(positions.len());
         // Which descendant the call goes to, once the decreasing argument has
         // been matched: `Nat` has only one, a `Wf` arm has one per recursive
@@ -6049,7 +6058,56 @@ impl Elaborator {
     /// declaration's qualifier, so a false answer costs a rejection at the
     /// declaration and never a mis-resolution at a use.
     fn names_a_type(&self, name: &str) -> bool {
-        self.lookup_inductive(name).is_some() || name == "Nat" || name == "Type"
+        // `True` for the same reason `Nat` is here: a kernel type (`Unit^0`)
+        // claimed as a surface type name with no declaration behind it
+        // (`inductive.rs`'s claim, issues/true-prop-trivial-hypotheses.md). A
+        // file that declares its own `True` is answered by `lookup_inductive`
+        // first, exactly as the claim itself is.
+        self.lookup_inductive(name).is_some()
+            || name == "Nat"
+            || name == "Type"
+            || name == "True"
+    }
+
+    /// Does this name refer to a **type former** — a global whose result, after
+    /// every argument is supplied, is a universe? `Not : Π(P: Ty l). Ty l` and
+    /// `Le : Π(n: Nat). Π(m: Nat). Ty 0` both answer yes.
+    ///
+    /// This is the *carrier-owner* half of an instance's canonical name
+    /// (docs/traits-layer1-design.md §4.1, widened 2026-08-17). A carrier like
+    /// `Le(n, m)` has a perfectly good head — `Le` — but `Le` names a `fn`
+    /// rather than an inductive, so [`Self::names_a_type`] refused it and
+    /// `Le::Decide` had nothing to attach to. The refusal was about the
+    /// *namespace*, never about resolution: candidates are selected by trying
+    /// each instance of the class against the goal (`resolve.rs`'s candidate
+    /// loop), and the head never enters that search at all.
+    ///
+    /// Type formers and not merely *any* global, because the name has to keep
+    /// meaning what it says: `Le::Decide` reads as "the `Decide` at `Le`", and
+    /// that is only a sentence when `Le` is something a proposition can be *of*.
+    /// A global returning `Nat` is not, and still refuses here.
+    fn names_a_type_former(&self, name: &str) -> bool {
+        let Some(info) = self.lookup_global(name) else { return false };
+        let GlobalBinding::Tm { ty, .. } = &self.psi.bindings[info.abs as usize] else {
+            return false;
+        };
+        // Peel arguments to the result. `UPi` is peeled too: a level-polymorphic
+        // former is still a former, and its body is where the universe is.
+        let mut t: &Type = ty;
+        loop {
+            match t {
+                Type::Pi { cod, .. } => t = cod,
+                Type::UPi { body, .. } => t = body,
+                _ => return matches!(t, Type::Ty(_)),
+            }
+        }
+    }
+
+    /// The owner rule for a canonical instance name: a type, or a type former.
+    /// One place, so `instance` and `designation` cannot drift apart on what a
+    /// carrier is allowed to be.
+    fn names_a_carrier(&self, name: &str) -> bool {
+        self.names_a_type(name) || self.names_a_type_former(name)
     }
 
     /// The name of the declaration a lowered type belongs to — the type's own

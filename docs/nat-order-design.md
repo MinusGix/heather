@@ -127,6 +127,14 @@ are not this round's to restate (`issues/std-api-waves.md` L3 owns that, behind
 `Decide`). What changed is their standing: nothing in a *specification* names
 them, and `Cmp` no longer does.
 
+> **Superseded in part, 2026-08-17.** `list_algos`'s insertion sort *was*
+> restated — `Sorted` is a recursion into `Type` and `insert` decides with
+> `le_dec` — so `leb`'s last specification customer is gone and only
+> `certgen_code` still reads it, where a Boolean is the subject rather than the
+> statement. See `docs/decide-class-design.md` §4 for the before/after. The
+> sentence above is kept because it records what the order round chose to defer
+> and why, which is still the reason the restatement was a separate round.
+
 ## 4. Two grammar findings, both from writing the file
 
 **`<` was unusable in a type position, and the issue said it wasn't.**

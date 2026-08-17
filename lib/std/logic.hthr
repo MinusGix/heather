@@ -113,7 +113,7 @@ theorem or_resolve<P, Q>(h: Or<P, Q>, nq: Not(Q)): P {
 }
 
 // Branching on a disjunction to pick a *value* — the `Or` counterpart of
-// `list_algos`'s `ins_pick` and the successor to `algebra`'s `cmp_pick`, which
+// `list_algos`'s old `ins_pick` and the successor to `algebra`'s `cmp_pick`, which
 // picked on a `Bool`. It is a `fn` and NOT a `theorem` for a reason that is
 // easy to lose: a `theorem` is opaque, so `or_elim` above — which computes the
 // same thing — never unfolds in conversion, and `max_of(2, 5) = 5` would stop
@@ -167,3 +167,81 @@ theorem iff_trans<P, Q, R>(h1: Iff<P, Q>, h2: Iff<Q, R>): Iff<P, R> {
 // (`Exists(2, refl)` takes it from the expected type).
 
 record Exists<A>(P: A -> Type) { witness: A, proof: P(witness) }
+
+// ---------------------------------------------------------------------------
+// Decidability (issues/decide-class.md). One field, because `Decide<P>` already
+// IS the Bool with its evidence attached — there is no sort boundary to cross
+// and no second object, since Heather keeps proof relevance and a `match` on
+// `dec` eliminates straight into `Type`.
+//
+// The content of the class is *"this disjunction reduces"*. A classical
+// `lem : (P: Type) -> P ∨ ¬P` would make every consumer below typecheck and
+// then compute nothing, because `lem(…)` is a neutral constant with no
+// reduction rule. That difference is the whole reason the class exists.
+
+class Decide<P> { dec: Or<P, Not(P)> }
+
+// The two constants. `True` is the kernel's `Unit^0`, so `Inl(trivial)` is the
+// only inhabitant there is; `False`'s refutation is the identity, exactly as
+// `not_succ_le_zero` is over in `nat`.
+instance Decide<True> { dec := Inl(trivial) }
+instance Decide<False> { dec := Inr(λ (h: False) => h) }
+
+// The composition instances — what earns this a class rather than a naming
+// convention. Resolution assembles them: a goal at `¬(P ∧ Q)` backchains
+// through `Not`, then `And`, then whatever decides `P` and `Q`, and no writer
+// names an intermediate.
+//
+// `Not(P)` is a carrier at all only because an instance's canonical name may be
+// keyed at a **type former** as well as a type (docs/decide-class-design.md §2,
+// landed 2026-08-17). `Not` is a `fn` into `Type` — deliberately, so that `¬P`
+// stays definitionally `P -> False` — and before the widening `Not::Decide`
+// had nothing to attach to. The two decisions had collided: negation is a
+// former precisely so it does not need unwrapping, and the registry keyed only
+// on declared types.
+
+instance<P: Decide, Q: Decide> Decide<And<P, Q>> {
+    dec := match P.dec {
+        Inl(p) => match Q.dec {
+            Inl(q) => Inl(And(p, q)),
+            Inr(nq) => Inr(λ (h: And<P, Q>) => nq(h.right)),
+        },
+        Inr(np) => Inr(λ (h: And<P, Q>) => np(h.left)),
+    },
+}
+
+instance<P: Decide, Q: Decide> Decide<Or<P, Q>> {
+    dec := match P.dec {
+        Inl(p) => Inl(Inl(p)),
+        Inr(np) => match Q.dec {
+            Inl(q) => Inl(Inr(q)),
+            Inr(nq) => Inr(λ (h: Or<P, Q>) =>
+                match h { Inl(p) => np(p), Inr(q) => nq(q) }),
+        },
+    },
+}
+
+instance<P: Decide> Decide<Not(P)> {
+    dec := match P.dec {
+        Inl(p) => Inr(λ (np: Not(P)) => np(p)),
+        Inr(np) => Inl(np),
+    },
+}
+
+// The consumers. `decide` is the projection a caller reaches for when it wants
+// the disjunction and will `match` on it itself; `decide_pick` is the same
+// branch made a value, and is `or_pick` with the dictionary found rather than
+// passed.
+//
+// A `fn` and not a `theorem`, both of them, for the reason `or_pick` carries:
+// a `theorem` is opaque, so a decision spelled as one never unfolds in
+// conversion and nothing downstream of it is `refl` any more.
+fn decide<P: Decide>() -> Or<P, Not(P)> { P.dec }
+
+fn decide_pick<P: Decide, A>(x, y: A) -> A { or_pick(P.dec, x, y) }
+
+// The `or_pick_dec` lemma with the dictionary resolved — a proof of `P` makes
+// the decided branch compute, whichever way the decider happened to go.
+theorem decide_pick_yes<P: Decide, A>(x, y: A, p: P): decide_pick<P, A>(x, y) = y {
+    or_pick_dec(P.dec, x, y, p)
+}

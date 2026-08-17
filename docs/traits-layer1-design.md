@@ -250,6 +250,28 @@ between two instances at the same head anyway — there is no resolver to
 select with — so the refusal costs nothing it could have used, and layer 2
 inherits the full key with the table that needs it.
 
+> **Amended 2026-08-17** (`docs/decide-class-design.md` §2). Two things this
+> section says have to be read more carefully now that layer 2 exists.
+>
+> First, what the head key is *for*. It mints the canonical name and it detects
+> duplicates — and that is all. The resolver filters candidates on the **class
+> key alone** and selects by elaborating each against the goal, so the carrier
+> head never enters a search. A reader reaching this section to find out why
+> some carrier will not resolve is in the wrong place: it will not be this.
+>
+> Second, the "spellable" evidence has partly expired, because layer 2 does
+> have a resolver. What survives is the weaker requirement that the name be an
+> *identifier*, which head-keying still satisfies.
+>
+> The head may now be a **type former** as well as a declared type, so
+> `Not::Decide` and `Le::Decide` are canonical names. §4.1's "`Head` must name
+> a type in scope (`names_a_type`)" is now `names_a_carrier` — a type, or a
+> global whose result after every argument is a universe — and it is applied at
+> the member-declaration check, so a type former owns a namespace like any
+> other owner. An **equation** carrier is still refused, deliberately: that one
+> genuinely wants the full key (§8's first residue item), and
+> `issues/decidable-equation-carrier.md` owns it.
+
 ### 7.2 `extends` at a non-parameter argument is refused, not lowered
 
 Recorded above (§3). The restriction pays for itself twice: instantiating a
@@ -290,6 +312,12 @@ first failing, the second landing on the same names.
 
 - **The full canonical key.** (class, carrier-syntax) rather than (class,
   carrier head) — owned by layer 2's canonical-derivation table (§7.1).
+  *Still open 2026-08-17, and now with exactly one named customer rather than a
+  general wish:* an **equation** carrier, where a single reserved head would
+  collide equality at every type (`issues/decidable-equation-carrier.md`).
+  Everything else that looked like it wanted this key turned out to want the
+  type-former widening in §7.1's amendment instead, which is a much smaller
+  change and does not touch the key at all.
 - **Three-segment names are unwritable.** `Rat::Monoid::op` is registered
   and resolvable but not lexable: the lexer joins exactly one `::`. Members
   are reached by projection instead, which is definitionally the same value.

@@ -217,10 +217,12 @@ theorem mconcat_single<A: Monoid(op)>(op: A -> A -> A, x: A):
 }
 
 // The order consumer: the class's `le_dec` decides which of two values to
-// keep. The branch is hoisted into a separate `fn` for the reason
-// `list_algos`'s `ins_pick` is one — a `match` on a stuck scrutinee is
-// unreachable from the goal — and that `fn` is now `logic::or_pick`, because
-// what is being branched on is a disjunction rather than a `Bool`.
+// keep. The branch is hoisted into a separate `fn` because a `match` on a
+// stuck scrutinee is unreachable from the goal, and that `fn` is
+// `logic::or_pick`, because what is being branched on is a disjunction rather
+// than a `Bool`. `list_algos`'s `insert` used to hoist its own `ins_pick` for
+// the same reason and now calls `or_pick` directly (2026-08-17) — one hoisted
+// branch for the whole library, which is what making it generic was for.
 //
 // This replaced `fn cmp_pick<A>(b: Bool, x, y: A) -> A` when `Cmp` went
 // propositional. The proof side got SIMPLER in the swap and it is worth

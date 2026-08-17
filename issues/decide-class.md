@@ -4,7 +4,47 @@ status: open
 labels: [design,traits,frontend,stdlib]
 blocked-by: [std-logic-module]
 created: 2026-08-16
-updated: 2026-08-16
+updated: 2026-08-17
+---
+
+## Current state (added 2026-08-17; everything below it is the filing text)
+
+**The class LANDED, complete over the connectives and absent at the
+relations.** `docs/decide-class-design.md` is the reasoning; this issue stays
+open only for the relation half, which is blocked on a gap this round found.
+
+Landed in `lib/std/logic.hthr`: `class Decide<P> { dec: Or<P, Not(P)> }`, the
+constant instances at `True` and `False`, the composition instances at `∧`, `∨`
+and `¬`, and the consumers `decide`, `decide_pick`, `decide_pick_yes`. In
+`lib/std/nat.hthr`: `pred`, `succ_inj`, `IsSucc`, `succ_ne_zero`,
+`zero_ne_succ`, `eq_dec` and `le_of_not_le`. The acceptance restatement landed
+in full — `lib/list_algos.hthr`'s insertion sort has no `Bool` and no `= True`,
+and the before/after is `docs/decide-class-design.md` §4.
+
+**A language change was needed and was not the one anticipated.** An instance
+may now be keyed at a **type former** (`Not::Decide`), because `¬P` is a `fn`
+into `Type` by deliberate choice and the registry keyed only on declared types.
+Two design decisions had quietly collided. Details in §2 of the design doc;
+the guards were `head_name` and `names_a_type`, and Paterson's decrease
+condition had to learn the new carrier syntax with them.
+
+**What is left, and why it is not this issue's to fix:** the relations. The
+motivating example at the top of this filing — `insert` deciding `Le(x, h)` at
+arbitrary `x`, `h` — is unreachable because **an instance cannot be generic
+over a value** ([[value-generic-instances]]), which is a binder gap and not a
+`Decide` question. `Decide<Le(2, 5)>` at closed arguments now registers and is
+useless, which is the sharpest way to say it. Equations are separately blocked
+on the key ([[decidable-equation-carrier]]), so `eq_dec` ships as a plain `fn`.
+
+Until those land, relations decide the way they already did: by calling
+`le_dec`, or through `Cmp`'s `le_dec` field, which is exactly what the
+restatement does.
+
+One thing this round *created* rather than found: `Decide` is now the widest
+class in the registry at six instances, and selection tries every candidate of
+a class. Not measured, not this round's business, and parked on
+[[resolution-candidate-fan-out]].
+
 ---
 
 A function that branches on a proposition needs a term that produces the
@@ -126,3 +166,4 @@ established).
   forces it in Lean simply does not apply — `Decide` drops from a blocking
   design question to a one-field class plus a derivation.
 - 2026-08-16: 2026-08-16: The decision procedure this class will be filled with at Nat is WRITTEN, ahead of the class: lib/std/nat.hthr's le_dec(n)(m) : Or<Le(n,m), ¬Le(n,m)>, plus le_bool_dec at Bool, and Cmp carries a le_dec field until Decide exists to be a superclass constraint instead ([[nat-order-kit]], docs/nat-order-design.md §2). Three findings this class inherits. (1) A decider must be a fn, not a theorem: a theorem is opaque, so it never unfolds in conversion and max_of(2,5)=5 stops being refl. The kernel found this, not reasoning. (2) Deciders reduce at closed arguments, so decider-driven branching is refl-provable today with no Decide class and no reflection — the derived-where-structurally-recursive claim is cheap at Nat (le_dec is nine lines and mirrors Le exactly). (3) The consumption shape is logic::or_pick_dec: a dependent match whose motive reaches its own scrutinee, refuting arm closed by the caller's proof, no equation and no transport. That is what an if-on-a-proposition desugars to, and it is simpler than the Bool version it replaced.
+- 2026-08-17: Landed, complete over the connectives (True/False/And/Or/Not) and absent at the relations. Three findings the filing did not predict. (1) The head-key restriction that refused Not/Le/= is NOT layer 2's deferred (class, carrier-syntax) key: resolution filters on the class key alone and tries every candidate by convertibility, so the head is a declaration-time naming device only. The fix was widening head_name to applied type formers plus an owner rule admitting type formers — about thirty lines, not a layer. (2) Paterson's decrease condition measured OfExpr carriers as size 1 / zero occurrences, so every instance at an applied former would have refused whatever it required; ty_size and ty_var_count now walk the application spine. (3) The motivating example is still unreachable, for a different reason than the one scoped: an instance cannot bind an ordinary value parameter, so instance Decide<Le(n, m)> has no spelling ([[value-generic-instances]]). Decide<Le(2, 5)> registers and is useless. docs/decide-class-design.md is the record; the list_algos restatement traded thirteen declarations for two and lost every j, trans and congruence.

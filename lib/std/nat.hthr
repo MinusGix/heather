@@ -176,10 +176,12 @@ fn Le(n: Nat) -> Nat -> Type {
 fn Lt(n, m: Nat) -> Type { Le(Succ(n), m) }
 
 // The decision procedure, kept. It is NOT part of the order's specification —
-// nothing above mentions it and no lemma below is stated with it — but
-// `list_algos`'s `sortedb`/`insert` kit and `certgen_code` are written against
-// a Bool and are not this round's to restate. `le_dec` at the bottom of this
-// section is what the *propositional* side decides with.
+// nothing above mentions it and no lemma below is stated with it — and as of
+// 2026-08-17 its last *specification* customer is gone too: `list_algos`'s
+// insertion sort went propositional and decides with `le_dec`. What still reads
+// `leb` is `certgen_code`, where a Boolean is the subject rather than the
+// statement, which is exactly the role issues/class-ops-prop-vs-bool.md leaves
+// `Bool` in.
 fn leb(n: Nat) -> Nat -> Bool {
     match n {
         Zero => λ (m: Nat) => True,
@@ -381,6 +383,79 @@ theorem lt_trichotomy(n: Nat): (m: Nat) -> Or<Lt(n, m), Or<n = m, Lt(m, n)>> {
                             Inl(e) => Inr(Inl(cong_succ(e))),
                             Inr(b) => Inr(Inr(b)),
                         },
+                    },
+            },
+    }
+}
+
+// A refuted comparison is the other one holding — totality, read backwards.
+// This is the propositional successor of `list_algos`'s `leb_false_flip`, and
+// the difference is the whole of what going propositional buys: that lemma was
+// an induction on `x` with `y` generalized, ending in `leb(y, x) = True`;
+// this one is `le_total` with the refuted side resolved away, and it is a line.
+theorem le_of_not_le(n, m: Nat, h: ¬ Le(n, m)): Le(m, n) {
+    or_resolve(or_swap(le_total(n)(m)), h)
+}
+
+// ---------------------------------------------------------------------------
+// Equality at `Nat`, and its decision (issues/std-api-waves.md wave 2).
+//
+// The two no-confusion facts first, and they are proved by RECURSION rather
+// than by `inj`/`absurd`. Those two special forms want "an equation at a
+// declared inductive type" and `Nat` is a *kernel* type with no declaration —
+// so the constructor-injectivity and constructor-disjointness that every
+// declared inductive gets generated for it have to be written by hand here,
+// once. Each is one auxiliary function on `Nat` and a `j` along it:
+//
+//   - injectivity is `pred`, which undoes `Succ` definitionally, so `cong_nat`
+//     is the whole proof and the statement holds by conversion;
+//   - disjointness is a predicate that *separates* the constructors, so
+//     transporting its inhabitant along the absurd equation lands in `False`.
+//
+// This is the small tax `Nat`-as-a-kernel-type charges, and it is worth naming
+// because nothing else in the library pays it.
+
+fn pred(n: Nat) -> Nat { match n { Zero => 0, Succ(k) => k } }
+
+theorem succ_inj(n, m: Nat, h: Succ(n) = Succ(m)): n = m { cong_nat(pred, h) }
+
+// `IsSucc(Succ k)` is `True` and `IsSucc(0)` is `False`, so the constructors
+// are told apart by a type rather than by a generated no-confusion lemma.
+fn IsSucc(n: Nat) -> Type { match n { Zero => False, Succ(k) => True } }
+
+theorem succ_ne_zero(n: Nat): ¬ (Succ(n) = 0) {
+    λ (h: Succ(n) = 0) => j(h, λ y q => IsSucc(y), trivial)
+}
+
+theorem zero_ne_succ(n: Nat): ¬ (0 = Succ(n)) {
+    λ (h: 0 = Succ(n)) => succ_ne_zero(n)(sym(h))
+}
+
+// The equality decider, mirroring `le_dec` exactly — same shape, same reason to
+// be a `fn` rather than a `theorem` (it has to reduce), same curried spelling
+// (both arguments descend together, so the guard refuses the uncurried one).
+//
+// It is NOT registered as a `Decide` instance, and that is a language boundary
+// rather than a choice: an instance is keyed on its carrier's head, and an
+// equation has no head to key on — one reserved key would collide `n = m` at
+// `Nat` with every other type's equality. That is the one case of this round
+// that genuinely wants layer 2's (class, carrier-syntax) key
+// (issues/decidable-equation-carrier.md). Until then `eq_dec` is called by
+// name, which is what every consumer here does anyway.
+fn eq_dec(n: Nat) -> (m: Nat) -> Or<n = m, ¬ (n = m)> {
+    match n as λ z => (m: Nat) -> Or<z = m, Not(z = m)> {
+        Zero => λ m =>
+            match m as λ y => Or<0 = y, Not(0 = y)> {
+                Zero => Inl(refl),
+                Succ(m2) => Inr(zero_ne_succ(m2)),
+            },
+        Succ(k, ih) => λ m =>
+            match m as λ y => Or<Succ(k) = y, Not(Succ(k) = y)> {
+                Zero => Inr(succ_ne_zero(k)),
+                Succ(m2) =>
+                    match ih(m2) {
+                        Inl(e) => Inl(cong_succ(e)),
+                        Inr(ne) => Inr(λ (bad: Succ(k) = Succ(m2)) => ne(succ_inj(k, m2, bad))),
                     },
             },
     }

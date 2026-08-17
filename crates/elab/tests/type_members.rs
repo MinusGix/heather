@@ -85,8 +85,11 @@ fn a_members_base_name_is_not_ambient() {
 // naming convention.
 #[test]
 fn a_member_of_a_type_that_does_not_exist_is_rejected_at_the_declaration() {
+    // The owner rule admits a type *former* as well as a type as of 2026-08-17
+    // (`docs/decide-class-design.md` §2.3), so the message names both. An
+    // undeclared name is neither, and is refused on the path it always was.
     let e = bad("fn Frobnicate::x(n: Nat) -> Nat { n }");
-    assert!(e.contains("not a type in scope"), "{e}");
+    assert!(e.contains("not a type"), "{e}");
     assert!(e.contains("Frobnicate"), "{e}");
 }
 
