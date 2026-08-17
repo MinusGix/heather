@@ -3,7 +3,7 @@ title: "Type-owned namespaces: names attach to subjects, reachability through ev
 status: open
 labels: [frontend, syntax, elaboration, design, modules]
 created: 2026-08-05
-updated: 2026-08-05
+updated: 2026-08-17
 ---
 
 Direction issue, not scheduled — filed from the 2026-08-05 namespace
@@ -121,3 +121,4 @@ the prelude layer-2 round or the first file that wants two order kits.
 
 - 2026-08-05: Receiver half scheduled as [[type-owned-members-receiver-slice]] (2026-08-05 ergonomics round); expected-type resolution and head-symbol picking stay here.
 - 2026-08-05: Receiver slice landed ([[type-owned-members-receiver-slice]], 2026-08-05). Three findings for this issue's next slice: (1) Le::refl is not spellable — a fn … -> Type predicate owns no namespace, so every decided predicate is outside the design as landed; (2) the member-ambiguity diagnostic suggests import a::{List::nth}; which does not parse — what a member's standing disambiguation looks like is this issue's call; (3) the exercise file's still-hurts list ranks expected-type (introduction-shaped) resolution as its #4 tax: four lemmas with no ambient home.
+- 2026-08-17: First real customer of the prediction [[list-algorithms-exercise]] made on 2026-08-05 ("map is declared bare in both list and option, so it is already ambiguous at use for any file importing both"). Wave L2' hit it (2026-08-17, [[std-list-l2-prime-laws]]): in a module importing list AND option, map(zip(xs, ys), λ q => swap(q)) resolves to NEITHER declaration — it reaches the prelude's vector map and reports `map's receiver has to be a vector`, which names a third thing the author never mentioned. list::map is the workaround now in crates/elab/tests/lib_std_list.rs. Two facts for the fix's design: the failure is silent-then-confusing rather than an ambiguity error, and it happened in a TEST probe rather than in lib/, because lib/std/list.hthr does not import option.

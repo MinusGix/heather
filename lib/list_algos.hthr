@@ -21,6 +21,11 @@
 // `plusl(len(xs), i)` for `nat::add` to step where `append` steps. What is
 // left below is the algorithms: insertion sort, its sortedness proof, and
 // nothing that any other file would want.
+//
+// Wave L3 (2026-08-17, issues/std-list-mem-and-perm.md) finished the
+// specification: `count` and the permutation half. `Mem` went to `std/list`
+// because it is polymorphic; `count` stayed here because it is not, and the
+// reason it is not is a live language gap — see §the other half below.
 
 import list;
 import nat;
@@ -133,4 +138,182 @@ theorem isort_sorted(xs: List<Nat>): Sorted(isort(xs)) {
         Nil => trivial,
         Cons(h, t) => insert_sorted(h, isort(t), isort_sorted(t)),
     }
+}
+
+// ---------------------------------------------------------------------------
+// the other half of the specification: the output is a REARRANGEMENT of the
+// input (wave L3, issues/std-list-mem-and-perm.md).
+//
+// "It sorts" is half a spec — `λ xs => Nil` satisfies `isort_sorted` — and the
+// half above says nothing about the elements. Two statements say the rest, and
+// they are not equally strong:
+//
+//   `count_isort` — for every `a`, `isort(xs)` and `xs` contain `a` the same
+//   NUMBER of times. This is multiset equality, i.e. permutation, stated
+//   extensionally over the element rather than as a relation.
+//   `mem_isort` — `isort(xs)` contains nothing new. Strictly weaker (it cannot
+//   see multiplicity), and here because it is what `std/list`'s `Mem` kit is
+//   for and it is three lines on top of `mem_insert`.
+//
+// **Why `count` and not a `Perm` relation.** issues/std-api-waves.md records
+// the fork: a `Perm` relation is inductively defined over two lists at once,
+// which is an indexed family (issues/indexed-families.md) and therefore wave
+// L4's, while `count` needs only a decidable equation and is writable today.
+// The count route was taken, and it is not a workaround for the relation — it
+// is the *extensional* statement of the same fact, and it computes: at closed
+// lists both sides reduce to numerals and the theorem is `refl`. What L4 would
+// buy is a permutation fact that can be TRANSPORTED (composed, inverted, used
+// to move any other predicate across), which an equality of counts at each `a`
+// cannot do.
+//
+// **What it cost.** `count` is at `Nat` and not polymorphic, and that is the
+// language boundary rather than a choice: it must decide `a = h`, an equation
+// has no head to key an instance on (issues/decidable-equation-carrier.md), so
+// `decide<a = h>()` — the spelling `insert` above uses for `Le` — has no
+// instance to find and `nat::eq_dec` is called by name. The polymorphic `count`
+// wants a class keyed on that equation; the dictionary-passing spelling (take
+// the decider as an argument and thread it through every call site) is an
+// encoding around a missing feature and was not written.
+
+// Counting with a named decider. `or_pick(d, x, y)` takes `y` on `Inl`, so the
+// equal case is the `Succ`.
+fn count(a: Nat, xs: List<Nat>) -> Nat {
+    match xs {
+        Nil => 0,
+        Cons(h, t) => or_pick(eq_dec(a, h), count(a, t), Succ(count(a, t))),
+    }
+}
+
+// The one lemma the permutation proof needs, and it is about neither lists nor
+// sorting: two independent decisions each of which may add one commute. It
+// lives here rather than in `std/logic` because it mentions `Succ`, and `logic`
+// is below `nat`.
+//
+// Four cases, all `refl`, and only ONE match needs to be written: substituting
+// `Inr` for the outer decision makes both sides the same term, so the inner
+// split is needed only on the `Inl` side.
+theorem pick_succ_comm<P, Q, R, S>(d1: Or<P, Q>, d2: Or<R, S>, n: Nat):
+    or_pick(d1, or_pick(d2, n, Succ(n)), Succ(or_pick(d2, n, Succ(n))))
+        = or_pick(d2, or_pick(d1, n, Succ(n)), Succ(or_pick(d1, n, Succ(n))))
+{
+    match d1 as λ z =>
+        or_pick(z, or_pick(d2, n, Succ(n)), Succ(or_pick(d2, n, Succ(n))))
+            = or_pick(d2, or_pick(z, n, Succ(n)), Succ(or_pick(z, n, Succ(n))))
+    {
+        Inl(p) =>
+            match d2 as λ w =>
+                Succ(or_pick(w, n, Succ(n))) = or_pick(w, Succ(n), Succ(Succ(n)))
+            {
+                Inl(r) => refl,
+                Inr(s) => refl,
+            },
+        Inr(q) => refl,
+    }
+}
+
+// Inserting is consing, as far as counting can tell. The `Inl` arm — `x` goes
+// in front — is `refl`, because there the two sides are the same list; all the
+// work is in the arm where `x` sinks past `h`, and it is exactly the commuting
+// lemma above with the IH rewritten in underneath it.
+theorem count_insert(x: Nat, xs: List<Nat>, a: Nat):
+    count(a, insert(x, xs)) = count(a, Cons(x, xs))
+{
+    match xs {
+        Nil => {},
+        Cons(h, t) =>
+            match decide<Le(x, h)>() as λ d =>
+                count(a, or_pick(d, Cons(h, insert(x, t)), Cons(x, Cons(h, t))))
+                    = count(a, Cons(x, Cons(h, t)))
+            {
+                Inl(good) => refl,
+                Inr(bad) =>
+                    trans(cong_fn(λ (n: Nat) => or_pick(eq_dec(a, h), n, Succ(n)),
+                                  count_insert(x, t, a)),
+                          pick_succ_comm(eq_dec(a, h), eq_dec(a, x), count(a, t))),
+            },
+    }
+}
+
+// The permutation half. `count_insert` at the recursive result, then the IH
+// under the same one-place context — `std/list`'s `cong_fn` is what carries it,
+// with the context written out as a lambda because it has to be
+// (issues/congruence-by-anti-unification.md).
+theorem count_isort(xs: List<Nat>, a: Nat): count(a, isort(xs)) = count(a, xs) {
+    match xs {
+        Nil => {},
+        Cons(h, t) =>
+            trans(count_insert(h, isort(t), a),
+                  cong_fn(λ (n: Nat) => or_pick(eq_dec(a, h), n, Succ(n)),
+                          count_isort(t, a))),
+    }
+}
+
+// Length, which permutation implies but not by any proof this file can write —
+// summing `count` over the elements is a fold this library does not have. Two
+// recursions, both `cong_succ` over the tail.
+theorem len_insert(x: Nat, xs: List<Nat>): len(insert(x, xs)) = Succ(len(xs)) {
+    match xs {
+        Nil => {},
+        Cons(h, t) =>
+            match decide<Le(x, h)>() as λ d =>
+                len(or_pick(d, Cons(h, insert(x, t)), Cons(x, Cons(h, t))))
+                    = Succ(Succ(len(t)))
+            {
+                Inl(good) => refl,
+                Inr(bad) => cong_succ(len_insert(x, t)),
+            },
+    }
+}
+
+theorem len_isort(xs: List<Nat>): len(isort(xs)) = len(xs) {
+    match xs {
+        Nil => {},
+        Cons(h, t) => trans(len_insert(h, isort(t)), cong_succ(len_isort(t))),
+    }
+}
+
+// The membership half, on `std/list`'s `Mem`. Weaker than `count_isort` and
+// much cheaper; kept because it is the polymorphic statement of the same idea
+// and because it is what a caller who only wants "nothing was invented" will
+// cite.
+theorem mem_insert(x: Nat, xs: List<Nat>, a: Nat):
+    Mem(a, insert(x, xs)) -> Mem(a, Cons(x, xs))
+{
+    match xs {
+        Nil => λ m => m,
+        Cons(h, t) =>
+            match decide<Le(x, h)>() as λ d =>
+                Mem(a, or_pick(d, Cons(h, insert(x, t)), Cons(x, Cons(h, t))))
+                    -> Mem(a, Cons(x, Cons(h, t)))
+            {
+                Inl(good) => λ m => m,
+                Inr(bad) => λ m => match m {
+                    Inl(e) => Inr(Inl(e)),
+                    Inr(m2) => match mem_insert(x, t, a, m2) {
+                        Inl(e) => Inl(e),
+                        Inr(mt) => Inr(Inr(mt)),
+                    },
+                },
+            },
+    }
+}
+
+theorem mem_isort(xs: List<Nat>, a: Nat): Mem(a, isort(xs)) -> Mem(a, xs) {
+    match xs {
+        Nil => λ m => m,
+        Cons(h, t) => λ m =>
+            match mem_insert(h, isort(t), a, m) {
+                Inl(e) => Inl(e),
+                Inr(mt) => Inr(mem_isort(t, a, mt)),
+            },
+    }
+}
+
+// Both halves in one statement, which is the point of the wave: this is the
+// first specification in the library that is a CONJUNCTION of a relation and an
+// extensional equality, and it is the theorem a caller should cite.
+theorem isort_correct(xs: List<Nat>):
+    And<Sorted(isort(xs)), (a: Nat) -> count(a, isort(xs)) = count(a, xs)>
+{
+    And(isort_sorted(xs), λ a => count_isort(xs, a))
 }

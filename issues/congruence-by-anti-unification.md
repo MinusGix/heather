@@ -3,7 +3,7 @@ title: Infer cong's function by anti-unification, in a goal-solver metaprogram
 status: open
 labels: [frontend,elaboration,metaprogramming,design]
 created: 2026-07-27
-updated: 2026-08-05
+updated: 2026-08-17
 ---
 
 A general `cong` cannot have its function argument implicit today, so the
@@ -200,3 +200,4 @@ Decisions:
   moves the work off [[elab-unifier-completeness]], where finishing the filed
   bullets could never have reached it, and onto the tactic layer, where the
   same solver also serves `subst` and `rewrite`.
+- 2026-08-17: Third round running as a ranked item (waves L2'/L3, [[std-list-l2-prime-laws]], 2026-08-17), three new sites, and one of them is a shape this issue has not recorded before: filter_filter rewrites under a MATCH context, not a function application — j with a hand-written motive that restates filter's own body around the hole — so anti-unification would have to find a context that is a case tree. The other two are ordinary one-place contexts written as lambdas that the expected type already determines: cong_fn(λ (n: Nat) => or_pick(eq_dec(a, h), n, Succ(n)), …) in count_insert and count_isort, the same context twice. Direction datum for the same site: [[match-with-equation]] binds scrutinee = pattern, and rewriting the GOAL wants pattern = scrutinee, so the round's only sym is there.

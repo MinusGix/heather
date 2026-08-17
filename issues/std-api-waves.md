@@ -37,17 +37,19 @@ laws, `map` with **none**, `List::nth`. `std/option`: three functions.
 | 4 | `Nat::iter`/fold with `add`/`mul`/`pow` as instances | [[datatype-container-algebras]] |
 | L1 | ✅ **landed 2026-08-17** — `len`/`rev` into `std/list`, `plusl` gone; `foldr`/`foldl`, `filter`, `take`/`drop`, `replicate`, `zip`, `head`/`tail`/`last`, plus a `std/pair` the library had no product type for | [[std-list-api]] |
 | L2 | ✅ **landed 2026-08-17**, all seven plus `len_replicate`, `take_append_drop`, `len_filter` | [[std-list-api]] — taken with L1 as one round |
-| L2′ | the laws L2 did not name and this round did not state: `foldl`'s (it has none), `filter`'s, `zip`/`len` | unowned — file when scheduled |
-| L3 | `Mem` by recursion into Prop; the **permutation** half of `insert`/`isort` correctness. `Sorted` and the sortedness half landed 2026-08-17 in `lib/list_algos.hthr` | unowned — file when scheduled |
-| L4 | permutation | unowned; forks on `count`-with-decidable-eq vs a `Perm` relation needing [[indexed-families]] |
+| L2′ | ✅ **landed 2026-08-17** — ten laws: `foldl_append`/`foldl_rev`/`foldl_len`, `filter_append`/`filter_filter`/`filter_map`, `len_zip`/`zip_map_fst`/`zip_map_snd`/`zip_swap` | [[std-list-l2-prime-laws]] |
+| L3 | ✅ **landed 2026-08-17** — `Mem` + ten-lemma kit in `std/list`; `count`, `count_isort` and `isort_correct` in `list_algos`. Fork taken: `count`, not `Perm` | [[std-list-mem-and-perm]] — taken with L2′ as one round |
+| L4 | a permutation **relation**, and L3 sharpened what it is for: not the statement (`count_isort` is that, extensionally, and it computes) but a fact that can be **transported** — composed, inverted, used to carry an arbitrary predicate across. Still behind [[indexed-families]] | unowned |
 | I | `Int` | [[std-int-encoding]] |
 
-**Sequencing: 0 → 1 → 2 → L1 → L2, then reassess.** Waves 0, 1, 2, L1 and L2
-landed 2026-08-16/17, so the sequence is *spent* and the reassessment is due:
-L3 and L2′ are the writable list work, `Int` is the stress round, and the
-ranked language gaps are the competition. L4 and any derivation-shaped
-relation sit behind [[indexed-families]]; `Int` is deliberately last because it
-is the stress round, not an API round.
+**Sequencing: 0 → 1 → 2 → L1 → L2, then reassess; the reassessment called
+L2′ + L3 (user, 2026-08-17), and they landed as one round.** What is left of
+the list is L4, which is behind [[indexed-families]] and now has a *reason*
+rather than a place in a list (see its row). So the next decision is between
+[[std-int-encoding]] — the stress round, deliberately last among the API
+waves — wave 4 ([[datatype-container-algebras]]), and the ranked language
+gaps, which after this round are one item longer and led by
+[[goal-motive-by-scrutinee-abstraction]].
 
 **L3 is no longer simply "behind `Decide`", and that is wave 2's main
 sequencing datum.** `Decide` landed complete over the *connectives* and absent
@@ -128,3 +130,4 @@ datum.
 The datum for the ranking function: the feature the library ranked was not the feature the feature-issue had costed. The costing named a syntactic side condition that turned out unnecessary and missed the one thing that took the round's time — a dependent motive needs the carried values convoyed through the nested `match`. Two-step *proofs* are where that bites, and the library is what has them; a language round with no library customer would have shipped the non-dependent case and called it done.
 - 2026-08-17: Waves L1 and L2 landed together ([[std-list-api]]): std/list went 76 lines to ~380, a std/pair arrived because the library had no product type, and lib/list_algos.hthr is now only algorithms. The sequencing datum: the two prior rounds predicted their risk as notation and grammar, and at HIGHER ORDER that prediction fails — the round's one refusal was neither, it was type-argument INFERENCE meeting the currying workaround ([[curried-tail-type-arg-inference]], filed: zip's B lives in the curried tail, so no call site can infer it). Everything else that cost time was ordinary arithmetic phase (add recurses right, append peels left). The sequence 0 → 1 → 2 → L1 → L2 is now spent; the reassessment it always promised is the next decision.
 - 2026-08-17: Both language gaps wave L1/L2 ranked are closed the same day ([[curried-tail-type-arg-inference]], [[match-arg-of-polymorphic-callee-needs-motive]]), which is the fourth and fifth time this push has turned a ranking into a landed feature within a day. Bearing on sequencing: the reassessment now weighs L3, L2' and [[std-int-encoding]] against a language whose polymorphic-inference gaps are one issue shorter than when the wave started — and the one that remains from those controls is a diagnostics issue, not an expressiveness one ([[check-fallback-discards-expected-type]]).
+- 2026-08-17: Waves L2' and L3 landed together (2026-08-17): [[std-list-l2-prime-laws]] (ten laws — foldl, filter, zip/len) and [[std-list-mem-and-perm]] (Mem + kit, count, isort_correct). Table rows updated above. Two sequencing data. (1) L3's fork resolved to count and NOT a Perm relation, and the reason changes what L4 is for: count_isort is the permutation statement extensionally and it COMPUTES, so what a relation would add is transportability — composition, inversion, carrying an arbitrary predicate across — which is a different feature request from 'state the permutation'. L4's row now says that. (2) The prediction pattern that has held for four rounds finally broke in the other direction: rounds 1 and 2 predicted their risk correctly as notation/grammar, L1/L2 was wrong because the refusal was inference, and THIS round's risk was neither — it was motive synthesis, seven sites of it ([[goal-motive-by-scrutinee-abstraction]], ranked #1 and filed). Every one of those seven is a proof about a function that branches internally, which is a property of the library's CONTENT rather than of its notation, and Int will have more of them, not fewer.
