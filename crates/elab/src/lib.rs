@@ -4191,7 +4191,10 @@ impl Elaborator {
         let (rec_motive, rec_lvl) = match &convoy {
             None => (cov_ty(&comps_z, &mlvl), mlvl.clone()),
             Some(c) => {
-                let carried = cov_ty(&cov_comps(&cx.gamma, &c.motive, c.d, 1, &Term::Var(LocalVar(0))), &c.lvl);
+                let carried = cov_ty(
+                    &cov_comps(&cx.gamma, &c.motive, c.d, 1, &c.anchor(Term::Var(LocalVar(0)))),
+                    &c.lvl,
+                );
                 (
                     Type::Pi {
                         dom_level: c.lvl.clone(),
@@ -4211,7 +4214,7 @@ impl Elaborator {
         let base = match &convoy {
             None => self.elab_check(cx, zero, &base_ty, &mlvl)?,
             Some(c) => {
-                let comps = cov_comps(&cx.gamma, &c.motive, c.d, 0, &Term::Zero);
+                let comps = cov_comps(&cx.gamma, &c.motive, c.d, 0, &c.anchor(Term::Zero));
                 let dom = cov_ty(&comps, &c.lvl);
                 let mut bcx = cx.clone();
                 bcx.push("#cov".into(), dom.clone(), c.lvl.clone());
@@ -4261,7 +4264,7 @@ impl Elaborator {
                     &c.motive,
                     c.d,
                     2,
-                    &Term::Succ(Rc::new(Term::Var(LocalVar(1)))),
+                    &c.anchor(Term::Succ(Rc::new(Term::Var(LocalVar(1))))),
                 );
                 let dom = cov_ty(&comps, &c.lvl);
                 let mut bcx = scx.clone();
@@ -4337,7 +4340,7 @@ impl Elaborator {
         };
         if let Some(c) = &convoy {
             // …and the window goes in, which is what refines it.
-            let comps = cov_comps(&cx.gamma, &c.motive, c.d, 0, &scrut_t);
+            let comps = cov_comps(&cx.gamma, &c.motive, c.d, 0, &c.anchor(scrut_t.clone()));
             return Ok(Term::App {
                 fun: Rc::new(elim),
                 dom_level: c.lvl.clone(),
@@ -4397,6 +4400,7 @@ impl Elaborator {
             outer_motive: Rc::clone(motive),
             gamma: gamma.clone(),
             tuple: tuple.shift_local(by),
+            lift: preds.len() - 1,
         })
     }
 
@@ -8928,9 +8932,25 @@ struct Convoy {
     gamma: LocalCtx,
     /// The window itself, at the nested `match`'s context.
     tuple: Term,
+    /// How far the window's **anchor** sits above this `match`'s scrutinee.
+    ///
+    /// The window always holds the values at the chain read from its head:
+    /// component `i` is the value at `preds[i]`, so it is anchored at
+    /// `preds[0]` however deep the nesting has gone. The first nested `match`
+    /// scrutinizes that head and lifts by nothing; the second scrutinizes the
+    /// value one below it, so its window is the same window at `Succ` of its
+    /// own scrutinee — and so on down. Re-indexing at the scrutinee instead
+    /// would slide every component by one and typecheck nowhere.
+    lift: usize,
 }
 
 impl Convoy {
+    /// `Succ^lift(t)` — where the window's head sits, seen from a term at this
+    /// `match`'s scrutinee.
+    fn anchor(&self, t: Term) -> Term {
+        (0..self.lift).fold(t, |t, _| Term::Succ(Rc::new(t)))
+    }
+
     /// The guard for one arm: the window is now the arm's own binder, and
     /// `new_pred` is the predecessor that arm binds — `None` for the `Zero`
     /// arm, which extends the chain by nothing.

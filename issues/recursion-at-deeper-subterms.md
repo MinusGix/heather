@@ -173,3 +173,9 @@ Cost to ordinary code: none. A one-step recursion carries nothing below the chai
 Also here: the guard's message now carries the mechanism, not just the rule — the thing this issue said should stop implying a one-line fix.
 
 Tests: crates/elab/tests/match_recursion.rs (half, fib, a Type motive, a dependent motive, the value controls, and a nested match on another variable as the negative), crates/elab/tests/nat_parity.rs for the library side.
+- 2026-08-17: Residue, both filed rather than fixed here:
+
+- [[convoyed-window-vs-written-motive]] — a nested `match` with a WRITTEN motive that names its scrutinee meets a convoyed component speaking of `Succ l`, and gets a bare NotConvertible. Nothing unsound; possibly unreachable. It is a probe before it is a fix.
+- [[cov-window-term-size]] — the annotations are O(d²) nodes because component `i` carries an `i`-deep `pred` chain, and conversion walks them at open arguments. Recorded with no measurement, at `d = 2` everywhere it matters, with the levers named.
+
+And one correction to this issue's own log, found by testing depth 3 and 4 rather than trusting that depth 2 generalized: the window is anchored at the chain's HEAD, so a second nesting must convoy it at `Succ` of its own scrutinee, not re-indexed there (design doc §5.1). Re-indexing slides every component by one; it typechecks at depth 2, where there is no second nesting, and nowhere below. Non-dependent motives never see it either, so `trib` passed while the depth-3 dependent proof did not. Both depth-3 and depth-4 dependent tests fail if the lift is removed, which is what says they are not vacuous.

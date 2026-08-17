@@ -140,6 +140,31 @@ The guard therefore carries the recursion's *motive family* along with the
 window, plus the context that family was written in — a family cannot be
 reindexed by shifting, so the two travel together.
 
+### 5.1 The window is anchored at the chain's head, and a second nesting lifts it
+
+At depth three and below there is a second `match` to convoy through, and the
+invariant that makes it work is worth stating because getting it wrong
+typechecks nowhere and reads like an off-by-one anywhere:
+
+> The window always holds the values at the chain read **from its head**:
+> component `i` is the value at `preds[i]`. So it stays anchored at `preds[0]`
+> however deep the nesting goes.
+
+The first nested `match` scrutinizes the head itself, so it convoys the window
+at its own scrutinee. The second scrutinizes the value one *below* the head, so
+it must convoy the same window at `Succ` of its scrutinee — and the `j`-th at
+`Succ^{j-1}`. Re-indexing the window at each new scrutinee instead slides every
+component by one, and the arm then asks for the value at `l` from a tuple whose
+head is the value at `l`.
+
+The reduction that makes it land is again `pred (Succ x) ⇝ x`, now applied
+`i` times: in the `Succ(m)` arm of the third level the window sits at
+`Succ²(m)`, whose components are the values at `k`, `l` and `m` exactly.
+
+`fib` and `trib` never see any of this — a non-dependent motive makes every
+anchoring agree — so the depth-3 and depth-4 tests that pin it are
+**dependent** on purpose (`crates/elab/tests/match_recursion.rs`).
+
 ## 6. The depth scan is a sizing decision only
 
 `cov_depth` reads the surface arm and answers how deep its self-calls reach.

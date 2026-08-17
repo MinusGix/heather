@@ -260,6 +260,127 @@ fn a_deeper_recursion_at_a_dependent_motive() {
     );
 }
 
+/// Depth **three**, where the two things depth two cannot show up: a
+/// component whose type carries a two-deep `pred` chain, and a nested convoy —
+/// the innermost `match` passing on a window that was itself passed in to the
+/// one above it. `trib` reads all three of its past values in one arm, so the
+/// window has to arrive intact at the bottom.
+#[test]
+fn three_deep_and_the_nested_convoy() {
+    elab_ok(
+        "
+        fn trib(n: Nat) -> Nat {
+            match n {
+                Zero => 0,
+                Succ(k) => match k {
+                    Zero => 1,
+                    Succ(l) => match l {
+                        Zero => 1,
+                        Succ(m) => add(add(trib(k), trib(l)), trib(m)),
+                    },
+                },
+            }
+        }
+        theorem t3(): trib(3) = 2 { refl }
+        theorem t4(): trib(4) = 4 { refl }
+        theorem t7(): trib(7) = 24 { refl }
+        theorem t2(): trib(2) = 1 { refl }
+        theorem t0(): trib(0) = 0 { refl }",
+    );
+}
+
+/// The same depth with a **dependent** motive, which is where the convoy is
+/// load-bearing (§5 of the design doc) — and at depth three the innermost arm
+/// needs `pred (pred (Succ (Succ l)))` to reduce, not merely `pred (Succ l)`.
+#[test]
+fn three_deep_at_a_dependent_motive() {
+    elab_ok(
+        "
+        fn D(n: Nat) -> Type {
+            match n {
+                Zero => True,
+                Succ(k) => match k {
+                    Zero => 0 = 1,
+                    Succ(l) => match l { Zero => 0 = 1, Succ(m) => D(m) },
+                },
+            }
+        }
+        fn R(n: Nat) -> Type {
+            match n {
+                Zero => 0 = 1,
+                Succ(k) => match k {
+                    Zero => True,
+                    Succ(l) => match l { Zero => 0 = 1, Succ(m) => R(m) },
+                },
+            }
+        }
+        theorem not_both(n: Nat): D(n) -> R(n) -> 0 = 1 {
+            match n {
+                Zero => λ (d: D(0)) (r: R(0)) => r,
+                Succ(k) => match k {
+                    Zero => λ (d: D(1)) (r: R(1)) => d,
+                    Succ(l) => match l {
+                        Zero => λ (d: D(2)) (r: R(2)) => d,
+                        Succ(m) => λ (d: D(m)) (r: R(m)) => not_both(m)(d)(r),
+                    },
+                },
+            }
+        }
+        theorem six(): D(6) { trivial }
+        theorem seven(): R(7) { trivial }",
+    );
+}
+
+/// Depth **four**, dependent — a third nesting, so the window is lifted twice.
+/// Depth three is what caught the anchor bug (a window re-indexed at the
+/// scrutinee instead of lifted above it slides every component by one), and
+/// the fix generalized over the nesting count rather than special-casing the
+/// second level; this is what says so.
+#[test]
+fn four_deep_at_a_dependent_motive() {
+    elab_ok(
+        "
+        fn A(n: Nat) -> Nat {
+            match n {
+                Zero => 0,
+                Succ(k) => match k {
+                    Zero => 0,
+                    Succ(l) => match l {
+                        Zero => 0,
+                        Succ(m) => match m { Zero => 0, Succ(p) => Succ(A(p)) },
+                    },
+                },
+            }
+        }
+        fn B(n: Nat) -> Nat {
+            match n {
+                Zero => 0,
+                Succ(k) => match k {
+                    Zero => 0,
+                    Succ(l) => match l {
+                        Zero => 0,
+                        Succ(m) => match m { Zero => 0, Succ(p) => add(1, B(p)) },
+                    },
+                },
+            }
+        }
+        theorem agree(n: Nat): A(n) = B(n) {
+            match n {
+                Zero => refl,
+                Succ(k) => match k {
+                    Zero => refl,
+                    Succ(l) => match l {
+                        Zero => refl,
+                        Succ(m) => match m { Zero => refl, Succ(p) => cong_succ(agree(p)) },
+                    },
+                },
+            }
+        }
+        theorem nine(): A(9) = 2 { refl }
+        theorem same(): B(9) = 2 { refl }",
+    );
+}
+
 /// The chain is followed by *binder*, not by name: a nested `match` on
 /// something else does not extend it, and a call at its pattern variable is
 /// refused — with the mechanism, not just the rule
@@ -293,3 +414,4 @@ fn self_name_is_not_a_value() {
     let msg = elab_err("fn loop(n: Nat) -> Nat { match n { Zero => 0, Succ(k) => loop } }");
     assert!(msg.contains("saturated recursive call"), "{msg}");
 }
+
