@@ -57,3 +57,7 @@ A `trivial`-mismatch or goal-statement diagnostic whose expected type is
 `Le(n, m)` at open `n`, `m` prints something a reader recognizes as that type.
 Bounded and display-only, like its predecessor; a code that does *not* respell
 (a raw `app` of a meta, say) still falls back rather than guessing.
+
+## Log
+
+- 2026-08-17: Second customer, a different display site (issues/std-list-api.md, 2026-08-17). The L1 wave's `len_append` left an unfilled goal — its `Nil` arm was `{}` where the goal is `len(ys) = add(0, len(ys))`, which is stuck rather than refl — and the GOAL LISTING printed the statement as raw kernel encoding: `?g1 : Id[0](Nat; app(app(u1^{·^9}; …)))`, with each context binder shown as its `Wf[0](Σ…)` lowering. Several hundred columns of it, for a statement the reader wrote as one line. The span was correct and pointed at the `{}`, so the fix needed here is only this issue's — respell the code as surface — but the trigger is worth recording: it is not the `trivial` mismatch, it is the ordinary unfilled-goal report, which is the message a proof under construction sees most often.

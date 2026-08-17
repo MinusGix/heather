@@ -13,7 +13,12 @@ and how checking behaves on workloads closer to practical ones. Per tracker
 rule 2 this issue owns **sequencing only**; each wave's content and decisions
 live in the issue named beside it.
 
-## Where the library is (2026-08-16)
+## Where the library was when this was filed (2026-08-16)
+
+Kept as the *baseline* the waves were planned against, not as current state —
+waves 0–3, L1 and L2 have all landed since. For what the library is now, read
+the files.
+
 
 `std/nat`: `add` + `mul` with monoid kits, `leb`/`Le`, `sub` with one lemma,
 five order lemmas. `std/bool`: both monoids. `std/list`: `append` with two
@@ -30,14 +35,17 @@ laws, `map` with **none**, `List::nth`. `std/option`: three functions.
 | 2 | ✅ **mostly landed 2026-08-17** — `succ_inj`, `succ_ne_zero`, `zero_ne_succ`, `eq_dec`, `le_of_not_le`, and `Decide` over the connectives; `Decide` **at** `Nat` equality and order is blocked, see below | [[decide-class]] |
 | 3 | ✅ **landed 2026-08-17**, in full — `min`/`max`, the `sub` kit, `add_le_mono`, `mul_le_mono`, cancellation ([[nat-arithmetic-kit]]); `pow`, `fact` ([[nat-pow-and-fact]]); `half`/`Even`/`Odd` and the parity kit ([[nat-parity-and-half]]), once [[recursion-at-deeper-subterms]] made them writable | all closed |
 | 4 | `Nat::iter`/fold with `add`/`mul`/`pow` as instances | [[datatype-container-algebras]] |
-| L1 | `len`/`rev` into `std/list`, retire `plusl`; `foldr`/`foldl`, `filter`, `take`/`drop`, `replicate`, `zip`, `head`/`tail`/`last` | unowned — file when scheduled |
-| L2 | the absent `map` laws: `map_id`, `map_map`, `map_append`, `len_map`, `len_append`, `rev_len`, `foldr_append` | unowned — file when scheduled |
+| L1 | ✅ **landed 2026-08-17** — `len`/`rev` into `std/list`, `plusl` gone; `foldr`/`foldl`, `filter`, `take`/`drop`, `replicate`, `zip`, `head`/`tail`/`last`, plus a `std/pair` the library had no product type for | [[std-list-api]] |
+| L2 | ✅ **landed 2026-08-17**, all seven plus `len_replicate`, `take_append_drop`, `len_filter` | [[std-list-api]] — taken with L1 as one round |
+| L2′ | the laws L2 did not name and this round did not state: `foldl`'s (it has none), `filter`'s, `zip`/`len` | unowned — file when scheduled |
 | L3 | `Mem` by recursion into Prop; the **permutation** half of `insert`/`isort` correctness. `Sorted` and the sortedness half landed 2026-08-17 in `lib/list_algos.hthr` | unowned — file when scheduled |
 | L4 | permutation | unowned; forks on `count`-with-decidable-eq vs a `Perm` relation needing [[indexed-families]] |
 | I | `Int` | [[std-int-encoding]] |
 
-**Sequencing: 0 → 1 → 2 → L1 → L2, then reassess.** Waves 0, 1 and 2 landed
-2026-08-16/17; the rest are writable today. L4 and any derivation-shaped
+**Sequencing: 0 → 1 → 2 → L1 → L2, then reassess.** Waves 0, 1, 2, L1 and L2
+landed 2026-08-16/17, so the sequence is *spent* and the reassessment is due:
+L3 and L2′ are the writable list work, `Int` is the stress round, and the
+ranked language gaps are the competition. L4 and any derivation-shaped
 relation sit behind [[indexed-families]]; `Int` is deliberately last because it
 is the stress round, not an API round.
 
@@ -118,3 +126,4 @@ datum.
 - 2026-08-17: Wave 3 is closed in full. [[recursion-at-deeper-subterms]] landed 2026-08-17 and [[nat-parity-and-half]] went in behind it the same day, in the spellings that issue had written down as its acceptance test — so the stall cost the wave nothing and bought a language feature.
 
 The datum for the ranking function: the feature the library ranked was not the feature the feature-issue had costed. The costing named a syntactic side condition that turned out unnecessary and missed the one thing that took the round's time — a dependent motive needs the carried values convoyed through the nested `match`. Two-step *proofs* are where that bites, and the library is what has them; a language round with no library customer would have shipped the non-dependent case and called it done.
+- 2026-08-17: Waves L1 and L2 landed together ([[std-list-api]]): std/list went 76 lines to ~380, a std/pair arrived because the library had no product type, and lib/list_algos.hthr is now only algorithms. The sequencing datum: the two prior rounds predicted their risk as notation and grammar, and at HIGHER ORDER that prediction fails — the round's one refusal was neither, it was type-argument INFERENCE meeting the currying workaround ([[curried-tail-type-arg-inference]], filed: zip's B lives in the curried tail, so no call site can infer it). Everything else that cost time was ordinary arithmetic phase (add recurses right, append peels left). The sequence 0 → 1 → 2 → L1 → L2 is now spent; the reassessment it always promised is the next decision.

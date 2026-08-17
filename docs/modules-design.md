@@ -213,6 +213,13 @@ a seam, not built.
   ergonomics round — §8's receiver-direction bullet, landed:
   `issues/type-owned-members-receiver-slice.md`.)
 
+That is the **birth** inventory and is kept as such; it is not a current
+listing. `lib/std/` has since grown by deliberate waves — `logic`, `bool`,
+`algebra`, `pair`, and an order/arithmetic kit and list API many times the
+size of the three bullets above (`issues/std-api-waves.md` sequences them,
+and each wave's own issue holds its content). Read the directory for what is
+there now.
+
 Acceptance is the migration: `lib/ir_v1.hthr` imports `nat` (and `option`
 where `OptVal` permits — `OptVal`'s monomorphic uses migrate only where
 the swap is mechanical; forcing it is not the round's job) and deletes its

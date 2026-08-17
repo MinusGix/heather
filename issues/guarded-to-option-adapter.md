@@ -3,7 +3,7 @@ title: Guarded total fns get their Option/Result face by adapter, not by twin de
 status: open
 labels: [frontend,design,ergonomics,stdlib]
 created: 2026-08-14
-updated: 2026-08-14
+updated: 2026-08-17
 ---
 
 Filed from the datarepr design review (2026-08-14, user note on
@@ -22,3 +22,7 @@ SPEC-SIDE/surface face of it. Decider provenance is shared with
 decider must be RUNTIME-COMPUTABLE (Compile-instance-bearing when used for
 compilation), Decidable alone does not mean sane-to-run. Related:
 [[datarepr-separation]].
+
+## Log
+
+- 2026-08-17: First customers, and they arrived written the other way (issues/std-list-api.md, 2026-08-17): `std/list` now has `List::head` and `List::last`, both returning `Option<A>` outright, because that is the only spelling available today. So this issue's premise is now concrete rather than hypothetical — there are two functions in the library whose `Option` face is the DEFINITION rather than an adapter over a guarded total function, and closing this issue means rewriting them and keeping the current signatures as the adapted view.

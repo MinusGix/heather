@@ -11,103 +11,21 @@
 // the `Bool` kit it rested on is gone. That section carries its own
 // before/after, because it is the measurement issues/decide-class.md was
 // filed to take.
+//
+// Emptied out from the top the same day (issues/std-list-api.md): `len`, `rev`
+// and its two laws, `cong_append_l` and the two `nth`/`append` lemmas were
+// list facts sitting in the algorithm file, and they are now `std/list`'s —
+// the move `cong_cons` and the append laws made on 2026-08-07, finished. The
+// private `plusl` did not move; it is GONE, because `nth_append_r`'s index
+// only ever needed writing as `add(i, len(xs))` rather than
+// `plusl(len(xs), i)` for `nat::add` to step where `append` steps. What is
+// left below is the algorithms: insertion sort, its sortedness proof, and
+// nothing that any other file would want.
 
 import list;
 import nat;
 import option;
 import logic;
-
-// ---------------------------------------------------------------------------
-// congruences this file needs. `cong_nat` (nat) is the model: a general `cong`
-// needs its function argument explicit, so each shape is its own lemma.
-//
-// `cong_cons` and the two append laws below it moved to `std/list`
-// (2026-08-07): `std/algebra` assembles `Monoid<List<A>>` from them, and they
-// were always list facts rather than algorithm facts. They arrive here by
-// `import list;` and are used unqualified, exactly as before.
-
-theorem cong_append_l<A>({a: List<A>}, {b: List<A>}, zs: List<A>, p: a = b):
-    append(a, zs) = append(b, zs)
-{
-    j(p, λ y q => append(a, zs) = append(y, zs), refl)
-}
-
-// ---------------------------------------------------------------------------
-// reverse and the append laws it rests on.
-
-fn rev<A>(xs: List<A>) -> List<A> {
-    match xs {
-        Nil => Nil,
-        Cons(h, t) => append(rev(t), Cons(h, Nil)),
-    }
-}
-
-theorem rev_append<A>(xs: List<A>, ys: List<A>):
-    rev(append(xs, ys)) = append(rev(ys), rev(xs))
-{
-    match xs {
-        Nil => sym(append_nil(rev(ys))),
-        Cons(h, t) =>
-            trans(
-                cong_append_l(Cons(h, Nil), rev_append(t, ys)),
-                append_assoc(rev(ys), rev(t), Cons(h, Nil))),
-    }
-}
-
-theorem rev_involutive<A>(xs: List<A>): rev(rev(xs)) = xs {
-    match xs {
-        Nil => {},
-        Cons(h, t) =>
-            trans(rev_append(rev(t), Cons(h, Nil)),
-                  cong_cons(h, rev_involutive(t))),
-    }
-}
-
-// ---------------------------------------------------------------------------
-// length, and `nth` after `append`.
-//
-// `plusl` recurses on its FIRST argument, unlike `nat::add`, because the
-// index that walks off the front of `append(xs, ys)` is `len(xs) + i` and it
-// has to reduce as `xs` is peeled. Curried for the usual reason, so every
-// call site would write `plusl(n)(m)` — but over-application spells it
-// `plusl(n, m)`.
-
-fn len<A>(xs: List<A>) -> Nat {
-    match xs { Nil => 0, Cons(h, t) => Succ(len(t)) }
-}
-
-fn plusl(n: Nat) -> Nat -> Nat {
-    match n {
-        Zero => λ (m: Nat) => m,
-        Succ(k) => λ (m: Nat) => Succ(plusl(k, m)),
-    }
-}
-
-// Past the whole of `xs`, `nth` reads out of `ys`.
-theorem nth_append_r<A>(xs: List<A>, ys: List<A>, i: Nat):
-    append(xs, ys).nth(plusl(len(xs), i)) = ys.nth(i)
-{
-    match xs {
-        Nil => {},
-        Cons(h, t) => nth_append_r(t, ys, i),
-    }
-}
-
-// Inside `xs`, `append` changes nothing. The index varies with the recursion,
-// so the statement is a function of it and every use is an over-application
-// (issues/ih-generalization.md's workaround).
-theorem nth_append_l<A>(xs: List<A>, ys: List<A>):
-    (i: Nat, a: A) -> xs.nth(i) = Some(a) -> append(xs, ys).nth(i) = Some(a)
-{
-    match xs {
-        Nil => λ i a p => absurd(p),
-        Cons(h, t) => λ i a =>
-            match i {
-                Zero => λ p => p,
-                Succ(k) => λ p => nth_append_l(t, ys, k, a, p),
-            },
-    }
-}
 
 // ---------------------------------------------------------------------------
 // insertion sort, and the proof that it sorts.

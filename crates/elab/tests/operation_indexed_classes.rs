@@ -32,6 +32,7 @@ const LOGIC: &str = include_str!("../../../lib/std/logic.hthr");
 const BOOL: &str = include_str!("../../../lib/std/bool.hthr");
 const NAT: &str = include_str!("../../../lib/std/nat.hthr");
 const OPTION: &str = include_str!("../../../lib/std/option.hthr");
+const PAIR: &str = include_str!("../../../lib/std/pair.hthr");
 const LIST: &str = include_str!("../../../lib/std/list.hthr");
 
 /// The classes and the instances, declared in the probe module itself so that
@@ -70,7 +71,7 @@ instance<A> Mon<List<A>>(append) {
 fn run(extra: &str) -> Result<Elaborator, String> {
     let mut e = Elaborator::with_prelude().expect("prelude");
     for (name, src) in
-        [("logic", LOGIC), ("bool", BOOL), ("nat", NAT), ("option", OPTION), ("list", LIST)]
+        [("logic", LOGIC), ("bool", BOOL), ("nat", NAT), ("option", OPTION), ("pair", PAIR), ("list", LIST)]
     {
         if let Err(err) = e.elab_module_source(name, src) {
             return Err(format!("{name}: {err}"));

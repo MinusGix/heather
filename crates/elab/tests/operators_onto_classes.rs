@@ -39,6 +39,7 @@ const LOGIC: &str = include_str!("../../../lib/std/logic.hthr");
 const BOOL: &str = include_str!("../../../lib/std/bool.hthr");
 const NAT: &str = include_str!("../../../lib/std/nat.hthr");
 const OPTION: &str = include_str!("../../../lib/std/option.hthr");
+const PAIR: &str = include_str!("../../../lib/std/pair.hthr");
 const LIST: &str = include_str!("../../../lib/std/list.hthr");
 
 /// The test's own chain and instances, plus its own designation table. `Sem` →
@@ -100,7 +101,7 @@ fn sum_all<A: Mon(+)>(xs: List<A>) -> A { fold(+, xs) }
 
 fn run(extra: &str) -> Result<Elaborator, String> {
     let mut e = Elaborator::with_prelude().expect("prelude");
-    for (name, src) in [("logic", LOGIC), ("bool", BOOL), ("nat", NAT), ("option", OPTION), ("list", LIST)] {
+    for (name, src) in [("logic", LOGIC), ("bool", BOOL), ("nat", NAT), ("option", OPTION), ("pair", PAIR), ("list", LIST)] {
         if let Err(err) = e.elab_module_source(name, src) {
             return Err(format!("{name}: {err}"));
         }
@@ -362,14 +363,19 @@ fn an_instance_head_will_not_take_a_symbol() {
 /// kernel type and needs no import, so the carrier survives the trim; the
 /// designation table keeps the row that makes the diagnostic's "where `*`
 /// *does* mean something" half real.
+///
+/// `list` left this closure on 2026-08-17 (`issues/std-list-api.md`): the L1
+/// wave gave `std/list` a `len`, so the module imports `nat`, and a probe
+/// whose premise is that `nat` is *nowhere* cannot load it. Nothing here
+/// needed a list — the assertions are about `Bool` and the fallback name —
+/// so the trim costs the test nothing, but it is the first place a widened
+/// `std/list` closure has been felt.
 fn without_nat(extra: &str) -> String {
     let mut e = Elaborator::with_prelude().expect("prelude");
-    for (name, src) in [("logic", LOGIC), ("bool", BOOL), ("option", OPTION), ("list", LIST)] {
+    for (name, src) in [("logic", LOGIC), ("bool", BOOL), ("option", OPTION)] {
         e.elab_module_source(name, src).unwrap_or_else(|err| panic!("{name}: {err}"));
     }
-    let src = format!(
-        "import bool;\nimport option;\nimport list;\ndesignation * at Bool := and\n{extra}"
-    );
+    let src = format!("import bool;\nimport option;\ndesignation * at Bool := and\n{extra}");
     match e.elab_module_source("probe", &src) {
         Ok(()) => panic!("expected a refusal, but it checked:\n{extra}"),
         Err(ElabError::Elab { msg, .. }) => msg,

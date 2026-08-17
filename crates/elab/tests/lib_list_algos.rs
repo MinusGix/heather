@@ -20,6 +20,7 @@ const LOGIC: &str = include_str!("../../../lib/std/logic.hthr");
 const BOOL: &str = include_str!("../../../lib/std/bool.hthr");
 const NAT: &str = include_str!("../../../lib/std/nat.hthr");
 const OPTION: &str = include_str!("../../../lib/std/option.hthr");
+const PAIR: &str = include_str!("../../../lib/std/pair.hthr");
 const LIST: &str = include_str!("../../../lib/std/list.hthr");
 const ALGOS: &str = include_str!("../../../lib/list_algos.hthr");
 
@@ -27,7 +28,7 @@ const ALGOS: &str = include_str!("../../../lib/list_algos.hthr");
 fn the_list_algorithms_check() {
     let mut e = Elaborator::with_prelude().expect("prelude");
     for (name, src) in
-        [("logic", LOGIC), ("bool", BOOL), ("nat", NAT), ("option", OPTION), ("list", LIST), ("list_algos", ALGOS)]
+        [("logic", LOGIC), ("bool", BOOL), ("nat", NAT), ("option", OPTION), ("pair", PAIR), ("list", LIST), ("list_algos", ALGOS)]
     {
         if let Err(err) = e.elab_module_source(name, src) {
             let msg = match err {

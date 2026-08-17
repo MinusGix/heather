@@ -3,7 +3,7 @@ title: IH generalization: recursion whose non-decreasing arguments vary
 status: open
 labels: [frontend,elaboration,design]
 created: 2026-07-31
-updated: 2026-08-16
+updated: 2026-08-17
 ---
 
 Promoted from [[match-recursion]]'s deferred note (2026-07-24: "the one
@@ -78,3 +78,4 @@ What the ir_v1 round adds to the picture:
 - 2026-08-05: The call-site half of the workaround got cheaper: [[call-site-overapplication]] landed (2026-08-05), including over-applying an induction hypothesis, so a curried-return fn is called nth(t, k) everywhere. The definition-site motive computation remains this issue's scope, cost warning unchanged.
 - 2026-08-13: Sibling gap filed off the showcase critique (2026-08-13): [[termination-measures]] — non-structural decreases clauses and callee consumption postconditions. Same checker, complementary axis (this issue: arguments that vary; that one: measures that are not structural at all). The showcase gap table (docs/showcase/README.md) carries both as its two recursion rows.
 - 2026-08-16: A library-shaping instance, from the [[std-logic-module]] round (2026-08-16): the recommended propositional `Le` for [[nat-order-kit]] — `Le(0,m)=True; Le(Sk,0)=Empty; Le(Sk,Sl)=Le(k,l)`, by recursion into Type — CANNOT be written uncurried. `fn Le(n, m: Nat) -> Type { match n { … match m … } }` is refused with "recursive call to `Le` must pass `n` unchanged", because the inner match makes the call vary both arguments; the curried `fn Le(n: Nat) -> Nat -> Type` checks, and so does a real `le_trans` over it (verified through the CLI, 2026-08-16). Not a new defect and nothing here is asked to move — `leb` and `sub` in lib/std/nat.hthr are already curried for the same reason. What is new is the SCOPE: this gap now shapes the spelling of a core PREDICATE and not only of two helper functions, so every order lemma in the coming kit is stated against a curried relation. If this issue lands, the library's uncurrying is a mechanical follow-on with a named beneficiary rather than a hypothetical one.
+- 2026-08-17: New customer at HIGHER ORDER, from the L1 list wave (issues/std-list-api.md, 2026-08-17): `foldl` has to be curried in its SEED — `fn foldl<A, B>(xs: List<A>, f: B -> A -> B) -> B -> B` — because the accumulator changes at every step while the list descends. Every prior customer curried an *index* (`nth`, `sub`, `take`/`drop`, `Le`); this is the first where the varying argument is the fold's own result type, so the workaround now shows up in a return type rather than in a parameter list. It also has a downstream cost the index cases never had: a curried tail is invisible to type-argument inference (issues/curried-tail-type-arg-inference.md).
