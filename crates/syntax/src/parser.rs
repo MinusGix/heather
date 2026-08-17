@@ -128,7 +128,15 @@ pub fn class_ty(name: String, args: Vec<Ty>, index: Vec<Expr>, span: Span) -> Ty
 pub fn parse_file(src: &str) -> Result<File, ParseError> {
     let toks = lex(src).map_err(|e| ParseError { msg: e.msg, span: e.span })?;
     let mut p =
-        Parser { toks, pos: 0, no_record_lit: false, no_eq: false, no_iff: false, motive_body: false };
+        Parser {
+            toks,
+            pos: 0,
+            no_record_lit: false,
+            no_eq: false,
+            no_iff: false,
+            motive_body: false,
+            spec_failed: std::collections::HashSet::new(),
+        };
     let mut items = Vec::new();
     // Imports come first, all of them (docs/modules-design.md §3.1). The
     // position rule is enforced here rather than in the elaborator because it
@@ -194,9 +202,38 @@ struct Parser {
     /// accepted here still parses: [`Parser::ty`] falls through to
     /// [`Parser::expr`] for `a = b`, names and applications.
     motive_body: bool,
+    /// Positions where a type-argument speculation has already been tried and
+    /// **failed** — the memo that keeps speculation linear.
+    ///
+    /// Two sites speculate on a `<`: [`Parser::try_tyargs`] in the expression
+    /// grammar, and the `D<A, B>` branch of [`Parser::ty`]. Each falls back by
+    /// rewinding and re-parsing the same tokens the other way, so once *both*
+    /// recover they re-enter each other and a failing `A<A<A<…<Nat` re-parses
+    /// every prefix at every depth. That is **exponential**: measured at 4× per
+    /// two levels, 7 ms at depth 10 and 4.7 s at depth 20.
+    /// `docs/surface-polymorphism.md` §1 called backtracking "free here", and
+    /// it was — but only because the *type* side failed hard and cut the
+    /// recursion. Making that side recover (the `Lt` round) removed the cut.
+    ///
+    /// A failed speculation is a pure function of (position, site, flags), so
+    /// remembering it is sound, and it collapses the re-entry to one attempt
+    /// per key — packrat memoization over the one nonterminal that needs it.
+    /// **Failures only**: a success consumes its tokens and is never retried,
+    /// so there is nothing to memo on that side.
+    ///
+    /// The flags are part of the key because `ty()` reaches the expression
+    /// grammar, where all four of them change what parses.
+    spec_failed: std::collections::HashSet<(usize, u8)>,
 }
 
 type R<T> = Result<T, ParseError>;
+
+/// The two speculating sites, as the `site` half of a [`Parser::spec_failed`]
+/// key. They must not share: the expression site additionally requires a `(`
+/// or a `>` where the type site does not, so the same position can fail for
+/// one and succeed for the other.
+const SITE_EXPR_TYARGS: u8 = 1 << 4;
+const SITE_TY_NAMED: u8 = 1 << 5;
 
 /// `name(args…)` as an [`ExprKind::App`] with a `Var` head — what the operator
 /// and `calc` desugarings build.
@@ -2063,6 +2100,7 @@ impl Parser {
         // third and largest, and it is the same `save`.
         if matches!(self.peek(), TokKind::Ident(_))
             && matches!(self.toks.get(self.pos + 1).map(|t| &t.kind), Some(TokKind::Lt))
+            && !self.spec_seen_failing(self.pos, SITE_TY_NAMED)
         {
             let save = self.pos;
             let (name, start) = self.qual_ident("type name")?;
@@ -2089,7 +2127,7 @@ impl Parser {
             // reports at the `<` as "unbound name / expected …" rather than
             // pretending to know which reading was intended.
             if !ok || !matches!(self.peek(), TokKind::Gt) {
-                self.pos = save;
+                self.spec_note_failure(save, SITE_TY_NAMED);
                 let lhs = self.expr()?;
                 return Ok(expr_as_ty(&lhs));
             }
@@ -2719,16 +2757,16 @@ impl Parser {
         if !matches!(self.peek(), TokKind::Lt) {
             return None;
         }
+        if self.spec_seen_failing(self.pos, SITE_EXPR_TYARGS) {
+            return None;
+        }
         let save = self.pos;
         self.bump();
         let mut args = Vec::new();
         loop {
             match self.ty() {
                 Ok(t) => args.push(t),
-                Err(_) => {
-                    self.pos = save;
-                    return None;
-                }
+                Err(_) => return self.spec_fail(save, SITE_EXPR_TYARGS),
             }
             if !matches!(self.peek(), TokKind::Comma) {
                 break;
@@ -2736,10 +2774,40 @@ impl Parser {
             self.bump();
         }
         if !matches!(self.peek(), TokKind::Gt) {
-            self.pos = save;
-            return None;
+            return self.spec_fail(save, SITE_EXPR_TYARGS);
         }
         Some((args, self.bump().span))
+    }
+
+    /// The bit-packed flag set that, with a position and a site, keys
+    /// [`Self::spec_failed`]. Every flag that can change what the expression
+    /// grammar accepts has to be here, or the memo would answer a question it
+    /// was not asked.
+    fn spec_flags(&self, site: u8) -> u8 {
+        site | (self.no_record_lit as u8)
+            | ((self.no_eq as u8) << 1)
+            | ((self.no_iff as u8) << 2)
+            | ((self.motive_body as u8) << 3)
+    }
+
+    /// Has this exact speculation already been tried here and failed?
+    fn spec_seen_failing(&self, at: usize, site: u8) -> bool {
+        self.spec_failed.contains(&(at, self.spec_flags(site)))
+    }
+
+    /// Record a failed speculation, rewind, and answer "not this reading".
+    /// Typed to return `Option` so the two `try_tyargs` exits read as one line;
+    /// [`Self::ty`]'s site calls [`Self::spec_note_failure`] directly, since it
+    /// continues into the fallback rather than returning.
+    fn spec_fail<T>(&mut self, save: usize, site: u8) -> Option<T> {
+        self.spec_note_failure(save, site);
+        None
+    }
+
+    fn spec_note_failure(&mut self, save: usize, site: u8) {
+        let key = (save, self.spec_flags(site));
+        self.spec_failed.insert(key);
+        self.pos = save;
     }
 
     /// A primary expression: keyword forms (`match`/`refl`/`j`/`calc`), an
@@ -4653,5 +4721,40 @@ mod tests {
         parse_file("theorem t(a: Nat, b: Nat, c: Nat): (a + b) + c = a + (b + c) { refl }")
             .unwrap();
         parse_file("fn f(a: Nat, b: Nat) -> Nat { g(h(a, b), a) }").unwrap();
+    }
+
+    /// **Speculation stays linear** (`issues/type-argument-speculation-cost.md`).
+    ///
+    /// Two sites speculate on a `<` and each falls back by re-parsing the same
+    /// tokens the other way, so once both recover they re-enter each other and
+    /// a failing `A<A<A<…` costs 2^depth. It was measured at 4× per two
+    /// levels — 7 ms at depth 10, 4.7 s at depth 20 — before
+    /// [`Parser::spec_failed`] memoized the failures.
+    ///
+    /// This is a **cost** test, so it is written the only way a cost test is
+    /// worth having: at a depth the exponential could not survive. Depth 200
+    /// is 2^200 attempts unmemoized and one attempt per position memoized, so
+    /// the assertion is simply that it *terminates* — no timing, no threshold,
+    /// nothing machine-dependent. Both spellings are here because the two
+    /// sites are separate keys and a memo on one alone still blows up.
+    #[test]
+    fn deep_failing_speculation_does_not_blow_up() {
+        let ty_pos = format!("fn f(h: {}Nat) -> Nat {{ 0 }}", "A<".repeat(200));
+        assert!(parse_file(&ty_pos).is_err(), "unterminated type arguments must still fail");
+        let expr_pos = format!("fn g() -> Nat {{ {}b }}", "a<".repeat(200));
+        assert!(parse_file(&expr_pos).is_err(), "an unterminated `<` chain must still fail");
+    }
+
+    /// The memo must not change *which* programs parse — it only skips work
+    /// already known to be wasted. The shapes that exercise every rewind path:
+    /// a comparison in type position (the `Lt` round's whole point), a real
+    /// type application, the `(`-follows reinterpretation, and nesting of each.
+    #[test]
+    fn memoized_speculation_accepts_exactly_what_it_did_before() {
+        parse_file("fn a(n: Nat, m: Nat, h: n < m) -> Nat { 0 }").unwrap();
+        parse_file("fn b(xs: List<Option<Nat>>) -> List<Option<Nat>> { xs }").unwrap();
+        parse_file("theorem c(): id<Nat>(3) = 3 { refl }").unwrap();
+        parse_file("fn d(n: Nat, m: Nat, h: Or<(n < m), (m <= n)>) -> Nat { 0 }").unwrap();
+        parse_file("fn e(a: Nat, b: Nat) -> Nat { a < b }").unwrap();
     }
 }

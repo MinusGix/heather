@@ -61,6 +61,19 @@ falls back to `lt`; `f<A>(x)` succeeds. Backtracking is free here — the parser
 is a `Vec<Tok>` plus an index — and it is total, so no lookahead heuristic can
 be wrong about a program.
 
+**Amended 2026-08-16** (`issues/type-argument-speculation-cost.md`): "free" was
+true, and true only while this was the *one* speculating site and the type
+grammar's `D<A, B>` failed hard, which cut the recursion at the first level.
+When `Parser::ty` learned to recover as well — it had to, since `n < m` is a
+type once the order is propositional — the two sites began re-entering each
+other on failure, and an unterminated `A<A<A<…` cost 2^depth: 4.7 s at depth 20
+against 7 ms at depth 10. The rule the paragraph should have stated is
+**speculation is free only while failure is terminal**. Both sites now consult
+a shared failure memo keyed on (position, site, mode flags), which restores
+linearity without moving any boundary. `issues/retire-angle-bracket-type-arguments.md`
+asks whether `<…>` should exist at all, given that §2 below lowers it to
+ordinary leading implicit parameters.
+
 ## 2. The lowering
 
 A type parameter is a **leading implicit value parameter at `Ty 0`**, and the
