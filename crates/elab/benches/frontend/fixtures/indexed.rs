@@ -64,7 +64,12 @@ fn arms() -> Family {
         // registered code names a class; `D#fam` names the whole family.
         // Band records the exponent that exists, per the suite's rule; what
         // it guards is a third power appearing.
-        expect_slope: Some((1.90, 2.60)),
+        //
+        // 2026-08-17, re-recorded: **1.89** (six runs, range 1.86-1.93). The
+        // old floor was 1.90 -- inside this family's own run-to-run range, so
+        // the gate flipped red or green on which run you took. A boundary that
+        // close to the measurement is not a claim about the cost model.
+        expect_slope: Some((1.55, 2.25)),
         cases: indexed_sweep(
             "indexed/arms", &[2, 3, 4, 5, 6], "Vf", IndexedRoute::One, src,
         ),

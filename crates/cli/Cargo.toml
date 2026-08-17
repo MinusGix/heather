@@ -4,6 +4,12 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 
+# The loader is shared with the frontend bench corpus (see src/lib.rs); the
+# binary is the only other consumer.
+[lib]
+name = "heather_cli"
+path = "src/lib.rs"
+
 [[bin]]
 name = "heather"
 path = "src/main.rs"

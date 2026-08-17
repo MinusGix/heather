@@ -73,7 +73,14 @@ fn wide_inductive() -> Family {
         // emitted term is O(n²) before anything checks it. The band is
         // recorded rather than claimed — what it guards is a *third* power
         // appearing.
-        expect_slope: Some((1.30, 2.60)),
+        //
+        // 2026-08-17, re-recorded (issues/frontend-benchmarks.md): **1.23**,
+        // measured as the mean of six consecutive runs whose whole range was
+        // 1.22-1.25. The 1.30 floor had been exited from below since at least
+        // 2026-08-16 and the exit was not noise; the band now spans the
+        // measurement +/-0.35, which is the same distance `--check` calls a
+        // slope drift, so band and drift gate mean the same thing by "moved".
+        expect_slope: Some((0.90, 1.60)),
         cases: sweep("scale/wide-inductive", &[4, 8, 16, 32], src),
     }
 }

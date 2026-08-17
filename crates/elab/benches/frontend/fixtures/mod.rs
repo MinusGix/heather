@@ -21,7 +21,7 @@
 //! Both are repeatable, which the harness requires: `check_source` mutates
 //! the elaborator, so a timed closure may never reuse one.
 
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::time::Instant;
 
@@ -115,13 +115,27 @@ fn measure_phases(src: &str, cell: &Rc<Cell<Phases>>, total_ns: u64) {
 /// and not the root — timing the root alone would time a file that no longer
 /// checks, and a fixture that stops working gets *faster*.
 ///
-/// The checksum is the total error count across the closure, so a module that
-/// stopped checking is still visible as a changed count.
+/// The checksum is the number of **Ψ bindings** the closure leaves behind —
+/// a count of work *done*, not of errors. An error count is a poor checksum
+/// for a corpus case: it is zero both when the closure checks and when a
+/// declaration quietly stops being elaborated at all, and a fixture doing
+/// less work gets faster. A failed declaration registers nothing (globals and
+/// Ψ are touched only after the kernel gate), so any lost declaration moves
+/// this number.
+/// A checksum is still only a *count*, though, and a count is a poor bug
+/// report. The runner therefore also records the first diagnostic it saw,
+/// rendered against the module it came from, and
+/// [`crate::harness::Case::with_diagnosis`] hands it to the checksum
+/// assertion. Diagnosing the stale closure of
+/// issues/frontend-bench-ir-closure-stale.md cost a detour that this one line
+/// would have saved.
 pub fn fresh_closure_runner(
     modules: Vec<(String, String)>,
-) -> (impl Fn() -> u64, Rc<Cell<Phases>>) {
+) -> (impl Fn() -> u64, Rc<Cell<Phases>>, Diagnosis) {
     let cell = Rc::new(Cell::new(Phases::default()));
     let out = cell.clone();
+    let first: Diagnosis = Rc::new(RefCell::new(None));
+    let seen = first.clone();
     // The phase split is attributed against the root's source, which is the
     // file the split is a statement about.
     let root = modules.last().expect("a closure has a root").1.clone();
@@ -129,19 +143,40 @@ pub fn fresh_closure_runner(
         stats::reset_kernel_ns();
         let t = Instant::now();
         let mut e = Elaborator::with_prelude().expect("prelude");
-        let mut errs = 0u64;
         for (name, src) in &modules {
-            errs += e.check_module_source(name, src).len() as u64;
+            let es = e.check_module_source(name, src);
+            // Recording only the *first* error of the whole closure: a broken
+            // import cascades (every later module fails on the module that
+            // failed before it), so the first one is the one that explains
+            // the rest.
+            if let Some(e0) = es.first()
+                && seen.borrow().is_none()
+            {
+                *seen.borrow_mut() = Some(format!("module `{name}`: {}", e0.render(src)));
+            }
         }
+        let done = e.psi().bindings.len() as u64;
         let total_ns = t.elapsed().as_nanos() as u64;
         measure_phases(&root, &out, total_ns);
-        errs
+        done
     };
-    (run, cell)
+    (run, cell, first)
 }
 
-/// [`validate`] for a closure: every module must check, in order.
-pub fn validate_closure(what: &str, modules: &[(String, String)]) {
+/// The first diagnostic a runner saw, if any — written by the run, read by
+/// the checksum assertion.
+pub type Diagnosis = Rc<RefCell<Option<String>>>;
+
+/// [`validate`] for a closure: every module must check, in order. Returns the
+/// closure's Ψ-binding count — the checksum the timed runs must reproduce.
+///
+/// The heavy corpus cases used to skip this, because validating one meant
+/// checking `lib/ir_v1.hthr` and that was ~90 s. It is seconds now (the
+/// kernel-side rounds of early August), so the suite's own fixture rule — *a
+/// fixture validates before it is timed* — is affordable again, and the
+/// exception that let issues/frontend-bench-ir-closure-stale.md's closure fail
+/// for a day is gone.
+pub fn validate_closure(what: &str, modules: &[(String, String)]) -> u64 {
     let mut e = prelude();
     for (name, src) in modules {
         let errs = e.check_module_source(name, src);
@@ -152,6 +187,7 @@ pub fn validate_closure(what: &str, modules: &[(String, String)]) {
             errs[0].render(src)
         );
     }
+    e.psi().bindings.len() as u64
 }
 
 /// A run against a warm prelude: the clone is inside the timing, because it

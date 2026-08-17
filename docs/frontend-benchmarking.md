@@ -45,6 +45,27 @@ fitted exponents moved by ≤0.25, and by ≤0.1 on all but the noisiest family.
 Families that make a claim declare a band, and `--check` fails when the fit
 leaves it, whether or not a baseline exists on this machine.
 
+**That ±0.25 is a loaded-machine figure and it is far too pessimistic to size
+a band with** (measured 2026-08-17, `issues/frontend-benchmarks.md`, which
+owns the bands and carries the numbers): repeated back-to-back runs on a
+machine carrying nothing but a desktop put the whole run-to-run *range* of
+every family's fit in the low hundredths. So a fit that sits a few hundredths
+outside its band is not the machine, and a band boundary within a few
+hundredths of the measurement is not a claim about the cost model — it is a
+coin toss, and it was one on two families until that day. Bands are therefore
+recorded as **the measurement ±0.35**, the same distance `--check` calls a
+slope drift, so the band gate and the drift gate agree about what "moved"
+means.
+
+A band can be left on **either** side, and the two mean opposite things.
+Above: the cost model got worse — that is the regression a round should
+suspect itself of. Below: the code became cheaper than the recorded claim, so
+the *claim* is what is broken, and the fix is to re-record the band rather
+than to change any code. `--check` fails on both, because a false claim is
+false in both directions and a band nobody re-records is a band that stops
+meaning anything — but it prints which side, because the two want different
+work.
+
 **2. Latency budgets** — an absolute ceiling on a corpus file, checked on
 every machine, baseline or not. `lib/ir_v1.hthr` is the one that matters:
 59 s through the release CLI on a quiet machine, 67–88 s from this harness
@@ -90,7 +111,7 @@ number is never mistaken for a seven-round one.
 | condition | threshold | why that threshold |
 |---|---|---|
 | a case is slower than baseline | ≥ 1.25× | the kernel suite's number, kept for consistency — but see the noise warning below, which matters far more here |
-| a fitted slope drifted upward | > +0.35 | as the kernel suite — but the observed run-to-run spread here reached 0.25 on `forded/declared-index-tags`, so a lone slope flag wants a re-run too |
+| a fitted slope drifted upward | > +0.35 | as the kernel suite. The 0.25 spread this row used to cite for `forded/declared-index-tags` was measured under load ~10; on a quiet machine that family's six-run range was 0.06, so a lone slope flag is worth a re-run but not a shrug |
 | a slope left its declared band | — | a standing claim about the cost model, checked on every machine |
 | a case exceeded its latency budget | — | a standing claim about the wait, checked on every machine |
 | a case blew its guard | 3× its budget | it was measured once and not sampled; something is very wrong or the fixture needs a new home |
@@ -113,6 +134,18 @@ sits well above its own min — that annotation means the machine was busy
 `--filter <family> --check` is the cheap way to ask again; `--no-heavy` makes
 it cheaper.
 
+**Interim protocol for the time half** (2026-08-17,
+`issues/frontend-bench-heavy-contaminates-cheap-cases.md`): read the absolute
+times from a `--no-heavy` run. A full run's heavy `lib/ir_v1.hthr` cases leave
+the process in a state that makes later families read 1.3–1.5× higher —
+measured by controlled experiment, not inferred: the same families are green
+under `--no-heavy` and under `--filter` in the same minute a full run flags
+them. That is above the 1.25× threshold, so a full run's cheap-case time flags
+carry no information until that issue is fixed. Everything else the full run
+gates — slope bands, latency budgets, guards, and the heavy cases' own times,
+which are seconds-scale and unaffected — is trustworthy and is the reason to
+run it.
+
 ## The baseline file
 
 `crates/elab/benches/baseline.tsv`, tab-separated for the kernel suite's
@@ -125,11 +158,18 @@ Re-record when the machine changes, the toolchain changes, or a deliberate
 change moves the numbers. A baseline from another machine still gates slopes,
 bands and budgets, and `--check` says which half it skipped.
 
-> **The baseline in the tree was re-recorded 2026-08-05** (the code-definition
-> round, load ~3–6 — quieter than 2026-08-04's ~10 but not quiet). Absolute
-> times still carry a ~1.2–1.5× machine-noise width; the slopes, the phase
-> proportions and the budgets are the trustworthy half. Re-record on a quiet
-> machine before trusting the time half of `--check`.
+> **The baseline in the tree was re-recorded 2026-08-17** on an otherwise idle
+> machine (`issues/frontend-benchmarks.md` has the run's conditions, every row
+> that moved, and the evidence that the heavy rows moved because the system got
+> faster rather than because the fixture stopped working — the corpus checksum
+> is a count of declarations landed, so that is checkable without a clock).
+> Every recorded time here is superseded by it; the rows below and in the
+> historical sections are what those rounds measured on their day, kept because
+> the *shapes* and the reasoning are what they are for, and per the
+> numbers-in-docs policy on
+> `issues/perf-tracking-consistent-environment.md` current figures live on the
+> issue rather than here. Read absolute times from a `--no-heavy` run until
+> `issues/frontend-bench-heavy-contaminates-cheap-cases.md` closes.
 
 ## Why no Criterion, and why a second harness at all
 
@@ -203,6 +243,17 @@ for is both. The x-axis stays the root's bytes — the label names the root —
 so the two `ir_v1` cases legitimately changed *shape*, not merely time, on
 2026-08-05, and their baseline rows have to be re-recorded rather than
 compared across that boundary.
+
+**The closure is computed, not listed** (2026-08-17,
+`issues/frontend-bench-ir-closure-stale.md`). It was a list of module names in
+the fixture for two weeks, and it went stale the day `lib/std/bool.hthr`
+gained `import logic;` — after which every module of the closure failed, since
+a module whose import does not resolve never registers a scope and so breaks
+the module after it too. A corpus case that fails its whole closure is *fast*,
+and the checksum caught it only because the checksum is the error count. The
+fixture now calls the CLI's own loader (`heather_cli::loader::load`, which is
+why `crates/cli` has a `lib` target), so the closure the corpus times is
+whatever the library actually imports.
 
 No exponent is claimed for the corpus: the x-axis is source bytes across
 unrelated files, and `lib/ir_v1.hthr` is not "a bigger `lib/vec_code.hthr`" —

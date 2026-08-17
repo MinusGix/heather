@@ -29,7 +29,7 @@
 //! 58-second case is an hour. Cases that take longer than a second get fewer
 //! rounds, which is a weaker measurement, and the report says so.
 
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::fmt::Write as _;
 use std::rc::Rc;
 use std::time::Instant;
@@ -116,6 +116,11 @@ pub struct Case {
     /// Skipped under `--no-heavy` and by the smoke test. Set on cases that
     /// cost seconds.
     pub heavy: bool,
+    /// What the fixture would say about a failed run, if it can say anything.
+    /// The checksum is a count, and a count is a poor bug report: a case that
+    /// elaborates sources fills this with its first diagnostic so a checksum
+    /// mismatch arrives with the reason attached rather than a number.
+    pub diagnosis: Option<Rc<RefCell<Option<String>>>>,
 }
 
 impl Case {
@@ -129,6 +134,7 @@ impl Case {
             phases: None,
             budget_ns: None,
             heavy: false,
+            diagnosis: None,
         }
     }
 
@@ -149,6 +155,11 @@ impl Case {
 
     pub fn heavy(mut self) -> Case {
         self.heavy = true;
+        self
+    }
+
+    pub fn with_diagnosis(mut self, first_error: Rc<RefCell<Option<String>>>) -> Case {
+        self.diagnosis = Some(first_error);
         self
     }
 }
@@ -287,9 +298,13 @@ pub fn measure(case: &Case, cfg: &Cfg) -> (Point, Option<String>) {
     assert!(
         got == case.expect,
         "fixture `{}` returned {got}, expected {} — the fixture is broken, not \
-         slow (a checksum mismatch means the work changed)",
+         slow (a checksum mismatch means the work changed){}",
         case.label,
-        case.expect
+        case.expect,
+        match case.diagnosis.as_ref().and_then(|d| d.borrow().clone()) {
+            Some(first) => format!("\nfirst diagnostic of this run:\n{first}"),
+            None => String::new(),
+        }
     );
 
     let guard = case.budget_ns.map(|b| b.saturating_mul(3)).unwrap_or(cfg.default_guard_ns);
@@ -699,12 +714,27 @@ pub fn compare(reports: &[Report], base: &Baseline, th: &Thresholds) -> Vec<Diff
         }
         // An expected band is a standing claim about the cost model and is
         // checked whether or not a baseline exists.
+        //
+        // Both sides fail, and they fail for opposite reasons, so the message
+        // says which side it left: *above* is the cost model getting worse,
+        // and it is the reading a round should suspect itself of; *below* is
+        // the claim having gone stale — the code got cheaper than what is
+        // written down, and what it wants is a re-record, not a fix. A round
+        // that reads a red gate has to be able to tell those apart in one
+        // line; three bands sat exited from below for eleven days
+        // (issues/frontend-benchmarks.md, 2026-08-17) partly because red said
+        // only "outside".
         if let (Some(s), Some((lo, hi))) = (r.slope, r.expect_slope) {
             if s < lo || s > hi {
+                let side = if s < lo {
+                    "below — the recorded claim is stale, re-record it"
+                } else {
+                    "above — the cost model got worse"
+                };
                 out.push(Diff {
                     label: format!("{} slope band", r.name),
                     verdict: Verdict::Regressed,
-                    detail: format!("{s:.2} outside expected {lo:.2}–{hi:.2}"),
+                    detail: format!("{s:.2} outside expected {lo:.2}–{hi:.2}, {side}"),
                 });
             }
         }

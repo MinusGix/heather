@@ -32,7 +32,10 @@ use std::rc::Rc;
 use heather_cache::Cache;
 use heather_elab::Elaborator;
 
-mod loader;
+// The loader lives in this crate's `lib` target so that the frontend bench
+// corpus computes its import closure with the *same* code the CLI does
+// (see `lib.rs`, issues/frontend-bench-ir-closure-stale.md).
+use heather_cli::loader;
 
 /// Where the standard library lives when nobody says otherwise
 /// (docs/modules-design.md §3.2). Defaulted only if it exists, so a run from
