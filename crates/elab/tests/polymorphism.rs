@@ -493,3 +493,100 @@ fn an_implicit_taking_call_still_checks_its_arguments() {
     ok("theorem t(n: Nat): n = n { @sym(n, n, refl) }
         theorem u(n: Nat): n = n { @sym(n, n, ?p) on ?p := refl; }");
 }
+
+// -- a recursive self-call at written type arguments -----------------------
+//
+// `issues/recursive-self-call-type-arguments.md`. The self-name is not a global
+// while its own body elaborates, so the type-application path used to report
+// that the declaration takes no type arguments — of a declaration that visibly
+// takes one, at the one place a reader cannot check the claim against a
+// different declaration, since caller and callee are the same text.
+//
+// The rule the fix states: a self-call is always at the declaration's *own*
+// type parameters, because the lowering is an `elim` whose type parameters are
+// bound outside the recursion. So the written arguments are checked to be those
+// parameters and then dropped, and a different instantiation is refused as the
+// polymorphic recursion it is.
+
+#[test]
+fn a_self_call_may_write_its_own_type_arguments() {
+    ok("fn twice<A>(a: A, n: Nat) -> A \
+        { match n { Zero => a, Succ(k) => twice<A>(a, k) } }");
+}
+
+#[test]
+fn a_type_valued_self_call_may_too() {
+    // The shape that found this: a proposition by recursion into `Type`, whose
+    // recursive occurrence is the one a carrier mentions. Its failure used to
+    // cascade — the head never registered, so every later `Rep<…>` reported the
+    // same thing and three declarations looked broken.
+    ok("fn Rep<A>(n: Nat) -> Type { match n { Zero => A, Succ(k) => Rep<A>(k) } }
+        fn use_rep<B>(b: B, k: Nat) -> B { b }");
+}
+
+#[test]
+fn the_implicit_spelling_is_unchanged() {
+    // The workaround that always worked, kept honest: writing the arguments and
+    // omitting them must be the same call.
+    ok("fn twice<A>(a: A, n: Nat) -> A \
+        { match n { Zero => a, Succ(k) => twice(a, k) } }");
+}
+
+#[test]
+fn a_self_call_at_type_arguments_still_computes() {
+    // Axis 1, and the assertion that the written arguments really are dropped
+    // rather than re-elaborated into something else: the lowering is still the
+    // recursor, so a closed call reduces.
+    ok("fn twice<A>(a: A, n: Nat) -> A \
+        { match n { Zero => a, Succ(k) => twice<A>(a, k) } }
+        theorem computes(): twice<Nat>(7, 3) = 7 { refl }");
+}
+
+#[test]
+fn a_self_call_at_a_different_instantiation_is_refused() {
+    // Polymorphic recursion, named as such. Permuted parameters and not junk
+    // types, because that is the case a reader would expect to work.
+    let e = bad("fn swap<A, B>(a: A, b: B, n: Nat) -> A \
+                 { match n { Zero => a, Succ(k) => swap<B, A>(a, b, k) } }");
+    assert!(e.contains("polymorphic recursion"), "{e}");
+}
+
+#[test]
+fn the_wrong_number_of_self_type_arguments_is_refused() {
+    let e = bad("fn one<A>(a: A, n: Nat) -> A \
+                 { match n { Zero => a, Succ(k) => one<A, A>(a, k) } }");
+    assert!(e.contains("type argument(s)"), "{e}");
+}
+
+#[test]
+fn type_arguments_on_a_monomorphic_self_call_are_refused() {
+    let e = bad("fn none(n: Nat) -> Nat { match n { Zero => 0, Succ(k) => none<Nat>(k) } }");
+    assert!(e.contains("has no type parameters"), "{e}");
+}
+
+#[test]
+fn a_bare_self_name_at_type_arguments_is_still_not_a_value() {
+    // `f<A>` with no call is the self-name used as a value, which it never is:
+    // it is the induction hypothesis. The message is the one a bare `f` gets,
+    // rather than the arity complaint the type-application path would make.
+    let e = bad("fn bare<A>(a: A, n: Nat) -> A \
+                 { match n { Zero => a, Succ(k) => bare<A> } }");
+    assert!(e.contains("saturated recursive call"), "{e}");
+}
+
+#[test]
+fn a_self_call_at_type_arguments_is_still_guarded() {
+    // The termination analysis is untrusted and can only reject; writing the
+    // type arguments must not route around it.
+    let e = bad("fn loopy<A>(a: A, n: Nat) -> A { loopy<A>(a, n) }");
+    assert!(e.contains("not structurally guarded"), "{e}");
+}
+
+#[test]
+fn at_and_type_arguments_compose_on_a_self_call() {
+    // `<…>` controls type arguments and `@` controls value implicits
+    // (issues/at-and-type-arguments.md); a self-call recursing on an *implicit*
+    // parameter needs `@`, and the two knobs have to compose there too.
+    ok("fn twice<A>(a: A, {n: Nat}) -> A \
+        { match n { Zero => a, Succ(k) => @twice<A>(a, k) } }");
+}

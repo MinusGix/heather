@@ -3376,6 +3376,17 @@ impl Elaborator {
                 if let Some(r) = self.ctor_at(cx, callee, tyargs, args, e.span) {
                     return r;
                 }
+                // `map<A, B>(f, tail)` — the recursive call *with its type
+                // arguments written* (issues/recursive-self-call-type-arguments.md).
+                // The self-name is not a global yet, so `elab_ty_app` would
+                // report that the declaration takes no type arguments, of a
+                // declaration that visibly takes some.
+                if let ExprKind::Var(n) = &callee.kind
+                    && cx.selfref.as_ref().is_some_and(|s| s.name == *n)
+                {
+                    self.check_self_tyargs(cx, tyargs, head.span)?;
+                    return self.elab_self_call(cx, args, *explicit, e.span);
+                }
                 let (name, t, ty, lvl, mask) =
                     self.elab_ty_app(cx, callee, tyargs, head.span)?;
                 if !*explicit && mask.iter().any(|&b| b) {
@@ -4399,6 +4410,67 @@ impl Elaborator {
         let idx = (cx.names.len() - 1 - pos) as u32;
         let entry = &cx.gamma.entries[pos];
         (Term::Var(LocalVar(idx)), entry.ty.shift_local(idx + 1), entry.level.clone())
+    }
+
+    /// The written type arguments of a **self-call**
+    /// (issues/recursive-self-call-type-arguments.md).
+    ///
+    /// A self-call is always at the declaration's *own* type parameters, and
+    /// that is a fact about the lowering rather than a restriction chosen here:
+    /// the recursion becomes an `elim` whose motive is fixed outside it, and the
+    /// type parameters are λ-bound outside that — so there is no position in the
+    /// emitted term where a second instantiation could go. Polymorphic recursion
+    /// would need a fixpoint, which is exactly what
+    /// `issues/match-recursion.md`'s discipline exists to avoid.
+    ///
+    /// So the written arguments are checked to *be* those parameters, in order,
+    /// and then dropped. Accepting the spelling costs nothing and refusing it
+    /// cost a reader the belief that the language has recursive polymorphic
+    /// functions at all; what is not accepted is a different instantiation,
+    /// which gets the honest answer instead of a puzzle about scope.
+    fn check_self_tyargs(&self, cx: &Cx, tyargs: &[Ty], span: Span) -> R<()> {
+        let s = cx.selfref.as_ref().expect("checked by the caller");
+        let name = &s.name;
+        let own: Vec<&str> = s.params[..s.n_tyvars].iter().map(|(n, _)| n.as_str()).collect();
+        if tyargs.len() != s.n_tyvars {
+            return err(
+                if s.n_tyvars == 0 {
+                    format!("`{name}` has no type parameters, so a recursive call takes none")
+                } else {
+                    format!(
+                        "the recursive call to `{name}` writes {} type argument(s), and \
+                         `{name}` has {} (`{}`)",
+                        tyargs.len(),
+                        s.n_tyvars,
+                        own.join(", ")
+                    )
+                },
+                span,
+            );
+        }
+        for (a, want) in tyargs.iter().zip(&own) {
+            let is_own = matches!(&a.kind, TyKind::Named { name, args }
+                if args.is_empty() && name == want);
+            if !is_own {
+                return err(
+                    format!(
+                        "a recursive call to `{name}` is always at `{name}`'s own type \
+                         parameter(s) `{}`, and `{}` is not `{want}`: recursing at a \
+                         *different* instantiation is polymorphic recursion, which this \
+                         lowering cannot express — the recursion becomes an `elim` whose \
+                         type parameters are bound outside it, so there is nowhere for a \
+                         second instantiation to go (issues/match-recursion.md). Writing \
+                         `{}` is the same call and so is dropping the type arguments \
+                         entirely",
+                        own.join(", "),
+                        crate::traits::render_ty(a),
+                        own.join(", ")
+                    ),
+                    a.span,
+                );
+            }
+        }
+        Ok(())
     }
 
     /// Lower a call to the enclosing declaration's own name
@@ -7501,6 +7573,19 @@ impl Elaborator {
                 span,
             );
         };
+        // The enclosing declaration's own name, with no call after it. A
+        // *saturated* self-call at written type arguments is handled before
+        // this function is reached; a bare `f<A>` is the self-name used as a
+        // value, which it never is (it is the induction hypothesis). Said here
+        // because `params_of` finds no global for a self-name and the arity
+        // complaint below would otherwise deny a declaration the reader is
+        // looking at (issues/recursive-self-call-type-arguments.md).
+        if cx.selfref.as_ref().is_some_and(|s| s.name == *name) {
+            return err(
+                format!("`{name}` can only be used here as a saturated recursive call"),
+                span,
+            );
+        }
         let params = self.params_of(name);
         let n_ty = params.iter().take_while(|p| p.is_type).count();
         if n_ty == 0 {

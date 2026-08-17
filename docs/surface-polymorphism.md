@@ -344,6 +344,30 @@ Each of these is a test, not a claim.
 | ~~`@f<Nat>(…)`~~ | **now legal** — `@` and `<…>` are orthogonal (§5, `at-and-type-arguments`) |
 | a type argument with no code (`Ty l`) | that type cannot be a type argument |
 | an argument landing at `Ty l` | drop the `@`, or write `f<T, …>(x)` |
+| `f<B, A>(…)` inside `fn f<A, B>`'s own body | that is polymorphic recursion (§7.1) |
+| `f<A>` inside `f`'s own body, with no call | the self-name is not a value |
+
+### 7.1 A self-call is at the declaration's own type parameters
+
+Added 2026-08-17 (`issues/recursive-self-call-type-arguments.md`). `f<A>(…)`
+*inside* `f`'s own body is accepted when the written arguments are `f`'s own
+type parameters, in order, and is then dropped: it is the same call as `f(…)`.
+
+The restriction is a fact about the lowering rather than a choice. A guarded
+self-call becomes an `elim` whose motive is fixed outside the recursion, and the
+declaration's type parameters are λ-bound outside *that* — so the emitted term
+has no position where a second instantiation could go. Recursing at a different
+one is polymorphic recursion, which needs a fixpoint, which is what
+`issues/match-recursion.md`'s whole discipline exists to avoid. The message says
+that instead of leaving the reader to infer it.
+
+The spelling is accepted rather than uniformly refused because refusing it cost
+something specific: the self-name is not a global while its own body elaborates,
+so the type-application path reported that the declaration *takes no type
+arguments* — about a declaration that visibly takes one, at the one place the
+claim cannot be checked against a different declaration, since caller and callee
+are the same text. A reader who believed it would conclude the language has no
+recursive polymorphic functions at all.
 
 ## 8. Out of scope
 
