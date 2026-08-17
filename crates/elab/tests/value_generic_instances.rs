@@ -195,6 +195,49 @@ fn open(x, y: Nat) -> Sum<Leq(x, y), Neg(Leq(x, y))> {{ dec_of() }}
 }
 
 #[test]
+fn a_type_parameter_absent_from_the_head_is_refused_too() {
+    // `issues/instance-binder-occurrence.md`. The rule was stated for value
+    // binders and left off type parameters, which was unexamined rather than
+    // decided: the two are determined the same way, and a head-absent one is a
+    // registry entry no goal can use and every goal must still try.
+    let e = bad(&format!(
+        r#"{KIT}
+instance<Q> Dec<Top> {{ d := L(tt) }}
+"#
+    ));
+    assert!(e.contains("does not occur in the head"), "unexpected: {e}");
+}
+
+#[test]
+fn a_type_parameter_in_the_index_alone_is_accepted() {
+    // The case that makes the rule non-uniform, and the reason it counts the
+    // index for a type parameter and not for a value binder: an index argument
+    // may be a *global reference at this instance's own type parameters*, and
+    // the index is part of the class type, so a goal determines `A` there. A
+    // rule that counted class arguments only would refuse this.
+    ok(r#"
+inductive Bool2 { T, F }
+class Mag<A>(op: A -> A -> A) { tag: Nat }
+fn pick<A>(x: A, y: A) -> A { x }
+instance<A> Mag<Bool2>(pick<A>) { tag := 0 }
+"#);
+}
+
+#[test]
+fn an_index_only_type_parameter_still_resolves() {
+    // Accepted *and* reachable — otherwise the exception would be protecting a
+    // declaration nobody can use, which is exactly what the rule exists to
+    // refuse. The goal names the index, and resolution answers from it.
+    ok(r#"
+inductive Bool2 { T, F }
+class Mag<A>(op: A -> A -> A) { tag: Nat }
+fn pick<A>(x: A, y: A) -> A { x }
+instance<A> Mag<Bool2>(pick<A>) { tag := 0 }
+fn by_resolution(m: Mag<Bool2>(pick<Bool2>) := infer) -> Nat { m.tag }
+"#);
+}
+
+#[test]
 fn a_binder_absent_from_the_head_is_refused() {
     // There is exactly one route by which a value binder is determined, and a
     // binder the head does not mention is a metavariable nothing can solve.

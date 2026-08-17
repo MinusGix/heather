@@ -99,48 +99,79 @@ well; the head has never carried the carrier's arguments, and resolution never
 consults the head at all (`docs/decide-class-design.md` §2.2). The issue said
 this was not the canonical-name problem and it was right.
 
-## 4. The one new refusal: a binder must occur in the head
+## 4. The refusal: a binder must occur in the head
 
 ```
-the value binder `k` does not occur in the head `Decide<True>`, so resolution
-has no way to determine it …
+the type parameter `A` does not occur in the head `Dec<Bot>`, so resolution has
+no way to determine it …
 ```
 
-There is exactly one route by which a value binder is determined — unification
-of the head against the goal — so a binder the head does not mention is a
-metavariable **nothing can ever solve**. Left unchecked, the failure surfaces
-far from the declaration, as an uninstantiated implicit at some unrelated use
-site. It is checked at the declaration, where the name to blame is in hand.
+There is one route by which a binder is determined — unification of the head
+against the goal — so a binder the head does not mention is a metavariable
+**nothing can ever solve**. Left unchecked such an instance still declares, and
+it costs twice: a rejection at every use site instead of one at the declaration,
+and a registry entry no goal can use that **every goal must still try**, since
+selection walks every candidate of a class in sorted order
+(`issues/resolution-candidate-fan-out.md`). The second is the one a reader never
+sees.
 
-The occurrence is counted over the **class arguments** only. Occurring in the
-*index* does not count, and that is the second refusal rather than an
-approximation:
+The message routes the three wishes a head-absent binder usually expresses, two
+of which have a spelling that works:
 
-```
-the value binder `k` occurs only in this instance's index, which is not a
-position a binder can be recovered from …
-```
+- *"a family of instances selected by a value"* — that is a class **index**
+  (`class C<A>(op)`), which joins the registry key, so `Monoid<Bool>(and)` and
+  `Monoid<Bool>(or)` coexist as equals. A head-absent binder expresses the same
+  wish and fails at it: both instances would be one entry at one key.
+- *"a value I will fill by hand"* — a `fn`. It is the same value without a
+  registry entry, and `@`-applying a named instance is strictly worse: it pays
+  the fan-out cost for a candidate that cannot succeed.
+- *"resolution should pick one"* — unavailable, deliberately. The resolver
+  selects among candidates and never guesses an argument, so
+  `instance<A> Serialize<Nat> requires enc: Encoder<A>` is exactly the request
+  the language declines, and declining it at the declaration says so once.
 
-An index argument joins the registry **key** as a *spelling*, computed from the
-declaration alone (`docs/operation-indexed-classes-design.md` §3.1), and a local
-binder has no spelling: `index_spelling` falls back to the name as written, so
-`instance(k: F) Monoid<Nat>(k)` would key under `k`, two instances differing
-only in what they called their binder would land at different keys, and two
-agreeing on it would collide. It is refused with its own sentence because the
-generic complaint — "does not occur in the head" — reads as false to someone
-looking at `Monoid<Nat>(k)`.
+### 4.1 The rule is not uniform, and that is the finding
 
-An instance generic in its *index* is a coherent thing to want and a different
-feature from this one; nothing asks for it yet.
+Stated for value binders when this round landed and **extended to type
+parameters on 2026-08-17** (`issues/instance-binder-occurrence.md`). The
+asymmetry that existed in between was unexamined rather than decided, and this
+section previously claimed otherwise; what the examination found is that the
+rule *is* asymmetric, just not where it had been drawn:
 
-This condition is **not** imposed on type parameters, and the asymmetry is
-deliberate rather than an oversight: `instance<A> C<Rat>` has been accepted
-since layer 1, and tightening it is a separate change with its own blast radius
-over the standard library. The rule is stated for the binders this round
-introduces, where there is no history to break.
+| binder | counts |
+|---|---|
+| type parameter | class arguments **and** index |
+| value binder | class arguments only |
 
-Two ordinary hygiene refusals come with it: a value binder may not repeat a
-name, and may not shadow one of the instance's own type parameters.
+A **type parameter may occur in an index**, and usefully — an index argument may
+be a global reference at this instance's own type parameters, and the index is
+part of the class type, so a goal determines it there.
+`instance<A> Mag<Bool2>(pick<A>)` both declares and resolves, and a rule
+counting class arguments only would refuse it. A **value binder cannot reach an
+index at all**: an index joins the key as a *spelling* and must therefore be a
+global reference, which a local binder has no way to be —
+`index_spelling` falls back to the name as written, so `instance(k: F)
+Monoid<Nat>(k)` would key under `k`, two instances differing only in what they
+called their binder would land at different keys, and two agreeing on it would
+collide. That case keeps its own message, because the generic complaint reads as
+false to someone looking at `Monoid<Nat>(k)`.
+
+So the two kinds differ in *where a goal can determine them from*, and the check
+follows that rather than being tidy. `head_var_count` and `index_var_count`
+are the two halves.
+
+### 4.2 What the extension cost
+
+Nothing in the repository: no declaration in `lib/` and no test in the suite used
+the loophole, measured by turning the check on and running the full suite
+(1762 passed, 0 failed). Nor was the old behaviour *broken* — `instance<A>
+Dec<Bot>` declared, refused to resolve with a diagnostic that named the
+candidate, the reason and the escape, and `Bot::Dec<Nat>.d` worked by hand. The
+extension buys earliness, one rule instead of two, and the fan-out entry; it is
+not a rescue, and saying so is the honest size of it.
+
+Two ordinary hygiene refusals come with the value list: a value binder may not
+repeat a name, and may not shadow one of the instance's own type parameters.
 
 ## 5. Termination: Paterson's condition counts value binders
 
@@ -160,9 +191,15 @@ applied type former's spine during the carrier widening
 (`docs/decide-class-design.md` §2.3), and a value argument is a node on that
 spine like any other.
 
-Both halves measure the class arguments only, which is the same measure §4's
-occurrence rule uses and for the same reason: a value binder that reaches only
-the index is refused outright.
+Both halves measure the class arguments only. For a value binder that is §4's
+measure exactly, and for the same reason — one that reaches only the index is
+refused outright. For a *type* parameter it is deliberately narrower than §4.1's
+recovery rule: a subgoal mentioning a type parameter that lives only in the
+index admits no decrease, which refuses programs rather than admitting bad ones.
+Loosening a termination check to match a recovery check is not a step to take
+without a customer, and the library has none — every instance of an indexed
+class in `lib/` (`Monoid<List<A>>(append)` and its neighbours) writes its type
+parameter in the class arguments, where both measures already see it.
 
 ## 6. What it bought
 
@@ -208,9 +245,11 @@ a proof of the same disjunction.
   (`issues/resolution-candidate-fan-out.md`). Not measured — per `CLAUDE.md`
   this was not a perf round — but the new instance makes the class the widest in
   the registry by one more.
-- **The occurrence rule at type parameters** (§4) is unstated for `instance<A>`
-  and would be the natural companion tightening.
-- **An instance generic in its *index*** (§4) is a coherent feature this one
+- ~~**The occurrence rule at type parameters**~~ — extended 2026-08-17, §4.1
+  (`issues/instance-binder-occurrence.md`). What looked like a consistency fix
+  turned out to have content: the rule is genuinely asymmetric, because a type
+  parameter can be determined from an index and a value binder cannot.
+- **An instance generic in its *index*** (§4.1) is a coherent feature this one
   does not provide, and the refusal names it as such. It wants the index to stop
   being a spelling in the registry key, which is a bigger question than a binder
   list — and nothing asks for it yet.

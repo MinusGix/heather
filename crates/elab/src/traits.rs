@@ -1462,7 +1462,7 @@ impl Elaborator {
                 d.class.span,
             );
         }
-        self.check_valparams(d)?;
+        self.check_binders(d)?;
         let index = self.index_spelling(&d.class, &class)?;
         let prefix = if index.is_empty() {
             format!("{head}::{}", class.name)
@@ -1885,16 +1885,58 @@ impl Elaborator {
         Ok(())
     }
 
-    /// The instance's **value binders** (docs/value-generic-instances-design.md
-    /// §4): each has to be a name of its own, and each has to occur in the head.
+    /// Every binder of an instance has to be **recoverable**: a binder the goal
+    /// cannot determine is a metavariable nothing can ever solve
+    /// (docs/value-generic-instances-design.md §4,
+    /// issues/instance-binder-occurrence.md).
     ///
-    /// The occurrence rule is what makes the binder *recoverable*. Resolution
-    /// determines a value binder in exactly one way — by unifying the instance
-    /// head against the goal — so a binder the head does not mention is a
-    /// metavariable nothing can ever solve, and the failure it causes surfaces
-    /// far from here as an uninstantiated implicit at some use site. It is
-    /// checked at the declaration instead, where the name to blame is in hand.
-    fn check_valparams(&self, d: &InstanceDecl) -> R<()> {
+    /// Left unchecked, such an instance still *declares*, and the consequences
+    /// are two. The visible one is a rejection at every use site instead of one
+    /// at the declaration, far from the name to blame. The invisible one is
+    /// worse: it is a registry entry no goal can use and every goal must still
+    /// try, since selection walks every candidate of a class in sorted order
+    /// (issues/resolution-candidate-fan-out.md) — a permanent per-goal cost with
+    /// no possible payoff.
+    ///
+    /// **The rule is not uniform, and deliberately so.** The two binder kinds
+    /// differ in *where a goal can determine them from*, and the check follows
+    /// that rather than being tidy:
+    ///
+    /// - A **type parameter** may occur in the class arguments or in the
+    ///   **index**. An index argument may be a global reference at this
+    ///   instance's own type parameters, and the index is part of the class
+    ///   type, so a goal determines it there —
+    ///   `instance<A> Mag<Bool2>(pick<A>)` both declares and resolves.
+    /// - A **value binder** counts the class arguments only. It cannot reach an
+    ///   index at all: an index joins the registry key as a *spelling* and must
+    ///   therefore be a global reference, which a local binder has no way to be.
+    fn check_binders(&self, d: &InstanceDecl) -> R<()> {
+        let head = class_ref_written(&d.class);
+        // A binder absent from the head is usually one of three wishes, and the
+        // message routes all three: two have a spelling that works and the third
+        // is unavailable on purpose.
+        let routes = |what: &str, name: &str| {
+            format!(
+                "the {what} `{name}` does not occur in the head `{head}`, so resolution \
+                 has no way to determine it — a binder is recovered by unifying the head \
+                 against the goal, and one the head does not mention would stay an \
+                 unsolved metavariable at every use site, in an instance every search of \
+                 this class would still have to try. If `{name}` was meant to select \
+                 between structures at one carrier, that is a class **index** \
+                 (`class C<A>(op)`), which joins the registry key so the alternatives \
+                 coexist; if it was meant to be filled by hand, a `fn` is a value with no \
+                 registry entry. Resolution choosing `{name}` for itself is the one \
+                 reading that is unavailable, deliberately: search selects among \
+                 candidates and never guesses an argument \
+                 (issues/instance-binder-occurrence.md)"
+            )
+        };
+        // Type parameters: arguments or index, either determines.
+        for t in &d.tyvars {
+            if head_var_count(&d.class, &t.name) + index_var_count(&d.class, &t.name) == 0 {
+                return err(routes("type parameter", &t.name), d.class.span);
+            }
+        }
         for (i, p) in d.valparams.iter().enumerate() {
             if d.tyvars.iter().any(|t| t.name == p.name) {
                 return err(
@@ -1910,40 +1952,30 @@ impl Elaborator {
                 return err(format!("duplicate value binder `{}`", p.name), p.span);
             }
             if head_var_count(&d.class, &p.name) == 0 {
-                // Occurring in the *index* is not occurring in the head, and
-                // the distinction is worth its own sentence: an index joins the
-                // registry key as a **spelling**, computed from the declaration
-                // alone, and a local binder has none — `index_spelling` would
-                // key the instance under the binder's own name, so two
-                // instances differing only in what they called `k` would land
-                // at different keys and two agreeing on it would collide.
+                // Occurring in the *index* is not occurring in the head for a
+                // value binder, and the distinction is worth its own sentence
+                // rather than the generic complaint above: `index_spelling`
+                // would key the instance under the binder's own name, so two
+                // instances differing only in what they called `k` would land at
+                // different keys and two agreeing on it would collide. This is
+                // the one place the two binder kinds genuinely diverge.
                 if index_var_count(&d.class, &p.name) > 0 {
                     return err(
                         format!(
                             "the value binder `{}` occurs only in this instance's index, \
-                             which is not a position a binder can be recovered from: an \
-                             index argument joins the registry key as a spelling and must \
-                             therefore be a global reference \
-                             (docs/operation-indexed-classes-design.md §3.1). An instance \
-                             generic in its index is a different feature from one generic \
-                             in its carrier's values",
+                             which is not a position a *value* binder can be recovered \
+                             from: an index argument joins the registry key as a spelling \
+                             and must therefore be a global reference \
+                             (docs/operation-indexed-classes-design.md §3.1). A type \
+                             parameter may sit there, because a global reference at one is \
+                             still a global reference; an instance generic in its index is \
+                             a different feature from either",
                             p.name
                         ),
                         p.span,
                     );
                 }
-                return err(
-                    format!(
-                        "the value binder `{}` does not occur in the head `{}`, so \
-                         resolution has no way to determine it: a value binder is \
-                         recovered by unifying the head against the goal, and one the \
-                         head does not mention would stay an unsolved metavariable at \
-                         every use site (docs/value-generic-instances-design.md §4)",
-                        p.name,
-                        class_ref_written(&d.class)
-                    ),
-                    p.span,
-                );
+                return err(routes("value binder", &p.name), p.span);
             }
         }
         Ok(())

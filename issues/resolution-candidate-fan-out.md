@@ -55,6 +55,11 @@ outcome.
   of them at `Le`. Still unmeasured, per `CLAUDE.md` — but the head-match-first
   ordering above is now worth more, since the new candidate is the one an
   arithmetic goal wants and it sorts in the middle.
+- [[instance-binder-occurrence]] removed one *class* of wasted candidate
+  (2026-08-17): an instance with a binder absent from its head can never
+  resolve, and was tried on every goal of its class regardless. That is a
+  guard against the fan-out growing, not a reduction of it — nothing in `lib/`
+  had such an instance, so today's count is unchanged.
 - The derived-instance table (`resolve.rs`'s canonical minting) already
   short-circuits repeat goals, so this is about distinct goals, not repeated
   ones.
