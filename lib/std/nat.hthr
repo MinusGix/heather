@@ -90,13 +90,13 @@ theorem mul_left_one(x: Nat): mul(1, x) = x {
 theorem mul_succ_left(a, b: Nat): mul(Succ(a), b) = add(b, mul(a, b)) {
     match b {
         Zero => refl,
-        Succ(k) => trans(
-            cong_succ(trans(
-                cong_nat(λ (w: Nat) => add(w, a), mul_succ_left(a, k)),
-                add_assoc(k, mul(a, k), a),
-            )),
-            sym(add_succ_left(k, add(mul(a, k), a))),
-        ),
+        Succ(k) => calc {
+            mul(Succ(a), Succ(k))
+                = Succ(add(mul(Succ(a), k), a))   := refl,
+                = Succ(add(add(k, mul(a, k)), a)) := cong(mul_succ_left(a, k)),
+                = Succ(add(k, add(mul(a, k), a))) := cong(add_assoc(k, mul(a, k), a)),
+                = add(Succ(k), mul(a, Succ(k)))   := sym(add_succ_left(k, add(mul(a, k), a))),
+        },
     }
 }
 
@@ -130,13 +130,13 @@ theorem mul_assoc(x, y, z: Nat): mul(mul(x, y), z) = mul(x, mul(y, z)) {
 theorem mul_comm(x, y: Nat): mul(x, y) = mul(y, x) {
     match y {
         Zero => sym(mul_left_zero(x)),
-        Succ(k) => trans(
-            trans(
-                cong_nat(λ (w: Nat) => add(w, x), mul_comm(x, k)),
-                add_comm(mul(k, x), x),
-            ),
-            sym(mul_succ_left(k, x)),
-        ),
+        Succ(k) => calc {
+            mul(x, Succ(k))
+                = add(mul(x, k), x) := refl,
+                = add(mul(k, x), x) := cong(mul_comm(x, k)),
+                = add(x, mul(k, x)) := add_comm(mul(k, x), x),
+                = mul(Succ(k), x)   := sym(mul_succ_left(k, x)),
+        },
     }
 }
 
@@ -836,10 +836,12 @@ theorem pow_add(a, b, c: Nat): pow(a, add(b, c)) = mul(pow(a, b), pow(a, c)) {
 theorem pow_mul(a, b, c: Nat): pow(a, mul(b, c)) = pow(pow(a, b), c) {
     match c {
         Zero => refl,
-        Succ(k) => trans(
-            pow_add(a, mul(b, k), b),
-            cong_nat(λ (w: Nat) => mul(w, pow(a, b)), pow_mul(a, b, k)),
-        ),
+        Succ(k) => calc {
+            pow(a, mul(b, Succ(k)))
+                = mul(pow(a, mul(b, k)), pow(a, b)) := pow_add(a, mul(b, k), b),
+                = mul(pow(pow(a, b), k), pow(a, b)) := cong(pow_mul(a, b, k)),
+                = pow(pow(a, b), Succ(k))           := refl,
+        },
     }
 }
 
@@ -848,17 +850,14 @@ theorem pow_mul(a, b, c: Nat): pow(a, mul(b, c)) = pow(pow(a, b), c) {
 // proof. Middle-exchange: it is what commutativity and associativity say
 // together, and the only lemma here that is pure monoid algebra.
 theorem mul_shuffle(x, y, z, w: Nat): mul(mul(x, y), mul(z, w)) = mul(mul(x, z), mul(y, w)) {
-    trans(
-        trans(
-            mul_assoc(x, y, mul(z, w)),
-            cong_nat(λ (v: Nat) => mul(x, v),
-                trans(
-                    trans(sym(mul_assoc(y, z, w)), cong_nat(λ (v: Nat) => mul(v, w), mul_comm(y, z))),
-                    mul_assoc(z, y, w),
-                )),
-        ),
-        sym(mul_assoc(x, z, mul(y, w))),
-    )
+    calc {
+        mul(mul(x, y), mul(z, w))
+            = mul(x, mul(y, mul(z, w))) := mul_assoc(x, y, mul(z, w)),
+            = mul(x, mul(mul(y, z), w)) := cong(sym(mul_assoc(y, z, w))),
+            = mul(x, mul(mul(z, y), w)) := cong(mul_comm(y, z)),
+            = mul(x, mul(z, mul(y, w))) := cong(mul_assoc(z, y, w)),
+            = mul(mul(x, z), mul(y, w)) := sym(mul_assoc(x, z, mul(y, w))),
+    }
 }
 
 theorem mul_pow(a, b, n: Nat): pow(mul(a, b), n) = mul(pow(a, n), pow(b, n)) {

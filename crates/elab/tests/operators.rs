@@ -262,3 +262,163 @@ fn a_symbol_with_no_name_behind_it_says_so() {
     assert!(msg.contains("`*` has no meaning here"), "{msg}");
     assert!(msg.contains("mul"), "{msg}");
 }
+
+// -- calc chains: the composed behavior (issues/calc-equational-chains.md) --
+//
+// The desugaring above is 2026-07-24; what these pin is 2026-08-18's finding
+// (docs/calc-equational-chains-design.md): because every emitted `trans` pins
+// its endpoints BY NAME, each step proof is a checking position at the stated
+// equation — so the result-only deferral reaches into a step and the terse
+// `cong(p)` works there, exactly as far as the LGG's wall
+// (docs/congruence-in-inference-position-design.md §1.1/§1.2) and no further.
+
+// `add` and the two lemmas the chains lean on; the scrutinees below are
+// neutral (open variables), so nothing reduces away the step annotations.
+const CALC_KIT: &str = r#"
+fn add(m: Nat, n: Nat) -> Nat { match m { Zero => n, Succ(k, ih) => Succ(ih) } }
+theorem add_zero(n: Nat): n + 0 = n {
+    match n { Zero => refl, Succ(k, ih) => cong_succ(ih) }
+}
+theorem add_succ(m: Nat, n: Nat): m + Succ(n) = Succ(m + n) {
+    match m { Zero => refl, Succ(k, ih) => cong_succ(ih) }
+}
+"#;
+
+fn with_calc_kit(src: &str) -> Result<(), String> {
+    let mut e = Elaborator::with_prelude().expect("prelude");
+    let src = format!("{CALC_KIT}{src}");
+    e.elab_source(&src).map_err(|err| err.render(&src))
+}
+
+#[test]
+fn calc_step_is_a_checking_position_for_terse_cong() {
+    // The §1.1 clearance, by construction: the step states both endpoints, so
+    // `cong(ih)` generalizes where the same site inside a hand-written
+    // `trans(...)` chain was refused before 2026-08-18.
+    with_calc_kit(
+        r#"
+        theorem add_comm(m: Nat, n: Nat): m + n = n + m {
+            match m {
+                Zero => sym(add_zero(n)),
+                Succ(k, ih) => calc {
+                    Succ(k) + n
+                        = Succ(k + n) := refl,
+                        = Succ(n + k) := cong(ih),
+                        = n + Succ(k) := sym(add_succ(n, k)),
+                },
+            }
+        }
+        "#,
+    )
+    .expect("terse cong inside a calc step");
+}
+
+#[test]
+fn calc_block_checks_in_inference_position() {
+    // The block itself under `sym(...)`: no expected type reaches the calc,
+    // and it still elaborates, because the named endpoints on the emitted
+    // `trans` are what type the steps — including the checking-only `refl`
+    // and the deferred `cong`. If the endpoints ever stopped being pinned,
+    // this is the test that notices.
+    with_calc_kit(
+        r#"
+        theorem flipped(k: Nat, n: Nat, ih: k + n = n + k): n + Succ(k) = Succ(k) + n {
+            sym(calc {
+                Succ(k) + n
+                    = Succ(k + n) := refl,
+                    = Succ(n + k) := cong(ih),
+                    = n + Succ(k) := sym(add_succ(n, k)),
+            })
+        }
+        "#,
+    )
+    .expect("a calc block needs no expected type");
+}
+
+#[test]
+fn computation_level_context_stays_walled_inside_calc() {
+    // Negative control for the design's scope guard: a §1.2 site — the
+    // context (`isucc`) appears in NEITHER side's spelling, only after a δι
+    // step — fails inside a calc step with the same refusal as outside one.
+    // Calc changes where the expected type comes from, not what it says. If
+    // this starts passing, the LGG grew; re-measure before believing it.
+    let e = with_calc_kit(
+        r#"
+        inductive Int { OfNat(n: Nat), NegSucc(n: Nat) }
+        fn isucc(a: Int) -> Int {
+            match a {
+                OfNat(n) => OfNat(Succ(n)),
+                NegSucc(n) => match n { Zero => OfNat(0), Succ(k) => NegSucc(k) },
+            }
+        }
+        fn addNat(a: Int, n: Nat) -> Int {
+            match n { Zero => a, Succ(k, ih) => isucc(ih) }
+        }
+        theorem addNat_zero_l(n: Nat): addNat(OfNat(0), n) = OfNat(n) {
+            match n {
+                Zero => refl,
+                Succ(k, ih) => calc {
+                    addNat(OfNat(0), Succ(k)) = OfNat(Succ(k)) := cong(ih),
+                },
+            }
+        }
+        "#,
+    )
+    .expect_err("a computation-level context must still be refused");
+    assert!(e.contains("cannot generalize"), "the LGG's refusal, not another error: {e}");
+}
+
+#[test]
+fn the_author_states_the_reduct_as_a_refl_step() {
+    // ...and the calc-native way THROUGH the wall: one refl step to the
+    // reduct, after which both sides spell the context and the terse `cong`
+    // generalizes. The conversion fact is stated by the human, not inferred.
+    with_calc_kit(
+        r#"
+        inductive Int { OfNat(n: Nat), NegSucc(n: Nat) }
+        fn isucc(a: Int) -> Int {
+            match a {
+                OfNat(n) => OfNat(Succ(n)),
+                NegSucc(n) => match n { Zero => OfNat(0), Succ(k) => NegSucc(k) },
+            }
+        }
+        fn addNat(a: Int, n: Nat) -> Int {
+            match n { Zero => a, Succ(k, ih) => isucc(ih) }
+        }
+        theorem addNat_zero_l(n: Nat): addNat(OfNat(0), n) = OfNat(n) {
+            match n {
+                Zero => refl,
+                Succ(k, ih) => calc {
+                    addNat(OfNat(0), Succ(k))
+                        = isucc(addNat(OfNat(0), k)) := refl,
+                        = isucc(OfNat(k))            := cong(ih),
+                        = OfNat(Succ(k))             := refl,
+                },
+            }
+        }
+        "#,
+    )
+    .expect("a refl step to the reduct clears the wall by hand");
+}
+
+#[test]
+fn a_hole_in_a_step_is_a_goal_at_the_steps_equation() {
+    // The justification seam: the slot after `:=` is an ordinary expression
+    // position, so a `?hole` there raises a goal named and typed by the step,
+    // discharged by `on` at the declaration block — which is what a future
+    // tactic form will consume, with no change to calc.
+    with_calc_kit(
+        r#"
+        theorem succ_comm(k: Nat, n: Nat, ih: k + n = n + k): Succ(k) + n = n + Succ(k) {
+            calc {
+                Succ(k) + n
+                    = Succ(k + n) := refl,
+                    = Succ(n + k) := ?mid,
+                    = n + Succ(k) := sym(add_succ(n, k)),
+            }
+            on ?mid := cong(ih);
+        }
+        "#,
+    )
+    .expect("a step discharges through a named goal");
+}

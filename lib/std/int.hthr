@@ -352,7 +352,10 @@ theorem int_ind(P: Int -> Type,
 // written, and as written it is a β-redex rather than an `Id`. The read now
 // reduces when the syntactic one learns nothing
 // (issues/motive-application-hides-hypothesis-type.md,
-// docs/argument-type-reduction-design.md), and the eight `ih` sites are terse.
+// docs/argument-type-reduction-design.md), and the eight `ih` sites are terse
+// (one of them, `neg_add`'s deepest arm, now a `calc` chain whose stated
+// endpoints let the step drop the function too — see
+// docs/calc-equational-chains-design.md).
 // The other fourteen `@cong_int`s this file carried are gone too, and they are
 // a separate finding: their proof argument was an ordinary lemma call at a real
 // `Id`, so *nothing* was hiding and the endpoints never had to be written —
@@ -427,13 +430,13 @@ theorem neg_add(a, b: Int): neg(add(a, b)) = add(neg(a), neg(b)) {
     int_ind(λ (z: Int) => neg(add(a, z)) = add(neg(a), neg(z)),
         refl,
         λ (k: Nat) (ih: neg(add(a, OfNat(k))) = add(neg(a), neg(OfNat(k)))) =>
-            trans(
-                neg_isucc(add(a, OfNat(k))),
-                trans(
-                    cong_int(ipred, ih),
-                    trans(
-                        sym(add_ipred(neg(a), negOfNat(k))),
-                        cong_int(λ (w: Int) => add(neg(a), w), ipred_negOfNat(k))))),
+            calc {
+                neg(add(a, OfNat(Succ(k))))
+                    = ipred(neg(add(a, OfNat(k))))      := neg_isucc(add(a, OfNat(k))),
+                    = ipred(add(neg(a), neg(OfNat(k)))) := cong(ih),
+                    = add(neg(a), ipred(negOfNat(k)))   := sym(add_ipred(neg(a), negOfNat(k))),
+                    = add(neg(a), NegSucc(k))           := cong(ipred_negOfNat(k)),
+            },
         neg_ipred(a),
         λ (k: Nat) (ih: neg(add(a, NegSucc(k))) = add(neg(a), neg(NegSucc(k)))) =>
             trans(
@@ -532,10 +535,12 @@ theorem mul_neg_r(a, b: Int): mul(a, neg(b)) = neg(mul(a, b)) {
 }
 
 theorem mul_neg_l(a, b: Int): mul(neg(a), b) = neg(mul(a, b)) {
-    trans(
-        trans(mul_comm(neg(a), b), mul_neg_r(b, a)),
-        cong_int(neg, mul_comm(b, a)),
-    )
+    calc {
+        mul(neg(a), b)
+            = mul(b, neg(a)) := mul_comm(neg(a), b),
+            = neg(mul(b, a)) := mul_neg_r(b, a),
+            = neg(mul(a, b)) := cong(mul_comm(b, a)),
+    }
 }
 
 // Associativity, and the eight cases are the file's most explicit statement of
@@ -552,11 +557,15 @@ theorem mul_assoc(a, b, c: Int): mul(mul(a, b), c) = mul(a, mul(b, c)) {
                     sym(mul_neg_r(OfNat(m), OfNat(nat::mul(n, Succ(p)))))),
             },
             NegSucc(n) => match c {
-                OfNat(p) => trans(
-                    mul_neg_l(OfNat(nat::mul(m, Succ(n))), OfNat(p)),
-                    trans(
-                        cong_int(neg, cong_ofnat(nat::mul_assoc(m, Succ(n), p))),
-                        sym(mul_neg_r(OfNat(m), OfNat(nat::mul(Succ(n), p)))))),
+                OfNat(p) => calc {
+                    mul(mul(OfNat(m), NegSucc(n)), OfNat(p))
+                        = neg(OfNat(nat::mul(nat::mul(m, Succ(n)), p)))
+                            := mul_neg_l(OfNat(nat::mul(m, Succ(n))), OfNat(p)),
+                        = neg(OfNat(nat::mul(m, nat::mul(Succ(n), p))))
+                            := cong_int(neg, cong_ofnat(nat::mul_assoc(m, Succ(n), p))),
+                        = mul(OfNat(m), mul(NegSucc(n), OfNat(p)))
+                            := sym(mul_neg_r(OfNat(m), OfNat(nat::mul(Succ(n), p)))),
+                },
                 NegSucc(p) => trans(
                     mul_neg_l(OfNat(nat::mul(m, Succ(n))), NegSucc(p)),
                     trans(
@@ -569,15 +578,19 @@ theorem mul_assoc(a, b, c: Int): mul(mul(a, b), c) = mul(a, mul(b, c)) {
                 OfNat(p) => trans(
                     mul_neg_l(OfNat(nat::mul(Succ(m), n)), OfNat(p)),
                     cong_int(neg, cong_ofnat(nat::mul_assoc(Succ(m), n, p)))),
-                NegSucc(p) => trans(
-                    trans(
-                        mul_neg_l(OfNat(nat::mul(Succ(m), n)), NegSucc(p)),
-                        neg_negOfNat(nat::mul(nat::mul(Succ(m), n), Succ(p)))),
-                    trans(
-                        cong_ofnat(nat::mul_assoc(Succ(m), n, Succ(p))),
-                        sym(trans(
-                            mul_neg_r(NegSucc(m), OfNat(nat::mul(n, Succ(p)))),
-                            neg_negOfNat(nat::mul(Succ(m), nat::mul(n, Succ(p)))))))),
+                NegSucc(p) => calc {
+                    mul(mul(NegSucc(m), OfNat(n)), NegSucc(p))
+                        = neg(mul(OfNat(nat::mul(Succ(m), n)), NegSucc(p)))
+                            := mul_neg_l(OfNat(nat::mul(Succ(m), n)), NegSucc(p)),
+                        = OfNat(nat::mul(nat::mul(Succ(m), n), Succ(p)))
+                            := neg_negOfNat(nat::mul(nat::mul(Succ(m), n), Succ(p))),
+                        = OfNat(nat::mul(Succ(m), nat::mul(n, Succ(p))))
+                            := cong_ofnat(nat::mul_assoc(Succ(m), n, Succ(p))),
+                        = neg(negOfNat(nat::mul(Succ(m), nat::mul(n, Succ(p)))))
+                            := sym(neg_negOfNat(nat::mul(Succ(m), nat::mul(n, Succ(p))))),
+                        = mul(NegSucc(m), mul(OfNat(n), NegSucc(p)))
+                            := sym(mul_neg_r(NegSucc(m), OfNat(nat::mul(n, Succ(p))))),
+                },
             },
             NegSucc(n) => match c {
                 OfNat(p) => trans(
