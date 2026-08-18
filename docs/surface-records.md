@@ -372,6 +372,21 @@ arguments land. This is also a reason to pull that issue forward — it now pays
 off in two places (there, `@`-calls and `calc`'s fragile desugaring; here, a
 whole ambiguity class).
 
+**Named arguments landed** (`docs/named-arguments-design.md`), so the second
+line above is real — spelled `Monoid(unit := 0, op := f, unit_l := p)`, with
+`:=` rather than `:` for the reasons that document's §3.1 gives, and permuted
+by the *same function* this section's literal is permuted by, so the two
+cannot drift into disagreeing about an unknown, duplicated or missing field.
+`crates/elab/tests/named_arguments.rs` proves the three spellings equal by
+`refl`.
+
+**The braced form is not retired, and that is a decision rather than an
+omission**: retiring it is a *migration* (every literal in `lib/`, the
+fixtures and the tests, plus the `no_record_lit` flag and its ten set-sites,
+plus this section's parenthesis rule and its tests), and bundling a sweep into
+the round that introduces the successor would make a bisect over either
+useless. The criterion for that round is in named-arguments-design.md §10.2.
+
 Not chosen, and worth recording why: **going all-in on `⟨…⟩`** — dropping the
 braced form now and spelling an explicit head as `Monoid ⟨unit: 0, …⟩` — is
 coherent, and its rule is cleaner than what we have ("braces are for blocks,

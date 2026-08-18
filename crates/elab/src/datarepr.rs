@@ -837,7 +837,12 @@ fn is_repr_obligation(spec: &SpecView, clause: &str) -> bool {
 
 fn is_naive_call(e: &Expr) -> bool {
     match &e.kind {
-        ExprKind::App { head, args, .. } => args.is_empty() && is_naive_call(head),
+        // `named.is_empty()` too: `repr::naive(x := 1)` has no *positional*
+        // arguments and would otherwise read as `repr::naive()`
+        // (docs/named-arguments-design.md §8.2).
+        ExprKind::App { head, args, named, .. } => {
+            args.is_empty() && named.is_empty() && is_naive_call(head)
+        }
         ExprKind::Var(n) => n == "repr::naive",
         _ => false,
     }
@@ -857,7 +862,13 @@ pub(crate) fn spell_expr(e: &Expr) -> Option<String> {
     Some(match &e.kind {
         ExprKind::Var(n) => n.clone(),
         ExprKind::Num(n) => n.to_string(),
-        ExprKind::App { head, args, .. } => {
+        ExprKind::App { head, args, named, .. } => {
+            // Named arguments are a decline, not a spelling: this renderer's
+            // output is *re-parsed* as generated source, and a permutation
+            // that resolves at one callee need not resolve at another.
+            if !named.is_empty() {
+                return None;
+            }
             let a: Option<Vec<String>> = args.iter().map(spell_expr).collect();
             let a = a?;
             if a.is_empty() {
@@ -870,7 +881,9 @@ pub(crate) fn spell_expr(e: &Expr) -> Option<String> {
             let a: Option<Vec<String>> = args.iter().map(spell_ty).collect();
             format!("{}<{}>", spell_expr(head)?, a?.join(", "))
         }
-        ExprKind::Dot { recv, name, .. } => format!("{}.{name}", spell_expr(recv)?),
+        ExprKind::Dot { recv, name, named, .. } if named.is_empty() => {
+            format!("{}.{name}", spell_expr(recv)?)
+        }
         _ => return None,
     })
 }
@@ -1280,9 +1293,10 @@ fn mentions_free(e: &Expr, names: &[String], bound: &mut Vec<String>) -> bool {
         | ExprKind::Refl
         | ExprKind::AutoRefl
         | ExprKind::Hole(_) => false,
-        ExprKind::App { head, args, .. } => {
+        ExprKind::App { head, args, named, .. } => {
             mentions_free(head, names, bound)
                 || args.iter().any(|a| mentions_free(a, names, bound))
+                || named.iter().any(|a| mentions_free(&a.expr, names, bound))
         }
         ExprKind::TyApp { head, args } => {
             mentions_free(head, names, bound)

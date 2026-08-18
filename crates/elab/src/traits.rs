@@ -220,10 +220,17 @@ pub(crate) fn render_expr(e: &Expr) -> String {
         {
             format!("{} {} {}", render_expr(&args[0]), render_expr(head), render_expr(&args[1]))
         }
-        ExprKind::App { head, args, .. } => format!(
+        // A named argument renders as it was **written**, `x := e`, for the
+        // same reason an operator application renders as `a + b`
+        // (issues/diagnostics-name-the-written-form.md).
+        ExprKind::App { head, args, named, .. } => format!(
             "{}({})",
             render_expr(head),
-            args.iter().map(render_expr).collect::<Vec<_>>().join(", ")
+            args.iter()
+                .map(render_expr)
+                .chain(named.iter().map(|a| format!("{} := {}", a.name, render_expr(&a.expr))))
+                .collect::<Vec<_>>()
+                .join(", ")
         ),
         ExprKind::Dot { recv, name, .. } => format!("{}.{name}", render_expr(recv)),
         _ => "_".into(),
@@ -342,9 +349,20 @@ fn rename_expr(m: &Ren, e: &Expr) -> Expr {
         Refl => Refl,
         AutoRefl => AutoRefl,
         Hole(n) => Hole(n.clone()),
-        App { head, args, explicit } => App {
+        App { head, args, named, explicit } => App {
             head: Box::new(rename_expr(m, head)),
             args: args.iter().map(|a| rename_expr(m, a)).collect(),
+            // A named argument's *name* is the callee's parameter name, which
+            // no instantiation renames — only its value is a subterm.
+            named: named
+                .iter()
+                .map(|na| heather_syntax::NamedArg {
+                    name: na.name.clone(),
+                    name_span: na.name_span,
+                    expr: rename_expr(m, &na.expr),
+                    span: na.span,
+                })
+                .collect(),
             explicit: *explicit,
         },
         TyApp { head, args } => TyApp {
@@ -401,10 +419,19 @@ fn rename_expr(m: &Ren, e: &Expr) -> Expr {
                 })
                 .collect(),
         },
-        Dot { recv, name, args } => Dot {
+        Dot { recv, name, args, named } => Dot {
             recv: Box::new(rename_expr(m, recv)),
             name: name.clone(),
             args: args.as_ref().map(|v| v.iter().map(|a| rename_expr(m, a)).collect()),
+            named: named
+                .iter()
+                .map(|na| heather_syntax::NamedArg {
+                    name: na.name.clone(),
+                    name_span: na.name_span,
+                    expr: rename_expr(m, &na.expr),
+                    span: na.span,
+                })
+                .collect(),
         },
         Index { recv, idx } => Index {
             recv: Box::new(rename_expr(m, recv)),
@@ -537,15 +564,18 @@ fn ty_mentions(t: &Ty, name: &str) -> bool {
 fn expr_mentions(e: &Expr, name: &str) -> bool {
     match &e.kind {
         ExprKind::Var(n) => n == name,
-        ExprKind::App { head, args, .. } => {
-            expr_mentions(head, name) || args.iter().any(|a| expr_mentions(a, name))
+        ExprKind::App { head, args, named, .. } => {
+            expr_mentions(head, name)
+                || args.iter().any(|a| expr_mentions(a, name))
+                || named.iter().any(|a| expr_mentions(&a.expr, name))
         }
         ExprKind::TyApp { head, args } => {
             expr_mentions(head, name) || args.iter().any(|a| ty_mentions(a, name))
         }
-        ExprKind::Dot { recv, args, .. } => {
+        ExprKind::Dot { recv, args, named, .. } => {
             expr_mentions(recv, name)
                 || args.iter().flatten().any(|a| expr_mentions(a, name))
+                || named.iter().any(|a| expr_mentions(&a.expr, name))
         }
         ExprKind::Eq(a, b) => expr_mentions(a, name) || expr_mentions(b, name),
         _ => false,
@@ -576,8 +606,10 @@ fn ty_size(t: &Ty) -> usize {
 /// are measured on one scale and a mixed carrier cannot game the comparison.
 fn expr_size(e: &Expr) -> usize {
     match &e.kind {
-        ExprKind::App { head, args, .. } => {
-            expr_size(head) + args.iter().map(expr_size).sum::<usize>()
+        ExprKind::App { head, args, named, .. } => {
+            expr_size(head)
+                + args.iter().map(expr_size).sum::<usize>()
+                + named.iter().map(|a| expr_size(&a.expr)).sum::<usize>()
         }
         ExprKind::TyApp { head, args } => {
             expr_size(head) + args.iter().map(ty_size).sum::<usize>()
@@ -612,8 +644,10 @@ fn expr_var_count(e: &Expr, v: &str) -> usize {
         // one of the carrier's variables, so in practice this adds zero; if it
         // ever did not, a higher count on the *subgoal* side is the direction
         // that refuses, which is the safe way to be wrong.
-        ExprKind::App { head, args, .. } => {
-            expr_var_count(head, v) + args.iter().map(|a| expr_var_count(a, v)).sum::<usize>()
+        ExprKind::App { head, args, named, .. } => {
+            expr_var_count(head, v)
+                + args.iter().map(|a| expr_var_count(a, v)).sum::<usize>()
+                + named.iter().map(|a| expr_var_count(&a.expr, v)).sum::<usize>()
         }
         ExprKind::TyApp { head, args } => {
             expr_var_count(head, v) + args.iter().map(|a| ty_var_count(a, v)).sum::<usize>()
@@ -1785,6 +1819,7 @@ impl Elaborator {
                                 recv: Box::new(var(g, span)),
                                 name: fname.clone(),
                                 args: None,
+                                named: Vec::new(),
                             },
                             span,
                         ),

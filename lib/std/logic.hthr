@@ -78,7 +78,10 @@ theorem mt(P: Type, Q: Type, f: P -> Q, nq: Not(Q)): Not(P) {
 
 record And<P, Q> { left: P, right: Q }
 
-theorem and_swap<P, Q>(h: And<P, Q>): And<Q, P> { And(h.right, h.left) }
+// The two fields are *transposed*, and at `P = Q` no type would catch a
+// mistake — so the argument names say which is which
+// (docs/named-arguments-design.md).
+theorem and_swap<P, Q>(h: And<P, Q>): And<Q, P> { And(left := h.right, right := h.left) }
 
 theorem and_curry<P, Q, R>(f: And<P, Q> -> R): P -> Q -> R {
     λ (p: P) (q: Q) => f(And(p, q))
@@ -146,12 +149,16 @@ theorem or_pick_dec<P, A>(d: Or<P, Not(P)>, x, y: A, p: P): or_pick(d, x, y) = y
 
 record Iff<P, Q> { mp: P -> Q, mpr: Q -> P }
 
-theorem iff_refl<P>(): Iff<P, P> { Iff(λ (p: P) => p, λ (p: P) => p) }
+// Every `Iff` below names its two directions. `iff_refl`'s two fields have the
+// *same* type, so a swap there would typecheck; `iff_sym`'s are transposed on
+// purpose; and `iff_trans`'s are two lambdas long enough that "which one is
+// `mp`" stops being obvious from position alone.
+theorem iff_refl<P>(): Iff<P, P> { Iff(mp := λ (p: P) => p, mpr := λ (p: P) => p) }
 
-theorem iff_sym<P, Q>(h: Iff<P, Q>): Iff<Q, P> { Iff(h.mpr, h.mp) }
+theorem iff_sym<P, Q>(h: Iff<P, Q>): Iff<Q, P> { Iff(mp := h.mpr, mpr := h.mp) }
 
 theorem iff_trans<P, Q, R>(h1: Iff<P, Q>, h2: Iff<Q, R>): Iff<P, R> {
-    Iff(λ (p: P) => h2.mp(h1.mp(p)), λ (r: R) => h1.mpr(h2.mpr(r)))
+    Iff(mp := λ (p: P) => h2.mp(h1.mp(p)), mpr := λ (r: R) => h1.mpr(h2.mpr(r)))
 }
 
 // ---------------------------------------------------------------------------

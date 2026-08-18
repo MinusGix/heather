@@ -122,7 +122,12 @@ pub fn class_ty(name: String, args: Vec<Ty>, index: Vec<Expr>, span: Span) -> Ty
         Expr { kind: ExprKind::TyApp { head: Box::new(head), args }, span }
     };
     let applied = Expr {
-        kind: ExprKind::App { head: Box::new(head), args: index, explicit: false },
+        kind: ExprKind::App {
+            head: Box::new(head),
+            args: index,
+            named: Vec::new(),
+            explicit: false,
+        },
         span,
     };
     Ty { kind: TyKind::OfExpr(Box::new(applied)), span }
@@ -238,11 +243,24 @@ type R<T> = Result<T, ParseError>;
 const SITE_EXPR_TYARGS: u8 = 1 << 4;
 const SITE_TY_NAMED: u8 = 1 << 5;
 
-/// `name(args…)` as an [`ExprKind::App`] with a `Var` head — what the operator
-/// and `calc` desugarings build.
-fn named_call(name: &str, args: Vec<Expr>, explicit: bool, span: Span) -> Expr {
-    let head = Expr { kind: ExprKind::Var(name.to_string()), span };
-    Expr { kind: ExprKind::App { head: Box::new(head), args, explicit }, span }
+/// `trans(p, q, a := …, b := …, c := …)` — one `calc` step
+/// (docs/named-arguments-design.md). Separate from [`named_call`] because the
+/// endpoints are named rather than positional; see `calc_expr` for why.
+fn trans_call(args: Vec<Expr>, named: Vec<(&str, Expr)>, span: Span) -> Expr {
+    let head = Expr { kind: ExprKind::Var("trans".to_string()), span };
+    let named = named
+        .into_iter()
+        .map(|(name, expr)| NamedArg {
+            name: name.to_string(),
+            name_span: span,
+            span,
+            expr,
+        })
+        .collect();
+    Expr {
+        kind: ExprKind::App { head: Box::new(head), args, named, explicit: false },
+        span,
+    }
 }
 
 /// The owner half of a `<owner>::<member>` path, rendered as it is *printed*
@@ -251,7 +269,14 @@ fn named_call(name: &str, args: Vec<Expr>, explicit: bool, span: Span) -> Expr {
 /// and is what keeps the rendering total — there is no expression printer
 /// here and none is wanted.
 fn render_owner(e: &Expr) -> Option<String> {
-    let ExprKind::App { head, args, explicit: false } = &e.kind else { return None };
+    let ExprKind::App { head, args, named, explicit: false } = &e.kind else { return None };
+    if !named.is_empty() {
+        // An owner path is `Impl(add, BinNat)`, a name applied to names. A
+        // named argument is not a name, so it does not render — and rendering
+        // it as if it were would mint a path string that no `::` lookup and no
+        // `heather obligations` line could ever match.
+        return None;
+    }
     let ExprKind::Var(h) = &head.kind else { return None };
     let mut parts = Vec::with_capacity(args.len());
     for a in args {
@@ -270,7 +295,7 @@ fn render_owner(e: &Expr) -> Option<String> {
 /// written instead of as what it used to desugar to.
 fn op_call(sym: &str, args: Vec<Expr>, span: Span) -> Expr {
     let head = Expr { kind: ExprKind::OpSymbol(sym.to_string()), span };
-    Expr { kind: ExprKind::App { head: Box::new(head), args, explicit: false }, span }
+    Expr { kind: ExprKind::App { head: Box::new(head), args, named: Vec::new(), explicit: false }, span }
 }
 
 /// A binary connective: `P ∧ Q` is `And<P, Q>`, the declared record applied to
@@ -325,8 +350,14 @@ fn expr_as_ty(e: &Expr) -> Ty {
         // and the fall-through parses an expression. Any other arity falls
         // through to `OfExpr`, where the elaborator's own `Fin` arm says what
         // the arity is.
-        ExprKind::App { head, args, explicit: false }
-            if matches!(&head.kind, ExprKind::Var(s) if s == "Fin") && args.len() == 1 =>
+        // `named.is_empty()` because this arm reads the arity off `args`
+        // alone: `Fin(1, n := 2)` has one positional argument and would
+        // otherwise be read as `Fin(1)` with the name silently dropped
+        // (docs/named-arguments-design.md §8.2).
+        ExprKind::App { head, args, named, explicit: false }
+            if matches!(&head.kind, ExprKind::Var(s) if s == "Fin")
+                && args.len() == 1
+                && named.is_empty() =>
         {
             TyKind::Fin(Box::new(args[0].clone()))
         }
@@ -2410,7 +2441,12 @@ impl Parser {
             let span = start.join(inner.span);
             let head = Expr { kind: ExprKind::Var("Not".to_string()), span: start };
             return Ok(Expr {
-                kind: ExprKind::App { head: Box::new(head), args: vec![inner], explicit: false },
+                kind: ExprKind::App {
+                    head: Box::new(head),
+                    args: vec![inner],
+                    named: Vec::new(),
+                    explicit: false,
+                },
                 span,
             });
         }
@@ -2500,7 +2536,12 @@ impl Parser {
                 span: start,
             };
             out = Expr {
-                kind: ExprKind::App { head: Box::new(head), args: vec![lam], explicit: false },
+                kind: ExprKind::App {
+                    head: Box::new(head),
+                    args: vec![lam],
+                    named: Vec::new(),
+                    explicit: false,
+                },
                 span,
             };
         }
@@ -2721,16 +2762,16 @@ impl Parser {
                 TokKind::Dot => {
                     self.bump();
                     let (field, fsp) = self.ident("field or method name")?;
-                    let (args, end) = if matches!(self.peek(), TokKind::LParen) {
+                    let (args, named, end) = if matches!(self.peek(), TokKind::LParen) {
                         self.bump();
-                        let (args, end) = self.call_args()?;
-                        (Some(args), end)
+                        let (args, named, end) = self.call_args()?;
+                        (Some(args), named, end)
                     } else {
-                        (None, fsp)
+                        (None, Vec::new(), fsp)
                     };
                     let span = e.span.join(end);
                     e = Expr {
-                        kind: ExprKind::Dot { recv: Box::new(e), name: field, args },
+                        kind: ExprKind::Dot { recv: Box::new(e), name: field, args, named },
                         span,
                     };
                 }
@@ -2763,10 +2804,10 @@ impl Parser {
                 }
                 TokKind::LParen => {
                     self.bump();
-                    let (args, end) = self.call_args()?;
+                    let (args, named, end) = self.call_args()?;
                     let span = e.span.join(end);
                     e = Expr {
-                        kind: ExprKind::App { head: Box::new(e), args, explicit: false },
+                        kind: ExprKind::App { head: Box::new(e), args, named, explicit: false },
                         span,
                     };
                 }
@@ -3018,9 +3059,9 @@ impl Parser {
                 };
             }
             self.expect(&TokKind::LParen, "`(` (`@` marks a call)")?;
-            let (args, end) = self.call_args()?;
+            let (args, named, end) = self.call_args()?;
             return Ok(Expr {
-                kind: ExprKind::App { head: Box::new(head), args, explicit: true },
+                kind: ExprKind::App { head: Box::new(head), args, named, explicit: true },
                 span: at.join(end),
             });
         }
@@ -3165,18 +3206,55 @@ impl Parser {
     /// Parse a comma-separated argument list up to and including the closing
     /// `)` (the opening `(` is already consumed). Returns the args and the
     /// span of the `)`.
-    fn call_args(&mut self) -> R<(Vec<Expr>, Span)> {
+    /// The argument list of every call — a plain one, an `@`-call, an
+    /// `f<T>(…)` call, a method call and a constructor application all reach
+    /// here. The `(` is already consumed.
+    ///
+    /// Positional arguments first, then **named** ones, `x := e`
+    /// (docs/named-arguments-design.md §3.3). An argument is named iff the
+    /// next two tokens are `IDENT` `:=`, which is two tokens of fixed
+    /// lookahead with no speculation and no backtracking: `:=` occurs in no
+    /// expression position anywhere in this grammar (§2.2), so `f(x := e)` was
+    /// a parse error — at the `)` — before this existed, and nothing that
+    /// parsed before parses differently now.
+    fn call_args(&mut self) -> R<(Vec<Expr>, Vec<NamedArg>, Span)> {
         // Inside brackets a `{` cannot be a block, so the record-literal
         // restriction lifts here (and in every other bracketed context).
         self.with_record_lit(false, |p| {
             let mut args = Vec::new();
+            let mut named: Vec<NamedArg> = Vec::new();
             while !matches!(p.peek(), TokKind::RParen) {
-                // `A::CommMonoid(+)` — a designation reference, which is what
-                // an operator token in argument-initial position always is
-                // (docs/operation-indexed-classes-design.md §7).
-                match p.op_symbol_arg() {
-                    Some(e) => args.push(e),
-                    None => args.push(p.expr()?),
+                if p.at_named_arg() {
+                    let (name, name_span) = p.ident("a named argument's parameter name")?;
+                    p.expect(&TokKind::ColonEq, "`:=` (a named argument)")?;
+                    let expr = p.expr()?;
+                    let span = name_span.join(expr.span);
+                    named.push(NamedArg { name, name_span, expr, span });
+                } else {
+                    // Positional-then-named is the grammar, not an elaboration
+                    // rule (§4.2): a positional argument means "the next
+                    // parameter with no argument yet", and once free-order
+                    // named arguments have claimed parameters that is a rule
+                    // the writer has to compute rather than read. Refusing it
+                    // here is what makes the interleaving unrepresentable in
+                    // the AST, so no elaborator path has to define it.
+                    if let Some(prev) = named.last() {
+                        let msg = format!(
+                            "a positional argument cannot follow a named one: `{}` names its \
+                             parameter, so every argument after it must name its own. Write the \
+                             positional arguments first, or give this one a name too",
+                            prev.name
+                        );
+                        return Err(ParseError { msg, span: p.peek_span() });
+                    }
+                    // `A::CommMonoid(+)` — a designation reference, which is
+                    // what an operator token in argument-initial position
+                    // always is
+                    // (docs/operation-indexed-classes-design.md §7).
+                    match p.op_symbol_arg() {
+                        Some(e) => args.push(e),
+                        None => args.push(p.expr()?),
+                    }
                 }
                 if !matches!(p.peek(), TokKind::Comma) {
                     break;
@@ -3184,8 +3262,14 @@ impl Parser {
                 p.bump();
             }
             let end = p.expect(&TokKind::RParen, "`)`")?;
-            Ok((args, end))
+            Ok((args, named, end))
         })
+    }
+
+    /// `x :=` at the head of an argument. Two tokens, no lookahead beyond
+    /// them, and total — see [`Self::call_args`] for why that is enough.
+    fn at_named_arg(&self) -> bool {
+        matches!(self.peek(), TokKind::Ident(_)) && matches!(self.nth(1), TokKind::ColonEq)
     }
 
     /// `{ f: e, … }` after the record name, which the caller has consumed.
@@ -3490,16 +3574,21 @@ impl Parser {
         let last = &terms[m];
         let mut acc = proofs[m - 1].clone();
         for i in (0..m - 1).rev() {
-            acc = named_call(
-                "trans",
+            // The endpoints are pinned **by name**, not by a fully explicit
+            // `@trans` (docs/named-arguments-design.md; the issue calls this
+            // desugaring out as having been fragile twice). `@` forced every
+            // value implicit positionally, so the emitted call depended on how
+            // many implicits `trans` has and in what order — a property of a
+            // *library* declaration that a *parser* desugaring should not
+            // encode. Naming them depends only on what they are called, which
+            // `ParamMeta` already treats as API.
+            acc = trans_call(
+                vec![proofs[i].clone(), acc],
                 vec![
-                    terms[i].clone(),
-                    terms[i + 1].clone(),
-                    last.clone(),
-                    proofs[i].clone(),
-                    acc,
+                    ("a", terms[i].clone()),
+                    ("b", terms[i + 1].clone()),
+                    ("c", last.clone()),
                 ],
-                true,
                 span,
             );
         }
@@ -3575,7 +3664,7 @@ mod tests {
     fn at_marks_a_fully_explicit_call() {
         let f = parse_file("fn f(n: Nat) -> Nat { @g(a, b, p) }").unwrap();
         match &only_decl(&f).body.result.kind {
-            ExprKind::App { head, args, explicit } => {
+            ExprKind::App { head, args, explicit, .. } => {
                 assert!(matches!(&head.kind, ExprKind::Var(n) if n == "g"));
                 assert_eq!(args.len(), 3);
                 assert!(*explicit);
@@ -3590,6 +3679,53 @@ mod tests {
         match &only_decl(&f).body.result.kind {
             ExprKind::App { explicit, .. } => assert!(!*explicit),
             other => panic!("expected a call, got {other:?}"),
+        }
+    }
+
+    /// Named arguments land in their own list, so the grammar's
+    /// positional-then-named rule is a property of the AST rather than a rule
+    /// every reader has to re-check (docs/named-arguments-design.md §8.1).
+    #[test]
+    fn a_named_argument_parses_into_its_own_list() {
+        let f = parse_file("fn f(n: Nat) -> Nat { g(a, x := b, y := c) }").unwrap();
+        match &only_decl(&f).body.result.kind {
+            ExprKind::App { args, named, .. } => {
+                assert_eq!(args.len(), 1, "one positional");
+                assert_eq!(named.len(), 2);
+                assert_eq!(named[0].name, "x");
+                assert_eq!(named[1].name, "y");
+            }
+            other => panic!("expected a call, got {other:?}"),
+        }
+    }
+
+    /// §4.2 is a *parse* rule, so the interleaving never reaches the AST.
+    #[test]
+    fn a_positional_argument_after_a_named_one_does_not_parse() {
+        let e = parse_file("fn f(n: Nat) -> Nat { g(x := b, c) }").unwrap_err();
+        assert!(e.msg.contains("positional argument cannot follow a named one"), "{}", e.msg);
+    }
+
+    /// The lookahead is two tokens and total: `:=` occurs in no expression
+    /// position, so nothing that parsed before parses differently now. `a : b`
+    /// inside call parentheses is still the error it always was — it is not
+    /// quietly read as a named argument.
+    #[test]
+    fn a_colon_in_an_argument_is_still_not_a_named_argument() {
+        assert!(parse_file("fn f(n: Nat) -> Nat { g(x: b) }").is_err());
+    }
+
+    /// Named arguments reach every call spelling, because they are all one
+    /// function (`call_args`).
+    #[test]
+    fn every_call_spelling_takes_named_arguments() {
+        for src in [
+            "fn f(n: Nat) -> Nat { @g(a, x := b) }",
+            "fn f(n: Nat) -> Nat { g<Nat>(a, x := b) }",
+            "fn f(n: Nat) -> Nat { n.g(x := b) }",
+            "fn f(n: Nat) -> Nat { C(x := b) }",
+        ] {
+            parse_file(src).unwrap_or_else(|e| panic!("{src}: {}", e.msg));
         }
     }
 
@@ -3614,7 +3750,7 @@ mod tests {
     /// the growth-invariant pins).
     fn as_call(k: &ExprKind) -> (&str, &[Expr], bool) {
         match k {
-            ExprKind::App { head, args, explicit } => match &head.kind {
+            ExprKind::App { head, args, explicit, .. } => match &head.kind {
                 ExprKind::Var(name) => (name.as_str(), args.as_slice(), *explicit),
                 ExprKind::OpSymbol(sym) => (sym.as_str(), args.as_slice(), *explicit),
                 other => panic!("expected a named call, got {other:?}"),
@@ -3996,7 +4132,7 @@ mod tests {
     #[test]
     fn method_call_parses_as_dot_with_args() {
         let k = body("add_succ(n, k).sym()");
-        let ExprKind::Dot { recv, name, args } = &k else { panic!("expected a Dot, got {k:?}") };
+        let ExprKind::Dot { recv, name, args, .. } = &k else { panic!("expected a Dot, got {k:?}") };
         assert_eq!(name, "sym");
         assert_eq!(args.as_ref().expect("`()` means a call").len(), 0);
         assert_eq!(as_call(&recv.kind).0, "add_succ");
@@ -4006,7 +4142,7 @@ mod tests {
     fn field_access_parses_without_parens() {
         // `m.op` — a bare projection, which used to be a parse error.
         let k = body("m.op");
-        let ExprKind::Dot { recv, name, args } = &k else { panic!("expected a Dot, got {k:?}") };
+        let ExprKind::Dot { recv, name, args, .. } = &k else { panic!("expected a Dot, got {k:?}") };
         assert_eq!(name, "op");
         assert!(args.is_none(), "no `()` means no call");
         assert!(matches!(&recv.kind, ExprKind::Var(v) if v == "m"));
@@ -4016,7 +4152,7 @@ mod tests {
     fn dot_chains_left_associatively() {
         // `m.a.b(c)` — `(m.a).b(c)`, so the receiver of `b` is `m.a`.
         let k = body("m.a.b(c)");
-        let ExprKind::Dot { recv, name, args } = &k else { panic!("expected a Dot, got {k:?}") };
+        let ExprKind::Dot { recv, name, args, .. } = &k else { panic!("expected a Dot, got {k:?}") };
         assert_eq!(name, "b");
         assert_eq!(args.as_ref().expect("a call").len(), 1);
         let ExprKind::Dot { name: inner, .. } = &recv.kind else { panic!("expected a Dot") };
@@ -4083,32 +4219,56 @@ mod tests {
         assert!(matches!(&k, ExprKind::Var(v) if v == "p"));
     }
 
+    /// `calc { a = b := p1, = c := p2 }` ⇒ `trans(p1, p2, a := a, b := b,
+    /// c := c)`. The assertion that this used to be `@trans(a, b, c, p1, p2)`
+    /// was changed **deliberately** when named arguments landed: `@` made the
+    /// desugaring depend on how many implicits `trans` has and in what order,
+    /// which is a property of a library declaration rather than of the
+    /// grammar, and is the fragility `issues/named-arguments.md` records.
     #[test]
-    fn calc_multi_step_nests_explicit_trans() {
-        // `calc { a = b := p1, = c := p2 }` ⇒ @trans(a, b, c, p1, p2).
+    fn calc_multi_step_pins_the_endpoints_by_name() {
         let k = body("calc { a = b := p1, = c := p2 }");
         let (name, args, explicit) = as_call(&k);
         assert_eq!(name, "trans");
-        assert!(explicit, "calc lowers to the explicit `@trans`");
-        assert_eq!(args.len(), 5);
-        assert!(matches!(&args[0].kind, ExprKind::Var(v) if v == "a"));
-        assert!(matches!(&args[1].kind, ExprKind::Var(v) if v == "b"));
-        assert!(matches!(&args[2].kind, ExprKind::Var(v) if v == "c"));
-        assert!(matches!(&args[3].kind, ExprKind::Var(v) if v == "p1"));
-        assert!(matches!(&args[4].kind, ExprKind::Var(v) if v == "p2"));
+        assert!(!explicit, "the endpoints are named, so `@` is not needed");
+        assert_eq!(args.len(), 2);
+        assert!(matches!(&args[0].kind, ExprKind::Var(v) if v == "p1"));
+        assert!(matches!(&args[1].kind, ExprKind::Var(v) if v == "p2"));
+        let ExprKind::App { named, .. } = &k else { panic!("expected a call") };
+        let spelled: Vec<(&str, &str)> = named
+            .iter()
+            .map(|n| {
+                let ExprKind::Var(v) = &n.expr.kind else { panic!("expected a var") };
+                (n.name.as_str(), v.as_str())
+            })
+            .collect();
+        assert_eq!(spelled, vec![("a", "a"), ("b", "b"), ("c", "c")]);
     }
 
+    /// `calc { a=b:=p1, =c:=p2, =d:=p3 }` ⇒
+    /// `trans(p1, trans(p2, p3, a:=b, b:=c, c:=d), a:=a, b:=b, c:=d)`.
+    /// The right endpoint `d` is shared by every level, which is what the
+    /// right fold is for; it is now read off the `c` **name** rather than off
+    /// argument slot 2.
     #[test]
     fn calc_three_steps_fold_right() {
-        // `calc { a=b:=p1, =c:=p2, =d:=p3 }` ⇒ @trans(a,b,d,p1,@trans(b,c,d,p2,p3)).
         let k = body("calc { a = b := p1, = c := p2, = d := p3 }");
+        assert_eq!(calc_endpoint(&k, "c"), "d", "shared right endpoint");
+        assert_eq!(calc_endpoint(&k, "a"), "a");
         let (_, args, _) = as_call(&k);
-        assert!(matches!(&args[2].kind, ExprKind::Var(v) if v == "d"), "shared right endpoint");
-        let (inner, iargs, iexpl) = as_call(&args[4].kind);
+        let (inner, _, iexpl) = as_call(&args[1].kind);
         assert_eq!(inner, "trans");
-        assert!(iexpl);
-        assert!(matches!(&iargs[0].kind, ExprKind::Var(v) if v == "b"));
-        assert!(matches!(&iargs[2].kind, ExprKind::Var(v) if v == "d"));
+        assert!(!iexpl);
+        assert_eq!(calc_endpoint(&args[1].kind, "a"), "b");
+        assert_eq!(calc_endpoint(&args[1].kind, "c"), "d");
+    }
+
+    /// The variable a `calc`-emitted `trans` pins at the named endpoint `which`.
+    fn calc_endpoint<'a>(k: &'a ExprKind, which: &str) -> &'a str {
+        let ExprKind::App { named, .. } = k else { panic!("expected a call, got {k:?}") };
+        let na = named.iter().find(|n| n.name == which).expect("endpoint");
+        let ExprKind::Var(v) = &na.expr.kind else { panic!("expected a var") };
+        v.as_str()
     }
 
     #[test]

@@ -1255,9 +1255,11 @@ fn scan_splices(e: &Expr, menv: &MetaEnv, out: &mut Vec<(String, Span)>) -> R<()
             scan_splices(b, menv, out)
         }
         ExprKind::TyLit(t) => walk_ty(t, menv, out),
-        ExprKind::App { head, args, .. } => {
+        ExprKind::App { head, args, named, .. } => {
             scan_splices(head, menv, out)?;
-            args.iter().try_for_each(|a| scan_splices(a, menv, out))
+            args.iter().try_for_each(|a| scan_splices(a, menv, out))?;
+            // A splice inside a named argument is still a splice.
+            named.iter().try_for_each(|a| scan_splices(&a.expr, menv, out))
         }
         ExprKind::TyApp { head, args } => {
             scan_splices(head, menv, out)?;
@@ -1285,9 +1287,10 @@ fn scan_splices(e: &Expr, menv: &MetaEnv, out: &mut Vec<(String, Span)>) -> R<()
             }
             arms.iter().try_for_each(|a| scan_splices(&a.body, menv, out))
         }
-        ExprKind::Dot { recv, args, .. } => {
+        ExprKind::Dot { recv, args, named, .. } => {
             scan_splices(recv, menv, out)?;
-            args.iter().flatten().try_for_each(|a| scan_splices(a, menv, out))
+            args.iter().flatten().try_for_each(|a| scan_splices(a, menv, out))?;
+            named.iter().try_for_each(|a| scan_splices(&a.expr, menv, out))
         }
         ExprKind::RecordLit { tyargs, fields, .. } => {
             tyargs.iter().try_for_each(|t| walk_ty(t, menv, out))?;

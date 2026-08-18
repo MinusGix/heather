@@ -386,6 +386,7 @@ impl Elaborator {
                     recv: Box::new(Expr { kind: ExprKind::Var("#dict".into()), span }),
                     name: n.clone()?,
                     args: None,
+                    named: Vec::new(),
                 },
                 span,
             });

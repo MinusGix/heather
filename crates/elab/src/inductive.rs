@@ -3170,8 +3170,10 @@ pub(crate) fn expr_mentions(e: &Expr, name: &str) -> bool {
         | ExprKind::AutoRefl
         | ExprKind::Hole(_)
         | ExprKind::Univ { .. } => false,
-        ExprKind::App { head, args, .. } => {
-            expr_mentions(head, name) || args.iter().any(|a| expr_mentions(a, name))
+        ExprKind::App { head, args, named, .. } => {
+            expr_mentions(head, name)
+                || args.iter().any(|a| expr_mentions(a, name))
+                || named.iter().any(|a| expr_mentions(&a.expr, name))
         }
         ExprKind::TyApp { head, args } => {
             expr_mentions(head, name) || args.iter().any(|t| occurs(t, name).is_some())
@@ -3187,9 +3189,10 @@ pub(crate) fn expr_mentions(e: &Expr, name: &str) -> bool {
         ExprKind::Index { recv, idx } => {
             expr_mentions(recv, name) || expr_mentions(idx, name)
         }
-        ExprKind::Dot { recv, args, .. } => {
+        ExprKind::Dot { recv, args, named, .. } => {
             expr_mentions(recv, name)
                 || args.iter().flatten().any(|a| expr_mentions(a, name))
+                || named.iter().any(|a| expr_mentions(&a.expr, name))
         }
         ExprKind::RecordLit { name: n, tyargs, fields } => {
             n == name
