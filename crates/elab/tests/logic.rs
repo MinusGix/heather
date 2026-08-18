@@ -13,7 +13,7 @@
 //! sugar a hypothesis written in the *desugared* spelling and letting
 //! conversion agree or refuse. `p <= q ∧ q <= r ∧ p <= r` typechecking says
 //! nothing on its own — it is only evidence once the term it is fed is
-//! `And<Le(p,q), And<Le(q,r), Le(p,r)>>` and the left-nested rival is refused
+//! `And<nat::Le(p,q), And<nat::Le(q,r), nat::Le(p,r)>>` and the left-nested rival is refused
 //! beside it.
 
 use heather_elab::{ElabError, Elaborator};
@@ -217,7 +217,7 @@ theorem con(P: Type, Q: Type, h: And<P, Q>): P ∧ Q { h }
 theorem dis(P: Type, Q: Type, h: Or<P, Q>): P ∨ Q { h }
 theorem neg(P: Type, h: Not(P)): ¬P { h }
 theorem bi(P: Type, Q: Type, h: Iff<P, Q>): P ↔ Q { h }
-theorem all(h: (n: Nat) -> Le(n, n)): ∀ n: Nat, n <= n { h }
+theorem all(h: (n: Nat) -> nat::Le(n, n)): ∀ n: Nat, n <= n { h }
 theorem ex(h: Exists<Nat>(λ (k: Nat) => add(k, k) = 4)): ∃ k: Nat, add(k, k) = 4 { h }
 ");
 }
@@ -255,7 +255,7 @@ fn no_ascii_digraph_for_the_other_connectives() {
 #[test]
 fn connectives_are_looser_than_comparison() {
     ok("
-theorem t(a: Nat, b: Nat, c: Nat, h: And<Le(a, b), Le(b, c)>): a <= b ∧ b <= c { h }
+theorem t(a: Nat, b: Nat, c: Nat, h: And<nat::Le(a, b), nat::Le(b, c)>): a <= b ∧ b <= c { h }
 ");
 }
 
@@ -265,16 +265,16 @@ theorem t(a: Nat, b: Nat, c: Nat, h: And<Le(a, b), Le(b, c)>): a <= b ∧ b <= c
 #[test]
 fn wedge_binds_tighter_than_vee_and_both_associate_right() {
     ok("
-theorem assoc(p: Nat, q: Nat, r: Nat, h: And<Le(p, q), And<Le(q, r), Le(p, r)>>):
+theorem assoc(p: Nat, q: Nat, r: Nat, h: And<nat::Le(p, q), And<nat::Le(q, r), nat::Le(p, r)>>):
     p <= q ∧ q <= r ∧ p <= r { h }
-theorem prec(p: Nat, q: Nat, r: Nat, h: Or<And<Le(p, q), Le(q, r)>, Le(r, p)>):
+theorem prec(p: Nat, q: Nat, r: Nat, h: Or<And<nat::Le(p, q), nat::Le(q, r)>, nat::Le(r, p)>):
     p <= q ∧ q <= r ∨ r <= p { h }
 ");
     // The left-nested rival, refused. Without this the associativity claim is
     // untested: a left-associative parse would pass `assoc` too if `And` were
     // symmetric, and nothing above says it is not.
     let err = bad(
-        "theorem t(p: Nat, q: Nat, r: Nat, h: And<And<Le(p, q), Le(q, r)>, Le(p, r)>):
+        "theorem t(p: Nat, q: Nat, r: Nat, h: And<And<nat::Le(p, q), nat::Le(q, r)>, nat::Le(p, r)>):
             p <= q ∧ q <= r ∧ p <= r { h }",
     );
     assert!(err.contains("NotConvertible") || err.contains("mismatch"), "got: {err}");
@@ -286,7 +286,7 @@ theorem prec(p: Nat, q: Nat, r: Nat, h: Or<And<Le(p, q), Le(q, r)>, Le(r, p)>):
 fn neg_binds_tighter_than_wedge_and_looser_than_equality() {
     ok("
 theorem eqn(h: Not(1 = 0)): ¬ 1 = 0 { h }
-theorem conj(P: Type, np: Not(P), q: Le(0, 1)): And<Not(P), Le(0, 1)> { And(np, q) }
+theorem conj(P: Type, np: Not(P), q: nat::Le(0, 1)): And<Not(P), nat::Le(0, 1)> { And(np, q) }
 theorem conj_sugar(P: Type, np: ¬P, q: 0 <= 1): ¬P ∧ 0 <= 1 { And(np, q) }
 theorem dbl(P: Type, h: Not(Not(P))): ¬¬P { h }
 ");
@@ -328,9 +328,9 @@ theorem u(P: Type, Q: Type, h: Iff<Or<P, Q>, And<P, Q>>): Or<P, Q> ↔ And<P, Q>
 #[test]
 fn forall_is_the_arrow_form() {
     ok("
-theorem one(h: (n: Nat) -> Le(n, n)): ∀ n: Nat, n <= n { h }
-theorem many(h: (n: Nat) -> (m: Nat) -> Le(n, add(n, m))): ∀ n, m: Nat, n <= add(n, m) { h }
-theorem body_runs_right(h: (n: Nat) -> And<Le(n, n), Le(0, n)>):
+theorem one(h: (n: Nat) -> nat::Le(n, n)): ∀ n: Nat, n <= n { h }
+theorem many(h: (n: Nat) -> (m: Nat) -> nat::Le(n, add(n, m))): ∀ n, m: Nat, n <= add(n, m) { h }
+theorem body_runs_right(h: (n: Nat) -> And<nat::Le(n, n), nat::Le(0, n)>):
     ∀ n: Nat, n <= n ∧ 0 <= n { h }
 ");
 }

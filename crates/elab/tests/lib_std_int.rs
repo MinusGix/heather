@@ -209,6 +209,75 @@ theorem c_max_computes(): max_of(NegSucc(2), OfNat(1)) = OfNat(1) { refl }
     );
 }
 
+/// The round's own row, and the reason it could not be written until
+/// 2026-08-17: `Decide` at **three** orders that are all written `Le`
+/// (`docs/instance-resolved-key-design.md`,
+/// `issues/instance-key-collides-across-modules.md`). One downstream file that
+/// imports all three, `<=` reading its carrier off the operand, and `decide` at
+/// each — so the claim is not merely "three instances registered" but "the
+/// resolver hands each goal the one at its own carrier".
+///
+/// Per `docs/testing-generated-terms.md`: an OPEN carrier on each side (the
+/// `d_*_open` rows, where no goal is closed by computation), a *checking*
+/// position (each is a declaration with a written result type), a closed
+/// scrutinee that must actually decide (`d_*_computes`), and the negative
+/// control below it.
+#[test]
+fn decide_resolves_at_all_three_orders_named_le() {
+    probe(
+        "the three `Le` carriers did not all decide",
+        r#"
+import int;
+import nat;
+import bool;
+import logic;
+
+// `<=` at three carriers in one file, none of them qualified: the designation
+// at the operand's carrier is what picks the order (`nat`, `int` and `bool`
+// each declare their own row).
+theorem o_nat(m: Nat): m <= m { nat::le_refl(m) }
+theorem o_int(a: Int): a <= a { int::le_refl(a) }
+theorem o_bool(p: Bool): p <= p { bool::le_refl(p) }
+
+// The same three, decided through the class rather than by naming a decider —
+// at OPEN operands, so each is answered by the registry and not by reduction.
+fn d_nat_open(m, n: Nat) -> Or<nat::Le(m, n), ¬ nat::Le(m, n)> { decide<nat::Le(m, n)>() }
+fn d_int_open(a, b: Int) -> Or<int::Le(a, b), ¬ int::Le(a, b)> { decide<int::Le(a, b)>() }
+fn d_bool_open(p, q: Bool) -> Or<bool::Le(p, q), ¬ bool::Le(p, q)> { decide<bool::Le(p, q)>() }
+
+// And they COMPUTE, which is what says the answer was the right instance and
+// not merely one of the right type: a decider that unfolds picks a branch.
+theorem d_nat_computes(): decide_pick<nat::Le(2, 5), Nat>(7, 9) = 9 { refl }
+theorem d_int_computes(): decide_pick<int::Le(OfNat(2), NegSucc(0)), Nat>(7, 9) = 7 { refl }
+theorem d_bool_computes(): decide_pick<bool::Le(True, False), Nat>(7, 9) = 7 { refl }
+
+// The canonical names, written: three modules, three declarations, one spelling
+// `Le::Decide` each. This is the string the registry hands out and it is now
+// writable verbatim.
+fn k_nat(m, n: Nat) -> Decide<nat::Le(m, n)> { nat::Le::Decide() }
+fn k_int(a, b: Int) -> Decide<int::Le(a, b)> { int::Le::Decide() }
+fn k_bool(p, q: Bool) -> Decide<bool::Le(p, q)> { bool::Le::Decide() }
+"#,
+    );
+}
+
+/// The negative control for the test above: a decision that is *false* at
+/// closed operands is refused. Without it, `d_*_computes` would pass over a
+/// `decide_pick` that always took the same branch.
+#[test]
+fn a_wrong_decision_at_one_of_the_three_orders_is_refused() {
+    let mut e = elaborated();
+    let bad = r#"
+import int;
+import logic;
+theorem wrong(): decide_pick<int::Le(OfNat(2), NegSucc(0)), Nat>(7, 9) = 9 { refl }
+"#;
+    match e.elab_module_source("bad", bad) {
+        Err(_) => {}
+        Ok(()) => panic!("a false decision at closed integers was accepted"),
+    }
+}
+
 /// The negative control: a *false* equation at closed integers is refused. Test
 /// 3 would pass over an `add` that ignored its second argument if that argument
 /// happened to be `0` everywhere, and it would pass over a `mul` whose sign

@@ -178,8 +178,15 @@ instance Default<Bool> { default := False }
 instance<A> Default<List<A>> { default := Nil }
 instance<A> Default<Option<A>> { default := None }
 
-instance Cmp<Nat> { le := Le, le_refl := le_refl, le_dec := le_dec }
-instance Cmp<Bool> { le := Le_bool, le_refl := le_bool_refl, le_dec := le_bool_dec }
+// Both orders are written **qualified**, and this file is where that stopped
+// being optional: `std/bool`'s order dropped its `_bool` suffix on 2026-08-17
+// (docs/instance-resolved-key-design.md §6), so `Le`, `le_refl` and `le_dec`
+// each name two declarations in a file that imports `nat` and `bool` both.
+// Ambiguity at the *use* is the module regime working (docs/modules-design.md
+// §4) — library growth introduces errors, never reinterpretations — and the
+// answer is to say which.
+instance Cmp<Nat> { le := nat::Le, le_refl := nat::le_refl, le_dec := nat::le_dec }
+instance Cmp<Bool> { le := bool::Le, le_refl := bool::le_refl, le_dec := bool::le_dec }
 
 // ---------------------------------------------------------------------------
 // The designations: what a symbol means at a carrier

@@ -252,7 +252,7 @@ theorem c_drop(): drop(three(), 2) = Cons(3, Nil) { refl }
 theorem c_rev(): rev(three()) = Cons(3, Cons(2, Cons(1, Nil))) { refl }
 theorem c_foldr(): foldr(three(), λ (a: Nat) (b: Nat) => add(a, b), 0) = 6 { refl }
 theorem c_foldl(): foldl(three(), λ (a: Nat) (b: Nat) => add(a, b), 0) = 6 { refl }
-theorem c_filter(): filter(three(), λ (n: Nat) => leb(2, n)) = Cons(2, Cons(3, Nil)) { refl }
+theorem c_filter(): filter(three(), λ (n: Nat) => nat::leb(2, n)) = Cons(2, Cons(3, Nil)) { refl }
 theorem c_replicate(): replicate(7, 2) = Cons(7, Cons(7, Nil)) { refl }
 theorem c_head(): three().head() = Some(1) { refl }
 theorem c_last(): three().last() = Some(3) { refl }
@@ -269,8 +269,8 @@ theorem c_len_zip(): len(zip(three(), Cons(4, Nil))) = 1 { refl }
 theorem c_zip_swap(): list::map(zip(three(), Cons(4, Nil)),
                                 λ (q: Pair<Nat, Nat>) => swap(q))
     = zip(Cons(4, Nil), three()) { refl }
-theorem c_filter_filter(): filter(filter(three(), λ (n: Nat) => leb(2, n)),
-                                  λ (n: Nat) => leb(2, n)) = Cons(2, Cons(3, Nil)) { refl }
+theorem c_filter_filter(): filter(filter(three(), λ (n: Nat) => nat::leb(2, n)),
+                                  λ (n: Nat) => nat::leb(2, n)) = Cons(2, Cons(3, Nil)) { refl }
 theorem c_foldl_rev(): foldl(rev(three()), λ (b: Nat) (a: Nat) => add(b, a), 0) = 6 { refl }
 theorem c_mem(): Mem(2, three()) { Inr(Inl(refl)) }
 

@@ -115,8 +115,15 @@ pub(crate) fn qkey(module: &str, name: &str) -> String {
 }
 
 /// Split a written reference into its qualifier and base name. `None` for an
-/// unqualified name. There is exactly one `::` at most: module names are
-/// single-segment and the lexer joins only one pair.
+/// unqualified name.
+///
+/// The split is at the **first** `::`, and that is the whole reading of a
+/// three-segment name: module names are single-segment, so `int::Le::Decide`
+/// is the module `int` and the declared name `Le::Decide` — which is exactly
+/// how a member of a type's namespace was already keyed
+/// (`Elaborator::key_of_declared_kinds`). The lexer joins a chain as of
+/// 2026-08-17 (`docs/instance-resolved-key-design.md` §5); nothing here had to
+/// move for it.
 pub(crate) fn split_qual(name: &str) -> Option<(&str, &str)> {
     name.split_once("::")
 }

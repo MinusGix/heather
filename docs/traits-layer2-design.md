@@ -181,6 +181,14 @@ both" for every class shape this round can express, so **no new machinery is
 built**: the check exists, and this document is where it is claimed as the
 overlap discipline rather than as a naming collision.
 
+> **Amended 2026-08-17** (`docs/instance-resolved-key-design.md`). The key's
+> carrier component is the head's **resolved declaration**, so two carriers
+> whose heads share a *name* across modules (`nat::Le`, `int::Le`) are two
+> keys and coexist. That is not a hole in the overlap discipline: their heads
+> do not unify — they are different declarations — so record §6.2 never asked
+> for them to be refused, and the old key was refusing more than the
+> discipline required. Within one carrier declaration nothing changed.
+
 Two instances whose heads unify but are not equal (`C<Pair<A, B>>` and
 `C<Pair<Nat, B>>`) share a head and are therefore already refused — the
 refusal is *coarser* than unification, never laxer, so nothing overlapping

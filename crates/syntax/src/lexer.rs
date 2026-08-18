@@ -138,11 +138,27 @@ pub fn lex(src: &str) -> Result<Vec<Tok>, LexError> {
             // `nat::sub` is **one** identifier token (docs/modules-design.md
             // §4). Adjacency decides, as it does for `?name`: a `::` followed
             // by an identifier start joins, so `nat::{Le}` (the import-list
-            // form) still lexes as `nat` `::` `{`. Single-segment module
-            // names mean one join is the whole grammar — there are no
-            // compound paths in v1 — so the joined name never grows a second
-            // `::`.
-            if src.get(i..i + 2) == Some("::")
+            // form) still lexes as `nat` `::` `{`.
+            //
+            // A **chain**, not one join (2026-08-17,
+            // docs/instance-resolved-key-design.md §5). Module names are
+            // single-segment, so for a long time one join was the whole
+            // grammar; a *member of a member's* namespace is three segments —
+            // `int::Le::Decide` is the module, the carrier and the class — and
+            // is now the printed form of a name the registry hands out, so it
+            // has to be writable verbatim (docs/repr-access-spellings-design.md
+            // §2's invariant). The loop is the whole change: what a joined name
+            // *means* is decided by `names::resolve_kinds` against the tables,
+            // exactly as it was for two segments, and `split_qual`'s
+            // first-`::` split already reads a three-segment name as
+            // (qualifier, declared name).
+            //
+            // Nothing regressed by widening this: a standalone `::` after an
+            // identifier was a parse error in every expression position
+            // (`Parser`'s postfix `::` arm needs an *applied* owner,
+            // `Impl(add, BinNat)::refines`, which ends in `)` and never
+            // reaches here).
+            while src.get(i..i + 2) == Some("::")
                 && bytes.get(i + 2).is_some_and(|c| c.is_ascii_alphabetic() || *c == b'_')
             {
                 i += 2;

@@ -101,7 +101,11 @@ Two consequences worth stating plainly:
 - **Duplicate detection coarsens.** Every `Decide<Le(…)>` collides at key `Le`
   regardless of arguments. That is the same narrowing already accepted for
   `Monoid<Pair<A, B>>` and it is a declaration error naming both, never a
-  silent overwrite.
+  silent overwrite. (Across *modules* it no longer collides: the key's carrier
+  component is the head's resolved declaration as of 2026-08-17,
+  `docs/instance-resolved-key-design.md`, which is what let `std/int` and
+  `std/bool` register the `Decide` rows this section's widening had made
+  spellable but not registrable.)
 - **Paterson's condition had to learn the new syntax.** `ty_size` and
   `ty_var_count` fell through to `1`/`0` for `TyKind::OfExpr`, which was
   harmless only while such a carrier could not be declared — a head of size 1
@@ -123,7 +127,10 @@ the class.
 `Decide<n = m>` refuses, and `head_name` **deliberately** does not answer for
 `TyKind::Eq`. One reserved key would collide `n = m` at `Nat` with equality at
 every other type, so keying it needs the endpoints' type in the key — which is
-the (class, carrier-syntax) key of §7.1, wanted here for real.
+the (class, carrier-syntax) key of §7.1, wanted here for real. (That key landed
+on 2026-08-17 in its cheap form — a tuple of resolved declaration references,
+`docs/instance-resolved-key-design.md` — so what is left here is the *name* for
+a headless carrier, not the key. The issue's log carries the revised cost.)
 
 `std/nat`'s `eq_dec` is therefore an ordinary `fn`, called by name.
 `issues/decidable-equation-carrier.md` owns the key.

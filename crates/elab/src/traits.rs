@@ -52,11 +52,16 @@ pub(crate) struct ClassInfo {
     pub owner: Vec<Option<String>>,
 }
 
-/// A registered instance: one canonical value per (class, carrier head)
-/// (design §4.1).
+/// A registered instance: one canonical value per (class, resolved carrier)
+/// (design §4.1, `docs/instance-resolved-key-design.md`).
 #[derive(Clone)]
 pub(crate) struct InstanceInfo {
-    /// The global that *is* the instance — `Rat::Monoid`.
+    /// The global that *is* the instance, **module-qualified** —
+    /// `main::Rat::Monoid`, `int::Le::Decide`. Qualified because it is emitted
+    /// as a `Var` at a *use* site, in a module that may see two `Le::Decide`s
+    /// (`docs/instance-resolved-key-design.md` §4): the unqualified string was
+    /// a name that resolved by luck of visibility, and the registry has to
+    /// name the very declaration it registered.
     pub global: String,
     /// The instance head as written, for diagnostics (`Monoid<Rat>`).
     pub written: String,
@@ -83,18 +88,29 @@ pub(crate) struct DesignationInfo {
     pub written: String,
 }
 
-/// The key an instance is registered under. Deliberately *not* the rendered
-/// carrier: see design §4.1 and §7.1.
+/// The key an instance is registered under: **(class key, carrier-head key,
+/// index spelling)**, every component a *resolved* declaration reference and
+/// no component a surface spelling
+/// (`docs/instance-resolved-key-design.md` §3).
 ///
-/// The third component is the **index spelling**
-/// (docs/operation-indexed-classes-design.md §3.1): two instances at one key
-/// are the duplicate-declaration error they always were, two at different
-/// indices coexist as equals. Empty at an unindexed class, so every key that
-/// predates value indices is unchanged.
+/// The first component is the class's qualified key, the second the carrier
+/// head's — `("logic::Decide", "int::Le", "")` and `("logic::Decide",
+/// "nat::Le", "")` are two instances that coexist, where keying the head on
+/// the written name `Le` collided them
+/// (issues/instance-key-collides-across-modules.md).
+///
+/// The third is the **index spelling**
+/// (docs/operation-indexed-classes-design.md §3.1): each index argument's own
+/// resolved global key, joined. Two instances at one key are the
+/// duplicate-declaration error they always were, two at different indices
+/// coexist as equals. Empty at an unindexed class, so every key that predates
+/// value indices carries one resolved component instead of two.
 pub(crate) type InstKey = (String, String, String);
 
-pub(crate) fn instance_key(class_key: &str, head: &str, index: &str) -> InstKey {
-    (class_key.to_string(), head.to_string(), index.to_string())
+/// `head_key` is the carrier head **resolved** — [`Elaborator::carrier_key`],
+/// never `head_name`'s raw string.
+pub(crate) fn instance_key(class_key: &str, head_key: &str, index: &str) -> InstKey {
+    (class_key.to_string(), head_key.to_string(), index.to_string())
 }
 
 /// The index spelling as a *name* fragment: a key may contain `::` (a
@@ -760,6 +776,18 @@ impl Elaborator {
         };
         self.classes.insert(qkey(&self.scope.module, &d.name), Rc::new(info));
         Ok(())
+    }
+
+    /// A carrier head as the registry keys it: the **declaration** the head
+    /// names, qualified (`docs/instance-resolved-key-design.md` §3).
+    ///
+    /// The fallback is the bare name, and it is reached by exactly the three
+    /// names [`Elaborator::names_a_type`] claims with no declaration behind
+    /// them — `Nat`, `Type`, `True`. Those are the language's own and cannot be
+    /// declared twice, so a bare key for them is a *constant*, not a spelling
+    /// that might mean two things.
+    pub(crate) fn carrier_key(&self, head: &str) -> String {
+        self.key_of(head).unwrap_or_else(|| head.to_string())
     }
 
     /// The **index spelling** of an instance head
@@ -1473,17 +1501,23 @@ impl Elaborator {
             // — the `T::C(args)` spelling of §5.1 — is how it is reached.
             format!("{head}::{}#{}", class.name, name_suffix(&index))
         };
-        let key = instance_key(&class_key, &head, &index);
+        // The carrier as the registry keys it: the *declaration* the head
+        // names, not the head's spelling
+        // (docs/instance-resolved-key-design.md §3). `head` itself stays the
+        // written string, because it is what the canonical name is built from
+        // and what a diagnostic should print.
+        let head_key = self.carrier_key(&head);
+        let key = instance_key(&class_key, &head_key, &index);
         if let Some(prev) = self.instances.get(&key) {
             return err(
                 format!(
-                    "`{}` already has an instance of `{}`{} (`{}`), declared as `{}`: at \
-                     layer 1 the canonical name is keyed on the carrier's *head* and the \
-                     index spelling, so two carriers with the same head collide — this is \
-                     refused rather than silently overwritten \
-                     (docs/traits-layer1-design.md §4.1)",
-                    head,
-                    class.name,
+                    "`{}` already has an instance of `{}`{} (`{}`), declared as `{}`: an \
+                     instance is keyed on its class and its **resolved** carrier, so this \
+                     is the same carrier declaration and not merely the same written name \
+                     — refused rather than silently overwritten \
+                     (docs/instance-resolved-key-design.md §3)",
+                    head_key,
+                    class_key,
                     if index.is_empty() {
                         String::new()
                     } else {
@@ -1575,12 +1609,18 @@ impl Elaborator {
         // The scope is a block-local device and must not survive the block.
         // On the failure path the whole snapshot is restored, which clears it
         // too.
-        let r = self.assemble_instance(d, &class, &head, &prefix, &class_ty, &written);
+        let r =
+            self.assemble_instance(d, &class, &head, &head_key, &prefix, &class_ty, &written);
         self.instance_scope.clear();
         r?;
         self.instances.insert(
             key,
-            InstanceInfo { global: prefix, written, index, parameterized },
+            InstanceInfo {
+                global: qkey(&self.scope.module, &prefix),
+                written,
+                index,
+                parameterized,
+            },
         );
         Ok(())
     }
@@ -1593,6 +1633,7 @@ impl Elaborator {
         d: &InstanceDecl,
         class: &ClassInfo,
         head: &str,
+        head_key: &str,
         prefix: &str,
         class_ty: &Ty,
         written: &str,
@@ -1706,7 +1747,7 @@ impl Elaborator {
             let Some(akey) = self.key_of(&a.name) else { continue };
             let Some(ainfo) = self.classes.get(&akey).cloned() else { continue };
             let aindex = self.index_spelling(&anc_ref(a), &ainfo)?;
-            let Some(inst) = self.instances.get(&instance_key(&akey, head, &aindex)) else {
+            let Some(inst) = self.instances.get(&instance_key(&akey, head_key, &aindex)) else {
                 continue;
             };
             // A *parameterized* canonical parent (a generic instance, or one
@@ -1826,7 +1867,7 @@ impl Elaborator {
             let Some(ainfo) = self.classes.get(&akey).cloned() else { continue };
             let aref = anc_ref(&a);
             let aindex = self.index_spelling(&aref, &ainfo)?;
-            if self.instances.contains_key(&instance_key(&akey, head, &aindex)) {
+            if self.instances.contains_key(&instance_key(&akey, head_key, &aindex)) {
                 continue;
             }
             let aname = if aindex.is_empty() {
@@ -1873,9 +1914,9 @@ impl Elaborator {
             );
             self.synth_decl(DeclKind::Fn, &aname, d, aty, alit, span)?;
             self.instances.insert(
-                instance_key(&akey, head, &aindex),
+                instance_key(&akey, head_key, &aindex),
                 InstanceInfo {
-                    global: aname,
+                    global: qkey(&self.scope.module, &aname),
                     written: class_ref_written(&aref),
                     index: aindex,
                     parameterized,

@@ -121,7 +121,10 @@ buys at a use site.
 `max_of_le(x, y, p: A.le(x, y))`: the hypothesis is the relation itself rather
 than a fact about having run a decision procedure.
 
-`leb` and `leb_bool` **stay**, as decision procedures. `lib/list_algos.hthr`'s
+`leb` and `bool`'s Boolean decision **stay**, as decision procedures. (The
+latter was `leb_bool` until 2026-08-17 and is `bool::leb` now: the module is
+the namespace, and the suffix existed only because the instance registry keyed
+on written names — `docs/instance-resolved-key-design.md` §6.) `lib/list_algos.hthr`'s
 `sortedb`/`insert` kit and `lib/certgen_code.hthr` are written against them and
 are not this round's to restate (`issues/std-api-waves.md` L3 owns that, behind
 `Decide`). What changed is their standing: nothing in a *specification* names

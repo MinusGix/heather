@@ -407,12 +407,19 @@ fn fold_colours(cs: List<Colour>) -> Colour { mconcat(first, cs) }",
 /// field is `le` for exactly this reason — `leb` would have collided with
 /// `std/nat`'s function, and the elaborator names both readings rather than
 /// choosing. Pinned so the rename is not undone by accident.
+///
+/// The shadowed global is `sub` and not `leb` as of 2026-08-17: `std/bool`
+/// dropped its `_bool` suffixes (`docs/instance-resolved-key-design.md` §6), so
+/// two modules declare `leb` and a bare one resolves to *neither*. That is a
+/// different refusal — ambiguity at the value, not at the receiver — and it
+/// would have made this test pass for the wrong reason, so the fixture moved to
+/// a global only `std/nat` declares.
 #[test]
 fn a_member_name_that_shadows_a_global_is_ambiguous_at_a_receiver() {
     let e = bad(
-        "class Cmp2<A> { leb: A -> A -> Bool }
-instance Cmp2<Nat> { leb := leb }
-fn f(a: Nat, b: Nat) -> Bool { a.leb(b) }",
+        "class Cmp2<A> { sub: A -> A -> A }
+instance Cmp2<Nat> { sub := sub }
+fn f(a: Nat, b: Nat) -> Nat { a.sub(b) }",
     );
     assert!(e.contains("write one of them"), "{e}");
 }
@@ -572,7 +579,7 @@ fn yes<G> requires m: CommMonoid<G>(o) (o: G -> G -> G, x: G) -> G { dbl2(o, x) 
 fn two_unrelated_owners_of_one_name_are_still_ambiguous() {
     let e = bad(
         "class Ordish<A> { le: A -> A -> Bool }
-instance Ordish<Nat> { le := leb }
+instance Ordish<Nat> { le := nat::leb }
 fn f(a: Nat, b: Nat) -> Bool { a.le(b) }",
     );
     assert!(e.contains("Cmp<Nat>") && e.contains("Ordish<Nat>"), "{e}");

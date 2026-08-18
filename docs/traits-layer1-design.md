@@ -104,7 +104,10 @@ idempotent and order-independent — §12's content-addressing requirement.
 It is *coarser* than §12 asks: two instances of one class whose carriers
 share a head (`Monoid<Pair<A, B>>` and `Monoid<Pair<Nat, Nat>>`) collide.
 That collision is a **declaration error naming both**, not a silent
-overwrite. The narrowing is deliberate and is recorded in §7.1: at layer 1
+overwrite. (Two carriers whose heads share a *name* across modules do not
+collide — that is the registry **key**, which is resolved rather than
+written as of 2026-08-17: `docs/instance-resolved-key-design.md`. This
+paragraph is about the minted name, which is still the written head's.) The narrowing is deliberate and is recorded in §7.1: at layer 1
 a *spellable* canonical name is worth more than distinguishing carriers no
 layer-1 program can select between, and the full (class, carrier-syntax)
 key is layer 2's — it is the resolver's canonical-derivation table that
@@ -266,6 +269,14 @@ inherits the full key with the table that needs it.
 > have a resolver. What survives is the weaker requirement that the name be an
 > *identifier*, which head-keying still satisfies.
 >
+> **Amended again 2026-08-17** (`docs/instance-resolved-key-design.md`). The
+> key's carrier component is the head's **resolved declaration** —
+> `int::Le`, `nat::Le` — and not its written name, so "two carriers with the
+> same head collide" is no longer true and §4.1's paragraph about it describes
+> a scheme that is gone. The *canonical name* is still built from the written
+> head, which is what this section is about; identity and naming came apart,
+> and that is the whole change.
+>
 > The head may now be a **type former** as well as a declared type, so
 > `Not::Decide` and `Le::Decide` are canonical names. §4.1's "`Head` must name
 > a type in scope (`names_a_type`)" is now `names_a_carrier` — a type, or a
@@ -315,16 +326,24 @@ first failing, the second landing on the same names.
 
 - **The full canonical key.** (class, carrier-syntax) rather than (class,
   carrier head) — owned by layer 2's canonical-derivation table (§7.1).
-  *Still open 2026-08-17, and now with exactly one named customer rather than a
-  general wish:* an **equation** carrier, where a single reserved head would
-  collide equality at every type (`issues/decidable-equation-carrier.md`).
-  Everything else that looked like it wanted this key turned out to want the
-  type-former widening in §7.1's amendment instead, which is a much smaller
-  change and does not touch the key at all.
-- **Three-segment names are unwritable.** `Rat::Monoid::op` is registered
-  and resolvable but not lexable: the lexer joins exactly one `::`. Members
-  are reached by projection instead, which is definitionally the same value.
-  Lifting the join rule is a lexer change nobody needs yet.
+  **Answered in its cheap form** by `docs/instance-resolved-key-design.md`
+  (2026-08-17), which takes the step this entry did not see was available:
+  the *key* never had to be spellable, only the *name* did, so the key became
+  a tuple of **resolved declaration references** — (class key, carrier-head
+  key, index spelling) — with no component a surface spelling. That is what
+  `nat::Le` and `int::Le` being two carriers means, and it needed no
+  canonical-derivation table. What is left of this item is the one named
+  customer: an **equation** carrier, which has no head to resolve
+  (`issues/decidable-equation-carrier.md`, whose cost that round shrank —
+  it now wants a carrier entry and its UX, not a new notion of key).
+- **Three-segment names are unwritable.** ~~`Rat::Monoid::op` is registered
+  and resolvable but not lexable: the lexer joins exactly one `::`.~~
+  **Retired** by `docs/instance-resolved-key-design.md` §5 (2026-08-17): the
+  lexer joins a **chain**, so `Rat::Monoid::op` and `int::Le::Decide` are
+  writable verbatim. The projection spelling stays and is the same value —
+  §4.2's claim, now pinned by a `refl`. The paying customer was the qualified
+  canonical name, which is the *printed* form of a registry entry and so owed
+  `docs/repr-access-spellings-design.md` §2's invariant.
 - **Receiver dispatch through an instance.** `member_bases` records a
   member's base name, and an instance member's base under the current scheme
   is `Monoid::op`, not `op`, so `x.op(y)` does not reach it. The concrete

@@ -68,17 +68,26 @@ theorem or_comm(a, b: Bool): or(a, b) = or(b, a) {
 // The decided order on `Bool`. `False <= True` is the reading, so the relation
 // is implication.
 //
-// `leb_bool` is the Bool-valued decision and `Le_bool` the PROPOSITION, in the
-// shape `nat`'s order took on 2026-08-16 (docs/nat-order-design.md): the
+// `leb` is the Bool-valued decision and `Le` the PROPOSITION, in the shape
+// `nat`'s order took on 2026-08-16 (docs/nat-order-design.md): the
 // specification is a recursion into `Type` with no `= True` in it, and the
 // decision procedure is a separate function nothing above mentions. This
 // module needs both for the reason `nat` does — `Bool` is where Booleans are
 // genuinely the subject.
-fn leb_bool(a: Bool) -> Bool -> Bool {
+//
+// The names carry no `_bool` suffix as of 2026-08-17
+// (docs/instance-resolved-key-design.md §6). They used to: an instance was
+// keyed on its carrier head's *written* name, so `Le` here would have collided
+// with `nat::Le` in the registry and this module paid a suffix to stay
+// registrable. The key is a resolved declaration reference now, `nat::Le` and
+// `bool::Le` are two carriers, and the suffix bought nothing — a module is
+// already a namespace. A file that sees both writes `nat::Le` and `bool::Le`,
+// which is what qualification is for.
+fn leb(a: Bool) -> Bool -> Bool {
     match a { False => λ (b: Bool) => True, True => λ (b: Bool) => b }
 }
 
-theorem leb_bool_refl(a: Bool): leb_bool(a)(a) = True {
+theorem leb_refl(a: Bool): leb(a)(a) = True {
     match a { False => refl, True => refl }
 }
 
@@ -86,25 +95,37 @@ theorem leb_bool_refl(a: Bool): leb_bool(a)(a) = True {
 // `True <= False` is refuted. `logic::False` is the falsity and `bool::False`
 // the constructor, one line apart and neither qualified
 // (issues/false-collides-with-bools-constructor.md).
-fn Le_bool(a: Bool) -> Bool -> Type {
+fn Le(a: Bool) -> Bool -> Type {
     match a {
         False => λ (b: Bool) => True,
         True => λ (b: Bool) => match b { False => False, True => True },
     }
 }
 
-theorem le_bool_refl(a: Bool): Le_bool(a)(a) {
+theorem le_refl(a: Bool): Le(a)(a) {
     match a { False => trivial, True => trivial }
 }
 
 // A `fn`, not a `theorem`: a decision has to unfold in conversion
 // (docs/nat-order-design.md §2).
-fn le_bool_dec(a, b: Bool) -> Or<Le_bool(a)(b), ¬ Le_bool(a)(b)> {
-    match a as λ z => Or<Le_bool(z)(b), Not(Le_bool(z)(b))> {
+fn le_dec(a, b: Bool) -> Or<Le(a)(b), ¬ Le(a)(b)> {
+    match a as λ z => Or<Le(z)(b), Not(Le(z)(b))> {
         False => Inl(trivial),
-        True => match b as λ y => Or<Le_bool(True)(y), Not(Le_bool(True)(y))> {
-            False => Inr(λ (bad: Le_bool(True)(False)) => bad),
+        True => match b as λ y => Or<Le(True)(y), Not(Le(True)(y))> {
+            False => Inr(λ (bad: Le(True)(False)) => bad),
             True => Inl(trivial),
         },
     }
 }
+
+// The order's `Decide` instance, generic in both operands — the same row
+// `std/nat` and `std/int` carry at their own orders
+// (docs/value-generic-instances-design.md). All three register: the key is
+// (`logic::Decide`, `bool::Le`) here, `nat::Le` there, `int::Le` there.
+instance(a, b: Bool) Decide<Le(a, b)> { dec := le_dec(a, b) }
+
+// `<=` at a Bool operand is this relation, and the row is what makes it so in
+// a file that also imports `nat` or `int`: without it the symbol falls back to
+// the bare name `Le`, which in such a file names three declarations
+// (docs/operators-onto-classes-design.md §4).
+designation <= at Bool := Le
