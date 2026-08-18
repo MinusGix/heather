@@ -338,23 +338,30 @@ theorem int_ind(P: Int -> Type,
 // group. Each is one `int_ind` whose four arms are the push lemmas above; no arm
 // does any arithmetic of its own, and none mentions `nat::sub`.
 //
-// Every arm that rewrites by its induction hypothesis writes `@cong_int` with
-// both endpoints spelled, and that is NOT a style choice. `ih`'s type in an arm
-// is the motive *applied* — `(λ z => …)(OfNat(k))` — and implicit arguments are
-// solved by unifying against a type rather than by reducing one, so
-// `cong_int(isucc, ih)` cannot see that `ih` proves an equation at all
-// (issues/motive-application-hides-hypothesis-type.md). The endpoints below are
-// exactly `ih`'s own statement, written out.
+// An arm that rewrites by its induction hypothesis writes `cong_int(isucc, ih)`
+// and nothing more. `ih`'s type there is the motive *applied* — `(λ z =>
+// …)(OfNat(k))` — so until 2026-08-17 the endpoints had to be spelled out with
+// `@cong_int(f, lhs, rhs, ih)`: implicits were read off the argument's type as
+// written, and as written it is a β-redex rather than an `Id`. The read now
+// reduces when the syntactic one learns nothing
+// (issues/motive-application-hides-hypothesis-type.md,
+// docs/argument-type-reduction-design.md), and the eight `ih` sites are terse.
+// The other fourteen `@cong_int`s this file carried are gone too, and they are
+// a separate finding: their proof argument was an ordinary lemma call at a real
+// `Id`, so *nothing* was hiding and the endpoints never had to be written —
+// they were spelled by consistency with the arms that did. Measured with the
+// reduction disabled, 2026-08-17: all fourteen check terse on the old
+// elaborator. Only the `ih` sites were paying the tax the issue named.
 
 theorem add_comm(a, b: Int): add(a, b) = add(b, a) {
     int_ind(λ (z: Int) => add(a, z) = add(z, a),
         sym(zero_add(a)),
         λ (k: Nat) (ih: add(a, OfNat(k)) = add(OfNat(k), a)) =>
-            trans(@cong_int(isucc, add(a, OfNat(k)), add(OfNat(k), a), ih),
+            trans(cong_int(isucc, ih),
                   sym(isucc_add(OfNat(k), a))),
         sym(trans(ipred_add(OfNat(0), a), cong_int(ipred, zero_add(a)))),
         λ (k: Nat) (ih: add(a, NegSucc(k)) = add(NegSucc(k), a)) =>
-            trans(@cong_int(ipred, add(a, NegSucc(k)), add(NegSucc(k), a), ih),
+            trans(cong_int(ipred, ih),
                   sym(ipred_add(NegSucc(k), a))),
         b)
 }
@@ -363,11 +370,11 @@ theorem add_assoc(a, b, c: Int): add(add(a, b), c) = add(a, add(b, c)) {
     int_ind(λ (z: Int) => add(add(a, b), z) = add(a, add(b, z)),
         refl,
         λ (k: Nat) (ih: add(add(a, b), OfNat(k)) = add(a, add(b, OfNat(k)))) =>
-            trans(@cong_int(isucc, add(add(a, b), OfNat(k)), add(a, add(b, OfNat(k))), ih),
+            trans(cong_int(isucc, ih),
                   sym(add_isucc(a, add(b, OfNat(k))))),
         sym(add_ipred(a, b)),
         λ (k: Nat) (ih: add(add(a, b), NegSucc(k)) = add(a, add(b, NegSucc(k)))) =>
-            trans(@cong_int(ipred, add(add(a, b), NegSucc(k)), add(a, add(b, NegSucc(k))), ih),
+            trans(cong_int(ipred, ih),
                   sym(add_ipred(a, add(b, NegSucc(k))))),
         c)
 }
@@ -416,17 +423,16 @@ theorem neg_add(a, b: Int): neg(add(a, b)) = add(neg(a), neg(b)) {
             trans(
                 neg_isucc(add(a, OfNat(k))),
                 trans(
-                    @cong_int(ipred, neg(add(a, OfNat(k))), add(neg(a), neg(OfNat(k))), ih),
+                    cong_int(ipred, ih),
                     trans(
                         sym(add_ipred(neg(a), negOfNat(k))),
-                        @cong_int(λ (w: Int) => add(neg(a), w),
-                                  ipred(negOfNat(k)), NegSucc(k), ipred_negOfNat(k))))),
+                        cong_int(λ (w: Int) => add(neg(a), w), ipred_negOfNat(k))))),
         neg_ipred(a),
         λ (k: Nat) (ih: neg(add(a, NegSucc(k))) = add(neg(a), neg(NegSucc(k)))) =>
             trans(
                 neg_ipred(add(a, NegSucc(k))),
                 trans(
-                    @cong_int(isucc, neg(add(a, NegSucc(k))), add(neg(a), neg(NegSucc(k))), ih),
+                    cong_int(isucc, ih),
                     sym(add_isucc(neg(a), OfNat(Succ(k)))))),
         b)
 }
@@ -604,12 +610,12 @@ theorem mul_neg_one(a: Int): mul(a, NegSucc(0)) = neg(a) {
 
 theorem add_neg_cancel_r(x, y: Int): add(add(x, y), neg(y)) = x {
     trans(add_assoc(x, y, neg(y)),
-          @cong_int(λ (w: Int) => add(x, w), add(y, neg(y)), OfNat(0), add_neg(y)))
+          cong_int(λ (w: Int) => add(x, w), add_neg(y)))
 }
 
 theorem add_neg_cancel_l(x, y: Int): add(add(x, neg(y)), y) = x {
     trans(add_assoc(x, neg(y), y),
-          @cong_int(λ (w: Int) => add(x, w), add(neg(y), y), OfNat(0), neg_add_self(y)))
+          cong_int(λ (w: Int) => add(x, w), neg_add_self(y)))
 }
 
 // `a * (n+1) = a * n + a`, at a NON-negative multiplier — the `mul` step that
@@ -634,23 +640,17 @@ theorem mul_isucc(a, x: Int): mul(a, isucc(x)) = add(mul(a, x), a) {
                 Zero => trans(
                     mul_zero(a),
                     sym(trans(
-                        @cong_int(λ (w: Int) => add(w, a), mul(a, NegSucc(0)), neg(a),
-                                  mul_neg_one(a)),
+                        cong_int(λ (w: Int) => add(w, a), mul_neg_one(a)),
                         neg_add_self(a)))),
                 Succ(j) => trans(
                     mul_neg_r(a, OfNat(Succ(j))),
                     sym(trans(
-                        @cong_int(λ (w: Int) => add(w, a),
-                                  mul(a, NegSucc(Succ(j))),
-                                  add(neg(mul(a, OfNat(Succ(j)))), neg(a)),
-                                  trans(
-                                      mul_neg_r(a, OfNat(Succ(Succ(j)))),
-                                      trans(
-                                          @cong_int(neg,
-                                                    mul(a, OfNat(Succ(Succ(j)))),
-                                                    add(mul(a, OfNat(Succ(j))), a),
-                                                    mul_ofnat_succ(a, Succ(j))),
-                                          neg_add(mul(a, OfNat(Succ(j))), a)))),
+                        cong_int(λ (w: Int) => add(w, a),
+                                 trans(
+                                     mul_neg_r(a, OfNat(Succ(Succ(j)))),
+                                     trans(
+                                         cong_int(neg, mul_ofnat_succ(a, Succ(j))),
+                                         neg_add(mul(a, OfNat(Succ(j))), a)))),
                         add_neg_cancel_l(neg(mul(a, OfNat(Succ(j)))), a)))),
             },
     }
@@ -658,47 +658,34 @@ theorem mul_isucc(a, x: Int): mul(a, isucc(x)) = add(mul(a, x), a) {
 
 theorem mul_ipred(a, x: Int): mul(a, ipred(x)) = add(mul(a, x), neg(a)) {
     sym(trans(
-        @cong_int(λ (w: Int) => add(w, neg(a)),
-                  mul(a, x), add(mul(a, ipred(x)), a),
-                  trans(
-                      sym(@cong_int(λ (w: Int) => mul(a, w),
-                                    isucc(ipred(x)), x, isucc_ipred(x))),
-                      mul_isucc(a, ipred(x)))),
+        cong_int(λ (w: Int) => add(w, neg(a)),
+                 trans(
+                     sym(cong_int(λ (w: Int) => mul(a, w), isucc_ipred(x))),
+                     mul_isucc(a, ipred(x)))),
         add_neg_cancel_r(mul(a, ipred(x)), a)))
 }
 
 theorem mul_add_distr(a, b, c: Int): mul(a, add(b, c)) = add(mul(a, b), mul(a, c)) {
     int_ind(λ (z: Int) => mul(a, add(b, z)) = add(mul(a, b), mul(a, z)),
-        sym(@cong_int(λ (w: Int) => add(mul(a, b), w), mul(a, OfNat(0)), OfNat(0), mul_zero(a))),
+        sym(cong_int(λ (w: Int) => add(mul(a, b), w), mul_zero(a))),
         λ (k: Nat) (ih: mul(a, add(b, OfNat(k))) = add(mul(a, b), mul(a, OfNat(k)))) =>
             trans(
                 mul_isucc(a, add(b, OfNat(k))),
                 trans(
-                    @cong_int(λ (w: Int) => add(w, a),
-                              mul(a, add(b, OfNat(k))),
-                              add(mul(a, b), mul(a, OfNat(k))), ih),
+                    cong_int(λ (w: Int) => add(w, a), ih),
                     trans(
                         add_assoc(mul(a, b), mul(a, OfNat(k)), a),
-                        sym(@cong_int(λ (w: Int) => add(mul(a, b), w),
-                                      mul(a, OfNat(Succ(k))),
-                                      add(mul(a, OfNat(k)), a),
-                                      mul_ofnat_succ(a, k)))))),
+                        sym(cong_int(λ (w: Int) => add(mul(a, b), w), mul_ofnat_succ(a, k)))))),
         trans(mul_ipred(a, b),
-              sym(@cong_int(λ (w: Int) => add(mul(a, b), w),
-                            mul(a, NegSucc(0)), neg(a), mul_neg_one(a)))),
+              sym(cong_int(λ (w: Int) => add(mul(a, b), w), mul_neg_one(a)))),
         λ (k: Nat) (ih: mul(a, add(b, NegSucc(k))) = add(mul(a, b), mul(a, NegSucc(k)))) =>
             trans(
                 mul_ipred(a, add(b, NegSucc(k))),
                 trans(
-                    @cong_int(λ (w: Int) => add(w, neg(a)),
-                              mul(a, add(b, NegSucc(k))),
-                              add(mul(a, b), mul(a, NegSucc(k))), ih),
+                    cong_int(λ (w: Int) => add(w, neg(a)), ih),
                     trans(
                         add_assoc(mul(a, b), mul(a, NegSucc(k)), neg(a)),
-                        sym(@cong_int(λ (w: Int) => add(mul(a, b), w),
-                                      mul(a, NegSucc(Succ(k))),
-                                      add(mul(a, NegSucc(k)), neg(a)),
-                                      mul_ipred(a, NegSucc(k))))))),
+                        sym(cong_int(λ (w: Int) => add(mul(a, b), w), mul_ipred(a, NegSucc(k))))))),
         c)
 }
 
@@ -709,9 +696,8 @@ theorem add_mul_distr(a, b, c: Int): mul(add(a, b), c) = add(mul(a, c), mul(b, c
         trans(
             mul_add_distr(c, a, b),
             trans(
-                @cong_int(λ (w: Int) => add(w, mul(c, b)), mul(c, a), mul(a, c), mul_comm(c, a)),
-                @cong_int(λ (w: Int) => add(mul(a, c), w), mul(c, b), mul(b, c),
-                          mul_comm(c, b)))))
+                cong_int(λ (w: Int) => add(w, mul(c, b)), mul_comm(c, a)),
+                cong_int(λ (w: Int) => add(mul(a, c), w), mul_comm(c, b)))))
 }
 
 // ---------------------------------------------------------------------------
