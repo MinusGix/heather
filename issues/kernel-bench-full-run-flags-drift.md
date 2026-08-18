@@ -27,3 +27,7 @@ Not filed as a defect in this round's change: the change touches the substitutio
 
 - **[[frontend-bench-heavy-contaminates-cheap-cases]]** owns the same finding on the frontend harness. Assumed here: nothing but its existence — the mechanism it suspects is a hypothesis for this one, not a shared conclusion.
 - **[[kernel-benchmarks]]** owns the suite and its thresholds. Assumed here: only that the time half gates at 1.25x.
+
+## Log
+
+- 2026-08-17: Fifth run, coordinator, at merge verification (2026-08-17): the merged tree's full scripts/bench --check on a quiet machine was fully green — ok 106 comparisons, zero flags. Consistent with the intermittent signature (four runs: 6/3/6/1 flags; fifth: 0) rather than with any fixture being reliably slow.
