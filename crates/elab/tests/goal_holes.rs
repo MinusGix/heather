@@ -627,3 +627,129 @@ fn a_hole_may_not_appear_in_a_discharge() {
     );
     assert!(msg.contains("right-hand side"), "{msg}");
 }
+
+/// A context entry's type is scoped in the *prefix* of Γ that precedes its own
+/// binder, so the listing has to render it there and not against the whole of Γ
+/// (issues/goal-context-entry-printed-in-the-wrong-context.md). Rendered
+/// against all of Γ, `p`'s type read back as `add(p, 0) = p` — the entry naming
+/// itself, which is exactly the reading a stuck author would trust.
+#[test]
+fn a_context_entry_is_rendered_in_the_context_it_is_scoped_in() {
+    let r = reject(
+        r#"
+        theorem q(a: Nat, p: add(a, 0) = a): a = a { ?g }
+        "#,
+    );
+    let ElabError::UnsolvedGoals { goals, .. } = r else {
+        panic!("expected an unsolved-goal listing");
+    };
+    // The goal's own statement *is* scoped in the whole of Γ; pinned here so
+    // that fixing the entries can never be bought by breaking it.
+    assert_eq!(goals[0].statement, "a = a");
+    let ctx: Vec<(&str, &str)> =
+        goals[0].context.iter().map(|(n, t)| (n.as_str(), t.as_str())).collect();
+    assert_eq!(ctx, [("a", "Nat"), ("p", "add(a, 0) = a")]);
+}
+
+/// The same, with the truncation depth actually varying: `p`, `q` and `r` are
+/// each scoped in a different prefix and each mentions binders further out. A
+/// fix that used one fixed context — the last prefix, say — would pass the
+/// two-entry repro and fail here.
+#[test]
+fn a_chain_of_entries_each_names_the_binders_it_mentions() {
+    let r = reject(
+        r#"
+        theorem chain(a: Nat, b: Nat, p: add(a, 0) = a, q: add(b, a) = b, r: add(a, b) = b)
+            : a = a { ?g }
+        "#,
+    );
+    let ElabError::UnsolvedGoals { goals, .. } = r else {
+        panic!("expected an unsolved-goal listing");
+    };
+    assert_eq!(goals[0].statement, "a = a");
+    let ctx: Vec<(&str, &str)> =
+        goals[0].context.iter().map(|(n, t)| (n.as_str(), t.as_str())).collect();
+    assert_eq!(
+        ctx,
+        [
+            ("a", "Nat"),
+            ("b", "Nat"),
+            ("p", "add(a, 0) = a"),
+            ("q", "add(b, a) = b"),
+            ("r", "add(a, b) = b"),
+        ]
+    );
+}
+
+/// The aliases chained onto the listing after the kernel binders are the same
+/// question asked again, and the answer is the same: an [`Alias`] stores its
+/// type scoped at the `depth` it was bound at — which is exactly why a *use*
+/// shifts by `names.len() - depth` — so the listing renders one in that prefix.
+/// Binders pushed *after* the alias are what make the two contexts differ; the
+/// nested `match m` is here to supply some.
+///
+/// For a **constructor field binder** specifically the fix is currently
+/// invisible, and that is worth pinning rather than assuming: a tier-0 arm
+/// aliases field `j` to `fst(snd^j v)`, so a *dependent* field's type mentions
+/// projections of the scrutinee, which the speller declines and the listing
+/// prints raw — de Bruijn, naming nobody. A field type that mentions no earlier
+/// field (`n : Nat`) is closed and reads the same in any prefix. So no name can
+/// come out wrong here *today*; the property the test pins is that none does,
+/// which is what would break the day projections become spellable.
+#[test]
+fn an_arm_field_alias_is_rendered_at_the_depth_it_was_bound() {
+    let r = reject(
+        r#"
+        inductive Witness { Mk(n: Nat, p: n = n) }
+        theorem aliased(w: Witness, m: Nat): m = m {
+            match w {
+                Mk(n, p) => match m {
+                    Zero => refl,
+                    Succ(k) => ?g,
+                },
+            }
+        }
+        "#,
+    );
+    let ElabError::UnsolvedGoals { goals, .. } = r else {
+        panic!("expected an unsolved-goal listing");
+    };
+    assert_eq!(goals[0].statement, "Succ(k) = Succ(k)");
+    let ctx: Vec<(&str, &str)> =
+        goals[0].context.iter().map(|(n, t)| (n.as_str(), t.as_str())).collect();
+    // The arm's field binders are listed, after the kernel binders.
+    let names: Vec<&str> = ctx.iter().map(|(n, _)| *n).collect();
+    assert_eq!(names, ["w", "m", "k", "n", "p"]);
+    assert_eq!(ctx[3], ("n", "Nat"));
+    // `p`'s type is `n = n` with `n` the projection: raw, and in particular it
+    // does not name `k`, the binder pushed after the alias was bound.
+    let p_ty = ctx[4].1;
+    assert!(p_ty.starts_with("fst["), "{p_ty}");
+    assert!(!p_ty.contains('k'), "{p_ty}");
+}
+
+/// A `let` alias is where alias scoping *is* observable: its type is written in
+/// the surface, so it spells, and it can name an ordinary binder. Bound before
+/// the `match`, read inside an arm that pushed two more binders (`k` and the
+/// hidden ih) — against the whole of Γ that shift made `a` read as `k`.
+#[test]
+fn a_let_alias_is_rendered_at_the_depth_it_was_bound() {
+    let r = reject(
+        r#"
+        theorem lets(a: Nat, m: Nat): m = m {
+            let e: (add(a, 0) = a) = add_zero(a);
+            match m {
+                Zero => refl,
+                Succ(k) => ?g,
+            }
+        }
+        "#,
+    );
+    let ElabError::UnsolvedGoals { goals, .. } = r else {
+        panic!("expected an unsolved-goal listing");
+    };
+    assert_eq!(goals[0].statement, "Succ(k) = Succ(k)");
+    let ctx: Vec<(&str, &str)> =
+        goals[0].context.iter().map(|(n, t)| (n.as_str(), t.as_str())).collect();
+    assert_eq!(ctx, [("a", "Nat"), ("m", "Nat"), ("k", "Nat"), ("e", "add(a, 0) = a")]);
+}
