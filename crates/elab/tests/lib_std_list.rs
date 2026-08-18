@@ -164,6 +164,50 @@ theorem l_zip_swap<A, B>(xs: List<A>, ys: List<B>):
     }
 }
 
+/// The concrete first-class algebra experiment
+/// (`issues/datatype-container-algebras.md`). This is deliberately more than
+/// a constructor-equation check: uniqueness is consumed at an arbitrary
+/// function, and fusion crosses three open carriers at a neutral list.
+#[test]
+fn the_first_class_algebra_laws_are_present() {
+    let mut e = elaborated();
+    let probe = r#"
+import list;
+
+theorem a_nil<A, B>(alg: ListAlg<A, B>): list_fold(alg, Nil) = alg.nil {
+    list_fold_nil(alg)
+}
+
+theorem a_cons<A, B>(alg: ListAlg<A, B>, h: A, t: List<A>):
+    list_fold(alg, Cons(h, t)) = alg.cons(h, list_fold(alg, t))
+{ list_fold_cons(alg, h, t) }
+
+theorem a_unique<A, B>(alg: ListAlg<A, B>, g: List<A> -> B,
+    nil_law: g(Nil) = alg.nil,
+    cons_law: (h: A) -> (t: List<A>) -> g(Cons(h, t)) = alg.cons(h, g(t)),
+    xs: List<A>): g(xs) = list_fold(alg, xs)
+{ list_fold_unique(alg, g, nil_law, cons_law, xs) }
+
+theorem a_fusion<A, B, C>(src: ListAlg<A, B>, dst: ListAlg<A, C>,
+    hom: B -> C,
+    nil_comm: hom(src.nil) = dst.nil,
+    cons_comm: (a: A) -> (b: B) -> hom(src.cons(a, b)) = dst.cons(a, hom(b)),
+    xs: List<A>): hom(list_fold(src, xs)) = list_fold(dst, xs)
+{ list_fold_fusion(src, dst, hom, nil_comm, cons_comm, xs) }
+
+theorem a_foldr<A, B>(f: A -> B -> B, z: B, xs: List<A>):
+    list_fold(ListAlg<A, B> { nil: z, cons: f }, xs) = foldr(xs, f, z)
+{ list_fold_is_foldr(f, z, xs) }
+"#;
+    if let Err(err) = e.elab_module_source("probe", probe) {
+        let msg = match err {
+            ElabError::Elab { msg, .. } => msg,
+            other => format!("{other}"),
+        };
+        panic!("the algebra kit did not apply: {msg}");
+    }
+}
+
 /// Wave L3 (`issues/std-list-mem-and-perm.md`): `Mem` and its kit, at an
 /// **open** element type — the axis `docs/testing-generated-terms.md` names
 /// first, and the one that matters most here, since `Mem`'s whole claim is that
@@ -252,6 +296,9 @@ theorem c_drop(): drop(three(), 2) = Cons(3, Nil) { refl }
 theorem c_rev(): rev(three()) = Cons(3, Cons(2, Cons(1, Nil))) { refl }
 theorem c_foldr(): foldr(three(), λ (a: Nat) (b: Nat) => add(a, b), 0) = 6 { refl }
 theorem c_foldl(): foldl(three(), λ (a: Nat) (b: Nat) => add(a, b), 0) = 6 { refl }
+theorem c_list_fold():
+    list_fold(ListAlg<Nat, Nat> { nil: 0, cons: λ (a: Nat) (b: Nat) => add(a, b) }, three()) = 6
+{ refl }
 theorem c_filter(): filter(three(), λ (n: Nat) => nat::leb(2, n)) = Cons(2, Cons(3, Nil)) { refl }
 theorem c_replicate(): replicate(7, 2) = Cons(7, Cons(7, Nil)) { refl }
 theorem c_head(): three().head() = Some(1) { refl }

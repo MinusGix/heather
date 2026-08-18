@@ -237,6 +237,20 @@ fn mconcat<A: Monoid(op)>(op as ∙: A -> A -> A, xs: List<A>) -> A {
     }
 }
 
+// `list_fold` exposes the same consumer as a first-class algebra. This is the
+// first free-monoid connection in the concrete-algebra experiment: the monoid
+// dictionary supplies precisely the Nil and Cons clauses, and the established
+// `mconcat` API is recovered pointwise rather than replaced.
+fn monoid_list_alg<A: Monoid(op)>(op: A -> A -> A) -> ListAlg<A, A> {
+    ListAlg<A, A> { nil: A.unit, cons: op }
+}
+
+theorem list_fold_monoid<A: Monoid(op)>(op: A -> A -> A, xs: List<A>):
+    list_fold(monoid_list_alg(op), xs) = mconcat(op, xs)
+{
+    list_fold_is_foldr(op, A.unit, xs)
+}
+
 // Proved once against the class; its uses below are at unrelated carriers and
 // neither re-proves anything. `A.unit_r` is a **proof** field projected from
 // the type — a type projection is an ordinary field projection, so an

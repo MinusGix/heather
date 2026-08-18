@@ -230,6 +230,83 @@ theorem foldr_append<A, B>(xs, ys: List<A>, f: A -> B -> B, z: B):
     }
 }
 
+// ---------------------------------------------------------------------------
+// The fold as a first-class algebra.
+//
+// `foldr` takes its two clauses as separate arguments. `ListAlg` packages the
+// same data into an ordinary value, so an algebra can be passed around,
+// compared through its laws, and eventually generated from the datatype
+// declaration without giving the kernel a new eliminator. The result carrier
+// `B` and the element carrier `A` are both open on purpose: a Nat-only version
+// would miss exactly the level and scoping pressure this experiment is for
+// (issues/datatype-container-algebras.md).
+
+record ListAlg<A, B> {
+    nil: B,
+    cons: A -> B -> B,
+}
+
+fn list_fold<A, B>(alg: ListAlg<A, B>, xs: List<A>) -> B {
+    match xs {
+        Nil => alg.nil,
+        Cons(h, t) => alg.cons(h, list_fold(alg, t)),
+    }
+}
+
+// These equations are the public computational face of the fold. They are
+// theorems for callers, but their proofs are empty because `list_fold` is only
+// the ordinary structural eliminator with its clauses projected from a value.
+theorem list_fold_nil<A, B>(alg: ListAlg<A, B>): list_fold(alg, Nil) = alg.nil {}
+
+theorem list_fold_cons<A, B>(alg: ListAlg<A, B>, h: A, t: List<A>):
+    list_fold(alg, Cons(h, t)) = alg.cons(h, list_fold(alg, t))
+{}
+
+// Pointwise uniqueness is the form available without function
+// extensionality: any `g` satisfying the same two equations agrees with the
+// fold at every list. The Cons law receives the original tail as well as its
+// folded result; that makes this a characterization of this fold, not a
+// restriction to functions whose clause forgot the substructure.
+theorem list_fold_unique<A, B>(alg: ListAlg<A, B>, g: List<A> -> B,
+    nil_law: g(Nil) = alg.nil,
+    cons_law: (h: A) -> (t: List<A>) -> g(Cons(h, t)) = alg.cons(h, g(t)),
+    xs: List<A>): g(xs) = list_fold(alg, xs)
+{
+    match xs {
+        Nil => nil_law,
+        Cons(h, t) =>
+            trans(cons_law(h, t), cong_fn(alg.cons(h), list_fold_unique(alg, g, nil_law, cons_law, t))),
+    }
+}
+
+// An algebra homomorphism commutes with the fold. This is the usable,
+// pointwise fusion law; stating equality between the two resulting functions
+// would add a funext premise without strengthening what clients can apply.
+theorem list_fold_fusion<A, B, C>(src: ListAlg<A, B>, dst: ListAlg<A, C>,
+    hom: B -> C,
+    nil_comm: hom(src.nil) = dst.nil,
+    cons_comm: (a: A) -> (b: B) -> hom(src.cons(a, b)) = dst.cons(a, hom(b)),
+    xs: List<A>): hom(list_fold(src, xs)) = list_fold(dst, xs)
+{
+    match xs {
+        Nil => nil_comm,
+        Cons(h, t) =>
+            trans(cons_comm(h, list_fold(src, t)),
+                  cong_fn(dst.cons(h), list_fold_fusion(src, dst, hom, nil_comm, cons_comm, t))),
+    }
+}
+
+// The old API and the first-class one are not competing folds. Packaging
+// `foldr`'s arguments gives the same computation at every list.
+theorem list_fold_is_foldr<A, B>(f: A -> B -> B, z: B, xs: List<A>):
+    list_fold(ListAlg<A, B> { nil: z, cons: f }, xs) = foldr(xs, f, z)
+{
+    match xs {
+        Nil => {},
+        Cons(h, t) => cong_fn(f(h), list_fold_is_foldr(f, z, t)),
+    }
+}
+
 // `foldl`'s laws (wave L2′, issues/std-list-l2-prime-laws.md). L2 left `foldl`
 // with none, and the reason is visible in every statement below: the
 // accumulator changes at each step, so a law about `foldl` is never a law about

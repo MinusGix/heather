@@ -110,6 +110,26 @@ theorem neutral_singleton(n: Nat): sum(Cons(n, Nil)) = n { sum_single(n) }
 ");
 }
 
+/// The existing monoid consumer is recovered from the first-class list
+/// algebra, at distinct structures and at a neutral list.
+#[test]
+fn the_monoid_fold_is_the_list_algebra_fold() {
+    ok("
+theorem alg_nat(xs: List<Nat>):
+    list_fold(monoid_list_alg<Nat>(add), xs) = mconcat(add, xs)
+{ list_fold_monoid(add, xs) }
+
+theorem alg_bool(xs: List<Bool>):
+    list_fold(monoid_list_alg<Bool>(and), xs) = mconcat(and, xs)
+{ list_fold_monoid(and, xs) }
+
+theorem alg_open<A>(xs, ys: List<A>):
+    list_fold(monoid_list_alg<List<A>>(++), Cons(xs, Cons(ys, Nil))) = append(xs, ys)
+{ trans(list_fold_monoid(++, Cons(xs, Cons(ys, Nil))),
+        trans(sym(append_assoc(xs, ys, Nil)), append_nil(append(xs, ys)))) }
+");
+}
+
 /// Two structures on one carrier, **both registered**, as equals
 /// (`docs/operation-indexed-classes-design.md` §3). `all_of` and `any_of` are
 /// one generic fold at one carrier under two operations, and they compute

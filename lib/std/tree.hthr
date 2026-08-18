@@ -1,0 +1,59 @@
+// `tree` — the branching control for first-class recursion algebras.
+//
+// `ListAlg` could accidentally be nothing more than a record-shaped `foldr`.
+// A node here has TWO recursive children, and `TreeAlg` hands both folded
+// results to its node clause. The same uniqueness/fusion story therefore
+// survives genuine branching rather than relying on a list's linear spine
+// (issues/datatype-container-algebras.md).
+
+import list;
+import nat;
+
+inductive Tree<A> { Leaf(value: A), Node(left: Tree<A>, right: Tree<A>) }
+
+record TreeAlg<A, B> {
+    leaf: A -> B,
+    node: B -> B -> B,
+}
+
+fn tree_fold<A, B>(alg: TreeAlg<A, B>, tree: Tree<A>) -> B {
+    match tree {
+        Leaf(value) => alg.leaf(value),
+        Node(left, right) => alg.node(tree_fold(alg, left), tree_fold(alg, right)),
+    }
+}
+
+theorem tree_fold_leaf<A, B>(alg: TreeAlg<A, B>, value: A):
+    tree_fold(alg, Leaf(value)) = alg.leaf(value)
+{}
+
+theorem tree_fold_node<A, B>(alg: TreeAlg<A, B>, left, right: Tree<A>):
+    tree_fold(alg, Node(left, right)) = alg.node(tree_fold(alg, left), tree_fold(alg, right))
+{}
+
+theorem tree_fold_fusion<A, B, C>(src: TreeAlg<A, B>, dst: TreeAlg<A, C>,
+    hom: B -> C,
+    leaf_comm: (a: A) -> hom(src.leaf(a)) = dst.leaf(a),
+    node_comm: (left, right: B) ->
+        hom(src.node(left, right)) = dst.node(hom(left), hom(right)),
+    tree: Tree<A>): hom(tree_fold(src, tree)) = tree_fold(dst, tree)
+{
+    match tree {
+        Leaf(value) => leaf_comm(value),
+        Node(left, right) =>
+            trans(node_comm(tree_fold(src, left), tree_fold(src, right)),
+              trans(cong_fn(λ (l: C) => dst.node(l, hom(tree_fold(src, right))),
+                            tree_fold_fusion(src, dst, hom, leaf_comm, node_comm, left)),
+                    cong_fn(dst.node(tree_fold(dst, left)),
+                            tree_fold_fusion(src, dst, hom, leaf_comm, node_comm, right)))),
+    }
+}
+
+// A concrete consumer whose Node arm uses both recursive results. This is
+// deliberately expressed through `tree_fold`, not duplicated as a match.
+fn tree_size<A>(tree: Tree<A>) -> Nat {
+    tree_fold(TreeAlg<A, Nat> {
+        leaf: λ (a: A) => 1,
+        node: λ (left: Nat) (right: Nat) => Succ(add(left, right)),
+    }, tree)
+}

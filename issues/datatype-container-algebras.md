@@ -3,7 +3,7 @@ title: Develop inductives as containers and recursion algebras
 status: open
 labels: [stdlib,inductives,design,mathematics]
 created: 2026-08-09
-updated: 2026-08-09
+updated: 2026-08-18
 ---
 
 Long-range mathematical-library direction, not scheduled. Heather's finitary
@@ -181,3 +181,35 @@ surface.
   folds and elimination algebras first-class, and explore fusion, free
   constructions, derivatives, and zippers beginning with explicit `List` and
   branching-datatype exercises.
+- 2026-08-18: **The disciplined first exploration landed.** `std/list` now
+  exposes `ListAlg<A,B>` and `list_fold`, its definitional Nil/Cons equations,
+  pointwise uniqueness, fusion, and an equality with the established `foldr`;
+  `std/algebra` builds the algebra supplied by an operation-indexed `Monoid`
+  and recovers `mconcat` from it. New `std/tree` is the branching control:
+  `Tree<A>`, `TreeAlg<A,B>`, its equations and fusion, plus `tree_size` as a
+  concrete consumer. The acceptance composes the branching fold with the list
+  one: collect a neutral `Tree<A>`'s leaves by `append`, then fuse `len` through
+  it into a Nat algebra, at an open `A` and with both recursive results used.
+
+  **Verdict:** ordinary records and ordinary structural recursion are enough
+  for the whole concrete rung; no parser, elaborator, generator, or kernel
+  feature was needed. Uniqueness is naturally pointwise, so it needs no
+  funext; fusion is two ordinary congruences at a branch. The repetitive
+  declarations are exactly the predicted datatype-shaped shell — record,
+  fold, two equations — while uniqueness/fusion remain real mathematical
+  theorems and should not be generated as unexplained boilerplate. This is
+  evidence for a future generated `D::Alg`/fold shell, not yet for exposing a
+  general `Container` abstraction.
+
+  Two inference boundaries were measured rather than hidden. A polymorphic
+  record literal whose type arguments occur only in its fields needs
+  `ListAlg<A,B> { ... }`; and a nested `monoid_list_alg(add)` must spell its
+  carrier before indexed-class resolution (`monoid_list_alg<Nat>(add)`). Once
+  an algebra value or class binder is already in scope, uses are terse. These
+  are existing explicit-type-application boundaries, not new blockers; no new
+  issue is warranted from the concrete sites. Subject-owned `List::Alg` /
+  `Tree::Alg` naming still waits on [[type-owned-namespaces]], so the shipped
+  names are deliberately flat. The issue stays open for the next, distinct
+  decision: generate the concrete shell, or first probe the public container
+  calculus / dependent algebra rung. Full `scripts/test`: suite 1914 -> 1919,
+  0 failed.
