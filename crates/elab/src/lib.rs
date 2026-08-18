@@ -8615,7 +8615,7 @@ impl Elaborator {
                         let (arg_t, arg_ty, _) = self.elab_infer(cx, arg)?;
                         // Drive meta solutions from the argument's actual
                         // type, then splice it into the scratch world.
-                        unify_ty(&cx.gamma, &dom, &arg_ty, n, 0, &mut sols);
+                        self.unify_arg_ty(cx, &dom, &arg_ty, n, &mut sols, span);
                         Rc::new(arg_t.shift_global(n))
                     }
                 }
@@ -8664,7 +8664,7 @@ impl Elaborator {
                     break;
                 }
                 let (arg_t, arg_ty, _) = self.elab_infer(cx, arg)?;
-                unify_ty(&cx.gamma, &dom, &arg_ty, n, 0, &mut sols);
+                self.unify_arg_ty(cx, &dom, &arg_ty, n, &mut sols, span);
                 let arg_rc = Rc::new(arg_t.shift_global(n));
                 ty = cod.apply_local(&LocalSubst::id(&cx.gamma).extended(Rc::clone(&arg_rc)));
                 lvl = cod_level.clone();
@@ -8928,6 +8928,54 @@ impl Elaborator {
         // would name the first parameter for an argument that is not it.
         let past = all_params.len();
         self.apply_explicit(cx, Some(name), all_params, past, t, ty, lvl, &spill)
+    }
+
+    /// Read implicit solutions off an argument's type
+    /// (docs/argument-type-reduction-design.md): the syntactic read first,
+    /// and — only when it learned *nothing* — the same read against the
+    /// type's weak head normal form.
+    ///
+    /// The retry is for an argument whose type is a **motive applied**. An
+    /// induction principle with a value-parameter motive (`int_ind`'s `P: Int
+    /// -> Type`) binds its hypothesis at `P(OfNat(k))`, which after `P` is
+    /// given is a β-redex `(λ (z: Int) => add(a, z) = add(z, a))(OfNat(k))` —
+    /// an `Id` that does not say so yet, so `cong_int(isucc, ih)` and
+    /// `sym(ih)` both refused (issues/motive-application-hides-hypothesis-
+    /// type.md). Reducing makes the evidence readable, and it is the same
+    /// sentence [`Self::solve_from_expected`] already applies to the *expected*
+    /// type one screen below.
+    ///
+    /// Three properties keep it from being a widening:
+    ///
+    ///  - **learn-only, twice.** [`unify_ty`] records into `Unsolved` slots and
+    ///    never fails, so the retry can add solutions and cannot retract or
+    ///    contradict one. A wrong solution is still a kernel rejection.
+    ///  - **no progress is the trigger**, not "something is still unsolved":
+    ///    an argument whose type taught anything at all takes exactly the path
+    ///    it took before this existed, so no call that already elaborated
+    ///    reaches the reduction.
+    ///  - **the reduction is opportunistic.** Out of fuel is not an error here:
+    ///    the honest outcome is the caller's own per-slot message about the
+    ///    implicit it could not infer, not a complaint about a type the writer
+    ///    never asked to reduce.
+    fn unify_arg_ty(
+        &self,
+        cx: &Cx,
+        dom: &Type,
+        arg_ty: &Type,
+        n: u32,
+        sols: &mut [Sol],
+        span: Span,
+    ) {
+        let learned = |sols: &[Sol]| sols.iter().filter(|s| s.solved().is_some()).count();
+        let before = learned(sols);
+        unify_ty(&cx.gamma, dom, arg_ty, n, 0, sols);
+        if learned(sols) != before || !sols.iter().any(|s| matches!(s, Sol::Unsolved)) {
+            return;
+        }
+        if let Ok(head) = self.whnf(cx, arg_ty, span) {
+            unify_ty(&cx.gamma, dom, &head, n, 0, sols);
+        }
     }
 
     /// Expected-type-directed solving (docs/unifier-completeness-design.md
