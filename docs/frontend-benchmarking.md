@@ -155,8 +155,13 @@ reasons (greppable, diffable, parseable without a dependency). Rows are `env`
 corpus cases are named by file.
 
 Re-record when the machine changes, the toolchain changes, or a deliberate
-change moves the numbers. A baseline from another machine still gates slopes,
-bands and budgets, and `--check` says which half it skipped.
+change moves the numbers. Time comparability is keyed on cpu + profile +
+rustc — not the hostname, which is the one env row with no bearing on speed
+(a machine rename once turned the time half off silently while `--check`
+kept printing `ok`; `issues/frontend-bench-baseline-host-string.md`). A
+baseline from another machine still gates slopes, bands and budgets, but a
+run that skipped its time half says `shape-only` instead of `ok` and exits
+3, so a scripted gate cannot mistake it for a full pass.
 
 > **The baseline in the tree was re-recorded 2026-08-17** on an otherwise idle
 > machine (`issues/frontend-benchmarks.md` has the run's conditions, every row

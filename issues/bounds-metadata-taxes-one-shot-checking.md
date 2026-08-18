@@ -3,7 +3,7 @@ title: Free-variable bounds tax one-shot checking ~1.4x; accepted, with levers i
 status: open
 labels: [kernel,performance]
 created: 2026-07-31
-updated: 2026-08-13
+updated: 2026-08-17
 ---
 
 [[subst-visits-closed-subtrees]]'s round left one deliberate regression:
@@ -75,3 +75,4 @@ NUMBERS (debug -- note `[profile.dev.package]` gives the hot crates opt-level 3,
 THE PROFILE IS THE OPPOSITE OF THE OTHER CENTRE IN THAT FAMILY, which is why it is filed here and not on [[conversion-cost-at-large-values]]: of `transcribe`'s 1.12 s gate, only **0.19 s is `conv_type`** and **0.14 s is `rec::branch_specs` construction** -- the remaining ~0.8 s is the 52 branch BODIES checked against their instantiated motive types (`rec_ga`'s second loop). `check_sig` is more extreme: 0.76 s of gate with **4 ms** of conv_type. So the cost is one-shot construction-and-traversal, this issue's shape, and NOT conversion; and note that schema-skeleton caching alone ([[schema-construction-caching]]'s lever 1) addresses the 0.14 s, not the 0.8 s.
 
 WHERE IT LANDS IN THE SUITE: the declaration cache gates it away for four of the five certgen binaries, so it is visible only where it must be -- once in certgen_emissions (the designated ungated backstop) and three times in certgen_controls (mutated shells files, uncacheable by construction), ~8 s family-wide of a ~32 s family. [[certgen-harness-cost]]'s 2026-08-11 rail entry predicted exactly this ("each new analyzer shell adds another gate"); this is the first measurement that separates the shell gate's cost from the conversion cost it used to be bundled with.
+- 2026-08-17: Trigger-adjacent observation from the 2026-08-17 kernel baseline re-record (bench-gate round): level/equiv-rebuilt is 1.33-1.43x against the 0674cac (2026-07-31) baseline, uniform across sizes with slopes unchanged -- a constant factor on one-shot-structured level equality, consistent with this issue's accepted ~1.4x rather than a new pathology. Recorded so the next baseline diff does not re-discover it; no lever pulled.

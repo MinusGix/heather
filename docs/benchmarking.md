@@ -93,8 +93,13 @@ Being in the tree is the point: a baseline that lives in CI artifacts is a
 baseline nobody compares against by hand.
 
 Re-record when the machine changes, the toolchain changes, or a deliberate
-change moves the numbers. A baseline from another machine is still useful — the
-slope comparisons run regardless, and `--check` says which half it skipped.
+change moves the numbers. Time comparability is keyed on cpu + profile +
+rustc — not the hostname, which is the one env row with no bearing on speed
+(a machine rename once turned the time half off silently while `--check`
+kept printing `ok`; `issues/frontend-bench-baseline-host-string.md`). A
+baseline from another machine is still useful — the slope comparisons run
+regardless — but a run that skipped its time half says `shape-only` instead
+of `ok` and exits 3, so a scripted gate cannot mistake it for a full pass.
 
 ## Why no Criterion
 

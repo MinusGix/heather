@@ -228,17 +228,31 @@ fn check(args: &Args, env: &[(String, String)], reports: &[Report], probe: Optio
     }
 
     let mut th = Thresholds::default();
-    // Absolute times only mean something on the machine and profile they were
-    // recorded on. Slopes and stack frames are compared regardless — they are
-    // properties of the code (and, for frames, the compiler).
-    th.compare_times = get("host") == base.env_get("host") && get("profile") == base.env_get("profile");
+    // Absolute times only mean something for the cpu, profile and compiler
+    // they were recorded under — the hostname is deliberately not consulted,
+    // because it is the one env row with no bearing on speed (a machine
+    // rename once turned the time half off silently,
+    // issues/frontend-bench-baseline-host-string.md). Slopes and stack frames
+    // are compared regardless — they are properties of the code (and, for
+    // frames, the compiler).
+    let mismatched: Vec<String> = ["cpu", "profile", "rustc"]
+        .iter()
+        .filter(|k| get(k) != base.env_get(k))
+        .map(|k| {
+            format!(
+                "{k}: baseline {} vs this run {}",
+                base.env_get(k).unwrap_or("?"),
+                get(k).unwrap_or("?")
+            )
+        })
+        .collect();
+    th.compare_times = mismatched.is_empty();
     th.compare_stack = get("rustc") == base.env_get("rustc") && get("profile") == base.env_get("profile");
     if !th.compare_times {
         println!(
-            "baseline is from another machine or profile ({} / {}) — comparing \
-             scaling shape only, not times",
-            base.env_get("host").unwrap_or("?"),
-            base.env_get("profile").unwrap_or("?"),
+            "baseline is not time-comparable ({}) — comparing scaling shape \
+             only, not times; the verdict will be shape-only, not ok",
+            mismatched.join("; "),
         );
     }
 
@@ -258,8 +272,25 @@ fn check(args: &Args, env: &[(String, String)], reports: &[Report], probe: Optio
     }
     if regressed == 0 {
         let n = diffs.iter().filter(|d| d.verdict != Verdict::Untracked).count();
-        println!("ok: {n} comparisons within thresholds");
-        0
+        // "ok" is reserved for a run that compared everything it knows how
+        // to compare. A run that skipped its time (or stack) half says so in
+        // its verdict and its exit code, so a green that checked half the
+        // gate cannot be read — or scripted — as the full gate passing.
+        let full = th.compare_times && (probe.is_none() || th.compare_stack);
+        if full {
+            println!("ok: {n} comparisons within thresholds");
+            0
+        } else {
+            let skipped = if th.compare_times { 0 } else { reports.iter().map(|r| r.points.len()).sum::<usize>() }
+                + if probe.is_some() && !th.compare_stack { 1 } else { 0 };
+            println!(
+                "shape-only: {n} comparisons within thresholds — {skipped} \
+                 skipped for a baseline env mismatch. Not a full pass; \
+                 re-record with `scripts/bench --save` on this toolchain \
+                 to restore the time gate."
+            );
+            3
+        }
     } else {
         println!(
             "\n{regressed} regression(s). If the change is intended and \
