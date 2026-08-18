@@ -1,6 +1,6 @@
 ---
 title: "Instance keys are the carrier head's surface name, so two modules' relations collide"
-status: open
+status: closed
 labels: [traits,stdlib,modules]
 created: 2026-08-17
 updated: 2026-08-17
@@ -67,3 +67,22 @@ Both would be answered by a key that is a declaration reference.
 ## Log
 
 - 2026-08-17: Filed by the `Int` round as the round's only refused row. Ranked #3 of six, and it is the one that cost a *kit item* rather than proof lines.
+- 2026-08-17: CLOSED by `docs/instance-resolved-key-design.md` (2026-08-17). The full round in one entry.
+
+**The decision.** Identity by resolution, never by spelling. The registry key is `(class key, carrier-head key, index spelling)` with every component a RESOLVED declaration reference: `("logic::Decide", "int::Le", "")` and `("logic::Decide", "nat::Le", "")` are two instances that coexist. Duplicate semantics are unchanged — same resolved carrier twice is refused, and the refusal now module-qualifies the carrier, the class and the occupant.
+
+The enabling step is worth recording because it is why this was cheap where `docs/traits-layer1-design.md` §7.1 thought it expensive: **a key never had to be spellable, only a name did.** §7.1 keyed on the head because a canonical name must be an identifier — true, and still true — but the key is a tuple in a HashMap no program writes down. Dropping spellability-as-a-key-constraint made the cheap form of §8's 'full canonical key' available with no layer-2 canonical-derivation table.
+
+**Names did not move.** The canonical name is still `Le::Decide`, declared in the declaring module like any other declaration; the external face is `int::Le::Decide`. Nothing is minted, so `docs/repr-access-spellings-design.md`'s minted-name policy needed no extension — the round's brief expected to extend it, and there was nothing to extend (design §7.2). One thing did move: `InstanceInfo.global` is now module-qualified, because it is emitted as a `Var` at a use site that may see two `Le::Decide`s.
+
+**The lexer joins a chain** (`if` → `while`), so `int::Le::Decide` is writable and 'printed paths are writable verbatim' is an invariant again rather than an invariant-with-a-carve-out. Boundaries checked and unmoved: `m::{a, b}` (a `::` before `{` never joined), `Impl(add, R)::member` (its `::` follows a `)` and never reaches the identifier scanner). Nothing relied on the one-join rule — `a::b::c` used to lex as `a::b` `::` `c` and the parser's postfix `::` arm needs an APPLIED owner, so it was a parse error everywhere.
+
+**The library win, all three carriers.** `std/int` gets the stalled row (`instance(a, b: Int) Decide<Le(a, b)>`); `std/bool` drops the `Le_bool`/`le_bool_refl`/`le_bool_dec`/`leb_bool` suffixes for the real names and gains both the `Decide` instance and a `<=` designation; `std/algebra`'s two `Cmp` rows qualify (`nat::Le`, `bool::Le`). `x <= y` now means the right order at Nat, Int and Bool in one downstream file with nothing qualified.
+
+Two corrections reality made. (1) The index component was ALREADY resolved — `index_spelling` has called `key_of` per argument since value indices — so only the head was infected; the round's rule ('no component of the key is a spelling') is what keeps that from drifting back. (2) The `<=` **designations were not optional**: `<=`'s fallback is the bare name `Le`, so with three modules declaring one, `lib/std/list.hthr` (which imports `nat` and `bool` and writes `len(filter(xs, p)) <= len(xs)`) had a symbol resolving to nothing. `nat` and `bool` grew the row `int` already had.
+
+Fixture churn, and it is the whole cost of the rename: five test files write a bare `Le`/`le_dec`/`leb` in a probe that imports `nat` AND `bool`, and each now qualifies (`logic.rs`, `nat_order.rs`, `lib_std_list.rs`, `lib_algebra.rs` ×2). One of them is worth reading — `a_member_name_that_shadows_a_global_is_ambiguous_at_a_receiver` STARTED PASSING for the wrong reason: with `leb` ambiguous at the value it no longer resolves as a global at all, so the member/global collision the test exists for stopped happening and the snippet checked. The fixture moved to `sub`. That failure mode is invisible to a test that asserts only 'it was refused', and it was caught because this one asserts WHICH refusal. Separately, the trace-nesting test in `traits_resolution.rs` now expects a module-qualified candidate line — a deliberate reading of [[diagnostics-name-the-written-form]] and not an exception to it (a trace line is data about the registry, not a quotation of what the writer typed).
+
+Suite 1854 → 1864 (8 in the new `instance_resolved_key.rs`, 2 in `lib_std_int.rs`), green; `scripts/bench --check` ok, 106 comparisons within thresholds, no flags.
+
+Residue filed: [[designation-key-collides-across-modules]] — the designation table beside the registry has the same latent (symbol, written head) key, with no failing customer today. Cost note logged on [[decidable-equation-carrier]]: its new-key half is paid, and what remains is the NAME for a headless carrier plus UX.

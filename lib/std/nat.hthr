@@ -321,6 +321,15 @@ fn le_dec(n: Nat) -> (m: Nat) -> Or<Le(n, m), ¬ Le(n, m)> {
 // was filed to take.
 instance(n, m: Nat) Decide<Le(n, m)> { dec := le_dec(n)(m) }
 
+// `<=` at a Nat operand is this relation. The row exists for the same reason
+// `std/int`'s does: `<=`'s fallback is the bare name `Le`, and as of
+// 2026-08-17 three modules declare one (`nat`, `int`, `bool` — see
+// docs/instance-resolved-key-design.md §6), so a file importing two of them
+// had a symbol that resolved to nothing rather than to the operand's order.
+// A designation reads the carrier off the operand, which is exactly the datum
+// the bare name lost.
+designation <= at Nat := Le
+
 // ---------------------------------------------------------------------------
 // The strict order. Every one of these is `Le`'s kit read at `Succ(n)`; the
 // section is short because `Lt` is a definition rather than a second relation.
@@ -452,11 +461,12 @@ theorem zero_ne_succ(n: Nat): ¬ (0 = Succ(n)) {
 //
 // It is NOT registered as a `Decide` instance, and that is a language boundary
 // rather than a choice: an instance is keyed on its carrier's head, and an
-// equation has no head to key on — one reserved key would collide `n = m` at
-// `Nat` with every other type's equality. That is the one case of this round
-// that genuinely wants layer 2's (class, carrier-syntax) key
-// (issues/decidable-equation-carrier.md). Until then `eq_dec` is called by
-// name, which is what every consumer here does anyway.
+// equation has no head to key on. The *collision* half of that is gone as of
+// 2026-08-17 — the key is a resolved declaration reference now, so `Le` at two
+// modules is two carriers (docs/instance-resolved-key-design.md) — but an
+// equation still has nothing to resolve, so this row still waits on
+// issues/decidable-equation-carrier.md. Until then `eq_dec` is called by name,
+// which is what every consumer here does anyway.
 fn eq_dec(n: Nat) -> (m: Nat) -> Or<n = m, ¬ (n = m)> {
     match n as λ z => (m: Nat) -> Or<z = m, Not(z = m)> {
         Zero => λ m =>

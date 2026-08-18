@@ -141,7 +141,7 @@ fn the_order_kit_composes_at_open_arguments() {
 }
 theorem u(a, b: Nat, h1: a <= b, h2: b <= a): a = b { le_antisym(a)(b, h1, h2) }
 theorem v(a: Nat): 0 <= a { zero_le(a) }
-theorem w(a, b: Nat): Or<Le(a, b), Le(b, a)> { le_total(a)(b) }");
+theorem w(a, b: Nat): Or<nat::Le(a, b), nat::Le(b, a)> { le_total(a)(b) }");
 }
 
 #[test]
@@ -177,9 +177,9 @@ theorem round_trip(a, k: Nat): a <= add(a, k) {
 /// decision rather than a lookup.
 #[test]
 fn the_decider_works_closed_and_open() {
-    ok("theorem closed(): Le(2, 5) { or_resolve(le_dec(2)(5), λ (k: ¬ Le(2, 5)) => k(trivial)) }
-fn branch(a, b: Nat) -> Nat { or_pick(le_dec(a)(b), a, b) }
-theorem at_open(a, b: Nat, h: a <= b): branch(a, b) = b { or_pick_dec(le_dec(a)(b), a, b, h) }
+    ok("theorem closed(): nat::Le(2, 5) { or_resolve(nat::le_dec(2)(5), λ (k: ¬ nat::Le(2, 5)) => k(trivial)) }
+fn branch(a, b: Nat) -> Nat { or_pick(nat::le_dec(a)(b), a, b) }
+theorem at_open(a, b: Nat, h: a <= b): branch(a, b) = b { or_pick_dec(nat::le_dec(a)(b), a, b, h) }
 theorem at_closed(): branch(2, 5) = 5 { refl }
 theorem the_other_way(): branch(5, 2) = 5 { refl }");
 }
@@ -220,7 +220,7 @@ fn a_bare_false_at_an_unsolved_carrier_is_ambiguous() {
 #[test]
 fn the_cmp_law_is_the_relation_itself() {
     ok("theorem t(a, b: Nat, h: a <= b): max_of(a, b) = b { max_of_le(a, b, h) }");
-    let e = bad("theorem t(a, b: Nat, h: leb(a)(b) = True): max_of(a, b) = b { max_of_le(a, b, h) }");
+    let e = bad("theorem t(a, b: Nat, h: nat::leb(a)(b) = True): max_of(a, b) = b { max_of_le(a, b, h) }");
     assert!(!e.is_empty(), "expected a type error, got an empty message");
 }
 

@@ -1056,26 +1056,21 @@ instance Default<Int> { default := OfNat(0) }
 
 instance Cmp<Int> { le := Le, le_refl := le_refl, le_dec := le_dec }
 
-// NOT here, and this is the round's sharpest refusal:
-//
-//     instance(a, b: Int) Decide<Le(a, b)> { dec := le_dec(a, b) }
-//
-// is REFUSED, because an instance's canonical name is keyed on its carrier's
-// syntactic head and `std/nat` already registered `Decide<Le(n, m)>` — two
-// different relations in two different modules, one key `Le`
-// (issues/instance-key-collides-across-modules.md). The row is stalled rather
-// than worked around: renaming this file's relation to `Le_int` would make the
-// instance register and would be exactly the encoding-around that erases the
-// datum, and it is also what `std/bool`'s `Le_bool` already paid. Until the key
-// is qualified, `int`'s order is decided by naming `le_dec`, which is what
-// `nat::eq_dec` does for the neighbouring reason
-// (issues/decidable-equation-carrier.md).
+// The order's `Decide` instance, generic in both operands. It was the `Int`
+// round's one stalled row: an instance used to be keyed on its carrier head's
+// written name, so `std/nat`'s `Decide<Le(n, m)>` had already claimed the key
+// `Le` and this declaration was refused. The key is a pair of resolved
+// declaration references now — (`logic::Decide`, `int::Le`) here,
+// (`logic::Decide`, `nat::Le`) there — and both register
+// (docs/instance-resolved-key-design.md, issues/instance-key-collides-across-modules.md).
+instance(a, b: Int) Decide<Le(a, b)> { dec := le_dec(a, b) }
 
 // The designations. `+` and `*` have arithmetic fallbacks (`add`, `mul`) that
 // would resolve to `nat`'s at a file importing both, so these rows are what make
 // `x + y` mean the INTEGER sum at an integer operand; `<=` and `<` are the same
-// story at the relations, and they are the reason this file could name its order
-// `Le` at all rather than the `Le_bool`-style dodge `std/bool` had to take.
+// story at the relations. `std/bool`'s order carries its real name too as of
+// 2026-08-17, so all three modules declare `Le` and the designations are what
+// tell a downstream file which one an operand means.
 designation + at Int := add
 designation * at Int := mul
 designation <= at Int := Le

@@ -793,9 +793,12 @@ pub struct Elaborator {
     /// transitive ancestor list. Layer 2's resolver is the consumer it exists
     /// for.
     classes: HashMap<String, Rc<ClassInfo>>,
-    /// One canonical value per (class, carrier head)
-    /// (docs/traits-layer1-design.md §4.1). Declaring is registering; there is
-    /// no search over this table at layer 1, only the fill-by-reference and
+    /// One canonical value per (class, **resolved** carrier)
+    /// (docs/traits-layer1-design.md §4.1,
+    /// docs/instance-resolved-key-design.md). Every component of the key is a
+    /// declaration reference and none is a spelling, so `nat::Le` and
+    /// `int::Le` are two carriers and not one. Declaring is registering; there
+    /// is no search over this table at layer 1, only the fill-by-reference and
     /// parent-synthesis lookups the `extends` discipline makes.
     instances: HashMap<traits::InstKey, InstanceInfo>,
     /// What an operator symbol means at a carrier: one entry per **(symbol,
@@ -6041,10 +6044,15 @@ impl Elaborator {
         let Some(ckey) = self.key_of(&class.name) else {
             return ElabError::Elab { msg: format!("`{}` is not in scope", class.name), span };
         };
+        // The registry keys the carrier by its *resolved* declaration
+        // (docs/instance-resolved-key-design.md §3), so the head this
+        // diagnostic was handed — a declaration's own name, read off the
+        // lowered type — is resolved the same way before it can filter.
+        let hkey = head.map(|h| self.carrier_key(h));
         let mut listed: Vec<String> = self
             .instances
             .iter()
-            .filter(|((c, h, _), _)| *c == ckey && head.is_none_or(|k| h == k))
+            .filter(|((c, h, _), _)| *c == ckey && hkey.as_deref().is_none_or(|k| h == k))
             .map(|(_, i)| format!("`{}`", i.written))
             .collect();
         listed.sort();

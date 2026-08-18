@@ -313,7 +313,11 @@ fn combine<A> requires m: Mag<A> (x: A, y: A) -> A {{ m.op(x, y) }}
 fn oops(p: Pair<Z, Y>, q: Pair<Z, Y>) -> Pair<Z, Y> {{ combine(p, q) }}
 "
     ));
-    assert!(e.contains("candidate: Pair::Mag"), "{e}");
+    // The candidate is named as the **registry** holds it — module-qualified
+    // (`docs/instance-resolved-key-design.md` §4). A trace line is data about
+    // the registry and not a quotation of what the writer typed, and in a
+    // program with two `Pair::Mag`s a bare line would name neither.
+    assert!(e.contains("candidate: main::Pair::Mag"), "{e}");
     // The subgoal's own search, one level in: the trace nests rather than
     // collapsing to the outermost failure.
     assert!(e.contains("\n      goal: Mag<B>"), "{e}");
