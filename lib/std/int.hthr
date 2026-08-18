@@ -52,10 +52,17 @@ inductive Int { OfNat(n: Nat), NegSucc(n: Nat) }
 // The four congruences the file rewrites with — `nat::cong_nat`'s counterparts,
 // one per arrow (`Int -> Int` and `Nat -> Int`) plus one per constructor. All
 // four are `issues/congruence-by-anti-unification.md` customers: the one-place context is
-// recoverable from the expected type at every one of the 58 sites below, and
+// determined by the expected type at every one of the 54 sites below, and
 // every one of them names it by hand. A congruence is needed per ARROW rather
 // than per type, which is why a two-type file needs two of them before the
 // constructors get theirs.
+//
+// Not from a want of trying: all 54 were measured against the terse `cong(p)`
+// on 2026-08-18 and 50 are still refused — 23 because they sit in a `trans`
+// chain whose middle endpoint nothing determines, and 27 because the context
+// is a fact about how the two sides COMPUTE and not how they are spelled.
+// Four now accept it, which is not enough to be worth two spellings in one
+// file.
 theorem cong_int(f: Int -> Int, {a, b: Int}, p: a = b): f(a) = f(b) {
     j(p, λ y q => f(a) = f(y), refl)
 }

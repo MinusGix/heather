@@ -236,3 +236,99 @@ fn other_implicits_are_untouched() {
     // a check that the hook cannot fire spuriously and mis-solve.)
     ok("theorem t(a: Nat, b: Nat, p: a = b): b = a { sym(p) }");
 }
+
+// -- inside a `trans` chain -------------------------------------------------
+//
+// docs/congruence-in-inference-position-design.md. A call whose callee has a
+// **result-only implicit** — one no explicit parameter's domain mentions — is
+// checking-only, so `trans`'s argument is elaborated after its sibling and at
+// the domain the sibling determined. Two thirds of the library's congruence
+// sites are this shape and none of them elaborated before.
+
+#[test]
+fn first_argument_of_a_trans_chain() {
+    // `cong(p)`'s goal is `Succ(a) = ?b`: the expected type of the `trans`
+    // pins the *outer* endpoints and never the middle one, so this works only
+    // because `q` runs first and its type is what says `?b := Succ(b)`.
+    ok(r#"
+    theorem t(a: Nat, b: Nat, c: Nat, p: a = b, q: Succ(b) = c): Succ(a) = c {
+        trans(cong(p), q)
+    }
+    "#);
+}
+
+#[test]
+fn second_argument_of_a_trans_chain() {
+    // The mirror image, and it is *not* the same test: here the middle
+    // endpoint comes from the first argument and the far endpoint from the
+    // expected type, so it exercises the expected-type harvest running before
+    // the deferred retry rather than the sibling's inferred type.
+    ok(r#"
+    theorem t(a: Nat, b: Nat, c: Nat, p: c = Succ(a), q: a = b): c = Succ(b) {
+        trans(p, cong(q))
+    }
+    "#);
+}
+
+#[test]
+fn trans_chain_at_an_open_element_type() {
+    // Axis 2 of docs/testing-generated-terms.md at the new position: the
+    // deferral has to carry an element type that is a *parameter*, and a
+    // codomain `B` that only the expected type mentions.
+    ok(r#"
+    theorem t<A, B>(g: A -> B, a: A, b: A, c: B, p: a = b, q: g(b) = c): g(a) = c {
+        trans(cong(p), q)
+    }
+    "#);
+}
+
+#[test]
+fn a_goal_that_only_reduction_spells_through_the_context() {
+    // The second attempt (design §3): `g2(a)` names no congruence context in
+    // its syntax, and one whnf apiece turns both sides into `Succ(Succ(□))`.
+    // The syntactic attempt runs first and fails here, so this is the *only*
+    // test that reaches the reduced one.
+    ok(r#"
+    fn g2(n: Nat) -> Nat { Succ(Succ(n)) }
+    theorem t(a: Nat, b: Nat, p: a = b): g2(a) = Succ(Succ(b)) { cong(p) }
+    "#);
+}
+
+#[test]
+fn a_chain_the_deferral_cannot_reach_keeps_the_old_message() {
+    // The strict-additivity claim (design §2). The *inner* `trans` is itself
+    // in inference position, so its middle endpoint is determined by nothing
+    // and its `cong(q)` can never become ready. The obligation falls back to
+    // inference — the path this call took before the rule existed — and the
+    // reader gets the message they got before, not a report about deferral.
+    let msg = fails(
+        r#"
+    theorem t(a: Nat, b: Nat, c: Nat, d: Nat,
+              p: a = b, q: b = c, r: Succ(c) = d): Succ(a) = d {
+        trans(cong(p), trans(cong(q), r))
+    }
+    "#,
+    );
+    assert!(
+        msg.contains("could not infer the implicit argument `f`"),
+        "expected the pre-existing message, got: {msg}"
+    );
+}
+
+#[test]
+fn a_witness_mismatch_inside_a_chain_is_still_loud() {
+    // The negative control for the deferral: reaching checking position must
+    // not make the rule *lenient*. `Succ(Succ(a)) = ?b` against `p : a = b`
+    // has a differing position whose witness is not the proof's, and that is
+    // reported rather than swallowed back into "could not infer".
+    let msg = fails(
+        r#"
+    theorem t(a: Nat, b: Nat, c: Nat, p: a = b, q: Succ(b) = c):
+        Succ(Succ(a)) = c
+    {
+        trans(cong(p), q)
+    }
+    "#,
+    );
+    assert!(msg.contains("cannot generalize"), "expected the LGG message, got: {msg}");
+}

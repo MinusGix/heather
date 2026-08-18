@@ -949,6 +949,14 @@ pub struct Elaborator {
     /// `GlobalVar`s resolve to the right bindings — the goal machinery's
     /// padding trick, one layer up. Empty outside a `meta fn`.
     meta_pushed: RefCell<Vec<GlobalBinding>>,
+    /// Memo for the telescope walk in
+    /// [`Elaborator::call_defers_for_result_only`], keyed by the global's absolute
+    /// Ψ position. That test is asked at **every explicit argument of every
+    /// call**, and its answer depends only on the callee's declared type,
+    /// which never changes once the global is committed — so it is computed
+    /// once per declaration rather than once per argument. Nothing here is
+    /// semantic: dropping the memo changes only how long elaboration takes.
+    result_only_memo: RefCell<HashMap<u32, bool>>,
     /// The oracle consulted at the kernel gate (`gate.rs`), if any. `None` —
     /// the default, and what every test and the unflagged CLI use — means the
     /// kernel runs on every declaration, exactly as it always has.
@@ -1109,6 +1117,7 @@ impl Elaborator {
             meta_defs: HashMap::new(),
             meta_slots: HashMap::new(),
             meta_pushed: RefCell::new(Vec::new()),
+            result_only_memo: RefCell::new(HashMap::new()),
             gate: None,
         }
     }
@@ -8416,8 +8425,27 @@ impl Elaborator {
                 Some(("FS", _, false)) => {
                     !self.shadowed(cx, "FS") && self.ctor_here(cx, "FS").is_none()
                 }
+                // A call with a **result-only implicit**
+                // ([`Self::call_defers_for_result_only`]): the semantic member
+                // of this set, and the only one that can still elaborate if
+                // deferral does not pay off — which is why it, alone, carries
+                // the inference fallback in [`Self::apply_implicit`].
+                Some((n, args, false)) => {
+                    self.call_defers_for_result_only(cx, n, args.len())
+                }
                 _ => false,
             },
+            _ => false,
+        }
+    }
+
+    /// Was this argument deferred by the **result-only implicit** rule — the
+    /// one member of [`Self::is_checking_only`] that can still be elaborated
+    /// in inference mode? See [`DeferredArg::fallback_infer`].
+    fn deferral_can_fall_back(&self, cx: &Cx, e: &Expr) -> bool {
+        match e.as_named() {
+            Some(("absurd", _, _)) | Some(("FS", _, false)) => false,
+            Some((n, args, false)) => self.call_defers_for_result_only(cx, n, args.len()),
             _ => false,
         }
     }
@@ -8620,6 +8648,7 @@ impl Elaborator {
                             dom: (*dom).clone(),
                             dom_level: dom_level.clone(),
                             param: i,
+                            fallback_infer: self.deferral_can_fall_back(cx, arg),
                         });
                         meta_doms.push((*dom).clone());
                         slot_param.push(i);
@@ -8792,6 +8821,24 @@ impl Elaborator {
                 progressed = true;
             }
             if !progressed || !blocked {
+                // Last resort for a result-only deferral: nothing else can
+                // move, so elaborate one such argument in **inference** mode,
+                // exactly as this call did before the rule existed, and come
+                // round again — its type may unblock the others. One per pass
+                // keeps the fixpoint's termination argument (each pass fills
+                // at least one slot). Its own error, if it has one, is the
+                // error the site used to get.
+                if blocked
+                    && let Some(k) = deferred.iter().position(|ob| {
+                        ob.fallback_infer && matches!(sols[ob.slot], Sol::Withheld)
+                    })
+                {
+                    let ob = &deferred[k];
+                    let (arg_t, arg_ty, _) = self.elab_infer(cx, ob.expr)?;
+                    self.unify_arg_ty(cx, &ob.dom, &arg_ty, n, &mut sols, span);
+                    sols[ob.slot] = Sol::Solved(Rc::new(arg_t));
+                    continue;
+                }
                 break;
             }
         }
@@ -9090,8 +9137,51 @@ impl Elaborator {
         let Type::Pi { dom_level, cod_level, dom, .. } = self.whnf(cx, &dom_ty, span)? else {
             return Ok(());
         };
-        let body = lgg::lgg_body(&x, &y, &s, &t)
-            .map_err(|msg| ElabError::Elab { msg, span })?;
+        // Two attempts, in this order, and no more
+        // (docs/congruence-in-inference-position-design.md §3).
+        //
+        // 1. The endpoints **as written**. This is the whole of decision 2 as
+        //    it landed, and it stays first so that no goal that generalized
+        //    before now generalizes differently: reducing can only destroy a
+        //    match (`f(a) = f(b)` at a transparent `f` unfolds into two
+        //    unrelated-looking bodies), so a syntactic success is never
+        //    thrown away for a reduced one.
+        // 2. The endpoints in **weak head normal form**, once each. This is a
+        //    deliberate, bounded loosening of "exactly `(s, t)` is `==`": the
+        //    *witness* comparison is still syntactic, and still `==` — what
+        //    reduces is the goal, and only its two outermost nodes.
+        //
+        // Why the second attempt exists at all: a library statement is
+        // written in the reader's terms, not the elaborator's.
+        // `mul(OfNat(m), OfNat(n)) = mul(OfNat(n), OfNat(m))` names no
+        // congruence context anywhere in its syntax; one whnf apiece turns
+        // both sides into `OfNat(…)` and the context is `OfNat(□)`. Without
+        // this the rule fires only at goals that were *already* spelled
+        // through the function being abstracted, which is the minority of
+        // them (issues/congruence-by-anti-unification.md, 2026-08-18).
+        //
+        // Why *only* the goal and not `s`/`t`: the witnesses come from the
+        // proof's type and the goal's payload comes from the statement, and
+        // both are written in the same unreduced terms. Reducing one side of
+        // that comparison and not the other is what would break the match.
+        //
+        // Why whnf and not conversion: an unbounded `conv` call per `cong`
+        // is the memory-superlinear hazard this project keeps out of the
+        // elaborator, and it would also make failure quiet. Two whnfs are
+        // linear and terminating, which is the property §3 of the issue
+        // claims for this solver.
+        let body = match lgg::lgg_body(&x, &y, &s, &t) {
+            Ok(body) => body,
+            Err(msg) => {
+                let rx = self.whnf_tm(cx, &x, span)?;
+                let ry = self.whnf_tm(cx, &y, span)?;
+                if *rx == *x && *ry == *y {
+                    return Err(ElabError::Elab { msg, span });
+                }
+                lgg::lgg_body(&rx, &ry, &s, &t)
+                    .map_err(|msg| ElabError::Elab { msg, span })?
+            }
+        };
         sols[m] = Sol::Solved(Rc::new(Term::Lam {
             dom_level,
             cod_level,
@@ -9152,6 +9242,104 @@ impl Elaborator {
             .take_while(|p| p.implicit)
             .count();
         (prefix > 0).then_some(prefix)
+    }
+
+    /// Does a saturated call `name(a⃗)` carry an implicit parameter that **no
+    /// explicit parameter's domain mentions** — a *result-only* implicit
+    /// (docs/congruence-in-inference-position-design.md §2)?
+    ///
+    /// This is the semantic half of [`Self::is_checking_only`]'s sentence.
+    /// The syntactic members of that set are forms whose `elab_infer` arm
+    /// *refuses*; a call with a result-only implicit is a form whose
+    /// `apply_implicit` refuses, for the same reason and with the same
+    /// consequence: in inference mode it cannot contribute a solution,
+    /// because the only evidence that could fill the slot is an expected
+    /// type. `cong(p)` is the motivating instance — `f` occurs in `f(a) =
+    /// f(b)` and in its own domain, and in nothing an argument carries — and
+    /// the test is deliberately *not* keyed to `cong`: any declaration of
+    /// that shape gets the same deferral.
+    ///
+    /// Note what the test does **not** say. `sym<A>({a},{b}, p: a = b)`'s `A`
+    /// is not result-only: the kernel's `Id` carries its type, so `A` occurs
+    /// in `p`'s domain and an inferred argument solves it. That is the whole
+    /// reason the test is an occurrence check on the *kernel* telescope
+    /// rather than on the written surface types — the written `a = b` hides
+    /// the `A`, and a surface-level reading would defer every `sym` in the
+    /// library for nothing.
+    ///
+    /// Three guards, each keeping a call that infers today on its old path:
+    ///
+    /// - `@name(…)` (`explicit`) fills every parameter by hand, so nothing is
+    ///   left to infer;
+    /// - a call with **spill** (more arguments than declared parameters) is
+    ///   the curried-tail route of [`Self::apply_implicit`], where the
+    ///   over-applied argument's type is exactly the evidence a result-only
+    ///   implicit is missing (issues/curried-tail-type-arg-inference.md);
+    /// - a **solver** parameter is filled by resolution, not unification, so
+    ///   its being result-only says nothing.
+    ///
+    /// `name<…>(…)` needs no guard: it parses as an `App` whose head is a
+    /// `TyApp`, which [`Expr::as_named`] already declines.
+    fn call_defers_for_result_only(&self, cx: &Cx, name: &str, n_args: usize) -> bool {
+        if name == "Zero" || name == "Succ" || cx.meta.is_some() {
+            return false;
+        }
+        if cx.names.iter().any(|n| n == name)
+            || cx.aliases.iter().any(|a| a.name == *name)
+            || self.ctor_of(name).is_some()
+            || cx.selfref.as_ref().is_some_and(|s| s.name == *name)
+        {
+            return false;
+        }
+        let Some(info) = self.lookup_global(name) else { return false };
+        let params = Rc::clone(&info.params);
+        // Spill: the over-applied argument is evidence this test cannot see.
+        if n_args > params.iter().filter(|p| !p.implicit).count() {
+            return false;
+        }
+        if !params.iter().any(|p| p.implicit && p.solver.is_none()) {
+            return false;
+        }
+        // Everything past here depends only on the declaration, so it is
+        // computed once (see [`Elaborator::result_only_memo`]).
+        if let Some(&hit) = self.result_only_memo.borrow().get(&info.abs) {
+            return hit;
+        }
+        let hit = self.walk_for_result_only(info.abs, &params);
+        self.result_only_memo.borrow_mut().insert(info.abs, hit);
+        hit
+    }
+
+    /// The declaration-only half of [`Self::call_defers_for_result_only`],
+    /// behind that method's memo.
+    fn walk_for_result_only(&self, abs: u32, params: &[ParamMeta]) -> bool {
+        let GlobalBinding::Tm { ctx, ty, .. } = &self.psi.bindings[abs as usize] else {
+            return false;
+        };
+        // The declaration's own Δ must be `·`, or the local indices below are
+        // not the parameters' (every ordinary `fn`/`theorem` is closed).
+        if !matches!(ctx.base, CtxBase::Nil) || ctx.len() != 0 {
+            return false;
+        }
+        // The declared telescope, one domain per parameter. Read off the
+        // *stored* type, which is closed, so the local indices below are the
+        // parameters' own and nothing has to be rescoped. A declaration whose
+        // type is not a syntactic `Π` chain that far is simply not tested.
+        let mut doms: Vec<Type> = Vec::with_capacity(params.len());
+        let mut cur: Type = ty.as_ref().clone();
+        for _ in 0..params.len() {
+            let Type::Pi { dom, cod, .. } = cur else { return false };
+            doms.push((*dom).clone());
+            cur = (*cod).clone();
+        }
+        params.iter().enumerate().any(|(i, p)| {
+            p.implicit
+                && p.solver.is_none()
+                && !params.iter().enumerate().skip(i + 1).any(|(j, q)| {
+                    !q.implicit
+                        && mentions_binder(&doms[j], j as u32, (j - 1 - i) as u32)
+                })
+        })
     }
 
     fn resolve(&self, cx: &Cx, name: &str, span: Span) -> R<(Term, Type, Level)> {
@@ -10278,6 +10466,15 @@ struct DeferredArg<'a> {
     dom_level: Level,
     /// Parameter index, for the goal-name hint and the §7.2 message.
     param: usize,
+    /// Deferred by the **result-only implicit** rule
+    /// (docs/congruence-in-inference-position-design.md §2), rather than by
+    /// one of the syntactic checking-only forms. Such an argument *can* be
+    /// elaborated in inference mode — it just fails at its own implicit — so
+    /// an obligation that never becomes ready is inferred in place rather
+    /// than reported as blocked. That is what makes the rule strictly
+    /// additive: every program that elaborated before it existed takes the
+    /// old path and gets the old message.
+    fallback_infer: bool,
 }
 
 /// Per-slot state of one [`Elaborator::apply_implicit`] scratch world
@@ -10664,6 +10861,29 @@ fn strengthen_tm(gamma: &LocalCtx, t: &Term, d: u32) -> Option<Term> {
     }
     let s = t.apply_local(&drop_binders(gamma, d));
     (s.shift_local(d) == *t).then_some(s)
+}
+
+/// Does `t`, scoped in a closed context of `m` binders, mention the binder at
+/// de Bruijn index `d`?
+///
+/// The same trick [`strengthen_tm`] uses, narrowed to **one** binder: map
+/// index `d` to a marker and every other index to itself, and ask whether the
+/// term changed. Precise where `strengthen_ty` is conservative (that one drops
+/// a whole *suffix* of binders, so it cannot tell "mentions `f`" from
+/// "mentions `a`"), and still no new traversal of the syntax.
+///
+/// `Term::Zero` is a sound marker: the only position it can land in is one
+/// that held `Var(d)`, so the substituted term equals the original exactly
+/// when `d` never occurred.
+fn mentions_binder(t: &Type, m: u32, d: u32) -> bool {
+    let tail = SubstTail::Empty { len: m, base: CtxBase::Nil };
+    let terms = (0..m)
+        .map(|k| {
+            let idx = m - 1 - k;
+            Rc::new(if idx == d { Term::Zero } else { Term::Var(LocalVar(idx)) })
+        })
+        .collect();
+    t.apply_local(&LocalSubst { tail, terms }) != *t
 }
 
 /// [`strengthen_tm`] at the type level.

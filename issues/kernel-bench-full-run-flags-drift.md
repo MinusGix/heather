@@ -3,7 +3,7 @@ title: The kernel bench's full --check flags a different 1.25-1.5x set every run
 status: open
 labels: [kernel,tooling,performance]
 created: 2026-08-17
-updated: 2026-08-17
+updated: 2026-08-18
 ---
 
 Observed 2026-08-17 as the end-of-round gate of the motive-synthesis round (docs/goal-motive-synthesis-design.md), and recorded because the round could not tell "my change regressed something" from "this harness's time half does not repeat" without four runs.
@@ -33,3 +33,4 @@ Not filed as a defect in this round's change: the change touches the substitutio
 - 2026-08-17: Fifth run, coordinator, at merge verification (2026-08-17): the merged tree's full scripts/bench --check on a quiet machine was fully green — ok 106 comparisons, zero flags. Consistent with the intermittent signature (four runs: 6/3/6/1 flags; fifth: 0) rather than with any fixture being reliably slow.
 - 2026-08-17: Sixth full run, end-of-round gate of the argument-type-reduction round ([[motive-application-hides-hypothesis-type]]): ok, 106 comparisons, zero flags, on a machine running nothing else. Second consecutive clean full run (fifth was the coordinator's merge verification). Running tally of flags per full run on essentially the same tree: 6 / 3 / 6 / 1 / 0 / 0 — still consistent with the intermittent signature and with no fixture being reliably slow. No disambiguation run was needed by this round, so it cost the one line a gate is supposed to cost.
 - 2026-08-17: Seventh run (coordinator, merged-tree verification of the argument-type-reduction round, 2026-08-17): fully green, ok 106, zero flags. Tally 6/3/6/1/0/0/0.
+- 2026-08-18: Eighth and ninth runs, end-of-round gate of the congruence-in-inference-position round (elaborator-only change; crates/kernel untouched, verified with git diff). Run 8 flagged NINE, all of nat/add-normalize and nat/mul-normalize, every size, uniformly 1.47-1.67x -- and it was run while a SIBLING agent's scripts/test --fast was saturating the machine from another worktree. Run 9, same binary and baseline, on a quiet machine: ok, 106 comparisons, zero flags. Tally 6/3/6/1/0/0/0/9/0. New datum for the four candidate fixes: this is the first run where the flagged set was a coherent FAMILY at a uniform ratio rather than a scattered handful just over 1.25x, and it had an identifiable external cause. Worth distinguishing in whatever fix lands -- a whole family at 1.5x is machine load and could be refused outright (or the harness could decline to compare times when load is high), whereas the scattered 1.25-1.5x singletons of runs 1-4 are the harder, in-process contamination signature.
