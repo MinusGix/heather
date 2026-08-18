@@ -3,7 +3,7 @@ title: Sketch: functions defined per-constructor, dispatch as an object
 status: open
 labels: [frontend,syntax,elaboration,metaprogramming,design]
 created: 2026-07-31
-updated: 2026-07-31
+updated: 2026-08-18
 ---
 
 Design sketch, deliberately ahead of need (user, 2026-07-31, off the
@@ -97,10 +97,13 @@ to `step.Ret(env, rs)` and each clause is its own lemma target
 **Rung 3 — dependent algebras: induction as a record you fill in.**
 `D::Elim<P: D -> Type>` with one field per constructor returning
 `P(that constructor)`; a proof by induction is a record value, holes per
-field are named goals. Names its own blocker: **dependent/higher-kinded
-record parameters** (`P: Rose -> Type`; also value parameters,
-`IrAlgSound(a: IrAlg<Ir>)`) — the one genuinely new surface capability
-in the ladder; type params today are first-order `A: Type<n>`.
+field are named goals. **This rung is now explicitly live**: the dependent
+record parameter is a value parameter (`D::Elim(P: D -> Type)`), the shape
+made available by record types as type-valued functions and exercised by
+`ListElim` / `TreeElim` in [[datatype-container-algebras]]. The old claim that
+this needed a new higher-kinded type-parameter feature was stale; generation
+of the datatype-shaped shell, not expressibility of the object, is what
+remains here.
 
 **Rung 4 — passes as algebras, certified once.** A rewrite pass is
 `IrAlg<Ir>`; its obligation is the induced per-clause law record; and
@@ -127,3 +130,11 @@ when weighing rung 3/4 against their prerequisite features.
 ## Log
 
 - 2026-07-31: Sketches folded in from the 2026-07-31 discussion (see section above): Cases-vs-Alg distinction, rung 1 writable today (feature = generator), rung 2 makes the single-ih discipline structural, rung 3 surfaces the real blocker (dependent record parameters), rung 4 is per-clause-certified passes with a generic pass_sound. Plus the user's framing: algebras deliberately central, as faux internal-language reasoning.
+- 2026-08-18: Rung 3's recorded blocker is corrected by implementation, not
+  speculation: [[datatype-container-algebras]] now ships explicit
+  `ListElim<A>(P: List<A> -> Type)` and `TreeElim<A>(P: Tree<A> -> Type)`
+  records plus their structural consumers. An existing theorem (`append_nil`)
+  is supplied entirely as a record of constructor obligations, and the tree
+  rebuild proof consumes both differently indexed IHs. No language change was
+  needed; this issue stays open for generation / per-constructor definition
+  surface and the Cases/open-recursion rungs it owns.

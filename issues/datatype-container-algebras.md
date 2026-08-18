@@ -213,3 +213,25 @@ surface.
   decision: generate the concrete shell, or first probe the public container
   calculus / dependent algebra rung. Full `scripts/test`: suite 1914 -> 1919,
   0 failed.
+- 2026-08-18: **The dependent-algebra probe landed next.** `ListElim<A>(P)`
+  and `TreeElim<A>(P)` package the constructor-local obligations for an open
+  motive `P : D -> Type`; `list_elim` / `tree_elim` consume them by ordinary
+  structural recursion, with definitional constructor equations exposed as
+  theorems. `append_nil` is no longer a direct recursive proof: its algebra's
+  Cons field receives the IH, and the public theorem is one `list_elim` call.
+  The branching control folds a tree back into itself and proves the result by
+  a `TreeElim` whose Node obligation uses both differently indexed IHs. Two
+  negative controls return a tail/left proof at the whole constructor and are
+  refused at the dependent index.
+
+  **Verdict:** the old [[case-algebra-definitions]] rung-3 blocker was stale.
+  A type-family-valued *record value parameter* is already the needed
+  abstraction; no higher-kinded type-parameter feature, parser change,
+  elaborator case, or kernel form is required. The only spelling pressure is
+  existing constructor inference: `Node` inside `P(Node(left,right))` must be
+  `Node<A>` because inference does not recover a type parameter through a
+  recursive child in that inference position (the boundary already recorded
+  by [[tyvar-scoping-in-lowered-fields]]). This narrows the next decision:
+  `Cases` / open recursion should be probed against a real consumer before one
+  generator emits the now-known `Cases` + `Alg` + `Elim` family. Full
+  `scripts/test`: suite 1919 -> 1923, 0 failed.

@@ -16,12 +16,39 @@ record TreeAlg<A, B> {
     node: B -> B -> B,
 }
 
+// The dependent algebra: each constructor-local result lives in a potentially
+// different type selected by `P`, and the Node clause receives both original
+// subtrees beside their two induction results.
+record TreeElim<A>(P: Tree<A> -> Type) {
+    leaf: (value: A) -> P(Leaf(value)),
+    node: (left: Tree<A>) -> (right: Tree<A>) ->
+        P(left) -> P(right) -> P(Node<A>(left, right)),
+}
+
 fn tree_fold<A, B>(alg: TreeAlg<A, B>, tree: Tree<A>) -> B {
     match tree {
         Leaf(value) => alg.leaf(value),
         Node(left, right) => alg.node(tree_fold(alg, left), tree_fold(alg, right)),
     }
 }
+
+fn tree_elim<A>(P: Tree<A> -> Type, alg: TreeElim<A>(P), tree: Tree<A>) -> P(tree) {
+    match tree {
+        Leaf(value) => alg.leaf(value),
+        Node(left, right) =>
+            alg.node(left, right, tree_elim(P, alg, left), tree_elim(P, alg, right)),
+    }
+}
+
+theorem tree_elim_leaf<A>(P: Tree<A> -> Type, alg: TreeElim<A>(P), value: A):
+    tree_elim(P, alg, Leaf(value)) = alg.leaf(value)
+{}
+
+theorem tree_elim_node<A>(P: Tree<A> -> Type, alg: TreeElim<A>(P),
+    left, right: Tree<A>):
+    tree_elim(P, alg, Node(left, right)) =
+        alg.node(left, right, tree_elim(P, alg, left), tree_elim(P, alg, right))
+{}
 
 theorem tree_fold_leaf<A, B>(alg: TreeAlg<A, B>, value: A):
     tree_fold(alg, Leaf(value)) = alg.leaf(value)
@@ -56,4 +83,32 @@ fn tree_size<A>(tree: Tree<A>) -> Nat {
         leaf: λ (a: A) => 1,
         node: λ (left: Nat) (right: Nat) => Succ(add(left, right)),
     }, tree)
+}
+
+// A fold that rebuilds its input, followed by a proof through the dependent
+// algebra. The Node obligation consumes BOTH induction results, which is the
+// branching control a ListElim example cannot provide.
+fn tree_rebuild_alg<A>() -> TreeAlg<A, Tree<A>> {
+    TreeAlg<A, Tree<A>> {
+        leaf: Leaf,
+        node: λ (left: Tree<A>) (right: Tree<A>) => Node<A>(left, right),
+    }
+}
+
+fn tree_rebuild_elim<A>() ->
+    TreeElim<A>(λ (tree: Tree<A>) => tree_fold(tree_rebuild_alg<A>(), tree) = tree)
+{
+    TreeElim {
+        leaf: λ (value: A) => refl,
+        node: λ (left: Tree<A>) (right: Tree<A>) ih_left ih_right =>
+            trans(
+                cong_fn(λ (l: Tree<A>) => Node<A>(l, tree_fold(tree_rebuild_alg<A>(), right)), ih_left),
+                cong_fn(λ (r: Tree<A>) => Node<A>(left, r), ih_right)),
+    }
+}
+
+theorem tree_rebuild_id<A>(tree: Tree<A>): tree_fold(tree_rebuild_alg<A>(), tree) = tree {
+    tree_elim(
+        λ (t: Tree<A>) => tree_fold(tree_rebuild_alg<A>(), t) = t,
+        tree_rebuild_elim(), tree)
 }

@@ -26,6 +26,38 @@ import pair;
 
 inductive List<A> { Nil, Cons(head: A, tail: List<A>) }
 
+// The dependent companion to `ListAlg` below. An ordinary algebra replaces a
+// recursive tail by one result in a fixed carrier `B`; an elimination algebra
+// keeps the original tail and pairs it with a result in the motive at that
+// tail. Packaging the two constructor-local obligations as a record makes a
+// proof by induction an ordinary first-class value.
+//
+// `P` is a VALUE parameter whose value is a type family. This is the exact
+// higher-kinded/dependent record shape that used to be listed as this rung's
+// blocker (issues/case-algebra-definitions.md); record types as type-valued
+// functions have made it writable since.
+record ListElim<A>(P: List<A> -> Type) {
+    nil: P(Nil),
+    cons: (head: A) -> (tail: List<A>) -> P(tail) -> P(Cons(head, tail)),
+}
+
+fn list_elim<A>(P: List<A> -> Type, alg: ListElim<A>(P), xs: List<A>) -> P(xs) {
+    match xs {
+        Nil => alg.nil,
+        Cons(head, tail) => alg.cons(head, tail, list_elim(P, alg, tail)),
+    }
+}
+
+theorem list_elim_nil<A>(P: List<A> -> Type, alg: ListElim<A>(P)):
+    list_elim(P, alg, Nil) = alg.nil
+{}
+
+theorem list_elim_cons<A>(P: List<A> -> Type, alg: ListElim<A>(P),
+    head: A, tail: List<A>):
+    list_elim(P, alg, Cons(head, tail)) =
+        alg.cons(head, tail, list_elim(P, alg, tail))
+{}
+
 // ---------------------------------------------------------------------------
 // append, its laws, and the two congruences the file proves with.
 //
@@ -55,11 +87,18 @@ theorem cong_append_l<A>({a: List<A>}, {b: List<A>}, zs: List<A>, p: a = b):
     j(p, λ y q => append(a, zs) = append(y, zs), refl)
 }
 
-theorem append_nil<A>(xs: List<A>): append(xs, Nil) = xs {
-    match xs {
-        Nil => {},
-        Cons(h, t) => cong_cons(h, append_nil(t)),
+// `append_nil` is the first existing library theorem expressed by filling a
+// dependent elimination algebra. The recursive proof is no longer named or
+// called here: `list_elim` supplies it to the Cons obligation as `ih`.
+fn append_nil_elim<A>() -> ListElim<A>(λ (xs: List<A>) => append(xs, Nil) = xs) {
+    ListElim {
+        nil: refl,
+        cons: λ (h: A) (t: List<A>) ih => cong_cons(h, ih),
     }
+}
+
+theorem append_nil<A>(xs: List<A>): append(xs, Nil) = xs {
+    list_elim(λ (ys: List<A>) => append(ys, Nil) = ys, append_nil_elim(), xs)
 }
 
 theorem append_assoc<A>(xs, ys, zs: List<A>):

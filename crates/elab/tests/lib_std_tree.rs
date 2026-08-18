@@ -50,6 +50,13 @@ fn ok(extra: &str) -> Elaborator {
     run(extra).unwrap_or_else(|e| panic!("expected this to check, got: {e}"))
 }
 
+fn bad(extra: &str) -> String {
+    match run(extra) {
+        Err(e) => e,
+        Ok(_) => panic!("expected a refusal, but it checked"),
+    }
+}
+
 #[test]
 fn the_tree_module_checks() {
     ok("");
@@ -97,5 +104,44 @@ theorem leaves_compute():
 
 // Three leaves plus two internal nodes.
 theorem size_computes(): tree_size(sample()) = 5 { refl }
+theorem rebuild_computes(): tree_fold(tree_rebuild_alg<Nat>(), sample()) = sample() {
+    tree_rebuild_id(sample())
+}
 "#);
+}
+
+#[test]
+fn the_dependent_tree_algebra_accepts_an_open_motive() {
+    ok(r#"
+theorem e_use<A>(P: Tree<A> -> Type, alg: TreeElim<A>(P), tree: Tree<A>): P(tree) {
+    tree_elim(P, alg, tree)
+}
+
+theorem e_leaf<A>(P: Tree<A> -> Type, alg: TreeElim<A>(P), value: A):
+    tree_elim(P, alg, Leaf(value)) = alg.leaf(value)
+{ tree_elim_leaf(P, alg, value) }
+
+theorem e_node<A>(P: Tree<A> -> Type, alg: TreeElim<A>(P), left, right: Tree<A>):
+    tree_elim(P, alg, Node(left, right)) =
+        alg.node(left, right, tree_elim(P, alg, left), tree_elim(P, alg, right))
+{ tree_elim_node(P, alg, left, right) }
+
+theorem e_rebuild<A>(tree: Tree<A>): tree_fold(tree_rebuild_alg<A>(), tree) = tree {
+    tree_rebuild_id(tree)
+}
+"#);
+}
+
+#[test]
+fn a_node_obligation_cannot_return_one_childs_proof() {
+    let msg = bad(r#"
+fn wrong<A>() -> TreeElim<A>(λ (tree: Tree<A>) => tree = tree) {
+    TreeElim {
+        leaf: λ (value: A) => refl,
+        // The left IH is indexed by `left`, not by `Node(left, right)`.
+        node: λ (left: Tree<A>) (right: Tree<A>) ih_left ih_right => ih_left,
+    }
+}
+"#);
+    assert!(msg.contains("left = left") && msg.contains("expected"), "{msg}");
 }

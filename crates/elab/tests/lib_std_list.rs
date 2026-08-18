@@ -208,6 +208,55 @@ theorem a_foldr<A, B>(f: A -> B -> B, z: B, xs: List<A>):
     }
 }
 
+/// The motive itself is open here: this is the higher-kinded record parameter
+/// that the old case-algebra sketch listed as missing, not one monomorphic
+/// equality chosen by the test.
+#[test]
+fn the_dependent_elimination_algebra_is_first_class() {
+    let mut e = elaborated();
+    let probe = r#"
+import list;
+
+theorem e_use<A>(P: List<A> -> Type, alg: ListElim<A>(P), xs: List<A>): P(xs) {
+    list_elim(P, alg, xs)
+}
+
+theorem e_nil<A>(P: List<A> -> Type, alg: ListElim<A>(P)):
+    list_elim(P, alg, Nil) = alg.nil
+{ list_elim_nil(P, alg) }
+
+theorem e_cons<A>(P: List<A> -> Type, alg: ListElim<A>(P), h: A, t: List<A>):
+    list_elim(P, alg, Cons(h, t)) = alg.cons(h, t, list_elim(P, alg, t))
+{ list_elim_cons(P, alg, h, t) }
+
+theorem e_append_nil<A>(xs: List<A>): append(xs, Nil) = xs { append_nil(xs) }
+"#;
+    if let Err(err) = e.elab_module_source("probe", probe) {
+        let msg = match err {
+            ElabError::Elab { msg, .. } => msg,
+            other => format!("{other}"),
+        };
+        panic!("the dependent algebra did not apply: {msg}");
+    }
+}
+
+#[test]
+fn a_wrong_list_obligation_is_rejected() {
+    let mut e = elaborated();
+    let bad = r#"
+import list;
+
+fn bad_append_nil<A>() -> ListElim<A>(λ (xs: List<A>) => append(xs, Nil) = xs) {
+    ListElim {
+        nil: refl,
+        // `ih` proves the property at `tail`, not at `Cons(head, tail)`.
+        cons: λ (head: A) (tail: List<A>) ih => ih,
+    }
+}
+"#;
+    assert!(e.elab_module_source("bad", bad).is_err(), "the wrong Cons obligation checked");
+}
+
 /// Wave L3 (`issues/std-list-mem-and-perm.md`): `Mem` and its kit, at an
 /// **open** element type — the axis `docs/testing-generated-terms.md` names
 /// first, and the one that matters most here, since `Mem`'s whole claim is that
