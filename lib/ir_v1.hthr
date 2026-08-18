@@ -89,6 +89,35 @@ inductive Prog { PNil, PFun(body: Ir, next: Prog) }
 // Out carries the region's output slots as a VCons-chain.
 inductive Res { Stuck, OutOfFuel, Out(vals: Val) }
 
+// A non-recursive dispatch table for `Ir`. Unlike an algebra, recursive
+// fields stay as `Ir`: a Cases value describes one layer of case analysis or
+// open recursion, and a caller decides what recursive function (if any) its
+// clauses close over. `step_cases` below is the real consumer — its clauses
+// close over the fuel-indexed recursive call `ev`.
+record IrCases<M> {
+    ret: Refs -> M,
+    letcon: Nat -> Refs -> Ir -> M,
+    letmatch: Nat -> Ir -> Ir -> M,
+    arm: Ir -> Ir -> M,
+    noarm: M,
+    letloop: Refs -> Ir -> Ir -> M,
+    loopiter: Ir -> M,
+    letcall: Nat -> Refs -> Ir -> M,
+}
+
+fn ir_cases<M>(cases: IrCases<M>, ir: Ir) -> M {
+    match ir {
+        Ret(rs) => cases.ret(rs),
+        LetCon(tag, args, rest) => cases.letcon(tag, args, rest),
+        LetMatch(scrut, arms, rest) => cases.letmatch(scrut, arms, rest),
+        Arm(body, next) => cases.arm(body, next),
+        NoArm => cases.noarm,
+        LetLoop(init, body, rest) => cases.letloop(init, body, rest),
+        LoopIter(body) => cases.loopiter(body),
+        LetCall(callee, args, rest) => cases.letcall(callee, args, rest),
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Environment helpers. The termination discipline shapes every signature
 // here: a recursive fn must pass its non-decreasing parameters unchanged,
@@ -242,18 +271,25 @@ fn step_letcall(ev: Val -> Ir -> Res, prog: Prog, env: Val, callee: Nat, args: R
     }
 }
 
-// one step: dispatch on the instruction; `ev` is the recursive call
-fn step(ev: Val -> Ir -> Res, prog: Prog, env: Val, ir: Ir) -> Res {
-    match ir {
-        Ret(rs) => step_ret(env, rs),
-        LetCon(tag, args, rest) => step_letcon(ev, env, tag, args, rest),
-        LetMatch(scrut, arms, rest) => step_letmatch(ev, env, scrut, arms, rest),
-        Arm(body, next) => Stuck,
-        NoArm => Stuck,
-        LetLoop(init, body, rest) => step_letloop(ev, env, init, body, rest),
-        LoopIter(body) => step_loopiter(ev, env, body),
-        LetCall(callee, args, rest) => step_letcall(ev, prog, env, callee, args, rest),
+// Reify the interpreter's clause table. `ev` is deliberately a captured
+// value, not tied recursively here: eval supplies its one fuel-decreasing IH,
+// while another consumer may supply a different open-recursion discipline.
+fn step_cases(ev: Val -> Ir -> Res, prog: Prog, env: Val) -> IrCases<Res> {
+    IrCases<Res> {
+        ret: λ rs => step_ret(env, rs),
+        letcon: λ tag args rest => step_letcon(ev, env, tag, args, rest),
+        letmatch: λ scrut arms rest => step_letmatch(ev, env, scrut, arms, rest),
+        arm: λ body next => Stuck,
+        noarm: Stuck,
+        letloop: λ init body rest => step_letloop(ev, env, init, body, rest),
+        loopiter: λ body => step_loopiter(ev, env, body),
+        letcall: λ callee args rest => step_letcall(ev, prog, env, callee, args, rest),
     }
+}
+
+// one step: select a clause from the first-class table
+fn step(ev: Val -> Ir -> Res, prog: Prog, env: Val, ir: Ir) -> Res {
+    ir_cases(step_cases(ev, prog, env), ir)
 }
 
 fn eval(fuel: Nat, prog: Prog) -> Val -> Ir -> Res {
@@ -474,6 +510,45 @@ fn bumps(k: Nat) -> Val -> Val {
 // constructor with two interpreters in scope. That is the measured price of
 // the manual explicit-motive route, and it is a term-SIZE price rather than
 // a reduction one — memory barely moved (issues/ih-generalization.md).
+
+// The public computational face of the Cases object. These are the exact
+// datatype-shaped equations a future generator could emit; all are
+// definitional because `ir_cases` is the ordinary non-recursive eliminator.
+theorem ir_cases_ret<M>(cases: IrCases<M>, rs: Refs):
+    ir_cases(cases, Ret(rs)) = cases.ret(rs)
+{}
+
+theorem ir_cases_letcon<M>(cases: IrCases<M>, tag: Nat, args: Refs, rest: Ir):
+    ir_cases(cases, LetCon(tag, args, rest)) = cases.letcon(tag, args, rest)
+{}
+
+theorem ir_cases_letmatch<M>(cases: IrCases<M>, scrut: Nat, arms, rest: Ir):
+    ir_cases(cases, LetMatch(scrut, arms, rest)) = cases.letmatch(scrut, arms, rest)
+{}
+
+theorem ir_cases_arm<M>(cases: IrCases<M>, body, next: Ir):
+    ir_cases(cases, Arm(body, next)) = cases.arm(body, next)
+{}
+
+theorem ir_cases_noarm<M>(cases: IrCases<M>):
+    ir_cases(cases, NoArm) = cases.noarm
+{}
+
+theorem ir_cases_letloop<M>(cases: IrCases<M>, init: Refs, body, rest: Ir):
+    ir_cases(cases, LetLoop(init, body, rest)) = cases.letloop(init, body, rest)
+{}
+
+theorem ir_cases_loopiter<M>(cases: IrCases<M>, body: Ir):
+    ir_cases(cases, LoopIter(body)) = cases.loopiter(body)
+{}
+
+theorem ir_cases_letcall<M>(cases: IrCases<M>, callee: Nat, args: Refs, rest: Ir):
+    ir_cases(cases, LetCall(callee, args, rest)) = cases.letcall(callee, args, rest)
+{}
+
+theorem step_is_cases(ev: Val -> Ir -> Res, prog: Prog, env: Val, ir: Ir):
+    step(ev, prog, env, ir) = ir_cases(step_cases(ev, prog, env), ir)
+{}
 
 // 1 + 1 = 2 through the loop: LetLoop/LoopIter, LetMatch with BOTH arms
 // taken (Succ on iteration one, Zero on iteration two), LetCon,

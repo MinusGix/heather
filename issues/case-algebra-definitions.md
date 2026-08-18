@@ -138,3 +138,19 @@ when weighing rung 3/4 against their prerequisite features.
   rebuild proof consumes both differently indexed IHs. No language change was
   needed; this issue stays open for generation / per-constructor definition
   surface and the Cases/open-recursion rungs it owns.
+- 2026-08-18: Rungs 1--3 now all have explicit real consumers. The missing
+  Cases/open-recursion control landed as `IrCases<M>` + `ir_cases` in
+  `lib/ir_v1.hthr`; `step_cases(ev, prog, env)` is an ordinary record value
+  whose clauses capture the recursive evaluator, and `step` is its generic
+  dispatch. All eight constructor equations are definitional, while an
+  independent constructor-classifying consumer pins that this is reusable
+  case analysis rather than interpreter-only factoring.
+
+  One old motivation is deliberately weakened by the measurement history:
+  the single-IH factoring was once performance-critical, but value-domain
+  conversion removed that cliff. Cases still earns its place structurally --
+  named/reusable dispatch and an explicit open-recursion boundary -- not as a
+  performance primitive. No declaration sugar was needed for the probe. The
+  remaining feature question is now only whether and how to generate the
+  known shell (including its eventual subject-owned names), not whether the
+  three objects are expressible.

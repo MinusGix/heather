@@ -235,3 +235,22 @@ surface.
   `Cases` / open recursion should be probed against a real consumer before one
   generator emits the now-known `Cases` + `Alg` + `Elim` family. Full
   `scripts/test`: suite 1919 -> 1923, 0 failed.
+- 2026-08-18: **The Cases/open-recursion probe landed against the real IR
+  interpreter.** `IrCases<M>` keeps every recursive field at `Ir`, and
+  `ir_cases` is the ordinary non-recursive dispatcher with one definitional
+  equation per constructor. `step_cases(ev, prog, env)` closes that record's
+  clauses over the fuel-indexed recursive call while `step` merely selects a
+  clause. A second, unrelated consumer classifies the outer constructor and a
+  mutation control refuses the wrong selected result.
+
+  **Verdict:** `Cases` is distinct from both `Alg` and `Elim` in use, not only
+  on paper: it reifies a one-layer dispatch without choosing a recursion
+  scheme, and open recursion is ordinary closure capture. Again no parser,
+  elaborator, generator or kernel feature was needed. The concrete
+  `Cases`/`Alg`/`Elim` family is now fully characterized by explicit Heather
+  programs; what remains repetitive is precisely the datatype-shaped record,
+  dispatcher/fold/eliminator, and constructor equations. Generation is now
+  an evidence-backed convenience round, while a public general `Container`
+  calculus remains a separate mathematical decision rather than a
+  prerequisite. Full `scripts/test`: suite 1923, 0 failed (count unchanged;
+  the focused acceptance and mutation control extend the existing IR test).

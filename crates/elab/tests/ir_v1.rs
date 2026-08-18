@@ -120,6 +120,32 @@ fn declarations_check_and_wrong_claims_are_refuted() {
     e.elab_module_source("ir_v1", src)
         .unwrap_or_else(|err| panic!("{}", err.render(src)));
 
+    // `IrCases` is usable independently of the interpreter: this consumer
+    // observes only the outer constructor, while `step_cases` closes over a
+    // recursive evaluator. Together they pin Cases as case analysis/open
+    // recursion, rather than a second spelling of the recursive fold.
+    let cases_probe = "fn ir_constructor_number(ir: Ir) -> Nat {\n\
+        ir_cases(IrCases<Nat> {\n\
+            ret: λ rs => 0,\n\
+            letcon: λ tag args rest => 1,\n\
+            letmatch: λ scrut arms rest => 2,\n\
+            arm: λ body next => 3,\n\
+            noarm: 4,\n\
+            letloop: λ init body rest => 5,\n\
+            loopiter: λ body => 6,\n\
+            letcall: λ callee args rest => 7,\n\
+        }, ir)\n\
+    }\n\
+    theorem cases_ret(): ir_constructor_number(Ret(RNil)) = 0 { refl }\n\
+    theorem cases_letcall(): ir_constructor_number(LetCall(3, RNil, NoArm)) = 7 { refl }";
+    e.elab_module_source("ir_v1", cases_probe)
+        .unwrap_or_else(|err| panic!("{}", err.render(cases_probe)));
+    refuted(
+        &mut e,
+        "theorem cases_wrong(): ir_constructor_number(Ret(RNil)) = 1 { refl }",
+        "a Cases table selecting the wrong clause",
+    );
+
     // 1. Zero fuel is OutOfFuel; claiming it produced a value must fail. One
     // eval unfolding, so the control costs seconds, not minutes.
     let wrong = "theorem wrong(): eval(0, PNil)(VNil, Ret(RNil)) = Out(VNil) { refl }";
