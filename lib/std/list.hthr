@@ -611,8 +611,8 @@ theorem mem_append<A>(xs, ys: List<A>, a: A):
 theorem mem_append_iff<A>(xs, ys: List<A>, a: A):
     Iff<Mem(a, append(xs, ys)), Or<Mem(a, xs), Mem(a, ys)>>
 {
-    Iff(mem_append(xs, ys, a),
-        λ (h: Or<Mem(a, xs), Mem(a, ys)>) =>
+    Iff(mp := mem_append(xs, ys, a),
+        mpr := λ (h: Or<Mem(a, xs), Mem(a, ys)>) =>
             or_elim(h, mem_append_l(xs, ys, a), mem_append_r(xs, ys, a)))
 }
 

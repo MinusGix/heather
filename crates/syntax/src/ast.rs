@@ -571,6 +571,25 @@ pub struct RecordLitField {
     pub span: Span,
 }
 
+/// One **named argument** at a call site: `xs := ys`
+/// (docs/named-arguments-design.md §3). The span covers the whole
+/// `name := expr`; `name_span` covers the identifier alone, so a refusal
+/// about the *name* points at the name and not at its value.
+///
+/// `:=` rather than `:` or `=`: `:` introduces a *type* in every binding
+/// position in this grammar and a type is an expression (§3.1), and `=` is
+/// the identity-type former, so `f(a = x)` is already a legal one-argument
+/// call (§3.2). `:=` is this language's operator for filling a named slot —
+/// `on ?g := e`, an instance's `op := e`, a binder's `:= infer` — and a
+/// named argument is that slot filled from the other side.
+#[derive(Debug, Clone)]
+pub struct NamedArg {
+    pub name: String,
+    pub name_span: Span,
+    pub expr: Expr,
+    pub span: Span,
+}
+
 /// One lambda binder: `x`, `(x: A)`, `{x}` or `{x: A}`. An unannotated
 /// binder is only usable in checking position, where the expected Π supplies
 /// the domain. `implicit` marks the brace spelling; like [`TyKind::Fn`]'s
@@ -662,11 +681,27 @@ impl Expr {
     /// `None` for an application of anything else.
     pub fn as_named(&self) -> Option<(&str, &[Expr], bool)> {
         match &self.kind {
-            ExprKind::App { head, args, explicit } => match &head.kind {
+            ExprKind::App { head, args, explicit, .. } => match &head.kind {
                 ExprKind::Var(name) => Some((name.as_str(), args.as_slice(), *explicit)),
                 _ => None,
             },
             _ => None,
+        }
+    }
+
+    /// The call's **named** arguments, or `&[]` for anything that is not a
+    /// call (docs/named-arguments-design.md §8.2).
+    ///
+    /// Every consumer of [`Self::as_named`] hands the positional slice to a
+    /// name-keyed special form — a builtin arm, a fragment recognizer — and
+    /// those have no parameter table to be called by, so a named argument at
+    /// one must be *refused* rather than dropped. This is the accessor that
+    /// lets them notice.
+    pub fn named_args(&self) -> &[NamedArg] {
+        match &self.kind {
+            ExprKind::App { named, .. } => named.as_slice(),
+            ExprKind::Dot { named, .. } => named.as_slice(),
+            _ => &[],
         }
     }
 }
@@ -731,7 +766,20 @@ pub enum ExprKind {
     /// every parameter — including `{}`-implicits — must be given positionally.
     /// It is only ever set on a `Var` head: implicit insertion is
     /// name-directed, so there is nothing for `@` to suppress elsewhere.
-    App { head: Box<Expr>, args: Vec<Expr>, explicit: bool },
+    /// `named` holds the `x := e` arguments (docs/named-arguments-design.md).
+    /// A **separate list**, not an optional name per element of `args`, and
+    /// that is load-bearing three times over: it makes the grammar's
+    /// positional-then-named rule (§4.2) *unrepresentable* otherwise, so no
+    /// elaborator path has to decide what an interleaving would mean; it
+    /// leaves `args.len()` meaning the positional arity that every fragment
+    /// recognizer keys on, so a call carrying names simply fails to match a
+    /// shape expecting `n` positional arguments (the safe direction); and it
+    /// cannot desync, which a parallel `Vec<Option<String>>` could.
+    ///
+    /// Empty for every call written before this existed, and the elaborator's
+    /// resolution pass is a no-op when it is empty — a call with no named
+    /// argument takes the path it took before, byte for byte.
+    App { head: Box<Expr>, args: Vec<Expr>, named: Vec<NamedArg>, explicit: bool },
     /// `f<A, B>` — explicit type application, filling a declaration's leading
     /// type parameters positionally (docs/surface-polymorphism.md §1). Kept
     /// **separate** from `App` rather than a field on it: every existing
@@ -867,7 +915,7 @@ pub enum ExprKind {
     /// two needs the receiver's type, so it cannot happen here. The old
     /// desugaring survives as the fallback for every non-field name, which is
     /// what keeps `p.sym()`, `p.inj(1)` and `xs.map(f)` working unchanged.
-    Dot { recv: Box<Expr>, name: String, args: Option<Vec<Expr>> },
+    Dot { recv: Box<Expr>, name: String, args: Option<Vec<Expr>>, named: Vec<NamedArg> },
     /// `xs[i]` — indexing a vector at a `Fin` index
     /// (docs/surface-fin-indexing-design.md §5). A **postfix** form, produced
     /// in `postfix`'s loop beside `Dot` and the call `(`, so `[1,2,3][0]` and

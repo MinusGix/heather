@@ -340,7 +340,7 @@ theorem lt_succ_self(n: Nat): n < Succ(n) { le_refl(n) }
 // Both directions are the identity: `Lt(n, Succ m)` and `Le(n, m)` are one
 // type. The `Iff` exists to be *cited*, not to do work.
 theorem lt_succ_iff_le(n, m: Nat): Iff<Lt(n, Succ(m)), Le(n, m)> {
-    Iff(λ (h: Lt(n, Succ(m))) => h, λ (h: Le(n, m)) => h)
+    Iff(mp := λ (h: Lt(n, Succ(m))) => h, mpr := λ (h: Le(n, m)) => h)
 }
 
 // Irreflexivity, which is `Le(Succ n, n) -> False` and recurses to the base
@@ -522,8 +522,8 @@ theorem le_add_r(n, m: Nat): m <= add(n, m) {
 // definition — which is what makes the definition swappable later.
 theorem le_iff_exists_add(n, m: Nat): Iff<Le(n, m), Exists(λ (k: Nat) => add(n, k) = m)> {
     Iff(
-        λ (h: Le(n, m)) => Exists(sub(m)(n), le_add(n)(m, h)),
-        λ (h: Exists(λ (k: Nat) => add(n, k) = m)) =>
+        mp := λ (h: Le(n, m)) => Exists(sub(m)(n), le_add(n)(m, h)),
+        mpr := λ (h: Exists(λ (k: Nat) => add(n, k) = m)) =>
             j(h.proof, λ y q => Le(n, y), le_add_l(n, h.witness)),
     )
 }

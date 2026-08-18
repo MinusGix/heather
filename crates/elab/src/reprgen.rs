@@ -1102,14 +1102,22 @@ fn self_call_children(e: &Expr, op: &str, rec_ix: usize) -> Vec<String> {
 fn walk(e: &Expr, f: &mut impl FnMut(&Expr)) {
     f(e);
     match &e.kind {
-        ExprKind::App { head, args, .. } => {
+        ExprKind::App { head, args, named, .. } => {
             walk(head, f);
             for a in args {
                 walk(a, f);
             }
+            for a in named {
+                walk(&a.expr, f);
+            }
         }
         ExprKind::TyApp { head, .. } => walk(head, f),
-        ExprKind::Dot { recv, .. } => walk(recv, f),
+        ExprKind::Dot { recv, named, .. } => {
+            walk(recv, f);
+            for a in named {
+                walk(&a.expr, f);
+            }
+        }
         _ => {}
     }
 }
@@ -1383,7 +1391,7 @@ fn vars_outside_self_calls(e: &Expr, op: &str, rec_ix: usize) -> Vec<String> {
     fn go(e: &Expr, op: &str, rec_ix: usize, out: &mut Vec<String>) {
         match &e.kind {
             ExprKind::Var(v) => out.push(v.clone()),
-            ExprKind::App { head, args, .. } => {
+            ExprKind::App { head, args, named, .. } => {
                 if matches!(&head.kind, ExprKind::Var(h) if h == op) {
                     // The recursion argument is the one position a recursive
                     // child legitimately appears in.
@@ -1392,11 +1400,21 @@ fn vars_outside_self_calls(e: &Expr, op: &str, rec_ix: usize) -> Vec<String> {
                             go(a, op, rec_ix, out);
                         }
                     }
+                    // A *named* argument is never the recursion argument: the
+                    // fragment's self-call is positional (a named self-call is
+                    // refused outright), so every one of these is an ordinary
+                    // occurrence.
+                    for a in named {
+                        go(&a.expr, op, rec_ix, out);
+                    }
                     return;
                 }
                 go(head, op, rec_ix, out);
                 for a in args {
                     go(a, op, rec_ix, out);
+                }
+                for a in named {
+                    go(&a.expr, op, rec_ix, out);
                 }
             }
             ExprKind::TyApp { head, .. } => go(head, op, rec_ix, out),

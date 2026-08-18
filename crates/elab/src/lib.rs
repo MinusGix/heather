@@ -71,7 +71,7 @@ use heather_kernel::term::{
 use heather_kernel::typing::{self, TypeError, DEFAULT_FUEL};
 use heather_syntax::{
     parse_file, Arm, Decl, DeclKind, Expr, ExprKind, Item, LamBinder, MatchForm, OnStmt, OnTarget,
-    ParseError, Span, Stmt, RecordLitField, Ty, TyKind,
+    NamedArg, ParseError, Span, Stmt, RecordLitField, Ty, TyKind,
 };
 
 mod access;
@@ -440,8 +440,13 @@ fn expr_as_ty(e: &Expr) -> Option<Ty> {
         ExprKind::Var(name) => TyKind::Named { name: name.clone(), args: vec![] },
         // `Fin(n)`, as the parser's own `expr_as_ty` reads it — the two
         // readings must not drift (docs/surface-fin-indexing-design.md §2.2).
-        ExprKind::App { head, args, explicit: false }
-            if matches!(&head.kind, ExprKind::Var(s) if s == "Fin") && args.len() == 1 =>
+        // `named.is_empty()`: this arm reads the arity off `args` alone, so
+        // `Fin(1, n := 2)` would otherwise be read as `Fin(1)` with the name
+        // dropped (docs/named-arguments-design.md §8.2).
+        ExprKind::App { head, args, named, explicit: false }
+            if matches!(&head.kind, ExprKind::Var(s) if s == "Fin")
+                && args.len() == 1
+                && named.is_empty() =>
         {
             TyKind::Fin(Box::new(args[0].clone()))
         }
@@ -2879,8 +2884,10 @@ impl Elaborator {
                 self.build_ctor_value(cx, &ind, i, &[], expected, lvl, e.span)
             }
             ExprKind::App { .. } if self.ctor_spine_expected(cx, e, expected).is_some() => {
-                let (ind, i, args) =
+                let (ind, i, args, named) =
                     self.ctor_spine_expected(cx, e, expected).expect("just checked");
+                let permuted = self.resolve_named_ctor(&ind, i, &args, &named, e.span)?;
+                let args = permuted.unwrap_or(args);
                 self.build_ctor_value(cx, &ind, i, &args, expected, lvl, e.span)
             }
             // A record literal *is* a constructor application once its fields
@@ -2898,8 +2905,8 @@ impl Elaborator {
             // `.f` resolution has to exist in *both* modes: a projection
             // synthesizes, but the method fallback may be checking-only
             // (`p.absurd()`), and routing it through inference would break it.
-            ExprKind::Dot { recv, name, args } => {
-                match self.resolve_dot(cx, recv, name, args, e.span)? {
+            ExprKind::Dot { recv, name, args, named } => {
+                match self.resolve_dot(cx, recv, name, args, named, e.span)? {
                     DotResolution::Project(t, ty, l, fskel) => match args {
                         // A bare skeletal projection in checking position:
                         // the §5.2 route with the field's skeleton, under the
@@ -2946,6 +2953,7 @@ impl Elaborator {
                                 l,
                                 fskel,
                                 args,
+                                named,
                                 Some(expected),
                                 e.span,
                             )?;
@@ -2964,6 +2972,7 @@ impl Elaborator {
                             l,
                             fskel,
                             &dargs,
+                            named,
                             Some(expected),
                             e.span,
                         )?;
@@ -3408,17 +3417,17 @@ impl Elaborator {
             // `xs[i]` — infers, since the element type comes off the receiver
             // (docs/surface-fin-indexing-design.md §5.2).
             ExprKind::Index { recv, idx } => self.elab_vec_nth(cx, recv, idx, e.span),
-            ExprKind::Dot { recv, name, args } => {
-                match self.resolve_dot(cx, recv, name, args, e.span)? {
+            ExprKind::Dot { recv, name, args, named } => {
+                match self.resolve_dot(cx, recv, name, args, named, e.span)? {
                     DotResolution::Project(t, ty, l, fskel) => match args {
                         None => Ok((t, ty, l)),
-                        Some(args) => {
-                            self.apply_projection(cx, name, t, ty, l, fskel, args, expected, e.span)
-                        }
+                        Some(args) => self.apply_projection(
+                            cx, name, t, ty, l, fskel, args, named, expected, e.span,
+                        ),
                     },
-                    DotResolution::Dispatch(t, ty, l, fskel, dargs) => {
-                        self.apply_projection(cx, name, t, ty, l, fskel, &dargs, expected, e.span)
-                    }
+                    DotResolution::Dispatch(t, ty, l, fskel, dargs) => self.apply_projection(
+                        cx, name, t, ty, l, fskel, &dargs, named, expected, e.span,
+                    ),
                     DotResolution::Method(m) => self.elab_infer_at(cx, &m, expected),
                 }
             }
@@ -3496,7 +3505,7 @@ impl Elaborator {
             // applied first; what happens to the remaining `{}`-implicits is
             // `@`'s business and not `<…>`'s — the two are orthogonal knobs
             // (issues/at-and-type-arguments.md).
-            ExprKind::App { head, args, explicit }
+            ExprKind::App { head, args, named, explicit }
                 if matches!(head.kind, ExprKind::TyApp { .. }) =>
             {
                 let ExprKind::TyApp { head: callee, args: tyargs } = &head.kind else {
@@ -3507,7 +3516,15 @@ impl Elaborator {
                 // application path at all; the type arguments *are* the
                 // instantiation, which is what `infer_ctor` otherwise has to
                 // guess (docs/surface-polymorphism.md §10.3).
-                if let Some(r) = self.ctor_at(cx, callee, tyargs, args, e.span) {
+                if let ExprKind::Var(cn) = &callee.kind
+                    && let Some((ind, ci)) = self.ctor_here(cx, cn)
+                {
+                    let permuted = self.resolve_named_ctor(&ind, ci, args, named, e.span)?;
+                    let args = permuted.as_deref().unwrap_or(args);
+                    if let Some(r) = self.ctor_at(cx, callee, tyargs, args, e.span) {
+                        return r;
+                    }
+                } else if let Some(r) = self.ctor_at(cx, callee, tyargs, args, e.span) {
                     return r;
                 }
                 // `map<A, B>(f, tail)` — the recursive call *with its type
@@ -3519,15 +3536,34 @@ impl Elaborator {
                     && cx.selfref.as_ref().is_some_and(|s| s.name == *n)
                 {
                     self.check_self_tyargs(cx, tyargs, head.span)?;
+                    self.refuse_named(
+                        &format!("a recursive call to `{n}`"),
+                        "the termination guard reads *which position* decreases, so a                          self-call's arguments stay where the declaration put them",
+                        named,
+                    )?;
                     return self.elab_self_call(cx, args, *explicit, e.span);
                 }
                 let (name, t, ty, lvl, mask) =
                     self.elab_ty_app(cx, callee, tyargs, head.span)?;
+                let params = self.params_of(&name);
+                let flat;
+                let full = if !*explicit && mask.iter().any(|&b| b) {
+                    &mask[..]
+                } else {
+                    flat = vec![false; mask.len()];
+                    &flat[..]
+                };
+                let r =
+                    self.resolve_named(&name, false, &params, tyargs.len(), full, args, named, e.span)?;
+                let (args, mask): (&[Expr], &[bool]) = match &r {
+                    Some((a, m)) => (&a[..], &m[..]),
+                    None => (&args[..], &mask[..]),
+                };
                 if !*explicit && mask.iter().any(|&b| b) {
                     self.apply_implicit(
                         cx,
                         &name,
-                        self.params_of(&name),
+                        Rc::clone(&params),
                         false,
                         tyargs.len(),
                         false,
@@ -3535,7 +3571,7 @@ impl Elaborator {
                         ty,
                         lvl,
                         args,
-                        &mask,
+                        mask,
                         expected,
                         e.span,
                     )
@@ -3546,7 +3582,7 @@ impl Elaborator {
                     self.apply_explicit(
                         cx,
                         Some(&name),
-                        self.params_of(&name),
+                        params,
                         tyargs.len(),
                         t,
                         ty,
@@ -3560,12 +3596,19 @@ impl Elaborator {
             // it infer: the head alone (`Cons(1)`) has no inferable type, but
             // the whole spine does (docs/constructor-function-values.md §3).
             ExprKind::App { .. } if e.as_named().is_none() && self.ctor_spine(cx, e).is_some() => {
-                let (ind, i, args) = self.ctor_spine(cx, e).expect("just checked");
+                let (ind, i, args, named) = self.ctor_spine(cx, e).expect("just checked");
+                let permuted = self.resolve_named_ctor(&ind, i, &args, &named, e.span)?;
+                let args = permuted.unwrap_or(args);
                 self.infer_ctor(cx, &ind, i, &args, e.span)
             }
             // An application whose head is *not* a name: no parameter
             // metadata exists for it, so it is always explicit.
-            ExprKind::App { head, args, explicit } if e.as_named().is_none() => {
+            ExprKind::App { head, args, named, explicit } if e.as_named().is_none() => {
+                self.refuse_named(
+                    "a call whose head is an expression",
+                    "named arguments need a callee whose parameters have names, and only a                      *name* has a parameter table here (docs/named-arguments-design.md §7)",
+                    named,
+                )?;
                 if *explicit {
                     return err(
                         "`@` suppresses implicit-argument insertion, which only applies \
@@ -3576,9 +3619,35 @@ impl Elaborator {
                 let (h, hty, hlvl) = self.elab_infer(cx, head)?;
                 self.apply_explicit(cx, None, Rc::new(Vec::new()), 0, h, hty, hlvl, args)
             }
-            ExprKind::App { args, explicit, .. } => {
+            ExprKind::App { args, named, explicit, .. } => {
                 let (name, _, _) = e.as_named().expect("head is a name");
                 let name = &name.to_string();
+                // Named arguments (docs/named-arguments-design.md §8.2). Only
+                // four of this arm's paths have a parameter table — a
+                // constructor, a value head, a global, and the self-call — and
+                // everything else in it is a *builtin*: an elaborator form
+                // rather than a declaration, with no names to be called by.
+                // The test is `shadowed`'s own, which is exactly the guard
+                // every builtin arm below already carries, so the two cannot
+                // drift apart.
+                if !named.is_empty() {
+                    if cx.selfref.as_ref().is_some_and(|s| s.name == *name) {
+                        return err(
+                            format!(
+                                "a recursive call to `{name}` takes positional arguments only:                                  the termination guard reads *which position* decreases, so a                                  self-call's arguments stay where the declaration put them"
+                            ),
+                            named[0].name_span,
+                        );
+                    }
+                    if !self.shadowed(cx, name) && self.ctor_here(cx, name).is_none() {
+                        return err(
+                            format!(
+                                "`{name}` is a built-in form rather than a declaration, so it                                  has no parameter names: write its arguments positionally"
+                            ),
+                            named[0].name_span,
+                        );
+                    }
+                }
                 // `Nat::Monoid(add)` — a class at a type, at its index
                 // (docs/operation-indexed-classes-design.md §5.1). Before the
                 // ordinary application path, because an indexed class's
@@ -3713,6 +3782,8 @@ impl Elaborator {
                     );
                 }
                 if let Some((ind, i)) = self.ctor_here(cx, name) {
+                    let permuted = self.resolve_named_ctor(&ind, i, args, named, e.span)?;
+                    let args = permuted.as_deref().unwrap_or(args);
                     return self.infer_ctor(cx, &ind, i, args, e.span);
                 }
                 if cx.selfref.as_ref().is_some_and(|s| s.name == *name) {
@@ -3740,13 +3811,22 @@ impl Elaborator {
                         .as_deref()
                         .filter(|s| !*explicit && s.params.iter().any(|b| b.implicit));
                     let Some(skel) = implicit else {
+                        let flat = vec![false; params.len()];
+                        let r =
+                            self.resolve_named(name, true, &params, 0, &flat, args, named, e.span)?;
+                        let args: &[Expr] = r.as_ref().map_or(&args[..], |(a, _)| &a[..]);
                         return self.apply_explicit(
                             cx, Some(name), params, 0, head, ty, lvl, args,
                         );
                     };
                     let mask: Vec<bool> = skel.params.iter().map(|b| b.implicit).collect();
+                    let r = self.resolve_named(name, true, &params, 0, &mask, args, named, e.span)?;
+                    let (args, mask): (&[Expr], &[bool]) = match &r {
+                        Some((a, m)) => (&a[..], &m[..]),
+                        None => (&args[..], &mask[..]),
+                    };
                     return self.apply_implicit(
-                        cx, name, params, true, 0, false, head, ty, lvl, args, &mask,
+                        cx, name, params, true, 0, false, head, ty, lvl, args, mask,
                         expected, e.span,
                     );
                 }
@@ -3767,24 +3847,20 @@ impl Elaborator {
                 } else {
                     mask
                 };
+                let params = self.params_of(name);
+                // The named arguments are permuted into declaration order and
+                // the mask is adjusted here, once, so both walkers below see
+                // the positional call they have always seen (§8.3).
+                let r = self.resolve_named(name, false, &params, 0, &mask, args, named, e.span)?;
+                let (args, mask): (&[Expr], &[bool]) = match &r {
+                    Some((a, m)) => (&a[..], &m[..]),
+                    None => (&args[..], &mask[..]),
+                };
                 if !mask.iter().any(|&b| b) {
-                    self.apply_explicit(
-                        cx, Some(name), self.params_of(name), 0, head, ty, lvl, args,
-                    )
+                    self.apply_explicit(cx, Some(name), params, 0, head, ty, lvl, args)
                 } else {
                     self.apply_implicit(
-                        cx,
-                        name,
-                        self.params_of(name),
-                        false,
-                        0,
-                        false,
-                        head,
-                        ty,
-                        lvl,
-                        args,
-                        &mask,
-                        expected,
+                        cx, name, params, false, 0, false, head, ty, lvl, args, mask, expected,
                         e.span,
                     )
                 }
@@ -4690,7 +4766,12 @@ impl Elaborator {
             }
         }
         walk_expr(body, &mut |e| {
-            let ExprKind::App { head, args, explicit } = &e.kind else { return };
+            // `named: _`: a named argument on a *self-call* is refused by
+            // `elab_self_call` (a recursive call's argument positions are what
+            // the termination guard reads), so a declaration that carries one
+            // never reaches a kernel term. Skipping it here can only make this
+            // analysis less informative, never wrongly permissive.
+            let ExprKind::App { head, args, explicit, named: _ } = &e.kind else { return };
             let head = match &head.kind {
                 ExprKind::TyApp { head, .. } => head,
                 _ => head,
@@ -5374,6 +5455,7 @@ impl Elaborator {
         recv: &Expr,
         name: &str,
         args: &Option<Vec<Expr>>,
+        named: &[NamedArg],
         span: Span,
     ) -> R<DotResolution> {
         // A **type** subject, first: `A.unit`, `G.plus(x, y)`, `Nat.zero`
@@ -5478,11 +5560,34 @@ impl Elaborator {
         }
         let name = &head;
         let mut args = args.clone();
-        let at = self.subject_index(name).min(args.len());
+        // The receiver is spliced into the positional list at its parameter's
+        // index, which is how this desugaring has always worked. Named
+        // arguments do not disturb that as long as every parameter *before*
+        // the subject is still written positionally — and when one is not,
+        // the receiver has no honest position to take, so it is refused here
+        // rather than silently placed one slot early
+        // (docs/named-arguments-design.md §5.4).
+        let at = self.subject_index(name);
+        if !named.is_empty() && at > args.len() {
+            return err(
+                format!(
+                    "`{name}`'s receiver is its parameter number {}, so a method call has to                      give the arguments before it positionally: `{}` names one of them and                      leaves the receiver nowhere to go. Write the plain call `{name}(…)`",
+                    at + 1,
+                    named[0].name
+                ),
+                named[0].name_span,
+            );
+        }
+        let at = at.min(args.len());
         args.insert(at, recv.clone());
         let head = Expr { kind: ExprKind::Var(name.to_string()), span };
         Ok(DotResolution::Method(Expr {
-            kind: ExprKind::App { head: Box::new(head), args, explicit: false },
+            kind: ExprKind::App {
+                head: Box::new(head),
+                args,
+                named: named.to_vec(),
+                explicit: false,
+            },
             span,
         }))
     }
@@ -6388,19 +6493,28 @@ impl Elaborator {
     fn op_rewrite(&self, cx: &Cx, e: &Expr, expected: Option<&Type>) -> R<Option<Expr>> {
         let (sym, args, explicit) = match &e.kind {
             ExprKind::OpSymbol(s) => (s, None, false),
-            ExprKind::App { head, args, explicit } => match &head.kind {
-                ExprKind::OpSymbol(s) => (s, Some(args), *explicit),
+            ExprKind::App { head, args, named, explicit } => match &head.kind {
+                // An operator application carries the named arguments it was
+                // written with — `a.op(x := 1)` reaches here after `.`
+                // resolution — so the rewrite preserves them rather than
+                // rewriting them away.
+                ExprKind::OpSymbol(s) => (s, Some((args, named)), *explicit),
                 _ => return Ok(None),
             },
             _ => return Ok(None),
         };
         let name =
-            self.resolve_op_name(cx, sym, args.map_or(&[][..], |a| a), expected, e.span)?;
+            self.resolve_op_name(cx, sym, args.map_or(&[][..], |(a, _)| a), expected, e.span)?;
         let head = Expr { kind: ExprKind::Var(name), span: e.span };
         Ok(Some(match args {
             None => head,
-            Some(args) => Expr {
-                kind: ExprKind::App { head: Box::new(head), args: args.clone(), explicit },
+            Some((args, named)) => Expr {
+                kind: ExprKind::App {
+                    head: Box::new(head),
+                    args: args.clone(),
+                    named: named.clone(),
+                    explicit,
+                },
                 span: e.span,
             },
         }))
@@ -6746,6 +6860,235 @@ impl Elaborator {
         }
     }
 
+    /// Named arguments at a **callable** head (docs/named-arguments-design.md
+    /// §8.3): permute the written `x := e` arguments into declaration order
+    /// and hand the result to the ordinary spine walkers, which never learn
+    /// that any name was written.
+    ///
+    /// Returns the argument vector for the parameters this call fills and the
+    /// **adjusted mask** — a named implicit's or solver parameter's `true`
+    /// flips to `false`, so its slot consumes the written argument instead of
+    /// minting a meta or a resolution obligation. That flip is the whole of
+    /// the elaboration change: the flipped slot then travels
+    /// `apply_implicit`'s ordinary explicit-argument path, which already
+    /// zonks the domain against the solutions learned so far, defers a
+    /// checking-only argument at a metaful domain, and drives `unify_arg_ty`
+    /// otherwise.
+    ///
+    /// `None` — and *nothing cloned* — when no named argument was written,
+    /// which is this round's invariant: a call with no named argument reaches
+    /// the walkers with exactly the vector and mask it did before.
+    #[allow(clippy::too_many_arguments)]
+    fn resolve_named(
+        &self,
+        callee: &str,
+        value_head: bool,
+        params: &[ParamMeta],
+        param_offset: usize,
+        mask: &[bool],
+        args: &[Expr],
+        named: &[NamedArg],
+        span: Span,
+    ) -> R<Option<(Vec<Expr>, Vec<bool>)>> {
+        if named.is_empty() {
+            return Ok(None);
+        }
+        let n = mask.len();
+        let mut slots: Vec<Option<Expr>> = vec![None; n];
+        let mut written: Vec<Option<Span>> = vec![None; n];
+        let mut newmask = mask.to_vec();
+        // The positional prefix fills the explicit parameters in declaration
+        // order, exactly as it does today.
+        let mut rest = args.iter();
+        for mi in 0..n {
+            if mask[mi] {
+                continue;
+            }
+            let Some(a) = rest.next() else { break };
+            slots[mi] = Some(a.clone());
+            written[mi] = Some(a.span);
+        }
+        // Over-application spills onto the call's *result*, whose `Type::Pi`
+        // has no names at all (§4.3), so the two do not compose. Checked
+        // *after* the names below, so that a callee with no parameter table at
+        // all — where "more than it has parameters" is vacuously true — still
+        // gets §7's message about names rather than one about arity.
+        let over_applied = rest.next().is_some();
+        for na in named {
+            let Some(pi) = params.iter().position(|p| p.name == na.name) else {
+                return Err(self.no_such_param(callee, value_head, params, param_offset, mask, na));
+            };
+            let p = &params[pi];
+            if p.is_type {
+                return err(
+                    format!(
+                        "`{}` is a type parameter of `{callee}`, and a type argument is a \
+                         *type* rather than an expression — write `{callee}<…>` \
+                         (docs/named-arguments-design.md §5.3)",
+                        na.name
+                    ),
+                    na.name_span,
+                );
+            }
+            if pi < param_offset {
+                return err(
+                    format!(
+                        "`{}` is already given by `{callee}<…>`: the written type arguments \
+                         fill the leading parameters",
+                        na.name
+                    ),
+                    na.name_span,
+                );
+            }
+            let mi = pi - param_offset;
+            if mi >= n {
+                return err(
+                    format!("`{}` is not a parameter this call fills", na.name),
+                    na.name_span,
+                );
+            }
+            if written[mi].is_some() {
+                let msg = if p.is_self {
+                    format!(
+                        "`{}` is `{callee}`'s receiver parameter, so a method call `e.{callee}(…)` \
+                         already fills it — `{} := …` fills it a second time. Give it by name \
+                         only in the plain-call spelling `{callee}(…)`",
+                        na.name, na.name
+                    )
+                } else {
+                    format!(
+                        "`{}` is given twice: once already, and again as `{} := …`",
+                        na.name, na.name
+                    )
+                };
+                return err(msg, na.name_span);
+            }
+            slots[mi] = Some(na.expr.clone());
+            written[mi] = Some(na.name_span);
+            // The third state of the mask: given by name, so the slot is
+            // filled by the written argument rather than inferred or searched.
+            newmask[mi] = false;
+        }
+        if over_applied {
+            return err(
+                format!(
+                    "`{callee}` is applied to more arguments than it has parameters, and a \
+                     named argument cannot name one past the end: the extra arguments apply \
+                     to the *result* of the call, whose type binds no parameter names"
+                ),
+                named[0].span,
+            );
+        }
+        // No gaps (§4.3): an explicit parameter the named arguments jumped
+        // over has nothing to put in its spine position.
+        let mut out = Vec::with_capacity(n);
+        for (mi, slot) in slots.into_iter().enumerate() {
+            match slot {
+                Some(e) => out.push(e),
+                None if newmask[mi] => {}
+                None => {
+                    let what = params
+                        .get(mi + param_offset)
+                        .map_or_else(|| format!("parameter {}", mi + 1), |p| format!("`{}`", p.name));
+                    return err(
+                        format!(
+                            "`{callee}` is applied to too few arguments: {what} has none. A call \
+                             that names an argument has to fill every parameter before it — \
+                             partial application and named arguments do not compose"
+                        ),
+                        span,
+                    );
+                }
+            }
+        }
+        Ok(Some((out, newmask)))
+    }
+
+    /// The refusal for a named argument whose name no parameter has
+    /// (docs/named-arguments-design.md §7): two messages, because a callee
+    /// with no parameter *names* is a different situation from a typo.
+    fn no_such_param(
+        &self,
+        callee: &str,
+        value_head: bool,
+        params: &[ParamMeta],
+        param_offset: usize,
+        mask: &[bool],
+        na: &NamedArg,
+    ) -> ElabError {
+        // `#i` is what `skel_params` gives a binder that was never named. It
+        // is unspellable — no identifier starts with `#` — so it can never be
+        // *matched* by accident; this message is the only way to reach one.
+        let nameable: Vec<&str> = params
+            .iter()
+            .skip(param_offset)
+            .take(mask.len())
+            .filter(|p| !p.is_type && !p.name.starts_with('#'))
+            .map(|p| p.name.as_str())
+            .collect();
+        let msg = if nameable.is_empty() && value_head {
+            format!(
+                "`{callee}` is a value whose type binds no parameter names, so its arguments \
+                 are positional (issues/implicit-binders-in-function-types.md). Write the \
+                 argument positionally, or annotate the binder — `(x: T) -> …`"
+            )
+        } else if nameable.is_empty() {
+            format!(
+                "`{callee}` has no named parameters to fill: write the arguments positionally"
+            )
+        } else {
+            format!(
+                "`{callee}` has no parameter named `{}` (it has: {})",
+                na.name,
+                nameable.join(", ")
+            )
+        };
+        ElabError::Elab { msg, span: na.name_span }
+    }
+
+    /// The refusal for a named argument at a head that has no parameter table
+    /// at all — a builtin arm, an expression in head position, a self-call
+    /// (docs/named-arguments-design.md §8.2). Called *centrally*, so a form
+    /// that never learned about names cannot silently drop one.
+    fn refuse_named(&self, what: &str, why: &str, named: &[NamedArg]) -> R<()> {
+        match named.first() {
+            None => Ok(()),
+            Some(na) => err(
+                format!("{what} takes positional arguments only: {why}"),
+                na.name_span,
+            ),
+        }
+    }
+
+    /// Named arguments at a **constructor** (docs/named-arguments-design.md
+    /// §6): permute by field name into field order. Shares
+    /// [`Self::permute_by_name`] with the record literal, so
+    /// `Monoid(unit := 0)` and `Monoid { unit: 0 }` cannot drift into
+    /// disagreeing about what is unknown, duplicated or missing.
+    ///
+    /// `None`, cloning nothing, when no name was written — which is what
+    /// leaves a partially applied constructor (`Cons(1)`, η-expanded against
+    /// an expected Π) on exactly the path it was on before. Naming an
+    /// argument *does* require saturating, for §4.3's reason.
+    fn resolve_named_ctor(
+        &self,
+        ind: &Inductive,
+        i: usize,
+        args: &[Expr],
+        named: &[NamedArg],
+        span: Span,
+    ) -> R<Option<Vec<Expr>>> {
+        if named.is_empty() {
+            return Ok(None);
+        }
+        let cname = ind.ctors[i].name.clone();
+        let decl: Vec<&str> =
+            ind.ctors[i].fields.iter().map(|(n, _)| n.as_deref().unwrap_or("_")).collect();
+        let written: Vec<(&str, &Expr, Span)> =
+            named.iter().map(|na| (na.name.as_str(), &na.expr, na.name_span)).collect();
+        self.permute_by_name(&cname, "field", &decl, args, &written, span).map(Some)
+    }
+
     /// A record literal (§6): permute the written fields into declaration
     /// order and hand the result to the ordinary tier-0 constructor path.
     /// Every diagnostic about *which* fields were written lives here, since
@@ -6771,18 +7114,59 @@ impl Elaborator {
         }
         let decl: Vec<&str> =
             ind.ctors[0].fields.iter().map(|(n, _)| n.as_deref().unwrap_or("_")).collect();
+        let written: Vec<(&str, &Expr, Span)> =
+            fields.iter().map(|f| (f.name.as_str(), &f.expr, f.span)).collect();
+        self.permute_by_name(name, "field", &decl, &[], &written, span)
+    }
+
+    /// Permute a by-name argument list into declaration order: the one
+    /// function behind the record literal `D { f: e }` (§6 of
+    /// docs/surface-records.md) and the named-argument constructor call
+    /// `C(f := e)` (§6 of docs/named-arguments-design.md).
+    ///
+    /// One function rather than two, because these two spellings say the same
+    /// thing and their diagnostics must not be able to disagree about what is
+    /// unknown, what is duplicated and what is missing.
+    ///
+    /// `positional` is the prefix given without names (always empty for a
+    /// literal); `written` is `(name, value, span-of-the-name)`.
+    fn permute_by_name(
+        &self,
+        owner: &str,
+        noun: &str,
+        decl: &[&str],
+        positional: &[Expr],
+        written: &[(&str, &Expr, Span)],
+        span: Span,
+    ) -> R<Vec<Expr>> {
         let mut slots: Vec<Option<&Expr>> = vec![None; decl.len()];
-        for f in fields {
-            let Some(i) = decl.iter().position(|d| *d == f.name) else {
+        if positional.len() > decl.len() {
+            return err(
+                format!(
+                    "`{owner}` takes {} {noun}(s), found {}",
+                    decl.len(),
+                    positional.len() + written.len()
+                ),
+                span,
+            );
+        }
+        for (i, a) in positional.iter().enumerate() {
+            slots[i] = Some(a);
+        }
+        for (name, value, nsp) in written {
+            let Some(i) = decl.iter().position(|d| d == name) else {
+                // An unnamed field is spelled `_` in `decl` and is therefore
+                // unmatchable, which is right: a positional-only constructor
+                // gains nothing here and must not pretend to.
                 return err(
-                    format!("`{name}` has no field `{}` (it has: {})", f.name, decl.join(", ")),
-                    f.span,
+                    format!("`{owner}` has no {noun} `{name}` (it has: {})", decl.join(", ")),
+                    *nsp,
                 );
             };
             if slots[i].is_some() {
-                return err(format!("field `{}` is given twice", f.name), f.span);
+                return err(format!("{noun} `{name}` is given twice"), *nsp);
             }
-            slots[i] = Some(&f.expr);
+            slots[i] = Some(value);
         }
         let missing: Vec<&str> = decl
             .iter()
@@ -6792,7 +7176,7 @@ impl Elaborator {
             .collect();
         if !missing.is_empty() {
             return err(
-                format!("`{name}` literal is missing field(s): {}", missing.join(", ")),
+                format!("`{owner}` is missing {noun}(s): {}", missing.join(", ")),
                 span,
             );
         }
@@ -7050,20 +7434,29 @@ impl Elaborator {
     /// definitionally the saturated one — and flattening is what lets the
     /// curried spelling work in inference position, where the head alone
     /// (`Cons(1)`) has no type to infer.
-    fn ctor_spine(&self, cx: &Cx, e: &Expr) -> Option<(Rc<Inductive>, usize, Vec<Expr>)> {
-        let ExprKind::App { head, args, explicit } = &e.kind else { return None };
+    /// The named arguments of every level travel with the spine
+    /// (docs/named-arguments-design.md §6); the caller permutes the whole lot
+    /// into field order at once, so a name written at an inner level of a
+    /// curried spelling lands where it says rather than being dropped.
+    fn ctor_spine(
+        &self,
+        cx: &Cx,
+        e: &Expr,
+    ) -> Option<(Rc<Inductive>, usize, Vec<Expr>, Vec<NamedArg>)> {
+        let ExprKind::App { head, args, named, explicit } = &e.kind else { return None };
         if *explicit {
             return None;
         }
         match &head.kind {
             ExprKind::Var(name) => {
                 let (ind, i) = self.ctor_here(cx, name)?;
-                Some((ind, i, args.clone()))
+                Some((ind, i, args.clone(), named.clone()))
             }
             ExprKind::App { .. } => {
-                let (ind, i, mut prefix) = self.ctor_spine(cx, head)?;
+                let (ind, i, mut prefix, mut pnamed) = self.ctor_spine(cx, head)?;
                 prefix.extend(args.iter().cloned());
-                Some((ind, i, prefix))
+                pnamed.extend(named.iter().cloned());
+                Some((ind, i, prefix, pnamed))
             }
             _ => None,
         }
@@ -7079,20 +7472,22 @@ impl Elaborator {
         cx: &Cx,
         e: &Expr,
         expected: &Type,
-    ) -> Option<(Rc<Inductive>, usize, Vec<Expr>)> {
-        let ExprKind::App { head, args, explicit } = &e.kind else { return None };
+    ) -> Option<(Rc<Inductive>, usize, Vec<Expr>, Vec<NamedArg>)> {
+        let ExprKind::App { head, args, named, explicit } = &e.kind else { return None };
         if *explicit {
             return None;
         }
         match &head.kind {
             ExprKind::Var(name) => {
                 let (ind, i) = self.ctor_here_expected(cx, name, expected)?;
-                Some((ind, i, args.clone()))
+                Some((ind, i, args.clone(), named.clone()))
             }
             ExprKind::App { .. } => {
-                let (ind, i, mut prefix) = self.ctor_spine_expected(cx, head, expected)?;
+                let (ind, i, mut prefix, mut pnamed) =
+                    self.ctor_spine_expected(cx, head, expected)?;
                 prefix.extend(args.iter().cloned());
-                Some((ind, i, prefix))
+                pnamed.extend(named.iter().cloned());
+                Some((ind, i, prefix, pnamed))
             }
             _ => None,
         }
@@ -8145,32 +8540,38 @@ impl Elaborator {
         lvl: Level,
         fskel: Option<Rc<Skel>>,
         args: &[Expr],
+        named: &[NamedArg],
         expected: Option<&Type>,
         span: Span,
     ) -> R<(Term, Type, Level)> {
         match fskel {
             Some(skel) if skel.params.iter().any(|b| b.implicit) => {
                 let mask: Vec<bool> = skel.params.iter().map(|b| b.implicit).collect();
+                let params = skel_params(&skel);
+                let r = self.resolve_named(name, true, &params, 0, &mask, args, named, span)?;
+                let (args, mask): (&[Expr], &[bool]) = match &r {
+                    Some((a, m)) => (&a[..], &m[..]),
+                    None => (args, &mask[..]),
+                };
                 self.apply_implicit(
-                    cx,
-                    name,
-                    skel_params(&skel),
-                    true,
-                    0,
-                    false,
-                    t,
-                    ty,
-                    lvl,
-                    args,
-                    &mask,
-                    expected,
-                    span,
+                    cx, name, params, true, 0, false, t, ty, lvl, args, mask, expected, span,
                 )
             }
             Some(skel) => {
-                self.apply_explicit(cx, Some(name), skel_params(&skel), 0, t, ty, lvl, args)
+                let params = skel_params(&skel);
+                let flat = vec![false; params.len()];
+                let r = self.resolve_named(name, true, &params, 0, &flat, args, named, span)?;
+                let args = r.as_ref().map_or(args, |(a, _)| &a[..]);
+                self.apply_explicit(cx, Some(name), params, 0, t, ty, lvl, args)
             }
-            None => self.apply_explicit(cx, None, Rc::new(Vec::new()), 0, t, ty, lvl, args),
+            None => {
+                self.refuse_named(
+                    &format!("`{name}`"),
+                    "its type binds no parameter names, so its arguments are positional                      (docs/named-arguments-design.md §7)",
+                    named,
+                )?;
+                self.apply_explicit(cx, None, Rc::new(Vec::new()), 0, t, ty, lvl, args)
+            }
         }
     }
 
@@ -9822,9 +10223,13 @@ mod count_holes_impl {
             // be discharged by `refl` costs a reserved-but-unused slot and
             // nothing else (issues/auto-refl-empty-block.md).
             ExprKind::AutoRefl => *n += 1,
-            ExprKind::App { head, args, .. } => {
+            ExprKind::App { head, args, named, .. } => {
                 expr(head, n);
                 args.iter().for_each(|a| expr(a, n));
+                // A `?hole` inside a named argument is still a hole, and the
+                // pre-count is the one thing the goal mechanism cannot survive
+                // under-counting.
+                named.iter().for_each(|a| expr(&a.expr, n));
             }
             // A type argument can contain a hole (`f<a = ?p>(…)`), and the
             // pre-count is the one thing the goal mechanism cannot survive
@@ -9846,9 +10251,10 @@ mod count_holes_impl {
             // projection: the method fallback re-elaborates it as an argument,
             // and a hole is keyed by span, so one syntactic hole stays one
             // goal either way.
-            ExprKind::Dot { recv, args, .. } => {
+            ExprKind::Dot { recv, args, named, .. } => {
                 expr(recv, n);
                 args.iter().flatten().for_each(|a| expr(a, n));
+                named.iter().for_each(|a| expr(&a.expr, n));
             }
             ExprKind::RecordLit { tyargs, fields, .. } => {
                 tyargs.iter().for_each(|t| ty(t, n));
@@ -9955,9 +10361,9 @@ fn walk_expr(e: &Expr, f: &mut impl FnMut(&Expr)) {
     f(e);
     let mut go = |e: &Expr| walk_expr(e, f);
     match &e.kind {
-        ExprKind::App { head, args, .. } => {
+        ExprKind::App { head, args, named, .. } => {
             go(head);
-            args.iter().for_each(go);
+            args.iter().chain(named.iter().map(|a| &a.expr)).for_each(go);
         }
         ExprKind::TyApp { head, .. } => go(head),
         ExprKind::Lam { body, .. } => go(body),
@@ -9970,9 +10376,9 @@ fn walk_expr(e: &Expr, f: &mut impl FnMut(&Expr)) {
             go(scrut);
             arms.iter().for_each(|a| go(&a.body));
         }
-        ExprKind::Dot { recv, args, .. } => {
+        ExprKind::Dot { recv, args, named, .. } => {
             go(recv);
-            args.iter().flatten().for_each(go);
+            args.iter().flatten().chain(named.iter().map(|a| &a.expr)).for_each(go);
         }
         ExprKind::Index { recv, idx } => {
             go(recv);
