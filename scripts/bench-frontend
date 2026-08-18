@@ -39,5 +39,6 @@ cargo bench --package heather-elab --bench frontend --no-run --quiet
 # those are `lib/ir_v1.hthr` alone (~59 s per round, 3 rounds); a runaway is
 # orders of magnitude beyond it either way. `--no-heavy` is the fast loop.
 ulimit -v 8388608
-ulimit -t 1800
+# As in scripts/bench: a slower host raises the CPU cap deliberately per run.
+ulimit -t "${HEATHER_BENCH_CPU_SECS:-1800}"
 exec cargo bench --package heather-elab --bench frontend --quiet -- "$@"

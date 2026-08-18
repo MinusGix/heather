@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+# Run the bench diary on the quiet server, now, on the current HEAD.
+#
+# The server run is the dedicated cadence of
+# issues/perf-tracking-consistent-environment.md: a plain full pass of both
+# bench suites on idle low-perf hardware, appended to a dated results diary
+# (/srv/heather-bench/results/ over there). It stops the box's game servers
+# for the run and restores them after — and refuses outright while anyone is
+# playing, so this can fail politely; try again later.
+#
+# A nightly systemd timer over there does the same at 3am US-Eastern for
+# whatever was pushed last; this script is the explicit trigger.
+#
+# Usage: scripts/bench-remote
+# The ssh host (and git remote) defaults to "mc"; override with BENCH_REMOTE.
+set -euo pipefail
+cd "$(dirname "$0")/.."
+
+host="${BENCH_REMOTE:-mc}"
+git push -q "$host" HEAD:master
+exec ssh "$host" heather-bench --force

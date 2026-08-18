@@ -28,5 +28,7 @@ cargo bench --package heather-kernel --bench kernel --no-run --quiet
 # gets an explicit stack size, and the stack probe's whole job is to measure
 # depth at a size it chose, which an ambient minimum would silently raise.
 ulimit -v 4194304
-ulimit -t 1200
+# The CPU cap is sized for the desktop; a slower host (the nightly server
+# cadence) raises it deliberately per run, never removes it.
+ulimit -t "${HEATHER_BENCH_CPU_SECS:-1200}"
 exec cargo bench --package heather-kernel --bench kernel --quiet -- "$@"
