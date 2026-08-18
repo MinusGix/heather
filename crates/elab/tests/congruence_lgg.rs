@@ -332,3 +332,88 @@ fn a_witness_mismatch_inside_a_chain_is_still_loud() {
     );
     assert!(msg.contains("cannot generalize"), "expected the LGG message, got: {msg}");
 }
+
+// -- the diagnostic (issues/lgg-diagnostic-dumps-kernel-terms.md) -----------
+
+/// Every kernel term the message used to print, at the goal where that was a
+/// wall: a **lowered inductive**. Four `{:?}`d terms there are four
+/// multi-thousand-character `inl[0,0](Σ[0,0](Unit 0). …)` dumps, and the one
+/// fact the reader wants — where the walk stopped — was not recoverable from
+/// any of them.
+///
+/// The assertions are the halves of the fix plus one bound: the position, the
+/// goal spelled as surface, the endpoints spelled as surface, and *no kernel
+/// encoding at all*. A `Nat` goal would have hidden every one of them
+/// (`docs/testing-generated-terms.md`: three of five past defects here were
+/// invisible at a closed simple type), which is why the carrier is a tree.
+#[test]
+fn the_mismatch_at_a_lowered_inductive_is_readable() {
+    let msg = fails(
+        r#"
+    inductive Tree { Leaf, Node(l: Tree, r: Tree) }
+    theorem t(a: Tree, b: Tree, p: a = b):
+        Node(a, Leaf) = Node(b, Node(Leaf, Leaf))
+    {
+        cong(p)
+    }
+    "#,
+    );
+    assert!(msg.contains("cannot generalize"), "{msg}");
+    // Where the walk stopped: it agreed down a path and differed under it.
+    assert!(msg.contains("agree down through"), "{msg}");
+    // The endpoints, by name rather than by encoding.
+    assert!(msg.contains("the proof's endpoints are `a` and `b`"), "{msg}");
+    // And no kernel encoding: these are the fragments the dump was made of.
+    for wall in ["inl[", "inr[", "Σ[", "«", "El["] {
+        assert!(!msg.contains(wall), "the message still prints kernel syntax ({wall}): {msg}");
+    }
+    // The bound that says it is a sentence and not a dump. The walls ran to
+    // several thousand characters; a readable diagnostic is two lines.
+    assert!(msg.len() < 600, "the message is {} chars: {msg}", msg.len());
+}
+
+/// The goal clause, at a lowered inductive that *can* be spelled: the message
+/// states the expected type as the reader wrote it.
+///
+/// Why the pair of tests is two and not one: a **recursive** declaration lowers
+/// through `Wf` with its shape behind a generated global, and `display.rs` has
+/// no reading for that — [[display-inductive-type-arguments]]'s gap, and the
+/// reason `the_mismatch_at_a_lowered_inductive_is_readable` above does not ask
+/// for the goal. What this round guarantees at *every* goal is the position and
+/// the absence of the wall; the spelled goal is guaranteed wherever the speller
+/// can spell, and a clause that cannot be said cleanly is not said at all.
+#[test]
+fn the_diagnostic_states_the_goal_where_it_spells() {
+    let msg = fails(
+        r#"
+    inductive Col { Red, Green }
+    fn same(c: Col) -> Col { c }
+    theorem t(a: Col, b: Col, p: a = b): same(a) = Red { cong(p) }
+    "#,
+    );
+    assert!(msg.contains("cannot generalize"), "{msg}");
+    assert!(msg.contains("The goal is `same(a) = Red`"), "{msg}");
+    assert!(msg.contains("the proof's endpoints are `a` and `b`"), "{msg}");
+    assert!(msg.len() < 600, "the message is {} chars: {msg}", msg.len());
+}
+
+/// The same claim where the walk stops **under a binder** — the case whose two
+/// sides cannot be spelled at all: a subterm mentioning the λ's own variable
+/// has no reading in the reader's context, and inventing one would name their
+/// variables wrongly. The position and the goal are still named, which is the
+/// point: the message degrades by a clause, not into a dump.
+#[test]
+fn a_mismatch_under_a_binder_still_names_the_position() {
+    let msg = fails(
+        r#"
+    theorem t(a: Nat, b: Nat, p: a = b):
+        (λ (x: Nat) => x) = (λ (x: Nat) => b)
+    {
+        cong(p)
+    }
+    "#,
+    );
+    assert!(msg.contains("cannot generalize"), "{msg}");
+    assert!(msg.contains("λ"), "the path should reach the λ: {msg}");
+    assert!(msg.len() < 600, "the message is {} chars: {msg}", msg.len());
+}

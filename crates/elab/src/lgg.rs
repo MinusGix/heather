@@ -49,31 +49,97 @@
 //! agreement — they can only be reached by terms that already differ, so
 //! declining is the conservative answer.
 
+use std::fmt;
 use std::rc::Rc;
 
 use heather_kernel::term::{LocalVar, Term, Type};
 
+/// Where the walk stopped, as **data**.
+///
+/// The failure used to be a `String` built with `{:?}` on four kernel terms,
+/// which at a lowered inductive is four multi-thousand-character walls with the
+/// one useful fact — *which* subterm did not match — not recoverable from them
+/// (issues/lgg-diagnostic-dumps-kernel-terms.md). Nothing here is a rendered
+/// term: rendering wants `display.rs`'s speller and a `Cx`, and this module
+/// deliberately has neither, so the elaborator does that half and this one
+/// reports the position.
+pub(crate) struct Mismatch {
+    /// The head formers walked from the goal's root down to — but not
+    /// including — the node the walk stopped at, outermost first.
+    pub path: Vec<&'static str>,
+    /// The head former of each side at that node. The whole of why it stopped:
+    /// either they are different formers, or they are the same one with
+    /// annotations that differ.
+    pub sides: (&'static str, &'static str),
+    /// The two subterms at that node, when it is a term position. `None` at a
+    /// *type* position, where a caller that wants to spell them has a `Type`
+    /// and not a `Term`.
+    pub at: Option<(Term, Term)>,
+    /// Binders between the goal's root and the stopping node, plus the
+    /// abstraction's own `z` — what [`crate::strengthen_tm`] must drop for
+    /// [`Self::at`] to be readable in the goal's own context.
+    pub depth: u32,
+    /// The degenerate case: the proof's endpoints are the same term, so the
+    /// only congruence is the constant one and the goal's sides had to agree
+    /// outright (decision 5's second sentence). `path` is empty.
+    pub endpoints_agree: bool,
+}
+
+impl fmt::Debug for Mismatch {
+    /// [`fmt::Display`], deliberately: a derived `Debug` would print
+    /// [`Mismatch::at`]'s two kernel terms, which is the wall this type
+    /// exists to stop — and `.expect()` in a test is a user of `Debug`.
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Display::fmt(self, f)
+    }
+}
+
+impl fmt::Display for Mismatch {
+    /// The term-free half of the message: the position, and nothing that
+    /// needs a context to read. [`crate::Elaborator`] appends the spelled
+    /// expected type and endpoints.
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if self.endpoints_agree {
+            return write!(
+                f,
+                "cannot generalize: the proof's endpoints are the same term, so the only \
+                 congruence is the constant one — but the goal's two sides differ, at \
+                 `{}` against `{}`",
+                self.sides.0, self.sides.1
+            );
+        }
+        write!(f, "cannot generalize: the goal's two sides agree ")?;
+        if self.path.is_empty() {
+            write!(f, "nowhere — they differ at the root, ")?;
+        } else {
+            write!(f, "down through `{}`, and differ under it ", self.path.join(" ▸ "))?;
+        }
+        write!(f, "at `{}` against `{}`", self.sides.0, self.sides.1)
+    }
+}
 
 /// The body of `f = λ z. body`, scoped in `Γ, z` — `Ok` exactly when every
 /// position at which `x` and `y` differ is witnessed by `(s, t)`.
 ///
-/// `x`, `y`, `s` and `t` are all scoped in `Γ`; `Err` carries a message
-/// naming the mismatching position, for the caller to attach a span to.
-pub(crate) fn lgg_body(x: &Term, y: &Term, s: &Term, t: &Term) -> Result<Term, String> {
+/// `x`, `y`, `s` and `t` are all scoped in `Γ`; `Err` locates the mismatching
+/// position, for the caller to render and attach a span to.
+pub(crate) fn lgg_body(x: &Term, y: &Term, s: &Term, t: &Term) -> Result<Term, Mismatch> {
     // `s ≡ t`: no position can be witnessed by a *difference*, so the only
     // generalization is the constant one — and it exists only if the goal's
     // two sides already agree (decision 5's second sentence).
     if s == t {
         if x != y {
-            return Err(format!(
-                "the proof's endpoints are the same term ({s:?}), so the only \
-                 congruence is the constant one — but the goal's two sides differ \
-                 ({x:?} vs {y:?})"
-            ));
+            return Err(Mismatch {
+                path: Vec::new(),
+                sides: (former_tm(x), former_tm(y)),
+                at: Some((x.clone(), y.clone())),
+                depth: 0,
+                endpoints_agree: true,
+            });
         }
         return Ok(x.shift_local(1));
     }
-    let mut lgg = Lgg { s: s.clone(), t: t.clone(), witness: Vec::new() };
+    let mut lgg = Lgg { s: s.clone(), t: t.clone(), witness: Vec::new(), path: Vec::new() };
     // Both sides are weakened into `Γ, z` *first*, so every subterm the walk
     // meets is already in the body's scope and the pieces it keeps need no
     // renumbering. The witness for depth `k` is correspondingly `s` weakened
@@ -87,6 +153,72 @@ struct Lgg {
     /// `witness[k]` is `(s, t)` weakened into `Γ, z` plus `k` further
     /// binders. Memoized because the walk asks for it at every node.
     witness: Vec<(Term, Term)>,
+    /// The formers of the nodes currently being walked, outermost first —
+    /// pushed on the way down and popped only on *success*, so at a failure it
+    /// is exactly the path to the node that stopped
+    /// (issues/lgg-diagnostic-dumps-kernel-terms.md).
+    path: Vec<&'static str>,
+}
+
+/// The head former of a term, in the kernel's own vocabulary — one word, so a
+/// path built from it stays readable at a lowered inductive, where the term
+/// itself does not.
+fn former_tm(t: &Term) -> &'static str {
+    match t {
+        Term::Var(_) => "variable",
+        Term::Zero | Term::Succ(_) => "numeral",
+        Term::Lam { .. } => "λ",
+        Term::App { .. } => "application",
+        Term::Pair { .. } => "pair",
+        Term::Fst { .. } => "fst",
+        Term::Snd { .. } => "snd",
+        Term::Inl { .. } => "inl",
+        Term::Inr { .. } => "inr",
+        Term::Case { .. } => "case",
+        Term::Sup { .. } | Term::Supf { .. } => "constructor value",
+        Term::ElimW { .. } | Term::ElimWf { .. } => "recursor",
+        Term::ElimNat { .. } => "Nat eliminator",
+        Term::ElimEmpty { .. } | Term::ElimSEmpty { .. } => "absurd",
+        Term::Triv { .. } => "trivial",
+        Term::Refl { .. } | Term::SRefl { .. } => "refl",
+        Term::J { .. } => "J",
+        Term::Transp { .. } => "transp",
+        Term::GlobalTm { .. } => "global",
+        Term::TmNat | Term::TmTy(_) | Term::TmUnit { .. } | Term::TmEmpty { .. } => "type code",
+        Term::TmPi { .. }
+        | Term::TmSigma { .. }
+        | Term::TmSum { .. }
+        | Term::TmW { .. }
+        | Term::TmWf { .. }
+        | Term::TmVec { .. }
+        | Term::TmFin { .. }
+        | Term::TmSEmpty { .. } => "type code",
+        Term::TmId { .. } => "equation code",
+        Term::TmSEq { .. } => "strict-equation code",
+        // The layer-m formers, which the walk declines to enter at all.
+        _ => "code former",
+    }
+}
+
+/// [`former_tm`] at the type level.
+fn former_ty(t: &Type) -> &'static str {
+    match t {
+        Type::Nat => "Nat",
+        Type::Ty(_) => "universe",
+        Type::El { .. } => "El",
+        Type::Id { .. } => "equation",
+        Type::SEq { .. } => "strict equation",
+        Type::Pi { .. } => "function type",
+        Type::Sigma { .. } => "pair type",
+        Type::Sum { .. } => "sum type",
+        Type::W { .. } | Type::Wf { .. } => "well-founded type",
+        Type::Vec { .. } => "vector type",
+        Type::Fin { .. } => "Fin",
+        Type::Unit { .. } => "True",
+        Type::Empty { .. } | Type::SEmpty { .. } => "False",
+        Type::GlobalTy { .. } => "global type",
+        _ => "type former",
+    }
 }
 
 impl Lgg {
@@ -99,20 +231,59 @@ impl Lgg {
         x == sw && y == tw
     }
 
-    fn mismatch<T>(&self, x: &impl std::fmt::Debug, y: &impl std::fmt::Debug) -> Result<T, String> {
-        Err(format!(
-            "cannot generalize: the two sides differ at a position whose sides are \
-             `{x:?}` and `{y:?}`, but the proof's endpoints are `{:?}` and `{:?}` — \
-             every differing position has to be exactly the proof's endpoints \
-             (issues/congruence-by-anti-unification.md §3)",
-            self.s, self.t
-        ))
+    /// The path to the stopping node: everything pushed on the way down,
+    /// *minus* the node itself, whose two formers are reported separately.
+    fn ancestors(&self) -> Vec<&'static str> {
+        let mut p = self.path.clone();
+        p.pop();
+        p
+    }
+
+    fn mismatch_tm<T>(&self, x: &Term, y: &Term, k: u32) -> Result<T, Mismatch> {
+        Err(Mismatch {
+            path: self.ancestors(),
+            sides: (former_tm(x), former_tm(y)),
+            at: Some((x.clone(), y.clone())),
+            depth: k + 1,
+            endpoints_agree: false,
+        })
+    }
+
+    fn mismatch_ty<T>(&self, x: &Type, y: &Type, k: u32) -> Result<T, Mismatch> {
+        Err(Mismatch {
+            path: self.ancestors(),
+            sides: (former_ty(x), former_ty(y)),
+            at: None,
+            depth: k + 1,
+            endpoints_agree: false,
+        })
+    }
+
+    /// One term node, with its former on the path for as long as the walk is
+    /// inside it. [`Self::tm_at`] is the walk proper.
+    fn tm(&mut self, x: &Term, y: &Term, k: u32) -> Result<Term, Mismatch> {
+        self.path.push(former_tm(x));
+        let r = self.tm_at(x, y, k);
+        if r.is_ok() {
+            self.path.pop();
+        }
+        r
+    }
+
+    /// One type node, likewise.
+    fn ty(&mut self, x: &Type, y: &Type, k: u32) -> Result<Type, Mismatch> {
+        self.path.push(former_ty(x));
+        let r = self.ty_at(x, y, k);
+        if r.is_ok() {
+            self.path.pop();
+        }
+        r
     }
 
     /// One term node. `x`/`y` are scoped in `Γ, z` plus `k` binders; the
     /// result is in the same scope, with `Var(k)` wherever the abstraction
     /// variable was placed.
-    fn tm(&mut self, x: &Term, y: &Term, k: u32) -> Result<Term, String> {
+    fn tm_at(&mut self, x: &Term, y: &Term, k: u32) -> Result<Term, Mismatch> {
         // Agreement: keep it whole. Nothing inside can need a hole — a hole
         // needs a *difference*, and these subtrees are identical.
         if x == y {
@@ -523,14 +694,14 @@ impl Lgg {
             // Everything else — mismatched heads, differing level or context
             // annotations, and the layer-m code formers this module declines
             // to walk into.
-            _ => self.mismatch(x, y),
+            _ => self.mismatch_tm(x, y, k),
         }
     }
 
     /// One type node. There is no hole rule here: the abstraction variable is
     /// a *term*, so a difference between two types can only be repaired by a
     /// difference in a term it contains.
-    fn ty(&mut self, x: &Type, y: &Type, k: u32) -> Result<Type, String> {
+    fn ty_at(&mut self, x: &Type, y: &Type, k: u32) -> Result<Type, Mismatch> {
         if x == y {
             return Ok(x.clone());
         }
@@ -611,7 +782,7 @@ impl Lgg {
                 shape: Rc::new(self.ty(s1, s2, k)?),
                 arity: Rc::new(self.tm(n1, n2, k + 1)?),
             }),
-            _ => self.mismatch(x, y),
+            _ => self.mismatch_ty(x, y, k),
         }
     }
 }
@@ -693,7 +864,7 @@ mod tests {
             nat(3)
         );
         let e = lgg_body(&nat(3), &nat(4), &nat(1), &nat(1)).expect_err("no congruence");
-        assert!(e.contains("same term"), "{e}");
+        assert!(e.to_string().contains("same term"), "{e}");
     }
 
     #[test]
@@ -701,13 +872,13 @@ mod tests {
         // `Succ(0) = Succ(1)` from `p : 0 = 2`: the differing position's
         // witness is `(0, 1)`, not the proof's `(0, 2)`.
         let e = lgg_body(&nat(1), &nat(2), &nat(0), &nat(2)).expect_err("must not guess");
-        assert!(e.contains("cannot generalize"), "{e}");
+        assert!(e.to_string().contains("cannot generalize"), "{e}");
     }
 
     #[test]
     fn mismatched_heads_are_loud() {
         let e = lgg_body(&nat(1), &var(0), &nat(0), &nat(1)).expect_err("must not guess");
-        assert!(e.contains("cannot generalize"), "{e}");
+        assert!(e.to_string().contains("cannot generalize"), "{e}");
     }
 
     #[test]
@@ -740,7 +911,31 @@ mod tests {
         };
         let e = lgg_body(&lam(var(0)), &lam(var(1)), &var(1), &var(0))
             .expect_err("the bound variable is not the proof's endpoint");
-        assert!(e.contains("cannot generalize"), "{e}");
+        assert!(e.to_string().contains("cannot generalize"), "{e}");
+    }
+
+    #[test]
+    fn the_failure_carries_the_path_to_the_stopping_node() {
+        // The same shape, read as *data*: the walk agreed through the λ and
+        // the `Succ`, and stopped at the two variables under them. This is
+        // what replaced four `{:?}`d kernel terms
+        // (issues/lgg-diagnostic-dumps-kernel-terms.md), and it is asserted
+        // here rather than through a rendered string because the rendering
+        // belongs to the elaborator.
+        let lam = |b: Term| Term::Lam {
+            dom_level: Level::Zero,
+            cod_level: Level::Zero,
+            dom: Rc::new(Type::Nat),
+            body: Rc::new(Term::Succ(Rc::new(b))),
+        };
+        let e = lgg_body(&lam(var(0)), &lam(var(1)), &var(1), &var(0)).expect_err("no congruence");
+        assert_eq!(e.path, vec!["λ", "numeral"]);
+        assert_eq!(e.sides, ("variable", "variable"));
+        // Two binders between the goal's root and the stopping node: the
+        // abstraction's own `z` and the λ's.
+        assert_eq!(e.depth, 2);
+        assert!(e.at.is_some(), "a term position carries its two sides");
+        assert!(e.to_string().contains("`λ ▸ numeral`"), "{e}");
     }
 
     #[test]

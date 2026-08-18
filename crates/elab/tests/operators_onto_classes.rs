@@ -317,7 +317,11 @@ fn the_designation_declaration_refuses_by_name() {
     let e = bad("designation + at Nat := add");
     assert!(e.contains("already designates"), "{e}");
     assert!(e.contains("nat::add"), "{e}");
-    assert!(e.contains("one entry per (symbol, carrier head)"), "{e}");
+    // One entry per (symbol, **resolved** carrier): the key stopped being a
+    // spelling in issues/designation-key-collides-across-modules.md, and the
+    // sentence says so — `crates/elab/tests/designation_resolved_key.rs`.
+    assert!(e.contains("one entry per (symbol, carrier)"), "{e}");
+    assert!(e.contains("**resolved** carrier"), "{e}");
     // ... and the reason two operations at one carrier are not a duplicate.
     assert!(e.contains("two *symbols*"), "{e}");
 
