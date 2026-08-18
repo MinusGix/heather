@@ -2250,16 +2250,23 @@ impl Elaborator {
                     .names
                     .iter()
                     .zip(&g.cx.gamma.entries)
+                    .enumerate()
                     // `#`-prefixed binders are the elaborator's own (a `match`
                     // arm's hidden ih); they are unspellable, so listing them
-                    // would only mislead.
-                    .filter(|(n, _)| !n.starts_with('#'))
-                    .map(|(n, e)| (n.clone(), self.display_type(&g.cx, &e.ty)))
-                    .chain(
-                        g.cx.aliases
-                            .iter()
-                            .map(|a| (a.name.clone(), self.display_type(&g.cx, &a.ty))),
-                    )
+                    // would only mislead. Filtering by position, after
+                    // `enumerate`, so a hidden binder still occupies its index.
+                    .filter(|(_, (n, _))| !n.starts_with('#'))
+                    // Entry `i`'s type is scoped in the first `i` binders, not
+                    // in the whole of Γ — `p: add(a, 0) = a` printed against
+                    // full Γ reads back as `add(p, 0) = p`.
+                    .map(|(i, (n, e))| (n.clone(), self.display_type(&g.cx.prefix(i), &e.ty)))
+                    .chain(g.cx.aliases.iter().map(|a| {
+                        // Same for an alias: its type is stored scoped at the
+                        // depth it was bound at (which is why a *use* shifts by
+                        // `names.len() - depth`), so that prefix is where it
+                        // reads correctly.
+                        (a.name.clone(), self.display_type(&g.cx.prefix(a.depth), &a.ty))
+                    }))
                     .collect(),
                 origin: g
                     .origin
@@ -9711,6 +9718,23 @@ impl Cx {
 
     fn push(&mut self, name: String, ty: Type, level: Level) {
         self.push_skel(name, ty, level, None);
+    }
+
+    /// This context cut back to its first `n` binders — the context in which a
+    /// binder at position `n`, or an [`Alias`] bound at `depth == n`, has its
+    /// type scoped. Display only: a stored type is scoped in the *prefix* of Γ
+    /// that precedes its binder, so rendering it against the whole of Γ reads
+    /// every de Bruijn index one or more names too late
+    /// (issues/goal-context-entry-printed-in-the-wrong-context.md). The
+    /// context's base is kept — a prefix of Γ shares it — and everything that
+    /// is not a binder rides along unchanged, since nothing on the display
+    /// path indexes into those positionally.
+    fn prefix(&self, n: usize) -> Cx {
+        let mut out = self.clone();
+        out.names.truncate(n);
+        out.gamma.entries = self.gamma.entries.prefix(n);
+        out.skels.truncate(n);
+        out
     }
 
     /// [`Cx::push`] for the sites that carry an implicitness skeleton: the
