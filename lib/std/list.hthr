@@ -346,10 +346,7 @@ theorem take_append_drop<A>(xs: List<A>):
 theorem len_filter<A>(xs: List<A>, p: A -> Bool): len(filter(xs, p)) <= len(xs) {
     match xs {
         Nil => trivial,
-        Cons(h, t) => match p(h) as λ b =>
-            len(match b { True => Cons(h, filter(t, p)), False => filter(t, p) })
-                <= Succ(len(t))
-        {
+        Cons(h, t) => match p(h) {
             True => len_filter(t, p),
             False => le_succ_r(len(filter(t, p)), len(t), len_filter(t, p)),
         },
@@ -372,27 +369,20 @@ theorem len_filter<A>(xs: List<A>, p: A -> Bool): len(filter(xs, p)) <= len(xs) 
 // three lines of hand-written motive for a rewrite under a `match` context
 // (issues/congruence-by-anti-unification.md).
 //
-// All three write their own inner motive, and writing it means unfolding
-// `filter` by hand into the `match p(h)` it reduces to. That, and not the
-// equation, is the tax this section actually pays — seven times across L2′ and
-// L3, ten counting what stood before them
-// (issues/goal-motive-by-scrutinee-abstraction.md).
+// All three USED to write their own inner motive, which meant unfolding
+// `filter` by hand into the `match p(h)` it reduces to — ten sites across the
+// two list files, and the tax this section actually paid. Motive synthesis now
+// reduces the goal and abstracts what it is stuck on, so the `as λ b => …`
+// is gone from all of them and only the mathematics is left
+// (issues/goal-motive-by-scrutinee-abstraction.md, closed 2026-08-17;
+// docs/goal-motive-synthesis-design.md).
 
 theorem filter_append<A>(xs, ys: List<A>, p: A -> Bool):
     filter(append(xs, ys), p) = append(filter(xs, p), filter(ys, p))
 {
     match xs {
         Nil => {},
-        Cons(h, t) => match p(h) as λ b =>
-            (match b {
-                True => Cons(h, filter(append(t, ys), p)),
-                False => filter(append(t, ys), p),
-            })
-            = append(match b {
-                True => Cons(h, filter(t, p)),
-                False => filter(t, p),
-            }, filter(ys, p))
-        {
+        Cons(h, t) => match p(h) {
             True => cong_cons(h, filter_append(t, ys, p)),
             False => filter_append(t, ys, p),
         },
@@ -400,24 +390,18 @@ theorem filter_append<A>(xs, ys: List<A>, p: A -> Bool):
 }
 
 // Idempotence, and the one proof in the file that needs the scrutinee's own
-// equation. The `(p(h) = b) ->` in the motive and the trailing `(refl)` are the
-// convoy; the `j` inside the `True` arm is what the convoy is FOR — it moves the
-// goal's second, unreachable `p(h)` to `True` so that `filter` steps there too.
+// equation. `match e : p(h)` is the convoy, one token; the `j` inside the
+// `True` arm is what the convoy is FOR — it moves the goal's second,
+// unreachable `p(h)` to `True` so that `filter` steps there too. The two
+// features compose with nothing to say to each other: the equation binding
+// decorates whatever motive synthesis hands it
+// (docs/goal-motive-synthesis-design.md §6).
 theorem filter_filter<A>(xs: List<A>, p: A -> Bool):
     filter(filter(xs, p), p) = filter(xs, p)
 {
     match xs {
         Nil => {},
-        Cons(h, t) => match e : p(h) as λ b =>
-            filter(match b {
-                True => Cons(h, filter(t, p)),
-                False => filter(t, p),
-            }, p)
-            = match b {
-                True => Cons(h, filter(t, p)),
-                False => filter(t, p),
-            }
-        {
+        Cons(h, t) => match e : p(h) {
             True =>
                 j(sym(e),
                   λ y q =>
@@ -439,16 +423,7 @@ theorem filter_map<A, B>(xs: List<A>, f: A -> B, p: B -> Bool):
 {
     match xs {
         Nil => {},
-        Cons(h, t) => match p(f(h)) as λ b =>
-            (match b {
-                True => Cons(f(h), filter(map(t, f), p)),
-                False => filter(map(t, f), p),
-            })
-            = map(match b {
-                True => Cons(h, filter(t, λ (a: A) => p(f(a)))),
-                False => filter(t, λ (a: A) => p(f(a))),
-            }, f)
-        {
+        Cons(h, t) => match p(f(h)) {
             True => cong_cons(f(h), filter_map(t, f, p)),
             False => filter_map(t, f, p),
         },
@@ -663,12 +638,7 @@ theorem mem_filter<A>(xs: List<A>, a: A, p: A -> Bool):
 {
     match xs {
         Nil => λ m => false_elim(m),
-        Cons(h, t) => match p(h) as λ b =>
-            Mem(a, match b {
-                True => Cons(h, filter(t, p)),
-                False => filter(t, p),
-            }) -> Or<a = h, Mem(a, t)>
-        {
+        Cons(h, t) => match p(h) {
             True => λ m => match m {
                 Inl(e) => Inl(e),
                 Inr(m2) => Inr(mem_filter(t, a, p, m2)),

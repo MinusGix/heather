@@ -340,3 +340,39 @@ fn global_local_commute_weakening_focus() {
                 .apply_local(&delta.apply_global(&sigma)));
     }
 }
+
+/// Abstraction inverts substitution: `T.abstract_local(p)[p/z] = T`, whatever
+/// subset of the occurrences the walk found
+/// (`docs/goal-motive-synthesis-design.md` §3). This is the whole soundness
+/// argument for motive synthesis — the eliminator's obligation `M[e/z] ≡ T` —
+/// so it is a law and not a unit test, and it is checked at a *random* pattern
+/// as well as at a variable, since the operation's point is that the pattern
+/// need not be one.
+#[test]
+fn abstraction_inverts_substitution() {
+    for seed in 0..CASES {
+        let mut r = Rng::new(seed ^ 0x94d049bb133111eb);
+        let sc = gen_scope(&mut r);
+        if sc.local.len == 0 {
+            continue;
+        }
+        let t = gen_term(&sc, &mut r, BUDGET);
+        // An `Id` over the same term twice: two positions, so a walk that
+        // replaces one and not the other still has to round-trip.
+        let ty = Type::Id {
+            level: Level::Zero,
+            ty: Rc::new(Type::Nat),
+            lhs: Rc::clone(&t),
+            rhs: Rc::clone(&t),
+        };
+        let gamma = materialize(&sc, sc.local);
+        let pats = [
+            Rc::new(Term::Var(LocalVar(r.below(sc.local.len)))),
+            gen_term(&sc, &mut r, BUDGET),
+        ];
+        for p in pats {
+            let Some(m) = ty.abstract_local(&p) else { continue };
+            law!(seed, m.apply_local(&LocalSubst::id(&gamma).extended(Rc::clone(&p))), ty);
+        }
+    }
+}

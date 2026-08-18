@@ -163,6 +163,12 @@ pub struct GoalReport {
 /// elaboration fuel: exhausting it must only make the message less pretty.
 const DISPLAY_DECODE_STEPS: usize = 32;
 
+/// How many stuck positions of a reduced goal motive synthesis will consider
+/// (`docs/goal-motive-synthesis-design.md` §4.4). Each costs one conversion
+/// call, so this is a *budget* and not a limit anyone should hit: the goals
+/// that need it are blocked on one or two positions per side.
+const STUCK_CANDIDATES: u32 = 64;
+
 /// The lowering selected for an indexed inductive declaration.
 ///
 /// Exposed as a small piece of elaboration metadata so a benchmark or test
@@ -2742,12 +2748,14 @@ impl Elaborator {
             // the kernel's `BoxTm` (docs/in-language-map-design.md §5).
             ExprKind::Quote(payload) => self.elab_quote(cx, payload, expected, e.span),
             ExprKind::Match { form, motive: None, scrut, arms, eqbind, generated } => {
-                // Stage-2 motive synthesis (issues/elab-stage2-metas.md): when
-                // the scrutinee is a local variable, abstract it out of the
-                // expected type so the motive is genuinely dependent; otherwise
-                // fall back to the non-dependent motive (expected under `z`).
+                // Stage-2 motive synthesis (issues/elab-stage2-metas.md,
+                // docs/goal-motive-synthesis-design.md): abstract the
+                // scrutinee out of the expected type so the motive is
+                // genuinely dependent; the non-dependent motive (expected
+                // under `z`) is what "no occurrence anywhere" falls back to.
                 let (scrut_t, scrut_ty, scrut_lvl) = self.elab_infer(cx, scrut)?;
-                let motive = self.synth_motive(cx, &scrut_t, &scrut_ty, &scrut_lvl, expected);
+                let motive =
+                    self.synth_motive(cx, &scrut_t, &scrut_ty, &scrut_lvl, expected, e.span);
                 let Some(h) = eqbind else {
                     return self.elab_match(
                         cx, *form, *generated, arms, scrut_t, &scrut_ty, &scrut_lvl, motive,
@@ -5202,16 +5210,19 @@ impl Elaborator {
     }
 
     /// Synthesize the dependent motive for a motive-less `match` in checking
-    /// position. If the scrutinee elaborates to a local variable `x`, the
-    /// motive over `Γ, z : Nat` is the expected type with every occurrence of
-    /// `x` abstracted to `z` (the "clear-and-generalize" move); otherwise the
-    /// scrutinee is not a variable and no dependency can be recovered, so we
-    /// fall back to the non-dependent motive (expected, weakened under `z`).
+    /// position: the expected type with every occurrence of the **scrutinee**
+    /// abstracted to `z` (the "clear-and-generalize" move), and the
+    /// non-dependent motive (expected, weakened under `z`) only when there is
+    /// nothing to abstract. `docs/goal-motive-synthesis-design.md` is the
+    /// design; §4 is this ladder and why it is climbed in this order.
     ///
-    /// Both branches are pure kernel substitutions — no metas. The abstraction
-    /// is `expected↑¹` (weaken into `Γ, z`) composed with the swap
-    /// `Var(x+1) ↦ z`; applying `[x/z]` to it recovers `expected`, which is
-    /// exactly the eliminator's motive obligation `M[scrut/z] = expected`.
+    /// Whatever rung answers, the eliminator's obligation `M[scrut/z] =
+    /// expected` holds: [`Type::abstract_local`] only ever replaces a position
+    /// that literally *was* the scrutinee, so substituting it back is the
+    /// identity. The last rung weakens that to "≡ up to conversion" twice over
+    /// — it reduces the goal, and it accepts a position convertible to the
+    /// scrutinee rather than equal to it — and conversion is what the
+    /// obligation is checked at anyway.
     fn synth_motive(
         &self,
         cx: &Cx,
@@ -5219,23 +5230,118 @@ impl Elaborator {
         scrut_ty: &Type,
         scrut_lvl: &Level,
         expected: &Type,
+        span: Span,
     ) -> Type {
-        // Weaken the expected type into `Γ, z` (z = LocalVar 0, unused).
-        let weak = expected.shift_local(1);
-        let Term::Var(LocalVar(i)) = scrut_t else {
-            return weak;
+        // The field-binder reading of the scrutinee, computed once: `None`
+        // for every scrutinee that is not a projection path, which is the
+        // common one.
+        let rewrap = field_rewrap(scrut_t);
+        // Rungs 1 and 2, on the goal as written. No program that checks today
+        // gets past here, and rung 1 — a variable scrutinee occurring in the
+        // goal — is one traversal and no reduction.
+        if let Some(m) = abstract_scrut(expected, scrut_t, &rewrap) {
+            return m;
+        }
+        // Rung 3: the occurrence is one *unfolding of the goal* away —
+        // `filter(Cons(h, t), p)` mentions `p(h)` only after it reduces
+        // (issues/goal-motive-by-scrutinee-abstraction.md). Reducing the goal
+        // is deliberately last: it is the only rung that spends fuel.
+        let Some(exposed) = self.expose(cx, expected, span) else {
+            return expected.shift_local(1);
         };
-        // Swap substitution over `Γ, z`: identity except the (shifted)
-        // scrutinee `Var(i+1)` maps to `z = Var(0)`.
-        let mut ext = cx.gamma.clone();
-        ext.entries
-            .push(CtxEntry { ty: Rc::new(scrut_ty.clone()), level: scrut_lvl.clone() });
-        let mut swap = LocalSubst::id(&ext);
-        // `id` puts the outermost entry at index 0: `Var(i+1)` sits at
-        // position `|Γ| - 1 - i` (see LocalSubst::id).
-        let g = cx.gamma.entries.len() as u32;
-        swap.terms[(g - 1 - i) as usize] = Rc::new(Term::Var(LocalVar(0)));
-        weak.apply_local(&swap)
+        if let Some(m) = self.abstract_stuck(cx, &exposed, scrut_t, scrut_ty, scrut_lvl) {
+            return m;
+        }
+        if let Some(m) = abstract_scrut(&exposed, scrut_t, &rewrap) {
+            return m;
+        }
+        expected.shift_local(1)
+    }
+
+    /// Abstract, out of a **reduced** goal, every position it is stuck on that
+    /// *is* the scrutinee — decided by conversion, not by spelling
+    /// (`docs/goal-motive-synthesis-design.md` §4.4).
+    ///
+    /// Conversion rather than `==` because reduction respells: unfolding
+    /// `filter(append(Cons(h, t), ys), p)` rebuilds the cons cell, so the
+    /// `p(h)` it is blocked on is `p` applied to a projection *of a literal
+    /// pair* — the same term, one Σ-β from the scrutinee as elaborated. A
+    /// syntactic pass finds the goal's other side and not this one, and half
+    /// an abstraction is worse than none: the arms then face a goal
+    /// specialized on the left and stuck on the right.
+    ///
+    /// Everything that converts is abstracted in one pass, so all spellings
+    /// become the same `z`. The obligation survives: each abstracted position
+    /// held something convertible to the scrutinee, so `M[scrut/z]` is
+    /// convertible to the goal, which is what the kernel checks.
+    fn abstract_stuck(
+        &self,
+        cx: &Cx,
+        exposed: &Type,
+        scrut_t: &Term,
+        scrut_ty: &Type,
+        scrut_lvl: &Level,
+    ) -> Option<Type> {
+        let mut cands = Vec::new();
+        let mut budget = STUCK_CANDIDATES;
+        stuck_in_ty(exposed, &mut cands, &mut budget);
+        cands.dedup();
+        let psi = self.goal_psi();
+        let hits: Vec<Term> = cands
+            .into_iter()
+            .filter(|c| {
+                c == scrut_t
+                    || conv_term(
+                        &psi,
+                        &cx.gamma,
+                        Layer::Prog,
+                        c,
+                        scrut_t,
+                        scrut_ty,
+                        scrut_lvl,
+                        self.fuel,
+                    )
+                    .is_ok()
+            })
+            .collect();
+        exposed.abstract_local_any(&hits)
+    }
+
+    /// The expected type with its **exposed term positions** in weak head
+    /// normal form — the goal as the kernel would have to see it to find the
+    /// scrutinee (`docs/goal-motive-synthesis-design.md` §4.3).
+    ///
+    /// Type-level `whnf` alone does nothing to an equation: `Id` *is* a head,
+    /// and everything worth unfolding sits in its two sides. So the sides are
+    /// reduced too — one layer, not a normalization: exposing the head of each
+    /// side is what turns a stuck `filter`/`or_pick` into the `match` on the
+    /// decided scrutinee, and anything deeper is neither needed (the arms are
+    /// checked up to conversion) nor bounded.
+    ///
+    /// A goal that is an *implication* — `Mem(a, filter(xs, p)) -> …`, the
+    /// shape half the `Mem` kit proves in — hides its computation in the
+    /// domain, so the domain is exposed too. The codomain is not: it lives
+    /// under a binder, and a scrutinee scoped in `Γ` cannot occur there
+    /// unshifted.
+    fn expose(&self, cx: &Cx, ty: &Type, span: Span) -> Option<Type> {
+        match self.whnf(cx, ty, span).ok()? {
+            Type::Id { level, ty, lhs, rhs } => Some(Type::Id {
+                level,
+                ty,
+                lhs: self.whnf_tm(cx, &lhs, span).ok()?,
+                rhs: self.whnf_tm(cx, &rhs, span).ok()?,
+            }),
+            Type::El { level, tm } => {
+                Some(Type::El { level, tm: self.whnf_tm(cx, &tm, span).ok()? })
+            }
+            Type::Pi { dom_level, cod_level, dom, cod } => Some(Type::Pi {
+                dom_level,
+                cod_level,
+                dom: Rc::new(self.expose(cx, &dom, span)?),
+                cod,
+            }),
+            head => Some(head),
+        }
     }
 
     // -- field access (docs/surface-records.md §4) ---------------------------
@@ -9899,6 +10005,151 @@ fn cov_proj(comps: &[Type], lvl: &Level, p: Term, i: usize) -> Term {
         };
     }
     cur
+}
+
+/// [`stuck_scrutinees`] over a goal *type*, at the positions [`Elaborator::
+/// expose`] reduces and in the same scope: an equation's two sides, a code's
+/// term, an implication's domain. Never a codomain or any other subtree under
+/// a binder.
+fn stuck_in_ty(t: &Type, out: &mut Vec<Term>, budget: &mut u32) {
+    match t {
+        Type::Id { lhs, rhs, .. } => {
+            stuck_scrutinees(lhs, out, budget);
+            stuck_scrutinees(rhs, out, budget);
+        }
+        Type::El { tm, .. } => stuck_scrutinees(tm, out, budget),
+        Type::Pi { dom, .. } => stuck_in_ty(dom, out, budget),
+        _ => {}
+    }
+}
+
+/// Every position a reduced goal is **stuck on**: the scrutinee of an
+/// eliminator that could not fire, plus the same recursively inside it
+/// (`docs/goal-motive-synthesis-design.md` §4.4).
+///
+/// This is the candidate set for "which subterm of the goal is the thing this
+/// `match` is splitting". It is deliberately small — a handful of positions,
+/// never the whole term — because each candidate costs a conversion call, and
+/// because a subterm that is *not* blocking anything is not what the arms are
+/// waiting for.
+///
+/// The walk stays at the goal's own scope: it descends through the introduction
+/// and elimination forms whose children live in the ambient context, and never
+/// under a binder (a motive, a branch, a `λ`). A scrutinee is scoped in `Γ`,
+/// so nothing under a binder could be it anyway.
+fn stuck_scrutinees(t: &Term, out: &mut Vec<Term>, budget: &mut u32) {
+    if *budget == 0 {
+        return;
+    }
+    *budget -= 1;
+    // The eliminators: the scrutinee is both a candidate and a place to look.
+    let scrut = match t {
+        Term::ElimNat { scrut, .. }
+        | Term::ElimEmpty { scrut, .. }
+        | Term::ElimSEmpty { scrut, .. }
+        | Term::Case { scrut, .. }
+        | Term::ElimW { scrut, .. }
+        | Term::ElimWf { scrut, .. } => Some(scrut),
+        Term::Fst { pair, .. } | Term::Snd { pair, .. } => Some(pair),
+        Term::J { proof, .. } | Term::Transp { proof, .. } => Some(proof),
+        _ => None,
+    };
+    if let Some(s) = scrut {
+        out.push((**s).clone());
+        stuck_scrutinees(s, out, budget);
+        return;
+    }
+    // The rest: no candidate of its own, but a blocked eliminator can sit
+    // under a constructor (`Cons(h, match …)`) or in an argument.
+    match t {
+        Term::Succ(a) => stuck_scrutinees(a, out, budget),
+        Term::Inl { val, .. } | Term::Inr { val, .. } => stuck_scrutinees(val, out, budget),
+        Term::Pair { fst, snd, .. } => {
+            stuck_scrutinees(fst, out, budget);
+            stuck_scrutinees(snd, out, budget);
+        }
+        Term::Sup { label, children, .. } | Term::Supf { label, children, .. } => {
+            stuck_scrutinees(label, out, budget);
+            stuck_scrutinees(children, out, budget);
+        }
+        Term::App { fun, arg, .. } => {
+            stuck_scrutinees(fun, out, budget);
+            stuck_scrutinees(arg, out, budget);
+        }
+        _ => {}
+    }
+}
+
+/// One goal, both abstractions of one scrutinee: the scrutinee itself, and —
+/// when it is a constructor field — the *value* that carries it, rebuilt
+/// around `z` (`docs/goal-motive-synthesis-design.md` §5).
+///
+/// The direct abstraction is tried first. Where both would apply they agree
+/// on the arms' goals, and the direct one leaves the rest of the goal alone,
+/// which is the answer a reader would have written.
+fn abstract_scrut(goal: &Type, scrut_t: &Term, rewrap: &Option<(Term, Term)>) -> Option<Type> {
+    goal.abstract_local(scrut_t).or_else(|| {
+        let (base, rep) = rewrap.as_ref()?;
+        goal.abstract_local_with(base, rep)
+    })
+}
+
+/// Read a scrutinee as a **constructor field**, and say what abstracting that
+/// field does to the value it was projected out of
+/// (`docs/goal-motive-synthesis-design.md` §5).
+///
+/// A tier-0 arm binds its fields as *aliases* for `fst(snd^j v)`
+/// (`inductive.rs`, `elab_arm`), while the arm's goal is the outer motive at
+/// `v` — so the field never occurs in the goal and `v` always does. `Some(v,
+/// rep)` answers with `v` and its η-expansion around `z`: the same pair, the
+/// same annotations, this field replaced by `z` and every other component
+/// still projected out of `v`. `rep` is scoped in `Γ, z`.
+///
+/// `None` for anything that is not a `fst` off a chain of `snd`s — a variable
+/// scrutinee, a call, a literal — which is every scrutinee the direct
+/// abstraction already handles.
+fn field_rewrap(scrut: &Term) -> Option<(Term, Term)> {
+    let Term::Fst { fst_level, snd_level, fst_ty, snd_ty, pair } = scrut else {
+        return None;
+    };
+    // Innermost: the pair this field is the `fst` of, with `z` in that slot
+    // and its own `snd` still projected out of the original.
+    let mut base = Rc::clone(pair);
+    let mut rep = Term::Pair {
+        fst_level: fst_level.clone(),
+        snd_level: snd_level.clone(),
+        fst_ty: Rc::new(fst_ty.shift_local(1)),
+        snd_ty: Rc::new(snd_ty.shift_local(1)),
+        fst: Rc::new(Term::Var(LocalVar(0))),
+        snd: Rc::new(Term::Snd {
+            fst_level: fst_level.clone(),
+            snd_level: snd_level.clone(),
+            fst_ty: Rc::new(fst_ty.shift_local(1)),
+            snd_ty: Rc::new(snd_ty.shift_local(1)),
+            pair: Rc::new(pair.shift_local(1)),
+        }),
+    };
+    // Then outwards, one `snd` at a time: each enclosing pair keeps its `fst`
+    // and takes the rebuilt tail.
+    while let Term::Snd { fst_level, snd_level, fst_ty, snd_ty, pair } = &*base {
+        let (fst_ty, snd_ty) = (Rc::new(fst_ty.shift_local(1)), Rc::new(snd_ty.shift_local(1)));
+        rep = Term::Pair {
+            fst_level: fst_level.clone(),
+            snd_level: snd_level.clone(),
+            fst_ty: Rc::clone(&fst_ty),
+            snd_ty: Rc::clone(&snd_ty),
+            fst: Rc::new(Term::Fst {
+                fst_level: fst_level.clone(),
+                snd_level: snd_level.clone(),
+                fst_ty,
+                snd_ty,
+                pair: Rc::new(pair.shift_local(1)),
+            }),
+            snd: Rc::new(rep),
+        };
+        base = Rc::clone(pair);
+    }
+    Some(((*base).clone(), rep))
 }
 
 /// The identity substitution of `gamma`, weakened so its source is `gamma`
