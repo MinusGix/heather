@@ -1,9 +1,9 @@
 ---
 title: The designation table is keyed on the carrier head's written name, as the instance registry was
-status: open
+status: closed
 labels: [traits,elaboration,modules]
 created: 2026-08-17
-updated: 2026-08-17
+updated: 2026-08-18
 ---
 
 Filed as residue by the round that fixed [[instance-key-collides-across-modules]] (`docs/instance-resolved-key-design.md`).
@@ -30,3 +30,15 @@ The one design question this owes an answer to, and the reason it is a design is
 ## Acceptance
 
 Two modules declaring a type of the same name, each designating one symbol at its own, both register; a use at each carrier gets its own operation; a genuine duplicate (one module, one resolved carrier) is still refused naming both parties qualified.
+
+## Log
+
+- 2026-08-18: Paid. The registration side was the one `carrier_key` call the issue predicted; the lookup side — the part it owned — turned out to be **four** sites, and the design question was not *how* to resolve but *from what*.
+
+Three of the four hold a lowered operand's type, not a name: `resolve_op_name` rung 2 (both sources — the operand's carrier and the checking position's), `fill_index_from_designation`, and `value_slot_refusal`'s designation list. For those, resolving the *written* head at the use site would have been wrong, not merely slow: in a file importing two modules that each declare `List`, `key_of("List")` is ambiguous and answers nothing, about a type nothing at the use site is ambiguous about. So `type_namespace` grew a sibling, `carrier_of_ty`, which reads the declaration's own key (`qkey(ind.scope.module, ind.name)` — the string `inductives` is keyed by) straight off the lowered type, and returns it beside the written name as a `Carrier`. `Nat` answers for itself, which agrees with `carrier_key`'s fallback for the three names the language declares itself. The fourth site, `class_at_type`'s `Bool::Mon(+)` spelling, is a name the writer *did* spell, so it takes `carrier_key` in the scope they wrote it. No site could not resolve.
+
+The written head did not become unnecessary — it became a separate field. `DesignationInfo.carrier` keeps it, because the two diagnostics that list the table (`nothing designates `++` at `Box``, and the row list beside it) quote something the reader can type; the key is now the registry's business only.
+
+Acceptance is `crates/elab/tests/designation_resolved_key.rs` (6 tests): the collision pair registers and each use gets its own operation, pinned by `refl` against the qualified operation at neutral operands and at computing ones; a third `Box` declared where it is used is *not* covered by its namesake next door (the control without which the positive passes over a one-entry table); the genuine duplicate is still refused, qualifying carrier and occupant; and a duplicate at another module's carrier is refused too. `++` throughout, because it has no fallback name, so a lookup that misses cannot be quietly rescued by rung 3. Latent as filed — nothing in `lib/` moved.
+
+One test fixture said the old rule out loud and was updated: `the_designation_declaration_refuses_by_name` asserted 'one entry per (symbol, carrier head)'. `docs/operators-onto-classes-design.md` §3.2 carries the amendment.

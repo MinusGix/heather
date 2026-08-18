@@ -86,6 +86,34 @@ pub(crate) struct DesignationInfo {
     pub op: String,
     /// The declaration as written, for the duplicate diagnostic.
     pub written: String,
+    /// The carrier head **as the writer spelled it** — `List`, not
+    /// `list::List`. The key is the resolved declaration ([`DesigKey`]), which
+    /// is exactly why the written form is kept beside it: a diagnostic that
+    /// lists the table quotes something a reader can type
+    /// (`issues/diagnostics-name-the-written-form.md`), and once the key
+    /// stopped being a spelling there was nowhere else to read it off.
+    pub carrier: String,
+}
+
+/// The key a designation is registered under: **(symbol, carrier-head key)**,
+/// the second component a *resolved* declaration reference and not a surface
+/// spelling — `docs/instance-resolved-key-design.md` §3's rule applied one
+/// table over (issues/designation-key-collides-across-modules.md).
+///
+/// `("++", "list::List")` and `("++", "seq::List")` are two designations that
+/// coexist; keying the head on the written `List` made the second a duplicate
+/// of the first.
+///
+/// The symbol component is not a spelling in the relevant sense: it is one of
+/// the grammar's fixed operator tokens, the same token in every module, and no
+/// declaration can introduce another `+`.
+pub(crate) type DesigKey = (String, String);
+
+/// `head_key` is the carrier head **resolved** — [`Elaborator::carrier_key`]
+/// at a declaration, [`Elaborator::carrier_of_ty`] at a lowered operand —
+/// never a written head's raw string.
+pub(crate) fn designation_key(sym: &str, head_key: &str) -> DesigKey {
+    (sym.to_string(), head_key.to_string())
 }
 
 /// The key an instance is registered under: **(class key, carrier-head key,
@@ -1410,37 +1438,53 @@ impl Elaborator {
             render_ty(&d.carrier),
             render_expr(&d.op)
         );
-        let key = (d.symbol.clone(), head.clone());
+        // The carrier as the table keys it: the *declaration* the head names,
+        // not the head's spelling
+        // (issues/designation-key-collides-across-modules.md). `head` itself
+        // stays the written string — it is what a diagnostic prints and what
+        // `DesignationInfo::carrier` keeps for the read side.
+        let head_key = self.carrier_key(&head);
+        let key = designation_key(&d.symbol, &head_key);
         if let Some(prev) = self.designations.get(&key) {
             return err(
                 format!(
-                    "`{}` already designates `{}` at `{head}` (`{}`): one entry per \
-                     (symbol, carrier head), so this is refused rather than silently \
-                     overwritten. Two operations at one carrier are two *symbols* — \
-                     which is how `+` is `or` and `*` is `and` at `Bool`",
+                    "`{}` already designates `{}` at `{head_key}` (`{}`): a designation is \
+                     keyed on its symbol and its **resolved** carrier, so this is the same \
+                     carrier declaration and not merely the same written name — one entry \
+                     per (symbol, carrier), refused rather than silently overwritten. Two \
+                     operations at one carrier are two *symbols* — which is how `+` is \
+                     `or` and `*` is `and` at `Bool` \
+                     (docs/instance-resolved-key-design.md §3)",
                     d.symbol, prev.op, prev.written
                 ),
                 d.span,
             );
         }
-        self.designations.insert(key, DesignationInfo { op, written });
+        self.designations.insert(key, DesignationInfo { op, written, carrier: head });
         Ok(())
     }
 
-    /// The operation `sym` designates at a carrier whose head is `head`, if
-    /// any. The whole of the designation table's read side.
-    pub(crate) fn designated(&self, sym: &str, head: &str) -> Option<String> {
-        self.designations.get(&(sym.to_string(), head.to_string())).map(|d| d.op.clone())
+    /// The operation `sym` designates at the carrier `head_key`, if any. The
+    /// whole of the designation table's read side.
+    ///
+    /// `head_key` is **resolved**, never a written head: every caller reaches
+    /// this through [`Elaborator::carrier_of_ty`] (a lowered operand) or
+    /// [`Elaborator::carrier_key`] (a name the writer spelled), so that a
+    /// lookup lands on the key the declaration registered even where two
+    /// modules declare the head's name.
+    pub(crate) fn designated(&self, sym: &str, head_key: &str) -> Option<String> {
+        self.designations.get(&designation_key(sym, head_key)).map(|d| d.op.clone())
     }
 
-    /// Every designation at one carrier head, as `` (`+`, `or`) `` pairs
-    /// sorted by symbol — what a value-slot refusal lists so that the reader
-    /// is told which binder would have worked (§6, §7).
-    pub(crate) fn designations_at(&self, head: &str) -> Vec<(String, String)> {
+    /// Every designation at one carrier, as `` (`+`, `or`) `` pairs sorted by
+    /// symbol — what a value-slot refusal lists so that the reader is told
+    /// which binder would have worked (§6, §7). `head_key` is resolved, as
+    /// [`Self::designated`]'s is.
+    pub(crate) fn designations_at(&self, head_key: &str) -> Vec<(String, String)> {
         let mut out: Vec<(String, String)> = self
             .designations
             .iter()
-            .filter(|((_, h), _)| h == head)
+            .filter(|((_, h), _)| h == head_key)
             .map(|((s, _), d)| (s.clone(), d.op.clone()))
             .collect();
         out.sort();

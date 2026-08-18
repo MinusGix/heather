@@ -3,7 +3,7 @@ title: A lowered inductive instance cannot say what type arguments it was instan
 status: open
 labels: [frontend,diagnostics]
 created: 2026-08-17
-updated: 2026-08-17
+updated: 2026-08-18
 ---
 
 Residue of [[le-diagnostics-print-raw-el]] (2026-08-17). The surface speller
@@ -52,3 +52,4 @@ mismatch. So it complements the inversion rather than replacing it.
 ## Log
 
 - 2026-08-17: Second customer, from [[check-fallback-discards-expected-type]] (same day): the missing arguments are not only a display nuisance, they SUPPRESS a diagnostic. That round's mismatch report speaks only when the two types spell differently, because "this has type `And<...>`, but `And<...>` is expected here" reads as a compiler bug; so a mismatch whose whole difference is the type arguments falls back to the gate's bare `NotConvertible`. Recovering the arguments would turn those back into stated mismatches, which raises this from ergonomics to coverage. The reproducer is in that round's tests as a control (`a_mismatch_the_display_cannot_state_is_left_to_the_kernel`), so it will flip to a stated message when this lands -- expect to rewrite it then.
+- 2026-08-18: 2026-08-18: Third customer, and a measurement. [[lgg-diagnostic-dumps-kernel-terms]] gave `display.rs` a term entry point (`spell_term_clean`) and the `cannot generalize` diagnostic now spells its goal — at **tier 0**. At a *recursive* declaration it still cannot: the value is `supf` whose shape annotation is a generated global, and `ctor_value` reads the nominal tag only out of an inline `Wf`/`Sum`/`Sigma`. The cheap route was tried and does not reach — `unspell_here` inverts a `#tycode` reference and a shape code is not one — so this is the inversion described above and not a lookup. Cost datum for whoever schedules it: the term speller is now public, so the missing piece is exactly the tag/argument recovery, with no printer to build first.

@@ -697,6 +697,33 @@ struct ParamMeta {
     solver: Option<Rc<Ty>>,
 }
 
+/// A carrier the operator path read off a type: what a diagnostic prints, and
+/// what a registry is keyed by.
+///
+/// The two are different strings and the distinction is the whole content of
+/// `issues/designation-key-collides-across-modules.md`: `written` is `List`,
+/// which is what the writer typed and what a message must quote; `key` is
+/// `list::List`, the declaration, which is what the designation table is
+/// keyed on so that two modules' `List`s are two carriers.
+#[derive(Clone)]
+struct Carrier {
+    written: String,
+    key: String,
+}
+
+impl Carrier {
+    fn of_ind(ind: &Inductive) -> Self {
+        Carrier { written: ind.name.clone(), key: names::qkey(&ind.scope.module, &ind.name) }
+    }
+
+    /// A carrier the language declares itself — `Nat`. Written and key are the
+    /// same string, and that is not a spelling escaping into a key: nothing
+    /// can declare a second one (see [`Elaborator::carrier_key`]).
+    fn constant(name: &str) -> Self {
+        Carrier { written: name.to_string(), key: name.to_string() }
+    }
+}
+
 /// What a global name refers to: the absolute position of its `Trm_c`
 /// binding in Ψ, plus the surface parameter metadata.
 ///
@@ -807,15 +834,16 @@ pub struct Elaborator {
     /// parent-synthesis lookups the `extends` discipline makes.
     instances: HashMap<traits::InstKey, InstanceInfo>,
     /// What an operator symbol means at a carrier: one entry per **(symbol,
-    /// carrier head)** (docs/operators-onto-classes-design.md §3.2).
+    /// resolved carrier head)** (docs/operators-onto-classes-design.md §3.2,
+    /// `traits::DesigKey`).
     ///
-    /// Beside `instances` and keyed the same way — on the carrier's *head*,
-    /// by the same `head_name` — for the same reason: declaring is
-    /// registering, and there is no search over it. What it is *not* is a
-    /// default-instance table: it says what a symbol means, never which
-    /// structure a carrier has, which is why `+` at `Bool` can be `or` while
-    /// both Bool monoids stay registered as equals (§3.3).
-    designations: HashMap<(String, String), traits::DesignationInfo>,
+    /// Beside `instances` and keyed the same way — on the carrier's
+    /// *declaration*, never on the head's spelling — for the same reason:
+    /// declaring is registering, and there is no search over it. What it is
+    /// *not* is a default-instance table: it says what a symbol means, never
+    /// which structure a carrier has, which is why `+` at `Bool` can be `or`
+    /// while both Bool monoids stay registered as equals (§3.3).
+    designations: HashMap<traits::DesigKey, traits::DesignationInfo>,
     /// One repr per spec type, keyed per `docs/datarepr-design.md` §4: the
     /// spec inductive's *elaborated declaration* identity plus the elaborated
     /// arguments of the instantiation. Declaration keying and not nominal
@@ -5957,8 +5985,8 @@ impl Elaborator {
         let Some(index) = self.scope_index(cx, &info.name, carrier, clvl) else {
             // The carrier's head where it has one: at `Bool` the refusal lists
             // the two Bool structures and not every instance of the class.
-            let head = self.type_namespace(cx, carrier, span);
-            return Err(self.value_slot_refusal(info, subject, head.as_deref(), span));
+            let head = self.carrier_of_ty(cx, carrier, span);
+            return Err(self.value_slot_refusal(info, subject, head.as_ref(), span));
         };
         match self.valparam_args(cx, ind, targs, &index, span) {
             Ok(v) => Ok(Some(v)),
@@ -6057,7 +6085,7 @@ impl Elaborator {
             if sols[slot].solved().is_some() || matches!(sols[slot], Sol::Withheld) {
                 continue;
             }
-            let Some(op) = self.designated(sym, &head) else { continue };
+            let Some(op) = self.designated(sym, &head.key) else { continue };
             // **Checked** against the slot's own domain, not inferred: the
             // designated operation is emitted bare (§3.2), so a generic one
             // — `append` at `List<B>` — has an element type that only the
@@ -6091,20 +6119,24 @@ impl Elaborator {
         slot_param: &[usize],
         sols: &[Sol],
         span: Span,
-    ) -> Option<String> {
+    ) -> Option<Carrier> {
         let TyKind::Named { name, args } = &carrier?.kind else { return None };
         if !args.is_empty() {
             return None;
         }
-        // A carrier written concretely in the signature needs no lookup.
+        // A carrier written concretely in the signature needs no lookup — but
+        // it does need resolving, since the name is a *spelling* the callee's
+        // module wrote and the table is keyed on declarations.
         if !params.iter().any(|p| p.name == *name) {
-            return self.names_a_type(name).then(|| name.clone());
+            return self
+                .names_a_type(name)
+                .then(|| Carrier { written: name.clone(), key: self.carrier_key(name) });
         }
         let pi = params.iter().position(|p| p.name == *name)?;
         let slot = slot_param.iter().position(|&s| s == pi)?;
         let code = sols[slot].solved()?;
         let ty = Type::El { level: Level::Zero, tm: Rc::clone(code) };
-        self.type_namespace(cx, &ty, span)
+        self.carrier_of_ty(cx, &ty, span)
     }
 
     /// The innermost dictionary in scope whose class is `tkey` or a descendant
@@ -6159,17 +6191,18 @@ impl Elaborator {
         &self,
         class: &traits::ClassInfo,
         subject: &str,
-        head: Option<&str>,
+        head: Option<&Carrier>,
         span: Span,
     ) -> ElabError {
         let Some(ckey) = self.key_of(&class.name) else {
             return ElabError::Elab { msg: format!("`{}` is not in scope", class.name), span };
         };
-        // The registry keys the carrier by its *resolved* declaration
-        // (docs/instance-resolved-key-design.md §3), so the head this
-        // diagnostic was handed — a declaration's own name, read off the
-        // lowered type — is resolved the same way before it can filter.
-        let hkey = head.map(|h| self.carrier_key(h));
+        // Both registries key the carrier by its *resolved* declaration
+        // (docs/instance-resolved-key-design.md §3), and the carrier read off
+        // the lowered type carries that key beside its spelling, so this
+        // filter and the designation lookup below use the same string the
+        // declarations registered.
+        let hkey = head.map(|h| h.key.clone());
         let mut listed: Vec<String> = self
             .instances
             .iter()
@@ -6190,7 +6223,7 @@ impl Elaborator {
         // names no symbol, and choosing among the symbols at a carrier would
         // be the nomination this whole design deletes — but naming the ones
         // that exist tells the reader, in one line, the binder that works.
-        let desig = head.map(|h| self.designations_at(h)).unwrap_or_default();
+        let desig = head.map(|h| self.designations_at(&h.key)).unwrap_or_default();
         let fix = if desig.is_empty() {
             String::new()
         } else {
@@ -6328,7 +6361,12 @@ impl Elaborator {
                 self.op_carrier_head(cx, args, span).map(|h| (h, Self::FROM_OPERAND))
             };
             if let Some((head, from)) = probed {
-                if let Some(op) = self.designated(sym, &head) {
+                // The carrier the probe found is a *declaration*, and the
+                // table is keyed on declarations
+                // (issues/designation-key-collides-across-modules.md): a file
+                // that sees two `List`s asks about the one its operand
+                // actually has, and the other module's `++` is not consulted.
+                if let Some(op) = self.designated(sym, &head.key) {
                     return Ok(op);
                 }
                 uncovered_carrier = Some((head, from));
@@ -6349,8 +6387,9 @@ impl Elaborator {
         {
             if let Some((head, from)) = &uncovered_carrier {
                 let note = format!(
-                    "`{sym}` has no designation at `{head}` ({from}), so it used its \
-                     fallback name `{fb}`"
+                    "`{sym}` has no designation at `{}` ({from}), so it used its \
+                     fallback name `{fb}`",
+                    head.written
                 );
                 let mut notes = self.op_fallback_notes.borrow_mut();
                 if !notes.contains(&note) {
@@ -6366,7 +6405,11 @@ impl Elaborator {
             .designations
             .iter()
             .filter(|((s, _), _)| s == sym)
-            .map(|((_, h), d)| format!("`{h}` (`{}`)", d.op))
+            // The *written* carrier, not the key: this line tells a reader
+            // where the symbol does mean something, and `list::List` is the
+            // registry's name for it, not theirs
+            // (issues/diagnostics-name-the-written-form.md).
+            .map(|(_, d)| format!("`{}` (`{}`)", d.carrier, d.op))
             .collect::<Vec<_>>();
         known.sort();
         // The carrier rung 2 tried, where it got one from either source. Naming
@@ -6375,7 +6418,7 @@ impl Elaborator {
         // table (docs/bare-symbol-checking-carrier-design.md §6).
         let tried = match &uncovered_carrier {
             Some((head, from)) => {
-                format!("nothing designates `{sym}` at `{head}` — {from} —")
+                format!("nothing designates `{sym}` at `{}` — {from} —", head.written)
             }
             None => format!("no `designation {sym} at …` covers this carrier,"),
         };
@@ -6443,7 +6486,7 @@ impl Elaborator {
     /// through to the fallback rung, so a mis-probe costs a rung and never a
     /// wrong term. The speculative inference's goals are rolled back for the
     /// same reason.
-    fn op_carrier_head(&self, cx: &Cx, args: &[Expr], span: Span) -> Option<String> {
+    fn op_carrier_head(&self, cx: &Cx, args: &[Expr], span: Span) -> Option<Carrier> {
         let mut leaf = args.first()?;
         loop {
             let ExprKind::App { head, args, .. } = &leaf.kind else { break };
@@ -6462,7 +6505,7 @@ impl Elaborator {
         let inferred = self.elab_infer(cx, leaf);
         self.goals.borrow_mut().truncate(mark);
         let (_, ty, _) = inferred.ok()?;
-        self.type_namespace(cx, &ty, span)
+        self.carrier_of_ty(cx, &ty, span)
     }
 
     /// The head of the carrier a **checking position** is asking for — rung
@@ -6479,9 +6522,9 @@ impl Elaborator {
     /// meta, `Type` — answers `None` through `type_namespace`, so a domain
     /// that still mentions an implicit needs no separate meta test, and the
     /// ladder simply goes on to the fallback rung.
-    fn expected_carrier_head(&self, cx: &Cx, expected: &Type, span: Span) -> Option<String> {
+    fn expected_carrier_head(&self, cx: &Cx, expected: &Type, span: Span) -> Option<Carrier> {
         let Type::Pi { dom, .. } = self.whnf(cx, expected, span).ok()? else { return None };
-        self.type_namespace(cx, &dom, span)
+        self.carrier_of_ty(cx, &dom, span)
     }
 
     /// An operator symbol, bare or applied, rewritten to the ordinary
@@ -6839,9 +6882,13 @@ impl Elaborator {
         // name wrote it. A symbol the table does not cover falls through to
         // the ordinary ladder, which reports it as written.
         let mut written: Vec<Expr> = Vec::with_capacity(index.len());
+        // `subject` is a name the writer spelled in the qualified path, so it
+        // resolves the way any written carrier does — `carrier_key`, in the
+        // scope they wrote it — to the key the designation registered under.
+        let subject_key = self.carrier_key(subject);
         for a in index {
             match &a.kind {
-                ExprKind::OpSymbol(s) => match self.designated(s, subject) {
+                ExprKind::OpSymbol(s) => match self.designated(s, &subject_key) {
                     Some(op) => written.push(Expr { kind: ExprKind::Var(op), span: a.span }),
                     None => written.push(a.clone()),
                 },
@@ -7292,20 +7339,39 @@ impl Elaborator {
     /// type with no declaration and answers for itself; anything with no
     /// nominal tag has no namespace and answers `None`.
     fn type_namespace(&self, cx: &Cx, ty: &Type, span: Span) -> Option<String> {
+        self.carrier_of_ty(cx, ty, span).map(|c| c.written)
+    }
+
+    /// [`Self::type_namespace`], plus the **key** the registries hold that
+    /// declaration under (issues/designation-key-collides-across-modules.md).
+    ///
+    /// The key is read off the declaration itself — `qkey(ind.scope.module,
+    /// ind.name)`, exactly the string `inductives` is keyed by — and
+    /// deliberately *not* by resolving the written name at the use site:
+    /// `carrier_key` is right for a name the writer spelled (it resolves where
+    /// they wrote it), but a lowered operand's declaration is already known,
+    /// and re-resolving its bare name in a file that imports two `List`s would
+    /// answer "ambiguous" about a type there is nothing ambiguous about.
+    ///
+    /// `Nat` has no declaration and answers for itself, which agrees with
+    /// [`Self::carrier_key`]'s fallback: the three names `names_a_type` claims
+    /// with nothing behind them are the language's own, so a bare key for them
+    /// is a constant rather than a spelling.
+    fn carrier_of_ty(&self, cx: &Cx, ty: &Type, span: Span) -> Option<Carrier> {
         if matches!(ty, Type::Nat) {
-            return Some("Nat".to_string());
+            return Some(Carrier::constant("Nat"));
         }
         if let Some(ind) = self.tag_of(ty) {
-            return Some(ind.name.clone());
+            return Some(Carrier::of_ind(&ind));
         }
         // Same fallback as `record_of_at`: a receiver whose type arrived
         // through a `Val -> Type` value is `El` of a redex, and the structural
         // read is deliberately context-free.
         let head = self.whnf(cx, ty, span).ok()?;
         if matches!(head, Type::Nat) {
-            return Some("Nat".to_string());
+            return Some(Carrier::constant("Nat"));
         }
-        self.tag_of(&head).map(|ind| ind.name.clone())
+        self.tag_of(&head).map(|ind| Carrier::of_ind(&ind))
     }
 
     /// The constructor this name refers to *here* — `None` when it is not a
@@ -9573,14 +9639,17 @@ impl Elaborator {
         // claims for this solver.
         let body = match lgg::lgg_body(&x, &y, &s, &t) {
             Ok(body) => body,
-            Err(msg) => {
+            Err(m) => {
                 let rx = self.whnf_tm(cx, &x, span)?;
                 let ry = self.whnf_tm(cx, &y, span)?;
                 if *rx == *x && *ry == *y {
+                    let msg = self.cong_mismatch(cx, &m, expected, &s, &t);
                     return Err(ElabError::Elab { msg, span });
                 }
-                lgg::lgg_body(&rx, &ry, &s, &t)
-                    .map_err(|msg| ElabError::Elab { msg, span })?
+                lgg::lgg_body(&rx, &ry, &s, &t).map_err(|m| ElabError::Elab {
+                    msg: self.cong_mismatch(cx, &m, expected, &s, &t),
+                    span,
+                })?
             }
         };
         sols[m] = Sol::Solved(Rc::new(Term::Lam {
@@ -9590,6 +9659,66 @@ impl Elaborator {
             body: Rc::new(body),
         }));
         Ok(())
+    }
+
+    /// The `cannot generalize` message
+    /// (issues/lgg-diagnostic-dumps-kernel-terms.md).
+    ///
+    /// The solver reports a *position* and this reads it out: the goal as
+    /// surface, the proof's endpoints as surface, and the two sides at the
+    /// stopping node where they can be read in the goal's own context. What it
+    /// deliberately never does is print a kernel term — at a lowered inductive
+    /// that was four multi-thousand-character walls, and the useful fact was
+    /// not recoverable from any of them.
+    ///
+    /// Every spelling is optional and its absence costs a clause, not the
+    /// message: `spell_*` declines rather than half-spelling
+    /// (`docs/surface-type-display-design.md` §2), and the position — which is
+    /// the part the reader could not get before — needs no context at all.
+    fn cong_mismatch(
+        &self,
+        cx: &Cx,
+        m: &lgg::Mismatch,
+        expected: &Type,
+        s: &Term,
+        t: &Term,
+    ) -> String {
+        let mut msg = m.to_string();
+        // The two sides at the stopping node, when the walk stopped somewhere
+        // that mentions none of the binders it descended under. A subterm that
+        // *does* mention them has no reading in `cx` at all, and inventing one
+        // would name the reader's variables wrongly — so the formers, already
+        // in `m`'s own sentence, are the whole of what is said about it.
+        if let Some((a, b)) = &m.at
+            && let (Some(a), Some(b)) = (
+                strengthen_tm(&cx.gamma, a, m.depth),
+                strengthen_tm(&cx.gamma, b, m.depth),
+            )
+            && let (Some(a), Some(b)) =
+                (self.spell_term_clean(cx, &a), self.spell_term_clean(cx, &b))
+        {
+            msg.push_str(&format!(" (`{a}` against `{b}`)"));
+        }
+        // *Clean* spellings throughout: every clause here makes a claim about
+        // a term, and a half-spelled one is the kernel wall wearing surface
+        // syntax (`issues/check-fallback-discards-expected-type.md`). A clause
+        // that cannot be said cleanly is not said.
+        if let Some(goal) = self.spell_type_clean(cx, expected) {
+            msg.push_str(&format!(". The goal is `{goal}`"));
+        } else {
+            msg.push('.');
+        }
+        match (self.spell_term_clean(cx, s), self.spell_term_clean(cx, t)) {
+            (Some(s), Some(t)) => {
+                msg.push_str(&format!(", and the proof's endpoints are `{s}` and `{t}`"));
+            }
+            _ => msg.push_str(", and the proof's endpoints do not spell as surface"),
+        }
+        msg.push_str(
+            " — every differing position has to be exactly the proof's endpoints \
+             (issues/congruence-by-anti-unification.md §3)",
+        );
+        msg
     }
 
     // -- names --------------------------------------------------------------

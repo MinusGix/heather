@@ -84,6 +84,23 @@ declaration error naming the previous one. The carrier's head is computed by
 `head_name`, the very function layer 1 keys instances on, so `List<A>` and
 `List<Nat>` are one key for the same reason two instances at one head collide.
 
+**Amended 2026-08-18** (`issues/designation-key-collides-across-modules.md`):
+the head component is the head's **resolved declaration** and not its written
+name — `list::List`, never `List` — which is
+`docs/instance-resolved-key-design.md` §3's rule ("no component of a registry
+key is a spelling") applied to this table. Two modules each declaring a `List`
+and each designating `++` at their own are two entries; the same resolved
+carrier twice is the declaration error it always was. `head_name` still
+computes what the *diagnostics* print, and `DesignationInfo::carrier` keeps it
+for them, because the key stopped being something a reader can be shown.
+
+The lookup side is where this table differs from the instance registry, which
+had one: a designation is looked up from an **operand's** carrier — a lowered
+type's declaration — so `Elaborator::carrier_of_ty` reads the declaration's own
+key (`qkey(module, name)`) off the type rather than re-resolving a spelling at
+the use site. Re-resolving would answer "ambiguous" in a file importing two
+`List`s, about a type nothing there is ambiguous about.
+
 The right-hand side must be a **bare global name**. Not "spellable" in
 `index_spelling`'s wider sense (which admits `f<A>`): a designated operation
 is fetched at a use site whose type arguments are the *use site's*, so the

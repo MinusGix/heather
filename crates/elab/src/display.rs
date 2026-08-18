@@ -62,16 +62,45 @@ impl Elaborator {
         self.spell_within(cx, ty, 0)
     }
 
+    /// Spell a **term** as surface, or decline — [`Self::spell_type_clean`]'s
+    /// counterpart at the other syntactic class, and admitting no raw node for
+    /// the same reason.
+    ///
+    /// The walk has always spelled terms (an `El`'s payload, an equation's two
+    /// sides, a call's arguments): what did not exist was an *entry point* at
+    /// a term, so a diagnostic holding one had no choice but `{:?}`
+    /// (issues/lgg-diagnostic-dumps-kernel-terms.md). The budgets, the
+    /// per-node fallback and the abandon rule are the same ones, because it is
+    /// the same walk. Only the clean flavour is offered: a diagnostic holding
+    /// a bare term is *making a claim* about it, and half a spelling of a
+    /// lowered inductive is the `inl[0,0](Σ[0,0](Unit 0). …)` wall wearing
+    /// surface syntax. A tolerant flavour can be added when something wants to
+    /// *display* a term it was asked to display.
+    ///
+    /// `t` must be scoped in `cx` — a subterm read out from under binders is
+    /// **not**, and its variables would be spelled with the wrong names. A
+    /// caller holding one strengthens it first ([`crate::strengthen_tm`]) and
+    /// declines when it does not strengthen.
+    pub(crate) fn spell_term_clean(&self, cx: &Cx, t: &Term) -> Option<String> {
+        let sp = self.speller(cx);
+        let out = sp.tm(t, 0);
+        (sp.fallbacks.get() == 0).then_some(out)
+    }
+
     fn spell_within(&self, cx: &Cx, ty: &Type, fallbacks: u32) -> Option<String> {
-        let sp = Speller {
+        let sp = self.speller(cx);
+        let out = sp.ty(ty, 0);
+        (sp.fallbacks.get() <= fallbacks).then_some(out)
+    }
+
+    fn speller<'a>(&'a self, cx: &'a Cx) -> Speller<'a> {
+        Speller {
             el: self,
             cx,
             names: RefCell::new(cx.names.clone()),
             nodes: Cell::new(SPELL_NODES),
             fallbacks: Cell::new(0),
-        };
-        let out = sp.ty(ty, 0);
-        (sp.fallbacks.get() <= fallbacks).then_some(out)
+        }
     }
 }
 
