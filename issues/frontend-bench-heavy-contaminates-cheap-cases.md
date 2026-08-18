@@ -32,3 +32,4 @@ Interim protocol, written into docs/frontend-benchmarking.md: for the time half,
 
 - **[[frontend-benchmarks]]** owns the suite, its thresholds and its baseline.
   Assumed here: only that `--check`'s time comparison fails a case at 1.25x.
+- 2026-08-17: 2026-08-17: the same signature turned up on the KERNEL harness, filed as [[kernel-bench-full-run-flags-drift]]: four consecutive full 'scripts/bench --check' runs on one unchanged binary flagged nine distinct fixtures between them, none in all four, all in the 1.25-1.5x band, while every filtered re-run of a flagged family was green and every scaling exponent stayed in band. Bearing on this issue: candidate fixes 1-3 are now wanted twice, or the two harnesses have to stop being siblings. Nothing here re-measures the frontend claim; it is cross-linked so that whoever takes one takes the other knowingly.

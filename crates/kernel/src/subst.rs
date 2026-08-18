@@ -232,6 +232,16 @@ trait Mapper {
         (tail, Vec::new())
     }
 
+    /// Replace a whole **term** node, before its children are visited.
+    /// `None` — the default — means "descend as usual", which is every
+    /// mapper here but [`AbstractLocal`], whose pattern is a *term* rather
+    /// than a variable and so cannot be expressed by [`Self::local_var`].
+    /// A `Some` is noted by the caller, so a hook may be written without
+    /// touching the change counter.
+    fn pre_tm(&mut self, _t: &Rc<Term>, _at: Depths) -> Option<Term> {
+        None
+    }
+
     /// Whether this subtree provably cannot be changed by this mapper at
     /// these depths, decided in O(1) from cached per-node metadata
     /// (see §Skipping closed subtrees). `false` — the default — means
@@ -309,6 +319,14 @@ fn sub_ty<M: Mapper>(t: &Rc<Type>, m: &mut M, at: Depths) -> Rc<Type> {
 }
 
 fn sub_tm<M: Mapper>(t: &Rc<Term>, m: &mut M, at: Depths) -> Rc<Term> {
+    // Whole-node replacement, before anything else: a mapper that matches
+    // *terms* has to see a node before its children are rebuilt, and its
+    // answer is by construction a change (rule 1's "over-reporting is safe"
+    // does not even apply — the node really is different).
+    if let Some(r) = m.pre_tm(t, at) {
+        m.note();
+        return Rc::new(r);
+    }
     if m.skip_tm(t, at) {
         #[cfg(debug_assertions)]
         {
@@ -1152,6 +1170,67 @@ impl Mapper for SubstLocal<'_> {
     }
 }
 
+/// Abstraction over a **term**: every occurrence of `pat` becomes the fresh
+/// innermost variable `z` (`docs/goal-motive-synthesis-design.md` §3).
+///
+/// The inverse of [`SubstLocal`] at a singleton, and the operation a
+/// dependent motive is: `T.abstract_local(s)` is a type over `Γ, z` whose
+/// `[s/z]` instance is `T` again — *whatever* subset of the occurrences the
+/// walk found, because it only ever replaces a position that literally held
+/// `s`. That is why the traversal may be as syntactic as it likes and the
+/// eliminator's obligation still holds.
+///
+/// "Occurrence" is `==` on de Bruijn terms, which is α-equality here — the
+/// same decision, for the same reasons, as [`crate::term`]'s neighbour in
+/// `elab`'s anti-unifier: no conversion call, so this is linear and its
+/// failure (finding nothing) is a fact rather than a fuel accident.
+struct AbstractLocal<'a> {
+    /// The patterns and what each occurrence becomes. The replacement is `z`
+    /// itself for the plain abstraction, and a term *containing* `z` for the
+    /// caller that abstracts a field out of the value that carries it.
+    /// Several patterns because one abstraction may have to catch a term the
+    /// goal spells two ways, and catching only one of them is worse than
+    /// catching neither.
+    pats: &'a [(Term, Term)],
+    /// `witness[k]` is `pats` weakened past `k` further binders — each `pat`
+    /// by `k + 1` (it is scoped in `Γ`, and `z` is one more), each `rep` by
+    /// `k` (it already lives under `z`). Memoized: the walk asks at every
+    /// node.
+    witness: Vec<Vec<(Term, Term)>>,
+    /// Occurrences replaced — the caller's "did this find anything".
+    hits: u64,
+    changes: u64,
+}
+
+impl Mapper for AbstractLocal<'_> {
+    const LOCAL_OP: bool = true;
+    const NAME: &'static str = "abstract_local";
+
+    fn changes(&mut self) -> &mut u64 {
+        &mut self.changes
+    }
+
+    fn pre_tm(&mut self, t: &Rc<Term>, at: Depths) -> Option<Term> {
+        while self.witness.len() as u32 <= at.local {
+            let i = self.witness.len() as u32;
+            let row = self
+                .pats
+                .iter()
+                .map(|(p, r)| (p.shift_local(i + 1), r.shift_local(i)))
+                .collect();
+            self.witness.push(row);
+        }
+        let hit = self.witness[at.local as usize]
+            .iter()
+            .find(|(pat, _)| **t == *pat)
+            .map(|(_, rep)| rep.clone());
+        if hit.is_some() {
+            self.hits += 1;
+        }
+        hit
+    }
+}
+
 /// Global substitution `σ` (instantiation form, see [`GlobalSubst`]).
 struct SubstGlobal<'a> {
     sigma: &'a GlobalSubst,
@@ -1402,6 +1481,62 @@ macro_rules! ops {
 
 ops!(Type, map_type);
 ops!(Term, map_term);
+
+impl Type {
+    /// Abstract a **term** out of a type: the result is scoped in `Γ, z`
+    /// (`z` of the abstracted term's type) with every occurrence of `pat`
+    /// replaced by `z`, or `None` when there is no occurrence to replace.
+    ///
+    /// `None` rather than the constant function, because the two answers are
+    /// different *facts* and every caller so far wants to try something else
+    /// before settling for the constant one
+    /// (`docs/goal-motive-synthesis-design.md` §3.2).
+    ///
+    /// `self` is weakened into `Γ, z` first, so a `pat` occurring under `k`
+    /// binders is matched against `pat` weakened by `k + 1` and the variable
+    /// planted is `Var(k)`: nothing is captured, and nothing is matched
+    /// across a scope this operation does not own (boxed code and the other
+    /// foreign-context subtrees are left whole, as for every local operation).
+    pub fn abstract_local(&self, pat: &Term) -> Option<Type> {
+        self.abstract_local_with(pat, &Term::Var(LocalVar(0)))
+    }
+
+    /// [`Self::abstract_local`] over **several** spellings of one term: every
+    /// occurrence of every pattern becomes the same `z`.
+    ///
+    /// One abstraction, not a fold of several: abstracting `a` and then `b`
+    /// would bind two variables, and what the caller has is one scrutinee
+    /// that the goal spells more than one way (`docs/goal-motive-synthesis-
+    /// design.md` §4.4). Catching one spelling and not the other is worse
+    /// than catching neither — the arms then face a goal half-specialized.
+    pub fn abstract_local_any(&self, pats: &[Term]) -> Option<Type> {
+        let z = Term::Var(LocalVar(0));
+        let pairs: Vec<(Term, Term)> =
+            pats.iter().map(|p| (p.clone(), z.clone())).collect();
+        self.abstract_pats(&pairs)
+    }
+
+    /// [`Self::abstract_local`] with the planted term given: every occurrence
+    /// of `pat` becomes `rep`, which is scoped in `Γ, z` and is expected to
+    /// mention `z` (or the result is a constant motive spelled the long way).
+    ///
+    /// The generality is one caller's, and a real one: a constructor field is
+    /// reached from a goal that mentions the *value*, so what abstracting the
+    /// field does to that value is rebuild it around `z`
+    /// (`docs/goal-motive-synthesis-design.md` §5). The `[pat/z]` instance is
+    /// then the original only up to `rep[pat/z] ≡ pat` — for that caller,
+    /// Σ/Unit-η — which is why this returns a term to be *checked* and not a
+    /// proof of anything.
+    pub fn abstract_local_with(&self, pat: &Term, rep: &Term) -> Option<Type> {
+        self.abstract_pats(&[(pat.clone(), rep.clone())])
+    }
+
+    fn abstract_pats(&self, pats: &[(Term, Term)]) -> Option<Type> {
+        let mut m = AbstractLocal { pats, witness: Vec::new(), hits: 0, changes: 0 };
+        let out = map_type(&self.shift_local(1), &mut m, Depths::default());
+        (m.hits > 0).then_some(out)
+    }
+}
 
 impl LocalCtx {
     pub fn apply_univ(&self, phi: &[Level]) -> LocalCtx {

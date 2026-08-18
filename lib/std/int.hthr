@@ -100,14 +100,17 @@ theorem neg_negOfNat(n: Nat): neg(negOfNat(n)) = OfNat(n) {
     match n { Zero => refl, Succ(k) => refl }
 }
 
-// Involutive. The `OfNat` arm needs the inner motive written out: the arm's
-// field binder is a projection alias rather than a variable, so a motive-less
-// inner `match` gets a non-dependent motive and the arm goal never specializes
-// (issues/nested-match-on-field-binder-motive.md — the tax this whole file
-// pays, at 14 sites).
+// Involutive, and the file's first "case on the integer, then on its payload".
+// The inner `match` needed a written motive until 2026-08-17: an arm's field
+// binder is a projection alias rather than a variable, so motive synthesis
+// found nothing to abstract and the arm goal never specialized. It now
+// abstracts the field by rebuilding the constructor value around `z`, which is
+// what the deleted motive said by hand — thirteen sites in this file
+// (issues/nested-match-on-field-binder-motive.md;
+// docs/goal-motive-synthesis-design.md §5).
 theorem neg_neg(a: Int): neg(neg(a)) = a {
     match a {
-        OfNat(n) => match n as λ y => neg(neg(OfNat(y))) = OfNat(y) {
+        OfNat(n) => match n {
             Zero => refl,
             Succ(k) => refl,
         },
@@ -136,7 +139,7 @@ fn ipred(a: Int) -> Int {
 
 theorem isucc_ipred(a: Int): isucc(ipred(a)) = a {
     match a {
-        OfNat(n) => match n as λ y => isucc(ipred(OfNat(y))) = OfNat(y) {
+        OfNat(n) => match n {
             Zero => refl,
             Succ(k) => refl,
         },
@@ -147,7 +150,7 @@ theorem isucc_ipred(a: Int): isucc(ipred(a)) = a {
 theorem ipred_isucc(a: Int): ipred(isucc(a)) = a {
     match a {
         OfNat(n) => refl,
-        NegSucc(n) => match n as λ y => ipred(isucc(NegSucc(y))) = NegSucc(y) {
+        NegSucc(n) => match n {
             Zero => refl,
             Succ(k) => refl,
         },
@@ -163,11 +166,11 @@ theorem ipred_negOfNat(n: Nat): ipred(negOfNat(n)) = NegSucc(n) {
 
 theorem neg_isucc(a: Int): neg(isucc(a)) = ipred(neg(a)) {
     match a {
-        OfNat(n) => match n as λ y => neg(isucc(OfNat(y))) = ipred(neg(OfNat(y))) {
+        OfNat(n) => match n {
             Zero => refl,
             Succ(k) => refl,
         },
-        NegSucc(n) => match n as λ y => neg(isucc(NegSucc(y))) = ipred(neg(NegSucc(y))) {
+        NegSucc(n) => match n {
             Zero => refl,
             Succ(k) => refl,
         },
@@ -176,7 +179,7 @@ theorem neg_isucc(a: Int): neg(isucc(a)) = ipred(neg(a)) {
 
 theorem neg_ipred(a: Int): neg(ipred(a)) = isucc(neg(a)) {
     match a {
-        OfNat(n) => match n as λ y => neg(ipred(OfNat(y))) = isucc(neg(OfNat(y))) {
+        OfNat(n) => match n {
             Zero => refl,
             Succ(k) => refl,
         },
@@ -226,7 +229,7 @@ theorem add_isucc(a, b: Int): add(a, isucc(b)) = isucc(add(a, b)) {
     match b {
         OfNat(n) => refl,
         NegSucc(n) =>
-            match n as λ y => add(a, isucc(NegSucc(y))) = isucc(add(a, NegSucc(y))) {
+            match n {
                 Zero => sym(isucc_ipred(a)),
                 Succ(k) => sym(isucc_ipred(subNat(a, Succ(k)))),
             },
@@ -236,7 +239,7 @@ theorem add_isucc(a, b: Int): add(a, isucc(b)) = isucc(add(a, b)) {
 theorem add_ipred(a, b: Int): add(a, ipred(b)) = ipred(add(a, b)) {
     match b {
         OfNat(n) =>
-            match n as λ y => add(a, ipred(OfNat(y))) = ipred(add(a, OfNat(y))) {
+            match n {
                 Zero => refl,
                 Succ(k) => sym(ipred_isucc(addNat(a, k))),
             },
@@ -392,7 +395,7 @@ theorem addNat_negsucc_self(n: Nat): addNat(NegSucc(n), Succ(n)) = OfNat(0) {
 
 theorem add_neg(a: Int): add(a, neg(a)) = OfNat(0) {
     match a {
-        OfNat(n) => match n as λ y => add(OfNat(y), neg(OfNat(y))) = OfNat(0) {
+        OfNat(n) => match n {
             Zero => refl,
             Succ(k) => subNat_self(Succ(k)),
         },
@@ -498,7 +501,7 @@ theorem mul_neg_r(a, b: Int): mul(a, neg(b)) = neg(mul(a, b)) {
     match a {
         OfNat(m) => match b {
             OfNat(n) =>
-                match n as λ y => mul(OfNat(m), neg(OfNat(y))) = neg(mul(OfNat(m), OfNat(y))) {
+                match n {
                     Zero => refl,
                     Succ(k) => refl,
                 },
@@ -506,8 +509,7 @@ theorem mul_neg_r(a, b: Int): mul(a, neg(b)) = neg(mul(a, b)) {
         },
         NegSucc(m) => match b {
             OfNat(n) =>
-                match n as λ y =>
-                    mul(NegSucc(m), neg(OfNat(y))) = neg(mul(NegSucc(m), OfNat(y))) {
+                match n {
                     Zero => refl,
                     Succ(k) => sym(neg_negOfNat(nat::mul(Succ(m), Succ(k)))),
                 },
@@ -628,7 +630,7 @@ theorem mul_isucc(a, x: Int): mul(a, isucc(x)) = add(mul(a, x), a) {
     match x {
         OfNat(n) => mul_ofnat_succ(a, n),
         NegSucc(n) =>
-            match n as λ y => mul(a, isucc(NegSucc(y))) = add(mul(a, NegSucc(y)), a) {
+            match n {
                 Zero => trans(
                     mul_zero(a),
                     sym(trans(
@@ -830,7 +832,7 @@ theorem lt_isucc_self(a: Int): Lt(a, isucc(a)) { le_refl(isucc(a)) }
 theorem lt_irrefl(a: Int): ¬ Lt(a, a) {
     match a as λ z => Not(Lt(z, z)) {
         OfNat(m) => nat::lt_irrefl(m),
-        NegSucc(m) => match m as λ y => Not(Lt(NegSucc(y), NegSucc(y))) {
+        NegSucc(m) => match m {
             Zero => λ (h: Lt(NegSucc(0), NegSucc(0))) => h,
             Succ(j) => nat::lt_irrefl(j),
         },
@@ -848,6 +850,12 @@ theorem le_of_lt(a: Int): (b: Int) -> Lt(a, b) -> Le(a, b) {
             match b as λ y => Lt(NegSucc(m), y) -> Le(NegSucc(m), y) {
                 OfNat(n) => λ p => trivial,
                 NegSucc(n) => λ p =>
+                    // The one payload split in this file that is NOT motive
+                    // synthesis' to recover: the `(p)` makes it an INFERENCE
+                    // position, and the motive is convoying `p` past the
+                    // split, which is what the order kit's twelve do
+                    // (issues/nested-match-on-field-binder-motive.md, log
+                    // 2026-08-17).
                     match m as λ y => Lt(NegSucc(y), NegSucc(n)) -> Le(NegSucc(y), NegSucc(n)) {
                         Zero => λ p2 => false_elim(p2),
                         Succ(j) => λ p2 => nat::le_succ_r(n)(j, p2),

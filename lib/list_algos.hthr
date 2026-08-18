@@ -95,19 +95,19 @@ fn isort(xs: List<Nat>) -> List<Nat> {
 }
 
 // Inserting below a head keeps the head below everything. Two case splits and
-// no recursion, exactly as before — but the second split is on the DECISION,
-// and its motive reaches `or_pick`'s own scrutinee, so each arm's goal has
+// no recursion — and the second is on the DECISION, so each arm's goal has
 // already reduced to the branch that arm picked. Both arms are a hypothesis
-// handed back unchanged.
+// handed back unchanged. The motive that used to restate `or_pick(d, …, …)` is
+// gone here and at the four other decision splits in this file: synthesis
+// reduces the goal and abstracts the decision it is stuck on
+// (issues/goal-motive-by-scrutinee-abstraction.md, closed 2026-08-17).
 theorem le_head_insert(h: Nat, x: Nat, t: List<Nat>):
     Le(h, x) -> LeHead(h, t) -> LeHead(h, insert(x, t))
 {
     match t {
         Nil => λ hx ht => hx,
         Cons(h2, t2) => λ hx ht =>
-            match decide<Le(x, h2)>() as λ d =>
-                LeHead(h, or_pick(d, Cons(h2, insert(x, t2)), Cons(x, Cons(h2, t2))))
-            {
+            match decide<Le(x, h2)>() {
                 Inl(good) => hx,
                 Inr(bad) => ht,
             },
@@ -122,9 +122,7 @@ theorem insert_sorted(x: Nat, xs: List<Nat>): Sorted(xs) -> Sorted(insert(x, xs)
     match xs {
         Nil => λ hs => And(trivial, trivial),
         Cons(h, t) => λ hs =>
-            match decide<Le(x, h)>() as λ d =>
-                Sorted(or_pick(d, Cons(h, insert(x, t)), Cons(x, Cons(h, t))))
-            {
+            match decide<Le(x, h)>() {
                 Inl(good) => And(good, hs),
                 Inr(bad) => And(
                     le_head_insert(h, x, t, le_of_not_le(x, h, bad), hs.left),
@@ -221,10 +219,7 @@ theorem count_insert(x: Nat, xs: List<Nat>, a: Nat):
     match xs {
         Nil => {},
         Cons(h, t) =>
-            match decide<Le(x, h)>() as λ d =>
-                count(a, or_pick(d, Cons(h, insert(x, t)), Cons(x, Cons(h, t))))
-                    = count(a, Cons(x, Cons(h, t)))
-            {
+            match decide<Le(x, h)>() {
                 Inl(good) => refl,
                 Inr(bad) =>
                     trans(cong_fn(λ (n: Nat) => or_pick(eq_dec(a, h), n, Succ(n)),
@@ -255,10 +250,7 @@ theorem len_insert(x: Nat, xs: List<Nat>): len(insert(x, xs)) = Succ(len(xs)) {
     match xs {
         Nil => {},
         Cons(h, t) =>
-            match decide<Le(x, h)>() as λ d =>
-                len(or_pick(d, Cons(h, insert(x, t)), Cons(x, Cons(h, t))))
-                    = Succ(Succ(len(t)))
-            {
+            match decide<Le(x, h)>() {
                 Inl(good) => refl,
                 Inr(bad) => cong_succ(len_insert(x, t)),
             },
@@ -282,10 +274,7 @@ theorem mem_insert(x: Nat, xs: List<Nat>, a: Nat):
     match xs {
         Nil => λ m => m,
         Cons(h, t) =>
-            match decide<Le(x, h)>() as λ d =>
-                Mem(a, or_pick(d, Cons(h, insert(x, t)), Cons(x, Cons(h, t))))
-                    -> Mem(a, Cons(x, Cons(h, t)))
-            {
+            match decide<Le(x, h)>() {
                 Inl(good) => λ m => m,
                 Inr(bad) => λ m => match m {
                     Inl(e) => Inr(Inl(e)),
