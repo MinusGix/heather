@@ -1,6 +1,6 @@
 ---
 title: "Carrier-directed numerals: make 3 : Int solve the same problem as -3"
-status: open
+status: closed
 labels: [frontend,elaboration,notation,stdlib,traits]
 created: 2026-08-19
 updated: 2026-08-19
@@ -71,3 +71,12 @@ prefix designation; there is no separate negative-literal semantic path.
 - 2026-08-19: Split from the unary-negation implementation. The round chose the
   semantic equation `-3 = -(3)`, and refused an Int-only parser lowering:
   positive and negative numeral notation should gain carriers together.
+- 2026-08-19: Landed as the single-operation `Numeral<A>` class described in
+  `docs/carrier-directed-numerals-design.md`. Checking at a non-Nat/non-Fin
+  carrier resolves `ofNat : Nat -> A`; inference still defaults to the exact
+  historical Nat term. Expected results, non-numeral operator siblings, and an
+  equation's right endpoint provide the bounded bidirectional anchors needed
+  by `-3`, `3 + a`, and `3 = OfNat(3)` without delayed metas. `Int` registers
+  its constructor, generic `<A: Numeral>` source resolves through local
+  evidence, missing instances show the ordinary search trace, and no negative
+  literal node or carrier-specific parser rule was added.

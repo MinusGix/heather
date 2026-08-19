@@ -142,6 +142,36 @@ fn prefix_negation_is_carrier_directed() {
     .expect("a prefix designation resolves from its operand's carrier");
 }
 
+#[test]
+fn numerals_use_the_expected_carriers_instance() {
+    let mut e = Elaborator::with_prelude().expect("prelude");
+    e.elab_source(
+        r#"
+        class Numeral<A> { ofNat: Nat -> A }
+        inductive Wrap { W(n: Nat) }
+        instance Numeral<Wrap> { ofNat := W }
+        fn three() -> Wrap { 3 }
+        theorem computes(): three() = W(3) { refl }
+        fn generic<A: Numeral>() -> A { 1 }
+        theorem generic_computes(): generic<Wrap>() = W(1) { refl }
+        "#,
+    )
+    .expect("numerals should resolve at concrete and constrained open carriers");
+}
+
+#[test]
+fn a_missing_numeral_instance_names_the_carrier_goal() {
+    let mut e = Elaborator::with_prelude().expect("prelude");
+    let src = r#"
+        class Numeral<A> { ofNat: Nat -> A }
+        inductive Empty { E }
+        fn bad() -> Empty { 2 }
+    "#;
+    let err = e.elab_source(src).expect_err("a carrier with no numeral instance must refuse");
+    let msg = err.render(src);
+    assert!(msg.contains("no instance for `Numeral<Empty>`"), "{msg}");
+}
+
 // -- `<=` (issues/comparison-operators.md) ---------------------------------
 
 // The order kit, cut down to what a comparison test needs: the boolean

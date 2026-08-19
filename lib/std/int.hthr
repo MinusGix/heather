@@ -1288,6 +1288,7 @@ theorem neg_unique(x, y: Int, h: x + y = OfNat(0)): y = neg(x) {
 }
 
 instance Default<Int> { default := OfNat(0) }
+instance Numeral<Int> { ofNat := OfNat }
 
 instance Cmp<Int> { le := Le, le_refl := le_refl, le_dec := le_dec }
 

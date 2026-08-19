@@ -362,6 +362,16 @@ fn head_or_default<A: Default>(o: Option<A>) -> A { or_default(o) }
 ");
 }
 
+#[test]
+fn numeral_resolves_generically_and_keeps_nat_as_the_default() {
+    ok("
+fn one<A: Numeral>() -> A { 1 }
+fn three() -> Nat { 3 }
+theorem generic_nat(): one<Nat>() = 1 { refl }
+theorem ordinary_nat(): three() = 3 { refl }
+");
+}
+
 // ---------------------------------------------------------------------------
 // 6. The policy, enforced.
 

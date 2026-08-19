@@ -80,6 +80,15 @@ class Default<A> {
     default: A,
 }
 
+// The canonical interpretation of a natural numeral at a carrier. Numeral
+// syntax keeps its `Nat` default, but in a checking position at `A` the
+// elaborator resolves this dictionary and applies `ofNat` to the written
+// natural. One embedding per carrier; laws about it belong to that carrier's
+// own API rather than to notation.
+class Numeral<A> {
+    ofNat: Nat -> A,
+}
+
 // A decided order — and as of 2026-08-16 a **propositional** one
 // (docs/nat-order-design.md §3). `le` returns a `Type`, the law is the
 // relation itself rather than an equation with `True`, and the decision moved
@@ -177,6 +186,8 @@ instance Default<Nat> { default := 0 }
 instance Default<Bool> { default := False }
 instance<A> Default<List<A>> { default := Nil }
 instance<A> Default<Option<A>> { default := None }
+
+instance Numeral<Nat> { ofNat := λ (n: Nat) => n }
 
 // Both orders are written **qualified**, and this file is where that stopped
 // being optional: `std/bool`'s order dropped its `_bool` suffix on 2026-08-17

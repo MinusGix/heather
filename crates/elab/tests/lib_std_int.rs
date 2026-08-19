@@ -216,6 +216,18 @@ theorem c_sub_over(): int::sub(OfNat(8), OfNat(3)) = OfNat(5) { refl }
 theorem c_neg_p(): int::neg(OfNat(4)) = NegSucc(3) { refl }
 theorem c_neg_n(): int::neg(NegSucc(3)) = OfNat(4) { refl }
 theorem c_neg_zero(): int::neg(OfNat(0)) = OfNat(0) { refl }
+fn c_positive_numeral() -> Int { 4 }
+fn c_negative_numeral() -> Int { -4 }
+fn c_generic_numeral<A: Numeral>() -> A { 1 }
+fn c_literal_left_infers_from_sibling(a: Int) -> Int { let x = 3 + a; x }
+theorem c_positive_numeral_computes(): c_positive_numeral() = OfNat(4) { refl }
+theorem c_negative_numeral_computes(): c_negative_numeral() = NegSucc(3) { refl }
+theorem c_generic_int_numeral(): c_generic_numeral<Int>() = OfNat(1) { refl }
+theorem c_generic_nat_numeral(): c_generic_numeral<Nat>() = 1 { refl }
+theorem c_positive_literal_equation(): 4 = OfNat(4) { refl }
+theorem c_negative_literal_equation(): -4 = NegSucc(3) { refl }
+theorem c_literal_arithmetic_equation(): 2 + 3 = OfNat(5) { refl }
+theorem c_literal_left_computes(): c_literal_left_infers_from_sibling(OfNat(2)) = OfNat(5) { refl }
 theorem c_prefix_neg_open(a: Int): -a = int::neg(a) { refl }
 theorem c_prefix_neg_positive(): -OfNat(4) = NegSucc(3) { refl }
 theorem c_prefix_neg_negative(): -NegSucc(3) = OfNat(4) { refl }
@@ -259,20 +271,6 @@ theorem c_max(a: Int): max_of(a, a) = a { max_of_self(a) }
 theorem c_max_computes(): max_of(NegSucc(2), OfNat(1)) = OfNat(1) { refl }
 "#,
     );
-}
-
-#[test]
-fn a_bare_numeral_under_minus_is_still_a_nat() {
-    let mut e = elaborated();
-    let src = r#"
-import int;
-theorem not_an_int_literal(): -3 = NegSucc(2) { refl }
-"#;
-    let err = e
-        .elab_module_source("negative_numeral", src)
-        .expect_err("`-3` must not acquire an Int-specific literal lowering");
-    let msg = err.render(src);
-    assert!(msg.contains("nothing designates `-` at `Nat`"), "{msg}");
 }
 
 /// The round's own row, and the reason it could not be written until

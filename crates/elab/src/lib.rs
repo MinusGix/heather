@@ -2662,6 +2662,26 @@ impl Elaborator {
             // payloads — anywhere `cx.meta` is present).
             TyKind::Splice { name } => self.elab_ty_splice(cx, name, ty.span),
             TyKind::Eq(lhs, rhs) => {
+                // A numeral has a `Nat` default in inference, but is
+                // carrier-directed in checking. When the equation's left
+                // operator spine begins at one, the right endpoint is the
+                // available carrier annotation: infer it first, then check
+                // the written left endpoint there. `3 = 3` remains Nat;
+                // `3 = OfNat(3)` and `-3 = NegSucc(2)` become Int without a
+                // negative-literal node or an Int-specific parser rule.
+                if Self::expression_left_leaf_is_numeral(lhs) {
+                    let (rhs_t, rhs_ty, lvl) = self.elab_infer(cx, rhs)?;
+                    let lhs_t = self.elab_check(cx, lhs, &rhs_ty, &lvl)?;
+                    return Ok((
+                        Type::Id {
+                            level: lvl.clone(),
+                            ty: Rc::new(rhs_ty),
+                            lhs: Rc::new(lhs_t),
+                            rhs: Rc::new(rhs_t),
+                        },
+                        lvl,
+                    ));
+                }
                 let (lhs_t, lhs_ty, lvl) = self.elab_infer(cx, lhs)?;
                 let rhs_t = self.elab_check(cx, rhs, &lhs_ty, &lvl)?;
                 Ok((
@@ -2892,7 +2912,7 @@ impl Elaborator {
             // is the spelling anybody reaches for first, and without this it
             // means `xs[FS(FS(FZ))]`. Falls through to the ordinary `Nat`
             // reading at every other expected type.
-            ExprKind::Num(t) => self.elab_num_check(cx, *t, e, expected, e.span),
+            ExprKind::Num(t) => self.elab_num_check(cx, *t, e, expected, lvl, e.span),
             // A lambda against an expected Π: the *expected* domain is what
             // the binder is pushed with, so the emitted annotation always
             // matches the type it is checked against. A written annotation is
@@ -4988,6 +5008,7 @@ impl Elaborator {
         t: u64,
         e: &Expr,
         expected: &Type,
+        expected_level: &Level,
         span: Span,
     ) -> R<Term> {
         if let Type::Fin { len } = &*crate::inductive::decoded(expected) {
@@ -5011,6 +5032,57 @@ impl Elaborator {
             }
             let t = t as usize;
             return Ok(wf::fin_index(t, t + 1, &base));
+        }
+        // `Nat` remains the inference default and its checking term remains
+        // byte-identical. In particular, loading the standard `Numeral<Nat>`
+        // instance must not turn every ordinary numeral into a dictionary
+        // projection whose reduction merely returns this same term.
+        if matches!(&*crate::inductive::decoded(expected), Type::Nat) {
+            let (num, _, _) = self.elab_infer(cx, e)?;
+            return Ok(num);
+        }
+        // At another expected carrier, use the ordinary class resolver. The
+        // class is optional at the language level: a program that has not
+        // imported the standard algebra module keeps the historical Nat-only
+        // mismatch below. Once `Numeral` is visible, however, a missing
+        // instance is the useful diagnosis and not a later Nat-vs-carrier
+        // conversion error.
+        if let Some(class) = self.lookup_class("Numeral")
+            && class.params.len() == 1
+            && class.valparams.is_empty()
+            && let Some(ind) = self.lookup_inductive(&class.name).cloned()
+            && let Some(field) = ind.field_index("ofNat")
+        {
+            let targs = [(expected.clone(), expected_level.clone())];
+            let (goal, goal_level) = self.lower_instance(cx, &ind, &targs, &[], span)?;
+            let carrier = self
+                .type_namespace(cx, expected, span)
+                .unwrap_or_else(|| "the expected type".to_string());
+            let display = format!("Numeral<{carrier}>");
+            let mut trace = Vec::new();
+            let Some(dict) = self.resolve_goal(
+                cx,
+                &goal,
+                &goal_level,
+                &display,
+                span,
+                &mut trace,
+            ) else {
+                return Err(ElabError::Resolution { goal: display, span, trace });
+            };
+            let (embed, embed_ty, embed_level) =
+                self.project_field(cx, &ind, &goal, Rc::new(dict), field, span)?;
+            let (out, _, _) = self.apply_explicit(
+                cx,
+                Some("ofNat"),
+                Rc::new(Vec::new()),
+                0,
+                embed,
+                embed_ty,
+                embed_level,
+                std::slice::from_ref(e),
+            )?;
+            return Ok(out);
         }
         // A numeral is the leaf case of
         // `issues/check-fallback-discards-expected-type.md`: its inferred type
@@ -6359,7 +6431,32 @@ impl Elaborator {
         //    (docs/bare-symbol-checking-carrier-design.md §4.2).
         let mut uncovered_carrier = None;
         if self.designations.keys().any(|(f, s, _)| *f == fixity && s == sym) {
-            let probed = if args.is_empty() {
+            let flexible_left = Self::operator_left_leaf_is_numeral(args);
+            let expected_for_numeral = if flexible_left {
+                expected
+                    .and_then(|t| self.carrier_of_ty(cx, t, span))
+                    .filter(|h| self.designated(sym, fixity, &h.key).is_some())
+                    .map(|h| (h, Self::FROM_EXPECTED))
+            } else {
+                None
+            };
+            let sibling_for_numeral = if flexible_left {
+                args.iter()
+                    .skip(1)
+                    .filter(|arg| !Self::expression_left_leaf_is_numeral(arg))
+                    .find_map(|arg| {
+                        self.op_carrier_head(cx, std::slice::from_ref(arg), span)
+                            .filter(|h| self.designated(sym, fixity, &h.key).is_some())
+                    })
+                    .map(|h| (h, "the carrier of its first non-numeral operand"))
+            } else {
+                None
+            };
+            let probed = if let Some(from_expected) = expected_for_numeral {
+                Some(from_expected)
+            } else if let Some(from_sibling) = sibling_for_numeral {
+                Some(from_sibling)
+            } else if args.is_empty() {
                 expected
                     .and_then(|t| self.expected_carrier_head(cx, t, span))
                     .map(|h| (h, Self::FROM_EXPECTED))
@@ -6521,6 +6618,35 @@ impl Elaborator {
         self.goals.borrow_mut().truncate(mark);
         let (_, ty, _) = inferred.ok()?;
         self.carrier_of_ty(cx, &ty, span)
+    }
+
+    /// Whether the leftmost operand that would normally choose an operator's
+    /// carrier is a numeral. Such a leaf has a `Nat` *default*, not an
+    /// intrinsic carrier, so a checking position may choose a designation at
+    /// its expected result carrier before the arguments are checked there.
+    fn operator_left_leaf_is_numeral(args: &[Expr]) -> bool {
+        let Some(mut leaf) = args.first() else { return false };
+        loop {
+            let ExprKind::App { head, args, .. } = &leaf.kind else { break };
+            if !matches!(head.kind, ExprKind::OpSymbol { .. }) {
+                break;
+            }
+            let Some(first) = args.first() else { break };
+            leaf = first;
+        }
+        matches!(leaf.kind, ExprKind::Num(_))
+    }
+
+    fn expression_left_leaf_is_numeral(e: &Expr) -> bool {
+        match &e.kind {
+            ExprKind::Num(_) => true,
+            ExprKind::App { head, args, .. }
+                if matches!(head.kind, ExprKind::OpSymbol { .. }) =>
+            {
+                Self::operator_left_leaf_is_numeral(args)
+            }
+            _ => false,
+        }
     }
 
     /// The head of the carrier a **checking position** is asking for — rung

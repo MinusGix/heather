@@ -76,3 +76,6 @@ literal needs its own expected-type/coercion decision, now owned by
   `-3` deliberately parses as `-(3)` but refuses today because `3` still infers
   `Nat`; [[carrier-directed-numerals]] owns making both `3 : Int` and `-3 : Int`
   work without an Int-specific negative-literal node.
+- 2026-08-19: [[carrier-directed-numerals]] landed immediately afterward, so
+  that temporary refusal is gone: in an Int-directed position `-3` now lowers
+  through the same `neg(OfNat(3))` path the issue reserved for it.
