@@ -371,18 +371,13 @@ fn a_quantifier_binder_needs_its_annotation() {
 // ---------------------------------------------------------------------------
 // 7. Controls on the rungs the connectives sit between.
 
-/// `&&`/`||` did NOT move. They are arithmetic, tighter than comparison, and
-/// `x && True = x` is still `(x && True) = x` — the assertion
-/// `issues/bool-operator-designations.md` relies on.
-///
-/// The closure here has no `algebra`, so `&&` reaches no designation and the
-/// *resolution* fails; that failure is the evidence, because it can only be
-/// reached by a parse that read `x && True` as one operand of the `=`.
+/// `&&`/`||` remain arithmetic, tighter than comparison, and are now owned by
+/// `bool` itself. Thus `x && True = x` is `(x && True) = x`, and the named and
+/// designated spellings convert without importing `algebra`.
 #[test]
-fn the_boolean_doubles_are_unmoved() {
+fn the_boolean_doubles_keep_their_precedence_and_resolve_from_bool() {
     ok("theorem t(x: Bool): and(x, True) = x { and_true_r(x) }");
-    let err = bad("theorem u(x: Bool, h: and(x, True) = x): x && True = x { h }");
-    assert!(err.contains("`&&` has no meaning here"), "got: {err}");
+    ok("theorem u(x: Bool, h: and(x, True) = x): x && True = x { h }");
 }
 
 /// Comparisons still do not chain, and the message is still theirs rather

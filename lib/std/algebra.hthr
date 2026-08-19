@@ -188,35 +188,10 @@ instance<A> Default<Option<A>> { default := None }
 instance Cmp<Nat> { le := nat::Le, le_refl := nat::le_refl, le_dec := nat::le_dec }
 instance Cmp<Bool> { le := bool::Le, le_refl := bool::le_refl, le_dec := bool::le_dec }
 
-// ---------------------------------------------------------------------------
-// The designations: what a symbol means at a carrier
-// (docs/operators-onto-classes-design.md §3).
-//
-// One entry per (symbol, carrier head); a duplicate is a declaration error.
-// `Bool` is the case worth reading: two operations, two symbols, and the
-// programming spelling chooses which is which — `&&` is conjunction, `||` is
-// disjunction. Neither entry is "the" Bool monoid, because a designation says
-// what a *symbol* means and never which structure a carrier has.
-//
-// `+` and `*` have fixed fallback meanings (`add`, `mul`) that a file with no
-// row still gets; the rows here are what make them table entries rather than
-// hard-coded rules.
-// `&&`, `||` and `++` have no such fallback, so away from a designation or a
-// binder they refuse — which makes these entries the whole of what the
-// symbols mean.
-
-designation + at Nat := add
-designation * at Nat := mul
-designation && at Bool := and
-designation || at Bool := or
-
-// The generic entry, at an **open** element type: `xs ++ ys` is concatenation
-// at every `List<A>`, keyed on the head exactly as `instance<A> Monoid<List<A>>`
-// is. `++` has no arithmetic fallback, so this row is the whole of its meaning.
-// It is also what `concat`'s `mconcat(++, xss)` below reads: there the symbol
-// is passed rather than applied, and the carrier `List<A>` arrives from the
-// slot's own type — the open-carrier case of the same row.
-designation<A> ++ at List<A> := append
+// Operation designations live beside their definitions in `bool`, `nat`, and
+// `list`. This module consumes those rows; it does not own them. In particular,
+// `concat`'s `mconcat(++, xss)` below passes `++` as a value and resolves the
+// generic `List<A>` row declared immediately after `append`.
 
 // ---------------------------------------------------------------------------
 // The consumers: written once against a class, used at every carrier.

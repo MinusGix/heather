@@ -23,23 +23,27 @@ fn not(b: Bool) -> Bool { match b { False => True, True => False } }
 
 fn and(a, b: Bool) -> Bool { match a { False => False, True => b } }
 
+designation && at Bool := and
+
 fn or(a, b: Bool) -> Bool { match a { False => b, True => True } }
+
+designation || at Bool := or
 
 // `and` is the conjunction monoid: unit `True`, and — because `and` recurses
 // on its *first* argument — `and(True, x)` is `x` definitionally while
 // `and(x, True) = x` is the case split.
 
-theorem and_assoc(a, b, c: Bool): and(and(a, b), c) = and(a, and(b, c)) {
+theorem and_assoc(a, b, c: Bool): (a && b) && c = a && (b && c) {
     match a { False => refl, True => refl }
 }
 
-theorem and_true_l(a: Bool): and(True, a) = a { refl }
+theorem and_true_l(a: Bool): True && a = a { refl }
 
-theorem and_true_r(a: Bool): and(a, True) = a {
+theorem and_true_r(a: Bool): a && True = a {
     match a { False => refl, True => refl }
 }
 
-theorem and_comm(a, b: Bool): and(a, b) = and(b, a) {
+theorem and_comm(a, b: Bool): a && b = b && a {
     match a {
         False => match b { False => refl, True => refl },
         True => match b { False => refl, True => refl },
@@ -48,17 +52,17 @@ theorem and_comm(a, b: Bool): and(a, b) = and(b, a) {
 
 // `or` is the disjunction monoid: unit `False`. Same shape, dual.
 
-theorem or_assoc(a, b, c: Bool): or(or(a, b), c) = or(a, or(b, c)) {
+theorem or_assoc(a, b, c: Bool): (a || b) || c = a || (b || c) {
     match a { False => refl, True => refl }
 }
 
-theorem or_false_l(a: Bool): or(False, a) = a { refl }
+theorem or_false_l(a: Bool): False || a = a { refl }
 
-theorem or_false_r(a: Bool): or(a, False) = a {
+theorem or_false_r(a: Bool): a || False = a {
     match a { False => refl, True => refl }
 }
 
-theorem or_comm(a, b: Bool): or(a, b) = or(b, a) {
+theorem or_comm(a, b: Bool): a || b = b || a {
     match a {
         False => match b { False => refl, True => refl },
         True => match b { False => refl, True => refl },
@@ -102,17 +106,19 @@ fn Le(a: Bool) -> Bool -> Type {
     }
 }
 
-theorem le_refl(a: Bool): Le(a)(a) {
+designation <= at Bool := Le
+
+theorem le_refl(a: Bool): a <= a {
     match a { False => trivial, True => trivial }
 }
 
 // A `fn`, not a `theorem`: a decision has to unfold in conversion
 // (docs/nat-order-design.md §2).
-fn le_dec(a, b: Bool) -> Or<Le(a)(b), ¬ Le(a)(b)> {
-    match a as λ z => Or<Le(z)(b), Not(Le(z)(b))> {
+fn le_dec(a, b: Bool) -> Or<a <= b, ¬ (a <= b)> {
+    match a as λ z => Or<z <= b, Not(z <= b)> {
         False => Inl(trivial),
-        True => match b as λ y => Or<Le(True)(y), Not(Le(True)(y))> {
-            False => Inr(λ (bad: Le(True)(False)) => bad),
+        True => match b as λ y => Or<True <= y, Not(True <= y)> {
+            False => Inr(λ (bad: True <= False) => bad),
             True => Inl(trivial),
         },
     }
@@ -123,9 +129,3 @@ fn le_dec(a, b: Bool) -> Or<Le(a)(b), ¬ Le(a)(b)> {
 // (docs/value-generic-instances-design.md). All three register: the key is
 // (`logic::Decide`, `bool::Le`) here, `nat::Le` there, `int::Le` there.
 instance(a, b: Bool) Decide<Le(a, b)> { dec := le_dec(a, b) }
-
-// `<=` at a Bool operand is this relation, and the row is what makes it so in
-// a file that also imports `nat` or `int`: without it the symbol falls back to
-// the bare name `Le`, which in such a file names three declarations
-// (docs/operators-onto-classes-design.md §4).
-designation <= at Bool := Le

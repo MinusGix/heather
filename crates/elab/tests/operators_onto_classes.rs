@@ -42,7 +42,7 @@ const OPTION: &str = include_str!("../../../lib/std/option.hthr");
 const PAIR: &str = include_str!("../../../lib/std/pair.hthr");
 const LIST: &str = include_str!("../../../lib/std/list.hthr");
 
-/// The test's own chain and instances, plus its own designation table. `Sem` →
+/// The test's own chain and instances, plus extra designation rows. `Sem` →
 /// `Mon` → `CMon` at one index each, so the upcast machinery is exercised
 /// without the library's names being the thing under test.
 ///
@@ -50,8 +50,9 @@ const LIST: &str = include_str!("../../../lib/std/list.hthr");
 /// *library* reviewed out in favour of `&&`/`||`
 /// (issues/bool-operator-designations.md) — deliberately: the mechanism is
 /// convention-agnostic, a designation may put any operation in any symbol at
-/// any carrier, and these tests are what pin that. The doubled symbols are
-/// declared beside them, so one carrier here holds four designated symbols.
+/// any carrier, and these tests are what pin that. The standard `&&`/`||`
+/// rows remain in scope from `bool`, so one carrier here holds four designated
+/// symbols.
 const P: &str = r#"
 class Sem<A>(op: A -> A -> A) {
     assoc: (x: A) -> (y: A) -> (z: A) -> op(op(x, y), z) = op(x, op(y, z)),
@@ -84,13 +85,9 @@ instance<A> Mon<List<A>>(append) {
     unit_l := λ (xs: List<A>) => refl, unit_r := append_nil,
 }
 
-designation + at Nat := add
 designation + at Bool := or
 designation * at Bool := and
-designation && at Bool := and
-designation || at Bool := or
 designation<A> + at List<A> := append
-designation<A> ++ at List<A> := append
 
 fn fold<A: Mon(op)>(op: A -> A -> A, xs: List<A>) -> A {
     match xs { Nil => A.unit, Cons(h, t) => op(h, fold(op, t)) }
@@ -250,8 +247,8 @@ fn the_fallback_rung_is_the_old_desugaring() {
     ")
     .expect("a file with no designation is the fallback rung, unchanged");
 
-    // (b) `<=` and `<` have no designations in the library and never had one
-    //     here: `<=` is `Le`, the *proposition*, exactly as before.
+    // (b) In this bare source `<=` and `<` have no designation: `<=` is `Le`,
+    //     the *proposition*, exactly as before.
     bare("
         fn Le(n: Nat, m: Nat) -> Type<0> { n = m }
         theorem t(n: Nat, m: Nat, h: n <= m): Le(n, m) { h }
@@ -343,9 +340,9 @@ fn the_designation_declaration_refuses_by_name() {
     let e = bad("designation * at (Nat -> Nat) := add");
     assert!(e.contains("no head type name"), "{e}");
 
-    // The positive control: a *third* symbol at `Nat` is not a duplicate, and
-    // a fourth carrier for `+` is not either.
-    ok("designation * at Nat := add
+    // The positive control: a fresh symbol at `Nat` is not a duplicate, and a
+    // fresh carrier for `+` is not either.
+    ok("designation ++ at Nat := add
         designation + at Option := add");
 }
 

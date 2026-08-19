@@ -75,6 +75,8 @@ fn append<A>(xs, ys: List<A>) -> List<A> {
     }
 }
 
+designation<A> ++ at List<A> := append
+
 theorem cong_cons<A>(h: A, {a, b: List<A>}, p: a = b):
     Cons(h, a) = Cons(h, b)
 {
@@ -82,27 +84,27 @@ theorem cong_cons<A>(h: A, {a, b: List<A>}, p: a = b):
 }
 
 theorem cong_append_l<A>({a: List<A>}, {b: List<A>}, zs: List<A>, p: a = b):
-    append(a, zs) = append(b, zs)
+    a ++ zs = b ++ zs
 {
-    j(p, λ y q => append(a, zs) = append(y, zs), refl)
+    j(p, λ y q => a ++ zs = y ++ zs, refl)
 }
 
 // `append_nil` is the first existing library theorem expressed by filling a
 // dependent elimination algebra. The recursive proof is no longer named or
 // called here: `list_elim` supplies it to the Cons obligation as `ih`.
-fn append_nil_elim<A>() -> ListElim<A>(λ (xs: List<A>) => append(xs, Nil) = xs) {
+fn append_nil_elim<A>() -> ListElim<A>(λ (xs: List<A>) => xs ++ Nil = xs) {
     ListElim {
         nil: refl,
         cons: λ (h: A) (t: List<A>) ih => cong_cons(h, ih),
     }
 }
 
-theorem append_nil<A>(xs: List<A>): append(xs, Nil) = xs {
-    list_elim(λ (ys: List<A>) => append(ys, Nil) = ys, append_nil_elim(), xs)
+theorem append_nil<A>(xs: List<A>): xs ++ Nil = xs {
+    list_elim(λ (ys: List<A>) => ys ++ Nil = ys, append_nil_elim(), xs)
 }
 
 theorem append_assoc<A>(xs, ys, zs: List<A>):
-    append(append(xs, ys), zs) = append(xs, append(ys, zs))
+    (xs ++ ys) ++ zs = xs ++ (ys ++ zs)
 {
     match xs {
         Nil => {},
@@ -126,7 +128,7 @@ fn len<A>(xs: List<A>) -> Nat {
 }
 
 theorem len_append<A>(xs, ys: List<A>):
-    len(append(xs, ys)) = add(len(xs), len(ys))
+    len(xs ++ ys) = len(xs) + len(ys)
 {
     match xs {
         Nil => sym(add_left_zero(len(ys))),
@@ -169,7 +171,7 @@ theorem map_map<A, B, C>(xs: List<A>, f: A -> B, g: B -> C):
 }
 
 theorem map_append<A, B>(xs, ys: List<A>, f: A -> B):
-    map(append(xs, ys), f) = append(map(xs, f), map(ys, f))
+    map(xs ++ ys, f) = map(xs, f) ++ map(ys, f)
 {
     match xs {
         Nil => {},
@@ -195,7 +197,7 @@ fn rev<A>(xs: List<A>) -> List<A> {
 }
 
 theorem rev_append<A>(xs: List<A>, ys: List<A>):
-    rev(append(xs, ys)) = append(rev(ys), rev(xs))
+    rev(xs ++ ys) = rev(ys) ++ rev(xs)
 {
     match xs {
         Nil => sym(append_nil(rev(ys))),
@@ -261,7 +263,7 @@ theorem cong_fn<A, B>(g: A -> B, {a, b: A}, p: a = b): g(a) = g(b) {
 }
 
 theorem foldr_append<A, B>(xs, ys: List<A>, f: A -> B -> B, z: B):
-    foldr(append(xs, ys), f, z) = foldr(xs, f, foldr(ys, f, z))
+    foldr(xs ++ ys, f, z) = foldr(xs, f, foldr(ys, f, z))
 {
     match xs {
         Nil => {},
@@ -359,7 +361,7 @@ theorem list_fold_is_foldr<A, B>(f: A -> B -> B, z: B, xs: List<A>):
 // laws want.
 
 theorem foldl_append<A, B>(xs, ys: List<A>, f: B -> A -> B):
-    (z: B) -> foldl(append(xs, ys), f, z) = foldl(ys, f, foldl(xs, f, z))
+    (z: B) -> foldl(xs ++ ys, f, z) = foldl(ys, f, foldl(xs, f, z))
 {
     match xs {
         Nil => λ z => {},
@@ -388,7 +390,7 @@ theorem foldl_rev<A, B>(xs: List<A>, f: B -> A -> B):
 // same way `len_append` does: the IH lands on `add(Succ(z), len(t))` and the
 // goal wants `Succ(add(z, len(t)))`.
 theorem foldl_len<A>(xs: List<A>):
-    (z: Nat) -> foldl(xs, λ (k: Nat) (a: A) => Succ(k), z) = add(z, len(xs))
+    (z: Nat) -> foldl(xs, λ (k: Nat) (a: A) => Succ(k), z) = z + len(xs)
 {
     match xs {
         Nil => λ z => {},
@@ -441,7 +443,7 @@ fn drop<A>(xs: List<A>) -> Nat -> List<A> {
 }
 
 theorem take_append_drop<A>(xs: List<A>):
-    (n: Nat) -> append(take(xs, n), drop(xs, n)) = xs
+    (n: Nat) -> take(xs, n) ++ drop(xs, n) = xs
 {
     match xs {
         Nil => λ n => {},
@@ -494,7 +496,7 @@ theorem len_filter<A>(xs: List<A>, p: A -> Bool): len(filter(xs, p)) <= len(xs) 
 // docs/goal-motive-synthesis-design.md).
 
 theorem filter_append<A>(xs, ys: List<A>, p: A -> Bool):
-    filter(append(xs, ys), p) = append(filter(xs, p), filter(ys, p))
+    filter(xs ++ ys, p) = filter(xs, p) ++ filter(ys, p)
 {
     match xs {
         Nil => {},
@@ -691,7 +693,7 @@ theorem mem_head<A>(a: A, xs: List<A>): Mem(a, Cons(a, xs)) { Inl(refl) }
 
 theorem mem_cons<A>(a, h: A, xs: List<A>, m: Mem(a, xs)): Mem(a, Cons(h, xs)) { Inr(m) }
 
-theorem mem_append_l<A>(xs, ys: List<A>, a: A): Mem(a, xs) -> Mem(a, append(xs, ys)) {
+theorem mem_append_l<A>(xs, ys: List<A>, a: A): Mem(a, xs) -> Mem(a, xs ++ ys) {
     match xs {
         Nil => λ m => false_elim(m),
         Cons(h, t) => λ m => match m {
@@ -701,7 +703,7 @@ theorem mem_append_l<A>(xs, ys: List<A>, a: A): Mem(a, xs) -> Mem(a, append(xs, 
     }
 }
 
-theorem mem_append_r<A>(xs, ys: List<A>, a: A): Mem(a, ys) -> Mem(a, append(xs, ys)) {
+theorem mem_append_r<A>(xs, ys: List<A>, a: A): Mem(a, ys) -> Mem(a, xs ++ ys) {
     match xs {
         Nil => λ m => m,
         Cons(h, t) => λ m => Inr(mem_append_r(t, ys, a, m)),
@@ -709,7 +711,7 @@ theorem mem_append_r<A>(xs, ys: List<A>, a: A): Mem(a, ys) -> Mem(a, append(xs, 
 }
 
 theorem mem_append<A>(xs, ys: List<A>, a: A):
-    Mem(a, append(xs, ys)) -> Or<Mem(a, xs), Mem(a, ys)>
+    Mem(a, xs ++ ys) -> Mem(a, xs) ∨ Mem(a, ys)
 {
     match xs {
         Nil => λ m => Inr(m),
@@ -725,7 +727,7 @@ theorem mem_append<A>(xs, ys: List<A>, a: A):
 
 // The `Iff` exists to be cited; the three lemmas above are what get applied.
 theorem mem_append_iff<A>(xs, ys: List<A>, a: A):
-    Iff<Mem(a, append(xs, ys)), Or<Mem(a, xs), Mem(a, ys)>>
+    Mem(a, xs ++ ys) ↔ Mem(a, xs) ∨ Mem(a, ys)
 {
     Iff(mp := mem_append(xs, ys, a),
         mpr := λ (h: Or<Mem(a, xs), Mem(a, ys)>) =>
@@ -836,7 +838,7 @@ fn List::nth<A>(self xs: List<A>) -> Nat -> Option<A> {
 // so the statement is a function of it and every use is an over-application
 // (issues/ih-generalization.md's workaround).
 theorem nth_append_l<A>(xs: List<A>, ys: List<A>):
-    (i: Nat, a: A) -> xs.nth(i) = Some(a) -> append(xs, ys).nth(i) = Some(a)
+    (i: Nat, a: A) -> xs.nth(i) = Some(a) -> (xs ++ ys).nth(i) = Some(a)
 {
     match xs {
         Nil => λ i a p => absurd(p),
@@ -855,7 +857,7 @@ theorem nth_append_l<A>(xs: List<A>, ys: List<A>):
 // recurses on its second argument. Written this way round `add` steps exactly
 // when `append` does, and the proof is the bare recursion.
 theorem nth_append_r<A>(xs: List<A>, ys: List<A>, i: Nat):
-    append(xs, ys).nth(add(i, len(xs))) = ys.nth(i)
+    (xs ++ ys).nth(i + len(xs)) = ys.nth(i)
 {
     match xs {
         Nil => {},

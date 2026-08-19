@@ -26,15 +26,19 @@ import logic;
 
 fn add(a, b: Nat) -> Nat { match b { Zero => a, Succ(k) => Succ(add(a, k)) } }
 
+// The public spelling belongs beside the operation, so the law kit below is
+// written in the same surface a downstream proof uses.
+designation + at Nat := add
+
 theorem cong_nat(f: Nat -> Nat, {a, b: Nat}, p: a = b): f(a) = f(b) {
     j(p, λ y q => f(a) = f(y), refl)
 }
 
-theorem add_left_zero(x: Nat): add(0, x) = x {
+theorem add_left_zero(x: Nat): 0 + x = x {
     match x { Zero => refl, Succ(k) => cong_succ(add_left_zero(k)) }
 }
 
-theorem add_succ_left(a, b: Nat): add(Succ(a), b) = Succ(add(a, b)) {
+theorem add_succ_left(a, b: Nat): Succ(a) + b = Succ(a + b) {
     match b { Zero => refl, Succ(k) => cong_succ(add_succ_left(a, k)) }
 }
 
@@ -43,11 +47,11 @@ theorem add_succ_left(a, b: Nat): add(Succ(a), b) = Succ(add(a, b)) {
 // `std/algebra` and needs exactly these as its fields. Both recurse on the
 // argument `add` itself recurses on, so both are three lines.
 
-theorem add_assoc(x, y, z: Nat): add(add(x, y), z) = add(x, add(y, z)) {
+theorem add_assoc(x, y, z: Nat): (x + y) + z = x + (y + z) {
     match z { Zero => refl, Succ(k) => cong_succ(add_assoc(x, y, k)) }
 }
 
-theorem add_comm(x, y: Nat): add(x, y) = add(y, x) {
+theorem add_comm(x, y: Nat): x + y = y + x {
     match y {
         Zero => sym(add_left_zero(x)),
         Succ(k) => trans(cong_succ(add_comm(x, k)), sym(add_succ_left(k, x))),
@@ -72,30 +76,32 @@ theorem add_comm(x, y: Nat): add(x, y) = add(y, x) {
 
 fn mul(a, b: Nat) -> Nat { match b { Zero => Zero, Succ(k) => add(mul(a, k), a) } }
 
+designation * at Nat := mul
+
 // The right zero — `mul(x, 0) = 0` — needs no lemma. The left one does, and it
 // is three lines because the step's `add(_, 0)` reduces away.
-theorem mul_left_zero(x: Nat): mul(0, x) = 0 {
+theorem mul_left_zero(x: Nat): 0 * x = 0 {
     match x { Zero => refl, Succ(k) => mul_left_zero(k) }
 }
 
 // The unit on the left, for the same reason: `add(mul(1, k), 1)` reduces to
 // `Succ(mul(1, k))` on its own, so this is `add_left_zero`'s shape exactly.
-theorem mul_left_one(x: Nat): mul(1, x) = x {
+theorem mul_left_one(x: Nat): 1 * x = x {
     match x { Zero => refl, Succ(k) => cong_succ(mul_left_one(k)) }
 }
 
 // `add_succ_left`'s counterpart: the lemma that moves a `Succ` across from the
 // left. It is the one proof here that is not three lines, and every step of it
 // is an `add` law — which is the point of proving `add`'s kit first.
-theorem mul_succ_left(a, b: Nat): mul(Succ(a), b) = add(b, mul(a, b)) {
+theorem mul_succ_left(a, b: Nat): Succ(a) * b = b + a * b {
     match b {
         Zero => refl,
         Succ(k) => calc {
-            mul(Succ(a), Succ(k))
-                = Succ(add(mul(Succ(a), k), a))   := refl,
-                = Succ(add(add(k, mul(a, k)), a)) := cong(mul_succ_left(a, k)),
-                = Succ(add(k, add(mul(a, k), a))) := cong(add_assoc(k, mul(a, k), a)),
-                = add(Succ(k), mul(a, Succ(k)))   := sym(add_succ_left(k, add(mul(a, k), a))),
+            Succ(a) * Succ(k)
+                = Succ(Succ(a) * k + a)   := refl,
+                = Succ((k + a * k) + a)   := cong(mul_succ_left(a, k)),
+                = Succ(k + (a * k + a))   := cong(add_assoc(k, a * k, a)),
+                = Succ(k) + a * Succ(k)   := sym(add_succ_left(k, a * k + a)),
         },
     }
 }
@@ -104,7 +110,7 @@ theorem mul_succ_left(a, b: Nat): mul(Succ(a), b) = add(b, mul(a, b)) {
 // `mul_assoc` because `mul_assoc` *is* an instance of it, not the other way
 // round — the associativity step rebuilds `mul(x, mul(y, Succ(k)))` as a sum
 // and needs this to take it apart.
-theorem mul_add_distr(a, b, c: Nat): mul(a, add(b, c)) = add(mul(a, b), mul(a, c)) {
+theorem mul_add_distr(a, b, c: Nat): a * (b + c) = a * b + a * c {
     match c {
         Zero => refl,
         Succ(k) => trans(
@@ -117,7 +123,7 @@ theorem mul_add_distr(a, b, c: Nat): mul(a, add(b, c)) = add(mul(a, b), mul(a, c
 // The two laws `std/algebra` registers `CommMonoid<Nat>(mul)` from, in the
 // shape its fields want.
 
-theorem mul_assoc(x, y, z: Nat): mul(mul(x, y), z) = mul(x, mul(y, z)) {
+theorem mul_assoc(x, y, z: Nat): (x * y) * z = x * (y * z) {
     match z {
         Zero => refl,
         Succ(k) => trans(
@@ -127,15 +133,15 @@ theorem mul_assoc(x, y, z: Nat): mul(mul(x, y), z) = mul(x, mul(y, z)) {
     }
 }
 
-theorem mul_comm(x, y: Nat): mul(x, y) = mul(y, x) {
+theorem mul_comm(x, y: Nat): x * y = y * x {
     match y {
         Zero => sym(mul_left_zero(x)),
         Succ(k) => calc {
-            mul(x, Succ(k))
-                = add(mul(x, k), x) := refl,
-                = add(mul(k, x), x) := cong(mul_comm(x, k)),
-                = add(x, mul(k, x)) := add_comm(mul(k, x), x),
-                = mul(Succ(k), x)   := sym(mul_succ_left(k, x)),
+            x * Succ(k)
+                = x * k + x := refl,
+                = k * x + x := cong(mul_comm(x, k)),
+                = x + k * x := add_comm(k * x, x),
+                = Succ(k) * x := sym(mul_succ_left(k, x)),
         },
     }
 }
@@ -176,6 +182,9 @@ fn Le(n: Nat) -> Nat -> Type {
 // definitional (see below). It is uncurried because it is not recursive, so
 // nothing forces the shape.
 fn Lt(n, m: Nat) -> Type { Le(Succ(n), m) }
+
+designation <= at Nat := Le
+designation < at Nat := Lt
 
 // The decision procedure, kept. It is NOT part of the order's specification —
 // nothing above mentions it and no lemma below is stated with it — and as of
@@ -276,7 +285,7 @@ theorem le_antisym(n: Nat): (m: Nat) -> n <= m -> m <= n -> n = m {
 // goal `Or<Le(Succ k, Succ m2), Le(Succ m2, Succ k)>` and the IH's
 // `Or<Le(k, m2), Le(m2, k)>` are the SAME type, so the step is `ih(m2)` with
 // no repackaging.
-theorem le_total(n: Nat): (m: Nat) -> Or<Le(n, m), Le(m, n)> {
+theorem le_total(n: Nat): (m: Nat) -> n <= m ∨ m <= n {
     match n as λ z => (m: Nat) -> Or<Le(z, m), Le(m, z)> {
         Zero => λ m => Inl(trivial),
         Succ(k, ih) => λ m =>
@@ -321,16 +330,6 @@ fn le_dec(n: Nat) -> (m: Nat) -> Or<Le(n, m), ¬ Le(n, m)> {
 // was filed to take.
 instance(n, m: Nat) Decide<Le(n, m)> { dec := le_dec(n)(m) }
 
-// `<=` and `<` at a Nat operand are these relations. The rows exist for the
-// same reason `std/int`'s do: their fallbacks are the bare names `Le`/`Lt`,
-// which multiple modules declare (see docs/instance-resolved-key-design.md
-// §6), so a file importing two of them would otherwise resolve the symbol to
-// nothing rather than to the operand's order.
-// A designation reads the carrier off the operand, which is exactly the datum
-// the bare name lost.
-designation <= at Nat := Le
-designation < at Nat := Lt
-
 // ---------------------------------------------------------------------------
 // The strict order. Every one of these is `Le`'s kit read at `Succ(n)`; the
 // section is short because `Lt` is a definition rather than a second relation.
@@ -340,13 +339,13 @@ theorem lt_succ_self(n: Nat): n < Succ(n) { le_refl(n) }
 
 // Both directions are the identity: `Lt(n, Succ m)` and `Le(n, m)` are one
 // type. The `Iff` exists to be *cited*, not to do work.
-theorem lt_succ_iff_le(n, m: Nat): Iff<Lt(n, Succ(m)), Le(n, m)> {
+theorem lt_succ_iff_le(n, m: Nat): n < Succ(m) ↔ n <= m {
     Iff(mp := λ (h: Lt(n, Succ(m))) => h, mpr := λ (h: Le(n, m)) => h)
 }
 
 // Irreflexivity, which is `Le(Succ n, n) -> False` and recurses to the base
 // case `Le(1, 0)` — already `False`, so the whole proof is the recursion.
-theorem lt_irrefl(n: Nat): ¬ Lt(n, n) {
+theorem lt_irrefl(n: Nat): ¬ (n < n) {
     match n as λ z => Not(Lt(z, z)) {
         Zero => λ (h: Lt(0, 0)) => h,
         Succ(k, ih) => λ (h: Lt(Succ(k), Succ(k))) => ih(h),
@@ -391,7 +390,7 @@ theorem lt_of_le_of_ne(n: Nat): (m: Nat) -> n <= m -> ¬ (n = m) -> n < m {
 // the connective is what `logic` gives and a bespoke type would need its own
 // eliminator for no gain. The successor step is again a re-use of the IH at
 // the same type, once for each of its three arms.
-theorem lt_trichotomy(n: Nat): (m: Nat) -> Or<Lt(n, m), Or<n = m, Lt(m, n)>> {
+theorem lt_trichotomy(n: Nat): (m: Nat) -> n < m ∨ n = m ∨ m < n {
     match n as λ z => (m: Nat) -> Or<Lt(z, m), Or<z = m, Lt(m, z)>> {
         Zero => λ m =>
             match m as λ y => Or<Lt(0, y), Or<0 = y, Lt(y, 0)>> {
@@ -418,7 +417,7 @@ theorem lt_trichotomy(n: Nat): (m: Nat) -> Or<Lt(n, m), Or<n = m, Lt(m, n)>> {
 // the difference is the whole of what going propositional buys: that lemma was
 // an induction on `x` with `y` generalized, ending in `leb(y, x) = True`;
 // this one is `le_total` with the refuted side resolved away, and it is a line.
-theorem le_of_not_le(n, m: Nat, h: ¬ Le(n, m)): Le(m, n) {
+theorem le_of_not_le(n, m: Nat, h: ¬ (n <= m)): m <= n {
     or_resolve(or_swap(le_total(n)(m)), h)
 }
 
@@ -492,7 +491,7 @@ fn eq_dec(n: Nat) -> (m: Nat) -> Or<n = m, ¬ (n = m)> {
 // rather than chosen. `le_add` is the forward half and was already here.
 
 // `Le(n, m)` gives the difference. Induction on `n` with `m` generalized.
-theorem le_add(n: Nat): (m: Nat) -> n <= m -> add(n, sub(m)(n)) = m {
+theorem le_add(n: Nat): (m: Nat) -> n <= m -> n + sub(m)(n) = m {
     match n as λ z => (m: Nat) -> Le(z, m) -> add(z, sub(m)(z)) = m {
         Zero => λ m hle =>
             trans(cong_nat(λ (x: Nat) => add(0, x), sub_zero(m)), add_left_zero(m)),
@@ -507,12 +506,12 @@ theorem le_add(n: Nat): (m: Nat) -> n <= m -> add(n, sub(m)(n)) = m {
 
 // Two values compared by raising both to `n + m`, which is above each of them.
 
-theorem le_add_l(n, m: Nat): n <= add(n, m) {
+theorem le_add_l(n, m: Nat): n <= n + m {
     match m { Zero => le_refl(n), Succ(m2) => le_succ_r(n)(add(n, m2), le_add_l(n, m2)) }
 }
 
 // `add` recurses on its second argument, so this one is the definitional side
-theorem le_add_r(n, m: Nat): m <= add(n, m) {
+theorem le_add_r(n, m: Nat): m <= n + m {
     match m { Zero => trivial, Succ(m2) => le_add_r(n, m2) }
 }
 
@@ -521,7 +520,7 @@ theorem le_add_r(n, m: Nat): m <= add(n, m) {
 // `le_add_l` transported along the caller's equation. Route (c) of the design
 // is therefore available as a *view* at every call site, without being the
 // definition — which is what makes the definition swappable later.
-theorem le_iff_exists_add(n, m: Nat): Iff<Le(n, m), Exists(λ (k: Nat) => add(n, k) = m)> {
+theorem le_iff_exists_add(n, m: Nat): n <= m ↔ ∃ k: Nat, n + k = m {
     Iff(
         mp := λ (h: Le(n, m)) => Exists(sub(m)(n), le_add(n)(m, h)),
         mpr := λ (h: Exists(λ (k: Nat) => add(n, k) = m)) =>
@@ -548,14 +547,14 @@ theorem sub_self(n: Nat): sub(n)(n) = 0 {
 // Unconditional, and definitional at every step: `add(n, Succ k)` reduces to
 // `Succ(add(n, k))` and `sub(Succ x)(Succ y)` to `sub(x)(y)`, so each arm is
 // exactly the recursive call with no rewrite between.
-theorem add_sub_cancel(n, m: Nat): sub(add(n, m))(m) = n {
+theorem add_sub_cancel(n, m: Nat): sub(n + m)(m) = n {
     match m { Zero => sub_zero(n), Succ(k) => add_sub_cancel(n, k) }
 }
 
 // The conditional direction, and it is `le_add` commuted rather than a second
 // induction — `le_add` already proved `n + (m - n) = m` under the hypothesis,
 // and the only difference is which side the difference is written on.
-theorem sub_add_cancel(n, m: Nat, h: n <= m): add(sub(m)(n), n) = m {
+theorem sub_add_cancel(n, m: Nat, h: n <= m): sub(m)(n) + n = m {
     trans(add_comm(sub(m)(n), n), le_add(n)(m, h))
 }
 
@@ -588,21 +587,21 @@ theorem sub_le(m: Nat): (n: Nat) -> sub(m)(n) <= m {
 // induction on the left operand would pay `add_left_zero`/`add_succ_left` at
 // every step to reach a shape the `_r` proof already has.
 
-theorem add_le_mono_r(k: Nat): (n: Nat) -> (m: Nat) -> n <= m -> add(n, k) <= add(m, k) {
+theorem add_le_mono_r(k: Nat): (n: Nat) -> (m: Nat) -> n <= m -> n + k <= m + k {
     match k as λ w => (n: Nat) -> (m: Nat) -> Le(n, m) -> Le(add(n, w), add(m, w)) {
         Zero => λ n m h => h,
         Succ(j, ih) => λ n m h => ih(n, m, h),
     }
 }
 
-theorem add_le_mono_l(k, n, m: Nat, h: n <= m): add(k, n) <= add(k, m) {
+theorem add_le_mono_l(k, n, m: Nat, h: n <= m): k + n <= k + m {
     j(add_comm(n, k), λ y q => Le(y, add(k, m)),
       j(add_comm(m, k), λ y q => Le(add(n, k), y), add_le_mono_r(k)(n, m, h)))
 }
 
 // Both sides at once, which is the two one-sided lemmas chained through
 // transitivity at the mixed sum `b + c`.
-theorem add_le_mono(a, b, c, d: Nat, h1: a <= b, h2: c <= d): add(a, c) <= add(b, d) {
+theorem add_le_mono(a, b, c, d: Nat, h1: a <= b, h2: c <= d): a + c <= b + d {
     le_trans(add(a, c))(add(b, c), add(b, d),
              add_le_mono_r(c)(a, b, h1), add_le_mono_l(b, c, d, h2))
 }
@@ -611,14 +610,14 @@ theorem add_le_mono(a, b, c, d: Nat, h1: a <= b, h2: c <= d): add(a, c) <= add(b
 // the implication turned round — which is worth seeing, because it says the
 // two directions are not two facts: at each step both sides shed a `Succ`
 // definitionally, and neither direction ever has anything to do.
-theorem le_of_add_le_add_r(k: Nat): (n: Nat) -> (m: Nat) -> add(n, k) <= add(m, k) -> n <= m {
+theorem le_of_add_le_add_r(k: Nat): (n: Nat) -> (m: Nat) -> n + k <= m + k -> n <= m {
     match k as λ w => (n: Nat) -> (m: Nat) -> Le(add(n, w), add(m, w)) -> Le(n, m) {
         Zero => λ n m h => h,
         Succ(j, ih) => λ n m h => ih(n, m, h),
     }
 }
 
-theorem le_of_add_le_add_l(k, n, m: Nat, h: add(k, n) <= add(k, m)): n <= m {
+theorem le_of_add_le_add_l(k, n, m: Nat, h: k + n <= k + m): n <= m {
     le_of_add_le_add_r(k)(n, m,
         j(add_comm(k, n), λ y q => Le(y, add(m, k)),
           j(add_comm(k, m), λ y q => Le(add(k, n), y), h)))
@@ -632,7 +631,7 @@ theorem le_of_add_le_add_l(k, n, m: Nat, h: add(k, n) <= add(k, m)): n <= m {
 // Note what is NOT here: cancellation for `mul`. It is false at `k = 0`
 // (`0 <= 0` says nothing about `n` and `m`) and so wants a `0 < k` hypothesis,
 // which is a different lemma and not the mirror of this one.
-theorem mul_le_mono_r(k: Nat): (n: Nat) -> (m: Nat) -> n <= m -> mul(n, k) <= mul(m, k) {
+theorem mul_le_mono_r(k: Nat): (n: Nat) -> (m: Nat) -> n <= m -> n * k <= m * k {
     match k as λ w => (n: Nat) -> (m: Nat) -> Le(n, m) -> Le(mul(n, w), mul(m, w)) {
         Zero => λ n m h => trivial,
         Succ(j, ih) => λ n m h =>
@@ -640,12 +639,12 @@ theorem mul_le_mono_r(k: Nat): (n: Nat) -> (m: Nat) -> n <= m -> mul(n, k) <= mu
     }
 }
 
-theorem mul_le_mono_l(k, n, m: Nat, h: n <= m): mul(k, n) <= mul(k, m) {
+theorem mul_le_mono_l(k, n, m: Nat, h: n <= m): k * n <= k * m {
     j(mul_comm(n, k), λ y q => Le(y, mul(k, m)),
       j(mul_comm(m, k), λ y q => Le(mul(n, k), y), mul_le_mono_r(k)(n, m, h)))
 }
 
-theorem mul_le_mono(a, b, c, d: Nat, h1: a <= b, h2: c <= d): mul(a, c) <= mul(b, d) {
+theorem mul_le_mono(a, b, c, d: Nat, h1: a <= b, h2: c <= d): a * c <= b * d {
     le_trans(mul(a, c))(mul(b, c), mul(b, d),
              mul_le_mono_r(c)(a, b, h1), mul_le_mono_l(b, c, d, h2))
 }
@@ -821,7 +820,7 @@ theorem one_pow(n: Nat): pow(1, n) = 1 {
 // Exponents add. The zero arm is the one place the `mul`-shaped definition
 // charges anything — `mul(x, 1)` is `add(0, x)` and not `x` — and it charges
 // exactly one `add_left_zero`.
-theorem pow_add(a, b, c: Nat): pow(a, add(b, c)) = mul(pow(a, b), pow(a, c)) {
+theorem pow_add(a, b, c: Nat): pow(a, b + c) = pow(a, b) * pow(a, c) {
     match c {
         Zero => sym(add_left_zero(pow(a, b))),
         Succ(k) => trans(
@@ -834,7 +833,7 @@ theorem pow_add(a, b, c: Nat): pow(a, add(b, c)) = mul(pow(a, b), pow(a, c)) {
 // Exponents multiply, and this one is `pow_add`'s customer rather than a
 // second induction: `mul(b, Succ k)` is `add(mul(b, k), b)`, so the step is
 // `pow_add` at that sum with the IH rewritten into the left factor.
-theorem pow_mul(a, b, c: Nat): pow(a, mul(b, c)) = pow(pow(a, b), c) {
+theorem pow_mul(a, b, c: Nat): pow(a, b * c) = pow(pow(a, b), c) {
     match c {
         Zero => refl,
         Succ(k) => calc {
@@ -850,7 +849,7 @@ theorem pow_mul(a, b, c: Nat): pow(a, mul(b, c)) = pow(pow(a, b), c) {
 // alone and a reader looking for it should not have to find it inside a `pow`
 // proof. Middle-exchange: it is what commutativity and associativity say
 // together, and the only lemma here that is pure monoid algebra.
-theorem mul_shuffle(x, y, z, w: Nat): mul(mul(x, y), mul(z, w)) = mul(mul(x, z), mul(y, w)) {
+theorem mul_shuffle(x, y, z, w: Nat): (x * y) * (z * w) = (x * z) * (y * w) {
     calc {
         mul(mul(x, y), mul(z, w))
             = mul(x, mul(y, mul(z, w))) := mul_assoc(x, y, mul(z, w)),
@@ -861,7 +860,7 @@ theorem mul_shuffle(x, y, z, w: Nat): mul(mul(x, y), mul(z, w)) = mul(mul(x, z),
     }
 }
 
-theorem mul_pow(a, b, n: Nat): pow(mul(a, b), n) = mul(pow(a, n), pow(b, n)) {
+theorem mul_pow(a, b, n: Nat): pow(a * b, n) = pow(a, n) * pow(b, n) {
     match n {
         Zero => refl,
         Succ(k) => trans(
@@ -960,7 +959,7 @@ theorem half_le(n: Nat): half(n) <= n {
 // descends on `n` while the doubling supplies the two `Succ`s that let `half`
 // take a step. The rewrite is `add_succ_left`, which is what turns
 // `add(Succ l, l)` into a visible successor for `half` to consume.
-theorem half_double(n: Nat): half(add(n, n)) = n {
+theorem half_double(n: Nat): half(n + n) = n {
     match n {
         Zero => refl,
         Succ(l) => trans(
@@ -972,7 +971,7 @@ theorem half_double(n: Nat): half(add(n, n)) = n {
 
 // Doubling is even — the same rewrite as `half_double`, transported instead of
 // composed, because the conclusion is a proposition rather than an equation.
-theorem even_double(n: Nat): Even(add(n, n)) {
+theorem even_double(n: Nat): Even(n + n) {
     match n {
         Zero => trivial,
         Succ(l) => j(sym(add_succ_left(l, l)), λ y q => Even(Succ(y)), even_double(l)),
@@ -1006,7 +1005,7 @@ theorem not_even_and_odd(n: Nat): ¬ And<Even(n), Odd(n)> {
 // issue rather than two: on an even argument, halving is exactly invertible.
 // Curried, so that the recursion descends on `n` alone and the hypothesis
 // rides along as an argument (issues/ih-generalization.md's shape).
-theorem half_add_half(n: Nat): Even(n) -> add(half(n), half(n)) = n {
+theorem half_add_half(n: Nat): Even(n) -> half(n) + half(n) = n {
     match n {
         Zero => λ (h: Even(0)) => refl,
         Succ(k) => match k {

@@ -76,8 +76,6 @@ instance<A> Mon<List<A>>(append) {
     unit_l := λ (xs: List<A>) => refl, unit_r := append_nil,
 }
 
-designation + at Nat := add
-
 fn fold<A: Mon(op)>(op as ∙: A -> A -> A, xs: List<A>) -> A {
     match xs { Nil => A.unit, Cons(h, t) => h ∙ fold(op, t) }
 }

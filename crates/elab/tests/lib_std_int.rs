@@ -147,9 +147,9 @@ theorem i_int_ind(P: Int -> Type, z: P(OfNat(0)),
 }
 
 /// The API *computes*, and the operators and instances resolve at `Int` in a
-/// file that imports `nat` too — which is the property the three designations at
-/// the end of `int.hthr` exist for, and the one a reader would otherwise have to
-/// take on trust. Both signs on both sides of every operation, since a
+/// file that imports `nat` too — which is the property the four designations
+/// beside their operations in `int.hthr` exist for, and the one a reader would
+/// otherwise have to take on trust. Both signs on both sides of every operation, since a
 /// sign-blind bug survives any test that stays non-negative.
 ///
 /// Note what has to be qualified and what does not: `int::add` and `nat::add`

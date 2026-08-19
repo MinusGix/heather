@@ -51,18 +51,18 @@ theorem false_elim<P>(h: False): P { match h {} }
 
 fn Not(P: Type) -> Type { P -> False }
 
-theorem not_intro(P: Type, k: P -> False): Not(P) { k }
+theorem not_intro(P: Type, k: P -> False): ¬P { k }
 
 // From `P` and `¬P`, anything. The workhorse: this is what a refuted branch
 // calls, and it is why the absurd cases of a recursive predicate need no
 // special form.
-theorem absurd_of<P, Q>(p: P, np: Not(P)): Q { false_elim(np(p)) }
+theorem absurd_of<P, Q>(p: P, np: ¬P): Q { false_elim(np(p)) }
 
-theorem not_not_intro(P: Type, p: P): Not(Not(P)) { λ (k: Not(P)) => k(p) }
+theorem not_not_intro(P: Type, p: P): ¬¬P { λ (k: ¬P) => k(p) }
 
 // Modus tollens. Stated with the implication first, matching the order it is
 // usually applied in.
-theorem mt(P: Type, Q: Type, f: P -> Q, nq: Not(Q)): Not(P) {
+theorem mt(P: Type, Q: Type, f: P -> Q, nq: ¬Q): ¬P {
     λ (p: P) => nq(f(p))
 }
 
@@ -81,14 +81,14 @@ record And<P, Q> { left: P, right: Q }
 // The two fields are *transposed*, and at `P = Q` no type would catch a
 // mistake — so the argument names say which is which
 // (docs/named-arguments-design.md).
-theorem and_swap<P, Q>(h: And<P, Q>): And<Q, P> { And(left := h.right, right := h.left) }
+theorem and_swap<P, Q>(h: P ∧ Q): Q ∧ P { And(left := h.right, right := h.left) }
 
-theorem and_curry<P, Q, R>(f: And<P, Q> -> R): P -> Q -> R {
+theorem and_curry<P, Q, R>(f: P ∧ Q -> R): P -> Q -> R {
     λ (p: P) (q: Q) => f(And(p, q))
 }
 
-theorem and_uncurry<P, Q, R>(f: P -> Q -> R): And<P, Q> -> R {
-    λ (h: And<P, Q>) => f(h.left, h.right)
+theorem and_uncurry<P, Q, R>(f: P -> Q -> R): P ∧ Q -> R {
+    λ (h: P ∧ Q) => f(h.left, h.right)
 }
 
 // ---------------------------------------------------------------------------
@@ -101,17 +101,17 @@ theorem and_uncurry<P, Q, R>(f: P -> Q -> R): And<P, Q> -> R {
 
 inductive Or<P, Q> { Inl(p: P), Inr(q: Q) }
 
-theorem or_swap<P, Q>(h: Or<P, Q>): Or<Q, P> {
+theorem or_swap<P, Q>(h: P ∨ Q): Q ∨ P {
     match h { Inl(p) => Inr(p), Inr(q) => Inl(q) }
 }
 
-theorem or_elim<P, Q, R>(h: Or<P, Q>, f: P -> R, g: Q -> R): R {
+theorem or_elim<P, Q, R>(h: P ∨ Q, f: P -> R, g: Q -> R): R {
     match h { Inl(p) => f(p), Inr(q) => g(q) }
 }
 
 // A disjunction whose right side is refuted collapses to its left side. The
 // shape a decided predicate is consumed in.
-theorem or_resolve<P, Q>(h: Or<P, Q>, nq: Not(Q)): P {
+theorem or_resolve<P, Q>(h: P ∨ Q, nq: ¬Q): P {
     match h { Inl(p) => p, Inr(q) => absurd_of(q, nq) }
 }
 
@@ -125,7 +125,7 @@ theorem or_resolve<P, Q>(h: Or<P, Q>, nq: Not(Q)): P {
 // The right side is the FIRST result and the left the second, matching
 // `cmp_pick`'s `False => x, True => y` so that `Inl` (the relation holds)
 // keeps `y` exactly as `True` did.
-fn or_pick<P, Q, A>(d: Or<P, Q>, x, y: A) -> A {
+fn or_pick<P, Q, A>(d: P ∨ Q, x, y: A) -> A {
     match d { Inl(p) => y, Inr(q) => x }
 }
 
@@ -134,7 +134,7 @@ fn or_pick<P, Q, A>(d: Or<P, Q>, x, y: A) -> A {
 // allowed to be a stuck term at open arguments. There is no equation to
 // rewrite by and none is wanted: the match's own motive reaches the scrutinee,
 // and the refuting branch is closed by the proof the caller already holds.
-theorem or_pick_dec<P, A>(d: Or<P, Not(P)>, x, y: A, p: P): or_pick(d, x, y) = y {
+theorem or_pick_dec<P, A>(d: P ∨ ¬P, x, y: A, p: P): or_pick(d, x, y) = y {
     match d as λ z => or_pick(z, x, y) = y {
         Inl(good) => refl,
         Inr(bad) => false_elim(bad(p)),
@@ -153,11 +153,11 @@ record Iff<P, Q> { mp: P -> Q, mpr: Q -> P }
 // *same* type, so a swap there would typecheck; `iff_sym`'s are transposed on
 // purpose; and `iff_trans`'s are two lambdas long enough that "which one is
 // `mp`" stops being obvious from position alone.
-theorem iff_refl<P>(): Iff<P, P> { Iff(mp := λ (p: P) => p, mpr := λ (p: P) => p) }
+theorem iff_refl<P>(): P ↔ P { Iff(mp := λ (p: P) => p, mpr := λ (p: P) => p) }
 
-theorem iff_sym<P, Q>(h: Iff<P, Q>): Iff<Q, P> { Iff(mp := h.mpr, mpr := h.mp) }
+theorem iff_sym<P, Q>(h: P ↔ Q): Q ↔ P { Iff(mp := h.mpr, mpr := h.mp) }
 
-theorem iff_trans<P, Q, R>(h1: Iff<P, Q>, h2: Iff<Q, R>): Iff<P, R> {
+theorem iff_trans<P, Q, R>(h1: P ↔ Q, h2: Q ↔ R): P ↔ R {
     Iff(mp := λ (p: P) => h2.mp(h1.mp(p)), mpr := λ (r: R) => h1.mpr(h2.mpr(r)))
 }
 
@@ -186,7 +186,7 @@ record Exists<A>(P: A -> Type) { witness: A, proof: P(witness) }
 // then compute nothing, because `lem(…)` is a neutral constant with no
 // reduction rule. That difference is the whole reason the class exists.
 
-class Decide<P> { dec: Or<P, Not(P)> }
+class Decide<P> { dec: P ∨ ¬P }
 
 // The two constants. `True` is the kernel's `Unit^0`, so `Inl(trivial)` is the
 // only inhabitant there is; `False`'s refutation is the identity, exactly as
@@ -207,22 +207,22 @@ instance Decide<False> { dec := Inr(λ (h: False) => h) }
 // former precisely so it does not need unwrapping, and the registry keyed only
 // on declared types.
 
-instance<P: Decide, Q: Decide> Decide<And<P, Q>> {
+instance<P: Decide, Q: Decide> Decide<P ∧ Q> {
     dec := match P.dec {
         Inl(p) => match Q.dec {
             Inl(q) => Inl(And(p, q)),
-            Inr(nq) => Inr(λ (h: And<P, Q>) => nq(h.right)),
+            Inr(nq) => Inr(λ (h: P ∧ Q) => nq(h.right)),
         },
-        Inr(np) => Inr(λ (h: And<P, Q>) => np(h.left)),
+        Inr(np) => Inr(λ (h: P ∧ Q) => np(h.left)),
     },
 }
 
-instance<P: Decide, Q: Decide> Decide<Or<P, Q>> {
+instance<P: Decide, Q: Decide> Decide<P ∨ Q> {
     dec := match P.dec {
         Inl(p) => Inl(Inl(p)),
         Inr(np) => match Q.dec {
             Inl(q) => Inl(Inr(q)),
-            Inr(nq) => Inr(λ (h: Or<P, Q>) =>
+            Inr(nq) => Inr(λ (h: P ∨ Q) =>
                 match h { Inl(p) => np(p), Inr(q) => nq(q) }),
         },
     },
