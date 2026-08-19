@@ -111,6 +111,48 @@ theorem rebuild_computes(): tree_fold(tree_rebuild_alg<Nat>(), sample()) = sampl
 }
 
 #[test]
+fn a_certified_pass_changes_the_tree_and_preserves_its_measure() {
+    ok(r#"
+fn pass_sample() -> Tree<Nat> { Node(Leaf(2), Node(Leaf(3), Leaf(5))) }
+
+theorem mirror_computes():
+    tree_mirror(pass_sample()) = Node(Node(Leaf(5), Leaf(3)), Leaf(2))
+{ refl }
+
+theorem mirror_keeps_size():
+    tree_size(tree_mirror(pass_sample())) = tree_size(pass_sample())
+{ tree_mirror_size(pass_sample()) }
+
+theorem mirror_certificate_is_generic<A>(tree: Tree<A>):
+    TreeSameSize<A>(tree)(run_tree_pass(TreeSameSize<A>, mirror_pass<A>(), tree))
+{ tree_pass_sound(TreeSameSize<A>, mirror_pass<A>(), tree) }
+"#);
+}
+
+#[test]
+fn a_wrong_node_clause_cannot_be_certified() {
+    let msg = bad(r#"
+fn drop_right_alg<A>() -> TreeAlg<A, Tree<A>> {
+    TreeAlg<A, Tree<A>> {
+        leaf: λ (value: A) => Leaf(value),
+        node: λ (left: Tree<A>) (right: Tree<A>) => left,
+    }
+}
+
+fn bad_size_laws<A>() -> TreePassLaws<A>(TreeSameSize<A>, drop_right_alg<A>()) {
+    TreePassLaws {
+        leaf: λ (value: A) => refl,
+        // `ih_left` knows only that the left subtree kept its size. It cannot
+        // certify dropping the whole right branch at the Node obligation.
+        node: λ (left: Tree<A>) (left_r: Tree<A>) ih_left
+                (right: Tree<A>) (right_r: Tree<A>) ih_right => ih_left,
+    }
+}
+"#);
+    assert!(msg.contains("NotConvertible"), "{msg}");
+}
+
+#[test]
 fn the_dependent_tree_algebra_accepts_an_open_motive() {
     ok(r#"
 theorem e_use<A>(P: Tree<A> -> Type, alg: TreeElim<A>(P), tree: Tree<A>): P(tree) {

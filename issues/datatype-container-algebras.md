@@ -254,3 +254,29 @@ surface.
   calculus remains a separate mathematical decision rather than a
   prerequisite. Full `scripts/test`: suite 1923, 0 failed (count unchanged;
   the focused acceptance and mutation control extend the existing IR test).
+- 2026-08-18: **Rung 4's first certified-pass probe landed, with an honest
+  split verdict** (`docs/certified-pass-algebra-probe.md`). `TreePassLaws`
+  indexes a structural `TreeAlg<A,Tree<A>>` by an arbitrary relation and asks
+  for one law per constructor; `tree_pass_sound` is the one generic induction.
+  The concrete mirror pass visibly changes the tree and preserves `tree_size`:
+  its Node law consumes both IHs plus commutativity. A mutation that drops the
+  right branch is refused at that Node obligation.
+
+  The same general construction was attempted first over the real
+  eight-constructor `Ir`; its nondependent algebra/fold checked, but the
+  dependent global theorem exhausted kernel conversion fuel even after the
+  motive was named and the relation specialized to equality. That boundary is
+  [[ir-pass-dependent-fold-fuel]]. Thus the prove-local-laws-once architecture
+  is validated at a genuine branching pass, but not yet at compiler scale;
+  no syntax or generation follows from this round. Full `scripts/test`: suite
+  1923 -> 1925, 0 failed.
+- 2026-08-18: **The compiler-scale half of rung 4 now passes.** The fuel
+  refusal was a fallback record-projection spelling mismatch, not an algebra
+  limit: the theorem's respelled `laws` binder was checked against inline
+  `Fst`/`Snd` annotations. Component-respelling those emitted annotations,
+  while retaining the inline Σ for structural reads, removes the conversion.
+  The relation-polymorphic eight-constructor `Ir` induction and the concrete
+  `add(0, tag)` pass certificate check at default fuel; a `Succ(tag)` mutation
+  is refused. [[ir-pass-dependent-fold-fuel]] is closed. The remaining rung-4
+  work is semantic—a non-equality execution refinement—not mechanical scale.
+  Full `scripts/test`: suite 1925 -> 1926, 0 failed; kernel bench 106/106.

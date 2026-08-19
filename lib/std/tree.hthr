@@ -40,6 +40,41 @@ fn tree_elim<A>(P: Tree<A> -> Type, alg: TreeElim<A>(P), tree: Tree<A>) -> P(tre
     }
 }
 
+// A certified pass packages a structural algebra with one preservation law
+// per constructor. The relation is deliberately arbitrary: equality,
+// semantics, a cost invariant, or a refinement can all occupy `R`. The global
+// induction is written once here; pass authors fill only `leaf` and `node`.
+record TreePassLaws<A>(R: Tree<A> -> Tree<A> -> Type, alg: TreeAlg<A, Tree<A>>) {
+    leaf: (value: A) -> R(Leaf(value), alg.leaf(value)),
+    node: (left, left_r: Tree<A>) -> R(left, left_r) ->
+        (right, right_r: Tree<A>) -> R(right, right_r) ->
+        R(Node(left, right), alg.node(left_r, right_r)),
+}
+
+record CertifiedTreePass<A>(R: Tree<A> -> Tree<A> -> Type) {
+    alg: TreeAlg<A, Tree<A>>,
+    laws: TreePassLaws<A>(R, alg),
+}
+
+fn run_tree_pass<A>(R: Tree<A> -> Tree<A> -> Type,
+    pass: CertifiedTreePass<A>(R), tree: Tree<A>) -> Tree<A>
+{
+    tree_fold(pass.alg, tree)
+}
+
+theorem tree_pass_sound<A>(R: Tree<A> -> Tree<A> -> Type,
+    pass: CertifiedTreePass<A>(R), tree: Tree<A>):
+    R(tree, run_tree_pass(R, pass, tree))
+{
+    match tree {
+        Leaf(value) => pass.laws.leaf(value),
+        Node(left, right) =>
+            pass.laws.node(
+                left, run_tree_pass(R, pass, left), tree_pass_sound(R, pass, left),
+                right, run_tree_pass(R, pass, right), tree_pass_sound(R, pass, right)),
+    }
+}
+
 theorem tree_elim_leaf<A>(P: Tree<A> -> Type, alg: TreeElim<A>(P), value: A):
     tree_elim(P, alg, Leaf(value)) = alg.leaf(value)
 {}
@@ -83,6 +118,48 @@ fn tree_size<A>(tree: Tree<A>) -> Nat {
         leaf: λ (a: A) => 1,
         node: λ (left: Nat) (right: Nat) => Succ(add(left, right)),
     }, tree)
+}
+
+// The concrete probe is genuinely syntax-changing: mirror swaps both
+// recursive results at every Node. Its certificate states preservation of
+// size, not equality of output and input, so the generic theorem is doing
+// relational work rather than proving that a rebuild is identity.
+fn TreeSameSize<A>(source: Tree<A>) -> Tree<A> -> Type {
+    λ (result: Tree<A>) => tree_size(result) = tree_size(source)
+}
+
+fn mirror_alg<A>() -> TreeAlg<A, Tree<A>> {
+    TreeAlg<A, Tree<A>> {
+        leaf: λ (value: A) => Leaf(value),
+        node: λ (left: Tree<A>) (right: Tree<A>) => Node<A>(right, left),
+    }
+}
+
+fn mirror_size_laws<A>() -> TreePassLaws<A>(TreeSameSize<A>, mirror_alg<A>()) {
+    TreePassLaws {
+        leaf: λ (value: A) => refl,
+        node: λ (left: Tree<A>) (left_r: Tree<A>) ih_left
+                (right: Tree<A>) (right_r: Tree<A>) ih_right =>
+            cong_succ(
+                trans(cong_fn(λ (n: Nat) => add(n, tree_size(left_r)), ih_right),
+                    trans(cong_fn(add(tree_size(right)), ih_left),
+                          add_comm(tree_size(right), tree_size(left))))),
+    }
+}
+
+fn mirror_pass<A>() -> CertifiedTreePass<A>(TreeSameSize<A>) {
+    CertifiedTreePass {
+        alg: mirror_alg<A>(),
+        laws: mirror_size_laws<A>(),
+    }
+}
+
+fn tree_mirror<A>(tree: Tree<A>) -> Tree<A> {
+    run_tree_pass(TreeSameSize<A>, mirror_pass<A>(), tree)
+}
+
+theorem tree_mirror_size<A>(tree: Tree<A>): tree_size(tree_mirror(tree)) = tree_size(tree) {
+    tree_pass_sound(TreeSameSize<A>, mirror_pass<A>(), tree)
 }
 
 // A fold that rebuilds its input, followed by a proof through the dependent

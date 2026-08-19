@@ -154,3 +154,28 @@ when weighing rung 3/4 against their prerequisite features.
   remaining feature question is now only whether and how to generate the
   known shell (including its eventual subject-owned names), not whether the
   three objects are expressible.
+- 2026-08-18: Rung 4's first probe is implemented
+  (`docs/certified-pass-algebra-probe.md`). On `Tree`, a certified mirror is a
+  first-class algebra plus Leaf/Node relational laws, and one generic theorem
+  turns those into size preservation for every tree; the wrong Node clause is
+  kernel-refused locally. This confirms the proof architecture without new
+  language machinery.
+
+  The real-`Ir` version hit a stop condition before semantics: the dependent
+  algebra induction exhausts conversion fuel at eight constructors, including
+  after relation-to-equality specialization. [[ir-pass-dependent-fold-fuel]]
+  owns that refusal. Consequently this issue's IR claim remains OPEN: after
+  the mechanical scale boundary is paid, it still owes one genuinely
+  semantics-changing pass with `Refines`-shaped local laws. The Tree result is
+  evidence for the method, not permission to call an optimizer shipped.
+- 2026-08-18: The mechanical IR-scale claim is now paid and
+  [[ir-pass-dependent-fold-fuel]] is closed. The cause was the fallback
+  projection of the value-parameterized law record: Γ held its
+  component-respelled type while emitted `Fst`/`Snd` annotations used the
+  inline Σ. Respelling only those annotations preserves structural reads and
+  makes the arbitrary-relation eight-constructor induction check at default
+  fuel. The concrete `add(0, tag)` pass is certified; `Succ(tag)` is refused.
+  This issue remains open for the claim it already separated: a genuinely
+  semantics-changing IR pass with execution-refinement laws, and only then a
+  decision about generating the known algebra shell. Suite 1926, bench
+  106/106.

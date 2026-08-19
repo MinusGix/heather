@@ -2040,6 +2040,12 @@ impl Elaborator {
             return Ok(t);
         }
         let mut cur = record_ty.clone();
+        // Compute the declaration-binder spelling once, then walk it beside
+        // the inline structural copy. Most fallback records have nothing to
+        // respell and keep this as `None`, so their old path stays allocation-
+        // free; a parameterized law record such as `IrPassLaws(R, alg)` gets
+        // the exact component spelling its closed Π binder received.
+        let mut cur_emit = self.respell_ty_deep(cx, record_ty, 0);
         let mut pair = value;
         // Entry 0 is the tag (§3.3), so field `idx` is spine entry `idx + 1`.
         for step in 0..=idx + 1 {
@@ -2054,24 +2060,41 @@ impl Elaborator {
                     span,
                 );
             };
+            // `cur` remains the structural copy. Only annotations come from
+            // the parallel emission walk, mirroring constructor/match
+            // lowering's established split.
+            let (fst_e, snd_e) = match &cur_emit {
+                Some(emitted) => {
+                    let Type::Sigma { fst, snd, .. } = self.whnf(cx, emitted, span)? else {
+                        return err("internal: respelling changed a record spine's shape", span);
+                    };
+                    (fst, snd)
+                }
+                None => (Rc::clone(&fst), Rc::clone(&snd)),
+            };
             let proj = Rc::new(Term::Fst {
                 fst_level: fst_level.clone(),
                 snd_level: snd_level.clone(),
-                fst_ty: Rc::clone(&fst),
-                snd_ty: Rc::clone(&snd),
+                fst_ty: Rc::clone(&fst_e),
+                snd_ty: Rc::clone(&snd_e),
                 pair: Rc::clone(&pair),
             });
             if step == idx + 1 {
-                return Ok(((*proj).clone(), (*fst).clone(), fst_level));
+                return Ok(((*proj).clone(), (*fst_e).clone(), fst_level));
             }
             let rest = Rc::new(Term::Snd {
                 fst_level,
                 snd_level,
-                fst_ty: Rc::clone(&fst),
-                snd_ty: Rc::clone(&snd),
+                fst_ty: Rc::clone(&fst_e),
+                snd_ty: Rc::clone(&snd_e),
                 pair: Rc::clone(&pair),
             });
-            cur = snd.apply_local(&LocalSubst::id(&cx.gamma).extended(proj));
+            cur = snd.apply_local(&LocalSubst::id(&cx.gamma).extended(Rc::clone(&proj)));
+            if cur_emit.is_some() {
+                cur_emit = Some(
+                    snd_e.apply_local(&LocalSubst::id(&cx.gamma).extended(proj)),
+                );
+            }
             pair = rest;
         }
         unreachable!("the loop returns at step idx + 1")
