@@ -41,12 +41,12 @@ laws, `map` with **none**, `List::nth`. `std/option`: three functions.
 | L3 | ✅ **landed 2026-08-17** — `Mem` + ten-lemma kit in `std/list`; `count`, `count_isort` and `isort_correct` in `list_algos`. Fork taken: `count`, not `Perm` | [[std-list-mem-and-perm]] — taken with L2′ as one round |
 | L4 | a permutation **relation**, and L3 sharpened what it is for: not the statement (`count_isort` is that, extensionally, and it computes) but a fact that can be **transported** — composed, inverted, used to carry an arbitrary predicate across. Still behind [[indexed-families]] | unowned |
 | I | ✅ **landed 2026-08-17** — the type, `neg`/`add`/`sub`/`mul`, the order and its kit, the `Nat` embedding, `int_ind`, and five instances incl. the library's first `Group`. `Decide` at `int::Le` is the one row it stalled | [[std-int-encoding]] |
-| I′ | the `Int` laws that round cut: `le_mul_mono` (wants a `0 <= k` hypothesis), a full strict kit beyond three facts, `min`/`max` at `Int` | unowned — file when scheduled |
+| I′ | ✅ **landed 2026-08-19** — nonnegative-factor multiplication monotonicity, the full strict kit, and carrier-owned `min`/`max` with lattice laws | [[std-int-order-completion]] |
 
 **Sequencing: 0 → 1 → 2 → L1 → L2, then reassess; the reassessment called
 L2′ + L3, and `Int` was taken in parallel beside them (user, 2026-08-17).
 All three landed the same day, so the wave list is now spent to its end.**
-What remains of it is unowned residue (L2′'s converse, L4, I′) and wave 4
+What remains of it is unowned residue (L2′'s converse and L4) and wave 4
 ([[datatype-container-algebras]]), which is a long-range direction rather
 than a scheduled row. L4 is still behind [[indexed-families]] but now has a
 *reason* rather than a place in a list (see its row).
@@ -144,3 +144,6 @@ The datum for the ranking function: the feature the library ranked was not the f
   [[stdlib-operator-spelling-locality]]: defining modules now own designations
   beside their operations and state their existing law kits in the public
   operator/connective surface.
+- 2026-08-19: Wave I-prime is scheduled as [[std-int-order-completion]]: the
+  strict-order residue, carrier-owned `min`/`max`, and multiplication
+  monotonicity under a nonnegative factor.

@@ -1,9 +1,10 @@
 //! `lib/std/int.hthr` — the integer module, checked on its own
-//! (`issues/std-int-encoding.md`, wave I of `issues/std-api-waves.md`).
+//! (`issues/std-int-encoding.md` and `issues/std-int-order-completion.md`,
+//! waves I and I-prime of `issues/std-api-waves.md`).
 //!
 //! Nothing else in the library imports `int`, so without this binary the file
-//! would be checked by nothing at all. Four tests, and the split is the one
-//! `lib_std_list.rs` established plus the negative control that file lacks:
+//! would be checked by nothing at all. The coverage split is the one
+//! `lib_std_list.rs` established, plus explicit negative controls:
 //!
 //!  1. the closure checks (the module and everything it imports);
 //!  2. the law kit is *there* — named one by one, because a law deleted rather
@@ -11,7 +12,8 @@
 //!  3. the API computes at closed arguments, in both signs, and the operators
 //!     and class instances resolve at `Int` in a file that ALSO imports `nat`
 //!     (the whole point of the designations);
-//!  4. a false equation is refused, so test 3 is not vacuous.
+//!  4. false decisions/equations are refused, so test 3 is not vacuous;
+//!  5. multiplication monotonicity cannot be used at a negative factor.
 //!
 //! `int` imports `algebra` (it registers its own instances), so the prefix here
 //! is the whole of `lib/std`.
@@ -66,10 +68,10 @@ fn the_int_module_checks() {
     elaborated();
 }
 
-/// The kit `issues/std-int-encoding.md` §"Sketch of the kit" asked for, stated
-/// at OPEN integers so that nothing here is answered by computation: `neg`,
-/// `add`, `sub`, `mul` with their laws, the group and ring facts, the order and
-/// its kit, and the `Nat` embedding.
+/// The kits requested by waves I and I-prime, stated at OPEN integers so that
+/// nothing here is answered by computation: `neg`, `add`, `sub`, `mul` with
+/// their laws, the group and ring facts, the completed order/lattice kit, and
+/// the `Nat` embedding.
 ///
 /// Every name is applied rather than counted. Two entries are the ones to read
 /// first: `mul_add_distr` is the law that made the round's `mul_isucc`/
@@ -116,6 +118,20 @@ theorem i_le_dec(a, b: Int): Or<int::Le(a, b), ¬ int::Le(a, b)> { int::le_dec(a
 theorem i_le_of_not_le(a, b: Int, h: ¬ int::Le(a, b)): b <= a { int::le_of_not_le(a, b, h) }
 theorem i_lt_irrefl(a: Int): ¬ int::Lt(a, a) { int::lt_irrefl(a) }
 theorem i_le_of_lt(a, b: Int, h: int::Lt(a, b)): a <= b { int::le_of_lt(a)(b, h) }
+theorem i_lt_trichotomy(a, b: Int): a < b ∨ a = b ∨ b < a { int::lt_trichotomy(a, b) }
+theorem i_lt_trans(a, b, c: Int, h1: a < b, h2: b < c): a < c { int::lt_trans(a, b, c, h1, h2) }
+theorem i_lt_of_lt_of_le(a, b, c: Int, h1: a < b, h2: b <= c): a < c {
+    int::lt_of_lt_of_le(a, b, c, h1, h2)
+}
+theorem i_lt_of_le_of_lt(a, b, c: Int, h1: a <= b, h2: b < c): a < c {
+    int::lt_of_le_of_lt(a, b, c, h1, h2)
+}
+theorem i_lt_of_le_of_ne(a, b: Int, h1: a <= b, h2: ¬ (a = b)): a < b {
+    int::lt_of_le_of_ne(a, b, h1, h2)
+}
+theorem i_lt_asymm(a, b: Int, h: a < b): ¬ (b < a) { int::lt_asymm(a, b, h) }
+theorem i_le_of_not_lt(a, b: Int, h: ¬ (a < b)): b <= a { int::le_of_not_lt(a, b, h) }
+theorem i_lt_of_not_le(a, b: Int, h: ¬ (b <= a)): a < b { int::lt_of_not_le(a, b, h) }
 theorem i_le_isucc(a, b: Int, h: a <= b): int::isucc(a) <= int::isucc(b) { int::le_isucc(a)(b, h) }
 theorem i_le_ipred(a, b: Int, h: a <= b): int::ipred(a) <= int::ipred(b) { int::le_ipred(a)(b, h) }
 theorem i_le_neg(a, b: Int, h: a <= b): int::neg(b) <= int::neg(a) { int::le_neg(a)(b, h) }
@@ -125,6 +141,30 @@ theorem i_add_le_mono_r(a, b, c: Int, h: a <= b): int::add(a, c) <= int::add(b, 
 theorem i_add_le_mono_l(a, b, c: Int, h: a <= b): int::add(c, a) <= int::add(c, b) {
     int::add_le_mono_l(a, b, c, h)
 }
+theorem i_add_le_mono(a, b, c, d: Int, h1: a <= b, h2: c <= d): a + c <= b + d {
+    int::add_le_mono(a, b, c, d, h1, h2)
+}
+theorem i_mul_le_mono_r(a, b, k: Int, h1: a <= b, h2: OfNat(0) <= k): a * k <= b * k {
+    int::mul_le_mono_r(a, b, k, h1, h2)
+}
+theorem i_mul_le_mono_l(a, b, k: Int, h1: a <= b, h2: OfNat(0) <= k): k * a <= k * b {
+    int::mul_le_mono_l(a, b, k, h1, h2)
+}
+
+theorem i_le_max_l(a, b: Int): a <= int::max(a, b) { int::le_max_l(a, b) }
+theorem i_le_max_r(a, b: Int): b <= int::max(a, b) { int::le_max_r(a, b) }
+theorem i_min_le_l(a, b: Int): int::min(a, b) <= a { int::min_le_l(a, b) }
+theorem i_min_le_r(a, b: Int): int::min(a, b) <= b { int::min_le_r(a, b) }
+theorem i_max_le(a, b, c: Int, h1: a <= c, h2: b <= c): int::max(a, b) <= c {
+    int::max_le(a, b, c, h1, h2)
+}
+theorem i_le_min(a, b, c: Int, h1: c <= a, h2: c <= b): c <= int::min(a, b) {
+    int::le_min(a, b, c, h1, h2)
+}
+theorem i_max_eq_r(a, b: Int, h: a <= b): int::max(a, b) = b { int::max_eq_r(a, b, h) }
+theorem i_max_eq_l(a, b: Int, h: b <= a): int::max(a, b) = a { int::max_eq_l(a, b, h) }
+theorem i_min_eq_l(a, b: Int, h: a <= b): int::min(a, b) = a { int::min_eq_l(a, b, h) }
+theorem i_min_eq_r(a, b: Int, h: b <= a): int::min(a, b) = b { int::min_eq_r(a, b, h) }
 
 theorem i_ofNat_add(m, n: Nat): OfNat(nat::add(m, n)) = int::add(OfNat(m), OfNat(n)) {
     int::ofNat_add(m, n)
@@ -189,6 +229,10 @@ theorem c_le_nn(): NegSucc(9) <= NegSucc(0) { trivial }
 theorem c_le_np(): NegSucc(9) <= OfNat(0) { trivial }
 theorem c_not_le_pn(): ¬ (OfNat(0) <= NegSucc(0)) { λ (h: OfNat(0) <= NegSucc(0)) => h }
 theorem c_lt(): int::Lt(NegSucc(0), OfNat(0)) { trivial }
+theorem c_max_mixed(): int::max(NegSucc(2), OfNat(1)) = OfNat(1) { refl }
+theorem c_max_negative(): int::max(NegSucc(2), NegSucc(5)) = NegSucc(2) { refl }
+theorem c_min_mixed(): int::min(OfNat(3), NegSucc(1)) = NegSucc(1) { refl }
+theorem c_min_positive(): int::min(OfNat(3), OfNat(7)) = OfNat(3) { refl }
 
 // the operators at BOTH carriers, in one file, with neither qualified
 theorem c_op_int(a, b: Int): a + b = b + a { int::add_comm(a, b) }
@@ -295,5 +339,23 @@ theorem wrong(): int::mul(NegSucc(1), OfNat(3)) = OfNat(6) { refl }
     match e.elab_module_source("bad", bad) {
         Err(_) => {}
         Ok(()) => panic!("a false equation at closed integers was accepted"),
+    }
+}
+
+/// Multiplication monotonicity is deliberately unavailable at a negative
+/// factor: its final argument is mathematical evidence, not a Boolean guard
+/// that could be ignored by the proof.
+#[test]
+fn multiplication_monotonicity_requires_a_nonnegative_factor() {
+    let mut e = elaborated();
+    let bad = r#"
+import int;
+theorem wrong(a, b: Int, h: a <= b): a * NegSucc(0) <= b * NegSucc(0) {
+    int::mul_le_mono_r(a, b, NegSucc(0), h, trivial)
+}
+"#;
+    match e.elab_module_source("bad", bad) {
+        Err(_) => {}
+        Ok(()) => panic!("multiplication monotonicity accepted a negative factor"),
     }
 }
