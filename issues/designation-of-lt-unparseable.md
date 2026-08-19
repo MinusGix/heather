@@ -1,9 +1,9 @@
 ---
 title: "designation < at T cannot be parsed: the tyvar list opens with the same token"
-status: open
+status: closed
 labels: [frontend,syntax]
 created: 2026-08-17
-updated: 2026-08-17
+updated: 2026-08-19
 ---
 
 Filed by the `Int` round ([[std-int-encoding]]). Smallest item that round found,
@@ -48,3 +48,12 @@ here is a single keyword.
 ## Log
 
 - 2026-08-17: Filed by the `Int` round; ranked last of six. `lib/std/int.hthr` carries a comment where the row would be.
+- 2026-08-19: LANDED and closed. `designation_decl` now recognizes `< at` as
+  the operator before attempting the optional type-parameter list; the follow
+  token is exact because `at` cannot begin a type parameter, while
+  `designation<A> < at …` stays on the generic path. Parser coverage pins both
+  forms. `std/int` gains `designation < at Int := Lt`, and the integration
+  probe exposed and closed the symmetric row at `Nat`: a downstream module
+  importing both numeric carriers needs both designations for `<` to resolve
+  by its left operand. The mixed-carrier test now writes `<` at open `Int` and
+  open `Nat` in the same module.

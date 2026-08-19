@@ -195,6 +195,8 @@ theorem c_op_int(a, b: Int): a + b = b + a { int::add_comm(a, b) }
 theorem c_op_nat(m, n: Nat): m + n = n + m { nat::add_comm(m, n) }
 theorem c_op_int_mul(a, b: Int): a * b = b * a { int::mul_comm(a, b) }
 theorem c_op_le_int(a: Int): a <= a { int::le_refl(a) }
+theorem c_op_lt_int(a: Int): a < int::isucc(a) { int::lt_isucc_self(a) }
+theorem c_op_lt_nat(n: Nat): n < Succ(n) { nat::lt_succ_self(n) }
 
 // the instances, reached by resolution: the commutative monoid's generic law,
 // the monoid fold at `List<Int>`, the group's inverse-uniqueness, and `Cmp`

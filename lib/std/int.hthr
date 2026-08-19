@@ -1094,9 +1094,4 @@ instance(a, b: Int) Decide<Le(a, b)> { dec := le_dec(a, b) }
 designation + at Int := add
 designation * at Int := mul
 designation <= at Int := Le
-
-// `designation < at Int := Lt` is NOT here, and not by choice: `designation <`
-// cannot be parsed, because the optional type-parameter list of a designation
-// opens with the same token (issues/designation-of-lt-unparseable.md). `<` at an
-// integer therefore still falls back to the ambient `Lt`, which inside a file
-// importing both `nat` and `int` is ambiguous — write `Lt(a, b)` there.
+designation < at Int := Lt

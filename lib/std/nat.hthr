@@ -321,14 +321,15 @@ fn le_dec(n: Nat) -> (m: Nat) -> Or<Le(n, m), ¬ Le(n, m)> {
 // was filed to take.
 instance(n, m: Nat) Decide<Le(n, m)> { dec := le_dec(n)(m) }
 
-// `<=` at a Nat operand is this relation. The row exists for the same reason
-// `std/int`'s does: `<=`'s fallback is the bare name `Le`, and as of
-// 2026-08-17 three modules declare one (`nat`, `int`, `bool` — see
-// docs/instance-resolved-key-design.md §6), so a file importing two of them
-// had a symbol that resolved to nothing rather than to the operand's order.
+// `<=` and `<` at a Nat operand are these relations. The rows exist for the
+// same reason `std/int`'s do: their fallbacks are the bare names `Le`/`Lt`,
+// which multiple modules declare (see docs/instance-resolved-key-design.md
+// §6), so a file importing two of them would otherwise resolve the symbol to
+// nothing rather than to the operand's order.
 // A designation reads the carrier off the operand, which is exactly the datum
 // the bare name lost.
 designation <= at Nat := Le
+designation < at Nat := Lt
 
 // ---------------------------------------------------------------------------
 // The strict order. Every one of these is `Le`'s kit read at `Succ(n)`; the

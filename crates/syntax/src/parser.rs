@@ -784,7 +784,17 @@ impl Parser {
     fn designation_decl(&mut self) -> R<DesignationDecl> {
         let start = self.peek_span();
         self.bump(); // `designation`
-        let tyvars = self.tyvar_list()?;
+        // `<` opens the optional type-parameter list everywhere else, but in
+        // `designation < at Int := Lt` it is the operator itself. `at` cannot
+        // begin a type parameter, so this two-token lookahead is exact and
+        // leaves `designation<A> < at List<A> := …` on the generic path.
+        let less_operator = matches!(self.peek(), TokKind::Lt)
+            && matches!(self.nth(1), TokKind::Ident(word) if word == "at");
+        let tyvars = if less_operator {
+            Vec::new()
+        } else {
+            self.tyvar_list()?
+        };
         let Some(sym) = Self::op_symbol(self.peek()) else {
             return self.err(
                 "a designation names an operator (`designation + at Nat := add`): the \
@@ -3914,6 +3924,21 @@ mod tests {
         let Item::Decl(d) = &f.items[2] else { panic!("expected declaration") };
         let ExprKind::App { args, .. } = &d.body.result.kind else { panic!("expected call") };
         assert!(matches!(&args[0].kind, ExprKind::OpSymbol(s) if s == "++"));
+    }
+
+    #[test]
+    fn less_than_parses_as_a_designation_symbol_before_at() {
+        let f = parse_file(
+            "designation < at Nat := Lt
+             designation<A> < at List<A> := before",
+        )
+        .unwrap();
+        let Item::Designation(plain) = &f.items[0] else { panic!("expected designation") };
+        assert_eq!(plain.symbol, "<");
+        assert!(plain.tyvars.is_empty());
+        let Item::Designation(generic) = &f.items[1] else { panic!("expected designation") };
+        assert_eq!(generic.symbol, "<");
+        assert_eq!(generic.tyvars, ["A"]);
     }
 
     // -- the logical connectives (issues/std-logic-module.md) ---------------
