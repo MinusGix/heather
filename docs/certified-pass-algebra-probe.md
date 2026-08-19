@@ -108,3 +108,42 @@ compiler capability.
 Initial Tree probe: suite 1923 -> 1925, 0 failed. IR boundary repair: suite
 1925 -> 1926, 0 failed; `scripts/bench --check`: 106 comparisons within
 thresholds.
+
+## Semantic control: extending missing arms
+
+The next probe changes execution rather than merely syntax. Its algebra
+replaces every `NoArm` tail with `Arm(Ret(RNil), NoArm)`: the first tag beyond
+each previously complete arm chain can now take an empty-return fallback.
+Existing successful matches retain their selected bodies, while some formerly
+stuck programs become successful. The result is therefore not propositionally
+equal to the source and the proof cannot pass through IR equality.
+
+Plain direct-execution refinement is not compositional for this IR. `Arm` and
+`NoArm` are both stuck when evaluated as instructions, so that relation says
+nothing about the behavior `LetMatch` observes through `pick_arm`. The probe's
+local relation consequently carries two observations:
+
+- successful direct evaluation is preserved at the same fuel; and
+- successful evaluation after selecting any tag is preserved at the same
+  fuel.
+
+The `Arm` law routes tag zero through the body's direct hypothesis and a
+successor tag through the tail's selection hypothesis. The `NoArm` law is
+allowed to add the default because selection from the source cannot have
+succeeded. `LetMatch` consumes both observations; the remaining instruction
+laws consume direct hypotheses. `LoopIter` needs a fuel induction because its
+continue case re-enters itself, but no larger fuel bound is required.
+
+One generic `ir_fold_sound` call produces the two-observation certificate, and
+its direct field closes the ordinary existential convergence refinement. A
+closed computation confirms that the transformed missing-arm program now
+returns `VNil`. Replacing existing arm bodies with the default cannot reuse the
+law record and is kernel-refused as `NotConvertible`.
+
+This one-slot extension pays rung 4's semantic acceptance. It also identifies
+a requirement for any generated pass interface: the relation offered to
+constructor laws must include the inductive's eliminator-specific observations,
+not only execution of the datatype value in isolation. The next honest
+optimization target is constant-match fusion; generation can remain deferred
+until that exercise shows whether these observation records have a stable
+reusable shape.

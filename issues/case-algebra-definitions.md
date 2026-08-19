@@ -179,3 +179,15 @@ when weighing rung 3/4 against their prerequisite features.
   semantics-changing IR pass with execution-refinement laws, and only then a
   decision about generating the known algebra shell. Suite 1926, bench
   106/106.
+- 2026-08-18: Rung 4's semantic acceptance is paid by the missing-arm
+  extension pass. Its `NoArm` clause emits `Arm(Ret(RNil), NoArm)`, making the
+  first formerly missing tag converge while preserving every previously
+  successful run at the same fuel. Direct `Refines` alone was not a
+  compositional algebra relation: `Arm` and `NoArm` both evaluate to `Stuck`,
+  while `LetMatch` observes them through `pick_arm`. The successful relation
+  therefore pairs direct-evaluation forwarding with selected-arm forwarding;
+  the Arm law dispatches between the body and tail hypotheses, and LetMatch
+  consumes that second observation. `ir_fold_sound` builds the global
+  certificate and its direct field yields existential convergence refinement.
+  Mutating existing arm bodies is refused. No declaration/generator machinery
+  was added: constant-match fusion is the next value test before that choice.
