@@ -122,6 +122,26 @@ fn incoherent_calc_chain_is_kernel_rejected() {
     assert!(r.is_err(), "an incoherent calc chain must not check, got {r:?}");
 }
 
+#[test]
+fn prefix_negation_is_carrier_directed() {
+    let mut e = Elaborator::with_prelude().expect("prelude");
+    e.elab_source(
+        r#"
+        inductive Sign { Pos(n: Nat), Neg(n: Nat) }
+        fn flip(a: Sign) -> Sign {
+            match a { Pos(n) => Neg(n), Neg(n) => Pos(n) }
+        }
+        designation prefix - at Sign := flip
+        theorem open(a: Sign): -a = flip(a) { refl }
+        theorem closed(): -Pos(2) = Neg(2) { refl }
+        theorem nested(a: Sign): --a = a {
+            match a { Pos(n) => refl, Neg(n) => refl }
+        }
+        "#,
+    )
+    .expect("a prefix designation resolves from its operand's carrier");
+}
+
 // -- `<=` (issues/comparison-operators.md) ---------------------------------
 
 // The order kit, cut down to what a comparison test needs: the boolean

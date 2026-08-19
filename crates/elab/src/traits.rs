@@ -16,9 +16,8 @@ use std::rc::Rc;
 
 use heather_syntax::{
     Block, ClassDecl, ClassRef, CtorDecl, Decl, DeclKind, DesignationDecl, Expr, ExprKind, FieldDecl,
-    InductiveDecl,
-    InstanceBody, InstanceDecl, InstanceField, LamBinder, Param, RecordLitField, Span, Stmt, Ty,
-    TyKind,
+    InductiveDecl, InstanceBody, InstanceDecl, InstanceField, LamBinder, OpFixity, Param,
+    RecordLitField, Span, Stmt, Ty, TyKind,
 };
 
 use crate::names::qkey;
@@ -95,8 +94,8 @@ pub(crate) struct DesignationInfo {
     pub carrier: String,
 }
 
-/// The key a designation is registered under: **(symbol, carrier-head key)**,
-/// the second component a *resolved* declaration reference and not a surface
+/// The key a designation is registered under: **(fixity, symbol,
+/// carrier-head key)**, the third component a *resolved* declaration reference and not a surface
 /// spelling — `docs/instance-resolved-key-design.md` §3's rule applied one
 /// table over (issues/designation-key-collides-across-modules.md).
 ///
@@ -104,16 +103,30 @@ pub(crate) struct DesignationInfo {
 /// coexist; keying the head on the written `List` made the second a duplicate
 /// of the first.
 ///
-/// The symbol component is not a spelling in the relevant sense: it is one of
+/// Fixity keeps a future infix `-` distinct from prefix negation. The symbol
+/// component is not a spelling in the relevant sense: it is one of
 /// the grammar's fixed operator tokens, the same token in every module, and no
 /// declaration can introduce another `+`.
-pub(crate) type DesigKey = (String, String);
+pub(crate) type DesigKey = (OpFixity, String, String);
 
 /// `head_key` is the carrier head **resolved** — [`Elaborator::carrier_key`]
 /// at a declaration, [`Elaborator::carrier_of_ty`] at a lowered operand —
 /// never a written head's raw string.
-pub(crate) fn designation_key(sym: &str, head_key: &str) -> DesigKey {
-    (sym.to_string(), head_key.to_string())
+pub(crate) fn designation_key(fixity: OpFixity, sym: &str, head_key: &str) -> DesigKey {
+    (fixity, sym.to_string(), head_key.to_string())
+}
+
+#[cfg(test)]
+mod designation_key_tests {
+    use super::*;
+
+    #[test]
+    fn prefix_and_infix_slots_do_not_collide() {
+        assert_ne!(
+            designation_key(OpFixity::Prefix, "-", "int::Int"),
+            designation_key(OpFixity::Infix, "-", "int::Int")
+        );
+    }
 }
 
 /// The key an instance is registered under: **(class key, carrier-head key,
@@ -237,16 +250,27 @@ pub(crate) fn render_ty(t: &Ty) -> String {
 pub(crate) fn render_expr(e: &Expr) -> String {
     match &e.kind {
         ExprKind::Var(n) => n.clone(),
-        ExprKind::OpSymbol(s) => s.clone(),
+        ExprKind::OpSymbol { symbol, .. } => symbol.clone(),
         ExprKind::Num(n) => n.to_string(),
         // An operator application renders as what was **written**
         // (`a + b`, never `add(a, b)`) — the standing ask of
         // `issues/diagnostics-name-the-written-form.md`, arriving free now
         // that the symbol survives into the AST.
         ExprKind::App { head, args, .. }
-            if matches!(head.kind, ExprKind::OpSymbol(_)) && args.len() == 2 =>
+            if matches!(
+                head.kind,
+                ExprKind::OpSymbol { fixity: OpFixity::Infix, .. }
+            ) && args.len() == 2 =>
         {
             format!("{} {} {}", render_expr(&args[0]), render_expr(head), render_expr(&args[1]))
+        }
+        ExprKind::App { head, args, .. }
+            if matches!(
+                head.kind,
+                ExprKind::OpSymbol { fixity: OpFixity::Prefix, .. }
+            ) && args.len() == 1 =>
+        {
+            format!("{}{}", render_expr(head), render_expr(&args[0]))
         }
         // A named argument renders as it was **written**, `x := e`, for the
         // same reason an operator application renders as `a + b`
@@ -371,7 +395,7 @@ fn rename_expr(m: &Ren, e: &Expr) -> Expr {
         Var(n) => Var(ren(m, n)),
         // A symbol is never renamed: it names nothing in the telescope a
         // parent instantiation renames.
-        OpSymbol(s) => OpSymbol(s.clone()),
+        OpSymbol { symbol, fixity } => OpSymbol { symbol: symbol.clone(), fixity: *fixity },
         Univ { level } => Univ { level: *level },
         Num(n) => Num(*n),
         Refl => Refl,
@@ -875,7 +899,7 @@ impl Elaborator {
                 // A symbol in an instance head would make the registry key
                 // depend on the designation table's state at declaration
                 // time, which the key exists not to depend on.
-                if let ExprKind::OpSymbol(s) = &a.kind {
+                if let ExprKind::OpSymbol { symbol: s, .. } = &a.kind {
                     return err(
                         format!(
                             "an instance names its index by the **operation**, not by a \
@@ -1153,7 +1177,7 @@ impl Elaborator {
                 // meaning for the whole declaration. A mixed list
                 // (`Semiring<A>(+, mul)`) is per-slot, because there is
                 // nothing to gain from refusing it.
-                if !r.index.iter().any(|a| matches!(a.kind, ExprKind::OpSymbol(_))) {
+                if !r.index.iter().any(|a| matches!(a.kind, ExprKind::OpSymbol { .. })) {
                     out.push(p.clone());
                     continue;
                 }
@@ -1161,7 +1185,7 @@ impl Elaborator {
                     class.params.iter().cloned().zip(r.args.iter().cloned()).collect();
                 let mut index: Vec<Expr> = Vec::new();
                 for (k, (v, a)) in class.valparams.iter().zip(r.index.iter()).enumerate() {
-                    let ExprKind::OpSymbol(sym) = &a.kind else {
+                    let ExprKind::OpSymbol { symbol: sym, .. } = &a.kind else {
                         index.push(a.clone());
                         continue;
                     };
@@ -1433,7 +1457,8 @@ impl Elaborator {
         }
         let op = self.key_of(op.as_str()).unwrap_or_else(|| op.clone());
         let written = format!(
-            "designation {} at {} := {}",
+            "designation {}{} at {} := {}",
+            if d.fixity == OpFixity::Prefix { "prefix " } else { "" },
             d.symbol,
             render_ty(&d.carrier),
             render_expr(&d.op)
@@ -1444,7 +1469,7 @@ impl Elaborator {
         // stays the written string — it is what a diagnostic prints and what
         // `DesignationInfo::carrier` keeps for the read side.
         let head_key = self.carrier_key(&head);
-        let key = designation_key(&d.symbol, &head_key);
+        let key = designation_key(d.fixity, &d.symbol, &head_key);
         if let Some(prev) = self.designations.get(&key) {
             return err(
                 format!(
@@ -1472,8 +1497,15 @@ impl Elaborator {
     /// [`Elaborator::carrier_key`] (a name the writer spelled), so that a
     /// lookup lands on the key the declaration registered even where two
     /// modules declare the head's name.
-    pub(crate) fn designated(&self, sym: &str, head_key: &str) -> Option<String> {
-        self.designations.get(&designation_key(sym, head_key)).map(|d| d.op.clone())
+    pub(crate) fn designated(
+        &self,
+        sym: &str,
+        fixity: OpFixity,
+        head_key: &str,
+    ) -> Option<String> {
+        self.designations
+            .get(&designation_key(fixity, sym, head_key))
+            .map(|d| d.op.clone())
     }
 
     /// Every designation at one carrier, as `` (`+`, `or`) `` pairs sorted by
@@ -1484,8 +1516,8 @@ impl Elaborator {
         let mut out: Vec<(String, String)> = self
             .designations
             .iter()
-            .filter(|((_, h), _)| h == head_key)
-            .map(|((s, _), d)| (s.clone(), d.op.clone()))
+            .filter(|((fixity, _, h), _)| *fixity == OpFixity::Infix && h == head_key)
+            .map(|((_, s, _), d)| (s.clone(), d.op.clone()))
             .collect();
         out.sort();
         out

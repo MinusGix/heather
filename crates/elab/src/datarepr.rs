@@ -1287,7 +1287,7 @@ fn mentions_free(e: &Expr, names: &[String], bound: &mut Vec<String>) -> bool {
     };
     match &e.kind {
         ExprKind::Var(n) => hit(n, bound),
-        ExprKind::OpSymbol(_)
+        ExprKind::OpSymbol { .. }
         | ExprKind::Univ { .. }
         | ExprKind::Num(_)
         | ExprKind::Refl

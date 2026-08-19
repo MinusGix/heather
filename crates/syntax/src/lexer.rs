@@ -23,6 +23,7 @@ pub enum TokKind {
     At,        // @
     Dot,       // .
     Plus,      // +
+    Minus,     // -   (prefix negation; `->` is matched first)
     /// `++` — list append notation (issues/list-append-symbol.md). Like the
     /// Boolean doubles, it has no single-name fallback: a designation or a
     /// binder supplies its meaning.
@@ -260,6 +261,7 @@ pub fn lex(src: &str) -> Result<Vec<Tok>, LexError> {
                 b'$' => (TokKind::Dollar, 1),
                 b'.' => (TokKind::Dot, 1),
                 b'+' => (TokKind::Plus, 1),
+                b'-' => (TokKind::Minus, 1),
                 b'*' => (TokKind::Star, 1),
                 b'<' => (TokKind::Lt, 1),
                 b'>' => (TokKind::Gt, 1),

@@ -64,6 +64,7 @@ designation + at Nat := add
 designation + at Bool := or
 designation * at Bool := and
 designation<A> + at List<A> := append
+designation prefix - at Int := neg
 ```
 
 Read: *the symbol `+`, at a carrier whose head is `Nat`, designates `add`.*
@@ -73,13 +74,14 @@ exists to *spell* the carrier), the carrier is a written type, and the
 right-hand side is `:=` plus a name, which is what an instance's literal field
 is.
 
-Grammar: `"designation" tyvars? OP "at" ty ":=" expr`. `designation` is
+Grammar: `"designation" "prefix"? tyvars? OP "at" ty ":=" expr`. Omitting
+`prefix` means infix, preserving every original declaration. `designation` is
 contextual exactly as `class` and `instance` are — a declaration cannot begin
 with it, since the next token would have to be an operator.
 
 ### 3.2 The key, and what the two halves admit
 
-The key is **(symbol, carrier-head)** — one entry, a duplicate is a
+The key is **(fixity, symbol, carrier-head)** — one entry, a duplicate is a
 declaration error naming the previous one. The carrier's head is computed by
 `head_name`, the very function layer 1 keys instances on, so `List<A>` and
 `List<Nat>` are one key for the same reason two instances at one head collide.
@@ -133,8 +135,9 @@ module-scoped for the same reason the instance registry is not.
 
 ## 4. Resolving a symbol
 
-`+` is `ExprKind::OpSymbol("+")`. `a + b` is that symbol **applied**:
-`App { head: OpSymbol("+"), args: [a, b] }`. A bare symbol between delimiters
+`+` is `ExprKind::OpSymbol { symbol: "+", fixity: Infix }`. `a + b` is that
+symbol **applied**: `App { head: OpSymbol { ... }, args: [a, b] }`. A bare
+infix symbol between delimiters
 — `Monoid(+)`, `A::CommMonoid(+)` — is the same node unapplied. The parsing
 rule is §7's, decided there and implemented here without reopening: an
 operator token in argument-initial position (directly after `(` or `,`) has

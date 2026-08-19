@@ -56,3 +56,10 @@ on [[calc-over-order-relations]] rather than adding syntax speculatively.
   Open-law probes cover every new declaration, closed computations cover
   positive, negative, and mixed-sign `min`/`max`, and a negative control proves
   that multiplication monotonicity cannot be invoked at a negative factor.
+- 2026-08-19: Post-round surface review produced four owners:
+  [[prefix-negation-notation]], [[intro-proof-statement]],
+  [[stdlib-surface-style-lint]], and [[decidable-if-expression]]. Two suspected
+  gaps were checked and are already supported: the first bridge can be written
+  `{ split m; on _ := trivial; }`, and the dependent motive can use
+  `n < z -> NegSucc(z) < NegSucc(n)`. These are cleanup/style customers, not
+  language blockers.

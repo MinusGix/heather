@@ -71,7 +71,7 @@ use heather_kernel::term::{
 use heather_kernel::typing::{self, TypeError, DEFAULT_FUEL};
 use heather_syntax::{
     parse_file, Arm, Decl, DeclKind, Expr, ExprKind, Item, LamBinder, MatchForm, OnStmt, OnTarget,
-    NamedArg, ParseError, Span, Stmt, RecordLitField, Ty, TyKind,
+    NamedArg, OpFixity, ParseError, Span, Stmt, RecordLitField, Ty, TyKind,
 };
 
 mod access;
@@ -4119,7 +4119,7 @@ impl Elaborator {
             ExprKind::Splice(inner) => self.elab_splice(cx, inner, e.span),
             // Unreachable: [`Self::op_rewrite`] runs at the top of this
             // function and rewrites every symbol, bare or applied, to a name.
-            ExprKind::OpSymbol(s) => {
+            ExprKind::OpSymbol { symbol: s, .. } => {
                 err(format!("`{s}` reached elaboration unresolved"), e.span)
             }
         }
@@ -6085,7 +6085,7 @@ impl Elaborator {
             if sols[slot].solved().is_some() || matches!(sols[slot], Sol::Withheld) {
                 continue;
             }
-            let Some(op) = self.designated(sym, &head.key) else { continue };
+            let Some(op) = self.designated(sym, OpFixity::Infix, &head.key) else { continue };
             // **Checked** against the slot's own domain, not inferred: the
             // designated operation is emitted bare (§3.2), so a generic one
             // — `append` at `List<B>` — has an element type that only the
@@ -6265,7 +6265,10 @@ impl Elaborator {
     /// `Parser::infix_op`'s first column to the resolver's last stop. That is
     /// the growth invariant, and it is structural rather than audited: a file
     /// with no designation for a symbol runs exactly this.
-    fn op_fallback(sym: &str) -> Option<&'static str> {
+    fn op_fallback(sym: &str, fixity: OpFixity) -> Option<&'static str> {
+        if fixity != OpFixity::Infix {
+            return None;
+        }
         match sym {
             "+" => Some("add"),
             "*" => Some("mul"),
@@ -6328,6 +6331,7 @@ impl Elaborator {
         &self,
         cx: &Cx,
         sym: &str,
+        fixity: OpFixity,
         args: &[Expr],
         expected: Option<&Type>,
         span: Span,
@@ -6335,7 +6339,9 @@ impl Elaborator {
         // 1. A constraint binder that named the symbol. Innermost first, and
         //    before any type is looked at: inside `<A: Monoid(+)>` the `+` is
         //    the bound index and nothing else, at every carrier.
-        if let Some((_, n)) = cx.op_locals.iter().rev().find(|(s, _)| s == sym) {
+        if fixity == OpFixity::Infix
+            && let Some((_, n)) = cx.op_locals.iter().rev().find(|(s, _)| s == sym)
+        {
             return Ok(n.clone());
         }
         // 2. The designation at the carrier — the operand's, or the one this
@@ -6352,7 +6358,7 @@ impl Elaborator {
         //    path of every operator expression that elaborates today
         //    (docs/bare-symbol-checking-carrier-design.md §4.2).
         let mut uncovered_carrier = None;
-        if self.designations.keys().any(|(s, _)| s == sym) {
+        if self.designations.keys().any(|(f, s, _)| *f == fixity && s == sym) {
             let probed = if args.is_empty() {
                 expected
                     .and_then(|t| self.expected_carrier_head(cx, t, span))
@@ -6366,7 +6372,7 @@ impl Elaborator {
                 // (issues/designation-key-collides-across-modules.md): a file
                 // that sees two `List`s asks about the one its operand
                 // actually has, and the other module's `++` is not consulted.
-                if let Some(op) = self.designated(sym, &head.key) {
+                if let Some(op) = self.designated(sym, fixity, &head.key) {
                     return Ok(op);
                 }
                 uncovered_carrier = Some((head, from));
@@ -6378,7 +6384,7 @@ impl Elaborator {
         //    (issues/bool-operator-designations.md) — and refuse like a
         //    fallback whose name is missing, not like a symbol outside the
         //    grammar.
-        let fb = Self::op_fallback(sym);
+        let fb = Self::op_fallback(sym, fixity);
         if let Some(fb) = fb
             && (self.lookup_global(fb).is_some()
                 || self.ctor_of(fb).is_some()
@@ -6404,7 +6410,7 @@ impl Elaborator {
         let mut known = self
             .designations
             .iter()
-            .filter(|((s, _), _)| s == sym)
+            .filter(|((f, s, _), _)| *f == fixity && s == sym)
             // The *written* carrier, not the key: this line tells a reader
             // where the symbol does mean something, and `list::List` is the
             // registry's name for it, not theirs
@@ -6416,16 +6422,25 @@ impl Elaborator {
         // it is the difference between "covers this carrier" — which names no
         // carrier at all — and a sentence the reader can check against the
         // table (docs/bare-symbol-checking-carrier-design.md §6).
+        let designation_form = if fixity == OpFixity::Prefix {
+            format!("designation prefix {sym} at …")
+        } else {
+            format!("designation {sym} at …")
+        };
         let tried = match &uncovered_carrier {
             Some((head, from)) => {
                 format!("nothing designates `{sym}` at `{}` — {from} —", head.written)
             }
-            None => format!("no `designation {sym} at …` covers this carrier,"),
+            None => format!("no `{designation_form}` covers this carrier,"),
+        };
+        let binder_clause = if fixity == OpFixity::Infix {
+            format!("no constraint binder named it (`<A: Monoid({sym})>`), ")
+        } else {
+            String::new()
         };
         err(
             format!(
-                "`{sym}` has no meaning here: no constraint binder named it \
-                 (`<A: Monoid({sym})>`), {tried} and {}. {}",
+                "`{sym}` has no meaning here: {binder_clause}{tried} and {}. {}",
                 match fb {
                     Some(fb) => format!("its fallback name `{fb}` is not in scope"),
                     None => format!("`{sym}` has no fallback name"),
@@ -6490,7 +6505,7 @@ impl Elaborator {
         let mut leaf = args.first()?;
         loop {
             let ExprKind::App { head, args, .. } = &leaf.kind else { break };
-            if !matches!(head.kind, ExprKind::OpSymbol(_)) {
+            if !matches!(head.kind, ExprKind::OpSymbol { .. }) {
                 break;
             }
             match args.first() {
@@ -6544,19 +6559,27 @@ impl Elaborator {
     /// `None` at the two inference sites.
     fn op_rewrite(&self, cx: &Cx, e: &Expr, expected: Option<&Type>) -> R<Option<Expr>> {
         let (sym, args, explicit) = match &e.kind {
-            ExprKind::OpSymbol(s) => (s, None, false),
+            ExprKind::OpSymbol { symbol, fixity } => ((symbol, fixity), None, false),
             ExprKind::App { head, args, named, explicit } => match &head.kind {
                 // An operator application carries the named arguments it was
                 // written with — `a.op(x := 1)` reaches here after `.`
                 // resolution — so the rewrite preserves them rather than
                 // rewriting them away.
-                ExprKind::OpSymbol(s) => (s, Some((args, named)), *explicit),
+                ExprKind::OpSymbol { symbol, fixity } => {
+                    ((symbol, fixity), Some((args, named)), *explicit)
+                }
                 _ => return Ok(None),
             },
             _ => return Ok(None),
         };
-        let name =
-            self.resolve_op_name(cx, sym, args.map_or(&[][..], |(a, _)| a), expected, e.span)?;
+        let name = self.resolve_op_name(
+            cx,
+            sym.0,
+            *sym.1,
+            args.map_or(&[][..], |(a, _)| a),
+            expected,
+            e.span,
+        )?;
         let head = Expr { kind: ExprKind::Var(name), span: e.span };
         Ok(Some(match args {
             None => head,
@@ -6888,10 +6911,14 @@ impl Elaborator {
         let subject_key = self.carrier_key(subject);
         for a in index {
             match &a.kind {
-                ExprKind::OpSymbol(s) => match self.designated(s, &subject_key) {
-                    Some(op) => written.push(Expr { kind: ExprKind::Var(op), span: a.span }),
-                    None => written.push(a.clone()),
-                },
+                ExprKind::OpSymbol { symbol: s, fixity } => {
+                    match self.designated(s, *fixity, &subject_key) {
+                        Some(op) => {
+                            written.push(Expr { kind: ExprKind::Var(op), span: a.span })
+                        }
+                        None => written.push(a.clone()),
+                    }
+                }
                 _ => written.push(a.clone()),
             }
         }
@@ -8869,7 +8896,9 @@ impl Elaborator {
             // where its resolution is decidable, so at a meta-bearing domain it
             // waits for one, and the per-argument deferral is what hands it the
             // carrier a later argument produced.
-            ExprKind::OpSymbol(sym) => self.symbol_needs_a_carrier(cx, sym),
+            ExprKind::OpSymbol { symbol: sym, fixity } => {
+                self.symbol_needs_a_carrier(cx, sym, *fixity)
+            }
             ExprKind::Refl => !self.shadowed(cx, "refl"),
             ExprKind::Lam { binders, .. } => binders.iter().any(|b| b.ty.is_none()),
             ExprKind::Var(name) => {
@@ -8933,9 +8962,9 @@ impl Elaborator {
     /// it by the fallback — and the fallback's own type is sometimes what
     /// teaches the call its carrier — so a program written before this round
     /// could start refusing. With it, such a file runs byte-identical code.
-    fn symbol_needs_a_carrier(&self, cx: &Cx, sym: &str) -> bool {
-        !cx.op_locals.iter().any(|(s, _)| s == sym)
-            && self.designations.keys().any(|(s, _)| s == sym)
+    fn symbol_needs_a_carrier(&self, cx: &Cx, sym: &str, fixity: OpFixity) -> bool {
+        (fixity != OpFixity::Infix || !cx.op_locals.iter().any(|(s, _)| s == sym))
+            && self.designations.keys().any(|(f, s, _)| *f == fixity && s == sym)
     }
 
     /// Application with implicit-argument insertion
@@ -9368,7 +9397,7 @@ impl Elaborator {
                 // (docs/bare-symbol-checking-carrier-design.md §6(c)). The
                 // generic message below is true of it but explains nothing:
                 // the reader wrote a notation, not a hole.
-                if let ExprKind::OpSymbol(sym) = &ob.expr.kind {
+                if let ExprKind::OpSymbol { symbol: sym, .. } = &ob.expr.kind {
                     return err(
                         format!(
                             "`{sym}` is a bare operator symbol, so it needs the carrier \
@@ -10530,7 +10559,7 @@ mod count_holes_impl {
             }
             ExprKind::TyLit(t) => ty(t, n),
             ExprKind::Var(_)
-            | ExprKind::OpSymbol(_)
+            | ExprKind::OpSymbol { .. }
             | ExprKind::Num(_)
             | ExprKind::Refl
             | ExprKind::Univ { .. } => {}

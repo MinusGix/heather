@@ -36,3 +36,8 @@ Both want [[goal-holes]]' block-statement + `on` surface for their full form; in
 - 2026-08-02: A future consumer, recorded off the certifying-generator v2 round (2026-08-02, docs/ir-simulate-design.md section 13 note 9): quantitative fuel/cost reasoning. The design settled on 'modality in statements, numbers hidden' — Converges is a computes-in-finite-time possibility modality and specific bounds are compositional debt — but consumers that DO want the number (complexity certificates, cost-model refinements) are exactly a goal-solver workload: a fuel bound is a witness a tactic should synthesize (run the mini-evaluator / compose per-instruction costs) and a human should never spell. When the solver slot lands (goal-holes' on _: _ := solver(goal)), bound synthesis and le-discharge are natural early tactics alongside auto-refl.
 - 2026-08-05: MVP slice scheduled as [[auto-refl-empty-block]] (2026-08-05 ergonomics round); apply and the solver slot stay here.
 - 2026-08-05: auto-refl MVP landed ([[auto-refl-empty-block]], 2026-08-05); the solver slot and apply remain here.
+- 2026-08-19: The post-I-prime proof-style review split introduction into
+  [[intro-proof-statement]]. It is goal-directed but not automation:
+  `intro x; rest` is simply the checking-position face of `λ x => rest`.
+  `cases` is already [[split-on-arms]], including a default arm; do not grow
+  this issue into an umbrella tactic language.

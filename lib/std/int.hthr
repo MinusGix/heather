@@ -97,6 +97,8 @@ fn neg(a: Int) -> Int {
     }
 }
 
+designation prefix - at Int := neg
+
 // Truncated, exactly as `nat::sub` is: the integers below zero have no `Nat`,
 // so they land on `0` and the embedding lemma below carries the hypothesis that
 // says when that is lossless.
@@ -116,7 +118,7 @@ theorem neg_negOfNat(n: Nat): neg(negOfNat(n)) = OfNat(n) {
 // what the deleted motive said by hand — thirteen sites in this file
 // (issues/nested-match-on-field-binder-motive.md;
 // docs/goal-motive-synthesis-design.md §5).
-theorem neg_neg(a: Int): neg(neg(a)) = a {
+theorem neg_neg(a: Int): -(-a) = a {
     match a {
         OfNat(n) => match n {
             Zero => refl,
@@ -126,7 +128,7 @@ theorem neg_neg(a: Int): neg(neg(a)) = a {
     }
 }
 
-theorem neg_ofNat_succ(n: Nat): neg(OfNat(Succ(n))) = NegSucc(n) { refl }
+theorem neg_ofNat_succ(n: Nat): -OfNat(Succ(n)) = NegSucc(n) { refl }
 
 // ---------------------------------------------------------------------------
 // The successor and predecessor, which are the file's primitives.

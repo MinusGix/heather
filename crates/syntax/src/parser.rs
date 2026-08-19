@@ -27,7 +27,7 @@
 //!                                     -- a certified runtime representation
 //!                                     (docs/datarepr-design.md §1.4)
 //! dclause := "mk"? name ":=" expr     -- `mk C := …` is C's image
-//! desig   := "designation" tyvars? OP "at" type ":=" expr
+//! desig   := "designation" "prefix"? tyvars? OP "at" type ":=" expr
 //!                                     -- what a symbol means at a carrier
 //!                                     (docs/operators-onto-classes-design.md)
 //! decl    := ("fn"|"theorem") name tyvars? ("requires" ibind ("," ibind)*)?
@@ -293,8 +293,8 @@ fn render_owner(e: &Expr) -> Option<String> {
 /// namespace of its own, so an operator expression is the ordinary
 /// [`ExprKind::App`] it has always been — only its head survives as what was
 /// written instead of as what it used to desugar to.
-fn op_call(sym: &str, args: Vec<Expr>, span: Span) -> Expr {
-    let head = Expr { kind: ExprKind::OpSymbol(sym.to_string()), span };
+fn op_call(sym: &str, fixity: OpFixity, args: Vec<Expr>, span: Span) -> Expr {
+    let head = Expr { kind: ExprKind::OpSymbol { symbol: sym.to_string(), fixity }, span };
     Expr { kind: ExprKind::App { head: Box::new(head), args, named: Vec::new(), explicit: false }, span }
 }
 
@@ -784,6 +784,7 @@ impl Parser {
     fn designation_decl(&mut self) -> R<DesignationDecl> {
         let start = self.peek_span();
         self.bump(); // `designation`
+        let fixity = if self.eat_kw("prefix") { OpFixity::Prefix } else { OpFixity::Infix };
         // `<` opens the optional type-parameter list everywhere else, but in
         // `designation < at Int := Lt` it is the operator itself. `at` cannot
         // begin a type parameter, so this two-token lookahead is exact and
@@ -795,10 +796,15 @@ impl Parser {
         } else {
             self.tyvar_list()?
         };
-        let Some(sym) = Self::op_symbol(self.peek()) else {
+        let sym = match fixity {
+            OpFixity::Prefix if matches!(self.peek(), TokKind::Minus) => Some("-"),
+            OpFixity::Prefix => None,
+            OpFixity::Infix => Self::op_symbol(self.peek()),
+        };
+        let Some(sym) = sym else {
             return self.err(
-                "a designation names an operator (`designation + at Nat := add`): the \
-                 symbols are `+`, `++`, `*`, `&&`, `||`, `<=` and `<`. A designation for an ordinary name \
+                "a designation names an operator (`designation + at Nat := add`, \
+                 `designation prefix - at Int := neg`). A designation for an ordinary name \
                  is not a form — that is a default instance wearing a smaller hat \
                  (docs/operation-indexed-classes-design.md §9.2)",
             );
@@ -818,7 +824,7 @@ impl Parser {
         )?;
         let op = self.expr()?;
         let span = start.join(op.span);
-        Ok(DesignationDecl { tyvars, symbol, carrier, op, span })
+        Ok(DesignationDecl { tyvars, fixity, symbol, carrier, op, span })
     }
 
     /// `datarepr N for S { R := …, mk Cons := …, … }` and
@@ -2372,7 +2378,7 @@ impl Parser {
                 self.bump();
                 let rhs = self.with_eq(true, |p| p.expr_bp(0))?;
                 let span = lhs.span.join(rhs.span);
-                op_call(sym, vec![lhs, rhs], span)
+                op_call(sym, OpFixity::Infix, vec![lhs, rhs], span)
             }
             _ => return Ok(lhs),
         };
@@ -2713,13 +2719,16 @@ impl Parser {
             return None;
         }
         let span = self.bump().span;
-        Some(Expr { kind: ExprKind::OpSymbol(sym.to_string()), span })
+        Some(Expr {
+            kind: ExprKind::OpSymbol { symbol: sym.to_string(), fixity: OpFixity::Infix },
+            span,
+        })
     }
 
     /// Precedence-climbing loop: parse a postfix expression, then fold in
     /// infix operators whose left binding power is at least `min_bp`.
     fn expr_bp(&mut self, min_bp: u8) -> R<Expr> {
-        let mut lhs = self.postfix()?;
+        let mut lhs = self.prefix()?;
         while let Some((sym, l_bp, r_bp)) = Self::infix_op(self.peek()) {
             if l_bp < min_bp {
                 break;
@@ -2727,9 +2736,23 @@ impl Parser {
             self.bump();
             let rhs = self.expr_bp(r_bp)?;
             let span = lhs.span.join(rhs.span);
-            lhs = op_call(sym, vec![lhs, rhs], span);
+            lhs = op_call(sym, OpFixity::Infix, vec![lhs, rhs], span);
         }
         Ok(lhs)
+    }
+
+    /// Arithmetic prefix operators. Unary `-` is an operator symbol rather
+    /// than a literal sign: `-3` has exactly the AST of `-(3)`. It binds more
+    /// tightly than every infix rung, includes postfix applications in its
+    /// operand, and recurses so `--a` is two negations.
+    fn prefix(&mut self) -> R<Expr> {
+        if matches!(self.peek(), TokKind::Minus) {
+            let start = self.bump().span;
+            let inner = self.prefix()?;
+            let span = start.join(inner.span);
+            return Ok(op_call("-", OpFixity::Prefix, vec![inner], span));
+        }
+        self.postfix()
     }
 
     /// An atom followed by zero or more field accesses `.f` / `.f(args)`, a
@@ -3762,7 +3785,9 @@ mod tests {
         match k {
             ExprKind::App { head, args, explicit, .. } => match &head.kind {
                 ExprKind::Var(name) => (name.as_str(), args.as_slice(), *explicit),
-                ExprKind::OpSymbol(sym) => (sym.as_str(), args.as_slice(), *explicit),
+                ExprKind::OpSymbol { symbol, .. } => {
+                    (symbol.as_str(), args.as_slice(), *explicit)
+                }
                 other => panic!("expected a named call, got {other:?}"),
             },
             other => panic!("expected a call, got {other:?}"),
@@ -3791,6 +3816,36 @@ mod tests {
         assert!(matches!(&args[1].kind, ExprKind::Var(v) if v == "c"));
     }
 
+    #[test]
+    fn unary_minus_is_a_prefix_symbol_applied_to_an_expression() {
+        let k = body("-3");
+        let ExprKind::App { head, args, .. } = k else { panic!("expected prefix call") };
+        assert!(matches!(
+            head.kind,
+            ExprKind::OpSymbol { symbol, fixity: OpFixity::Prefix } if symbol == "-"
+        ));
+        assert!(matches!(args.as_slice(), [Expr { kind: ExprKind::Num(3), .. }]));
+    }
+
+    #[test]
+    fn unary_minus_binds_tighter_than_infix_and_nests() {
+        let k = body("--a * b");
+        let (name, args, _) = as_call(&k);
+        assert_eq!(name, "*");
+        let (outer, outer_args, _) = as_call(&args[0].kind);
+        assert_eq!(outer, "-");
+        assert_eq!(as_call(&outer_args[0].kind).0, "-");
+    }
+
+    #[test]
+    fn prefix_designation_records_a_distinct_fixity() {
+        let f = parse_file("fn neg(a: Nat) -> Nat { a } designation prefix - at Nat := neg")
+            .expect("prefix designation");
+        let Item::Designation(d) = &f.items[1] else { panic!("expected designation") };
+        assert_eq!(d.symbol, "-");
+        assert_eq!(d.fixity, OpFixity::Prefix);
+    }
+
     // -- binder symbols (issues/binder-symbol-as-notation.md) --------------
 
     #[test]
@@ -3813,7 +3868,10 @@ mod tests {
         // slot name it, and so what makes the duplicate control writable.
         let k = body("f(∙, x)");
         let (_, args, _) = as_call(&k);
-        assert!(matches!(&args[0].kind, ExprKind::OpSymbol(s) if s == "∙"));
+        assert!(matches!(
+            &args[0].kind,
+            ExprKind::OpSymbol { symbol: s, fixity: OpFixity::Infix } if s == "∙"
+        ));
     }
 
     #[test]
@@ -3923,7 +3981,10 @@ mod tests {
         assert_eq!(d.symbol, "++");
         let Item::Decl(d) = &f.items[2] else { panic!("expected declaration") };
         let ExprKind::App { args, .. } = &d.body.result.kind else { panic!("expected call") };
-        assert!(matches!(&args[0].kind, ExprKind::OpSymbol(s) if s == "++"));
+        assert!(matches!(
+            &args[0].kind,
+            ExprKind::OpSymbol { symbol: s, fixity: OpFixity::Infix } if s == "++"
+        ));
     }
 
     #[test]
@@ -4070,7 +4131,10 @@ mod tests {
         let k = body("f(||, x)");
         let (name, args, _) = as_call(&k);
         assert_eq!(name, "f");
-        assert!(matches!(&args[0].kind, ExprKind::OpSymbol(s) if s == "||"));
+        assert!(matches!(
+            &args[0].kind,
+            ExprKind::OpSymbol { symbol: s, fixity: OpFixity::Infix } if s == "||"
+        ));
     }
 
     #[test]

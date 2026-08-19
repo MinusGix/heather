@@ -3187,7 +3187,7 @@ pub(crate) fn expr_mentions(e: &Expr, name: &str) -> bool {
         ExprKind::Var(n) => n == name,
         // An operator symbol is a name in its own namespace, never a
         // declaration's (docs/operators-onto-classes-design.md §4).
-        ExprKind::OpSymbol(_)
+        ExprKind::OpSymbol { .. }
         | ExprKind::Num(_)
         | ExprKind::Refl
         | ExprKind::AutoRefl

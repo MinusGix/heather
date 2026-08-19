@@ -66,3 +66,10 @@ alongside [[surface-proof-automation]]'s `apply`, which raises the same
 ## Log
 
 - 2026-08-05: Landed as a **parser desugaring** onto `ExprKind::Match` (managed round; docs/match-equation-split-design.md §5–7). The route this issue proposed — constructor goals in the goal machinery — was rejected on an obstacle it never costed: `goal_base = count_holes(decl)` is a syntactic pre-count, and a split's goal count is an inductive's arity the parser cannot know; plus the binder names come from the `on` head, needing per-goal Cx renaming no other goal performs. The desugaring makes "lowers to the same elimination" byte-identical (asserted by test) and inherits every arm diagnostic. Grammar rule decided: a block whose statement list ends in a `split` takes no result expression; arms and goal discharges share the one `on` loop, told apart by a single token, so arms stay order-free and may interleave with discharges. `split h : e;` is accepted (same node, same field). A split-terminated block *expression* works and does not re-raise [[nested-goal-discharge]] — the caution docs/let-and-blocks-design.md §6 recorded is answered. Known wart, deliberately not fixed: arm diagnostics say `match` where the user wrote `split` (the price of the desugaring; constructor and arm are still named correctly).
+- 2026-08-19: Post-I-prime review supplied the compact proof customer and
+  confirmed it already checks: `{ split m; on _ := trivial; }` replaces
+  `match m { Zero => trivial, Succ(k) => trivial }`. The default arm is the
+  useful analogue of applying one closer to every constructor. A general
+  all-goals command combinator remains deliberately unowned until a command
+  sequence needs more than this existing spelling; [[intro-proof-statement]]
+  owns the adjacent checking-position introduction command.

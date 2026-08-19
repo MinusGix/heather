@@ -216,6 +216,11 @@ theorem c_sub_over(): int::sub(OfNat(8), OfNat(3)) = OfNat(5) { refl }
 theorem c_neg_p(): int::neg(OfNat(4)) = NegSucc(3) { refl }
 theorem c_neg_n(): int::neg(NegSucc(3)) = OfNat(4) { refl }
 theorem c_neg_zero(): int::neg(OfNat(0)) = OfNat(0) { refl }
+theorem c_prefix_neg_open(a: Int): -a = int::neg(a) { refl }
+theorem c_prefix_neg_positive(): -OfNat(4) = NegSucc(3) { refl }
+theorem c_prefix_neg_negative(): -NegSucc(3) = OfNat(4) { refl }
+theorem c_prefix_neg_nested(a: Int): --a = a { int::neg_neg(a) }
+theorem c_prefix_neg_precedence(a, b: Int): -a * b = int::mul(int::neg(a), b) { refl }
 theorem c_mul_pp(): int::mul(OfNat(2), OfNat(3)) = OfNat(6) { refl }
 theorem c_mul_pn(): int::mul(OfNat(2), NegSucc(2)) = NegSucc(5) { refl }
 theorem c_mul_np(): int::mul(NegSucc(1), OfNat(3)) = NegSucc(5) { refl }
@@ -249,10 +254,25 @@ theorem c_sum(): sum_all(Cons(OfNat(2), Cons(NegSucc(0), Nil))) = OfNat(1) { ref
 theorem c_inv(x, y: Int, h: int::add(x, y) = OfNat(0)): y = int::neg(x) {
     op_inv_unique(x, y, h)
 }
+
 theorem c_max(a: Int): max_of(a, a) = a { max_of_self(a) }
 theorem c_max_computes(): max_of(NegSucc(2), OfNat(1)) = OfNat(1) { refl }
 "#,
     );
+}
+
+#[test]
+fn a_bare_numeral_under_minus_is_still_a_nat() {
+    let mut e = elaborated();
+    let src = r#"
+import int;
+theorem not_an_int_literal(): -3 = NegSucc(2) { refl }
+"#;
+    let err = e
+        .elab_module_source("negative_numeral", src)
+        .expect_err("`-3` must not acquire an Int-specific literal lowering");
+    let msg = err.render(src);
+    assert!(msg.contains("nothing designates `-` at `Nat`"), "{msg}");
 }
 
 /// The round's own row, and the reason it could not be written until

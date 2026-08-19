@@ -85,3 +85,8 @@ has been declared, its subsequent kit should use the corresponding `¬`, `∧`,
   standard symbols to be absent or fresh. The fixtures now inherit the rows
   from their defining modules and reserve local declarations for deliberately
   nonstandard mappings. No elaboration or public API behavior changed.
+- 2026-08-19: Follow-up consistency and enforcement are owned by
+  [[stdlib-surface-style-lint]]. The I-prime review confirmed operator notation
+  works inside dependent motives too; remaining explicit `add`/`Le`/`Lt`
+  spellings must be classified as structural exceptions or cleaned, not
+  mistaken for an expressiveness gap.

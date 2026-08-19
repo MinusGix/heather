@@ -59,7 +59,11 @@ pub struct DesignationDecl {
     /// `designation<A> …` — bound only so that `List<A>` parses. The key is
     /// the carrier's head, so these never reach it.
     pub tyvars: Vec<String>,
-    /// The operator, as written: `+`, `++`, `*`, `&&`, `||`, `<=`, `<`.
+    /// Prefix and infix operators occupy distinct designation slots. Existing
+    /// declarations omit the keyword and are infix; prefix declarations write
+    /// it explicitly (`designation prefix - at Int := neg`).
+    pub fixity: OpFixity,
+    /// The operator, as written: `+`, `++`, `*`, `&&`, `||`, `<=`, `<`, `-`.
     pub symbol: String,
     pub carrier: Ty,
     /// The designated operation. A **bare global name** (§3.2): it is emitted
@@ -68,6 +72,21 @@ pub struct DesignationDecl {
     /// rather than merely unsupported.
     pub op: Expr,
     pub span: Span,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum OpFixity {
+    Prefix,
+    Infix,
+}
+
+impl OpFixity {
+    pub fn keyword(self) -> &'static str {
+        match self {
+            Self::Prefix => "prefix",
+            Self::Infix => "infix",
+        }
+    }
 }
 
 /// One `import` item. The listed names are a *standing disambiguation*, not a
@@ -736,10 +755,10 @@ impl MatchForm {
 pub enum ExprKind {
     /// A name: parameter, `fn`, or `theorem`.
     Var(String),
-    /// An **operator symbol** — `+`, `++`, `*`, `&&`, `||`, `<=`, `<`
+    /// An **operator symbol** — `+`, `++`, `*`, `&&`, `||`, `<=`, `<`, `-`
     /// (docs/operators-onto-classes-design.md §4). A name in a namespace of
     /// its own: `a + b` is this node *applied*
-    /// (`App { head: OpSymbol("+"), … }`) and a lone symbol between delimiters
+    /// (`App { head: OpSymbol { symbol: "+", fixity: Infix }, … }`) and a lone symbol between delimiters
     /// — `Monoid(+)`, `A::CommMonoid(+)` — is it unapplied, which is the
     /// designation reference §7 of the operation-indexed design specified.
     ///
@@ -749,7 +768,7 @@ pub enum ExprKind {
     /// fixed name the parser used to desugar to, which is why every operator
     /// expression that elaborated before this node existed still elaborates
     /// to the same term.
-    OpSymbol(String),
+    OpSymbol { symbol: String, fixity: OpFixity },
     /// `Type<n>` where a *term* is expected — the code `TmTy(n) : Ty (n+1)`.
     /// A universe is a type, so it is spellable in both positions; this is the
     /// expression one, and it infers rather than needing the `Expr`/`Ty`
