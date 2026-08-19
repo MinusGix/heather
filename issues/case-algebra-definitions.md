@@ -3,7 +3,7 @@ title: Sketch: functions defined per-constructor, dispatch as an object
 status: open
 labels: [frontend,syntax,elaboration,metaprogramming,design]
 created: 2026-07-31
-updated: 2026-08-18
+updated: 2026-08-19
 ---
 
 Design sketch, deliberately ahead of need (user, 2026-07-31, off the
@@ -191,3 +191,17 @@ when weighing rung 3/4 against their prerequisite features.
   certificate and its direct field yields existential convergence refinement.
   Mutating existing arm bodies is refused. No declaration/generator machinery
   was added: constant-match fusion is the next value test before that choice.
+- 2026-08-19: The next value test lands: a certified constant-match-fusion
+  algebra rewrites a fresh constructor followed by `LetMatch(0, arms,
+  Ret(outputs))` when the selected arm is `Ret(arm_outputs)`. It composes the
+  arm's `fields ++ con ++ env` references with the continuation's
+  `arm_outputs ++ con ++ env` references, including the mandatory Succ shift
+  from pre-constructor `args` into the post-constructor environment. Gather
+  lemmas certify that composition; the LetCon law combines them with its
+  recursive execution hypothesis, and the existing relation-indexed fold
+  supplies global same-fuel refinement. A non-empty-field/four-output control
+  computes on both sides; omitting the Succ shift is refused. General
+  instruction-chain fusion is deliberately declined because landed IR v1
+  stores no output arity on multi-output binders (recorded in
+  `docs/ir-simulate-design.md` §13 note 10). This is now optimizer evidence,
+  not only pass-architecture evidence; generation remains a separate choice.

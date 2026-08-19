@@ -461,6 +461,426 @@ theorem default_arm_changes_execution_probe():
         ir_fold_probe(add_default_arm_alg_probe(), LetMatch(0, NoArm, Ret(RNil))))
     = Out(VNil)
 { refl }
+
+// Constant-match fusion.  The constructor itself remains bound, but a match
+// on its freshly-bound slot can be removed when both the chosen arm and the
+// match continuation are Ret.  The two reference compositions below account
+// for the arm's `fields ++ con ++ env` view and the continuation's
+// `arm_outputs ++ con ++ env` view.
+fn succ_refs_probe(rs: Refs) -> Refs {
+    match rs {
+        RNil => RNil,
+        RCons(i, next) => RCons(Succ(i), succ_refs_probe(next)),
+    }
+}
+
+fn resolve_ref_probe(prefix: Refs) -> Nat -> Nat {
+    match prefix {
+        RNil => λ (i: Nat) => i,
+        RCons(head, tail) => λ (i: Nat) =>
+            match i {
+                Zero => head,
+                Succ(k) => resolve_ref_probe(tail)(k),
+            },
+    }
+}
+
+fn remap_refs_probe(prefix: Refs, rs: Refs) -> Refs {
+    match rs {
+        RNil => RNil,
+        RCons(i, next) =>
+            RCons(resolve_ref_probe(prefix)(i), remap_refs_probe(prefix, next)),
+    }
+}
+
+fn arm_outputs_in_con_env_probe(args: Refs, arm_outputs: Refs) -> Refs {
+    remap_refs_probe(succ_refs_probe(args), arm_outputs)
+}
+
+fn fused_outputs_probe(args: Refs, arm_outputs: Refs, outputs: Refs) -> Refs {
+    remap_refs_probe(arm_outputs_in_con_env_probe(args, arm_outputs), outputs)
+}
+
+fn gather_step_probe(head: OptVal, tail: OptVal) -> OptVal {
+    match head {
+        NoneV => NoneV,
+        SomeV(v) =>
+            match tail {
+                NoneV => NoneV,
+                SomeV(vs) => SomeV(VCons(v, vs)),
+            },
+    }
+}
+
+theorem gather_is_step_probe(i: Nat, next: Refs, env: Val):
+    gather(RCons(i, next), env)
+    = gather_step_probe(lookup(env)(i), gather(next, env))
+{ refl }
+
+theorem resolve_lookup_probe(prefix: Refs):
+    (env, ws: Val) -> gather(prefix, env) = SomeV(ws) -> (i: Nat) ->
+        lookup(env)(resolve_ref_probe(prefix)(i))
+        = lookup(append(ws, env))(i)
+{
+    match prefix as λ p =>
+        (env, ws: Val) -> gather(p, env) = SomeV(ws) -> (i: Nat) ->
+            lookup(env)(resolve_ref_probe(p)(i))
+            = lookup(append(ws, env))(i) {
+        RNil => λ env ws hg i =>
+            j(inj(hg),
+              λ y q => lookup(env)(i) = lookup(append(y, env))(i),
+              refl),
+        RCons(head, tail) => λ env ws =>
+            match hl : lookup(env)(head) as λ o =>
+                gather_step_probe(o, gather(tail, env)) = SomeV(ws) ->
+                (i: Nat) -> lookup(env)(resolve_ref_probe(RCons(head, tail))(i))
+                    = lookup(append(ws, env))(i) {
+                NoneV => λ hg i => absurd(hg),
+                SomeV(v) =>
+                    match ht : gather(tail, env) as λ o =>
+                        gather_step_probe(SomeV(v), o) = SomeV(ws) ->
+                        (i: Nat) -> lookup(env)(resolve_ref_probe(RCons(head, tail))(i))
+                            = lookup(append(ws, env))(i) {
+                        NoneV => λ hg i => absurd(hg),
+                        SomeV(vs) => λ hg i =>
+                            j(inj(hg),
+                              λ y q =>
+                                  lookup(env)(resolve_ref_probe(RCons(head, tail))(i))
+                                  = lookup(append(y, env))(i),
+                              match i {
+                                  Zero => hl,
+                                  Succ(k) => resolve_lookup_probe(tail)(env, vs, ht, k),
+                              }),
+                    },
+            },
+    }
+}
+
+theorem gather_remap_probe(prefix: Refs, rs: Refs):
+    (env, ws: Val) -> gather(prefix, env) = SomeV(ws) ->
+        gather(remap_refs_probe(prefix, rs), env)
+        = gather(rs, append(ws, env))
+{
+    match rs as λ refs =>
+        (env, ws: Val) -> gather(prefix, env) = SomeV(ws) ->
+            gather(remap_refs_probe(prefix, refs), env)
+            = gather(refs, append(ws, env)) {
+        RNil => λ env ws hg => refl,
+        RCons(i, next) => λ env ws hg =>
+            trans(
+                cong_probe(
+                    λ (h: OptVal) =>
+                        gather_step_probe(h,
+                            gather(remap_refs_probe(prefix, next), env)),
+                    resolve_lookup_probe(prefix)(env, ws, hg, i)),
+                cong_probe(
+                    λ (t: OptVal) =>
+                        gather_step_probe(lookup(append(ws, env))(i), t),
+                    gather_remap_probe(prefix, next)(env, ws, hg))),
+    }
+}
+
+theorem gather_succ_refs_probe(rs: Refs):
+    (head, env: Val) ->
+        gather(succ_refs_probe(rs), VCons(head, env)) = gather(rs, env)
+{
+    match rs as λ refs =>
+        (head, env: Val) ->
+            gather(succ_refs_probe(refs), VCons(head, env)) = gather(refs, env) {
+        RNil => λ head env => refl,
+        RCons(i, next) => λ head env =>
+            cong_probe(
+                λ (t: OptVal) => gather_step_probe(lookup(env)(i), t),
+                gather_succ_refs_probe(next)(head, env)),
+    }
+}
+
+theorem fused_outputs_gather_probe(tag: Nat, args, arm_outputs, outputs: Refs,
+    env, fields, ws, vs: Val,
+    hg: gather(args, env) = SomeV(fields),
+    ha: gather(arm_outputs,
+            append(fields, VCons(VCon(tag, fields), env))) = SomeV(ws),
+    ho: gather(outputs,
+            append(ws, VCons(VCon(tag, fields), env))) = SomeV(vs)):
+    gather(fused_outputs_probe(args, arm_outputs, outputs),
+        VCons(VCon(tag, fields), env)) = SomeV(vs)
+{
+    let con_env: Val = VCons(VCon(tag, fields), env);
+    let shifted: (gather(succ_refs_probe(args), con_env) = SomeV(fields)) =
+        trans(gather_succ_refs_probe(args)(VCon(tag, fields), env), hg);
+    let arm_mapped: (gather(arm_outputs_in_con_env_probe(args, arm_outputs), con_env)
+                     = SomeV(ws)) =
+        trans(gather_remap_probe(succ_refs_probe(args), arm_outputs)
+                  (con_env, fields, shifted), ha);
+    trans(gather_remap_probe(arm_outputs_in_con_env_probe(args, arm_outputs), outputs)
+              (con_env, ws, arm_mapped), ho)
+}
+
+theorem fused_candidate_eval_probe(tag: Nat, args: Refs, arms: Ir,
+    arm_outputs, outputs: Refs, env, fields: Val,
+    hg: gather(args, env) = SomeV(fields),
+    hpick: pick_arm(arms)(tag) = Ret(arm_outputs), fuel: Nat):
+    (prog: Prog, vs: Val) ->
+        eval(fuel, prog)(VCons(VCon(tag, fields), env),
+            LetMatch(0, arms, Ret(outputs))) = Out(vs) ->
+        eval(fuel, prog)(VCons(VCon(tag, fields), env),
+            Ret(fused_outputs_probe(args, arm_outputs, outputs))) = Out(vs)
+{
+    match fuel as λ n =>
+        (prog: Prog, vs: Val) ->
+            eval(n, prog)(VCons(VCon(tag, fields), env),
+                LetMatch(0, arms, Ret(outputs))) = Out(vs) ->
+            eval(n, prog)(VCons(VCon(tag, fields), env),
+                Ret(fused_outputs_probe(args, arm_outputs, outputs))) = Out(vs) {
+        Zero => λ prog vs q => q,
+        Succ(k) => λ prog vs =>
+            j(sym(hpick),
+              λ selected q =>
+                  k_bind(eval(k, prog), VCons(VCon(tag, fields), env), Ret(outputs),
+                      eval(k, prog)(append(fields, VCons(VCon(tag, fields), env)), selected))
+                  = Out(vs) ->
+                  eval(Succ(k), prog)(VCons(VCon(tag, fields), env),
+                      Ret(fused_outputs_probe(args, arm_outputs, outputs))) = Out(vs),
+              match k as λ m =>
+                  k_bind(eval(m, prog), VCons(VCon(tag, fields), env), Ret(outputs),
+                      eval(m, prog)(append(fields, VCons(VCon(tag, fields), env)),
+                          Ret(arm_outputs))) = Out(vs) ->
+                  eval(Succ(m), prog)(VCons(VCon(tag, fields), env),
+                      Ret(fused_outputs_probe(args, arm_outputs, outputs))) = Out(vs) {
+                  Zero => λ q => absurd(q),
+                  Succ(j) =>
+                      match ha : gather(arm_outputs,
+                              append(fields, VCons(VCon(tag, fields), env))) as λ a =>
+                          k_bind(eval(Succ(j), prog), VCons(VCon(tag, fields), env),
+                              Ret(outputs), k_ret(a)) = Out(vs) ->
+                          eval(Succ(Succ(j)), prog)(VCons(VCon(tag, fields), env),
+                              Ret(fused_outputs_probe(args, arm_outputs, outputs))) = Out(vs) {
+                          NoneV => λ q => absurd(q),
+                          SomeV(ws) =>
+                              match ho : gather(outputs,
+                                      append(ws, VCons(VCon(tag, fields), env))) as λ o =>
+                                  k_ret(o) = Out(vs) ->
+                                  eval(Succ(Succ(j)), prog)(VCons(VCon(tag, fields), env),
+                                      Ret(fused_outputs_probe(args, arm_outputs, outputs)))
+                                  = Out(vs) {
+                                  NoneV => λ q => absurd(q),
+                                  SomeV(out) => λ q =>
+                                      j(sym(fused_outputs_gather_probe(tag, args,
+                                          arm_outputs, outputs, env, fields, ws, out,
+                                          hg, ha, ho)),
+                                        λ gathered p => k_ret(gathered) = Out(vs),
+                                        q),
+                              },
+                      },
+              }),
+    }
+}
+
+fn fuse_letcon_probe(tag: Nat, args: Refs, rest: Ir) -> Ir {
+    match rest {
+        LetMatch(scrut, arms, cont) =>
+            match scrut {
+                Zero =>
+                    match cont {
+                        Ret(outputs) =>
+                            match pick_arm(arms)(tag) {
+                                Ret(arm_outputs) =>
+                                    LetCon(tag, args,
+                                        Ret(fused_outputs_probe(args, arm_outputs, outputs))),
+                                _ => LetCon(tag, args, rest),
+                            },
+                        _ => LetCon(tag, args, rest),
+                    },
+                Succ(k) => LetCon(tag, args, rest),
+            },
+        _ => LetCon(tag, args, rest),
+    }
+}
+
+theorem fused_candidate_letcon_law_probe(tag: Nat, args: Refs, rest, arms: Ir,
+    arm_outputs, outputs: Refs,
+    ih: IrExecForwardProbe(rest, LetMatch(0, arms, Ret(outputs))),
+    hpick: pick_arm(arms)(tag) = Ret(arm_outputs)):
+    IrExecForwardProbe(LetCon(tag, args, rest),
+        LetCon(tag, args, Ret(fused_outputs_probe(args, arm_outputs, outputs))))
+{
+    IrExecForwardProbe(
+        λ fuel prog env vs =>
+            match fuel as λ n =>
+                eval(n, prog)(env, LetCon(tag, args, rest)) = Out(vs) ->
+                eval(n, prog)(env,
+                    LetCon(tag, args,
+                        Ret(fused_outputs_probe(args, arm_outputs, outputs)))) = Out(vs) {
+                Zero => λ q => q,
+                Succ(k) =>
+                    match hg : gather(args, env) as λ o =>
+                        k_letcon(eval(k, prog), env, tag, rest, o) = Out(vs) ->
+                        k_letcon(eval(k, prog), env, tag,
+                            Ret(fused_outputs_probe(args, arm_outputs, outputs)), o) = Out(vs) {
+                        NoneV => λ q => q,
+                        SomeV(fields) => λ q =>
+                            fused_candidate_eval_probe(tag, args, arms, arm_outputs,
+                                outputs, env, fields, hg, hpick, k)
+                                (prog, vs,
+                                    ih.eval_out(k, prog,
+                                        VCons(VCon(tag, fields), env), vs, q)),
+                    },
+            },
+        λ picked fuel prog env vs q => q)
+}
+
+theorem constant_match_fusion_letcon_law_probe(tag: Nat, args: Refs,
+    rest, rest_r: Ir, ih: IrExecForwardProbe(rest, rest_r)):
+    IrExecForwardProbe(LetCon(tag, args, rest), fuse_letcon_probe(tag, args, rest_r))
+{
+    match rest_r as λ transformed =>
+        IrExecForwardProbe(rest, transformed) ->
+        IrExecForwardProbe(LetCon(tag, args, rest),
+            fuse_letcon_probe(tag, args, transformed)) {
+        Ret(rs) => λ ih1 => add_default_letcon_law_probe(tag, args, rest,
+            Ret(rs), ih1),
+        LetCon(t, a, r) => λ ih1 => add_default_letcon_law_probe(tag, args, rest,
+            LetCon(t, a, r), ih1),
+        Arm(b, n) => λ ih1 => add_default_letcon_law_probe(tag, args, rest,
+            Arm(b, n), ih1),
+        NoArm => λ ih1 => add_default_letcon_law_probe(tag, args, rest,
+            NoArm, ih1),
+        LetLoop(init, b, r) => λ ih1 => add_default_letcon_law_probe(tag, args,
+            rest, LetLoop(init, b, r), ih1),
+        LoopIter(b) => λ ih1 => add_default_letcon_law_probe(tag, args, rest,
+            LoopIter(b), ih1),
+        LetCall(c, a, r) => λ ih1 => add_default_letcon_law_probe(tag, args,
+            rest, LetCall(c, a, r), ih1),
+        LetMatch(scrut, arms, cont) => λ ih1 =>
+            match scrut as λ slot =>
+                IrExecForwardProbe(rest, LetMatch(slot, arms, cont)) ->
+                IrExecForwardProbe(LetCon(tag, args, rest),
+                    fuse_letcon_probe(tag, args, LetMatch(slot, arms, cont))) {
+                Succ(k) => λ ih2 => add_default_letcon_law_probe(tag, args, rest,
+                    LetMatch(Succ(k), arms, cont), ih2),
+                Zero => λ ih2 =>
+                    match cont as λ continuation =>
+                        IrExecForwardProbe(rest, LetMatch(0, arms, continuation)) ->
+                        IrExecForwardProbe(LetCon(tag, args, rest),
+                            fuse_letcon_probe(tag, args,
+                                LetMatch(0, arms, continuation))) {
+                        LetCon(t, a, r) => λ ih3 => add_default_letcon_law_probe(tag,
+                            args, rest, LetMatch(0, arms, LetCon(t, a, r)), ih3),
+                        LetMatch(s, a, r) => λ ih3 => add_default_letcon_law_probe(tag,
+                            args, rest, LetMatch(0, arms, LetMatch(s, a, r)), ih3),
+                        Arm(b, n) => λ ih3 => add_default_letcon_law_probe(tag, args,
+                            rest, LetMatch(0, arms, Arm(b, n)), ih3),
+                        NoArm => λ ih3 => add_default_letcon_law_probe(tag, args,
+                            rest, LetMatch(0, arms, NoArm), ih3),
+                        LetLoop(init, b, r) => λ ih3 => add_default_letcon_law_probe(tag,
+                            args, rest, LetMatch(0, arms, LetLoop(init, b, r)), ih3),
+                        LoopIter(b) => λ ih3 => add_default_letcon_law_probe(tag, args,
+                            rest, LetMatch(0, arms, LoopIter(b)), ih3),
+                        LetCall(c, a, r) => λ ih3 => add_default_letcon_law_probe(tag,
+                            args, rest, LetMatch(0, arms, LetCall(c, a, r)), ih3),
+                        Ret(outputs) => λ ih3 =>
+                            match hpick : pick_arm(arms)(tag) as λ selected =>
+                                IrExecForwardProbe(LetCon(tag, args, rest),
+                                    match selected {
+                                        Ret(arm_outputs) => LetCon(tag, args,
+                                            Ret(fused_outputs_probe(args,
+                                                arm_outputs, outputs))),
+                                        _ => LetCon(tag, args,
+                                            LetMatch(0, arms, Ret(outputs))),
+                                    }) {
+                                Ret(arm_outputs) =>
+                                    fused_candidate_letcon_law_probe(tag, args, rest,
+                                        arms, arm_outputs, outputs, ih3, hpick),
+                                _ => add_default_letcon_law_probe(tag, args, rest,
+                                    LetMatch(0, arms, Ret(outputs)), ih3),
+                            },
+                    }(ih2),
+            }(ih1),
+    }(ih)
+}
+
+fn constant_match_fusion_alg_probe() -> IrAlgProbe<Ir> {
+    IrAlgProbe<Ir> {
+        ret: λ (rs: Refs) => Ret(rs),
+        letcon: fuse_letcon_probe,
+        letmatch: λ (scrut: Nat) (arms: Ir) (rest: Ir) => LetMatch(scrut, arms, rest),
+        arm: λ (body: Ir) (next: Ir) => Arm(body, next),
+        noarm: NoArm,
+        letloop: λ (init: Refs) (body: Ir) (rest: Ir) => LetLoop(init, body, rest),
+        loopiter: λ (body: Ir) => LoopIter(body),
+        letcall: λ (callee: Nat) (args: Refs) (rest: Ir) => LetCall(callee, args, rest),
+    }
+}
+
+theorem identity_noarm_law_probe(): IrExecForwardProbe(NoArm, NoArm) {
+    IrExecForwardProbe(
+        λ fuel prog env vs q => q,
+        λ tag fuel prog env vs q => q)
+}
+
+fn constant_match_fusion_laws_probe() ->
+    IrPassLawsProbe<Ir>(IrExecForwardRelProbe, constant_match_fusion_alg_probe())
+{
+    IrPassLawsProbe {
+        ret: add_default_arm_laws_probe().ret,
+        letcon: constant_match_fusion_letcon_law_probe,
+        letmatch: add_default_arm_laws_probe().letmatch,
+        arm: add_default_arm_laws_probe().arm,
+        noarm: identity_noarm_law_probe(),
+        letloop: add_default_arm_laws_probe().letloop,
+        loopiter: add_default_arm_laws_probe().loopiter,
+        letcall: add_default_arm_laws_probe().letcall,
+    }
+}
+
+theorem constant_match_fusion_sound_probe(ir: Ir):
+    IrExecForwardProbe(ir, ir_fold_probe(constant_match_fusion_alg_probe(), ir))
+{
+    ir_fold_sound_probe(IrExecForwardRelProbe, constant_match_fusion_alg_probe(),
+        constant_match_fusion_laws_probe(), ir)
+}
+
+theorem constant_match_fusion_refines_probe(prog: Prog, ir: Ir):
+    RefinesProbe(prog, ir, ir_fold_probe(constant_match_fusion_alg_probe(), ir))
+{
+    λ env vs c => ConvergesProbe(c.n,
+        constant_match_fusion_sound_probe(ir).eval_out(c.n, prog, env, vs, c.h))
+}
+
+fn fusion_source_probe() -> Ir {
+    LetCon(1, RCons(1, RNil),
+        LetMatch(0,
+            Arm(NoArm, Arm(Ret(RCons(0, RCons(2, RNil))), NoArm)),
+            Ret(RCons(0, RCons(1, RCons(2, RCons(4, RNil)))))))
+}
+
+fn fusion_result_probe() -> Ir {
+    LetCon(1, RCons(1, RNil),
+        Ret(RCons(2, RCons(1, RCons(0, RCons(2, RNil))))))
+}
+
+theorem constant_match_fusion_computes_probe():
+    ir_fold_probe(constant_match_fusion_alg_probe(), fusion_source_probe())
+    = fusion_result_probe()
+{ refl }
+
+theorem constant_match_fusion_source_runs_probe():
+    eval(8, PNil)(VCons(VCon(7, VNil), VCons(VCon(8, VNil), VNil)),
+        fusion_source_probe())
+    = Out(VCons(VCon(8, VNil),
+          VCons(VCon(7, VNil),
+          VCons(VCon(1, VCons(VCon(8, VNil), VNil)),
+          VCons(VCon(8, VNil), VNil)))))
+{ refl }
+
+theorem constant_match_fusion_result_runs_probe():
+    eval(8, PNil)(VCons(VCon(7, VNil), VCons(VCon(8, VNil), VNil)),
+        fusion_result_probe())
+    = Out(VCons(VCon(8, VNil),
+          VCons(VCon(7, VNil),
+          VCons(VCon(1, VCons(VCon(8, VNil), VNil)),
+          VCons(VCon(8, VNil), VNil)))))
+{ refl }
 "#;
 
 const BAD: &str = r#"
@@ -506,6 +926,63 @@ fn bad_default_arm_laws_probe() ->
     IrPassLawsProbe<Ir>(IrExecForwardRelProbe, replace_existing_arms_alg_probe())
 {
     add_default_arm_laws_probe()
+}
+"#;
+
+const BAD_FUSION: &str = r#"
+import ir_v1;
+import nat;
+
+// Wrong: constructor arguments are references in the pre-constructor
+// environment.  The fused Ret runs after the constructor is bound, so every
+// one must be shifted by Succ.  This mutation deliberately omits that shift.
+fn bad_arm_outputs_in_con_env_probe(args: Refs, arm_outputs: Refs) -> Refs {
+    remap_refs_probe(args, arm_outputs)
+}
+
+fn bad_fused_outputs_probe(args: Refs, arm_outputs: Refs, outputs: Refs) -> Refs {
+    remap_refs_probe(bad_arm_outputs_in_con_env_probe(args, arm_outputs), outputs)
+}
+
+fn bad_fuse_letcon_probe(tag: Nat, args: Refs, rest: Ir) -> Ir {
+    match rest {
+        LetMatch(scrut, arms, cont) =>
+            match scrut {
+                Zero =>
+                    match cont {
+                        Ret(outputs) =>
+                            match pick_arm(arms)(tag) {
+                                Ret(arm_outputs) =>
+                                    LetCon(tag, args,
+                                        Ret(bad_fused_outputs_probe(args,
+                                            arm_outputs, outputs))),
+                                _ => LetCon(tag, args, rest),
+                            },
+                        _ => LetCon(tag, args, rest),
+                    },
+                Succ(k) => LetCon(tag, args, rest),
+            },
+        _ => LetCon(tag, args, rest),
+    }
+}
+
+fn bad_constant_match_fusion_alg_probe() -> IrAlgProbe<Ir> {
+    IrAlgProbe<Ir> {
+        ret: λ (rs: Refs) => Ret(rs),
+        letcon: bad_fuse_letcon_probe,
+        letmatch: λ (scrut: Nat) (arms: Ir) (rest: Ir) => LetMatch(scrut, arms, rest),
+        arm: λ (body: Ir) (next: Ir) => Arm(body, next),
+        noarm: NoArm,
+        letloop: λ (init: Refs) (body: Ir) (rest: Ir) => LetLoop(init, body, rest),
+        loopiter: λ (body: Ir) => LoopIter(body),
+        letcall: λ (callee: Nat) (args: Refs) (rest: Ir) => LetCall(callee, args, rest),
+    }
+}
+
+fn bad_constant_match_fusion_laws_probe() ->
+    IrPassLawsProbe<Ir>(IrExecForwardRelProbe, bad_constant_match_fusion_alg_probe())
+{
+    constant_match_fusion_laws_probe()
 }
 "#;
 
@@ -560,5 +1037,9 @@ fn ir_passes_check_at_default_fuel_and_carry_execution_refinement() {
     let err = e
         .elab_module_source("bad_default_arm_pass", BAD_DEFAULT)
         .expect_err("existing-arm mutation checked");
+    assert!(format!("{err:?}").contains("NotConvertible"), "{err:?}");
+    let err = e
+        .elab_module_source("bad_constant_match_fusion", BAD_FUSION)
+        .expect_err("unshifted constructor-field remapping checked");
     assert!(format!("{err:?}").contains("NotConvertible"), "{err:?}");
 }

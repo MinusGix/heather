@@ -672,3 +672,22 @@ costs and why it costs nothing later.
    that machinery exists, the split stands: modality in statements,
    numbers in fixtures and in whatever quantitative theorems a consumer
    explicitly asks for.
+
+10. **The landed extrinsic nodes do not carry output arities** (2026-08-19,
+    found by the certified constant-match-fusion pass). Section 3's region
+    model assigns every node an output arity, but the chain encoding in
+    `lib/ir_v1.hthr` binds whatever `Val` spine its sub-region returns:
+    `LetMatch`, `LetLoop`, and `LetCall` contain no arity field. Evaluation is
+    total because malformed arities are merely data; reference rewriting is
+    not. A pass cannot lift a slot map through one of these binders without
+    knowing how many leading references belong to its outputs.
+
+    The first constant-match fusion therefore takes the maximal arity-free
+    case: a fresh `LetCon` immediately followed by `LetMatch(0, ...)`, with
+    both the statically selected arm and the continuation equal to `Ret`.
+    Their explicit `Refs` lists provide both prefix lengths structurally, so
+    the pass can compose `fields ++ con ++ env` and
+    `arm_outputs ++ con ++ env` exactly. General instruction-chain splicing
+    waits for an arity source—an IR field, a checked side table, or the
+    intrinsically scoped target from §8—and must not infer one from successful
+    fixtures.

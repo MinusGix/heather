@@ -143,7 +143,57 @@ law record and is kernel-refused as `NotConvertible`.
 This one-slot extension pays rung 4's semantic acceptance. It also identifies
 a requirement for any generated pass interface: the relation offered to
 constructor laws must include the inductive's eliminator-specific observations,
-not only execution of the datatype value in isolation. The next honest
-optimization target is constant-match fusion; generation can remain deferred
-until that exercise shows whether these observation records have a stable
+not only execution of the datatype value in isolation. That result selects the
+constant-match-fusion probe below; generation remains deferred until the
+optimizer exercise shows whether these observation records have a stable
 reusable shape.
+
+## Optimizer control: constant-match fusion
+
+The first actual optimization recognizes this bottom-up shape:
+
+```text
+LetCon(tag, args, LetMatch(0, arms, Ret(outputs)))
+```
+
+when `pick_arm(arms)(tag)` is `Ret(arm_outputs)`. It removes the match and
+chosen arm, retaining the constructor binding because the continuation may
+still return the constructed value:
+
+```text
+LetCon(tag, args, Ret(fused_outputs(args, arm_outputs, outputs)))
+```
+
+The reference composition is the substance of the pass. Before fusion, the
+arm reads `fields ++ con ++ env`; its field prefix comes from `args`, whose
+references were written in `env`. After the constructor is bound those
+references must first be shifted by one. The match continuation then reads
+`arm_results ++ con ++ env`, so its references are resolved through the
+already-remapped arm result list. Two small operations express both steps:
+`resolve(prefix, i)` maps a reference through a prepended slot map, and
+`remap(prefix, refs)` applies it pointwise.
+
+The certificate proves the corresponding gather law twice. Given successful
+gathers for the constructor fields, arm outputs and continuation outputs, the
+fused list gathers exactly the same final values from `con ++ env`. The
+LetCon law uses its recursive refinement hypothesis to reach the transformed
+match, then this gather theorem removes it. Every other clause reuses the
+semantic control's direct/selected execution laws. `ir_fold_sound` again
+produces the global certificate, and successful source executions are
+preserved at the identical fuel.
+
+The closed control uses a non-empty constructor field list, returns both a
+field and an enclosing slot from the selected arm, and then returns those
+alongside the constructed value from the continuation. It computes to the
+expected fused `Ret`, and both programs return the same four values. The
+engaged mutation omits the mandatory one-slot shift on constructor arguments;
+the certified laws are kernel-refused as `NotConvertible`.
+
+This is the maximal useful fusion available without recovering a binder
+arity. If either selected arm or continuation contains more instructions,
+splicing its terminal `Ret` requires lifting references through intermediate
+multi-output binders. IR v1's `LetMatch`, `LetLoop`, and `LetCall` nodes do not
+store their output arity, even though the original design assigns one to each
+node. The pass therefore declines those shapes rather than guessing a slot
+count. `docs/ir-simulate-design.md` §13 note 10 records that implementation
+boundary.
