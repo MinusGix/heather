@@ -23,8 +23,5 @@ fn and_then<A, B>(o: Option<A>, f: A -> Option<B>) -> Option<B> {
 }
 
 fn unwrap_or<A>(o: Option<A>, d: A) -> A {
-    match o {
-        None => d,
-        Some(v) => v,
-    }
+    if let Some(v) = o { v } else { d }
 }

@@ -4246,6 +4246,8 @@ impl Elaborator {
                             MatchForm::Split => "split e as \u{3bb} z => T;",
                             MatchForm::If => "give the `if` an expected result type, for \
                                               example with an annotated `let`",
+                            MatchForm::IfLet => "give the `if let` an expected result type, for \
+                                                 example with an annotated `let`",
                         }
                     ),
                     e.span,
@@ -4263,6 +4265,8 @@ impl Elaborator {
                         MatchForm::Split => "split e as \u{3bb} z => T;",
                         MatchForm::If => "give the `if` an expected result type, for \
                                           example with an annotated `let`",
+                        MatchForm::IfLet => "give the `if let` an expected result type, for \
+                                             example with an annotated `let`",
                     }
                 ),
                 e.span,

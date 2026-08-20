@@ -1,6 +1,6 @@
 ---
 title: "if let: one-pattern dependent match with equation evidence"
-status: open
+status: closed
 labels: [frontend,syntax,elaboration,patterns,design]
 created: 2026-08-05
 updated: 2026-08-19
@@ -56,21 +56,15 @@ provides. When requested, it also receives an equation connecting the original
 scrutinee to the constructor-shaped value, so a goal mentioning `y` can be
 rewritten rather than reconstructed around `x`.
 
-### Equation orientation must be explicit in the design round
+### Equation orientation
 
-The chosen surface text visually reads `hy : Some(x) = y`. Existing
-`match hy : y`, however, deliberately gives `hy : y = Some(x)`
-([[match-with-equation]]): that direction removed a real `sym` at its original
-consumer. The implementation must not silently blur those readings. Before
-landing, use real rewrite sites to choose one of:
-
-1. honor the displayed direction and derive `Some(x) = y` from the match
-   equation; or
-2. define `=` here as the pattern/scrutinee separator and retain the existing
-   `y = Some(x)` convention, documenting it in the diagnostic and design.
-
-The first is locally more literal; the second makes every equation-bearing
-case split uniform. This issue owns that decision.
+The surface `=` is the pattern/scrutinee separator. The named equation follows
+the existing equation-bearing-match convention and has type `y = Some(x)`:
+original scrutinee to constructor-shaped arm value. This makes every
+equation-bearing split uniform and preserves the direction that removed a real
+`sym` at [[match-with-equation]]'s original consumer. The broader question of
+making routine equality consumers less sensitive to orientation is recorded in
+[[equality-orientation-ergonomics]], without changing this stable convention.
 
 ## Dependent and indexed boundary
 
@@ -123,3 +117,11 @@ questions. This issue owns the expression-valued two-branch form above.
   using `if let hy : Some(x) = y { ... } else { ... }`. The old `with` word is
   dropped. Ordinary negative-branch evidence is wanted but split to
   [[if-let-negative-evidence]] so it does not hold V1 open.
+- 2026-08-19: LANDED positional V1. Both forms lower to one ordinary match;
+  constructor fields and nested patterns reuse the pattern compiler, branches
+  are blocks, and the named success equation is `scrutinee = pattern`. A hidden
+  convoy name plus success-local alias keeps it out of `else`. Option computation,
+  constant inference, equation direction/scope, diagnostics, and the indexed
+  homogeneous-equality boundary are pinned in `positional_if_let.rs`; `unwrap_or`
+  is the representative stdlib use. See
+  `docs/positional-if-let-design.md`.

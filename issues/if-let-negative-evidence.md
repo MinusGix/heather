@@ -1,8 +1,7 @@
 ---
 title: Give an if-let failure branch evidence that the pattern did not match
-status: blocked
+status: open
 labels: [frontend,elaboration,patterns,proofs,design]
-blocked-by: [let-else-sugar]
 created: 2026-08-19
 updated: 2026-08-19
 ---
@@ -55,3 +54,4 @@ name in a way that gives it unrelated types without clear branch scopes.
 - 2026-08-19: Split from the `if let` design discussion. Negative evidence is
   a desired feature, but its existential `Matches` proposition is materially
   larger than the V1 one-row match and therefore has its own owner.
+- 2026-08-19: UNBLOCKED when positional `if let` V1 landed.

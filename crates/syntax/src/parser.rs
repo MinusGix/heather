@@ -68,6 +68,8 @@
 //! expr    := "match" (name ":")? expr ("as" expr)? "{" arms "}"
 //!          | "if" (name ":")? expr "{" block-body "}"
 //!                 "else" "{" block-body "}"
+//!          | "if" "let" (name ":")? pat-head "=" expr
+//!                 "{" block-body "}" "else" "{" block-body "}"
 //!          | "refl" | "?" name?
 //!          | "j" "(" expr "," "(" name "," name ")" "->" type "," expr ")"
 //!          | ("λ"|"fun") binder+ "=>" expr
@@ -3562,6 +3564,9 @@ impl Parser {
     /// computes sees the same ordinary `Or` match as the explicit spelling.
     fn if_expr(&mut self) -> R<Expr> {
         let start = self.bump().span; // `if`
+        if self.eat_kw("let") {
+            return self.if_let_expr(start);
+        }
         let evidence = self.eq_binder()?;
         // The following `{` is the true branch, never a record literal on the
         // condition's final name.
@@ -3623,6 +3628,86 @@ impl Parser {
                 generated: false,
                 scrut: Box::new(scrut),
                 eqbind: None,
+                motive: None,
+                arms,
+            },
+            span,
+        })
+    }
+
+    /// `if let P = e { yes } else { no }`, with optional success evidence:
+    /// `if let h : P = e { yes } else { no }`.
+    ///
+    /// The `=` is a pattern/scrutinee separator, not a displayed type. In the
+    /// success branch `h` follows the equation-bearing-match convention and
+    /// has type `e = P`. The convoy binder itself has an unspellable internal
+    /// name; a synthetic success-local `let` exposes it as `h`. Consequently
+    /// the default arm receives no source-visible negative or equation
+    /// evidence, while both forms still lower to exactly one ordinary match.
+    fn if_let_expr(&mut self, start: Span) -> R<Expr> {
+        const EQUATION: &str = "#if_let_eq";
+
+        let evidence = self.eq_binder()?;
+        let (ctor, cspan) = self.qual_ident("constructor name in an `if let` pattern")?;
+        if ctor == "_" {
+            return Err(ParseError {
+                msg: "an `if let` pattern must be refutable; `_` always matches".into(),
+                span: cspan,
+            });
+        }
+        let binders = self.pat_args(&ctor, cspan)?;
+        self.expect_eq("`if let` pattern")?;
+        // The following `{` starts the success block, never a record literal
+        // attached to the scrutinee's final name.
+        let scrut = self.with_record_lit(true, |p| p.expr())?;
+
+        let mut yes = self.if_branch("the `if let` branch")?;
+        if !self.eat_kw("else") {
+            return self.err("an `if let` needs an `else { … }` branch");
+        }
+        let no = self.if_branch("the `else` branch")?;
+
+        if let Some(name) = &evidence {
+            let ExprKind::Block(block) = &mut yes.kind else {
+                unreachable!("if_branch always constructs a block")
+            };
+            block.stmts.insert(
+                0,
+                Stmt::Let {
+                    name: name.clone(),
+                    ty: None,
+                    expr: Expr {
+                        kind: ExprKind::Var(EQUATION.into()),
+                        span: cspan,
+                    },
+                    span: cspan,
+                },
+            );
+        }
+
+        let arms = vec![
+            Arm {
+                ctor,
+                default: false,
+                binders,
+                span: cspan.join(yes.span),
+                body: yes,
+            },
+            Arm {
+                ctor: "_".into(),
+                default: true,
+                binders: vec![],
+                span: no.span,
+                body: no,
+            },
+        ];
+        let span = start.join(arms[1].body.span);
+        Ok(Expr {
+            kind: ExprKind::Match {
+                form: MatchForm::IfLet,
+                generated: false,
+                scrut: Box::new(scrut),
+                eqbind: evidence.map(|_| EQUATION.into()),
                 motive: None,
                 arms,
             },

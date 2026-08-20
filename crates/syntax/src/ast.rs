@@ -743,6 +743,10 @@ pub enum MatchForm {
     /// ordinary `Or` constructors. Like `Split`, this survives only so
     /// diagnostics name the spelling the writer used.
     If,
+    /// `if let P = e { yes } else { no }`, lowered to a one-row pattern
+    /// matrix followed by a default arm. This is diagnostic provenance only;
+    /// pattern compilation and elimination are the ordinary match path.
+    IfLet,
 }
 
 impl MatchForm {
@@ -752,6 +756,7 @@ impl MatchForm {
             Self::Match => "match",
             Self::Split => "split",
             Self::If => "if",
+            Self::IfLet => "if let",
         }
     }
 }
