@@ -374,7 +374,7 @@ theorem lt_of_le_of_ne(n: Nat): (m: Nat) -> n <= m -> ¬ (n = m) -> n < m {
     match n as λ z => (m: Nat) -> Le(z, m) -> Not(z = m) -> Lt(z, m) {
         Zero => λ m h hne =>
             match m as λ y => Not(0 = y) -> Lt(0, y) {
-                Zero => λ ne => false_elim(ne(refl)),
+                Zero => false_elim(·(refl)),
                 Succ(m2) => λ ne => trivial,
             }(hne),
         Succ(k, ih) => λ m h hne =>

@@ -1,6 +1,6 @@
 ---
 title: Anonymous argument-slot sections
-status: open
+status: closed
 labels: [frontend,syntax,elaboration,ergonomics]
 created: 2026-08-19
 updated: 2026-08-19
@@ -81,3 +81,9 @@ makes the unindexed left-to-right expansion coincide with positions 0, 1, ... .
   whether they name one argument or several. `·` reads as a mathematical
   argument place; explicit zero-based Unicode subscripts recover identity,
   repetition, reordering, and omission without names.
+- 2026-08-19: LANDED. The lexer retains plain and multi-digit indexed slots;
+  checking-position ownership is resolved independently of traversal order,
+  then lowered through ordinary lambdas. Focused acceptance covers nested
+  ownership, dependent telescopes, boundaries, and diagnostics; Nat and Int
+  contain representative uses. Design record:
+  `docs/argument-slot-sections-design.md`.

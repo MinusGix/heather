@@ -3189,6 +3189,7 @@ pub(crate) fn expr_mentions(e: &Expr, name: &str) -> bool {
         // declaration's (docs/operators-onto-classes-design.md §4).
         ExprKind::OpSymbol { .. }
         | ExprKind::Num(_)
+        | ExprKind::ArgSlot(_)
         | ExprKind::Refl
         | ExprKind::AutoRefl
         | ExprKind::Hole(_)

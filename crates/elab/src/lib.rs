@@ -139,6 +139,13 @@ pub enum ElabError {
     /// which candidates were tried, which subgoal failed — and the trace is
     /// the diagnostic, as data rather than as prose.
     Resolution { goal: String, span: Span, trace: Vec<resolve::TraceLine> },
+    /// Internal control flow for argument-slot abstraction. A slot first
+    /// declines at a checking boundary that is not itself capturing; the
+    /// nearest enclosing function-typed checking boundary catches this and
+    /// retries after lowering the section to lambdas. If none exists, the
+    /// ordinary renderers below turn it into the user-facing checking-position
+    /// diagnostic. Never reaches the kernel.
+    ArgSlotEscape { span: Span },
 }
 
 /// One entry of the unsolved-goal listing. Types are decoded for display and
@@ -230,6 +237,9 @@ impl ElabError {
     pub(crate) fn message(&self) -> String {
         match self {
             ElabError::Elab { msg, .. } => msg.clone(),
+            ElabError::ArgSlotEscape { .. } =>
+                "an argument slot needs an enclosing checking position with a function type"
+                    .into(),
             other => other.to_string(),
         }
     }
@@ -245,6 +255,10 @@ impl ElabError {
         match self {
             ElabError::Parse(e) => format!("{}:{}: {}", at(e.span), "parse error", e.msg),
             ElabError::Elab { msg, span } => format!("{}: {msg}", at(*span)),
+            ElabError::ArgSlotEscape { span } => format!(
+                "{}: an argument slot needs an enclosing checking position with a function type",
+                at(*span)
+            ),
             ElabError::Resolution { span, .. } => format!("{}: {self}", at(*span)),
             ElabError::Kernel { span, .. } => format!("{}: {self}", at(*span)),
             ElabError::UnsolvedGoals { decl, goals } => {
@@ -273,6 +287,10 @@ impl ElabError {
         match self {
             ElabError::Parse(e) => headed(&format!("parse error: {}", e.msg), e.span),
             ElabError::Elab { msg, span } => headed(msg, *span),
+            ElabError::ArgSlotEscape { span } => headed(
+                "an argument slot needs an enclosing checking position with a function type",
+                *span,
+            ),
             ElabError::Resolution { span, .. } => headed(&self.to_string(), *span),
             ElabError::Kernel { span, .. } => headed(&self.to_string(), *span),
             ElabError::UnsolvedGoals { decl, goals } => {
@@ -343,6 +361,10 @@ impl std::fmt::Display for ElabError {
         match self {
             ElabError::Parse(e) => write!(f, "parse error: {}", e.msg),
             ElabError::Elab { msg, .. } => write!(f, "{msg}"),
+            ElabError::ArgSlotEscape { .. } => write!(
+                f,
+                "an argument slot needs an enclosing checking position with a function type"
+            ),
             ElabError::Resolution { goal, trace, .. } => write!(
                 f,
                 "no instance for `{goal}` — the search:{}",
@@ -948,6 +970,11 @@ pub struct Elaborator {
     /// (motive synthesis; `calc`'s cloned `@trans` spine), and one syntactic
     /// hole must stay one goal.
     goal_spans: RefCell<HashMap<(usize, usize), usize>>,
+    /// During an argument-slot ownership probe, only this slot remains live;
+    /// sibling slots elaborate as disposable neutrals. This lets the probe
+    /// ask where each slot is captured independently of source traversal
+    /// order. `None` in every real elaboration.
+    slot_probe_target: Cell<Option<Span>>,
     /// Set while elaborating an `on` right-hand side, where a *new* hole is
     /// refused. Load-bearing: it is what makes [`strengthen_global`] sound.
     frozen: Cell<bool>,
@@ -1145,6 +1172,7 @@ impl Elaborator {
             goal_base: 0,
             goals: RefCell::new(Vec::new()),
             goal_spans: RefCell::new(HashMap::new()),
+            slot_probe_target: Cell::new(None),
             frozen: Cell::new(false),
             motive_speculation: Cell::new(false),
             meta_defs: HashMap::new(),
@@ -2739,15 +2767,89 @@ impl Elaborator {
         hint: Option<(&str, &str)>,
         skel: Option<&Skel>,
     ) -> R<Term> {
+        self.elab_check_skel_slots(cx, e, expected, lvl, hint, skel, true)
+    }
+
+    /// Checking with control over whether THIS boundary may capture argument
+    /// slots. A capture-enabled boundary first probes a clone with itself
+    /// disabled: nested checking positions remain enabled and therefore win.
+    /// Only a slot that escapes all of them causes this boundary to lower the
+    /// free section to ordinary lambdas. The clone makes the probe incapable
+    /// of leaking goals, derived instances, warnings, or mismatch notes.
+    #[allow(clippy::too_many_arguments)]
+    fn elab_check_skel_slots(
+        &self,
+        cx: &Cx,
+        e: &Expr,
+        expected: &Type,
+        lvl: &Level,
+        hint: Option<(&str, &str)>,
+        skel: Option<&Skel>,
+        capture_slots: bool,
+    ) -> R<Term> {
+        if capture_slots && has_free_slots(e) {
+            let probe = self.clone();
+            match probe.elab_check_skel_slots(cx, e, expected, lvl, hint, skel, false) {
+                Ok(_) => {
+                    // Every slot found a smaller function-typed checking
+                    // position. Repeat on the real elaborator; the probe's
+                    // state is deliberately discarded.
+                    return self
+                        .elab_check_skel_slots(cx, e, expected, lvl, hint, skel, false);
+                }
+                Err(ElabError::ArgSlotEscape { span }) => {
+                    if !matches!(self.whnf(cx, expected, span)?, Type::Pi { .. }) {
+                        return Err(ElabError::ArgSlotEscape { span });
+                    }
+                    // The first escaping slot may precede smaller sections in
+                    // source order. Probe every slot independently, masking
+                    // its siblings with disposable neutrals, so ownership is
+                    // structural rather than an accident of traversal order.
+                    let mut slots = Vec::new();
+                    for_each_free_slot(e, &mut |_, span| slots.push(span));
+                    let mut nested = Vec::new();
+                    for target in slots {
+                        let targeted = self.clone();
+                        targeted.slot_probe_target.set(Some(target));
+                        match targeted
+                            .elab_check_skel_slots(cx, e, expected, lvl, hint, skel, false)
+                        {
+                            Ok(_) => nested.push(target),
+                            Err(ElabError::ArgSlotEscape { span }) if span == target => {}
+                            Err(other) => return Err(other),
+                        }
+                    }
+                    let profile = slot_profile(e, &nested)?
+                        .expect("an escaping slot remains after nested captures");
+                    let lowered = lower_argument_slots(e, profile, &nested);
+                    return self.elab_check_skel_slots(
+                        cx, &lowered, expected, lvl, hint, skel, false,
+                    );
+                }
+                Err(other) => return Err(other),
+            }
+        }
         // Checking position, so rung 2 has its second source: a bare symbol
         // resolves at the carrier this type's first domain names
         // (docs/bare-symbol-checking-carrier-design.md §3.1). The expected type
         // is already in hand one line above the rewrite, and has been since the
         // operators round — nothing is plumbed from a call site.
         if let Some(rewritten) = self.op_rewrite(cx, e, Some(expected))? {
-            return self.elab_check_skel(cx, &rewritten, expected, lvl, hint, skel);
+            return self.elab_check_skel_slots(
+                cx,
+                &rewritten,
+                expected,
+                lvl,
+                hint,
+                skel,
+                capture_slots,
+            );
         }
         match &e.kind {
+            ExprKind::ArgSlot(_) => match self.slot_probe_target.get() {
+                Some(target) if target != e.span => Ok(Term::Var(LocalVar(0))),
+                _ => Err(ElabError::ArgSlotEscape { span: e.span }),
+            },
             // The expected type *is* the goal's statement, which is why holes
             // are checking-only (issues/goal-holes.md).
             ExprKind::Hole(name) => {
@@ -2764,13 +2866,14 @@ impl Elaborator {
             // `issues/special-forms-as-declarations.md`, not a stopgap: when
             // `refl` becomes a declaration this arm is deleted and no program
             // changes behaviour.
-            ExprKind::Refl if self.shadowed(cx, "refl") => self.elab_check_skel(
+            ExprKind::Refl if self.shadowed(cx, "refl") => self.elab_check_skel_slots(
                 cx,
                 &Expr { kind: ExprKind::Var("refl".to_string()), span: e.span },
                 expected,
                 lvl,
                 hint,
                 skel,
+                capture_slots,
             ),
             ExprKind::Refl => {
                 let head = self.whnf(cx, expected, e.span)?;
@@ -2814,7 +2917,15 @@ impl Elaborator {
             // reports the callee and parameter it belongs to.
             ExprKind::Block(b) => {
                 let cx = self.elab_stmts(cx, &b.stmts)?;
-                self.elab_check_skel(&cx, &b.result, expected, lvl, hint, skel)
+                self.elab_check_skel_slots(
+                    &cx,
+                    &b.result,
+                    expected,
+                    lvl,
+                    hint,
+                    skel,
+                    capture_slots,
+                )
             }
             // A quote against its `Code(g |- T)` type — checking-only, like
             // the kernel's `BoxTm` (docs/in-language-map-design.md §5).
@@ -3036,7 +3147,15 @@ impl Elaborator {
                         Ok(t)
                     }
                     DotResolution::Method(m) => {
-                        self.elab_check_skel(cx, &m, expected, lvl, hint, skel)
+                        self.elab_check_skel_slots(
+                            cx,
+                            &m,
+                            expected,
+                            lvl,
+                            hint,
+                            skel,
+                            capture_slots,
+                        )
                     }
                 }
             }
@@ -3304,6 +3423,12 @@ impl Elaborator {
             return self.elab_infer_at(cx, &rewritten, expected);
         }
         match &e.kind {
+            ExprKind::ArgSlot(_) => match self.slot_probe_target.get() {
+                Some(target) if target != e.span => {
+                    Ok((Term::Var(LocalVar(0)), Type::Nat, Level::Zero))
+                }
+                _ => Err(ElabError::ArgSlotEscape { span: e.span }),
+            },
             // `{ let x = e; … result }` — the block's statements extend a
             // clone of `cx`, and its result is inferred there
             // (docs/let-and-blocks-design.md §4.4). Inference-transparent:
@@ -10646,6 +10771,249 @@ struct DictBinder {
     index: Vec<Expr>,
 }
 
+// -- anonymous argument-slot sections --------------------------------------
+
+/// A resource bound, not a semantic arity limit. Indexed lowering allocates
+/// one binder through the largest position, so a source-controlled giant
+/// subscript must not become an allocation attack.
+const MAX_ARGUMENT_SLOTS: usize = 256;
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum SlotStyle {
+    Unindexed,
+    Indexed,
+}
+
+struct SlotProfile {
+    style: SlotStyle,
+    count: usize,
+}
+
+/// Visit slots free at this expression's abstraction boundary. An explicit
+/// lambda — including a parser-lowered sequent binder — starts a new boundary.
+fn for_each_free_slot(e: &Expr, f: &mut impl FnMut(Option<u64>, Span)) {
+    let mut go = |e: &Expr| for_each_free_slot(e, f);
+    match &e.kind {
+        ExprKind::ArgSlot(index) => f(*index, e.span),
+        ExprKind::App { head, args, named, .. } => {
+            go(head);
+            args.iter().chain(named.iter().map(|a| &a.expr)).for_each(go);
+        }
+        ExprKind::TyApp { head, .. } => go(head),
+        ExprKind::Lam { .. } => {}
+        ExprKind::VecLit(xs) => xs.iter().for_each(go),
+        ExprKind::Eq(a, b) => {
+            go(a);
+            go(b);
+        }
+        ExprKind::Match { scrut, motive, arms, .. } => {
+            go(scrut);
+            if let Some(motive) = motive {
+                go(motive);
+            }
+            arms.iter().for_each(|a| go(&a.body));
+        }
+        ExprKind::MatchCode { scrut, arms, .. } => {
+            go(scrut);
+            arms.iter().for_each(|a| go(&a.body));
+        }
+        ExprKind::Dot { recv, args, named, .. } => {
+            go(recv);
+            args.iter().flatten().chain(named.iter().map(|a| &a.expr)).for_each(go);
+        }
+        ExprKind::Index { recv, idx } => {
+            go(recv);
+            go(idx);
+        }
+        ExprKind::RecordLit { fields, .. } => fields.iter().for_each(|x| go(&x.expr)),
+        ExprKind::Block(b) => {
+            for stmt in &b.stmts {
+                match stmt {
+                    Stmt::Let { expr, .. }
+                    | Stmt::LetRecord { expr, .. }
+                    | Stmt::LetCode { expr, .. } => go(expr),
+                }
+            }
+            go(&b.result);
+            b.ons.iter().for_each(|o| go(&o.expr));
+        }
+        ExprKind::Quote(x) | ExprKind::Splice(x) => go(x),
+        ExprKind::J { proof, motive, case, .. } => {
+            go(proof);
+            go(motive);
+            go(case);
+        }
+        ExprKind::Var(_)
+        | ExprKind::OpSymbol { .. }
+        | ExprKind::Univ { .. }
+        | ExprKind::Num(_)
+        | ExprKind::TyLit(_)
+        | ExprKind::Refl
+        | ExprKind::AutoRefl
+        | ExprKind::Hole(_) => {}
+    }
+}
+
+fn has_free_slots(e: &Expr) -> bool {
+    let mut found = false;
+    for_each_free_slot(e, &mut |_, _| found = true);
+    found
+}
+
+fn slot_profile(e: &Expr, excluded: &[Span]) -> R<Option<SlotProfile>> {
+    let mut style: Option<(SlotStyle, Span)> = None;
+    let mut unindexed = 0usize;
+    let mut max_index = None::<u64>;
+    let mut conflict = None;
+    for_each_free_slot(e, &mut |index, span| {
+        if excluded.contains(&span) {
+            return;
+        }
+        let here = if index.is_some() { SlotStyle::Indexed } else { SlotStyle::Unindexed };
+        match style {
+            None => style = Some((here, span)),
+            Some((was, first)) if was != here && conflict.is_none() => {
+                conflict = Some((first, span));
+            }
+            _ => {}
+        }
+        match index {
+            Some(i) => max_index = Some(max_index.map_or(i, |m| m.max(i))),
+            None => unindexed += 1,
+        }
+    });
+    if let Some((first, second)) = conflict {
+        return err(
+            "indexed and unindexed argument slots cannot mix in one section: use \
+             either `f(·, ·)` or explicit zero-based slots such as `f(·₀, ·₂)`",
+            first.join(second),
+        );
+    }
+    let Some((style, span)) = style else { return Ok(None) };
+    let count = match style {
+        SlotStyle::Unindexed => unindexed,
+        SlotStyle::Indexed => {
+            let max = max_index.expect("indexed style has an index");
+            usize::try_from(max).ok().and_then(|n| n.checked_add(1)).ok_or_else(|| {
+                ElabError::Elab { msg: "argument-slot index is too large".into(), span }
+            })?
+        }
+    };
+    if count > MAX_ARGUMENT_SLOTS {
+        return err(
+            format!(
+                "an argument-slot section may introduce at most {MAX_ARGUMENT_SLOTS} arguments"
+            ),
+            span,
+        );
+    }
+    Ok(Some(SlotProfile { style, count }))
+}
+
+/// Replace the free slots selected by [`slot_profile`] with impossible source
+/// names for the generated lambda binders. Mirrors [`for_each_free_slot`].
+fn replace_free_slots(
+    e: &mut Expr,
+    style: SlotStyle,
+    next: &mut usize,
+    excluded: &[Span],
+) {
+    let mut go = |e: &mut Expr| replace_free_slots(e, style, next, excluded);
+    match &mut e.kind {
+        ExprKind::ArgSlot(index) => {
+            if excluded.contains(&e.span) {
+                return;
+            }
+            let i = match style {
+                SlotStyle::Unindexed => {
+                    let i = *next;
+                    *next += 1;
+                    i
+                }
+                SlotStyle::Indexed => usize::try_from(index.expect("profile checked style"))
+                    .expect("profile checked index range"),
+            };
+            e.kind = ExprKind::Var(format!("#argument_slot{i}"));
+        }
+        ExprKind::App { head, args, named, .. } => {
+            go(head);
+            args.iter_mut().chain(named.iter_mut().map(|a| &mut a.expr)).for_each(go);
+        }
+        ExprKind::TyApp { head, .. } => go(head),
+        ExprKind::Lam { .. } => {}
+        ExprKind::VecLit(xs) => xs.iter_mut().for_each(go),
+        ExprKind::Eq(a, b) => {
+            go(a);
+            go(b);
+        }
+        ExprKind::Match { scrut, motive, arms, .. } => {
+            go(scrut);
+            if let Some(motive) = motive {
+                go(motive);
+            }
+            arms.iter_mut().for_each(|a| go(&mut a.body));
+        }
+        ExprKind::MatchCode { scrut, arms, .. } => {
+            go(scrut);
+            arms.iter_mut().for_each(|a| go(&mut a.body));
+        }
+        ExprKind::Dot { recv, args, named, .. } => {
+            go(recv);
+            args.iter_mut()
+                .flatten()
+                .chain(named.iter_mut().map(|a| &mut a.expr))
+                .for_each(go);
+        }
+        ExprKind::Index { recv, idx } => {
+            go(recv);
+            go(idx);
+        }
+        ExprKind::RecordLit { fields, .. } => fields.iter_mut().for_each(|x| go(&mut x.expr)),
+        ExprKind::Block(b) => {
+            for stmt in &mut b.stmts {
+                match stmt {
+                    Stmt::Let { expr, .. }
+                    | Stmt::LetRecord { expr, .. }
+                    | Stmt::LetCode { expr, .. } => go(expr),
+                }
+            }
+            go(&mut b.result);
+            b.ons.iter_mut().for_each(|o| go(&mut o.expr));
+        }
+        ExprKind::Quote(x) | ExprKind::Splice(x) => go(x),
+        ExprKind::J { proof, motive, case, .. } => {
+            go(proof);
+            go(motive);
+            go(case);
+        }
+        ExprKind::Var(_)
+        | ExprKind::OpSymbol { .. }
+        | ExprKind::Univ { .. }
+        | ExprKind::Num(_)
+        | ExprKind::TyLit(_)
+        | ExprKind::Refl
+        | ExprKind::AutoRefl
+        | ExprKind::Hole(_) => {}
+    }
+}
+
+fn lower_argument_slots(e: &Expr, profile: SlotProfile, excluded: &[Span]) -> Expr {
+    let mut body = e.clone();
+    replace_free_slots(&mut body, profile.style, &mut 0, excluded);
+    let binders = (0..profile.count)
+        .map(|i| LamBinder {
+            name: format!("#argument_slot{i}"),
+            ty: None,
+            implicit: false,
+            span: e.span,
+        })
+        .collect();
+    Expr {
+        kind: ExprKind::Lam { binders, body: Box::new(body) },
+        span: e.span,
+    }
+}
+
 /// The walkers of [`count_holes`], at module level so that the pattern
 /// compiler can ask the same question of one expression
 /// (`docs/nested-match-patterns-design.md` §10.3): a body it would copy
@@ -10687,6 +11055,7 @@ mod count_holes_impl {
             ExprKind::Var(_)
             | ExprKind::OpSymbol { .. }
             | ExprKind::Num(_)
+            | ExprKind::ArgSlot(_)
             | ExprKind::Refl
             | ExprKind::Univ { .. } => {}
             // The empty block's speculative `refl` may fail, and then it

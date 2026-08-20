@@ -3289,6 +3289,10 @@ impl Parser {
                 let sp = self.bump().span;
                 Ok(Expr { kind: ExprKind::Hole(name), span: sp })
             }
+            TokKind::ArgSlot(index) => {
+                let sp = self.bump().span;
+                Ok(Expr { kind: ExprKind::ArgSlot(index), span: sp })
+            }
             TokKind::Num(n) => {
                 let sp = self.bump().span;
                 Ok(Expr { kind: ExprKind::Num(n), span: sp })

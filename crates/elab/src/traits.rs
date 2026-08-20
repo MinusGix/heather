@@ -398,6 +398,7 @@ fn rename_expr(m: &Ren, e: &Expr) -> Expr {
         OpSymbol { symbol, fixity } => OpSymbol { symbol: symbol.clone(), fixity: *fixity },
         Univ { level } => Univ { level: *level },
         Num(n) => Num(*n),
+        ArgSlot(index) => ArgSlot(*index),
         Refl => Refl,
         AutoRefl => AutoRefl,
         Hole(n) => Hole(n.clone()),

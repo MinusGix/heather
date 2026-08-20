@@ -7,6 +7,10 @@ use crate::ast::Span;
 pub enum TokKind {
     Ident(String),
     Num(u64),
+    /// `·` followed immediately by zero or more Unicode subscript digits.
+    /// No subscript is the left-to-right anonymous mode; a subscript is an
+    /// explicit zero-based argument position (issues/argument-slot-sections.md).
+    ArgSlot(Option<u64>),
     /// `?name` (named goal) or bare `?` (anonymous goal). Named-vs-anonymous
     /// is decided here, by *adjacency*: `?p` is the hole `p`, `? p` is an
     /// anonymous hole followed by the variable `p`. Settling it in the lexer
@@ -232,6 +236,45 @@ pub fn lex(src: &str) -> Result<Vec<Tok>, LexError> {
             continue;
         }
         let two = src.get(i..i + 2).unwrap_or("");
+        // `·`, U+00B7 MIDDLE DOT, is deliberately distinct from `∙`, the
+        // generic infix bullet. Consume an immediately adjacent run of
+        // Unicode subscript digits into the same token: adjacency and the
+        // subscript alphabet make `·₁₂` unambiguously slot 12 while `·12`
+        // remains a slot followed by an ordinary numeral.
+        if two == "·" {
+            i += 2;
+            let mut index = 0u64;
+            let mut indexed = false;
+            while let Some(ch) = src.get(i..).and_then(|s| s.chars().next()) {
+                let digit = match ch {
+                    '₀' => 0,
+                    '₁' => 1,
+                    '₂' => 2,
+                    '₃' => 3,
+                    '₄' => 4,
+                    '₅' => 5,
+                    '₆' => 6,
+                    '₇' => 7,
+                    '₈' => 8,
+                    '₉' => 9,
+                    _ => break,
+                };
+                indexed = true;
+                index = index
+                    .checked_mul(10)
+                    .and_then(|n| n.checked_add(digit))
+                    .ok_or_else(|| LexError {
+                        msg: "argument-slot index is out of range".into(),
+                        span: Span { start, end: i + ch.len_utf8() },
+                    })?;
+                i += ch.len_utf8();
+            }
+            toks.push(Tok {
+                kind: TokKind::ArgSlot(indexed.then_some(index)),
+                span: Span { start, end: i },
+            });
+            continue;
+        }
         let (kind, len) = match two {
             // `λ` (U+03BB) is two bytes and is *not* an identifier character,
             // so it lexes here rather than in the identifier rule above.

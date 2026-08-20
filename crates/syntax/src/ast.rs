@@ -776,6 +776,13 @@ pub enum ExprKind {
     Univ { level: u64 },
     /// Numeral literal (desugars to `Zero`/`Succ`).
     Num(u64),
+    /// `·` / `·₀` / `·₁₂` — an anonymous argument slot
+    /// (issues/argument-slot-sections.md). `None` is an unindexed slot;
+    /// `Some(n)` is the explicitly zero-based slot `n`. Checking-position
+    /// elaboration replaces every slot at one abstraction boundary with an
+    /// ordinary local and wraps the expression in ordinary lambdas. This node
+    /// must therefore never reach a kernel term.
+    ArgSlot(Option<u64>),
     /// `f(a, b, …)`, `@f(a, b, …)`, or an application of any expression —
     /// `g(a)(b)`, `(λ x => x)(3)`. Kept **n-ary rather than curried** so that
     /// implicit-argument insertion, which needs the whole argument list at

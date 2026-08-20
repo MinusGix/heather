@@ -1290,6 +1290,7 @@ fn mentions_free(e: &Expr, names: &[String], bound: &mut Vec<String>) -> bool {
         ExprKind::OpSymbol { .. }
         | ExprKind::Univ { .. }
         | ExprKind::Num(_)
+        | ExprKind::ArgSlot(_)
         | ExprKind::Refl
         | ExprKind::AutoRefl
         | ExprKind::Hole(_) => false,

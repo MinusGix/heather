@@ -1237,7 +1237,7 @@ theorem negsucc_le_ofNat(m, n: Nat): NegSucc(m) <= OfNat(n) { trivial }
 theorem ofNat_toNat(a: Int): OfNat(0) <= a -> OfNat(toNat(a)) = a {
     match a as λ z => Le(OfNat(0), z) -> OfNat(toNat(z)) = z {
         OfNat(n) => λ h => refl,
-        NegSucc(n) => λ h => false_elim(h),
+        NegSucc(n) => false_elim(·),
     }
 }
 
