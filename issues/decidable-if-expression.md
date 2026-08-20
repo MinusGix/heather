@@ -1,6 +1,6 @@
 ---
 title: "Decidable if expressions over propositions"
-status: open
+status: closed
 labels: [frontend,syntax,elaboration,traits,stdlib]
 created: 2026-08-19
 updated: 2026-08-19
@@ -89,3 +89,9 @@ the missing `Decide<P>` search trace.
 - 2026-08-19: Filed from the post-I-prime review of `Int::max`/`min`. Their
   `or_pick(le_dec(...))` bodies are small and correct but expose the decision
   representation that ordinary source branching should hide.
+- 2026-08-19: LANDED. Proposition-directed `if` lowers to ordinary
+  `match decide<P>()`, with optional same-name evidence in the disjoint
+  branches, dependent checking, constant-result inference, and source-shaped
+  resolution diagnostics. Raw `Bool` is deliberately rejected. `Int::max`
+  and `Int::min` are the representative library uses. Design record:
+  `docs/decidable-if-expression-design.md`.

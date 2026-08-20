@@ -739,6 +739,10 @@ pub enum MatchForm {
     Match,
     /// `split e; on C(x⃗) := b;`
     Split,
+    /// `if P { yes } else { no }`, lowered through `decide<P>()` to the
+    /// ordinary `Or` constructors. Like `Split`, this survives only so
+    /// diagnostics name the spelling the writer used.
+    If,
 }
 
 impl MatchForm {
@@ -747,6 +751,7 @@ impl MatchForm {
         match self {
             Self::Match => "match",
             Self::Split => "split",
+            Self::If => "if",
         }
     }
 }

@@ -600,7 +600,7 @@ as `Var("refl")` instead. Three lines, and exactly the guard `Fin`
 **Rule 3 (binder rejection — the `self`-as-type-parameter precedent). A form
 that is neither saturated by a fixed token nor nullary is a true keyword, and
 a binder by its name is rejected at the binding site with a message naming the
-collision.** Applies to `match`, `fun`, `Type`:
+collision.** Applies to `match`, `fun`, `if`, `Type`:
 
 > `fun` is the lambda keyword, so it cannot be a binding name here; a use of
 > it would parse as `fun x => …`. Pick another name.
@@ -614,10 +614,10 @@ destructuring pattern's field names (`:663`), lambda binders (`:1339`,
 
 Why the split rather than one rule for all six: **each rule is keyed on a
 property the form actually has**, so the set stays classified rather than
-enumerated when a seventh form arrives. `match` cannot take rule 1 because
-what follows it is an arbitrary expression — `match (x) { … }` and a call
-`match(a, b)` to a function named `match` begin identically, and one token of
-lookahead cannot separate them. `refl` cannot take rule 1 because it has no
+enumerated when another form arrives. `match` and `if` cannot take rule 1
+because what follows either is an arbitrary expression — `match (x) { … }`
+and a call `match(a, b)` to a function named `match` begin identically, and
+one token of lookahead cannot separate them. `refl` cannot take rule 1 because it has no
 follow token at all. `Type` cannot take rule 2 because `Type` and `Type<0>`
 produce the same `Univ { level: 0 }` node, so there is no name left in the
 tree to check.
@@ -646,7 +646,7 @@ dissolve this whole question for those five. So, per rule:
   shadows like anything else" is exactly what rule 2 implements for `refl`,
   one form early. When `refl` becomes a declaration the special arm is deleted
   and the behaviour is unchanged for every program.
-- **Rule 3 is permanent.** `match`, `fun` and `Type` are not on
+- **Rule 3 is permanent.** `match`, `fun`, `if` and `Type` are not on
   `special-forms-as-declarations`' list and never will be: they are keywords
   of the grammar, not elaborator conveniences. Rejecting them as binder names
   is a rule the language keeps.
@@ -818,7 +818,7 @@ checking position where nothing reduces; axis 4 = a negative control)
     checking position at an equality type still elaborates as the form; a
     `theorem` that *shadows* `refl` and still needs it is a documented
     impossibility, not a test.
-16. Rule 3: each of `match`, `fun`, `Type` as a `let` name, a lambda binder, a
+16. Rule 3: each of `match`, `fun`, `if`, `Type` as a `let` name, a lambda binder, a
     match-arm binder and a declaration parameter is rejected with a message
     containing the form's name. One negative control per binding site is
     excessive; one per *form* across three sites is enough.
@@ -898,7 +898,7 @@ independent; within a phase, the order matters.
     lookahead guards. Checkable: §8 item 14.
 15. Rule 2: the `ExprKind::Refl` elaborator arm consults
     `shadowed(cx, "refl")` (`lib.rs:2599`). Checkable: §8 item 15.
-16. Rule 3: a shared binder-name check rejects `match`, `fun` and `Type` at
+16. Rule 3: a shared binder-name check rejects `match`, `fun`, `if` and `Type` at
     the ten binding sites listed in §5.2, with a message naming the form.
     Checkable: §8 item 16.
 17. `j_expr`'s arity errors gain a clause naming the local-`j` collision

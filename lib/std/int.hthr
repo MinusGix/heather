@@ -837,6 +837,14 @@ fn le_dec(a, b: Int) -> a <= b ∨ ¬ (a <= b) {
     }
 }
 
+// The order's `Decide` instance, generic in both operands. It lives beside
+// the decider so every later source consumer — notably proposition-directed
+// `if` in `max` and `min` — reaches it through ordinary declaration-order
+// resolution. Nat and Int may both register their relation named `Le` because
+// instance keys use resolved declaration references, not written names
+// (docs/instance-resolved-key-design.md).
+instance(a, b: Int) Decide<Le(a, b)> { dec := le_dec(a, b) }
+
 theorem le_of_not_le(a, b: Int, h: ¬ (a <= b)): b <= a {
     or_resolve(or_swap(le_total(a, b)), h)
 }
@@ -1145,9 +1153,9 @@ theorem le_neg(a: Int): (b: Int) -> a <= b -> neg(b) <= neg(a) {
 // direct propositional decision at `Int`: one neutral decision is shared by
 // the function and every proof below, and closed sign combinations compute.
 
-fn max(a, b: Int) -> Int { or_pick(le_dec(a, b), a, b) }
+fn max(a, b: Int) -> Int { if a <= b { b } else { a } }
 
-fn min(a, b: Int) -> Int { or_pick(le_dec(a, b), b, a) }
+fn min(a, b: Int) -> Int { if a <= b { a } else { b } }
 
 theorem le_max_l(a, b: Int): a <= max(a, b) {
     match le_dec(a, b) as λ d => Le(a, or_pick(d, a, b)) {
@@ -1291,12 +1299,3 @@ instance Default<Int> { default := OfNat(0) }
 instance Numeral<Int> { ofNat := OfNat }
 
 instance Cmp<Int> { le := Le, le_refl := le_refl, le_dec := le_dec }
-
-// The order's `Decide` instance, generic in both operands. It was the `Int`
-// round's one stalled row: an instance used to be keyed on its carrier head's
-// written name, so `std/nat`'s `Decide<Le(n, m)>` had already claimed the key
-// `Le` and this declaration was refused. The key is a pair of resolved
-// declaration references now — (`logic::Decide`, `int::Le`) here,
-// (`logic::Decide`, `nat::Le`) there — and both register
-// (docs/instance-resolved-key-design.md, issues/instance-key-collides-across-modules.md).
-instance(a, b: Int) Decide<Le(a, b)> { dec := le_dec(a, b) }

@@ -66,6 +66,8 @@
 //! on_stmt := "on" ("?" name ("." numeral)? | "_" ":" type) ":=" expr ";"
 //!          | "on" name ("(" name ("," name)* ")")? ":=" expr ";"  -- split arm
 //! expr    := "match" (name ":")? expr ("as" expr)? "{" arms "}"
+//!          | "if" (name ":")? expr "{" block-body "}"
+//!                 "else" "{" block-body "}"
 //!          | "refl" | "?" name?
 //!          | "j" "(" expr "," "(" name "," name ")" "->" type "," expr ")"
 //!          | ("λ"|"fun") binder+ "=>" expr
@@ -89,7 +91,7 @@
 //! `split` is the one statement head that sits where a *result expression*
 //! could start, so it cannot be bought back by lookahead (nothing fixed
 //! follows it) and is instead rejected as a binding name, like `match`/`fun`/
-//! `Type` — rule 3 of docs/let-and-blocks-design.md §5.2. A block that splits
+//! `if`/`Type` — rule 3 of docs/let-and-blocks-design.md §5.2. A block that splits
 //! has no result expression: the arms are the result, and the `on Ctor(…)`
 //! heads after it are those arms rather than goal discharges
 //! (docs/match-equation-split-design.md §5). Both `split` and `match` take the
@@ -545,7 +547,7 @@ impl Parser {
     /// died at "`refl` needs an `=` expected type" and `let Type = n; Type`
     /// reached the kernel as `Type<0>` and died at `LevelMismatch`.
     ///
-    /// Permanent, unlike rules 1 and 2: `match`, `fun` and `Type` are keywords
+    /// Permanent, unlike rules 1 and 2: `match`, `fun`, `if` and `Type` are keywords
     /// of the grammar, not elaborator conveniences, so
     /// `issues/special-forms-as-declarations.md` will never make them
     /// ordinary declarations (§5.4).
@@ -561,6 +563,8 @@ impl Parser {
             "split" => "`split` is the case-split statement keyword, so a use of it at \
                         the head of a block's result would parse as `split e;` \
                         (docs/match-equation-split-design.md §5)",
+            "if" => "`if` is the decidable-branching keyword, so a use of it would parse \
+                     as `if P { … } else { … }`",
             _ => return Ok((name, span)),
         };
         Err(ParseError {
@@ -3130,6 +3134,9 @@ impl Parser {
         if self.at_kw("match") {
             return self.match_expr();
         }
+        if self.at_kw("if") {
+            return self.if_expr();
+        }
         // **Rule 1** (docs/let-and-blocks-design.md §5.2): a keyword-headed
         // form that is always introduced by a fixed token is recognized only
         // when that token follows, so the name is bought back everywhere else.
@@ -3540,6 +3547,105 @@ impl Parser {
             },
             span: start.join(end),
         })
+    }
+
+    /// `if P { yes } else { no }` and `if h : P { yes } else { no }`.
+    ///
+    /// Proposition-directed branching is exactly elimination of the decision
+    /// evidence, so the parser makes that identity structural:
+    ///
+    /// ```text
+    /// match decide<P>() { Inl(h) => yes, Inr(h) => no }
+    /// ```
+    ///
+    /// `MatchForm::If` is diagnostic provenance only. Everything that types or
+    /// computes sees the same ordinary `Or` match as the explicit spelling.
+    fn if_expr(&mut self) -> R<Expr> {
+        let start = self.bump().span; // `if`
+        let evidence = self.eq_binder()?;
+        // The following `{` is the true branch, never a record literal on the
+        // condition's final name.
+        let condition = self.with_record_lit(true, |p| p.expr())?;
+        // Reuse the language's one expression-to-type bridge. It preserves
+        // built-in and declared proposition names (`True`, `P`, `Mystery`)
+        // while relational expressions become decoded type expressions.
+        let proposition = expr_as_ty(&condition);
+
+        let yes = self.if_branch("the `if` branch")?;
+        if !self.eat_kw("else") {
+            return self.err("an `if` needs an `else { … }` branch");
+        }
+        let no = self.if_branch("the `else` branch")?;
+
+        let ev_span = condition.span;
+        let yes_name = evidence.clone().unwrap_or_else(|| "#if_yes".into());
+        let no_name = evidence.unwrap_or_else(|| "#if_no".into());
+        let decide_head = Expr {
+            kind: ExprKind::Var("decide".into()),
+            span: condition.span,
+        };
+        let decide = Expr {
+            kind: ExprKind::TyApp {
+                head: Box::new(decide_head),
+                args: vec![proposition],
+            },
+            span: condition.span,
+        };
+        let scrut = Expr {
+            kind: ExprKind::App {
+                head: Box::new(decide),
+                args: vec![],
+                named: vec![],
+                explicit: false,
+            },
+            span: condition.span,
+        };
+        let arms = vec![
+            Arm {
+                ctor: "Inl".into(),
+                default: false,
+                binders: vec![Pat::Var { name: yes_name, span: ev_span }],
+                span: yes.span,
+                body: yes,
+            },
+            Arm {
+                ctor: "Inr".into(),
+                default: false,
+                binders: vec![Pat::Var { name: no_name, span: ev_span }],
+                span: no.span,
+                body: no,
+            },
+        ];
+        let span = start.join(arms[1].body.span);
+        Ok(Expr {
+            kind: ExprKind::Match {
+                form: MatchForm::If,
+                generated: false,
+                scrut: Box::new(scrut),
+                eqbind: None,
+                motive: None,
+                arms,
+            },
+            span,
+        })
+    }
+
+    /// One braced `if` branch as an ordinary block expression. Branch-local
+    /// `let`s are therefore the same aliases as everywhere else; nested goal
+    /// discharges retain the existing expression-block refusal.
+    fn if_branch(&mut self, what: &str) -> R<Expr> {
+        if !matches!(self.peek(), TokKind::LBrace) {
+            return self.err(format!("{what} must be a braced block"));
+        }
+        let b = self.block()?;
+        if let Some(on) = b.ons.first() {
+            return Err(ParseError {
+                msg: "an `if` branch cannot discharge declaration-scoped goals".into(),
+                span: on.span,
+            });
+        }
+        let span = b.span;
+        Ok(Expr { kind: ExprKind::Block(Box::new(b)), span })
     }
 
     /// Arms are `C(x, …) => body`, one per constructor. Which constructors
@@ -4915,13 +5021,13 @@ mod tests {
         assert!(e.msg.contains("j-binder-parse-trap"), "{}", e.msg);
     }
 
-    /// **Rule 3**: the three true keywords are rejected *at the binding site*,
+    /// **Rule 3**: the four true keywords are rejected *at the binding site*,
     /// each with a message naming the form. One per form across three sites is
-    /// the coverage §8 item 16 asks for; the point is that `match`/`fun`/`Type`
+    /// the coverage §8 item 16 asks for; the point is that `match`/`fun`/`if`/`Type`
     /// are keywords of the grammar and stay so (§5.4).
     #[test]
     fn a_true_keyword_cannot_be_a_binding_name() {
-        for form in ["match", "fun", "Type"] {
+        for form in ["match", "fun", "if", "Type"] {
             for src in [
                 format!("fn f(n: Nat) -> Nat {{ let {form} = n; n }}"),
                 format!("fn f(n: Nat) -> Nat {{ (\u{3bb} {form} => n)(n) }}"),

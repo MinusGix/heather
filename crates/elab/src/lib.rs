@@ -483,6 +483,35 @@ fn expr_as_ty(e: &Expr) -> Option<Ty> {
     Some(Ty { kind, span: e.span })
 }
 
+/// Replace the generic `Decide<P>` display of the parser-synthesized call in
+/// an `if` with the condition the writer actually wrote. Resolution remains
+/// the ordinary call path; this changes only the top-level diagnostic record.
+fn if_resolution_error(form: MatchForm, scrut: &Expr, error: ElabError) -> ElabError {
+    if form != MatchForm::If {
+        return error;
+    }
+    let ExprKind::App { head, args, named, .. } = &scrut.kind else { return error };
+    if !args.is_empty() || !named.is_empty() {
+        return error;
+    }
+    let ExprKind::TyApp { head, args } = &head.kind else { return error };
+    if !matches!(&head.kind, ExprKind::Var(name) if name == "decide") {
+        return error;
+    }
+    let [condition] = args.as_slice() else { return error };
+    let display = format!("Decide<{}>", traits::render_ty(condition));
+    match error {
+        ElabError::Resolution { span, mut trace, .. } => {
+            if let Some(goal) = trace.iter_mut().find(|line| line.depth == 0 && line.key == "goal")
+            {
+                goal.value.clone_from(&display);
+            }
+            ElabError::Resolution { goal: display, span, trace }
+        }
+        other => other,
+    }
+}
+
 /// What to call a type projection's subject in a diagnostic: the text that
 /// was written, when the shape is one a reader would recognize
 /// (docs/traits-type-projection-design.md §7). `None` for anything else, which
@@ -2936,7 +2965,9 @@ impl Elaborator {
                 // scrutinee out of the expected type so the motive is
                 // genuinely dependent; the non-dependent motive (expected
                 // under `z`) is what "no occurrence anywhere" falls back to.
-                let (scrut_t, scrut_ty, scrut_lvl) = self.elab_infer(cx, scrut)?;
+                let (scrut_t, scrut_ty, scrut_lvl) = self
+                    .elab_infer(cx, scrut)
+                    .map_err(|error| if_resolution_error(*form, scrut, error))?;
                 let motive =
                     self.synth_motive(cx, &scrut_t, &scrut_ty, &scrut_lvl, expected, e.span);
                 let Some(h) = eqbind else {
@@ -4150,6 +4181,12 @@ impl Elaborator {
             // Tried before the message below, and only ever *replaced* by it —
             // a synthesis that does not go through leaves no trace.
             ExprKind::Match { form, motive: None, scrut, arms, eqbind: None, generated } => {
+                if *form == MatchForm::If
+                    && let Some(r) =
+                        self.infer_if_constant_motive(cx, scrut, arms, *generated, e.span)
+                {
+                    return r;
+                }
                 if let Some(r) =
                     self.infer_match_constant_motive(cx, *form, scrut, arms, *generated, e.span)
                 {
@@ -4162,6 +4199,8 @@ impl Elaborator {
                         match form {
                             MatchForm::Match => "match e as \u{3bb} z => T { … }",
                             MatchForm::Split => "split e as \u{3bb} z => T;",
+                            MatchForm::If => "give the `if` an expected result type, for \
+                                              example with an annotated `let`",
                         }
                     ),
                     e.span,
@@ -4177,6 +4216,8 @@ impl Elaborator {
                     match form {
                         MatchForm::Match => "match e as \u{3bb} z => T { … }",
                         MatchForm::Split => "split e as \u{3bb} z => T;",
+                        MatchForm::If => "give the `if` an expected result type, for \
+                                          example with an annotated `let`",
                     }
                 ),
                 e.span,
@@ -4492,6 +4533,95 @@ impl Elaborator {
                 None
             }
         }
+    }
+
+    /// Inference for the ordinary, non-dependent `if`: infer either branch in
+    /// the evidence context, strengthen its type back to Γ, then check both
+    /// real match arms against that constant motive. Generic motive-less
+    /// `match` cannot do this cheaply because reconstructing arbitrary
+    /// constructor contexts is lowering-specific; `if` has exactly the two
+    /// contexts `h : P` and `h : P -> False`, already known from its syntax.
+    fn infer_if_constant_motive(
+        &self,
+        cx: &Cx,
+        scrut: &Expr,
+        arms: &[Arm],
+        generated: bool,
+        span: Span,
+    ) -> Option<R<(Term, Type, Level)>> {
+        let ExprKind::App { head, args, named, .. } = &scrut.kind else { return None };
+        if !args.is_empty() || !named.is_empty() {
+            return None;
+        }
+        let ExprKind::TyApp { head, args } = &head.kind else { return None };
+        if !matches!(&head.kind, ExprKind::Var(name) if name == "decide") {
+            return None;
+        }
+        let [condition] = args.as_slice() else { return None };
+        let (p_ty, p_lvl) = match self.elab_ty(cx, condition) {
+            Ok(p) => p,
+            Err(error) => return Some(Err(error)),
+        };
+        let not_p = Type::Pi {
+            dom_level: p_lvl.clone(),
+            cod_level: Level::Zero,
+            dom: Rc::new(p_ty.clone()),
+            cod: Rc::new(Type::Empty { level: Level::Zero }),
+        };
+
+        let warned = self.warnings.borrow().len();
+        let goaled = self.goals.borrow().len();
+        let rollback = || {
+            self.warnings.borrow_mut().truncate(warned);
+            self.goals.borrow_mut().truncate(goaled);
+            self.goal_spans.borrow_mut().retain(|_, k| *k < goaled);
+        };
+        let mut inferred = None;
+        for (arm, (evidence_ty, evidence_lvl)) in arms.iter().zip([
+            (&p_ty, &p_lvl),
+            (&not_p, &Level::Zero),
+        ]) {
+            let [binder] = arm.binders.as_slice() else { continue };
+            let mut acx = cx.clone();
+            acx.push(binder.name().to_string(), evidence_ty.clone(), evidence_lvl.clone());
+            let Ok((_, branch_ty, branch_lvl)) = self.elab_infer(&acx, &arm.body) else {
+                rollback();
+                continue;
+            };
+            // Substitute an arbitrary disposable term for the evidence. It is
+            // never checked or emitted; equality with the re-weakened result
+            // is precisely the syntactic proof that the branch type did not
+            // mention it and therefore really lives in Γ.
+            let branch_ty0 = branch_ty.apply_local(
+                &LocalSubst::id(&cx.gamma).extended(Rc::new(Term::Zero)),
+            );
+            if branch_ty == branch_ty0.shift_local(1) {
+                inferred = Some((branch_ty0, branch_lvl));
+                rollback();
+                break;
+            }
+            rollback();
+        }
+        let Some((ty, lvl)) = inferred else { return None };
+        let attempt = (|| {
+            let (scrut_t, scrut_ty, scrut_lvl) = self
+                .elab_infer(cx, scrut)
+                .map_err(|error| if_resolution_error(MatchForm::If, scrut, error))?;
+            let t = self.elab_match(
+                cx,
+                MatchForm::If,
+                generated,
+                arms,
+                scrut_t,
+                &scrut_ty,
+                &scrut_lvl,
+                ty.shift_local(1),
+                lvl.clone(),
+                span,
+            )?;
+            Ok((t, ty, lvl))
+        })();
+        Some(attempt)
     }
 
     fn elab_match(
