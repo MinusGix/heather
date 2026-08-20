@@ -70,8 +70,8 @@ use heather_kernel::term::{
 };
 use heather_kernel::typing::{self, TypeError, DEFAULT_FUEL};
 use heather_syntax::{
-    parse_file, Arm, Decl, DeclKind, Expr, ExprKind, Item, LamBinder, MatchForm, OnStmt, OnTarget,
-    NamedArg, OpFixity, ParseError, Span, Stmt, RecordLitField, Ty, TyKind,
+    parse_file, Arm, Decl, DeclKind, Expr, ExprKind, InstanceDecl, Item, LamBinder, MatchForm,
+    OnStmt, OnTarget, NamedArg, OpFixity, ParseError, Span, Stmt, RecordLitField, Ty, TyKind,
 };
 
 mod access;
@@ -1822,6 +1822,51 @@ impl Elaborator {
             self.decls.insert(decl.name.clone(), decl.clone());
         }
         r
+    }
+
+    /// The binders available in an instance's **head**, for declaration-time
+    /// inspection that must elaborate the carrier before the generated
+    /// instance declarations exist. Equality carriers need this to infer the
+    /// endpoints' type and use its resolved declaration as their registry key
+    /// (issues/decidable-equation-carrier.md).
+    ///
+    /// This is the prefix of [`Self::elab_decl_inner`]'s telescope builder:
+    /// type parameters, then value parameters. `requires` dictionaries do not
+    /// occur in an instance head and therefore deliberately are not in scope.
+    fn instance_head_cx(&self, decl: &InstanceDecl) -> R<Cx> {
+        let mut cx = Cx::empty();
+        for (i, tv) in decl.tyvars.iter().enumerate() {
+            if decl.tyvars[..i].iter().any(|other| other.name == tv.name) {
+                return err(format!("duplicate type parameter `{}`", tv.name), tv.span);
+            }
+            let level = Level::constant(tv.level);
+            cx.push(tv.name.clone(), Type::Ty(level.clone()), Level::constant(tv.level + 1));
+            cx.tyvars.push(TyVar {
+                name: tv.name.clone(),
+                ty: Type::El {
+                    level: level.clone(),
+                    tm: Rc::new(Term::Var(LocalVar(0))),
+                },
+                level,
+                depth: cx.names.len(),
+            });
+        }
+        for p in &decl.valparams {
+            let (ty, lvl) = self.elab_ty(&cx, &p.ty)?;
+            cx.push_skel(p.name.clone(), ty.clone(), lvl, skel_of_ty(&p.ty));
+            if let Type::Ty(level) = &ty {
+                cx.tyvars.push(TyVar {
+                    name: p.name.clone(),
+                    ty: Type::El {
+                        level: level.clone(),
+                        tm: Rc::new(Term::Var(LocalVar(0))),
+                    },
+                    level: level.clone(),
+                    depth: cx.names.len(),
+                });
+            }
+        }
+        Ok(cx)
     }
 
     fn elab_decl_inner(&mut self, decl: &Decl) -> R<()> {

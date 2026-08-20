@@ -459,14 +459,10 @@ theorem zero_ne_succ(n: Nat): ¬ (0 = Succ(n)) {
 // be a `fn` rather than a `theorem` (it has to reduce), same curried spelling
 // (both arguments descend together, so the guard refuses the uncurried one).
 //
-// It is NOT registered as a `Decide` instance, and that is a language boundary
-// rather than a choice: an instance is keyed on its carrier's head, and an
-// equation has no head to key on. The *collision* half of that is gone as of
-// 2026-08-17 — the key is a resolved declaration reference now, so `Le` at two
-// modules is two carriers (docs/instance-resolved-key-design.md) — but an
-// equation still has nothing to resolve, so this row still waits on
-// issues/decidable-equation-carrier.md. Until then `eq_dec` is called by name,
-// which is what every consumer here does anyway.
+// Equality instances are keyed by the endpoints' inferred carrier, so this
+// registers independently of equality at Bool and every other nominal type
+// (docs/decidable-equation-carrier-design.md). The generated canonical value
+// is deliberately unwritable; ordinary uses reach it through `Decide<n = m>`.
 fn eq_dec(n: Nat) -> (m: Nat) -> Or<n = m, ¬ (n = m)> {
     match n as λ z => (m: Nat) -> Or<z = m, Not(z = m)> {
         Zero => λ m =>
@@ -485,6 +481,8 @@ fn eq_dec(n: Nat) -> (m: Nat) -> Or<n = m, ¬ (n = m)> {
             },
     }
 }
+
+instance(n, m: Nat) Decide<n = m> { dec := eq_dec(n)(m) }
 
 // ---------------------------------------------------------------------------
 // The bridge to addition — route (c) of docs/nat-order-design.md §1, proved

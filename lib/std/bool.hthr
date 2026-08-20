@@ -69,6 +69,24 @@ theorem or_comm(a, b: Bool): a || b = b || a {
     }
 }
 
+// Equality is a separate decision from the propositional order below. It is
+// stated directly over constructor identity, and registers at Bool's equality
+// carrier without colliding with Nat's corresponding instance.
+fn eq_dec(a, b: Bool) -> Or<a = b, ¬ (a = b)> {
+    match a as λ x => Or<x = b, Not(x = b)> {
+        False => match b as λ y => Or<False = y, Not(False = y)> {
+            False => Inl(refl),
+            True => Inr(λ (bad: False = True) => absurd(bad)),
+        },
+        True => match b as λ y => Or<True = y, Not(True = y)> {
+            False => Inr(λ (bad: True = False) => absurd(bad)),
+            True => Inl(refl),
+        },
+    }
+}
+
+instance(a, b: Bool) Decide<a = b> { dec := eq_dec(a, b) }
+
 // The decided order on `Bool`. `False <= True` is the reading, so the relation
 // is implication.
 //

@@ -1,48 +1,119 @@
 ---
-title: Should a pattern name its fields, as a call now names its arguments?
+title: Named and renamed fields in constructor and record patterns
 status: open
-labels: [frontend,syntax,design]
+labels: [frontend,syntax,design,patterns,records,ergonomics]
 created: 2026-08-18
-updated: 2026-08-18
+updated: 2026-08-19
 ---
 
-Sketch. Filed by the [[named-arguments]] round, which decided calls and
-deliberately did **not** decide patterns (docs/named-arguments-design.md
-§10.3).
+Record destructuring currently binds fields only under their declared names:
+
+```heather
+let { witness, proof } = h;
+```
+
+That is particularly awkward for an existential, where the rest of the proof
+wants mathematical names such as `x` and `hx`. Admit a field-to-subpattern
+mapping:
+
+```heather
+let { witness := x, proof := hx } = h;
+// x  : A
+// hx : P(x)
+```
+
+This is scoped existential elimination, not choice: `x` is the witness already
+stored in `h`, remains local to the block, and `hx` depends on that local alias.
+Nothing is synthesized and no witness escapes unless the result explicitly
+packages it again.
+
+The same named-pattern operation should be available at constructors:
 
 ```heather
 match xs {
-    Cons(head, tail) => …            // today: positional binders
-    Cons(head: h, tail: t) => …      // by field?
+    Cons(head := h, tail := t) => ...,
+    Nil => ...,
 }
 ```
 
-## Why it is not simply "the same feature in pattern position"
+and consequently inside [[let-else-sugar]]:
 
-`:=` would be pointing the wrong way. A call's `f(x := e)` **fills** the slot
-`x` with `e`; a pattern's `Cons(head, tail)` **binds** `head` and `tail` *from*
-the fields. So the pattern form is field-to-binder, not binder-to-value, and
-the natural spelling is `Cons(head: h, tail: t)` or Rust's
-`Cons { head: h, tail: t }` — a different operator, with a different collision
-surface, in a position (`pat_args`) that shares no code with `call_args`.
+```heather
+if let Some(value := x) = y { ... } else { ... }
+```
 
-The other asymmetry: a call may omit an implicit and let inference fill it; a
-pattern that omits a field has *not bound* it, which is a legal and useful
-thing to say (`Cons(head: h)`, ignoring the tail) and has no analogue on the
-call side, where §4.3 refuses gaps.
+The final example is schematic until a real named-field constructor is the
+customer; positional `Some(x)` remains the ordinary spelling.
 
-## Who should decide it
+## Syntax decision
 
-[[surface-records]] and this issue together, and the two spellings must agree —
-which is the standing observation from `issues/named-arguments.md`'s open
-question 4. A record's destructuring `let` (`docs/surface-records.md` §5) is
-the third member of the same family and would inherit whatever is chosen.
+Use `field := pattern`. The left side identifies the declared slot and the
+right side is a pattern filling that slot; a binder is merely the smallest
+pattern. This is the same structural reading as named call arguments, without
+claiming that matching flows values in the same operational direction as a
+call.
 
-Not scheduled, no live customer.
+The earlier sketch proposed `field: binder` because extraction flows out of a
+field. That spelling is rejected: `:` introduces a type at binding positions
+throughout Heather, while `:=` already means “fill this named slot.” Treating
+the right side as a subpattern also scales to `_` and nested patterns without a
+second syntax:
+
+```heather
+Cons(head := _, tail := Cons(head := x))
+```
+
+The existing shorthand remains:
+
+```heather
+{ witness, proof }
+```
+
+means the same as:
+
+```heather
+{ witness := witness, proof := proof }
+```
+
+## Semantics and boundaries
+
+- Field order is irrelevant; the elaborator restores declaration order before
+  using the existing positional pattern machinery.
+- Omitted fields are deliberately ignored, as current record destructuring
+  already permits.
+- Unknown and duplicate field names are errors. Binding the same local name
+  twice follows the existing duplicate-pattern-binder rule.
+- Dependent fields are elaborated in declaration order, not written order, so
+  `proof := hx` receives a type mentioning the renamed `witness := x` even if
+  the clauses were written in the opposite order.
+- Record destructuring continues to lower to projections and therefore keeps
+  definitional Sigma eta; constructor patterns continue through the pattern
+  matrix compiler. This is syntax sharing, not a new kernel pattern form.
+
+## Acceptance
+
+- `let { witness := x, proof := hx } = h;` checks at an open
+  `Exists(λ (x: A) => P(x))` and `hx` is usable at `P(x)`.
+- Written field order does not affect dependent binding; shorthand and renamed
+  forms elaborate to convertible terms.
+- Partial patterns, `_`, and one nested named subpattern work.
+- Unknown fields, duplicates, and a named field on a positional-only
+  constructor have targeted diagnostics.
+- The form composes with explicit `match` and [[let-else-sugar]].
 
 ## What it assumes from elsewhere
 
-- **[[named-arguments]]** owns the call-site spelling. Assumed here: only that
-  it chose `:=` and that its reason (§3.1: `:` introduces a type in binding
-  position) is about *binding* positions, which a pattern is — so the pattern
-  form cannot simply reuse it without an argument.
+- **[[named-arguments]]** owns call-site `:=`. Assumed here: only the shared
+  “fill a named slot” reading.
+- **[[surface-records]]** owns record projection and existing shorthand
+  destructuring.
+- **[[nested-match-patterns]]** owns nested positional pattern compilation.
+
+## Log
+
+- 2026-08-18: Filed by the named-arguments round as an undecided
+  `Cons(head: h, tail: t)` sketch.
+- 2026-08-19: Rescoped around the first concrete customer: opening
+  `Exists` as `let { witness := x, proof := hx } = h;`. Chose
+  `field := pattern`; the right side is a general subpattern, which makes the
+  call-site operator coherent and leaves `:` exclusively type-directed.

@@ -644,6 +644,11 @@ fn ty_size(t: &Ty) -> usize {
         TyKind::Named { args, .. } => 1 + args.iter().map(ty_size).sum::<usize>(),
         TyKind::Vec { elem, .. } => 1 + ty_size(elem),
         TyKind::Fn { dom, cod, .. } => 1 + ty_size(dom) + ty_size(cod),
+        // An equality carrier is measured through both endpoints. Value
+        // binders in `instance(n, m: Nat) Decide<n = m>` must be recoverable
+        // from the head, and required subgoals must obey the same Paterson
+        // measure as every other carrier.
+        TyKind::Eq(a, b) => 1 + expr_size(a) + expr_size(b),
         // An applied type former (`Not(P)`, `Le(n, m)`) is a carrier as of the
         // 2026-08-17 widening, so the measure has to see into it. Falling
         // through to `1` was harmless only while such a carrier could not be
@@ -682,6 +687,7 @@ fn ty_var_count(t: &Ty, v: &str) -> usize {
         }
         TyKind::Vec { elem, .. } => ty_var_count(elem, v),
         TyKind::Fn { dom, cod, .. } => ty_var_count(dom, v) + ty_var_count(cod, v),
+        TyKind::Eq(a, b) => expr_var_count(a, v) + expr_var_count(b, v),
         // The occurrence half of the same widening: a parameter of an applied
         // former (`Not(P)`'s `P`) is a bare occurrence exactly as `And<P, Q>`'s
         // is, and Paterson's second condition has to count it.
@@ -706,6 +712,7 @@ fn expr_var_count(e: &Expr, v: &str) -> usize {
             expr_var_count(head, v) + args.iter().map(|a| ty_var_count(a, v)).sum::<usize>()
         }
         ExprKind::Var(name) => (name == v) as usize,
+        ExprKind::Eq(a, b) => expr_var_count(a, v) + expr_var_count(b, v),
         _ => 0,
     }
 }
@@ -1562,27 +1569,61 @@ impl Elaborator {
             );
         }
         let carrier = &d.class.args[0];
-        let Some(head) = head_name(carrier) else {
-            return err(
-                format!(
-                    "the carrier `{}` has no head type name, so this instance has no \
-                     canonical name (docs/traits-layer1-design.md §4.1)",
-                    render_ty(carrier)
-                ),
-                carrier.span,
-            );
+        self.check_binders(d)?;
+        // Most carriers own an ordinary namespace (`Le::Decide`). Equality is
+        // the one headless former whose instances have a better owner: the
+        // endpoints' inferred type. The registry therefore distinguishes Nat
+        // equality from Bool equality by the same resolved declaration keys
+        // every other carrier uses, while the full instance type remains what
+        // candidate trial checks against a goal.
+        let (head, head_key, equality) = if matches!(carrier.kind, TyKind::Eq(..)) {
+            let cx = self.instance_head_cx(d)?;
+            let (lowered, _) = self.elab_ty(&cx, carrier)?;
+            let crate::Type::Id { ty, .. } = lowered else {
+                unreachable!("a lowered equality carrier is an identity type")
+            };
+            let Some(owner) = self.carrier_of_ty(&cx, &ty, carrier.span) else {
+                return err(
+                    format!(
+                        "the equality carrier `{}` has endpoints at a type with no \
+                         nominal owner, so its instance cannot be registered: equality \
+                         instances are keyed by the endpoints' type (for example `Nat` \
+                         in `n = m`), which keeps equality at different types distinct",
+                        render_ty(carrier)
+                    ),
+                    carrier.span,
+                );
+            };
+            // `Decide<Nat>` and `Decide<n = m>` must not share a key. `#`
+            // cannot begin a source name, so this is a structural registry
+            // component rather than a spelling that could resolve elsewhere.
+            let equality_key = format!("#Eq@{}", owner.key);
+            (owner.written, equality_key, true)
+        } else {
+            let Some(head) = head_name(carrier) else {
+                return err(
+                    format!(
+                        "the carrier `{}` has no head type name, so this instance has no \
+                         canonical name (docs/traits-layer1-design.md §4.1)",
+                        render_ty(carrier)
+                    ),
+                    carrier.span,
+                );
+            };
+            let head = head.to_string();
+            if !self.names_a_carrier(&head) {
+                return err(
+                    format!(
+                        "`{head}` is not a type or a type former in scope, so `{head}::{}` \
+                         attaches to nothing",
+                        d.class.name
+                    ),
+                    carrier.span,
+                );
+            }
+            let key = self.carrier_key(&head);
+            (head, key, false)
         };
-        let head = head.to_string();
-        if !self.names_a_carrier(&head) {
-            return err(
-                format!(
-                    "`{head}` is not a type or a type former in scope, so `{head}::{}` \
-                     attaches to nothing",
-                    d.class.name
-                ),
-                carrier.span,
-            );
-        }
         // The index (docs/operation-indexed-classes-design.md §3.1). Its
         // spelling joins the registry key, so it is computed from the
         // declaration alone and an unspellable one is refused here.
@@ -1601,23 +1642,22 @@ impl Elaborator {
                 d.class.span,
             );
         }
-        self.check_binders(d)?;
         let index = self.index_spelling(&d.class, &class)?;
+        let equality_suffix = if equality { "#Eq" } else { "" };
         let prefix = if index.is_empty() {
-            format!("{head}::{}", class.name)
+            format!("{head}::{}{equality_suffix}", class.name)
         } else {
             // Two instances of one class at one carrier are the point (§3), so
             // the canonical name carries the index. `#` never begins an
             // identifier, so the suffix is unwritable and `Bool::Monoid(or)`
             // — the `T::C(args)` spelling of §5.1 — is how it is reached.
-            format!("{head}::{}#{}", class.name, name_suffix(&index))
+            format!("{head}::{}{equality_suffix}#{}", class.name, name_suffix(&index))
         };
         // The carrier as the registry keys it: the *declaration* the head
         // names, not the head's spelling
         // (docs/instance-resolved-key-design.md §3). `head` itself stays the
         // written string, because it is what the canonical name is built from
         // and what a diagnostic should print.
-        let head_key = self.carrier_key(&head);
         let key = instance_key(&class_key, &head_key, &index);
         if let Some(prev) = self.instances.get(&key) {
             return err(

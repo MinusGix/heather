@@ -1,6 +1,6 @@
 ---
 title: An equation has no head, so Decide<n = m> cannot be an instance
-status: open
+status: closed
 labels: [frontend,elaboration,traits,design,stdlib]
 created: 2026-08-17
 updated: 2026-08-17
@@ -65,6 +65,18 @@ equality instance at another type; `eq_dec` fills it; and a goal at a composed
 proposition mentioning an equation resolves.
 
 ## Log
+
+- 2026-08-19: LANDED. Equality instances infer the endpoints' type in the
+  instance-head telescope and register under the structural key
+  `Eq(resolved endpoint carrier)`, encoded with an unspellable marker. Their
+  generated value is likewise an ordinary but unwritable endpoint member
+  (`Nat::Decide#Eq`). Nat and Bool equality coexist, and equality-at-Nat does
+  not collide with an ordinary instance at `Nat`. The binder occurrence and
+  Paterson walks now traverse equality endpoints; Nat's existing `eq_dec` and
+  Bool's new four-case decider are registered. Proposition-directed `if` and
+  composed `Decide` resolution compute through both. Non-nominal endpoint
+  types remain a targeted refusal. Design record:
+  `docs/decidable-equation-carrier-design.md`.
 
 - 2026-08-17: Second customer, and the sharpest so far (wave L3, [[std-list-mem-and-perm]], 2026-08-17): this key is what splits the two halves of one algorithm's specification. `Mem` needs only `=`, so it is polymorphic and lives in `std/list`; `count` must DECIDE `a = h`, so `decide<a = h>()` finds no instance, `nat::eq_dec` is called by name, and `count` is at `Nat` — a permanent monomorphic hole in an otherwise polymorphic list API. The dictionary-passing spelling (decider as a parameter, threaded through every call site) works and was deliberately NOT written, per the push's no-encoding-around doctrine. Ranked #2 of that round: fewest lines, largest design consequence.
 - 2026-08-17: The new-key half of this issue is PAID, and the cost estimate drops accordingly. `docs/instance-resolved-key-design.md` (2026-08-17) rebuilt the instance registry's key as a tuple of RESOLVED declaration references — (class key, carrier-head key, index spelling), no component a spelling — which is the cheap form of the (class, carrier-syntax) key `docs/traits-layer1-design.md` §7.1/§8 deferred to layer 2. It needed no canonical-derivation table: the enabling step was noticing that a *key* never had to be spellable, only a *name* did. So the sentence above — 'keying it correctly needs the endpoints' type in the key, and that is the (class, carrier-syntax) key deferred to layer 2' — no longer describes a blocker. There is no new notion of key to invent and no layer-2 table to wait for. What remains is: (1) a carrier component for `TyKind::Eq` — the endpoints' type as a resolved reference, which is what every other carrier component already is, so `Decide<n = m>` at Nat and at Bool land at different keys by construction; (2) the canonical NAME, which is the part that does still want a decision, since `Eq` is not a declared head and `{Head}::{Class}` has nothing to build from (identity and naming came apart in that round — §4 — so this is now a naming question in isolation, and a minted unwritable name is available where it was not before); (3) the UX — writing the instance, and the diagnostics. Estimate: from 'blocked on a layer-2 table nobody has designed' to a bounded slice, most of it (2) and (3). Still NOT implemented here, deliberately: that round's brief scoped it out and there is no evidence in it about the equation case.

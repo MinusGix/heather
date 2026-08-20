@@ -13,7 +13,7 @@
 //! **checking** position (the use site elaborates `dec_of()` against an
 //! expected type), a composed/**neutral** goal reached by backchaining rather
 //! than by a literal instance, and a **negative control** beside each positive
-//! — including the two carriers that are still refused on purpose.
+//! — including a non-nominal endpoint type that is still refused on purpose.
 
 use heather_elab::Elaborator;
 
@@ -107,17 +107,35 @@ fn Neg::tag() -> Nat {{ 0 }}
 // -- 2: the negative controls ----------------------------------------------
 
 #[test]
-fn an_equation_carrier_is_still_refused() {
-    // Deliberate, and the one case of this round that genuinely wants layer 2's
-    // (class, carrier-syntax) key: a single reserved head for `=` would collide
-    // equality at `Nat` with equality at every other type
-    // (`docs/decide-class-design.md` §3.1).
-    let e = bad(&format!(
+fn equality_instances_are_owned_by_the_endpoints_type() {
+    // Equality has no surface head, but its endpoints do. Nat and Bit use two
+    // resolved carrier keys and therefore coexist; before the equality-carrier
+    // round the first declaration stopped at "no head type name".
+    ok(&format!(
         r#"{LOGIC}
+inductive Bit {{ Off }}
+instance Dec<Nat> {{ d := L(0) }}
 instance Dec<2 = 2> {{ d := L(refl) }}
+instance Dec<Off = Off> {{ d := L(refl) }}
+fn dec_of<P: Dec>() -> Sum<P, Neg(P)> {{ P.d }}
+fn nat_value() -> Sum<Nat, Neg(Nat)> {{ dec_of() }}
+fn nat_eq() -> Sum<2 = 2, Neg(2 = 2)> {{ dec_of() }}
+fn bit_eq() -> Sum<Off = Off, Neg(Off = Off)> {{ dec_of() }}
 "#
     ));
-    assert!(e.contains("no head type name"), "unexpected: {e}");
+}
+
+#[test]
+fn equality_at_a_non_nominal_endpoint_type_is_refused() {
+    // A function type has no one resolved owner to key under. A dictionary in
+    // scope remains the spelling for equality at a non-nominal carrier; global
+    // registration is per nominal endpoint type.
+    let e = bad(&format!(
+        r#"{LOGIC}
+instance(f, g: Nat -> Nat) Dec<f = g> {{ d := R(λ (bad: f = g) => bad) }}
+"#
+    ));
+    assert!(e.contains("endpoints at a type with no nominal owner"), "unexpected: {e}");
 }
 
 #[test]
