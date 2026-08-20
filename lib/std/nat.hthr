@@ -240,8 +240,8 @@ theorem le_succ_r(n: Nat): (m: Nat) -> n <= m -> n <= Succ(m) {
         Zero => λ m h => trivial,
         Succ(k, ih) => λ m h =>
             match m as λ y => Le(Succ(k), y) -> Le(Succ(k), Succ(y)) {
-                Zero => λ bad => false_elim(bad),
-                Succ(m2) => λ good => ih(m2, good),
+                Zero => bad ⊢ false_elim(bad),
+                Succ(m2) => good ⊢ ih(m2, good),
             }(h),
     }
 }

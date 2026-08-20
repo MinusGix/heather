@@ -43,9 +43,11 @@ pub enum TokKind {
     RBracket,  // ]
     Arrow,     // ->
     FatArrow,  // =>
-    /// `|-` — the turnstile of a contextual type `Code(g |- T)`. Two-byte like
-    /// `->`; a bare `|` stays a lex error, so nothing existing changes shape.
-    Turnstile, // |-
+    /// `⊢` / `|-` — the turnstile of a contextual type `Code(g |- T)` and a
+    /// checking-position sequent binder `x ⊢ body`. Both spellings become one
+    /// token, so downstream syntax cannot assign them different semantics.
+    /// A bare `|` stays a lex error.
+    Turnstile, // ⊢ or |-
     /// `&&` and `||` — the Boolean operator spellings
     /// (issues/bool-operator-designations.md). Two-byte; the bare `&` and `|`
     /// stay lex errors, deliberately: the single characters are unclaimed
@@ -221,6 +223,7 @@ pub fn lex(src: &str) -> Result<Vec<Tok>, LexError> {
             "↔" | "<->" => Some(TokKind::Iff),
             "∃" => Some(TokKind::Exists),
             "∀" => Some(TokKind::Forall),
+            "⊢" => Some(TokKind::Turnstile),
             _ => None,
         };
         if let Some(kind) = three_kind {

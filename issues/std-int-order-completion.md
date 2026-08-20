@@ -57,7 +57,7 @@ on [[calc-over-order-relations]] rather than adding syntax speculatively.
   positive, negative, and mixed-sign `min`/`max`, and a negative control proves
   that multiplication monotonicity cannot be invoked at a negative factor.
 - 2026-08-19: Post-round surface review produced four owners:
-  [[prefix-negation-notation]], [[intro-proof-statement]],
+  [[prefix-negation-notation]], [[sequent-binder-expression]],
   [[stdlib-surface-style-lint]], and [[decidable-if-expression]]. Two suspected
   gaps were checked and are already supported: the first bridge can be written
   `{ split m; on _ := trivial; }`, and the dependent motive can use

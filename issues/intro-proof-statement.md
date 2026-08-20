@@ -1,6 +1,6 @@
 ---
 title: "intro as a checking-position proof statement"
-status: open
+status: closed
 labels: [frontend,syntax,proofs,ergonomics]
 created: 2026-08-19
 updated: 2026-08-19
@@ -74,3 +74,8 @@ sequence genuinely wants it.
 - 2026-08-19: Filed from the post-I-prime proof-style review. The decision to
   omit `exact` and defer an all-goals combinator is intentional: the ordinary
   trailing expression and `split` default arm already cover those two examples.
+- 2026-08-19: Closed without implementing `intro`. The design discussion found
+  that named Pi introduction wants to remain term syntax and read as a typing
+  judgment, `x ⊢ body`, rather than begin a tactic-command language; the
+  replacement is [[sequent-binder-expression]]. Anonymous immediate use is a
+  separate point-free feature owned by [[argument-slot-sections]].

@@ -1767,6 +1767,51 @@ impl Parser {
         while self.at_kw("let") {
             stmts.push(self.let_stmt()?);
         }
+        // `x ⊢ ...` at a block's result scopes over the REST of that block,
+        // including its `let`s. This is the long-proof face of the sequent
+        // expression: `{ x ⊢ let y = e; body }` lowers to
+        // `λ x => { let y = e; body }`, without requiring a second pair of
+        // braces merely to delimit the lambda body
+        // (issues/sequent-binder-expression.md).
+        if self.at_sequent_binders() {
+            let (binders, start, turnstile) = self.sequent_binders()?;
+            let mut body_stmts = Vec::new();
+            while self.at_kw("let") {
+                body_stmts.push(self.let_stmt()?);
+            }
+            let (body_result, ons) = self.block_result_and_ons()?;
+            let close = self.expect(&TokKind::RBrace, "`}`")?;
+            let body = if body_stmts.is_empty() {
+                body_result
+            } else {
+                Expr {
+                    kind: ExprKind::Block(Box::new(Block {
+                        stmts: body_stmts,
+                        result: Box::new(body_result),
+                        // Goal discharges retain declaration-block scope and
+                        // are therefore hoisted to the outer block below.
+                        ons: Vec::new(),
+                        span: turnstile.join(close),
+                    })),
+                    span: turnstile.join(close),
+                }
+            };
+            let result = Expr {
+                kind: ExprKind::Lam { binders, body: Box::new(body) },
+                span: start.join(close),
+            };
+            return Ok(Block { stmts, result: Box::new(result), ons, span: open.join(close) });
+        }
+        let (result, ons) = self.block_result_and_ons()?;
+        let close = self.expect(&TokKind::RBrace, "`}`")?;
+        Ok(Block { stmts, result: Box::new(result), ons, span: open.join(close) })
+    }
+
+    /// Parse the result expression (or terminal `split`) and the declaration-
+    /// scoped goal discharges that follow it. Kept separate from
+    /// [`Self::block_body`] because a sequent block header wraps this whole
+    /// suffix in a lambda while hoisting its `on`s back to the declaration.
+    fn block_result_and_ons(&mut self) -> R<(Expr, Vec<OnStmt>)> {
         if self.at_kw("on") {
             return self
                 .err("a block's `on` discharges come after its result expression");
@@ -1793,8 +1838,7 @@ impl Parser {
             }
             ons.push(on);
         }
-        let close = self.expect(&TokKind::RBrace, "`}`")?;
-        Ok(Block { stmts, result: Box::new(result), ons, span: open.join(close) })
+        Ok((result, ons))
     }
 
     /// `split (h :)? e; on C(x⃗) := b; …` — parsed here and **desugared here**,
@@ -2277,6 +2321,14 @@ impl Parser {
     /// [`Self::ty`], where the arrow's sides are `ty_atom`s and `ty_atom`
     /// falls through to this function.
     fn expr(&mut self) -> R<Expr> {
+        // The turnstile is the loosest expression form and extends rightward
+        // exactly like a lambda body. It is recognized before parsing its
+        // identifier-headed left side; without the complete binder-prefix
+        // lookahead, an ordinary variable would be consumed before we learned
+        // whether a `⊢` followed (issues/sequent-binder-expression.md).
+        if self.at_sequent_binders() {
+            return self.sequent_expr();
+        }
         let lhs = self.expr_no_iff()?;
         if self.no_iff {
             return Ok(lhs);
@@ -2299,6 +2351,103 @@ impl Parser {
             );
         }
         Ok(connective("Iff", lhs, rhs, span))
+    }
+
+    /// Does the cursor begin one or more sequent binders followed by `⊢`?
+    ///
+    /// Bare binders are identifiers. Annotated binders are one-per-group,
+    /// `(x: A)`, exactly as for lambdas; their types may contain arbitrarily
+    /// nested parentheses, so the lookahead balances rather than attempting to
+    /// recognize the type grammar. This is only a discriminator: the real
+    /// parser below still owns every diagnostic.
+    fn at_sequent_binders(&self) -> bool {
+        let mut i = self.pos;
+        loop {
+            match self.toks.get(i).map(|t| &t.kind) {
+                Some(TokKind::Ident(_)) => {
+                    i += 1;
+                }
+                Some(TokKind::LParen)
+                    if matches!(self.toks.get(i + 1).map(|t| &t.kind), Some(TokKind::Ident(_)))
+                        && matches!(self.toks.get(i + 2).map(|t| &t.kind), Some(TokKind::Colon)) =>
+                {
+                    let mut depth = 0usize;
+                    loop {
+                        match self.toks.get(i).map(|t| &t.kind) {
+                            Some(TokKind::LParen) => depth += 1,
+                            Some(TokKind::RParen) => {
+                                depth -= 1;
+                                if depth == 0 {
+                                    i += 1;
+                                    break;
+                                }
+                            }
+                            Some(TokKind::Eof) | None => return false,
+                            _ => {}
+                        }
+                        i += 1;
+                    }
+                }
+                _ => break,
+            }
+            if matches!(self.toks.get(i).map(|t| &t.kind), Some(TokKind::Turnstile)) {
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Parse the binder prefix shared by a one-expression sequent and a
+    /// sequent-headed block. The latter needs the turnstile span to delimit
+    /// the transparent block synthesized for a long body.
+    fn sequent_binders(&mut self) -> R<(Vec<LamBinder>, Span, Span)> {
+        let start = self.peek_span();
+        let mut binders = Vec::new();
+        loop {
+            match self.peek() {
+                TokKind::Ident(_) => {
+                    let (name, span) = self.binder_ident("sequent binder")?;
+                    binders.push(LamBinder { name, ty: None, implicit: false, span });
+                }
+                TokKind::LParen => {
+                    let open = self.bump().span;
+                    let (name, _) = self.binder_ident("sequent binder")?;
+                    self.expect(&TokKind::Colon, "`:` (annotated sequent binder)")?;
+                    let ty = self.ty()?;
+                    let close = self.expect(&TokKind::RParen, "`)`")?;
+                    binders.push(LamBinder {
+                        name,
+                        ty: Some(ty),
+                        implicit: false,
+                        span: open.join(close),
+                    });
+                }
+                _ => break,
+            }
+            if matches!(self.peek(), TokKind::Turnstile) {
+                break;
+            }
+        }
+        let turnstile =
+            self.expect(&TokKind::Turnstile, "`⊢` (a sequent binder is `x ⊢ body`)")?;
+        Ok((binders, start, turnstile))
+    }
+
+    /// `x y ⊢ body` / `(x: A) ⊢ body`: a checking-position spelling of
+    /// the ordinary lambda `λ x y => body`. Parser lowering is intentional;
+    /// dependent checking and every diagnostic after the spelling disappears
+    /// are exactly the existing lambda path's behavior.
+    fn sequent_expr(&mut self) -> R<Expr> {
+        let (binders, start, _) = self.sequent_binders()?;
+        let body = if std::mem::take(&mut self.motive_body) {
+            let ty = self.ty()?;
+            let span = ty.span;
+            Expr { kind: ExprKind::TyLit(Box::new(ty)), span }
+        } else {
+            self.expr()?
+        };
+        let span = start.join(body.span);
+        Ok(Expr { kind: ExprKind::Lam { binders, body: Box::new(body) }, span })
     }
 
     /// [`Self::expr`] without its `↔` rung — the level `↔`'s two operands are

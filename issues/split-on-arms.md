@@ -71,5 +71,5 @@ alongside [[surface-proof-automation]]'s `apply`, which raises the same
   `match m { Zero => trivial, Succ(k) => trivial }`. The default arm is the
   useful analogue of applying one closer to every constructor. A general
   all-goals command combinator remains deliberately unowned until a command
-  sequence needs more than this existing spelling; [[intro-proof-statement]]
-  owns the adjacent checking-position introduction command.
+  sequence needs more than this existing spelling; [[sequent-binder-expression]]
+  owns the adjacent checking-position introduction form.

@@ -37,7 +37,7 @@ Both want [[goal-holes]]' block-statement + `on` surface for their full form; in
 - 2026-08-05: MVP slice scheduled as [[auto-refl-empty-block]] (2026-08-05 ergonomics round); apply and the solver slot stay here.
 - 2026-08-05: auto-refl MVP landed ([[auto-refl-empty-block]], 2026-08-05); the solver slot and apply remain here.
 - 2026-08-19: The post-I-prime proof-style review split introduction into
-  [[intro-proof-statement]]. It is goal-directed but not automation:
+  [[sequent-binder-expression]]. It is goal-directed but not automation:
   `intro x; rest` is simply the checking-position face of `λ x => rest`.
   `cases` is already [[split-on-arms]], including a default arm; do not grow
   this issue into an umbrella tactic language.
