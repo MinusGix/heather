@@ -32,7 +32,7 @@ laws, `map` with **none**, `List::nth`. `std/option`: three functions.
 |---|---|---|
 | 0 | ✅ **landed 2026-08-16** — `Empty`/`Not`/`And`/`Or`/`Iff`/`Exists` + `¬ ∧ ∨ ↔ ∃ ∀` | [[std-logic-module]] (closed) |
 | 1 | ✅ **landed 2026-08-16** — `Le` by recursion, `Lt`, the order + strict kit, `le_dec`, `le_iff_exists_add`. The deferred `sub` kit and `min`/`max` are [[nat-arithmetic-kit]], a wave-3 item | [[nat-order-kit]] |
-| 2 | ✅ **mostly landed 2026-08-17** — `succ_inj`, `succ_ne_zero`, `zero_ne_succ`, `eq_dec`, `le_of_not_le`, and `Decide` over the connectives; `Decide` **at** `Nat` equality and order is blocked, see below | [[decide-class]] |
+| 2 | ✅ **landed in full; closed 2026-08-20** — `succ_inj`, `succ_ne_zero`, `zero_ne_succ`, `eq_dec`, `le_of_not_le`, and `Decide` over connectives, open relations, and equality | [[decide-class]] |
 | 3 | ✅ **landed 2026-08-17**, in full — `min`/`max`, the `sub` kit, `add_le_mono`, `mul_le_mono`, cancellation ([[nat-arithmetic-kit]]); `pow`, `fact` ([[nat-pow-and-fact]]); `half`/`Even`/`Odd` and the parity kit ([[nat-parity-and-half]]), once [[recursion-at-deeper-subterms]] made them writable | all closed |
 | 4 | `Nat::iter`/fold with `add`/`mul`/`pow` as instances | [[datatype-container-algebras]] |
 | L1 | ✅ **landed 2026-08-17** — `len`/`rev` into `std/list`, `plusl` gone; `foldr`/`foldl`, `filter`, `take`/`drop`, `replicate`, `zip`, `head`/`tail`/`last`, plus a `std/pair` the library had no product type for | [[std-list-api]] |
@@ -147,3 +147,8 @@ The datum for the ranking function: the feature the library ranked was not the f
 - 2026-08-19: Wave I-prime is scheduled as [[std-int-order-completion]]: the
   strict-order residue, carrier-owned `min`/`max`, and multiplication
   monotonicity under a nonnegative factor.
+- 2026-08-20: Wave 2's staged residue is paid and [[decide-class]] closes:
+  [[value-generic-instances]] supplied open relation instances and
+  [[decidable-equation-carrier]] supplied carrier-keyed equality instances.
+  The historical sequencing entries above remain the record of why L3 did
+  not wait for either.
