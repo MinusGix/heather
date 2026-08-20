@@ -1371,7 +1371,7 @@ fn pattern_of(arm: &heather_syntax::Arm) -> Option<(String, Vec<String>)> {
     for b in &arm.binders {
         match b {
             Pat::Var { name, .. } => bs.push(name.clone()),
-            Pat::Ctor { .. } => return None,
+            Pat::Ctor { .. } | Pat::Named { .. } => return None,
         }
     }
     Some((arm.ctor.clone(), bs))

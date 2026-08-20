@@ -2513,9 +2513,9 @@ impl Elaborator {
     fn elab_stmts(&self, cx: &Cx, stmts: &[Stmt]) -> R<Cx> {
         let mut cx = cx.clone();
         for stmt in stmts {
-            // `let { unit, op } = m;` — each name aliased to its projection
-            // (docs/surface-records.md §5). Sugar over `m.unit` / `m.op`, and
-            // it shares their code: a partial pattern simply binds fewer.
+            // `let { unit := u, op } = m;` — each right-hand name aliases the
+            // selected projection (docs/named-patterns-by-field-design.md §2).
+            // Sugar over `m.unit` / `m.op`; a partial pattern binds fewer.
             let (name, ty, expr) = match stmt {
                 Stmt::Let { name, ty, expr, .. } => (name, ty, expr),
                 Stmt::LetCode { span, .. } => {
@@ -2539,27 +2539,54 @@ impl Elaborator {
                         );
                     };
                     let value = Rc::new(t);
-                    for (f, fsp) in fields {
-                        let Some(idx) = ind.field_index(f) else {
+                    let mut selected: Vec<Option<&heather_syntax::RecordPatField>> =
+                        vec![None; ind.ctors[0].fields.len()];
+                    for field in fields {
+                        let Some(idx) = ind.field_index(&field.name) else {
                             return err(
-                                format!("`{}` has no field `{f}`", ind.name),
-                                *fsp,
+                                format!("`{}` has no field `{}`", ind.name, field.name),
+                                field.span,
                             );
                         };
+                        if selected[idx].replace(field).is_some() {
+                            return err(
+                                format!(
+                                    "field `{}` appears twice in this record pattern",
+                                    field.name
+                                ),
+                                field.span,
+                            );
+                        }
+                    }
+                    // Declaration order is semantic for a dependent record.
+                    // Written order is only presentation.
+                    for (idx, field) in selected.into_iter().enumerate() {
+                        let Some(field) = field else { continue };
+                        let heather_syntax::Pat::Var { name, span: pspan } = &field.pat else {
+                            return err(
+                                "a record `let` field is irrefutable: its right side must \
+                                 be a name or `_`; use `match` or `if let` for a \
+                                 constructor pattern",
+                                field.pat.span(),
+                            );
+                        };
+                        if name == "_" {
+                            continue;
+                        }
                         let (term, ty, level) = self.project_field(
                             &cx,
                             &ind,
                             &rty,
                             Rc::clone(&value),
                             idx,
-                            *fsp,
+                            *pspan,
                         )?;
                         cx.aliases.push(Rc::new(Alias {
                             // The projected field's skeleton travels onto
                             // the alias (docs/implicit-binders-design.md
                             // §3.1) — same source as `resolve_dot`'s.
                             skel: skel_of_ty(&ind.ctors[0].fields[idx].1),
-                            name: f.clone(),
+                            name: name.clone(),
                             depth: cx.names.len(),
                             term: Rc::new(term),
                             ty,

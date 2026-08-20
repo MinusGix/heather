@@ -1920,15 +1920,22 @@ impl Parser {
     /// now delivers.
     fn let_stmt(&mut self) -> R<Stmt> {
         let start = self.bump().span; // `let`
-        // `let { unit, op } = m;` — record destructuring
-        // (docs/surface-records.md §5). Unambiguous against `let x = …`: a
-        // binding name cannot start with `{`.
+        // `let { unit := u, op } = m;` — record destructuring
+        // (docs/named-patterns-by-field-design.md §2). Unambiguous against
+        // `let x = …`: a binding name cannot start with `{`.
         if matches!(self.peek(), TokKind::LBrace) {
             self.bump();
             let mut fields = Vec::new();
             while !matches!(self.peek(), TokKind::RBrace) {
                 let (n, sp) = self.binder_ident("field name in a `let` pattern")?;
-                fields.push((n, sp));
+                let pat = if matches!(self.peek(), TokKind::ColonEq) {
+                    self.bump();
+                    self.pat()?
+                } else {
+                    Pat::Var { name: n.clone(), span: sp }
+                };
+                let span = sp.join(pat.span());
+                fields.push(RecordPatField { name: n, pat, span });
                 if !matches!(self.peek(), TokKind::Comma) {
                     break;
                 }
@@ -3790,8 +3797,8 @@ impl Parser {
         })
     }
 
-    /// The parenthesized argument list of a pattern — the field positions of a
-    /// `match` arm or an `on` arm (docs/nested-match-patterns-design.md §3.1).
+    /// The parenthesized argument list of a pattern — positional fields or
+    /// `field := pattern` (docs/named-patterns-by-field-design.md §3).
     /// Absent parentheses mean no fields, which is the nullary-constructor
     /// spelling `Zero => …`.
     ///
@@ -3814,7 +3821,7 @@ impl Parser {
         }
         self.bump();
         while !matches!(self.peek(), TokKind::RParen) {
-            args.push(self.pat()?);
+            args.push(self.pat_arg()?);
             if !matches!(self.peek(), TokKind::Comma) {
                 break;
             }
@@ -3846,7 +3853,7 @@ impl Parser {
         self.bump();
         let mut args = Vec::new();
         while !matches!(self.peek(), TokKind::RParen) {
-            args.push(self.pat()?);
+            args.push(self.pat_arg()?);
             if !matches!(self.peek(), TokKind::Comma) {
                 break;
             }
@@ -3854,6 +3861,18 @@ impl Parser {
         }
         let end = self.expect(&TokKind::RParen, "`)` (pattern arguments)")?;
         Ok(Pat::Ctor { name, args, span: span.join(end) })
+    }
+
+    /// A constructor field pattern, positional or `field := pattern`.
+    fn pat_arg(&mut self) -> R<Pat> {
+        if self.at_named_arg() {
+            let (field, fsp) = self.ident("a named pattern's field name")?;
+            self.bump(); // `:=`
+            let pat = self.pat()?;
+            let span = fsp.join(pat.span());
+            return Ok(Pat::Named { field, pat: Box::new(pat), span });
+        }
+        self.pat()
     }
 
     /// The optional `h :` prefix of a `match` scrutinee or a `split`
@@ -4642,7 +4661,7 @@ mod tests {
         let Stmt::LetRecord { fields, .. } = &d.body.stmts[0] else {
             panic!("expected a destructuring let")
         };
-        assert_eq!(fields.iter().map(|(n, _)| n.as_str()).collect::<Vec<_>>(), ["x", "y"]);
+        assert_eq!(fields.iter().map(|f| f.name.as_str()).collect::<Vec<_>>(), ["x", "y"]);
     }
 
     #[test]

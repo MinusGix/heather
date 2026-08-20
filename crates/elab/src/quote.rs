@@ -1076,10 +1076,10 @@ impl Elaborator {
                     arm.span,
                 );
             }
-            if arm.binders.iter().any(|p| p.is_deep()) {
+            if arm.binders.iter().any(|p| p.is_deep() || p.has_named()) {
                 return err(
-                    "a `match code` arm binds plain names: a recursive result is a value \
-                     of the motive, not a constructor pattern",
+                    "a `match code` arm binds plain positional names: a recursive result \
+                     is a value of the motive, not a constructor or named-field pattern",
                     arm.span,
                 );
             }

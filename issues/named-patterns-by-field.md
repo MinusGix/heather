@@ -1,9 +1,9 @@
 ---
 title: Named and renamed fields in constructor and record patterns
-status: open
+status: closed
 labels: [frontend,syntax,design,patterns,records,ergonomics]
 created: 2026-08-18
-updated: 2026-08-19
+updated: 2026-08-20
 ---
 
 Record destructuring currently binds fields only under their declared names:
@@ -63,7 +63,7 @@ second syntax:
 Cons(head := _, tail := Cons(head := x))
 ```
 
-The existing shorthand remains:
+The existing record shorthand remains:
 
 ```heather
 { witness, proof }
@@ -74,6 +74,12 @@ means the same as:
 ```heather
 { witness := witness, proof := proof }
 ```
+
+At a constructor, the right side is the general subpattern described above.
+At a record `let`, it is a binder or `_`: a constructor subpattern is
+refutable, while plain `let` has no failure continuation. That form is refused
+with advice to use `match` or `if let`; silently inventing failure behavior
+would be a control-flow feature rather than destructuring sugar.
 
 ## Semantics and boundaries
 
@@ -117,3 +123,17 @@ means the same as:
   `Exists` as `let { witness := x, proof := hx } = h;`. Chose
   `field := pattern`; the right side is a general subpattern, which makes the
   call-site operator coherent and leaves `:` exclusively type-directed.
+- 2026-08-20: Landed and closed
+  (`docs/named-patterns-by-field-design.md`). Record `let` maps fields to
+  renamed binders or `_`, validates and then projects in declaration order,
+  so an open dependent `Exists` may be written in reverse field order while
+  `hx` still checks at `P(x)`. Constructor patterns retain named wrappers only
+  until `prepare_arms`: one normalizer validates field metadata, restores
+  declaration order, fills omissions with `_`, and recurses through nested
+  constructors before the existing pattern matrix runs. Explicit `match` and
+  positional `if let` therefore share the feature without any lowering or
+  kernel change. Unknown and duplicate fields, positional-only constructors,
+  mixed positional/named lists, and the refutable record-`let` boundary have
+  targeted controls. Seven elaboration tests; `scripts/test --fast` reported
+  1966 passed, zero failed; the full `scripts/test` reported 1977 passed,
+  zero failed, zero ignored.

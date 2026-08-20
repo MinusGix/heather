@@ -1383,7 +1383,9 @@ fn mentions_free(e: &Expr, names: &[String], bound: &mut Vec<String>) -> bool {
                         if found {
                             break;
                         }
-                        bound.extend(fields.iter().map(|(n, _)| n.clone()));
+                        for field in fields {
+                            pat_names(&field.pat, bound);
+                        }
                     }
                     Stmt::LetCode { name, expr, .. } => {
                         found = mentions_free(expr, names, bound);
@@ -1452,6 +1454,7 @@ fn pat_names(p: &Pat, out: &mut Vec<String>) {
                 pat_names(a, out);
             }
         }
+        Pat::Named { pat, .. } => pat_names(pat, out),
     }
 }
 

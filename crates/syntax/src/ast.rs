@@ -410,17 +410,26 @@ pub enum Stmt {
     /// right-hand side in *checking* position, so `let p: a = b = ?g;` is how
     /// a hole gets bound to a name.
     Let { name: String, ty: Option<Ty>, expr: Expr, span: Span },
-    /// `let { unit, op } = m;` — record destructuring
-    /// (docs/surface-records.md §5). Each name is bound to its projection, so
-    /// this is sugar over [`ExprKind::Dot`] and shares its code. Partial
-    /// patterns are allowed: an unmentioned field is simply not bound. No
-    /// annotation — the receiver must infer, since it is what names the
-    /// fields.
-    LetRecord { fields: Vec<(String, Span)>, expr: Expr, span: Span },
+    /// `let { unit := u, op } = m;` — record destructuring
+    /// (docs/named-patterns-by-field-design.md §2). Each right-hand binder is
+    /// aliased to the selected projection, so this remains sugar over
+    /// [`ExprKind::Dot`]. Partial patterns and `_` are allowed. No annotation:
+    /// the receiver must infer, since it is what names the fields.
+    LetRecord { fields: Vec<RecordPatField>, expr: Expr, span: Span },
     /// `let code x = e;` — the surface letbox (surface-v0 §4, adopted
     /// verdict (c)). Binds `x` as *code*: a later `$x` inside a quote hoists
     /// a `LetBoxTm` for it. Meta-layer blocks only.
     LetCode { name: String, expr: Expr, span: Span },
+}
+
+/// One named slot of a record destructuring pattern:
+/// `let { witness := x, proof := hx } = h;`. The field name selects the
+/// projection; the pattern names (or ignores) the projected value.
+#[derive(Debug, Clone)]
+pub struct RecordPatField {
+    pub name: String,
+    pub pat: Pat,
+    pub span: Span,
 }
 
 /// `on ?name := expr;` / `on _: P := expr;` — discharge of a goal.
@@ -639,12 +648,16 @@ pub struct LamBinder {
 pub enum Pat {
     Var { name: String, span: Span },
     Ctor { name: String, args: Vec<Pat>, span: Span },
+    /// `field := pattern` inside a constructor pattern. This wrapper is
+    /// surface-only: elaboration restores declaration order and fills omitted
+    /// slots with `_` before the existing pattern matrix sees it.
+    Named { field: String, pat: Box<Pat>, span: Span },
 }
 
 impl Pat {
     pub fn span(&self) -> Span {
         match self {
-            Pat::Var { span, .. } | Pat::Ctor { span, .. } => *span,
+            Pat::Var { span, .. } | Pat::Ctor { span, .. } | Pat::Named { span, .. } => *span,
         }
     }
 
@@ -656,12 +669,25 @@ impl Pat {
         match self {
             Pat::Var { name, .. } => name,
             Pat::Ctor { .. } => "#deep",
+            Pat::Named { .. } => "#named",
         }
     }
 
     /// Is this pattern, or anything under it, a constructor application?
     pub fn is_deep(&self) -> bool {
-        matches!(self, Pat::Ctor { .. })
+        match self {
+            Pat::Var { .. } => false,
+            Pat::Ctor { .. } => true,
+            Pat::Named { pat, .. } => pat.is_deep(),
+        }
+    }
+
+    pub fn has_named(&self) -> bool {
+        match self {
+            Pat::Var { .. } => false,
+            Pat::Ctor { args, .. } => args.iter().any(Pat::has_named),
+            Pat::Named { .. } => true,
+        }
     }
 }
 

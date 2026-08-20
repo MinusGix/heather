@@ -134,10 +134,18 @@ impl Elaborator {
     ) -> R<Option<(Cx, Vec<Arm>)>> {
         // The fast path, and the reason the pass may be called from three
         // entry points without anyone costing it (§9).
-        if !arms.iter().any(|a| a.default || a.binders.iter().any(|p| self.pat_is_deep(p))) {
+        let has_named = arms.iter().any(|a| a.binders.iter().any(Pat::has_named));
+        if !has_named
+            && !arms.iter().any(|a| a.default || a.binders.iter().any(|p| self.pat_is_deep(p)))
+        {
             return Ok(None);
         }
         self.check_default_arms(arms, span)?;
+        let arms = if has_named {
+            self.normalize_named_arms(cx, arms, scrut_ty, span)?
+        } else {
+            arms.to_vec()
+        };
         // §3.5: a sub-pattern identifier that names a constructor *is* that
         // constructor, exactly as in expression position. Done before
         // anything else, so `is_deep` below sees the reclassified shape.
@@ -489,6 +497,7 @@ impl Elaborator {
                         r2.pats.splice(j..j + 1, (0..arity).map(|_| wild(r.span)));
                         sub.push(r2);
                     }
+                    Pat::Named { .. } => unreachable!("named patterns are normalized first"),
                 }
             }
             let body = self.compile(st, arms, &cols2, sub, span)?;
@@ -673,6 +682,11 @@ impl Elaborator {
                 args: args.iter().map(|a| self.reclassify(a)).collect(),
                 span: *span,
             },
+            Pat::Named { field, pat, span } => Pat::Named {
+                field: field.clone(),
+                pat: Box::new(self.reclassify(pat)),
+                span: *span,
+            },
         }
     }
 
@@ -684,7 +698,140 @@ impl Elaborator {
         match p {
             Pat::Ctor { .. } => true,
             Pat::Var { name, .. } => self.is_ctor_name(name),
+            Pat::Named { pat, .. } => self.pat_is_deep(pat),
         }
+    }
+
+    /// Restore declaration order for every `field := pattern` list before
+    /// the positional pattern matrix sees it. Omitted named fields become
+    /// `_`; the old positional path is returned unchanged apart from nested
+    /// named patterns.
+    fn normalize_named_arms(
+        &self,
+        cx: &Cx,
+        arms: &[Arm],
+        scrut_ty: &Type,
+        span: Span,
+    ) -> R<Vec<Arm>> {
+        let ind = self.inductive_at(cx, scrut_ty, span);
+        let mut out = Vec::with_capacity(arms.len());
+        for arm in arms {
+            if arm.default {
+                out.push(arm.clone());
+                continue;
+            }
+            let Some(ind) = ind.as_ref() else {
+                if arm.binders.iter().any(Pat::has_named) {
+                    return err(
+                        format!(
+                            "`{}` has positional-only pattern fields; write its binders by position",
+                            arm.ctor
+                        ),
+                        arm.span,
+                    );
+                }
+                out.push(arm.clone());
+                continue;
+            };
+            let Some(i) = crate::inductive::arm_ctor_index(ind, &arm.ctor) else {
+                // Preserve the ordinary unknown-constructor diagnostic.
+                out.push(arm.clone());
+                continue;
+            };
+            let binders =
+                self.normalize_pat_args(&arm.ctor, &arm.binders, &ind.ctors[i].fields)?;
+            out.push(Arm { binders, ..arm.clone() });
+        }
+        Ok(out)
+    }
+
+    fn normalize_pat(&self, p: &Pat) -> R<Pat> {
+        match p {
+            Pat::Var { .. } => Ok(p.clone()),
+            Pat::Named { .. } => unreachable!("a named pattern is normalized with its siblings"),
+            Pat::Ctor { name, args, span } => {
+                let fields = self.ctor_of(name).map(|(ind, i)| ind.ctors[i].fields.clone());
+                let args = match fields {
+                    Some(fields) => self.normalize_pat_args(name, args, &fields)?,
+                    None if args.iter().any(Pat::has_named) => {
+                        return err(
+                            format!(
+                                "`{name}` has positional-only pattern fields; write its binders by position"
+                            ),
+                            *span,
+                        )
+                    }
+                    None => args.iter().map(|a| self.normalize_pat(a)).collect::<R<_>>()?,
+                };
+                Ok(Pat::Ctor { name: name.clone(), args, span: *span })
+            }
+        }
+    }
+
+    fn normalize_pat_args(
+        &self,
+        ctor: &str,
+        args: &[Pat],
+        fields: &[(Option<String>, heather_syntax::Ty)],
+    ) -> R<Vec<Pat>> {
+        let named = args.iter().any(|p| matches!(p, Pat::Named { .. }));
+        if !named {
+            return args.iter().map(|p| self.normalize_pat(p)).collect();
+        }
+        if args.iter().any(|p| !matches!(p, Pat::Named { .. })) {
+            return err(
+                format!(
+                    "a `{ctor}` pattern cannot mix positional binders with `field := pattern`; use one form"
+                ),
+                args.iter()
+                    .find(|p| !matches!(p, Pat::Named { .. }))
+                    .unwrap()
+                    .span(),
+            );
+        }
+        if fields.iter().all(|(n, _)| n.is_none()) {
+            return err(
+                format!(
+                    "`{ctor}` has positional-only pattern fields; write its binders by position"
+                ),
+                args[0].span(),
+            );
+        }
+        let mut out: Vec<Pat> = fields.iter().map(|_| wild(args[0].span())).collect();
+        let mut used = vec![false; fields.len()];
+        for arg in args {
+            let Pat::Named { field, pat, span } = arg else { unreachable!() };
+            let Some(i) = fields.iter().position(|(n, _)| n.as_deref() == Some(field)) else {
+                return err(format!("`{ctor}` has no field `{field}`"), *span);
+            };
+            if used[i] {
+                return err(
+                    format!("field `{field}` appears twice in this `{ctor}` pattern"),
+                    *span,
+                );
+            }
+            used[i] = true;
+            out[i] = self.normalize_pat(pat)?;
+        }
+        Ok(out)
+    }
+
+    fn inductive_at(
+        &self,
+        cx: &Cx,
+        ty: &Type,
+        span: Span,
+    ) -> Option<Rc<crate::inductive::Inductive>> {
+        if let Some((ind, _)) = self.forded_of_at(cx, ty) {
+            return Some(ind);
+        }
+        let head = self.whnf(cx, ty, span).ok()?;
+        if !matches!(head, Type::Empty { .. })
+            && let Some((ind, _)) = self.indexed_of_at(cx, ty)
+        {
+            return Some(ind);
+        }
+        self.tag_of(&head)
     }
 
     /// §4: the scrutinee type's constructors and their arities, in declaration
@@ -727,6 +874,7 @@ fn pat_names(ps: &[Pat], f: &mut impl FnMut(&str)) {
         match p {
             Pat::Var { name, .. } => f(name),
             Pat::Ctor { args, .. } => pat_names(args, f),
+            Pat::Named { pat, .. } => pat_names(std::slice::from_ref(pat), f),
         }
     }
 }
