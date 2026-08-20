@@ -1,9 +1,9 @@
 ---
 title: A markless function type stores no binder names, so a value callee cannot be called by name
-status: open
+status: closed
 labels: [frontend,elaboration,ergonomics]
 created: 2026-08-18
-updated: 2026-08-18
+updated: 2026-08-20
 ---
 
 Found by the [[named-arguments]] round (docs/named-arguments-design.md §7 and
@@ -47,3 +47,14 @@ argument, and `scripts/bench --check` is the gate.
   records.
 - **[[named-arguments]]** owns the calling convention. Assumed here: only that
   it reads names off `skel_params`, which it does.
+
+## Log
+
+- 2026-08-20: Closed. `skel_of_ty` retains a skeleton when a function spine
+  contains either an implicit mark, a nested skeleton, or a written binder
+  name. Thus `(x: Nat) -> Nat` exposes `x` to named calls while anonymous
+  `Nat -> Nat` remains skeleton-less and positional; no implicit-insertion
+  rule changes. The regression also permutes two same-typed named binders and
+  proves the result by `refl`, so merely accepting the syntax cannot pass it.
+  `scripts/bench --check`: 106 comparisons within thresholds. Full
+  `scripts/test`: 1978 passed, 0 failed.

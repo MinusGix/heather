@@ -616,8 +616,11 @@ impl Skel {
 }
 
 /// Derive a type's skeleton, purely syntactically. Sparse by rule: `None`
-/// unless an implicit mark occurs somewhere along the spine or in a nested
-/// domain, so every existing program allocates nothing and changes nothing.
+/// unless an implicit mark or a written binder name occurs somewhere along
+/// the spine or in a nested domain. Names became operational when value
+/// callees gained named arguments
+/// (issues/skel-of-ty-drops-binder-names.md); an anonymous `T -> U` still
+/// allocates nothing and offers only positional application.
 /// The codomain chain flattens (Π is right-nested and positional along the
 /// spine); the domain nests (`SkelBinder::dom`); the final result type past
 /// the last written arrow carries nothing (docs/implicit-binders-design.md
@@ -628,7 +631,7 @@ fn skel_of_ty(ty: &Ty) -> Option<Rc<Skel>> {
     let mut cur = ty;
     while let TyKind::Fn { binder, implicit, dom, cod } = &cur.kind {
         let dom_skel = skel_of_ty(dom);
-        any |= *implicit || dom_skel.is_some();
+        any |= binder.is_some() || *implicit || dom_skel.is_some();
         params.push(SkelBinder {
             name: binder.clone(),
             implicit: *implicit,

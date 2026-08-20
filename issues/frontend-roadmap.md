@@ -322,3 +322,6 @@ date; the originals are in `git log --follow issues/frontend-roadmap.md`.
   [[deep-pattern-ctor-needs-column-type]] closed: nested bare constructors are
   classified by their instantiated column type, so an ambiguous import can no
   longer silently turn one into a binder. Suite 1977 → 1978.
+- 2026-08-20: [[skel-of-ty-drops-binder-names]] closed: written binder names
+  now keep a value-type skeleton even without implicit marks, while anonymous
+  arrows remain positional; bench 106/106, suite 1978 unchanged.

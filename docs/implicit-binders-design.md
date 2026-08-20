@@ -143,8 +143,13 @@ struct SkelBinder {
 
 Derivation is one purely syntactic function, `skel_of_ty(&Ty) -> Option<Skel>`,
 walking `TyKind::Fn` chains. Sparse by rule: it returns `None` unless an
-implicit mark occurs somewhere in the type (including nested `dom`s), so
-every existing program allocates nothing and changes nothing.
+implicit mark occurs somewhere in the type (including nested `dom`s).
+
+*Amended 2026-08-20*: named arguments made a written binder name operational
+surface data, so a skeleton is also retained whenever a binder has a name.
+An anonymous `T -> U` remains skeleton-less and positional. The cost of the
+wider allocation rule is measured by `scripts/bench --check`; the kernel type
+and every implicit-insertion rule remain unchanged.
 
 **What nests and what deliberately flattens.** The codomain chain flattens:
 `Nat -> {A: Type<0>} -> A -> A` is one spine, `params = [explicit, implicit,

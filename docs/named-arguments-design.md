@@ -385,6 +385,12 @@ territory: the fix is for `skel_of_ty` to store names whenever a binder *has*
 one, not only when a mark is present). Both halves are tests, so the line
 cannot move by accident.
 
+**Amended 2026-08-20:** [[skel-of-ty-drops-binder-names]] closed that residue.
+Tier two's boundary is now the one this section originally designed: a value
+head is nameable exactly where its written type names binders. Thus
+`f: (x: Nat) -> Nat` accepts `f(x := n)`, while anonymous `Nat -> Nat` remains
+skeleton-less and positional. The two halves remain one regression test.
+
 ## 8. Representation, and the audit it forces
 
 ### 8.1 The AST

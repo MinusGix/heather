@@ -288,21 +288,25 @@ theorem t(): pick(b := 2) = 1 { refl }
     assert!(e.contains("`n`"), "{e}");
 }
 
-/// §7 — a value callee whose type binds no parameter names. The **positive**
-/// twin is in the same test, because without it "refuse everything" passes.
+/// §7 — an anonymous function type binds no parameter names, while names on
+/// a markless written Π are callable. Both halves live together because
+/// without the negative, manufacturing names for `Nat -> Nat` would pass.
 #[test]
-fn a_value_callee_needs_binder_names() {
+fn a_value_callee_uses_its_written_binder_names() {
     let e = bad("
 fn apply(f: Nat -> Nat, n: Nat) -> Nat { f(x := n) }
 ");
     assert!(e.contains("positional"), "{e}");
 
-    // The twin: a value head whose written type DOES store binder names, and
-    // the name works. Today that is exactly a type carrying an implicit mark
-    // — `skel_of_ty` is sparse, so a markless `(x: Nat) -> Nat` stores no
-    // skeleton and therefore no names (§7's residue note).
+    // A written name is API even when no binder is implicit.
     ok("
-fn apply(f: {A: Type<0>} -> (x: A) -> A, n: Nat) -> Nat { f(x := n) }
+fn apply(f: (x: Nat) -> Nat, n: Nat) -> Nat { f(x := n) }
+fn first(left: Nat, right: Nat) -> Nat { left }
+fn through(f: (left: Nat) -> (right: Nat) -> Nat, a: Nat, b: Nat) -> Nat {
+    f(right := b, left := a)
+}
+theorem one(): apply(Succ, 2) = 3 { refl }
+theorem order(): through(first, 4, 7) = 4 { refl }
 ");
 }
 
