@@ -329,3 +329,7 @@ date; the originals are in `git log --follow issues/frontend-roadmap.md`.
   kernel-Nat `Succ` layers until a `Zero`/`Succ` mismatch, so closed numeral
   disequalities use the same one-step surface proof as declared inductives;
   bench 106/106, suite 1978 → 1979.
+- 2026-08-20: [[display-inductive-type-arguments]] closed: diagnostics recover
+  monomorphized arguments from exact parameter fields only after verified
+  re-lowering, and recursive generated shape references invert by registry
+  lookup; ambiguous cases retain `<…>`. Bench 106/106, suite 1979 → 1980.

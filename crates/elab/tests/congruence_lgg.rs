@@ -363,6 +363,10 @@ fn the_mismatch_at_a_lowered_inductive_is_readable() {
     assert!(msg.contains("agree down through"), "{msg}");
     // The endpoints, by name rather than by encoding.
     assert!(msg.contains("the proof's endpoints are `a` and `b`"), "{msg}");
+    assert!(
+        msg.contains("The goal is `Node(a, Leaf) = Node(b, Node(Leaf, Leaf))`"),
+        "{msg}"
+    );
     // And no kernel encoding: these are the fragments the dump was made of.
     for wall in ["inl[", "inr[", "Σ[", "«", "El["] {
         assert!(!msg.contains(wall), "the message still prints kernel syntax ({wall}): {msg}");
@@ -372,16 +376,7 @@ fn the_mismatch_at_a_lowered_inductive_is_readable() {
     assert!(msg.len() < 600, "the message is {} chars: {msg}", msg.len());
 }
 
-/// The goal clause, at a lowered inductive that *can* be spelled: the message
-/// states the expected type as the reader wrote it.
-///
-/// Why the pair of tests is two and not one: a **recursive** declaration lowers
-/// through `Wf` with its shape behind a generated global, and `display.rs` has
-/// no reading for that — [[display-inductive-type-arguments]]'s gap, and the
-/// reason `the_mismatch_at_a_lowered_inductive_is_readable` above does not ask
-/// for the goal. What this round guarantees at *every* goal is the position and
-/// the absence of the wall; the spelled goal is guaranteed wherever the speller
-/// can spell, and a clause that cannot be said cleanly is not said at all.
+/// The goal clause at a flat lowered inductive remains covered separately.
 #[test]
 fn the_diagnostic_states_the_goal_where_it_spells() {
     let msg = fails(

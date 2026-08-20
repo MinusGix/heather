@@ -1414,6 +1414,96 @@ impl Elaborator {
         }
     }
 
+    /// The inline constructor shape of a type on the display path. Recursive
+    /// values and types may carry `D#shape` rather than the shape itself; no
+    /// ordinary structural reader unfolds generated globals, so display uses
+    /// the registry's exact inverse lookup and nothing more.
+    fn display_shape(&self, ty: &Type) -> Type {
+        let shape = match ty {
+            Type::Wf { shape, .. } => &**shape,
+            _ => ty,
+        };
+        self.unspell_shape_here(shape).unwrap_or_else(|| shape.clone())
+    }
+
+    /// The declaration at the head of a displayable inductive type, including
+    /// a recursive `Wf` whose shape has been respelled as a generated global.
+    pub(crate) fn display_tag_of(&self, ty: &Type) -> Option<Rc<Inductive>> {
+        self.tag_of(&self.display_shape(ty))
+    }
+
+    /// Recover a monomorphized inductive instance's type arguments for
+    /// diagnostics. A candidate comes only from a payload field whose written
+    /// type is exactly one declaration parameter. It is strengthened out of
+    /// the tag/field telescope, then the complete candidate list is verified
+    /// by re-lowering the declaration and comparing the resulting shape.
+    /// Anything uncertain declines to the existing `<…>` spelling.
+    pub(crate) fn display_targs(
+        &self,
+        cx: &Cx,
+        ty: &Type,
+        ind: &Inductive,
+    ) -> Option<Vec<(Type, Level)>> {
+        if ind.params.is_empty() {
+            return Some(Vec::new());
+        }
+        // Value arguments and indices are not recoverable from the ordinary
+        // constructor shape alone. They keep the honest ellipsis until their
+        // own display designs exist.
+        if !ind.valparams.is_empty() || ind.index.is_some() {
+            return None;
+        }
+        // Re-lowering is the soundness check and its cost is proportional to
+        // the declaration. Keep a fixed ceiling on that work in a diagnostic.
+        const MAX_RECOVERY_FIELDS: usize = 64;
+        let size = ind.ctors.len()
+            + ind.ctors.iter().map(|ctor| ctor.fields.len()).sum::<usize>();
+        if size > MAX_RECOVERY_FIELDS {
+            return None;
+        }
+
+        let shape = self.display_shape(ty);
+        let mut sols: Vec<Option<(Type, Level)>> = vec![None; ind.params.len()];
+        let mut summand = Rc::new(shape.clone());
+        for (i, ctor) in ind.ctors.iter().enumerate() {
+            let ctor_ty = if i + 1 < ind.ctors.len() {
+                let d = decoded(&summand);
+                let Type::Sum { lhs, rhs, .. } = &*d else { return None };
+                let out = Rc::clone(lhs);
+                summand = Rc::clone(rhs);
+                out
+            } else {
+                Rc::clone(&summand)
+            };
+
+            // Entry zero is the nominal tag. Every following Sigma entry is
+            // one payload field; recursive children are absent from the shape.
+            let d = decoded(&ctor_ty);
+            let Type::Sigma { snd, .. } = &*d else { return None };
+            let mut fields = Rc::clone(snd);
+            let mut crossed = 1u32;
+            for (_, (_, written)) in ctor.payload() {
+                let d = decoded(&fields);
+                let Type::Sigma { fst_level, fst, snd, .. } = &*d else { return None };
+                if let TyKind::Named { name, args } = &written.kind
+                    && args.is_empty()
+                    && let Some(p) = ind.params.iter().position(|param| param == name)
+                    && sols[p].is_none()
+                    && let Some(candidate) = crate::strengthen_ty(&cx.gamma, fst, crossed)
+                {
+                    sols[p] = Some((candidate, fst_level.clone()));
+                }
+                fields = Rc::clone(snd);
+                crossed += 1;
+            }
+        }
+        let args: Vec<(Type, Level)> = sols.into_iter().collect::<Option<_>>()?;
+        let (rebuilt, _) = self
+            .lower_shape(cx, ind, &args, &[], Span { start: 0, end: 0 })
+            .ok()?;
+        (rebuilt == shape).then_some(args)
+    }
+
     /// The surface field types of a constructor, for the narrow type-argument
     /// inference in [`Elaborator::infer_ctor`].
     pub(crate) fn ctor_fields(&self, ind: &Inductive, i: usize) -> Vec<Ty> {

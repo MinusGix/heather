@@ -115,8 +115,8 @@ theorem len_append<A>(xs, ys: List<A>): len(append(xs, ys)) = add(len(xs), len(y
     assert_eq!(gs[1].0, "len(append(Cons(…), ys)) = add(len(Cons(…)), len(ys))");
     for g in &gs {
         assert!(
-            g.1.iter().any(|(n, ty)| n == "xs" && ty == "List<…>"),
-            "context should name the declaration: {:?}",
+            g.1.iter().any(|(n, ty)| n == "xs" && ty == "List<A>"),
+            "context should name the declaration and its recovered argument: {:?}",
             g.1
         );
         assert!(

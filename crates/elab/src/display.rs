@@ -201,13 +201,18 @@ impl Speller<'_> {
         // An inductive instance is its declaration's name, wherever its
         // lowering is what we are looking at.
         if matches!(ty, Type::Wf { .. } | Type::Sum { .. } | Type::Sigma { .. })
-            && let Some(ind) = self.el.tag_of(ty)
+            && let Some(ind) = self.el.display_tag_of(ty)
         {
             return if ind.params.is_empty() {
                 ind.name.clone()
+            } else if let Some(args) = self.el.display_targs(self.cx, ty, &ind) {
+                let shown = args
+                    .iter()
+                    .map(|(arg, _)| self.ty(arg, d + 1))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                format!("{}<{shown}>", ind.name)
             } else {
-                // The lowering monomorphizes, and nothing records what at:
-                // §4 of the design, [[display-inductive-type-arguments]].
                 format!("{}<…>", ind.name)
             };
         }
@@ -314,7 +319,7 @@ impl Speller<'_> {
     fn ctor_value(&self, t: &Term, d: u32) -> Option<String> {
         let (label, children, ind) = match t {
             Term::Supf { shape, label, children, .. } => {
-                (&**label, Some(&**children), self.el.tag_of(shape)?)
+                (&**label, Some(&**children), self.el.display_tag_of(shape)?)
             }
             // Tier 0: the value *is* the injection, and either summand type
             // carries the nominal tag.

@@ -277,7 +277,13 @@ theorem prec(p: Nat, q: Nat, r: Nat, h: Or<And<nat::Le(p, q), nat::Le(q, r)>, na
         "theorem t(p: Nat, q: Nat, r: Nat, h: And<And<nat::Le(p, q), nat::Le(q, r)>, nat::Le(p, r)>):
             p <= q ∧ q <= r ∧ p <= r { h }",
     );
-    assert!(err.contains("NotConvertible") || err.contains("mismatch"), "got: {err}");
+    assert!(
+        err.contains(
+            "this has type `And<And<Le(p, q), Le(q, r)>, Le(p, r)>`, but \
+             `And<Le(p, q), And<Le(q, r), Le(p, r)>>` is expected here"
+        ),
+        "got: {err}"
+    );
 }
 
 /// `¬` binds tighter than `∧` and looser than the comparison rung, so

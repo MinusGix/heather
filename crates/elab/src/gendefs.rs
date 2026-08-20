@@ -1017,6 +1017,21 @@ impl Elaborator {
         self.gdefs.ty_code.get(&tag).map(|(inline, _)| (**inline).clone())
     }
 
+    /// `El (D#shape^δ)` back to the inline shape registered for a recursive
+    /// declaration. This is the shape-slot counterpart of [`Self::unspell_here`]
+    /// and exists for display only: a `Wf` annotation may carry the generated
+    /// reference even though the nominal tag and constructor spine live in the
+    /// inline shape (issues/display-inductive-type-arguments.md).
+    pub(crate) fn unspell_shape_here(&self, ty: &Type) -> Option<Type> {
+        if self.gdefs.wf_slots.is_empty() {
+            return None;
+        }
+        let Type::El { tm, .. } = ty else { return None };
+        let Term::GlobalTm { var, .. } = &**tm else { return None };
+        let GenDef::ShapeCode(tag) = self.gen_def_of(*var)? else { return None };
+        self.gdefs.wf_slots.get(&tag).map(|slots| (*slots.shape).clone())
+    }
+
     /// The **inverse** of [`Self::respell_ty_deep`], for the reflection
     /// boundary (`Elaborator::fn_type_code`): rebuild `ty` with every
     /// `El (D#tycode^δ)` reference replaced by the registry's inline lowering.

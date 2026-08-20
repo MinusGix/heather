@@ -44,7 +44,7 @@ fn a_literal_at_the_wrong_type_reports_at_the_literal() {
     let r = reject(&src);
     let rendered = r.render(&src);
     assert!(
-        rendered.contains("this has type `Nat`, but `List<…>` is expected here"),
+        rendered.contains("this has type `Nat`, but `List<A>` is expected here"),
         "{rendered}"
     );
     assert!(!rendered.contains("the kernel rejected"), "{rendered}");
@@ -61,7 +61,7 @@ fn a_variable_at_the_wrong_type_reports_at_the_variable() {
     let r = reject(&src);
     let rendered = r.render(&src);
     assert!(
-        rendered.contains("this has type `Nat`, but `List<…>` is expected here"),
+        rendered.contains("this has type `Nat`, but `List<A>` is expected here"),
         "{rendered}"
     );
     let ElabError::Elab { span, .. } = r else { panic!("expected an elaborator error: {r}") };
@@ -78,17 +78,17 @@ fn a_call_at_the_wrong_type_reports_at_the_call() {
     let src = format!("{LIST}fn d7<A>(xs: List<A>) -> Nat {{ append(xs, xs) }}\n");
     let rendered = reject(&src).render(&src);
     assert!(
-        rendered.contains("this has type `List<…>`, but `Nat` is expected here"),
+        rendered.contains("this has type `List<A>`, but `Nat` is expected here"),
         "{rendered}"
     );
     assert!(!rendered.contains("the kernel rejected"), "{rendered}");
 }
 
-/// The other half of the same boundary: a mismatch the display cannot *state*
-/// is not reported, because "this has type `X`, but `X` is expected here" reads
-/// as a compiler bug and says less than the gate does.
+/// Type arguments recovered from distinct payload positions make this
+/// mismatch stateable. Re-lowering verifies the candidates before the display
+/// path is allowed to make the claim.
 #[test]
-fn a_mismatch_the_display_cannot_state_is_left_to_the_kernel() {
+fn a_mismatch_between_inductive_instantiations_is_stated() {
     let src = "
 inductive And<A, B> { Both(left: A, right: B) }
 theorem t(p: And<True, True>, q: And<True, And<True, True>>): True {
@@ -97,7 +97,31 @@ theorem t(p: And<True, True>, q: And<True, And<True, True>>): True {
 fn wrong(p: And<True, And<True, True>>) -> And<True, True> { p }
 ";
     let rendered = reject(src).render(src);
-    assert!(rendered.contains("the kernel rejected"), "{rendered}");
+    assert!(
+        rendered.contains(
+            "this has type `And<True, And<True, True>>`, but `And<True, True>` is expected here"
+        ),
+        "{rendered}"
+    );
+    assert!(!rendered.contains("the kernel rejected"), "{rendered}");
+}
+
+/// A phantom parameter has no structural witness in the lowering. (Indeed,
+/// two phantom instantiations are definitionally the same kernel type.) An
+/// unrelated mismatch therefore keeps the honest ellipsis rather than
+/// inventing a type argument.
+#[test]
+fn a_phantom_inductive_argument_is_not_guessed() {
+    let src = "
+inductive Phantom<A> { Mark }
+fn wrong() -> Phantom<Nat> { 0 }
+";
+    let rendered = reject(src).render(src);
+    assert!(
+        rendered.contains("this has type `Nat`, but `Phantom<…>` is expected here"),
+        "{rendered}"
+    );
+    assert!(!rendered.contains("Phantom<Nat>"), "{rendered}");
 }
 
 /// **Negative control, and the architectural one.** The elaborator reports what

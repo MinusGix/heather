@@ -135,15 +135,18 @@ context-variable base, and an `Empty` tail there is a kernel invariant violation
 that the kernel reports by *panicking*. A display path that panics is worse than
 any message it could have printed.
 
-**The one place this design knowingly loses information.** A tier-0/1 lowering
-*monomorphizes* its type parameters, and nothing records that a given `Wf(Σ…)`
-came from `List` at `A := Nat` — the arguments are recoverable only by
-structurally inverting the lowering, which would have to be verified by
-re-lowering to be sound. So a parameterized instance prints `List<…>`: the
-declaration's name, and an explicit admission that the arguments were not
-recovered. That is a ~250-character context entry becoming eight characters, and
-it is honest, but it is residue — filed as
-[[display-inductive-type-arguments]].
+**Recovering monomorphized type arguments.** A tier-0/1 lowering records no
+argument list, but an argument is recoverable where a constructor payload
+field's written type is exactly that parameter (`Cons(head: A, …)`). The
+speller reads the matching lowered Σ field type, strengthens it out of the
+nominal-tag and preceding-field binders, and does not trust that read: it
+re-lowers the whole declaration at the candidates and accepts them only when
+the resulting constructor shape is structurally identical. The diagnostic
+cost is capped at declarations with at most 64 constructors-plus-fields.
+Indexed families, value-parameterized declarations, oversized declarations,
+and parameters with no exact field witness retain the honest `<…>` fallback.
+Thus ordinary context entries now say `List<A>`, while `Phantom<A>` still says
+`Phantom<…>` ([[display-inductive-type-arguments]]).
 
 ## 5. Recovering a global's name
 
@@ -166,7 +169,8 @@ and `global_name_at(abs)` is the existing reverse lookup. Two guards:
 - A generated definition (`List#tycode`, `D#proj3`) is not in `globals` at all.
   `unspell_here` collapses a `#tycode` reference to the registry's inline copy
   before spelling, which is the right answer since the inline copy is then
-  recognized by `tag_of`. Anything else generated falls back.
+  recognized by `tag_of`. Recursive constructor values and `Wf` types use the
+  parallel exact lookup for `D#shape`; other generated definitions fall back.
 
 ## 6. Testing
 
@@ -178,7 +182,11 @@ refuses). Concretely:
 - the `trivial` mismatch at `Le(n)(m)`, open `n`, `m`: pins `Le(n, m)`;
 - the unfilled-goal statement of an equation between calls over a parameterized
   inductive: pins `len(append(xs, ys)) = add(len(xs), len(ys))` and pins the
-  context entries as `List<…>` rather than the `Wf(Σ…)` lowering;
+  context entries as `List<A>` rather than the `Wf(Σ…)` lowering;
+- a mismatch between two `And` instantiations states both complete types, while
+  a phantom parameter retains `<…>` rather than being guessed;
+- a recursive `Tree` congruence failure states its complete constructor-valued
+  goal after resolving the generated `Tree#shape` annotation;
 - the reader still wins where it can: `N(v)` prints `Nat` (existing pin, kept);
 - a term the speller refuses falls back to `El[`/the raw form, as a direct unit
   test on a hand-built `Type` — the surface language makes it hard to *write* an
