@@ -3,7 +3,7 @@ title: "Standard-library surface style: n-ary calls, designated operators, and a
 status: open
 labels: [stdlib,ergonomics,tooling,lint]
 created: 2026-08-19
-updated: 2026-08-19
+updated: 2026-08-20
 ---
 
 Heather's surface now accepts substantially better spellings than parts of the
@@ -41,6 +41,22 @@ therefore a style/enforcement issue, not an expressiveness issue.
 3. A local exception should be explainable in those semantic terms, not merely
    “the old spelling also checks.”
 
+## Concrete connective cleanup
+
+Logic notation is part of the same rule, including structural positions that
+were missed by the first operator cleanup. Prefer `P ∨ Q`, `P ∧ Q`, and `¬P`
+over `Or<P, Q>`, `And<P, Q>`, and `Not(P)` in motives, local types, return
+types, and instance heads whenever the parser accepts the notation. In
+particular, `instance<P: Decide> Decide<Not(P)>` should become
+`instance<P: Decide> Decide<¬P>` and its body should stop spelling the same
+proposition both ways.
+
+Do not mechanically rewrite a structural key that notation cannot currently
+represent. Operator-headed instance carriers such as `Decide<a <= b>` have a
+known canonical-name boundary; parser-desugared connectives do not appear to
+share it, but the cleanup must verify instance registration and resolution
+before adopting each spelling.
+
 These rules should be written into a small project style guide and enforced on
 `lib/std` by a lint included in the ordinary test workflow. Start warning-only
 against an explicit baseline; make it gating after the existing library is
@@ -69,6 +85,8 @@ rewrite that would change which later argument participates in inference.
   operator positions, without flagging first-class values, instance keys, or
   necessary structural spellings.
 - The initial cleanup includes Nat, Int, Bool, List, and Logic motives/proofs.
+- Logic cleanup covers instance heads and public signatures as well as theorem
+  bodies, with resolution controls for every rewritten instance carrier.
 - Generated fixtures are opt-in or exempt unless their owning generator adopts
   the same style contract.
 
@@ -78,6 +96,9 @@ rewrite that would change which later argument participates in inference.
   generated surface; this issue generalizes that decision to hand-written std.
 - **[[stdlib-operator-spelling-locality]]** made designated notation available
   early enough for the rule to be actionable.
+- **[[diagnostic-operator-resugaring]]** owns rendering an already elaborated
+  operation back as notation in kernel-term diagnostics. This issue owns source
+  style and its lint, not diagnostic pretty-printing.
 
 ## Log
 
@@ -85,3 +106,7 @@ rewrite that would change which later argument participates in inference.
   were checked against the current elaborator: n-ary calls spill across the
   curried signatures, and `<` resolves correctly at both Nat and Int inside the
   dependent motive. The remaining gap is consistency and feedback.
+- 2026-08-20: Scope sharpened from the library review: connective names are
+  included, especially `Decide<Not(P)>` and the remaining `Or<…>` / `Not(…)`
+  motives. The instance-head boundary must be tested rather than inferred from
+  the separate refusal for designation-headed relation syntax.

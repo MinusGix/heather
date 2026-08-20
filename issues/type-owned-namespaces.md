@@ -3,7 +3,7 @@ title: "Type-owned namespaces: names attach to subjects, reachability through ev
 status: open
 labels: [frontend, syntax, elaboration, design, modules]
 created: 2026-08-05
-updated: 2026-08-17
+updated: 2026-08-20
 ---
 
 Direction issue, not scheduled — filed from the 2026-08-05 namespace
@@ -12,6 +12,15 @@ written down rather than re-derived. The prompt: `cong_nat` should be
 `nat::cong` — a name wearing its namespace as a suffix — and a prover
 needs mass accessibility that Rust-style selective import does not give,
 while typeclasses "capture a good chunk but not wholly."
+
+The standard library now supplies a concrete readability test. Its branching
+algebra probe exposes `TreeAlg`, `TreeElim`, `tree_fold`, and
+`TreePassLaws`; the intended organized surface is `Tree::Alg`, `Tree::Elim`,
+`Tree::fold`, and `Tree::PassLaws`. This is not merely shorter spelling: it
+lets a user discover the theory from `Tree` while keeping the ambient module
+namespace from becoming a catalogue of prefixed names. [[tree-library-public-shape]]
+owns which declarations form that public theory; this issue owns how those
+attachments are declared and resolved.
 
 ## The claim
 
@@ -118,6 +127,11 @@ Triggered by the first library round that hurts without it — plausibly
 the prelude layer-2 round or the first file that wants two order kits.
 
 ## Log
+
+- 2026-08-20: Added `Tree::Alg` / `Tree::Elim` / `Tree::fold` as the first
+  whole-module acceptance pressure. The Tree cleanup itself is separately
+  owned; flat `TreeAlg` names should not become the permanent workaround for a
+  missing subject namespace.
 
 - 2026-08-05: Receiver half scheduled as [[type-owned-members-receiver-slice]] (2026-08-05 ergonomics round); expected-type resolution and head-symbol picking stay here.
 - 2026-08-05: Receiver slice landed ([[type-owned-members-receiver-slice]], 2026-08-05). Three findings for this issue's next slice: (1) Le::refl is not spellable — a fn … -> Type predicate owns no namespace, so every decided predicate is outside the design as landed; (2) the member-ambiguity diagnostic suggests import a::{List::nth}; which does not parse — what a member's standing disambiguation looks like is this issue's call; (3) the exercise file's still-hurts list ranks expected-type (introduction-shaped) resolution as its #4 tax: four lemmas with no ambient home.
