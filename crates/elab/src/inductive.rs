@@ -31,6 +31,18 @@ use heather_syntax::{Arm, CtorDecl, Expr, ExprKind, InductiveDecl, MatchForm, Sp
 use crate::names::{qkey, NameKind, Scope};
 use crate::{embed, err, Alias, Cx, Elaborator, TyVar, R};
 
+type Equation = (Term, Type, Level, Rc<Term>, Rc<Term>);
+type CtorEquation = (
+    Term,
+    Rc<Inductive>,
+    Type,
+    Level,
+    Rc<Term>,
+    Rc<Term>,
+    (usize, Vec<Rc<Term>>),
+    (usize, Vec<Rc<Term>>),
+);
+
 /// A declared inductive, kept in surface form: the field types are lowered
 /// afresh at each instantiation, since type parameters are monomorphized
 /// (§2 — `Option<Nat>` and `Option<Bool>` are unrelated kernel types).
@@ -3648,47 +3660,168 @@ impl Elaborator {
         Ok(Some((i, fields)))
     }
 
-    /// The equation an `absurd`/`inj` argument must prove, with both sides read
-    /// back as constructors.
-    #[allow(clippy::type_complexity)]
-    pub(crate) fn equation(
-        &self,
-        cx: &Cx,
-        e: &Expr,
-        who: &str,
-        read_fields: bool,
-    ) -> R<(Term, Rc<Inductive>, Type, Level, Rc<Term>, Rc<Term>, (usize, Vec<Rc<Term>>), (usize, Vec<Rc<Term>>))>
-    {
+    /// The equation an `absurd`/`inj` argument must prove, reduced far enough
+    /// to expose its carrier and endpoints. Constructor-specific readers sit
+    /// on top of this because `Nat` is a kernel type rather than a declared
+    /// inductive (issues/absurd-at-nat-numerals.md).
+    fn equation(&self, cx: &Cx, e: &Expr, who: &str) -> R<Equation> {
         let (proof, proof_ty, _) = self.elab_infer(cx, e)?;
         let Type::Id { level, ty, lhs, rhs } = self.whnf(cx, &proof_ty, e.span)? else {
             return err(format!("`{who}` needs a proof of an `=` between constructors"), e.span);
         };
         let sty = self.whnf(cx, &ty, e.span)?;
+        // A constructor equation may be reached by computation. No-confusion
+        // is about the reduced endpoints rather than their source spelling.
+        let (lhs, rhs) = (self.whnf_tm(cx, &lhs, e.span)?, self.whnf_tm(cx, &rhs, e.span)?);
+        Ok((proof, sty, level, lhs, rhs))
+    }
+
+    /// A declared-inductive equation with both sides read as constructors.
+    fn declared_equation(
+        &self,
+        cx: &Cx,
+        equation: Equation,
+        who: &str,
+        read_fields: bool,
+        span: Span,
+    ) -> R<CtorEquation> {
+        let (proof, sty, level, lhs, rhs) = equation;
         let Some(ind) = self.tag_of(&sty) else {
             return err(
                 format!("`{who}` needs an equation at a declared inductive type"),
-                e.span,
+                span,
             );
         };
-        // Both endpoints are reduced first: an equation reached by *computing*
-        // — `eval(0, p)(env, ir) = Out(vs)`, the base case of a fuel induction
-        // (`issues/ih-generalization.md`) — is a constructor equation only
-        // after δι-reduction, and `absurd`/`inj` are about the constructors,
-        // not about the spelling.
-        let (lhs, rhs) = (self.whnf_tm(cx, &lhs, e.span)?, self.whnf_tm(cx, &rhs, e.span)?);
-        let spine = self.spine(&sty, &level, ind.ctors.len(), e.span)?;
+        let spine = self.spine(&sty, &level, ind.ctors.len(), span)?;
         let (Some(l), Some(r)) = (
-            self.read_ctor(cx, &ind, &spine, &lhs, read_fields, e.span)?,
-            self.read_ctor(cx, &ind, &spine, &rhs, read_fields, e.span)?,
+            self.read_ctor(cx, &ind, &spine, &lhs, read_fields, span)?,
+            self.read_ctor(cx, &ind, &spine, &rhs, read_fields, span)?,
         ) else {
             return err(
                 format!(
                     "`{who}` needs both sides of the equation to be constructor applications"
                 ),
-                e.span,
+                span,
             );
         };
         Ok((proof, ind, sty, level, lhs, rhs, l, r))
+    }
+
+    fn nat_pred(n: Term) -> Term {
+        Term::ElimNat {
+            level: Level::Zero,
+            motive: Rc::new(Type::Nat),
+            base: Rc::new(Term::Zero),
+            step: Rc::new(Term::Var(LocalVar(1))),
+            scrut: Rc::new(n),
+        }
+    }
+
+    /// Apply constructor injectivity once, internally, to peel a matching
+    /// `Succ` layer. This is `cong pred proof`, emitted directly so `absurd`
+    /// does not depend on the optional `std/nat` module.
+    fn nat_succ_inj(proof: Term, lhs: Rc<Term>, rhs: Rc<Term>) -> Term {
+        let pred_lhs = Rc::new(Self::nat_pred((*lhs).clone()));
+        Term::J {
+            ty_level: Level::Zero,
+            motive_level: Level::Zero,
+            ty: Rc::new(Type::Nat),
+            lhs: Rc::clone(&lhs),
+            motive: Rc::new(Type::Id {
+                level: Level::Zero,
+                ty: Rc::new(Type::Nat),
+                lhs: Rc::new(Self::nat_pred(lhs.shift_local(2))),
+                rhs: Rc::new(Self::nat_pred(Term::Var(LocalVar(1)))),
+            }),
+            case: Rc::new(Term::Refl {
+                level: Level::Zero,
+                ty: Rc::new(Type::Nat),
+                tm: pred_lhs,
+            }),
+            rhs,
+            proof: Rc::new(proof),
+        }
+    }
+
+    /// `⌜Unit⌝` at one Nat constructor and `⌜Empty⌝` at the other.
+    fn nat_tag(n: Term, unit_at_zero: bool) -> Term {
+        let unit = Term::TmUnit { level: Level::Zero };
+        let empty = Term::TmEmpty { level: Level::Zero };
+        let (base, step) = if unit_at_zero { (unit, empty) } else { (empty, unit) };
+        Term::ElimNat {
+            level: Level::succ(Level::Zero),
+            motive: Rc::new(Type::Ty(Level::Zero)),
+            base: Rc::new(base),
+            step: Rc::new(step),
+            scrut: Rc::new(n),
+        }
+    }
+
+    fn build_nat_absurd(
+        &self,
+        cx: &Cx,
+        mut proof: Term,
+        mut lhs: Rc<Term>,
+        mut rhs: Rc<Term>,
+        expected: &Type,
+        expected_lvl: &Level,
+        span: Span,
+    ) -> R<Term> {
+        let unit_at_zero = loop {
+            match (&*lhs, &*rhs) {
+                (Term::Zero, Term::Succ(_)) => break true,
+                (Term::Succ(_), Term::Zero) => break false,
+                (Term::Zero, Term::Zero) => {
+                    return err(
+                        "both sides of this equation are `Zero`, so it is not absurd",
+                        span,
+                    );
+                }
+                (Term::Succ(a), Term::Succ(b)) => {
+                    let (a, b) = (self.whnf_tm(cx, a, span)?, self.whnf_tm(cx, b, span)?);
+                    if !matches!(&*a, Term::Zero | Term::Succ(_))
+                        || !matches!(&*b, Term::Zero | Term::Succ(_))
+                    {
+                        return err(
+                            "both sides of this equation are `Succ`, so it is not absurd \
+                             (use `inj` to get the predecessor equation)",
+                            span,
+                        );
+                    }
+                    proof = Self::nat_succ_inj(proof, Rc::clone(&lhs), Rc::clone(&rhs));
+                    lhs = a;
+                    rhs = b;
+                }
+                _ => {
+                    return err(
+                        "`absurd` needs both sides of the equation to reduce to Nat constructors",
+                        span,
+                    );
+                }
+            }
+        };
+
+        // Transport `trivial` from the left constructor's tag to the right
+        // one. At the exposed Zero/Succ mismatch the result reduces to Empty.
+        let empty = Term::J {
+            ty_level: Level::Zero,
+            motive_level: Level::Zero,
+            ty: Rc::new(Type::Nat),
+            lhs: Rc::clone(&lhs),
+            motive: Rc::new(Type::El {
+                level: Level::Zero,
+                tm: Rc::new(Self::nat_tag(Term::Var(LocalVar(1)), unit_at_zero)),
+            }),
+            case: Rc::new(Term::Triv { level: Level::Zero }),
+            rhs,
+            proof: Rc::new(proof),
+        };
+        Ok(Term::ElimEmpty {
+            level: expected_lvl.clone(),
+            scrut_level: Level::Zero,
+            motive: Rc::new(expected.shift_local(1)),
+            scrut: Rc::new(empty),
+        })
     }
 
     /// A total, constant-motive function of `⟦D⟧` built inside a `J` motive —
@@ -3743,8 +3876,15 @@ impl Elaborator {
         expected_lvl: &Level,
         span: Span,
     ) -> R<Term> {
+        let equation = self.equation(cx, arg, "absurd")?;
+        if matches!(equation.1, Type::Nat) {
+            let (proof, _, _, lhs, rhs) = equation;
+            return self.build_nat_absurd(
+                cx, proof, lhs, rhs, expected, expected_lvl, span,
+            );
+        }
         let (proof, ind, sty, slvl, lhs, rhs, (i, _), (j, _)) =
-            self.equation(cx, arg, "absurd", false)?;
+            self.declared_equation(cx, equation, "absurd", false, arg.span)?;
         if i == j {
             return err(
                 format!(
@@ -3818,8 +3958,9 @@ impl Elaborator {
         arg: &Expr,
         span: Span,
     ) -> R<(Term, Type, Level)> {
+        let equation = self.equation(cx, arg, "inj")?;
         let (proof, ind, sty, slvl, lhs, rhs, (i, la), (j, rb)) =
-            self.equation(cx, arg, "inj", true)?;
+            self.declared_equation(cx, equation, "inj", true, arg.span)?;
         if i != j {
             return err(
                 format!(

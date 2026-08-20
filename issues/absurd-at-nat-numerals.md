@@ -1,9 +1,9 @@
 ---
 title: absurd cannot refute an equation between Nat numerals
-status: open
+status: closed
 labels: [frontend,elaboration,proofs]
 created: 2026-08-17
-updated: 2026-08-17
+updated: 2026-08-20
 ---
 
 Found by wave L3 ([[std-list-mem-and-perm]]) writing the negative control for
@@ -58,3 +58,18 @@ absorbed into a helper nobody asked for.
 
 - **[[absurd-on-branch-scrutinee]]** owns what `absurd` can read. Assumed here:
   only that its subject is declared inductives and that `Nat` is outside them.
+
+## Resolution
+
+- 2026-08-20: Closed by taking the language option. `absurd` now recognizes an
+  equation at kernel `Nat`, reduces both endpoints, and peels matching `Succ`
+  layers by internally emitted path induction until it exposes a `Zero`/`Succ`
+  mismatch. It then applies the same code-valued tag argument as declared
+  no-confusion and eliminates the resulting `Empty`; no `std/nat` import or
+  helper lookup is involved. The boundary is deliberately evidence-directed:
+  unequal constructor numerals (including delta-reduced endpoints and either
+  orientation) work, while equal numerals and an open `Succ(n) = Succ(m)` are
+  still rejected as not absurd. The original `List<Bool>` negative control is
+  now the motivating `Mem(7, Cons(1, Cons(2, Nil)))` proof, with one
+  `absurd(e)` at each unequal element. `scripts/bench --check`: 106 comparisons
+  within thresholds. Full `scripts/test`: 1979 passed, 0 failed.

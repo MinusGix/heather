@@ -308,6 +308,22 @@ fn distinct_constructors_are_provably_distinct() {
     );
 }
 
+// Nat is a kernel type rather than a declared inductive, but its numeral
+// constructors have the same no-confusion principle. Matching Succ layers are
+// peeled until the first Zero/Succ mismatch, including after delta reduction.
+#[test]
+fn distinct_nat_numerals_are_provably_distinct() {
+    elab(
+        r#"
+        fn seven() -> Nat { 7 }
+        theorem forward(p: seven() = 2): 0 = 1 { absurd(p) }
+        theorem backward(p: 2 = seven()): 0 = 1 { p.absurd() }
+        theorem at_zero(n: Nat, p: 0 = Succ(n)): 0 = 1 { absurd(p) }
+        theorem at_succ(n: Nat, p: Succ(n) = 0): 0 = 1 { absurd(p) }
+        "#,
+    );
+}
+
 // An arm's motive is instantiated at the injected summand binder, not an
 // η-expanded constructor literal. That is still enough constructor evidence:
 // the injection supplies the index and Σ projections recover payload fields
@@ -401,6 +417,15 @@ fn no_confusion_rejects_the_wrong_shape() {
         "inductive Flag { On, Off } theorem t(x: Flag, p: x = On): 0 = 1 { absurd(p) }",
     );
     assert!(msg.contains("constructor applications"), "{msg}");
+
+    // Equal closed numerals and open equations with the same visible Nat
+    // constructor do not manufacture a contradiction.
+    let msg = elab_err("theorem t(p: 3 = 3): 0 = 1 { absurd(p) }");
+    assert!(msg.contains("not absurd"), "{msg}");
+    let msg = elab_err(
+        "theorem t(n: Nat, m: Nat, p: Succ(n) = Succ(m)): 0 = 1 { absurd(p) }",
+    );
+    assert!(msg.contains("not absurd"), "{msg}");
 }
 
 #[test]

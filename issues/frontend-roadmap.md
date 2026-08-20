@@ -325,3 +325,7 @@ date; the originals are in `git log --follow issues/frontend-roadmap.md`.
 - 2026-08-20: [[skel-of-ty-drops-binder-names]] closed: written binder names
   now keep a value-type skeleton even without implicit marks, while anonymous
   arrows remain positional; bench 106/106, suite 1978 unchanged.
+- 2026-08-20: [[absurd-at-nat-numerals]] closed: `absurd` now peels matching
+  kernel-Nat `Succ` layers until a `Zero`/`Succ` mismatch, so closed numeral
+  disequalities use the same one-step surface proof as declared inductives;
+  bench 106/106, suite 1978 → 1979.

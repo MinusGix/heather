@@ -370,16 +370,14 @@ theorem c_filter_filter(): filter(filter(three(), λ (n: Nat) => nat::leb(2, n))
 theorem c_foldl_rev(): foldl(rev(three()), λ (b: Nat) (a: Nat) => add(b, a), 0) = 6 { refl }
 theorem c_mem(): Mem(2, three()) { Inr(Inl(refl)) }
 
-// The negative control for `Mem`, and it is at `Bool` rather than at `Nat` on
-// purpose: refuting `Mem` needs a DISEQUALITY of elements, `absurd` reads one
-// only at a declared inductive, and `Nat` is the kernel's
-// (`issues/absurd-at-nat-numerals.md` — at `Nat` this arm is three nested
-// `succ_inj`s instead of one `absurd`). The list is still `List<Bool>`, so the
-// `Mem` under test is the same polymorphic recursion.
-theorem c_not_mem(): ¬ Mem(True, Cons(False, Nil)) {
-    λ (m: Mem(True, Cons(False, Nil))) => match m {
+// The negative control for `Mem` can now use kernel Nat directly: `absurd`
+// peels matching Succ layers internally until each equation exposes the
+// Zero/Succ mismatch (`issues/absurd-at-nat-numerals.md`).
+theorem c_not_mem(): ¬ Mem(7, Cons(1, Cons(2, Nil))) {
+    λ (m: Mem(7, Cons(1, Cons(2, Nil)))) => match m {
         Inl(e) => absurd(e),
-        Inr(bad) => bad,
+        Inr(Inl(e)) => absurd(e),
+        Inr(Inr(bad)) => bad,
     }
 }
 "#;
