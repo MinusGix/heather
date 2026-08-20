@@ -4180,8 +4180,8 @@ impl Elaborator {
                     // by two (docs/nested-match-patterns-design.md §5.1).
                     let indep = motive2 == result.shift_local(2);
                     let prepared = self.prepare_arms(
-                        cx, *form, *generated, arms, &scrut_t, &scrut_ty, &result, indep, &mlvl,
-                        e.span,
+                        cx, *form, *generated, arms, &scrut_t, &scrut_ty, &scrut_lvl, &result,
+                        indep, &mlvl, e.span,
                     )?;
                     let (acx, arms) = match &prepared {
                         Some((c, a)) => (c, a.as_slice()),
@@ -4211,8 +4211,8 @@ impl Elaborator {
                     );
                     let indep = motive2 == result.shift_local(2);
                     let prepared = self.prepare_arms(
-                        cx, *form, *generated, arms, &scrut_t, &scrut_ty, &result, indep, &mlvl,
-                        e.span,
+                        cx, *form, *generated, arms, &scrut_t, &scrut_ty, &scrut_lvl, &result,
+                        indep, &mlvl, e.span,
                     )?;
                     let (acx, arms) = match &prepared {
                         Some((c, a)) => (c, a.as_slice()),
@@ -4724,7 +4724,8 @@ impl Elaborator {
             .apply_local(&LocalSubst::id(&cx.gamma).extended(Rc::new(scrut_t.clone())));
         let independent = motive == result.shift_local(1);
         let prepared = self.prepare_arms(
-            cx, form, generated, arms, &scrut_t, scrut_ty, &result, independent, &mlvl, span,
+            cx, form, generated, arms, &scrut_t, scrut_ty, scrut_lvl, &result, independent, &mlvl,
+            span,
         )?;
         let (cx, arms) = match &prepared {
             Some((c, a)) => (c, a.as_slice()),

@@ -1,9 +1,9 @@
 ---
 title: An ambiguous constructor name in a deep pattern is silently read as a binder
-status: open
+status: closed
 labels: [frontend, elaboration, patterns, modules]
 created: 2026-08-16
-updated: 2026-08-16
+updated: 2026-08-20
 ---
 
 Found in passing while landing [[ctor-resolution-by-expected-type]] (2026-08-16),
@@ -88,3 +88,15 @@ this stops being hypothetical and starts being a wrong answer.
 - **[[modules]]** owns the name regime. Assumed here: only §8's second
   invariant, that library growth may introduce errors and never
   reinterpretations.
+
+## Log
+
+- 2026-08-20: Closed. The pattern prepass now carries the actual lowered type
+  of each constructor-field column and classifies a bare identifier only
+  against that type's constructors. Payload types come from the instantiated
+  Sigma spine (`Outer<A>` at `Outer<Inner>` therefore exposes `Inner`), plain
+  recursive children carry the scrutinee type, and primitive Nat/Fin retain
+  their constructor rules. The generated decision tree and all lowerers are
+  unchanged. The module regression crosses two colliding Option constructors,
+  a colliding recursive child, and the negative control where the same name at
+  Nat remains a binder. Full `scripts/test`: 1978 passed, 0 failed.

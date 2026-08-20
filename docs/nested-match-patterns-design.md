@@ -29,7 +29,7 @@ every constructor must appear. Neither is new power.
    Both are chosen so the emitted nesting is the one the user would have
    written, in source order.
 3. **§3.5 — a bare identifier in a sub-pattern is a constructor iff it names
-   one**, exactly as in expression position. `_` is always a binder.
+   one at that pattern column's type.** `_` is always a binder.
 4. **§4 — `_ =>` is a default arm**: no binders, last, at most one. It expands
    to the constructors with no arm of their own. A redundant `_` is dropped
    silently, because the pattern compiler generates redundant ones (§3.4).
@@ -153,10 +153,10 @@ Three things to read off it:
   `elab_check`'s `Match { motive: None }` path against the arm's expected
   type — which is exactly what the hand-written tower gets.
 - **The inner `_` is the feature of §4**, and it is resolved when the *inner*
-  match elaborates, where the sub-scrutinee's type is known. This is why the
-  compiler needs **no** type information: it never has to enumerate a
-  constructor set. The one place a constructor set is needed — expanding `_` —
-  is deferred to the level that knows it.
+  match elaborates, where the sub-scrutinee's type is known. The compiler
+  carries each column's type only to classify bare identifiers (§3.5); it
+  still never enumerates constructors to expand `_`. That remains deferred to
+  the generated level that knows it.
 - **User pattern variables are bound by `let` aliases at the leaf.** The
   generated binders are `#`-prefixed and so unspellable; the `let`s cost
   nothing (an alias is inlined, `Γ` is unchanged) and they keep the rule
@@ -229,24 +229,24 @@ still should not be: it breaks the refactor that adds a constructor.
 
 ### 3.5 A bare identifier in a sub-pattern
 
-`SomeV(NoneV)` is genuinely ambiguous in this grammar: `NoneV` could be a
-binder or the nullary constructor. **It is the constructor**, and the rule is:
-a sub-pattern identifier that names a declared constructor (or one of `Zero`,
-`Succ`, `FZ`, `FS`) is a constructor pattern; every other identifier, and `_`,
-is a binder.
+`SomeV(NoneV)` is genuinely ambiguous in the grammar: `NoneV` could be a
+binder or the nullary constructor. The column type settles it. If `SomeV`'s
+field is `Option<A>`, `NoneV` is that declaration's constructor; if the field
+is `Nat`, it is a binder. `_` is always a binder.
 
-This is not a new rule — it is the one the surface already applies in
-*expression* position, where `resolve` tries locals, then aliases, then
-`ctor_of` (`lib.rs:4823`), so a bare `NoneV` in a term is already the
-constructor. Pattern position following expression position is the cheapest
-thing to explain and the only thing consistent with `C => …` at the top level,
-where an identifier has always meant a constructor.
+This is the nested form of the judgment top-level arms have always used: the
+scrutinee identifies the declaration before an arm name is read. It is also
+the checking-position rule for constructor expressions. The expected type may
+shrink an ambiguous name's candidate set; it never consults the global table
+and guesses. Consequently, importing a second declaration with the same
+constructor name may introduce an ambiguity in synthesis position, but cannot
+silently reinterpret a deep pattern.
 
-The hazard it buys, stated rather than discovered later: a binder whose name
-collides with some constructor of some *other* type silently becomes a
-constructor pattern and then fails its arity or its type. Nothing in `lib/` or
-the suite has such a binder (every constructor in the corpus is capitalized and
-every binder is not), and the escape is to rename the binder or write `_`.
+The implementation reads instantiated field types from the lowering's Sigma
+spine. Thus a stored field written `A` in `Outer<A>`, instantiated at
+`Outer<Inner>`, is classified at `Inner`; recursive child columns carry the
+scrutinee's own type. This type information is used only for classification.
+The generated decision tree and every lowerer remain unchanged.
 
 ## 4. Decision 2: the `_` arm
 

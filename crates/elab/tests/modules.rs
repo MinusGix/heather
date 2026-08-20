@@ -589,6 +589,44 @@ fn a_match_arm_resolves_its_constructors_through_the_scrutinee() {
 }
 
 #[test]
+fn a_deep_pattern_resolves_a_constructor_through_its_column_type() {
+    // The outer arm already identifies Option, and its field column identifies
+    // Option again. A second visible `None`/`Some` must not make the inner
+    // names into binders: that used to make the first `Some(None)` row match
+    // every `Some`, silently shadowing `Some(Some(v))`.
+    ok(&[
+        ("opt", OPT),
+        ("opt2", OPT2),
+        ("chain", "inductive Chain { End, Next(rest: Chain) }"),
+        ("stop", "inductive Stop { End }"),
+        (
+            "user",
+            "import opt;
+             import opt2;
+             import chain;
+             import stop;
+             fn depth(o: Option<Option<Nat>>) -> Nat {
+                 match o { None => 0, Some(None) => 1, Some(Some(v)) => v }
+             }
+             theorem empty(): depth(Some(None)) = 1 { refl }
+             theorem nested(): depth(Some(Some(7))) = 7 { refl }
+
+             // Type evidence only shrinks the candidate set. `None` at Nat
+             // is still an ordinary binder despite both imported ctors.
+             inductive Box { Box(value: Nat) }
+             fn unbox(b: Box) -> Nat { match b { Box(None) => None } }
+             theorem binder(): unbox(Box(8)) = 8 { refl }
+
+             // A recursive child column carries the parent's own type.
+             fn depth_chain(c: Chain) -> Nat {
+                 match c { End => 0, Next(End) => 1, Next(Next(rest)) => 2 }
+             }
+             theorem recursive(): depth_chain(Next(Next(End))) = 2 { refl }",
+        ),
+    ]);
+}
+
+#[test]
 fn an_arm_qualified_by_the_wrong_type_is_an_error() {
     let e = bad(&[
         ("opt", OPT),

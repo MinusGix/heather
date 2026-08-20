@@ -19,7 +19,7 @@
 use std::rc::Rc;
 
 use heather_kernel::level::Level;
-use heather_kernel::term::{Term, Type};
+use heather_kernel::term::{LocalVar, Term, Type};
 use heather_syntax::{Arm, Block, Expr, ExprKind, MatchForm, Pat, Span, Stmt};
 
 use crate::inductive::{decoded, FieldKind};
@@ -37,6 +37,16 @@ struct Row {
     /// `(user name, column variable)`, innermost last.
     binds: Vec<(String, String)>,
     span: Span,
+}
+
+/// The type evidence attached to one pattern-matrix column. A stored field
+/// type may depend on the fields before it, so the context travels with the
+/// type rather than being reconstructed from a surface name later.
+#[derive(Clone)]
+struct PatCol {
+    cx: Cx,
+    ty: Type,
+    lvl: Level,
 }
 
 /// The mutable state of one compilation: the fresh-name counter and the leaf
@@ -127,17 +137,25 @@ impl Elaborator {
         arms: &[Arm],
         scrut_t: &Term,
         scrut_ty: &Type,
+        scrut_lvl: &Level,
         result: &Type,
         independent: bool,
         mlvl: &Level,
         span: Span,
     ) -> R<Option<(Cx, Vec<Arm>)>> {
-        // The fast path, and the reason the pass may be called from three
-        // entry points without anyone costing it (§9).
         let has_named = arms.iter().any(|a| a.binders.iter().any(Pat::has_named));
-        if !has_named
-            && !arms.iter().any(|a| a.default || a.binders.iter().any(|p| self.pat_is_deep(p)))
-        {
+        // The fast path, and the reason the pass may be called from three
+        // entry points without anyone costing it (§9). A bare identifier is
+        // classified against its own column type, not the global constructor
+        // table: two visible constructors of one name must not turn it into a
+        // binder (issues/deep-pattern-ctor-needs-column-type.md).
+        let has_deep = arms.iter().any(|a| {
+            let cols = self.pattern_fields_at(cx, scrut_ty, scrut_lvl, &a.ctor, span);
+            a.binders.iter().enumerate().any(|(j, p)| {
+                self.pat_is_deep_at(p, cols.as_ref().and_then(|cs| cs.get(j)))
+            })
+        });
+        if !has_named && !arms.iter().any(|a| a.default) && !has_deep {
             return Ok(None);
         }
         self.check_default_arms(arms, span)?;
@@ -146,13 +164,22 @@ impl Elaborator {
         } else {
             arms.to_vec()
         };
-        // §3.5: a sub-pattern identifier that names a constructor *is* that
-        // constructor, exactly as in expression position. Done before
-        // anything else, so `is_deep` below sees the reclassified shape.
+        // §3.5: a sub-pattern identifier that names a constructor *of its
+        // column type* is that constructor. Done before anything else, so
+        // `is_deep` below sees the reclassified shape.
         let arms: Vec<Arm> = arms
             .iter()
             .map(|a| Arm {
-                binders: a.binders.iter().map(|p| self.reclassify(p)).collect(),
+                binders: {
+                    let cols = self.pattern_fields_at(cx, scrut_ty, scrut_lvl, &a.ctor, span);
+                    a.binders
+                        .iter()
+                        .enumerate()
+                        .map(|(j, p)| {
+                            self.reclassify_at(p, cols.as_ref().and_then(|cs| cs.get(j)))
+                        })
+                        .collect()
+                },
                 ..a.clone()
             })
             .collect();
@@ -668,38 +695,144 @@ impl Elaborator {
     // -- helpers -------------------------------------------------------------
 
     /// §3.5. The parser cannot know whether a bare identifier is a nullary
-    /// constructor, so this decides it, by the same rule expression position
-    /// uses. `Zero`/`Succ`/`FZ`/`FS` are named explicitly: they are the
-    /// kernel's, not any declaration's, so `ctor_of` has never heard of them.
-    fn reclassify(&self, p: &Pat) -> Pat {
+    /// constructor. The column type can: it names exactly one declaration,
+    /// even when the written constructor name is ambiguous in the surrounding
+    /// module scope.
+    fn reclassify_at(&self, p: &Pat, col: Option<&PatCol>) -> Pat {
         match p {
-            Pat::Var { name, span } if self.is_ctor_name(name) => {
+            Pat::Var { name, span }
+                if col.is_some_and(|c| {
+                    self.pattern_fields_at(&c.cx, &c.ty, &c.lvl, name, *span)
+                        .is_some()
+                }) =>
+            {
                 Pat::Ctor { name: name.clone(), args: vec![], span: *span }
             }
             Pat::Var { .. } => p.clone(),
             Pat::Ctor { name, args, span } => Pat::Ctor {
                 name: name.clone(),
-                args: args.iter().map(|a| self.reclassify(a)).collect(),
+                args: {
+                    let cols = col.and_then(|c| {
+                        self.pattern_fields_at(&c.cx, &c.ty, &c.lvl, name, *span)
+                    });
+                    args.iter()
+                        .enumerate()
+                        .map(|(j, a)| self.reclassify_at(a, cols.as_ref().and_then(|cs| cs.get(j))))
+                        .collect()
+                },
                 span: *span,
             },
             Pat::Named { field, pat, span } => Pat::Named {
                 field: field.clone(),
-                pat: Box::new(self.reclassify(pat)),
+                pat: Box::new(self.reclassify_at(pat, col)),
                 span: *span,
             },
         }
     }
 
-    fn is_ctor_name(&self, name: &str) -> bool {
-        matches!(name, "Zero" | "Succ" | "FZ" | "FS") || self.ctor_of(name).is_some()
-    }
-
-    fn pat_is_deep(&self, p: &Pat) -> bool {
+    fn pat_is_deep_at(&self, p: &Pat, col: Option<&PatCol>) -> bool {
         match p {
             Pat::Ctor { .. } => true,
-            Pat::Var { name, .. } => self.is_ctor_name(name),
-            Pat::Named { pat, .. } => self.pat_is_deep(pat),
+            Pat::Var { name, span } => col.is_some_and(|c| {
+                self.pattern_fields_at(&c.cx, &c.ty, &c.lvl, name, *span).is_some()
+            }),
+            Pat::Named { pat, .. } => self.pat_is_deep_at(pat, col),
         }
+    }
+
+    /// The actual types of constructor fields at one instantiated scrutinee
+    /// type. Payloads are read from the lowering's Sigma spine, so a field
+    /// declared as `A` at `Outer<Inner>` is seen here as `Inner`, not as the
+    /// stored surface variable. Plain recursive children have the scrutinee's
+    /// own type. This is the same information the arm lowerings project when
+    /// the generated inner match is elaborated.
+    fn pattern_fields_at(
+        &self,
+        cx: &Cx,
+        ty: &Type,
+        lvl: &Level,
+        ctor_name: &str,
+        span: Span,
+    ) -> Option<Vec<PatCol>> {
+        if let Type::Fin { len } = &*decoded(ty) {
+            let pred = match &*self.whnf_tm(cx, len, span).ok()? {
+                Term::Zero => return None,
+                Term::Succ(k) => Rc::clone(k),
+                _ => return None,
+            };
+            return match ctor_name {
+                "FZ" => Some(vec![]),
+                "FS" => Some(vec![PatCol {
+                    cx: cx.clone(),
+                    ty: Type::Fin { len: pred },
+                    lvl: Level::Zero,
+                }]),
+                _ => None,
+            };
+        }
+        let head = self.whnf(cx, ty, span).ok()?;
+        if matches!(head, Type::Nat) {
+            return match ctor_name {
+                "Zero" => Some(vec![]),
+                "Succ" => Some(vec![PatCol { cx: cx.clone(), ty: Type::Nat, lvl: Level::Zero }]),
+                _ => None,
+            };
+        }
+        let ind = self.inductive_at(cx, ty, span)?;
+        let i = crate::inductive::arm_ctor_index(&ind, ctor_name)?;
+        let ctor = &ind.ctors[i];
+        let spine = self.spine(ty, lvl, ind.ctors.len(), span).ok()?;
+        let mut pcx = cx.clone();
+        let mut cur = (*spine.ctors[i].0).clone();
+        let mut payloads = Vec::new();
+        let mut first = true;
+        loop {
+            let Type::Sigma { fst_level, snd, fst, .. } = self.whnf(&pcx, &cur, span).ok()? else {
+                break;
+            };
+            if !first {
+                payloads.push(PatCol {
+                    cx: pcx.clone(),
+                    ty: (*fst).clone(),
+                    lvl: fst_level.clone(),
+                });
+            }
+            first = false;
+            let next = snd.apply_local(
+                &crate::embed(&pcx.gamma, 1).extended(Rc::new(Term::Var(LocalVar(0)))),
+            );
+            pcx.push(format!("#pat{}", pcx.names.len()), (*fst).clone(), fst_level);
+            cur = next;
+        }
+        if payloads.len() != ctor.payload().count() {
+            return None;
+        }
+        let mut payloads = payloads.into_iter();
+        let by = (pcx.names.len() - cx.names.len()) as u32;
+        let unknown = || PatCol {
+            cx: pcx.clone(),
+            ty: Type::Ty(Level::Zero),
+            lvl: Level::succ(Level::Zero),
+        };
+        let fields = ctor
+            .kind
+            .iter()
+            .map(|kind| match kind {
+                FieldKind::Payload => payloads.next(),
+                FieldKind::Plain => Some(PatCol {
+                    cx: pcx.clone(),
+                    ty: ty.shift_local(by),
+                    lvl: lvl.clone(),
+                }),
+                // A container is a primitive Vec and an IndexVar is supplied
+                // by the family eliminator. Neither has declared constructors
+                // for a deep surface pattern to select here; retain an
+                // explicitly constructor-less column so sibling payloads do
+                // not lose their type evidence.
+                FieldKind::Container { .. } | FieldKind::IndexVar => Some(unknown()),
+            })
+            .collect::<Option<Vec<_>>>()?;
+        Some(fields)
     }
 
     /// Restore declaration order for every `field := pattern` list before

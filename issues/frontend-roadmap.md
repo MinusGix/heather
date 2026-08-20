@@ -318,3 +318,7 @@ date; the originals are in `git log --follow issues/frontend-roadmap.md`.
 - 2026-08-20: Named and renamed record/constructor pattern fields landed and
   closed ([[named-patterns-by-field]]), composing with the preceding
   positional `if let` round.
+- 2026-08-20: The pattern-line correctness residue
+  [[deep-pattern-ctor-needs-column-type]] closed: nested bare constructors are
+  classified by their instantiated column type, so an ambiguous import can no
+  longer silently turn one into a binder. Suite 1977 → 1978.
