@@ -1,9 +1,9 @@
 ---
 title: "Add a low-maintenance Tree-sitter grammar and Zed language extension"
-status: open
+status: closed
 labels: [tooling,editor,syntax,zed]
 created: 2026-08-20
-updated: 2026-08-20
+updated: 2026-08-21
 ---
 
 Heather files have no structural editor support. Build a Tree-sitter grammar
@@ -51,3 +51,10 @@ and [Tree-sitter grammar guidance](https://tree-sitter.github.io/tree-sitter/cre
 - 2026-08-20: Filed with Zed as the primary consumer. Official Zed docs confirm
   that one Tree-sitter grammar plus query files is the normal route for syntax
   highlighting and structural editor support.
+- 2026-08-21: LANDED. `tree-sitter-heather` now owns the hand-maintained CST,
+  generated C parser, corpus, positive/negative/recovery fixtures, and checked
+  lexical inventory. The same positive corpus is parsed by Heather in a Rust
+  integration test. `editors/zed` supplies `.hthr` recognition, highlighting,
+  brackets, indentation, outlines, and function/type text objects; query copies
+  are checked byte-for-byte. `scripts/check-tree-sitter` is the complete local
+  gate, while the ordinary suite runs the dependency-free inventory drift gate.

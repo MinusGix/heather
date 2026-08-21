@@ -1,0 +1,12 @@
+id = "heather"
+name = "Heather"
+version = "0.1.0"
+schema_version = 1
+authors = ["Heather contributors"]
+description = "Heather language support powered by Tree-sitter"
+repository = "https://github.com/MinusGix/heather"
+
+[grammars.heather]
+repository = "https://github.com/MinusGix/heather"
+rev = "ea6aa192a6772601b26a49c908eec98253de52b0"
+path = "tree-sitter-heather"

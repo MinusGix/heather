@@ -21,6 +21,10 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
+# Cheap and dependency-free: fail the ordinary CI entrypoint when Heather's
+# compiler keywords or fixed symbols drift away from the editor manifest.
+node scripts/check-tree-sitter-inventory.js
+
 SKIP=()
 TEST_ARGS=()
 if [[ "${1:-}" == --fast ]]; then

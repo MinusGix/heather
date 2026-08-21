@@ -1,0 +1,26 @@
+{
+  "name": "tree-sitter-heather",
+  "version": "0.1.0",
+  "description": "Tree-sitter grammar for the Heather proof language",
+  "main": "bindings/node",
+  "keywords": [
+    "incremental",
+    "parsing",
+    "tree-sitter",
+    "heather"
+  ],
+  "license": "MIT OR Apache-2.0",
+  "repository": "https://github.com/MinusGix/heather",
+  "scripts": {
+    "generate": "tree-sitter generate",
+    "test": "tree-sitter test && node --test bindings/node/binding_test.js"
+  },
+  "dependencies": {
+    "node-addon-api": "^8.5.0",
+    "node-gyp-build": "^4.8.4"
+  },
+  "devDependencies": {
+    "tree-sitter": "^0.25.0",
+    "tree-sitter-cli": "^0.25.10"
+  }
+}

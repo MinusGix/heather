@@ -1,0 +1,229 @@
+==================
+Declarations
+==================
+
+inductive Option<A> { None, Some(value: A) }
+record Pair<A, B> { fst: A, snd: B }
+fn id<A>(x: A) -> A { x }
+theorem id_eq<A>(x: A): id(x) = x { refl }
+
+---
+
+(source_file
+  (inductive_declaration
+    (identifier)
+    (type_parameters
+      (type_parameter
+        (identifier)))
+    (constructor_list
+      (constructor
+        (identifier))
+      (constructor
+        (identifier)
+        (field_parameters
+          (field
+            (identifier)
+            (identifier))))))
+  (record_declaration
+    (identifier)
+    (type_parameters
+      (type_parameter
+        (identifier))
+      (type_parameter
+        (identifier)))
+    (field_list
+      (field
+        (identifier)
+        (identifier))
+      (field
+        (identifier)
+        (identifier))))
+  (function_declaration
+    (qualified_identifier)
+    (type_parameters
+      (type_parameter
+        (identifier)))
+    (parameter_list
+      (parameter
+        (parameter_run
+          (parameter_name
+            (identifier))
+          (identifier))))
+    (identifier)
+    (block
+      (identifier)))
+  (theorem_declaration
+    (qualified_identifier)
+    (type_parameters
+      (type_parameter
+        (identifier)))
+    (parameter_list
+      (parameter
+        (parameter_run
+          (parameter_name
+            (identifier))
+          (identifier))))
+    (declaration_binary_type
+      (declaration_call_type
+        (identifier)
+        (argument_list
+          (identifier)))
+      (identifier))
+    (block
+      (refl_expression))))
+
+==================
+Nested patterns and operators
+==================
+
+fn nested(o: Option<Option<Nat>>) -> Nat {
+  match o { Some(Some(n)) => n, Some(None) => 0, None => 0 }
+}
+theorem logic(a, b: Nat, p: a = b): b = a {
+  calc { b = a := sym(p), = b := p }
+}
+
+---
+
+(source_file
+  (function_declaration
+    (qualified_identifier)
+    (parameter_list
+      (parameter
+        (parameter_run
+          (parameter_name
+            (identifier))
+          (type_application_expression
+            (identifier)
+            (type_arguments
+              (type_application_expression
+                (identifier)
+                (type_arguments
+                  (identifier))))))))
+    (identifier)
+    (block
+      (match_expression
+        (identifier)
+        (match_body
+          (match_arm
+            (constructor_pattern
+              (identifier)
+              (constructor_pattern
+                (identifier)
+                (identifier)))
+            (identifier))
+          (match_arm
+            (constructor_pattern
+              (identifier)
+              (identifier))
+            (number))
+          (match_arm
+            (identifier)
+            (number))))))
+  (theorem_declaration
+    (qualified_identifier)
+    (parameter_list
+      (parameter
+        (parameter_run
+          (parameter_name
+            (identifier))
+          (parameter_name
+            (identifier))
+          (identifier)))
+      (parameter
+        (parameter_run
+          (parameter_name
+            (identifier))
+          (binary_expression
+            (identifier)
+            (identifier)))))
+    (declaration_binary_type
+      (identifier)
+      (identifier))
+    (block
+      (calc_expression
+        (calc_first_step
+          (identifier)
+          (identifier)
+          (call_expression
+            (identifier)
+            (argument_list
+              (identifier))))
+        (calc_next_step
+          (identifier)
+          (identifier))))))
+
+==================
+Quotation and Unicode
+==================
+
+meta fn quoted(g: Ctx, x: Code(g |- Nat)) -> Code(g |- Nat) {
+  code { $x }
+}
+theorem connect(P, Q: Type): P ∧ Q ↔ Q ∧ P { ?proof }
+
+---
+
+(source_file
+  (function_declaration
+    (qualified_identifier)
+    (parameter_list
+      (parameter
+        (parameter_run
+          (parameter_name
+            (identifier))
+          (builtin_type)))
+      (parameter
+        (parameter_run
+          (parameter_name
+            (identifier))
+          (call_expression
+            (builtin_type)
+            (argument_list
+              (sequent_expression
+                (lambda_binder
+                  (identifier))
+                (identifier)))))))
+    (declaration_call_type
+      (builtin_type)
+      (argument_list
+        (sequent_expression
+          (lambda_binder
+            (identifier))
+          (identifier))))
+    (block
+      (quote_expression
+        (block
+          (splice_expression
+            (identifier))))))
+  (theorem_declaration
+    (qualified_identifier)
+    (parameter_list
+      (parameter
+        (parameter_run
+          (parameter_name
+            (identifier))
+          (parameter_name
+            (identifier))
+          (universe))))
+    (declaration_binary_type
+      (declaration_binary_type
+        (identifier)
+        (identifier))
+      (declaration_binary_type
+        (identifier)
+        (identifier)))
+    (block
+      (hole))))
+
+==================
+Incomplete edit recovers
+:error
+==================
+
+fn unfinished<A>(x: A) -> A {
+  match x { Some(value) =>
+
+---
+
+(source_file)

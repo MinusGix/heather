@@ -1,0 +1,17 @@
+import nat;
+
+record Box<A>(value: A) { get: A }
+
+class Mag<A>(op: A -> A -> A) { unit: A }
+
+instance Mag<Nat>(add) { unit := 0 }
+
+designation + at Nat := add
+
+datarepr Packed for Nat := pack()
+
+impl add for Packed := derive()
+
+fn choose(o: Option<Nat>) -> Nat {
+    if let Some(value) = o { value } else { 0 }
+}

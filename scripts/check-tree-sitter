@@ -1,0 +1,35 @@
+#!/usr/bin/env bash
+# Verify the generated parser, shared fixtures, queries, and lexical drift.
+set -euo pipefail
+cd "$(dirname "$0")/.."
+
+grammar=tree-sitter-heather
+cli="$grammar/node_modules/.bin/tree-sitter"
+
+if [[ ! -x "$cli" ]]; then
+  echo "error: $cli is missing; run 'npm install' in $grammar" >&2
+  exit 2
+fi
+
+node scripts/check-tree-sitter-inventory.js
+
+for query in highlights brackets indents outline textobjects; do
+  cmp "$grammar/queries/$query.scm" "editors/zed/languages/heather/$query.scm"
+done
+
+(
+  cd "$grammar"
+  "$OLDPWD/$cli" generate
+  XDG_CACHE_HOME="${TMPDIR:-/tmp}/heather-tree-sitter-cache" \
+    "$OLDPWD/$cli" test
+  XDG_CACHE_HOME="${TMPDIR:-/tmp}/heather-tree-sitter-cache" \
+    "$OLDPWD/$cli" parse test/fixtures/positive/*.hthr --quiet
+  XDG_CACHE_HOME="${TMPDIR:-/tmp}/heather-tree-sitter-cache" \
+    "$OLDPWD/$cli" parse ../lib/*.hthr ../lib/std/*.hthr ../docs/showcase/calc.hthr --quiet
+  for query in queries/*.scm; do
+    XDG_CACHE_HOME="${TMPDIR:-/tmp}/heather-tree-sitter-cache" \
+      "$OLDPWD/$cli" query "$query" test/fixtures/positive/basic.hthr >/dev/null
+  done
+)
+
+cargo test -p heather-syntax --test editor_corpus --quiet

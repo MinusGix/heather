@@ -1,0 +1,18 @@
+{
+  "keywords": [
+    "Code", "Ctx", "TyCode", "Type", "as", "at", "calc", "class", "code",
+    "datarepr", "designation", "else", "extends", "fn", "for", "fun", "if",
+    "impl", "import", "inductive", "infer", "instance", "j", "let", "match",
+    "meta", "mk", "on", "prefix", "record", "refl", "requires", "self", "split",
+    "theorem"
+  ],
+  "punctuation": [
+    "(", ")", "{", "}", "[", "]", ",", ":", ";", "@", "$", ".", "->",
+    "=>", "⊢", "|-", "=", ":=", "::", ">", "λ"
+  ],
+  "fixed_operators": [
+    "+", "-", "++", "*", "<", "<=", "&&", "||", "∙", "¬", "∧", "∨", "↔",
+    "<->", "∀", "∃", "≠"
+  ],
+  "rejected_fixed_tokens": ["=="]
+}

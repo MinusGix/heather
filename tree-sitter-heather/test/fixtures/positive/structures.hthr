@@ -1,0 +1,11 @@
+record Pair<A, B> { fst: A, snd: B }
+
+fn swap<A, B>(p: Pair<A, B>) -> Pair<B, A> { Pair(p.snd, p.fst) }
+
+fn nested(o: Option<Option<Nat>>) -> Nat {
+    match o {
+        Some(Some(n)) => n,
+        Some(None) => 0,
+        None => 0,
+    }
+}

@@ -1,0 +1,1 @@
+fn bad(a, b, c: Nat) -> Type { a = b = c }

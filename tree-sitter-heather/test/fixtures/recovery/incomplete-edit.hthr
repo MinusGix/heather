@@ -1,0 +1,4 @@
+fn unfinished<A>(x: A) -> A {
+    match x {
+        Some(value) =>
+

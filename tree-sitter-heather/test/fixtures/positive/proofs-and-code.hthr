@@ -1,0 +1,7 @@
+theorem logic(a, b: Nat, p: a = b): b = a {
+    calc { b = a := sym(p), = b := p }
+}
+
+meta fn quoted(g: Ctx, x: Code(g |- Nat)) -> Code(g |- Nat) {
+    code { $x }
+}

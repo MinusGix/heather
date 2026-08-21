@@ -1,0 +1,33 @@
+{
+  "grammars": [
+    {
+      "name": "heather",
+      "camelcase": "Heather",
+      "scope": "source.heather",
+      "path": ".",
+      "file-types": ["hthr"],
+      "highlights": "queries/highlights.scm",
+      "injection-regex": "^heather$"
+    }
+  ],
+  "metadata": {
+    "version": "0.1.0",
+    "license": "MIT OR Apache-2.0",
+    "description": "Heather grammar for tree-sitter",
+    "authors": [
+      { "name": "Heather contributors" }
+    ],
+    "links": {
+      "repository": "https://github.com/MinusGix/heather"
+    }
+  },
+  "bindings": {
+    "c": true,
+    "node": true,
+    "rust": true,
+    "python": false,
+    "go": false,
+    "swift": false,
+    "zig": false
+  }
+}
