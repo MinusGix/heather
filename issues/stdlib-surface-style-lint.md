@@ -124,3 +124,8 @@ rewrite that would change which later argument participates in inference.
   bounded owners: [[decidable-if-through-defined-branch]],
   [[infix-subtraction-notation]], [[list-membership-notation]],
   [[trichotomy-proposition]], and [[instance-owned-decision-procedures]].
+- 2026-08-20: Two written-form rules were split into focused lint owners:
+  [[lint-tight-negation-spacing]] and [[lint-trivial-argument-slot]]. The same
+  review filed [[not-equal-notation]] for direct `≠` sugar and
+  [[match-motive-surface-audit]] to determine how much `as λ` source is
+  inference debt before choosing a replacement syntax.
