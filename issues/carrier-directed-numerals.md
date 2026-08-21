@@ -1,9 +1,9 @@
 ---
 title: "Carrier-directed numerals: make 3 : Int solve the same problem as -3"
-status: closed
+status: open
 labels: [frontend,elaboration,notation,stdlib,traits]
 created: 2026-08-19
-updated: 2026-08-19
+updated: 2026-08-20
 ---
 
 Numerals currently infer `Nat` unconditionally, with one checking-position
@@ -80,3 +80,10 @@ prefix designation; there is no separate negative-literal semantic path.
   its constructor, generic `<A: Numeral>` source resolves through local
   evidence, missing instances show the ordinary search trace, and no negative
   literal node or carrier-specific parser rule was added.
+- 2026-08-20: Reopened from the standard-library review. The promised negative
+  numeral path is not actually accepted in a direct Int checking position:
+  with `as_int : Int -> Int`, `as_int(-1)` reports that the operand has type
+  `Nat` where `Int` was expected. The landed tests cover a positive numeral at
+  an expected carrier and prefix negation over a non-numeral carrier value, but
+  not their composition. Acceptance still requires `-1 : Int` to flow the
+  expected result carrier through prefix-operator resolution to the numeral.

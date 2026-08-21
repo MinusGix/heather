@@ -286,12 +286,12 @@ theorem le_total(n: Nat): (m: Nat) -> n <= m ∨ m <= n {
 // `max_of(2, 5) = 5` stops being `refl`. Deciding is computation, whatever it
 // returns. Found by the kernel rejecting that very `refl` rather than by
 // reasoning; `logic::or_pick` carries the same note for the same reason.
-fn le_dec(n: Nat) -> (m: Nat) -> n <= m ∨ ¬ (n <= m) {
-    match n as λ z => (m: Nat) -> z <= m ∨ ¬ (z <= m) {
+fn le_dec(n: Nat) -> (m: Nat) -> n <= m ∨ ¬(n <= m) {
+    match n as λ z => (m: Nat) -> z <= m ∨ ¬(z <= m) {
         Zero => λ m => Inl(trivial),
         Succ(k, ih) => λ m =>
-            match m as λ y => Succ(k) <= y ∨ ¬ (Succ(k) <= y) {
-                Zero => Inr(λ (bad: Succ(k) <= 0) => bad),
+            match m as λ y => Succ(k) <= y ∨ ¬(Succ(k) <= y) {
+                Zero => Inr(·),
                 Succ(m2) => ih(m2),
             },
     }
@@ -326,8 +326,8 @@ theorem lt_succ_iff_le(n, m: Nat): n < Succ(m) ↔ n <= m {
 
 // Irreflexivity, which is `Le(Succ n, n) -> False` and recurses to the base
 // case `Le(1, 0)` — already `False`, so the whole proof is the recursion.
-theorem lt_irrefl(n: Nat): ¬ (n < n) {
-    match n as λ z => ¬ (z < z) {
+theorem lt_irrefl(n: Nat): ¬(n < n) {
+    match n as λ z => ¬(z < z) {
         Zero => λ (h: 0 < 0) => h,
         Succ(k, ih) => λ (h: Succ(k) < Succ(k)) => ih(h),
     }
@@ -351,15 +351,15 @@ theorem lt_trans(n, m, l: Nat, h1: n < m, h2: m < l): n < l {
     le_trans(Succ(n), m, l, h1, le_of_lt(m, l, h2))
 }
 
-theorem lt_of_le_of_ne(n: Nat): (m: Nat) -> n <= m -> ¬ (n = m) -> n < m {
-    match n as λ z => (m: Nat) -> z <= m -> ¬ (z = m) -> z < m {
+theorem lt_of_le_of_ne(n: Nat): (m: Nat) -> n <= m -> ¬(n = m) -> n < m {
+    match n as λ z => (m: Nat) -> z <= m -> ¬(z = m) -> z < m {
         Zero => λ m h hne =>
-            match m as λ y => ¬ (0 = y) -> 0 < y {
+            match m as λ y => ¬(0 = y) -> 0 < y {
                 Zero => false_elim(·(refl)),
                 Succ(m2) => λ ne => trivial,
             }(hne),
         Succ(k, ih) => λ m h hne =>
-            match m as λ y => Succ(k) <= y -> ¬ (Succ(k) = y) -> Succ(k) < y {
+            match m as λ y => Succ(k) <= y -> ¬(Succ(k) = y) -> Succ(k) < y {
                 Zero => λ bad ne => false_elim(bad),
                 Succ(m2) => λ a ne =>
                     ih(m2, a, λ (e: k = m2) => ne(cong_succ(e))),
@@ -398,7 +398,7 @@ theorem lt_trichotomy(n: Nat): (m: Nat) -> n < m ∨ n = m ∨ m < n {
 // the difference is the whole of what going propositional buys: that lemma was
 // an induction on `x` with `y` generalized, ending in `leb(y, x) = True`;
 // this one is `le_total` with the refuted side resolved away, and it is a line.
-theorem le_of_not_le(n, m: Nat, h: ¬ (n <= m)): m <= n {
+theorem le_of_not_le(n, m: Nat, h: ¬(n <= m)): m <= n {
     or_resolve(or_swap(le_total(n, m)), h)
 }
 
@@ -428,11 +428,11 @@ theorem succ_inj(n, m: Nat, h: Succ(n) = Succ(m)): n = m { cong_nat(pred, h) }
 // are told apart by a type rather than by a generated no-confusion lemma.
 fn IsSucc(n: Nat) -> Type { match n { Zero => False, Succ(k) => True } }
 
-theorem succ_ne_zero(n: Nat): ¬ (Succ(n) = 0) {
+theorem succ_ne_zero(n: Nat): ¬(Succ(n) = 0) {
     λ (h: Succ(n) = 0) => j(h, λ y q => IsSucc(y), trivial)
 }
 
-theorem zero_ne_succ(n: Nat): ¬ (0 = Succ(n)) {
+theorem zero_ne_succ(n: Nat): ¬(0 = Succ(n)) {
     λ (h: 0 = Succ(n)) => succ_ne_zero(n, sym(h))
 }
 
@@ -444,15 +444,15 @@ theorem zero_ne_succ(n: Nat): ¬ (0 = Succ(n)) {
 // registers independently of equality at Bool and every other nominal type
 // (docs/decidable-equation-carrier-design.md). The generated canonical value
 // is deliberately unwritable; ordinary uses reach it through `Decide<n = m>`.
-fn eq_dec(n: Nat) -> (m: Nat) -> n = m ∨ ¬ (n = m) {
-    match n as λ z => (m: Nat) -> z = m ∨ ¬ (z = m) {
+fn eq_dec(n: Nat) -> (m: Nat) -> n = m ∨ ¬(n = m) {
+    match n as λ z => (m: Nat) -> z = m ∨ ¬(z = m) {
         Zero => λ m =>
-            match m as λ y => 0 = y ∨ ¬ (0 = y) {
+            match m as λ y => 0 = y ∨ ¬(0 = y) {
                 Zero => Inl(refl),
                 Succ(m2) => Inr(zero_ne_succ(m2)),
             },
         Succ(k, ih) => λ m =>
-            match m as λ y => Succ(k) = y ∨ ¬ (Succ(k) = y) {
+            match m as λ y => Succ(k) = y ∨ ¬(Succ(k) = y) {
                 Zero => Inr(succ_ne_zero(k)),
                 Succ(m2) =>
                     match ih(m2) {
@@ -970,7 +970,7 @@ theorem even_or_odd(n: Nat): Even(n) ∨ Odd(n) {
 // And exclusive. Both base arms are a projection out of the conjunction — at
 // `0` the right half is already `False`, at `1` the left half is — which is
 // the same "the absurd case is the hypothesis" economy the order kit has.
-theorem not_even_and_odd(n: Nat): ¬ (Even(n) ∧ Odd(n)) {
+theorem not_even_and_odd(n: Nat): ¬(Even(n) ∧ Odd(n)) {
     match n {
         Zero => λ (h: Even(0) ∧ Odd(0)) => h.right,
         Succ(k) => match k {

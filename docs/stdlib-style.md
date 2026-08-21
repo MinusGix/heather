@@ -15,6 +15,11 @@ Prefer the spelling a downstream program should copy.
   and proofs: `x + y`, `x <= y`, and `xs ++ ys`.
 - Likewise prefer `¬P`, `P ∧ Q`, `P ∨ Q`, `P ↔ Q`, `∃ x, P`, and
   `∀ x, P` over calls to the connective declarations.
+- Write prefix notation tightly: `¬P` and `¬(a = b)`, not `¬ (a = b)`.
+- Use argument slots for a short, one-use eta wrapper when the expected
+  function type makes ownership clear: `false_elim(·)` rather than
+  `λ p => false_elim(p)`. Keep a named lambda when its binder is reused,
+  ignored, or helps explain the proof.
 - Keep a named operation when it is used as a first-class value, an instance
   key, or a deliberately qualified disambiguation. Definitions may also expose
   their underlying calls when that makes reduction or termination clearer.

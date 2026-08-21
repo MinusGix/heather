@@ -119,3 +119,8 @@ rewrite that would change which later argument participates in inference.
   connectives do not share that boundary. `docs/stdlib-style.md` records the
   rules and semantic exemptions. Full suite: 1,980 passed, 0 failed. The issue
   stays open for the provenance-aware lint and generated-fixture policy.
+- 2026-08-20: Follow-up review tightened `¬(...)`, adopted argument slots for
+  obvious identity/eta wrappers, and split five language/library blockers into
+  bounded owners: [[decidable-if-through-defined-branch]],
+  [[infix-subtraction-notation]], [[list-membership-notation]],
+  [[trichotomy-proposition]], and [[instance-owned-decision-procedures]].

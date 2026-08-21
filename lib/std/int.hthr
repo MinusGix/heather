@@ -754,11 +754,11 @@ theorem le_total(a, b: Int): a <= b ∨ b <= a {
 // The decider, and a `fn` rather than a `theorem` for the reason `nat::le_dec`
 // carries: a decision has to unfold in conversion or nothing built on it
 // computes.
-fn le_dec(a, b: Int) -> a <= b ∨ ¬ (a <= b) {
+fn le_dec(a, b: Int) -> a <= b ∨ ¬(a <= b) {
     match a {
         OfNat(m) => match b {
             OfNat(n) => nat::le_dec(m, n),
-            NegSucc(n) => Inr(λ (bad: OfNat(m) <= NegSucc(n)) => bad),
+            NegSucc(n) => Inr(·),
         },
         NegSucc(m) => match b {
             OfNat(n) => Inl(trivial),
@@ -775,7 +775,7 @@ fn le_dec(a, b: Int) -> a <= b ∨ ¬ (a <= b) {
 // (docs/instance-resolved-key-design.md).
 instance(a, b: Int) Decide<Le(a, b)> { dec := le_dec(a, b) }
 
-theorem le_of_not_le(a, b: Int, h: ¬ (a <= b)): b <= a {
+theorem le_of_not_le(a, b: Int, h: ¬(a <= b)): b <= a {
     or_resolve(or_swap(le_total(a, b)), h)
 }
 
@@ -783,11 +783,11 @@ theorem le_of_not_le(a, b: Int, h: ¬ (a <= b)): b <= a {
 
 theorem lt_isucc_self(a: Int): a < isucc(a) { le_refl(isucc(a)) }
 
-theorem lt_irrefl(a: Int): ¬ (a < a) {
-    match a as λ z => ¬ (z < z) {
+theorem lt_irrefl(a: Int): ¬(a < a) {
+    match a as λ z => ¬(z < z) {
         OfNat(m) => nat::lt_irrefl(m),
         NegSucc(m) => match m {
-            Zero => λ (h: NegSucc(0) < NegSucc(0)) => h,
+            Zero => ·,
             Succ(j) => nat::lt_irrefl(j),
         },
     }
@@ -797,8 +797,8 @@ theorem le_of_lt(a: Int): (b: Int) -> a < b -> a <= b {
     match a as λ z => (b: Int) -> z < b -> z <= b {
         OfNat(m) => λ b h =>
             match b as λ y => OfNat(m) < y -> OfNat(m) <= y {
-                OfNat(n) => λ p => nat::le_of_lt(m, n, p),
-                NegSucc(n) => λ p => false_elim(p),
+                OfNat(n) => nat::le_of_lt(m, n, ·),
+                NegSucc(n) => false_elim(·),
             }(h),
         NegSucc(m) => λ b h =>
             match b as λ y => NegSucc(m) < y -> NegSucc(m) <= y {
@@ -864,7 +864,7 @@ theorem lt_of_lt_of_le(a, b, c: Int, h1: a < b, h2: b <= c): a < c {
     le_trans(isucc(a))(b, c, h1, h2)
 }
 
-theorem lt_of_le_of_ne(a, b: Int, hle: a <= b, hne: ¬ (a = b)): a < b {
+theorem lt_of_le_of_ne(a, b: Int, hle: a <= b, hne: ¬(a = b)): a < b {
     match lt_trichotomy(a, b) {
         Inl(h) => h,
         Inr(rest) => match rest {
@@ -875,7 +875,7 @@ theorem lt_of_le_of_ne(a, b: Int, hle: a <= b, hne: ¬ (a = b)): a < b {
     }
 }
 
-theorem le_of_not_lt(a, b: Int, h: ¬ (a < b)): b <= a {
+theorem le_of_not_lt(a, b: Int, h: ¬(a < b)): b <= a {
     match lt_trichotomy(a, b) {
         Inl(forward) => false_elim(h(forward)),
         Inr(rest) => match rest {
@@ -885,7 +885,7 @@ theorem le_of_not_lt(a, b: Int, h: ¬ (a < b)): b <= a {
     }
 }
 
-theorem lt_of_not_le(a, b: Int, h: ¬ (b <= a)): a < b {
+theorem lt_of_not_le(a, b: Int, h: ¬(b <= a)): a < b {
     match lt_trichotomy(a, b) {
         Inl(forward) => forward,
         Inr(rest) => match rest {
@@ -941,11 +941,11 @@ theorem lt_of_le_of_lt(a, b, c: Int, h1: a <= b, h2: b < c): a < c {
     le_trans(isucc(a), isucc(b), c, le_isucc(a, b, h1), h2)
 }
 
-theorem not_lt_of_ge(a, b: Int, h: a <= b): ¬ (b < a) {
+theorem not_lt_of_ge(a, b: Int, h: a <= b): ¬(b < a) {
     (back: b < a) ⊢ lt_irrefl(a, lt_of_le_of_lt(a, b, a, h, back))
 }
 
-theorem lt_asymm(a, b: Int, h: a < b): ¬ (b < a) {
+theorem lt_asymm(a, b: Int, h: a < b): ¬(b < a) {
     not_lt_of_ge(a, b, le_of_lt(a, b, h))
 }
 
@@ -1098,24 +1098,15 @@ theorem le_max_r(a, b: Int): b <= max(a, b) {
 }
 
 theorem min_le_l(a, b: Int): min(a, b) <= a {
-    match le_dec(a, b) as λ d => or_pick(d, b, a) <= a {
-        Inl(h) => le_refl(a),
-        Inr(h) => le_of_not_le(a, b, h),
-    }
+    if h : a <= b { le_refl(a) } else { le_of_not_le(a, b, h) }
 }
 
 theorem min_le_r(a, b: Int): min(a, b) <= b {
-    match le_dec(a, b) as λ d => or_pick(d, b, a) <= b {
-        Inl(h) => h,
-        Inr(h) => le_refl(b),
-    }
+    if h : a <= b { h } else { le_refl(b) }
 }
 
 theorem max_le(a, b, c: Int, h1: a <= c, h2: b <= c): max(a, b) <= c {
-    match le_dec(a, b) as λ d => or_pick(d, a, b) <= c {
-        Inl(h) => h2,
-        Inr(h) => h1,
-    }
+    if a <= b { h2 } else { h1 }
 }
 
 theorem le_min(a, b, c: Int, h1: c <= a, h2: c <= b): c <= min(a, b) {
