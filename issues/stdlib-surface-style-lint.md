@@ -110,3 +110,12 @@ rewrite that would change which later argument participates in inference.
   included, especially `Decide<Not(P)>` and the remaining `Or<…>` / `Not(…)`
   motives. The instance-head boundary must be tested rather than inferred from
   the separate refusal for designation-headed relation syntax.
+- 2026-08-20: The initial source cleanup and style guide landed as one slice.
+  `lib/std` has no remaining executable `f(x)(y)` spelling; Nat, Int, Bool,
+  List, and Logic now use n-ary over-application and public operator/connective
+  notation in signatures, motives, and proofs. Structural relation instance
+  keys remain named where designation-headed keys are unsupported. The
+  connective control succeeded: `Decide<¬P>` registers and resolves, so parser
+  connectives do not share that boundary. `docs/stdlib-style.md` records the
+  rules and semantic exemptions. Full suite: 1,980 passed, 0 failed. The issue
+  stays open for the provenance-aware lint and generated-fixture policy.

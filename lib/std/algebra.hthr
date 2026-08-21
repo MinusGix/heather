@@ -95,7 +95,7 @@ class Numeral<A> {
 // into its own field.
 //
 // The version this replaces was `le: A -> A -> Bool` with
-// `le_refl: (x: A) -> le(x, x) = True`, matching the `leb(n)(m) = True`
+// `le_refl: (x: A) -> le(x, x) = True`, matching the former Boolean-reflection
 // spelling `std/nat` then used. Both halves of that are retired by
 // issues/class-ops-prop-vs-bool.md: no `Bool` in a specification, no `= True`
 // anywhere. What is NOT retired is deciding — `max_of` still has to pick a

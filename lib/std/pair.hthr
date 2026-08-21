@@ -1,13 +1,5 @@
-// `pair` — the non-dependent product, as the record it is.
-//
-// Filed out of `std/list` (issues/std-list-api.md): `zip` is the first
-// function in the library that has to *return* a product, and the library had
-// none. `logic::And` is the same shape and is deliberately not reused: `And`
-// is a connective over propositions and its fields are named `left`/`right`,
-// which is the wrong reading for a pair of data.
-//
-// Its own module rather than a declaration inside `list`, because a product is
-// not a list notion and the next customer will not be `zip`.
+// A non-dependent product. Unlike `logic::And`, this is data rather than a
+// proposition and exposes the conventional `fst` and `snd` projections.
 
 record Pair<A, B> { fst: A, snd: B }
 

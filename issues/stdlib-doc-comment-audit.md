@@ -47,3 +47,11 @@ Heather does not yet extract documentation mechanically.
 - 2026-08-20: Filed separately from the completed kernel-comment audit: the
   problem here is library voice and historical accumulation, not stale kernel
   rule counts.
+- 2026-08-20: First editorial slice landed alongside the surface-style cleanup.
+  Nat, Int, Bool, List, Logic, Option, and Pair now open with API-facing module
+  comments; obsolete migration narratives and dated workaround reports were
+  removed from representative declaration sections, while representation,
+  reduction, motive, and law-orientation guidance stayed local. The comment
+  roles are written in `docs/stdlib-style.md`. Full suite: 1,980 passed, 0
+  failed. This issue remains open for the deeper declaration-by-declaration
+  pass, with Tree still intentionally deferred to [[tree-library-public-shape]].

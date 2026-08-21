@@ -1,21 +1,13 @@
-// `logic` — the propositional connectives (issues/std-logic-module.md).
-//
-// The library had none of these. Every proposition in `lib/std` was either an
-// equation or a `->` chain, and that absence is *why* the order kit drifted to
-// the `leb(n, m) = True` spelling: an equation was the only available way to
-// say a non-equational thing. The direction that retires that spelling
-// (issues/class-ops-prop-vs-bool.md, 2026-08-16) needs these first.
-//
-// Propositions here are ordinary types and are PROOF-RELEVANT. There is no
+// Propositional connectives. Propositions are ordinary, proof-relevant types;
+// there is no
 // `Prop` sort and this module does not want one: relevance is the default
 // ontology, `SProp` stays opt-in for evidence that should be invisible
 // (issues/sprop-strict-prop.md), and erasure is the compiler's business
 // (datarepr / `Compile`) rather than the type system's. A connective here is
 // therefore just a record or an inductive, and nothing in it is special.
 //
-// `True` is NOT declared here. It landed as the kernel's `Unit^0` claimed as a
-// surface type name, with `trivial` its inhabitant, always in scope
-// (issues/true-prop-trivial-hypotheses.md). Declaring an `inductive True`
+// `True` is the always-in-scope surface name for the kernel's `Unit^0`, with
+// `trivial` as its inhabitant. Declaring an `inductive True` here
 // would throw away the whole point — the kernel's η rule makes every
 // inhabitant of `Unit` convertible, i.e. `True` is *judgmentally* proof
 // irrelevant, which a one-constructor inductive is not.
@@ -24,9 +16,8 @@
 // Falsity. Zero constructors, so a `match` on it has zero arms and proves
 // anything — which is the elimination rule, spelled with no special form.
 //
-// The name coexists with `bool::False`, the CONSTRUCTOR, and that took a
-// resolution round to make true (issues/false-collides-with-bools-constructor.md,
-// 2026-08-16): a *type* position never considers a constructor a candidate,
+// The name coexists with the `bool::False` constructor: a type position never
+// considers a constructor a candidate,
 // and an expected type that is an inductive never considers a type name one.
 // Both are shrinks rather than choices — neither dropped reading could have
 // checked where it was dropped — so `and(False, True)` and `h: False` mean
@@ -34,9 +25,8 @@
 
 inductive False {}
 
-// The goal is a **type parameter**, not a value parameter of type `Type`, and
-// that is the difference between usable and not (found by writing the order
-// kit, 2026-08-16). An absurd arm's goal is whatever the match's motive says
+// The goal is a type parameter rather than a value parameter of type `Type`.
+// An absurd arm's goal is whatever the match's motive says
 // at that constructor — `or_pick(Inr(bad), x, y) = y`, say — and a value
 // parameter makes the writer spell it, which is both long and, where the
 // spelling needs a type argument nothing determines, sometimes impossible.
@@ -167,11 +157,9 @@ theorem iff_trans<P, Q, R>(h1: P ↔ Q, h2: Q ↔ R): P ↔ R {
 // (docs/surface-value-parameters.md, issues/surface-existential.md — the same
 // shape `lib/ir_v1.hthr`'s `Converges` is written in, generalized).
 //
-// The type argument infers from the predicate's own binder
-// (issues/exists-type-arg-not-inferred.md, fixed 2026-08-16), so
-// `Exists(λ (k: Nat) => …)` writes and `Exists<Nat>(…)` remains available
-// where a reader wants it spelled. Introduction was always fine
-// (`Exists(2, refl)` takes it from the expected type).
+// The type argument infers from the predicate's binder, so
+// `Exists(λ (k: Nat) => …)` writes; `Exists<Nat>(…)` remains available when
+// explicitness helps. Introduction takes the argument from its expected type.
 
 record Exists<A>(P: A -> Type) { witness: A, proof: P(witness) }
 
@@ -199,13 +187,9 @@ instance Decide<False> { dec := Inr(λ (h: False) => h) }
 // through `Not`, then `And`, then whatever decides `P` and `Q`, and no writer
 // names an intermediate.
 //
-// `Not(P)` is a carrier at all only because an instance's canonical name may be
-// keyed at a **type former** as well as a type (docs/decide-class-design.md §2,
-// landed 2026-08-17). `Not` is a `fn` into `Type` — deliberately, so that `¬P`
-// stays definitionally `P -> False` — and before the widening `Not::Decide`
-// had nothing to attach to. The two decisions had collided: negation is a
-// former precisely so it does not need unwrapping, and the registry keyed only
-// on declared types.
+// `¬P` can key an instance because canonical names may be attached to a type
+// former as well as to a declared type. `Not` remains a function into `Type`,
+// keeping negation definitionally equal to `P -> False`.
 
 instance<P: Decide, Q: Decide> Decide<P ∧ Q> {
     dec := match P.dec {
@@ -228,9 +212,9 @@ instance<P: Decide, Q: Decide> Decide<P ∨ Q> {
     },
 }
 
-instance<P: Decide> Decide<Not(P)> {
+instance<P: Decide> Decide<¬P> {
     dec := match P.dec {
-        Inl(p) => Inr(λ (np: Not(P)) => np(p)),
+        Inl(p) => Inr(λ (np: ¬P) => np(p)),
         Inr(np) => Inl(np),
     },
 }
@@ -243,7 +227,7 @@ instance<P: Decide> Decide<Not(P)> {
 // A `fn` and not a `theorem`, both of them, for the reason `or_pick` carries:
 // a `theorem` is opaque, so a decision spelled as one never unfolds in
 // conversion and nothing downstream of it is `refl` any more.
-fn decide<P: Decide>() -> Or<P, Not(P)> { P.dec }
+fn decide<P: Decide>() -> P ∨ ¬P { P.dec }
 
 fn decide_pick<P: Decide, A>(x, y: A) -> A { or_pick(P.dec, x, y) }
 

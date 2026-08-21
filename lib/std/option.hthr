@@ -1,10 +1,4 @@
-// `option` — the generic `Option<A>` and the three functions every use of it
-// wanted (docs/modules-design.md §7, issues/prelude-option-and-friends.md).
-//
-// Type parameters are monomorphized at each instantiation (§2 of
-// docs/inductive-tier0-lowering.md), so `Option<Nat>` and `Option<Bool>` are
-// unrelated kernel types — which is exactly what makes this declaration
-// re-usable without a functor: each importer's uses lower to their own.
+// `Option<A>` and its basic transformation, chaining, and fallback operations.
 
 inductive Option<A> { None, Some(v: A) }
 

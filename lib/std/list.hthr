@@ -1,22 +1,6 @@
-// `list` — `List<A>` and its API (docs/modules-design.md §7). Recursive, so
-// tier 1: the lowering is `Wf^l(x : S). n` rather than a bare sum-of-Σs
-// (docs/inductive-tier1-wf-lowering.md).
-//
-// Grown from three functions to the L1/L2 waves of the library push
-// (issues/std-list-api.md, 2026-08-17). What arrived from elsewhere: `len`,
-// `rev` and the `nth`/`append` interaction lemmas, which were
-// `lib/list_algos.hthr`'s and were always list facts rather than algorithm
-// facts — the same move `cong_cons` and the append laws made on 2026-08-07.
-//
-// Grown again by waves L2′ and L3 (issues/std-list-l2-prime-laws.md,
-// issues/std-list-mem-and-perm.md, 2026-08-17): the laws L2 left unstated —
-// `foldl`'s, `filter`'s, and `zip`'s interaction with `len` — and `Mem`, the
-// module's first relation.
-//
-// Cross-module dependencies: `logic` (`Mem` lands in `Or`/`False`, which is
-// what wave L3 added and what the module had no import for), `nat` (`len`,
-// `take`/`drop`, `replicate`, `min`), `option` (what an out-of-range index has
-// to mean), `bool` (`filter`'s predicate) and `pair` (`zip`).
+// Recursive lists and their core API: elimination, transformation, folds,
+// slicing, zipping, membership, and indexing, together with their principal
+// laws. `List<A>` lowers through the tier-1 well-founded encoding.
 
 import logic;
 import nat;
@@ -32,10 +16,7 @@ inductive List<A> { Nil, Cons(head: A, tail: List<A>) }
 // tail. Packaging the two constructor-local obligations as a record makes a
 // proof by induction an ordinary first-class value.
 //
-// `P` is a VALUE parameter whose value is a type family. This is the exact
-// higher-kinded/dependent record shape that used to be listed as this rung's
-// blocker (issues/case-algebra-definitions.md); record types as type-valued
-// functions have made it writable since.
+// `P` is a value parameter whose value is the result type family.
 record ListElim<A>(P: List<A> -> Type) {
     nil: P(Nil),
     cons: (head: A) -> (tail: List<A>) -> P(tail) -> P(Cons(head, tail)),
@@ -454,13 +435,8 @@ theorem take_append_drop<A>(xs: List<A>):
     }
 }
 
-// The one law about `filter`. The OUTER motive is doing real work — it is what
-// makes each arm's goal reduce to the branch that arm picked — while the inner
-// `match` needs none: both its arms are `List<A>`, and a `match` under a
-// polymorphic callee whose type argument is not yet known takes its motive from
-// an arm that binds nothing (issues/match-arg-of-polymorphic-callee-needs-motive.md,
-// closed 2026-08-17; it used to need `as λ c => List<A>` restating what `len`
-// already knew).
+// Filtering cannot increase length. Both inner branches return `List<A>`, so
+// the match needs no written motive.
 theorem len_filter<A>(xs: List<A>, p: A -> Bool): len(filter(xs, p)) <= len(xs) {
     match xs {
         Nil => trivial,
@@ -471,29 +447,19 @@ theorem len_filter<A>(xs: List<A>, p: A -> Bool): len(filter(xs, p)) <= len(xs) 
     }
 }
 
-// `filter`'s laws (wave L2′). `len_filter` above is a *bound*, not a law, so
-// until now nothing said what `filter` does. Three facts, and they sort
-// themselves by one question: does the OTHER side of the equation branch on the
-// same scrutinee?
+// The three principal filter laws differ by whether the other side of the
+// equation branches on the same scrutinee.
 //
 // For `filter_append` and `filter_map` it does, and then the inner motive is
 // enough — each arm's goal reduces on both sides at once. For `filter_filter`
 // it does not: the right-hand side is `filter(xs, p)` with nothing to reduce,
 // while the left has a SECOND stuck `p(h)` that the motive cannot reach, so the
 // arm needs the equation `p(h) = b` and has to rewrite by it. `match e : p(h)`
-// binds that equation (issues/match-with-equation.md, landed 2026-08-05), so
+// binds that equation, so
 // the convoy costs one token and not a `-> Goal` in the motive plus a trailing
 // `(refl)`; what it does NOT do is use it, and the `j` in the `True` arm is
 // three lines of hand-written motive for a rewrite under a `match` context
 // (issues/congruence-by-anti-unification.md).
-//
-// All three USED to write their own inner motive, which meant unfolding
-// `filter` by hand into the `match p(h)` it reduces to — ten sites across the
-// two list files, and the tax this section actually paid. Motive synthesis now
-// reduces the goal and abstracts what it is stuck on, so the `as λ b => …`
-// is gone from all of them and only the mathematics is left
-// (issues/goal-motive-by-scrutinee-abstraction.md, closed 2026-08-17;
-// docs/goal-motive-synthesis-design.md).
 
 theorem filter_append<A>(xs, ys: List<A>, p: A -> Bool):
     filter(xs ++ ys, p) = filter(xs, p) ++ filter(ys, p)
@@ -554,12 +520,9 @@ theorem filter_map<A, B>(xs: List<A>, f: A -> B, p: B -> Bool):
 // `replicate` recurses on the count with the element fixed, so it needs no
 // currying; `zip` walks both lists at once and therefore does.
 //
-// `zip(xs, ys)` infers both type arguments, and that is newer than `zip`: `B`
-// occurs only in the curried tail, where inference did not look until
-// over-application began feeding it
-// (issues/curried-tail-type-arg-inference.md, closed 2026-08-17). The
-// parenthesized spelling `zip(xs)(ys)` still needs `zip<A, B>(xs)` — there the
-// inner call is a complete expression with no evidence in it.
+// Write `zip(xs, ys)`: over-application lets the second list determine the
+// curried tail's element type. A deliberately partial `zip<A, B>(xs)` still
+// needs both type arguments because the second list is not present to infer B.
 
 fn replicate<A>(x: A, n: Nat) -> List<A> {
     match n {
@@ -683,7 +646,7 @@ theorem zip_swap<A, B>(xs: List<A>):
 fn Mem<A>(a: A, xs: List<A>) -> Type {
     match xs {
         Nil => False,
-        Cons(h, t) => Or<a = h, Mem(a, t)>,
+        Cons(h, t) => a = h ∨ Mem(a, t),
     }
 }
 
@@ -730,7 +693,7 @@ theorem mem_append_iff<A>(xs, ys: List<A>, a: A):
     Mem(a, xs ++ ys) ↔ Mem(a, xs) ∨ Mem(a, ys)
 {
     Iff(mp := mem_append(xs, ys, a),
-        mpr := λ (h: Or<Mem(a, xs), Mem(a, ys)>) =>
+        mpr := λ (h: Mem(a, xs) ∨ Mem(a, ys)) =>
             or_elim(h, mem_append_l(xs, ys, a), mem_append_r(xs, ys, a)))
 }
 
@@ -830,7 +793,7 @@ fn List::last<A>(self xs: List<A>) -> Option<A> {
 fn List::nth<A>(self xs: List<A>) -> Nat -> Option<A> {
     match xs {
         Nil => λ (i: Nat) => None,
-        Cons(h, t) => λ (i: Nat) => match i { Zero => Some(h), Succ(k) => nth(t)(k) },
+        Cons(h, t) => λ (i: Nat) => match i { Zero => Some(h), Succ(k) => nth(t, k) },
     }
 }
 

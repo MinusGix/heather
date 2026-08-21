@@ -1,20 +1,7 @@
-// `bool` — the two-constructor tier-0 declaration, and the two monoid
-// structures it carries.
-//
-// Moved out of `nat` (2026-08-05), where it lived because `leb` needed it.
-// The module's own header asked for `not`/`and` and their laws; the traits
-// adoption round (2026-08-07) is what finally wanted them, because `Bool` is
-// the carrier that makes the "two structures on one carrier" story concrete:
-// conjunction and disjunction are both monoids on it, and the algebra module
-// registers exactly one of them (`std/algebra`, and its header for why).
-//
-// Every law here is a case split and nothing else: `match` on two Bools is
-// four `refl`s. That is the point of proving them at this carrier — the
-// generic consumers over in `algebra` are exercised at a carrier whose laws
-// cost nothing, beside `Nat`, whose laws cost induction.
+// Booleans, their logical operations, and the propositional order
+// `False <= True`. Conjunction and disjunction are both commutative monoids;
+// the corresponding instances live in `std/algebra`.
 
-// `logic` for the connectives the propositional order below is stated with.
-// It imports nothing, so this is a leaf-to-leaf edge and not a cycle.
 import logic;
 
 inductive Bool { False, True }
@@ -72,13 +59,13 @@ theorem or_comm(a, b: Bool): a || b = b || a {
 // Equality is a separate decision from the propositional order below. It is
 // stated directly over constructor identity, and registers at Bool's equality
 // carrier without colliding with Nat's corresponding instance.
-fn eq_dec(a, b: Bool) -> Or<a = b, ¬ (a = b)> {
-    match a as λ x => Or<x = b, Not(x = b)> {
-        False => match b as λ y => Or<False = y, Not(False = y)> {
+fn eq_dec(a, b: Bool) -> a = b ∨ ¬ (a = b) {
+    match a as λ x => x = b ∨ ¬ (x = b) {
+        False => match b as λ y => False = y ∨ ¬ (False = y) {
             False => Inl(refl),
             True => Inr(λ (bad: False = True) => absurd(bad)),
         },
-        True => match b as λ y => Or<True = y, Not(True = y)> {
+        True => match b as λ y => True = y ∨ ¬ (True = y) {
             False => Inr(λ (bad: True = False) => absurd(bad)),
             True => Inl(refl),
         },
@@ -109,7 +96,7 @@ fn leb(a: Bool) -> Bool -> Bool {
     match a { False => λ (b: Bool) => True, True => λ (b: Bool) => b }
 }
 
-theorem leb_refl(a: Bool): leb(a)(a) = True {
+theorem leb_refl(a: Bool): leb(a, a) = True {
     match a { False => refl, True => refl }
 }
 
@@ -132,10 +119,10 @@ theorem le_refl(a: Bool): a <= a {
 
 // A `fn`, not a `theorem`: a decision has to unfold in conversion
 // (docs/nat-order-design.md §2).
-fn le_dec(a, b: Bool) -> Or<a <= b, ¬ (a <= b)> {
-    match a as λ z => Or<z <= b, Not(z <= b)> {
+fn le_dec(a, b: Bool) -> a <= b ∨ ¬ (a <= b) {
+    match a as λ z => z <= b ∨ ¬ (z <= b) {
         False => Inl(trivial),
-        True => match b as λ y => Or<True <= y, Not(True <= y)> {
+        True => match b as λ y => True <= y ∨ ¬ (True <= y) {
             False => Inr(λ (bad: True <= False) => bad),
             True => Inl(trivial),
         },

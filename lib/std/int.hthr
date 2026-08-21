@@ -1,48 +1,11 @@
-// `int` — the integers, their arithmetic, their order
-// (issues/std-int-encoding.md; wave I of issues/std-api-waves.md).
+// Integers, represented canonically as `OfNat(n)` for `n` and `NegSucc(n)` for
+// `-(n+1)`. Addition iterates `isucc`/`ipred`; multiplication uses sign and
+// magnitude; the order is propositional and decided by `le_dec`.
 //
-// The encoding is the one that issue recommended and this file confirms:
-// `OfNat(n)` is `n` and `NegSucc(n)` is `-(n+1)`, so every integer has exactly
-// ONE representation, structural equality is equality, and no quotient is
-// needed. What the file did NOT confirm is the issue's prediction about the
-// *operations*: `add` is not the four-way split whose mixed cases route through
-// `nat::sub` and a comparison. It is iterated `isucc`/`ipred`, which is the same
-// function extensionally and a different proof burden entirely — the mixed-sign
-// cases never mention subtraction, so no cancellation lemma appears anywhere
-// below. See the issue's log for what that costs (`nat`'s `sub` kit is not
-// cashed by this file at all).
-//
-// The shape of the file, and the reason it reads the way it does:
-//
-//   - `Int` is a NON-recursive inductive, so there is no structural recursion
-//     on an integer. Every proof by induction descends on a *payload* `Nat`,
-//     which the recursion guard will not accept as a descent on the integer —
-//     so the induction principle is stated once, as `int_ind`, and every law
-//     below that needs induction is one application of it. That is not a
-//     workaround; it is what an `Int` induction principle *is*, and having it
-//     named is better than the two payload-keyed companion lemmas per law that
-//     the alternative would have cost.
-//   - `isucc`/`ipred` are the file's primitives, and the four lemmas that say
-//     they are mutually inverse and that they commute with `add` on either side
-//     are what every arithmetic law below is spent through.
-//   - `NegSucc(n)` and `neg(OfNat(Succ(n)))` are DEFINITIONALLY equal (both are
-//     `negOfNat(Succ(n))`), which is why the sign cases of `mul` need no case
-//     analysis on a stuck product: `mul_neg_r` applies to `negOfNat(x)` at open
-//     `x` directly.
-//
-// Cross-module: `nat` (every payload fact), `logic` (`False`, `Or`, `Iff`),
-// `algebra` (the classes the carrier earns, at the end). No `bool`: nothing here
-// is Boolean — there is no `leb`-shaped decision procedure, because the order is
-// propositional and `le_dec` returns `P ∨ ¬P` (issues/class-ops-prop-vs-bool.md).
-//
-// One naming note that a reader will trip on otherwise: this file declares
-// `add`, `mul`, `neg`, `Le` and `Lt` at `Int`, and a file's own declaration
-// beats an unlisted import (docs/modules-design.md §4), so inside this file
-// those names are the INTEGER ones and `Nat`'s are written `nat::add`,
-// `nat::Le`, and so on. The operators are what keep both reachable downstream:
-// Each operator is designated immediately after its operation is declared, so
-// this file and a downstream consumer importing both modules write `x + y` at
-// either carrier.
+// `Int` itself is non-recursive, so proofs over all integers use `int_ind`,
+// which performs the two inductions over constructor payloads. Local names such
+// as `add` and `Le` refer to the integer operations; Nat operations are
+// qualified, while the shared public surface is written with operators.
 
 import nat;
 import logic;
@@ -50,20 +13,9 @@ import algebra;
 
 inductive Int { OfNat(n: Nat), NegSucc(n: Nat) }
 
-// The four congruences the file rewrites with — `nat::cong_nat`'s counterparts,
-// one per arrow (`Int -> Int` and `Nat -> Int`) plus one per constructor. All
-// four are `issues/congruence-by-anti-unification.md` customers: the one-place context is
-// determined by the expected type at every one of the 54 sites below, and
-// every one of them names it by hand. A congruence is needed per ARROW rather
-// than per type, which is why a two-type file needs two of them before the
-// constructors get theirs.
-//
-// Not from a want of trying: all 54 were measured against the terse `cong(p)`
-// on 2026-08-18 and 50 are still refused — 23 because they sit in a `trans`
-// chain whose middle endpoint nothing determines, and 27 because the context
-// is a fact about how the two sides COMPUTE and not how they are spelled.
-// Four now accept it, which is not enough to be worth two spellings in one
-// file.
+// Congruence helpers for the two relevant arrows and the two constructors.
+// They remain explicit where the surrounding chain does not determine the
+// one-place context (issues/congruence-by-anti-unification.md).
 theorem cong_int(f: Int -> Int, {a, b: Int}, p: a = b): f(a) = f(b) {
     j(p, λ y q => f(a) = f(y), refl)
 }
@@ -110,14 +62,7 @@ theorem neg_negOfNat(n: Nat): neg(negOfNat(n)) = OfNat(n) {
     match n { Zero => refl, Succ(k) => refl }
 }
 
-// Involutive, and the file's first "case on the integer, then on its payload".
-// The inner `match` needed a written motive until 2026-08-17: an arm's field
-// binder is a projection alias rather than a variable, so motive synthesis
-// found nothing to abstract and the arm goal never specialized. It now
-// abstracts the field by rebuilding the constructor value around `z`, which is
-// what the deleted motive said by hand — thirteen sites in this file
-// (issues/nested-match-on-field-binder-motive.md;
-// docs/goal-motive-synthesis-design.md §5).
+// Involutive by case analysis on the integer and, for `OfNat`, its payload.
 theorem neg_neg(a: Int): -(-a) = a {
     match a {
         OfNat(n) => match n {
@@ -350,23 +295,8 @@ theorem int_ind(P: Int -> Type,
 // group. Each is one `int_ind` whose four arms are the push lemmas above; no arm
 // does any arithmetic of its own, and none mentions `nat::sub`.
 //
-// An arm that rewrites by its induction hypothesis writes `cong_int(isucc, ih)`
-// and nothing more. `ih`'s type there is the motive *applied* — `(λ z =>
-// …)(OfNat(k))` — so until 2026-08-17 the endpoints had to be spelled out with
-// `@cong_int(f, lhs, rhs, ih)`: implicits were read off the argument's type as
-// written, and as written it is a β-redex rather than an `Id`. The read now
-// reduces when the syntactic one learns nothing
-// (issues/motive-application-hides-hypothesis-type.md,
-// docs/argument-type-reduction-design.md), and the eight `ih` sites are terse
-// (one of them, `neg_add`'s deepest arm, now a `calc` chain whose stated
-// endpoints let the step drop the function too — see
-// docs/calc-equational-chains-design.md).
-// The other fourteen `@cong_int`s this file carried are gone too, and they are
-// a separate finding: their proof argument was an ordinary lemma call at a real
-// `Id`, so *nothing* was hiding and the endpoints never had to be written —
-// they were spelled by consistency with the arms that did. Measured with the
-// reduction disabled, 2026-08-17: all fourteen check terse on the old
-// elaborator. Only the `ih` sites were paying the tax the issue named.
+// Induction-hypothesis rewrites use the congruence helpers above; `calc` is used
+// where naming intermediate endpoints makes the chain clearer.
 
 theorem add_comm(a, b: Int): a + b = b + a {
     int_ind(λ (z: Int) => a + z = z + a,
@@ -765,43 +695,43 @@ theorem le_refl(a: Int): a <= a {
 // reason `nat::le_trans` is: the hypotheses are not the scrutinee, so they have
 // to be convoyed past each case analysis.
 theorem le_trans(a: Int): (b: Int) -> (c: Int) -> a <= b -> b <= c -> a <= c {
-    match a as λ z => (b: Int) -> (c: Int) -> Le(z, b) -> Le(b, c) -> Le(z, c) {
+    match a as λ z => (b: Int) -> (c: Int) -> z <= b -> b <= c -> z <= c {
         OfNat(m) => λ b c h1 h2 =>
-            match b as λ y => Le(OfNat(m), y) -> Le(y, c) -> Le(OfNat(m), c) {
+            match b as λ y => OfNat(m) <= y -> y <= c -> OfNat(m) <= c {
                 OfNat(n) => λ p q =>
-                    match c as λ w => Le(OfNat(n), w) -> Le(OfNat(m), w) {
-                        OfNat(r) => λ q2 => nat::le_trans(m)(n, r, p, q2),
+                    match c as λ w => OfNat(n) <= w -> OfNat(m) <= w {
+                        OfNat(r) => λ q2 => nat::le_trans(m, n, r, p, q2),
                         NegSucc(r) => λ q2 => false_elim(q2),
                     }(q),
                 NegSucc(n) => λ p q => false_elim(p),
             }(h1, h2),
         NegSucc(m) => λ b c h1 h2 =>
-            match b as λ y => Le(NegSucc(m), y) -> Le(y, c) -> Le(NegSucc(m), c) {
+            match b as λ y => NegSucc(m) <= y -> y <= c -> NegSucc(m) <= c {
                 OfNat(n) => λ p q =>
-                    match c as λ w => Le(OfNat(n), w) -> Le(NegSucc(m), w) {
+                    match c as λ w => OfNat(n) <= w -> NegSucc(m) <= w {
                         OfNat(r) => λ q2 => trivial,
                         NegSucc(r) => λ q2 => false_elim(q2),
                     }(q),
                 NegSucc(n) => λ p q =>
-                    match c as λ w => Le(NegSucc(n), w) -> Le(NegSucc(m), w) {
+                    match c as λ w => NegSucc(n) <= w -> NegSucc(m) <= w {
                         OfNat(r) => λ q2 => trivial,
-                        NegSucc(r) => λ q2 => nat::le_trans(r)(n, m, q2, p),
+                        NegSucc(r) => λ q2 => nat::le_trans(r, n, m, q2, p),
                     }(q),
             }(h1, h2),
     }
 }
 
 theorem le_antisym(a: Int): (b: Int) -> a <= b -> b <= a -> a = b {
-    match a as λ z => (b: Int) -> Le(z, b) -> Le(b, z) -> z = b {
+    match a as λ z => (b: Int) -> z <= b -> b <= z -> z = b {
         OfNat(m) => λ b h1 h2 =>
-            match b as λ y => Le(OfNat(m), y) -> Le(y, OfNat(m)) -> OfNat(m) = y {
-                OfNat(n) => λ p q => cong_ofnat(nat::le_antisym(m)(n, p, q)),
+            match b as λ y => OfNat(m) <= y -> y <= OfNat(m) -> OfNat(m) = y {
+                OfNat(n) => λ p q => cong_ofnat(nat::le_antisym(m, n, p, q)),
                 NegSucc(n) => λ p q => false_elim(p),
             }(h1, h2),
         NegSucc(m) => λ b h1 h2 =>
-            match b as λ y => Le(NegSucc(m), y) -> Le(y, NegSucc(m)) -> NegSucc(m) = y {
+            match b as λ y => NegSucc(m) <= y -> y <= NegSucc(m) -> NegSucc(m) = y {
                 OfNat(n) => λ p q => false_elim(q),
-                NegSucc(n) => λ p q => cong_negsucc(sym(nat::le_antisym(n)(m, p, q))),
+                NegSucc(n) => λ p q => cong_negsucc(sym(nat::le_antisym(n, m, p, q))),
             }(h1, h2),
     }
 }
@@ -811,12 +741,12 @@ theorem le_antisym(a: Int): (b: Int) -> a <= b -> b <= a -> a = b {
 theorem le_total(a, b: Int): a <= b ∨ b <= a {
     match a {
         OfNat(m) => match b {
-            OfNat(n) => nat::le_total(m)(n),
+            OfNat(n) => nat::le_total(m, n),
             NegSucc(n) => Inr(trivial),
         },
         NegSucc(m) => match b {
             OfNat(n) => Inl(trivial),
-            NegSucc(n) => nat::le_total(n)(m),
+            NegSucc(n) => nat::le_total(n, m),
         },
     }
 }
@@ -827,12 +757,12 @@ theorem le_total(a, b: Int): a <= b ∨ b <= a {
 fn le_dec(a, b: Int) -> a <= b ∨ ¬ (a <= b) {
     match a {
         OfNat(m) => match b {
-            OfNat(n) => nat::le_dec(m)(n),
-            NegSucc(n) => Inr(λ (bad: Le(OfNat(m), NegSucc(n))) => bad),
+            OfNat(n) => nat::le_dec(m, n),
+            NegSucc(n) => Inr(λ (bad: OfNat(m) <= NegSucc(n)) => bad),
         },
         NegSucc(m) => match b {
             OfNat(n) => Inl(trivial),
-            NegSucc(n) => nat::le_dec(n)(m),
+            NegSucc(n) => nat::le_dec(n, m),
         },
     }
 }
@@ -854,35 +784,31 @@ theorem le_of_not_le(a, b: Int, h: ¬ (a <= b)): b <= a {
 theorem lt_isucc_self(a: Int): a < isucc(a) { le_refl(isucc(a)) }
 
 theorem lt_irrefl(a: Int): ¬ (a < a) {
-    match a as λ z => Not(Lt(z, z)) {
+    match a as λ z => ¬ (z < z) {
         OfNat(m) => nat::lt_irrefl(m),
         NegSucc(m) => match m {
-            Zero => λ (h: Lt(NegSucc(0), NegSucc(0))) => h,
+            Zero => λ (h: NegSucc(0) < NegSucc(0)) => h,
             Succ(j) => nat::lt_irrefl(j),
         },
     }
 }
 
 theorem le_of_lt(a: Int): (b: Int) -> a < b -> a <= b {
-    match a as λ z => (b: Int) -> Lt(z, b) -> Le(z, b) {
+    match a as λ z => (b: Int) -> z < b -> z <= b {
         OfNat(m) => λ b h =>
-            match b as λ y => Lt(OfNat(m), y) -> Le(OfNat(m), y) {
-                OfNat(n) => λ p => nat::le_of_lt(m)(n, p),
+            match b as λ y => OfNat(m) < y -> OfNat(m) <= y {
+                OfNat(n) => λ p => nat::le_of_lt(m, n, p),
                 NegSucc(n) => λ p => false_elim(p),
             }(h),
         NegSucc(m) => λ b h =>
-            match b as λ y => Lt(NegSucc(m), y) -> Le(NegSucc(m), y) {
+            match b as λ y => NegSucc(m) < y -> NegSucc(m) <= y {
                 OfNat(n) => λ p => trivial,
                 NegSucc(n) => λ p =>
-                    // The one payload split in this file that is NOT motive
-                    // synthesis' to recover: the `(p)` makes it an INFERENCE
-                    // position, and the motive is convoying `p` past the
-                    // split, which is what the order kit's twelve do
-                    // (issues/nested-match-on-field-binder-motive.md, log
-                    // 2026-08-17).
-                    match m as λ y => Lt(NegSucc(y), NegSucc(n)) -> Le(NegSucc(y), NegSucc(n)) {
+                    // This inference-position split needs the written motive
+                    // to convoy `p` across the payload cases.
+                    match m as λ y => NegSucc(y) < NegSucc(n) -> NegSucc(y) <= NegSucc(n) {
                         Zero => λ p2 => false_elim(p2),
-                        Succ(j) => λ p2 => nat::le_succ_r(n)(j, p2),
+                        Succ(j) => λ p2 => nat::le_succ_r(n, j, p2),
                     }(p),
             }(h),
     }
@@ -899,7 +825,7 @@ theorem negsucc_lt_ofnat(m, n: Nat): NegSucc(m) < OfNat(n) {
 }
 
 theorem negsucc_lt_of_lt(m, n: Nat, h: n < m): NegSucc(m) < NegSucc(n) {
-    match m as λ z => nat::Lt(n, z) -> Lt(NegSucc(z), NegSucc(n)) {
+    match m as λ z => n < z -> NegSucc(z) < NegSucc(n) {
         Zero => bad ⊢ false_elim(bad),
         Succ(k) => good ⊢ good,
     }(h)
@@ -908,7 +834,7 @@ theorem negsucc_lt_of_lt(m, n: Nat, h: n < m): NegSucc(m) < NegSucc(n) {
 theorem lt_trichotomy(a, b: Int): a < b ∨ a = b ∨ b < a {
     match a {
         OfNat(m) => match b {
-            OfNat(n) => match nat::lt_trichotomy(m)(n) {
+            OfNat(n) => match nat::lt_trichotomy(m, n) {
                 Inl(h) => Inl(h),
                 Inr(rest) => match rest {
                     Inl(eq) => Inr(Inl(cong_ofnat(eq))),
@@ -919,7 +845,7 @@ theorem lt_trichotomy(a, b: Int): a < b ∨ a = b ∨ b < a {
         },
         NegSucc(m) => match b {
             OfNat(n) => Inl(negsucc_lt_ofnat(m, n)),
-            NegSucc(n) => match nat::lt_trichotomy(m)(n) {
+            NegSucc(n) => match nat::lt_trichotomy(m, n) {
                 Inl(h) => Inr(Inr(negsucc_lt_of_lt(n, m, h))),
                 Inr(rest) => match rest {
                     Inl(eq) => Inr(Inl(cong_negsucc(eq))),
@@ -931,7 +857,7 @@ theorem lt_trichotomy(a, b: Int): a < b ∨ a = b ∨ b < a {
 }
 
 theorem lt_trans(a, b, c: Int, h1: a < b, h2: b < c): a < c {
-    le_trans(isucc(a))(b, c, h1, le_of_lt(b)(c, h2))
+    le_trans(isucc(a), b, c, h1, le_of_lt(b, c, h2))
 }
 
 theorem lt_of_lt_of_le(a, b, c: Int, h1: a < b, h2: b <= c): a < c {
@@ -944,7 +870,7 @@ theorem lt_of_le_of_ne(a, b: Int, hle: a <= b, hne: ¬ (a = b)): a < b {
         Inr(rest) => match rest {
             Inl(eq) => false_elim(hne(eq)),
             Inr(back) =>
-                false_elim(hne(le_antisym(a)(b, hle, le_of_lt(b)(a, back)))),
+                false_elim(hne(le_antisym(a, b, hle, le_of_lt(b, a, back)))),
         },
     }
 }
@@ -953,8 +879,8 @@ theorem le_of_not_lt(a, b: Int, h: ¬ (a < b)): b <= a {
     match lt_trichotomy(a, b) {
         Inl(forward) => false_elim(h(forward)),
         Inr(rest) => match rest {
-            Inl(eq) => j(eq, λ y q => Le(y, a), le_refl(a)),
-            Inr(back) => le_of_lt(b)(a, back),
+            Inl(eq) => j(eq, λ y q => y <= a, le_refl(a)),
+            Inr(back) => le_of_lt(b, a, back),
         },
     }
 }
@@ -963,8 +889,8 @@ theorem lt_of_not_le(a, b: Int, h: ¬ (b <= a)): a < b {
     match lt_trichotomy(a, b) {
         Inl(forward) => forward,
         Inr(rest) => match rest {
-            Inl(eq) => false_elim(h(j(eq, λ y q => Le(y, a), le_refl(a)))),
-            Inr(back) => false_elim(h(le_of_lt(b)(a, back))),
+            Inl(eq) => false_elim(h(j(eq, λ y q => y <= a, le_refl(a)))),
+            Inr(back) => false_elim(h(le_of_lt(b, a, back))),
         },
     }
 }
@@ -977,32 +903,32 @@ theorem lt_of_not_le(a, b: Int, h: ¬ (b <= a)): a < b {
 // exactly these two lemmas.
 
 theorem le_isucc(a: Int): (b: Int) -> a <= b -> isucc(a) <= isucc(b) {
-    match a as λ z => (b: Int) -> Le(z, b) -> Le(isucc(z), isucc(b)) {
+    match a as λ z => (b: Int) -> z <= b -> isucc(z) <= isucc(b) {
         OfNat(m) => λ b h =>
-            match b as λ y => Le(OfNat(m), y) -> Le(isucc(OfNat(m)), isucc(y)) {
+            match b as λ y => OfNat(m) <= y -> isucc(OfNat(m)) <= isucc(y) {
                 OfNat(n) => λ p => p,
                 NegSucc(n) => λ p => false_elim(p),
             }(h),
         NegSucc(m) => λ b h =>
-            match b as λ y => Le(NegSucc(m), y) -> Le(isucc(NegSucc(m)), isucc(y)) {
+            match b as λ y => NegSucc(m) <= y -> isucc(NegSucc(m)) <= isucc(y) {
                 OfNat(n) => λ p =>
-                    match m as λ w => Le(isucc(NegSucc(w)), OfNat(Succ(n))) {
+                    match m as λ w => isucc(NegSucc(w)) <= OfNat(Succ(n)) {
                         Zero => trivial,
                         Succ(j) => trivial,
                     },
                 NegSucc(n) => λ p =>
                     match m as λ w =>
-                        Le(NegSucc(w), NegSucc(n)) -> Le(isucc(NegSucc(w)), isucc(NegSucc(n))) {
+                        NegSucc(w) <= NegSucc(n) -> isucc(NegSucc(w)) <= isucc(NegSucc(n)) {
                         Zero => λ p2 =>
                             match n as λ v =>
-                                Le(NegSucc(0), NegSucc(v)) -> Le(OfNat(0), isucc(NegSucc(v))) {
+                                NegSucc(0) <= NegSucc(v) -> OfNat(0) <= isucc(NegSucc(v)) {
                                 Zero => λ p3 => trivial,
                                 Succ(i) => λ p3 => false_elim(p3),
                             }(p2),
                         Succ(j) => λ p2 =>
                             match n as λ v =>
-                                Le(NegSucc(Succ(j)), NegSucc(v))
-                                    -> Le(NegSucc(j), isucc(NegSucc(v))) {
+                                NegSucc(Succ(j)) <= NegSucc(v)
+                                    -> NegSucc(j) <= isucc(NegSucc(v)) {
                                 Zero => λ p3 => trivial,
                                 Succ(i) => λ p3 => p3,
                             }(p2),
@@ -1012,33 +938,33 @@ theorem le_isucc(a: Int): (b: Int) -> a <= b -> isucc(a) <= isucc(b) {
 }
 
 theorem lt_of_le_of_lt(a, b, c: Int, h1: a <= b, h2: b < c): a < c {
-    le_trans(isucc(a))(isucc(b), c, le_isucc(a)(b, h1), h2)
+    le_trans(isucc(a), isucc(b), c, le_isucc(a, b, h1), h2)
 }
 
 theorem not_lt_of_ge(a, b: Int, h: a <= b): ¬ (b < a) {
-    (back: b < a) ⊢ lt_irrefl(a)(lt_of_le_of_lt(a, b, a, h, back))
+    (back: b < a) ⊢ lt_irrefl(a, lt_of_le_of_lt(a, b, a, h, back))
 }
 
 theorem lt_asymm(a, b: Int, h: a < b): ¬ (b < a) {
-    not_lt_of_ge(a, b, le_of_lt(a)(b, h))
+    not_lt_of_ge(a, b, le_of_lt(a, b, h))
 }
 
 theorem le_ipred(a: Int): (b: Int) -> a <= b -> ipred(a) <= ipred(b) {
-    match a as λ z => (b: Int) -> Le(z, b) -> Le(ipred(z), ipred(b)) {
+    match a as λ z => (b: Int) -> z <= b -> ipred(z) <= ipred(b) {
         OfNat(m) => λ b h =>
-            match b as λ y => Le(OfNat(m), y) -> Le(ipred(OfNat(m)), ipred(y)) {
+            match b as λ y => OfNat(m) <= y -> ipred(OfNat(m)) <= ipred(y) {
                 OfNat(n) => λ p =>
                     match m as λ w =>
-                        Le(OfNat(w), OfNat(n)) -> Le(ipred(OfNat(w)), ipred(OfNat(n))) {
+                        OfNat(w) <= OfNat(n) -> ipred(OfNat(w)) <= ipred(OfNat(n)) {
                         Zero => λ p2 =>
-                            match n as λ v => Le(ipred(OfNat(0)), ipred(OfNat(v))) {
+                            match n as λ v => ipred(OfNat(0)) <= ipred(OfNat(v)) {
                                 Zero => trivial,
                                 Succ(i) => trivial,
                             },
                         Succ(j) => λ p2 =>
                             match n as λ v =>
-                                Le(OfNat(Succ(j)), OfNat(v))
-                                    -> Le(OfNat(j), ipred(OfNat(v))) {
+                                OfNat(Succ(j)) <= OfNat(v)
+                                    -> OfNat(j) <= ipred(OfNat(v)) {
                                 Zero => λ p3 => false_elim(p3),
                                 Succ(i) => λ p3 => p3,
                             }(p2),
@@ -1046,9 +972,9 @@ theorem le_ipred(a: Int): (b: Int) -> a <= b -> ipred(a) <= ipred(b) {
                 NegSucc(n) => λ p => false_elim(p),
             }(h),
         NegSucc(m) => λ b h =>
-            match b as λ y => Le(NegSucc(m), y) -> Le(ipred(NegSucc(m)), ipred(y)) {
+            match b as λ y => NegSucc(m) <= y -> ipred(NegSucc(m)) <= ipred(y) {
                 OfNat(n) => λ p =>
-                    match n as λ v => Le(NegSucc(Succ(m)), ipred(OfNat(v))) {
+                    match n as λ v => NegSucc(Succ(m)) <= ipred(OfNat(v)) {
                         Zero => trivial,
                         Succ(i) => trivial,
                     },
@@ -1058,23 +984,23 @@ theorem le_ipred(a: Int): (b: Int) -> a <= b -> ipred(a) <= ipred(b) {
 }
 
 theorem add_le_mono_r(a, b, c: Int, h: a <= b): a + c <= b + c {
-    int_ind(λ (z: Int) => Le(add(a, z), add(b, z)),
+    int_ind(λ (z: Int) => a + z <= b + z,
         h,
-        λ (k: Nat) (ih: Le(add(a, OfNat(k)), add(b, OfNat(k)))) =>
-            le_isucc(add(a, OfNat(k)))(add(b, OfNat(k)), ih),
-        le_ipred(a)(b, h),
-        λ (k: Nat) (ih: Le(add(a, NegSucc(k)), add(b, NegSucc(k)))) =>
-            le_ipred(add(a, NegSucc(k)))(add(b, NegSucc(k)), ih),
+        λ (k: Nat) (ih: a + OfNat(k) <= b + OfNat(k)) =>
+            le_isucc(a + OfNat(k), b + OfNat(k), ih),
+        le_ipred(a, b, h),
+        λ (k: Nat) (ih: a + NegSucc(k) <= b + NegSucc(k)) =>
+            le_ipred(a + NegSucc(k), b + NegSucc(k), ih),
         c)
 }
 
 theorem add_le_mono_l(a, b, c: Int, h: a <= b): c + a <= c + b {
-    j(add_comm(a, c), λ y q => Le(y, add(c, b)),
-      j(add_comm(b, c), λ y q => Le(add(a, c), y), add_le_mono_r(a, b, c, h)))
+    j(add_comm(a, c), λ y q => y <= c + b,
+      j(add_comm(b, c), λ y q => a + c <= y, add_le_mono_r(a, b, c, h)))
 }
 
 theorem add_le_mono(a, b, c, d: Int, h1: a <= b, h2: c <= d): a + c <= b + d {
-    le_trans(a + c)(b + c, b + d,
+    le_trans(a + c, b + c, b + d,
         add_le_mono_r(a, b, c, h1),
         add_le_mono_l(c, d, b, h2))
 }
@@ -1088,15 +1014,15 @@ theorem mul_le_mono_r(a, b, k: Int, h: a <= b, hk: OfNat(0) <= k): a * k <= b * 
     int_ind(
         λ (z: Int) => OfNat(0) <= z -> a <= b -> a * z <= b * z,
         λ hz hab =>
-            j(sym(mul_zero(a)), λ left q => Le(left, b * OfNat(0)),
-              j(sym(mul_zero(b)), λ right q => Le(OfNat(0), right), le_refl(OfNat(0)))),
+            j(sym(mul_zero(a)), λ left q => left <= b * OfNat(0),
+              j(sym(mul_zero(b)), λ right q => OfNat(0) <= right, le_refl(OfNat(0)))),
         λ (n: Nat)
           (ih: OfNat(0) <= OfNat(n) -> a <= b -> a * OfNat(n) <= b * OfNat(n))
           hz hab =>
             j(sym(mul_ofnat_succ(a, n)),
-              λ left q => Le(left, b * OfNat(Succ(n))),
+              λ left q => left <= b * OfNat(Succ(n)),
               j(sym(mul_ofnat_succ(b, n)),
-                λ right q => Le(a * OfNat(n) + a, right),
+                λ right q => a * OfNat(n) + a <= right,
                 add_le_mono(a * OfNat(n), b * OfNat(n), a, b,
                     ih(trivial, hab), hab))),
         λ hz hab => false_elim(hz),
@@ -1107,29 +1033,29 @@ theorem mul_le_mono_r(a, b, k: Int, h: a <= b, hk: OfNat(0) <= k): a * k <= b * 
 }
 
 theorem mul_le_mono_l(a, b, k: Int, h: a <= b, hk: OfNat(0) <= k): k * a <= k * b {
-    j(mul_comm(a, k), λ left q => Le(left, k * b),
-      j(mul_comm(b, k), λ right q => Le(a * k, right),
+    j(mul_comm(a, k), λ left q => left <= k * b,
+      j(mul_comm(b, k), λ right q => a * k <= right,
         mul_le_mono_r(a, b, k, h, hk)))
 }
 
 // Negation reverses the order — the fact that makes `Int`'s order an order on
 // the *integers* rather than two `Nat` orders glued at zero.
-theorem le_neg(a: Int): (b: Int) -> a <= b -> neg(b) <= neg(a) {
-    match a as λ z => (b: Int) -> Le(z, b) -> Le(neg(b), neg(z)) {
+theorem le_neg(a: Int): (b: Int) -> a <= b -> -b <= -a {
+    match a as λ z => (b: Int) -> z <= b -> -b <= -z {
         OfNat(m) => λ b h =>
-            match b as λ y => Le(OfNat(m), y) -> Le(neg(y), neg(OfNat(m))) {
+            match b as λ y => OfNat(m) <= y -> -y <= -OfNat(m) {
                 OfNat(n) => λ p =>
                     match m as λ w =>
-                        Le(OfNat(w), OfNat(n)) -> Le(neg(OfNat(n)), neg(OfNat(w))) {
+                        OfNat(w) <= OfNat(n) -> -OfNat(n) <= -OfNat(w) {
                         Zero => λ p2 =>
-                            match n as λ v => Le(neg(OfNat(v)), neg(OfNat(0))) {
+                            match n as λ v => -OfNat(v) <= -OfNat(0) {
                                 Zero => trivial,
                                 Succ(i) => trivial,
                             },
                         Succ(j) => λ p2 =>
                             match n as λ v =>
-                                Le(OfNat(Succ(j)), OfNat(v))
-                                    -> Le(neg(OfNat(v)), NegSucc(j)) {
+                                OfNat(Succ(j)) <= OfNat(v)
+                                    -> -OfNat(v) <= NegSucc(j) {
                                 Zero => λ p3 => false_elim(p3),
                                 Succ(i) => λ p3 => p3,
                             }(p2),
@@ -1137,9 +1063,9 @@ theorem le_neg(a: Int): (b: Int) -> a <= b -> neg(b) <= neg(a) {
                 NegSucc(n) => λ p => false_elim(p),
             }(h),
         NegSucc(m) => λ b h =>
-            match b as λ y => Le(NegSucc(m), y) -> Le(neg(y), neg(NegSucc(m))) {
+            match b as λ y => NegSucc(m) <= y -> -y <= -NegSucc(m) {
                 OfNat(n) => λ p =>
-                    match n as λ v => Le(neg(OfNat(v)), OfNat(Succ(m))) {
+                    match n as λ v => -OfNat(v) <= OfNat(Succ(m)) {
                         Zero => trivial,
                         Succ(i) => trivial,
                     },
@@ -1158,42 +1084,42 @@ fn max(a, b: Int) -> Int { if a <= b { b } else { a } }
 fn min(a, b: Int) -> Int { if a <= b { a } else { b } }
 
 theorem le_max_l(a, b: Int): a <= max(a, b) {
-    match le_dec(a, b) as λ d => Le(a, or_pick(d, a, b)) {
+    match le_dec(a, b) as λ d => a <= or_pick(d, a, b) {
         Inl(h) => h,
         Inr(h) => le_refl(a),
     }
 }
 
 theorem le_max_r(a, b: Int): b <= max(a, b) {
-    match le_dec(a, b) as λ d => Le(b, or_pick(d, a, b)) {
+    match le_dec(a, b) as λ d => b <= or_pick(d, a, b) {
         Inl(h) => le_refl(b),
         Inr(h) => le_of_not_le(a, b, h),
     }
 }
 
 theorem min_le_l(a, b: Int): min(a, b) <= a {
-    match le_dec(a, b) as λ d => Le(or_pick(d, b, a), a) {
+    match le_dec(a, b) as λ d => or_pick(d, b, a) <= a {
         Inl(h) => le_refl(a),
         Inr(h) => le_of_not_le(a, b, h),
     }
 }
 
 theorem min_le_r(a, b: Int): min(a, b) <= b {
-    match le_dec(a, b) as λ d => Le(or_pick(d, b, a), b) {
+    match le_dec(a, b) as λ d => or_pick(d, b, a) <= b {
         Inl(h) => h,
         Inr(h) => le_refl(b),
     }
 }
 
 theorem max_le(a, b, c: Int, h1: a <= c, h2: b <= c): max(a, b) <= c {
-    match le_dec(a, b) as λ d => Le(or_pick(d, a, b), c) {
+    match le_dec(a, b) as λ d => or_pick(d, a, b) <= c {
         Inl(h) => h2,
         Inr(h) => h1,
     }
 }
 
 theorem le_min(a, b, c: Int, h1: c <= a, h2: c <= b): c <= min(a, b) {
-    match le_dec(a, b) as λ d => Le(c, or_pick(d, b, a)) {
+    match le_dec(a, b) as λ d => c <= or_pick(d, b, a) {
         Inl(h) => h1,
         Inr(h) => h2,
     }
@@ -1209,14 +1135,14 @@ theorem min_eq_l(a, b: Int, h: a <= b): min(a, b) = a {
 
 theorem max_eq_l(a, b: Int, h: b <= a): max(a, b) = a {
     match le_dec(a, b) as λ d => or_pick(d, a, b) = a {
-        Inl(forward) => sym(le_antisym(a)(b, forward, h)),
+        Inl(forward) => sym(le_antisym(a, b, forward, h)),
         Inr(back) => refl,
     }
 }
 
 theorem min_eq_r(a, b: Int, h: b <= a): min(a, b) = b {
     match le_dec(a, b) as λ d => or_pick(d, b, a) = b {
-        Inl(forward) => le_antisym(a)(b, forward, h),
+        Inl(forward) => le_antisym(a, b, forward, h),
         Inr(back) => refl,
     }
 }
@@ -1228,11 +1154,11 @@ theorem min_eq_r(a, b: Int, h: b <= a): min(a, b) = b {
 // non-negative half really is `Nat` and not a copy of it.
 
 theorem ofNat_le_iff(m, n: Nat): m <= n ↔ OfNat(m) <= OfNat(n) {
-    Iff(λ (h: nat::Le(m, n)) => h, λ (h: Le(OfNat(m), OfNat(n))) => h)
+    Iff(λ (h: m <= n) => h, λ (h: OfNat(m) <= OfNat(n)) => h)
 }
 
 theorem ofNat_lt_iff(m, n: Nat): m < n ↔ OfNat(m) < OfNat(n) {
-    Iff(λ (h: nat::Lt(m, n)) => h, λ (h: Lt(OfNat(m), OfNat(n))) => h)
+    Iff(λ (h: m < n) => h, λ (h: OfNat(m) < OfNat(n)) => h)
 }
 
 theorem zero_le_ofNat(n: Nat): OfNat(0) <= OfNat(n) { trivial }
@@ -1243,7 +1169,7 @@ theorem negsucc_le_ofNat(m, n: Nat): NegSucc(m) <= OfNat(n) { trivial }
 // hypothesis is convoyed rather than assumed: at a negative argument the
 // hypothesis IS `False`, which is the same economy `nat`'s order kit has.
 theorem ofNat_toNat(a: Int): OfNat(0) <= a -> OfNat(toNat(a)) = a {
-    match a as λ z => Le(OfNat(0), z) -> OfNat(toNat(z)) = z {
+    match a as λ z => OfNat(0) <= z -> OfNat(toNat(z)) = z {
         OfNat(n) => λ h => refl,
         NegSucc(n) => false_elim(·),
     }
@@ -1255,11 +1181,7 @@ theorem ofNat_toNat(a: Int): OfNat(0) <= a -> OfNat(toNat(a)) = a {
 // value-generic instance shape `nat`'s order has
 // (docs/value-generic-instances-design.md).
 //
-// These live here rather than in `std/algebra` for one reason and it is not a
-// design one: `algebra` is where every other carrier's instances are, and this
-// round was not allowed to edit that file. The declarations are portable as they
-// stand — `algebra` imports nothing from `int` — so moving them is a cut and a
-// paste.
+// Instances live with the carrier and the laws that discharge their fields.
 
 instance CommMonoid<Int>(add) {
     unit := OfNat(0),
