@@ -8,5 +8,5 @@ repository = "https://github.com/MinusGix/heather"
 
 [grammars.heather]
 repository = "https://github.com/MinusGix/heather"
-rev = "ea6aa192a6772601b26a49c908eec98253de52b0"
+rev = "1756e3c1f27d1248febd22782c1a22e9fd24f187"
 path = "tree-sitter-heather"
