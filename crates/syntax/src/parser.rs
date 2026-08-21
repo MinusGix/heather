@@ -2501,12 +2501,14 @@ impl Parser {
     /// The **comparison level**: one non-associative rung, loosest of all, sitting
     /// above the arithmetic table (`a + b <= c` is `Le(add(a, b), c)`).
     ///
-    /// Three spellings share it, because they are one notion — a relation
+    /// Four spellings share it, because they are one notion — a relation
     /// between two arithmetic expressions — and because sharing a rung is what
     /// makes chaining impossible:
     ///
     /// - `a = b`, the identity-type former (an [`ExprKind::Eq`], not a call —
     ///   the elaborator never sees `=` as a `Call`);
+    /// - `a ≠ b`, direct notation for `¬(a = b)`, desugared here to the
+    ///   same `Not` application and equality node as that longer spelling;
     /// - `a <= b`, which falls back to `Le(a, b)`, the *proposition* from
     ///   lib/ir_v1.hthr, never the boolean `leb`; a computational position
     ///   calls `leb` by name (issues/comparison-operators.md);
@@ -2535,6 +2537,22 @@ impl Parser {
                 let span = lhs.span.join(rhs.span);
                 Expr { kind: ExprKind::Eq(Box::new(lhs), Box::new(rhs)), span }
             }
+            TokKind::Ne => {
+                let op = self.bump().span;
+                let rhs = self.with_eq(true, |p| p.expr_bp(0))?;
+                let eq_span = lhs.span.join(rhs.span);
+                let eq = Expr { kind: ExprKind::Eq(Box::new(lhs), Box::new(rhs)), span: eq_span };
+                let head = Expr { kind: ExprKind::Var("Not".to_string()), span: op };
+                Expr {
+                    kind: ExprKind::App {
+                        head: Box::new(head),
+                        args: vec![eq],
+                        named: Vec::new(),
+                        explicit: false,
+                    },
+                    span: eq_span,
+                }
+            }
             TokKind::LtEq | TokKind::Lt => {
                 let sym = if matches!(self.peek(), TokKind::LtEq) { "<=" } else { "<" };
                 self.bump();
@@ -2544,12 +2562,12 @@ impl Parser {
             }
             _ => return Ok(lhs),
         };
-        const CHAIN: &str = "comparisons do not chain: `=`, `<=` and `<` share one \
+        const CHAIN: &str = "comparisons do not chain: `=`, `≠`, `<=` and `<` share one \
              non-associative level, so `a <= b <= c` has no reading. Write the two \
              comparisons separately, or parenthesise the one that is meant to be an \
              operand";
         match self.peek() {
-            TokKind::LtEq | TokKind::Eq => self.err(CHAIN),
+            TokKind::LtEq | TokKind::Lt | TokKind::Eq | TokKind::Ne => self.err(CHAIN),
             TokKind::EqEq => {
                 self.err(format!("{CHAIN} (and `==` is not used in Heather: equality is `=`)"))
             }
@@ -4382,6 +4400,7 @@ mod tests {
         assert_eq!(kinds("a <-> b")[1], TokKind::Iff);
         assert_eq!(kinds("a <= b")[1], TokKind::LtEq);
         assert_eq!(kinds("a < b")[1], TokKind::Lt);
+        assert_eq!(kinds("a ≠ b")[1], TokKind::Ne);
         // `↔` and `<->` are one token, so nothing downstream can tell them
         // apart — the property the library's casual spelling rests on.
         assert_eq!(kinds("a ↔ b"), kinds("a <-> b"));
@@ -4541,10 +4560,50 @@ mod tests {
     fn comparisons_do_not_chain() {
         // Non-associative at their shared level: `a <= b <= c` has no reading,
         // and says so rather than silently grouping.
-        for src in ["a <= b <= c", "a <= b == c", "a = b <= c", "a < b <= c"] {
+        for src in [
+            "a <= b <= c",
+            "a <= b == c",
+            "a = b <= c",
+            "a < b <= c",
+            "a ≠ b = c",
+            "a = b ≠ c",
+            "a ≠ b ≠ c",
+        ] {
             let e = parse_file(&format!("fn f() -> Nat {{ {src} }}")).unwrap_err();
             assert!(e.msg.contains("do not chain"), "{src}: {}", e.msg);
         }
+    }
+
+    #[test]
+    fn inequality_is_exact_negated_equality_sugar_with_logic_precedence() {
+        let inequality = body("a ≠ b");
+        let explicit = body("¬(a = b)");
+
+        let inequality_call = as_call(&inequality);
+        let explicit_call = as_call(&explicit);
+        assert_eq!(inequality_call.0, "Not");
+        assert_eq!(explicit_call.0, "Not");
+        assert!(matches!(inequality_call.1[0].kind, ExprKind::Eq(..)));
+        assert!(matches!(explicit_call.1[0].kind, ExprKind::Eq(..)));
+
+        // Comparison is tighter than conjunction.
+        let conjunction = body("a ≠ b ∧ P");
+        let ExprKind::TyApp { head, args } = conjunction else {
+            panic!("expected an And type application")
+        };
+        assert!(matches!(&head.kind, ExprKind::Var(name) if name == "And"));
+        let TyKind::OfExpr(left) = &args[0].kind else {
+            panic!("expected inequality as the left conjunct")
+        };
+        assert_eq!(as_call(&left.kind).0, "Not");
+
+        // Prefix negation is looser than comparison, giving double negation.
+        let outer = body("¬(a ≠ b)");
+        let (_, args, _) = as_call(&outer);
+        assert_eq!(as_call(&args[0].kind).0, "Not");
+
+        let ascii = parse_file("fn f(a, b: Nat) -> Type { a != b }").unwrap_err();
+        assert!(ascii.msg.contains("unexpected character"), "{}", ascii.msg);
     }
 
     #[test]

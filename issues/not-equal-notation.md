@@ -1,6 +1,6 @@
 ---
 title: "Direct ≠ notation for negated equality"
-status: open
+status: closed
 labels: [frontend,syntax,notation,logic,stdlib,ergonomics]
 created: 2026-08-20
 updated: 2026-08-20
@@ -34,3 +34,12 @@ by this issue.
 
 - 2026-08-20: Filed from the standard-library review with the direct-desugaring
   direction chosen specifically to avoid a second nominal relation.
+- 2026-08-21: Landed as one Unicode lexer token and a comparison-rung parser
+  case which emits the exact `Not(a = b)` surface tree; no declaration,
+  resolver path, or kernel form was added. Precedence, non-associativity, the
+  absent `!=` alias, and agreement at open polymorphic endpoints are pinned.
+  Surface diagnostic rendering recognizes only the preserved `Not(Eq)` shape
+  as `≠`, never an arbitrary function into `False`. Nat, Int, and Bool
+  public equality-refutation statements were respelled; List has no public
+  negated-equality statement to migrate, so no unrelated API was invented.
+  Full workspace suite green.

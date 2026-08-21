@@ -864,7 +864,7 @@ theorem lt_of_lt_of_le(a, b, c: Int, h1: a < b, h2: b <= c): a < c {
     le_trans(isucc(a))(b, c, h1, h2)
 }
 
-theorem lt_of_le_of_ne(a, b: Int, hle: a <= b, hne: ¬(a = b)): a < b {
+theorem lt_of_le_of_ne(a, b: Int, hle: a <= b, hne: a ≠ b): a < b {
     match lt_trichotomy(a, b) {
         Inl(h) => h,
         Inr(rest) => match rest {

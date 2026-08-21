@@ -298,6 +298,16 @@ theorem dbl(P: Type, h: Not(Not(P))): ¬¬P { h }
 ");
 }
 
+/// `≠` is only parser sugar, so both spellings use the same expected-carrier
+/// path even when the equality endpoints have an open polymorphic carrier.
+#[test]
+fn inequality_and_negated_equality_share_open_endpoint_resolution() {
+    ok("
+theorem long_to_short<A>(x, y: A, h: ¬(x = y)): x ≠ y { h }
+theorem short_to_long<A>(x, y: A, h: x ≠ y): ¬(x = y) { h }
+");
+}
+
 /// `↔` is looser than `->`, which the arrow's right-associativity would
 /// otherwise beat: `P -> Q ↔ Q -> P` relates two implications.
 #[test]

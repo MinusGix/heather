@@ -252,6 +252,19 @@ pub(crate) fn render_expr(e: &Expr) -> String {
         ExprKind::Var(n) => n.clone(),
         ExprKind::OpSymbol { symbol, .. } => symbol.clone(),
         ExprKind::Num(n) => n.to_string(),
+        ExprKind::Eq(lhs, rhs) => format!("{} = {}", render_expr(lhs), render_expr(rhs)),
+        // Prefer the direct surface notation only while its source shape is
+        // still present. In particular, do not inspect an elaborated `Pi`
+        // ending in `False`: an arbitrary function into `False` is not
+        // necessarily an inequality.
+        ExprKind::App { head, args, named, explicit: false }
+            if matches!(&head.kind, ExprKind::Var(name) if name == "Not")
+                && named.is_empty()
+                && matches!(args.as_slice(), [Expr { kind: ExprKind::Eq(..), .. }]) =>
+        {
+            let ExprKind::Eq(lhs, rhs) = &args[0].kind else { unreachable!() };
+            format!("{} ≠ {}", render_expr(lhs), render_expr(rhs))
+        }
         // An operator application renders as what was **written**
         // (`a + b`, never `add(a, b)`) — the standing ask of
         // `issues/diagnostics-name-the-written-form.md`, arriving free now
@@ -286,6 +299,34 @@ pub(crate) fn render_expr(e: &Expr) -> String {
         ),
         ExprKind::Dot { recv, name, .. } => format!("{}.{name}", render_expr(recv)),
         _ => "_".into(),
+    }
+}
+
+#[cfg(test)]
+mod inequality_render_tests {
+    use super::*;
+
+    fn expr(kind: ExprKind) -> Expr {
+        Expr { kind, span: Span { start: 0, end: 0 } }
+    }
+
+    #[test]
+    fn only_the_surface_not_equality_shape_renders_as_inequality() {
+        let equation = expr(ExprKind::Eq(
+            Box::new(expr(ExprKind::Var("x".into()))),
+            Box::new(expr(ExprKind::Num(0))),
+        ));
+        let call = |name: &str| {
+            expr(ExprKind::App {
+                head: Box::new(expr(ExprKind::Var(name.into()))),
+                args: vec![equation.clone()],
+                named: Vec::new(),
+                explicit: false,
+            })
+        };
+
+        assert_eq!(render_expr(&call("Not")), "x ≠ 0");
+        assert_eq!(render_expr(&call("reject")), "reject(x = 0)");
     }
 }
 

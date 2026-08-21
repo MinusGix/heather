@@ -93,6 +93,10 @@ pub enum TokKind {
     /// by the parser's keyword helpers (docs/surface-function-types.md §3.2).
     Lambda,
     Eq,        // =   (both `let x = e` binding and `a = b` equality)
+    /// `≠` (U+2260), the Unicode-only negated-equality spelling. It is a
+    /// three-byte comparison token and desugars in the parser; there is no
+    /// `!=` alias.
+    Ne,
     EqEq,      // ==  (lexed but rejected by the parser — see `=`)
     ColonEq,   // :=
     /// `::` — qualification (docs/modules-design.md §4). Only ever *seen* by
@@ -227,6 +231,7 @@ pub fn lex(src: &str) -> Result<Vec<Tok>, LexError> {
             "↔" | "<->" => Some(TokKind::Iff),
             "∃" => Some(TokKind::Exists),
             "∀" => Some(TokKind::Forall),
+            "≠" => Some(TokKind::Ne),
             "⊢" => Some(TokKind::Turnstile),
             _ => None,
         };
