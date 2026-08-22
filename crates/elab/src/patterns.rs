@@ -646,7 +646,11 @@ impl Elaborator {
                 // new analysis, it is this number being zero.
                 0 => {
                     if !st.generated {
-                        self.warn(unreachable_msg(a, &arms[..i], st.form), a.span);
+                        self.emit_lint(
+                            crate::Lint::UnreachableMatchArm,
+                            unreachable_msg(a, &arms[..i], st.form),
+                            a.span,
+                        );
                     }
                 }
                 1 => bodies[i] = Some(a.body.clone()),

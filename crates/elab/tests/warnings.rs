@@ -8,7 +8,7 @@
 //! pattern compiler has always known about — `Compile.uses[i] == 0` is the
 //! census §5 computes for sharing — and until now had nowhere to say.
 
-use heather_elab::Elaborator;
+use heather_elab::{Elaborator, Lint};
 
 const TOK: &str = "
 inductive Tok { TA, TB }
@@ -114,6 +114,52 @@ fn a_dead_default_arm_is_reported() {
     assert_eq!(ws.len(), 1, "{ws:?}");
     assert!(ws[0].contains("`_` arm can never be reached"), "{}", ws[0]);
     assert!(ws[0].contains("already cover every constructor"), "{}", ws[0]);
+}
+
+#[test]
+fn warnings_carry_a_stable_lint_identity() {
+    let mut e = Elaborator::with_prelude().expect("prelude");
+    let src = format!("{TOK}fn f(t: Tok) -> Nat {{ match t {{ TA => 0, TB => 1, _ => 2 }} }}");
+    assert!(e.check_source(&src).is_empty());
+    let w = e.take_warnings().pop().expect("a warning");
+    assert_eq!(w.lint, Lint::UnreachableMatchArm);
+    assert_eq!(w.lint.name(), "unreachable-match-arm");
+}
+
+// -- registered source lints ----------------------------------------------
+
+#[test]
+fn an_immediately_applied_function_match_is_reported() {
+    let mut e = Elaborator::with_prelude().expect("prelude");
+    let src = "fn old(n: Nat) -> Nat -> Nat {
+        λ m => match n as λ z => Nat -> Nat {
+            Zero => λ x => x,
+            Succ(k) => λ x => x,
+        }(m)
+    }";
+    assert!(e.check_source(src).is_empty());
+    let ws = e.take_warnings();
+    assert_eq!(ws.len(), 1, "{ws:?}");
+    assert_eq!(ws[0].lint, Lint::MatchFunctionApplication);
+    assert_eq!(ws[0].lint.name(), "match-function-application");
+    assert!(ws[0].msg.contains("checking position"), "{}", ws[0].msg);
+    assert!(ws[0].msg.contains("motive may be inferable"), "{}", ws[0].msg);
+}
+
+#[test]
+fn a_match_used_as_a_function_value_is_not_reported() {
+    let direct = "fn kept(n: Nat) -> Nat -> Nat {
+        match n as λ z => Nat -> Nat { Zero => λ x => x, Succ(k) => λ x => x }
+    }";
+    let nonbinder = "fn applied(n: Nat) -> Nat -> Nat {
+        λ m => match n as λ z => Nat -> Nat {
+            Zero => λ x => x, Succ(k) => λ x => x
+        }(0)
+    }";
+    let mut e = Elaborator::with_prelude().expect("prelude");
+    assert!(e.check_source(direct).is_empty());
+    assert!(e.check_source(nonbinder).is_empty());
+    assert!(e.take_warnings().is_empty());
 }
 
 /// A `_` that stands for a constructor with no arm of its own is the whole

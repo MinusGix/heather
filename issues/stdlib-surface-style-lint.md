@@ -3,7 +3,7 @@ title: "Standard-library surface style: n-ary calls, designated operators, and a
 status: open
 labels: [stdlib,ergonomics,tooling,lint]
 created: 2026-08-19
-updated: 2026-08-20
+updated: 2026-08-22
 ---
 
 Heather's surface now accepts substantially better spellings than parts of the
@@ -129,3 +129,7 @@ rewrite that would change which later argument participates in inference.
   review filed [[not-equal-notation]] for direct `≠` sugar and
   [[match-motive-surface-audit]] to determine how much `as λ` source is
   inference debt before choosing a replacement syntax.
+- 2026-08-22: [[lint-match-function-application]] supplied the first registered
+  source-AST lint and stable lint identities on the common warning channel.
+  This establishes the modular home for the remaining rules here without
+  pretending parser-desugared operator spelling has acquired provenance.

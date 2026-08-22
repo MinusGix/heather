@@ -3,7 +3,7 @@ title: "Audit explicit match motives and reconsider the as λ surface"
 status: open
 labels: [frontend,syntax,elaboration,stdlib,ergonomics]
 created: 2026-08-20
-updated: 2026-08-20
+updated: 2026-08-22
 ---
 
 The standard library currently contains 99 written motives of the form
@@ -23,14 +23,15 @@ Then reconsider the irreducible written surface. Candidates include:
 
 ```heather
 match e as y : P(y) { ... }
-match e return λ y => P(y) { ... }
 match e : λ y => P(y) { ... }
 ```
 
-The first avoids spelling a lambda while retaining a binder; the second names
-the semantic role explicitly; the third is shortest but risks reading like a
-type annotation on `e`. No syntax direction is chosen before the audit shrinks
-the customer set.
+The first avoids spelling a lambda while retaining a binder; the second is
+shortest but risks reading like a type annotation on `e`. No syntax direction
+is chosen before the audit shrinks the customer set. `return` spellings were
+considered and rejected: Heather may gain imperative function-body syntax, and
+spending that word on an eliminator annotation would make its reading depend
+on which part of the language one is in.
 
 ## Acceptance
 
@@ -54,3 +55,16 @@ the customer set.
 
 - 2026-08-20: Filed from the post-cleanup review. The 99-site count is a search
   baseline, not a claim that all 99 motives are required.
+- 2026-08-22: `std/nat`'s `le_succ_r` supplied the first audit datum. Moving
+  the hypothesis binder from `λ m h => (match m as … { … })(h)` to
+  `λ m => match m { … }` puts the inner split in checking position, where the
+  existing goal-derived synthesis recovers its dependent function motive; the
+  outer motive then synthesizes too. Two motives removed, taking the stdlib
+  baseline 99 → 97 with no elaborator change. Discussion also added
+  `match e return y : P(y)` to the surface candidates: `return` names the
+  semantic role, while `y : P(y)` gives the binder/ascription reading without
+  presenting the motive as an ordinary lambda attached to `match`.
+- 2026-08-22: The `return` candidate is withdrawn after review: it is too close
+  to imperative return, a meaning Heather may need in programming-oriented
+  function bodies. The recurring applied-function shape now has the focused
+  lint owner [[lint-match-function-application]].

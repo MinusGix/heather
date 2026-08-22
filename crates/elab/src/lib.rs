@@ -90,6 +90,8 @@ mod gendefs;
 mod indexed;
 mod inductive;
 mod lgg;
+mod lint;
+pub use lint::Lint;
 mod quote;
 pub mod resolve;
 mod slots;
@@ -203,6 +205,9 @@ pub enum IndexedRoute {
 /// in having its own rendering the day a customer needs it.
 #[derive(Debug, Clone)]
 pub struct Warning {
+    /// Stable identity; messages may improve without breaking tooling or
+    /// future allow/deny configuration.
+    pub lint: Lint,
     pub msg: String,
     pub span: Span,
 }
@@ -1284,6 +1289,7 @@ impl Elaborator {
                 self.warnings.borrow_mut().truncate(warn_mark);
             } else {
                 self.mint_pending();
+                self.run_source_lints(item);
             }
             r?;
         }
@@ -1590,7 +1596,7 @@ impl Elaborator {
     /// Nothing here decides whether the warning *survives* — a declaration
     /// that goes on to fail drops the ones it raised, at the same site that
     /// drops its pending derivations (§4).
-    pub(crate) fn warn(&self, msg: impl Into<String>, span: Span) {
+    pub(crate) fn emit_lint(&self, lint: Lint, msg: impl Into<String>, span: Span) {
         // §4.1: a span into *generated* text does not index into any file a
         // reader has, and a `datarepr`'s emission is elaborated inside an
         // ordinary `check` of the declaration that owns it. Rendering such a
@@ -1600,7 +1606,13 @@ impl Elaborator {
         if self.access.in_generated() {
             return;
         }
-        self.warnings.borrow_mut().push(Warning { msg: msg.into(), span });
+        self.warnings.borrow_mut().push(Warning { lint, msg: msg.into(), span });
+    }
+
+    fn run_source_lints(&self, item: &Item) {
+        for finding in lint::check_item(item) {
+            self.emit_lint(finding.lint, finding.msg, finding.span);
+        }
     }
 
     /// [`Self::check_source`] into a named module — what the CLI's loader
@@ -1636,6 +1648,7 @@ impl Elaborator {
                 self.warnings.borrow_mut().truncate(warn_mark);
             } else {
                 self.mint_pending();
+                self.run_source_lints(item);
             }
             if let Err(e) = r {
                 errs.push(e);

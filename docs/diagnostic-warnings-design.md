@@ -40,7 +40,7 @@ So: `ElabError` is untouched, and `Warning` is its own type. The contract in
 ## 3. Decision 2: the sink lives on the elaborator; the reader drains it
 
 `Elaborator::warnings: RefCell<Vec<Warning>>`, raised through
-`Elaborator::warn(msg, span)` and read through
+`Elaborator::emit_lint(lint, msg, span)` and read through
 `Elaborator::take_warnings()`.
 
 Two reasons for a field rather than a return value. **`&self`**: the customers
@@ -72,7 +72,7 @@ warning nobody can silence is a warning that has to be worth printing.
 
 ### 4.1 Generated text warns nobody
 
-`Elaborator::warn` drops the warning outright while generated source is being
+`Elaborator::emit_lint` drops the warning outright while generated source is being
 elaborated (`access.generated > 0`, the depth the unnameable-names boundary
 already keeps). A `datarepr`'s emission is elaborated *inside* an ordinary
 check of the declaration that owns it, so its spans index into text the reader
@@ -83,12 +83,15 @@ render site keeps every future reader of the channel from having to know this.
 Generated code that is genuinely wrong is the *generator's* problem and reports
 as an error through the emission's own check, which is unchanged.
 
-## 5. Decision 4: one shape, one rendering
+## 5. Decision 4: one shape and stable identity, one rendering
 
-`Warning { msg, span }`. Every warning anyone has actually asked for is a
+`Warning { lint, msg, span }`. Every warning anyone has actually asked for is a
 message at a span; the listing-shaped diagnostic (`ElabError::UnsolvedGoals`)
 exists because goal *state* is the point there, and nothing here needs it. A
 listing-shaped warning can grow its own rendering the day a customer arrives.
+`Lint` supplies a stable enum identity and kebab-case name, so tests and future
+allow/deny configuration need not parse wording that should remain free to
+improve.
 
 `render` and `render_snippet` are the error renderers with the severity word
 changed — the shared `headed(severity, …)` helper — so the two cannot drift
@@ -99,6 +102,22 @@ into two shapes a reader has to learn separately.
 Infrastructure with no customer is untested infrastructure. The channel lands
 with one of the two parked issues actually paid, which is also what proves the
 staging rules above are the right ones.
+
+### 6.1 Source-style rules have a registry
+
+Semantic findings should still be emitted where their analysis lives: the
+unreachable-arm lint consumes the pattern compiler's reachability census, and
+duplicating that analysis in a generic pass would be worse modularity. Purely
+syntactic style rules instead live in `crates/elab/src/lint.rs`. A shared AST
+walker visits each successfully elaborated source item and calls a small
+registry of expression-lint functions in deterministic source order.
+
+Running the pass only after the item checks preserves §4 without asking each
+rule to understand speculative declarations. All findings pass through
+`emit_lint`, so generated-source suppression and future channel policy remain
+centralized. The first registered source rule is
+`match-function-application`, tracked by
+`issues/lint-match-function-application.md`.
 
 ## 7. The first customer: an arm that can never be reached
 
