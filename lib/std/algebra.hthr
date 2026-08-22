@@ -39,19 +39,19 @@ import option;
 // binder that named it it cannot mean anything, which is what makes it the
 // right symbol for bare semigroup/monoid theory where `+` would whisper
 // commutativity over `append`.
-class Semigroup<A>(op as ∙: A -> A -> A) {
-    assoc: (x, y, z: A) -> (x ∙ y) ∙ z = x ∙ (y ∙ z),
+class Semigroup<A>(op as ∙: A → A → A) {
+    assoc: (x, y, z: A) → (x ∙ y) ∙ z = x ∙ (y ∙ z),
 }
 
-class Monoid<A>(op as ∙: A -> A -> A) extends Semigroup<A>(op) {
+class Monoid<A>(op as ∙: A → A → A) extends Semigroup<A>(op) {
     unit: A,
-    unit_l: (x: A) -> unit ∙ x = x,
-    unit_r: (x: A) -> x ∙ unit = x,
+    unit_l: (x: A) → unit ∙ x = x,
+    unit_r: (x: A) → x ∙ unit = x,
 }
 
 // The commutative monoid: one chain, at every operation.
-class CommMonoid<A>(op as ∙: A -> A -> A) extends Monoid<A>(op) {
-    comm: (x, y: A) -> x ∙ y = y ∙ x,
+class CommMonoid<A>(op as ∙: A → A → A) extends Monoid<A>(op) {
+    comm: (x, y: A) → x ∙ y = y ∙ x,
 }
 
 // The group: a monoid whose every element has an inverse. Added by the `Int`
@@ -68,10 +68,10 @@ class CommMonoid<A>(op as ∙: A -> A -> A) extends Monoid<A>(op) {
 // the two terms are CONVERTIBLE, and two proofs of one equation are generally
 // not — proof relevance means an override owes something a prover cannot supply
 // (issues/inherited-field-override-owes-conversion.md).
-class Group<A>(op as ∙: A -> A -> A) extends Monoid<A>(op) {
-    inv: A -> A,
-    inv_l: (x: A) -> inv(x) ∙ x = unit,
-    inv_r: (x: A) -> x ∙ inv(x) = unit,
+class Group<A>(op as ∙: A → A → A) extends Monoid<A>(op) {
+    inv: A → A,
+    inv_l: (x: A) → inv(x) ∙ x = unit,
+    inv_r: (x: A) → x ∙ inv(x) = unit,
 }
 
 // A value every type of the class has. No laws: `Default` is the class that
@@ -86,7 +86,7 @@ class Default<A> {
 // natural. One embedding per carrier; laws about it belong to that carrier's
 // own API rather than to notation.
 class Numeral<A> {
-    ofNat: Nat -> A,
+    ofNat: Nat → A,
 }
 
 // A decided order — and as of 2026-08-16 a **propositional** one
@@ -94,8 +94,8 @@ class Numeral<A> {
 // relation itself rather than an equation with `True`, and the decision moved
 // into its own field.
 //
-// The version this replaces was `le: A -> A -> Bool` with
-// `le_refl: (x: A) -> le(x, x) = True`, matching the former Boolean-reflection
+// The version this replaces was `le: A → A → Bool` with
+// `le_refl: (x: A) → le(x, x) = True`, matching the former Boolean-reflection
 // spelling `std/nat` then used. Both halves of that are retired by
 // issues/class-ops-prop-vs-bool.md: no `Bool` in a specification, no `= True`
 // anywhere. What is NOT retired is deciding — `max_of` still has to pick a
@@ -119,9 +119,9 @@ class Numeral<A> {
 // `Cmp` and `Default` take no index: their structure is identified by the
 // carrier alone, and indexing is opt-in per class (design §2.1).
 class Cmp<A> {
-    le: A -> A -> Type,
-    le_refl: (x: A) -> le(x, x),
-    le_dec: (x, y: A) -> Or<le(x, y), Not(le(x, y))>,
+    le: A → A → Type,
+    le_refl: (x: A) → le(x, x),
+    le_dec: (x, y: A) → Or<le(x, y), Not(le(x, y))>,
 }
 
 // ---------------------------------------------------------------------------
@@ -216,7 +216,7 @@ instance Cmp<Bool> { le := bool::Le, le_refl := bool::le_refl, le_dec := bool::l
 // with the same consequence: nothing outside changes — the constraint is still
 // the plain linked slot naming `op`, callers still pass positionally — and the
 // fold's own step reads as the operation it is.
-fn mconcat<A: Monoid(op)>(op as ∙: A -> A -> A, xs: List<A>) -> A {
+fn mconcat<A: Monoid(op)>(op as ∙: A → A → A, xs: List<A>) → A {
     match xs {
         Nil => A.unit,
         Cons(h, t) => h ∙ mconcat(op, t),
@@ -227,11 +227,11 @@ fn mconcat<A: Monoid(op)>(op as ∙: A -> A -> A, xs: List<A>) -> A {
 // first free-monoid connection in the concrete-algebra experiment: the monoid
 // dictionary supplies precisely the Nil and Cons clauses, and the established
 // `mconcat` API is recovered pointwise rather than replaced.
-fn monoid_list_alg<A: Monoid(op)>(op: A -> A -> A) -> ListAlg<A, A> {
+fn monoid_list_alg<A: Monoid(op)>(op: A → A → A) → ListAlg<A, A> {
     ListAlg<A, A> { nil: A.unit, cons: op }
 }
 
-theorem list_fold_monoid<A: Monoid(op)>(op: A -> A -> A, xs: List<A>):
+theorem list_fold_monoid<A: Monoid(op)>(op: A → A → A, xs: List<A>):
     list_fold(monoid_list_alg(op), xs) = mconcat(op, xs)
 {
     list_fold_is_foldr(op, A.unit, xs)
@@ -241,7 +241,7 @@ theorem list_fold_monoid<A: Monoid(op)>(op: A -> A -> A, xs: List<A>):
 // neither re-proves anything. `A.unit_r` is a **proof** field projected from
 // the type — a type projection is an ordinary field projection, so an
 // operation and a law are the same move.
-theorem mconcat_single<A: Monoid(op)>(op: A -> A -> A, x: A):
+theorem mconcat_single<A: Monoid(op)>(op: A → A → A, x: A):
     mconcat(op, Cons(x, Nil)) = x
 {
     A.unit_r(x)
@@ -255,7 +255,7 @@ theorem mconcat_single<A: Monoid(op)>(op: A -> A -> A, x: A):
 // the same reason and now calls `or_pick` directly (2026-08-17) — one hoisted
 // branch for the whole library, which is what making it generic was for.
 //
-// This replaced `fn cmp_pick<A>(b: Bool, x, y: A) -> A` when `Cmp` went
+// This replaced `fn cmp_pick<A>(b: Bool, x, y: A) → A` when `Cmp` went
 // propositional. The proof side got SIMPLER in the swap and it is worth
 // saying why: `cmp_pick`'s lemma needed a `j` to rewrite the stuck `Bool` to
 // `True` before the branch would reduce, whereas `or_pick`'s motive reaches
@@ -271,7 +271,7 @@ theorem mconcat_single<A: Monoid(op)>(op: A -> A -> A, x: A):
 // against `std/nat`'s ambient `le_refl` global: the receiver reading would put
 // a type in `le_refl`'s `Nat` slot, and the declaration refuses that
 // (docs/traits-type-projection-design.md §4).
-fn max_of<A: Cmp>(x, y: A) -> A { or_pick(A.le_dec(x, y), x, y) }
+fn max_of<A: Cmp>(x, y: A) → A { or_pick(A.le_dec(x, y), x, y) }
 
 // `max_of_true`'s successor, and the rename is the content: the hypothesis is
 // no longer "the comparison returned `True`" but the RELATION ITSELF. That is
@@ -306,7 +306,7 @@ theorem op_inv_unique<A: Group(∙)>(x, y: A, h: x ∙ y = A.unit): y = A.inv(x)
 // dictionary and no fallback value. In the inline constraint form, like
 // `max_of` above — nothing names the dictionary, since `A.default` projects
 // the value straight from the type.
-fn or_default<A: Default>(o: Option<A>) -> A { unwrap_or(o, A.default) }
+fn or_default<A: Default>(o: Option<A>) → A { unwrap_or(o, A.default) }
 
 // The chain's generic consequence: a right unit follows from commutativity and
 // the left one, so `Monoid`'s `unit_r` is redundant *for a commutative
@@ -327,20 +327,20 @@ theorem op_unit_of_comm<A: CommMonoid(+)>(x: A): x + A.unit = x {
 // (docs/operators-onto-classes-design.md §5). Inside this declaration `+` IS
 // the bound index, so the two folds are one term; at a call site the index is
 // filled from the designation at the caller's carrier.
-fn sum_all<A: Monoid(+)>(xs: List<A>) -> A { mconcat(+, xs) }
+fn sum_all<A: Monoid(+)>(xs: List<A>) → A { mconcat(+, xs) }
 
 // One declaration, two carriers, and no caller names an operation. The
 // second is at an **open** element type, so its goal is
 // `Monoid<List<A>>(append)` with `A` the caller's own parameter, answered by
 // backchaining through `instance<A> Monoid<List<A>>(append)`.
-fn sum(ns: List<Nat>) -> Nat { sum_all(ns) }
+fn sum(ns: List<Nat>) → Nat { sum_all(ns) }
 
 // The monoid here is at `List<A>`, which is no tyvar, so no constraint slot
 // could ever name a symbol for it — and yet `++` is passed bare, because the
 // slot's own type says the carrier is `List<A>` and the generic designation
 // answers there (docs/bare-symbol-checking-carrier-design.md). Same term as
 // `mconcat(append, xss)`, which is what `concat_single` below still proves.
-fn concat<A>(xss: List<List<A>>) -> List<A> { mconcat(++, xss) }
+fn concat<A>(xss: List<List<A>>) → List<A> { mconcat(++, xss) }
 
 // The `Bool` folds are still NOT `sum_all` — `+` means nothing at `Bool` — but
 // each now writes its own symbol, and the bare symbol takes its meaning from
@@ -350,9 +350,9 @@ fn concat<A>(xss: List<List<A>>) -> List<A> { mconcat(++, xss) }
 // sentence that nothing was nominated — two symbols, two structures, one
 // carrier, both registered, both reachable, neither the default. The positional
 // spelling stays legal forever, and the `_single` lemmas below still use it.
-fn any_of(bs: List<Bool>) -> Bool { mconcat(||, bs) }
+fn any_of(bs: List<Bool>) → Bool { mconcat(||, bs) }
 
-fn all_of(bs: List<Bool>) -> Bool { mconcat(&&, bs) }
+fn all_of(bs: List<Bool>) → Bool { mconcat(&&, bs) }
 
 // The class lemma at three carriers. None re-proves anything: each is
 // `mconcat_single` with the dictionary found through the registry, and the two

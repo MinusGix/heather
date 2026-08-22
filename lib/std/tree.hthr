@@ -12,27 +12,27 @@ import nat;
 inductive Tree<A> { Leaf(value: A), Node(left: Tree<A>, right: Tree<A>) }
 
 record TreeAlg<A, B> {
-    leaf: A -> B,
-    node: B -> B -> B,
+    leaf: A → B,
+    node: B → B → B,
 }
 
 // The dependent algebra: each constructor-local result lives in a potentially
 // different type selected by `P`, and the Node clause receives both original
 // subtrees beside their two induction results.
-record TreeElim<A>(P: Tree<A> -> Type) {
-    leaf: (value: A) -> P(Leaf(value)),
-    node: (left: Tree<A>) -> (right: Tree<A>) ->
-        P(left) -> P(right) -> P(Node<A>(left, right)),
+record TreeElim<A>(P: Tree<A> → Type) {
+    leaf: (value: A) → P(Leaf(value)),
+    node: (left: Tree<A>) → (right: Tree<A>) →
+        P(left) → P(right) → P(Node<A>(left, right)),
 }
 
-fn tree_fold<A, B>(alg: TreeAlg<A, B>, tree: Tree<A>) -> B {
+fn tree_fold<A, B>(alg: TreeAlg<A, B>, tree: Tree<A>) → B {
     match tree {
         Leaf(value) => alg.leaf(value),
         Node(left, right) => alg.node(tree_fold(alg, left), tree_fold(alg, right)),
     }
 }
 
-fn tree_elim<A>(P: Tree<A> -> Type, alg: TreeElim<A>(P), tree: Tree<A>) -> P(tree) {
+fn tree_elim<A>(P: Tree<A> → Type, alg: TreeElim<A>(P), tree: Tree<A>) → P(tree) {
     match tree {
         Leaf(value) => alg.leaf(value),
         Node(left, right) =>
@@ -44,25 +44,25 @@ fn tree_elim<A>(P: Tree<A> -> Type, alg: TreeElim<A>(P), tree: Tree<A>) -> P(tre
 // per constructor. The relation is deliberately arbitrary: equality,
 // semantics, a cost invariant, or a refinement can all occupy `R`. The global
 // induction is written once here; pass authors fill only `leaf` and `node`.
-record TreePassLaws<A>(R: Tree<A> -> Tree<A> -> Type, alg: TreeAlg<A, Tree<A>>) {
-    leaf: (value: A) -> R(Leaf(value), alg.leaf(value)),
-    node: (left, left_r: Tree<A>) -> R(left, left_r) ->
-        (right, right_r: Tree<A>) -> R(right, right_r) ->
+record TreePassLaws<A>(R: Tree<A> → Tree<A> → Type, alg: TreeAlg<A, Tree<A>>) {
+    leaf: (value: A) → R(Leaf(value), alg.leaf(value)),
+    node: (left, left_r: Tree<A>) → R(left, left_r) →
+        (right, right_r: Tree<A>) → R(right, right_r) →
         R(Node(left, right), alg.node(left_r, right_r)),
 }
 
-record CertifiedTreePass<A>(R: Tree<A> -> Tree<A> -> Type) {
+record CertifiedTreePass<A>(R: Tree<A> → Tree<A> → Type) {
     alg: TreeAlg<A, Tree<A>>,
     laws: TreePassLaws<A>(R, alg),
 }
 
-fn run_tree_pass<A>(R: Tree<A> -> Tree<A> -> Type,
-    pass: CertifiedTreePass<A>(R), tree: Tree<A>) -> Tree<A>
+fn run_tree_pass<A>(R: Tree<A> → Tree<A> → Type,
+    pass: CertifiedTreePass<A>(R), tree: Tree<A>) → Tree<A>
 {
     tree_fold(pass.alg, tree)
 }
 
-theorem tree_pass_sound<A>(R: Tree<A> -> Tree<A> -> Type,
+theorem tree_pass_sound<A>(R: Tree<A> → Tree<A> → Type,
     pass: CertifiedTreePass<A>(R), tree: Tree<A>):
     R(tree, run_tree_pass(R, pass, tree))
 {
@@ -75,11 +75,11 @@ theorem tree_pass_sound<A>(R: Tree<A> -> Tree<A> -> Type,
     }
 }
 
-theorem tree_elim_leaf<A>(P: Tree<A> -> Type, alg: TreeElim<A>(P), value: A):
+theorem tree_elim_leaf<A>(P: Tree<A> → Type, alg: TreeElim<A>(P), value: A):
     tree_elim(P, alg, Leaf(value)) = alg.leaf(value)
 {}
 
-theorem tree_elim_node<A>(P: Tree<A> -> Type, alg: TreeElim<A>(P),
+theorem tree_elim_node<A>(P: Tree<A> → Type, alg: TreeElim<A>(P),
     left, right: Tree<A>):
     tree_elim(P, alg, Node(left, right)) =
         alg.node(left, right, tree_elim(P, alg, left), tree_elim(P, alg, right))
@@ -94,9 +94,9 @@ theorem tree_fold_node<A, B>(alg: TreeAlg<A, B>, left, right: Tree<A>):
 {}
 
 theorem tree_fold_fusion<A, B, C>(src: TreeAlg<A, B>, dst: TreeAlg<A, C>,
-    hom: B -> C,
-    leaf_comm: (a: A) -> hom(src.leaf(a)) = dst.leaf(a),
-    node_comm: (left, right: B) ->
+    hom: B → C,
+    leaf_comm: (a: A) → hom(src.leaf(a)) = dst.leaf(a),
+    node_comm: (left, right: B) →
         hom(src.node(left, right)) = dst.node(hom(left), hom(right)),
     tree: Tree<A>): hom(tree_fold(src, tree)) = tree_fold(dst, tree)
 {
@@ -113,7 +113,7 @@ theorem tree_fold_fusion<A, B, C>(src: TreeAlg<A, B>, dst: TreeAlg<A, C>,
 
 // A concrete consumer whose Node arm uses both recursive results. This is
 // deliberately expressed through `tree_fold`, not duplicated as a match.
-fn tree_size<A>(tree: Tree<A>) -> Nat {
+fn tree_size<A>(tree: Tree<A>) → Nat {
     tree_fold(TreeAlg<A, Nat> {
         leaf: λ (a: A) => 1,
         node: λ (left: Nat) (right: Nat) => Succ(add(left, right)),
@@ -124,18 +124,18 @@ fn tree_size<A>(tree: Tree<A>) -> Nat {
 // recursive results at every Node. Its certificate states preservation of
 // size, not equality of output and input, so the generic theorem is doing
 // relational work rather than proving that a rebuild is identity.
-fn TreeSameSize<A>(source: Tree<A>) -> Tree<A> -> Type {
+fn TreeSameSize<A>(source: Tree<A>) → Tree<A> → Type {
     λ (result: Tree<A>) => tree_size(result) = tree_size(source)
 }
 
-fn mirror_alg<A>() -> TreeAlg<A, Tree<A>> {
+fn mirror_alg<A>() → TreeAlg<A, Tree<A>> {
     TreeAlg<A, Tree<A>> {
         leaf: λ (value: A) => Leaf(value),
         node: λ (left: Tree<A>) (right: Tree<A>) => Node<A>(right, left),
     }
 }
 
-fn mirror_size_laws<A>() -> TreePassLaws<A>(TreeSameSize<A>, mirror_alg<A>()) {
+fn mirror_size_laws<A>() → TreePassLaws<A>(TreeSameSize<A>, mirror_alg<A>()) {
     TreePassLaws {
         leaf: λ (value: A) => refl,
         node: λ (left: Tree<A>) (left_r: Tree<A>) ih_left
@@ -147,14 +147,14 @@ fn mirror_size_laws<A>() -> TreePassLaws<A>(TreeSameSize<A>, mirror_alg<A>()) {
     }
 }
 
-fn mirror_pass<A>() -> CertifiedTreePass<A>(TreeSameSize<A>) {
+fn mirror_pass<A>() → CertifiedTreePass<A>(TreeSameSize<A>) {
     CertifiedTreePass {
         alg: mirror_alg<A>(),
         laws: mirror_size_laws<A>(),
     }
 }
 
-fn tree_mirror<A>(tree: Tree<A>) -> Tree<A> {
+fn tree_mirror<A>(tree: Tree<A>) → Tree<A> {
     run_tree_pass(TreeSameSize<A>, mirror_pass<A>(), tree)
 }
 
@@ -165,14 +165,14 @@ theorem tree_mirror_size<A>(tree: Tree<A>): tree_size(tree_mirror(tree)) = tree_
 // A fold that rebuilds its input, followed by a proof through the dependent
 // algebra. The Node obligation consumes BOTH induction results, which is the
 // branching control a ListElim example cannot provide.
-fn tree_rebuild_alg<A>() -> TreeAlg<A, Tree<A>> {
+fn tree_rebuild_alg<A>() → TreeAlg<A, Tree<A>> {
     TreeAlg<A, Tree<A>> {
         leaf: Leaf,
         node: λ (left: Tree<A>) (right: Tree<A>) => Node<A>(left, right),
     }
 }
 
-fn tree_rebuild_elim<A>() ->
+fn tree_rebuild_elim<A>() →
     TreeElim<A>(λ (tree: Tree<A>) => tree_fold(tree_rebuild_alg<A>(), tree) = tree)
 {
     TreeElim {

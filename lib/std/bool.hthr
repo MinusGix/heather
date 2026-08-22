@@ -6,13 +6,13 @@ import logic;
 
 inductive Bool { False, True }
 
-fn not(b: Bool) -> Bool { match b { False => True, True => False } }
+fn not(b: Bool) → Bool { match b { False => True, True => False } }
 
-fn and(a, b: Bool) -> Bool { match a { False => False, True => b } }
+fn and(a, b: Bool) → Bool { match a { False => False, True => b } }
 
 designation && at Bool := and
 
-fn or(a, b: Bool) -> Bool { match a { False => b, True => True } }
+fn or(a, b: Bool) → Bool { match a { False => b, True => True } }
 
 designation || at Bool := or
 
@@ -59,7 +59,7 @@ theorem or_comm(a, b: Bool): a || b = b || a {
 // Equality is a separate decision from the propositional order below. It is
 // stated directly over constructor identity, and registers at Bool's equality
 // carrier without colliding with Nat's corresponding instance.
-fn eq_dec(a, b: Bool) -> a = b ∨ a ≠ b {
+fn eq_dec(a, b: Bool) → a = b ∨ a ≠ b {
     match a as λ x => x = b ∨ x ≠ b {
         False => match b as λ y => False = y ∨ False ≠ y {
             False => Inl(refl),
@@ -92,7 +92,7 @@ instance(a, b: Bool) Decide<a = b> { dec := eq_dec(a, b) }
 // `bool::Le` are two carriers, and the suffix bought nothing — a module is
 // already a namespace. A file that sees both writes `nat::Le` and `bool::Le`,
 // which is what qualification is for.
-fn leb(a: Bool) -> Bool -> Bool {
+fn leb(a: Bool) → Bool → Bool {
     match a { False => λ (b: Bool) => True, True => λ (b: Bool) => b }
 }
 
@@ -104,7 +104,7 @@ theorem leb_refl(a: Bool): leb(a, a) = True {
 // `True <= False` is refuted. `logic::False` is the falsity and `bool::False`
 // the constructor, one line apart and neither qualified
 // (issues/false-collides-with-bools-constructor.md).
-fn Le(a: Bool) -> Bool -> Type {
+fn Le(a: Bool) → Bool → Type {
     match a {
         False => λ (b: Bool) => True,
         True => λ (b: Bool) => match b { False => False, True => True },
@@ -119,7 +119,7 @@ theorem le_refl(a: Bool): a <= a {
 
 // A `fn`, not a `theorem`: a decision has to unfold in conversion
 // (docs/nat-order-design.md §2).
-fn le_dec(a, b: Bool) -> a <= b ∨ ¬(a <= b) {
+fn le_dec(a, b: Bool) → a <= b ∨ ¬(a <= b) {
     match a as λ z => z <= b ∨ ¬(z <= b) {
         False => Inl(trivial),
         True => match b as λ y => True <= y ∨ ¬(True <= y) {

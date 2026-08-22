@@ -91,7 +91,7 @@ mod indexed;
 mod inductive;
 mod lgg;
 mod lint;
-pub use lint::Lint;
+pub use lint::{Lint, LintProfile};
 mod quote;
 pub mod resolve;
 mod slots;
@@ -204,12 +204,22 @@ pub enum IndexedRoute {
 /// is one (§5). A listing-shaped warning can join `ElabError::UnsolvedGoals`
 /// in having its own rendering the day a customer needs it.
 #[derive(Debug, Clone)]
+pub struct LintFix {
+    /// The exact written byte range to replace.
+    pub span: Span,
+    pub replacement: String,
+}
+
+#[derive(Debug, Clone)]
 pub struct Warning {
     /// Stable identity; messages may improve without breaking tooling or
     /// future allow/deny configuration.
     pub lint: Lint,
     pub msg: String,
     pub span: Span,
+    /// A mechanically safe edit, when the lint has one. Kept as data so an
+    /// editor or future `--fix` mode never has to recover it from prose.
+    pub fix: Option<LintFix>,
 }
 
 impl Warning {
@@ -987,6 +997,9 @@ pub struct Elaborator {
     /// belongs to whoever has the source text to render it against, and that
     /// is the caller (§3).
     warnings: RefCell<Vec<Warning>>,
+    /// Project-local style policy for written-source lints. General lints run
+    /// under every profile; the CLI selects `Stdlib` only for `lib/std`.
+    lint_profile: LintProfile,
     /// Backchaining depth, for the recursion cap. A `Cell` because resolution
     /// recurses *through* `elab_check` — the nested obligation is discovered
     /// by `apply_implicit`, not passed down.
@@ -1203,6 +1216,7 @@ impl Elaborator {
             derived: Vec::new(),
             pending_derived: RefCell::new(Vec::new()),
             warnings: RefCell::new(Vec::new()),
+            lint_profile: LintProfile::Default,
             resolve_depth: Cell::new(0),
             next_tag: 0,
             fuel: DEFAULT_FUEL,
@@ -1229,6 +1243,12 @@ impl Elaborator {
     /// implementation lives.
     pub fn set_gate(&mut self, gate: Rc<dyn gate::KernelGate>) {
         self.gate = Some(gate);
+    }
+
+    /// Select project-local source conventions without changing what syntax
+    /// the language accepts. Intended for drivers before they check a module.
+    pub fn set_lint_profile(&mut self, profile: LintProfile) {
+        self.lint_profile = profile;
     }
 
     /// An elaborator with the stage-1 prelude already elaborated and
@@ -1267,6 +1287,7 @@ impl Elaborator {
     /// walk guarantees (docs/modules-design.md §3.2).
     pub fn elab_module_source(&mut self, module: &str, src: &str) -> R<()> {
         let file = parse_file(src)?;
+        let lint_source = lint::Source::new(src, self.lint_profile);
         self.enter_module(module, &file)?;
         for item in &file.items {
             let warn_mark = self.warnings.borrow().len();
@@ -1289,7 +1310,7 @@ impl Elaborator {
                 self.warnings.borrow_mut().truncate(warn_mark);
             } else {
                 self.mint_pending();
-                self.run_source_lints(item);
+                self.run_source_lints(item, &lint_source);
             }
             r?;
         }
@@ -1606,12 +1627,19 @@ impl Elaborator {
         if self.access.in_generated() {
             return;
         }
-        self.warnings.borrow_mut().push(Warning { lint, msg: msg.into(), span });
+        self.warnings.borrow_mut().push(Warning { lint, msg: msg.into(), span, fix: None });
     }
 
-    fn run_source_lints(&self, item: &Item) {
-        for finding in lint::check_item(item) {
-            self.emit_lint(finding.lint, finding.msg, finding.span);
+    fn run_source_lints(&self, item: &Item, source: &lint::Source<'_>) {
+        for finding in lint::check_item(item, source) {
+            if !self.access.in_generated() {
+                self.warnings.borrow_mut().push(Warning {
+                    lint: finding.lint,
+                    msg: finding.msg,
+                    span: finding.span,
+                    fix: finding.fix,
+                });
+            }
         }
     }
 
@@ -1625,6 +1653,7 @@ impl Elaborator {
             Ok(f) => f,
             Err(e) => return vec![e.into()],
         };
+        let lint_source = lint::Source::new(src, self.lint_profile);
         if let Err(e) = self.enter_module(module, &file) {
             return vec![e];
         }
@@ -1648,7 +1677,7 @@ impl Elaborator {
                 self.warnings.borrow_mut().truncate(warn_mark);
             } else {
                 self.mint_pending();
-                self.run_source_lints(item);
+                self.run_source_lints(item, &lint_source);
             }
             if let Err(e) = r {
                 errs.push(e);

@@ -1,9 +1,9 @@
 ---
 title: "Lint whitespace after prefix negation"
-status: open
+status: closed
 labels: [tooling,lint,syntax,stdlib,ergonomics]
 created: 2026-08-20
-updated: 2026-08-20
+updated: 2026-08-22
 ---
 
 The standard style is tight prefix notation: `¬P` and `¬(a = b)`, not
@@ -32,3 +32,9 @@ that removes only the trivia between `¬` and its operand.
 ## Log
 
 - 2026-08-20: Filed after the standard library was normalized to tight `¬`.
+- 2026-08-22: Implemented as the default `tight-negation-spacing` lint over a
+  shared once-per-file token view. It reports only whitespace trivia, leaves a
+  comment between the operator and operand alone, and carries the exact empty
+  replacement as structured fix data. The stdlib's two remaining occurrences
+  were normalized and the focused warning tests cover both the fix and comment
+  control.

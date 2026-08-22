@@ -35,13 +35,13 @@ inductive False {}
 theorem false_elim<P>(h: False): P { match h {} }
 
 // ---------------------------------------------------------------------------
-// Negation. A `fn` into `Type`, not a declaration: `¬P` is `P -> False` and
+// Negation. A `fn` into `Type`, not a declaration: `¬P` is `P → False` and
 // wants to stay definitionally so, so that a proof of `¬P` is *applied* like
 // the function it is rather than unwrapped first.
 
-fn Not(P: Type) -> Type { P -> False }
+fn Not(P: Type) → Type { P → False }
 
-theorem not_intro(P: Type, k: P -> False): ¬P { k }
+theorem not_intro(P: Type, k: P → False): ¬P { k }
 
 // From `P` and `¬P`, anything. The workhorse: this is what a refuted branch
 // calls, and it is why the absurd cases of a recursive predicate need no
@@ -52,7 +52,7 @@ theorem not_not_intro(P: Type, p: P): ¬¬P { λ (k: ¬P) => k(p) }
 
 // Modus tollens. Stated with the implication first, matching the order it is
 // usually applied in.
-theorem mt(P: Type, Q: Type, f: P -> Q, nq: ¬Q): ¬P {
+theorem mt(P: Type, Q: Type, f: P → Q, nq: ¬Q): ¬P {
     λ (p: P) => nq(f(p))
 }
 
@@ -73,11 +73,11 @@ record And<P, Q> { left: P, right: Q }
 // (docs/named-arguments-design.md).
 theorem and_swap<P, Q>(h: P ∧ Q): Q ∧ P { And(left := h.right, right := h.left) }
 
-theorem and_curry<P, Q, R>(f: P ∧ Q -> R): P -> Q -> R {
+theorem and_curry<P, Q, R>(f: P ∧ Q → R): P → Q → R {
     λ (p: P) (q: Q) => f(And(p, q))
 }
 
-theorem and_uncurry<P, Q, R>(f: P -> Q -> R): P ∧ Q -> R {
+theorem and_uncurry<P, Q, R>(f: P → Q → R): P ∧ Q → R {
     λ (h: P ∧ Q) => f(h.left, h.right)
 }
 
@@ -95,7 +95,7 @@ theorem or_swap<P, Q>(h: P ∨ Q): Q ∨ P {
     match h { Inl(p) => Inr(p), Inr(q) => Inl(q) }
 }
 
-theorem or_elim<P, Q, R>(h: P ∨ Q, f: P -> R, g: Q -> R): R {
+theorem or_elim<P, Q, R>(h: P ∨ Q, f: P → R, g: Q → R): R {
     match h { Inl(p) => f(p), Inr(q) => g(q) }
 }
 
@@ -115,7 +115,7 @@ theorem or_resolve<P, Q>(h: P ∨ Q, nq: ¬Q): P {
 // The right side is the FIRST result and the left the second, matching
 // `cmp_pick`'s `False => x, True => y` so that `Inl` (the relation holds)
 // keeps `y` exactly as `True` did.
-fn or_pick<P, Q, A>(d: P ∨ Q, x, y: A) -> A {
+fn or_pick<P, Q, A>(d: P ∨ Q, x, y: A) → A {
     match d { Inl(p) => y, Inr(q) => x }
 }
 
@@ -133,11 +133,11 @@ theorem or_pick_dec<P, A>(d: P ∨ ¬P, x, y: A, p: P): or_pick(d, x, y) = y {
 
 // ---------------------------------------------------------------------------
 // Bi-implication, as a record with NAMED directions rather than as
-// `And<P -> Q, Q -> P>`. Two reasons, both about use: `h.mp(p)` and
+// `And<P → Q, Q → P>`. Two reasons, both about use: `h.mp(p)` and
 // `h.mpr(q)` say which way they go where `h.left`/`h.right` do not, and an
 // `Iff` is applied far more often than it is taken apart generically.
 
-record Iff<P, Q> { mp: P -> Q, mpr: Q -> P }
+record Iff<P, Q> { mp: P → Q, mpr: Q → P }
 
 // Every `Iff` below names its two directions. `iff_refl`'s two fields have the
 // *same* type, so a swap there would typecheck; `iff_sym`'s are transposed on
@@ -161,7 +161,7 @@ theorem iff_trans<P, Q, R>(h1: P ↔ Q, h2: Q ↔ R): P ↔ R {
 // `Exists(λ (k: Nat) => …)` writes; `Exists<Nat>(…)` remains available when
 // explicitness helps. Introduction takes the argument from its expected type.
 
-record Exists<A>(P: A -> Type) { witness: A, proof: P(witness) }
+record Exists<A>(P: A → Type) { witness: A, proof: P(witness) }
 
 // ---------------------------------------------------------------------------
 // Decidability (issues/decide-class.md). One field, because `Decide<P>` already
@@ -170,7 +170,7 @@ record Exists<A>(P: A -> Type) { witness: A, proof: P(witness) }
 // `dec` eliminates straight into `Type`.
 //
 // The content of the class is *"this disjunction reduces"*. A classical
-// `lem : (P: Type) -> P ∨ ¬P` would make every consumer below typecheck and
+// `lem : (P: Type) → P ∨ ¬P` would make every consumer below typecheck and
 // then compute nothing, because `lem(…)` is a neutral constant with no
 // reduction rule. That difference is the whole reason the class exists.
 
@@ -189,7 +189,7 @@ instance Decide<False> { dec := Inr(λ (h: False) => h) }
 //
 // `¬P` can key an instance because canonical names may be attached to a type
 // former as well as to a declared type. `Not` remains a function into `Type`,
-// keeping negation definitionally equal to `P -> False`.
+// keeping negation definitionally equal to `P → False`.
 
 instance<P: Decide, Q: Decide> Decide<P ∧ Q> {
     dec := match P.dec {
@@ -227,9 +227,9 @@ instance<P: Decide> Decide<¬P> {
 // A `fn` and not a `theorem`, both of them, for the reason `or_pick` carries:
 // a `theorem` is opaque, so a decision spelled as one never unfolds in
 // conversion and nothing downstream of it is `refl` any more.
-fn decide<P: Decide>() -> P ∨ ¬P { P.dec }
+fn decide<P: Decide>() → P ∨ ¬P { P.dec }
 
-fn decide_pick<P: Decide, A>(x, y: A) -> A { or_pick(P.dec, x, y) }
+fn decide_pick<P: Decide, A>(x, y: A) → A { or_pick(P.dec, x, y) }
 
 // The `or_pick_dec` lemma with the dictionary resolved — a proof of `P` makes
 // the decided branch compute, whichever way the decider happened to go.

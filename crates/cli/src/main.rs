@@ -36,7 +36,7 @@ use std::process::ExitCode;
 use std::rc::Rc;
 
 use heather_cache::Cache;
-use heather_elab::Elaborator;
+use heather_elab::{Elaborator, LintProfile};
 
 // The loader lives in this crate's `lib` target so that the frontend bench
 // corpus computes its import closure with the *same* code the CLI does
@@ -180,6 +180,7 @@ fn check(opts: &Opts, files: &[String]) -> ExitCode {
                 return ExitCode::from(2);
             }
         };
+        elab.set_lint_profile(lint_profile_for_path(Path::new(path)));
         // After the prelude, deliberately: the prelude is elaborated inside
         // `with_prelude` and is milliseconds, so it is hashed but never
         // cached (docs/cache-v1-design.md §4).
@@ -413,6 +414,20 @@ fn display_path(module_path: &Path, root_arg: &str) -> String {
             Err(_) => module_path.display().to_string(),
         },
         _ => module_path.display().to_string(),
+    }
+}
+
+/// Heather's own library has a house style; accepting the ASCII aliases is a
+/// language promise and warning about them is not. Canonical paths make this
+/// depend on the actual `lib/std` tree rather than a coincidental directory
+/// name, and selecting one file inside it behaves like selecting the tree.
+fn lint_profile_for_path(path: &Path) -> LintProfile {
+    let Ok(stdlib) = Path::new(DEFAULT_LIB).canonicalize() else {
+        return LintProfile::Default;
+    };
+    match path.canonicalize() {
+        Ok(path) if path.starts_with(stdlib) => LintProfile::Stdlib,
+        _ => LintProfile::Default,
     }
 }
 

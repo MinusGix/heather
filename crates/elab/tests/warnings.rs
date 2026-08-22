@@ -8,7 +8,7 @@
 //! pattern compiler has always known about — `Compile.uses[i] == 0` is the
 //! census §5 computes for sharing — and until now had nowhere to say.
 
-use heather_elab::{Elaborator, Lint};
+use heather_elab::{Elaborator, Lint, LintProfile};
 
 const TOK: &str = "
 inductive Tok { TA, TB }
@@ -159,6 +159,70 @@ fn a_match_used_as_a_function_value_is_not_reported() {
     let mut e = Elaborator::with_prelude().expect("prelude");
     assert!(e.check_source(direct).is_empty());
     assert!(e.check_source(nonbinder).is_empty());
+    assert!(e.take_warnings().is_empty());
+}
+
+#[test]
+fn spaced_prefix_negation_is_reported_but_comments_are_preserved() {
+    let mut e = Elaborator::with_prelude().expect("prelude");
+    let src = "
+        inductive Empty {}
+        fn Not(P: Type) → Type { P → Empty }
+        fn spaced(P: Type, h: ¬ P) → ¬P { h }
+        fn documented(P: Type, h: ¬ // why this hypothesis is negative
+            P) → ¬P { h }
+    ";
+    assert!(e.check_source(src).is_empty());
+    let ws = e.take_warnings();
+    assert_eq!(ws.len(), 1, "{ws:?}");
+    assert_eq!(ws[0].lint, Lint::TightNegationSpacing);
+    assert_eq!(ws[0].lint.name(), "tight-negation-spacing");
+    let fix = ws[0].fix.as_ref().expect("spacing has a mechanical fix");
+    assert_eq!(&src[fix.span.start..fix.span.end], " ");
+    assert_eq!(fix.replacement, "");
+}
+
+#[test]
+fn unicode_spelling_is_a_stdlib_profile_not_a_language_rule() {
+    let src = "// ASCII examples remain useful: fun x -> x\nfn id(n: Nat) -> Nat { (fun (x: Nat) => x)(n) }";
+    let mut ordinary = Elaborator::with_prelude().expect("prelude");
+    let errs = ordinary.check_source(src);
+    assert!(errs.is_empty(), "{}", errs[0].render(src));
+    assert!(ordinary.take_warnings().is_empty());
+
+    let mut stdlib = Elaborator::with_prelude().expect("prelude");
+    stdlib.set_lint_profile(LintProfile::Stdlib);
+    let errs = stdlib.check_source(src);
+    assert!(errs.is_empty(), "{}", errs[0].render(src));
+    let ws = stdlib.take_warnings();
+    assert_eq!(ws.len(), 2, "{ws:?}");
+    assert!(ws.iter().all(|w| w.lint == Lint::StdlibUnicodeSpelling));
+    assert!(ws.iter().any(|w| w.msg.contains("replace `->` with `→`")));
+    assert!(ws.iter().any(|w| w.msg.contains("replace `fun` with `λ`")));
+    assert!(ws.iter().all(|w| w.fix.is_some()), "alias replacements are structured fixes");
+}
+
+#[test]
+fn consecutive_direct_calls_prefer_one_argument_list() {
+    let mut e = Elaborator::with_prelude().expect("prelude");
+    let src = "fn apply(f: Nat → Nat → Nat) → Nat { f(0)(1) }";
+    assert!(e.check_source(src).is_empty());
+    let ws = e.take_warnings();
+    assert_eq!(ws.len(), 1, "{ws:?}");
+    assert_eq!(ws[0].lint, Lint::NestedCall);
+    assert_eq!(ws[0].lint.name(), "nested-call");
+    assert!(ws[0].msg.contains("`f(a, b)`"));
+}
+
+#[test]
+fn staged_or_computed_function_values_are_not_nested_call_style() {
+    let src = "
+        fn staged(f: Nat → Nat → Nat) → Nat { let g = f(0); g(1) }
+        fn computed() → Nat { (λ (x: Nat) => λ (y: Nat) => x)(0)(1) }
+    ";
+    let mut e = Elaborator::with_prelude().expect("prelude");
+    let errs = e.check_source(src);
+    assert!(errs.is_empty(), "{}", errs[0].render(src));
     assert!(e.take_warnings().is_empty());
 }
 

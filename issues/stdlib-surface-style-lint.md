@@ -133,3 +133,12 @@ rewrite that would change which later argument participates in inference.
   source-AST lint and stable lint identities on the common warning channel.
   This establishes the modular home for the remaining rules here without
   pretending parser-desugared operator spelling has acquired provenance.
+- 2026-08-22: The next lint set is sequenced by [[lint-roadmap]]. User policy
+  puts exact ASCII-to-Unicode preference in the stdlib profile rather than the
+  language-wide default; [[lint-stdlib-unicode-spelling]] owns that bounded
+  rule and migration.
+- 2026-08-22: The structurally visible half landed as the conservative
+  `nested-call` AST lint. It recognizes maximal direct-name application chains,
+  ignores computed and deliberately stored function values, and found three
+  remaining executable chains in Nat/Int; all three now use one argument list.
+  This issue remains open for provenance-aware designated-operator spelling.

@@ -3,4 +3,4 @@
 
 record Pair<A, B> { fst: A, snd: B }
 
-fn swap<A, B>(p: Pair<A, B>) -> Pair<B, A> { Pair(p.snd, p.fst) }
+fn swap<A, B>(p: Pair<A, B>) → Pair<B, A> { Pair(p.snd, p.fst) }

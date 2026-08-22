@@ -17,23 +17,23 @@ inductive List<A> { Nil, Cons(head: A, tail: List<A>) }
 // proof by induction an ordinary first-class value.
 //
 // `P` is a value parameter whose value is the result type family.
-record ListElim<A>(P: List<A> -> Type) {
+record ListElim<A>(P: List<A> → Type) {
     nil: P(Nil),
-    cons: (head: A) -> (tail: List<A>) -> P(tail) -> P(Cons(head, tail)),
+    cons: (head: A) → (tail: List<A>) → P(tail) → P(Cons(head, tail)),
 }
 
-fn list_elim<A>(P: List<A> -> Type, alg: ListElim<A>(P), xs: List<A>) -> P(xs) {
+fn list_elim<A>(P: List<A> → Type, alg: ListElim<A>(P), xs: List<A>) → P(xs) {
     match xs {
         Nil => alg.nil,
         Cons(head, tail) => alg.cons(head, tail, list_elim(P, alg, tail)),
     }
 }
 
-theorem list_elim_nil<A>(P: List<A> -> Type, alg: ListElim<A>(P)):
+theorem list_elim_nil<A>(P: List<A> → Type, alg: ListElim<A>(P)):
     list_elim(P, alg, Nil) = alg.nil
 {}
 
-theorem list_elim_cons<A>(P: List<A> -> Type, alg: ListElim<A>(P),
+theorem list_elim_cons<A>(P: List<A> → Type, alg: ListElim<A>(P),
     head: A, tail: List<A>):
     list_elim(P, alg, Cons(head, tail)) =
         alg.cons(head, tail, list_elim(P, alg, tail))
@@ -49,7 +49,7 @@ theorem list_elim_cons<A>(P: List<A> -> Type, alg: ListElim<A>(P),
 // `append` recurses on its first argument, so `append(Nil, ys)` is `ys`
 // definitionally and it is the *right* unit that costs an induction.
 
-fn append<A>(xs, ys: List<A>) -> List<A> {
+fn append<A>(xs, ys: List<A>) → List<A> {
     match xs {
         Nil => ys,
         Cons(h, t) => Cons(h, append(t, ys)),
@@ -73,7 +73,7 @@ theorem cong_append_l<A>({a: List<A>}, {b: List<A>}, zs: List<A>, p: a = b):
 // `append_nil` is the first existing library theorem expressed by filling a
 // dependent elimination algebra. The recursive proof is no longer named or
 // called here: `list_elim` supplies it to the Cons obligation as `ih`.
-fn append_nil_elim<A>() -> ListElim<A>(λ (xs: List<A>) => xs ++ Nil = xs) {
+fn append_nil_elim<A>() → ListElim<A>(λ (xs: List<A>) => xs ++ Nil = xs) {
     ListElim {
         nil: refl,
         cons: λ (h: A) (t: List<A>) ih => cong_cons(h, ih),
@@ -104,7 +104,7 @@ theorem append_assoc<A>(xs, ys, zs: List<A>):
 // — both arms are `{}`, and every call site reads backwards. The cost of the
 // readable spelling is these two rewrites, and it is worth it.
 
-fn len<A>(xs: List<A>) -> Nat {
+fn len<A>(xs: List<A>) → Nat {
     match xs { Nil => 0, Cons(h, t) => Succ(len(t)) }
 }
 
@@ -128,7 +128,7 @@ theorem len_append<A>(xs, ys: List<A>):
 // through by the same recursion as everything else. It does — every proof here
 // is `cong_cons` over the tail, exactly like the append laws.
 
-fn map<A, B>(xs: List<A>, f: A -> B) -> List<B> {
+fn map<A, B>(xs: List<A>, f: A → B) → List<B> {
     match xs {
         Nil => Nil,
         Cons(h, t) => Cons(f(h), map(t, f)),
@@ -142,7 +142,7 @@ theorem map_id<A>(xs: List<A>): map(xs, λ (a: A) => a) = xs {
     }
 }
 
-theorem map_map<A, B, C>(xs: List<A>, f: A -> B, g: B -> C):
+theorem map_map<A, B, C>(xs: List<A>, f: A → B, g: B → C):
     map(map(xs, f), g) = map(xs, λ (a: A) => g(f(a)))
 {
     match xs {
@@ -151,7 +151,7 @@ theorem map_map<A, B, C>(xs: List<A>, f: A -> B, g: B -> C):
     }
 }
 
-theorem map_append<A, B>(xs, ys: List<A>, f: A -> B):
+theorem map_append<A, B>(xs, ys: List<A>, f: A → B):
     map(xs ++ ys, f) = map(xs, f) ++ map(ys, f)
 {
     match xs {
@@ -160,7 +160,7 @@ theorem map_append<A, B>(xs, ys: List<A>, f: A -> B):
     }
 }
 
-theorem len_map<A, B>(xs: List<A>, f: A -> B): len(map(xs, f)) = len(xs) {
+theorem len_map<A, B>(xs: List<A>, f: A → B): len(map(xs, f)) = len(xs) {
     match xs {
         Nil => {},
         Cons(h, t) => cong_succ(len_map(t, f)),
@@ -170,7 +170,7 @@ theorem len_map<A, B>(xs: List<A>, f: A -> B): len(map(xs, f)) = len(xs) {
 // ---------------------------------------------------------------------------
 // reverse, and the laws that rest on append's.
 
-fn rev<A>(xs: List<A>) -> List<A> {
+fn rev<A>(xs: List<A>) → List<A> {
     match xs {
         Nil => Nil,
         Cons(h, t) => append(rev(t), Cons(h, Nil)),
@@ -219,14 +219,14 @@ theorem rev_len<A>(xs: List<A>): len(rev(xs)) = len(xs) {
 // (issues/ih-generalization.md), so the seed is returned as a function.
 // Over-application means call sites still write `foldl(xs, f, z)`.
 
-fn foldr<A, B>(xs: List<A>, f: A -> B -> B, z: B) -> B {
+fn foldr<A, B>(xs: List<A>, f: A → B → B, z: B) → B {
     match xs {
         Nil => z,
         Cons(h, t) => f(h, foldr(t, f, z)),
     }
 }
 
-fn foldl<A, B>(xs: List<A>, f: B -> A -> B) -> B -> B {
+fn foldl<A, B>(xs: List<A>, f: B → A → B) → B → B {
     match xs {
         Nil => λ (z: B) => z,
         Cons(h, t) => λ (z: B) => foldl(t, f, f(z, h)),
@@ -239,11 +239,11 @@ fn foldl<A, B>(xs: List<A>, f: B -> A -> B) -> B -> B {
 // the theorem it is used in, which is what `j` wants anyway — a general `cong`
 // is unusable only when the function has to be *inferred*
 // (issues/congruence-by-anti-unification.md).
-theorem cong_fn<A, B>(g: A -> B, {a, b: A}, p: a = b): g(a) = g(b) {
+theorem cong_fn<A, B>(g: A → B, {a, b: A}, p: a = b): g(a) = g(b) {
     j(p, λ y q => g(a) = g(y), refl)
 }
 
-theorem foldr_append<A, B>(xs, ys: List<A>, f: A -> B -> B, z: B):
+theorem foldr_append<A, B>(xs, ys: List<A>, f: A → B → B, z: B):
     foldr(xs ++ ys, f, z) = foldr(xs, f, foldr(ys, f, z))
 {
     match xs {
@@ -265,10 +265,10 @@ theorem foldr_append<A, B>(xs, ys: List<A>, f: A -> B -> B, z: B):
 
 record ListAlg<A, B> {
     nil: B,
-    cons: A -> B -> B,
+    cons: A → B → B,
 }
 
-fn list_fold<A, B>(alg: ListAlg<A, B>, xs: List<A>) -> B {
+fn list_fold<A, B>(alg: ListAlg<A, B>, xs: List<A>) → B {
     match xs {
         Nil => alg.nil,
         Cons(h, t) => alg.cons(h, list_fold(alg, t)),
@@ -289,9 +289,9 @@ theorem list_fold_cons<A, B>(alg: ListAlg<A, B>, h: A, t: List<A>):
 // fold at every list. The Cons law receives the original tail as well as its
 // folded result; that makes this a characterization of this fold, not a
 // restriction to functions whose clause forgot the substructure.
-theorem list_fold_unique<A, B>(alg: ListAlg<A, B>, g: List<A> -> B,
+theorem list_fold_unique<A, B>(alg: ListAlg<A, B>, g: List<A> → B,
     nil_law: g(Nil) = alg.nil,
-    cons_law: (h: A) -> (t: List<A>) -> g(Cons(h, t)) = alg.cons(h, g(t)),
+    cons_law: (h: A) → (t: List<A>) → g(Cons(h, t)) = alg.cons(h, g(t)),
     xs: List<A>): g(xs) = list_fold(alg, xs)
 {
     match xs {
@@ -305,9 +305,9 @@ theorem list_fold_unique<A, B>(alg: ListAlg<A, B>, g: List<A> -> B,
 // pointwise fusion law; stating equality between the two resulting functions
 // would add a funext premise without strengthening what clients can apply.
 theorem list_fold_fusion<A, B, C>(src: ListAlg<A, B>, dst: ListAlg<A, C>,
-    hom: B -> C,
+    hom: B → C,
     nil_comm: hom(src.nil) = dst.nil,
-    cons_comm: (a: A) -> (b: B) -> hom(src.cons(a, b)) = dst.cons(a, hom(b)),
+    cons_comm: (a: A) → (b: B) → hom(src.cons(a, b)) = dst.cons(a, hom(b)),
     xs: List<A>): hom(list_fold(src, xs)) = list_fold(dst, xs)
 {
     match xs {
@@ -320,7 +320,7 @@ theorem list_fold_fusion<A, B, C>(src: ListAlg<A, B>, dst: ListAlg<A, C>,
 
 // The old API and the first-class one are not competing folds. Packaging
 // `foldr`'s arguments gives the same computation at every list.
-theorem list_fold_is_foldr<A, B>(f: A -> B -> B, z: B, xs: List<A>):
+theorem list_fold_is_foldr<A, B>(f: A → B → B, z: B, xs: List<A>):
     list_fold(ListAlg<A, B> { nil: z, cons: f }, xs) = foldr(xs, f, z)
 {
     match xs {
@@ -332,7 +332,7 @@ theorem list_fold_is_foldr<A, B>(f: A -> B -> B, z: B, xs: List<A>):
 // `foldl`'s laws (wave L2′, issues/std-list-l2-prime-laws.md). L2 left `foldl`
 // with none, and the reason is visible in every statement below: the
 // accumulator changes at each step, so a law about `foldl` is never a law about
-// one accumulator. Each one is stated as `(z: B) -> …` and each proof applies
+// one accumulator. Each one is stated as `(z: B) → …` and each proof applies
 // its IH at a DIFFERENT `z` — the higher-order face of
 // issues/ih-generalization.md, which the L1/L2 round could only rank from the
 // definition's shape because it proved nothing about it.
@@ -341,8 +341,8 @@ theorem list_fold_is_foldr<A, B>(f: A -> B -> B, z: B, xs: List<A>):
 // spelling forced the workaround, and the workaround is exactly the shape the
 // laws want.
 
-theorem foldl_append<A, B>(xs, ys: List<A>, f: B -> A -> B):
-    (z: B) -> foldl(xs ++ ys, f, z) = foldl(ys, f, foldl(xs, f, z))
+theorem foldl_append<A, B>(xs, ys: List<A>, f: B → A → B):
+    (z: B) → foldl(xs ++ ys, f, z) = foldl(ys, f, foldl(xs, f, z))
 {
     match xs {
         Nil => λ z => {},
@@ -355,8 +355,8 @@ theorem foldl_append<A, B>(xs, ys: List<A>, f: B -> A -> B):
 // function to prove it — `foldl_append` at the singleton — because `rev` is
 // defined by `append` and `foldl` has nothing to say about `append` by
 // computation.
-theorem foldl_rev<A, B>(xs: List<A>, f: B -> A -> B):
-    (z: B) -> foldl(rev(xs), f, z) = foldr(xs, λ (a: A) (b: B) => f(b, a), z)
+theorem foldl_rev<A, B>(xs: List<A>, f: B → A → B):
+    (z: B) → foldl(rev(xs), f, z) = foldr(xs, λ (a: A) (b: B) => f(b, a), z)
 {
     match xs {
         Nil => λ z => {},
@@ -371,7 +371,7 @@ theorem foldl_rev<A, B>(xs: List<A>, f: B -> A -> B):
 // same way `len_append` does: the IH lands on `add(Succ(z), len(t))` and the
 // goal wants `Succ(add(z, len(t)))`.
 theorem foldl_len<A>(xs: List<A>):
-    (z: Nat) -> foldl(xs, λ (k: Nat) (a: A) => Succ(k), z) = z + len(xs)
+    (z: Nat) → foldl(xs, λ (k: Nat) (a: A) => Succ(k), z) = z + len(xs)
 {
     match xs {
         Nil => λ z => {},
@@ -393,7 +393,7 @@ theorem foldl_len<A>(xs: List<A>):
 // `take`/`drop` are curried for the reason `nth` is: the index descends
 // alongside the list.
 
-fn filter<A>(xs: List<A>, p: A -> Bool) -> List<A> {
+fn filter<A>(xs: List<A>, p: A → Bool) → List<A> {
     match xs {
         Nil => Nil,
         Cons(h, t) => match p(h) {
@@ -403,7 +403,7 @@ fn filter<A>(xs: List<A>, p: A -> Bool) -> List<A> {
     }
 }
 
-fn take<A>(xs: List<A>) -> Nat -> List<A> {
+fn take<A>(xs: List<A>) → Nat → List<A> {
     match xs {
         Nil => λ (n: Nat) => Nil,
         Cons(h, t) => λ (n: Nat) => match n {
@@ -413,7 +413,7 @@ fn take<A>(xs: List<A>) -> Nat -> List<A> {
     }
 }
 
-fn drop<A>(xs: List<A>) -> Nat -> List<A> {
+fn drop<A>(xs: List<A>) → Nat → List<A> {
     match xs {
         Nil => λ (n: Nat) => Nil,
         Cons(h, t) => λ (n: Nat) => match n {
@@ -424,7 +424,7 @@ fn drop<A>(xs: List<A>) -> Nat -> List<A> {
 }
 
 theorem take_append_drop<A>(xs: List<A>):
-    (n: Nat) -> take(xs, n) ++ drop(xs, n) = xs
+    (n: Nat) → take(xs, n) ++ drop(xs, n) = xs
 {
     match xs {
         Nil => λ n => {},
@@ -437,7 +437,7 @@ theorem take_append_drop<A>(xs: List<A>):
 
 // Filtering cannot increase length. Both inner branches return `List<A>`, so
 // the match needs no written motive.
-theorem len_filter<A>(xs: List<A>, p: A -> Bool): len(filter(xs, p)) <= len(xs) {
+theorem len_filter<A>(xs: List<A>, p: A → Bool): len(filter(xs, p)) <= len(xs) {
     match xs {
         Nil => trivial,
         Cons(h, t) => match p(h) {
@@ -456,12 +456,12 @@ theorem len_filter<A>(xs: List<A>, p: A -> Bool): len(filter(xs, p)) <= len(xs) 
 // while the left has a SECOND stuck `p(h)` that the motive cannot reach, so the
 // arm needs the equation `p(h) = b` and has to rewrite by it. `match e : p(h)`
 // binds that equation, so
-// the convoy costs one token and not a `-> Goal` in the motive plus a trailing
+// the convoy costs one token and not a `→ Goal` in the motive plus a trailing
 // `(refl)`; what it does NOT do is use it, and the `j` in the `True` arm is
 // three lines of hand-written motive for a rewrite under a `match` context
 // (issues/congruence-by-anti-unification.md).
 
-theorem filter_append<A>(xs, ys: List<A>, p: A -> Bool):
+theorem filter_append<A>(xs, ys: List<A>, p: A → Bool):
     filter(xs ++ ys, p) = filter(xs, p) ++ filter(ys, p)
 {
     match xs {
@@ -480,7 +480,7 @@ theorem filter_append<A>(xs, ys: List<A>, p: A -> Bool):
 // features compose with nothing to say to each other: the equation binding
 // decorates whatever motive synthesis hands it
 // (docs/goal-motive-synthesis-design.md §6).
-theorem filter_filter<A>(xs: List<A>, p: A -> Bool):
+theorem filter_filter<A>(xs: List<A>, p: A → Bool):
     filter(filter(xs, p), p) = filter(xs, p)
 {
     match xs {
@@ -502,7 +502,7 @@ theorem filter_filter<A>(xs: List<A>, p: A -> Bool):
 // Filtering a mapped list is mapping a filtered one, with the predicate pulled
 // back through `f`. Both sides branch on `p(f(h))` — the right one after a beta
 // step, since the pulled-back predicate is a literal lambda — so no convoy.
-theorem filter_map<A, B>(xs: List<A>, f: A -> B, p: B -> Bool):
+theorem filter_map<A, B>(xs: List<A>, f: A → B, p: B → Bool):
     filter(map(xs, f), p) = map(filter(xs, λ (a: A) => p(f(a))), f)
 {
     match xs {
@@ -524,7 +524,7 @@ theorem filter_map<A, B>(xs: List<A>, f: A -> B, p: B -> Bool):
 // curried tail's element type. A deliberately partial `zip<A, B>(xs)` still
 // needs both type arguments because the second list is not present to infer B.
 
-fn replicate<A>(x: A, n: Nat) -> List<A> {
+fn replicate<A>(x: A, n: Nat) → List<A> {
     match n {
         Zero => Nil,
         Succ(k) => Cons(x, replicate(x, k)),
@@ -538,7 +538,7 @@ theorem len_replicate<A>(x: A, n: Nat): len(replicate(x, n)) = n {
     }
 }
 
-fn zip<A, B>(xs: List<A>) -> List<B> -> List<Pair<A, B>> {
+fn zip<A, B>(xs: List<A>) → List<B> → List<Pair<A, B>> {
     match xs {
         Nil => λ (ys: List<B>) => Nil,
         Cons(h, t) => λ (ys: List<B>) => match ys {
@@ -561,7 +561,7 @@ fn zip<A, B>(xs: List<A>) -> List<B> -> List<Pair<A, B>> {
 // for the same reason `min` does.
 
 theorem len_zip<A, B>(xs: List<A>):
-    (ys: List<B>) -> len(zip(xs, ys)) = min(len(xs), len(ys))
+    (ys: List<B>) → len(zip(xs, ys)) = min(len(xs), len(ys))
 {
     match xs {
         Nil => λ ys => {},
@@ -573,7 +573,7 @@ theorem len_zip<A, B>(xs: List<A>):
 }
 
 theorem zip_map_fst<A, B>(xs: List<A>):
-    (ys: List<B>) -> map(zip(xs, ys), λ (q: Pair<A, B>) => q.fst) = take(xs, len(ys))
+    (ys: List<B>) → map(zip(xs, ys), λ (q: Pair<A, B>) => q.fst) = take(xs, len(ys))
 {
     match xs {
         Nil => λ ys => {},
@@ -589,7 +589,7 @@ theorem zip_map_fst<A, B>(xs: List<A>):
 // its index (issues/ih-generalization.md), so it steps only once its LIST is a
 // constructor. The same shape is why `zip_swap`'s `Nil` arm splits too.
 theorem zip_map_snd<A, B>(xs: List<A>):
-    (ys: List<B>) -> map(zip(xs, ys), λ (q: Pair<A, B>) => q.snd) = take(ys, len(xs))
+    (ys: List<B>) → map(zip(xs, ys), λ (q: Pair<A, B>) => q.snd) = take(ys, len(xs))
 {
     match xs {
         Nil => λ ys => match ys {
@@ -608,7 +608,7 @@ theorem zip_map_snd<A, B>(xs: List<A>):
 // its type arguments, and the η-expanded `λ q => swap(q)` is shorter than
 // `swap<A, B>`. Nothing is lost — it is the same function.
 theorem zip_swap<A, B>(xs: List<A>):
-    (ys: List<B>) -> map(zip(xs, ys), λ (q: Pair<A, B>) => swap(q)) = zip(ys, xs)
+    (ys: List<B>) → map(zip(xs, ys), λ (q: Pair<A, B>) => swap(q)) = zip(ys, xs)
 {
     match xs {
         Nil => λ ys => match ys {
@@ -643,20 +643,20 @@ theorem zip_swap<A, B>(xs: List<A>):
 // `match xs` without being convoyed through it. That is the ordinary shape in
 // this repo (`nth_append_l`, `le_succ_r`), stated once here for the section.
 
-fn Mem<A>(a: A, xs: List<A>) -> Type {
+fn Mem<A>(a: A, xs: List<A>) → Type {
     match xs {
         Nil => False,
         Cons(h, t) => a = h ∨ Mem(a, t),
     }
 }
 
-theorem not_mem_nil<A>(a: A): ¬ Mem(a, Nil) { λ (h: Mem(a, Nil)) => h }
+theorem not_mem_nil<A>(a: A): ¬Mem(a, Nil) { λ (h: Mem(a, Nil)) => h }
 
 theorem mem_head<A>(a: A, xs: List<A>): Mem(a, Cons(a, xs)) { Inl(refl) }
 
 theorem mem_cons<A>(a, h: A, xs: List<A>, m: Mem(a, xs)): Mem(a, Cons(h, xs)) { Inr(m) }
 
-theorem mem_append_l<A>(xs, ys: List<A>, a: A): Mem(a, xs) -> Mem(a, xs ++ ys) {
+theorem mem_append_l<A>(xs, ys: List<A>, a: A): Mem(a, xs) → Mem(a, xs ++ ys) {
     match xs {
         Nil => λ m => false_elim(m),
         Cons(h, t) => λ m => match m {
@@ -666,7 +666,7 @@ theorem mem_append_l<A>(xs, ys: List<A>, a: A): Mem(a, xs) -> Mem(a, xs ++ ys) {
     }
 }
 
-theorem mem_append_r<A>(xs, ys: List<A>, a: A): Mem(a, ys) -> Mem(a, xs ++ ys) {
+theorem mem_append_r<A>(xs, ys: List<A>, a: A): Mem(a, ys) → Mem(a, xs ++ ys) {
     match xs {
         Nil => λ m => m,
         Cons(h, t) => λ m => Inr(mem_append_r(t, ys, a, m)),
@@ -674,7 +674,7 @@ theorem mem_append_r<A>(xs, ys: List<A>, a: A): Mem(a, ys) -> Mem(a, xs ++ ys) {
 }
 
 theorem mem_append<A>(xs, ys: List<A>, a: A):
-    Mem(a, xs ++ ys) -> Mem(a, xs) ∨ Mem(a, ys)
+    Mem(a, xs ++ ys) → Mem(a, xs) ∨ Mem(a, ys)
 {
     match xs {
         Nil => λ m => Inr(m),
@@ -697,7 +697,7 @@ theorem mem_append_iff<A>(xs, ys: List<A>, a: A):
             or_elim(h, mem_append_l(xs, ys, a), mem_append_r(xs, ys, a)))
 }
 
-theorem mem_map<A, B>(xs: List<A>, a: A, f: A -> B): Mem(a, xs) -> Mem(f(a), map(xs, f)) {
+theorem mem_map<A, B>(xs: List<A>, a: A, f: A → B): Mem(a, xs) → Mem(f(a), map(xs, f)) {
     match xs {
         Nil => λ m => false_elim(m),
         Cons(h, t) => λ m => match m {
@@ -714,8 +714,8 @@ theorem mem_map<A, B>(xs: List<A>, a: A, f: A -> B): Mem(a, xs) -> Mem(f(a), map
 // `Decide`-valued `filter` that issues/std-list-api.md called "a second
 // function, not a replacement" is what would state it, and this is its first
 // customer. Not encoded around: the fact is left unstated.
-theorem mem_filter<A>(xs: List<A>, a: A, p: A -> Bool):
-    Mem(a, filter(xs, p)) -> Mem(a, xs)
+theorem mem_filter<A>(xs: List<A>, a: A, p: A → Bool):
+    Mem(a, filter(xs, p)) → Mem(a, xs)
 {
     match xs {
         Nil => λ m => false_elim(m),
@@ -732,7 +732,7 @@ theorem mem_filter<A>(xs: List<A>, a: A, p: A -> Bool):
 // Reversing preserves membership, and this is the lemma that shows the kit
 // working as one: `rev` is defined by `append`, so the proof is `mem_append`
 // followed by refuting the singleton's tail.
-theorem mem_rev<A>(xs: List<A>, a: A): Mem(a, rev(xs)) -> Mem(a, xs) {
+theorem mem_rev<A>(xs: List<A>, a: A): Mem(a, rev(xs)) → Mem(a, xs) {
     match xs {
         Nil => λ m => false_elim(m),
         Cons(h, t) => λ m =>
@@ -759,21 +759,21 @@ theorem mem_rev<A>(xs: List<A>, a: A): Mem(a, rev(xs)) -> Mem(a, xs) {
 // `tail` is forced rather than chosen: `Cons`'s own fields are called `head`
 // and `tail`.
 
-fn List::head<A>(self xs: List<A>) -> Option<A> {
+fn List::head<A>(self xs: List<A>) → Option<A> {
     match xs {
         Nil => None,
         Cons(h, t) => Some(h),
     }
 }
 
-fn List::tail<A>(self xs: List<A>) -> List<A> {
+fn List::tail<A>(self xs: List<A>) → List<A> {
     match xs {
         Nil => Nil,
         Cons(h, t) => t,
     }
 }
 
-fn List::last<A>(self xs: List<A>) -> Option<A> {
+fn List::last<A>(self xs: List<A>) → Option<A> {
     match xs {
         Nil => None,
         Cons(h, t) => match t {
@@ -790,7 +790,7 @@ fn List::last<A>(self xs: List<A>) -> Option<A> {
 // member through the type and the index spills into the curried tail
 // (issues/type-owned-members-receiver-slice.md,
 // issues/call-site-overapplication.md).
-fn List::nth<A>(self xs: List<A>) -> Nat -> Option<A> {
+fn List::nth<A>(self xs: List<A>) → Nat → Option<A> {
     match xs {
         Nil => λ (i: Nat) => None,
         Cons(h, t) => λ (i: Nat) => match i { Zero => Some(h), Succ(k) => nth(t, k) },
@@ -801,7 +801,7 @@ fn List::nth<A>(self xs: List<A>) -> Nat -> Option<A> {
 // so the statement is a function of it and every use is an over-application
 // (issues/ih-generalization.md's workaround).
 theorem nth_append_l<A>(xs: List<A>, ys: List<A>):
-    (i: Nat, a: A) -> xs.nth(i) = Some(a) -> (xs ++ ys).nth(i) = Some(a)
+    (i: Nat, a: A) → xs.nth(i) = Some(a) → (xs ++ ys).nth(i) = Some(a)
 {
     match xs {
         Nil => λ i a p => absurd(p),
