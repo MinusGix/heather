@@ -45,7 +45,9 @@ pub enum TokKind {
     Gt,        // >   (closes a type-argument list; `>` is not an operator)
     LBracket,  // [
     RBracket,  // ]
-    Arrow,     // ->
+    /// Function/implication arrow. `→` is the preferred mathematical
+    /// spelling; `->` remains an ASCII alias and produces the same token.
+    Arrow,     // → or ->
     FatArrow,  // =>
     /// `⊢` / `|-` — the turnstile of a contextual type `Code(g |- T)` and a
     /// checking-position sequent binder `x ⊢ body`. Both spellings become one
@@ -233,6 +235,7 @@ pub fn lex(src: &str) -> Result<Vec<Tok>, LexError> {
             "∀" => Some(TokKind::Forall),
             "≠" => Some(TokKind::Ne),
             "⊢" => Some(TokKind::Turnstile),
+            "→" => Some(TokKind::Arrow),
             _ => None,
         };
         if let Some(kind) = three_kind {

@@ -4406,6 +4406,16 @@ mod tests {
         assert_eq!(kinds("a ↔ b"), kinds("a <-> b"));
     }
 
+    #[test]
+    fn the_unicode_arrow_is_the_same_token_as_ascii() {
+        use crate::lexer::lex;
+        let kinds = |s: &str| {
+            lex(s).unwrap().into_iter().map(|t| t.kind).collect::<Vec<_>>()
+        };
+        assert_eq!(kinds("A → B"), kinds("A -> B"));
+        parse_file("theorem id<A>(): A → A { λ x => x }").unwrap();
+    }
+
     /// `¬` is two bytes and `∧`/`∨`/`∃`/`∀` are three, so they are matched in
     /// different windows; a window that lands mid-codepoint must mean "not a
     /// token of this width" rather than panic.

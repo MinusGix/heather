@@ -61,7 +61,7 @@ module.exports = grammar({
       optional($.type_parameters), optional($.requires_clause),
       field('parameters', $.parameter_list),
       optional(seq('for', $.slot_path)),
-      '->', field('return_type', $._declaration_type), field('body', $.block),
+      choice('->', '→'), field('return_type', $._declaration_type), field('body', $.block),
     ),
 
     theorem_declaration: $ => seq(
@@ -233,7 +233,7 @@ module.exports = grammar({
       repeat1(seq('.', $.identifier, optional($.argument_list))),
     )),
     declaration_function_type: $ => prec.right(PREC.ARROW, seq(
-      choice($.binder_group, $.implicit_binder_group, $._type_atom), '->', $._declaration_type,
+      choice($.binder_group, $.implicit_binder_group, $._type_atom), choice('->', '→'), $._declaration_type,
     )),
     declaration_binary_type: $ => choice(
       ...typeBinary($, ['↔', '<->'], PREC.IFF, 'right'),
@@ -365,7 +365,7 @@ module.exports = grammar({
     record_field: $ => seq(field('name', $.identifier), ':', field('value', $._expression)),
 
     function_type: $ => prec.right(PREC.ARROW, seq(
-      choice($.binder_group, $.implicit_binder_group, $._expression), '->', $._expression,
+      choice($.binder_group, $.implicit_binder_group, $._expression), choice('->', '→'), $._expression,
     )),
     prefix_expression: $ => prec(PREC.PREFIX, seq(choice('-', '¬'), $._expression)),
     binary_expression: $ => choice(
