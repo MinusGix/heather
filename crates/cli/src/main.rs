@@ -23,6 +23,10 @@
 //! feeds them in that order, and each module's diagnostics are rendered
 //! against its *own* source.
 //!
+//! Human terminal output uses a small ANSI palette; redirected streams,
+//! `TERM=dumb`, and the conventional `NO_COLOR` environment variable keep
+//! the byte-for-byte plain rendering used by tools and tests.
+//!
 //! Argument parsing is by hand: the interface is one subcommand, and the
 //! workspace above the kernel stays dependency-light until the policy round
 //! (issues/dependency-policy.md) says otherwise.
@@ -39,19 +43,22 @@ use heather_elab::Elaborator;
 // (see `lib.rs`, issues/frontend-bench-ir-closure-stale.md).
 use heather_cli::loader;
 
+mod color;
+
 /// Where the standard library lives when nobody says otherwise
 /// (docs/modules-design.md §3.2). Defaulted only if it exists, so a run from
 /// a directory without one behaves exactly as it did before modules.
 const DEFAULT_LIB: &str = "lib/std";
 
 fn main() -> ExitCode {
+    let stderr_color = color::stderr_enabled();
     let args: Vec<String> = std::env::args().skip(1).collect();
     match args.split_first() {
         Some((cmd, rest)) if cmd == "check" => match parse_check_args(rest) {
             Ok((opts, files)) if !files.is_empty() => check(&opts, &files),
             Ok(_) => usage(),
             Err(msg) => {
-                eprintln!("error: {msg}");
+                eprintln!("{}: {msg}", color::error_label(stderr_color));
                 eprintln!("{USAGE}");
                 ExitCode::from(2)
             }
@@ -60,7 +67,7 @@ fn main() -> ExitCode {
             Ok((opts, files)) if !files.is_empty() => obligations(&opts, &files),
             Ok(_) => usage(),
             Err(msg) => {
-                eprintln!("error: {msg}");
+                eprintln!("{}: {msg}", color::error_label(stderr_color));
                 eprintln!("{USAGE}");
                 ExitCode::from(2)
             }
@@ -144,6 +151,8 @@ fn parse_check_args(args: &[String]) -> Result<(Opts, Vec<String>), String> {
 }
 
 fn check(opts: &Opts, files: &[String]) -> ExitCode {
+    let stderr_color = color::stderr_enabled();
+    let stdout_color = color::stdout_enabled();
     // One cache for the whole run, shared across roots: a declaration two
     // roots have in common is checked once. Loading says out loud when it
     // threw an existing file away (a stale kernel, a corrupted file) — the
@@ -158,13 +167,16 @@ fn check(opts: &Opts, files: &[String]) -> ExitCode {
 
     let mut failed = false;
     for path in files {
-        // A fresh elaborator per **root**: two roots re-elaborate a shared
+        // A fresh elaborator per **path**: two file paths re-elaborate a shared
         // import, which at prelude sizes costs milliseconds (caching is
         // docs/modules-design.md §8's round, not this one).
         let mut elab = match Elaborator::with_prelude() {
             Ok(e) => e,
             Err(e) => {
-                eprintln!("internal error: the prelude failed to check: {e}");
+                eprintln!(
+                    "{}: the prelude failed to check: {e}",
+                    color::internal_error_label(stderr_color)
+                );
                 return ExitCode::from(2);
             }
         };
@@ -181,7 +193,7 @@ fn check(opts: &Opts, files: &[String]) -> ExitCode {
         let roots = match roots_for_path(Path::new(path)) {
             Ok(roots) => roots,
             Err(msg) => {
-                eprintln!("error: {msg}");
+                eprintln!("{}: {msg}", color::error_label(stderr_color));
                 return ExitCode::from(2);
             }
         };
@@ -189,7 +201,7 @@ fn check(opts: &Opts, files: &[String]) -> ExitCode {
         let modules = match loader::load_many(&root_refs, &opts.search) {
             Ok(m) => m,
             Err(e) => {
-                eprintln!("error: {}", e.msg);
+                eprintln!("{}: {}", color::error_label(stderr_color), e.msg);
                 return ExitCode::from(2);
             }
         };
@@ -205,11 +217,19 @@ fn check(opts: &Opts, files: &[String]) -> ExitCode {
             if !warns.is_empty() {
                 let shown = display_path(&m.path, path);
                 for w in &warns {
-                    eprint!("{}", w.render_snippet(&m.src, &shown));
+                    eprint!(
+                        "{}",
+                        color::diagnostic(
+                            &w.render_snippet(&m.src, &shown),
+                            color::Severity::Warning,
+                            stderr_color,
+                        )
+                    );
                     eprintln!();
                 }
                 let n = warns.len();
-                eprintln!("{shown}: {n} warning{}", if n == 1 { "" } else { "s" });
+                let count = format!("{n} warning{}", if n == 1 { "" } else { "s" });
+                eprintln!("{shown}: {}", color::warning_count(&count, stderr_color));
             }
             if errs.is_empty() {
                 continue;
@@ -223,10 +243,18 @@ fn check(opts: &Opts, files: &[String]) -> ExitCode {
                 if i > 0 {
                     eprintln!();
                 }
-                eprint!("{}", e.render_snippet(&m.src, &shown));
+                eprint!(
+                    "{}",
+                    color::diagnostic(
+                        &e.render_snippet(&m.src, &shown),
+                        color::Severity::Error,
+                        stderr_color,
+                    )
+                );
             }
             let n = errs.len();
-            eprintln!("\n{shown}: {n} error{}", if n == 1 { "" } else { "s" });
+            let count = format!("{n} error{}", if n == 1 { "" } else { "s" });
+            eprintln!("\n{shown}: {}", color::error_count(&count, stderr_color));
         }
         if root_ok {
             match (&cache, before) {
@@ -236,14 +264,15 @@ fn check(opts: &Opts, files: &[String]) -> ExitCode {
                 (Some(c), Some(before)) => {
                     let n = c.counts().since(&before);
                     println!(
-                        "{path}: ok (cache) — {} declaration{} kernel-checked, {} accepted \
+                        "{path}: {} (cache) — {} declaration{} kernel-checked, {} accepted \
                          from cache",
+                        color::success("ok", stdout_color),
                         n.checked,
                         if n.checked == 1 { "" } else { "s" },
                         n.hits
                     );
                 }
-                _ => println!("{path}: ok"),
+                _ => println!("{path}: {}", color::success("ok", stdout_color)),
             }
         }
     }
@@ -269,18 +298,22 @@ fn check(opts: &Opts, files: &[String]) -> ExitCode {
 /// tool, knowing what a declaration owes and who discharged it before editing
 /// it.
 fn obligations(opts: &Opts, files: &[String]) -> ExitCode {
+    let stderr_color = color::stderr_enabled();
     for path in files {
         let mut elab = match Elaborator::with_prelude() {
             Ok(e) => e,
             Err(e) => {
-                eprintln!("internal error: the prelude failed to check: {e}");
+                eprintln!(
+                    "{}: the prelude failed to check: {e}",
+                    color::internal_error_label(stderr_color)
+                );
                 return ExitCode::from(2);
             }
         };
         let modules = match loader::load(Path::new(path), &opts.search) {
             Ok(m) => m,
             Err(e) => {
-                eprintln!("error: {}", e.msg);
+                eprintln!("{}: {}", color::error_label(stderr_color), e.msg);
                 return ExitCode::from(2);
             }
         };
@@ -291,7 +324,14 @@ fn obligations(opts: &Opts, files: &[String]) -> ExitCode {
             }
             let shown = display_path(&m.path, path);
             for e in &errs {
-                eprint!("{}", e.render_snippet(&m.src, &shown));
+                eprint!(
+                    "{}",
+                    color::diagnostic(
+                        &e.render_snippet(&m.src, &shown),
+                        color::Severity::Error,
+                        stderr_color,
+                    )
+                );
             }
             eprintln!("\n{shown}: not checked, so there is nothing to list");
             return ExitCode::from(1);
