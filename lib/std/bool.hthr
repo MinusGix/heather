@@ -60,12 +60,12 @@ theorem or_comm(a, b: Bool): a || b = b || a {
 // stated directly over constructor identity, and registers at Bool's equality
 // carrier without colliding with Nat's corresponding instance.
 fn eq_dec(a, b: Bool) → a = b ∨ a ≠ b {
-    match a as λ x => x = b ∨ x ≠ b {
-        False => match b as λ y => False = y ∨ False ≠ y {
+    match a {
+        False => match b {
             False => Inl(refl),
             True => Inr(λ (bad: False = True) => absurd(bad)),
         },
-        True => match b as λ y => True = y ∨ True ≠ y {
+        True => match b {
             False => Inr(λ (bad: True = False) => absurd(bad)),
             True => Inl(refl),
         },
@@ -120,9 +120,9 @@ theorem le_refl(a: Bool): a <= a {
 // A `fn`, not a `theorem`: a decision has to unfold in conversion
 // (docs/nat-order-design.md §2).
 fn le_dec(a, b: Bool) → a <= b ∨ ¬(a <= b) {
-    match a as λ z => z <= b ∨ ¬(z <= b) {
+    match a {
         False => Inl(trivial),
-        True => match b as λ y => True <= y ∨ ¬(True <= y) {
+        True => match b {
             False => Inr(·),
             True => Inl(trivial),
         },

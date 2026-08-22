@@ -1,6 +1,6 @@
 ---
 title: "Lint operator uses that resolve only through a basename fallback"
-status: open
+status: closed
 labels: [tooling,lint,frontend,notation,resolution,ergonomics]
 created: 2026-08-22
 updated: 2026-08-22
@@ -43,3 +43,9 @@ controls or profile treatment rather than hard-coded message exceptions.
 
 - 2026-08-22: Filed from the lint review as a resolution-surprise diagnostic,
   not merely a canonical-spelling rule.
+- 2026-08-22: Implemented `operator-fallback` at rung 3 of the resolver itself.
+  It records the selected fallback declaration, carrier, evidence source, and
+  span only when the carrier probe found an uncovered carrier; fallback-only
+  programs with no designation anywhere retain the compatibility behavior
+  silently. Cloned/speculative elaboration cannot leak provenance, failed
+  items roll it back, and the stdlib census found zero occurrences.

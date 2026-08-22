@@ -116,7 +116,7 @@ theorem or_resolve<P, Q>(h: P ∨ Q, nq: ¬Q): P {
 // `cmp_pick`'s `False => x, True => y` so that `Inl` (the relation holds)
 // keeps `y` exactly as `True` did.
 fn or_pick<P, Q, A>(d: P ∨ Q, x, y: A) → A {
-    match d { Inl(p) => y, Inr(q) => x }
+    match d { Inl(_) => y, Inr(_) => x }
 }
 
 // A decided disjunction whose left side is proved picks the left value — the
@@ -125,8 +125,8 @@ fn or_pick<P, Q, A>(d: P ∨ Q, x, y: A) → A {
 // rewrite by and none is wanted: the match's own motive reaches the scrutinee,
 // and the refuting branch is closed by the proof the caller already holds.
 theorem or_pick_dec<P, A>(d: P ∨ ¬P, x, y: A, p: P): or_pick(d, x, y) = y {
-    match d as λ z => or_pick(z, x, y) = y {
-        Inl(good) => refl,
+    match d {
+        Inl(_) => refl,
         Inr(bad) => false_elim(bad(p)),
     }
 }

@@ -139,11 +139,13 @@ fn an_immediately_applied_function_match_is_reported() {
     }";
     assert!(e.check_source(src).is_empty());
     let ws = e.take_warnings();
-    assert_eq!(ws.len(), 1, "{ws:?}");
-    assert_eq!(ws[0].lint, Lint::MatchFunctionApplication);
-    assert_eq!(ws[0].lint.name(), "match-function-application");
-    assert!(ws[0].msg.contains("checking position"), "{}", ws[0].msg);
-    assert!(ws[0].msg.contains("motive may be inferable"), "{}", ws[0].msg);
+    let w = ws
+        .iter()
+        .find(|w| w.lint == Lint::MatchFunctionApplication)
+        .expect("the match-function lint");
+    assert_eq!(w.lint.name(), "match-function-application");
+    assert!(w.msg.contains("checking position"), "{}", w.msg);
+    assert!(w.msg.contains("motive may be inferable"), "{}", w.msg);
 }
 
 #[test]
@@ -159,7 +161,10 @@ fn a_match_used_as_a_function_value_is_not_reported() {
     let mut e = Elaborator::with_prelude().expect("prelude");
     assert!(e.check_source(direct).is_empty());
     assert!(e.check_source(nonbinder).is_empty());
-    assert!(e.take_warnings().is_empty());
+    assert!(
+        e.take_warnings().iter().all(|w| w.lint != Lint::MatchFunctionApplication),
+        "neither control is an immediately applied function match"
+    );
 }
 
 #[test]
@@ -226,6 +231,112 @@ fn staged_or_computed_function_values_are_not_nested_call_style() {
     assert!(e.take_warnings().is_empty());
 }
 
+#[test]
+fn unused_pattern_payloads_are_identity_aware_and_fixable() {
+    let mut e = Elaborator::with_prelude().expect("prelude");
+    let src = format!(
+        "{TOK}
+         fn one(p: P) → Nat {{
+             match p {{ Mk(x, y) => match x {{ TA => 0, TB => 1 }} }}
+         }}
+         fn shadowed(p: P) → Nat {{
+             match p {{ Mk(x, y) => (λ (x: Nat) => x)(0) }}
+         }}"
+    );
+    assert!(e.check_source(&src).is_empty());
+    let ws = e
+        .take_warnings()
+        .into_iter()
+        .filter(|w| w.lint == Lint::UnusedPatternBinder)
+        .collect::<Vec<_>>();
+    assert_eq!(ws.len(), 3, "{ws:?}");
+    assert_eq!(ws.iter().filter(|w| w.msg.contains("`y`")).count(), 2);
+    assert_eq!(ws.iter().filter(|w| w.msg.contains("`x`")).count(), 1);
+    assert!(ws.iter().all(|w| w.fix.as_ref().is_some_and(|f| f.replacement == "_")));
+}
+
+#[test]
+fn an_unused_explicit_induction_hypothesis_has_a_distinct_warning() {
+    let mut e = Elaborator::with_prelude().expect("prelude");
+    let src = "fn predecessor(n: Nat) → Nat {
+        match n { Zero => 0, Succ(k, ih) => k }
+    }";
+    assert!(e.check_source(src).is_empty());
+    let ws = e.take_warnings();
+    assert_eq!(ws.len(), 1, "{ws:?}");
+    assert_eq!(ws[0].lint, Lint::UnusedPatternBinder);
+    assert_eq!(ws[0].lint.name(), "unused-pattern-binder");
+    assert!(ws[0].msg.contains("induction hypothesis `ih`"), "{}", ws[0].msg);
+    assert!(ws[0].msg.contains("case analysis"), "{}", ws[0].msg);
+}
+
+#[test]
+fn operator_fallback_warns_only_after_a_known_carrier_misses_designation() {
+    let mut e = Elaborator::with_prelude().expect("prelude");
+    let src = "
+        inductive A { A0 }
+        inductive B { B0 }
+        fn add(a: A, b: A) → A { a }
+        fn add_b(a: B, b: B) → B { a }
+        designation + at B := add_b
+        fn fallback(a: A, b: A) → A { a + b }
+        designation + at A := add
+        fn designated(a: A, b: A) → A { a + b }
+    ";
+    assert!(e.check_source(src).is_empty());
+    let ws = e
+        .take_warnings()
+        .into_iter()
+        .filter(|w| w.lint == Lint::OperatorFallback)
+        .collect::<Vec<_>>();
+    assert_eq!(ws.len(), 1, "{ws:?}");
+    assert_eq!(ws[0].lint.name(), "operator-fallback");
+    assert!(ws[0].msg.contains("no designation at `A`"), "{}", ws[0].msg);
+    assert!(ws[0].msg.contains("fallback `add`"), "{}", ws[0].msg);
+    assert!(ws[0].msg.contains("designation + at A := add"), "{}", ws[0].msg);
+}
+
+#[test]
+fn compatibility_fallback_without_any_designation_remains_silent() {
+    let mut e = Elaborator::with_prelude().expect("prelude");
+    let src = "fn add(a: Nat, b: Nat) → Nat { a }
+               fn old_surface(a: Nat, b: Nat) → Nat { a + b }";
+    assert!(e.check_source(src).is_empty());
+    assert!(e.take_warnings().iter().all(|w| w.lint != Lint::OperatorFallback));
+}
+
+#[test]
+fn a_match_motive_verified_redundant_in_checking_position_has_an_exact_fix() {
+    let mut e = Elaborator::with_prelude().expect("prelude");
+    let src = "fn choose(n: Nat) → Nat {
+        match n as λ z => Nat { Zero => 0, Succ(k) => k }
+    }";
+    assert!(e.check_source(src).is_empty());
+    let ws = e
+        .take_warnings()
+        .into_iter()
+        .filter(|w| w.lint == Lint::RedundantMatchMotive)
+        .collect::<Vec<_>>();
+    assert_eq!(ws.len(), 1, "{ws:?}");
+    assert_eq!(ws[0].lint.name(), "redundant-match-motive");
+    let fix = ws[0].fix.as_ref().expect("omission is an exact source edit");
+    assert!(src[fix.span.start..fix.span.end].contains("as λ z => Nat"));
+    let fixed = format!("{}{}{}", &src[..fix.span.start], fix.replacement, &src[fix.span.end..]);
+    let mut verify = Elaborator::with_prelude().expect("prelude");
+    assert!(verify.check_source(&fixed).is_empty(), "the suggested omission checks");
+}
+
+#[test]
+fn a_motive_required_for_inference_is_not_called_redundant() {
+    let mut e = Elaborator::with_prelude().expect("prelude");
+    let src = "fn choose(n: Nat) → Nat {
+        let answer = match n as λ z => Nat { Zero => 0, Succ(k) => k };
+        answer
+    }";
+    assert!(e.check_source(src).is_empty());
+    assert!(e.take_warnings().iter().all(|w| w.lint != Lint::RedundantMatchMotive));
+}
+
 /// A `_` that stands for a constructor with no arm of its own is the whole
 /// point of the feature and is not a warning. Without this control, "warn on
 /// every `_`" would pass the test above.
@@ -245,12 +356,12 @@ fn a_shadowed_deep_row_is_reported() {
         "fn f(p: P) -> Nat {
              match p { Mk(TA, y) => 0, Mk(x, y) => 1, Mk(TB, TB) => 2 } }",
     );
-    assert_eq!(ws.len(), 1, "{ws:?}");
-    assert!(ws[0].contains("`Mk` arm can never be reached"), "{}", ws[0]);
-    assert!(ws[0].contains("an earlier `Mk` arm"), "{}", ws[0]);
+    let w = ws.iter().find(|w| w.contains("can never be reached")).expect("dead arm warning");
+    assert!(w.contains("`Mk` arm can never be reached"), "{w}");
+    assert!(w.contains("an earlier `Mk` arm"), "{w}");
     // What the warning is *for*: a body that never runs was also never
     // checked, so the silence hid a second thing.
-    assert!(ws[0].contains("never checked"), "{}", ws[0]);
+    assert!(w.contains("never checked"), "{w}");
 }
 
 /// §7.1, and the control the whole `generated` flag exists for: the pattern
@@ -266,7 +377,8 @@ fn a_generated_levels_own_default_arm_is_not_reported() {
             "fn h(p: P) -> Nat {
                  match p { Mk(TA, TA) => 0, Mk(TB, TA) => 1, Mk(x, y) => 2 } }",
         )
-        .is_empty()
+        .iter()
+        .all(|w| !w.contains("can never be reached"))
     );
 }
 

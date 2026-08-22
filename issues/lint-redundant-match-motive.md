@@ -48,3 +48,11 @@ surface policy after the audit.
 - 2026-08-22: Filed as the semantic counterpart to
   [[lint-match-function-application]]: that rule recognizes one rewrite shape;
   this rule asks the elaborator whether the motive itself is actually needed.
+- 2026-08-22: Landed the conservative checking-position slice. For each
+  explicit non-convoy motive, a cloned elaborator removes it and runs ordinary
+  goal-derived checking, then the local kernel checker validates the emitted
+  term at the same expected type. The second gate is load-bearing: elaboration
+  alone incorrectly nominated three Int lattice proofs, all now pinned as
+  retained controls. Diagnostics carry token-completed exact deletions. The
+  stdlib adopted 58 verified omissions; this issue stays open for any
+  inference-position constant-motive candidates and the broader audit.

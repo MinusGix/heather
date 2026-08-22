@@ -780,6 +780,15 @@ struct Carrier {
     key: String,
 }
 
+#[derive(Clone)]
+struct OperatorFallbackUse {
+    symbol: String,
+    fallback: String,
+    carrier: String,
+    from: &'static str,
+    span: Span,
+}
+
 impl Carrier {
     fn of_ind(ind: &Inductive) -> Self {
         Carrier { written: ind.name.clone(), key: names::qkey(&ind.scope.module, &ind.name) }
@@ -953,6 +962,10 @@ pub struct Elaborator {
     /// Kept only to turn an otherwise source-free kernel rejection into a
     /// diagnostic about the notation the writer actually used.
     op_fallback_notes: RefCell<Vec<String>>,
+    /// Successful rung-3 resolutions at a known carrier which had no rung-2
+    /// designation. Unlike `op_fallback_notes`, these survive a successful
+    /// declaration as lint diagnostics rather than explaining only failures.
+    op_fallback_uses: RefCell<Vec<OperatorFallbackUse>>,
     /// The first type mismatch this declaration's checking *noticed* but did
     /// not raise (`issues/check-fallback-discards-expected-type.md`): the
     /// message and the span of the expression it belongs to.
@@ -1211,6 +1224,7 @@ impl Elaborator {
             impl_provenance: None,
             decls: HashMap::new(),
             op_fallback_notes: RefCell::new(Vec::new()),
+            op_fallback_uses: RefCell::new(Vec::new()),
             pending_mismatch: RefCell::new(None),
             instance_scope: Vec::new(),
             derived: Vec::new(),
@@ -1618,6 +1632,16 @@ impl Elaborator {
     /// that goes on to fail drops the ones it raised, at the same site that
     /// drops its pending derivations (§4).
     pub(crate) fn emit_lint(&self, lint: Lint, msg: impl Into<String>, span: Span) {
+        self.emit_lint_with_fix(lint, msg, span, None);
+    }
+
+    fn emit_lint_with_fix(
+        &self,
+        lint: Lint,
+        msg: impl Into<String>,
+        span: Span,
+        fix: Option<LintFix>,
+    ) {
         // §4.1: a span into *generated* text does not index into any file a
         // reader has, and a `datarepr`'s emission is elaborated inside an
         // ordinary `check` of the declaration that owns it. Rendering such a
@@ -1627,11 +1651,41 @@ impl Elaborator {
         if self.access.in_generated() {
             return;
         }
-        self.warnings.borrow_mut().push(Warning { lint, msg: msg.into(), span, fix: None });
+        let mut warnings = self.warnings.borrow_mut();
+        if warnings.iter().any(|w| w.lint == lint && w.span == span) {
+            return;
+        }
+        warnings.push(Warning { lint, msg: msg.into(), span, fix });
     }
 
     fn run_source_lints(&self, item: &Item, source: &lint::Source<'_>) {
+        for warning in self
+            .warnings
+            .borrow_mut()
+            .iter_mut()
+            .filter(|w| w.lint == Lint::RedundantMatchMotive)
+        {
+            if let Some(fix) = &mut warning.fix
+                && let Some(span) = source.complete_motive_fix(item, fix.span)
+            {
+                fix.span = span;
+                fix.replacement = " ".into();
+            }
+        }
         for finding in lint::check_item(item, source) {
+            // A dead arm's body is deliberately never checked. Its dedicated
+            // semantic warning already says so; piling lexical unused-binder
+            // findings onto names in that body would pretend we had analyzed
+            // code that cannot run.
+            if finding.lint == Lint::UnusedPatternBinder
+                && self.warnings.borrow().iter().any(|w| {
+                    w.lint == Lint::UnreachableMatchArm
+                        && w.span.start <= finding.span.start
+                        && finding.span.end <= w.span.end
+                })
+            {
+                continue;
+            }
             if !self.access.in_generated() {
                 self.warnings.borrow_mut().push(Warning {
                     lint: finding.lint,
@@ -1849,6 +1903,7 @@ impl Elaborator {
             return self.elab_meta_decl(decl);
         }
         self.op_fallback_notes.borrow_mut().clear();
+        self.op_fallback_uses.borrow_mut().clear();
         self.pending_mismatch.borrow_mut().take();
         let r = self.elab_decl_inner(decl);
         self.goal_base = 0;
@@ -1856,6 +1911,26 @@ impl Elaborator {
         self.goals.borrow_mut().clear();
         self.goal_spans.borrow_mut().clear();
         self.frozen.set(false);
+        if r.is_ok() {
+            for used in self.op_fallback_uses.borrow_mut().drain(..) {
+                self.emit_lint(
+                    Lint::OperatorFallback,
+                    format!(
+                        "`{}` has no designation at `{}` ({}), so this notation resolved through the compatibility fallback `{}`; install or import `designation {} at {} := {}` to make the meaning explicit",
+                        used.symbol,
+                        used.carrier,
+                        used.from,
+                        used.fallback,
+                        used.symbol,
+                        used.carrier,
+                        used.fallback,
+                    ),
+                    used.span,
+                );
+            }
+        } else {
+            self.op_fallback_uses.borrow_mut().clear();
+        }
         self.op_fallback_notes.borrow_mut().clear();
         self.pending_mismatch.borrow_mut().take();
         // The surface signature, kept for the declaration forms that have to
@@ -2973,6 +3048,64 @@ impl Elaborator {
                     );
                 }
                 Err(other) => return Err(other),
+            }
+        }
+        // A written motive in checking position has a mechanically testable
+        // redundancy criterion: clone the elaborator, remove just the motive,
+        // and ask the ordinary goal-derived route to check the same match
+        // against the same expected type. The clone makes goals, warnings,
+        // fallback provenance, derived instances, and fuel bookkeeping
+        // transactional; no declaration or kernel gate is duplicated.
+        if let ExprKind::Match {
+            generated: false,
+            scrut,
+            motive: Some(motive),
+            eqbind: None,
+            ..
+        } = &e.kind
+        {
+            let mut omitted = e.clone();
+            let ExprKind::Match { motive: omitted_motive, .. } = &mut omitted.kind else {
+                unreachable!()
+            };
+            *omitted_motive = None;
+            let probe = self.clone();
+            if let Ok(term) = probe.elab_check_skel_slots(
+                    cx,
+                    &omitted,
+                    expected,
+                    lvl,
+                    hint,
+                    skel,
+                    capture_slots,
+                )
+                && typing::check_term(
+                    &probe.goal_psi(),
+                    0,
+                    Layer::Prog,
+                    &cx.gamma,
+                    &term,
+                    expected,
+                    lvl,
+                    probe.fuel,
+                )
+                .is_ok()
+            {
+                self.emit_lint_with_fix(
+                    Lint::RedundantMatchMotive,
+                    format!(
+                        "this explicit `{}` motive is redundant: the same match checks against its expected type without it",
+                        match &e.kind {
+                            ExprKind::Match { form, .. } => form.keyword(),
+                            _ => unreachable!(),
+                        }
+                    ),
+                    motive.span,
+                    Some(LintFix {
+                        span: Span { start: scrut.span.end, end: motive.span.end },
+                        replacement: String::new(),
+                    }),
+                );
             }
         }
         // Checking position, so rung 2 has its second source: a bare symbol
@@ -6874,6 +7007,16 @@ impl Elaborator {
                 let mut notes = self.op_fallback_notes.borrow_mut();
                 if !notes.contains(&note) {
                     notes.push(note);
+                }
+                let mut uses = self.op_fallback_uses.borrow_mut();
+                if !uses.iter().any(|u| u.span == span) {
+                    uses.push(OperatorFallbackUse {
+                        symbol: sym.into(),
+                        fallback: fb.into(),
+                        carrier: head.written.clone(),
+                        from,
+                        span,
+                    });
                 }
             }
             return Ok(fb.to_string());

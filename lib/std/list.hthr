@@ -105,7 +105,7 @@ theorem append_assoc<A>(xs, ys, zs: List<A>):
 // readable spelling is these two rewrites, and it is worth it.
 
 fn len<A>(xs: List<A>) → Nat {
-    match xs { Nil => 0, Cons(h, t) => Succ(len(t)) }
+    match xs { Nil => 0, Cons(_, t) => Succ(len(t)) }
 }
 
 theorem len_append<A>(xs, ys: List<A>):
@@ -113,7 +113,7 @@ theorem len_append<A>(xs, ys: List<A>):
 {
     match xs {
         Nil => sym(add_left_zero(len(ys))),
-        Cons(h, t) =>
+        Cons(_, t) =>
             trans(cong_succ(len_append(t, ys)),
                   sym(add_succ_left(len(t), len(ys)))),
     }
@@ -163,7 +163,7 @@ theorem map_append<A, B>(xs, ys: List<A>, f: A → B):
 theorem len_map<A, B>(xs: List<A>, f: A → B): len(map(xs, f)) = len(xs) {
     match xs {
         Nil => {},
-        Cons(h, t) => cong_succ(len_map(t, f)),
+        Cons(_, t) => cong_succ(len_map(t, f)),
     }
 }
 
@@ -375,7 +375,7 @@ theorem foldl_len<A>(xs: List<A>):
 {
     match xs {
         Nil => λ z => {},
-        Cons(h, t) => λ z =>
+        Cons(_, t) => λ z =>
             trans(foldl_len(t, Succ(z)), add_succ_left(z, len(t))),
     }
 }
@@ -565,9 +565,9 @@ theorem len_zip<A, B>(xs: List<A>):
 {
     match xs {
         Nil => λ ys => {},
-        Cons(h, t) => λ ys => match ys {
+        Cons(_, t) => λ ys => match ys {
             Nil => {},
-            Cons(h2, t2) => cong_succ(len_zip(t, t2)),
+            Cons(_, t2) => cong_succ(len_zip(t, t2)),
         },
     }
 }
@@ -579,7 +579,7 @@ theorem zip_map_fst<A, B>(xs: List<A>):
         Nil => λ ys => {},
         Cons(h, t) => λ ys => match ys {
             Nil => {},
-            Cons(h2, t2) => cong_cons(h, zip_map_fst(t, t2)),
+            Cons(_, t2) => cong_cons(h, zip_map_fst(t, t2)),
         },
     }
 }
@@ -594,9 +594,9 @@ theorem zip_map_snd<A, B>(xs: List<A>):
     match xs {
         Nil => λ ys => match ys {
             Nil => {},
-            Cons(h2, t2) => {},
+            Cons(_, _) => {},
         },
-        Cons(h, t) => λ ys => match ys {
+        Cons(_, t) => λ ys => match ys {
             Nil => {},
             Cons(h2, t2) => cong_cons(h2, zip_map_snd(t, t2)),
         },
@@ -613,7 +613,7 @@ theorem zip_swap<A, B>(xs: List<A>):
     match xs {
         Nil => λ ys => match ys {
             Nil => {},
-            Cons(h2, t2) => {},
+            Cons(_, _) => {},
         },
         Cons(h, t) => λ ys => match ys {
             Nil => {},
@@ -659,7 +659,7 @@ theorem mem_cons<A>(a, h: A, xs: List<A>, m: Mem(a, xs)): Mem(a, Cons(h, xs)) { 
 theorem mem_append_l<A>(xs, ys: List<A>, a: A): Mem(a, xs) → Mem(a, xs ++ ys) {
     match xs {
         Nil => λ m => false_elim(m),
-        Cons(h, t) => λ m => match m {
+        Cons(_, t) => λ m => match m {
             Inl(e) => Inl(e),
             Inr(m2) => Inr(mem_append_l(t, ys, a, m2)),
         },
@@ -669,7 +669,7 @@ theorem mem_append_l<A>(xs, ys: List<A>, a: A): Mem(a, xs) → Mem(a, xs ++ ys) 
 theorem mem_append_r<A>(xs, ys: List<A>, a: A): Mem(a, ys) → Mem(a, xs ++ ys) {
     match xs {
         Nil => λ m => m,
-        Cons(h, t) => λ m => Inr(mem_append_r(t, ys, a, m)),
+        Cons(_, t) => λ m => Inr(mem_append_r(t, ys, a, m)),
     }
 }
 
@@ -678,7 +678,7 @@ theorem mem_append<A>(xs, ys: List<A>, a: A):
 {
     match xs {
         Nil => λ m => Inr(m),
-        Cons(h, t) => λ m => match m {
+        Cons(_, t) => λ m => match m {
             Inl(e) => Inl(Inl(e)),
             Inr(m2) => match mem_append(t, ys, a, m2) {
                 Inl(mt) => Inl(Inr(mt)),
@@ -700,7 +700,7 @@ theorem mem_append_iff<A>(xs, ys: List<A>, a: A):
 theorem mem_map<A, B>(xs: List<A>, a: A, f: A → B): Mem(a, xs) → Mem(f(a), map(xs, f)) {
     match xs {
         Nil => λ m => false_elim(m),
-        Cons(h, t) => λ m => match m {
+        Cons(_, t) => λ m => match m {
             Inl(e) => Inl(cong_fn(f, e)),
             Inr(m2) => Inr(mem_map(t, a, f, m2)),
         },
@@ -762,14 +762,14 @@ theorem mem_rev<A>(xs: List<A>, a: A): Mem(a, rev(xs)) → Mem(a, xs) {
 fn List::head<A>(self xs: List<A>) → Option<A> {
     match xs {
         Nil => None,
-        Cons(h, t) => Some(h),
+        Cons(h, _) => Some(h),
     }
 }
 
 fn List::tail<A>(self xs: List<A>) → List<A> {
     match xs {
         Nil => Nil,
-        Cons(h, t) => t,
+        Cons(_, t) => t,
     }
 }
 
@@ -778,7 +778,7 @@ fn List::last<A>(self xs: List<A>) → Option<A> {
         Nil => None,
         Cons(h, t) => match t {
             Nil => Some(h),
-            Cons(h2, t2) => last(t),
+            Cons(_, _) => last(t),
         },
     }
 }
@@ -805,7 +805,7 @@ theorem nth_append_l<A>(xs: List<A>, ys: List<A>):
 {
     match xs {
         Nil => λ i a p => absurd(p),
-        Cons(h, t) => λ i a =>
+        Cons(_, t) => λ i a =>
             match i {
                 Zero => λ p => p,
                 Succ(k) => λ p => nth_append_l(t, ys, k, a, p),
@@ -824,6 +824,6 @@ theorem nth_append_r<A>(xs: List<A>, ys: List<A>, i: Nat):
 {
     match xs {
         Nil => {},
-        Cons(h, t) => nth_append_r(t, ys, i),
+        Cons(_, t) => nth_append_r(t, ys, i),
     }
 }

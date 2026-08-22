@@ -66,3 +66,8 @@ Already-owned work stays with [[lint-match-function-application]],
   fix data. It closes [[lint-tight-negation-spacing]] and
   [[lint-stdlib-unicode-spelling]] and lands the n-ary-call half of
   [[stdlib-surface-style-lint]]; the semantic roadmap items remain open.
+- 2026-08-22: The second batch closed [[lint-unused-pattern-binders]] and
+  [[lint-operator-fallback]], and landed the kernel-verified checking-position
+  portion of [[lint-redundant-match-motive]]. The shared warning fix format now
+  supports token-completed multi-token deletions as well as single-token
+  replacements.

@@ -10,7 +10,7 @@
 use heather_syntax::lexer::{lex, Tok, TokKind};
 use heather_syntax::{
     Block, ClassRef, DatareprBody, Decl, Expr, ExprKind, FieldDecl, InstanceBody, Item, Param,
-    Span, Stmt, Ty, TyKind,
+    MatchForm, Span, Stmt, Ty, TyKind,
 };
 
 /// Which project-specific source conventions should accompany the general
@@ -37,6 +37,12 @@ pub enum Lint {
     StdlibUnicodeSpelling,
     /// Consecutive calls of a directly named function can use one argument list.
     NestedCall,
+    /// A constructor-pattern binder is named but not read by its arm.
+    UnusedPatternBinder,
+    /// Written notation selected a compatibility basename after missing a designation.
+    OperatorFallback,
+    /// An explicit match motive can be omitted in its checking position.
+    RedundantMatchMotive,
 }
 
 impl Lint {
@@ -49,6 +55,9 @@ impl Lint {
             Self::TightNegationSpacing => "tight-negation-spacing",
             Self::StdlibUnicodeSpelling => "stdlib-unicode-spelling",
             Self::NestedCall => "nested-call",
+            Self::UnusedPatternBinder => "unused-pattern-binder",
+            Self::OperatorFallback => "operator-fallback",
+            Self::RedundantMatchMotive => "redundant-match-motive",
         }
     }
 }
@@ -88,6 +97,18 @@ impl<'a> Source<'a> {
             .take_while(move |t| t.span.end <= span.end)
             .filter(move |t| t.span.start >= span.start)
     }
+
+    pub fn complete_motive_fix(&self, item: &Item, partial: Span) -> Option<Span> {
+        let item = item_span(item);
+        if partial.start < item.start || partial.end > item.end {
+            return None;
+        }
+        let brace = self
+            .toks
+            .iter()
+            .find(|t| t.span.start >= partial.end && matches!(t.kind, TokKind::LBrace))?;
+        Some(Span { start: partial.start, end: brace.span.start })
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -101,7 +122,8 @@ type SourceLint = fn(&Item, &Source<'_>, &mut Vec<Finding>);
 /// The registry. A source-expression lint is one function and one row; the
 /// shared total walker supplies nesting, item ownership, and deterministic
 /// source order.
-const EXPR_LINTS: &[ExprLint] = &[match_function_application, nested_call];
+const EXPR_LINTS: &[ExprLint] =
+    &[match_function_application, nested_call, unused_pattern_binders];
 const SOURCE_LINTS: &[SourceLint] = &[tight_negation_spacing, stdlib_unicode_spelling];
 
 pub(crate) fn check_item(item: &Item, source: &Source<'_>) -> Vec<Finding> {
@@ -354,6 +376,268 @@ fn nested_call(e: &Expr, context: ExprContext, out: &mut Vec<Finding>) {
         span: e.span,
         fix: None,
     });
+}
+
+fn unused_pattern_binders(e: &Expr, _context: ExprContext, out: &mut Vec<Finding>) {
+    let ExprKind::Match { form, generated: false, arms, eqbind, .. } = &e.kind else { return };
+    if !matches!(form, MatchForm::Match | MatchForm::Split) {
+        return;
+    }
+    for arm in arms {
+        let mut uses = BinderUses::default();
+        let mut written = Vec::new();
+        for (field, pat) in arm.binders.iter().enumerate() {
+            uses.bind_pattern(pat, &mut written, arm.ctor == "Succ" && field == 1);
+        }
+        if let Some(name) = eqbind {
+            uses.bind_shadow(name);
+        }
+        uses.expr(&arm.body);
+        for binder in written {
+            // Before semantic pattern preparation, a bare nested constructor
+            // is represented by the same node as a binder. Constructor names
+            // are capitalized by Heather's declaration grammar/style; staying
+            // silent on capitalized binders is the conservative side of that
+            // erased distinction.
+            if binder.name == "_"
+                || binder.name.starts_with('#')
+                || binder.name.chars().next().is_some_and(char::is_uppercase)
+                || uses.used.contains(&binder.id)
+            {
+                continue;
+            }
+            out.push(Finding {
+                lint: Lint::UnusedPatternBinder,
+                msg: if binder.induction_hypothesis {
+                    format!(
+                        "induction hypothesis `{}` is not used; write `_` here, or consider whether this proof only needs case analysis",
+                        binder.name,
+                    )
+                } else {
+                    format!(
+                        "constructor payload `{}` is not used in this arm; write `_` instead",
+                        binder.name,
+                    )
+                },
+                span: binder.span,
+                fix: Some(crate::LintFix { span: binder.span, replacement: "_".into() }),
+            });
+        }
+    }
+}
+
+struct WrittenBinder {
+    id: usize,
+    name: String,
+    span: Span,
+    induction_hypothesis: bool,
+}
+
+/// A small lexical resolver for linting binding identities. Each environment
+/// entry is either a pattern binder's id or `None` for a shadowing binder from
+/// a lambda, local declaration, or nested pattern. This is deliberately not a
+/// text search: `λ x => x` inside an arm must not make the arm's `x` look used.
+#[derive(Default)]
+struct BinderUses {
+    env: Vec<(String, Option<usize>)>,
+    used: std::collections::HashSet<usize>,
+    next_id: usize,
+}
+
+impl BinderUses {
+    fn bind_pattern(
+        &mut self,
+        pat: &heather_syntax::Pat,
+        written: &mut Vec<WrittenBinder>,
+        induction_hypothesis: bool,
+    ) {
+        match pat {
+            heather_syntax::Pat::Var { name, span } => {
+                let id = self.next_id;
+                self.next_id += 1;
+                self.env.push((name.clone(), Some(id)));
+                written.push(WrittenBinder {
+                    id,
+                    name: name.clone(),
+                    span: *span,
+                    induction_hypothesis,
+                });
+            }
+            heather_syntax::Pat::Ctor { args, .. } => {
+                for p in args {
+                    self.bind_pattern(p, written, false);
+                }
+            }
+            heather_syntax::Pat::Named { pat, .. } => {
+                self.bind_pattern(pat, written, induction_hypothesis)
+            }
+        }
+    }
+
+    fn bind_shadow(&mut self, name: &str) {
+        self.env.push((name.into(), None));
+    }
+
+    fn mark(&mut self, name: &str) {
+        if let Some((_, Some(id))) = self.env.iter().rev().find(|(bound, _)| bound == name) {
+            self.used.insert(*id);
+        }
+    }
+
+    fn scoped(&mut self, f: impl FnOnce(&mut Self)) {
+        let mark = self.env.len();
+        f(self);
+        self.env.truncate(mark);
+    }
+
+    fn ty(&mut self, t: &Ty) {
+        match &t.kind {
+            TyKind::Nat
+            | TyKind::Univ { .. }
+            | TyKind::Ctx
+            | TyKind::TyCode { .. }
+            | TyKind::Splice { .. } => {}
+            TyKind::Eq(a, b) => {
+                self.expr(a);
+                self.expr(b);
+            }
+            TyKind::OfExpr(e) | TyKind::Fin(e) => self.expr(e),
+            TyKind::Named { args, .. } => args.iter().for_each(|a| self.ty(a)),
+            TyKind::Vec { elem, len } => {
+                self.ty(elem);
+                self.expr(len);
+            }
+            TyKind::Fn { binder, dom, cod, .. } => {
+                self.ty(dom);
+                self.scoped(|this| {
+                    if let Some(name) = binder {
+                        this.bind_shadow(name);
+                    }
+                    this.ty(cod);
+                });
+            }
+            TyKind::Code { ty, .. } => self.ty(ty),
+        }
+    }
+
+    fn block(&mut self, b: &Block) {
+        self.scoped(|this| {
+            for stmt in &b.stmts {
+                match stmt {
+                    Stmt::Let { name, ty, expr, .. } => {
+                        ty.iter().for_each(|t| this.ty(t));
+                        this.expr(expr);
+                        this.bind_shadow(name);
+                    }
+                    Stmt::LetRecord { fields, expr, .. } => {
+                        this.expr(expr);
+                        for f in fields {
+                            for name in pattern_names(&f.pat) {
+                                this.bind_shadow(name);
+                            }
+                        }
+                    }
+                    Stmt::LetCode { name, expr, .. } => {
+                        this.expr(expr);
+                        this.bind_shadow(name);
+                    }
+                }
+            }
+            this.expr(&b.result);
+            for on in &b.ons {
+                if let heather_syntax::OnTarget::Stmt(t) = &on.target {
+                    this.ty(t);
+                }
+                this.expr(&on.expr);
+            }
+        });
+    }
+
+    fn expr(&mut self, e: &Expr) {
+        match &e.kind {
+            ExprKind::Var(name) => self.mark(name),
+            ExprKind::OpSymbol { .. }
+            | ExprKind::Univ { .. }
+            | ExprKind::Num(_)
+            | ExprKind::ArgSlot(_)
+            | ExprKind::Refl
+            | ExprKind::AutoRefl
+            | ExprKind::Hole(_) => {}
+            ExprKind::TyLit(t) => self.ty(t),
+            ExprKind::App { head, args, named, .. } => {
+                self.expr(head);
+                args.iter().for_each(|a| self.expr(a));
+                named.iter().for_each(|a| self.expr(&a.expr));
+            }
+            ExprKind::TyApp { head, args } => {
+                self.expr(head);
+                args.iter().for_each(|a| self.ty(a));
+            }
+            ExprKind::Lam { binders, body } => self.scoped(|this| {
+                for binder in binders {
+                    binder.ty.iter().for_each(|t| this.ty(t));
+                    this.bind_shadow(&binder.name);
+                }
+                this.expr(body);
+            }),
+            ExprKind::VecLit(xs) => xs.iter().for_each(|x| self.expr(x)),
+            ExprKind::Eq(a, b) | ExprKind::Index { recv: a, idx: b } => {
+                self.expr(a);
+                self.expr(b);
+            }
+            ExprKind::Match { scrut, motive, arms, eqbind, .. } => {
+                self.expr(scrut);
+                motive.iter().for_each(|m| self.expr(m));
+                for arm in arms {
+                    self.scoped(|this| {
+                        let mut ignored = Vec::new();
+                        arm.binders.iter().for_each(|p| this.bind_pattern(p, &mut ignored, false));
+                        if let Some(name) = eqbind {
+                            this.bind_shadow(name);
+                        }
+                        this.expr(&arm.body);
+                    });
+                }
+            }
+            ExprKind::MatchCode { scrut, motive, arms } => {
+                self.expr(scrut);
+                self.ty(motive);
+                for arm in arms {
+                    self.scoped(|this| {
+                        let mut ignored = Vec::new();
+                        arm.binders
+                            .iter()
+                            .for_each(|p| this.bind_pattern(p, &mut ignored, false));
+                        this.expr(&arm.body);
+                    });
+                }
+            }
+            ExprKind::Dot { recv, args, named, .. } => {
+                self.expr(recv);
+                args.iter().flatten().for_each(|a| self.expr(a));
+                named.iter().for_each(|a| self.expr(&a.expr));
+            }
+            ExprKind::RecordLit { tyargs, fields, .. } => {
+                tyargs.iter().for_each(|t| self.ty(t));
+                fields.iter().for_each(|f| self.expr(&f.expr));
+            }
+            ExprKind::Block(b) => self.block(b),
+            ExprKind::Quote(x) | ExprKind::Splice(x) => self.expr(x),
+            ExprKind::J { proof, motive, case } => {
+                self.expr(proof);
+                self.expr(motive);
+                self.expr(case);
+            }
+        }
+    }
+}
+
+fn pattern_names(pat: &heather_syntax::Pat) -> Vec<&str> {
+    match pat {
+        heather_syntax::Pat::Var { name, .. } => vec![name],
+        heather_syntax::Pat::Ctor { args, .. } => args.iter().flat_map(pattern_names).collect(),
+        heather_syntax::Pat::Named { pat, .. } => pattern_names(pat),
+    }
 }
 
 fn tight_negation_spacing(item: &Item, source: &Source<'_>, out: &mut Vec<Finding>) {

@@ -18,7 +18,7 @@
 //! `int` imports `algebra` (it registers its own instances), so the prefix here
 //! is the whole of `lib/std`.
 
-use heather_elab::{ElabError, Elaborator};
+use heather_elab::{ElabError, Elaborator, Lint};
 
 const LOGIC: &str = include_str!("../../../lib/std/logic.hthr");
 const BOOL: &str = include_str!("../../../lib/std/bool.hthr");
@@ -65,7 +65,17 @@ fn probe(name: &str, src: &str) {
 
 #[test]
 fn the_int_module_checks() {
-    elaborated();
+    let mut e = elaborated();
+    assert!(
+        INT.contains("match le_dec(a, b) as λ d => a <= or_pick(d, a, b)")
+            && INT.contains("match le_dec(a, b) as λ d => b <= or_pick(d, a, b)")
+            && INT.contains("match le_dec(a, b) as λ d => c <= or_pick(d, b, a)"),
+        "the three kernel-required motives remain explicit"
+    );
+    assert!(
+        e.take_warnings().iter().all(|w| w.lint != Lint::RedundantMatchMotive),
+        "a motive whose omission elaborates but fails the local kernel check is retained"
+    );
 }
 
 /// The kits requested by waves I and I-prime, stated at OPEN integers so that

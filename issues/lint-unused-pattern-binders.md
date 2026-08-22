@@ -1,6 +1,6 @@
 ---
 title: "Lint unused constructor fields and induction hypotheses"
-status: open
+status: closed
 labels: [tooling,lint,frontend,patterns,proofs,ergonomics]
 created: 2026-08-22
 updated: 2026-08-22
@@ -42,3 +42,9 @@ search: nested lambdas may shadow a field name, and uses in local annotations,
 
 - 2026-08-22: Filed from the lint review as a deliberately scoped alternative
   to a language-wide unused-variable warning.
+- 2026-08-22: Implemented `unused-pattern-binder` with lexical binding
+  identities across lambdas, locals, nested matches, annotations, and `on`
+  clauses. Payloads carry exact `_` fixes; explicit Nat induction hypotheses
+  get a distinct case-analysis message. Generated/if-lowered binders and dead
+  arms are suppressed. The stdlib census applied 99 safe fixes (92 initially,
+  then seven exposed by motive cleanup) and now reports zero findings.
