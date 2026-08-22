@@ -1,8 +1,10 @@
 //! `heather` — the CLI face of the checker (issues/cli-check-diagnostics.md).
 //!
-//! `heather check [-L <dir>]… [--cache] [--cache-dir <dir>] <file.hthr>…`
+//! `heather check [-L <dir>]… [--cache] [--cache-dir <dir>] <path>…`
 //! elaborates each root file **and everything it imports** against a fresh
-//! prelude'd elaborator, and prints diagnostics. Exit codes: 0 every file
+//! prelude'd elaborator, and prints diagnostics. A directory path checks its
+//! immediate `.hthr` files as one deduplicated import closure, so
+//! `heather check lib/std` checks the whole standard library. Exit codes: 0 every file
 //! checked, 1 some file had diagnostics, 2 the run itself failed (usage, an
 //! unreadable file, an import that does not resolve, a cycle, a prelude that
 //! does not check).
@@ -67,7 +69,7 @@ fn main() -> ExitCode {
     }
 }
 
-const USAGE: &str = "usage: heather check [-L <dir>]... [--cache] [--cache-dir <dir>] <file.hthr>...\n\
+const USAGE: &str = "usage: heather check [-L <dir>]... [--cache] [--cache-dir <dir>] <file-or-dir>...\n\
                      \x20      heather obligations [-L <dir>]... [--json] <file.hthr>...";
 
 fn usage() -> ExitCode {
@@ -87,7 +89,8 @@ struct Opts {
 }
 
 /// `-L <dir>` (repeatable) and the cache flags may appear before, after or
-/// between the files; everything else is a root file.
+/// between the paths; everything else is a root file or a directory whose
+/// immediate `.hthr` files form one check.
 fn parse_check_args(args: &[String]) -> Result<(Opts, Vec<String>), String> {
     let mut opts = Opts {
         search: Vec::new(),
@@ -175,7 +178,15 @@ fn check(opts: &Opts, files: &[String]) -> ExitCode {
             elab.set_gate(Rc::clone(c) as Rc<dyn heather_elab::gate::KernelGate>);
             c.counts()
         });
-        let modules = match loader::load(Path::new(path), &opts.search) {
+        let roots = match roots_for_path(Path::new(path)) {
+            Ok(roots) => roots,
+            Err(msg) => {
+                eprintln!("error: {msg}");
+                return ExitCode::from(2);
+            }
+        };
+        let root_refs = roots.iter().map(PathBuf::as_path).collect::<Vec<_>>();
+        let modules = match loader::load_many(&root_refs, &opts.search) {
             Ok(m) => m,
             Err(e) => {
                 eprintln!("error: {}", e.msg);
@@ -357,6 +368,34 @@ fn json_str(s: &str) -> String {
 fn display_path(module_path: &Path, root_arg: &str) -> String {
     match Path::new(root_arg).canonicalize() {
         Ok(c) if c == module_path => root_arg.to_string(),
+        Ok(c) if c.is_dir() => match module_path.strip_prefix(&c) {
+            Ok(rel) => Path::new(root_arg).join(rel).display().to_string(),
+            Err(_) => module_path.display().to_string(),
+        },
         _ => module_path.display().to_string(),
     }
+}
+
+/// A file is one root. A directory is a deterministic, non-recursive module
+/// set: Heather modules are flat names today, and recursing would silently
+/// merge unrelated module namespaces.
+fn roots_for_path(path: &Path) -> Result<Vec<PathBuf>, String> {
+    if !path.is_dir() {
+        return Ok(vec![path.to_path_buf()]);
+    }
+    let mut roots = std::fs::read_dir(path)
+        .map_err(|e| format!("cannot read directory `{}`: {e}", path.display()))?
+        .filter_map(|entry| match entry {
+            Ok(entry) if entry.path().extension().is_some_and(|ext| ext == "hthr") => {
+                Some(Ok(entry.path()))
+            }
+            Ok(_) => None,
+            Err(e) => Some(Err(format!("cannot read directory `{}`: {e}", path.display()))),
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    roots.sort();
+    if roots.is_empty() {
+        return Err(format!("directory `{}` contains no `.hthr` files", path.display()));
+    }
+    Ok(roots)
 }

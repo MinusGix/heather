@@ -94,9 +94,21 @@ modules (§7).
 ### 3.3 What one run means now
 
 `heather check lib/ir_v1.hthr` checks the transitive closure. A fresh
-elaborator per CLI *root* argument stays (two roots re-elaborate a shared
+elaborator per CLI *path* argument stays (two file paths re-elaborate a shared
 import; caching is §8's problem, and at current sizes an import costs what
 the prelude costs — milliseconds for prelude-sized modules).
+
+A directory path denotes one flat module set: the CLI sorts its immediate
+`.hthr` files, loads their union as one deduplicated closure, and prints one
+result for the directory. Thus the whole standard library, including its
+source lints, is one command with no repeated import diagnostics:
+
+```sh
+heather check lib/std
+```
+
+Directory checking is deliberately non-recursive because module names are
+file stems rather than hierarchical paths.
 
 ## 4. Names: unambiguous-or-qualified, never silently shadowed
 

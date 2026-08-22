@@ -1,0 +1,3 @@
+import base;
+
+fn left() -> Nat { base() }

@@ -48,6 +48,16 @@ impl LoadError {
 /// last: exactly the order the elaborator's single accumulator needs, since an
 /// `import m;` requires `m` to have already landed in it.
 pub fn load(root: &Path, search: &[PathBuf]) -> Result<Vec<Module>, LoadError> {
+    load_many(std::slice::from_ref(&root), search)
+}
+
+/// Load several roots as one import closure.
+///
+/// This is the directory-checking form's important semantic detail: a module
+/// imported by two files is elaborated once, so declarations and warnings are
+/// neither duplicated. Roots retain their supplied order, modulo dependencies
+/// appearing before the root that needs them.
+pub fn load_many(roots: &[&Path], search: &[PathBuf]) -> Result<Vec<Module>, LoadError> {
     let mut w = Walk {
         search,
         done: HashMap::new(),
@@ -55,7 +65,9 @@ pub fn load(root: &Path, search: &[PathBuf]) -> Result<Vec<Module>, LoadError> {
         out: Vec::new(),
         by_name: HashMap::new(),
     };
-    w.visit(root)?;
+    for root in roots {
+        w.visit(root)?;
+    }
     Ok(w.out)
 }
 

@@ -42,6 +42,17 @@ fn several_files_check_independently() {
 }
 
 #[test]
+fn a_directory_checks_each_module_as_one_deduplicated_closure() {
+    // Both roots import `base`. Loading them as independent files into one
+    // elaborator would redeclare it; loading the directory as one closure
+    // checks it exactly once and prints one result for the requested target.
+    let out = heather(&["check", "stdset"]);
+    assert_eq!(out.status.code(), Some(0), "stderr: {}", String::from_utf8_lossy(&out.stderr));
+    assert_eq!(String::from_utf8_lossy(&out.stdout), "stdset: ok\n");
+    assert!(out.stderr.is_empty(), "{}", String::from_utf8_lossy(&out.stderr));
+}
+
+#[test]
 fn missing_file_is_a_run_failure() {
     let out = heather(&["check", "no-such.hthr"]);
     assert_eq!(out.status.code(), Some(2));
