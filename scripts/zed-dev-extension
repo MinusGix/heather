@@ -1,0 +1,76 @@
+#!/usr/bin/env bash
+# Build an ignored Zed dev extension whose grammar is an exact snapshot of
+# the current tree-sitter-heather working tree, including uncommitted files.
+
+set -euo pipefail
+
+repo_root=$(cd "$(dirname "$0")/.." && pwd -P)
+zed_source="$repo_root/editors/zed"
+dev_dir="$zed_source/.dev"
+grammar_repo="$dev_dir/grammar-repo"
+
+mkdir -p "$dev_dir"
+snapshot=$(mktemp -d "$dev_dir/.grammar-repo.XXXXXX")
+cleanup() {
+    if [[ -d "$snapshot" ]]; then
+        rm -rf -- "$snapshot"
+    fi
+}
+trap cleanup EXIT
+
+# Copy exactly the tracked and visible-untracked grammar files. Ignored build
+# products (`node_modules`, `target`, generated Zed wasm) stay out of the tiny
+# repository Zed will clone.
+while IFS= read -r -d '' path; do
+    [[ -e "$repo_root/$path" || -L "$repo_root/$path" ]] || continue
+    mkdir -p "$snapshot/$(dirname "$path")"
+    cp -P -- "$repo_root/$path" "$snapshot/$path"
+done < <(git -C "$repo_root" ls-files -co --exclude-standard -z -- tree-sitter-heather)
+
+git -C "$snapshot" init -q
+git -C "$snapshot" add -f tree-sitter-heather
+GIT_AUTHOR_DATE="2000-01-01T00:00:00Z" \
+GIT_COMMITTER_DATE="2000-01-01T00:00:00Z" \
+git -C "$snapshot" \
+    -c user.name="Heather Zed dev helper" \
+    -c user.email="zed-dev@localhost" \
+    commit -qm "Snapshot Heather grammar for Zed"
+rev=$(git -C "$snapshot" rev-parse HEAD)
+
+# Publish the completed snapshot atomically enough that a failed build leaves
+# the previous usable repository in place.
+if [[ -e "$grammar_repo" && ! -d "$grammar_repo/.git" ]]; then
+    echo "error: refusing to replace unexpected path: $grammar_repo" >&2
+    exit 1
+fi
+rm -rf -- "$grammar_repo"
+mv -- "$snapshot" "$grammar_repo"
+trap - EXIT
+
+# Queries/config stay live through this symlink; only grammar source needs the
+# Git snapshot because Zed insists on checking out a revision.
+if [[ -e "$dev_dir/languages" && ! -L "$dev_dir/languages" ]]; then
+    echo "error: refusing to replace unexpected path: $dev_dir/languages" >&2
+    exit 1
+fi
+ln -sfn ../languages "$dev_dir/languages"
+
+awk -v repository="file://$grammar_repo" -v rev="$rev" '
+    /^\[grammars\.heather\]$/ { grammar = 1 }
+    grammar && /^repository = / {
+        print "repository = \"" repository "\""
+        next
+    }
+    grammar && /^rev = / {
+        print "rev = \"" rev "\""
+        grammar = 0
+        next
+    }
+    { print }
+' "$zed_source/extension.toml" > "$dev_dir/extension.toml.tmp"
+mv -- "$dev_dir/extension.toml.tmp" "$dev_dir/extension.toml"
+
+echo "Zed dev extension refreshed:"
+echo "  $dev_dir"
+echo "Grammar snapshot: $rev"
+echo "Install that directory with Zed: Install Dev Extension, then Rebuild after refreshes."
