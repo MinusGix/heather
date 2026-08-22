@@ -229,36 +229,35 @@ theorem le_succ_r(n: Nat): (m: Nat) → n <= m → n <= Succ(m) {
 
 // Transitivity. Three nested case analyses and no arithmetic: the recursion is
 // on the leftmost argument, and the two inner `match`es exist only to expose
-// the successors that make the hypotheses reducible. Both inner motives convoy
-// their hypotheses through, since neither `m` nor `l` is the scrutinee of the
-// recursion that carries the IH.
+// the successors that make the hypotheses reducible. Leaving the hypothesis
+// binders in checking position lets both inner matches infer their motives.
 theorem le_trans(n: Nat): (m: Nat) → (l: Nat) → n <= m → m <= l → n <= l {
     match n {
         Zero => λ m l h1 h2 => trivial,
-        Succ(k, ih) => λ m l h1 h2 =>
-            match m as λ y => Succ(k) <= y → y <= l → Succ(k) <= l {
+        Succ(_, ih) => λ m l =>
+            match m {
                 Zero => λ bad b => false_elim(bad),
-                Succ(m2) => λ a b =>
-                    match l as λ w => Succ(m2) <= w → Succ(k) <= w {
+                Succ(m2) => λ a =>
+                    match l {
                         Zero => λ bad => false_elim(bad),
                         Succ(l2) => λ c => ih(m2, l2, a, c),
-                    }(b),
-            }(h1, h2),
+                    },
+            },
     }
 }
 
 theorem le_antisym(n: Nat): (m: Nat) → n <= m → m <= n → n = m {
     match n {
-        Zero => λ m h1 h2 =>
-            match m as λ y => 0 <= y → y <= 0 → 0 = y {
+        Zero => λ m =>
+            match m {
                 Zero => λ a b => refl,
                 Succ(_) => λ a bad => false_elim(bad),
-            }(h1, h2),
-        Succ(k, ih) => λ m h1 h2 =>
-            match m as λ y => Succ(k) <= y → y <= Succ(k) → Succ(k) = y {
+            },
+        Succ(_, ih) => λ m =>
+            match m {
                 Zero => λ bad b => false_elim(bad),
                 Succ(m2) => λ a b => cong_succ(ih(m2, a, b)),
-            }(h1, h2),
+            },
     }
 }
 
@@ -336,11 +335,11 @@ theorem lt_irrefl(n: Nat): ¬(n < n) {
 theorem le_of_lt(n: Nat): (m: Nat) → n < m → n <= m {
     match n {
         Zero => λ m h => trivial,
-        Succ(k, ih) => λ m h =>
-            match m as λ y => Succ(k) < y → Succ(k) <= y {
+        Succ(_, ih) => λ m =>
+            match m {
                 Zero => λ bad => false_elim(bad),
                 Succ(m2) => λ good => ih(m2, good),
-            }(h),
+            },
     }
 }
 
@@ -353,17 +352,17 @@ theorem lt_trans(n, m, l: Nat, h1: n < m, h2: m < l): n < l {
 
 theorem lt_of_le_of_ne(n: Nat): (m: Nat) → n <= m → n ≠ m → n < m {
     match n {
-        Zero => λ m h hne =>
-            match m as λ y => 0 ≠ y → 0 < y {
+        Zero => λ m h =>
+            match m {
                 Zero => false_elim(·(refl)),
                 Succ(_) => λ ne => trivial,
-            }(hne),
-        Succ(k, ih) => λ m h hne =>
-            match m as λ y => Succ(k) <= y → Succ(k) ≠ y → Succ(k) < y {
+            },
+        Succ(k, ih) => λ m =>
+            match m {
                 Zero => λ bad ne => false_elim(bad),
                 Succ(m2) => λ a ne =>
                     ih(m2, a, λ (e: k = m2) => ne(cong_succ(e))),
-            }(h, hne),
+            },
     }
 }
 
@@ -474,12 +473,12 @@ theorem le_add(n: Nat): (m: Nat) → n <= m → n + sub(m, n) = m {
     match n {
         Zero => λ m hle =>
             trans(cong_nat(λ (x: Nat) => add(0, x), sub_zero(m)), add_left_zero(m)),
-        Succ(n2, ih) => λ m hle =>
-            match m as λ y => Succ(n2) <= y → Succ(n2) + sub(y, Succ(n2)) = y {
+        Succ(n2, ih) => λ m =>
+            match m {
                 Zero => λ bad => false_elim(bad),
                 Succ(m2) => λ good =>
                     trans(add_succ_left(n2, sub(m2, n2)), cong_succ(ih(m2, good))),
-            }(hle),
+            },
     }
 }
 
@@ -714,30 +713,30 @@ theorem min_le_r(a: Nat): (b: Nat) → min(a, b) <= b {
 theorem max_le(a: Nat): (b: Nat) → (c: Nat) → a <= c → b <= c → max(a, b) <= c {
     match a {
         Zero => λ b c h1 h2 => h2,
-        Succ(k, ih) => λ b c h1 h2 =>
-            match b as λ y => Succ(k) <= c → y <= c → max(Succ(k), y) <= c {
+        Succ(_, ih) => λ b c =>
+            match b {
                 Zero => λ a1 a2 => a1,
                 Succ(l) =>
                     match c {
                         Zero => λ bad a2 => false_elim(bad),
                         Succ(c2) => λ a1 a2 => ih(l, c2, a1, a2),
                     },
-            }(h1, h2),
+            },
     }
 }
 
 theorem le_min(a: Nat): (b: Nat) → (c: Nat) → c <= a → c <= b → c <= min(a, b) {
     match a {
         Zero => λ b c h1 h2 => h1,
-        Succ(k, ih) => λ b c h1 h2 =>
-            match b as λ y => c <= Succ(k) → c <= y → c <= min(Succ(k), y) {
+        Succ(_, ih) => λ b c =>
+            match b {
                 Zero => λ a1 a2 => a2,
                 Succ(l) =>
                     match c {
                         Zero => λ a1 a2 => trivial,
                         Succ(c2) => λ a1 a2 => ih(l, c2, a1, a2),
                     },
-            }(h1, h2),
+            },
     }
 }
 
@@ -748,22 +747,22 @@ theorem le_min(a: Nat): (b: Nat) → (c: Nat) → c <= a → c <= b → c <= min
 theorem max_eq_r(a: Nat): (b: Nat) → a <= b → max(a, b) = b {
     match a {
         Zero => λ b h => refl,
-        Succ(k, ih) => λ b h =>
-            match b as λ y => Succ(k) <= y → max(Succ(k), y) = y {
+        Succ(_, ih) => λ b =>
+            match b {
                 Zero => λ bad => false_elim(bad),
                 Succ(l) => λ good => cong_succ(ih(l, good)),
-            }(h),
+            },
     }
 }
 
 theorem min_eq_l(a: Nat): (b: Nat) → a <= b → min(a, b) = a {
     match a {
         Zero => λ b h => refl,
-        Succ(k, ih) => λ b h =>
-            match b as λ y => Succ(k) <= y → min(Succ(k), y) = Succ(k) {
+        Succ(_, ih) => λ b =>
+            match b {
                 Zero => λ bad => false_elim(bad),
                 Succ(l) => λ good => cong_succ(ih(l, good)),
-            }(h),
+            },
     }
 }
 
