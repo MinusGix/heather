@@ -2,7 +2,7 @@
 title: "Lint deeply nested proof returns that have a clearer apply script"
 status: open
 labels: [tooling,lint,frontend,proofs,automation,ergonomics]
-blocked-by: [surface-proof-automation, lint-review-only-mode]
+blocked-by: [lint-review-only-mode]
 created: 2026-08-22
 updated: 2026-08-22
 ---
@@ -26,16 +26,15 @@ call-style rule: short expressions are often clearer as terms, constructors
 often remain clearer as term syntax, and multi-argument applications should be
 suggested only when their non-final goal boundaries are unambiguous.
 
-The issue is intentionally blocked on the syntax and semantics owned by
-[[surface-proof-automation]]. A lint must not recommend syntax that Heather
-does not yet accept.
+The syntax and semantics owned by [[surface-proof-automation]] are now landed.
+The remaining blocker is the review-only rollout mode: this is readability
+advice rather than a correctness warning.
 
 ## Acceptance
 
-- No implementation or warning ships before the corresponding `apply` form.
 - The first slice is restricted to theorem/proof checking positions. Unary
   continuation chains are the minimum customer; multi-argument suggestions
-  use the accepted `exact`/bounded-block layout rather than inventing holes.
+  use the accepted `give` layout rather than inventing holes.
 - Constructors, short one-step calls, named arguments, meaningful partial
   applications, and calls whose continuation is not the selected premise are
   negative controls.
@@ -60,3 +59,6 @@ does not yet accept.
   to ordinary n-ary application in goal order. The lint may eventually suggest
   multi-argument layouts, but it does not trigger meta promotion merely to
   make a rewrite fit.
+- 2026-08-22: Unblocked on `apply`: automatic promotion and structured source
+  provenance landed with [[surface-proof-automation]]. Review-only lint mode
+  is now the sole blocker.

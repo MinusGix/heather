@@ -165,7 +165,25 @@ pub struct GoalReport {
     /// Where the goal came from, when it was an argument: "the `p` parameter
     /// of `sym`". Proof-parameter names are API precisely so this reads.
     pub origin: Option<String>,
+    /// Machine-readable origin for editor navigation and code actions. The
+    /// rendered `origin` above remains for compatibility with existing CLI
+    /// and API consumers.
+    pub source: Option<GoalSource>,
     pub span: Span,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum GoalSource {
+    /// A written `?hole` occupying a callee argument.
+    Argument { callee: String, parameter: String },
+    /// An implicit meta left unsolved by a goal-oriented application and
+    /// promoted after inference reached its fixpoint.
+    ApplyImplicit {
+        callee: String,
+        parameter: String,
+        parameter_index: usize,
+        apply_span: Span,
+    },
 }
 
 /// Diagnostics get a small, independent reduction allowance. This is not
@@ -1025,14 +1043,31 @@ pub struct Elaborator {
     /// committed global is offset by it (see [`Self::resolve`]). Zero outside
     /// a declaration body, which makes the whole mechanism inert.
     goal_base: u32,
+    /// Syntactic-hole portion of `goal_base` for the current declaration.
+    /// Promoted apply goals are reserved in addition to this upper bound, not
+    /// out of slots that a written hole later in the body may still consume.
+    written_goal_base: u32,
+    /// Number of promotable implicits encountered in this declaration attempt.
+    promoted_goals_seen: Cell<u32>,
     /// Goals in creation order; goal `k` is `GlobalVar(goal_base - 1 - k)`.
     /// Interior mutability because the elaboration methods take `&self` and
     /// `Cx` is cloned at every binder.
     goals: RefCell<Vec<Goal>>,
-    /// Hole span → goal index. The elaborator visits some expressions twice
-    /// (motive synthesis; `calc`'s cloned `@trans` spine), and one syntactic
-    /// hole must stay one goal.
-    goal_spans: RefCell<HashMap<(usize, usize), usize>>,
+    /// (Span, optional synthesized discriminator) → goal index. The elaborator
+    /// visits some expressions twice (motive synthesis; cloned spines), and
+    /// one source goal must stay one goal; promoted parameters at the same
+    /// apply span use the discriminator to remain distinct.
+    goal_spans: RefCell<HashMap<(usize, usize, Option<String>), usize>>,
+    /// A declaration elaboration that discovers more promoted `apply` goals
+    /// than its current prefix reserved records the required total here and
+    /// aborts speculatively. [`Self::elab_decl`] then restarts that declaration
+    /// with the larger prefix. Zero outside that narrow control path.
+    requested_goal_base: Cell<u32>,
+    /// Whether the current item is an ordinary declaration that can be safely
+    /// restarted to enlarge its goal prefix. Meta declarations use a separate
+    /// path and retain ordinary inference failures instead of leaking the
+    /// restart sentinel.
+    goal_restart_enabled: Cell<bool>,
     /// During an argument-slot ownership probe, only this slot remains live;
     /// sibling slots elaborate as disposable neutrals. This lets the probe
     /// ask where each slot is captured independently of source traversal
@@ -1184,6 +1219,7 @@ struct Goal {
     /// `(callee, parameter)` when the hole is an argument — the provenance the
     /// listing reports, and where an anonymous hole's default name comes from.
     origin: Option<(String, String)>,
+    source: Option<GoalSource>,
     solution: Option<Rc<Term>>,
 }
 
@@ -1235,8 +1271,12 @@ impl Elaborator {
             next_tag: 0,
             fuel: DEFAULT_FUEL,
             goal_base: 0,
+            written_goal_base: 0,
+            promoted_goals_seen: Cell::new(0),
             goals: RefCell::new(Vec::new()),
             goal_spans: RefCell::new(HashMap::new()),
+            requested_goal_base: Cell::new(0),
+            goal_restart_enabled: Cell::new(false),
             slot_probe_target: Cell::new(None),
             frozen: Cell::new(false),
             motive_speculation: Cell::new(false),
@@ -1902,11 +1942,34 @@ impl Elaborator {
         if decl.is_meta {
             return self.elab_meta_decl(decl);
         }
-        self.op_fallback_notes.borrow_mut().clear();
-        self.op_fallback_uses.borrow_mut().clear();
-        self.pending_mismatch.borrow_mut().take();
-        let r = self.elab_decl_inner(decl);
+        let warn_mark = self.warnings.borrow().len();
+        let mut reserved = 0;
+        self.goal_restart_enabled.set(true);
+        let r = loop {
+            self.op_fallback_notes.borrow_mut().clear();
+            self.op_fallback_uses.borrow_mut().clear();
+            self.pending_mismatch.borrow_mut().take();
+            self.pending_derived.borrow_mut().clear();
+            self.requested_goal_base.set(0);
+            self.promoted_goals_seen.set(0);
+            let r = self.elab_decl_inner(decl, reserved);
+            let requested = self.requested_goal_base.replace(0);
+            if requested <= reserved {
+                break r;
+            }
+            // Nothing in an ordinary declaration is registered before its
+            // kernel gate. Goal-capacity discovery is therefore speculative:
+            // discard its diagnostics and goal arena, enlarge the stable Ψ
+            // prefix, and elaborate the declaration again from its source.
+            self.warnings.borrow_mut().truncate(warn_mark);
+            self.goals.borrow_mut().clear();
+            self.goal_spans.borrow_mut().clear();
+            self.frozen.set(false);
+            reserved = requested;
+        };
+        self.goal_restart_enabled.set(false);
         self.goal_base = 0;
+        self.written_goal_base = 0;
         self.refresh_delta_psi();
         self.goals.borrow_mut().clear();
         self.goal_spans.borrow_mut().clear();
@@ -1989,7 +2052,7 @@ impl Elaborator {
         Ok(cx)
     }
 
-    fn elab_decl_inner(&mut self, decl: &Decl) -> R<()> {
+    fn elab_decl_inner(&mut self, decl: &Decl, reserved_goals: u32) -> R<()> {
         // The constraint binders' desugaring at an **indexed** class
         // (docs/operation-indexed-classes-design.md §4): the index binders in
         // front of the dictionary, or the dictionary floated past the
@@ -2044,7 +2107,8 @@ impl Elaborator {
         // telescope and result type are elaborated first and their types end
         // up embedded in the emitted term, so they must live in the same
         // (shifted) world as the body.
-        self.goal_base = count_holes(decl);
+        self.written_goal_base = count_holes(decl);
+        self.goal_base = self.written_goal_base.max(reserved_goals);
         self.refresh_delta_psi();
         // Elaborate the parameter telescope. Type parameters come first and
         // are ordinary kernel binders at `Ty 0` — level-0 parametric
@@ -2335,6 +2399,24 @@ impl Elaborator {
         level: Level,
         span: Span,
     ) -> R<Term> {
+        self.new_goal_key(cx, name, hint, ty, level, span, None, None)
+    }
+
+    /// [`Self::new_goal`] with a stable discriminator for goals synthesized
+    /// at one shared source span. Written holes need no discriminator because
+    /// their own spans are unique; several promoted implicit parameters of
+    /// one `apply` deliberately point at the same apply span.
+    fn new_goal_key(
+        &self,
+        cx: &Cx,
+        name: Option<&str>,
+        hint: Option<(&str, &str)>,
+        ty: Type,
+        level: Level,
+        span: Span,
+        key: Option<&str>,
+        promoted_parameter: Option<usize>,
+    ) -> R<Term> {
         if self.frozen.get() {
             return err(
                 "a hole may not appear in an `on` right-hand side — give it its own `on`",
@@ -2343,7 +2425,8 @@ impl Elaborator {
         }
         let mut goals = self.goals.borrow_mut();
         let mut spans = self.goal_spans.borrow_mut();
-        let k = match spans.get(&(span.start, span.end)) {
+        let span_key = (span.start, span.end, key.map(str::to_string));
+        let k = match spans.get(&span_key) {
             // Re-elaboration of the same syntactic hole (motive synthesis,
             // `calc`'s cloned spine): the same goal, so long as it is the same
             // context — the occurrence's `id_Γ` is what the payload lands in.
@@ -2397,6 +2480,18 @@ impl Elaborator {
                 };
                 let origin =
                     hint.map(|(callee, param)| (callee.to_string(), param.to_string()));
+                let source = hint.map(|(callee, parameter)| match promoted_parameter {
+                    Some(parameter_index) => GoalSource::ApplyImplicit {
+                        callee: callee.to_string(),
+                        parameter: parameter.to_string(),
+                        parameter_index,
+                        apply_span: span,
+                    },
+                    None => GoalSource::Argument {
+                        callee: callee.to_string(),
+                        parameter: parameter.to_string(),
+                    },
+                });
                 goals.push(Goal {
                     name,
                     cx: cx.clone(),
@@ -2404,9 +2499,10 @@ impl Elaborator {
                     level,
                     span,
                     origin,
+                    source,
                     solution: None,
                 });
-                spans.insert((span.start, span.end), k);
+                spans.insert(span_key, k);
                 k
             }
         };
@@ -2539,6 +2635,7 @@ impl Elaborator {
                     .origin
                     .as_ref()
                     .map(|(callee, param)| format!("the `{param}` parameter of `{callee}`")),
+                source: g.source.clone(),
                 span: g.span,
             })
             .collect();
@@ -3386,6 +3483,7 @@ impl Elaborator {
                                         &[],
                                         &mask,
                                         Some(expected),
+                                        false,
                                         e.span,
                                     )?;
                                     return Ok(t);
@@ -3844,6 +3942,7 @@ impl Elaborator {
                             &[],
                             &mask,
                             Some(expected),
+                            false,
                             e.span,
                         );
                     }
@@ -3871,6 +3970,7 @@ impl Elaborator {
                             &[],
                             &mask,
                             Some(expected),
+                            false,
                             e.span,
                         );
                     }
@@ -3959,6 +4059,7 @@ impl Elaborator {
                         &[],
                         &mask[..prefix],
                         expected,
+                        false,
                         e.span,
                     );
                 }
@@ -3968,7 +4069,7 @@ impl Elaborator {
             // applied first; what happens to the remaining `{}`-implicits is
             // `@`'s business and not `<…>`'s — the two are orthogonal knobs
             // (issues/at-and-type-arguments.md).
-            ExprKind::App { head, args, named, explicit, .. }
+            ExprKind::App { head, args, named, explicit, goal_oriented }
                 if matches!(head.kind, ExprKind::TyApp { .. }) =>
             {
                 let ExprKind::TyApp { head: callee, args: tyargs } = &head.kind else {
@@ -4036,6 +4137,7 @@ impl Elaborator {
                         args,
                         mask,
                         expected,
+                        *goal_oriented,
                         e.span,
                     )
                 } else {
@@ -4082,7 +4184,7 @@ impl Elaborator {
                 let (h, hty, hlvl) = self.elab_infer(cx, head)?;
                 self.apply_explicit(cx, None, Rc::new(Vec::new()), 0, h, hty, hlvl, args)
             }
-            ExprKind::App { args, named, explicit, .. } => {
+            ExprKind::App { args, named, explicit, goal_oriented, .. } => {
                 let (name, _, _) = e.as_named().expect("head is a name");
                 let name = &name.to_string();
                 // Named arguments (docs/named-arguments-design.md §8.2). Only
@@ -4290,7 +4392,7 @@ impl Elaborator {
                     };
                     return self.apply_implicit(
                         cx, name, params, true, 0, false, head, ty, lvl, args, mask,
-                        expected, e.span,
+                        expected, *goal_oriented, e.span,
                     );
                 }
                 let mask = self.implicit_mask(name);
@@ -4324,7 +4426,7 @@ impl Elaborator {
                 } else {
                     self.apply_implicit(
                         cx, name, params, false, 0, false, head, ty, lvl, args, mask, expected,
-                        e.span,
+                        *goal_oriented, e.span,
                     )
                 }
             }
@@ -9304,7 +9406,8 @@ impl Elaborator {
                     None => (args, &mask[..]),
                 };
                 self.apply_implicit(
-                    cx, name, params, true, 0, false, t, ty, lvl, args, mask, expected, span,
+                    cx, name, params, true, 0, false, t, ty, lvl, args, mask, expected, false,
+                    span,
                 )
             }
             Some(skel) => {
@@ -9662,6 +9765,7 @@ impl Elaborator {
         args: &[Expr],
         mask: &[bool],
         expected: Option<&Type>,
+        promote_unsolved: bool,
         span: Span,
     ) -> R<(Term, Type, Level)> {
         // Scratch-world size, fixed up front (everything downstream of
@@ -9690,6 +9794,7 @@ impl Elaborator {
         // place a solution's domain can come from when no argument mentions
         // it (see [`Self::solve_from_expected`]).
         let mut meta_doms: Vec<Type> = Vec::with_capacity(n as usize);
+        let mut meta_lvls: Vec<Level> = Vec::with_capacity(n as usize);
         // Which parameter each slot came from, in slot order — for the
         // per-slot diagnostics at discharge.
         let mut slot_param: Vec<usize> = Vec::with_capacity(n as usize);
@@ -9734,6 +9839,7 @@ impl Elaborator {
                     });
                 }
                 meta_doms.push((*dom).clone());
+                meta_lvls.push(dom_level.clone());
                 slot_param.push(i);
                 next_meta += 1;
                 Rc::new(m)
@@ -9766,6 +9872,7 @@ impl Elaborator {
                             // slot numbering aligned with the count.
                             sols[next_meta as usize] = Sol::Solved(Rc::new(arg_t.clone()));
                             meta_doms.push((*dom).clone());
+                            meta_lvls.push(dom_level.clone());
                             slot_param.push(i);
                             next_meta += 1;
                         }
@@ -9795,6 +9902,7 @@ impl Elaborator {
                             fallback_infer: self.deferral_can_fall_back(cx, arg),
                         });
                         meta_doms.push((*dom).clone());
+                        meta_lvls.push(dom_level.clone());
                         slot_param.push(i);
                         next_meta += 1;
                         Rc::new(m)
@@ -9984,6 +10092,103 @@ impl Elaborator {
                     continue;
                 }
                 break;
+            }
+        }
+        // `apply`'s one semantic difference from an ordinary call: after all
+        // ordinary evidence and deferred inference have reached a fixpoint,
+        // turn each genuinely-unsolved implicit into a declaration goal.
+        // The first pass may not have reserved enough stable Ψ slots because
+        // these goals are semantic, not written holes. Request the exact
+        // total and let `elab_decl` restart before creating any of them.
+        if promote_unsolved && self.goal_restart_enabled.get() {
+            let promoted: Vec<usize> = sols
+                .iter()
+                .enumerate()
+                .filter_map(|(j, s)| matches!(s, Sol::Unsolved).then_some(j))
+                .collect();
+            let total_promoted = self.promoted_goals_seen.get() + promoted.len() as u32;
+            self.promoted_goals_seen.set(total_promoted);
+            let needed = self.written_goal_base + total_promoted;
+            if needed > self.goal_base {
+                self.requested_goal_base.set(needed);
+                return err("internal: restarting declaration to reserve promoted apply goals", span);
+            }
+            for j in promoted {
+                // Telescope order guarantees that a parameter's domain can
+                // mention only earlier parameters. Those have either been
+                // inferred or were promoted earlier in this loop, so a
+                // remaining block here is a solver/deferred value rather than
+                // an implicit eligible for promotion.
+                let Some(dom) = zonked(&meta_doms[j], n, &sols) else { continue };
+                let i = slot_param[j];
+                let param = all_params.get(i).map(|p| p.name.as_str()).unwrap_or("?");
+                let key = format!("apply:{name}:{i}");
+                let goal = self.new_goal_key(
+                    cx,
+                    None,
+                    Some((name, param)),
+                    dom,
+                    meta_lvls[j].clone(),
+                    span,
+                    Some(&key),
+                    Some(i),
+                )?;
+                sols[j] = Sol::Solved(Rc::new(goal));
+            }
+
+            // Promotion can unblock a solver goal and checking-only argument
+            // whose domain mentioned the new declaration goal. Run the same
+            // ordered fixpoint again; no unifier writes the promoted slots,
+            // which are now rigid ordinary globals.
+            loop {
+                let mut progressed = false;
+                let mut blocked = false;
+                for ob in &resolves {
+                    if !matches!(sols[ob.slot], Sol::Withheld) {
+                        continue;
+                    }
+                    let Some(goal) = zonked(&ob.dom, n, &sols) else {
+                        blocked = true;
+                        continue;
+                    };
+                    let display = all_params
+                        .get(ob.param)
+                        .and_then(|p| p.solver.as_deref())
+                        .map(traits::render_ty)
+                        .unwrap_or_else(|| "a solver parameter".to_string());
+                    let mut tr = Vec::new();
+                    match self.resolve_goal(cx, &goal, &ob.dom_level, &display, span, &mut tr) {
+                        Some(t) => {
+                            sols[ob.slot] = Sol::Solved(Rc::new(t));
+                            progressed = true;
+                        }
+                        None => {
+                            return Err(ElabError::Resolution {
+                                goal: display,
+                                span,
+                                trace: tr,
+                            })
+                        }
+                    }
+                }
+                for ob in &deferred {
+                    if !matches!(sols[ob.slot], Sol::Withheld) {
+                        continue;
+                    }
+                    let Some(dom) = zonked(&ob.dom, n, &sols) else {
+                        blocked = true;
+                        continue;
+                    };
+                    let hint = all_params.get(ob.param).map(|p| (name, p.name.as_str()));
+                    let pskel = all_params.get(ob.param).and_then(|p| p.skel.as_deref());
+                    let arg_t =
+                        self.elab_check_skel(cx, ob.expr, &dom, &ob.dom_level, hint, pskel)?;
+                    sols[ob.slot] = Sol::Solved(Rc::new(arg_t));
+                    progressed = true;
+                }
+                if !progressed || !blocked {
+                    break;
+                }
             }
         }
         // A resolution obligation whose goal never became meta-free is

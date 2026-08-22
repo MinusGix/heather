@@ -5,12 +5,20 @@
 //! programming code, and proof calls retain the elaborator's existing
 //! expected-type and cross-argument implicit inference.
 
-use heather_elab::Elaborator;
+use heather_elab::{ElabError, Elaborator, GoalSource};
 
 fn ok(src: &str) {
     let mut e = Elaborator::with_prelude().expect("prelude");
     if let Err(err) = e.elab_source(src) {
         panic!("expected success, got: {}", err.render(src));
+    }
+}
+
+fn bad(src: &str) -> String {
+    let mut e = Elaborator::with_prelude().expect("prelude");
+    match e.elab_source(src) {
+        Ok(()) => panic!("expected rejection, but it elaborated"),
+        Err(err) => err.render(src),
     }
 }
 
@@ -88,6 +96,129 @@ theorem chain(
     on ?right := q;
 }
 ");
+}
+
+#[test]
+fn apply_promotes_an_uninferred_implicit_before_dependent_argument_goals() {
+    ok("
+theorem chain(
+    a: Nat,
+    midpoint: Nat,
+    c: Nat,
+    p: a = midpoint,
+    q: midpoint = c,
+): a = c {
+    apply trans;
+    give ?left;
+    ?right
+
+    on ?b := midpoint;
+    on ?left := p;
+    on ?right := q;
+}
+");
+}
+
+#[test]
+fn apply_can_promote_several_dependent_implicits() {
+    ok("
+fn erase({A: Type<0>}, {x: A}, n: Nat) -> Nat { n }
+fn choose(n: Nat) -> Nat {
+    apply erase;
+    n
+
+    on ?A := Nat;
+    on ?x := 0;
+}
+");
+}
+
+#[test]
+fn separate_nested_apply_sites_each_receive_capacity() {
+    ok("
+fn erase({A: Type<0>}, n: Nat) -> Nat { n }
+fn twice(n: Nat) -> Nat {
+    apply erase;
+    apply erase;
+    n
+
+    on ?A := Nat;
+    on ?A.1 := Nat;
+}
+");
+}
+
+#[test]
+fn ordinary_inference_wins_before_any_goal_is_promoted() {
+    ok("
+fn identity<A>(x: A) -> A { x }
+fn choose(n: Nat) -> Nat {
+    apply identity;
+    n
+}
+");
+}
+
+#[test]
+fn promotion_uses_a_local_callable_values_parameter_names() {
+    ok("
+fn invoke(f: {A: Type<0>} -> A -> Nat, n: Nat) -> Nat {
+    apply f;
+    ?arg
+
+    on ?A := Nat;
+    on ?arg := n;
+}
+");
+}
+
+#[test]
+fn ordinary_calls_still_refuse_an_uninferable_implicit() {
+    let msg = bad("
+fn erase({A: Type<0>}, {x: A}, n: Nat) -> Nat { n }
+fn choose(n: Nat) -> Nat { erase(n) }
+");
+    assert!(
+        msg.contains("could not infer the implicit argument `x`"),
+        "{msg}"
+    );
+}
+
+#[test]
+fn an_unfilled_promoted_goal_points_back_to_apply_and_names_its_parameter() {
+    let src = "
+fn erase({A: Type<0>}, n: Nat) -> Nat { n }
+fn choose(n: Nat) -> Nat {
+    apply erase;
+    n
+}
+";
+    let mut e = Elaborator::with_prelude().expect("prelude");
+    let err = e
+        .elab_source(src)
+        .expect_err("the promoted goal is intentionally open");
+    let ElabError::UnsolvedGoals { goals, .. } = &err else {
+        panic!("expected an unsolved-goal report, got {err}")
+    };
+    let [goal] = goals.as_slice() else {
+        panic!("expected one goal, got {goals:?}")
+    };
+    assert_eq!(
+        goal.source,
+        Some(GoalSource::ApplyImplicit {
+            callee: "erase".into(),
+            parameter: "A".into(),
+            parameter_index: 0,
+            apply_span: goal.span,
+        })
+    );
+    let msg = err.render(src);
+    assert!(msg.contains("?A"), "{msg}");
+    assert!(msg.contains("the `A` parameter of `erase`"), "{msg}");
+    assert!(
+        msg.contains("4:5"),
+        "the goal should point at `apply erase`: {msg}"
+    );
 }
 
 #[test]

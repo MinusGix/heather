@@ -1,6 +1,6 @@
 ---
 title: "Lightweight goal-directed application: auto-refl and apply"
-status: open
+status: closed
 labels: [frontend,elaboration,syntax,proofs,ergonomics]
 created: 2026-07-24
 updated: 2026-08-22
@@ -19,7 +19,7 @@ Goal: `theorem two_two(): 2 + 2 == 4 {}` auto-passes — an empty proof block di
 
 - **Mechanism**: in *checking* position, an empty block (later: any residual `?_`) gets ONE speculative `refl` attempt — construct `Refl`, run the existing checking path, keep it iff the kernel accepts; else the goal stays open (-> the goal-listing error from [[goal-holes]]). It is the simplest hardwired instance of that issue's future solver slot (`on _: _ := solver(goal)`).
 - **'ignored for values' falls out**: refl only shapes an `Id` goal, and checking-only means a `fn` result type (not generally an equality) offers nothing to close — no default fires in value position.
-- **OPEN — conservative vs aggressive**: conservative = speculation is tied to the *empty block / explicit hole* ('I didn't write a proof' is the trigger). Aggressive = `refl` itself becomes a tolerant 'trivial' that silently no-ops wherever inapplicable, so it can be sprinkled. RECOMMEND conservative: a load-bearing `refl` silently doing nothing hides mistakes (Lean's `rfl` errors for exactly this). Record the aggressive reading, do not default to it.
+- **DECIDED — conservative**: speculation is tied to the empty block ('I didn't write a proof' is the trigger). `refl` never becomes a tolerant no-op: a load-bearing `refl` silently doing nothing would hide mistakes.
 - **MVP is independent**: empty-block -> refl-attempt needs only a parser tweak (allow `{}`) + a checking-position elaborator hook; no [[goal-holes]] engine required. Could land opportunistically.
 
 ## 2. `apply`: ordinary application in goal order
@@ -228,13 +228,13 @@ application.
 
 ## Sequencing
 
-`apply` now has its prerequisites: [[goal-holes]], named arguments, and the
-retry-to-fixpoint implicit machinery are landed. The `apply`/`give` grammar,
-n-ary lowering, source provenance, named inline goals, and dependent-goal
-tests are implemented. The remaining slice is automatic late meta-to-goal
-promotion and its richer provenance diagnostics. It interacts with
-[[match-recursion]] because self-call proofs share the block surface. Tracked
-in [[frontend-roadmap]].
+`apply` is implemented: the `apply`/`give` grammar, n-ary lowering, ordinary
+cross-argument inference, automatic late meta-to-goal promotion, structured
+source provenance, named inline goals, and dependent-goal retries all share
+the existing application and goal machinery. Future infoview and code-action
+consumers may expose the provenance more richly; no elaboration slice remains
+for the construct itself. It interacts with [[match-recursion]] because
+self-call proofs share the block surface. Tracked in [[frontend-roadmap]].
 
 ## Log
 
@@ -266,3 +266,12 @@ in [[frontend-roadmap]].
   compatibility tests landed. Automatic promotion remains open because the
   current declaration goal world must reserve every global slot before
   elaboration; an inferred meta is not present in the syntactic hole count.
+- 2026-08-22: Automatic promotion landed without a syntactic approximation or
+  fixed limit. A speculative declaration elaboration records the exact extra
+  goal-prefix capacity demanded by unsolved apply implicits and restarts the
+  uncommitted declaration with that stable Ψ prefix. Promotion happens only
+  after expected-type solving, argument inference, and deferred retries reach
+  a fixpoint; blocked solver and explicit-argument obligations are retried
+  afterward. Multiple telescope-dependent implicits promote in order. Each
+  goal carries structured callee, parameter, parameter-index, and apply-span
+  provenance, while ordinary calls retain their inference failures.
