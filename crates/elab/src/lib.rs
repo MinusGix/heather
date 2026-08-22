@@ -480,7 +480,7 @@ fn expr_as_ty(e: &Expr) -> Option<Ty> {
         // `named.is_empty()`: this arm reads the arity off `args` alone, so
         // `Fin(1, n := 2)` would otherwise be read as `Fin(1)` with the name
         // dropped (docs/named-arguments-design.md §8.2).
-        ExprKind::App { head, args, named, explicit: false }
+        ExprKind::App { head, args, named, explicit: false, .. }
             if matches!(&head.kind, ExprKind::Var(s) if s == "Fin")
                 && args.len() == 1
                 && named.is_empty() =>
@@ -3968,7 +3968,7 @@ impl Elaborator {
             // applied first; what happens to the remaining `{}`-implicits is
             // `@`'s business and not `<…>`'s — the two are orthogonal knobs
             // (issues/at-and-type-arguments.md).
-            ExprKind::App { head, args, named, explicit }
+            ExprKind::App { head, args, named, explicit, .. }
                 if matches!(head.kind, ExprKind::TyApp { .. }) =>
             {
                 let ExprKind::TyApp { head: callee, args: tyargs } = &head.kind else {
@@ -4066,7 +4066,7 @@ impl Elaborator {
             }
             // An application whose head is *not* a name: no parameter
             // metadata exists for it, so it is always explicit.
-            ExprKind::App { head, args, named, explicit } if e.as_named().is_none() => {
+            ExprKind::App { head, args, named, explicit, .. } if e.as_named().is_none() => {
                 self.refuse_named(
                     "a call whose head is an expression",
                     "named arguments need a callee whose parameters have names, and only a                      *name* has a parameter table here (docs/named-arguments-design.md §7)",
@@ -5338,7 +5338,7 @@ impl Elaborator {
             // the termination guard reads), so a declaration that carries one
             // never reaches a kernel term. Skipping it here can only make this
             // analysis less informative, never wrongly permissive.
-            let ExprKind::App { head, args, explicit, named: _ } = &e.kind else { return };
+            let ExprKind::App { head, args, explicit, named: _, .. } = &e.kind else { return };
             let head = match &head.kind {
                 ExprKind::TyApp { head, .. } => head,
                 _ => head,
@@ -6206,6 +6206,7 @@ impl Elaborator {
                 args,
                 named: named.to_vec(),
                 explicit: false,
+                goal_oriented: false,
             },
             span,
         }))
@@ -7204,15 +7205,15 @@ impl Elaborator {
     /// `expected` is the checking position's type where there is one, and
     /// `None` at the two inference sites.
     fn op_rewrite(&self, cx: &Cx, e: &Expr, expected: Option<&Type>) -> R<Option<Expr>> {
-        let (sym, args, explicit) = match &e.kind {
-            ExprKind::OpSymbol { symbol, fixity } => ((symbol, fixity), None, false),
-            ExprKind::App { head, args, named, explicit } => match &head.kind {
+        let (sym, args, explicit, goal_oriented) = match &e.kind {
+            ExprKind::OpSymbol { symbol, fixity } => ((symbol, fixity), None, false, false),
+            ExprKind::App { head, args, named, explicit, goal_oriented } => match &head.kind {
                 // An operator application carries the named arguments it was
                 // written with — `a.op(x := 1)` reaches here after `.`
                 // resolution — so the rewrite preserves them rather than
                 // rewriting them away.
                 ExprKind::OpSymbol { symbol, fixity } => {
-                    ((symbol, fixity), Some((args, named)), *explicit)
+                    ((symbol, fixity), Some((args, named)), *explicit, *goal_oriented)
                 }
                 _ => return Ok(None),
             },
@@ -7235,6 +7236,7 @@ impl Elaborator {
                     args: args.clone(),
                     named: named.clone(),
                     explicit,
+                    goal_oriented,
                 },
                 span: e.span,
             },
@@ -8191,7 +8193,7 @@ impl Elaborator {
         cx: &Cx,
         e: &Expr,
     ) -> Option<(Rc<Inductive>, usize, Vec<Expr>, Vec<NamedArg>)> {
-        let ExprKind::App { head, args, named, explicit } = &e.kind else { return None };
+        let ExprKind::App { head, args, named, explicit, .. } = &e.kind else { return None };
         if *explicit {
             return None;
         }
@@ -8221,7 +8223,7 @@ impl Elaborator {
         e: &Expr,
         expected: &Type,
     ) -> Option<(Rc<Inductive>, usize, Vec<Expr>, Vec<NamedArg>)> {
-        let ExprKind::App { head, args, named, explicit } = &e.kind else { return None };
+        let ExprKind::App { head, args, named, explicit, .. } = &e.kind else { return None };
         if *explicit {
             return None;
         }

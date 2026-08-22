@@ -40,7 +40,11 @@ through the same warning channel.
 
 Already-owned work stays with [[lint-match-function-application]],
 [[lint-tight-negation-spacing]], [[lint-trivial-argument-slot]],
-[[stdlib-surface-style-lint]], and [[warn-bare-eq-no-effect]].
+[[lint-unused-local-bindings]], [[lint-vacuous-match]],
+[[lint-sequent-binder-intro]], [[lint-proof-apply]],
+[[stdlib-surface-style-lint]], and [[warn-bare-eq-no-effect]]. Optional advice
+and the distinction between activation level and style profile belong to
+[[lint-review-only-mode]].
 
 ## Acceptance
 
@@ -71,3 +75,7 @@ Already-owned work stays with [[lint-match-function-application]],
   portion of [[lint-redundant-match-motive]]. The shared warning fix format now
   supports token-completed multi-token deletions as well as single-token
   replacements.
+- 2026-08-22: The clean-stdlib review added bounded owners for unused local
+  bindings, vacuous matches, proof-lambda `⊢` spelling, and a future
+  proof-`apply` readability lint. It also split optional review advice from
+  always-on warnings rather than treating removable annotations as defects.

@@ -1,12 +1,17 @@
 ---
-title: Lightweight proof automation: auto-refl and apply
+title: "Lightweight goal-directed application: auto-refl and apply"
 status: open
-labels: [frontend,elaboration,syntax]
+labels: [frontend,elaboration,syntax,proofs,ergonomics]
 created: 2026-07-24
-updated: 2026-08-05
+updated: 2026-08-22
 ---
 
-Two ergonomic surface features (user-requested 2026-07-24; not scheduled). Both are the *same* underlying move — goal-directed elaboration, the elaborator supplying a proof for a goal it can see — so they are the ergonomic front of the goal engine [[goal-holes]] builds (a hole = an [[elab-stage2-metas]] metavariable that survives to end-of-block). Kernel-safe throughout: the elaborator is untrusted, so a wrong auto-fill is a kernel rejection or an unfilled-goal listing, never unsoundness. Filed together because they share that substrate and were requested together; split if they diverge.
+Two ergonomic surface features (user-requested 2026-07-24; not scheduled).
+Both use expected types and Heather's existing metavariable/goal machinery,
+but neither introduces a kernel construct. Auto-refl is proof-specific;
+`apply` is deliberately not. It is an alternate, goal-oriented layout for an
+ordinary application and should be usable in ordinary programs as readily as
+in proofs.
 
 ## 1. Auto-refl (trivial-closer for empty/residual goals)
 
@@ -17,18 +22,219 @@ Goal: `theorem two_two(): 2 + 2 == 4 {}` auto-passes — an empty proof block di
 - **OPEN — conservative vs aggressive**: conservative = speculation is tied to the *empty block / explicit hole* ('I didn't write a proof' is the trigger). Aggressive = `refl` itself becomes a tolerant 'trivial' that silently no-ops wherever inapplicable, so it can be sprinkled. RECOMMEND conservative: a load-bearing `refl` silently doing nothing hides mistakes (Lean's `rfl` errors for exactly this). Record the aggressive reading, do not default to it.
 - **MVP is independent**: empty-block -> refl-attempt needs only a parser tweak (allow `{}`) + a checking-position elaborator hook; no [[goal-holes]] engine required. Could land opportunistically.
 
-## 2. `apply` (prefix application threading the continuation)
+## 2. `apply`: ordinary application in goal order
 
-Goal: `apply sym` reads more naturally than `sym(...)`; 'wrap everything after this'. `apply f` = `f(<continuation>)`.
+The design target is **not** a special tactic language. `apply` presents the
+arguments of an ordinary application as restricted checking scopes, in the
+same telescope order the call already owns. It performs no lemma search and
+has no proof/value distinction.
 
-- **Cheap slice (single continuation)**: `apply sym; apply cong_succ; ih` desugars to `sym(cong_succ(ih))` — pure parser sugar like `calc`, top-down reading (outer step first). Continuation lands as the *last* argument, so stage-2 implicit endpoints infer from it — a prefix mirror of method-calls (receiver-last). Callable-agnostic: `apply Succ; ...` = `Succ(...)` ('support values').
-- **Full slice (multi-premise f)**: `apply trans` leaves TWO goals -> `f(?g1, ?g2)` with holes discharged by `on`. This needs the [[goal-holes]] engine; it is 'a more specific kind of defer' — defer f's arguments.
-- **OPEN — which premise gets the continuation**: lean 'last explicit premise' (matches method-receiver-last, feeds implicit-endpoint inference); other premises become `on`-discharged holes. Decide against [[surface-syntax]] taste.
-- **Dependency**: even the cheap slice wants **block-statement surface** (`apply f;` then more) — blocks are currently single-expression; that statement grammar arrives with [[goal-holes]]. So `apply` is downstream of goal-holes in a way auto-refl's MVP is not.
+The unary form wraps the remaining expression:
+
+```heather
+apply outer;
+apply middle;
+value
+```
+
+and elaborates to the ordinary term:
+
+```heather
+outer(middle(value))
+```
+
+Constructors and program values are first-class customers:
+
+```heather
+apply Inr;
+compute_value(input)
+```
+
+is `Inr(compute_value(input))`. The whole application is elaborated in its
+original checking position; the wrapper is not inferred in isolation, so
+constructor result indices and implicit arguments retain the information from
+the expected return type and supplied bodies.
+
+### 2.1 Multiple goals are multiple argument bodies
+
+For a callee with several remaining explicit parameters, each parameter is a
+goal: an expression checked at that parameter's domain. The landed spelling
+uses contextual `give` for every non-final argument, with the final goal
+completed by the ordinary trailing expression:
+
+```heather
+apply trans;
+give first;
+second
+```
+
+The parser lowers this to:
+
+```heather
+trans(first, second)
+```
+
+`give` makes non-final completion visible without borrowing proof-specific
+language such as `exact`; it reads just as naturally for program inputs.
+Braces remain available around a
+non-final body containing its own statements:
+
+```heather
+apply trans;
+give {
+    let x = prepare(input);
+    produce_left(x)
+};
+produce_right(input)
+```
+
+Requiring `give` for every non-final goal avoids a
+future ambiguity with effectful expression sequencing: bare `first; second`
+must not silently alternate between "two arguments" and "discard `first`, then
+return `second`". It also makes nested multi-goal applications locally scoped.
+
+Parsing lowers the bodies to one ordinary n-ary `App`, with a `goal_oriented`
+provenance bit retained for the promotion policy and its diagnostics below.
+The kernel sees only the resulting application.
+
+### 2.2 Normal implicit inference runs across every goal
+
+`apply` does not turn implicit parameters into immediate goals. They remain
+Heather's ordinary flexible per-call metavariables and consume information
+from the expected result and every explicit argument body.
+
+For example:
+
+```heather
+theorem trans({a, b, c: Int}): a <= b → b <= c → a <= c
+```
+
+applied at an expected `x <= z` begins conceptually as:
+
+```text
+a := x
+b := ?b
+c := z
+first  : x <= ?b
+second : ?b <= z
+```
+
+The expected result solves `a` and `c`. If `first` infers a type `x <= y`,
+ordinary unification solves `b := y`; the second body is then checked at
+`y <= z`. A later inferable body may solve an earlier unknown as well: the
+existing deferred-argument retry-to-fixpoint is the right mechanism, not a
+new tactic-state solver.
+
+Named arguments are the direct, local escape when the writer already knows
+the intermediate:
+
+```heather
+apply trans(b := midpoint);
+give prove_left(midpoint);
+prove_right(midpoint)
+```
+
+This is often preferable to deferring `b`, and keeps the choice at the source
+site that created the application.
+
+### 2.3 Promote only genuinely unsolved implicits
+
+If ordinary expected-type solving, argument inference, and deferred retries
+reach a fixpoint with `b` still unknown, `apply` may **promote** that flexible
+implicit meta into a declaration-scoped named goal:
+
+```text
+?b : Int
+```
+
+Promotion is late and one-way. Promoting immediately would make `b` rigid and
+prevent later argument bodies from inferring it. The intended order is:
+
+1. create ordinary flexible implicit metas;
+2. use the expected result and every inferable body;
+3. retry checking-only/deferred bodies to a fixpoint;
+4. promote remaining implicit metas to named goals;
+5. substitute those goal globals into blocked argument domains and retry them;
+6. elaborate explicit holes there as ordinary dependent goals.
+
+That permits a fully deferred application such as:
+
+```heather
+{
+    apply trans;
+    give ?left;
+    ?right
+
+    on ?b := midpoint;
+    on ?left := prove_left(midpoint);
+    on ?right := prove_right(midpoint);
+}
+```
+
+The existing `?name`/`on` mechanism remains the only persistent goal store.
+Flexible scratch metas do not escape their application call: they are either
+solved there or converted to ordinary goal globals before the call returns.
+Ordinary call syntax continues to report an inference failure; automatic
+promotion is opt-in through the goal-oriented `apply` spelling.
+
+### 2.4 A promoted goal must say where it came from
+
+The parameter name is API, but the name alone is insufficient. Every promoted
+implicit records structured provenance:
+
+- the source span of the `apply` head that failed to infer it;
+- the resolved callee and its declaration, when nameable;
+- the callee parameter name and position;
+- the expected result which supplied the information that was available; and
+- which later argument goals remain blocked on it, when known cheaply.
+
+An unfilled-goal diagnostic should read approximately:
+
+```text
+?b : Int
+promoted from implicit parameter `b` of `trans`
+at path/file.hthr:line:column (`apply trans`)
+```
+
+and the primary or secondary caret must point back to that `apply`, not merely
+to the end-of-block goal listing. A future infoview should expose the same
+origin as navigable metadata, so selecting `?b` answers both "what is this?"
+and "which application asked for it?" without reconstructing the call from
+its type.
+
+The provenance is data, not preformatted prose: terminal rendering, editor
+navigation, and a future code-action that inserts `b := ...` on the apply line
+must consume the same record. Goal-name collisions retain the existing
+ordinal suffix convention (`b`, `b.1`, ...), while origin metadata preserves
+which is which.
+
+### 2.5 Boundary from a tactic language
+
+`apply` may expose several checking goals and promote failed inference, but it
+still:
+
+- performs no declaration or lemma search;
+- uses no proof-only classification (`Prop` is not required);
+- never guesses which explicit parameter is a premise;
+- follows the callee's explicit/implicit binder API;
+- compiles to the same n-ary application the writer could spell directly;
+- uses explicit `?name`/`on` for obligations that survive the application;
+- reports ordinary call/type errors when a supplied goal body is wrong.
+
+This is the useful part of tactic-style information flow without making
+ordinary term code the disfavored language. Programs may deliberately use
+multiple goal bodies to construct several inputs before returning the final
+application.
 
 ## Sequencing
 
-Both want [[goal-holes]]' block-statement + `on` surface for their full form; interacts with [[match-recursion]] (self-call proofs share the block surface). auto-refl's empty-block MVP is the one independent, tiny piece. Enabled by [[elab-stage2-metas]] (done). Tracked in [[frontend-roadmap]]; not in the current focus order.
+`apply` now has its prerequisites: [[goal-holes]], named arguments, and the
+retry-to-fixpoint implicit machinery are landed. The `apply`/`give` grammar,
+n-ary lowering, source provenance, named inline goals, and dependent-goal
+tests are implemented. The remaining slice is automatic late meta-to-goal
+promotion and its richer provenance diagnostics. It interacts with
+[[match-recursion]] because self-call proofs share the block surface. Tracked
+in [[frontend-roadmap]].
 
 ## Log
 
@@ -41,3 +247,22 @@ Both want [[goal-holes]]' block-statement + `on` surface for their full form; in
   `intro x; rest` is simply the checking-position face of `λ x => rest`.
   `cases` is already [[split-on-arms]], including a default arm; do not grow
   this issue into an umbrella tactic language.
+- 2026-08-22: Apply direction substantially sharpened. It is an ordinary
+  n-ary application presented as argument goals, useful for programs and
+  proofs. Non-final goals need explicit scope (then considering `exact` or
+  bounded blocks; the landed spelling is `give`), the
+  final expression is the lightweight implicit completion, and ordinary
+  implicits remain flexible across all bodies. Only an implicit still unsolved
+  at fixpoint is promoted to a named `on`-dischargeable goal. Promotion carries
+  structured provenance back to the originating apply/callee/parameter so a
+  diagnostic or infoview can navigate there, while a named argument such as
+  `b := midpoint` remains the immediate inline escape.
+- 2026-08-22: Landed the first implementation slice. Contextual
+  `apply f; give a; b` lowers to one ordinary n-ary application, the final
+  body nests naturally for unary chains, `apply(x)` remains an ordinary call
+  to a function named `apply`, and `apply f(p := value)` carries named values
+  onto the generated call. The AST retains `goal_oriented` provenance.
+  Programming, proof, dependent implicit-inference, inline named-goal, and
+  compatibility tests landed. Automatic promotion remains open because the
+  current declaration goal world must reserve every global slot before
+  elaboration; an inferred meta is not present in the syntactic hole count.

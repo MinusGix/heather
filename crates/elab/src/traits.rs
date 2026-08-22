@@ -257,7 +257,7 @@ pub(crate) fn render_expr(e: &Expr) -> String {
         // still present. In particular, do not inspect an elaborated `Pi`
         // ending in `False`: an arbitrary function into `False` is not
         // necessarily an inequality.
-        ExprKind::App { head, args, named, explicit: false }
+        ExprKind::App { head, args, named, explicit: false, .. }
             if matches!(&head.kind, ExprKind::Var(name) if name == "Not")
                 && named.is_empty()
                 && matches!(args.as_slice(), [Expr { kind: ExprKind::Eq(..), .. }]) =>
@@ -322,6 +322,7 @@ mod inequality_render_tests {
                 args: vec![equation.clone()],
                 named: Vec::new(),
                 explicit: false,
+                goal_oriented: false,
             })
         };
 
@@ -443,7 +444,7 @@ fn rename_expr(m: &Ren, e: &Expr) -> Expr {
         Refl => Refl,
         AutoRefl => AutoRefl,
         Hole(n) => Hole(n.clone()),
-        App { head, args, named, explicit } => App {
+        App { head, args, named, explicit, goal_oriented } => App {
             head: Box::new(rename_expr(m, head)),
             args: args.iter().map(|a| rename_expr(m, a)).collect(),
             // A named argument's *name* is the callee's parameter name, which
@@ -458,6 +459,7 @@ fn rename_expr(m: &Ren, e: &Expr) -> Expr {
                 })
                 .collect(),
             explicit: *explicit,
+            goal_oriented: *goal_oriented,
         },
         TyApp { head, args } => TyApp {
             head: Box::new(rename_expr(m, head)),

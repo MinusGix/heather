@@ -838,10 +838,24 @@ pub enum ExprKind {
     /// shape expecting `n` positional arguments (the safe direction); and it
     /// cannot desync, which a parallel `Vec<Option<String>>` could.
     ///
-    /// Empty for every call written before this existed, and the elaborator's
-    /// resolution pass is a no-op when it is empty — a call with no named
-    /// argument takes the path it took before, byte for byte.
-    App { head: Box<Expr>, args: Vec<Expr>, named: Vec<NamedArg>, explicit: bool },
+    /// `goal_oriented` records the `apply f; …` spelling. It does not change
+    /// ordinary application semantics: the parser lowers the argument bodies
+    /// to this same n-ary node so expected-type and cross-argument inference
+    /// remain shared. Keeping the bit is what lets later elaboration and
+    /// diagnostics distinguish an inference failure at the originating
+    /// `apply` from the same failure at an ordinary call.
+    ///
+    /// `named` is empty for every call written before named arguments existed,
+    /// and the elaborator's resolution pass is a no-op when it is empty — a
+    /// call with no named argument takes the path it took before, byte for
+    /// byte.
+    App {
+        head: Box<Expr>,
+        args: Vec<Expr>,
+        named: Vec<NamedArg>,
+        explicit: bool,
+        goal_oriented: bool,
+    },
     /// `f<A, B>` — explicit type application, filling a declaration's leading
     /// type parameters positionally (docs/surface-polymorphism.md §1). Kept
     /// **separate** from `App` rather than a field on it: every existing

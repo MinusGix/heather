@@ -310,7 +310,7 @@ fn expr_with_context(e: &Expr, context: ExprContext, out: &mut Vec<Finding>) {
 
 fn match_function_application(e: &Expr, _context: ExprContext, out: &mut Vec<Finding>) {
     let ExprKind::Lam { binders, body } = &e.kind else { return };
-    let ExprKind::App { head, args, named, explicit } = &body.kind else { return };
+    let ExprKind::App { head, args, named, explicit, .. } = &body.kind else { return };
     if *explicit || !named.is_empty() || args.is_empty() || args.len() > binders.len() {
         return;
     }
@@ -345,7 +345,7 @@ fn nested_call(e: &Expr, context: ExprContext, out: &mut Vec<Finding>) {
     if context.is_app_head {
         return;
     }
-    let ExprKind::App { head, args, named, explicit } = &e.kind else { return };
+    let ExprKind::App { head, args, named, explicit, .. } = &e.kind else { return };
     if *explicit || args.is_empty() || !named.is_empty() {
         return;
     }
@@ -354,6 +354,7 @@ fn nested_call(e: &Expr, context: ExprContext, out: &mut Vec<Finding>) {
         args: inner_args,
         named: inner_named,
         explicit: inner_explicit,
+        ..
     } = &head.kind
     else {
         return;

@@ -131,6 +131,7 @@ pub fn class_ty(name: String, args: Vec<Ty>, index: Vec<Expr>, span: Span) -> Ty
             args: index,
             named: Vec::new(),
             explicit: false,
+            goal_oriented: false,
         },
         span,
     };
@@ -262,7 +263,13 @@ fn trans_call(args: Vec<Expr>, named: Vec<(&str, Expr)>, span: Span) -> Expr {
         })
         .collect();
     Expr {
-        kind: ExprKind::App { head: Box::new(head), args, named, explicit: false },
+        kind: ExprKind::App {
+            head: Box::new(head),
+            args,
+            named,
+            explicit: false,
+            goal_oriented: false,
+        },
         span,
     }
 }
@@ -273,7 +280,7 @@ fn trans_call(args: Vec<Expr>, named: Vec<(&str, Expr)>, span: Span) -> Expr {
 /// and is what keeps the rendering total — there is no expression printer
 /// here and none is wanted.
 fn render_owner(e: &Expr) -> Option<String> {
-    let ExprKind::App { head, args, named, explicit: false } = &e.kind else { return None };
+    let ExprKind::App { head, args, named, explicit: false, .. } = &e.kind else { return None };
     if !named.is_empty() {
         // An owner path is `Impl(add, BinNat)`, a name applied to names. A
         // named argument is not a name, so it does not render — and rendering
@@ -299,7 +306,16 @@ fn render_owner(e: &Expr) -> Option<String> {
 /// written instead of as what it used to desugar to.
 fn op_call(sym: &str, fixity: OpFixity, args: Vec<Expr>, span: Span) -> Expr {
     let head = Expr { kind: ExprKind::OpSymbol { symbol: sym.to_string(), fixity }, span };
-    Expr { kind: ExprKind::App { head: Box::new(head), args, named: Vec::new(), explicit: false }, span }
+    Expr {
+        kind: ExprKind::App {
+            head: Box::new(head),
+            args,
+            named: Vec::new(),
+            explicit: false,
+            goal_oriented: false,
+        },
+        span,
+    }
 }
 
 /// A binary connective: `P ∧ Q` is `And<P, Q>`, the declared record applied to
@@ -358,7 +374,7 @@ fn expr_as_ty(e: &Expr) -> Ty {
         // alone: `Fin(1, n := 2)` has one positional argument and would
         // otherwise be read as `Fin(1)` with the name silently dropped
         // (docs/named-arguments-design.md §8.2).
-        ExprKind::App { head, args, named, explicit: false }
+        ExprKind::App { head, args, named, explicit: false, .. }
             if matches!(&head.kind, ExprKind::Var(s) if s == "Fin")
                 && args.len() == 1
                 && named.is_empty() =>
@@ -2342,6 +2358,14 @@ impl Parser {
         if self.at_sequent_binders() {
             return self.sequent_expr();
         }
+        // `apply f; give a; b` is ordinary n-ary application with its
+        // argument bodies written in goal order. `apply` remains contextual:
+        // `apply(x)` is still a call to a function named `apply`, and a bare
+        // `apply` is still a variable. The top-level semicolon is the exact
+        // discriminator for the new form.
+        if self.starts_apply_expr() {
+            return self.apply_expr();
+        }
         let lhs = self.expr_no_iff()?;
         if self.no_iff {
             return Ok(lhs);
@@ -2364,6 +2388,88 @@ impl Parser {
             );
         }
         Ok(connective("Iff", lhs, rhs, span))
+    }
+
+    /// Does the cursor begin the contextual `apply <callee>;` form?
+    ///
+    /// Scan only to the end of this expression and ignore delimiters inside
+    /// the callee. This keeps both `apply(x)` and a bare function value named
+    /// `apply` source-compatible without reserving a lexer keyword.
+    fn starts_apply_expr(&self) -> bool {
+        if !self.at_kw("apply") || matches!(self.nth(1), TokKind::LParen) {
+            return false;
+        }
+        let mut paren = 0usize;
+        let mut bracket = 0usize;
+        let mut brace = 0usize;
+        for tok in self.toks.iter().skip(self.pos + 1) {
+            match tok.kind {
+                TokKind::LParen => paren += 1,
+                TokKind::RParen if paren > 0 => paren -= 1,
+                TokKind::LBracket => bracket += 1,
+                TokKind::RBracket if bracket > 0 => bracket -= 1,
+                TokKind::LBrace => brace += 1,
+                TokKind::RBrace if brace > 0 => brace -= 1,
+                TokKind::Semi if paren == 0 && bracket == 0 && brace == 0 => return true,
+                TokKind::Comma | TokKind::RParen | TokKind::RBracket | TokKind::RBrace
+                    if paren == 0 && bracket == 0 && brace == 0 =>
+                {
+                    return false;
+                }
+                TokKind::Eof => return false,
+                _ => {}
+            }
+        }
+        false
+    }
+
+    /// `apply f; give a; b` → the same n-ary call as `f(a, b)`.
+    ///
+    /// Every `give` completes one non-final parameter; the last expression
+    /// completes the last parameter without ceremony. Recursing through
+    /// [`Self::expr`] makes chains read naturally:
+    /// `apply f; apply g; x` is `f(g(x))`.
+    fn apply_expr(&mut self) -> R<Expr> {
+        let start = self.bump().span; // `apply`
+        let callee = self.expr()?;
+        self.expect(&TokKind::Semi, "`;` after the callee in `apply f; body`")?;
+
+        let mut bodies = Vec::new();
+        while self.eat_kw("give") {
+            if matches!(self.peek(), TokKind::Semi | TokKind::RBrace | TokKind::Eof) {
+                return self.err("an expression after `give`");
+            }
+            bodies.push(self.expr()?);
+            self.expect(&TokKind::Semi, "`;` after a non-final `give` body")?;
+        }
+        if matches!(self.peek(), TokKind::RBrace | TokKind::Eof) {
+            return self.err(
+                "a final argument body after `apply`; use `give body;` only for non-final arguments",
+            );
+        }
+        let last = self.expr()?;
+        let span = start.join(last.span);
+        bodies.push(last);
+
+        // Named values on the apply line are parameter selections, not an
+        // already-executed partial call: `apply trans(b := m); give p; q`
+        // lowers to `trans(p, q, b := m)`. A positional call remains a
+        // callable expression, so `apply make(x); y` means `make(x)(y)`.
+        let (head, mut args, named, explicit) = match callee.kind {
+            ExprKind::App {
+                head,
+                args,
+                named,
+                explicit,
+                goal_oriented: false,
+            } if args.is_empty() && !named.is_empty() => (head, args, named, explicit),
+            kind => (Box::new(Expr { kind, span: callee.span }), Vec::new(), Vec::new(), false),
+        };
+        args.extend(bodies);
+        Ok(Expr {
+            kind: ExprKind::App { head, args, named, explicit, goal_oriented: true },
+            span,
+        })
     }
 
     /// Does the cursor begin one or more sequent binders followed by `⊢`?
@@ -2549,6 +2655,7 @@ impl Parser {
                         args: vec![eq],
                         named: Vec::new(),
                         explicit: false,
+                        goal_oriented: false,
                     },
                     span: eq_span,
                 }
@@ -2642,6 +2749,7 @@ impl Parser {
                     args: vec![inner],
                     named: Vec::new(),
                     explicit: false,
+                    goal_oriented: false,
                 },
                 span,
             });
@@ -2737,6 +2845,7 @@ impl Parser {
                     args: vec![lam],
                     named: Vec::new(),
                     explicit: false,
+                    goal_oriented: false,
                 },
                 span,
             };
@@ -3020,7 +3129,13 @@ impl Parser {
                     let (args, named, end) = self.call_args()?;
                     let span = e.span.join(end);
                     e = Expr {
-                        kind: ExprKind::App { head: Box::new(e), args, named, explicit: false },
+                        kind: ExprKind::App {
+                            head: Box::new(e),
+                            args,
+                            named,
+                            explicit: false,
+                            goal_oriented: false,
+                        },
                         span,
                     };
                 }
@@ -3277,7 +3392,13 @@ impl Parser {
             self.expect(&TokKind::LParen, "`(` (`@` marks a call)")?;
             let (args, named, end) = self.call_args()?;
             return Ok(Expr {
-                kind: ExprKind::App { head: Box::new(head), args, named, explicit: true },
+                kind: ExprKind::App {
+                    head: Box::new(head),
+                    args,
+                    named,
+                    explicit: true,
+                    goal_oriented: false,
+                },
                 span: at.join(end),
             });
         }
@@ -3627,6 +3748,7 @@ impl Parser {
                 args: vec![],
                 named: vec![],
                 explicit: false,
+                goal_oriented: false,
             },
             span: condition.span,
         };
@@ -4173,6 +4295,63 @@ mod tests {
             },
             other => panic!("expected a call, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn apply_lowers_to_one_goal_oriented_nary_call() {
+        let k = body("apply trans; give p; q");
+        let ExprKind::App { head, args, named, explicit, goal_oriented } = k else {
+            panic!("expected an application")
+        };
+        assert!(matches!(head.kind, ExprKind::Var(ref name) if name == "trans"));
+        assert_eq!(args.len(), 2);
+        assert!(matches!(args[0].kind, ExprKind::Var(ref name) if name == "p"));
+        assert!(matches!(args[1].kind, ExprKind::Var(ref name) if name == "q"));
+        assert!(named.is_empty());
+        assert!(!explicit);
+        assert!(goal_oriented);
+    }
+
+    #[test]
+    fn apply_chains_by_nesting_the_final_body() {
+        let k = body("apply f; apply g; n");
+        let ExprKind::App { head, args, goal_oriented: true, .. } = k else {
+            panic!("expected outer apply")
+        };
+        assert!(matches!(head.kind, ExprKind::Var(ref name) if name == "f"));
+        assert_eq!(args.len(), 1);
+        let ExprKind::App { head, args, goal_oriented: true, .. } = &args[0].kind else {
+            panic!("expected nested apply")
+        };
+        assert!(matches!(head.kind, ExprKind::Var(ref name) if name == "g"));
+        assert_eq!(args.len(), 1);
+    }
+
+    #[test]
+    fn apply_line_accepts_named_implicit_values() {
+        let k = body("apply trans(b := n); give p; q");
+        let ExprKind::App { head, args, named, goal_oriented: true, .. } = k else {
+            panic!("expected an apply call")
+        };
+        assert!(matches!(head.kind, ExprKind::Var(ref name) if name == "trans"));
+        assert_eq!(args.len(), 2);
+        assert_eq!(named.len(), 1);
+        assert_eq!(named[0].name, "b");
+    }
+
+    #[test]
+    fn apply_identifier_calls_and_values_remain_ordinary() {
+        let ExprKind::App { goal_oriented, .. } = body("apply(n)") else {
+            panic!("expected an ordinary call")
+        };
+        assert!(!goal_oriented);
+        assert!(matches!(body("apply"), ExprKind::Var(ref name) if name == "apply"));
+    }
+
+    #[test]
+    fn apply_requires_a_final_body() {
+        let e = parse_file("fn f(n: Nat) -> Nat { apply g; give n; }").unwrap_err();
+        assert!(e.msg.contains("final argument body"), "{}", e.msg);
     }
 
     #[test]

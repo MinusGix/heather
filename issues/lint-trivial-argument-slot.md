@@ -11,7 +11,8 @@ quicker spelling:
 
 ```heather
 λ x => x                 // ·
-λ p => false_elim(p)     // false_elim(·)
+λ p => false_elim(p)     // false_elim (eta-reduce to the function)
+λ p => Inr(p)            // Inr(·) (checking-only constructor section)
 λ x y => f(x, y)         // f(·, ·)
 ```
 
@@ -22,7 +23,10 @@ a name that documents a nontrivial hypothesis merely because it occurs once.
 ## Acceptance
 
 - Identity lambdas and direct one-use eta wrappers receive the corresponding
-  `·` suggestion.
+  shortest valid suggestion.
+- A direct wrapper around a first-class function prefers eta-reduction to the
+  function itself (`false_elim`), while a checking-only constructor wrapper
+  may prefer the explicit section (`Inr(·)`).
 - Multiple, repeated, reordered, and discarded arguments use indexed slots
   only when the result is strictly clearer and supported by
   [[argument-slot-sections]].
@@ -39,3 +43,7 @@ a name that documents a nontrivial hypothesis merely because it occurs once.
 
 - 2026-08-20: Filed from the cleanup that changed the Int negative-base arm
   from `λ (h: NegSucc(0) < NegSucc(0)) => h` to simply `·`.
+- 2026-08-22: Preference refined after review: do not manufacture an argument
+  slot when ordinary eta-reduction already yields the named function;
+  constructor sections such as `Inr(·)` remain the case where the slot reads
+  better and supplies checking-position construction.
