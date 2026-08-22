@@ -216,14 +216,14 @@ theorem not_succ_le_zero(n: Nat, h: Succ(n) <= 0): False { h }
 theorem le_succ_succ(n, m: Nat, h: n <= m): Succ(n) <= Succ(m) { h }
 theorem le_of_succ_succ(n, m: Nat, h: Succ(n) <= Succ(m)): n <= m { h }
 
-theorem le_succ_r(n: Nat): (m: Nat) -> n <= m -> n <= Succ(m) {
-    match n as λ z => (m: Nat) -> z <= m -> z <= Succ(m) {
+theorem le_succ_r(n: Nat): (m: Nat) → n <= m → n <= Succ(m) {
+    match n {
         Zero => λ m h => trivial,
-        Succ(k, ih) => λ m h =>
-            match m as λ y => Succ(k) <= y -> Succ(k) <= Succ(y) {
+        Succ(k, ih) => λ m =>
+            match m {
                 Zero => bad ⊢ false_elim(bad),
                 Succ(m2) => good ⊢ ih(m2, good),
-            }(h),
+            },
     }
 }
 
