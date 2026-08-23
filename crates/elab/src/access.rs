@@ -50,32 +50,21 @@ pub(crate) struct AccessTable {
     /// Owner → its designed members, for the miss diagnostic. An owner with
     /// members is a closed list, so "no such member" can print the list.
     owners: HashMap<String, Vec<String>>,
-    /// Nesting depth of generated-source elaboration. Zero is user source.
-    generated: usize,
-}
-
-impl AccessTable {
-    /// Whether generated source is being elaborated right now. The one
-    /// question outside this module that the depth answers: a diagnostic about
-    /// generated text has no source file to point into
-    /// (`docs/diagnostic-warnings-design.md` §4.1).
-    pub(crate) fn in_generated(&self) -> bool {
-        self.generated > 0
-    }
 }
 
 impl Elaborator {
     /// Record a designed access path and the declaration it resolves to. The
     /// minted name becomes unspellable in user source at the same moment.
     pub(crate) fn designate_access(&mut self, designed: &str, minted: &str) {
-        self.access.alias.insert(designed.to_string(), minted.to_string());
-        self.access
+        let access = self.representations.access_mut();
+        access.alias.insert(designed.to_string(), minted.to_string());
+        access
             .restricted
             .insert(minted.to_string(), Restriction::Designed(designed.to_string()));
-        self.access.display.push((minted.to_string(), designed.to_string()));
-        self.access.display.sort_by(|a, b| b.0.len().cmp(&a.0.len()));
+        access.display.push((minted.to_string(), designed.to_string()));
+        access.display.sort_by(|a, b| b.0.len().cmp(&a.0.len()));
         if let Some((owner, member)) = designed.rsplit_once("::") {
-            self.access
+            access
                 .owners
                 .entry(owner.to_string())
                 .or_default()
@@ -85,21 +74,25 @@ impl Elaborator {
 
     /// Record a generated name with no designed spelling (design §3.3).
     pub(crate) fn internal_access(&mut self, minted: &str, of: &str) {
-        self.access.restricted.insert(minted.to_string(), Restriction::Internal(of.to_string()));
+        self.representations
+            .access_mut()
+            .restricted
+            .insert(minted.to_string(), Restriction::Internal(of.to_string()));
     }
 
     /// The declaration a designed path names, if this is one.
     pub(crate) fn access_alias<'a>(&'a self, name: &str) -> Option<&'a str> {
-        self.access.alias.get(name).map(String::as_str)
+        self.representations.access().alias.get(name).map(String::as_str)
     }
 
     /// The refusal for a name written in user source, if it is one. `None` in
     /// generated mode, where the minted names are what the text says.
     pub(crate) fn access_refusal(&self, name: &str) -> Option<String> {
-        if self.access.generated > 0 {
+        if self.generated_depth > 0 {
             return None;
         }
-        match self.access.restricted.get(name)? {
+        let access = self.representations.access();
+        match access.restricted.get(name)? {
             Restriction::Designed(d) => Some(format!(
                 "`{name}` is a generated name and is not part of the surface — write \
                  `{d}` (docs/repr-access-spellings-design.md §2)"
@@ -117,14 +110,15 @@ impl Elaborator {
     /// all — it is an applied owner, and what is missing is the declaration.
     pub(crate) fn unknown_access_path(&self, name: &str) -> Option<String> {
         let (owner, member) = name.rsplit_once("::")?;
-        if self.access.alias.contains_key(name) {
+        let access = self.representations.access();
+        if access.alias.contains_key(name) {
             return None;
         }
         // An owner that *has* designed members and was asked for one it does
         // not have: the list is closed and short, so print it rather than
         // complain about the qualifier (which is a repr's name, and is not a
         // module and not a type).
-        if let Some(members) = self.access.owners.get(owner) {
+        if let Some(members) = access.owners.get(owner) {
             let list = members.iter().map(|m| format!("`{m}`")).collect::<Vec<_>>().join(", ");
             return Some(format!(
                 "`{owner}` has no member `{member}`: its access points are {list} \
@@ -151,7 +145,7 @@ impl Elaborator {
     /// deliberately left alone — display is the only place the two disagree.
     pub(crate) fn display_paths(&self, s: &str) -> String {
         let mut out = s.to_string();
-        for (minted, designed) in &self.access.display {
+        for (minted, designed) in &self.representations.access().display {
             if out.contains(minted.as_str()) {
                 out = out.replace(minted.as_str(), designed);
             }
@@ -162,10 +156,16 @@ impl Elaborator {
     /// Run `f` with generated mode raised. A guard rather than two statements
     /// because every caller has error paths.
     pub(crate) fn generated_mode<T>(&mut self, f: impl FnOnce(&mut Self) -> T) -> T {
-        self.access.generated += 1;
+        self.generated_depth += 1;
         let r = f(self);
-        self.access.generated -= 1;
+        self.generated_depth -= 1;
         r
+    }
+
+    /// Whether generated source is being elaborated right now. Diagnostics
+    /// against generated spans have no user file to point into.
+    pub(crate) fn in_generated(&self) -> bool {
+        self.generated_depth > 0
     }
 
     /// Every access path of a `datarepr` (design §3.1), registered at the

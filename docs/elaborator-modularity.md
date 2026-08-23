@@ -102,9 +102,23 @@ scope and pending derivations intentionally stay outside the registry: they are
 temporary state belonging to the current elaboration attempt, not committed
 trait declarations.
 
-`Representations` remains. It should expose deterministic lookup and explicit
-commit methods. No caller should iterate a hash-backed registry to emit terms
-or diagnostics.
+`Representations` is now established in `representations.rs`. It owns reprs by
+spec identity and written name, parameterized monomorph names,
+implementations and their provenance, the declaration-ordered obligation
+ledger, and designed/generated access mappings. A repr or implementation
+enters its linked lookup and reporting views through one commit operation.
+Access mappings must exist provisionally while generated source and obligation
+diagnostics are checked, so representation declarations snapshot the registry
+and restore it wholesale on failure; failed reprs and implementations cannot
+leak even those provisional names.
+Generated-source nesting and the active `derive()` route remain outside: both
+are transient control flow for the declaration being elaborated, not committed
+representation metadata.
+
+The four global registries are therefore explicit. No caller iterates a
+hash-backed registry to emit terms or diagnostics, and the remaining work can
+target elaboration mechanisms rather than moving session tables out of
+`Elaborator`.
 
 ### 2. Bidirectional core
 

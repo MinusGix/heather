@@ -205,7 +205,7 @@ impl Elaborator {
     /// recursively generated callee `Impl`s, which are part of the same text
     /// and land or fail with it.
     pub fn reprgen(&self, op: &str, repr: &str) -> Result<ReprEmission, String> {
-        if !self.datarepr_by_name.contains_key(repr) {
+        if !self.representations.has_name(repr) {
             return Err(format!("`{repr}` is not a `datarepr` in scope"));
         }
         if self.names.surface_decl(op).is_none() {
@@ -257,8 +257,8 @@ impl Elaborator {
         target: &mut Option<Target>,
     ) -> Result<(), String> {
         let rp = self
-            .datarepr_by_name
-            .get(repr)
+            .representations
+            .named(repr)
             .ok_or_else(|| format!("`{repr}` is not a `datarepr` in scope"))?;
         let f = self
             .names

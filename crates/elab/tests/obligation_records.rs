@@ -204,6 +204,45 @@ fn a_hole_at_a_datarepr_law_reports_the_law() {
     assert!(msg.contains("BinC::inv(BinC::mk_Succ(a0))"), "{msg}");
 }
 
+#[test]
+fn a_failed_datarepr_leaves_no_registry_views() {
+    let mut e = Elaborator::with_prelude().expect("prelude");
+    let failed = BIN_CANON.replace("    Succ_inv := bin_canon_succ,", "    Succ_inv := ?,");
+    assert_eq!(e.check_source(&failed).len(), 1);
+    assert!(
+        e.obligations().is_empty(),
+        "a failed repr records no obligations"
+    );
+
+    let probe = "fn leaked(r: Bin) -> Nat { Repr_BinC::abs(r) }";
+    let errors = e.check_source(probe);
+    assert_eq!(errors.len(), 1);
+    let message = errors[0].render(probe);
+    assert!(
+        !message.contains("generated name"),
+        "a failed repr leaked access state: {message}"
+    );
+}
+
+#[test]
+fn a_failed_impl_leaves_no_registry_views() {
+    let mut e = ok(LIST);
+    let obligation_count = e.obligations().len();
+    let failed = "impl length for ListTok { body := length, refines := ? }";
+    assert_eq!(e.check_source(failed).len(), 1);
+    assert_eq!(e.impl_global("ListTok", "length"), None);
+    assert_eq!(e.obligations().len(), obligation_count);
+
+    let probe = "fn leaked(l: List<Tok>) -> Nat { Impl_ListTok_length::body(l) }";
+    let errors = e.check_source(probe);
+    assert_eq!(errors.len(), 1);
+    let message = errors[0].render(probe);
+    assert!(
+        !message.contains("generated name"),
+        "a failed impl leaked access state: {message}"
+    );
+}
+
 /// Omission keeps meaning *take the default* — the rule the defaults round
 /// inherits (§1.2, FINDING C dissolved). `BIN_REPR` omits `Zero_abs`,
 /// `Zero_inv` and `Succ_inv`, and checks.

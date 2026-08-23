@@ -375,8 +375,17 @@ impl Elaborator {
     /// declaration's qualifier has to name a type in scope and `N` names the
     /// assembled value.
     pub(crate) fn elab_datarepr(&mut self, d: &DatareprDecl) -> R<()> {
+        let before = self.representations.clone();
+        let result = self.elab_datarepr_inner(d);
+        if result.is_err() {
+            self.representations = before;
+        }
+        result
+    }
+
+    fn elab_datarepr_inner(&mut self, d: &DatareprDecl) -> R<()> {
         let mut spec = self.spec_view(&d.spec, d.spec.span)?;
-        if let Some(prev) = self.datareprs.get(&spec.key) {
+        if let Some(prev) = self.representations.for_spec(&spec.key) {
             return err(
                 format!(
                     "`{}` already has a repr, `{}`: v1 is one repr per spec type \
@@ -386,7 +395,7 @@ impl Elaborator {
                 d.span,
             );
         }
-        if self.datarepr_by_name.contains_key(&d.name) {
+        if self.representations.has_name(&d.name) {
             return err(format!("duplicate repr name `{}`", d.name), d.span);
         }
         // The designed access spellings (`docs/repr-access-spellings-design.md`
@@ -417,7 +426,6 @@ impl Elaborator {
             return hole_error(&obs, h);
         }
         self.elab_generated(&src, &owner, d.span, &sp)?;
-        self.obligations.extend(obs);
         let info = DatareprInfo {
             global: d.name.clone(),
             written: spec.spell.clone(),
@@ -425,19 +433,13 @@ impl Elaborator {
             record: record_name(&d.name),
             ctors: Rc::new(std::mem::take(&mut spec.ctors)),
         };
-        self.datareprs.insert(
+        self.representations.commit_repr(
             spec.key.clone(),
-            info.clone(),
+            d.name.clone(),
+            info,
+            spec.monomorph,
+            obs,
         );
-        self.datarepr_by_name.insert(d.name.clone(), info);
-        // The minting site (§1.4 item 2): a parameterized instantiation has no
-        // name today, and this declaration is where it gets one. The consumer
-        // is certgen's rim, which needs a name to build `embed_T`'s — not a
-        // new type: `List<Tok>` is perfectly spellable as a *type*, it just
-        // cannot name a function.
-        if let Some(mono) = spec.monomorph {
-            self.monomorphs.insert(mono, d.name.clone());
-        }
         Ok(())
     }
 
@@ -735,7 +737,7 @@ impl Elaborator {
     pub fn monomorph_name(&self, name: &str, args: &[Ty]) -> Option<&str> {
         let ind = self.lookup_inductive(name)?;
         let argkey = args.iter().filter_map(spell_ty).collect::<Vec<_>>().join(",");
-        self.monomorphs.get(&(ind.tag, argkey)).map(|s| s.as_str())
+        self.representations.monomorph(ind.tag, &argkey)
     }
 }
 
@@ -1937,8 +1939,8 @@ impl Elaborator {
     /// what is left here is the spelling.
     pub(crate) fn impl_schema(&self, op: &str, repr: &str) -> Result<ImplSchema, String> {
         let rp = self
-            .datarepr_by_name
-            .get(repr)
+            .representations
+            .named(repr)
             .ok_or_else(|| format!("`{repr}` is not a `datarepr` in scope"))?;
         let f = self
             .names
@@ -2001,7 +2003,16 @@ impl Elaborator {
     /// about the operation half being its resolved name rather than its
     /// `.code`.
     pub(crate) fn elab_impl(&mut self, d: &heather_syntax::ImplDecl) -> R<()> {
-        let Some(rp) = self.datarepr_by_name.get(&d.repr).cloned() else {
+        let before = self.representations.clone();
+        let result = self.elab_impl_inner(d);
+        if result.is_err() {
+            self.representations = before;
+        }
+        result
+    }
+
+    fn elab_impl_inner(&mut self, d: &heather_syntax::ImplDecl) -> R<()> {
+        let Some(rp) = self.representations.named(&d.repr).cloned() else {
             return err(
                 format!("`{}` is not a `datarepr` in scope", d.repr),
                 d.span,
@@ -2027,7 +2038,7 @@ impl Elaborator {
                 d.span,
             );
         }
-        if self.impls.contains_key(&(d.repr.clone(), d.op.clone())) {
+        if self.representations.has_impl(&d.repr, &d.op) {
             return err(
                 format!("`{}` already has an implementation at `{}`", d.op, d.repr),
                 d.span,
@@ -2266,8 +2277,13 @@ impl Elaborator {
         let global = format!("{}_{}_impl", d.repr, d.op);
         src.push_str(&format!("\nfn {global}() -> {rec} {{ {rec} {{ {} }} }}\n", lit.join(", ")));
         self.elab_generated(&src, &owner, d.span, &sp)?;
-        self.register_impl(&d.repr, &d.op, global, provenance);
-        self.obligations.extend(obs);
+        let provenance = self.impl_provenance.unwrap_or(provenance);
+        self.representations.commit_impl(
+            d.repr.clone(),
+            d.op.clone(),
+            ImplEntry { global, provenance },
+            obs,
+        );
         Ok(())
     }
 
@@ -2309,33 +2325,25 @@ impl Elaborator {
         r
     }
 
-    fn register_impl(&mut self, repr: &str, op: &str, global: String, prov: Provenance) {
-        let provenance = self.impl_provenance.unwrap_or(prov);
-        self.impls.insert(
-            (repr.to_string(), op.to_string()),
-            ImplEntry { global, provenance },
-        );
-    }
-
     /// The `Impl` registered for `op` at repr `rp`, if any — the
     /// "find the `Impl` for `f` at `Rp`" query of §1.4 item 3. The consumers
     /// are the transfer generator and the compiler walk; nothing in the
     /// surface path reads it.
     pub fn impl_global(&self, repr: &str, op: &str) -> Option<&str> {
-        self.impls.get(&(repr.to_string(), op.to_string())).map(|e| e.global.as_str())
+        self.representations.impl_entry(repr, op).map(|entry| entry.global.as_str())
     }
 
     /// How that `Impl` came to be (§4.4). For humans and tools only — the Q2
     /// verdict's "distinguish provenance on inspection"; no certificate and no
     /// resolution consults it.
     pub fn impl_provenance_of(&self, repr: &str, op: &str) -> Option<Provenance> {
-        self.impls.get(&(repr.to_string(), op.to_string())).map(|e| e.provenance)
+        self.representations.impl_entry(repr, op).map(|entry| entry.provenance)
     }
 
     /// Every obligation of every obligation-bearing declaration elaborated so
     /// far, in declaration order — `heather obligations` (§6).
     pub fn obligations(&self) -> &[Obligation] {
-        &self.obligations
+        self.representations.obligations()
     }
 }
 

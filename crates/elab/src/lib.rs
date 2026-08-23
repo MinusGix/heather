@@ -96,6 +96,7 @@ mod lint;
 pub use lint::{Lint, LintProfile};
 mod quote;
 pub mod resolve;
+mod representations;
 mod slots;
 mod traits;
 mod types;
@@ -108,6 +109,7 @@ use names::{
     miss_msg, qkey, split_qual, GlobalInfo, GlobalRegistration, ImportSpec,
     NameKind, NameRes, Names, Scope, DEFAULT_MODULE,
 };
+use representations::Representations;
 use slots::{Ingredient, Slot};
 use traits::Traits;
 use types::Types;
@@ -726,34 +728,12 @@ pub struct Elaborator {
     /// Committed classes, instances, designations, and derived dictionaries
     /// (`traits.rs`).
     traits: Traits,
-    /// One repr per spec type, keyed per `docs/datarepr-design.md` §4: the
-    /// spec inductive's *elaborated declaration* identity plus the elaborated
-    /// arguments of the instantiation. Declaration keying and not nominal
-    /// keying, so that editing `S` invalidates its repr instead of leaving a
-    /// stale basis that still resolves (§4's failure mode).
-    datareprs: HashMap<datarepr::DatareprKey, datarepr::DatareprInfo>,
-    /// The monomorph names a `datarepr` minted for parameterized
-    /// instantiations (§1.4 item 2), keyed on (declaration tag, argument
-    /// spelling). `List<Tok>` is spellable as a *type* and unspellable as a
-    /// *name*; this table is what lets a generator name a function about it.
-    monomorphs: HashMap<(u32, String), String>,
-    /// Reprs by their own name, for `impl f for Rp` to find `Rp`'s carrier
-    /// and the namespace its `abs`/`inv` live in.
-    datarepr_by_name: HashMap<String, datarepr::DatareprInfo>,
-    /// One `Impl` per (repr, operation) — the open, per-operation registry of
-    /// design §1.2, keyed per §4. The entry carries how it got there, which is
-    /// recorded for humans and tools and read by no certificate
-    /// (docs/obligation-records-design.md §4.4).
-    impls: HashMap<(String, String), datarepr::ImplEntry>,
-    /// Every obligation every obligation-bearing declaration stated, in
-    /// declaration order — what `heather obligations` lists
-    /// (docs/obligation-records-design.md §6). Recorded only on success, which
-    /// under inline-first is the only outcome that leaves anything behind.
-    obligations: Vec<datarepr::Obligation>,
-    /// The designed access spellings of every repr and `Impl` declared so far,
-    /// and the generated-mode depth that exempts an emission from them
-    /// (`access.rs`, `docs/repr-access-spellings-design.md`).
-    access: access::AccessTable,
+    /// Committed representation declarations, implementations, obligations,
+    /// monomorph names, and designed access paths (`representations.rs`).
+    representations: Representations,
+    /// Nesting depth of generated-source elaboration. This is execution mode,
+    /// not representation registry state; zero means user source.
+    generated_depth: usize,
     /// Set while a `:= derive()` route elaborates the transfer generator's
     /// emission, so that the `impl` block *inside* that emission records
     /// `Derived` rather than what its own clauses look like. `None` everywhere
@@ -932,12 +912,8 @@ impl Elaborator {
             names: Names::new(DEFAULT_MODULE),
             types: Types::default(),
             traits: Traits::default(),
-            datareprs: HashMap::new(),
-            monomorphs: HashMap::new(),
-            datarepr_by_name: HashMap::new(),
-            impls: HashMap::new(),
-            obligations: Vec::new(),
-            access: access::AccessTable::default(),
+            representations: Representations::default(),
+            generated_depth: 0,
             impl_provenance: None,
             attempt: DeclAttempt::default(),
             instance_scope: Vec::new(),
@@ -1354,7 +1330,7 @@ impl Elaborator {
         // span against the user's source would point a caret at an unrelated
         // line. Generated code is the generator's problem, so it is dropped
         // here rather than filtered by whoever renders.
-        if self.access.in_generated() {
+        if self.in_generated() {
             return;
         }
         let mut warnings = self.warnings.borrow_mut();
@@ -1392,7 +1368,7 @@ impl Elaborator {
             {
                 continue;
             }
-            if !self.access.in_generated() {
+            if !self.in_generated() {
                 self.warnings.borrow_mut().push(Warning {
                     lint: finding.lint,
                     msg: finding.msg,
