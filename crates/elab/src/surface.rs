@@ -1,0 +1,548 @@
+// Surface-expression traversals and argument-slot lowering.
+
+// -- anonymous argument-slot sections --------------------------------------
+
+/// A resource bound, not a semantic arity limit. Indexed lowering allocates
+/// one binder through the largest position, so a source-controlled giant
+/// subscript must not become an allocation attack.
+const MAX_ARGUMENT_SLOTS: usize = 256;
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum SlotStyle {
+    Unindexed,
+    Indexed,
+}
+
+struct SlotProfile {
+    style: SlotStyle,
+    count: usize,
+}
+
+/// Visit slots free at this expression's abstraction boundary. An explicit
+/// lambda — including a parser-lowered sequent binder — starts a new boundary.
+fn for_each_free_slot(e: &Expr, f: &mut impl FnMut(Option<u64>, Span)) {
+    let mut go = |e: &Expr| for_each_free_slot(e, f);
+    match &e.kind {
+        ExprKind::ArgSlot(index) => f(*index, e.span),
+        ExprKind::App {
+            head, args, named, ..
+        } => {
+            go(head);
+            args.iter()
+                .chain(named.iter().map(|a| &a.expr))
+                .for_each(go);
+        }
+        ExprKind::TyApp { head, .. } => go(head),
+        ExprKind::Lam { .. } => {}
+        ExprKind::VecLit(xs) => xs.iter().for_each(go),
+        ExprKind::Eq(a, b) => {
+            go(a);
+            go(b);
+        }
+        ExprKind::Match {
+            scrut,
+            motive,
+            arms,
+            ..
+        } => {
+            go(scrut);
+            if let Some(motive) = motive {
+                go(motive);
+            }
+            arms.iter().for_each(|a| go(&a.body));
+        }
+        ExprKind::MatchCode { scrut, arms, .. } => {
+            go(scrut);
+            arms.iter().for_each(|a| go(&a.body));
+        }
+        ExprKind::Dot {
+            recv, args, named, ..
+        } => {
+            go(recv);
+            args.iter()
+                .flatten()
+                .chain(named.iter().map(|a| &a.expr))
+                .for_each(go);
+        }
+        ExprKind::Index { recv, idx } => {
+            go(recv);
+            go(idx);
+        }
+        ExprKind::RecordLit { fields, .. } => fields.iter().for_each(|x| go(&x.expr)),
+        ExprKind::Block(b) => {
+            for stmt in &b.stmts {
+                match stmt {
+                    Stmt::Let { expr, .. }
+                    | Stmt::LetRecord { expr, .. }
+                    | Stmt::LetCode { expr, .. } => go(expr),
+                }
+            }
+            go(&b.result);
+            b.ons.iter().for_each(|o| go(&o.expr));
+        }
+        ExprKind::Quote(x) | ExprKind::Splice(x) => go(x),
+        ExprKind::J {
+            proof,
+            motive,
+            case,
+            ..
+        } => {
+            go(proof);
+            go(motive);
+            go(case);
+        }
+        ExprKind::Var(_)
+        | ExprKind::OpSymbol { .. }
+        | ExprKind::Univ { .. }
+        | ExprKind::Num(_)
+        | ExprKind::TyLit(_)
+        | ExprKind::Refl
+        | ExprKind::AutoRefl
+        | ExprKind::Hole(_) => {}
+    }
+}
+
+fn has_free_slots(e: &Expr) -> bool {
+    let mut found = false;
+    for_each_free_slot(e, &mut |_, _| found = true);
+    found
+}
+
+fn slot_profile(e: &Expr, excluded: &[Span]) -> R<Option<SlotProfile>> {
+    let mut style: Option<(SlotStyle, Span)> = None;
+    let mut unindexed = 0usize;
+    let mut max_index = None::<u64>;
+    let mut conflict = None;
+    for_each_free_slot(e, &mut |index, span| {
+        if excluded.contains(&span) {
+            return;
+        }
+        let here = if index.is_some() {
+            SlotStyle::Indexed
+        } else {
+            SlotStyle::Unindexed
+        };
+        match style {
+            None => style = Some((here, span)),
+            Some((was, first)) if was != here && conflict.is_none() => {
+                conflict = Some((first, span));
+            }
+            _ => {}
+        }
+        match index {
+            Some(i) => max_index = Some(max_index.map_or(i, |m| m.max(i))),
+            None => unindexed += 1,
+        }
+    });
+    if let Some((first, second)) = conflict {
+        return err(
+            "indexed and unindexed argument slots cannot mix in one section: use \
+             either `f(·, ·)` or explicit zero-based slots such as `f(·₀, ·₂)`",
+            first.join(second),
+        );
+    }
+    let Some((style, span)) = style else {
+        return Ok(None);
+    };
+    let count = match style {
+        SlotStyle::Unindexed => unindexed,
+        SlotStyle::Indexed => {
+            let max = max_index.expect("indexed style has an index");
+            usize::try_from(max)
+                .ok()
+                .and_then(|n| n.checked_add(1))
+                .ok_or_else(|| ElabError::Elab {
+                    msg: "argument-slot index is too large".into(),
+                    span,
+                })?
+        }
+    };
+    if count > MAX_ARGUMENT_SLOTS {
+        return err(
+            format!(
+                "an argument-slot section may introduce at most {MAX_ARGUMENT_SLOTS} arguments"
+            ),
+            span,
+        );
+    }
+    Ok(Some(SlotProfile { style, count }))
+}
+
+/// Replace the free slots selected by [`slot_profile`] with impossible source
+/// names for the generated lambda binders. Mirrors [`for_each_free_slot`].
+fn replace_free_slots(e: &mut Expr, style: SlotStyle, next: &mut usize, excluded: &[Span]) {
+    let mut go = |e: &mut Expr| replace_free_slots(e, style, next, excluded);
+    match &mut e.kind {
+        ExprKind::ArgSlot(index) => {
+            if excluded.contains(&e.span) {
+                return;
+            }
+            let i = match style {
+                SlotStyle::Unindexed => {
+                    let i = *next;
+                    *next += 1;
+                    i
+                }
+                SlotStyle::Indexed => usize::try_from(index.expect("profile checked style"))
+                    .expect("profile checked index range"),
+            };
+            e.kind = ExprKind::Var(format!("#argument_slot{i}"));
+        }
+        ExprKind::App {
+            head, args, named, ..
+        } => {
+            go(head);
+            args.iter_mut()
+                .chain(named.iter_mut().map(|a| &mut a.expr))
+                .for_each(go);
+        }
+        ExprKind::TyApp { head, .. } => go(head),
+        ExprKind::Lam { .. } => {}
+        ExprKind::VecLit(xs) => xs.iter_mut().for_each(go),
+        ExprKind::Eq(a, b) => {
+            go(a);
+            go(b);
+        }
+        ExprKind::Match {
+            scrut,
+            motive,
+            arms,
+            ..
+        } => {
+            go(scrut);
+            if let Some(motive) = motive {
+                go(motive);
+            }
+            arms.iter_mut().for_each(|a| go(&mut a.body));
+        }
+        ExprKind::MatchCode { scrut, arms, .. } => {
+            go(scrut);
+            arms.iter_mut().for_each(|a| go(&mut a.body));
+        }
+        ExprKind::Dot {
+            recv, args, named, ..
+        } => {
+            go(recv);
+            args.iter_mut()
+                .flatten()
+                .chain(named.iter_mut().map(|a| &mut a.expr))
+                .for_each(go);
+        }
+        ExprKind::Index { recv, idx } => {
+            go(recv);
+            go(idx);
+        }
+        ExprKind::RecordLit { fields, .. } => fields.iter_mut().for_each(|x| go(&mut x.expr)),
+        ExprKind::Block(b) => {
+            for stmt in &mut b.stmts {
+                match stmt {
+                    Stmt::Let { expr, .. }
+                    | Stmt::LetRecord { expr, .. }
+                    | Stmt::LetCode { expr, .. } => go(expr),
+                }
+            }
+            go(&mut b.result);
+            b.ons.iter_mut().for_each(|o| go(&mut o.expr));
+        }
+        ExprKind::Quote(x) | ExprKind::Splice(x) => go(x),
+        ExprKind::J {
+            proof,
+            motive,
+            case,
+            ..
+        } => {
+            go(proof);
+            go(motive);
+            go(case);
+        }
+        ExprKind::Var(_)
+        | ExprKind::OpSymbol { .. }
+        | ExprKind::Univ { .. }
+        | ExprKind::Num(_)
+        | ExprKind::TyLit(_)
+        | ExprKind::Refl
+        | ExprKind::AutoRefl
+        | ExprKind::Hole(_) => {}
+    }
+}
+
+fn lower_argument_slots(e: &Expr, profile: SlotProfile, excluded: &[Span]) -> Expr {
+    let mut body = e.clone();
+    replace_free_slots(&mut body, profile.style, &mut 0, excluded);
+    let binders = (0..profile.count)
+        .map(|i| LamBinder {
+            name: format!("#argument_slot{i}"),
+            ty: None,
+            implicit: false,
+            span: e.span,
+        })
+        .collect();
+    Expr {
+        kind: ExprKind::Lam {
+            binders,
+            body: Box::new(body),
+        },
+        span: e.span,
+    }
+}
+
+/// The walkers of [`count_holes`], at module level so that the pattern
+/// compiler can ask the same question of one expression
+/// (`docs/nested-match-patterns-design.md` §10.3): a body it would copy
+/// into several arms must not contain a hole, since a hole is keyed by its
+/// context and cannot be elaborated twice.
+mod count_holes_impl {
+    use super::*;
+
+    pub(super) fn ty(t: &Ty, n: &mut u32) {
+        match &t.kind {
+            TyKind::Nat | TyKind::Univ { .. } => {}
+            TyKind::Eq(a, b) => {
+                expr(a, n);
+                expr(b, n);
+            }
+            TyKind::OfExpr(e) => expr(e, n),
+            TyKind::Named { args, .. } => args.iter().for_each(|a| ty(a, n)),
+            TyKind::Fn { dom, cod, .. } => {
+                ty(dom, n);
+                ty(cod, n);
+            }
+            TyKind::Vec { elem, len } => {
+                ty(elem, n);
+                expr(len, n);
+            }
+            TyKind::Fin(len) => expr(len, n),
+            TyKind::Ctx | TyKind::TyCode { .. } | TyKind::Splice { .. } => {}
+            TyKind::Code { ty: t, .. } => ty(t, n),
+        }
+    }
+    pub(super) fn expr(e: &Expr, n: &mut u32) {
+        match &e.kind {
+            ExprKind::Hole(_) => *n += 1,
+            ExprKind::Eq(a, b) => {
+                expr(a, n);
+                expr(b, n);
+            }
+            ExprKind::TyLit(t) => ty(t, n),
+            ExprKind::Var(_)
+            | ExprKind::OpSymbol { .. }
+            | ExprKind::Num(_)
+            | ExprKind::ArgSlot(_)
+            | ExprKind::Refl
+            | ExprKind::Univ { .. } => {}
+            // The empty block's speculative `refl` may fail, and then it
+            // raises a goal — so it must be counted. The pre-count is
+            // documented as an upper bound, so counting one that turns out to
+            // be discharged by `refl` costs a reserved-but-unused slot and
+            // nothing else (issues/auto-refl-empty-block.md).
+            ExprKind::AutoRefl => *n += 1,
+            ExprKind::App {
+                head, args, named, ..
+            } => {
+                expr(head, n);
+                args.iter().for_each(|a| expr(a, n));
+                // A `?hole` inside a named argument is still a hole, and the
+                // pre-count is the one thing the goal mechanism cannot survive
+                // under-counting.
+                named.iter().for_each(|a| expr(&a.expr, n));
+            }
+            // A type argument can contain a hole (`f<a = ?p>(…)`), and the
+            // pre-count is the one thing the goal mechanism cannot survive
+            // under-counting (see this function's doc comment).
+            ExprKind::TyApp { head, args } => {
+                expr(head, n);
+                args.iter().for_each(|t| ty(t, n));
+            }
+            ExprKind::Lam { binders, body } => {
+                binders
+                    .iter()
+                    .filter_map(|b| b.ty.as_ref())
+                    .for_each(|t| ty(t, n));
+                expr(body, n);
+            }
+            ExprKind::VecLit(elems) => elems.iter().for_each(|x| expr(x, n)),
+            ExprKind::Index { recv, idx } => {
+                expr(recv, n);
+                expr(idx, n);
+            }
+            // The receiver counts whether or not `.f` turns out to be a
+            // projection: the method fallback re-elaborates it as an argument,
+            // and a hole is keyed by span, so one syntactic hole stays one
+            // goal either way.
+            ExprKind::Dot {
+                recv, args, named, ..
+            } => {
+                expr(recv, n);
+                args.iter().flatten().for_each(|a| expr(a, n));
+                named.iter().for_each(|a| expr(&a.expr, n));
+            }
+            ExprKind::RecordLit { tyargs, fields, .. } => {
+                tyargs.iter().for_each(|t| ty(t, n));
+                fields.iter().for_each(|f| expr(&f.expr, n));
+            }
+            ExprKind::Match {
+                scrut,
+                motive,
+                arms,
+                eqbind: _,
+                form: _,
+                generated: _,
+            } => {
+                expr(scrut, n);
+                if let Some(m) = motive {
+                    expr(m, n);
+                }
+                arms.iter().for_each(|a| expr(&a.body, n));
+            }
+            ExprKind::MatchCode {
+                scrut,
+                motive,
+                arms,
+            } => {
+                expr(scrut, n);
+                ty(motive, n);
+                arms.iter().for_each(|a| expr(&a.body, n));
+            }
+            ExprKind::J {
+                proof,
+                motive,
+                case,
+                ..
+            } => {
+                expr(proof, n);
+                expr(motive, n);
+                expr(case, n);
+            }
+            ExprKind::Quote(e) | ExprKind::Splice(e) => expr(e, n),
+            // A block's statements **and** its result: a hole in either is a
+            // goal in the declaration's list, and an under-count is
+            // `internal: more goals than the pre-count reserved`, not a wrong
+            // answer (this function's doc comment).
+            ExprKind::Block(b) => {
+                stmts(&b.stmts, n);
+                expr(&b.result, n);
+            }
+        }
+    }
+    /// A block's statements, shared by the declaration body's own walk below
+    /// so a nested block cannot be walked differently from a top-level one.
+    pub(super) fn stmts(ss: &[Stmt], n: &mut u32) {
+        for s in ss {
+            match s {
+                Stmt::Let { ty: t, expr: e, .. } => {
+                    if let Some(t) = t {
+                        ty(t, n);
+                    }
+                    expr(e, n);
+                }
+                Stmt::LetRecord { expr: e, .. } => expr(e, n),
+                Stmt::LetCode { expr: e, .. } => expr(e, n),
+            }
+        }
+    }
+}
+
+/// Every `?` in one expression — see [`count_holes_impl`].
+pub(crate) fn count_holes_expr(e: &Expr) -> u32 {
+    let mut n = 0;
+    count_holes_impl::expr(e, &mut n);
+    n
+}
+
+/// Syntactic upper bound on the goals a declaration can raise: every `?` in
+/// it. An *upper* bound, not the count — `calc` clones sub-expressions into
+/// its `@trans` spine (parser.rs) and the elaborator visits some expressions
+/// twice — which is why goals are numbered in creation order and the unused
+/// slots are padded. Under-counting is impossible: nothing invents a hole.
+fn count_holes(decl: &Decl) -> u32 {
+    use count_holes_impl::{expr, stmts, ty};
+    let mut n = 0;
+    for p in &decl.params {
+        ty(&p.ty, &mut n);
+    }
+    ty(&decl.result, &mut n);
+    stmts(&decl.body.stmts, &mut n);
+    expr(&decl.body.result, &mut n);
+    for on in &decl.body.ons {
+        if let OnTarget::Stmt(t) = &on.target {
+            ty(t, &mut n);
+        }
+        expr(&on.expr, &mut n);
+    }
+    n
+}
+
+/// Strengthen a discharge out of the goal world. An `on` right-hand side is
+/// elaborated *with* the goal prefix in scope — it has to be, since the goal's
+/// context and statement live there — but a `GlobalSubst` payload is scoped in
+/// the source Ψ, below the prefix (subst.rs). Applying a `g`-entry σ whose
+/// payloads are never reached renumbers every committed global back down by
+/// `g`. "Never reached" is exactly the `frozen` restriction: no new hole, so
+/// no goal occurrence survives in the payload to meet a dummy.
+fn strengthen_global(t: &Term, g: u32) -> Term {
+    if g == 0 {
+        return t.clone();
+    }
+    let entries = (0..g)
+        .map(|_| GlobalEntry::Tm(Rc::new(Term::Zero)))
+        .collect();
+    t.apply_global(&GlobalSubst { entries })
+}
+
+/// Pre-order walk over an expression's subexpressions.
+///
+/// Total over the forms a *self-call* can hide in, which is what its one
+/// caller ([`Elaborator::cov_depth`]) needs; a form missed here can only
+/// under-count a depth, and an under-counted depth is the refusal that stood
+/// before course-of-values existed, never a wrong term.
+fn walk_expr(e: &Expr, f: &mut impl FnMut(&Expr)) {
+    f(e);
+    let mut go = |e: &Expr| walk_expr(e, f);
+    match &e.kind {
+        ExprKind::App {
+            head, args, named, ..
+        } => {
+            go(head);
+            args.iter()
+                .chain(named.iter().map(|a| &a.expr))
+                .for_each(go);
+        }
+        ExprKind::TyApp { head, .. } => go(head),
+        ExprKind::Lam { body, .. } => go(body),
+        ExprKind::VecLit(xs) => xs.iter().for_each(go),
+        ExprKind::Eq(a, b) => {
+            go(a);
+            go(b);
+        }
+        ExprKind::Match { scrut, arms, .. } | ExprKind::MatchCode { scrut, arms, .. } => {
+            go(scrut);
+            arms.iter().for_each(|a| go(&a.body));
+        }
+        ExprKind::Dot {
+            recv, args, named, ..
+        } => {
+            go(recv);
+            args.iter()
+                .flatten()
+                .chain(named.iter().map(|a| &a.expr))
+                .for_each(go);
+        }
+        ExprKind::Index { recv, idx } => {
+            go(recv);
+            go(idx);
+        }
+        ExprKind::RecordLit { fields, .. } => fields.iter().for_each(|x| go(&x.expr)),
+        ExprKind::Block(b) => {
+            for s in &b.stmts {
+                match s {
+                    Stmt::Let { expr, .. } | Stmt::LetRecord { expr, .. } => go(expr),
+                    _ => {}
+                }
+            }
+            go(&b.result);
+            b.ons.iter().for_each(|o| go(&o.expr));
+        }
+        ExprKind::Quote(x) | ExprKind::Splice(x) => go(x),
+        _ => {}
+    }
+}

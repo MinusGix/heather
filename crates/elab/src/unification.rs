@@ -1,0 +1,571 @@
+// Implicit-application scratch state and structural unification.
+
+/// A deferred explicit argument (docs/unifier-completeness-design.md §3.1):
+/// **not** a first-class constraint in a queue on the [`Elaborator`], but a
+/// record local to one [`Elaborator::apply_implicit`] activation. The scratch
+/// world is the constraint store — the domain's meta occurrences *are* the
+/// "blocked on" set, and [`zonked`] decides readiness exactly. Cross-call
+/// postponement is deliberately not built: a nested call elaborates to
+/// completion (or errors) inside its own world before the outer loop
+/// continues, so there is nothing an inner call could leave pending that the
+/// outer call could later unblock.
+struct ResolveOb {
+    /// The scratch slot standing for the argument.
+    slot: usize,
+    /// The parameter's declared domain, scratch world — the goal, once every
+    /// meta it mentions is solved (docs/traits-layer2-design.md §4).
+    dom: Type,
+    dom_level: Level,
+    /// Parameter index, for the hint and the message.
+    param: usize,
+}
+
+struct DeferredArg<'a> {
+    /// The withheld slot: the stand-in meta holding the argument's spine
+    /// position.
+    slot: usize,
+    /// The unelaborated surface argument.
+    expr: &'a Expr,
+    /// Its declared domain, scratch world.
+    dom: Type,
+    dom_level: Level,
+    /// Parameter index, for the goal-name hint and the §7.2 message.
+    param: usize,
+    /// Deferred by the **result-only implicit** rule
+    /// (docs/congruence-in-inference-position-design.md §2), rather than by
+    /// one of the syntactic checking-only forms. Such an argument *can* be
+    /// elaborated in inference mode — it just fails at its own implicit — so
+    /// an obligation that never becomes ready is inferred in place rather
+    /// than reported as blocked. That is what makes the rule strictly
+    /// additive: every program that elaborated before it existed takes the
+    /// old path and gets the old message.
+    fallback_infer: bool,
+}
+
+/// Per-slot state of one [`Elaborator::apply_implicit`] scratch world
+/// (docs/unifier-completeness-design.md §3). Three states, because two
+/// different "unsolved" populations exist and must not be conflated:
+///
+/// - `Unsolved` — nothing known yet; `unify_ty`/`unify_tm` may record a
+///   solution here (and only here).
+/// - `Withheld` — unsolved *and untouchable*: a deferred argument's stand-in
+///   meta, or a flex-applied meta during the LGG's harvest. [`zonked`] treats
+///   it as unsolved (its occurrences must keep blocking dependent domains),
+///   while the unifiers refuse to write into it. This replaces the old
+///   plant-a-`Term::Zero` placeholder, which made a withheld slot *look*
+///   solved to `zonked` — a lie once deferred arguments joined the world.
+/// - `Solved(t)` — `t` is a committed-world payload, the convention the
+///   unifiers' strengthened subjects already follow.
+///
+/// Discharge requires `Solved` everywhere; anything else is a per-slot
+/// diagnostic (design §7).
+#[derive(Clone)]
+enum Sol {
+    Unsolved,
+    Withheld,
+    Solved(Rc<Term>),
+}
+
+impl Sol {
+    fn solved(&self) -> Option<&Rc<Term>> {
+        match self {
+            Sol::Solved(t) => Some(t),
+            _ => None,
+        }
+    }
+}
+
+/// Best-effort structural unification driving implicit-argument solutions
+/// (issues/elab-stage2-metas.md). `pat` is a parameter domain in the scratch
+/// world (metavariables at Ψ-indices `< n`); `subj` is an argument's inferred
+/// type. Solving is deliberately incomplete: this mirrors the fragment of
+/// `conv.rs` the Nat suite exercises (`Id`/`Nat` congruence), records a
+/// solution whenever a meta meets a rigid subterm, and otherwise makes no
+/// claim — an unsolved meta is reported by the caller, a *wrong* solution is
+/// caught by the kernel's re-check. It never fails: it only ever *learns*.
+/// Congruence through every type former the lowerings build, plus the one
+/// rule that makes polymorphism inferable:
+///
+/// > `El ?A ≟ T` solves `?A := ⌜T⌝` (docs/surface-polymorphism.md §4).
+///
+/// `d` counts the binders crossed since `gamma` — a `Σ`'s second component, a
+/// `Π`'s codomain, a `Wf`'s arity. A meta's solution is scoped in `gamma`, so
+/// a candidate found under `d` binders is accepted only if it survives
+/// [`strengthen_ty`]. Without that check `f(g)` at `g : (x : Nat) -> Vec(A;
+/// x)` would happily solve a meta to a term mentioning `x`, which is
+/// ill-scoped where it lands (the kernel would reject it, but a rejection is
+/// a worse message than a refusal to guess).
+fn unify_ty(gamma: &LocalCtx, pat: &Type, subj: &Type, n: u32, d: u32, sols: &mut [Sol]) {
+    // The `El` rule. Checked before the congruence so that `El ?A` meeting a
+    // *decoded* `El t` still solves rather than descending into the code.
+    if let Type::El { tm, .. } = pat
+        && let Term::GlobalTm { var, subst } = &**tm
+        && var.0 < n
+    {
+        // The Miller-pattern guard (docs/unifier-completeness-design.md §6):
+        // the delayed substitution must be exactly the weakened identity
+        // `embed(Γ, d)` — the one condition under which taking the
+        // strengthened subject verbatim *is* the pattern inversion. Every
+        // reachable renaming today is of this class (established structurally
+        // and by an instrumented full run, design §6.1); anything else — a
+        // non-variable payload, and the today-unreachable permuted or
+        // dropping renamings — is declined, which learn-only always permits.
+        if matches!(sols[var.0 as usize], Sol::Unsolved)
+            && *subst == embed(gamma, d)
+            && let Some(s) = strengthen_ty(gamma, subj, d)
+            && let Some(c) = code::code_of(&s)
+        {
+            sols[var.0 as usize] = Sol::Solved(Rc::new(c));
+        }
+        return;
+    }
+    // The subject may be `El` of a canonical code rather than the former
+    // itself — a record field read off a type that arrived through a
+    // `Val -> Type` *value* is exactly that (docs/record-type-values.md §4).
+    // `decoded` is the same context-free strip the structural readers of
+    // `inductive.rs` use: canonical codes only, never a neutral, so this walk
+    // still does no δ. Below the pattern's own `El` rule, which must keep
+    // seeing an undecoded subject so `El ?A` solves whole.
+    let subj = &*inductive::decoded(subj);
+    match (pat, subj) {
+        (
+            Type::Id {
+                ty: t1,
+                lhs: a1,
+                rhs: b1,
+                ..
+            },
+            Type::Id {
+                ty: t2,
+                lhs: a2,
+                rhs: b2,
+                ..
+            },
+        ) => {
+            unify_ty(gamma, t1, t2, n, d, sols);
+            unify_tm(gamma, a1, a2, n, d, sols);
+            unify_tm(gamma, b1, b2, n, d, sols);
+        }
+        // `Π`/`Σ`/`W` bind in their second component; `+` does not.
+        (
+            Type::Pi {
+                dom: a1, cod: b1, ..
+            },
+            Type::Pi {
+                dom: a2, cod: b2, ..
+            },
+        )
+        | (
+            Type::Sigma {
+                fst: a1, snd: b1, ..
+            },
+            Type::Sigma {
+                fst: a2, snd: b2, ..
+            },
+        )
+        | (
+            Type::W {
+                shape: a1, pos: b1, ..
+            },
+            Type::W {
+                shape: a2, pos: b2, ..
+            },
+        ) => {
+            unify_ty(gamma, a1, a2, n, d, sols);
+            unify_ty(gamma, b1, b2, n, d + 1, sols);
+        }
+        (
+            Type::Sum {
+                lhs: a1, rhs: b1, ..
+            },
+            Type::Sum {
+                lhs: a2, rhs: b2, ..
+            },
+        ) => {
+            unify_ty(gamma, a1, a2, n, d, sols);
+            unify_ty(gamma, b1, b2, n, d, sols);
+        }
+        (
+            Type::Vec {
+                elem: e1, len: k1, ..
+            },
+            Type::Vec {
+                elem: e2, len: k2, ..
+            },
+        ) => {
+            unify_ty(gamma, e1, e2, n, d, sols);
+            unify_tm(gamma, k1, k2, n, d, sols);
+        }
+        // A `Wf`'s arity is scoped under its shape binder — the same +1 a `Σ`
+        // tail gets, and the reason this is not a flat structural walk.
+        (
+            Type::Wf {
+                shape: s1,
+                arity: a1,
+                ..
+            },
+            Type::Wf {
+                shape: s2,
+                arity: a2,
+                ..
+            },
+        ) => {
+            unify_ty(gamma, s1, s2, n, d, sols);
+            unify_tm(gamma, a1, a2, n, d + 1, sols);
+        }
+        (Type::Fin { len: k1 }, Type::Fin { len: k2 }) => {
+            unify_tm(gamma, k1, k2, n, d, sols);
+        }
+        (Type::El { tm: t1, .. }, Type::El { tm: t2, .. }) => {
+            unify_tm(gamma, t1, t2, n, d, sols);
+        }
+        // `Nat`/`Unit`/`Empty`/`Ty` and every mismatched pairing: nothing to
+        // learn. A mismatch is not an error here — this function only ever
+        // learns, and the kernel is what decides whether the call typechecks.
+        _ => {}
+    }
+}
+
+/// Term-level companion of [`unify_ty`]. When `pat` is an unsolved
+/// metavariable under the weakened identity renaming `embed(Γ, d)` (the
+/// Miller pattern condition, in the one class reachable today — design §6),
+/// record the strengthened subject; otherwise recurse through matching heads
+/// toward nested metas. For an occurrence `?m^{embed(Γ,d)}` and a subject `s`
+/// with `strengthen_tm(Γ, s, d) = Some(s₀)`, the recorded `?m := s₀`
+/// satisfies `s₀[embed(Γ,d)] = s₀.shift(d) = s` — the verbatim take plus the
+/// strengthening that already runs *is* the inversion for this class.
+/// How many arguments a spine applies. Used only by the equal-arity rule.
+fn spine_len(mut t: &Term) -> usize {
+    let mut k = 0;
+    while let Term::App { fun, .. } = t {
+        k += 1;
+        t = fun;
+    }
+    k
+}
+
+/// Is this spine headed by a **committed** global — one outside this call's
+/// scratch world? A meta head at either end is what the guard exists for.
+fn rigid_global_head(mut t: &Term, n: u32) -> bool {
+    while let Term::App { fun, .. } = t {
+        t = fun;
+    }
+    matches!(t, Term::GlobalTm { var, .. } if var.0 >= n)
+}
+
+fn unify_tm(gamma: &LocalCtx, pat: &Term, subj: &Term, n: u32, d: u32, sols: &mut [Sol]) {
+    if let Term::GlobalTm { var, subst } = pat
+        && var.0 < n
+    {
+        if matches!(sols[var.0 as usize], Sol::Unsolved)
+            && *subst == embed(gamma, d)
+            && let Some(s) = strengthen_tm(gamma, subj, d)
+        {
+            sols[var.0 as usize] = Sol::Solved(Rc::new(s));
+        }
+        return;
+    }
+    match (pat, subj) {
+        (Term::Succ(a), Term::Succ(b)) => unify_tm(gamma, a, b, n, d, sols),
+        (
+            Term::App {
+                fun: f1, arg: a1, ..
+            },
+            Term::App {
+                fun: f2, arg: a2, ..
+            },
+        ) => {
+            // The flex-head guard (design §5.4): a pattern application whose
+            // spine head is one of this call's not-yet-solved metas learns
+            // nothing here. The `App` congruence would otherwise "solve"
+            // `?f(?a) ≟ add(a, a)` by peeling one argument — `?f := add(a)` —
+            // satisfying this occurrence and contradicting the next. Flex
+            // heads applied to arbitrary terms are outside the Miller
+            // fragment; the only rule trusted for them is the LGG
+            // ([`Elaborator::solve_from_expected`]), and this guard is what
+            // keeps first-order guessing out of the position. Committed
+            // globals sit at `var.0 >= n`, so `D#fam`-headed family spines
+            // (the type-arg-inference-through-index walker) are untouched.
+            let mut head = pat;
+            while let Term::App { fun, .. } = head {
+                head = fun;
+            }
+            //
+            // The **equal-arity flex-rigid rule**
+            // (docs/operation-indexed-classes-design.md §4.2): where the
+            // subject's own spine is headed by a *committed global* and has
+            // exactly as many arguments, the head is determined and the
+            // decomposition is the inversion — `?op(x, u) ≟ add(x, 0)` gives
+            // `?op := add` with `u ≟ 0` learned beside it, which is how a
+            // law's corollary pins its operation. It dodges the guard's
+            // recorded counterexample precisely: `?f(?a) ≟ add(a, a)` has
+            // spine lengths 1 against 2, and the dangerous partial-application
+            // peel *is* the unequal-length case, which stays refused. Same
+            // license as every rule here — learn-only, the kernel judges.
+            if let Term::GlobalTm { var, .. } = head
+                && var.0 < n
+                && sols[var.0 as usize].solved().is_none()
+                && !(spine_len(pat) == spine_len(subj) && rigid_global_head(subj, n))
+            {
+                return;
+            }
+            unify_tm(gamma, f1, f2, n, d, sols);
+            unify_tm(gamma, a1, a2, n, d, sols);
+        }
+        // A declared-index family's type is `El` of an **index recursion
+        // choosing among quoted codes** — `elimN(M; z «Σ…+…»; s «…»; i)`
+        // with the payload type a variable *inside* the code literals
+        // (docs/inductive-indexed-lowering.md), so learning `A` from
+        // `t: W3<A>(n)` means walking the eliminator and the code
+        // constructors (issues/type-arg-inference-through-index.md). Same
+        // license as every case here: learn-only, kernel judges. Depths are
+        // each variant's own binding structure — motive and Π/Σ/W second
+        // components bind one, a step binds two, `Wf`'s arity binds one,
+        // `Vec`/`Fin`/`Id`/`sEq`/`+` bind nothing.
+        (
+            Term::ElimNat {
+                motive: m1,
+                base: b1,
+                step: s1,
+                scrut: t1,
+                ..
+            },
+            Term::ElimNat {
+                motive: m2,
+                base: b2,
+                step: s2,
+                scrut: t2,
+                ..
+            },
+        ) => {
+            unify_ty(gamma, m1, m2, n, d + 1, sols);
+            unify_tm(gamma, b1, b2, n, d, sols);
+            unify_tm(gamma, s1, s2, n, d + 2, sols);
+            unify_tm(gamma, t1, t2, n, d, sols);
+        }
+        (
+            Term::TmPi {
+                dom: a1, cod: b1, ..
+            },
+            Term::TmPi {
+                dom: a2, cod: b2, ..
+            },
+        )
+        | (
+            Term::TmSigma {
+                fst: a1, snd: b1, ..
+            },
+            Term::TmSigma {
+                fst: a2, snd: b2, ..
+            },
+        )
+        | (
+            Term::TmW {
+                shape: a1, pos: b1, ..
+            },
+            Term::TmW {
+                shape: a2, pos: b2, ..
+            },
+        )
+        | (
+            Term::TmWf {
+                shape: a1,
+                arity: b1,
+                ..
+            },
+            Term::TmWf {
+                shape: a2,
+                arity: b2,
+                ..
+            },
+        ) => {
+            unify_tm(gamma, a1, a2, n, d, sols);
+            unify_tm(gamma, b1, b2, n, d + 1, sols);
+        }
+        (
+            Term::TmSum {
+                lhs: a1, rhs: b1, ..
+            },
+            Term::TmSum {
+                lhs: a2, rhs: b2, ..
+            },
+        ) => {
+            unify_tm(gamma, a1, a2, n, d, sols);
+            unify_tm(gamma, b1, b2, n, d, sols);
+        }
+        (
+            Term::TmVec {
+                elem: e1, len: k1, ..
+            },
+            Term::TmVec {
+                elem: e2, len: k2, ..
+            },
+        ) => {
+            unify_tm(gamma, e1, e2, n, d, sols);
+            unify_tm(gamma, k1, k2, n, d, sols);
+        }
+        (Term::TmFin { len: k1 }, Term::TmFin { len: k2 }) => {
+            unify_tm(gamma, k1, k2, n, d, sols);
+        }
+        (
+            Term::TmId {
+                ty: t1,
+                lhs: a1,
+                rhs: b1,
+                ..
+            },
+            Term::TmId {
+                ty: t2,
+                lhs: a2,
+                rhs: b2,
+                ..
+            },
+        )
+        | (
+            Term::TmSEq {
+                ty: t1,
+                lhs: a1,
+                rhs: b1,
+                ..
+            },
+            Term::TmSEq {
+                ty: t2,
+                lhs: a2,
+                rhs: b2,
+                ..
+            },
+        ) => {
+            unify_tm(gamma, t1, t2, n, d, sols);
+            unify_tm(gamma, a1, a2, n, d, sols);
+            unify_tm(gamma, b1, b2, n, d, sols);
+        }
+        _ => {}
+    }
+}
+
+/// A parameter domain with the meta block substituted away — `Some` exactly
+/// when every metavariable it mentions is already solved, in which case the
+/// result is scoped in the *real* Ψ (a `GlobalSubst` over the `n` metas also
+/// renumbers the committed globals back down, as `strengthen_global` records).
+///
+/// "Mentions no unsolved meta" is decided by substituting **two different**
+/// markers for the unsolved ones and comparing: an unsolved occurrence makes
+/// the two results differ, and nothing else can. Same device as
+/// [`strengthen_tm`] — an exact test that needs no traversal of `Term`/`Type`
+/// and so cannot drift out of sync with the syntax.
+fn zonked(dom: &Type, n: u32, sols: &[Sol]) -> Option<Type> {
+    let with = |marker: Term| {
+        let entries = (0..n)
+            .map(|k| {
+                GlobalEntry::Tm(match sols[(n - 1 - k) as usize].solved() {
+                    Some(t) => Rc::clone(t),
+                    // `Unsolved` and `Withheld` alike: a withheld slot must
+                    // keep *blocking* — a deferred argument's occurrences in a
+                    // dependent domain are exactly what its retry waits on.
+                    None => Rc::new(marker.clone()),
+                })
+            })
+            .collect();
+        dom.apply_global(&GlobalSubst { entries })
+    };
+    let a = with(Term::Zero);
+    (a == with(Term::Succ(Rc::new(Term::Zero)))).then_some(a)
+}
+
+/// [`zonked`] for a *term* — same two-marker test, same guarantee: `Some`
+/// exactly when every metavariable the term mentions is already solved, in
+/// which case the result is scoped in the committed Ψ. Used by the congruence
+/// rule, whose witnesses are compared with `==` and so must be real terms.
+fn zonked_tm(t: &Term, n: u32, sols: &[Sol]) -> Option<Term> {
+    let with = |marker: Term| {
+        let entries = (0..n)
+            .map(|k| {
+                GlobalEntry::Tm(match sols[(n - 1 - k) as usize].solved() {
+                    Some(t) => Rc::clone(t),
+                    None => Rc::new(marker.clone()),
+                })
+            })
+            .collect();
+        t.apply_global(&GlobalSubst { entries })
+    };
+    let a = with(Term::Zero);
+    (a == with(Term::Succ(Rc::new(Term::Zero)))).then_some(a)
+}
+
+/// The substitution that drops the innermost `d` binders off `gamma`,
+/// sending each to a marker. Used only by [`strengthen_ty`]/[`strengthen_tm`].
+///
+/// `terms` is indexed outermost-first over the *source* context `Γ, d`
+/// (length `m + d`), so entry `k` is the image of `Var(m + d - 1 - k)`: the
+/// first `m` are `Γ`'s own variables lowered by `d`, and the last `d` are the
+/// binders being dropped.
+fn drop_binders(gamma: &LocalCtx, d: u32) -> LocalSubst {
+    let m = gamma.entries.len() as u32;
+    let tail = match gamma.base {
+        CtxBase::Nil => SubstTail::Empty {
+            len: m,
+            base: CtxBase::Nil,
+        },
+        CtxBase::Var(g) => SubstTail::Wk { len: m, ctx_var: g },
+    };
+    let terms = (0..m)
+        .map(|k| Rc::new(Term::Var(LocalVar(m - 1 - k))))
+        .chain((0..d).map(|_| Rc::new(Term::Zero)))
+        .collect();
+    LocalSubst { tail, terms }
+}
+
+/// Is `t`, scoped in `Γ` plus `d` further binders, in fact scoped in `Γ`
+/// alone — and if so, what is it there?
+///
+/// Drop the `d` binders to a marker, then shift back by `d` and compare. A
+/// term that never mentioned them is restored exactly; one that did keeps a
+/// marker where a variable was, and the comparison fails. That is the whole
+/// test: no new traversal of `Term`/`Type` is needed, and it cannot drift out
+/// of sync with the syntax the way a hand-written occurrence check would.
+fn strengthen_tm(gamma: &LocalCtx, t: &Term, d: u32) -> Option<Term> {
+    if d == 0 {
+        return Some(t.clone());
+    }
+    let s = t.apply_local(&drop_binders(gamma, d));
+    (s.shift_local(d) == *t).then_some(s)
+}
+
+/// Does `t`, scoped in a closed context of `m` binders, mention the binder at
+/// de Bruijn index `d`?
+///
+/// The same trick [`strengthen_tm`] uses, narrowed to **one** binder: map
+/// index `d` to a marker and every other index to itself, and ask whether the
+/// term changed. Precise where `strengthen_ty` is conservative (that one drops
+/// a whole *suffix* of binders, so it cannot tell "mentions `f`" from
+/// "mentions `a`"), and still no new traversal of the syntax.
+///
+/// `Term::Zero` is a sound marker: the only position it can land in is one
+/// that held `Var(d)`, so the substituted term equals the original exactly
+/// when `d` never occurred.
+fn mentions_binder(t: &Type, m: u32, d: u32) -> bool {
+    let tail = SubstTail::Empty {
+        len: m,
+        base: CtxBase::Nil,
+    };
+    let terms = (0..m)
+        .map(|k| {
+            let idx = m - 1 - k;
+            Rc::new(if idx == d {
+                Term::Zero
+            } else {
+                Term::Var(LocalVar(idx))
+            })
+        })
+        .collect();
+    t.apply_local(&LocalSubst { tail, terms }) != *t
+}
+
+/// [`strengthen_tm`] at the type level.
+fn strengthen_ty(gamma: &LocalCtx, t: &Type, d: u32) -> Option<Type> {
+    if d == 0 {
+        return Some(t.clone());
+    }
+    let s = t.apply_local(&drop_binders(gamma, d));
+    (s.shift_local(d) == *t).then_some(s)
+}
