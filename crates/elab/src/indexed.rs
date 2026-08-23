@@ -35,7 +35,6 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use heather_kernel::conv::conv_term;
 use heather_kernel::layer::Layer;
 use heather_kernel::level::Level;
 use heather_kernel::term::{nth, LocalCtx, LocalSubst, LocalVar, Term, Type};
@@ -386,16 +385,9 @@ impl Elaborator {
             return Some(r);
         }
         let Type::El { level, tm } = ty else { return None };
-        let mut tm = Rc::clone(tm);
-        // Bounded by the elaborator's own fuel: peeling `F(e)` is δ then β,
-        // and a chain of wrappers is two steps each.
-        for _ in 0..self.fuel.min(1024) {
-            let next = heather_kernel::reduce::step_term_delta(
-                &tm,
-                &cx.gamma,
-                heather_kernel::reduce::Defs::transparent(&self.delta_psi),
-            )?;
-            tm = Rc::new(next);
+        let oracle = self.semantic_oracle();
+        for tm in oracle.term_reducts(&cx.gamma, tm, 1024) {
+            let tm = Rc::new(tm);
             let cand = Type::El { level: level.clone(), tm: Rc::clone(&tm) };
             if let Some(r) = self.indexed_of(&cand) {
                 return Some(r);
@@ -892,15 +884,13 @@ impl Elaborator {
         // must convert with the family's. This is the whole index check — the
         // value itself stores nothing index-shaped.
         let (target, ity, ilvl) = self.indexed_ctor_index(cx, ind, i, args, span)?;
-        if conv_term(
-            self.psi(),
+        if self.committed_oracle().convert_term(
             &cx.gamma,
             Layer::Prog,
             &target,
             &fam.idx,
             &ity,
             &ilvl,
-            self.fuel,
         )
         .is_err()
         {

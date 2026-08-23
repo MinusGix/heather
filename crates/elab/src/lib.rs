@@ -57,12 +57,9 @@ use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::rc::Rc;
 
-use heather_kernel::conv::{conv_term, conv_type};
+use heather_kernel::conv::ConvError;
 use heather_kernel::layer::Layer;
 use heather_kernel::level::Level;
-use heather_kernel::reduce::{
-    step_type_delta, whnf_term, whnf_term_delta, whnf_type_delta, Defs,
-};
 use heather_kernel::subst::GlobalSubst;
 use heather_kernel::term::{
     nth, CtxBase, GlobalBinding, GlobalCtx, GlobalVar, LocalCtx, LocalSubst, LocalVar,
@@ -88,6 +85,7 @@ mod display;
 pub use datarepr::{Obligation, Provenance};
 pub mod reprgen;
 mod names;
+mod oracle;
 mod patterns;
 mod forded;
 mod gendefs;
@@ -146,7 +144,7 @@ pub const PRELUDE_MODULE: &str = names::PRELUDE_MODULE;
 pub use diagnostics::{
     ElabError, GoalReport, GoalSource, IndexedRoute, LintFix, Warning,
 };
-use diagnostics::{DISPLAY_DECODE_STEPS, STUCK_CANDIDATES};
+use diagnostics::STUCK_CANDIDATES;
 
 impl From<ParseError> for ElabError {
     fn from(e: ParseError) -> Self {
@@ -2049,7 +2047,7 @@ impl Elaborator {
                 // many sites). `P` is elaborated per goal, in that goal's own
                 // context, since that is where its statement lives.
                 OnTarget::Stmt(pat) => {
-                    let psi = self.goal_psi();
+                    let oracle = self.goal_oracle();
                     let candidates = self.attempt.goal_arena.outstanding();
                     let mut matched = Vec::new();
                     for (k, cx, ty, lvl) in candidates {
@@ -2059,7 +2057,8 @@ impl Elaborator {
                         let Ok((pat_ty, pat_lvl)) = self.elab_ty(&cx, pat) else {
                             continue;
                         };
-                        if conv_type(&psi, &cx.gamma, Layer::Prog, &pat_ty, &ty, &pat_lvl, self.fuel)
+                        if oracle
+                            .convert_type(&cx.gamma, Layer::Prog, &pat_ty, &ty, &pat_lvl)
                             .is_ok()
                         {
                             matched.push((k, cx, ty, lvl));
@@ -2677,15 +2676,13 @@ impl Elaborator {
             // it.
             ExprKind::AutoRefl => {
                 if let Ok(Type::Id { level, ty, lhs, rhs }) = self.whnf(cx, expected, e.span)
-                    && conv_term(
-                        &self.goal_psi(),
+                    && self.goal_oracle().convert_term(
                         &cx.gamma,
                         Layer::Prog,
                         &lhs,
                         &rhs,
                         &ty,
                         &level,
-                        self.fuel,
                     )
                     .is_ok()
                 {
@@ -3032,9 +3029,10 @@ impl Elaborator {
         lvl: &Level,
         span: Span,
     ) {
-        let psi = self.goal_psi();
-        if conv_type(&psi, &cx.gamma, Layer::Prog, got, expected, lvl, self.fuel)
-            != Err(heather_kernel::conv::ConvError::NotConvertible)
+        if self
+            .goal_oracle()
+            .convert_type(&cx.gamma, Layer::Prog, got, expected, lvl)
+            != Err(ConvError::NotConvertible)
         {
             return;
         }
@@ -5552,20 +5550,18 @@ impl Elaborator {
         let mut budget = STUCK_CANDIDATES;
         stuck_in_ty(exposed, &mut cands, &mut budget);
         cands.dedup();
-        let psi = self.goal_psi();
+        let oracle = self.goal_oracle();
         let hits: Vec<Term> = cands
             .into_iter()
             .filter(|c| {
                 c == scrut_t
-                    || conv_term(
-                        &psi,
+                    || oracle.convert_term(
                         &cx.gamma,
                         Layer::Prog,
                         c,
                         scrut_t,
                         scrut_ty,
                         scrut_lvl,
-                        self.fuel,
                     )
                     .is_ok()
             })
@@ -8521,7 +8517,9 @@ impl Elaborator {
         // field's expected length arrives as a projection out of the label
         // (docs/container-fields.md §3.4), which computes to a numeral rather
         // than being one.
-        let len = whnf_term(len, &cx.gamma, self.fuel)
+        let len = self
+            .semantic_oracle()
+            .whnf_term_opaque(&cx.gamma, len)
             .map_err(|_| ElabError::Elab {
                 msg: "ran out of fuel reducing a vector literal's expected length".into(),
                 span,
@@ -8641,8 +8639,9 @@ impl Elaborator {
         }
         if let Some(ann) = &b.ty {
             let (ann_t, _) = self.elab_ty(cx, ann)?;
-            let psi = self.goal_psi();
-            if conv_type(&psi, &cx.gamma, Layer::Prog, &ann_t, &dom, &dom_level, self.fuel)
+            if self
+                .goal_oracle()
+                .convert_type(&cx.gamma, Layer::Prog, &ann_t, &dom, &dom_level)
                 .is_err()
             {
                 return err(
@@ -9688,11 +9687,31 @@ impl Elaborator {
 
     // -- kernel oracle ------------------------------------------------------
 
+    /// Semantic operations in the expression world's δ context, including
+    /// any dynamic meta binders currently in scope.
+    fn semantic_oracle(&self) -> oracle::SemanticOracle {
+        oracle::SemanticOracle::with_dynamic(
+            &self.delta_psi,
+            &self.meta_pushed.borrow(),
+            self.fuel,
+        )
+    }
+
+    /// Semantic operations in the real goal-statement world.
+    fn goal_oracle(&self) -> oracle::SemanticOracle {
+        oracle::SemanticOracle::in_world(self.goal_psi(), self.fuel)
+    }
+
+    /// Semantic operations over committed Ψ, with no declaration padding.
+    fn committed_oracle(&self) -> oracle::SemanticOracle {
+        oracle::SemanticOracle::in_world(self.psi.clone(), self.fuel)
+    }
+
     /// [`Self::whnf`] for a term: δ against Ψ included, so a definition
     /// unfolds. Used where a *shape* has to be read off a computed term.
     pub(crate) fn whnf_tm(&self, cx: &Cx, t: &Term, span: Span) -> R<Rc<Term>> {
-        let psi = self.oracle_psi();
-        whnf_term_delta(t, &cx.gamma, Defs::transparent(&psi), self.fuel)
+        self.semantic_oracle()
+            .whnf_term(&cx.gamma, t)
             .map(Rc::new)
             .map_err(|_| ElabError::Elab { msg: "out of fuel reducing a term".into(), span })
     }
@@ -9714,78 +9733,9 @@ impl Elaborator {
         if let Some(inline) = self.unspell_here(ty) {
             return Ok(inline);
         }
-        let psi = self.oracle_psi();
-        whnf_type_delta(ty, &cx.gamma, Defs::transparent(&psi), self.fuel)
+        self.semantic_oracle()
+            .whnf_type(&cx.gamma, ty)
             .map_err(|_| ElabError::Elab { msg: "out of fuel reducing a type".into(), span })
-    }
-
-    /// A type as a human should read it (docs/surface-type-display-design.md
-    /// §3). Three stages, in this order:
-    ///
-    /// 1. **The reader.** Expose just enough of a lazy `El(code)` to give its
-    ///    decoded head. Where a head exists it is the more informative answer —
-    ///    `fn N(v: Nat) -> Type { Nat }` at `N(v)` prints `Nat`, which is what
-    ///    the type *is*.
-    /// 2. **The speller** ([`Self::spell_type`]), on the decoded head when
-    ///    there was one and on the original otherwise. This is what a `fn … ->
-    ///    Type` relation at open arguments needs (no head exists, irreducibly)
-    ///    and what an `Id` between two calls needs (never `El`-headed, so
-    ///    stage 1 declines in its first line).
-    /// 3. The original, budget-bounded `Debug`.
-    ///
-    /// Keep all of this separate from checking: a hostile or merely long
-    /// definition chain degrades the message instead of consuming elaboration
-    /// fuel or changing the type.
-    fn display_type(&self, cx: &Cx, ty: &Type) -> String {
-        let decoded = self.display_decode(cx, ty);
-        let target = decoded.as_ref().unwrap_or(ty);
-        match self.spell_type(cx, target) {
-            Some(s) => s,
-            None => dress_true(&format!("{target:?}")),
-        }
-    }
-
-    /// [`Self::display_type`] for a message that *claims* something about the
-    /// type rather than merely showing it: `None` unless the whole type spelled
-    /// as surface. Same two stages, no raw fallback.
-    fn display_type_clean(&self, cx: &Cx, ty: &Type) -> Option<String> {
-        let decoded = self.display_decode(cx, ty);
-        self.spell_type_clean(cx, decoded.as_ref().unwrap_or(ty))
-    }
-
-    /// Stage 1 of [`Self::display_type`]: the [[goal-display-decodes]] reader,
-    /// unchanged. `None` when `ty` is not `El`-headed, when a step gets stuck,
-    /// or when the budget runs out — the three cases where there is no head to
-    /// have.
-    fn display_decode(&self, cx: &Cx, ty: &Type) -> Option<Type> {
-        if !matches!(ty, Type::El { .. }) {
-            return None;
-        }
-        let psi = self.oracle_psi();
-        let defs = Defs::transparent(&psi);
-        let mut head = ty.clone();
-        for _ in 0..DISPLAY_DECODE_STEPS {
-            head = step_type_delta(&head, &cx.gamma, defs)?;
-            if !matches!(head, Type::El { .. }) {
-                return Some(head);
-            }
-        }
-        None
-    }
-
-    /// [`Self::delta_psi`], padded with the meta binders currently in scope
-    /// (docs/in-language-map-design.md §5): during a `meta fn`'s elaboration
-    /// the innermost `GlobalVar`s are its `Ctx`/`TyCode`/letbox binders, and
-    /// δ-consultation with an unpadded Ψ would resolve them to the wrong
-    /// bindings. Identical to `delta_psi` everywhere else.
-    fn oracle_psi(&self) -> GlobalCtx {
-        let mp = self.meta_pushed.borrow();
-        if mp.is_empty() {
-            return self.delta_psi.clone();
-        }
-        let mut bindings = (*self.delta_psi.bindings).clone();
-        bindings.extend(mp.iter().cloned());
-        GlobalCtx::new(bindings)
     }
 
     /// Rebuild [`Self::delta_psi`]. Called wherever Ψ or `goal_base` moves.

@@ -230,6 +230,25 @@ and the kernel oracle. The arena supplies cloned goal obligations and accepts
 solutions without exposing storage. When `ExprElab` is introduced, its goal
 effect should be the arena's allocation capability, not `DeclAttempt`.
 
+The kernel oracle seam is established. `SemanticOracle` owns one completed
+global world and its fuel policy, and is the only ordinary stage-1 path that
+assembles transparent reduction or conversion calls. (The certificate
+interpreter retains its specialized cached evaluator.) Its constructors make
+the three worlds explicit: committed Ψ, the cached δ-padded expression world
+plus dynamic meta binders, and the goal arena's real statement world. It
+offers transparent and deliberately opaque WHNF, conversion, and bounded
+reduct streams; indexed, forded, quotation, resolution, goal, and expression
+consumers no longer pass `delta_psi`, dynamic binders, and `fuel` separately.
+
+Diagnostic reading is a distinct capability with a distinct contract.
+`DiagnosticOracle` can only expose an `El`-headed type within a caller-owned
+step budget, returning `None` for a stuck term or exhaustion. `display.rs` now
+owns that decoder/speller/fallback sequence. Semantic reduction reports
+exhaustion to elaboration; diagnostic decoding silently degrades; surface
+spelling performs no reduction. Kernel typing remains direct at the gate and
+at explicit proposal checks—it is judgment, not normalization, and folding it
+into this oracle would erase a useful boundary.
+
 Move `elab_ty`, `elab_check*`, and `elab_infer*` behind an `ExprElab`
 view borrowing the immutable session and mutable declaration attempt. Split
 application, match lowering, and member/operator dispatch into collaborators
@@ -257,21 +276,16 @@ would be less honest than the large file we have now.
 
 The remaining routes are not equally ready. Take them in dependency order:
 
-1. **Kernel oracle.** Separate semantic normalization (δ context, dynamic meta
-   binders, and fuel) from best-effort diagnostic decoding and respelling.
-   These have different failure policies and must not become one generic
-   service. This is a smaller, lower-risk prerequisite for expression and
-   matching collaborators.
-2. **`ExprElab` in stages.** Introduce an explicit view before moving behavior,
+1. **`ExprElab` in stages.** Introduce an explicit view before moving behavior,
    then migrate type elaboration and the simple checking/inference arms. It
    must borrow named session queries, declaration effects, normalization, and
    local context individually; it must never store `&Elaborator` or gain commit
    authority.
-3. **Match elaboration.** Move convoy, motive, recursive-guard, Nat/Fin, and
+2. **Match elaboration.** Move convoy, motive, recursive-guard, Nat/Fin, and
    indexed/forded matching only after `ExprElab` exists. Its speculative goal
    rollback and binder-sensitive lowering make this a high-risk consumer, not
    a good place to discover the view.
-4. **Dispatch last.** Named arguments, member lookup, class dispatch, indexed
+3. **Dispatch last.** Named arguments, member lookup, class dispatch, indexed
    dictionaries, operator carriers, designations, and compatibility fallback
    are several policies, not one `dispatch.rs`. Split pure argument
    normalization first, then carrier/callable queries, operator policy, dot

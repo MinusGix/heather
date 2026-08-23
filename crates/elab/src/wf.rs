@@ -319,12 +319,7 @@ impl Elaborator {
             ty: Rc::new(tel.d_ty.clone()),
             level: tel.level.clone(),
         });
-        match heather_kernel::reduce::whnf_type_delta(
-            &tel.motive,
-            &gamma,
-            heather_kernel::reduce::Defs::transparent(&self.delta_psi),
-            self.fuel,
-        ) {
+        match self.semantic_oracle().whnf_type(&gamma, &tel.motive) {
             Ok(t) => std::borrow::Cow::Owned(t),
             Err(_) => std::borrow::Cow::Borrowed(&tel.motive),
         }

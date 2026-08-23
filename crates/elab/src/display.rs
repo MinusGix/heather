@@ -33,7 +33,8 @@ use heather_kernel::term::{
 };
 
 use crate::inductive::nat_value;
-use crate::{show_level, Cx, Elaborator};
+use crate::diagnostics::DISPLAY_DECODE_STEPS;
+use crate::{dress_true, show_level, Cx, Elaborator};
 
 /// Nodes the walk may visit. Generous next to `fmt.rs`'s 512, because a
 /// spelled node is a handful of characters where a raw one is a record.
@@ -47,6 +48,30 @@ const SPELL_FALLBACKS: u32 = 4;
 const RAW_NODE_CHARS: usize = 96;
 
 impl Elaborator {
+    /// A type as a human should read it: best-effort decoded head, surface
+    /// spelling, then the bounded kernel form.
+    pub(crate) fn display_type(&self, cx: &Cx, ty: &Type) -> String {
+        let decoded = self.display_decode(cx, ty);
+        let target = decoded.as_ref().unwrap_or(ty);
+        match self.spell_type(cx, target) {
+            Some(spelled) => spelled,
+            None => dress_true(&format!("{target:?}")),
+        }
+    }
+
+    /// [`Self::display_type`] for a message that makes a claim about a type.
+    /// It declines unless the complete result has a surface spelling.
+    pub(crate) fn display_type_clean(&self, cx: &Cx, ty: &Type) -> Option<String> {
+        let decoded = self.display_decode(cx, ty);
+        self.spell_type_clean(cx, decoded.as_ref().unwrap_or(ty))
+    }
+
+    fn display_decode(&self, cx: &Cx, ty: &Type) -> Option<Type> {
+        self.semantic_oracle()
+            .diagnostics(DISPLAY_DECODE_STEPS)
+            .decode_type(&cx.gamma, ty)
+    }
+
     /// Spell `ty` as surface, or decline. Declining means "the caller should
     /// print the raw bounded form", not "there was an error".
     pub(crate) fn spell_type(&self, cx: &Cx, ty: &Type) -> Option<String> {

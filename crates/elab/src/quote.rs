@@ -20,7 +20,6 @@ use std::rc::Rc;
 use heather_kernel::term::{
     CtxBase, GlobalBinding, GlobalVar, LocalCtx, LocalSubst, SubstTail, Term, Type,
 };
-use heather_kernel::conv;
 use heather_kernel::rec;
 use heather_kernel::layer::Layer;
 use heather_kernel::level::Level;
@@ -448,7 +447,8 @@ impl Elaborator {
             );
         }
         let empty = LocalCtx::nil();
-        conv::conv_type(&self.oracle_psi(), &empty, Layer::Meta, stmt, &want, lvl, self.fuel)
+        self.semantic_oracle()
+            .convert_type(&empty, Layer::Meta, stmt, &want, lvl)
             .map_err(|_| ElabError::Elab {
                 msg: format!(
                     "this `meta fn` does not have `{}`'s signature. The slot's is\n  \
@@ -601,15 +601,8 @@ impl Elaborator {
                 decl.result.span,
             );
         }
-        conv::conv_type(
-            &self.oracle_psi(),
-            ctx,
-            Layer::Prog,
-            got,
-            &want,
-            level,
-            self.fuel,
-        )
+        self.semantic_oracle()
+            .convert_type(ctx, Layer::Prog, got, &want, level)
         .map_err(|_| ElabError::Elab {
             msg: format!(
                 "this template does not have `{}`'s type. The slot's payload is\n  \
@@ -901,9 +894,9 @@ impl Elaborator {
 
         // Type the payload once, then apply the arguments down its Π spine,
         // annotating each `App` from the peeled domain.
-        let psi = self.oracle_psi();
+        let oracle = self.semantic_oracle();
         let (mut ty, _) = typing::infer_term(
-            &psi,
+            oracle.world(),
             0,
             heather_kernel::layer::Layer::Prog,
             &cx.gamma,

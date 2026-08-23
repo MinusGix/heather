@@ -19,7 +19,6 @@
 
 use std::rc::Rc;
 
-use heather_kernel::conv::conv_type;
 use heather_kernel::layer::Layer;
 use heather_kernel::level::Level;
 use heather_kernel::term::{
@@ -401,9 +400,10 @@ impl Elaborator {
 
     /// Is `ty` the goal type, here? Conversion, in the use site's context.
     fn conv_here(&self, cx: &Cx, ty: &Type, goal: &Type, lvl: &Level) -> bool {
-        let psi = self.goal_psi();
         stats::time_kernel(|| {
-            conv_type(&psi, &cx.gamma, Layer::Prog, ty, goal, lvl, self.fuel).is_ok()
+            self.goal_oracle()
+                .convert_type(&cx.gamma, Layer::Prog, ty, goal, lvl)
+                .is_ok()
         })
     }
 
@@ -465,8 +465,9 @@ impl Elaborator {
         }
         let mut pending = self.pending_derived.borrow_mut();
         if pending.iter().any(|(t, l, _)| {
-            let psi = self.goal_psi();
-            conv_type(&psi, &LocalCtx::nil(), Layer::Prog, t, goal, l, self.fuel).is_ok()
+            self.goal_oracle()
+                .convert_type(&LocalCtx::nil(), Layer::Prog, t, goal, l)
+                .is_ok()
         }) {
             return;
         }

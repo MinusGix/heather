@@ -22,7 +22,6 @@
 use std::borrow::Cow;
 use std::rc::Rc;
 
-use heather_kernel::conv::conv_type;
 use heather_kernel::layer::Layer;
 use heather_kernel::level::Level;
 use heather_kernel::term::{LocalCtx, LocalSubst, LocalVar, Term, Type};
@@ -4094,7 +4093,9 @@ impl Elaborator {
             // Layer p: conversion is only defined at computing layers, and
             // this comparison is the elaborator's own, not part of an emitted
             // term.
-            if conv_type(self.psi(), &cx.gamma, Layer::Prog, &lty, &rty, &llvl, self.fuel)
+            if self
+                .committed_oracle()
+                .convert_type(&cx.gamma, Layer::Prog, &lty, &rty, &llvl)
                 .is_err()
             {
                 return err(

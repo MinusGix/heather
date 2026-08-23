@@ -27,6 +27,7 @@
 
 use std::rc::Rc;
 
+#[cfg(test)]
 use heather_kernel::conv::conv_term;
 use heather_kernel::layer::Layer;
 use heather_kernel::level::Level;
@@ -339,14 +340,9 @@ impl Elaborator {
             return Some(r);
         }
         let Type::El { level, tm } = ty else { return None };
-        let mut tm = Rc::clone(tm);
-        for _ in 0..self.fuel.min(1024) {
-            let next = heather_kernel::reduce::step_term_delta(
-                &tm,
-                &cx.gamma,
-                heather_kernel::reduce::Defs::transparent(&self.delta_psi),
-            )?;
-            tm = Rc::new(next);
+        let oracle = self.semantic_oracle();
+        for tm in oracle.term_reducts(&cx.gamma, tm, 1024) {
+            let tm = Rc::new(tm);
             let cand = Type::El { level: level.clone(), tm: Rc::clone(&tm) };
             if let Some(r) = self.forded_of(cx, &cand) {
                 return Some(r);
@@ -792,15 +788,13 @@ impl Elaborator {
             let _scope = self.use_inductive_scope(ind);
             self.elab_check(&acx, self.res_expr(ind, i), &fam.ity, &fam.ilvl)?
         };
-        if conv_term(
-            self.psi(),
+        if self.committed_oracle().convert_term(
             &cx.gamma,
             Layer::Prog,
             &target,
             &fam.idx,
             &fam.ity,
             &fam.ilvl,
-            self.fuel,
         )
         .is_err()
         {
