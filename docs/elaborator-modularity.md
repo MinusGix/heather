@@ -43,7 +43,7 @@ been made explicit. Doing that first would replace one giant implicit API with
 hundreds of `pub(crate)` fields and methods, which is movement rather than
 modularity.
 
-## Next extractions
+## Extraction progress
 
 ### 1. Declaration transaction
 
@@ -54,17 +54,22 @@ the retry/cleanup lifecycle in one place. Warnings remain an output accumulator
 across declarations, and pending derived instances remain item-level because
 inductive and representation declarations use them too.
 
-The second phase should make `Elaborator::elab_decl`:
+The second phase is also present. `check_decl` now returns an inert
+`PendingDecl`; `commit_decl` is the only operation that installs its Ψ
+binding or updates the global, name, member, and stored-surface registries.
+The ordinary path is consequently:
 
 1. create an attempt;
 2. elaborate into a proposed binding;
 3. solve goals and run the kernel gate;
 4. commit the binding and attempt emissions.
 
-This is the highest-value change because rollback rules become structural
-instead of a list of fields that every new feature must remember.
+Rollback is now structural: no fallible operation occurs after committed state
+starts changing.
 
-### 2. Global registries
+## Next extractions
+
+### 1. Global registries
 
 Group the lookup-only state by invariant, not merely by feature:
 
@@ -77,7 +82,7 @@ Group the lookup-only state by invariant, not merely by feature:
 Each registry should expose deterministic lookup and explicit commit methods.
 No caller should iterate a hash-backed registry to emit terms or diagnostics.
 
-### 3. Bidirectional core
+### 2. Bidirectional core
 
 Move `elab_ty`, `elab_check*`, and `elab_infer*` behind an `ExprElab`
 view borrowing the immutable session and mutable declaration attempt. Split

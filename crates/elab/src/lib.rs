@@ -704,6 +704,20 @@ struct GlobalInfo {
     params: Rc<Vec<ParamMeta>>,
 }
 
+/// A kernel-checked ordinary declaration which has not entered the session.
+///
+/// Construction is the entire fallible half of declaration elaboration.
+/// Committing one only assigns its absolute Ψ position and updates the lookup
+/// registries; it performs no elaboration and cannot fail.
+struct PendingDecl {
+    name: String,
+    key: String,
+    binding: GlobalBinding,
+    params: Rc<Vec<ParamMeta>>,
+    member_base: Option<String>,
+    surface: Decl,
+}
+
 /// `Clone` is deliberate and cheap: every field is a `HashMap` of `Rc`s or a
 /// small `Vec`, so cloning a prelude'd elaborator costs microseconds where
 /// [`Self::with_prelude`] costs milliseconds. The frontend benchmark suite
@@ -1734,7 +1748,7 @@ impl Elaborator {
         let r = loop {
             self.attempt.prepare();
             self.pending_derived.borrow_mut().clear();
-            let r = self.elab_decl_inner(decl, reserved);
+            let r = self.check_decl(decl, reserved);
             let requested = self.attempt.requested_goal_base.replace(0);
             if requested <= reserved {
                 break r;
@@ -1749,35 +1763,57 @@ impl Elaborator {
         };
         self.attempt.finish();
         self.refresh_delta_psi();
-        if r.is_ok() {
-            for used in self.attempt.op_fallback_uses.borrow_mut().drain(..) {
-                self.emit_lint(
-                    Lint::OperatorFallback,
-                    format!(
-                        "`{}` has no designation at `{}` ({}), so this notation resolved through the compatibility fallback `{}`; install or import `designation {} at {} := {}` to make the meaning explicit",
-                        used.symbol,
-                        used.carrier,
-                        used.from,
-                        used.fallback,
-                        used.symbol,
-                        used.carrier,
-                        used.fallback,
-                    ),
-                    used.span,
-                );
+        match r {
+            Ok(pending) => {
+                self.commit_decl(pending);
+                for used in self.attempt.op_fallback_uses.borrow_mut().drain(..) {
+                    self.emit_lint(
+                        Lint::OperatorFallback,
+                        format!(
+                            "`{}` has no designation at `{}` ({}), so this notation resolved through the compatibility fallback `{}`; install or import `designation {} at {} := {}` to make the meaning explicit",
+                            used.symbol,
+                            used.carrier,
+                            used.from,
+                            used.fallback,
+                            used.symbol,
+                            used.carrier,
+                            used.fallback,
+                        ),
+                        used.span,
+                    );
+                }
+                Ok(())
             }
-        } else {
-            self.attempt.op_fallback_uses.borrow_mut().clear();
+            Err(error) => {
+                self.attempt.op_fallback_uses.borrow_mut().clear();
+                Err(error)
+            }
         }
-        // The surface signature, kept for the declaration forms that have to
-        // *restate* it: `impl f for Rp` computes `f`'s refinement obligation
-        // by rewriting `f`'s own parameter and result types
-        // (docs/datarepr-design.md §1.2). Nothing in the ordinary path reads
-        // this table.
-        if r.is_ok() {
-            self.decls.insert(decl.name.clone(), decl.clone());
+    }
+
+    /// The sole commit point for a checked ordinary declaration.
+    ///
+    /// Every operation here is infallible. In particular, no declaration can
+    /// become visible to later source unless `check_decl` returned a complete
+    /// value after the kernel gate.
+    fn commit_decl(&mut self, pending: PendingDecl) {
+        let PendingDecl {
+            name,
+            key,
+            binding,
+            params,
+            member_base,
+            surface,
+        } = pending;
+        let abs = self.psi.bindings.len() as u32;
+        self.psi.push(binding);
+        self.globals.insert(key, GlobalInfo { abs, params });
+        self.add_name(&name, NameKind::Global);
+        if let Some(base) = member_base {
+            self.member_bases.insert(base);
         }
-        r
+        self.decls.insert(name, surface);
+        self.refresh_delta_psi();
     }
 
     /// The binders available in an instance's **head**, for declaration-time
@@ -1786,7 +1822,7 @@ impl Elaborator {
     /// endpoints' type and use its resolved declaration as their registry key
     /// (issues/decidable-equation-carrier.md).
     ///
-    /// This is the prefix of [`Self::elab_decl_inner`]'s telescope builder:
+    /// This is the prefix of [`Self::check_decl`]'s telescope builder:
     /// type parameters, then value parameters. `requires` dictionaries do not
     /// occur in an instance head and therefore deliberately are not in scope.
     fn instance_head_cx(&self, decl: &InstanceDecl) -> R<Cx> {
@@ -1825,7 +1861,10 @@ impl Elaborator {
         Ok(cx)
     }
 
-    fn elab_decl_inner(&mut self, decl: &Decl, reserved_goals: u32) -> R<()> {
+    fn check_decl(&mut self, decl: &Decl, reserved_goals: u32) -> R<PendingDecl> {
+        // Keep the writer's declaration, not the constraint-expanded working
+        // copy: representation obligations later restate the surface API.
+        let surface = decl.clone();
         // The constraint binders' desugaring at an **indexed** class
         // (docs/operation-indexed-classes-design.md §4): the index binders in
         // front of the dictionary, or the dictionary floated past the
@@ -2140,8 +2179,7 @@ impl Elaborator {
         // proofs are transported, never evaluated, and a transparent proof
         // would put the whole proof term back into every conversion that
         // mentions the theorem.
-        let abs = self.psi.bindings.len() as u32;
-        self.psi.push(GlobalBinding::Tm {
+        let binding = GlobalBinding::Tm {
             ctx: LocalCtx::nil(),
             layer: Layer::Code,
             ty: Rc::new(stmt),
@@ -2150,14 +2188,15 @@ impl Elaborator {
                 DeclKind::Fn => Some(Rc::new(term)),
                 DeclKind::Theorem => None,
             },
-        });
-        self.globals.insert(qkey(&self.scope.module, &decl.name), GlobalInfo { abs, params });
-        self.add_name(&decl.name, NameKind::Global);
-        if let Some((_, base)) = member {
-            self.member_bases.insert(base.to_string());
-        }
-        self.refresh_delta_psi();
-        Ok(())
+        };
+        Ok(PendingDecl {
+            name: decl.name.clone(),
+            key: qkey(&self.scope.module, &decl.name),
+            binding,
+            params,
+            member_base: member.map(|(_, base)| base.to_string()),
+            surface,
+        })
     }
 
     // -- goals --------------------------------------------------------------
@@ -2727,7 +2766,7 @@ impl Elaborator {
                 Ok((Type::Fin { len: Rc::new(len_t) }, Level::Zero))
             }
             // `(x: A) -> B` / `A -> B`. The level rule is `max(dom, cod)`,
-            // the same one `elab_decl_inner` uses to close a declaration's
+            // the same one `check_decl` uses to close a declaration's
             // telescope — a written function type and a `fn`'s own type must
             // not compute levels differently
             // (docs/surface-function-types.md §5.1).
