@@ -82,6 +82,7 @@ mod context;
 mod datarepr;
 mod diagnostics;
 mod display;
+mod expr;
 pub use datarepr::{Obligation, Provenance};
 pub mod reprgen;
 mod names;
@@ -2277,13 +2278,14 @@ impl Elaborator {
 
     fn elab_ty(&self, cx: &Cx, ty: &Ty) -> R<(Type, Level)> {
         match &ty.kind {
-            TyKind::Nat => Ok((Type::Nat, Level::Zero)),
-            // `Type<n>` is the kernel's `Ty n`, itself a type at level `n + 1`
-            // (`typing.rs:457-460`). This is the whole lowering
-            // (docs/surface-universe.md §2).
-            TyKind::Univ { level } => {
-                Ok((Type::Ty(Level::constant(*level)), Level::constant(level + 1)))
-            }
+            TyKind::Nat
+            | TyKind::Univ { .. }
+            | TyKind::Ctx
+            | TyKind::TyCode { .. }
+            | TyKind::Code { .. } => self
+                .expr_elab()
+                .type_leaf(ty)
+                .expect("classified as an ExprElab type leaf"),
             // An expression in type position: infer it, require its type to be
             // a universe, and decode (docs/surface-universe.md §4). `El` is the
             // kernel's own decoding, so nothing here is a coercion — the term
@@ -2403,14 +2405,6 @@ impl Elaborator {
                     Level::max(dom_level, cod_level),
                 ))
             }
-            // The modal types (docs/in-language-map-design.md §3): meaningful
-            // only in a `meta fn` signature, which elaborates them itself
-            // (`elab_meta_decl`) before this general path could see them.
-            TyKind::Ctx | TyKind::TyCode { .. } | TyKind::Code { .. } => err(
-                "`Ctx`/`TyCode`/`Code` are meta-layer types: they belong in a \
-                 `meta fn` signature (docs/in-language-map-design.md §3)",
-                ty.span,
-            ),
             // `$a` for a `TyCode` binder: its global type variable, valid at
             // the code scope (a `meta fn` signature's payload types and quote
             // payloads — anywhere `cx.meta` is present).
@@ -2630,15 +2624,10 @@ impl Elaborator {
             );
         }
         match &e.kind {
-            ExprKind::ArgSlot(_) => match self.attempt.slot_probe_target.get() {
-                Some(target) if target != e.span => Ok(Term::Var(LocalVar(0))),
-                _ => Err(ElabError::ArgSlotEscape { span: e.span }),
-            },
-            // The expected type *is* the goal's statement, which is why holes
-            // are checking-only (issues/goal-holes.md).
-            ExprKind::Hole(name) => {
-                self.new_goal(cx, name.as_deref(), hint, expected.clone(), lvl.clone(), e.span)
-            }
+            ExprKind::ArgSlot(_) | ExprKind::Hole(_) => self
+                .expr_elab()
+                .check_leaf(cx, e, expected, lvl, hint)
+                .expect("classified as an ExprElab checking leaf"),
             // **Rule 2** (docs/let-and-blocks-design.md §5.2): `refl` is a
             // *nullary* special form, so its node carries no name to
             // re-derive and the parser cannot buy the name back with a
@@ -3210,12 +3199,13 @@ impl Elaborator {
             return self.elab_infer_at(cx, &rewritten, expected);
         }
         match &e.kind {
-            ExprKind::ArgSlot(_) => match self.attempt.slot_probe_target.get() {
-                Some(target) if target != e.span => {
-                    Ok((Term::Var(LocalVar(0)), Type::Nat, Level::Zero))
-                }
-                _ => Err(ElabError::ArgSlotEscape { span: e.span }),
-            },
+            ExprKind::ArgSlot(_)
+            | ExprKind::Univ { .. }
+            | ExprKind::Hole(_)
+            | ExprKind::Num(_) => self
+                .expr_elab()
+                .infer_leaf(e)
+                .expect("classified as an ExprElab inference leaf"),
             // `{ let x = e; … result }` — the block's statements extend a
             // clone of `cx`, and its result is inferred there
             // (docs/let-and-blocks-design.md §4.4). Inference-transparent:
@@ -3241,27 +3231,6 @@ impl Elaborator {
             // (docs/certgen-transcriber-in-language-design.md §3).
             ExprKind::MatchCode { scrut, motive, arms } => {
                 self.elab_match_code(cx, scrut, motive, arms, e.span)
-            }
-            // `Type<n>` as a term is the code `TmTy(n) : Ty (n+1)`
-            // (`typing.rs:756-759`) — it infers, so it needs no bridge.
-            ExprKind::Univ { level } => Ok((
-                Term::TmTy(Level::constant(*level)),
-                Type::Ty(Level::constant(level + 1)),
-                Level::constant(level + 2),
-            )),
-            // A goal is its statement; with nothing to check against there is
-            // no statement to defer, so holes are checking-only (like `refl`).
-            ExprKind::Hole(_) => err(
-                "a hole here has no expected type — annotate it (`let p: T = ?;`) \
-                 or write the call fully explicitly (`@f(a, b, ?p)`)",
-                e.span,
-            ),
-            ExprKind::Num(n) => {
-                let mut t = Term::Zero;
-                for _ in 0..*n {
-                    t = Term::Succ(Rc::new(t));
-                }
-                Ok((t, Type::Nat, Level::Zero))
             }
             // `FZ` cannot infer: it inhabits `Fin(Succ k)` for every `k`
             // (docs/surface-fin-indexing-design.md §3.1). Said only where the
@@ -9707,11 +9676,20 @@ impl Elaborator {
         oracle::SemanticOracle::in_world(self.psi.clone(), self.fuel)
     }
 
+    /// The capabilities currently admitted to expression elaboration.
+    fn expr_elab(&self) -> expr::ExprElab<'_> {
+        expr::ExprElab::new(
+            self.semantic_oracle(),
+            self.attempt.goal_arena.allocator(),
+            &self.attempt.slot_probe_target,
+        )
+    }
+
     /// [`Self::whnf`] for a term: δ against Ψ included, so a definition
     /// unfolds. Used where a *shape* has to be read off a computed term.
     pub(crate) fn whnf_tm(&self, cx: &Cx, t: &Term, span: Span) -> R<Rc<Term>> {
-        self.semantic_oracle()
-            .whnf_term(&cx.gamma, t)
+        self.expr_elab()
+            .whnf_term(cx, t)
             .map(Rc::new)
             .map_err(|_| ElabError::Elab { msg: "out of fuel reducing a term".into(), span })
     }
@@ -9733,8 +9711,8 @@ impl Elaborator {
         if let Some(inline) = self.unspell_here(ty) {
             return Ok(inline);
         }
-        self.semantic_oracle()
-            .whnf_type(&cx.gamma, ty)
+        self.expr_elab()
+            .whnf_type(cx, ty)
             .map_err(|_| ElabError::Elab { msg: "out of fuel reducing a type".into(), span })
     }
 

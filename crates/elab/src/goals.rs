@@ -50,7 +50,36 @@ pub(super) struct GoalArena {
     frozen: Cell<bool>,
 }
 
+/// The one goal effect expression leaves may perform.
+///
+/// Keeping this as a view prevents expression elaboration from freezing,
+/// rolling back, solving, or otherwise managing the declaration arena.
+#[derive(Clone, Copy)]
+pub(crate) struct GoalAllocator<'a> {
+    arena: &'a GoalArena,
+}
+
+impl GoalAllocator<'_> {
+    /// Allocate one source-written hole in the current local context.
+    pub(crate) fn written_hole(
+        self,
+        cx: &Cx,
+        name: Option<&str>,
+        hint: Option<(&str, &str)>,
+        ty: Type,
+        level: Level,
+        span: Span,
+    ) -> R<Term> {
+        self.arena
+            .allocate(cx, name, hint, ty, level, span, None, None)
+    }
+}
+
 impl GoalArena {
+    pub(crate) fn allocator(&self) -> GoalAllocator<'_> {
+        GoalAllocator { arena: self }
+    }
+
     pub(super) fn prepare(&mut self) {
         self.requested_base.set(0);
         self.promoted_seen.set(0);

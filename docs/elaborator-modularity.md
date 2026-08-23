@@ -249,21 +249,39 @@ spelling performs no reduction. Kernel typing remains direct at the gate and
 at explicit proposal checks—it is judgment, not normalization, and folding it
 into this oracle would erase a useful boundary.
 
-Move `elab_ty`, `elab_check*`, and `elab_infer*` behind an `ExprElab`
-view borrowing the immutable session and mutable declaration attempt. Split
-application, match lowering, and member/operator dispatch into collaborators
-only when their parameter lists describe real dependencies.
+The first staged `ExprElab` view is now established in `expr.rs`. It owns a
+semantic oracle value and borrows two declaration-local capabilities: a
+goal-allocation-only view and the argument-slot probe cell. Local Γ is passed
+to the operations that need it. It holds no `&Elaborator`, session registry,
+commit operation, or arena lifecycle access. Constructing the view only clones
+the oracle's shared world handle unless dynamic meta scope actually requires a
+completed world.
+
+The first migrated slice is intentionally made of leaves: closed type forms,
+literal/universe/hole/slot inference, hole/slot checking, and the semantic
+half of expression WHNF. A unit fixture constructs this view directly, infers
+a numeral, and allocates a goal without an `Elaborator` or session. The root
+still owns the registry-sensitive `unspell_here` pre-pass before type WHNF;
+that spelling policy is not smuggled into the semantic capability.
+
+Moving all of `elab_ty` in this stage would require name resolution, indexed
+and value-parameter lowering, operator policy, checking, and inference. That
+would turn the new view into the context bag it is meant to replace. Continue
+moving `elab_ty`, `elab_check*`, and `elab_infer*` behind `ExprElab` only as
+those inputs become narrow named queries. Split application, match lowering,
+and member/operator dispatch into collaborators only when their parameter
+lists describe real dependencies.
 
 The desired test is architectural: pure unification and surface rewriting can
 be unit-tested without constructing an `Elaborator`; expression elaboration
 can be tested with a small session fixture; declaration tests continue to
 exercise commit and rollback end to end.
 
-`ExprElab` is ready only when all of these are true:
+The staged view satisfies the initial boundary when all of these remain true:
 
-- it names its session, attempt, local-context, and dynamic-scope inputs
-  individually rather than holding `&Elaborator`;
-- constructing it does not clone committed state;
+- it names semantic, declaration-effect, local-context, and dynamic-scope
+  inputs individually rather than holding `&Elaborator`;
+- constructing it does not deep-clone committed state;
 - it cannot commit a declaration or mutate a global registry;
 - application, matching, and dispatch can be moved one at a time without
   widening the view for unrelated callers.
@@ -276,11 +294,11 @@ would be less honest than the large file we have now.
 
 The remaining routes are not equally ready. Take them in dependency order:
 
-1. **`ExprElab` in stages.** Introduce an explicit view before moving behavior,
-   then migrate type elaboration and the simple checking/inference arms. It
-   must borrow named session queries, declaration effects, normalization, and
-   local context individually; it must never store `&Elaborator` or gain commit
-   authority.
+1. **Continue `ExprElab` in stages.** Add named read-only session queries one
+   policy at a time, then migrate structural type elaboration and the next
+   checking/inference families that fit them. Keep local context per-call and
+   declaration effects narrower than their owners; the view must never store
+   `&Elaborator` or gain commit authority.
 2. **Match elaboration.** Move convoy, motive, recursive-guard, Nat/Fin, and
    indexed/forded matching only after `ExprElab` exists. Its speculative goal
    rollback and binder-sensitive lowering make this a high-risk consumer, not
