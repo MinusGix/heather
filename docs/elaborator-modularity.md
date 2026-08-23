@@ -86,9 +86,16 @@ enter all of those indexes through one `commit_global` operation. Its reverse
 Ψ lookup is explicit, so reflection no longer scans a hash map to recover a
 callee name.
 
-`Types`, `Traits`, and `Representations` remain. Each should expose
-deterministic lookup and explicit commit methods. No caller should iterate a
-hash-backed registry to emit terms or diagnostics.
+`Types` is now established in `types.rs`. It owns inductives by qualified name
+and nominal tag, constructor lookup, the forded-skeleton fingerprint, the
+record-field fast path, tag allocation, and generated definitions. All
+fallible inductive checks finish before `Types::commit` installs those views;
+a failed declaration neither consumes a tag nor partially enters a type
+index.
+
+`Traits` and `Representations` remain. Each should expose deterministic lookup
+and explicit commit methods. No caller should iterate a hash-backed registry
+to emit terms or diagnostics.
 
 ### 2. Bidirectional core
 

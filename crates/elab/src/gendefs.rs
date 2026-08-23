@@ -283,7 +283,7 @@ impl Elaborator {
     /// occurrence stays inline, exactly as before.
     fn register_idx_code(&mut self, iind: &Rc<Inductive>, span: Span) {
         let key = GenDef::IdxCode(iind.tag);
-        if self.gdefs.by_key.contains_key(&key) {
+        if self.types.gdefs().by_key.contains_key(&key) {
             return;
         }
         let cx = Cx::empty();
@@ -306,7 +306,7 @@ impl Elaborator {
             return;
         }
         let key = GenDef::SkelCode(ind.tag);
-        if self.gdefs.by_key.contains_key(&key) {
+        if self.types.gdefs().by_key.contains_key(&key) {
             return;
         }
         let Some(skel) = ind.skel.as_ref() else { return };
@@ -348,7 +348,7 @@ impl Elaborator {
             return;
         }
         let key = GenDef::TyCode(ind.tag);
-        if self.gdefs.by_key.contains_key(&key) {
+        if self.types.gdefs().by_key.contains_key(&key) {
             return;
         }
         let cx = Cx::empty();
@@ -371,7 +371,10 @@ impl Elaborator {
             .push_gen_def(key, &ind.name, ty, Level::succ(l.clone()), body, span)
             .is_ok()
         {
-            self.gdefs.ty_code.insert(ind.tag, (Rc::new(d_ty.clone()), l.clone()));
+            self.types
+                .gdefs_mut()
+                .ty_code
+                .insert(ind.tag, (Rc::new(d_ty.clone()), l.clone()));
         }
         self.register_wf_slots(ind, &d_ty, &l, span);
     }
@@ -414,7 +417,9 @@ impl Elaborator {
             return;
         }
         let nfields = ind.ctors[0].fields.len();
-        if nfields == 0 || self.gdefs.by_key.contains_key(&GenDef::RecProj(ind.tag, 0)) {
+        if nfields == 0
+            || self.types.gdefs().by_key.contains_key(&GenDef::RecProj(ind.tag, 0))
+        {
             return;
         }
         let cx = Cx::empty();
@@ -723,7 +728,7 @@ impl Elaborator {
         // reference's own variable gives the rescoping, exactly as it does for
         // a binding's type in `typing.rs` (`shift_global(v + 1)`).
         let Term::GlobalTm { var, .. } = &fun else { return None };
-        let abs = *self.gdefs.by_key.get(&key)? as usize;
+        let abs = *self.types.gdefs().by_key.get(&key)? as usize;
         let GlobalBinding::Tm { ty, .. } = self.psi.bindings.get(abs)? else {
             return None;
         };
@@ -760,7 +765,9 @@ impl Elaborator {
         };
         let skey = GenDef::ShapeCode(ind.tag);
         let akey = GenDef::ArityFn(ind.tag);
-        if self.gdefs.by_key.contains_key(&skey) || self.gdefs.by_key.contains_key(&akey) {
+        if self.types.gdefs().by_key.contains_key(&skey)
+            || self.types.gdefs().by_key.contains_key(&akey)
+        {
             return;
         }
         let Some(scode) = crate::code::code_of(shape) else { return };
@@ -802,7 +809,7 @@ impl Elaborator {
                 level: l.clone(),
                 tm: Rc::new(scode),
             });
-            self.gdefs.wf_slots.insert(
+            self.types.gdefs_mut().wf_slots.insert(
                 ind.tag,
                 WfSlots {
                     shape: Rc::clone(shape),
@@ -825,11 +832,11 @@ impl Elaborator {
     /// here, and getting it wrong is a kernel `SubstMismatch`, not a wrong
     /// answer.
     pub(crate) fn wf_slot_refs(&self, cx: &Cx, shape: &Type, arity: &Term) -> Option<(Type, Term)> {
-        if self.gdefs.wf_slots.is_empty() {
+        if self.types.gdefs().wf_slots.is_empty() {
             return None;
         }
         let ind = self.tag_of(shape)?;
-        let slots = self.gdefs.wf_slots.get(&ind.tag)?;
+        let slots = self.types.gdefs().wf_slots.get(&ind.tag)?;
         let l = &slots.level;
         if (*slots.shape != *shape && *slots.shape_decoded != *shape)
             || *slots.arity != *arity
@@ -856,7 +863,7 @@ impl Elaborator {
     /// [`GenDefs::ty_code`]). `None` is every emission site's cue to keep
     /// writing the type out, exactly as before.
     pub(crate) fn ty_type_ref(&self, cx: &Cx, tag: u32, inline: &Type) -> Option<Type> {
-        let (registered, level) = self.gdefs.ty_code.get(&tag)?;
+        let (registered, level) = self.types.gdefs().ty_code.get(&tag)?;
         if **registered != *inline {
             return None;
         }
@@ -899,7 +906,7 @@ impl Elaborator {
     /// the source. An `El`-headed reference declines at the top (`respell_ty`
     /// is idempotent) and has no walked components, so this is idempotent too.
     pub(crate) fn respell_ty_deep(&self, cx: &Cx, ty: &Type, depth: u32) -> Option<Type> {
-        if self.gdefs.ty_code.is_empty() {
+        if self.types.gdefs().ty_code.is_empty() {
             return None;
         }
         self.respell_deep_at(cx, ty, depth)
@@ -1008,13 +1015,13 @@ impl Elaborator {
     /// use-site guard is written against. Closed by construction, so nothing
     /// is shifted.
     pub(crate) fn unspell_here(&self, ty: &Type) -> Option<Type> {
-        if self.gdefs.ty_code.is_empty() {
+        if self.types.gdefs().ty_code.is_empty() {
             return None;
         }
         let Type::El { tm, .. } = ty else { return None };
         let Term::GlobalTm { var, .. } = &**tm else { return None };
         let GenDef::TyCode(tag) = self.gen_def_of(*var)? else { return None };
-        self.gdefs.ty_code.get(&tag).map(|(inline, _)| (**inline).clone())
+        self.types.gdefs().ty_code.get(&tag).map(|(inline, _)| (**inline).clone())
     }
 
     /// `El (D#shape^δ)` back to the inline shape registered for a recursive
@@ -1023,13 +1030,13 @@ impl Elaborator {
     /// reference even though the nominal tag and constructor spine live in the
     /// inline shape (issues/display-inductive-type-arguments.md).
     pub(crate) fn unspell_shape_here(&self, ty: &Type) -> Option<Type> {
-        if self.gdefs.wf_slots.is_empty() {
+        if self.types.gdefs().wf_slots.is_empty() {
             return None;
         }
         let Type::El { tm, .. } = ty else { return None };
         let Term::GlobalTm { var, .. } = &**tm else { return None };
         let GenDef::ShapeCode(tag) = self.gen_def_of(*var)? else { return None };
-        self.gdefs.wf_slots.get(&tag).map(|slots| (*slots.shape).clone())
+        self.types.gdefs().wf_slots.get(&tag).map(|slots| (*slots.shape).clone())
     }
 
     /// The **inverse** of [`Self::respell_ty_deep`], for the reflection
@@ -1054,14 +1061,14 @@ impl Elaborator {
     /// meta padding never applies to either, which is why this does not go
     /// through [`Self::gen_def_of`].
     pub(crate) fn unspell_ty_deep(&self, len_at: u32, ty: &Type) -> Option<Type> {
-        if self.gdefs.ty_code.is_empty() {
+        if self.types.gdefs().ty_code.is_empty() {
             return None;
         }
         if let Type::El { tm, .. } = ty
             && let Term::GlobalTm { var, .. } = &**tm
             && let Some(abs) = var.0.checked_add(1).and_then(|v| len_at.checked_sub(v))
-            && let Some(GenDef::TyCode(tag)) = self.gdefs.by_abs.get(&abs).copied()
-            && let Some((inline, _)) = self.gdefs.ty_code.get(&tag)
+            && let Some(GenDef::TyCode(tag)) = self.types.gdefs().by_abs.get(&abs).copied()
+            && let Some((inline, _)) = self.types.gdefs().ty_code.get(&tag)
         {
             return Some((**inline).clone());
         }
@@ -1156,12 +1163,12 @@ impl Elaborator {
             return;
         }
         let key = GenDef::Fam(ind.tag);
-        if self.gdefs.by_key.contains_key(&key) {
+        if self.types.gdefs().by_key.contains_key(&key) {
             return;
         }
         let Ok((ty, level, body, l, ilvl)) = self.fam_def(ind, span) else { return };
         if self.push_gen_def(key, &ind.name, ty, level, body, span).is_ok() {
-            self.gdefs.fam_lvl.insert(ind.tag, (l, ilvl));
+            self.types.gdefs_mut().fam_lvl.insert(ind.tag, (l, ilvl));
         }
     }
 
@@ -1172,7 +1179,7 @@ impl Elaborator {
         let n = iind.ctors.len();
         for k in 0..n {
             let key = GenDef::IdxTag(iind.tag, k);
-            if !self.gdefs.by_key.contains_key(&key) {
+            if !self.types.gdefs().by_key.contains_key(&key) {
                 if let Ok((ty, lvl, body)) = self.tag_pred_def(iind, k, span) {
                     let _ = self.push_gen_def(key, &iind.name, ty, lvl, body, span);
                 }
@@ -1184,7 +1191,7 @@ impl Elaborator {
             }
             for t in 0..iind.ctors[k].arity() {
                 let key = GenDef::IdxChild(iind.tag, k, t);
-                if self.gdefs.by_key.contains_key(&key) {
+                if self.types.gdefs().by_key.contains_key(&key) {
                     continue;
                 }
                 if let Ok((ty, lvl, body)) = self.child_proj_def(iind, k, t, span) {
@@ -1196,7 +1203,7 @@ impl Elaborator {
 
     fn register_mu(&mut self, ind: &Rc<Inductive>, span: Span) -> R<()> {
         let key = GenDef::Mu(ind.tag);
-        if self.gdefs.by_key.contains_key(&key) {
+        if self.types.gdefs().by_key.contains_key(&key) {
             return Ok(());
         }
         let (ty, lvl, body) = self.mu_def(ind, span)?;
@@ -1270,8 +1277,8 @@ impl Elaborator {
             level,
             Rc::new(body),
         ));
-        self.gdefs.by_key.insert(key, abs);
-        self.gdefs.by_abs.insert(abs, key);
+        self.types.gdefs_mut().by_key.insert(key, abs);
+        self.types.gdefs_mut().by_abs.insert(abs, key);
         self.refresh_delta_psi();
         Ok(())
     }
@@ -1290,7 +1297,7 @@ impl Elaborator {
     /// definition is closed and its Ψ index is context-independent. One caller:
     /// the arity slot, which is always read under the shape's binder.
     fn gen_ref_deeper(&self, cx: &Cx, key: GenDef, extra: u32) -> Option<Term> {
-        let abs = *self.gdefs.by_key.get(&key)?;
+        let abs = *self.types.gdefs().by_key.get(&key)?;
         let len = self.psi.bindings.len() as u32;
         // Goals sit innermost, exactly as in `resolve` — and so do a
         // `meta fn`'s Ψ-extending binders (`Ctx`, `lib.rs`'s `meta_pushed`),
@@ -1335,7 +1342,7 @@ impl Elaborator {
             .checked_add(self.attempt.goal_base)?
             .checked_add(self.meta_offset())?
             .checked_sub(var.0.checked_add(1)?)?;
-        self.gdefs.by_abs.get(&abs).copied()
+        self.types.gdefs().by_abs.get(&abs).copied()
     }
 
     /// How far a `meta fn`'s Ψ-extending binders push the committed bindings
@@ -1468,7 +1475,7 @@ impl Elaborator {
         idx: &Term,
         span: Span,
     ) -> Option<(Type, Level)> {
-        let (l, ilvl) = self.gdefs.fam_lvl.get(&ind.tag)?.clone();
+        let (l, ilvl) = self.types.gdefs().fam_lvl.get(&ind.tag)?.clone();
         let fun = self.gen_ref(cx, GenDef::Fam(ind.tag))?;
         // The Π's domain is an annotation like any other, so it takes the
         // index type's own code reference where one exists (design §1.4).

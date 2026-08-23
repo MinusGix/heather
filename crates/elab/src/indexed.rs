@@ -329,7 +329,7 @@ impl Elaborator {
             && let Term::GlobalTm { var, .. } = &**fun
         {
             let GenDef::Fam(tag) = self.gen_def_of(*var)? else { return None };
-            let ind = self.by_tag.get(&tag)?;
+            let ind = self.types.by_tag(tag)?;
             ind.index.as_ref()?;
             return Some((
                 Rc::clone(ind),
@@ -351,7 +351,7 @@ impl Elaborator {
             return None;
         }
         let tag = tag_in(tm, 64)?;
-        let ind = self.by_tag.get(&tag)?;
+        let ind = self.types.by_tag(tag)?;
         ind.index.as_ref()?;
         let idx = Rc::clone(scrut_of(tm)?);
         let node = set_scrut(tm, Rc::new(Term::Zero))?;
@@ -1727,8 +1727,8 @@ inductive W : (n: Nat) -> Type {
     fn two() -> Two {
         let mut el = Elaborator::with_prelude().expect("prelude");
         el.elab_source(SRC).expect("two indexed families elaborate");
-        let v = Rc::clone(el.inductives.get(&crate::names::qkey("main", "V")).expect("declared"));
-        let w = Rc::clone(el.inductives.get(&crate::names::qkey("main", "W")).expect("declared"));
+        let v = Rc::clone(el.types.inductive(&crate::names::qkey("main", "V")).expect("declared"));
+        let w = Rc::clone(el.types.inductive(&crate::names::qkey("main", "W")).expect("declared"));
         Two { el, v, w, cx: Cx::empty() }
     }
 
@@ -1836,8 +1836,8 @@ inductive Pv<A> : (n: Nat) -> Type {
 ";
         let mut el = Elaborator::with_prelude().expect("prelude");
         el.elab_source(&format!("{SRC}{PSRC}")).expect("elaborates");
-        let v = Rc::clone(el.inductives.get(&crate::names::qkey("main", "V")).expect("declared"));
-        let p = Rc::clone(el.inductives.get(&crate::names::qkey("main", "Pv")).expect("declared"));
+        let v = Rc::clone(el.types.inductive(&crate::names::qkey("main", "V")).expect("declared"));
+        let p = Rc::clone(el.types.inductive(&crate::names::qkey("main", "Pv")).expect("declared"));
         let cx = Cx::empty();
         assert!(el.gen_ref(&cx, GenDef::Fam(p.tag)).is_none());
         let (pty, _) = el
@@ -1877,10 +1877,10 @@ inductive Bal : (s: Shape) -> Type {
         let cx = Cx::empty();
         for (name, iname) in [("Tg", "Col"), ("Bal", "Shape")] {
             let ind = Rc::clone(
-                el.inductives.get(&crate::names::qkey("main", name)).expect("declared"),
+                el.types.inductive(&crate::names::qkey("main", name)).expect("declared"),
             );
             let iind = Rc::clone(
-                el.inductives.get(&crate::names::qkey("main", iname)).expect("declared"),
+                el.types.inductive(&crate::names::qkey("main", iname)).expect("declared"),
             );
             let (ity, ilvl) = el.lower_instance(&cx, &iind, &[], &[], SPAN).expect("lowers");
             let idx = el.build_ctor(&cx, &iind, 0, &[], &ity, &ilvl, SPAN).expect("builds");

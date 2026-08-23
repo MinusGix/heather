@@ -636,7 +636,9 @@ impl Elaborator {
             // each declare a `Cons`, and a use picks by uniqueness, by
             // `List::Cons`, or errors. Within one module a constructor name
             // still belongs to one type.
-            if let Some((other, _)) = self.ctors.get(&qkey(self.names.module(), &c.name)) {
+            if let Some((other, _)) =
+                self.types.constructor(&qkey(self.names.module(), &c.name))
+            {
                 return err(
                     format!("`{}` is already a constructor of `{}`", c.name, other.name),
                     c.span,
@@ -740,24 +742,20 @@ impl Elaborator {
         // declaration with its indices erased, registered as an ordinary
         // declaration so that the *unindexed* tiers lower it verbatim — which
         // is §4.1's single most consequential sentence, mechanized.
+        let first_tag = self.types.next_tag();
         let skel = match &route {
-            Some(IdxRoute::Forded(_)) => {
-                let s = Rc::new(skeleton_of(
-                    d, &ctors, self.next_tag, Rc::new(self.names.scope().clone()),
-                ));
-                self.next_tag += 1;
-                self.by_tag.insert(s.tag, Rc::clone(&s));
-                self.inductives.insert(qkey(self.names.module(), &s.name), Rc::clone(&s));
-                self.add_name(&s.name.clone(), NameKind::Inductive);
-                Some(s)
-            }
+            Some(IdxRoute::Forded(_)) => Some(Rc::new(skeleton_of(
+                d,
+                &ctors,
+                first_tag,
+                Rc::new(self.names.scope().clone()),
+            ))),
             _ => None,
         };
-        let skel_tag = skel.as_ref().map(|s| s.tag);
         let ind = Rc::new(Inductive {
             name: d.name.clone(),
             scope: Rc::new(self.names.scope().clone()),
-            tag: self.next_tag,
+            tag: first_tag + u32::from(skel.is_some()),
             params: d.params.clone(),
             valparams: d.valparams.iter().map(|p| (p.name.clone(), p.ty.clone())).collect(),
             op_symbols: d
@@ -772,27 +770,16 @@ impl Elaborator {
             index_ty,
             skel,
         });
-        self.next_tag += 1;
-        if let Some(t) = skel_tag {
-            // §6.3's fingerprint is tag-anchored: a forded type is recognized
-            // by reading the *skeleton's* tag out of the Σ's first component,
-            // which is where `tag_of` already looks.
-            self.forded_by_skel.insert(t, Rc::clone(&ind));
+        // From here on registration is infallible. The type registry installs
+        // all nominal views together; the ambiguity index then exposes the
+        // same declarations to surface resolution.
+        self.types.commit(self.names.module(), Rc::clone(&ind));
+        if let Some(skeleton) = &ind.skel {
+            self.add_name(&skeleton.name, NameKind::Inductive);
         }
-        for i in 0..ind.ctors.len() {
-            let cname = ind.ctors[i].name.clone();
-            self.ctors.insert(qkey(self.names.module(), &cname), (Rc::clone(&ind), i));
-            self.add_name(&cname, NameKind::Ctor);
+        for ctor in &ind.ctors {
+            self.add_name(&ctor.name, NameKind::Ctor);
         }
-        if ind.is_record {
-            for (n, _) in &ind.ctors[0].fields {
-                if let Some(n) = n {
-                    self.record_fields.insert(n.clone());
-                }
-            }
-        }
-        self.by_tag.insert(ind.tag, Rc::clone(&ind));
-        self.inductives.insert(qkey(self.names.module(), &d.name), Rc::clone(&ind));
         self.add_name(&d.name, NameKind::Inductive);
         // The generator's own artifacts become Ψ definitions here — once, at
         // declaration time, never edited afterwards (§14.6's discipline, the
@@ -1409,7 +1396,7 @@ impl Elaborator {
             // Tier 1: the tag is in the `Wf`'s shape (tier 1 §4).
             Type::Wf { shape, .. } => self.tag_of(shape),
             Type::Sum { lhs, .. } => self.tag_of(lhs),
-            Type::Sigma { fst, .. } => self.by_tag.get(&read_tag(fst)?).cloned(),
+            Type::Sigma { fst, .. } => self.types.by_tag(read_tag(fst)?).cloned(),
             _ => None,
         }
     }

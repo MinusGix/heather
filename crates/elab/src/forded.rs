@@ -249,10 +249,10 @@ impl Elaborator {
         let fst_is_ref = el_of_global(&fst);
         let ind = if fst_is_ref {
             let GenDef::SkelCode(tag) = referenced(&fst)? else { return None };
-            Rc::clone(self.by_tag.get(&tag)?)
+            Rc::clone(self.types.by_tag(tag)?)
         } else {
             let skel = self.tag_of(&fst)?;
-            Rc::clone(self.forded_by_skel.get(&skel.tag)?)
+            Rc::clone(self.types.forded_by_skeleton(skel.tag)?)
         };
         // The `sEq`'s `ty` slot, same rule: an `El`-of-global there must be
         // **this** declaration's index-type code and nothing else. An inline
@@ -2296,7 +2296,7 @@ mod decl_inversion {
     fn proto() -> Proto {
         let mut el = Elaborator::with_prelude().expect("prelude");
         el.elab_source(SHAPE).expect("the index declaration elaborates");
-        let ind = Rc::clone(el.inductives.get(&crate::names::qkey("main", "Shape")).expect("declared"));
+        let ind = Rc::clone(el.types.inductive(&crate::names::qkey("main", "Shape")).expect("declared"));
         let cx0 = Cx::empty();
         let (ity, ilvl) = el.lower_instance(&cx0, &ind, &[], &[], SPAN).expect("lowers");
         let spine = el.spine(&ity, &ilvl, ind.ctors.len(), SPAN).expect("spine");
@@ -2571,8 +2571,8 @@ inductive G : (n: Nat) -> Type {
     fn two() -> Two {
         let mut el = Elaborator::with_prelude().expect("prelude");
         el.elab_source(SRC).expect("two forded families elaborate");
-        let f = Rc::clone(el.inductives.get(&crate::names::qkey("main", "F")).expect("declared"));
-        let g = Rc::clone(el.inductives.get(&crate::names::qkey("main", "G")).expect("declared"));
+        let f = Rc::clone(el.types.inductive(&crate::names::qkey("main", "F")).expect("declared"));
+        let g = Rc::clone(el.types.inductive(&crate::names::qkey("main", "G")).expect("declared"));
         Two { el, f, g, cx: Cx::empty() }
     }
 
@@ -2778,8 +2778,8 @@ inductive P<A> : (n: Nat) -> Type {
 ";
         let mut el = Elaborator::with_prelude().expect("prelude");
         el.elab_source(&format!("{SRC}{PSRC}")).expect("elaborates");
-        let f = Rc::clone(el.inductives.get(&crate::names::qkey("main", "F")).expect("declared"));
-        let p = Rc::clone(el.inductives.get(&crate::names::qkey("main", "P")).expect("declared"));
+        let f = Rc::clone(el.types.inductive(&crate::names::qkey("main", "F")).expect("declared"));
+        let p = Rc::clone(el.types.inductive(&crate::names::qkey("main", "P")).expect("declared"));
         let cx = Cx::empty();
         // `P<Nat>` has no code definition (§14.12's boundary), so its own
         // type is emitted inline and reads back structurally, with no
@@ -2871,8 +2871,8 @@ inductive H : (s: Shp) -> Type {
 ";
         let mut el = Elaborator::with_prelude().expect("prelude");
         el.elab_source(DSRC).expect("elaborates");
-        let h = Rc::clone(el.inductives.get(&crate::names::qkey("main", "H")).expect("declared"));
-        let shp = Rc::clone(el.inductives.get(&crate::names::qkey("main", "Shp")).expect("declared"));
+        let h = Rc::clone(el.types.inductive(&crate::names::qkey("main", "H")).expect("declared"));
+        let shp = Rc::clone(el.types.inductive(&crate::names::qkey("main", "Shp")).expect("declared"));
         let cx = Cx::empty();
         let (ity, ilvl) = el.lower_instance(&cx, &shp, &[], &[], SPAN).expect("lowers");
         let sa = el.build_ctor(&cx, &shp, 0, &[], &ity, &ilvl, SPAN).expect("SA builds");

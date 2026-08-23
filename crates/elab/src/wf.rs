@@ -1076,8 +1076,8 @@ inductive Box<A> { BNil, BCons(a: A, r: Box<A>) }
         fn ind(&self, name: &str) -> Rc<Inductive> {
             Rc::clone(
                 self.el
-                    .inductives
-                    .get(&crate::names::qkey("main", name))
+                    .types
+                    .inductive(&crate::names::qkey("main", name))
                     .unwrap_or_else(|| panic!("`{name}` was declared")),
             )
         }

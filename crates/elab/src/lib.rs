@@ -98,6 +98,7 @@ mod quote;
 pub mod resolve;
 mod slots;
 mod traits;
+mod types;
 mod vec;
 mod wf;
 
@@ -109,6 +110,7 @@ use names::{
 };
 use slots::{Ingredient, Slot};
 use traits::{ClassInfo, InstanceInfo};
+use types::Types;
 
 /// The stage-1 prelude: `sym`/`trans`/`cong`/`cong_succ`, monomorphic at
 /// `Nat` where the equation's type is not a parameter.
@@ -718,37 +720,13 @@ pub struct Elaborator {
     /// Module scopes, committed ordinary declarations, and every index that
     /// makes them nameable (`names.rs`).
     names: Names,
-    /// Declared inductives by qualified name, by nominal tag, and by
-    /// constructor name. Constructor names are per-module and qualified by
-    /// their *type* (`Option::None`), not globally unique
-    /// (docs/inductive-tier0-lowering.md, scoped by docs/modules-design.md §4).
-    inductives: HashMap<String, Rc<Inductive>>,
-    by_tag: HashMap<u32, Rc<Inductive>>,
-    /// Route 2b's fingerprint anchor (`docs/inductive-fording-lowering.md`
-    /// §6.3): the **skeleton's** nominal tag → the forded declaration it is the
-    /// skeleton of. A forded type is a Σ whose first component is the skeleton,
-    /// so reading the declaration back is `tag_of` plus this one lookup.
-    forded_by_skel: HashMap<u32, Rc<Inductive>>,
-    /// Machine-named Ψ definitions for generator-emitted artifacts
-    /// (`issues/generated-term-defs.md`, `gendefs.rs`): `μ_D`, the index
-    /// type's tag predicates, its child projections. Registered once at
-    /// declaration time; every emission site references them and falls back
-    /// to inlining when a key is absent.
-    gdefs: gendefs::GenDefs,
-    ctors: HashMap<String, (Rc<Inductive>, usize)>,
-    /// Every field name of every declared `record`, across all of them. Not a
-    /// resolution table — which record a name belongs to is decided by the
-    /// receiver's type — but the **cheap negative test** that keeps `.`
-    /// resolution off the hot path: a name that is nobody's field takes the
-    /// method fallback without inferring the receiver at all
-    /// (docs/surface-records.md §4.2). That is every use that existed before
-    /// records, which is what makes the move of `.` into the elaborator a
-    /// no-op for them.
-    record_fields: HashSet<String>,
+    /// Committed nominal declarations and every index or generated definition
+    /// belonging to them (`types.rs`).
+    types: Types,
     /// Every field name of every declared `class`, across all of them
     /// (docs/traits-receiver-dispatch-design.md §3). The same **cheap negative
-    /// test** as [`Self::record_fields`] and the name registry's member-base
-    /// index, and for
+    /// test** as the type registry's record-field index and the name
+    /// registry's member-base index, and for
     /// the same reason: `x.op(y)` consults this before inferring the
     /// receiver's type or building a resolution goal, so a `.` call on a name
     /// that is nobody's class field costs exactly what it cost before classes
@@ -852,7 +830,6 @@ pub struct Elaborator {
     /// recurses *through* `elab_check` — the nested obligation is discovered
     /// by `apply_implicit`, not passed down.
     resolve_depth: Cell<usize>,
-    next_tag: u32,
     fuel: u64,
     /// `meta fn` definitions, **elaborator-held** (docs/in-language-map-design.md
     /// §4): kernel-checked at `Layer::Meta` against Ψ, never pushed to it —
@@ -993,12 +970,7 @@ impl Elaborator {
             psi: GlobalCtx::default(),
             delta_psi: GlobalCtx::default(),
             names: Names::new(DEFAULT_MODULE),
-            inductives: HashMap::new(),
-            by_tag: HashMap::new(),
-            forded_by_skel: HashMap::new(),
-            gdefs: gendefs::GenDefs::default(),
-            ctors: HashMap::new(),
-            record_fields: HashSet::new(),
+            types: Types::default(),
             class_members: HashSet::new(),
             classes: HashMap::new(),
             instances: HashMap::new(),
@@ -1017,7 +989,6 @@ impl Elaborator {
             warnings: RefCell::new(Vec::new()),
             lint_profile: LintProfile::Default,
             resolve_depth: Cell::new(0),
-            next_tag: 0,
             fuel: DEFAULT_FUEL,
             meta_defs: HashMap::new(),
             meta_slots: HashMap::new(),
@@ -1209,8 +1180,8 @@ impl Elaborator {
 
     fn resolve_declared_kinds(&self, name: &str, kinds: &[NameKind]) -> NameRes {
         self.names.resolve_kinds(name, kinds, |m, ty, ctor| {
-            self.inductives
-                .get(&qkey(m, ty))
+            self.types
+                .inductive(&qkey(m, ty))
                 .is_some_and(|i| i.ctors.iter().any(|c| c.name == ctor))
         })
     }
@@ -1308,14 +1279,14 @@ impl Elaborator {
     /// dropping it is a shrink rather than a choice
     /// (issues/false-collides-with-bools-constructor.md).
     pub(crate) fn lookup_inductive(&self, name: &str) -> Option<&Rc<Inductive>> {
-        self.inductives.get(&self.key_of_kinds(name, &[NameKind::Inductive])?)
+        self.types.inductive(&self.key_of_kinds(name, &[NameKind::Inductive])?)
     }
 
     pub(crate) fn lookup_ctor(&self, name: &str) -> Option<(Rc<Inductive>, usize)> {
         // `Option::None` resolves through the *type*, so the key is the
         // constructor's own name in the type's module.
         let key = self.key_of(name)?;
-        self.ctors.get(&key).map(|(i, k)| (Rc::clone(i), *k))
+        self.types.constructor(&key).map(|(i, k)| (Rc::clone(i), *k))
     }
 
     /// The error for a name that did not resolve. An ambiguous name must
@@ -1658,7 +1629,7 @@ impl Elaborator {
         } else {
             names::qkey(self.names.module(), name)
         };
-        let ind = self.inductives.get(&key)?;
+        let ind = self.types.inductive(&key)?;
         ind.index.as_ref()?;
         Some(if ind.skel.is_some() { IndexedRoute::Forded } else { IndexedRoute::One })
     }
@@ -5937,7 +5908,7 @@ impl Elaborator {
             let (t, ty, lvl) = self.elab_infer(cx, &e)?;
             return Ok(DotResolution::Project(t, ty, lvl, None));
         }
-        if self.record_fields.contains(name) {
+        if self.types.has_record_field(name) {
             // Inference failure is not an error *here*: the fallback is what
             // handles a receiver whose type only the method call determines,
             // and reporting this failure would regress every such call.
