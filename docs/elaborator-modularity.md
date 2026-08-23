@@ -32,7 +32,8 @@ crate root. That preserved Rust privacy and name resolution exactly while
 making the dependency seams visible:
 
 - `diagnostics.rs`: public diagnostic data;
-- `context.rs`: Γ and surface bindings;
+- `context.rs`: Γ and surface bindings, now an ordinary module that owns their
+  parallelism and prefix operation;
 - `recursion.rs`: structural-recursion guards and convoy state;
 - `surface.rs`: surface traversals and argument-slot lowering, now an ordinary
   state-free module;
@@ -42,9 +43,10 @@ making the dependency seams visible:
 The remaining included files should become ordinary modules only after their
 inputs have been made explicit. Doing that first would replace one giant
 implicit API with hundreds of `pub(crate)` fields and methods, which is
-movement rather than modularity. `surface.rs` and `unification.rs` crossed that
-threshold without such an API: both import their complete inputs explicitly,
-and neither can reach elaborator state.
+movement rather than modularity. `context.rs`, `surface.rs`, and
+`unification.rs` have crossed that threshold. The context module owns one
+coherent state vector, while the other two import their complete inputs
+explicitly and cannot reach elaborator state.
 
 ## Extraction progress
 
@@ -176,12 +178,29 @@ damages the original dispatcher.
 
 ### 1. Bidirectional core
 
-The first supporting seam is established. Surface rewriting and structural
+The first supporting seams are established. Surface rewriting and structural
 unification are ordinary modules rather than textually included fragments.
 Their privacy boundary makes accidental access to `Elaborator` impossible, and
-focused unit tests exercise both mechanisms without constructing one. The
-implicit-application policy that creates and consumes unification scratch still
-belongs to the bidirectional extraction; only the state-free solver moved.
+focused unit tests exercise both mechanisms without constructing one.
+
+Local context is now an ordinary `context` module as well. It owns Γ together
+with the parallel binder names and callable skeletons, and its tests pin both
+the push invariant and the distinction between positional binder state and
+dynamic scope preserved by a prefix.
+
+`application.rs` owns callable skeleton metadata and the first vertical
+bidirectional mechanism: explicit application down a Π spine. That engine sees
+only the local context and two capabilities—weak-head normalization and
+argument checking—through `ExplicitArgElab`. A unit test supplies both with a
+tiny fake, proving that the application loop itself needs neither an
+`Elaborator` nor a session fixture. The current `Elaborator` implements those
+capabilities as a transition point; the eventual `ExprElab` can implement the
+same interface without changing application policy.
+
+The implicit-application policy that creates and consumes unification scratch
+still belongs to the bidirectional extraction. Its next split should separate
+Π-spine scheduling from goal promotion and trait resolution, adding
+capabilities only when one of those policies actually needs them.
 
 Move `elab_ty`, `elab_check*`, and `elab_infer*` behind an `ExprElab`
 view borrowing the immutable session and mutable declaration attempt. Split
