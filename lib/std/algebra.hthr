@@ -291,15 +291,15 @@ theorem max_of_self<A: Cmp>(x: A): max_of(x, x) = x {
 // once here and reachable at every group. `std/int`'s `neg_unique` is this
 // theorem with the dictionary found by resolution and nothing re-proved.
 theorem op_inv_unique<A: Group(∙)>(x, y: A, h: x ∙ y = A.unit): y = A.inv(x) {
-    trans(
-        sym(A.unit_l(y)),
-        trans(
-            j(sym(A.inv_l(x)), λ w q => A.unit ∙ y = w ∙ y, refl),
-            trans(
-                A.assoc(A.inv(x), x, y),
-                trans(
-                    j(h, λ w q => A.inv(x) ∙ (x ∙ y) = A.inv(x) ∙ w, refl),
-                    A.unit_r(A.inv(x))))))
+    apply trans;
+    give sym(A.unit_l(y));
+    apply trans;
+    give j(sym(A.inv_l(x)), λ w q => A.unit ∙ y = w ∙ y, refl);
+    apply trans;
+    give A.assoc(A.inv(x), x, y);
+    apply trans;
+    give j(h, λ w q => A.inv(x) ∙ (x ∙ y) = A.inv(x) ∙ w, refl);
+    A.unit_r(A.inv(x))
 }
 
 // `Default` earns its keep here: the caller of `or_default` names no

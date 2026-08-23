@@ -211,20 +211,24 @@ theorem addNat_isucc(a: Int, n: Nat): addNat(isucc(a), n) = isucc(addNat(a, n)) 
 theorem subNat_isucc(a: Int, n: Nat): subNat(isucc(a), n) = isucc(subNat(a, n)) {
     match n {
         Zero => refl,
-        Succ(k) => trans(
-            cong_int(ipred, subNat_isucc(a, k)),
-            trans(ipred_isucc(subNat(a, k)), sym(isucc_ipred(subNat(a, k)))),
-        ),
+        Succ(k) =>
+            apply trans;
+            give cong_int(ipred, subNat_isucc(a, k));
+            apply trans;
+            give ipred_isucc(subNat(a, k));
+            sym(isucc_ipred(subNat(a, k))),
     }
 }
 
 theorem addNat_ipred(a: Int, n: Nat): addNat(ipred(a), n) = ipred(addNat(a, n)) {
     match n {
         Zero => refl,
-        Succ(k) => trans(
-            cong_int(isucc, addNat_ipred(a, k)),
-            trans(isucc_ipred(addNat(a, k)), sym(ipred_isucc(addNat(a, k)))),
-        ),
+        Succ(k) =>
+            apply trans;
+            give cong_int(isucc, addNat_ipred(a, k));
+            apply trans;
+            give isucc_ipred(addNat(a, k));
+            sym(ipred_isucc(addNat(a, k))),
     }
 }
 
@@ -301,26 +305,33 @@ theorem int_ind(P: Int → Type,
 theorem add_comm(a, b: Int): a + b = b + a {
     int_ind(λ (z: Int) => a + z = z + a,
         sym(zero_add(a)),
-        λ (k: Nat) (ih: a + OfNat(k) = OfNat(k) + a) =>
-            trans(cong_int(isucc, ih),
-                  sym(isucc_add(OfNat(k), a))),
-        sym(trans(ipred_add(OfNat(0), a), cong_int(ipred, zero_add(a)))),
-        λ (k: Nat) (ih: a + NegSucc(k) = NegSucc(k) + a) =>
-            trans(cong_int(ipred, ih),
-                  sym(ipred_add(NegSucc(k), a))),
+        (k: Nat) (ih: a + OfNat(k) = OfNat(k) + a) ⊢
+            apply trans;
+            give cong_int(isucc, ih);
+            sym(isucc_add(OfNat(k), a)),
+        apply sym;
+        apply trans;
+        give ipred_add(OfNat(0), a);
+        cong_int(ipred, zero_add(a)),
+        (k: Nat) (ih: a + NegSucc(k) = NegSucc(k) + a) ⊢
+            apply trans;
+            give cong_int(ipred, ih);
+            sym(ipred_add(NegSucc(k), a)),
         b)
 }
 
 theorem add_assoc(a, b, c: Int): (a + b) + c = a + (b + c) {
     int_ind(λ (z: Int) => (a + b) + z = a + (b + z),
         refl,
-        λ (k: Nat) (ih: (a + b) + OfNat(k) = a + (b + OfNat(k))) =>
-            trans(cong_int(isucc, ih),
-                  sym(add_isucc(a, add(b, OfNat(k))))),
+        (k: Nat) (ih: (a + b) + OfNat(k) = a + (b + OfNat(k))) ⊢
+            apply trans;
+            give cong_int(isucc, ih);
+            sym(add_isucc(a, add(b, OfNat(k)))),
         sym(add_ipred(a, b)),
-        λ (k: Nat) (ih: (a + b) + NegSucc(k) = a + (b + NegSucc(k))) =>
-            trans(cong_int(ipred, ih),
-                  sym(add_ipred(a, add(b, NegSucc(k))))),
+        (k: Nat) (ih: (a + b) + NegSucc(k) = a + (b + NegSucc(k))) ⊢
+            apply trans;
+            give cong_int(ipred, ih);
+            sym(add_ipred(a, add(b, NegSucc(k)))),
         c)
 }
 
@@ -330,18 +341,24 @@ theorem add_assoc(a, b, c: Int): (a + b) + c = a + (b + c) {
 theorem subNat_self(n: Nat): subNat(OfNat(n), n) = OfNat(0) {
     match n {
         Zero => refl,
-        Succ(k) => trans(
-            cong_int(ipred, subNat_isucc(OfNat(k), k)),
-            trans(ipred_isucc(subNat(OfNat(k), k)), subNat_self(k)),
-        ),
+        Succ(k) =>
+            apply trans;
+            give cong_int(ipred, subNat_isucc(OfNat(k), k));
+            apply trans;
+            give ipred_isucc(subNat(OfNat(k), k));
+            subNat_self(k),
     }
 }
 
 theorem addNat_negsucc_self(n: Nat): addNat(NegSucc(n), Succ(n)) = OfNat(0) {
     match n {
         Zero => refl,
-        Succ(k) => cong_int(isucc,
-            trans(addNat_ipred(NegSucc(k), Succ(k)), cong_int(ipred, addNat_negsucc_self(k)))),
+        Succ(k) =>
+            apply cong_int;
+            give isucc;
+            apply trans;
+            give addNat_ipred(NegSucc(k), Succ(k));
+            cong_int(ipred, addNat_negsucc_self(k)),
     }
 }
 
@@ -373,12 +390,12 @@ theorem neg_add(a, b: Int): neg(a + b) = neg(a) + neg(b) {
                     = neg(a) + NegSucc(k)           := cong(ipred_negOfNat(k)),
             },
         neg_ipred(a),
-        λ (k: Nat) (ih: neg(a + NegSucc(k)) = neg(a) + neg(NegSucc(k))) =>
-            trans(
-                neg_ipred(add(a, NegSucc(k))),
-                trans(
-                    cong_int(isucc, ih),
-                    sym(add_isucc(neg(a), OfNat(Succ(k)))))),
+        (k: Nat) (ih: neg(a + NegSucc(k)) = neg(a) + neg(NegSucc(k))) ⊢
+            apply trans;
+            give neg_ipred(add(a, NegSucc(k)));
+            apply trans;
+            give cong_int(isucc, ih);
+            sym(add_isucc(neg(a), OfNat(Succ(k)))),
         b)
 }
 
@@ -489,9 +506,10 @@ theorem mul_assoc(a, b, c: Int): (a * b) * c = a * (b * c) {
         OfNat(m) => match b {
             OfNat(n) => match c {
                 OfNat(p) => cong_ofnat(nat::mul_assoc(m, n, p)),
-                NegSucc(p) => trans(
-                    cong_int_of(negOfNat, nat::mul_assoc(m, n, Succ(p))),
-                    sym(mul_neg_r(OfNat(m), OfNat(nat::mul(n, Succ(p)))))),
+                NegSucc(p) =>
+                    apply trans;
+                    give cong_int_of(negOfNat, nat::mul_assoc(m, n, Succ(p)));
+                    sym(mul_neg_r(OfNat(m), OfNat(nat::mul(n, Succ(p))))),
             },
             NegSucc(n) => match c {
                 OfNat(p) => calc {
@@ -503,18 +521,20 @@ theorem mul_assoc(a, b, c: Int): (a * b) * c = a * (b * c) {
                         = OfNat(m) * (NegSucc(n) * OfNat(p))
                             := sym(mul_neg_r(OfNat(m), OfNat(Succ(n) * p))),
                 },
-                NegSucc(p) => trans(
-                    mul_neg_l(OfNat(nat::mul(m, Succ(n))), NegSucc(p)),
-                    trans(
-                        neg_negOfNat(nat::mul(nat::mul(m, Succ(n)), Succ(p))),
-                        cong_ofnat(nat::mul_assoc(m, Succ(n), Succ(p))))),
+                NegSucc(p) =>
+                    apply trans;
+                    give mul_neg_l(OfNat(nat::mul(m, Succ(n))), NegSucc(p));
+                    apply trans;
+                    give neg_negOfNat(nat::mul(nat::mul(m, Succ(n)), Succ(p)));
+                    cong_ofnat(nat::mul_assoc(m, Succ(n), Succ(p))),
             },
         },
         NegSucc(m) => match b {
             OfNat(n) => match c {
-                OfNat(p) => trans(
-                    mul_neg_l(OfNat(nat::mul(Succ(m), n)), OfNat(p)),
-                    cong_int(neg, cong_ofnat(nat::mul_assoc(Succ(m), n, p)))),
+                OfNat(p) =>
+                    apply trans;
+                    give mul_neg_l(OfNat(nat::mul(Succ(m), n)), OfNat(p));
+                    cong_int(neg, cong_ofnat(nat::mul_assoc(Succ(m), n, p))),
                 NegSucc(p) => calc {
                     (NegSucc(m) * OfNat(n)) * NegSucc(p)
                         = neg(OfNat(Succ(m) * n) * NegSucc(p))
@@ -530,11 +550,13 @@ theorem mul_assoc(a, b, c: Int): (a * b) * c = a * (b * c) {
                 },
             },
             NegSucc(n) => match c {
-                OfNat(p) => trans(
-                    cong_ofnat(nat::mul_assoc(Succ(m), Succ(n), p)),
-                    sym(trans(
-                        mul_neg_r(NegSucc(m), OfNat(nat::mul(Succ(n), p))),
-                        neg_negOfNat(nat::mul(Succ(m), nat::mul(Succ(n), p)))))),
+                OfNat(p) =>
+                    apply trans;
+                    give cong_ofnat(nat::mul_assoc(Succ(m), Succ(n), p));
+                    apply sym;
+                    apply trans;
+                    give mul_neg_r(NegSucc(m), OfNat(nat::mul(Succ(n), p)));
+                    neg_negOfNat(nat::mul(Succ(m), nat::mul(Succ(n), p))),
                 NegSucc(p) =>
                     cong_int_of(negOfNat, nat::mul_assoc(Succ(m), Succ(n), Succ(p))),
             },
@@ -562,17 +584,21 @@ theorem ofNat_mul(m, n: Nat): OfNat(m * n) = OfNat(m) * OfNat(n) { refl }
 // Times `-1`, and the two cancellations every rearrangement below spends.
 
 theorem mul_neg_one(a: Int): a * NegSucc(0) = neg(a) {
-    trans(mul_neg_r(a, OfNat(1)), cong_int(neg, mul_one(a)))
+    apply trans;
+    give mul_neg_r(a, OfNat(1));
+    cong(mul_one(a))
 }
 
 theorem add_neg_cancel_r(x, y: Int): (x + y) + neg(y) = x {
-    trans(add_assoc(x, y, neg(y)),
-          cong_int(λ (w: Int) => add(x, w), add_neg(y)))
+    apply trans;
+    give add_assoc(x, y, neg(y));
+    cong_int(λ (w: Int) => add(x, w), add_neg(y))
 }
 
 theorem add_neg_cancel_l(x, y: Int): (x + neg(y)) + y = x {
-    trans(add_assoc(x, neg(y), y),
-          cong_int(λ (w: Int) => add(x, w), neg_add_self(y)))
+    apply trans;
+    give add_assoc(x, neg(y), y);
+    cong_int(λ (w: Int) => add(x, w), neg_add_self(y))
 }
 
 // `a * (n+1) = a * n + a`, at a NON-negative multiplier — the `mul` step that
@@ -580,9 +606,11 @@ theorem add_neg_cancel_l(x, y: Int): (x + neg(y)) + y = x {
 theorem mul_ofnat_succ(a: Int, n: Nat): a * OfNat(Succ(n)) = a * OfNat(n) + a {
     match a {
         OfNat(m) => sym(add_ofnat_ofnat(nat::mul(m, n), m)),
-        NegSucc(m) => sym(trans(
-            sym(neg_add(OfNat(nat::mul(Succ(m), n)), OfNat(Succ(m)))),
-            cong_int(neg, add_ofnat_ofnat(nat::mul(Succ(m), n), Succ(m))))),
+        NegSucc(m) =>
+            apply sym;
+            apply trans;
+            give sym(neg_add(OfNat(nat::mul(Succ(m), n)), OfNat(Succ(m))));
+            cong_int(neg, add_ofnat_ofnat(nat::mul(Succ(m), n), Succ(m))),
     }
 }
 
@@ -594,67 +622,77 @@ theorem mul_isucc(a, x: Int): a * isucc(x) = a * x + a {
         OfNat(n) => mul_ofnat_succ(a, n),
         NegSucc(n) =>
             match n {
-                Zero => trans(
-                    mul_zero(a),
-                    sym(trans(
-                        cong_int(λ (w: Int) => add(w, a), mul_neg_one(a)),
-                        neg_add_self(a)))),
-                Succ(j) => trans(
-                    mul_neg_r(a, OfNat(Succ(j))),
-                    sym(trans(
-                        cong_int(λ (w: Int) => add(w, a),
-                                 trans(
-                                     mul_neg_r(a, OfNat(Succ(Succ(j)))),
-                                     trans(
-                                         cong_int(neg, mul_ofnat_succ(a, Succ(j))),
-                                         neg_add(mul(a, OfNat(Succ(j))), a)))),
-                        add_neg_cancel_l(neg(mul(a, OfNat(Succ(j)))), a)))),
+                Zero =>
+                    apply trans;
+                    give mul_zero(a);
+                    apply sym;
+                    apply trans;
+                    give cong_int(λ (w: Int) => add(w, a), mul_neg_one(a));
+                    neg_add_self(a),
+                Succ(j) =>
+                    apply trans;
+                    give mul_neg_r(a, OfNat(Succ(j)));
+                    apply sym;
+                    apply trans;
+                    give
+                        apply cong_int;
+                        give λ (w: Int) => add(w, a);
+                        apply trans;
+                        give mul_neg_r(a, OfNat(Succ(Succ(j))));
+                        apply trans;
+                        give cong_int(neg, mul_ofnat_succ(a, Succ(j)));
+                        neg_add(mul(a, OfNat(Succ(j))), a);
+                    add_neg_cancel_l(neg(mul(a, OfNat(Succ(j)))), a),
             },
     }
 }
 
 theorem mul_ipred(a, x: Int): a * ipred(x) = a * x + neg(a) {
-    sym(trans(
-        cong_int(λ (w: Int) => add(w, neg(a)),
-                 trans(
-                     sym(cong_int(λ (w: Int) => mul(a, w), isucc_ipred(x))),
-                     mul_isucc(a, ipred(x)))),
-        add_neg_cancel_r(mul(a, ipred(x)), a)))
+    apply sym;
+    apply trans;
+    give
+        apply cong_int;
+        give λ (w: Int) => add(w, neg(a));
+        apply trans;
+        give sym(cong_int(λ (w: Int) => mul(a, w), isucc_ipred(x)));
+        mul_isucc(a, ipred(x));
+    add_neg_cancel_r(mul(a, ipred(x)), a)
 }
 
 theorem mul_add_distr(a, b, c: Int): a * (b + c) = a * b + a * c {
     int_ind(λ (z: Int) => mul(a, add(b, z)) = add(mul(a, b), mul(a, z)),
         sym(cong_int(λ (w: Int) => add(mul(a, b), w), mul_zero(a))),
-        λ (k: Nat) (ih: mul(a, add(b, OfNat(k))) = add(mul(a, b), mul(a, OfNat(k)))) =>
-            trans(
-                mul_isucc(a, add(b, OfNat(k))),
-                trans(
-                    cong_int(λ (w: Int) => add(w, a), ih),
-                    trans(
-                        add_assoc(mul(a, b), mul(a, OfNat(k)), a),
-                        sym(cong_int(λ (w: Int) => add(mul(a, b), w), mul_ofnat_succ(a, k)))))),
-        trans(mul_ipred(a, b),
-              sym(cong_int(λ (w: Int) => add(mul(a, b), w), mul_neg_one(a)))),
-        λ (k: Nat) (ih: mul(a, add(b, NegSucc(k))) = add(mul(a, b), mul(a, NegSucc(k)))) =>
-            trans(
-                mul_ipred(a, add(b, NegSucc(k))),
-                trans(
-                    cong_int(λ (w: Int) => add(w, neg(a)), ih),
-                    trans(
-                        add_assoc(mul(a, b), mul(a, NegSucc(k)), neg(a)),
-                        sym(cong_int(λ (w: Int) => add(mul(a, b), w), mul_ipred(a, NegSucc(k))))))),
+        (k: Nat) (ih: mul(a, add(b, OfNat(k))) = add(mul(a, b), mul(a, OfNat(k)))) ⊢
+            apply trans;
+            give mul_isucc(a, add(b, OfNat(k)));
+            apply trans;
+            give cong_int(λ (w: Int) => add(w, a), ih);
+            apply trans;
+            give add_assoc(mul(a, b), mul(a, OfNat(k)), a);
+            sym(cong_int(λ (w: Int) => add(mul(a, b), w), mul_ofnat_succ(a, k))),
+        apply trans;
+        give mul_ipred(a, b);
+        sym(cong_int(λ (w: Int) => add(mul(a, b), w), mul_neg_one(a))),
+        (k: Nat) (ih: mul(a, add(b, NegSucc(k))) = add(mul(a, b), mul(a, NegSucc(k)))) ⊢
+            apply trans;
+            give mul_ipred(a, add(b, NegSucc(k)));
+            apply trans;
+            give cong_int(λ (w: Int) => add(w, neg(a)), ih);
+            apply trans;
+            give add_assoc(mul(a, b), mul(a, NegSucc(k)), neg(a));
+            sym(cong_int(λ (w: Int) => add(mul(a, b), w), mul_ipred(a, NegSucc(k)))),
         c)
 }
 
 // The other side, through commutativity rather than a second induction.
 theorem add_mul_distr(a, b, c: Int): (a + b) * c = a * c + b * c {
-    trans(
-        mul_comm(add(a, b), c),
-        trans(
-            mul_add_distr(c, a, b),
-            trans(
-                cong_int(λ (w: Int) => add(w, mul(c, b)), mul_comm(c, a)),
-                cong_int(λ (w: Int) => add(mul(a, c), w), mul_comm(c, b)))))
+    apply trans;
+    give mul_comm(add(a, b), c);
+    apply trans;
+    give mul_add_distr(c, a, b);
+    apply trans;
+    give cong_int(λ (w: Int) => add(w, mul(c, b)), mul_comm(c, a));
+    cong_int(λ (w: Int) => add(mul(a, c), w), mul_comm(c, b))
 }
 
 // ---------------------------------------------------------------------------

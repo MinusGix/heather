@@ -103,11 +103,13 @@ theorem tree_fold_fusion<A, B, C>(src: TreeAlg<A, B>, dst: TreeAlg<A, C>,
     match tree {
         Leaf(value) => leaf_comm(value),
         Node(left, right) =>
-            trans(node_comm(tree_fold(src, left), tree_fold(src, right)),
-              trans(cong_fn(λ (l: C) => dst.node(l, hom(tree_fold(src, right))),
-                            tree_fold_fusion(src, dst, hom, leaf_comm, node_comm, left)),
-                    cong_fn(dst.node(tree_fold(dst, left)),
-                            tree_fold_fusion(src, dst, hom, leaf_comm, node_comm, right)))),
+            apply trans;
+            give node_comm(tree_fold(src, left), tree_fold(src, right));
+            apply trans;
+            give cong_fn(λ (l: C) => dst.node(l, hom(tree_fold(src, right))),
+                         tree_fold_fusion(src, dst, hom, leaf_comm, node_comm, left));
+            cong_fn(dst.node(tree_fold(dst, left)),
+                    tree_fold_fusion(src, dst, hom, leaf_comm, node_comm, right)),
     }
 }
 
@@ -138,12 +140,14 @@ fn mirror_alg<A>() → TreeAlg<A, Tree<A>> {
 fn mirror_size_laws<A>() → TreePassLaws<A>(TreeSameSize<A>, mirror_alg<A>()) {
     TreePassLaws {
         leaf: λ (value: A) => refl,
-        node: λ (left: Tree<A>) (left_r: Tree<A>) ih_left
-                (right: Tree<A>) (right_r: Tree<A>) ih_right =>
-            cong_succ(
-                trans(cong_fn(λ (n: Nat) => add(n, tree_size(left_r)), ih_right),
-                    trans(cong_fn(add(tree_size(right)), ih_left),
-                          add_comm(tree_size(right), tree_size(left))))),
+        node: (left: Tree<A>) (left_r: Tree<A>) ih_left
+              (right: Tree<A>) (right_r: Tree<A>) ih_right ⊢
+            apply cong_succ;
+            apply trans;
+            give cong_fn(λ (n: Nat) => add(n, tree_size(left_r)), ih_right);
+            apply trans;
+            give cong_fn(add(tree_size(right)), ih_left);
+            add_comm(tree_size(right), tree_size(left)),
     }
 }
 
@@ -177,10 +181,10 @@ fn tree_rebuild_elim<A>() →
 {
     TreeElim {
         leaf: λ (value: A) => refl,
-        node: λ (left: Tree<A>) (right: Tree<A>) ih_left ih_right =>
-            trans(
-                cong_fn(λ (l: Tree<A>) => Node<A>(l, tree_fold(tree_rebuild_alg<A>(), right)), ih_left),
-                cong_fn(λ (r: Tree<A>) => Node<A>(left, r), ih_right)),
+        node: (left: Tree<A>) (right: Tree<A>) ih_left ih_right ⊢
+            apply trans;
+            give cong_fn(λ (l: Tree<A>) => Node<A>(l, tree_fold(tree_rebuild_alg<A>(), right)), ih_left);
+            cong_fn(λ (r: Tree<A>) => Node<A>(left, r), ih_right),
     }
 }
 

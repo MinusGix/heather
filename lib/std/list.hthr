@@ -114,8 +114,9 @@ theorem len_append<A>(xs, ys: List<A>):
     match xs {
         Nil => sym(add_left_zero(len(ys))),
         Cons(_, t) =>
-            trans(cong_succ(len_append(t, ys)),
-                  sym(add_succ_left(len(t), len(ys)))),
+            apply trans;
+            give cong_succ(len_append(t, ys));
+            sym(add_succ_left(len(t), len(ys))),
     }
 }
 
@@ -183,9 +184,9 @@ theorem rev_append<A>(xs: List<A>, ys: List<A>):
     match xs {
         Nil => sym(append_nil(rev(ys))),
         Cons(h, t) =>
-            trans(
-                cong_append_l(Cons(h, Nil), rev_append(t, ys)),
-                append_assoc(rev(ys), rev(t), Cons(h, Nil))),
+            apply trans;
+            give cong_append_l(Cons(h, Nil), rev_append(t, ys));
+            append_assoc(rev(ys), rev(t), Cons(h, Nil)),
     }
 }
 
@@ -193,8 +194,9 @@ theorem rev_involutive<A>(xs: List<A>): rev(rev(xs)) = xs {
     match xs {
         Nil => {},
         Cons(h, t) =>
-            trans(rev_append(rev(t), Cons(h, Nil)),
-                  cong_cons(h, rev_involutive(t))),
+            apply trans;
+            give rev_append(rev(t), Cons(h, Nil));
+            cong_cons(h, rev_involutive(t)),
     }
 }
 
@@ -205,8 +207,9 @@ theorem rev_len<A>(xs: List<A>): len(rev(xs)) = len(xs) {
     match xs {
         Nil => {},
         Cons(h, t) =>
-            trans(len_append(rev(t), Cons(h, Nil)),
-                  cong_succ(rev_len(t))),
+            apply trans;
+            give len_append(rev(t), Cons(h, Nil));
+            cong_succ(rev_len(t)),
     }
 }
 
@@ -297,7 +300,9 @@ theorem list_fold_unique<A, B>(alg: ListAlg<A, B>, g: List<A> → B,
     match xs {
         Nil => nil_law,
         Cons(h, t) =>
-            trans(cons_law(h, t), cong_fn(alg.cons(h), list_fold_unique(alg, g, nil_law, cons_law, t))),
+            apply trans;
+            give cons_law(h, t);
+            cong_fn(alg.cons(h), list_fold_unique(alg, g, nil_law, cons_law, t)),
     }
 }
 
@@ -313,8 +318,9 @@ theorem list_fold_fusion<A, B, C>(src: ListAlg<A, B>, dst: ListAlg<A, C>,
     match xs {
         Nil => nil_comm,
         Cons(h, t) =>
-            trans(cons_comm(h, list_fold(src, t)),
-                  cong_fn(dst.cons(h), list_fold_fusion(src, dst, hom, nil_comm, cons_comm, t))),
+            apply trans;
+            give cons_comm(h, list_fold(src, t));
+            cong_fn(dst.cons(h), list_fold_fusion(src, dst, hom, nil_comm, cons_comm, t)),
     }
 }
 
@@ -360,9 +366,10 @@ theorem foldl_rev<A, B>(xs: List<A>, f: B → A → B):
 {
     match xs {
         Nil => λ z => {},
-        Cons(h, t) => λ z =>
-            trans(foldl_append(rev(t), Cons(h, Nil), f, z),
-                  cong_fn(λ (w: B) => f(w, h), foldl_rev(t, f, z))),
+        Cons(h, t) => z ⊢
+            apply trans;
+            give foldl_append(rev(t), Cons(h, Nil), f, z);
+            cong_fn(λ (w: B) => f(w, h), foldl_rev(t, f, z)),
     }
 }
 
@@ -375,8 +382,10 @@ theorem foldl_len<A>(xs: List<A>):
 {
     match xs {
         Nil => λ z => {},
-        Cons(_, t) => λ z =>
-            trans(foldl_len(t, Succ(z)), add_succ_left(z, len(t))),
+        Cons(_, t) => z ⊢
+            apply trans;
+            give foldl_len(t, Succ(z));
+            add_succ_left(z, len(t)),
     }
 }
 
@@ -650,7 +659,7 @@ fn Mem<A>(a: A, xs: List<A>) → Type {
     }
 }
 
-theorem not_mem_nil<A>(a: A): ¬Mem(a, Nil) { λ (h: Mem(a, Nil)) => h }
+theorem not_mem_nil<A>(a: A): ¬Mem(a, Nil) { (h: Mem(a, Nil)) ⊢ h }
 
 theorem mem_head<A>(a: A, xs: List<A>): Mem(a, Cons(a, xs)) { Inl(refl) }
 

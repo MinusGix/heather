@@ -40,7 +40,10 @@ theorem add_assoc(x, y, z: Nat): (x + y) + z = x + (y + z) {
 theorem add_comm(x, y: Nat): x + y = y + x {
     match y {
         Zero => sym(add_left_zero(x)),
-        Succ(k) => trans(cong_succ(add_comm(x, k)), sym(add_succ_left(k, x))),
+        Succ(k) =>
+            apply trans;
+            give cong_succ(add_comm(x, k));
+            sym(add_succ_left(k, x)),
     }
 }
 
@@ -99,10 +102,10 @@ theorem mul_succ_left(a, b: Nat): Succ(a) * b = b + a * b {
 theorem mul_add_distr(a, b, c: Nat): a * (b + c) = a * b + a * c {
     match c {
         Zero => refl,
-        Succ(k) => trans(
-            cong_nat(λ (w: Nat) => add(w, a), mul_add_distr(a, b, k)),
+        Succ(k) =>
+            apply trans;
+            give cong_nat(λ (w: Nat) => add(w, a), mul_add_distr(a, b, k));
             add_assoc(mul(a, b), mul(a, k), a),
-        ),
     }
 }
 
@@ -112,10 +115,10 @@ theorem mul_add_distr(a, b, c: Nat): a * (b + c) = a * b + a * c {
 theorem mul_assoc(x, y, z: Nat): (x * y) * z = x * (y * z) {
     match z {
         Zero => refl,
-        Succ(k) => trans(
-            cong_nat(λ (w: Nat) => add(w, mul(x, y)), mul_assoc(x, y, k)),
+        Succ(k) =>
+            apply trans;
+            give cong_nat(λ (w: Nat) => add(w, mul(x, y)), mul_assoc(x, y, k));
             sym(mul_add_distr(x, mul(y, k), y)),
-        ),
     }
 }
 
@@ -471,13 +474,17 @@ instance(n, m: Nat) Decide<n = m> { dec := eq_dec(n, m) }
 // `Le(n, m)` gives the difference. Induction on `n` with `m` generalized.
 theorem le_add(n: Nat): (m: Nat) → n <= m → n + sub(m, n) = m {
     match n {
-        Zero => λ m hle =>
-            trans(cong_nat(λ (x: Nat) => add(0, x), sub_zero(m)), add_left_zero(m)),
-        Succ(n2, ih) => λ m =>
+        Zero => m hle ⊢
+            apply trans;
+            give cong_nat(λ (x: Nat) => add(0, x), sub_zero(m));
+            add_left_zero(m),
+        Succ(n2, ih) => m ⊢
             match m {
-                Zero => λ bad => false_elim(bad),
-                Succ(m2) => λ good =>
-                    trans(add_succ_left(n2, sub(m2, n2)), cong_succ(ih(m2, good))),
+                Zero => bad ⊢ false_elim(bad),
+                Succ(m2) => good ⊢
+                    apply trans;
+                    give add_succ_left(n2, sub(m2, n2));
+                    cong_succ(ih(m2, good)),
             },
     }
 }
@@ -801,10 +808,10 @@ theorem one_pow(n: Nat): pow(1, n) = 1 {
 theorem pow_add(a, b, c: Nat): pow(a, b + c) = pow(a, b) * pow(a, c) {
     match c {
         Zero => sym(add_left_zero(pow(a, b))),
-        Succ(k) => trans(
-            cong_nat(λ (w: Nat) => mul(w, a), pow_add(a, b, k)),
+        Succ(k) =>
+            apply trans;
+            give cong_nat(λ (w: Nat) => mul(w, a), pow_add(a, b, k));
             mul_assoc(pow(a, b), pow(a, k), a),
-        ),
     }
 }
 
@@ -841,10 +848,10 @@ theorem mul_shuffle(x, y, z, w: Nat): (x * y) * (z * w) = (x * z) * (y * w) {
 theorem mul_pow(a, b, n: Nat): pow(a * b, n) = pow(a, n) * pow(b, n) {
     match n {
         Zero => refl,
-        Succ(k) => trans(
-            cong_nat(λ (w: Nat) => mul(w, mul(a, b)), mul_pow(a, b, k)),
+        Succ(k) =>
+            apply trans;
+            give cong_nat(λ (w: Nat) => mul(w, mul(a, b)), mul_pow(a, b, k));
             mul_shuffle(pow(a, k), pow(b, k), a, b),
-        ),
     }
 }
 
@@ -940,10 +947,10 @@ theorem half_le(n: Nat): half(n) <= n {
 theorem half_double(n: Nat): half(n + n) = n {
     match n {
         Zero => refl,
-        Succ(l) => trans(
-            cong_nat(λ (w: Nat) => half(Succ(w)), add_succ_left(l, l)),
+        Succ(l) =>
+            apply trans;
+            give cong_nat(λ (w: Nat) => half(Succ(w)), add_succ_left(l, l));
             cong_succ(half_double(l)),
-        ),
     }
 }
 
@@ -988,10 +995,10 @@ theorem half_add_half(n: Nat): Even(n) → half(n) + half(n) = n {
         Zero => λ (h: Even(0)) => refl,
         Succ(k) => match k {
             Zero => λ (h: Even(1)) => false_elim(h),
-            Succ(l) => λ (h: Even(Succ(Succ(l)))) => trans(
-                cong_succ(add_succ_left(half(l), half(l))),
+            Succ(l) => (h: Even(Succ(Succ(l)))) ⊢
+                apply trans;
+                give cong_succ(add_succ_left(half(l), half(l)));
                 cong_succ(cong_succ(half_add_half(l, h))),
-            ),
         },
     }
 }

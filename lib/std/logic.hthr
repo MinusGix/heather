@@ -48,7 +48,7 @@ theorem not_intro(P: Type, k: P → False): ¬P { k }
 // special form.
 theorem absurd_of<P, Q>(p: P, np: ¬P): Q { false_elim(np(p)) }
 
-theorem not_not_intro(P: Type, p: P): ¬¬P { λ (k: ¬P) => k(p) }
+theorem not_not_intro(P: Type, p: P): ¬¬P { (k: ¬P) ⊢ k(p) }
 
 // Modus tollens. Stated with the implication first, matching the order it is
 // usually applied in.
