@@ -75,6 +75,7 @@ use heather_syntax::{
 };
 
 mod access;
+mod attempt;
 pub mod certgen;
 pub mod gate;
 pub mod stats;
@@ -100,13 +101,14 @@ mod traits;
 mod vec;
 mod wf;
 
+use attempt::DeclAttempt;
 use inductive::Inductive;
-use traits::{ClassInfo, InstanceInfo};
 use names::{
     miss_msg, qkey, split_qual, ImportSpec, NameIndex, NameKind, NameRes,
     Scope, DEFAULT_MODULE,
 };
 use slots::{Ingredient, Slot};
+use traits::{ClassInfo, InstanceInfo};
 
 /// The stage-1 prelude: `sym`/`trans`/`cong`/`cong_succ`, monomorphic at
 /// `Nat` where the equation's type is not a parameter.
@@ -842,31 +844,8 @@ pub struct Elaborator {
     impl_provenance: Option<datarepr::Provenance>,
     /// Surface declarations by name; see the note in `elab_decl`.
     decls: HashMap<String, Decl>,
-    /// Operator fallbacks taken while elaborating the current declaration
-    /// after a designation table was consulted at a known, uncovered carrier.
-    /// Kept only to turn an otherwise source-free kernel rejection into a
-    /// diagnostic about the notation the writer actually used.
-    op_fallback_notes: RefCell<Vec<String>>,
-    /// Successful rung-3 resolutions at a known carrier which had no rung-2
-    /// designation. Unlike `op_fallback_notes`, these survive a successful
-    /// declaration as lint diagnostics rather than explaining only failures.
-    op_fallback_uses: RefCell<Vec<OperatorFallbackUse>>,
-    /// The first type mismatch this declaration's checking *noticed* but did
-    /// not raise (`issues/check-fallback-discards-expected-type.md`): the
-    /// message and the span of the expression it belongs to.
-    ///
-    /// Held rather than raised, because raising it would make the elaborator
-    /// the judge in a race it should not enter. A more specific diagnostic
-    /// further down — an arity error, an injectivity refusal, an operator
-    /// designation — is a *better* message about the same declaration, and it
-    /// is raised in the ordinary way, which now still wins. This slot is
-    /// consulted at exactly one place: the kernel gate, when the gate rejects
-    /// with `NotConvertible`, which is the case this slot has an explanation
-    /// for. Cleared per declaration next to [`Self::op_fallback_notes`], and
-    /// first-writer-wins — which names the *innermost* expression that
-    /// disagreed, since checking records on the way back out of the descent,
-    /// and the innermost one is the most specific thing to point at.
-    pending_mismatch: RefCell<Option<(String, Span)>>,
+    /// Scratch state with exactly one ordinary declaration's lifetime.
+    attempt: DeclAttempt,
     /// While an `instance` block is being elaborated: the members that have
     /// already landed, as (written name, full name). An unqualified reference
     /// to one of them resolves to its global, which is the whole of "later
@@ -904,54 +883,6 @@ pub struct Elaborator {
     resolve_depth: Cell<usize>,
     next_tag: u32,
     fuel: u64,
-    /// Number of Ψ slots reserved for the current declaration's goals — a
-    /// syntactic pre-count of its holes. Goals occupy the *innermost* indices
-    /// `[0, goal_base)` for the whole declaration, so every reference to a
-    /// committed global is offset by it (see [`Self::resolve`]). Zero outside
-    /// a declaration body, which makes the whole mechanism inert.
-    goal_base: u32,
-    /// Syntactic-hole portion of `goal_base` for the current declaration.
-    /// Promoted apply goals are reserved in addition to this upper bound, not
-    /// out of slots that a written hole later in the body may still consume.
-    written_goal_base: u32,
-    /// Number of promotable implicits encountered in this declaration attempt.
-    promoted_goals_seen: Cell<u32>,
-    /// Goals in creation order; goal `k` is `GlobalVar(goal_base - 1 - k)`.
-    /// Interior mutability because the elaboration methods take `&self` and
-    /// `Cx` is cloned at every binder.
-    goals: RefCell<Vec<Goal>>,
-    /// (Span, optional synthesized discriminator) → goal index. The elaborator
-    /// visits some expressions twice (motive synthesis; cloned spines), and
-    /// one source goal must stay one goal; promoted parameters at the same
-    /// apply span use the discriminator to remain distinct.
-    goal_spans: RefCell<HashMap<(usize, usize, Option<String>), usize>>,
-    /// A declaration elaboration that discovers more promoted `apply` goals
-    /// than its current prefix reserved records the required total here and
-    /// aborts speculatively. [`Self::elab_decl`] then restarts that declaration
-    /// with the larger prefix. Zero outside that narrow control path.
-    requested_goal_base: Cell<u32>,
-    /// Whether the current item is an ordinary declaration that can be safely
-    /// restarted to enlarge its goal prefix. Meta declarations use a separate
-    /// path and retain ordinary inference failures instead of leaking the
-    /// restart sentinel.
-    goal_restart_enabled: Cell<bool>,
-    /// During an argument-slot ownership probe, only this slot remains live;
-    /// sibling slots elaborate as disposable neutrals. This lets the probe
-    /// ask where each slot is captured independently of source traversal
-    /// order. `None` in every real elaboration.
-    slot_probe_target: Cell<Option<Span>>,
-    /// Set while elaborating an `on` right-hand side, where a *new* hole is
-    /// refused. Load-bearing: it is what makes [`strengthen_global`] sound.
-    frozen: Cell<bool>,
-    /// Set while a motive-less `match` is speculatively inferring one arm's
-    /// type ([`Self::infer_match_constant_motive`]). Its only job is to keep
-    /// that speculation from *nesting*: the inner `match` declines to
-    /// speculate, so the outer attempt fails and falls back to the message
-    /// that names the motive. Without the guard the work at a `match` nested
-    /// `d` deep would be 2^d — the shape
-    /// `issues/type-argument-speculation-cost.md` was filed for, and the
-    /// reason this is a flag rather than a syntactic scan of the arm.
-    motive_speculation: Cell<bool>,
     /// `meta fn` definitions, **elaborator-held** (docs/in-language-map-design.md
     /// §4): kernel-checked at `Layer::Meta` against Ψ, never pushed to it —
     /// ch. 04 admits no layer-m term in a global context. The evaluation hook
@@ -1126,9 +1057,7 @@ impl Elaborator {
             access: access::AccessTable::default(),
             impl_provenance: None,
             decls: HashMap::new(),
-            op_fallback_notes: RefCell::new(Vec::new()),
-            op_fallback_uses: RefCell::new(Vec::new()),
-            pending_mismatch: RefCell::new(None),
+            attempt: DeclAttempt::default(),
             instance_scope: Vec::new(),
             derived: Vec::new(),
             pending_derived: RefCell::new(Vec::new()),
@@ -1137,16 +1066,6 @@ impl Elaborator {
             resolve_depth: Cell::new(0),
             next_tag: 0,
             fuel: DEFAULT_FUEL,
-            goal_base: 0,
-            written_goal_base: 0,
-            promoted_goals_seen: Cell::new(0),
-            goals: RefCell::new(Vec::new()),
-            goal_spans: RefCell::new(HashMap::new()),
-            requested_goal_base: Cell::new(0),
-            goal_restart_enabled: Cell::new(false),
-            slot_probe_target: Cell::new(None),
-            frozen: Cell::new(false),
-            motive_speculation: Cell::new(false),
             meta_defs: HashMap::new(),
             meta_slots: HashMap::new(),
             meta_pushed: RefCell::new(Vec::new()),
@@ -1755,7 +1674,7 @@ impl Elaborator {
     pub(crate) fn global_abs_of(&self, var: GlobalVar) -> Option<usize> {
         let len = self.psi.bindings.len() as u32;
         let abs = len
-            .checked_add(self.goal_base)?
+            .checked_add(self.attempt.goal_base)?
             .checked_add(self.meta_pushed.borrow().len() as u32)?
             .checked_sub(var.0.checked_add(1)?)?;
         Some(abs as usize)
@@ -1811,16 +1730,12 @@ impl Elaborator {
         }
         let warn_mark = self.warnings.borrow().len();
         let mut reserved = 0;
-        self.goal_restart_enabled.set(true);
+        self.attempt.goal_restart_enabled.set(true);
         let r = loop {
-            self.op_fallback_notes.borrow_mut().clear();
-            self.op_fallback_uses.borrow_mut().clear();
-            self.pending_mismatch.borrow_mut().take();
+            self.attempt.prepare();
             self.pending_derived.borrow_mut().clear();
-            self.requested_goal_base.set(0);
-            self.promoted_goals_seen.set(0);
             let r = self.elab_decl_inner(decl, reserved);
-            let requested = self.requested_goal_base.replace(0);
+            let requested = self.attempt.requested_goal_base.replace(0);
             if requested <= reserved {
                 break r;
             }
@@ -1829,20 +1744,13 @@ impl Elaborator {
             // discard its diagnostics and goal arena, enlarge the stable Ψ
             // prefix, and elaborate the declaration again from its source.
             self.warnings.borrow_mut().truncate(warn_mark);
-            self.goals.borrow_mut().clear();
-            self.goal_spans.borrow_mut().clear();
-            self.frozen.set(false);
+            self.attempt.clear_goals();
             reserved = requested;
         };
-        self.goal_restart_enabled.set(false);
-        self.goal_base = 0;
-        self.written_goal_base = 0;
+        self.attempt.finish();
         self.refresh_delta_psi();
-        self.goals.borrow_mut().clear();
-        self.goal_spans.borrow_mut().clear();
-        self.frozen.set(false);
         if r.is_ok() {
-            for used in self.op_fallback_uses.borrow_mut().drain(..) {
+            for used in self.attempt.op_fallback_uses.borrow_mut().drain(..) {
                 self.emit_lint(
                     Lint::OperatorFallback,
                     format!(
@@ -1859,10 +1767,8 @@ impl Elaborator {
                 );
             }
         } else {
-            self.op_fallback_uses.borrow_mut().clear();
+            self.attempt.op_fallback_uses.borrow_mut().clear();
         }
-        self.op_fallback_notes.borrow_mut().clear();
-        self.pending_mismatch.borrow_mut().take();
         // The surface signature, kept for the declaration forms that have to
         // *restate* it: `impl f for Rp` computes `f`'s refinement obligation
         // by rewriting `f`'s own parameter and result types
@@ -1974,8 +1880,8 @@ impl Elaborator {
         // telescope and result type are elaborated first and their types end
         // up embedded in the emitted term, so they must live in the same
         // (shifted) world as the body.
-        self.written_goal_base = count_holes(decl);
-        self.goal_base = self.written_goal_base.max(reserved_goals);
+        self.attempt.written_goal_base = count_holes(decl);
+        self.attempt.goal_base = self.attempt.written_goal_base.max(reserved_goals);
         self.refresh_delta_psi();
         // Elaborate the parameter telescope. Type parameters come first and
         // are ordinary kernel binders at `Ty 0` — level-0 parametric
@@ -2284,14 +2190,14 @@ impl Elaborator {
         key: Option<&str>,
         promoted_parameter: Option<usize>,
     ) -> R<Term> {
-        if self.frozen.get() {
+        if self.attempt.frozen.get() {
             return err(
                 "a hole may not appear in an `on` right-hand side — give it its own `on`",
                 span,
             );
         }
-        let mut goals = self.goals.borrow_mut();
-        let mut spans = self.goal_spans.borrow_mut();
+        let mut goals = self.attempt.goals.borrow_mut();
+        let mut spans = self.attempt.goal_spans.borrow_mut();
         let span_key = (span.start, span.end, key.map(str::to_string));
         let k = match spans.get(&span_key) {
             // Re-elaboration of the same syntactic hole (motive synthesis,
@@ -2305,7 +2211,7 @@ impl Elaborator {
             }
             None => {
                 let k = goals.len();
-                if k as u32 >= self.goal_base {
+                if k as u32 >= self.attempt.goal_base {
                     return err("internal: more goals than the pre-count reserved", span);
                 }
                 // A goal payload is a `Trm` entry, so a context *variable* base
@@ -2374,7 +2280,7 @@ impl Elaborator {
             }
         };
         Ok(Term::GlobalTm {
-            var: GlobalVar(self.goal_base - 1 - k as u32),
+            var: GlobalVar(self.attempt.goal_base - 1 - k as u32),
             subst: LocalSubst::id(&cx.gamma),
         })
     }
@@ -2384,12 +2290,12 @@ impl Elaborator {
     fn solve_goals(&self, ons: &[OnStmt], decl: &str) -> R<()> {
         // No new goals from here on: `on` right-hand sides are elaborated in
         // the goal world but their solutions are strengthened out of it.
-        self.frozen.set(true);
+        self.attempt.frozen.set(true);
         for on in ons {
             match &on.target {
                 OnTarget::Name(name) => {
                     let (cx, ty, lvl) = {
-                        let goals = self.goals.borrow();
+                        let goals = self.attempt.goals.borrow();
                         let Some(g) = goals.iter().find(|g| g.name == *name) else {
                             let known: Vec<&str> =
                                 goals.iter().map(|g| g.name.as_str()).collect();
@@ -2412,8 +2318,8 @@ impl Elaborator {
                     };
                     // In the goal's *own* context, not the one at the `on`.
                     let t = self.elab_check(&cx, &on.expr, &ty, &lvl)?;
-                    let t = strengthen_global(&t, self.goal_base);
-                    let mut goals = self.goals.borrow_mut();
+                    let t = strengthen_global(&t, self.attempt.goal_base);
+                    let mut goals = self.attempt.goals.borrow_mut();
                     let g = goals.iter_mut().find(|g| g.name == *name).expect("found above");
                     g.solution = Some(Rc::new(t));
                 }
@@ -2424,6 +2330,7 @@ impl Elaborator {
                 OnTarget::Stmt(pat) => {
                     let psi = self.goal_psi();
                     let candidates: Vec<(usize, Cx, Type, Level)> = self
+                        .attempt
                         .goals
                         .borrow()
                         .iter()
@@ -2453,8 +2360,8 @@ impl Elaborator {
                     }
                     for (k, cx, ty, lvl) in matched {
                         let t = self.elab_check(&cx, &on.expr, &ty, &lvl)?;
-                        let t = strengthen_global(&t, self.goal_base);
-                        self.goals.borrow_mut()[k].solution = Some(Rc::new(t));
+                        let t = strengthen_global(&t, self.attempt.goal_base);
+                        self.attempt.goals.borrow_mut()[k].solution = Some(Rc::new(t));
                     }
                 }
                 // A `split` arm, consumed by the parser into an `Arm`
@@ -2468,7 +2375,7 @@ impl Elaborator {
                 }
             }
         }
-        let goals = self.goals.borrow();
+        let goals = self.attempt.goals.borrow();
         let unsolved: Vec<GoalReport> = goals
             .iter()
             .filter(|g| g.solution.is_none())
@@ -2538,12 +2445,12 @@ impl Elaborator {
         }
         // No goals in flight: Ψ itself already is the goal world, and
         // sharing its `Rc` beats rebuilding the list.
-        if self.goal_base == 0 {
+        if self.attempt.goal_base == 0 {
             return self.psi.clone();
         }
-        let goals = self.goals.borrow();
+        let goals = self.attempt.goals.borrow();
         let mut bindings = (*self.psi.bindings).clone();
-        for k in 0..self.goal_base as usize {
+        for k in 0..self.attempt.goal_base as usize {
             bindings.push(match goals.get(k) {
                 Some(g) => GlobalBinding::Tm {
                     ctx: g.cx.gamma.clone(),
@@ -2571,8 +2478,8 @@ impl Elaborator {
     /// `apply_global`'s convention. Reserved-but-unused slots (the pre-count
     /// is an upper bound) get a payload nothing can reach.
     fn goal_subst(&self) -> GlobalSubst {
-        let goals = self.goals.borrow();
-        let entries = (0..self.goal_base as usize)
+        let goals = self.attempt.goals.borrow();
+        let entries = (0..self.attempt.goal_base as usize)
             .map(|k| {
                 GlobalEntry::Tm(match goals.get(k).and_then(|g| g.solution.clone()) {
                     Some(t) => t,
@@ -2995,7 +2902,7 @@ impl Elaborator {
                     let mut nested = Vec::new();
                     for target in slots {
                         let targeted = self.clone();
-                        targeted.slot_probe_target.set(Some(target));
+                        targeted.attempt.slot_probe_target.set(Some(target));
                         match targeted
                             .elab_check_skel_slots(cx, e, expected, lvl, hint, skel, false)
                         {
@@ -3089,7 +2996,7 @@ impl Elaborator {
             );
         }
         match &e.kind {
-            ExprKind::ArgSlot(_) => match self.slot_probe_target.get() {
+            ExprKind::ArgSlot(_) => match self.attempt.slot_probe_target.get() {
                 Some(target) if target != e.span => Ok(Term::Var(LocalVar(0))),
                 _ => Err(ElabError::ArgSlotEscape { span: e.span }),
             },
@@ -3471,7 +3378,7 @@ impl Elaborator {
     /// no types, as a bare `NotConvertible`.
     ///
     /// The kernel stays the judge, and this method does not even raise an error:
-    /// it fills [`Self::pending_mismatch`], which only the gate reads and only
+    /// it fills [`DeclAttempt::pending_mismatch`], which only the gate reads and only
     /// when the gate itself rejects. `Layer::Prog` against
     /// [`Self::goal_psi`] is [[auto-refl-empty-block]]'s gate, for its reason
     /// (a type mentioning an outstanding goal must still be well-scoped).
@@ -3509,10 +3416,10 @@ impl Elaborator {
         if got_s == want_s {
             return;
         }
-        // Recorded, not raised: see [`Self::pending_mismatch`]. The gate is
+        // Recorded, not raised: see [`DeclAttempt::pending_mismatch`]. The gate is
         // still the judge, and a more specific diagnostic downstream still
         // wins the message.
-        let mut slot = self.pending_mismatch.borrow_mut();
+        let mut slot = self.attempt.pending_mismatch.borrow_mut();
         if slot.is_none() {
             *slot = Some((
                 format!("this has type `{got_s}`, but `{want_s}` is expected here"),
@@ -3669,7 +3576,7 @@ impl Elaborator {
             return self.elab_infer_at(cx, &rewritten, expected);
         }
         match &e.kind {
-            ExprKind::ArgSlot(_) => match self.slot_probe_target.get() {
+            ExprKind::ArgSlot(_) => match self.attempt.slot_probe_target.get() {
                 Some(target) if target != e.span => {
                     Ok((Term::Var(LocalVar(0)), Type::Nat, Level::Zero))
                 }
@@ -4686,7 +4593,7 @@ impl Elaborator {
     ///    every arm — binding or not — goes through the ordinary path against
     ///    it. So this widens where a motive may be *omitted*, never what a
     ///    `match` may mean.
-    ///  - **Speculation does not nest** ([`Self::motive_speculation`]), and a
+    ///  - **Speculation does not nest** ([`DeclAttempt::motive_speculation`]), and a
     ///    failed attempt leaves no warnings behind.
     fn infer_match_constant_motive(
         &self,
@@ -4697,22 +4604,22 @@ impl Elaborator {
         generated: bool,
         span: Span,
     ) -> Option<R<(Term, Type, Level)>> {
-        if self.motive_speculation.get() {
+        if self.attempt.motive_speculation.get() {
             return None;
         }
         let warned = self.warnings.borrow().len();
-        let goaled = self.goals.borrow().len();
+        let goaled = self.attempt.goals.borrow().len();
         let rollback = || {
             self.warnings.borrow_mut().truncate(warned);
-            self.goals.borrow_mut().truncate(goaled);
-            self.goal_spans.borrow_mut().retain(|_, k| *k < goaled);
+            self.attempt.goals.borrow_mut().truncate(goaled);
+            self.attempt.goal_spans.borrow_mut().retain(|_, k| *k < goaled);
         };
         // *An* arm that binds nothing, not the first one: a non-binding arm
         // whose body does not infer either (`Nil` on its own, which is the
         // very ambiguity this is trying to resolve) teaches nothing and is
         // stepped over. Each candidate is elaborated at most once, so the
         // whole search is linear in the arms.
-        self.motive_speculation.set(true);
+        self.attempt.motive_speculation.set(true);
         let named = arms
             .iter()
             .filter(|a| a.binders.is_empty())
@@ -4723,7 +4630,7 @@ impl Elaborator {
                     None
                 }
             });
-        self.motive_speculation.set(false);
+        self.attempt.motive_speculation.set(false);
         let (ty, lvl) = named?;
         let attempt: R<(Term, Type, Level)> = (|| {
             let (scrut_t, scrut_ty, scrut_lvl) = self.elab_infer(cx, scrut)?;
@@ -4793,11 +4700,11 @@ impl Elaborator {
         };
 
         let warned = self.warnings.borrow().len();
-        let goaled = self.goals.borrow().len();
+        let goaled = self.attempt.goals.borrow().len();
         let rollback = || {
             self.warnings.borrow_mut().truncate(warned);
-            self.goals.borrow_mut().truncate(goaled);
-            self.goal_spans.borrow_mut().retain(|_, k| *k < goaled);
+            self.attempt.goals.borrow_mut().truncate(goaled);
+            self.attempt.goal_spans.borrow_mut().retain(|_, k| *k < goaled);
         };
         let mut inferred = None;
         for (arm, (evidence_ty, evidence_lvl)) in arms.iter().zip([
@@ -6974,11 +6881,11 @@ impl Elaborator {
                      fallback name `{fb}`",
                     head.written
                 );
-                let mut notes = self.op_fallback_notes.borrow_mut();
+                let mut notes = self.attempt.op_fallback_notes.borrow_mut();
                 if !notes.contains(&note) {
                     notes.push(note);
                 }
-                let mut uses = self.op_fallback_uses.borrow_mut();
+                let mut uses = self.attempt.op_fallback_uses.borrow_mut();
                 if !uses.iter().any(|u| u.span == span) {
                     uses.push(OperatorFallbackUse {
                         symbol: sym.into(),
@@ -7043,7 +6950,7 @@ impl Elaborator {
     }
 
     fn operator_fallback_note(&self) -> Option<String> {
-        let notes = self.op_fallback_notes.borrow();
+        let notes = self.attempt.op_fallback_notes.borrow();
         (!notes.is_empty()).then(|| notes.join("; "))
     }
 
@@ -7060,7 +6967,7 @@ impl Elaborator {
     /// the bare one.
     fn kernel_error(&self, decl: &str, span: Span, e: TypeError) -> ElabError {
         if e == TypeError::NotConvertible
-            && let Some((msg, at)) = self.pending_mismatch.borrow().clone()
+            && let Some((msg, at)) = self.attempt.pending_mismatch.borrow().clone()
         {
             let msg = match self.operator_fallback_note() {
                 Some(note) => format!("{msg} (note: {note})"),
@@ -7103,9 +7010,9 @@ impl Elaborator {
         if self.is_checking_only(cx, leaf) {
             return None;
         }
-        let mark = self.goals.borrow().len();
+        let mark = self.attempt.goals.borrow().len();
         let inferred = self.elab_infer(cx, leaf);
-        self.goals.borrow_mut().truncate(mark);
+        self.attempt.goals.borrow_mut().truncate(mark);
         let (_, ty, _) = inferred.ok()?;
         self.carrier_of_ty(cx, &ty, span)
     }
@@ -9967,17 +9874,17 @@ impl Elaborator {
         // The first pass may not have reserved enough stable Ψ slots because
         // these goals are semantic, not written holes. Request the exact
         // total and let `elab_decl` restart before creating any of them.
-        if promote_unsolved && self.goal_restart_enabled.get() {
+        if promote_unsolved && self.attempt.goal_restart_enabled.get() {
             let promoted: Vec<usize> = sols
                 .iter()
                 .enumerate()
                 .filter_map(|(j, s)| matches!(s, Sol::Unsolved).then_some(j))
                 .collect();
-            let total_promoted = self.promoted_goals_seen.get() + promoted.len() as u32;
-            self.promoted_goals_seen.set(total_promoted);
-            let needed = self.written_goal_base + total_promoted;
-            if needed > self.goal_base {
-                self.requested_goal_base.set(needed);
+            let total_promoted = self.attempt.promoted_goals_seen.get() + promoted.len() as u32;
+            self.attempt.promoted_goals_seen.set(total_promoted);
+            let needed = self.attempt.written_goal_base + total_promoted;
+            if needed > self.attempt.goal_base {
+                self.attempt.requested_goal_base.set(needed);
                 return err("internal: restarting declaration to reserve promoted apply goals", span);
             }
             for j in promoted {
@@ -10693,7 +10600,7 @@ impl Elaborator {
                 // The two paddings never combine: goals are refused inside a
                 // `meta fn`.
                 let meta_off = self.meta_pushed.borrow().len() as u32;
-                let var = GlobalVar(len - 1 - abs + self.goal_base + meta_off);
+                let var = GlobalVar(len - 1 - abs + self.attempt.goal_base + meta_off);
                 let GlobalBinding::Tm { ty, level, .. } =
                     &self.psi.bindings[*abs as usize]
                 else {
@@ -10848,13 +10755,13 @@ impl Elaborator {
 
     /// Rebuild [`Self::delta_psi`]. Called wherever Ψ or `goal_base` moves.
     fn refresh_delta_psi(&mut self) {
-        if self.goal_base == 0 {
+        if self.attempt.goal_base == 0 {
             self.delta_psi = self.psi.clone();
             return;
         }
         let mut bindings = (*self.psi.bindings).clone();
         bindings.resize(
-            bindings.len() + self.goal_base as usize,
+            bindings.len() + self.attempt.goal_base as usize,
             GlobalBinding::Tm {
                 ctx: LocalCtx::nil(),
                 layer: Layer::Code,

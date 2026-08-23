@@ -2751,7 +2751,7 @@ inductive G : (n: Nat) -> Type {
         // so the variable is `goal_base` — in scope, resolvable, and not in
         // the registry.
         let dup = Term::GlobalTm {
-            var: GlobalVar(t.el.goal_base),
+            var: GlobalVar(t.el.attempt.goal_base),
             subst: LocalSubst {
                 tail: heather_kernel::term::SubstTail::Empty {
                     len: 0,

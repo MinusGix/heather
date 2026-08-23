@@ -441,7 +441,7 @@ impl Elaborator {
     /// substitution is the empty map out of the current Γ.
     fn derived_ref(&self, cx: &Cx, abs: u32) -> Term {
         let len = self.psi.bindings.len() as u32;
-        let var = GlobalVar(len - 1 - abs + self.goal_base);
+        let var = GlobalVar(len - 1 - abs + self.attempt.goal_base);
         Term::GlobalTm {
             var,
             subst: LocalSubst {
@@ -464,7 +464,7 @@ impl Elaborator {
     /// goals are in flight (`goal_base == 0`), which is what keeps the queued
     /// type in a world the mint can still read.
     fn record_derived(&self, goal: &Type, lvl: &Level) {
-        if self.goal_base != 0 || !self.type_is_closed(goal, lvl) {
+        if self.attempt.goal_base != 0 || !self.type_is_closed(goal, lvl) {
             return;
         }
         let mut pending = self.pending_derived.borrow_mut();

@@ -47,12 +47,14 @@ modularity.
 
 ### 1. Declaration transaction
 
-Introduce a `DeclAttempt` containing the fields currently cleared, rolled
-back, or restarted in `elab_decl`: goals, goal spans and capacity, pending
-derived instances, warnings, mismatch notes, operator fallback records,
-recursion state, and frozen/speculation flags.
+The first phase is now present: `DeclAttempt` owns goal allocation and
+capacity, mismatch notes, operator fallback records, slot probing, and motive
+speculation. Its `prepare`, `clear_goals`, and `finish` operations encode
+the retry/cleanup lifecycle in one place. Warnings remain an output accumulator
+across declarations, and pending derived instances remain item-level because
+inductive and representation declarations use them too.
 
-`Elaborator::elab_decl` should become:
+The second phase should make `Elaborator::elab_decl`:
 
 1. create an attempt;
 2. elaborate into a proposed binding;
