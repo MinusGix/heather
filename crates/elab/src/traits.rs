@@ -11,7 +11,7 @@
 //! The two tables this round adds are consumed by `extends` and by the
 //! instance assembler only. Layer 2's resolver is the consumer they exist for.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 
 use heather_syntax::{
@@ -21,6 +21,7 @@ use heather_syntax::{
 };
 
 use crate::names::qkey;
+use crate::resolve::DerivedInst;
 use crate::{err, ElabError, Elaborator, R};
 
 /// A declared class: the record it is, plus what `extends` and the instance
@@ -152,6 +153,163 @@ pub(crate) type InstKey = (String, String, String);
 /// never `head_name`'s raw string.
 pub(crate) fn instance_key(class_key: &str, head_key: &str, index: &str) -> InstKey {
     (class_key.to_string(), head_key.to_string(), index.to_string())
+}
+
+/// Committed class, instance, designation, and derived-dictionary state.
+///
+/// These tables answer one question together: which structure does a carrier
+/// expose? Their fields stay private so declaration code cannot update a
+/// lookup view without going through the matching registration operation.
+#[derive(Clone, Default)]
+pub(crate) struct Traits {
+    class_members: HashSet<String>,
+    classes: HashMap<String, Rc<ClassInfo>>,
+    instances: HashMap<InstKey, InstanceInfo>,
+    designations: HashMap<DesigKey, DesignationInfo>,
+    derived: Vec<DerivedInst>,
+}
+
+impl Traits {
+    pub(crate) fn commit_class(&mut self, key: String, info: ClassInfo) {
+        debug_assert!(!self.classes.contains_key(&key));
+        for name in info.fields.iter().filter_map(|field| field.name.as_ref()) {
+            self.class_members.insert(name.clone());
+        }
+        self.classes.insert(key, Rc::new(info));
+    }
+
+    pub(crate) fn class(&self, key: &str) -> Option<&Rc<ClassInfo>> {
+        self.classes.get(key)
+    }
+
+    pub(crate) fn has_class(&self, key: &str) -> bool {
+        self.classes.contains_key(key)
+    }
+
+    pub(crate) fn has_member(&self, name: &str) -> bool {
+        self.class_members.contains(name)
+    }
+
+    pub(crate) fn classes_declaring(&self, name: &str) -> Vec<(String, Rc<ClassInfo>)> {
+        let mut out: Vec<_> = self
+            .classes
+            .iter()
+            .filter(|(_, info)| {
+                info.fields
+                    .iter()
+                    .zip(&info.owner)
+                    .any(|(field, owner)| field.name.as_deref() == Some(name) && owner.is_none())
+            })
+            .map(|(key, info)| (key.clone(), Rc::clone(info)))
+            .collect();
+        out.sort_by(|left, right| left.0.cmp(&right.0));
+        out
+    }
+
+    pub(crate) fn instance(&self, key: &InstKey) -> Option<&InstanceInfo> {
+        self.instances.get(key)
+    }
+
+    pub(crate) fn has_instance(&self, key: &InstKey) -> bool {
+        self.instances.contains_key(key)
+    }
+
+    pub(crate) fn commit_instance(&mut self, key: InstKey, info: InstanceInfo) {
+        debug_assert!(!self.instances.contains_key(&key));
+        self.instances.insert(key, info);
+    }
+
+    pub(crate) fn candidates(&self, class_key: &str) -> Vec<(String, bool, String)> {
+        let mut out: Vec<_> = self
+            .instances
+            .iter()
+            .filter(|((class, _, _), _)| class == class_key)
+            .map(|(_, info)| {
+                (info.global.clone(), info.parameterized, info.index.clone())
+            })
+            .collect();
+        out.sort();
+        out
+    }
+
+    pub(crate) fn instances_answering(
+        &self,
+        class_key: &str,
+        head_key: Option<&str>,
+    ) -> Vec<String> {
+        let mut out: Vec<_> = self
+            .instances
+            .iter()
+            .filter(|((class, head, _), _)| {
+                class == class_key && head_key.is_none_or(|key| head == key)
+            })
+            .map(|(_, info)| info.written.clone())
+            .collect();
+        out.sort();
+        out
+    }
+
+    pub(crate) fn designation(&self, key: &DesigKey) -> Option<&DesignationInfo> {
+        self.designations.get(key)
+    }
+
+    pub(crate) fn commit_designation(&mut self, key: DesigKey, info: DesignationInfo) {
+        debug_assert!(!self.designations.contains_key(&key));
+        self.designations.insert(key, info);
+    }
+
+    pub(crate) fn designated(
+        &self,
+        fixity: OpFixity,
+        symbol: &str,
+        carrier_key: &str,
+    ) -> Option<&str> {
+        self.designations
+            .get(&designation_key(fixity, symbol, carrier_key))
+            .map(|info| info.op.as_str())
+    }
+
+    pub(crate) fn has_designation_for(&self, fixity: OpFixity, symbol: &str) -> bool {
+        self.designations
+            .keys()
+            .any(|(registered_fixity, registered, _)| {
+                *registered_fixity == fixity && registered == symbol
+            })
+    }
+
+    pub(crate) fn designations_at(&self, carrier_key: &str) -> Vec<(String, String)> {
+        let mut out: Vec<_> = self
+            .designations
+            .iter()
+            .filter(|((fixity, _, carrier), _)| {
+                *fixity == OpFixity::Infix && carrier == carrier_key
+            })
+            .map(|((_, symbol, _), info)| (symbol.clone(), info.op.clone()))
+            .collect();
+        out.sort();
+        out
+    }
+
+    pub(crate) fn designations_for(&self, fixity: OpFixity, symbol: &str) -> Vec<(String, String)> {
+        let mut out: Vec<_> = self
+            .designations
+            .iter()
+            .filter(|((registered_fixity, registered, _), _)| {
+                *registered_fixity == fixity && registered == symbol
+            })
+            .map(|(_, info)| (info.carrier.clone(), info.op.clone()))
+            .collect();
+        out.sort();
+        out
+    }
+
+    pub(crate) fn derived(&self) -> &[DerivedInst] {
+        &self.derived
+    }
+
+    pub(crate) fn commit_derived(&mut self, derived: DerivedInst) {
+        self.derived.push(derived);
+    }
 }
 
 /// The index spelling as a *name* fragment: a key may contain `::` (a
@@ -893,16 +1051,6 @@ impl Elaborator {
             span: d.span,
         };
         self.elab_inductive(&ind)?;
-        // The cheap negative test receiver dispatch consults before it infers
-        // anything (docs/traits-receiver-dispatch-design.md §3). Recorded here
-        // and not in `elab_inductive`: a plain `record`'s fields are reachable
-        // only through a receiver of that record's own type, and dispatch must
-        // stay off every call that has nothing to do with a class.
-        for f in &fields {
-            if let Some(n) = &f.name {
-                self.class_members.insert(n.clone());
-            }
-        }
         let info = ClassInfo {
             name: d.name.clone(),
             params: d.params.clone(),
@@ -911,7 +1059,7 @@ impl Elaborator {
             ancestors,
             owner,
         };
-        self.classes.insert(qkey(self.names.module(), &d.name), Rc::new(info));
+        self.traits.commit_class(qkey(self.names.module(), &d.name), info);
         Ok(())
     }
 
@@ -1092,7 +1240,7 @@ impl Elaborator {
     }
 
     pub(crate) fn lookup_class(&self, name: &str) -> Option<Rc<ClassInfo>> {
-        self.classes.get(&self.key_of(name)?).cloned()
+        self.traits.class(&self.key_of(name)?).cloned()
     }
 
     /// A parameter's type read as a **class reference**: the class's name, its
@@ -1521,7 +1669,7 @@ impl Elaborator {
         // `DesignationInfo::carrier` keeps for the read side.
         let head_key = self.carrier_key(&head);
         let key = designation_key(d.fixity, &d.symbol, &head_key);
-        if let Some(prev) = self.designations.get(&key) {
+        if let Some(prev) = self.traits.designation(&key) {
             return err(
                 format!(
                     "`{}` already designates `{}` at `{head_key}` (`{}`): a designation is \
@@ -1536,7 +1684,7 @@ impl Elaborator {
                 d.span,
             );
         }
-        self.designations.insert(key, DesignationInfo { op, written, carrier: head });
+        self.traits.commit_designation(key, DesignationInfo { op, written, carrier: head });
         Ok(())
     }
 
@@ -1554,9 +1702,7 @@ impl Elaborator {
         fixity: OpFixity,
         head_key: &str,
     ) -> Option<String> {
-        self.designations
-            .get(&designation_key(fixity, sym, head_key))
-            .map(|d| d.op.clone())
+        self.traits.designated(fixity, sym, head_key).map(str::to_string)
     }
 
     /// Every designation at one carrier, as `` (`+`, `or`) `` pairs sorted by
@@ -1564,14 +1710,7 @@ impl Elaborator {
     /// which binder would have worked (§6, §7). `head_key` is resolved, as
     /// [`Self::designated`]'s is.
     pub(crate) fn designations_at(&self, head_key: &str) -> Vec<(String, String)> {
-        let mut out: Vec<(String, String)> = self
-            .designations
-            .iter()
-            .filter(|((fixity, _, h), _)| *fixity == OpFixity::Infix && h == head_key)
-            .map(|((_, s, _), d)| (s.clone(), d.op.clone()))
-            .collect();
-        out.sort();
-        out
+        self.traits.designations_at(head_key)
     }
 
     // -- instances ----------------------------------------------------------
@@ -1702,7 +1841,7 @@ impl Elaborator {
         // written string, because it is what the canonical name is built from
         // and what a diagnostic should print.
         let key = instance_key(&class_key, &head_key, &index);
-        if let Some(prev) = self.instances.get(&key) {
+        if let Some(prev) = self.traits.instance(&key) {
             return err(
                 format!(
                     "`{}` already has an instance of `{}`{} (`{}`), declared as `{}`: an \
@@ -1807,7 +1946,7 @@ impl Elaborator {
             self.assemble_instance(d, &class, &head, &head_key, &prefix, &class_ty, &written);
         self.instance_scope.clear();
         r?;
-        self.instances.insert(
+        self.traits.commit_instance(
             key,
             InstanceInfo {
                 global: qkey(self.names.module(), &prefix),
@@ -1939,9 +2078,9 @@ impl Elaborator {
         let mut registered: Vec<(String, Rc<ClassInfo>, String)> = Vec::new();
         for a in &class.ancestors {
             let Some(akey) = self.key_of(&a.name) else { continue };
-            let Some(ainfo) = self.classes.get(&akey).cloned() else { continue };
+            let Some(ainfo) = self.traits.class(&akey).cloned() else { continue };
             let aindex = self.index_spelling(&anc_ref(a), &ainfo)?;
-            let Some(inst) = self.instances.get(&instance_key(&akey, head_key, &aindex)) else {
+            let Some(inst) = self.traits.instance(&instance_key(&akey, head_key, &aindex)) else {
                 continue;
             };
             // A *parameterized* canonical parent (a generic instance, or one
@@ -1955,7 +2094,7 @@ impl Elaborator {
                 continue;
             }
             let g = inst.global.clone();
-            let Some(ainfo) = self.classes.get(&akey).cloned() else { continue };
+            let Some(ainfo) = self.traits.class(&akey).cloned() else { continue };
             registered.push((a.name.clone(), ainfo, g));
         }
 
@@ -2059,10 +2198,10 @@ impl Elaborator {
             let Some(akey) = self.key_of(&a.name) else {
                 return err(format!("`{}` is not a class in scope", a.name), span);
             };
-            let Some(ainfo) = self.classes.get(&akey).cloned() else { continue };
+            let Some(ainfo) = self.traits.class(&akey).cloned() else { continue };
             let aref = anc_ref(&a);
             let aindex = self.index_spelling(&aref, &ainfo)?;
-            if self.instances.contains_key(&instance_key(&akey, head_key, &aindex)) {
+            if self.traits.has_instance(&instance_key(&akey, head_key, &aindex)) {
                 continue;
             }
             let aname = if aindex.is_empty() {
@@ -2108,7 +2247,7 @@ impl Elaborator {
                 span,
             );
             self.synth_decl(DeclKind::Fn, &aname, d, aty, alit, span)?;
-            self.instances.insert(
+            self.traits.commit_instance(
                 instance_key(&akey, head_key, &aindex),
                 InstanceInfo {
                     global: qkey(self.names.module(), &aname),

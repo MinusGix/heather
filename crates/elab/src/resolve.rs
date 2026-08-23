@@ -68,7 +68,8 @@ pub(crate) struct DerivedInst {
     /// Machine name, unwritable by construction. Deterministic within one
     /// elaboration; see design §9.2 for what that is *not*.
     pub name: String,
-    /// Absolute Ψ index, exactly as [`crate::GlobalInfo`]'s.
+    /// Absolute Ψ index, using the same convention as the name registry's
+    /// global metadata.
     pub abs: u32,
     /// The goal this value was derived for — the table's key, compared up to
     /// conversion.
@@ -182,7 +183,7 @@ impl Elaborator {
             tr.push(line(depth, "no-class", format!("`{}` does not resolve here", ind.name)));
             return None;
         };
-        if !self.classes.contains_key(&ckey) {
+        if !self.traits.has_class(&ckey) {
             tr.push(line(
                 depth,
                 "no-class",
@@ -192,13 +193,7 @@ impl Elaborator {
         }
         // Candidates in a *stated* order — sorted by canonical name, never
         // declaration order and never `HashMap` order (design §3.1).
-        let mut cands: Vec<(String, bool, String)> = self
-            .instances
-            .iter()
-            .filter(|((c, _, _), _)| *c == ckey)
-            .map(|(_, i)| (i.global.clone(), i.parameterized, i.index.clone()))
-            .collect();
-        cands.sort();
+        let cands = self.traits.candidates(&ckey);
         if cands.is_empty() {
             tr.push(line(depth, "no-instance", format!("`{}` has no instances", ind.name)));
             return None;
@@ -302,7 +297,7 @@ impl Elaborator {
             return None;
         }
         let ckey = self.key_of(&cind.name)?;
-        if !self.classes.contains_key(&ckey) {
+        if !self.traits.has_class(&ckey) {
             return None;
         }
         // Innermost first, exactly as the exact pass: the two passes must not
@@ -364,7 +359,7 @@ impl Elaborator {
             return None; // the exact pass already had its chance
         }
         let dkey = self.key_of(&dind.name)?;
-        let dinfo = self.classes.get(&dkey)?;
+        let dinfo = self.traits.class(&dkey)?;
         // `ancestors` is already transitive and deduped (layer 1 §2), so a
         // grandparent is one membership test and never a chain walk.
         if !dinfo.ancestors.iter().any(|r| self.key_of(&r.name).as_deref() == Some(ckey)) {
@@ -429,7 +424,8 @@ impl Elaborator {
     fn derived_hit(&self, cx: &Cx, goal: &Type) -> Option<Term> {
         let now = self.psi.bindings.len() as u32;
         let d = self
-            .derived
+            .traits
+            .derived()
             .iter()
             .find(|d| self.conv_here(cx, &d.ty.shift_global(now - d.at), goal, &d.level))?;
         Some(self.derived_ref(cx, d.abs))
@@ -558,7 +554,7 @@ impl Elaborator {
         if !ok {
             return;
         }
-        let name = format!("#derived{}", self.derived.len());
+        let name = format!("#derived{}", self.traits.derived().len());
         let abs = self.psi.bindings.len() as u32;
         self.psi.push(GlobalBinding::Tm {
             ctx: LocalCtx::nil(),
@@ -570,7 +566,7 @@ impl Elaborator {
             // it (record §6.1).
             body: Some(Rc::new(term)),
         });
-        self.derived.push(DerivedInst {
+        self.traits.commit_derived(DerivedInst {
             name,
             abs,
             ty: goal.clone(),

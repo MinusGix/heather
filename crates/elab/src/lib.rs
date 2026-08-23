@@ -54,7 +54,7 @@
 //! stored golden value.
 
 use std::cell::{Cell, RefCell};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::rc::Rc;
 
 use heather_kernel::conv::{conv_term, conv_type};
@@ -109,7 +109,7 @@ use names::{
     NameKind, NameRes, Names, Scope, DEFAULT_MODULE,
 };
 use slots::{Ingredient, Slot};
-use traits::{ClassInfo, InstanceInfo};
+use traits::Traits;
 use types::Types;
 
 /// The stage-1 prelude: `sym`/`trans`/`cong`/`cong_succ`, monomorphic at
@@ -723,43 +723,9 @@ pub struct Elaborator {
     /// Committed nominal declarations and every index or generated definition
     /// belonging to them (`types.rs`).
     types: Types,
-    /// Every field name of every declared `class`, across all of them
-    /// (docs/traits-receiver-dispatch-design.md §3). The same **cheap negative
-    /// test** as the type registry's record-field index and the name
-    /// registry's member-base index, and for
-    /// the same reason: `x.op(y)` consults this before inferring the
-    /// receiver's type or building a resolution goal, so a `.` call on a name
-    /// that is nobody's class field costs exactly what it cost before classes
-    /// existed. Which class a name belongs to — and whether an instance exists
-    /// at the receiver's carrier — is decided by the receiver and the
-    /// resolver, never here.
-    class_members: HashSet<String>,
-    /// Declared classes, by qualified name (docs/traits-layer1-design.md §2).
-    /// A class *is* a record — `inductives` holds it too — so this table
-    /// carries only what `extends` and the instance assembler need beyond the
-    /// record: the flattened field list with its per-field owner, and the
-    /// transitive ancestor list. Layer 2's resolver is the consumer it exists
-    /// for.
-    classes: HashMap<String, Rc<ClassInfo>>,
-    /// One canonical value per (class, **resolved** carrier)
-    /// (docs/traits-layer1-design.md §4.1,
-    /// docs/instance-resolved-key-design.md). Every component of the key is a
-    /// declaration reference and none is a spelling, so `nat::Le` and
-    /// `int::Le` are two carriers and not one. Declaring is registering; there
-    /// is no search over this table at layer 1, only the fill-by-reference and
-    /// parent-synthesis lookups the `extends` discipline makes.
-    instances: HashMap<traits::InstKey, InstanceInfo>,
-    /// What an operator symbol means at a carrier: one entry per **(symbol,
-    /// resolved carrier head)** (docs/operators-onto-classes-design.md §3.2,
-    /// `traits::DesigKey`).
-    ///
-    /// Beside `instances` and keyed the same way — on the carrier's
-    /// *declaration*, never on the head's spelling — for the same reason:
-    /// declaring is registering, and there is no search over it. What it is
-    /// *not* is a default-instance table: it says what a symbol means, never
-    /// which structure a carrier has, which is why `+` at `Bool` can be `or`
-    /// while both Bool monoids stay registered as equals (§3.3).
-    designations: HashMap<traits::DesigKey, traits::DesignationInfo>,
+    /// Committed classes, instances, designations, and derived dictionaries
+    /// (`traits.rs`).
+    traits: Traits,
     /// One repr per spec type, keyed per `docs/datarepr-design.md` §4: the
     /// spec inductive's *elaborated declaration* identity plus the elaborated
     /// arguments of the instantiation. Declaration keying and not nominal
@@ -801,12 +767,6 @@ pub struct Elaborator {
     /// members use earlier members by name" (docs/traits-layer1-design.md
     /// §4.2). Empty outside a block, which makes the mechanism inert.
     instance_scope: Vec<(String, String)>,
-    /// Canonical derived instances, minted into Ψ, one per derivation
-    /// (docs/traits-layer2-design.md §8). A `Vec` and not a map: the key is
-    /// the goal type *up to conversion*, so lookup is a scan and the table is
-    /// small by construction (one entry per distinct derived dictionary in
-    /// the program).
-    derived: Vec<resolve::DerivedInst>,
     /// Goals this item's elaboration derived and that deserve a canonical
     /// global. Ψ must not grow mid-declaration, so minting is a **restart**:
     /// the item is rolled back, the queue drained, the item elaborated again
@@ -971,10 +931,7 @@ impl Elaborator {
             delta_psi: GlobalCtx::default(),
             names: Names::new(DEFAULT_MODULE),
             types: Types::default(),
-            class_members: HashSet::new(),
-            classes: HashMap::new(),
-            instances: HashMap::new(),
-            designations: HashMap::new(),
+            traits: Traits::default(),
             datareprs: HashMap::new(),
             monomorphs: HashMap::new(),
             datarepr_by_name: HashMap::new(),
@@ -984,7 +941,6 @@ impl Elaborator {
             impl_provenance: None,
             attempt: DeclAttempt::default(),
             instance_scope: Vec::new(),
-            derived: Vec::new(),
             pending_derived: RefCell::new(Vec::new()),
             warnings: RefCell::new(Vec::new()),
             lint_profile: LintProfile::Default,
@@ -1494,7 +1450,7 @@ impl Elaborator {
     /// (docs/traits-layer2-design.md §8) — one per *derivation*, not per use
     /// site, which is the coherence invariant this table is.
     pub fn derived_instances(&self) -> Vec<&str> {
-        self.derived.iter().map(|d| d.name.as_str()).collect()
+        self.traits.derived().iter().map(|d| d.name.as_str()).collect()
     }
 
     /// A declared global's elaborated statement and body, by written name —
@@ -6097,7 +6053,7 @@ impl Elaborator {
         span: Span,
     ) -> R<Option<DotResolution>> {
         // The cheap negative test, before anything is inferred or resolved.
-        if !self.class_members.contains(name) {
+        if !self.traits.has_member(name) {
             return Ok(None);
         }
         // Inference failure is not an error here, exactly as for a field and
@@ -6315,7 +6271,7 @@ impl Elaborator {
         let tkey = self.key_of(target)?;
         for d in cx.dicts.iter().rev() {
             let Some(dkey) = self.key_of(&d.class) else { continue };
-            let Some(dinfo) = self.classes.get(&dkey) else { continue };
+            let Some(dinfo) = self.traits.class(&dkey) else { continue };
             let index = if dkey == tkey {
                 d.index.clone()
             } else {
@@ -6536,7 +6492,7 @@ impl Elaborator {
     fn scope_dict_index(&self, cx: &Cx, tkey: &str) -> Option<Vec<Expr>> {
         for d in cx.dicts.iter().rev() {
             let Some(dkey) = self.key_of(&d.class) else { continue };
-            let Some(dinfo) = self.classes.get(&dkey) else { continue };
+            let Some(dinfo) = self.traits.class(&dkey) else { continue };
             if dkey == tkey {
                 return Some(d.index.clone());
             }
@@ -6595,13 +6551,12 @@ impl Elaborator {
         // filter and the designation lookup below use the same string the
         // declarations registered.
         let hkey = head.map(|h| h.key.clone());
-        let mut listed: Vec<String> = self
-            .instances
-            .iter()
-            .filter(|((c, h, _), _)| *c == ckey && hkey.as_deref().is_none_or(|k| h == k))
-            .map(|(_, i)| format!("`{}`", i.written))
+        let listed: Vec<String> = self
+            .traits
+            .instances_answering(&ckey, hkey.as_deref())
+            .into_iter()
+            .map(|written| format!("`{written}`"))
             .collect();
-        listed.sort();
         let slots = class
             .valparams
             .iter()
@@ -6750,7 +6705,7 @@ impl Elaborator {
         //    path of every operator expression that elaborates today
         //    (docs/bare-symbol-checking-carrier-design.md §4.2).
         let mut uncovered_carrier = None;
-        if self.designations.keys().any(|(f, s, _)| *f == fixity && s == sym) {
+        if self.traits.has_designation_for(fixity, sym) {
             let flexible_left = Self::operator_left_leaf_is_numeral(args);
             let expected_for_numeral = if flexible_left {
                 expected
@@ -6834,17 +6789,16 @@ impl Elaborator {
         // Reporting "unbound name `add`" would name something the writer
         // never typed. Say what *was* typed, and what would have to be
         // true for it to mean something.
-        let mut known = self
-            .designations
-            .iter()
-            .filter(|((f, s, _), _)| *f == fixity && s == sym)
+        let known = self
+            .traits
+            .designations_for(fixity, sym)
+            .into_iter()
             // The *written* carrier, not the key: this line tells a reader
             // where the symbol does mean something, and `list::List` is the
             // registry's name for it, not theirs
             // (issues/diagnostics-name-the-written-form.md).
-            .map(|(_, d)| format!("`{}` (`{}`)", d.carrier, d.op))
+            .map(|(carrier, op)| format!("`{carrier}` (`{op}`)"))
             .collect::<Vec<_>>();
-        known.sort();
         // The carrier rung 2 tried, where it got one from either source. Naming
         // it is the difference between "covers this carrier" — which names no
         // carrier at all — and a sentence the reader can check against the
@@ -7061,20 +7015,11 @@ impl Elaborator {
     /// ordinary §4 name regime, asked by resolving the class's own name, and
     /// not a second visibility rule.
     fn declaring_classes(&self, name: &str) -> Vec<(String, Rc<traits::ClassInfo>)> {
-        let mut with_field: Vec<(String, Rc<traits::ClassInfo>)> = self
-            .classes
-            .iter()
-            .filter(|(k, info)| {
-                info.fields
-                    .iter()
-                    .zip(&info.owner)
-                    .any(|(f, o)| f.name.as_deref() == Some(name) && o.is_none())
-                    && self.key_of(&info.name).as_deref() == Some(k.as_str())
-            })
-            .map(|(k, i)| (k.clone(), Rc::clone(i)))
-            .collect();
-        with_field.sort_by(|a, b| a.0.cmp(&b.0));
-        with_field
+        self.traits
+            .classes_declaring(name)
+            .into_iter()
+            .filter(|(key, info)| self.key_of(&info.name).as_deref() == Some(key.as_str()))
+            .collect()
     }
 
     /// The receiver read **as a type**, when it is one
@@ -7125,7 +7070,7 @@ impl Elaborator {
         // The cheap negative test, before anything is inferred or lowered: a
         // `.f` where `f` is nobody's class field costs one hash lookup, which
         // is what keeps every program that predates classes at its old price.
-        if !self.class_members.contains(name) {
+        if !self.traits.has_member(name) {
             return Ok(None);
         }
         let Some((carrier, clvl)) = self.type_subject(cx, recv, span) else {
@@ -7346,7 +7291,7 @@ impl Elaborator {
     ) -> Option<R<(Term, Type, Level)>> {
         let (subject, class) = names::split_qual(name)?;
         let key = self.key_of(class)?;
-        let info = Rc::clone(self.classes.get(&key)?);
+        let info = Rc::clone(self.traits.class(&key)?);
         if info.params.len() != 1 || info.valparams.len() != index.len() {
             return None;
         }
@@ -9410,7 +9355,7 @@ impl Elaborator {
     /// could start refusing. With it, such a file runs byte-identical code.
     fn symbol_needs_a_carrier(&self, cx: &Cx, sym: &str, fixity: OpFixity) -> bool {
         (fixity != OpFixity::Infix || !cx.op_locals.iter().any(|(s, _)| s == sym))
-            && self.designations.keys().any(|(f, s, _)| *f == fixity && s == sym)
+            && self.traits.has_designation_for(fixity, sym)
     }
 
     /// Application with implicit-argument insertion

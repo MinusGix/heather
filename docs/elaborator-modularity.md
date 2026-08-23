@@ -93,9 +93,18 @@ fallible inductive checks finish before `Types::commit` installs those views;
 a failed declaration neither consumes a tag nor partially enters a type
 index.
 
-`Traits` and `Representations` remain. Each should expose deterministic lookup
-and explicit commit methods. No caller should iterate a hash-backed registry
-to emit terms or diagnostics.
+`Traits` is now established in `traits.rs`. It owns classes and the class-member
+fast path, instances, operator designations, and canonical derived
+dictionaries. Declaration and resolution code use explicit registration and
+lookup operations; every query that crosses a hash-backed table returns a
+canonical order before terms or diagnostics can observe it. Lexical instance
+scope and pending derivations intentionally stay outside the registry: they are
+temporary state belonging to the current elaboration attempt, not committed
+trait declarations.
+
+`Representations` remains. It should expose deterministic lookup and explicit
+commit methods. No caller should iterate a hash-backed registry to emit terms
+or diagnostics.
 
 ### 2. Bidirectional core
 
