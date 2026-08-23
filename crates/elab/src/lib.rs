@@ -94,6 +94,7 @@ mod inductive;
 mod lgg;
 mod lint;
 pub use lint::{Lint, LintProfile};
+mod metaprograms;
 mod quote;
 pub mod resolve;
 mod representations;
@@ -106,6 +107,7 @@ mod wf;
 
 use attempt::DeclAttempt;
 use inductive::Inductive;
+use metaprograms::{MetaDef, MetaPrograms};
 use names::{
     miss_msg, qkey, split_qual, GlobalInfo, GlobalRegistration, ImportSpec,
     NameKind, NameRes, Names, Scope, DEFAULT_MODULE,
@@ -772,22 +774,10 @@ pub struct Elaborator {
     /// by `apply_implicit`, not passed down.
     resolve_depth: Cell<usize>,
     fuel: u64,
-    /// `meta fn` definitions, **elaborator-held** (docs/in-language-map-design.md
-    /// §4): kernel-checked at `Layer::Meta` against Ψ, never pushed to it —
-    /// ch. 04 admits no layer-m term in a global context. The evaluation hook
-    /// applies these to code arguments and reduces the application away.
-    meta_defs: HashMap<String, MetaDef>,
-    /// Which template elaborates which slot
-    /// (docs/meta-def-registration-design.md §2). Populated by the `for`
-    /// clause and by nothing else: a `meta fn` named `map_code` without one is
-    /// not a template, which is the point at which "the name is the contract"
-    /// was retired. One slot takes one template — a second claim is an error
-    /// at its declaration, not a shadowing.
-    /// Global across the program, deliberately: one template per slot, and a
-    /// second claim is an error at the join. The value is
-    /// `(module, template name)` so that the error can name both modules when
-    /// the collision arrives through an import (docs/modules-design.md §4).
-    meta_slots: HashMap<Slot, (String, String)>,
+    /// Meta-layer definitions and the slots claimed by their `for` clauses
+    /// (`metaprograms.rs`). Kept elaborator-side because layer-m terms cannot
+    /// enter Ψ; both lookup views commit together after validation.
+    meta_programs: MetaPrograms,
     /// The Ψ-extending binders of the `meta fn` currently elaborating (its
     /// `Ctx`/`TyCode` binders, plus letbox-bound code globals during quote
     /// assembly). The whnf/conv oracles append these to Ψ so meta-bound
@@ -806,54 +796,6 @@ pub struct Elaborator {
     /// the default, and what every test and the unflagged CLI use — means the
     /// kernel runs on every declaration, exactly as it always has.
     gate: Option<Rc<dyn gate::KernelGate>>,
-}
-
-/// One registered `meta fn`: its closed layer-m term and statement type,
-/// plus — for a template that claimed a slot — the Π **order** its signature
-/// declared (docs/meta-def-registration-design.md §2.2).
-///
-/// The hook types its *evaluated payload* by kernel inference rather than by
-/// peeling `stmt`, so the statement is currently the registration's record
-/// only — kept because it is the checked fact about `term`.
-///
-/// `order` holds positions into the slot spec's ingredient list, in the
-/// template's own binder order: it is the one place that knowledge lives, and
-/// [`Elaborator::try_code_template`] is the only reader.
-#[derive(Clone)]
-pub(crate) struct MetaDef {
-    pub(crate) term: Rc<Term>,
-    #[allow(dead_code)]
-    pub(crate) stmt: Rc<Type>,
-    /// `|Ψ|` when this definition was registered.
-    ///
-    /// A meta definition is **elaborator-held**, so nothing rescopes it when Ψ
-    /// grows — unlike a Ψ-resident binding, whose body is prefix-scoped and
-    /// rescoped at every lookup. A `GlobalVar` counts from the *end* of Ψ, so
-    /// every declaration elaborated after this one moves what its references
-    /// mean, and a use site has to shift by the growth
-    /// (`MetaDef::at`). Invisible while templates were pure quotation — a
-    /// template that references no global has nothing to go stale — and the
-    /// first analyzer, whose arms call library functions, hits it at once.
-    pub(crate) psi_len: u32,
-    /// The slot this template claimed, if any. `None` is an ordinary meta
-    /// definition: registered, never dispatched.
-    #[allow(dead_code)]
-    pub(crate) slot: Option<Slot>,
-    pub(crate) order: Vec<usize>,
-}
-
-impl MetaDef {
-    /// This definition's term and statement, rescoped to a Ψ of length `now`.
-    pub(crate) fn at(&self, now: usize) -> (Rc<Term>, Rc<Type>) {
-        let growth = now as u32 - self.psi_len;
-        if growth == 0 {
-            return (Rc::clone(&self.term), Rc::clone(&self.stmt));
-        }
-        (
-            Rc::new(self.term.shift_global(growth)),
-            Rc::new(self.stmt.shift_global(growth)),
-        )
-    }
 }
 
 /// What a `p.f` turned out to be (docs/surface-records.md §4.2).
@@ -923,8 +865,7 @@ impl Elaborator {
             lint_profile: LintProfile::Default,
             resolve_depth: Cell::new(0),
             fuel: DEFAULT_FUEL,
-            meta_defs: HashMap::new(),
-            meta_slots: HashMap::new(),
+            meta_programs: MetaPrograms::default(),
             meta_pushed: RefCell::new(Vec::new()),
             result_only_memo: RefCell::new(HashMap::new()),
             gate: None,
@@ -1545,8 +1486,7 @@ impl Elaborator {
     /// (docs/certgen-transcriber-in-language-design.md §6). `None` is the
     /// honest decline every caller falls back from: no template claimed it.
     pub(crate) fn analyzer_def(&self, slot: Slot) -> Option<&MetaDef> {
-        let (m, name) = self.meta_slots.get(&slot)?;
-        self.meta_defs.get(&names::qkey(m, name))
+        self.meta_programs.for_slot(slot).map(|(_, definition)| definition)
     }
 
     /// The accumulated global context (theorem statements).

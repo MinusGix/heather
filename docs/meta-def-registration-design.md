@@ -521,10 +521,11 @@ pub(crate) fn try_code_template(
 `elab_meta_decl_inner` calls `register_slot` after its two `typing::check_*`
 calls (registration is checked code only) and stores the result.
 
-**`crates/elab/src/lib.rs`** — `MetaDef` gains `slot: Option<Slot>` and
-`order: Vec<usize>`; `Elaborator` gains `meta_slots: HashMap<Slot, String>`
-(and, when `issues/meta-hook-evaluation-cost.md` is scheduled, the cached
-`(payload, ty)` beside it). `elab_vec_map` and `elab_vec_fold` shrink to the
+**As landed:** `MetaDef` carries `order: Vec<usize>` and `MetaPrograms` owns
+both qualified definitions and `Slot → (module, name)` dispatch. Its single
+commit installs both views after validation. When
+`issues/meta-hook-evaluation-cost.md` is scheduled, the cached `(payload, ty)`
+belongs beside the definition. `elab_vec_map` and `elab_vec_fold` shrink to the
 named-bag call of §2.3 and lose their template names, argument vectors, and
 prefix comments. `elab_container_ih` gains the same call for `vec.tabulate`
 when §4.4's blocker clears — not in this round.

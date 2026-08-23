@@ -233,6 +233,9 @@ fn a_template_takes_one_ctx_binder_and_no_code_parameters() {
 fn two_templates_cannot_claim_one_slot() {
     let mut e = Elaborator::with_prelude().expect("prelude");
     e.elab_source(LIB).expect("the lib registers");
+    let mut expected = e.clone();
+    expected.elab_source(BUMP).expect("the original template dispatches");
+    let (expected_body, _, _) = last_body(&expected);
     let second = "meta fn other_map(g: Ctx) for vec.map -> Code(g |-
     (A: Type<0>) -> (B: Type<0>) -> (f: A -> B) -> (k: Nat) -> (v: [A; k]) -> [B; k]
 ) {
@@ -248,6 +251,9 @@ fn two_templates_cannot_claim_one_slot() {
 ";
     let err = format!("{:?}", e.elab_source(second).expect_err("`vec.map` is taken"));
     assert!(err.contains("already elaborated by `map_code`"), "wrong failure: {err}");
+    e.elab_source(BUMP).expect("the rejected claimant changed no registry view");
+    let (body, _, _) = last_body(&e);
+    assert_eq!(body, expected_body, "the rejected claimant displaced the original template");
 }
 
 // -- the order lives in the signature ---------------------------------------

@@ -18,8 +18,7 @@ routes so nothing here forecloses them.
   surface name. A module system therefore lives entirely in the
   syntax/elab crates: **no kernel change, no ch. 07 obligation.**
 - **The elaborator is one monotone accumulator.** `Elaborator` holds Ψ plus
-  the name tables — `globals: HashMap<String, GlobalInfo>`, `inductives`,
-  `ctors`, `record_fields`, `meta_defs`/`meta_slots`
+  committed `Names`, `Types`, `Traits`, `Representations`, and `MetaPrograms`
   (`crates/elab/src/lib.rs:376`). Declaration order is Ψ order; a failed
   declaration registers nothing (`check_source` recovery, `lib.rs:559`).
 - **The prelude is already a module in all but name.** `with_prelude`
@@ -187,8 +186,8 @@ at `fn mono(o: Option<Nat>)` is settled; `unwrap_or(None, 9)` at
 cannot also be checked against it. Both are pinned in
 `crates/elab/tests/modules.rs`.
 
-`meta_slots` stays global: one template per slot across the program, a
-second claim is an error at the join (same rule as today, now possibly
+The `MetaPrograms` slot index stays global: one template per slot across the
+program, and a second claim is an error at the join (same rule as today, now possibly
 triggered by an import — the error names both modules). `record_fields`
 is a negative test; union is correct as-is.
 
@@ -313,7 +312,7 @@ import is their correct home either way.
   which the second invariant exists to forbid.
 - **`use` as the policy keyword.** Reserved by decision 2. If scoped
   instance selection (`let instance` in compile-typeclass round-2's
-  sketch), notation packs, or per-file meta-template choice (`meta_slots`
+  sketch), notation packs, or per-file meta-template choice (`MetaPrograms`
   conflicts dissolving into "the template you `use`d") want a surface
   form, `use` is it: `import` moves *names* into scope, `use` moves
   *policies* into the resolution set. Nothing parses yet; the reservation

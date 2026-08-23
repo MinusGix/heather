@@ -6,11 +6,9 @@
 //! the one rollback boundary spanning every durable registry those ordinary
 //! commits can change.
 
-use std::collections::HashMap;
-
 use heather_kernel::term::GlobalCtx;
 
-use crate::{Elaborator, MetaDef, Names, Representations, Slot, Traits, Types, R};
+use crate::{Elaborator, MetaPrograms, Names, Representations, Traits, Types, R};
 
 /// A complete snapshot of facts committed by successful declarations.
 ///
@@ -25,8 +23,7 @@ struct SessionCheckpoint {
     types: Types,
     traits: Traits,
     representations: Representations,
-    meta_defs: HashMap<String, MetaDef>,
-    meta_slots: HashMap<Slot, (String, String)>,
+    meta_programs: MetaPrograms,
 }
 
 impl SessionCheckpoint {
@@ -38,8 +35,7 @@ impl SessionCheckpoint {
             types: elab.types.clone(),
             traits: elab.traits.clone(),
             representations: elab.representations.clone(),
-            meta_defs: elab.meta_defs.clone(),
-            meta_slots: elab.meta_slots.clone(),
+            meta_programs: elab.meta_programs.clone(),
         }
     }
 
@@ -50,8 +46,7 @@ impl SessionCheckpoint {
         elab.types = self.types;
         elab.traits = self.traits;
         elab.representations = self.representations;
-        elab.meta_defs = self.meta_defs;
-        elab.meta_slots = self.meta_slots;
+        elab.meta_programs = self.meta_programs;
 
         // Absolute Ψ positions may be reused after rollback. A cached answer
         // for a removed declaration must not become the answer for its future

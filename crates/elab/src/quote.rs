@@ -6,7 +6,7 @@
 //! its `Code` binders are ordinary Π locals of contextual type, and its body
 //! is pure quotation: one `code {}` payload with letbox-hoisted splices.
 //! The declaration is kernel-checked at `Layer::Meta` against Ψ and then
-//! registered **elaborator-side** (`meta_defs`), never pushed to Ψ — ch. 04
+//! registered **elaborator-side** (`MetaPrograms`), never pushed to Ψ — ch. 04
 //! admits no layer-m term in a global context, and the kernel enforces it
 //! (typing.rs `check_global_ctx`). All meta-level computation is static
 //! (issues/box-synthesis-gap.md): the evaluation hook applies a registered
@@ -28,7 +28,7 @@ use heather_kernel::typing;
 use heather_syntax::{Decl, DeclKind, Expr, ExprKind, SlotPath, Span, Stmt, Ty, TyKind};
 
 use crate::slots::{self, Ingredient, IngredientKind, Slot, SlotSpec};
-use crate::names::{qkey, NameKind};
+use crate::names::NameKind;
 use crate::{err, Alias, Cx, ElabError, Elaborator, MetaDef, R};
 
 /// One binder of a `meta fn`'s signature, in written order.
@@ -119,7 +119,7 @@ fn wk_to_base(gamma: &LocalCtx, span: Span) -> R<LocalSubst> {
 impl Elaborator {
     /// A `meta fn` declaration (docs/in-language-map-design.md §3): elaborate
     /// the modal signature and quotation body, kernel-check the whole thing
-    /// at `Layer::Meta`, and register it in `meta_defs`.
+    /// at `Layer::Meta`, and commit it to the meta-program registry.
     pub(crate) fn elab_meta_decl(&mut self, decl: &Decl) -> R<()> {
         debug_assert_eq!(decl.kind, DeclKind::Fn);
         let r = self.elab_meta_decl_inner(decl);
@@ -365,22 +365,19 @@ impl Elaborator {
             }
             None => None,
         };
-        let (slot, order) = match claimed {
-            Some((slot, order)) => {
-                self.meta_slots
-                    .insert(slot, (self.names.module().to_string(), decl.name.clone()));
-                (Some(slot), order)
-            }
-            None => (None, Vec::new()),
-        };
+        let (slot, order) = claimed
+            .map(|(slot, order)| (Some(slot), order))
+            .unwrap_or((None, Vec::new()));
+        let module = self.names.module().to_string();
         self.declare_name(&decl.name, NameKind::Meta, decl.span)?;
-        self.meta_defs.insert(
-            qkey(self.names.module(), &decl.name),
+        self.meta_programs.commit(
+            module,
+            decl.name.clone(),
+            slot,
             MetaDef {
                 term: Rc::new(term),
                 stmt: Rc::new(stmt),
                 psi_len: self.psi.bindings.len() as u32,
-                slot,
                 order,
             },
         );
@@ -405,7 +402,7 @@ impl Elaborator {
         stmt: &Type,
         lvl: &Level,
     ) -> R<()> {
-        if let Some((m, other)) = self.meta_slots.get(&spec.slot) {
+        if let Some((m, other)) = self.meta_programs.slot_owner(spec.slot) {
             let who = if m == self.names.module() {
                 format!("`{other}`")
             } else {
@@ -491,7 +488,7 @@ impl Elaborator {
                 path.span,
             );
         };
-        if let Some((m, other)) = self.meta_slots.get(&spec.slot) {
+        if let Some((m, other)) = self.meta_programs.slot_owner(spec.slot) {
             // One template per slot **across the program**: a slot is a
             // property of the elaborator, not of a file, so an import can
             // trigger this. The other template is named with its module
@@ -843,13 +840,9 @@ impl Elaborator {
         args: &[(&'static str, Ingredient<'_>)],
         span: Span,
     ) -> R<Option<Term>> {
-        let Some((m, name)) = self.meta_slots.get(&slot) else {
+        let Some((name, md)) = self.meta_programs.for_slot(slot) else {
             return Ok(None);
         };
-        let md = self
-            .meta_defs
-            .get(&qkey(m, name))
-            .expect("a claimed slot has its template");
         let spec = slots::spec(slot);
         debug_assert_eq!(
             args.len(),

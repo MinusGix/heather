@@ -528,7 +528,8 @@ fn stored_forded_indices_keep_their_declaration_module_scope() {
 }
 
 // ---------------------------------------------------------------------------
-// `meta_slots` stays global: one template per slot across the whole program,
+// The MetaPrograms slot index stays global: one template per slot across the
+// whole program,
 // and a second claim through an import is an error that names both modules.
 
 const TEMPLATE: &str = "meta fn map_code(g: Ctx) for vec.map

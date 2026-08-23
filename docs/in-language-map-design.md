@@ -188,7 +188,7 @@ is static; the elaborator normalizes the meta layer at emission time.* So:
 - A `meta fn` elaborates to a closed layer-m term, is **kernel-checked at
   `Layer::Meta` against Ψ** (statement via `check_type`, body via
   `check_term` — same gate as ordinary declarations, different layer), and
-  is registered in an elaborator-side table (`meta_defs`), *not* pushed to
+  is registered in the elaborator-side `MetaPrograms` registry, *not* pushed to
   Ψ. Layer honesty falls out: nothing at layer c can reference it, because
   Ψ never hears of it.
 - At a use site, the hook builds the application — for the closed template
@@ -218,7 +218,7 @@ is static; the elaborator normalizes the meta layer at emission time.* So:
   holds for everything the kernel is asked to re-check per use — the
   box-synthesis-gap discipline, obeyed by construction.
 
-**Routing policy:** `elab_vec_map` consults `meta_defs` for `map_code`;
+**Routing policy:** `elab_vec_map` consults `MetaPrograms` for the claimed slot;
 if registered, the hook path produces the term, otherwise the Rust schema
 does. The Rust `vec::map` stays, as the oracle the cross-check compares
 against (and the fallback for every file that doesn't declare `map_code`).

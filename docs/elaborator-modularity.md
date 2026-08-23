@@ -116,14 +116,17 @@ Generated-source nesting and the active `derive()` route remain outside: both
 are transient control flow for the declaration being elaborated, not committed
 representation metadata.
 
-These four source-language registries are now explicit. No caller iterates one
-of their hash-backed tables to emit terms or diagnostics.
+`MetaPrograms` is now established in `metaprograms.rs`. It owns elaborator-held
+meta definitions and the optional elaboration slot each template claims. It
+answers qualified definition lookup, collision ownership, and slot dispatch;
+callers cannot reach either backing map. Signature and name validation finish
+before one infallible commit installs the definition and slot views together,
+so a slot can never point at a missing definition. `meta_pushed` remains on the
+elaborator because it is dynamic oracle scope during a meta declaration, not a
+committed meta program.
 
-One committed registry remains directly on `Elaborator`: `meta_defs` and
-`meta_slots`, which together say which checked meta program implements each
-generation slot. They have the same shape as the completed extractions — two
-lookup views with one declaration-time invariant — and should become a small
-`MetaPrograms` owner before expression elaboration is split.
+All five source-language registries are now explicit. No caller iterates one
+of their hash-backed tables to emit terms or diagnostics.
 
 ## State that intentionally remains on `Elaborator`
 
@@ -161,15 +164,14 @@ entire elaborator object.” Regressions cover both an arbitrary generated bundl
 crossing Ψ/name/type registries and a representation implementation whose early
 generated declarations precede a later kernel failure.
 
-### 1. Meta-program registry
+### Established: meta-program registry
 
-Move `meta_defs` and `meta_slots` behind a `MetaPrograms` owner with one
-registration operation. Keep `meta_pushed` outside as dynamic checking scope.
-The registry should answer slot dispatch and definition lookup without exposing
-either backing map, and slot/name validation must finish before either view is
-installed.
+`MetaPrograms` owns definition and slot lookup behind one registration
+operation. Unit tests pin the ordinary-definition and claimed-slot cases, while
+the registration suite proves a rejected second claimant neither displaces nor
+damages the original dispatcher.
 
-### 2. Bidirectional core
+### 1. Bidirectional core
 
 Move `elab_ty`, `elab_check*`, and `elab_infer*` behind an `ExprElab`
 view borrowing the immutable session and mutable declaration attempt. Split

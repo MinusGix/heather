@@ -8,7 +8,7 @@ function that walks **code**. Round pattern as usual: this document first, the
 implementing round against §10's acceptance list.
 
 The predecessor is `docs/in-language-map-design.md` — the **quotation** stage
-(`meta fn`, `code { … }`, `$`-splices, the elaborator-held `meta_defs` table,
+(`meta fn`, `code { … }`, `$`-splices, the elaborator-held `MetaPrograms` registry,
 the evaluation hook). This round opens the **analysis** stage: the first
 surface use of `elim^Trm`, the kernel's code recursor.
 
