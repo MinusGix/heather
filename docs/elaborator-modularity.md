@@ -27,21 +27,24 @@ making every method a peer on one enormous `Elaborator`.
 
 ## Seams established first
 
-The initial mechanical split deliberately keeps several files included in the
-crate root. That preserves Rust privacy and name resolution exactly while
+The initial mechanical split deliberately kept several files included in the
+crate root. That preserved Rust privacy and name resolution exactly while
 making the dependency seams visible:
 
 - `diagnostics.rs`: public diagnostic data;
 - `context.rs`: Γ and surface bindings;
 - `recursion.rs`: structural-recursion guards and convoy state;
-- `surface.rs`: surface traversals and argument-slot lowering;
+- `surface.rs`: surface traversals and argument-slot lowering, now an ordinary
+  state-free module;
 - `unification.rs`: implicit-application scratch state and the structural
-  unifier.
+  unifier, now an ordinary state-free module.
 
-The included files should become ordinary modules only after their inputs have
-been made explicit. Doing that first would replace one giant implicit API with
-hundreds of `pub(crate)` fields and methods, which is movement rather than
-modularity.
+The remaining included files should become ordinary modules only after their
+inputs have been made explicit. Doing that first would replace one giant
+implicit API with hundreds of `pub(crate)` fields and methods, which is
+movement rather than modularity. `surface.rs` and `unification.rs` crossed that
+threshold without such an API: both import their complete inputs explicitly,
+and neither can reach elaborator state.
 
 ## Extraction progress
 
@@ -172,6 +175,13 @@ the registration suite proves a rejected second claimant neither displaces nor
 damages the original dispatcher.
 
 ### 1. Bidirectional core
+
+The first supporting seam is established. Surface rewriting and structural
+unification are ordinary modules rather than textually included fragments.
+Their privacy boundary makes accidental access to `Elaborator` impossible, and
+focused unit tests exercise both mechanisms without constructing one. The
+implicit-application policy that creates and consumes unification scratch still
+belongs to the bidirectional extraction; only the state-free solver moved.
 
 Move `elab_ty`, `elab_check*`, and `elab_infer*` behind an `ExprElab`
 view borrowing the immutable session and mutable declaration attempt. Split

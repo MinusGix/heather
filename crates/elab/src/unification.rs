@@ -1,36 +1,45 @@
-// Implicit-application scratch state and structural unification.
+//! Implicit-application scratch state and state-free structural unification.
+
+use std::rc::Rc;
+
+use heather_kernel::level::Level;
+use heather_kernel::subst::{GlobalEntry, GlobalSubst};
+use heather_kernel::term::{CtxBase, LocalCtx, LocalSubst, LocalVar, SubstTail, Term, Type};
+use heather_syntax::Expr;
+
+use crate::{code, inductive};
 
 /// A deferred explicit argument (docs/unifier-completeness-design.md §3.1):
-/// **not** a first-class constraint in a queue on the [`Elaborator`], but a
-/// record local to one [`Elaborator::apply_implicit`] activation. The scratch
-/// world is the constraint store — the domain's meta occurrences *are* the
-/// "blocked on" set, and [`zonked`] decides readiness exactly. Cross-call
-/// postponement is deliberately not built: a nested call elaborates to
-/// completion (or errors) inside its own world before the outer loop
+/// **not** a first-class constraint in a queue on the [`crate::Elaborator`],
+/// but a record local to one [`crate::Elaborator::apply_implicit`] activation.
+/// The scratch world is the constraint store — the domain's meta occurrences
+/// *are* the "blocked on" set, and [`zonked`] decides readiness exactly.
+/// Cross-call postponement is deliberately not built: a nested call elaborates
+/// to completion (or errors) inside its own world before the outer loop
 /// continues, so there is nothing an inner call could leave pending that the
 /// outer call could later unblock.
-struct ResolveOb {
+pub(super) struct ResolveOb {
     /// The scratch slot standing for the argument.
-    slot: usize,
+    pub(super) slot: usize,
     /// The parameter's declared domain, scratch world — the goal, once every
     /// meta it mentions is solved (docs/traits-layer2-design.md §4).
-    dom: Type,
-    dom_level: Level,
+    pub(super) dom: Type,
+    pub(super) dom_level: Level,
     /// Parameter index, for the hint and the message.
-    param: usize,
+    pub(super) param: usize,
 }
 
-struct DeferredArg<'a> {
+pub(super) struct DeferredArg<'a> {
     /// The withheld slot: the stand-in meta holding the argument's spine
     /// position.
-    slot: usize,
+    pub(super) slot: usize,
     /// The unelaborated surface argument.
-    expr: &'a Expr,
+    pub(super) expr: &'a Expr,
     /// Its declared domain, scratch world.
-    dom: Type,
-    dom_level: Level,
+    pub(super) dom: Type,
+    pub(super) dom_level: Level,
     /// Parameter index, for the goal-name hint and the §7.2 message.
-    param: usize,
+    pub(super) param: usize,
     /// Deferred by the **result-only implicit** rule
     /// (docs/congruence-in-inference-position-design.md §2), rather than by
     /// one of the syntactic checking-only forms. Such an argument *can* be
@@ -39,10 +48,10 @@ struct DeferredArg<'a> {
     /// than reported as blocked. That is what makes the rule strictly
     /// additive: every program that elaborated before it existed takes the
     /// old path and gets the old message.
-    fallback_infer: bool,
+    pub(super) fallback_infer: bool,
 }
 
-/// Per-slot state of one [`Elaborator::apply_implicit`] scratch world
+/// Per-slot state of one [`crate::Elaborator::apply_implicit`] scratch world
 /// (docs/unifier-completeness-design.md §3). Three states, because two
 /// different "unsolved" populations exist and must not be conflated:
 ///
@@ -60,14 +69,14 @@ struct DeferredArg<'a> {
 /// Discharge requires `Solved` everywhere; anything else is a per-slot
 /// diagnostic (design §7).
 #[derive(Clone)]
-enum Sol {
+pub(super) enum Sol {
     Unsolved,
     Withheld,
     Solved(Rc<Term>),
 }
 
 impl Sol {
-    fn solved(&self) -> Option<&Rc<Term>> {
+    pub(super) fn solved(&self) -> Option<&Rc<Term>> {
         match self {
             Sol::Solved(t) => Some(t),
             _ => None,
@@ -95,7 +104,14 @@ impl Sol {
 /// x)` would happily solve a meta to a term mentioning `x`, which is
 /// ill-scoped where it lands (the kernel would reject it, but a rejection is
 /// a worse message than a refusal to guess).
-fn unify_ty(gamma: &LocalCtx, pat: &Type, subj: &Type, n: u32, d: u32, sols: &mut [Sol]) {
+pub(super) fn unify_ty(
+    gamma: &LocalCtx,
+    pat: &Type,
+    subj: &Type,
+    n: u32,
+    d: u32,
+    sols: &mut [Sol],
+) {
     // The `El` rule. Checked before the congruence so that `El ?A` meeting a
     // *decoded* `El t` still solves rather than descending into the code.
     if let Type::El { tm, .. } = pat
@@ -453,7 +469,7 @@ fn unify_tm(gamma: &LocalCtx, pat: &Term, subj: &Term, n: u32, d: u32, sols: &mu
 /// the two results differ, and nothing else can. Same device as
 /// [`strengthen_tm`] — an exact test that needs no traversal of `Term`/`Type`
 /// and so cannot drift out of sync with the syntax.
-fn zonked(dom: &Type, n: u32, sols: &[Sol]) -> Option<Type> {
+pub(super) fn zonked(dom: &Type, n: u32, sols: &[Sol]) -> Option<Type> {
     let with = |marker: Term| {
         let entries = (0..n)
             .map(|k| {
@@ -476,7 +492,7 @@ fn zonked(dom: &Type, n: u32, sols: &[Sol]) -> Option<Type> {
 /// exactly when every metavariable the term mentions is already solved, in
 /// which case the result is scoped in the committed Ψ. Used by the congruence
 /// rule, whose witnesses are compared with `==` and so must be real terms.
-fn zonked_tm(t: &Term, n: u32, sols: &[Sol]) -> Option<Term> {
+pub(super) fn zonked_tm(t: &Term, n: u32, sols: &[Sol]) -> Option<Term> {
     let with = |marker: Term| {
         let entries = (0..n)
             .map(|k| {
@@ -523,7 +539,7 @@ fn drop_binders(gamma: &LocalCtx, d: u32) -> LocalSubst {
 /// marker where a variable was, and the comparison fails. That is the whole
 /// test: no new traversal of `Term`/`Type` is needed, and it cannot drift out
 /// of sync with the syntax the way a hand-written occurrence check would.
-fn strengthen_tm(gamma: &LocalCtx, t: &Term, d: u32) -> Option<Term> {
+pub(crate) fn strengthen_tm(gamma: &LocalCtx, t: &Term, d: u32) -> Option<Term> {
     if d == 0 {
         return Some(t.clone());
     }
@@ -543,7 +559,7 @@ fn strengthen_tm(gamma: &LocalCtx, t: &Term, d: u32) -> Option<Term> {
 /// `Term::Zero` is a sound marker: the only position it can land in is one
 /// that held `Var(d)`, so the substituted term equals the original exactly
 /// when `d` never occurred.
-fn mentions_binder(t: &Type, m: u32, d: u32) -> bool {
+pub(crate) fn mentions_binder(t: &Type, m: u32, d: u32) -> bool {
     let tail = SubstTail::Empty {
         len: m,
         base: CtxBase::Nil,
@@ -562,10 +578,65 @@ fn mentions_binder(t: &Type, m: u32, d: u32) -> bool {
 }
 
 /// [`strengthen_tm`] at the type level.
-fn strengthen_ty(gamma: &LocalCtx, t: &Type, d: u32) -> Option<Type> {
+pub(crate) fn strengthen_ty(gamma: &LocalCtx, t: &Type, d: u32) -> Option<Type> {
     if d == 0 {
         return Some(t.clone());
     }
     let s = t.apply_local(&drop_binders(gamma, d));
     (s.shift_local(d) == *t).then_some(s)
+}
+
+/// The identity substitution of `gamma`, weakened so its source is `gamma`
+/// extended by `extra` fresh entries: maps a term scoped in `gamma, z` (once
+/// `extended`) into `gamma` plus the extra binders.
+pub(crate) fn embed(gamma: &LocalCtx, extra: u32) -> LocalSubst {
+    let m = gamma.entries.len() as u32;
+    let tail = match gamma.base {
+        CtxBase::Nil => SubstTail::Empty {
+            len: m + extra,
+            base: CtxBase::Nil,
+        },
+        CtxBase::Var(g) => SubstTail::Wk {
+            len: m + extra,
+            ctx_var: g,
+        },
+    };
+    let terms = (0..m)
+        .map(|j| Rc::new(Term::Var(LocalVar(m + extra - 1 - j))))
+        .collect();
+    LocalSubst { tail, terms }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use heather_kernel::term::GlobalVar;
+
+    fn meta(gamma: &LocalCtx) -> Type {
+        Type::El {
+            level: Level::Zero,
+            tm: Rc::new(Term::GlobalTm {
+                var: GlobalVar(0),
+                subst: embed(gamma, 0),
+            }),
+        }
+    }
+
+    #[test]
+    fn el_meta_learns_the_subjects_code_without_an_elaborator() {
+        let gamma = LocalCtx::nil();
+        let mut solutions = [Sol::Unsolved];
+        unify_ty(&gamma, &meta(&gamma), &Type::Nat, 1, 0, &mut solutions);
+
+        assert!(matches!(
+            &solutions[0],
+            Sol::Solved(term) if **term == Term::TmNat
+        ));
+    }
+
+    #[test]
+    fn a_withheld_solution_keeps_a_domain_blocked() {
+        let gamma = LocalCtx::nil();
+        assert!(zonked(&meta(&gamma), 1, &[Sol::Withheld]).is_none());
+    }
 }

@@ -100,8 +100,10 @@ pub mod resolve;
 mod representations;
 mod session;
 mod slots;
+mod surface;
 mod traits;
 mod types;
+mod unification;
 mod vec;
 mod wf;
 
@@ -114,8 +116,14 @@ use names::{
 };
 use representations::Representations;
 use slots::{Ingredient, Slot};
+use surface::{
+    for_each_free_slot, has_free_slots, lower_argument_slots, slot_profile, walk_expr,
+};
 use traits::Traits;
 use types::Types;
+use unification::{DeferredArg, ResolveOb, Sol, unify_ty, zonked, zonked_tm};
+pub(crate) use surface::{count_holes, count_holes_expr, strengthen_global};
+pub(crate) use unification::{embed, mentions_binder, strengthen_tm, strengthen_ty};
 
 /// The stage-1 prelude: `sym`/`trans`/`cong`/`cong_succ`, monomorphic at
 /// `Nat` where the equation's type is not a parameter.
@@ -10560,8 +10568,6 @@ impl Elaborator {
 include!("recursion.rs");
 include!("context.rs");
 
-include!("surface.rs");
-
 /// `pred(t)`, as the kernel spells it: `elim_Nat(λ _. Nat; 0; λ k ih. k; t)`.
 /// Needed because a course-of-values tuple's `i`-th component is the motive at
 /// `pred^i z` — and `pred (Succ k) ⇝ k` and `pred 0 ⇝ 0` by computation, which
@@ -10799,20 +10805,3 @@ fn field_rewrap(scrut: &Term) -> Option<(Term, Term)> {
     }
     Some(((*base).clone(), rep))
 }
-
-/// The identity substitution of `gamma`, weakened so its source is `gamma`
-/// extended by `extra` fresh entries: maps a term scoped in `gamma, z` (once
-/// `extended`) into `gamma` + the extra binders.
-pub(crate) fn embed(gamma: &LocalCtx, extra: u32) -> LocalSubst {
-    let m = gamma.entries.len() as u32;
-    let tail = match gamma.base {
-        CtxBase::Nil => SubstTail::Empty { len: m + extra, base: CtxBase::Nil },
-        CtxBase::Var(g) => SubstTail::Wk { len: m + extra, ctx_var: g },
-    };
-    let terms = (0..m)
-        .map(|j| Rc::new(Term::Var(LocalVar(m + extra - 1 - j))))
-        .collect();
-    LocalSubst { tail, terms }
-}
-
-include!("unification.rs");

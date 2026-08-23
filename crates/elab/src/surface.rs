@@ -1,4 +1,12 @@
-// Surface-expression traversals and argument-slot lowering.
+//! State-free surface-expression traversals and argument-slot lowering.
+
+use std::rc::Rc;
+
+use heather_kernel::subst::{GlobalEntry, GlobalSubst};
+use heather_kernel::term::Term;
+use heather_syntax::{Decl, Expr, ExprKind, LamBinder, OnTarget, Span, Stmt, Ty, TyKind};
+
+use crate::{ElabError, R, err};
 
 // -- anonymous argument-slot sections --------------------------------------
 
@@ -8,19 +16,19 @@
 const MAX_ARGUMENT_SLOTS: usize = 256;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum SlotStyle {
+pub(super) enum SlotStyle {
     Unindexed,
     Indexed,
 }
 
-struct SlotProfile {
+pub(super) struct SlotProfile {
     style: SlotStyle,
     count: usize,
 }
 
 /// Visit slots free at this expression's abstraction boundary. An explicit
 /// lambda — including a parser-lowered sequent binder — starts a new boundary.
-fn for_each_free_slot(e: &Expr, f: &mut impl FnMut(Option<u64>, Span)) {
+pub(super) fn for_each_free_slot(e: &Expr, f: &mut impl FnMut(Option<u64>, Span)) {
     let mut go = |e: &Expr| for_each_free_slot(e, f);
     match &e.kind {
         ExprKind::ArgSlot(index) => f(*index, e.span),
@@ -102,13 +110,13 @@ fn for_each_free_slot(e: &Expr, f: &mut impl FnMut(Option<u64>, Span)) {
     }
 }
 
-fn has_free_slots(e: &Expr) -> bool {
+pub(super) fn has_free_slots(e: &Expr) -> bool {
     let mut found = false;
     for_each_free_slot(e, &mut |_, _| found = true);
     found
 }
 
-fn slot_profile(e: &Expr, excluded: &[Span]) -> R<Option<SlotProfile>> {
+pub(super) fn slot_profile(e: &Expr, excluded: &[Span]) -> R<Option<SlotProfile>> {
     let mut style: Option<(SlotStyle, Span)> = None;
     let mut unindexed = 0usize;
     let mut max_index = None::<u64>;
@@ -266,7 +274,7 @@ fn replace_free_slots(e: &mut Expr, style: SlotStyle, next: &mut usize, excluded
     }
 }
 
-fn lower_argument_slots(e: &Expr, profile: SlotProfile, excluded: &[Span]) -> Expr {
+pub(super) fn lower_argument_slots(e: &Expr, profile: SlotProfile, excluded: &[Span]) -> Expr {
     let mut body = e.clone();
     replace_free_slots(&mut body, profile.style, &mut 0, excluded);
     let binders = (0..profile.count)
@@ -454,7 +462,7 @@ pub(crate) fn count_holes_expr(e: &Expr) -> u32 {
 /// its `@trans` spine (parser.rs) and the elaborator visits some expressions
 /// twice — which is why goals are numbered in creation order and the unused
 /// slots are padded. Under-counting is impossible: nothing invents a hole.
-fn count_holes(decl: &Decl) -> u32 {
+pub(crate) fn count_holes(decl: &Decl) -> u32 {
     use count_holes_impl::{expr, stmts, ty};
     let mut n = 0;
     for p in &decl.params {
@@ -479,7 +487,7 @@ fn count_holes(decl: &Decl) -> u32 {
 /// payloads are never reached renumbers every committed global back down by
 /// `g`. "Never reached" is exactly the `frozen` restriction: no new hole, so
 /// no goal occurrence survives in the payload to meet a dummy.
-fn strengthen_global(t: &Term, g: u32) -> Term {
+pub(crate) fn strengthen_global(t: &Term, g: u32) -> Term {
     if g == 0 {
         return t.clone();
     }
@@ -492,10 +500,10 @@ fn strengthen_global(t: &Term, g: u32) -> Term {
 /// Pre-order walk over an expression's subexpressions.
 ///
 /// Total over the forms a *self-call* can hide in, which is what its one
-/// caller ([`Elaborator::cov_depth`]) needs; a form missed here can only
+/// caller ([`crate::Elaborator::cov_depth`]) needs; a form missed here can only
 /// under-count a depth, and an under-counted depth is the refusal that stood
 /// before course-of-values existed, never a wrong term.
-fn walk_expr(e: &Expr, f: &mut impl FnMut(&Expr)) {
+pub(super) fn walk_expr(e: &Expr, f: &mut impl FnMut(&Expr)) {
     f(e);
     let mut go = |e: &Expr| walk_expr(e, f);
     match &e.kind {
@@ -544,5 +552,48 @@ fn walk_expr(e: &Expr, f: &mut impl FnMut(&Expr)) {
         }
         ExprKind::Quote(x) | ExprKind::Splice(x) => go(x),
         _ => {}
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn slot(index: Option<u64>, start: usize) -> Expr {
+        Expr {
+            kind: ExprKind::ArgSlot(index),
+            span: Span {
+                start,
+                end: start + 1,
+            },
+        }
+    }
+
+    #[test]
+    fn indexed_slot_lowering_is_a_pure_structural_rewrite() {
+        let source = slot(Some(2), 7);
+        let profile = slot_profile(&source, &[])
+            .expect("profile")
+            .expect("one slot");
+        assert_eq!(profile.count, 3);
+
+        let lowered = lower_argument_slots(&source, profile, &[]);
+        assert!(matches!(
+            lowered.kind,
+            ExprKind::Lam { ref binders, ref body }
+                if binders.len() == 3
+                    && matches!(body.kind, ExprKind::Var(ref name) if name == "#argument_slot2")
+        ));
+        assert!(matches!(source.kind, ExprKind::ArgSlot(Some(2))));
+    }
+
+    #[test]
+    fn an_excluded_nested_slot_is_not_owned_by_this_boundary() {
+        let source = slot(None, 11);
+        assert!(
+            slot_profile(&source, &[source.span])
+                .expect("profile")
+                .is_none()
+        );
     }
 }
