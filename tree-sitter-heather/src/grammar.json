@@ -3759,6 +3759,10 @@
         },
         {
           "type": "SYMBOL",
+          "name": "apply_expression"
+        },
+        {
+          "type": "SYMBOL",
           "name": "j_expression"
         },
         {
@@ -4845,6 +4849,63 @@
         }
       ]
     },
+    "apply_expression": {
+      "type": "PREC_RIGHT",
+      "value": 0,
+      "content": {
+        "type": "SEQ",
+        "members": [
+          {
+            "type": "STRING",
+            "value": "apply"
+          },
+          {
+            "type": "FIELD",
+            "name": "function",
+            "content": {
+              "type": "SYMBOL",
+              "name": "_expression"
+            }
+          },
+          {
+            "type": "STRING",
+            "value": ";"
+          },
+          {
+            "type": "REPEAT",
+            "content": {
+              "type": "SEQ",
+              "members": [
+                {
+                  "type": "STRING",
+                  "value": "give"
+                },
+                {
+                  "type": "FIELD",
+                  "name": "argument",
+                  "content": {
+                    "type": "SYMBOL",
+                    "name": "_expression"
+                  }
+                },
+                {
+                  "type": "STRING",
+                  "value": ";"
+                }
+              ]
+            }
+          },
+          {
+            "type": "FIELD",
+            "name": "argument",
+            "content": {
+              "type": "SYMBOL",
+              "name": "_expression"
+            }
+          }
+        ]
+      }
+    },
     "j_expression": {
       "type": "SEQ",
       "members": [
@@ -5896,6 +5957,24 @@
           "type": "ALIAS",
           "content": {
             "type": "STRING",
+            "value": "apply"
+          },
+          "named": true,
+          "value": "identifier"
+        },
+        {
+          "type": "ALIAS",
+          "content": {
+            "type": "STRING",
+            "value": "give"
+          },
+          "named": true,
+          "value": "identifier"
+        },
+        {
+          "type": "ALIAS",
+          "content": {
+            "type": "STRING",
             "value": "refl"
           },
           "named": true,
@@ -5978,6 +6057,10 @@
     ],
     [
       "calc_expression",
+      "contextual_identifier"
+    ],
+    [
+      "apply_expression",
       "contextual_identifier"
     ],
     [

@@ -73,6 +73,32 @@ theorem id_eq<A>(x: A): id(x) = x { refl }
       (refl_expression))))
 
 ==================
+Goal-oriented apply
+==================
+
+fn goal() -> Nat {
+  apply trans;
+  give first;
+  apply wrap;
+  last
+}
+
+---
+
+(source_file
+  (function_declaration
+    (qualified_identifier)
+    (parameter_list)
+    (identifier)
+    (block
+      (apply_expression
+        (identifier)
+        (identifier)
+        (apply_expression
+          (identifier)
+          (identifier))))))
+
+==================
 Nested patterns and operators
 ==================
 

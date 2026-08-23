@@ -3,7 +3,7 @@ title: "Add a low-maintenance Tree-sitter grammar and Zed language extension"
 status: closed
 labels: [tooling,editor,syntax,zed]
 created: 2026-08-20
-updated: 2026-08-21
+updated: 2026-08-22
 ---
 
 Heather files have no structural editor support. Build a Tree-sitter grammar
@@ -58,3 +58,8 @@ and [Tree-sitter grammar guidance](https://tree-sitter.github.io/tree-sitter/cre
   brackets, indentation, outlines, and function/type text objects; query copies
   are checked byte-for-byte. `scripts/check-tree-sitter` is the complete local
   gate, while the ordinary suite runs the dependency-free inventory drift gate.
+- 2026-08-22: Added structural parsing for goal-oriented `apply`/`give` forms
+  and styled both words with Zed's supported `@keyword @preproc` fallback,
+  preferring a directive-like color. The highlight is intentionally lexical, so
+  ordinary expressions named `apply` or `give` receive the same tactic-like
+  treatment while remaining valid contextual identifiers.

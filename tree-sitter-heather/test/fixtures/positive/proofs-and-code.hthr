@@ -2,6 +2,22 @@ theorem logic(a, b: Nat, p: a = b): b = a {
     calc { b = a := sym(p), = b := p }
 }
 
+theorem chained(a, b, c: Nat, ab: a = b, bc: b = c): a = c {
+    apply trans;
+    give ab;
+    bc
+}
+
+theorem nested(a, b, c: Nat, ab: a = b, bc: b = c): c = a {
+    apply sym;
+    apply trans;
+    give ab;
+    bc
+}
+
+fn ordinary_apply(n: Nat) -> Nat { apply(n) }
+fn ordinary_give() -> Nat { give }
+
 meta fn quoted(g: Ctx, x: Code(g |- Nat)) -> Code(g |- Nat) {
     code { $x }
 }

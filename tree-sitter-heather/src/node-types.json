@@ -4,6 +4,10 @@
     "named": true,
     "subtypes": [
       {
+        "type": "apply_expression",
+        "named": true
+      },
+      {
         "type": "argument_slot",
         "named": true
       },
@@ -192,6 +196,32 @@
         "named": true
       }
     ]
+  },
+  {
+    "type": "apply_expression",
+    "named": true,
+    "fields": {
+      "argument": {
+        "multiple": true,
+        "required": true,
+        "types": [
+          {
+            "type": "_expression",
+            "named": true
+          }
+        ]
+      },
+      "function": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "_expression",
+            "named": true
+          }
+        ]
+      }
+    }
   },
   {
     "type": "argument_list",
@@ -3908,6 +3938,10 @@
     "named": false
   },
   {
+    "type": "apply",
+    "named": false
+  },
+  {
     "type": "argument_slot",
     "named": true
   },
@@ -3962,6 +3996,10 @@
   },
   {
     "type": "fun",
+    "named": false
+  },
+  {
+    "type": "give",
     "named": false
   },
   {

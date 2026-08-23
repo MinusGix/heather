@@ -81,3 +81,12 @@
   (#match? @constructor "^[A-Z]"))
 ((call_expression function: (qualified_identifier) @constructor)
   (#match? @constructor "(^|::)[A-Z]"))
+
+; Goal-oriented words get tactic-like keyword styling even when the CST sees
+; an ordinary identifier. This is intentionally lexical: `apply(x)` and a
+; user binding named `give` may be highlighted the same way as the syntax.
+[
+  "apply" "give"
+] @keyword @preproc
+((identifier) @keyword @preproc
+  (#any-of? @preproc "apply" "give"))

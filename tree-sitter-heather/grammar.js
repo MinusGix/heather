@@ -30,6 +30,7 @@ module.exports = grammar({
     [$.parameter_name, $.lambda_binder],
     [$.quote_expression, $.contextual_identifier],
     [$.calc_expression, $.contextual_identifier],
+    [$.apply_expression, $.contextual_identifier],
     [$.j_expression, $.contextual_identifier],
     [$.refl_expression, $.contextual_identifier],
   ],
@@ -273,6 +274,7 @@ module.exports = grammar({
       $.quote_expression,
       $.splice_expression,
       $.calc_expression,
+      $.apply_expression,
       $.j_expression,
       $.refl_expression,
       $.explicit_call_expression,
@@ -340,6 +342,11 @@ module.exports = grammar({
     calc_expression: $ => seq('calc', '{', $.calc_first_step, repeat(seq(',', $.calc_next_step)), optional(','), '}'),
     calc_first_step: $ => seq($._expression, '=', $._expression, ':=', $._expression),
     calc_next_step: $ => seq('=', $._expression, ':=', $._expression),
+    apply_expression: $ => prec.right(seq(
+      'apply', field('function', $._expression), ';',
+      repeat(seq('give', field('argument', $._expression), ';')),
+      field('argument', $._expression),
+    )),
     j_expression: $ => seq('j', '(', $._expression, ',', $._expression, ',', $._expression, ')'),
     refl_expression: _ => 'refl',
 
@@ -383,12 +390,14 @@ module.exports = grammar({
 
     operator: _ => choice('+', '-', '++', '*', '&&', '||', '∙', '<=', '<'),
     // These words introduce a special form only with their fixed follower in
-    // Heather's parser (`j(`, `code {`, `calc {`). Elsewhere they are ordinary
+    // Heather's parser (`j(`, `code {`, `calc {`, `apply f;`). Elsewhere they are ordinary
     // names, so preserve that recovery-friendly contextual reading.
     contextual_identifier: $ => choice(
       alias('j', $.identifier),
       alias('code', $.identifier),
       alias('calc', $.identifier),
+      alias('apply', $.identifier),
+      alias('give', $.identifier),
       alias('refl', $.identifier),
     ),
     // Lower lexical precedence lets a plain name remain `identifier` wherever
