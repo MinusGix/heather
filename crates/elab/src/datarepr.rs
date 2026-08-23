@@ -1941,8 +1941,8 @@ impl Elaborator {
             .get(repr)
             .ok_or_else(|| format!("`{repr}` is not a `datarepr` in scope"))?;
         let f = self
-            .decls
-            .get(op)
+            .names
+            .surface_decl(op)
             .ok_or_else(|| format!("`{op}` is not a declared function here"))?;
         let s = &rp.written;
         let c = &rp.carrier;
@@ -2007,7 +2007,7 @@ impl Elaborator {
                 d.span,
             );
         };
-        let Some(f) = self.decls.get(&d.op).cloned() else {
+        let Some(f) = self.names.surface_decl(&d.op).cloned() else {
             return err(
                 format!(
                     "`{}` is not a declared function here: an `Impl` restates its \

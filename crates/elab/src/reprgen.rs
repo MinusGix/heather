@@ -208,7 +208,7 @@ impl Elaborator {
         if !self.datarepr_by_name.contains_key(repr) {
             return Err(format!("`{repr}` is not a `datarepr` in scope"));
         }
-        if !self.decls.contains_key(op) {
+        if self.names.surface_decl(op).is_none() {
             return Err(format!("`{op}` is not a declared function here"));
         }
         if self.impl_global(repr, op).is_some() {
@@ -261,8 +261,8 @@ impl Elaborator {
             .get(repr)
             .ok_or_else(|| format!("`{repr}` is not a `datarepr` in scope"))?;
         let f = self
-            .decls
-            .get(op)
+            .names
+            .surface_decl(op)
             .ok_or_else(|| format!("`{op}` is not a declared function here"))?;
         if !f.tyvars.is_empty() {
             return Err(format!("`{op}` is polymorphic: v1 transfers monomorphic operations"));
@@ -286,7 +286,7 @@ impl Elaborator {
                 if name == op || callees.contains_key(&name) {
                     continue;
                 }
-                let Some(d) = self.decls.get(&name) else { continue };
+                let Some(d) = self.names.surface_decl(&name) else { continue };
                 if !touches(d, &rp.written) {
                     continue;
                 }

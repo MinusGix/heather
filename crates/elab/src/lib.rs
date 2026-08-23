@@ -104,8 +104,8 @@ mod wf;
 use attempt::DeclAttempt;
 use inductive::Inductive;
 use names::{
-    miss_msg, qkey, split_qual, ImportSpec, NameIndex, NameKind, NameRes,
-    Scope, DEFAULT_MODULE,
+    miss_msg, qkey, split_qual, GlobalInfo, GlobalRegistration, ImportSpec,
+    NameKind, NameRes, Names, Scope, DEFAULT_MODULE,
 };
 use slots::{Ingredient, Slot};
 use traits::{ClassInfo, InstanceInfo};
@@ -689,33 +689,14 @@ impl Carrier {
     }
 }
 
-/// What a global name refers to: the absolute position of its `Trm_c`
-/// binding in Ψ, plus the surface parameter metadata.
-///
-/// `fn` and `theorem` differ only in whether that binding carries a *body*
-/// — a definition or a declaration (`GlobalBinding::Tm`'s `body`,
-/// issues/simulate-conversion-cost.md). Both are referenced by name as
-/// `u^δ`; a `fn` used to be substituted in whole at every use, which put a
-/// copy of its body in every theorem statement and every induction
-/// hypothesis that mentioned it.
-#[derive(Clone)]
-struct GlobalInfo {
-    abs: u32,
-    params: Rc<Vec<ParamMeta>>,
-}
-
 /// A kernel-checked ordinary declaration which has not entered the session.
 ///
 /// Construction is the entire fallible half of declaration elaboration.
 /// Committing one only assigns its absolute Ψ position and updates the lookup
 /// registries; it performs no elaboration and cannot fail.
 struct PendingDecl {
-    name: String,
-    key: String,
     binding: GlobalBinding,
-    params: Rc<Vec<ParamMeta>>,
-    member_base: Option<String>,
-    surface: Decl,
+    registration: GlobalRegistration,
 }
 
 /// `Clone` is deliberate and cheap: every field is a `HashMap` of `Rc`s or a
@@ -734,23 +715,9 @@ pub struct Elaborator {
     /// in step with two cheap rebuilds rather than recomputed per lookup
     /// (unlike [`Self::goal_psi`], which conversion needs statements from).
     delta_psi: GlobalCtx,
-    /// The module being elaborated and what it can see
-    /// (docs/modules-design.md §4). Every table below keys `module::name`
-    /// ([`names::qkey`]); this is what turns a written name into that key.
-    scope: Scope,
-    /// Declaration scopes temporarily installed while stored inductive
-    /// syntax is re-lowered. A stack handles one stored declaration referring
-    /// to another; the innermost declaration owns the syntax being read.
-    resolution_scopes: RefCell<Vec<Rc<Scope>>>,
-    /// Every module elaborated into this accumulator, with the scope it was
-    /// elaborated in. `import m;` requires that `m` already landed here, which
-    /// is what the CLI's topological walk guarantees. Inductives also retain
-    /// their declaration's value from this table: their surface field syntax
-    /// is re-lowered at uses, under that scope rather than the use site's.
-    module_scopes: HashMap<String, Scope>,
-    /// Which module declares what: the ambiguity oracle (`names.rs`).
-    names: NameIndex,
-    globals: HashMap<String, GlobalInfo>,
+    /// Module scopes, committed ordinary declarations, and every index that
+    /// makes them nameable (`names.rs`).
+    names: Names,
     /// Declared inductives by qualified name, by nominal tag, and by
     /// constructor name. Constructor names are per-module and qualified by
     /// their *type* (`Option::None`), not globally unique
@@ -778,18 +745,10 @@ pub struct Elaborator {
     /// records, which is what makes the move of `.` into the elaborator a
     /// no-op for them.
     record_fields: HashSet<String>,
-    /// Every *base* name attached to some type's namespace by a `fn D::m` /
-    /// `theorem D::m` declaration, across all of them
-    /// (issues/type-owned-members-receiver-slice.md). The same cheap negative
-    /// test as [`Self::record_fields`], and for the same reason: `t.m(a)`
-    /// consults this before inferring the receiver's type, so a `.` call on a
-    /// name nobody attaches costs exactly what it cost before members existed.
-    /// Which type a base name belongs to is not recorded here — that is
-    /// decided by the receiver, against the ordinary name tables.
-    member_bases: HashSet<String>,
     /// Every field name of every declared `class`, across all of them
     /// (docs/traits-receiver-dispatch-design.md §3). The same **cheap negative
-    /// test** as [`Self::record_fields`] and [`Self::member_bases`], and for
+    /// test** as [`Self::record_fields`] and the name registry's member-base
+    /// index, and for
     /// the same reason: `x.op(y)` consults this before inferring the
     /// receiver's type or building a resolution goal, so a `.` call on a name
     /// that is nobody's class field costs exactly what it cost before classes
@@ -856,8 +815,6 @@ pub struct Elaborator {
     /// `Derived` rather than what its own clauses look like. `None` everywhere
     /// else, which makes the mechanism inert.
     impl_provenance: Option<datarepr::Provenance>,
-    /// Surface declarations by name; see the note in `elab_decl`.
-    decls: HashMap<String, Decl>,
     /// Scratch state with exactly one ordinary declaration's lifetime.
     attempt: DeclAttempt,
     /// While an `instance` block is being elaborated: the members that have
@@ -931,18 +888,6 @@ pub struct Elaborator {
     /// the default, and what every test and the unflagged CLI use — means the
     /// kernel runs on every declaration, exactly as it always has.
     gate: Option<Rc<dyn gate::KernelGate>>,
-}
-
-/// Restores the ambient name-resolution environment after re-lowering one
-/// declaration's stored surface syntax.
-struct ResolutionScope<'a> {
-    stack: &'a RefCell<Vec<Rc<Scope>>>,
-}
-
-impl Drop for ResolutionScope<'_> {
-    fn drop(&mut self) {
-        self.stack.borrow_mut().pop().expect("a resolution scope was installed");
-    }
 }
 
 /// One registered `meta fn`: its closed layer-m term and statement type,
@@ -1047,18 +992,13 @@ impl Elaborator {
         Elaborator {
             psi: GlobalCtx::default(),
             delta_psi: GlobalCtx::default(),
-            scope: Scope::new(DEFAULT_MODULE),
-            resolution_scopes: RefCell::new(Vec::new()),
-            module_scopes: HashMap::new(),
-            names: NameIndex::default(),
-            globals: HashMap::new(),
+            names: Names::new(DEFAULT_MODULE),
             inductives: HashMap::new(),
             by_tag: HashMap::new(),
             forded_by_skel: HashMap::new(),
             gdefs: gendefs::GenDefs::default(),
             ctors: HashMap::new(),
             record_fields: HashSet::new(),
-            member_bases: HashSet::new(),
             class_members: HashSet::new(),
             classes: HashMap::new(),
             instances: HashMap::new(),
@@ -1070,7 +1010,6 @@ impl Elaborator {
             obligations: Vec::new(),
             access: access::AccessTable::default(),
             impl_provenance: None,
-            decls: HashMap::new(),
             attempt: DeclAttempt::default(),
             instance_scope: Vec::new(),
             derived: Vec::new(),
@@ -1183,14 +1122,14 @@ impl Elaborator {
         // error one layer down; two distinct *files* claiming one module name
         // is a loader concern, where the paths are known.
         let mut scope =
-            self.module_scopes.get(module).cloned().unwrap_or_else(|| Scope::new(module));
+            self.names.module_scope(module).cloned().unwrap_or_else(|| Scope::new(module));
         let mut written: Vec<&str> = Vec::new();
         for item in &file.items {
             let Item::Import(imp) = item else { continue };
             if imp.module == module {
                 return err(format!("a module cannot import itself (`{module}`)"), imp.span);
             }
-            if imp.module != PRELUDE_MODULE && !self.module_scopes.contains_key(&imp.module) {
+            if imp.module != PRELUDE_MODULE && !self.names.has_module(&imp.module) {
                 return err(
                     format!(
                         "unknown module `{}`: it is not in this run's import closure",
@@ -1237,8 +1176,7 @@ impl Elaborator {
                 None => scope.imports.push(ImportSpec { module: imp.module.clone(), listed }),
             }
         }
-        self.module_scopes.insert(module.to_string(), scope.clone());
-        self.scope = scope;
+        self.names.enter_scope(scope);
         Ok(())
     }
 
@@ -1270,9 +1208,7 @@ impl Elaborator {
     }
 
     fn resolve_declared_kinds(&self, name: &str, kinds: &[NameKind]) -> NameRes {
-        let scopes = self.resolution_scopes.borrow();
-        let scope = scopes.last().map(Rc::as_ref).unwrap_or(&self.scope);
-        names::resolve_kinds(&self.names, scope, name, kinds, |m, ty, ctor| {
+        self.names.resolve_kinds(name, kinds, |m, ty, ctor| {
             self.inductives
                 .get(&qkey(m, ty))
                 .is_some_and(|i| i.ctors.iter().any(|c| c.name == ctor))
@@ -1281,9 +1217,11 @@ impl Elaborator {
 
     /// Install the declaration scope for one read of stored inductive syntax.
     /// The guard restores the caller's scope on every return path.
-    fn use_inductive_scope<'a>(&'a self, ind: &inductive::Inductive) -> ResolutionScope<'a> {
-        self.resolution_scopes.borrow_mut().push(Rc::clone(&ind.scope));
-        ResolutionScope { stack: &self.resolution_scopes }
+    fn use_inductive_scope<'a>(
+        &'a self,
+        ind: &inductive::Inductive,
+    ) -> names::ResolutionScope<'a> {
+        self.names.use_scope(Rc::clone(&ind.scope))
     }
 
     /// The base half of a written name — `nat::sub` and `sub` both name `sub`.
@@ -1338,7 +1276,7 @@ impl Elaborator {
     }
 
     fn lookup_global(&self, name: &str) -> Option<&GlobalInfo> {
-        self.globals.get(&self.key_of(self.instance_alias(name))?)
+        self.names.global(&self.key_of(self.instance_alias(name))?)
     }
 
     /// Inside an `instance` block, an unqualified name that is an *earlier*
@@ -1395,7 +1333,7 @@ impl Elaborator {
     /// The duplicate-declaration test: a *module* never declares one name
     /// twice, while two modules may.
     fn own_declares(&self, name: &str, kinds: &[NameKind]) -> bool {
-        self.names.declares_as(&self.scope.module, name, kinds)
+        self.names.declares_as(self.names.module(), name, kinds)
     }
 
     /// The one collision the regime turns into an error at the *declaration*:
@@ -1404,7 +1342,8 @@ impl Elaborator {
     /// failed declaration must register nothing.
     fn check_declarable(&self, name: &str, span: Span) -> R<()> {
         if let Some(m) = self
-            .scope
+            .names
+            .scope()
             .imports
             .iter()
             .find(|i| i.listed.iter().any(|l| l == name))
@@ -1426,7 +1365,7 @@ impl Elaborator {
     /// registration time — after the kernel gate — so that the index and the
     /// tables land together.
     pub(crate) fn add_name(&mut self, name: &str, kind: NameKind) {
-        self.names.insert(&self.scope.module, name, kind);
+        self.names.insert_current(name, kind);
     }
 
     /// [`Self::check_declarable`] then [`Self::add_name`], for the sites that
@@ -1669,13 +1608,10 @@ impl Elaborator {
 
     /// The written (base) name of the binding at absolute Ψ index `abs` —
     /// the reverse of [`Self::global_abs`], for resolving a stored body's
-    /// `GlobalVar`s to callee names. A linear scan of the name table: callee
-    /// resolution happens a handful of times per reflection request.
+    /// `GlobalVar`s to callee names. The name registry maintains this reverse
+    /// index when the declaration commits.
     pub(crate) fn global_name_at(&self, abs: usize) -> Option<String> {
-        let key = self
-            .globals
-            .iter()
-            .find_map(|(k, info)| (info.abs as usize == abs).then_some(k))?;
+        let key = self.names.global_name_at(abs as u32)?;
         Some(key.rsplit("::").next().unwrap_or(key).to_string())
     }
 
@@ -1697,10 +1633,7 @@ impl Elaborator {
     /// The parameter table of the binding at absolute Ψ index `abs`, empty for
     /// a binding that has none. The by-index companion of [`Self::params_of`].
     pub(crate) fn params_at(&self, abs: usize) -> Rc<Vec<ParamMeta>> {
-        match self.globals.values().find(|info| info.abs as usize == abs) {
-            Some(info) => Rc::clone(&info.params),
-            None => Rc::new(Vec::new()),
-        }
+        self.names.params_at(abs as u32).unwrap_or_else(|| Rc::new(Vec::new()))
     }
 
     /// The `meta fn` claiming an analyzer slot, with the arity of its Π spine
@@ -1723,7 +1656,7 @@ impl Elaborator {
         let key = if name.contains("::") {
             name.to_string()
         } else {
-            names::qkey(&self.scope.module, name)
+            names::qkey(self.names.module(), name)
         };
         let ind = self.inductives.get(&key)?;
         ind.index.as_ref()?;
@@ -1797,22 +1730,10 @@ impl Elaborator {
     /// become visible to later source unless `check_decl` returned a complete
     /// value after the kernel gate.
     fn commit_decl(&mut self, pending: PendingDecl) {
-        let PendingDecl {
-            name,
-            key,
-            binding,
-            params,
-            member_base,
-            surface,
-        } = pending;
+        let PendingDecl { binding, registration } = pending;
         let abs = self.psi.bindings.len() as u32;
         self.psi.push(binding);
-        self.globals.insert(key, GlobalInfo { abs, params });
-        self.add_name(&name, NameKind::Global);
-        if let Some(base) = member_base {
-            self.member_bases.insert(base);
-        }
-        self.decls.insert(name, surface);
+        self.names.commit_global(abs, registration);
         self.refresh_delta_psi();
     }
 
@@ -2190,12 +2111,14 @@ impl Elaborator {
             },
         };
         Ok(PendingDecl {
-            name: decl.name.clone(),
-            key: qkey(&self.scope.module, &decl.name),
             binding,
-            params,
-            member_base: member.map(|(_, base)| base.to_string()),
-            surface,
+            registration: GlobalRegistration {
+                name: decl.name.clone(),
+                key: qkey(self.names.module(), &decl.name),
+                params,
+                member_base: member.map(|(_, base)| base.to_string()),
+                surface,
+            },
         })
     }
 
@@ -6138,7 +6061,7 @@ impl Elaborator {
     /// silently reinterprets an existing `t.name(…)`, which is the one thing
     /// the growth invariant forbids (docs/modules-design.md §4).
     fn member_head(&self, cx: &Cx, recv: &Expr, name: &str, span: Span) -> R<String> {
-        if !self.member_bases.contains(name) {
+        if !self.names.has_member_base(name) {
             return Ok(name.to_string());
         }
         // Inference failure is not an error here, exactly as for a field: the
@@ -8071,24 +7994,12 @@ impl Elaborator {
     /// applied — a listed import or a local declaration hides the collision
     /// this has to see.
     fn only_ctors_visible(&self, name: &str) -> bool {
-        let scopes = self.resolution_scopes.borrow();
-        let scope = scopes.last().map(Rc::as_ref).unwrap_or(&self.scope);
-        self.names.entries(name).iter().all(|e| {
-            let visible = e.module == scope.module
-                || scope.imports_module(&e.module)
-                || e.module == names::PRELUDE_MODULE;
-            // An `Inductive` candidate is admitted beside the constructors on
-            // the same licence the whole route runs on. This function's caller
-            // has already established that the expected type IS an inductive
-            // (`expected_ind`), and a type *name* denotes a value whose type is
-            // a universe — so that reading could never have checked here, and
-            // dropping it is a shrink rather than a choice. A `Global` or a
-            // `Meta` still stands the route down: a `fn` may perfectly well
-            // return the expected type, so between it and a constructor there
-            // is a real decision, and this route does not make those
-            // (issues/false-collides-with-bools-constructor.md).
-            !visible || matches!(e.kind, NameKind::Ctor | NameKind::Inductive)
-        })
+        // An `Inductive` candidate is admitted beside constructors because
+        // the caller has already established an inductive expected type. A
+        // type name has a universe type and cannot check there; dropping that
+        // reading is therefore a shrink, while a `Global` or `Meta` may return
+        // the expected type and must still make this route stand down.
+        self.names.visible_entries_are(name, &[NameKind::Ctor, NameKind::Inductive])
     }
 
     /// A constructor applied to its arguments, however the surface

@@ -79,8 +79,16 @@ Group the lookup-only state by invariant, not merely by feature:
 - `Representations`: data representations, implementations, obligations,
   access aliases, and provenance.
 
-Each registry should expose deterministic lookup and explicit commit methods.
-No caller should iterate a hash-backed registry to emit terms or diagnostics.
+`Names` is now established in `names.rs`. It owns current, stored, and
+temporarily overridden module scopes; the ambiguity index; callable globals;
+the member-name fast path; and stored surface declarations. Ordinary globals
+enter all of those indexes through one `commit_global` operation. Its reverse
+Ψ lookup is explicit, so reflection no longer scans a hash map to recover a
+callee name.
+
+`Types`, `Traits`, and `Representations` remain. Each should expose
+deterministic lookup and explicit commit methods. No caller should iterate a
+hash-backed registry to emit terms or diagnostics.
 
 ### 2. Bidirectional core
 

@@ -636,7 +636,7 @@ impl Elaborator {
             // each declare a `Cons`, and a use picks by uniqueness, by
             // `List::Cons`, or errors. Within one module a constructor name
             // still belongs to one type.
-            if let Some((other, _)) = self.ctors.get(&qkey(&self.scope.module, &c.name)) {
+            if let Some((other, _)) = self.ctors.get(&qkey(self.names.module(), &c.name)) {
                 return err(
                     format!("`{}` is already a constructor of `{}`", c.name, other.name),
                     c.span,
@@ -743,11 +743,11 @@ impl Elaborator {
         let skel = match &route {
             Some(IdxRoute::Forded(_)) => {
                 let s = Rc::new(skeleton_of(
-                    d, &ctors, self.next_tag, Rc::new(self.scope.clone()),
+                    d, &ctors, self.next_tag, Rc::new(self.names.scope().clone()),
                 ));
                 self.next_tag += 1;
                 self.by_tag.insert(s.tag, Rc::clone(&s));
-                self.inductives.insert(qkey(&self.scope.module, &s.name), Rc::clone(&s));
+                self.inductives.insert(qkey(self.names.module(), &s.name), Rc::clone(&s));
                 self.add_name(&s.name.clone(), NameKind::Inductive);
                 Some(s)
             }
@@ -756,7 +756,7 @@ impl Elaborator {
         let skel_tag = skel.as_ref().map(|s| s.tag);
         let ind = Rc::new(Inductive {
             name: d.name.clone(),
-            scope: Rc::new(self.scope.clone()),
+            scope: Rc::new(self.names.scope().clone()),
             tag: self.next_tag,
             params: d.params.clone(),
             valparams: d.valparams.iter().map(|p| (p.name.clone(), p.ty.clone())).collect(),
@@ -781,7 +781,7 @@ impl Elaborator {
         }
         for i in 0..ind.ctors.len() {
             let cname = ind.ctors[i].name.clone();
-            self.ctors.insert(qkey(&self.scope.module, &cname), (Rc::clone(&ind), i));
+            self.ctors.insert(qkey(self.names.module(), &cname), (Rc::clone(&ind), i));
             self.add_name(&cname, NameKind::Ctor);
         }
         if ind.is_record {
@@ -792,7 +792,7 @@ impl Elaborator {
             }
         }
         self.by_tag.insert(ind.tag, Rc::clone(&ind));
-        self.inductives.insert(qkey(&self.scope.module, &d.name), Rc::clone(&ind));
+        self.inductives.insert(qkey(self.names.module(), &d.name), Rc::clone(&ind));
         self.add_name(&d.name, NameKind::Inductive);
         // The generator's own artifacts become Ψ definitions here — once, at
         // declaration time, never edited afterwards (§14.6's discipline, the

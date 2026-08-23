@@ -17,7 +17,13 @@
 //! decides anything. The consequence that pays for it: library growth can
 //! introduce errors, never reinterpretations.
 
-use std::collections::HashMap;
+use std::cell::RefCell;
+use std::collections::{HashMap, HashSet};
+use std::rc::Rc;
+
+use heather_syntax::Decl;
+
+use super::ParamMeta;
 
 /// Which table a name lives in. Resolution is by name first and kind second —
 /// two modules that declare the same name are ambiguous whatever the two
@@ -70,9 +76,9 @@ impl Scope {
 
 /// The module a name was declared in, plus what kind of declaration it was.
 #[derive(Clone, Debug)]
-pub(crate) struct NameEntry {
-    pub module: String,
-    pub kind: NameKind,
+struct NameEntry {
+    module: String,
+    kind: NameKind,
 }
 
 /// Name → every declaration of it, across all modules elaborated so far.
@@ -81,8 +87,58 @@ pub(crate) struct NameEntry {
 /// ([`qkey`]); this is the index that makes "which modules declare `sub`?" a
 /// lookup rather than a scan, and it is the only place ambiguity is visible.
 #[derive(Clone, Default)]
-pub(crate) struct NameIndex {
+struct NameIndex {
     by_name: HashMap<String, Vec<NameEntry>>,
+}
+
+/// Committed ordinary declarations and the indexes that make them nameable.
+///
+/// These tables are one invariant, not four independent caches: a global is
+/// visible only when its ambiguity entry, Ψ coordinate, member fast-path and
+/// restatable surface signature have landed together. Keeping the fields
+/// private makes [`Names::commit_global`] the only way to create that state.
+#[derive(Clone)]
+pub(crate) struct Names {
+    scope: Scope,
+    resolution_scopes: RefCell<Vec<Rc<Scope>>>,
+    module_scopes: HashMap<String, Scope>,
+    index: NameIndex,
+    globals: HashMap<String, GlobalInfo>,
+    by_abs: HashMap<u32, String>,
+    member_bases: HashSet<String>,
+    surface_decls: HashMap<String, Decl>,
+}
+
+/// A callable global's Ψ coordinate and surface parameter metadata.
+///
+/// Functions and theorems are both referenced as `u^δ`; their Ψ binding says
+/// whether a body is transparent, while this registry supplies only the
+/// coordinate and the surface calling convention.
+#[derive(Clone)]
+pub(crate) struct GlobalInfo {
+    pub(crate) abs: u32,
+    pub(crate) params: Rc<Vec<ParamMeta>>,
+}
+
+/// Everything the name registry installs for one ordinary declaration.
+pub(crate) struct GlobalRegistration {
+    pub(crate) name: String,
+    pub(crate) key: String,
+    pub(crate) params: Rc<Vec<ParamMeta>>,
+    pub(crate) member_base: Option<String>,
+    pub(crate) surface: Decl,
+}
+
+/// Restores the ambient name-resolution environment after re-lowering stored
+/// surface syntax.
+pub(crate) struct ResolutionScope<'a> {
+    stack: &'a RefCell<Vec<Rc<Scope>>>,
+}
+
+impl Drop for ResolutionScope<'_> {
+    fn drop(&mut self) {
+        self.stack.borrow_mut().pop().expect("a resolution scope was installed");
+    }
 }
 
 /// The result of resolving one written name against one scope.
@@ -151,6 +207,120 @@ impl NameIndex {
     }
 }
 
+impl Names {
+    pub(crate) fn new(module: impl Into<String>) -> Self {
+        Names {
+            scope: Scope::new(module),
+            resolution_scopes: RefCell::new(Vec::new()),
+            module_scopes: HashMap::new(),
+            index: NameIndex::default(),
+            globals: HashMap::new(),
+            by_abs: HashMap::new(),
+            member_bases: HashSet::new(),
+            surface_decls: HashMap::new(),
+        }
+    }
+
+    pub(crate) fn scope(&self) -> &Scope {
+        &self.scope
+    }
+
+    pub(crate) fn module(&self) -> &str {
+        &self.scope.module
+    }
+
+    pub(crate) fn module_scope(&self, module: &str) -> Option<&Scope> {
+        self.module_scopes.get(module)
+    }
+
+    pub(crate) fn has_module(&self, module: &str) -> bool {
+        self.module_scopes.contains_key(module)
+    }
+
+    pub(crate) fn enter_scope(&mut self, scope: Scope) {
+        self.module_scopes.insert(scope.module.clone(), scope.clone());
+        self.scope = scope;
+    }
+
+    pub(crate) fn use_scope(&self, scope: Rc<Scope>) -> ResolutionScope<'_> {
+        self.resolution_scopes.borrow_mut().push(scope);
+        ResolutionScope { stack: &self.resolution_scopes }
+    }
+
+    pub(crate) fn declares(&self, module: &str, name: &str) -> bool {
+        self.index.declares(module, name)
+    }
+
+    pub(crate) fn declares_as(
+        &self,
+        module: &str,
+        name: &str,
+        kinds: &[NameKind],
+    ) -> bool {
+        self.index.declares_as(module, name, kinds)
+    }
+
+    pub(crate) fn visible_entries_are(&self, name: &str, kinds: &[NameKind]) -> bool {
+        let scopes = self.resolution_scopes.borrow();
+        let scope = scopes.last().map(Rc::as_ref).unwrap_or(&self.scope);
+        self.index.entries(name).iter().all(|e| {
+            let visible = e.module == scope.module
+                || scope.imports_module(&e.module)
+                || e.module == PRELUDE_MODULE;
+            !visible || kinds.contains(&e.kind)
+        })
+    }
+
+    pub(crate) fn insert_current(&mut self, name: &str, kind: NameKind) {
+        self.index.insert(&self.scope.module, name, kind);
+    }
+
+    pub(crate) fn resolve_kinds(
+        &self,
+        name: &str,
+        kinds: &[NameKind],
+        is_ctor_of: impl Fn(&str, &str, &str) -> bool,
+    ) -> NameRes {
+        let scopes = self.resolution_scopes.borrow();
+        let scope = scopes.last().map(Rc::as_ref).unwrap_or(&self.scope);
+        resolve_kinds(&self.index, scope, name, kinds, is_ctor_of)
+    }
+
+    pub(crate) fn global(&self, key: &str) -> Option<&GlobalInfo> {
+        self.globals.get(key)
+    }
+
+    pub(crate) fn global_name_at(&self, abs: u32) -> Option<&str> {
+        self.by_abs.get(&abs).map(String::as_str)
+    }
+
+    pub(crate) fn params_at(&self, abs: u32) -> Option<Rc<Vec<ParamMeta>>> {
+        let key = self.by_abs.get(&abs)?;
+        Some(Rc::clone(&self.globals.get(key)?.params))
+    }
+
+    pub(crate) fn has_member_base(&self, name: &str) -> bool {
+        self.member_bases.contains(name)
+    }
+
+    pub(crate) fn surface_decl(&self, name: &str) -> Option<&Decl> {
+        self.surface_decls.get(name)
+    }
+
+    pub(crate) fn commit_global(&mut self, abs: u32, reg: GlobalRegistration) {
+        let GlobalRegistration { name, key, params, member_base, surface } = reg;
+        debug_assert!(!self.globals.contains_key(&key));
+        debug_assert!(!self.by_abs.contains_key(&abs));
+        self.index.insert(&self.scope.module, &name, NameKind::Global);
+        self.by_abs.insert(abs, key.clone());
+        self.globals.insert(key, GlobalInfo { abs, params });
+        if let Some(base) = member_base {
+            self.member_bases.insert(base);
+        }
+        self.surface_decls.insert(name, surface);
+    }
+}
+
 /// The prelude's module name. Implicitly imported by every module and by
 /// nothing else special: it is an ordinary module that happens to be
 /// elaborated first (docs/modules-design.md §3.2).
@@ -187,7 +357,7 @@ pub(crate) const ANY_KIND: &[NameKind] = &[];
 /// Expression position deliberately does **not** get this treatment, and the
 /// asymmetry is the whole point: there a type name and a constructor are
 /// *both* legal readings, so shrinking would be choosing.
-pub(crate) fn resolve_kinds(
+fn resolve_kinds(
     index: &NameIndex,
     scope: &Scope,
     name: &str,

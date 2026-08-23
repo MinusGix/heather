@@ -911,7 +911,7 @@ impl Elaborator {
             ancestors,
             owner,
         };
-        self.classes.insert(qkey(&self.scope.module, &d.name), Rc::new(info));
+        self.classes.insert(qkey(self.names.module(), &d.name), Rc::new(info));
         Ok(())
     }
 
@@ -1810,7 +1810,7 @@ impl Elaborator {
         self.instances.insert(
             key,
             InstanceInfo {
-                global: qkey(&self.scope.module, &prefix),
+                global: qkey(self.names.module(), &prefix),
                 written,
                 index,
                 parameterized,
@@ -2111,7 +2111,7 @@ impl Elaborator {
             self.instances.insert(
                 instance_key(&akey, head_key, &aindex),
                 InstanceInfo {
-                    global: qkey(&self.scope.module, &aname),
+                    global: qkey(self.names.module(), &aname),
                     written: class_ref_written(&aref),
                     index: aindex,
                     parameterized,

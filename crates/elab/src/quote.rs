@@ -368,14 +368,14 @@ impl Elaborator {
         let (slot, order) = match claimed {
             Some((slot, order)) => {
                 self.meta_slots
-                    .insert(slot, (self.scope.module.clone(), decl.name.clone()));
+                    .insert(slot, (self.names.module().to_string(), decl.name.clone()));
                 (Some(slot), order)
             }
             None => (None, Vec::new()),
         };
         self.declare_name(&decl.name, NameKind::Meta, decl.span)?;
         self.meta_defs.insert(
-            qkey(&self.scope.module, &decl.name),
+            qkey(self.names.module(), &decl.name),
             MetaDef {
                 term: Rc::new(term),
                 stmt: Rc::new(stmt),
@@ -406,7 +406,7 @@ impl Elaborator {
         lvl: &Level,
     ) -> R<()> {
         if let Some((m, other)) = self.meta_slots.get(&spec.slot) {
-            let who = if *m == self.scope.module {
+            let who = if m == self.names.module() {
                 format!("`{other}`")
             } else {
                 format!("`{other}`, in module `{m}`")
@@ -498,7 +498,7 @@ impl Elaborator {
             // exactly when that module is not this one — a cross-module
             // conflict has to say where to look, and a local one would only
             // be noisier for it (docs/modules-design.md §4).
-            let who = if *m == self.scope.module {
+            let who = if m == self.names.module() {
                 format!("`{other}`")
             } else {
                 format!("`{other}`, in module `{m}`")
