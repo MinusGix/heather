@@ -18,28 +18,28 @@ use crate::{code, inductive};
 /// to completion (or errors) inside its own world before the outer loop
 /// continues, so there is nothing an inner call could leave pending that the
 /// outer call could later unblock.
-pub(super) struct ResolveOb {
+pub(crate) struct ResolveOb {
     /// The scratch slot standing for the argument.
-    pub(super) slot: usize,
+    pub(crate) slot: usize,
     /// The parameter's declared domain, scratch world — the goal, once every
     /// meta it mentions is solved (docs/traits-layer2-design.md §4).
-    pub(super) dom: Type,
-    pub(super) dom_level: Level,
+    pub(crate) dom: Type,
+    pub(crate) dom_level: Level,
     /// Parameter index, for the hint and the message.
-    pub(super) param: usize,
+    pub(crate) param: usize,
 }
 
-pub(super) struct DeferredArg<'a> {
+pub(crate) struct DeferredArg<'a> {
     /// The withheld slot: the stand-in meta holding the argument's spine
     /// position.
-    pub(super) slot: usize,
+    pub(crate) slot: usize,
     /// The unelaborated surface argument.
-    pub(super) expr: &'a Expr,
+    pub(crate) expr: &'a Expr,
     /// Its declared domain, scratch world.
-    pub(super) dom: Type,
-    pub(super) dom_level: Level,
+    pub(crate) dom: Type,
+    pub(crate) dom_level: Level,
     /// Parameter index, for the goal-name hint and the §7.2 message.
-    pub(super) param: usize,
+    pub(crate) param: usize,
     /// Deferred by the **result-only implicit** rule
     /// (docs/congruence-in-inference-position-design.md §2), rather than by
     /// one of the syntactic checking-only forms. Such an argument *can* be
@@ -48,7 +48,7 @@ pub(super) struct DeferredArg<'a> {
     /// than reported as blocked. That is what makes the rule strictly
     /// additive: every program that elaborated before it existed takes the
     /// old path and gets the old message.
-    pub(super) fallback_infer: bool,
+    pub(crate) fallback_infer: bool,
 }
 
 /// Per-slot state of one [`crate::Elaborator::apply_implicit`] scratch world
@@ -69,14 +69,14 @@ pub(super) struct DeferredArg<'a> {
 /// Discharge requires `Solved` everywhere; anything else is a per-slot
 /// diagnostic (design §7).
 #[derive(Clone)]
-pub(super) enum Sol {
+pub(crate) enum Sol {
     Unsolved,
     Withheld,
     Solved(Rc<Term>),
 }
 
 impl Sol {
-    pub(super) fn solved(&self) -> Option<&Rc<Term>> {
+    pub(crate) fn solved(&self) -> Option<&Rc<Term>> {
         match self {
             Sol::Solved(t) => Some(t),
             _ => None,

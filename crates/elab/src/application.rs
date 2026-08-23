@@ -11,7 +11,195 @@ use heather_kernel::level::Level;
 use heather_kernel::term::{LocalSubst, Term, Type};
 use heather_syntax::{Expr, LamBinder, Span, Ty, TyKind};
 
+use crate::unification::{DeferredArg, ResolveOb, Sol, zonked};
 use crate::{Cx, R, err};
+
+/// The state-free schedule for one implicit-inserting call.
+///
+/// It fixes the scratch-world size before elaboration starts: one slot for
+/// every implicit parameter and one reserved slot for every explicit argument
+/// that may have to wait for a checking type. Keeping this calculation here
+/// makes the static-size invariant independent of goal promotion and trait
+/// resolution.
+pub(crate) struct ImplicitPlan<'a> {
+    mask: &'a [bool],
+    scratch_len: u32,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct ParamStep {
+    pub(crate) parameter: usize,
+    pub(crate) implicit: bool,
+}
+
+impl<'a> ImplicitPlan<'a> {
+    pub(crate) fn new(
+        mask: &'a [bool],
+        args: &[Expr],
+        checking_only: impl Fn(&Expr) -> bool,
+    ) -> Self {
+        let implicit = mask.iter().filter(|&&b| b).count();
+        let explicit = mask.len() - implicit;
+        let deferred = args
+            .iter()
+            .take(explicit)
+            .filter(|arg| checking_only(arg))
+            .count();
+        Self {
+            mask,
+            scratch_len: (implicit + deferred) as u32,
+        }
+    }
+
+    pub(crate) fn scratch_len(&self) -> u32 {
+        self.scratch_len
+    }
+
+    pub(crate) fn steps(&self, parameter_offset: usize) -> impl Iterator<Item = ParamStep> + '_ {
+        self.mask
+            .iter()
+            .enumerate()
+            .map(move |(index, &implicit)| ParamStep {
+                parameter: index + parameter_offset,
+                implicit,
+            })
+    }
+}
+
+/// Outcome of attempting one solver obligation in the scratch world.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum ObligationProgress {
+    /// Its goal still mentions an unsolved scratch slot.
+    Blocked,
+    /// Another slot was filled, but this obligation still needs another pass.
+    Unblocked,
+    /// The obligation itself was solved.
+    Solved,
+}
+
+/// Semantic capabilities used by the otherwise mechanical obligation queue.
+///
+/// The application module owns retry order and fixpoint termination. The
+/// implementation owns the policies that genuinely need session state:
+/// dictionary search, expression elaboration, unification, and declaration
+/// goal creation.
+pub(crate) trait ImplicitApplicationElab {
+    #[allow(clippy::too_many_arguments)]
+    fn resolve_application_obligation(
+        &self,
+        cx: &Cx,
+        name: &str,
+        params: &[ParamMeta],
+        slot_param: &[usize],
+        meta_doms: &[Type],
+        n: u32,
+        sols: &mut [Sol],
+        obligation: &ResolveOb,
+        span: Span,
+    ) -> R<ObligationProgress>;
+
+    fn check_deferred_application_argument(
+        &self,
+        cx: &Cx,
+        name: &str,
+        params: &[ParamMeta],
+        obligation: &DeferredArg<'_>,
+        expected: &Type,
+    ) -> R<Term>;
+
+    fn infer_deferred_application_argument(
+        &self,
+        cx: &Cx,
+        obligation: &DeferredArg<'_>,
+        n: u32,
+        sols: &mut [Sol],
+        span: Span,
+    ) -> R<Term>;
+
+    #[allow(clippy::too_many_arguments)]
+    fn promote_application_goals(
+        &self,
+        cx: &Cx,
+        name: &str,
+        params: &[ParamMeta],
+        slot_param: &[usize],
+        meta_doms: &[Type],
+        meta_lvls: &[Level],
+        n: u32,
+        sols: &mut [Sol],
+        span: Span,
+    ) -> R<()>;
+}
+
+/// Retry solver and checking-only obligations to a fixpoint.
+///
+/// Solver obligations run first because dictionaries may unblock argument
+/// domains, while checking an argument cannot instantiate a withheld solver
+/// slot. Each continuing pass fills at least one slot, which bounds the loop
+/// by the number of obligations. Before promotion, result-only calls may use
+/// their compatibility inference fallback; after promotion they may not.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn retry_obligations(
+    elab: &impl ImplicitApplicationElab,
+    cx: &Cx,
+    name: &str,
+    params: &[ParamMeta],
+    slot_param: &[usize],
+    meta_doms: &[Type],
+    n: u32,
+    sols: &mut [Sol],
+    resolves: &[ResolveOb],
+    deferred: &[DeferredArg<'_>],
+    allow_fallback: bool,
+    span: Span,
+) -> R<()> {
+    loop {
+        let mut progressed = false;
+        let mut blocked = false;
+        for obligation in resolves {
+            if !matches!(sols[obligation.slot], Sol::Withheld) {
+                continue;
+            }
+            match elab.resolve_application_obligation(
+                cx, name, params, slot_param, meta_doms, n, sols, obligation, span,
+            )? {
+                ObligationProgress::Blocked => blocked = true,
+                ObligationProgress::Unblocked => {
+                    progressed = true;
+                    blocked = true;
+                }
+                ObligationProgress::Solved => progressed = true,
+            }
+        }
+        for obligation in deferred {
+            if !matches!(sols[obligation.slot], Sol::Withheld) {
+                continue;
+            }
+            let Some(dom) = zonked(&obligation.dom, n, sols) else {
+                blocked = true;
+                continue;
+            };
+            let term =
+                elab.check_deferred_application_argument(cx, name, params, obligation, &dom)?;
+            sols[obligation.slot] = Sol::Solved(Rc::new(term));
+            progressed = true;
+        }
+        if !progressed || !blocked {
+            if allow_fallback
+                && blocked
+                && let Some(obligation) = deferred.iter().find(|obligation| {
+                    obligation.fallback_infer && matches!(sols[obligation.slot], Sol::Withheld)
+                })
+            {
+                let term =
+                    elab.infer_deferred_application_argument(cx, obligation, n, sols, span)?;
+                sols[obligation.slot] = Sol::Solved(Rc::new(term));
+                continue;
+            }
+            return Ok(());
+        }
+    }
+}
 
 /// The implicitness skeleton of a surface-written function type
 /// (`docs/implicit-binders-design.md` §2).
@@ -218,8 +406,14 @@ pub(crate) fn apply_explicit(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::cell::RefCell;
 
     struct FakeExprElab;
+
+    #[derive(Default)]
+    struct FakeImplicitElab {
+        events: RefCell<Vec<&'static str>>,
+    }
 
     impl ExplicitArgElab for FakeExprElab {
         fn whnf_for_application(&self, _cx: &Cx, ty: &Type, _span: Span) -> R<Type> {
@@ -237,6 +431,63 @@ mod tests {
         ) -> R<Term> {
             assert_eq!(*expected, Type::Nat);
             Ok(Term::Zero)
+        }
+    }
+
+    impl ImplicitApplicationElab for FakeImplicitElab {
+        fn resolve_application_obligation(
+            &self,
+            _cx: &Cx,
+            _name: &str,
+            _params: &[ParamMeta],
+            _slot_param: &[usize],
+            _meta_doms: &[Type],
+            _n: u32,
+            sols: &mut [Sol],
+            obligation: &ResolveOb,
+            _span: Span,
+        ) -> R<ObligationProgress> {
+            self.events.borrow_mut().push("resolve");
+            sols[obligation.slot] = Sol::Solved(Rc::new(Term::Zero));
+            Ok(ObligationProgress::Solved)
+        }
+
+        fn check_deferred_application_argument(
+            &self,
+            _cx: &Cx,
+            _name: &str,
+            _params: &[ParamMeta],
+            _obligation: &DeferredArg<'_>,
+            _expected: &Type,
+        ) -> R<Term> {
+            self.events.borrow_mut().push("check");
+            Ok(Term::Zero)
+        }
+
+        fn infer_deferred_application_argument(
+            &self,
+            _cx: &Cx,
+            _obligation: &DeferredArg<'_>,
+            _n: u32,
+            _sols: &mut [Sol],
+            _span: Span,
+        ) -> R<Term> {
+            panic!("the fixture has no fallback obligation")
+        }
+
+        fn promote_application_goals(
+            &self,
+            _cx: &Cx,
+            _name: &str,
+            _params: &[ParamMeta],
+            _slot_param: &[usize],
+            _meta_doms: &[Type],
+            _meta_lvls: &[Level],
+            _n: u32,
+            _sols: &mut [Sol],
+            _span: Span,
+        ) -> R<()> {
+            panic!("obligation retry cannot promote declaration goals")
         }
     }
 
@@ -289,5 +540,86 @@ mod tests {
         assert!(matches!(term, Term::App { arg, .. } if *arg == Term::Zero));
         assert_eq!(ty, Type::Nat);
         assert_eq!(level, zero);
+    }
+
+    #[test]
+    fn implicit_schedule_fixes_slots_and_parameter_indices_without_a_session() {
+        let checking = Expr {
+            kind: heather_syntax::ExprKind::Hole(None),
+            span: Span { start: 0, end: 1 },
+        };
+        let ordinary = Expr {
+            kind: heather_syntax::ExprKind::Num(0),
+            span: Span { start: 2, end: 3 },
+        };
+        let plan = ImplicitPlan::new(&[true, false, true, false], &[checking, ordinary], |arg| {
+            matches!(arg.kind, heather_syntax::ExprKind::Hole(_))
+        });
+
+        assert_eq!(plan.scratch_len(), 3);
+        assert_eq!(
+            plan.steps(2).collect::<Vec<_>>(),
+            vec![
+                ParamStep {
+                    parameter: 2,
+                    implicit: true
+                },
+                ParamStep {
+                    parameter: 3,
+                    implicit: false
+                },
+                ParamStep {
+                    parameter: 4,
+                    implicit: true
+                },
+                ParamStep {
+                    parameter: 5,
+                    implicit: false
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn obligation_fixpoint_needs_capabilities_not_an_elaborator() {
+        let elab = FakeImplicitElab::default();
+        let expr = Expr {
+            kind: heather_syntax::ExprKind::Hole(None),
+            span: Span { start: 0, end: 1 },
+        };
+        let resolves = [ResolveOb {
+            slot: 0,
+            dom: Type::Nat,
+            dom_level: Level::Zero,
+            param: 0,
+        }];
+        let deferred = [DeferredArg {
+            slot: 1,
+            expr: &expr,
+            dom: Type::Nat,
+            dom_level: Level::Zero,
+            param: 1,
+            fallback_infer: false,
+        }];
+        let mut sols = [Sol::Withheld, Sol::Withheld];
+
+        retry_obligations(
+            &elab,
+            &Cx::empty(),
+            "f",
+            &[],
+            &[],
+            &[],
+            2,
+            &mut sols,
+            &resolves,
+            &deferred,
+            true,
+            Span { start: 0, end: 1 },
+        )
+        .expect("fixpoint");
+
+        assert!(sols.iter().all(|sol| sol.solved().is_some()));
+        assert_eq!(&*elab.events.borrow(), &["resolve", "check"]);
     }
 }

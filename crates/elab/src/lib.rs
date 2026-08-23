@@ -707,6 +707,137 @@ impl application::ExplicitArgElab for Elaborator {
     }
 }
 
+impl application::ImplicitApplicationElab for Elaborator {
+    fn resolve_application_obligation(
+        &self,
+        cx: &Cx,
+        _name: &str,
+        params: &[ParamMeta],
+        slot_param: &[usize],
+        meta_doms: &[Type],
+        n: u32,
+        sols: &mut [Sol],
+        obligation: &ResolveOb,
+        span: Span,
+    ) -> R<application::ObligationProgress> {
+        let Some(goal) = zonked(&obligation.dom, n, sols) else {
+            // A blocked indexed goal first consults the matching dictionary
+            // binder, then an operator designation. Either may fill an index
+            // slot without yet solving this obligation.
+            let written = params.get(obligation.param).and_then(|p| p.solver.as_deref());
+            let changed = self.fill_index_from_scope(cx, written, params, slot_param, sols)
+                || self.fill_index_from_designation(
+                    cx, written, params, slot_param, sols, meta_doms, n, span,
+                );
+            return Ok(if changed {
+                application::ObligationProgress::Unblocked
+            } else {
+                application::ObligationProgress::Blocked
+            });
+        };
+        let display = params
+            .get(obligation.param)
+            .and_then(|p| p.solver.as_deref())
+            .map(traits::render_ty)
+            .unwrap_or_else(|| "a solver parameter".to_string());
+        let mut trace = Vec::new();
+        match self.resolve_goal(
+            cx,
+            &goal,
+            &obligation.dom_level,
+            &display,
+            span,
+            &mut trace,
+        ) {
+            Some(term) => {
+                sols[obligation.slot] = Sol::Solved(Rc::new(term));
+                Ok(application::ObligationProgress::Solved)
+            }
+            None => Err(ElabError::Resolution { goal: display, span, trace }),
+        }
+    }
+
+    fn check_deferred_application_argument(
+        &self,
+        cx: &Cx,
+        name: &str,
+        params: &[ParamMeta],
+        obligation: &DeferredArg<'_>,
+        expected: &Type,
+    ) -> R<Term> {
+        let hint = params.get(obligation.param).map(|p| (name, p.name.as_str()));
+        let skel = params.get(obligation.param).and_then(|p| p.skel.as_deref());
+        self.elab_check_skel(
+            cx,
+            obligation.expr,
+            expected,
+            &obligation.dom_level,
+            hint,
+            skel,
+        )
+    }
+
+    fn infer_deferred_application_argument(
+        &self,
+        cx: &Cx,
+        obligation: &DeferredArg<'_>,
+        n: u32,
+        sols: &mut [Sol],
+        span: Span,
+    ) -> R<Term> {
+        let (term, ty, _) = self.elab_infer(cx, obligation.expr)?;
+        self.unify_arg_ty(cx, &obligation.dom, &ty, n, sols, span);
+        Ok(term)
+    }
+
+    fn promote_application_goals(
+        &self,
+        cx: &Cx,
+        name: &str,
+        params: &[ParamMeta],
+        slot_param: &[usize],
+        meta_doms: &[Type],
+        meta_lvls: &[Level],
+        n: u32,
+        sols: &mut [Sol],
+        span: Span,
+    ) -> R<()> {
+        let promoted: Vec<usize> = sols
+            .iter()
+            .enumerate()
+            .filter_map(|(slot, sol)| matches!(sol, Sol::Unsolved).then_some(slot))
+            .collect();
+        let total = self.attempt.promoted_goals_seen.get() + promoted.len() as u32;
+        self.attempt.promoted_goals_seen.set(total);
+        let needed = self.attempt.written_goal_base + total;
+        if needed > self.attempt.goal_base {
+            self.attempt.requested_goal_base.set(needed);
+            return err("internal: restarting declaration to reserve promoted apply goals", span);
+        }
+        for slot in promoted {
+            // Telescope order means earlier implicit parameters have already
+            // been inferred or promoted. A remaining blocked domain belongs
+            // to a solver/deferred value and is left for its own diagnostic.
+            let Some(dom) = zonked(&meta_doms[slot], n, sols) else { continue };
+            let parameter = slot_param[slot];
+            let param = params.get(parameter).map(|p| p.name.as_str()).unwrap_or("?");
+            let key = format!("apply:{name}:{parameter}");
+            let goal = self.new_goal_key(
+                cx,
+                None,
+                Some((name, param)),
+                dom,
+                meta_lvls[slot].clone(),
+                span,
+                Some(&key),
+                Some(parameter),
+            )?;
+            sols[slot] = Sol::Solved(Rc::new(goal));
+        }
+        Ok(())
+    }
+}
+
 impl Default for Elaborator {
     fn default() -> Self {
         Self::new()
@@ -9214,14 +9345,10 @@ impl Elaborator {
         // checking-only argument whose domain turns out meta-free is checked
         // inline exactly as before, and its pre-allocated slot is filled with
         // the checked term immediately.
-        let n_impl = mask.iter().filter(|&&b| b).count();
-        let n_expl = mask.len() - n_impl;
-        let n_defer = args
-            .iter()
-            .take(n_expl)
-            .filter(|a| self.is_checking_only(cx, a))
-            .count();
-        let n = (n_impl + n_defer) as u32;
+        let plan = application::ImplicitPlan::new(mask, args, |arg| {
+            self.is_checking_only(cx, arg)
+        });
+        let n = plan.scratch_len();
         // Scratch world: the `n` metas take the innermost Ψ indices `[0, n)`;
         // committed globals shift up by `n` so nothing collides.
         let mut t = head.shift_global(n);
@@ -9250,8 +9377,9 @@ impl Elaborator {
         let mut next_meta = 0u32;
         let mut args = args.iter();
         let all_params = params;
-        for (mi, &is_implicit) in mask.iter().enumerate() {
-            let i = mi + param_offset;
+        for step in plan.steps(param_offset) {
+            let i = step.parameter;
+            let is_implicit = step.implicit;
             let params = &all_params;
             let head_ty = self.whnf(cx, &ty, span)?;
             let Type::Pi { dom_level, cod_level, dom, cod } = head_ty else {
@@ -9428,110 +9556,20 @@ impl Elaborator {
         // stops: at most `k` passes for `k` obligations. The multi-pass
         // exists for an obligation whose domain mentions another deferred
         // argument's value, which a single ordered pass could misreport.
-        loop {
-            let mut progressed = false;
-            let mut blocked = false;
-            // Resolution obligations first: a resolved dictionary is
-            // frequently what a deferred argument's domain was waiting on,
-            // and the reverse never happens (a checked argument cannot
-            // instantiate a solver parameter's goal — its slot is withheld).
-            for ob in &resolves {
-                if !matches!(sols[ob.slot], Sol::Withheld) {
-                    continue;
-                }
-                let Some(goal) = zonked(&ob.dom, n, &sols) else {
-                    // The value-slot ladder's step 2 at a *call*
-                    // (docs/operation-indexed-classes-design.md §5): the goal
-                    // is blocked on its index, and a binder in scope of the
-                    // goal's class pins it. This is what lets a generic
-                    // function call itself — `sum_all(t)` inside `sum_all`
-                    // fills the index from the room rather than from search.
-                    let written = all_params.get(ob.param).and_then(|p| p.solver.as_deref());
-                    if self.fill_index_from_scope(
-                        cx,
-                        written,
-                        &all_params,
-                        &slot_param,
-                        &mut sols,
-                    ) || self.fill_index_from_designation(
-                        // Step 3, after step 2: a binder in scope of the
-                        // goal's class is the writer's own answer and always
-                        // beats the table
-                        // (docs/operators-onto-classes-design.md §5).
-                        cx,
-                        written,
-                        &all_params,
-                        &slot_param,
-                        &mut sols,
-                        &meta_doms,
-                        n,
-                        span,
-                    ) {
-                        // Progressed *and* still blocked: this obligation has
-                        // not been discharged, only unblocked, so the loop has
-                        // to come round again rather than fall out.
-                        progressed = true;
-                    }
-                    blocked = true;
-                    continue;
-                };
-                let display = all_params
-                    .get(ob.param)
-                    .and_then(|p| p.solver.as_deref())
-                    .map(traits::render_ty)
-                    .unwrap_or_else(|| "a solver parameter".to_string());
-                let mut tr = Vec::new();
-                match self.resolve_goal(cx, &goal, &ob.dom_level, &display, span, &mut tr) {
-                    Some(t) => {
-                        sols[ob.slot] = Sol::Solved(Rc::new(t));
-                        progressed = true;
-                    }
-                    None => {
-                        return Err(ElabError::Resolution {
-                            goal: display,
-                            span,
-                            trace: tr,
-                        })
-                    }
-                }
-            }
-            for ob in &deferred {
-                if !matches!(sols[ob.slot], Sol::Withheld) {
-                    continue;
-                }
-                let Some(dom) = zonked(&ob.dom, n, &sols) else {
-                    blocked = true;
-                    continue;
-                };
-                let hint = all_params.get(ob.param).map(|p| (name, p.name.as_str()));
-                let pskel = all_params.get(ob.param).and_then(|p| p.skel.as_deref());
-                let arg_t =
-                    self.elab_check_skel(cx, ob.expr, &dom, &ob.dom_level, hint, pskel)?;
-                sols[ob.slot] = Sol::Solved(Rc::new(arg_t));
-                progressed = true;
-            }
-            if !progressed || !blocked {
-                // Last resort for a result-only deferral: nothing else can
-                // move, so elaborate one such argument in **inference** mode,
-                // exactly as this call did before the rule existed, and come
-                // round again — its type may unblock the others. One per pass
-                // keeps the fixpoint's termination argument (each pass fills
-                // at least one slot). Its own error, if it has one, is the
-                // error the site used to get.
-                if blocked
-                    && let Some(k) = deferred.iter().position(|ob| {
-                        ob.fallback_infer && matches!(sols[ob.slot], Sol::Withheld)
-                    })
-                {
-                    let ob = &deferred[k];
-                    let (arg_t, arg_ty, _) = self.elab_infer(cx, ob.expr)?;
-                    self.unify_arg_ty(cx, &ob.dom, &arg_ty, n, &mut sols, span);
-                    sols[ob.slot] = Sol::Solved(Rc::new(arg_t));
-                    continue;
-                }
-                break;
-            }
-        }
+        application::retry_obligations(
+            self,
+            cx,
+            name,
+            &all_params,
+            &slot_param,
+            &meta_doms,
+            n,
+            &mut sols,
+            &resolves,
+            &deferred,
+            true,
+            span,
+        )?;
         // `apply`'s one semantic difference from an ordinary call: after all
         // ordinary evidence and deferred inference have reached a fixpoint,
         // turn each genuinely-unsolved implicit into a declaration goal.
@@ -9539,95 +9577,36 @@ impl Elaborator {
         // these goals are semantic, not written holes. Request the exact
         // total and let `elab_decl` restart before creating any of them.
         if promote_unsolved && self.attempt.goal_restart_enabled.get() {
-            let promoted: Vec<usize> = sols
-                .iter()
-                .enumerate()
-                .filter_map(|(j, s)| matches!(s, Sol::Unsolved).then_some(j))
-                .collect();
-            let total_promoted = self.attempt.promoted_goals_seen.get() + promoted.len() as u32;
-            self.attempt.promoted_goals_seen.set(total_promoted);
-            let needed = self.attempt.written_goal_base + total_promoted;
-            if needed > self.attempt.goal_base {
-                self.attempt.requested_goal_base.set(needed);
-                return err("internal: restarting declaration to reserve promoted apply goals", span);
-            }
-            for j in promoted {
-                // Telescope order guarantees that a parameter's domain can
-                // mention only earlier parameters. Those have either been
-                // inferred or were promoted earlier in this loop, so a
-                // remaining block here is a solver/deferred value rather than
-                // an implicit eligible for promotion.
-                let Some(dom) = zonked(&meta_doms[j], n, &sols) else { continue };
-                let i = slot_param[j];
-                let param = all_params.get(i).map(|p| p.name.as_str()).unwrap_or("?");
-                let key = format!("apply:{name}:{i}");
-                let goal = self.new_goal_key(
-                    cx,
-                    None,
-                    Some((name, param)),
-                    dom,
-                    meta_lvls[j].clone(),
-                    span,
-                    Some(&key),
-                    Some(i),
-                )?;
-                sols[j] = Sol::Solved(Rc::new(goal));
-            }
-
-            // Promotion can unblock a solver goal and checking-only argument
-            // whose domain mentioned the new declaration goal. Run the same
-            // ordered fixpoint again; no unifier writes the promoted slots,
-            // which are now rigid ordinary globals.
-            loop {
-                let mut progressed = false;
-                let mut blocked = false;
-                for ob in &resolves {
-                    if !matches!(sols[ob.slot], Sol::Withheld) {
-                        continue;
-                    }
-                    let Some(goal) = zonked(&ob.dom, n, &sols) else {
-                        blocked = true;
-                        continue;
-                    };
-                    let display = all_params
-                        .get(ob.param)
-                        .and_then(|p| p.solver.as_deref())
-                        .map(traits::render_ty)
-                        .unwrap_or_else(|| "a solver parameter".to_string());
-                    let mut tr = Vec::new();
-                    match self.resolve_goal(cx, &goal, &ob.dom_level, &display, span, &mut tr) {
-                        Some(t) => {
-                            sols[ob.slot] = Sol::Solved(Rc::new(t));
-                            progressed = true;
-                        }
-                        None => {
-                            return Err(ElabError::Resolution {
-                                goal: display,
-                                span,
-                                trace: tr,
-                            })
-                        }
-                    }
-                }
-                for ob in &deferred {
-                    if !matches!(sols[ob.slot], Sol::Withheld) {
-                        continue;
-                    }
-                    let Some(dom) = zonked(&ob.dom, n, &sols) else {
-                        blocked = true;
-                        continue;
-                    };
-                    let hint = all_params.get(ob.param).map(|p| (name, p.name.as_str()));
-                    let pskel = all_params.get(ob.param).and_then(|p| p.skel.as_deref());
-                    let arg_t =
-                        self.elab_check_skel(cx, ob.expr, &dom, &ob.dom_level, hint, pskel)?;
-                    sols[ob.slot] = Sol::Solved(Rc::new(arg_t));
-                    progressed = true;
-                }
-                if !progressed || !blocked {
-                    break;
-                }
-            }
+            application::ImplicitApplicationElab::promote_application_goals(
+                self,
+                cx,
+                name,
+                &all_params,
+                &slot_param,
+                &meta_doms,
+                &meta_lvls,
+                n,
+                &mut sols,
+                span,
+            )?;
+            // Promoted declaration goals are now rigid committed-world
+            // payloads. They may unblock dictionaries and checking-only
+            // arguments, but the compatibility inference fallback has
+            // already had its one pre-promotion opportunity.
+            application::retry_obligations(
+                self,
+                cx,
+                name,
+                &all_params,
+                &slot_param,
+                &meta_doms,
+                n,
+                &mut sols,
+                &resolves,
+                &deferred,
+                false,
+                span,
+            )?;
         }
         // A resolution obligation whose goal never became meta-free is
         // reported at the call, naming the parameter and what it waited on:

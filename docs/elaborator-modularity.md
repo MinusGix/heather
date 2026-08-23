@@ -197,10 +197,21 @@ tiny fake, proving that the application loop itself needs neither an
 capabilities as a transition point; the eventual `ExprElab` can implement the
 same interface without changing application policy.
 
-The implicit-application policy that creates and consumes unification scratch
-still belongs to the bidirectional extraction. Its next split should separate
-Π-spine scheduling from goal promotion and trait resolution, adding
-capabilities only when one of those policies actually needs them.
+Implicit application now crosses the same boundary in two pieces.
+`ImplicitPlan` fixes the Π schedule and the scratch-world size without session
+state, including the reserved slots for checking-only arguments.
+`retry_obligations` owns solver-before-argument ordering, readiness, fallback,
+and fixpoint termination. Dictionary search, deferred expression elaboration,
+unification, and declaration-goal promotion enter only through
+`ImplicitApplicationElab`; the `Elaborator` implementation is the transition
+adapter. A fake implementation tests both the plan and the obligation queue
+without constructing an elaboration session.
+
+The remaining `apply_implicit` body still constructs and discharges the
+scratch world in `lib.rs`. Its next split is to move that Π walk into
+`application.rs` once argument inference/checking and expected-type harvesting
+are expressed as capabilities. Promotion and trait resolution should remain
+services at that boundary, not fields on a generic context bag.
 
 Move `elab_ty`, `elab_check*`, and `elab_infer*` behind an `ExprElab`
 view borrowing the immutable session and mutable declaration attempt. Split
