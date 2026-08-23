@@ -64,12 +64,12 @@ The ordinary path is consequently:
 3. solve goals and run the kernel gate;
 4. commit the binding and attempt emissions.
 
-Rollback is now structural: no fallible operation occurs after committed state
-starts changing.
+For an ordinary declaration, rollback is now structural: no fallible operation
+occurs after committed state starts changing.
 
-## Next extractions
+## Session registries
 
-### 1. Global registries
+### Source-language registries
 
 Group the lookup-only state by invariant, not merely by feature:
 
@@ -115,12 +115,56 @@ Generated-source nesting and the active `derive()` route remain outside: both
 are transient control flow for the declaration being elaborated, not committed
 representation metadata.
 
-The four global registries are therefore explicit. No caller iterates a
-hash-backed registry to emit terms or diagnostics, and the remaining work can
-target elaboration mechanisms rather than moving session tables out of
-`Elaborator`.
+These four source-language registries are now explicit. No caller iterates one
+of their hash-backed tables to emit terms or diagnostics.
 
-### 2. Bidirectional core
+One committed registry remains directly on `Elaborator`: `meta_defs` and
+`meta_slots`, which together say which checked meta program implements each
+generation slot. They have the same shape as the completed extractions — two
+lookup views with one declaration-time invariant — and should become a small
+`MetaPrograms` owner before expression elaboration is split.
+
+## State that intentionally remains on `Elaborator`
+
+Not every remaining field is a missing registry:
+
+- `psi`, `delta_psi`, and the optional kernel gate are the declaration
+  transaction's trust boundary and belong to the orchestration layer;
+- `attempt`, `instance_scope`, `pending_derived`, warnings, generated-source
+  depth, the active derive provenance, resolution depth, and fuel describe the
+  item or call currently being elaborated;
+- `meta_pushed` is dynamic scope while checking a meta program;
+- `result_only_memo` is a performance cache whose removal changes no result.
+
+This inventory is a constraint on later views: committed state, dynamic scope,
+configuration, and caches should not be bundled merely because one mechanism
+reads several of them.
+
+## Remaining sequence
+
+### 1. Generated bundle transaction
+
+A representation generator emits several ordinary declarations. Each one uses
+the normal check/commit path, while the representation registry itself is
+snapshotted around the whole source declaration. Consequently a failed bundle
+cannot leak representation lookup, obligation, provenance, or access state,
+but the orchestration layer still lacks one named checkpoint spanning Ψ,
+names, types, traits, meta programs, and representations together.
+
+Establish that session checkpoint before deeper mechanism extraction. It
+should be the one rollback operation used by generated bundles and by any
+future speculative client; adding one-off truncation logic to each registry
+would recreate the coupling the registries removed.
+
+### 2. Meta-program registry
+
+Move `meta_defs` and `meta_slots` behind a `MetaPrograms` owner with one
+registration operation. Keep `meta_pushed` outside as dynamic checking scope.
+The registry should answer slot dispatch and definition lookup without exposing
+either backing map, and slot/name validation must finish before either view is
+installed.
+
+### 3. Bidirectional core
 
 Move `elab_ty`, `elab_check*`, and `elab_infer*` behind an `ExprElab`
 view borrowing the immutable session and mutable declaration attempt. Split
@@ -132,6 +176,30 @@ be unit-tested without constructing an `Elaborator`; expression elaboration
 can be tested with a small session fixture; declaration tests continue to
 exercise commit and rollback end to end.
 
+`ExprElab` is ready only when all of these are true:
+
+- it names its session, attempt, local-context, and dynamic-scope inputs
+  individually rather than holding `&Elaborator`;
+- constructing it does not clone committed state;
+- it cannot commit a declaration or mutate a global registry;
+- application, matching, and dispatch can be moved one at a time without
+  widening the view for unrelated callers.
+
+The size of `lib.rs` is evidence, not the success criterion. A smaller file
+that hides the same dependency graph behind `ExprElab { elab: &Elaborator }`
+would be less honest than the large file we have now.
+
+## Lessons from the registry pass
+
+- Move ownership and enforce invariants before changing algorithms.
+- A fast-path index belongs with the canonical table it summarizes.
+- Hash-backed queries that affect output must sort at the registry boundary.
+- Temporary lexical or generated-source modes are not committed metadata.
+- When provisional registry state is required during checking, snapshot the
+  owner and test the failure path explicitly.
+- Ordinary Rust modules became useful only after the dependency boundary was
+  real; privacy changes were then a consequence rather than the objective.
+
 ## Guardrails
 
 - Preserve the kernel as the sole trust boundary.
@@ -139,5 +207,8 @@ exercise commit and rollback end to end.
 - Prefer moves and state grouping before algorithm rewrites.
 - Keep each intermediate commit behavior-preserving and run the full
   `heather-elab` suite.
+- Roll back every affected registry when one generated source declaration
+  fails; do not call a feature transactional when only its primary table rolls
+  back.
 - Do not create a generic “context” or “services” bag. If a component still
   needs all of `Elaborator`, the boundary is not ready.
