@@ -97,6 +97,7 @@ pub use lint::{Lint, LintProfile};
 mod quote;
 pub mod resolve;
 mod representations;
+mod session;
 mod slots;
 mod traits;
 mod types;
@@ -974,7 +975,7 @@ impl Elaborator {
     /// entry point it would be refused for spelling a generated name instead
     /// of for the mutation — a control passing for the wrong reason.
     pub fn elab_generated_source(&mut self, src: &str) -> R<()> {
-        self.generated_mode(|me| me.elab_source(src))
+        self.session_transaction(|me| me.generated_mode(|me| me.elab_source(src)))
     }
 
     /// [`Self::elab_source`] into a named module. The elaborator does no file

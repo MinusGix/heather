@@ -108,9 +108,10 @@ implementations and their provenance, the declaration-ordered obligation
 ledger, and designed/generated access mappings. A repr or implementation
 enters its linked lookup and reporting views through one commit operation.
 Access mappings must exist provisionally while generated source and obligation
-diagnostics are checked, so representation declarations snapshot the registry
-and restore it wholesale on failure; failed reprs and implementations cannot
-leak even those provisional names.
+diagnostics are checked. Representation declarations therefore run inside the
+session transaction described below; failed reprs and implementations cannot
+leak those provisional names or any ordinary declaration emitted before the
+failure.
 Generated-source nesting and the active `derive()` route remain outside: both
 are transient control flow for the declaration being elaborated, not committed
 representation metadata.
@@ -142,21 +143,25 @@ reads several of them.
 
 ## Remaining sequence
 
-### 1. Generated bundle transaction
+### Established: generated bundle transaction
 
 A representation generator emits several ordinary declarations. Each one uses
-the normal check/commit path, while the representation registry itself is
-snapshotted around the whole source declaration. Consequently a failed bundle
-cannot leak representation lookup, obligation, provenance, or access state,
-but the orchestration layer still lacks one named checkpoint spanning Ψ,
-names, types, traits, meta programs, and representations together.
+the normal check/commit path, so `session.rs` now gives the orchestration layer
+one `SessionCheckpoint` spanning Ψ, its δ view, names, types, traits, meta
+programs, and representations. Representation and implementation declarations,
+plus the public generated-source entry point used by mutation controls, all run
+through the same transaction. An error restores that snapshot and clears the
+Ψ-indexed result-only memo, whose absolute indices may otherwise be reused by
+later declarations.
 
-Establish that session checkpoint before deeper mechanism extraction. It
-should be the one rollback operation used by generated bundles and by any
-future speculative client; adding one-off truncation logic to each registry
-would recreate the coupling the registries removed.
+Dynamic scope, diagnostics, configuration, and attempt scratch deliberately
+remain outside the checkpoint. Their existing owners delimit those lifetimes;
+the transaction means “committed program facts are atomic,” not “rewind the
+entire elaborator object.” Regressions cover both an arbitrary generated bundle
+crossing Ψ/name/type registries and a representation implementation whose early
+generated declarations precede a later kernel failure.
 
-### 2. Meta-program registry
+### 1. Meta-program registry
 
 Move `meta_defs` and `meta_slots` behind a `MetaPrograms` owner with one
 registration operation. Keep `meta_pushed` outside as dynamic checking scope.
@@ -164,7 +169,7 @@ The registry should answer slot dispatch and definition lookup without exposing
 either backing map, and slot/name validation must finish before either view is
 installed.
 
-### 3. Bidirectional core
+### 2. Bidirectional core
 
 Move `elab_ty`, `elab_check*`, and `elab_infer*` behind an `ExprElab`
 view borrowing the immutable session and mutable declaration attempt. Split
@@ -196,7 +201,7 @@ would be less honest than the large file we have now.
 - Hash-backed queries that affect output must sort at the registry boundary.
 - Temporary lexical or generated-source modes are not committed metadata.
 - When provisional registry state is required during checking, snapshot the
-  owner and test the failure path explicitly.
+  committed session and test the failure path explicitly.
 - Ordinary Rust modules became useful only after the dependency boundary was
   real; privacy changes were then a consequence rather than the objective.
 

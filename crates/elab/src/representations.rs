@@ -4,9 +4,9 @@
 //! identity, its written name, an optional monomorph name, its designed access
 //! paths, and its obligation rows. An `impl` similarly couples its lookup
 //! entry, provenance, access paths, and obligations. This module owns those
-//! views; declaration entry points snapshot it while provisional access paths
-//! are live, then either commit the linked lookup/reporting views or restore
-//! the whole registry on failure.
+//! views; declaration entry points run in the session-wide transaction while
+//! provisional access paths are live, then either commit every linked view or
+//! restore all committed registries together on failure.
 
 use std::collections::HashMap;
 

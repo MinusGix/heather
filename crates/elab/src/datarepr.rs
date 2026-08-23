@@ -375,12 +375,7 @@ impl Elaborator {
     /// declaration's qualifier has to name a type in scope and `N` names the
     /// assembled value.
     pub(crate) fn elab_datarepr(&mut self, d: &DatareprDecl) -> R<()> {
-        let before = self.representations.clone();
-        let result = self.elab_datarepr_inner(d);
-        if result.is_err() {
-            self.representations = before;
-        }
-        result
+        self.session_transaction(|me| me.elab_datarepr_inner(d))
     }
 
     fn elab_datarepr_inner(&mut self, d: &DatareprDecl) -> R<()> {
@@ -2003,12 +1998,7 @@ impl Elaborator {
     /// about the operation half being its resolved name rather than its
     /// `.code`.
     pub(crate) fn elab_impl(&mut self, d: &heather_syntax::ImplDecl) -> R<()> {
-        let before = self.representations.clone();
-        let result = self.elab_impl_inner(d);
-        if result.is_err() {
-            self.representations = before;
-        }
-        result
+        self.session_transaction(|me| me.elab_impl_inner(d))
     }
 
     fn elab_impl_inner(&mut self, d: &heather_syntax::ImplDecl) -> R<()> {

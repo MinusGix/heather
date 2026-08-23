@@ -227,9 +227,17 @@ fn a_failed_datarepr_leaves_no_registry_views() {
 #[test]
 fn a_failed_impl_leaves_no_registry_views() {
     let mut e = ok(LIST);
+    let psi_count = e.psi().bindings.len();
     let obligation_count = e.obligations().len();
-    let failed = "impl length for ListTok { body := length, refines := ? }";
+    // The generated record and body declaration land before the false
+    // `refines` theorem reaches the kernel. The whole emitted bundle must
+    // nevertheless disappear with the failed surface `impl`.
+    let failed = "impl length for ListTok {
+        body := λ r => Succ(length(r)),
+        refines := λ r h0 => refl,
+    }";
     assert_eq!(e.check_source(failed).len(), 1);
+    assert_eq!(e.psi().bindings.len(), psi_count);
     assert_eq!(e.impl_global("ListTok", "length"), None);
     assert_eq!(e.obligations().len(), obligation_count);
 
