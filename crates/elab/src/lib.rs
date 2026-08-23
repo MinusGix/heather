@@ -127,7 +127,7 @@ use surface::{
 };
 use traits::Traits;
 use types::Types;
-use unification::{DeferredArg, ResolveOb, Sol, unify_ty, zonked, zonked_tm};
+use unification::{ResolveOb, Sol, unify_ty, zonked, zonked_tm};
 pub(crate) use surface::{count_holes, count_holes_expr, strengthen_global};
 pub(crate) use unification::{embed, mentions_binder, strengthen_tm, strengthen_ty};
 
@@ -708,6 +708,46 @@ impl application::ExplicitArgElab for Elaborator {
 }
 
 impl application::ImplicitApplicationElab for Elaborator {
+    fn classify_application_argument(
+        &self,
+        cx: &Cx,
+        argument: &Expr,
+    ) -> application::ArgumentClass {
+        application::ArgumentClass {
+            checking_only: self.is_checking_only(cx, argument),
+            fallback_infer: self.deferral_can_fall_back(cx, argument),
+        }
+    }
+
+    fn infer_application_argument(&self, cx: &Cx, argument: &Expr) -> R<(Term, Type, Level)> {
+        self.elab_infer(cx, argument)
+    }
+
+    fn unify_application_argument_type(
+        &self,
+        cx: &Cx,
+        parameter: &Type,
+        argument: &Type,
+        n: u32,
+        sols: &mut [Sol],
+        span: Span,
+    ) {
+        self.unify_arg_ty(cx, parameter, argument, n, sols, span)
+    }
+
+    fn solve_application_from_expected(
+        &self,
+        cx: &Cx,
+        result: &Type,
+        expected: &Type,
+        n: u32,
+        sols: &mut [Sol],
+        meta_doms: &[Type],
+        span: Span,
+    ) -> R<()> {
+        self.solve_from_expected(cx, result, expected, n, sols, meta_doms, span)
+    }
+
     fn resolve_application_obligation(
         &self,
         cx: &Cx,
@@ -757,39 +797,6 @@ impl application::ImplicitApplicationElab for Elaborator {
         }
     }
 
-    fn check_deferred_application_argument(
-        &self,
-        cx: &Cx,
-        name: &str,
-        params: &[ParamMeta],
-        obligation: &DeferredArg<'_>,
-        expected: &Type,
-    ) -> R<Term> {
-        let hint = params.get(obligation.param).map(|p| (name, p.name.as_str()));
-        let skel = params.get(obligation.param).and_then(|p| p.skel.as_deref());
-        self.elab_check_skel(
-            cx,
-            obligation.expr,
-            expected,
-            &obligation.dom_level,
-            hint,
-            skel,
-        )
-    }
-
-    fn infer_deferred_application_argument(
-        &self,
-        cx: &Cx,
-        obligation: &DeferredArg<'_>,
-        n: u32,
-        sols: &mut [Sol],
-        span: Span,
-    ) -> R<Term> {
-        let (term, ty, _) = self.elab_infer(cx, obligation.expr)?;
-        self.unify_arg_ty(cx, &obligation.dom, &ty, n, sols, span);
-        Ok(term)
-    }
-
     fn promote_application_goals(
         &self,
         cx: &Cx,
@@ -802,6 +809,9 @@ impl application::ImplicitApplicationElab for Elaborator {
         sols: &mut [Sol],
         span: Span,
     ) -> R<()> {
+        if !self.attempt.goal_restart_enabled.get() {
+            return Ok(());
+        }
         let promoted: Vec<usize> = sols
             .iter()
             .enumerate()
@@ -835,6 +845,42 @@ impl application::ImplicitApplicationElab for Elaborator {
             sols[slot] = Sol::Solved(Rc::new(goal));
         }
         Ok(())
+    }
+
+    fn blocked_solver_error(
+        &self,
+        name: &str,
+        params: &[ParamMeta],
+        obligation: &ResolveOb,
+        span: Span,
+    ) -> ElabError {
+        let parameter = params
+            .get(obligation.param)
+            .map(|parameter| parameter.name.as_str())
+            .unwrap_or("?");
+        if let Some(solver) = params
+            .get(obligation.param)
+            .and_then(|parameter| parameter.solver.as_deref())
+            && let Some(reference) = self.class_ref_of_ty(solver)
+            && let Some(class) = self.lookup_class(&reference.name)
+            && !class.valparams.is_empty()
+        {
+            return self.value_slot_refusal(&class, name, None, span);
+        }
+        let goal = params
+            .get(obligation.param)
+            .and_then(|parameter| parameter.solver.as_deref())
+            .map(traits::render_ty)
+            .unwrap_or_else(|| "a solver parameter".to_string());
+        ElabError::Elab {
+            msg: format!(
+                "the goal of `{parameter}` (`{goal}`) still mentions an implicit that \
+                 could not be inferred here, so no search can run for it: give the type \
+                 arguments (`{name}<…>(…)`) or pass `{parameter}` explicitly \
+                 (`@{name}(…)`)"
+            ),
+            span,
+        }
     }
 }
 
@@ -3048,7 +3094,8 @@ impl Elaborator {
                                     );
                                 if prefix > 0 && !suppress {
                                     let mask = vec![true; prefix];
-                                    let (t, _, _) = self.apply_implicit(
+                                    let (t, _, _) = application::apply_implicit(
+                                        self,
                                         cx,
                                         name,
                                         skel_params(fskel),
@@ -3353,7 +3400,7 @@ impl Elaborator {
     /// and inference is the fallback, the expected type it would otherwise
     /// discard (already whnf'd).
     ///
-    /// One consumer: [`Self::apply_implicit`], which uses it to solve
+    /// One consumer: [`application::apply_implicit`], which uses it to solve
     /// implicits that no argument's type mentions — the congruence rule of
     /// `issues/congruence-by-anti-unification.md`, whose whole premise is
     /// that the information is in the expected type and nowhere else. Every
@@ -3507,7 +3554,8 @@ impl Elaborator {
                     if let Some(prefix) = global_prefix {
                         let (head, ty, lvl) = self.resolve(cx, name, e.span)?;
                         let mask = vec![true; prefix];
-                        return self.apply_implicit(
+                        return application::apply_implicit(
+                            self,
                             cx,
                             name,
                             self.params_of(name),
@@ -3535,7 +3583,8 @@ impl Elaborator {
                         let prefix = skel.leading_implicit();
                         let (head, ty, lvl) = self.resolve(cx, name, e.span)?;
                         let mask = vec![true; prefix];
-                        return self.apply_implicit(
+                        return application::apply_implicit(
+                            self,
                             cx,
                             name,
                             skel_params(&skel),
@@ -3624,7 +3673,8 @@ impl Elaborator {
                 let solver_here = (0..prefix)
                     .any(|k| params.get(args.len() + k).is_some_and(|p| p.solver.is_some()));
                 if expected.is_some() && solver_here {
-                    return self.apply_implicit(
+                    return application::apply_implicit(
+                        self,
                         cx,
                         &name,
                         Rc::clone(&params),
@@ -3702,7 +3752,8 @@ impl Elaborator {
                     None => (&args[..], &mask[..]),
                 };
                 if !*explicit && mask.iter().any(|&b| b) {
-                    self.apply_implicit(
+                    application::apply_implicit(
+                        self,
                         cx,
                         &name,
                         Rc::clone(&params),
@@ -3987,7 +4038,8 @@ impl Elaborator {
                         Some((a, m)) => (&a[..], &m[..]),
                         None => (&args[..], &mask[..]),
                     };
-                    return self.apply_implicit(
+                    return application::apply_implicit(
+                        self,
                         cx, name, params, true, 0, false, head, ty, lvl, args, mask,
                         expected, *goal_oriented, e.span,
                     );
@@ -4031,7 +4083,8 @@ impl Elaborator {
                         args,
                     )
                 } else {
-                    self.apply_implicit(
+                    application::apply_implicit(
+                        self,
                         cx, name, params, false, 0, false, head, ty, lvl, args, mask, expected,
                         *goal_oriented, e.span,
                     )
@@ -8954,7 +9007,8 @@ impl Elaborator {
                     Some((a, m)) => (&a[..], &m[..]),
                     None => (args, &mask[..]),
                 };
-                self.apply_implicit(
+                application::apply_implicit(
+                    self,
                     cx, name, params, true, 0, false, t, ty, lvl, args, mask, expected, false,
                     span,
                 )
@@ -9245,7 +9299,7 @@ impl Elaborator {
                 // ([`Self::call_defers_for_result_only`]): the semantic member
                 // of this set, and the only one that can still elaborate if
                 // deferral does not pay off — which is why it, alone, carries
-                // the inference fallback in [`Self::apply_implicit`].
+                // the inference fallback in [`application::apply_implicit`].
                 Some((n, args, false)) => {
                     self.call_defers_for_result_only(cx, n, args.len())
                 }
@@ -9311,463 +9365,6 @@ impl Elaborator {
     /// right when the mask is a suffix. `bare_ref` selects the §7.1 message
     /// flavor for the zero-argument checking-position route.
     #[allow(clippy::too_many_arguments)]
-    fn apply_implicit(
-        &self,
-        cx: &Cx,
-        name: &str,
-        // The callee's parameter table, passed by the caller rather than
-        // recovered by name here (docs/implicit-binders-design.md §4.2):
-        // global sites pass `params_of`, value sites synthesize the table
-        // from the head's skeleton — which is what keeps a local `f` from
-        // borrowing a global `f`'s metadata, and what names goal hints and
-        // per-slot messages after skeleton binders.
-        params: Rc<Vec<ParamMeta>>,
-        // A skeletal *value* head (a local, alias, or projection): its
-        // messages must offer only the escapes that exist — `@name(…)` and
-        // an annotated eta-expansion, never `name<…>` (§4.3).
-        value_head: bool,
-        param_offset: usize,
-        bare_ref: bool,
-        head: Term,
-        callee_ty: Type,
-        callee_lvl: Level,
-        args: &[Expr],
-        mask: &[bool],
-        expected: Option<&Type>,
-        promote_unsolved: bool,
-        span: Span,
-    ) -> R<(Term, Type, Level)> {
-        // Scratch-world size, fixed up front (everything downstream of
-        // `shift_global(n)` assumes it is static): one meta per implicit
-        // parameter, plus one per explicit argument that is syntactically
-        // checking-only (design §4.2) — those *may* be deferred behind a
-        // stand-in meta. The second summand is an over-approximation: a
-        // checking-only argument whose domain turns out meta-free is checked
-        // inline exactly as before, and its pre-allocated slot is filled with
-        // the checked term immediately.
-        let plan = application::ImplicitPlan::new(mask, args, |arg| {
-            self.is_checking_only(cx, arg)
-        });
-        let n = plan.scratch_len();
-        // Scratch world: the `n` metas take the innermost Ψ indices `[0, n)`;
-        // committed globals shift up by `n` so nothing collides.
-        let mut t = head.shift_global(n);
-        let mut ty = callee_ty.shift_global(n);
-        let mut lvl = callee_lvl;
-        let mut sols: Vec<Sol> = vec![Sol::Unsolved; n as usize];
-        // Each meta's *declared* parameter type, in meta order — the only
-        // place a solution's domain can come from when no argument mentions
-        // it (see [`Self::solve_from_expected`]).
-        let mut meta_doms: Vec<Type> = Vec::with_capacity(n as usize);
-        let mut meta_lvls: Vec<Level> = Vec::with_capacity(n as usize);
-        // Which parameter each slot came from, in slot order — for the
-        // per-slot diagnostics at discharge.
-        let mut slot_param: Vec<usize> = Vec::with_capacity(n as usize);
-        // Deferred obligations (design §3.1): local to this activation. The
-        // scratch world is the constraint store — an obligation's domain's
-        // meta occurrences *are* its "blocked on" set, and [`zonked`] decides
-        // readiness exactly.
-        let mut deferred: Vec<DeferredArg<'_>> = Vec::new();
-        // Resolution obligations (docs/traits-layer2-design.md §4): one per
-        // **solver parameter**, discharged by the same retry-to-fixpoint loop
-        // the deferred arguments use. A solver parameter's slot is minted
-        // exactly like an implicit's; what differs is where its solution comes
-        // from — search, once the goal is meta-free.
-        let mut resolves: Vec<ResolveOb> = Vec::new();
-        let mut next_meta = 0u32;
-        let mut args = args.iter();
-        let all_params = params;
-        for step in plan.steps(param_offset) {
-            let i = step.parameter;
-            let is_implicit = step.implicit;
-            let params = &all_params;
-            let head_ty = self.whnf(cx, &ty, span)?;
-            let Type::Pi { dom_level, cod_level, dom, cod } = head_ty else {
-                return err(format!("`{name}` is applied to too many arguments"), span);
-            };
-            let arg_rc = if is_implicit {
-                // A fresh metavariable `?m^{id_Γ}` at Ψ-index `next_meta`.
-                let m = Term::GlobalTm {
-                    var: GlobalVar(next_meta),
-                    subst: LocalSubst::id(&cx.gamma),
-                };
-                if all_params.get(i).is_some_and(|p| p.solver.is_some()) {
-                    // A solver parameter: withheld, not unsolved. Nothing may
-                    // learn a solution for it from an argument's type — its
-                    // value is *searched for*, and a unifier-supplied one
-                    // would be a different value at the same slot.
-                    sols[next_meta as usize] = Sol::Withheld;
-                    resolves.push(ResolveOb {
-                        slot: next_meta as usize,
-                        dom: (*dom).clone(),
-                        dom_level: dom_level.clone(),
-                        param: i,
-                    });
-                }
-                meta_doms.push((*dom).clone());
-                meta_lvls.push(dom_level.clone());
-                slot_param.push(i);
-                next_meta += 1;
-                Rc::new(m)
-            } else {
-                let arg = args.next().ok_or_else(|| ElabError::Elab {
-                    msg: format!("`{name}` is applied to too few arguments"),
-                    span,
-                })?;
-                // If every meta this domain mentions is *already* solved,
-                // elaborate the argument in **checking** mode against the
-                // zonked domain. That is what puts `refl`, a `?`-hole, an
-                // unannotated lambda and a vector literal in a position that
-                // supplies their expected type — they are checking-only.
-                //
-                // Load-bearing since `@` stopped clearing the mask
-                // (issues/at-and-type-arguments.md): `@sym(a, b, ?p)` still
-                // has one meta (the type parameter), so it comes through here
-                // rather than through `apply_explicit`, and `a` solves the
-                // meta before `p`'s domain is needed.
-                match zonked(&dom, n, &sols) {
-                    Some(real_dom) => {
-                        let hint = params.get(i).map(|p| (name, p.name.as_str()));
-                        let pskel = params.get(i).and_then(|p| p.skel.as_deref());
-                        let arg_t = self
-                            .elab_check_skel(cx, arg, &real_dom, &dom_level, hint, pskel)?;
-                        if self.is_checking_only(cx, arg) {
-                            // Counted into `n` up front, so the slot exists;
-                            // fill it now (a solved slot is indistinguishable
-                            // from an unused one at discharge) and keep the
-                            // slot numbering aligned with the count.
-                            sols[next_meta as usize] = Sol::Solved(Rc::new(arg_t.clone()));
-                            meta_doms.push((*dom).clone());
-                            meta_lvls.push(dom_level.clone());
-                            slot_param.push(i);
-                            next_meta += 1;
-                        }
-                        Rc::new(arg_t.shift_global(n))
-                    }
-                    // Per-argument deferral (design §4): a checking-only form
-                    // cannot contribute a solution in inference mode — every
-                    // such arm in `elab_infer_at` refuses it — so at a domain
-                    // that still mentions metas it is *deferred*: its spine
-                    // position is a fresh stand-in meta, its slot is
-                    // withheld, and the obligation is retried after
-                    // expected-type solving. Later arguments whose domains
-                    // mention the deferred value see the meta and block or
-                    // infer as their own trigger says.
-                    None if self.is_checking_only(cx, arg) => {
-                        let m = Term::GlobalTm {
-                            var: GlobalVar(next_meta),
-                            subst: LocalSubst::id(&cx.gamma),
-                        };
-                        sols[next_meta as usize] = Sol::Withheld;
-                        deferred.push(DeferredArg {
-                            slot: next_meta as usize,
-                            expr: arg,
-                            dom: (*dom).clone(),
-                            dom_level: dom_level.clone(),
-                            param: i,
-                            fallback_infer: self.deferral_can_fall_back(cx, arg),
-                        });
-                        meta_doms.push((*dom).clone());
-                        meta_lvls.push(dom_level.clone());
-                        slot_param.push(i);
-                        next_meta += 1;
-                        Rc::new(m)
-                    }
-                    None => {
-                        let (arg_t, arg_ty, _) = self.elab_infer(cx, arg)?;
-                        // Drive meta solutions from the argument's actual
-                        // type, then splice it into the scratch world.
-                        self.unify_arg_ty(cx, &dom, &arg_ty, n, &mut sols, span);
-                        Rc::new(arg_t.shift_global(n))
-                    }
-                }
-            };
-            ty = cod.apply_local(&LocalSubst::id(&cx.gamma).extended(Rc::clone(&arg_rc)));
-            lvl = cod_level.clone();
-            t = Term::App { fun: Rc::new(t), dom_level, cod_level, dom, cod, arg: arg_rc };
-        }
-        // Arguments left over once every parameter has one are **not** partial
-        // application: they are a second spine on the *result*, so they spill
-        // into iterated application — `nth(t, k)` is `nth(t)(k)`
-        // (issues/call-site-overapplication.md). Applied after the discharge
-        // below, because only there is the head back in the committed world
-        // that `apply_explicit` elaborates its arguments in.
-        let mut spill: Vec<Expr> = args.cloned().collect();
-        // …*unless* a meta is still unsolved, in which case the spine is not
-        // over yet as far as inference is concerned. A declaration curried to
-        // satisfy the termination guard (issues/ih-generalization.md) puts
-        // real parameters in its result type — `zip<A, B>(xs: List<A>) ->
-        // List<B> -> …` — and `B` occurs in no *declared* parameter, so
-        // nothing above this line can solve it. The spilled argument's type is
-        // the evidence, and it is evidence of exactly the kind the declared
-        // arguments give (issues/curried-tail-type-arg-inference.md).
-        //
-        // Consumed here rather than in `apply_explicit` because a solution has
-        // to land in `sols` *before* the discharge below. Three stopping
-        // conditions keep this to the case that needs it, so a call that
-        // elaborated before this existed takes the same path it did:
-        //
-        //  - every meta solved — nothing left to learn, so the rest spills;
-        //  - a domain that is already meta-free — it teaches nothing, and
-        //    `apply_explicit` is where an argument at a known type belongs;
-        //  - a checking-only argument — it cannot contribute a solution in
-        //    inference mode (design §4), the same rule the loop above obeys.
-        //
-        // Consuming the whole spill also makes `ty` the call's real result
-        // type again, which is the condition the expected-type solving below
-        // states for itself.
-        if !spill.is_empty() && sols.iter().any(|s| s.solved().is_none()) {
-            let mut taken = 0usize;
-            while taken < spill.len() && sols.iter().any(|s| s.solved().is_none()) {
-                let head_ty = self.whnf(cx, &ty, span)?;
-                let Type::Pi { dom_level, cod_level, dom, cod } = head_ty else { break };
-                let arg = &spill[taken];
-                if zonked(&dom, n, &sols).is_some() || self.is_checking_only(cx, arg) {
-                    break;
-                }
-                let (arg_t, arg_ty, _) = self.elab_infer(cx, arg)?;
-                self.unify_arg_ty(cx, &dom, &arg_ty, n, &mut sols, span);
-                let arg_rc = Rc::new(arg_t.shift_global(n));
-                ty = cod.apply_local(&LocalSubst::id(&cx.gamma).extended(Rc::clone(&arg_rc)));
-                lvl = cod_level.clone();
-                t = Term::App { fun: Rc::new(t), dom_level, cod_level, dom, cod, arg: arg_rc };
-                taken += 1;
-            }
-            spill.drain(..taken);
-        }
-        // Expected-type-directed solving (design §5): in checking position,
-        // with an unspilled spine (so `ty` really is the call's result type),
-        // the expected type is the remaining evidence. Run only when
-        // something is still unfilled — so no call that elaborated before
-        // reaches it.
-        if let Some(expected) = expected
-            && spill.is_empty()
-            && sols.iter().any(|s| s.solved().is_none())
-        {
-            self.solve_from_expected(cx, &ty, expected, n, &mut sols, &meta_doms, span)?;
-        }
-        // Retry the deferred obligations, to fixpoint in argument order
-        // (design §4.3): an obligation whose domain has become meta-free is
-        // checked against it — the hole becomes an ordinary goal here, `refl`
-        // gets its `Id`, the vector literal its `Vec`. The checked term is a
-        // committed-world payload, the same convention the unifiers'
-        // strengthened subjects follow. Checking-mode elaboration never
-        // writes `sols`, so each pass either fills at least one slot or
-        // stops: at most `k` passes for `k` obligations. The multi-pass
-        // exists for an obligation whose domain mentions another deferred
-        // argument's value, which a single ordered pass could misreport.
-        application::retry_obligations(
-            self,
-            cx,
-            name,
-            &all_params,
-            &slot_param,
-            &meta_doms,
-            n,
-            &mut sols,
-            &resolves,
-            &deferred,
-            true,
-            span,
-        )?;
-        // `apply`'s one semantic difference from an ordinary call: after all
-        // ordinary evidence and deferred inference have reached a fixpoint,
-        // turn each genuinely-unsolved implicit into a declaration goal.
-        // The first pass may not have reserved enough stable Ψ slots because
-        // these goals are semantic, not written holes. Request the exact
-        // total and let `elab_decl` restart before creating any of them.
-        if promote_unsolved && self.attempt.goal_restart_enabled.get() {
-            application::ImplicitApplicationElab::promote_application_goals(
-                self,
-                cx,
-                name,
-                &all_params,
-                &slot_param,
-                &meta_doms,
-                &meta_lvls,
-                n,
-                &mut sols,
-                span,
-            )?;
-            // Promoted declaration goals are now rigid committed-world
-            // payloads. They may unblock dictionaries and checking-only
-            // arguments, but the compatibility inference fallback has
-            // already had its one pre-promotion opportunity.
-            application::retry_obligations(
-                self,
-                cx,
-                name,
-                &all_params,
-                &slot_param,
-                &meta_doms,
-                n,
-                &mut sols,
-                &resolves,
-                &deferred,
-                false,
-                span,
-            )?;
-        }
-        // A resolution obligation whose goal never became meta-free is
-        // reported at the call, naming the parameter and what it waited on:
-        // the goal is *unknown*, not absent, and saying "no instance" would
-        // be a lie (docs/traits-layer2-design.md §4).
-        for ob in &resolves {
-            if matches!(sols[ob.slot], Sol::Withheld) {
-                let p = all_params.get(ob.param).map(|p| p.name.as_str()).unwrap_or("?");
-                // A goal blocked on a **value slot** is refused by name, with
-                // every registered instance listed as data
-                // (docs/operation-indexed-classes-design.md §5, §11): "no
-                // instance" would be a lie and "could not infer" says nothing
-                // about which structure was wanted.
-                if let Some(t) = all_params.get(ob.param).and_then(|q| q.solver.as_deref())
-                    && let Some(r) = self.class_ref_of_ty(t)
-                    && let Some(class) = self.lookup_class(&r.name)
-                    && !class.valparams.is_empty()
-                {
-                    return Err(self.value_slot_refusal(&class, name, None, span));
-                }
-                let goal = all_params
-                    .get(ob.param)
-                    .and_then(|q| q.solver.as_deref())
-                    .map(traits::render_ty)
-                    .unwrap_or_else(|| "a solver parameter".to_string());
-                return err(
-                    format!(
-                        "the goal of `{p}` (`{goal}`) still mentions an implicit that \
-                         could not be inferred here, so no search can run for it: give \
-                         the type arguments (`{name}<…>(…)`) or pass `{p}` explicitly \
-                         (`@{name}(…)`)"
-                    ),
-                    span,
-                );
-            }
-        }
-        // An obligation still blocked is reported at *its* argument, before
-        // the generic unsolved-meta report — the user should see the
-        // argument, not only the meta (design §7.2).
-        for ob in &deferred {
-            if matches!(sols[ob.slot], Sol::Withheld) {
-                let p = all_params
-                    .get(ob.param)
-                    .map(|p| p.name.as_str())
-                    .unwrap_or("?");
-                // A value head has no `name<…>` spelling (§4.3), so its
-                // message offers only the escapes that exist.
-                let escape = if value_head {
-                    format!("write the call fully explicitly (`@{name}(…)`)")
-                } else {
-                    format!(
-                        "give the type arguments (`{name}<…>(…)`) or write \
-                         the call fully explicitly (`@{name}(…)`)"
-                    )
-                };
-                // A deferred bare symbol says why it wanted the type at all,
-                // and names the spelling that does not
-                // (docs/bare-symbol-checking-carrier-design.md §6(c)). The
-                // generic message below is true of it but explains nothing:
-                // the reader wrote a notation, not a hole.
-                if let ExprKind::OpSymbol { symbol: sym, .. } = &ob.expr.kind {
-                    return err(
-                        format!(
-                            "`{sym}` is a bare operator symbol, so it needs the carrier \
-                             this position expects — and the type of `{name}`'s \
-                             parameter `{p}` still mentions an implicit that could not \
-                             be inferred here. Name the operation instead of the \
-                             symbol, or {escape}"
-                        ),
-                        ob.expr.span,
-                    );
-                }
-                return err(
-                    format!(
-                        "this argument of `{name}` was deferred — the type of its \
-                         parameter `{p}` still mentions an implicit that could not be \
-                         inferred; {escape}"
-                    ),
-                    ob.expr.span,
-                );
-            }
-        }
-        // Discharge the meta block: `entries[k]` is the payload for Ψ-index
-        // `n-1-k` (apply_global's convention), so it takes `sols[n-1-k]`.
-        // Only an implicit's slot can still be `Unsolved` here — deferred
-        // slots are `Solved` or already reported above, inline-checked ones
-        // were filled at their turn.
-        let mut entries = Vec::with_capacity(n as usize);
-        for k in 0..n {
-            let j = (n - 1 - k) as usize;
-            let sol = sols[j].solved().cloned().ok_or_else(|| ElabError::Elab {
-                msg: match slot_param.get(j).and_then(|&i| all_params.get(i)) {
-                    // A value head's escapes are `@` and an annotated
-                    // eta-expansion — `name<…>` does not exist for it
-                    // (docs/implicit-binders-design.md §7.3).
-                    Some(p) if value_head && bare_ref && p.is_type => format!(
-                        "cannot infer the type argument `{}` of `{name}` from the \
-                         expected type here — write the use fully explicitly \
-                         (`@{name}(…)`) or eta-expand with the argument written \
-                         (`λ … => {name}(T, …)`)",
-                        p.name
-                    ),
-                    Some(p) if value_head && p.is_type => format!(
-                        "cannot infer the type argument `{}` of `{name}` here — no \
-                         argument's type mentions it; write the call fully \
-                         explicitly (`@{name}(…)`) or eta-expand with the argument \
-                         written (`λ … => {name}(T, …)`)",
-                        p.name
-                    ),
-                    // The bare-reference route (design §7.1): there is no
-                    // argument whose type could have mentioned anything, so
-                    // the message names the only evidence that was consulted.
-                    Some(p) if bare_ref && p.is_type => format!(
-                        "cannot infer the type argument `{}` of `{name}` from the \
-                         expected type here — write `{name}<…>` to give the type \
-                         arguments",
-                        p.name
-                    ),
-                    Some(p) if bare_ref => format!(
-                        "could not infer the implicit argument `{}` of `{name}` from \
-                         the expected type here",
-                        p.name
-                    ),
-                    Some(p) if p.is_type => format!(
-                        "cannot infer the type argument `{}` of `{name}` here — no \
-                         argument's type mentions it; write `{name}<…>(…)` to give the \
-                         type arguments",
-                        p.name
-                    ),
-                    Some(p) => format!(
-                        "could not infer the implicit argument `{}` of `{name}`",
-                        p.name
-                    ),
-                    None => format!("could not infer an implicit argument of `{name}`"),
-                },
-                span,
-            })?;
-            entries.push(GlobalEntry::Tm(sol));
-        }
-        let sigma = GlobalSubst { entries };
-        let (t, ty) = (t.apply_global(&sigma), ty.apply_global(&sigma));
-        if spill.is_empty() {
-            return Ok((t, ty, lvl));
-        }
-        // Past the end of the parameter list, so no goal-name hint can be
-        // right: the offset is set beyond it rather than left at 0, which
-        // would name the first parameter for an argument that is not it.
-        let past = all_params.len();
-        application::apply_explicit(
-            self,
-            cx,
-            Some(name),
-            all_params,
-            past,
-            t,
-            ty,
-            lvl,
-            &spill,
-        )
-    }
-
     /// Read implicit solutions off an argument's type
     /// (docs/argument-type-reduction-design.md): the syntactic read first,
     /// and — only when it learned *nothing* — the same read against the
@@ -9818,7 +9415,7 @@ impl Elaborator {
 
     /// Expected-type-directed solving (docs/unifier-completeness-design.md
     /// §5): the expected type, consulted for the implicits an argument's type
-    /// cannot reach. Called from [`Self::apply_implicit`] with the call's
+    /// cannot reach. Called from [`application::apply_implicit`] with the call's
     /// scratch world (`n` metas, `sols` their solutions so far) just before
     /// the deferred-argument retry and the discharge.
     ///
@@ -10111,7 +9708,7 @@ impl Elaborator {
     /// - `@name(…)` (`explicit`) fills every parameter by hand, so nothing is
     ///   left to infer;
     /// - a call with **spill** (more arguments than declared parameters) is
-    ///   the curried-tail route of [`Self::apply_implicit`], where the
+    ///   the curried-tail route of [`application::apply_implicit`], where the
     ///   over-applied argument's type is exactly the evidence a result-only
     ///   implicit is missing (issues/curried-tail-type-arg-inference.md);
     /// - a **solver** parameter is filled by resolution, not unification, so

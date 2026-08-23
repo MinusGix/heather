@@ -197,21 +197,22 @@ tiny fake, proving that the application loop itself needs neither an
 capabilities as a transition point; the eventual `ExprElab` can implement the
 same interface without changing application policy.
 
-Implicit application now crosses the same boundary in two pieces.
-`ImplicitPlan` fixes the Π schedule and the scratch-world size without session
-state, including the reserved slots for checking-only arguments.
-`retry_obligations` owns solver-before-argument ordering, readiness, fallback,
-and fixpoint termination. Dictionary search, deferred expression elaboration,
-unification, and declaration-goal promotion enter only through
-`ImplicitApplicationElab`; the `Elaborator` implementation is the transition
-adapter. A fake implementation tests both the plan and the obligation queue
-without constructing an elaboration session.
+Implicit application is now a complete vertical slice as well.
+`ImplicitPlan` fixes the Π schedule and scratch-world size without session
+state, including reserved slots for checking-only arguments. The implicit
+engine owns scratch construction, meta numbering, the Π walk, deferred
+arguments, spill-based and expected-type learning, obligation fixpoints,
+promotion orchestration, diagnostics, global discharge, and explicit
+overapplication. Dictionary search and declaration-goal promotion remain
+services rather than fields on a generic context bag.
 
-The remaining `apply_implicit` body still constructs and discharges the
-scratch world in `lib.rs`. Its next split is to move that Π walk into
-`application.rs` once argument inference/checking and expected-type harvesting
-are expressed as capabilities. Promotion and trait resolution should remain
-services at that boundary, not fields on a generic context bag.
+`ImplicitApplicationElab` names the semantic operations the mechanism cannot
+own: argument classification, inference and checking, unification harvests,
+expected-type harvests, dictionary resolution, goal promotion, and the
+trait-specific blocked-goal diagnostic. `Elaborator` implements that interface
+as a transition adapter. Fake implementations exercise the schedule, retry
+queue, and complete scratch-world lifecycle without constructing an
+elaboration session. No `Elaborator::apply_implicit` forwarding method remains.
 
 Move `elab_ty`, `elab_check*`, and `elab_infer*` behind an `ExprElab`
 view borrowing the immutable session and mutable declaration attempt. Split
@@ -235,6 +236,41 @@ exercise commit and rollback end to end.
 The size of `lib.rs` is evidence, not the success criterion. A smaller file
 that hides the same dependency graph behind `ExprElab { elab: &Elaborator }`
 would be less honest than the large file we have now.
+
+### Sequence after application
+
+The remaining routes are not equally ready. Take them in dependency order:
+
+1. **Goal arena and lifecycle.** Move goal identity, capacity, allocation,
+   freezing, reporting, goal-world Ψ construction, and final substitution
+   behind a declaration-local owner. Expression mechanisms should receive a
+   goal-allocation capability rather than the whole `DeclAttempt`. This is
+   index-sensitive and therefore serious, but it removes the largest mutable
+   effect an `ExprElab` would otherwise inherit.
+2. **Kernel oracle.** Separate semantic normalization (δ context, dynamic meta
+   binders, and fuel) from best-effort diagnostic decoding and respelling.
+   These have different failure policies and must not become one generic
+   service. This is a smaller, lower-risk prerequisite for expression and
+   matching collaborators.
+3. **`ExprElab` in stages.** Introduce an explicit view before moving behavior,
+   then migrate type elaboration and the simple checking/inference arms. It
+   must borrow named session queries, declaration effects, normalization, and
+   local context individually; it must never store `&Elaborator` or gain commit
+   authority.
+4. **Match elaboration.** Move convoy, motive, recursive-guard, Nat/Fin, and
+   indexed/forded matching only after `ExprElab` exists. Its speculative goal
+   rollback and binder-sensitive lowering make this a high-risk consumer, not
+   a good place to discover the view.
+5. **Dispatch last.** Named arguments, member lookup, class dispatch, indexed
+   dictionaries, operator carriers, designations, and compatibility fallback
+   are several policies, not one `dispatch.rs`. Split pure argument
+   normalization first, then carrier/callable queries, operator policy, dot
+   resolution, and dictionary construction.
+
+Moving vector or lambda helpers merely to reduce line count is intentionally
+not a roadmap item. Move them when they can consume the same explicit
+expression capabilities; otherwise the result is only widened privacy and
+forwarding methods.
 
 ## Lessons from the registry pass
 

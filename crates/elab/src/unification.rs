@@ -11,7 +11,7 @@ use crate::{code, inductive};
 
 /// A deferred explicit argument (docs/unifier-completeness-design.md §3.1):
 /// **not** a first-class constraint in a queue on the [`crate::Elaborator`],
-/// but a record local to one [`crate::Elaborator::apply_implicit`] activation.
+/// but a record local to one [`crate::application::apply_implicit`] activation.
 /// The scratch world is the constraint store — the domain's meta occurrences
 /// *are* the "blocked on" set, and [`zonked`] decides readiness exactly.
 /// Cross-call postponement is deliberately not built: a nested call elaborates
@@ -51,7 +51,7 @@ pub(crate) struct DeferredArg<'a> {
     pub(crate) fallback_infer: bool,
 }
 
-/// Per-slot state of one [`crate::Elaborator::apply_implicit`] scratch world
+/// Per-slot state of one [`crate::application::apply_implicit`] scratch world
 /// (docs/unifier-completeness-design.md §3). Three states, because two
 /// different "unsolved" populations exist and must not be conflated:
 ///

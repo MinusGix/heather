@@ -1,18 +1,19 @@
 //! Callable surface metadata and application along an explicit Π spine.
 //!
 //! This module deliberately knows no elaborator state. The explicit engine
-//! receives the two expression capabilities it needs through
-//! [`ExplicitArgElab`]: normalize the current function type and check one
-//! argument. Implicit solving can move behind the same boundary incrementally.
+//! receives normalization and argument checking through [`ExplicitArgElab`].
+//! The implicit engine owns its complete scratch-world lifecycle and receives
+//! only the semantic effects in [`ImplicitApplicationElab`].
 
 use std::rc::Rc;
 
 use heather_kernel::level::Level;
-use heather_kernel::term::{LocalSubst, Term, Type};
-use heather_syntax::{Expr, LamBinder, Span, Ty, TyKind};
+use heather_kernel::subst::{GlobalEntry, GlobalSubst};
+use heather_kernel::term::{GlobalVar, LocalSubst, Term, Type};
+use heather_syntax::{Expr, ExprKind, LamBinder, Span, Ty, TyKind};
 
 use crate::unification::{DeferredArg, ResolveOb, Sol, zonked};
-use crate::{Cx, R, err};
+use crate::{Cx, ElabError, R, err};
 
 /// The state-free schedule for one implicit-inserting call.
 ///
@@ -83,7 +84,33 @@ pub(crate) enum ObligationProgress {
 /// implementation owns the policies that genuinely need session state:
 /// dictionary search, expression elaboration, unification, and declaration
 /// goal creation.
-pub(crate) trait ImplicitApplicationElab {
+pub(crate) trait ImplicitApplicationElab: ExplicitArgElab {
+    fn classify_application_argument(&self, cx: &Cx, argument: &Expr) -> ArgumentClass;
+
+    fn infer_application_argument(&self, cx: &Cx, argument: &Expr) -> R<(Term, Type, Level)>;
+
+    fn unify_application_argument_type(
+        &self,
+        cx: &Cx,
+        parameter: &Type,
+        argument: &Type,
+        n: u32,
+        sols: &mut [Sol],
+        span: Span,
+    );
+
+    #[allow(clippy::too_many_arguments)]
+    fn solve_application_from_expected(
+        &self,
+        cx: &Cx,
+        result: &Type,
+        expected: &Type,
+        n: u32,
+        sols: &mut [Sol],
+        meta_doms: &[Type],
+        span: Span,
+    ) -> R<()>;
+
     #[allow(clippy::too_many_arguments)]
     fn resolve_application_obligation(
         &self,
@@ -98,24 +125,6 @@ pub(crate) trait ImplicitApplicationElab {
         span: Span,
     ) -> R<ObligationProgress>;
 
-    fn check_deferred_application_argument(
-        &self,
-        cx: &Cx,
-        name: &str,
-        params: &[ParamMeta],
-        obligation: &DeferredArg<'_>,
-        expected: &Type,
-    ) -> R<Term>;
-
-    fn infer_deferred_application_argument(
-        &self,
-        cx: &Cx,
-        obligation: &DeferredArg<'_>,
-        n: u32,
-        sols: &mut [Sol],
-        span: Span,
-    ) -> R<Term>;
-
     #[allow(clippy::too_many_arguments)]
     fn promote_application_goals(
         &self,
@@ -129,6 +138,20 @@ pub(crate) trait ImplicitApplicationElab {
         sols: &mut [Sol],
         span: Span,
     ) -> R<()>;
+
+    fn blocked_solver_error(
+        &self,
+        name: &str,
+        params: &[ParamMeta],
+        obligation: &ResolveOb,
+        span: Span,
+    ) -> crate::ElabError;
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct ArgumentClass {
+    pub(crate) checking_only: bool,
+    pub(crate) fallback_infer: bool,
 }
 
 /// Retry solver and checking-only obligations to a fixpoint.
@@ -179,8 +202,18 @@ pub(crate) fn retry_obligations(
                 blocked = true;
                 continue;
             };
-            let term =
-                elab.check_deferred_application_argument(cx, name, params, obligation, &dom)?;
+            let hint = params
+                .get(obligation.param)
+                .map(|p| (name, p.name.as_str()));
+            let skel = params.get(obligation.param).and_then(|p| p.skel.as_deref());
+            let term = elab.check_explicit_argument(
+                cx,
+                obligation.expr,
+                &dom,
+                &obligation.dom_level,
+                hint,
+                skel,
+            )?;
             sols[obligation.slot] = Sol::Solved(Rc::new(term));
             progressed = true;
         }
@@ -191,8 +224,8 @@ pub(crate) fn retry_obligations(
                     obligation.fallback_infer && matches!(sols[obligation.slot], Sol::Withheld)
                 })
             {
-                let term =
-                    elab.infer_deferred_application_argument(cx, obligation, n, sols, span)?;
+                let (term, ty, _) = elab.infer_application_argument(cx, obligation.expr)?;
+                elab.unify_application_argument_type(cx, &obligation.dom, &ty, n, sols, span);
                 sols[obligation.slot] = Sol::Solved(Rc::new(term));
                 continue;
             }
@@ -403,6 +436,357 @@ pub(crate) fn apply_explicit(
     Ok((term, ty, lvl))
 }
 
+/// Apply a callable while inserting its implicit and solver parameters.
+///
+/// This owns the complete scratch-world lifecycle: a static slot plan, the
+/// Π walk, deferred arguments, spill-based and expected-type learning,
+/// promotion, diagnostics, global discharge, and explicit overapplication.
+/// Session and declaration state enter only through [`ImplicitApplicationElab`].
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn apply_implicit(
+    elab: &impl ImplicitApplicationElab,
+    cx: &Cx,
+    name: &str,
+    params: Rc<Vec<ParamMeta>>,
+    value_head: bool,
+    param_offset: usize,
+    bare_ref: bool,
+    head: Term,
+    callee_ty: Type,
+    callee_lvl: Level,
+    args: &[Expr],
+    mask: &[bool],
+    expected: Option<&Type>,
+    promote_unsolved: bool,
+    span: Span,
+) -> R<(Term, Type, Level)> {
+    let plan = ImplicitPlan::new(mask, args, |arg| {
+        elab.classify_application_argument(cx, arg).checking_only
+    });
+    let n = plan.scratch_len();
+    let mut term = head.shift_global(n);
+    let mut ty = callee_ty.shift_global(n);
+    let mut level = callee_lvl;
+    let mut sols = vec![Sol::Unsolved; n as usize];
+    let mut meta_doms = Vec::with_capacity(n as usize);
+    let mut meta_lvls = Vec::with_capacity(n as usize);
+    let mut slot_param = Vec::with_capacity(n as usize);
+    let mut deferred = Vec::new();
+    let mut resolves = Vec::new();
+    let mut next_meta = 0u32;
+    let mut arguments = args.iter();
+
+    for step in plan.steps(param_offset) {
+        let parameter = step.parameter;
+        let head_ty = elab.whnf_for_application(cx, &ty, span)?;
+        let Type::Pi {
+            dom_level,
+            cod_level,
+            dom,
+            cod,
+        } = head_ty
+        else {
+            return err(format!("`{name}` is applied to too many arguments"), span);
+        };
+        let argument = if step.implicit {
+            let meta = Term::GlobalTm {
+                var: GlobalVar(next_meta),
+                subst: LocalSubst::id(&cx.gamma),
+            };
+            if params
+                .get(parameter)
+                .is_some_and(|parameter| parameter.solver.is_some())
+            {
+                sols[next_meta as usize] = Sol::Withheld;
+                resolves.push(ResolveOb {
+                    slot: next_meta as usize,
+                    dom: (*dom).clone(),
+                    dom_level: dom_level.clone(),
+                    param: parameter,
+                });
+            }
+            meta_doms.push((*dom).clone());
+            meta_lvls.push(dom_level.clone());
+            slot_param.push(parameter);
+            next_meta += 1;
+            Rc::new(meta)
+        } else {
+            let argument = arguments.next().ok_or_else(|| ElabError::Elab {
+                msg: format!("`{name}` is applied to too few arguments"),
+                span,
+            })?;
+            let class = elab.classify_application_argument(cx, argument);
+            match zonked(&dom, n, &sols) {
+                Some(real_dom) => {
+                    let hint = params
+                        .get(parameter)
+                        .map(|parameter| (name, parameter.name.as_str()));
+                    let skel = params
+                        .get(parameter)
+                        .and_then(|parameter| parameter.skel.as_deref());
+                    let checked = elab
+                        .check_explicit_argument(cx, argument, &real_dom, &dom_level, hint, skel)?;
+                    if class.checking_only {
+                        sols[next_meta as usize] = Sol::Solved(Rc::new(checked.clone()));
+                        meta_doms.push((*dom).clone());
+                        meta_lvls.push(dom_level.clone());
+                        slot_param.push(parameter);
+                        next_meta += 1;
+                    }
+                    Rc::new(checked.shift_global(n))
+                }
+                None if class.checking_only => {
+                    let meta = Term::GlobalTm {
+                        var: GlobalVar(next_meta),
+                        subst: LocalSubst::id(&cx.gamma),
+                    };
+                    sols[next_meta as usize] = Sol::Withheld;
+                    deferred.push(DeferredArg {
+                        slot: next_meta as usize,
+                        expr: argument,
+                        dom: (*dom).clone(),
+                        dom_level: dom_level.clone(),
+                        param: parameter,
+                        fallback_infer: class.fallback_infer,
+                    });
+                    meta_doms.push((*dom).clone());
+                    meta_lvls.push(dom_level.clone());
+                    slot_param.push(parameter);
+                    next_meta += 1;
+                    Rc::new(meta)
+                }
+                None => {
+                    let (inferred, inferred_ty, _) =
+                        elab.infer_application_argument(cx, argument)?;
+                    elab.unify_application_argument_type(
+                        cx,
+                        &dom,
+                        &inferred_ty,
+                        n,
+                        &mut sols,
+                        span,
+                    );
+                    Rc::new(inferred.shift_global(n))
+                }
+            }
+        };
+        ty = cod.apply_local(&LocalSubst::id(&cx.gamma).extended(Rc::clone(&argument)));
+        level = cod_level.clone();
+        term = Term::App {
+            fun: Rc::new(term),
+            dom_level,
+            cod_level,
+            dom,
+            cod,
+            arg: argument,
+        };
+    }
+
+    // Arguments beyond the declared mask spill onto a callable result. While
+    // an implicit remains unknown, an inferable spill may still teach it.
+    let mut spill: Vec<Expr> = arguments.cloned().collect();
+    if !spill.is_empty() && sols.iter().any(|solution| solution.solved().is_none()) {
+        let mut taken = 0;
+        while taken < spill.len() && sols.iter().any(|solution| solution.solved().is_none()) {
+            let head_ty = elab.whnf_for_application(cx, &ty, span)?;
+            let Type::Pi {
+                dom_level,
+                cod_level,
+                dom,
+                cod,
+            } = head_ty
+            else {
+                break;
+            };
+            let argument = &spill[taken];
+            if zonked(&dom, n, &sols).is_some()
+                || elab
+                    .classify_application_argument(cx, argument)
+                    .checking_only
+            {
+                break;
+            }
+            let (inferred, inferred_ty, _) = elab.infer_application_argument(cx, argument)?;
+            elab.unify_application_argument_type(cx, &dom, &inferred_ty, n, &mut sols, span);
+            let argument = Rc::new(inferred.shift_global(n));
+            ty = cod.apply_local(&LocalSubst::id(&cx.gamma).extended(Rc::clone(&argument)));
+            level = cod_level.clone();
+            term = Term::App {
+                fun: Rc::new(term),
+                dom_level,
+                cod_level,
+                dom,
+                cod,
+                arg: argument,
+            };
+            taken += 1;
+        }
+        spill.drain(..taken);
+    }
+
+    if let Some(expected) = expected
+        && spill.is_empty()
+        && sols.iter().any(|solution| solution.solved().is_none())
+    {
+        elab.solve_application_from_expected(cx, &ty, expected, n, &mut sols, &meta_doms, span)?;
+    }
+    retry_obligations(
+        elab,
+        cx,
+        name,
+        &params,
+        &slot_param,
+        &meta_doms,
+        n,
+        &mut sols,
+        &resolves,
+        &deferred,
+        true,
+        span,
+    )?;
+    if promote_unsolved {
+        elab.promote_application_goals(
+            cx,
+            name,
+            &params,
+            &slot_param,
+            &meta_doms,
+            &meta_lvls,
+            n,
+            &mut sols,
+            span,
+        )?;
+        retry_obligations(
+            elab,
+            cx,
+            name,
+            &params,
+            &slot_param,
+            &meta_doms,
+            n,
+            &mut sols,
+            &resolves,
+            &deferred,
+            false,
+            span,
+        )?;
+    }
+
+    if let Some(obligation) = resolves
+        .iter()
+        .find(|obligation| matches!(sols[obligation.slot], Sol::Withheld))
+    {
+        return Err(elab.blocked_solver_error(name, &params, obligation, span));
+    }
+    for obligation in &deferred {
+        if !matches!(sols[obligation.slot], Sol::Withheld) {
+            continue;
+        }
+        let parameter = params
+            .get(obligation.param)
+            .map(|parameter| parameter.name.as_str())
+            .unwrap_or("?");
+        let escape = if value_head {
+            format!("write the call fully explicitly (`@{name}(…)`)")
+        } else {
+            format!(
+                "give the type arguments (`{name}<…>(…)`) or write \
+                 the call fully explicitly (`@{name}(…)`)"
+            )
+        };
+        if let ExprKind::OpSymbol { symbol, .. } = &obligation.expr.kind {
+            return err(
+                format!(
+                    "`{symbol}` is a bare operator symbol, so it needs the carrier \
+                     this position expects — and the type of `{name}`'s parameter \
+                     `{parameter}` still mentions an implicit that could not be inferred \
+                     here. Name the operation instead of the symbol, or {escape}"
+                ),
+                obligation.expr.span,
+            );
+        }
+        return err(
+            format!(
+                "this argument of `{name}` was deferred — the type of its parameter \
+                 `{parameter}` still mentions an implicit that could not be inferred; \
+                 {escape}"
+            ),
+            obligation.expr.span,
+        );
+    }
+
+    let mut entries = Vec::with_capacity(n as usize);
+    for reverse in 0..n {
+        let slot = (n - 1 - reverse) as usize;
+        let solution = sols[slot]
+            .solved()
+            .cloned()
+            .ok_or_else(|| ElabError::Elab {
+                msg: unsolved_message(
+                    name,
+                    slot_param
+                        .get(slot)
+                        .and_then(|&parameter| params.get(parameter)),
+                    value_head,
+                    bare_ref,
+                ),
+                span,
+            })?;
+        entries.push(GlobalEntry::Tm(solution));
+    }
+    let substitution = GlobalSubst { entries };
+    let (term, ty) = (
+        term.apply_global(&substitution),
+        ty.apply_global(&substitution),
+    );
+    if spill.is_empty() {
+        return Ok((term, ty, level));
+    }
+    let past = params.len();
+    apply_explicit(elab, cx, Some(name), params, past, term, ty, level, &spill)
+}
+
+fn unsolved_message(
+    name: &str,
+    parameter: Option<&ParamMeta>,
+    value_head: bool,
+    bare_ref: bool,
+) -> String {
+    match parameter {
+        Some(parameter) if value_head && bare_ref && parameter.is_type => format!(
+            "cannot infer the type argument `{}` of `{name}` from the expected type here — \
+             write the use fully explicitly (`@{name}(…)`) or eta-expand with the argument \
+             written (`λ … => {name}(T, …)`)",
+            parameter.name
+        ),
+        Some(parameter) if value_head && parameter.is_type => format!(
+            "cannot infer the type argument `{}` of `{name}` here — no argument's type \
+             mentions it; write the call fully explicitly (`@{name}(…)`) or eta-expand \
+             with the argument written (`λ … => {name}(T, …)`)",
+            parameter.name
+        ),
+        Some(parameter) if bare_ref && parameter.is_type => format!(
+            "cannot infer the type argument `{}` of `{name}` from the expected type here — \
+             write `{name}<…>` to give the type arguments",
+            parameter.name
+        ),
+        Some(parameter) if bare_ref => format!(
+            "could not infer the implicit argument `{}` of `{name}` from the expected type here",
+            parameter.name
+        ),
+        Some(parameter) if parameter.is_type => format!(
+            "cannot infer the type argument `{}` of `{name}` here — no argument's type \
+             mentions it; write `{name}<…>(…)` to give the type arguments",
+            parameter.name
+        ),
+        Some(parameter) => format!(
+            "could not infer the implicit argument `{}` of `{name}`",
+            parameter.name
+        ),
+        None => format!("could not infer an implicit argument of `{name}`"),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -434,7 +818,68 @@ mod tests {
         }
     }
 
+    impl ExplicitArgElab for FakeImplicitElab {
+        fn whnf_for_application(&self, _cx: &Cx, ty: &Type, _span: Span) -> R<Type> {
+            Ok(ty.clone())
+        }
+
+        fn check_explicit_argument(
+            &self,
+            _cx: &Cx,
+            _arg: &Expr,
+            _expected: &Type,
+            _level: &Level,
+            _hint: Option<(&str, &str)>,
+            _skel: Option<&Skel>,
+        ) -> R<Term> {
+            self.events.borrow_mut().push("check");
+            Ok(Term::Zero)
+        }
+    }
+
     impl ImplicitApplicationElab for FakeImplicitElab {
+        fn classify_application_argument(&self, _cx: &Cx, _argument: &Expr) -> ArgumentClass {
+            ArgumentClass {
+                checking_only: false,
+                fallback_infer: false,
+            }
+        }
+
+        fn infer_application_argument(&self, _cx: &Cx, _argument: &Expr) -> R<(Term, Type, Level)> {
+            panic!("the fixture has no inference obligation")
+        }
+
+        fn unify_application_argument_type(
+            &self,
+            _cx: &Cx,
+            _parameter: &Type,
+            _argument: &Type,
+            _n: u32,
+            _sols: &mut [Sol],
+            _span: Span,
+        ) {
+            panic!("the fixture has no inferred argument")
+        }
+
+        fn solve_application_from_expected(
+            &self,
+            _cx: &Cx,
+            _result: &Type,
+            _expected: &Type,
+            _n: u32,
+            sols: &mut [Sol],
+            _meta_doms: &[Type],
+            _span: Span,
+        ) -> R<()> {
+            self.events.borrow_mut().push("expected");
+            for solution in sols {
+                if matches!(solution, Sol::Unsolved) {
+                    *solution = Sol::Solved(Rc::new(Term::Zero));
+                }
+            }
+            Ok(())
+        }
+
         fn resolve_application_obligation(
             &self,
             _cx: &Cx,
@@ -452,29 +897,6 @@ mod tests {
             Ok(ObligationProgress::Solved)
         }
 
-        fn check_deferred_application_argument(
-            &self,
-            _cx: &Cx,
-            _name: &str,
-            _params: &[ParamMeta],
-            _obligation: &DeferredArg<'_>,
-            _expected: &Type,
-        ) -> R<Term> {
-            self.events.borrow_mut().push("check");
-            Ok(Term::Zero)
-        }
-
-        fn infer_deferred_application_argument(
-            &self,
-            _cx: &Cx,
-            _obligation: &DeferredArg<'_>,
-            _n: u32,
-            _sols: &mut [Sol],
-            _span: Span,
-        ) -> R<Term> {
-            panic!("the fixture has no fallback obligation")
-        }
-
         fn promote_application_goals(
             &self,
             _cx: &Cx,
@@ -488,6 +910,19 @@ mod tests {
             _span: Span,
         ) -> R<()> {
             panic!("obligation retry cannot promote declaration goals")
+        }
+
+        fn blocked_solver_error(
+            &self,
+            _name: &str,
+            _params: &[ParamMeta],
+            _obligation: &ResolveOb,
+            span: Span,
+        ) -> ElabError {
+            ElabError::Elab {
+                msg: "blocked solver".into(),
+                span,
+            }
         }
     }
 
@@ -621,5 +1056,68 @@ mod tests {
 
         assert!(sols.iter().all(|sol| sol.solved().is_some()));
         assert_eq!(&*elab.events.borrow(), &["resolve", "check"]);
+    }
+
+    #[test]
+    fn implicit_application_owns_its_scratch_world_without_an_elaborator() {
+        let zero = Level::Zero;
+        let ty = Type::Pi {
+            dom_level: zero.clone(),
+            cod_level: zero.clone(),
+            dom: Rc::new(Type::Nat),
+            cod: Rc::new(Type::Pi {
+                dom_level: zero.clone(),
+                cod_level: zero.clone(),
+                dom: Rc::new(Type::Nat),
+                cod: Rc::new(Type::Nat),
+            }),
+        };
+        let params = Rc::new(vec![
+            ParamMeta {
+                name: "implicit".into(),
+                implicit: true,
+                is_type: false,
+                is_self: false,
+                skel: None,
+                solver: None,
+            },
+            ParamMeta {
+                name: "value".into(),
+                implicit: false,
+                is_type: false,
+                is_self: false,
+                skel: None,
+                solver: None,
+            },
+        ]);
+        let argument = Expr {
+            kind: ExprKind::Num(0),
+            span: Span { start: 2, end: 3 },
+        };
+        let elab = FakeImplicitElab::default();
+
+        let (term, result, level) = apply_implicit(
+            &elab,
+            &Cx::empty(),
+            "f",
+            params,
+            false,
+            0,
+            false,
+            Term::Zero,
+            ty,
+            zero.clone(),
+            &[argument],
+            &[true, false],
+            Some(&Type::Nat),
+            false,
+            Span { start: 0, end: 4 },
+        )
+        .expect("implicit application");
+
+        assert!(matches!(term, Term::App { .. }));
+        assert_eq!(result, Type::Nat);
+        assert_eq!(level, zero);
+        assert_eq!(&*elab.events.borrow(), &["check", "expected"]);
     }
 }
