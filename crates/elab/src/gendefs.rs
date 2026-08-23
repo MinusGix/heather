@@ -1307,7 +1307,9 @@ impl Elaborator {
         // symptom was a kernel `WrongGlobalBinding` naming the context binder
         // (`crates/elab/tests/certgen_route1_spike.rs`'s meta walk over `Ir`).
         // The two paddings never combine: goals are refused inside a `meta fn`.
-        let var = GlobalVar(len - 1 - abs + self.attempt.goal_base + self.meta_offset());
+        let var = GlobalVar(
+            len - 1 - abs + self.attempt.goal_arena.base() + self.meta_offset(),
+        );
         Some(Term::GlobalTm {
             var,
             subst: LocalSubst {
@@ -1339,7 +1341,7 @@ impl Elaborator {
         // Fully checked: a `GlobalVar` reaching here can be anything the term
         // it came out of contains, including one that is out of scope.
         let abs = len
-            .checked_add(self.attempt.goal_base)?
+            .checked_add(self.attempt.goal_arena.base())?
             .checked_add(self.meta_offset())?
             .checked_sub(var.0.checked_add(1)?)?;
         self.types.gdefs().by_abs.get(&abs).copied()

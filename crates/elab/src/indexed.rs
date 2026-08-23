@@ -1806,14 +1806,14 @@ inductive W : (n: Nat) -> Type {
         let r = t.el.gen_ref(&t.cx, GenDef::Fam(t.v.tag)).expect("V has a family definition");
         let Term::GlobalTm { var, .. } = &r else { panic!("a reference is a global") };
         let len = t.el.psi.bindings.len() as u32;
-        let abs = len + t.el.attempt.goal_base - var.0 - 1;
+        let abs = len + t.el.attempt.goal_arena.base() - var.0 - 1;
         let binding = t.el.psi.bindings[abs as usize].clone();
         t.el.psi.push(binding);
         t.el.refresh_delta_psi();
         // `gen_ref`'s numbering for the binding just pushed: abs = len − 1,
         // so the variable is `goal_base` — in scope, resolvable, unregistered.
         let dup = Term::GlobalTm {
-            var: GlobalVar(t.el.attempt.goal_base),
+            var: GlobalVar(t.el.attempt.goal_arena.base()),
             subst: LocalSubst {
                 tail: SubstTail::Empty { len: 0, base: CtxBase::Nil },
                 terms: vec![],

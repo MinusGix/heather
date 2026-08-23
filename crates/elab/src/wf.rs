@@ -1189,13 +1189,16 @@ inductive Box<A> { BNil, BCons(a: A, r: Box<A>) }
         ));
         e.el.refresh_delta_psi();
         let dup = Term::GlobalTm {
-            var: GlobalVar(e.el.attempt.goal_base),
+            var: GlobalVar(e.el.attempt.goal_arena.base()),
             subst: LocalSubst {
                 tail: SubstTail::Empty { len: 0, base: CtxBase::Nil },
                 terms: vec![],
             },
         };
-        assert!(e.el.gen_def_of(GlobalVar(e.el.attempt.goal_base)).is_none());
+        assert!(e
+            .el
+            .gen_def_of(GlobalVar(e.el.attempt.goal_arena.base()))
+            .is_none());
         let forged = Type::El { level: l, tm: Rc::new(dup) };
         assert!(e.el.ty_type_ref(&e.cx, e.ind("T").tag, &forged).is_none());
         assert!(e.el.respell_ty(&e.cx, &forged).is_none());

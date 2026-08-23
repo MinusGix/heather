@@ -214,6 +214,22 @@ as a transition adapter. Fake implementations exercise the schedule, retry
 queue, and complete scratch-world lifecycle without constructing an
 elaboration session. No `Elaborator::apply_implicit` forwarding method remains.
 
+The declaration goal arena is established too. `goals.rs` owns the reserved Ψ
+prefix, stable source identities, implicit-promotion capacity discovery,
+allocation and naming, freezing, speculative marks and rollback, discharge
+state, diagnostic reports, the real goal world, and the final substitution.
+`DeclAttempt` holds that owner rather than seven parallel goal fields, and
+consumers can observe only its stable base or ask it to perform a lifecycle
+operation. In particular, all expression probes now roll back both goal
+records and source keys through one operation; the old operator-carrier probe
+only truncated records and could leave a stale key behind.
+
+Goal solving remains orchestration on `Elaborator` because checking an `on`
+right-hand side and comparing a statement still need expression elaboration
+and the kernel oracle. The arena supplies cloned goal obligations and accepts
+solutions without exposing storage. When `ExprElab` is introduced, its goal
+effect should be the arena's allocation capability, not `DeclAttempt`.
+
 Move `elab_ty`, `elab_check*`, and `elab_infer*` behind an `ExprElab`
 view borrowing the immutable session and mutable declaration attempt. Split
 application, match lowering, and member/operator dispatch into collaborators
@@ -241,27 +257,21 @@ would be less honest than the large file we have now.
 
 The remaining routes are not equally ready. Take them in dependency order:
 
-1. **Goal arena and lifecycle.** Move goal identity, capacity, allocation,
-   freezing, reporting, goal-world Ψ construction, and final substitution
-   behind a declaration-local owner. Expression mechanisms should receive a
-   goal-allocation capability rather than the whole `DeclAttempt`. This is
-   index-sensitive and therefore serious, but it removes the largest mutable
-   effect an `ExprElab` would otherwise inherit.
-2. **Kernel oracle.** Separate semantic normalization (δ context, dynamic meta
+1. **Kernel oracle.** Separate semantic normalization (δ context, dynamic meta
    binders, and fuel) from best-effort diagnostic decoding and respelling.
    These have different failure policies and must not become one generic
    service. This is a smaller, lower-risk prerequisite for expression and
    matching collaborators.
-3. **`ExprElab` in stages.** Introduce an explicit view before moving behavior,
+2. **`ExprElab` in stages.** Introduce an explicit view before moving behavior,
    then migrate type elaboration and the simple checking/inference arms. It
    must borrow named session queries, declaration effects, normalization, and
    local context individually; it must never store `&Elaborator` or gain commit
    authority.
-4. **Match elaboration.** Move convoy, motive, recursive-guard, Nat/Fin, and
+3. **Match elaboration.** Move convoy, motive, recursive-guard, Nat/Fin, and
    indexed/forded matching only after `ExprElab` exists. Its speculative goal
    rollback and binder-sensitive lowering make this a high-risk consumer, not
    a good place to discover the view.
-5. **Dispatch last.** Named arguments, member lookup, class dispatch, indexed
+4. **Dispatch last.** Named arguments, member lookup, class dispatch, indexed
    dictionaries, operator carriers, designations, and compatibility fallback
    are several policies, not one `dispatch.rs`. Split pure argument
    normalization first, then carrier/callable queries, operator policy, dot
