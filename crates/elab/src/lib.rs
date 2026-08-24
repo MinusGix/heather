@@ -665,11 +665,13 @@ impl expr::StructuralTypeElab for Elaborator {
     }
 }
 
-impl expr::EqualityCheckingElab for Elaborator {
+impl expr::ExpectedTypeElab for Elaborator {
     fn read_expected_type(&self, cx: &Cx, expected: &Type, span: Span) -> R<Type> {
         self.whnf(cx, expected, span)
     }
+}
 
+impl expr::EqualityCheckingElab for Elaborator {
     fn goal_endpoints_convert(
         &self,
         cx: &Cx,
@@ -681,6 +683,12 @@ impl expr::EqualityCheckingElab for Elaborator {
         self.goal_oracle()
             .convert_term(&cx.gamma, Layer::Prog, lhs, rhs, ty, level)
             .is_ok()
+    }
+}
+
+impl expr::UnitCheckingElab for Elaborator {
+    fn display_expected_type(&self, cx: &Cx, expected: &Type) -> String {
+        self.display_type(cx, expected)
     }
 }
 
@@ -2643,16 +2651,7 @@ impl Elaborator {
                     && !self.shadowed(cx, name)
                     && self.ctor_here_expected(cx, name, expected).is_none() =>
             {
-                match self.whnf(cx, expected, e.span)? {
-                    Type::Unit { level } => Ok(Term::Triv { level }),
-                    _ => err(
-                        format!(
-                            "`trivial` proves `True`, but `{}` is expected here",
-                            self.display_type(cx, expected)
-                        ),
-                        e.span,
-                    ),
-                }
+                self.expr_elab().check_unit_form(self, cx, expected, e.span)
             }
             ExprKind::App { .. }
                 if matches!(e.as_named(), Some(("FS", _, false)))

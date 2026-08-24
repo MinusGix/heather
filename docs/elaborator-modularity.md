@@ -302,6 +302,22 @@ the root's remaining numeral helper is explicitly the overloaded
 `Numeral<T>` class path. Thus structural syntax no longer reaches class
 registries, and class resolution no longer obscures the built-in semantics.
 
+The remaining canonical leaf, `trivial`, also lives in the view. Expected-type
+reading is now a shared capability composed by equality and Unit checking;
+goal-world conversion and diagnostic spelling remain separate extensions.
+Root resolution retains the local/declaration shadowing guard, so moving the
+term construction does not move name policy with it.
+
+This exhausts the cheap checking leaves. Every remaining root arm crosses a
+subsystem boundary: blocks elaborate statements and mutate attempt scope;
+quotes change layers; matches own motive synthesis, rollback, and recursive
+guards; constructors and dot/application perform registry dispatch; universe
+checking combines type-former lookup with speculative type reading. Lambda
+checking is the narrowest next vertical slice, but it is no longer a leaf: it
+must make binder/skeleton alignment, annotation conversion, context extension,
+and recursive checking explicit together. Treat that as the next serious
+boundary rather than widening `ExprElab` one forwarding method at a time.
+
 Only expression-as-type remains in the root `elab_ty` match. It combines
 operator rewriting, indexed-family recognition, value-parameter formation,
 term inference, and universe decoding; moving it behind one callback would

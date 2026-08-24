@@ -42,11 +42,14 @@ pub(crate) trait StructuralTypeElab {
     ) -> R<Term>;
 }
 
-/// Semantic decisions required by equality-specific checking forms.
-pub(crate) trait EqualityCheckingElab {
+/// Registry-aware access to the expected type's structural spelling.
+pub(crate) trait ExpectedTypeElab {
     /// Read an expected type through any registry-aware structural spelling.
     fn read_expected_type(&self, cx: &Cx, expected: &Type, span: Span) -> R<Type>;
+}
 
+/// The additional semantic decision required by equality checking.
+pub(crate) trait EqualityCheckingElab: ExpectedTypeElab {
     /// Conversion in the real goal-statement world.
     fn goal_endpoints_convert(
         &self,
@@ -56,6 +59,11 @@ pub(crate) trait EqualityCheckingElab {
         ty: &Type,
         level: &Level,
     ) -> bool;
+}
+
+/// Diagnostic spelling required by the canonical Unit inhabitant.
+pub(crate) trait UnitCheckingElab: ExpectedTypeElab {
+    fn display_expected_type(&self, cx: &Cx, expected: &Type) -> String;
 }
 
 /// Recursive checking required by checking-only indexed constructors.
@@ -397,6 +405,27 @@ impl<'a> ExprElab<'a> {
         }
     }
 
+    /// The canonical inhabitant of Unit/True. Name and constructor shadowing
+    /// have already been decided by root orchestration.
+    pub(crate) fn check_unit_form(
+        &self,
+        elab: &impl UnitCheckingElab,
+        cx: &Cx,
+        expected: &Type,
+        span: Span,
+    ) -> R<Term> {
+        match elab.read_expected_type(cx, expected, span)? {
+            Type::Unit { level } => Ok(Term::Triv { level }),
+            _ => err(
+                format!(
+                    "`trivial` proves `True`, but `{}` is expected here",
+                    elab.display_expected_type(cx, expected)
+                ),
+                span,
+            ),
+        }
+    }
+
     fn check_fin_index(
         &self,
         elab: &impl RecursiveCheckingElab,
@@ -577,11 +606,13 @@ mod tests {
         }
     }
 
-    impl EqualityCheckingElab for StructuralFake {
+    impl ExpectedTypeElab for StructuralFake {
         fn read_expected_type(&self, _cx: &Cx, expected: &Type, _span: Span) -> R<Type> {
             Ok(expected.clone())
         }
+    }
 
+    impl EqualityCheckingElab for StructuralFake {
         fn goal_endpoints_convert(
             &self,
             _cx: &Cx,
@@ -591,6 +622,12 @@ mod tests {
             _level: &Level,
         ) -> bool {
             lhs == rhs
+        }
+    }
+
+    impl UnitCheckingElab for StructuralFake {
+        fn display_expected_type(&self, _cx: &Cx, expected: &Type) -> String {
+            format!("{expected:?}")
         }
     }
 
@@ -838,6 +875,24 @@ mod tests {
                 .unwrap()
                 .unwrap(),
             Term::Inl { .. }
+        ));
+    }
+
+    #[test]
+    fn unit_checking_composes_expected_type_reading_with_diagnostics() {
+        let goals = GoalArena::default();
+        let slot_probe = Cell::new(None);
+        let expr = view(&goals, &slot_probe);
+        let fake = StructuralFake::default();
+        assert!(matches!(
+            expr.check_unit_form(
+                &fake,
+                &Cx::empty(),
+                &Type::Unit { level: Level::constant(2) },
+                SPAN,
+            )
+            .unwrap(),
+            Term::Triv { level } if level == Level::constant(2)
         ));
     }
 }
