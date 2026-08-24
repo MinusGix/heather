@@ -233,6 +233,15 @@ therefore consume one answer instead of reconstructing carrier identity at
 each policy site. This is deliberately infrastructure, not a catch-all
 `dispatch.rs`; operator, dot, and dictionary policy remain separate moves.
 
+Operator policy now lives beside that vocabulary in
+`dispatch/operator.rs`. It owns the complete three-rung meaning ladder,
+declaration-local symbol uniqueness, speculative operand and expected-domain
+carrier probes, compatibility-fallback accounting, the checking-only gate for
+bare symbols, and rewriting notation into the ordinary named-application
+path. The trait registry still owns designation data; the operator module only
+asks deterministic queries of it. Kernel-gate error selection remains in root
+because it consumes operator notes but is not itself operator resolution.
+
 `ImplicitApplicationElab` names the semantic operations the mechanism cannot
 own: argument classification, inference and checking, unification harvests,
 expected-type harvests, dictionary resolution, goal promotion, and the
@@ -519,8 +528,9 @@ The remaining routes are not equally ready. Take them in dependency order:
    are several policies, not one `dispatch.rs`. Pure argument normalization is
    now owned by `application/named.rs`, and surface constructor policy by
    `constructor.rs`. Canonical carrier queries now live in
-   `dispatch/carrier.rs`; continue with callable queries, operator policy, dot
-   resolution, and dictionary construction.
+   `dispatch/carrier.rs`, and operator policy in `dispatch/operator.rs`;
+   continue with callable queries, dot resolution, and dictionary
+   construction.
 
 Moving lambda helpers merely to reduce line count is intentionally not a
 roadmap item. Move them when their binder, skeleton, and conversion policies
