@@ -1,5 +1,8 @@
-//! Vector eliminators: `map`, `fold` and `tabulate`
-//! (`docs/container-fields.md` §4.2).
+//! Surface vector operations and their kernel schemas.
+//!
+//! This module owns `map`, `fold`, `head`, `tail`, `cons`, indexing, and the
+//! container-recursion spellings that tabulate an induction hypothesis
+//! (`docs/container-fields.md` §4.2, `docs/container-proofs.md` §5).
 //!
 //! Each is an `elim_Nat` on the *length*, with a motive that is a Π over the
 //! vector — the only shape that works, because `Vec` reduces on its length and
@@ -18,6 +21,13 @@ use std::rc::Rc;
 
 use heather_kernel::level::Level;
 use heather_kernel::term::{LocalCtx, LocalSubst, LocalVar, Term, Type};
+
+mod surface;
+pub(crate) use surface::{
+    SurfaceVecElab, elab_cons, elab_container_ih, elab_fold, elab_head_tail, elab_map,
+    elab_nth, method_arity_error,
+};
+
 
 fn var(i: u32) -> Rc<Term> {
     Rc::new(Term::Var(LocalVar(i)))
@@ -791,6 +801,84 @@ mod tests {
     use heather_kernel::layer::Layer;
     use heather_kernel::term::{CtxEntry, GlobalCtx};
     use heather_kernel::typing::{check_term, DEFAULT_FUEL as FUEL};
+    use heather_syntax::{Expr, Span};
+
+    use crate::slots::{Ingredient, Slot};
+    use crate::{Cx, R};
+
+    struct FakeSurfaceVec {
+        receiver_type: Type,
+        normalized_length: Rc<Term>,
+    }
+
+    impl SurfaceVecElab for FakeSurfaceVec {
+        fn infer_vector_expr(
+            &self,
+            _cx: &Cx,
+            _expression: &Expr,
+        ) -> R<(Term, Type, Level)> {
+            Ok((Term::Zero, self.receiver_type.clone(), Level::Zero))
+        }
+
+        fn check_vector_expr(
+            &self,
+            _cx: &Cx,
+            _expression: &Expr,
+            _expected: &Type,
+            _level: &Level,
+        ) -> R<Term> {
+            Ok(Term::Zero)
+        }
+
+        fn whnf_vector_type(&self, _cx: &Cx, ty: &Type, _span: Span) -> R<Type> {
+            Ok(ty.clone())
+        }
+
+        fn whnf_vector_term(&self, _cx: &Cx, _term: &Term, _span: Span) -> R<Rc<Term>> {
+            Ok(Rc::clone(&self.normalized_length))
+        }
+
+        fn try_vector_template(
+            &self,
+            _cx: &Cx,
+            _slot: Slot,
+            _ingredients: &[(&'static str, Ingredient<'_>)],
+            _span: Span,
+        ) -> R<Option<Term>> {
+            Ok(None)
+        }
+    }
+
+    const SPAN: Span = Span { start: 0, end: 1 };
+
+    #[test]
+    fn surface_head_and_tail_need_only_vector_capabilities() {
+        let length = Rc::new(Term::Succ(Rc::new(Term::Zero)));
+        let fake = FakeSurfaceVec {
+            receiver_type: Type::Vec {
+                level: Level::Zero,
+                elem: Rc::new(Type::Nat),
+                len: Rc::clone(&length),
+            },
+            normalized_length: Rc::clone(&length),
+        };
+        let expression = Expr { kind: heather_syntax::ExprKind::Num(0), span: SPAN };
+
+        let (_, head_type, _) =
+            elab_head_tail(&fake, &Cx::empty(), &expression, true, SPAN).expect("head");
+        assert_eq!(head_type, Type::Nat);
+
+        let (_, tail_type, _) =
+            elab_head_tail(&fake, &Cx::empty(), &expression, false, SPAN).expect("tail");
+        assert_eq!(
+            tail_type,
+            Type::Vec {
+                level: Level::Zero,
+                elem: Rc::new(Type::Nat),
+                len: Rc::new(Term::Zero),
+            }
+        );
+    }
 
     fn nat_lit(k: usize) -> Rc<Term> {
         let mut t = Term::Zero;

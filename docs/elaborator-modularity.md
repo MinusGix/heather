@@ -411,12 +411,21 @@ inference and the callable parameter metadata used for spill diagnostics to
 that existing explicit-argument interface. Direct tests select a Nat IH and
 exercise a callable-result spill without an elaboration session.
 
-The container spellings `.map(self)` and `.cong(self)` deliberately remain
-with the vector built-ins. They are not ordinary self-calls with another guard
-shape: they tabulate an indexed container IH, optionally dispatch a registered
-code template, or construct an equation between two tabulations. Moving that
-route into the recursion core would widen it with vector schemas and template
+The container spellings `.map(self)` and `.cong(self)` remain with the vector
+built-ins. They are not ordinary self-calls with another guard shape: they
+tabulate an indexed container IH, optionally dispatch a registered code
+template, or construct an equation between two tabulations. Moving that route
+into the recursion core would widen it with vector schemas and template
 registry policy.
+
+The complete surface vector family now lives in `vec/surface.rs`, beside its
+schemas in `vec.rs`: `map`, `fold`, `head`, `tail`, `cons`, indexing,
+vector-specific arity diagnostics, and both container-IH modes. The root
+retains name-shadowing and dispatch precedence, then calls the vector owner
+through a capability boundary for expression inference/checking, type and term
+normalization, and optional template execution. This is the first owner that
+spans a surface route, its kernel construction, and its metaprogram fallback
+without receiving a session or `&Elaborator`.
 
 Ordinary statements now have their own subsystem as well. `statements.rs`
 owns context cloning and sequencing, annotated and inferred alias creation,
@@ -472,10 +481,10 @@ The remaining routes are not equally ready. Take them in dependency order:
    operations while matching owns candidate order and the distinction between
    a speculative decline and an authoritative failure. Guarded self-call
    lowering now lives in the shared recursion core behind recursive inference
-   and explicit-application capabilities; container tabulation remains with
-   vector built-ins for the reasons above. Next take the next
-   checking/inference family whose capability surface is already small, or
-   isolate the vector built-in family before attempting its container route.
+   and explicit-application capabilities. The vector built-in family and its
+   container tabulation route now have one owner in the `vec` module, while
+   central name precedence stays in root. Next take the next
+   checking/inference family whose capability surface is already small.
    Preserve the existing inductive, indexed, forded, and `Wf` route owners
    instead of recombining them.
 3. **Dispatch last.** Named arguments, member lookup, class dispatch, indexed
