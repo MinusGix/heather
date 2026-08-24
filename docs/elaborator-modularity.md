@@ -215,6 +215,13 @@ policy owner performs record registry lookup and then uses the same pure
 permutation as constructor calls. Direct tests pin the no-op path, named
 implicit scheduling, and shared field ordering without an elaboration session.
 
+Callable metadata policy now lives in `application/callable.rs`. It interprets
+the canonical `ParamMeta` table for implicit masks, receiver placement, bare
+local/alias skeletons, leading-implicit eligibility, and memoized result-only
+deferral. These are queries about *how a declaration may be called*, not name
+resolution and not spine execution; both application engines consume their
+answers without acquiring session ownership.
+
 Surface constructor policy now lives in `constructor.rs`, separate from the
 kernel encoding machinery in `inductive.rs`. It owns shadow-aware constructor
 recognition, expected-type disambiguation, curried-spine flattening, record
@@ -509,47 +516,32 @@ The size of `lib.rs` is evidence, not the success criterion. A smaller file
 that hides the same dependency graph behind `ExprElab { elab: &Elaborator }`
 would be less honest than the large file we have now.
 
-### Sequence after application
+### Stopping line after dispatch
 
-The remaining routes are not equally ready. Take them in dependency order:
+The planned extraction line is now reached. `lib.rs` retains four kinds of
+work whose coupling is honest today:
 
-1. **Continue `ExprElab` in stages.** Choose the next checking/inference family
-   by capability shape, then add named read-only session queries one policy at
-   a time. Keep local context per-call and declaration effects narrower than
-   their owners; the view must never store `&Elaborator` or gain commit
-   authority.
-2. **Continue match elaboration.** Motive synthesis and convoy mechanics now
-   have their first boundary, and motive-less inference now has an explicit
-   rollback transaction and outcome model. Built-in Nat/Fin routing and Nat's
-   guard orchestration now live in `matching/routes.rs`, and the shared
-   recursion core is a normal module. Constant-motive candidate discovery for
-   both ordinary matches and parser-generated `if` now lives in `matching.rs`.
-   Its boundary names only expression inference, condition-type elaboration,
-   final match lowering, and speculative state; the root owns those semantic
-   operations while matching owns candidate order and the distinction between
-   a speculative decline and an authoritative failure. Guarded self-call
-   lowering now lives in the shared recursion core behind recursive inference
-   and explicit-application capabilities. The vector built-in family and its
-   container tabulation route now have one owner in the `vec` module, while
-   central name precedence stays in root. Next take the next
-   checking/inference family whose capability surface is already small.
-   Preserve the existing inductive, indexed, forded, and `Wf` route owners
-   instead of recombining them.
-3. **Dispatch last.** Named arguments, member lookup, class dispatch, indexed
-   dictionaries, operator carriers, designations, and compatibility fallback
-   are several policies, not one `dispatch.rs`. Pure argument normalization is
-   now owned by `application/named.rs`, and surface constructor policy by
-   `constructor.rs`. Canonical carrier queries now live in
-   `dispatch/carrier.rs`, operator policy in `dispatch/operator.rs`, dot routing
-   in `dispatch/member.rs`, receiver/type projection in their own modules, and
-   indexed goal construction in `dispatch/dictionary.rs`. The remaining audit
-   should decide whether the small callable-query cluster merits one final
-   owner or belongs with application metadata.
+1. session orchestration, name precedence, declaration transactions, goals,
+   and the kernel gate;
+2. the central bidirectional `elab_check` / `elab_infer` ordering, where route
+   precedence itself is the policy;
+3. narrow capability adapters that let `ExprElab`, application, matching,
+   recursion, statements, and vectors operate without a session handle; and
+4. a small amount of boundary glue—projection application, written type
+   application, conversion diagnostics, name resolution, and oracle creation.
 
-Moving lambda helpers merely to reduce line count is intentionally not a
-roadmap item. Move them when their binder, skeleton, and conversion policies
-have explicit expression capabilities; otherwise the result is only widened
-privacy and forwarding methods.
+The final audit rejects three tempting extractions. Moving the remaining
+lambda or application glue merely for line count would either duplicate route
+precedence or create forwarding methods. Moving `resolve` away from the root
+would split one name-precedence judgment across owners. Giving `ExprElab` an
+`&Elaborator` would hide rather than remove the dependency graph. Any future
+move should begin with a new capability boundary or state invariant, not a
+target file size.
+
+The large domain modules (`inductive`, `forded`, `indexed`, `traits`,
+`datarepr`, and `certgen`) are separate follow-up audits, not residue of this
+root extraction. Each already owns a real language subsystem; their size alone
+does not authorize recombining their internals with expression dispatch.
 
 ## Lessons from the registry pass
 
