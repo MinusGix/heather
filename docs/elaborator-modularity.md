@@ -210,10 +210,19 @@ Named-argument normalization now lives in `application/named.rs` before either
 spine engine runs. It owns callable slot permutation and mask adjustment,
 positional-only refusal, constructor-field permutation, and the shared
 record/constructor field-order algorithm. The no-names path returns `None`
-without cloning, preserving the old positional call exactly. Record literals
-retain only their registry lookup in root, then use the same pure permutation
-as constructors. Direct tests pin the no-op path, named implicit scheduling,
-and shared field ordering without an elaboration session.
+without cloning, preserving the old positional call exactly. The constructor
+policy owner performs record registry lookup and then uses the same pure
+permutation as constructor calls. Direct tests pin the no-op path, named
+implicit scheduling, and shared field ordering without an elaboration session.
+
+Surface constructor policy now lives in `constructor.rs`, separate from the
+kernel encoding machinery in `inductive.rs`. It owns shadow-aware constructor
+recognition, expected-type disambiguation, curried-spine flattening, record
+literal validation, inference of written and recoverable instantiations, and
+the indexed-family child route. The root bidirectional dispatcher decides
+*when* to ask; this module decides *whether and how* the surface expression is
+a constructor. Construction of the actual tier-0 term remains with
+`inductive.rs`, so surface resolution and encoding do not become one owner.
 
 `ImplicitApplicationElab` names the semantic operations the mechanism cannot
 own: argument classification, inference and checking, unification harvests,
@@ -499,9 +508,9 @@ The remaining routes are not equally ready. Take them in dependency order:
 3. **Dispatch last.** Named arguments, member lookup, class dispatch, indexed
    dictionaries, operator carriers, designations, and compatibility fallback
    are several policies, not one `dispatch.rs`. Pure argument normalization is
-   now owned by `application/named.rs`. Continue with constructor policy, then
-   carrier/callable queries, operator policy, dot resolution, and dictionary
-   construction.
+   now owned by `application/named.rs`, and surface constructor policy by
+   `constructor.rs`. Continue with carrier/callable queries, operator policy,
+   dot resolution, and dictionary construction.
 
 Moving lambda helpers merely to reduce line count is intentionally not a
 roadmap item. Move them when their binder, skeleton, and conversion policies
