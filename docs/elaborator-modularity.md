@@ -316,9 +316,9 @@ lowering, and domain conversion. In particular, no callback manipulates the
 local context and the view still has no registry or declaration authority.
 
 Every remaining root checking arm crosses a subsystem boundary: quotes change
-layers; matches own motive synthesis, rollback, and recursive guards;
-constructors and dot/application perform registry dispatch. Blocks have now
-crossed that boundary rather than being counted among it.
+layers; matches own rollback and recursive guards; constructors and
+dot/application perform registry dispatch. Blocks have now crossed that
+boundary rather than being counted among it.
 
 Lambda inference has followed checking across the boundary without merging
 their bidirectional rules. Both modes share one context-extension mechanism,
@@ -350,6 +350,23 @@ The slice also fixes the earlier staging order: expression-as-type moved only
 after indexed-family and value-parameter formation already had explicit
 seams. Split application, match lowering, and member/operator dispatch into
 collaborators only when their parameter lists describe real dependencies.
+
+Match elaboration has now entered that sequence. `matching.rs` owns written
+motive syntax (also shared by `J`), the checking-mode motive-synthesis ladder,
+its bounded search through stuck eliminators, and the pure transformation that
+adds and discharges a convoy equation. Semantic exposure and candidate
+conversion are three named read-only capabilities; the module does not hold an
+`Elaborator`, allocate goals, or inspect a registry. Small tests exercise
+motive abstraction and convoy construction without an elaboration session.
+
+This is deliberately a staged boundary rather than a new match god-object.
+The root still owns motive-less inference as a speculative transaction: it
+snapshots goals and warnings, records mismatch evidence, and decides whether a
+constant motive succeeded. It also owns route selection and recursive guards.
+The Nat, inductive, indexed, forded, and `Wf` lowerers remain with their
+existing owners. The next match slice should make that speculative transaction
+explicit; only then should the central Nat/Fin route and guard orchestration
+move.
 
 Ordinary statements now have their own subsystem as well. `statements.rs`
 owns context cloning and sequencing, annotated and inferred alias creation,
@@ -394,10 +411,11 @@ The remaining routes are not equally ready. Take them in dependency order:
    a time. Keep local context per-call and declaration effects narrower than
    their owners; the view must never store `&Elaborator` or gain commit
    authority.
-2. **Match elaboration.** Move convoy, motive, recursive-guard, Nat/Fin, and
-   indexed/forded matching only after `ExprElab` exists. Its speculative goal
-   rollback and binder-sensitive lowering make this a high-risk consumer, not
-   a good place to discover the view.
+2. **Continue match elaboration.** Motive synthesis and convoy mechanics now
+   have their first boundary. Next isolate motive-less inference's goal/warning
+   rollback as one transaction, then move the central Nat/Fin routing and
+   recursive-guard orchestration. Preserve the existing inductive, indexed,
+   forded, and `Wf` route owners instead of recombining them.
 3. **Dispatch last.** Named arguments, member lookup, class dispatch, indexed
    dictionaries, operator carriers, designations, and compatibility fallback
    are several policies, not one `dispatch.rs`. Split pure argument
