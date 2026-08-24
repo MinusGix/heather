@@ -42,6 +42,38 @@ pub(crate) trait StructuralTypeElab {
     ) -> R<Term>;
 }
 
+/// Registry and dispatch policies needed by the surface-universe bridge.
+///
+/// `ExprElab` owns the bridge itself: expression-shaped types are decoded and
+/// type-shaped expressions are quoted here.  These queries keep the policies
+/// that identify declared families, rewrite operators, and respell registered
+/// types with their existing owners.
+pub(crate) trait UniverseElab: StructuralTypeElab {
+    /// Rewrite an operator occurring in type position to its named call.
+    fn rewrite_type_operator(&self, cx: &Cx, expression: &Expr) -> R<Option<Expr>>;
+
+    /// Lower an indexed family or value-parameterized record application.
+    fn lower_declared_expression_type(
+        &self,
+        cx: &Cx,
+        expression: &Expr,
+        span: Span,
+    ) -> R<Option<(Type, Level)>>;
+
+    /// Read the inferred type through registry-aware structural spelling.
+    fn read_inferred_type(&self, cx: &Cx, inferred: &Type, span: Span) -> R<Type>;
+
+    /// Shape of a visible declared type former used in expression position.
+    fn visible_type_former(&self, cx: &Cx, name: &str) -> Option<TypeFormerShape>;
+}
+
+/// The declaration facts the universe bridge needs for `D(v̄)` routing.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct TypeFormerShape {
+    pub(crate) indexed: bool,
+    pub(crate) value_parameters: usize,
+}
+
 /// Registry-aware access to the expected type's structural spelling.
 pub(crate) trait ExpectedTypeElab {
     /// Read an expected type through any registry-aware structural spelling.
@@ -265,6 +297,122 @@ impl<'a> ExprElab<'a> {
                 ty.span,
             )),
             _ => None,
+        }
+    }
+
+    /// Lower an expression occupying a type-syntax slot.
+    ///
+    /// This is the decoding direction of the surface-universe bridge.  The
+    /// registry-aware alternatives are tried before ordinary inference, just
+    /// as declaration syntax requires; the final `El` is the kernel's own
+    /// decoding operation rather than an elaborator coercion.
+    pub(crate) fn lower_expression_type(
+        &self,
+        elab: &impl UniverseElab,
+        cx: &Cx,
+        expression: &Expr,
+        span: Span,
+    ) -> R<(Type, Level)> {
+        if let Some(rewritten) = elab.rewrite_type_operator(cx, expression)? {
+            return self.lower_expression_type(elab, cx, &rewritten, span);
+        }
+        if let Some(lowered) = elab.lower_declared_expression_type(cx, expression, span)? {
+            return Ok(lowered);
+        }
+        let (term, inferred, _) = elab.infer_type_endpoint(cx, expression)?;
+        let Type::Ty(level) = elab.read_inferred_type(cx, &inferred, span)? else {
+            return err(
+                "this is not a type: only an expression whose type is a \
+                 universe (`Type<n>`) can be used where a type is expected",
+                span,
+            );
+        };
+        Ok((Type::El { level: level.clone(), tm: Rc::new(term) }, level))
+    }
+
+    /// Check an expression where the expected type is `Type<want>`.
+    ///
+    /// Type syntax is an opportunistic second reading: declared applications
+    /// commit to their formation diagnostics, ordinary type-shaped syntax is
+    /// tried speculatively, and everything else retains ordinary inference.
+    pub(crate) fn check_at_universe(
+        &self,
+        elab: &impl UniverseElab,
+        cx: &Cx,
+        expression: &Expr,
+        want: &Level,
+        span: Span,
+    ) -> R<Term> {
+        if let Some(ty) = self.type_former_application(elab, cx, expression)? {
+            let (lowered, level) = elab.lower_type(cx, &ty)?;
+            return Self::quote_type_at(&lowered, &level, want, span);
+        }
+        if let Some(ty) = expression_as_type(expression)
+            && let Ok((lowered, level)) = elab.lower_type(cx, &ty)
+        {
+            return Self::quote_type_at(&lowered, &level, want, span);
+        }
+        let (term, _, _) = elab.infer_type_endpoint(cx, expression)?;
+        Ok(term)
+    }
+
+    fn type_former_application(
+        &self,
+        elab: &impl UniverseElab,
+        cx: &Cx,
+        expression: &Expr,
+    ) -> R<Option<Ty>> {
+        let ExprKind::App { head, args, .. } = &expression.kind else {
+            return Ok(None);
+        };
+        let Some((name, _)) = crate::inductive::named_head(head) else {
+            return Ok(None);
+        };
+        let Some(shape) = elab.visible_type_former(cx, name) else {
+            return Ok(None);
+        };
+        if !shape.indexed && shape.value_parameters == 0 {
+            return err(
+                format!(
+                    "`{name}` takes 0 value argument(s), found {} — where a `Type` is \
+                     expected, `{name}` names the type itself, so write it bare",
+                    args.len()
+                ),
+                expression.span,
+            );
+        }
+        Ok(Some(Ty {
+            kind: TyKind::OfExpr(Box::new(expression.clone())),
+            span: expression.span,
+        }))
+    }
+
+    fn quote_type_at(
+        elaborated: &Type,
+        level: &Level,
+        want: &Level,
+        span: Span,
+    ) -> R<Term> {
+        if !level.equiv(want) {
+            return err(
+                format!(
+                    "this type is at level {}, but a `Type<{}>` is expected \
+                     here — universes in this system are non-cumulative, so a \
+                     type does not also inhabit the universes above its own, \
+                     and there is no lift",
+                    crate::show_level(level),
+                    crate::show_level(want),
+                ),
+                span,
+            );
+        }
+        match code::code_of(elaborated) {
+            Some(code) => Ok(code),
+            None => err(
+                "this type has no code, so it cannot be written where a term is \
+                 expected (docs/surface-universe.md §7)",
+                span,
+            ),
         }
     }
 
@@ -824,11 +972,18 @@ mod tests {
                 .set(self.deepest_context.get().max(cx.names.len()));
             self.deepest_tyvars
                 .set(self.deepest_tyvars.get().max(cx.tyvars.len()));
-            let ExprKind::Num(n) = expression.kind else {
-                panic!("the fixture only infers numerals");
-            };
-            self.inferred_numerals.borrow_mut().push(n);
-            Ok((Term::Zero, Type::Nat, Level::Zero))
+            match &expression.kind {
+                ExprKind::Num(n) => {
+                    self.inferred_numerals.borrow_mut().push(*n);
+                    Ok((Term::Zero, Type::Nat, Level::Zero))
+                }
+                ExprKind::Var(name) if name == "code" => Ok((
+                    Term::TmNat,
+                    Type::Ty(Level::Zero),
+                    Level::constant(1),
+                )),
+                _ => panic!("the fixture only infers numerals and `code`"),
+            }
         }
 
         fn lower_named_type(
@@ -858,6 +1013,32 @@ mod tests {
             };
             self.checked_numerals.borrow_mut().push(n);
             Ok(Term::Zero)
+        }
+    }
+
+    impl UniverseElab for StructuralFake {
+        fn rewrite_type_operator(&self, _cx: &Cx, _expression: &Expr) -> R<Option<Expr>> {
+            Ok(None)
+        }
+
+        fn lower_declared_expression_type(
+            &self,
+            _cx: &Cx,
+            _expression: &Expr,
+            _span: Span,
+        ) -> R<Option<(Type, Level)>> {
+            Ok(None)
+        }
+
+        fn read_inferred_type(&self, _cx: &Cx, inferred: &Type, _span: Span) -> R<Type> {
+            Ok(inferred.clone())
+        }
+
+        fn visible_type_former(&self, _cx: &Cx, name: &str) -> Option<TypeFormerShape> {
+            (name == "Plain").then_some(TypeFormerShape {
+                indexed: false,
+                value_parameters: 0,
+            })
         }
     }
 
@@ -1068,6 +1249,56 @@ mod tests {
             expr.infer_form(&fake, &cx, &type_literal).unwrap().unwrap(),
             (Term::TmNat, Type::Ty(Level::Zero), _)
         ));
+    }
+
+    #[test]
+    fn universe_bridge_owns_decoding_quoting_and_fallback() {
+        let goals = GoalArena::default();
+        let slot_probe = Cell::new(None);
+        let expr = view(&goals, &slot_probe);
+        let fake = StructuralFake::default();
+        let cx = Cx::empty();
+
+        let code = Expr { kind: ExprKind::Var("code".into()), span: SPAN };
+        assert!(matches!(
+            expr.lower_expression_type(&fake, &cx, &code, SPAN).unwrap(),
+            (Type::El { tm, .. }, Level::Zero) if matches!(&*tm, Term::TmNat)
+        ));
+
+        let nat = Expr {
+            kind: ExprKind::TyLit(Box::new(Ty { kind: TyKind::Nat, span: SPAN })),
+            span: SPAN,
+        };
+        assert!(matches!(
+            expr.check_at_universe(&fake, &cx, &nat, &Level::Zero, SPAN)
+                .unwrap(),
+            Term::TmNat
+        ));
+        assert!(expr
+            .check_at_universe(&fake, &cx, &nat, &Level::constant(1), SPAN)
+            .is_err());
+
+        let numeral = Expr { kind: ExprKind::Num(7), span: SPAN };
+        assert!(matches!(
+            expr.check_at_universe(&fake, &cx, &numeral, &Level::Zero, SPAN)
+                .unwrap(),
+            Term::Zero
+        ));
+
+        let plain_application = Expr {
+            kind: ExprKind::App {
+                head: Box::new(Expr { kind: ExprKind::Var("Plain".into()), span: SPAN }),
+                args: vec![numeral],
+                named: Vec::new(),
+                explicit: false,
+                goal_oriented: false,
+            },
+            span: SPAN,
+        };
+        let error = expr
+            .check_at_universe(&fake, &cx, &plain_application, &Level::Zero, SPAN)
+            .unwrap_err();
+        assert!(error.message().contains("takes 0 value argument"));
     }
 
     #[test]

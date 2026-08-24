@@ -665,6 +665,39 @@ impl expr::StructuralTypeElab for Elaborator {
     }
 }
 
+impl expr::UniverseElab for Elaborator {
+    fn rewrite_type_operator(&self, cx: &Cx, expression: &Expr) -> R<Option<Expr>> {
+        self.op_rewrite(cx, expression, None)
+    }
+
+    fn lower_declared_expression_type(
+        &self,
+        cx: &Cx,
+        expression: &Expr,
+        span: Span,
+    ) -> R<Option<(Type, Level)>> {
+        if let Some(lowered) = self.try_indexed_ty(cx, expression, span)? {
+            return Ok(Some(lowered));
+        }
+        self.try_valparam_ty(cx, expression, span)
+    }
+
+    fn read_inferred_type(&self, cx: &Cx, inferred: &Type, span: Span) -> R<Type> {
+        self.whnf(cx, inferred, span)
+    }
+
+    fn visible_type_former(&self, cx: &Cx, name: &str) -> Option<expr::TypeFormerShape> {
+        if self.shadowed(cx, name) {
+            return None;
+        }
+        let ind = self.lookup_inductive(name)?;
+        Some(expr::TypeFormerShape {
+            indexed: ind.index.is_some(),
+            value_parameters: ind.valparams.len(),
+        })
+    }
+}
+
 impl expr::ExpectedTypeElab for Elaborator {
     fn read_expected_type(&self, cx: &Cx, expected: &Type, span: Span) -> R<Type> {
         self.whnf(cx, expected, span)
@@ -2339,44 +2372,11 @@ impl Elaborator {
             // kernel's own decoding, so nothing here is a coercion — the term
             // *is* a code, and `El ⌜T⌝ ⇝ T` makes a written type and a decoded
             // one convertible rather than merely equal-looking.
-            TyKind::OfExpr(e) => {
-                // An operator in **type** position — `n <= m`, and `x + A.unit`
-                // as an equation's endpoint. The symbol resolves to a name
-                // here exactly as it does in a term
-                // (docs/operators-onto-classes-design.md §4), and then every
-                // reading below applies to what it named: `Le(n, m)` is the
-                // record-at-its-value-parameters road it always was.
-                if let Some(rewritten) = self.op_rewrite(cx, e, None)? {
-                    let ty = Ty { kind: TyKind::OfExpr(Box::new(rewritten)), span: ty.span };
-                    return self.elab_ty(cx, &ty);
-                }
-                // `Vec<A>(n)` — an indexed family applied to its index
-                // (docs/inductive-indexed-lowering.md §2), delivered here by
-                // the parser's applied-type-is-never-called backtracking.
-                if let Some(r) = self.try_indexed_ty(cx, e, ty.span)? {
-                    return Ok(r);
-                }
-                // `Converges(p, env, ir, vs)` — a record applied to its *value*
-                // parameters (docs/surface-value-parameters.md §3). Same road,
-                // same reason: the parser cannot tell formation from a call,
-                // and only the declaration can.
-                if let Some(r) = self.try_valparam_ty(cx, e, ty.span)? {
-                    return Ok(r);
-                }
-                let (tm, tm_ty, _) = self.elab_infer(cx, e)?;
-                let Type::Ty(level) = self.whnf(cx, &tm_ty, ty.span)? else {
-                    return err(
-                        "this is not a type: only an expression whose type is a \
-                         universe (`Type<n>`) can be used where a type is expected",
-                        ty.span,
-                    );
-                };
-                Ok((Type::El { level: level.clone(), tm: Rc::new(tm) }, level))
-            }
+            TyKind::OfExpr(e) => self.expr_elab().lower_expression_type(self, cx, e, ty.span),
             _ => self
                 .expr_elab()
                 .type_form(self, cx, ty)
-                .expect("only expression-as-type remains outside ExprElab"),
+                .expect("every structural type form is classified by ExprElab"),
         }
     }
 
@@ -2718,7 +2718,8 @@ impl Elaborator {
             // a term is expected, so read it as one and quote it
             // (docs/surface-universe.md §4).
             _ if matches!(expected, Type::Ty(_)) => {
-                self.elab_at_universe(cx, e, expected, e.span)
+                let Type::Ty(want) = expected else { unreachable!() };
+                self.expr_elab().check_at_universe(self, cx, e, want, e.span)
             }
             // A constructor in checking position: the expected type *is* the
             // encoding, so every annotation of the injection and the field
@@ -2850,12 +2851,12 @@ impl Elaborator {
                 // (docs/inductive-indexed-lowering.md §4: the branch spine is
                 // quoted and decoded, so a `Type`-valued field reads back as
                 // `El (TmTy …)`). Reduce before giving up on the
-                // type-position reading; `elab_at_universe` still falls
+                // type-position reading; the universe bridge still falls
                 // through to ordinary inference when the expression is not a
                 // type by shape.
                 let head = self.whnf(cx, expected, e.span)?;
-                if matches!(head, Type::Ty(_)) {
-                    return self.elab_at_universe(cx, e, &head, e.span);
+                if let Type::Ty(want) = &head {
+                    return self.expr_elab().check_at_universe(self, cx, e, want, e.span);
                 }
                 // Inference is the fallback, but the expected type is *not*
                 // discarded on the way: an implicit-inserting call (or a bare
@@ -2958,117 +2959,6 @@ impl Elaborator {
                 span,
             ));
         }
-    }
-
-    /// An expression in a position whose expected type is a universe — a
-    /// *type* written where a term is expected. Read it as a type, elaborate
-    /// it, and quote it into its code (docs/surface-universe.md §4).
-    ///
-    /// This restores the coercion `docs/surface-polymorphism.md` §5 retired.
-    /// The retirement was right *then*: `<…>`/`@` between them left no position
-    /// with expected type `Ty l`, so the arm was dead code and a message was
-    /// all it could be. A `Type`-valued binder creates the position for a real
-    /// reason — it is stated by a declaration rather than conjured by a
-    /// spelling — so the coercion has a customer again.
-    /// The bridge is **not** a claim that every expression here is a type: a
-    /// universe is an ordinary type, so `g(A)` and a variable at `Ty n` reach
-    /// this position too. Only a reading that succeeds *as a type* is taken;
-    /// anything else falls through to ordinary inference, which is what the
-    /// position meant before universes were writable.
-    fn elab_at_universe(&self, cx: &Cx, e: &Expr, expected: &Type, span: Span) -> R<Term> {
-        if let Type::Ty(want) = expected {
-            // `Boxed(v)` at `Type`: a declared type applied to its value
-            // arguments, written where a *term* is expected
-            // (docs/record-type-values.md). This is the only reading that can
-            // be well-typed — no constructor inhabits a universe — so it is
-            // **committed**: an error here is reported, not retried as a call,
-            // which is what keeps the arity diagnostic pointed at the value
-            // parameter telescope instead of at the constructor.
-            if let Some(ty) = self.type_former_app(cx, e)? {
-                let (elaborated, level) = self.elab_ty(cx, &ty)?;
-                return self.quote_type_at(&elaborated, &level, want, span);
-            }
-            if let Some(ty) = expression_as_type(e)
-                && let Ok((elaborated, level)) = self.elab_ty(cx, &ty)
-            {
-                return self.quote_type_at(&elaborated, &level, want, span);
-            }
-        }
-        let (t, _, _) = self.elab_infer(cx, e)?;
-        Ok(t)
-    }
-
-    /// A lowered type quoted into its code at the universe that was expected.
-    fn quote_type_at(
-        &self,
-        elaborated: &Type,
-        level: &Level,
-        want: &Level,
-        span: Span,
-    ) -> R<Term> {
-        // Non-cumulative: levels compare by `≈`, never `≤`, and there
-        // is no lift (docs/surface-universe.md §6).
-        if !level.equiv(want) {
-            return err(
-                format!(
-                    "this type is at level {}, but a `Type<{}>` is expected \
-                     here — universes in this system are non-cumulative, so a \
-                     type does not also inhabit the universes above its own, \
-                     and there is no lift",
-                    show_level(level),
-                    show_level(want),
-                ),
-                span,
-            );
-        }
-        // `El` is the identity on codes (`code.rs`), so a `Type`-valued
-        // binder quotes back to the variable itself.
-        match code::code_of(elaborated) {
-            Some(code) => Ok(code),
-            None => err(
-                "this type has no code, so it cannot be written where a term is \
-                 expected (docs/surface-universe.md §7)",
-                span,
-            ),
-        }
-    }
-
-    /// `D<ā>(v̄)` in **expression** position, where `D` is a declared record or
-    /// inductive: the applied *type former*, read as the type-position
-    /// [`TyKind::OfExpr`] it would be one syntactic slot over. There is no
-    /// second lowering here — `elab_ty` runs `try_indexed_ty` /
-    /// `try_valparam_ty` / the generic decode exactly as it does for a type
-    /// annotation (docs/record-type-values.md §2).
-    ///
-    /// `None` for anything that is not a declared type's name, and for a name a
-    /// local binder or global shadows, so every existing spelling reaches its
-    /// old handler. The one case answered here rather than deferred is a
-    /// declaration with *no* value parameters and no index: `OfExpr`'s generic
-    /// path would try to *call* it and report the constructor's problem, which
-    /// is the misdirected diagnostic this round exists to remove.
-    fn type_former_app(&self, cx: &Cx, e: &Expr) -> R<Option<Ty>> {
-        let ExprKind::App { head, args, .. } = &e.kind else { return Ok(None) };
-        let Some((name, _)) = inductive::named_head(head) else { return Ok(None) };
-        if self.shadowed(cx, name) {
-            return Ok(None);
-        }
-        let Some(ind) = self.lookup_inductive(name) else { return Ok(None) };
-        // A non-empty telescope (and an index) reach their own handlers inside
-        // `elab_ty`, and those already diagnose arity against the declaration.
-        // An *empty* telescope has no handler there — `try_valparam_ty`
-        // declines — so the mismatch is said here rather than left to
-        // `OfExpr`'s generic path, which would try to call `D`.
-        if ind.index.is_none() && ind.valparams.is_empty() {
-            return err(
-                format!(
-                    "`{name}` takes 0 value argument(s), found {} — where a `Type` is \
-                     expected, `{name}` names the type itself, so write it bare",
-                    args.len()
-                ),
-                e.span,
-            );
-        }
-        Ok(Some(Ty { kind: TyKind::OfExpr(Box::new(e.clone())), span: e.span }))
     }
 
     /// Inference mode: returns the elaborated term with its canonical type

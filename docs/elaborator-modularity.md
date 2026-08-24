@@ -337,14 +337,20 @@ the existing ExprElab classifier owns `FZ`'s checking-only refusal and
 `trivial`'s fixed `Unit^0` synthesis. All remaining inference arms now cross a
 real subsystem boundary rather than merely constructing a core term.
 
-Only expression-as-type remains in the root `elab_ty` match. It combines
-operator rewriting, indexed-family recognition, value-parameter formation,
-term inference, and universe decoding; moving it behind one callback would
-only rename the old coupling. Continue moving `elab_check*` and `elab_infer*`
-behind `ExprElab` where their inputs become narrow named queries, and return to
-expression-as-type after those underlying policies have their own seams. Split
-application, match lowering, and member/operator dispatch into collaborators
-only when their parameter lists describe real dependencies.
+The universe bridge is now a complete vertical slice. `ExprElab` owns both
+directions: an expression in type position is inferred and decoded through
+`El`, while type syntax at an expected universe is lowered, checked for the
+exact non-cumulative level, and quoted to its code. The root `elab_ty` match no
+longer elaborates any form itself. Registry and dispatch policy remain outside
+the view as four named queries: operator rewriting, declared-family
+formation, registry-aware reading of an inferred type, and the small visible
+type-former shape needed to commit `D(v̄)` to its formation diagnostics. This
+is intentionally not one recursive "elaborate this somehow" callback.
+
+The slice also fixes the earlier staging order: expression-as-type moved only
+after indexed-family and value-parameter formation already had explicit
+seams. Split application, match lowering, and member/operator dispatch into
+collaborators only when their parameter lists describe real dependencies.
 
 The desired test is architectural: pure unification and surface rewriting can
 be unit-tested without constructing an `Elaborator`; expression elaboration
