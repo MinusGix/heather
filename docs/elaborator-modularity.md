@@ -242,6 +242,18 @@ path. The trait registry still owns designation data; the operator module only
 asks deterministic queries of it. Kernel-gate error selection remains in root
 because it consumes operator notes but is not itself operator resolution.
 
+Dot and class dispatch are now decomposed by decision owner rather than
+collected in one large dispatch module. `dispatch/member.rs` owns precedence
+between record projection, type subjects, dictionary indices, nominal members,
+class dispatch, and ordinary method desugaring. `dispatch/receiver.rs` owns
+receiver-driven class candidate selection and upcast-aware projection.
+`dispatch/projection.rs` owns type-subject projection and the explicit
+`T::Class(index)` escape spelling. `dispatch/dictionary.rs` owns the value-index
+ladder shared by those routes: compatible scope dictionary, designation, and
+the structured refusal when neither pins a slot. These modules share carrier
+identity and registry/resolution services, but no module re-decides another's
+precedence rule.
+
 `ImplicitApplicationElab` names the semantic operations the mechanism cannot
 own: argument classification, inference and checking, unification harvests,
 expected-type harvests, dictionary resolution, goal promotion, and the
@@ -528,9 +540,11 @@ The remaining routes are not equally ready. Take them in dependency order:
    are several policies, not one `dispatch.rs`. Pure argument normalization is
    now owned by `application/named.rs`, and surface constructor policy by
    `constructor.rs`. Canonical carrier queries now live in
-   `dispatch/carrier.rs`, and operator policy in `dispatch/operator.rs`;
-   continue with callable queries, dot resolution, and dictionary
-   construction.
+   `dispatch/carrier.rs`, operator policy in `dispatch/operator.rs`, dot routing
+   in `dispatch/member.rs`, receiver/type projection in their own modules, and
+   indexed goal construction in `dispatch/dictionary.rs`. The remaining audit
+   should decide whether the small callable-query cluster merits one final
+   owner or belongs with application metadata.
 
 Moving lambda helpers merely to reduce line count is intentionally not a
 roadmap item. Move them when their binder, skeleton, and conversion policies
