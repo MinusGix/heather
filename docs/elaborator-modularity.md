@@ -296,6 +296,12 @@ whether `FZ` or `FS` is shadowed by a local or declaration constructor. This
 keeps name resolution out of the view while removing both term constructors
 and their reduction policy from the root elaborator.
 
+Core numeral checking follows the same boundary. `ExprElab` owns the direct
+`Nat` term and the canonical folded `Fin` index, including successor peeling;
+the root's remaining numeral helper is explicitly the overloaded
+`Numeral<T>` class path. Thus structural syntax no longer reaches class
+registries, and class resolution no longer obscures the built-in semantics.
+
 Only expression-as-type remains in the root `elab_ty` match. It combines
 operator rewriting, indexed-family recognition, value-parameter formation,
 term inference, and universe decoding; moving it behind one callback would

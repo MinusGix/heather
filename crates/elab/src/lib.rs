@@ -2667,7 +2667,13 @@ impl Elaborator {
             // is the spelling anybody reaches for first, and without this it
             // means `xs[FS(FS(FZ))]`. Falls through to the ordinary `Nat`
             // reading at every other expected type.
-            ExprKind::Num(t) => self.elab_num_check(cx, *t, e, expected, lvl, e.span),
+            ExprKind::Num(t) => match self
+                .expr_elab()
+                .check_builtin_numeral(cx, *t, expected, e.span)
+            {
+                Some(result) => result,
+                None => self.elab_overloaded_num_check(cx, e, expected, lvl, e.span),
+            },
             // A lambda against an expected Π: the *expected* domain is what
             // the binder is pushed with, so the emitted annotation always
             // matches the type it is checked against. A written annotation is
@@ -4819,54 +4825,16 @@ impl Elaborator {
         })
     }
 
-    /// A numeral in checking position. At a `Fin`-headed expected type it is
-    /// the iterated index (docs/surface-fin-indexing-design.md §3.3);
-    /// everywhere else it is the `Nat` it always was.
-    ///
-    /// The `Fin` case is a reuse and not new code: `wf::fin_index` already
-    /// builds "index `t` of `Fin(Succ^m(base))`" with the folded annotations,
-    /// and emitting *literally* the term it emits is free adequacy — the
-    /// surface numeral and the elaborator's own container indices are the same
-    /// syntax, so nothing can drift between them.
-    fn elab_num_check(
+    /// A numeral at a user-defined carrier. Core `Nat` and `Fin` readings are
+    /// already settled by `ExprElab`; this is declaration/class policy only.
+    fn elab_overloaded_num_check(
         &self,
         cx: &Cx,
-        t: u64,
         e: &Expr,
         expected: &Type,
         expected_level: &Level,
         span: Span,
     ) -> R<Term> {
-        if let Type::Fin { len } = &*crate::inductive::decoded(expected) {
-            // Peel `t + 1` successors off the length; the residue is the base
-            // `fin_index` annotates its tails with.
-            let mut base = Rc::clone(len);
-            for peeled in 0..=t {
-                let w = self.whnf_tm(cx, &base, span)?;
-                let Term::Succ(pred) = &*w else {
-                    return err(
-                        format!(
-                            "`{t}` is not an index of this `Fin`: a numeral here needs the \
-                             length to reduce to at least {} successor(s), and this one \
-                             reduces to {peeled}",
-                            t + 1
-                        ),
-                        span,
-                    );
-                };
-                base = Rc::clone(pred);
-            }
-            let t = t as usize;
-            return Ok(wf::fin_index(t, t + 1, &base));
-        }
-        // `Nat` remains the inference default and its checking term remains
-        // byte-identical. In particular, loading the standard `Numeral<Nat>`
-        // instance must not turn every ordinary numeral into a dictionary
-        // projection whose reduction merely returns this same term.
-        if matches!(&*crate::inductive::decoded(expected), Type::Nat) {
-            let (num, _, _) = self.elab_infer(cx, e)?;
-            return Ok(num);
-        }
         // At another expected carrier, use the ordinary class resolver. The
         // class is optional at the language level: a program that has not
         // imported the standard algebra module keeps the historical Nat-only

@@ -82,6 +82,14 @@ pub(crate) struct ExprElab<'a> {
 }
 
 impl<'a> ExprElab<'a> {
+    fn natural_literal(n: u64) -> Term {
+        let mut term = Term::Zero;
+        for _ in 0..n {
+            term = Term::Succ(Rc::new(term));
+        }
+        term
+    }
+
     pub(crate) fn new(
         semantic: SemanticOracle,
         goals: GoalAllocator<'a>,
@@ -249,11 +257,7 @@ impl<'a> ExprElab<'a> {
                 e.span,
             )),
             ExprKind::Num(n) => {
-                let mut term = Term::Zero;
-                for _ in 0..*n {
-                    term = Term::Succ(Rc::new(term));
-                }
-                Some(Ok((term, Type::Nat, Level::Zero)))
+                Some(Ok((Self::natural_literal(*n), Type::Nat, Level::Zero)))
             }
             // A type in term position is its kernel code at the next universe.
             ExprKind::Eq(..) | ExprKind::TyLit(..) => Some((|| {
@@ -349,6 +353,46 @@ impl<'a> ExprElab<'a> {
                     _ => err("`FS` takes exactly one argument, an index", e.span),
                 })
             }
+            _ => None,
+        }
+    }
+
+    /// The non-overloaded numeral readings supplied by the core language.
+    /// Other carriers remain the declaration/class resolver's policy.
+    pub(crate) fn check_builtin_numeral(
+        &self,
+        cx: &Cx,
+        numeral: u64,
+        expected: &Type,
+        span: Span,
+    ) -> Option<R<Term>> {
+        match &*crate::inductive::decoded(expected) {
+            Type::Nat => Some(Ok(Self::natural_literal(numeral))),
+            Type::Fin { len } => Some((|| {
+                // Peel `numeral + 1` successors off the length; the residue
+                // is the folded base used by the kernel's canonical schema.
+                let mut base = Rc::clone(len);
+                for peeled in 0..=numeral {
+                    let reduced = self.whnf_term(cx, &base).map_err(|_| ElabError::Elab {
+                        msg: "out of fuel reducing a term".into(),
+                        span,
+                    })?;
+                    let Term::Succ(pred) = reduced else {
+                        return err(
+                            format!(
+                                "`{numeral}` is not an index of this `Fin`: a numeral here \
+                                 needs the length to reduce to at least {} successor(s), and \
+                                 this one reduces to {peeled}",
+                                numeral + 1
+                            ),
+                            span,
+                        );
+                    };
+                    base = pred;
+                }
+                let numeral = numeral as usize;
+                Ok(crate::wf::fin_index(numeral, numeral + 1, &base))
+            })()),
             _ => None,
         }
     }
@@ -778,6 +822,19 @@ mod tests {
         };
         assert!(matches!(
             expr.check_indexed_form(&fake, &cx, &fz, &fin_ty)
+                .unwrap()
+                .unwrap(),
+            Term::Inl { .. }
+        ));
+
+        assert!(matches!(
+            expr.check_builtin_numeral(&cx, 0, &Type::Nat, SPAN)
+                .unwrap()
+                .unwrap(),
+            Term::Zero
+        ));
+        assert!(matches!(
+            expr.check_builtin_numeral(&cx, 0, &fin_ty, SPAN)
                 .unwrap()
                 .unwrap(),
             Term::Inl { .. }
