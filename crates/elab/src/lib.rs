@@ -123,7 +123,8 @@ pub(crate) use context::{Alias, Cx, DictBinder, TyVar};
 use representations::Representations;
 use slots::{Ingredient, Slot};
 use surface::{
-    for_each_free_slot, has_free_slots, lower_argument_slots, slot_profile, walk_expr,
+    expression_left_leaf_is_numeral, for_each_free_slot, has_free_slots, lower_argument_slots,
+    slot_profile, walk_expr,
 };
 use traits::Traits;
 use types::Types;
@@ -664,6 +665,26 @@ enum DotResolution {
     /// elaborated in whichever mode the caller is in — which is what keeps
     /// checking-only methods like `p.absurd()` working.
     Method(Expr),
+}
+
+impl expr::StructuralTypeElab for Elaborator {
+    fn lower_type(&self, cx: &Cx, ty: &Ty) -> R<(Type, Level)> {
+        self.elab_ty(cx, ty)
+    }
+
+    fn infer_type_endpoint(&self, cx: &Cx, expression: &Expr) -> R<(Term, Type, Level)> {
+        self.elab_infer(cx, expression)
+    }
+
+    fn check_type_endpoint(
+        &self,
+        cx: &Cx,
+        expression: &Expr,
+        expected: &Type,
+        level: &Level,
+    ) -> R<Term> {
+        self.elab_check(cx, expression, expected, level)
+    }
 }
 
 impl application::ExplicitArgElab for Elaborator {
@@ -2282,10 +2303,14 @@ impl Elaborator {
             | TyKind::Univ { .. }
             | TyKind::Ctx
             | TyKind::TyCode { .. }
-            | TyKind::Code { .. } => self
+            | TyKind::Code { .. }
+            | TyKind::Vec { .. }
+            | TyKind::Fin(_)
+            | TyKind::Fn { .. }
+            | TyKind::Eq(..) => self
                 .expr_elab()
-                .type_leaf(ty)
-                .expect("classified as an ExprElab type leaf"),
+                .type_form(self, cx, ty)
+                .expect("classified as an ExprElab type form"),
             // An expression in type position: infer it, require its type to be
             // a universe, and decode (docs/surface-universe.md §4). `El` is the
             // kernel's own decoding, so nothing here is a coercion — the term
@@ -2334,114 +2359,10 @@ impl Elaborator {
                 }
                 self.lower_named(cx, name, args, ty.span)
             }
-            // `[T; n]` — the kernel's `Type::Vec` directly. A primitive
-            // indexed type: no fording, no encoding
-            // (docs/container-fields.md §2.1).
-            TyKind::Vec { elem, len } => {
-                // A `[T; n]` element type has no skeleton slot (§3.4).
-                if has_implicit_mark(elem) {
-                    return err(IMPLICIT_MARK_REFUSED, elem.span);
-                }
-                let (elem_t, level) = self.elab_ty(cx, elem)?;
-                let len_t = self.elab_check(cx, len, &Type::Nat, &Level::Zero)?;
-                Ok((
-                    Type::Vec {
-                        level: level.clone(),
-                        elem: Rc::new(elem_t),
-                        len: Rc::new(len_t),
-                    },
-                    level,
-                ))
-            }
-            // `Fin(n)` — the kernel's `Type::Fin` directly
-            // (docs/surface-fin-indexing-design.md §2.3). The level is
-            // `Zero` **unconditionally**: `Fin` is the one extension former
-            // that carries no level (`term.rs:153`), so there is no `Fin` at
-            // level 1 to write and no way to ask for one.
-            TyKind::Fin(len) => {
-                let len_t = self.elab_check(cx, len, &Type::Nat, &Level::Zero)?;
-                Ok((Type::Fin { len: Rc::new(len_t) }, Level::Zero))
-            }
-            // `(x: A) -> B` / `A -> B`. The level rule is `max(dom, cod)`,
-            // the same one `check_decl` uses to close a declaration's
-            // telescope — a written function type and a `fn`'s own type must
-            // not compute levels differently
-            // (docs/surface-function-types.md §5.1).
-            TyKind::Fn { binder, dom, cod, .. } => {
-                let (dom_t, dom_level) = self.elab_ty(cx, dom)?;
-                let mut inner = cx.clone();
-                // `#` marks an elaborator-introduced binder: unspellable, and
-                // filtered out of the goal listing.
-                let name = binder.clone().unwrap_or_else(|| "#arrow".to_string());
-                // The binder pushed for the codomain carries the *domain's*
-                // skeleton — this one line is what makes insertion work
-                // inside any written dependent type: a statement
-                // `(f: {A: Type<0>} -> A -> A) -> f(0) = 0` has `f`'s uses
-                // in the codomain inferring with no further plumbing
-                // (docs/implicit-binders-design.md §3.1).
-                inner.push_skel(name.clone(), dom_t.clone(), dom_level.clone(), skel_of_ty(dom));
-                // A binder at a universe is usable as a type in the codomain
-                // (`(A: Type<0>) -> A -> A`) — the registration the telescope
-                // loop and `elab_lam_check` make, at the third binding form.
-                if let Type::Ty(level) = &dom_t {
-                    inner.tyvars.push(TyVar {
-                        name,
-                        ty: Type::El {
-                            level: level.clone(),
-                            tm: Rc::new(Term::Var(LocalVar(0))),
-                        },
-                        level: level.clone(),
-                        depth: inner.names.len(),
-                    });
-                }
-                let (cod_t, cod_level) = self.elab_ty(&inner, cod)?;
-                Ok((
-                    Type::Pi {
-                        dom_level: dom_level.clone(),
-                        cod_level: cod_level.clone(),
-                        dom: Rc::new(dom_t),
-                        cod: Rc::new(cod_t),
-                    },
-                    Level::max(dom_level, cod_level),
-                ))
-            }
             // `$a` for a `TyCode` binder: its global type variable, valid at
             // the code scope (a `meta fn` signature's payload types and quote
             // payloads — anywhere `cx.meta` is present).
             TyKind::Splice { name } => self.elab_ty_splice(cx, name, ty.span),
-            TyKind::Eq(lhs, rhs) => {
-                // A numeral has a `Nat` default in inference, but is
-                // carrier-directed in checking. When the equation's left
-                // operator spine begins at one, the right endpoint is the
-                // available carrier annotation: infer it first, then check
-                // the written left endpoint there. `3 = 3` remains Nat;
-                // `3 = OfNat(3)` and `-3 = NegSucc(2)` become Int without a
-                // negative-literal node or an Int-specific parser rule.
-                if Self::expression_left_leaf_is_numeral(lhs) {
-                    let (rhs_t, rhs_ty, lvl) = self.elab_infer(cx, rhs)?;
-                    let lhs_t = self.elab_check(cx, lhs, &rhs_ty, &lvl)?;
-                    return Ok((
-                        Type::Id {
-                            level: lvl.clone(),
-                            ty: Rc::new(rhs_ty),
-                            lhs: Rc::new(lhs_t),
-                            rhs: Rc::new(rhs_t),
-                        },
-                        lvl,
-                    ));
-                }
-                let (lhs_t, lhs_ty, lvl) = self.elab_infer(cx, lhs)?;
-                let rhs_t = self.elab_check(cx, rhs, &lhs_ty, &lvl)?;
-                Ok((
-                    Type::Id {
-                        level: lvl.clone(),
-                        ty: Rc::new(lhs_ty),
-                        lhs: Rc::new(lhs_t),
-                        rhs: Rc::new(rhs_t),
-                    },
-                    lvl,
-                ))
-            }
         }
     }
 
@@ -6462,7 +6383,7 @@ impl Elaborator {
         //    (docs/bare-symbol-checking-carrier-design.md §4.2).
         let mut uncovered_carrier = None;
         if self.traits.has_designation_for(fixity, sym) {
-            let flexible_left = Self::operator_left_leaf_is_numeral(args);
+            let flexible_left = args.first().is_some_and(expression_left_leaf_is_numeral);
             let expected_for_numeral = if flexible_left {
                 expected
                     .and_then(|t| self.carrier_of_ty(cx, t, span))
@@ -6474,7 +6395,7 @@ impl Elaborator {
             let sibling_for_numeral = if flexible_left {
                 args.iter()
                     .skip(1)
-                    .filter(|arg| !Self::expression_left_leaf_is_numeral(arg))
+                    .filter(|arg| !expression_left_leaf_is_numeral(arg))
                     .find_map(|arg| {
                         self.op_carrier_head(cx, std::slice::from_ref(arg), span)
                             .filter(|h| self.designated(sym, fixity, &h.key).is_some())
@@ -6658,35 +6579,6 @@ impl Elaborator {
         self.attempt.goal_arena.rollback(mark);
         let (_, ty, _) = inferred.ok()?;
         self.carrier_of_ty(cx, &ty, span)
-    }
-
-    /// Whether the leftmost operand that would normally choose an operator's
-    /// carrier is a numeral. Such a leaf has a `Nat` *default*, not an
-    /// intrinsic carrier, so a checking position may choose a designation at
-    /// its expected result carrier before the arguments are checked there.
-    fn operator_left_leaf_is_numeral(args: &[Expr]) -> bool {
-        let Some(mut leaf) = args.first() else { return false };
-        loop {
-            let ExprKind::App { head, args, .. } = &leaf.kind else { break };
-            if !matches!(head.kind, ExprKind::OpSymbol { .. }) {
-                break;
-            }
-            let Some(first) = args.first() else { break };
-            leaf = first;
-        }
-        matches!(leaf.kind, ExprKind::Num(_))
-    }
-
-    fn expression_left_leaf_is_numeral(e: &Expr) -> bool {
-        match &e.kind {
-            ExprKind::Num(_) => true,
-            ExprKind::App { head, args, .. }
-                if matches!(head.kind, ExprKind::OpSymbol { .. }) =>
-            {
-                Self::operator_left_leaf_is_numeral(args)
-            }
-            _ => false,
-        }
     }
 
     /// The head of the carrier a **checking position** is asking for — rung

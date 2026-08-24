@@ -259,18 +259,25 @@ completed world.
 
 The first migrated slice is intentionally made of leaves: closed type forms,
 literal/universe/hole/slot inference, hole/slot checking, and the semantic
-half of expression WHNF. A unit fixture constructs this view directly, infers
-a numeral, and allocates a goal without an `Elaborator` or session. The root
-still owns the registry-sensitive `unspell_here` pre-pass before type WHNF;
-that spelling policy is not smuggled into the semantic capability.
+half of expression WHNF. The next slice moves primitive structural type
+formation—vectors, `Fin`, dependent functions, and equality. Those forms see
+only a three-operation `StructuralTypeElab` collaborator: recursive type
+lowering plus term inference and checking. Binder extension stays local to the
+mechanism, including callable skeletons and universe-bound type variables.
 
-Moving all of `elab_ty` in this stage would require name resolution, indexed
-and value-parameter lowering, operator policy, checking, and inference. That
-would turn the new view into the context bag it is meant to replace. Continue
-moving `elab_ty`, `elab_check*`, and `elab_infer*` behind `ExprElab` only as
-those inputs become narrow named queries. Split application, match lowering,
-and member/operator dispatch into collaborators only when their parameter
-lists describe real dependencies.
+Unit fixtures construct the view directly, infer a numeral, allocate a goal,
+and exercise structural type formation with a tiny fake collaborator, all
+without an `Elaborator` or session. The root still owns the registry-sensitive
+`unspell_here` pre-pass before type WHNF; that spelling policy is not smuggled
+into the semantic capability.
+
+The remaining `elab_ty` arms require name resolution, indexed and
+value-parameter lowering, operator policy, or meta-splice scope. Moving them as
+one unit would turn the new view into the context bag it is meant to replace.
+Continue moving `elab_ty`, `elab_check*`, and `elab_infer*` behind `ExprElab`
+only as those inputs become narrow named queries. Split application, match
+lowering, and member/operator dispatch into collaborators only when their
+parameter lists describe real dependencies.
 
 The desired test is architectural: pure unification and surface rewriting can
 be unit-tested without constructing an `Elaborator`; expression elaboration
@@ -294,11 +301,11 @@ would be less honest than the large file we have now.
 
 The remaining routes are not equally ready. Take them in dependency order:
 
-1. **Continue `ExprElab` in stages.** Add named read-only session queries one
-   policy at a time, then migrate structural type elaboration and the next
-   checking/inference families that fit them. Keep local context per-call and
-   declaration effects narrower than their owners; the view must never store
-   `&Elaborator` or gain commit authority.
+1. **Continue `ExprElab` in stages.** Choose the next checking/inference family
+   by capability shape, then add named read-only session queries one policy at
+   a time. Keep local context per-call and declaration effects narrower than
+   their owners; the view must never store `&Elaborator` or gain commit
+   authority.
 2. **Match elaboration.** Move convoy, motive, recursive-guard, Nat/Fin, and
    indexed/forded matching only after `ExprElab` exists. Its speculative goal
    rollback and binder-sensitive lowering make this a high-risk consumer, not

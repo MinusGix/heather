@@ -8,6 +8,40 @@ use heather_syntax::{Decl, Expr, ExprKind, LamBinder, OnTarget, Span, Stmt, Ty, 
 
 use crate::{ElabError, R, err};
 
+/// Whether the leftmost carrier-selecting leaf of an expression is a numeral.
+///
+/// A numeral has a `Nat` default rather than an intrinsic carrier. Equality
+/// and operator elaboration use this syntactic fact to let an available
+/// checking position choose the carrier before elaborating the numeral.
+pub(crate) fn expression_left_leaf_is_numeral(e: &Expr) -> bool {
+    match &e.kind {
+        ExprKind::Num(_) => true,
+        ExprKind::App { head, args, .. } if matches!(head.kind, ExprKind::OpSymbol { .. }) => {
+            operator_left_leaf_is_numeral(args)
+        }
+        _ => false,
+    }
+}
+
+fn operator_left_leaf_is_numeral(args: &[Expr]) -> bool {
+    let Some(mut leaf) = args.first() else {
+        return false;
+    };
+    loop {
+        let ExprKind::App { head, args, .. } = &leaf.kind else {
+            break;
+        };
+        if !matches!(head.kind, ExprKind::OpSymbol { .. }) {
+            break;
+        }
+        let Some(first) = args.first() else {
+            break;
+        };
+        leaf = first;
+    }
+    matches!(leaf.kind, ExprKind::Num(_))
+}
+
 // -- anonymous argument-slot sections --------------------------------------
 
 /// A resource bound, not a semantic arity limit. Indexed lowering allocates
