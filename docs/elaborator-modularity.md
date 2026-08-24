@@ -224,6 +224,15 @@ the indexed-family child route. The root bidirectional dispatcher decides
 a constructor. Construction of the actual tier-0 term remains with
 `inductive.rs`, so surface resolution and encoding do not become one owner.
 
+Dispatch now has a shared carrier vocabulary in `dispatch/carrier.rs`. A
+carrier keeps its diagnostic spelling distinct from its canonical registry
+key, and the module owns the queries for nominal carrier recovery, built-in
+carrier constants, type-former ownership, and type namespaces. Trait
+registration, member lookup, dictionary indexing, and operator designation
+therefore consume one answer instead of reconstructing carrier identity at
+each policy site. This is deliberately infrastructure, not a catch-all
+`dispatch.rs`; operator, dot, and dictionary policy remain separate moves.
+
 `ImplicitApplicationElab` names the semantic operations the mechanism cannot
 own: argument classification, inference and checking, unification harvests,
 expected-type harvests, dictionary resolution, goal promotion, and the
@@ -509,8 +518,9 @@ The remaining routes are not equally ready. Take them in dependency order:
    dictionaries, operator carriers, designations, and compatibility fallback
    are several policies, not one `dispatch.rs`. Pure argument normalization is
    now owned by `application/named.rs`, and surface constructor policy by
-   `constructor.rs`. Continue with carrier/callable queries, operator policy,
-   dot resolution, and dictionary construction.
+   `constructor.rs`. Canonical carrier queries now live in
+   `dispatch/carrier.rs`; continue with callable queries, operator policy, dot
+   resolution, and dictionary construction.
 
 Moving lambda helpers merely to reduce line count is intentionally not a
 roadmap item. Move them when their binder, skeleton, and conversion policies
