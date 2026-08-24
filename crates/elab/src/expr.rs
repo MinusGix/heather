@@ -13,9 +13,10 @@ use heather_kernel::term::{LocalVar, Term, Type};
 use heather_syntax::{Expr, ExprKind, Span, Ty, TyKind};
 
 use crate::application::{has_implicit_mark, skel_of_ty};
+use crate::code;
 use crate::goals::GoalAllocator;
 use crate::oracle::SemanticOracle;
-use crate::surface::expression_left_leaf_is_numeral;
+use crate::surface::{expression_as_type, expression_left_leaf_is_numeral};
 use crate::{Cx, ElabError, IMPLICIT_MARK_REFUSED, R, TyVar, err};
 
 /// Recursive services required by primitive structural type forms.
@@ -194,8 +195,13 @@ impl<'a> ExprElab<'a> {
         }
     }
 
-    /// Inference leaves whose result is independent of session registries.
-    pub(crate) fn infer_leaf(&self, e: &Expr) -> Option<R<(Term, Type, Level)>> {
+    /// Inference forms admitted to the staged expression view so far.
+    pub(crate) fn infer_form(
+        &self,
+        elab: &impl StructuralTypeElab,
+        cx: &Cx,
+        e: &Expr,
+    ) -> Option<R<(Term, Type, Level)>> {
         match &e.kind {
             ExprKind::ArgSlot(_) => Some(match self.slot_probe_target.get() {
                 Some(target) if target != e.span => Ok((
@@ -222,6 +228,21 @@ impl<'a> ExprElab<'a> {
                 }
                 Some(Ok((term, Type::Nat, Level::Zero)))
             }
+            // A type in term position is its kernel code at the next universe.
+            ExprKind::Eq(..) | ExprKind::TyLit(..) => Some((|| {
+                let ty = expression_as_type(e).expect("classified as type syntax");
+                let (ty, level) = elab.lower_type(cx, &ty)?;
+                match code::code_of(&ty) {
+                    Some(code) => Ok((code, Type::Ty(level.clone()), Level::succ(level))),
+                    None => err("this equation has no code", e.span),
+                }
+            })()),
+            ExprKind::VecLit(_) => Some(err(
+                "a vector literal needs an expected type (it is checking-only, like \
+                 `refl`): annotate it (`let xs: [T; 2] = [a, b];`) or use it as an \
+                 argument",
+                e.span,
+            )),
             _ => None,
         }
     }
@@ -349,7 +370,8 @@ mod tests {
             kind: ExprKind::Num(2),
             span: SPAN,
         };
-        let (term, ty, level) = expr.infer_leaf(&numeral).unwrap().unwrap();
+        let fake = StructuralFake::default();
+        let (term, ty, level) = expr.infer_form(&fake, &cx, &numeral).unwrap().unwrap();
         assert!(matches!(term, Term::Succ(_)));
         assert_eq!((ty, level), (Type::Nat, Level::Zero));
 
@@ -384,7 +406,8 @@ mod tests {
             span: SPAN,
         };
         assert!(matches!(
-            expr.infer_leaf(&slot).unwrap(),
+            expr.infer_form(&StructuralFake::default(), &Cx::empty(), &slot)
+                .unwrap(),
             Err(ElabError::ArgSlotEscape { .. })
         ));
     }
@@ -449,5 +472,17 @@ mod tests {
             expr.type_form(&fake, &cx, &named).unwrap().unwrap(),
             (Type::Nat, Level::Zero)
         );
+
+        let type_literal = Expr {
+            kind: ExprKind::TyLit(Box::new(Ty {
+                kind: TyKind::Nat,
+                span: SPAN,
+            })),
+            span: SPAN,
+        };
+        assert!(matches!(
+            expr.infer_form(&fake, &cx, &type_literal).unwrap().unwrap(),
+            (Term::TmNat, Type::Ty(Level::Zero), _)
+        ));
     }
 }

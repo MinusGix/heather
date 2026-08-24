@@ -23,6 +23,45 @@ pub(crate) fn expression_left_leaf_is_numeral(e: &Expr) -> bool {
     }
 }
 
+/// Read an expression as type syntax when its shape has that second reading.
+///
+/// This mirrors the parser's type-atom bridge: names, applied type names,
+/// universes, equations, and explicit type literals qualify. Everything else
+/// remains an expression and returns `None`.
+pub(crate) fn expression_as_type(e: &Expr) -> Option<Ty> {
+    let kind = match &e.kind {
+        ExprKind::Univ { level } => TyKind::Univ { level: *level },
+        ExprKind::Eq(a, b) => TyKind::Eq(a.clone(), b.clone()),
+        ExprKind::TyLit(ty) => return Some((**ty).clone()),
+        ExprKind::Var(name) if name == "Nat" => TyKind::Nat,
+        ExprKind::Var(name) => TyKind::Named {
+            name: name.clone(),
+            args: vec![],
+        },
+        ExprKind::App {
+            head,
+            args,
+            named,
+            explicit: false,
+            ..
+        } if matches!(&head.kind, ExprKind::Var(name) if name == "Fin")
+            && args.len() == 1
+            && named.is_empty() =>
+        {
+            TyKind::Fin(Box::new(args[0].clone()))
+        }
+        ExprKind::TyApp { head, args } => match &head.kind {
+            ExprKind::Var(name) => TyKind::Named {
+                name: name.clone(),
+                args: args.clone(),
+            },
+            _ => return None,
+        },
+        _ => return None,
+    };
+    Some(Ty { kind, span: e.span })
+}
+
 fn operator_left_leaf_is_numeral(args: &[Expr]) -> bool {
     let Some(mut leaf) = args.first() else {
         return false;

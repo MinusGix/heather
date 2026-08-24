@@ -123,8 +123,8 @@ pub(crate) use context::{Alias, Cx, DictBinder, TyVar};
 use representations::Representations;
 use slots::{Ingredient, Slot};
 use surface::{
-    expression_left_leaf_is_numeral, for_each_free_slot, has_free_slots, lower_argument_slots,
-    slot_profile, walk_expr,
+    expression_as_type, expression_left_leaf_is_numeral, for_each_free_slot, has_free_slots,
+    lower_argument_slots, slot_profile, walk_expr,
 };
 use traits::Traits;
 use types::Types;
@@ -357,7 +357,7 @@ fn motive_lam(e: &Expr, n: usize, what: &str) -> R<(Vec<String>, Ty)> {
         );
     }
     let names = binders.iter().map(|b| b.name.clone()).collect();
-    let ty = expr_as_ty(body)
+    let ty = expression_as_type(body)
         .unwrap_or_else(|| Ty { kind: TyKind::OfExpr(body.clone()), span: body.span });
     Ok((names, ty))
 }
@@ -375,38 +375,6 @@ fn err<T>(msg: impl Into<String>, span: Span) -> R<T> {
 /// name — so the two readings are deliberately the same shape: a name, an
 /// applied name, or a universe. Anything structural (`Π`, `[T; n]`) has type
 /// syntax that cannot occur in an expression position in the first place.
-fn expr_as_ty(e: &Expr) -> Option<Ty> {
-    let kind = match &e.kind {
-        ExprKind::Univ { level } => TyKind::Univ { level: *level },
-        ExprKind::Eq(a, b) => TyKind::Eq(a.clone(), b.clone()),
-        // A motive body, parsed in type syntax: it may be a *function* type,
-        // which no expression form can be (`issues/ih-generalization.md`).
-        ExprKind::TyLit(t) => return Some((**t).clone()),
-        ExprKind::Var(name) if name == "Nat" => TyKind::Nat,
-        ExprKind::Var(name) => TyKind::Named { name: name.clone(), args: vec![] },
-        // `Fin(n)`, as the parser's own `expr_as_ty` reads it — the two
-        // readings must not drift (docs/surface-fin-indexing-design.md §2.2).
-        // `named.is_empty()`: this arm reads the arity off `args` alone, so
-        // `Fin(1, n := 2)` would otherwise be read as `Fin(1)` with the name
-        // dropped (docs/named-arguments-design.md §8.2).
-        ExprKind::App { head, args, named, explicit: false, .. }
-            if matches!(&head.kind, ExprKind::Var(s) if s == "Fin")
-                && args.len() == 1
-                && named.is_empty() =>
-        {
-            TyKind::Fin(Box::new(args[0].clone()))
-        }
-        // `List<Nat>` — the one expression form that already carries type
-        // arguments (`ExprKind::TyApp`, ast.rs).
-        ExprKind::TyApp { head, args } => match &head.kind {
-            ExprKind::Var(name) => TyKind::Named { name: name.clone(), args: args.clone() },
-            _ => return None,
-        },
-        _ => return None,
-    };
-    Some(Ty { kind, span: e.span })
-}
-
 /// Replace the generic `Decide<P>` display of the parser-synthesized call in
 /// an `if` with the condition the writer actually wrote. Resolution remains
 /// the ordinary call path; this changes only the top-level diagnostic record.
@@ -2989,7 +2957,7 @@ impl Elaborator {
                 let (elaborated, level) = self.elab_ty(cx, &ty)?;
                 return self.quote_type_at(&elaborated, &level, want, span);
             }
-            if let Some(ty) = expr_as_ty(e)
+            if let Some(ty) = expression_as_type(e)
                 && let Ok((elaborated, level)) = self.elab_ty(cx, &ty)
             {
                 return self.quote_type_at(&elaborated, &level, want, span);
@@ -3112,10 +3080,13 @@ impl Elaborator {
             ExprKind::ArgSlot(_)
             | ExprKind::Univ { .. }
             | ExprKind::Hole(_)
-            | ExprKind::Num(_) => self
+            | ExprKind::Num(_)
+            | ExprKind::Eq(..)
+            | ExprKind::TyLit(..)
+            | ExprKind::VecLit(_) => self
                 .expr_elab()
-                .infer_leaf(e)
-                .expect("classified as an ExprElab inference leaf"),
+                .infer_form(self, cx, e)
+                .expect("classified as an ExprElab inference form"),
             // `{ let x = e; … result }` — the block's statements extend a
             // clone of `cx`, and its result is inferred there
             // (docs/let-and-blocks-design.md §4.4). Inference-transparent:
@@ -3124,17 +3095,6 @@ impl Elaborator {
             ExprKind::Block(b) => {
                 let cx = self.elab_stmts(cx, &b.stmts)?;
                 self.elab_infer(&cx, &b.result)
-            }
-            // `a = b` as a term: it is a *type*, so the term is its code
-            // `TmId : Ty l` (docs/surface-universe.md §13). Elaborated through
-            // the type path so the two spellings cannot diverge.
-            ExprKind::Eq(..) | ExprKind::TyLit(..) => {
-                let ty = expr_as_ty(e).expect("an equation reads as a type");
-                let (t, level) = self.elab_ty(cx, &ty)?;
-                match code::code_of(&t) {
-                    Some(code) => Ok((code, Type::Ty(level.clone()), Level::succ(level))),
-                    None => err("this equation has no code", e.span),
-                }
             }
             // Intensional analysis: the result type is written, so unlike a
             // quote this one *infers*
@@ -3301,12 +3261,6 @@ impl Elaborator {
                     })
                 }
             }
-            ExprKind::VecLit(_) => err(
-                "a vector literal needs an expected type (it is checking-only, like \
-                 `refl`): annotate it (`let xs: [T; 2] = [a, b];`) or use it as an \
-                 argument",
-                e.span,
-            ),
             // A lambda in inference position needs every binder annotated:
             // with no expected type there is nothing else to take the domain
             // from (docs/surface-function-types.md §5.2).
@@ -6668,7 +6622,7 @@ impl Elaborator {
     ///   that code, which is what `lower_named` would have built for it;
     /// - the receiver does not elaborate as a value at all, but reads as a
     ///   type by shape (`Nat`, `Bool`, `Box<Z>`), through the same
-    ///   [`expr_as_ty`] the universe round already uses.
+    ///   [`surface::expression_as_type`] the universe round already uses.
     ///
     /// A value binder therefore **shadows** the type reading — `elab_infer`
     /// succeeds at a non-universe type and this answers `None` — which is what
@@ -6679,7 +6633,7 @@ impl Elaborator {
                 let Type::Ty(level) = self.whnf(cx, &ty, span).ok()? else { return None };
                 Some((Type::El { level: level.clone(), tm: Rc::new(tm) }, level))
             }
-            Err(_) => self.elab_ty(cx, &expr_as_ty(recv)?).ok(),
+            Err(_) => self.elab_ty(cx, &expression_as_type(recv)?).ok(),
         }
     }
 

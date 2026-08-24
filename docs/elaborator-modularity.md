@@ -273,6 +273,13 @@ without an `Elaborator` or session. The root still owns the registry-sensitive
 `unspell_here` pre-pass before type WHNF; that spelling policy is not smuggled
 into the semantic capability.
 
+Inference has begun crossing the same boundary. Type syntax used as a term
+(`a = b` and explicit type literals) lowers through the existing type
+collaborator and is coded inside `ExprElab`; the context-free refusal for an
+inferred vector literal lives there too. The expression-to-type shape reader
+is now a state-free surface operation shared by this path, motives, universe
+checking, and type-subject lookup rather than a helper hidden in `lib.rs`.
+
 Only expression-as-type remains in the root `elab_ty` match. It combines
 operator rewriting, indexed-family recognition, value-parameter formation,
 term inference, and universe decoding; moving it behind one callback would
