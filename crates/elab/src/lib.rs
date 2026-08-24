@@ -853,6 +853,27 @@ impl matching::MotiveSynthesisElab for Elaborator {
     }
 }
 
+impl matching::MatchSpeculationState for Elaborator {
+    type Mark = (usize, usize);
+
+    fn mark_match_state(&self) -> Self::Mark {
+        (self.warnings.borrow().len(), self.attempt.goal_arena.mark())
+    }
+
+    fn rollback_match_state(&self, mark: Self::Mark) {
+        self.warnings.borrow_mut().truncate(mark.0);
+        self.attempt.goal_arena.rollback(mark.1);
+    }
+
+    fn motive_probe_active(&self) -> bool {
+        self.attempt.motive_speculation.get()
+    }
+
+    fn set_motive_probe_active(&self, active: bool) {
+        self.attempt.motive_speculation.set(active);
+    }
+}
+
 impl application::ExplicitArgElab for Elaborator {
     fn whnf_for_application(&self, cx: &Cx, ty: &Type, span: Span) -> R<Type> {
         self.whnf(cx, ty, span)
@@ -3676,16 +3697,19 @@ impl Elaborator {
             // Tried before the message below, and only ever *replaced* by it —
             // a synthesis that does not go through leaves no trace.
             ExprKind::Match { form, motive: None, scrut, arms, eqbind: None, generated } => {
-                if *form == MatchForm::If
-                    && let Some(r) =
-                        self.infer_if_constant_motive(cx, scrut, arms, *generated, e.span)
-                {
-                    return r;
+                if *form == MatchForm::If {
+                    match self.infer_if_constant_motive(cx, scrut, arms, *generated, e.span) {
+                        matching::MotiveInference::Accepted(result) => return Ok(result),
+                        matching::MotiveInference::Failed(error) => return Err(error),
+                        matching::MotiveInference::Declined => {}
+                    }
                 }
-                if let Some(r) =
-                    self.infer_match_constant_motive(cx, *form, scrut, arms, *generated, e.span)
+                match self
+                    .infer_match_constant_motive(cx, *form, scrut, arms, *generated, e.span)
                 {
-                    return r;
+                    matching::MotiveInference::Accepted(result) => return Ok(result),
+                    matching::MotiveInference::Failed(error) => return Err(error),
+                    matching::MotiveInference::Declined => {}
                 }
                 err(
                     format!(
@@ -3909,10 +3933,10 @@ impl Elaborator {
     /// the motive is that type, constant
     /// (`issues/match-arg-of-polymorphic-callee-needs-motive.md`).
     ///
-    /// `None` means "not this shape" and the caller reports the message that
-    /// asks for a motive — the synthesis never produces an error of its own,
-    /// so a dependent `match` that always needed a written motive still gets
-    /// told so rather than a mismatch inside an arm.
+    /// `Declined` means "not this shape" and the caller reports the message
+    /// that asks for a motive — the synthesis never produces an authoritative
+    /// error of its own, so a dependent `match` that always needed a written
+    /// motive still gets told so rather than a mismatch inside an arm.
     ///
     /// Three properties make this a synthesis rather than a guess:
     ///
@@ -3935,34 +3959,30 @@ impl Elaborator {
         arms: &[Arm],
         generated: bool,
         span: Span,
-    ) -> Option<R<(Term, Type, Level)>> {
-        if self.attempt.motive_speculation.get() {
-            return None;
-        }
-        let warned = self.warnings.borrow().len();
-        let goaled = self.attempt.goal_arena.mark();
-        let rollback = || {
-            self.warnings.borrow_mut().truncate(warned);
-            self.attempt.goal_arena.rollback(goaled);
+    ) -> matching::MotiveInference<(Term, Type, Level), ElabError> {
+        let Some(probe) = matching::MotiveProbe::begin(self) else {
+            return matching::MotiveInference::Declined;
         };
+        let speculation = matching::MatchRollback::new(self);
         // *An* arm that binds nothing, not the first one: a non-binding arm
         // whose body does not infer either (`Nil` on its own, which is the
         // very ambiguity this is trying to resolve) teaches nothing and is
         // stepped over. Each candidate is elaborated at most once, so the
         // whole search is linear in the arms.
-        self.attempt.motive_speculation.set(true);
         let named = arms
             .iter()
             .filter(|a| a.binders.is_empty())
             .find_map(|a| match self.elab_infer(cx, &a.body) {
                 Ok((_, ty, lvl)) => Some((ty, lvl)),
                 Err(_) => {
-                    rollback();
+                    speculation.rollback();
                     None
                 }
             });
-        self.attempt.motive_speculation.set(false);
-        let (ty, lvl) = named?;
+        drop(probe);
+        let Some((ty, lvl)) = named else {
+            return matching::MotiveInference::Declined;
+        };
         let attempt: R<(Term, Type, Level)> = (|| {
             let (scrut_t, scrut_ty, scrut_lvl) = self.elab_infer(cx, scrut)?;
             let t = self.elab_match(
@@ -3981,7 +4001,10 @@ impl Elaborator {
             Ok((t, ty, lvl))
         })();
         match attempt {
-            Ok(r) => Some(Ok(r)),
+            Ok(result) => {
+                speculation.commit();
+                matching::MotiveInference::Accepted(result)
+            }
             Err(_) => {
                 // No trace: warnings raised inside the attempt, and any goal it
                 // minted, are rolled back. The goals matter more than they
@@ -3990,8 +4013,7 @@ impl Elaborator {
                 // inside the branch context, so a surviving registration would
                 // meet the "re-elaborated in a different context" refusal in
                 // [`Self::new_goal`] and turn a decline into an internal error.
-                rollback();
-                None
+                matching::MotiveInference::Declined
             }
         }
     }
@@ -4009,19 +4031,25 @@ impl Elaborator {
         arms: &[Arm],
         generated: bool,
         span: Span,
-    ) -> Option<R<(Term, Type, Level)>> {
-        let ExprKind::App { head, args, named, .. } = &scrut.kind else { return None };
+    ) -> matching::MotiveInference<(Term, Type, Level), ElabError> {
+        let ExprKind::App { head, args, named, .. } = &scrut.kind else {
+            return matching::MotiveInference::Declined;
+        };
         if !args.is_empty() || !named.is_empty() {
-            return None;
+            return matching::MotiveInference::Declined;
         }
-        let ExprKind::TyApp { head, args } = &head.kind else { return None };
+        let ExprKind::TyApp { head, args } = &head.kind else {
+            return matching::MotiveInference::Declined;
+        };
         if !matches!(&head.kind, ExprKind::Var(name) if name == "decide") {
-            return None;
+            return matching::MotiveInference::Declined;
         }
-        let [condition] = args.as_slice() else { return None };
+        let [condition] = args.as_slice() else {
+            return matching::MotiveInference::Declined;
+        };
         let (p_ty, p_lvl) = match self.elab_ty(cx, condition) {
             Ok(p) => p,
-            Err(error) => return Some(Err(error)),
+            Err(error) => return matching::MotiveInference::Failed(error),
         };
         let not_p = Type::Pi {
             dom_level: p_lvl.clone(),
@@ -4030,12 +4058,7 @@ impl Elaborator {
             cod: Rc::new(Type::Empty { level: Level::Zero }),
         };
 
-        let warned = self.warnings.borrow().len();
-        let goaled = self.attempt.goal_arena.mark();
-        let rollback = || {
-            self.warnings.borrow_mut().truncate(warned);
-            self.attempt.goal_arena.rollback(goaled);
-        };
+        let speculation = matching::MatchRollback::new(self);
         let mut inferred = None;
         for (arm, (evidence_ty, evidence_lvl)) in arms.iter().zip([
             (&p_ty, &p_lvl),
@@ -4045,7 +4068,7 @@ impl Elaborator {
             let mut acx = cx.clone();
             acx.push(binder.name().to_string(), evidence_ty.clone(), evidence_lvl.clone());
             let Ok((_, branch_ty, branch_lvl)) = self.elab_infer(&acx, &arm.body) else {
-                rollback();
+                speculation.rollback();
                 continue;
             };
             // Substitute an arbitrary disposable term for the evidence. It is
@@ -4057,12 +4080,16 @@ impl Elaborator {
             );
             if branch_ty == branch_ty0.shift_local(1) {
                 inferred = Some((branch_ty0, branch_lvl));
-                rollback();
                 break;
             }
-            rollback();
+            speculation.rollback();
         }
-        let Some((ty, lvl)) = inferred else { return None };
+        let Some((ty, lvl)) = inferred else {
+            return matching::MotiveInference::Declined;
+        };
+        // Branch inference was only a type probe. The ordinary match lowering
+        // below re-elaborates it and owns any effects it raises.
+        drop(speculation);
         let attempt = (|| {
             let (scrut_t, scrut_ty, scrut_lvl) = self
                 .elab_infer(cx, scrut)
@@ -4081,7 +4108,7 @@ impl Elaborator {
             )?;
             Ok((t, ty, lvl))
         })();
-        Some(attempt)
+        matching::MotiveInference::decided(attempt)
     }
 
     fn elab_match(

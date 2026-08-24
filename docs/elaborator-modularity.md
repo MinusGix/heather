@@ -360,13 +360,24 @@ conversion are three named read-only capabilities; the module does not hold an
 motive abstraction and convoy construction without an elaboration session.
 
 This is deliberately a staged boundary rather than a new match god-object.
-The root still owns motive-less inference as a speculative transaction: it
-snapshots goals and warnings, records mismatch evidence, and decides whether a
-constant motive succeeded. It also owns route selection and recursive guards.
-The Nat, inductive, indexed, forded, and `Wf` lowerers remain with their
-existing owners. The next match slice should make that speculative transaction
-explicit; only then should the central Nat/Fin route and guard orchestration
-move.
+`matching.rs` now also owns motive-less inference's transaction vocabulary. A
+rollback scope treats warning and goal marks as one opaque capability, defaults
+to rollback on every exit, and preserves effects only through an explicit
+commit. A separate RAII probe guard prevents recursive motive discovery while
+still permitting unrelated nested matches during real lowering. Its outcome
+is no longer `Option<Result<...>>`: `Accepted`, `Declined`, and authoritative
+`Failed` state the caller's policy directly.
+
+Retained checking-mismatch evidence is deliberately outside that rollback
+mark. It is evidence for a possible later kernel rejection, not an observable
+effect of accepting a candidate; the declaration attempt remains its owner and
+clears it at its existing boundary. Unit tests make both the two-channel
+rollback and this exclusion visible without an elaboration session.
+
+The root still owns candidate discovery, route selection, and recursive
+guards. The Nat, inductive, indexed, forded, and `Wf` lowerers remain with their
+existing owners. With the transaction seam explicit, the next match slice can
+move the central Nat/Fin route and guard orchestration.
 
 Ordinary statements now have their own subsystem as well. `statements.rs`
 owns context cloning and sequencing, annotated and inferred alias creation,
@@ -412,10 +423,10 @@ The remaining routes are not equally ready. Take them in dependency order:
    their owners; the view must never store `&Elaborator` or gain commit
    authority.
 2. **Continue match elaboration.** Motive synthesis and convoy mechanics now
-   have their first boundary. Next isolate motive-less inference's goal/warning
-   rollback as one transaction, then move the central Nat/Fin routing and
-   recursive-guard orchestration. Preserve the existing inductive, indexed,
-   forded, and `Wf` route owners instead of recombining them.
+   have their first boundary, and motive-less inference now has an explicit
+   rollback transaction and outcome model. Next move the central Nat/Fin
+   routing and recursive-guard orchestration. Preserve the existing inductive,
+   indexed, forded, and `Wf` route owners instead of recombining them.
 3. **Dispatch last.** Named arguments, member lookup, class dispatch, indexed
    dictionaries, operator carriers, designations, and compatibility fallback
    are several policies, not one `dispatch.rs`. Split pure argument

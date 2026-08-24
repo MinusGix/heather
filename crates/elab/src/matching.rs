@@ -28,6 +28,96 @@ pub(crate) trait MotiveSynthesisElab {
     ) -> bool;
 }
 
+/// The declaration-local state which must disappear when a motive candidate
+/// is declined. The mark is deliberately opaque to matching: its owner decides
+/// which diagnostic and goal channels form one rollback boundary. Retained
+/// mismatch evidence is intentionally not one of them.
+pub(crate) trait MatchSpeculationState {
+    type Mark: Copy;
+
+    fn mark_match_state(&self) -> Self::Mark;
+    fn rollback_match_state(&self, mark: Self::Mark);
+    fn motive_probe_active(&self) -> bool;
+    fn set_motive_probe_active(&self, active: bool);
+}
+
+/// The outcome of trying to infer a constant match motive.
+///
+/// `Declined` means the caller should request a written motive. `Failed` means
+/// the route was recognized and its error is authoritative rather than
+/// speculative.
+pub(crate) enum MotiveInference<T, E> {
+    Declined,
+    Accepted(T),
+    Failed(E),
+}
+
+impl<T, E> MotiveInference<T, E> {
+    pub(crate) fn decided(result: Result<T, E>) -> Self {
+        match result {
+            Ok(value) => Self::Accepted(value),
+            Err(error) => Self::Failed(error),
+        }
+    }
+}
+
+/// A rollback scope for a tentative match interpretation.
+///
+/// Dropping the scope declines the interpretation and restores its state.
+/// `commit` is the only path which preserves effects raised since the mark.
+pub(crate) struct MatchRollback<'a, S: MatchSpeculationState + ?Sized> {
+    state: &'a S,
+    mark: S::Mark,
+    committed: bool,
+}
+
+impl<'a, S: MatchSpeculationState + ?Sized> MatchRollback<'a, S> {
+    pub(crate) fn new(state: &'a S) -> Self {
+        Self { state, mark: state.mark_match_state(), committed: false }
+    }
+
+    /// Restore the original mark while keeping the scope available for
+    /// another candidate.
+    pub(crate) fn rollback(&self) {
+        self.state.rollback_match_state(self.mark);
+    }
+
+    pub(crate) fn commit(mut self) {
+        self.committed = true;
+    }
+}
+
+impl<S: MatchSpeculationState + ?Sized> Drop for MatchRollback<'_, S> {
+    fn drop(&mut self) {
+        if !self.committed {
+            self.rollback();
+        }
+    }
+}
+
+/// The smaller dynamic scope in which an arm is being probed for a motive.
+/// It is separate from [`MatchRollback`] because real lowering happens after
+/// probing and may recursively contain an unrelated motive-less match.
+pub(crate) struct MotiveProbe<'a, S: MatchSpeculationState + ?Sized> {
+    state: &'a S,
+}
+
+impl<'a, S: MatchSpeculationState + ?Sized> MotiveProbe<'a, S> {
+    pub(crate) fn begin(state: &'a S) -> Option<Self> {
+        if state.motive_probe_active() {
+            return None;
+        }
+        state.set_motive_probe_active(true);
+        Some(Self { state })
+    }
+}
+
+impl<S: MatchSpeculationState + ?Sized> Drop for MotiveProbe<'_, S> {
+    fn drop(&mut self) {
+        self.state.set_motive_probe_active(false);
+    }
+}
+
 /// The mechanically convoyed motive and arms, ready for ordinary lowering.
 pub(crate) struct ConvoyPlan {
     pub(crate) motive: Type,
@@ -345,6 +435,8 @@ fn field_rewrap(scrutinee: &Term) -> Option<(Term, Term)> {
 
 #[cfg(test)]
 mod tests {
+    use std::cell::Cell;
+
     use super::*;
 
     const SPAN: Span = Span { start: 0, end: 1 };
@@ -370,6 +462,71 @@ mod tests {
         ) -> bool {
             candidate == scrutinee
         }
+    }
+
+    #[derive(Default)]
+    struct FakeSpeculation {
+        warnings: Cell<usize>,
+        goals: Cell<usize>,
+        mismatch_evidence: Cell<usize>,
+        probing: Cell<bool>,
+    }
+
+    impl MatchSpeculationState for FakeSpeculation {
+        type Mark = (usize, usize);
+
+        fn mark_match_state(&self) -> Self::Mark {
+            (self.warnings.get(), self.goals.get())
+        }
+
+        fn rollback_match_state(&self, mark: Self::Mark) {
+            self.warnings.set(mark.0);
+            self.goals.set(mark.1);
+        }
+
+        fn motive_probe_active(&self) -> bool {
+            self.probing.get()
+        }
+
+        fn set_motive_probe_active(&self, active: bool) {
+            self.probing.set(active);
+        }
+    }
+
+    #[test]
+    fn match_rollback_discards_or_commits_all_owned_channels() {
+        let state = FakeSpeculation::default();
+        state.warnings.set(2);
+        state.goals.set(3);
+        {
+            let attempt = MatchRollback::new(&state);
+            state.warnings.set(5);
+            state.goals.set(8);
+            state.mismatch_evidence.set(1);
+            attempt.rollback();
+            assert_eq!((state.warnings.get(), state.goals.get()), (2, 3));
+            assert_eq!(state.mismatch_evidence.get(), 1);
+            state.warnings.set(7);
+            state.goals.set(11);
+        }
+        assert_eq!((state.warnings.get(), state.goals.get()), (2, 3));
+        assert_eq!(state.mismatch_evidence.get(), 1);
+
+        let attempt = MatchRollback::new(&state);
+        state.warnings.set(13);
+        state.goals.set(17);
+        attempt.commit();
+        assert_eq!((state.warnings.get(), state.goals.get()), (13, 17));
+    }
+
+    #[test]
+    fn motive_probe_refuses_nesting_and_always_reopens_its_scope() {
+        let state = FakeSpeculation::default();
+        let probe = MotiveProbe::begin(&state).expect("outer probe");
+        assert!(MotiveProbe::begin(&state).is_none());
+        drop(probe);
+        assert!(!state.probing.get());
+        assert!(MotiveProbe::begin(&state).is_some());
     }
 
     #[test]
