@@ -280,6 +280,14 @@ inferred vector literal lives there too. The expression-to-type shape reader
 is now a state-free surface operation shared by this path, motives, universe
 checking, and type-subject lookup rather than a helper hidden in `lib.rs`.
 
+Equality-specific checking has crossed as well. `refl` and auto-refl receive
+two semantic decisions by name: registry-aware reading of the expected type,
+and conversion in the real goal-statement world. Auto-refl allocates its
+fallback through the existing goal-only capability. Root orchestration keeps
+the `refl` shadowing decision, so the view owns equality construction without
+gaining name resolution. The obsolete general `new_goal` forwarding method is
+gone; only keyed implicit promotion still reaches the arena from the root.
+
 Only expression-as-type remains in the root `elab_ty` match. It combines
 operator rewriting, indexed-family recognition, value-parameter formation,
 term inference, and universe decoding; moving it behind one callback would

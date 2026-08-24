@@ -42,6 +42,22 @@ pub(crate) trait StructuralTypeElab {
     ) -> R<Term>;
 }
 
+/// Semantic decisions required by equality-specific checking forms.
+pub(crate) trait EqualityCheckingElab {
+    /// Read an expected type through any registry-aware structural spelling.
+    fn read_expected_type(&self, cx: &Cx, expected: &Type, span: Span) -> R<Type>;
+
+    /// Conversion in the real goal-statement world.
+    fn goal_endpoints_convert(
+        &self,
+        cx: &Cx,
+        lhs: &Term,
+        rhs: &Term,
+        ty: &Type,
+        level: &Level,
+    ) -> bool;
+}
+
 /// The expression-layer capabilities migrated so far.
 ///
 /// Local Γ is supplied per operation rather than stored: recursive descent
@@ -247,9 +263,12 @@ impl<'a> ExprElab<'a> {
         }
     }
 
-    /// Checking leaves whose only declaration effect is goal allocation.
-    pub(crate) fn check_leaf(
+    /// Checking forms admitted to the staged expression view so far.
+    ///
+    /// Name-shadowing policy is settled before calling this method.
+    pub(crate) fn check_form(
         &self,
+        elab: &impl EqualityCheckingElab,
         cx: &Cx,
         e: &Expr,
         expected: &Type,
@@ -271,6 +290,28 @@ impl<'a> ExprElab<'a> {
                 level.clone(),
                 e.span,
             )),
+            ExprKind::Refl => Some((|| {
+                let head = elab.read_expected_type(cx, expected, e.span)?;
+                let Type::Id { level, ty, lhs, .. } = head else {
+                    return err("`refl` needs an `=` expected type", e.span);
+                };
+                Ok(Term::Refl { level, ty, tm: lhs })
+            })()),
+            ExprKind::AutoRefl => Some({
+                if let Ok(Type::Id {
+                    level,
+                    ty,
+                    lhs,
+                    rhs,
+                }) = elab.read_expected_type(cx, expected, e.span)
+                    && elab.goal_endpoints_convert(cx, &lhs, &rhs, &ty, &level)
+                {
+                    Ok(Term::Refl { level, ty, tm: lhs })
+                } else {
+                    self.goals
+                        .written_hole(cx, None, hint, expected.clone(), level.clone(), e.span)
+                }
+            }),
             _ => None,
         }
     }
@@ -346,6 +387,23 @@ mod tests {
         }
     }
 
+    impl EqualityCheckingElab for StructuralFake {
+        fn read_expected_type(&self, _cx: &Cx, expected: &Type, _span: Span) -> R<Type> {
+            Ok(expected.clone())
+        }
+
+        fn goal_endpoints_convert(
+            &self,
+            _cx: &Cx,
+            lhs: &Term,
+            rhs: &Term,
+            _ty: &Type,
+            _level: &Level,
+        ) -> bool {
+            lhs == rhs
+        }
+    }
+
     fn view<'a>(goals: &'a GoalArena, slot_probe: &'a Cell<Option<Span>>) -> ExprElab<'a> {
         ExprElab::new(
             SemanticOracle::in_world(GlobalCtx::default(), 32),
@@ -380,7 +438,7 @@ mod tests {
             span: SPAN,
         };
         let term = expr
-            .check_leaf(&cx, &hole, &Type::Nat, &Level::Zero, None)
+            .check_form(&fake, &cx, &hole, &Type::Nat, &Level::Zero, None)
             .unwrap()
             .unwrap();
         assert!(matches!(
@@ -483,6 +541,49 @@ mod tests {
         assert!(matches!(
             expr.infer_form(&fake, &cx, &type_literal).unwrap().unwrap(),
             (Term::TmNat, Type::Ty(Level::Zero), _)
+        ));
+    }
+
+    #[test]
+    fn equality_checking_names_its_two_semantic_capabilities() {
+        let mut goals = GoalArena::default();
+        goals.configure(1, 0);
+        let slot_probe = Cell::new(None);
+        let expr = view(&goals, &slot_probe);
+        let fake = StructuralFake::default();
+        let cx = Cx::empty();
+        let identity = Type::Id {
+            level: Level::Zero,
+            ty: Rc::new(Type::Nat),
+            lhs: Rc::new(Term::Zero),
+            rhs: Rc::new(Term::Zero),
+        };
+        let refl = Expr {
+            kind: ExprKind::Refl,
+            span: SPAN,
+        };
+        assert!(matches!(
+            expr.check_form(&fake, &cx, &refl, &identity, &Level::Zero, None)
+                .unwrap()
+                .unwrap(),
+            Term::Refl { .. }
+        ));
+
+        let unequal = Type::Id {
+            level: Level::Zero,
+            ty: Rc::new(Type::Nat),
+            lhs: Rc::new(Term::Zero),
+            rhs: Rc::new(Term::Succ(Rc::new(Term::Zero))),
+        };
+        let auto = Expr {
+            kind: ExprKind::AutoRefl,
+            span: SPAN,
+        };
+        assert!(matches!(
+            expr.check_form(&fake, &cx, &auto, &unequal, &Level::Zero, None)
+                .unwrap()
+                .unwrap(),
+            Term::GlobalTm { .. }
         ));
     }
 }

@@ -665,6 +665,25 @@ impl expr::StructuralTypeElab for Elaborator {
     }
 }
 
+impl expr::EqualityCheckingElab for Elaborator {
+    fn read_expected_type(&self, cx: &Cx, expected: &Type, span: Span) -> R<Type> {
+        self.whnf(cx, expected, span)
+    }
+
+    fn goal_endpoints_convert(
+        &self,
+        cx: &Cx,
+        lhs: &Term,
+        rhs: &Term,
+        ty: &Type,
+        level: &Level,
+    ) -> bool {
+        self.goal_oracle()
+            .convert_term(&cx.gamma, Layer::Prog, lhs, rhs, ty, level)
+            .is_ok()
+    }
+}
+
 impl application::ExplicitArgElab for Elaborator {
     fn whnf_for_application(&self, cx: &Cx, ty: &Type, span: Span) -> R<Type> {
         self.whnf(cx, ty, span)
@@ -1987,23 +2006,9 @@ impl Elaborator {
 
     // -- goals --------------------------------------------------------------
 
-    /// Raise a goal for a hole, returning its occurrence `u^{id_Γ}`.
-    fn new_goal(
-        &self,
-        cx: &Cx,
-        name: Option<&str>,
-        hint: Option<(&str, &str)>,
-        ty: Type,
-        level: Level,
-        span: Span,
-    ) -> R<Term> {
-        self.new_goal_key(cx, name, hint, ty, level, span, None, None)
-    }
-
-    /// [`Self::new_goal`] with a stable discriminator for goals synthesized
-    /// at one shared source span. Written holes need no discriminator because
-    /// their own spans are unique; several promoted implicit parameters of
-    /// one `apply` deliberately point at the same apply span.
+    /// Raise a goal with a stable discriminator for several synthesized goals
+    /// at one shared source span. Written holes use [`goals::GoalAllocator`];
+    /// promoted implicit parameters additionally need this key and index.
     fn new_goal_key(
         &self,
         cx: &Cx,
@@ -2502,10 +2507,6 @@ impl Elaborator {
             );
         }
         match &e.kind {
-            ExprKind::ArgSlot(_) | ExprKind::Hole(_) => self
-                .expr_elab()
-                .check_leaf(cx, e, expected, lvl, hint)
-                .expect("classified as an ExprElab checking leaf"),
             // **Rule 2** (docs/let-and-blocks-design.md §5.2): `refl` is a
             // *nullary* special form, so its node carries no name to
             // re-derive and the parser cannot buy the name back with a
@@ -2526,37 +2527,13 @@ impl Elaborator {
                 skel,
                 capture_slots,
             ),
-            ExprKind::Refl => {
-                let head = self.whnf(cx, expected, e.span)?;
-                let Type::Id { level, ty, lhs, .. } = head else {
-                    return err("`refl` needs an `=` expected type", e.span);
-                };
-                Ok(Term::Refl { level, ty, tm: lhs })
-            }
-            // `{}` — one speculative `refl`, kept iff the kernel accepts it
-            // (issues/auto-refl-empty-block.md). The conversion is run *here*
-            // rather than left to the declaration's final `check_term`,
-            // because a guess that fails there would surface as a kernel error
-            // about a term nobody wrote. A guess that fails here is an open
-            // goal instead — the same object a `?` raises, so it is listed
-            // with its statement and context and an `on` can still discharge
-            // it.
-            ExprKind::AutoRefl => {
-                if let Ok(Type::Id { level, ty, lhs, rhs }) = self.whnf(cx, expected, e.span)
-                    && self.goal_oracle().convert_term(
-                        &cx.gamma,
-                        Layer::Prog,
-                        &lhs,
-                        &rhs,
-                        &ty,
-                        &level,
-                    )
-                    .is_ok()
-                {
-                    return Ok(Term::Refl { level, ty, tm: lhs });
-                }
-                self.new_goal(cx, None, hint, expected.clone(), lvl.clone(), e.span)
-            }
+            ExprKind::ArgSlot(_)
+            | ExprKind::Hole(_)
+            | ExprKind::Refl
+            | ExprKind::AutoRefl => self
+                .expr_elab()
+                .check_form(self, cx, e, expected, lvl, hint)
+                .expect("classified as an ExprElab checking form"),
             // `{ let x = e; … result }` — **checking**-transparent, which is
             // the property that makes the form useful: a block in a `match`
             // arm under a dependent motive is checked at the arm's type rather
