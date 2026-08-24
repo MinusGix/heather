@@ -374,10 +374,30 @@ effect of accepting a candidate; the declaration attempt remains its owner and
 clears it at its existing boundary. Unit tests make both the two-channel
 rollback and this exclusion visible without an elaboration session.
 
-The root still owns candidate discovery, route selection, and recursive
-guards. The Nat, inductive, indexed, forded, and `Wf` lowerers remain with their
-existing owners. With the transaction seam explicit, the next match slice can
-move the central Nat/Fin route and guard orchestration.
+At that stage the root still owned candidate discovery, route selection, and
+recursive guards. The Nat, inductive, indexed, forded, and `Wf` lowerers
+remained with their existing owners. With the transaction seam explicit, the
+central Nat/Fin route and its guard orchestration became the next movable
+slice.
+
+That built-in route slice has now moved to `matching/routes.rs`. It owns the
+post-pattern-preparation dispatch order, `Fin`'s folded-type recognition and
+sum lowering, and the complete `Nat` route: arm validation, ordinary guarded
+recursion, course-of-values sizing, nested convoy construction, tuple
+construction/projection, and the final `elim_Nat`. Declared, indexed, forded,
+and `Wf` branches are still calls to their existing route owners rather than
+being absorbed into a central lowering module.
+
+The ownership split follows consumption rather than proximity. Nat's convoy
+and course-of-values tuple representation are private to the built-in route.
+`Guard`, `GuardKind`, self-reference data, and `descends_on_param` remain in the
+shared recursion core because inductive, indexed, forded, and `Wf` lowering all
+construct or inspect them. One tuple projection is deliberately re-exported
+to guarded self-call lowering; that named edge is the only course-of-values
+representation detail left crossing back into the root. Converting the
+currently included `recursion.rs` into a normal module is now a plausible next
+slice, but should preserve those cross-route users rather than pretending the
+guard is a Nat detail.
 
 Ordinary statements now have their own subsystem as well. `statements.rs`
 owns context cloning and sequencing, annotated and inferred alias creation,
@@ -424,9 +444,11 @@ The remaining routes are not equally ready. Take them in dependency order:
    authority.
 2. **Continue match elaboration.** Motive synthesis and convoy mechanics now
    have their first boundary, and motive-less inference now has an explicit
-   rollback transaction and outcome model. Next move the central Nat/Fin
-   routing and recursive-guard orchestration. Preserve the existing inductive,
-   indexed, forded, and `Wf` route owners instead of recombining them.
+   rollback transaction and outcome model. Built-in Nat/Fin routing and Nat's
+   guard orchestration now live in `matching/routes.rs`. Next either make the
+   shared recursion core a normal module or move the remaining constant-motive
+   candidate discovery; preserve the existing inductive, indexed, forded, and
+   `Wf` route owners instead of recombining them.
 3. **Dispatch last.** Named arguments, member lookup, class dispatch, indexed
    dictionaries, operator carriers, designations, and compatibility fallback
    are several policies, not one `dispatch.rs`. Split pure argument

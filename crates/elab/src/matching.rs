@@ -14,6 +14,9 @@ use heather_syntax::{Arm, Expr, ExprKind, LamBinder, Span, Ty, TyKind};
 use crate::diagnostics::STUCK_CANDIDATES;
 use crate::{Cx, R, err};
 
+mod routes;
+pub(crate) use routes::cov_proj;
+
 /// Semantic reads required by the motive-synthesis ladder.
 pub(crate) trait MotiveSynthesisElab {
     fn read_motive_type(&self, cx: &Cx, ty: &Type, span: Span) -> Option<Type>;

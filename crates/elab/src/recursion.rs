@@ -17,68 +17,6 @@ struct SelfRef {
     n_tyvars: usize,
 }
 
-/// The enclosing recursion's window of past values, as a nested `match` on the
-/// chain's end needs it — see [`Elaborator::chain_convoy`], which builds one,
-/// and `docs/course-of-values-recursion-design.md` §5 for why passing it
-/// through the `match` is what makes the deeper values usable.
-struct Convoy {
-    dec: usize,
-    preds: Vec<usize>,
-    /// How many values are carried.
-    d: usize,
-    lvl: Level,
-    /// The recursion's motive reindexed into the context the nested `match`
-    /// sits in, scoped in (that context, z).
-    motive: Type,
-    /// …and as it was written, for the guards this `match` hands to its arms:
-    /// they must be able to reindex it again, deeper in.
-    outer_motive: Rc<Type>,
-    gamma: LocalCtx,
-    /// The window itself, at the nested `match`'s context.
-    tuple: Term,
-    /// How far the window's **anchor** sits above this `match`'s scrutinee.
-    ///
-    /// The window always holds the values at the chain read from its head:
-    /// component `i` is the value at `preds[i]`, so it is anchored at
-    /// `preds[0]` however deep the nesting has gone. The first nested `match`
-    /// scrutinizes that head and lifts by nothing; the second scrutinizes the
-    /// value one below it, so its window is the same window at `Succ` of its
-    /// own scrutinee — and so on down. Re-indexing at the scrutinee instead
-    /// would slide every component by one and typecheck nowhere.
-    lift: usize,
-}
-
-impl Convoy {
-    /// `Succ^lift(t)` — where the window's head sits, seen from a term at this
-    /// `match`'s scrutinee.
-    fn anchor(&self, t: Term) -> Term {
-        (0..self.lift).fold(t, |t, _| Term::Succ(Rc::new(t)))
-    }
-
-    /// The guard for one arm: the window is now the arm's own binder, and
-    /// `new_pred` is the predecessor that arm binds — `None` for the `Zero`
-    /// arm, which extends the chain by nothing.
-    fn guard_at(&self, comps: &[Type], depth: usize, new_pred: Option<usize>) -> Rc<Guard> {
-        let mut preds = self.preds.clone();
-        preds.extend(new_pred);
-        Rc::new(Guard {
-            dec: self.dec,
-            kind: GuardKind::Nat {
-                preds,
-                // Shifted past the convoy binder itself, which every caller
-                // pushes immediately before asking for this.
-                comps: comps.iter().map(|c| c.shift_local(1)).collect(),
-                tuple: Term::Var(LocalVar(0)),
-                mlvl: self.lvl.clone(),
-                depth,
-                motive: Rc::clone(&self.outer_motive),
-                gamma: self.gamma.clone(),
-            },
-            rebind: None,
-        })
-    }
-}
-
 /// What a guarded self-call must look like inside a `match` arm, and what it
 /// lowers to (issues/match-recursion.md).
 struct Guard {
