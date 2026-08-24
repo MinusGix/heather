@@ -2743,7 +2743,9 @@ impl Elaborator {
             ExprKind::App { .. } if self.ctor_spine_expected(cx, e, expected).is_some() => {
                 let (ind, i, args, named) =
                     self.ctor_spine_expected(cx, e, expected).expect("just checked");
-                let permuted = self.resolve_named_ctor(&ind, i, &args, &named, e.span)?;
+                let permuted = application::resolve_constructor_arguments(
+                    &ind, i, &args, &named, e.span,
+                )?;
                 let args = permuted.unwrap_or(args);
                 self.build_ctor_value(cx, &ind, i, &args, expected, lvl, e.span)
             }
@@ -3253,7 +3255,9 @@ impl Elaborator {
                 if let ExprKind::Var(cn) = &callee.kind
                     && let Some((ind, ci)) = self.ctor_here(cx, cn)
                 {
-                    let permuted = self.resolve_named_ctor(&ind, ci, args, named, e.span)?;
+                    let permuted = application::resolve_constructor_arguments(
+                        &ind, ci, args, named, e.span,
+                    )?;
                     let args = permuted.as_deref().unwrap_or(args);
                     if let Some(r) = self.ctor_at(cx, callee, tyargs, args, e.span) {
                         return r;
@@ -3270,7 +3274,7 @@ impl Elaborator {
                     && cx.selfref.as_ref().is_some_and(|s| s.name == *n)
                 {
                     recursion::check_self_tyargs(cx, tyargs, head.span)?;
-                    self.refuse_named(
+                    application::refuse_named(
                         &format!("a recursive call to `{n}`"),
                         "the termination guard reads *which position* decreases, so a                          self-call's arguments stay where the declaration put them",
                         named,
@@ -3287,8 +3291,9 @@ impl Elaborator {
                     flat = vec![false; mask.len()];
                     &flat[..]
                 };
-                let r =
-                    self.resolve_named(&name, false, &params, tyargs.len(), full, args, named, e.span)?;
+                let r = application::resolve_named(
+                    &name, false, &params, tyargs.len(), full, args, named, e.span,
+                )?;
                 let (args, mask): (&[Expr], &[bool]) = match &r {
                     Some((a, m)) => (&a[..], &m[..]),
                     None => (&args[..], &mask[..]),
@@ -3334,14 +3339,16 @@ impl Elaborator {
             // the whole spine does (docs/constructor-function-values.md §3).
             ExprKind::App { .. } if e.as_named().is_none() && self.ctor_spine(cx, e).is_some() => {
                 let (ind, i, args, named) = self.ctor_spine(cx, e).expect("just checked");
-                let permuted = self.resolve_named_ctor(&ind, i, &args, &named, e.span)?;
+                let permuted = application::resolve_constructor_arguments(
+                    &ind, i, &args, &named, e.span,
+                )?;
                 let args = permuted.unwrap_or(args);
                 self.infer_ctor(cx, &ind, i, &args, e.span)
             }
             // An application whose head is *not* a name: no parameter
             // metadata exists for it, so it is always explicit.
             ExprKind::App { head, args, named, explicit, .. } if e.as_named().is_none() => {
-                self.refuse_named(
+                application::refuse_named(
                     "a call whose head is an expression",
                     "named arguments need a callee whose parameters have names, and only a                      *name* has a parameter table here (docs/named-arguments-design.md §7)",
                     named,
@@ -3533,7 +3540,9 @@ impl Elaborator {
                     );
                 }
                 if let Some((ind, i)) = self.ctor_here(cx, name) {
-                    let permuted = self.resolve_named_ctor(&ind, i, args, named, e.span)?;
+                    let permuted = application::resolve_constructor_arguments(
+                        &ind, i, args, named, e.span,
+                    )?;
                     let args = permuted.as_deref().unwrap_or(args);
                     return self.infer_ctor(cx, &ind, i, args, e.span);
                 }
@@ -3563,8 +3572,9 @@ impl Elaborator {
                         .filter(|s| !*explicit && s.params.iter().any(|b| b.implicit));
                     let Some(skel) = implicit else {
                         let flat = vec![false; params.len()];
-                        let r =
-                            self.resolve_named(name, true, &params, 0, &flat, args, named, e.span)?;
+                        let r = application::resolve_named(
+                            name, true, &params, 0, &flat, args, named, e.span,
+                        )?;
                         let args: &[Expr] = r.as_ref().map_or(&args[..], |(a, _)| &a[..]);
                         return application::apply_explicit(
                             self,
@@ -3579,7 +3589,9 @@ impl Elaborator {
                         );
                     };
                     let mask: Vec<bool> = skel.params.iter().map(|b| b.implicit).collect();
-                    let r = self.resolve_named(name, true, &params, 0, &mask, args, named, e.span)?;
+                    let r = application::resolve_named(
+                        name, true, &params, 0, &mask, args, named, e.span,
+                    )?;
                     let (args, mask): (&[Expr], &[bool]) = match &r {
                         Some((a, m)) => (&a[..], &m[..]),
                         None => (&args[..], &mask[..]),
@@ -3611,7 +3623,9 @@ impl Elaborator {
                 // The named arguments are permuted into declaration order and
                 // the mask is adjusted here, once, so both walkers below see
                 // the positional call they have always seen (§8.3).
-                let r = self.resolve_named(name, false, &params, 0, &mask, args, named, e.span)?;
+                let r = application::resolve_named(
+                    name, false, &params, 0, &mask, args, named, e.span,
+                )?;
                 let (args, mask): (&[Expr], &[bool]) = match &r {
                     Some((a, m)) => (&a[..], &m[..]),
                     None => (&args[..], &mask[..]),
@@ -5542,234 +5556,6 @@ impl Elaborator {
         }
     }
 
-    /// Named arguments at a **callable** head (docs/named-arguments-design.md
-    /// §8.3): permute the written `x := e` arguments into declaration order
-    /// and hand the result to the ordinary spine walkers, which never learn
-    /// that any name was written.
-    ///
-    /// Returns the argument vector for the parameters this call fills and the
-    /// **adjusted mask** — a named implicit's or solver parameter's `true`
-    /// flips to `false`, so its slot consumes the written argument instead of
-    /// minting a meta or a resolution obligation. That flip is the whole of
-    /// the elaboration change: the flipped slot then travels
-    /// `apply_implicit`'s ordinary explicit-argument path, which already
-    /// zonks the domain against the solutions learned so far, defers a
-    /// checking-only argument at a metaful domain, and drives `unify_arg_ty`
-    /// otherwise.
-    ///
-    /// `None` — and *nothing cloned* — when no named argument was written,
-    /// which is this round's invariant: a call with no named argument reaches
-    /// the walkers with exactly the vector and mask it did before.
-    #[allow(clippy::too_many_arguments)]
-    fn resolve_named(
-        &self,
-        callee: &str,
-        value_head: bool,
-        params: &[ParamMeta],
-        param_offset: usize,
-        mask: &[bool],
-        args: &[Expr],
-        named: &[NamedArg],
-        span: Span,
-    ) -> R<Option<(Vec<Expr>, Vec<bool>)>> {
-        if named.is_empty() {
-            return Ok(None);
-        }
-        let n = mask.len();
-        let mut slots: Vec<Option<Expr>> = vec![None; n];
-        let mut written: Vec<Option<Span>> = vec![None; n];
-        let mut newmask = mask.to_vec();
-        // The positional prefix fills the explicit parameters in declaration
-        // order, exactly as it does today.
-        let mut rest = args.iter();
-        for mi in 0..n {
-            if mask[mi] {
-                continue;
-            }
-            let Some(a) = rest.next() else { break };
-            slots[mi] = Some(a.clone());
-            written[mi] = Some(a.span);
-        }
-        // Over-application spills onto the call's *result*, whose `Type::Pi`
-        // has no names at all (§4.3), so the two do not compose. Checked
-        // *after* the names below, so that a callee with no parameter table at
-        // all — where "more than it has parameters" is vacuously true — still
-        // gets §7's message about names rather than one about arity.
-        let over_applied = rest.next().is_some();
-        for na in named {
-            let Some(pi) = params.iter().position(|p| p.name == na.name) else {
-                return Err(self.no_such_param(callee, value_head, params, param_offset, mask, na));
-            };
-            let p = &params[pi];
-            if p.is_type {
-                return err(
-                    format!(
-                        "`{}` is a type parameter of `{callee}`, and a type argument is a \
-                         *type* rather than an expression — write `{callee}<…>` \
-                         (docs/named-arguments-design.md §5.3)",
-                        na.name
-                    ),
-                    na.name_span,
-                );
-            }
-            if pi < param_offset {
-                return err(
-                    format!(
-                        "`{}` is already given by `{callee}<…>`: the written type arguments \
-                         fill the leading parameters",
-                        na.name
-                    ),
-                    na.name_span,
-                );
-            }
-            let mi = pi - param_offset;
-            if mi >= n {
-                return err(
-                    format!("`{}` is not a parameter this call fills", na.name),
-                    na.name_span,
-                );
-            }
-            if written[mi].is_some() {
-                let msg = if p.is_self {
-                    format!(
-                        "`{}` is `{callee}`'s receiver parameter, so a method call `e.{callee}(…)` \
-                         already fills it — `{} := …` fills it a second time. Give it by name \
-                         only in the plain-call spelling `{callee}(…)`",
-                        na.name, na.name
-                    )
-                } else {
-                    format!(
-                        "`{}` is given twice: once already, and again as `{} := …`",
-                        na.name, na.name
-                    )
-                };
-                return err(msg, na.name_span);
-            }
-            slots[mi] = Some(na.expr.clone());
-            written[mi] = Some(na.name_span);
-            // The third state of the mask: given by name, so the slot is
-            // filled by the written argument rather than inferred or searched.
-            newmask[mi] = false;
-        }
-        if over_applied {
-            return err(
-                format!(
-                    "`{callee}` is applied to more arguments than it has parameters, and a \
-                     named argument cannot name one past the end: the extra arguments apply \
-                     to the *result* of the call, whose type binds no parameter names"
-                ),
-                named[0].span,
-            );
-        }
-        // No gaps (§4.3): an explicit parameter the named arguments jumped
-        // over has nothing to put in its spine position.
-        let mut out = Vec::with_capacity(n);
-        for (mi, slot) in slots.into_iter().enumerate() {
-            match slot {
-                Some(e) => out.push(e),
-                None if newmask[mi] => {}
-                None => {
-                    let what = params
-                        .get(mi + param_offset)
-                        .map_or_else(|| format!("parameter {}", mi + 1), |p| format!("`{}`", p.name));
-                    return err(
-                        format!(
-                            "`{callee}` is applied to too few arguments: {what} has none. A call \
-                             that names an argument has to fill every parameter before it — \
-                             partial application and named arguments do not compose"
-                        ),
-                        span,
-                    );
-                }
-            }
-        }
-        Ok(Some((out, newmask)))
-    }
-
-    /// The refusal for a named argument whose name no parameter has
-    /// (docs/named-arguments-design.md §7): two messages, because a callee
-    /// with no parameter *names* is a different situation from a typo.
-    fn no_such_param(
-        &self,
-        callee: &str,
-        value_head: bool,
-        params: &[ParamMeta],
-        param_offset: usize,
-        mask: &[bool],
-        na: &NamedArg,
-    ) -> ElabError {
-        // `#i` is what `skel_params` gives a binder that was never named. It
-        // is unspellable — no identifier starts with `#` — so it can never be
-        // *matched* by accident; this message is the only way to reach one.
-        let nameable: Vec<&str> = params
-            .iter()
-            .skip(param_offset)
-            .take(mask.len())
-            .filter(|p| !p.is_type && !p.name.starts_with('#'))
-            .map(|p| p.name.as_str())
-            .collect();
-        let msg = if nameable.is_empty() && value_head {
-            format!(
-                "`{callee}` is a value whose type binds no parameter names, so its arguments \
-                 are positional (issues/implicit-binders-in-function-types.md). Write the \
-                 argument positionally, or annotate the binder — `(x: T) -> …`"
-            )
-        } else if nameable.is_empty() {
-            format!(
-                "`{callee}` has no named parameters to fill: write the arguments positionally"
-            )
-        } else {
-            format!(
-                "`{callee}` has no parameter named `{}` (it has: {})",
-                na.name,
-                nameable.join(", ")
-            )
-        };
-        ElabError::Elab { msg, span: na.name_span }
-    }
-
-    /// The refusal for a named argument at a head that has no parameter table
-    /// at all — a builtin arm, an expression in head position, a self-call
-    /// (docs/named-arguments-design.md §8.2). Called *centrally*, so a form
-    /// that never learned about names cannot silently drop one.
-    fn refuse_named(&self, what: &str, why: &str, named: &[NamedArg]) -> R<()> {
-        match named.first() {
-            None => Ok(()),
-            Some(na) => err(
-                format!("{what} takes positional arguments only: {why}"),
-                na.name_span,
-            ),
-        }
-    }
-
-    /// Named arguments at a **constructor** (docs/named-arguments-design.md
-    /// §6): permute by field name into field order. Shares
-    /// [`Self::permute_by_name`] with the record literal, so
-    /// `Monoid(unit := 0)` and `Monoid { unit: 0 }` cannot drift into
-    /// disagreeing about what is unknown, duplicated or missing.
-    ///
-    /// `None`, cloning nothing, when no name was written — which is what
-    /// leaves a partially applied constructor (`Cons(1)`, η-expanded against
-    /// an expected Π) on exactly the path it was on before. Naming an
-    /// argument *does* require saturating, for §4.3's reason.
-    fn resolve_named_ctor(
-        &self,
-        ind: &Inductive,
-        i: usize,
-        args: &[Expr],
-        named: &[NamedArg],
-        span: Span,
-    ) -> R<Option<Vec<Expr>>> {
-        if named.is_empty() {
-            return Ok(None);
-        }
-        let cname = ind.ctors[i].name.clone();
-        let decl: Vec<&str> =
-            ind.ctors[i].fields.iter().map(|(n, _)| n.as_deref().unwrap_or("_")).collect();
-        let written: Vec<(&str, &Expr, Span)> =
-            named.iter().map(|na| (na.name.as_str(), &na.expr, na.name_span)).collect();
-        self.permute_by_name(&cname, "field", &decl, args, &written, span).map(Some)
-    }
 
     /// A record literal (§6): permute the written fields into declaration
     /// order and hand the result to the ordinary tier-0 constructor path.
@@ -5798,72 +5584,9 @@ impl Elaborator {
             ind.ctors[0].fields.iter().map(|(n, _)| n.as_deref().unwrap_or("_")).collect();
         let written: Vec<(&str, &Expr, Span)> =
             fields.iter().map(|f| (f.name.as_str(), &f.expr, f.span)).collect();
-        self.permute_by_name(name, "field", &decl, &[], &written, span)
+        application::permute_by_name(name, "field", &decl, &[], &written, span)
     }
 
-    /// Permute a by-name argument list into declaration order: the one
-    /// function behind the record literal `D { f: e }` (§6 of
-    /// docs/surface-records.md) and the named-argument constructor call
-    /// `C(f := e)` (§6 of docs/named-arguments-design.md).
-    ///
-    /// One function rather than two, because these two spellings say the same
-    /// thing and their diagnostics must not be able to disagree about what is
-    /// unknown, what is duplicated and what is missing.
-    ///
-    /// `positional` is the prefix given without names (always empty for a
-    /// literal); `written` is `(name, value, span-of-the-name)`.
-    fn permute_by_name(
-        &self,
-        owner: &str,
-        noun: &str,
-        decl: &[&str],
-        positional: &[Expr],
-        written: &[(&str, &Expr, Span)],
-        span: Span,
-    ) -> R<Vec<Expr>> {
-        let mut slots: Vec<Option<&Expr>> = vec![None; decl.len()];
-        if positional.len() > decl.len() {
-            return err(
-                format!(
-                    "`{owner}` takes {} {noun}(s), found {}",
-                    decl.len(),
-                    positional.len() + written.len()
-                ),
-                span,
-            );
-        }
-        for (i, a) in positional.iter().enumerate() {
-            slots[i] = Some(a);
-        }
-        for (name, value, nsp) in written {
-            let Some(i) = decl.iter().position(|d| d == name) else {
-                // An unnamed field is spelled `_` in `decl` and is therefore
-                // unmatchable, which is right: a positional-only constructor
-                // gains nothing here and must not pretend to.
-                return err(
-                    format!("`{owner}` has no {noun} `{name}` (it has: {})", decl.join(", ")),
-                    *nsp,
-                );
-            };
-            if slots[i].is_some() {
-                return err(format!("{noun} `{name}` is given twice"), *nsp);
-            }
-            slots[i] = Some(value);
-        }
-        let missing: Vec<&str> = decl
-            .iter()
-            .zip(&slots)
-            .filter(|(_, s)| s.is_none())
-            .map(|(d, _)| *d)
-            .collect();
-        if !missing.is_empty() {
-            return err(
-                format!("`{owner}` is missing {noun}(s): {}", missing.join(", ")),
-                span,
-            );
-        }
-        Ok(slots.into_iter().map(|s| s.expect("checked above").clone()).collect())
-    }
 
     /// Explain a failed `let` annotation that turned out to name a **term**.
     ///
@@ -6399,7 +6122,9 @@ impl Elaborator {
             Some(skel) if skel.params.iter().any(|b| b.implicit) => {
                 let mask: Vec<bool> = skel.params.iter().map(|b| b.implicit).collect();
                 let params = skel_params(&skel);
-                let r = self.resolve_named(name, true, &params, 0, &mask, args, named, span)?;
+                let r = application::resolve_named(
+                    name, true, &params, 0, &mask, args, named, span,
+                )?;
                 let (args, mask): (&[Expr], &[bool]) = match &r {
                     Some((a, m)) => (&a[..], &m[..]),
                     None => (args, &mask[..]),
@@ -6413,7 +6138,9 @@ impl Elaborator {
             Some(skel) => {
                 let params = skel_params(&skel);
                 let flat = vec![false; params.len()];
-                let r = self.resolve_named(name, true, &params, 0, &flat, args, named, span)?;
+                let r = application::resolve_named(
+                    name, true, &params, 0, &flat, args, named, span,
+                )?;
                 let args = r.as_ref().map_or(args, |(a, _)| &a[..]);
                 application::apply_explicit(
                     self,
@@ -6428,7 +6155,7 @@ impl Elaborator {
                 )
             }
             None => {
-                self.refuse_named(
+                application::refuse_named(
                     &format!("`{name}`"),
                     "its type binds no parameter names, so its arguments are positional                      (docs/named-arguments-design.md §7)",
                     named,

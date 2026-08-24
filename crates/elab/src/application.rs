@@ -15,6 +15,11 @@ use heather_syntax::{Expr, ExprKind, LamBinder, Span, Ty, TyKind};
 use crate::unification::{DeferredArg, ResolveOb, Sol, zonked};
 use crate::{Cx, ElabError, R, err};
 
+mod named;
+pub(crate) use named::{
+    permute_by_name, refuse_named, resolve_constructor_arguments, resolve_named,
+};
+
 /// The state-free schedule for one implicit-inserting call.
 ///
 /// It fixes the scratch-world size before elaboration starts: one slot for

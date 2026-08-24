@@ -206,6 +206,15 @@ promotion orchestration, diagnostics, global discharge, and explicit
 overapplication. Dictionary search and declaration-goal promotion remain
 services rather than fields on a generic context bag.
 
+Named-argument normalization now lives in `application/named.rs` before either
+spine engine runs. It owns callable slot permutation and mask adjustment,
+positional-only refusal, constructor-field permutation, and the shared
+record/constructor field-order algorithm. The no-names path returns `None`
+without cloning, preserving the old positional call exactly. Record literals
+retain only their registry lookup in root, then use the same pure permutation
+as constructors. Direct tests pin the no-op path, named implicit scheduling,
+and shared field ordering without an elaboration session.
+
 `ImplicitApplicationElab` names the semantic operations the mechanism cannot
 own: argument classification, inference and checking, unification harvests,
 expected-type harvests, dictionary resolution, goal promotion, and the
@@ -489,9 +498,10 @@ The remaining routes are not equally ready. Take them in dependency order:
    instead of recombining them.
 3. **Dispatch last.** Named arguments, member lookup, class dispatch, indexed
    dictionaries, operator carriers, designations, and compatibility fallback
-   are several policies, not one `dispatch.rs`. Split pure argument
-   normalization first, then carrier/callable queries, operator policy, dot
-   resolution, and dictionary construction.
+   are several policies, not one `dispatch.rs`. Pure argument normalization is
+   now owned by `application/named.rs`. Continue with constructor policy, then
+   carrier/callable queries, operator policy, dot resolution, and dictionary
+   construction.
 
 Moving lambda helpers merely to reduce line count is intentionally not a
 roadmap item. Move them when their binder, skeleton, and conversion policies
