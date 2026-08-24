@@ -319,10 +319,17 @@ Every remaining root checking arm crosses a subsystem boundary: blocks
 elaborate statements and mutate attempt scope; quotes change layers; matches
 own motive synthesis, rollback, and recursive guards; constructors and
 dot/application perform registry dispatch; universe checking combines
-type-former lookup with speculative type reading. Lambda inference is the
-closest adjacent mechanism and can eventually share the binder-extension
-core, but its annotation-required synthesis and skeleton-harvest contract are
-a distinct bidirectional rule rather than unfinished checking work.
+type-former lookup with speculative type reading.
+
+Lambda inference has followed checking across the boundary without merging
+their bidirectional rules. Both modes share one context-extension mechanism,
+including callable skeletons and universe-bound type variables. Inference
+still requires annotations, synthesizes the Π spine, and takes a named mode:
+ordinary inference refuses implicit binders whose marks would be lost, while
+`LetSkeletonHarvest` admits them precisely because the statement elaborator
+records the written skeleton on the alias. The root now supplies recursive
+body inference and shared annotation lowering; it no longer traverses or
+constructs either kind of lambda.
 
 Only expression-as-type remains in the root `elab_ty` match. It combines
 operator rewriting, indexed-family recognition, value-parameter formation,

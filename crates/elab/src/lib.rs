@@ -704,11 +704,13 @@ impl expr::RecursiveCheckingElab for Elaborator {
     }
 }
 
-impl expr::LambdaCheckingElab for Elaborator {
+impl expr::LambdaBinderElab for Elaborator {
     fn lower_lambda_annotation(&self, cx: &Cx, annotation: &Ty) -> R<(Type, Level)> {
         self.elab_ty(cx, annotation)
     }
+}
 
+impl expr::LambdaCheckingElab for Elaborator {
     fn lambda_domains_convert(
         &self,
         cx: &Cx,
@@ -719,6 +721,12 @@ impl expr::LambdaCheckingElab for Elaborator {
         self.goal_oracle()
             .convert_type(&cx.gamma, Layer::Prog, annotation, expected, level)
             .is_ok()
+    }
+}
+
+impl expr::LambdaInferenceElab for Elaborator {
+    fn infer_lambda_body(&self, cx: &Cx, body: &Expr) -> R<(Term, Type, Level)> {
+        self.elab_infer(cx, body)
     }
 }
 
@@ -2282,7 +2290,13 @@ impl Elaborator {
                 // records the skeleton read off the written marks.
                 None => match &expr.kind {
                     ExprKind::Lam { binders, body } => {
-                        let (tm, ty, lvl) = self.elab_lam_infer(&cx, binders, body, true)?;
+                        let (tm, ty, lvl) = self.expr_elab().infer_lambda(
+                            self,
+                            &cx,
+                            binders,
+                            body,
+                            expr::LambdaInferenceMode::LetSkeletonHarvest,
+                        )?;
                         (tm, ty, lvl, skel_of_lam_binders(binders))
                     }
                     _ => {
@@ -3281,7 +3295,13 @@ impl Elaborator {
             // A lambda in inference position needs every binder annotated:
             // with no expected type there is nothing else to take the domain
             // from (docs/surface-function-types.md §5.2).
-            ExprKind::Lam { binders, body } => self.elab_lam_infer(cx, binders, body, false),
+            ExprKind::Lam { binders, body } => self.expr_elab().infer_lambda(
+                self,
+                cx,
+                binders,
+                body,
+                expr::LambdaInferenceMode::Ordinary,
+            ),
             // `f<T, …>` — explicit type application, with or without a call
             // after it (docs/surface-polymorphism.md §1).
             ExprKind::TyApp { head, args } => {
@@ -8210,74 +8230,6 @@ impl Elaborator {
                 rhs: Rc::new(vec::tabulate(&e.level, &a_ty, &len_rc, g_side)),
             },
             e.level.clone(),
-        ))
-    }
-
-    /// A lambda in inference position: every binder must be annotated.
-    ///
-    /// Implicit marks are **refused** here unless `harvest` — any other
-    /// inference position would infer the type and *drop* the skeleton, the
-    /// silent erasure §3.4 forbids. The one carve-out is the `let`-RHS
-    /// caller in [`Self::elab_stmts`], which records the skeleton read off
-    /// the written marks onto the alias (docs/implicit-binders-design.md
-    /// §6.3).
-    fn elab_lam_infer(
-        &self,
-        cx: &Cx,
-        binders: &[LamBinder],
-        body: &Expr,
-        harvest: bool,
-    ) -> R<(Term, Type, Level)> {
-        let Some((b, rest)) = binders.split_first() else {
-            return self.elab_infer(cx, body);
-        };
-        if b.implicit && !harvest {
-            return err(
-                "an implicit lambda binder needs a checking position, or a `let` — \
-                 its implicitness has nowhere to go from here",
-                b.span,
-            );
-        }
-        let Some(ann) = &b.ty else {
-            return err(
-                format!(
-                    "this lambda's binder `{}` needs a type annotation, or the lambda \
-                     needs a checking position (`let f: A -> B = λ {} => …;`)",
-                    b.name, b.name
-                ),
-                b.span,
-            );
-        };
-        let (dom, dom_level) = self.elab_ty(cx, ann)?;
-        let mut inner = cx.clone();
-        // The annotation's own skeleton (docs/implicit-binders-design.md
-        // §3.1): a callback parameter's uses in the body insert.
-        inner.push_skel(b.name.clone(), dom.clone(), dom_level.clone(), skel_of_ty(ann));
-        // A binder at a universe is usable as a type in the body — see
-        // `elab_lam_check`, whose registration this mirrors.
-        if let Type::Ty(level) = &dom {
-            inner.tyvars.push(TyVar {
-                name: b.name.clone(),
-                ty: Type::El { level: level.clone(), tm: Rc::new(Term::Var(LocalVar(0))) },
-                level: level.clone(),
-                depth: inner.names.len(),
-            });
-        }
-        let (body_t, cod, cod_level) = self.elab_lam_infer(&inner, rest, body, harvest)?;
-        Ok((
-            Term::Lam {
-                dom_level: dom_level.clone(),
-                cod_level: cod_level.clone(),
-                dom: Rc::new(dom.clone()),
-                body: Rc::new(body_t),
-            },
-            Type::Pi {
-                dom_level: dom_level.clone(),
-                cod_level: cod_level.clone(),
-                dom: Rc::new(dom),
-                cod: Rc::new(cod),
-            },
-            Level::max(dom_level, cod_level),
         ))
     }
 

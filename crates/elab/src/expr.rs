@@ -77,12 +77,15 @@ pub(crate) trait RecursiveCheckingElab {
     ) -> R<Term>;
 }
 
+/// Annotation lowering shared by the two lambda modes.
+pub(crate) trait LambdaBinderElab {
+    fn lower_lambda_annotation(&self, cx: &Cx, annotation: &Ty) -> R<(Type, Level)>;
+}
+
 /// The root services required by checking a lambda against a function type.
 pub(crate) trait LambdaCheckingElab:
-    ExpectedTypeDiagnosticsElab + RecursiveCheckingElab
+    ExpectedTypeDiagnosticsElab + RecursiveCheckingElab + LambdaBinderElab
 {
-    fn lower_lambda_annotation(&self, cx: &Cx, annotation: &Ty) -> R<(Type, Level)>;
-
     fn lambda_domains_convert(
         &self,
         cx: &Cx,
@@ -90,6 +93,18 @@ pub(crate) trait LambdaCheckingElab:
         expected: &Type,
         level: &Level,
     ) -> bool;
+}
+
+/// Recursive synthesis required when a fully annotated lambda infers.
+pub(crate) trait LambdaInferenceElab: LambdaBinderElab {
+    fn infer_lambda_body(&self, cx: &Cx, body: &Expr) -> R<(Term, Type, Level)>;
+}
+
+/// Whether inferred implicit binder marks have a consumer.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum LambdaInferenceMode {
+    Ordinary,
+    LetSkeletonHarvest,
 }
 
 /// The expression-layer capabilities migrated so far.
@@ -542,27 +557,10 @@ impl<'a> ExprElab<'a> {
             }
         }
 
-        let mut inner = cx.clone();
         let binder_skel = position
             .and_then(|position| position.dom.clone())
             .or_else(|| binder.ty.as_ref().and_then(skel_of_ty));
-        inner.push_skel(
-            binder.name.clone(),
-            (*dom).clone(),
-            dom_level.clone(),
-            binder_skel,
-        );
-        if let Type::Ty(universe) = &*dom {
-            inner.tyvars.push(TyVar {
-                name: binder.name.clone(),
-                ty: Type::El {
-                    level: universe.clone(),
-                    tm: Rc::new(Term::Var(LocalVar(0))),
-                },
-                level: universe.clone(),
-                depth: inner.names.len(),
-            });
-        }
+        let inner = Self::extend_lambda_context(cx, binder, &dom, &dom_level, binder_skel);
 
         let body = if rest.is_empty() {
             elab.check_expression(&inner, body, &cod, &cod_level)?
@@ -585,6 +583,84 @@ impl<'a> ExprElab<'a> {
             dom,
             body: Rc::new(body),
         })
+    }
+
+    /// Infer a fully annotated lambda and synthesize its Π type.
+    pub(crate) fn infer_lambda(
+        &self,
+        elab: &impl LambdaInferenceElab,
+        cx: &Cx,
+        binders: &[LamBinder],
+        body: &Expr,
+        mode: LambdaInferenceMode,
+    ) -> R<(Term, Type, Level)> {
+        let Some((binder, rest)) = binders.split_first() else {
+            return elab.infer_lambda_body(cx, body);
+        };
+        if binder.implicit && mode == LambdaInferenceMode::Ordinary {
+            return err(
+                "an implicit lambda binder needs a checking position, or a `let` — \
+                 its implicitness has nowhere to go from here",
+                binder.span,
+            );
+        }
+        let Some(annotation) = &binder.ty else {
+            return err(
+                format!(
+                    "this lambda's binder `{}` needs a type annotation, or the lambda \
+                     needs a checking position (`let f: A -> B = λ {} => …;`)",
+                    binder.name, binder.name
+                ),
+                binder.span,
+            );
+        };
+        let (dom, dom_level) = elab.lower_lambda_annotation(cx, annotation)?;
+        let inner = Self::extend_lambda_context(
+            cx,
+            binder,
+            &dom,
+            &dom_level,
+            skel_of_ty(annotation),
+        );
+        let (body, cod, cod_level) = self.infer_lambda(elab, &inner, rest, body, mode)?;
+        Ok((
+            Term::Lam {
+                dom_level: dom_level.clone(),
+                cod_level: cod_level.clone(),
+                dom: Rc::new(dom.clone()),
+                body: Rc::new(body),
+            },
+            Type::Pi {
+                dom_level: dom_level.clone(),
+                cod_level: cod_level.clone(),
+                dom: Rc::new(dom),
+                cod: Rc::new(cod),
+            },
+            Level::max(dom_level, cod_level),
+        ))
+    }
+
+    fn extend_lambda_context(
+        cx: &Cx,
+        binder: &LamBinder,
+        dom: &Type,
+        dom_level: &Level,
+        skel: Option<Rc<Skel>>,
+    ) -> Cx {
+        let mut inner = cx.clone();
+        inner.push_skel(binder.name.clone(), dom.clone(), dom_level.clone(), skel);
+        if let Type::Ty(universe) = dom {
+            inner.tyvars.push(TyVar {
+                name: binder.name.clone(),
+                ty: Type::El {
+                    level: universe.clone(),
+                    tm: Rc::new(Term::Var(LocalVar(0))),
+                },
+                level: universe.clone(),
+                depth: inner.names.len(),
+            });
+        }
+        inner
     }
 
     fn check_fin_index(
@@ -731,7 +807,11 @@ mod tests {
             }
         }
 
-        fn infer_type_endpoint(&self, _cx: &Cx, expression: &Expr) -> R<(Term, Type, Level)> {
+        fn infer_type_endpoint(&self, cx: &Cx, expression: &Expr) -> R<(Term, Type, Level)> {
+            self.deepest_context
+                .set(self.deepest_context.get().max(cx.names.len()));
+            self.deepest_tyvars
+                .set(self.deepest_tyvars.get().max(cx.tyvars.len()));
             let ExprKind::Num(n) = expression.kind else {
                 panic!("the fixture only infers numerals");
             };
@@ -794,11 +874,13 @@ mod tests {
         }
     }
 
-    impl LambdaCheckingElab for StructuralFake {
+    impl LambdaBinderElab for StructuralFake {
         fn lower_lambda_annotation(&self, cx: &Cx, annotation: &Ty) -> R<(Type, Level)> {
             self.lower_type(cx, annotation)
         }
+    }
 
+    impl LambdaCheckingElab for StructuralFake {
         fn lambda_domains_convert(
             &self,
             _cx: &Cx,
@@ -807,6 +889,12 @@ mod tests {
             level: &Level,
         ) -> bool {
             annotation == expected && level == &Level::Zero
+        }
+    }
+
+    impl LambdaInferenceElab for StructuralFake {
+        fn infer_lambda_body(&self, cx: &Cx, body: &Expr) -> R<(Term, Type, Level)> {
+            self.infer_type_endpoint(cx, body)
         }
     }
 
@@ -1110,5 +1198,41 @@ mod tests {
         ));
         assert_eq!(fake.deepest_context.get(), 1);
         assert_eq!(*fake.checked_numerals.borrow(), [4]);
+    }
+
+    #[test]
+    fn lambda_inference_names_its_skeleton_harvest_mode() {
+        let goals = GoalArena::default();
+        let slot_probe = Cell::new(None);
+        let expr = view(&goals, &slot_probe);
+        let fake = StructuralFake::default();
+        let binder = LamBinder {
+            name: "A".into(),
+            ty: Some(Ty { kind: TyKind::Univ { level: 0 }, span: SPAN }),
+            implicit: true,
+            span: SPAN,
+        };
+        let body = Expr { kind: ExprKind::Num(1), span: SPAN };
+        assert!(expr
+            .infer_lambda(
+                &fake,
+                &Cx::empty(),
+                std::slice::from_ref(&binder),
+                &body,
+                LambdaInferenceMode::Ordinary,
+            )
+            .is_err());
+        let (_, ty, _) = expr
+            .infer_lambda(
+                &fake,
+                &Cx::empty(),
+                &[binder],
+                &body,
+                LambdaInferenceMode::LetSkeletonHarvest,
+            )
+            .unwrap();
+        assert!(matches!(ty, Type::Pi { .. }));
+        assert_eq!(fake.deepest_context.get(), 1);
+        assert_eq!(fake.deepest_tyvars.get(), 1);
     }
 }
