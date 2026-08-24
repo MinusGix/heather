@@ -308,15 +308,21 @@ goal-world conversion and diagnostic spelling remain separate extensions.
 Root resolution retains the local/declaration shadowing guard, so moving the
 term construction does not move name policy with it.
 
-This exhausts the cheap checking leaves. Every remaining root arm crosses a
-subsystem boundary: blocks elaborate statements and mutate attempt scope;
-quotes change layers; matches own motive synthesis, rollback, and recursive
-guards; constructors and dot/application perform registry dispatch; universe
-checking combines type-former lookup with speculative type reading. Lambda
-checking is the narrowest next vertical slice, but it is no longer a leaf: it
-must make binder/skeleton alignment, annotation conversion, context extension,
-and recursive checking explicit together. Treat that as the next serious
-boundary rather than widening `ExprElab` one forwarding method at a time.
+Lambda checking has now crossed the first non-leaf boundary. `ExprElab` owns
+the function-spine traversal, binder/skeleton alignment, context extension,
+universe-binder registration, and `Term::Lam` construction. The root exposes
+only expected-type reading and display, recursive checking, annotation
+lowering, and domain conversion. In particular, no callback manipulates the
+local context and the view still has no registry or declaration authority.
+
+Every remaining root checking arm crosses a subsystem boundary: blocks
+elaborate statements and mutate attempt scope; quotes change layers; matches
+own motive synthesis, rollback, and recursive guards; constructors and
+dot/application perform registry dispatch; universe checking combines
+type-former lookup with speculative type reading. Lambda inference is the
+closest adjacent mechanism and can eventually share the binder-extension
+core, but its annotation-required synthesis and skeleton-harvest contract are
+a distinct bidirectional rule rather than unfinished checking work.
 
 Only expression-as-type remains in the root `elab_ty` match. It combines
 operator rewriting, indexed-family recognition, value-parameter formation,

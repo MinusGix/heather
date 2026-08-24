@@ -111,7 +111,7 @@ mod wf;
 
 use attempt::DeclAttempt;
 pub(crate) use application::{
-    ParamMeta, Skel, SkelBinder, has_implicit_mark, skel_of_lam_binders, skel_of_ty, skel_params,
+    ParamMeta, Skel, has_implicit_mark, skel_of_lam_binders, skel_of_ty, skel_params,
 };
 use inductive::Inductive;
 use metaprograms::{MetaDef, MetaPrograms};
@@ -686,7 +686,7 @@ impl expr::EqualityCheckingElab for Elaborator {
     }
 }
 
-impl expr::UnitCheckingElab for Elaborator {
+impl expr::ExpectedTypeDiagnosticsElab for Elaborator {
     fn display_expected_type(&self, cx: &Cx, expected: &Type) -> String {
         self.display_type(cx, expected)
     }
@@ -701,6 +701,24 @@ impl expr::RecursiveCheckingElab for Elaborator {
         level: &Level,
     ) -> R<Term> {
         self.elab_check(cx, expression, expected, level)
+    }
+}
+
+impl expr::LambdaCheckingElab for Elaborator {
+    fn lower_lambda_annotation(&self, cx: &Cx, annotation: &Ty) -> R<(Type, Level)> {
+        self.elab_ty(cx, annotation)
+    }
+
+    fn lambda_domains_convert(
+        &self,
+        cx: &Cx,
+        annotation: &Type,
+        expected: &Type,
+        level: &Level,
+    ) -> bool {
+        self.goal_oracle()
+            .convert_type(&cx.gamma, Layer::Prog, annotation, expected, level)
+            .is_ok()
     }
 }
 
@@ -2679,7 +2697,8 @@ impl Elaborator {
             // a readability aid and must be convertible with it
             // (docs/surface-function-types.md §5.2).
             ExprKind::Lam { binders, body } => {
-                self.elab_lam_check(cx, binders, body, expected, lvl, skel, e.span)
+                self.expr_elab()
+                    .check_lambda(self, cx, binders, body, expected, lvl, skel, e.span)
             }
             // A universe as the expected type: a *type* has been written where
             // a term is expected, so read it as one and quote it
@@ -8192,137 +8211,6 @@ impl Elaborator {
             },
             e.level.clone(),
         ))
-    }
-
-    /// A lambda against an expected type (docs/surface-function-types.md §5.2).
-    /// One Π is peeled per binder; a written annotation must be convertible
-    /// with the expected domain, but the *expected* domain is what gets
-    /// pushed and emitted.
-    fn elab_lam_check(
-        &self,
-        cx: &Cx,
-        binders: &[LamBinder],
-        body: &Expr,
-        expected: &Type,
-        lvl: &Level,
-        // The expected type's skeleton, where the caller had one — positions
-        // are consumed one per binder as the recursion descends the spine
-        // (docs/implicit-binders-design.md §6.1).
-        skel: Option<&Skel>,
-        span: Span,
-    ) -> R<Term> {
-        self.lam_check_at(cx, binders, body, expected, lvl, skel.map(|s| s.params.as_slice()), span)
-    }
-
-    /// [`Self::elab_lam_check`] with the expected skeleton advanced to the
-    /// current binder: `skel_at[0]` (if any) speaks for `binders[0]`.
-    #[allow(clippy::too_many_arguments)]
-    fn lam_check_at(
-        &self,
-        cx: &Cx,
-        binders: &[LamBinder],
-        body: &Expr,
-        expected: &Type,
-        lvl: &Level,
-        skel_at: Option<&[SkelBinder]>,
-        span: Span,
-    ) -> R<Term> {
-        let Some((b, rest)) = binders.split_first() else {
-            return self.elab_check(cx, body, expected, lvl);
-        };
-        let head = self.whnf(cx, expected, span)?;
-        let Type::Pi { dom_level, cod_level, dom, cod } = head else {
-            return err(
-                format!(
-                    "a lambda needs a function type here, found `{}`",
-                    self.display_type(cx, expected)
-                ),
-                span,
-            );
-        };
-        // The §6.2 coherence rule: an implicit-marked binder requires the
-        // expected position to be implicit — silently accepting would mean
-        // the writer believes uses of the function will infer, and they will
-        // not (stale intent, the §3.4 hazard at the term level). An
-        // *explicit* binder is accepted at any position, including implicit
-        // ones: insertion at uses is governed by the type's skeleton, not by
-        // the argument's spelling.
-        let pos = skel_at.and_then(|s| s.first());
-        if b.implicit {
-            match pos {
-                Some(p) if p.implicit => {}
-                Some(_) => {
-                    return err(
-                        "this binder is marked implicit, but the expected function \
-                         type spells this parameter explicit — the two must agree \
-                         position by position",
-                        b.span,
-                    )
-                }
-                None => {
-                    return err(
-                        "this binder is marked implicit, but the function type \
-                         expected here carries no implicitness — it was computed, \
-                         not written, and a computed type offers no implicit \
-                         insertion (issues/implicit-binders-in-function-types.md)",
-                        b.span,
-                    )
-                }
-            }
-        }
-        if let Some(ann) = &b.ty {
-            let (ann_t, _) = self.elab_ty(cx, ann)?;
-            if self
-                .goal_oracle()
-                .convert_type(&cx.gamma, Layer::Prog, &ann_t, &dom, &dom_level)
-                .is_err()
-            {
-                return err(
-                    format!(
-                        "`{}` is annotated with a type that is not the one expected here",
-                        b.name
-                    ),
-                    ann.span,
-                );
-            }
-        }
-        let mut inner = cx.clone();
-        // The binder carries the expected position's `dom` sub-skeleton, so
-        // a callback bound by the lambda inserts at its own uses (§3.1);
-        // the written annotation's marks are the fallback where the expected
-        // type carried no skeleton — the annotation was just proved
-        // convertible with the domain, so the pairing is with the same
-        // erased spine.
-        let bskel = pos
-            .and_then(|p| p.dom.clone())
-            .or_else(|| b.ty.as_ref().and_then(skel_of_ty));
-        inner.push_skel(b.name.clone(), (*dom).clone(), dom_level.clone(), bskel);
-        // A lambda binder *at a universe* is usable as a type in the body —
-        // the same generalization the telescope loop makes for parameters
-        // (docs/surface-universe.md §2: a type name is any binder whose type
-        // is `Type<n>`). What forced it to lambdas: a generic code template
-        // binds its element types inside the quote, `fun (A: Type<0>) => …`
-        // (docs/in-language-map-design.md §3).
-        if let Type::Ty(level) = &*dom {
-            inner.tyvars.push(TyVar {
-                name: b.name.clone(),
-                ty: Type::El { level: level.clone(), tm: Rc::new(Term::Var(LocalVar(0))) },
-                level: level.clone(),
-                depth: inner.names.len(),
-            });
-        }
-        let body_t = if rest.is_empty() {
-            self.elab_check(&inner, body, &cod, &cod_level)?
-        } else {
-            let rest_skel = skel_at.map(|s| s.get(1..).unwrap_or(&[]));
-            self.lam_check_at(&inner, rest, body, &cod, &cod_level, rest_skel, span)?
-        };
-        Ok(Term::Lam {
-            dom_level,
-            cod_level,
-            dom,
-            body: Rc::new(body_t),
-        })
     }
 
     /// A lambda in inference position: every binder must be annotated.

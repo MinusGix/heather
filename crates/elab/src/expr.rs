@@ -10,9 +10,9 @@ use std::rc::Rc;
 use heather_kernel::level::Level;
 use heather_kernel::reduce::OutOfFuel;
 use heather_kernel::term::{LocalVar, Term, Type};
-use heather_syntax::{Expr, ExprKind, Span, Ty, TyKind};
+use heather_syntax::{Expr, ExprKind, LamBinder, Span, Ty, TyKind};
 
-use crate::application::{has_implicit_mark, skel_of_ty};
+use crate::application::{Skel, SkelBinder, has_implicit_mark, skel_of_ty};
 use crate::code;
 use crate::goals::GoalAllocator;
 use crate::oracle::SemanticOracle;
@@ -61,8 +61,8 @@ pub(crate) trait EqualityCheckingElab: ExpectedTypeElab {
     ) -> bool;
 }
 
-/// Diagnostic spelling required by the canonical Unit inhabitant.
-pub(crate) trait UnitCheckingElab: ExpectedTypeElab {
+/// Diagnostic spelling for checking forms that inspect an expected type.
+pub(crate) trait ExpectedTypeDiagnosticsElab: ExpectedTypeElab {
     fn display_expected_type(&self, cx: &Cx, expected: &Type) -> String;
 }
 
@@ -75,6 +75,21 @@ pub(crate) trait RecursiveCheckingElab {
         expected: &Type,
         level: &Level,
     ) -> R<Term>;
+}
+
+/// The root services required by checking a lambda against a function type.
+pub(crate) trait LambdaCheckingElab:
+    ExpectedTypeDiagnosticsElab + RecursiveCheckingElab
+{
+    fn lower_lambda_annotation(&self, cx: &Cx, annotation: &Ty) -> R<(Type, Level)>;
+
+    fn lambda_domains_convert(
+        &self,
+        cx: &Cx,
+        annotation: &Type,
+        expected: &Type,
+        level: &Level,
+    ) -> bool;
 }
 
 /// The expression-layer capabilities migrated so far.
@@ -409,7 +424,7 @@ impl<'a> ExprElab<'a> {
     /// have already been decided by root orchestration.
     pub(crate) fn check_unit_form(
         &self,
-        elab: &impl UnitCheckingElab,
+        elab: &impl ExpectedTypeDiagnosticsElab,
         cx: &Cx,
         expected: &Type,
         span: Span,
@@ -424,6 +439,152 @@ impl<'a> ExprElab<'a> {
                 span,
             ),
         }
+    }
+
+    /// Check a written lambda against an expected function spine.
+    ///
+    /// Binder traversal, skeleton advancement, local context extension, and
+    /// term construction are mechanism. The collaborator supplies only the
+    /// semantic operations that cross the expression boundary.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn check_lambda(
+        &self,
+        elab: &impl LambdaCheckingElab,
+        cx: &Cx,
+        binders: &[LamBinder],
+        body: &Expr,
+        expected: &Type,
+        level: &Level,
+        skel: Option<&Skel>,
+        span: Span,
+    ) -> R<Term> {
+        self.check_lambda_at(
+            elab,
+            cx,
+            binders,
+            body,
+            expected,
+            level,
+            skel.map(|s| s.params.as_slice()),
+            span,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn check_lambda_at(
+        &self,
+        elab: &impl LambdaCheckingElab,
+        cx: &Cx,
+        binders: &[LamBinder],
+        body: &Expr,
+        expected: &Type,
+        level: &Level,
+        skel_at: Option<&[SkelBinder]>,
+        span: Span,
+    ) -> R<Term> {
+        let Some((binder, rest)) = binders.split_first() else {
+            return elab.check_expression(cx, body, expected, level);
+        };
+        let head = elab.read_expected_type(cx, expected, span)?;
+        let Type::Pi {
+            dom_level,
+            cod_level,
+            dom,
+            cod,
+        } = head
+        else {
+            return err(
+                format!(
+                    "a lambda needs a function type here, found `{}`",
+                    elab.display_expected_type(cx, expected)
+                ),
+                span,
+            );
+        };
+
+        // An implicit mark promises insertion at uses, so it must agree with
+        // a written expected skeleton. Explicit lambda binders remain valid at
+        // implicit positions; insertion belongs to the expected type.
+        let position = skel_at.and_then(|positions| positions.first());
+        if binder.implicit {
+            match position {
+                Some(position) if position.implicit => {}
+                Some(_) => {
+                    return err(
+                        "this binder is marked implicit, but the expected function \
+                         type spells this parameter explicit — the two must agree \
+                         position by position",
+                        binder.span,
+                    )
+                }
+                None => {
+                    return err(
+                        "this binder is marked implicit, but the function type \
+                         expected here carries no implicitness — it was computed, \
+                         not written, and a computed type offers no implicit \
+                         insertion (issues/implicit-binders-in-function-types.md)",
+                        binder.span,
+                    )
+                }
+            }
+        }
+
+        if let Some(annotation) = &binder.ty {
+            let (annotation_ty, _) = elab.lower_lambda_annotation(cx, annotation)?;
+            if !elab.lambda_domains_convert(cx, &annotation_ty, &dom, &dom_level) {
+                return err(
+                    format!(
+                        "`{}` is annotated with a type that is not the one expected here",
+                        binder.name
+                    ),
+                    annotation.span,
+                );
+            }
+        }
+
+        let mut inner = cx.clone();
+        let binder_skel = position
+            .and_then(|position| position.dom.clone())
+            .or_else(|| binder.ty.as_ref().and_then(skel_of_ty));
+        inner.push_skel(
+            binder.name.clone(),
+            (*dom).clone(),
+            dom_level.clone(),
+            binder_skel,
+        );
+        if let Type::Ty(universe) = &*dom {
+            inner.tyvars.push(TyVar {
+                name: binder.name.clone(),
+                ty: Type::El {
+                    level: universe.clone(),
+                    tm: Rc::new(Term::Var(LocalVar(0))),
+                },
+                level: universe.clone(),
+                depth: inner.names.len(),
+            });
+        }
+
+        let body = if rest.is_empty() {
+            elab.check_expression(&inner, body, &cod, &cod_level)?
+        } else {
+            let rest_skel = skel_at.map(|positions| positions.get(1..).unwrap_or(&[]));
+            self.check_lambda_at(
+                elab,
+                &inner,
+                rest,
+                body,
+                &cod,
+                &cod_level,
+                rest_skel,
+                span,
+            )?
+        };
+        Ok(Term::Lam {
+            dom_level,
+            cod_level,
+            dom,
+            body: Rc::new(body),
+        })
     }
 
     fn check_fin_index(
@@ -592,11 +753,13 @@ mod tests {
 
         fn check_type_endpoint(
             &self,
-            _cx: &Cx,
+            cx: &Cx,
             expression: &Expr,
             expected: &Type,
             level: &Level,
         ) -> R<Term> {
+            self.deepest_context
+                .set(self.deepest_context.get().max(cx.names.len()));
             assert_eq!((expected, level), (&Type::Nat, &Level::Zero));
             let ExprKind::Num(n) = expression.kind else {
                 panic!("the fixture only checks numerals");
@@ -625,9 +788,25 @@ mod tests {
         }
     }
 
-    impl UnitCheckingElab for StructuralFake {
+    impl ExpectedTypeDiagnosticsElab for StructuralFake {
         fn display_expected_type(&self, _cx: &Cx, expected: &Type) -> String {
             format!("{expected:?}")
+        }
+    }
+
+    impl LambdaCheckingElab for StructuralFake {
+        fn lower_lambda_annotation(&self, cx: &Cx, annotation: &Ty) -> R<(Type, Level)> {
+            self.lower_type(cx, annotation)
+        }
+
+        fn lambda_domains_convert(
+            &self,
+            _cx: &Cx,
+            annotation: &Type,
+            expected: &Type,
+            level: &Level,
+        ) -> bool {
+            annotation == expected && level == &Level::Zero
         }
     }
 
@@ -894,5 +1073,42 @@ mod tests {
             .unwrap(),
             Term::Triv { level } if level == Level::constant(2)
         ));
+    }
+
+    #[test]
+    fn lambda_checking_owns_binder_traversal_and_construction() {
+        let goals = GoalArena::default();
+        let slot_probe = Cell::new(None);
+        let expr = view(&goals, &slot_probe);
+        let fake = StructuralFake::default();
+        let binder = LamBinder {
+            name: "x".into(),
+            ty: Some(Ty { kind: TyKind::Nat, span: SPAN }),
+            implicit: false,
+            span: SPAN,
+        };
+        let body = Expr { kind: ExprKind::Num(4), span: SPAN };
+        let expected = Type::Pi {
+            dom_level: Level::Zero,
+            cod_level: Level::Zero,
+            dom: Rc::new(Type::Nat),
+            cod: Rc::new(Type::Nat),
+        };
+        assert!(matches!(
+            expr.check_lambda(
+                &fake,
+                &Cx::empty(),
+                &[binder],
+                &body,
+                &expected,
+                &Level::Zero,
+                None,
+                SPAN,
+            )
+            .unwrap(),
+            Term::Lam { .. }
+        ));
+        assert_eq!(fake.deepest_context.get(), 1);
+        assert_eq!(*fake.checked_numerals.borrow(), [4]);
     }
 }
