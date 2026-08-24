@@ -3141,11 +3141,9 @@ impl Elaborator {
                     && !self.shadowed(cx, name)
                     && self.ctor_here(cx, name).is_none() =>
             {
-                err(
-                    "`FZ` needs an expected `Fin` type (checking position, or an \
-                     annotated `let`)",
-                    e.span,
-                )
+                self.expr_elab()
+                    .infer_form(self, cx, e)
+                    .expect("classified as an ExprElab inference form")
             }
             // `trivial` **infers**, unlike `FZ` and `refl`: the surface spells
             // exactly one `True` and it is `Unit^0`, so there is no level to
@@ -3156,11 +3154,9 @@ impl Elaborator {
                     && !self.shadowed(cx, name)
                     && self.ctor_here(cx, name).is_none() =>
             {
-                Ok((
-                    Term::Triv { level: Level::Zero },
-                    Type::Unit { level: Level::Zero },
-                    Level::Zero,
-                ))
+                self.expr_elab()
+                    .infer_form(self, cx, e)
+                    .expect("classified as an ExprElab inference form")
             }
             // A bare reference to a polymorphic declaration, met in
             // *checking* position, is the zero-explicit-argument case of

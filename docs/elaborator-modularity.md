@@ -331,6 +331,12 @@ records the written skeleton on the alias. The root now supplies recursive
 body inference and shared annotation lowering; it no longer traverses or
 constructs either kind of lambda.
 
+The last canonical inference names have moved with it. After root decides
+that `FZ` or `trivial` is not shadowed by a local or declaration constructor,
+the existing ExprElab classifier owns `FZ`'s checking-only refusal and
+`trivial`'s fixed `Unit^0` synthesis. All remaining inference arms now cross a
+real subsystem boundary rather than merely constructing a core term.
+
 Only expression-as-type remains in the root `elab_ty` match. It combines
 operator rewriting, indexed-family recognition, value-parameter formation,
 term inference, and universe decoding; moving it behind one callback would

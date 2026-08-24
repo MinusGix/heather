@@ -312,6 +312,18 @@ impl<'a> ExprElab<'a> {
                  argument",
                 e.span,
             )),
+            // Root settles local/declaration shadowing before admitting these
+            // bare canonical names to the staged view.
+            ExprKind::Var(name) if name == "FZ" => Some(err(
+                "`FZ` needs an expected `Fin` type (checking position, or an \
+                 annotated `let`)",
+                e.span,
+            )),
+            ExprKind::Var(name) if name == "trivial" => Some(Ok((
+                Term::Triv { level: Level::Zero },
+                Type::Unit { level: Level::Zero },
+                Level::Zero,
+            ))),
             _ => None,
         }
     }
@@ -938,6 +950,14 @@ mod tests {
         let (term, ty, level) = expr.infer_form(&fake, &cx, &numeral).unwrap().unwrap();
         assert!(matches!(term, Term::Succ(_)));
         assert_eq!((ty, level), (Type::Nat, Level::Zero));
+
+        let trivial = Expr { kind: ExprKind::Var("trivial".into()), span: SPAN };
+        assert!(matches!(
+            expr.infer_form(&fake, &cx, &trivial).unwrap().unwrap(),
+            (Term::Triv { .. }, Type::Unit { .. }, Level::Zero)
+        ));
+        let fz = Expr { kind: ExprKind::Var("FZ".into()), span: SPAN };
+        assert!(expr.infer_form(&fake, &cx, &fz).unwrap().is_err());
 
         let hole = Expr {
             kind: ExprKind::Hole(Some("proof".into())),
