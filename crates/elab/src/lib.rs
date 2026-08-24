@@ -330,44 +330,6 @@ fn err<T>(msg: impl Into<String>, span: Span) -> R<T> {
     Err(ElabError::Elab { msg: msg.into(), span })
 }
 
-/// Read an expression *as a type*, for a position whose expected type is a
-/// universe (docs/surface-universe.md §4). `None` when the expression is not a
-/// type by shape, which is a diagnostic rather than a failure.
-///
-/// The mirror of what `parser.rs`'s `ty_atom` already does in the other
-/// direction — it parses an expression and reinterprets a bare name as a type
-/// name — so the two readings are deliberately the same shape: a name, an
-/// applied name, or a universe. Anything structural (`Π`, `[T; n]`) has type
-/// syntax that cannot occur in an expression position in the first place.
-/// Replace the generic `Decide<P>` display of the parser-synthesized call in
-/// an `if` with the condition the writer actually wrote. Resolution remains
-/// the ordinary call path; this changes only the top-level diagnostic record.
-fn if_resolution_error(form: MatchForm, scrut: &Expr, error: ElabError) -> ElabError {
-    if form != MatchForm::If {
-        return error;
-    }
-    let ExprKind::App { head, args, named, .. } = &scrut.kind else { return error };
-    if !args.is_empty() || !named.is_empty() {
-        return error;
-    }
-    let ExprKind::TyApp { head, args } = &head.kind else { return error };
-    if !matches!(&head.kind, ExprKind::Var(name) if name == "decide") {
-        return error;
-    }
-    let [condition] = args.as_slice() else { return error };
-    let display = format!("Decide<{}>", traits::render_ty(condition));
-    match error {
-        ElabError::Resolution { span, mut trace, .. } => {
-            if let Some(goal) = trace.iter_mut().find(|line| line.depth == 0 && line.key == "goal")
-            {
-                goal.value.clone_from(&display);
-            }
-            ElabError::Resolution { goal: display, span, trace }
-        }
-        other => other,
-    }
-}
-
 /// What to call a type projection's subject in a diagnostic: the text that
 /// was written, when the shape is one a reader would recognize
 /// (docs/traits-type-projection-design.md §7). `None` for anything else, which
@@ -873,6 +835,43 @@ impl matching::MatchSpeculationState for Elaborator {
 
     fn set_motive_probe_active(&self, active: bool) {
         self.attempt.motive_speculation.set(active);
+    }
+}
+
+impl matching::ConstantMotiveElab for Elaborator {
+    fn infer_motive_expr(&self, cx: &Cx, expr: &Expr) -> R<(Term, Type, Level)> {
+        self.elab_infer(cx, expr)
+    }
+
+    fn lower_if_condition(&self, cx: &Cx, condition: &Ty) -> R<(Type, Level)> {
+        self.elab_ty(cx, condition)
+    }
+
+    fn lower_constant_match(
+        &self,
+        cx: &Cx,
+        form: MatchForm,
+        generated: bool,
+        arms: &[Arm],
+        scrutinee: Term,
+        scrutinee_type: &Type,
+        scrutinee_level: &Level,
+        motive: Type,
+        motive_level: Level,
+        span: Span,
+    ) -> R<Term> {
+        self.elab_match(
+            cx,
+            form,
+            generated,
+            arms,
+            scrutinee,
+            scrutinee_type,
+            scrutinee_level,
+            motive,
+            motive_level,
+            span,
+        )
     }
 }
 
@@ -2572,7 +2571,7 @@ impl Elaborator {
                 // under `z`) is what "no occurrence anywhere" falls back to.
                 let (scrut_t, scrut_ty, scrut_lvl) = self
                     .elab_infer(cx, scrut)
-                    .map_err(|error| if_resolution_error(*form, scrut, error))?;
+                    .map_err(|error| matching::if_resolution_error(*form, scrut, error))?;
                 let motive = matching::synthesize_motive(
                     self,
                     cx,
@@ -3700,15 +3699,17 @@ impl Elaborator {
             // a synthesis that does not go through leaves no trace.
             ExprKind::Match { form, motive: None, scrut, arms, eqbind: None, generated } => {
                 if *form == MatchForm::If {
-                    match self.infer_if_constant_motive(cx, scrut, arms, *generated, e.span) {
+                    match matching::infer_if_constant_motive(
+                        self, cx, scrut, arms, *generated, e.span,
+                    ) {
                         matching::MotiveInference::Accepted(result) => return Ok(result),
                         matching::MotiveInference::Failed(error) => return Err(error),
                         matching::MotiveInference::Declined => {}
                     }
                 }
-                match self
-                    .infer_match_constant_motive(cx, *form, scrut, arms, *generated, e.span)
-                {
+                match matching::infer_match_constant_motive(
+                    self, cx, *form, scrut, arms, *generated, e.span,
+                ) {
                     matching::MotiveInference::Accepted(result) => return Ok(result),
                     matching::MotiveInference::Failed(error) => return Err(error),
                     matching::MotiveInference::Declined => {}
@@ -3922,195 +3923,6 @@ impl Elaborator {
             mlvl,
             result,
         ))
-    }
-
-    /// Elaborate a `match` given its scrutinee and its (already elaborated)
-    /// motive, scoped over one extra local `z` of the scrutinee's type.
-    /// Dispatch is by the scrutinee's type: `Nat` is the kernel's own
-    /// recursor, a declared inductive is the tier-0 case tree
-    /// (docs/inductive-tier0-lowering.md §5).
-    #[allow(clippy::too_many_arguments)]
-    /// A motive-less `match` in **inference** position, read as one whose
-    /// result type does not depend on the scrutinee: an arm names the type and
-    /// the motive is that type, constant
-    /// (`issues/match-arg-of-polymorphic-callee-needs-motive.md`).
-    ///
-    /// `Declined` means "not this shape" and the caller reports the message
-    /// that asks for a motive — the synthesis never produces an authoritative
-    /// error of its own, so a dependent `match` that always needed a written
-    /// motive still gets told so rather than a mismatch inside an arm.
-    ///
-    /// Three properties make this a synthesis rather than a guess:
-    ///
-    ///  - **The naming arm binds nothing**, so its body is scoped in `Γ` and
-    ///    its type is available with no branch context to build. Reading a
-    ///    binding arm's type means reconstructing that arm's context, which is
-    ///    per-lowering work (`elab_arm`'s Σ-walk, the case tree, the `Wf`
-    ///    eliminator) and is not attempted here.
-    ///  - **The other arms are checked, not joined.** Once one arm names `T`,
-    ///    every arm — binding or not — goes through the ordinary path against
-    ///    it. So this widens where a motive may be *omitted*, never what a
-    ///    `match` may mean.
-    ///  - **Speculation does not nest** ([`DeclAttempt::motive_speculation`]), and a
-    ///    failed attempt leaves no warnings behind.
-    fn infer_match_constant_motive(
-        &self,
-        cx: &Cx,
-        form: MatchForm,
-        scrut: &Expr,
-        arms: &[Arm],
-        generated: bool,
-        span: Span,
-    ) -> matching::MotiveInference<(Term, Type, Level), ElabError> {
-        let Some(probe) = matching::MotiveProbe::begin(self) else {
-            return matching::MotiveInference::Declined;
-        };
-        let speculation = matching::MatchRollback::new(self);
-        // *An* arm that binds nothing, not the first one: a non-binding arm
-        // whose body does not infer either (`Nil` on its own, which is the
-        // very ambiguity this is trying to resolve) teaches nothing and is
-        // stepped over. Each candidate is elaborated at most once, so the
-        // whole search is linear in the arms.
-        let named = arms
-            .iter()
-            .filter(|a| a.binders.is_empty())
-            .find_map(|a| match self.elab_infer(cx, &a.body) {
-                Ok((_, ty, lvl)) => Some((ty, lvl)),
-                Err(_) => {
-                    speculation.rollback();
-                    None
-                }
-            });
-        drop(probe);
-        let Some((ty, lvl)) = named else {
-            return matching::MotiveInference::Declined;
-        };
-        let attempt: R<(Term, Type, Level)> = (|| {
-            let (scrut_t, scrut_ty, scrut_lvl) = self.elab_infer(cx, scrut)?;
-            let t = self.elab_match(
-                cx,
-                form,
-                generated,
-                arms,
-                scrut_t,
-                &scrut_ty,
-                &scrut_lvl,
-                // Constant over the scrutinee binder: that *is* the reading.
-                ty.shift_local(1),
-                lvl.clone(),
-                span,
-            )?;
-            Ok((t, ty, lvl))
-        })();
-        match attempt {
-            Ok(result) => {
-                speculation.commit();
-                matching::MotiveInference::Accepted(result)
-            }
-            Err(_) => {
-                // No trace: warnings raised inside the attempt, and any goal it
-                // minted, are rolled back. The goals matter more than they
-                // look — a hole is registered by *span*, and the attempt
-                // elaborates the arm in `Γ` while the real pass elaborates it
-                // inside the branch context, so a surviving registration would
-                // meet the "re-elaborated in a different context" refusal in
-                // [`Self::new_goal`] and turn a decline into an internal error.
-                matching::MotiveInference::Declined
-            }
-        }
-    }
-
-    /// Inference for the ordinary, non-dependent `if`: infer either branch in
-    /// the evidence context, strengthen its type back to Γ, then check both
-    /// real match arms against that constant motive. Generic motive-less
-    /// `match` cannot do this cheaply because reconstructing arbitrary
-    /// constructor contexts is lowering-specific; `if` has exactly the two
-    /// contexts `h : P` and `h : P -> False`, already known from its syntax.
-    fn infer_if_constant_motive(
-        &self,
-        cx: &Cx,
-        scrut: &Expr,
-        arms: &[Arm],
-        generated: bool,
-        span: Span,
-    ) -> matching::MotiveInference<(Term, Type, Level), ElabError> {
-        let ExprKind::App { head, args, named, .. } = &scrut.kind else {
-            return matching::MotiveInference::Declined;
-        };
-        if !args.is_empty() || !named.is_empty() {
-            return matching::MotiveInference::Declined;
-        }
-        let ExprKind::TyApp { head, args } = &head.kind else {
-            return matching::MotiveInference::Declined;
-        };
-        if !matches!(&head.kind, ExprKind::Var(name) if name == "decide") {
-            return matching::MotiveInference::Declined;
-        }
-        let [condition] = args.as_slice() else {
-            return matching::MotiveInference::Declined;
-        };
-        let (p_ty, p_lvl) = match self.elab_ty(cx, condition) {
-            Ok(p) => p,
-            Err(error) => return matching::MotiveInference::Failed(error),
-        };
-        let not_p = Type::Pi {
-            dom_level: p_lvl.clone(),
-            cod_level: Level::Zero,
-            dom: Rc::new(p_ty.clone()),
-            cod: Rc::new(Type::Empty { level: Level::Zero }),
-        };
-
-        let speculation = matching::MatchRollback::new(self);
-        let mut inferred = None;
-        for (arm, (evidence_ty, evidence_lvl)) in arms.iter().zip([
-            (&p_ty, &p_lvl),
-            (&not_p, &Level::Zero),
-        ]) {
-            let [binder] = arm.binders.as_slice() else { continue };
-            let mut acx = cx.clone();
-            acx.push(binder.name().to_string(), evidence_ty.clone(), evidence_lvl.clone());
-            let Ok((_, branch_ty, branch_lvl)) = self.elab_infer(&acx, &arm.body) else {
-                speculation.rollback();
-                continue;
-            };
-            // Substitute an arbitrary disposable term for the evidence. It is
-            // never checked or emitted; equality with the re-weakened result
-            // is precisely the syntactic proof that the branch type did not
-            // mention it and therefore really lives in Γ.
-            let branch_ty0 = branch_ty.apply_local(
-                &LocalSubst::id(&cx.gamma).extended(Rc::new(Term::Zero)),
-            );
-            if branch_ty == branch_ty0.shift_local(1) {
-                inferred = Some((branch_ty0, branch_lvl));
-                break;
-            }
-            speculation.rollback();
-        }
-        let Some((ty, lvl)) = inferred else {
-            return matching::MotiveInference::Declined;
-        };
-        // Branch inference was only a type probe. The ordinary match lowering
-        // below re-elaborates it and owns any effects it raises.
-        drop(speculation);
-        let attempt = (|| {
-            let (scrut_t, scrut_ty, scrut_lvl) = self
-                .elab_infer(cx, scrut)
-                .map_err(|error| if_resolution_error(MatchForm::If, scrut, error))?;
-            let t = self.elab_match(
-                cx,
-                MatchForm::If,
-                generated,
-                arms,
-                scrut_t,
-                &scrut_ty,
-                &scrut_lvl,
-                ty.shift_local(1),
-                lvl.clone(),
-                span,
-            )?;
-            Ok((t, ty, lvl))
-        })();
-        matching::MotiveInference::decided(attempt)
     }
 
     /// A numeral at a user-defined carrier. Core `Nat` and `Fin` readings are

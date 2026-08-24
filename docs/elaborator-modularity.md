@@ -453,10 +453,16 @@ The remaining routes are not equally ready. Take them in dependency order:
    have their first boundary, and motive-less inference now has an explicit
    rollback transaction and outcome model. Built-in Nat/Fin routing and Nat's
    guard orchestration now live in `matching/routes.rs`, and the shared
-   recursion core is a normal module. Next move the remaining constant-motive
-   candidate discovery, or narrow self-call lowering's application/inference
-   capabilities enough to move it honestly. Preserve the existing inductive,
-   indexed, forded, and `Wf` route owners instead of recombining them.
+   recursion core is a normal module. Constant-motive candidate discovery for
+   both ordinary matches and parser-generated `if` now lives in `matching.rs`.
+   Its boundary names only expression inference, condition-type elaboration,
+   final match lowering, and speculative state; the root owns those semantic
+   operations while matching owns candidate order and the distinction between
+   a speculative decline and an authoritative failure. Next narrow self-call
+   lowering's application/inference capabilities enough to move it honestly,
+   or take the next checking/inference family whose capability surface is
+   already smaller. Preserve the existing inductive, indexed, forded, and
+   `Wf` route owners instead of recombining them.
 3. **Dispatch last.** Named arguments, member lookup, class dispatch, indexed
    dictionaries, operator carriers, designations, and compatibility fallback
    are several policies, not one `dispatch.rs`. Split pure argument

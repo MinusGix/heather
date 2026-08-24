@@ -8,11 +8,11 @@
 use std::rc::Rc;
 
 use heather_kernel::level::Level;
-use heather_kernel::term::{LocalVar, Term, Type};
-use heather_syntax::{Arm, Expr, ExprKind, LamBinder, Span, Ty, TyKind};
+use heather_kernel::term::{LocalSubst, LocalVar, Term, Type};
+use heather_syntax::{Arm, Expr, ExprKind, LamBinder, MatchForm, Span, Ty, TyKind};
 
 use crate::diagnostics::STUCK_CANDIDATES;
-use crate::{Cx, R, err};
+use crate::{Cx, ElabError, R, err};
 
 mod routes;
 pub(crate) use routes::cov_proj;
@@ -42,6 +42,32 @@ pub(crate) trait MatchSpeculationState {
     fn rollback_match_state(&self, mark: Self::Mark);
     fn motive_probe_active(&self) -> bool;
     fn set_motive_probe_active(&self, active: bool);
+}
+
+/// Semantic operations used while discovering a constant motive.
+///
+/// Candidate policy belongs here; expression inference and final route
+/// lowering remain capabilities supplied by the root elaborator. In
+/// particular, matching gains neither declaration commit authority nor a
+/// reference to the whole elaborator.
+pub(crate) trait ConstantMotiveElab: MatchSpeculationState {
+    fn infer_motive_expr(&self, cx: &Cx, expr: &Expr) -> R<(Term, Type, Level)>;
+    fn lower_if_condition(&self, cx: &Cx, condition: &Ty) -> R<(Type, Level)>;
+
+    #[allow(clippy::too_many_arguments)]
+    fn lower_constant_match(
+        &self,
+        cx: &Cx,
+        form: MatchForm,
+        generated: bool,
+        arms: &[Arm],
+        scrutinee: Term,
+        scrutinee_type: &Type,
+        scrutinee_level: &Level,
+        motive: Type,
+        motive_level: Level,
+        span: Span,
+    ) -> R<Term>;
 }
 
 /// The outcome of trying to infer a constant match motive.
@@ -119,6 +145,199 @@ impl<S: MatchSpeculationState + ?Sized> Drop for MotiveProbe<'_, S> {
     fn drop(&mut self) {
         self.state.set_motive_probe_active(false);
     }
+}
+
+/// Replace the generic `Decide<P>` display of the parser-synthesized call in
+/// an `if` with the condition the writer actually wrote. Resolution remains
+/// the ordinary call path; this changes only the top-level diagnostic record.
+pub(crate) fn if_resolution_error(
+    form: MatchForm,
+    scrutinee: &Expr,
+    error: ElabError,
+) -> ElabError {
+    if form != MatchForm::If {
+        return error;
+    }
+    let ExprKind::App { head, args, named, .. } = &scrutinee.kind else { return error };
+    if !args.is_empty() || !named.is_empty() {
+        return error;
+    }
+    let ExprKind::TyApp { head, args } = &head.kind else { return error };
+    if !matches!(&head.kind, ExprKind::Var(name) if name == "decide") {
+        return error;
+    }
+    let [condition] = args.as_slice() else { return error };
+    let display = format!("Decide<{}>", crate::traits::render_ty(condition));
+    match error {
+        ElabError::Resolution { span, mut trace, .. } => {
+            if let Some(goal) = trace.iter_mut().find(|line| line.depth == 0 && line.key == "goal")
+            {
+                goal.value.clone_from(&display);
+            }
+            ElabError::Resolution { goal: display, span, trace }
+        }
+        other => other,
+    }
+}
+
+/// Discover a constant motive for an ordinary motive-less match.
+///
+/// A non-binding arm may name the result type because its body lives in the
+/// caller's context. Candidate failures are speculative: they leave no goals
+/// or warnings and ultimately decline in favor of the written-motive
+/// diagnostic. Once a candidate is found, every real arm is checked by its
+/// ordinary route rather than joined here.
+pub(crate) fn infer_match_constant_motive(
+    elab: &(impl ConstantMotiveElab + ?Sized),
+    cx: &Cx,
+    form: MatchForm,
+    scrutinee: &Expr,
+    arms: &[Arm],
+    generated: bool,
+    span: Span,
+) -> MotiveInference<(Term, Type, Level), ElabError> {
+    let Some(probe) = MotiveProbe::begin(elab) else {
+        return MotiveInference::Declined;
+    };
+    let speculation = MatchRollback::new(elab);
+    // A non-binding arm that does not infer teaches nothing. Step over it and
+    // try the next candidate; each arm is elaborated at most once.
+    let named = arms
+        .iter()
+        .filter(|arm| arm.binders.is_empty())
+        .find_map(|arm| match elab.infer_motive_expr(cx, &arm.body) {
+            Ok((_, ty, level)) => Some((ty, level)),
+            Err(_) => {
+                speculation.rollback();
+                None
+            }
+        });
+    drop(probe);
+    let Some((ty, level)) = named else {
+        return MotiveInference::Declined;
+    };
+    let attempt: R<(Term, Type, Level)> = (|| {
+        let (scrutinee_term, scrutinee_type, scrutinee_level) =
+            elab.infer_motive_expr(cx, scrutinee)?;
+        let term = elab.lower_constant_match(
+            cx,
+            form,
+            generated,
+            arms,
+            scrutinee_term,
+            &scrutinee_type,
+            &scrutinee_level,
+            ty.shift_local(1),
+            level.clone(),
+            span,
+        )?;
+        Ok((term, ty, level))
+    })();
+    match attempt {
+        Ok(result) => {
+            speculation.commit();
+            MotiveInference::Accepted(result)
+        }
+        Err(_) => MotiveInference::Declined,
+    }
+}
+
+/// Discover a constant motive for the parser-generated `if` match.
+///
+/// The two evidence contexts are known from syntax, so either branch may name
+/// a result type after proving syntactically that it does not depend on its
+/// evidence binder. Recognizing `if` makes condition and final-lowering errors
+/// authoritative; branch probes themselves remain fully speculative.
+pub(crate) fn infer_if_constant_motive(
+    elab: &(impl ConstantMotiveElab + ?Sized),
+    cx: &Cx,
+    scrutinee: &Expr,
+    arms: &[Arm],
+    generated: bool,
+    span: Span,
+) -> MotiveInference<(Term, Type, Level), ElabError> {
+    let ExprKind::App { head, args, named, .. } = &scrutinee.kind else {
+        return MotiveInference::Declined;
+    };
+    if !args.is_empty() || !named.is_empty() {
+        return MotiveInference::Declined;
+    }
+    let ExprKind::TyApp { head, args } = &head.kind else {
+        return MotiveInference::Declined;
+    };
+    if !matches!(&head.kind, ExprKind::Var(name) if name == "decide") {
+        return MotiveInference::Declined;
+    }
+    let [condition] = args.as_slice() else {
+        return MotiveInference::Declined;
+    };
+    let (condition_type, condition_level) = match elab.lower_if_condition(cx, condition) {
+        Ok(condition) => condition,
+        Err(error) => return MotiveInference::Failed(error),
+    };
+    let negated_condition = Type::Pi {
+        dom_level: condition_level.clone(),
+        cod_level: Level::Zero,
+        dom: Rc::new(condition_type.clone()),
+        cod: Rc::new(Type::Empty { level: Level::Zero }),
+    };
+
+    let speculation = MatchRollback::new(elab);
+    let mut inferred = None;
+    for (arm, (evidence_type, evidence_level)) in arms.iter().zip([
+        (&condition_type, &condition_level),
+        (&negated_condition, &Level::Zero),
+    ]) {
+        let [binder] = arm.binders.as_slice() else { continue };
+        let mut arm_cx = cx.clone();
+        arm_cx.push(
+            binder.name().to_string(),
+            evidence_type.clone(),
+            evidence_level.clone(),
+        );
+        let Ok((_, branch_type, branch_level)) =
+            elab.infer_motive_expr(&arm_cx, &arm.body)
+        else {
+            speculation.rollback();
+            continue;
+        };
+        // Substitute an arbitrary disposable term for the evidence. Equality
+        // with the re-weakened result is the syntactic proof that the type
+        // actually lives in the caller's context.
+        let branch_type0 = branch_type.apply_local(
+            &LocalSubst::id(&cx.gamma).extended(Rc::new(Term::Zero)),
+        );
+        if branch_type == branch_type0.shift_local(1) {
+            inferred = Some((branch_type0, branch_level));
+            break;
+        }
+        speculation.rollback();
+    }
+    let Some((ty, level)) = inferred else {
+        return MotiveInference::Declined;
+    };
+    // Branch inference was only a type probe. Ordinary match lowering owns
+    // all effects from the real pass, including those from nested matches.
+    drop(speculation);
+    let attempt = (|| {
+        let (scrutinee_term, scrutinee_type, scrutinee_level) = elab
+            .infer_motive_expr(cx, scrutinee)
+            .map_err(|error| if_resolution_error(MatchForm::If, scrutinee, error))?;
+        let term = elab.lower_constant_match(
+            cx,
+            MatchForm::If,
+            generated,
+            arms,
+            scrutinee_term,
+            &scrutinee_type,
+            &scrutinee_level,
+            ty.shift_local(1),
+            level.clone(),
+            span,
+        )?;
+        Ok((term, ty, level))
+    })();
+    MotiveInference::decided(attempt)
 }
 
 /// The mechanically convoyed motive and arms, ready for ordinary lowering.
@@ -440,6 +659,8 @@ fn field_rewrap(scrutinee: &Term) -> Option<(Term, Term)> {
 mod tests {
     use std::cell::Cell;
 
+    use heather_syntax::Pat;
+
     use super::*;
 
     const SPAN: Span = Span { start: 0, end: 1 };
@@ -473,6 +694,7 @@ mod tests {
         goals: Cell<usize>,
         mismatch_evidence: Cell<usize>,
         probing: Cell<bool>,
+        fail_lowering: Cell<bool>,
     }
 
     impl MatchSpeculationState for FakeSpeculation {
@@ -493,6 +715,38 @@ mod tests {
 
         fn set_motive_probe_active(&self, active: bool) {
             self.probing.set(active);
+        }
+    }
+
+    impl ConstantMotiveElab for FakeSpeculation {
+        fn infer_motive_expr(&self, _cx: &Cx, _expr: &Expr) -> R<(Term, Type, Level)> {
+            self.goals.set(self.goals.get() + 1);
+            Ok((Term::Zero, Type::Nat, Level::Zero))
+        }
+
+        fn lower_if_condition(&self, _cx: &Cx, _condition: &Ty) -> R<(Type, Level)> {
+            Ok((Type::Nat, Level::Zero))
+        }
+
+        fn lower_constant_match(
+            &self,
+            _cx: &Cx,
+            _form: MatchForm,
+            _generated: bool,
+            _arms: &[Arm],
+            _scrutinee: Term,
+            _scrutinee_type: &Type,
+            _scrutinee_level: &Level,
+            _motive: Type,
+            _motive_level: Level,
+            _span: Span,
+        ) -> R<Term> {
+            self.warnings.set(self.warnings.get() + 1);
+            if self.fail_lowering.get() {
+                err("lowering failed", SPAN)
+            } else {
+                Ok(Term::Zero)
+            }
         }
     }
 
@@ -530,6 +784,96 @@ mod tests {
         drop(probe);
         assert!(!state.probing.get());
         assert!(MotiveProbe::begin(&state).is_some());
+    }
+
+    #[test]
+    fn constant_match_discovery_commits_only_an_accepted_candidate() {
+        let arm = Arm {
+            ctor: "Zero".into(),
+            default: false,
+            binders: Vec::new(),
+            body: Expr { kind: ExprKind::Num(0), span: SPAN },
+            span: SPAN,
+        };
+        let scrutinee = Expr { kind: ExprKind::Num(0), span: SPAN };
+
+        let accepted = FakeSpeculation::default();
+        assert!(matches!(
+            infer_match_constant_motive(
+                &accepted,
+                &Cx::empty(),
+                MatchForm::Match,
+                &scrutinee,
+                std::slice::from_ref(&arm),
+                false,
+                SPAN,
+            ),
+            MotiveInference::Accepted(_)
+        ));
+        assert_eq!((accepted.goals.get(), accepted.warnings.get()), (2, 1));
+        assert!(!accepted.probing.get());
+
+        let declined = FakeSpeculation::default();
+        declined.goals.set(3);
+        declined.warnings.set(5);
+        declined.fail_lowering.set(true);
+        assert!(matches!(
+            infer_match_constant_motive(
+                &declined,
+                &Cx::empty(),
+                MatchForm::Match,
+                &scrutinee,
+                std::slice::from_ref(&arm),
+                false,
+                SPAN,
+            ),
+            MotiveInference::Declined
+        ));
+        assert_eq!((declined.goals.get(), declined.warnings.get()), (3, 5));
+        assert!(!declined.probing.get());
+    }
+
+    #[test]
+    fn recognized_if_lowering_failures_are_authoritative() {
+        let decide = Expr {
+            kind: ExprKind::App {
+                head: Box::new(Expr {
+                    kind: ExprKind::TyApp {
+                        head: Box::new(Expr {
+                            kind: ExprKind::Var("decide".into()),
+                            span: SPAN,
+                        }),
+                        args: vec![Ty { kind: TyKind::Nat, span: SPAN }],
+                    },
+                    span: SPAN,
+                }),
+                args: Vec::new(),
+                named: Vec::new(),
+                explicit: false,
+                goal_oriented: false,
+            },
+            span: SPAN,
+        };
+        let arm = Arm {
+            ctor: "Left".into(),
+            default: false,
+            binders: vec![Pat::Var { name: "evidence".into(), span: SPAN }],
+            body: Expr { kind: ExprKind::Num(0), span: SPAN },
+            span: SPAN,
+        };
+        let state = FakeSpeculation::default();
+        state.fail_lowering.set(true);
+        assert!(matches!(
+            infer_if_constant_motive(
+                &state,
+                &Cx::empty(),
+                &decide,
+                std::slice::from_ref(&arm),
+                true,
+                SPAN,
+            ),
+            MotiveInference::Failed(_)
+        ));
     }
 
     #[test]
