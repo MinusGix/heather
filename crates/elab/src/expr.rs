@@ -24,6 +24,13 @@ use crate::{Cx, ElabError, IMPLICIT_MARK_REFUSED, R, TyVar, err};
 /// implementor or gain access to the session behind it.
 pub(crate) trait StructuralTypeElab {
     fn lower_type(&self, cx: &Cx, ty: &Ty) -> R<(Type, Level)>;
+    fn lower_named_type(
+        &self,
+        cx: &Cx,
+        name: &str,
+        arguments: &[Ty],
+        span: Span,
+    ) -> R<(Type, Level)>;
     fn infer_type_endpoint(&self, cx: &Cx, expression: &Expr) -> R<(Term, Type, Level)>;
     fn check_type_endpoint(
         &self,
@@ -169,6 +176,20 @@ impl<'a> ExprElab<'a> {
                     level,
                 ))
             })()),
+            TyKind::Named { name, args } => Some((|| {
+                if let Some(argument) = args.iter().find(|argument| has_implicit_mark(argument)) {
+                    return err(IMPLICIT_MARK_REFUSED, argument.span);
+                }
+                elab.lower_named_type(cx, name, args, ty.span)
+            })()),
+            TyKind::Splice { name } => Some(err(
+                format!(
+                    "`${name}` cannot splice a type: type codes are layer p and cannot \
+                     appear inside layer-c code — bind the type inside the quote instead \
+                     (`fun (A: Type<0>) => …`, docs/in-language-map-design.md §3)"
+                ),
+                ty.span,
+            )),
             _ => None,
         }
     }
@@ -274,6 +295,18 @@ mod tests {
             };
             self.inferred_numerals.borrow_mut().push(n);
             Ok((Term::Zero, Type::Nat, Level::Zero))
+        }
+
+        fn lower_named_type(
+            &self,
+            _cx: &Cx,
+            name: &str,
+            arguments: &[Ty],
+            _span: Span,
+        ) -> R<(Type, Level)> {
+            assert_eq!(name, "Fake");
+            assert!(arguments.is_empty());
+            Ok((Type::Nat, Level::Zero))
         }
 
         fn check_type_endpoint(
@@ -404,5 +437,17 @@ mod tests {
         ));
         assert_eq!(*fake.inferred_numerals.borrow(), [4]);
         assert_eq!(*fake.checked_numerals.borrow(), [3]);
+
+        let named = Ty {
+            kind: TyKind::Named {
+                name: "Fake".into(),
+                args: Vec::new(),
+            },
+            span: SPAN,
+        };
+        assert_eq!(
+            expr.type_form(&fake, &cx, &named).unwrap().unwrap(),
+            (Type::Nat, Level::Zero)
+        );
     }
 }

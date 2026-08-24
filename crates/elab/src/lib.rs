@@ -676,6 +676,16 @@ impl expr::StructuralTypeElab for Elaborator {
         self.elab_infer(cx, expression)
     }
 
+    fn lower_named_type(
+        &self,
+        cx: &Cx,
+        name: &str,
+        arguments: &[Ty],
+        span: Span,
+    ) -> R<(Type, Level)> {
+        self.lower_named(cx, name, arguments, span)
+    }
+
     fn check_type_endpoint(
         &self,
         cx: &Cx,
@@ -2299,18 +2309,6 @@ impl Elaborator {
 
     fn elab_ty(&self, cx: &Cx, ty: &Ty) -> R<(Type, Level)> {
         match &ty.kind {
-            TyKind::Nat
-            | TyKind::Univ { .. }
-            | TyKind::Ctx
-            | TyKind::TyCode { .. }
-            | TyKind::Code { .. }
-            | TyKind::Vec { .. }
-            | TyKind::Fin(_)
-            | TyKind::Fn { .. }
-            | TyKind::Eq(..) => self
-                .expr_elab()
-                .type_form(self, cx, ty)
-                .expect("classified as an ExprElab type form"),
             // An expression in type position: infer it, require its type to be
             // a universe, and decode (docs/surface-universe.md §4). `El` is the
             // kernel's own decoding, so nothing here is a coercion — the term
@@ -2350,19 +2348,10 @@ impl Elaborator {
                 };
                 Ok((Type::El { level: level.clone(), tm: Rc::new(tm) }, level))
             }
-            TyKind::Named { name, args } => {
-                // A `D<…>` type argument's lowering stores kernel types and
-                // re-lowers in contexts with no skeleton slot, so a mark in
-                // one has no consumer and is refused (§3.4).
-                if let Some(a) = args.iter().find(|a| has_implicit_mark(a)) {
-                    return err(IMPLICIT_MARK_REFUSED, a.span);
-                }
-                self.lower_named(cx, name, args, ty.span)
-            }
-            // `$a` for a `TyCode` binder: its global type variable, valid at
-            // the code scope (a `meta fn` signature's payload types and quote
-            // payloads — anywhere `cx.meta` is present).
-            TyKind::Splice { name } => self.elab_ty_splice(cx, name, ty.span),
+            _ => self
+                .expr_elab()
+                .type_form(self, cx, ty)
+                .expect("only expression-as-type remains outside ExprElab"),
         }
     }
 

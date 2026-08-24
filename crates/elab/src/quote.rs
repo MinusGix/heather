@@ -1113,18 +1113,6 @@ impl Elaborator {
         Ok((term, m_ty, m_lvl))
     }
 
-    /// A `$name` splice in *type* position. Out of the slice with `TyCode`
-    /// (see [`MetaBinder`]); the arm stays so the diagnostic can say why.
-    pub(crate) fn elab_ty_splice(&self, _cx: &Cx, name: &str, span: Span) -> R<(Type, Level)> {
-        err(
-            format!(
-                "`${name}` cannot splice a type: type codes are layer p and cannot \
-                 appear inside layer-c code — bind the type inside the quote instead \
-                 (`fun (A: Type<0>) => …`, docs/in-language-map-design.md §3)"
-            ),
-            span,
-        )
-    }
 }
 
 /// The branch names an arm may use, for the unknown-branch diagnostic. Every

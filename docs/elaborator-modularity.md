@@ -261,9 +261,11 @@ The first migrated slice is intentionally made of leaves: closed type forms,
 literal/universe/hole/slot inference, hole/slot checking, and the semantic
 half of expression WHNF. The next slice moves primitive structural type
 formation—vectors, `Fin`, dependent functions, and equality. Those forms see
-only a three-operation `StructuralTypeElab` collaborator: recursive type
-lowering plus term inference and checking. Binder extension stays local to the
-mechanism, including callable skeletons and universe-bound type variables.
+only a small `StructuralTypeElab` collaborator: recursive type lowering, named
+type lowering, and term inference/checking. Binder extension stays local to
+the mechanism, including callable skeletons and universe-bound type variables.
+Named types now cross one explicit read-only policy operation; the rejected
+type-splice form is local and needs no collaborator at all.
 
 Unit fixtures construct the view directly, infer a numeral, allocate a goal,
 and exercise structural type formation with a tiny fake collaborator, all
@@ -271,13 +273,14 @@ without an `Elaborator` or session. The root still owns the registry-sensitive
 `unspell_here` pre-pass before type WHNF; that spelling policy is not smuggled
 into the semantic capability.
 
-The remaining `elab_ty` arms require name resolution, indexed and
-value-parameter lowering, operator policy, or meta-splice scope. Moving them as
-one unit would turn the new view into the context bag it is meant to replace.
-Continue moving `elab_ty`, `elab_check*`, and `elab_infer*` behind `ExprElab`
-only as those inputs become narrow named queries. Split application, match
-lowering, and member/operator dispatch into collaborators only when their
-parameter lists describe real dependencies.
+Only expression-as-type remains in the root `elab_ty` match. It combines
+operator rewriting, indexed-family recognition, value-parameter formation,
+term inference, and universe decoding; moving it behind one callback would
+only rename the old coupling. Continue moving `elab_check*` and `elab_infer*`
+behind `ExprElab` where their inputs become narrow named queries, and return to
+expression-as-type after those underlying policies have their own seams. Split
+application, match lowering, and member/operator dispatch into collaborators
+only when their parameter lists describe real dependencies.
 
 The desired test is architectural: pure unification and surface rewriting can
 be unit-tested without constructing an `Elaborator`; expression elaboration
