@@ -684,6 +684,18 @@ impl expr::EqualityCheckingElab for Elaborator {
     }
 }
 
+impl expr::RecursiveCheckingElab for Elaborator {
+    fn check_expression(
+        &self,
+        cx: &Cx,
+        expression: &Expr,
+        expected: &Type,
+        level: &Level,
+    ) -> R<Term> {
+        self.elab_check(cx, expression, expected, level)
+    }
+}
+
 impl application::ExplicitArgElab for Elaborator {
     fn whnf_for_application(&self, cx: &Cx, ty: &Type, span: Span) -> R<Type> {
         self.whnf(cx, ty, span)
@@ -2595,7 +2607,10 @@ impl Elaborator {
             // like `refl`, and the length must be a *literal*: matching a
             // literal's own length against a neutral one is unification, not
             // a check (docs/container-fields.md §2.2).
-            ExprKind::VecLit(elems) => self.elab_vec_lit(cx, elems, expected, e.span),
+            ExprKind::VecLit(_) => self
+                .expr_elab()
+                .check_indexed_form(self, cx, e, expected)
+                .expect("classified as an ExprElab indexed checking form"),
             // `FZ` / `FS(j)` against an expected `Fin`. Checking-only, like
             // `refl` and a vector literal: `FZ` inhabits `Fin(Succ k)` for
             // *every* `k`, and nothing in the term names one
@@ -2608,7 +2623,9 @@ impl Elaborator {
                     && !self.shadowed(cx, name)
                     && self.ctor_here_expected(cx, name, expected).is_none() =>
             {
-                self.elab_fin_index(cx, None, expected, e.span)
+                self.expr_elab()
+                    .check_indexed_form(self, cx, e, expected)
+                    .expect("classified as an ExprElab indexed checking form")
             }
             // `trivial` — the canonical inhabitant of `True`, i.e. the kernel's
             // `⟨⟩^l : Unit^l` (`issues/true-prop-trivial-hypotheses.md`). A
@@ -2637,15 +2654,14 @@ impl Elaborator {
                     ),
                 }
             }
-            ExprKind::App { args, .. }
+            ExprKind::App { .. }
                 if matches!(e.as_named(), Some(("FS", _, false)))
                     && !self.shadowed(cx, "FS")
                     && self.ctor_here_expected(cx, "FS", expected).is_none() =>
             {
-                let [j] = args.as_slice() else {
-                    return err("`FS` takes exactly one argument, an index", e.span);
-                };
-                self.elab_fin_index(cx, Some(j), expected, e.span)
+                self.expr_elab()
+                    .check_indexed_form(self, cx, e, expected)
+                    .expect("classified as an ExprElab indexed checking form")
             }
             // A numeral at a `Fin` type is the iterated index (§3.3): `xs[2]`
             // is the spelling anybody reaches for first, and without this it
@@ -4801,59 +4817,6 @@ impl Elaborator {
             case_r: Rc::new(case_r),
             scrut: Rc::new(scrut_t),
         })
-    }
-
-    /// `FZ` (`succ_of: None`) or `FS(j)` against an expected `Fin`
-    /// (docs/surface-fin-indexing-design.md §3.2).
-    ///
-    /// `decoded` and not `whnf`, for exactly the reason `elab_vec_lit` gives:
-    /// `Fin` *reduces on its length*, so the whnf of `Fin(Succ k)` is the sum
-    /// this arm exists to recognise the folded form of. The length alone is
-    /// reduced, and that is what the table dispatches on.
-    fn elab_fin_index(
-        &self,
-        cx: &Cx,
-        succ_of: Option<&Expr>,
-        expected: &Type,
-        span: Span,
-    ) -> R<Term> {
-        let what = if succ_of.is_some() { "FS" } else { "FZ" };
-        let expected = &*crate::inductive::decoded(expected);
-        let Type::Fin { len } = expected else {
-            return err(format!("`{what}` needs an expected `Fin` type"), span);
-        };
-        let len_w = self.whnf_tm(cx, len, span)?;
-        let Term::Succ(k) = &*len_w else {
-            return if matches!(&*len_w, Term::Zero) {
-                err("`Fin(0)` is empty, so it has no index", span)
-            } else {
-                err(
-                    "the length has to reduce to a successor here; `Fin(n)` at an open \
-                     `n` has no canonical index",
-                    span,
-                )
-            };
-        };
-        // The annotations are written **folded** (`Fin(k)`, not its unfolded
-        // sum): the kernel converts the two, and the folded form is what a
-        // goal reads back as — the property `wf.rs`'s `fin_index` exists to
-        // preserve.
-        let (lhs_level, rhs_level) = (Level::Zero, Level::Zero);
-        let lhs = Rc::new(Type::Unit { level: Level::Zero });
-        let rhs = Rc::new(Type::Fin { len: Rc::clone(k) });
-        match succ_of {
-            None => Ok(Term::Inl {
-                lhs_level,
-                rhs_level,
-                lhs,
-                rhs,
-                val: Rc::new(Term::Triv { level: Level::Zero }),
-            }),
-            Some(j) => {
-                let j_t = self.elab_check(cx, j, &rhs, &Level::Zero)?;
-                Ok(Term::Inr { lhs_level, rhs_level, lhs, rhs, val: Rc::new(j_t) })
-            }
-        }
     }
 
     /// A numeral in checking position. At a `Fin`-headed expected type it is
@@ -8262,84 +8225,6 @@ impl Elaborator {
             },
             e.level.clone(),
         ))
-    }
-
-    /// `[a, b, c]` at an expected `Vec^l(T; k)`: the Σ-chain that `Vec`
-    /// unfolds to, terminated by `⟨⟩ : Unit^l`
-    /// (docs/container-fields.md §2.2). Shares its shape with
-    /// `wf::build_children`, which builds the same chain for a constructor's
-    /// children — the difference is only where the element type comes from.
-    fn elab_vec_lit(
-        &self,
-        cx: &Cx,
-        elems: &[Expr],
-        expected: &Type,
-        span: Span,
-    ) -> R<Term> {
-        // *Not* whnf'd: `Vec` reduces on its length, so the whnf of
-        // `[T; 0]` is `Unit` and of `[T; 2]` a Σ-chain — the former is what
-        // this arm exists to recognise.
-        //
-        // `decoded` and not `whnf` for exactly that reason. A `Vec` no longer
-        // always arrives straight from `elab_ty`: a record whose field is a
-        // vector, reached as a *code* (a type-valued `fn`, or a `Val -> Type`
-        // value), hands `build_fields` a component that is `El (TmVec …)`
-        // (docs/types-as-expressions.md §4 — the decode is lazy, so the
-        // children stay wrapped). `decoded` strips that one canonical former
-        // and stops; `whnf` would carry straight on into the Σ-chain and lose
-        // the shape this arm exists to see.
-        let expected = &*crate::inductive::decoded(expected);
-        let Type::Vec { level, elem, len } = expected else {
-            return err("a vector literal needs a `[T; n]` expected type", span);
-        };
-        let (level, elem) = (level.clone(), Rc::clone(elem));
-        // The length has to be a literal — but only *after* reduction:
-        // `Vec` itself reduces on the whnf of its length, and a container
-        // field's expected length arrives as a projection out of the label
-        // (docs/container-fields.md §3.4), which computes to a numeral rather
-        // than being one.
-        let len = self
-            .semantic_oracle()
-            .whnf_term_opaque(&cx.gamma, len)
-            .map_err(|_| ElabError::Elab {
-                msg: "ran out of fuel reducing a vector literal's expected length".into(),
-                span,
-            })?;
-        let Some(k) = crate::inductive::nat_value(&len) else {
-            return err(
-                "a vector literal needs a literal length here; a vector of a \
-                 variable length has to come from a binder",
-                span,
-            );
-        };
-        if k != elems.len() {
-            return err(
-                format!(
-                    "this vector literal has {} element(s) but {k} are expected",
-                    elems.len()
-                ),
-                span,
-            );
-        }
-        let mut acc = Term::Triv { level: level.clone() };
-        for (j, e) in elems.iter().enumerate().rev() {
-            let x = self.elab_check(cx, e, &elem, &level)?;
-            acc = Term::Pair {
-                fst_level: level.clone(),
-                snd_level: level.clone(),
-                fst_ty: Rc::clone(&elem),
-                // A Σ's second component binds, so the tail type sits one
-                // binder deeper (tier-1 §5's annotation caveat).
-                snd_ty: Rc::new(Type::Vec {
-                    level: level.clone(),
-                    elem: Rc::new(elem.shift_local(1)),
-                    len: Rc::new(crate::inductive::nat_lit(elems.len() - 1 - j)),
-                }),
-                fst: Rc::new(x),
-                snd: Rc::new(acc),
-            };
-        }
-        Ok(acc)
     }
 
     /// A lambda against an expected type (docs/surface-function-types.md §5.2).

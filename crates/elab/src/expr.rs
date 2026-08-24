@@ -58,6 +58,17 @@ pub(crate) trait EqualityCheckingElab {
     ) -> bool;
 }
 
+/// Recursive checking required by checking-only indexed constructors.
+pub(crate) trait RecursiveCheckingElab {
+    fn check_expression(
+        &self,
+        cx: &Cx,
+        expression: &Expr,
+        expected: &Type,
+        level: &Level,
+    ) -> R<Term>;
+}
+
 /// The expression-layer capabilities migrated so far.
 ///
 /// Local Γ is supplied per operation rather than stored: recursive descent
@@ -315,6 +326,141 @@ impl<'a> ExprElab<'a> {
             _ => None,
         }
     }
+
+    /// Checking-only indexed forms whose result type supplies their missing
+    /// shape. Name and constructor shadowing policy is settled by the caller.
+    pub(crate) fn check_indexed_form(
+        &self,
+        elab: &impl RecursiveCheckingElab,
+        cx: &Cx,
+        e: &Expr,
+        expected: &Type,
+    ) -> Option<R<Term>> {
+        match &e.kind {
+            ExprKind::VecLit(elems) => Some(self.check_vec_lit(elab, cx, elems, expected, e.span)),
+            ExprKind::Var(name) if name == "FZ" => {
+                Some(self.check_fin_index(elab, cx, None, expected, e.span))
+            }
+            ExprKind::App { args, .. }
+                if matches!(e.as_named(), Some(("FS", _, false))) =>
+            {
+                Some(match args.as_slice() {
+                    [index] => self.check_fin_index(elab, cx, Some(index), expected, e.span),
+                    _ => err("`FS` takes exactly one argument, an index", e.span),
+                })
+            }
+            _ => None,
+        }
+    }
+
+    fn check_fin_index(
+        &self,
+        elab: &impl RecursiveCheckingElab,
+        cx: &Cx,
+        succ_of: Option<&Expr>,
+        expected: &Type,
+        span: Span,
+    ) -> R<Term> {
+        let what = if succ_of.is_some() { "FS" } else { "FZ" };
+        let expected = &*crate::inductive::decoded(expected);
+        let Type::Fin { len } = expected else {
+            return err(format!("`{what}` needs an expected `Fin` type"), span);
+        };
+        let len_w = self.whnf_term(cx, len).map_err(|_| ElabError::Elab {
+            msg: "out of fuel reducing a term".into(),
+            span,
+        })?;
+        let Term::Succ(k) = &len_w else {
+            return if matches!(&len_w, Term::Zero) {
+                err("`Fin(0)` is empty, so it has no index", span)
+            } else {
+                err(
+                    "the length has to reduce to a successor here; `Fin(n)` at an open \
+                     `n` has no canonical index",
+                    span,
+                )
+            };
+        };
+        let (lhs_level, rhs_level) = (Level::Zero, Level::Zero);
+        let lhs = Rc::new(Type::Unit { level: Level::Zero });
+        let rhs = Rc::new(Type::Fin { len: Rc::clone(k) });
+        match succ_of {
+            None => Ok(Term::Inl {
+                lhs_level,
+                rhs_level,
+                lhs,
+                rhs,
+                val: Rc::new(Term::Triv { level: Level::Zero }),
+            }),
+            Some(index) => {
+                let index = elab.check_expression(cx, index, &rhs, &Level::Zero)?;
+                Ok(Term::Inr {
+                    lhs_level,
+                    rhs_level,
+                    lhs,
+                    rhs,
+                    val: Rc::new(index),
+                })
+            }
+        }
+    }
+
+    fn check_vec_lit(
+        &self,
+        elab: &impl RecursiveCheckingElab,
+        cx: &Cx,
+        elems: &[Expr],
+        expected: &Type,
+        span: Span,
+    ) -> R<Term> {
+        // Preserve the folded constructor: full WHNF would turn `Vec` into
+        // its Unit/Sigma encoding before this checking-only form can see it.
+        let expected = &*crate::inductive::decoded(expected);
+        let Type::Vec { level, elem, len } = expected else {
+            return err("a vector literal needs a `[T; n]` expected type", span);
+        };
+        let (level, elem) = (level.clone(), Rc::clone(elem));
+        let len = self
+            .semantic
+            .whnf_term_opaque(&cx.gamma, len)
+            .map_err(|_| ElabError::Elab {
+                msg: "ran out of fuel reducing a vector literal's expected length".into(),
+                span,
+            })?;
+        let Some(k) = crate::inductive::nat_value(&len) else {
+            return err(
+                "a vector literal needs a literal length here; a vector of a \
+                 variable length has to come from a binder",
+                span,
+            );
+        };
+        if k != elems.len() {
+            return err(
+                format!(
+                    "this vector literal has {} element(s) but {k} are expected",
+                    elems.len()
+                ),
+                span,
+            );
+        }
+        let mut acc = Term::Triv { level: level.clone() };
+        for (j, element) in elems.iter().enumerate().rev() {
+            let element = elab.check_expression(cx, element, &elem, &level)?;
+            acc = Term::Pair {
+                fst_level: level.clone(),
+                snd_level: level.clone(),
+                fst_ty: Rc::clone(&elem),
+                snd_ty: Rc::new(Type::Vec {
+                    level: level.clone(),
+                    elem: Rc::new(elem.shift_local(1)),
+                    len: Rc::new(crate::inductive::nat_lit(elems.len() - 1 - j)),
+                }),
+                fst: Rc::new(element),
+                snd: Rc::new(acc),
+            };
+        }
+        Ok(acc)
+    }
 }
 
 #[cfg(test)]
@@ -401,6 +547,18 @@ mod tests {
             _level: &Level,
         ) -> bool {
             lhs == rhs
+        }
+    }
+
+    impl RecursiveCheckingElab for StructuralFake {
+        fn check_expression(
+            &self,
+            cx: &Cx,
+            expression: &Expr,
+            expected: &Type,
+            level: &Level,
+        ) -> R<Term> {
+            self.check_type_endpoint(cx, expression, expected, level)
         }
     }
 
@@ -584,6 +742,45 @@ mod tests {
                 .unwrap()
                 .unwrap(),
             Term::GlobalTm { .. }
+        ));
+    }
+
+    #[test]
+    fn indexed_checking_needs_only_recursive_checking() {
+        let goals = GoalArena::default();
+        let slot_probe = Cell::new(None);
+        let expr = view(&goals, &slot_probe);
+        let fake = StructuralFake::default();
+        let cx = Cx::empty();
+        let vec_ty = Type::Vec {
+            level: Level::Zero,
+            elem: Rc::new(Type::Nat),
+            len: Rc::new(crate::inductive::nat_lit(2)),
+        };
+        let literal = Expr {
+            kind: ExprKind::VecLit(vec![
+                Expr { kind: ExprKind::Num(3), span: SPAN },
+                Expr { kind: ExprKind::Num(4), span: SPAN },
+            ]),
+            span: SPAN,
+        };
+        assert!(matches!(
+            expr.check_indexed_form(&fake, &cx, &literal, &vec_ty)
+                .unwrap()
+                .unwrap(),
+            Term::Pair { .. }
+        ));
+        assert_eq!(*fake.checked_numerals.borrow(), [4, 3]);
+
+        let fz = Expr { kind: ExprKind::Var("FZ".into()), span: SPAN };
+        let fin_ty = Type::Fin {
+            len: Rc::new(Term::Succ(Rc::new(Term::Zero))),
+        };
+        assert!(matches!(
+            expr.check_indexed_form(&fake, &cx, &fz, &fin_ty)
+                .unwrap()
+                .unwrap(),
+            Term::Inl { .. }
         ));
     }
 }

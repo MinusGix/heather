@@ -288,6 +288,14 @@ the `refl` shadowing decision, so the view owns equality construction without
 gaining name resolution. The obsolete general `new_goal` forwarding method is
 gone; only keyed implicit promotion still reaches the arena from the root.
 
+Checking-only indexed constructors are the next complete slice. Vector
+literals and `FZ`/`FS` now preserve their folded `Vec`/`Fin` shapes and reduce
+only the indices inside `ExprElab`; their sole outward operation is recursive
+checking of an element or predecessor. Root orchestration still decides
+whether `FZ` or `FS` is shadowed by a local or declaration constructor. This
+keeps name resolution out of the view while removing both term constructors
+and their reduction policy from the root elaborator.
+
 Only expression-as-type remains in the root `elab_ty` match. It combines
 operator rewriting, indexed-family recognition, value-parameter formation,
 term inference, and universe decoding; moving it behind one callback would
@@ -334,10 +342,10 @@ The remaining routes are not equally ready. Take them in dependency order:
    normalization first, then carrier/callable queries, operator policy, dot
    resolution, and dictionary construction.
 
-Moving vector or lambda helpers merely to reduce line count is intentionally
-not a roadmap item. Move them when they can consume the same explicit
-expression capabilities; otherwise the result is only widened privacy and
-forwarding methods.
+Moving lambda helpers merely to reduce line count is intentionally not a
+roadmap item. Move them when their binder, skeleton, and conversion policies
+have explicit expression capabilities; otherwise the result is only widened
+privacy and forwarding methods.
 
 ## Lessons from the registry pass
 
