@@ -400,11 +400,23 @@ That shared core is now a normal `recursion` module rather than textually
 included into `lib.rs`. Its five state types form an explicit crate-visible
 contract for contexts and route owners. Binder-identity descent detection and
 written self-call type-argument validation moved with them because both are
-session-free recursion policy; the former has a direct shadowing test. The
-large self-call lowering remains in root for now: it combines recursive
-expression inference, application metadata, over-application, and container
-lowering, so moving it before those capabilities narrow would merely create a
-broad forwarding interface.
+session-free recursion policy; the former has a direct shadowing test.
+
+Guarded self-call lowering now lives there too. The recursion owner decides
+written argument positions, checks the decreasing argument before indexed
+rebinding, validates unchanged parameters, chooses a `Wf` descendant or
+course-of-values component, and hands over-applications to the ordinary
+explicit-application engine. Its boundary adds only recursive expression
+inference and the callable parameter metadata used for spill diagnostics to
+that existing explicit-argument interface. Direct tests select a Nat IH and
+exercise a callable-result spill without an elaboration session.
+
+The container spellings `.map(self)` and `.cong(self)` deliberately remain
+with the vector built-ins. They are not ordinary self-calls with another guard
+shape: they tabulate an indexed container IH, optionally dispatch a registered
+code template, or construct an equation between two tabulations. Moving that
+route into the recursion core would widen it with vector schemas and template
+registry policy.
 
 Ordinary statements now have their own subsystem as well. `statements.rs`
 owns context cloning and sequencing, annotated and inferred alias creation,
@@ -458,11 +470,14 @@ The remaining routes are not equally ready. Take them in dependency order:
    Its boundary names only expression inference, condition-type elaboration,
    final match lowering, and speculative state; the root owns those semantic
    operations while matching owns candidate order and the distinction between
-   a speculative decline and an authoritative failure. Next narrow self-call
-   lowering's application/inference capabilities enough to move it honestly,
-   or take the next checking/inference family whose capability surface is
-   already smaller. Preserve the existing inductive, indexed, forded, and
-   `Wf` route owners instead of recombining them.
+   a speculative decline and an authoritative failure. Guarded self-call
+   lowering now lives in the shared recursion core behind recursive inference
+   and explicit-application capabilities; container tabulation remains with
+   vector built-ins for the reasons above. Next take the next
+   checking/inference family whose capability surface is already small, or
+   isolate the vector built-in family before attempting its container route.
+   Preserve the existing inductive, indexed, forded, and `Wf` route owners
+   instead of recombining them.
 3. **Dispatch last.** Named arguments, member lookup, class dispatch, indexed
    dictionaries, operator carriers, designations, and compatibility fallback
    are several policies, not one `dispatch.rs`. Split pure argument

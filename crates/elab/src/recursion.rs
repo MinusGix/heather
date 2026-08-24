@@ -4,9 +4,21 @@ use std::rc::Rc;
 
 use heather_kernel::level::Level;
 use heather_kernel::term::{LocalCtx, LocalVar, Term, Type};
-use heather_syntax::{Span, Ty, TyKind};
+use heather_syntax::{Expr, Span, Ty, TyKind};
 
-use crate::{Cx, R, err};
+use crate::application::{self, ExplicitArgElab, ParamMeta};
+use crate::{Cx, R, err, matching};
+
+/// Semantic capabilities needed by guarded self-call lowering.
+///
+/// This module owns termination-guard interpretation and selection of the
+/// induction hypothesis. The root elaborator retains recursive expression
+/// inference and callable metadata, while explicit spill application reuses
+/// the ordinary application engine.
+pub(crate) trait SelfCallElab: ExplicitArgElab {
+    fn infer_self_call_argument(&self, cx: &Cx, argument: &Expr) -> R<(Term, Type, Level)>;
+    fn self_call_application_params(&self, name: &str) -> Rc<Vec<ParamMeta>>;
+}
 
 /// Is `scrut` (already elaborated) exactly one of the enclosing declaration's
 /// parameters? Returns its parameter index — the argument position the
@@ -67,6 +79,223 @@ pub(crate) fn check_self_tyargs(cx: &Cx, tyargs: &[Ty], span: Span) -> R<()> {
         }
     }
     Ok(())
+}
+
+/// Lower a call to the enclosing declaration's own name to the induction
+/// hypothesis supplied by its structurally recursive match.
+///
+/// The decreasing argument is checked first because indexed guards discover
+/// the descendant before they can validate a rebound index. Every remaining
+/// declared parameter must be passed unchanged. Arguments beyond the
+/// declaration's arity are applied to the induction hypothesis's result by
+/// the ordinary explicit-application engine.
+pub(crate) fn elab_self_call(
+    elab: &impl SelfCallElab,
+    cx: &Cx,
+    args: &[Expr],
+    explicit: bool,
+    span: Span,
+) -> R<(Term, Type, Level)> {
+    let self_ref = Rc::clone(cx.selfref.as_ref().expect("self-call outside a declaration"));
+    let name = &self_ref.name;
+    let Some(guard) = cx.guard.clone() else {
+        return err(
+            format!(
+                "recursive call to `{name}` is not structurally guarded: it must occur \
+                 inside a `match` on one of `{name}`'s own parameters"
+            ),
+            span,
+        );
+    };
+
+    // Which parameter each written value argument fills. Leading type
+    // parameters are never passed here; value implicits are omitted unless
+    // the call is `@`-marked.
+    let positions: Vec<usize> = (self_ref.n_tyvars..self_ref.params.len())
+        .filter(|&position| explicit || !self_ref.params[position].1)
+        .collect();
+    if !positions.contains(&guard.dec) {
+        return err(
+            format!(
+                "`{name}` recurses on its implicit parameter `{}`; pass it explicitly \
+                 (`@{name}(…)`) to make the recursive call",
+                self_ref.params[guard.dec].0
+            ),
+            span,
+        );
+    }
+    if args.len() < positions.len() {
+        return err(
+            format!(
+                "recursive call to `{name}` must pass all {} argument(s), found {}",
+                positions.len(),
+                args.len()
+            ),
+            span,
+        );
+    }
+
+    let (args, spill) = args.split_at(positions.len());
+    let mut descendant = 0usize;
+    let mut cov_at = 0usize;
+    let order = {
+        let mut order: Vec<usize> = (0..args.len()).collect();
+        if let Some(decreasing) = positions.iter().position(|&position| position == guard.dec) {
+            order.swap(0, decreasing);
+        }
+        order
+    };
+    for (argument, position) in order.iter().map(|&index| (&args[index], positions[index])) {
+        // Compare by binder for Nat and by term for Wf. Names are diagnostic
+        // data only and cannot fake structural descent through shadowing.
+        let (argument_term, _, _) = elab.infer_self_call_argument(cx, argument)?;
+        let accepted = match (&guard.kind, position == guard.dec) {
+            (GuardKind::Nat { preds, comps, .. }, true) => match argument_term {
+                Term::Var(LocalVar(index)) => {
+                    let absolute = cx.names.len() - 1 - index as usize;
+                    match preds.iter().position(|&predecessor| predecessor == absolute) {
+                        Some(depth) if depth < comps.len() => {
+                            cov_at = depth;
+                            true
+                        }
+                        _ => false,
+                    }
+                }
+                _ => false,
+            },
+            (GuardKind::Wf { depth, children, .. }, true) => {
+                let shift = (cx.names.len() - depth) as u32;
+                match children
+                    .iter()
+                    .position(|(child, ..)| child.shift_local(shift) == argument_term)
+                {
+                    Some(index) => {
+                        descendant = index;
+                        true
+                    }
+                    None => false,
+                }
+            }
+            (_, false) => {
+                let is_original_binder = |absolute: usize| {
+                    matches!(argument_term, Term::Var(LocalVar(index))
+                        if cx.names.len() - 1 - index as usize == absolute)
+                };
+                is_original_binder(position)
+                    || guard.rebind.as_ref().is_some_and(|(rebound, terms)| {
+                        let depth = match &guard.kind {
+                            GuardKind::Wf { depth, .. } => *depth,
+                            GuardKind::Nat { .. } => return false,
+                        };
+                        let shift = (cx.names.len() - depth) as u32;
+                        *rebound == position
+                            && terms
+                                .get(descendant)
+                                .is_some_and(|term| term.shift_local(shift) == argument_term)
+                    })
+            }
+        };
+        if accepted {
+            continue;
+        }
+        return if position == guard.dec {
+            let (what, why) = match &guard.kind {
+                GuardKind::Nat { preds, comps, .. } => {
+                    let usable = preds.len().min(comps.len());
+                    let names: Vec<String> = preds[..usable]
+                        .iter()
+                        .map(|predecessor| format!("`{}`", cx.names[*predecessor]))
+                        .collect();
+                    if usable == 1 {
+                        (
+                            format!("{}, the predecessor bound by", names[0]),
+                            format!(
+                                ". A deeper subterm is refused too, even though it is \
+                                 genuinely smaller: this `match` compiles to a recursor \
+                                 whose induction hypothesis is the value at {} and at \
+                                 nothing else, so a call anywhere else has no term to \
+                                 elaborate to. Reaching further needs the recursion to \
+                                 carry its earlier values \
+                                 (issues/recursion-at-deeper-subterms.md), which happens \
+                                 only where an arm scrutinizes its own predecessor",
+                                names[0]
+                            ),
+                        )
+                    } else {
+                        (
+                            format!(
+                                "one of {}, the predecessors bound by",
+                                names.join(", ")
+                            ),
+                            format!(
+                                ". The recursion carries its last {usable} values, so \
+                                 those are the subterms it can descend to; anything else \
+                                 has no term to elaborate to, even when it is genuinely \
+                                 smaller (issues/recursion-at-deeper-subterms.md)"
+                            ),
+                        )
+                    }
+                }
+                GuardKind::Wf { .. } => (
+                    "one of the recursive fields bound by".to_string(),
+                    ". A deeper subterm is refused too, even though it is genuinely \
+                     smaller: the induction hypothesis this `match` binds is the value \
+                     at each recursive field and at nothing else, so a call anywhere \
+                     else has no term to elaborate to"
+                        .to_string(),
+                ),
+            };
+            err(
+                format!(
+                    "recursive call to `{name}` must descend: argument `{}` has to be \
+                     {what} the enclosing `match`{why}",
+                    self_ref.params[position].0
+                ),
+                argument.span,
+            )
+        } else {
+            err(
+                format!(
+                    "recursive call to `{name}` must pass `{}` unchanged: the induction \
+                     hypothesis fixes every non-decreasing parameter (generalizing a \
+                     varying argument into the motive is not supported yet)",
+                    self_ref.params[position].0
+                ),
+                argument.span,
+            )
+        };
+    }
+
+    let (term, ty, level) = match &guard.kind {
+        GuardKind::Nat { tuple, comps, mlvl, depth, .. } => {
+            let shift = (cx.names.len() - depth) as u32;
+            let term = matching::cov_proj(comps, mlvl, tuple.clone(), cov_at);
+            (
+                term.shift_local(shift),
+                comps[cov_at].shift_local(shift),
+                mlvl.clone(),
+            )
+        }
+        GuardKind::Wf { depth, children, .. } => {
+            let shift = (cx.names.len() - depth) as u32;
+            let (_, ih, ty, level) = &children[descendant];
+            ((**ih).shift_local(shift), ty.shift_local(shift), level.clone())
+        }
+    };
+    if spill.is_empty() {
+        return Ok((term, ty, level));
+    }
+    application::apply_explicit(
+        elab,
+        cx,
+        Some(name),
+        elab.self_call_application_params(name),
+        self_ref.params.len(),
+        term,
+        ty,
+        level,
+        spill,
+    )
 }
 
 /// The enclosing declaration, in scope throughout its own body so that a
@@ -224,6 +453,82 @@ pub(crate) struct EqSplit {
 mod tests {
     use super::*;
 
+    struct FakeSelfCall;
+
+    impl ExplicitArgElab for FakeSelfCall {
+        fn whnf_for_application(&self, _cx: &Cx, ty: &Type, _span: Span) -> R<Type> {
+            Ok(ty.clone())
+        }
+
+        fn check_explicit_argument(
+            &self,
+            cx: &Cx,
+            argument: &Expr,
+            _expected: &Type,
+            _level: &Level,
+            _hint: Option<(&str, &str)>,
+            _skeleton: Option<&crate::Skel>,
+        ) -> R<Term> {
+            Ok(self.infer_self_call_argument(cx, argument)?.0)
+        }
+    }
+
+    impl SelfCallElab for FakeSelfCall {
+        fn infer_self_call_argument(
+            &self,
+            cx: &Cx,
+            argument: &Expr,
+        ) -> R<(Term, Type, Level)> {
+            let term = match &argument.kind {
+                heather_syntax::ExprKind::Var(name) => {
+                    let position = cx
+                        .names
+                        .iter()
+                        .rposition(|candidate| candidate == name)
+                        .ok_or_else(|| crate::ElabError::Elab {
+                            msg: format!("unknown test local `{name}`"),
+                            span: argument.span,
+                        })?;
+                    Term::Var(LocalVar((cx.names.len() - 1 - position) as u32))
+                }
+                heather_syntax::ExprKind::Num(0) => Term::Zero,
+                _ => return err("unsupported test expression", argument.span),
+            };
+            Ok((term, Type::Nat, Level::Zero))
+        }
+
+        fn self_call_application_params(&self, _name: &str) -> Rc<Vec<ParamMeta>> {
+            Rc::new(Vec::new())
+        }
+    }
+
+    const SPAN: Span = Span { start: 0, end: 1 };
+
+    fn nat_guarded_context(component: Type) -> Cx {
+        let mut cx = Cx::empty();
+        cx.push("n".into(), Type::Nat, Level::Zero);
+        cx.push("predecessor".into(), Type::Nat, Level::Zero);
+        cx.selfref = Some(Rc::new(SelfRef {
+            name: "f".into(),
+            params: vec![("n".into(), false)],
+            n_tyvars: 0,
+        }));
+        cx.guard = Some(Rc::new(Guard {
+            dec: 0,
+            rebind: None,
+            kind: GuardKind::Nat {
+                preds: vec![1],
+                tuple: Term::Var(LocalVar(0)),
+                comps: vec![component],
+                mlvl: Level::Zero,
+                depth: 2,
+                motive: Rc::new(Type::Nat),
+                gamma: LocalCtx::nil(),
+            },
+        }));
+        cx
+    }
+
     #[test]
     fn descent_is_parameter_identity_not_a_shadowing_name() {
         let mut cx = Cx::empty();
@@ -238,5 +543,48 @@ mod tests {
         cx.push("n".into(), Type::Nat, Level::Zero);
         assert_eq!(descends_on_param(&cx, &Term::Var(LocalVar(0))), None);
         assert_eq!(descends_on_param(&cx, &Term::Var(LocalVar(1))), Some(0));
+    }
+
+    #[test]
+    fn guarded_self_call_selects_the_ih_without_an_elaborator() {
+        let cx = nat_guarded_context(Type::Nat);
+        let predecessor = Expr {
+            kind: heather_syntax::ExprKind::Var("predecessor".into()),
+            span: SPAN,
+        };
+        let (term, ty, level) = elab_self_call(
+            &FakeSelfCall,
+            &cx,
+            std::slice::from_ref(&predecessor),
+            false,
+            SPAN,
+        )
+        .expect("guarded call");
+        assert_eq!(term, Term::Var(LocalVar(0)));
+        assert_eq!(ty, Type::Nat);
+        assert_eq!(level, Level::Zero);
+    }
+
+    #[test]
+    fn self_call_spill_reuses_explicit_application() {
+        let result = Type::Pi {
+            dom_level: Level::Zero,
+            cod_level: Level::Zero,
+            dom: Rc::new(Type::Nat),
+            cod: Rc::new(Type::Nat),
+        };
+        let cx = nat_guarded_context(result);
+        let args = [
+            Expr {
+                kind: heather_syntax::ExprKind::Var("predecessor".into()),
+                span: SPAN,
+            },
+            Expr { kind: heather_syntax::ExprKind::Num(0), span: SPAN },
+        ];
+        let (term, ty, level) =
+            elab_self_call(&FakeSelfCall, &cx, &args, false, SPAN).expect("spilled call");
+        assert!(matches!(term, Term::App { .. }));
+        assert_eq!(ty, Type::Nat);
+        assert_eq!(level, Level::Zero);
     }
 }

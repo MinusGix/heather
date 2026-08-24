@@ -893,6 +893,16 @@ impl application::ExplicitArgElab for Elaborator {
     }
 }
 
+impl recursion::SelfCallElab for Elaborator {
+    fn infer_self_call_argument(&self, cx: &Cx, argument: &Expr) -> R<(Term, Type, Level)> {
+        self.elab_infer(cx, argument)
+    }
+
+    fn self_call_application_params(&self, name: &str) -> Rc<Vec<ParamMeta>> {
+        self.params_of(name)
+    }
+}
+
 impl application::ImplicitApplicationElab for Elaborator {
     fn classify_application_argument(
         &self,
@@ -3231,7 +3241,7 @@ impl Elaborator {
                         "the termination guard reads *which position* decreases, so a                          self-call's arguments stay where the declaration put them",
                         named,
                     )?;
-                    return self.elab_self_call(cx, args, *explicit, e.span);
+                    return recursion::elab_self_call(self, cx, args, *explicit, e.span);
                 }
                 let (name, t, ty, lvl, mask) =
                     self.elab_ty_app(cx, callee, tyargs, head.span)?;
@@ -3490,7 +3500,7 @@ impl Elaborator {
                     return self.infer_ctor(cx, &ind, i, args, e.span);
                 }
                 if cx.selfref.as_ref().is_some_and(|s| s.name == *name) {
-                    return self.elab_self_call(cx, args, *explicit, e.span);
+                    return recursion::elab_self_call(self, cx, args, *explicit, e.span);
                 }
                 // A *value* head — a local, or an alias. With a skeleton it
                 // applies with skeleton-directed insertion
@@ -3996,248 +4006,6 @@ impl Elaborator {
         (Term::Var(LocalVar(idx)), entry.ty.shift_local(idx + 1), entry.level.clone())
     }
 
-    /// Lower a call to the enclosing declaration's own name
-    /// (issues/match-recursion.md). The termination analysis is deliberately
-    /// strict: the call must sit inside a `match` arm that descends on one of
-    /// the declaration's parameters, must be saturated, must pass the arm's
-    /// predecessor in the decreasing position, and must pass every other
-    /// parameter unchanged. Anything accepted still has to typecheck as an
-    /// eliminator in the kernel.
-    fn elab_self_call(
-        &self,
-        cx: &Cx,
-        args: &[Expr],
-        explicit: bool,
-        span: Span,
-    ) -> R<(Term, Type, Level)> {
-        let s = Rc::clone(cx.selfref.as_ref().expect("self-call outside a declaration"));
-        let name = &s.name;
-        let Some(g) = cx.guard.clone() else {
-            return err(
-                format!(
-                    "recursive call to `{name}` is not structurally guarded: it must occur \
-                     inside a `match` on one of `{name}`'s own parameters"
-                ),
-                span,
-            );
-        };
-        // Which parameter each surface argument fills: implicits are omitted
-        // unless the call is `@`-marked.
-        let positions: Vec<usize> = (s.n_tyvars..s.params.len())
-            .filter(|&j| explicit || !s.params[j].1)
-            .collect();
-        if !positions.contains(&g.dec) {
-            return err(
-                format!(
-                    "`{name}` recurses on its implicit parameter `{}`; pass it explicitly \
-                     (`@{name}(…)`) to make the recursive call",
-                    s.params[g.dec].0
-                ),
-                span,
-            );
-        }
-        if args.len() < positions.len() {
-            return err(
-                format!(
-                    "recursive call to `{name}` must pass all {} argument(s), found {}",
-                    positions.len(),
-                    args.len()
-                ),
-                span,
-            );
-        }
-        // The ih is saturated at the declared parameters; anything beyond them
-        // is a second spine on its *result*, exactly as at an ordinary call
-        // site (issues/call-site-overapplication.md). This is the case that
-        // matters most, because the curried-return workaround for a varying
-        // argument (issues/ih-generalization.md) makes every use of such an ih
-        // an over-application: `le_add(n2, m2, good)` for `le_add(n2)(m2, good)`
-        // (`lib/std/nat.hthr`).
-        let (args, spill) = args.split_at(positions.len());
-        // Which descendant the call goes to, once the decreasing argument has
-        // been matched: `Nat` has only one, a `Wf` arm has one per recursive
-        // field, so this is set inside the loop below. The decreasing argument
-        // is checked **first** — at a branching index constructor the ih's
-        // index is the *descendant's own* pattern variable, so the rebind
-        // check below has no answer until the descendant is known.
-        let mut descendant = 0usize;
-        // Which link of a `Nat` guard's predecessor chain the call descends to:
-        // `0` is the immediate predecessor and anything beyond it is a
-        // course-of-values call (issues/recursion-at-deeper-subterms.md).
-        let mut cov_at = 0usize;
-        let order = {
-            let mut o: Vec<usize> = (0..args.len()).collect();
-            if let Some(p) = positions.iter().position(|&j| j == g.dec) {
-                o.swap(0, p);
-            }
-            o
-        };
-        for (arg, j) in order.iter().map(|&k| (&args[k], positions[k])) {
-            // Compare by *binder* (`Nat`) or by *term* (`Wf`), never by name,
-            // so shadowing cannot fake a guarded call.
-            let (arg_t, _, _) = self.elab_infer(cx, arg)?;
-            let ok = match (&g.kind, j == g.dec) {
-                (GuardKind::Nat { preds, comps, .. }, true) => match arg_t {
-                    Term::Var(LocalVar(i)) => {
-                        let pos = cx.names.len() - 1 - i as usize;
-                        match preds.iter().position(|&p| p == pos) {
-                            // Deeper than the recursor was built for is not a
-                            // descent it can serve; the message below says so.
-                            Some(j) if j < comps.len() => {
-                                cov_at = j;
-                                true
-                            }
-                            _ => false,
-                        }
-                    }
-                    _ => false,
-                },
-                (GuardKind::Wf { depth, children, .. }, true) => {
-                    let by = (cx.names.len() - depth) as u32;
-                    match children.iter().position(|(c, ..)| c.shift_local(by) == arg_t) {
-                        Some(t) => {
-                            descendant = t;
-                            true
-                        }
-                        None => false,
-                    }
-                }
-                (_, false) => {
-                    let at = |pos: usize| {
-                        matches!(arg_t, Term::Var(LocalVar(i))
-                                 if cx.names.len() - 1 - i as usize == pos)
-                    };
-                    // An indexed match rebinds the index parameter to the
-                    // arm's pattern variable — the ih is at that index, so
-                    // the call must pass exactly it (§6). Compared by *term*,
-                    // like a child: at a declared index the pattern variable
-                    // is a projection (`nth(cs'; ι_t)`), not a binder.
-                    at(j)
-                        || g.rebind.as_ref().is_some_and(|(rj, terms)| {
-                            let depth = match &g.kind {
-                                GuardKind::Wf { depth, .. } => *depth,
-                                GuardKind::Nat { .. } => return false,
-                            };
-                            let by = (cx.names.len() - depth) as u32;
-                            *rj == j
-                                && terms
-                                    .get(descendant)
-                                    .is_some_and(|t| t.shift_local(by) == arg_t)
-                        })
-                }
-            };
-            if ok {
-                continue;
-            }
-            return if j == g.dec {
-                // The message carries the *mechanism*, not just the rule,
-                // because the commonest way to hit this is a call at a
-                // genuinely smaller subterm — the predecessor's predecessor,
-                // in a nested `match` — where the bare rule reads as a checker
-                // being needlessly strict and sends the reader here to relax
-                // the comparison above. That would only move the failure: the
-                // arm is a recursor's step, its ih is the value at the
-                // immediate descendant, and there is nothing else to emit.
-                // See issues/recursion-at-deeper-subterms.md.
-                let (what, why) = match &g.kind {
-                    // The chain the enclosing `match`es bind, cut at the depth
-                    // the recursor was actually built for: past that there is
-                    // no ih to hand back, so naming it would be an offer the
-                    // lowering cannot keep.
-                    GuardKind::Nat { preds, comps, .. } => {
-                        let usable = preds.len().min(comps.len());
-                        let names: Vec<String> =
-                            preds[..usable].iter().map(|p| format!("`{}`", cx.names[*p])).collect();
-                        if usable == 1 {
-                            (
-                                format!("{}, the predecessor bound by", names[0]),
-                                format!(
-                                    ". A deeper subterm is refused too, even though it is \
-                                     genuinely smaller: this `match` compiles to a recursor \
-                                     whose induction hypothesis is the value at {} and at \
-                                     nothing else, so a call anywhere else has no term to \
-                                     elaborate to. Reaching further needs the recursion to \
-                                     carry its earlier values \
-                                     (issues/recursion-at-deeper-subterms.md), which happens \
-                                     only where an arm scrutinizes its own predecessor",
-                                    names[0]
-                                ),
-                            )
-                        } else {
-                            (
-                                format!(
-                                    "one of {}, the predecessors bound by",
-                                    names.join(", ")
-                                ),
-                                format!(
-                                    ". The recursion carries its last {usable} values, so \
-                                     those are the subterms it can descend to; anything else \
-                                     has no term to elaborate to, even when it is genuinely \
-                                     smaller (issues/recursion-at-deeper-subterms.md)"
-                                ),
-                            )
-                        }
-                    }
-                    GuardKind::Wf { .. } => (
-                        "one of the recursive fields bound by".to_string(),
-                        ". A deeper subterm is refused too, even though it is genuinely \
-                         smaller: the induction hypothesis this `match` binds is the value \
-                         at each recursive field and at nothing else, so a call anywhere \
-                         else has no term to elaborate to"
-                            .to_string(),
-                    ),
-                };
-                err(
-                    format!(
-                        "recursive call to `{name}` must descend: argument `{}` has to be \
-                         {what} the enclosing `match`{why}",
-                        s.params[j].0
-                    ),
-                    arg.span,
-                )
-            } else {
-                err(
-                    format!(
-                        "recursive call to `{name}` must pass `{}` unchanged: the induction \
-                         hypothesis fixes every non-decreasing parameter (generalizing a \
-                         varying argument into the motive is not supported yet)",
-                        s.params[j].0
-                    ),
-                    arg.span,
-                )
-            };
-        }
-        let (t, ty, lvl) = match &g.kind {
-            // The ih at the depth the argument descended to, shifted out to
-            // wherever the call sits — a variable at depth 0, a projection out
-            // of the carried tuple below it.
-            GuardKind::Nat { tuple, comps, mlvl, depth, .. } => {
-                let by = (cx.names.len() - depth) as u32;
-                let t = matching::cov_proj(comps, mlvl, tuple.clone(), cov_at);
-                (t.shift_local(by), comps[cov_at].shift_local(by), mlvl.clone())
-            }
-            // `ih' ι_t` and its type, shifted out to wherever the call sits.
-            GuardKind::Wf { depth, children, .. } => {
-                let by = (cx.names.len() - depth) as u32;
-                let (_, ih, ty, lvl) = &children[descendant];
-                ((**ih).shift_local(by), ty.shift_local(by), lvl.clone())
-            }
-        };
-        if spill.is_empty() {
-            return Ok((t, ty, lvl));
-        }
-        application::apply_explicit(
-            self,
-            cx,
-            Some(name),
-            self.params_of(name),
-            s.params.len(),
-            t,
-            ty,
-            lvl,
-            spill,
-        )
-    }
 
     // -- field access (docs/surface-records.md §4) ---------------------------
 
