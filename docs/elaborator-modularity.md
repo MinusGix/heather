@@ -315,11 +315,10 @@ only expected-type reading and display, recursive checking, annotation
 lowering, and domain conversion. In particular, no callback manipulates the
 local context and the view still has no registry or declaration authority.
 
-Every remaining root checking arm crosses a subsystem boundary: blocks
-elaborate statements and mutate attempt scope; quotes change layers; matches
-own motive synthesis, rollback, and recursive guards; constructors and
-dot/application perform registry dispatch; universe checking combines
-type-former lookup with speculative type reading.
+Every remaining root checking arm crosses a subsystem boundary: quotes change
+layers; matches own motive synthesis, rollback, and recursive guards;
+constructors and dot/application perform registry dispatch. Blocks have now
+crossed that boundary rather than being counted among it.
 
 Lambda inference has followed checking across the boundary without merging
 their bidirectional rules. Both modes share one context-extension mechanism,
@@ -351,6 +350,22 @@ The slice also fixes the earlier staging order: expression-as-type moved only
 after indexed-family and value-parameter formation already had explicit
 seams. Split application, match lowering, and member/operator dispatch into
 collaborators only when their parameter lists describe real dependencies.
+
+Ordinary statements now have their own subsystem as well. `statements.rs`
+owns context cloning and sequencing, annotated and inferred alias creation,
+the let-only implicit-lambda skeleton harvest, indexed dictionary aliases,
+record-pattern validation, declaration-order projection, and propagation of
+field skeletons. Declaration bodies and expression blocks call the same entry
+point, so their `let` semantics cannot drift. Checking and inference block
+results also enter through this module and remain transparent: no block or
+alias kernel node is invented.
+
+The statement subsystem has no session or attempt-state handle. Recursive
+expression work, type lowering with the annotation diagnostic, record lookup
+and projection, and dictionary recognition are narrow capabilities supplied
+by their existing owners. In particular, goal allocation remains an effect of
+recursive expression checking rather than an authority granted to statements;
+nested `on` discharge is still refused at the surface boundary.
 
 The desired test is architectural: pure unification and surface rewriting can
 be unit-tested without constructing an `Elaborator`; expression elaboration

@@ -68,7 +68,7 @@ use heather_kernel::term::{
 use heather_kernel::typing::{self, TypeError, DEFAULT_FUEL};
 use heather_syntax::{
     parse_file, Arm, Decl, DeclKind, Expr, ExprKind, InstanceDecl, Item, LamBinder, MatchForm,
-    OnStmt, OnTarget, NamedArg, OpFixity, ParseError, Span, Stmt, RecordLitField, Ty, TyKind,
+    OnStmt, OnTarget, NamedArg, OpFixity, ParseError, Span, RecordLitField, Ty, TyKind,
 };
 
 mod access;
@@ -102,6 +102,7 @@ pub mod resolve;
 mod representations;
 mod session;
 mod slots;
+mod statements;
 mod surface;
 mod traits;
 mod types;
@@ -760,6 +761,104 @@ impl expr::LambdaCheckingElab for Elaborator {
 impl expr::LambdaInferenceElab for Elaborator {
     fn infer_lambda_body(&self, cx: &Cx, body: &Expr) -> R<(Term, Type, Level)> {
         self.elab_infer(cx, body)
+    }
+}
+
+impl statements::StatementElab for Elaborator {
+    fn lower_let_annotation(&self, cx: &Cx, annotation: &Ty) -> R<(Type, Level)> {
+        self.elab_ty(cx, annotation)
+            .map_err(|error| self.let_ty_hint(cx, annotation, error))
+    }
+
+    fn check_let_value(
+        &self,
+        cx: &Cx,
+        expression: &Expr,
+        expected: &Type,
+        level: &Level,
+        skeleton: Option<&Skel>,
+    ) -> R<Term> {
+        self.elab_check_skel(cx, expression, expected, level, None, skeleton)
+    }
+
+    fn infer_statement_expression(
+        &self,
+        cx: &Cx,
+        expression: &Expr,
+    ) -> R<(Term, Type, Level)> {
+        self.elab_infer(cx, expression)
+    }
+
+    fn infer_let_lambda(
+        &self,
+        cx: &Cx,
+        binders: &[LamBinder],
+        body: &Expr,
+    ) -> R<(Term, Type, Level)> {
+        self.expr_elab().infer_lambda(
+            self,
+            cx,
+            binders,
+            body,
+            expr::LambdaInferenceMode::LetSkeletonHarvest,
+        )
+    }
+
+    fn dictionary_alias(&self, name: &str, annotation: &Ty) -> Option<DictBinder> {
+        let reference = self.class_ref_of_ty(annotation)?;
+        if reference.index.is_empty() || reference.args.is_empty() {
+            return None;
+        }
+        Some(DictBinder {
+            name: name.to_string(),
+            class: reference.name,
+            carrier: reference.args[0].clone(),
+            index: reference.index,
+        })
+    }
+
+    fn record_for_destructuring(
+        &self,
+        cx: &Cx,
+        record_type: &Type,
+        span: Span,
+    ) -> Option<Rc<Inductive>> {
+        self.record_of_at(cx, record_type, span)
+    }
+
+    fn project_destructured_field(
+        &self,
+        cx: &Cx,
+        record: &Inductive,
+        record_type: &Type,
+        value: Rc<Term>,
+        index: usize,
+        span: Span,
+    ) -> R<(Term, Type, Level)> {
+        self.project_field(cx, record, record_type, value, index, span)
+    }
+}
+
+impl statements::BlockCheckingElab for Elaborator {
+    fn check_block_result(
+        &self,
+        cx: &Cx,
+        result: &Expr,
+        expected: &Type,
+        level: &Level,
+        hint: Option<(&str, &str)>,
+        skeleton: Option<&Skel>,
+        capture_slots: bool,
+    ) -> R<Term> {
+        self.elab_check_skel_slots(
+            cx,
+            result,
+            expected,
+            level,
+            hint,
+            skeleton,
+            capture_slots,
+        )
     }
 }
 
@@ -1936,7 +2035,7 @@ impl Elaborator {
             n_tyvars: decl.tyvars.len(),
         }));
         // `let` bindings, then the result expression.
-        let cx = self.elab_stmts(&cx, &decl.body.stmts)?;
+        let cx = statements::elaborate(self, &cx, &decl.body.stmts)?;
         let body = self.elab_check(&cx, &decl.body.result, &res_ty, &res_lvl)?;
         // Discharge every goal the block raised, then substitute them away.
         self.solve_goals(&decl.body.ons, &decl.name)?;
@@ -2210,161 +2309,6 @@ impl Elaborator {
 
     // -- types --------------------------------------------------------------
 
-    /// Push a block's statements onto a **clone** of `cx` as aliases, and
-    /// return the extended context.
-    ///
-    /// Shared by a declaration body and [`ExprKind::Block`]
-    /// (docs/let-and-blocks-design.md §4.4), so the two cannot disagree about
-    /// what a `let` means. A `let` is an inlined **alias** — the same doctrine
-    /// as a `fn` definition — not a kernel binder, which is what makes a block
-    /// in a `match` arm free: it perturbs no `Case`/`ElimNat` telescope and no
-    /// motive, and its scope dies with the clone.
-    fn elab_stmts(&self, cx: &Cx, stmts: &[Stmt]) -> R<Cx> {
-        let mut cx = cx.clone();
-        for stmt in stmts {
-            // `let { unit := u, op } = m;` — each right-hand name aliases the
-            // selected projection (docs/named-patterns-by-field-design.md §2).
-            // Sugar over `m.unit` / `m.op`; a partial pattern binds fewer.
-            let (name, ty, expr) = match stmt {
-                Stmt::Let { name, ty, expr, .. } => (name, ty, expr),
-                Stmt::LetCode { span, .. } => {
-                    return err(
-                        "`let code` is meta-layer syntax: it binds code inside a \
-                         `meta fn` body (docs/in-language-map-design.md §3)",
-                        *span,
-                    )
-                }
-                Stmt::LetRecord { fields, expr, span } => {
-                    let (t, rty, _) = self.elab_infer(&cx, expr)?;
-                    // `record_of_at`, not `record_of`: the right-hand side may
-                    // have arrived through a `Nat -> Type` function value, and
-                    // then its type is `El` of a β-redex rather than of a code
-                    // (docs/record-type-values.md §4). Same reader as
-                    // `resolve_dot`'s, so the same fallback.
-                    let Some(ind) = self.record_of_at(&cx, &rty, *span) else {
-                        return err(
-                            "a `let { … }` pattern needs a record on the right",
-                            *span,
-                        );
-                    };
-                    let value = Rc::new(t);
-                    let mut selected: Vec<Option<&heather_syntax::RecordPatField>> =
-                        vec![None; ind.ctors[0].fields.len()];
-                    for field in fields {
-                        let Some(idx) = ind.field_index(&field.name) else {
-                            return err(
-                                format!("`{}` has no field `{}`", ind.name, field.name),
-                                field.span,
-                            );
-                        };
-                        if selected[idx].replace(field).is_some() {
-                            return err(
-                                format!(
-                                    "field `{}` appears twice in this record pattern",
-                                    field.name
-                                ),
-                                field.span,
-                            );
-                        }
-                    }
-                    // Declaration order is semantic for a dependent record.
-                    // Written order is only presentation.
-                    for (idx, field) in selected.into_iter().enumerate() {
-                        let Some(field) = field else { continue };
-                        let heather_syntax::Pat::Var { name, span: pspan } = &field.pat else {
-                            return err(
-                                "a record `let` field is irrefutable: its right side must \
-                                 be a name or `_`; use `match` or `if let` for a \
-                                 constructor pattern",
-                                field.pat.span(),
-                            );
-                        };
-                        if name == "_" {
-                            continue;
-                        }
-                        let (term, ty, level) = self.project_field(
-                            &cx,
-                            &ind,
-                            &rty,
-                            Rc::clone(&value),
-                            idx,
-                            *pspan,
-                        )?;
-                        cx.aliases.push(Rc::new(Alias {
-                            // The projected field's skeleton travels onto
-                            // the alias (docs/implicit-binders-design.md
-                            // §3.1) — same source as `resolve_dot`'s.
-                            skel: skel_of_ty(&ind.ctors[0].fields[idx].1),
-                            name: name.clone(),
-                            depth: cx.names.len(),
-                            term: Rc::new(term),
-                            ty,
-                            level,
-                        }));
-                    }
-                    continue;
-                }
-            };
-            let annot = ty.clone();
-            let (term, ty, level, skel) = match ty {
-                Some(t) => {
-                    let (ty, lvl) = self.elab_ty(&cx, t).map_err(|e| self.let_ty_hint(&cx, t, e))?;
-                    // The annotation's skeleton is both the expected
-                    // skeleton the RHS is checked at (§6.1's second site)
-                    // and the alias's own (§3.1).
-                    let skel = skel_of_ty(t);
-                    let tm =
-                        self.elab_check_skel(&cx, expr, &ty, &lvl, None, skel.as_deref())?;
-                    (tm, ty, lvl, skel)
-                }
-                // The `let`-RHS harvest (docs/implicit-binders-design.md
-                // §6.3): an implicit lambda infers here (all binders
-                // annotated, as inference already requires) and the alias
-                // records the skeleton read off the written marks.
-                None => match &expr.kind {
-                    ExprKind::Lam { binders, body } => {
-                        let (tm, ty, lvl) = self.expr_elab().infer_lambda(
-                            self,
-                            &cx,
-                            binders,
-                            body,
-                            expr::LambdaInferenceMode::LetSkeletonHarvest,
-                        )?;
-                        (tm, ty, lvl, skel_of_lam_binders(binders))
-                    }
-                    _ => {
-                        let (tm, ty, lvl) = self.elab_infer(&cx, expr)?;
-                        (tm, ty, lvl, None)
-                    }
-                },
-            };
-            // A `let`-bound dictionary at a written index: the local-override
-            // case of the value-slot ladder's step 2
-            // (docs/operation-indexed-classes-design.md §5).
-            if let Some(t) = &annot
-                && let Some(r) = self.class_ref_of_ty(t)
-                && !r.index.is_empty()
-                && !r.args.is_empty()
-            {
-                cx.dicts.push(Rc::new(DictBinder {
-                    name: name.clone(),
-                    class: r.name,
-                    carrier: r.args[0].clone(),
-                    index: r.index,
-                }));
-            }
-            cx.aliases.push(Rc::new(Alias {
-                skel,
-                name: name.clone(),
-                depth: cx.names.len(),
-                term: Rc::new(term),
-                ty,
-                level,
-            }));
-        }
-        Ok(cx)
-    }
-
     fn elab_ty(&self, cx: &Cx, ty: &Ty) -> R<(Type, Level)> {
         match &ty.kind {
             // An expression in type position: infer it, require its type to be
@@ -2593,18 +2537,16 @@ impl Elaborator {
             // (docs/let-and-blocks-design.md §4.4). The hint travels with it,
             // so a hole in the result of a block in argument position still
             // reports the callee and parameter it belongs to.
-            ExprKind::Block(b) => {
-                let cx = self.elab_stmts(cx, &b.stmts)?;
-                self.elab_check_skel_slots(
-                    &cx,
-                    &b.result,
-                    expected,
-                    lvl,
-                    hint,
-                    skel,
-                    capture_slots,
-                )
-            }
+            ExprKind::Block(block) => statements::check_block(
+                self,
+                cx,
+                block,
+                expected,
+                lvl,
+                hint,
+                skel,
+                capture_slots,
+            ),
             // A quote against its `Code(g |- T)` type — checking-only, like
             // the kernel's `BoxTm` (docs/in-language-map-design.md §5).
             ExprKind::Quote(payload) => self.elab_quote(cx, payload, expected, e.span),
@@ -3013,10 +2955,7 @@ impl Elaborator {
             // (docs/let-and-blocks-design.md §4.4). Inference-transparent:
             // the block contributes no term of its own, because a `let` is an
             // alias.
-            ExprKind::Block(b) => {
-                let cx = self.elab_stmts(cx, &b.stmts)?;
-                self.elab_infer(&cx, &b.result)
-            }
+            ExprKind::Block(block) => statements::infer_block(self, cx, block),
             // Intensional analysis: the result type is written, so unlike a
             // quote this one *infers*
             // (docs/certgen-transcriber-in-language-design.md §3).

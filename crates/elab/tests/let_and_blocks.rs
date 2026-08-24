@@ -4,7 +4,7 @@
 //! `let x: T = e;` writable at every `T` by reading the annotation with the
 //! comparison rung suppressed, and §4 makes `{ stmt* expr }` an expression in
 //! prefix position. Neither adds a kernel form — a `let` is an *alias*, not a
-//! binder (`lib.rs`'s `elab_stmts`) — so the suite's job is that the terms are
+//! binder (`statements.rs`) — so the suite's job is that the terms are
 //! the ones the same program without the block already emits.
 //!
 //! Per `docs/testing-generated-terms.md`, §4 is an elaboration change that
