@@ -40,7 +40,8 @@ use crate::inductive::{
     inject, nat_lit, tag_value, ConstBody, FieldKind, IdxTy, Inductive, Spine,
 };
 use crate::wf::{fin_index, nth_child, Branches, Tel};
-use crate::{embed, err, Alias, Cx, Elaborator, Guard, GuardKind, R};
+use crate::recursion::{Guard, GuardKind};
+use crate::{embed, err, Alias, Cx, Elaborator, R};
 
 /// A type in **forded form** (§6.3), read back into its parts: a `Type::Sigma`
 /// whose `snd` is a `Type::SEq` whose `lhs` is the `μ` node applied at the Σ
@@ -1031,7 +1032,7 @@ impl Elaborator {
                 )),
             }),
         };
-        let dec = self.descends_on_param(cx, &scrut);
+        let dec = crate::recursion::descends_on_param(cx, &scrut);
         let idx_param = match (&dec, &*fam.idx) {
             (Some(_), Term::Var(LocalVar(i))) => {
                 let pos = cx.names.len() - 1 - *i as usize;

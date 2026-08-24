@@ -6,7 +6,8 @@ use heather_kernel::level::Level;
 use heather_kernel::term::{CtxEntry, LocalCtx, Term, Type};
 use heather_syntax::{Expr, Ty};
 
-use crate::{Guard, SelfRef, Skel, quote};
+use crate::recursion::{Guard, SelfRef};
+use crate::{Skel, quote};
 
 /// Elaboration context: kernel Γ plus the parallel name list
 /// (`names[j]` names `gamma.entries[j]`, outermost first).

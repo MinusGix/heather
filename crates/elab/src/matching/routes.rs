@@ -12,7 +12,8 @@ use heather_kernel::term::{LocalCtx, LocalSubst, LocalVar, Term, Type};
 use heather_syntax::{Arm, Expr, ExprKind, MatchForm, Span};
 
 use crate::surface::walk_expr;
-use crate::{Cx, Elaborator, Guard, GuardKind, R, embed, err};
+use crate::recursion::{Guard, GuardKind};
+use crate::{Cx, Elaborator, R, embed, err};
 
 /// The enclosing recursion's window of past values, as a nested `match` on the
 /// chain's end needs it — see [`Elaborator::chain_convoy`], which builds one,
@@ -257,7 +258,11 @@ impl Elaborator {
         // If so, self-calls in the arm become the ih. If not (a nested match on
         // some other term), the enclosing arm's guard — if any — still stands,
         // possibly *extended* by this match (§ course-of-values below).
-        let dec = if ih.is_none() { self.descends_on_param(cx, &scrut_t) } else { None };
+        let dec = if ih.is_none() {
+            crate::recursion::descends_on_param(cx, &scrut_t)
+        } else {
+            None
+        };
         // How many past values the arm reads. `1` is the ordinary recursion and
         // emits exactly the term it always did; more makes the recursor carry a
         // tuple (`cov_*` below, issues/recursion-at-deeper-subterms.md).

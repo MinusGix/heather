@@ -43,7 +43,8 @@ use heather_syntax::ast::{Arm, Expr, ExprKind, MatchForm, Span};
 use crate::gendefs::GenDef;
 use crate::inductive::{inject, nat_lit, FieldKind, IdxTy, Inductive, Spine};
 use crate::wf::{Branches, Tel};
-use crate::{code, err, Alias, Cx, Elaborator, Guard, GuardKind, R};
+use crate::recursion::{Guard, GuardKind};
+use crate::{code, err, Alias, Cx, Elaborator, R};
 
 /// A type in **family form**: `El^l` of the index type's eliminator at motive
 /// `Ty l`, read back into its parts. This is the indexed analogue of `tag_of`
@@ -1017,7 +1018,7 @@ impl Elaborator {
         // Self-call plumbing (§6): the guard descends on the matched
         // parameter, and the index parameter — when the family's index is
         // itself a parameter — is *rebound* to the arm's pattern variable.
-        let dec = self.descends_on_param(cx, &scrut);
+        let dec = crate::recursion::descends_on_param(cx, &scrut);
         let idx_param = match (&dec, &*fam.idx) {
             (Some(_), Term::Var(LocalVar(i))) => {
                 let pos = cx.names.len() - 1 - *i as usize;

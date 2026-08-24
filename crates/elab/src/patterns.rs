@@ -261,7 +261,7 @@ impl Elaborator {
         // scan is a sound over-approximation — a mention of the name that is
         // not a call still refuses, and there is no such mention that
         // elaborates (a bare self-reference is already an error).
-        if let Some(dec) = self.descends_on_param(cx, scrut_t)
+        if let Some(dec) = crate::recursion::descends_on_param(cx, scrut_t)
             && let Some(s) = cx.selfref.as_ref()
             && arms.iter().any(|a| crate::inductive::expr_mentions(&a.body, &s.name))
         {

@@ -390,14 +390,21 @@ being absorbed into a central lowering module.
 
 The ownership split follows consumption rather than proximity. Nat's convoy
 and course-of-values tuple representation are private to the built-in route.
-`Guard`, `GuardKind`, self-reference data, and `descends_on_param` remain in the
+`Guard`, `GuardKind`, self-reference data, and `descends_on_param` belong to the
 shared recursion core because inductive, indexed, forded, and `Wf` lowering all
 construct or inspect them. One tuple projection is deliberately re-exported
 to guarded self-call lowering; that named edge is the only course-of-values
-representation detail left crossing back into the root. Converting the
-currently included `recursion.rs` into a normal module is now a plausible next
-slice, but should preserve those cross-route users rather than pretending the
-guard is a Nat detail.
+representation detail left crossing back into the root.
+
+That shared core is now a normal `recursion` module rather than textually
+included into `lib.rs`. Its five state types form an explicit crate-visible
+contract for contexts and route owners. Binder-identity descent detection and
+written self-call type-argument validation moved with them because both are
+session-free recursion policy; the former has a direct shadowing test. The
+large self-call lowering remains in root for now: it combines recursive
+expression inference, application metadata, over-application, and container
+lowering, so moving it before those capabilities narrow would merely create a
+broad forwarding interface.
 
 Ordinary statements now have their own subsystem as well. `statements.rs`
 owns context cloning and sequencing, annotated and inferred alias creation,
@@ -445,10 +452,11 @@ The remaining routes are not equally ready. Take them in dependency order:
 2. **Continue match elaboration.** Motive synthesis and convoy mechanics now
    have their first boundary, and motive-less inference now has an explicit
    rollback transaction and outcome model. Built-in Nat/Fin routing and Nat's
-   guard orchestration now live in `matching/routes.rs`. Next either make the
-   shared recursion core a normal module or move the remaining constant-motive
-   candidate discovery; preserve the existing inductive, indexed, forded, and
-   `Wf` route owners instead of recombining them.
+   guard orchestration now live in `matching/routes.rs`, and the shared
+   recursion core is a normal module. Next move the remaining constant-motive
+   candidate discovery, or narrow self-call lowering's application/inference
+   capabilities enough to move it honestly. Preserve the existing inductive,
+   indexed, forded, and `Wf` route owners instead of recombining them.
 3. **Dispatch last.** Named arguments, member lookup, class dispatch, indexed
    dictionaries, operator carriers, designations, and compatibility fallback
    are several policies, not one `dispatch.rs`. Split pure argument

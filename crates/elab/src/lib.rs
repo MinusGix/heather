@@ -99,6 +99,7 @@ pub use lint::{Lint, LintProfile};
 mod matching;
 mod metaprograms;
 mod quote;
+mod recursion;
 pub mod resolve;
 mod representations;
 mod session;
@@ -123,6 +124,7 @@ use names::{
 };
 pub(crate) use context::{Alias, Cx, DictBinder, TyVar};
 use representations::Representations;
+use recursion::{GuardKind, SelfRef};
 use slots::{Ingredient, Slot};
 use surface::{
     expression_as_type, expression_left_leaf_is_numeral, for_each_free_slot, has_free_slots,
@@ -3224,7 +3226,7 @@ impl Elaborator {
                 if let ExprKind::Var(n) = &callee.kind
                     && cx.selfref.as_ref().is_some_and(|s| s.name == *n)
                 {
-                    self.check_self_tyargs(cx, tyargs, head.span)?;
+                    recursion::check_self_tyargs(cx, tyargs, head.span)?;
                     self.refuse_named(
                         &format!("a recursive call to `{n}`"),
                         "the termination guard reads *which position* decreases, so a                          self-call's arguments stay where the declaration put them",
@@ -4174,16 +4176,6 @@ impl Elaborator {
         Ok(num)
     }
 
-    /// Is `scrut` (already elaborated) exactly one of the enclosing
-    /// declaration's parameters? Returns its parameter index — the argument
-    /// position the recursion descends on.
-    fn descends_on_param(&self, cx: &Cx, scrut: &Term) -> Option<usize> {
-        let s = cx.selfref.as_ref()?;
-        let Term::Var(LocalVar(i)) = scrut else { return None };
-        let pos = cx.names.len() - 1 - *i as usize;
-        (pos < s.params.len()).then_some(pos)
-    }
-
     /// A local variable by absolute position (outermost first), as
     /// [`Self::resolve`] would return it.
     fn local(&self, cx: &Cx, pos: usize) -> (Term, Type, Level) {
@@ -4192,78 +4184,13 @@ impl Elaborator {
         (Term::Var(LocalVar(idx)), entry.ty.shift_local(idx + 1), entry.level.clone())
     }
 
-    /// The written type arguments of a **self-call**
-    /// (issues/recursive-self-call-type-arguments.md).
-    ///
-    /// A self-call is always at the declaration's *own* type parameters, and
-    /// that is a fact about the lowering rather than a restriction chosen here:
-    /// the recursion becomes an `elim` whose motive is fixed outside it, and the
-    /// type parameters are λ-bound outside that — so there is no position in the
-    /// emitted term where a second instantiation could go. Polymorphic recursion
-    /// would need a fixpoint, which is exactly what
-    /// `issues/match-recursion.md`'s discipline exists to avoid.
-    ///
-    /// So the written arguments are checked to *be* those parameters, in order,
-    /// and then dropped. Accepting the spelling costs nothing and refusing it
-    /// cost a reader the belief that the language has recursive polymorphic
-    /// functions at all; what is not accepted is a different instantiation,
-    /// which gets the honest answer instead of a puzzle about scope.
-    fn check_self_tyargs(&self, cx: &Cx, tyargs: &[Ty], span: Span) -> R<()> {
-        let s = cx.selfref.as_ref().expect("checked by the caller");
-        let name = &s.name;
-        let own: Vec<&str> = s.params[..s.n_tyvars].iter().map(|(n, _)| n.as_str()).collect();
-        if tyargs.len() != s.n_tyvars {
-            return err(
-                if s.n_tyvars == 0 {
-                    format!("`{name}` has no type parameters, so a recursive call takes none")
-                } else {
-                    format!(
-                        "the recursive call to `{name}` writes {} type argument(s), and \
-                         `{name}` has {} (`{}`)",
-                        tyargs.len(),
-                        s.n_tyvars,
-                        own.join(", ")
-                    )
-                },
-                span,
-            );
-        }
-        for (a, want) in tyargs.iter().zip(&own) {
-            let is_own = matches!(&a.kind, TyKind::Named { name, args }
-                if args.is_empty() && name == want);
-            if !is_own {
-                return err(
-                    format!(
-                        "a recursive call to `{name}` is always at `{name}`'s own type \
-                         parameter(s) `{}`, and `{}` is not `{want}`: recursing at a \
-                         *different* instantiation is polymorphic recursion, which this \
-                         lowering cannot express — the recursion becomes an `elim` whose \
-                         type parameters are bound outside it, so there is nowhere for a \
-                         second instantiation to go (issues/match-recursion.md). Writing \
-                         `{}` is the same call and so is dropping the type arguments \
-                         entirely",
-                        own.join(", "),
-                        crate::traits::render_ty(a),
-                        own.join(", ")
-                    ),
-                    a.span,
-                );
-            }
-        }
-        Ok(())
-    }
-
     /// Lower a call to the enclosing declaration's own name
     /// (issues/match-recursion.md). The termination analysis is deliberately
     /// strict: the call must sit inside a `match` arm that descends on one of
     /// the declaration's parameters, must be saturated, must pass the arm's
     /// predecessor in the decreasing position, and must pass every other
-    /// parameter *unchanged*. Under exactly those conditions the recursive
-    /// result is definitionally the arm's induction hypothesis, so the
-    /// lowering is a variable — no motive surgery, no fixpoint.
-    ///
-    /// The analysis is untrusted: it can only *reject*. Anything it lets
-    /// through still has to typecheck as an `elim_Nat` in the kernel.
+    /// parameter unchanged. Anything accepted still has to typecheck as an
+    /// eliminator in the kernel.
     fn elab_self_call(
         &self,
         cx: &Cx,
@@ -8355,5 +8282,3 @@ impl Elaborator {
         self.delta_psi = GlobalCtx::new(bindings);
     }
 }
-
-include!("recursion.rs");

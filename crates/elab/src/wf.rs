@@ -25,7 +25,8 @@ use heather_kernel::term::{nth, wf_step_telescope, LocalCtx, LocalVar, Term, Typ
 use heather_syntax::{Arm, Expr, Span};
 
 use crate::inductive::{inject, ConstBody, FieldKind, Inductive, Spine};
-use crate::{embed, err, Alias, Cx, Elaborator, Guard, GuardKind, R};
+use crate::recursion::{ContainerIh, EqSplit, Guard, GuardKind};
+use crate::{embed, err, Alias, Cx, Elaborator, R};
 
 /// The pieces every part of the lowering needs, gathered once so that the
 /// recursion below carries one reference instead of eight arguments.
@@ -243,7 +244,7 @@ impl Elaborator {
     ) -> R<Term> {
         // Does this `match` descend on one of the enclosing declaration's own
         // parameters? If so, a self-call in an arm is the ih (§6.4).
-        let dec = self.descends_on_param(cx, &scrut);
+        let dec = crate::recursion::descends_on_param(cx, &scrut);
         self.build_elim_wf(
             cx,
             ind,
@@ -701,7 +702,7 @@ impl Elaborator {
                 let mut acx = bcx.clone();
                 let ctor_ty = ctor_ty_here.clone();
                 let mut children = Vec::with_capacity(m);
-                let mut container_ih: Option<crate::ContainerIh> = None;
+                let mut container_ih: Option<ContainerIh> = None;
                 let (mut payload_k, mut rec_t) = (0usize, 0usize);
                 for (k, name) in arm.binders.iter().map(|p| p.name().to_string()).enumerate() {
                     // The container binder is the *tail* of the children
@@ -774,7 +775,7 @@ impl Elaborator {
                                             body: Rc::new(t.apply_local(&sigma)),
                                         })
                                     };
-                                    crate::EqSplit {
+                                    EqSplit {
                                         level: level.clone(),
                                         ty: a.shift_local(d_body),
                                         lhs: lam(lhs),
@@ -784,7 +785,7 @@ impl Elaborator {
                             }
                             _ => None,
                         };
-                        container_ih = Some(crate::ContainerIh {
+                        container_ih = Some(ContainerIh {
                             term,
                             len: tail_len,
                             ih: Rc::new(Term::Var(LocalVar(0))),
