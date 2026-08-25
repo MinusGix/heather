@@ -56,3 +56,23 @@ on a cached verdict.
   67.30 → 27.89 s, repeated kernel verdicts accounted for about 85 seconds
   per serial suite. The residual still rebuilds surface/elaborator state and
   remains this issue's scope.
+- 2026-08-25: The in-process snapshot candidate is viable immediately:
+  `Elaborator` already has a deliberately cheap, isolated `Clone`. Three
+  operation/class fixture binaries now build their fixed module plus
+  class/instance prefix once per libtest worker in a thread-local `OnceCell`,
+  then clone it for each ungated probe. Standalone full-target measurements:
+  `operators_onto_classes` 43.61 → 25.24s, `binder_symbol_notation`
+  20.37 → 8.99s, and `operation_indexed_classes` 30.75 → 22.50s. Their
+  headers already named four load-bearing tests; the remaining stable matrix
+  cases joined the existing `slow_acceptance_` lane, making their four-test
+  fast slices 3.78 / 3.76 / 4.05s respectively.
+
+  The same snapshot shape on the issue's original `lib_algebra` customer
+  moved the 35-test full target 27.89 → 22.92s and its retained four-test fast
+  slice to 3.81s, meeting the under-five-second acceptance. Its empty
+  whole-library test still constructs a fresh elaborator and gates the entire
+  closure front-to-back; cached bases cover only the checked-in closure, and
+  every probe added to a clone is ungated. This is deliberately only the
+  **in-process** half. Cross-binary reuse still consists solely of kernel
+  verdict replay and remains open: a serialized elaborator snapshot or
+  immutable shared build artifact needs its own trust/versioning design.

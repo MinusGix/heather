@@ -31,6 +31,8 @@
 //! `scripts/test` still runs all of it; the fast lane keeps one positive per
 //! load-bearing axis instead of paying the full 35-probe cross-product.
 
+use std::cell::OnceCell;
+
 use heather_elab::{ElabError, Elaborator};
 
 mod support;
@@ -55,7 +57,7 @@ fn modules() -> Vec<(&'static str, &'static str)> {
     ]
 }
 
-fn run(extra: &str) -> Result<Elaborator, String> {
+fn load_modules(gated: bool) -> Result<Elaborator, String> {
     let mut e = Elaborator::with_prelude().expect("prelude");
     let mut prefix_error = None;
     let mut load = |e: &mut Elaborator| {
@@ -74,14 +76,30 @@ fn run(extra: &str) -> Result<Elaborator, String> {
     // their own (always ungated) module, so replay its kernel verdicts just
     // as the certgen family does. This removes 34 redundant kernel checks of
     // seven modules without weakening any probe or its negative control.
-    if extra.is_empty() {
-        load(&mut e);
-    } else {
+    if gated {
         support::with_decl_cache(&mut e, load);
+    } else {
+        load(&mut e);
     }
     if let Some(err) = prefix_error {
         return Err(err);
     }
+    Ok(e)
+}
+
+// A clone is an isolated elaborator snapshot by design. Each libtest worker
+// builds the checked library closure once; probes clone it and add only their
+// own ungated module. The empty acceptance path below deliberately remains a
+// fresh, uncached front-to-back check.
+thread_local! {
+    static BASE: OnceCell<Result<Elaborator, String>> = const { OnceCell::new() };
+}
+
+fn run(extra: &str) -> Result<Elaborator, String> {
+    if extra.is_empty() {
+        return load_modules(false);
+    }
+    let mut e = BASE.with(|base| base.get_or_init(|| load_modules(true)).clone())?;
     if !extra.is_empty() {
         // The probe module imports the whole closure, exactly as a user file
         // would; `import` lines have to come first, so they are prepended here.

@@ -1,6 +1,6 @@
 ---
 title: Attribute test-target time and restore a genuinely fast lane
-status: open
+status: closed
 labels: [testing,tooling,performance]
 created: 2026-08-25
 updated: 2026-08-25
@@ -57,3 +57,23 @@ high-signal regression for an active implementation seam.
   9.78 s. Across algebra/reprgen/bitvec, 68 stable matrix tests moved out of
   `--fast`; their retained slices take about 26 s instead of 91 s, while a
   plain selected-target run still passes all 103 tests.
+- 2026-08-25: Closed after the snapshot-fixture and bounded-parallel rounds.
+  A warm `scripts/test --fast` run at the automatic six-job bound passes
+  1,973 tests in 63 seconds, down from 2,024 tests in 80 seconds at seven
+  jobs before the final 51 stable matrix cases moved to the slow lane. The
+  retained four-test slices for `operators_onto_classes`,
+  `binder_symbol_notation`, `operation_indexed_classes`, and `lib_algebra`
+  all remain fast and load-bearing. Plain `scripts/test` still passes all
+  2,103 tests in 134 seconds; its wall time is statistically flat against the
+  preceding 131-second run because six-way execution already overlaps the
+  saved fixture work.
+
+  The fast lane now has a single serial critical path: `ir_pass_fuel` takes
+  60.72 seconds under suite contention and the suite takes 63 seconds. Its
+  phase attribution and next work live in [[ir-pass-probe-elaboration-cost]].
+  The remaining full-lane targets above fifteen seconds are accounted for by
+  [[certgen-harness-cost]], [[record-projection-defs-declaration-cost]], this
+  issue's explicit slow-lane decisions, or
+  [[integration-test-prefix-reelaboration]]. Further wins therefore belong to
+  those production and cross-binary mechanisms rather than more runner or
+  lane bookkeeping.

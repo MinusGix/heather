@@ -33,6 +33,8 @@
 //! `the_concrete_carrier_refusal_names_the_designations` (item 8 — the
 //! regression this round decided to *keep*, pinned positively).
 
+use std::cell::OnceCell;
+
 use heather_elab::{ElabError, Elaborator};
 
 const LOGIC: &str = include_str!("../../../lib/std/logic.hthr");
@@ -96,14 +98,33 @@ fn fold<A: Mon(op)>(op: A -> A -> A, xs: List<A>) -> A {
 fn sum_all<A: Mon(+)>(xs: List<A>) -> A { fold(+, xs) }
 "#;
 
-fn run(extra: &str) -> Result<Elaborator, String> {
+// The fixed six-module plus class/instance prefix is expensive, while an
+// `Elaborator` clone is deliberately cheap and gives every probe isolated
+// diagnostics, registries, and committed state. libtest uses two worker
+// threads under `scripts/test`, so a thread-local base pays this prefix at
+// most twice instead of once per test without requiring `Elaborator: Sync`.
+thread_local! {
+    static BASE: OnceCell<Result<Elaborator, String>> = const { OnceCell::new() };
+}
+
+fn build_base() -> Result<Elaborator, String> {
     let mut e = Elaborator::with_prelude().expect("prelude");
     for (name, src) in [("logic", LOGIC), ("bool", BOOL), ("nat", NAT), ("option", OPTION), ("pair", PAIR), ("list", LIST)] {
         if let Err(err) = e.elab_module_source(name, src) {
             return Err(format!("{name}: {err}"));
         }
     }
-    let src = format!("import bool;\nimport nat;\nimport option;\nimport list;\n{P}\n{extra}");
+    let src = format!("import bool;\nimport nat;\nimport option;\nimport list;\n{P}");
+    match e.elab_module_source("probe", &src) {
+        Ok(()) => Ok(e),
+        Err(ElabError::Elab { msg, .. }) => Err(msg),
+        Err(other) => Err(format!("{other}")),
+    }
+}
+
+fn run(extra: &str) -> Result<Elaborator, String> {
+    let mut e = BASE.with(|base| base.get_or_init(build_base).clone())?;
+    let src = format!("import bool;\nimport nat;\nimport option;\nimport list;\n{extra}");
     match e.elab_module_source("probe", &src) {
         Ok(()) => Ok(e),
         Err(ElabError::Elab { msg, .. }) => Err(msg),
@@ -170,7 +191,7 @@ fn one_fold_three_carriers_no_caller_names_an_operation() {
 /// answer at `Bool`. `sum_all` at `Bool` is disjunction, and saying it is
 /// conjunction is a kernel rejection.
 #[test]
-fn a_designation_does_not_travel_between_carriers() {
+fn slow_acceptance_a_designation_does_not_travel_between_carriers() {
     let e = bad("
         fn a(bs: List<Bool>) -> Bool { sum_all(bs) }
         theorem wrong(bs: List<Bool>): a(bs) = fold(and, bs) { refl }
@@ -191,7 +212,7 @@ fn a_designation_does_not_travel_between_carriers() {
 /// unification is the first rung, so the designation is never consulted. A
 /// designation supplies an index nothing else pinned; it never overrides one.
 #[test]
-fn theory_is_written_in_notation_and_its_corollaries_still_unify() {
+fn slow_acceptance_theory_is_written_in_notation_and_its_corollaries_still_unify() {
     ok("
         theorem unit_of_comm<A: CMon(+)>(x: A): x + A.unit = x {
             trans(A.comm(x, A.unit), A.unit_l(x))
@@ -205,7 +226,7 @@ fn theory_is_written_in_notation_and_its_corollaries_still_unify() {
 /// The negative control beside it: the *wrong* unit is still refused. `or`'s
 /// unit is `False`, and `unit_of_comm` cannot be made to say otherwise.
 #[test]
-fn the_wrong_unit_is_still_refused_under_a_symbol_binder() {
+fn slow_acceptance_the_wrong_unit_is_still_refused_under_a_symbol_binder() {
     let e = bad("
         theorem unit_of_comm<A: CMon(+)>(x: A): x + A.unit = x {
             trans(A.comm(x, A.unit), A.unit_l(x))
@@ -219,7 +240,7 @@ fn the_wrong_unit_is_still_refused_under_a_symbol_binder() {
 /// declaration with no `(+)` gets the fallback rung, not the neighbour's
 /// binder.
 #[test]
-fn an_installed_symbol_does_not_leak_out_of_its_declaration() {
+fn slow_acceptance_an_installed_symbol_does_not_leak_out_of_its_declaration() {
     // `+` here is `add` by designation at `Nat`, not the previous
     // declaration's index — which is what makes it type-check at all.
     ok("
@@ -262,7 +283,7 @@ fn the_fallback_rung_is_the_old_desugaring() {
 /// agree at `Nat` by construction, which is the whole reason the migration is
 /// not a behaviour change.
 #[test]
-fn a_designation_at_nat_agrees_with_the_name_it_replaced() {
+fn slow_acceptance_a_designation_at_nat_agrees_with_the_name_it_replaced() {
     ok("
         theorem t(x: Nat, y: Nat): x + y = add(x, y) { refl }
         theorem lit(): 2 + 2 = 4 { refl }
@@ -297,7 +318,7 @@ fn two_symbols_at_one_carrier_nominate_nothing() {
 /// The negative control: the two are not interchangeable. If they were, the
 /// coexistence above would be vacuous.
 #[test]
-fn the_two_symbols_do_not_meet() {
+fn slow_acceptance_the_two_symbols_do_not_meet() {
     let e = bad("
         fn prod_all<A: Mon(*)>(xs: List<A>) -> A { fold(*, xs) }
         theorem nope(bs: List<Bool>): sum_all(bs) = prod_all(bs) { refl }
@@ -309,7 +330,7 @@ fn the_two_symbols_do_not_meet() {
 
 /// Every refusal the declaration form owes, checked for **content**.
 #[test]
-fn the_designation_declaration_refuses_by_name() {
+fn slow_acceptance_the_designation_declaration_refuses_by_name() {
     // A duplicate at one key names the previous entry and where it was written.
     let e = bad("designation + at Nat := add");
     assert!(e.contains("already designates"), "{e}");
@@ -350,7 +371,7 @@ fn the_designation_declaration_refuses_by_name() {
 /// otherwise the registry key would depend on the designation table's state at
 /// declaration time, which is the one thing the key exists not to depend on.
 #[test]
-fn an_instance_head_will_not_take_a_symbol() {
+fn slow_acceptance_an_instance_head_will_not_take_a_symbol() {
     let e = bad("instance Mon<Option<Nat>>(+) { unit := None, assoc := ?a, unit_l := ?b, unit_r := ?c }");
     assert!(e.contains("by the **operation**, not by a symbol"), "{e}");
     assert!(e.contains("designation"), "{e}");
@@ -388,7 +409,7 @@ fn without_nat(extra: &str) -> String {
 /// would have had to be true — never "unbound name `mul`", which names
 /// something the writer did not type.
 #[test]
-fn a_symbol_with_no_rung_names_the_symbol() {
+fn slow_acceptance_a_symbol_with_no_rung_names_the_symbol() {
     // `*` at `Nat`: no binder named it, no designation covers `Nat`, and its
     // fallback name `mul` is nowhere — see `without_nat` for what "nowhere"
     // costs now that `std/nat` owns a `mul`.
@@ -406,7 +427,7 @@ fn a_symbol_with_no_rung_names_the_symbol() {
 /// therefore bound by nothing, and says which spelling works instead of
 /// "unbound name".
 #[test]
-fn a_symbol_slot_binds_the_symbol_and_not_the_declared_name() {
+fn slow_acceptance_a_symbol_slot_binds_the_symbol_and_not_the_declared_name() {
     let e = bad("fn f<A: Mon(+)>(x: A, y: A) -> A { op(x, y) }");
     assert!(e.contains("binds it under the SYMBOL"), "{e}");
     assert!(e.contains("write `x + y`"), "{e}");
@@ -470,7 +491,7 @@ fn the_concrete_carrier_refusal_names_the_designations() {
 /// something else. Instantiating the generic function at `Bool` with `and`
 /// gives `and`, not the designated `or`.
 #[test]
-fn a_binder_that_names_the_symbol_beats_the_table() {
+fn slow_acceptance_a_binder_that_names_the_symbol_beats_the_table() {
     ok("
         fn f<A: Mon(+)>(x: A, y: A) -> A { x + y }
         theorem at_and(x: Bool, y: Bool): @f(and, Bool::Mon(and), x, y) = and(x, y) { refl }
@@ -483,7 +504,7 @@ fn a_binder_that_names_the_symbol_beats_the_table() {
 /// makes a mixed-symbol chain read its carrier correctly. Three deep, both
 /// symbols, at both carriers.
 #[test]
-fn the_carrier_probe_descends_the_left_spine() {
+fn slow_acceptance_the_carrier_probe_descends_the_left_spine() {
     ok("
         theorem b3(x: Bool, y: Bool, z: Bool): x + y + z = or(or(x, y), z) { refl }
         theorem n3(a: Nat, b: Nat, c: Nat): a + b + c = add(add(a, b), c) { refl }
@@ -498,7 +519,7 @@ fn the_carrier_probe_descends_the_left_spine() {
 /// *value* there: `fold(+, xs)` passes the binder's index positionally, which
 /// is how the library's `sum_all` is one term with `fold`.
 #[test]
-fn a_bare_symbol_between_delimiters_is_the_index() {
+fn slow_acceptance_a_bare_symbol_between_delimiters_is_the_index() {
     ok("
         theorem one_term<A: Mon(+)>(xs: List<A>): sum_all(xs) = fold(+, xs) { refl }
     ");
@@ -520,7 +541,7 @@ fn a_bare_symbol_between_delimiters_is_the_index() {
 /// binder — the ladder's step 2 (scope) is unchanged by any of this, and the
 /// upcast rides two hops up the chain with the symbol's binder as the index.
 #[test]
-fn the_dot_sugars_work_under_a_symbol_binder() {
+fn slow_acceptance_the_dot_sugars_work_under_a_symbol_binder() {
     ok("
         theorem assoc_up<A: CMon(+)>(x: A, y: A, z: A): (x + y) + z = x + (y + z) {
             x.assoc(y, z)
@@ -536,7 +557,7 @@ fn the_dot_sugars_work_under_a_symbol_binder() {
 /// at a literal and at a neutral operand, with `&&` binding tighter than `||`
 /// and both looser than `*`.
 #[test]
-fn the_doubled_symbols_resolve_by_designation() {
+fn slow_acceptance_the_doubled_symbols_resolve_by_designation() {
     ok("
         theorem and_notated(x: Bool, y: Bool): x && y = and(x, y) { refl }
         theorem or_notated(x: Bool, y: Bool): x || y = or(x, y) { refl }
@@ -555,7 +576,7 @@ fn the_doubled_symbols_resolve_by_designation() {
 /// symbol is the bound index at every carrier — including instantiated at
 /// `or`, where the designation at `Bool` says `and` and loses to the binder.
 #[test]
-fn a_binder_can_name_a_doubled_symbol() {
+fn slow_acceptance_a_binder_can_name_a_doubled_symbol() {
     ok("
         fn both<A: Mon(&&)>(x: A, y: A) -> A { x && y }
         theorem at_and(x: Bool, y: Bool): @both(and, Bool::Mon(and), x, y) = and(x, y) { refl }
@@ -571,7 +592,7 @@ fn a_binder_can_name_a_doubled_symbol() {
 /// designation they refuse — naming the symbol as written, saying there is no
 /// fallback to be missing, and listing where the symbol *does* mean something.
 #[test]
-fn a_doubled_symbol_has_no_fallback_rung() {
+fn slow_acceptance_a_doubled_symbol_has_no_fallback_rung() {
     // At `Nat`, where nothing designates `&&`: refused, with the `Bool` rows
     // as data.
     let e = bad("theorem t(x: Nat, y: Nat): x && y = x { ?p }");
@@ -609,7 +630,7 @@ fn a_doubled_symbol_has_no_fallback_rung() {
 /// `List<A>` carrier supplies `append`, and a binder can name the symbol at an
 /// unrelated carrier. Neither route nominates an instance.
 #[test]
-fn append_symbol_resolves_by_designation_and_binder() {
+fn slow_acceptance_append_symbol_resolves_by_designation_and_binder() {
     ok("
         theorem neutral<A>(xs: List<A>, ys: List<A>): xs ++ ys = append(xs, ys) { refl }
         theorem literal(): Cons(1, Nil) ++ Cons(2, Nil) = Cons(1, Cons(2, Nil)) { refl }
@@ -622,7 +643,7 @@ fn append_symbol_resolves_by_designation_and_binder() {
 /// Like `&&`/`||`, `++` has no legacy name to fall back to. At a carrier with
 /// no designation the refusal names the written symbol and the missing rung.
 #[test]
-fn append_symbol_has_no_fallback_rung() {
+fn slow_acceptance_append_symbol_has_no_fallback_rung() {
     let e = bad("theorem t(x: Nat, y: Nat): x ++ y = x { ?p }");
     assert!(e.contains("`++` has no meaning here"), "{e}");
     assert!(e.contains("has no fallback name"), "{e}");
@@ -646,7 +667,7 @@ fn append_symbol_has_no_fallback_rung() {
 /// slot's domain rather than inferred (a generic `append`'s element type comes
 /// from that domain and nowhere else — §12.2 of the operators design).
 #[test]
-fn a_bare_symbol_resolves_at_the_carrier_the_position_expects() {
+fn slow_acceptance_a_bare_symbol_resolves_at_the_carrier_the_position_expects() {
     ok("
         theorem conj(bs: List<Bool>): fold(&&, bs) = fold(and, bs) { refl }
         theorem disj(bs: List<Bool>): fold(||, bs) = fold(or, bs) { refl }
@@ -673,7 +694,7 @@ fn a_bare_symbol_resolves_at_the_carrier_the_position_expects() {
 /// reads whatever expected type it is handed — while every case that can be
 /// *written* is an argument slot. Pinned here so the two halves cannot drift.
 #[test]
-fn a_bare_symbol_is_grammatical_only_in_an_argument_slot() {
+fn slow_acceptance_a_bare_symbol_is_grammatical_only_in_an_argument_slot() {
     let e = bad("fn conj2(x: Bool, y: Bool) -> Bool { let g: Bool -> Bool -> Bool = &&; g(x, y) }");
     assert!(e.contains("parse error"), "{e}");
     let e = bad("fn conj3(x: Bool, y: Bool) -> Bool { let g = &&; g(x, y) }");
@@ -686,7 +707,7 @@ fn a_bare_symbol_is_grammatical_only_in_an_argument_slot() {
 /// type is no `Π`": `type_namespace` answers `None` for both, which is also why
 /// a domain that still mentions an implicit needs no separate test.
 #[test]
-fn a_carrier_with_no_head_declines_the_probe() {
+fn slow_acceptance_a_carrier_with_no_head_declines_the_probe() {
     let e = bad("fn g<A>(xs: List<A>) -> A { fold(&&, xs) }");
     assert!(e.contains("`&&` has no meaning here"), "{e}");
     // No carrier was probed at all, so the refusal keeps its carrier-less
@@ -702,7 +723,7 @@ fn a_carrier_with_no_head_declines_the_probe() {
 /// carrier it tried — which is the half that was missing, since "covers this
 /// carrier" named none.
 #[test]
-fn a_carrier_with_no_designation_still_refuses() {
+fn slow_acceptance_a_carrier_with_no_designation_still_refuses() {
     let e = bad("theorem t(ns: List<Nat>): fold(&&, ns) = fold(add, ns) { refl }");
     assert!(e.contains("`&&` has no meaning here"), "{e}");
     assert!(e.contains("nothing designates `&&` at `Nat`"), "{e}");
@@ -728,7 +749,7 @@ fn a_carrier_with_no_designation_still_refuses() {
 /// The existing `Mon(++)`-at-`Nat` test cannot make this point: nothing
 /// designates `++` at `Nat`, so rung 2 has no answer there to lose with.
 #[test]
-fn a_binder_shadows_the_expected_carrier() {
+fn slow_acceptance_a_binder_shadows_the_expected_carrier() {
     ok("
         fn fold_or<A: Mon(||)>(xs: List<A>) -> A { fold(||, xs) }
         theorem shadowed(bs: List<Bool>):
@@ -744,7 +765,7 @@ fn a_binder_shadows_the_expected_carrier() {
 /// `Mon<?A>(?op)` goal is reported first by the value-slot refusal, which is
 /// its own (older, and better) message about the same situation.
 #[test]
-fn a_symbol_with_no_carrier_in_sight_says_so() {
+fn slow_acceptance_a_symbol_with_no_carrier_in_sight_says_so() {
     let e = bad("
         fn apply2<A>(f: A -> A -> A, x: A) -> A { f(x, x) }
         fn g(b: Bool) -> Bool { let r = apply2(&&, ?); b }
@@ -759,7 +780,7 @@ fn a_symbol_with_no_carrier_in_sight_says_so() {
 /// teaches the call its carrier — which is the shape that would have started
 /// refusing had the gate been left off.
 #[test]
-fn an_undesignated_symbol_is_never_deferred() {
+fn slow_acceptance_an_undesignated_symbol_is_never_deferred() {
     bare("
         fn add(a: Nat, b: Nat) -> Nat { match b { Zero => a, Succ(k) => Succ(add(a, k)) } }
         fn apply2<A>(f: A -> A -> A, x: A) -> A { f(x, x) }
@@ -772,7 +793,7 @@ fn an_undesignated_symbol_is_never_deferred() {
 /// has nothing to do with them — the growth invariant stated once more from
 /// the class side.
 #[test]
-fn unindexed_classes_and_ordinary_calls_are_unchanged() {
+fn slow_acceptance_unindexed_classes_and_ordinary_calls_are_unchanged() {
     ok("
         class Def<A> { d: A }
         instance Def<Nat> { d := 0 }

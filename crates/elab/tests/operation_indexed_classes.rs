@@ -26,6 +26,8 @@
 //! `the_equal_arity_rule_and_its_negative_control` (item 7), and
 //! `the_linked_slot_forward_references` (item 8).
 
+use std::cell::OnceCell;
+
 use heather_elab::{ElabError, Elaborator};
 
 const LOGIC: &str = include_str!("../../../lib/std/logic.hthr");
@@ -68,7 +70,14 @@ instance<A> Mon<List<A>>(append) {
 }
 "#;
 
-fn run(extra: &str) -> Result<Elaborator, String> {
+// Clone the fixed prefix per probe. This is isolated committed state, not a
+// shared mutable elaborator; thread-local storage pays the build at most once
+// on each of libtest's two workers.
+thread_local! {
+    static BASE: OnceCell<Result<Elaborator, String>> = const { OnceCell::new() };
+}
+
+fn build_base() -> Result<Elaborator, String> {
     let mut e = Elaborator::with_prelude().expect("prelude");
     for (name, src) in
         [("logic", LOGIC), ("bool", BOOL), ("nat", NAT), ("option", OPTION), ("pair", PAIR), ("list", LIST)]
@@ -77,8 +86,17 @@ fn run(extra: &str) -> Result<Elaborator, String> {
             return Err(format!("{name}: {err}"));
         }
     }
-    let src =
-        format!("import bool;\nimport nat;\nimport option;\nimport list;\n{P}\n{extra}");
+    let src = format!("import bool;\nimport nat;\nimport option;\nimport list;\n{P}");
+    match e.elab_module_source("probe", &src) {
+        Ok(()) => Ok(e),
+        Err(ElabError::Elab { msg, .. }) => Err(msg),
+        Err(other) => Err(format!("{other}")),
+    }
+}
+
+fn run(extra: &str) -> Result<Elaborator, String> {
+    let mut e = BASE.with(|base| base.get_or_init(build_base).clone())?;
+    let src = format!("import bool;\nimport nat;\nimport option;\nimport list;\n{extra}");
     match e.elab_module_source("probe", &src) {
         Ok(()) => Ok(e),
         Err(ElabError::Elab { msg, .. }) => Err(msg),
@@ -120,7 +138,7 @@ theorem at_or(x: Bool):  or(x, False)  = x { op_unit_of_comm(x) }
 /// unit, so the wrong one is refused rather than derived. Without it a proof
 /// that silently found the other Bool monoid would pass every test above.
 #[test]
-fn the_wrong_unit_is_refused() {
+fn slow_acceptance_the_wrong_unit_is_refused() {
     let e = bad("
 theorem law<A: CMon>(x: A): op(x, A.unit) = x {
   trans(A.comm(x, A.unit), A.unit_l(x))
@@ -137,7 +155,7 @@ theorem nope(x: Bool): or(x, True) = x { law(x) }
 /// its own — including down the whole `extends` chain, which is synthesized
 /// twice at `Bool` and never meets itself.
 #[test]
-fn both_structures_register_and_each_ground_goal_finds_its_own() {
+fn slow_acceptance_both_structures_register_and_each_ground_goal_finds_its_own() {
     ok("
 theorem and_unit(): Bool::Mon(and).unit = True  { refl }
 theorem or_unit():  Bool::Mon(or).unit  = False { refl }
@@ -151,7 +169,7 @@ theorem chain(): Bool::Sem(or).assoc = Bool::CMon(or).assoc { refl }
 /// …and the negative control: the two chains at one carrier do not leak into
 /// each other.
 #[test]
-fn the_two_chains_at_one_carrier_do_not_meet() {
+fn slow_acceptance_the_two_chains_at_one_carrier_do_not_meet() {
     let e = bad("theorem nope(): Bool::Mon(or).unit = True { refl }");
     assert!(e.contains("nope"), "{e}");
 }
@@ -159,7 +177,7 @@ fn the_two_chains_at_one_carrier_do_not_meet() {
 /// A duplicate at one key is the declaration error it always was, and the
 /// message names the **index** as part of the key.
 #[test]
-fn a_duplicate_at_one_index_names_the_index() {
+fn slow_acceptance_a_duplicate_at_one_index_names_the_index() {
     let e = bad("instance Sem<Bool>(and) { assoc := and_assoc }");
     assert!(e.contains("already has an instance"), "{e}");
     assert!(e.contains("index"), "{e}");
@@ -182,7 +200,7 @@ instance Mag<Bool>(or)   { pt := False }
 /// answered by the binder in scope. The index arrives at the call by
 /// unification from the *statement* (theory's case, §4.1's style rule).
 #[test]
-fn the_empty_slot_binds_the_index_under_its_declared_name() {
+fn slow_acceptance_the_empty_slot_binds_the_index_under_its_declared_name() {
     ok("
 theorem twice<A: Mon>(x: A): op(x, A.unit) = op(x, A.unit) { refl }
 // at an open carrier the binder answers; at a concrete one the statement pins
@@ -197,7 +215,7 @@ theorem at_add(x: Nat):  add(x, 0)    = add(x, 0)    { twice(x) }
 /// index, and the binder it already holds is what pins it (§5's ladder, step
 /// 2). This is the recursive-call case in its smallest honest form.
 #[test]
-fn a_generic_call_fills_its_index_from_the_room() {
+fn slow_acceptance_a_generic_call_fills_its_index_from_the_room() {
     ok("
 fn twice<A: Mon>(x: A) -> A { op(x, A.unit) }
 fn quad<A: Mon>(x: A) -> A { twice(twice(x)) }
@@ -216,7 +234,7 @@ theorem at_or(x: Bool):
 /// That is the whole reason the design routes programs to the linked slot and
 /// leaves the empty one to theory.
 #[test]
-fn an_empty_slot_can_be_supplied_by_hand() {
+fn slow_acceptance_an_empty_slot_can_be_supplied_by_hand() {
     ok("
 fn twice<A: Mon>(x: A) -> A { op(x, A.unit) }
 fn conj(x: Bool) -> Bool { @twice(and, Bool::Mon(and), x) }
@@ -229,7 +247,7 @@ theorem and_the_other(): disj(True) = True { refl }
 /// The generic instance at an **open** element type, reached by backchaining
 /// with the index instantiated at the same time as the carrier.
 #[test]
-fn a_generic_instance_answers_at_an_open_element_type() {
+fn slow_acceptance_a_generic_instance_answers_at_an_open_element_type() {
     ok("
 fn fold<A: Mon(o)>(o: A -> A -> A, xs: List<A>) -> A {
   match xs { Nil => A.unit, Cons(h, t) => o(h, fold(o, t)) }
@@ -282,7 +300,7 @@ fn go(x: Bool) -> Bool { twice(x) }
 /// A receiver at a concrete carrier is the same refusal: the receiver fixes
 /// the carrier and nothing fixes the operation (§5.1).
 #[test]
-fn receiver_dispatch_at_a_concrete_carrier_is_refused_by_name() {
+fn slow_acceptance_receiver_dispatch_at_a_concrete_carrier_is_refused_by_name() {
     let e = bad("theorem nope(a: Bool, b: Bool, c: Bool):
   and(and(a, b), c) = and(a, and(b, c)) { a.assoc(b, c) }");
     assert!(e.contains("not pinned"), "{e}");
@@ -296,7 +314,7 @@ fn receiver_dispatch_at_a_concrete_carrier_is_refused_by_name() {
 /// the member, with the index taken from the binder and the answer reached by
 /// upcast — two hops up the chain from `CMon`.
 #[test]
-fn receiver_dispatch_under_a_binder_upcasts_with_the_index() {
+fn slow_acceptance_receiver_dispatch_under_a_binder_upcasts_with_the_index() {
     ok("
 theorem assoc_from_a_monoid<A: Mon(o)>(o: A -> A -> A, x: A, y: A, z: A):
   o(o(x, y), z) = o(x, o(y, z)) { x.assoc(y, z) }
@@ -312,7 +330,7 @@ theorem assoc_from_a_comm_monoid<A: CMon(o)>(o: A -> A -> A, x: A, y: A, z: A):
 /// `and`-keyed instance: selection is by checked trial, and the kernel is what
 /// compares two operations.
 #[test]
-fn an_alias_and_an_eta_expansion_find_the_keyed_instance() {
+fn slow_acceptance_an_alias_and_an_eta_expansion_find_the_keyed_instance() {
     ok("
 fn conj(x: Bool, y: Bool) -> Bool { and(x, y) }
 fn need<A: Mon(o)>(o: A -> A -> A, x: A) -> A { o(x, A.unit) }
@@ -326,7 +344,7 @@ theorem by_eta(x: Bool):
 /// does **not** match. Without this, "up to conversion" would be
 /// indistinguishable from "any operation of the right type".
 #[test]
-fn a_different_operation_does_not_match() {
+fn slow_acceptance_a_different_operation_does_not_match() {
     let e = bad("
 fn nand(a: Bool, b: Bool) -> Bool { not(and(a, b)) }
 fn need<A: Mon(o)>(o: A -> A -> A, x: A) -> A { o(x, A.unit) }
@@ -346,7 +364,7 @@ fn go(x: Bool) -> Bool { need(nand, x) }
 /// the type and the one that names the dictionary, related by `refl`, at an
 /// open carrier and at a concrete one, with a literal case that computes.
 #[test]
-fn the_spellings_are_one_term() {
+fn slow_acceptance_the_spellings_are_one_term() {
     ok("
 fn anon<A: Mon(o)>(o: A -> A -> A, x: A) -> A { o(x, A.unit) }
 theorem anon_is_the_dictionary<A> requires m: Mon<A>(o) (o: A -> A -> A, x: A):
@@ -412,7 +430,7 @@ theorem single(x: Nat): fold(add, Cons(x, Nil)) = add(x, 0) { refl }
 /// A name in an index slot that is neither a parameter of this declaration nor
 /// a global is refused, naming the one forward reference the language has.
 #[test]
-fn an_index_that_names_nothing_is_refused() {
+fn slow_acceptance_an_index_that_names_nothing_is_refused() {
     let e = bad("fn f<A: Mon(nope)>(x: A) -> A { x }");
     assert!(e.contains("not a parameter"), "{e}");
 }
@@ -420,7 +438,7 @@ fn an_index_that_names_nothing_is_refused() {
 /// The cycle: the constraint's index names a parameter whose own type names
 /// the constraint. Refused **by name** rather than ordered by guess.
 #[test]
-fn a_dependency_cycle_is_refused_by_name() {
+fn slow_acceptance_a_dependency_cycle_is_refused_by_name() {
     let e = bad(
         "theorem cyc<A> requires m: Mon<A>(o) (p: m.unit = m.unit, o: A -> A -> A):
   m.unit = m.unit { refl }",
@@ -432,7 +450,7 @@ fn a_dependency_cycle_is_refused_by_name() {
 /// Two constraints of one class, distinguished by their linked names (§5.2) —
 /// and the bare declared name, which binds nothing there, refused naming both.
 #[test]
-fn two_constraints_of_one_class() {
+fn slow_acceptance_two_constraints_of_one_class() {
     ok("
 fn both<A: Mon(f) + Mon(g)>(f: A -> A -> A, g: A -> A -> A, x: A) -> A {
   f(g(x, x), x)
@@ -450,7 +468,7 @@ theorem at_bool(x: Bool): both(and, or, x) = and(or(x, x), x) { refl }
 /// `d.op` at `d: Mon<A>(and)` is `and`, read off the dictionary's type — at a
 /// concrete carrier and at an open one.
 #[test]
-fn the_index_pseudo_projection() {
+fn slow_acceptance_the_index_pseudo_projection() {
     ok("
 theorem concrete requires m: Mon<Bool>(and) (x: Bool, y: Bool):
   m.op(x, y) = and(x, y) { refl }
@@ -462,7 +480,7 @@ theorem open<A> requires m: Mon<A>(o) (o: A -> A -> A, x: A, y: A):
 /// The negative control: a name that is a **field** still resolves as a field,
 /// and a name that is neither is still the ordinary error.
 #[test]
-fn a_field_is_still_a_field() {
+fn slow_acceptance_a_field_is_still_a_field() {
     ok("theorem the_unit requires m: Mon<Bool>(and) (x: Bool): and(m.unit, x) = x {
   m.unit_l(x)
 }");
@@ -477,7 +495,7 @@ fn a_field_is_still_a_field() {
 /// above is gated on a non-empty index list, and this is the control that says
 /// so.
 #[test]
-fn unindexed_classes_are_unchanged() {
+fn slow_acceptance_unindexed_classes_are_unchanged() {
     ok("
 class Def<A> { d: A }
 instance Def<Bool> { d := False }

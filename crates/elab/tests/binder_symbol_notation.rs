@@ -29,6 +29,8 @@
 //! (the negative control the reservation exists for), and
 //! `a_declaration_installs_each_spelling_once` (§5.2 over both namespaces).
 
+use std::cell::OnceCell;
+
 use heather_elab::{ElabError, Elaborator};
 
 const LOGIC: &str = include_str!("../../../lib/std/logic.hthr");
@@ -81,14 +83,31 @@ fn fold<A: Mon(op)>(op as ∙: A -> A -> A, xs: List<A>) -> A {
 }
 "#;
 
-fn run(extra: &str) -> Result<Elaborator, String> {
+// Clone the fixed prefix per probe. `Elaborator`'s clone is deliberately a
+// cheap isolated snapshot; thread-local storage pays the prefix at most once
+// on each of libtest's two worker threads.
+thread_local! {
+    static BASE: OnceCell<Result<Elaborator, String>> = const { OnceCell::new() };
+}
+
+fn build_base() -> Result<Elaborator, String> {
     let mut e = Elaborator::with_prelude().expect("prelude");
     for (name, src) in [("logic", LOGIC), ("bool", BOOL), ("nat", NAT), ("option", OPTION), ("pair", PAIR), ("list", LIST)] {
         if let Err(err) = e.elab_module_source(name, src) {
             return Err(format!("{name}: {err}"));
         }
     }
-    let src = format!("import bool;\nimport nat;\nimport option;\nimport list;\n{P}\n{extra}");
+    let src = format!("import bool;\nimport nat;\nimport option;\nimport list;\n{P}");
+    match e.elab_module_source("probe", &src) {
+        Ok(()) => Ok(e),
+        Err(ElabError::Elab { msg, .. }) => Err(msg),
+        Err(other) => Err(format!("{other}")),
+    }
+}
+
+fn run(extra: &str) -> Result<Elaborator, String> {
+    let mut e = BASE.with(|base| base.get_or_init(build_base).clone())?;
+    let src = format!("import bool;\nimport nat;\nimport option;\nimport list;\n{extra}");
     match e.elab_module_source("probe", &src) {
         Ok(()) => Ok(e),
         Err(ElabError::Elab { msg, .. }) => Err(msg),
@@ -148,7 +167,7 @@ fn the_class_head_spells_its_own_laws() {
 /// the whole device free: the empty slot binds the class's declared name, a
 /// linked slot binds the caller's own, and neither has heard of a symbol.
 #[test]
-fn the_identifier_is_still_the_interface_spelling() {
+fn slow_acceptance_the_identifier_is_still_the_interface_spelling() {
     ok("
         // The EMPTY slot binds `op`, the class's declared parameter name —
         // exactly as before the head carried a symbol.
@@ -205,7 +224,7 @@ fn a_value_parameter_spells_the_telescope_the_statement_and_the_body() {
 /// symbol, used in the **body** and in the **result type**, at an open element
 /// type with no constraint anywhere.
 #[test]
-fn a_class_free_higher_order_function_takes_a_symbol() {
+fn slow_acceptance_a_class_free_higher_order_function_takes_a_symbol() {
     ok("
         // The body.
         fn square<A>(f as ∙: A -> A -> A, x: A) -> A { x ∙ x }
@@ -251,7 +270,7 @@ fn the_reserved_generic_symbol_means_nothing_off_a_binder() {
 /// next declaration has not heard of it. Stated positively (the fallback rung
 /// still answers for `+` next door) and negatively.
 #[test]
-fn an_installed_symbol_does_not_leak_out_of_its_declaration() {
+fn slow_acceptance_an_installed_symbol_does_not_leak_out_of_its_declaration() {
     ok("
         fn inside<A>(f as ∙: A -> A -> A, x: A) -> A { x ∙ x }
         theorem outside(x: Nat, y: Nat): x + y = add(x, y) { refl }
@@ -305,7 +324,7 @@ fn a_declaration_installs_each_spelling_once() {
 /// symbol is spelled in a **checking** position (a theorem's statement) at an
 /// **open** carrier, with the negative control beside it.
 #[test]
-fn a_symbol_in_a_shared_run_reaches_only_its_own_name() {
+fn slow_acceptance_a_symbol_in_a_shared_run_reaches_only_its_own_name() {
     ok("theorem run<A>(f as ∙, h: A -> A -> A, x: A): x ∙ x = f(x, x) { refl }");
     // `h` is a parameter of the same type, referable by its identifier — the
     // run really did bind two names, not one.
@@ -321,7 +340,7 @@ fn a_symbol_in_a_shared_run_reaches_only_its_own_name() {
 /// is the program it was. The classes above are the library's own, restated —
 /// `lib_algebra.rs` is the acceptance test that says the library agrees.
 #[test]
-fn a_declaration_that_writes_no_symbol_is_unchanged() {
+fn slow_acceptance_a_declaration_that_writes_no_symbol_is_unchanged() {
     ok("
         fn plain<A: Mon(op)>(op: A -> A -> A, x: A) -> A { op(x, A.unit) }
         theorem plain_nat(x: Nat): plain(add, x) = add(x, 0) { refl }
