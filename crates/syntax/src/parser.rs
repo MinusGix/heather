@@ -2354,6 +2354,19 @@ impl Parser {
     }
 
     fn ty_atom(&mut self) -> R<Ty> {
+        if matches!(self.peek(), TokKind::NormBar) {
+            let start = self.bump().span;
+            let inner = self.ty()?;
+            let end = self.expect(&TokKind::NormBar, "`∥` to close a squash type")?;
+            return Ok(Ty { kind: TyKind::Squash(Box::new(inner)), span: start.join(end) });
+        }
+        if self.at_kw("Squash") && matches!(self.nth(1), TokKind::Lt) {
+            let start = self.bump().span;
+            self.bump(); // `<`
+            let inner = self.ty()?;
+            let end = self.expect(&TokKind::Gt, "`>` to close `Squash<A>`")?;
+            return Ok(Ty { kind: TyKind::Squash(Box::new(inner)), span: start.join(end) });
+        }
         // `Type` / `Type<n>`. Before the applied-inductive rule below, which
         // would try to parse `0` as a type.
         if let Some((level, span)) = self.univ()? {
@@ -3436,6 +3449,17 @@ impl Parser {
     /// `@`- or plain call, a variable, a numeral, or a parenthesised group.
     fn atom(&mut self) -> R<Expr> {
         let start = self.peek_span();
+        // Squash is type syntax in expression position too, just like an
+        // arrow type.  This matters in particular under `code { ... }`: the
+        // quotation must retain the distinct `TmSquash` encoding rather than
+        // resolving `Squash` as an ordinary term name.
+        if matches!(self.peek(), TokKind::NormBar)
+            || (self.at_kw("Squash") && matches!(self.nth(1), TokKind::Lt))
+        {
+            let ty = self.ty_atom()?;
+            let span = ty.span;
+            return Ok(Expr { kind: ExprKind::TyLit(Box::new(ty)), span });
+        }
         // `Type<n>` where a term is expected. Before the operator loop sees
         // the `<`, which would otherwise read it as `lt`.
         if let Some((level, span)) = self.univ()? {
@@ -3463,6 +3487,9 @@ impl Parser {
         }
         if self.at_kw("j") && matches!(self.nth(1), TokKind::LParen) {
             return self.j_expr();
+        }
+        if self.at_kw("squash_ind") && matches!(self.nth(1), TokKind::LParen) {
+            return self.squash_ind_expr();
         }
         if matches!(self.peek(), TokKind::Lambda) || self.at_kw("fun") {
             return self.lambda();
@@ -4236,6 +4263,30 @@ impl Parser {
                 proof: Box::new(proof),
                 motive: Box::new(motive),
                 case: Box::new(case),
+            },
+            span: start.join(end),
+        })
+    }
+
+    fn squash_ind_expr(&mut self) -> R<Expr> {
+        let start = self.bump().span;
+        self.expect(&TokKind::LParen, "`(`")?;
+        let scrut = self.expr()?;
+        self.expect(&TokKind::Comma, "`,` after the squash scrutinee")?;
+        let motive = self.with_motive(|p| p.expr())?;
+        self.expect(&TokKind::Comma, "`,` after the squash motive")?;
+        let case = self.expr()?;
+        let end = self.expect(&TokKind::RParen, "`)` to close `squash_ind`")?;
+        Ok(Expr {
+            kind: ExprKind::App {
+                head: Box::new(Expr {
+                    kind: ExprKind::Var("squash_ind".into()),
+                    span: start,
+                }),
+                args: vec![scrut, motive, case],
+                named: vec![],
+                explicit: false,
+                goal_oriented: false,
             },
             span: start.join(end),
         })

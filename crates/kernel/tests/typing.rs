@@ -4,7 +4,7 @@
 //! disciplines, global contexts and local substitutions, universe
 //! polymorphism, contextual types (box/letbox, checking-only box under
 //! binders), and the code recursors, including a full *identity recursor*
-//! whose 52 branches re-box their telescopes' code — an end-to-end exercise
+//! whose 56 branches re-box their telescopes' code — an end-to-end exercise
 //! of every `G_Typ`/`G_Trm` telescope.
 //!
 //! No generator-based properties: the generators produce ill-typed terms,
@@ -15,6 +15,7 @@ use std::rc::Rc;
 
 use heather_kernel::layer::Layer;
 use heather_kernel::level::{Level, UnivVar};
+use heather_kernel::reduce::whnf_term;
 use heather_kernel::term::{
     nth, Branches, CtxBase, CtxEntry, GlobalBinding, GlobalCtx, GlobalVar, LocalCtx,
     LocalSubst, LocalVar, Motives, SubstTail, Term, Type,
@@ -552,6 +553,10 @@ fn constant_branches() -> Rc<Branches> {
         tm_srefl: z(),
         tm_transp: z(),
         tm_elim_sempty: z(),
+        ty_squash: z(),
+        tm_squash: z(),
+        tm_squash_in: z(),
+        tm_elim_squash: z(),
     })
 }
 
@@ -1071,6 +1076,40 @@ fn identity_branches() -> Rc<Branches> {
                 scrut: rt(gtm(0, &g2s)),
             })))
         },
+        ty_squash: rt(Term::BoxTy(rty(Type::Squash {
+            level: lv(0),
+            ty: rty(gty(0, &g1)),
+        }))),
+        tm_squash: rt(Term::BoxTm(rt(Term::TmSquash {
+            level: lv(0),
+            ty: rt(gtm(0, &g1)),
+        }))),
+        tm_squash_in: rt(Term::BoxTm(rt(Term::Squash {
+            level: lv(0),
+            ty: rty(gty(1, &g2)),
+            tm: rt(gtm(0, &g2)),
+        }))),
+        tm_elim_squash: {
+            let g4s = g_ctx(4);
+            let a = gty(3, &g4s);
+            let gz = ext(
+                &g4s,
+                Type::Squash { level: lv(1), ty: rty(a.clone()) },
+                lv(1),
+            );
+            let gx = ext(&g4s, a.clone(), lv(1));
+            rt(Term::BoxTm(rt(Term::ElimSquash {
+                src_level: lv(1),
+                dst_level: lv(0),
+                src_ty: rty(a),
+                motive: rty(Type::GlobalTy {
+                    var: GlobalVar(2),
+                    subst: LocalSubst::id(&gz),
+                }),
+                case: rt(gtm(1, &gx)),
+                scrut: rt(gtm(0, &g4s)),
+            })))
+        },
     })
 }
 
@@ -1305,7 +1344,7 @@ fn elim_empty_branch_recursive_call_is_at_the_scrutinee_level() {
 /// The pattern is `elim_empty_branch_recursive_call_is_at_the_scrutinee_level`
 /// generalised: the identity body is routed through `λ(z : claim). <body>`
 /// applied to the entry under test, so only `claim` varies. The harness
-/// recursor is `elim^Typ` on `box Nat`: `rec_ga` checks all 52 branches
+/// recursor is `elim^Typ` on `box Nat`: `rec_ga` checks all 56 branches
 /// whatever the scrutinee is, so a single trivial scrutinee observes any
 /// branch's telescope.
 #[test]
@@ -1344,7 +1383,7 @@ fn type_motive_branch_entries_are_usable_at_their_declared_context_and_level() {
         })
     };
     // `elim^Typ` over `box Nat`, whose only job is to make `rec_ga` walk the
-    // 52 branches; it fires `ty_nat`, which no probe touches.
+    // 56 branches; it fires `ty_nat`, which no probe touches.
     let harness = |branches: Rc<Branches>| Term::ElimCodeTy {
         ty_motive_level: Level::Zero,
         tm_motive_level: Level::Zero,
@@ -1447,6 +1486,63 @@ fn identity_recursor_on_code_of_terms() {
     let (ty, l) = infer_closed(Layer::Meta, &t).unwrap();
     assert!(ty == Type::CodeTm { ctx: nil_ctx(), ty: rty(Type::Nat), level: Level::Zero });
     assert!(l.equiv(&Level::Zero));
+}
+
+#[test]
+fn identity_recursor_dispatches_to_all_squash_branches() {
+    let gamma = nil_ctx();
+    let squash_nat_ty = Type::Squash { level: Level::Zero, ty: rty(Type::Nat) };
+    let squash_zero = Term::Squash {
+        level: Level::Zero,
+        ty: rty(Type::Nat),
+        tm: rt(Term::Zero),
+    };
+    let motive = Type::Nat;
+    let elim = Term::ElimSquash {
+        src_level: Level::Zero,
+        dst_level: Level::Zero,
+        src_ty: rty(Type::Nat),
+        motive: rty(motive),
+        case: rt(squash_zero.clone()),
+        scrut: rt(squash_zero.clone()),
+    };
+
+    let type_codes = [
+        Type::Squash { level: Level::Zero, ty: rty(Type::Nat) },
+    ];
+    for ty in type_codes {
+        let boxed = Term::BoxTy(rty(ty));
+        let rec = Term::ElimCodeTy {
+            ty_motive_level: Level::Zero,
+            tm_motive_level: Level::Zero,
+            motives: identity_motives(),
+            branches: identity_branches(),
+            code_level: Level::Zero,
+            ctx: gamma.clone(),
+            scrut: rt(boxed.clone()),
+        };
+        assert_eq!(whnf_term(&rec, &gamma, FUEL), Ok(boxed));
+    }
+
+    let term_codes = [
+        (Term::TmSquash { level: Level::Zero, ty: rt(Term::TmNat) }, Type::Ty(Level::Zero)),
+        (squash_zero, squash_nat_ty.clone()),
+        (elim, squash_nat_ty),
+    ];
+    for (tm, ty) in term_codes {
+        let boxed = Term::BoxTm(rt(tm));
+        let rec = Term::ElimCodeTm {
+            ty_motive_level: Level::Zero,
+            tm_motive_level: Level::Zero,
+            motives: identity_motives(),
+            branches: identity_branches(),
+            code_level: Level::Zero,
+            ctx: gamma.clone(),
+            ty: rty(ty),
+            scrut: rt(boxed.clone()),
+        };
+        assert_eq!(whnf_term(&rec, &gamma, FUEL), Ok(boxed));
+    }
 }
 
 // -------------------------------------------------------------------------

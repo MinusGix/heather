@@ -577,6 +577,8 @@ pub enum TyKind {
     /// which claims the *name* `Fin` exactly as it claims `Nat` — so `Fin` is
     /// a reserved type-former name in type position (§2.2).
     Fin(Box<Expr>),
+    /// Propositional truncation, written `∥A∥` or `Squash<A>`.
+    Squash(Box<Ty>),
     /// `(x: A) -> B` (dependent) or `A -> B` (`binder: None`).
     /// Right-associative; one binder per parenthesis group, so `(x: A) (y: B)
     /// -> C` is written `(x: A) -> (y: B) -> C`
@@ -986,11 +988,11 @@ pub enum ExprKind {
     /// (docs/certgen-transcriber-in-language-design.md §3).
     ///
     /// Three things distinguish it from [`ExprKind::Match`], and all three are
-    /// what make a 52-branch elimination writable at all:
+    /// what make a 56-branch elimination writable at all:
     ///
     /// - the motive is a **constant type**, not a lambda: a motive that
     ///   mentioned the scrutinee, its context or its level would give the
-    ///   branches 52 different expected types and would put the recursive
+    ///   branches 56 different expected types and would put the recursive
     ///   results of the `lam`/`elim_nat` branches at *extended* contexts,
     ///   where nothing can bring them back down;
     /// - an arm binds only the branch's recursive-call results, positionally;

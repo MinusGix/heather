@@ -574,6 +574,7 @@ fn rename_ty(m: &Ren, t: &Ty) -> Ty {
             len: Box::new(rename_expr(m, len)),
         },
         TyKind::Fin(e) => TyKind::Fin(Box::new(rename_expr(m, e))),
+        TyKind::Squash(inner) => TyKind::Squash(Box::new(rename_ty(m, inner))),
         TyKind::Fn { binder, implicit, dom, cod } => TyKind::Fn {
             binder: binder.clone(),
             implicit: *implicit,

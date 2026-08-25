@@ -222,6 +222,14 @@ impl<'a> ExprElab<'a> {
                 elab.check_type_endpoint(cx, len, &Type::Nat, &Level::Zero)
                     .map(|len| (Type::Fin { len: Rc::new(len) }, Level::Zero)),
             ),
+            TyKind::Squash(inner) => Some(
+                elab.lower_type(cx, inner).map(|(ty, level)| {
+                    (
+                        Type::Squash { level: level.clone(), ty: Rc::new(ty) },
+                        level,
+                    )
+                }),
+            ),
             TyKind::Fn {
                 binder, dom, cod, ..
             } => Some((|| {

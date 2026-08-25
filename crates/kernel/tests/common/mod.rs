@@ -393,6 +393,18 @@ pub fn gen_branches(sc: &Sc, r: &mut Rng, b: u32) -> Rc<Branches> {
             ]
         }),
         tm_elim_sempty: t(2, 2, &|g| vec![GK::Ctx, GK::Ty(sh(g, 1)), GK::Tm(sh(g, 0))]),
+        ty_squash: t(1, 1, &|g| vec![GK::Ctx, GK::Ty(sh(g, 0))]),
+        tm_squash: t(1, 1, &|g| vec![GK::Ctx, GK::Tm(sh(g, 0))]),
+        tm_squash_in: t(1, 2, &|g| vec![GK::Ctx, GK::Ty(sh(g, 0)), GK::Tm(sh(g, 0))]),
+        tm_elim_squash: t(2, 4, &|g| {
+            vec![
+                GK::Ctx,
+                GK::Ty(sh(g, 0)),
+                GK::Ty(sh(g, 1)),
+                GK::Tm(sh(g, 1)),
+                GK::Tm(sh(g, 0)),
+            ]
+        }),
     })
 }
 
@@ -1078,6 +1090,7 @@ pub fn count_type(t: &Type) -> u64 {
         Type::Vec { elem, len, .. } => count_type(elem) + count_term(len),
         Type::Fin { len } => count_term(len),
         Type::Wf { shape, arity, .. } => count_type(shape) + count_term(arity),
+        Type::Squash { ty, .. } => count_type(ty),
         Type::UPi { body, .. } => count_type(body),
         Type::El { tm, .. } => count_term(tm),
         Type::GlobalTy { subst, .. } => count_subst(subst),
@@ -1105,6 +1118,7 @@ pub fn count_term(t: &Term) -> u64 {
             count_term(ty) + count_term(lhs) + count_term(rhs)
         }
         Term::TmSEmpty { .. } => 0,
+        Term::TmSquash { ty, .. } => count_term(ty),
         Term::TmSigma { fst, snd, .. } => count_term(fst) + count_term(snd),
         Term::TmSum { lhs, rhs, .. } => count_term(lhs) + count_term(rhs),
         Term::TmW { shape, pos, .. } => count_term(shape) + count_term(pos),
@@ -1133,7 +1147,11 @@ pub fn count_term(t: &Term) -> u64 {
                 + count_term(rhs) + count_term(proof)
         }
         Term::SRefl { ty, tm, .. } => count_type(ty) + count_term(tm),
+        Term::Squash { ty, tm, .. } => count_type(ty) + count_term(tm),
         Term::ElimSEmpty { motive, scrut, .. } => count_type(motive) + count_term(scrut),
+        Term::ElimSquash { src_ty, motive, case, scrut, .. } => {
+            count_type(src_ty) + count_type(motive) + count_term(case) + count_term(scrut)
+        }
         Term::Transp { ty, motive, lhs, rhs, proof, tm, .. } => {
             count_type(ty) + count_type(motive) + count_term(lhs) + count_term(rhs)
                 + count_term(proof) + count_term(tm)

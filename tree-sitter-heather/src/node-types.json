@@ -120,6 +120,14 @@
         "named": true
       },
       {
+        "type": "squash_ind_expression",
+        "named": true
+      },
+      {
+        "type": "squash_type",
+        "named": true
+      },
+      {
         "type": "type_application_expression",
         "named": true
       },
@@ -389,6 +397,10 @@
             "named": true
           },
           {
+            "type": "squash_type",
+            "named": true
+          },
+          {
             "type": "type_arguments",
             "named": true
           },
@@ -486,6 +498,10 @@
           },
           {
             "type": "qualified_identifier",
+            "named": true
+          },
+          {
+            "type": "squash_type",
             "named": true
           },
           {
@@ -1060,6 +1076,10 @@
             "named": true
           },
           {
+            "type": "squash_type",
+            "named": true
+          },
+          {
             "type": "type_arguments",
             "named": true
           },
@@ -1200,6 +1220,10 @@
             "named": true
           },
           {
+            "type": "squash_type",
+            "named": true
+          },
+          {
             "type": "type_arguments",
             "named": true
           },
@@ -1311,6 +1335,10 @@
           "named": true
         },
         {
+          "type": "squash_type",
+          "named": true
+        },
+        {
           "type": "type_arguments",
           "named": true
         },
@@ -1386,6 +1414,10 @@
           "named": true
         },
         {
+          "type": "squash_type",
+          "named": true
+        },
+        {
           "type": "type_arguments",
           "named": true
         },
@@ -1457,6 +1489,10 @@
           "named": true
         },
         {
+          "type": "squash_type",
+          "named": true
+        },
+        {
           "type": "type_arguments",
           "named": true
         },
@@ -1525,6 +1561,10 @@
         },
         {
           "type": "qualified_identifier",
+          "named": true
+        },
+        {
+          "type": "squash_type",
           "named": true
         },
         {
@@ -1774,6 +1814,10 @@
           },
           {
             "type": "qualified_identifier",
+            "named": true
+          },
+          {
+            "type": "squash_type",
             "named": true
           },
           {
@@ -2912,6 +2956,10 @@
             "named": true
           },
           {
+            "type": "squash_type",
+            "named": true
+          },
+          {
             "type": "type_arguments",
             "named": true
           },
@@ -3253,6 +3301,10 @@
           },
           {
             "type": "qualified_identifier",
+            "named": true
+          },
+          {
+            "type": "squash_type",
             "named": true
           },
           {
@@ -3875,6 +3927,105 @@
     }
   },
   {
+    "type": "squash_ind_expression",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": true,
+      "required": true,
+      "types": [
+        {
+          "type": "_expression",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "squash_type",
+    "named": true,
+    "fields": {
+      "type": {
+        "multiple": true,
+        "required": true,
+        "types": [
+          {
+            "type": "(",
+            "named": false
+          },
+          {
+            "type": ")",
+            "named": false
+          },
+          {
+            "type": "builtin_type",
+            "named": true
+          },
+          {
+            "type": "contextual_identifier",
+            "named": true
+          },
+          {
+            "type": "declaration_binary_type",
+            "named": true
+          },
+          {
+            "type": "declaration_call_type",
+            "named": true
+          },
+          {
+            "type": "declaration_function_type",
+            "named": true
+          },
+          {
+            "type": "declaration_member_type",
+            "named": true
+          },
+          {
+            "type": "declaration_prefix_type",
+            "named": true
+          },
+          {
+            "type": "declaration_quantified_type",
+            "named": true
+          },
+          {
+            "type": "hole",
+            "named": true
+          },
+          {
+            "type": "identifier",
+            "named": true
+          },
+          {
+            "type": "number",
+            "named": true
+          },
+          {
+            "type": "qualified_identifier",
+            "named": true
+          },
+          {
+            "type": "squash_type",
+            "named": true
+          },
+          {
+            "type": "type_arguments",
+            "named": true
+          },
+          {
+            "type": "universe",
+            "named": true
+          },
+          {
+            "type": "vector_type",
+            "named": true
+          }
+        ]
+      }
+    }
+  },
+  {
     "type": "theorem_declaration",
     "named": true,
     "fields": {
@@ -3966,6 +4117,10 @@
           },
           {
             "type": "qualified_identifier",
+            "named": true
+          },
+          {
+            "type": "squash_type",
             "named": true
           },
           {
@@ -4256,6 +4411,10 @@
     "named": false
   },
   {
+    "type": "Squash",
+    "named": false
+  },
+  {
     "type": "TyCode",
     "named": false
   },
@@ -4433,6 +4592,10 @@
     "named": false
   },
   {
+    "type": "squash_ind",
+    "named": false
+  },
+  {
     "type": "theorem",
     "named": false
   },
@@ -4478,6 +4641,10 @@
   },
   {
     "type": "∙",
+    "named": false
+  },
+  {
+    "type": "∥",
     "named": false
   },
   {

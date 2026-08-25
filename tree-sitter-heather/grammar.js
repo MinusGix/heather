@@ -254,6 +254,7 @@ module.exports = grammar({
       $.hole,
       $.universe,
       $.vector_type,
+      $.squash_type,
       seq('(', $._declaration_type, ')'),
       seq(choice($.identifier, $.qualified_identifier, $.builtin_type), $.type_arguments),
       $.declaration_call_type,
@@ -296,6 +297,7 @@ module.exports = grammar({
       $.universe,
       $.parenthesized_expression,
       $.vector_type,
+      $.squash_type,
       $.vector_expression,
       $.block_expression,
       $.lambda_expression,
@@ -310,6 +312,7 @@ module.exports = grammar({
       $.calc_expression,
       $.apply_expression,
       $.j_expression,
+      $.squash_ind_expression,
       $.refl_expression,
       $.explicit_call_expression,
       $.record_expression,
@@ -325,6 +328,10 @@ module.exports = grammar({
     builtin_type: _ => choice('Code', 'Ctx', 'TyCode'),
     universe: $ => prec.right(PREC.POSTFIX, seq('Type', optional(seq('<', $.number, '>')))),
     vector_type: $ => seq('[', field('element', $._expression), ';', field('length', $._expression), ']'),
+    squash_type: $ => choice(
+      seq('∥', field('type', $._declaration_type), '∥'),
+      seq('Squash', '<', field('type', $._declaration_type), '>'),
+    ),
     vector_expression: $ => seq('[', commaSep($._expression), optional(','), ']'),
     block_expression: $ => $.block,
 
@@ -382,6 +389,7 @@ module.exports = grammar({
       field('argument', $._expression),
     )),
     j_expression: $ => seq('j', '(', $._expression, ',', $._expression, ',', $._expression, ')'),
+    squash_ind_expression: $ => seq('squash_ind', '(', $._expression, ',', $._expression, ',', $._expression, ')'),
     refl_expression: _ => 'refl',
 
     explicit_call_expression: $ => prec(PREC.POSTFIX, seq('@', $.qualified_identifier, optional($.type_arguments), $.argument_list)),

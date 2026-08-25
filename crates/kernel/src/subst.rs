@@ -438,6 +438,10 @@ fn map_type<M: Mapper>(t: &Type, m: &mut M, at: Depths) -> Type {
             rhs: sub_tm(rhs, m, at),
         },
         Type::SEmpty { level } => Type::SEmpty { level: m.level(level, at) },
+        Type::Squash { level, ty } => Type::Squash {
+            level: m.level(level, at),
+            ty: sub_ty(ty, m, at),
+        },
         Type::Sigma { fst_level, snd_level, fst, snd } => Type::Sigma {
             fst_level: m.level(fst_level, at),
             snd_level: m.level(snd_level, at),
@@ -522,6 +526,10 @@ fn map_term<M: Mapper>(t: &Term, m: &mut M, at: Depths) -> Term {
             rhs: sub_tm(rhs, m, at),
         },
         Term::TmSEmpty { level } => Term::TmSEmpty { level: m.level(level, at) },
+        Term::TmSquash { level, ty } => Term::TmSquash {
+            level: m.level(level, at),
+            ty: sub_tm(ty, m, at),
+        },
         Term::TmSigma { fst_level, snd_level, fst, snd } => Term::TmSigma {
             fst_level: m.level(fst_level, at),
             snd_level: m.level(snd_level, at),
@@ -584,6 +592,11 @@ fn map_term<M: Mapper>(t: &Term, m: &mut M, at: Depths) -> Term {
             ty: sub_ty(ty, m, at),
             tm: sub_tm(tm, m, at),
         },
+        Term::Squash { level, ty, tm } => Term::Squash {
+            level: m.level(level, at),
+            ty: sub_ty(ty, m, at),
+            tm: sub_tm(tm, m, at),
+        },
         Term::Transp { ty_level, motive_level, ty, motive, lhs, rhs, proof, tm } => {
             Term::Transp {
                 ty_level: m.level(ty_level, at),
@@ -602,6 +615,16 @@ fn map_term<M: Mapper>(t: &Term, m: &mut M, at: Depths) -> Term {
             motive: sub_ty(motive, m, at + dep(0, 0, 1)),
             scrut: sub_tm(scrut, m, at),
         },
+        Term::ElimSquash { src_level, dst_level, src_ty, motive, case, scrut } => {
+            Term::ElimSquash {
+                src_level: m.level(src_level, at),
+                dst_level: m.level(dst_level, at),
+                src_ty: sub_ty(src_ty, m, at),
+                motive: sub_ty(motive, m, at + dep(0, 0, 1)),
+                case: sub_tm(case, m, at + dep(0, 0, 1)),
+                scrut: sub_tm(scrut, m, at),
+            }
+        }
         Term::Pair { fst_level, snd_level, fst_ty, snd_ty, fst, snd } => Term::Pair {
             fst_level: m.level(fst_level, at),
             snd_level: m.level(snd_level, at),
@@ -881,6 +904,10 @@ fn map_branches<M: Mapper>(b: &Branches, m: &mut M, at: Depths) -> Branches {
         tm_srefl: sub_tm(&b.tm_srefl, m, at + dep(1, 3, 2)),
         tm_transp: sub_tm(&b.tm_transp, m, at + dep(2, 7, 6)),
         tm_elim_sempty: sub_tm(&b.tm_elim_sempty, m, at + dep(2, 3, 2)),
+        ty_squash: sub_tm(&b.ty_squash, m, at + dep(1, 2, 1)),
+        tm_squash: sub_tm(&b.tm_squash, m, at + dep(1, 2, 1)),
+        tm_squash_in: sub_tm(&b.tm_squash_in, m, at + dep(1, 3, 2)),
+        tm_elim_squash: sub_tm(&b.tm_elim_squash, m, at + dep(2, 5, 4)),
     }
 }
 

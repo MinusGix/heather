@@ -322,6 +322,10 @@ fn uniform_branches(t: Rc<Term>) -> Branches {
         tm_srefl: Rc::clone(&t),
         tm_transp: Rc::clone(&t),
         tm_elim_sempty: t,
+        ty_squash: zero(),
+        tm_squash: zero(),
+        tm_squash_in: zero(),
+        tm_elim_squash: zero(),
     }
 }
 
@@ -341,7 +345,8 @@ fn code_recursor(b: Branches) -> Term {
 /// `Branches` prints 37 of the struct's 52 fields, so under v1 two code
 /// recursors differing only in one of the other fifteen — every `Vec`/`Fin`/
 /// `Wf` branch and every strict-equality branch — had the *same cache
-/// identity*. The walker distinguishes all 52.
+/// identity*. The walker now distinguishes all 56 (the historical 52 plus
+/// the four squash branches).
 ///
 /// This is the differential pin for the transition: it is a property the
 /// scanner provably did not have, on the fields it did not have it for.
@@ -413,8 +418,12 @@ fn every_recursor_branch_is_hashed() {
         tm_srefl,
         tm_transp,
         tm_elim_sempty,
+        ty_squash,
+        tm_squash,
+        tm_squash_in,
+        tm_elim_squash,
     );
-    assert_eq!(mutate.len(), 52, "every branch field must be listed here");
+    assert_eq!(mutate.len(), 56, "every branch field must be listed here");
 
     let mut seen = std::collections::BTreeSet::new();
     for (name, f) in &mutate {

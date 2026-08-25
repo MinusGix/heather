@@ -456,6 +456,9 @@ impl Dom for Values {
             VTy::Unit { level } => TyView::Unit { level },
             VTy::Empty { level } => TyView::Empty { level },
             VTy::SEmpty { level } => TyView::SEmpty { level },
+            VTy::Squash { level, ty } => {
+                TyView::Squash { level, ty: TyC::here(env, Rc::clone(ty)) }
+            }
             VTy::Pi { dom_level, cod_level, dom, cod } => TyView::Pi {
                 dom_level,
                 cod_level,
@@ -535,6 +538,9 @@ impl Dom for Values {
             Val::TmUnit { level } => TmView::TmUnit { level },
             Val::TmEmpty { level } => TmView::TmEmpty { level },
             Val::TmSEmpty { level } => TmView::TmSEmpty { level },
+            Val::TmSquash { level, ty } => {
+                TmView::TmSquash { level, ty: TmC::here(env, Rc::clone(ty)) }
+            }
             Val::TmPi { dom_level, cod_level, dom, cod } => TmView::TmPi {
                 dom_level,
                 cod_level,
@@ -605,7 +611,8 @@ impl Dom for Values {
             | Val::TyLam { .. }
             | Val::Pair { .. }
             | Val::Triv { .. }
-            | Val::SRefl { .. } => TmView::Opaque,
+            | Val::SRefl { .. }
+            | Val::Squash { .. } => TmView::Opaque,
 
             Val::Neutral(n) => view_neutral(env, n),
         }
@@ -817,6 +824,13 @@ impl Dom for Values {
 
     fn sempty(env: &Env, level: &Level) -> TyC {
         TyC::value(env, Rc::new(VTy::SEmpty { level: level.clone() }))
+    }
+
+    fn squash(env: &Env, level: &Level, ty: &TyC) -> TyC {
+        TyC::value(
+            env,
+            Rc::new(VTy::Squash { level: level.clone(), ty: Rc::clone(&ty.clo) }),
+        )
     }
 
     fn code_ty(env: &Env, ctx: &LocalCtx, level: &Level) -> TyC {
@@ -1454,6 +1468,15 @@ fn view_neutral<'a>(env: &Env, n: &'a Rc<VNeutral>) -> TmView<'a, Values> {
             motive: TyC::under(env, Rc::clone(motive), 1),
             scrut: head,
         },
+        Elim::ElimSquash { src_level, dst_level, src_ty, motive, .. } => {
+            TmView::ElimSquash {
+                src_level,
+                dst_level,
+                src_ty: TyC::here(env, Rc::clone(src_ty)),
+                motive: TyC::under(env, Rc::clone(motive), 1),
+                scrut: head,
+            }
+        }
         Elim::Case {
             lhs_level,
             rhs_level,

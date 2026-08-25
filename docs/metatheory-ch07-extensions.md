@@ -2016,3 +2016,46 @@ Not done in this round; recorded so it is not lost.
 Nothing here is a new *shape* of obligation: (1) is the textbook glueing
 case, (2) is Part I §6's argument re-run one level down, and (4) is
 structural. The risk is bulk, not novelty.
+
+## 27. Squash: normalizing-total irrelevance
+
+`Squash^l A` (`∥A∥`) is the first irrelevant former whose eliminator
+computes by inspecting an inhabitant. Its logical-relation clause therefore
+cannot reuse `Unit`/`sEq`/`sEmpty`'s unqualified total relation. The term
+relation at `∥A∥` is **normalizing-total**:
+
+```text
+t ~ t' : ∥A∥  iff  t ⇓ w and t' ⇓ w' for some w,w'.
+```
+
+No relation is required between `w` and `w'`, and in particular no relation
+is required between the payloads of two `squash` constructors. This exactly
+matches the algorithm: conversion first evaluates both terms to WHNF, then
+the type-directed squash arm accepts without inspecting either result. It
+also prevents irrelevance from hiding divergence or fuel exhaustion, which
+would be unsound for the eliminator's operational case split.
+
+The dependent eliminator stores the inner family `B(z)` and constructs its
+outer result former itself:
+
+```text
+q : ∥A∥
+z : ∥A∥ ⊢ B(z) type
+x : A ⊢ b(x) : ∥B(squash x)∥
+----------------------------------
+ind_∥∥(q; z.B; x.b) : ∥B(q)∥
+```
+
+For the fundamental theorem, normalize the two scrutinees independently.
+A constructor head uses beta and semantic substitution; a neutral head
+produces the corresponding neutral elimination. Either way the results are
+again related by the normalizing-total clause. Closed canonical forms are
+`squash a`: a closed well-typed neutral is impossible by the existing
+canonicity argument, while normalization supplies a WHNF. The witness `a`
+is retained by syntax (and hence visible to code recursion) but is absent
+from the live term relation.
+
+The code-layer case is ordinary structural recursion. `TmSquash`,
+`squash`, and `elim_Squash` have distinct branches, so quotation can inspect
+the witness and eliminator syntax even though live conversion forgets the
+witness. No readback rule crosses the code firewall.

@@ -182,8 +182,10 @@ candidate** if the round runs heavy, exactly like `Fin` was (§1.2 of the wf
 doc): make `Empty` irrelevant instead and drop `sEmpty`; nothing else in
 this document depends on the choice.
 
-Deferred, unchanged from the issue: squash `∥·∥` (needs its restricted
-eliminator designed), SProp inductives in general.
+Squash `∥·∥` has since landed with the dependent squash-headed
+eliminator recorded in `issues/sprop-squash.md`; its normalizing-total LR
+case is `docs/metatheory-ch07-extensions.md` §27. SProp inductives in
+general remain deferred.
 
 ---
 

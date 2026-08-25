@@ -1,5 +1,5 @@
 //! The code-recursor telescopes of ch. 04 (§More Typing and Equivalence
-//! Judgments): the two motive scopes `G_M` and the 52 branch telescopes
+//! Judgments): the two motive scopes `G_M` and the 56 branch telescopes
 //! `G_Typ G_Trm` (13 from ch. 04 plus the Id/Σ/Unit/Empty/Sum/W extension
 //! branches of kernel-v1-extensions), each with its expected
 //! (motive-instantiated) type.
@@ -202,12 +202,12 @@ pub(crate) fn motive_types(m: &Motives) -> [&Rc<Type>; 2] {
     [&m.ty_motive, &m.tm_motive]
 }
 
-/// The 52 branch names, in [`branch_specs`] order — for diagnostics that
+/// The 56 branch names, in [`branch_specs`] order — for diagnostics that
 /// must name a branch without printing a term, and for the surface
 /// `match code`, whose arms are **keyed to these names**: the table below is
 /// the single source of truth for what branches exist and in what order, and
 /// the elaborator reads it rather than restating it.
-pub const BRANCH_NAMES: [&str; 52] = [
+pub const BRANCH_NAMES: [&str; 56] = [
     "ty_nat",
     "ty_pi",
     "ty_ty",
@@ -260,10 +260,14 @@ pub const BRANCH_NAMES: [&str; 52] = [
     "tm_srefl",
     "tm_transp",
     "tm_elim_sempty",
+    "ty_squash",
+    "tm_squash",
+    "tm_squash_in",
+    "tm_elim_squash",
 ];
 
-/// The 52 branches, in [`branch_specs`] order (= `Branches` field order).
-pub(crate) fn branch_terms(b: &Branches) -> [&Rc<Term>; 52] {
+/// The 56 branches, in [`branch_specs`] order (= `Branches` field order).
+pub(crate) fn branch_terms(b: &Branches) -> [&Rc<Term>; 56] {
     [
         &b.ty_nat,
         &b.ty_pi,
@@ -317,6 +321,10 @@ pub(crate) fn branch_terms(b: &Branches) -> [&Rc<Term>; 52] {
         &b.tm_srefl,
         &b.tm_transp,
         &b.tm_elim_sempty,
+        &b.ty_squash,
+        &b.tm_squash,
+        &b.tm_squash_in,
+        &b.tm_elim_squash,
     ]
 }
 
@@ -344,7 +352,7 @@ pub struct BranchShape {
     pub level: Level,
 }
 
-/// The 52 branch shapes at the given motives, in [`BRANCH_NAMES`] order.
+/// The 56 branch shapes at the given motives, in [`BRANCH_NAMES`] order.
 ///
 /// Derived from [`branch_specs`], never restated: a client that binds arm
 /// variables by position stays correct when a branch's telescope changes,
@@ -369,9 +377,9 @@ pub fn branch_shapes(
         .collect()
 }
 
-/// [`Branches`] from 52 terms in [`BRANCH_NAMES`] order — the inverse of
+/// [`Branches`] from 56 terms in [`BRANCH_NAMES`] order — the inverse of
 /// [`branch_terms`], for clients that build the table by index.
-pub fn branches_from(t: [Rc<Term>; 52]) -> Branches {
+pub fn branches_from(t: [Rc<Term>; 56]) -> Branches {
     let [
         ty_nat, ty_pi, ty_ty, ty_el, ty_id, ty_sigma, ty_unit, ty_empty, tm_var, tm_nat,
         tm_pi, tm_ty, tm_zero, tm_succ, tm_elim_nat, tm_lam, tm_app, tm_id, tm_refl, tm_j,
@@ -379,6 +387,7 @@ pub fn branches_from(t: [Rc<Term>; 52]) -> Branches {
         tm_sum, tm_inl, tm_inr, tm_case, ty_w, tm_w, tm_sup, tm_elim_w, ty_vec, tm_vec,
         ty_fin, tm_fin, ty_wf, tm_wf, tm_supf, tm_elim_wf, ty_seq, tm_seq, ty_sempty,
         tm_sempty, tm_srefl, tm_transp, tm_elim_sempty,
+        ty_squash, tm_squash, tm_squash_in, tm_elim_squash,
     ] = t;
     Branches {
         ty_nat, ty_pi, ty_ty, ty_el, ty_id, ty_sigma, ty_unit, ty_empty, tm_var, tm_nat,
@@ -387,10 +396,11 @@ pub fn branches_from(t: [Rc<Term>; 52]) -> Branches {
         tm_sum, tm_inl, tm_inr, tm_case, ty_w, tm_w, tm_sup, tm_elim_w, ty_vec, tm_vec,
         ty_fin, tm_fin, ty_wf, tm_wf, tm_supf, tm_elim_wf, ty_seq, tm_seq, ty_sempty,
         tm_sempty, tm_srefl, tm_transp, tm_elim_sempty,
+        ty_squash, tm_squash, tm_squash_in, tm_elim_squash,
     }
 }
 
-/// The 52 branch telescopes `G_Typ G_Trm` with their expected types, built
+/// The 56 branch telescopes `G_Typ G_Trm` with their expected types, built
 /// from the given motives (for conversion: the *left* side's, matching its
 /// left-biased inference). `gamma` is the ambient local context (before any
 /// telescope), used only for the shape of the identity substitutions in the
@@ -405,7 +415,7 @@ pub(crate) fn branch_specs(
     l1: &Level,
     l2: &Level,
     gamma: &LocalCtx,
-) -> [BranchSpec; 52] {
+) -> [BranchSpec; 56] {
     let m_ty = &*motives.ty_motive;
     let m_tm = &*motives.tm_motive;
     let gt = |tu: u32, tg: u32| gamma.shift_univ(tu).shift_global(tg);
@@ -4305,6 +4315,261 @@ pub(crate) fn branch_specs(
         }
     };
 
+    // -- propositional truncation (issues/sprop-squash.md) -----------------
+
+    let ty_squash = {
+        let gt = gt(1, 2);
+        let x_a = inst_ty_motive(
+            m_ty,
+            (1, 2, 0),
+            lvar(0),
+            g_ctx(1),
+            Term::BoxTy(Rc::new(gty(0, &g_ctx(1)))),
+            &gt,
+        );
+        let code = Type::Squash { level: lvar(0), ty: Rc::new(gty(0, &g_ctx(1))) };
+        BranchSpec {
+            tele: Tele {
+                univs: 1,
+                globals: vec![
+                    GlobalBinding::Ctx,
+                    GlobalBinding::Ty { ctx: g_ctx(0), layer: Layer::Code, level: lvar(0) },
+                ],
+                locals: vec![(Rc::new(x_a), l1.shift(1, 0))],
+            },
+            ty: Rc::new(inst_ty_motive(
+                m_ty,
+                (1, 2, 1),
+                lvar(0),
+                g_ctx(1),
+                Term::BoxTy(Rc::new(code)),
+                &gt,
+            )),
+            level: l1.shift(1, 0),
+        }
+    };
+
+    let tm_squash = {
+        let gt = gt(1, 2);
+        let x_a = inst_tm_motive(
+            m_tm,
+            (1, 2, 0),
+            Level::succ(lvar(0)),
+            g_ctx(1),
+            Type::Ty(lvar(0)),
+            Term::BoxTm(Rc::new(gtm(0, &g_ctx(1)))),
+            &gt,
+        );
+        let code = Term::TmSquash { level: lvar(0), ty: Rc::new(gtm(0, &g_ctx(1))) };
+        BranchSpec {
+            tele: Tele {
+                univs: 1,
+                globals: vec![
+                    GlobalBinding::Ctx,
+                    GlobalBinding::Tm {
+                        ctx: g_ctx(0),
+                        layer: Layer::Code,
+                        ty: Rc::new(Type::Ty(lvar(0))),
+                        level: Level::succ(lvar(0)),
+                        body: None,
+                    },
+                ],
+                locals: vec![(Rc::new(x_a), l2.shift(1, 0))],
+            },
+            ty: Rc::new(inst_tm_motive(
+                m_tm,
+                (1, 2, 1),
+                Level::succ(lvar(0)),
+                g_ctx(1),
+                Type::Ty(lvar(0)),
+                Term::BoxTm(Rc::new(code)),
+                &gt,
+            )),
+            level: l2.shift(1, 0),
+        }
+    };
+
+    let tm_squash_in = {
+        let gt = gt(1, 3);
+        let x_a = inst_ty_motive(
+            m_ty,
+            (1, 3, 0),
+            lvar(0),
+            g_ctx(2),
+            Term::BoxTy(Rc::new(gty(1, &g_ctx(2)))),
+            &gt,
+        );
+        let x_tm = inst_tm_motive(
+            m_tm,
+            (1, 3, 1),
+            lvar(0),
+            g_ctx(2),
+            gty(1, &g_ctx(2)),
+            Term::BoxTm(Rc::new(gtm(0, &g_ctx(2)))),
+            &gt,
+        );
+        let sq_ty = Type::Squash { level: lvar(0), ty: Rc::new(gty(1, &g_ctx(2))) };
+        let code = Term::Squash {
+            level: lvar(0),
+            ty: Rc::new(gty(1, &g_ctx(2))),
+            tm: Rc::new(gtm(0, &g_ctx(2))),
+        };
+        BranchSpec {
+            tele: Tele {
+                univs: 1,
+                globals: vec![
+                    GlobalBinding::Ctx,
+                    GlobalBinding::Ty { ctx: g_ctx(0), layer: Layer::Code, level: lvar(0) },
+                    GlobalBinding::Tm {
+                        ctx: g_ctx(1),
+                        layer: Layer::Code,
+                        ty: Rc::new(gty(0, &g_ctx(1))),
+                        level: lvar(0),
+                        body: None,
+                    },
+                ],
+                locals: vec![
+                    (Rc::new(x_a), l1.shift(1, 0)),
+                    (Rc::new(x_tm), l2.shift(1, 0)),
+                ],
+            },
+            ty: Rc::new(inst_tm_motive(
+                m_tm,
+                (1, 3, 2),
+                lvar(0),
+                g_ctx(2),
+                sq_ty,
+                Term::BoxTm(Rc::new(code)),
+                &gt,
+            )),
+            level: l2.shift(1, 0),
+        }
+    };
+
+    let tm_elim_squash = {
+        let gt = gt(2, 5);
+        // Final telescope: g=4, U_A=3, U_B=2, u_b=1, u_q=0.
+        let a4 = gty(3, &g_ctx(4));
+        let sq_a4 = Type::Squash { level: lvar(1), ty: Rc::new(a4.clone()) };
+        let gz4 = ext_ctx(&g_ctx(4), sq_a4.clone(), lvar(1));
+        let gx4 = ext_ctx(&g_ctx(4), a4.clone(), lvar(1));
+        let motive_code = Type::GlobalTy { var: GlobalVar(2), subst: LocalSubst::id(&gz4) };
+        let packed_x = Term::Squash {
+            level: lvar(1),
+            ty: Rc::new(a4.shift_local(1)),
+            tm: Rc::new(Term::Var(LocalVar(0))),
+        };
+        let b_at_x = Type::GlobalTy {
+            var: GlobalVar(2),
+            subst: LocalSubst::id(&g_ctx(4)).shift_local(1).extended(Rc::new(packed_x)),
+        };
+        let branch_ty = Type::Squash { level: lvar(0), ty: Rc::new(b_at_x) };
+        let result_inner = Type::GlobalTy {
+            var: GlobalVar(2),
+            subst: LocalSubst::id(&g_ctx(4)).extended(Rc::new(gtm(0, &g_ctx(4)))),
+        };
+        let result_ty = Type::Squash { level: lvar(0), ty: Rc::new(result_inner) };
+
+        let x_a = inst_ty_motive(
+            m_ty,
+            (2, 5, 0),
+            lvar(1),
+            g_ctx(4),
+            Term::BoxTy(Rc::new(a4.clone())),
+            &gt,
+        );
+        let x_b = inst_ty_motive(
+            m_ty,
+            (2, 5, 1),
+            lvar(0),
+            gz4.clone(),
+            Term::BoxTy(Rc::new(gty(2, &gz4))),
+            &gt,
+        );
+        let x_case = inst_tm_motive(
+            m_tm,
+            (2, 5, 2),
+            lvar(0),
+            gx4.clone(),
+            branch_ty.clone(),
+            Term::BoxTm(Rc::new(gtm(1, &gx4))),
+            &gt,
+        );
+        let x_q = inst_tm_motive(
+            m_tm,
+            (2, 5, 3),
+            lvar(1),
+            g_ctx(4),
+            sq_a4.clone(),
+            Term::BoxTm(Rc::new(gtm(0, &g_ctx(4)))),
+            &gt,
+        );
+        let code = Term::ElimSquash {
+            src_level: lvar(1),
+            dst_level: lvar(0),
+            src_ty: Rc::new(a4),
+            motive: Rc::new(motive_code),
+            case: Rc::new(gtm(1, &gx4)),
+            scrut: Rc::new(gtm(0, &g_ctx(4))),
+        };
+
+        // Prefix-scoped global types.
+        let a1 = gty(0, &g_ctx(1));
+        let sq_a1 = Type::Squash { level: lvar(1), ty: Rc::new(a1.clone()) };
+        let gz1 = ext_ctx(&g_ctx(1), sq_a1, lvar(1));
+        let gx2 = ext_ctx(&g_ctx(2), gty(1, &g_ctx(2)), lvar(1));
+        let packed_bind = Term::Squash {
+            level: lvar(1),
+            ty: Rc::new(gty(1, &g_ctx(2)).shift_local(1)),
+            tm: Rc::new(Term::Var(LocalVar(0))),
+        };
+        let b_bind = Type::GlobalTy {
+            var: GlobalVar(0),
+            subst: LocalSubst::id(&g_ctx(2)).shift_local(1).extended(Rc::new(packed_bind)),
+        };
+        let q_ty = Type::Squash { level: lvar(1), ty: Rc::new(gty(2, &g_ctx(3))) };
+        BranchSpec {
+            tele: Tele {
+                univs: 2,
+                globals: vec![
+                    GlobalBinding::Ctx,
+                    GlobalBinding::Ty { ctx: g_ctx(0), layer: Layer::Code, level: lvar(1) },
+                    GlobalBinding::Ty { ctx: gz1, layer: Layer::Code, level: lvar(0) },
+                    GlobalBinding::Tm {
+                        ctx: gx2,
+                        layer: Layer::Code,
+                        ty: Rc::new(Type::Squash { level: lvar(0), ty: Rc::new(b_bind) }),
+                        level: lvar(0),
+                        body: None,
+                    },
+                    GlobalBinding::Tm {
+                        ctx: g_ctx(3),
+                        layer: Layer::Code,
+                        ty: Rc::new(q_ty),
+                        level: lvar(1),
+                        body: None,
+                    },
+                ],
+                locals: vec![
+                    (Rc::new(x_a), l1.shift(2, 0)),
+                    (Rc::new(x_b), l1.shift(2, 0)),
+                    (Rc::new(x_case), l2.shift(2, 0)),
+                    (Rc::new(x_q), l2.shift(2, 0)),
+                ],
+            },
+            ty: Rc::new(inst_tm_motive(
+                m_tm,
+                (2, 5, 4),
+                lvar(0),
+                g_ctx(4),
+                result_ty,
+                Term::BoxTm(Rc::new(code)),
+                &gt,
+            )),
+            level: l2.shift(2, 0),
+        }
+    };
+
     [
         ty_nat, ty_pi, ty_ty, ty_el, ty_id, ty_sigma, ty_unit, ty_empty, tm_var, tm_nat,
         tm_pi, tm_ty, tm_zero, tm_succ, tm_elim_nat, tm_lam, tm_app, tm_id, tm_refl, tm_j,
@@ -4312,6 +4577,7 @@ pub(crate) fn branch_specs(
         tm_sum, tm_inl, tm_inr, tm_case, ty_w, tm_w, tm_sup, tm_elim_w, ty_vec, tm_vec,
         ty_fin, tm_fin, ty_wf, tm_wf, tm_supf, tm_elim_wf, ty_seq, tm_seq, ty_sempty,
         tm_sempty, tm_srefl, tm_transp, tm_elim_sempty,
+        ty_squash, tm_squash, tm_squash_in, tm_elim_squash,
     ]
 }
 
@@ -4325,7 +4591,7 @@ mod tests {
     use crate::term::Motives;
     use crate::typing::{check_global_ctx, check_type};
 
-    /// Enough for the whole 52-branch walk: every judgment here is a small
+    /// Enough for the whole 56-branch walk: every judgment here is a small
     /// contextual type, and the walk is linear in the tables.
     const FUEL: u64 = 1 << 16;
 
@@ -4347,7 +4613,7 @@ mod tests {
     /// as a type at its declared level under the prefix that precedes it.
     /// `label` names the site; failures report the label and the entry index
     /// only — never a term (the kernel's `Debug` is bounded, but a
-    /// 52-telescope walk is no place to exercise it).
+    /// 56-telescope walk is no place to exercise it).
     fn check_tele(label: &str, tele: &Tele) -> (GlobalCtx, LocalCtx) {
         // The ambient scope is `(L; Ψ; Γ) = (0; ·; ·)` at layer `m`: `rec_ga`
         // runs under `meta_layer`, and `push_spec` keeps the layer, so this
@@ -4455,7 +4721,7 @@ mod tests {
     /// independently hand-written halves of each branch spec — its
     /// `globals:` list and its `inst_ty_motive` arguments — must agree.
     ///
-    /// The correspondence is the identity on order and, in all 52 branches,
+    /// The correspondence is the identity on order and, in all 56 branches,
     /// a **bijection**: `n` layer-c `Ty` globals ⟺ `n` type-motive calls, in
     /// the same order. Layer-**p** `Ty` globals are the exception that
     /// explains the rule, and it is the paper's own
@@ -4467,7 +4733,7 @@ mod tests {
     /// term-motive calls, whose slots formation already pins (see the
     /// sibling test).
     ///
-    /// 45 slots across 27 branches are covered; the enumeration is
+    /// 49 slots are covered; the enumeration is
     /// `branch_specs` itself, read off by this walk rather than transcribed.
     #[test]
     fn every_type_motive_recursive_call_matches_its_code_layer_type_binding() {
@@ -4529,6 +4795,6 @@ mod tests {
         // A tripwire on the *scope* of this test: if a branch gains or loses
         // a type-motive recursive call, the enumeration in the issue and the
         // Coq `G_Typ` table both move with it.
-        assert_eq!(covered, 45, "the number of type-motive recursive calls moved");
+        assert_eq!(covered, 49, "the number of type-motive recursive calls moved");
     }
 }

@@ -179,8 +179,10 @@ fn former_tm(t: &Term) -> &'static str {
         Term::ElimW { .. } | Term::ElimWf { .. } => "recursor",
         Term::ElimNat { .. } => "Nat eliminator",
         Term::ElimEmpty { .. } | Term::ElimSEmpty { .. } => "absurd",
+        Term::ElimSquash { .. } => "squash eliminator",
         Term::Triv { .. } => "trivial",
         Term::Refl { .. } | Term::SRefl { .. } => "refl",
+        Term::Squash { .. } => "squash",
         Term::J { .. } => "J",
         Term::Transp { .. } => "transp",
         Term::GlobalTm { .. } => "global",
@@ -193,6 +195,7 @@ fn former_tm(t: &Term) -> &'static str {
         | Term::TmVec { .. }
         | Term::TmFin { .. }
         | Term::TmSEmpty { .. } => "type code",
+        Term::TmSquash { .. } => "type code",
         Term::TmId { .. } => "equation code",
         Term::TmSEq { .. } => "strict-equation code",
         // The layer-m formers, which the walk declines to enter at all.
@@ -216,6 +219,7 @@ fn former_ty(t: &Type) -> &'static str {
         Type::Fin { .. } => "Fin",
         Type::Unit { .. } => "True",
         Type::Empty { .. } | Type::SEmpty { .. } => "False",
+        Type::Squash { .. } => "squash type",
         Type::GlobalTy { .. } => "global type",
         _ => "type former",
     }

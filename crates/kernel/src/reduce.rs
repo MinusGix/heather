@@ -255,6 +255,10 @@ pub fn step_type_delta(t: &Type, gamma: &LocalCtx, defs: Defs<'_>) -> Option<Typ
                 rhs: Rc::clone(rhs),
             }),
             Term::TmSEmpty { level } => Some(Type::SEmpty { level: level.clone() }),
+            Term::TmSquash { level, ty } => Some(Type::Squash {
+                level: level.clone(),
+                ty: Rc::new(Type::El { level: level.clone(), tm: Rc::clone(ty) }),
+            }),
             // El^{l⊔l'} (s +^{l,l'} t) ⇝ El^l s +^{l,l'} El^l' t   (extension)
             Term::TmSum { lhs_level, rhs_level, lhs, rhs } => Some(Type::Sum {
                 lhs_level: lhs_level.clone(),
@@ -435,6 +439,22 @@ pub fn step_term_delta(t: &Term, gamma: &LocalCtx, defs: Defs<'_>) -> Option<Ter
                 motive: Rc::clone(motive),
                 scrut: Rc::new(s),
             })
+        }
+        Term::ElimSquash { src_level, dst_level, src_ty, motive, case, scrut } => {
+            match &**scrut {
+                Term::Squash { tm, .. } => {
+                    let delta = LocalSubst::id(gamma).extended(Rc::clone(tm));
+                    Some(case.apply_local(&delta))
+                }
+                _ => step_term_delta(scrut, gamma, defs).map(|s| Term::ElimSquash {
+                    src_level: src_level.clone(),
+                    dst_level: dst_level.clone(),
+                    src_ty: Rc::clone(src_ty),
+                    motive: Rc::clone(motive),
+                    case: Rc::clone(case),
+                    scrut: Rc::new(s),
+                }),
+            }
         }
         // case (inl a) ⇝ c_l[a/x]; case (inr b) ⇝ c_r[b/y]; else reduce the
         // scrutinee, staying neutral when it is.   (extension)
@@ -786,7 +806,7 @@ pub(crate) struct Rec<'a> {
 
 impl<'a> Rec<'a> {
     /// The recursor's copied-forward parts, for [`crate::eval`]'s β: the
-    /// evaluator shares these functions rather than transcribing the 52
+    /// evaluator shares these functions rather than transcribing the 56
     /// branch telescopes a sixth time (docs/nbe-conversion-design.md §2).
     pub(crate) fn new(
         ty_motive_level: &'a Level,
@@ -1092,6 +1112,16 @@ pub(crate) fn beta_elim_ty(
             vec![],
             gamma,
         )),
+        Type::Squash { level, ty } => {
+            let s_ty = rec.elim_ty(level.clone(), delta.clone(), Rc::clone(ty));
+            Some(fire(
+                &b.ty_squash,
+                std::slice::from_ref(level),
+                vec![GlobalEntry::Ctx(delta.clone()), GlobalEntry::Ty(Rc::clone(ty))],
+                vec![s_ty],
+                gamma,
+            ))
+        }
         // Layer-m types cannot be layer-c code: ill-typed, stuck.
         _ => None,
     }
@@ -1666,6 +1696,78 @@ pub(crate) fn beta_elim_tm(
                 gamma,
             ))
         }
+        Term::TmSquash { level, ty } => {
+            let s_ty = rec.elim_tm(
+                Level::succ(level.clone()),
+                delta.clone(),
+                Rc::new(Type::Ty(level.clone())),
+                Rc::clone(ty),
+            );
+            Some(fire(
+                &b.tm_squash,
+                std::slice::from_ref(level),
+                vec![GlobalEntry::Ctx(delta.clone()), GlobalEntry::Tm(Rc::clone(ty))],
+                vec![s_ty],
+                gamma,
+            ))
+        }
+        Term::Squash { level, ty, tm } => {
+            let s_ty = rec.elim_ty(level.clone(), delta.clone(), Rc::clone(ty));
+            let s_tm = rec.elim_tm(level.clone(), delta.clone(), Rc::clone(ty), Rc::clone(tm));
+            Some(fire(
+                &b.tm_squash_in,
+                std::slice::from_ref(level),
+                vec![
+                    GlobalEntry::Ctx(delta.clone()),
+                    GlobalEntry::Ty(Rc::clone(ty)),
+                    GlobalEntry::Tm(Rc::clone(tm)),
+                ],
+                vec![s_ty, s_tm],
+                gamma,
+            ))
+        }
+        Term::ElimSquash { src_level, dst_level, src_ty, motive, case, scrut } => {
+            let sq_src = Rc::new(Type::Squash {
+                level: src_level.clone(),
+                ty: Rc::clone(src_ty),
+            });
+            let dz = extend(delta, Rc::clone(&sq_src), src_level.clone());
+            let dx = extend(delta, Rc::clone(src_ty), src_level.clone());
+            let s_src = rec.elim_ty(src_level.clone(), delta.clone(), Rc::clone(src_ty));
+            let s_motive = rec.elim_ty(dst_level.clone(), dz, Rc::clone(motive));
+            let packed = Rc::new(Term::Squash {
+                level: src_level.clone(),
+                ty: Rc::new(src_ty.shift_local(1)),
+                tm: Rc::new(Term::Var(LocalVar(0))),
+            });
+            let case_inner = motive.apply_local(
+                &LocalSubst::id(delta).shift_local(1).extended(packed),
+            );
+            let case_ty = Rc::new(Type::Squash {
+                level: dst_level.clone(),
+                ty: Rc::new(case_inner),
+            });
+            let s_case = rec.elim_tm(dst_level.clone(), dx, case_ty, Rc::clone(case));
+            let s_scrut = rec.elim_tm(
+                src_level.clone(),
+                delta.clone(),
+                Rc::clone(&sq_src),
+                Rc::clone(scrut),
+            );
+            Some(fire(
+                &b.tm_elim_squash,
+                &[dst_level.clone(), src_level.clone()],
+                vec![
+                    GlobalEntry::Ctx(delta.clone()),
+                    GlobalEntry::Ty(Rc::clone(src_ty)),
+                    GlobalEntry::Ty(Rc::clone(motive)),
+                    GlobalEntry::Tm(Rc::clone(case)),
+                    GlobalEntry::Tm(Rc::clone(scrut)),
+                ],
+                vec![s_src, s_motive, s_case, s_scrut],
+                gamma,
+            ))
+        }
         // (ℓ, ℓ', g, u_a, u_b, x_a, x_b. t'_+) — the encoding; mirrors
         // tm_sigma minus the binder extension.   (extension)
         Term::TmSum { lhs_level, rhs_level, lhs, rhs } => {
@@ -2154,6 +2256,7 @@ pub fn is_whnf_type(t: &Type) -> bool {
         | Type::Id { .. }
         | Type::SEq { .. }
         | Type::SEmpty { .. }
+        | Type::Squash { .. }
         | Type::Sigma { .. }
         | Type::Unit { .. }
         | Type::Empty { .. }
@@ -2193,6 +2296,7 @@ pub fn is_neutral_term(t: &Term) -> bool {
         // reduction (docs/sprop-design.md §5.2).
         Term::Transp { proof, .. } => is_neutral_term(proof),
         Term::ElimSEmpty { scrut, .. } => is_neutral_term(scrut),
+        Term::ElimSquash { scrut, .. } => is_neutral_term(scrut),
         Term::Fst { pair, .. } | Term::Snd { pair, .. } => is_neutral_term(pair),
         Term::App { fun, .. }
         | Term::UApp { fun, .. }
@@ -2226,6 +2330,7 @@ pub fn is_whnf_term(t: &Term) -> bool {
         | Term::TmEmpty { .. }
         | Term::TmSEq { .. }
         | Term::TmSEmpty { .. }
+        | Term::TmSquash { .. }
         | Term::TmSum { .. }
         | Term::TmW { .. }
         | Term::TmVec { .. }
@@ -2235,6 +2340,7 @@ pub fn is_whnf_term(t: &Term) -> bool {
         | Term::Succ(_)
         | Term::Refl { .. }
         | Term::SRefl { .. }
+        | Term::Squash { .. }
         | Term::Pair { .. }
         | Term::Triv { .. }
         | Term::Inl { .. }

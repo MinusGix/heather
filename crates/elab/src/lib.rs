@@ -2593,6 +2593,18 @@ impl Elaborator {
                 capture_slots,
             );
         }
+        if let ExprKind::App { head, args, named, explicit: false, goal_oriented: false } = &e.kind
+            && matches!(&head.kind, ExprKind::Var(name) if name == "squash")
+            && args.len() == 1
+            && named.is_empty()
+            && !self.shadowed(cx, "squash")
+        {
+            let head_ty = self.whnf(cx, expected, e.span)?;
+            if let Type::Squash { level, ty } = head_ty {
+                let payload = self.elab_check(cx, &args[0], &ty, &level)?;
+                return Ok(Term::Squash { level, ty, tm: Rc::new(payload) });
+            }
+        }
         match &e.kind {
             // **Rule 2** (docs/let-and-blocks-design.md §5.2): `refl` is a
             // *nullary* special form, so its node carries no name to
@@ -3009,6 +3021,68 @@ impl Elaborator {
         self.elab_infer_at(cx, e, None)
     }
 
+    fn elab_squash_ind(
+        &self,
+        cx: &Cx,
+        scrut: &Expr,
+        motive: &Expr,
+        case: &Expr,
+    ) -> R<(Term, Type, Level)> {
+        let (mbinders, mbody) = matching::motive_lam(
+            motive,
+            1,
+            "write `squash_ind(q, λ z => B, λ x => b)`",
+        )?;
+        let (scrut_t, scrut_ty, _) = self.elab_infer(cx, scrut)?;
+        let head = self.whnf(cx, &scrut_ty, scrut.span)?;
+        let squash_ty = head.clone();
+        let Type::Squash { level: src_level, ty: src_ty } = head else {
+            return err("`squash_ind` needs a scrutinee of type `∥A∥`", scrut.span);
+        };
+        let mut mcx = cx.clone();
+        mcx.push(mbinders[0].clone(), squash_ty, src_level.clone());
+        let (motive_t, dst_level) = self.elab_ty(&mcx, &mbody)?;
+
+        let ExprKind::Lam { binders, body } = &case.kind else {
+            return err("the `squash_ind` case is a lambda: write `λ x => b`", case.span);
+        };
+        if binders.len() != 1 || binders[0].ty.is_some() {
+            return err(
+                "the `squash_ind` case binds one unannotated witness: `λ x => b`",
+                case.span,
+            );
+        }
+        let mut bcx = cx.clone();
+        bcx.push(binders[0].name.clone(), (*src_ty).clone(), src_level.clone());
+        let packed = Rc::new(Term::Squash {
+            level: src_level.clone(),
+            ty: Rc::new(src_ty.shift_local(1)),
+            tm: Rc::new(Term::Var(LocalVar(0))),
+        });
+        let inner = motive_t.apply_local(
+            &LocalSubst::id(&cx.gamma).shift_local(1).extended(packed),
+        );
+        let branch_ty = Type::Squash { level: dst_level.clone(), ty: Rc::new(inner) };
+        let case_t = self.elab_check(&bcx, body, &branch_ty, &dst_level)?;
+        let scrut_t = Rc::new(scrut_t);
+        let result_inner = motive_t.apply_local(
+            &LocalSubst::id(&cx.gamma).extended(Rc::clone(&scrut_t)),
+        );
+        let result = Type::Squash { level: dst_level.clone(), ty: Rc::new(result_inner) };
+        Ok((
+            Term::ElimSquash {
+                src_level,
+                dst_level: dst_level.clone(),
+                src_ty,
+                motive: Rc::new(motive_t),
+                case: Rc::new(case_t),
+                scrut: scrut_t,
+            },
+            result,
+            dst_level,
+        ))
+    }
+
     /// [`Self::elab_infer`] plus, when the caller is in **checking** position
     /// and inference is the fallback, the expected type it would otherwise
     /// discard (already whnf'd).
@@ -3038,6 +3112,31 @@ impl Elaborator {
         // (docs/bare-symbol-checking-carrier-design.md §5).
         if let Some(rewritten) = self.op_rewrite(cx, e, None)? {
             return self.elab_infer_at(cx, &rewritten, expected);
+        }
+        if let ExprKind::App { head, args, named, explicit: false, goal_oriented: false } = &e.kind
+            && matches!(&head.kind, ExprKind::Var(name) if name == "squash")
+            && args.len() == 1
+            && named.is_empty()
+            && !self.shadowed(cx, "squash")
+        {
+            let (tm, ty, level) = self.elab_infer(cx, &args[0])?;
+            return Ok((
+                Term::Squash {
+                    level: level.clone(),
+                    ty: Rc::new(ty.clone()),
+                    tm: Rc::new(tm),
+                },
+                Type::Squash { level: level.clone(), ty: Rc::new(ty) },
+                level,
+            ));
+        }
+        if let ExprKind::App { head, args, named, explicit: false, goal_oriented: false } = &e.kind
+            && matches!(&head.kind, ExprKind::Var(name) if name == "squash_ind")
+            && args.len() == 3
+            && named.is_empty()
+            && !self.shadowed(cx, "squash_ind")
+        {
+            return self.elab_squash_ind(cx, &args[0], &args[1], &args[2]);
         }
         match &e.kind {
             ExprKind::ArgSlot(_)

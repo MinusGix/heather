@@ -183,6 +183,10 @@ fn dummy_branches() -> Branches {
         tm_srefl: z(),
         tm_transp: z(),
         tm_elim_sempty: z(),
+        ty_squash: z(),
+        tm_squash: z(),
+        tm_squash_in: z(),
+        tm_elim_squash: z(),
     }
 }
 

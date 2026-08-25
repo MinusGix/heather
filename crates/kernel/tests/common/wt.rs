@@ -1318,7 +1318,7 @@ fn gen_letbox_ty(env: &WtEnv, r: &mut Rng, b: u32) -> (Rc<Term>, Rc<Type>, Level
 /// recursive-call entry has that same motive (so `Var(0)` inhabits the
 /// branch type). Order = `Branches` field order. Independent transcription
 /// of docs/delam/04 — a disagreement with `src/rec.rs` is a test failure.
-const BRANCH_DIMS: [(u32, u32, u32, bool, bool); 52] = [
+const BRANCH_DIMS: [(u32, u32, u32, bool, bool); 56] = [
     (0, 1, 0, false, false), // ty_nat
     (2, 3, 2, false, true),  // ty_pi
     (1, 1, 0, false, false), // ty_ty
@@ -1371,6 +1371,10 @@ const BRANCH_DIMS: [(u32, u32, u32, bool, bool); 52] = [
     (1, 3, 2, true, true),   // tm_srefl
     (2, 7, 6, true, true),   // tm_transp
     (2, 3, 2, true, true),   // tm_elim_sempty (innermost local is a term-motive call)
+    (1, 2, 1, false, true),  // ty_squash
+    (1, 2, 1, true, true),   // tm_squash
+    (1, 3, 2, true, true),   // tm_squash_in
+    (2, 5, 4, true, true),   // tm_elim_squash
 ];
 
 /// A Γ-variable whose WHNF type is a contextual type matching `tm_variant`:
@@ -1426,7 +1430,7 @@ fn gen_const_rec(
         ty_motive: rty(m1ty.shift_univ(1).shift_global(1).shift_local(1)),
         tm_motive: rty(m2ty.shift_univ(1).shift_global(2).shift_local(1)),
     });
-    let mut bs: Vec<Rc<Term>> = Vec::with_capacity(52);
+    let mut bs: Vec<Rc<Term>> = Vec::with_capacity(56);
     for &(tu, tg, tl, tm_kind, var_ok) in &BRANCH_DIMS {
         if var_ok && r.below(3) == 0 {
             bs.push(rt(v(0)));
@@ -1488,6 +1492,10 @@ fn gen_const_rec(
         tm_srefl: bs[49].clone(),
         tm_transp: bs[50].clone(),
         tm_elim_sempty: bs[51].clone(),
+        ty_squash: bs[52].clone(),
+        tm_squash: bs[53].clone(),
+        tm_squash_in: bs[54].clone(),
+        tm_elim_squash: bs[55].clone(),
     });
     if tm_variant {
         let (scrut, delta, cty, cl) = match neutral {
@@ -1728,7 +1736,7 @@ pub fn gen_nat_rec(base: &WtEnv, r: &mut Rng, tm_variant: bool) -> NatRec {
 impl NatRec {
     /// The recursor over `Var 0` with the given branch bodies, in
     /// [`Branches`] field order. Checks at `Nat @ 0` in `self.env`.
-    pub fn build(&self, bs: &[Rc<Term>; 52]) -> Rc<Term> {
+    pub fn build(&self, bs: &[Rc<Term>; 56]) -> Rc<Term> {
         let motives = Rc::new(Motives {
             ty_motive: rty(Type::Nat),
             tm_motive: rty(Type::Nat),
@@ -1786,6 +1794,10 @@ impl NatRec {
             tm_srefl: bs[49].clone(),
             tm_transp: bs[50].clone(),
             tm_elim_sempty: bs[51].clone(),
+            ty_squash: bs[52].clone(),
+            tm_squash: bs[53].clone(),
+            tm_squash_in: bs[54].clone(),
+            tm_elim_squash: bs[55].clone(),
         });
         rt(if self.tm_variant {
             Term::ElimCodeTm {
@@ -2263,6 +2275,40 @@ pub fn identity_branches() -> Rc<Branches> {
                     subst: LocalSubst::id(&gxe),
                 }),
                 scrut: rt(gtm(0, &g2)),
+            })))
+        },
+        ty_squash: rt(Term::BoxTy(rty(Type::Squash {
+            level: lv(0),
+            ty: rty(gty(0, &g1)),
+        }))),
+        tm_squash: rt(Term::BoxTm(rt(Term::TmSquash {
+            level: lv(0),
+            ty: rt(gtm(0, &g1)),
+        }))),
+        tm_squash_in: rt(Term::BoxTm(rt(Term::Squash {
+            level: lv(0),
+            ty: rty(gty(1, &g2)),
+            tm: rt(gtm(0, &g2)),
+        }))),
+        tm_elim_squash: {
+            let g4s = g_ctx(4);
+            let a = gty(3, &g4s);
+            let gz = ext(
+                &g4s,
+                Type::Squash { level: lv(1), ty: rty(a.clone()) },
+                lv(1),
+            );
+            let gx = ext(&g4s, a.clone(), lv(1));
+            rt(Term::BoxTm(rt(Term::ElimSquash {
+                src_level: lv(1),
+                dst_level: lv(0),
+                src_ty: rty(a),
+                motive: rty(Type::GlobalTy {
+                    var: GlobalVar(2),
+                    subst: LocalSubst::id(&gz),
+                }),
+                case: rt(gtm(1, &gx)),
+                scrut: rt(gtm(0, &g4s)),
             })))
         },
     })

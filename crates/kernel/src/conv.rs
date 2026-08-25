@@ -31,7 +31,7 @@
 //! - **Boxed types/terms compare syntactically** (`==`; α-equality is free
 //!   under de Bruijn). Code is static data — β-convertible code is *not*
 //!   convertible.
-//! - Neutral recursors compare motives, all 52 branches (each at its
+//! - Neutral recursors compare motives, all 56 branches (each at its
 //!   instantiated motive type, the ch. 04 `G_A` telescopes), and indices —
 //!   the ch. 06 `C_A` bundle ([`Conv::rec_ca`]).
 //! - The layer index restricts *types*, not terms (ch. 06 intro): layer-m
@@ -700,6 +700,13 @@ impl<D: Dom> Conv<D> {
                 self.tm(env, t1, t2, s1, l1)?;
                 self.tm(env, u1, u2, s1, l1)
             }
+            (
+                TyView::Squash { level: l1, ty: t1 },
+                TyView::Squash { level: l2, ty: t2 },
+            ) => {
+                self.lev_eq(l1, l2)?;
+                self.ty(env, t1, t2, l1)
+            }
             // Σ congruence (extension; mirrors Π).
             (
                 TyView::Sigma { fst_level: dl1, snd_level: cl1, fst: s1, snd: t1 },
@@ -1133,6 +1140,13 @@ impl<D: Dom> Conv<D> {
                     self.tm(env, t1, t2, &el, l1)?;
                     self.tm(env, u1, u2, &el, l1)
                 }
+                (
+                    TmView::TmSquash { level: l1, ty: t1 },
+                    TmView::TmSquash { level: l2, ty: t2 },
+                ) => {
+                    self.lev_eq(l1, l2)?;
+                    self.tm_at_univ(env, t1, t2, l1)
+                }
                 // TmSigma congruence (extension; mirrors TmPi).
                 (
                     TmView::TmSigma { fst_level: dl1, snd_level: cl1, fst: s1, snd: t1 },
@@ -1241,6 +1255,9 @@ impl<D: Dom> Conv<D> {
             // proofs are convertible — vacuously sound, the type is
             // uninhabited in consistent contexts.
             TyView::SEmpty { .. } => Ok(()),
+            // Propositional truncation is definitionally proof-irrelevant,
+            // while evaluation above still forces both sides to WHNF.
+            TyView::Squash { .. } => Ok(()),
             // Empty (extension): no canonical inhabitants, so only neutrals can
             // appear; compare them structurally.
             TyView::Empty { .. } => self.tm_nee(env, a, b).map(drop),
@@ -1423,6 +1440,31 @@ impl<D: Dom> Conv<D> {
                 let e_x = D::push_entry(env, &em, s1);
                 self.ty(&e_x, m1, m2, v1)?;
                 Ok((D::inst_ty(self, env, env, m1, std::slice::from_ref(n1))?, (*v1).clone()))
+            }
+            (
+                TmView::ElimSquash {
+                    src_level: s1,
+                    dst_level: d1,
+                    src_ty: a1,
+                    motive: m1,
+                    scrut: n1,
+                },
+                TmView::ElimSquash {
+                    src_level: s2,
+                    dst_level: d2,
+                    src_ty: a2,
+                    motive: m2,
+                    scrut: _,
+                },
+            ) => {
+                self.lev_eq(s1, s2)?;
+                self.lev_eq(d1, d2)?;
+                self.ty(env, a1, a2, s1)?;
+                let sq_a = D::squash(env, s1, a1);
+                let e_z = D::push_entry(env, &sq_a, s1);
+                self.ty(&e_z, m1, m2, d1)?;
+                let inner = D::inst_ty(self, &e_z, env, m1, std::slice::from_ref(n1))?;
+                Ok((D::squash(env, d1, &inner), (*d1).clone()))
             }
             // case neutral congruence (extension); mirrors ElimNat — all
             // annotations compared (branches at M[inl x/z] / M[inr y/z]), the
@@ -2060,7 +2102,7 @@ impl<D: Dom> Conv<D> {
 
     // -- the C_A bundle for neutral recursors -------------------------------
 
-    /// Ch. 06 `C_A`: motive levels, both motives, and all 52 branches, each
+    /// Ch. 06 `C_A`: motive levels, both motives, and all 56 branches, each
     /// branch compared at its instantiated motive type under its ch. 04
     /// telescope (`G_M G_Typ G_Trm`). Branch types and telescope entry
     /// types are built from the *left* side (left-biased, like all
@@ -2085,7 +2127,7 @@ impl<D: Dom> Conv<D> {
             self.ty(&e, &x, &y, &spec.level)?;
         }
 
-        // G_Typ G_Trm: the 52 branches, each at its instantiated motive
+        // G_Typ G_Trm: the 56 branches, each at its instantiated motive
         // type under its telescope.
         let branch_specs = rec::branch_specs(&a.motives, a.l1, a.l2, &env.gamma);
         let ba = rec::branch_terms(&a.branches);

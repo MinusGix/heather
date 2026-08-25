@@ -61,6 +61,8 @@ pub enum TokKind {
     /// and doubling is what keeps them so.
     AmpAmp,    // &&
     PipePipe,  // ||
+    /// `∥` (U+2225, PARALLEL TO), the delimiter in `∥A∥`.
+    NormBar,
     /// `∙` (U+2219, BULLET OPERATOR) — the **reserved generic** operator
     /// (issues/notation-extensibility.md, log 2026-08-09). One token, no
     /// designation row anywhere in the library, and no fallback name, so rungs
@@ -236,6 +238,7 @@ pub fn lex(src: &str) -> Result<Vec<Tok>, LexError> {
             "≠" => Some(TokKind::Ne),
             "⊢" => Some(TokKind::Turnstile),
             "→" => Some(TokKind::Arrow),
+            "∥" => Some(TokKind::NormBar),
             _ => None,
         };
         if let Some(kind) = three_kind {

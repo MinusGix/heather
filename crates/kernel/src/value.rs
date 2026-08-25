@@ -482,6 +482,10 @@ pub enum VTy {
     Unit { level: Level },
     Empty { level: Level },
     SEmpty { level: Level },
+    Squash {
+        level: Level,
+        ty: Rc<TyClo>,
+    },
     Pi {
         dom_level: Level,
         cod_level: Level,
@@ -578,6 +582,10 @@ pub enum Val {
     TmUnit { level: Level },
     TmEmpty { level: Level },
     TmSEmpty { level: Level },
+    TmSquash {
+        level: Level,
+        ty: Rc<TmClo>,
+    },
     TmPi {
         dom_level: Level,
         cod_level: Level,
@@ -635,6 +643,11 @@ pub enum Val {
         tm: Rc<TmClo>,
     },
     SRefl {
+        level: Level,
+        ty: Rc<TyClo>,
+        tm: Rc<TmClo>,
+    },
+    Squash {
         level: Level,
         ty: Rc<TyClo>,
         tm: Rc<TmClo>,
@@ -786,6 +799,13 @@ pub enum Elim {
         scrut_level: Level,
         motive: Rc<TyClo>,
     },
+    ElimSquash {
+        src_level: Level,
+        dst_level: Level,
+        src_ty: Rc<TyClo>,
+        motive: Rc<TyClo>,
+        case: Rc<TmClo>,
+    },
     Case {
         lhs_level: Level,
         rhs_level: Level,
@@ -885,6 +905,7 @@ impl Elim {
             Elim::ElimNat { .. } => "elim_Nat",
             Elim::ElimEmpty { .. } => "elim_Empty",
             Elim::ElimSEmpty { .. } => "elim_sEmpty",
+            Elim::ElimSquash { .. } => "elim_Squash",
             Elim::Case { .. } => "case",
             Elim::ElimW { .. } => "elim_W",
             Elim::ElimWf { .. } => "elim_Wf",
@@ -1000,6 +1021,7 @@ impl fmt::Debug for VTy {
             VTy::Unit { level } => write!(f, "Unit {level:?}"),
             VTy::Empty { level } => write!(f, "Empty {level:?}"),
             VTy::SEmpty { level } => write!(f, "sEmpty {level:?}"),
+            VTy::Squash { ty, .. } => write!(f, "∥{ty:?}∥"),
             VTy::Pi { dom, cod, .. } => write!(f, "Π({dom:?}). {cod:?}"),
             VTy::Sigma { fst, snd, .. } => write!(f, "Σ({fst:?}). {snd:?}"),
             VTy::W { shape, pos, .. } => write!(f, "W({shape:?}). {pos:?}"),
@@ -1027,6 +1049,7 @@ impl fmt::Debug for Val {
             Val::TmUnit { .. } => f.write_str("`Unit"),
             Val::TmEmpty { .. } => f.write_str("`Empty"),
             Val::TmSEmpty { .. } => f.write_str("`sEmpty"),
+            Val::TmSquash { ty, .. } => write!(f, "`Squash({ty:?})"),
             Val::TmPi { dom, cod, .. } => write!(f, "`Π({dom:?}). {cod:?}"),
             Val::TmSigma { fst, snd, .. } => write!(f, "`Σ({fst:?}). {snd:?}"),
             Val::TmW { shape, pos, .. } => write!(f, "`W({shape:?}). {pos:?}"),
@@ -1040,6 +1063,7 @@ impl fmt::Debug for Val {
             Val::Succ(t) => write!(f, "su {t:?}"),
             Val::Refl { tm, .. } => write!(f, "refl({tm:?})"),
             Val::SRefl { tm, .. } => write!(f, "srefl({tm:?})"),
+            Val::Squash { tm, .. } => write!(f, "squash({tm:?})"),
             Val::Pair { fst, snd, .. } => write!(f, "⟨{fst:?}, {snd:?}⟩"),
             Val::Triv { .. } => f.write_str("⟨⟩"),
             Val::Inl { val, .. } => write!(f, "inl({val:?})"),

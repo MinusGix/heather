@@ -1156,7 +1156,7 @@ fn stream3_open_terms_at_a_checked_type() {
 }
 
 // ---------------------------------------------------------------------------
-// Seed stream 4: boxed code under the identity code recursors — the 52
+// Seed stream 4: boxed code under the identity code recursors — the 56
 // branch telescopes, fired through the *shared* `beta_elim_*`
 // ---------------------------------------------------------------------------
 

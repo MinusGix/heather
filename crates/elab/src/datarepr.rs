@@ -1426,6 +1426,7 @@ fn mentions_free_ty(t: &Ty, names: &[String], bound: &mut Vec<String>) -> bool {
             mentions_free_ty(elem, names, bound) || mentions_free(len, names, bound)
         }
         TyKind::Fin(e) => mentions_free(e, names, bound),
+        TyKind::Squash(inner) => mentions_free_ty(inner, names, bound),
         TyKind::Fn { binder, dom, cod, .. } => {
             if mentions_free_ty(dom, names, bound) {
                 return true;

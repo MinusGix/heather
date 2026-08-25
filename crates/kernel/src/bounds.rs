@@ -308,6 +308,7 @@ impl Cache {
                 .type_use(ty)
                 .join(self.term_use(lhs))
                 .join(self.term_use(rhs)),
+            Type::Squash { ty, .. } => self.type_use(ty),
             Type::Sigma { fst, snd, .. } => self.type_use(fst).join(self.type_use(snd).under(1)),
             Type::Sum { lhs, rhs, .. } => self.type_use(lhs).join(self.type_use(rhs)),
             Type::Vec { elem, len, .. } => self.type_use(elem).join(self.term_use(len)),
@@ -342,6 +343,7 @@ impl Cache {
                 .term_use(ty)
                 .join(self.term_use(lhs))
                 .join(self.term_use(rhs)),
+            Term::TmSquash { ty, .. } => self.term_use(ty),
             Term::TmSigma { fst, snd, .. } => self.term_use(fst).join(self.term_use(snd).under(1)),
             Term::TmSum { lhs, rhs, .. } => self.term_use(lhs).join(self.term_use(rhs)),
             Term::TmW { shape, pos, .. } => self.term_use(shape).join(self.term_use(pos).under(1)),
@@ -366,6 +368,7 @@ impl Cache {
             Term::Refl { ty, tm, .. } | Term::SRefl { ty, tm, .. } => {
                 self.type_use(ty).join(self.term_use(tm))
             }
+            Term::Squash { ty, tm, .. } => self.type_use(ty).join(self.term_use(tm)),
             Term::J {
                 ty,
                 lhs,
@@ -399,6 +402,11 @@ impl Cache {
             Term::ElimSEmpty { motive, scrut, .. } | Term::ElimEmpty { motive, scrut, .. } => {
                 self.type_use(motive).under(1).join(self.term_use(scrut))
             }
+            Term::ElimSquash { src_ty, motive, case, scrut, .. } => self
+                .type_use(src_ty)
+                .join(self.type_use(motive).under(1))
+                .join(self.term_use(case).under(1))
+                .join(self.term_use(scrut)),
             Term::Pair {
                 fst_ty,
                 snd_ty,
@@ -601,6 +609,10 @@ impl Cache {
             .join(self.term_use(&b.tm_srefl).under(2))
             .join(self.term_use(&b.tm_transp).under(6))
             .join(self.term_use(&b.tm_elim_sempty).under(2))
+            .join(self.term_use(&b.ty_squash).under(1))
+            .join(self.term_use(&b.tm_squash).under(1))
+            .join(self.term_use(&b.tm_squash_in).under(2))
+            .join(self.term_use(&b.tm_elim_squash).under(4))
     }
 }
 

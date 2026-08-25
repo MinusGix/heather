@@ -328,6 +328,7 @@ pub(crate) fn has_implicit_mark(ty: &Ty) -> bool {
         } => *implicit || has_implicit_mark(dom) || has_implicit_mark(cod),
         TyKind::Named { args, .. } => args.iter().any(has_implicit_mark),
         TyKind::Vec { elem, .. } => has_implicit_mark(elem),
+        TyKind::Squash(inner) => has_implicit_mark(inner),
         TyKind::Code { ty, .. } => has_implicit_mark(ty),
         TyKind::Nat
         | TyKind::Eq(..)

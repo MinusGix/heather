@@ -174,6 +174,7 @@ mod tag {
     pub const T_TYPI: u8 = 0x32;
     pub const T_CODETY: u8 = 0x33;
     pub const T_CODETM: u8 = 0x34;
+    pub const T_SQUASH: u8 = 0x35;
 
     // terms
     pub const E_VAR: u8 = 0x40;
@@ -226,6 +227,9 @@ mod tag {
     pub const E_LETBOXTM: u8 = 0x6f;
     pub const E_ELIMCODETY: u8 = 0x70;
     pub const E_ELIMCODETM: u8 = 0x71;
+    pub const E_TMSQUASH: u8 = 0x72;
+    pub const E_SQUASH: u8 = 0x73;
+    pub const E_ELIMSQUASH: u8 = 0x74;
 }
 
 /// The walk in progress: a SHA-256 state, a small staging buffer, and the Ψ
@@ -450,6 +454,11 @@ impl<'a> Walk<'a> {
                 self.tag(tag::T_SEMPTY);
                 self.level(level);
             }
+            Type::Squash { level, ty } => {
+                self.tag(tag::T_SQUASH);
+                self.level(level);
+                self.ty(ty);
+            }
             Type::Sigma { fst_level, snd_level, fst, snd } => {
                 self.tag(tag::T_SIGMA);
                 self.level(fst_level);
@@ -563,6 +572,11 @@ impl<'a> Walk<'a> {
                 self.tag(tag::E_TMSEMPTY);
                 self.level(level);
             }
+            Term::TmSquash { level, ty } => {
+                self.tag(tag::E_TMSQUASH);
+                self.level(level);
+                self.term(ty);
+            }
             Term::TmSigma { fst_level, snd_level, fst, snd } => {
                 self.tag(tag::E_TMSIGMA);
                 self.level(fst_level);
@@ -644,6 +658,12 @@ impl<'a> Walk<'a> {
                 self.ty(ty);
                 self.term(tm);
             }
+            Term::Squash { level, ty, tm } => {
+                self.tag(tag::E_SQUASH);
+                self.level(level);
+                self.ty(ty);
+                self.term(tm);
+            }
             Term::Transp { ty_level, motive_level, ty, motive, lhs, rhs, proof, tm } => {
                 self.tag(tag::E_TRANSP);
                 self.level(ty_level);
@@ -660,6 +680,15 @@ impl<'a> Walk<'a> {
                 self.level(level);
                 self.level(scrut_level);
                 self.ty(motive);
+                self.term(scrut);
+            }
+            Term::ElimSquash { src_level, dst_level, src_ty, motive, case, scrut } => {
+                self.tag(tag::E_ELIMSQUASH);
+                self.level(src_level);
+                self.level(dst_level);
+                self.ty(src_ty);
+                self.ty(motive);
+                self.term(case);
                 self.term(scrut);
             }
             Term::Pair { fst_level, snd_level, fst_ty, snd_ty, fst, snd } => {
@@ -916,7 +945,7 @@ impl<'a> Walk<'a> {
         self.ty(tm_motive);
     }
 
-    /// All 52 branches of the mutual code recursors, in declaration order.
+    /// All 56 branches of the mutual code recursors, in declaration order.
     ///
     /// Destructured without `..` deliberately: `fmt`'s `Debug` for this struct
     /// prints only 37 of the fields, which is precisely the defect the v1
@@ -976,6 +1005,10 @@ impl<'a> Walk<'a> {
             tm_srefl,
             tm_transp,
             tm_elim_sempty,
+            ty_squash,
+            tm_squash,
+            tm_squash_in,
+            tm_elim_squash,
         } = b;
         self.tag(tag::BRANCHES);
         for t in [
@@ -1031,6 +1064,10 @@ impl<'a> Walk<'a> {
             tm_srefl,
             tm_transp,
             tm_elim_sempty,
+            ty_squash,
+            tm_squash,
+            tm_squash_in,
+            tm_elim_squash,
         ] {
             self.term(t);
         }

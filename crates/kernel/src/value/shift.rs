@@ -220,6 +220,15 @@ fn elimination(e: &Elim, o: Outer) -> Elim {
             scrut_level: level(scrut_level, o),
             motive: ty_clo(motive, o),
         },
+        Elim::ElimSquash { src_level, dst_level, src_ty, motive, case } => {
+            Elim::ElimSquash {
+                src_level: level(src_level, o),
+                dst_level: level(dst_level, o),
+                src_ty: ty_clo(src_ty, o),
+                motive: ty_clo(motive, o),
+                case: tm_clo(case, o),
+            }
+        }
         Elim::Case {
             lhs_level,
             rhs_level,
@@ -377,6 +386,10 @@ pub fn vty(v: &Rc<VTy>, o: Outer) -> Rc<VTy> {
         VTy::Unit { level: l } => VTy::Unit { level: level(l, o) },
         VTy::Empty { level: l } => VTy::Empty { level: level(l, o) },
         VTy::SEmpty { level: l } => VTy::SEmpty { level: level(l, o) },
+        VTy::Squash { level: l, ty } => VTy::Squash {
+            level: level(l, o),
+            ty: ty_clo(ty, o),
+        },
         VTy::Pi { dom_level, cod_level, dom, cod } => VTy::Pi {
             dom_level: level(dom_level, o),
             cod_level: level(cod_level, o),
@@ -460,6 +473,10 @@ pub fn val(v: &Rc<Val>, o: Outer) -> Rc<Val> {
         Val::TmUnit { level: l } => Val::TmUnit { level: level(l, o) },
         Val::TmEmpty { level: l } => Val::TmEmpty { level: level(l, o) },
         Val::TmSEmpty { level: l } => Val::TmSEmpty { level: level(l, o) },
+        Val::TmSquash { level: l, ty } => Val::TmSquash {
+            level: level(l, o),
+            ty: tm_clo(ty, o),
+        },
         Val::TmPi { dom_level, cod_level, dom, cod } => Val::TmPi {
             dom_level: level(dom_level, o),
             cod_level: level(cod_level, o),
@@ -515,6 +532,11 @@ pub fn val(v: &Rc<Val>, o: Outer) -> Rc<Val> {
             tm: tm_clo(tm, o),
         },
         Val::SRefl { level: l, ty, tm } => Val::SRefl {
+            level: level(l, o),
+            ty: ty_clo(ty, o),
+            tm: tm_clo(tm, o),
+        },
+        Val::Squash { level: l, ty, tm } => Val::Squash {
             level: level(l, o),
             ty: ty_clo(ty, o),
             tm: tm_clo(tm, o),

@@ -393,6 +393,7 @@ mod count_holes_impl {
                 expr(len, n);
             }
             TyKind::Fin(len) => expr(len, n),
+            TyKind::Squash(inner) => ty(inner, n),
             TyKind::Ctx | TyKind::TyCode { .. } | TyKind::Splice { .. } => {}
             TyKind::Code { ty: t, .. } => ty(t, n),
         }

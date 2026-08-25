@@ -3352,6 +3352,7 @@ fn occurs(t: &Ty, name: &str) -> Option<Span> {
         // walk is conservative by design (see the doc comment): scanning it
         // costs at worst a rejection, and skipping it would cost positivity.
         TyKind::Fin(len) => expr_mentions(len, name).then_some(t.span),
+        TyKind::Squash(inner) => occurs(inner, name),
         // Modal types (layer m) cannot be field types — they are rejected at
         // elaboration; conservative answers here keep the walkers total.
         TyKind::Ctx | TyKind::TyCode { .. } => None,
@@ -3386,6 +3387,7 @@ pub(crate) fn reject_function_fields(d: &InductiveDecl) -> Result<(), crate::Ela
             }
             TyKind::Named { args, .. } => args.iter().find_map(|a| recursive_fn(a, name)),
             TyKind::Vec { elem, .. } => recursive_fn(elem, name),
+            TyKind::Squash(inner) => recursive_fn(inner, name),
             // Not a `Π` by shape, so not what this check is looking for; a
             // self-occurrence inside it is `occurs`' business.
             TyKind::OfExpr(..) => None,

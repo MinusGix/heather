@@ -255,6 +255,7 @@ impl Speller<'_> {
             Type::SEq { lhs, rhs, .. } => {
                 format!("{} ≡ {}", self.tm(lhs, d), self.tm(rhs, d))
             }
+            Type::Squash { ty, .. } => format!("∥{}∥", self.ty(ty, d + 1)),
             Type::Vec { elem, len, .. } => {
                 format!("[{}; {}]", self.ty(elem, d + 1), self.tm(len, d))
             }
@@ -320,6 +321,8 @@ impl Speller<'_> {
                 format!("[{}; {}]", self.tm(elem, d + 1), self.tm(len, d + 1))
             }
             Term::TmFin { len } => format!("Fin({})", self.tm(len, d + 1)),
+            Term::TmSquash { ty, .. } => format!("∥{}∥", self.tm(ty, d + 1)),
+            Term::Squash { tm, .. } => format!("squash({})", self.tm(tm, d + 1)),
             Term::Supf { .. } | Term::Inl { .. } | Term::Inr { .. } => {
                 self.ctor_value(t, d).unwrap_or_else(|| self.raw_tm(t))
             }

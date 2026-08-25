@@ -169,6 +169,7 @@ impl fmt::Debug for Type {
                 write!(f, "sEq[{level:?}]({ty:?}; {lhs:?}; {rhs:?})")
             }
             Type::SEmpty { level } => write!(f, "sEmpty {level:?}"),
+            Type::Squash { level, ty } => write!(f, "Squash[{level:?}]({ty:?})"),
             Type::Sigma { fst_level, snd_level, fst, snd } => {
                 write!(f, "Σ[{fst_level:?},{snd_level:?}]({fst:?}). {snd:?}")
             }
@@ -240,6 +241,10 @@ impl fmt::Debug for Term {
                 write!(f, "«sEq»[{level:?}]({ty:?}; {lhs:?}; {rhs:?})")
             }
             Term::TmSEmpty { level } => write!(f, "«sEmpty» {level:?}"),
+            Term::TmSquash { level, ty } => write!(f, "«Squash»[{level:?}]({ty:?})"),
+            Term::Squash { level, ty, tm } => {
+                write!(f, "squash[{level:?}]({ty:?}; {tm:?})")
+            }
             Term::Transp { ty_level, motive_level, ty, motive, lhs, rhs, proof, tm } => write!(
                 f,
                 "transp[{ty_level:?},{motive_level:?}]({ty:?}; x.{motive:?}; {lhs:?}; {rhs:?}; {proof:?}; {tm:?})"
@@ -247,6 +252,10 @@ impl fmt::Debug for Term {
             Term::ElimSEmpty { level, scrut_level, motive, scrut } => {
                 write!(f, "elim_sEmpty[{level:?},{scrut_level:?}](x. {motive:?}; {scrut:?})")
             }
+            Term::ElimSquash { src_level, dst_level, src_ty, motive, case, scrut } => write!(
+                f,
+                "elim_Squash[{src_level:?},{dst_level:?}]({src_ty:?}; z.{motive:?}; x.{case:?}; {scrut:?})"
+            ),
             Term::J { ty_level, motive_level, ty, lhs, motive, case, rhs, proof } => write!(
                 f,
                 "J[{ty_level:?},{motive_level:?}]({ty:?}; a {lhs:?}; M {motive:?}; c {case:?}; {rhs:?}; {proof:?})"
@@ -445,7 +454,7 @@ impl fmt::Debug for Motives {
     }
 }
 
-/// All 52 branches, labelled and in declaration order — the same order and
+/// All 56 branches, labelled and in declaration order — the same order and
 /// the same no-`..` destructuring as the cache's structural walker
 /// (`heather_cache::merkle`), so the printed form and the content hash cannot
 /// disagree about what a recursor *is*.
@@ -505,6 +514,10 @@ impl fmt::Debug for Branches {
             tm_srefl,
             tm_transp,
             tm_elim_sempty,
+            ty_squash,
+            tm_squash,
+            tm_squash_in,
+            tm_elim_squash,
         } = self;
         node(f, |f| {
             f.write_str("b⃗(")?;
@@ -562,6 +575,10 @@ impl fmt::Debug for Branches {
                 ("srefl", tm_srefl),
                 ("transp", tm_transp),
                 ("elim_sEmpty", tm_elim_sempty),
+                ("Squash", ty_squash),
+                ("«Squash»", tm_squash),
+                ("squash", tm_squash_in),
+                ("elim_Squash", tm_elim_squash),
             ] {
                 if !first {
                     f.write_str("; ")?;

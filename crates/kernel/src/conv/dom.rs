@@ -81,6 +81,7 @@ pub(super) enum TyView<'a, D: Dom> {
     Unit { level: &'a Level },
     Empty { level: &'a Level },
     SEmpty { level: &'a Level },
+    Squash { level: &'a Level, ty: D::TyC },
     Pi { dom_level: &'a Level, cod_level: &'a Level, dom: D::TyC, cod: D::TyC },
     Sigma { fst_level: &'a Level, snd_level: &'a Level, fst: D::TyC, snd: D::TyC },
     W { shape_level: &'a Level, pos_level: &'a Level, shape: D::TyC, pos: D::TyC },
@@ -123,6 +124,7 @@ pub(super) enum TmView<'a, D: Dom> {
     TmUnit { level: &'a Level },
     TmEmpty { level: &'a Level },
     TmSEmpty { level: &'a Level },
+    TmSquash { level: &'a Level, ty: D::TmC },
     TmPi { dom_level: &'a Level, cod_level: &'a Level, dom: D::TmC, cod: D::TmC },
     TmSigma { fst_level: &'a Level, snd_level: &'a Level, fst: D::TmC, snd: D::TmC },
     TmW { shape_level: &'a Level, pos_level: &'a Level, shape: D::TmC, pos: D::TmC },
@@ -150,6 +152,13 @@ pub(super) enum TmView<'a, D: Dom> {
     ElimNat { level: &'a Level, motive: D::TyC, base: D::TmC, step: D::TmC, scrut: D::TmC },
     ElimEmpty { level: &'a Level, scrut_level: &'a Level, motive: D::TyC, scrut: D::TmC },
     ElimSEmpty { level: &'a Level, scrut_level: &'a Level, motive: D::TyC, scrut: D::TmC },
+    ElimSquash {
+        src_level: &'a Level,
+        dst_level: &'a Level,
+        src_ty: D::TyC,
+        motive: D::TyC,
+        scrut: D::TmC,
+    },
     Case {
         lhs_level: &'a Level,
         rhs_level: &'a Level,
@@ -485,6 +494,7 @@ pub(super) trait Dom: Sized + 'static {
     fn univ(env: &Env, level: &Level) -> Self::TyC;
     fn empty(env: &Env, level: &Level) -> Self::TyC;
     fn sempty(env: &Env, level: &Level) -> Self::TyC;
+    fn squash(env: &Env, level: &Level, ty: &Self::TyC) -> Self::TyC;
     fn code_ty(env: &Env, ctx: &LocalCtx, level: &Level) -> Self::TyC;
     fn code_tm(env: &Env, ctx: &LocalCtx, ty: &Rc<Type>, level: &Level) -> Self::TyC;
     /// `El^l s` at an encoding that is a domain object — the arms that compare
@@ -831,6 +841,7 @@ impl Dom for Syn {
             Type::Unit { level } => TyView::Unit { level },
             Type::Empty { level } => TyView::Empty { level },
             Type::SEmpty { level } => TyView::SEmpty { level },
+            Type::Squash { level, ty } => TyView::Squash { level, ty: Rc::clone(ty) },
             Type::Pi { dom_level, cod_level, dom, cod } => TyView::Pi {
                 dom_level,
                 cod_level,
@@ -896,6 +907,7 @@ impl Dom for Syn {
             Term::TmUnit { level } => TmView::TmUnit { level },
             Term::TmEmpty { level } => TmView::TmEmpty { level },
             Term::TmSEmpty { level } => TmView::TmSEmpty { level },
+            Term::TmSquash { level, ty } => TmView::TmSquash { level, ty: Rc::clone(ty) },
             Term::TmPi { dom_level, cod_level, dom, cod } => TmView::TmPi {
                 dom_level,
                 cod_level,
@@ -975,6 +987,15 @@ impl Dom for Syn {
                 motive: Rc::clone(motive),
                 scrut: Rc::clone(scrut),
             },
+            Term::ElimSquash { src_level, dst_level, src_ty, motive, scrut, .. } => {
+                TmView::ElimSquash {
+                    src_level,
+                    dst_level,
+                    src_ty: Rc::clone(src_ty),
+                    motive: Rc::clone(motive),
+                    scrut: Rc::clone(scrut),
+                }
+            }
             Term::Case {
                 lhs_level,
                 rhs_level,
@@ -1140,7 +1161,8 @@ impl Dom for Syn {
             | Term::TyLam { .. }
             | Term::Pair { .. }
             | Term::Triv { .. }
-            | Term::SRefl { .. } => TmView::Opaque,
+            | Term::SRefl { .. }
+            | Term::Squash { .. } => TmView::Opaque,
         }
     }
 
@@ -1355,6 +1377,10 @@ impl Dom for Syn {
     #[inline]
     fn sempty(_env: &Env, level: &Level) -> Rc<Type> {
         Rc::new(Type::SEmpty { level: level.clone() })
+    }
+
+    fn squash(_env: &Env, level: &Level, ty: &Rc<Type>) -> Rc<Type> {
+        Rc::new(Type::Squash { level: level.clone(), ty: Rc::clone(ty) })
     }
 
     #[inline]

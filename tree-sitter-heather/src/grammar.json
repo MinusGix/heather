@@ -3215,6 +3215,10 @@
           "name": "vector_type"
         },
         {
+          "type": "SYMBOL",
+          "name": "squash_type"
+        },
+        {
           "type": "SEQ",
           "members": [
             {
@@ -4035,6 +4039,10 @@
         },
         {
           "type": "SYMBOL",
+          "name": "squash_type"
+        },
+        {
+          "type": "SYMBOL",
           "name": "vector_expression"
         },
         {
@@ -4088,6 +4096,10 @@
         {
           "type": "SYMBOL",
           "name": "j_expression"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "squash_ind_expression"
         },
         {
           "type": "SYMBOL",
@@ -4229,6 +4241,57 @@
         {
           "type": "STRING",
           "value": "]"
+        }
+      ]
+    },
+    "squash_type": {
+      "type": "CHOICE",
+      "members": [
+        {
+          "type": "SEQ",
+          "members": [
+            {
+              "type": "STRING",
+              "value": "∥"
+            },
+            {
+              "type": "FIELD",
+              "name": "type",
+              "content": {
+                "type": "SYMBOL",
+                "name": "_declaration_type"
+              }
+            },
+            {
+              "type": "STRING",
+              "value": "∥"
+            }
+          ]
+        },
+        {
+          "type": "SEQ",
+          "members": [
+            {
+              "type": "STRING",
+              "value": "Squash"
+            },
+            {
+              "type": "STRING",
+              "value": "<"
+            },
+            {
+              "type": "FIELD",
+              "name": "type",
+              "content": {
+                "type": "SYMBOL",
+                "name": "_declaration_type"
+              }
+            },
+            {
+              "type": "STRING",
+              "value": ">"
+            }
+          ]
         }
       ]
     },
@@ -5236,6 +5299,43 @@
         {
           "type": "STRING",
           "value": "j"
+        },
+        {
+          "type": "STRING",
+          "value": "("
+        },
+        {
+          "type": "SYMBOL",
+          "name": "_expression"
+        },
+        {
+          "type": "STRING",
+          "value": ","
+        },
+        {
+          "type": "SYMBOL",
+          "name": "_expression"
+        },
+        {
+          "type": "STRING",
+          "value": ","
+        },
+        {
+          "type": "SYMBOL",
+          "name": "_expression"
+        },
+        {
+          "type": "STRING",
+          "value": ")"
+        }
+      ]
+    },
+    "squash_ind_expression": {
+      "type": "SEQ",
+      "members": [
+        {
+          "type": "STRING",
+          "value": "squash_ind"
         },
         {
           "type": "STRING",

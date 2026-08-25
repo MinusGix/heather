@@ -68,6 +68,10 @@ pub(crate) fn code_of(t: &Type) -> Option<Term> {
             len: Rc::clone(len),
         },
         Type::Fin { len } => Term::TmFin { len: Rc::clone(len) },
+        Type::Squash { level, ty } => Term::TmSquash {
+            level: level.clone(),
+            ty: Rc::new(code_of(ty)?),
+        },
         // The index equation of a forded family
         // (`docs/inductive-fording-lowering.md` §6.2): having a code is what
         // lets a forded family be a *field* of another declaration.

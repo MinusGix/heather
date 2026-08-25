@@ -33,7 +33,7 @@
 //!   variables demand `i' ≤ i`; `ω` is accepted nowhere a programmer level
 //!   is demanded ([`crate::level::Level::well_formed`]) and arises only as
 //!   the inferred level of `ΠΠ`/`Λ ℓ⃗`.
-//! - The recursor rules check the two motives and 52 branches against the
+//! - The recursor rules check the two motives and 56 branches against the
 //!   `G_M G_Typ G_Trm` telescopes of [`crate::rec`] — the same tables
 //!   conversion compares against.
 //!
@@ -519,6 +519,11 @@ impl Tc {
                 self.level_wf(env, level)?;
                 Ok(level.clone())
             }
+            Type::Squash { level, ty } => {
+                self.level_wf(env, level)?;
+                self.ty_check(env, ty, level)?;
+                Ok(level.clone())
+            }
             // Σ-formation (extension beyond ch. 04; kernel-v1-extensions):
             // ⊢_i Σ^{l,l'}(x:S).T @ l⊔l' ⟸ ⊢_i S @ l, (Γ, x:S) ⊢_i T @ l'
             Type::Sigma { fst_level, snd_level, fst, snd } => {
@@ -834,6 +839,12 @@ impl Tc {
                 self.level_wf(env, level)?;
                 Ok((Type::Ty(level.clone()), Level::succ(level.clone())))
             }
+            Term::TmSquash { level, ty } => {
+                self.not_var_layer(env)?;
+                self.level_wf(env, level)?;
+                self.tm_check(env, ty, &Type::Ty(level.clone()), &Level::succ(level.clone()))?;
+                Ok((Type::Ty(level.clone()), Level::succ(level.clone())))
+            }
             // Encoding of sEq (extension; docs/sprop-design.md §6): mirrors
             // TmId — sEq^l(s; t; u) : Ty l.
             Term::TmSEq { level, ty, lhs, rhs } => {
@@ -1033,6 +1044,16 @@ impl Tc {
                     level.clone(),
                 ))
             }
+            Term::Squash { level, ty, tm } => {
+                self.not_var_layer(env)?;
+                self.level_wf(env, level)?;
+                self.ty_check(env, ty, level)?;
+                self.tm_check(env, tm, ty, level)?;
+                Ok((
+                    Type::Squash { level: level.clone(), ty: Rc::clone(ty) },
+                    level.clone(),
+                ))
+            }
             // transp^{l,l'}(I; x.P; a; b; e; t) : P[b/x] @ l'. The motive
             // binds one local (x : I) — J's non-dependent cousin; no motive
             // over the proof exists or is needed (proofs are irrelevant, so
@@ -1075,6 +1096,42 @@ impl Tc {
                 Ok((
                     motive.apply_local(&LocalSubst::id(&env.gamma).extended(Rc::clone(scrut))),
                     level.clone(),
+                ))
+            }
+            Term::ElimSquash { src_level, dst_level, src_ty, motive, case, scrut } => {
+                self.not_var_layer(env)?;
+                self.level_wf(env, src_level)?;
+                self.level_wf(env, dst_level)?;
+                self.ty_check(env, src_ty, src_level)?;
+                let squash_src = Type::Squash {
+                    level: src_level.clone(),
+                    ty: Rc::clone(src_ty),
+                };
+                let e_z = env.push_entry(Rc::new(squash_src.clone()), src_level.clone());
+                self.ty_check(&e_z, motive, dst_level)?;
+
+                let e_x = env.push_entry(Rc::clone(src_ty), src_level.clone());
+                let witness = Rc::new(Term::Var(LocalVar(0)));
+                let packed = Rc::new(Term::Squash {
+                    level: src_level.clone(),
+                    ty: Rc::new(src_ty.shift_local(1)),
+                    tm: witness,
+                });
+                let case_inner = motive.apply_local(
+                    &LocalSubst::id(&env.gamma).shift_local(1).extended(packed),
+                );
+                let case_ty = Type::Squash {
+                    level: dst_level.clone(),
+                    ty: Rc::new(case_inner),
+                };
+                self.tm_check(&e_x, case, &case_ty, dst_level)?;
+                self.tm_check(env, scrut, &squash_src, src_level)?;
+                let result_inner = motive.apply_local(
+                    &LocalSubst::id(&env.gamma).extended(Rc::clone(scrut)),
+                );
+                Ok((
+                    Type::Squash { level: dst_level.clone(), ty: Rc::new(result_inner) },
+                    dst_level.clone(),
                 ))
             }
 
@@ -1738,7 +1795,7 @@ impl Tc {
 
     /// The `G_A = G_M G_Typ G_Trm` premise bundle shared by the two
     /// recursor rules: motive levels, both motives well-formed in their
-    /// scopes, and all 52 branches at their instantiated motive types.
+    /// scopes, and all 56 branches at their instantiated motive types.
     fn rec_ga(
         &self,
         env: &Env,

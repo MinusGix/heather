@@ -233,6 +233,7 @@ fn ty(t: &Ty, out: &mut Vec<Finding>) {
         }
         TyKind::OfExpr(e) | TyKind::Fin(e) => expr(e, out),
         TyKind::Named { args, .. } => args.iter().for_each(|a| ty(a, out)),
+        TyKind::Squash(inner) => ty(inner, out),
         TyKind::Vec { elem, len } => {
             ty(elem, out);
             expr(len, out);
@@ -506,6 +507,7 @@ impl BinderUses {
             }
             TyKind::OfExpr(e) | TyKind::Fin(e) => self.expr(e),
             TyKind::Named { args, .. } => args.iter().for_each(|a| self.ty(a)),
+            TyKind::Squash(inner) => self.ty(inner),
             TyKind::Vec { elem, len } => {
                 self.ty(elem);
                 self.expr(len);

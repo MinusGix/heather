@@ -17,7 +17,7 @@
 //! - [`crate::reduce::beta_elim_ty`] / [`beta_elim_tm`] — the ~1300-line code
 //!   recursor β. The evaluator hands the box's payload to the *existing*
 //!   function, receives the fired branch as **syntax**, and evaluates it. The
-//!   52 branch telescopes are not written down a sixth time.
+//!   56 branch telescopes are not written down a sixth time.
 //! - [`crate::term::nth`] and the `elim_W`/`elim_Wf` ih λs, which are built
 //!   from the same syntax `reduce.rs` builds — see [`Eval::fire_elim_w`].
 //! - [`crate::reduce::step_type_delta`], for the one annotation that lives in
@@ -442,6 +442,10 @@ impl<'a> Eval<'a> {
                 lhs: tclo(env, lhs),
                 rhs: tclo(env, rhs),
             },
+            Type::Squash { level, ty } => VTy::Squash {
+                level: level.clone(),
+                ty: yclo(env, ty),
+            },
             Type::UPi { num_vars, level, body } => VTy::UPi {
                 num_vars: *num_vars,
                 level: level.clone(),
@@ -515,6 +519,10 @@ impl<'a> Eval<'a> {
             Val::TmUnit { level } => VTy::Unit { level: level.clone() },
             Val::TmEmpty { level } => VTy::Empty { level: level.clone() },
             Val::TmSEmpty { level } => VTy::SEmpty { level: level.clone() },
+            Val::TmSquash { level, ty } => {
+                let Some(ty) = el(level, ty) else { return stuck_el() };
+                VTy::Squash { level: level.clone(), ty }
+            }
             Val::TmPi { dom_level, cod_level, dom, cod } => {
                 let (Some(d), Some(c)) = (el(dom_level, dom), el(cod_level, cod)) else {
                     return stuck_el();
@@ -714,6 +722,10 @@ impl<'a> Eval<'a> {
             Term::TmUnit { level } => Val::TmUnit { level: level.clone() },
             Term::TmEmpty { level } => Val::TmEmpty { level: level.clone() },
             Term::TmSEmpty { level } => Val::TmSEmpty { level: level.clone() },
+            Term::TmSquash { level, ty } => Val::TmSquash {
+                level: level.clone(),
+                ty: tclo(env, ty),
+            },
             Term::TmPi { dom_level, cod_level, dom, cod } => Val::TmPi {
                 dom_level: dom_level.clone(),
                 cod_level: cod_level.clone(),
@@ -771,6 +783,11 @@ impl<'a> Eval<'a> {
                 tm: tclo(env, tm),
             },
             Term::SRefl { level, ty, tm } => Val::SRefl {
+                level: level.clone(),
+                ty: yclo(env, ty),
+                tm: tclo(env, tm),
+            },
+            Term::Squash { level, ty, tm } => Val::Squash {
                 level: level.clone(),
                 ty: yclo(env, ty),
                 tm: tclo(env, tm),
@@ -917,6 +934,17 @@ impl<'a> Eval<'a> {
                     level: level.clone(),
                     scrut_level: scrut_level.clone(),
                     motive: yclo(env, motive),
+                };
+                return Ok(Work::Elim(s, e));
+            }
+            Term::ElimSquash { src_level, dst_level, src_ty, motive, case, scrut } => {
+                let s = self.eval_tm(scrut, env)?;
+                let e = Elim::ElimSquash {
+                    src_level: src_level.clone(),
+                    dst_level: dst_level.clone(),
+                    src_ty: yclo(env, src_ty),
+                    motive: yclo(env, motive),
+                    case: tclo(env, case),
                 };
                 return Ok(Work::Elim(s, e));
             }
@@ -1180,6 +1208,10 @@ impl<'a> Eval<'a> {
                 self.spend()?;
                 let tm = Rc::clone(tm);
                 Ok(Work::Force(tm))
+            }
+            (Val::Squash { tm, .. }, Elim::ElimSquash { case, .. }) => {
+                self.spend()?;
+                Ok(Work::Apply1(Rc::clone(case), Rc::clone(tm)))
             }
             (Val::Pair { fst, .. }, Elim::Fst { .. }) => {
                 self.spend()?;

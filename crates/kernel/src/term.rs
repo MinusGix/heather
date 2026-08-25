@@ -86,6 +86,14 @@ pub enum Type {
     SEmpty {
         level: Level,
     },
+    /// `Squash^l A` (`∥A∥`) — propositional truncation of `A`.  The
+    /// payload type remains ordinary data, while inhabitants are
+    /// definitionally irrelevant.  Elimination is restricted to a
+    /// squash-headed family by [`Term::ElimSquash`].
+    Squash {
+        level: Level,
+        ty: Rc<Type>,
+    },
     /// `Σ^{l,l'}(x : S). T` — dependent pair type; `snd` binds one local
     /// variable (of type `fst`). Lives at `l ⊔ l'`. Extension beyond DeLaM
     /// ch. 04 (see issues/kernel-v1-extensions.md).
@@ -233,6 +241,12 @@ pub enum Term {
     TmSEmpty {
         level: Level,
     },
+    /// `Squash^l(s) : Ty l` where `s : Ty l` — encoding of propositional
+    /// truncation.
+    TmSquash {
+        level: Level,
+        ty: Rc<Term>,
+    },
     /// `Σ^{l,l'}(x : s). t : Ty (l ⊔ l')` where `s : Ty l`; `snd` binds one
     /// local variable (of type `El s`) — encoding of the dependent pair
     /// type. Extension beyond DeLaM ch. 04.
@@ -343,6 +357,13 @@ pub enum Term {
         ty: Rc<Type>,
         tm: Rc<Term>,
     },
+    /// `squash^l(A; a) : ∥A∥`.  The witness is retained by syntax and
+    /// code, but ignored by live conversion at the squash type.
+    Squash {
+        level: Level,
+        ty: Rc<Type>,
+        tm: Rc<Term>,
+    },
     /// `transp^{l,l'}(I; x.P; a; b; e; t) : P[b/x]` — transport along a
     /// strict equality through a motive; J's non-dependent cousin. `motive`
     /// binds one local variable (`x : I`); nothing else binds. `proof :
@@ -373,6 +394,19 @@ pub enum Term {
         level: Level,
         scrut_level: Level,
         motive: Rc<Type>,
+        scrut: Rc<Term>,
+    },
+    /// Dependent elimination from `∥A∥` into a squash-headed family.
+    /// `motive` binds `z : ∥A∥` and denotes the *inner* type `B(z)`;
+    /// `case` binds `x : A` and has type `∥B(squash x)∥`.  The result is
+    /// `∥B(scrut)∥`, and the beta rule sends a canonical `squash a` to
+    /// `case[a/x]`.
+    ElimSquash {
+        src_level: Level,
+        dst_level: Level,
+        src_ty: Rc<Type>,
+        motive: Rc<Type>,
+        case: Rc<Term>,
         scrut: Rc<Term>,
     },
 
@@ -945,6 +979,21 @@ pub struct Branches {
     ///  u_t : Trm_c(g ⊢ sEmpty^{ℓ'} @ ℓ'), x_M, x_t. t_elim_sE)` — mirrors
     /// `tm_elim_empty`.
     pub tm_elim_sempty: Rc<Term>,
+
+    // -- propositional truncation (issues/sprop-squash.md) --
+    /// `(ℓ, g, U_A, x_A. t_Squash)` — code of the type `∥U_A^id∥`.
+    pub ty_squash: Rc<Term>,
+    /// `(ℓ, g, u_A, x_A. t'_Squash)` — code of the encoding
+    /// `Squash^ℓ(u_A^id) : Ty ℓ`.
+    pub tm_squash: Rc<Term>,
+    /// `(ℓ, g, U_A, u_a, x_A, x_a. t_squash)` — code of
+    /// `squash^ℓ(U_A^id; u_a^id)`.
+    pub tm_squash_in: Rc<Term>,
+    /// `(ℓ, ℓ', g, U_A, U_B, u_b, u_q, x_A, x_B, x_b, x_q.
+    /// t_elim_Squash)` — code of dependent squash elimination. `U_B` is
+    /// scoped over `z : ∥U_A∥`; `u_b` over `x : U_A` and returns
+    /// `∥U_B[squash x/z]∥`; `u_q : ∥U_A∥`.
+    pub tm_elim_squash: Rc<Term>,
 }
 
 /// Base of a local context: empty (`·`) or a context variable `g`.
