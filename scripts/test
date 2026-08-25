@@ -32,6 +32,7 @@ node --test scripts/test-target-runner.test.mjs
 
 SKIP=()
 TEST_ARGS=()
+TEST_LANE=full
 HAS_LIBTEST_SEPARATOR=false
 for a in "$@"; do
   if [[ "$a" == -- ]]; then
@@ -41,6 +42,7 @@ for a in "$@"; do
 done
 if [[ "${1:-}" == --fast ]]; then
   shift
+  TEST_LANE=fast
   TEST_ARGS=(--no-fail-fast)
   # By exact test-fn name; `cargo test -- --skip` applies the filter in
   # every test binary, where these names are unique. If the caller already
@@ -74,17 +76,17 @@ compile_seconds=$((SECONDS - compile_started))
 
 # An unfiltered workspace run has no Cargo selection semantics left to
 # preserve, so run its independent binaries in bounded parallel. Focused
-# invocations retain Cargo's native serial path below. Two workers are the
-# conservative default: each child still has its own 4 GiB address-space
-# rail, and the scheduler additionally caps the count from MemAvailable with
-# 2 GiB reserved for the host. HEATHER_TEST_JOBS can lower or deliberately
-# raise the requested bound; the memory cap remains authoritative.
+# invocations retain Cargo's native serial path below. By default the runner
+# chooses the smaller of the available two-thread CPU slots minus one
+# (libtest gets two threads) and the number of 4 GiB children MemAvailable can
+# hold while leaving 2 GiB available for the host. HEATHER_TEST_JOBS
+# can lower or request a higher count; both safety caps remain authoritative.
 if (( $# == 0 )); then
   mkdir -p target
   test_started=$SECONDS
   set +e
-  runner_args=(--manifest "$manifest" --timings target/test-target-timings.tsv
-               --jobs "${HEATHER_TEST_JOBS:-2}" --keep-going)
+  runner_args=(--manifest "$manifest" --timings "target/test-target-timings-${TEST_LANE}.tsv"
+               --jobs "${HEATHER_TEST_JOBS:-auto}" --keep-going)
   node scripts/run-test-targets.mjs "${runner_args[@]}" -- "${LIBTEST_ARGS[@]:1}"
   status=$?
   set -e

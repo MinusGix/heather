@@ -66,3 +66,25 @@ and CPU contention on two representative elaborator-heavy binaries.
   594.15 seconds of reported target work in 300 seconds of test-runner wall
   time (301 seconds including inventory and runner checks). This exercises the
   slow acceptance lane and confirms the same near-ideal two-way compression.
+- 2026-08-25: Follow-up scaling made the default adaptive rather than relying
+  on runners to set an override. It chooses the smaller of half the available
+  CPUs (two libtest threads per child, with one two-thread slot left free)
+  and the 4-GiB-child capacity remaining after reserving 2 GiB. Both Linux
+  `MemAvailable` and a tighter cgroup-v2 `memory.max - memory.current` are
+  honored. `HEATHER_TEST_JOBS` remains a request, not a way around either
+  safety cap. Fast and full lanes now keep separate timing histories so fast
+  filters cannot teach the full scheduler that acceptance targets cost zero.
+
+  Same-host fast-lane scaling: 2 jobs = 179s wall / 350s reported target
+  work; 4 = 94s / 371s; 6 = 83s / 490s; warmed-history 7 = 80s / 556s.
+  Seven is the wall-time winner but clearly the knee: jobs 5–7 save only 14
+  seconds while adding 185 seconds of contended target time. Full lane at 6,
+  on its first
+  alphabetical run before a full timing history existed: 2,103 passed,
+  147s wall / 767s target work, versus 300s / 594s at two jobs. The six-way
+  floor from target work is ~128s and the longest target is 61s, so the suite
+  is contention-limited rather than trapped behind one serial long target.
+  Final verification at the actual adaptive default of 7, with warmed full
+  history: 2,103 passed, 131s wall / 908s target work. That is 2.29x faster
+  than the two-job full run and 4.5x faster than serial target work, while
+  retaining the explicit host CPU/RAM reserve.

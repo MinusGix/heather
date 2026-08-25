@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { boundedJobs, parseArtifacts, parseResults, targetIncomplete } from "./run-test-targets.mjs";
+import { jobBounds, parseArtifacts, parseResults, targetIncomplete } from "./run-test-targets.mjs";
 
 test("artifact discovery keeps test-profile executables once", () => {
   const artifact = { reason: "compiler-artifact", executable: "/tmp/example", profile: { test: true },
@@ -17,10 +17,14 @@ test("libtest summaries aggregate exactly", () => {
   assert.deepEqual(result, { passed: 7, failed: 1, ignored: 2, duration: 1.75, resultLines: 2 });
 });
 
-test("job bound reserves host memory for four-GiB children", () => {
-  assert.equal(boundedJobs(8, "MemAvailable: 11010048 kB\n"), 2);
-  assert.equal(boundedJobs(2, "MemAvailable: 67108864 kB\n"), 2);
-  assert.equal(boundedJobs(4, ""), 1);
+test("automatic job bound reserves host memory and two CPUs per child", () => {
+  const tenFree = "MemTotal: 33554432 kB\nMemAvailable: 10485760 kB\n";
+  const thirtyFree = "MemTotal: 67108864 kB\nMemAvailable: 31457280 kB\n";
+  assert.equal(jobBounds("auto", tenFree, 16).jobs, 2);
+  assert.equal(jobBounds("auto", thirtyFree, 16).jobs, 7);
+  assert.equal(jobBounds("auto", thirtyFree, 8).jobs, 3);
+  assert.equal(jobBounds("8", "", 16).jobs, 1);
+  assert.equal(jobBounds("auto", thirtyFree, 16, String(16 * 1024 ** 3), String(2 * 1024 ** 3)).jobs, 3);
 });
 
 test("ordinary failures are red but only missing summaries are incomplete", () => {

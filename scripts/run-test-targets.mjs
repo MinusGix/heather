@@ -6,6 +6,7 @@
 
 import { spawn } from "node:child_process";
 import { readFileSync, writeFileSync } from "node:fs";
+import { availableParallelism } from "node:os";
 import { fileURLToPath } from "node:url";
 
 const LIMIT_KIB = 4 * 1024 * 1024;
@@ -49,12 +50,36 @@ export function parseResults(text) {
   return total;
 }
 
-export function boundedJobs(requested, meminfo) {
-  const found = /MemAvailable:\s+(\d+)\s+kB/.exec(meminfo);
-  const memoryJobs = found
-    ? Math.max(1, Math.floor((Number(found[1]) - RESERVE_KIB) / LIMIT_KIB))
+export function jobBounds(requested, meminfo, cores, cgroupMax = "", cgroupCurrent = "") {
+  const available = /MemAvailable:\s+(\d+)\s+kB/.exec(meminfo);
+  let availableKib = available ? Number(available[1]) : null;
+  const groupMaxBytes = /^\d+$/.test(cgroupMax.trim()) ? Number(cgroupMax.trim()) : null;
+  const groupCurrentBytes = /^\d+$/.test(cgroupCurrent.trim()) ? Number(cgroupCurrent.trim()) : null;
+  if (groupMaxBytes !== null) {
+    if (groupCurrentBytes !== null) {
+      const groupAvailableKib = Math.max(0, Math.floor((groupMaxBytes - groupCurrentBytes) / 1024));
+      availableKib = availableKib === null ? groupAvailableKib : Math.min(availableKib, groupAvailableKib);
+    }
+  }
+  const memoryJobs = availableKib !== null
+    ? Math.max(1, Math.floor((availableKib - RESERVE_KIB) / LIMIT_KIB))
     : 1;
-  return Math.max(1, Math.min(requested, memoryJobs));
+  // libtest itself gets two threads, so don't create more runnable test
+  // threads than the CPUs the process is actually allowed to use. One
+  // two-thread slot remains free for the editor and other foreground work.
+  const cpuJobs = Math.max(1, Math.floor(cores / 2) - 1);
+  const requestedJobs = requested === "auto" ? cpuJobs : Number(requested);
+  if (!Number.isInteger(requestedJobs) || requestedJobs < 1) {
+    throw new Error("--jobs must be `auto` or a positive integer");
+  }
+  return {
+    jobs: Math.max(1, Math.min(requestedJobs, memoryJobs, cpuJobs)),
+    requestedJobs,
+    memoryJobs,
+    cpuJobs,
+    reserveKib: RESERVE_KIB,
+    automatic: requested === "auto",
+  };
 }
 
 export function targetIncomplete(run) {
@@ -102,6 +127,18 @@ function loadHistory(path) {
   return timings;
 }
 
+function readOwnCgroupValue(name) {
+  try {
+    const entry = readFileSync("/proc/self/cgroup", "utf8")
+      .split("\n").find((line) => line.startsWith("0::"));
+    const path = entry?.slice(3);
+    if (!path?.startsWith("/")) return "";
+    return readFileSync(`/sys/fs/cgroup${path}/${name}`, "utf8");
+  } catch {
+    return "";
+  }
+}
+
 async function runTargets(targets, jobs, libtestArgs, keepGoing) {
   const pending = [...targets];
   const completed = [];
@@ -147,17 +184,18 @@ async function main() {
   };
   const manifest = take("--manifest");
   const timingsPath = take("--timings");
-  const jobsRequested = Number(take("--jobs"));
+  const jobsRequested = take("--jobs");
   const keepGoingIndex = args.indexOf("--keep-going");
   const keepGoing = keepGoingIndex >= 0;
   if (keepGoing) args.splice(keepGoingIndex, 1);
   const sep = args.indexOf("--");
   const libtestArgs = sep < 0 ? [] : args.slice(sep + 1);
-  if (!Number.isInteger(jobsRequested) || jobsRequested < 1) throw new Error("--jobs must be a positive integer");
-
   let meminfo = "";
   try { meminfo = readFileSync("/proc/meminfo", "utf8"); } catch {}
-  const jobs = boundedJobs(jobsRequested, meminfo);
+  const cgroupMax = readOwnCgroupValue("memory.max");
+  const cgroupCurrent = readOwnCgroupValue("memory.current");
+  const bounds = jobBounds(jobsRequested, meminfo, availableParallelism(), cgroupMax, cgroupCurrent);
+  const jobs = bounds.jobs;
   const history = loadHistory(timingsPath);
   const targets = parseArtifacts(readFileSync(manifest, "utf8"));
   targets.sort((a, b) => {
@@ -166,7 +204,12 @@ async function main() {
   });
   if (!targets.length) throw new Error("Cargo manifest contained no test executables");
   console.log(`\n== test targets: ${targets.length} binaries, ${jobs}-way bound (${jobs * 4} GiB maximum child address space) ==`);
-  if (jobs < jobsRequested) console.log(`requested ${jobsRequested} jobs, reduced to ${jobs} from MemAvailable (2 GiB host reserve)`);
+  const reserveGib = (bounds.reserveKib / 1024 / 1024).toFixed(1);
+  if (bounds.automatic) {
+    console.log(`automatic bound: memory ${bounds.memoryJobs}, CPU ${bounds.cpuJobs}; reserving ${reserveGib} GiB for the host`);
+  } else if (jobs < bounds.requestedJobs) {
+    console.log(`requested ${bounds.requestedJobs} jobs, reduced to ${jobs} by memory/CPU bounds; reserving ${reserveGib} GiB for the host`);
+  }
 
   const runs = await runTargets(targets, jobs, libtestArgs, keepGoing);
   // Complete target blocks are emitted in stable label order, never interleaved.
