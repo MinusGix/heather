@@ -19,6 +19,8 @@
 
 use heather_elab::{ElabError, Elaborator};
 
+mod support;
+
 const LOGIC: &str = include_str!("../../../lib/std/logic.hthr");
 const BOOL: &str = include_str!("../../../lib/std/bool.hthr");
 const NAT: &str = include_str!("../../../lib/std/nat.hthr");
@@ -29,20 +31,29 @@ const ALGEBRA: &str = include_str!("../../../lib/std/algebra.hthr");
 
 fn run(extra: &str) -> Result<Elaborator, String> {
     let mut e = Elaborator::with_prelude().expect("prelude");
-    for (name, src) in [
-        ("logic", LOGIC),
-        ("bool", BOOL),
-        ("nat", NAT),
-        ("option", OPTION), ("pair", PAIR),
-        ("list", LIST),
-        ("algebra", ALGEBRA),
-    ] {
-        if let Err(err) = e.elab_module_source(name, src) {
-            return Err(match err {
-                ElabError::Elab { msg, .. } => format!("{name}: {msg}"),
-                other => format!("{name}: {other}"),
-            });
+    let mut prefix_error = None;
+    let mut load = |e: &mut Elaborator| {
+        for (name, src) in [
+            ("logic", LOGIC), ("bool", BOOL), ("nat", NAT),
+            ("option", OPTION), ("pair", PAIR), ("list", LIST),
+            ("algebra", ALGEBRA),
+        ] {
+            if let Err(err) = e.elab_module_source(name, src) {
+                prefix_error = Some(match err {
+                    ElabError::Elab { msg, .. } => format!("{name}: {msg}"),
+                    other => format!("{name}: {other}"),
+                });
+                break;
+            }
         }
+    };
+    if extra.is_empty() {
+        load(&mut e);
+    } else {
+        support::with_decl_cache(&mut e, load);
+    }
+    if let Some(err) = prefix_error {
+        return Err(err);
     }
     if !extra.is_empty() {
         let src = format!(

@@ -18,15 +18,26 @@
 # binary while the expensive acceptance tests stay skipped.
 # default runs everything: a round's FINAL verification, and anything that
 # touches lib/, the kit, or the generators, must be a plain `scripts/test`.
+# Stable exhaustive matrices may opt into that lane by naming the test
+# `slow_acceptance_*`; `--fast` filters that prefix while retaining the
+# target's explicitly chosen load-bearing smoke and refusal cases.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
 # Cheap and dependency-free: fail the ordinary CI entrypoint when Heather's
 # compiler keywords or fixed symbols drift away from the editor manifest.
+suite_started=$SECONDS
 node scripts/check-tree-sitter-inventory.js
 
 SKIP=()
 TEST_ARGS=()
+HAS_LIBTEST_SEPARATOR=false
+for a in "$@"; do
+  if [[ "$a" == -- ]]; then
+    HAS_LIBTEST_SEPARATOR=true
+    break
+  fi
+done
 if [[ "${1:-}" == --fast ]]; then
   shift
   TEST_ARGS=(--no-fail-fast)
@@ -34,6 +45,7 @@ if [[ "${1:-}" == --fast ]]; then
   # every test binary, where these names are unique. If the caller already
   # passed a `--`, don't add a second one.
   SKIP=(--skip the_full_ir_library_checks --skip emissions_check_and_controls
+        --skip slow_acceptance_
         --skip nonnat_emissions_and_controls
         --skip tier1_emissions_and_declines
         --skip a_perturbed_tier1_ih_value_is_refused_by_the_kernel
@@ -43,12 +55,20 @@ if [[ "${1:-}" == --fast ]]; then
         --skip a_perturbed_signature_checker_is_a_loud_disagreement
         --skip a_perturbed_fold_is_refused_by_the_kernel
         --skip a_perturbed_field_merge_is_refused_by_the_kernel)
-  for a in "$@"; do [[ "$a" == -- ]] && break; done
-  [[ "${a:-}" == -- ]] || SKIP=(-- "${SKIP[@]}")
+fi
+
+# Keep libtest's compact dot output while leaving Cargo itself non-quiet: the
+# latter is what prints `Running tests/foo.rs`, which the timing table needs.
+# Respect a caller-supplied `--`; otherwise introduce the separator here.
+LIBTEST_ARGS=(--format terse "${SKIP[@]}")
+if ! $HAS_LIBTEST_SEPARATOR; then
+  LIBTEST_ARGS=(-- "${LIBTEST_ARGS[@]}")
 fi
 
 # Compile without limits (rustc is memory-hungry but trusted)...
+compile_started=$SECONDS
 cargo test --workspace --no-run --quiet
+compile_seconds=$((SECONDS - compile_started))
 
 # ...then run under them: 4 GiB address space, 5 CPU minutes, two threads.
 #
@@ -64,23 +84,54 @@ cargo test --workspace --no-run --quiet
 #
 # RUST_MIN_STACK raises the *test thread* stack from its 2 MiB default: the
 # `Wf` step telescope embeds the `nth` schema (a nested elim_Nat under two
-# λs), so checking the `tm_elim_wf` branch of a 52-branch recursor recurses
+# λs), so checking the `tm_elim_wf` branch of a 56-branch recursor recurses
 # deeper than 2 MiB allows. 8 MiB is comfortable; the cap above still bounds
 # total address space.
 ulimit -v 4194304
 ulimit -t 300
 counts=$(mktemp)
+timings=$(mktemp)
+test_started=$SECONDS
 set +e
-RUST_MIN_STACK=8388608 RUST_TEST_THREADS=2 cargo test --quiet "${TEST_ARGS[@]}" "$@" "${SKIP[@]}" 2>&1 |
-  awk -v out="$counts" '
+RUST_MIN_STACK=8388608 RUST_TEST_THREADS=2 cargo test "${TEST_ARGS[@]}" "$@" "${LIBTEST_ARGS[@]}" 2>&1 |
+  awk -v out="$counts" -v timing_out="$timings" '
        { print }
-       /^test result:/ { passed += $4; failed += $6; ignored += $8 }
+       /^     Running / {
+         target = $0
+         sub(/^     Running /, "", target)
+         sub(/ \([^)]*\)$/, "", target)
+       }
+       /^   Doc-tests / {
+         target = $0
+         sub(/^   Doc-tests /, "doc-tests ", target)
+       }
+       /^test result:/ {
+         passed += $4; failed += $6; ignored += $8
+         duration = $0
+         sub(/^.*finished in /, "", duration)
+         sub(/s$/, "", duration)
+         if (target != "" && duration ~ /^[0-9]+([.][0-9]+)?$/) {
+           printf "%s\t%s\n", duration, target >> timing_out
+         }
+       }
        /\(signal: [0-9]+/ || /process didn.t exit successfully/ { killed++ }
        END { printf "%d %d %d %d\n", passed, failed, ignored, killed > out }'
 status=${PIPESTATUS[0]}
 set -e
+test_seconds=$((SECONDS - test_started))
 read -r passed failed ignored killed < "$counts"
 rm -f "$counts"
+printf '\n== slowest test targets (reported test time) ==\n'
+sort -t $'\t' -k1,1nr "$timings" | awk -F '\t' '
+  NR <= 20 && $1 + 0 >= 1 { printf "%8.2fs  %s\n", $1, $2; shown++ }
+  { total += $1 }
+  END {
+    if (!shown) print "  (no target took at least 1 second)"
+    printf "reported target time: %.2fs across %d targets\n", total, NR
+  }'
+rm -f "$timings"
+printf 'runner wall time: compile %ds + tests %ds = %ds total\n' \
+  "$compile_seconds" "$test_seconds" "$((SECONDS - suite_started))"
 if (( killed > 0 )) || { (( status != 0 )) && (( failed == 0 )); }; then
   # cargo died for a reason other than ordinary test failures (a binary was
   # killed by ulimit, crashed, etc.). Never print a green-looking count.

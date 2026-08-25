@@ -20,6 +20,8 @@
 
 use heather_elab::{ElabError, Elaborator, Lint};
 
+mod support;
+
 const LOGIC: &str = include_str!("../../../lib/std/logic.hthr");
 const BOOL: &str = include_str!("../../../lib/std/bool.hthr");
 const NAT: &str = include_str!("../../../lib/std/nat.hthr");
@@ -29,31 +31,33 @@ const LIST: &str = include_str!("../../../lib/std/list.hthr");
 const ALGEBRA: &str = include_str!("../../../lib/std/algebra.hthr");
 const INT: &str = include_str!("../../../lib/std/int.hthr");
 
-fn elaborated() -> Elaborator {
+fn elaborated(cached: bool) -> Elaborator {
     let mut e = Elaborator::with_prelude().expect("prelude");
-    for (name, src) in [
-        ("logic", LOGIC),
-        ("bool", BOOL),
-        ("nat", NAT),
-        ("option", OPTION),
-        ("pair", PAIR),
-        ("list", LIST),
-        ("algebra", ALGEBRA),
-        ("int", INT),
-    ] {
-        if let Err(err) = e.elab_module_source(name, src) {
-            let msg = match err {
-                ElabError::Elab { msg, .. } => msg,
-                other => format!("{other}"),
-            };
-            panic!("{name} did not check: {msg}");
+    let load = |e: &mut Elaborator| {
+        for (name, src) in [
+            ("logic", LOGIC), ("bool", BOOL), ("nat", NAT),
+            ("option", OPTION), ("pair", PAIR), ("list", LIST),
+            ("algebra", ALGEBRA), ("int", INT),
+        ] {
+            if let Err(err) = e.elab_module_source(name, src) {
+                let msg = match err {
+                    ElabError::Elab { msg, .. } => msg,
+                    other => format!("{other}"),
+                };
+                panic!("{name} did not check: {msg}");
+            }
         }
+    };
+    if cached {
+        support::with_decl_cache(&mut e, load);
+    } else {
+        load(&mut e);
     }
     e
 }
 
 fn probe(name: &str, src: &str) {
-    let mut e = elaborated();
+    let mut e = elaborated(true);
     if let Err(err) = e.elab_module_source("probe", src) {
         let msg = match err {
             ElabError::Elab { msg, .. } => msg,
@@ -65,7 +69,7 @@ fn probe(name: &str, src: &str) {
 
 #[test]
 fn the_int_module_checks() {
-    let mut e = elaborated();
+    let mut e = elaborated(false);
     assert!(
         INT.contains("match le_dec(a, b) as λ d => a <= or_pick(d, a, b)")
             && INT.contains("match le_dec(a, b) as λ d => b <= or_pick(d, a, b)")
@@ -340,7 +344,7 @@ fn k_bool(p, q: Bool) -> Decide<bool::Le(p, q)> { bool::Le::Decide() }
 /// `decide_pick` that always took the same branch.
 #[test]
 fn a_wrong_decision_at_one_of_the_three_orders_is_refused() {
-    let mut e = elaborated();
+    let mut e = elaborated(true);
     let bad = r#"
 import int;
 import logic;
@@ -359,7 +363,7 @@ theorem wrong(): decide_pick<int::Le(OfNat(2), NegSucc(0)), Nat>(7, 9) = 9 { ref
 /// above are checks.
 #[test]
 fn a_wrong_sign_is_refused() {
-    let mut e = elaborated();
+    let mut e = elaborated(true);
     let bad = r#"
 import int;
 theorem wrong(): int::mul(NegSucc(1), OfNat(3)) = OfNat(6) { refl }
@@ -375,7 +379,7 @@ theorem wrong(): int::mul(NegSucc(1), OfNat(3)) = OfNat(6) { refl }
 /// that could be ignored by the proof.
 #[test]
 fn multiplication_monotonicity_requires_a_nonnegative_factor() {
-    let mut e = elaborated();
+    let mut e = elaborated(true);
     let bad = r#"
 import int;
 theorem wrong(a, b: Int, h: a <= b): a * NegSucc(0) <= b * NegSucc(0) {

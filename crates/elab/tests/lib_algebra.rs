@@ -24,8 +24,16 @@
 //! `add`, `and` and `or`, each pinning its index by unification alone), and
 //! `a_second_instance_at_one_index_is_refused` (the key is the class, the
 //! carrier head *and* the index).
+//!
+//! Those four stay in `scripts/test --fast`. The remaining matrix is prefixed
+//! `slow_acceptance_`: it is stable whole-library acceptance coverage, and
+//! every case necessarily reloads the same seven-module closure. Plain
+//! `scripts/test` still runs all of it; the fast lane keeps one positive per
+//! load-bearing axis instead of paying the full 35-probe cross-product.
 
 use heather_elab::{ElabError, Elaborator};
+
+mod support;
 
 const LOGIC: &str = include_str!("../../../lib/std/logic.hthr");
 const BOOL: &str = include_str!("../../../lib/std/bool.hthr");
@@ -49,13 +57,30 @@ fn modules() -> Vec<(&'static str, &'static str)> {
 
 fn run(extra: &str) -> Result<Elaborator, String> {
     let mut e = Elaborator::with_prelude().expect("prelude");
-    for (name, src) in modules() {
-        if let Err(err) = e.elab_module_source(name, src) {
-            return Err(match err {
-                ElabError::Elab { msg, .. } => format!("{name}: {msg}"),
-                other => format!("{name}: {other}"),
-            });
+    let mut prefix_error = None;
+    let mut load = |e: &mut Elaborator| {
+        for (name, src) in modules() {
+            if let Err(err) = e.elab_module_source(name, src) {
+                prefix_error = Some(match err {
+                    ElabError::Elab { msg, .. } => format!("{name}: {msg}"),
+                    other => format!("{name}: {other}"),
+                });
+                break;
+            }
         }
+    };
+    // `the_library_checks` remains the ungated front-to-back acceptance.
+    // Probe tests all load the identical checked-in closure before adding
+    // their own (always ungated) module, so replay its kernel verdicts just
+    // as the certgen family does. This removes 34 redundant kernel checks of
+    // seven modules without weakening any probe or its negative control.
+    if extra.is_empty() {
+        load(&mut e);
+    } else {
+        support::with_decl_cache(&mut e, load);
+    }
+    if let Some(err) = prefix_error {
+        return Err(err);
     }
     if !extra.is_empty() {
         // The probe module imports the whole closure, exactly as a user file
@@ -98,7 +123,7 @@ fn the_library_checks() {
 //    distinguishes a resolved dictionary from some other resolved dictionary.
 
 #[test]
-fn the_registered_monoids_are_the_declared_ones() {
+fn slow_acceptance_the_registered_monoids_are_the_declared_ones() {
     ok("
 theorem nat_is_addition(): sum(Cons(2, Cons(3, Nil))) = 5 { refl }
 theorem bool_is_conjunction(): all_of(Cons(True, Cons(False, Nil))) = False { refl }
@@ -113,7 +138,7 @@ theorem neutral_singleton(n: Nat): sum(Cons(n, Nil)) = n { sum_single(n) }
 /// The existing monoid consumer is recovered from the first-class list
 /// algebra, at distinct structures and at a neutral list.
 #[test]
-fn the_monoid_fold_is_the_list_algebra_fold() {
+fn slow_acceptance_the_monoid_fold_is_the_list_algebra_fold() {
     ok("
 theorem alg_nat(xs: List<Nat>):
     list_fold(monoid_list_alg<Nat>(add), xs) = mconcat(add, xs)
@@ -151,7 +176,7 @@ theorem or_unit(): Bool::Monoid(or).unit = False { refl }
 /// positive test alone cannot tell one Bool monoid from the other, since both
 /// are registered and both type-check.
 #[test]
-fn the_two_bool_monoids_are_not_interchangeable() {
+fn slow_acceptance_the_two_bool_monoids_are_not_interchangeable() {
     let e = bad("theorem wrong(): any_of(Cons(True, Cons(False, Nil))) = False { refl }");
     assert!(e.contains("wrong"), "{e}");
     let e = bad("theorem wrong2(): Bool::Monoid(or).unit = True { refl }");
@@ -164,7 +189,7 @@ fn the_two_bool_monoids_are_not_interchangeable() {
 /// because `+` means nothing there any more. The refusal is the review's
 /// content, so it is pinned beside the spelling that replaced it.
 #[test]
-fn the_bool_spelling_is_the_doubled_symbols_not_the_semiring() {
+fn slow_acceptance_the_bool_spelling_is_the_doubled_symbols_not_the_semiring() {
     ok("
 theorem and_notated(x: Bool, y: Bool): x && y = and(x, y) { refl }
 theorem or_notated(x: Bool, y: Bool): x || y = or(x, y) { refl }
@@ -186,7 +211,7 @@ theorem consumed(x: Bool): or(x, False) = x { bool_or_false(x) }
 /// through `instance<A> Monoid<List<A>>(append)` — with the index instantiated
 /// at the same time as the carrier.
 #[test]
-fn the_list_monoid_answers_at_an_open_element_type() {
+fn slow_acceptance_the_list_monoid_answers_at_an_open_element_type() {
     ok("
 fn join<A>(xss: List<List<A>>) -> List<A> { concat(xss) }
 // checking position, at the open type: the result is used where `List<A>` is
@@ -198,7 +223,7 @@ fn join_then_append<A>(xss: List<List<A>>, ys: List<A>) -> List<A> { append(join
 /// …and it *computes* at a closed one, which is what says the resolved
 /// dictionary's `op` is `append` and not something else of the same type.
 #[test]
-fn the_list_monoid_computes() {
+fn slow_acceptance_the_list_monoid_computes() {
     ok("
 theorem flattens(): concat(Cons(Cons(1, Nil), Cons(Cons(2, Nil), Nil))) = Cons(1, Cons(2, Nil)) {
   refl
@@ -210,7 +235,7 @@ theorem neutral(xs: List<Nat>, ys: List<Nat>):
 }
 
 #[test]
-fn a_generic_class_lemma_instantiates_at_a_wf_carrier() {
+fn slow_acceptance_a_generic_class_lemma_instantiates_at_a_wf_carrier() {
     ok("
 theorem neutral_concat_single<A>(xs: List<A>): concat(Cons(xs, Nil)) = xs {
     concat_single(xs)
@@ -222,7 +247,7 @@ theorem neutral_concat_single<A>(xs: List<A>): concat(Cons(xs, Nil)) = xs {
 /// (issues/list-append-symbol.md). The generic designation must work at an
 /// open element type, and the literal control must compute.
 #[test]
-fn the_list_spelling_is_append_not_add() {
+fn slow_acceptance_the_list_spelling_is_append_not_add() {
     ok("
 theorem neutral<A>(xs: List<A>, ys: List<A>): xs ++ ys = append(xs, ys) { refl }
 theorem literal(): Cons(1, Nil) ++ Cons(2, Nil) = Cons(1, Cons(2, Nil)) { refl }
@@ -244,7 +269,7 @@ theorem concat_is_positional<A>(xss: List<List<A>>):
 /// their own derivation. Sharing, never correctness, which is the table's
 /// standing bargain; recorded as a residue by the round that found it.
 #[test]
-fn a_derived_list_monoid_is_not_shared_between_use_sites() {
+fn slow_acceptance_a_derived_list_monoid_is_not_shared_between_use_sites() {
     let e = ok("
 fn f(xss: List<List<Nat>>) -> List<Nat> { mconcat(append, xss) }
 fn g(xss: List<List<Nat>>) -> List<Nat> { mconcat(append, xss) }
@@ -266,7 +291,7 @@ theorem same2(o: Option<List<Nat>>): p(o) = q(o) { refl }
 /// inside `concat`'s own body, at an open carrier — which is not a closed goal
 /// and so is never minted. A caller only instantiates the type argument.
 #[test]
-fn calling_concat_derives_nothing() {
+fn slow_acceptance_calling_concat_derives_nothing() {
     let e = ok("
 fn f(xss: List<List<Nat>>) -> List<Nat> { concat(xss) }
 fn g(xss: List<List<Bool>>) -> List<Bool> { concat(xss) }
@@ -283,7 +308,7 @@ fn g(xss: List<List<Bool>>) -> List<Bool> { concat(xss) }
 /// the synthesized `Monoid<Bool>(and)` at `and`, so one carrier carries two
 /// whole chains that never meet.
 #[test]
-fn the_extends_chain_reaches_one_value() {
+fn slow_acceptance_the_extends_chain_reaches_one_value() {
     ok("
 theorem nat_up(): Nat::CommMonoid(add).unit = Nat::Monoid(add).unit { refl }
 theorem bool_and_up(): Bool::CommMonoid(and).unit = Bool::Monoid(and).unit { refl }
@@ -295,7 +320,7 @@ theorem bool_or_up(): Bool::CommMonoid(or).unit = Bool::Monoid(or).unit { refl }
 /// not leak into each other. Without this, a synthesized parent that silently
 /// took the wrong components would pass every test above.
 #[test]
-fn the_two_bool_chains_do_not_meet() {
+fn slow_acceptance_the_two_bool_chains_do_not_meet() {
     ok("theorem or_zero_is_False(): Bool::Monoid(or).unit = False { refl }");
     let e = bad("theorem or_zero_is_True(): Bool::Monoid(or).unit = True { refl }");
     assert!(e.contains("or_zero_is_True"), "{e}");
@@ -325,7 +350,7 @@ theorem at_or(x: Bool): or(x, False) = x { op_unit_of_comm(x) }
 /// One statement, two carriers, no re-proof — and in *checking* position: the
 /// class lemma's instantiated type has to converge with each goal.
 #[test]
-fn one_class_lemma_serves_two_carriers() {
+fn slow_acceptance_one_class_lemma_serves_two_carriers() {
     ok("
 theorem at_nat(n: Nat): sum(Cons(n, Nil)) = n { mconcat_single(add, n) }
 theorem at_bool(b: Bool): all_of(Cons(b, Nil)) = b { mconcat_single(and, b) }
@@ -337,7 +362,7 @@ theorem at_bool_again(b: Bool): any_of(Cons(b, Nil)) = b { mconcat_single(or, b)
 /// dictionary comes from its own `requires` binder. At a concrete carrier the
 /// registry answers instead, and the result computes.
 #[test]
-fn the_order_class_dispatches_and_computes() {
+fn slow_acceptance_the_order_class_dispatches_and_computes() {
     ok("
 theorem picks_the_larger(): max_of(2, 5) = 5 { refl }
 theorem picks_the_larger_the_other_way(): max_of(5, 2) = 5 { refl }
@@ -350,7 +375,7 @@ theorem idempotent(n: Nat): max_of(n, n) = n { max_of_self(n) }
 /// `:= infer` on an ordinary (non-`requires`) binder: the caller of
 /// `or_default` names neither the dictionary nor the fallback.
 #[test]
-fn or_default_infers_its_dictionary() {
+fn slow_acceptance_or_default_infers_its_dictionary() {
     ok("
 fn no_nat() -> Option<Nat> { None }
 fn no_list() -> Option<List<Nat>> { None }
@@ -363,7 +388,7 @@ fn head_or_default<A: Default>(o: Option<A>) -> A { or_default(o) }
 }
 
 #[test]
-fn numeral_resolves_generically_and_keeps_nat_as_the_default() {
+fn slow_acceptance_numeral_resolves_generically_and_keeps_nat_as_the_default() {
     ok("
 fn one<A: Numeral>() -> A { 1 }
 fn three() -> Nat { 3 }
@@ -395,7 +420,7 @@ fn a_second_instance_at_one_index_is_refused() {
 /// …and the positive control beside it: a *third* structure at one carrier is
 /// an ordinary declaration, because the key distinguishes it.
 #[test]
-fn a_third_structure_at_one_carrier_registers() {
+fn slow_acceptance_a_third_structure_at_one_carrier_registers() {
     ok("
 fn andnot(a: Bool, b: Bool) -> Bool { and(a, not(b)) }
 class Mag<A>(op: A -> A -> A) { pt: A, fixes: op(pt, pt) = pt }
@@ -408,7 +433,7 @@ instance Mag<Bool>(or) { pt := False, fixes := refl }
 /// An instance head whose index is not spellable is refused **at the
 /// declaration**, with the scope alternative stated (§3.1).
 #[test]
-fn an_unspellable_instance_head_is_refused() {
+fn slow_acceptance_an_unspellable_instance_head_is_refused() {
     let e = bad(
         "instance Monoid<Bool>(λ (a: Bool) (b: Bool) => a) {
   unit := True,
@@ -423,7 +448,7 @@ fn an_unspellable_instance_head_is_refused() {
 /// A carrier with no instance is a resolution failure with a trace, not a
 /// silent wrong answer.
 #[test]
-fn a_carrier_with_no_monoid_is_a_reported_failure() {
+fn slow_acceptance_a_carrier_with_no_monoid_is_a_reported_failure() {
     let e = bad(
         "inductive Colour { Red, Green }
 fn first(a: Colour, b: Colour) -> Colour { a }
@@ -445,7 +470,7 @@ fn fold_colours(cs: List<Colour>) -> Colour { mconcat(first, cs) }",
 /// would have made this test pass for the wrong reason, so the fixture moved to
 /// a global only `std/nat` declares.
 #[test]
-fn a_member_name_that_shadows_a_global_is_ambiguous_at_a_receiver() {
+fn slow_acceptance_a_member_name_that_shadows_a_global_is_ambiguous_at_a_receiver() {
     let e = bad(
         "class Cmp2<A> { sub: A -> A -> A }
 instance Cmp2<Nat> { sub := sub }
@@ -460,7 +485,7 @@ fn f(a: Nat, b: Nat) -> Nat { a.sub(b) }",
 /// binder is a `Semigroup` goal at that binder's own operation, answered by
 /// upcast. The two that merely inherit `assoc` are not candidates at all.
 #[test]
-fn an_inherited_member_is_reached_at_its_owner() {
+fn slow_acceptance_an_inherited_member_is_reached_at_its_owner() {
     ok("
 theorem assoc_from_a_monoid<A: Monoid(o)>(o: A -> A -> A, x: A, y: A, z: A):
   o(o(x, y), z) = o(x, o(y, z)) { x.assoc(y, z) }
@@ -476,7 +501,7 @@ theorem assoc_from_a_comm_monoid<A: CommMonoid(o)>(o: A -> A -> A, x: A, y: A, z
 /// (`docs/operation-indexed-classes-design.md` §5.1). Scope, then refuse — and
 /// here there is no scope.
 #[test]
-fn dispatch_at_a_concrete_carrier_is_refused_by_name() {
+fn slow_acceptance_dispatch_at_a_concrete_carrier_is_refused_by_name() {
     let e = bad("theorem nope(a: Bool, b: Bool, c: Bool): and(and(a, b), c) = and(a, and(b, c)) {
   a.assoc(b, c)
 }");
@@ -493,7 +518,7 @@ fn dispatch_at_a_concrete_carrier_is_refused_by_name() {
 /// two records that no conversion relates. Nothing here is concrete, so no
 /// registry entry and no synthesized parent global can be the one answering.
 #[test]
-fn dispatch_upcasts_from_a_child_dictionary_at_an_open_carrier() {
+fn slow_acceptance_dispatch_upcasts_from_a_child_dictionary_at_an_open_carrier() {
     ok("
 theorem unit_r_from_a_comm_monoid<G> requires m: CommMonoid<G>(o) (o: G -> G -> G, x: G):
   o(x, m.unit) = x { x.unit_r() }
@@ -509,7 +534,7 @@ theorem two_hops<G> requires m: CommMonoid<G>(o) (o: G -> G -> G, x: G, y: G, z:
 /// at `AddMonoid<G>` is discharged from an `AddCommMonoid<G>` binder, at an
 /// open `G`, with the dictionary never written at the use site.
 #[test]
-fn a_parent_lemma_resolves_from_a_child_binder_at_an_open_carrier() {
+fn slow_acceptance_a_parent_lemma_resolves_from_a_child_binder_at_an_open_carrier() {
     ok("
 theorem left_unit<G> requires m: Monoid<G>(o) (o: G -> G -> G, x: G): o(m.unit, x) = x {
   m.unit_l(x)
@@ -539,7 +564,7 @@ fn use_grandparent<G> requires m: CommMonoid<G>(o) (o: G -> G -> G, x: G) -> G {
 /// 35.9 s before it and 0.94 s after, because the two spellings stopped being
 /// two terms.
 #[test]
-fn a_projection_through_an_upcast_is_the_childs_own_field() {
+fn slow_acceptance_a_projection_through_an_upcast_is_the_childs_own_field() {
     ok("
 fn anon<G: CommMonoid(o)>(o: G -> G -> G, x: G) -> G { o(x, G.unit) }
 theorem anon_is_the_dictionary<G> requires a: CommMonoid<G>(o) (o: G -> G -> G, x: G):
@@ -563,7 +588,7 @@ theorem at_bool(a: Bool): anon(or, a) = or(a, False) { refl }
 /// the rewrite is seen to agree with owner-dispatch §2.2 rather than to lean on
 /// it.
 #[test]
-fn an_override_still_upcasts_to_its_own_field() {
+fn slow_acceptance_an_override_still_upcasts_to_its_own_field() {
     ok("
 class Sg<A> { sop: A -> A -> A }
 class Mn<A> extends Sg<A> { munit: A }
@@ -589,7 +614,7 @@ theorem at_nat(a: Nat, b: Nat): twice_over(a) = add(a, a) { refl }
 /// statement mentions no dictionary, so resolution is the *only* thing that
 /// can fail here.
 #[test]
-fn upcast_does_not_fire_between_unrelated_classes() {
+fn slow_acceptance_upcast_does_not_fire_between_unrelated_classes() {
     let e = bad(
         "fn dbl<G> requires m: Monoid<G>(o) (o: G -> G -> G, x: G) -> G { o(m.unit, x) }
 fn nope<G> requires c: Cmp<G> (o: G -> G -> G, x: G) -> G { dbl(o, x) }",
@@ -606,7 +631,7 @@ fn yes<G> requires m: CommMonoid<G>(o) (o: G -> G -> G, x: G) -> G { dbl2(o, x) 
 /// and the receiver still refuses to choose, naming both
 /// (`docs/traits-receiver-dispatch-design.md` §4 rule 3, unchanged).
 #[test]
-fn two_unrelated_owners_of_one_name_are_still_ambiguous() {
+fn slow_acceptance_two_unrelated_owners_of_one_name_are_still_ambiguous() {
     let e = bad(
         "class Ordish<A> { le: A -> A -> Bool }
 instance Ordish<Nat> { le := nat::leb }
@@ -619,7 +644,7 @@ fn f(a: Nat, b: Nat) -> Bool { a.le(b) }",
 /// `Monoid` is now the hierarchy it always wanted to be, with `op` declared by
 /// `Semigroup` and reached through the child dictionary by upcast.
 #[test]
-fn a_member_of_one_class_dispatches() {
+fn slow_acceptance_a_member_of_one_class_dispatches() {
     ok("
 // generic, at the linked index: the operation is a variable and the member is
 // reached through the binder.
@@ -637,7 +662,7 @@ theorem one_unit(): Nat::Monoid(add).unit = Nat::CommMonoid(add).unit { refl }
 /// The load-bearing claim is that `Nat.zero` is the very term
 /// `Nat::AddMonoid.zero` is, so the migration moved a spelling and not a value.
 #[test]
-fn the_library_projects_from_its_types() {
+fn slow_acceptance_the_library_projects_from_its_types() {
     ok("
 // open, which is where `A.unit` lives in the library: the binder in scope
 // pins the index and the projection is an ordinary field read.
@@ -657,7 +682,7 @@ theorem the_empty_nat_fold(): sum(Nil) = Nat::Monoid(add).unit { refl }
 /// instance listed — the diagnosis a reader needs in order to know which
 /// structure was wanted (`docs/operation-indexed-classes-design.md` §11).
 #[test]
-fn an_unconstrained_type_parameter_reports_the_search() {
+fn slow_acceptance_an_unconstrained_type_parameter_reports_the_search() {
     let e = bad("fn nope<A>() -> A { A.unit }");
     assert!(e.contains("not pinned"), "{e}");
     assert!(e.contains("Monoid<Nat>(add)") && e.contains("Monoid<Bool>(or)"), "{e}");

@@ -1,6 +1,6 @@
 ---
 title: Squash ∥·∥ and SProp inductives: the restricted eliminator
-status: open
+status: closed
 labels: [kernel,delam,design]
 created: 2026-08-02
 updated: 2026-08-25
@@ -185,7 +185,8 @@ rule freezes; no normal-form readback is involved.
   syntax accepts `∥A∥` / `Squash<A>`, inferred or checked `squash(a)`, and
   `squash_ind(q, λ z => B, λ x => b)`. No general SProp classifier and no
   `sEq`/`sEmpty` bridge landed; those remain explicit follow-on choices.
-- 2026-08-25: The issue remains OPEN for its second half: deciding whether
-  user-defined SProp inductives, a target classifier, or either atomic bridge
-  has a concrete customer. None of those are required by the implemented
-  squash former.
+- 2026-08-25: CLOSED under the tracker ownership rule. The implemented narrow
+  slice is complete. Residue is re-homed to [[squash-library-api]] (derived
+  client API), [[squash-code-reflection-coverage]] (surface staging pin),
+  [[metatheory-ch07-squash]] (full FT pass), and
+  [[sprop-inductives-and-squash-bridges]] (the deferred design decision).

@@ -5,6 +5,13 @@
 //! hand-run-first): the artifacts below are written by hand in exactly the
 //! shape the generator emits, so that what the generator has to produce is
 //! known to be checkable before anything produces it.
+//!
+//! The broad hand-run/negative matrix is intentionally slow-lane coverage:
+//! tests prefixed `slow_acceptance_` run under plain `scripts/test` and are
+//! skipped by `scripts/test --fast`. The fast lane retains the two generated
+//! cross-axis positives, one end-to-end transfer, and one kernel-refusal
+//! control; those four exercise generation rather than repeating every
+//! stable emitted shape.
 
 use heather_elab::Elaborator;
 
@@ -28,7 +35,7 @@ datarepr ListTok for List<Tok> := repr::naive();
 /// The hand-run for verification item (b): `length`, a structural fn over
 /// `List<Tok>`, transferred to the naive repr through the fold anchor.
 #[test]
-fn hand_run_a_derived_impl_over_the_naive_list_repr() {
+fn slow_acceptance_hand_run_a_derived_impl_over_the_naive_list_repr() {
     ok(&format!(
         "{LIST}
 fn length(l: List<Tok>) -> Nat {{ match l {{ Nil => Zero, Cons(h, t) => Succ(length(t)) }} }}
@@ -70,7 +77,7 @@ impl length for ListTok {{
 /// by its commutation law". Nothing parallel to the `List` route: one extra
 /// lemma shape, chosen by whether the result is repr-typed.
 #[test]
-fn hand_run_a_derived_impl_at_bin_where_the_result_is_the_spec_type() {
+fn slow_acceptance_hand_run_a_derived_impl_at_bin_where_the_result_is_the_spec_type() {
     ok(&format!(
         "{BIN_REPR}
 fn double_spec(n: Nat) -> Nat {{ match n {{ Zero => Zero, Succ(k) => Succ(Succ(double_spec(k))) }} }}
@@ -120,7 +127,7 @@ impl double_spec for BinNat {{
 /// `True` and it could have been elided. This is the schema; the canonical-inv
 /// hand-run below is the same schema where the third lemma has content.
 #[test]
-fn hand_run_the_generated_shape_for_a_repr_typed_result_at_bin() {
+fn slow_acceptance_hand_run_the_generated_shape_for_a_repr_typed_result_at_bin() {
     ok(&format!(
         "{BIN_REPR}
 fn double_spec(n: Nat) -> Nat {{ match n {{ Zero => Zero, Succ(k) => Succ(Succ(double_spec(k))) }} }}
@@ -196,7 +203,7 @@ impl double_spec for BinNat {{
 /// `sr` is bound only to keep the repeated recursor spelling honest; the
 /// text is otherwise written out as the generator emits it.
 #[test]
-fn hand_run_a_repr_typed_result_where_inv_preservation_has_content() {
+fn slow_acceptance_hand_run_a_repr_typed_result_where_inv_preservation_has_content() {
     let alg = "BinC::mk_Zero(), λ a0 b0 => BinC::mk_Succ(BinC::mk_Succ(b0))";
     let sr = |x: &str| format!("BinC::spec_rec(Bin, {alg}, {x})");
     let (sr_a0, sr_x) = (sr("a0"), sr("x"));
@@ -338,7 +345,7 @@ fn tsize(x: Tree) -> Nat {{
 }
 
 #[test]
-fn a_transfer_to_a_non_naive_repr_checks_end_to_end() {
+fn slow_acceptance_a_transfer_to_a_non_naive_repr_checks_end_to_end() {
     // `Bin`: `abs` is a real binary evaluation, so the derived body folds
     // over the representation and the certificate has content beyond `refl`.
     let mut e = ok(&format!(
@@ -357,7 +364,7 @@ fn tally(n: Nat) -> Ct {{ match n {{ Zero => CZ, Succ(k) => CS(tally(k)) }} }}
 /// derived body's algebra is at the carrier and the certificate is the
 /// image-spine induction rather than the recursor-unfolding one.
 #[test]
-fn arithmetic_at_bin_transfers_when_the_result_is_repr_typed() {
+fn slow_acceptance_arithmetic_at_bin_transfers_when_the_result_is_repr_typed() {
     let mut e = ok(&format!(
         "{BIN_REPR}
 fn double_spec(n: Nat) -> Nat {{ match n {{ Zero => Zero, Succ(k) => Succ(Succ(double_spec(k))) }} }}
@@ -384,7 +391,7 @@ fn double_spec(n: Nat) -> Nat {{ match n {{ Zero => Zero, Succ(k) => Succ(Succ(d
 /// every commutation law in the certificate is now paid for by the
 /// `inv`-preservation lemma, which no longer holds by `refl`.
 #[test]
-fn a_repr_typed_result_transfers_at_a_repr_with_a_real_invariant() {
+fn slow_acceptance_a_repr_typed_result_transfers_at_a_repr_with_a_real_invariant() {
     let mut e = ok(&format!(
         "{BIN_CANON}
 fn double_spec(n: Nat) -> Nat {{ match n {{ Zero => Zero, Succ(k) => Succ(Succ(double_spec(k))) }} }}
@@ -443,7 +450,7 @@ fn mirror(x: Tree) -> Tree {{
 /// `BinMin::fold()` and `fold_law()` without knowing that neither was
 /// written, and the `Impl` it registers computes at the carrier.
 #[test]
-fn a_transfer_at_a_repr_whose_fold_is_defaulted() {
+fn slow_acceptance_a_transfer_at_a_repr_whose_fold_is_defaulted() {
     let mut e = ok(&format!(
         "{BIN_MIN}
 fn double_spec(n: Nat) -> Nat {{ match n {{ Zero => Zero, Succ(k) => Succ(Succ(double_spec(k))) }} }}
@@ -467,7 +474,7 @@ fn double_spec(n: Nat) -> Nat {{ match n {{ Zero => Zero, Succ(k) => Succ(Succ(d
 // thing in the certificate unobservable. `UnC` folds on the **carrier**.
 
 #[test]
-fn a_transfer_at_a_repr_whose_fold_is_not_through_abs() {
+fn slow_acceptance_a_transfer_at_a_repr_whose_fold_is_not_through_abs() {
     let mut e = ok(&format!(
         "{UNARY_CANON}
 fn double_spec(n: Nat) -> Nat {{ match n {{ Zero => Zero, Succ(k) => Succ(Succ(double_spec(k))) }} }}
@@ -490,7 +497,7 @@ fn double_spec(n: Nat) -> Nat {{ match n {{ Zero => Zero, Succ(k) => Succ(Succ(d
 /// are convertible for an algebra that ignores the spec child. Here they are
 /// two different stuck terms, and the mutation is refused.
 #[test]
-fn the_refines_inv_transport_direction_is_observable_when_fold_is_not_through_abs() {
+fn slow_acceptance_the_refines_inv_transport_direction_is_observable_when_fold_is_not_through_abs() {
     let mut e = ok(&format!(
         "{UNARY_CANON}
 fn double_spec(n: Nat) -> Nat {{ match n {{ Zero => Zero, Succ(k) => Succ(Succ(double_spec(k))) }} }}
@@ -506,7 +513,7 @@ fn double_spec(n: Nat) -> Nat {{ match n {{ Zero => Zero, Succ(k) => Succ(Succ(d
 /// fixture rather than left implicit: at `BinC` the identical mutation checks.
 /// Recording it keeps a future reader from "fixing" the note above.
 #[test]
-fn the_same_mutation_is_invisible_where_fold_is_defined_through_abs() {
+fn slow_acceptance_the_same_mutation_is_invisible_where_fold_is_defined_through_abs() {
     let (mut e, text) = base_double();
     let bad = text.replacen("j(sym(", "j((", 1);
     assert_ne!(bad, text, "the mutation must apply");
@@ -575,7 +582,7 @@ fn a_perturbed_derived_body_is_refused_by_its_own_refines() {
 }
 
 #[test]
-fn a_perturbed_base_case_is_refused() {
+fn slow_acceptance_a_perturbed_base_case_is_refused() {
     let (mut e, text) = base_length();
     // The derived body's base value only: `::fold(` does not match the
     // `::fold_law(` citation beside it, which quantifies over the same algebra.
@@ -585,7 +592,7 @@ fn a_perturbed_base_case_is_refused() {
 }
 
 #[test]
-fn a_closing_lemma_over_the_wrong_statement_is_refused() {
+fn slow_acceptance_a_closing_lemma_over_the_wrong_statement_is_refused() {
     // The induction that links the spec fn to its recursor unfolding, aimed
     // at a different function: the proof term is unchanged and the statement
     // is a lie.
@@ -596,7 +603,7 @@ fn a_closing_lemma_over_the_wrong_statement_is_refused() {
 }
 
 #[test]
-fn a_forced_emission_outside_the_fragment_fails_to_check() {
+fn slow_acceptance_a_forced_emission_outside_the_fragment_fails_to_check() {
     // `stunted` reaches its recursive child directly instead of through the
     // recursion, so the generator declines it. Forcing the emission's *shape*
     // by hand — the fold with an algebra read off the arms — produces
@@ -638,7 +645,7 @@ fn double_spec(n: Nat) -> Nat {{ match n {{ Zero => Zero, Succ(k) => Succ(Succ(d
 }
 
 #[test]
-fn a_perturbed_image_spine_is_refused() {
+fn slow_acceptance_a_perturbed_image_spine_is_refused() {
     // One `Succ` image dropped from the algebra, consistently everywhere: the
     // derived body still computes, the two closing lemmas are still about the
     // body that is there, and `refines` is what notices that it halves.
@@ -652,7 +659,7 @@ fn a_perturbed_image_spine_is_refused() {
 }
 
 #[test]
-fn a_perturbed_commutation_step_is_refused() {
+fn slow_acceptance_a_perturbed_commutation_step_is_refused() {
     // The `j` motive of one link in the image chain no longer abstracts the
     // position it rewrites, so its `refl` no longer proves the base case.
     let (mut e, text) = base_double();
@@ -662,7 +669,7 @@ fn a_perturbed_commutation_step_is_refused() {
 }
 
 #[test]
-fn a_perturbed_inv_preservation_proof_is_refused() {
+fn slow_acceptance_a_perturbed_inv_preservation_proof_is_refused() {
     // The inner closure law is applied to the accumulator instead of to the
     // image built on top of it: `inv` of the wrong term. Invisible at
     // `inv = True`, which is why this fixture exists.
@@ -677,7 +684,7 @@ fn a_perturbed_inv_preservation_proof_is_refused() {
 }
 
 #[test]
-fn the_third_lemma_at_the_wrong_value_is_refused() {
+fn slow_acceptance_the_third_lemma_at_the_wrong_value_is_refused() {
     // `refines_inv` carries the `inv`-preservation lemma back across the
     // anchor law; aimed at a *literal* instead of at the value being folded,
     // it proves `inv` of something else.
@@ -697,7 +704,7 @@ fn the_third_lemma_at_the_wrong_value_is_refused() {
 }
 
 #[test]
-fn a_forced_repr_typed_emission_outside_the_fragment_fails_to_check() {
+fn slow_acceptance_a_forced_repr_typed_emission_outside_the_fragment_fails_to_check() {
     // `pred_bad` hands back its recursive child, so the generator declines it.
     // Forcing the schema shows what the decline protects: the child is at the
     // carrier on the repr side and at `S` on the spec side, so the algebra the
@@ -724,7 +731,7 @@ theorem pred_bad_abs_alg(x: Nat):
 // -- declines (§3.3) -------------------------------------------------------
 
 #[test]
-fn the_decline_boundary_names_its_reasons() {
+fn slow_acceptance_the_decline_boundary_names_its_reasons() {
     let mut e = ok(&format!(
         "{LIST}
 inductive Pair {{ P(a: Nat, b: Nat) }}
@@ -779,7 +786,7 @@ fn zeroish(n: Nat) -> Nat {{ match n {{ Zero => 0, Succ(k) => Succ(zeroish(k)) }
 /// touched). The admission is the positive half of this test; the wording is
 /// the rest.
 #[test]
-fn a_split_bodied_transfer_is_admitted_and_declined_in_its_own_words() {
+fn slow_acceptance_a_split_bodied_transfer_is_admitted_and_declined_in_its_own_words() {
     let mut e = ok(&format!(
         "{LIST}
 fn slength(l: List<Tok>) -> Nat {{
@@ -823,7 +830,7 @@ fn s_default(l: List<Tok>) -> Nat {{
 /// The control the fix needs: hardcoding `split` would pass the test above.
 /// The same three shapes spelled `match` are still described as a `match`.
 #[test]
-fn a_match_bodied_transfers_declines_still_name_match() {
+fn slow_acceptance_a_match_bodied_transfers_declines_still_name_match() {
     let e = ok(&format!(
         "{LIST}
 fn m_stmts(l: List<Tok>) -> Nat {{
@@ -866,7 +873,7 @@ fn m_default(l: List<Tok>) -> Nat {{ match l {{ _ => Zero }} }}
 /// `S` feeding a callee that consumes `S`, so the step is closed by `single`'s
 /// `refines` *and* `refines_inv` chained into `length`'s `refines`.
 #[test]
-fn hand_run_a_transfer_over_resolved_callees() {
+fn slow_acceptance_hand_run_a_transfer_over_resolved_callees() {
     ok(&format!(
         "{LIST}
 fn add(a: Nat, b: Nat) -> Nat {{ match b {{ Zero => a, Succ(k) => Succ(add(a, k)) }} }}
@@ -976,7 +983,7 @@ impl count for ListTok {{
 /// (see the decline below). Run at `BinC`, where `inv` is a canonical form and
 /// every one of those obligations has content.
 #[test]
-fn hand_run_a_resolved_callee_at_a_repr_with_a_real_invariant() {
+fn slow_acceptance_hand_run_a_resolved_callee_at_a_repr_with_a_real_invariant() {
     let alg = "BinC::mk_Zero(), λ k b0 => Impl(double_spec, BinC)::body(BinC::mk_Succ(b0))";
     let sr = |x: &str| format!("BinC::spec_rec(Bin, {alg}, {x})");
     let (sr_k, sr_x) = (sr("k"), sr("x"));
@@ -1073,7 +1080,7 @@ fn count(l: List<Tok>) -> Nat {
 /// so the step is closed by `single`'s `refines` and `refines_inv` feeding
 /// `length`'s `refines`.
 #[test]
-fn a_transfer_resolves_callees_of_either_provenance() {
+fn slow_acceptance_a_transfer_resolves_callees_of_either_provenance() {
     let mut e = ok(&format!("{LIST}{COUNT}"));
     transfer(&mut e, "length", "ListTok");
     let text = transfer(&mut e, "count", "ListTok");
@@ -1092,7 +1099,7 @@ fn a_transfer_resolves_callees_of_either_provenance() {
 /// here, so the emission has to contain both `Impl`s, the callee's before the
 /// caller's — the topological order the doc asks for.
 #[test]
-fn a_missing_in_fragment_callee_is_generated_first() {
+fn slow_acceptance_a_missing_in_fragment_callee_is_generated_first() {
     let mut e = ok(&format!("{LIST}{COUNT}"));
     let text = transfer(&mut e, "count", "ListTok");
     let callee = text.find("impl length for ListTok").expect("the callee's `Impl`");
@@ -1107,7 +1114,7 @@ fn a_missing_in_fragment_callee_is_generated_first() {
 /// there. This is the open registry's cost basis stated as a test: the
 /// caller's certificate resolves four names and never asks who wrote them.
 #[test]
-fn the_callers_certificate_is_indifferent_to_how_the_callee_was_implemented() {
+fn slow_acceptance_the_callers_certificate_is_indifferent_to_how_the_callee_was_implemented() {
     let mut generated = ok(&format!("{LIST}{COUNT}"));
     transfer(&mut generated, "length", "ListTok");
     let over_generated = generated.reprgen("count", "ListTok").expect("green").text;
@@ -1165,7 +1172,7 @@ fn pred_via(n: Nat) -> Nat { match n { Zero => Zero, Succ(k) => double_spec(k) }
 ";
 
 #[test]
-fn resolved_callees_transfer_at_a_repr_with_a_real_invariant() {
+fn slow_acceptance_resolved_callees_transfer_at_a_repr_with_a_real_invariant() {
     let mut e = ok(&format!("{BIN_CANON}{HEXA}"));
     // `double_spec` has no `Impl` and is in the fragment, so the transfer of
     // `hexa` generates it on the way — at the repr where `inv` has content.
@@ -1195,7 +1202,7 @@ fn base_hexa() -> (Elaborator, String) {
 }
 
 #[test]
-fn a_callee_step_closed_by_the_wrong_callees_refines_is_refused() {
+fn slow_acceptance_a_callee_step_closed_by_the_wrong_callees_refines_is_refused() {
     let (mut e, text) = base_hexa();
     let bad = text.replace("Impl_BinC_succ2::refines(", "Impl_BinC_double_spec::refines(");
     assert_ne!(bad, text, "the mutation must apply");
@@ -1203,7 +1210,7 @@ fn a_callee_step_closed_by_the_wrong_callees_refines_is_refused() {
 }
 
 #[test]
-fn a_callee_step_closed_at_the_wrong_argument_is_refused() {
+fn slow_acceptance_a_callee_step_closed_at_the_wrong_argument_is_refused() {
     // `succ2`'s `refines` aimed one node down the spine: the equation it
     // proves is about the value its argument was built from, not the value.
     let (mut e, text) = base_hexa();
@@ -1217,7 +1224,7 @@ fn a_callee_step_closed_at_the_wrong_argument_is_refused() {
 }
 
 #[test]
-fn a_callees_inv_hypothesis_paid_by_the_wrong_lemma_is_refused() {
+fn slow_acceptance_a_callees_inv_hypothesis_paid_by_the_wrong_lemma_is_refused() {
     // A callee's `refines` demands `inv` at its repr-typed argument, and the
     // node below it pays. Paying with the *equation* instead of the invariant
     // is the mistake `inv = True` would hide, which is why this runs at `BinC`.
@@ -1229,7 +1236,7 @@ fn a_callees_inv_hypothesis_paid_by_the_wrong_lemma_is_refused() {
 }
 
 #[test]
-fn a_forced_callee_at_a_recursive_child_fails_to_check() {
+fn slow_acceptance_a_forced_callee_at_a_recursive_child_fails_to_check() {
     // The decline this stage did *not* lift: a recursive child handed to a
     // resolved callee. The arm becomes the fold's algebra, which is spelled
     // once and typed twice — at the carrier for the fold and at `S` for the
@@ -1257,7 +1264,7 @@ theorem pred_via_abs_alg(x: Nat):
 /// sibling case). The declaration-order fix landed the emission side of this;
 /// this is the reader side.
 #[test]
-fn the_recursive_child_is_read_at_the_recursion_parameters_index() {
+fn slow_acceptance_the_recursive_child_is_read_at_the_recursion_parameters_index() {
     let mut e = ok(&format!(
         "{LIST}
 fn length_at(l: List<Tok>, k: Nat) -> Nat {{
@@ -1270,7 +1277,7 @@ fn length_at(l: List<Tok>, k: Nat) -> Nat {{
 }
 
 #[test]
-fn the_callee_decline_boundary_names_its_reasons() {
+fn slow_acceptance_the_callee_decline_boundary_names_its_reasons() {
     let e = ok(&format!(
         "{BIN_CANON}{HEXA}
 // An arm that mentions the value being matched.

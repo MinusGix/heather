@@ -1,9 +1,15 @@
 //! Public fixed-width bitvectors and their generic arithmetic/bit-operation
 //! kit. The carrier is exercised at closed and open widths; closed numerals
 //! alone would miss an index or motive that was accidentally specialized.
+//!
+//! The fast lane keeps the ungated module check, the width/open-carrier
+//! probe, and the open law kit. The three closed computational cross-products
+//! are stable exhaustive acceptance and use the `slow_acceptance_` prefix.
 
 use heather_elab::{ElabError, Elaborator};
 use std::sync::Mutex;
+
+mod support;
 
 static ELAB_LOCK: Mutex<()> = Mutex::new(());
 
@@ -20,14 +26,26 @@ const BITVEC: &str = include_str!("../../../lib/std/bitvec.hthr");
 fn run(extra: &str) -> Result<(), String> {
     let _guard = ELAB_LOCK.lock().unwrap_or_else(|p| p.into_inner());
     let mut e = Elaborator::with_prelude().expect("prelude");
-    for (name, src) in [
-        ("logic", LOGIC), ("bool", BOOL), ("nat", NAT), ("option", OPTION),
-        ("pair", PAIR), ("list", LIST), ("algebra", ALGEBRA), ("int", INT),
-        ("bitvec", BITVEC),
-    ] {
-        if let Err(err) = e.elab_module_source(name, src) {
-            return Err(format!("{name}: {}", err.render(src)));
+    let mut prefix_error = None;
+    let mut load = |e: &mut Elaborator| {
+        for (name, src) in [
+            ("logic", LOGIC), ("bool", BOOL), ("nat", NAT), ("option", OPTION),
+            ("pair", PAIR), ("list", LIST), ("algebra", ALGEBRA), ("int", INT),
+            ("bitvec", BITVEC),
+        ] {
+            if let Err(err) = e.elab_module_source(name, src) {
+                prefix_error = Some(format!("{name}: {}", err.render(src)));
+                break;
+            }
         }
+    };
+    if extra.is_empty() {
+        load(&mut e);
+    } else {
+        support::with_decl_cache(&mut e, load);
+    }
+    if let Some(err) = prefix_error {
+        return Err(err);
     }
     if !extra.is_empty() {
         let src = format!("import bitvec;\nimport bool;\nimport logic;\n{extra}");
@@ -68,7 +86,7 @@ theorem z1(): toNat(1, w1()) = 1 { refl }
 }
 
 #[test]
-fn bitwise_shape_and_conversion_compute() {
+fn slow_acceptance_bitwise_shape_and_conversion_compute() {
     ok(r#"
 fn five() -> BitVec(3) { from_bits(3, [True, False, True]) }
 theorem value(): toNat(3, five()) = 5 { refl }
@@ -86,7 +104,7 @@ theorem signed_minus_one(): toInt(4, ofNat(4, 15)) = NegSucc(0) { refl }
 }
 
 #[test]
-fn arithmetic_is_modulo_the_width_and_reports_alu_conditions() {
+fn slow_acceptance_arithmetic_is_modulo_the_width_and_reports_alu_conditions() {
     ok(r#"
 theorem add_wrap(): toNat(4, add(4, ofNat(4, 14), ofNat(4, 3))) = 1 { refl }
 theorem sub_wrap(): toNat(4, sub(4, ofNat(4, 3), ofNat(4, 5))) = 14 { refl }
@@ -102,7 +120,7 @@ theorem width_zero_add(): add(0, zero(0), zero(0)) = zero(0) { refl }
 }
 
 #[test]
-fn slicing_extension_concat_and_shifts_compute() {
+fn slow_acceptance_slicing_extension_concat_and_shifts_compute() {
     ok(r#"
 fn lo() -> BitVec(3) { from_bits(3, [True, False, True]) }
 fn hi() -> BitVec(2) { from_bits(2, [False, True]) }

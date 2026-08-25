@@ -2,7 +2,6 @@
 title: Develop a bounded list, trapping stack API, and representation interface
 status: open
 labels: [stdlib,semantics,design]
-blocked-by: [sprop-squash]
 created: 2026-08-25
 updated: 2026-08-25
 ---
@@ -79,3 +78,6 @@ machine-specific `PUSH` theorem can reuse generic LIFO and capacity results.
   squashed; a separate wrapper is deferred until restricting clients to stack
   operations has a proof customer.  This promotes [[sprop-squash]] from an
   unscheduled foundation item to this issue's direct prerequisite.
+- 2026-08-25: UNBLOCKED: [[sprop-squash]] landed. The optional derived
+  combinator polish is owned by [[squash-library-api]] and does not prevent
+  implementing the container with `squash_ind` directly.
