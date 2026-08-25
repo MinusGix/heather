@@ -1,7 +1,7 @@
 //! The kernel gate as an interceptable boundary
 //! (`issues/parallel-checking-and-caching.md`, `docs/cache-v1-design.md` §1).
 //!
-//! Every finished declaration passes one `typing::check_type` +
+//! Every finished definition or theorem passes one `typing::check_type` +
 //! `typing::check_term` pair before it is committed, at exactly three sites:
 //! [`crate::Elaborator::elab_decl_inner`] (user `fn`/`theorem`),
 //! `gendefs::push_gen_def` (the generated definitions) — both of which push
@@ -9,7 +9,9 @@
 //! `meta fn`, checked at `Layer::Meta` and registered in the meta-def table
 //! rather than pushed; `lands_in_psi` is how an oracle tells the two apart).
 //! This module is the seam that lets something outside the elaborator watch
-//! those sites and, if it can vouch for the declaration, say so.
+//! those sites and, if it can vouch for the declaration, say so. Explicit
+//! axioms have no term gate; [`KernelGate::assumption`] announces their
+//! separately checked statement so caches retain the trust distinction.
 //!
 //! It is deliberately the smallest surface that can carry a content-addressed
 //! cache: one trait, one item struct, one setter. The elaborator holds no
@@ -84,6 +86,18 @@ pub trait KernelGate {
     /// `false` from [`Self::admits`] — never after a hit, so a gate cannot
     /// mistake its own vouching for evidence.
     fn accepted(&self, psi: &GlobalCtx, item: &GateItem<'_>);
+
+    /// An explicit axiom's statement passed `check_type` and is about to land
+    /// as an opaque binding. A cache observes this separately so an axiom and
+    /// a proved theorem with the same statement never share an interface
+    /// identity. This is notification only: axioms have no proof gate to skip.
+    fn assumption(
+        &self,
+        _psi: &GlobalCtx,
+        _name: &str,
+        _binding: &heather_kernel::term::GlobalBinding,
+    ) {
+    }
 }
 
 /// A gate that never admits anything: the identity, useful as a control.

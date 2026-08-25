@@ -4,6 +4,9 @@
 (theorem_declaration
   name: (_) @name) @item
 
+(axiom_declaration
+  name: (_) @name) @item
+
 [
   (inductive_declaration name: (identifier) @name)
   (record_declaration name: (identifier) @name)

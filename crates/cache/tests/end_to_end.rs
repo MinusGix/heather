@@ -155,6 +155,27 @@ fn editing_a_statement_invalidates_its_dependents() {
     assert_eq!(before["add"], after["add"], "and so must everything before it");
 }
 
+/// An axiom and a proved opaque theorem have the same kernel binding shape,
+/// but not the same trust interface. Replacing one with the other must move a
+/// dependent's closure hash even when the public statement is byte-identical.
+#[test]
+fn proving_an_axiom_changes_dependent_cache_identity() {
+    let assumed = run(
+        "axiom seed(): Nat;\n\
+         theorem dep(): Nat { seed() }",
+    )
+    .recorded();
+    let proved = run(
+        "theorem seed(): Nat { 0 }\n\
+         theorem dep(): Nat { seed() }",
+    )
+    .recorded();
+    assert_ne!(
+        assumed["dep"], proved["dep"],
+        "trust provenance is part of a dependent's cache identity"
+    );
+}
+
 // -- 3. hits and misses -----------------------------------------------------
 
 /// A warm run skips the kernel entirely, and says how much it skipped.

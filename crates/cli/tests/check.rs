@@ -256,3 +256,38 @@ fn obligations_of_an_unchecked_file_lists_nothing() {
     assert!(err.contains("Impl(length, ListTok)::refines"), "{err}");
     assert!(err.contains("nothing to list"), "{err}");
 }
+
+// -- explicit axiom provenance ---------------------------------------------
+
+#[test]
+fn axioms_lists_a_deterministic_path() {
+    let out = heather(&["axioms", "indirect", "axioms.hthr"]);
+    assert_eq!(out.status.code(), Some(0), "stderr: {}", String::from_utf8_lossy(&out.stderr));
+    let text = String::from_utf8_lossy(&out.stdout);
+    assert!(text.contains("axioms::seed (user)"), "{text}");
+    assert!(
+        text.contains("axioms::indirect -> axioms::direct -> axioms::seed"),
+        "{text}"
+    );
+}
+
+#[test]
+fn axioms_json_exposes_direct_edges_and_paths() {
+    let out = heather(&["axioms", "indirect", "--json", "axioms.hthr"]);
+    assert_eq!(out.status.code(), Some(0));
+    let text = String::from_utf8_lossy(&out.stdout);
+    assert!(text.contains("\"direct\": [\"axioms::direct\"]"), "{text}");
+    assert!(text.contains("\"kind\": \"user\""), "{text}");
+    assert!(text.contains("\"path\": [\"axioms::indirect\", \"axioms::direct\", \"axioms::seed\"]"), "{text}");
+}
+
+#[test]
+fn deny_axioms_is_a_check_policy() {
+    let out = heather(&["check", "--deny-axioms", "axioms.hthr"]);
+    assert_eq!(out.status.code(), Some(1));
+    assert!(out.stdout.is_empty(), "{}", String::from_utf8_lossy(&out.stdout));
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.contains("axioms::direct"), "{err}");
+    assert!(err.contains("axioms::indirect"), "{err}");
+    assert!(!err.contains("axioms::clean"), "{err}");
+}

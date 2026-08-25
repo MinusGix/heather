@@ -9,6 +9,7 @@
 use heather_kernel::term::GlobalCtx;
 
 use crate::{Elaborator, MetaPrograms, Names, Representations, Traits, Types, R};
+use crate::provenance::Provenance;
 
 /// A complete snapshot of facts committed by successful declarations.
 ///
@@ -24,6 +25,7 @@ struct SessionCheckpoint {
     traits: Traits,
     representations: Representations,
     meta_programs: MetaPrograms,
+    provenance: Provenance,
 }
 
 impl SessionCheckpoint {
@@ -36,6 +38,7 @@ impl SessionCheckpoint {
             traits: elab.traits.clone(),
             representations: elab.representations.clone(),
             meta_programs: elab.meta_programs.clone(),
+            provenance: elab.provenance.clone(),
         }
     }
 
@@ -47,6 +50,7 @@ impl SessionCheckpoint {
         elab.traits = self.traits;
         elab.representations = self.representations;
         elab.meta_programs = self.meta_programs;
+        elab.provenance = self.provenance;
 
         // Absolute Ψ positions may be reused after rollback. A cached answer
         // for a removed declaration must not become the answer for its future

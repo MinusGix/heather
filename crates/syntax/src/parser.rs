@@ -1517,10 +1517,12 @@ impl Parser {
             DeclKind::Fn
         } else if !is_meta && self.eat_kw("theorem") {
             DeclKind::Theorem
+        } else if !is_meta && self.eat_kw("axiom") {
+            DeclKind::Axiom
         } else if is_meta {
             return self.err("`meta` marks a `fn`: write `meta fn name(…)`");
         } else {
-            return self.err("expected `fn`, `theorem`, or `inductive`");
+            return self.err("expected `fn`, `theorem`, `axiom`, or `inductive`");
         };
         // A declaration head is the one *binding* position where a qualified
         // name is legal: `fn List::nth(…)` attaches the declaration to a
@@ -1730,7 +1732,7 @@ impl Parser {
             DeclKind::Fn => {
                 self.expect(&TokKind::Arrow, "`->`")?;
             }
-            DeclKind::Theorem => {
+            DeclKind::Theorem | DeclKind::Axiom => {
                 self.expect(&TokKind::Colon, "`:`")?;
             }
         }
@@ -1751,7 +1753,24 @@ impl Parser {
                  the parameter list (issues/requires-placement-syntax.md)",
             );
         }
-        let body = self.block()?;
+        let body = if kind == DeclKind::Axiom {
+            let end = self.expect(&TokKind::Semi, "`;` (an axiom has no proof body)")?;
+            // `Decl` predates bodiless declarations and several syntax tools
+            // deliberately operate on its always-present block.  Keep that
+            // invariant with an unreachable sentinel; the elaborator and
+            // lints branch on `kind` and never inspect it.
+            Block {
+                stmts: Vec::new(),
+                result: Box::new(Expr {
+                    kind: ExprKind::Var("#axiom".into()),
+                    span: end,
+                }),
+                ons: Vec::new(),
+                span: end,
+            }
+        } else {
+            self.block()?
+        };
         let span = start.join(body.span);
         Ok(Decl { kind, is_meta, elaborates, name, tyvars, params, result, body, span })
     }
@@ -5737,5 +5756,18 @@ mod tests {
         parse_file("theorem c(): id<Nat>(3) = 3 { refl }").unwrap();
         parse_file("fn d(n: Nat, m: Nat, h: Or<(n < m), (m <= n)>) -> Nat { 0 }").unwrap();
         parse_file("fn e(a: Nat, b: Nat) -> Nat { a < b }").unwrap();
+    }
+
+    #[test]
+    fn axioms_are_explicit_and_bodiless() {
+        let d = parse_file("axiom funext<A>(f, g: A -> A): f = g;")
+            .unwrap()
+            .items
+            .remove(0)
+            .into_decl();
+        assert_eq!(d.kind, DeclKind::Axiom);
+        assert!(parse_file("axiom assumed(): Nat { 0 }").is_err());
+        assert!(parse_file("theorem accidental(): Nat;").is_err());
+        assert!(parse_file("postulate hidden(): Nat;").is_err());
     }
 }

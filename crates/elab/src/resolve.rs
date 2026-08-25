@@ -199,6 +199,10 @@ impl Elaborator {
         }
         tr.push(line(depth, "class", format!("{} ({} instance(s))", ind.name, cands.len())));
         for (g, parameterized, index) in cands {
+            // Candidate construction elaborates a real global reference, but
+            // a rejected candidate is search state rather than part of the
+            // winning term. Only the accepted branch may publish its edges.
+            let dependency_mark = self.attempt.direct_dependencies.borrow().clone();
             // The index is part of the candidate line, not a separate one: at a
             // carrier with two structures the trace has to say *which* was
             // tried, and that is the whole observability the registry key buys
@@ -247,6 +251,7 @@ impl Elaborator {
                 }
                 Err(e) => tr.push(line(depth + 1, "rejected", e.message())),
             }
+            *self.attempt.direct_dependencies.borrow_mut() = dependency_mark;
         }
         None
     }
@@ -436,6 +441,9 @@ impl Elaborator {
     /// binding is that much further out, and a closed statement's delayed
     /// substitution is the empty map out of the current Γ.
     fn derived_ref(&self, cx: &Cx, abs: u32) -> Term {
+        if let Some(key) = self.names.global_name_at(abs) {
+            self.attempt.direct_dependencies.borrow_mut().insert(key.to_string());
+        }
         let len = self.psi.bindings.len() as u32;
         let var = GlobalVar(len - 1 - abs + self.attempt.goal_arena.base());
         Term::GlobalTm {

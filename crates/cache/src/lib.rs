@@ -273,4 +273,19 @@ impl KernelGate for Cache {
             inner.forget();
         }
     }
+
+    fn assumption(
+        &self,
+        psi: &GlobalCtx,
+        _name: &str,
+        binding: &heather_kernel::term::GlobalBinding,
+    ) {
+        let mut inner = self.inner.borrow_mut();
+        inner.sync(psi);
+        let at = inner.prefix.len();
+        let hash = merkle::assumption_interface_hash(&inner.prefix, binding);
+        inner.pending = Some((at, hash));
+        inner.counts.checked += 1;
+        inner.last = None;
+    }
 }

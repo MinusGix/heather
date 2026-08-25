@@ -42,6 +42,7 @@ module.exports = grammar({
       $.import_declaration,
       $.function_declaration,
       $.theorem_declaration,
+      $.axiom_declaration,
       $.inductive_declaration,
       $.record_declaration,
       $.class_declaration,
@@ -70,6 +71,13 @@ module.exports = grammar({
       optional($.type_parameters), optional($.requires_clause),
       field('parameters', $.parameter_list),
       ':', field('return_type', $._declaration_type), field('body', $.block),
+    ),
+
+    axiom_declaration: $ => seq(
+      'axiom', field('name', $.qualified_identifier),
+      optional($.type_parameters), optional($.requires_clause),
+      field('parameters', $.parameter_list),
+      ':', field('return_type', $._declaration_type), ';',
     ),
 
     inductive_declaration: $ => seq(

@@ -9,7 +9,7 @@
 
 use heather_syntax::lexer::{lex, Tok, TokKind};
 use heather_syntax::{
-    Block, ClassRef, DatareprBody, Decl, Expr, ExprKind, FieldDecl, InstanceBody, Item, Param,
+    Block, ClassRef, DatareprBody, Decl, DeclKind, Expr, ExprKind, FieldDecl, InstanceBody, Item, Param,
     MatchForm, Span, Stmt, Ty, TyKind,
 };
 
@@ -172,7 +172,9 @@ pub(crate) fn check_item(item: &Item, source: &Source<'_>) -> Vec<Finding> {
 fn decl(d: &Decl, out: &mut Vec<Finding>) {
     d.params.iter().for_each(|p| param(p, out));
     ty(&d.result, out);
-    block(&d.body, out);
+    if d.kind != DeclKind::Axiom {
+        block(&d.body, out);
+    }
 }
 
 fn param(p: &Param, out: &mut Vec<Finding>) {

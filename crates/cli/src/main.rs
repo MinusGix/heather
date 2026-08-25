@@ -72,12 +72,25 @@ fn main() -> ExitCode {
                 ExitCode::from(2)
             }
         },
+        Some((cmd, rest)) if cmd == "axioms" => match rest.split_first() {
+            Some((target, args)) => match parse_check_args(args) {
+                Ok((opts, files)) if !files.is_empty() => axioms(&opts, target, &files),
+                Ok(_) => usage(),
+                Err(msg) => {
+                    eprintln!("{}: {msg}", color::error_label(stderr_color));
+                    eprintln!("{USAGE}");
+                    ExitCode::from(2)
+                }
+            },
+            None => usage(),
+        },
         _ => usage(),
     }
 }
 
-const USAGE: &str = "usage: heather check [-L <dir>]... [--cache] [--cache-dir <dir>] <file-or-dir>...\n\
-                     \x20      heather obligations [-L <dir>]... [--json] <file.hthr>...";
+const USAGE: &str = "usage: heather check [-L <dir>]... [--cache] [--cache-dir <dir>] [--deny-axioms] <file-or-dir>...\n\
+                     \x20      heather obligations [-L <dir>]... [--json] <file.hthr>...\n\
+                     \x20      heather axioms <target> [-L <dir>]... [--json] <file-or-dir>...";
 
 fn usage() -> ExitCode {
     eprintln!("{USAGE}");
@@ -91,8 +104,12 @@ struct Opts {
     /// neither reads nor writes anything and behaves exactly as before.
     cache: bool,
     cache_dir: PathBuf,
-    /// `--json`: `obligations` only, per `issues/ai-facing-tooling.md`.
+    /// `--json`: structured output for inspection subcommands.
     json: bool,
+    /// Fail a check when any proved/computing declaration reaches a user
+    /// axiom. The axiom declaration itself is an explicit policy input, not a
+    /// violation until something depends on it.
+    deny_axioms: bool,
 }
 
 /// `-L <dir>` (repeatable) and the cache flags may appear before, after or
@@ -104,6 +121,7 @@ fn parse_check_args(args: &[String]) -> Result<(Opts, Vec<String>), String> {
         cache: false,
         cache_dir: PathBuf::from(heather_cache::DEFAULT_DIR),
         json: false,
+        deny_axioms: false,
     };
     let mut files = Vec::new();
     let mut it = args.iter();
@@ -123,6 +141,10 @@ fn parse_check_args(args: &[String]) -> Result<(Opts, Vec<String>), String> {
         }
         if a == "--json" {
             opts.json = true;
+            continue;
+        }
+        if a == "--deny-axioms" {
+            opts.deny_axioms = true;
             continue;
         }
         // `--cache-dir` implies `--cache`: naming a cache and not using it is
@@ -257,6 +279,27 @@ fn check(opts: &Opts, files: &[String]) -> ExitCode {
             let count = format!("{n} error{}", if n == 1 { "" } else { "s" });
             eprintln!("\n{shown}: {}", color::error_count(&count, stderr_color));
         }
+        if root_ok && opts.deny_axioms {
+            let violations = elab.axiom_violations();
+            if !violations.is_empty() {
+                root_ok = false;
+                failed = true;
+                for report in violations {
+                    let names = report
+                        .axioms
+                        .iter()
+                        .map(|a| a.axiom.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    eprintln!(
+                        "{}: `{}` depends on forbidden axiom{} {names}",
+                        color::error_label(stderr_color),
+                        report.target,
+                        if report.axioms.len() == 1 { "" } else { "s" },
+                    );
+                }
+            }
+        }
         if root_ok {
             match (&cache, before) {
                 // The bare `ok` is reserved for a full check, so a green line
@@ -286,6 +329,96 @@ fn check(opts: &Opts, files: &[String]) -> ExitCode {
         eprintln!("cache: could not write {}: {e}", opts.cache_dir.display());
     }
     ExitCode::from(if failed { 1 } else { 0 })
+}
+
+/// `heather axioms <target> [--json] <root>` checks the import closure and
+/// reports the deterministic shortest path from `target` to every assumption.
+fn axioms(opts: &Opts, target: &str, files: &[String]) -> ExitCode {
+    let stderr_color = color::stderr_enabled();
+    for path in files {
+        let mut elab = match Elaborator::with_prelude() {
+            Ok(e) => e,
+            Err(e) => {
+                eprintln!(
+                    "{}: the prelude failed to check: {e}",
+                    color::internal_error_label(stderr_color)
+                );
+                return ExitCode::from(2);
+            }
+        };
+        let roots = match roots_for_path(Path::new(path)) {
+            Ok(roots) => roots,
+            Err(msg) => {
+                eprintln!("{}: {msg}", color::error_label(stderr_color));
+                return ExitCode::from(2);
+            }
+        };
+        let root_refs = roots.iter().map(PathBuf::as_path).collect::<Vec<_>>();
+        let modules = match loader::load_many(&root_refs, &opts.search) {
+            Ok(m) => m,
+            Err(e) => {
+                eprintln!("{}: {}", color::error_label(stderr_color), e.msg);
+                return ExitCode::from(2);
+            }
+        };
+        for m in &modules {
+            let errs = elab.check_module_source(&m.name, &m.src);
+            if errs.is_empty() {
+                continue;
+            }
+            let shown = display_path(&m.path, path);
+            for e in &errs {
+                eprint!(
+                    "{}",
+                    color::diagnostic(
+                        &e.render_snippet(&m.src, &shown),
+                        color::Severity::Error,
+                        stderr_color,
+                    )
+                );
+            }
+            eprintln!("\n{shown}: not checked, so there is no axiom report");
+            return ExitCode::from(1);
+        }
+        let report = match elab.axiom_report(target) {
+            Ok(r) => r,
+            Err(msg) => {
+                eprintln!("{}: {msg}", color::error_label(stderr_color));
+                return ExitCode::from(1);
+            }
+        };
+        if opts.json {
+            println!("{{");
+            println!("  \"target\": {},", json_str(&report.target));
+            println!("  \"is_axiom\": {},", report.is_axiom);
+            println!(
+                "  \"direct\": [{}],",
+                report.direct.iter().map(|s| json_str(s)).collect::<Vec<_>>().join(", ")
+            );
+            println!("  \"axioms\": [");
+            for (i, a) in report.axioms.iter().enumerate() {
+                let path = a.path.iter().map(|s| json_str(s)).collect::<Vec<_>>().join(", ");
+                println!(
+                    "    {{\"name\": {}, \"kind\": {}, \"path\": [{}]}}{}",
+                    json_str(&a.axiom),
+                    json_str(a.kind.as_str()),
+                    path,
+                    if i + 1 == report.axioms.len() { "" } else { "," }
+                );
+            }
+            println!("  ]");
+            println!("}}");
+        } else if report.axioms.is_empty() {
+            println!("{}: no axioms", report.target);
+        } else {
+            println!("{}:", report.target);
+            for a in &report.axioms {
+                println!("  {} ({})", a.axiom, a.kind.as_str());
+                println!("    {}", a.path.join(" -> "));
+            }
+        }
+    }
+    ExitCode::from(0)
 }
 
 /// `heather obligations [--json] <file>` — every obligation-bearing field of

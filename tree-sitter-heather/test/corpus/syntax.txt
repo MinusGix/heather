@@ -253,3 +253,25 @@ fn unfinished<A>(x: A) -> A {
 ---
 
 (source_file)
+
+==================
+Explicit axiom
+==================
+
+axiom choice<A>(fallback: A): A;
+
+---
+
+(source_file
+  (axiom_declaration
+    (qualified_identifier)
+    (type_parameters
+      (type_parameter
+        (identifier)))
+    (parameter_list
+      (parameter
+        (parameter_run
+          (parameter_name
+            (identifier))
+          (identifier))))
+    (identifier)))

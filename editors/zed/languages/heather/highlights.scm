@@ -8,7 +8,7 @@
 
 [
   "import" "inductive" "record" "class" "instance" "designation"
-  "datarepr" "impl" "fn" "theorem" "meta" "requires" "extends"
+  "datarepr" "impl" "fn" "theorem" "axiom" "meta" "requires" "extends"
   "for" "at" "prefix" "mk" "let" "split" "on" "match" "if"
   "else" "as" "code" "calc" "self" "infer"
 ] @keyword
@@ -45,6 +45,7 @@
 
 (function_declaration name: (qualified_identifier) @function)
 (theorem_declaration name: (qualified_identifier) @function)
+(axiom_declaration name: (qualified_identifier) @function)
 (designation_declaration value: (identifier) @function)
 (impl_declaration name: (identifier) @function)
 

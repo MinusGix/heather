@@ -542,6 +542,9 @@ pub(crate) fn count_holes(decl: &Decl) -> u32 {
         ty(&p.ty, &mut n);
     }
     ty(&decl.result, &mut n);
+    if decl.kind == heather_syntax::DeclKind::Axiom {
+        return n;
+    }
     stmts(&decl.body.stmts, &mut n);
     expr(&decl.body.result, &mut n);
     for on in &decl.body.ons {

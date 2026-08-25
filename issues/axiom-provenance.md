@@ -1,9 +1,9 @@
 ---
 title: "Make axioms explicit and report their transitive provenance"
-status: open
+status: closed
 labels: [frontend,proofs,tooling,diagnostics,design]
 created: 2026-08-20
-updated: 2026-08-20
+updated: 2026-08-24
 ---
 
 Heather needs a principled way to state irreducible assumptions such as
@@ -68,6 +68,23 @@ unfold opaque theorem proofs later.
   them.
 
 ## Log
+
+- 2026-08-24: Follow-up design filed as
+  [[implicit-logical-assumptions]]: make assumptions ordinary implicit proof
+  or class parameters, let scoped axioms discharge them as a fallback, and
+  attach provenance to the caller where that choice is made.
+
+- 2026-08-24: Landed complete (`docs/axiom-provenance-design.md`): explicit
+  bodiless `axiom` declarations; body-time dependency capture at the
+  `PendingDecl`/commit boundary; deterministic shortest transitive paths keyed
+  by resolved module identity; instance and generated-declaration propagation
+  with transactional rollback; `heather axioms <target>` text/JSON inspection;
+  `check --deny-axioms`; and a distinct cache-interface domain for assumptions.
+  Controls cover unused and clean declarations, two paths, qualification,
+  synthesized instances, failed generated bundles, and axiom-to-theorem cache
+  invalidation. Heather has no generated-doc command today; the public report
+  data is the single source a future renderer consumes rather than a parallel
+  table.
 
 - 2026-08-20: Filed after auditing the current surface. Heather has no
   `axiom`/`postulate` item; bodiless globals exist in the kernel representation

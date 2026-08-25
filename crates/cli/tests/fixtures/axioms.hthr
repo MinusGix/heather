@@ -1,0 +1,5 @@
+axiom seed(): Nat;
+
+theorem direct(): Nat { seed() }
+theorem indirect(): Nat { direct() }
+theorem clean(): Nat { 0 }

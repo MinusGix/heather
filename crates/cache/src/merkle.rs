@@ -103,6 +103,7 @@ pub type Hash = [u8; 32];
 /// bumped alongside, which is what makes the invalidation *loud* — see
 /// `docs/cache-v1-design.md` §12.)
 const DOMAIN_IFACE: &[u8] = b"heather/iface/2\0";
+const DOMAIN_AXIOM_IFACE: &[u8] = b"heather/axiom-iface/1\0";
 const DOMAIN_CHECK: &[u8] = b"heather/check/2\0";
 
 /// The interface hashes of a Ψ prefix, in binding order.
@@ -1075,6 +1076,15 @@ impl<'a> Walk<'a> {
 /// and every caller treats that as "do not cache", never as an error.
 pub fn interface_hash(prefix: &Prefix, b: &GlobalBinding) -> Option<Hash> {
     let mut w = Walk::new(DOMAIN_IFACE, prefix, prefix.len() as u32);
+    w.binding(b);
+    w.finish()
+}
+
+/// An explicit assumption's interface. Its kernel binding is intentionally
+/// the same opaque `Tm` shape as a theorem; the distinct domain is the
+/// elaborator-side trust fact that must still invalidate cache dependents.
+pub fn assumption_interface_hash(prefix: &Prefix, b: &GlobalBinding) -> Option<Hash> {
+    let mut w = Walk::new(DOMAIN_AXIOM_IFACE, prefix, prefix.len() as u32);
     w.binding(b);
     w.finish()
 }

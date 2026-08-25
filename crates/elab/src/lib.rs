@@ -4,15 +4,15 @@
 //! resolution into the kernel's namespaces and bidirectional
 //! annotation-filling — no metavariables, no level inference (everything in
 //! stage 1 lives at level 0, though levels are tracked honestly), no modal
-//! layer. The kernel remains the gate: every elaborated declaration is
-//! re-checked from scratch by `heather_kernel::typing` before it is
-//! recorded, so nothing here is trusted.
+//! layer. The kernel remains the gate: every definition and theorem is
+//! re-checked from scratch by `heather_kernel::typing`; an explicit axiom's
+//! statement is checked as a type and its assumption status is recorded.
 //!
 //! Definition story (elaborator-design; revised 2026-07-31 by
-//! issues/simulate-conversion-cost.md). Both kinds bind a closed Ψ-global
+//! issues/simulate-conversion-cost.md). All three ordinary kinds bind a closed Ψ-global
 //! `u : Trm_c(· ⊢ Stmt @ l)` and are referenced by name as `u^δ` (ch. 04
 //! admits referencing a layer-c global from any layer ≥ c: `i' ≤ i`,
-//! typing.rs). They differ in one field of that binding:
+//! typing.rs). Definitions and proved theorems differ in one binding field:
 //! - `fn` (computes): the binding carries the elaborated term as its
 //!   **body**, so conversion δ-unfolds it at layer p exactly when running
 //!   it is what a comparison needs. Previously a `fn` was **inlined** at
@@ -21,6 +21,9 @@
 //! - `theorem` (never computes): the proof is kernel-checked against the
 //!   statement, then discarded — the binding stays **opaque**. Later proofs
 //!   refer to it as a neutral; proofs are transported, never evaluated.
+//! - `axiom` (explicit assumption): the statement is checked for
+//!   well-formedness and committed opaque with no proof. Its trust status and
+//!   transitive provenance live elaborator-side (`provenance.rs`).
 //!
 //! Everything is checked at layer c (full MLTT, no computation *rules* —
 //! conversion still β-reduces during checking, which is all the Nat suite
@@ -90,6 +93,8 @@ pub mod reprgen;
 mod names;
 mod oracle;
 mod patterns;
+mod provenance;
+pub use provenance::{AssumptionKind, AxiomReport, AxiomUse};
 mod forded;
 mod gendefs;
 mod goals;
@@ -423,6 +428,8 @@ struct OperatorFallbackUse {
 struct PendingDecl {
     binding: GlobalBinding,
     registration: GlobalRegistration,
+    is_axiom: bool,
+    direct_dependencies: Vec<String>,
 }
 
 /// `Clone` is deliberate and cheap: every field is a `HashMap` of `Rc`s or a
@@ -453,6 +460,8 @@ pub struct Elaborator {
     /// Committed representation declarations, implementations, obligations,
     /// monomorph names, and designed access paths (`representations.rs`).
     representations: Representations,
+    /// Direct declaration edges and their transitive assumption paths.
+    provenance: provenance::Provenance,
     /// Nesting depth of generated-source elaboration. This is execution mode,
     /// not representation registry state; zero means user source.
     generated_depth: usize,
@@ -1105,6 +1114,7 @@ impl Elaborator {
             types: Types::default(),
             traits: Traits::default(),
             representations: Representations::default(),
+            provenance: provenance::Provenance::default(),
             generated_depth: 0,
             impl_provenance: None,
             attempt: DeclAttempt::default(),
@@ -1620,6 +1630,23 @@ impl Elaborator {
         self.traits.derived().iter().map(|d| d.name.as_str()).collect()
     }
 
+    /// Assumptions reachable from one declaration, resolved by the same name
+    /// judgment as an ordinary source reference.
+    pub fn axiom_report(&self, name: &str) -> Result<AxiomReport, String> {
+        let key = self
+            .key_of_kinds(name, &[NameKind::Global])
+            .ok_or_else(|| format!("no visible declaration named `{name}`"))?;
+        self.provenance
+            .report(&key)
+            .ok_or_else(|| format!("`{name}` has no provenance record"))
+    }
+
+    /// Every non-axiom declaration whose proof or body reaches an axiom.
+    /// Sorted by resolved declaration identity.
+    pub fn axiom_violations(&self) -> Vec<AxiomReport> {
+        self.provenance.tainted()
+    }
+
     /// A declared global's elaborated statement and body, by written name —
     /// what an analyzer's input is read out of (the fn to transcribe is an
     /// ordinary declaration, already checked and in Ψ).
@@ -1823,10 +1850,12 @@ impl Elaborator {
     /// become visible to later source unless `check_decl` returned a complete
     /// value after the kernel gate.
     fn commit_decl(&mut self, pending: PendingDecl) {
-        let PendingDecl { binding, registration } = pending;
+        let PendingDecl { binding, registration, is_axiom, direct_dependencies } = pending;
+        let key = registration.key.clone();
         let abs = self.psi.bindings.len() as u32;
         self.psi.push(binding);
         self.names.commit_global(abs, registration);
+        self.provenance.commit(key, is_axiom, direct_dependencies);
         self.refresh_delta_psi();
     }
 
@@ -2046,31 +2075,38 @@ impl Elaborator {
             return err(IMPLICIT_MARK_REFUSED, decl.result.span);
         }
         let (res_ty, res_lvl) = self.elab_ty(&cx, &decl.result)?;
-        cx.selfref = Some(Rc::new(SelfRef {
-            // A member recurses under its **base** name: inside `fn List::nth`
-            // the recursive call is `nth(t)`, not `List::nth(t)`. The self-name
-            // is checked before globals in `resolve`, so this shadows an
-            // ambient `nth` for the body only — which is the same scoping the
-            // name has always had.
-            name: member.map_or_else(|| decl.name.clone(), |(_, base)| base.to_string()),
-            // Type parameters are part of the telescope, so they are part of
-            // the positional bookkeeping a guarded self-call does — as
-            // *implicit* parameters, which is what keeps them out of the
-            // argument list `map(f, tail)` has to match
-            // (docs/surface-polymorphism.md §6.1).
-            params: decl
-                .tyvars
-                .iter()
-                .map(|t| (t.name.clone(), true))
-                .chain(decl.params.iter().map(|p| (p.name.clone(), p.implicit)))
-                .collect(),
-            n_tyvars: decl.tyvars.len(),
-        }));
-        // `let` bindings, then the result expression.
-        let cx = statements::elaborate(self, &cx, &decl.body.stmts)?;
-        let body = self.elab_check(&cx, &decl.body.result, &res_ty, &res_lvl)?;
-        // Discharge every goal the block raised, then substitute them away.
-        self.solve_goals(&decl.body.ons, &decl.name)?;
+        // The graph records what the checked proof/body references, not names
+        // appearing only in its public statement (issues/axiom-provenance.md).
+        self.attempt.direct_dependencies.borrow_mut().clear();
+        if decl.kind != DeclKind::Axiom {
+            cx.selfref = Some(Rc::new(SelfRef {
+                // A member recurses under its **base** name: inside
+                // `fn List::nth` the recursive call is `nth(t)`, not
+                // `List::nth(t)`. The self-name is checked before globals in
+                // `resolve`, so this shadows an ambient `nth` for the body.
+                name: member.map_or_else(|| decl.name.clone(), |(_, base)| base.to_string()),
+                // Type parameters participate in guarded-call bookkeeping as
+                // implicit parameters (docs/surface-polymorphism.md §6.1).
+                params: decl
+                    .tyvars
+                    .iter()
+                    .map(|t| (t.name.clone(), true))
+                    .chain(decl.params.iter().map(|p| (p.name.clone(), p.implicit)))
+                    .collect(),
+                n_tyvars: decl.tyvars.len(),
+            }));
+        }
+        // An axiom has no term to check. Ordinary definitions and theorems
+        // elaborate their block exactly as before.
+        let body = if decl.kind == DeclKind::Axiom {
+            self.solve_goals(&[], &decl.name)?;
+            None
+        } else {
+            let cx = statements::elaborate(self, &cx, &decl.body.stmts)?;
+            let body = self.elab_check(&cx, &decl.body.result, &res_ty, &res_lvl)?;
+            self.solve_goals(&decl.body.ons, &decl.name)?;
+            Some(body)
+        };
         let sigma = self.goal_subst();
 
         // Close over the telescope: statement = Π…, proof/body = λ….
@@ -2100,12 +2136,12 @@ impl Elaborator {
                 Some(r) => r,
                 None => dom,
             };
-            term = Term::Lam {
+            term = term.map(|term| Term::Lam {
                 dom_level: dom_lvl.clone(),
                 cod_level: stmt_lvl.clone(),
                 dom: Rc::new(dom.clone()),
                 body: Rc::new(term),
-            };
+            });
             stmt = Type::Pi {
                 dom_level: dom_lvl.clone(),
                 cod_level: stmt_lvl.clone(),
@@ -2118,7 +2154,7 @@ impl Elaborator {
         // One global substitution fills every goal and renumbers the committed
         // globals back down out of the goal world (`GlobalSubst`'s
         // instantiation semantics). With no holes it is the identity.
-        let term = term.apply_global(&sigma);
+        let term = term.map(|term| term.apply_global(&sigma));
         let stmt = stmt.apply_global(&sigma);
 
         // The kernel is the gate: check the statement, then the term.
@@ -2129,7 +2165,7 @@ impl Elaborator {
         // instead, in which case neither call runs. Nothing installs one by
         // default; `heather check --cache` is the only caller today.
         let empty = LocalCtx::nil();
-        {
+        if let Some(term) = term.as_ref() {
             let item = gate::GateItem {
                 name: &decl.name,
                 ctx: &empty,
@@ -2157,6 +2193,15 @@ impl Elaborator {
                     g.accepted(&self.psi, &item);
                 }
             }
+        } else {
+            // Axioms extend the trusted assumptions, but their statements are
+            // still required to be well-formed kernel types.
+            stats::time_kernel(|| {
+                typing::check_type(
+                    &self.psi, 0, Layer::Prog, &empty, &stmt, &stmt_lvl, self.fuel,
+                )
+            })
+            .map_err(|e| self.kernel_error(&decl.name, decl.span, e))?;
         }
 
         let params = Rc::new(
@@ -2183,7 +2228,7 @@ impl Elaborator {
                 }))
                 .collect::<Vec<_>>(),
         );
-        // Both kinds bind a closed `Trm_c` global; the `fn` is the one that
+        // All three kinds bind a closed `Trm_c` global; the `fn` is the one that
         // keeps its body, so later declarations reference it as `u^δ` and
         // conversion δ-unfolds it at p when — and only when — running it is
         // what the comparison needs.
@@ -2198,12 +2243,26 @@ impl Elaborator {
             ty: Rc::new(stmt),
             level: stmt_lvl,
             body: match decl.kind {
-                DeclKind::Fn => Some(Rc::new(term)),
-                DeclKind::Theorem => None,
+                DeclKind::Fn => Some(Rc::new(term.expect("a function has a body"))),
+                DeclKind::Theorem | DeclKind::Axiom => None,
             },
         };
+        if decl.kind == DeclKind::Axiom
+            && let Some(gate) = self.gate.as_ref()
+        {
+            gate.assumption(&self.psi, &decl.name, &binding);
+        }
+        let direct_dependencies = self
+            .attempt
+            .direct_dependencies
+            .borrow()
+            .iter()
+            .cloned()
+            .collect();
         Ok(PendingDecl {
             binding,
+            is_axiom: decl.kind == DeclKind::Axiom,
+            direct_dependencies,
             registration: GlobalRegistration {
                 name: decl.name.clone(),
                 key: qkey(self.names.module(), &decl.name),
@@ -4708,8 +4767,11 @@ impl Elaborator {
                 span,
             );
         }
-        match self.lookup_global(name) {
-            Some(GlobalInfo { abs, .. }) => {
+        let resolved_global = self
+            .key_of(self.instance_alias(name))
+            .and_then(|key| self.names.global(&key).map(|info| (key, info)));
+        match resolved_global {
+            Some((key, GlobalInfo { abs, .. })) => {
                 let len = self.psi.bindings.len() as u32;
                 // The goals sit innermost, so a committed binding is that much
                 // further out — and so do a `meta fn`'s Ψ-extending binders
@@ -4752,6 +4814,7 @@ impl Elaborator {
                 // while `fn`s were inlined, because then a closed statement
                 // really had nothing delayed inside it.
                 let ty = ty.apply_local(&subst);
+                self.attempt.direct_dependencies.borrow_mut().insert(key);
                 Ok((Term::GlobalTm { var, subst }, ty, level.clone()))
             }
             // The last stop for every written name, so this is where an

@@ -142,6 +142,10 @@
     "named": true,
     "subtypes": [
       {
+        "type": "axiom_declaration",
+        "named": true
+      },
+      {
         "type": "class_declaration",
         "named": true
       },
@@ -270,6 +274,120 @@
           }
         ]
       }
+    }
+  },
+  {
+    "type": "axiom_declaration",
+    "named": true,
+    "fields": {
+      "name": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "qualified_identifier",
+            "named": true
+          }
+        ]
+      },
+      "parameters": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "parameter_list",
+            "named": true
+          }
+        ]
+      },
+      "return_type": {
+        "multiple": true,
+        "required": true,
+        "types": [
+          {
+            "type": "(",
+            "named": false
+          },
+          {
+            "type": ")",
+            "named": false
+          },
+          {
+            "type": "builtin_type",
+            "named": true
+          },
+          {
+            "type": "contextual_identifier",
+            "named": true
+          },
+          {
+            "type": "declaration_binary_type",
+            "named": true
+          },
+          {
+            "type": "declaration_call_type",
+            "named": true
+          },
+          {
+            "type": "declaration_function_type",
+            "named": true
+          },
+          {
+            "type": "declaration_member_type",
+            "named": true
+          },
+          {
+            "type": "declaration_prefix_type",
+            "named": true
+          },
+          {
+            "type": "declaration_quantified_type",
+            "named": true
+          },
+          {
+            "type": "hole",
+            "named": true
+          },
+          {
+            "type": "identifier",
+            "named": true
+          },
+          {
+            "type": "number",
+            "named": true
+          },
+          {
+            "type": "qualified_identifier",
+            "named": true
+          },
+          {
+            "type": "type_arguments",
+            "named": true
+          },
+          {
+            "type": "universe",
+            "named": true
+          },
+          {
+            "type": "vector_type",
+            "named": true
+          }
+        ]
+      }
+    },
+    "children": {
+      "multiple": true,
+      "required": false,
+      "types": [
+        {
+          "type": "requires_clause",
+          "named": true
+        },
+        {
+          "type": "type_parameters",
+          "named": true
+        }
+      ]
     }
   },
   {
@@ -3951,6 +4069,10 @@
   },
   {
     "type": "at",
+    "named": false
+  },
+  {
+    "type": "axiom",
     "named": false
   },
   {

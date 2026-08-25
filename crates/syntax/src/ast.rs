@@ -334,8 +334,9 @@ pub struct FieldDecl {
     pub span: Span,
 }
 
-/// `fn name(params) -> T { body }` (computing definition, inlined) or
-/// `theorem name(params): T { proof }` (opaque, becomes a Ψ-global).
+/// `fn name(params) -> T { body }` (computing definition),
+/// `theorem name(params): T { proof }` (opaque), or
+/// `axiom name(params): T;` (an explicit, bodiless assumption).
 #[derive(Debug, Clone)]
 pub struct Decl {
     pub kind: DeclKind,
@@ -461,6 +462,7 @@ pub enum OnTarget {
 pub enum DeclKind {
     Fn,
     Theorem,
+    Axiom,
 }
 
 #[derive(Debug, Clone)]

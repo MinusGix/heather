@@ -4,6 +4,8 @@
 (theorem_declaration
   body: (block) @function.inside) @function.around
 
+(axiom_declaration) @function.around
+
 [
   (inductive_declaration body: (constructor_list) @class.inside)
   (record_declaration body: (field_list) @class.inside)
