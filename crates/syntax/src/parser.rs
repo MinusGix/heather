@@ -151,6 +151,7 @@ pub fn parse_file(src: &str) -> Result<File, ParseError> {
             no_iff: false,
             motive_body: false,
             spec_failed: std::collections::HashSet::new(),
+            next_hygienic: 0,
         };
     let mut items = Vec::new();
     // Imports come first, all of them (docs/modules-design.md §3.1). The
@@ -218,6 +219,10 @@ struct Parser {
     /// accepted here still parses: [`Parser::ty`] falls through to
     /// [`Parser::expr`] for `a = b`, names and applications.
     motive_body: bool,
+    /// File-local supply for names the source language cannot spell. Item
+    /// groups flatten, so a per-group index would collide across nested
+    /// anonymous `assuming` telescopes.
+    next_hygienic: usize,
     /// Positions where a type-argument speculation has already been tried and
     /// **failed** — the memo that keeps speculation linear.
     ///
@@ -425,6 +430,12 @@ fn curry(binders: Vec<(String, Ty)>, cod: Ty, implicit: bool, span: Span) -> Ty 
 }
 
 impl Parser {
+    fn hygienic(&mut self, kind: &str) -> String {
+        let id = self.next_hygienic;
+        self.next_hygienic += 1;
+        format!("#{kind}{id}")
+    }
+
     /// The token `k` positions ahead (`nth(0)` is [`Self::peek`]). Clamped to
     /// `Eof`, which the token stream always ends with.
     fn nth(&self, k: usize) -> &TokKind {
@@ -663,7 +674,7 @@ impl Parser {
                 self.bump(); // `:`
                 (name, span)
             } else {
-                (format!("#assuming{}", assumptions.len()), self.peek_span())
+                (self.hygienic("assuming"), self.peek_span())
             };
             // The following `{` opens the item group, never a record literal
             // continuing the assumption type — the same boundary as a
@@ -730,12 +741,17 @@ impl Parser {
                     .into(),
                 span: c.span,
             }),
-            Item::Instance(i) => Err(ParseError {
-                msg: "`instance` inside `assuming` is not implemented yet: its inherited \
-                      telescope will lower to `requires` in the next item-kind slice"
-                    .into(),
-                span: i.span,
-            }),
+            Item::Instance(mut i) => {
+                // An instance already carries its conditional evidence in
+                // `requires`; inherited assumptions are exactly more of that
+                // telescope. Value binders must remain first because written
+                // instance requirements may depend on them, so prepend within
+                // `requires`, not before the instance's type/value binders.
+                let mut requires = assumptions.to_vec();
+                requires.append(&mut i.requires);
+                i.requires = requires;
+                Ok(Item::Instance(i))
+            }
             Item::Designation(d) => Err(ParseError {
                 msg: "`designation` cannot yet inherit an `assuming` telescope".into(),
                 span: d.span,
@@ -1173,7 +1189,7 @@ impl Parser {
                 self.bump(); // `:`
                 (name, span)
             } else {
-                (format!("#requires{}", requires.len()), self.peek_span())
+                (self.hygienic("requires"), self.peek_span())
             };
             // A **class reference**, not a general type: `requires` is the
             // class spelling of a solver parameter, and the general one is
@@ -5927,7 +5943,7 @@ mod tests {
         for item in &f.items {
             let Item::Decl(d) = item else { panic!("expected a declaration") };
             assert_eq!(d.params[0].name, "h");
-            assert_eq!(d.params[1].name, "#assuming1");
+            assert_eq!(d.params[1].name, "#assuming0");
             assert!(d.params[..2].iter().all(|p| {
                 p.implicit
                     && p.solver == Some(Solver::Infer)
@@ -5948,6 +5964,23 @@ mod tests {
         .unwrap();
         let params = &only_decl(&f).params;
         assert_eq!(params.iter().map(|p| p.name.as_str()).collect::<Vec<_>>(), ["outer", "inner"]);
+    }
+
+    #[test]
+    fn assuming_lowers_onto_an_instances_requires_telescope() {
+        let f = parse_file(
+            "assuming Nat { assuming Nat { \
+                 instance Mag<Nat> requires written: Mag<Nat> { op := add } \
+             } }",
+        )
+        .unwrap();
+        let Item::Instance(instance) = &f.items[0] else { panic!("expected an instance") };
+        assert_eq!(
+            instance.requires.iter().map(|p| p.name.as_str()).collect::<Vec<_>>(),
+            ["#assuming0", "#assuming1", "written"]
+        );
+        assert!(instance.requires[..2].iter().all(|p| p.origin == ParamOrigin::Assuming));
+        assert_eq!(instance.requires[2].origin, ParamOrigin::Written);
     }
 
     #[test]
