@@ -28,6 +28,7 @@ cd "$(dirname "$0")/.."
 # compiler keywords or fixed symbols drift away from the editor manifest.
 suite_started=$SECONDS
 node scripts/check-tree-sitter-inventory.js
+node --test scripts/test-target-runner.test.mjs
 
 SKIP=()
 TEST_ARGS=()
@@ -67,8 +68,33 @@ fi
 
 # Compile without limits (rustc is memory-hungry but trusted)...
 compile_started=$SECONDS
-cargo test --workspace --no-run --quiet
+manifest=$(mktemp)
+cargo test --workspace --no-run --quiet --message-format=json > "$manifest"
 compile_seconds=$((SECONDS - compile_started))
+
+# An unfiltered workspace run has no Cargo selection semantics left to
+# preserve, so run its independent binaries in bounded parallel. Focused
+# invocations retain Cargo's native serial path below. Two workers are the
+# conservative default: each child still has its own 4 GiB address-space
+# rail, and the scheduler additionally caps the count from MemAvailable with
+# 2 GiB reserved for the host. HEATHER_TEST_JOBS can lower or deliberately
+# raise the requested bound; the memory cap remains authoritative.
+if (( $# == 0 )); then
+  mkdir -p target
+  test_started=$SECONDS
+  set +e
+  runner_args=(--manifest "$manifest" --timings target/test-target-timings.tsv
+               --jobs "${HEATHER_TEST_JOBS:-2}" --keep-going)
+  node scripts/run-test-targets.mjs "${runner_args[@]}" -- "${LIBTEST_ARGS[@]:1}"
+  status=$?
+  set -e
+  rm -f "$manifest"
+  test_seconds=$((SECONDS - test_started))
+  printf 'runner wall time: compile %ds + tests %ds = %ds total\n' \
+    "$compile_seconds" "$test_seconds" "$((SECONDS - suite_started))"
+  exit "$status"
+fi
+rm -f "$manifest"
 
 # ...then run under them: 4 GiB address space, 5 CPU minutes, two threads.
 #
