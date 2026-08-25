@@ -3,7 +3,7 @@ title: AI-facing tooling: every failure returns the search state that produced i
 status: open
 labels: [tooling,design,meta,diagnostics]
 created: 2026-08-05
-updated: 2026-08-20
+updated: 2026-08-25
 ---
 
 Direction issue, not scheduled — filed from the 2026-08-05 riff (while the
@@ -42,6 +42,33 @@ Two properties everything here inherits:
 - **The kernel is the judge**: the elaborator is untrusted, so no tool
   output ever enters the trusted story; a wrong hint is a rejection.
 
+## Assumption-aware proof actions
+
+For a candidate theorem, the machine-readable search state should include the
+requirement footprint from [[implicit-logical-assumptions]] and the ranking
+owned by [[lemma-selection-and-search]]:
+
+```text
+candidate
+result match
+requirements already resolved, with providers
+missing exact propositions or typeclass capabilities
+profiles that can derive them
+concrete providers available to `using`
+axiom/provenance impact of each concrete choice
+```
+
+This gives an agent four explicit moves: prove the narrow premise, find a
+specialized provider, generalize the current block with `given`/`assuming`, or
+activate a concrete provider with `using`. Selecting an axiom-backed provider
+is a trust-policy escalation, never an automatic “make the proof close” step.
+
+Do not hide down-ranked candidates from an agent. A missing proposition that
+looks hard to name-based completion may be easy in the current special case,
+and constructive and classical variants may have materially different
+precision bounds or witnesses. Return both with their exact requirement
+deltas; let the agent or policy choose, and let the kernel check the term.
+
 ## What it assumes from elsewhere
 - **[[lsp-from-the-meta-layer]]** owns the editor-facing surface of the
   same information. Assumed here: only that the two share the
@@ -53,6 +80,11 @@ Two properties everything here inherits:
   are quietly also AI-ergonomics issues.
 
 ## Log
+
+- 2026-08-25: Added structured assumption-aware proof actions. Agent search
+  receives exact missing requirements, checked profile expansions, concrete
+  provider choices, and axiom impact; axiom-backed `using` is an explicit
+  policy escalation rather than a silent fallback.
 
 - 2026-08-20: Linked the separate conversation-preview research owner. Syntax
   highlighting makes agent edits easier to review, but it is presentation and
