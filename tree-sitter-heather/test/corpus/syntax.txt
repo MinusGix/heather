@@ -275,3 +275,42 @@ axiom choice<A>(fallback: A): A;
             (identifier))
           (identifier))))
     (identifier)))
+
+==================
+Assumption item group
+==================
+
+assuming classical: Classical, Extensional {
+  theorem result requires m: Monoid<Nat>, algebra::Ring<Nat> (): Nat { 0 }
+}
+
+---
+
+(source_file
+  (assuming_declaration
+    (assumption
+      (identifier)
+      (identifier))
+    (assumption
+      (identifier))
+    (theorem_declaration
+      (qualified_identifier)
+      (requires_clause
+        (requirement
+          (identifier)
+          (requirement_class_reference
+            (qualified_identifier
+              (identifier))
+            (type_arguments
+              (identifier))))
+        (requirement
+          (requirement_class_reference
+            (qualified_identifier
+              (identifier)
+              (identifier))
+            (type_arguments
+              (identifier)))))
+      (parameter_list)
+      (identifier)
+      (block
+        (number)))))

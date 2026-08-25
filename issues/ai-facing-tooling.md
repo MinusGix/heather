@@ -59,9 +59,10 @@ axiom/provenance impact of each concrete choice
 ```
 
 This gives an agent four explicit moves: prove the narrow premise, find a
-specialized provider, generalize the current block with `given`/`assuming`, or
-activate a concrete provider with `using`. Selecting an axiom-backed provider
-is a trust-policy escalation, never an automatic “make the proof close” step.
+specialized provider, add an ordinary parameter or generalize an item group
+with `assuming`, or activate a concrete provider with `using`. Selecting an
+axiom-backed provider is a trust-policy escalation, never an automatic “make
+the proof close” step.
 
 Do not hide down-ranked candidates from an agent. A missing proposition that
 looks hard to name-based completion may be easy in the current special case,

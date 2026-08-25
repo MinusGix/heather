@@ -2,7 +2,9 @@
 //!
 //! ```text
 //! file    := item*
-//! item    := decl | inductive | record | class | instance
+//! item    := decl | inductive | record | class | instance | assuming
+//! assuming := "assuming" requirement ("," requirement)* "{" item* "}"
+//! requirement := (name ":")? type
 //! decl    := "fn" name tyvars? "(" params? ")" "->" type block
 //!          | "theorem" name tyvars? "(" params? ")" ":" type block
 //! tyvars  := "<" tyvar ("," tyvar)* ">"
@@ -156,18 +158,19 @@ pub fn parse_file(src: &str) -> Result<File, ParseError> {
     // is what lets a tool read a file's import DAG without parsing bodies.
     let mut seen_decl = false;
     while !p.at_eof() {
-        let item = p.item()?;
-        match &item {
-            Item::Import(i) if seen_decl => {
-                return Err(ParseError {
-                    msg: "`import` must come before the first declaration".into(),
-                    span: i.span,
-                })
+        for item in p.items()? {
+            match &item {
+                Item::Import(i) if seen_decl => {
+                    return Err(ParseError {
+                        msg: "`import` must come before the first declaration".into(),
+                        span: i.span,
+                    })
+                }
+                Item::Import(_) => {}
+                _ => seen_decl = true,
             }
-            Item::Import(_) => {}
-            _ => seen_decl = true,
+            items.push(item);
         }
-        items.push(item);
     }
     Ok(File { items })
 }
@@ -637,6 +640,121 @@ impl Parser {
 
     // -- declarations -------------------------------------------------------
 
+    /// Parse one item position. An `assuming` group is surface-only: it
+    /// flattens to its declarations after prepending one ordinary solver
+    /// telescope to each. The elaborator consequently sees exactly the same
+    /// `Param` representation as a written `:= infer` or `requires` binder.
+    fn items(&mut self) -> R<Vec<Item>> {
+        if self.at_kw("assuming") {
+            self.assuming_items()
+        } else {
+            Ok(vec![self.item()?])
+        }
+    }
+
+    fn assuming_items(&mut self) -> R<Vec<Item>> {
+        let start = self.bump().span; // `assuming`
+        let mut assumptions = Vec::new();
+        loop {
+            let named = matches!(self.peek(), TokKind::Ident(_))
+                && matches!(self.nth(1), TokKind::Colon);
+            let (name, nsp) = if named {
+                let (name, span) = self.binder_ident("an `assuming` binder name")?;
+                self.bump(); // `:`
+                (name, span)
+            } else {
+                (format!("#assuming{}", assumptions.len()), self.peek_span())
+            };
+            // The following `{` opens the item group, never a record literal
+            // continuing the assumption type — the same boundary as a
+            // declaration result immediately followed by its body.
+            let ty = self.with_record_lit(true, |p| p.ty())?;
+            let span = nsp.join(ty.span);
+            assumptions.push(Param {
+                name,
+                ty,
+                implicit: true,
+                is_self: false,
+                solver: Some(Solver::Infer),
+                origin: ParamOrigin::Assuming,
+                symbol: None,
+                span,
+            });
+            if !matches!(self.peek(), TokKind::Comma) {
+                break;
+            }
+            self.bump();
+        }
+        self.expect(&TokKind::LBrace, "`{` to open the `assuming` item group")?;
+        let mut items = Vec::new();
+        while !matches!(self.peek(), TokKind::RBrace) {
+            if self.at_eof() {
+                return Err(ParseError {
+                    msg: "expected `}` to close the `assuming` item group".into(),
+                    span: start.join(self.peek_span()),
+                });
+            }
+            for item in self.items()? {
+                if let Item::Import(i) = &item {
+                    return Err(ParseError {
+                        msg: "an `import` cannot appear inside an `assuming` group; imports \
+                              belong at the start of the file"
+                            .into(),
+                        span: i.span,
+                    });
+                }
+                items.push(self.apply_assumptions(item, &assumptions)?);
+            }
+        }
+        self.bump(); // `}`
+        Ok(items)
+    }
+
+    fn apply_assumptions(&self, item: Item, assumptions: &[Param]) -> R<Item> {
+        match item {
+            Item::Decl(mut d) => {
+                let mut params = assumptions.to_vec();
+                params.append(&mut d.params);
+                d.params = params;
+                Ok(Item::Decl(d))
+            }
+            Item::Inductive(i) => Err(ParseError {
+                msg: "`inductive` inside `assuming` is not implemented yet: the first \
+                      slice generalizes `fn`, `theorem`, `axiom`, and `meta fn` declarations"
+                    .into(),
+                span: i.span,
+            }),
+            Item::Class(c) => Err(ParseError {
+                msg: "`class` inside `assuming` is not implemented yet: the first slice \
+                      generalizes ordinary declarations"
+                    .into(),
+                span: c.span,
+            }),
+            Item::Instance(i) => Err(ParseError {
+                msg: "`instance` inside `assuming` is not implemented yet: its inherited \
+                      telescope will lower to `requires` in the next item-kind slice"
+                    .into(),
+                span: i.span,
+            }),
+            Item::Designation(d) => Err(ParseError {
+                msg: "`designation` cannot yet inherit an `assuming` telescope".into(),
+                span: d.span,
+            }),
+            Item::Datarepr(d) => Err(ParseError {
+                msg: "`datarepr` cannot yet inherit an `assuming` telescope".into(),
+                span: d.span,
+            }),
+            Item::Impl(i) => Err(ParseError {
+                msg: "`impl` cannot yet inherit an `assuming` telescope".into(),
+                span: i.span,
+            }),
+            Item::Import(i) => Err(ParseError {
+                msg: "an `import` cannot appear inside an `assuming` group".into(),
+                span: i.span,
+            }),
+        }
+    }
+
     fn item(&mut self) -> R<Item> {
         // `import` is contextual like every other keyword here: a declaration
         // named `import` is impossible anyway (`import` would have to be
@@ -1033,7 +1151,7 @@ impl Parser {
         Ok(InstanceDecl { tyvars, valparams, class, requires, body, span: start.join(end) })
     }
 
-    /// `requires ma: Monoid<A>, mb: Monoid<B>`, or nothing — the class
+    /// `requires ma: Monoid<A>, Monoid<B>`, or nothing — the class
     /// spelling of a **solver parameter** (docs/traits-layer2-design.md §1).
     /// No parentheses, because the list is not an argument list; every binder
     /// desugars to a leading implicit parameter with `Solver::Infer`, which is
@@ -1044,8 +1162,19 @@ impl Parser {
             return Ok(requires);
         }
         loop {
-            let (pname, psp) = self.binder_ident("a `requires` binder name")?;
-            self.expect(&TokKind::Colon, "`:` (a `requires` binder is `name: C<A>`)")?;
+            // `requires C<A>` is the anonymous form. A colon immediately
+            // after the first identifier selects the named form; every class
+            // reference otherwise consumes its own complete `<…>` and
+            // optional index list before the comma or value-parameter list.
+            let named = matches!(self.peek(), TokKind::Ident(_))
+                && matches!(self.nth(1), TokKind::Colon);
+            let (pname, psp) = if named {
+                let (name, span) = self.binder_ident("a `requires` binder name")?;
+                self.bump(); // `:`
+                (name, span)
+            } else {
+                (format!("#requires{}", requires.len()), self.peek_span())
+            };
             // A **class reference**, not a general type: `requires` is the
             // class spelling of a solver parameter, and the general one is
             // `p: T := infer`. The restriction is also what keeps the list
@@ -1061,6 +1190,7 @@ impl Parser {
                 implicit: true,
                 is_self: false,
                 solver: Some(Solver::Infer),
+                origin: if named { ParamOrigin::Written } else { ParamOrigin::InlineConstraint },
                 symbol: None,
                 span,
             });
@@ -1236,6 +1366,7 @@ impl Parser {
             implicit: true,
             is_self: false,
             solver: Some(Solver::Infer),
+            origin: ParamOrigin::InlineConstraint,
             symbol: None,
             span,
         })
@@ -1390,6 +1521,7 @@ impl Parser {
                     implicit: false,
                     is_self: false,
                     solver: None,
+                    origin: ParamOrigin::Written,
                     symbol,
                     span: nsp.join(ty.span),
                 });
@@ -1694,6 +1826,7 @@ impl Parser {
                     implicit,
                     is_self,
                     solver,
+                    origin: ParamOrigin::Written,
                     symbol,
                     span: nsp.join(span),
                 });
@@ -5769,5 +5902,57 @@ mod tests {
         assert!(parse_file("axiom assumed(): Nat { 0 }").is_err());
         assert!(parse_file("theorem accidental(): Nat;").is_err());
         assert!(parse_file("postulate hidden(): Nat;").is_err());
+    }
+
+    #[test]
+    fn anonymous_requires_mints_a_hygienic_solver_parameter() {
+        let f = parse_file("fn f requires Monoid<Nat> () -> Nat { 0 }").unwrap();
+        let p = &only_decl(&f).params[0];
+        assert_eq!(p.name, "#requires0");
+        assert!(p.implicit);
+        assert_eq!(p.solver, Some(Solver::Infer));
+        assert_eq!(p.origin, ParamOrigin::InlineConstraint);
+    }
+
+    #[test]
+    fn assuming_flattens_a_comma_separated_telescope_over_every_declaration() {
+        let f = parse_file(
+            "assuming h: Nat, Nat { \
+                 fn first(x: Nat) -> Nat { h } \
+                 theorem second(): Nat { first(0) } \
+             }",
+        )
+        .unwrap();
+        assert_eq!(f.items.len(), 2);
+        for item in &f.items {
+            let Item::Decl(d) = item else { panic!("expected a declaration") };
+            assert_eq!(d.params[0].name, "h");
+            assert_eq!(d.params[1].name, "#assuming1");
+            assert!(d.params[..2].iter().all(|p| {
+                p.implicit
+                    && p.solver == Some(Solver::Infer)
+                    && p.origin == ParamOrigin::Assuming
+            }));
+        }
+        let Item::Decl(first) = &f.items[0] else { unreachable!() };
+        assert_eq!(first.params[2].name, "x", "written parameters follow the group telescope");
+    }
+
+    #[test]
+    fn nested_assuming_groups_put_outer_requirements_first() {
+        let f = parse_file(
+            "assuming outer: Nat { assuming inner: Nat { \
+                 theorem nested(): Nat { inner } \
+             } }",
+        )
+        .unwrap();
+        let params = &only_decl(&f).params;
+        assert_eq!(params.iter().map(|p| p.name.as_str()).collect::<Vec<_>>(), ["outer", "inner"]);
+    }
+
+    #[test]
+    fn assuming_refuses_item_kinds_not_yet_generalized() {
+        let e = parse_file("assuming Nat { inductive D { C } }").unwrap_err();
+        assert!(e.msg.contains("inside `assuming` is not implemented yet"), "{}", e.msg);
     }
 }

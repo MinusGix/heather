@@ -3,7 +3,7 @@
     "Code", "Ctx", "TyCode", "Type", "apply", "as", "at", "axiom", "calc", "class", "code",
     "datarepr", "designation", "else", "extends", "fn", "for", "fun", "if",
     "give", "impl", "import", "inductive", "infer", "instance", "j", "let", "match",
-    "meta", "mk", "on", "prefix", "record", "refl", "requires", "self", "split",
+    "meta", "mk", "on", "prefix", "record", "refl", "requires", "assuming", "self", "split",
     "theorem"
   ],
   "punctuation": [

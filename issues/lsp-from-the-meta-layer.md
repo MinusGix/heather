@@ -64,7 +64,7 @@ case.
 Useful editor actions follow the data rather than the word “classical”:
 
 - prove the exact missing proposition here;
-- add a `given`/`assuming` requirement to the enclosing declaration or block;
+- add an ordinary requirement to one declaration or `assuming` to an item group;
 - activate an existing constructive provider with `using`;
 - select an axiom-backed provider as an explicit trust escalation.
 

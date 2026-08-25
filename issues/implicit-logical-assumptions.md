@@ -18,7 +18,7 @@ The earlier sketch in `docs/implicit-logical-assumptions-design.md` proposed
 an axiom-specific fallback for selected `:= infer` parameters. This issue
 supersedes that part of the sketch: there is only `infer`. Axioms are never an
 ambient candidate set merely because they are visible or imported. Evidence
-enters inference scope through an ordinary local/given value, a generalized
+enters inference scope through an ordinary local/assumed value, a generalized
 profile, or an explicit `using` scope.
 
 The computational boundary from the earlier sketch remains: classical
@@ -44,13 +44,13 @@ theorem choose<P>(
 an exact local or specialized constructive proof. Neither the declaration nor
 the solver says anything about axioms or classical logic.
 
-### 2. `given` / `assuming`: generalize a lexical block
+### 2. `assuming`: generalize a lexical item group
 
 A shared hypothetical context is a block annotation which prepends an
 ordinary implicit solver parameter to every declaration in the block:
 
 ```hthr
-given hp: P {
+assuming hp: P {
     theorem recover(): P {
         hp
     }
@@ -75,15 +75,30 @@ the block pass the parameter through ordinary `infer`.
 
 `assuming classical: Classical { ... }` is the named-profile form of the same
 generalization operation. It introduces a binder; it does not mint a constant
-and does not add axiom provenance. At theorem scale it annotates that theorem's
-body block and adds the parameter to that theorem. At a larger item-group or
-namespace scale it adds the same prefix to every enclosed declaration. A
-whole-file form after imports may annotate the file's implicit top-level item
-block. File scope is allowed because users will want it, but it does not flow
-through imports and tooling should keep the resulting broad interface visible.
+and does not add axiom provenance. `assuming` is deliberately an **item-group**
+construct: one declaration writes its ordinary `p: P := infer`, named
+`requires p: C<A>`, or anonymous `requires C<A>` parameter directly. The new
+syntax earns its place only by amortizing one telescope over several items.
 
-The precise grammar is part of the design round, but the three scales must
-share one lexical-scope representation rather than three independent modes.
+A future namespace block may accept the same annotation without changing its
+semantics. A whole-file form after imports may annotate the file's implicit
+top-level item block. File scope is allowed because users will want it, but it
+does not flow through imports and tooling should keep the resulting broad
+interface visible.
+
+Named and anonymous assumptions are comma-separated and share the requirement
+grammar:
+
+```hthr
+assuming classical: Classical, Extensional { ... }
+```
+
+The anonymous value receives a hygienic, unwritable internal name and remains
+available to resolution by type. The same anonymous spelling is useful for
+ordinary class requirements (`requires Monoid<A>`); a name is written only
+when the body needs to refer to the dictionary value itself. Section-level
+type parameters are wanted eventually, but are not part of the first slice:
+`ClassicalOn<A>` stays declaration-local until a group can bind `A` honestly.
 
 ### 3. Profiles: name a reusable assumption interface
 
@@ -231,7 +246,7 @@ There is one `infer`, with one observable priority:
 There is no `infer axiom`. Importing or merely naming an axiom never adds it
 to step 4. Provider trials are checked at the requested goal and are
 transactional: rejected or ambiguous candidates publish no dependency edges.
-Diagnostics name the given/profile/using scope and the provider selected or
+Diagnostics name the assumption/profile/using scope and the provider selected or
 rejected.
 
 Scopes are lexical and nest. An inner exact proof beats an outer broad
@@ -251,11 +266,11 @@ or explicitly postulate it.
 
 ## Advisory lint
 
-Because a `given`/`assuming` prefix is intentionally added to every enclosed
+Because an `assuming` prefix is intentionally added to every enclosed
 declaration, necessity is a lint rather than elaboration policy. The lint
 should distinguish:
 
-- a direct semantic use of the given binder or one of its providers;
+- a direct semantic use of the assumed binder or one of its providers;
 - a call to another declaration that genuinely requires it;
 - mere forwarding caused only by the callee's written generalized prefix.
 
@@ -291,7 +306,7 @@ requirement/provider edges those consumers read.
 
 - Design one block-annotation model shared by theorem bodies, item groups or
   future namespaces, and the file's implicit top-level block.
-- Implement `given` for an ordinary proposition and prove that every enclosed
+- Implement `assuming` for an ordinary proposition and prove that every enclosed
   declaration receives the same leading implicit solver parameter, including
   a declaration whose body does not use it.
 - Thread the generated parameter automatically through calls within and
@@ -321,7 +336,7 @@ requirement/provider edges those consumers read.
   exact local, profile, or `using` source considered.
 - Keep classical evidence separate from `Decide<P>` and demonstrate that an
   opaque provider cannot satisfy the reducing decision contract.
-- Add the advisory unused-given lint using direct-use seeds and SCC-aware
+- Add the advisory unused-assumption lint using direct-use seeds and SCC-aware
   transitive propagation, including a mutually recursive useless-forwarding
   control.
 - Demonstrate the compiler boundary: an internal axiom-free `Compile`
@@ -333,7 +348,7 @@ requirement/provider edges those consumers read.
 
 ## Non-goals
 
-- Do not infer which declarations acquire a given parameter from their bodies.
+- Do not infer which declarations acquire an assumed parameter from their bodies.
 - Do not search every proved global or every visible axiom for arbitrary
   evidence.
 - Do not make importing a classical module activate classical reasoning.
@@ -346,17 +361,35 @@ requirement/provider edges those consumers read.
 
 ## Staged implementation
 
-1. Land ordinary `given` block generalization and automatic parameter
+1. Land ordinary `assuming` item-group generalization and automatic parameter
    threading, with every enclosed declaration prefixed by construction.
 2. Land lexical `using` for an ordinary concrete value and the corresponding
    resolution trace/provenance controls.
 3. Design and land profiles using the smallest ordinary kernel
    representation that supports polymorphic providers; exercise exact local
    evidence against a broad `Classical` profile.
-4. Add theorem-body, item-group, and file-scale spellings over the same scope
-   mechanism, then the unused-given fixed-point lint.
+4. Add further parameterizable item kinds and the file-scale spelling over the
+   same scope mechanism, then the unused-assumption fixed-point lint.
 5. Exercise explicit axiom-backed closure only at the external/deployment
    boundary and keep the internal `Compile` path assumption-parametric.
+
+## Implementation status
+
+The first syntax slice is intentionally smaller than the semantic target:
+
+- `assuming` parses a comma-separated mixture of named and anonymous general
+  types and flattens nested item groups with outer requirements first;
+- every enclosed `fn`, `theorem`, `axiom`, and `meta fn` receives ordinary
+  leading `Solver::Infer` parameters marked with an `Assuming` origin;
+- anonymous `requires C<A>` also mints a hygienic solver parameter;
+- imports and item kinds whose parameterization route has not been audited are
+  rejected explicitly inside the group rather than silently escaping it;
+- the Rust parser, Tree-sitter grammar/highlighting, and end-to-end elaborator
+  controls share the spelling.
+
+Next on this issue is the item-kind audit, beginning with `instance` lowering
+to inherited `requires`. Profiles, file scope, section-level type parameters,
+`using`, and the unused-assumption lint remain later stages.
 
 ## What it assumes from elsewhere
 
@@ -375,7 +408,7 @@ requirement/provider edges those consumers read.
   visibility. Assumed here: file-level assumptions affect the file's implicit
   item block but are not imported as inference policy.
 - **[[lint-review-only-mode]]** and **[[lint-roadmap]]** own advisory lint
-  presentation. Assumed here: an unused-given analysis may be a review-only
+  presentation. Assumed here: an unused-assumption analysis may be a review-only
   fixed-point check rather than a type-system rule.
 - **[[compile-typeclass-design]]** owns `Compile`. Assumed here: its formal
   source-to-code equivalence can remain axiom-free; a physical-platform bridge
@@ -395,7 +428,7 @@ requirement/provider edges those consumers read.
   availability but cannot implement a reducing decision procedure.
 - 2026-08-24: Replaced the proposed `infer axiom` fallback with a single
   `infer` plus explicit evidence scopes. Settled the four-way split:
-  exact solver parameter; `given`/`assuming` generalization; named profiles;
+  exact solver parameter; `assuming` item-group generalization; named profiles;
   concrete `using`.
 - 2026-08-24: Settled that generalized block parameters are added to every
   declaration rather than inferred from body use. Unnecessary parameters are
@@ -416,3 +449,8 @@ requirement/provider edges those consumers read.
   requirements added at the cursor; the LSP may down-rank but not hide, while
   AI tooling receives the missing obligations, provider alternatives, and
   axiom impact as data.
+- 2026-08-25: Implementation round opened on the group-only syntax. A single
+  declaration continues to write an ordinary solver parameter or `requires`;
+  `assuming h: P, C<A> { ... }` amortizes named and hygienic anonymous
+  requirements over nested item groups. The first slice covers ordinary
+  declarations and rejects unaudited item kinds by name.

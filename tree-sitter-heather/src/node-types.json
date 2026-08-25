@@ -142,6 +142,10 @@
     "named": true,
     "subtypes": [
       {
+        "type": "assuming_declaration",
+        "named": true
+      },
+      {
         "type": "axiom_declaration",
         "named": true
       },
@@ -270,6 +274,130 @@
         "types": [
           {
             "type": "_expression",
+            "named": true
+          }
+        ]
+      }
+    }
+  },
+  {
+    "type": "assuming_declaration",
+    "named": true,
+    "fields": {
+      "body": {
+        "multiple": true,
+        "required": true,
+        "types": [
+          {
+            "type": "_item",
+            "named": true
+          },
+          {
+            "type": "{",
+            "named": false
+          },
+          {
+            "type": "}",
+            "named": false
+          }
+        ]
+      }
+    },
+    "children": {
+      "multiple": true,
+      "required": true,
+      "types": [
+        {
+          "type": "assumption",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "assumption",
+    "named": true,
+    "fields": {
+      "name": {
+        "multiple": false,
+        "required": false,
+        "types": [
+          {
+            "type": "identifier",
+            "named": true
+          }
+        ]
+      },
+      "type": {
+        "multiple": true,
+        "required": true,
+        "types": [
+          {
+            "type": "(",
+            "named": false
+          },
+          {
+            "type": ")",
+            "named": false
+          },
+          {
+            "type": "builtin_type",
+            "named": true
+          },
+          {
+            "type": "contextual_identifier",
+            "named": true
+          },
+          {
+            "type": "declaration_binary_type",
+            "named": true
+          },
+          {
+            "type": "declaration_call_type",
+            "named": true
+          },
+          {
+            "type": "declaration_function_type",
+            "named": true
+          },
+          {
+            "type": "declaration_member_type",
+            "named": true
+          },
+          {
+            "type": "declaration_prefix_type",
+            "named": true
+          },
+          {
+            "type": "declaration_quantified_type",
+            "named": true
+          },
+          {
+            "type": "hole",
+            "named": true
+          },
+          {
+            "type": "identifier",
+            "named": true
+          },
+          {
+            "type": "number",
+            "named": true
+          },
+          {
+            "type": "qualified_identifier",
+            "named": true
+          },
+          {
+            "type": "type_arguments",
+            "named": true
+          },
+          {
+            "type": "universe",
+            "named": true
+          },
+          {
+            "type": "vector_type",
             "named": true
           }
         ]
@@ -671,6 +799,21 @@
     }
   },
   {
+    "type": "class_index_arguments",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": true,
+      "required": true,
+      "types": [
+        {
+          "type": "_expression",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
     "type": "class_reference",
     "named": true,
     "fields": {
@@ -689,7 +832,7 @@
         "required": false,
         "types": [
           {
-            "type": "argument_list",
+            "type": "class_index_arguments",
             "named": true
           }
         ]
@@ -3342,6 +3485,21 @@
     }
   },
   {
+    "type": "qualified_identifier",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": true,
+      "required": false,
+      "types": [
+        {
+          "type": "identifier",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
     "type": "quantified_expression",
     "named": true,
     "fields": {
@@ -3539,6 +3697,68 @@
     }
   },
   {
+    "type": "requirement",
+    "named": true,
+    "fields": {
+      "class": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "requirement_class_reference",
+            "named": true
+          }
+        ]
+      },
+      "name": {
+        "multiple": false,
+        "required": false,
+        "types": [
+          {
+            "type": "identifier",
+            "named": true
+          }
+        ]
+      }
+    }
+  },
+  {
+    "type": "requirement_class_reference",
+    "named": true,
+    "fields": {
+      "arguments": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "type_arguments",
+            "named": true
+          }
+        ]
+      },
+      "indices": {
+        "multiple": false,
+        "required": false,
+        "types": [
+          {
+            "type": "class_index_arguments",
+            "named": true
+          }
+        ]
+      },
+      "name": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "qualified_identifier",
+            "named": true
+          }
+        ]
+      }
+    }
+  },
+  {
     "type": "requires_clause",
     "named": true,
     "fields": {},
@@ -3547,7 +3767,7 @@
       "required": true,
       "types": [
         {
-          "type": "parameter",
+          "type": "requirement",
           "named": true
         }
       ]
@@ -4068,6 +4288,10 @@
     "named": false
   },
   {
+    "type": "assuming",
+    "named": false
+  },
+  {
     "type": "at",
     "named": false
   },
@@ -4187,10 +4411,6 @@
   {
     "type": "prefix",
     "named": false
-  },
-  {
-    "type": "qualified_identifier",
-    "named": true
   },
   {
     "type": "record",

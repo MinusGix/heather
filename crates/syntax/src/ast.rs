@@ -487,6 +487,10 @@ pub struct Param {
     /// spellings desugar here, and a solver parameter is always `implicit`
     /// (it has no positional slot; `@f(…)` is how one is passed by hand).
     pub solver: Option<Solver>,
+    /// Where this parameter entered the written telescope. Assumption groups
+    /// are parser sugar over ordinary solver parameters, but the distinction
+    /// remains observable to the advisory unused-assumption lint.
+    pub origin: ParamOrigin,
     /// `op as ∙: A -> A -> A` — the **body spelling** this binder installs
     /// (issues/binder-symbol-as-notation.md). The identifier stays the binder's
     /// *interface* spelling: constraint slots, call sites, the registry and
@@ -503,6 +507,16 @@ pub struct Param {
     /// `None` for every parameter written before this grammar existed.
     pub symbol: Option<String>,
     pub span: Span,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ParamOrigin {
+    /// A parameter or named `requires` binder written on this declaration.
+    Written,
+    /// An anonymous dictionary synthesized from an inline type constraint.
+    InlineConstraint,
+    /// A solver parameter prepended by an enclosing `assuming` item group.
+    Assuming,
 }
 
 /// The solvers a parameter default may name. One this round

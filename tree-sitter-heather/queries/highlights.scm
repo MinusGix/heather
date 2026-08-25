@@ -8,7 +8,7 @@
 
 [
   "import" "inductive" "record" "class" "instance" "designation"
-  "datarepr" "impl" "fn" "theorem" "axiom" "meta" "requires" "extends"
+  "datarepr" "impl" "fn" "theorem" "axiom" "meta" "requires" "assuming" "extends"
   "for" "at" "prefix" "mk" "let" "split" "on" "match" "if"
   "else" "as" "code" "calc" "self" "infer"
 ] @keyword

@@ -33,6 +33,7 @@ module.exports = grammar({
     [$.apply_expression, $.contextual_identifier],
     [$.j_expression, $.contextual_identifier],
     [$.refl_expression, $.contextual_identifier],
+    [$.requirement_class_reference],
   ],
 
   rules: {
@@ -50,6 +51,7 @@ module.exports = grammar({
       $.designation_declaration,
       $.datarepr_declaration,
       $.impl_declaration,
+      $.assuming_declaration,
     ),
 
     import_declaration: $ => seq(
@@ -120,12 +122,31 @@ module.exports = grammar({
       choice(seq(':=', field('value', $._expression), optional(';')), $.repr_clause_block),
     ),
 
+    assuming_declaration: $ => seq(
+      'assuming', commaSep1($.assumption),
+      field('body', seq('{', repeat($._item), '}')),
+    ),
+    assumption: $ => choice(
+      seq(field('name', $.identifier), ':', field('type', $._declaration_type)),
+      field('type', $._declaration_type),
+    ),
+
     type_parameters: $ => seq('<', commaSep1($.type_parameter), '>'),
     type_parameter: $ => seq(
       field('name', $.identifier),
       optional(seq(':', commaSep1($._expression, '+'))),
     ),
-    requires_clause: $ => seq('requires', commaSep1($.parameter)),
+    requires_clause: $ => seq('requires', commaSep1($.requirement)),
+    requirement: $ => choice(
+      field('class', $.requirement_class_reference),
+      seq(field('name', $.identifier), ':', field('class', $.requirement_class_reference)),
+    ),
+    requirement_class_reference: $ => seq(
+      field('name', alias($._requirement_name, $.qualified_identifier)),
+      field('arguments', $.type_arguments),
+      optional(field('indices', $.class_index_arguments)),
+    ),
+    _requirement_name: $ => seq($.identifier, repeat(seq('::', $.identifier))),
     value_parameters: $ => seq('(', commaSep1($.parameter), optional(','), ')'),
     parameter_list: $ => seq('(', commaSep($.parameter), optional(','), ')'),
     parameter: $ => choice(
@@ -142,8 +163,13 @@ module.exports = grammar({
 
     class_reference: $ => seq(
       field('name', $.qualified_identifier), field('arguments', $.type_arguments),
-      optional(field('indices', $.argument_list)),
+      // In a `requires C<A> (x: A)` head the following parentheses are the
+      // declaration's binder list. Prefer reducing the class reference there;
+      // an actual `C<A>(index)` remains the only valid parse when its contents
+      // are expressions rather than binders.
+      optional(field('indices', $.class_index_arguments)),
     ),
+    class_index_arguments: $ => seq('(', commaSep1($._expression), optional(','), ')'),
     // Expression/type application is adjacent in Heather (`List<Nat>`). The
     // immediate opener keeps spaced comparisons such as `n < Succ(m)` out of
     // the speculative type-argument path, matching the compiler's lexer span
