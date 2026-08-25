@@ -1,6 +1,6 @@
 ---
 title: Develop fixed-width bitvectors and their arithmetic proof kit
-status: open
+status: closed
 labels: [stdlib,mathematics,design]
 created: 2026-08-25
 updated: 2026-08-25
@@ -65,3 +65,37 @@ waiting for them.
 - 2026-08-25: Filed from the x86-64 model audit.  The demanded API is generic
   because fixed-width arithmetic is also a compiler, format, crypto, and
   data-representation foundation.
+- 2026-08-25: LANDED in `lib/std/bitvec.hthr`, with acceptance coverage in
+  `crates/elab/tests/lib_std_bitvec.rs`. `BitVec(n)` is a one-field record over
+  the kernel vector `[Bool; n]`, least-significant bit first. The wrapper is
+  representation-transparent in the ordinary Heather sense: it contains no
+  bound proof and equality is structural equality of its `bits` field.
+  `BitVec(0)` is the singleton empty vector; its sign bit is canonically false,
+  and zero-width construction and arithmetic discard their inputs.
+
+  The API includes construction and interpretation, indexed read/update and
+  extensionality, the pointwise Boolean operations, bounded slicing,
+  concat/split, truncation and both extensions, unsigned and two's-complement
+  signed order, wrapping arithmetic, mathematical-count shifts, carry/borrow,
+  and signed-overflow formulas. The modular boundary is stated in the module
+  header and reflected in the implementation: `ofNat`, add, sub, neg, and mul
+  wrap, while `toNat`/`toInt` interpret. Increment/decrement are structural
+  inverses, which makes add/sub cancellation provable at an open width rather
+  than merely tested on numerals. The other minimum laws are likewise open:
+  xor-self, read-after-update, extensionality, split/concat projections, and
+  extension/truncation.
+
+  DOGFOODING REFUSAL ([[vector-types-as-expressions]]): the initially preferred spelling
+  `fn BitVec(n: Nat) -> Type { [Bool; n] }` is not writable. In a type-valued
+  function body the expression parser commits prefix `[` to a vector literal
+  and reports `expected ] (vector literal), found Semi`; expected-universe
+  information does not select vector-type syntax. A one-field value-indexed
+  record preserves the selected vector representation without inventing a
+  bounded-`Nat` proof carrier or adding a kernel former. The refusal is left
+  recorded here rather than repaired as an unrequested parser round; the
+  linked issue now owns that surface-language oversight.
+
+  Tests cover widths 0, 1, 8, 16, 32, and 64, plus a neutral width; computation
+  spans bit order, conversion, wrapping arithmetic, overflow, shape operations,
+  extension, and shifts, while separate probes apply every core law to open
+  values and widths and carry negative controls.
