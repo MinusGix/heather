@@ -12,6 +12,27 @@ fn ok(src: &str) {
     }
 }
 
+fn bad(src: &str) -> String {
+    let mut e = Elaborator::with_prelude().expect("prelude");
+    match e.elab_source(src) {
+        Ok(()) => panic!("expected a rejection, but it elaborated"),
+        Err(err) => err.render(src),
+    }
+}
+
+const ASSUMED_INSTANCE: &str = r#"
+inductive Permit { grant }
+inductive Z { Z0, Z1 }
+class Mag<A> { op: A -> A -> A }
+record Pair<A, B> { fst: A, snd: B }
+
+assuming permit: Permit {
+    instance Mag<Pair<Z, Z>> {
+        fn op(x: Pair<Z, Z>, y: Pair<Z, Z>) -> Pair<Z, Z> { y }
+    }
+}
+"#;
+
 #[test]
 fn a_group_assumption_is_local_and_threads_between_declarations() {
     ok(r#"
@@ -80,4 +101,27 @@ fn supplies_has requires h: Has<Nat> (n: Nat) -> Nat {
     needs_has(n)
 }
 "#);
+}
+
+#[test]
+fn an_assumed_instance_backchains_through_the_callers_local_evidence() {
+    ok(&format!(
+        "{ASSUMED_INSTANCE}\n\
+         fn authorized(x: Pair<Z, Z>, y: Pair<Z, Z>) -> Pair<Z, Z> {{\n\
+             let permit = grant;\n\
+             x.op(y)\n\
+         }}\n"
+    ));
+}
+
+#[test]
+fn an_assumed_instance_is_not_unconditionally_available() {
+    let e = bad(&format!(
+        "{ASSUMED_INSTANCE}\n\
+         fn unauthorized(x: Pair<Z, Z>, y: Pair<Z, Z>) -> Pair<Z, Z> {{\n\
+             x.op(y)\n\
+         }}\n"
+    ));
+    assert!(e.contains("Permit"), "{e}");
+    assert!(e.contains("candidate:"), "{e}");
 }

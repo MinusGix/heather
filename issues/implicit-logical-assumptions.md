@@ -381,14 +381,21 @@ The first syntax slice is intentionally smaller than the semantic target:
   types and flattens nested item groups with outer requirements first;
 - every enclosed `fn`, `theorem`, `axiom`, and `meta fn` receives ordinary
   leading `Solver::Infer` parameters marked with an `Assuming` origin;
+- an enclosed `instance` receives the same telescope as leading inherited
+  `requires`, so its members and assembled dictionary remain conditional and
+  registry resolution backchains through the evidence rather than installing
+  an ambient instance;
 - anonymous `requires C<A>` also mints a hygienic solver parameter;
+- anonymous generated names use one file-wide supply, remaining distinct when
+  nested item groups are flattened onto one declaration;
 - imports and item kinds whose parameterization route has not been audited are
   rejected explicitly inside the group rather than silently escaping it;
 - the Rust parser, Tree-sitter grammar/highlighting, and end-to-end elaborator
   controls share the spelling.
 
-Next on this issue is the item-kind audit, beginning with `instance` lowering
-to inherited `requires`. Profiles, file scope, section-level type parameters,
+Next on this issue is the remaining item-kind audit for `record`, `inductive`,
+and `class`, whose assumptions must become honest parameters of their generated
+types and constructors. Profiles, file scope, section-level type parameters,
 `using`, and the unused-assumption lint remain later stages.
 
 ## What it assumes from elsewhere
@@ -454,3 +461,9 @@ to inherited `requires`. Profiles, file scope, section-level type parameters,
   `assuming h: P, C<A> { ... }` amortizes named and hygienic anonymous
   requirements over nested item groups. The first slice covers ordinary
   declarations and rejects unaudited item kinds by name.
+- 2026-08-25: Extended group lowering to `instance`: inherited assumptions
+  prepend its existing `requires` telescope and therefore flow through every
+  synthesized member and the canonical dictionary. Positive and negative
+  resolver controls demonstrate conditional backchaining. Also replaced the
+  per-group anonymous-name index with a file-wide hygienic supply, preventing
+  collisions when nested groups flatten.
