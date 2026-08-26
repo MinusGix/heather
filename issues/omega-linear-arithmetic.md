@@ -134,3 +134,23 @@ when stuck. Arithmetic overflow is a structured refusal and must never wrap.
   bounded exhaustive models. The issue remains open for Heather term
   reflection, hard-equality balanced remainders, and kernel-checked proof
   reconstruction; the `arith` surface form does not invoke this core yet.
+- 2026-08-26: Added the first kernel-certified vertical slice. The ordinary
+  `lib/std/omega.hthr` module proves coefficient-row scaling, addition, linear
+  combination, and mixed lower/upper Fourier--Motzkin soundness. A narrow
+  `omega` checking form reflects explicit `omega::dot` constraints over `Int`,
+  replays only the reachable derivation DAG as shared generated bindings, and
+  closes crossed bounds at `False`. Its acceptance includes a genuine
+  elimination certificate, a satisfiable mutation refusal, and name-shadowing.
+  Ordinary arithmetic-expression reflection and non-`False` goals remain the
+  next frontend step; the old `arith` reconstructor remains migration
+  scaffolding until its customers move.
+- 2026-08-26: Replaced the user-facing explicit-row boundary with an ordinary
+  `Int` affine-expression reifier for constants, addition, and multiplication
+  by a literal on either side. Every reflected expression carries a
+  kernel-checked normalization proof into a shared atom row; repeated
+  nonlinear or otherwise unrecognized subterms are deliberately shared as
+  opaque atoms. Initial `<=` constraints are converted to certified upper
+  rows, and solver sign normalization is reconstructed with an ordinary
+  negated-bound theorem. The explicit `omega::dot` path remains as a low-level
+  regression fixture. Goal negation, equality/strict relations, `Nat`, and GCD
+  division certificates remain open frontend/reconstruction work.

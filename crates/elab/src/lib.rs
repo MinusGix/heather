@@ -80,6 +80,7 @@ mod application;
 mod attempt;
 pub mod arith;
 pub mod omega;
+mod omega_cert;
 pub mod certgen;
 pub mod gate;
 pub mod stats;
@@ -2901,6 +2902,29 @@ impl Elaborator {
                     });
                     Ok(term)
                 }
+            }
+            // `omega` is the kernel-certified vertical slice of the linear
+            // solver. Like `arith`, it is only an untrusted elaborator
+            // shortcut: reconstruction returns an ordinary Heather
+            // expression and this recursive call checks it at the original
+            // goal before the enclosing declaration reaches the kernel gate.
+            ExprKind::Var(name)
+                if name == "omega"
+                    && !self.shadowed(cx, name)
+                    && self.ctor_here_expected(cx, name, expected).is_none() =>
+            {
+                let head = self.whnf(cx, expected, e.span)?;
+                let cert = omega_cert::reconstruct(self, cx, &head).map_err(|detail|
+                    ElabError::Elab {
+                        msg: format!("`omega` got stuck: {detail}"),
+                        span: e.span,
+                    })?;
+                let _audit = (cert.assumptions, cert.reachable_derivations);
+                self.elab_check(cx, &cert.expr, expected, lvl).map_err(|error|
+                    ElabError::Elab {
+                        msg: format!("{error}\n  generated Omega certificate: {}", cert.source),
+                        span: e.span,
+                    })
             }
             // `arith` is an untrusted, checking-only proof reconstructor. It
             // reads the elaborated goal and produces an ordinary Heather

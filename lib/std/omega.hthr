@@ -1,0 +1,360 @@
+// Kernel-checked certificate algebra for the Rust Omega searcher. The searcher
+// is untrusted: it supplies concrete coefficient lists and applications of
+// these lemmas, while ordinary Heather elaboration and the kernel check every
+// equality and order step.
+
+import int;
+import list;
+
+// Coefficient rows are deliberately ordinary lists. `dot` stops at the first
+// exhausted list, so generated certificates need no separate length witness;
+// the Rust reifier always emits equally sized rows and atom lists.
+fn dot(coeffs: List<Int>) → List<Int> → Int {
+    match coeffs {
+        Nil => λ atoms => OfNat(0),
+        Cons(c, cs) => λ atoms => match atoms {
+            Nil => OfNat(0),
+            Cons(x, xs) => c * x + dot(cs, xs),
+        },
+    }
+}
+
+fn scale(k: Int, coeffs: List<Int>) → List<Int> {
+    match coeffs {
+        Nil => Nil,
+        Cons(c, cs) => Cons(k * c, scale(k, cs)),
+    }
+}
+
+fn add_coeffs(left: List<Int>) → List<Int> → List<Int> {
+    match left {
+        Nil => λ right => right,
+        Cons(a, as) => λ right => match right {
+            Nil => Cons(a, as),
+            Cons(b, bs) => Cons(a + b, add_coeffs(as, bs)),
+        },
+    }
+}
+
+fn combo(a: Int, left: List<Int>, b: Int, right: List<Int>) → List<Int> {
+    add_coeffs(scale(a, left), scale(b, right))
+}
+
+fn zeros(atoms: List<Int>) → List<Int> {
+    match atoms { Nil => Nil, Cons(_, xs) => Cons(OfNat(0), zeros(xs)) }
+}
+
+fn basis(index: Nat) → List<Int> → List<Int> {
+    match index {
+        Zero => λ atoms => match atoms {
+            Nil => Nil,
+            Cons(_, xs) => Cons(OfNat(1), zeros(xs)),
+        },
+        Succ(i) => λ atoms => match atoms {
+            Nil => Nil,
+            Cons(_, xs) => Cons(OfNat(0), basis(i, xs)),
+        },
+    }
+}
+
+fn nth0(index: Nat) → List<Int> → Int {
+    match index {
+        Zero => λ atoms => match atoms { Nil => OfNat(0), Cons(x, _) => x },
+        Succ(i) => λ atoms => match atoms { Nil => OfNat(0), Cons(_, xs) => nth0(i, xs) },
+    }
+}
+
+// The four-term additive permutation used by `dot_add`. Keeping it here pays
+// the associativity/commutativity proof once for every generated certificate.
+theorem add_swap_middle(a, b, c, d: Int):
+    (a + b) + (c + d) = (a + c) + (b + d)
+{
+    apply trans;
+    give add_assoc(a, b, c + d);
+    apply trans;
+    give cong_int(λ (q: Int) => a + q,
+        trans(sym(add_assoc(b, c, d)),
+            trans(cong_int(λ (q: Int) => q + d, add_comm(b, c)),
+                add_assoc(c, b, d))));
+    sym(add_assoc(a, c, b + d))
+}
+
+theorem dot_scale(k: Int, coeffs: List<Int>): (atoms: List<Int>) →
+    dot(scale(k, coeffs), atoms) = k * dot(coeffs, atoms)
+{
+    match coeffs {
+        Nil => λ atoms => sym(mul_zero(k)),
+        Cons(c, cs) => λ atoms => match atoms {
+            Nil => sym(mul_zero(k)),
+            Cons(x, xs) =>
+                apply trans;
+                give cong_int(λ (q: Int) => (k * c) * x + q,
+                    dot_scale(k, cs, xs));
+                apply trans;
+                give cong_int(λ (q: Int) => q + k * dot(cs, xs),
+                    mul_assoc(k, c, x));
+                sym(mul_add_distr(k, c * x, dot(cs, xs))),
+        },
+    }
+}
+
+theorem dot_add(left: List<Int>): (right, atoms: List<Int>) →
+    dot(add_coeffs(left, right), atoms) = dot(left, atoms) + dot(right, atoms)
+{
+    match left {
+        Nil => λ right atoms => sym(zero_add(dot(right, atoms))),
+        Cons(a, as) => λ right atoms => match right {
+            Nil => add_zero(dot(Cons(a, as), atoms)),
+            Cons(b, bs) => match atoms {
+                Nil => sym(add_zero(OfNat(0))),
+                Cons(x, xs) =>
+                    apply trans;
+                    give cong_int(λ (q: Int) => (a + b) * x + q,
+                        dot_add(as, bs, xs));
+                    apply trans;
+                    give cong_int(λ (q: Int) => q + (dot(as, xs) + dot(bs, xs)),
+                        add_mul_distr(a, b, x));
+                    add_swap_middle(a * x, b * x, dot(as, xs), dot(bs, xs)),
+            },
+        },
+    }
+}
+
+theorem dot_combo(a: Int, left: List<Int>, b: Int, right, atoms: List<Int>):
+    dot(combo(a, left, b, right), atoms) =
+        a * dot(left, atoms) + b * dot(right, atoms)
+{
+    apply trans;
+    give dot_add(scale(a, left), scale(b, right), atoms);
+    apply trans;
+    give cong_int(λ (q: Int) => q + dot(scale(b, right), atoms),
+        dot_scale(a, left, atoms));
+    cong_int(λ (q: Int) => a * dot(left, atoms) + q,
+        dot_scale(b, right, atoms))
+}
+
+theorem dot_zeros(atoms: List<Int>): dot(zeros(atoms), atoms) = OfNat(0) {
+    match atoms {
+        Nil => refl,
+        Cons(x, xs) =>
+            apply trans;
+            give cong_int(λ (q: Int) => OfNat(0) * x + q, dot_zeros(xs));
+            apply trans;
+            give add_zero(OfNat(0) * x);
+            zero_mul(x),
+    }
+}
+
+theorem dot_basis(index: Nat): (atoms: List<Int>) →
+    dot(basis(index, atoms), atoms) = nth0(index, atoms)
+{
+    match index {
+        Zero => λ atoms => match atoms {
+            Nil => refl,
+            Cons(x, xs) =>
+                apply trans;
+                give cong_int(λ (q: Int) => OfNat(1) * x + q, dot_zeros(xs));
+                apply trans;
+                give add_zero(OfNat(1) * x);
+                one_mul(x),
+        },
+        Succ(i) => λ atoms => match atoms {
+            Nil => refl,
+            Cons(x, xs) =>
+                apply trans;
+                give cong_int(λ (q: Int) => OfNat(0) * x + q, dot_basis(i, xs));
+                apply trans;
+                give cong_int(λ (q: Int) => q + nth0(i, xs), zero_mul(x));
+                zero_add(nth0(i, xs)),
+        },
+    }
+}
+
+theorem normalize_const(c: Int, atoms: List<Int>):
+    c = c + dot(zeros(atoms), atoms)
+{
+    sym(trans(cong_int(λ (q: Int) => c + q, dot_zeros(atoms)), add_zero(c)))
+}
+
+theorem normalize_atom(index: Nat, atoms: List<Int>):
+    nth0(index, atoms) = OfNat(0) + dot(basis(index, atoms), atoms)
+{
+    apply trans;
+    give sym(dot_basis(index, atoms));
+    sym(zero_add(dot(basis(index, atoms), atoms)))
+}
+
+theorem normalize_add(x, y, cx, cy: Int, left, right, atoms: List<Int>,
+    hx: x = cx + dot(left, atoms), hy: y = cy + dot(right, atoms)):
+    x + y = (cx + cy) + dot(add_coeffs(left, right), atoms)
+{
+    apply trans;
+    give cong_int(λ (q: Int) => q + y, hx);
+    apply trans;
+    give cong_int(λ (q: Int) => (cx + dot(left, atoms)) + q, hy);
+    apply trans;
+    give add_swap_middle(cx, dot(left, atoms), cy, dot(right, atoms));
+    cong_int(λ (q: Int) => (cx + cy) + q, sym(dot_add(left, right, atoms)))
+}
+
+theorem normalize_scale(k, x, c: Int, row, atoms: List<Int>,
+    hx: x = c + dot(row, atoms)):
+    k * x = (k * c) + dot(scale(k, row), atoms)
+{
+    apply trans;
+    give cong_int(λ (q: Int) => k * q, hx);
+    apply trans;
+    give mul_add_distr(k, c, dot(row, atoms));
+    cong_int(λ (q: Int) => k * c + q, sym(dot_scale(k, row, atoms)))
+}
+
+theorem normalize_scale_right(x, k, c: Int, row, atoms: List<Int>,
+    hx: x = c + dot(row, atoms)):
+    x * k = (k * c) + dot(scale(k, row), atoms)
+{
+    trans(mul_comm(x, k), normalize_scale(k, x, c, row, atoms, hx))
+}
+
+// Transport helpers keep generated terms small and make their direction
+// explicit. They are ordinary equality elimination, not trusted casts.
+theorem le_transport(a, b, c, d: Int, left: a = b, right: c = d, h: a <= c):
+    b <= d
+{
+    j(right, λ q p => b <= q,
+        j(left, λ q p => q <= c, h))
+}
+
+theorem sub_le_sub_constants(cx, dx, cy, dy: Int,
+    h: cx + dx <= cy + dy): dx + (-dy) <= cy + (-cx)
+{
+    let shifted = add_le_mono_r(
+        cx + dx, cy + dy, (-cx) + (-dy), h);
+    let left = trans(
+        add_swap_middle(cx, dx, -cx, -dy),
+        trans(cong_int(λ (q: Int) => q + (dx + (-dy)), add_neg(cx)),
+            zero_add(dx + (-dy))));
+    let right = trans(
+        add_swap_middle(cy, dy, -cx, -dy),
+        trans(cong_int(λ (q: Int) => (cy + (-cx)) + q, add_neg(dy)),
+            add_zero(cy + (-cx))));
+    le_transport(
+        (cx + dx) + ((-cx) + (-dy)), dx + (-dy),
+        (cy + dy) + ((-cx) + (-dy)), cy + (-cx),
+        left, right, shifted)
+}
+
+theorem neg_one_mul(x: Int): NegSucc(0) * x = -x {
+    trans(mul_neg_l(OfNat(1), x), cong_int(neg, one_mul(x)))
+}
+
+fn sub_coeffs(left, right: List<Int>) → List<Int> {
+    combo(OfNat(1), left, NegSucc(0), right)
+}
+
+theorem dot_sub(left, right, atoms: List<Int>):
+    dot(sub_coeffs(left, right), atoms) = dot(left, atoms) + (-dot(right, atoms))
+{
+    apply trans;
+    give dot_combo(OfNat(1), left, NegSucc(0), right, atoms);
+    apply trans;
+    give cong_int(λ (q: Int) => q + NegSucc(0) * dot(right, atoms),
+        one_mul(dot(left, atoms)));
+    cong_int(λ (q: Int) => dot(left, atoms) + q,
+        neg_one_mul(dot(right, atoms)))
+}
+
+theorem normalized_le_upper(x, y, cx, cy: Int, left, right, atoms: List<Int>,
+    hx: x = cx + dot(left, atoms), hy: y = cy + dot(right, atoms), h: x <= y):
+    dot(sub_coeffs(left, right), atoms) <= cy + (-cx)
+{
+    let normalized = le_transport(
+        x, cx + dot(left, atoms), y, cy + dot(right, atoms), hx, hy, h);
+    le_transport(
+        dot(left, atoms) + (-dot(right, atoms)),
+        dot(sub_coeffs(left, right), atoms),
+        cy + (-cx), cy + (-cx),
+        sym(dot_sub(left, right, atoms)), refl,
+        sub_le_sub_constants(
+            cx, dot(left, atoms), cy, dot(right, atoms), normalized))
+}
+
+theorem upper_to_negated_lower(row, atoms: List<Int>, upper: Int,
+    h: dot(row, atoms) <= upper):
+    -upper <= dot(scale(NegSucc(0), row), atoms)
+{
+    let reversed = le_neg(dot(row, atoms), upper, h);
+    let scaled = trans(
+        dot_scale(NegSucc(0), row, atoms),
+        neg_one_mul(dot(row, atoms)));
+    le_transport(-upper, -upper, -dot(row, atoms),
+        dot(scale(NegSucc(0), row), atoms), refl, sym(scaled), reversed)
+}
+
+theorem lower_transport(coeffs, atoms: List<Int>, lower, value: Int,
+    hvalue: lower <= value, value_eq: value = dot(coeffs, atoms)):
+    lower <= dot(coeffs, atoms)
+{
+    j(value_eq, λ q p => lower <= q, hvalue)
+}
+
+theorem upper_transport(coeffs, atoms: List<Int>, upper, value: Int,
+    hvalue: value <= upper, value_eq: value = dot(coeffs, atoms)):
+    dot(coeffs, atoms) <= upper
+{
+    j(value_eq, λ q p => q <= upper, hvalue)
+}
+
+// A positive multiple of a lower bound remains a lower bound.
+theorem lower_scale(k, lower, value: Int,
+    hk: OfNat(0) <= k, h: lower <= value):
+    k * lower <= k * value
+{
+    mul_le_mono_l(lower, value, k, h, hk)
+}
+
+theorem upper_neg_scale(k, value, upper: Int,
+    hk: OfNat(0) <= k, h: value <= upper):
+    (-k) * upper <= (-k) * value
+{
+    let scaled = mul_le_mono_l(value, upper, k, h, hk);
+    le_transport(
+        -(k * upper), (-k) * upper,
+        -(k * value), (-k) * value,
+        sym(mul_neg_l(k, upper)),
+        sym(mul_neg_l(k, value)),
+        le_neg(k * value, k * upper, scaled))
+}
+
+// Combining two certified lower bounds is the common nonnegative-certificate
+// step. Fourier--Motzkin's mixed lower/upper step is added with the frontend;
+// this theorem already covers equality substitution and same-direction rows.
+theorem lower_combo(a, b: Int, left, right, atoms: List<Int>, l, r: Int,
+    ha: OfNat(0) <= a, hb: OfNat(0) <= b,
+    hl: l <= dot(left, atoms), hr: r <= dot(right, atoms)):
+    a * l + b * r <= dot(combo(a, left, b, right), atoms)
+{
+    let summed = add_le_mono(
+        a * l, a * dot(left, atoms),
+        b * r, b * dot(right, atoms),
+        lower_scale(a, l, dot(left, atoms), ha, hl),
+        lower_scale(b, r, dot(right, atoms), hb, hr));
+    j(sym(dot_combo(a, left, b, right, atoms)),
+        λ q p => a * l + b * r <= q, summed)
+}
+
+
+// Fourier--Motzkin combines a lower row with an upper row using positive
+// magnitudes `a` and `b`; the upper row is multiplied by `-b`, reversing it.
+theorem lower_upper_combo(a, b: Int, left, right, atoms: List<Int>, l, u: Int,
+    ha: OfNat(0) <= a, hb: OfNat(0) <= b,
+    hl: l <= dot(left, atoms), hu: dot(right, atoms) <= u):
+    a * l + (-b) * u <= dot(combo(a, left, -b, right), atoms)
+{
+    let summed = add_le_mono(
+        a * l, a * dot(left, atoms),
+        (-b) * u, (-b) * dot(right, atoms),
+        lower_scale(a, l, dot(left, atoms), ha, hl),
+        upper_neg_scale(b, dot(right, atoms), u, hb, hu));
+    j(sym(dot_combo(a, left, -b, right, atoms)),
+        λ q p => a * l + (-b) * u <= q, summed)
+}
