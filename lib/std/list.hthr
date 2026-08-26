@@ -100,23 +100,27 @@ theorem append_assoc<A>(xs, ys, zs: List<A>):
 // rather than compute, and it pays at BOTH ends: `append` peels its FIRST
 // argument while `add` recurses on its SECOND, so `add(0, n)` is stuck at the
 // base (`add_left_zero`) and the two sides are one `Succ` out of phase at the
-// step (`add_succ_left`). Stated the other way round — `add(len(ys), len(xs))`
+// step (`add_succ_left`). Stated the other way round — `add(ys.len(), xs.len())`
 // — both arms are `{}`, and every call site reads backwards. The cost of the
 // readable spelling is these two rewrites, and it is worth it.
 
-fn len<A>(xs: List<A>) → Nat {
-    match xs { Nil => 0, Cons(_, t) => Succ(len(t)) }
+fn list_len<A>(xs: List<A>) → Nat {
+    match xs { Nil => 0, Cons(_, t) => Succ(list_len(t)) }
 }
 
+// Receiver-style public face; `list_len` is the traversal implementation so
+// the member can delegate without looking like an unguarded recursive call.
+fn List::len<A>(self xs: List<A>) → Nat { list_len(xs) }
+
 theorem len_append<A>(xs, ys: List<A>):
-    len(xs ++ ys) = len(xs) + len(ys)
+    (xs ++ ys).len() = xs.len() + ys.len()
 {
     match xs {
-        Nil => sym(add_left_zero(len(ys))),
+        Nil => sym(add_left_zero(ys.len())),
         Cons(_, t) =>
             apply trans;
             give cong_succ(len_append(t, ys));
-            sym(add_succ_left(len(t), len(ys))),
+            sym(add_succ_left(t.len(), ys.len())),
     }
 }
 
@@ -161,7 +165,7 @@ theorem map_append<A, B>(xs, ys: List<A>, f: A → B):
     }
 }
 
-theorem len_map<A, B>(xs: List<A>, f: A → B): len(map(xs, f)) = len(xs) {
+theorem len_map<A, B>(xs: List<A>, f: A → B): map(xs, f).len() = xs.len() {
     match xs {
         Nil => {},
         Cons(_, t) => cong_succ(len_map(t, f)),
@@ -203,7 +207,7 @@ theorem rev_involutive<A>(xs: List<A>): rev(rev(xs)) = xs {
 // `add(n, 1)` is `Succ(n)` by computation — `add` recurses on its second
 // argument — so unlike `len_append` this one needs no `add_succ_left` and the
 // singleton's length never has to be named.
-theorem rev_len<A>(xs: List<A>): len(rev(xs)) = len(xs) {
+theorem rev_len<A>(xs: List<A>): rev(xs).len() = xs.len() {
     match xs {
         Nil => {},
         Cons(h, t) =>
@@ -374,18 +378,18 @@ theorem foldl_rev<A, B>(xs: List<A>, f: B → A → B):
 }
 
 // `foldl` counts. Stated at a generalized accumulator it is not `len` but
-// `add(z, len(xs))`, and then the proof pays `std/nat`'s phase tax once, the
-// same way `len_append` does: the IH lands on `add(Succ(z), len(t))` and the
-// goal wants `Succ(add(z, len(t)))`.
+// `add(z, xs.len())`, and then the proof pays `std/nat`'s phase tax once, the
+// same way `len_append` does: the IH lands on `add(Succ(z), t.len())` and the
+// goal wants `Succ(add(z, t.len()))`.
 theorem foldl_len<A>(xs: List<A>):
-    (z: Nat) → foldl(xs, λ (k: Nat) (a: A) => Succ(k), z) = z + len(xs)
+    (z: Nat) → foldl(xs, λ (k: Nat) (a: A) => Succ(k), z) = z + xs.len()
 {
     match xs {
         Nil => λ z => {},
         Cons(_, t) => z ⊢
             apply trans;
             give foldl_len(t, Succ(z));
-            add_succ_left(z, len(t)),
+            add_succ_left(z, t.len()),
     }
 }
 
@@ -446,12 +450,12 @@ theorem take_append_drop<A>(xs: List<A>):
 
 // Filtering cannot increase length. Both inner branches return `List<A>`, so
 // the match needs no written motive.
-theorem len_filter<A>(xs: List<A>, p: A → Bool): len(filter(xs, p)) <= len(xs) {
+theorem len_filter<A>(xs: List<A>, p: A → Bool): filter(xs, p).len() <= xs.len() {
     match xs {
         Nil => trivial,
         Cons(h, t) => match p(h) {
             True => len_filter(t, p),
-            False => le_succ_r(len(filter(t, p)), len(t), len_filter(t, p)),
+            False => le_succ_r(filter(t, p).len(), t.len(), len_filter(t, p)),
         },
     }
 }
@@ -540,7 +544,7 @@ fn replicate<A>(x: A, n: Nat) → List<A> {
     }
 }
 
-theorem len_replicate<A>(x: A, n: Nat): len(replicate(x, n)) = n {
+theorem len_replicate<A>(x: A, n: Nat): replicate(x, n).len() = n {
     match n {
         Zero => {},
         Succ(k) => cong_succ(len_replicate(x, k)),
@@ -570,7 +574,7 @@ fn zip<A, B>(xs: List<A>) → List<B> → List<Pair<A, B>> {
 // for the same reason `min` does.
 
 theorem len_zip<A, B>(xs: List<A>):
-    (ys: List<B>) → len(zip(xs, ys)) = min(len(xs), len(ys))
+    (ys: List<B>) → zip(xs, ys).len() = min(xs.len(), ys.len())
 {
     match xs {
         Nil => λ ys => {},
@@ -582,7 +586,7 @@ theorem len_zip<A, B>(xs: List<A>):
 }
 
 theorem zip_map_fst<A, B>(xs: List<A>):
-    (ys: List<B>) → map(zip(xs, ys), λ (q: Pair<A, B>) => q.fst) = take(xs, len(ys))
+    (ys: List<B>) → map(zip(xs, ys), λ (q: Pair<A, B>) => q.fst) = take(xs, ys.len())
 {
     match xs {
         Nil => λ ys => {},
@@ -598,7 +602,7 @@ theorem zip_map_fst<A, B>(xs: List<A>):
 // its index (issues/ih-generalization.md), so it steps only once its LIST is a
 // constructor. The same shape is why `zip_swap`'s `Nil` arm splits too.
 theorem zip_map_snd<A, B>(xs: List<A>):
-    (ys: List<B>) → map(zip(xs, ys), λ (q: Pair<A, B>) => q.snd) = take(ys, len(xs))
+    (ys: List<B>) → map(zip(xs, ys), λ (q: Pair<A, B>) => q.snd) = take(ys, xs.len())
 {
     match xs {
         Nil => λ ys => match ys {
@@ -756,7 +760,8 @@ theorem mem_rev<A>(xs: List<A>, a: A): Mem(a, rev(xs)) → Mem(a, xs) {
 }
 
 // ---------------------------------------------------------------------------
-// the type's own namespace: the accessors and `nth`.
+// the type's own namespace: the accessors and `nth` (length is beside its
+// traversal above, because the length laws use it throughout this file).
 //
 // `head` and `last` are the library's first PARTIAL functions, and they are
 // written total, into `Option<A>`. That is the only spelling available today;
@@ -764,7 +769,7 @@ theorem mem_rev<A>(xs: List<A>, a: A): Mem(a, rev(xs)) → Mem(a, xs) {
 // `Option` face by adapter — is issues/guarded-to-option-adapter.md, which has
 // no customer until this one.
 //
-// All four are type-owned members and not ambient names, which for `head` and
+// All five are type-owned members, which for `head` and
 // `tail` is forced rather than chosen: `Cons`'s own fields are called `head`
 // and `tail`.
 
@@ -823,13 +828,13 @@ theorem nth_append_l<A>(xs: List<A>, ys: List<A>):
 }
 
 // Past the whole of `xs`, `nth` reads out of `ys`. The index is written
-// `add(i, len(xs))` and not `add(len(xs), i)`, which is what retires
+// `add(i, xs.len())` and not `add(xs.len(), i)`, which is what retires
 // `list_algos`'s private `plusl` (2026-08-17): that function existed only
 // because the sum had to peel a `Succ` as `xs` was peeled, and `nat::add`
 // recurses on its second argument. Written this way round `add` steps exactly
 // when `append` does, and the proof is the bare recursion.
 theorem nth_append_r<A>(xs: List<A>, ys: List<A>, i: Nat):
-    (xs ++ ys).nth(i + len(xs)) = ys.nth(i)
+    (xs ++ ys).nth(i + xs.len()) = ys.nth(i)
 {
     match xs {
         Nil => {},

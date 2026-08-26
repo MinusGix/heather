@@ -83,7 +83,7 @@ theorem p_count_isort(xs: List<Nat>, a: Nat): count(a, isort(xs)) = count(a, xs)
     count_isort(xs, a)
 }
 
-theorem p_len_isort(xs: List<Nat>): len(isort(xs)) = len(xs) { len_isort(xs) }
+theorem p_len_isort(xs: List<Nat>): isort(xs).len() = xs.len() { len_isort(xs) }
 
 theorem p_mem_isort(xs: List<Nat>, a: Nat, m: Mem(a, isort(xs))): Mem(a, xs) {
     mem_isort(xs, a, m)
@@ -121,7 +121,7 @@ theorem c_isort(): isort(dup()) = Cons(1, Cons(2, Cons(2, Nil))) { refl }
 theorem c_count(): count(2, dup()) = 2 { refl }
 theorem c_count_absent(): count(7, dup()) = 0 { refl }
 theorem c_perm(): count(2, isort(dup())) = count(2, dup()) { refl }
-theorem c_len(): len(isort(dup())) = 3 { refl }
+theorem c_len(): isort(dup()).len() = 3 { refl }
 "#;
     if let Err(err) = e.elab_module_source("probe", probe) {
         let msg = match err {

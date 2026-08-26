@@ -11,7 +11,7 @@ import pair;
 record BoundedList<A> {
     capacity: Nat,
     contents: List<A>,
-    fit: ∥list::len(contents) <= capacity∥,
+    fit: ∥contents.len() <= capacity∥,
 }
 
 // Failures carry the unchanged input state. The success and failure payloads
@@ -27,7 +27,9 @@ fn empty<A>(capacity: Nat) → BoundedList<A> {
     BoundedList<A>(capacity := capacity, contents := Nil<A>, fit := squash(zero_le(capacity)))
 }
 
-fn len<A>(xs: BoundedList<A>) → Nat { list::len(xs.contents) }
+fn bounded_len<A>(xs: BoundedList<A>) → Nat { xs.contents.len() }
+
+fn BoundedList::len<A>(self xs: BoundedList<A>) → Nat { bounded_len(xs) }
 
 fn capacity<A>(xs: BoundedList<A>) → Nat { xs.capacity }
 
@@ -41,7 +43,7 @@ fn peek<A>(xs: BoundedList<A>) → Outcome<A, BoundedList<A>> {
 fn push<A>(value: A, xs: BoundedList<A>) →
     Outcome<BoundedList<A>, BoundedList<A>>
 {
-    match le_dec(Succ(list::len(xs.contents)), xs.capacity) {
+    match le_dec(Succ(xs.contents.len()), xs.capacity) {
         Inl(fit) => Success(BoundedList<A>(
             capacity := xs.capacity,
             contents := Cons(value, xs.contents),
@@ -54,14 +56,13 @@ fn push<A>(value: A, xs: BoundedList<A>) →
 // Removing a head weakens the stored bound. `squash_map` performs that
 // weakening without selecting or exposing the representative fit proof.
 fn bounded_tail<A>(limit: Nat, tail: List<A>,
-    fit: ∥Succ(list::len(tail)) <= limit∥) → BoundedList<A>
+    fit: ∥Succ(tail.len()) <= limit∥) → BoundedList<A>
 {
     BoundedList<A>(
         capacity := limit,
         contents := tail,
         fit := squash_map(fit,
-            λ (h: Succ(list::len(tail)) <= limit) =>
-                le_of_lt(list::len(tail), limit, h)),
+            λ (h: Succ(tail.len()) <= limit) => le_of_lt(tail.len(), limit, h)),
     )
 }
 
@@ -69,7 +70,7 @@ fn pop<A>(xs: BoundedList<A>) →
     Outcome<Pair<A, BoundedList<A>>, BoundedList<A>>
 {
     let { capacity := limit, contents := contents, fit := fit } = xs;
-    (match contents as λ ys => ∥list::len(ys) <= limit∥ →
+    (match contents as λ ys => ∥ys.len() <= limit∥ →
         Outcome<Pair<A, BoundedList<A>>, BoundedList<A>> {
         Nil => λ fit => Underflow(BoundedList<A>(
             capacity := limit,
@@ -115,7 +116,7 @@ fn run<A>(ops: List<StackOp<A>>) → BoundedList<A> →
 // ---------------------------------------------------------------------------
 // Container and single-step laws.
 
-theorem len_empty<A>(limit: Nat): len(empty<A>(limit)) = 0 {}
+theorem len_empty<A>(limit: Nat): empty<A>(limit).len() = 0 {}
 
 theorem capacity_empty<A>(limit: Nat): capacity(empty<A>(limit)) = limit {}
 
@@ -128,52 +129,52 @@ theorem pop_empty<A>(limit: Nat):
 {}
 
 theorem peek_cons<A>(limit: Nat, head: A, tail: List<A>,
-    fit: ∥Succ(list::len(tail)) <= limit∥):
+    fit: ∥Succ(tail.len()) <= limit∥):
     peek(BoundedList<A>(capacity := limit, contents := Cons(head, tail), fit := fit)) =
         Success(head)
 {}
 
 theorem pop_cons<A>(limit: Nat, head: A, tail: List<A>,
-    fit: ∥Succ(list::len(tail)) <= limit∥):
+    fit: ∥Succ(tail.len()) <= limit∥):
     pop(BoundedList<A>(capacity := limit, contents := Cons(head, tail), fit := fit)) =
         Success(Pair(head, bounded_tail(limit, tail, fit)))
 {}
 
 theorem push_success<A>(value: A, xs: BoundedList<A>,
-    h: Succ(len(xs)) <= capacity(xs)):
+    h: Succ(xs.len()) <= capacity(xs)):
     push(value, xs) = Success(BoundedList<A>(
         capacity := xs.capacity,
         contents := Cons(value, xs.contents),
         fit := squash(h),
     ))
 {
-    match le_dec(Succ(list::len(xs.contents)), xs.capacity) {
+    match le_dec(Succ(xs.contents.len()), xs.capacity) {
         Inl(_) => refl,
         Inr(not_fit) => false_elim(not_fit(h)),
     }
 }
 
 theorem push_overflow<A>(value: A, xs: BoundedList<A>,
-    h: ¬(Succ(len(xs)) <= capacity(xs))):
+    h: ¬(Succ(xs.len()) <= capacity(xs))):
     push(value, xs) = Overflow(xs)
 {
-    match le_dec(Succ(list::len(xs.contents)), xs.capacity) {
+    match le_dec(Succ(xs.contents.len()), xs.capacity) {
         Inl(fit) => false_elim(h(fit)),
         Inr(_) => refl,
     }
 }
 
 theorem len_after_push<A>(value: A, xs: BoundedList<A>,
-    h: Succ(len(xs)) <= capacity(xs)):
-    len(BoundedList<A>(
+    h: Succ(xs.len()) <= capacity(xs)):
+    BoundedList<A>(
         capacity := capacity(xs),
         contents := Cons(value, xs.contents),
         fit := squash(h),
-    )) = Succ(len(xs))
+    ).len() = Succ(xs.len())
 {}
 
 theorem capacity_after_push<A>(value: A, xs: BoundedList<A>,
-    h: Succ(len(xs)) <= capacity(xs)):
+    h: Succ(xs.len()) <= capacity(xs)):
     capacity(BoundedList<A>(
         capacity := capacity(xs),
         contents := Cons(value, xs.contents),
@@ -182,12 +183,12 @@ theorem capacity_after_push<A>(value: A, xs: BoundedList<A>,
 {}
 
 theorem len_after_pop<A>(limit: Nat, tail: List<A>,
-    fit: ∥Succ(list::len(tail)) <= limit∥):
-    len(bounded_tail(limit, tail, fit)) = list::len(tail)
+    fit: ∥Succ(tail.len()) <= limit∥):
+    bounded_tail(limit, tail, fit).len() = tail.len()
 {}
 
 theorem capacity_after_pop<A>(limit: Nat, tail: List<A>,
-    fit: ∥Succ(list::len(tail)) <= limit∥):
+    fit: ∥Succ(tail.len()) <= limit∥):
     capacity(bounded_tail(limit, tail, fit)) = limit
 {}
 
@@ -195,7 +196,7 @@ theorem capacity_after_pop<A>(limit: Nat, tail: List<A>,
 // `push` and the weakened proof reconstructed by `pop` disappear by Squash
 // irrelevance, leaving the original record value.
 theorem pop_push<A>(value: A, xs: BoundedList<A>,
-    h: Succ(len(xs)) <= capacity(xs)):
+    h: Succ(xs.len()) <= capacity(xs)):
     push(value, xs) = Success(BoundedList<A>(
         capacity := xs.capacity,
         contents := Cons(value, xs.contents),
@@ -246,10 +247,10 @@ theorem run_append<A>(first: List<StackOp<A>>):
 }
 
 theorem run_push_pop<A>(value: A, xs: BoundedList<A>,
-    h: Succ(len(xs)) <= capacity(xs)):
+    h: Succ(xs.len()) <= capacity(xs)):
     run(Cons(Push(value), Cons(Pop, Nil<StackOp<A>>)), xs) = Success(xs)
 {
-    match le_dec(Succ(list::len(xs.contents)), xs.capacity) {
+    match le_dec(Succ(xs.contents.len()), xs.capacity) {
         Inl(_) => refl,
         Inr(not_fit) => false_elim(not_fit(h)),
     }

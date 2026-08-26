@@ -68,25 +68,26 @@ theorem l_map_append<A, B>(xs, ys: List<A>, f: A -> B):
     map(append(xs, ys), f) = append(map(xs, f), map(ys, f))
 { map_append(xs, ys, f) }
 
-theorem l_len_map<A, B>(xs: List<A>, f: A -> B): len(map(xs, f)) = len(xs) { len_map(xs, f) }
+theorem l_len_map<A, B>(xs: List<A>, f: A -> B): map(xs, f).len() = xs.len() { len_map(xs, f) }
 
-theorem l_len_append<A>(xs, ys: List<A>): len(append(xs, ys)) = add(len(xs), len(ys)) {
+theorem l_len_append<A>(xs, ys: List<A>):
+    append(xs, ys).len() = add(xs.len(), ys.len()) {
     len_append(xs, ys)
 }
 
-theorem l_rev_len<A>(xs: List<A>): len(rev(xs)) = len(xs) { rev_len(xs) }
+theorem l_rev_len<A>(xs: List<A>): rev(xs).len() = xs.len() { rev_len(xs) }
 
 theorem l_foldr_append<A, B>(xs, ys: List<A>, f: A -> B -> B, z: B):
     foldr(append(xs, ys), f, z) = foldr(xs, f, foldr(ys, f, z))
 { foldr_append(xs, ys, f, z) }
 
-theorem l_len_replicate<A>(x: A, n: Nat): len(replicate(x, n)) = n { len_replicate(x, n) }
+theorem l_len_replicate<A>(x: A, n: Nat): replicate(x, n).len() = n { len_replicate(x, n) }
 
 theorem l_take_drop<A>(xs: List<A>, n: Nat): append(take(xs, n), drop(xs, n)) = xs {
     take_append_drop(xs, n)
 }
 
-theorem l_len_filter<A>(xs: List<A>, p: A -> Bool): len(filter(xs, p)) <= len(xs) {
+theorem l_len_filter<A>(xs: List<A>, p: A -> Bool): filter(xs, p).len() <= xs.len() {
     len_filter(xs, p)
 }
 "#;
@@ -124,7 +125,7 @@ theorem l_foldl_rev<A, B>(xs: List<A>, f: B -> A -> B, z: B):
 { foldl_rev(xs, f, z) }
 
 theorem l_foldl_len<A>(xs: List<A>, z: Nat):
-    foldl(xs, λ (k: Nat) (a: A) => Succ(k), z) = add(z, len(xs))
+    foldl(xs, λ (k: Nat) (a: A) => Succ(k), z) = add(z, xs.len())
 { foldl_len(xs, z) }
 
 theorem l_filter_append<A>(xs, ys: List<A>, p: A -> Bool):
@@ -140,15 +141,15 @@ theorem l_filter_map<A, B>(xs: List<A>, f: A -> B, p: B -> Bool):
 { filter_map(xs, f, p) }
 
 theorem l_len_zip<A, B>(xs: List<A>, ys: List<B>):
-    len(zip(xs, ys)) = min(len(xs), len(ys))
+    zip(xs, ys).len() = min(xs.len(), ys.len())
 { len_zip(xs, ys) }
 
 theorem l_zip_map_fst<A, B>(xs: List<A>, ys: List<B>):
-    map(zip(xs, ys), λ (q: Pair<A, B>) => q.fst) = take(xs, len(ys))
+    map(zip(xs, ys), λ (q: Pair<A, B>) => q.fst) = take(xs, ys.len())
 { zip_map_fst(xs, ys) }
 
 theorem l_zip_map_snd<A, B>(xs: List<A>, ys: List<B>):
-    map(zip(xs, ys), λ (q: Pair<A, B>) => q.snd) = take(ys, len(xs))
+    map(zip(xs, ys), λ (q: Pair<A, B>) => q.snd) = take(ys, xs.len())
 { zip_map_snd(xs, ys) }
 
 theorem l_zip_swap<A, B>(xs: List<A>, ys: List<B>):
@@ -339,7 +340,7 @@ import logic;
 
 fn three() -> List<Nat> { Cons(1, Cons(2, Cons(3, Nil))) }
 
-theorem c_len(): len(three()) = 3 { refl }
+theorem c_len(): three().len() = 3 { refl }
 theorem c_take(): take(three(), 2) = Cons(1, Cons(2, Nil)) { refl }
 theorem c_drop(): drop(three(), 2) = Cons(3, Nil) { refl }
 theorem c_rev(): rev(three()) = Cons(3, Cons(2, Cons(1, Nil))) { refl }
@@ -352,11 +353,14 @@ theorem c_filter(): filter(three(), λ (n: Nat) => nat::leb(2, n)) = Cons(2, Con
 theorem c_replicate(): replicate(7, 2) = Cons(7, Cons(7, Nil)) { refl }
 theorem c_head(): three().head() = Some(1) { refl }
 theorem c_last(): three().last() = Some(3) { refl }
+theorem c_receiver_len(): three().len() = 3 { refl }
 theorem c_zip(): zip(three(), Cons(4, Nil)) = Cons(Pair(1, 4), Nil) { refl }
+
+theorem receiver_len_open<A>(xs: List<A>): xs.len() = list_len(xs) { refl }
 
 // L2′/L3. `c_mem` is the one that says `Mem` is a *computing* relation and not
 // a derivation to search: the proof is the position, written out.
-theorem c_len_zip(): len(zip(three(), Cons(4, Nil))) = 1 { refl }
+theorem c_len_zip(): zip(three(), Cons(4, Nil)).len() = 1 { refl }
 // `list::map` and not `map`: this probe imports `option` too, and a bare `map`
 // with both in scope resolves to NEITHER — it reaches the prelude's vector `map`
 // and fails asking for a vector. `issues/list-algorithms-exercise.md` predicted

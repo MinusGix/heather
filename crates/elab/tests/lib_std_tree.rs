@@ -80,10 +80,10 @@ fn leaf_count_alg<A>() -> TreeAlg<A, Nat> {
 }
 
 theorem leaf_count_fusion<A>(tree: Tree<A>):
-    len(tree_fold(leaves_alg<A>(), tree)) = tree_fold(leaf_count_alg<A>(), tree)
+    tree_fold(leaves_alg<A>(), tree).len() = tree_fold(leaf_count_alg<A>(), tree)
 {
     tree_fold_fusion(
-        leaves_alg<A>(), leaf_count_alg<A>(), λ (xs: List<A>) => len(xs),
+        leaves_alg<A>(), leaf_count_alg<A>(), λ (xs: List<A>) => xs.len(),
         λ (a: A) => refl,
         λ (left: List<A>) (right: List<A>) => len_append(left, right), tree)
 }

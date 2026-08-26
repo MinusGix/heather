@@ -58,24 +58,28 @@ theorem bind_assoc<A, B, C>(q: ∥A∥, f: A -> ∥B∥, g: B -> ∥C∥):
 { squash_bind_assoc(q, f, g) }
 
 theorem lifo<A>(x: A, xs: BoundedList<A>,
-    h: Succ(bounded_list::len(xs)) <= capacity(xs)):
+    h: Succ(xs.len()) <= capacity(xs)):
     run(Cons(Push(x), Cons(Pop, Nil)), xs) = Success(xs)
 { run_push_pop(x, xs, h) }
 
+theorem receiver_len<A>(xs: BoundedList<A>):
+    xs.len() = bounded_len(xs)
+{ refl }
+
 theorem rejected<A>(x: A, xs: BoundedList<A>,
-    h: ¬(Succ(bounded_list::len(xs)) <= capacity(xs))):
+    h: ¬(Succ(xs.len()) <= capacity(xs))):
     push(x, xs) = Overflow(xs)
 { push_overflow(x, xs, h) }
 
 theorem pushed_len<A>(x: A, xs: BoundedList<A>,
-    h: Succ(bounded_list::len(xs)) <= capacity(xs)):
-    bounded_list::len(BoundedList<A>(capacity := capacity(xs),
-        contents := Cons(x, xs.contents), fit := squash(h))) =
-        Succ(bounded_list::len(xs))
+    h: Succ(xs.len()) <= capacity(xs)):
+    BoundedList<A>(capacity := capacity(xs),
+        contents := Cons(x, xs.contents), fit := squash(h)).len() =
+        Succ(xs.len())
 { len_after_push(x, xs, h) }
 
 theorem popped_capacity<A>(limit: Nat, tail: List<A>,
-    fit: ∥Succ(list::len(tail)) <= limit∥):
+    fit: ∥Succ(tail.len()) <= limit∥):
     capacity(bounded_tail(limit, tail, fit)) = limit
 { capacity_after_pop(limit, tail, fit) }
 

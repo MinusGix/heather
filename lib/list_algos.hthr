@@ -17,8 +17,8 @@
 // list facts sitting in the algorithm file, and they are now `std/list`'s —
 // the move `cong_cons` and the append laws made on 2026-08-07, finished. The
 // private `plusl` did not move; it is GONE, because `nth_append_r`'s index
-// only ever needed writing as `add(i, len(xs))` rather than
-// `plusl(len(xs), i)` for `nat::add` to step where `append` steps. What is
+// only ever needed writing as `add(i, xs.len())` rather than
+// `plusl(xs.len(), i)` for `nat::add` to step where `append` steps. What is
 // left below is the algorithms: insertion sort, its sortedness proof, and
 // nothing that any other file would want.
 //
@@ -246,7 +246,7 @@ theorem count_isort(xs: List<Nat>, a: Nat): count(a, isort(xs)) = count(a, xs) {
 // Length, which permutation implies but not by any proof this file can write —
 // summing `count` over the elements is a fold this library does not have. Two
 // recursions, both `cong_succ` over the tail.
-theorem len_insert(x: Nat, xs: List<Nat>): len(insert(x, xs)) = Succ(len(xs)) {
+theorem len_insert(x: Nat, xs: List<Nat>): insert(x, xs).len() = Succ(xs.len()) {
     match xs {
         Nil => {},
         Cons(h, t) =>
@@ -257,7 +257,7 @@ theorem len_insert(x: Nat, xs: List<Nat>): len(insert(x, xs)) = Succ(len(xs)) {
     }
 }
 
-theorem len_isort(xs: List<Nat>): len(isort(xs)) = len(xs) {
+theorem len_isort(xs: List<Nat>): isort(xs).len() = xs.len() {
     match xs {
         Nil => {},
         Cons(h, t) => trans(len_insert(h, isort(t)), cong_succ(len_isort(t))),

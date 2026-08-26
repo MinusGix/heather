@@ -95,3 +95,10 @@ machine-specific `PUSH` theorem can reuse generic LIFO and capacity results.
   generalize non-decreasing parameters. The issue remains open for its second
   agreed round: the pointer-plus-addressed-storage representation interface
   and toy push/pop refinement.
+- 2026-08-25: API polish: length is receiver-owned for both carriers —
+  `xs.len()` at `List<A>` and `BoundedList<A>`. Keeping an ambient `len(xs)`
+  alias beside `List::len` was tried and rejected by the existing ambiguity
+  rule: both readings are equally applicable to the same receiver. The
+  canonical public spelling is therefore receiver-only; `list_len` and
+  `bounded_len` remain plainly named traversal/delegation helpers, and the
+  library plus open-receiver probes migrated to the public spelling.
