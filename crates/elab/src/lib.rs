@@ -2826,6 +2826,7 @@ impl Elaborator {
                         adjacent_swaps: 0,
                         boolean_splits: 0,
                         branches: 1,
+                        order_reifications: 0,
                         candidate_probes: 0,
                         used_lemmas: Vec::new(),
                     });
@@ -2839,6 +2840,22 @@ impl Elaborator {
                     self.arith_reports.borrow_mut().push(cert.report);
                     Ok(term)
                 } else {
+                    let direct_failure = match arith::reconstruct_order(self, cx, &head, e.span) {
+                        Ok(cert) => {
+                            let term = self.elab_check(cx, &cert.expr, expected, lvl)?;
+                            self.arith_reports.borrow_mut().push(arith::ArithReport {
+                                atoms: 0,
+                                adjacent_swaps: 0,
+                                boolean_splits: 0,
+                                branches: 1,
+                                order_reifications: 1,
+                                candidate_probes: 0,
+                                used_lemmas: vec![cert.lemma],
+                            });
+                            return Ok(term);
+                        }
+                        Err(detail) => detail,
+                    };
                     let candidates = arith::order_candidates(cx, e.span);
                     let mut selected = None;
                     let mut candidate_probes = 0;
@@ -2867,7 +2884,7 @@ impl Elaborator {
                     }
                     let Some((lemma, candidate)) = selected else {
                         return err(
-                            "`arith` exhausted its Boolean leaf candidates: conversion, additive equality, and the structural doubling-order kit all failed",
+                            format!("`arith` exhausted its Boolean leaf candidates: conversion, additive equality, and the structural doubling-order kit all failed\n  direct order reification: {direct_failure}"),
                             e.span,
                         );
                     };
@@ -2877,6 +2894,7 @@ impl Elaborator {
                         adjacent_swaps: 0,
                         boolean_splits: 0,
                         branches: 1,
+                        order_reifications: 0,
                         candidate_probes,
                         used_lemmas: vec![lemma],
                     });
@@ -2906,6 +2924,7 @@ impl Elaborator {
                         adjacent_swaps: 0,
                         boolean_splits: 0,
                         branches: 1,
+                        order_reifications: 0,
                         candidate_probes: 0,
                         used_lemmas: Vec::new(),
                     });
@@ -2950,6 +2969,10 @@ impl Elaborator {
                             adjacent_swaps: leaves.iter().map(|r| r.adjacent_swaps).sum(),
                             boolean_splits: split.splits,
                             branches: leaves.len(),
+                            order_reifications: leaves
+                                .iter()
+                                .map(|r| r.order_reifications)
+                                .sum(),
                             candidate_probes: leaves.iter().map(|r| r.candidate_probes).sum(),
                             used_lemmas,
                         });

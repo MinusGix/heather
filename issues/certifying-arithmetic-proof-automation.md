@@ -120,3 +120,7 @@ unary closed computations is compatible with that division.
   probes with goal-directed selection, and [[arith-compact-additive-certificates]]
   for reducing reassociation and proof-composition size. This umbrella retains
   the shared trust boundary and eventual solver orchestration.
+- 2026-08-26: [[arith-structural-order-reification]] landed and closed: all
+  eight carry leaves select directly from their residual `Iff`/`Le` shape,
+  reducing 20 speculative probes to zero while retaining the exact handwritten
+  evaluator metrics. The additive certificate follow-up remains next.

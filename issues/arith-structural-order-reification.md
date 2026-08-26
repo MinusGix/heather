@@ -1,6 +1,6 @@
 ---
 title: Reify structural Nat order goals instead of guessing leaf lemmas
-status: open
+status: closed
 labels: [proofs,elaboration,metaprogramming,performance,stdlib]
 created: 2026-08-26
 updated: 2026-08-26
@@ -56,3 +56,16 @@ Acceptance:
   duplicate speculative proof-term kernel checks made the generated and
   handwritten certificate counts identical, revealing 20 infer/convert probes
   as the remaining Boolean-specific cost.
+- 2026-08-26: Landed direct structural reification. The reconstructor reads the
+  nominal `Iff` spine, verifies its two directions, recognizes the two `Le`
+  shapes, and preserves neutral `twice` while evaluating only the bounded
+  closed carry addend. All eight `carry_threshold` leaves now report direct
+  selection and zero candidate probes; reducible aliases retain an explicitly
+  measured fallback. Generated and handwritten evaluator metrics remain
+  identical with zero eviction. A representative debug profile moved from
+  roughly 24 ms total to 11.6 ms (6.0 ms search/elaboration, 5.6 ms final
+  gate); handwritten measured 7.9 ms (3.0 ms elaboration, 4.9 ms gate).
+  Unsupported leaves include the structured direct-reification reason, the
+  majority mutation remains refused, and the focused value-metrics suite is
+  green. Merged-tree verification: `scripts/test --fast` reports 1,997 passed,
+  zero failed; `scripts/bench --check` reports 106/106 within thresholds.

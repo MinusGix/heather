@@ -3,6 +3,8 @@
 //! generated proof expression.
 
 use heather_elab::{ElabError, Elaborator};
+#[cfg(feature = "value-metrics")]
+use std::time::Instant;
 
 const LOGIC: &str = include_str!("../../../lib/std/logic.hthr");
 const BOOL: &str = include_str!("../../../lib/std/bool.hthr");
@@ -129,11 +131,28 @@ theorem carry_threshold(a, b, carry: Bool, power, tail_sum: Nat):
     assert_eq!((reports[0].boolean_splits, reports[0].branches), (3, 8));
     assert!(reports[0].used_lemmas.is_empty());
     assert_eq!((reports[1].boolean_splits, reports[1].branches), (3, 8));
-    assert_eq!(reports[1].candidate_probes, 20);
+    assert_eq!(reports[1].order_reifications, 8);
+    assert_eq!(reports[1].candidate_probes, 0);
     assert_eq!(
         reports[1].used_lemmas,
         ["nat::twice_le_twice_iff", "nat::twice_le_succ_twice_iff"]
     );
+}
+
+#[test]
+fn structural_order_search_remains_an_explicit_fallback() {
+    let e = run(r#"
+fn twice_alias(n: Nat) -> Nat { twice(n) }
+theorem through_alias(unrelated: Bool, power, tail_sum: Nat):
+    (twice_alias(power) <= twice(tail_sum)) ↔ (power <= tail_sum)
+{ arith }
+"#).unwrap_or_else(|error| panic!("expected compatibility search to close the alias: {error}"));
+    let reports = e.take_arith_reports();
+    assert_eq!(reports.len(), 1);
+    assert_eq!((reports[0].boolean_splits, reports[0].branches), (1, 2));
+    assert_eq!(reports[0].order_reifications, 0);
+    assert!(reports[0].candidate_probes > 0);
+    assert_eq!(reports[0].used_lemmas, ["nat::twice_le_twice_iff"]);
 }
 
 #[test]
@@ -145,6 +164,7 @@ fn majority(a, b, carry: Bool) -> Bool {
 theorem mutated(a, b, carry: Bool): majority(a, b, carry) = (a && b) { arith }
 "#);
     assert!(mutation.contains("exhausted its Boolean leaf candidates"), "{mutation}");
+    assert!(mutation.contains("direct order reification:"), "{mutation}");
 
     let bounded = bad(r#"
 fn majority(a, b, carry: Bool) -> Bool {
@@ -250,9 +270,13 @@ theorem measured(a, b, carry: Bool, power, tail_sum: Nat):
     generated.elab_module_source("generated", helpers).expect("helpers");
     generated.enable_value_metrics();
     generated.reset_value_metrics();
+    heather_elab::stats::reset_kernel_ns();
+    let generated_start = Instant::now();
     generated
         .elab_module_source("generated", &format!("{statement}{{ arith }}"))
         .expect("generated Boolean carry certificate checks");
+    let generated_total = generated_start.elapsed();
+    let generated_gate = heather_elab::stats::kernel_ns();
     let metrics = generated.value_metrics().expect("collector enabled");
 
     let mut handwritten = loaded().expect("library prefix");
@@ -285,10 +309,23 @@ theorem measured(a, b, carry: Bool, power, tail_sum: Nat):
     }
 }
 "#;
+    heather_elab::stats::reset_kernel_ns();
+    let handwritten_start = Instant::now();
     handwritten
         .elab_module_source("handwritten", &format!("{statement}{proof}"))
         .expect("handwritten Boolean carry proof checks");
+    let handwritten_total = handwritten_start.elapsed();
+    let handwritten_gate = heather_elab::stats::kernel_ns();
     let handwritten_metrics = handwritten.value_metrics().expect("collector enabled");
+    eprintln!(
+        "Boolean arith profile: generated total {:?}, search/elaboration {:?}, final gate {:?}; handwritten total {:?}, elaboration {:?}, final gate {:?}",
+        generated_total,
+        generated_total.saturating_sub(std::time::Duration::from_nanos(generated_gate)),
+        std::time::Duration::from_nanos(generated_gate),
+        handwritten_total,
+        handwritten_total.saturating_sub(std::time::Duration::from_nanos(handwritten_gate)),
+        std::time::Duration::from_nanos(handwritten_gate),
+    );
     assert_eq!(metrics.term_cache_evictions, 0, "search should not churn: {metrics:?}");
     assert_eq!(
         metrics, handwritten_metrics,

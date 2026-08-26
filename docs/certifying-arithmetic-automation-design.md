@@ -45,8 +45,11 @@ each leaf, in order, by:
 
 1. definitional equality;
 2. additive equality reconstruction;
-3. a deterministic search over `nat::twice_le_twice_iff` and
-   `nat::twice_le_succ_twice_iff`, including a successor on the right.
+3. direct reification of the `nat::twice_le_twice_iff` and
+   `nat::twice_le_succ_twice_iff` goal shapes, including structural
+   successors on the right;
+4. a compatibility search over those same applications when a reducible
+   alias hides the structural shape.
 
 Conversion runs before collecting Boolean locals, so irrelevant inputs cannot
 make an already-reflexive goal exceed the split bound. The initial splitter
@@ -56,16 +59,20 @@ engine; the small hard bound prevents an accidental exponential certificate.
 
 The match leaves use an elaborator-private marker containing a NUL byte. It
 cannot be written by Heather source and introduces no declaration or kernel
-term. Each structural candidate is elaborated transactionally on a cloned
-elaborator; the selected expression is then elaborated normally as part of the
-completed proof and passes the enclosing declaration's kernel gate.
+term. Direct order reification reads the lowered `Iff` record's two directions,
+recognizes the two `Le` applications, and reduces only a bounded closed Nat
+addend (at most four successors) while preserving neutral `twice` heads. It
+then emits one ordinary lemma application. A reducible alias may fall back to
+transactional candidate inference on a cloned elaborator; the audit reports
+that route separately. Either selected expression is elaborated normally as
+part of the completed proof and passes the enclosing declaration's kernel gate.
 The actual `std/bitvec` `carry_threshold` truth table is now a single `arith`.
 
 ## Audit and failure interface
 
 Every successful reconstruction records an `ArithReport` containing the atom
-count, adjacent-swap count, Boolean split count, checked branch count,
-structural candidate-probe count, and exact used-lemma list. Reports are drained with
+count, adjacent-swap count, Boolean split count, checked branch count, direct
+order-reification count, fallback candidate-probe count, and exact used-lemma list. Reports are drained with
 `Elaborator::take_arith_reports`; a declaration that later fails loses its
 reports transactionally, as it loses warnings and pending derivations.
 
@@ -95,10 +102,14 @@ time. That distinction matters for the two fragments:
   leaf was kernel-checked separately before the finished match was checked.
   Search now infers candidate types and compares those types, while the final
   declaration gate remains the authority on the emitted proof.
-- A representative debug run took roughly 24 ms to find, elaborate, and check
-  the Boolean certificate versus 9 ms for handwritten source; both final
-  kernel gates took about 5 ms. The remaining gap is therefore the 20 recorded
-  candidate probes: clone, infer, and convert work outside the final gate.
+- Before direct order reification, a representative debug run took roughly 24
+  ms to find, elaborate, and check the Boolean certificate versus 9 ms for
+  handwritten source; both final kernel gates took about 5 ms. With all eight
+  leaves reified directly and zero candidate probes, a representative run is
+  11.6 ms total: 6.0 ms search/elaboration and 5.6 ms final gate, versus 7.9
+  ms total for handwritten (3.0 ms elaboration, 4.9 ms final gate). These
+  milliseconds remain diagnostic; the pinned rail is eight direct
+  reifications and zero fallback probes.
 - Before `add_left_comm`, isolated additive measurements assigned 28,220 term
   closures to permutation, 14,261 to reassociation, and only 155 to
   `twice_add`. The named swap law reduced the permutation case to 9,529 and

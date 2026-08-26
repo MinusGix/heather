@@ -27,6 +27,7 @@ pub struct ArithReport {
     pub adjacent_swaps: usize,
     pub boolean_splits: usize,
     pub branches: usize,
+    pub order_reifications: usize,
     pub candidate_probes: usize,
     pub used_lemmas: Vec<&'static str>,
 }
@@ -66,6 +67,11 @@ pub(crate) struct Certificate {
 pub(crate) struct BooleanCertificate {
     pub expr: Expr,
     pub splits: usize,
+}
+
+pub(crate) struct OrderCertificate {
+    pub expr: Expr,
+    pub lemma: &'static str,
 }
 
 /// This string cannot be produced by Heather's lexer. It marks leaves in an
@@ -520,6 +526,150 @@ fn app(name: impl Into<String>, args: Vec<Expr>, span: Span) -> Expr {
     }
 }
 
+/// Read the two proposition arguments back out of the lowered `Iff` record.
+/// The record spine binds its nominal tag and then each preceding field, so
+/// the field types must be strengthened back into the ambient context before
+/// they can be compared. Checking both directions keeps nominal record
+/// recognition from silently accepting a malformed or look-alike lowering.
+fn iff_args(elab: &Elaborator, cx: &Cx, expected: &Type) -> Option<(Type, Type)> {
+    let ind = elab.display_tag_of(expected)?;
+    if ind.name != "Iff" {
+        return None;
+    }
+    let Type::Sigma { snd, .. } = &*crate::inductive::decoded(expected) else {
+        return None;
+    };
+    let Type::Sigma { fst: mp, snd, .. } = &*crate::inductive::decoded(snd) else {
+        return None;
+    };
+    let mp = crate::strengthen_ty(&cx.gamma, mp, 1)?;
+    let Type::Sigma { fst: mpr, .. } = &*crate::inductive::decoded(snd) else {
+        return None;
+    };
+    let mpr = crate::strengthen_ty(&cx.gamma, mpr, 2)?;
+    let Type::Pi { dom: p, cod: q, .. } = &*crate::inductive::decoded(&mp) else {
+        return None;
+    };
+    let q = crate::strengthen_ty(&cx.gamma, q, 1)?;
+    let Type::Pi { dom: q_back, cod: p_back, .. } = &*crate::inductive::decoded(&mpr) else {
+        return None;
+    };
+    let p_back = crate::strengthen_ty(&cx.gamma, p_back, 1)?;
+    if **p != p_back || **q_back != q {
+        return None;
+    }
+    Some(((**p).clone(), q))
+}
+
+fn relation_args<'a>(elab: &Elaborator, ty: &'a Type) -> Option<(&'a Rc<Term>, &'a Rc<Term>)> {
+    let Type::El { tm, .. } = ty else { return None };
+    let args = named_args(elab, tm, "nat::Le")?;
+    let [left, right] = args.as_slice() else { return None };
+    Some((left, right))
+}
+
+fn unary_arg<'a>(elab: &Elaborator, tm: &'a Term, name: &str) -> Option<&'a Rc<Term>> {
+    let args = named_args(elab, tm, name)?;
+    let [arg] = args.as_slice() else { return None };
+    Some(arg)
+}
+
+/// Reduce only a closed right operand of Nat addition, preserving the left
+/// operand as syntax. Carry leaves expose `twice(tail) + weight(False, …)`;
+/// evaluating that finite weight is useful, while unfolding neutral
+/// `twice(tail)` would destroy the structural head the reifier needs.
+fn normalize_closed_add_right(
+    elab: &Elaborator,
+    cx: &Cx,
+    tm: &Rc<Term>,
+    span: Span,
+) -> Result<Rc<Term>, String> {
+    let Some(args) = named_args(elab, tm, "nat::add") else {
+        return Ok(Rc::clone(tm));
+    };
+    let [left, right] = args.as_slice() else {
+        return Err("the resolved `nat::add` has an unexpected application spine".into());
+    };
+    // The carry residuals are 0..3. A small successor budget admits those
+    // while keeping broader computations, especially powers, opaque.
+    if named_args(elab, right, "nat::pow").is_some() {
+        return Ok(Rc::clone(tm));
+    }
+    let mut count = 0usize;
+    let mut rest = Rc::clone(right);
+    loop {
+        rest = elab.whnf_tm(cx, &rest, span).map_err(|e| e.to_string())?;
+        match &*rest {
+            Term::Zero => break,
+            Term::Succ(inner) if count < 4 => {
+                count += 1;
+                rest = Rc::clone(inner);
+            }
+            _ => return Ok(Rc::clone(tm)),
+        }
+    }
+    Ok((0..count).fold(Rc::clone(left), |out, _| Rc::new(Term::Succ(out))))
+}
+
+fn doubled_base(elab: &Elaborator, tm: &Rc<Term>) -> Option<(usize, Rc<Term>)> {
+    let mut succs = 0usize;
+    let mut head = Rc::clone(tm);
+    while let Term::Succ(inner) = &*head {
+        succs += 1;
+        head = Rc::clone(inner);
+    }
+    Some((succs, Rc::clone(unary_arg(elab, &head, "nat::twice")?)))
+}
+
+/// Select a structural doubling-order certificate from the normalized goal.
+/// This recognizes only the public two-lemma grammar and emits one ordinary
+/// lemma application for the enclosing declaration gate to check.
+pub(crate) fn reconstruct_order(
+    elab: &Elaborator,
+    cx: &Cx,
+    expected: &Type,
+    span: Span,
+) -> Result<OrderCertificate, String> {
+    let (lhs_prop, rhs_prop) = iff_args(elab, cx, expected).ok_or_else(|| format!(
+        "the residual goal `{}` is not a structurally recognizable `Iff`",
+        elab.display_type(cx, expected)
+    ))?;
+    let (doubled_left, doubled_right) = relation_args(elab, &lhs_prop).ok_or_else(||
+        "the left side of the residual `Iff` is not a direct `nat::Le` application".to_string()
+    )?;
+    let (plain_left, plain_right) = relation_args(elab, &rhs_prop).ok_or_else(||
+        "the right side of the residual `Iff` is not a direct `nat::Le` application".to_string()
+    )?;
+    let n = unary_arg(elab, doubled_left, "nat::twice").ok_or_else(||
+        "the residual order goal does not have `nat::twice` on the left".to_string()
+    )?;
+    let doubled_right = normalize_closed_add_right(elab, cx, doubled_right, span)?;
+    let (succs, base) = doubled_base(elab, &doubled_right).ok_or_else(||
+        "the residual order goal does not reduce to successors around `nat::twice`".to_string()
+    )?;
+    let m = (0..succs / 2).fold(base, |out, _| Rc::new(Term::Succ(out)));
+    let lemma = if succs % 2 == 0 {
+        "nat::twice_le_twice_iff"
+    } else {
+        "nat::twice_le_succ_twice_iff"
+    };
+    let plain_right = normalize_closed_add_right(elab, cx, plain_right, span)?;
+    if **plain_left != **n || *plain_right != *m {
+        return Err(
+            "the reflected plain inequality does not use the arguments of the doubled inequality"
+                .into(),
+        );
+    }
+    let n = elab.spell_term_clean(cx, n).ok_or_else(||
+        "the reflected left argument has no complete surface spelling".to_string()
+    )?;
+    let m = elab.spell_term_clean(cx, &m).ok_or_else(||
+        "the reflected right argument has no complete surface spelling".to_string()
+    )?;
+    let expr = parse_generated_expr(&format!("{lemma}({n}, {m})"))?;
+    Ok(OrderCertificate { expr, lemma })
+}
+
 /// Fixed, deterministic leaf candidates for the carry threshold. These tiny
 /// applications are built directly as surface AST: parsing generated source
 /// repeatedly is useful for large reconstructed proofs, but pure overhead for
@@ -637,6 +787,7 @@ pub(crate) fn reconstruct(
             adjacent_swaps: build.adjacent_swaps,
             boolean_splits: 0,
             branches: 1,
+            order_reifications: 0,
             candidate_probes: 0,
             used_lemmas: build.used_lemmas,
         },
