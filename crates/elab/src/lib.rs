@@ -79,6 +79,7 @@ mod access;
 mod application;
 mod attempt;
 pub mod arith;
+pub mod omega;
 pub mod certgen;
 pub mod gate;
 pub mod stats;
