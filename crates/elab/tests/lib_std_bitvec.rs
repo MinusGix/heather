@@ -115,6 +115,8 @@ theorem borrow(): borrow_sub(4, ofNat(4, 3), ofNat(4, 5)) { trivial }
 theorem ov_add(): signed_overflow_add(4, ofNat(4, 7), ofNat(4, 1)) = True { refl }
 theorem ov_sub(): signed_overflow_sub(4, ofNat(4, 8), ofNat(4, 1)) = True { refl }
 theorem width_zero_add(): add(0, zero(0), zero(0)) = zero(0) { refl }
+theorem carry_bit_yes(): carry_add_bit(4, ofNat(4, 14), ofNat(4, 3)) = True { refl }
+theorem carry_bit_no(): carry_add_bit(4, ofNat(4, 1), ofNat(4, 1)) = False { refl }
 "#);
     bad("theorem no_carry(): carry_add(4, ofNat(4, 1), ofNat(4, 1)) { trivial }");
 }
@@ -157,6 +159,18 @@ theorem sround(n, m: Nat, x: BitVec(Succ(n))):
     truncate(Succ(n), m, sign_extend(n, m, x)) = x { truncate_sign_extend(n, m, x) }
 theorem ext(n: Nat, x, y: BitVec(n), at: (i: Fin(n)) -> get(n, x, i) = get(n, y, i)):
     x = y { extensionality(n, x, y, at) }
+
+theorem carry_equiv(n: Nat, x, y: BitVec(n)):
+    (carry_add_bit(n, x, y) = True) ↔ carry_add(n, x, y)
+{ carry_add_bit_true_iff(n, x, y) }
+
+theorem carry_forward(n: Nat, x, y: BitVec(n),
+    h: carry_add_bit(n, x, y) = True): carry_add(n, x, y)
+{ carry_add_of_bit_true(n, x, y, h) }
+
+theorem carry_backward64(x, y: BitVec(64), h: carry_add(64, x, y)):
+    carry_add_bit(64, x, y) = True
+{ carry_add_bit_of_carry(64, x, y, h) }
 "#);
     bad("theorem fake(n: Nat, x: BitVec(n)): bxor(n, x, x) = zero(n) { refl }");
 }

@@ -54,3 +54,12 @@ syntax.  The round should decide from written proofs, not from terminology.
   prove that havocing a flag preserves an adjacent register.  Treat those as
   the pair-shaped baseline, not as completion of this issue: this issue still
   decides how real nested state names locations and states noninterference.
+- 2026-08-26: The x86 vertical slice landed the first generic layer in
+  `lib/std/location.hthr`: total read/write locations, separately carried
+  get-put/put-get/put-put evidence, structural composition of locations,
+  disjointness as two read-frame laws plus commuting writes, and open-carrier
+  probes. Law evidence is deliberately separate from the location constructor,
+  so a custom architectural location can be described before it is certified
+  and partial access is not disguised as a total lens. The issue remains open:
+  composition of law records, concrete nested/disjoint fields, overlapping
+  bit slices, and the partial-access bridge are still its acceptance residue.

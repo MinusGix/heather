@@ -1,0 +1,188 @@
+// Initial x86-64 architectural execution slice. This module begins at the
+// decoded-instruction boundary: the typed object carries a well-formed length.
+// The eventual `DecodedAt` evidence ties that object to actual fetched bytes
+// before the byte-level machine step calls `execute`; the compiler's encoder
+// and a raw-binary decoder meet at that boundary.
+//
+// Scope: long-mode scalar register forms MOV r64,r64 and ADD r64,r64. There
+// are no memory operands or execution faults in this slice. Coverage remains
+// distinct from semantic outcomes through std/relation.
+
+import logic;
+import bool;
+import nat;
+import bitvec;
+import relation;
+import location;
+
+inductive Gpr {
+    Rax, Rcx, Rdx, Rbx, Rsp, Rbp, Rsi, Rdi,
+    R8, R9, R10, R11, R12, R13, R14, R15,
+}
+
+fn gpr_index(register: Gpr) → Nat {
+    match register {
+        Rax => 0, Rcx => 1, Rdx => 2, Rbx => 3,
+        Rsp => 4, Rbp => 5, Rsi => 6, Rdi => 7,
+        R8 => 8, R9 => 9, R10 => 10, R11 => 11,
+        R12 => 12, R13 => 13, R14 => 14, R15 => 15,
+    }
+}
+
+fn nat_same(left: Nat) → Nat → Bool {
+    match left as λ n => Nat → Bool {
+        Zero => λ right => match right { Zero => True, Succ(_) => False },
+        Succ(l, ih) => λ right => match right {
+            Zero => False,
+            Succ(r) => ih(r),
+        },
+    }
+}
+
+record Gprs { at: Gpr → BitVec(64) }
+
+fn zero_gprs() → Gprs { Gprs(at := λ (register: Gpr) => zero(64)) }
+
+fn read_gpr(register: Gpr, registers: Gprs) → BitVec(64) {
+    registers.at(register)
+}
+
+fn write_gpr(register: Gpr, value: BitVec(64), registers: Gprs) → Gprs {
+    Gprs(at := λ (query: Gpr) =>
+        match nat_same(gpr_index(register), gpr_index(query)) {
+            False => registers.at(query),
+            True => value,
+        })
+}
+
+fn gpr_location(register: Gpr) → Location<Gprs, BitVec(64)> {
+    Location<Gprs, BitVec(64)>(
+        read := λ (registers: Gprs) => read_gpr(register, registers),
+        write := λ (registers: Gprs) => λ (value: BitVec(64)) =>
+            write_gpr(register, value, registers),
+    )
+}
+
+record Flags {
+    cf: Bool, pf: Bool, af: Bool, zf: Bool, sf: Bool, of: Bool,
+}
+
+fn clear_flags() → Flags {
+    Flags(cf := False, pf := False, af := False,
+        zf := False, sf := False, of := False)
+}
+
+record MachineState<M> {
+    gprs: Gprs,
+    flags: Flags,
+    rip: BitVec(64),
+    memory: M,
+}
+
+inductive Instruction {
+    MovRR(destination: Gpr, source: Gpr),
+    AddRR(destination: Gpr, source: Gpr),
+}
+
+// X86 instructions occupy 1 through 15 bytes. Squashing makes the fact
+// observationally irrelevant while preventing fabricated decoded lengths.
+record DecodedInstruction {
+    instruction: Instruction,
+    length: Nat,
+    valid_length: ∥1 <= length ∧ length <= 15∥,
+}
+
+fn next_rip(current: BitVec(64), length: Nat) → BitVec(64) {
+    bitvec::add(64, current, ofNat(64, length))
+}
+
+fn xor_bits(n: Nat) → BitVec(n) → Bool {
+    match n as λ k => BitVec(k) → Bool {
+        Zero => λ x => False,
+        Succ(k, ih) => λ x => xor_bit(head_bit(k, x), ih(tail_bits(k, x))),
+    }
+}
+
+fn is_zero_bits(n: Nat) → BitVec(n) → Bool {
+    match n as λ k => BitVec(k) → Bool {
+        Zero => λ x => True,
+        Succ(k, ih) => λ x =>
+            bool::not(head_bit(k, x)) && ih(tail_bits(k, x)),
+    }
+}
+
+fn add_flags(left, right: BitVec(64)) → Flags {
+    let result = bitvec::add(64, left, right);
+    let low_left = take_low(4, 60, left);
+    let low_right = take_low(4, 60, right);
+    Flags(
+        cf := carry_add_bit(64, left, right),
+        pf := bool::not(xor_bits(8, take_low(8, 56, result))),
+        af := carry_add_bit(4, low_left, low_right),
+        zf := is_zero_bits(64, result),
+        sf := sign_bit(64, result),
+        of := signed_overflow_add(64, left, right),
+    )
+}
+
+record RegisterEffect { gprs: Gprs, flags: Flags }
+
+fn execute_add(destination, source: Gpr, before: Gprs) → RegisterEffect
+{
+    let left = read_gpr(destination, before);
+    let right = read_gpr(source, before);
+    RegisterEffect(
+        gprs := write_gpr(destination, bitvec::add(64, left, right), before),
+        flags := add_flags(left, right),
+    )
+}
+
+fn execute_register(instruction: Instruction, before: Gprs, flags: Flags) →
+    RegisterEffect
+{
+    match instruction {
+        MovRR(destination, source) => RegisterEffect(
+            gprs := write_gpr(destination, read_gpr(source, before), before),
+            flags := flags,
+        ),
+        AddRR(destination, source) => execute_add(destination, source, before),
+    }
+}
+
+fn execute_normal<M>(decoded: DecodedInstruction, before: MachineState<M>) →
+    MachineState<M>
+{
+    let effect = execute_register(decoded.instruction, before.gprs, before.flags);
+    MachineState<M>(
+        gprs := effect.gprs,
+        flags := effect.flags,
+        rip := next_rip(before.rip, decoded.length),
+        memory := before.memory,
+    )
+}
+
+inductive Exception { }
+
+fn Execute<M>(decoded: DecodedInstruction, before: MachineState<M>,
+    outcome: SemanticOutcome<MachineState<M>, Exception>) → Type
+{
+    outcome = Returned(execute_normal(decoded, before))
+}
+
+inductive CoverageStatus { SemanticsDefined, SemanticsMissing }
+
+fn coverage(instruction: Instruction) → CoverageStatus { SemanticsDefined }
+
+theorem mov_preserves_flags<M>(destination, source: Gpr, length: Nat,
+    valid: ∥1 <= length ∧ length <= 15∥, before: MachineState<M>):
+    execute_normal(
+        DecodedInstruction(instruction := MovRR(destination, source),
+            length := length, valid_length := valid), before).flags = before.flags
+{}
+
+theorem mov_preserves_memory<M>(destination, source: Gpr, length: Nat,
+    valid: ∥1 <= length ∧ length <= 15∥, before: MachineState<M>):
+    execute_normal(
+        DecodedInstruction(instruction := MovRR(destination, source),
+            length := length, valid_length := valid), before).memory = before.memory
+{}

@@ -47,6 +47,53 @@ theorem add_comm(x, y: Nat): x + y = y + x {
     }
 }
 
+// Structural doubling. `2 * n` is extensionally the same operation, but
+// multiplication recurses on its second argument and is a poor normal form
+// for proofs that consume one binary digit at a time. `twice` exposes two
+// successors per input successor, so order cancellation remains structural.
+fn twice(n: Nat) → Nat {
+    match n { Zero => 0, Succ(k) => Succ(Succ(twice(k))) }
+}
+
+theorem twice_add_self(n: Nat): twice(n) = n + n {
+    match n {
+        Zero => refl,
+        Succ(k) => calc {
+            twice(Succ(k))
+                = Succ(Succ(twice(k))) := refl,
+                = Succ(Succ(k + k)) := cong_succ(cong_succ(twice_add_self(k))),
+                = Succ(Succ(k) + k) := cong_succ(sym(add_succ_left(k, k))),
+                = Succ(k) + Succ(k) := refl,
+        },
+    }
+}
+
+theorem twice_add(a, b: Nat): twice(a + b) = twice(a) + twice(b) {
+    match b {
+        Zero => refl,
+        Succ(k) => cong_succ(cong_succ(twice_add(a, k))),
+    }
+}
+
+// Reorder the middle two elements of a four-term sum. Keeping this ordinary
+// commutative-monoid consequence named avoids rebuilding a five-step calc in
+// every binary-arithmetic proof.
+theorem add_swap_middle(a, b, c, d: Nat):
+    (a + b) + (c + d) = (a + c) + (b + d)
+{
+    calc {
+        (a + b) + (c + d)
+            = a + (b + (c + d)) := add_assoc(a, b, c + d),
+            = a + ((b + c) + d) :=
+                cong_nat(λ (q: Nat) => a + q, sym(add_assoc(b, c, d))),
+            = a + ((c + b) + d) :=
+                cong_nat(λ (q: Nat) => a + (q + d), add_comm(b, c)),
+            = a + (c + (b + d)) :=
+                cong_nat(λ (q: Nat) => a + q, add_assoc(c, b, d)),
+            = (a + c) + (b + d) := sym(add_assoc(a, c, b + d)),
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Multiplication and its kit. `mul` recurses on its SECOND argument, like
 // `add`, and the step puts the recursive result on the LEFT of the `add` —
@@ -206,6 +253,50 @@ theorem sub_zero(m: Nat): sub(m, 0) = m {
 // `Zero` is below everything, by computation.
 theorem zero_le(m: Nat): 0 <= m { trivial }
 
+// Doubling reflects order; an extra odd successor on the right does not
+// change the comparison. Both proofs are just the two-successor recursion of
+// `twice` read alongside the one-successor recursion of `Le`.
+fn TwiceLeTwice(n, m: Nat) → Type { twice(n) <= twice(m) }
+fn TwiceLeOdd(n, m: Nat) → Type { twice(n) <= Succ(twice(m)) }
+
+theorem twice_le_twice_iff_curried(n: Nat): (m: Nat) →
+    Iff<TwiceLeTwice(n, m), Le(n, m)>
+{
+    match n {
+        Zero => λ m => Iff(mp := λ h => zero_le(m),
+            mpr := λ h => zero_le(twice(m))),
+        Succ(k, ih) => λ m => match m {
+            Zero => Iff(mp := λ bad => bad, mpr := λ bad => bad),
+            Succ(l) => ih(l),
+        },
+    }
+}
+
+theorem twice_le_twice_iff(n, m: Nat):
+    (twice(n) <= twice(m)) ↔ (n <= m)
+{
+    twice_le_twice_iff_curried(n, m)
+}
+
+theorem twice_le_succ_twice_iff_curried(n: Nat): (m: Nat) →
+    Iff<TwiceLeOdd(n, m), Le(n, m)>
+{
+    match n {
+        Zero => λ m => Iff(mp := λ h => zero_le(m),
+            mpr := λ h => zero_le(Succ(twice(m)))),
+        Succ(k, ih) => λ m => match m {
+            Zero => Iff(mp := λ bad => bad, mpr := λ bad => bad),
+            Succ(l) => ih(l),
+        },
+    }
+}
+
+theorem twice_le_succ_twice_iff(n, m: Nat):
+    (twice(n) <= Succ(twice(m))) ↔ (n <= m)
+{
+    twice_le_succ_twice_iff_curried(n, m)
+}
+
 theorem le_refl(n: Nat): n <= n { match n { Zero => trivial, Succ(k) => le_refl(k) } }
 
 // The one absurdity, and it is not proved so much as *named*: `Le(Succ n, 0)`
@@ -218,6 +309,13 @@ theorem not_succ_le_zero(n: Nat, h: Succ(n) <= 0): False { h }
 // lemmas anyway, because the API is the kit and downstream never unfolds `Le`.
 theorem le_succ_succ(n, m: Nat, h: n <= m): Succ(n) <= Succ(m) { h }
 theorem le_of_succ_succ(n, m: Nat, h: Succ(n) <= Succ(m)): n <= m { h }
+
+theorem le_congr_iff(a, b, c, d: Nat, left: a = b, right: c = d):
+    (a <= c) ↔ (b <= d)
+{
+    j(left, λ y p => (a <= c) ↔ (y <= d),
+      j(right, λ z q => (a <= c) ↔ (a <= z), iff_refl()))
+}
 
 theorem le_succ_r(n: Nat): (m: Nat) → n <= m → n <= Succ(m) {
     match n {

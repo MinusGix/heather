@@ -166,7 +166,7 @@ fn sign_extend(n, extra: Nat, x: BitVec(Succ(n))) → BitVec(extra + Succ(n)) {
 fn toNat(n: Nat) → BitVec(n) → Nat {
     match n as λ k => BitVec(k) → Nat {
         Zero => λ x => 0,
-        Succ(k, ih) => λ x => bit_value(head_bit(k, x)) + 2 * ih(tail_bits(k, x)),
+        Succ(k, ih) => λ x => bit_value(head_bit(k, x)) + twice(ih(tail_bits(k, x))),
     }
 }
 
@@ -253,6 +253,160 @@ fn mul(n: Nat, a, b: BitVec(n)) → BitVec(n) {
 
 fn carry_add(n: Nat, a, b: BitVec(n)) → Type {
     nat::pow(2, n) <= toNat(n, a) + toNat(n, b)
+}
+
+// Executable carry view. `carry_add` above is the arithmetic proposition used
+// by proofs; instruction semantics and other evaluators need the same fact as
+// a Boolean without deciding an open comparison involving `2^n`. This ripple
+// runs structurally over the bits and therefore remains linear at width 64.
+fn carry_majority(a, b, carry: Bool) → Bool {
+    (a && b) || ((a && carry) || (b && carry))
+}
+
+fn carry_bits(n: Nat) → BitVec(n) → BitVec(n) → Bool → Bool {
+    match n as λ k => BitVec(k) → BitVec(k) → Bool → Bool {
+        Zero => λ a b carry => carry,
+        Succ(k, ih) => λ a b carry => ih(
+            tail_bits(k, a), tail_bits(k, b),
+            carry_majority(head_bit(k, a), head_bit(k, b), carry)),
+    }
+}
+
+fn carry_add_bit(n: Nat, a, b: BitVec(n)) → Bool {
+    carry_bits(n, a, b, False)
+}
+
+// ---------------------------------------------------------------------------
+// Structural carry agrees with the unsigned arithmetic characterization.
+
+fn carry_weight(a, b, carry: Bool) → Nat {
+    (bit_value(a) + bit_value(b)) + bit_value(carry)
+}
+
+theorem carry_sum_normalize(x, y, z, a, b: Nat):
+    (x + twice(a)) + (y + twice(b)) + z =
+    twice(a + b) + ((x + y) + z)
+{
+    calc {
+        (x + twice(a)) + (y + twice(b)) + z
+            = ((x + y) + (twice(a) + twice(b))) + z :=
+                cong_nat(λ (q: Nat) => q + z,
+                    nat::add_swap_middle(x, twice(a), y, twice(b))),
+            = ((twice(a) + twice(b)) + (x + y)) + z :=
+                cong_nat(λ (q: Nat) => q + z,
+                    nat::add_comm(x + y, twice(a) + twice(b))),
+            = (twice(a) + twice(b)) + ((x + y) + z) :=
+                nat::add_assoc(twice(a) + twice(b), x + y, z),
+            = twice(a + b) + ((x + y) + z) :=
+                cong_nat(λ (q: Nat) => q + ((x + y) + z),
+                    sym(twice_add(a, b))),
+    }
+}
+
+theorem pow_two_succ_twice(n: Nat):
+    nat::pow(2, Succ(n)) = twice(nat::pow(2, n))
+{
+    let p = nat::pow(2, n);
+    calc {
+        nat::pow(2, Succ(n))
+            = (0 + p) + p := refl,
+            = p + p := cong_nat(λ (q: Nat) => q + p, nat::add_left_zero(p)),
+            = twice(p) := sym(twice_add_self(p)),
+    }
+}
+
+theorem carry_threshold(a, b, carry: Bool, power, tail_sum: Nat):
+    (twice(power) <= twice(tail_sum) + carry_weight(a, b, carry)) ↔
+    (power <= tail_sum + bit_value(carry_majority(a, b, carry)))
+{
+    match a {
+        False => match b {
+            False => match carry {
+                False => twice_le_twice_iff(power, tail_sum),
+                True => twice_le_succ_twice_iff(power, tail_sum),
+            },
+            True => match carry {
+                False => twice_le_succ_twice_iff(power, tail_sum),
+                True => twice_le_twice_iff(power, Succ(tail_sum)),
+            },
+        },
+        True => match b {
+            False => match carry {
+                False => twice_le_succ_twice_iff(power, tail_sum),
+                True => twice_le_twice_iff(power, Succ(tail_sum)),
+            },
+            True => match carry {
+                False => twice_le_twice_iff(power, Succ(tail_sum)),
+                True => twice_le_succ_twice_iff(power, Succ(tail_sum)),
+            },
+        },
+    }
+}
+
+fn CarryBitTrue(n: Nat, a, b: BitVec(n), carry: Bool) → Type {
+    carry_bits(n, a, b, carry) = True
+}
+
+fn CarryArithmetic(n: Nat, a, b: BitVec(n), carry: Bool) → Type {
+    nat::pow(2, n) <= toNat(n, a) + toNat(n, b) + bit_value(carry)
+}
+
+theorem carry_arithmetic_step(n: Nat, a, b: BitVec(Succ(n)), carry: Bool):
+    CarryArithmetic(Succ(n), a, b, carry) ↔
+    CarryArithmetic(n, tail_bits(n, a), tail_bits(n, b),
+        carry_majority(head_bit(n, a), head_bit(n, b), carry))
+{
+    let left = toNat(n, tail_bits(n, a));
+    let right = toNat(n, tail_bits(n, b));
+    iff_trans(
+        le_congr_iff(
+            nat::pow(2, Succ(n)), twice(nat::pow(2, n)),
+            toNat(Succ(n), a) + toNat(Succ(n), b) + bit_value(carry),
+            twice(left + right) +
+                carry_weight(head_bit(n, a), head_bit(n, b), carry),
+            pow_two_succ_twice(n),
+            carry_sum_normalize(
+                bit_value(head_bit(n, a)), bit_value(head_bit(n, b)),
+                bit_value(carry), left, right)),
+        carry_threshold(head_bit(n, a), head_bit(n, b), carry,
+            nat::pow(2, n), left + right))
+}
+
+theorem carry_bits_true_iff_arithmetic(n: Nat):
+    (a, b: BitVec(n)) → (carry: Bool) →
+    Iff<CarryBitTrue(n, a, b, carry), CarryArithmetic(n, a, b, carry)>
+{
+    match n as λ k => (a, b: BitVec(k)) → (carry: Bool) →
+        Iff<CarryBitTrue(k, a, b, carry), CarryArithmetic(k, a, b, carry)> {
+        Zero => λ a b carry => match carry {
+            False => Iff(
+                mp := λ bad => absurd(bad),
+                mpr := λ bad => false_elim(bad)),
+            True => Iff(mp := λ h => trivial, mpr := λ h => refl),
+        },
+        Succ(k, ih) => λ a b carry => iff_trans(
+            ih(tail_bits(k, a), tail_bits(k, b),
+                carry_majority(head_bit(k, a), head_bit(k, b), carry)),
+            iff_sym(carry_arithmetic_step(k, a, b, carry))),
+    }
+}
+
+theorem carry_add_bit_true_iff(n: Nat, a, b: BitVec(n)):
+    (carry_add_bit(n, a, b) = True) ↔ carry_add(n, a, b)
+{
+    carry_bits_true_iff_arithmetic(n, a, b, False)
+}
+
+theorem carry_add_of_bit_true(n: Nat, a, b: BitVec(n),
+    h: carry_add_bit(n, a, b) = True): carry_add(n, a, b)
+{
+    carry_add_bit_true_iff(n, a, b).mp(h)
+}
+
+theorem carry_add_bit_of_carry(n: Nat, a, b: BitVec(n),
+    h: carry_add(n, a, b)): carry_add_bit(n, a, b) = True
+{
+    carry_add_bit_true_iff(n, a, b).mpr(h)
 }
 
 fn borrow_sub(n: Nat, a, b: BitVec(n)) → Type { toNat(n, a) < toNat(n, b) }

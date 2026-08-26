@@ -3,7 +3,7 @@ title: Define the canonical scoped x86-64 machine model
 status: open
 labels: [compiler,semantics,x86,design]
 created: 2026-08-25
-updated: 2026-08-25
+updated: 2026-08-26
 ---
 
 Define Heather's one canonical x86-64 architectural step relation for the
@@ -96,3 +96,23 @@ access; it does not claim x86 memory is total.
   intentionally allowed to begin before all five land: discovering a missing
   theorem/API is part of their requirements, but any provisional local helper
   must be re-homed rather than becoming an x86-owned generic library.
+- 2026-08-26: The first implementation round fixes the byte/typed boundary in
+  `docs/x86-64-execution-boundary.md`. The eventual canonical `step` composes
+  fetch/decode from bytes at RIP with one typed `execute` relation. Compiler
+  encoding and raw-binary analysis prove into the same decoded object; neither
+  owns a second instruction meaning. `lib/std/arch/x86_64/model.hthr` begins the vertical
+  slice with all GPR names, arithmetic flags, opaque memory, decoded 1--15 byte
+  length, RIP fallthrough, and register forms of `MOV` and `ADD`. The generic
+  total-location vocabulary begins separately in `lib/std/location.hthr`.
+- 2026-08-26: The slice kernel-checks with deterministic register execution,
+  all six `ADD` arithmetic flags, a 1--15-byte decoded-length invariant,
+  distinct coverage status, and generic `MOV` memory/flag frame statements.
+  Two dogfooding residues received owners rather than workarounds:
+  [[bitvec-executable-carry-correspondence]] relates the new linear ripple bit
+  to the arithmetic carry proposition; [[x86-open-state-projection-cost]] owns
+  the conversion-fuel/stack cost of stronger open state-projection laws. Raw
+  byte evidence and decoding remain the next machine-model round.
+- 2026-08-26: [[bitvec-executable-carry-correspondence]] closed. `ADD`'s
+  executable CF/AF calculation now has a kernel-checked open-width bridge to
+  the generic unsigned inequality, including the width-64 specialization,
+  without evaluating a `2^64` comparison.

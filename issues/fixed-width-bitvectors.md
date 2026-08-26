@@ -3,7 +3,7 @@ title: Develop fixed-width bitvectors and their arithmetic proof kit
 status: closed
 labels: [stdlib,mathematics,design]
 created: 2026-08-25
-updated: 2026-08-25
+updated: 2026-08-26
 ---
 
 Heather has unbounded `Nat` and `Int`, kernel vectors and `Fin`, and useful
@@ -99,3 +99,14 @@ waiting for them.
   spans bit order, conversion, wrapping arithmetic, overflow, shape operations,
   extension, and shifts, while separate probes apply every core law to open
   values and widths and carry negative controls.
+- 2026-08-26: The first executable x86 `ADD` customer added the missing
+  Boolean view `carry_add_bit`, implemented as a structural ripple rather than
+  by deciding the arithmetic `carry_add` proposition through `Nat`. The latter
+  route attempted open `2^64` comparisons and exhausted the test-process memory
+  rail. Closed carry/no-carry controls landed; the open correspondence theorem
+  is owned by [[bitvec-executable-carry-correspondence]].
+- 2026-08-26: [[bitvec-executable-carry-correspondence]] closed: the structural
+  ripple result is now proved equivalent to the unsigned arithmetic carry
+  proposition at an open width, in both directions. The proof also replaced
+  `toNat`'s open `2 * tail` spelling with propositionally equal structural
+  doubling, giving binary proofs a reduction shape proportional to width.

@@ -1,0 +1,79 @@
+// Total readable/writable locations and their elementary laws. A location is
+// a candidate total lens stated without architecture-specific names; its
+// `LocationLaws` value is the certification. Partial
+// access (memory permissions, missing addresses, faults) is deliberately not
+// represented by this type: it composes with locations through an outcome or
+// relation supplied by the partial-access layer.
+
+import logic;
+
+record Location<S, A> { read: S → A, write: S → A → S }
+
+// Laws are evidence about a location rather than constructor fields. This
+// permits describing architecture-specific/custom locations first and makes
+// the point at which their laws are available explicit.
+record LocationLaws<S, A>(location: Location<S, A>) {
+    get_put: (state: S) →
+        location.write(state, location.read(state)) = state,
+    put_get: (state: S) → (value: A) →
+        location.read(location.write(state, value)) = value,
+    put_put: (state: S) → (first, second: A) →
+        location.write(location.write(state, first), second) =
+        location.write(state, second),
+}
+
+fn read_at<S, A>(location: Location<S, A>, state: S) → A {
+    location.read(state)
+}
+
+fn write_at<S, A>(location: Location<S, A>, state: S, value: A) → S {
+    location.write(state, value)
+}
+
+// Locations compose from an outer field to a field inside it. Composition of
+// their law records is a follow-up proof surface; the data operation itself
+// neither assumes nor fabricates those laws.
+fn compose_location<S, A, B>(outer: Location<S, A>, inner: Location<A, B>) →
+    Location<S, B>
+{
+    Location<S, B>(
+        read := λ (state: S) => inner.read(outer.read(state)),
+        write := λ (state: S) => λ (value: B) =>
+            outer.write(state, inner.write(outer.read(state), value)),
+    )
+}
+
+theorem lawful_get_put<S, A>(location: Location<S, A>,
+    laws: LocationLaws<S, A>(location), state: S):
+    location.write(state, location.read(state)) = state
+{
+    laws.get_put(state)
+}
+
+// Two locations are disjoint when writes commute and either write preserves
+// what the other reads. Overlapping bit slices therefore cannot acquire this
+// evidence unless their overlap is empty or a stronger side condition is
+// supplied by the client.
+record Disjoint<S, A, B>(left: Location<S, A>, right: Location<S, B>) {
+    left_after_right: (state: S) → (value: B) →
+        left.read(right.write(state, value)) = left.read(state),
+    right_after_left: (state: S) → (value: A) →
+        right.read(left.write(state, value)) = right.read(state),
+    writes_commute: (state: S) → (a: A) → (b: B) →
+        left.write(right.write(state, b), a) =
+        right.write(left.write(state, a), b),
+}
+
+theorem disjoint_read_left<S, A, B>(left: Location<S, A>, right: Location<S, B>,
+    apart: Disjoint<S, A, B>(left, right), state: S, value: B):
+    left.read(right.write(state, value)) = left.read(state)
+{
+    apart.left_after_right(state, value)
+}
+
+theorem disjoint_read_right<S, A, B>(left: Location<S, A>, right: Location<S, B>,
+    apart: Disjoint<S, A, B>(left, right), state: S, value: A):
+    right.read(left.write(state, value)) = right.read(state)
+{
+    apart.right_after_left(state, value)
+}
