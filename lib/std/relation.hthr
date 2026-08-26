@@ -1,0 +1,291 @@
+// Finitary relations and refinement. This module supplies the mathematical
+// vocabulary shared by deterministic evaluators, nondeterministic machine
+// steps, and later representation proofs; it does not choose an effects
+// surface or an executable set-valued representation.
+
+import logic;
+import nat;
+import list;
+import pair;
+
+// ---------------------------------------------------------------------------
+// Inclusion, equivalence, and the two refinement readings.
+
+fn Included<A, B>(R, S: A → B → Type) → Type {
+    (a: A) → (b: B) → R(a, b) → S(a, b)
+}
+
+fn RelEquivalent<A, B>(R, S: A → B → Type) → Type {
+    Included(R, S) ∧ Included(S, R)
+}
+
+// May refinement removes permitted behavior: every implementation behavior
+// is allowed by the specification. Must refinement adds guarantees: every
+// behavior required by the specification is supplied by the implementation.
+// Naming both directions prevents a bare `refines` from making callers guess.
+fn MayRefines<A, B>(implementation, specification: A → B → Type) → Type {
+    Included(implementation, specification)
+}
+
+fn MustRefines<A, B>(implementation, specification: A → B → Type) → Type {
+    Included(specification, implementation)
+}
+
+theorem included_refl<A, B>(R: A → B → Type): Included(R, R) {
+    λ a b h => h
+}
+
+theorem included_trans<A, B>(R, S, T: A → B → Type,
+    rs: Included(R, S), st: Included(S, T)): Included(R, T)
+{
+    λ a b h => st(a, b, rs(a, b, h))
+}
+
+theorem rel_equivalent_refl<A, B>(R: A → B → Type): RelEquivalent(R, R) {
+    And(included_refl(R), included_refl(R))
+}
+
+theorem rel_equivalent_sym<A, B>(R, S: A → B → Type,
+    h: RelEquivalent(R, S)): RelEquivalent(S, R)
+{
+    And(h.right, h.left)
+}
+
+theorem rel_equivalent_trans<A, B>(R, S, T: A → B → Type,
+    rs: RelEquivalent(R, S), st: RelEquivalent(S, T)): RelEquivalent(R, T)
+{
+    And(included_trans(R, S, T, rs.left, st.left),
+        included_trans(T, S, R, st.right, rs.right))
+}
+
+theorem may_refines_refl<A, B>(R: A → B → Type): MayRefines(R, R) {
+    included_refl(R)
+}
+
+theorem may_refines_trans<A, B>(R, S, T: A → B → Type,
+    rs: MayRefines(R, S), st: MayRefines(S, T)): MayRefines(R, T)
+{
+    included_trans(R, S, T, rs, st)
+}
+
+theorem must_refines_refl<A, B>(R: A → B → Type): MustRefines(R, R) {
+    included_refl(R)
+}
+
+theorem must_refines_trans<A, B>(R, S, T: A → B → Type,
+    rs: MustRefines(R, S), st: MustRefines(S, T)): MustRefines(R, T)
+{
+    included_trans(T, S, R, st, rs)
+}
+
+// ---------------------------------------------------------------------------
+// Identity, converse, composition, and deterministic graphs.
+
+fn RelId<A>(a, b: A) → Type { a = b }
+
+fn Converse<A, B>(R: A → B → Type, b: B, a: A) → Type { R(a, b) }
+
+fn Compose<A, B, C>(R: A → B → Type, S: B → C → Type) → A → C → Type {
+    λ a c => ∃ b: B, R(a, b) ∧ S(b, c)
+}
+
+fn Graph<A, B>(f: A → B) → A → B → Type { λ a b => f(a) = b }
+
+theorem compose_assoc<A, B, C, D>(R: A → B → Type, S: B → C → Type,
+    T: C → D → Type):
+    RelEquivalent(
+        Compose<A, C, D>(Compose<A, B, C>(R, S), T),
+        Compose<A, B, D>(R, Compose<B, C, D>(S, T)))
+{
+    And(
+        λ a d h => Exists(h.proof.left.witness, And(
+            h.proof.left.proof.left,
+            Exists(h.witness, And(
+                h.proof.left.proof.right,
+                h.proof.right)))),
+        λ a d h => Exists(h.proof.right.witness, And(
+            Exists(h.witness, And(
+                h.proof.left,
+                h.proof.right.proof.left)),
+            h.proof.right.proof.right)),
+    )
+}
+
+theorem compose_left_id<A, B>(R: A → B → Type):
+    RelEquivalent(Compose<A, A, B>(λ a b => RelId(a, b), R), R)
+{
+    And(
+        λ a b h => j(sym(h.proof.left), λ y q => R(y, b), h.proof.right),
+        λ a b h => Exists(a, And(refl, h)),
+    )
+}
+
+theorem compose_right_id<A, B>(R: A → B → Type):
+    RelEquivalent(Compose<A, B, B>(R, λ a b => RelId(a, b)), R)
+{
+    And(
+        λ a b h => j(h.proof.right, λ y q => R(a, y), h.proof.left),
+        λ a b h => Exists(b, And(h, refl)),
+    )
+}
+
+theorem compose_monotone<A, B, C>(R1, R2: A → B → Type,
+    S1, S2: B → C → Type, rr: Included(R1, R2), ss: Included(S1, S2)):
+    Included(Compose<A, B, C>(R1, S1), Compose<A, B, C>(R2, S2))
+{
+    λ a c h => Exists(h.witness, And(
+        rr(a, h.witness, h.proof.left),
+        ss(h.witness, c, h.proof.right)))
+}
+
+theorem graph_compose<A, B, C>(f: A → B, g: B → C):
+    RelEquivalent(
+        Compose<A, B, C>(Graph<A, B>(f), Graph<B, C>(g)),
+        Graph<A, C>(λ (a: A) => g(f(a))))
+{
+    And(
+        λ a c h => trans(cong_fn(g, h.proof.left), h.proof.right),
+        λ a c h => Exists(f(a), And(refl, h)),
+    )
+}
+
+// ---------------------------------------------------------------------------
+// Products, framing, choice, and havoc.
+
+fn RelProduct<A, B, C, D>(R: A → B → Type, S: C → D → Type,
+    source: Pair<A, C>, target: Pair<B, D>) → Type
+{
+    R(source.fst, target.fst) ∧ S(source.snd, target.snd)
+}
+
+fn FrameFirst<A, B, C>(R: A → B → Type,
+    source: Pair<A, C>, target: Pair<B, C>) → Type
+{
+    R(source.fst, target.fst) ∧ source.snd = target.snd
+}
+
+fn FrameSecond<A, B, C>(R: A → B → Type,
+    source: Pair<C, A>, target: Pair<C, B>) → Type
+{
+    source.fst = target.fst ∧ R(source.snd, target.snd)
+}
+
+fn RelChoice<A, B>(R, S: A → B → Type, a: A, b: B) → Type {
+    R(a, b) ∨ S(a, b)
+}
+
+fn AnyOf<A, B>(relations: List<A → B → Type>) → A → B → Type {
+    match relations {
+        Nil => λ a b => False,
+        Cons(R, rest) => λ a b => R(a, b) ∨ AnyOf(rest, a, b),
+    }
+}
+
+fn Havoc<A>(before, after: A) → Type { True }
+
+theorem frame_first_preserves<A, B, C>(R: A → B → Type,
+    source: Pair<A, C>, target: Pair<B, C>, h: FrameFirst(R, source, target)):
+    source.snd = target.snd
+{
+    h.right
+}
+
+theorem localized_havoc_preserves_neighbor<A, C>(source, target: Pair<A, C>,
+    h: FrameFirst(Havoc<A>, source, target)): source.snd = target.snd
+{
+    h.right
+}
+
+// ---------------------------------------------------------------------------
+// Semantic outcomes remain separate from model coverage. A supported fault is
+// modeled behavior; `Unsupported` says the model supplied no semantics.
+
+inductive SemanticOutcome<A, E> {
+    Returned(value: A),
+    Faulted(error: E),
+}
+
+inductive Coverage<A, E> {
+    Supported(outcome: SemanticOutcome<A, E>),
+    Unsupported,
+}
+
+// ---------------------------------------------------------------------------
+// Exact finite steps and their reflexive-transitive existential closure.
+
+fn Steps<A>(R: A → A → Type, fuel: Nat) → A → A → Type {
+    match fuel {
+        Zero => λ start finish => start = finish,
+        Succ(n) => λ start finish =>
+            ∃ middle: A, R(start, middle) ∧ Steps(R, n, middle, finish),
+    }
+}
+
+fn Reaches<A>(R: A → A → Type, start, finish: A) → Type {
+    ∃ fuel: Nat, Steps(R, fuel, start, finish)
+}
+
+theorem steps_zero<A>(R: A → A → Type, a: A): Steps(R, 0, a, a) { refl }
+
+theorem steps_one<A>(R: A → A → Type, a, b: A, h: R(a, b)):
+    Steps(R, 1, a, b)
+{
+    Exists(b, And(h, refl))
+}
+
+// `nat::add` recurses on its second argument. Recursing over the first path
+// naturally constructs `second + first`; the public theorem below transports
+// that proof to the program-order spelling `first + second`.
+theorem steps_concat_reversed<A>(R: A → A → Type, first: Nat):
+    (second: Nat) → (start, middle, finish: A) →
+    Steps(R, first, start, middle) → Steps(R, second, middle, finish) →
+    Steps(R, second + first, start, finish)
+{
+    match first {
+        Zero => λ second start middle finish left right =>
+            j(sym(left), λ y q => Steps(R, second, y, finish), right),
+        Succ(n, ih) => λ second start middle finish left right =>
+            Exists(left.witness, And(
+                left.proof.left,
+                ih(second, left.witness, middle, finish, left.proof.right, right))),
+    }
+}
+
+theorem steps_concat<A>(R: A → A → Type, first, second: Nat,
+    start, middle, finish: A,
+    left: Steps(R, first, start, middle),
+    right: Steps(R, second, middle, finish)):
+    Steps(R, first + second, start, finish)
+{
+    j(add_comm(second, first),
+        λ count q => Steps(R, count, start, finish),
+        steps_concat_reversed(R, first, second, start, middle, finish, left, right))
+}
+
+theorem steps_monotone<A>(R, S: A → A → Type, h: Included(R, S), fuel: Nat):
+    (start, finish: A) → Steps(R, fuel, start, finish) → Steps(S, fuel, start, finish)
+{
+    match fuel {
+        Zero => λ start finish path => path,
+        Succ(n, ih) => λ start finish path => Exists(path.witness, And(
+            h(start, path.witness, path.proof.left),
+            ih(path.witness, finish, path.proof.right))),
+    }
+}
+
+theorem reaches_refl<A>(R: A → A → Type, a: A): Reaches(R, a, a) {
+    Exists(0, refl)
+}
+
+theorem reaches_trans<A>(R: A → A → Type, a, b, c: A,
+    ab: Reaches(R, a, b), bc: Reaches(R, b, c)): Reaches(R, a, c)
+{
+    Exists(ab.witness + bc.witness,
+        steps_concat(R, ab.witness, bc.witness, a, b, c, ab.proof, bc.proof))
+}
+
+theorem reaches_monotone<A>(R, S: A → A → Type, h: Included(R, S), a, b: A,
+    path: Reaches(R, a, b)): Reaches(S, a, b)
+{
+    Exists(path.witness, steps_monotone(R, S, h, path.witness, a, b, path.proof))
+}

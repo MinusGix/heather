@@ -1,6 +1,6 @@
 ---
 title: Develop relations and refinement as a reusable semantics kit
-status: open
+status: closed
 labels: [stdlib,logic,semantics,design]
 created: 2026-08-25
 updated: 2026-08-25
@@ -58,3 +58,13 @@ concrete witnesses as a separate executable view.
 - 2026-08-25: Filed from the distinction between architectural choice,
   specified faults, and gaps in model coverage.  Keeping that distinction
   generic also serves protocol, concurrent-step, and optimizer semantics.
+- 2026-08-25: LANDED `std/relation`: inclusion and explicitly directed
+  may/must refinement, equivalence, identity/converse/composition/graphs,
+  composition laws, product framing, finite choice and localized havoc,
+  semantic outcomes distinct from coverage, and exact-fuel/reachable finite
+  execution with concatenation and refinement laws.  Integration probes cover
+  a deterministic instruction evaluator and a genuinely nonfunctional flag
+  relation whose neighboring register remains equal.  The main ergonomics gap
+  was elaboration of nested higher-order composition: intermediate carrier
+  types need explicit `Compose<A, B, C>` arguments.  Existential relational
+  proofs themselves required no new language feature or executable set type.
