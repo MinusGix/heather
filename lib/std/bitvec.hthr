@@ -334,28 +334,7 @@ theorem carry_threshold(a, b, carry: Bool, power, tail_sum: Nat):
     (twice(power) <= twice(tail_sum) + carry_weight(a, b, carry)) ↔
     (power <= tail_sum + bit_value(carry_majority(a, b, carry)))
 {
-    match a {
-        False => match b {
-            False => match carry {
-                False => twice_le_twice_iff(power, tail_sum),
-                True => twice_le_succ_twice_iff(power, tail_sum),
-            },
-            True => match carry {
-                False => twice_le_succ_twice_iff(power, tail_sum),
-                True => twice_le_twice_iff(power, Succ(tail_sum)),
-            },
-        },
-        True => match b {
-            False => match carry {
-                False => twice_le_succ_twice_iff(power, tail_sum),
-                True => twice_le_twice_iff(power, Succ(tail_sum)),
-            },
-            True => match carry {
-                False => twice_le_twice_iff(power, Succ(tail_sum)),
-                True => twice_le_succ_twice_iff(power, Succ(tail_sum)),
-            },
-        },
-    }
+    arith
 }
 
 fn CarryBitTrue(n: Nat, a, b: BitVec(n), carry: Bool) → Type {

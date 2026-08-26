@@ -68,3 +68,33 @@ unary closed computations is compatible with that division.
   selection. This keeps solver engineering outside the kernel and makes the
   feared certificate-checking cost an acceptance measurement rather than an
   assumption.
+- 2026-08-26: The first certifying fragment was implemented
+  (`docs/certifying-arithmetic-automation-design.md`): checking-only `arith`
+  reifies open Nat equalities containing opaque atoms, `+`, and `twice`, then
+  emits an ordinary proof from the Nat AC/congruence kit. Success exposes atom
+  and swap counts plus the exact used-lemma list; failure exposes its kind,
+  goal, both available normal forms, and detail. The executable carry sum is
+  the acceptance customer, an altered coefficient is refused, `pow(2,n)`
+  remains opaque, and a written `arith` binding wins over the form. Metrics
+  caught the first semantically poor certificate shape: eagerly turning every
+  `twice(a)` into `a+a` cost 162,246 term closures, 10.6x the handwritten
+  carry normalization. Preferring coefficient-preserving `twice_add` and
+  expanding only on retry brought that to 62,886 (4.1x), with no cache
+  eviction; both the absolute and relative bounds are pinned. Still open for
+  the next named slice: exhaustive Bool splitting plus the two structural
+  order lemmas, then whole carry-step orchestration and general grind wiring.
+- 2026-08-26: The bounded Boolean slice was implemented. After trying direct
+  conversion and additive equality, `arith` splits up to three `Bool` locals
+  into an ordinary generated match tree. Leaves try conversion, additive
+  reconstruction, then deterministic applications of
+  `twice_le_twice_iff`/`twice_le_succ_twice_iff`; candidate probes are
+  transactional and independently kernel-checked before the chosen expression
+  enters ordinary elaboration. Reports now pin split and branch counts as well
+  as the deduplicated lemma set. Mutated majority logic is rejected, four-input
+  nontrivial contexts hit the explicit bound, and conversion bypasses that
+  bound when the Booleans are irrelevant. `std/bitvec`'s manual eight-case
+  `carry_threshold` is now `arith`. Whole-path metrics, including rejected
+  probes, are 41,285 term closures versus 20,941 handwritten, with zero
+  eviction and absolute/relative regression rails. Remaining work is relevance
+  filtering or a general finite-domain search layer, broader arithmetic, and
+  eventual whole-step/`grind` orchestration.

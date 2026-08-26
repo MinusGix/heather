@@ -50,3 +50,7 @@ closed 4- and 64-bit examples are controls, not acceptance.
   value-domain/evaluator defect is [[bitvec-closed-reduction-cost]]; automating
   the induction and eight finite cases is
   [[certifying-arithmetic-proof-automation]].
+- 2026-08-26: The inner eight-case `carry_threshold` proof is now reconstructed
+  by the checking-only `arith` form. The public theorem and outer width
+  induction are unchanged; this is a proof-source simplification whose emitted
+  match and structural-order certificates still pass the ordinary kernel gate.

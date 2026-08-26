@@ -78,6 +78,7 @@ use heather_syntax::{
 mod access;
 mod application;
 mod attempt;
+pub mod arith;
 pub mod certgen;
 pub mod gate;
 pub mod stats;
@@ -507,6 +508,11 @@ pub struct Elaborator {
     /// share it so speculative and generated checking contribute to the same
     /// requested measurement; ordinary elaborators leave it absent.
     value_metrics: Option<Rc<ValueMetrics>>,
+    /// Successful arithmetic reconstructions in source order. This is the
+    /// certifying solver's audit surface: callers can see certificate size
+    /// and the exact library lemmas it selected. Failed declarations truncate
+    /// reports alongside warnings in [`Self::elab_module_source`].
+    arith_reports: RefCell<Vec<arith::ArithReport>>,
     /// Meta-layer definitions and the slots claimed by their `for` clauses
     /// (`metaprograms.rs`). Kept elaborator-side because layer-m terms cannot
     /// enter Ψ; both lookup views commit together after validation.
@@ -1130,6 +1136,7 @@ impl Elaborator {
             resolve_depth: Cell::new(0),
             fuel: DEFAULT_FUEL,
             value_metrics: None,
+            arith_reports: RefCell::new(Vec::new()),
             meta_programs: MetaPrograms::default(),
             meta_pushed: RefCell::new(Vec::new()),
             result_only_memo: RefCell::new(HashMap::new()),
@@ -1171,6 +1178,11 @@ impl Elaborator {
 
     pub fn value_metrics(&self) -> Option<ValueMetricsSnapshot> {
         self.value_metrics.as_ref().map(|metrics| metrics.snapshot())
+    }
+
+    /// Drain the audit reports produced by successful `arith` uses.
+    pub fn take_arith_reports(&self) -> Vec<arith::ArithReport> {
+        self.arith_reports.borrow_mut().drain(..).collect()
     }
 
     pub(crate) fn profiled_value_arena(&self) -> ValueArena<'_> {
@@ -1254,6 +1266,7 @@ impl Elaborator {
         self.enter_module(module, &file)?;
         for item in &file.items {
             let warn_mark = self.warnings.borrow().len();
+            let arith_mark = self.arith_reports.borrow().len();
             let r = match item {
                 Item::Decl(d) => self.elab_decl(d),
                 Item::Inductive(i) => self.elab_inductive(i),
@@ -1271,6 +1284,7 @@ impl Elaborator {
             if r.is_err() {
                 self.pending_derived.borrow_mut().clear();
                 self.warnings.borrow_mut().truncate(warn_mark);
+                self.arith_reports.borrow_mut().truncate(arith_mark);
             } else {
                 self.mint_pending();
                 self.run_source_lints(item, &lint_source);
@@ -2794,6 +2808,146 @@ impl Elaborator {
                     && self.ctor_here_expected(cx, name, expected).is_none() =>
             {
                 self.expr_elab().check_unit_form(self, cx, expected, e.span)
+            }
+            // Private leaves of the Boolean tree. The marker contains a NUL
+            // and cannot be written by the surface lexer; it exists only in
+            // `arith`'s generated AST. Each candidate is tried transactionally
+            // and then kernel-checked before the real elaborator accepts it.
+            ExprKind::Var(name) if name == arith::BOOLEAN_LEAF => {
+                let head = self.whnf(cx, expected, e.span)?;
+                if let Type::Id { level, ty, lhs, rhs } = &head
+                    && expr::EqualityCheckingElab::goal_endpoints_convert(
+                        self, cx, lhs, rhs, ty, level,
+                    )
+                {
+                    self.arith_reports.borrow_mut().push(arith::ArithReport {
+                        atoms: 0,
+                        adjacent_swaps: 0,
+                        boolean_splits: 0,
+                        branches: 1,
+                        used_lemmas: Vec::new(),
+                    });
+                    Ok(Term::Refl {
+                        level: level.clone(),
+                        ty: Rc::clone(ty),
+                        tm: Rc::clone(lhs),
+                    })
+                } else if let Ok(cert) = arith::reconstruct(self, cx, &head) {
+                    let term = self.elab_check(cx, &cert.expr, expected, lvl)?;
+                    self.arith_reports.borrow_mut().push(cert.report);
+                    Ok(term)
+                } else {
+                    let candidates = arith::order_candidates(cx).map_err(|detail| {
+                        ElabError::Elab {
+                            msg: format!("`arith` could not construct its Boolean leaf: {detail}"),
+                            span: e.span,
+                        }
+                    })?;
+                    let mut selected = None;
+                    for (lemma, candidate) in candidates {
+                        let probe = self.clone();
+                        let Ok(term) = probe.elab_check(cx, &candidate, expected, lvl) else {
+                            continue;
+                        };
+                        if probe
+                            .kernel_check_term(
+                                &probe.goal_psi(), Layer::Prog, &cx.gamma,
+                                &term, expected, lvl,
+                            )
+                            .is_ok()
+                        {
+                            selected = Some((lemma, candidate));
+                            break;
+                        }
+                    }
+                    let Some((lemma, candidate)) = selected else {
+                        return err(
+                            "`arith` exhausted its Boolean leaf candidates: conversion, additive equality, and the structural doubling-order kit all failed",
+                            e.span,
+                        );
+                    };
+                    let term = self.elab_check(cx, &candidate, expected, lvl)?;
+                    self.arith_reports.borrow_mut().push(arith::ArithReport {
+                        atoms: 0,
+                        adjacent_swaps: 0,
+                        boolean_splits: 0,
+                        branches: 1,
+                        used_lemmas: vec![lemma],
+                    });
+                    Ok(term)
+                }
+            }
+            // `arith` is an untrusted, checking-only proof reconstructor. It
+            // reads the elaborated goal and produces an ordinary Heather
+            // expression from the `Nat` lemma kit; this recursive call takes
+            // that expression through the same elaboration and final kernel
+            // gate as a handwritten proof. Like every bare special form, a
+            // local, declaration, or expected constructor with this name
+            // wins (crates/elab/src/arith.rs).
+            ExprKind::Var(name)
+                if name == "arith"
+                    && !self.shadowed(cx, name)
+                    && self.ctor_here_expected(cx, name, expected).is_none() =>
+            {
+                let head = self.whnf(cx, expected, e.span)?;
+                if let Type::Id { level, ty, lhs, rhs } = &head
+                    && expr::EqualityCheckingElab::goal_endpoints_convert(
+                        self, cx, lhs, rhs, ty, level,
+                    )
+                {
+                    self.arith_reports.borrow_mut().push(arith::ArithReport {
+                        atoms: 0,
+                        adjacent_swaps: 0,
+                        boolean_splits: 0,
+                        branches: 1,
+                        used_lemmas: Vec::new(),
+                    });
+                    return Ok(Term::Refl {
+                        level: level.clone(),
+                        ty: Rc::clone(ty),
+                        tm: Rc::clone(lhs),
+                    });
+                }
+                match arith::reconstruct(self, cx, &head) {
+                    Ok(cert) => {
+                        let term = self.elab_check(cx, &cert.expr, expected, lvl)?;
+                        self.arith_reports.borrow_mut().push(cert.report);
+                        Ok(term)
+                    }
+                    Err(direct) => {
+                        let split = arith::split_booleans(self, cx, e.span)
+                            .map_err(|detail| ElabError::Elab {
+                                msg: format!("{direct}\n  Boolean split: {detail}"),
+                                span: e.span,
+                            })?;
+                        let Some(split) = split else {
+                            return Err(ElabError::Elab {
+                                msg: direct.to_string(),
+                                span: e.span,
+                            });
+                        };
+                        let mark = self.arith_reports.borrow().len();
+                        let term = self.elab_check(cx, &split.expr, expected, lvl)?;
+                        let leaves: Vec<arith::ArithReport> =
+                            self.arith_reports.borrow_mut().drain(mark..).collect();
+                        let mut used_lemmas = Vec::new();
+                        for report in &leaves {
+                            for &lemma in &report.used_lemmas {
+                                if !used_lemmas.contains(&lemma) {
+                                    used_lemmas.push(lemma);
+                                }
+                            }
+                        }
+                        self.arith_reports.borrow_mut().push(arith::ArithReport {
+                            atoms: leaves.iter().map(|r| r.atoms).sum(),
+                            adjacent_swaps: leaves.iter().map(|r| r.adjacent_swaps).sum(),
+                            boolean_splits: split.splits,
+                            branches: leaves.len(),
+                            used_lemmas,
+                        });
+                        Ok(term)
+                    }
+                }
             }
             ExprKind::App { .. }
                 if matches!(e.as_named(), Some(("FS", _, false)))
