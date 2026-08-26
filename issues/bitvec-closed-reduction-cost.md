@@ -61,3 +61,23 @@ Acceptance has two parts:
   Times exclude cached standard-library declarations and attribute only the
   probe declaration's final kernel gate where stated. Scratch probes were
   removed after measurement.
+- 2026-08-26: Structural half diagnosed and fixed. Direct calls to both
+  conversion domains reproduced the shape, so this was not value-domain
+  disagreement. At width 32 the value machine completed in 8,496 fuel units
+  with maximum native evaluation depth 5; leaking its returned value passed,
+  while dropping that same value overflowed. The crash was recursive Rust
+  destruction following unique thunk-memo/value edges after successful
+  evaluation. `TmClo` now takes a unique computed-value edge into a
+  per-thread iterative destruction worklist; a 100,000-node value/closure
+  chain is the kernel regression.
+- 2026-08-26: The separate width-64 allocation cliff was the library
+  algorithm's lazy accumulator. Passing `carry_majority(...)` unevaluated to
+  the recursive call retained the preceding projected operands in every
+  accumulator thunk. A two-vector zip, one-vector scans, and a direct 64-step
+  Boolean loop were controls; explicitly forcing each next carry made width
+  64 check in about 0.54 s. `carry_bits_next` now performs that force, and
+  `carry_bits_step` preserves the open arithmetic correspondence proof. The
+  routine bitvector suite pins the formerly fatal closed width-64 case.
+  Remaining before this issue closes: preempt an inherently excessive unary
+  arithmetic computation with `OutOfFuel`/a resource diagnostic instead of
+  allocator failure.

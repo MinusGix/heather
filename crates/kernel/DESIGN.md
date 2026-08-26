@@ -369,6 +369,16 @@ paper too).
   native, where its depth is the syntax's. And fuel thresholds are asserted
   as **invariants, never as a cost model**: a budget that answers must agree
   with the answer full budget gives.
+- **Memoized value graphs are reclaimed iteratively.** Rust's ordinary `Rc`
+  destruction recursively follows a unique child. Evaluator thunks make that
+  ownership path proportional to the forced computation even though
+  `Eval::drive` keeps evaluation itself off the native stack; a closed
+  machine-width carry first exposed a post-evaluation stack overflow at only
+  8,496 spent fuel units. `TmClo` therefore owns a private destruction slot
+  for an already-computed payload. When a memo/value edge is the unique owner,
+  its destructor takes the edge and drains it through a per-thread worklist.
+  Shared edges retain ordinary `Rc` destruction, and evaluation, memoization,
+  conversion, and fuel accounting are unchanged.
 - **Level equivalence**: normalize to `adjust(count(l))` maps and compare;
   `ω` compares only to itself. `equiv`/`le` take a **reflexivity pre-check**
   first — identical syntax is equivalent because normalization is a function,

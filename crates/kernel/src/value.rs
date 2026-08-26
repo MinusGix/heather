@@ -232,12 +232,26 @@ pub enum TmClo {
         body: Rc<Term>,
         memo: RefCell<Option<Rc<Val>>>,
     },
-    Val(Rc<Val>),
+    Val(ReadyVal),
     Elim {
         head: Rc<TmClo>,
         elim: Rc<Elim>,
         memo: RefCell<Option<Rc<Val>>>,
     },
+}
+
+/// An already-computed closure payload with a private destruction slot.
+/// Semantically this is always one [`Val`]; only [`TmClo::drop`] can take it.
+pub struct ReadyVal(Option<Rc<Val>>);
+
+impl ReadyVal {
+    fn new(value: Rc<Val>) -> ReadyVal {
+        ReadyVal(Some(value))
+    }
+
+    pub fn get(&self) -> &Rc<Val> {
+        self.0.as_ref().expect("live value closure is populated")
+    }
 }
 
 impl TmClo {
@@ -246,7 +260,7 @@ impl TmClo {
     }
 
     pub fn val(v: Rc<Val>) -> TmClo {
-        TmClo::Val(v)
+        TmClo::Val(ReadyVal::new(v))
     }
 
     pub fn elim(head: Rc<TmClo>, elim: Rc<Elim>) -> TmClo {
@@ -269,7 +283,7 @@ impl TmClo {
     pub fn memo(&self) -> Option<Rc<Val>> {
         match self {
             TmClo::Syn { memo, .. } | TmClo::Elim { memo, .. } => memo.borrow().clone(),
-            TmClo::Val(v) => Some(Rc::clone(v)),
+            TmClo::Val(v) => Some(Rc::clone(v.get())),
         }
     }
 
@@ -281,6 +295,71 @@ impl TmClo {
                 *memo.borrow_mut() = Some(Rc::clone(v));
             }
             TmClo::Val(_) => {}
+        }
+    }
+}
+
+struct ValueDropState {
+    active: bool,
+    pending: Vec<Rc<Val>>,
+}
+
+thread_local! {
+    /// Rust drops an `Rc` graph recursively. Evaluator thunks point through
+    /// their memoized values to more thunks, so a perfectly terminating
+    /// reduction can otherwise overflow the native stack while reclaiming
+    /// its result. `TmClo::drop` cuts exactly those owning value edges and
+    /// drains them through this per-thread worklist.
+    static VALUE_DROP_STATE: RefCell<ValueDropState> = const {
+        RefCell::new(ValueDropState { active: false, pending: Vec::new() })
+    };
+}
+
+fn drop_value_iteratively(value: Rc<Val>) {
+    let mut value = Some(value);
+    let owner = match VALUE_DROP_STATE.try_with(|state| {
+        let mut state = state.borrow_mut();
+        state.pending.push(value.take().expect("drop value is present"));
+        if state.active {
+            false
+        } else {
+            state.active = true;
+            true
+        }
+    }) {
+        Ok(owner) => owner,
+        // Thread-local destruction is already in progress. The process is
+        // tearing this thread down, so intentionally leak the remaining
+        // graph rather than recursively aborting during shutdown.
+        Err(_) => {
+            std::mem::forget(value.take().expect("drop value was not queued"));
+            return;
+        }
+    };
+    if !owner {
+        return;
+    }
+    loop {
+        let next = VALUE_DROP_STATE.with(|state| state.borrow_mut().pending.pop());
+        let Some(value) = next else {
+            VALUE_DROP_STATE.with(|state| state.borrow_mut().active = false);
+            break;
+        };
+        drop(value);
+    }
+}
+
+impl Drop for TmClo {
+    fn drop(&mut self) {
+        let slot = match self {
+            TmClo::Syn { memo, .. } | TmClo::Elim { memo, .. } => memo.get_mut(),
+            TmClo::Val(value) => &mut value.0,
+        };
+        // A shared edge cannot recurse when this owner releases it. Leave
+        // that cheap path to `Rc`; intercept only the unique edge that would
+        // recursively destroy the child graph here.
+        if slot.as_ref().is_some_and(|value| Rc::strong_count(value) == 1) {
+            drop_value_iteratively(slot.take().expect("unique value is present"));
         }
     }
 }
@@ -933,7 +1012,11 @@ impl fmt::Debug for TmClo {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         node(f, |f| match self {
             TmClo::Syn { env, body, .. } => write!(f, "⟨{env:?}⊢{body:?}⟩"),
-            TmClo::Val(v) => write!(f, "{v:?}"),
+            TmClo::Val(v) => write!(
+                f,
+                "{:?}",
+                v.get(),
+            ),
             TmClo::Elim { elim, .. } => write!(f, "⟨·{}⟩", elim.tag()),
         })
     }
@@ -1078,5 +1161,20 @@ impl fmt::Debug for Val {
             Val::BoxTm(t) => write!(f, "box {t:?}"),
             Val::Neutral(n) => write!(f, "{n:?}"),
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{TmClo, Val};
+    use std::rc::Rc;
+
+    #[test]
+    fn deep_memo_value_chain_drops_without_using_the_native_stack() {
+        let mut value = Rc::new(Val::Zero);
+        for _ in 0..100_000 {
+            value = Rc::new(Val::Succ(Rc::new(TmClo::val(value))));
+        }
+        drop(value);
     }
 }

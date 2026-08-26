@@ -228,7 +228,7 @@ impl<'a> Eval<'a> {
                         Work::Val(v)
                     } else {
                         match &*c {
-                            TmClo::Val(v) => Work::Val(Rc::clone(v)),
+                            TmClo::Val(v) => Work::Val(Rc::clone(v.get())),
                             TmClo::Syn { env, body, .. } => {
                                 let w = Work::Eval(Rc::clone(body), env.clone());
                                 self.frames.push(Frame::Memo(Rc::clone(&c)));

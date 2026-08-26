@@ -263,12 +263,27 @@ fn carry_majority(a, b, carry: Bool) → Bool {
     (a && b) || ((a && carry) || (b && carry))
 }
 
+fn carry_bits_next(n: Nat, a, b: BitVec(n), carry: Bool,
+    rest: BitVec(n) → BitVec(n) → Bool → Bool) → Bool
+{
+    match carry {
+        False => rest(a, b, False),
+        True => rest(a, b, True),
+    }
+}
+
 fn carry_bits(n: Nat) → BitVec(n) → BitVec(n) → Bool → Bool {
     match n as λ k => BitVec(k) → BitVec(k) → Bool → Bool {
         Zero => λ a b carry => carry,
-        Succ(k, ih) => λ a b carry => ih(
-            tail_bits(k, a), tail_bits(k, b),
-            carry_majority(head_bit(k, a), head_bit(k, b), carry)),
+        // Force the next accumulator before recurring. Leaving this as the
+        // third argument expression builds a chain of suspended majority
+        // computations whose environments retain every preceding vector
+        // projection; a machine-width closed computation then has quadratic
+        // reduction work and pathological retained state despite the ripple
+        // algorithm itself being linear.
+        Succ(k, ih) => λ a b carry => carry_bits_next(
+            k, tail_bits(k, a), tail_bits(k, b),
+            carry_majority(head_bit(k, a), head_bit(k, b), carry), ih),
     }
 }
 
@@ -351,6 +366,22 @@ fn CarryArithmetic(n: Nat, a, b: BitVec(n), carry: Bool) → Type {
     nat::pow(2, n) <= toNat(n, a) + toNat(n, b) + bit_value(carry)
 }
 
+theorem carry_bits_step(n: Nat, a, b: BitVec(Succ(n)), carry: Bool):
+    CarryBitTrue(Succ(n), a, b, carry) ↔
+    CarryBitTrue(n, tail_bits(n, a), tail_bits(n, b),
+        carry_majority(head_bit(n, a), head_bit(n, b), carry))
+{
+    match carry_majority(head_bit(n, a), head_bit(n, b), carry)
+        as λ next =>
+            (carry_bits_next(n, tail_bits(n, a), tail_bits(n, b), next,
+                carry_bits(n)) = True) ↔
+            CarryBitTrue(n, tail_bits(n, a), tail_bits(n, b), next)
+    {
+        False => Iff(mp := λ h => h, mpr := λ h => h),
+        True => Iff(mp := λ h => h, mpr := λ h => h),
+    }
+}
+
 theorem carry_arithmetic_step(n: Nat, a, b: BitVec(Succ(n)), carry: Bool):
     CarryArithmetic(Succ(n), a, b, carry) ↔
     CarryArithmetic(n, tail_bits(n, a), tail_bits(n, b),
@@ -385,9 +416,11 @@ theorem carry_bits_true_iff_arithmetic(n: Nat):
             True => Iff(mp := λ h => trivial, mpr := λ h => refl),
         },
         Succ(k, ih) => λ a b carry => iff_trans(
-            ih(tail_bits(k, a), tail_bits(k, b),
-                carry_majority(head_bit(k, a), head_bit(k, b), carry)),
-            iff_sym(carry_arithmetic_step(k, a, b, carry))),
+            carry_bits_step(k, a, b, carry),
+            iff_trans(
+                ih(tail_bits(k, a), tail_bits(k, b),
+                    carry_majority(head_bit(k, a), head_bit(k, b), carry)),
+                iff_sym(carry_arithmetic_step(k, a, b, carry)))),
     }
 }
 

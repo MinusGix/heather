@@ -111,7 +111,7 @@ pub fn tm_clo(c: &Rc<TmClo>, o: Outer) -> Rc<TmClo> {
     }
     Rc::new(match &**c {
         TmClo::Syn { env: e, body, .. } => TmClo::syn(env(e, o), tm_syn(body, o)),
-        TmClo::Val(v) => TmClo::val(val(v, o)),
+        TmClo::Val(v) => TmClo::val(val(v.get(), o)),
         TmClo::Elim { head, elim, .. } => {
             TmClo::elim(tm_clo(head, o), Rc::new(elimination(elim, o)))
         }
