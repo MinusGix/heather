@@ -3,7 +3,7 @@ title: Develop state locations, updates, and frame reasoning
 status: open
 labels: [stdlib,logic,semantics,design]
 created: 2026-08-25
-updated: 2026-08-25
+updated: 2026-08-26
 ---
 
 Specifications that update structured state repeatedly need a common way to
@@ -50,3 +50,7 @@ syntax.  The round should decide from written proofs, not from terminology.
 - 2026-08-25: Filed with the x86 model as the first large customer, but the
   abstraction is intended equally for interpreters, protocols, and verified
   stateful algorithms.
+- 2026-08-26: `std/relation` landed `FrameFirst`/`FrameSecond`, sufficient to
+  prove that havocing a flag preserves an adjacent register.  Treat those as
+  the pair-shaped baseline, not as completion of this issue: this issue still
+  decides how real nested state names locations and states noninterference.

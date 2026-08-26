@@ -3,7 +3,7 @@ title: Develop relations and refinement as a reusable semantics kit
 status: closed
 labels: [stdlib,logic,semantics,design]
 created: 2026-08-25
-updated: 2026-08-25
+updated: 2026-08-26
 ---
 
 Heather's current executable specifications, notably `ir_v1`, are functions
@@ -68,3 +68,14 @@ concrete witnesses as a separate executable view.
   was elaboration of nested higher-order composition: intermediate carrier
   types need explicit `Compose<A, B, C>` arguments.  Existential relational
   proofs themselves required no new language feature or executable set type.
+
+## Follow-up decisions
+
+- [[must-refinement-terminology]]
+- [[relation-law-kit-demand]]
+- [[relation-combinator-shape]]
+- [[reachability-proof-relevance]]
+- [[semantic-coverage-reasons]]
+- [[polymorphic-argument-with-unsolved-callee]] owns the nested-composition
+  inference friction found here.
+- [[state-location-and-frame-kit]] owns the move beyond pair-shaped framing.

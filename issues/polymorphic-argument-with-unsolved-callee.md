@@ -3,7 +3,7 @@ title: A polymorphic function passed as an argument cannot be instantiated while
 status: open
 labels: [frontend,elaboration,inference]
 created: 2026-08-17
-updated: 2026-08-17
+updated: 2026-08-26
 ---
 
 Found by wave L2′ ([[std-list-l2-prime-laws]]) writing `zip_swap`. Ranked
@@ -52,3 +52,12 @@ the argument against it and defer.
 `lib/std/list.hthr`'s `zip_swap` is restated on it. Negative control: an
 argument whose implicits are genuinely undetermined by the parameter type still
 reports, and still names which implicit.
+
+## Log
+
+- 2026-08-26: `std/relation` supplied a second customer: the statement of
+  composition associativity could not infer the intermediate carriers in
+  `Compose(Compose(R, S), T)`.  Explicit `Compose<A, B, C>` arguments make it
+  check.  This is the same dependency shape—a polymorphic function-valued
+  argument and an outer call whose own carriers are not yet fixed—so it stays
+  here rather than becoming a relation-specific inference issue.
