@@ -3,7 +3,7 @@ title: Emitted annotations no registered code can name: fn-typed-parameter Apps,
 status: open
 labels: [elaboration,performance]
 created: 2026-08-13
-updated: 2026-08-13
+updated: 2026-08-25
 ---
 
 The emitted-mass residual of [[wf-shape-annotation-slots]]'s round (docs/wf-shape-code-design.md §7), promoted out of that closing issue's log so it keeps a live home. Two families of emitted `Type::Wf` occurrences survive both spelling rounds because no registered definition names them:
@@ -44,3 +44,179 @@ The measurement (rendered-Psi bytes added per declaration, against that declarat
   literal/projection and Wf-match annotation sites. It must retain inline
   copies at structural readers and the wrong-global/look-alike negatives of
   the closed-family code-definition rounds.
+
+- 2026-08-25: **The direct telescope-abstracted `TyCode` experiment is a
+  negative, and narrows the design.** The kernel already admits the proposed
+  definition without a new rule: `D#tycode : Trm_c(Delta |- Ty l)`, referenced
+  by a checked `LocalSubst` carrying the type and value arguments. The
+  prototype retained each lowering's originating substitution for the
+  emission pass (rather than unsoundly trying to invert a monomorphized
+  structural type), extended `unspell` at structural/inference boundaries,
+  and passed the focused closed/parameterized code tests.
+
+  It did not pass the workload criterion. With the contextual whole-record
+  code alone, `ir_fold_same_probe` reached its gate in about **8.2 s** rather
+  than the old target's roughly 36 s, but exhausted the ordinary 2^20
+  conversion budget. Abstracting the parameterized record's generated
+  projection/tail definitions as well still exhausted that budget (about
+  14.8 s to refusal). A diagnostic 4x-fuel run passed, but the whole target
+  took **129.2 s**. A 2x-fuel run was still running past a minute and was
+  stopped. All prototype code and the diagnostic fuel change were reverted.
+
+  Cause: this representation hides the useful outer structural head behind
+  `El (D#tycode[delta])`. Type-directed conversion must delta-unfold it to
+  learn that a value is a Sigma/record, and mixed compact/structural
+  annotations make that happen repeatedly. The syntax is dramatically
+  smaller while normalization work becomes dramatically larger. Raising fuel
+  is therefore not a fix.
+
+  The next experiment should preserve the outer structural head and share
+  only the large dependent tails, or add memoized contextual unfolding whose
+  cache survives the many conversion queries in one kernel gate. In concrete
+  terms, prefer a contextual/open analogue of the existing `RecFam` tail
+  device (with a compact structural spine at use sites) over a whole-record
+  `El(GlobalTm)`; alternatively make normalized contextual global instances a
+  gate-local shared object. Acceptance remains: the default fuel test passes,
+  exact core mass falls, and standalone wall improves—not merely one of the
+  three.
+
+- 2026-08-25: **The structural-head-preserving contextual projection
+  experiment is also a measured negative.** This follow-up left the record's
+  outer Sigma spine inline and generalized only `RecFam`/`RecTail`/`RecProj`.
+  The useful refinement over the first prototype was to use contextual
+  globals natively rather than Π-encoding their receiver:
+
+  `D#proj_j : Trm_c(Delta, v : D |- Field_j(v))`.
+
+  Thus a use was one `GlobalTm` with the checked substitution `[type
+  arguments, value indices, receiver]`: no `App`, no expanded domain
+  annotation, and no whole-record `El` hiding the structural head. A focused
+  value-indexed-record regression proved that this path was selected (the
+  earlier Π-shaped attempt had silently fallen back after a generated
+  projection failed its gate). Closed records stayed on their existing,
+  separately tested path.
+
+  The default-fuel IR probe passed, but took **52.67 s** versus the roughly
+  **36 s** baseline. Here the cost moved from type-code unfolding to term
+  unfolding: every projected field now reaches a contextual global body by
+  delta, and those forced results are not shared across the many conversion
+  queries in one declaration gate. The generated-definition family therefore
+  cannot by itself provide the desired abstraction. This prototype was also
+  reverted.
+
+  The evidence now points at the normalization boundary: either cache forced
+  contextual global instances across a whole kernel gate, keyed by the
+  global and its local substitution in a scope-safe way, or introduce a local
+  core sharing form whose normalization result is memoized. Repeating the
+  experiment with another global-definition shape is not warranted until one
+  of those exists.
+
+- 2026-08-25: **Gate-local contextual-global caching does not rescue that
+  representation.** A scope-safe prototype shared glued global values across
+  all conversion premises of one public kernel check, keyed by the ambient
+  context base, persistent environment identity, global, and local
+  substitution. It preserved the differential conversion suite. The IR probe
+  nevertheless remained at **51.32 s** (and **48.74--51.07 s** under two
+  lookup refinements), essentially the contextual-projection experiment's
+  52.67 s rather than the 36 s baseline.
+
+  Instrumentation explains why. Individual gates accumulated as many as
+  **41,647 distinct instances** (with 21,720 hits), and several others held
+  6,000--14,000. Restricting entries to unfoldable definitions did not change
+  that shape; bucketing by global removed unrelated structural comparisons
+  but did not move wall time. The workload is not repeatedly asking one
+  normalization question: it builds many genuinely different substitutions.
+  The cache prototype was therefore removed rather than making kernel fuel
+  accounting and memory retention more complicated for no measured gain.
+
+- 2026-08-25: **Naming only contextual tails is also a negative.** A hybrid
+  kept native `fst`/`snd` projection terms but used the registered contextual
+  `RecFam` definitions only in their dependent `snd_ty` annotations. It
+  compiled and passed the earlier focused path checks, but the unchanged IR
+  test ran beyond two minutes and was stopped. Mixed compact/structural types
+  still force every named tail to expose its next Sigma head during
+  conversion, recreating the suffix normalization that the spelling was
+  meant to avoid.
+
+  These three negatives identify the useful granularity more tightly: keep
+  the *entire* Sigma spine structural and native, and consider naming only
+  individual field types. A contextual `D#field_j` can abstract over the
+  declaration parameters and preceding field values; its occurrence is an
+  `El(GlobalTm)` in the `fst` slot, while the surrounding Sigma tail remains
+  visible. That should avoid both structural-head loss and delta-based term
+  projection, and is the next warranted experiment.
+
+- 2026-08-25: **Contextual field-type codes preserve the right heads but are
+  still a negative.** The prototype registered
+  `D#field_j : Trm_c(Delta, tag, f0, ..., f_{j-1} |- Ty l_j)` and rebuilt an
+  instantiated record as the same fully visible Sigma spine with only each
+  payload `fst` type replaced by `El(D#field_j[...])`. Native `fst`/`snd`
+  remained native. The value-parameter suite's 14 tests, including its
+  propositional capture observers, passed after correcting a source-context
+  depth bug.
+
+  The IR target nevertheless exceeded its **4 GiB** test-process limit after
+  23--27 seconds. Two suspected interface copies were removed without
+  changing that verdict: later generated-definition contexts used the earlier
+  compact field types, and closed type arguments reused their existing
+  `TyCode` term rather than re-quoting (notably `M = Ir`). The residual is
+  inherent to the explicit telescope spelling. A later field reference's
+  substitution contains all preceding field variables; dependent Sigma
+  projection eagerly substitutes growing `fst(snd^i r)` terms for those
+  variables in every later reference, copying the projection annotations into
+  the substitutions themselves. This is the original growth mechanism moved
+  one node inward, not removed. The prototype was removed.
+
+  The next representation-level candidate is consequently an **explicit
+  local-substitution suspension** (or an equivalent locally shared type
+  thunk): retain `S[delta]` as a compact core node and have NBE compose its
+  environment lazily, instead of `Type::apply_local` materializing `delta`
+  through the entire annotation. Unlike a global code, the suspension exposes
+  the structural `S` when demanded without delta-unfolding a definition, and
+  unlike a field-code telescope it does not copy `delta` into every nested
+  global reference. This changes core syntax and substitution metatheory, so
+  it should receive a design pass before a kernel prototype.
+
+- 2026-08-25: **The first explicit local-substitution suspension prototype is
+  inconclusive: its final representation was a genuine DAG, but the syntactic
+  reducer still had an eager escape hatch.** The prototype added an
+  administrative core type `S[delta]`
+  with a checked target context, value-evaluator interpretation by environment
+  composition, one-layer structural Sigma exposure in the syntactic oracle,
+  eager erasure at staging boundaries, and distinct cache syntax. The record
+  projection fallback walked the original telescope and retained the growing
+  substitution in each native `fst`/`snd` annotation.
+
+  A flat `LocalSubst` payload first exhausted the test process's **4 GiB**
+  limit in 49--90 seconds even when all kernel gates were bypassed. Boxing the
+  suspension payload did not help: the substitution's term `Vec` was still
+  cloned into every telescope prefix. A persistent snoc spine likewise
+  exhausted 4 GiB after **81 seconds**, because each dependent annotation
+  still eagerly shifted the retained prefix. The final representation made
+  `Concrete`, `Extend`, and `Shift` persistent expression nodes, so cloning,
+  extension, and dependent lift were all O(1). A diagnostic that panicked on
+  the first materialization proved no suspension was forced until **80.27
+  seconds** into probe elaboration; the first force was `step_type` exposing a
+  terminal field for application elaboration. Without the diagnostic, the
+  construction-only run still exhausted 4 GiB after **120 seconds**.
+
+  The backtrace changes the interpretation of that last failure. `step_type`
+  forced the suspension through its generic non-Sigma fallback, which called
+  eager `apply_local`; the projected field was function-typed (the call came
+  from applying a projected law), while the prototype only preserved
+  suspension through a Sigma head. Materializing the accumulated `Shift` DAG
+  recursively shifts projection terms whose annotations contain older
+  suspensions, collapsing the shared graph back into duplicated syntax. The
+  4 GiB result therefore measures that eager fallback, not an inherent cost of
+  carrying the final DAG. The kernel prototype and diagnostic changes were
+  removed, but it is not evidence that explicit suspension itself fails.
+
+  A conclusive retry must have no such escape hatch on the elaborator's WHNF
+  path: at minimum push suspension structurally through Pi as well as Sigma,
+  retain local composition/lift as DAG nodes when an application substitutes
+  into the codomain, and let NBE evaluate the substitution expression directly
+  rather than first materializing syntax. Other type heads should either get
+  analogous one-layer rules or a deliberately bounded force whose cost is
+  measured. Only after that version reaches the gate can it be compared with
+  the 36-second baseline. A compact record-projection/core-let remains the
+  next alternative if a fully lazy suspension still retains too much mass.

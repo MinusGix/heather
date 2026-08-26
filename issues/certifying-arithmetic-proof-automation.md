@@ -115,3 +115,8 @@ unary closed computations is compatible with that division.
   handwritten) to 41,353 (2.7x). The next meaningful reductions are direct
   order-goal reification to avoid candidate guessing, and more compact
   normalization/composition certificates.
+- 2026-08-26: Follow-up work was split into
+  [[arith-structural-order-reification]] for replacing the 20 Boolean leaf
+  probes with goal-directed selection, and [[arith-compact-additive-certificates]]
+  for reducing reassociation and proof-composition size. This umbrella retains
+  the shared trust boundary and eventual solver orchestration.
