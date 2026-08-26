@@ -54,3 +54,17 @@ unary closed computations is compatible with that division.
 - 2026-08-26: Filed from the executable carry proof. The direct 64-step
   Boolean control is cheap; the need for automation comes from proof
   construction and algebraic normalization, not from the semantic algorithm.
+- 2026-08-26: Arena/cache measurements sharpen the first implementation
+  milestone. A small certifying analyzer (`certgen` on `add`) uses only 1,498
+  cached term values and never evicts, so "a Rust tactic necessarily emits a
+  certificate the kernel cannot afford" is not supported; certificate SHAPE
+  remains the variable to control. Start below the eventual tactic surface:
+  a deterministic proof-term reconstructor for open Nat linear expressions,
+  plus exhaustive Bool splitting, whose output uses named library lemmas and
+  never evaluates closed `pow(2,n)`. Pin (1) the used-lemma list, (2) a
+  structured unsupported/stuck result, (3) the carry step's eight cases, and
+  (4) kernel-gate value metrics for the emitted open proof. Only after that
+  compact certificate checks should it be wired into `grind`/surface solver
+  selection. This keeps solver engineering outside the kernel and makes the
+  feared certificate-checking cost an acceptance measurement rather than an
+  assumption.

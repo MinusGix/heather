@@ -4,110 +4,110 @@ env	host	minus-desktop
 env	cpu	AMD Ryzen 7 5700X 8-Core Processor
 env	profile	release
 env	rustc	rustc 1.97.1 (8bab26f4f 2026-07-14)
-env	commit	4ca21c9
-case	level/equiv-shared	4	4.0
-case	level/equiv-shared	8	4.0
-case	level/equiv-shared	16	4.0
-case	level/equiv-shared	32	4.0
-case	level/equiv-shared	64	4.0
-case	level/equiv-rebuilt	4	400.9
-case	level/equiv-rebuilt	8	834.0
-case	level/equiv-rebuilt	16	1723.2
-case	level/equiv-rebuilt	32	3928.9
-case	level/equiv-rebuilt	64	8301.4
-case	subst/shift-local	71	1539.6
-case	subst/shift-local	135	3230.1
-case	subst/shift-local	263	7243.0
-case	subst/shift-local	519	16778.9
-case	subst/shift-local	1031	38835.1
-case	subst/apply-local	71	1601.1
-case	subst/apply-local	135	3459.4
-case	subst/apply-local	263	7567.5
-case	subst/apply-local	519	16949.2
-case	subst/apply-local	1031	38890.6
-case	nat/step-once	64	104.3
-case	nat/step-once	128	103.2
-case	nat/step-once	256	103.8
-case	nat/step-once	512	103.3
-case	nat/step-once	1024	102.5
-case	nat/step-into-closed-body	64	118.5
-case	nat/step-into-closed-body	128	113.7
-case	nat/step-into-closed-body	256	113.7
-case	nat/step-into-closed-body	512	114.3
-case	nat/step-into-closed-body	1024	117.4
-case	nat/add-normalize	64	10509.8
-case	nat/add-normalize	128	20894.0
-case	nat/add-normalize	256	41711.8
-case	nat/add-normalize	512	83617.5
-case	nat/add-normalize	1024	167821.9
-case	nat/mul-normalize	8	10126.7
-case	nat/mul-normalize	12	21955.4
-case	nat/mul-normalize	16	38015.6
-case	nat/mul-normalize	24	84346.3
-case	nat/mul-normalize	32	148568.1
-case	nat/mul-normalize	48	328696.0
-case	nat/check-numeral	64	3412.1
-case	nat/check-numeral	128	6880.1
-case	nat/check-numeral	256	14373.0
-case	nat/check-numeral	512	33989.8
-case	conv/computed-numeral	32	16045.1
-case	conv/computed-numeral	64	32387.9
-case	conv/computed-numeral	128	69398.9
-case	conv/computed-numeral	256	148703.7
-case	conv/computed-numeral	512	313320.8
-case	conv/perturbed-pairs	25	64605.8
-case	conv/perturbed-pairs	50	138666.4
-case	conv/perturbed-pairs	100	268079.1
-case	conv/perturbed-pairs	200	532945.3
-case	conv/simulate-payload	32	42218.6
-case	conv/simulate-payload	64	42858.6
-case	conv/simulate-payload	128	43035.5
-case	conv/simulate-payload	256	42667.4
-case	conv/simulate-payload	512	42502.7
-case	conv/simulate-payload	1024	42658.0
-case	conv/simulate-depth	16	10545.7
-case	conv/simulate-depth	32	21338.2
-case	conv/simulate-depth	64	42691.7
-case	conv/simulate-depth	128	90440.4
-case	conv/simulate-depth	256	194223.3
-case	wf/check-tree	303	48596.3
-case	wf/check-tree	683	110444.0
-case	wf/check-tree	1443	234720.1
-case	wf/check-tree	2963	479729.9
-case	wf/mirror-involution	303	102553.8
-case	wf/mirror-involution	683	235519.2
-case	wf/mirror-involution	1443	510850.2
-case	wf/mirror-involution	2963	1056317.2
-case	code/check-identity-recursor	3	278662.6
-case	code/check-identity-recursor	5	290546.1
-case	code/check-identity-recursor	9	297853.1
-case	code/check-identity-recursor	17	296530.3
-case	code/check-identity-recursor	33	307187.0
-case	code/whnf-identity-recursor	3	394.7
-case	code/whnf-identity-recursor	5	413.6
-case	code/whnf-identity-recursor	9	418.2
-case	code/whnf-identity-recursor	17	417.5
-case	code/whnf-identity-recursor	33	414.9
-case	check/generated-terms	25	446396.5
-case	check/generated-terms	50	484542.4
-case	check/generated-terms	100	1327469.2
-case	check/generated-terms	200	3773193.5
-slope	level/equiv-shared	0.001
-slope	level/equiv-rebuilt	1.098
-slope	subst/shift-local	1.210
-slope	subst/apply-local	1.190
-slope	nat/step-once	-0.005
-slope	nat/step-into-closed-body	-0.002
+env	commit	1ed9773
+case	level/equiv-shared	4	4.1
+case	level/equiv-shared	8	4.2
+case	level/equiv-shared	16	4.3
+case	level/equiv-shared	32	4.2
+case	level/equiv-shared	64	4.3
+case	level/equiv-rebuilt	4	439.2
+case	level/equiv-rebuilt	8	937.8
+case	level/equiv-rebuilt	16	1909.1
+case	level/equiv-rebuilt	32	4154.1
+case	level/equiv-rebuilt	64	9136.1
+case	subst/shift-local	71	1860.8
+case	subst/shift-local	135	4325.9
+case	subst/shift-local	263	8817.5
+case	subst/shift-local	519	18313.0
+case	subst/shift-local	1031	41732.7
+case	subst/apply-local	71	1931.1
+case	subst/apply-local	135	4246.9
+case	subst/apply-local	263	9099.4
+case	subst/apply-local	519	18567.7
+case	subst/apply-local	1031	40904.8
+case	nat/step-once	64	116.6
+case	nat/step-once	128	116.7
+case	nat/step-once	256	115.5
+case	nat/step-once	512	119.3
+case	nat/step-once	1024	116.6
+case	nat/step-into-closed-body	64	137.3
+case	nat/step-into-closed-body	128	125.0
+case	nat/step-into-closed-body	256	135.3
+case	nat/step-into-closed-body	512	128.1
+case	nat/step-into-closed-body	1024	128.9
+case	nat/add-normalize	64	11541.2
+case	nat/add-normalize	128	22362.2
+case	nat/add-normalize	256	46003.0
+case	nat/add-normalize	512	93001.3
+case	nat/add-normalize	1024	180503.3
+case	nat/mul-normalize	8	11214.1
+case	nat/mul-normalize	12	24247.1
+case	nat/mul-normalize	16	43167.4
+case	nat/mul-normalize	24	98349.0
+case	nat/mul-normalize	32	163434.2
+case	nat/mul-normalize	48	372927.4
+case	nat/check-numeral	64	8592.3
+case	nat/check-numeral	128	17447.0
+case	nat/check-numeral	256	36290.9
+case	nat/check-numeral	512	75626.6
+case	conv/computed-numeral	32	24787.0
+case	conv/computed-numeral	64	50867.4
+case	conv/computed-numeral	128	104272.4
+case	conv/computed-numeral	256	206970.3
+case	conv/computed-numeral	512	404927.1
+case	conv/perturbed-pairs	25	70887.7
+case	conv/perturbed-pairs	50	150493.8
+case	conv/perturbed-pairs	100	314500.6
+case	conv/perturbed-pairs	200	602758.5
+case	conv/simulate-payload	32	62816.6
+case	conv/simulate-payload	64	62697.2
+case	conv/simulate-payload	128	64228.4
+case	conv/simulate-payload	256	65185.3
+case	conv/simulate-payload	512	63359.7
+case	conv/simulate-payload	1024	64862.0
+case	conv/simulate-depth	16	15413.2
+case	conv/simulate-depth	32	31087.0
+case	conv/simulate-depth	64	62553.6
+case	conv/simulate-depth	128	127606.9
+case	conv/simulate-depth	256	260902.5
+case	wf/check-tree	303	77141.9
+case	wf/check-tree	683	177335.3
+case	wf/check-tree	1443	351626.0
+case	wf/check-tree	2963	724886.1
+case	wf/mirror-involution	303	119933.1
+case	wf/mirror-involution	683	285462.3
+case	wf/mirror-involution	1443	607693.4
+case	wf/mirror-involution	2963	1162165.5
+case	code/check-identity-recursor	3	336504.9
+case	code/check-identity-recursor	5	364614.7
+case	code/check-identity-recursor	9	363829.8
+case	code/check-identity-recursor	17	375324.7
+case	code/check-identity-recursor	33	451640.1
+case	code/whnf-identity-recursor	3	435.3
+case	code/whnf-identity-recursor	5	458.0
+case	code/whnf-identity-recursor	9	484.1
+case	code/whnf-identity-recursor	17	472.1
+case	code/whnf-identity-recursor	33	453.5
+case	check/generated-terms	25	610828.0
+case	check/generated-terms	50	633232.1
+case	check/generated-terms	100	1949210.8
+case	check/generated-terms	200	5650002.7
+slope	level/equiv-shared	0.013
+slope	level/equiv-rebuilt	1.090
+slope	subst/shift-local	1.144
+slope	subst/apply-local	1.132
+slope	nat/step-once	0.003
+slope	nat/step-into-closed-body	-0.015
 slope	nat/add-normalize	0.999
-slope	nat/mul-normalize	1.945
-slope	nat/check-numeral	1.101
-slope	conv/computed-numeral	1.077
-slope	conv/perturbed-pairs	1.008
-slope	conv/simulate-payload	0.001
-slope	conv/simulate-depth	1.049
-slope	wf/check-tree	1.005
-slope	wf/mirror-involution	1.024
-slope	code/check-identity-recursor	0.035
+slope	nat/mul-normalize	1.956
+slope	nat/check-numeral	1.047
+slope	conv/computed-numeral	1.008
+slope	conv/perturbed-pairs	1.033
+slope	conv/simulate-payload	0.009
+slope	conv/simulate-depth	1.020
+slope	wf/check-tree	0.976
+slope	wf/mirror-involution	0.998
+slope	code/check-identity-recursor	0.104
 slope	code/whnf-identity-recursor	0.017
-slope	check/generated-terms	1.069
-stack	stack/check-numeral	4194304	1595
+slope	check/generated-terms	1.125
+stack	stack/check-numeral	4194304	1566

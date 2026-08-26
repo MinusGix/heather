@@ -328,13 +328,15 @@ impl Elaborator {
             };
             if !self.gate.as_ref().is_some_and(|g| g.admits(&self.psi, &item)) {
                 crate::stats::time_kernel(|| {
-                    typing::check_type(&self.psi, 0, Layer::Meta, &empty, &stmt, &lvl, self.fuel)
+                    self.kernel_check_type(&self.psi, Layer::Meta, &empty, &stmt, &lvl)
                 })
                 .map_err(|e| ElabError::Kernel {
                     decl: decl.name.clone(), span: decl.span, err: e, note: None,
                 })?;
                 crate::stats::time_kernel(|| {
-                    typing::check_term(&self.psi, 0, Layer::Meta, &empty, &term, &stmt, &lvl, self.fuel)
+                    self.kernel_check_term(
+                        &self.psi, Layer::Meta, &empty, &term, &stmt, &lvl,
+                    )
                 })
                 .map_err(|e| ElabError::Kernel {
                     decl: decl.name.clone(), span: decl.span, err: e, note: None,

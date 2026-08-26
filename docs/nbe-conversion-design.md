@@ -341,10 +341,11 @@ Head ::= Var(lvl) | BaseVar(depth) | Global(u, δ_values) | BoxedGlobal(box-synt
 ```
 
 - `unfold` is `Some` exactly when the head is a `Global(u, …)` that `Defs`
-  says is defined. It is a **memoized thunk**: forcing it evaluates the
+  says is defined. It is a **cached thunk**: forcing it evaluates the
   definition's body under `δ`'s value environment and then replays the
-  spine. Second and later visits are free — which today's design cannot do
-  at all, since it re-reduces from syntax each time.
+  spine. Recent visits share the value through the query's bounded cache; a
+  visit after eviction may recompute it rather than retaining a dead graph
+  for the whole query.
 - `BoxedGlobal` is ch. 06's `box(U^δ)` / `box(u^δ)` neutral-scrutinee case
   for the code recursors: a canonical box under an eliminator that can never
   fire. Naming it a head keeps `is_neutral_term`'s special case from having
@@ -361,6 +362,16 @@ now O(1).
 
 **The `has_defs` gate survives** unchanged, and is now cheap for a second
 reason: a neutral with `unfold: None` cannot enter the stage at all.
+
+**Instrumentation.** `ValueMetrics` is an explicitly supplied aggregate
+collector, not evaluator state. A profiled arena counts its environment,
+term-closure and type-closure allocations and the two caches' lookups, hits,
+inserts, evictions and peak resident entries. The profiled typing entry points
+lend one collector to each short-lived conversion arena inside a kernel gate;
+the elaborator can lend that same collector to its analyzer arena. Thus a
+measurement has a caller-defined boundary and remains meaningful under
+parallel tests, without a thread-local or global observer. No counter is fuel
+and no counter participates in a rule.
 
 **`Defs::body`'s per-unfold `shift_global`.** Today every unfold recomputes
 `t.shift_global(v.0 + 1)`. The rescoping depends only on `v`, never on the
@@ -775,8 +786,8 @@ cross-references land with it —
 ## 12. The spike (2026-07-31)
 
 **Question:** can the acceptance instrument — the arm-nested probe, linear
-in N — be built as a *kernel* bench family? The bench suite is
-zero-dependency and cannot call the elaborator, so a kernel-term
+in N — be built as a *kernel* bench family? The bench suite cannot call the
+elaborator, so a kernel-term
 reconstruction of the probe would be much cheaper to run and to gate on
 than an elaborated `.hthr` file.
 

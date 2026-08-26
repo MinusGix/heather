@@ -10,10 +10,11 @@ autobenches = false
 [lib]
 name = "heather_kernel"
 
-# Still zero dependencies, dev-dependencies included: no Criterion. See
-# issues/dependency-policy.md and the module docs in
-# benches/kernel/harness.rs for why the estimator is first-party.
+[features]
+value-metrics = []
+
 [dependencies]
+typed-arena = "=2.0.2"
 
 # Run through scripts/bench (ulimit), not `cargo bench` directly —
 # docs/benchmarking.md.

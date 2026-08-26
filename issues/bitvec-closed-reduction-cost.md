@@ -81,3 +81,16 @@ Acceptance has two parts:
   Remaining before this issue closes: preempt an inherently excessive unary
   arithmetic computation with `OutOfFuel`/a resource diagnostic instead of
   allocator failure.
+- 2026-08-26: The evaluator graph is now query-arena-backed, replacing the
+  temporary thread-local destruction worklist; successful forced values live
+  in bounded 16K term/type FIFO caches. Explicit `ValueMetrics` instrumentation
+  measured the isolated closed width-64 structural carry under the ordinary
+  rail: 841 conversion/analyzer arenas, 3,946 environment nodes, 113,890 term
+  closures, 12,546 type closures, and 133,672 term-cache lookups (25,122 hits,
+  108,550 inserts, 92,165 evictions; peak exactly 16,384). A controlled 32K
+  capacity run left lookups and hits effectively unchanged (133,672 / 25,128)
+  and reduced evictions by almost exactly the extra 16K slots. This is a
+  streaming working set, not evidence that 16K narrowly misses a hot set;
+  retaining twice as many values buys no sharing and is not landed. The next
+  lever is allocation/force shape or a smarter admission policy, guided by a
+  minimized producer/consumer query, rather than a larger FIFO.

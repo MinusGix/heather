@@ -72,7 +72,9 @@ use crate::term::{
     Branches, CtxEntries, CtxEntry, GlobalBinding, GlobalCtx, GlobalVar, LocalCtx, LocalVar,
     Motives, Term, Type,
 };
-use crate::value::{self, shift::Outer, TmClo, TyClo};
+use crate::value::{self, shift::Outer, TmClo, TyClo, ValueArena};
+#[cfg(feature = "value-metrics")]
+use crate::value::ValueMetrics;
 
 mod dom;
 
@@ -130,7 +132,25 @@ pub fn conv_type(
     fuel: u64,
 ) -> R {
     debug_assert!(layer.computes(), "convertibility is only invoked at computing layers");
-    Conv::<Values>::new(fuel, psi).ty_root(&Env::new(psi, gamma, layer), a, b, level)
+    let arena = ValueArena::new();
+    Conv::<Values>::new(fuel, psi).ty_root(&Env::new(&arena, psi, gamma, layer), a, b, level)
+}
+
+#[cfg(feature = "value-metrics")]
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn conv_type_with_metrics(
+    psi: &GlobalCtx,
+    gamma: &LocalCtx,
+    layer: Layer,
+    a: &Type,
+    b: &Type,
+    level: &Level,
+    fuel: u64,
+    metrics: Option<&ValueMetrics>,
+) -> R {
+    debug_assert!(layer.computes(), "convertibility is only invoked at computing layers");
+    let arena = metrics.map_or_else(ValueArena::new, ValueArena::profiled);
+    Conv::<Values>::new(fuel, psi).ty_root(&Env::new(&arena, psi, gamma, layer), a, b, level)
 }
 
 /// `Ψ; Γ ⊢_i t ≈ t' : T @ l` — convertibility of terms at a type.
@@ -146,7 +166,8 @@ pub fn conv_term(
     fuel: u64,
 ) -> R {
     debug_assert!(layer.computes(), "convertibility is only invoked at computing layers");
-    Conv::<Values>::new(fuel, psi).tm_root(&Env::new(psi, gamma, layer), a, b, ty, level)
+    let arena = ValueArena::new();
+    Conv::<Values>::new(fuel, psi).tm_root(&Env::new(&arena, psi, gamma, layer), a, b, ty, level)
 }
 
 /// `Ψ ⊢_i Γ ≈ Δ` — convertibility of local contexts.
@@ -158,7 +179,23 @@ pub fn conv_local_ctx(
     fuel: u64,
 ) -> R {
     debug_assert!(layer.computes(), "convertibility is only invoked at computing layers");
-    let env = Env::new(psi, &LocalCtx::nil(), layer);
+    let arena = ValueArena::new();
+    let env = Env::new(&arena, psi, &LocalCtx::nil(), layer);
+    Conv::<Values>::new(fuel, psi).ctx(&env, layer, a, b)
+}
+
+#[cfg(feature = "value-metrics")]
+pub(crate) fn conv_local_ctx_with_metrics(
+    psi: &GlobalCtx,
+    layer: Layer,
+    a: &LocalCtx,
+    b: &LocalCtx,
+    fuel: u64,
+    metrics: Option<&ValueMetrics>,
+) -> R {
+    debug_assert!(layer.computes(), "convertibility is only invoked at computing layers");
+    let arena = metrics.map_or_else(ValueArena::new, ValueArena::profiled);
+    let env = Env::new(&arena, psi, &LocalCtx::nil(), layer);
     Conv::<Values>::new(fuel, psi).ctx(&env, layer, a, b)
 }
 
@@ -192,7 +229,8 @@ pub mod oracle {
         fuel: u64,
     ) -> R {
         debug_assert!(layer.computes(), "convertibility is only invoked at computing layers");
-        Conv::<Syn>::new(fuel, psi).ty_root(&Env::new(psi, gamma, layer), a, b, level)
+        let arena = ValueArena::new();
+        Conv::<Syn>::new(fuel, psi).ty_root(&Env::new(&arena, psi, gamma, layer), a, b, level)
     }
 
     /// [`super::conv_term`] decided by the rewriter.
@@ -208,7 +246,8 @@ pub mod oracle {
         fuel: u64,
     ) -> R {
         debug_assert!(layer.computes(), "convertibility is only invoked at computing layers");
-        Conv::<Syn>::new(fuel, psi).tm_root(&Env::new(psi, gamma, layer), a, b, ty, level)
+        let arena = ValueArena::new();
+        Conv::<Syn>::new(fuel, psi).tm_root(&Env::new(&arena, psi, gamma, layer), a, b, ty, level)
     }
 
     /// [`super::conv_local_ctx`] decided by the rewriter.
@@ -220,7 +259,8 @@ pub mod oracle {
         fuel: u64,
     ) -> R {
         debug_assert!(layer.computes(), "convertibility is only invoked at computing layers");
-        let env = Env::new(psi, &LocalCtx::nil(), layer);
+        let arena = ValueArena::new();
+        let env = Env::new(&arena, psi, &LocalCtx::nil(), layer);
         Conv::<Syn>::new(fuel, psi).ctx(&env, layer, a, b)
     }
 }
@@ -240,10 +280,10 @@ pub mod oracle {
 /// substitutions inside the syntax domain's [`Dom::inst_ty`]); at the value
 /// domain its entry types are fillers. The scope a *value* needs — the
 /// environment ρ of neutral variables, and each entry's type as a domain
-/// object for [`Dom::var_type`] — is [`Env::rho`] and [`Env::vtys`], which
+/// object for [`Dom::var_type`] — is [`Env<'v>::rho`] and [`Env<'v>::vtys`], which
 /// the syntax domain never reads.
 #[derive(Clone)]
-struct Env {
+struct Env<'v> {
     /// Shared, not cloned: a binder push clones the whole scope, and Ψ's
     /// bindings each carry a local context of their own — copying them per
     /// push was ~3% of a routine `lib/ir_v1.hthr` check. Only `push_tele`
@@ -263,14 +303,14 @@ struct Env {
     /// The local environment of the value domain: entry `j` from the outer
     /// end is the neutral variable at level `j`, so pushing a binder assigns
     /// the level `gamma.entries.len()` and never renumbers anything.
-    rho: value::Env,
+    rho: value::Env<'v>,
     /// The entry types of the binders **conversion itself pushed**, as domain
     /// objects, innermost first: those are the ones with no syntax in
     /// `gamma`. Everything older than `vbase` is still syntax there and is
     /// read back on demand, so entering a conversion costs no work per Γ
     /// entry (it cost O(|Γ|) allocations per query when this list was built
     /// eagerly — `scripts/bench`, 2026-07-31).
-    vtys: TyEnv,
+    vtys: TyEnv<'v>,
     /// The Γ-length at which `vtys` starts.
     vbase: u32,
     /// The telescope [`Dom::push_spec`] pushed to build this scope, as
@@ -279,34 +319,34 @@ struct Env {
     tele: (u32, u32, u32),
 }
 
-/// A persistent list of value-domain entry types: `Env` is cloned once per
+/// A persistent list of value-domain entry types: `Env<'v>` is cloned once per
 /// binder push on conversion's hottest path, so this must not be a `Vec`.
 #[derive(Clone)]
-struct TyEnv(Option<Rc<TyEnvNode>>);
+struct TyEnv<'v>(Option<Rc<TyEnvNode<'v>>>);
 
-struct TyEnvNode {
-    ty: Rc<TyClo>,
+struct TyEnvNode<'v> {
+    ty: &'v TyClo<'v>,
     level: Level,
-    rest: TyEnv,
+    rest: TyEnv<'v>,
 }
 
-impl TyEnv {
-    fn empty() -> TyEnv {
+impl<'v> TyEnv<'v> {
+    fn empty() -> TyEnv<'v> {
         TyEnv(None)
     }
 
-    fn push(&self, ty: Rc<TyClo>, level: Level) -> TyEnv {
+    fn push(&self, ty: &'v TyClo<'v>, level: Level) -> TyEnv<'v> {
         TyEnv(Some(Rc::new(TyEnvNode { ty, level, rest: self.clone() })))
     }
 
     /// The entry `i` binders out from the innermost one.
-    fn nth(&self, i: u32) -> Option<(&Rc<TyClo>, &Level)> {
+    fn nth(&self, i: u32) -> Option<(&'v TyClo<'v>, &Level)> {
         let mut cur = self;
         let mut k = i;
         loop {
             let n = cur.0.as_ref()?;
             if k == 0 {
-                return Some((&n.ty, &n.level));
+                return Some((n.ty, &n.level));
             }
             k -= 1;
             cur = &n.rest;
@@ -314,11 +354,11 @@ impl TyEnv {
     }
 
     /// Outermost first.
-    fn to_vec(&self) -> Vec<(Rc<TyClo>, Level)> {
+    fn to_vec(&self) -> Vec<(&'v TyClo<'v>, Level)> {
         let mut out = Vec::new();
         let mut cur = self;
         while let Some(n) = cur.0.as_ref() {
-            out.push((Rc::clone(&n.ty), n.level.clone()));
+            out.push((n.ty, n.level.clone()));
             cur = &n.rest;
         }
         out.reverse();
@@ -329,16 +369,21 @@ impl TyEnv {
 /// The value-domain reading of a syntactic Γ: the identity environment of
 /// its variables, and each entry's type as a closure over the *prefix* it is
 /// scoped in.
-fn value_scope(gamma: &LocalCtx) -> (value::Env, TyEnv) {
+fn value_scope<'v>(arena: &'v ValueArena<'v>, gamma: &LocalCtx) -> (value::Env<'v>, TyEnv<'v>) {
     (
-        value::Env::identity(gamma.entries.len() as u32),
+        value::Env::identity(arena, gamma.entries.len() as u32),
         TyEnv::empty(),
     )
 }
 
-impl Env {
-    fn new(psi: &GlobalCtx, gamma: &LocalCtx, layer: Layer) -> Env {
-        let (rho, vtys) = value_scope(gamma);
+impl<'v> Env<'v> {
+    fn new(
+        arena: &'v ValueArena<'v>,
+        psi: &GlobalCtx,
+        gamma: &LocalCtx,
+        layer: Layer,
+    ) -> Env<'v> {
+        let (rho, vtys) = value_scope(arena, gamma);
         Env {
             psi: Rc::new(psi.clone()),
             bodies: Rc::new(BodyCache::new()),
@@ -351,7 +396,7 @@ impl Env {
         }
     }
 
-    fn with_layer(&self, layer: Layer) -> Env {
+    fn with_layer(&self, layer: Layer) -> Env<'v> {
         Env { layer, ..self.clone() }
     }
 
@@ -359,8 +404,8 @@ impl Env {
     /// *different* local context, e.g. `Ψ; Δ ⊢_p T ≈ T'`. The value domain's
     /// scope is rebuilt from scratch: a different Γ is a different set of
     /// variables, at levels of its own.
-    fn in_ctx(&self, gamma: LocalCtx, layer: Layer) -> Env {
-        let (rho, vtys) = value_scope(&gamma);
+    fn in_ctx(&self, gamma: LocalCtx, layer: Layer) -> Env<'v> {
+        let (rho, vtys) = value_scope(self.rho.arena(), &gamma);
         let vbase = gamma.entries.len() as u32;
         Env { gamma, layer, rho, vtys, vbase, tele: (0, 0, 0), ..self.clone() }
     }
@@ -370,16 +415,16 @@ impl Env {
     /// fresh neutral, and records the entry's type as a domain object.
     ///
     /// The syntactic entry is a **filler** unless the caller has real syntax
-    /// (only [`Env::in_ctx`] and [`Env::new`] do): nothing reads it but the
+    /// (only [`Env<'v>::in_ctx`] and [`Env<'v>::new`] do): nothing reads it but the
     /// length and the base.
-    fn push_entry_syn(&self, ty: Rc<Type>, level: Level) -> Env {
-        let vty = Rc::new(TyClo::new(self.rho.clone(), Rc::clone(&ty)));
+    fn push_entry_syn(&self, ty: Rc<Type>, level: Level) -> Env<'v> {
+        let vty = self.rho.arena().ty(TyClo::new(self.rho, Rc::clone(&ty)));
         self.push_entry(ty, vty, level)
     }
 
-    fn push_entry(&self, ty: Rc<Type>, vty: Rc<TyClo>, level: Level) -> Env {
+    fn push_entry(&self, ty: Rc<Type>, vty: &'v TyClo<'v>, level: Level) -> Env<'v> {
         let mut e = self.clone();
-        e.rho = e.rho.push(Rc::new(TmClo::val(Rc::new(value::Val::var(
+        e.rho = e.rho.push(e.rho.arena().tm(TmClo::val(Rc::new(value::Val::var(
             self.gamma.entries.len() as u32,
         )))));
         e.vtys = e.vtys.push(vty, level.clone());
@@ -391,12 +436,12 @@ impl Env {
     /// bindings (each already scoped over `L, ℓ⃗` and its Ψ-prefix). The
     /// ambient Ψ and Γ are weakened accordingly — and so, at the value
     /// domain, is every value the scope carries (`value::shift`).
-    fn push_tele(&self, tu: u32, globals: Vec<GlobalBinding>) -> Env {
+    fn push_tele(&self, tu: u32, globals: Vec<GlobalBinding>) -> Env<'v> {
         let tg = globals.len() as u32;
         let mut psi = shift_univ_psi(&self.psi, tu);
         psi.extend(globals);
         let psi = Rc::new(psi);
-        let o = Outer { univs: tu, globals: tg };
+        let o = Outer { arena: self.rho.arena(), univs: tu, globals: tg };
         let mut vtys = TyEnv::empty();
         for (t, l) in self.vtys.to_vec() {
             vtys = vtys.push(value::shift::ty_clo(&t, o), l);
@@ -413,11 +458,11 @@ impl Env {
         }
     }
 
-    fn push_univs(&self, n: u32) -> Env {
+    fn push_univs(&self, n: u32) -> Env<'v> {
         self.push_tele(n, vec![])
     }
 
-    fn push_global(&self, b: GlobalBinding) -> Env {
+    fn push_global(&self, b: GlobalBinding) -> Env<'v> {
         self.push_tele(0, vec![b])
     }
 }
@@ -477,7 +522,7 @@ fn delta_head_ty(t: &Type, defs: Defs<'_>) -> Option<GlobalVar> {
 /// ([`Dom::RecCtx`]) rather than alone: at the value domain they agree with
 /// the rewriter's rewritten copies only through the elimination's stored
 /// environment.
-struct RecSide<'a, D: Dom> {
+struct RecSide<'a, 'v, D: Dom<'v>> {
     l1: &'a Level,
     l2: &'a Level,
     motives: Rc<Motives>,
@@ -485,7 +530,7 @@ struct RecSide<'a, D: Dom> {
     rec: D::RecCtx,
 }
 
-struct Conv<D: Dom> {
+struct Conv<'v, D: Dom<'v>> {
     fuel: u64,
     /// Does Ψ contain any definition at all? Decided once, because when it
     /// does not — every program before this feature, and every fixture that
@@ -494,11 +539,11 @@ struct Conv<D: Dom> {
     /// pushes never introduce definitions, so the answer cannot change while
     /// a comparison runs.
     has_defs: bool,
-    _dom: PhantomData<D>,
+    _dom: PhantomData<(&'v (), D)>,
 }
 
-impl<D: Dom> Conv<D> {
-    fn new(fuel: u64, psi: &GlobalCtx) -> Conv<D> {
+impl<'v, D: Dom<'v>> Conv<'v, D> {
+    fn new(fuel: u64, psi: &GlobalCtx) -> Conv<'v, D> {
         let has_defs = psi
             .bindings
             .iter()
@@ -519,7 +564,7 @@ impl<D: Dom> Conv<D> {
     /// p/m, so this is transparent in practice — the gate is here so that
     /// the one invariant that must never bend is stated where it is used,
     /// not assumed from the call sites.
-    fn defs<'a>(&self, env: &'a Env) -> Defs<'a> {
+    fn defs<'a>(&self, env: &'a Env<'v>) -> Defs<'a> {
         if self.has_defs && env.layer.computes() {
             Defs::transparent_cached(&env.psi, &env.bodies)
         } else {
@@ -563,7 +608,7 @@ impl<D: Dom> Conv<D> {
     /// conversion-level reduction step; the loop terminates because the
     /// payload is a strict subterm.
     #[cold]
-    fn strip(&mut self, mut cur: D::Tm, env: &Env) -> R<D::Tm> {
+    fn strip(&mut self, mut cur: D::Tm, env: &Env<'v>) -> R<D::Tm> {
         loop {
             if !D::is_transp(&cur) {
                 return Ok(cur);
@@ -606,7 +651,7 @@ impl<D: Dom> Conv<D> {
     /// defined head whose spines do not agree — with δ. A type reaches a
     /// definition only through `El ν`, so the head test is one hop deeper
     /// here than in [`Conv::tm`].
-    fn ty(&mut self, env: &Env, a: &D::TyC, b: &D::TyC, l: &Level) -> R {
+    fn ty(&mut self, env: &Env<'v>, a: &D::TyC, b: &D::TyC, l: &Level) -> R {
         self.spend()?;
         if D::ty_eq_fast(a, b) {
             return Ok(());
@@ -630,7 +675,7 @@ impl<D: Dom> Conv<D> {
     /// the first difference, so its cost is bounded by a prefix of the walk
     /// the comparison performs anyway. Same fuel policy as every
     /// reflexivity shortcut: the hit spends this node's one unit.
-    fn ty_root(&mut self, env: &Env, a: &Type, b: &Type, l: &Level) -> R {
+    fn ty_root(&mut self, env: &Env<'v>, a: &Type, b: &Type, l: &Level) -> R {
         self.spend()?;
         if std::ptr::eq(a, b) || a == b {
             return Ok(());
@@ -646,7 +691,7 @@ impl<D: Dom> Conv<D> {
     /// more per node cost 1.28× on `nat/check-numeral`
     /// (`scripts/bench --check`, 2026-07-31).
     #[inline]
-    fn ty_w(&mut self, env: &Env, wa: &mut D::Ty, wb: &mut D::Ty, l: &Level) -> R {
+    fn ty_w(&mut self, env: &Env<'v>, wa: &mut D::Ty, wb: &mut D::Ty, l: &Level) -> R {
         if self.has_defs {
             if let (Some(u1), Some(u2)) =
                 (D::delta_head_ty(self, env, wa), D::delta_head_ty(self, env, wb))
@@ -662,7 +707,7 @@ impl<D: Dom> Conv<D> {
     }
 
     /// `Γ ⊢ W ≈ W' : l` for weak head normal types.
-    fn ty_nf(&mut self, env: &Env, a: &D::Ty, b: &D::Ty, _l: &Level) -> R {
+    fn ty_nf(&mut self, env: &Env<'v>, a: &D::Ty, b: &D::Ty, _l: &Level) -> R {
         let va = D::view_ty(self, env, a);
         let vb = D::view_ty(self, env, b);
         match (&va, &vb) {
@@ -854,7 +899,7 @@ impl<D: Dom> Conv<D> {
 
     /// `Γ ⊢ V ≈ V' : l` for neutral types; the level is *inferred*
     /// (left-biased) and returned.
-    fn ty_ne(&mut self, env: &Env, a: &D::Ty, b: &D::Ty) -> R<Level> {
+    fn ty_ne(&mut self, env: &Env<'v>, a: &D::Ty, b: &D::Ty) -> R<Level> {
         self.spend()?;
         let va = D::view_ty(self, env, a);
         let vb = D::view_ty(self, env, b);
@@ -896,7 +941,7 @@ impl<D: Dom> Conv<D> {
 
     /// `⊢_i Γ ≈ Δ`, pairwise on entries (left-biased prefixes). `layer` is
     /// explicit because several rules compare index contexts at layer p.
-    fn ctx(&mut self, env: &Env, layer: Layer, a: &LocalCtx, b: &LocalCtx) -> R {
+    fn ctx(&mut self, env: &Env<'v>, layer: Layer, a: &LocalCtx, b: &LocalCtx) -> R {
         self.spend()?;
         if a == b {
             return Ok(());
@@ -921,7 +966,7 @@ impl<D: Dom> Conv<D> {
     }
 
     /// `Γ ⊢ δ ≈ δ' : Δ`, pairwise on the step terms over identical tails.
-    fn subst(&mut self, env: &Env, d1: &D::Subst, d2: &D::Subst, target: &LocalCtx) -> R {
+    fn subst(&mut self, env: &Env<'v>, d1: &D::Subst, d2: &D::Subst, target: &LocalCtx) -> R {
         self.spend()?;
         if !D::subst_tails_agree(d1, d2)
             || D::subst_len(d1) != target.entries.len()
@@ -941,7 +986,7 @@ impl<D: Dom> Conv<D> {
 
     /// `Γ ⊢ t ≈ t' : T @ l`: reduce the type and both terms to WHNF, then
     /// compare type-directed.
-    fn tm(&mut self, env: &Env, a: &D::TmC, b: &D::TmC, ty: &D::TyC, l: &Level) -> R {
+    fn tm(&mut self, env: &Env<'v>, a: &D::TmC, b: &D::TmC, ty: &D::TyC, l: &Level) -> R {
         self.spend()?;
         if D::tm_identity_fast(a, b) {
             return Ok(());
@@ -953,7 +998,7 @@ impl<D: Dom> Conv<D> {
     }
 
     /// [`Conv::tm`] at the **root**; see [`Conv::ty_root`].
-    fn tm_root(&mut self, env: &Env, a: &Term, b: &Term, ty: &Type, l: &Level) -> R {
+    fn tm_root(&mut self, env: &Env<'v>, a: &Term, b: &Term, ty: &Type, l: &Level) -> R {
         self.spend()?;
         let w = D::whnf_ty_root(self, env, ty)?;
         let wa = D::whnf_tm_root(self, env, a)?;
@@ -964,7 +1009,7 @@ impl<D: Dom> Conv<D> {
     /// The δ stage, the transp strip and the comparison, shared by the two
     /// entries above.
     #[inline]
-    fn tm_w(&mut self, env: &Env, mut wa: D::Tm, mut wb: D::Tm, w: &D::Ty, l: &Level) -> R {
+    fn tm_w(&mut self, env: &Env<'v>, mut wa: D::Tm, mut wb: D::Tm, w: &D::Ty, l: &Level) -> R {
         // δ-lazy stage (extension; see [`Conv::ty`]): stop at a definition's
         // spine, and when both sides stop at the *same* one, try the spine
         // comparison before unfolding anything.
@@ -1012,25 +1057,25 @@ impl<D: Dom> Conv<D> {
 
     /// `Γ ⊢ k ≈ k' : Nat @ 0` — the length/arity comparison the `Vec`, `Fin`
     /// and `Wf` families all make.
-    fn tm_at_nat(&mut self, env: &Env, a: &D::TmC, b: &D::TmC) -> R {
-        self.tm(env, a, b, &D::nat(), &Level::Zero)
+    fn tm_at_nat(&mut self, env: &Env<'v>, a: &D::TmC, b: &D::TmC) -> R {
+        self.tm(env, a, b, &D::nat(env), &Level::Zero)
     }
 
     /// `Γ ⊢ s ≈ s' : Ty l @ l+1` — two type *encodings*.
-    fn tm_at_univ(&mut self, env: &Env, a: &D::TmC, b: &D::TmC, l: &Level) -> R {
+    fn tm_at_univ(&mut self, env: &Env<'v>, a: &D::TmC, b: &D::TmC, l: &Level) -> R {
         let univ = D::univ(env, l);
         self.tm(env, a, b, &univ, &Level::succ(l.clone()))
     }
 
     /// `Γ, x : El^l s` — the binder every dependent encoding pushes.
-    fn push_el(&mut self, env: &Env, l: &Level, s: &D::TmC) -> R<Env> {
+    fn push_el(&mut self, env: &Env<'v>, l: &Level, s: &D::TmC) -> R<Env<'v>> {
         let el = D::el(self, env, l, s)?;
         Ok(D::push_entry(env, &el, l))
     }
 
     /// `Γ ⊢ w ≈ w' : W @ l` for weak head normal terms at a WHNF type,
     /// directed by the type.
-    fn tm_nf(&mut self, env: &Env, a: &D::Tm, b: &D::Tm, w: &D::Ty, _l: &Level) -> R {
+    fn tm_nf(&mut self, env: &Env<'v>, a: &D::Tm, b: &D::Tm, w: &D::Ty, _l: &Level) -> R {
         let vw = D::view_ty(self, env, w);
         match &vw {
             // η: Γ, x : S ⊢ app(w↑; l,l'; x:S↑.T↑; x) ≈ app(w'↑; …; x) : T
@@ -1339,7 +1384,7 @@ impl<D: Dom> Conv<D> {
     }
 
     /// Neutral comparison with the inferred type reduced to WHNF.
-    fn tm_nee(&mut self, env: &Env, a: &D::Tm, b: &D::Tm) -> R<(D::Ty, Level)> {
+    fn tm_nee(&mut self, env: &Env<'v>, a: &D::Tm, b: &D::Tm) -> R<(D::Ty, Level)> {
         let (t, l) = self.tm_ne(env, a, b)?;
         let w = D::whnf_ty(self, env, &t)?;
         Ok((w, l))
@@ -1349,7 +1394,7 @@ impl<D: Dom> Conv<D> {
     /// an application's function. They are already in weak head normal form
     /// (the form carrying them is), so reaching their heads is a no-op at the
     /// syntax domain and a `force` at the value domain.
-    fn tm_nee_c(&mut self, env: &Env, a: &D::TmC, b: &D::TmC) -> R<(D::Ty, Level)> {
+    fn tm_nee_c(&mut self, env: &Env<'v>, a: &D::TmC, b: &D::TmC) -> R<(D::Ty, Level)> {
         let x = D::head_tm(self, env, a)?;
         let y = D::head_tm(self, env, b)?;
         self.tm_nee(env, &x, &y)
@@ -1359,7 +1404,7 @@ impl<D: Dom> Conv<D> {
     /// *inferred* (left-biased) and returned. Layer-m elimination forms
     /// bump the ambient layer to m — their rules are stated there, and the
     /// layer index restricts only types.
-    fn tm_ne(&mut self, env: &Env, a: &D::Tm, b: &D::Tm) -> R<(D::TyC, Level)> {
+    fn tm_ne(&mut self, env: &Env<'v>, a: &D::Tm, b: &D::Tm) -> R<(D::TyC, Level)> {
         self.spend()?;
         let va = D::view_tm(self, env, a);
         let vb = D::view_tm(self, env, b);
@@ -1398,9 +1443,9 @@ impl<D: Dom> Conv<D> {
                 TmView::ElimNat { level: v2, motive: m2, base: z2, step: s2, scrut: n2 },
             ) => {
                 self.lev_eq(v1, v2)?;
-                let e_x = D::push_entry(env, &D::nat(), &Level::Zero);
+                let e_x = D::push_entry(env, &D::nat(env), &Level::Zero);
                 self.ty(&e_x, m1, m2, v1)?;
-                let base_ty = D::inst_ty(self, env, env, m1, &[D::zero()])?;
+                let base_ty = D::inst_ty(self, env, env, m1, &[D::zero(env)])?;
                 self.tm(env, z1, z2, &base_ty, v1)?;
                 // M[su x/x] scoped in (Γ, x : Nat, y : M), as in reduce.rs.
                 let e_xy = D::push_entry(&e_x, m1, v1);
@@ -2112,7 +2157,12 @@ impl<D: Dom> Conv<D> {
     /// The tables produce **raw syntax** scoped in Γ-plus-telescope, which is
     /// then embedded into the domain at the side's own [`Dom::RecCtx`]; only
     /// Γ's length and base reach [`rec::branch_specs`].
-    fn rec_ca(&mut self, env: &Env, a: &RecSide<D>, b: &RecSide<D>) -> R {
+    fn rec_ca(
+        &mut self,
+        env: &Env<'v>,
+        a: &RecSide<'_, 'v, D>,
+        b: &RecSide<'_, 'v, D>,
+    ) -> R {
         self.lev_eq(a.l1, b.l1)?;
         self.lev_eq(a.l2, b.l2)?;
 

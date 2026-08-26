@@ -69,6 +69,7 @@ use heather_kernel::term::{
     SubstTail, Term, Type,
 };
 use heather_kernel::typing::{self, TypeError, DEFAULT_FUEL};
+use heather_kernel::value::{ValueArena, ValueMetrics, ValueMetricsSnapshot};
 use heather_syntax::{
     parse_file, Arm, Decl, DeclKind, Expr, ExprKind, InstanceDecl, Item, LamBinder, MatchForm,
     OnStmt, OnTarget, NamedArg, ParseError, Span, Ty, TyKind,
@@ -502,6 +503,10 @@ pub struct Elaborator {
     /// by `apply_implicit`, not passed down.
     resolve_depth: Cell<usize>,
     fuel: u64,
+    /// Optional explicit collector for evaluator-region activity. Clones
+    /// share it so speculative and generated checking contribute to the same
+    /// requested measurement; ordinary elaborators leave it absent.
+    value_metrics: Option<Rc<ValueMetrics>>,
     /// Meta-layer definitions and the slots claimed by their `for` clauses
     /// (`metaprograms.rs`). Kept elaborator-side because layer-m terms cannot
     /// enter Ψ; both lookup views commit together after validation.
@@ -1124,6 +1129,7 @@ impl Elaborator {
             lint_profile: LintProfile::Default,
             resolve_depth: Cell::new(0),
             fuel: DEFAULT_FUEL,
+            value_metrics: None,
             meta_programs: MetaPrograms::default(),
             meta_pushed: RefCell::new(Vec::new()),
             result_only_memo: RefCell::new(HashMap::new()),
@@ -1146,6 +1152,66 @@ impl Elaborator {
     /// the language accepts. Intended for drivers before they check a module.
     pub fn set_lint_profile(&mut self, profile: LintProfile) {
         self.lint_profile = profile;
+    }
+
+    /// Begin aggregating value-machine allocation and cache activity across
+    /// kernel gates and in-language analyzer evaluation.
+    pub fn enable_value_metrics(&mut self) {
+        self.value_metrics = Some(Rc::new(ValueMetrics::default()));
+    }
+
+    /// Reset the active collector without changing whether instrumentation is
+    /// enabled. Useful for measuring one source fragment after its imports;
+    /// call only between checks, when no profiled arena is still active.
+    pub fn reset_value_metrics(&self) {
+        if let Some(metrics) = &self.value_metrics {
+            metrics.reset();
+        }
+    }
+
+    pub fn value_metrics(&self) -> Option<ValueMetricsSnapshot> {
+        self.value_metrics.as_ref().map(|metrics| metrics.snapshot())
+    }
+
+    pub(crate) fn profiled_value_arena(&self) -> ValueArena<'_> {
+        self.value_metrics
+            .as_deref()
+            .map_or_else(ValueArena::new, ValueArena::profiled)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn kernel_check_type(
+        &self,
+        psi: &GlobalCtx,
+        layer: Layer,
+        gamma: &LocalCtx,
+        ty: &Type,
+        level: &Level,
+    ) -> Result<(), TypeError> {
+        match self.value_metrics.as_deref() {
+            Some(metrics) => typing::check_type_profiled(
+                psi, 0, layer, gamma, ty, level, self.fuel, metrics,
+            ),
+            None => typing::check_type(psi, 0, layer, gamma, ty, level, self.fuel),
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn kernel_check_term(
+        &self,
+        psi: &GlobalCtx,
+        layer: Layer,
+        gamma: &LocalCtx,
+        term: &Term,
+        ty: &Type,
+        level: &Level,
+    ) -> Result<(), TypeError> {
+        match self.value_metrics.as_deref() {
+            Some(metrics) => typing::check_term_profiled(
+                psi, 0, layer, gamma, term, ty, level, self.fuel, metrics,
+            ),
+            None => typing::check_term(psi, 0, layer, gamma, term, ty, level, self.fuel),
+        }
     }
 
     /// An elaborator with the stage-1 prelude already elaborated and
@@ -2178,14 +2244,14 @@ impl Elaborator {
             };
             if !self.gate.as_ref().is_some_and(|g| g.admits(&self.psi, &item)) {
                 stats::time_kernel(|| {
-                    typing::check_type(
-                        &self.psi, 0, Layer::Prog, &empty, &stmt, &stmt_lvl, self.fuel,
+                    self.kernel_check_type(
+                        &self.psi, Layer::Prog, &empty, &stmt, &stmt_lvl,
                     )
                 })
                 .map_err(|e| self.kernel_error(&decl.name, decl.span, e))?;
                 stats::time_kernel(|| {
-                    typing::check_term(
-                        &self.psi, 0, Layer::Code, &empty, &term, &stmt, &stmt_lvl, self.fuel,
+                    self.kernel_check_term(
+                        &self.psi, Layer::Code, &empty, &term, &stmt, &stmt_lvl,
                     )
                 })
                 .map_err(|e| self.kernel_error(&decl.name, decl.span, e))?;
@@ -2197,9 +2263,7 @@ impl Elaborator {
             // Axioms extend the trusted assumptions, but their statements are
             // still required to be well-formed kernel types.
             stats::time_kernel(|| {
-                typing::check_type(
-                    &self.psi, 0, Layer::Prog, &empty, &stmt, &stmt_lvl, self.fuel,
-                )
+                self.kernel_check_type(&self.psi, Layer::Prog, &empty, &stmt, &stmt_lvl)
             })
             .map_err(|e| self.kernel_error(&decl.name, decl.span, e))?;
         }
@@ -2548,16 +2612,10 @@ impl Elaborator {
                     skel,
                     capture_slots,
                 )
-                && typing::check_term(
-                    &probe.goal_psi(),
-                    0,
-                    Layer::Prog,
-                    &cx.gamma,
-                    &term,
-                    expected,
-                    lvl,
-                    probe.fuel,
-                )
+                && probe
+                    .kernel_check_term(
+                        &probe.goal_psi(), Layer::Prog, &cx.gamma, &term, expected, lvl,
+                    )
                 .is_ok()
             {
                 self.emit_lint_with_fix(

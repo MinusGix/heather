@@ -116,3 +116,15 @@ access; it does not claim x86 memory is total.
   executable CF/AF calculation now has a kernel-checked open-width bridge to
   the generic unsigned inequality, including the width-64 specialization,
   without evaluating a `2^64` comparison.
+- 2026-08-26: The new explicit evaluator counters establish a baseline for
+  the raw-assembly-shaped slice itself (the `x86_64` module only; dependencies
+  loaded before instrumentation): 24,517 conversion arenas, 267,988
+  environment nodes, 280,515 term closures and 250,956 type closures. Term
+  caching is small (7,780 lookups, 613 hits, peak 2,350, no eviction); type
+  conversion is the larger working set (195,245 lookups, 19,450 hits, 175,795
+  inserts, 97 evictions, peak 16,384). This points away from increasing the
+  shared cache constants: unlike closed carry, the slice brushes the type cap
+  in only a small number of queries, and its dominant question is why a
+  compact typed instruction model opens so many short conversion regions.
+  Re-measure after raw decoding or a second instruction family changes that
+  shape; do not turn these dated counts into acceptance thresholds.

@@ -11,6 +11,9 @@ autobenches = false
 [lib]
 name = "heather_elab"
 
+[features]
+value-metrics = ["heather-kernel/value-metrics"]
+
 [dependencies]
 heather-kernel = { path = "../kernel" }
 heather-syntax = { path = "../syntax" }

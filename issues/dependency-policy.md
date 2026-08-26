@@ -3,34 +3,43 @@ title: "Dependency policy: kernel at zero, crates above it"
 status: open
 labels: [meta, kernel, tooling]
 created: 2026-07-24
-updated: 2026-08-06
+updated: 2026-08-26
 ---
 
-The tree is currently dependency-free: `Cargo.lock` has exactly the four
+The tree began dependency-free: `Cargo.lock` contained exactly the four
 workspace crates. That happened by default rather than by decision; this
-issue makes it a decision, because the two halves of the tree want opposite
-answers.
+issue made it a decision, because the two halves of the tree want opposite
+answers. Since then `sha2` has landed as a cache test oracle and
+`typed-arena` as the kernel's one shipped, exactly pinned dependency. Both
+exceptions and their audit boundaries are recorded below.
 
-*(As of 2026-08-06 that first sentence is history: `Cargo.lock` carries `sha2`
-plus nine transitive crates — `digest`, `block-buffer`, `crypto-common`,
-`generic-array`, `typenum`, `cpufeatures`, `libc`, `cfg-if`, `version_check` —
-as a **dev**-dependency of `crates/cache`. See the log. The shipped graph is
-still the workspace alone, and the kernel is still at zero including
-dev-dependencies.)*
-
-## The kernel stays at zero
+## The kernel stays at an audited minimum
 
 `crates/kernel` is the trusted base of a proof assistant: its bug set is the
 soundness set. A dependency there is trusted-base surface area nobody on
 this project wrote, a supply-chain question that gets awkward exactly when
 Heather starts *certifying* things, and a hole in the workspace's
 `unsafe_code = "forbid"` (which binds our code, not `smallvec`'s). The
-kernel also needs nothing: de Bruijn terms, the substitution algebra,
-conversion, and a budget-bounded `Debug` are all first-party by nature.
+The kernel's proof semantics need nothing: de Bruijn terms, the substitution
+algebra, conversion, and a budget-bounded `Debug` are all first-party by
+nature. The storage-mechanics exception below does not implement a judgment.
 
-Should that ever change, the entry price is an auditing story
-(`cargo-deny`/`cargo-vet`), decided *before* the first dependency lands, not
-after.
+That changed once, deliberately, on 2026-08-26. `typed-arena = "=2.0.2"` is
+the kernel's sole dependency. The exact version is pinned; it has no
+transitive dependencies; and its complete 635-line implementation was read
+before adoption, including the small unsafe core that maintains stable
+addresses while chunks grow. The dependency supplies allocation and
+destruction mechanics only: no term, reduction, conversion, or proof rule is
+delegated to it. The kernel's value graph uses its stable references to make
+recursive ownership unrepresentable and to replace an ad-hoc thread-local
+destruction protocol. That is a smaller practical trust boundary than owning
+both the proof rules and a custom arena implementation here.
+
+Any further kernel dependency still pays the original entry price: pin it,
+audit its complete reachable implementation before it lands, record why its
+semantics do not enter the proof judgment, and prefer no-transitive-dependency
+crates small enough to review directly. `cargo-deny`/`cargo-vet` remains the
+right next step if this ceases to be a one-crate exception.
 
 Note this is not an argument against crates in general — it is an argument
 about one crate. Everything above the kernel (`syntax`, `elab`, `cli`) has
@@ -81,7 +90,7 @@ no trust story to protect and should spend freely.
 
 ## Deferred
 
-Performance crates (`rustc-hash`, `smallvec`, arenas) are premature and, more
+Performance crates (`rustc-hash`, `smallvec`) are premature and, more
 to the point, not the lever: the thing that would matter at
 [[inductive-compiler]] term volume is hash-consing `Rc<Term>` with a
 conversion cache, which is a kernel design change we would write ourselves
@@ -92,5 +101,15 @@ conversion cache, which is a kernel design change we would write ourselves
 
 ## Log
 
+- 2026-08-26: **First shipped kernel dependency: `typed-arena` 2.0.2, exactly
+  pinned.** A 100,000-node forced value graph showed that stack-safe evaluation
+  was still followed by stack-recursive `Rc` destruction. A temporary
+  per-thread drain avoided the crash but made destruction a hidden global
+  protocol. The arena makes environment and closure ownership query-local;
+  graph edges are references and destruction is flat. `typed-arena` was chosen
+  over `bumpalo` because it runs payload destructors (the graph still contains
+  `Rc`, `Vec`, and syntax), and over handle arenas because stable references
+  express the evaluator's immutable graph directly. Its complete 635-line
+  source was audited before adoption and it adds no transitive crates.
 - 2026-08-06: **First dependency in the tree, and it is a dev-dependency: `sha2`, in `crates/cache` only.** `Cargo.lock` is no longer just the workspace crates (it gains `sha2` and nine transitive crates; the RustCrypto stack is not small, which is worth noticing even for a dev-dep). The case is the mirror image of the one that made `crates/cache`'s SHA-256 first-party (`docs/cache-v1-design.md` §2): that argument says a trust-bearing hash must be ours, and it is exactly *because* it is ours that "probably correct" is not good enough. `sha2` is therefore adopted as an **oracle to disagree with us**, never as an implementation — `crates/cache/tests/sha256.rs` asserts byte-identical digests over every length 0..=300, multi-block inputs to 1 MiB, and six adversarial chunkings, which is a stronger criterion than the five published vectors it joins. Shipped code links nothing; `cargo build -p heather-cache` still resolves to the workspace alone. The general rule this instances: *a first-party implementation of a frozen specification should be differentially tested against a mainstream one, and a dev-dependency is the cheap way to do it* — the same shape as the fresh-vs-replay oracle in [[parallel-checking-and-caching]]. It does **not** loosen the kernel's zero (dev-dependencies included, per `docs/benchmarking.md`); the kernel has no frozen-spec module to test this way. No divergence was found on adoption.
 - 2026-07-30: [[cli-check-diagnostics]] landed *without* the diagnostics-rendering dep: a single-span caret line is ~15 lines of std (`snippet` in crates/elab/src/lib.rs), so the renderer question stays open until something needs multi-label reports (the goal listing kept its listing shape instead). The candidate list stands as options, not commitments; `render_snippet` is now the thing a renderer dep would replace.

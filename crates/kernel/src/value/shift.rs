@@ -29,20 +29,23 @@ use std::rc::Rc;
 use crate::level::Level;
 use crate::term::{Branches, LocalCtx, Motives, Term, Type};
 
-use super::{Elim, Env, Head, TmClo, TyClo, VNeTy, VNeutral, VSubst, VTy, Val};
+use super::{
+    Elim, Env, Head, TmClo, TyClo, VNeTy, VNeutral, VSubst, VTy, Val, ValueArena,
+};
 
 /// How far to weaken: `univs` new universe variables, `globals` new global
-/// bindings, both pushed innermost (which is what `Conv::Env::push_tele`
+/// bindings, both pushed innermost (which is what `Conv::Env<'v>::push_tele`
 /// does).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Outer {
+#[derive(Clone, Copy)]
+pub struct Outer<'v> {
+    pub arena: &'v ValueArena<'v>,
     pub univs: u32,
     pub globals: u32,
 }
 
-impl Outer {
-    pub fn none() -> Outer {
-        Outer { univs: 0, globals: 0 }
+impl<'v> Outer<'v> {
+    pub fn none(arena: &'v ValueArena<'v>) -> Outer<'v> {
+        Outer { arena, univs: 0, globals: 0 }
     }
 
     pub fn is_none(&self) -> bool {
@@ -50,22 +53,22 @@ impl Outer {
     }
 }
 
-fn level(l: &Level, o: Outer) -> Level {
+fn level<'v>(l: &Level, o: Outer<'v>) -> Level {
     if o.univs == 0 {
         return l.clone();
     }
     l.shift(o.univs, 0)
 }
 
-fn ty_syn(t: &Rc<Type>, o: Outer) -> Rc<Type> {
+fn ty_syn<'v>(t: &Rc<Type>, o: Outer<'v>) -> Rc<Type> {
     Rc::new(t.shift_univ(o.univs).shift_global(o.globals))
 }
 
-fn tm_syn(t: &Rc<Term>, o: Outer) -> Rc<Term> {
+fn tm_syn<'v>(t: &Rc<Term>, o: Outer<'v>) -> Rc<Term> {
     Rc::new(t.shift_univ(o.univs).shift_global(o.globals))
 }
 
-fn ctx_syn(c: &LocalCtx, o: Outer) -> LocalCtx {
+fn ctx_syn<'v>(c: &LocalCtx, o: Outer<'v>) -> LocalCtx {
     c.shift_univ(o.univs).shift_global(o.globals)
 }
 
@@ -73,7 +76,7 @@ fn ctx_syn(c: &LocalCtx, o: Outer) -> LocalCtx {
 /// already knows all 54 fields: `subst.rs`'s `sub_motives`/`sub_branches` are
 /// private, and transcribing them here a *seventh* time is exactly the
 /// drift hazard `rec.rs` exists to prevent. The wrapper term is discarded.
-fn tables(m: &Rc<Motives>, b: &Rc<Branches>, o: Outer) -> (Rc<Motives>, Rc<Branches>) {
+fn tables<'v>(m: &Rc<Motives>, b: &Rc<Branches>, o: Outer<'v>) -> (Rc<Motives>, Rc<Branches>) {
     let wrapper = Term::ElimCodeTy {
         ty_motive_level: Level::Zero,
         tm_motive_level: Level::Zero,
@@ -94,35 +97,35 @@ fn tables(m: &Rc<Motives>, b: &Rc<Branches>, o: Outer) -> (Rc<Motives>, Rc<Branc
 // The value graph
 // ---------------------------------------------------------------------------
 
-pub fn env(e: &Env, o: Outer) -> Env {
+pub fn env<'v>(e: &Env<'v>, o: Outer<'v>) -> Env<'v> {
     if o.is_none() {
-        return e.clone();
+        return *e;
     }
-    let mut out = Env::empty();
+    let mut out = Env::empty(o.arena);
     for c in e.to_vec() {
-        out = out.push(tm_clo(&c, o));
+        out = out.push(tm_clo(c, o));
     }
     out
 }
 
-pub fn tm_clo(c: &Rc<TmClo>, o: Outer) -> Rc<TmClo> {
+pub fn tm_clo<'v>(c: &'v TmClo<'v>, o: Outer<'v>) -> &'v TmClo<'v> {
     if o.is_none() {
-        return Rc::clone(c);
+        return c;
     }
-    Rc::new(match &**c {
+    o.arena.tm(match c {
         TmClo::Syn { env: e, body, .. } => TmClo::syn(env(e, o), tm_syn(body, o)),
-        TmClo::Val(v) => TmClo::val(val(v.get(), o)),
+        TmClo::Val(v) => TmClo::val(val(v, o)),
         TmClo::Elim { head, elim, .. } => {
             TmClo::elim(tm_clo(head, o), Rc::new(elimination(elim, o)))
         }
     })
 }
 
-pub fn ty_clo(c: &Rc<TyClo>, o: Outer) -> Rc<TyClo> {
+pub fn ty_clo<'v>(c: &'v TyClo<'v>, o: Outer<'v>) -> &'v TyClo<'v> {
     if o.is_none() {
-        return Rc::clone(c);
+        return c;
     }
-    Rc::new(match &**c {
+    o.arena.ty(match c {
         TyClo::Syn { env: e, body, .. } => TyClo::new(env(e, o), ty_syn(body, o)),
         TyClo::Val(v) => TyClo::val(vty(v, o)),
         TyClo::Vec { level: l, elem, len, .. } => {
@@ -135,34 +138,38 @@ pub fn ty_clo(c: &Rc<TyClo>, o: Outer) -> Rc<TyClo> {
 /// Weaken only the **captured environment**, leaving the body syntax alone:
 /// the body of a `ΠΠ`, a `(g:Ctx)⇒`, a `(U:Typ)⇒` or a `letbox` is already
 /// written in the extended scope, and only what it closed over is not.
-pub fn reenv_ty(c: &Rc<TyClo>, o: Outer) -> Rc<TyClo> {
+pub fn reenv_ty<'v>(c: &'v TyClo<'v>, o: Outer<'v>) -> &'v TyClo<'v> {
     if o.is_none() {
-        return Rc::clone(c);
+        return c;
     }
-    match &**c {
-        TyClo::Syn { env: e, body, .. } => Rc::new(TyClo::new(env(e, o), Rc::clone(body))),
+    match c {
+        TyClo::Syn { env: e, body, .. } => {
+            o.arena.ty(TyClo::new(env(e, o), Rc::clone(body)))
+        }
         _ => ty_clo(c, o),
     }
 }
 
-pub fn reenv_tm(c: &Rc<TmClo>, o: Outer) -> Rc<TmClo> {
+pub fn reenv_tm<'v>(c: &'v TmClo<'v>, o: Outer<'v>) -> &'v TmClo<'v> {
     if o.is_none() {
-        return Rc::clone(c);
+        return c;
     }
-    match &**c {
-        TmClo::Syn { env: e, body, .. } => Rc::new(TmClo::syn(env(e, o), Rc::clone(body))),
+    match c {
+        TmClo::Syn { env: e, body, .. } => {
+            o.arena.tm(TmClo::syn(env(e, o), Rc::clone(body)))
+        }
         _ => tm_clo(c, o),
     }
 }
 
-fn vsubst(d: &VSubst, o: Outer) -> VSubst {
+fn vsubst<'v>(d: &VSubst<'v>, o: Outer<'v>) -> VSubst<'v> {
     VSubst {
         tail: d.tail,
         terms: d.terms.iter().map(|t| val(t, o)).collect(),
     }
 }
 
-fn head(h: &Head, o: Outer) -> Head {
+fn head<'v>(h: &Head<'v>, o: Outer<'v>) -> Head<'v> {
     match h {
         Head::Var(l) => Head::Var(*l),
         Head::BaseVar(d) => Head::BaseVar(*d),
@@ -178,7 +185,7 @@ fn head(h: &Head, o: Outer) -> Head {
     }
 }
 
-fn elimination(e: &Elim, o: Outer) -> Elim {
+fn elimination<'v>(e: &Elim<'v>, o: Outer<'v>) -> Elim<'v> {
     match e {
         Elim::App { dom_level, cod_level, dom, cod, arg } => Elim::App {
             dom_level: level(dom_level, o),
@@ -358,7 +365,7 @@ fn elimination(e: &Elim, o: Outer) -> Elim {
     }
 }
 
-fn neutral(n: &Rc<VNeutral>, o: Outer) -> Rc<VNeutral> {
+fn neutral<'v>(n: &Rc<VNeutral<'v>>, o: Outer<'v>) -> Rc<VNeutral<'v>> {
     Rc::new(VNeutral {
         head: head(&n.head, o),
         spine: n.spine.iter().map(|e| elimination(e, o)).collect(),
@@ -366,7 +373,7 @@ fn neutral(n: &Rc<VNeutral>, o: Outer) -> Rc<VNeutral> {
     })
 }
 
-fn nety(n: &VNeTy, o: Outer) -> VNeTy {
+fn nety<'v>(n: &VNeTy<'v>, o: Outer<'v>) -> VNeTy<'v> {
     match n {
         VNeTy::Global { var, subst } => VNeTy::Global {
             var: crate::term::GlobalVar(var.0 + o.globals),
@@ -376,7 +383,7 @@ fn nety(n: &VNeTy, o: Outer) -> VNeTy {
     }
 }
 
-pub fn vty(v: &Rc<VTy>, o: Outer) -> Rc<VTy> {
+pub fn vty<'v>(v: &Rc<VTy<'v>>, o: Outer<'v>) -> Rc<VTy<'v>> {
     if o.is_none() {
         return Rc::clone(v);
     }
@@ -463,7 +470,7 @@ pub fn vty(v: &Rc<VTy>, o: Outer) -> Rc<VTy> {
     })
 }
 
-pub fn val(v: &Rc<Val>, o: Outer) -> Rc<Val> {
+pub fn val<'v>(v: &Rc<Val<'v>>, o: Outer<'v>) -> Rc<Val<'v>> {
     if o.is_none() {
         return Rc::clone(v);
     }
@@ -613,9 +620,9 @@ pub fn val(v: &Rc<Val>, o: Outer) -> Rc<Val> {
 /// A term closure whose **syntax** sits under `cu` universe and `cg` global
 /// binders of its own while its **environment** does not: the body shifts
 /// above the cutoff, the environment shifts in full.
-fn shift_under(c: &Rc<TmClo>, o: Outer, cu: u32, cg: u32) -> Rc<TmClo> {
-    match &**c {
-        TmClo::Syn { env: e, body, .. } => Rc::new(TmClo::syn(
+fn shift_under<'v>(c: &'v TmClo<'v>, o: Outer<'v>, cu: u32, cg: u32) -> &'v TmClo<'v> {
+    match c {
+        TmClo::Syn { env: e, body, .. } => o.arena.tm(TmClo::syn(
             env(e, o),
             Rc::new(
                 body.shift_univ_above(o.univs, cu)

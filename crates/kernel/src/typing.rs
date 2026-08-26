@@ -60,7 +60,11 @@
 
 use std::rc::Rc;
 
-use crate::conv::{conv_local_ctx, conv_type, ConvError};
+use crate::conv::ConvError;
+#[cfg(not(feature = "value-metrics"))]
+use crate::conv::{conv_local_ctx, conv_type};
+#[cfg(feature = "value-metrics")]
+use crate::conv::{conv_local_ctx_with_metrics, conv_type_with_metrics};
 use crate::layer::Layer;
 use crate::level::Level;
 use crate::rec::{self, gtm, gty, inst_tm_motive, inst_ty_motive, shift_univ_psi};
@@ -70,6 +74,7 @@ use crate::term::{
     wf_step_telescope, CtxBase, CtxEntries, CtxEntry, GlobalBinding, GlobalCtx, GlobalVar,
     LocalCtx, LocalSubst, LocalVar, SubstTail, Term, Type,
 };
+use crate::value::ValueMetrics;
 
 /// A generous per-conversion fuel budget for callers without an opinion.
 pub const DEFAULT_FUEL: u64 = 1 << 20;
@@ -135,6 +140,8 @@ pub fn check_global_ctx(psi: &GlobalCtx, univs: u32, fuel: u64) -> R {
             gamma: LocalCtx::nil(),
             layer: Layer::Prog,
             univs,
+            #[cfg(feature = "value-metrics")]
+            value_metrics: None,
         };
         match b {
             GlobalBinding::Ctx => {}
@@ -184,6 +191,8 @@ pub fn check_local_ctx(
         gamma: LocalCtx::nil(),
         layer,
         univs,
+        #[cfg(feature = "value-metrics")]
+        value_metrics: None,
     };
     Tc { fuel }.ctx_wf(&env, layer, gamma)
 }
@@ -199,7 +208,32 @@ pub fn check_type(
     level: &Level,
     fuel: u64,
 ) -> R {
-    let env = Env { psi: psi.clone(), gamma: gamma.clone(), layer, univs };
+    let env = Env {
+        psi: psi.clone(), gamma: gamma.clone(), layer, univs,
+        #[cfg(feature = "value-metrics")]
+        value_metrics: None,
+    };
+    Tc { fuel }.ty_check(&env, ty, level)
+}
+
+/// [`check_type`] while accumulating value-machine activity in `metrics`.
+/// Instrumentation is observational and does not alter fuel or verdicts.
+#[allow(clippy::too_many_arguments)]
+pub fn check_type_profiled(
+    psi: &GlobalCtx,
+    univs: u32,
+    layer: Layer,
+    gamma: &LocalCtx,
+    ty: &Type,
+    level: &Level,
+    fuel: u64,
+    _metrics: &ValueMetrics,
+) -> R {
+    let env = Env {
+        psi: psi.clone(), gamma: gamma.clone(), layer, univs,
+        #[cfg(feature = "value-metrics")]
+        value_metrics: Some(_metrics.clone()),
+    };
     Tc { fuel }.ty_check(&env, ty, level)
 }
 
@@ -213,7 +247,11 @@ pub fn infer_type(
     ty: &Type,
     fuel: u64,
 ) -> R<Level> {
-    let env = Env { psi: psi.clone(), gamma: gamma.clone(), layer, univs };
+    let env = Env {
+        psi: psi.clone(), gamma: gamma.clone(), layer, univs,
+        #[cfg(feature = "value-metrics")]
+        value_metrics: None,
+    };
     Tc { fuel }.ty_infer(&env, ty)
 }
 
@@ -230,7 +268,33 @@ pub fn check_term(
     level: &Level,
     fuel: u64,
 ) -> R {
-    let env = Env { psi: psi.clone(), gamma: gamma.clone(), layer, univs };
+    let env = Env {
+        psi: psi.clone(), gamma: gamma.clone(), layer, univs,
+        #[cfg(feature = "value-metrics")]
+        value_metrics: None,
+    };
+    Tc { fuel }.tm_check(&env, t, ty, level)
+}
+
+/// [`check_term`] while accumulating value-machine activity in `metrics`.
+/// Instrumentation is observational and does not alter fuel or verdicts.
+#[allow(clippy::too_many_arguments)]
+pub fn check_term_profiled(
+    psi: &GlobalCtx,
+    univs: u32,
+    layer: Layer,
+    gamma: &LocalCtx,
+    t: &Term,
+    ty: &Type,
+    level: &Level,
+    fuel: u64,
+    _metrics: &ValueMetrics,
+) -> R {
+    let env = Env {
+        psi: psi.clone(), gamma: gamma.clone(), layer, univs,
+        #[cfg(feature = "value-metrics")]
+        value_metrics: Some(_metrics.clone()),
+    };
     Tc { fuel }.tm_check(&env, t, ty, level)
 }
 
@@ -245,7 +309,11 @@ pub fn infer_term(
     t: &Term,
     fuel: u64,
 ) -> R<(Type, Level)> {
-    let env = Env { psi: psi.clone(), gamma: gamma.clone(), layer, univs };
+    let env = Env {
+        psi: psi.clone(), gamma: gamma.clone(), layer, univs,
+        #[cfg(feature = "value-metrics")]
+        value_metrics: None,
+    };
     Tc { fuel }.tm_infer(&env, t)
 }
 
@@ -263,7 +331,11 @@ pub fn check_local_subst(
     target: &LocalCtx,
     fuel: u64,
 ) -> R {
-    let env = Env { psi: psi.clone(), gamma: gamma.clone(), layer, univs };
+    let env = Env {
+        psi: psi.clone(), gamma: gamma.clone(), layer, univs,
+        #[cfg(feature = "value-metrics")]
+        value_metrics: None,
+    };
     Tc { fuel }.subst_ck(&env, delta, target)
 }
 
@@ -280,6 +352,8 @@ struct Env {
     gamma: LocalCtx,
     layer: Layer,
     univs: u32,
+    #[cfg(feature = "value-metrics")]
+    value_metrics: Option<ValueMetrics>,
 }
 
 impl Env {
@@ -307,6 +381,8 @@ impl Env {
             gamma: self.gamma.shift_univ(tu).shift_global(tg),
             layer: self.layer,
             univs: self.univs + tu,
+            #[cfg(feature = "value-metrics")]
+            value_metrics: self.value_metrics.clone(),
         }
     }
 
@@ -358,6 +434,18 @@ impl Tc {
     /// The conversion rule: `⊢_typeof(i) T ≈ T' @ l`.
     fn conv_ty(&self, env: &Env, expected: &Type, inferred: &Type, l: &Level) -> R {
         let at = env.layer.type_layer();
+        #[cfg(feature = "value-metrics")]
+        conv_type_with_metrics(
+            &env.psi,
+            &env.gamma,
+            at,
+            expected,
+            inferred,
+            l,
+            self.fuel,
+            env.value_metrics.as_ref(),
+        )?;
+        #[cfg(not(feature = "value-metrics"))]
         conv_type(&env.psi, &env.gamma, at, expected, inferred, l, self.fuel)?;
         Ok(())
     }
@@ -724,6 +812,16 @@ impl Tc {
                 self.lev_eq(body_level, &pbl)?;
                 self.lev_eq(l, body_level)?;
                 self.ctx_wf(env, Layer::Prog, ctx)?;
+                #[cfg(feature = "value-metrics")]
+                conv_local_ctx_with_metrics(
+                    &env.psi,
+                    Layer::Prog,
+                    &pctx,
+                    ctx,
+                    self.fuel,
+                    env.value_metrics.as_ref(),
+                )?;
+                #[cfg(not(feature = "value-metrics"))]
                 conv_local_ctx(&env.psi, Layer::Prog, &pctx, ctx, self.fuel)?;
                 let e = env.push_global(GlobalBinding::Ty {
                     ctx: ctx.clone(),

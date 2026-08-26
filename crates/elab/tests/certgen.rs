@@ -236,21 +236,32 @@ fn in_language_transcriber() {
     elab(&mut e, SEVEN, "fn seven");
     elab(&mut e, THIRD3, "fn third3");
     elab(&mut e, VIAADD, "fn viaadd");
+    let report_metrics = std::env::var_os("HEATHER_VALUE_METRICS").is_some();
+    if report_metrics {
+        e.enable_value_metrics();
+    }
 
     // The single-function positives, across the axes of
     // docs/testing-generated-terms.md: recursion on the second parameter
     // (`add`), on the only parameter (`dbl`), on the last of three (`third3`),
     // and no recursion at all over a literal body (`seven`).
-    for (d, want) in [
+    for (index, (d, want)) in [
         (lib_decl("add"), IR_ADD),
         (lib_decl("dbl"), IR_DBL),
         (decl_of(THIRD3), IR_THIRD3),
         (decl_of(SEVEN), IR_SEVEN),
-    ] {
+    ]
+    .into_iter()
+    .enumerate()
+    {
         let em = generate_in_language(&e, &d, &GenCtx::new())
             .unwrap_or_else(|r| panic!("{} declined: {r}", d.name));
         assert_eq!(em.ir_body, want, "{} transcribes differently", d.name);
         assert_eq!(em.closure, vec![d.name.clone()], "{}'s closure", d.name);
+        if report_metrics && index == 0 {
+            eprintln!("certgen add value metrics: {:?}", e.value_metrics().unwrap());
+            e.reset_value_metrics();
+        }
     }
     assert_eq!(
         generate_in_language(&e, &lib_decl("add"), &GenCtx::new()).unwrap().arity,
@@ -359,4 +370,3 @@ fn in_language_transcriber() {
         assert!(em.ir_body.contains("pred2_gen_arm_succ() = Ret(RCons(0, RNil))"), "{}", em.ir_body);
     }
 }
-

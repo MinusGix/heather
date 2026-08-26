@@ -1888,7 +1888,7 @@ use heather_kernel::subst::{GlobalEntry, GlobalSubst};
 use heather_kernel::term::{
     CtxBase, GlobalBinding, GlobalVar, LocalCtx, LocalSubst, LocalVar, Term, Type,
 };
-use heather_kernel::value::{Elim, Env, TmClo, TyClo, Val};
+use heather_kernel::value::{Elim, Env, TmClo, TyClo, Val, ValueArena};
 
 use crate::slots::Slot;
 use crate::Elaborator;
@@ -1900,9 +1900,9 @@ use crate::Elaborator;
 /// §2) and the constant did not, which makes this *tighter* than the budget it
 /// replaces rather than looser: the rewriter spent this on each `whnf` of a
 /// sub-spine and there were hundreds of them per read, while the evaluator
-/// spends it on each `force` of the **shared** graph, where the memo means the
-/// work happens once. Measured headroom is three orders of magnitude, and
-/// running out is a decline like any other.
+/// spends it on each `force` of the **shared** graph, where the bounded cache
+/// avoids recent repeated work. Measured headroom is three orders of
+/// magnitude, and running out is a decline like any other.
 const READ_FUEL: u64 = heather_kernel::typing::DEFAULT_FUEL;
 
 /// `(λ (x: Nat). x) ⌜n⌝` — the marker standing for the binder whose de Bruijn
@@ -2805,10 +2805,11 @@ enum RIr {
 }
 
 /// The reader walks the analyzer's answer in the kernel's **value domain**:
-/// every sub-structure it holds is a [`TmClo`], forced on demand and
-/// memoized in place (docs/analyzer-evaluation-design.md).
-struct Reader<'a> {
+/// every sub-structure it holds is a [`TmClo`], forced on demand and shared
+/// through the query cache (docs/analyzer-evaluation-design.md).
+struct Reader<'a, 'v> {
     psi: &'a heather_kernel::term::GlobalCtx,
+    arena: &'v ValueArena<'v>,
     /// Rescoped definition bodies, memoized for the duration of one read.
     /// Every δ-unfold rescopes the callee's whole body with `shift_global`,
     /// and one transcription unfolds the same handful of library globals
@@ -2829,35 +2830,39 @@ struct Reader<'a> {
 /// handful; four figures is generous and still nowhere near the stack.
 const READ_BUDGET: u32 = 4096;
 
-impl<'a> Reader<'a> {
-    fn new(psi: &'a heather_kernel::term::GlobalCtx) -> Reader<'a> {
+impl<'a, 'v> Reader<'a, 'v> {
+    fn new(
+        psi: &'a heather_kernel::term::GlobalCtx,
+        arena: &'v ValueArena<'v>,
+    ) -> Reader<'a, 'v> {
         Reader {
             psi,
+            arena,
             bodies: reduce::BodyCache::new(),
             budget: std::cell::Cell::new(READ_BUDGET),
         }
     }
 }
 
-impl Reader<'_> {
+impl<'v> Reader<'_, 'v> {
     /// A closed term as a sub-structure of the value graph — the root a read
     /// starts from. The empty environment is the identity environment of the
     /// empty Γ, which is the context every analyzer application is built at.
-    fn root(&self, t: Term) -> Rc<TmClo> {
-        Rc::new(TmClo::syn(Env::empty(), Rc::new(t)))
+    fn root(&self, t: Term) -> &'v TmClo<'v> {
+        self.arena.tm(TmClo::syn(Env::empty(self.arena), Rc::new(t)))
     }
 
     /// The δ-transparent weak head **value** of a sub-structure.
     ///
-    /// The memo lives in the sub-structure, not here: forcing the same
-    /// closure twice — which the walk does constantly, because a field is
-    /// read once to classify it and again to descend it — computes once.
-    /// That is the whole of this round's fix; see the design doc's §2.
-    fn force(&self, c: &Rc<TmClo>) -> Result<Rc<Val>, String> {
+    /// The arena's bounded cache, rather than the reader, shares recent
+    /// forces while allowing values the walk has left behind to be reclaimed.
+    /// See the design doc's §2.
+    fn force(&self, c: &'v TmClo<'v>) -> Result<Rc<Val<'v>>, String> {
         let mut ev = Eval::new(
             READ_FUEL,
             Defs::transparent_cached(self.psi, &self.bodies),
             CtxBase::Nil,
+            self.arena,
         );
         let out = ev
             .force(c)
@@ -2869,30 +2874,30 @@ impl Reader<'_> {
     /// `(constructor index, non-recursive fields, recursive children)`.
     fn ctor(
         &self,
-        c: &Rc<TmClo>,
+        c: &'v TmClo<'v>,
         ctors: usize,
-    ) -> Result<(usize, Vec<Rc<TmClo>>, Vec<Rc<TmClo>>), String> {
+    ) -> Result<(usize, Vec<&'v TmClo<'v>>, Vec<&'v TmClo<'v>>), String> {
         let w = self.force(c)?;
         let (label, children) = match &*w {
-            Val::Supf { label, children, .. } => (Rc::clone(label), self.spine(children)?),
+            Val::Supf { label, children, .. } => (*label, self.spine(children)?),
             // A non-recursive inductive is the bare tier-0 value.
-            _ => (Rc::new(TmClo::val(Rc::clone(&w))), vec![]),
+            _ => (self.arena.tm(TmClo::val(Rc::clone(&w))), vec![]),
         };
-        let mut v = self.force(&label)?;
+        let mut v = self.force(label)?;
         let mut idx = 0usize;
         loop {
             let next = match &*v {
-                Val::Inl { val, .. } => (Rc::clone(val), true),
+                Val::Inl { val, .. } => (*val, true),
                 Val::Inr { val, .. } => {
                     idx += 1;
                     if idx >= ctors {
                         return Err("a sum value deeper than the constructor list".into());
                     }
-                    (Rc::clone(val), false)
+                    (*val, false)
                 }
                 _ => break,
             };
-            v = self.force(&next.0)?;
+            v = self.force(next.0)?;
             if next.1 {
                 break;
             }
@@ -2902,28 +2907,27 @@ impl Reader<'_> {
         let Val::Pair { snd, .. } = &*v else {
             return Err(format!("a constructor payload that is not a pair: {v:?}"));
         };
-        let snd = Rc::clone(snd);
-        Ok((idx, self.spine(&snd)?, children))
+        Ok((idx, self.spine(*snd)?, children))
     }
 
     /// A right-nested `Pair` chain ending in `Triv`.
-    fn spine(&self, c: &Rc<TmClo>) -> Result<Vec<Rc<TmClo>>, String> {
+    fn spine(&self, c: &'v TmClo<'v>) -> Result<Vec<&'v TmClo<'v>>, String> {
         let mut out = Vec::new();
         let mut v = self.force(c)?;
         loop {
             let next = match &*v {
                 Val::Triv { .. } => return Ok(out),
                 Val::Pair { fst, snd, .. } => {
-                    out.push(Rc::clone(fst));
-                    Rc::clone(snd)
+                    out.push(*fst);
+                    *snd
                 }
                 other => return Err(format!("a tuple that is not a pair chain: {other:?}")),
             };
-            v = self.force(&next)?;
+            v = self.force(next)?;
         }
     }
 
-    fn nat(&self, c: &Rc<TmClo>) -> Result<u64, String> {
+    fn nat(&self, c: &'v TmClo<'v>) -> Result<u64, String> {
         let mut v = self.force(c)?;
         let mut n = 0;
         loop {
@@ -2934,16 +2938,16 @@ impl Reader<'_> {
                     if n > 1_000_000 {
                         return Err("an implausible numeral".into());
                     }
-                    Rc::clone(p)
+                    *p
                 }
                 other => return Err(format!("a Nat that is not a numeral: {other:?}")),
             };
-            v = self.force(&next)?;
+            v = self.force(next)?;
         }
     }
 
     /// `Refs { RNil, RCons(i: Nat, next: Refs) }`.
-    fn refs(&self, t: &Rc<TmClo>) -> Result<Vec<u64>, String> {
+    fn refs(&self, t: &'v TmClo<'v>) -> Result<Vec<u64>, String> {
         let (idx, fields, children) = self.ctor(t, 2)?;
         match idx {
             0 => Ok(vec![]),
@@ -2961,7 +2965,7 @@ impl Reader<'_> {
     /// outside the fragment (`LetLoop`, `LoopIter`) decline: the in-language
     /// transcriber never emits them, so reading one means the value is not
     /// what this reader was pointed at.
-    fn ir(&self, t: &Rc<TmClo>) -> Result<RIr, String> {
+    fn ir(&self, t: &'v TmClo<'v>) -> Result<RIr, String> {
         let left = self.budget.get();
         if left == 0 {
             return Err("the transcription is implausibly large — declining".into());
@@ -2992,7 +2996,7 @@ impl Reader<'_> {
         }
     }
 
-    fn arms(&self, t: &Rc<TmClo>) -> Result<Vec<RIr>, String> {
+    fn arms(&self, t: &'v TmClo<'v>) -> Result<Vec<RIr>, String> {
         let (idx, _, children) = self.ctor(t, 8)?;
         match idx {
             4 => Ok(vec![]),
@@ -3033,11 +3037,11 @@ enum RCertOut {
     RecT { scrut: usize, arms: Vec<RCert> },
 }
 
-impl Reader<'_> {
+impl<'v> Reader<'_, 'v> {
     /// `Cert`, in `lib/certgen_cert.hthr`'s declaration order. `callees` is
     /// the reflection table a foreign tag `c ≥ 1` indexes; the self-call
     /// carries no name, because `CIh` says whose it is.
-    fn cert(&self, t: &Rc<TmClo>, callees: &[String]) -> Result<RCert, String> {
+    fn cert(&self, t: &'v TmClo<'v>, callees: &[String]) -> Result<RCert, String> {
         let left = self.budget.get();
         if left == 0 {
             return Err("the certificate is implausibly large — declining".into());
@@ -3086,7 +3090,7 @@ impl Reader<'_> {
         }
     }
 
-    fn cert_out(&self, t: &Rc<TmClo>, callees: &[String]) -> Result<RCertOut, String> {
+    fn cert_out(&self, t: &'v TmClo<'v>, callees: &[String]) -> Result<RCertOut, String> {
         let (idx, fields, _) = self.ctor(t, 3)?;
         let f = |i: usize| fields.get(i).ok_or_else(|| "a missing field".to_string());
         match idx {
@@ -3105,7 +3109,7 @@ impl Reader<'_> {
     }
 
     /// `CArms { CANil, CACons(c: Cert, rest: CArms) }`.
-    fn cert_arms(&self, t: &Rc<TmClo>, callees: &[String]) -> Result<Vec<RCert>, String> {
+    fn cert_arms(&self, t: &'v TmClo<'v>, callees: &[String]) -> Result<Vec<RCert>, String> {
         let (idx, fields, children) = self.ctor(t, 2)?;
         match idx {
             0 => Ok(vec![]),
@@ -3175,9 +3179,14 @@ fn analyzer_app(
 /// fold is applied to (`run_cert_fold`). Handing the value over rather than
 /// rebuilding one is what lets the fold see exactly the value the transcriber
 /// produced: there is no second encoding of an `Ir` anywhere — and, since the
-/// reader forced that value on the way past, the fold inherits every memo the
-/// readback wrote rather than re-reducing the `Ir` from its application.
-fn run_transcriber(e: &Elaborator, arity: usize, code: Term) -> Result<(RIr, Rc<TmClo>), String> {
+/// reader forced that value on the way past, the fold inherits the same arena
+/// and cache rather than rebuilding the `Ir` from syntax.
+fn run_transcriber<'v>(
+    e: &Elaborator,
+    arity: usize,
+    code: Term,
+    arena: &'v ValueArena<'v>,
+) -> Result<(RIr, &'v TmClo<'v>), String> {
     let mut nat = Term::Zero;
     for _ in 0..arity {
         nat = Term::Succ(Rc::new(nat));
@@ -3191,14 +3200,14 @@ fn run_transcriber(e: &Elaborator, arity: usize, code: Term) -> Result<(RIr, Rc<
     // Evaluation is **demand-driven**: `Reader::force` computes only the weak
     // head of what it is about to inspect, so nothing ever normalizes a whole
     // IR tree at once (CLAUDE.md's memory discipline, design doc §4).
-    let r = Reader::new(e.psi());
+    let r = Reader::new(e.psi(), arena);
     let root = r.root(term);
-    let (idx, fields, _) = r.ctor(&root, 2)?;
+    let (idx, fields, _) = r.ctor(root, 2)?;
     match idx {
         0 => Err("the in-language transcriber declined this body".into()),
         1 => {
             let ir = fields.first().ok_or("`TYes` without its IR")?;
-            Ok((r.ir(ir)?, Rc::clone(ir)))
+            Ok((r.ir(ir)?, *ir))
         }
         _ => Err("the transcriber's answer is not a `TOut`".into()),
     }
@@ -3214,7 +3223,12 @@ fn run_transcriber(e: &Elaborator, arity: usize, code: Term) -> Result<(RIr, Rc<
 /// Building the elimination in the value domain is what keeps the design
 /// doc's no-round-trip rule (`docs/nbe-conversion-design.md` §7): the `Ir`
 /// never becomes syntax again on its way into the fold.
-fn global_app(e: &Elaborator, name: &str, args: Vec<Rc<TmClo>>) -> Result<Rc<TmClo>, String> {
+fn global_app<'v>(
+    e: &Elaborator,
+    name: &str,
+    args: Vec<&'v TmClo<'v>>,
+    arena: &'v ValueArena<'v>,
+) -> Result<&'v TmClo<'v>, String> {
     let abs = e
         .global_abs(name)
         .ok_or_else(|| format!("`{name}` is not declared — the certificate fold is a library file"))?;
@@ -3228,7 +3242,7 @@ fn global_app(e: &Elaborator, name: &str, args: Vec<Rc<TmClo>>) -> Result<Rc<TmC
         var: GlobalVar((len - 1 - abs) as u32),
         subst: LocalSubst::id(&empty),
     };
-    let mut out = Rc::new(TmClo::syn(Env::empty(), Rc::new(head)));
+    let mut out = arena.tm(TmClo::syn(Env::empty(arena), Rc::new(head)));
     for arg in args {
         let Type::Pi { dom_level, cod_level, dom, cod } = &ty else {
             return Err(format!("`{name}`'s signature ran out of parameters"));
@@ -3236,11 +3250,11 @@ fn global_app(e: &Elaborator, name: &str, args: Vec<Rc<TmClo>>) -> Result<Rc<TmC
         let elim = Elim::App {
             dom_level: dom_level.clone(),
             cod_level: cod_level.clone(),
-            dom: Rc::new(TyClo::new(Env::empty(), Rc::clone(dom))),
-            cod: Rc::new(TyClo::new(Env::empty(), Rc::clone(cod))),
+            dom: arena.ty(TyClo::new(Env::empty(arena), Rc::clone(dom))),
+            cod: arena.ty(TyClo::new(Env::empty(arena), Rc::clone(cod))),
             arg,
         };
-        out = Rc::new(TmClo::elim(out, Rc::new(elim)));
+        out = arena.tm(TmClo::elim(out, Rc::new(elim)));
         // The fold's signatures are first-order (`Ir`, `Nat`), so the
         // codomain never mentions the argument and a plain unwrap is exact.
         ty = (**cod).clone();
@@ -3257,15 +3271,16 @@ fn global_app(e: &Elaborator, name: &str, args: Vec<Rc<TmClo>>) -> Result<Rc<TmC
 /// also what keeps it off the 56-branch `rec_ga` gate every `match code` shell
 /// pays. Evaluation is the same demand-driven forcing under the same budgets
 /// as every other readback here.
-fn run_cert_fold(
+fn run_cert_fold<'v>(
     e: &Elaborator,
-    ir: Rc<TmClo>,
+    ir: &'v TmClo<'v>,
     callees: &[String],
     kids: Option<u64>,
+    arena: &'v ValueArena<'v>,
 ) -> Result<RCertOut, String> {
     let app = match kids {
         // The Nat/plain entry point, unchanged.
-        None => global_app(e, "cert_body", vec![ir])?,
+        None => global_app(e, "cert_body", vec![ir], arena)?,
         // The tier-1 entry point (docs/certgen-tier1-source-types-design.md
         // §6): `cert_body_w(ir, kids)`, `kids` the little-endian has-children
         // bitmask the library decodes per arm — a declaration fact whose
@@ -3275,12 +3290,12 @@ fn run_cert_fold(
             for _ in 0..mask {
                 n = Term::Succ(Rc::new(n));
             }
-            let kids = Rc::new(TmClo::syn(Env::empty(), Rc::new(n)));
-            global_app(e, "cert_body_w", vec![ir, kids])?
+            let kids = arena.tm(TmClo::syn(Env::empty(arena), Rc::new(n)));
+            global_app(e, "cert_body_w", vec![ir, kids], arena)?
         }
     };
-    let r = Reader::new(e.psi());
-    r.cert_out(&app, callees)
+    let r = Reader::new(e.psi(), arena);
+    r.cert_out(app, callees)
 }
 
 /// The in-language fragment-signature verdict
@@ -3297,9 +3312,10 @@ fn run_sig_checker(e: &Elaborator, name: &str) -> Result<(u64, u64, u64), String
         .fn_type_code(name)
         .ok_or_else(|| format!("`{name}` has no declared type to reflect"))?;
     let term = analyzer_app(e, Slot::CertgenCheckSig, "certgen.check_sig", vec![sig])?;
-    let r = Reader::new(e.psi());
+    let arena = e.profiled_value_arena();
+    let r = Reader::new(e.psi(), &arena);
     let root = r.root(term);
-    let (idx, fields, _) = r.ctor(&root, 2)?;
+    let (idx, fields, _) = r.ctor(root, 2)?;
     match idx {
         0 => Err(format!(
             "the in-language signature checker declined `{name}`: the fragment \
@@ -3610,7 +3626,10 @@ pub fn generate_in_language(
     if arity != names.len() {
         return Err("the elaborated body's arity disagrees with the declaration".into());
     }
-    let (rir, ir) = run_transcriber(e, arity, body.code)?;
+    // One region owns the whole evaluator graph from transcription through
+    // the certificate fold, including the `Ir` graph handed between them.
+    let arena = e.profiled_value_arena();
+    let (rir, ir) = run_transcriber(e, arity, body.code, &arena)?;
     let params: Vec<String> = names.iter().map(|s| s.to_string()).collect();
     let model = fn_ir_from_rir(&rir, f, res, pts, &body.callees, &params)?;
     // The certificate FOLD, over the same `Ir` value the model came from
@@ -3628,6 +3647,6 @@ pub fn generate_in_language(
         ),
         _ => None,
     };
-    let cert = run_cert_fold(e, ir, &body.callees, kids)?;
+    let cert = run_cert_fold(e, ir, &body.callees, kids, &arena)?;
     emit_with_model(f, arity, res, pts, model, cert, ctx)
 }

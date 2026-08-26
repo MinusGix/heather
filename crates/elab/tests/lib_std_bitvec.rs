@@ -48,12 +48,19 @@ fn run(extra: &str) -> Result<(), String> {
         return Err(err);
     }
     if !extra.is_empty() {
+        let report_metrics = std::env::var_os("HEATHER_VALUE_METRICS").is_some();
+        if report_metrics {
+            e.enable_value_metrics();
+        }
         let src = format!("import bitvec;\nimport bool;\nimport logic;\n{extra}");
         if let Err(err) = e.elab_module_source("probe", &src) {
             return Err(match err {
                 ElabError::Elab { msg, .. } => msg,
                 other => format!("{other}"),
             });
+        }
+        if report_metrics {
+            eprintln!("bitvec probe value metrics: {:?}", e.value_metrics().unwrap());
         }
     }
     Ok(())
@@ -105,6 +112,12 @@ theorem signed_minus_one(): toInt(4, ofNat(4, 15)) = NegSucc(0) { refl }
 
 #[test]
 fn slow_acceptance_arithmetic_is_modulo_the_width_and_reports_alu_conditions() {
+    if std::env::var_os("HEATHER_VALUE_METRICS").is_some() {
+        ok(r#"
+theorem carry_bit_machine_width_only():
+    carry_add_bit(64, all_ones(64), one(64)) = True { refl }
+"#);
+    }
     ok(r#"
 theorem add_wrap(): toNat(4, add(4, ofNat(4, 14), ofNat(4, 3))) = 1 { refl }
 theorem sub_wrap(): toNat(4, sub(4, ofNat(4, 3), ofNat(4, 5))) = 14 { refl }

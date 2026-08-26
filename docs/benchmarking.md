@@ -24,6 +24,16 @@ scripts/bench --list                 # what is in the suite
 scripts/bench --stack-only           # only the stack probe (usable in a debug build)
 ```
 
+For evaluator allocation/cache diagnosis rather than timing, selected
+elaborator acceptance tests honor `HEATHER_VALUE_METRICS=1` when built with
+`--features value-metrics`, and print an explicit `ValueMetricsSnapshot` under
+`-- --nocapture`. The current probes are
+`lib_std_bitvec`'s machine-width carry test, `x86_64`'s module check, and
+`certgen`'s `add` generation. Always invoke them through `scripts/test`; the
+feature and environment flag change observation only, not fuel, cache capacity, or the
+checked program. These counters are the stable evidence for working-set shape;
+wall times from such a diagnostic run remain issue-log data, not baselines.
+
 **Always through `scripts/bench`, never bare `cargo bench`** — same rule as
 `scripts/test`, and for a sharper reason: benchmarks deliberately push
 reduction and conversion at size, which is precisely the workload that turns a
@@ -103,13 +113,12 @@ of `ok` and exits 3, so a scripted gate cannot mistake it for a full pass.
 
 ## Why no Criterion
 
-`issues/dependency-policy.md` keeps the kernel at zero dependencies, and a
-dev-dependency is not exempt: it lands in the same `Cargo.lock` the trusted
-base is audited from, and the audit story is supposed to be decided *before*
-the first dependency, not after. What Criterion buys — bootstrapped confidence
-intervals, outlier classification, plots — is aimed at detecting small
-differences in noisy code. This suite is aimed at a cost model: shape, and
-order-of-magnitude changes in deterministic tree walks. A min-of-samples
+`issues/dependency-policy.md` keeps the kernel at an audited minimum. Its one
+small shipped dependency does not justify adding Criterion's much larger
+dev-only graph to the same lockfile and audit surface. What Criterion buys —
+bootstrapped confidence intervals, outlier classification, plots — is aimed
+at detecting small differences in noisy code. This suite is aimed at a cost
+model: shape, and order-of-magnitude changes in deterministic tree walks. A min-of-samples
 estimator in ~250 lines answers that, and the harness is small enough to read
 in one sitting (`crates/kernel/benches/kernel/harness.rs`).
 

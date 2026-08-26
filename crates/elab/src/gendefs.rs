@@ -39,7 +39,6 @@ use heather_kernel::level::Level;
 use heather_kernel::term::{
     GlobalBinding, GlobalVar, LocalCtx, LocalSubst, LocalVar, SubstTail, Term, Type,
 };
-use heather_kernel::typing;
 use heather_syntax::ast::Span;
 
 use crate::inductive::{ConstBody, IdxTy, Inductive};
@@ -1248,7 +1247,7 @@ impl Elaborator {
                 // and a generated definition is one
                 // (issues/gendef-gate-untimed.md).
                 crate::stats::time_kernel(|| {
-                    typing::check_type(&self.psi, 0, Layer::Prog, &empty, &ty, &level, self.fuel)
+                    self.kernel_check_type(&self.psi, Layer::Prog, &empty, &ty, &level)
                 })
                 .map_err(|err| crate::ElabError::Kernel {
                     decl: name.clone(),
@@ -1257,8 +1256,8 @@ impl Elaborator {
                     note: None,
                 })?;
                 crate::stats::time_kernel(|| {
-                    typing::check_term(
-                        &self.psi, 0, Layer::Code, &empty, &body, &ty, &level, self.fuel,
+                    self.kernel_check_term(
+                        &self.psi, Layer::Code, &empty, &body, &ty, &level,
                     )
                 })
                 .map_err(|err| crate::ElabError::Kernel {

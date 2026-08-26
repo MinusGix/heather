@@ -320,7 +320,7 @@ paper too).
   is fallible**, because at values reaching a child is a `force` and forcing
   spends fuel.
 - **Sub-structures are lazy.** A value's children are closures
-  (environment + syntax + memo), forced only where a ch. 06 rule forces —
+  (environment + syntax), forced only where a ch. 06 rule forces —
   a scrutinee, a `Vec`/`Fin` length, an `El` encoding. A strict domain would
   agree on every value and still evaluate an induction hypothesis nothing
   reads, which is precisely the workload the round exists to fix.
@@ -369,16 +369,34 @@ paper too).
   native, where its depth is the syntax's. And fuel thresholds are asserted
   as **invariants, never as a cost model**: a budget that answers must agree
   with the answer full budget gives.
-- **Memoized value graphs are reclaimed iteratively.** Rust's ordinary `Rc`
-  destruction recursively follows a unique child. Evaluator thunks make that
+- **A conversion owns one arena-backed value graph.** Rust's ordinary `Rc`
+  destruction recursively follows a unique child. Evaluator thunks made that
   ownership path proportional to the forced computation even though
   `Eval::drive` keeps evaluation itself off the native stack; a closed
   machine-width carry first exposed a post-evaluation stack overflow at only
-  8,496 spent fuel units. `TmClo` therefore owns a private destruction slot
-  for an already-computed payload. When a memo/value edge is the unique owner,
-  its destructor takes the edge and drains it through a per-thread worklist.
-  Shared edges retain ordinary `Rc` destruction, and evaluation, memoization,
-  conversion, and fuel accounting are unchanged.
+  8,496 spent fuel units. Environments and term/type closures are therefore
+  allocated in a query-local `ValueArena`, and semantic edges to them are
+  borrowed pointers. Releasing a query walks the arena's flat chunks instead
+  of recursively following the value graph. Memo payloads remain `Rc` for
+  shared values, but values point back into the arena rather than owning the
+  next closure, so they no longer form the recursive destruction chain. This
+  also removes the evaluator's former thread-local destruction worklist.
+  Successful thunk results live in bounded FIFO caches owned by the arena
+  (16K term values and 16K type values). Consumers share a cached value, but
+  eviction reclaims old forced payloads while their stable closure skeletons
+  remain. (Unbounded strong memos made the first arena version exceed the
+  4 GiB test cap on `lib_std_bitvec`; per-node weak memos still retained every
+  dead `Rc` allocation through its control block.) Conversion and the
+  definition-body cache are unchanged; a force after eviction may spend fuel
+  again, which affects cost thresholds but never a verdict.
+- **Value-machine instrumentation is explicit and observational.** A caller
+  may lend a `ValueMetrics` collector to arenas directly, or use the profiled
+  typing entry points to aggregate the many conversion arenas created by one
+  kernel gate. It counts region/environment/closure allocation plus cache
+  lookups, hits, inserts, evictions and per-region peak residency. Ordinary
+  arenas carry no collector. There is deliberately no global or thread-local
+  sink: concurrent checks cannot contaminate one another's measurements, and
+  enabling counters cannot change fuel, cache policy, or a verdict.
 - **Level equivalence**: normalize to `adjust(count(l))` maps and compare;
   `ω` compares only to itself. `equiv`/`le` take a **reflexivity pre-check**
   first — identical syntax is equivalent because normalization is a function,

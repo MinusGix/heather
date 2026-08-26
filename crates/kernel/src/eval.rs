@@ -56,6 +56,7 @@ use crate::term::{
 };
 use crate::value::{
     Elim, Env, Head, Lookup, TmClo, TyClo, VNeTy, VNeutral, VSubst, VTail, VTy, Val,
+    ValueArena,
 };
 
 type Res<T> = Result<T, OutOfFuel>;
@@ -64,26 +65,26 @@ type Res<T> = Result<T, OutOfFuel>;
 // Small constructors
 // ---------------------------------------------------------------------------
 
-fn tclo(env: &Env, t: &Rc<Term>) -> Rc<TmClo> {
-    Rc::new(TmClo::syn(env.clone(), Rc::clone(t)))
+fn tclo<'v>(env: &Env<'v>, t: &Rc<Term>) -> &'v TmClo<'v> {
+    env.arena().tm(TmClo::syn(*env, Rc::clone(t)))
 }
 
-fn yclo(env: &Env, t: &Rc<Type>) -> Rc<TyClo> {
-    Rc::new(TyClo::new(env.clone(), Rc::clone(t)))
+fn yclo<'v>(env: &Env<'v>, t: &Rc<Type>) -> &'v TyClo<'v> {
+    env.arena().ty(TyClo::new(*env, Rc::clone(t)))
 }
 
-fn vclo(v: Rc<Val>) -> Rc<TmClo> {
-    Rc::new(TmClo::val(v))
-}
-
-fn neutral(head: Head, spine: Vec<Elim>, unfold: Option<Rc<TmClo>>) -> Rc<Val> {
+fn neutral<'v>(
+    head: Head<'v>,
+    spine: Vec<Elim<'v>>,
+    unfold: Option<&'v TmClo<'v>>,
+) -> Rc<Val<'v>> {
     Rc::new(Val::Neutral(Rc::new(VNeutral { head, spine, unfold })))
 }
 
 /// An eliminator applied to something it cannot eliminate. Unreachable on
 /// well-typed input — `reduce.rs` is equally stuck there — but represented
 /// rather than panicked on, so no input reaches undefined behaviour.
-fn stuck(head: &Rc<Val>, e: &Elim) -> Rc<Val> {
+fn stuck<'v>(head: &Rc<Val<'v>>, e: &Elim<'v>) -> Rc<Val<'v>> {
     neutral(Head::Stuck(Rc::clone(head)), vec![e.clone()], None)
 }
 
@@ -92,27 +93,27 @@ fn stuck(head: &Rc<Val>, e: &Elim) -> Rc<Val> {
 // ---------------------------------------------------------------------------
 
 /// A pending reduction, in the tail position of [`Eval::drive`]'s loop.
-enum Work {
+enum Work<'v> {
     /// Already a weak head value.
-    Val(Rc<Val>),
+    Val(Rc<Val<'v>>),
     /// `eval(t, ρ)`.
-    Eval(Rc<Term>, Env),
+    Eval(Rc<Term>, Env<'v>),
     /// Force a 0-binder sub-structure.
-    Force(Rc<TmClo>),
+    Force(&'v TmClo<'v>),
     /// Apply a closure to its pending binders' values.
-    Apply(Rc<TmClo>, Vec<Rc<TmClo>>),
+    Apply(&'v TmClo<'v>, Vec<&'v TmClo<'v>>),
     /// [`Work::Apply`] at one binder — β's commonest shape, and the one that
     /// must not allocate a vector to say so.
-    Apply1(Rc<TmClo>, Rc<TmClo>),
+    Apply1(&'v TmClo<'v>, &'v TmClo<'v>),
     /// Eliminate a weak head value.
-    Elim(Rc<Val>, Elim),
+    Elim(Rc<Val<'v>>, Elim<'v>),
 }
 
 /// What a value flows back into: a thunk waiting to memoize it, or an
 /// elimination waiting for its head.
-enum Frame {
-    Memo(Rc<TmClo>),
-    Elim(Rc<Elim>),
+enum Frame<'v> {
+    Memo(&'v TmClo<'v>),
+    Elim(Rc<Elim<'v>>),
 }
 
 /// An evaluation run: the shared fuel budget, the δ-environment, and the
@@ -127,27 +128,37 @@ enum Frame {
 /// already in the post-instantiation scope, and a context variable
 /// substituted by `Λ(g). t` is always freshly bound and therefore never Γ's
 /// base.
-pub struct Eval<'a> {
+pub struct Eval<'a, 'v> {
     fuel: u64,
     defs: Defs<'a>,
     base: CtxBase,
+    arena: &'v ValueArena<'v>,
     /// [`Eval::drive`]'s continuation stack, kept across drives so that the
     /// common reduction step allocates nothing for it. Nested drives (a
     /// scrutinee evaluated before its elimination is built) use it as a
     /// stack of stacks: each records the height it entered at.
-    frames: Vec<Frame>,
+    frames: Vec<Frame<'v>>,
 }
 
-impl<'a> Eval<'a> {
+impl<'a, 'v> Eval<'a, 'v> {
     /// A run with `fuel` units, unfolding the definitions of `defs`, over a Γ
     /// whose base is `base`.
-    pub fn new(fuel: u64, defs: Defs<'a>, base: CtxBase) -> Eval<'a> {
-        Eval { fuel, defs, base, frames: Vec::new() }
+    pub fn new(
+        fuel: u64,
+        defs: Defs<'a>,
+        base: CtxBase,
+        arena: &'v ValueArena<'v>,
+    ) -> Eval<'a, 'v> {
+        Eval { fuel, defs, base, arena, frames: Vec::new() }
     }
 
     /// The unspent budget.
     pub fn fuel(&self) -> u64 {
         self.fuel
+    }
+
+    fn vclo(&self, value: Rc<Val<'v>>) -> &'v TmClo<'v> {
+        self.arena.tm(TmClo::val(value))
     }
 
     fn spend(&mut self) -> Res<()> {
@@ -162,7 +173,7 @@ impl<'a> Eval<'a> {
     /// length and base (`reduce.rs` module doc). The entry types are never
     /// inspected, so a filler suffices — and building one is confined to the
     /// code-recursor path, which is not the hot one.
-    fn scope(&self, env: &Env) -> LocalCtx {
+    fn scope(&self, env: &Env<'v>) -> LocalCtx {
         LocalCtx {
             base: self.base,
             entries: CtxEntries::repeat(
@@ -194,7 +205,7 @@ impl<'a> Eval<'a> {
     /// explicit [`Frame`]s on the heap. Non-tail recursion (a scrutinee, an
     /// application's function, a type annotation) stays on the native stack,
     /// where its depth is the syntax's and the rewriter's own.
-    fn drive(&mut self, start: Work) -> Res<Rc<Val>> {
+    fn drive(&mut self, start: Work<'v>) -> Res<Rc<Val<'v>>> {
         let floor = self.frames.len();
         let out = self.drive_from(start, floor);
         // An error unwinds whatever this drive had pending; a thunk that
@@ -203,19 +214,19 @@ impl<'a> Eval<'a> {
         out
     }
 
-    fn drive_from(&mut self, start: Work, floor: usize) -> Res<Rc<Val>> {
+    fn drive_from(&mut self, start: Work<'v>, floor: usize) -> Res<Rc<Val<'v>>> {
         let mut work = start;
         loop {
             work = match work {
                 Work::Eval(t, env) => self.step_eval(&t, &env)?,
                 Work::Elim(head, e) => self.step_elim(head, e)?,
-                Work::Apply1(c, arg) => match &*c {
+                Work::Apply1(c, arg) => match c {
                     TmClo::Syn { env, body, .. } => {
                         Work::Eval(Rc::clone(body), env.push(arg))
                     }
                     _ => Work::Force(c),
                 },
-                Work::Apply(c, args) => match &*c {
+                Work::Apply(c, args) => match c {
                     TmClo::Syn { env, body, .. } => {
                         Work::Eval(Rc::clone(body), env.extend(&args))
                     }
@@ -224,19 +235,19 @@ impl<'a> Eval<'a> {
                     _ => Work::Force(c),
                 },
                 Work::Force(c) => {
-                    if let Some(v) = c.memo() {
+                    if let Some(v) = self.arena.memo_tm(c) {
                         Work::Val(v)
                     } else {
-                        match &*c {
-                            TmClo::Val(v) => Work::Val(Rc::clone(v.get())),
+                        match c {
+                            TmClo::Val(v) => Work::Val(Rc::clone(v)),
                             TmClo::Syn { env, body, .. } => {
-                                let w = Work::Eval(Rc::clone(body), env.clone());
-                                self.frames.push(Frame::Memo(Rc::clone(&c)));
+                                let w = Work::Eval(Rc::clone(body), *env);
+                                self.frames.push(Frame::Memo(c));
                                 w
                             }
                             TmClo::Elim { head, elim, .. } => {
-                                let w = Work::Force(Rc::clone(head));
-                                self.frames.push(Frame::Memo(Rc::clone(&c)));
+                                let w = Work::Force(head);
+                                self.frames.push(Frame::Memo(c));
                                 self.frames.push(Frame::Elim(Rc::clone(elim)));
                                 w
                             }
@@ -251,7 +262,7 @@ impl<'a> Eval<'a> {
                         None => return Ok(v),
                         // A thunk records its value only on success.
                         Some(Frame::Memo(c)) => {
-                            c.set_memo(&v);
+                            self.arena.cache_tm(c, &v);
                             Work::Val(v)
                         }
                         Some(Frame::Elim(e)) => Work::Elim(v, (*e).clone()),
@@ -265,43 +276,43 @@ impl<'a> Eval<'a> {
 
     /// Force a 0-binder sub-structure to its weak head value. Memoizes on
     /// success only.
-    pub fn force(&mut self, c: &Rc<TmClo>) -> Res<Rc<Val>> {
-        self.drive(Work::Force(Rc::clone(c)))
+    pub fn force(&mut self, c: &'v TmClo<'v>) -> Res<Rc<Val<'v>>> {
+        self.drive(Work::Force(c))
     }
 
     /// [`Eval::force`] for types.
-    pub fn force_ty(&mut self, c: &Rc<TyClo>) -> Res<Rc<VTy>> {
-        if let Some(v) = c.memo() {
+    pub fn force_ty(&mut self, c: &'v TyClo<'v>) -> Res<Rc<VTy<'v>>> {
+        if let Some(v) = self.arena.memo_ty(c) {
             return Ok(v);
         }
-        let v = match &**c {
+        let v = match c {
             TyClo::Val(v) => Rc::clone(v),
             TyClo::Syn { env, body, .. } => {
-                let (env, body) = (env.clone(), Rc::clone(body));
+                let (env, body) = (*env, Rc::clone(body));
                 self.eval_ty(&body, &env)?
             }
             TyClo::Vec { level, elem, len, .. } => {
-                let (level, elem, len) = (level.clone(), Rc::clone(elem), Rc::clone(len));
-                let lv = self.force(&len)?;
+                let (level, elem, len) = (level.clone(), *elem, *len);
+                let lv = self.force(len)?;
                 self.vec_ty(&level, elem, &lv)?
             }
             TyClo::El { level, tm, .. } => {
-                let (level, tm) = (level.clone(), Rc::clone(tm));
-                let v = self.force(&tm)?;
+                let (level, tm) = (level.clone(), *tm);
+                let v = self.force(tm)?;
                 self.decode(&level, &v)?
             }
         };
-        c.set_memo(&v);
+        self.arena.cache_ty(c, &v);
         Ok(v)
     }
 
     /// Apply a closure to its pending binders' values, `args[0]` outermost.
     /// This is the operation that replaces `apply_local`: it allocates one
     /// environment cell per binder and copies nothing.
-    pub fn apply(&mut self, c: &Rc<TmClo>, args: &[Rc<TmClo>]) -> Res<Rc<Val>> {
+    pub fn apply(&mut self, c: &'v TmClo<'v>, args: &[&'v TmClo<'v>]) -> Res<Rc<Val<'v>>> {
         let w = match args {
-            [a] => Work::Apply1(Rc::clone(c), Rc::clone(a)),
-            _ => Work::Apply(Rc::clone(c), args.to_vec()),
+            [a] => Work::Apply1(c, *a),
+            _ => Work::Apply(c, args.to_vec()),
         };
         self.drive(w)
     }
@@ -309,11 +320,11 @@ impl<'a> Eval<'a> {
     /// [`Eval::apply`] for type closures. A closure that is not syntactic has
     /// no pending binders and ignores them (`TyClo::Val` is a *constant*
     /// closure — the shape conversion's weakened annotations take).
-    pub fn apply_ty(&mut self, c: &Rc<TyClo>, args: &[Rc<TmClo>]) -> Res<Rc<VTy>> {
+    pub fn apply_ty(&mut self, c: &'v TyClo<'v>, args: &[&'v TmClo<'v>]) -> Res<Rc<VTy<'v>>> {
         if args.is_empty() {
             return self.force_ty(c);
         }
-        match &**c {
+        match c {
             TyClo::Syn { env, body, .. } => {
                 let (env, body) = (env.extend(args), Rc::clone(body));
                 self.eval_ty(&body, &env)
@@ -330,17 +341,17 @@ impl<'a> Eval<'a> {
     /// Conversion's δ-lazy stage deliberately does *not* call this until the
     /// opaque comparison has failed (design §5); it is the second stage, and
     /// the differential oracle's counterpart to `whnf_term_delta`.
-    pub fn delta_whnf(&mut self, mut v: Rc<Val>) -> Res<Rc<Val>> {
+    pub fn delta_whnf(&mut self, mut v: Rc<Val<'v>>) -> Res<Rc<Val<'v>>> {
         loop {
             let unfold = match &*v {
-                Val::Neutral(n) => n.unfold.as_ref().map(Rc::clone),
+                Val::Neutral(n) => n.unfold,
                 _ => None,
             };
             match unfold {
                 None => return Ok(v),
                 Some(u) => {
                     self.spend()?;
-                    v = self.force(&u)?;
+                    v = self.force(u)?;
                 }
             }
         }
@@ -348,18 +359,18 @@ impl<'a> Eval<'a> {
 
     /// [`Eval::delta_whnf`] for types: a type is δ-stuck only through `El`
     /// (type-level globals carry no body) or through a `Vec`/`Fin` length.
-    pub fn delta_whnf_ty(&mut self, mut v: Rc<VTy>) -> Res<Rc<VTy>> {
-        enum Next {
+    pub fn delta_whnf_ty(&mut self, mut v: Rc<VTy<'v>>) -> Res<Rc<VTy<'v>>> {
+        enum Next<'v> {
             Done,
-            El(Level, Rc<Val>),
-            Vec(Level, Rc<TyClo>, Rc<Val>),
-            Fin(Rc<Val>),
+            El(Level, Rc<Val<'v>>),
+            Vec(Level, &'v TyClo<'v>, Rc<Val<'v>>),
+            Fin(Rc<Val<'v>>),
         }
         loop {
             let next = match &*v {
                 VTy::Neutral(VNeTy::El { level, tm }) => Next::El(level.clone(), Rc::clone(tm)),
                 VTy::Vec { level, elem, len } => {
-                    Next::Vec(level.clone(), Rc::clone(elem), Rc::clone(len))
+                    Next::Vec(level.clone(), *elem, Rc::clone(len))
                 }
                 VTy::Fin { len } => Next::Fin(Rc::clone(len)),
                 _ => Next::Done,
@@ -394,7 +405,7 @@ impl<'a> Eval<'a> {
     // -- types --------------------------------------------------------------
 
     /// Evaluate a type to a weak head normal type value.
-    pub fn eval_ty(&mut self, t: &Type, env: &Env) -> Res<Rc<VTy>> {
+    pub fn eval_ty(&mut self, t: &Type, env: &Env<'v>) -> Res<Rc<VTy<'v>>> {
         let v = match t {
             Type::Nat => VTy::Nat,
             Type::Ty(l) => VTy::Ty(l.clone()),
@@ -496,20 +507,21 @@ impl<'a> Eval<'a> {
     /// The decoded children are built as `El` **syntax** over the encoding
     /// child's own closure, so the decode stays one step deep: a `Π` is weak
     /// head normal and its domain is not reduced until someone asks.
-    fn decode(&mut self, level: &Level, v: &Rc<Val>) -> Res<Rc<VTy>> {
-        /// `El^l c` as a lazy type. When `c` has syntax the `El` is built as
-        /// syntax over the child's own closure — one step deep, so a decoded
-        /// `Π`'s domain is not reduced until someone asks; otherwise the
-        /// domain's own lazy `El` says the same thing about a value.
-        fn el(l: &Level, c: &Rc<TmClo>) -> Option<Rc<TyClo>> {
-            Some(Rc::new(match c.as_syn() {
+    fn decode(&mut self, level: &Level, v: &Rc<Val<'v>>) -> Res<Rc<VTy<'v>>> {
+        // `El^l c` as a lazy type. When `c` has syntax the `El` is built as
+        // syntax over the child's own closure — one step deep, so a decoded
+        // `Π`'s domain is not reduced until someone asks; otherwise the
+        // domain's own lazy `El` says the same thing about a value.
+        let arena = self.arena;
+        let el = |l: &Level, c: &'v TmClo<'v>| -> Option<&'v TyClo<'v>> {
+            Some(arena.ty(match c.as_syn() {
                 Some((env, body)) => TyClo::new(
-                    env.clone(),
+                    *env,
                     Rc::new(Type::El { level: l.clone(), tm: Rc::clone(body) }),
                 ),
-                None => TyClo::el(l.clone(), Rc::clone(c)),
+                None => TyClo::el(l.clone(), c),
             }))
-        }
+        };
         let stuck_el =
             || Ok(Rc::new(VTy::Neutral(VNeTy::El { level: level.clone(), tm: Rc::clone(v) })));
 
@@ -572,8 +584,8 @@ impl<'a> Eval<'a> {
                 VTy::Id {
                     level: l.clone(),
                     ty: t,
-                    lhs: Rc::clone(lhs),
-                    rhs: Rc::clone(rhs),
+                    lhs: *lhs,
+                    rhs: *rhs,
                 }
             }
             Val::TmSEq { level: l, ty, lhs, rhs } => {
@@ -581,15 +593,15 @@ impl<'a> Eval<'a> {
                 VTy::SEq {
                     level: l.clone(),
                     ty: t,
-                    lhs: Rc::clone(lhs),
-                    rhs: Rc::clone(rhs),
+                    lhs: *lhs,
+                    rhs: *rhs,
                 }
             }
             // The arity rides across unchanged: it is a term under the same
             // binder, and only the shape decodes.
             Val::TmWf { level: l, shape, arity } => {
                 let Some(s) = el(l, shape) else { return stuck_el() };
-                VTy::Wf { level: l.clone(), shape: s, arity: Rc::clone(arity) }
+                VTy::Wf { level: l.clone(), shape: s, arity: *arity }
             }
             // `El (Vec s k) ⇝ Vec (El s) k`, which then steps at a canonical
             // length — so the decode continues into the `Vec` rule.
@@ -623,9 +635,9 @@ impl<'a> Eval<'a> {
     pub(crate) fn vec_ty(
         &mut self,
         level: &Level,
-        elem: Rc<TyClo>,
-        len: &Rc<Val>,
-    ) -> Res<Rc<VTy>> {
+        elem: &'v TyClo<'v>,
+        len: &Rc<Val<'v>>,
+    ) -> Res<Rc<VTy<'v>>> {
         let out = match &**len {
             Val::Zero => {
                 self.spend()?;
@@ -633,12 +645,12 @@ impl<'a> Eval<'a> {
             }
             Val::Succ(pred) => {
                 self.spend()?;
-                let tail = TyClo::vec(level.clone(), Rc::clone(&elem), Rc::clone(pred));
+                let tail = TyClo::vec(level.clone(), elem, pred);
                 VTy::Sigma {
                     fst_level: level.clone(),
                     snd_level: level.clone(),
-                    fst: Rc::clone(&elem),
-                    snd: Rc::new(tail),
+                    fst: elem,
+                    snd: self.arena.ty(tail),
                 }
             }
             _ => VTy::Vec {
@@ -653,7 +665,7 @@ impl<'a> Eval<'a> {
     /// `Fin(k)`: `0 ⇝ Empty^0`, `S k ⇝ Unit^0 +^{0,0} Fin(k)`, stuck
     /// otherwise. Both reducts are closed apart from the predecessor, which
     /// again rides in the environment.
-    fn fin_ty(&mut self, len: &Rc<Val>) -> Res<Rc<VTy>> {
+    fn fin_ty(&mut self, len: &Rc<Val<'v>>) -> Res<Rc<VTy<'v>>> {
         let out = match &**len {
             Val::Zero => {
                 self.spend()?;
@@ -661,15 +673,15 @@ impl<'a> Eval<'a> {
             }
             Val::Succ(pred) => {
                 self.spend()?;
-                let rhs_env = Env::empty().push(Rc::clone(pred));
+                let rhs_env = Env::empty(self.arena).push(pred);
                 VTy::Sum {
                     lhs_level: Level::Zero,
                     rhs_level: Level::Zero,
-                    lhs: Rc::new(TyClo::new(
-                        Env::empty(),
+                    lhs: self.arena.ty(TyClo::new(
+                        Env::empty(self.arena),
                         Rc::new(Type::Unit { level: Level::Zero }),
                     )),
-                    rhs: Rc::new(TyClo::new(
+                    rhs: self.arena.ty(TyClo::new(
                         rhs_env,
                         Rc::new(Type::Fin { len: Rc::new(Term::Var(LocalVar(0))) }),
                     )),
@@ -683,7 +695,7 @@ impl<'a> Eval<'a> {
     /// A local substitution inside a neutral: its terms become **values**,
     /// evaluated pointwise here. An unforced `δ` would be the defect class
     /// reintroduced by the domain (design §3.4).
-    fn eval_subst(&mut self, d: &LocalSubst, env: &Env) -> Res<VSubst> {
+    fn eval_subst(&mut self, d: &LocalSubst, env: &Env<'v>) -> Res<VSubst<'v>> {
         let mut terms = Vec::with_capacity(d.terms.len());
         for t in &d.terms {
             terms.push(self.eval_tm(t, env)?);
@@ -694,7 +706,7 @@ impl<'a> Eval<'a> {
     // -- terms --------------------------------------------------------------
 
     /// Evaluate a term to a weak head normal value.
-    pub fn eval_tm(&mut self, t: &Rc<Term>, env: &Env) -> Res<Rc<Val>> {
+    pub fn eval_tm(&mut self, t: &Rc<Term>, env: &Env<'v>) -> Res<Rc<Val<'v>>> {
         self.eval_tm_ref(t, env)
     }
 
@@ -702,14 +714,14 @@ impl<'a> Eval<'a> {
     /// conversion, which is syntax lent to the checker. Wrapping it in an
     /// `Rc` just to start the machine cost 1.3× on `nat/check-numeral`, whose
     /// every conversion is one `Nat ≈ Nat`.
-    pub fn eval_tm_ref(&mut self, t: &Term, env: &Env) -> Res<Rc<Val>> {
+    pub fn eval_tm_ref(&mut self, t: &Term, env: &Env<'v>) -> Res<Rc<Val<'v>>> {
         let w = self.step_eval(t, env)?;
         self.drive(w)
     }
 
     /// One step of [`Eval::eval_tm`], with its **tail positions returned**
     /// rather than called: see [`Eval::drive`].
-    fn step_eval(&mut self, t: &Term, env: &Env) -> Res<Work> {
+    fn step_eval(&mut self, t: &Term, env: &Env<'v>) -> Res<Work<'v>> {
         let v = match t {
             Term::Var(x) => match env.lookup(x.0) {
                 Lookup::Bound(c) => return Ok(Work::Force(c)),
@@ -1117,13 +1129,13 @@ impl<'a> Eval<'a> {
     /// abstract prefix of Δ to the abstract prefix of Γ identically, and
     /// `·^k_{g?}` targets an empty Δ, so past the payloads the lookup falls
     /// through to the same [`Head::BaseVar`] numbering either way.
-    fn global_tm(&mut self, var: GlobalVar, subst: VSubst) -> Rc<Val> {
+    fn global_tm(&mut self, var: GlobalVar, subst: VSubst<'v>) -> Rc<Val<'v>> {
         let unfold = self.defs.body(var).map(|body| {
-            let mut denv = Env::empty();
+            let mut denv = Env::empty(self.arena);
             for v in &subst.terms {
-                denv = denv.push(vclo(Rc::clone(v)));
+                denv = denv.push(self.vclo(Rc::clone(v)));
             }
-            Rc::new(TmClo::syn(denv, body))
+            self.arena.tm(TmClo::syn(denv, body))
         });
         neutral(Head::Global { var, subst }, Vec::new(), unfold)
     }
@@ -1144,12 +1156,12 @@ impl<'a> Eval<'a> {
 
     /// Apply one elimination to a weak head value: fire its β, or extend the
     /// neutral's spine (and, when the neutral is glued, its unfolding).
-    pub fn elim(&mut self, head: Rc<Val>, e: Elim) -> Res<Rc<Val>> {
+    pub fn elim(&mut self, head: Rc<Val<'v>>, e: Elim<'v>) -> Res<Rc<Val<'v>>> {
         self.drive(Work::Elim(head, e))
     }
 
     /// One step of [`Eval::elim`]; see [`Eval::drive`].
-    fn step_elim(&mut self, head: Rc<Val>, e: Elim) -> Res<Work> {
+    fn step_elim(&mut self, head: Rc<Val<'v>>, e: Elim<'v>) -> Res<Work<'v>> {
         if let Val::Neutral(n) = &*head {
             let n = Rc::clone(n);
             return Ok(Work::Val(self.push_elim(&n, e)));
@@ -1157,7 +1169,7 @@ impl<'a> Eval<'a> {
         match (&*head, &e) {
             (Val::Lam { body, .. }, Elim::App { arg, .. }) => {
                 self.spend()?;
-                let (body, arg) = (Rc::clone(body), Rc::clone(arg));
+                let (body, arg) = (*body, *arg);
                 Ok(Work::Apply1(body, arg))
             }
             (Val::ULam { num_vars, body, .. }, Elim::UApp { levels })
@@ -1187,7 +1199,7 @@ impl<'a> Eval<'a> {
             }
             (Val::Zero, Elim::ElimNat { base, .. }) => {
                 self.spend()?;
-                let base = Rc::clone(base);
+                let base = *base;
                 Ok(Work::Force(base))
             }
             // `elim_Nat … (su t) ⇝ s'[t/x, elim_Nat … t/y]`: the induction
@@ -1195,56 +1207,56 @@ impl<'a> Eval<'a> {
             // it costs nothing.
             (Val::Succ(pred), Elim::ElimNat { step, .. }) => {
                 self.spend()?;
-                let (pred, step) = (Rc::clone(pred), Rc::clone(step));
-                let ih = Rc::new(TmClo::elim(Rc::clone(&pred), Rc::new(e.clone())));
+                let (pred, step) = (*pred, *step);
+                let ih = self.arena.tm(TmClo::elim(pred, Rc::new(e.clone())));
                 Ok(Work::Apply(step, vec![pred, ih]))
             }
             (Val::Refl { .. }, Elim::J { case, .. }) => {
                 self.spend()?;
-                let case = Rc::clone(case);
+                let case = *case;
                 Ok(Work::Force(case))
             }
             (Val::SRefl { .. }, Elim::Transp { tm, .. }) => {
                 self.spend()?;
-                let tm = Rc::clone(tm);
+                let tm = *tm;
                 Ok(Work::Force(tm))
             }
             (Val::Squash { tm, .. }, Elim::ElimSquash { case, .. }) => {
                 self.spend()?;
-                Ok(Work::Apply1(Rc::clone(case), Rc::clone(tm)))
+                Ok(Work::Apply1(*case, *tm))
             }
             (Val::Pair { fst, .. }, Elim::Fst { .. }) => {
                 self.spend()?;
-                let fst = Rc::clone(fst);
+                let fst = *fst;
                 Ok(Work::Force(fst))
             }
             (Val::Pair { snd, .. }, Elim::Snd { .. }) => {
                 self.spend()?;
-                let snd = Rc::clone(snd);
+                let snd = *snd;
                 Ok(Work::Force(snd))
             }
             (Val::Inl { val, .. }, Elim::Case { case_l, .. }) => {
                 self.spend()?;
-                let (val, case_l) = (Rc::clone(val), Rc::clone(case_l));
+                let (val, case_l) = (*val, *case_l);
                 Ok(Work::Apply1(case_l, val))
             }
             (Val::Inr { val, .. }, Elim::Case { case_r, .. }) => {
                 self.spend()?;
-                let (val, case_r) = (Rc::clone(val), Rc::clone(case_r));
+                let (val, case_r) = (*val, *case_r);
                 Ok(Work::Apply1(case_r, val))
             }
             (Val::Sup { label, children, .. }, Elim::ElimW { .. }) => {
                 self.spend()?;
-                let (label, children) = (Rc::clone(label), Rc::clone(children));
-                match self.fire_elim_w(&label, &children, &e)? {
+                let (label, children) = (*label, *children);
+                match self.fire_elim_w(label, children, &e)? {
                     Some(v) => Ok(v),
                     None => Ok(Work::Val(stuck(&head, &e))),
                 }
             }
             (Val::Supf { label, children, .. }, Elim::ElimWf { .. }) => {
                 self.spend()?;
-                let (label, children) = (Rc::clone(label), Rc::clone(children));
-                match self.fire_elim_wf(&label, &children, &e)? {
+                let (label, children) = (*label, *children);
+                match self.fire_elim_wf(label, children, &e)? {
                     Some(v) => Ok(v),
                     None => Ok(Work::Val(stuck(&head, &e))),
                 }
@@ -1300,11 +1312,11 @@ impl<'a> Eval<'a> {
     /// Extend a neutral's spine — and, when it is glued, its pending
     /// unfolding by the same elimination, so that forcing the unfolding
     /// replays the spine (design §5).
-    fn push_elim(&mut self, n: &Rc<VNeutral>, e: Elim) -> Rc<Val> {
+    fn push_elim(&mut self, n: &Rc<VNeutral<'v>>, e: Elim<'v>) -> Rc<Val<'v>> {
         let unfold = n
             .unfold
             .as_ref()
-            .map(|u| Rc::new(TmClo::elim(Rc::clone(u), Rc::new(e.clone()))));
+            .map(|u| self.arena.tm(TmClo::elim(u, Rc::new(e.clone()))));
         let mut spine = n.spine.clone();
         spine.push(e);
         neutral(n.head.clone(), spine, unfold)
@@ -1322,10 +1334,10 @@ impl<'a> Eval<'a> {
     /// for the same reason.
     fn fire_elim_w(
         &mut self,
-        label: &Rc<TmClo>,
-        children: &Rc<TmClo>,
-        e: &Elim,
-    ) -> Res<Option<Work>> {
+        label: &'v TmClo<'v>,
+        children: &'v TmClo<'v>,
+        e: &Elim<'v>,
+    ) -> Res<Option<Work<'v>>> {
         let Elim::ElimW {
             shape_level,
             pos_level,
@@ -1345,7 +1357,7 @@ impl<'a> Eval<'a> {
         else {
             return Ok(None);
         };
-        let rho_af = env.push(Rc::clone(label)).push(Rc::clone(children));
+        let rho_af = env.push(label).push(children);
         let lmax = Level::max(shape_level.clone(), pos_level.clone());
         let w_syn = Type::W {
             shape_level: shape_level.clone(),
@@ -1391,13 +1403,13 @@ impl<'a> Eval<'a> {
             dom_level: pos_level.clone(),
             cod_level: motive_level.clone(),
             // `T[a/x]` in `(Γ, a, f)`: `a` is slot 1.
-            dom: Rc::new(TyClo::new(rho_af.clone(), Rc::new(pos_body.shift_local(1)))),
-            body: Rc::new(TmClo::syn(rho_af, Rc::new(rec))),
+            dom: self.arena.ty(TyClo::new(rho_af, Rc::new(pos_body.shift_local(1)))),
+            body: self.arena.tm(TmClo::syn(rho_af, Rc::new(rec))),
         });
-        let step = Rc::clone(step);
+        let step = *step;
         Ok(Some(Work::Apply(
             step,
-            vec![Rc::clone(label), Rc::clone(children), vclo(ih)],
+            vec![label, children, self.vclo(ih)],
         )))
     }
 
@@ -1406,10 +1418,10 @@ impl<'a> Eval<'a> {
     /// reached through the shared [`nth`] schema instead of an application.
     fn fire_elim_wf(
         &mut self,
-        label: &Rc<TmClo>,
-        children: &Rc<TmClo>,
-        e: &Elim,
-    ) -> Res<Option<Work>> {
+        label: &'v TmClo<'v>,
+        children: &'v TmClo<'v>,
+        e: &Elim<'v>,
+    ) -> Res<Option<Work<'v>>> {
         let Elim::ElimWf { level, motive_level, shape, arity, motive, step, env } = e else {
             return Ok(None);
         };
@@ -1419,7 +1431,7 @@ impl<'a> Eval<'a> {
         else {
             return Ok(None);
         };
-        let rho_acs = env.push(Rc::clone(label)).push(Rc::clone(children));
+        let rho_acs = env.push(label).push(children);
         let wf_syn = Type::Wf {
             level: level.clone(),
             shape: Rc::clone(shape_body),
@@ -1459,16 +1471,16 @@ impl<'a> Eval<'a> {
         let ih = Rc::new(Val::Lam {
             dom_level: Level::Zero,
             cod_level: motive_level.clone(),
-            dom: Rc::new(TyClo::new(
-                rho_acs.clone(),
+            dom: self.arena.ty(TyClo::new(
+                rho_acs,
                 Rc::new(Type::Fin { len: Rc::new(arity_body.shift_local(1)) }),
             )),
-            body: Rc::new(TmClo::syn(rho_acs, Rc::new(rec))),
+            body: self.arena.tm(TmClo::syn(rho_acs, Rc::new(rec))),
         });
-        let step = Rc::clone(step);
+        let step = *step;
         Ok(Some(Work::Apply(
             step,
-            vec![Rc::clone(label), Rc::clone(children), vclo(ih)],
+            vec![label, children, self.vclo(ih)],
         )))
     }
 
@@ -1476,7 +1488,7 @@ impl<'a> Eval<'a> {
     /// [`beta_elim_ty`] as syntax in the current Γ, and is then evaluated in
     /// the current environment. `None` is `reduce.rs`'s own stuck case (a
     /// layer-m type that cannot be code).
-    fn fire_code_ty(&mut self, code: &Rc<Type>, e: &Elim) -> Res<Option<Work>> {
+    fn fire_code_ty(&mut self, code: &Rc<Type>, e: &Elim<'v>) -> Res<Option<Work<'v>>> {
         let Elim::ElimCodeTy {
             ty_motive_level,
             tm_motive_level,
@@ -1500,7 +1512,7 @@ impl<'a> Eval<'a> {
 
     /// [`fire_code_ty`](Eval::fire_code_ty) for `elim^Trm`; the type
     /// annotation in the elimination is already in WHNF, as its β requires.
-    fn fire_code_tm(&mut self, code: &Rc<Term>, e: &Elim) -> Res<Option<Work>> {
+    fn fire_code_tm(&mut self, code: &Rc<Term>, e: &Elim<'v>) -> Res<Option<Work<'v>>> {
         let Elim::ElimCodeTm {
             ty_motive_level,
             tm_motive_level,
@@ -1531,27 +1543,29 @@ impl<'a> Eval<'a> {
 /// Evaluate a term in the **identity environment** of `gamma` — the root of
 /// a conversion, where every local is its own neutral variable — to a
 /// δ-transparent weak head value.
-pub fn whnf_value(
+pub fn whnf_value<'v>(
+    arena: &'v ValueArena<'v>,
     t: &Rc<Term>,
     gamma: &LocalCtx,
     defs: Defs<'_>,
     fuel: u64,
-) -> Result<Rc<Val>, OutOfFuel> {
-    let mut ev = Eval::new(fuel, defs, gamma.base);
-    let env = Env::identity(gamma.entries.len() as u32);
+) -> Result<Rc<Val<'v>>, OutOfFuel> {
+    let mut ev = Eval::new(fuel, defs, gamma.base, arena);
+    let env = Env::identity(arena, gamma.entries.len() as u32);
     let v = ev.eval_tm(t, &env)?;
     ev.delta_whnf(v)
 }
 
 /// [`whnf_value`] for types.
-pub fn whnf_value_ty(
+pub fn whnf_value_ty<'v>(
+    arena: &'v ValueArena<'v>,
     t: &Rc<Type>,
     gamma: &LocalCtx,
     defs: Defs<'_>,
     fuel: u64,
-) -> Result<Rc<VTy>, OutOfFuel> {
-    let mut ev = Eval::new(fuel, defs, gamma.base);
-    let env = Env::identity(gamma.entries.len() as u32);
+) -> Result<Rc<VTy<'v>>, OutOfFuel> {
+    let mut ev = Eval::new(fuel, defs, gamma.base, arena);
+    let env = Env::identity(arena, gamma.entries.len() as u32);
     let v = ev.eval_ty(t, &env)?;
     ev.delta_whnf_ty(v)
 }

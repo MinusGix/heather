@@ -43,7 +43,7 @@
 //! [`Dom::whnf_ty_root`].
 //!
 //! Two things are deliberately *not* abstracted, and stage 2b owns both:
-//! [`super::Env`]'s Γ stays a syntactic [`LocalCtx`] (only its length and base
+//! [`super::Env<'v>`]'s Γ stays a syntactic [`LocalCtx`] (only its length and base
 //! are read by the telescope helpers — entry *types* are read only by
 //! `tm_ne`'s variable arm, through [`Dom::var_type`]), and the recursor
 //! telescope tables in [`crate::rec`] keep producing syntax, which the arms
@@ -75,7 +75,7 @@ pub(super) use values::Values;
 /// One variant per `Type` former: conversion inspects all of them (the
 /// layer-m formers included — the layer index restricts which may *match*,
 /// not which may be viewed).
-pub(super) enum TyView<'a, D: Dom> {
+pub(super) enum TyView<'a, 'v, D: Dom<'v>> {
     Nat,
     Ty(&'a Level),
     Unit { level: &'a Level },
@@ -102,7 +102,7 @@ pub(super) enum TyView<'a, D: Dom> {
     GlobalTy { var: GlobalVar, subst: &'a D::Subst },
 }
 
-impl<D: Dom> TyView<'_, D> {
+impl<'v, D: Dom<'v>> TyView<'_, 'v, D> {
     /// Is this one of ch. 06's two neutral type forms (`U^δ`, `El^l ν`)?
     pub(super) fn is_neutral(&self) -> bool {
         matches!(self, TyView::El { .. } | TyView::GlobalTy { .. })
@@ -117,7 +117,7 @@ impl<D: Dom> TyView<'_, D> {
 /// (which accepts anything), and the remaining paths reject them through the
 /// neutral judgment's catch-all — exactly as before this abstraction, where
 /// they fell through the same `_` arms.
-pub(super) enum TmView<'a, D: Dom> {
+pub(super) enum TmView<'a, 'v, D: Dom<'v>> {
     // -- encodings (compared under `Ty l`) --
     TmNat,
     TmTy(&'a Level),
@@ -264,7 +264,7 @@ pub(super) enum TmView<'a, D: Dom> {
     Opaque,
 }
 
-impl<D: Dom> TmView<'_, D> {
+impl<'v, D: Dom<'v>> TmView<'_, 'v, D> {
     /// Is this one of the 14 type *encodings* — the canonical inhabitants of
     /// `Ty l`? A mismatched pair where either side is one is not convertible;
     /// this is the ch. 06 note that positive types reject across constructors.
@@ -303,7 +303,7 @@ impl<D: Dom> TmView<'_, D> {
 /// Implementors are zero-sized markers; every method takes the checker
 /// explicitly, because the operations that differ between domains are the ones
 /// that spend fuel.
-pub(super) trait Dom: Sized + 'static {
+pub(super) trait Dom<'v>: Sized {
     /// A **type** in weak head normal form.
     type Ty;
     /// A **term** in weak head normal form.
@@ -326,7 +326,7 @@ pub(super) trait Dom: Sized + 'static {
     // -- reduction ----------------------------------------------------------
 
     /// `T ⇝* W` with δ, spending one fuel per step.
-    fn whnf_ty(cv: &mut Conv<Self>, env: &Env, t: &Self::TyC) -> R<Self::Ty>;
+    fn whnf_ty(cv: &mut Conv<'v, Self>, env: &Env<'v>, t: &Self::TyC) -> R<Self::Ty>;
     /// The two **roots**: raw syntax, δ-opaquely reduced into the domain.
     ///
     /// A conversion starts from syntax the caller lends us, not from a
@@ -336,18 +336,18 @@ pub(super) trait Dom: Sized + 'static {
     /// `embed` + [`Dom::whnf_ty`] because the syntax domain can then reduce
     /// the borrow in place: wrapping every root cost 1.3× on
     /// `nat/check-numeral`, whose every conversion is one `Nat ≈ Nat`.
-    fn whnf_ty_root(cv: &mut Conv<Self>, env: &Env, t: &Type) -> R<Self::Ty>;
-    fn whnf_tm_root(cv: &mut Conv<Self>, env: &Env, t: &Term) -> R<Self::Tm>;
-    fn whnf_tm(cv: &mut Conv<Self>, env: &Env, t: &Self::TmC) -> R<Self::Tm>;
+    fn whnf_ty_root(cv: &mut Conv<'v, Self>, env: &Env<'v>, t: &Type) -> R<Self::Ty>;
+    fn whnf_tm_root(cv: &mut Conv<'v, Self>, env: &Env<'v>, t: &Term) -> R<Self::Tm>;
+    fn whnf_tm(cv: &mut Conv<'v, Self>, env: &Env<'v>, t: &Self::TmC) -> R<Self::Tm>;
     /// `T ⇝* W` **without** δ: stops at a definition's spine.
-    fn whnf_ty_opaque(cv: &mut Conv<Self>, env: &Env, t: &Self::TyC) -> R<Self::Ty>;
-    fn whnf_tm_opaque(cv: &mut Conv<Self>, env: &Env, t: &Self::TmC) -> R<Self::Tm>;
+    fn whnf_ty_opaque(cv: &mut Conv<'v, Self>, env: &Env<'v>, t: &Self::TyC) -> R<Self::Ty>;
+    fn whnf_tm_opaque(cv: &mut Conv<'v, Self>, env: &Env<'v>, t: &Self::TmC) -> R<Self::Tm>;
     /// Resume δ-transparent reduction from a δ-opaque weak head normal form.
-    fn delta_ty(cv: &mut Conv<Self>, env: &Env, w: &Self::Ty) -> R<Self::Ty>;
-    fn delta_tm(cv: &mut Conv<Self>, env: &Env, w: &Self::Tm) -> R<Self::Tm>;
+    fn delta_ty(cv: &mut Conv<'v, Self>, env: &Env<'v>, w: &Self::Ty) -> R<Self::Ty>;
+    fn delta_tm(cv: &mut Conv<'v, Self>, env: &Env<'v>, w: &Self::Tm) -> R<Self::Tm>;
     /// The definition at the head of a δ-stuck spine, if any.
-    fn delta_head(cv: &Conv<Self>, env: &Env, w: &Self::Tm) -> Option<GlobalVar>;
-    fn delta_head_ty(cv: &Conv<Self>, env: &Env, w: &Self::Ty) -> Option<GlobalVar>;
+    fn delta_head(cv: &Conv<'v, Self>, env: &Env<'v>, w: &Self::Tm) -> Option<GlobalVar>;
+    fn delta_head_ty(cv: &Conv<'v, Self>, env: &Env<'v>, w: &Self::Ty) -> Option<GlobalVar>;
     /// Is the head a `transp`? One discriminant read on conversion's hottest
     /// path — the strip loop must not cost a view construction.
     fn is_transp(w: &Self::Tm) -> bool;
@@ -359,26 +359,26 @@ pub(super) trait Dom: Sized + 'static {
     /// domain has to reduce anything to name its head or hand back its
     /// children. Fallibility lives one step earlier, in the operations that
     /// reach a head at all ([`Dom::whnf_ty`], [`Dom::head_tm`]).
-    fn view_ty<'a>(cv: &mut Conv<Self>, env: &Env, w: &'a Self::Ty) -> TyView<'a, Self>;
-    fn view_tm<'a>(cv: &mut Conv<Self>, env: &Env, w: &'a Self::Tm) -> TmView<'a, Self>;
+    fn view_ty<'a>(cv: &mut Conv<'v, Self>, env: &Env<'v>, w: &'a Self::Ty) -> TyView<'a, 'v, Self>;
+    fn view_tm<'a>(cv: &mut Conv<'v, Self>, env: &Env<'v>, w: &'a Self::Tm) -> TmView<'a, 'v, Self>;
     /// The weak head form of a sub-structure that is **already** in weak head
     /// normal form because the form carrying it is: an eliminator's scrutinee,
     /// an application's function. At the syntax domain this is a clone; at the
     /// value domain it is a force, which is why it is fallible.
-    fn head_tm(cv: &mut Conv<Self>, env: &Env, t: &Self::TmC) -> R<Self::Tm>;
+    fn head_tm(cv: &mut Conv<'v, Self>, env: &Env<'v>, t: &Self::TmC) -> R<Self::Tm>;
     /// A weak head normal type seen as a sub-structure — the `W` and `Wf` arms
     /// build the children's types out of the type they are comparing at.
-    fn as_child_ty(cv: &mut Conv<Self>, env: &Env, w: &Self::Ty) -> R<Self::TyC>;
+    fn as_child_ty(cv: &mut Conv<'v, Self>, env: &Env<'v>, w: &Self::Ty) -> R<Self::TyC>;
 
     // -- scope --------------------------------------------------------------
 
     /// `Γ, x : T @ l`.
-    fn push_entry(env: &Env, ty: &Self::TyC, level: &Level) -> Env;
+    fn push_entry(env: &Env<'v>, ty: &Self::TyC, level: &Level) -> Env<'v>;
     /// Push a recursor telescope's universe, global and local binders.
-    fn push_spec(env: &Env, tele: &rec::Tele) -> Env;
+    fn push_spec(env: &Env<'v>, tele: &rec::Tele) -> Env<'v>;
     /// The type and level of a local, looked up in Γ and weakened to the
     /// variable's own scope.
-    fn var_type(cv: &mut Conv<Self>, env: &Env, x: LocalVar) -> R<(Self::TyC, Level)>;
+    fn var_type(cv: &mut Conv<'v, Self>, env: &Env<'v>, x: LocalVar) -> R<(Self::TyC, Level)>;
     /// Weaken past `by` binders pushed on the right. Free at the value domain
     /// (variables are levels), a `shift_local` at the syntax one.
     fn weaken_ty(t: &Self::TyC, by: u32) -> Self::TyC;
@@ -387,11 +387,11 @@ pub(super) trait Dom: Sized + 'static {
     // -- embedding raw syntax -----------------------------------------------
 
     /// Raw syntax scoped in `env`'s Γ, as a sub-structure of the domain.
-    fn embed_ty(env: &Env, t: Rc<Type>) -> Self::TyC;
+    fn embed_ty(env: &Env<'v>, t: Rc<Type>) -> Self::TyC;
     /// Raw syntax scoped in `env`'s Γ but *read in* `rec`'s scope — the code
     /// recursors' motives and branches, plus everything derived from them.
-    fn embed_ty_at(rec: &Self::RecCtx, env: &Env, t: Rc<Type>) -> Self::TyC;
-    fn embed_tm_at(rec: &Self::RecCtx, env: &Env, t: Rc<Term>) -> Self::TmC;
+    fn embed_ty_at(rec: &Self::RecCtx, env: &Env<'v>, t: Rc<Type>) -> Self::TyC;
+    fn embed_tm_at(rec: &Self::RecCtx, env: &Env<'v>, t: Rc<Term>) -> Self::TmC;
 
     // -- instantiation ------------------------------------------------------
 
@@ -404,35 +404,35 @@ pub(super) trait Dom: Sized + 'static {
     /// This is *the* operation that must not be spelled at the call sites:
     /// substitution and closure application have no common syntax.
     fn inst_ty(
-        cv: &mut Conv<Self>,
-        home: &Env,
-        cur: &Env,
+        cv: &mut Conv<'v, Self>,
+        home: &Env<'v>,
+        cur: &Env<'v>,
         m: &Self::TyC,
         args: &[Self::TmC],
     ) -> R<Self::TyC>;
     /// [`Dom::inst_ty`] for a *term* annotation — `Wf`'s arity, the one
     /// sub-structure under a former's binder that is a term.
     fn inst_tm(
-        cv: &mut Conv<Self>,
-        home: &Env,
-        cur: &Env,
+        cv: &mut Conv<'v, Self>,
+        home: &Env<'v>,
+        cur: &Env<'v>,
         m: &Self::TmC,
         args: &[Self::TmC],
     ) -> R<Self::TmC>;
     /// Weaken past `by` **global** binders: the `letbox` arms compare their
     /// bodies under a Ψ extended by the code variable, and the motive they
     /// instantiate comes from outside it.
-    fn shift_global_ty(cv: &mut Conv<Self>, env: &Env, t: &Self::TyC, by: u32) -> R<Self::TyC>;
+    fn shift_global_ty(cv: &mut Conv<'v, Self>, env: &Env<'v>, t: &Self::TyC, by: u32) -> R<Self::TyC>;
     /// `T[ℓ⃗/L]` under a `ΠΠ` binder.
-    fn inst_univ_ty(cv: &mut Conv<Self>, env: &Env, body: &Self::TyC, phi: &[Level])
+    fn inst_univ_ty(cv: &mut Conv<'v, Self>, env: &Env<'v>, body: &Self::TyC, phi: &[Level])
         -> R<Self::TyC>;
     /// `T[Δ/g]` under a `(g : Ctx) ⇒` binder.
-    fn inst_ctx_ty(cv: &mut Conv<Self>, env: &Env, body: &Self::TyC, ctx: &LocalCtx)
+    fn inst_ctx_ty(cv: &mut Conv<'v, Self>, env: &Env<'v>, body: &Self::TyC, ctx: &LocalCtx)
         -> R<Self::TyC>;
     /// `T[S/U]` under a `(U : Typ) ⇒` binder.
     fn inst_tyarg_ty(
-        cv: &mut Conv<Self>,
-        env: &Env,
+        cv: &mut Conv<'v, Self>,
+        env: &Env<'v>,
         body: &Self::TyC,
         arg: &Rc<Type>,
     ) -> R<Self::TyC>;
@@ -448,15 +448,15 @@ pub(super) trait Dom: Sized + 'static {
     /// (`value::shift`, and the stage-2b log for why stage 1's argument does
     /// not cover this case).
     fn under_tele_ty(
-        cv: &mut Conv<Self>,
-        env: &Env,
+        cv: &mut Conv<'v, Self>,
+        env: &Env<'v>,
         t: &Self::TyC,
         tu: u32,
         tg: u32,
     ) -> R<Self::TyC>;
     fn under_tele_tm(
-        cv: &mut Conv<Self>,
-        env: &Env,
+        cv: &mut Conv<'v, Self>,
+        env: &Env<'v>,
         t: &Self::TmC,
         tu: u32,
         tg: u32,
@@ -466,7 +466,7 @@ pub(super) trait Dom: Sized + 'static {
 
     fn subst_len(d: &Self::Subst) -> usize;
     /// The `k`th step term of a substitution, read in `env`.
-    fn subst_term(env: &Env, d: &Self::Subst, k: usize) -> Self::TmC;
+    fn subst_term(env: &Env<'v>, d: &Self::Subst, k: usize) -> Self::TmC;
     /// Do the two substitutions have the same tail? Stated as a predicate
     /// rather than as equality because the value domain's tail deliberately
     /// carries less than the syntax's (`VTail` drops the source context's
@@ -477,8 +477,8 @@ pub(super) trait Dom: Sized + 'static {
     /// `k` steps of `δ`. With `k = δ.terms.len()` this is `T[δ]`, the type of
     /// a global variable's instance.
     fn apply_subst_ty(
-        cv: &mut Conv<Self>,
-        env: &Env,
+        cv: &mut Conv<'v, Self>,
+        env: &Env<'v>,
         d: &Self::Subst,
         k: usize,
         t: &Rc<Type>,
@@ -490,58 +490,58 @@ pub(super) trait Dom: Sized + 'static {
     /// hottest paths (every length, arity and `elim_Nat` base). Scope-free in
     /// both domains — they close over nothing — so the checker builds each
     /// once and clones the handle.
-    fn nat() -> Self::TyC;
-    fn univ(env: &Env, level: &Level) -> Self::TyC;
-    fn empty(env: &Env, level: &Level) -> Self::TyC;
-    fn sempty(env: &Env, level: &Level) -> Self::TyC;
-    fn squash(env: &Env, level: &Level, ty: &Self::TyC) -> Self::TyC;
-    fn code_ty(env: &Env, ctx: &LocalCtx, level: &Level) -> Self::TyC;
-    fn code_tm(env: &Env, ctx: &LocalCtx, ty: &Rc<Type>, level: &Level) -> Self::TyC;
+    fn nat(env: &Env<'v>) -> Self::TyC;
+    fn univ(env: &Env<'v>, level: &Level) -> Self::TyC;
+    fn empty(env: &Env<'v>, level: &Level) -> Self::TyC;
+    fn sempty(env: &Env<'v>, level: &Level) -> Self::TyC;
+    fn squash(env: &Env<'v>, level: &Level, ty: &Self::TyC) -> Self::TyC;
+    fn code_ty(env: &Env<'v>, ctx: &LocalCtx, level: &Level) -> Self::TyC;
+    fn code_tm(env: &Env<'v>, ctx: &LocalCtx, ty: &Rc<Type>, level: &Level) -> Self::TyC;
     /// `El^l s` at an encoding that is a domain object — the arms that compare
     /// under `Ty l` push its own `El` as a binder type.
-    fn el(cv: &mut Conv<Self>, env: &Env, level: &Level, tm: &Self::TmC) -> R<Self::TyC>;
+    fn el(cv: &mut Conv<'v, Self>, env: &Env<'v>, level: &Level, tm: &Self::TmC) -> R<Self::TyC>;
     /// `Π(x : S). T`, with `T` scoped one binder deeper.
     fn pi(
-        cv: &mut Conv<Self>,
-        env: &Env,
+        cv: &mut Conv<'v, Self>,
+        env: &Env<'v>,
         dom_level: &Level,
         cod_level: &Level,
         dom: &Self::TyC,
         cod: &Self::TyC,
     ) -> R<Self::TyC>;
     fn sum(
-        cv: &mut Conv<Self>,
-        env: &Env,
+        cv: &mut Conv<'v, Self>,
+        env: &Env<'v>,
         lhs_level: &Level,
         rhs_level: &Level,
         lhs: &Self::TyC,
         rhs: &Self::TyC,
     ) -> R<Self::TyC>;
     fn w(
-        cv: &mut Conv<Self>,
-        env: &Env,
+        cv: &mut Conv<'v, Self>,
+        env: &Env<'v>,
         shape_level: &Level,
         pos_level: &Level,
         shape: &Self::TyC,
         pos: &Self::TyC,
     ) -> R<Self::TyC>;
     fn wf(
-        cv: &mut Conv<Self>,
-        env: &Env,
+        cv: &mut Conv<'v, Self>,
+        env: &Env<'v>,
         level: &Level,
         shape: &Self::TyC,
         arity: &Self::TmC,
     ) -> R<Self::TyC>;
     fn vec(
-        cv: &mut Conv<Self>,
-        env: &Env,
+        cv: &mut Conv<'v, Self>,
+        env: &Env<'v>,
         level: &Level,
         elem: &Self::TyC,
         len: &Self::TmC,
     ) -> R<Self::TyC>;
     fn id(
-        cv: &mut Conv<Self>,
-        env: &Env,
+        cv: &mut Conv<'v, Self>,
+        env: &Env<'v>,
         level: &Level,
         ty: &Self::TyC,
         lhs: &Self::TmC,
@@ -550,13 +550,13 @@ pub(super) trait Dom: Sized + 'static {
 
     // -- synthesized terms --------------------------------------------------
 
-    fn zero() -> Self::TmC;
-    fn succ(cv: &mut Conv<Self>, env: &Env, t: &Self::TmC) -> R<Self::TmC>;
+    fn zero(env: &Env<'v>) -> Self::TmC;
+    fn succ(cv: &mut Conv<'v, Self>, env: &Env<'v>, t: &Self::TmC) -> R<Self::TmC>;
     /// The local variable `x` as a term of the domain.
-    fn local(env: &Env, x: LocalVar) -> Self::TmC;
+    fn local(env: &Env<'v>, x: LocalVar) -> Self::TmC;
     fn refl(
-        cv: &mut Conv<Self>,
-        env: &Env,
+        cv: &mut Conv<'v, Self>,
+        env: &Env<'v>,
         level: &Level,
         ty: &Self::TyC,
         tm: &Self::TmC,
@@ -564,8 +564,8 @@ pub(super) trait Dom: Sized + 'static {
     /// `inl`/`inr` at the given summand types; `left` picks the injection.
     #[allow(clippy::too_many_arguments)]
     fn inj(
-        cv: &mut Conv<Self>,
-        env: &Env,
+        cv: &mut Conv<'v, Self>,
+        env: &Env<'v>,
         left: bool,
         lhs_level: &Level,
         rhs_level: &Level,
@@ -583,8 +583,8 @@ pub(super) trait Dom: Sized + 'static {
     /// operation at all. Destructuring the weakened `W` is what the rule
     /// itself does.
     fn sup_at(
-        cv: &mut Conv<Self>,
-        env: &Env,
+        cv: &mut Conv<'v, Self>,
+        env: &Env<'v>,
         w: &Self::TyC,
         by: u32,
         label: &Self::TmC,
@@ -604,8 +604,8 @@ pub(super) trait Dom: Sized + 'static {
     fn tm_eq_fast(a: &Self::TmC, b: &Self::TmC) -> bool;
     #[allow(clippy::too_many_arguments)]
     fn app(
-        cv: &mut Conv<Self>,
-        env: &Env,
+        cv: &mut Conv<'v, Self>,
+        env: &Env<'v>,
         dom_level: &Level,
         cod_level: &Level,
         dom: &Self::TyC,
@@ -617,8 +617,8 @@ pub(super) trait Dom: Sized + 'static {
     /// [`Dom::eta_proj`]).
     #[allow(clippy::too_many_arguments)]
     fn proj(
-        cv: &mut Conv<Self>,
-        env: &Env,
+        cv: &mut Conv<'v, Self>,
+        env: &Env<'v>,
         first: bool,
         fst_level: &Level,
         snd_level: &Level,
@@ -628,13 +628,13 @@ pub(super) trait Dom: Sized + 'static {
     ) -> R<Self::TmC>;
     /// `box U^{id_Δ}` / `box u^{id_Δ}` for the freshly pushed global — the
     /// `letbox` arms' payload. Code is syntax in both domains (design §3.5).
-    fn box_ty(env: &Env, code: Rc<Type>) -> Self::TmC;
-    fn box_tm(env: &Env, code: Rc<Term>) -> Self::TmC;
+    fn box_ty(env: &Env<'v>, code: Rc<Type>) -> Self::TmC;
+    fn box_tm(env: &Env<'v>, code: Rc<Term>) -> Self::TmC;
     /// The payload of a `box`, if this sub-structure is one. `Ok(None)` means
     /// "not a box", which the code recursors' scrutinee arms distinguish from
     /// "a box of the wrong thing".
-    fn box_ty_payload(cv: &mut Conv<Self>, env: &Env, t: &Self::TmC) -> R<Option<Rc<Type>>>;
-    fn box_tm_payload(cv: &mut Conv<Self>, env: &Env, t: &Self::TmC) -> R<Option<Rc<Term>>>;
+    fn box_ty_payload(cv: &mut Conv<'v, Self>, env: &Env<'v>, t: &Self::TmC) -> R<Option<Rc<Type>>>;
+    fn box_tm_payload(cv: &mut Conv<'v, Self>, env: &Env<'v>, t: &Self::TmC) -> R<Option<Rc<Term>>>;
 
     // -- η -----------------------------------------------------------------
 
@@ -643,9 +643,9 @@ pub(super) trait Dom: Sized + 'static {
     /// `outer` is the scope `w` lives in, `inner` the extended one.
     #[allow(clippy::too_many_arguments)]
     fn eta_app(
-        cv: &mut Conv<Self>,
-        outer: &Env,
-        inner: &Env,
+        cv: &mut Conv<'v, Self>,
+        outer: &Env<'v>,
+        inner: &Env<'v>,
         a: &Self::Tm,
         b: &Self::Tm,
         dom_level: &Level,
@@ -655,26 +655,26 @@ pub(super) trait Dom: Sized + 'static {
     ) -> R<(Self::TmC, Self::TmC)>;
     /// `w↑ $ ℓ⃗` in `L, ℓ⃗`.
     fn eta_uapp(
-        cv: &mut Conv<Self>,
-        outer: &Env,
-        inner: &Env,
+        cv: &mut Conv<'v, Self>,
+        outer: &Env<'v>,
+        inner: &Env<'v>,
         a: &Self::Tm,
         b: &Self::Tm,
         num_vars: u32,
     ) -> R<(Self::TmC, Self::TmC)>;
     /// `w↑ @ g` in `Ψ, g : Ctx`.
     fn eta_ctxapp(
-        cv: &mut Conv<Self>,
-        outer: &Env,
-        inner: &Env,
+        cv: &mut Conv<'v, Self>,
+        outer: &Env<'v>,
+        inner: &Env<'v>,
         a: &Self::Tm,
         b: &Self::Tm,
     ) -> R<(Self::TmC, Self::TmC)>;
     /// `w↑ @ U^{id_Δ}` in `Ψ, U : Typ_p(Δ, l)`.
     fn eta_tyapp(
-        cv: &mut Conv<Self>,
-        outer: &Env,
-        inner: &Env,
+        cv: &mut Conv<'v, Self>,
+        outer: &Env<'v>,
+        inner: &Env<'v>,
         a: &Self::Tm,
         b: &Self::Tm,
         ctx: &LocalCtx,
@@ -682,8 +682,8 @@ pub(super) trait Dom: Sized + 'static {
     /// `fst w` / `snd w` — the Σ η arm, on compared heads.
     #[allow(clippy::too_many_arguments)]
     fn eta_proj(
-        cv: &mut Conv<Self>,
-        env: &Env,
+        cv: &mut Conv<'v, Self>,
+        env: &Env<'v>,
         first: bool,
         a: &Self::Tm,
         b: &Self::Tm,
@@ -699,8 +699,8 @@ pub(super) trait Dom: Sized + 'static {
     /// `typing.rs` at the syntax domain.
     #[allow(clippy::too_many_arguments)]
     fn wf_step_telescope(
-        cv: &mut Conv<Self>,
-        env: &Env,
+        cv: &mut Conv<'v, Self>,
+        env: &Env<'v>,
         level: &Level,
         motive_level: &Level,
         shape: &Self::TyC,
@@ -710,8 +710,8 @@ pub(super) trait Dom: Sized + 'static {
     /// `M_Typ[l/ℓ, Δ/g, t/x_T]` — the code type recursor's conclusion.
     #[allow(clippy::too_many_arguments)]
     fn inst_ty_motive(
-        cv: &mut Conv<Self>,
-        env: &Env,
+        cv: &mut Conv<'v, Self>,
+        env: &Env<'v>,
         rec: &Self::RecCtx,
         motive: &Rc<Type>,
         code_level: &Level,
@@ -721,8 +721,8 @@ pub(super) trait Dom: Sized + 'static {
     /// `M_Trm[l/ℓ, Δ/g, T/U_T, t/x_t]` — the code term recursor's conclusion.
     #[allow(clippy::too_many_arguments)]
     fn inst_tm_motive(
-        cv: &mut Conv<Self>,
-        env: &Env,
+        cv: &mut Conv<'v, Self>,
+        env: &Env<'v>,
         rec: &Self::RecCtx,
         motive: &Rc<Type>,
         code_level: &Level,
@@ -747,7 +747,7 @@ pub(super) struct Syn;
 
 /// `Γ ⊢ x : T` — the identity substitution of `env`'s Γ, weakened past the
 /// `k` binders `cur` has and `home` does not.
-fn id_at(home: &Env, cur: &Env) -> LocalSubst {
+fn id_at<'v>(home: &Env<'v>, cur: &Env<'v>) -> LocalSubst {
     let k = (cur.gamma.entries.len() - home.gamma.entries.len()) as u32;
     LocalSubst::id(&home.gamma).shift_local(k)
 }
@@ -756,7 +756,7 @@ fn var0() -> Rc<Term> {
     Rc::new(Term::Var(LocalVar(0)))
 }
 
-impl Dom for Syn {
+impl<'v> Dom<'v> for Syn {
     type Ty = Type;
     type Tm = Rc<Term>;
     type TyC = Rc<Type>;
@@ -769,18 +769,18 @@ impl Dom for Syn {
     // -- reduction ----------------------------------------------------------
 
     #[inline]
-    fn whnf_ty(cv: &mut Conv<Self>, env: &Env, t: &Rc<Type>) -> R<Type> {
+    fn whnf_ty(cv: &mut Conv<'v, Self>, env: &Env<'v>, t: &Rc<Type>) -> R<Type> {
         let defs = cv.defs(env);
         step_ty(cv, env, t, |t, g| step_type_delta(t, g, defs))
     }
 
     #[inline]
-    fn whnf_ty_root(cv: &mut Conv<Self>, env: &Env, t: &Type) -> R<Type> {
+    fn whnf_ty_root(cv: &mut Conv<'v, Self>, env: &Env<'v>, t: &Type) -> R<Type> {
         step_ty(cv, env, t, step_type)
     }
 
     #[inline]
-    fn whnf_tm_root(cv: &mut Conv<Self>, env: &Env, t: &Term) -> R<Rc<Term>> {
+    fn whnf_tm_root(cv: &mut Conv<'v, Self>, env: &Env<'v>, t: &Term) -> R<Rc<Term>> {
         let mut cur = t.clone();
         while let Some(next) = step_term(&cur, &env.gamma) {
             cv.spend()?;
@@ -790,39 +790,39 @@ impl Dom for Syn {
     }
 
     #[inline]
-    fn whnf_tm(cv: &mut Conv<Self>, env: &Env, t: &Rc<Term>) -> R<Rc<Term>> {
+    fn whnf_tm(cv: &mut Conv<'v, Self>, env: &Env<'v>, t: &Rc<Term>) -> R<Rc<Term>> {
         let defs = cv.defs(env);
         step_tm(cv, env, t, |t, g| step_term_delta(t, g, defs))
     }
 
     #[inline]
-    fn whnf_ty_opaque(cv: &mut Conv<Self>, env: &Env, t: &Rc<Type>) -> R<Type> {
+    fn whnf_ty_opaque(cv: &mut Conv<'v, Self>, env: &Env<'v>, t: &Rc<Type>) -> R<Type> {
         step_ty(cv, env, t, step_type)
     }
 
     #[inline]
-    fn whnf_tm_opaque(cv: &mut Conv<Self>, env: &Env, t: &Rc<Term>) -> R<Rc<Term>> {
+    fn whnf_tm_opaque(cv: &mut Conv<'v, Self>, env: &Env<'v>, t: &Rc<Term>) -> R<Rc<Term>> {
         step_tm(cv, env, t, step_term)
     }
 
     #[inline]
-    fn delta_ty(cv: &mut Conv<Self>, env: &Env, w: &Type) -> R<Type> {
+    fn delta_ty(cv: &mut Conv<'v, Self>, env: &Env<'v>, w: &Type) -> R<Type> {
         let defs = cv.defs(env);
         step_ty(cv, env, w, |t, g| step_type_delta(t, g, defs))
     }
 
     #[inline]
-    fn delta_tm(cv: &mut Conv<Self>, env: &Env, w: &Rc<Term>) -> R<Rc<Term>> {
+    fn delta_tm(cv: &mut Conv<'v, Self>, env: &Env<'v>, w: &Rc<Term>) -> R<Rc<Term>> {
         Self::whnf_tm(cv, env, w)
     }
 
     #[inline]
-    fn delta_head(cv: &Conv<Self>, env: &Env, w: &Rc<Term>) -> Option<GlobalVar> {
+    fn delta_head(cv: &Conv<'v, Self>, env: &Env<'v>, w: &Rc<Term>) -> Option<GlobalVar> {
         super::delta_head(w, cv.defs(env))
     }
 
     #[inline]
-    fn delta_head_ty(cv: &Conv<Self>, env: &Env, w: &Type) -> Option<GlobalVar> {
+    fn delta_head_ty(cv: &Conv<'v, Self>, env: &Env<'v>, w: &Type) -> Option<GlobalVar> {
         super::delta_head_ty(w, cv.defs(env))
     }
 
@@ -834,7 +834,7 @@ impl Dom for Syn {
     // -- views --------------------------------------------------------------
 
     #[inline]
-    fn view_ty<'a>(_cv: &mut Conv<Self>, _env: &Env, w: &'a Type) -> TyView<'a, Self> {
+    fn view_ty<'a>(_cv: &mut Conv<'v, Self>, _env: &Env<'v>, w: &'a Type) -> TyView<'a, 'v, Self> {
         match w {
             Type::Nat => TyView::Nat,
             Type::Ty(l) => TyView::Ty(l),
@@ -900,7 +900,7 @@ impl Dom for Syn {
     }
 
     #[inline]
-    fn view_tm<'a>(_cv: &mut Conv<Self>, _env: &Env, w: &'a Rc<Term>) -> TmView<'a, Self> {
+    fn view_tm<'a>(_cv: &mut Conv<'v, Self>, _env: &Env<'v>, w: &'a Rc<Term>) -> TmView<'a, 'v, Self> {
         match &**w {
             Term::TmNat => TmView::TmNat,
             Term::TmTy(l) => TmView::TmTy(l),
@@ -1167,24 +1167,24 @@ impl Dom for Syn {
     }
 
     #[inline]
-    fn head_tm(_cv: &mut Conv<Self>, _env: &Env, t: &Rc<Term>) -> R<Rc<Term>> {
+    fn head_tm(_cv: &mut Conv<'v, Self>, _env: &Env<'v>, t: &Rc<Term>) -> R<Rc<Term>> {
         Ok(Rc::clone(t))
     }
 
     #[inline]
-    fn as_child_ty(_cv: &mut Conv<Self>, _env: &Env, w: &Type) -> R<Rc<Type>> {
+    fn as_child_ty(_cv: &mut Conv<'v, Self>, _env: &Env<'v>, w: &Type) -> R<Rc<Type>> {
         Ok(Rc::new(w.clone()))
     }
 
     // -- scope --------------------------------------------------------------
 
     #[inline]
-    fn push_entry(env: &Env, ty: &Rc<Type>, level: &Level) -> Env {
+    fn push_entry(env: &Env<'v>, ty: &Rc<Type>, level: &Level) -> Env<'v> {
         env.push_entry_syn(Rc::clone(ty), level.clone())
     }
 
     #[inline]
-    fn push_spec(env: &Env, tele: &rec::Tele) -> Env {
+    fn push_spec(env: &Env<'v>, tele: &rec::Tele) -> Env<'v> {
         let mut e = env.push_tele(tele.univs, tele.globals.clone());
         for (ty, level) in &tele.locals {
             e = e.push_entry_syn(Rc::clone(ty), level.clone());
@@ -1194,7 +1194,7 @@ impl Dom for Syn {
     }
 
     #[inline]
-    fn var_type(_cv: &mut Conv<Self>, env: &Env, x: LocalVar) -> R<(Rc<Type>, Level)> {
+    fn var_type(_cv: &mut Conv<'v, Self>, env: &Env<'v>, x: LocalVar) -> R<(Rc<Type>, Level)> {
         let Some(e) = env.gamma.entries.nth_inner(x.0) else {
             return Err(NC);
         };
@@ -1214,17 +1214,17 @@ impl Dom for Syn {
     // -- embedding ----------------------------------------------------------
 
     #[inline]
-    fn embed_ty(_env: &Env, t: Rc<Type>) -> Rc<Type> {
+    fn embed_ty(_env: &Env<'v>, t: Rc<Type>) -> Rc<Type> {
         t
     }
 
     #[inline]
-    fn embed_ty_at(_rec: &(), _env: &Env, t: Rc<Type>) -> Rc<Type> {
+    fn embed_ty_at(_rec: &(), _env: &Env<'v>, t: Rc<Type>) -> Rc<Type> {
         t
     }
 
     #[inline]
-    fn embed_tm_at(_rec: &(), _env: &Env, t: Rc<Term>) -> Rc<Term> {
+    fn embed_tm_at(_rec: &(), _env: &Env<'v>, t: Rc<Term>) -> Rc<Term> {
         t
     }
 
@@ -1232,9 +1232,9 @@ impl Dom for Syn {
 
     #[inline]
     fn inst_ty(
-        _cv: &mut Conv<Self>,
-        home: &Env,
-        cur: &Env,
+        _cv: &mut Conv<'v, Self>,
+        home: &Env<'v>,
+        cur: &Env<'v>,
         m: &Rc<Type>,
         args: &[Rc<Term>],
     ) -> R<Rc<Type>> {
@@ -1247,9 +1247,9 @@ impl Dom for Syn {
 
     #[inline]
     fn inst_tm(
-        _cv: &mut Conv<Self>,
-        home: &Env,
-        cur: &Env,
+        _cv: &mut Conv<'v, Self>,
+        home: &Env<'v>,
+        cur: &Env<'v>,
         m: &Rc<Term>,
         args: &[Rc<Term>],
     ) -> R<Rc<Term>> {
@@ -1262,8 +1262,8 @@ impl Dom for Syn {
 
     #[inline]
     fn shift_global_ty(
-        _cv: &mut Conv<Self>,
-        _env: &Env,
+        _cv: &mut Conv<'v, Self>,
+        _env: &Env<'v>,
         t: &Rc<Type>,
         by: u32,
     ) -> R<Rc<Type>> {
@@ -1272,8 +1272,8 @@ impl Dom for Syn {
 
     #[inline]
     fn inst_univ_ty(
-        _cv: &mut Conv<Self>,
-        _env: &Env,
+        _cv: &mut Conv<'v, Self>,
+        _env: &Env<'v>,
         body: &Rc<Type>,
         phi: &[Level],
     ) -> R<Rc<Type>> {
@@ -1282,8 +1282,8 @@ impl Dom for Syn {
 
     #[inline]
     fn inst_ctx_ty(
-        _cv: &mut Conv<Self>,
-        _env: &Env,
+        _cv: &mut Conv<'v, Self>,
+        _env: &Env<'v>,
         body: &Rc<Type>,
         ctx: &LocalCtx,
     ) -> R<Rc<Type>> {
@@ -1294,8 +1294,8 @@ impl Dom for Syn {
 
     #[inline]
     fn inst_tyarg_ty(
-        _cv: &mut Conv<Self>,
-        _env: &Env,
+        _cv: &mut Conv<'v, Self>,
+        _env: &Env<'v>,
         body: &Rc<Type>,
         arg: &Rc<Type>,
     ) -> R<Rc<Type>> {
@@ -1312,7 +1312,7 @@ impl Dom for Syn {
     }
 
     #[inline]
-    fn subst_term(_env: &Env, d: &LocalSubst, k: usize) -> Rc<Term> {
+    fn subst_term(_env: &Env<'v>, d: &LocalSubst, k: usize) -> Rc<Term> {
         Rc::clone(&d.terms[k])
     }
 
@@ -1320,8 +1320,8 @@ impl Dom for Syn {
     /// there.
     #[inline]
     fn under_tele_ty(
-        _cv: &mut Conv<Self>,
-        _env: &Env,
+        _cv: &mut Conv<'v, Self>,
+        _env: &Env<'v>,
         t: &Rc<Type>,
         _tu: u32,
         _tg: u32,
@@ -1331,8 +1331,8 @@ impl Dom for Syn {
 
     #[inline]
     fn under_tele_tm(
-        _cv: &mut Conv<Self>,
-        _env: &Env,
+        _cv: &mut Conv<'v, Self>,
+        _env: &Env<'v>,
         t: &Rc<Term>,
         _tu: u32,
         _tg: u32,
@@ -1347,8 +1347,8 @@ impl Dom for Syn {
 
     #[inline]
     fn apply_subst_ty(
-        _cv: &mut Conv<Self>,
-        _env: &Env,
+        _cv: &mut Conv<'v, Self>,
+        _env: &Env<'v>,
         d: &LocalSubst,
         k: usize,
         t: &Rc<Type>,
@@ -1360,36 +1360,36 @@ impl Dom for Syn {
     // -- synthesized types --------------------------------------------------
 
     #[inline]
-    fn nat() -> Rc<Type> {
+    fn nat(_env: &Env<'v>) -> Rc<Type> {
         NAT.with(Rc::clone)
     }
 
     #[inline]
-    fn univ(_env: &Env, level: &Level) -> Rc<Type> {
+    fn univ(_env: &Env<'v>, level: &Level) -> Rc<Type> {
         Rc::new(Type::Ty(level.clone()))
     }
 
     #[inline]
-    fn empty(_env: &Env, level: &Level) -> Rc<Type> {
+    fn empty(_env: &Env<'v>, level: &Level) -> Rc<Type> {
         Rc::new(Type::Empty { level: level.clone() })
     }
 
     #[inline]
-    fn sempty(_env: &Env, level: &Level) -> Rc<Type> {
+    fn sempty(_env: &Env<'v>, level: &Level) -> Rc<Type> {
         Rc::new(Type::SEmpty { level: level.clone() })
     }
 
-    fn squash(_env: &Env, level: &Level, ty: &Rc<Type>) -> Rc<Type> {
+    fn squash(_env: &Env<'v>, level: &Level, ty: &Rc<Type>) -> Rc<Type> {
         Rc::new(Type::Squash { level: level.clone(), ty: Rc::clone(ty) })
     }
 
     #[inline]
-    fn code_ty(_env: &Env, ctx: &LocalCtx, level: &Level) -> Rc<Type> {
+    fn code_ty(_env: &Env<'v>, ctx: &LocalCtx, level: &Level) -> Rc<Type> {
         Rc::new(Type::CodeTy { ctx: ctx.clone(), level: level.clone() })
     }
 
     #[inline]
-    fn code_tm(_env: &Env, ctx: &LocalCtx, ty: &Rc<Type>, level: &Level) -> Rc<Type> {
+    fn code_tm(_env: &Env<'v>, ctx: &LocalCtx, ty: &Rc<Type>, level: &Level) -> Rc<Type> {
         Rc::new(Type::CodeTm {
             ctx: ctx.clone(),
             ty: Rc::clone(ty),
@@ -1398,14 +1398,14 @@ impl Dom for Syn {
     }
 
     #[inline]
-    fn el(_cv: &mut Conv<Self>, _env: &Env, level: &Level, tm: &Rc<Term>) -> R<Rc<Type>> {
+    fn el(_cv: &mut Conv<'v, Self>, _env: &Env<'v>, level: &Level, tm: &Rc<Term>) -> R<Rc<Type>> {
         Ok(Rc::new(Type::El { level: level.clone(), tm: Rc::clone(tm) }))
     }
 
     #[inline]
     fn pi(
-        _cv: &mut Conv<Self>,
-        _env: &Env,
+        _cv: &mut Conv<'v, Self>,
+        _env: &Env<'v>,
         dom_level: &Level,
         cod_level: &Level,
         dom: &Rc<Type>,
@@ -1421,8 +1421,8 @@ impl Dom for Syn {
 
     #[inline]
     fn sum(
-        _cv: &mut Conv<Self>,
-        _env: &Env,
+        _cv: &mut Conv<'v, Self>,
+        _env: &Env<'v>,
         lhs_level: &Level,
         rhs_level: &Level,
         lhs: &Rc<Type>,
@@ -1438,8 +1438,8 @@ impl Dom for Syn {
 
     #[inline]
     fn w(
-        _cv: &mut Conv<Self>,
-        _env: &Env,
+        _cv: &mut Conv<'v, Self>,
+        _env: &Env<'v>,
         shape_level: &Level,
         pos_level: &Level,
         shape: &Rc<Type>,
@@ -1455,8 +1455,8 @@ impl Dom for Syn {
 
     #[inline]
     fn wf(
-        _cv: &mut Conv<Self>,
-        _env: &Env,
+        _cv: &mut Conv<'v, Self>,
+        _env: &Env<'v>,
         level: &Level,
         shape: &Rc<Type>,
         arity: &Rc<Term>,
@@ -1470,8 +1470,8 @@ impl Dom for Syn {
 
     #[inline]
     fn vec(
-        _cv: &mut Conv<Self>,
-        _env: &Env,
+        _cv: &mut Conv<'v, Self>,
+        _env: &Env<'v>,
         level: &Level,
         elem: &Rc<Type>,
         len: &Rc<Term>,
@@ -1485,8 +1485,8 @@ impl Dom for Syn {
 
     #[inline]
     fn id(
-        _cv: &mut Conv<Self>,
-        _env: &Env,
+        _cv: &mut Conv<'v, Self>,
+        _env: &Env<'v>,
         level: &Level,
         ty: &Rc<Type>,
         lhs: &Rc<Term>,
@@ -1503,24 +1503,24 @@ impl Dom for Syn {
     // -- synthesized terms --------------------------------------------------
 
     #[inline]
-    fn zero() -> Rc<Term> {
+    fn zero(_env: &Env<'v>) -> Rc<Term> {
         ZERO.with(Rc::clone)
     }
 
     #[inline]
-    fn succ(_cv: &mut Conv<Self>, _env: &Env, t: &Rc<Term>) -> R<Rc<Term>> {
+    fn succ(_cv: &mut Conv<'v, Self>, _env: &Env<'v>, t: &Rc<Term>) -> R<Rc<Term>> {
         Ok(Rc::new(Term::Succ(Rc::clone(t))))
     }
 
     #[inline]
-    fn local(_env: &Env, x: LocalVar) -> Rc<Term> {
+    fn local(_env: &Env<'v>, x: LocalVar) -> Rc<Term> {
         Rc::new(Term::Var(x))
     }
 
     #[inline]
     fn refl(
-        _cv: &mut Conv<Self>,
-        _env: &Env,
+        _cv: &mut Conv<'v, Self>,
+        _env: &Env<'v>,
         level: &Level,
         ty: &Rc<Type>,
         tm: &Rc<Term>,
@@ -1535,8 +1535,8 @@ impl Dom for Syn {
     #[inline]
     #[allow(clippy::too_many_arguments)]
     fn inj(
-        _cv: &mut Conv<Self>,
-        _env: &Env,
+        _cv: &mut Conv<'v, Self>,
+        _env: &Env<'v>,
         left: bool,
         lhs_level: &Level,
         rhs_level: &Level,
@@ -1555,8 +1555,8 @@ impl Dom for Syn {
 
     #[inline]
     fn sup_at(
-        _cv: &mut Conv<Self>,
-        _env: &Env,
+        _cv: &mut Conv<'v, Self>,
+        _env: &Env<'v>,
         w: &Rc<Type>,
         by: u32,
         label: &Rc<Term>,
@@ -1592,8 +1592,8 @@ impl Dom for Syn {
 
     #[inline]
     fn app(
-        _cv: &mut Conv<Self>,
-        _env: &Env,
+        _cv: &mut Conv<'v, Self>,
+        _env: &Env<'v>,
         dom_level: &Level,
         cod_level: &Level,
         dom: &Rc<Type>,
@@ -1613,8 +1613,8 @@ impl Dom for Syn {
 
     #[inline]
     fn proj(
-        _cv: &mut Conv<Self>,
-        _env: &Env,
+        _cv: &mut Conv<'v, Self>,
+        _env: &Env<'v>,
         first: bool,
         fst_level: &Level,
         snd_level: &Level,
@@ -1626,19 +1626,19 @@ impl Dom for Syn {
     }
 
     #[inline]
-    fn box_ty(_env: &Env, code: Rc<Type>) -> Rc<Term> {
+    fn box_ty(_env: &Env<'v>, code: Rc<Type>) -> Rc<Term> {
         Rc::new(Term::BoxTy(code))
     }
 
     #[inline]
-    fn box_tm(_env: &Env, code: Rc<Term>) -> Rc<Term> {
+    fn box_tm(_env: &Env<'v>, code: Rc<Term>) -> Rc<Term> {
         Rc::new(Term::BoxTm(code))
     }
 
     #[inline]
     fn box_ty_payload(
-        _cv: &mut Conv<Self>,
-        _env: &Env,
+        _cv: &mut Conv<'v, Self>,
+        _env: &Env<'v>,
         t: &Rc<Term>,
     ) -> R<Option<Rc<Type>>> {
         Ok(match &**t {
@@ -1649,8 +1649,8 @@ impl Dom for Syn {
 
     #[inline]
     fn box_tm_payload(
-        _cv: &mut Conv<Self>,
-        _env: &Env,
+        _cv: &mut Conv<'v, Self>,
+        _env: &Env<'v>,
         t: &Rc<Term>,
     ) -> R<Option<Rc<Term>>> {
         Ok(match &**t {
@@ -1663,9 +1663,9 @@ impl Dom for Syn {
 
     #[inline]
     fn eta_app(
-        _cv: &mut Conv<Self>,
-        outer: &Env,
-        _inner: &Env,
+        _cv: &mut Conv<'v, Self>,
+        outer: &Env<'v>,
+        _inner: &Env<'v>,
         a: &Rc<Term>,
         b: &Rc<Term>,
         dom_level: &Level,
@@ -1695,9 +1695,9 @@ impl Dom for Syn {
 
     #[inline]
     fn eta_uapp(
-        _cv: &mut Conv<Self>,
-        _outer: &Env,
-        _inner: &Env,
+        _cv: &mut Conv<'v, Self>,
+        _outer: &Env<'v>,
+        _inner: &Env<'v>,
         a: &Rc<Term>,
         b: &Rc<Term>,
         num_vars: u32,
@@ -1714,9 +1714,9 @@ impl Dom for Syn {
 
     #[inline]
     fn eta_ctxapp(
-        _cv: &mut Conv<Self>,
-        _outer: &Env,
-        _inner: &Env,
+        _cv: &mut Conv<'v, Self>,
+        _outer: &Env<'v>,
+        _inner: &Env<'v>,
         a: &Rc<Term>,
         b: &Rc<Term>,
     ) -> R<(Rc<Term>, Rc<Term>)> {
@@ -1728,9 +1728,9 @@ impl Dom for Syn {
 
     #[inline]
     fn eta_tyapp(
-        _cv: &mut Conv<Self>,
-        _outer: &Env,
-        _inner: &Env,
+        _cv: &mut Conv<'v, Self>,
+        _outer: &Env<'v>,
+        _inner: &Env<'v>,
         a: &Rc<Term>,
         b: &Rc<Term>,
         ctx: &LocalCtx,
@@ -1744,8 +1744,8 @@ impl Dom for Syn {
 
     #[inline]
     fn eta_proj(
-        _cv: &mut Conv<Self>,
-        _env: &Env,
+        _cv: &mut Conv<'v, Self>,
+        _env: &Env<'v>,
         first: bool,
         a: &Rc<Term>,
         b: &Rc<Term>,
@@ -1764,8 +1764,8 @@ impl Dom for Syn {
 
     #[inline]
     fn wf_step_telescope(
-        _cv: &mut Conv<Self>,
-        env: &Env,
+        _cv: &mut Conv<'v, Self>,
+        env: &Env<'v>,
         level: &Level,
         motive_level: &Level,
         shape: &Rc<Type>,
@@ -1779,8 +1779,8 @@ impl Dom for Syn {
 
     #[inline]
     fn inst_ty_motive(
-        _cv: &mut Conv<Self>,
-        env: &Env,
+        _cv: &mut Conv<'v, Self>,
+        env: &Env<'v>,
         _rec: &(),
         motive: &Rc<Type>,
         code_level: &Level,
@@ -1799,8 +1799,8 @@ impl Dom for Syn {
 
     #[inline]
     fn inst_tm_motive(
-        _cv: &mut Conv<Self>,
-        env: &Env,
+        _cv: &mut Conv<'v, Self>,
+        env: &Env<'v>,
         _rec: &(),
         motive: &Rc<Type>,
         code_level: &Level,
@@ -1834,9 +1834,9 @@ thread_local! {
 /// step. A form that does not step is returned by handle: the rewriter's
 /// normal forms are shared, not copied, which matters because most
 /// sub-structures conversion reaches are already normal.
-fn step_ty(
-    cv: &mut Conv<Syn>,
-    env: &Env,
+fn step_ty<'v>(
+    cv: &mut Conv<'v, Syn>,
+    env: &Env<'v>,
     t: &Type,
     step: impl Fn(&Type, &LocalCtx) -> Option<Type>,
 ) -> R<Type> {
@@ -1848,9 +1848,9 @@ fn step_ty(
     Ok(cur)
 }
 
-fn step_tm(
-    cv: &mut Conv<Syn>,
-    env: &Env,
+fn step_tm<'v>(
+    cv: &mut Conv<'v, Syn>,
+    env: &Env<'v>,
     t: &Rc<Term>,
     step: impl Fn(&Term, &LocalCtx) -> Option<Term>,
 ) -> R<Rc<Term>> {
@@ -1867,7 +1867,7 @@ fn step_tm(
 
 /// `fst p` / `snd p` at the given `Σ` annotations (shared by [`Dom::proj`]
 /// and [`Dom::eta_proj`]).
-fn proj_syn(
+fn proj_syn<'v>(
     first: bool,
     fst_level: &Level,
     snd_level: &Level,

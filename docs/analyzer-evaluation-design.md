@@ -104,18 +104,18 @@ new:
    environment; forcing it is what makes it a type, and the reader never
    forces one. The `Wf` shape and arity slots that dominate the terms are
    carried as pointers from beginning to end.
-3. **A closure memoizes its force** (`TmClo`'s memo, written on success
-   only). The reader reads a field once to classify it and again to descend
-   it; the second read is a pointer dereference. This is the sharing the
-   issue asked for — obtained for free rather than as a table, and it is the
-   *smaller* half of the win.
+3. **The query shares recent forces** through a bounded cache, written on
+   success only. Consumers see the same cached value; FIFO eviction reclaims
+   old payloads even though the query arena retains their closure skeletons.
+   This is the sharing the issue asked for without whole-query value
+   retention, and it is the *smaller* half of the win.
 
 `global_app1` is the one piece of genuinely new code, and it exists to keep
 the `Ir` in the value domain end to end: the transcriber's answer must be fed
 to `cert_body`, and building an application *term* around it would mean
 writing a value back into syntax. Instead the application is a pending
 `Elim::App` over the `Ir`'s own closure — the glued-neutral shape of
-`docs/nbe-conversion-design.md` §5. The fold therefore inherits every memo the
+`docs/nbe-conversion-design.md` §5. The fold therefore inherits the cache the
 transcription readback wrote.
 
 **This preserves that document's §7 invariant**, and preserving it is why the
@@ -201,10 +201,10 @@ completion inside `scripts/test`'s own `ulimit -v 4194304`.
 - **Moving `typing.rs` to values as well.** Out of scope and unmotivated: the
   nbe design's §7 keeps the rewriter for typing deliberately, and nothing here
   measures typing. This round is one consumer, at one seam.
-- **Any kernel change.** None was needed. The value domain, the evaluator, the
-  glued neutrals and the body cache were all shipped by the nbe round and are
-  all `pub`. The kernel stays at zero dependencies and this round adds no
-  rule, so `crates/kernel/DESIGN.md` is untouched.
+- **Any kernel change.** None was needed in this round. The value domain, the
+  evaluator, the glued neutrals and the body cache were all shipped by the nbe
+  round and are all `pub`. At the time the kernel had zero dependencies and
+  this round added no rule, so `crates/kernel/DESIGN.md` was untouched.
 
 ## 5. Acceptance
 

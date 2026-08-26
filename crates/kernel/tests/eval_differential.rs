@@ -64,6 +64,7 @@ use heather_kernel::term::{
 };
 use heather_kernel::value::{
     Elim, Env, Head, TmClo, TyClo, VNeTy, VNeutral, VSubst, VTail, VTy, Val,
+    ValueArena,
 };
 
 /// Cases per seed stream. Five streams over `wt.rs`'s generator; the schedule
@@ -85,9 +86,10 @@ const DEPTH: u32 = 5;
 // The agreement relation
 // ---------------------------------------------------------------------------
 
-struct Agree<'a> {
-    ev: Eval<'a>,
+struct Agree<'a, 'v> {
+    ev: Eval<'a, 'v>,
     defs: Defs<'a>,
+    arena: &'v ValueArena<'v>,
 }
 
 type A = Result<(), String>;
@@ -105,21 +107,26 @@ fn bad(what: &str) -> A {
 /// The entry types are fillers: weak-head reduction reads only Γ's *shape*
 /// (length and base) — `reduce.rs`'s module doc says so, and `LocalSubst::id`
 /// is the only consumer.
-fn fresh(gamma: &LocalCtx, k: u32) -> (LocalCtx, Vec<Rc<TmClo>>) {
+fn fresh<'v>(arena: &'v ValueArena<'v>, gamma: &LocalCtx, k: u32) -> (LocalCtx, Vec<&'v TmClo<'v>>) {
     let n = gamma.entries.len() as u32;
     let mut g = gamma.clone();
     let mut args = Vec::with_capacity(k as usize);
     for j in 0..k {
         g.entries.push(CtxEntry { ty: Rc::new(Type::Nat), level: Level::Zero });
-        args.push(Rc::new(TmClo::val(Rc::new(Val::var(n + j)))));
+        args.push(arena.tm(TmClo::val(Rc::new(Val::var(n + j)))));
     }
     (g, args)
 }
 
-impl<'a> Agree<'a> {
-    fn new(psi: &'a GlobalCtx, transparent: bool, gamma: &LocalCtx) -> Agree<'a> {
+impl<'a, 'v> Agree<'a, 'v> {
+    fn new(
+        psi: &'a GlobalCtx,
+        transparent: bool,
+        gamma: &LocalCtx,
+        arena: &'v ValueArena<'v>,
+    ) -> Agree<'a, 'v> {
         let defs = if transparent { Defs::transparent(psi) } else { Defs::opaque() };
-        Agree { ev: Eval::new(FUEL, defs, gamma.base), defs }
+        Agree { ev: Eval::new(FUEL, defs, gamma.base, arena), defs, arena }
     }
 
     fn lev(&self, a: &Level, b: &Level, what: &'static str) -> A {
@@ -129,7 +136,7 @@ impl<'a> Agree<'a> {
     // -- forcing on both sides ---------------------------------------------
 
     /// A 0-binder term sub-structure against its syntax.
-    fn lazy_tm(&mut self, c: &Rc<TmClo>, t: &Term, gamma: &LocalCtx, depth: u32) -> A {
+    fn lazy_tm(&mut self, c: &'v TmClo<'v>, t: &Term, gamma: &LocalCtx, depth: u32) -> A {
         if depth == 0 {
             return ok();
         }
@@ -142,7 +149,7 @@ impl<'a> Agree<'a> {
     /// body, in Γ extended by `k`.
     fn under_tm(
         &mut self,
-        c: &Rc<TmClo>,
+        c: &'v TmClo<'v>,
         t: &Term,
         gamma: &LocalCtx,
         k: u32,
@@ -151,13 +158,13 @@ impl<'a> Agree<'a> {
         if depth == 0 {
             return ok();
         }
-        let (g, args) = fresh(gamma, k);
+        let (g, args) = fresh(self.arena, gamma, k);
         let v = self.ev.apply(c, &args).map_err(|_| "evaluator out of fuel".to_string())?;
         let v = self.ev.delta_whnf(v).map_err(|_| "evaluator out of fuel".to_string())?;
         self.tm(&v, t, &g, depth)
     }
 
-    fn lazy_ty(&mut self, c: &Rc<TyClo>, t: &Type, gamma: &LocalCtx, depth: u32) -> A {
+    fn lazy_ty(&mut self, c: &'v TyClo<'v>, t: &Type, gamma: &LocalCtx, depth: u32) -> A {
         if depth == 0 {
             return ok();
         }
@@ -168,7 +175,7 @@ impl<'a> Agree<'a> {
 
     fn under_ty(
         &mut self,
-        c: &Rc<TyClo>,
+        c: &'v TyClo<'v>,
         t: &Type,
         gamma: &LocalCtx,
         k: u32,
@@ -177,7 +184,7 @@ impl<'a> Agree<'a> {
         if depth == 0 {
             return ok();
         }
-        let (g, args) = fresh(gamma, k);
+        let (g, args) = fresh(self.arena, gamma, k);
         let v = self.ev.apply_ty(c, &args).map_err(|_| "evaluator out of fuel".to_string())?;
         let v = self.ev.delta_whnf_ty(v).map_err(|_| "evaluator out of fuel".to_string())?;
         self.ty(&v, t, &g, depth)
@@ -186,7 +193,7 @@ impl<'a> Agree<'a> {
     // -- types --------------------------------------------------------------
 
     /// `v ⊩ whnf(t)` for types.
-    pub fn ty(&mut self, v: &Rc<VTy>, t: &Type, gamma: &LocalCtx, depth: u32) -> A {
+    pub fn ty(&mut self, v: &Rc<VTy<'v>>, t: &Type, gamma: &LocalCtx, depth: u32) -> A {
         if depth == 0 {
             return ok();
         }
@@ -348,7 +355,7 @@ impl<'a> Agree<'a> {
     /// Enter a global binder on both sides with the same payload.
     fn instantiated_ty(
         &mut self,
-        body: &Rc<TyClo>,
+        body: &'v TyClo<'v>,
         syn: &Type,
         payload: GlobalEntry,
         gamma: &LocalCtx,
@@ -368,7 +375,7 @@ impl<'a> Agree<'a> {
     }
 
     /// `δ ⊩ δ'` — pairwise on the step terms over identical tails.
-    fn subst(&mut self, a: &VSubst, b: &LocalSubst, gamma: &LocalCtx, depth: u32) -> A {
+    fn subst(&mut self, a: &VSubst<'v>, b: &LocalSubst, gamma: &LocalCtx, depth: u32) -> A {
         // The value's tail drops δ̂ and normalizes `·`'s base, because a
         // machine that substitutes nothing cannot renormalize them; see
         // [`VTail`]. Everything the tail still distinguishes is compared.
@@ -391,7 +398,7 @@ impl<'a> Agree<'a> {
     // -- terms --------------------------------------------------------------
 
     /// `v ⊩ whnf(t)` for terms.
-    pub fn tm(&mut self, v: &Rc<Val>, t: &Term, gamma: &LocalCtx, depth: u32) -> A {
+    pub fn tm(&mut self, v: &Rc<Val<'v>>, t: &Term, gamma: &LocalCtx, depth: u32) -> A {
         if depth == 0 {
             return ok();
         }
@@ -626,7 +633,7 @@ impl<'a> Agree<'a> {
 
     /// A neutral value against a neutral term: peel the spine from the
     /// outside, matching the syntax's outermost eliminator each time.
-    fn ne(&mut self, n: &Rc<VNeutral>, w: &Term, gamma: &LocalCtx, depth: u32) -> A {
+    fn ne(&mut self, n: &Rc<VNeutral<'v>>, w: &Term, gamma: &LocalCtx, depth: u32) -> A {
         if depth == 0 {
             return ok();
         }
@@ -986,7 +993,7 @@ impl<'a> Agree<'a> {
     // compares what the branches *compute*.
 
     /// The bottom of a spine: the head itself.
-    fn head(&mut self, h: &Head, w: &Term, gamma: &LocalCtx, depth: u32) -> A {
+    fn head(&mut self, h: &Head<'v>, w: &Term, gamma: &LocalCtx, depth: u32) -> A {
         match (h, w) {
             // The two-part variable identity (design §3.2): a concrete entry
             // is a de Bruijn *level* from Γ's outer end, anything past the
@@ -1050,10 +1057,11 @@ fn check(
     what: &str,
 ) {
     for transparent in [true, false] {
-        let mut a = Agree::new(psi, transparent, gamma);
+        let arena = ValueArena::new();
+        let mut a = Agree::new(psi, transparent, gamma, &arena);
         let v = a
             .ev
-            .eval_tm(t, &Env::identity(gamma.entries.len() as u32))
+            .eval_tm(t, &Env::identity(&arena, gamma.entries.len() as u32))
             .unwrap_or_else(|_| panic!("seed {seed}: {what}: evaluator exhausted fuel"));
         let v = a
             .ev
@@ -1072,10 +1080,11 @@ fn check(
 /// [`check`] for types.
 fn check_ty(seed: u64, psi: &GlobalCtx, gamma: &LocalCtx, t: &Rc<Type>, what: &str) {
     for transparent in [true, false] {
-        let mut a = Agree::new(psi, transparent, gamma);
+        let arena = ValueArena::new();
+        let mut a = Agree::new(psi, transparent, gamma, &arena);
         let v = a
             .ev
-            .eval_ty(t, &Env::identity(gamma.entries.len() as u32))
+            .eval_ty(t, &Env::identity(&arena, gamma.entries.len() as u32))
             .unwrap_or_else(|_| panic!("seed {seed}: {what}: evaluator exhausted fuel"));
         let v = a
             .ev
@@ -1344,19 +1353,20 @@ fn low_fuel_never_produces_a_wrong_answer() {
         let mut r = Rng::new(seed ^ 0x8ebc6af09c88c6e3);
         let env = gen_wt_env(&mut r);
         let (t, _, _) = gen_wt_term(&env, &mut r, BUDGET);
-        let root = Env::identity(env.gamma.entries.len() as u32);
+        let arena = ValueArena::new();
+        let root = Env::identity(&arena, env.gamma.entries.len() as u32);
         let mut succeeded_somewhere = false;
         for budget in [0u64, 1, 2, 4, 8, 32, 256] {
-            let mut a = Agree::new(&env.psi, true, &env.gamma);
-            a.ev = Eval::new(budget, Defs::transparent(&env.psi), env.gamma.base);
+            let mut a = Agree::new(&env.psi, true, &env.gamma, &arena);
+            a.ev = Eval::new(budget, Defs::transparent(&env.psi), env.gamma.base, &arena);
             let Ok(v) = a.ev.eval_tm(&t, &root) else { continue };
             let Ok(v) = a.ev.delta_whnf(v) else { continue };
             succeeded_somewhere = true;
             // The agreement check itself needs a real budget; give it one.
             // Only the *evaluation under the small budget* is under test.
             let v2 = v;
-            let mut b = Agree::new(&env.psi, true, &env.gamma);
-            b.ev = Eval::new(FUEL, Defs::transparent(&env.psi), env.gamma.base);
+            let mut b = Agree::new(&env.psi, true, &env.gamma, &arena);
+            b.ev = Eval::new(FUEL, Defs::transparent(&env.psi), env.gamma.base, &arena);
             if let Err(why) = b.tm(&v2, &t, &env.gamma, 2) {
                 panic!("seed {seed}: budget {budget} produced a wrong value: {why}");
             }
@@ -1388,15 +1398,18 @@ fn a_failed_thunk_is_not_poisoned() {
     let big = nat_drain(12);
     let gamma = LocalCtx::nil();
     let psi = GlobalCtx::default();
+    let arena = ValueArena::new();
 
     // (a) an ordinary suspension.
-    let clo = Rc::new(TmClo::syn(Env::empty(), Rc::clone(&big)));
-    let mut small = Eval::new(3, Defs::opaque(), gamma.base);
-    assert!(small.force(&clo).is_err(), "the small budget must not suffice");
-    assert!(clo.memo().is_none(), "a failed force must memoize nothing");
-    let mut large = Eval::new(FUEL, Defs::opaque(), gamma.base);
-    let v = large.force(&clo).expect("re-forcing under a larger budget must succeed");
+    let clo = arena.tm(TmClo::syn(Env::empty(&arena), Rc::clone(&big)));
+    let mut small = Eval::new(3, Defs::opaque(), gamma.base, &arena);
+    assert!(small.force(clo).is_err(), "the small budget must not suffice");
+    assert!(arena.memo_tm(clo).is_none(), "a failed force must memoize nothing");
+    let mut large = Eval::new(FUEL, Defs::opaque(), gamma.base, &arena);
+    let v = large.force(clo).expect("re-forcing under a larger budget must succeed");
     assert!(matches!(&*v, Val::Zero), "the drained recursion must reach ze");
+    assert!(arena.memo_tm(clo).is_some(), "a successful result is cached");
+    drop(v);
 
     // (b) a glued neutral's unfolding — the δ path, where the memo lives on
     //     the definition's body rather than on a sub-term.
@@ -1408,19 +1421,19 @@ fn a_failed_thunk_is_not_poisoned() {
             terms: vec![Rc::new(Term::Zero)],
         },
     });
-    let mut small = Eval::new(4, Defs::transparent(&dpsi), gamma.base);
+    let mut small = Eval::new(4, Defs::transparent(&dpsi), gamma.base, &arena);
     let glued = small
-        .eval_tm(&u, &Env::empty())
+        .eval_tm(&u, &Env::empty(&arena))
         .expect("building the glued neutral is one step");
     let unfold = match &*glued {
         Val::Neutral(n) => n.unfold.clone().expect("a definition is glued"),
         _ => panic!("u^δ must evaluate to a neutral"),
     };
-    assert!(small.force(&unfold).is_err(), "the small budget must not suffice");
-    assert!(unfold.memo().is_none(), "a failed δ-unfold must memoize nothing");
-    let mut large = Eval::new(FUEL, Defs::transparent(&dpsi), gamma.base);
+    assert!(small.force(unfold).is_err(), "the small budget must not suffice");
+    assert!(arena.memo_tm(unfold).is_none(), "a failed δ-unfold must memoize nothing");
+    let mut large = Eval::new(FUEL, Defs::transparent(&dpsi), gamma.base, &arena);
     assert!(
-        large.force(&unfold).is_ok(),
+        large.force(unfold).is_ok(),
         "re-forcing the same unfolding under a larger budget must succeed"
     );
     let _ = psi;
@@ -1432,8 +1445,9 @@ fn a_failed_thunk_is_not_poisoned() {
 fn zero_fuel_reduces_nothing() {
     let gamma = LocalCtx::nil();
     let t = nat_rec(numeral(1));
-    let mut ev = Eval::new(0, Defs::opaque(), gamma.base);
-    assert!(ev.eval_tm(&t, &Env::empty()).is_err(), "a redex must cost fuel");
+    let arena = ValueArena::new();
+    let mut ev = Eval::new(0, Defs::opaque(), gamma.base, &arena);
+    assert!(ev.eval_tm(&t, &Env::empty(&arena)).is_err(), "a redex must cost fuel");
     assert!(
         whnf_term_delta(&t, &gamma, Defs::opaque(), 0).is_err(),
         "the rewriter agrees"

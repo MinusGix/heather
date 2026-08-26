@@ -25,11 +25,20 @@ fn elaborated() -> Elaborator {
         ("logic", LOGIC), ("bool", BOOL), ("nat", NAT), ("option", OPTION),
         ("pair", PAIR), ("list", LIST), ("algebra", ALGEBRA), ("int", INT),
         ("bitvec", BITVEC), ("relation", RELATION), ("location", LOCATION),
-        ("x86_64", X86_64),
     ] {
         if let Err(err) = e.elab_module_source(name, src) {
             panic!("{name} did not check: {}", err.render(src));
         }
+    }
+    let report_metrics = std::env::var_os("HEATHER_VALUE_METRICS").is_some();
+    if report_metrics {
+        e.enable_value_metrics();
+    }
+    if let Err(err) = e.elab_module_source("x86_64", X86_64) {
+        panic!("x86_64 did not check: {}", err.render(X86_64));
+    }
+    if report_metrics {
+        eprintln!("x86_64 module value metrics: {:?}", e.value_metrics().unwrap());
     }
     e
 }

@@ -102,3 +102,25 @@ and should re-read this at the same time — conversion no longer calls
   k_bind_mono reproducer's remaining 0.62 s of conv), whose per-node price IS
   this constant. The "worth trying" list above is unchanged and is the lever
   if that residual ever triggers a round.
+- 2026-08-26: ITEM 1 (arena) landed for a stronger reason than allocator
+  throughput: recursive destruction of a successfully forced machine-width
+  graph overflowed the native stack, and unbounded/weak per-node memos then
+  exceeded the 4 GiB rail. Query-local typed arenas plus bounded 16K FIFO
+  caches fix both failure modes, but the benchmark exposes a new constant:
+  the bounded cache is a pointer-keyed `HashMap`, so every force hashes where
+  the old thunk read its own memo cell. Against the pre-arena recorded
+  baseline, no slope moves, but no-sharing value families are about 1.3--1.5x
+  slower and `nat/check-numeral` is about 2.2--2.5x slower because it opens
+  many tiny conversion queries. This was reproduced after evaluator metrics
+  were compile-time-gated completely out of the ordinary build, so counters
+  are not the cause. A direct cache-slot index (`Cell<Option<…>>`) on each
+  arena closure was implemented as the first probe and reverted: it removed
+  hashing and let eviction clear/reuse slots safely, but enlarging every
+  closure made `nat/check-numeral` worse (about 2.4x became 2.4--3.9x, with
+  the smallest queries hurt most). The next representation must avoid a word
+  on every closure as well as a hash on every force. A small-query no-cache
+  policy is a possible probe, not a design: the metrics show workloads differ
+  sharply, and silently discarding sharing based on query size can merely move
+  the cliff. The arena solves a correctness failure and remains landed; the
+  baseline is re-recorded as required, with the regression and mechanism
+  explicitly owned here rather than silently normalized away.
