@@ -81,3 +81,17 @@ machine-specific `PUSH` theorem can reuse generic LIFO and capacity results.
 - 2026-08-25: UNBLOCKED: [[sprop-squash]] landed. The optional derived
   combinator polish is owned by [[squash-library-api]] and does not prevent
   implementing the container with `squash_ind` directly.
+- 2026-08-25: The BOUNDED-CONTAINER ROUND is complete in
+  `lib/std/bounded_list.hthr`: `BoundedList<A>` stores capacity, `List<A>`
+  contents, and a squashed fit proof; `Outcome` distinguishes success,
+  underflow, and overflow while carrying the unchanged state on rejection;
+  empty/size/capacity/peek/push/pop, stack operations, and a sequential runner
+  are accompanied by LIFO, size/capacity, rejection, and sequence laws. The
+  dedicated test keeps the element type and capacity neutral, pins all three
+  closed outcomes, and rejects an invalid value. Two honest proof-surface
+  findings: dependent record unpacking plus an explicit match convoy is
+  required for `pop` to refine the fit field with the contents, and the runner
+  must curry its changing state because recursive-call checking does not yet
+  generalize non-decreasing parameters. The issue remains open for its second
+  agreed round: the pointer-plus-addressed-storage representation interface
+  and toy push/pop refinement.

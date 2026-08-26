@@ -1,6 +1,6 @@
 ---
 title: Add the ordinary Squash combinators and exercise them in BoundedList
-status: open
+status: closed
 labels: [stdlib,logic,proofs,testing]
 created: 2026-08-25
 updated: 2026-08-25
@@ -39,3 +39,10 @@ dependent motive earns the extra syntax.
 
 - 2026-08-25: Filed from the implementation review. The primitive is usable,
   but its constant-motive special cases should be ordinary library names.
+- 2026-08-25: LANDED and CLOSED. `std/logic` now derives `squash_map`,
+  `squash_bind`, and `squash_join` from the restricted eliminator and states
+  their introduction, functor, and monad-shaped laws. `BoundedList` uses
+  `squash_map` to weaken the fit proof when popping a head. Surface friction
+  is narrow and recorded in the acceptance test: nested `squash_bind` calls
+  can require explicit type arguments because the elaborator defers a
+  higher-order argument before its result type determines the implicit.

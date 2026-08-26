@@ -219,6 +219,60 @@ instance<P: Decide> Decide<¬P> {
     },
 }
 
+// ---------------------------------------------------------------------------
+// Propositional truncation. The primitive eliminator is deliberately
+// dependent and exposes its squash-headed result restriction. These are the
+// ordinary constant-motive views clients should use when dependency is not
+// doing real work.
+
+fn squash_map<A, B>(q: ∥A∥, f: A → B) → ∥B∥ {
+    squash_ind(q, λ z => B, λ x => squash(f(x)))
+}
+
+fn squash_bind<A, B>(q: ∥A∥, f: A → ∥B∥) → ∥B∥ {
+    squash_ind(q, λ z => B, λ x => f(x))
+}
+
+fn squash_join<A>(q: ∥∥A∥∥) → ∥A∥ {
+    squash_bind<∥A∥, A>(q, λ x => x)
+}
+
+// Introduction laws pin the computational behavior. The remaining laws are
+// judgmental because every term at a fixed squash type is definitionally
+// irrelevant after both sides normalize.
+
+theorem squash_map_intro<A, B>(a: A, f: A → B):
+    squash_map<A, B>(squash(a), f) = squash(f(a))
+{}
+
+theorem squash_bind_intro<A, B>(a: A, f: A → ∥B∥):
+    squash_bind<A, B>(squash(a), f) = f(a)
+{}
+
+theorem squash_join_intro<A>(q: ∥A∥): squash_join<A>(squash(q)) = q {}
+
+theorem squash_map_id<A>(q: ∥A∥):
+    squash_map<A, A>(q, λ (x: A) => x) = q
+{}
+
+theorem squash_map_comp<A, B, C>(q: ∥A∥, f: A → B, g: B → C):
+    squash_map<B, C>(squash_map<A, B>(q, f), g) =
+        squash_map<A, C>(q, λ (x: A) => g(f(x)))
+{}
+
+theorem squash_bind_left_id<A, B>(a: A, f: A → ∥B∥):
+    squash_bind<A, B>(squash(a), f) = f(a)
+{}
+
+theorem squash_bind_right_id<A>(q: ∥A∥):
+    squash_bind<A, A>(q, λ x => squash(x)) = q
+{}
+
+theorem squash_bind_assoc<A, B, C>(q: ∥A∥, f: A → ∥B∥, g: B → ∥C∥):
+    squash_bind<B, C>(squash_bind<A, B>(q, f), g) =
+        squash_bind<A, C>(q, λ (x: A) => squash_bind<B, C>(f(x), g))
+{}
+
 // The consumers. `decide` is the projection a caller reaches for when it wants
 // the disjunction and will `match` on it itself; `decide_pick` is the same
 // branch made a value, and is `or_pick` with the dictionary found rather than

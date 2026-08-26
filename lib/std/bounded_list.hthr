@@ -1,0 +1,256 @@
+// Capacity-bounded lists and their stack reading. Ordinary `List` remains the
+// proof world; this record adds a finite capacity and seals the fit witness
+// behind propositional truncation so rebuilding the witness cannot disturb
+// equality of container values.
+
+import logic;
+import nat;
+import list;
+import pair;
+
+record BoundedList<A> {
+    capacity: Nat,
+    contents: List<A>,
+    fit: ∥list::len(contents) <= capacity∥,
+}
+
+// Failures carry the unchanged input state. The success and failure payloads
+// differ because `pop` returns both the top element and its replacement state,
+// while either rejection still returns the original bounded list.
+inductive Outcome<S, E> {
+    Success(value: S),
+    Underflow(unchanged: E),
+    Overflow(unchanged: E),
+}
+
+fn empty<A>(capacity: Nat) → BoundedList<A> {
+    BoundedList<A>(capacity := capacity, contents := Nil<A>, fit := squash(zero_le(capacity)))
+}
+
+fn len<A>(xs: BoundedList<A>) → Nat { list::len(xs.contents) }
+
+fn capacity<A>(xs: BoundedList<A>) → Nat { xs.capacity }
+
+fn peek<A>(xs: BoundedList<A>) → Outcome<A, BoundedList<A>> {
+    match xs.contents {
+        Nil => Underflow(xs),
+        Cons(head, _) => Success(head),
+    }
+}
+
+fn push<A>(value: A, xs: BoundedList<A>) →
+    Outcome<BoundedList<A>, BoundedList<A>>
+{
+    match le_dec(Succ(list::len(xs.contents)), xs.capacity) {
+        Inl(fit) => Success(BoundedList<A>(
+            capacity := xs.capacity,
+            contents := Cons(value, xs.contents),
+            fit := squash(fit),
+        )),
+        Inr(_) => Overflow(xs),
+    }
+}
+
+// Removing a head weakens the stored bound. `squash_map` performs that
+// weakening without selecting or exposing the representative fit proof.
+fn bounded_tail<A>(limit: Nat, tail: List<A>,
+    fit: ∥Succ(list::len(tail)) <= limit∥) → BoundedList<A>
+{
+    BoundedList<A>(
+        capacity := limit,
+        contents := tail,
+        fit := squash_map(fit,
+            λ (h: Succ(list::len(tail)) <= limit) =>
+                le_of_lt(list::len(tail), limit, h)),
+    )
+}
+
+fn pop<A>(xs: BoundedList<A>) →
+    Outcome<Pair<A, BoundedList<A>>, BoundedList<A>>
+{
+    let { capacity := limit, contents := contents, fit := fit } = xs;
+    (match contents as λ ys => ∥list::len(ys) <= limit∥ →
+        Outcome<Pair<A, BoundedList<A>>, BoundedList<A>> {
+        Nil => λ fit => Underflow(BoundedList<A>(
+            capacity := limit,
+            contents := Nil<A>,
+            fit := fit,
+        )),
+        Cons(head, tail) => λ fit => Success(Pair(head, bounded_tail(limit, tail, fit))),
+    })(fit)
+}
+
+// A small stack program. A pop's returned element is intentionally discarded
+// by the state-only runner; clients that need an output trace can layer one on
+// `pop` without changing the finite-state semantics.
+inductive StackOp<A> { Push(value: A), Pop }
+
+fn apply_op<A>(op: StackOp<A>, xs: BoundedList<A>) →
+    Outcome<BoundedList<A>, BoundedList<A>>
+{
+    match op {
+        Push(value) => push(value, xs),
+        Pop => match pop(xs) {
+            Success(result) => Success(result.snd),
+            Underflow(same) => Underflow(same),
+            Overflow(same) => Overflow(same),
+        },
+    }
+}
+
+fn run<A>(ops: List<StackOp<A>>) → BoundedList<A> →
+    Outcome<BoundedList<A>, BoundedList<A>>
+{
+    match ops {
+        Nil => λ xs => Success(xs),
+        Cons(op, rest) => λ xs =>
+            match apply_op(op, xs) {
+                Success(next) => run(rest, next),
+                Underflow(same) => Underflow(same),
+                Overflow(same) => Overflow(same),
+            },
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Container and single-step laws.
+
+theorem len_empty<A>(limit: Nat): len(empty<A>(limit)) = 0 {}
+
+theorem capacity_empty<A>(limit: Nat): capacity(empty<A>(limit)) = limit {}
+
+theorem peek_empty<A>(limit: Nat):
+    peek(empty<A>(limit)) = Underflow(empty<A>(limit))
+{}
+
+theorem pop_empty<A>(limit: Nat):
+    pop(empty<A>(limit)) = Underflow(empty<A>(limit))
+{}
+
+theorem peek_cons<A>(limit: Nat, head: A, tail: List<A>,
+    fit: ∥Succ(list::len(tail)) <= limit∥):
+    peek(BoundedList<A>(capacity := limit, contents := Cons(head, tail), fit := fit)) =
+        Success(head)
+{}
+
+theorem pop_cons<A>(limit: Nat, head: A, tail: List<A>,
+    fit: ∥Succ(list::len(tail)) <= limit∥):
+    pop(BoundedList<A>(capacity := limit, contents := Cons(head, tail), fit := fit)) =
+        Success(Pair(head, bounded_tail(limit, tail, fit)))
+{}
+
+theorem push_success<A>(value: A, xs: BoundedList<A>,
+    h: Succ(len(xs)) <= capacity(xs)):
+    push(value, xs) = Success(BoundedList<A>(
+        capacity := xs.capacity,
+        contents := Cons(value, xs.contents),
+        fit := squash(h),
+    ))
+{
+    match le_dec(Succ(list::len(xs.contents)), xs.capacity) {
+        Inl(_) => refl,
+        Inr(not_fit) => false_elim(not_fit(h)),
+    }
+}
+
+theorem push_overflow<A>(value: A, xs: BoundedList<A>,
+    h: ¬(Succ(len(xs)) <= capacity(xs))):
+    push(value, xs) = Overflow(xs)
+{
+    match le_dec(Succ(list::len(xs.contents)), xs.capacity) {
+        Inl(fit) => false_elim(h(fit)),
+        Inr(_) => refl,
+    }
+}
+
+theorem len_after_push<A>(value: A, xs: BoundedList<A>,
+    h: Succ(len(xs)) <= capacity(xs)):
+    len(BoundedList<A>(
+        capacity := capacity(xs),
+        contents := Cons(value, xs.contents),
+        fit := squash(h),
+    )) = Succ(len(xs))
+{}
+
+theorem capacity_after_push<A>(value: A, xs: BoundedList<A>,
+    h: Succ(len(xs)) <= capacity(xs)):
+    capacity(BoundedList<A>(
+        capacity := capacity(xs),
+        contents := Cons(value, xs.contents),
+        fit := squash(h),
+    )) = capacity(xs)
+{}
+
+theorem len_after_pop<A>(limit: Nat, tail: List<A>,
+    fit: ∥Succ(list::len(tail)) <= limit∥):
+    len(bounded_tail(limit, tail, fit)) = list::len(tail)
+{}
+
+theorem capacity_after_pop<A>(limit: Nat, tail: List<A>,
+    fit: ∥Succ(list::len(tail)) <= limit∥):
+    capacity(bounded_tail(limit, tail, fit)) = limit
+{}
+
+// LIFO at an open element type and neutral capacity. The fit proof chosen by
+// `push` and the weakened proof reconstructed by `pop` disappear by Squash
+// irrelevance, leaving the original record value.
+theorem pop_push<A>(value: A, xs: BoundedList<A>,
+    h: Succ(len(xs)) <= capacity(xs)):
+    push(value, xs) = Success(BoundedList<A>(
+        capacity := xs.capacity,
+        contents := Cons(value, xs.contents),
+        fit := squash(h),
+    )) ∧
+    pop(BoundedList<A>(
+        capacity := xs.capacity,
+        contents := Cons(value, xs.contents),
+        fit := squash(h),
+    )) = Success(Pair(value, xs))
+{
+    And(push_success(value, xs, h), refl)
+}
+
+// ---------------------------------------------------------------------------
+// Sequential laws. `run_append` is the composition rule for call sequences;
+// the one-step corollary below demonstrates a sequence that stays in bounds.
+
+theorem run_nil<A>(xs: BoundedList<A>):
+    run(Nil<StackOp<A>>, xs) = Success(xs)
+{}
+
+theorem run_cons<A>(op: StackOp<A>, rest: List<StackOp<A>>, xs: BoundedList<A>):
+    run(Cons(op, rest), xs) = match apply_op(op, xs) {
+        Success(next) => run(rest, next),
+        Underflow(same) => Underflow(same),
+        Overflow(same) => Overflow(same),
+    }
+{}
+
+theorem run_append<A>(first: List<StackOp<A>>):
+    (second: List<StackOp<A>>) → (xs: BoundedList<A>) →
+    run(first ++ second, xs) = match run(first, xs) {
+        Success(next) => run(second, next),
+        Underflow(same) => Underflow(same),
+        Overflow(same) => Overflow(same),
+    }
+{
+    match first {
+        Nil => λ second xs => refl,
+        Cons(op, rest) => λ second xs =>
+            match apply_op(op, xs) {
+                Success(next) => run_append(rest, second, next),
+                Underflow(_) => refl,
+                Overflow(_) => refl,
+            },
+    }
+}
+
+theorem run_push_pop<A>(value: A, xs: BoundedList<A>,
+    h: Succ(len(xs)) <= capacity(xs)):
+    run(Cons(Push(value), Cons(Pop, Nil<StackOp<A>>)), xs) = Success(xs)
+{
+    match le_dec(Succ(list::len(xs.contents)), xs.capacity) {
+        Inl(_) => refl,
+        Inr(not_fit) => false_elim(not_fit(h)),
+    }
+}
