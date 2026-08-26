@@ -23,16 +23,19 @@ Atoms are opaque kernel terms compared structurally. In particular,
 `pow(2, n)` is not evaluated or expanded. Addition is flattened and
 right-associated; equality is decided by coefficient-preserving permutation
 of the atoms. Proof reconstruction uses only `nat::add_assoc`,
-`nat::add_comm`, `nat::cong_nat`, `nat::twice_add`, and, when coefficient
-expansion is actually required, `nat::twice_add_self`.
+`nat::add_comm`, `nat::add_left_comm`, `nat::cong_nat`, `nat::twice_add`, and,
+when coefficient expansion is actually required, `nat::twice_add_self`.
 
 `twice` has two normalization routes. The preferred route preserves it as a
 coefficient and distributes it over addition with `twice_add`. If those normal
 forms differ, reconstruction retries with `twice(x) = x + x`. This ordering is
 certificate-shape policy, not semantics: expanding first made the carry
 customer's seven-atom certificate roughly 10.6 times the checking work of its
-handwritten proof. Preserving coefficients reduces that to about 4.1 times,
-with no value-cache eviction under the feature-gated metrics acceptance.
+handwritten proof. Preserving coefficients reduced that to about 4.1 times.
+Naming the standard right-associated `add_left_comm` law then replaced every
+expanded adjacent-swap subtree with one checked lemma application, reducing
+the carry-shaped certificate to 41,353 term closures, about 2.7 times its
+handwritten proof, with no value-cache eviction.
 
 The carry-oriented layer wraps that reconstructor in bounded finite-domain
 splitting. If direct conversion and additive equality reconstruction fail,
@@ -54,15 +57,15 @@ engine; the small hard bound prevents an accidental exponential certificate.
 The match leaves use an elaborator-private marker containing a NUL byte. It
 cannot be written by Heather source and introduces no declaration or kernel
 term. Each structural candidate is elaborated transactionally on a cloned
-elaborator and kernel-checked before selection; the selected expression is
-then elaborated normally and passes the enclosing declaration's kernel gate.
+elaborator; the selected expression is then elaborated normally as part of the
+completed proof and passes the enclosing declaration's kernel gate.
 The actual `std/bitvec` `carry_threshold` truth table is now a single `arith`.
 
 ## Audit and failure interface
 
 Every successful reconstruction records an `ArithReport` containing the atom
-count, adjacent-swap count, Boolean split count, checked branch count, and
-exact used-lemma list. Reports are drained with
+count, adjacent-swap count, Boolean split count, checked branch count,
+structural candidate-probe count, and exact used-lemma list. Reports are drained with
 `Elaborator::take_arith_reports`; a declaration that later fails loses its
 reports transactionally, as it loses warnings and pending derivations.
 
@@ -76,10 +79,35 @@ it to `failed`.
 declaration, or expected constructor named `arith` wins, so the form reserves
 no keyword and cannot reinterpret an existing program.
 
-The feature-gated carry acceptance measures the whole generated path,
-including failed candidate probes: 41,285 term closures versus 20,941 for the
-handwritten eight-case match, with zero cache eviction. The test pins an
-absolute 50,000-closure ceiling and a relative three-times ceiling.
+The feature-gated carry acceptance runs the whole generated path. Its evaluator
+collector pins the emitted proof against the handwritten eight-case match;
+`ArithReport::candidate_probes` separately accounts for the unprofiled search
+conversions. Zero cache eviction is required.
+
+## Cost anatomy
+
+The evaluator counters measure value-machine regions, not all tactic wall
+time. That distinction matters for the two fragments:
+
+- The Boolean certificate and handwritten eight-case match now have identical
+  evaluator counts: 20,941 term closures, 9,200 type closures, and 1,405
+  arenas. Earlier counts were almost exactly double because every speculative
+  leaf was kernel-checked separately before the finished match was checked.
+  Search now infers candidate types and compares those types, while the final
+  declaration gate remains the authority on the emitted proof.
+- A representative debug run took roughly 24 ms to find, elaborate, and check
+  the Boolean certificate versus 9 ms for handwritten source; both final
+  kernel gates took about 5 ms. The remaining gap is therefore the 20 recorded
+  candidate probes: clone, infer, and convert work outside the final gate.
+- Before `add_left_comm`, isolated additive measurements assigned 28,220 term
+  closures to permutation, 14,261 to reassociation, and only 155 to
+  `twice_add`. The named swap law reduced the permutation case to 9,529 and
+  the full carry-shaped certificate from 62,886 to 41,353. Its remaining cost
+  is dominated by reassociation and by composing normalization/permutation
+  proof chains, not by arithmetic reduction or Rust-side normalization.
+
+Wall-clock figures are diagnostic samples rather than regression assertions;
+the deterministic event counts and candidate-probe count are the pinned rails.
 
 ## Explicitly deferred
 

@@ -27,6 +27,7 @@ pub struct ArithReport {
     pub adjacent_swaps: usize,
     pub boolean_splits: usize,
     pub branches: usize,
+    pub candidate_probes: usize,
     pub used_lemmas: Vec<&'static str>,
 }
 
@@ -360,35 +361,8 @@ impl Build {
             return format!("nat::add_comm({a}, {b})");
         }
         let tail = sum(&atoms[2..]);
-        self.used("nat::add_assoc");
-        self.used("nat::add_comm");
-        self.used("nat::cong_nat");
-        let start = format!("({a} + ({b} + {tail}))");
-        let first = format!("(({a} + {b}) + {tail})");
-        let second = format!("(({b} + {a}) + {tail})");
-        let finish = format!("({b} + ({a} + {tail}))");
-        trans_eq(
-            &start,
-            &first,
-            &finish,
-            sym_eq(
-                &first,
-                &start,
-                format!("nat::add_assoc({a}, {b}, {tail})"),
-            ),
-            trans_eq(
-                &first,
-                &second,
-                &finish,
-                cong(
-                    format!("fun (q: Nat) => q + {tail}"),
-                    &format!("({a} + {b})"),
-                    &format!("({b} + {a})"),
-                    format!("nat::add_comm({a}, {b})"),
-                ),
-                format!("nat::add_assoc({b}, {a}, {tail})"),
-            ),
-        )
+        self.used("nat::add_left_comm");
+        format!("nat::add_left_comm({a}, {b}, {tail})")
     }
 }
 
@@ -529,10 +503,28 @@ pub(crate) fn split_booleans(
     Ok(Some(BooleanCertificate { expr: boolean_tree(&names, span), splits: names.len() }))
 }
 
-/// Fixed, deterministic leaf candidates for the carry threshold. Candidate
-/// search is untrusted: the caller elaborates each on a clone and kernel-checks
-/// it before selecting it for the real branch.
-pub(crate) fn order_candidates(cx: &Cx) -> Result<Vec<(&'static str, Expr)>, String> {
+fn var(name: impl Into<String>, span: Span) -> Expr {
+    Expr { kind: ExprKind::Var(name.into()), span }
+}
+
+fn app(name: impl Into<String>, args: Vec<Expr>, span: Span) -> Expr {
+    Expr {
+        kind: ExprKind::App {
+            head: Box::new(var(name, span)),
+            args,
+            named: Vec::new(),
+            explicit: false,
+            goal_oriented: false,
+        },
+        span,
+    }
+}
+
+/// Fixed, deterministic leaf candidates for the carry threshold. These tiny
+/// applications are built directly as surface AST: parsing generated source
+/// repeatedly is useful for large reconstructed proofs, but pure overhead for
+/// a two-argument candidate tried at every Boolean leaf.
+pub(crate) fn order_candidates(cx: &Cx, span: Span) -> Vec<(&'static str, Expr)> {
     let nats: Vec<&str> = cx
         .names
         .iter()
@@ -551,18 +543,20 @@ pub(crate) fn order_candidates(cx: &Cx) -> Result<Vec<(&'static str, Expr)>, Str
                     continue;
                 }
                 for (lemma, rhs) in [
-                    ("nat::twice_le_twice_iff", right.to_string()),
-                    ("nat::twice_le_succ_twice_iff", right.to_string()),
-                    ("nat::twice_le_twice_iff", format!("Succ({right})")),
-                    ("nat::twice_le_succ_twice_iff", format!("Succ({right})")),
+                    ("nat::twice_le_twice_iff", var(right, span)),
+                    ("nat::twice_le_succ_twice_iff", var(right, span)),
+                    ("nat::twice_le_twice_iff", app("Succ", vec![var(right, span)], span)),
+                    (
+                        "nat::twice_le_succ_twice_iff",
+                        app("Succ", vec![var(right, span)], span),
+                    ),
                 ] {
-                    let source = format!("{lemma}({left}, {rhs})");
-                    out.push((lemma, parse_generated_expr(&source)?));
+                    out.push((lemma, app(lemma, vec![var(left, span), rhs], span)));
                 }
             }
         }
     }
-    Ok(out)
+    out
 }
 
 pub(crate) fn reconstruct(
@@ -643,6 +637,7 @@ pub(crate) fn reconstruct(
             adjacent_swaps: build.adjacent_swaps,
             boolean_splits: 0,
             branches: 1,
+            candidate_probes: 0,
             used_lemmas: build.used_lemmas,
         },
     })

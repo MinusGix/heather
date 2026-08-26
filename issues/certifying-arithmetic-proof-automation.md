@@ -88,8 +88,8 @@ unary closed computations is compatible with that division.
   into an ordinary generated match tree. Leaves try conversion, additive
   reconstruction, then deterministic applications of
   `twice_le_twice_iff`/`twice_le_succ_twice_iff`; candidate probes are
-  transactional and independently kernel-checked before the chosen expression
-  enters ordinary elaboration. Reports now pin split and branch counts as well
+  transactional before the chosen expression enters ordinary elaboration and
+  the completed proof's kernel gate. Reports now pin split and branch counts as well
   as the deduplicated lemma set. Mutated majority logic is rejected, four-input
   nontrivial contexts hit the explicit bound, and conversion bypasses that
   bound when the Booleans are irrelevant. `std/bitvec`'s manual eight-case
@@ -98,3 +98,20 @@ unary closed computations is compatible with that division.
   eviction and absolute/relative regression rails. Remaining work is relevance
   filtering or a general finite-domain search layer, broader arithmetic, and
   eventual whole-step/`grind` orchestration.
+- 2026-08-26: Cost attribution separated certificate checking from tactic
+  search. Boolean reconstruction formerly spent 41,285 term closures because
+  it kernel-checked speculative leaves and then checked the completed match;
+  candidate selection now uses inferred-type conversion and leaves proof-term
+  authority to the final declaration gate. Generated and handwritten matches
+  consequently have identical evaluator metrics (20,941 term closures), while
+  the report pins the remaining 20 candidate probes. Building two-argument
+  candidate AST directly also removes generated-source parsing. Representative
+  wall time is still about 24 ms generated versus 9 ms handwritten, with both
+  final gates near 5 ms, locating the residual gap in clone/infer/convert
+  search. Additive component measurements found permutation (28,220 closures)
+  and reassociation (14,261), not `twice_add` (155), as the cost centers.
+  Adding the standard proved `nat::add_left_comm` certificate primitive cut
+  permutation to 9,529 and the full carry shape from 62,886 closures (4.1x
+  handwritten) to 41,353 (2.7x). The next meaningful reductions are direct
+  order-goal reification to avoid candidate guessing, and more compact
+  normalization/composition certificates.

@@ -63,7 +63,12 @@ theorem opaque_power(n, x: Nat):
     assert_eq!(reports.len(), 2);
     assert_eq!(
         reports[0].used_lemmas,
-        ["nat::add_assoc", "nat::cong_nat", "nat::twice_add", "nat::add_comm"]
+        [
+            "nat::add_assoc",
+            "nat::cong_nat",
+            "nat::twice_add",
+            "nat::add_left_comm"
+        ]
     );
     assert_eq!((reports[0].atoms, reports[0].adjacent_swaps), (5, 3));
     assert!(!reports[0].used_lemmas.contains(&"nat::twice_add_self"));
@@ -124,6 +129,7 @@ theorem carry_threshold(a, b, carry: Bool, power, tail_sum: Nat):
     assert_eq!((reports[0].boolean_splits, reports[0].branches), (3, 8));
     assert!(reports[0].used_lemmas.is_empty());
     assert_eq!((reports[1].boolean_splits, reports[1].branches), (3, 8));
+    assert_eq!(reports[1].candidate_probes, 20);
     assert_eq!(
         reports[1].used_lemmas,
         ["nat::twice_le_twice_iff", "nat::twice_le_succ_twice_iff"]
@@ -212,9 +218,9 @@ theorem measured(x, y, z, a, b: Nat):
         .expect("handwritten comparison checks");
     let handwritten_metrics = handwritten.value_metrics().expect("collector enabled");
     assert!(metrics.term_cache_evictions == 0, "certificate should not churn: {metrics:?}");
-    assert!(metrics.term_closures < 75_000, "unexpected certificate size: {metrics:?}");
+    assert!(metrics.term_closures < 50_000, "unexpected certificate size: {metrics:?}");
     assert!(
-        metrics.term_closures < handwritten_metrics.term_closures.saturating_mul(5),
+        metrics.term_closures < handwritten_metrics.term_closures.saturating_mul(3),
         "generated certificate is disproportionate: generated {metrics:?}; handwritten {handwritten_metrics:?}"
     );
 }
@@ -284,9 +290,8 @@ theorem measured(a, b, carry: Bool, power, tail_sum: Nat):
         .expect("handwritten Boolean carry proof checks");
     let handwritten_metrics = handwritten.value_metrics().expect("collector enabled");
     assert_eq!(metrics.term_cache_evictions, 0, "search should not churn: {metrics:?}");
-    assert!(metrics.term_closures < 50_000, "unexpected Boolean certificate cost: {metrics:?}");
-    assert!(
-        metrics.term_closures < handwritten_metrics.term_closures.saturating_mul(3),
-        "Boolean reconstruction is disproportionate: generated {metrics:?}; handwritten {handwritten_metrics:?}"
+    assert_eq!(
+        metrics, handwritten_metrics,
+        "Boolean search must not add evaluator work beyond its emitted proof"
     );
 }

@@ -2811,8 +2811,9 @@ impl Elaborator {
             }
             // Private leaves of the Boolean tree. The marker contains a NUL
             // and cannot be written by the surface lexer; it exists only in
-            // `arith`'s generated AST. Each candidate is tried transactionally
-            // and then kernel-checked before the real elaborator accepts it.
+            // `arith`'s generated AST. Each candidate is tried transactionally;
+            // the selected term becomes part of the completed declaration and
+            // therefore crosses its ordinary kernel gate.
             ExprKind::Var(name) if name == arith::BOOLEAN_LEAF => {
                 let head = self.whnf(cx, expected, e.span)?;
                 if let Type::Id { level, ty, lhs, rhs } = &head
@@ -2825,6 +2826,7 @@ impl Elaborator {
                         adjacent_swaps: 0,
                         boolean_splits: 0,
                         branches: 1,
+                        candidate_probes: 0,
                         used_lemmas: Vec::new(),
                     });
                     Ok(Term::Refl {
@@ -2837,28 +2839,31 @@ impl Elaborator {
                     self.arith_reports.borrow_mut().push(cert.report);
                     Ok(term)
                 } else {
-                    let candidates = arith::order_candidates(cx).map_err(|detail| {
-                        ElabError::Elab {
-                            msg: format!("`arith` could not construct its Boolean leaf: {detail}"),
-                            span: e.span,
-                        }
-                    })?;
+                    let candidates = arith::order_candidates(cx, e.span);
                     let mut selected = None;
+                    let mut candidate_probes = 0;
                     for (lemma, candidate) in candidates {
+                        candidate_probes += 1;
                         let probe = self.clone();
-                        let Ok(term) = probe.elab_check(cx, &candidate, expected, lvl) else {
+                        let Ok((_term, got, got_lvl)) = probe.elab_infer(cx, &candidate) else {
                             continue;
                         };
-                        if probe
-                            .kernel_check_term(
-                                &probe.goal_psi(), Layer::Prog, &cx.gamma,
-                                &term, expected, lvl,
-                            )
-                            .is_ok()
+                        // Search needs only decide whether the inferred result
+                        // type matches this leaf. Rechecking the complete
+                        // theorem application here duplicated the work of the
+                        // enclosing declaration gate; conversion is enough to
+                        // select a candidate, and the final gate remains the
+                        // authority on the selected proof term itself.
+                        if &got_lvl != lvl
+                            || probe
+                                .goal_oracle()
+                                .convert_type(&cx.gamma, Layer::Prog, &got, expected, lvl)
+                                .is_err()
                         {
-                            selected = Some((lemma, candidate));
-                            break;
+                            continue;
                         }
+                        selected = Some((lemma, candidate));
+                        break;
                     }
                     let Some((lemma, candidate)) = selected else {
                         return err(
@@ -2872,6 +2877,7 @@ impl Elaborator {
                         adjacent_swaps: 0,
                         boolean_splits: 0,
                         branches: 1,
+                        candidate_probes,
                         used_lemmas: vec![lemma],
                     });
                     Ok(term)
@@ -2900,6 +2906,7 @@ impl Elaborator {
                         adjacent_swaps: 0,
                         boolean_splits: 0,
                         branches: 1,
+                        candidate_probes: 0,
                         used_lemmas: Vec::new(),
                     });
                     return Ok(Term::Refl {
@@ -2943,6 +2950,7 @@ impl Elaborator {
                             adjacent_swaps: leaves.iter().map(|r| r.adjacent_swaps).sum(),
                             boolean_splits: split.splits,
                             branches: leaves.len(),
+                            candidate_probes: leaves.iter().map(|r| r.candidate_probes).sum(),
                             used_lemmas,
                         });
                         Ok(term)

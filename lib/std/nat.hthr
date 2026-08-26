@@ -75,6 +75,19 @@ theorem twice_add(a, b: Nat): twice(a + b) = twice(a) + twice(b) {
     }
 }
 
+// Swap the first two terms without rebuilding associativity and commutativity
+// at every use. This is the right-associated form consumed by certifying AC
+// reconstruction.
+theorem add_left_comm(a, b, c: Nat): a + (b + c) = b + (a + c) {
+    calc {
+        a + (b + c)
+            = (a + b) + c := sym(add_assoc(a, b, c)),
+            = (b + a) + c :=
+                cong_nat(fun (q: Nat) => q + c, add_comm(a, b)),
+            = b + (a + c) := add_assoc(b, a, c),
+    }
+}
+
 // Reorder the middle two elements of a four-term sum. Keeping this ordinary
 // commutative-monoid consequence named avoids rebuilding a five-step calc in
 // every binary-arithmetic proof.
