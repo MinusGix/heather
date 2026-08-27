@@ -48,3 +48,13 @@ frontend does not expand large unary divisions during reflection.
   kernel-checked. General `decreases` remains independently owned by
   [[termination-measures]] rather than acquiring division-shaped machinery.
   Remaining work here is existential divisibility and frontend auxiliary atoms.
+- 2026-08-27: Landed the first frontend auxiliary-atom slice for `Int`
+  division and modulus by positive literal divisors. A quotient is one shared
+  opaque atom with certified Euclidean lower and strict upper constraints;
+  modulus normalizes to `x - (x / k) * k` and reuses that same atom. The
+  defining facts are ordinary assumptions in the existing derivation DAG and
+  their supporting proofs are kernel-checked `int::div_mul_add_mod`,
+  `int::mod_nonneg`, and `int::mod_lt_abs` consequences. End-to-end rails cover
+  both quotient bounds, both remainder bounds, atom sharing, and refusal of a
+  false remainder mutation. Negative and zero literal divisors, `Nat`, and
+  existential divisibility remain explicit follow-ups.

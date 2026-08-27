@@ -61,6 +61,8 @@ fn reconstruction_lemmas(source: &str) -> Vec<&'static str> {
         "omega::atom_nonnegative",
         "omega::divide_lower",
         "omega::divide_upper",
+        "omega::div_lower",
+        "omega::div_upper",
         "omega::eq_of_bounds",
         "omega::exact_combo",
         "omega::impossible_constant_lower",
@@ -68,6 +70,7 @@ fn reconstruction_lemmas(source: &str) -> Vec<&'static str> {
         "omega::lower_combo",
         "omega::lower_of_eq",
         "omega::lower_to_negated_upper",
+        "omega::normalize_mod",
         "omega::lower_upper_combo",
         "omega::nat_le_of_not_lt",
         "omega::nat_le_to_int",
@@ -126,6 +129,12 @@ enum AffineSyntax {
         index: usize,
         source: String,
     },
+    Mod {
+        source: String,
+        dividend_source: String,
+        divisor_source: String,
+        expanded: Box<AffineSyntax>,
+    },
     Add {
         left: Box<AffineSyntax>,
         right: Box<AffineSyntax>,
@@ -164,6 +173,14 @@ struct ReflectedAtom {
     term: Rc<Term>,
     source: String,
     nat_source: Option<String>,
+    division: Option<DivisionAtom>,
+}
+
+#[derive(Clone)]
+struct DivisionAtom {
+    dividend: AffineSyntax,
+    dividend_source: String,
+    divisor: Z,
 }
 
 #[derive(Clone)]
@@ -538,6 +555,78 @@ fn affine_syntax(
             }
         }
     }
+    if let Some(args) = named_args(elab, tm, "int::mod")
+        && let [dividend, divisor] = args.as_slice()
+    {
+        let divisor_source = int_term_source(elab, cx, divisor)?;
+        if let Some(divisor) = integer_source(&divisor_source).filter(|value| *value > 0) {
+            let dividend_source = int_term_source(elab, cx, dividend)?;
+            let dividend_syntax = affine_syntax(elab, cx, dividend, atoms)?;
+            let quotient_source = format!("int::div({}, {})", dividend_source, int(divisor));
+            let quotient_index = atoms
+                .iter()
+                .position(|atom| atom.source == quotient_source)
+                .unwrap_or_else(|| {
+                    atoms.push(ReflectedAtom {
+                        term: Rc::clone(tm),
+                        source: quotient_source.clone(),
+                        nat_source: None,
+                        division: Some(DivisionAtom {
+                            dividend: dividend_syntax.clone(),
+                            dividend_source: dividend_source.clone(),
+                            divisor,
+                        }),
+                    });
+                    atoms.len() - 1
+                });
+            let quotient = AffineSyntax::Atom {
+                index: quotient_index,
+                source: quotient_source,
+            };
+            let expanded = AffineSyntax::Add {
+                left: Box::new(dividend_syntax),
+                right: Box::new(AffineSyntax::Neg {
+                    inner: Box::new(AffineSyntax::Scale {
+                        factor: divisor,
+                        factor_on_left: false,
+                        inner: Box::new(quotient),
+                    }),
+                }),
+            };
+            return Ok(AffineSyntax::Mod {
+                source,
+                dividend_source,
+                divisor_source: int(divisor),
+                expanded: Box::new(expanded),
+            });
+        }
+    }
+    if let Some(args) = named_args(elab, tm, "int::div")
+        && let [dividend, divisor] = args.as_slice()
+    {
+        let divisor_source = int_term_source(elab, cx, divisor)?;
+        if let Some(divisor) = integer_source(&divisor_source).filter(|value| *value > 0) {
+            let dividend_source = int_term_source(elab, cx, dividend)?;
+            let dividend_syntax = affine_syntax(elab, cx, dividend, atoms)?;
+            let index = atoms
+                .iter()
+                .position(|atom| *atom.term == **tm || atom.source == source)
+                .unwrap_or_else(|| {
+                    atoms.push(ReflectedAtom {
+                        term: Rc::clone(tm),
+                        source: source.clone(),
+                        nat_source: None,
+                        division: Some(DivisionAtom {
+                            dividend: dividend_syntax,
+                            dividend_source,
+                            divisor,
+                        }),
+                    });
+                    atoms.len() - 1
+                });
+            return Ok(AffineSyntax::Atom { index, source });
+        }
+    }
 
     let index = atoms
         .iter()
@@ -547,6 +636,7 @@ fn affine_syntax(
                 term: Rc::clone(tm),
                 source: source.clone(),
                 nat_source: None,
+                division: None,
             });
             atoms.len() - 1
         });
@@ -559,6 +649,8 @@ fn int_term_source(elab: &Elaborator, cx: &Cx, tm: &Rc<Term>) -> Result<String, 
         ("int::sub", 2),
         ("int::mul", 2),
         ("int::neg", 1),
+        ("int::div", 2),
+        ("int::mod", 2),
     ] {
         if let Some(args) = named_args(elab, tm, name)
             && args.len() == arity
@@ -665,6 +757,7 @@ fn nat_affine_syntax(
                 term: Rc::clone(tm),
                 source: source.clone(),
                 nat_source: Some(nat_source.clone()),
+                division: None,
             });
             atoms.len() - 1
         });
@@ -695,6 +788,29 @@ fn normalize_syntax(syntax: &AffineSyntax, atoms_source: &str) -> Result<Normali
                 linear: LinearExpr::atom(*index),
                 proof: format!("omega::normalize_atom({index}, {atoms_source})"),
                 row_source,
+            })
+        }
+        AffineSyntax::Mod {
+            source,
+            dividend_source,
+            divisor_source,
+            expanded,
+        } => {
+            let expanded = normalize_syntax(expanded, atoms_source)?;
+            let proof = format!(
+                "omega::normalize_mod({}, {}, {}, {}, {}, {})",
+                dividend_source,
+                divisor_source,
+                int(expanded.linear.constant),
+                expanded.row_source,
+                atoms_source,
+                expanded.proof,
+            );
+            Ok(Normalized {
+                source: source.clone(),
+                linear: expanded.linear,
+                row_source: expanded.row_source,
+                proof,
             })
         }
         AffineSyntax::Add { left, right } => {
@@ -1027,6 +1143,56 @@ fn reflect_ordinary(
     }
     if relations.is_empty() {
         return Ok(None);
+    }
+    let divisions = atoms
+        .iter()
+        .enumerate()
+        .filter_map(|(index, atom)| atom.division.clone().map(|division| (index, division)))
+        .collect::<Vec<_>>();
+    for (index, division) in divisions {
+        let quotient = AffineSyntax::Atom {
+            index,
+            source: atoms[index].source.clone(),
+        };
+        let product = AffineSyntax::Scale {
+            factor: division.divisor,
+            factor_on_left: false,
+            inner: Box::new(quotient),
+        };
+        let divisor_pred = division
+            .divisor
+            .checked_sub(1)
+            .ok_or("Omega positive divisor predecessor overflowed")?;
+        relations.push((
+            product.clone(),
+            division.dividend.clone(),
+            false,
+            format!(
+                "omega::div_lower({}, {})",
+                division.dividend_source, divisor_pred
+            ),
+        ));
+        relations.push((
+            AffineSyntax::Add {
+                left: Box::new(division.dividend),
+                right: Box::new(AffineSyntax::Const {
+                    value: 1,
+                    source: int(1),
+                }),
+            },
+            AffineSyntax::Add {
+                left: Box::new(product),
+                right: Box::new(AffineSyntax::Const {
+                    value: division.divisor,
+                    source: int(division.divisor),
+                }),
+            },
+            false,
+            format!(
+                "omega::div_upper({}, {})",
+                division.dividend_source, divisor_pred
+            ),
+        ));
     }
     let atoms_source = atom_list_source(&atoms);
     let mut facts = Vec::with_capacity(relations.len());
