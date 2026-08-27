@@ -58,3 +58,10 @@ frontend does not expand large unary divisions during reflection.
   both quotient bounds, both remainder bounds, atom sharing, and refusal of a
   false remainder mutation. Negative and zero literal divisors, `Nat`, and
   existential divisibility remain explicit follow-ups.
+- 2026-08-27: Generalized the `Int` frontend to every literal divisor. For a
+  negative divisor, quotient constraints retain its signed coefficient while
+  the strict Euclidean width uses its absolute value; constructor-specific
+  nonzero proofs keep this entirely certified. Division and modulus by zero
+  normalize through the library's explicit total semantics and introduce no
+  quotient atom. Rails cover negative quotient and remainder bounds plus open
+  zero-divisor identities. Remaining frontend work is `Nat` and divisibility.

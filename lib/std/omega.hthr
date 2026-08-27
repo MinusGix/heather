@@ -402,9 +402,17 @@ fn IsPositiveOfNat(value: Int) → Type {
     match value { OfNat(n) => nat::IsSucc(n), NegSucc(_) => False }
 }
 
+fn IsNegative(value: Int) → Type {
+    match value { OfNat(_) => False, NegSucc(_) => True }
+}
+
 theorem positive_int_nonzero(k: Nat): OfNat(Succ(k)) ≠ OfNat(0) {
     (h: OfNat(Succ(k)) = OfNat(0)) ⊢
         j(h, λ y _ => IsPositiveOfNat(y), trivial)
+}
+
+theorem negative_int_nonzero(k: Nat): NegSucc(k) ≠ OfNat(0) {
+    (h: NegSucc(k) = OfNat(0)) ⊢ j(h, λ y _ => IsNegative(y), trivial)
 }
 
 theorem add_lt_mono_l(a, b, c: Int, h: a < b): c + a < c + b {
@@ -413,23 +421,44 @@ theorem add_lt_mono_l(a, b, c: Int, h: a < b): c + a < c + b {
       int::add_le_mono_l(int::isucc(a), b, c, h))
 }
 
+theorem div_lower_nonzero(dividend, divisor: Int,
+    nonzero: divisor ≠ OfNat(0)):
+    int::div(dividend, divisor) * divisor <= dividend
+{
+    let product = int::div(dividend, divisor) * divisor;
+    let remainder = int::mod(dividend, divisor);
+    j(sym(int::add_zero(product)),
+      λ left _ => left <= dividend,
+      j(int::div_mul_add_mod(dividend, divisor),
+        λ right _ => product + OfNat(0) <= right,
+        int::add_le_mono_l(
+            OfNat(0), remainder, product,
+            int::mod_nonneg(dividend, divisor, nonzero))))
+}
+
+theorem div_upper_nonzero(dividend, divisor: Int,
+    nonzero: divisor ≠ OfNat(0)):
+    dividend < int::div(dividend, divisor) * divisor + int::abs(divisor)
+{
+    let product = int::div(dividend, divisor) * divisor;
+    let remainder = int::mod(dividend, divisor);
+    j(int::div_mul_add_mod(dividend, divisor),
+      λ right _ => right < product + int::abs(divisor),
+      add_lt_mono_l(
+          remainder,
+          int::abs(divisor),
+          product,
+          int::mod_lt_abs(dividend, divisor, nonzero)))
+}
+
 theorem div_lower(dividend: Int, divisor_pred: Nat):
     int::div(dividend, OfNat(Succ(divisor_pred))) * OfNat(Succ(divisor_pred))
         <= dividend
 {
-    let product = int::div(dividend, OfNat(Succ(divisor_pred))) *
-        OfNat(Succ(divisor_pred));
-    let remainder = int::mod(dividend, OfNat(Succ(divisor_pred)));
-    j(sym(int::add_zero(product)),
-      λ left _ => left <= dividend,
-      j(int::div_mul_add_mod(dividend, OfNat(Succ(divisor_pred))),
-        λ right _ => product + OfNat(0) <= right,
-        int::add_le_mono_l(
-            OfNat(0), remainder, product,
-            int::mod_nonneg(
-                dividend,
-                OfNat(Succ(divisor_pred)),
-                positive_int_nonzero(divisor_pred)))))
+    div_lower_nonzero(
+        dividend,
+        OfNat(Succ(divisor_pred)),
+        positive_int_nonzero(divisor_pred))
 }
 
 theorem div_upper(dividend: Int, divisor_pred: Nat):
@@ -437,19 +466,10 @@ theorem div_upper(dividend: Int, divisor_pred: Nat):
         int::div(dividend, OfNat(Succ(divisor_pred))) * OfNat(Succ(divisor_pred)) +
             OfNat(Succ(divisor_pred))
 {
-    let product = int::div(dividend, OfNat(Succ(divisor_pred))) *
-        OfNat(Succ(divisor_pred));
-    let remainder = int::mod(dividend, OfNat(Succ(divisor_pred)));
-    j(int::div_mul_add_mod(dividend, OfNat(Succ(divisor_pred))),
-      λ right _ => right < product + OfNat(Succ(divisor_pred)),
-      add_lt_mono_l(
-          remainder,
-          OfNat(Succ(divisor_pred)),
-          product,
-          int::mod_lt_abs(
-              dividend,
-              OfNat(Succ(divisor_pred)),
-              positive_int_nonzero(divisor_pred))))
+    div_upper_nonzero(
+        dividend,
+        OfNat(Succ(divisor_pred)),
+        positive_int_nonzero(divisor_pred))
 }
 
 theorem mod_expand(dividend, divisor: Int):
@@ -480,6 +500,19 @@ theorem normalize_mod(dividend, divisor, constant: Int,
     int::mod(dividend, divisor) = constant + dot(row, atoms)
 {
     trans(mod_expand(dividend, divisor), expanded)
+}
+
+theorem normalize_div_zero(dividend: Int, atoms: List<Int>):
+    int::div(dividend, OfNat(0)) = OfNat(0) + dot(zeros(atoms), atoms)
+{
+    trans(int::div_zero(dividend), normalize_const(OfNat(0), atoms))
+}
+
+theorem normalize_mod_zero(dividend, constant: Int, row, atoms: List<Int>,
+    h: dividend = constant + dot(row, atoms)):
+    int::mod(dividend, OfNat(0)) = constant + dot(row, atoms)
+{
+    trans(int::mod_zero(dividend), h)
 }
 
 theorem eq_of_bounds(row, atoms: List<Int>, value: Int,

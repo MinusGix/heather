@@ -311,6 +311,26 @@ theorem remainder_nonnegative(x: Int):
 theorem remainder_bounded(x: Int):
     int::mod(x, OfNat(3)) < OfNat(3)
 { omega }
+
+theorem negative_quotient_too_large(x: Int,
+    x_lower: OfNat(8) <= x,
+    too_large: NegSucc(0) <= int::div(x, NegSucc(2))):
+    False
+{ omega }
+
+theorem negative_remainder_nonnegative(x: Int):
+    OfNat(0) <= int::mod(x, NegSucc(2))
+{ omega }
+
+theorem negative_remainder_bounded(x: Int):
+    int::mod(x, NegSucc(2)) < OfNat(3)
+{ omega }
+
+theorem open_div_zero(x: Int): int::div(x, OfNat(0)) = OfNat(0)
+{ omega }
+
+theorem open_mod_zero(x: Int): int::mod(x, OfNat(0)) = x
+{ omega }
 "#;
     elab.elab_module_source("divmod", source)
         .unwrap_or_else(|error| panic!("remainder bounds did not check: {}", message(error)));
@@ -319,22 +339,41 @@ theorem remainder_bounded(x: Int):
         .into_iter()
         .filter(|report| report.atoms > 0)
         .collect::<Vec<_>>();
-    assert_eq!(reports.len(), 4);
-    let [large, small, nonnegative, bounded] = reports.as_slice() else {
+    assert_eq!(reports.len(), 11);
+    let [large, small, nonnegative, bounded, ..] = reports.as_slice() else {
         unreachable!()
     };
     assert_eq!(large.atoms, 2);
     assert_eq!(large.assumptions, 4);
-    assert!(large.used_lemmas.contains(&"omega::div_lower"));
+    assert!(large.used_lemmas.contains(&"omega::div_lower_nonzero"));
     assert_eq!(small.atoms, 2);
     assert_eq!(small.assumptions, 4);
-    assert!(small.used_lemmas.contains(&"omega::div_upper"));
+    assert!(small.used_lemmas.contains(&"omega::div_upper_nonzero"));
     for report in [nonnegative, bounded] {
         assert_eq!(report.atoms, 2, "{report:?}");
         assert!(report.used_lemmas.contains(&"omega::normalize_mod"));
     }
-    assert!(nonnegative.used_lemmas.contains(&"omega::div_lower"));
-    assert!(bounded.used_lemmas.contains(&"omega::div_upper"));
+    assert!(
+        nonnegative
+            .used_lemmas
+            .contains(&"omega::div_lower_nonzero")
+    );
+    assert!(bounded.used_lemmas.contains(&"omega::div_upper_nonzero"));
+    assert!(
+        reports
+            .iter()
+            .any(|report| report.used_lemmas.contains(&"omega::div_upper_nonzero"))
+    );
+    assert!(
+        reports
+            .iter()
+            .any(|report| report.used_lemmas.contains(&"omega::normalize_div_zero"))
+    );
+    assert!(
+        reports
+            .iter()
+            .any(|report| report.used_lemmas.contains(&"omega::normalize_mod_zero"))
+    );
 }
 
 #[test]

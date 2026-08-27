@@ -62,7 +62,9 @@ fn reconstruction_lemmas(source: &str) -> Vec<&'static str> {
         "omega::divide_lower",
         "omega::divide_upper",
         "omega::div_lower",
+        "omega::div_lower_nonzero",
         "omega::div_upper",
+        "omega::div_upper_nonzero",
         "omega::eq_of_bounds",
         "omega::exact_combo",
         "omega::impossible_constant_lower",
@@ -71,6 +73,8 @@ fn reconstruction_lemmas(source: &str) -> Vec<&'static str> {
         "omega::lower_of_eq",
         "omega::lower_to_negated_upper",
         "omega::normalize_mod",
+        "omega::normalize_div_zero",
+        "omega::normalize_mod_zero",
         "omega::lower_upper_combo",
         "omega::nat_le_of_not_lt",
         "omega::nat_le_to_int",
@@ -134,6 +138,15 @@ enum AffineSyntax {
         dividend_source: String,
         divisor_source: String,
         expanded: Box<AffineSyntax>,
+    },
+    DivZero {
+        source: String,
+        dividend_source: String,
+    },
+    ModZero {
+        source: String,
+        dividend_source: String,
+        dividend: Box<AffineSyntax>,
     },
     Add {
         left: Box<AffineSyntax>,
@@ -559,9 +572,19 @@ fn affine_syntax(
         && let [dividend, divisor] = args.as_slice()
     {
         let divisor_source = int_term_source(elab, cx, divisor)?;
-        if let Some(divisor) = integer_source(&divisor_source).filter(|value| *value > 0) {
+        if let Some(divisor) = integer_source(&divisor_source) {
             let dividend_source = int_term_source(elab, cx, dividend)?;
             let dividend_syntax = affine_syntax(elab, cx, dividend, atoms)?;
+            if divisor == 0 {
+                return Ok(AffineSyntax::ModZero {
+                    source,
+                    dividend_source,
+                    dividend: Box::new(dividend_syntax),
+                });
+            }
+            divisor
+                .checked_abs()
+                .ok_or("Omega cannot reflect division by the minimum `i128` literal")?;
             let quotient_source = format!("int::div({}, {})", dividend_source, int(divisor));
             let quotient_index = atoms
                 .iter()
@@ -605,9 +628,18 @@ fn affine_syntax(
         && let [dividend, divisor] = args.as_slice()
     {
         let divisor_source = int_term_source(elab, cx, divisor)?;
-        if let Some(divisor) = integer_source(&divisor_source).filter(|value| *value > 0) {
+        if let Some(divisor) = integer_source(&divisor_source) {
             let dividend_source = int_term_source(elab, cx, dividend)?;
             let dividend_syntax = affine_syntax(elab, cx, dividend, atoms)?;
+            if divisor == 0 {
+                return Ok(AffineSyntax::DivZero {
+                    source,
+                    dividend_source,
+                });
+            }
+            divisor
+                .checked_abs()
+                .ok_or("Omega cannot reflect division by the minimum `i128` literal")?;
             let index = atoms
                 .iter()
                 .position(|atom| *atom.term == **tm || atom.source == source)
@@ -810,6 +842,42 @@ fn normalize_syntax(syntax: &AffineSyntax, atoms_source: &str) -> Result<Normali
                 source: source.clone(),
                 linear: expanded.linear,
                 row_source: expanded.row_source,
+                proof,
+            })
+        }
+        AffineSyntax::DivZero {
+            source,
+            dividend_source,
+        } => {
+            let row_source = format!("omega::zeros({atoms_source})");
+            Ok(Normalized {
+                source: source.clone(),
+                linear: LinearExpr::constant(0),
+                proof: format!(
+                    "omega::normalize_div_zero({}, {})",
+                    dividend_source, atoms_source
+                ),
+                row_source,
+            })
+        }
+        AffineSyntax::ModZero {
+            source,
+            dividend_source,
+            dividend,
+        } => {
+            let dividend = normalize_syntax(dividend, atoms_source)?;
+            let proof = format!(
+                "omega::normalize_mod_zero({}, {}, {}, {}, {})",
+                dividend_source,
+                int(dividend.linear.constant),
+                dividend.row_source,
+                atoms_source,
+                dividend.proof,
+            );
+            Ok(Normalized {
+                source: source.clone(),
+                linear: dividend.linear,
+                row_source: dividend.row_source,
                 proof,
             })
         }
@@ -1159,17 +1227,20 @@ fn reflect_ordinary(
             factor_on_left: false,
             inner: Box::new(quotient),
         };
-        let divisor_pred = division
+        let magnitude = division
             .divisor
-            .checked_sub(1)
-            .ok_or("Omega positive divisor predecessor overflowed")?;
+            .checked_abs()
+            .ok_or("Omega cannot reconstruct the minimum `i128` divisor")?;
+        let nonzero = literal_int_nonzero(division.divisor)?;
         relations.push((
             product.clone(),
             division.dividend.clone(),
             false,
             format!(
-                "omega::div_lower({}, {})",
-                division.dividend_source, divisor_pred
+                "omega::div_lower_nonzero({}, {}, {})",
+                division.dividend_source,
+                int(division.divisor),
+                nonzero,
             ),
         ));
         relations.push((
@@ -1183,14 +1254,16 @@ fn reflect_ordinary(
             AffineSyntax::Add {
                 left: Box::new(product),
                 right: Box::new(AffineSyntax::Const {
-                    value: division.divisor,
-                    source: int(division.divisor),
+                    value: magnitude,
+                    source: int(magnitude),
                 }),
             },
             false,
             format!(
-                "omega::div_upper({}, {})",
-                division.dividend_source, divisor_pred
+                "omega::div_upper_nonzero({}, {}, {})",
+                division.dividend_source,
+                int(division.divisor),
+                nonzero,
             ),
         ));
     }
@@ -1292,6 +1365,20 @@ fn reflect_ordinary(
 
 fn int(value: Z) -> String {
     int_ctor(value)
+}
+
+fn literal_int_nonzero(value: Z) -> Result<String, String> {
+    if value > 0 {
+        return Ok(format!("omega::positive_int_nonzero({})", value - 1));
+    }
+    if value < 0 {
+        let payload = value
+            .checked_neg()
+            .and_then(|magnitude| magnitude.checked_sub(1))
+            .ok_or("Omega cannot reconstruct the minimum `i128` divisor")?;
+        return Ok(format!("omega::negative_int_nonzero({payload})"));
+    }
+    Err("Omega requested a nonzero proof for zero".into())
 }
 
 fn coeffs_source(coeffs: &Coeffs) -> String {
