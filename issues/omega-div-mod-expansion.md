@@ -4,7 +4,7 @@ status: open
 labels: [proofs,elaboration,metaprogramming,stdlib,arithmetic]
 blocked-by: [omega-linear-arithmetic]
 created: 2026-08-26
-updated: 2026-08-26
+updated: 2026-08-27
 ---
 
 Extend Heather's Omega frontend through division and remainder by nonzero
@@ -16,12 +16,11 @@ Euclidean interval `0 <= x - k*q <= k - 1`, reify `x % k` as `x - k*q`, and
 translate literal divisibility to a remainder equality. Negative divisors and
 zero require explicit, tested semantics rather than incidental reduction.
 
-The standard library first needs executable `Nat`/`Int` division and modulus,
-their termination arguments, and the complete correspondence kit consumed by
-the reconstructor. The operational definitions and their termination proof are
-owned here because the frontend is not useful until both computation and the
-certificate laws agree. Solver-side auxiliary atoms must reuse the derivation
-DAG and report their defining facts.
+The standard library first needs executable `Nat`/`Int` division and modulus
+and the complete correspondence kit consumed by the reconstructor. The
+operational definitions and laws are owned here because the frontend is not
+useful until computation and certificates agree. Solver-side auxiliary atoms
+must reuse the derivation DAG and report their defining facts.
 
 Acceptance includes closed computation, open quotient/remainder bounds,
 positive and negated divisibility, mutation rejection, and a rail proving the
@@ -38,3 +37,14 @@ frontend does not expand large unary divisions during reflection.
 - 2026-08-26: Split from the initial Omega implementation so division's
   executable definitions and termination proofs do not delay useful linear
   arithmetic. Lean's literal-divisor preprocessing remains the reference.
+- 2026-08-27: Landed the operational and law foundation without fuel or a
+  division-specific termination rule. `Nat.divmod` scans the numerator by
+  immediate structural recursion and shares quotient/remainder state; its
+  kernel-checked specification proves reconstruction and the positive-divisor
+  remainder bound. `Int.divmod` uses explicit Euclidean semantics in all four
+  sign quadrants: the remainder is nonnegative and below `abs(divisor)`, a
+  negative divisor only negates the quotient, and at zero the quotient is zero
+  and remainder is the dividend. Open reconstruction and bound laws are
+  kernel-checked. General `decreases` remains independently owned by
+  [[termination-measures]] rather than acquiring division-shaped machinery.
+  Remaining work here is existential divisibility and frontend auxiliary atoms.

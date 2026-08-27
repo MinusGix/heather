@@ -208,7 +208,7 @@ theorem reversed_exact(x: Int, eq: OfNat(1) = x, bad: x <= OfNat(0)): False
 }
 
 #[test]
-fn nonprimitive_rows_do_not_require_a_gcd_certificate() {
+fn reconstructs_nonprimitive_rows_with_gcd_rounding() {
     let source = format!(
         r#"{PREFIX}
 theorem nonprimitive(x: Int,
@@ -218,9 +218,14 @@ theorem nonprimitive(x: Int,
 {{ omega }}
 "#
     );
-    elaborator()
-        .elab_module_source("probe", &source)
+    let mut elab = elaborator();
+    elab.elab_module_source("probe", &source)
         .unwrap_or_else(|error| panic!("nonprimitive row did not check: {}", message(error)));
+    let reports = elab.take_omega_reports();
+    let report = reports.last().expect("Omega report");
+    assert!(report.stats.gcd_divisions >= 1);
+    assert!(report.used_lemmas.contains(&"omega::divide_lower"));
+    assert!(report.used_lemmas.contains(&"omega::divide_upper"));
 }
 
 #[test]

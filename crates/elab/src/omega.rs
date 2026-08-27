@@ -455,10 +455,9 @@ impl Problem {
         Self::default()
     }
 
-    /// Keep coefficient rows integral but non-primitive. Certificate
-    /// frontends use this until they can reconstruct the floor/ceiling proof
-    /// required by [`Derivation::DivideGcd`]. Search remains sound and loses
-    /// no real-shadow contradictions; it may merely carry larger numbers.
+    /// Keep coefficient rows integral but non-primitive. This is a diagnostic
+    /// opt-out for comparing search behavior; certificate frontends normally
+    /// reconstruct [`Derivation::DivideGcd`] and retain the optimization.
     pub fn without_gcd_reduction(mut self) -> Self {
         self.skip_gcd_reduction = true;
         self

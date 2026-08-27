@@ -88,6 +88,46 @@ fn min_and_max_do_not_reduce_to_the_wrong_side() {
     bad("theorem t(): min(2, 5) = 5 { refl }");
 }
 
+#[test]
+fn div_and_mod_reduce_together_at_closed_arguments() {
+    ok("theorem a(): div(0, 3) = 0 { refl }
+theorem b(): mod(0, 3) = 0 { refl }
+theorem c(): div(7, 3) = 2 { refl }
+theorem d(): mod(7, 3) = 1 { refl }
+theorem e(): div(9, 3) = 3 { refl }
+theorem f(): mod(9, 3) = 0 { refl }
+theorem g(): div(5, 1) = 5 { refl }
+theorem h(): mod(5, 1) = 0 { refl }
+theorem i(): div(5, 0) = 0 { refl }
+theorem j(): mod(5, 0) = 5 { refl }");
+}
+
+#[test]
+fn div_and_mod_do_not_compute_to_neighboring_values() {
+    bad("theorem t(): div(7, 3) = 3 { refl }");
+    bad("theorem t(): mod(7, 3) = 0 { refl }");
+    bad("theorem t(): mod(5, 0) = 0 { refl }");
+}
+
+#[test]
+fn div_and_mod_euclidean_laws_compose_at_open_arguments() {
+    ok(
+        "theorem reconstruct(n, d: Nat): div(n, d) * d + mod(n, d) = n {
+    div_mul_add_mod(n, d)
+}
+theorem bounded(n, d: Nat, h: 0 < d): mod(n, d) < d {
+    mod_lt(n, d, h)
+}
+theorem quotient_at_zero(n: Nat): div(n, 0) = 0 { div_zero(n) }
+theorem remainder_at_zero(n: Nat): mod(n, 0) = n { mod_zero(n) }",
+    );
+}
+
+#[test]
+fn the_positive_divisor_hypothesis_is_load_bearing() {
+    bad("theorem t(n, d: Nat): mod(n, d) < d { mod_lt(n, d, trivial) }");
+}
+
 // ---------------------------------------------------------------------------
 // 2. The open-argument axis (`docs/testing-generated-terms.md`), which for
 //    these two functions is also the *asymmetry* axis: both descend on their

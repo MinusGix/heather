@@ -287,6 +287,62 @@ theorem c_max_computes(): max_of(NegSucc(2), OfNat(1)) = OfNat(1) { refl }
     );
 }
 
+#[test]
+fn euclidean_division_computes_in_every_sign_quadrant() {
+    probe(
+        "integer Euclidean division did not compute",
+        r#"
+import int;
+
+theorem div_pp(): int::div(OfNat(7), OfNat(3)) = OfNat(2) { refl }
+theorem mod_pp(): int::mod(OfNat(7), OfNat(3)) = OfNat(1) { refl }
+theorem div_np(): int::div(NegSucc(6), OfNat(3)) = NegSucc(2) { refl }
+theorem mod_np(): int::mod(NegSucc(6), OfNat(3)) = OfNat(2) { refl }
+theorem div_pn(): int::div(OfNat(7), NegSucc(2)) = NegSucc(1) { refl }
+theorem mod_pn(): int::mod(OfNat(7), NegSucc(2)) = OfNat(1) { refl }
+theorem div_nn(): int::div(NegSucc(6), NegSucc(2)) = OfNat(3) { refl }
+theorem mod_nn(): int::mod(NegSucc(6), NegSucc(2)) = OfNat(2) { refl }
+theorem div_exact_negative(): int::div(NegSucc(5), OfNat(3)) = NegSucc(1) { refl }
+theorem mod_exact_negative(): int::mod(NegSucc(5), OfNat(3)) = OfNat(0) { refl }
+theorem div_zero(): int::div(NegSucc(4), OfNat(0)) = OfNat(0) { refl }
+theorem mod_zero(): int::mod(NegSucc(4), OfNat(0)) = NegSucc(4) { refl }
+"#,
+    );
+}
+
+#[test]
+fn euclidean_division_reconstructs_open_integers() {
+    probe(
+        "integer Euclidean reconstruction did not compose",
+        r#"
+import int;
+import logic;
+
+theorem reconstruct(a, b: Int):
+    int::div(a, b) * b + int::mod(a, b) = a
+{
+    int::div_mul_add_mod(a, b)
+}
+theorem remainder_nonnegative(a, b: Int, h: b ≠ OfNat(0)):
+    OfNat(0) <= int::mod(a, b)
+{
+    int::mod_nonneg(a, b, h)
+}
+theorem remainder_bounded(a, b: Int, h: b ≠ OfNat(0)):
+    int::mod(a, b) < int::abs(b)
+{
+    int::mod_lt_abs(a, b, h)
+}
+theorem quotient_at_zero(a: Int): int::div(a, OfNat(0)) = OfNat(0) {
+    int::div_zero(a)
+}
+theorem remainder_at_zero(a: Int): int::mod(a, OfNat(0)) = a {
+    int::mod_zero(a)
+}
+"#,
+    );
+}
+
 /// The round's own row, and the reason it could not be written until
 /// 2026-08-17: `Decide` at **three** orders that are all written `Le`
 /// (`docs/instance-resolved-key-design.md`,

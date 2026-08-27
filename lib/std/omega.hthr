@@ -66,6 +66,12 @@ fn nth0(index: Nat) → List<Int> → Int {
     }
 }
 
+theorem cong_dot(atoms: List<Int>, {left, right: List<Int>},
+    equality: left = right): dot(left, atoms) = dot(right, atoms)
+{
+    j(equality, λ q p => dot(left, atoms) = dot(q, atoms), refl)
+}
+
 // The four-term additive permutation used by `dot_add`. Keeping it here pays
 // the associativity/commutativity proof once for every generated certificate.
 theorem int_add_swap_middle(a, b, c, d: Int):
@@ -453,6 +459,74 @@ theorem upper_transport(coeffs, atoms: List<Int>, upper, value: Int,
     dot(coeffs, atoms) <= upper
 {
     j(value_eq, λ q p => q <= upper, hvalue)
+}
+
+// GCD normalization only divides concrete coefficient rows and computes the
+// rounded bound in Rust. These lemmas certify those closed floor/ceiling
+// choices using order alone; executable integer division is not part of the
+// proof interface.
+theorem divide_upper(row, reduced, atoms: List<Int>, divisor, upper, rounded: Int,
+    decomp: row = scale(divisor, reduced),
+    nonnegative: OfNat(0) <= divisor,
+    threshold: upper < divisor * isucc(rounded),
+    bound: dot(row, atoms) <= upper):
+    dot(reduced, atoms) <= rounded
+{
+    let scaled: (dot(row, atoms) = divisor * dot(reduced, atoms)) =
+        trans(cong_dot(atoms, decomp),
+            dot_scale(divisor, reduced, atoms));
+    let normalized: (divisor * dot(reduced, atoms) <= upper) =
+        le_transport(dot(row, atoms), divisor * dot(reduced, atoms),
+            upper, upper, scaled, refl, bound);
+    match int::le_dec(dot(reduced, atoms), rounded) {
+        Inl(proof) => proof,
+        Inr(denied) => {
+            let next_le: (isucc(rounded) <= dot(reduced, atoms)) =
+                int::lt_of_not_le(rounded, dot(reduced, atoms), denied);
+            let multiplied = int::mul_le_mono_l(
+                isucc(rounded), dot(reduced, atoms), divisor,
+                next_le, nonnegative);
+            false_elim(int::not_lt_of_ge(
+                divisor * isucc(rounded), upper,
+                int::le_trans(divisor * isucc(rounded),
+                    divisor * dot(reduced, atoms), upper,
+                    multiplied, normalized), threshold))
+        },
+    }
+}
+
+theorem divide_lower(row, reduced, atoms: List<Int>, divisor, lower, rounded: Int,
+    decomp: row = scale(divisor, reduced),
+    nonnegative: OfNat(0) <= divisor,
+    threshold: divisor * ipred(rounded) < lower,
+    bound: lower <= dot(row, atoms)):
+    rounded <= dot(reduced, atoms)
+{
+    let scaled: (dot(row, atoms) = divisor * dot(reduced, atoms)) =
+        trans(cong_dot(atoms, decomp),
+            dot_scale(divisor, reduced, atoms));
+    let normalized: (lower <= divisor * dot(reduced, atoms)) =
+        le_transport(lower, lower, dot(row, atoms),
+            divisor * dot(reduced, atoms), refl, scaled, bound);
+    match int::le_dec(rounded, dot(reduced, atoms)) {
+        Inl(proof) => proof,
+        Inr(denied) => {
+            let below: (isucc(dot(reduced, atoms)) <= rounded) =
+                int::lt_of_not_le(dot(reduced, atoms), rounded, denied);
+            let predecessor = int::le_ipred(
+                isucc(dot(reduced, atoms)), rounded, below);
+            let before: (dot(reduced, atoms) <= ipred(rounded)) =
+                j(int::ipred_isucc(dot(reduced, atoms)),
+                    λ q p => q <= ipred(rounded), predecessor);
+            let multiplied = int::mul_le_mono_l(
+                dot(reduced, atoms), ipred(rounded), divisor,
+                before, nonnegative);
+            false_elim(int::not_lt_of_ge(
+                lower, divisor * ipred(rounded),
+                int::le_trans(lower, divisor * dot(reduced, atoms),
+                    divisor * ipred(rounded), normalized, multiplied), threshold))
+        },
+    }
 }
 
 // A positive multiple of a lower bound remains a lower bound.

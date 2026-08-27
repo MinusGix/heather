@@ -410,6 +410,52 @@ fn le_dec(n: Nat) → (m: Nat) → n <= m ∨ ¬(n <= m) {
     }
 }
 
+// Quotient and remainder are computed together while scanning the numerator.
+// The state for `k + 1` increments the remainder from the state for `k`,
+// carrying into the quotient exactly when it reaches a positive divisor.
+// Thus termination is ordinary immediate-predecessor recursion, with no
+// runtime fuel and no division-specific termination exception.
+inductive DivMod { MkDivMod(quotient: Nat, remainder: Nat) }
+
+fn divmod_step(divisor_pred: Nat, state: DivMod) → DivMod {
+    match state {
+        MkDivMod(quotient, remainder) =>
+            match le_dec(Succ(divisor_pred), Succ(remainder)) {
+                Inl(_) => MkDivMod(Succ(quotient), 0),
+                Inr(_) => MkDivMod(quotient, Succ(remainder)),
+            },
+    }
+}
+
+fn divmod(n: Nat) → Nat → DivMod {
+    match n {
+        Zero => λ divisor => MkDivMod(0, 0),
+        Succ(k) => λ divisor => match divisor {
+            Zero => MkDivMod(0, Succ(k)),
+            Succ(d) => divmod_step(d, divmod(k, Succ(d))),
+        },
+    }
+}
+
+fn div(n, divisor: Nat) → Nat {
+    match divmod(n, divisor) { MkDivMod(quotient, _) => quotient }
+}
+
+fn mod(n, divisor: Nat) → Nat {
+    match divmod(n, divisor) { MkDivMod(_, remainder) => remainder }
+}
+
+// The computation above maintains both Euclidean facts in one state.  The
+// second field records either the zero-divisor convention (`divisor <= 0`) or
+// the strict remainder bound.
+fn DivModSpec(n, divisor: Nat, state: DivMod) → Type {
+    match state {
+        MkDivMod(quotient, remainder) =>
+            (quotient * divisor + remainder = n) ∧
+            (divisor <= 0 ∨ remainder < divisor),
+    }
+}
+
 // The order's `Decide` instance — generic in **both** of its values
 // (docs/value-generic-instances-design.md, 2026-08-17). Until value binders
 // existed the only registrable spelling was `Decide<Le(2, 5)>` at fixed
@@ -513,6 +559,139 @@ theorem lt_trichotomy(n: Nat): (m: Nat) → n < m ∨ n = m ∨ m < n {
 // this one is `le_total` with the refuted side resolved away, and it is a line.
 theorem le_of_not_le(n, m: Nat, h: ¬(n <= m)): m <= n {
     or_resolve(or_swap(le_total(n, m)), h)
+}
+
+// The strict counterpart is one successor stronger.  It is structural rather
+// than a corollary of totality: `¬(m <= n)` computes to exactly the branch in
+// which `Succ(n) <= m` holds.
+theorem lt_of_not_le(n: Nat): (m: Nat) → ¬(m <= n) → n < m {
+    match n {
+        Zero => λ m => match m {
+            Zero => λ h => false_elim(h(trivial)),
+            Succ(_) => λ h => trivial,
+        },
+        Succ(_, ih) => λ m => match m {
+            Zero => λ h => false_elim(h(trivial)),
+            Succ(k) => λ h => ih(k, h),
+        },
+    }
+}
+
+// Correctness follows the shared state, just like computation does.  Keeping
+// the step lemma separate gives its dependent match the precise state it
+// consumes and avoids duplicating quotient/remainder reasoning at the public
+// projections.
+theorem divmod_step_spec(n, divisor_pred: Nat, state: DivMod,
+                         h: DivModSpec(n, Succ(divisor_pred), state)):
+    DivModSpec(Succ(n), Succ(divisor_pred), divmod_step(divisor_pred, state))
+{
+    match state as λ s =>
+        DivModSpec(n, Succ(divisor_pred), s) →
+        DivModSpec(Succ(n), Succ(divisor_pred), divmod_step(divisor_pred, s))
+    {
+        MkDivMod(quotient, remainder) => λ spec => match spec {
+            And(reconstruct, alternatives) => match alternatives {
+                Inl(impossible) => false_elim(impossible),
+                Inr(bounded) =>
+                    match le_dec(Succ(divisor_pred), Succ(remainder)) as λ decision =>
+                        DivModSpec(
+                            Succ(n),
+                            Succ(divisor_pred),
+                            match decision {
+                                Inl(_) => MkDivMod(Succ(quotient), 0),
+                                Inr(_) => MkDivMod(quotient, Succ(remainder)),
+                            },
+                        )
+                    {
+                        Inl(carry) => And(
+                            calc {
+                                Succ(quotient) * Succ(divisor_pred)
+                                    = Succ(divisor_pred) + quotient * Succ(divisor_pred) :=
+                                        mul_succ_left(quotient, Succ(divisor_pred)),
+                                    = quotient * Succ(divisor_pred) + Succ(divisor_pred) :=
+                                        add_comm(
+                                            Succ(divisor_pred),
+                                            quotient * Succ(divisor_pred)),
+                                    = quotient * Succ(divisor_pred) + Succ(remainder) :=
+                                        cong_nat(
+                                            λ (x: Nat) =>
+                                                quotient * Succ(divisor_pred) + Succ(x),
+                                            le_antisym(
+                                                divisor_pred, remainder, carry, bounded)),
+                                    = Succ(quotient * Succ(divisor_pred) + remainder) := refl,
+                                    = Succ(n) := cong_succ(reconstruct),
+                            },
+                            Inr(trivial),
+                        ),
+                        Inr(no_carry) => And(
+                            cong_succ(reconstruct),
+                            Inr(lt_of_not_le(
+                                remainder, divisor_pred, no_carry)),
+                        ),
+                    },
+            },
+        },
+    }(h)
+}
+
+theorem divmod_spec(n: Nat): (divisor: Nat) →
+    DivModSpec(n, divisor, divmod(n, divisor))
+{
+    match n {
+        Zero => λ divisor => match divisor {
+            Zero => And(refl, Inl(trivial)),
+            Succ(d) => And(mul_left_zero(Succ(d)), Inr(trivial)),
+        },
+        Succ(k, ih) => λ divisor => match divisor {
+            Zero => And(cong_succ(add_left_zero(k)), Inl(trivial)),
+            Succ(d) => divmod_step_spec(k, d, divmod(k, Succ(d)), ih(Succ(d))),
+        },
+    }
+}
+
+// Public Euclidean laws.  Both projections below destruct the one shared
+// state, so their `div` and `mod` occurrences are definitionally the same
+// quotient and remainder certified by `divmod_spec`.
+theorem div_mul_add_mod(n, divisor: Nat):
+    div(n, divisor) * divisor + mod(n, divisor) = n
+{
+    match divmod(n, divisor) as λ state =>
+        DivModSpec(n, divisor, state) →
+        match state as λ _ => Type {
+            MkDivMod(quotient, remainder) =>
+                quotient * divisor + remainder = n,
+        }
+    {
+        MkDivMod(_, _) => λ spec => spec.left,
+    }(divmod_spec(n, divisor))
+}
+
+theorem mod_lt(n, divisor: Nat, positive: 0 < divisor):
+    mod(n, divisor) < divisor
+{
+    match divisor as λ d => 0 < d → mod(n, d) < d {
+        Zero => λ impossible => false_elim(impossible),
+        Succ(d) => λ _ =>
+            match divmod(n, Succ(d)) as λ state =>
+                DivModSpec(n, Succ(d), state) →
+                match state as λ _ => Type {
+                    MkDivMod(_, remainder) => remainder < Succ(d),
+                }
+            {
+                MkDivMod(_, _) => λ spec => match spec.right {
+                    Inl(impossible) => false_elim(impossible),
+                    Inr(bounded) => bounded,
+                },
+            }(divmod_spec(n, Succ(d))),
+    }(positive)
+}
+
+theorem div_zero(n: Nat): div(n, 0) = 0 {
+    match n { Zero => refl, Succ(_) => refl }
+}
+
+theorem mod_zero(n: Nat): mod(n, 0) = n {
+    match n { Zero => refl, Succ(_) => refl }
 }
 
 // ---------------------------------------------------------------------------
@@ -664,6 +843,21 @@ theorem sub_le(m: Nat): (n: Nat) → sub(m, n) <= m {
                 Zero => le_refl(Succ(m2)),
                 Succ(n2) => le_succ_r(sub(m2, n2), m2, ih(n2)),
             },
+    }
+}
+
+// Removing a positive amount from a value strictly lowers it, provided the
+// amount was available rather than truncated away.
+theorem sub_lt_of_pos(m: Nat): (n: Nat) → 0 < n → n <= m → sub(m, n) < m {
+    match m {
+        Zero => λ n => match n {
+            Zero => λ positive bounded => false_elim(positive),
+            Succ(_) => λ positive bounded => false_elim(bounded),
+        },
+        Succ(m2) => λ n => match n {
+            Zero => λ positive bounded => false_elim(positive),
+            Succ(n2) => λ positive bounded => sub_le(m2, n2),
+        },
     }
 }
 

@@ -53,10 +53,9 @@ The core representation is a signed linear combination
 coefficient vector. Constraint insertion canonicalizes sign and, in the pure
 search API, GCD; rounds integer bounds in the sound direction; intersects
 duplicate vectors; records tight bounds as equalities; and detects crossed
-bounds as contradictions. The certificate frontend currently disables GCD
-reduction: that preserves sound search and the real-shadow fragment while
-avoiding an unreconstructable floor/ceiling step until
-[[omega-div-mod-expansion]] supplies the required quotient laws.
+bounds as contradictions. The certificate frontend reconstructs GCD reduction
+with certified floor/ceiling bound rounding, so ordinary runs retain primitive
+rows.
 
 Equality processing first eliminates a variable with coefficient `+1` or
 `-1`. Hard equalities use Lean's balanced-remainder transformation and a fresh
@@ -204,3 +203,9 @@ when stuck. Arithmetic overflow is a structured refusal and must never wrap.
   branch, and additive Nat permutation. Remaining Omega work is hard
   equalities/balanced remainders, dark/grey shadows, richer stuck reports, and
   the separately owned division/modulus frontend.
+- 2026-08-27: Enabled GCD row reduction in the certificate frontend. Concrete
+  coefficient division is replayed through `omega::divide_lower` and
+  `omega::divide_upper`; the focused nonprimitive-row rail requires both
+  rounded-bound lemmas and reports the GCD derivations. This clears the
+  prerequisite for balanced-remainder hard equalities independently of the
+  user-facing division/modulus frontend.

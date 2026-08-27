@@ -59,6 +59,8 @@ fn reconstruction_lemmas(source: &str) -> Vec<&'static str> {
         "int::not_lt_of_ge",
         "int::zero_le_ofNat",
         "omega::atom_nonnegative",
+        "omega::divide_lower",
+        "omega::divide_upper",
         "omega::impossible_constant_lower",
         "omega::impossible_constant_upper",
         "omega::lower_combo",
@@ -1119,6 +1121,16 @@ fn int(value: Z) -> String {
     int_ctor(value)
 }
 
+fn coeffs_source(coeffs: &Coeffs) -> String {
+    coeffs
+        .as_slice()
+        .iter()
+        .rev()
+        .fold("Nil".to_string(), |tail, coefficient| {
+            format!("Cons({}, {tail})", int(*coefficient))
+        })
+}
+
 fn int_ctor(value: Z) -> String {
     if value >= 0 {
         format!("OfNat({value})")
@@ -1394,7 +1406,7 @@ pub(crate) fn reconstruct(
         (facts, atoms_source)
     };
 
-    let mut problem = Problem::new().without_gcd_reduction();
+    let mut problem = Problem::new();
     let reflected_debug = reflected
         .iter()
         .map(|fact| format!("{:?} {:?}", fact.coeffs, fact.interval))
@@ -1501,6 +1513,74 @@ pub(crate) fn reconstruct(
                         )),
                     ),
                     (None, None) => return Err("Omega cannot positivize an unbounded row".into()),
+                };
+                BoundProof {
+                    row_source,
+                    interval: fact.interval,
+                    lower,
+                    upper,
+                }
+            }
+            Derivation::DivideGcd {
+                parent: source,
+                divisor,
+            } => {
+                let source = parent(&proofs, source)?;
+                let row_source = coeffs_source(&fact.coeffs);
+                let nonnegative = format!("int::zero_le_ofNat({divisor})");
+                let lower = match (source.interval.lower, fact.interval.lower) {
+                    (Some(original), Some(rounded)) => {
+                        let before = rounded
+                            .checked_sub(1)
+                            .ok_or("Omega GCD lower predecessor overflowed")?;
+                        let threshold = divisor
+                            .checked_mul(before)
+                            .ok_or("Omega GCD lower threshold overflowed")?;
+                        Some(format!(
+                            "omega::divide_lower({}, {}, {}, {}, {}, {}, refl, {}, {}, {})",
+                            source.row_source,
+                            row_source,
+                            atoms_source,
+                            int(divisor),
+                            int(original),
+                            int(rounded),
+                            nonnegative,
+                            literal_lt_proof(threshold, original)?,
+                            source
+                                .lower
+                                .as_ref()
+                                .ok_or("Omega GCD division lost its lower proof")?,
+                        ))
+                    }
+                    (None, None) => None,
+                    _ => return Err("Omega GCD division changed lower-bound presence".into()),
+                };
+                let upper = match (source.interval.upper, fact.interval.upper) {
+                    (Some(original), Some(rounded)) => {
+                        let after = rounded
+                            .checked_add(1)
+                            .ok_or("Omega GCD upper successor overflowed")?;
+                        let threshold = divisor
+                            .checked_mul(after)
+                            .ok_or("Omega GCD upper threshold overflowed")?;
+                        Some(format!(
+                            "omega::divide_upper({}, {}, {}, {}, {}, {}, refl, {}, {}, {})",
+                            source.row_source,
+                            row_source,
+                            atoms_source,
+                            int(divisor),
+                            int(original),
+                            int(rounded),
+                            nonnegative,
+                            literal_lt_proof(original, threshold)?,
+                            source
+                                .upper
+                                .as_ref()
+                                .ok_or("Omega GCD division lost its upper proof")?,
+                        ))
+                    }
+                    (None, None) => None,
+                    _ => return Err("Omega GCD division changed upper-bound presence".into()),
                 };
                 BoundProof {
                     row_source,
