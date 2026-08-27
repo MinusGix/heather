@@ -32,3 +32,17 @@ success in the presence of an exhaustive model is never allowed.
 
 - **[[omega-linear-arithmetic]]** owns solver and reconstruction correctness.
 - **[[test-suite-target-timing-and-slow-lane]]** owns general test scheduling.
+
+## Log
+
+- 2026-08-27: Replaced the original radius-only pure differential check with
+  explicitly boxed systems, so exhaustive enumeration is a complete model
+  check rather than a heuristic search for small witnesses. The original
+  5,400-case grid classifies as 4,414 satisfiable, 986 contradicted, and zero
+  real-shadow misses. A second deterministic 20,000-seed rail with four
+  generated inequalities classifies as 11,074 satisfiable, 8,835 contradicted,
+  and 91 integer-unsatisfiable real-shadow misses. Seed 680 is pinned with its
+  directly replayable constraints and minimizes to three inequalities whose
+  real region is the singleton `x = -5/2, y = 1`. Pugh's classic nightmare is
+  pinned separately. Still open: generate the corresponding Heather source
+  subset, minimize frontend failures, and kernel-gate every generated success.

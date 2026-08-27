@@ -292,6 +292,13 @@ impl Interval {
         }
     }
 
+    pub fn bounded(lower: Z, upper: Z) -> Self {
+        Self {
+            lower: Some(lower),
+            upper: Some(upper),
+        }
+    }
+
     pub fn is_impossible(self) -> bool {
         matches!((self.lower, self.upper), (Some(l), Some(u)) if u < l)
     }
@@ -1323,11 +1330,13 @@ mod tests {
     }
 
     #[test]
-    fn generated_small_systems_disagree_with_no_bounded_model() {
+    fn generated_bounded_systems_classify_real_shadow_misses() {
         // A deterministic differential rail for the untrusted search layer.
-        // It is intentionally one-way: a contradiction may never coexist
-        // with a concrete model. `NoContradiction` remains allowed for an
-        // unsatisfiable integer problem because dark/grey shadows are absent.
+        // Every generated problem includes the same bounds used by exhaustive
+        // search, so the model check is complete rather than merely finding
+        // small counterexamples. This lets the rail distinguish satisfiable
+        // systems, contradictions found by the real shadow, and genuine
+        // integer-unsatisfiable systems missed without dark/grey shadows.
         let rows = [
             vec![-2, -1],
             vec![-1, 1],
@@ -1343,31 +1352,150 @@ mod tests {
             Interval::upper(1),
             Interval::exact(0),
         ];
-        let mut checked = 0usize;
+        let bounds = [
+            (vec![1, 0], Interval::bounded(-4, 4)),
+            (vec![0, 1], Interval::bounded(-4, 4)),
+        ];
+        let mut satisfiable = 0usize;
+        let mut contradicted = 0usize;
+        let mut integrality_gaps = 0usize;
+        let mut first_gap = None;
         for a in 0..rows.len() {
             for b in 0..rows.len() {
                 for c in 0..rows.len() {
                     for ia in intervals {
                         for ib in intervals {
-                            let facts = vec![
+                            let mut facts = vec![
                                 (rows[a].clone(), ia),
                                 (rows[b].clone(), ib),
                                 (rows[c].clone(), Interval::lower(0)),
                             ];
+                            facts.extend(bounds.clone());
+                            let has_model = has_model(&facts, 4);
                             let (_, outcome) = solve(&facts);
-                            if matches!(outcome, Outcome::Contradiction { .. }) {
-                                assert!(
-                                    !has_model(&facts, 4),
-                                    "solver contradicted the bounded model of {facts:?}"
-                                );
+                            match (has_model, outcome) {
+                                (true, Outcome::NoContradiction { .. }) => satisfiable += 1,
+                                (false, Outcome::Contradiction { .. }) => contradicted += 1,
+                                (false, Outcome::NoContradiction { .. }) => {
+                                    integrality_gaps += 1;
+                                    first_gap.get_or_insert_with(|| facts.clone());
+                                }
+                                (true, Outcome::Contradiction { .. }) => {
+                                    panic!("solver contradicted a model of {facts:?}")
+                                }
                             }
-                            checked += 1;
                         }
                     }
                 }
             }
         }
-        assert_eq!(checked, 5_400);
+        assert_eq!(
+            (satisfiable, contradicted, integrality_gaps),
+            (4_414, 986, 0)
+        );
+        assert_eq!(first_gap, None);
+    }
+
+    #[test]
+    fn seeded_bounded_systems_pin_integrality_gap_rate_and_replay_seed() {
+        fn next(state: &mut u64) -> u64 {
+            *state = state
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1_442_695_040_888_963_407);
+            *state
+        }
+
+        let mut satisfiable = 0usize;
+        let mut contradicted = 0usize;
+        let mut integrality_gaps = 0usize;
+        let mut first_gap = None;
+        for seed in 0..20_000u64 {
+            let mut state = seed;
+            let mut facts = Vec::new();
+            for _ in 0..4 {
+                let mut row = vec![
+                    (next(&mut state) % 11) as Z - 5,
+                    (next(&mut state) % 11) as Z - 5,
+                ];
+                if row == [0, 0] {
+                    row[0] = 1;
+                }
+                let bound = (next(&mut state) % 17) as Z - 8;
+                let interval = if next(&mut state) & 1 == 0 {
+                    Interval::lower(bound)
+                } else {
+                    Interval::upper(bound)
+                };
+                facts.push((row, interval));
+            }
+            facts.extend([
+                (vec![1, 0], Interval::bounded(-4, 4)),
+                (vec![0, 1], Interval::bounded(-4, 4)),
+            ]);
+            let has_model = has_model(&facts, 4);
+            match (has_model, solve(&facts).1) {
+                (true, Outcome::NoContradiction { .. }) => satisfiable += 1,
+                (false, Outcome::Contradiction { .. }) => contradicted += 1,
+                (false, Outcome::NoContradiction { .. }) => {
+                    integrality_gaps += 1;
+                    first_gap.get_or_insert_with(|| (seed, facts));
+                }
+                (true, Outcome::Contradiction { .. }) => {
+                    panic!("solver contradicted a model at seed {seed}: {facts:?}")
+                }
+            }
+        }
+        assert_eq!(
+            (satisfiable, contradicted, integrality_gaps),
+            (11_074, 8_835, 91)
+        );
+        assert_eq!(
+            first_gap,
+            Some((
+                680,
+                vec![
+                    (vec![2, 3], Interval::lower(-2)),
+                    (vec![-2, -5], Interval::lower(0)),
+                    (vec![0, 3], Interval::lower(3)),
+                    (vec![-5, 0], Interval::lower(-7)),
+                    (vec![1, 0], Interval::bounded(-4, 4)),
+                    (vec![0, 1], Interval::bounded(-4, 4)),
+                ]
+            ))
+        );
+    }
+
+    #[test]
+    fn minimal_thin_integer_slice_is_a_known_real_shadow_miss() {
+        // The first two rows imply 2y <= 2, while the third gives y >= 1,
+        // hence y = 1. The remaining bounds on 2x are then 2x >= -5 and
+        // 2x <= -5: the real shadow contains x = -5/2, but no integer does.
+        let facts = vec![
+            (vec![2, 3], Interval::lower(-2)),
+            (vec![2, 5], Interval::upper(0)),
+            (vec![0, 1], Interval::lower(1)),
+        ];
+        let (_, Outcome::NoContradiction { .. }) = solve(&facts) else {
+            panic!("the real-shadow baseline now closes the pinned gap")
+        };
+        assert!(!has_model(&facts, 4));
+    }
+
+    #[test]
+    fn pughs_nightmare_is_classified_as_a_real_shadow_miss() {
+        // Pugh's representative worst case. Explicit search bounds make the
+        // exhaustive classifier complete without changing the thin region in
+        // which the original system could have an integer point.
+        let facts = vec![
+            (vec![11, 13], Interval::bounded(27, 45)),
+            (vec![7, -9], Interval::bounded(-10, 4)),
+            (vec![1, 0], Interval::bounded(-16, 16)),
+            (vec![0, 1], Interval::bounded(-16, 16)),
+        ];
+        let (_, Outcome::NoContradiction { .. }) = solve(&facts) else {
+            panic!("the real-shadow baseline now closes Pugh's nightmare")
+        };
+        assert!(!has_model(&facts, 16));
     }
 
     #[test]
