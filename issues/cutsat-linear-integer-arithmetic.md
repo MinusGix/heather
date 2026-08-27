@@ -49,6 +49,17 @@ not the integer-specific Cooper search.
 - **[[omega-dark-grey-shadows]]** remains an optional measured fast-path
   extension, not a completeness dependency.
 
+## Follow-up owners
+
+- **[[arithmetic-certificate-dag-sharing]]** owns economical proof
+  materialization and the end-to-end Pugh rail.
+- **[[cutsat-reconstruction-completeness]]** owns the derivation shapes beyond
+  the first simple-Cooper slice.
+- **[[cutsat-first-class-relations]]** owns direct disequality/divisibility
+  reflection.
+- **[[shared-arithmetic-reflection]]** owns extracting the representation for
+  future arithmetic solvers.
+
 ## Log
 
 - 2026-08-27: Landed the substrate's representation boundary in

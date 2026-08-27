@@ -12,6 +12,11 @@ reachable derivations, discarded work, peak constraint-frontier size,
 generated certificate source size, and reconstruction/checking time on stable
 adversarial families.
 
+The same report must separate ordinary Omega, CutSat search, and CutSat proof
+reconstruction so fallback improvements remain attributable. In particular,
+[[arithmetic-certificate-dag-sharing]] owns reducing large proof DAGs while this
+issue owns the source-size/check-cost rails that demonstrate the reduction.
+
 The purpose is regression detection rather than a universal benchmark. Counts
 that are deterministic should be pinned exactly; wall-clock measurements
 should be recorded or bounded coarsely enough to remain reliable. Include

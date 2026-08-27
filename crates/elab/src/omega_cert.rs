@@ -1988,24 +1988,73 @@ fn wrap_cut_les(
     problem: &CutProblem,
     roots: &[usize],
     atom_sources: &[String],
-    body: String,
-) -> String {
-    collect_cut_les(problem, roots)
+    le_evidence: &[Option<String>],
+    mut body: String,
+) -> Result<String, String> {
+    for id in collect_cut_les(problem, roots)
         .into_iter()
+        .filter(|id| le_evidence.get(*id).is_none_or(Option::is_none))
         .rev()
-        .fold(body, |body, id| {
-            let Some(DerivedConstraint::Le(affine)) = problem.derivations().conclusion(id) else {
-                unreachable!()
-            };
-            let value = affine_source(affine, atom_sources);
-            format!(
-                "omega::cutsat_with_le({value}, __cutsat_linear_branch, (__cutsat_le_{id}: {value} <= OfNat(0)) ⊢ {body})"
-            )
-        })
+    {
+        let Some(DerivedConstraint::Le(affine)) = problem.derivations().conclusion(id) else {
+            return Err(format!(
+                "CutSat inequality dependency {id} has no conclusion"
+            ));
+        };
+        let value = affine_source(affine, atom_sources);
+        body = format!(
+            "omega::cutsat_with_le({value}, __cutsat_linear_branch, (__cutsat_le_{id}: {value} <= OfNat(0)) ⊢ {body})"
+        );
+    }
+    Ok(body)
 }
 
 fn cut_le_name(id: usize) -> String {
     format!("__cutsat_le_{id}")
+}
+
+fn cut_le_proof_name(id: usize, evidence: &[Option<String>]) -> String {
+    evidence
+        .get(id)
+        .and_then(Option::as_ref)
+        .cloned()
+        .unwrap_or_else(|| cut_le_name(id))
+}
+
+fn hoisted_cut_les(problem: &CutProblem, reachable: &[usize]) -> (Vec<usize>, Vec<Option<String>>) {
+    let mut is_reachable = vec![false; problem.derivations().nodes().len()];
+    for &id in reachable {
+        is_reachable[id] = true;
+    }
+    let mut is_static = vec![false; problem.derivations().nodes().len()];
+    let mut canonical: Vec<(Affine, usize)> = Vec::new();
+    let mut roots = Vec::new();
+    let mut evidence = vec![None; problem.derivations().nodes().len()];
+    for (id, node) in problem.derivations().nodes().iter().enumerate() {
+        is_static[id] = match node {
+            CutDerivation::Assumption { .. } => true,
+            CutDerivation::RealProjection { lower, upper } => {
+                is_static[*lower] && is_static[*upper]
+            }
+            _ => false,
+        };
+        if !is_reachable[id] || !is_static[id] {
+            continue;
+        }
+        let Some(DerivedConstraint::Le(affine)) = problem.derivations().conclusion(id) else {
+            continue;
+        };
+        let canonical_id = canonical
+            .iter()
+            .find_map(|(old, old_id)| (old == affine).then_some(*old_id))
+            .unwrap_or_else(|| {
+                canonical.push((affine.clone(), id));
+                roots.push(id);
+                id
+            });
+        evidence[id] = Some(cut_le_name(canonical_id));
+    }
+    (roots, evidence)
 }
 
 fn cut_nat_case_proof(split_id: usize, case: usize) -> String {
@@ -2021,6 +2070,7 @@ fn reconstruct_cut_node(
     id: usize,
     atoms_source: &str,
     atom_labels: &[String],
+    le_evidence: &[Option<String>],
     dvd_evidence: &[Option<CutDvdEvidence>],
     depth: usize,
 ) -> Result<String, String> {
@@ -2030,12 +2080,13 @@ fn reconstruct_cut_node(
         .get(id)
         .ok_or_else(|| format!("CutSat certificate references absent node {id}"))?;
     match node {
-        CutDerivation::ConstantInequality { constraint } => Ok(wrap_cut_les(
+        CutDerivation::ConstantInequality { constraint } => wrap_cut_les(
             problem,
             &[*constraint],
             atom_labels,
+            le_evidence,
             "__cutsat_linear_branch".into(),
-        )),
+        ),
         CutDerivation::ConstantDivisibility { constraint } => {
             let dvd = dvd_evidence
                 .get(*constraint)
@@ -2061,12 +2112,13 @@ fn reconstruct_cut_node(
                 .ok_or_else(|| {
                     format!("CutSat bound conflict node {divisibility} has no evidence")
                 })?;
-            Ok(wrap_cut_les(
+            wrap_cut_les(
                 problem,
                 &[*lower, *upper],
                 atom_labels,
+                le_evidence,
                 open_cut_dvds(&[dvd.clone()], "__cutsat_linear_branch".into(), depth),
-            ))
+            )
         }
         CutDerivation::DivisibilityConflict { left, right } => {
             let left = dvd_evidence
@@ -2100,18 +2152,20 @@ fn reconstruct_cut_node(
                         })
                 })
                 .collect::<Result<Vec<_>, _>>()?;
-            Ok(wrap_cut_les(
+            wrap_cut_les(
                 problem,
                 &[*lower, *upper],
                 atom_labels,
+                le_evidence,
                 open_cut_dvds(&evidence, "__cutsat_linear_branch".into(), depth),
-            ))
+            )
         }
         CutDerivation::CooperCase { contradiction, .. } => reconstruct_cut_node(
             problem,
             *contradiction,
             atoms_source,
             atom_labels,
+            le_evidence,
             dvd_evidence,
             depth,
         ),
@@ -2178,6 +2232,7 @@ fn reconstruct_cut_node(
             let cut_name = format!("__cutsat_cut_{id}");
             let dvd_name = format!("__cutsat_dvd_{id}");
             let mut branches = Vec::with_capacity(cases.len());
+            let mut branch_bindings = Vec::with_capacity(cases.len());
             for (case_index, &case_id) in cases.iter().enumerate() {
                 let CutDerivation::CooperCase {
                     inequality,
@@ -2206,6 +2261,8 @@ fn reconstruct_cut_node(
                     );
                 }
                 let mut branch_evidence = dvd_evidence.to_vec();
+                let mut branch_le_evidence = le_evidence.to_vec();
+                branch_le_evidence[*inequality] = Some(cut_name.clone());
                 if let Some(&dvd_id) = divisibilities.first() {
                     let value = format!(
                         "int::add({}, {remainder_name})",
@@ -2222,6 +2279,7 @@ fn reconstruct_cut_node(
                     *contradiction,
                     atoms_source,
                     atom_labels,
+                    &branch_le_evidence,
                     &branch_evidence,
                     depth + 1,
                 )?;
@@ -2230,8 +2288,12 @@ fn reconstruct_cut_node(
                     "trans(__cutsat_int_eq_{id}, int::cong_ofnat({}))",
                     cut_nat_case_proof(id, case_index),
                 );
+                let close_name = format!("__cutsat_close_{id}_{case_index}");
+                branch_bindings.push(format!(
+                    "let {close_name}: ({remainder_name} = {remainder_value}) → False = (__cutsat_remainder_value_{id}_{case_index}: {remainder_name} = {remainder_value}) ⊢ {branch};"
+                ));
                 branches.push(format!(
-                    "omega::cutsat_with_eq({remainder_name}, {remainder_value}, {remainder_proof}, (__cutsat_remainder_value_{id}_{case_index}: {remainder_name} = {remainder_value}) ⊢ {branch})"
+                    "omega::cutsat_with_eq({remainder_name}, {remainder_value}, {remainder_proof}, {close_name})"
                 ));
             }
             let mut matched = "__cutsat_linear_branch".to_string();
@@ -2249,6 +2311,7 @@ fn reconstruct_cut_node(
             matched = format!(
                 "match __cutsat_int_eq_{id} : {remainder_name} {{ NegSucc(__cutsat_negative_{id}) => omega::cutsat_negative_remainder({remainder_name}, __cutsat_negative_{id}, __cutsat_int_eq_{id}, __cutsat_nonnegative_{id}), OfNat({k_name}) => {matched}, }}"
             );
+            matched = format!("{{ {} {matched} }}", branch_bindings.join(" "));
             let lemma = if left {
                 "omega::cutsat_cooper_left"
             } else {
@@ -2261,16 +2324,17 @@ fn reconstruct_cut_node(
             let b_pred = b
                 .checked_sub(1)
                 .ok_or("CutSat right coefficient predecessor overflowed")?;
-            Ok(wrap_cut_les(
+            wrap_cut_les(
                 problem,
                 &[*lower, *upper],
                 atom_labels,
+                le_evidence,
                 format!(
                     "{lemma}({a_pred}, {b_pred}, {x}, {p}, {q}, {}, {}, ({remainder_name}: Int) __cutsat_nonnegative_{id} __cutsat_bound_{id} {cut_name} {dvd_name} ⊢ {matched})",
-                    cut_le_name(*lower),
-                    cut_le_name(*upper),
+                    cut_le_proof_name(*lower, le_evidence),
+                    cut_le_proof_name(*upper, le_evidence),
                 ),
-            ))
+            )
         }
         unsupported => Err(format!(
             "CutSat proof reconstruction does not yet support derivation {unsupported:?}"
@@ -2321,8 +2385,24 @@ fn reconstruct_cutsat(
     else {
         return Ok(None);
     };
+    let (hoisted_roots, le_evidence) = hoisted_cut_les(&problem, &reachable);
     let evidence = vec![None; problem.derivations().nodes().len()];
-    let source = reconstruct_cut_node(&problem, root, atoms_source, atom_sources, &evidence, 0)?;
+    let body = reconstruct_cut_node(
+        &problem,
+        root,
+        atoms_source,
+        atom_sources,
+        &le_evidence,
+        &evidence,
+        0,
+    )?;
+    let source = wrap_cut_les(
+        &problem,
+        &hoisted_roots,
+        atom_sources,
+        &vec![None; problem.derivations().nodes().len()],
+        body,
+    )?;
     Ok(Some((
         source,
         reachable.len(),
@@ -3663,5 +3743,61 @@ mod tests {
             render_residual(&[0, 0, 0, -2], None, Some(7), &labels),
             "-2 * aux[0] <= 7"
         );
+    }
+
+    #[test]
+    fn pugh_certificate_hoists_branch_invariant_inequalities() {
+        fn row(coefficients: &[Z]) -> Affine {
+            Affine {
+                constant: 0,
+                coeffs: AffineCoeffs::new(coefficients.to_vec()),
+            }
+        }
+
+        fn interval(problem: &mut CutProblem, coefficients: &[Z], lower: Z, upper: Z) {
+            let row = row(coefficients);
+            problem
+                .assume(Affine::constant(lower), Relation::Le, row.clone())
+                .unwrap();
+            problem
+                .assume(row, Relation::Le, Affine::constant(upper))
+                .unwrap();
+        }
+
+        let mut problem = CutProblem::new();
+        interval(&mut problem, &[11, 13], 27, 45);
+        interval(&mut problem, &[7, -9], -10, 4);
+        interval(&mut problem, &[1, 0], -16, 16);
+        interval(&mut problem, &[0, 1], -16, 16);
+        let (problem, outcome) = problem.solve(CutLimits::default()).unwrap();
+        let CutOutcome::Contradiction {
+            root, reachable, ..
+        } = outcome
+        else {
+            panic!("Pugh system did not contradict")
+        };
+        let (hoisted_roots, le_evidence) = hoisted_cut_les(&problem, &reachable);
+        let body = reconstruct_cut_node(
+            &problem,
+            root,
+            "atoms(x, y)",
+            &["x".into(), "y".into()],
+            &le_evidence,
+            &vec![None; problem.derivations().nodes().len()],
+            0,
+        )
+        .unwrap();
+        let source = wrap_cut_les(
+            &problem,
+            &hoisted_roots,
+            &["x".into(), "y".into()],
+            &vec![None; problem.derivations().nodes().len()],
+            body,
+        )
+        .unwrap();
+        assert_eq!(source.len(), 16_592);
+        assert_eq!(source.matches("__cutsat_linear_branch").count(), 28);
+        assert_eq!(source.matches("omega::cutsat_with_le").count(), 9);
+        assert_eq!(source.matches("let __cutsat_close_").count(), 18);
     }
 }
