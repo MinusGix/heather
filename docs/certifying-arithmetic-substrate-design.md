@@ -206,9 +206,21 @@ table and relation record while keeping division expansion, interval lowering,
 and proof evidence Omega-specific. Existing reports pin identical opaque-atom
 sharing and label order.
 
-The remaining work in slice 1 is to decide the smallest reusable source-
-evidence interface while implementing the first CutSat consumer. It should be
-extracted from an actual second use, not predicted as a generic solver trait.
+The search-only core now lives in `crates/elab/src/cutsat.rs`. Its public input
+is deliberately the first `Eq`/`Le` slice; equality lowers to two normalized
+inequalities. Search assigns variables in order, learns real projections, and
+uses Cooper-Left/Right cases with internal divisibility constraints. Compatible
+congruences are combined by generalized CRT. In the two-variable acceptance
+slice, a combined-congruence conflict can exclude the current lower-variable
+value by an explicit exhaustive split; higher-dimensional symbolic
+divisibility interaction remains a structured resource refusal.
+
+The core returns either a checked integer model, a contradiction root plus the
+reachable typed derivation slice, or partial model/residual constraints with a
+resource reason. It is still untrusted search: there is no tactic route or
+Heather proof reconstruction yet. The deterministic 20,000-system boxed rail
+pins 11,074 models and 8,926 contradictions, closing all 91 real-shadow misses;
+the minimized seed-680 system and Pugh's nightmare are direct regression tests.
 
 ## Why dark/grey shadows remain open
 

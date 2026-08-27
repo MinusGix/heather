@@ -78,6 +78,7 @@ mod access;
 mod application;
 pub mod arithmetic;
 mod attempt;
+pub mod cutsat;
 pub mod omega;
 mod omega_cert;
 pub use omega_cert::{OmegaReport, OmegaResidualConstraint};

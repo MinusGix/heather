@@ -60,3 +60,15 @@ not the integer-specific Cooper search.
   the same nonlinear atom sharing and exact label order through the kernel-
   gated frontend. Do not extract a generic search interface until the first
   CutSat core supplies the second concrete consumer.
+- 2026-08-27: Landed the first search-only CutSat consumer in
+  `crates/elab/src/cutsat.rs`. It accepts shared affine `Eq`/`Le`, normalizes
+  inequalities, constructs ordered integer assignments, learns real
+  projections, performs Cooper-Left/Right splits, maintains internal
+  divisibility constraints, and combines concrete congruences with generalized
+  CRT. Outcomes distinguish checked models, contradiction roots/reachable
+  typed derivations, and resource-limited partial state. The boxed 20,000-case
+  rail now pins 11,074 models and all 8,926 contradictions (the former 8,835
+  real-shadow closures plus all 91 integrality gaps); seed 680 and Pugh's
+  nightmare are direct tests. Symbolic interaction among multiple congruences
+  above the current two-variable exclusion split, certificate reconstruction,
+  and tactic orchestration remain open.
