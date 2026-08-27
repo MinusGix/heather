@@ -154,3 +154,12 @@ when stuck. Arithmetic overflow is a structured refusal and must never wrap.
   negated-bound theorem. The explicit `omega::dot` path remains as a low-level
   regression fixture. Goal negation, equality/strict relations, `Nat`, and GCD
   division certificates remain open frontend/reconstruction work.
+- 2026-08-26: Extended ordinary reflection to strict `Int` hypotheses and
+  direct `<=`/`<` goals. Goal closure introduces the corresponding negated
+  inequality, recursively asks the same certifying `omega` form for `False`,
+  and applies the standard integer linear-order theorem; the generated wrapper
+  and inner contradiction both pass ordinary elaboration and the kernel gate.
+  Crossed-bound closure now proves concrete signed integer inequalities rather
+  than requiring nonnegative endpoints. GCD-bound rounding remains with the
+  separately planned division/modulus certificate expansion: it requires a
+  genuine floor/ceiling proof, not an unchecked cancellation shortcut.

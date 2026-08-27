@@ -3,8 +3,8 @@
 //!
 //! The frontend reflects affine `Int` inequalities, sharing arbitrary
 //! unrecognized subterms as opaque atoms. Explicit `omega::dot` constraints
-//! remain as a low-level diagnostic boundary while the ordinary frontend
-//! grows beyond `False` goals.
+//! remain as a low-level diagnostic boundary. Direct `<=` and `<` goals are
+//! closed by recursively certifying a contradiction under their negation.
 
 use std::rc::Rc;
 
@@ -106,6 +106,20 @@ fn relation_args<'a>(elab: &Elaborator, ty: &'a Type) -> Option<(&'a Rc<Term>, &
         return None;
     };
     let args = named_args(elab, tm, "int::Le")?;
+    let [left, right] = args.as_slice() else {
+        return None;
+    };
+    Some((left, right))
+}
+
+fn strict_relation_args<'a>(
+    elab: &Elaborator,
+    ty: &'a Type,
+) -> Option<(&'a Rc<Term>, &'a Rc<Term>)> {
+    let Type::El { tm, .. } = ty else {
+        return None;
+    };
+    let args = named_args(elab, tm, "int::Lt")?;
     let [left, right] = args.as_slice() else {
         return None;
     };
@@ -354,7 +368,12 @@ fn affine_syntax(
 
     let index = atoms
         .iter()
-        .position(|atom| **atom == **tm)
+        .position(|atom| {
+            **atom == **tm
+                || elab
+                    .spell_term_clean(cx, atom)
+                    .is_some_and(|atom_source| atom_source == source)
+        })
         .unwrap_or_else(|| {
             atoms.push(Rc::clone(tm));
             atoms.len() - 1
@@ -480,17 +499,31 @@ fn reflect_ordinary(
     let mut relations = Vec::new();
     for pos in 0..cx.names.len() {
         let (_, ty, _) = elab.local(cx, pos);
-        let Some((left, right)) = relation_args(elab, &ty) else {
+        let (left, right) = if let Some((left, right)) = relation_args(elab, &ty) {
+            if dot_args(elab, left).is_some() || dot_args(elab, right).is_some() {
+                return Ok(None);
+            }
+            (
+                affine_syntax(elab, cx, left, &mut atoms)?,
+                affine_syntax(elab, cx, right, &mut atoms)?,
+            )
+        } else if let Some((left, right)) = strict_relation_args(elab, &ty) {
+            let left_source = elab
+                .spell_term_clean(cx, left)
+                .ok_or("Omega could not spell the left side of a strict inequality")?;
+            let left = AffineSyntax::Add {
+                source: format!("int::isucc({left_source})"),
+                left: Box::new(affine_syntax(elab, cx, left, &mut atoms)?),
+                right: Box::new(AffineSyntax::Const {
+                    value: 1,
+                    source: int(1),
+                }),
+            };
+            (left, affine_syntax(elab, cx, right, &mut atoms)?)
+        } else {
             continue;
         };
-        if dot_args(elab, left).is_some() || dot_args(elab, right).is_some() {
-            return Ok(None);
-        }
-        relations.push((
-            pos,
-            affine_syntax(elab, cx, left, &mut atoms)?,
-            affine_syntax(elab, cx, right, &mut atoms)?,
-        ));
+        relations.push((pos, left, right));
     }
     if relations.is_empty() {
         return Ok(None);
@@ -550,6 +583,38 @@ fn int_ctor(value: Z) -> String {
     }
 }
 
+fn literal_lt_proof(lower: Z, upper: Z) -> Result<String, String> {
+    if lower >= upper {
+        return Err(format!(
+            "Omega cannot prove the false literal order {lower} < {upper}"
+        ));
+    }
+    if lower >= 0 {
+        return Ok(format!(
+            "int::ofNat_lt_iff({}, {}).mp(trivial)",
+            lower, upper
+        ));
+    }
+    let lower_payload = lower
+        .checked_neg()
+        .and_then(|value| value.checked_sub(1))
+        .ok_or("Omega cannot reconstruct the minimum `i128` literal")?;
+    if upper >= 0 {
+        return Ok(format!(
+            "int::negsucc_lt_ofnat({}, {})",
+            lower_payload, upper
+        ));
+    }
+    let upper_payload = upper
+        .checked_neg()
+        .and_then(|value| value.checked_sub(1))
+        .ok_or("Omega cannot reconstruct the minimum `i128` literal")?;
+    Ok(format!(
+        "int::negsucc_lt_of_lt({}, {}, trivial)",
+        lower_payload, upper_payload
+    ))
+}
+
 fn list(coeffs: &Coeffs) -> String {
     coeffs
         .as_slice()
@@ -575,9 +640,48 @@ pub(crate) fn reconstruct(
     cx: &Cx,
     expected: &Type,
 ) -> Result<Certificate, String> {
+    if let Some((left, right)) = strict_relation_args(elab, expected) {
+        let left = elab
+            .spell_term_clean(cx, left)
+            .ok_or("Omega could not spell the left side of its `Int` strict goal")?;
+        let right = elab
+            .spell_term_clean(cx, right)
+            .ok_or("Omega could not spell the right side of its `Int` strict goal")?;
+        let source = format!(
+            "int::lt_of_not_le({}, {}, (__omega_negated_goal: {} <= {}) ⊢ omega)",
+            left, right, right, left,
+        );
+        return Ok(Certificate {
+            expr: parse_generated_expr(&source)?,
+            source,
+            assumptions: 0,
+            reachable_derivations: 0,
+        });
+    }
+    if let Some((left, right)) = relation_args(elab, expected) {
+        let left = elab
+            .spell_term_clean(cx, left)
+            .ok_or("Omega could not spell the left side of its `Int` goal")?;
+        let right = elab
+            .spell_term_clean(cx, right)
+            .ok_or("Omega could not spell the right side of its `Int` goal")?;
+        // `right < left` is definitionally `right + 1 <= left`. Writing the
+        // latter lets the recursive `omega` invocation use the same affine
+        // `Le` frontend as ordinary hypotheses.
+        let source = format!(
+            "int::le_of_not_lt({}, {}, (__omega_negated_goal: {} + OfNat(1) <= {}) ⊢ omega)",
+            right, left, right, left,
+        );
+        return Ok(Certificate {
+            expr: parse_generated_expr(&source)?,
+            source,
+            assumptions: 0,
+            reachable_derivations: 0,
+        });
+    }
     if elab.display_type(cx, expected) != "False" {
         return Err(format!(
-            "the first Omega certificate slice expects a `False` goal, got `{}`",
+            "Omega currently expects `False` or an `Int` `<=` goal, got `{}`",
             elab.display_type(cx, expected)
         ));
     }
@@ -614,6 +718,11 @@ pub(crate) fn reconstruct(
     };
 
     let mut problem = Problem::new();
+    let reflected_debug = reflected
+        .iter()
+        .map(|fact| format!("{:?} {:?}", fact.coeffs, fact.interval))
+        .collect::<Vec<_>>()
+        .join(", ");
     for fact in &reflected {
         problem
             .assume(fact.coeffs.as_slice().to_vec(), fact.interval)
@@ -624,10 +733,15 @@ pub(crate) fn reconstruct(
         derivation,
         reachable_derivations,
         ..
-    } = outcome
+    } = &outcome
     else {
-        return Err("Omega's real shadow found no contradiction".into());
+        return Err(format!(
+            "Omega's real shadow found no contradiction: {outcome:?}; locals {:?}; reflected [{reflected_debug}]",
+            cx.names,
+        ));
     };
+    let derivation = *derivation;
+    let reachable_derivations = reachable_derivations.clone();
 
     let mut proofs: Vec<Option<BoundProof>> = vec![None; problem.dag.nodes().len()];
     let mut bindings = Vec::new();
@@ -797,9 +911,6 @@ pub(crate) fn reconstruct(
     if upper >= lower {
         return Err("Omega contradiction did not contain crossed bounds".into());
     }
-    if upper < 0 {
-        return Err("Omega's first certificate slice requires nonnegative crossed bounds".into());
-    }
     let lower_proof = root
         .lower
         .as_ref()
@@ -819,12 +930,11 @@ pub(crate) fn reconstruct(
         upper_proof,
     );
     let result = format!(
-        "int::not_lt_of_ge({}, {}, {}) (int::ofNat_lt_iff({}, {}).mp(trivial))",
+        "int::not_lt_of_ge({}, {}, {}) ({})",
         int(lower),
         int(upper),
         trans,
-        upper,
-        lower,
+        literal_lt_proof(upper, lower)?,
     );
     let source = if bindings.is_empty() {
         result

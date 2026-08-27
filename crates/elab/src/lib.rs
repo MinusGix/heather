@@ -2913,8 +2913,7 @@ impl Elaborator {
                     && !self.shadowed(cx, name)
                     && self.ctor_here_expected(cx, name, expected).is_none() =>
             {
-                let head = self.whnf(cx, expected, e.span)?;
-                let cert = omega_cert::reconstruct(self, cx, &head).map_err(|detail|
+                let cert = omega_cert::reconstruct(self, cx, expected).map_err(|detail|
                     ElabError::Elab {
                         msg: format!("`omega` got stuck: {detail}"),
                         span: e.span,

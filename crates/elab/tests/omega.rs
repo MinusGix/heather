@@ -103,6 +103,43 @@ theorem opaque_nonlinear(x: Int,
 }
 
 #[test]
+fn closes_an_integer_le_goal_via_its_strict_negation() {
+    let source = format!(
+        r#"{PREFIX}
+theorem direct_goal(x, y: Int, h: x + OfNat(1) <= y): x <= y {{ omega }}
+"#
+    );
+    elaborator()
+        .elab_module_source("probe", &source)
+        .unwrap_or_else(|error| panic!("direct Omega goal did not check: {}", message(error)));
+}
+
+#[test]
+fn refuses_an_unprovable_integer_le_goal() {
+    let source = format!(
+        r#"{PREFIX}
+theorem unprovable_goal(x, y: Int): x <= y {{ omega }}
+"#
+    );
+    let error = elaborator()
+        .elab_module_source("probe", &source)
+        .expect_err("an unconstrained order goal must not produce a certificate");
+    assert!(message(error).contains("real shadow found no contradiction"));
+}
+
+#[test]
+fn closes_an_integer_lt_goal_via_its_negation() {
+    let source = format!(
+        r#"{PREFIX}
+theorem direct_strict_goal(x, y: Int, h: x + OfNat(1) < y): x < y {{ omega }}
+"#
+    );
+    elaborator()
+        .elab_module_source("probe", &source)
+        .unwrap_or_else(|error| panic!("strict Omega goal did not check: {}", message(error)));
+}
+
+#[test]
 fn satisfiable_mutation_is_refused_as_no_contradiction() {
     let source = format!(
         r#"{PREFIX}
