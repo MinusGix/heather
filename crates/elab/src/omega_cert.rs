@@ -1,10 +1,10 @@
 //! Reflection and proof reconstruction for the first kernel-certified Omega
 //! slice.
 //!
-//! The frontend reflects affine `Int` inequalities, sharing arbitrary
-//! unrecognized subterms as opaque atoms. Explicit `omega::dot` constraints
-//! remain as a low-level diagnostic boundary. Direct `<=` and `<` goals are
-//! closed by recursively certifying a contradiction under their negation.
+//! The frontend reflects affine `Int` inequalities and equalities, sharing
+//! arbitrary unrecognized subterms as opaque atoms. Explicit `omega::dot`
+//! constraints remain as a low-level diagnostic boundary. Direct `<=`, `<`,
+//! and `=` goals reuse recursively certified order consequences.
 
 use std::rc::Rc;
 
@@ -52,12 +52,13 @@ enum AffineSyntax {
         source: String,
     },
     Add {
-        source: String,
         left: Box<AffineSyntax>,
         right: Box<AffineSyntax>,
     },
+    Neg {
+        inner: Box<AffineSyntax>,
+    },
     Scale {
-        source: String,
         factor: Z,
         factor_on_left: bool,
         inner: Box<AffineSyntax>,
@@ -73,7 +74,6 @@ struct Normalized {
 
 #[derive(Clone)]
 struct BoundProof {
-    coeffs: Coeffs,
     row_source: String,
     interval: Interval,
     lower: Option<String>,
@@ -124,6 +124,17 @@ fn strict_relation_args<'a>(
         return None;
     };
     Some((left, right))
+}
+
+fn equality_args<'a>(
+    elab: &Elaborator,
+    cx: &Cx,
+    ty: &'a Type,
+) -> Option<(&'a Rc<Term>, &'a Rc<Term>)> {
+    let Type::Id { ty, lhs, rhs, .. } = ty else {
+        return None;
+    };
+    (elab.display_type(cx, ty) == "Int").then_some((lhs, rhs))
 }
 
 fn dot_args<'a>(elab: &Elaborator, tm: &'a Term) -> Option<(&'a Rc<Term>, &'a Rc<Term>)> {
@@ -331,9 +342,25 @@ fn affine_syntax(
     if let Some(args) = named_args(elab, tm, "int::add") {
         if let [left, right] = args.as_slice() {
             return Ok(AffineSyntax::Add {
-                source,
                 left: Box::new(affine_syntax(elab, cx, left, atoms)?),
                 right: Box::new(affine_syntax(elab, cx, right, atoms)?),
+            });
+        }
+    }
+    if let Some(args) = named_args(elab, tm, "int::sub") {
+        if let [left, right] = args.as_slice() {
+            return Ok(AffineSyntax::Add {
+                left: Box::new(affine_syntax(elab, cx, left, atoms)?),
+                right: Box::new(AffineSyntax::Neg {
+                    inner: Box::new(affine_syntax(elab, cx, right, atoms)?),
+                }),
+            });
+        }
+    }
+    if let Some(args) = named_args(elab, tm, "int::neg") {
+        if let [inner] = args.as_slice() {
+            return Ok(AffineSyntax::Neg {
+                inner: Box::new(affine_syntax(elab, cx, inner, atoms)?),
             });
         }
     }
@@ -346,7 +373,6 @@ fn affine_syntax(
                     return Err("Omega cannot reconstruct the minimum `i128` literal".into());
                 }
                 return Ok(AffineSyntax::Scale {
-                    source,
                     factor,
                     factor_on_left: true,
                     inner: Box::new(affine_syntax(elab, cx, right, atoms)?),
@@ -357,7 +383,6 @@ fn affine_syntax(
                     return Err("Omega cannot reconstruct the minimum `i128` literal".into());
                 }
                 return Ok(AffineSyntax::Scale {
-                    source,
                     factor,
                     factor_on_left: false,
                     inner: Box::new(affine_syntax(elab, cx, left, atoms)?),
@@ -413,11 +438,7 @@ fn normalize_syntax(syntax: &AffineSyntax, atoms_source: &str) -> Result<Normali
                 row_source,
             })
         }
-        AffineSyntax::Add {
-            source,
-            left,
-            right,
-        } => {
+        AffineSyntax::Add { left, right } => {
             let left = normalize_syntax(left, atoms_source)?;
             let right = normalize_syntax(right, atoms_source)?;
             let linear = left
@@ -441,14 +462,35 @@ fn normalize_syntax(syntax: &AffineSyntax, atoms_source: &str) -> Result<Normali
                 right.proof,
             );
             Ok(Normalized {
-                source: source.clone(),
+                source: format!("int::add({}, {})", left.source, right.source),
+                linear,
+                row_source,
+                proof,
+            })
+        }
+        AffineSyntax::Neg { inner } => {
+            let inner = normalize_syntax(inner, atoms_source)?;
+            let linear = inner
+                .linear
+                .checked_scale(-1)
+                .map_err(|failure| failure.to_string())?;
+            let row_source = format!("omega::scale({}, {})", int(-1), inner.row_source);
+            let proof = format!(
+                "omega::normalize_neg({}, {}, {}, {}, {})",
+                inner.source,
+                int(inner.linear.constant),
+                inner.row_source,
+                atoms_source,
+                inner.proof,
+            );
+            Ok(Normalized {
+                source: format!("int::neg({})", inner.source),
                 linear,
                 row_source,
                 proof,
             })
         }
         AffineSyntax::Scale {
-            source,
             factor,
             factor_on_left,
             inner,
@@ -482,7 +524,11 @@ fn normalize_syntax(syntax: &AffineSyntax, atoms_source: &str) -> Result<Normali
                 inner.proof,
             );
             Ok(Normalized {
-                source: source.clone(),
+                source: if *factor_on_left {
+                    format!("int::mul({}, {})", int(*factor), inner.source)
+                } else {
+                    format!("int::mul({}, {})", inner.source, int(*factor))
+                },
                 linear,
                 row_source,
                 proof,
@@ -499,38 +545,41 @@ fn reflect_ordinary(
     let mut relations = Vec::new();
     for pos in 0..cx.names.len() {
         let (_, ty, _) = elab.local(cx, pos);
-        let (left, right) = if let Some((left, right)) = relation_args(elab, &ty) {
+        let (left, right, exact) = if let Some((left, right)) = relation_args(elab, &ty) {
             if dot_args(elab, left).is_some() || dot_args(elab, right).is_some() {
                 return Ok(None);
             }
             (
                 affine_syntax(elab, cx, left, &mut atoms)?,
                 affine_syntax(elab, cx, right, &mut atoms)?,
+                false,
             )
         } else if let Some((left, right)) = strict_relation_args(elab, &ty) {
-            let left_source = elab
-                .spell_term_clean(cx, left)
-                .ok_or("Omega could not spell the left side of a strict inequality")?;
             let left = AffineSyntax::Add {
-                source: format!("int::isucc({left_source})"),
                 left: Box::new(affine_syntax(elab, cx, left, &mut atoms)?),
                 right: Box::new(AffineSyntax::Const {
                     value: 1,
                     source: int(1),
                 }),
             };
-            (left, affine_syntax(elab, cx, right, &mut atoms)?)
+            (left, affine_syntax(elab, cx, right, &mut atoms)?, false)
+        } else if let Some((left, right)) = equality_args(elab, cx, &ty) {
+            (
+                affine_syntax(elab, cx, left, &mut atoms)?,
+                affine_syntax(elab, cx, right, &mut atoms)?,
+                true,
+            )
         } else {
             continue;
         };
-        relations.push((pos, left, right));
+        relations.push((pos, left, right, exact));
     }
     if relations.is_empty() {
         return Ok(None);
     }
     let atoms_source = atom_list_source(elab, cx, &atoms)?;
     let mut facts = Vec::with_capacity(relations.len());
-    for (pos, left, right) in relations {
+    for (pos, left, right, exact) in relations {
         let left = normalize_syntax(&left, &atoms_source)?;
         let right = normalize_syntax(&right, &atoms_source)?;
         let linear = left
@@ -546,26 +595,61 @@ fn reflect_ordinary(
             "omega::sub_coeffs({}, {})",
             left.row_source, right.row_source
         );
-        let proof = format!(
-            "omega::normalized_le_upper({}, {}, {}, {}, {}, {}, {}, {}, {}, {})",
-            left.source,
-            right.source,
-            int(left.linear.constant),
-            int(right.linear.constant),
-            left.row_source,
-            right.row_source,
-            atoms_source,
-            left.proof,
-            right.proof,
-            cx.names[pos],
-        );
-        facts.push(InitialAssumption {
-            coeffs: linear.coeffs,
-            row_source,
-            interval: Interval::upper(upper),
-            lower: None,
-            upper: Some(proof),
-        });
+        if exact {
+            let equality = format!(
+                "omega::normalized_eq_value({}, {}, {}, {}, {}, {}, {}, {}, {}, {})",
+                left.source,
+                right.source,
+                int(left.linear.constant),
+                int(right.linear.constant),
+                left.row_source,
+                right.row_source,
+                atoms_source,
+                left.proof,
+                right.proof,
+                cx.names[pos],
+            );
+            facts.push(InitialAssumption {
+                coeffs: linear.coeffs,
+                row_source: row_source.clone(),
+                interval: Interval::exact(upper),
+                lower: Some(format!(
+                    "omega::lower_of_eq({}, {}, {}, {})",
+                    row_source,
+                    atoms_source,
+                    int(upper),
+                    equality,
+                )),
+                upper: Some(format!(
+                    "omega::upper_of_eq({}, {}, {}, {})",
+                    row_source,
+                    atoms_source,
+                    int(upper),
+                    equality,
+                )),
+            });
+        } else {
+            let proof = format!(
+                "omega::normalized_le_upper({}, {}, {}, {}, {}, {}, {}, {}, {}, {})",
+                left.source,
+                right.source,
+                int(left.linear.constant),
+                int(right.linear.constant),
+                left.row_source,
+                right.row_source,
+                atoms_source,
+                left.proof,
+                right.proof,
+                cx.names[pos],
+            );
+            facts.push(InitialAssumption {
+                coeffs: linear.coeffs,
+                row_source,
+                interval: Interval::upper(upper),
+                lower: None,
+                upper: Some(proof),
+            });
+        }
     }
     Ok(Some((facts, atoms_source)))
 }
@@ -615,16 +699,6 @@ fn literal_lt_proof(lower: Z, upper: Z) -> Result<String, String> {
     ))
 }
 
-fn list(coeffs: &Coeffs) -> String {
-    coeffs
-        .as_slice()
-        .iter()
-        .rev()
-        .fold("Nil".to_string(), |tail, value| {
-            format!("Cons({}, {tail})", int_ctor(*value))
-        })
-}
-
 fn parent<'a>(
     proofs: &'a [Option<BoundProof>],
     id: DerivationId,
@@ -640,6 +714,24 @@ pub(crate) fn reconstruct(
     cx: &Cx,
     expected: &Type,
 ) -> Result<Certificate, String> {
+    if let Some((left, right)) = equality_args(elab, cx, expected) {
+        let left = elab
+            .spell_term_clean(cx, left)
+            .ok_or("Omega could not spell the left side of its `Int` equality goal")?;
+        let right = elab
+            .spell_term_clean(cx, right)
+            .ok_or("Omega could not spell the right side of its `Int` equality goal")?;
+        // Antisymmetry keeps equality goal closure inside the already
+        // certified inequality frontend. Each recursive invocation builds and
+        // kernel-checks its own contradiction under the opposite strict bound.
+        let source = format!("int::le_antisym({}, {}, omega, omega)", left, right);
+        return Ok(Certificate {
+            expr: parse_generated_expr(&source)?,
+            source,
+            assumptions: 0,
+            reachable_derivations: 0,
+        });
+    }
     if let Some((left, right)) = strict_relation_args(elab, expected) {
         let left = elab
             .spell_term_clean(cx, left)
@@ -753,7 +845,6 @@ pub(crate) fn reconstruct(
                     .get(index)
                     .ok_or_else(|| format!("Omega assumption {index} was not reflected"))?;
                 BoundProof {
-                    coeffs: fact.coeffs,
                     row_source: source.row_source.clone(),
                     interval: fact.interval,
                     lower: source.lower.clone(),
@@ -777,15 +868,44 @@ pub(crate) fn reconstruct(
                         )),
                         None,
                     ),
-                    (Some(bound), None) => {
-                        return Err(format!(
-                            "Omega proof reconstruction cannot yet positivize lower bound {bound}"
-                        ));
-                    }
-                    _ => return Err("Omega cannot positivize a two-sided interval yet".into()),
+                    (Some(bound), None) => (
+                        None,
+                        Some(format!(
+                            "omega::lower_to_negated_upper({}, {}, {}, {})",
+                            source.row_source,
+                            atoms_source,
+                            int(bound),
+                            source
+                                .lower
+                                .as_ref()
+                                .ok_or("Omega positivization lost its lower proof")?,
+                        )),
+                    ),
+                    (Some(lower), Some(upper)) => (
+                        Some(format!(
+                            "omega::upper_to_negated_lower({}, {}, {}, {})",
+                            source.row_source,
+                            atoms_source,
+                            int(upper),
+                            source
+                                .upper
+                                .as_ref()
+                                .ok_or("Omega positivization lost its upper proof")?,
+                        )),
+                        Some(format!(
+                            "omega::lower_to_negated_upper({}, {}, {}, {})",
+                            source.row_source,
+                            atoms_source,
+                            int(lower),
+                            source
+                                .lower
+                                .as_ref()
+                                .ok_or("Omega positivization lost its lower proof")?,
+                        )),
+                    ),
+                    (None, None) => return Err("Omega cannot positivize an unbounded row".into()),
                 };
                 BoundProof {
-                    coeffs: fact.coeffs,
                     row_source,
                     interval: fact.interval,
                     lower,
@@ -812,7 +932,6 @@ pub(crate) fn reconstruct(
                     None => None,
                 };
                 BoundProof {
-                    coeffs: fact.coeffs,
                     row_source: left.row_source.clone(),
                     interval: fact.interval,
                     lower,
@@ -858,8 +977,8 @@ pub(crate) fn reconstruct(
                     "omega::lower_upper_combo({}, {}, {}, {}, {}, {}, {}, int::zero_le_ofNat({}), int::zero_le_ofNat({}), {}, {})",
                     int(left_scale),
                     int(magnitude),
-                    list(&left.coeffs),
-                    list(&right.coeffs),
+                    left.row_source,
+                    right.row_source,
                     atoms_source,
                     int(l),
                     int(u),
@@ -870,11 +989,235 @@ pub(crate) fn reconstruct(
                 );
                 bindings.push(format!("let {name} = {expression};"));
                 BoundProof {
-                    coeffs: fact.coeffs,
                     row_source,
                     interval: fact.interval,
                     lower: Some(name),
                     upper: None,
+                }
+            }
+            Derivation::Combo {
+                left,
+                left_scale,
+                right,
+                right_scale,
+            } if left_scale < 0 && right_scale > 0 && fact.interval.upper.is_none() => {
+                let left = parent(&proofs, left)?;
+                let right = parent(&proofs, right)?;
+                let upper = left
+                    .upper
+                    .as_ref()
+                    .ok_or("Omega equality combination is missing its upper proof")?;
+                let lower = right
+                    .lower
+                    .as_ref()
+                    .ok_or("Omega equality combination is missing its lower proof")?;
+                let u = left
+                    .interval
+                    .upper
+                    .ok_or("Omega equality combination has no upper value")?;
+                let l = right
+                    .interval
+                    .lower
+                    .ok_or("Omega equality combination has no lower value")?;
+                let magnitude = left_scale
+                    .checked_neg()
+                    .ok_or("Omega equality combination scale overflowed")?;
+                let name = format!("__omega_generated_{id}");
+                // The certificate row is commuted so it matches the existing
+                // positive-lower/negative-upper theorem. Its concrete
+                // coefficients are the same row replayed by the solver.
+                let row_source = format!(
+                    "omega::combo({}, {}, {}, {})",
+                    int(right_scale),
+                    right.row_source,
+                    int(left_scale),
+                    left.row_source,
+                );
+                let expression = format!(
+                    "omega::lower_upper_combo({}, {}, {}, {}, {}, {}, {}, int::zero_le_ofNat({}), int::zero_le_ofNat({}), {}, {})",
+                    int(right_scale),
+                    int(magnitude),
+                    right.row_source,
+                    left.row_source,
+                    atoms_source,
+                    int(l),
+                    int(u),
+                    right_scale,
+                    magnitude,
+                    lower,
+                    upper,
+                );
+                bindings.push(format!("let {name} = {expression};"));
+                BoundProof {
+                    row_source,
+                    interval: fact.interval,
+                    lower: Some(name),
+                    upper: None,
+                }
+            }
+            Derivation::Combo {
+                left,
+                left_scale,
+                right,
+                right_scale,
+            } if left_scale < 0 && right_scale > 0 && fact.interval.lower.is_none() => {
+                let left = parent(&proofs, left)?;
+                let right = parent(&proofs, right)?;
+                let lower = left
+                    .lower
+                    .as_ref()
+                    .ok_or("Omega upper equality combination is missing its lower proof")?;
+                let upper = right
+                    .upper
+                    .as_ref()
+                    .ok_or("Omega upper equality combination is missing its upper proof")?;
+                let l = left
+                    .interval
+                    .lower
+                    .ok_or("Omega upper equality combination has no lower value")?;
+                let u = right
+                    .interval
+                    .upper
+                    .ok_or("Omega upper equality combination has no upper value")?;
+                let magnitude = left_scale
+                    .checked_neg()
+                    .ok_or("Omega upper equality combination scale overflowed")?;
+                let name = format!("__omega_generated_{id}");
+                let row_source = format!(
+                    "omega::combo({}, {}, {}, {})",
+                    int(left_scale),
+                    left.row_source,
+                    int(right_scale),
+                    right.row_source,
+                );
+                let expression = format!(
+                    "omega::upper_lower_combo({}, {}, {}, {}, {}, {}, {}, int::zero_le_ofNat({}), int::zero_le_ofNat({}), {}, {})",
+                    int(magnitude),
+                    int(right_scale),
+                    left.row_source,
+                    right.row_source,
+                    atoms_source,
+                    int(l),
+                    int(u),
+                    magnitude,
+                    right_scale,
+                    lower,
+                    upper,
+                );
+                bindings.push(format!("let {name} = {expression};"));
+                BoundProof {
+                    row_source,
+                    interval: fact.interval,
+                    lower: None,
+                    upper: Some(name),
+                }
+            }
+            Derivation::Combo {
+                left,
+                left_scale,
+                right,
+                right_scale,
+            } if left_scale > 0 && right_scale > 0 && fact.interval.upper.is_none() => {
+                let left = parent(&proofs, left)?;
+                let right = parent(&proofs, right)?;
+                let left_lower = left
+                    .lower
+                    .as_ref()
+                    .ok_or("Omega positive combination is missing its left lower proof")?;
+                let right_lower = right
+                    .lower
+                    .as_ref()
+                    .ok_or("Omega positive combination is missing its right lower proof")?;
+                let l = left
+                    .interval
+                    .lower
+                    .ok_or("Omega positive combination has no left lower value")?;
+                let r = right
+                    .interval
+                    .lower
+                    .ok_or("Omega positive combination has no right lower value")?;
+                let name = format!("__omega_generated_{id}");
+                let row_source = format!(
+                    "omega::combo({}, {}, {}, {})",
+                    int(left_scale),
+                    left.row_source,
+                    int(right_scale),
+                    right.row_source,
+                );
+                let expression = format!(
+                    "omega::lower_combo({}, {}, {}, {}, {}, {}, {}, int::zero_le_ofNat({}), int::zero_le_ofNat({}), {}, {})",
+                    int(left_scale),
+                    int(right_scale),
+                    left.row_source,
+                    right.row_source,
+                    atoms_source,
+                    int(l),
+                    int(r),
+                    left_scale,
+                    right_scale,
+                    left_lower,
+                    right_lower,
+                );
+                bindings.push(format!("let {name} = {expression};"));
+                BoundProof {
+                    row_source,
+                    interval: fact.interval,
+                    lower: Some(name),
+                    upper: None,
+                }
+            }
+            Derivation::Combo {
+                left,
+                left_scale,
+                right,
+                right_scale,
+            } if left_scale > 0 && right_scale > 0 && fact.interval.lower.is_none() => {
+                let left = parent(&proofs, left)?;
+                let right = parent(&proofs, right)?;
+                let left_upper = left
+                    .upper
+                    .as_ref()
+                    .ok_or("Omega positive combination is missing its left upper proof")?;
+                let right_upper = right
+                    .upper
+                    .as_ref()
+                    .ok_or("Omega positive combination is missing its right upper proof")?;
+                let l = left
+                    .interval
+                    .upper
+                    .ok_or("Omega positive combination has no left upper value")?;
+                let r = right
+                    .interval
+                    .upper
+                    .ok_or("Omega positive combination has no right upper value")?;
+                let name = format!("__omega_generated_{id}");
+                let row_source = format!(
+                    "omega::combo({}, {}, {}, {})",
+                    int(left_scale),
+                    left.row_source,
+                    int(right_scale),
+                    right.row_source,
+                );
+                let expression = format!(
+                    "omega::upper_combo({}, {}, {}, {}, {}, {}, {}, int::zero_le_ofNat({}), int::zero_le_ofNat({}), {}, {})",
+                    int(left_scale),
+                    int(right_scale),
+                    left.row_source,
+                    right.row_source,
+                    atoms_source,
+                    int(l),
+                    int(r),
+                    left_scale,
+                    right_scale,
+                    left_upper,
+                    right_upper,
+                );
+                bindings.push(format!("let {name} = {expression};"));
+                BoundProof {
+                    row_source,
+                    interval: fact.interval,
+                    lower: None,
+                    upper: Some(name),
                 }
             }
             Derivation::Constant {
@@ -883,7 +1226,6 @@ pub(crate) fn reconstruct(
             } if impossible => {
                 let source = parent(&proofs, source)?;
                 BoundProof {
-                    coeffs: fact.coeffs,
                     row_source: source.row_source.clone(),
                     interval: fact.interval,
                     lower: source.lower.clone(),
@@ -941,7 +1283,8 @@ pub(crate) fn reconstruct(
     } else {
         format!("{{ {} {} }}", bindings.join(" "), result)
     };
-    let expr = parse_generated_expr(&source)?;
+    let expr = parse_generated_expr(&source)
+        .map_err(|error| format!("{error}\n  generated Omega source: {source}"))?;
     Ok(Certificate {
         expr,
         source,

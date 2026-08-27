@@ -163,3 +163,12 @@ when stuck. Arithmetic overflow is a structured refusal and must never wrap.
   than requiring nonnegative endpoints. GCD-bound rounding remains with the
   separately planned division/modulus certificate expansion: it requires a
   genuine floor/ceiling proof, not an unchecked cancellation shortcut.
+- 2026-08-26: Completed the first `Int` equality iteration. Affine reflection
+  now normalizes explicit subtraction and negation; equality hypotheses become
+  exact intervals with kernel proofs of both bounds. Proof reconstruction
+  handles easy-equality substitution into lower and upper constraints,
+  including two-sided sign normalization, while preserving untrimmed parent
+  row expressions at open atoms. Direct equality goals use two recursively
+  certified inequalities and integer antisymmetry. End-to-end rails cover
+  exact-interval contradiction, substitution in both bound directions,
+  reversed equality orientation, and a derived affine equality goal.

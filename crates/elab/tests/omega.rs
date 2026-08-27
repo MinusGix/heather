@@ -140,6 +140,114 @@ theorem direct_strict_goal(x, y: Int, h: x + OfNat(1) < y): x < y {{ omega }}
 }
 
 #[test]
+fn normalizes_negation_and_subtraction() {
+    let source = format!(
+        r#"{PREFIX}
+theorem negated_difference(x, y: Int,
+    upper: int::sub(x, y) <= OfNat(0),
+    lower: OfNat(1) <= x + int::neg(y)):
+    False
+{{ omega }}
+"#
+    );
+    elaborator()
+        .elab_module_source("probe", &source)
+        .unwrap_or_else(|error| panic!("negation/subtraction did not check: {}", message(error)));
+}
+
+#[test]
+fn reflects_integer_equality_as_an_exact_interval() {
+    let source = format!(
+        r#"{PREFIX}
+theorem exact_interval(x, y: Int, eq: x = y, bad: x + OfNat(1) <= y): False
+{{ omega }}
+"#
+    );
+    elaborator()
+        .elab_module_source("probe", &source)
+        .unwrap_or_else(|error| panic!("equality certificate did not check: {}", message(error)));
+}
+
+#[test]
+fn positivizes_a_reversed_exact_equality() {
+    let source = format!(
+        r#"{PREFIX}
+theorem reversed_exact(x: Int, eq: OfNat(1) = x, bad: x <= OfNat(0)): False
+{{ omega }}
+"#
+    );
+    elaborator()
+        .elab_module_source("probe", &source)
+        .unwrap_or_else(|error| panic!("reversed equality did not check: {}", message(error)));
+}
+
+#[test]
+fn reconstructs_easy_equality_elimination() {
+    let source = format!(
+        r#"{PREFIX}
+theorem substituted_bound(x, y: Int,
+    eq: y = x + OfNat(1),
+    lower: OfNat(3) <= y,
+    upper: x <= OfNat(1)):
+    False
+{{ omega }}
+"#
+    );
+    elaborator()
+        .elab_module_source("probe", &source)
+        .unwrap_or_else(|error| panic!("equality elimination did not check: {}", message(error)));
+}
+
+#[test]
+fn reconstructs_equality_elimination_into_an_upper_bound() {
+    let source = format!(
+        r#"{PREFIX}
+theorem substituted_upper(x, y: Int,
+    eq: y = x + OfNat(1),
+    upper: y <= OfNat(2),
+    lower: OfNat(2) <= x):
+    False
+{{ omega }}
+"#
+    );
+    elaborator()
+        .elab_module_source("probe", &source)
+        .unwrap_or_else(|error| {
+            panic!(
+                "upper equality elimination did not check: {}",
+                message(error)
+            )
+        });
+}
+
+#[test]
+fn closes_an_integer_equality_goal_by_antisymmetry() {
+    let source = format!(
+        r#"{PREFIX}
+theorem direct_equality(x, y: Int, forward: x <= y, backward: y <= x): x = y
+{{ omega }}
+"#
+    );
+    elaborator()
+        .elab_module_source("probe", &source)
+        .unwrap_or_else(|error| panic!("direct equality did not check: {}", message(error)));
+}
+
+#[test]
+fn proves_an_affine_equality_consequence() {
+    let source = format!(
+        r#"{PREFIX}
+theorem affine_equality_goal(x, y: Int, eq: y = x + OfNat(1)):
+    int::sub(y, OfNat(1)) = x
+{{ omega }}
+"#
+    );
+    elaborator()
+        .elab_module_source("probe", &source)
+        .unwrap_or_else(|error| panic!("affine equality goal did not check: {}", message(error)));
+}
+
+#[test]
 fn satisfiable_mutation_is_refused_as_no_contradiction() {
     let source = format!(
         r#"{PREFIX}
