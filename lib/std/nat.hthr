@@ -694,6 +694,11 @@ theorem mod_zero(n: Nat): mod(n, 0) = n {
     match n { Zero => refl, Succ(_) => refl }
 }
 
+// Divisibility follows the executable Euclidean semantics directly. Keeping
+// it definitionally equal to a zero-remainder proposition lets arithmetic
+// automation consume positive and negated uses without an existential witness.
+fn Divides(divisor, n: Nat) → Type { mod(n, divisor) = 0 }
+
 // ---------------------------------------------------------------------------
 // Equality at `Nat`, and its decision (issues/std-api-waves.md wave 2).
 //

@@ -1704,6 +1704,10 @@ theorem div_zero(dividend: Int): div(dividend, OfNat(0)) = OfNat(0) { refl }
 
 theorem mod_zero(dividend: Int): mod(dividend, OfNat(0)) = dividend { refl }
 
+fn Divides(divisor, dividend: Int) → Type {
+    mod(dividend, divisor) = OfNat(0)
+}
+
 instance Default<Int> { default := OfNat(0) }
 instance Numeral<Int> { ofNat := OfNat }
 

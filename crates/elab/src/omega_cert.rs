@@ -75,6 +75,12 @@ fn reconstruction_lemmas(source: &str) -> Vec<&'static str> {
         "omega::normalize_mod",
         "omega::normalize_div_zero",
         "omega::normalize_mod_zero",
+        "omega::nat_div_lower",
+        "omega::nat_div_upper",
+        "omega::nat_diseq_elim",
+        "omega::normalize_nat_mod",
+        "omega::normalize_nat_div_zero",
+        "omega::normalize_nat_mod_zero",
         "omega::lower_upper_combo",
         "omega::nat_le_of_not_lt",
         "omega::nat_le_to_int",
@@ -93,6 +99,8 @@ fn reconstruction_lemmas(source: &str) -> Vec<&'static str> {
         "omega::normalized_le_upper",
         "omega::upper_combo",
         "omega::upper_lower_combo",
+        "omega::upper_lower_lower_combo",
+        "omega::lower_upper_upper_combo",
         "omega::upper_of_eq",
         "omega::upper_to_negated_lower",
     ];
@@ -148,6 +156,21 @@ enum AffineSyntax {
         dividend_source: String,
         dividend: Box<AffineSyntax>,
     },
+    NatMod {
+        source: String,
+        dividend_source: String,
+        divisor_source: String,
+        expanded: Box<AffineSyntax>,
+    },
+    NatDivZero {
+        source: String,
+        dividend_source: String,
+    },
+    NatModZero {
+        source: String,
+        dividend_source: String,
+        dividend: Box<AffineSyntax>,
+    },
     Add {
         left: Box<AffineSyntax>,
         right: Box<AffineSyntax>,
@@ -194,6 +217,7 @@ struct DivisionAtom {
     dividend: AffineSyntax,
     dividend_source: String,
     divisor: Z,
+    natural: bool,
 }
 
 #[derive(Clone)]
@@ -296,6 +320,28 @@ fn nat_equality_args<'a>(
         return None;
     };
     (elab.display_type(cx, ty) == "Nat").then_some((lhs, rhs))
+}
+
+fn int_divides_args<'a>(elab: &Elaborator, ty: &'a Type) -> Option<(&'a Rc<Term>, &'a Rc<Term>)> {
+    let Type::El { tm, .. } = ty else {
+        return None;
+    };
+    let args = named_args(elab, tm, "int::Divides")?;
+    let [divisor, dividend] = args.as_slice() else {
+        return None;
+    };
+    Some((divisor, dividend))
+}
+
+fn nat_divides_args<'a>(elab: &Elaborator, ty: &'a Type) -> Option<(&'a Rc<Term>, &'a Rc<Term>)> {
+    let Type::El { tm, .. } = ty else {
+        return None;
+    };
+    let args = named_args(elab, tm, "nat::Divides")?;
+    let [divisor, dividend] = args.as_slice() else {
+        return None;
+    };
+    Some((divisor, dividend))
 }
 
 fn negated_domain(elab: &Elaborator, cx: &Cx, ty: &Type) -> Option<Type> {
@@ -598,6 +644,7 @@ fn affine_syntax(
                             dividend: dividend_syntax.clone(),
                             dividend_source: dividend_source.clone(),
                             divisor,
+                            natural: false,
                         }),
                     });
                     atoms.len() - 1
@@ -652,6 +699,7 @@ fn affine_syntax(
                             dividend: dividend_syntax,
                             dividend_source,
                             divisor,
+                            natural: false,
                         }),
                     });
                     atoms.len() - 1
@@ -699,23 +747,16 @@ fn int_term_source(elab: &Elaborator, cx: &Cx, tm: &Rc<Term>) -> Result<String, 
 }
 
 fn nat_term_source(elab: &Elaborator, cx: &Cx, tm: &Rc<Term>) -> Result<String, String> {
-    if let Some(args) = named_args(elab, tm, "nat::add")
-        && let [left, right] = args.as_slice()
-    {
-        return Ok(format!(
-            "nat::add({}, {})",
-            nat_term_source(elab, cx, left)?,
-            nat_term_source(elab, cx, right)?,
-        ));
-    }
-    if let Some(args) = named_args(elab, tm, "nat::mul")
-        && let [left, right] = args.as_slice()
-    {
-        return Ok(format!(
-            "nat::mul({}, {})",
-            nat_term_source(elab, cx, left)?,
-            nat_term_source(elab, cx, right)?,
-        ));
+    for name in ["nat::add", "nat::mul", "nat::div", "nat::mod"] {
+        if let Some(args) = named_args(elab, tm, name)
+            && let [left, right] = args.as_slice()
+        {
+            return Ok(format!(
+                "{name}({}, {})",
+                nat_term_source(elab, cx, left)?,
+                nat_term_source(elab, cx, right)?,
+            ));
+        }
     }
     elab.spell_term_clean(cx, tm)
         .ok_or_else(|| "Omega could not spell a natural expression".to_string())
@@ -778,6 +819,95 @@ fn nat_affine_syntax(
                     inner: Box::new(nat_affine_syntax(elab, cx, left, atoms)?),
                 });
             }
+        }
+    }
+    if let Some(args) = named_args(elab, tm, "nat::mod")
+        && let [dividend, divisor] = args.as_slice()
+    {
+        let divisor_source = nat_term_source(elab, cx, divisor)?;
+        if let Some(divisor) = integer_source(&divisor_source).filter(|value| *value >= 0) {
+            let dividend_source = nat_term_source(elab, cx, dividend)?;
+            let dividend_syntax = nat_affine_syntax(elab, cx, dividend, atoms)?;
+            let source = format!("OfNat({nat_source})");
+            if divisor == 0 {
+                return Ok(AffineSyntax::NatModZero {
+                    source,
+                    dividend_source,
+                    dividend: Box::new(dividend_syntax),
+                });
+            }
+            let quotient_nat = format!("nat::div({}, {})", dividend_source, divisor_source);
+            let quotient_source = format!("OfNat({quotient_nat})");
+            let quotient_index = atoms
+                .iter()
+                .position(|atom| atom.nat_source.as_deref() == Some(quotient_nat.as_str()))
+                .unwrap_or_else(|| {
+                    atoms.push(ReflectedAtom {
+                        term: Rc::clone(tm),
+                        source: quotient_source.clone(),
+                        nat_source: Some(quotient_nat.clone()),
+                        division: Some(DivisionAtom {
+                            dividend: dividend_syntax.clone(),
+                            dividend_source: dividend_source.clone(),
+                            divisor,
+                            natural: true,
+                        }),
+                    });
+                    atoms.len() - 1
+                });
+            let expanded = AffineSyntax::Add {
+                left: Box::new(dividend_syntax),
+                right: Box::new(AffineSyntax::Neg {
+                    inner: Box::new(AffineSyntax::Scale {
+                        factor: divisor,
+                        factor_on_left: false,
+                        inner: Box::new(AffineSyntax::Atom {
+                            index: quotient_index,
+                            source: quotient_source,
+                        }),
+                    }),
+                }),
+            };
+            return Ok(AffineSyntax::NatMod {
+                source,
+                dividend_source,
+                divisor_source,
+                expanded: Box::new(expanded),
+            });
+        }
+    }
+    if let Some(args) = named_args(elab, tm, "nat::div")
+        && let [dividend, divisor] = args.as_slice()
+    {
+        let divisor_source = nat_term_source(elab, cx, divisor)?;
+        if let Some(divisor) = integer_source(&divisor_source).filter(|value| *value >= 0) {
+            let dividend_source = nat_term_source(elab, cx, dividend)?;
+            let source = format!("OfNat({nat_source})");
+            if divisor == 0 {
+                return Ok(AffineSyntax::NatDivZero {
+                    source,
+                    dividend_source,
+                });
+            }
+            let dividend_syntax = nat_affine_syntax(elab, cx, dividend, atoms)?;
+            let index = atoms
+                .iter()
+                .position(|atom| atom.nat_source.as_deref() == Some(nat_source.as_str()))
+                .unwrap_or_else(|| {
+                    atoms.push(ReflectedAtom {
+                        term: Rc::clone(tm),
+                        source: source.clone(),
+                        nat_source: Some(nat_source.clone()),
+                        division: Some(DivisionAtom {
+                            dividend: dividend_syntax,
+                            dividend_source,
+                            divisor,
+                            natural: true,
+                        }),
+                    });
+                    atoms.len() - 1
+                });
+            return Ok(AffineSyntax::Atom { index, source });
         }
     }
     let source = format!("OfNat({nat_source})");
@@ -868,6 +998,65 @@ fn normalize_syntax(syntax: &AffineSyntax, atoms_source: &str) -> Result<Normali
             let dividend = normalize_syntax(dividend, atoms_source)?;
             let proof = format!(
                 "omega::normalize_mod_zero({}, {}, {}, {}, {})",
+                dividend_source,
+                int(dividend.linear.constant),
+                dividend.row_source,
+                atoms_source,
+                dividend.proof,
+            );
+            Ok(Normalized {
+                source: source.clone(),
+                linear: dividend.linear,
+                row_source: dividend.row_source,
+                proof,
+            })
+        }
+        AffineSyntax::NatMod {
+            source,
+            dividend_source,
+            divisor_source,
+            expanded,
+        } => {
+            let expanded = normalize_syntax(expanded, atoms_source)?;
+            let proof = format!(
+                "omega::normalize_nat_mod({}, {}, {}, {}, {}, {})",
+                dividend_source,
+                divisor_source,
+                int(expanded.linear.constant),
+                expanded.row_source,
+                atoms_source,
+                expanded.proof,
+            );
+            Ok(Normalized {
+                source: source.clone(),
+                linear: expanded.linear,
+                row_source: expanded.row_source,
+                proof,
+            })
+        }
+        AffineSyntax::NatDivZero {
+            source,
+            dividend_source,
+        } => {
+            let row_source = format!("omega::zeros({atoms_source})");
+            Ok(Normalized {
+                source: source.clone(),
+                linear: LinearExpr::constant(0),
+                proof: format!(
+                    "omega::normalize_nat_div_zero({}, {})",
+                    dividend_source, atoms_source
+                ),
+                row_source,
+            })
+        }
+        AffineSyntax::NatModZero {
+            source,
+            dividend_source,
+            dividend,
+        } => {
+            let dividend = normalize_syntax(dividend, atoms_source)?;
+            let proof = format!(
+                "omega::normalize_nat_mod_zero({}, {}, {}, {}, {})",
                 dividend_source,
                 int(dividend.linear.constant),
                 dividend.row_source,
@@ -1069,6 +1258,7 @@ fn reflect_ordinary(
     let mut relations = Vec::new();
     for pos in 0..cx.names.len() {
         let (_, ty, _) = elab.local(cx, pos);
+        let decoded_ty = crate::inductive::decoded(&ty);
         let (left, right, exact, proof) = if let Some((left, right)) = relation_args(elab, &ty) {
             if dot_args(elab, left).is_some() || dot_args(elab, right).is_some() {
                 return Ok(None);
@@ -1093,7 +1283,9 @@ fn reflect_ordinary(
                 false,
                 cx.names[pos].clone(),
             )
-        } else if let Some((left, right)) = equality_args(elab, cx, &ty) {
+        } else if let Some((left, right)) =
+            equality_args(elab, cx, &ty).or_else(|| equality_args(elab, cx, &decoded_ty))
+        {
             (
                 affine_syntax(elab, cx, left, &mut atoms)?,
                 affine_syntax(elab, cx, right, &mut atoms)?,
@@ -1131,7 +1323,9 @@ fn reflect_ordinary(
                     left_source, right_source, cx.names[pos]
                 ),
             )
-        } else if let Some((left, right)) = nat_equality_args(elab, cx, &ty) {
+        } else if let Some((left, right)) =
+            nat_equality_args(elab, cx, &ty).or_else(|| nat_equality_args(elab, cx, &decoded_ty))
+        {
             (
                 nat_affine_syntax(elab, cx, left, &mut atoms)?,
                 nat_affine_syntax(elab, cx, right, &mut atoms)?,
@@ -1231,17 +1425,43 @@ fn reflect_ordinary(
             .divisor
             .checked_abs()
             .ok_or("Omega cannot reconstruct the minimum `i128` divisor")?;
-        let nonzero = literal_int_nonzero(division.divisor)?;
+        let (lower_proof, upper_proof) = if division.natural {
+            let divisor_pred = division
+                .divisor
+                .checked_sub(1)
+                .ok_or("Omega positive natural divisor predecessor overflowed")?;
+            (
+                format!(
+                    "omega::nat_div_lower({}, {})",
+                    division.dividend_source, divisor_pred
+                ),
+                format!(
+                    "omega::nat_div_upper({}, {})",
+                    division.dividend_source, divisor_pred
+                ),
+            )
+        } else {
+            let nonzero = literal_int_nonzero(division.divisor)?;
+            (
+                format!(
+                    "omega::div_lower_nonzero({}, {}, {})",
+                    division.dividend_source,
+                    int(division.divisor),
+                    nonzero,
+                ),
+                format!(
+                    "omega::div_upper_nonzero({}, {}, {})",
+                    division.dividend_source,
+                    int(division.divisor),
+                    nonzero,
+                ),
+            )
+        };
         relations.push((
             product.clone(),
             division.dividend.clone(),
             false,
-            format!(
-                "omega::div_lower_nonzero({}, {}, {})",
-                division.dividend_source,
-                int(division.divisor),
-                nonzero,
-            ),
+            lower_proof,
         ));
         relations.push((
             AffineSyntax::Add {
@@ -1259,12 +1479,7 @@ fn reflect_ordinary(
                 }),
             },
             false,
-            format!(
-                "omega::div_upper_nonzero({}, {}, {})",
-                division.dividend_source,
-                int(division.divisor),
-                nonzero,
-            ),
+            upper_proof,
         ));
     }
     let atoms_source = atom_list_source(&atoms);
@@ -1455,14 +1670,39 @@ fn split_disequality(elab: &Elaborator, cx: &Cx) -> Result<Option<Certificate>, 
             continue;
         };
         let decoded = crate::inductive::decoded(&domain);
-        let Some((left, right)) = equality_args(elab, cx, &decoded) else {
-            continue;
-        };
-        let left = int_term_source(elab, cx, left)?;
-        let right = int_term_source(elab, cx, right)?;
         let disequality = &cx.names[pos];
+        let (left, right, disequality, lemma) =
+            if let Some((left, right)) = equality_args(elab, cx, &decoded) {
+                (
+                    int_term_source(elab, cx, left)?,
+                    int_term_source(elab, cx, right)?,
+                    disequality.clone(),
+                    "omega::diseq_elim",
+                )
+            } else if let Some((divisor, dividend)) = int_divides_args(elab, &domain) {
+                let divisor = int_term_source(elab, cx, divisor)?;
+                let dividend = int_term_source(elab, cx, dividend)?;
+                (
+                    format!("int::mod({dividend}, {divisor})"),
+                    int(0),
+                    disequality.clone(),
+                    "omega::diseq_elim",
+                )
+            } else if let Some((divisor, dividend)) = nat_divides_args(elab, &domain) {
+                let divisor = nat_term_source(elab, cx, divisor)?;
+                let dividend = nat_term_source(elab, cx, dividend)?;
+                let remainder = format!("nat::mod({dividend}, {divisor})");
+                (
+                    remainder,
+                    "0".to_string(),
+                    disequality.clone(),
+                    "omega::nat_diseq_elim",
+                )
+            } else {
+                continue;
+            };
         let source = format!(
-            "omega::diseq_elim({}, {}, {disequality}, (__omega_diseq_left: {} < {}) ⊢ __omega_diseq_branch, (__omega_diseq_right: {} < {}) ⊢ __omega_diseq_branch)",
+            "{lemma}({}, {}, {disequality}, (__omega_diseq_left: {} < {}) ⊢ __omega_diseq_branch, (__omega_diseq_right: {} < {}) ⊢ __omega_diseq_branch)",
             left, right, left, right, right, left,
         );
         return Ok(Some(Certificate {
@@ -1474,7 +1714,7 @@ fn split_disequality(elab: &Elaborator, cx: &Cx) -> Result<Option<Certificate>, 
                 reachable_derivations: 0,
                 logical_splits: 1,
                 stats: crate::omega::Stats::default(),
-                used_lemmas: vec!["omega::diseq_elim"],
+                used_lemmas: vec![lemma],
             },
         }));
     }
@@ -1524,6 +1764,7 @@ pub(crate) fn reconstruct(
     allow_disequality_split: bool,
     allow_connective_split: bool,
 ) -> Result<Certificate, String> {
+    let decoded_expected = crate::inductive::decoded(expected);
     if elab
         .display_tag_of(expected)
         .is_some_and(|tag| tag.name == "And")
@@ -1535,7 +1776,31 @@ pub(crate) fn reconstruct(
             report: wrapper_report("logic::And", 0),
         });
     }
-    if let Some((left, right)) = equality_args(elab, cx, expected) {
+    if let Some((divisor, dividend)) = int_divides_args(elab, expected) {
+        let divisor = int_term_source(elab, cx, divisor)?;
+        let dividend = int_term_source(elab, cx, dividend)?;
+        let remainder = format!("int::mod({dividend}, {divisor})");
+        let source = format!("int::le_antisym({}, OfNat(0), omega, omega)", remainder);
+        return Ok(Certificate {
+            expr: parse_generated_expr(&source)?,
+            source,
+            report: wrapper_report("int::le_antisym", 0),
+        });
+    }
+    if let Some((divisor, dividend)) = nat_divides_args(elab, expected) {
+        let divisor = nat_term_source(elab, cx, divisor)?;
+        let dividend = nat_term_source(elab, cx, dividend)?;
+        let remainder = format!("nat::mod({dividend}, {divisor})");
+        let source = format!("nat::le_antisym({}, 0, omega, omega)", remainder);
+        return Ok(Certificate {
+            expr: parse_generated_expr(&source)?,
+            source,
+            report: wrapper_report("nat::le_antisym", 0),
+        });
+    }
+    if let Some((left, right)) =
+        equality_args(elab, cx, expected).or_else(|| equality_args(elab, cx, &decoded_expected))
+    {
         let left = int_term_source(elab, cx, left)?;
         let right = int_term_source(elab, cx, right)?;
         // Antisymmetry keeps equality goal closure inside the already
@@ -1548,7 +1813,9 @@ pub(crate) fn reconstruct(
             report: wrapper_report("int::le_antisym", 0),
         });
     }
-    if let Some((left, right)) = nat_equality_args(elab, cx, expected) {
+    if let Some((left, right)) = nat_equality_args(elab, cx, expected)
+        .or_else(|| nat_equality_args(elab, cx, &decoded_expected))
+    {
         let left = nat_term_source(elab, cx, left)?;
         let right = nat_term_source(elab, cx, right)?;
         let source = format!("nat::le_antisym({}, {}, omega, omega)", left, right);
@@ -1994,6 +2261,130 @@ pub(crate) fn reconstruct(
                         name,
                     )),
                     exact: Some(name),
+                }
+            }
+            Derivation::Combo {
+                left,
+                left_scale,
+                right,
+                right_scale,
+            } if left_scale > 0
+                && right_scale < 0
+                && fact.interval.lower.is_some()
+                && fact.interval.upper.is_some() =>
+            {
+                let left = parent(&proofs, left)?;
+                let right = parent(&proofs, right)?;
+                let left_lower = left
+                    .interval
+                    .lower
+                    .ok_or("Omega two-sided combination lost its left lower value")?;
+                let left_upper = left
+                    .interval
+                    .upper
+                    .ok_or("Omega two-sided combination lost its left upper value")?;
+                let right_lower = right
+                    .interval
+                    .lower
+                    .ok_or("Omega two-sided combination lost its right lower value")?;
+                let right_upper = right
+                    .interval
+                    .upper
+                    .ok_or("Omega two-sided combination lost its right upper value")?;
+                let magnitude = right_scale
+                    .checked_neg()
+                    .ok_or("Omega combination scale overflowed")?;
+                let row_source = format!(
+                    "omega::combo({}, {}, {}, {})",
+                    int(left_scale),
+                    left.row_source,
+                    int(right_scale),
+                    right.row_source,
+                );
+                let lower_name = format!("__omega_generated_{id}_lower");
+                bindings.push(format!(
+                    "let {lower_name} = omega::lower_upper_combo({}, {}, {}, {}, {}, {}, {}, int::zero_le_ofNat({}), int::zero_le_ofNat({}), {}, {});",
+                    int(left_scale), int(magnitude), left.row_source, right.row_source,
+                    atoms_source, int(left_lower), int(right_upper), left_scale, magnitude,
+                    left.lower.as_ref().ok_or("Omega two-sided combination lost its left lower proof")?,
+                    right.upper.as_ref().ok_or("Omega two-sided combination lost its right upper proof")?,
+                ));
+                let upper_name = format!("__omega_generated_{id}_upper");
+                bindings.push(format!(
+                    "let {upper_name} = omega::lower_upper_upper_combo({}, {}, {}, {}, {}, {}, {}, int::zero_le_ofNat({}), int::zero_le_ofNat({}), {}, {});",
+                    int(left_scale), int(magnitude), left.row_source, right.row_source,
+                    atoms_source, int(right_lower), int(left_upper), left_scale, magnitude,
+                    left.upper.as_ref().ok_or("Omega two-sided combination lost its left upper proof")?,
+                    right.lower.as_ref().ok_or("Omega two-sided combination lost its right lower proof")?,
+                ));
+                BoundProof {
+                    row_source,
+                    interval: fact.interval,
+                    lower: Some(lower_name),
+                    upper: Some(upper_name),
+                    exact: None,
+                }
+            }
+            Derivation::Combo {
+                left,
+                left_scale,
+                right,
+                right_scale,
+            } if left_scale < 0
+                && right_scale > 0
+                && fact.interval.lower.is_some()
+                && fact.interval.upper.is_some() =>
+            {
+                let left = parent(&proofs, left)?;
+                let right = parent(&proofs, right)?;
+                let left_lower = left
+                    .interval
+                    .lower
+                    .ok_or("Omega two-sided combination lost its left lower value")?;
+                let left_upper = left
+                    .interval
+                    .upper
+                    .ok_or("Omega two-sided combination lost its left upper value")?;
+                let right_lower = right
+                    .interval
+                    .lower
+                    .ok_or("Omega two-sided combination lost its right lower value")?;
+                let right_upper = right
+                    .interval
+                    .upper
+                    .ok_or("Omega two-sided combination lost its right upper value")?;
+                let magnitude = left_scale
+                    .checked_neg()
+                    .ok_or("Omega combination scale overflowed")?;
+                let row_source = format!(
+                    "omega::combo({}, {}, {}, {})",
+                    int(left_scale),
+                    left.row_source,
+                    int(right_scale),
+                    right.row_source,
+                );
+                let lower_name = format!("__omega_generated_{id}_lower");
+                bindings.push(format!(
+                    "let {lower_name} = omega::upper_lower_lower_combo({}, {}, {}, {}, {}, {}, {}, int::zero_le_ofNat({}), int::zero_le_ofNat({}), {}, {});",
+                    int(magnitude), int(right_scale), left.row_source, right.row_source,
+                    atoms_source, int(right_lower), int(left_upper), magnitude, right_scale,
+                    left.upper.as_ref().ok_or("Omega two-sided combination lost its left upper proof")?,
+                    right.lower.as_ref().ok_or("Omega two-sided combination lost its right lower proof")?,
+                ));
+                let upper_name = format!("__omega_generated_{id}_upper");
+                bindings.push(format!(
+                    "let {upper_name} = omega::upper_lower_combo({}, {}, {}, {}, {}, {}, {}, int::zero_le_ofNat({}), int::zero_le_ofNat({}), {}, {});",
+                    int(magnitude), int(right_scale), left.row_source, right.row_source,
+                    atoms_source, int(left_lower), int(right_upper), magnitude, right_scale,
+                    left.lower.as_ref().ok_or("Omega two-sided combination lost its left lower proof")?,
+                    right.upper.as_ref().ok_or("Omega two-sided combination lost its right upper proof")?,
+                ));
+                BoundProof {
+                    row_source,
+                    interval: fact.interval,
+                    lower: Some(lower_name),
+                    upper: Some(upper_name),
+                    exact: None,
                 }
             }
             Derivation::Combo {

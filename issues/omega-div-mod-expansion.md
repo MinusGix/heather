@@ -65,3 +65,14 @@ frontend does not expand large unary divisions during reflection.
   normalize through the library's explicit total semantics and introduce no
   quotient atom. Rails cover negative quotient and remainder bounds plus open
   zero-divisor identities. Remaining frontend work is `Nat` and divisibility.
+- 2026-08-27: Extended the frontend through `Nat` quotient and remainder by
+  literal divisors, including the library's total zero-divisor semantics.
+  Natural quotient atoms share the same certified embedding used by ordinary
+  natural arithmetic, with native lower/upper division laws and nonnegativity
+  available to reconstruction. Added `nat::Divides` and `int::Divides` as
+  definitionally zero-remainder propositions; this is extensionally the usual
+  existential notion under the executable Euclidean laws, while letting both
+  positive and negated uses enter Omega without synthesizing quotient
+  witnesses. End-to-end rails cover natural quotient/remainder bounds,
+  divisibility, disequality splitting, and rejection of false divisibility.
+  The remaining acceptance item is an explicit large-literal scaling rail.

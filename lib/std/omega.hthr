@@ -515,6 +515,95 @@ theorem normalize_mod_zero(dividend, constant: Int, row, atoms: List<Int>,
     trans(int::mod_zero(dividend), h)
 }
 
+theorem nat_div_lower(dividend, divisor_pred: Nat):
+    OfNat(nat::div(dividend, Succ(divisor_pred))) * OfNat(Succ(divisor_pred))
+        <= OfNat(dividend)
+{
+    let quotient = nat::div(dividend, Succ(divisor_pred));
+    let product = nat::div(dividend, Succ(divisor_pred)) * Succ(divisor_pred);
+    let remainder = nat::mod(dividend, Succ(divisor_pred));
+    j(int::ofNat_mul(quotient, Succ(divisor_pred)),
+      λ left _ => left <= OfNat(dividend),
+      nat_le_to_int(
+          product,
+          dividend,
+          j(nat::div_mul_add_mod(dividend, Succ(divisor_pred)),
+            λ right _ => product <= right,
+            nat::le_add_l(product, remainder))))
+}
+
+theorem nat_div_upper(dividend, divisor_pred: Nat):
+    OfNat(dividend) <
+        OfNat(nat::div(dividend, Succ(divisor_pred))) *
+            OfNat(Succ(divisor_pred)) + OfNat(Succ(divisor_pred))
+{
+    let quotient = nat::div(dividend, Succ(divisor_pred));
+    let product = quotient * Succ(divisor_pred);
+    let remainder = nat::mod(dividend, Succ(divisor_pred));
+    j(sym(int::ofNat_mul_add(
+          quotient, Succ(divisor_pred), Succ(divisor_pred))),
+      λ right _ => OfNat(dividend) < right,
+      nat_lt_to_int(
+          dividend,
+          product + Succ(divisor_pred),
+          j(nat::div_mul_add_mod(dividend, Succ(divisor_pred)),
+            λ right _ => right < product + Succ(divisor_pred),
+            nat::add_le_mono_l(
+                product,
+                Succ(remainder),
+                Succ(divisor_pred),
+                nat::mod_lt(dividend, Succ(divisor_pred), trivial)))))
+}
+
+theorem nat_mod_expand(dividend, divisor: Nat):
+    OfNat(nat::mod(dividend, divisor)) =
+        OfNat(dividend) +
+            int::neg(OfNat(nat::div(dividend, divisor)) * OfNat(divisor))
+{
+    let product = OfNat(nat::div(dividend, divisor)) * OfNat(divisor);
+    let remainder = OfNat(nat::mod(dividend, divisor));
+    let reconstruct = trans(
+        int::ofNat_mul_add(
+            nat::div(dividend, divisor), divisor, nat::mod(dividend, divisor)),
+        int::cong_ofnat(nat::div_mul_add_mod(dividend, divisor)));
+    calc {
+        remainder = OfNat(0) + remainder := sym(int::zero_add(remainder)),
+        = (int::neg(product) + product) + remainder :=
+            cong_int(λ (x: Int) => x + remainder,
+                     sym(int::neg_add_self(product))),
+        = int::neg(product) + (product + remainder) :=
+            int::add_assoc(int::neg(product), product, remainder),
+        = int::neg(product) + OfNat(dividend) :=
+            cong_int(λ (x: Int) => int::neg(product) + x, reconstruct),
+        = OfNat(dividend) + int::neg(product) :=
+            int::add_comm(int::neg(product), OfNat(dividend)),
+    }
+}
+
+theorem normalize_nat_mod(dividend, divisor: Nat, constant: Int,
+    row, atoms: List<Int>,
+    expanded: OfNat(dividend) +
+        int::neg(OfNat(nat::div(dividend, divisor)) * OfNat(divisor)) =
+            constant + dot(row, atoms)):
+    OfNat(nat::mod(dividend, divisor)) = constant + dot(row, atoms)
+{
+    trans(nat_mod_expand(dividend, divisor), expanded)
+}
+
+theorem normalize_nat_div_zero(dividend: Nat, atoms: List<Int>):
+    OfNat(nat::div(dividend, 0)) = OfNat(0) + dot(zeros(atoms), atoms)
+{
+    trans(int::cong_ofnat(nat::div_zero(dividend)),
+          normalize_const(OfNat(0), atoms))
+}
+
+theorem normalize_nat_mod_zero(dividend: Nat, constant: Int,
+    row, atoms: List<Int>, h: OfNat(dividend) = constant + dot(row, atoms)):
+    OfNat(nat::mod(dividend, 0)) = constant + dot(row, atoms)
+{
+    trans(int::cong_ofnat(nat::mod_zero(dividend)), h)
+}
+
 theorem eq_of_bounds(row, atoms: List<Int>, value: Int,
     lower: value <= dot(row, atoms), upper: dot(row, atoms) <= value):
     dot(row, atoms) = value
@@ -769,6 +858,48 @@ theorem upper_lower_combo(a, b: Int, left, right, atoms: List<Int>, l, u: Int,
         upper_scale(b, dot(right, atoms), u, hb, hu));
     j(sym(dot_combo(-a, left, b, right, atoms)),
         λ q p => q <= (-a) * l + b * u, summed)
+}
+
+theorem upper_lower_lower_combo(a, b: Int,
+    left, right, atoms: List<Int>, l, u: Int,
+    ha: OfNat(0) <= a, hb: OfNat(0) <= b,
+    hu: dot(left, atoms) <= u, hl: l <= dot(right, atoms)):
+    (-a) * u + b * l <= dot(combo(-a, left, b, right), atoms)
+{
+    let summed = int::add_le_mono(
+        (-a) * u, (-a) * dot(left, atoms),
+        b * l, b * dot(right, atoms),
+        upper_neg_scale(a, dot(left, atoms), u, ha, hu),
+        lower_scale(b, l, dot(right, atoms), hb, hl));
+    j(sym(dot_combo(-a, left, b, right, atoms)),
+        λ q p => (-a) * u + b * l <= q, summed)
+}
+
+theorem lower_upper_upper_combo(a, b: Int,
+    left, right, atoms: List<Int>, l, u: Int,
+    ha: OfNat(0) <= a, hb: OfNat(0) <= b,
+    hu: dot(left, atoms) <= u, hl: l <= dot(right, atoms)):
+    dot(combo(a, left, -b, right), atoms) <= a * u + (-b) * l
+{
+    let summed = int::add_le_mono(
+        a * dot(left, atoms), a * u,
+        (-b) * dot(right, atoms), (-b) * l,
+        upper_scale(a, dot(left, atoms), u, ha, hu),
+        lower_neg_scale(b, l, dot(right, atoms), hb, hl));
+    j(sym(dot_combo(a, left, -b, right, atoms)),
+        λ q p => q <= a * u + (-b) * l, summed)
+}
+
+theorem nat_diseq_elim(x, y: Nat, different: x ≠ y,
+    left: x < y → False, right: y < x → False): False
+{
+    match nat::lt_trichotomy(x, y) {
+        Inl(h) => left(h),
+        Inr(rest) => match rest {
+            Inl(eq) => false_elim(different(eq)),
+            Inr(h) => right(h),
+        },
+    }
 }
 
 theorem diseq_elim(x, y: Int, different: x ≠ y,

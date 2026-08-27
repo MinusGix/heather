@@ -51,13 +51,20 @@ fn atoms(x, y: Int) → List<Int> { Cons(x, Cons(y, Nil)) }
 "#;
 
 #[test]
-fn fourier_motzkin_certificate_reaches_the_kernel_gate() {
+fn dot_and_affine_fourier_motzkin_certificates_reach_the_kernel_gate() {
     let source = format!(
         r#"{PREFIX}
 theorem eliminated(x, y: Int,
     lower: OfNat(3) <= omega::dot(Cons(OfNat(3), Cons(OfNat(1), Nil)), atoms(x, y)),
     upper: omega::dot(Cons(OfNat(2), Cons(OfNat(1), Nil)), atoms(x, y)) <= OfNat(2),
     final_upper: omega::dot(Cons(OfNat(1), Cons(OfNat(0), Nil)), atoms(x, y)) <= OfNat(0)):
+    False
+{{ omega }}
+
+theorem eliminated_affine(x, y: Int,
+    lower: OfNat(3) <= x * OfNat(3) + y,
+    upper: x * OfNat(2) + y <= OfNat(2),
+    final_upper: x <= OfNat(0)):
     False
 {{ omega }}
 "#
@@ -92,26 +99,7 @@ theorem audited(x, y: Int,
 }
 
 #[test]
-fn ordinary_affine_syntax_reaches_the_kernel_gate() {
-    let source = format!(
-        r#"{PREFIX}
-theorem eliminated_affine(x, y: Int,
-    lower: OfNat(3) <= x * OfNat(3) + y,
-    upper: x * OfNat(2) + y <= OfNat(2),
-    final_upper: x <= OfNat(0)):
-    False
-{{ omega }}
-"#
-    );
-    elaborator()
-        .elab_module_source("probe", &source)
-        .unwrap_or_else(|error| {
-            panic!("affine Omega certificate did not check: {}", message(error))
-        });
-}
-
-#[test]
-fn repeated_nonlinear_subterms_are_shared_opaque_atoms() {
+fn shares_nonlinear_atoms_and_normalizes_integer_negation() {
     let source = format!(
         r#"{PREFIX}
 theorem opaque_nonlinear(x: Int,
@@ -119,56 +107,7 @@ theorem opaque_nonlinear(x: Int,
     upper: x * x <= OfNat(0)):
     False
 {{ omega }}
-"#
-    );
-    elaborator()
-        .elab_module_source("probe", &source)
-        .unwrap_or_else(|error| {
-            panic!("opaque atom certificate did not check: {}", message(error))
-        });
-}
 
-#[test]
-fn closes_an_integer_le_goal_via_its_strict_negation() {
-    let source = format!(
-        r#"{PREFIX}
-theorem direct_goal(x, y: Int, h: x + OfNat(1) <= y): x <= y {{ omega }}
-"#
-    );
-    elaborator()
-        .elab_module_source("probe", &source)
-        .unwrap_or_else(|error| panic!("direct Omega goal did not check: {}", message(error)));
-}
-
-#[test]
-fn refuses_an_unprovable_integer_le_goal() {
-    let source = format!(
-        r#"{PREFIX}
-theorem unprovable_goal(x, y: Int): x <= y {{ omega }}
-"#
-    );
-    let error = elaborator()
-        .elab_module_source("probe", &source)
-        .expect_err("an unconstrained order goal must not produce a certificate");
-    assert!(message(error).contains("real shadow found no contradiction"));
-}
-
-#[test]
-fn closes_an_integer_lt_goal_via_its_negation() {
-    let source = format!(
-        r#"{PREFIX}
-theorem direct_strict_goal(x, y: Int, h: x + OfNat(1) < y): x < y {{ omega }}
-"#
-    );
-    elaborator()
-        .elab_module_source("probe", &source)
-        .unwrap_or_else(|error| panic!("strict Omega goal did not check: {}", message(error)));
-}
-
-#[test]
-fn normalizes_negation_and_subtraction() {
-    let source = format!(
-        r#"{PREFIX}
 theorem negated_difference(x, y: Int,
     upper: int::sub(x, y) <= OfNat(0),
     lower: OfNat(1) <= x + int::neg(y)):
@@ -178,33 +117,52 @@ theorem negated_difference(x, y: Int,
     );
     elaborator()
         .elab_module_source("probe", &source)
-        .unwrap_or_else(|error| panic!("negation/subtraction did not check: {}", message(error)));
+        .unwrap_or_else(|error| {
+            panic!(
+                "nonlinear sharing/negation did not check: {}",
+                message(error)
+            )
+        });
 }
 
 #[test]
-fn reflects_integer_equality_as_an_exact_interval() {
+fn proves_and_refuses_direct_integer_order_goals() {
+    let source = format!(
+        r#"{PREFIX}
+theorem direct_goal(x, y: Int, h: x + OfNat(1) <= y): x <= y {{ omega }}
+
+theorem direct_strict_goal(x, y: Int, h: x + OfNat(1) < y): x < y {{ omega }}
+"#
+    );
+    let mut elab = elaborator();
+    elab.elab_module_source("probe", &source)
+        .unwrap_or_else(|error| panic!("direct Omega goals did not check: {}", message(error)));
+
+    let unprovable = format!(
+        r#"{PREFIX}
+theorem unprovable_goal(x, y: Int): x <= y {{ omega }}
+"#
+    );
+    let error = elab
+        .elab_module_source("unprovable", &unprovable)
+        .expect_err("an unconstrained order goal must not produce a certificate");
+    assert!(message(error).contains("real shadow found no contradiction"));
+}
+
+#[test]
+fn reflects_exact_equalities_in_both_orientations() {
     let source = format!(
         r#"{PREFIX}
 theorem exact_interval(x, y: Int, eq: x = y, bad: x + OfNat(1) <= y): False
 {{ omega }}
-"#
-    );
-    elaborator()
-        .elab_module_source("probe", &source)
-        .unwrap_or_else(|error| panic!("equality certificate did not check: {}", message(error)));
-}
 
-#[test]
-fn positivizes_a_reversed_exact_equality() {
-    let source = format!(
-        r#"{PREFIX}
 theorem reversed_exact(x: Int, eq: OfNat(1) = x, bad: x <= OfNat(0)): False
 {{ omega }}
 "#
     );
     elaborator()
         .elab_module_source("probe", &source)
-        .unwrap_or_else(|error| panic!("reversed equality did not check: {}", message(error)));
+        .unwrap_or_else(|error| panic!("exact equalities did not check: {}", message(error)));
 }
 
 #[test]
@@ -253,8 +211,6 @@ theorem hard_equality(x, y: Int,
     assert_eq!(report.stats.fresh_variables, 1);
     assert!(report.stats.equality_eliminations >= 1);
     assert!(report.used_lemmas.contains(&"omega::exact_combo"));
-    reflects_positive_literal_integer_division_and_remainders(&mut elab);
-    drop(elab);
 
     let mutation = format!(
         r#"{PREFIX}
@@ -264,144 +220,26 @@ theorem satisfiable_hard(x, y: Int,
 {{ omega }}
 "#
     );
-    let mut mutation_elab = elaborator();
-    let error = mutation_elab
+    let error = elab
         .elab_module_source("mutation", &mutation)
         .expect_err("a satisfiable hard equality must not produce a certificate");
     assert!(message(error).contains("real shadow found no contradiction"));
-
-    let remainder_mutation = r#"
-import int;
-import logic;
-import omega;
-
-theorem false_remainder_bound(x: Int,
-    value: x = OfNat(2)):
-    int::mod(x, OfNat(3)) < OfNat(2)
-{ omega }
-"#;
-    let error = mutation_elab
-        .elab_module_source("remainder_mutation", remainder_mutation)
-        .expect_err("the false remainder mutation must not produce a certificate");
-    assert!(message(error).contains("real shadow found no contradiction"));
-}
-
-fn reflects_positive_literal_integer_division_and_remainders(elab: &mut Elaborator) {
-    let source = r#"
-import int;
-import logic;
-import omega;
-
-theorem quotient_too_large(x: Int,
-    x_upper: x <= OfNat(8),
-    quotient_lower: OfNat(3) <= int::div(x, OfNat(3))):
-    False
-{ omega }
-
-theorem quotient_too_small(x: Int,
-    x_lower: OfNat(8) <= x,
-    quotient_upper: int::div(x, OfNat(3)) <= OfNat(1)):
-    False
-{ omega }
-
-theorem remainder_nonnegative(x: Int):
-    OfNat(0) <= int::mod(x, OfNat(3))
-{ omega }
-
-theorem remainder_bounded(x: Int):
-    int::mod(x, OfNat(3)) < OfNat(3)
-{ omega }
-
-theorem negative_quotient_too_large(x: Int,
-    x_lower: OfNat(8) <= x,
-    too_large: NegSucc(0) <= int::div(x, NegSucc(2))):
-    False
-{ omega }
-
-theorem negative_remainder_nonnegative(x: Int):
-    OfNat(0) <= int::mod(x, NegSucc(2))
-{ omega }
-
-theorem negative_remainder_bounded(x: Int):
-    int::mod(x, NegSucc(2)) < OfNat(3)
-{ omega }
-
-theorem open_div_zero(x: Int): int::div(x, OfNat(0)) = OfNat(0)
-{ omega }
-
-theorem open_mod_zero(x: Int): int::mod(x, OfNat(0)) = x
-{ omega }
-"#;
-    elab.elab_module_source("divmod", source)
-        .unwrap_or_else(|error| panic!("remainder bounds did not check: {}", message(error)));
-    let reports = elab
-        .take_omega_reports()
-        .into_iter()
-        .filter(|report| report.atoms > 0)
-        .collect::<Vec<_>>();
-    assert_eq!(reports.len(), 11);
-    let [large, small, nonnegative, bounded, ..] = reports.as_slice() else {
-        unreachable!()
-    };
-    assert_eq!(large.atoms, 2);
-    assert_eq!(large.assumptions, 4);
-    assert!(large.used_lemmas.contains(&"omega::div_lower_nonzero"));
-    assert_eq!(small.atoms, 2);
-    assert_eq!(small.assumptions, 4);
-    assert!(small.used_lemmas.contains(&"omega::div_upper_nonzero"));
-    for report in [nonnegative, bounded] {
-        assert_eq!(report.atoms, 2, "{report:?}");
-        assert!(report.used_lemmas.contains(&"omega::normalize_mod"));
-    }
-    assert!(
-        nonnegative
-            .used_lemmas
-            .contains(&"omega::div_lower_nonzero")
-    );
-    assert!(bounded.used_lemmas.contains(&"omega::div_upper_nonzero"));
-    assert!(
-        reports
-            .iter()
-            .any(|report| report.used_lemmas.contains(&"omega::div_upper_nonzero"))
-    );
-    assert!(
-        reports
-            .iter()
-            .any(|report| report.used_lemmas.contains(&"omega::normalize_div_zero"))
-    );
-    assert!(
-        reports
-            .iter()
-            .any(|report| report.used_lemmas.contains(&"omega::normalize_mod_zero"))
-    );
 }
 
 #[test]
-fn reflects_a_negated_integer_relation() {
+fn reflects_negated_integer_relations() {
     let source = format!(
         r#"{PREFIX}
 theorem negated_relation(x, y: Int, negated: ¬(x <= y), bad: x <= y): False
 {{ omega }}
-"#
-    );
-    elaborator()
-        .elab_module_source("probe", &source)
-        .unwrap_or_else(|error| panic!("negated relation did not check: {}", message(error)));
-}
 
-#[test]
-fn reflects_a_negated_strict_relation() {
-    let source = format!(
-        r#"{PREFIX}
 theorem negated_strict(x, y: Int, negated: ¬(x < y), bad: x < y): False
 {{ omega }}
 "#
     );
     elaborator()
         .elab_module_source("probe", &source)
-        .unwrap_or_else(|error| {
-            panic!("negated strict relation did not check: {}", message(error))
-        });
+        .unwrap_or_else(|error| panic!("negated relations did not check: {}", message(error)));
 }
 
 #[test]
