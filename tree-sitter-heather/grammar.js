@@ -196,7 +196,10 @@ module.exports = grammar({
 
     block: $ => choice(
       seq('{', '}'),
-      seq('{', repeat($.let_statement), choice($.split_statement, field('result', $._expression)), repeat($.on_statement), '}'),
+      seq('{', repeat($.let_statement), choice(
+        $.goal_combinators,
+        seq(choice($.split_statement, field('result', $._expression)), repeat($.on_statement)),
+      ), '}'),
     ),
     let_statement: $ => seq(
       'let', choice(field('name', $.identifier), $.destructure_pattern),
@@ -206,6 +209,9 @@ module.exports = grammar({
     split_statement: $ => seq(
       'split', optional(seq(field('equation', $.identifier), ':')),
       field('value', $._expression), optional(seq('as', field('motive', $._expression))), ';',
+    ),
+    goal_combinators: $ => seq(
+      'split_all', ';', 'all_goals', field('body', $.block),
     ),
     on_statement: $ => seq(
       'on', choice($.goal_reference, seq('_', ':', $._expression), $._pattern),

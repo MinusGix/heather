@@ -1,4 +1,10 @@
-# Certifying arithmetic automation
+# Certifying arithmetic automation (retired `arith` design)
+
+> Historical design record. The specialized `arith` checking form was removed
+> after kernel-certified Omega covered its affine arithmetic customers.
+> Boolean enumeration is now the general `split_all; all_goals { ... }`
+> composition described in `docs/goal-combinators.md`; the bitvector carry
+> theorem uses its direct structural eight-case proof.
 
 Heather's first arithmetic automation is an elaborator-side proof
 reconstructor. It is not a kernel evaluator, an oracle, or a new proof term.

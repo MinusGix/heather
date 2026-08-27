@@ -147,6 +147,22 @@ theorem dot_zeros(atoms: List<Int>): dot(zeros(atoms), atoms) = OfNat(0) {
     }
 }
 
+theorem impossible_constant_lower(row, atoms: List<Int>, lower: Int,
+    bound: lower <= dot(row, atoms), zero: dot(row, atoms) = OfNat(0),
+    positive: OfNat(0) < lower): False
+{
+    int::not_lt_of_ge(lower, OfNat(0),
+        j(zero, λ q p => lower <= q, bound), positive)
+}
+
+theorem impossible_constant_upper(row, atoms: List<Int>, upper: Int,
+    bound: dot(row, atoms) <= upper, zero: dot(row, atoms) = OfNat(0),
+    negative: upper < OfNat(0)): False
+{
+    int::not_lt_of_ge(OfNat(0), upper,
+        j(zero, λ q p => q <= upper, bound), negative)
+}
+
 theorem dot_basis(index: Nat): (atoms: List<Int>) →
     dot(basis(index, atoms), atoms) = nth0(index, atoms)
 {

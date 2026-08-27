@@ -6,9 +6,9 @@ created: 2026-08-26
 updated: 2026-08-26
 ---
 
-Extend the checking-only `arith` form from additive equality normalization to
-a certifying solver for quantifier-free linear arithmetic over `Nat` and
-`Int`. The implementation belongs in the Rust elaborator. It is untrusted:
+Provide a certifying solver for quantifier-free linear arithmetic over `Nat`
+and `Int`, superseding the former checking-only `arith` normalizer. The
+implementation belongs in the Rust elaborator. It is untrusted:
 success reconstructs an ordinary Heather proof term and the enclosing
 declaration's ordinary kernel gate remains the authority.
 
@@ -102,7 +102,8 @@ when stuck. Arithmetic overflow is a structured refusal and must never wrap.
   generated small linear systems. A solver success must have no model.
 - Kernel-gate every positive end to end, pin the used lemma set, require zero
   value-cache eviction, and record certificate growth on a scaling family.
-- Keep the current additive and bounded-Boolean `arith` customers green.
+- Preserve the former additive automation coverage; finite case splitting is
+  composed separately through `split_all; all_goals { ... }`.
 
 ## Explicitly deferred
 
@@ -114,13 +115,11 @@ when stuck. Arithmetic overflow is a structured refusal and must never wrap.
 
 ## What it assumes from elsewhere
 
-- **[[certifying-arithmetic-proof-automation]]** owns the `arith` checking
-  form, its trust boundary, and the existing additive/Boolean customers.
-  Assumed here: only that a new deterministic solver may return an ordinary
-  certificate and extend the same structured report.
-- **[[arith-compact-additive-certificates]]** owns compact certificates for
-  the old AC normalizer. This issue does not silently replace that fragment;
-  it invokes Omega only after the cheap specialized closers fail.
+- **[[certifying-arithmetic-proof-automation]]** records the retired `arith`
+  experiment and owns eventual broader solver orchestration. Omega retains
+  the same ordinary-certificate trust boundary.
+- **[[arith-compact-additive-certificates]]** is the superseded certificate-
+  shape follow-up for the deleted additive normalizer.
 - **[[grind-port]]** owns eventual multi-solver orchestration. Assumed here:
   only that Omega's structured stuck state can later be embedded in it.
 
@@ -191,9 +190,17 @@ when stuck. Arithmetic overflow is a structured refusal and must never wrap.
   atom contributes a certified non-negativity fact. Direct Nat `<=`, `<`, and
   equality goals and negated Nat relations are kernel-checked end to end.
   Compatibility was audited before retiring `arith`: its sole production
-  customer (`std/bitvec`'s carry threshold) still requires bounded Boolean
-  splitting and structural `twice` order reification, neither of which Omega
-  supersedes. `arith` therefore remains intentionally, with all nine of its
-  integration rails green alongside Omega's 28. Remaining Omega work is hard
+  customer (`std/bitvec`'s carry threshold) required bounded Boolean splitting
+  and structural `twice` order reification, neither of which Omega superseded
+  in this round.
+- 2026-08-26: Retired `arith` after separating its two jobs. The bitvector
+  carry threshold again states its direct eight-case structural proof, while
+  general finite branching is the solver-independent
+  `split_all; all_goals { ... }` composition. Omega gained reconstruction for
+  impossible constant rows, preserving the former normalizer's pure affine
+  Nat-identity customer without recognizing `twice` specially. The obsolete
+  `arith` implementation, reports, dispatch, and dedicated suite were removed;
+  migrated rails cover finite splitting, arbitrary leaf blocks, Omega at every
+  branch, and additive Nat permutation. Remaining Omega work is hard
   equalities/balanced remainders, dark/grey shadows, richer stuck reports, and
   the separately owned division/modulus frontend.

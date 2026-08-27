@@ -15,6 +15,11 @@ theorem nested(a, b, c: Nat, ab: a = b, bc: b = c): c = a {
     bc
 }
 
+theorem finite_branches(a, b: Bool): a = a {
+    split_all;
+    all_goals { refl }
+}
+
 fn ordinary_apply(n: Nat) -> Nat { apply(n) }
 fn ordinary_give() -> Nat { give }
 

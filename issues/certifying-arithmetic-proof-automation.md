@@ -124,3 +124,12 @@ unary closed computations is compatible with that division.
   eight carry leaves select directly from their residual `Iff`/`Le` shape,
   reducing 20 speculative probes to zero while retaining the exact handwritten
   evaluator metrics. The additive certificate follow-up remains next.
+- 2026-08-26: The experimental `arith` surface was removed after its lessons
+  split cleanly into reusable components. Kernel-certified Omega now covers
+  affine Nat/Int arithmetic, including impossible constant rows. Finite case
+  analysis is the independent `split_all; all_goals { ... }` proof-tree
+  composition with no implicit branch cap. The one production structural
+  customer, `std/bitvec`'s carry threshold, uses its explicit eight-case proof
+  rather than teaching Omega about `twice`. The historical design and metrics
+  remain useful evidence; [[arith-compact-additive-certificates]] is closed as
+  superseded rather than implemented against deleted machinery.

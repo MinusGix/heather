@@ -54,3 +54,8 @@ closed 4- and 64-bit examples are controls, not acceptance.
   by the checking-only `arith` form. The public theorem and outer width
   induction are unchanged; this is a proof-source simplification whose emitted
   match and structural-order certificates still pass the ordinary kernel gate.
+- 2026-08-26: The specialized `arith` form was retired in favor of Omega plus
+  general goal combinators. `carry_threshold` deliberately returns to its
+  direct eight-case match because the two structural `twice` order lemmas are
+  representation-specific and should not become privileged Omega syntax; the
+  follow-up interface concern is [[bitvec-proof-normal-form-without-twice]].

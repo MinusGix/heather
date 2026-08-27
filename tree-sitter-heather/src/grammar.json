@@ -2169,24 +2169,38 @@
               "members": [
                 {
                   "type": "SYMBOL",
-                  "name": "split_statement"
+                  "name": "goal_combinators"
                 },
                 {
-                  "type": "FIELD",
-                  "name": "result",
-                  "content": {
-                    "type": "SYMBOL",
-                    "name": "_expression"
-                  }
+                  "type": "SEQ",
+                  "members": [
+                    {
+                      "type": "CHOICE",
+                      "members": [
+                        {
+                          "type": "SYMBOL",
+                          "name": "split_statement"
+                        },
+                        {
+                          "type": "FIELD",
+                          "name": "result",
+                          "content": {
+                            "type": "SYMBOL",
+                            "name": "_expression"
+                          }
+                        }
+                      ]
+                    },
+                    {
+                      "type": "REPEAT",
+                      "content": {
+                        "type": "SYMBOL",
+                        "name": "on_statement"
+                      }
+                    }
+                  ]
                 }
               ]
-            },
-            {
-              "type": "REPEAT",
-              "content": {
-                "type": "SYMBOL",
-                "name": "on_statement"
-              }
             },
             {
               "type": "STRING",
@@ -2381,6 +2395,31 @@
         {
           "type": "STRING",
           "value": ";"
+        }
+      ]
+    },
+    "goal_combinators": {
+      "type": "SEQ",
+      "members": [
+        {
+          "type": "STRING",
+          "value": "split_all"
+        },
+        {
+          "type": "STRING",
+          "value": ";"
+        },
+        {
+          "type": "STRING",
+          "value": "all_goals"
+        },
+        {
+          "type": "FIELD",
+          "name": "body",
+          "content": {
+            "type": "SYMBOL",
+            "name": "block"
+          }
         }
       ]
     },

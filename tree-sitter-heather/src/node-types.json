@@ -661,6 +661,10 @@
       "required": false,
       "types": [
         {
+          "type": "goal_combinators",
+          "named": true
+        },
+        {
           "type": "let_statement",
           "named": true
         },
@@ -1875,6 +1879,22 @@
           "named": true
         }
       ]
+    }
+  },
+  {
+    "type": "goal_combinators",
+    "named": true,
+    "fields": {
+      "body": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "block",
+            "named": true
+          }
+        ]
+      }
     }
   },
   {
@@ -4435,6 +4455,10 @@
     "named": false
   },
   {
+    "type": "all_goals",
+    "named": false
+  },
+  {
     "type": "apply",
     "named": false
   },
@@ -4589,6 +4613,10 @@
   },
   {
     "type": "split",
+    "named": false
+  },
+  {
+    "type": "split_all",
     "named": false
   },
   {

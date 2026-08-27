@@ -1,9 +1,9 @@
 {
   "keywords": [
     "Code", "Ctx", "TyCode", "Type", "apply", "as", "at", "axiom", "calc", "class", "code",
-    "datarepr", "designation", "else", "extends", "fn", "for", "fun", "if",
+    "all_goals", "datarepr", "designation", "else", "extends", "fn", "for", "fun", "if",
     "give", "impl", "import", "inductive", "infer", "instance", "j", "let", "match",
-    "meta", "mk", "on", "prefix", "record", "refl", "requires", "assuming", "self", "split",
+    "meta", "mk", "on", "prefix", "record", "refl", "requires", "assuming", "self", "split", "split_all",
     "theorem", "Squash", "squash_ind"
   ],
   "punctuation": [

@@ -737,6 +737,11 @@ pub struct Expr {
     pub span: Span,
 }
 
+/// Parser-generated head for `split_all; all_goals { ... }`. A NUL cannot be
+/// written by the surface lexer, so ordinary declarations and locals can
+/// never collide with this checking-form marker.
+pub const SPLIT_ALL_GOALS: &str = "\0split-all-goals";
+
 impl Expr {
     /// `f(a, b)` with a *name* at the head — the shape every name-keyed
     /// special form wants (`absurd`, `inj`, constructors, `Succ`, a self-call,

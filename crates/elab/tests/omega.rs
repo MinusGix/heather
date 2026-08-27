@@ -42,6 +42,7 @@ fn message(error: ElabError) -> String {
 const PREFIX: &str = r#"
 import int;
 import nat;
+import bool;
 import list;
 import logic;
 import omega;
@@ -370,6 +371,20 @@ theorem nat_equality_goal(n, m: Nat, forward: n <= m, backward: m <= n): n = m
 }
 
 #[test]
+fn proves_an_affine_nat_identity() {
+    let source = format!(
+        r#"{PREFIX}
+theorem reassociate_and_permute(a, b, c, d: Nat):
+    (a + b) + (c + d) = d + (b + (a + c))
+{{ omega }}
+"#
+    );
+    elaborator()
+        .elab_module_source("probe", &source)
+        .unwrap_or_else(|error| panic!("affine Nat identity did not check: {}", message(error)));
+}
+
+#[test]
 fn reflects_negated_nat_relations() {
     let source = format!(
         r#"{PREFIX}
@@ -383,6 +398,23 @@ theorem negated_nat_lt(n, m: Nat, denied: ¬(n < m), forward: n < m): False
     elaborator()
         .elab_module_source("probe", &source)
         .unwrap_or_else(|error| panic!("negated Nat relations did not check: {}", message(error)));
+}
+
+#[test]
+fn split_all_applies_omega_to_every_boolean_goal() {
+    let source = format!(
+        r#"{PREFIX}
+theorem every_boolean_branch_is_impossible(a, b: Bool, n: Nat,
+    lower: 2 <= n, upper: n <= 1): False
+{{
+    split_all;
+    all_goals {{ omega }}
+}}
+"#
+    );
+    elaborator()
+        .elab_module_source("probe", &source)
+        .unwrap_or_else(|error| panic!("split Omega goals did not check: {}", message(error)));
 }
 
 #[test]

@@ -9,9 +9,8 @@
 use std::rc::Rc;
 
 use heather_kernel::term::{LocalSubst, Term, Type};
-use heather_syntax::Expr;
+use heather_syntax::{Expr, Item, parse_file};
 
-use crate::arith::parse_generated_expr;
 use crate::omega::{Coeffs, Derivation, DerivationId, Interval, LinearExpr, Outcome, Problem, Z};
 use crate::{Cx, Elaborator};
 
@@ -19,6 +18,15 @@ pub(crate) struct Certificate {
     pub expr: Expr,
     pub source: String,
     pub report: OmegaReport,
+}
+
+fn parse_generated_expr(source: &str) -> Result<Expr, String> {
+    let wrapper = format!("theorem __omega_generated(): 0 = 0 {{ {source} }}");
+    let mut file = parse_file(&wrapper).map_err(|error| error.msg)?;
+    let Some(Item::Decl(decl)) = file.items.pop() else {
+        return Err("the generated Omega proof wrapper did not parse as a theorem".into());
+    };
+    Ok(*decl.body.result)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -51,6 +59,8 @@ fn reconstruction_lemmas(source: &str) -> Vec<&'static str> {
         "int::not_lt_of_ge",
         "int::zero_le_ofNat",
         "omega::atom_nonnegative",
+        "omega::impossible_constant_lower",
+        "omega::impossible_constant_upper",
         "omega::lower_combo",
         "omega::lower_of_eq",
         "omega::lower_to_negated_upper",
@@ -1826,6 +1836,63 @@ pub(crate) fn reconstruct(
             }
         };
         proofs[id] = Some(proof);
+    }
+
+    if let Derivation::Constant {
+        parent: source_id,
+        impossible: true,
+    } = problem.dag.nodes()[derivation]
+    {
+        let constant = parent(&proofs, source_id)?;
+        let result = if let Some(lower) = constant.interval.lower.filter(|lower| *lower > 0) {
+            format!(
+                "omega::impossible_constant_lower({}, {}, {}, {}, omega::dot_zeros({}), {})",
+                constant.row_source,
+                atoms_source,
+                int(lower),
+                constant
+                    .lower
+                    .as_ref()
+                    .ok_or("Omega constant contradiction lost its lower proof")?,
+                atoms_source,
+                literal_lt_proof(0, lower)?,
+            )
+        } else if let Some(upper) = constant.interval.upper.filter(|upper| *upper < 0) {
+            format!(
+                "omega::impossible_constant_upper({}, {}, {}, {}, omega::dot_zeros({}), {})",
+                constant.row_source,
+                atoms_source,
+                int(upper),
+                constant
+                    .upper
+                    .as_ref()
+                    .ok_or("Omega constant contradiction lost its upper proof")?,
+                atoms_source,
+                literal_lt_proof(upper, 0)?,
+            )
+        } else {
+            return Err("Omega constant contradiction still contains zero".into());
+        };
+        let source = if bindings.is_empty() {
+            result
+        } else {
+            format!("{{ {} {} }}", bindings.join(" "), result)
+        };
+        let expr = parse_generated_expr(&source)
+            .map_err(|error| format!("{error}\n  generated Omega source: {source}"))?;
+        let used_lemmas = reconstruction_lemmas(&source);
+        return Ok(Certificate {
+            expr,
+            source,
+            report: OmegaReport {
+                atoms: atoms_source.matches("Cons(").count(),
+                assumptions: reflected.len(),
+                reachable_derivations: reachable_derivations.len(),
+                logical_splits: 0,
+                stats: *stats,
+                used_lemmas,
+            },
+        });
     }
 
     let root = parent(&proofs, derivation)?;

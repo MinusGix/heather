@@ -1,6 +1,6 @@
 ---
 title: Emit compact block-level certificates for additive normalization
-status: open
+status: closed
 labels: [proofs,elaboration,metaprogramming,performance,stdlib]
 created: 2026-08-26
 updated: 2026-08-26
@@ -61,3 +61,4 @@ Acceptance:
   nearly all checking work. `nat::add_left_comm` demonstrated that naming one
   general, kernel-proved block transformation can remove tens of thousands of
   evaluator closures without widening the trusted boundary.
+- 2026-08-26: Superseded without implementation: the specialized arith normalizer was deleted after Omega gained impossible-constant reconstruction and preserved its affine Nat identity coverage. Finite branching moved to split_all/all_goals, while the bitvector twice proof remains explicit. There is no longer an additive certificate generator for this issue to optimize.

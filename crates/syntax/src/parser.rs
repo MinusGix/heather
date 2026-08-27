@@ -61,10 +61,11 @@
 //!                                      `=` is propositional equality (`==`
 //!                                      rejected), `<=` is `Le(a, b)`, `<` is
 //!                                      `lt(a, b)`; none of them chain
-//! block   := "{" stmt* (expr | split) on_stmt* "}"
+//! block   := "{" stmt* ((expr | split) on_stmt* | goal_combinators) "}"
 //! stmt    := "let" name (":" type)? "=" expr ";"
 //!          | "let" "{" name ("," name)* ","? "}" "=" expr ";"   -- destructure
 //! split   := "split" (name ":")? expr ("as" expr)? ";"   -- IS the result
+//! goal_combinators := "split_all" ";" "all_goals" block
 //! on_stmt := "on" ("?" name ("." numeral)? | "_" ":" type) ":=" expr ";"
 //!          | "on" name ("(" name ("," name)* ")")? ":=" expr ";"  -- split arm
 //! expr    := "match" (name ":")? expr ("as" expr)? "{" arms "}"
@@ -1956,6 +1957,50 @@ impl Parser {
         }
         while self.at_kw("let") {
             stmts.push(self.let_stmt()?);
+        }
+        // Goal combinators are statement-shaped: `split_all` replaces the
+        // current goal by one goal per finite branch, then `all_goals` checks
+        // the same block in every resulting branch. The parser packages the
+        // pair into one unspellable checking form; branch construction needs
+        // elaborated local types and therefore remains in the elaborator.
+        if self.at_kw("split_all") {
+            let start = self.bump().span;
+            self.expect(&TokKind::Semi, "`;` after `split_all`")?;
+            if !self.eat_kw("all_goals") {
+                return self.err("`split_all` must be followed by `all_goals { ... }`");
+            }
+            let goals = self.block()?;
+            if !goals.ons.is_empty() {
+                return Err(ParseError {
+                    msg: "an `all_goals` block cannot contain declaration-scoped `on` discharges"
+                        .into(),
+                    span: goals.span,
+                });
+            }
+            let close = self.expect(&TokKind::RBrace, "`}` after `all_goals`")?;
+            let span = start.join(close);
+            let result = Expr {
+                kind: ExprKind::App {
+                    head: Box::new(Expr {
+                        kind: ExprKind::Var(SPLIT_ALL_GOALS.into()),
+                        span: start,
+                    }),
+                    args: vec![Expr {
+                        kind: ExprKind::Block(Box::new(goals)),
+                        span,
+                    }],
+                    named: Vec::new(),
+                    explicit: false,
+                    goal_oriented: false,
+                },
+                span,
+            };
+            return Ok(Block {
+                stmts,
+                result: Box::new(result),
+                ons: Vec::new(),
+                span: open.join(close),
+            });
         }
         // `x ⊢ ...` at a block's result scopes over the REST of that block,
         // including its `let`s. This is the long-proof face of the sequent
@@ -5244,6 +5289,28 @@ mod tests {
             other => panic!("expected a name target, got {other:?}"),
         }
         assert!(matches!(d.body.ons[2].target, OnTarget::Stmt(_)));
+    }
+
+    #[test]
+    fn split_all_then_all_goals_is_one_checking_form() {
+        let d = decl_of(
+            "theorem t(a: Bool): a = a {
+                 split_all;
+                 all_goals { refl }
+             }",
+        );
+        let Some((head, args, false)) = d.body.result.as_named() else {
+            panic!("goal combinator call")
+        };
+        assert_eq!(head, SPLIT_ALL_GOALS);
+        assert_eq!(args.len(), 1);
+        assert!(matches!(args[0].kind, ExprKind::Block(_)));
+    }
+
+    #[test]
+    fn split_all_requires_an_all_goals_consumer() {
+        let error = parse_file("theorem t(a: Bool): a = a { split_all; refl }").unwrap_err();
+        assert!(error.msg.contains("all_goals"), "{}", error.msg);
     }
 
     #[test]

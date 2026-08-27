@@ -78,7 +78,6 @@ use heather_syntax::{
 mod access;
 mod application;
 mod attempt;
-pub mod arith;
 pub mod omega;
 mod omega_cert;
 pub use omega_cert::OmegaReport;
@@ -103,6 +102,7 @@ pub use provenance::{AssumptionKind, AxiomReport, AxiomUse};
 mod forded;
 mod gendefs;
 mod goals;
+mod goal_combinators;
 mod indexed;
 mod inductive;
 mod lgg;
@@ -511,11 +511,6 @@ pub struct Elaborator {
     /// share it so speculative and generated checking contribute to the same
     /// requested measurement; ordinary elaborators leave it absent.
     value_metrics: Option<Rc<ValueMetrics>>,
-    /// Successful arithmetic reconstructions in source order. This is the
-    /// certifying solver's audit surface: callers can see certificate size
-    /// and the exact library lemmas it selected. Failed declarations truncate
-    /// reports alongside warnings in [`Self::elab_module_source`].
-    arith_reports: RefCell<Vec<arith::ArithReport>>,
     /// Successful Omega reconstruction steps, including recursively generated
     /// logical branches, in checking order.
     omega_reports: RefCell<Vec<OmegaReport>>,
@@ -1142,7 +1137,6 @@ impl Elaborator {
             resolve_depth: Cell::new(0),
             fuel: DEFAULT_FUEL,
             value_metrics: None,
-            arith_reports: RefCell::new(Vec::new()),
             omega_reports: RefCell::new(Vec::new()),
             meta_programs: MetaPrograms::default(),
             meta_pushed: RefCell::new(Vec::new()),
@@ -1185,11 +1179,6 @@ impl Elaborator {
 
     pub fn value_metrics(&self) -> Option<ValueMetricsSnapshot> {
         self.value_metrics.as_ref().map(|metrics| metrics.snapshot())
-    }
-
-    /// Drain the audit reports produced by successful `arith` uses.
-    pub fn take_arith_reports(&self) -> Vec<arith::ArithReport> {
-        self.arith_reports.borrow_mut().drain(..).collect()
     }
 
     /// Drain the audit reports produced by successful `omega` uses.
@@ -1278,7 +1267,6 @@ impl Elaborator {
         self.enter_module(module, &file)?;
         for item in &file.items {
             let warn_mark = self.warnings.borrow().len();
-            let arith_mark = self.arith_reports.borrow().len();
             let omega_mark = self.omega_reports.borrow().len();
             let r = match item {
                 Item::Decl(d) => self.elab_decl(d),
@@ -1297,7 +1285,6 @@ impl Elaborator {
             if r.is_err() {
                 self.pending_derived.borrow_mut().clear();
                 self.warnings.borrow_mut().truncate(warn_mark);
-                self.arith_reports.borrow_mut().truncate(arith_mark);
                 self.omega_reports.borrow_mut().truncate(omega_mark);
             } else {
                 self.mint_pending();
@@ -2692,6 +2679,34 @@ impl Elaborator {
             }
         }
         match &e.kind {
+            // `split_all; all_goals { body }`: the parser packages the two
+            // statement combinators behind an unspellable head. Elaborated
+            // local types decide which domains are finite; the resulting
+            // nested matches are ordinary proof terms whose leaves check the
+            // same body independently in each branch.
+            ExprKind::App {
+                head,
+                args,
+                named,
+                explicit: false,
+                goal_oriented: false,
+            } if matches!(&head.kind, ExprKind::Var(name) if name == heather_syntax::SPLIT_ALL_GOALS)
+                && named.is_empty() =>
+            {
+                let [body] = args.as_slice() else {
+                    return err("internal `all_goals` form has the wrong arity", e.span);
+                };
+                let split = goal_combinators::split_all(self, cx, body, e.span);
+                self.elab_check_skel_slots(
+                    cx,
+                    &split,
+                    expected,
+                    lvl,
+                    hint,
+                    skel,
+                    capture_slots,
+                )
+            }
             // **Rule 2** (docs/let-and-blocks-design.md §5.2): `refl` is a
             // *nullary* special form, so its node carries no name to
             // re-derive and the parser cannot buy the name back with a
@@ -2823,101 +2838,9 @@ impl Elaborator {
             {
                 self.expr_elab().check_unit_form(self, cx, expected, e.span)
             }
-            // Private leaves of the Boolean tree. The marker contains a NUL
-            // and cannot be written by the surface lexer; it exists only in
-            // `arith`'s generated AST. Each candidate is tried transactionally;
-            // the selected term becomes part of the completed declaration and
-            // therefore crosses its ordinary kernel gate.
-            ExprKind::Var(name) if name == arith::BOOLEAN_LEAF => {
-                let head = self.whnf(cx, expected, e.span)?;
-                if let Type::Id { level, ty, lhs, rhs } = &head
-                    && expr::EqualityCheckingElab::goal_endpoints_convert(
-                        self, cx, lhs, rhs, ty, level,
-                    )
-                {
-                    self.arith_reports.borrow_mut().push(arith::ArithReport {
-                        atoms: 0,
-                        adjacent_swaps: 0,
-                        boolean_splits: 0,
-                        branches: 1,
-                        order_reifications: 0,
-                        candidate_probes: 0,
-                        used_lemmas: Vec::new(),
-                    });
-                    Ok(Term::Refl {
-                        level: level.clone(),
-                        ty: Rc::clone(ty),
-                        tm: Rc::clone(lhs),
-                    })
-                } else if let Ok(cert) = arith::reconstruct(self, cx, &head) {
-                    let term = self.elab_check(cx, &cert.expr, expected, lvl)?;
-                    self.arith_reports.borrow_mut().push(cert.report);
-                    Ok(term)
-                } else {
-                    let direct_failure = match arith::reconstruct_order(self, cx, &head, e.span) {
-                        Ok(cert) => {
-                            let term = self.elab_check(cx, &cert.expr, expected, lvl)?;
-                            self.arith_reports.borrow_mut().push(arith::ArithReport {
-                                atoms: 0,
-                                adjacent_swaps: 0,
-                                boolean_splits: 0,
-                                branches: 1,
-                                order_reifications: 1,
-                                candidate_probes: 0,
-                                used_lemmas: vec![cert.lemma],
-                            });
-                            return Ok(term);
-                        }
-                        Err(detail) => detail,
-                    };
-                    let candidates = arith::order_candidates(cx, e.span);
-                    let mut selected = None;
-                    let mut candidate_probes = 0;
-                    for (lemma, candidate) in candidates {
-                        candidate_probes += 1;
-                        let probe = self.clone();
-                        let Ok((_term, got, got_lvl)) = probe.elab_infer(cx, &candidate) else {
-                            continue;
-                        };
-                        // Search needs only decide whether the inferred result
-                        // type matches this leaf. Rechecking the complete
-                        // theorem application here duplicated the work of the
-                        // enclosing declaration gate; conversion is enough to
-                        // select a candidate, and the final gate remains the
-                        // authority on the selected proof term itself.
-                        if &got_lvl != lvl
-                            || probe
-                                .goal_oracle()
-                                .convert_type(&cx.gamma, Layer::Prog, &got, expected, lvl)
-                                .is_err()
-                        {
-                            continue;
-                        }
-                        selected = Some((lemma, candidate));
-                        break;
-                    }
-                    let Some((lemma, candidate)) = selected else {
-                        return err(
-                            format!("`arith` exhausted its Boolean leaf candidates: conversion, additive equality, and the structural doubling-order kit all failed\n  direct order reification: {direct_failure}"),
-                            e.span,
-                        );
-                    };
-                    let term = self.elab_check(cx, &candidate, expected, lvl)?;
-                    self.arith_reports.borrow_mut().push(arith::ArithReport {
-                        atoms: 0,
-                        adjacent_swaps: 0,
-                        boolean_splits: 0,
-                        branches: 1,
-                        order_reifications: 0,
-                        candidate_probes,
-                        used_lemmas: vec![lemma],
-                    });
-                    Ok(term)
-                }
-            }
             // `omega` is the kernel-certified vertical slice of the linear
-            // solver. Like `arith`, it is only an untrusted elaborator
-            // shortcut: reconstruction returns an ordinary Heather
+            // solver. It is only an untrusted elaborator shortcut:
+            // reconstruction returns an ordinary Heather
             // expression and this recursive call checks it at the original
             // goal before the enclosing declaration reaches the kernel gate.
             ExprKind::Var(name)
@@ -2944,85 +2867,6 @@ impl Elaborator {
                     })?;
                 self.omega_reports.borrow_mut().push(cert.report);
                 Ok(term)
-            }
-            // `arith` is an untrusted, checking-only proof reconstructor. It
-            // reads the elaborated goal and produces an ordinary Heather
-            // expression from the `Nat` lemma kit; this recursive call takes
-            // that expression through the same elaboration and final kernel
-            // gate as a handwritten proof. Like every bare special form, a
-            // local, declaration, or expected constructor with this name
-            // wins (crates/elab/src/arith.rs).
-            ExprKind::Var(name)
-                if name == "arith"
-                    && !self.shadowed(cx, name)
-                    && self.ctor_here_expected(cx, name, expected).is_none() =>
-            {
-                let head = self.whnf(cx, expected, e.span)?;
-                if let Type::Id { level, ty, lhs, rhs } = &head
-                    && expr::EqualityCheckingElab::goal_endpoints_convert(
-                        self, cx, lhs, rhs, ty, level,
-                    )
-                {
-                    self.arith_reports.borrow_mut().push(arith::ArithReport {
-                        atoms: 0,
-                        adjacent_swaps: 0,
-                        boolean_splits: 0,
-                        branches: 1,
-                        order_reifications: 0,
-                        candidate_probes: 0,
-                        used_lemmas: Vec::new(),
-                    });
-                    return Ok(Term::Refl {
-                        level: level.clone(),
-                        ty: Rc::clone(ty),
-                        tm: Rc::clone(lhs),
-                    });
-                }
-                match arith::reconstruct(self, cx, &head) {
-                    Ok(cert) => {
-                        let term = self.elab_check(cx, &cert.expr, expected, lvl)?;
-                        self.arith_reports.borrow_mut().push(cert.report);
-                        Ok(term)
-                    }
-                    Err(direct) => {
-                        let split = arith::split_booleans(self, cx, e.span)
-                            .map_err(|detail| ElabError::Elab {
-                                msg: format!("{direct}\n  Boolean split: {detail}"),
-                                span: e.span,
-                            })?;
-                        let Some(split) = split else {
-                            return Err(ElabError::Elab {
-                                msg: direct.to_string(),
-                                span: e.span,
-                            });
-                        };
-                        let mark = self.arith_reports.borrow().len();
-                        let term = self.elab_check(cx, &split.expr, expected, lvl)?;
-                        let leaves: Vec<arith::ArithReport> =
-                            self.arith_reports.borrow_mut().drain(mark..).collect();
-                        let mut used_lemmas = Vec::new();
-                        for report in &leaves {
-                            for &lemma in &report.used_lemmas {
-                                if !used_lemmas.contains(&lemma) {
-                                    used_lemmas.push(lemma);
-                                }
-                            }
-                        }
-                        self.arith_reports.borrow_mut().push(arith::ArithReport {
-                            atoms: leaves.iter().map(|r| r.atoms).sum(),
-                            adjacent_swaps: leaves.iter().map(|r| r.adjacent_swaps).sum(),
-                            boolean_splits: split.splits,
-                            branches: leaves.len(),
-                            order_reifications: leaves
-                                .iter()
-                                .map(|r| r.order_reifications)
-                                .sum(),
-                            candidate_probes: leaves.iter().map(|r| r.candidate_probes).sum(),
-                            used_lemmas,
-                        });
-                        Ok(term)
-                    }
-                }
             }
             ExprKind::App { .. }
                 if matches!(e.as_named(), Some(("FS", _, false)))
