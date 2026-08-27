@@ -829,6 +829,34 @@ theorem upper_combo(a, b: Int, left, right, atoms: List<Int>, l, r: Int,
         λ q p => q <= a * l + b * r, summed)
 }
 
+theorem lower_neg_combo(a, b: Int, left, right, atoms: List<Int>, l, r: Int,
+    ha: OfNat(0) <= a, hb: OfNat(0) <= b,
+    hl: dot(left, atoms) <= l, hr: dot(right, atoms) <= r):
+    (-a) * l + (-b) * r <= dot(combo(-a, left, -b, right), atoms)
+{
+    let summed = int::add_le_mono(
+        (-a) * l, (-a) * dot(left, atoms),
+        (-b) * r, (-b) * dot(right, atoms),
+        upper_neg_scale(a, dot(left, atoms), l, ha, hl),
+        upper_neg_scale(b, dot(right, atoms), r, hb, hr));
+    j(sym(dot_combo(-a, left, -b, right, atoms)),
+        λ q p => (-a) * l + (-b) * r <= q, summed)
+}
+
+theorem upper_neg_combo(a, b: Int, left, right, atoms: List<Int>, l, r: Int,
+    ha: OfNat(0) <= a, hb: OfNat(0) <= b,
+    hl: l <= dot(left, atoms), hr: r <= dot(right, atoms)):
+    dot(combo(-a, left, -b, right), atoms) <= (-a) * l + (-b) * r
+{
+    let summed = int::add_le_mono(
+        (-a) * dot(left, atoms), (-a) * l,
+        (-b) * dot(right, atoms), (-b) * r,
+        lower_neg_scale(a, l, dot(left, atoms), ha, hl),
+        lower_neg_scale(b, r, dot(right, atoms), hb, hr));
+    j(sym(dot_combo(-a, left, -b, right, atoms)),
+        λ q p => q <= (-a) * l + (-b) * r, summed)
+}
+
 
 // Fourier--Motzkin combines a lower row with an upper row using positive
 // magnitudes `a` and `b`; the upper row is multiplied by `-b`, reversing it.
@@ -922,4 +950,542 @@ theorem or_elim_false<P, Q>(h: P ∨ Q,
     left: P → False, right: Q → False): False
 {
     or_elim(h, left, right)
+}
+
+// ---------------------------------------------------------------------------
+// CutSat's internal divisibility evidence and finite Cooper eliminators.
+//
+// Search stores `d ∣ p` as an existential equation rather than exposing the
+// implementation of `int::mod`.  A terminal conflict opens the witness and
+// hands the resulting linear equality back to the ordinary Omega certificate
+// algebra.  The two Cooper lemmas below are the only genuinely integer step:
+// they choose the bounded Euclidean remainder of the slack at one side.
+
+fn cut_dvd(divisor, value: Int) → Type {
+    Exists<Int>(λ (witness: Int) => value = divisor * witness)
+}
+
+theorem cut_dvd_elim(divisor, value: Int, h: cut_dvd(divisor, value),
+    close: (witness: Int) → value = divisor * witness → False): False
+{
+    close(h.witness, h.proof)
+}
+
+theorem cutsat_with_le(value: Int, h: value <= OfNat(0),
+    close: value <= OfNat(0) → False): False
+{
+    close(h)
+}
+
+theorem cutsat_with_eq(left, right: Int, h: left = right,
+    close: left = right → False): False
+{
+    close(h)
+}
+
+theorem cutsat_negative_remainder(remainder: Int, payload: Nat,
+    equation: remainder = NegSucc(payload),
+    nonnegative: OfNat(0) <= remainder): False
+{
+    j(sym(equation), λ value _ => OfNat(0) <= value → False,
+        λ bad => false_elim(bad))(nonnegative)
+}
+
+theorem cutsat_div_nonnegative(dividend: Int, divisor_pred: Nat,
+    h: OfNat(0) <= dividend):
+    OfNat(0) <= int::div(dividend, OfNat(Succ(divisor_pred)))
+{
+    match dividend as λ d => OfNat(0) <= d →
+        OfNat(0) <= int::div(d, OfNat(Succ(divisor_pred))) {
+        OfNat(_) => λ _ => trivial,
+        NegSucc(_) => λ bad => false_elim(bad),
+    }(h)
+}
+
+theorem cutsat_left_gap_nonnegative(a_pred: Nat, x, p: Int,
+    lower_product: NegSucc(a_pred) * x = -(OfNat(Succ(a_pred)) * x),
+    lower: NegSucc(a_pred) * x + p <= OfNat(0)):
+    OfNat(0) <= OfNat(Succ(a_pred)) * x + (-p)
+{
+    omega
+}
+
+theorem cutsat_right_gap_nonnegative(b_pred: Nat, x, q: Int,
+    upper: OfNat(Succ(b_pred)) * x + q <= OfNat(0)):
+    OfNat(0) <= (-q) + (-(OfNat(Succ(b_pred)) * x))
+{
+    omega
+}
+
+theorem cutsat_remainder_le_gap(gap, quotient, divisor, remainder: Int,
+    quotient_product_nonnegative: OfNat(0) <= quotient * divisor,
+    reconstruct: quotient * divisor + remainder = gap): remainder <= gap
+{
+    omega
+}
+
+theorem cutsat_quotient_product_nonnegative(quotient: Int, divisor_pred: Nat,
+    quotient_nonnegative: OfNat(0) <= quotient):
+    OfNat(0) <= quotient * OfNat(Succ(divisor_pred))
+{
+    j(int::zero_mul(OfNat(Succ(divisor_pred))),
+        λ left _ => left <= quotient * OfNat(Succ(divisor_pred)),
+        int::mul_le_mono_r(
+            OfNat(0), quotient, OfNat(Succ(divisor_pred)),
+            quotient_nonnegative, int::zero_le_ofNat(Succ(divisor_pred))))
+}
+
+theorem cutsat_left_remainder_bound(a_pred: Nat, x, p, remainder, gap: Int,
+    lower_product: NegSucc(a_pred) * x = -(OfNat(Succ(a_pred)) * x),
+    lower: NegSucc(a_pred) * x + p <= OfNat(0),
+    gap_eq: gap = OfNat(Succ(a_pred)) * x + (-p),
+    remainder_le_gap: remainder <= gap):
+    p + remainder <= OfNat(Succ(a_pred)) * x
+{
+    omega
+}
+
+theorem cutsat_upper_bound(b_pred: Nat, x, q: Int,
+    upper: OfNat(Succ(b_pred)) * x + q <= OfNat(0)):
+    OfNat(Succ(b_pred)) * x <= -q
+{
+    omega
+}
+
+theorem cutsat_left_cut(a, b, x, p, q, remainder: Int,
+    scaled_lower: b * (p + remainder) <= b * (a * x),
+    scaled_upper: a * (b * x) <= a * (-q),
+    commute_product: b * (a * x) = a * (b * x),
+    distribute_remainder: b * (p + remainder) = b * p + b * remainder,
+    negate_q: a * (-q) = -(a * q)):
+    b * p + a * q + b * remainder <= OfNat(0)
+{
+    omega
+}
+
+theorem cutsat_solve_add_left(a, b, c: Int, h: a + b = c):
+    b = (-a) + c
+{
+    calc {
+        b = OfNat(0) + b := sym(int::zero_add(b)),
+          = ((-a) + a) + b :=
+                cong_int(λ z => z + b, sym(int::neg_add_self(a))),
+          = (-a) + (a + b) := int::add_assoc(-a, a, b),
+          = (-a) + c := cong_int(λ z => (-a) + z, h),
+    }
+}
+
+theorem cutsat_rotate_cancel(p, u, v: Int):
+    p + ((-u) + (v + (-p))) = (-u) + v
+{
+    calc {
+        p + ((-u) + (v + (-p)))
+            = (p + (-u)) + (v + (-p)) :=
+                sym(int::add_assoc(p, -u, v + (-p))),
+          = ((-u) + p) + (v + (-p)) :=
+                cong_int(λ z => z + (v + (-p)), int::add_comm(p, -u)),
+          = (-u) + (p + (v + (-p))) := int::add_assoc(-u, p, v + (-p)),
+          = (-u) + ((p + v) + (-p)) :=
+                cong_int(λ z => (-u) + z, sym(int::add_assoc(p, v, -p))),
+          = (-u) + ((v + p) + (-p)) :=
+                cong_int(λ z => (-u) + (z + (-p)), int::add_comm(p, v)),
+          = (-u) + v :=
+                cong_int(λ z => (-u) + z, int::add_neg_cancel_r(v, p)),
+    }
+}
+
+theorem cutsat_cancel_middle(p, u, v: Int):
+    p + ((-u) + ((-p) + v)) = (-u) + v
+{
+    omega
+}
+
+theorem cutsat_left_dvd(a_pred: Nat, x, p, quotient, remainder, gap: Int,
+    gap_eq: gap = OfNat(Succ(a_pred)) * x + (-p),
+    reconstruct: quotient * OfNat(Succ(a_pred)) + remainder = gap,
+    commute_quotient:
+        quotient * OfNat(Succ(a_pred)) = OfNat(Succ(a_pred)) * quotient,
+    witness_product:
+        NegSucc(a_pred) * (quotient + (-x)) =
+            -(OfNat(Succ(a_pred)) * quotient) + OfNat(Succ(a_pred)) * x):
+    cut_dvd(NegSucc(a_pred), p + remainder)
+{
+    let remainder_eq = cutsat_solve_add_left(
+        quotient * OfNat(Succ(a_pred)), remainder, gap, reconstruct);
+    let value_eq:
+        (p + remainder =
+            -(OfNat(Succ(a_pred)) * quotient) + OfNat(Succ(a_pred)) * x) =
+        calc {
+            p + remainder = p + ((-(quotient * OfNat(Succ(a_pred)))) + gap) :=
+                cong_int(λ z => p + z, remainder_eq),
+              = p + ((-(OfNat(Succ(a_pred)) * quotient)) + gap) :=
+                cong_int(
+                    λ z => p + ((-z) + gap),
+                    commute_quotient),
+              = p + ((-(OfNat(Succ(a_pred)) * quotient)) +
+                    (OfNat(Succ(a_pred)) * x + (-p))) :=
+                cong_int(
+                    λ z => p + ((-(OfNat(Succ(a_pred)) * quotient)) + z),
+                    gap_eq),
+              = -(OfNat(Succ(a_pred)) * quotient) +
+                    OfNat(Succ(a_pred)) * x :=
+                cutsat_rotate_cancel(
+                    p,
+                    OfNat(Succ(a_pred)) * quotient,
+                    OfNat(Succ(a_pred)) * x),
+        };
+    Exists(
+        witness := quotient + (-x),
+        proof := trans(value_eq, sym(witness_product)))
+}
+
+theorem cutsat_abs_positive(pred: Nat):
+    int::abs(OfNat(Succ(pred))) = OfNat(Succ(pred))
+{
+    refl
+}
+
+theorem cutsat_cooper_left_bound(a_pred: Nat, x, p: Int):
+    int::mod(OfNat(Succ(a_pred)) * x + (-p), OfNat(Succ(a_pred)))
+        < OfNat(Succ(a_pred))
+{
+    let a = OfNat(Succ(a_pred));
+    let gap = a * x + (-p);
+    let bounded_abs = int::mod_lt_abs(
+        gap, a, positive_int_nonzero(a_pred));
+    j(cutsat_abs_positive(a_pred),
+        λ bound _ => int::mod(gap, a) < bound, bounded_abs)
+}
+
+theorem cutsat_cooper_left_cut(a_pred, b_pred: Nat, x, p, q, remainder: Int,
+    lower: NegSucc(a_pred) * x + p <= OfNat(0),
+    upper: OfNat(Succ(b_pred)) * x + q <= OfNat(0),
+    remainder_bound: p + remainder <= OfNat(Succ(a_pred)) * x):
+    OfNat(Succ(b_pred)) * p + OfNat(Succ(a_pred)) * q
+        + OfNat(Succ(b_pred)) * remainder <= OfNat(0)
+{
+    let a = OfNat(Succ(a_pred));
+    let b = OfNat(Succ(b_pred));
+    let scaled_lower = int::mul_le_mono_l(
+        p + remainder, a * x, b, remainder_bound,
+        int::zero_le_ofNat(Succ(b_pred)));
+    let upper_bound = cutsat_upper_bound(b_pred, x, q, upper);
+    let scaled_upper = int::mul_le_mono_l(
+        b * x, -q, a, upper_bound,
+        int::zero_le_ofNat(Succ(a_pred)));
+    let commute_product: (b * (a * x) = a * (b * x)) = trans(
+        sym(int::mul_assoc(b, a, x)),
+        trans(
+            cong_int(λ c => c * x, int::mul_comm(b, a)),
+            int::mul_assoc(a, b, x)));
+    let cut_remainder = cutsat_left_cut(
+        a, b, x, p, q, remainder,
+        scaled_lower, scaled_upper, commute_product,
+        int::mul_add_distr(b, p, remainder), int::mul_neg_r(a, q));
+    cut_remainder
+}
+
+theorem cutsat_cooper_left_dvd(a_pred: Nat, x, p: Int):
+    cut_dvd(NegSucc(a_pred),
+        p + int::mod(OfNat(Succ(a_pred)) * x + (-p),
+            OfNat(Succ(a_pred))))
+{
+    let a = OfNat(Succ(a_pred));
+    let gap = a * x + (-p);
+    let quotient = int::div(gap, a);
+    let remainder = int::mod(gap, a);
+    let negative_quotient = int::mul_neg_l(a, quotient);
+    let double_negative_product: (NegSucc(a_pred) * (-x) = a * x) = trans(
+        int::mul_neg_l(a, -x),
+        trans(
+            cong_int(λ z => -z, int::mul_neg_r(a, x)),
+            int::neg_neg(a * x)));
+    let witness_product: (
+        NegSucc(a_pred) * (quotient + (-x)) =
+            -(a * quotient) + a * x) = trans(
+        int::mul_add_distr(NegSucc(a_pred), quotient, -x),
+        trans(
+            cong_int(
+                λ z => z + NegSucc(a_pred) * (-x),
+                negative_quotient),
+            cong_int(λ z => -(a * quotient) + z, double_negative_product)));
+    cutsat_left_dvd(
+        a_pred, x, p, quotient, remainder, gap,
+        refl, int::div_mul_add_mod(gap, a),
+        int::mul_comm(quotient, a), witness_product)
+}
+
+theorem cutsat_cooper_left_remainder_le_gap(a_pred: Nat, x, p: Int,
+    lower: NegSucc(a_pred) * x + p <= OfNat(0)):
+    int::mod(OfNat(Succ(a_pred)) * x + (-p), OfNat(Succ(a_pred)))
+        <= OfNat(Succ(a_pred)) * x + (-p)
+{
+    cutsat_remainder_le_gap(
+        OfNat(Succ(a_pred)) * x + (-p),
+        int::div(OfNat(Succ(a_pred)) * x + (-p), OfNat(Succ(a_pred))),
+        OfNat(Succ(a_pred)),
+        int::mod(OfNat(Succ(a_pred)) * x + (-p), OfNat(Succ(a_pred))),
+        cutsat_quotient_product_nonnegative(
+            int::div(OfNat(Succ(a_pred)) * x + (-p),
+                OfNat(Succ(a_pred))), a_pred,
+            cutsat_div_nonnegative(
+                OfNat(Succ(a_pred)) * x + (-p), a_pred,
+                cutsat_left_gap_nonnegative(
+                    a_pred, x, p,
+                    int::mul_neg_l(OfNat(Succ(a_pred)), x), lower))),
+        int::div_mul_add_mod(
+            OfNat(Succ(a_pred)) * x + (-p), OfNat(Succ(a_pred))))
+}
+
+theorem cutsat_cooper_left_remainder_bound(a_pred: Nat, x, p: Int,
+    lower: NegSucc(a_pred) * x + p <= OfNat(0)):
+    p + int::mod(OfNat(Succ(a_pred)) * x + (-p), OfNat(Succ(a_pred)))
+        <= OfNat(Succ(a_pred)) * x
+{
+    cutsat_left_remainder_bound(
+        a_pred, x, p,
+        int::mod(OfNat(Succ(a_pred)) * x + (-p), OfNat(Succ(a_pred))),
+        OfNat(Succ(a_pred)) * x + (-p),
+        int::mul_neg_l(OfNat(Succ(a_pred)), x), lower, refl,
+        cutsat_cooper_left_remainder_le_gap(a_pred, x, p, lower))
+}
+
+theorem cutsat_cooper_left(a_pred, b_pred: Nat, x, p, q: Int,
+    lower: NegSucc(a_pred) * x + p <= OfNat(0),
+    upper: OfNat(Succ(b_pred)) * x + q <= OfNat(0),
+    close: (remainder: Int) → OfNat(0) <= remainder →
+        remainder < OfNat(Succ(a_pred)) →
+        OfNat(Succ(b_pred)) * p + OfNat(Succ(a_pred)) * q
+            + OfNat(Succ(b_pred)) * remainder <= OfNat(0) →
+        cut_dvd(NegSucc(a_pred), p + remainder) → False): False
+{
+    close(
+        int::mod(OfNat(Succ(a_pred)) * x + (-p), OfNat(Succ(a_pred))),
+        int::mod_nonneg(
+            OfNat(Succ(a_pred)) * x + (-p), OfNat(Succ(a_pred)),
+            positive_int_nonzero(a_pred)),
+        cutsat_cooper_left_bound(a_pred, x, p),
+        cutsat_cooper_left_cut(
+            a_pred, b_pred, x, p, q,
+            int::mod(OfNat(Succ(a_pred)) * x + (-p), OfNat(Succ(a_pred))),
+            lower, upper,
+            cutsat_cooper_left_remainder_bound(a_pred, x, p, lower)),
+        cutsat_cooper_left_dvd(a_pred, x, p))
+}
+
+theorem cutsat_lower_bound(a_pred: Nat, x, p: Int,
+    lower_product: NegSucc(a_pred) * x = -(OfNat(Succ(a_pred)) * x),
+    lower: NegSucc(a_pred) * x + p <= OfNat(0)):
+    p <= OfNat(Succ(a_pred)) * x
+{
+    omega
+}
+
+theorem cutsat_right_remainder_bound(b_pred: Nat, x, q, remainder, gap: Int,
+    gap_eq: gap = (-q) + (-(OfNat(Succ(b_pred)) * x)),
+    remainder_le_gap: remainder <= gap):
+    q + remainder <= -(OfNat(Succ(b_pred)) * x)
+{
+    omega
+}
+
+theorem cutsat_right_cut(a, b, x, p, q, remainder: Int,
+    scaled_lower: b * p <= b * (a * x),
+    scaled_remainder: a * (q + remainder) <= a * (-(b * x)),
+    commute_product: b * (a * x) = a * (b * x),
+    distribute_remainder: a * (q + remainder) = a * q + a * remainder,
+    negate_product: a * (-(b * x)) = -(a * (b * x))):
+    b * p + a * q + a * remainder <= OfNat(0)
+{
+    omega
+}
+
+theorem cutsat_right_dvd(b_pred: Nat, x, q, quotient, remainder, gap: Int,
+    gap_eq: gap = (-q) + (-(OfNat(Succ(b_pred)) * x)),
+    reconstruct: quotient * OfNat(Succ(b_pred)) + remainder = gap,
+    commute_quotient:
+        quotient * OfNat(Succ(b_pred)) = OfNat(Succ(b_pred)) * quotient,
+    witness_product:
+        OfNat(Succ(b_pred)) * (-(x + quotient)) =
+            -(OfNat(Succ(b_pred)) * quotient)
+                + (-(OfNat(Succ(b_pred)) * x))):
+    cut_dvd(OfNat(Succ(b_pred)), q + remainder)
+{
+    let remainder_eq = cutsat_solve_add_left(
+        quotient * OfNat(Succ(b_pred)), remainder, gap, reconstruct);
+    let value_eq:
+        (q + remainder =
+            -(OfNat(Succ(b_pred)) * quotient)
+                + (-(OfNat(Succ(b_pred)) * x))) =
+        calc {
+            q + remainder = q + ((-(quotient * OfNat(Succ(b_pred)))) + gap) :=
+                cong_int(λ z => q + z, remainder_eq),
+              = q + ((-(OfNat(Succ(b_pred)) * quotient)) + gap) :=
+                cong_int(
+                    λ z => q + ((-z) + gap), commute_quotient),
+              = q + ((-(OfNat(Succ(b_pred)) * quotient)) +
+                    ((-q) + (-(OfNat(Succ(b_pred)) * x)))) :=
+                cong_int(
+                    λ z => q + ((-(OfNat(Succ(b_pred)) * quotient)) + z),
+                    gap_eq),
+              = -(OfNat(Succ(b_pred)) * quotient)
+                    + (-(OfNat(Succ(b_pred)) * x)) :=
+                cutsat_cancel_middle(
+                    q,
+                    OfNat(Succ(b_pred)) * quotient,
+                    -(OfNat(Succ(b_pred)) * x)),
+        };
+    Exists(
+        witness := -(x + quotient),
+        proof := trans(value_eq, sym(witness_product)))
+}
+
+theorem cutsat_cooper_right_remainder_le_gap(b_pred: Nat, x, q: Int,
+    upper: OfNat(Succ(b_pred)) * x + q <= OfNat(0)):
+    int::mod((-q) + (-(OfNat(Succ(b_pred)) * x)), OfNat(Succ(b_pred)))
+        <= (-q) + (-(OfNat(Succ(b_pred)) * x))
+{
+    cutsat_remainder_le_gap(
+        (-q) + (-(OfNat(Succ(b_pred)) * x)),
+        int::div((-q) + (-(OfNat(Succ(b_pred)) * x)),
+            OfNat(Succ(b_pred))),
+        OfNat(Succ(b_pred)),
+        int::mod((-q) + (-(OfNat(Succ(b_pred)) * x)),
+            OfNat(Succ(b_pred))),
+        cutsat_quotient_product_nonnegative(
+            int::div((-q) + (-(OfNat(Succ(b_pred)) * x)),
+                OfNat(Succ(b_pred))), b_pred,
+            cutsat_div_nonnegative(
+                (-q) + (-(OfNat(Succ(b_pred)) * x)), b_pred,
+                cutsat_right_gap_nonnegative(b_pred, x, q, upper))),
+        int::div_mul_add_mod(
+            (-q) + (-(OfNat(Succ(b_pred)) * x)), OfNat(Succ(b_pred))))
+}
+
+theorem cutsat_right_witness_product(b_pred: Nat, x, quotient: Int):
+    OfNat(Succ(b_pred)) * (-(x + quotient)) =
+        -(OfNat(Succ(b_pred)) * quotient)
+            + (-(OfNat(Succ(b_pred)) * x))
+{
+    calc {
+        OfNat(Succ(b_pred)) * (-(x + quotient))
+            = -(OfNat(Succ(b_pred)) * (x + quotient)) :=
+                int::mul_neg_r(OfNat(Succ(b_pred)), x + quotient),
+          = -(OfNat(Succ(b_pred)) * x
+                + OfNat(Succ(b_pred)) * quotient) :=
+                cong_int(λ z => -z,
+                    int::mul_add_distr(OfNat(Succ(b_pred)), x, quotient)),
+          = -(OfNat(Succ(b_pred)) * x)
+                + (-(OfNat(Succ(b_pred)) * quotient)) :=
+                int::neg_add(
+                    OfNat(Succ(b_pred)) * x,
+                    OfNat(Succ(b_pred)) * quotient),
+          = -(OfNat(Succ(b_pred)) * quotient)
+                + (-(OfNat(Succ(b_pred)) * x)) :=
+                int::add_comm(
+                    -(OfNat(Succ(b_pred)) * x),
+                    -(OfNat(Succ(b_pred)) * quotient)),
+    }
+}
+
+theorem cutsat_cooper_right_cut(a_pred, b_pred: Nat, x, p, q: Int,
+    lower: NegSucc(a_pred) * x + p <= OfNat(0),
+    upper: OfNat(Succ(b_pred)) * x + q <= OfNat(0)):
+    OfNat(Succ(b_pred)) * p + OfNat(Succ(a_pred)) * q
+        + OfNat(Succ(a_pred)) *
+            int::mod((-q) + (-(OfNat(Succ(b_pred)) * x)),
+                OfNat(Succ(b_pred))) <= OfNat(0)
+{
+    cutsat_right_cut(
+        OfNat(Succ(a_pred)), OfNat(Succ(b_pred)), x, p, q,
+        int::mod((-q) + (-(OfNat(Succ(b_pred)) * x)),
+            OfNat(Succ(b_pred))),
+        int::mul_le_mono_l(
+            p, OfNat(Succ(a_pred)) * x, OfNat(Succ(b_pred)),
+            cutsat_lower_bound(
+                a_pred, x, p,
+                int::mul_neg_l(OfNat(Succ(a_pred)), x), lower),
+            int::zero_le_ofNat(Succ(b_pred))),
+        int::mul_le_mono_l(
+            q + int::mod((-q) + (-(OfNat(Succ(b_pred)) * x)),
+                    OfNat(Succ(b_pred))),
+            -(OfNat(Succ(b_pred)) * x), OfNat(Succ(a_pred)),
+            cutsat_right_remainder_bound(
+                b_pred, x, q,
+                int::mod((-q) + (-(OfNat(Succ(b_pred)) * x)),
+                    OfNat(Succ(b_pred))),
+                (-q) + (-(OfNat(Succ(b_pred)) * x)), refl,
+                cutsat_cooper_right_remainder_le_gap(b_pred, x, q, upper)),
+            int::zero_le_ofNat(Succ(a_pred))),
+        trans(
+            sym(int::mul_assoc(
+                OfNat(Succ(b_pred)), OfNat(Succ(a_pred)), x)),
+            trans(
+                cong_int(λ c => c * x,
+                    int::mul_comm(OfNat(Succ(b_pred)), OfNat(Succ(a_pred)))),
+                int::mul_assoc(
+                    OfNat(Succ(a_pred)), OfNat(Succ(b_pred)), x))),
+        int::mul_add_distr(
+            OfNat(Succ(a_pred)), q,
+            int::mod((-q) + (-(OfNat(Succ(b_pred)) * x)),
+                OfNat(Succ(b_pred)))),
+        int::mul_neg_r(
+            OfNat(Succ(a_pred)), OfNat(Succ(b_pred)) * x))
+}
+
+theorem cutsat_cooper_right_dvd(b_pred: Nat, x, q: Int):
+    cut_dvd(OfNat(Succ(b_pred)),
+        q + int::mod((-q) + (-(OfNat(Succ(b_pred)) * x)),
+            OfNat(Succ(b_pred))))
+{
+    cutsat_right_dvd(
+        b_pred, x, q,
+        int::div((-q) + (-(OfNat(Succ(b_pred)) * x)),
+            OfNat(Succ(b_pred))),
+        int::mod((-q) + (-(OfNat(Succ(b_pred)) * x)),
+            OfNat(Succ(b_pred))),
+        (-q) + (-(OfNat(Succ(b_pred)) * x)), refl,
+        int::div_mul_add_mod(
+            (-q) + (-(OfNat(Succ(b_pred)) * x)), OfNat(Succ(b_pred))),
+        int::mul_comm(
+            int::div((-q) + (-(OfNat(Succ(b_pred)) * x)),
+                OfNat(Succ(b_pred))),
+            OfNat(Succ(b_pred))),
+        cutsat_right_witness_product(
+            b_pred, x,
+            int::div((-q) + (-(OfNat(Succ(b_pred)) * x)),
+                OfNat(Succ(b_pred)))))
+}
+
+theorem cutsat_cooper_right_bound(b_pred: Nat, x, q: Int):
+    int::mod((-q) + (-(OfNat(Succ(b_pred)) * x)), OfNat(Succ(b_pred)))
+        < OfNat(Succ(b_pred))
+{
+    j(cutsat_abs_positive(b_pred),
+        λ bound _ =>
+            int::mod((-q) + (-(OfNat(Succ(b_pred)) * x)),
+                OfNat(Succ(b_pred))) < bound,
+        int::mod_lt_abs(
+            (-q) + (-(OfNat(Succ(b_pred)) * x)), OfNat(Succ(b_pred)),
+            positive_int_nonzero(b_pred)))
+}
+
+theorem cutsat_cooper_right(a_pred, b_pred: Nat, x, p, q: Int,
+    lower: NegSucc(a_pred) * x + p <= OfNat(0),
+    upper: OfNat(Succ(b_pred)) * x + q <= OfNat(0),
+    close: (remainder: Int) → OfNat(0) <= remainder →
+        remainder < OfNat(Succ(b_pred)) →
+        OfNat(Succ(b_pred)) * p + OfNat(Succ(a_pred)) * q
+            + OfNat(Succ(a_pred)) * remainder <= OfNat(0) →
+        cut_dvd(OfNat(Succ(b_pred)), q + remainder) → False): False
+{
+    close(
+        int::mod((-q) + (-(OfNat(Succ(b_pred)) * x)),
+            OfNat(Succ(b_pred))),
+        int::mod_nonneg(
+            (-q) + (-(OfNat(Succ(b_pred)) * x)), OfNat(Succ(b_pred)),
+            positive_int_nonzero(b_pred)),
+        cutsat_cooper_right_bound(b_pred, x, q),
+        cutsat_cooper_right_cut(a_pred, b_pred, x, p, q, lower, upper),
+        cutsat_cooper_right_dvd(b_pred, x, q))
 }

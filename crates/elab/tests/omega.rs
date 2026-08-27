@@ -75,6 +75,42 @@ theorem eliminated_affine(x, y: Int,
 }
 
 #[test]
+fn cutsat_certificate_closes_the_minimal_real_shadow_integrality_gap() {
+    let source = format!(
+        r#"{PREFIX}
+theorem seed_680(x, y: Int,
+    first: NegSucc(1) <= x * OfNat(2) + y * OfNat(3),
+    second: x * OfNat(2) + y * OfNat(5) <= OfNat(0),
+    y_lower: OfNat(1) <= y): False
+{{ omega }}
+"#
+    );
+    let mut elab = elaborator();
+    elab.elab_module_source("probe", &source)
+        .unwrap_or_else(|error| panic!("CutSat certificate did not check: {}", message(error)));
+    let reports = elab.take_omega_reports();
+    assert_eq!(
+        reports
+            .iter()
+            .filter(|report| report.cutsat.is_some())
+            .count(),
+        1,
+        "{reports:#?}"
+    );
+    let cutsat = reports
+        .iter()
+        .find_map(|report| report.cutsat.as_ref())
+        .unwrap();
+    assert!(cutsat.reachable_derivations > 0);
+    assert!(cutsat.stats.derived_constraints > 0);
+    assert!(
+        reports
+            .iter()
+            .any(|report| { report.used_lemmas.contains(&"omega::cutsat_with_le") })
+    );
+}
+
+#[test]
 fn exposes_a_structured_omega_audit_report() {
     let source = format!(
         r#"{PREFIX}

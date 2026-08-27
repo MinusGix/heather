@@ -11,7 +11,13 @@ use std::rc::Rc;
 use heather_kernel::term::{LocalSubst, Term, Type};
 use heather_syntax::{Expr, Item, parse_file};
 
-use crate::arithmetic::{AtomId, AtomTable, Domain, ReflectedConstraint, Relation};
+use crate::arithmetic::{
+    Affine, AtomId, AtomTable, Coeffs as AffineCoeffs, Domain, ReflectedConstraint, Relation,
+};
+use crate::cutsat::{
+    Derivation as CutDerivation, DerivedConstraint, Limits as CutLimits, Outcome as CutOutcome,
+    Problem as CutProblem,
+};
 use crate::omega::{Coeffs, Derivation, DerivationId, Interval, LinearExpr, Outcome, Problem, Z};
 use crate::{Cx, Elaborator};
 
@@ -50,6 +56,14 @@ pub struct OmegaReport {
     pub stats: crate::omega::Stats,
     pub used_lemmas: Vec<&'static str>,
     pub residual: Vec<OmegaResidualConstraint>,
+    pub cutsat: Option<CutSatReport>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CutSatReport {
+    pub reachable_derivations: usize,
+    pub total_derivations: usize,
+    pub stats: crate::cutsat::Stats,
 }
 
 fn wrapper_report(lemma: &'static str, logical_splits: usize) -> OmegaReport {
@@ -64,6 +78,7 @@ fn wrapper_report(lemma: &'static str, logical_splits: usize) -> OmegaReport {
         stats: crate::omega::Stats::default(),
         used_lemmas: vec![lemma],
         residual: Vec::new(),
+        cutsat: None,
     }
 }
 
@@ -87,6 +102,7 @@ fn reconstruction_lemmas(source: &str) -> Vec<&'static str> {
         "omega::impossible_constant_lower",
         "omega::impossible_constant_upper",
         "omega::lower_combo",
+        "omega::lower_neg_combo",
         "omega::lower_of_eq",
         "omega::lower_to_negated_upper",
         "omega::normalize_mod",
@@ -115,11 +131,18 @@ fn reconstruction_lemmas(source: &str) -> Vec<&'static str> {
         "omega::normalized_eq_value",
         "omega::normalized_le_upper",
         "omega::upper_combo",
+        "omega::upper_neg_combo",
         "omega::upper_lower_combo",
         "omega::upper_lower_lower_combo",
         "omega::lower_upper_upper_combo",
         "omega::upper_of_eq",
         "omega::upper_to_negated_lower",
+        "omega::cut_dvd_elim",
+        "omega::cutsat_cooper_left",
+        "omega::cutsat_cooper_right",
+        "omega::cutsat_negative_remainder",
+        "omega::cutsat_with_eq",
+        "omega::cutsat_with_le",
     ];
     CANDIDATES
         .iter()
@@ -818,6 +841,13 @@ fn int_term_source(elab: &Elaborator, cx: &Cx, tm: &Rc<Term>) -> Result<String, 
 }
 
 fn nat_term_source(elab: &Elaborator, cx: &Cx, tm: &Rc<Term>) -> Result<String, String> {
+    match &**tm {
+        Term::Zero => return Ok("0".into()),
+        Term::Succ(inner) => {
+            return Ok(format!("Succ({})", nat_term_source(elab, cx, inner)?));
+        }
+        _ => {}
+    }
     for name in ["nat::add", "nat::mul", "nat::div", "nat::mod"] {
         if let Some(args) = named_args(elab, tm, name)
             && let [left, right] = args.as_slice()
@@ -1316,10 +1346,15 @@ fn normalize_syntax(syntax: &AffineSyntax, atoms_source: &str) -> Result<Normali
 fn reflect_ordinary(
     elab: &Elaborator,
     cx: &Cx,
-) -> Result<Option<(Vec<InitialAssumption>, String, Vec<String>)>, String> {
+) -> Result<Option<(Vec<InitialAssumption>, String, Vec<String>, Vec<String>)>, String> {
     let mut atoms = AtomTable::default();
     let mut relations = Vec::new();
     for pos in 0..cx.names.len() {
+        if cx.names[pos].starts_with("__cutsat_nat_eq_")
+            || cx.names[pos].starts_with("__cutsat_int_eq_")
+        {
+            continue;
+        }
         let (_, ty, _) = elab.local(cx, pos);
         let decoded_ty = crate::inductive::decoded(&ty);
         let (domain, left, right, relation, proof) =
@@ -1679,7 +1714,8 @@ fn reflect_ordinary(
                 .unwrap_or_else(|| atom.source.clone())
         })
         .collect();
-    Ok(Some((facts, atoms_source, atom_labels)))
+    let atom_sources = atoms.iter().map(|atom| atom.source.clone()).collect();
+    Ok(Some((facts, atoms_source, atom_labels, atom_sources)))
 }
 
 fn int(value: Z) -> String {
@@ -1707,6 +1743,27 @@ fn coeffs_source(coeffs: &Coeffs) -> String {
         .rev()
         .fold("Nil".to_string(), |tail, coefficient| {
             format!("Cons({}, {tail})", int(*coefficient))
+        })
+}
+
+fn affine_source(affine: &Affine, atom_sources: &[String]) -> String {
+    affine
+        .coeffs
+        .as_slice()
+        .iter()
+        .enumerate()
+        .filter(|(_, coefficient)| **coefficient != 0)
+        .fold(int(affine.constant), |out, (index, coefficient)| {
+            let atom = atom_sources
+                .get(index)
+                .cloned()
+                .unwrap_or_else(|| format!("__cutsat_missing_atom_{index}"));
+            let term = if *coefficient == 1 {
+                atom
+            } else {
+                format!("int::mul({}, {atom})", int(*coefficient))
+            };
+            format!("int::add({out}, {term})")
         })
 }
 
@@ -1823,6 +1880,7 @@ fn split_disequality(elab: &Elaborator, cx: &Cx) -> Result<Option<Certificate>, 
                 stats: crate::omega::Stats::default(),
                 used_lemmas: vec![lemma],
                 residual: Vec::new(),
+                cutsat: None,
             },
         }));
     }
@@ -1863,10 +1921,414 @@ fn split_connective(elab: &Elaborator, cx: &Cx) -> Result<Option<Certificate>, S
                     _ => "omega::or_elim_false",
                 }],
                 residual: Vec::new(),
+                cutsat: None,
             },
         }));
     }
     Ok(None)
+}
+
+#[derive(Clone)]
+struct CutDvdEvidence {
+    divisor: Z,
+    value: String,
+    proof: String,
+}
+
+fn cut_parent_le<'a>(problem: &'a CutProblem, id: usize) -> Result<&'a Affine, String> {
+    match problem.derivations().conclusion(id) {
+        Some(DerivedConstraint::Le(affine)) => Ok(affine),
+        other => Err(format!(
+            "CutSat certificate expected inequality node {id}, got {other:?}"
+        )),
+    }
+}
+
+fn open_cut_dvds(evidence: &[CutDvdEvidence], body: String, depth: usize) -> String {
+    evidence
+        .iter()
+        .enumerate()
+        .rev()
+        .fold(body, |body, (index, dvd)| {
+            format!(
+                "omega::cut_dvd_elim({}, {}, {}, (__cutsat_witness_{depth}_{index}: Int) __cutsat_dvd_eq_{depth}_{index} ⊢ {body})",
+                int(dvd.divisor), dvd.value, dvd.proof,
+            )
+        })
+}
+
+fn collect_cut_les(problem: &CutProblem, roots: &[usize]) -> Vec<usize> {
+    fn visit(problem: &CutProblem, id: usize, seen: &mut [bool]) {
+        if seen[id] {
+            return;
+        }
+        seen[id] = true;
+        for parent in problem.derivations().nodes()[id].parents() {
+            visit(problem, parent, seen);
+        }
+    }
+    let mut seen = vec![false; problem.derivations().nodes().len()];
+    for &root in roots {
+        visit(problem, root, &mut seen);
+    }
+    seen.into_iter()
+        .enumerate()
+        .filter_map(|(id, seen)| {
+            (seen
+                && matches!(
+                    problem.derivations().conclusion(id),
+                    Some(DerivedConstraint::Le(_))
+                ))
+            .then_some(id)
+        })
+        .collect()
+}
+
+fn wrap_cut_les(
+    problem: &CutProblem,
+    roots: &[usize],
+    atom_sources: &[String],
+    body: String,
+) -> String {
+    collect_cut_les(problem, roots)
+        .into_iter()
+        .rev()
+        .fold(body, |body, id| {
+            let Some(DerivedConstraint::Le(affine)) = problem.derivations().conclusion(id) else {
+                unreachable!()
+            };
+            let value = affine_source(affine, atom_sources);
+            format!(
+                "omega::cutsat_with_le({value}, __cutsat_linear_branch, (__cutsat_le_{id}: {value} <= OfNat(0)) ⊢ {body})"
+            )
+        })
+}
+
+fn cut_le_name(id: usize) -> String {
+    format!("__cutsat_le_{id}")
+}
+
+fn cut_nat_case_proof(split_id: usize, case: usize) -> String {
+    let mut proof = format!("__cutsat_nat_eq_{split_id}_{case}");
+    for index in (0..case).rev() {
+        proof = format!("trans(__cutsat_nat_eq_{split_id}_{index}, cong_nat(Succ, {proof}))");
+    }
+    proof
+}
+
+fn reconstruct_cut_node(
+    problem: &CutProblem,
+    id: usize,
+    atoms_source: &str,
+    atom_labels: &[String],
+    dvd_evidence: &[Option<CutDvdEvidence>],
+    depth: usize,
+) -> Result<String, String> {
+    let node = problem
+        .derivations()
+        .nodes()
+        .get(id)
+        .ok_or_else(|| format!("CutSat certificate references absent node {id}"))?;
+    match node {
+        CutDerivation::ConstantInequality { constraint } => Ok(wrap_cut_les(
+            problem,
+            &[*constraint],
+            atom_labels,
+            "__cutsat_linear_branch".into(),
+        )),
+        CutDerivation::ConstantDivisibility { constraint } => {
+            let dvd = dvd_evidence
+                .get(*constraint)
+                .and_then(Option::as_ref)
+                .ok_or_else(|| {
+                    format!("CutSat constant divisibility node {constraint} has no evidence")
+                })?;
+            Ok(open_cut_dvds(
+                &[dvd.clone()],
+                "__cutsat_linear_branch".into(),
+                depth,
+            ))
+        }
+        CutDerivation::BoundDivisibilityConflict {
+            lower,
+            upper,
+            divisibility,
+            ..
+        } => {
+            let dvd = dvd_evidence
+                .get(*divisibility)
+                .and_then(Option::as_ref)
+                .ok_or_else(|| {
+                    format!("CutSat bound conflict node {divisibility} has no evidence")
+                })?;
+            Ok(wrap_cut_les(
+                problem,
+                &[*lower, *upper],
+                atom_labels,
+                open_cut_dvds(&[dvd.clone()], "__cutsat_linear_branch".into(), depth),
+            ))
+        }
+        CutDerivation::DivisibilityConflict { left, right } => {
+            let left = dvd_evidence
+                .get(*left)
+                .and_then(Option::as_ref)
+                .ok_or_else(|| format!("CutSat divisibility node {left} has no evidence"))?;
+            let right = dvd_evidence
+                .get(*right)
+                .and_then(Option::as_ref)
+                .ok_or_else(|| format!("CutSat divisibility node {right} has no evidence"))?;
+            Ok(open_cut_dvds(
+                &[left.clone(), right.clone()],
+                "__cutsat_linear_branch".into(),
+                depth,
+            ))
+        }
+        CutDerivation::CombinedCongruenceBoundConflict {
+            lower,
+            upper,
+            divisibility,
+        } => {
+            let evidence = divisibility
+                .iter()
+                .map(|id| {
+                    dvd_evidence
+                        .get(*id)
+                        .and_then(Option::as_ref)
+                        .cloned()
+                        .ok_or_else(|| {
+                            format!("CutSat combined conflict node {id} has no evidence")
+                        })
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            Ok(wrap_cut_les(
+                problem,
+                &[*lower, *upper],
+                atom_labels,
+                open_cut_dvds(&evidence, "__cutsat_linear_branch".into(), depth),
+            ))
+        }
+        CutDerivation::CooperCase { contradiction, .. } => reconstruct_cut_node(
+            problem,
+            *contradiction,
+            atoms_source,
+            atom_labels,
+            dvd_evidence,
+            depth,
+        ),
+        CutDerivation::CooperExhausted { cases } => {
+            let Some(&first_case) = cases.first() else {
+                return Err("CutSat produced an empty Cooper split".into());
+            };
+            let CutDerivation::CooperCase {
+                inequality: first_cut,
+                divisibilities: first_dvds,
+                ..
+            } = &problem.derivations().nodes()[first_case]
+            else {
+                return Err("CutSat Cooper split does not point at case nodes".into());
+            };
+            if first_dvds.len() > 1 {
+                return Err("CutSat reconstruction does not yet replay Cooper with an existing divisibility constraint".into());
+            }
+            let CutDerivation::CooperInequality {
+                lower,
+                upper,
+                divisibility: None,
+                ..
+            } = &problem.derivations().nodes()[*first_cut]
+            else {
+                return Err("CutSat reconstruction currently expects a simple Cooper split".into());
+            };
+            let lower_affine = cut_parent_le(problem, *lower)?;
+            let upper_affine = cut_parent_le(problem, *upper)?;
+            let variable = lower_affine
+                .coeffs
+                .as_slice()
+                .iter()
+                .rposition(|coefficient| *coefficient != 0)
+                .ok_or("CutSat Cooper lower bound has no variable")?;
+            let a = lower_affine.coeffs.get(variable);
+            let b = upper_affine.coeffs.get(variable);
+            if a >= 0 || b <= 0 {
+                return Err("CutSat Cooper parents are not opposing bounds".into());
+            }
+            let left = a
+                .checked_abs()
+                .ok_or("CutSat coefficient magnitude overflowed")?
+                < b;
+            let selected = if left { a } else { b };
+            let selected_tail = if left { lower_affine } else { upper_affine };
+            let mut tail = selected_tail.clone();
+            tail.coeffs = tail.coeffs.with_coefficient(variable, 0);
+            let x = atom_labels
+                .get(variable)
+                .ok_or_else(|| format!("CutSat has no source for atom {variable}"))?;
+            let p = {
+                let mut p = lower_affine.clone();
+                p.coeffs = p.coeffs.with_coefficient(variable, 0);
+                affine_source(&p, atom_labels)
+            };
+            let q = {
+                let mut q = upper_affine.clone();
+                q.coeffs = q.coeffs.with_coefficient(variable, 0);
+                affine_source(&q, atom_labels)
+            };
+            let remainder_name = format!("__cutsat_remainder_{id}");
+            let k_name = format!("__cutsat_k_{id}");
+            let cut_name = format!("__cutsat_cut_{id}");
+            let dvd_name = format!("__cutsat_dvd_{id}");
+            let mut branches = Vec::with_capacity(cases.len());
+            for (case_index, &case_id) in cases.iter().enumerate() {
+                let CutDerivation::CooperCase {
+                    inequality,
+                    divisibilities,
+                    contradiction,
+                } = &problem.derivations().nodes()[case_id]
+                else {
+                    return Err("CutSat Cooper split contains a non-case root".into());
+                };
+                let CutDerivation::CooperInequality {
+                    lower: case_lower,
+                    upper: case_upper,
+                    divisibility: None,
+                    case,
+                } = &problem.derivations().nodes()[*inequality]
+                else {
+                    return Err("CutSat reconstruction found a non-simple Cooper case".into());
+                };
+                if *case_lower != *lower
+                    || *case_upper != *upper
+                    || *case != case_index as Z
+                    || divisibilities.len() > 1
+                {
+                    return Err(
+                        "CutSat Cooper cases are not a deterministic contiguous split".into(),
+                    );
+                }
+                let mut branch_evidence = dvd_evidence.to_vec();
+                if let Some(&dvd_id) = divisibilities.first() {
+                    let value = format!(
+                        "int::add({}, {remainder_name})",
+                        affine_source(&tail, atom_labels),
+                    );
+                    branch_evidence[dvd_id] = Some(CutDvdEvidence {
+                        divisor: selected,
+                        value,
+                        proof: dvd_name.clone(),
+                    });
+                }
+                let branch = reconstruct_cut_node(
+                    problem,
+                    *contradiction,
+                    atoms_source,
+                    atom_labels,
+                    &branch_evidence,
+                    depth + 1,
+                )?;
+                let remainder_value = int(case_index as Z);
+                let remainder_proof = format!(
+                    "trans(__cutsat_int_eq_{id}, int::cong_ofnat({}))",
+                    cut_nat_case_proof(id, case_index),
+                );
+                branches.push(format!(
+                    "omega::cutsat_with_eq({remainder_name}, {remainder_value}, {remainder_proof}, (__cutsat_remainder_value_{id}_{case_index}: {remainder_name} = {remainder_value}) ⊢ {branch})"
+                ));
+            }
+            let mut matched = "__cutsat_linear_branch".to_string();
+            for (case_index, branch) in branches.into_iter().enumerate().rev() {
+                let scrutinee = if case_index == 0 {
+                    k_name.clone()
+                } else {
+                    format!("__cutsat_rest_{id}_{}", case_index - 1)
+                };
+                let rest = format!("__cutsat_rest_{id}_{case_index}");
+                matched = format!(
+                    "match __cutsat_nat_eq_{id}_{case_index} : {scrutinee} {{ Zero => {branch}, Succ({rest}) => {matched}, }}"
+                );
+            }
+            matched = format!(
+                "match __cutsat_int_eq_{id} : {remainder_name} {{ NegSucc(__cutsat_negative_{id}) => omega::cutsat_negative_remainder({remainder_name}, __cutsat_negative_{id}, __cutsat_int_eq_{id}, __cutsat_nonnegative_{id}), OfNat({k_name}) => {matched}, }}"
+            );
+            let lemma = if left {
+                "omega::cutsat_cooper_left"
+            } else {
+                "omega::cutsat_cooper_right"
+            };
+            let a_pred = a
+                .checked_abs()
+                .and_then(|value| value.checked_sub(1))
+                .ok_or("CutSat left coefficient predecessor overflowed")?;
+            let b_pred = b
+                .checked_sub(1)
+                .ok_or("CutSat right coefficient predecessor overflowed")?;
+            Ok(wrap_cut_les(
+                problem,
+                &[*lower, *upper],
+                atom_labels,
+                format!(
+                    "{lemma}({a_pred}, {b_pred}, {x}, {p}, {q}, {}, {}, ({remainder_name}: Int) __cutsat_nonnegative_{id} __cutsat_bound_{id} {cut_name} {dvd_name} ⊢ {matched})",
+                    cut_le_name(*lower),
+                    cut_le_name(*upper),
+                ),
+            ))
+        }
+        unsupported => Err(format!(
+            "CutSat proof reconstruction does not yet support derivation {unsupported:?}"
+        )),
+    }
+}
+
+fn reconstruct_cutsat(
+    reflected: &[InitialAssumption],
+    atoms_source: &str,
+    atom_sources: &[String],
+) -> Result<Option<(String, usize, usize, crate::cutsat::Stats)>, String> {
+    let mut problem = CutProblem::new();
+    for fact in reflected {
+        let row = Affine {
+            constant: 0,
+            coeffs: AffineCoeffs::new(fact.coeffs.as_slice().to_vec()),
+        };
+        if let Some(value) = fact
+            .interval
+            .lower
+            .filter(|value| fact.interval.upper == Some(*value))
+        {
+            problem
+                .assume(row, Relation::Eq, Affine::constant(value))
+                .map_err(|failure| failure.to_string())?;
+        } else {
+            if let Some(lower) = fact.interval.lower {
+                problem
+                    .assume(Affine::constant(lower), Relation::Le, row.clone())
+                    .map_err(|failure| failure.to_string())?;
+            }
+            if let Some(upper) = fact.interval.upper {
+                problem
+                    .assume(row.clone(), Relation::Le, Affine::constant(upper))
+                    .map_err(|failure| failure.to_string())?;
+            }
+        }
+    }
+    let (problem, outcome) = problem
+        .solve(CutLimits::default())
+        .map_err(|failure| failure.to_string())?;
+    let CutOutcome::Contradiction {
+        root,
+        reachable,
+        stats,
+    } = outcome
+    else {
+        return Ok(None);
+    };
+    let evidence = vec![None; problem.derivations().nodes().len()];
+    let source = reconstruct_cut_node(&problem, root, atoms_source, atom_sources, &evidence, 0)?;
+    Ok(Some((
+        source,
+        reachable.len(),
+        problem.derivations().nodes().len(),
+        stats,
+    )))
 }
 
 pub(crate) fn reconstruct(
@@ -1875,6 +2337,7 @@ pub(crate) fn reconstruct(
     expected: &Type,
     allow_disequality_split: bool,
     allow_connective_split: bool,
+    allow_cutsat: bool,
 ) -> Result<Certificate, String> {
     let decoded_expected = crate::inductive::decoded(expected);
     if elab
@@ -1999,54 +2462,55 @@ pub(crate) fn reconstruct(
         ));
     }
 
-    let (reflected, atoms_source, atom_labels) = if let Some(ordinary) = reflect_ordinary(elab, cx)?
-    {
-        ordinary
-    } else {
-        let mut explicit = Vec::new();
-        for pos in 0..cx.names.len() {
-            if let Some(fact) = reflect_assumption(elab, cx, pos)? {
-                explicit.push(fact);
+    let (reflected, atoms_source, atom_labels, cut_atom_sources) =
+        if let Some(ordinary) = reflect_ordinary(elab, cx)? {
+            let (facts, atoms_source, atom_labels, atom_sources) = ordinary;
+            (facts, atoms_source, atom_labels, Some(atom_sources))
+        } else {
+            let mut explicit = Vec::new();
+            for pos in 0..cx.names.len() {
+                if let Some(fact) = reflect_assumption(elab, cx, pos)? {
+                    explicit.push(fact);
+                }
             }
-        }
-        let Some(first) = explicit.first() else {
-            if allow_disequality_split && let Some(certificate) = split_disequality(elab, cx)? {
-                return Ok(certificate);
+            let Some(first) = explicit.first() else {
+                if allow_disequality_split && let Some(certificate) = split_disequality(elab, cx)? {
+                    return Ok(certificate);
+                }
+                if allow_connective_split && let Some(certificate) = split_connective(elab, cx)? {
+                    return Ok(certificate);
+                }
+                let locals = (0..cx.names.len())
+                    .map(|pos| {
+                        let (_, ty, _) = elab.local(cx, pos);
+                        format!("{}: {}", cx.names[pos], elab.display_type(cx, &ty))
+                    })
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                return Err(format!(
+                    "Omega found no integer constraints among [{locals}]"
+                ));
+            };
+            if explicit.iter().any(|fact| *fact.atoms != *first.atoms) {
+                return Err(
+                    "Omega's explicit certificate frontend requires one shared atom row".into(),
+                );
             }
-            if allow_connective_split && let Some(certificate) = split_connective(elab, cx)? {
-                return Ok(certificate);
-            }
-            let locals = (0..cx.names.len())
-                .map(|pos| {
-                    let (_, ty, _) = elab.local(cx, pos);
-                    format!("{}: {}", cx.names[pos], elab.display_type(cx, &ty))
+            let atoms_source = first.atoms_source.clone();
+            let facts: Vec<_> = explicit
+                .into_iter()
+                .map(|fact| InitialAssumption {
+                    coeffs: fact.coeffs,
+                    row_source: fact.coeffs_source,
+                    interval: fact.interval,
+                    lower: fact.interval.lower.map(|_| fact.name.clone()),
+                    upper: fact.interval.upper.map(|_| fact.name),
+                    exact: None,
                 })
-                .collect::<Vec<_>>()
-                .join(", ");
-            return Err(format!(
-                "Omega found no integer constraints among [{locals}]"
-            ));
+                .collect();
+            let atom_count = reflected_atom_count(&facts);
+            (facts, atoms_source, indexed_atom_labels(atom_count), None)
         };
-        if explicit.iter().any(|fact| *fact.atoms != *first.atoms) {
-            return Err(
-                "Omega's explicit certificate frontend requires one shared atom row".into(),
-            );
-        }
-        let atoms_source = first.atoms_source.clone();
-        let facts: Vec<_> = explicit
-            .into_iter()
-            .map(|fact| InitialAssumption {
-                coeffs: fact.coeffs,
-                row_source: fact.coeffs_source,
-                interval: fact.interval,
-                lower: fact.interval.lower.map(|_| fact.name.clone()),
-                upper: fact.interval.upper.map(|_| fact.name),
-                exact: None,
-            })
-            .collect();
-        let atom_count = reflected_atom_count(&facts);
-        (facts, atoms_source, indexed_atom_labels(atom_count))
-    };
     let atom_count = atom_labels.len();
 
     let mut problem = Problem::new();
@@ -2070,6 +2534,36 @@ pub(crate) fn reconstruct(
         let Outcome::NoContradiction { residual, stats } = &outcome else {
             unreachable!()
         };
+        if allow_cutsat
+            && let Some(cut_atom_sources) = cut_atom_sources.as_deref()
+            && let Some((source, cut_reachable, cut_total, cut_stats)) =
+                reconstruct_cutsat(&reflected, &atoms_source, cut_atom_sources)?
+        {
+            let expr = parse_generated_expr(&source)
+                .map_err(|error| format!("{error}\n  generated CutSat source: {source}"))?;
+            let used_lemmas = reconstruction_lemmas(&source);
+            return Ok(Certificate {
+                expr,
+                source,
+                report: OmegaReport {
+                    atoms: atom_count,
+                    atom_labels: atom_labels.clone(),
+                    assumptions: reflected.len(),
+                    reachable_derivations: 0,
+                    total_derivations: problem.dag.nodes().len(),
+                    discarded_derivations: problem.dag.nodes().len(),
+                    logical_splits: cut_stats.splits,
+                    stats: *stats,
+                    used_lemmas,
+                    residual: Vec::new(),
+                    cutsat: Some(CutSatReport {
+                        reachable_derivations: cut_reachable,
+                        total_derivations: cut_total,
+                        stats: cut_stats,
+                    }),
+                },
+            });
+        }
         if allow_disequality_split && let Some(certificate) = split_disequality(elab, cx)? {
             return Ok(certificate);
         }
@@ -2114,6 +2608,7 @@ pub(crate) fn reconstruct(
             stats: *stats,
             used_lemmas: Vec::new(),
             residual,
+            cutsat: None,
         });
         return Err(format!(
             "Omega's real shadow found no contradiction; atoms [{}]; residual [{residual_display}]; locals [{local_types}]; reflected [{reflected_debug}]",
@@ -2720,6 +3215,137 @@ pub(crate) fn reconstruct(
                 left_scale,
                 right,
                 right_scale,
+            } if left_scale < 0
+                && right_scale < 0
+                && fact.interval.lower.is_some()
+                && fact.interval.upper.is_some() =>
+            {
+                let left = parent(&proofs, left)?;
+                let right = parent(&proofs, right)?;
+                let a = left_scale
+                    .checked_neg()
+                    .ok_or("Omega combination scale overflowed")?;
+                let b = right_scale
+                    .checked_neg()
+                    .ok_or("Omega combination scale overflowed")?;
+                let row_source = format!(
+                    "omega::combo({}, {}, {}, {})",
+                    int(left_scale),
+                    left.row_source,
+                    int(right_scale),
+                    right.row_source,
+                );
+                let lower_name = format!("__omega_generated_{id}_lower");
+                bindings.push(format!(
+                    "let {lower_name} = omega::lower_neg_combo({}, {}, {}, {}, {}, {}, {}, int::zero_le_ofNat({}), int::zero_le_ofNat({}), {}, {});",
+                    int(a), int(b), left.row_source, right.row_source, atoms_source,
+                    int(left.interval.upper.ok_or("Omega negative combination lost its left upper value")?),
+                    int(right.interval.upper.ok_or("Omega negative combination lost its right upper value")?),
+                    a, b,
+                    left.upper.as_ref().ok_or("Omega negative combination lost its left upper proof")?,
+                    right.upper.as_ref().ok_or("Omega negative combination lost its right upper proof")?,
+                ));
+                let upper_name = format!("__omega_generated_{id}_upper");
+                bindings.push(format!(
+                    "let {upper_name} = omega::upper_neg_combo({}, {}, {}, {}, {}, {}, {}, int::zero_le_ofNat({}), int::zero_le_ofNat({}), {}, {});",
+                    int(a), int(b), left.row_source, right.row_source, atoms_source,
+                    int(left.interval.lower.ok_or("Omega negative combination lost its left lower value")?),
+                    int(right.interval.lower.ok_or("Omega negative combination lost its right lower value")?),
+                    a, b,
+                    left.lower.as_ref().ok_or("Omega negative combination lost its left lower proof")?,
+                    right.lower.as_ref().ok_or("Omega negative combination lost its right lower proof")?,
+                ));
+                BoundProof {
+                    row_source,
+                    interval: fact.interval,
+                    lower: Some(lower_name),
+                    upper: Some(upper_name),
+                    exact: None,
+                }
+            }
+            Derivation::Combo {
+                left,
+                left_scale,
+                right,
+                right_scale,
+            } if left_scale < 0 && right_scale < 0 && fact.interval.upper.is_none() => {
+                let left = parent(&proofs, left)?;
+                let right = parent(&proofs, right)?;
+                let a = left_scale
+                    .checked_neg()
+                    .ok_or("Omega combination scale overflowed")?;
+                let b = right_scale
+                    .checked_neg()
+                    .ok_or("Omega combination scale overflowed")?;
+                let name = format!("__omega_generated_{id}");
+                let row_source = format!(
+                    "omega::combo({}, {}, {}, {})",
+                    int(left_scale),
+                    left.row_source,
+                    int(right_scale),
+                    right.row_source,
+                );
+                bindings.push(format!(
+                    "let {name} = omega::lower_neg_combo({}, {}, {}, {}, {}, {}, {}, int::zero_le_ofNat({}), int::zero_le_ofNat({}), {}, {});",
+                    int(a), int(b), left.row_source, right.row_source, atoms_source,
+                    int(left.interval.upper.ok_or("Omega negative combination lost its left upper value")?),
+                    int(right.interval.upper.ok_or("Omega negative combination lost its right upper value")?),
+                    a, b,
+                    left.upper.as_ref().ok_or("Omega negative combination lost its left upper proof")?,
+                    right.upper.as_ref().ok_or("Omega negative combination lost its right upper proof")?,
+                ));
+                BoundProof {
+                    row_source,
+                    interval: fact.interval,
+                    lower: Some(name),
+                    upper: None,
+                    exact: None,
+                }
+            }
+            Derivation::Combo {
+                left,
+                left_scale,
+                right,
+                right_scale,
+            } if left_scale < 0 && right_scale < 0 && fact.interval.lower.is_none() => {
+                let left = parent(&proofs, left)?;
+                let right = parent(&proofs, right)?;
+                let a = left_scale
+                    .checked_neg()
+                    .ok_or("Omega combination scale overflowed")?;
+                let b = right_scale
+                    .checked_neg()
+                    .ok_or("Omega combination scale overflowed")?;
+                let name = format!("__omega_generated_{id}");
+                let row_source = format!(
+                    "omega::combo({}, {}, {}, {})",
+                    int(left_scale),
+                    left.row_source,
+                    int(right_scale),
+                    right.row_source,
+                );
+                bindings.push(format!(
+                    "let {name} = omega::upper_neg_combo({}, {}, {}, {}, {}, {}, {}, int::zero_le_ofNat({}), int::zero_le_ofNat({}), {}, {});",
+                    int(a), int(b), left.row_source, right.row_source, atoms_source,
+                    int(left.interval.lower.ok_or("Omega negative combination lost its left lower value")?),
+                    int(right.interval.lower.ok_or("Omega negative combination lost its right lower value")?),
+                    a, b,
+                    left.lower.as_ref().ok_or("Omega negative combination lost its left lower proof")?,
+                    right.lower.as_ref().ok_or("Omega negative combination lost its right lower proof")?,
+                ));
+                BoundProof {
+                    row_source,
+                    interval: fact.interval,
+                    lower: None,
+                    upper: Some(name),
+                    exact: None,
+                }
+            }
+            Derivation::Combo {
+                left,
+                left_scale,
+                right,
+                right_scale,
             } if left_scale > 0 && right_scale > 0 && fact.interval.upper.is_none() => {
                 let left = parent(&proofs, left)?;
                 let right = parent(&proofs, right)?;
@@ -2930,6 +3556,7 @@ pub(crate) fn reconstruct(
                 stats: *stats,
                 used_lemmas,
                 residual: Vec::new(),
+                cutsat: None,
             },
         });
     }
@@ -2997,6 +3624,7 @@ pub(crate) fn reconstruct(
             stats: *stats,
             used_lemmas,
             residual: Vec::new(),
+            cutsat: None,
         },
     })
 }

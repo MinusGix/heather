@@ -72,3 +72,15 @@ not the integer-specific Cooper search.
   nightmare are direct tests. Symbolic interaction among multiple congruences
   above the current two-variable exclusion split, certificate reconstruction,
   and tactic orchestration remain open.
+- 2026-08-27: Landed the first kernel-certified fallback route. Omega now sends
+  real-shadow survivors through CutSat, whose reachable DAG records normalized
+  inequality/divisibility conclusions and explicit Cooper case-premise nodes.
+  Heather lemmas certify simple Cooper-Left/Right splits; generated finite
+  matches carry refinement equations, open divisibility witnesses, and return
+  each resulting linear branch to the ordinary Omega certificate rail without
+  recursively re-entering CutSat. The minimized seed-680 gap reaches the kernel
+  and reports CutSat search statistics. Pugh remains pinned at the search/DAG
+  layer: its naively expanded nested 9-by-9 certificate exceeds the test
+  runner's resource ceiling, so cached/named sharing of learned inequalities
+  and branch closures is the next reconstruction slice rather than accepting
+  exponential source duplication.

@@ -217,10 +217,15 @@ divisibility interaction remains a structured resource refusal.
 
 The core returns either a checked integer model, a contradiction root plus the
 reachable typed derivation slice, or partial model/residual constraints with a
-resource reason. It is still untrusted search: there is no tactic route or
-Heather proof reconstruction yet. The deterministic 20,000-system boxed rail
-pins 11,074 models and 8,926 contradictions, closing all 91 real-shadow misses;
-the minimized seed-680 system and Pugh's nightmare are direct regression tests.
+resource reason. Omega now routes real-shadow survivors through this untrusted
+search and reconstructs the first simple-Cooper certificate slice with ordinary
+Heather lemmas; the kernel remains the only acceptance boundary. The
+deterministic 20,000-system boxed rail pins 11,074 models and 8,926
+contradictions, closing all 91 real-shadow misses. The minimized seed-680
+system is also kernel-certified end to end. Pugh's nightmare remains a direct
+search/DAG regression: its nested residue tree needs cached named proof sharing
+before it can be an economical kernel certificate instead of an exponentially
+duplicated source term.
 
 ## Why dark/grey shadows remain open
 

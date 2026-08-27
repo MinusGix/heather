@@ -28,6 +28,13 @@ pub enum Derivation {
         upper: usize,
         divisibility: Vec<usize>,
     },
+    BoundDivisibilityConflict {
+        lower: usize,
+        upper: usize,
+        divisibility: usize,
+        residue: Z,
+        modulus: Z,
+    },
     CongruenceExclusion {
         constraints: Vec<usize>,
         variable: usize,
@@ -46,6 +53,11 @@ pub enum Derivation {
         divisibility: Option<usize>,
         case: Z,
     },
+    CooperCase {
+        inequality: usize,
+        divisibilities: Vec<usize>,
+        contradiction: usize,
+    },
     ConstantInequality {
         constraint: usize,
     },
@@ -62,7 +74,7 @@ pub enum Derivation {
 }
 
 impl Derivation {
-    fn parents(&self) -> Vec<usize> {
+    pub(crate) fn parents(&self) -> Vec<usize> {
         match self {
             Self::Assumption { .. } => Vec::new(),
             Self::RealProjection { lower, upper } => vec![*lower, *upper],
@@ -77,6 +89,12 @@ impl Derivation {
                 out.extend(divisibility.iter().copied());
                 out
             }
+            Self::BoundDivisibilityConflict {
+                lower,
+                upper,
+                divisibility,
+                ..
+            } => vec![*lower, *upper, *divisibility],
             Self::CongruenceExclusion { constraints, .. } => constraints.clone(),
             Self::CooperInequality {
                 lower,
@@ -96,6 +114,16 @@ impl Derivation {
                 }
                 out
             }
+            Self::CooperCase {
+                inequality,
+                divisibilities,
+                contradiction,
+            } => {
+                let mut out = vec![*inequality];
+                out.extend(divisibilities.iter().copied());
+                out.push(*contradiction);
+                out
+            }
             Self::ConstantInequality { constraint } | Self::ConstantDivisibility { constraint } => {
                 vec![*constraint]
             }
@@ -108,6 +136,7 @@ impl Derivation {
 #[derive(Debug, Clone, Default)]
 pub struct DerivationDag {
     nodes: Vec<Derivation>,
+    conclusions: Vec<Option<DerivedConstraint>>,
 }
 
 impl DerivationDag {
@@ -115,10 +144,19 @@ impl DerivationDag {
         &self.nodes
     }
 
+    pub fn conclusion(&self, id: usize) -> Option<&DerivedConstraint> {
+        self.conclusions.get(id)?.as_ref()
+    }
+
     fn push(&mut self, node: Derivation) -> usize {
         let id = self.nodes.len();
         self.nodes.push(node);
+        self.conclusions.push(None);
         id
+    }
+
+    fn conclude(&mut self, id: usize, conclusion: DerivedConstraint) {
+        self.conclusions[id] = Some(conclusion);
     }
 
     fn reachable(&self, root: usize) -> Vec<usize> {
@@ -136,6 +174,13 @@ impl DerivationDag {
             .filter_map(|(i, yes)| yes.then_some(i))
             .collect()
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DerivedConstraint {
+    Le(Affine),
+    Dvd { divisor: Z, affine: Affine },
+    False,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -266,6 +311,35 @@ impl Constraints {
     }
 }
 
+fn insert_le_derived(
+    constraints: &mut Constraints,
+    dag: &mut DerivationDag,
+    mut p: Affine,
+    derivation: usize,
+) -> Result<bool, Failure> {
+    let coefficient_gcd = p.coeffs.coefficient_gcd()?;
+    if coefficient_gcd > 1 {
+        p.constant = ceil_div(p.constant, coefficient_gcd)?;
+        p.coeffs = p.coeffs.exact_div(coefficient_gcd)?;
+    }
+    let inserted = constraints.insert_le(p.clone(), derivation)?;
+    dag.conclude(derivation, DerivedConstraint::Le(p));
+    Ok(inserted)
+}
+
+fn insert_dvd_derived(
+    constraints: &mut Constraints,
+    dag: &mut DerivationDag,
+    divisor: Z,
+    p: Affine,
+    derivation: usize,
+) -> Result<bool, Failure> {
+    let divisor = abs(divisor)?;
+    let inserted = constraints.insert_dvd(divisor, p.clone(), derivation)?;
+    dag.conclude(derivation, DerivedConstraint::Dvd { divisor, affine: p });
+    Ok(inserted)
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct Problem {
     constraints: Constraints,
@@ -296,19 +370,29 @@ impl Problem {
                     index,
                     equality_side: None,
                 });
-                self.constraints.insert_le(p, d)?;
+                insert_le_derived(&mut self.constraints, &mut self.derivations, p, d)?;
             }
             Relation::Eq => {
                 let forward = self.derivations.push(Derivation::Assumption {
                     index,
                     equality_side: Some(true),
                 });
-                self.constraints.insert_le(p.clone(), forward)?;
+                insert_le_derived(
+                    &mut self.constraints,
+                    &mut self.derivations,
+                    p.clone(),
+                    forward,
+                )?;
                 let backward = self.derivations.push(Derivation::Assumption {
                     index,
                     equality_side: Some(false),
                 });
-                self.constraints.insert_le(p.checked_scale(-1)?, backward)?;
+                insert_le_derived(
+                    &mut self.constraints,
+                    &mut self.derivations,
+                    p.checked_scale(-1)?,
+                    backward,
+                )?;
             }
             _ => unreachable!(),
         }
@@ -359,6 +443,7 @@ fn search(
         let root = dag.push(Derivation::ConstantInequality {
             constraint: c.derivation,
         });
+        dag.conclude(root, DerivedConstraint::False);
         return Ok(contradiction(root, dag, *stats));
     }
     if let Some(c) = constraints
@@ -369,6 +454,7 @@ fn search(
         let root = dag.push(Derivation::ConstantDivisibility {
             constraint: c.derivation,
         });
+        dag.conclude(root, DerivedConstraint::False);
         return Ok(contradiction(root, dag, *stats));
     }
 
@@ -431,7 +517,7 @@ fn search(
                 lower: constraints.le[l.constraint].derivation,
                 upper: constraints.le[u.constraint].derivation,
             });
-            if !next.insert_le(derived, d)? {
+            if !insert_le_derived(&mut next, dag, derived, d)? {
                 return Ok(resource(
                     constraints,
                     values,
@@ -465,7 +551,7 @@ fn search(
         let d = dag.push(Derivation::DivisibilityProjection {
             divisibility: old.derivation,
         });
-        if !next.insert_dvd(g, projected, d)? {
+        if !insert_dvd_derived(&mut next, dag, g, projected, d)? {
             return Ok(resource(
                 constraints,
                 values,
@@ -498,6 +584,7 @@ fn search(
                 let left = constraints.dvd[active_dvd[residue_source.unwrap()]].derivation;
                 let right = constraints.dvd[active_dvd[position]].derivation;
                 let root = dag.push(Derivation::DivisibilityConflict { left, right });
+                dag.conclude(root, DerivedConstraint::False);
                 return Ok(contradiction(root, dag, *stats));
             };
             residue = Some(combined);
@@ -516,6 +603,18 @@ fn search(
         lower.expect("integer conflict has a lower bound"),
         upper.expect("integer conflict has an upper bound"),
     );
+    if variable == 0 && active_dvd.len() == 1 {
+        let (residue, modulus) = residue.expect("an active divisibility has a solution");
+        let root = dag.push(Derivation::BoundDivisibilityConflict {
+            lower: constraints.le[lower.constraint].derivation,
+            upper: constraints.le[upper.constraint].derivation,
+            divisibility: constraints.dvd[active_dvd[0]].derivation,
+            residue,
+            modulus,
+        });
+        dag.conclude(root, DerivedConstraint::False);
+        return Ok(contradiction(root, dag, *stats));
+    }
     if active_dvd.len() > 1 {
         let individually_blocking = active_dvd.iter().zip(&solved).find_map(|(id, solution)| {
             let solution = solution.as_ref().copied()?;
@@ -579,6 +678,7 @@ fn exclude_tail_value(
                 .map(|id| constraints.dvd[*id].derivation)
                 .collect(),
         });
+        dag.conclude(root, DerivedConstraint::False);
         return Ok(contradiction(root, dag, *stats));
     }
     if values.len() != 1 {
@@ -622,7 +722,7 @@ fn exclude_tail_value(
             value: excluded,
             below,
         });
-        branch.insert_le(cut, d)?;
+        insert_le_derived(&mut branch, dag, cut, d)?;
         stats.derived_constraints += 1;
         match search(&branch, Vec::new(), dag, limits, stats)? {
             outcome @ Outcome::Model { .. } | outcome @ Outcome::ResourceLimit { .. } => {
@@ -636,6 +736,7 @@ fn exclude_tail_value(
         below: roots[0],
         above: roots[1],
     });
+    dag.conclude(root, DerivedConstraint::False);
     Ok(contradiction(root, dag, *stats))
 }
 
@@ -688,7 +789,8 @@ fn cooper_split(
             divisibility: parent_dvd,
             case: k,
         });
-        branch.insert_le(cut, cut_d)?;
+        insert_le_derived(&mut branch, dag, cut, cut_d)?;
+        let mut generated_divisibilities = Vec::new();
         let selected = if left { a } else { b };
         if abs(selected)? != 1 {
             let selected_tail = if left { &p } else { &q };
@@ -699,7 +801,8 @@ fn cooper_split(
                 divisibility: parent_dvd,
                 case: k,
             });
-            if branch.insert_dvd(selected, affine, d)? {
+            generated_divisibilities.push(d);
+            if insert_dvd_derived(&mut branch, dag, selected, affine, d)? {
                 stats.derived_constraints += 1;
             }
         }
@@ -727,7 +830,8 @@ fn cooper_split(
                 divisibility: Some(old.derivation),
                 case: k,
             });
-            if branch.insert_dvd(modulus, affine, d)? {
+            generated_divisibilities.push(d);
+            if insert_dvd_derived(&mut branch, dag, modulus, affine, d)? {
                 stats.derived_constraints += 1;
             }
         }
@@ -736,10 +840,19 @@ fn cooper_split(
             model @ Outcome::Model { .. } | model @ Outcome::ResourceLimit { .. } => {
                 return Ok(model);
             }
-            Outcome::Contradiction { root, .. } => roots.push(root),
+            Outcome::Contradiction { root, .. } => {
+                let case_root = dag.push(Derivation::CooperCase {
+                    inequality: cut_d,
+                    divisibilities: generated_divisibilities,
+                    contradiction: root,
+                });
+                dag.conclude(case_root, DerivedConstraint::False);
+                roots.push(case_root);
+            }
         }
     }
     let root = dag.push(Derivation::CooperExhausted { cases: roots });
+    dag.conclude(root, DerivedConstraint::False);
     Ok(contradiction(root, dag, *stats))
 }
 
@@ -1078,7 +1191,15 @@ mod tests {
         add_interval(&mut problem, &[7, -9], -10, 4);
         add_interval(&mut problem, &[1, 0], -16, 16);
         add_interval(&mut problem, &[0, 1], -16, 16);
-        let (_, outcome) = problem.solve(Limits::default()).unwrap();
+        let (problem, outcome) = problem.solve(Limits::default()).unwrap();
+        if let Outcome::Contradiction { reachable, .. } = &outcome {
+            assert!(
+                reachable
+                    .iter()
+                    .all(|id| problem.derivations().conclusion(*id).is_some()),
+                "every reachable proof node records its conclusion"
+            );
+        }
         assert!(
             matches!(
                 outcome,

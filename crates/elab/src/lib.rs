@@ -81,7 +81,7 @@ mod attempt;
 pub mod cutsat;
 pub mod omega;
 mod omega_cert;
-pub use omega_cert::{OmegaReport, OmegaResidualConstraint};
+pub use omega_cert::{CutSatReport, OmegaReport, OmegaResidualConstraint};
 pub mod certgen;
 mod code;
 mod constructor;
@@ -2923,7 +2923,8 @@ impl Elaborator {
             ExprKind::Var(name)
                 if (name == "omega"
                     || name == "__omega_diseq_branch"
-                    || name == "__omega_connective_branch")
+                    || name == "__omega_connective_branch"
+                    || name == "__cutsat_linear_branch")
                     && !self.shadowed(cx, name)
                     && self.ctor_here_expected(cx, name, expected).is_none() =>
             {
@@ -2933,6 +2934,7 @@ impl Elaborator {
                     expected,
                     name != "__omega_diseq_branch",
                     name != "__omega_connective_branch",
+                    name != "__cutsat_linear_branch",
                 )
                 .map_err(|detail| ElabError::Elab {
                     msg: format!("`omega` got stuck: {detail}"),
