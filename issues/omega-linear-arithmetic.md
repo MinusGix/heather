@@ -220,3 +220,13 @@ when stuck. Arithmetic overflow is a structured refusal and must never wrap.
   contradictory hard equality and its satisfiable mutation; the pure replay
   rail covers multiple dependent balanced splits and validates each flattened
   projection.
+- 2026-08-27: Completed the structured stuck-state audit. Exhausted searches
+  retain the last nonempty normalized real-shadow frontier before final
+  projection, report it as stable coefficient/bound data, and record total,
+  reachable, and discarded derivation counts. Failed-attempt reports use a
+  diagnostic channel that deliberately survives declaration rollback, while
+  successful certificate reports remain transactional. The explicit
+  `omega::dot` rail also exposed and fixed atom accounting that incorrectly
+  depended on the atom row being spelled as literal `Cons` syntax. Dark and
+  grey shadows remain explicitly deferred, matching the pinned Lean core's
+  own stated scope rather than blocking this diagnostic slice.

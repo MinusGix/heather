@@ -508,8 +508,10 @@ pub enum Outcome {
         stats: Stats,
     },
     NoContradiction {
-        /// The normalized real-shadow residue. It is diagnostic state, not a
-        /// model and not a satisfiability claim.
+        /// The normalized real-shadow frontier at which search stopped, or
+        /// the last nonempty frontier before projection erased the final
+        /// variable. It is diagnostic state, not a model and not a
+        /// satisfiability claim.
         residual: Vec<Fact>,
         stats: Stats,
     },
@@ -1012,7 +1014,9 @@ impl Problem {
 
     pub fn solve(mut self) -> R<(Self, Outcome)> {
         self.solve_equalities()?;
+        let mut last_nonempty = Vec::new();
         while self.contradiction.is_none() && !self.constraints.is_empty() {
+            last_nonempty = self.constraints.values().cloned().collect();
             let Some((var, exact, _)) = self.select_fourier_motzkin()? else {
                 break;
             };
@@ -1027,6 +1031,9 @@ impl Problem {
             }
         } else {
             let mut residual: Vec<_> = self.constraints.values().cloned().collect();
+            if residual.is_empty() {
+                residual = last_nonempty;
+            }
             residual.sort_by(|a, b| a.coeffs.as_slice().cmp(b.coeffs.as_slice()));
             Outcome::NoContradiction {
                 residual,
@@ -1240,9 +1247,13 @@ mod tests {
             (vec![0, 1], Interval::lower(2)),
             (vec![1], Interval::upper(5)),
         ];
-        let (_, Outcome::NoContradiction { .. }) = solve(&facts) else {
+        let (_, Outcome::NoContradiction { residual, .. }) = solve(&facts) else {
             panic!("a satisfiable real shadow is not a contradiction");
         };
+        assert!(
+            !residual.is_empty(),
+            "the last diagnostic frontier is retained"
+        );
         assert!(has_model(&facts, 5));
     }
 

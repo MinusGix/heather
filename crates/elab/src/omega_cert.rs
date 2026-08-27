@@ -30,13 +30,23 @@ fn parse_generated_expr(source: &str) -> Result<Expr, String> {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OmegaResidualConstraint {
+    pub coefficients: Vec<Z>,
+    pub lower: Option<Z>,
+    pub upper: Option<Z>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OmegaReport {
     pub atoms: usize,
     pub assumptions: usize,
     pub reachable_derivations: usize,
+    pub total_derivations: usize,
+    pub discarded_derivations: usize,
     pub logical_splits: usize,
     pub stats: crate::omega::Stats,
     pub used_lemmas: Vec<&'static str>,
+    pub residual: Vec<OmegaResidualConstraint>,
 }
 
 fn wrapper_report(lemma: &'static str, logical_splits: usize) -> OmegaReport {
@@ -44,9 +54,12 @@ fn wrapper_report(lemma: &'static str, logical_splits: usize) -> OmegaReport {
         atoms: 0,
         assumptions: 0,
         reachable_derivations: 0,
+        total_derivations: 0,
+        discarded_derivations: 0,
         logical_splits,
         stats: crate::omega::Stats::default(),
         used_lemmas: vec![lemma],
+        residual: Vec::new(),
     }
 }
 
@@ -129,6 +142,14 @@ struct InitialAssumption {
     lower: Option<String>,
     upper: Option<String>,
     exact: Option<String>,
+}
+
+fn reflected_atom_count(facts: &[InitialAssumption]) -> usize {
+    facts
+        .iter()
+        .map(|fact| fact.coeffs.as_slice().len())
+        .max()
+        .unwrap_or(0)
 }
 
 #[derive(Clone)]
@@ -1253,7 +1274,7 @@ fn normalize_syntax(syntax: &AffineSyntax, atoms_source: &str) -> Result<Normali
 fn reflect_ordinary(
     elab: &Elaborator,
     cx: &Cx,
-) -> Result<Option<(Vec<InitialAssumption>, String)>, String> {
+) -> Result<Option<(Vec<InitialAssumption>, String, usize)>, String> {
     let mut atoms = Vec::new();
     let mut relations = Vec::new();
     for pos in 0..cx.names.len() {
@@ -1575,7 +1596,8 @@ fn reflect_ordinary(
             exact: None,
         });
     }
-    Ok(Some((facts, atoms_source)))
+    let atom_count = atoms.len();
+    Ok(Some((facts, atoms_source, atom_count)))
 }
 
 fn int(value: Z) -> String {
@@ -1712,9 +1734,12 @@ fn split_disequality(elab: &Elaborator, cx: &Cx) -> Result<Option<Certificate>, 
                 atoms: 0,
                 assumptions: 0,
                 reachable_derivations: 0,
+                total_derivations: 0,
+                discarded_derivations: 0,
                 logical_splits: 1,
                 stats: crate::omega::Stats::default(),
                 used_lemmas: vec![lemma],
+                residual: Vec::new(),
             },
         }));
     }
@@ -1745,12 +1770,15 @@ fn split_connective(elab: &Elaborator, cx: &Cx) -> Result<Option<Certificate>, S
                 atoms: 0,
                 assumptions: 0,
                 reachable_derivations: 0,
+                total_derivations: 0,
+                discarded_derivations: 0,
                 logical_splits: 1,
                 stats: crate::omega::Stats::default(),
                 used_lemmas: vec![match tag.name.as_str() {
                     "And" => "omega::and_elim_false",
                     _ => "omega::or_elim_false",
                 }],
+                residual: Vec::new(),
             },
         }));
     }
@@ -1887,7 +1915,8 @@ pub(crate) fn reconstruct(
         ));
     }
 
-    let (reflected, atoms_source) = if let Some(ordinary) = reflect_ordinary(elab, cx)? {
+    let (reflected, atoms_source, atom_count) = if let Some(ordinary) = reflect_ordinary(elab, cx)?
+    {
         ordinary
     } else {
         let mut explicit = Vec::new();
@@ -1920,7 +1949,7 @@ pub(crate) fn reconstruct(
             );
         }
         let atoms_source = first.atoms_source.clone();
-        let facts = explicit
+        let facts: Vec<_> = explicit
             .into_iter()
             .map(|fact| InitialAssumption {
                 coeffs: fact.coeffs,
@@ -1931,7 +1960,8 @@ pub(crate) fn reconstruct(
                 exact: None,
             })
             .collect();
-        (facts, atoms_source)
+        let atom_count = reflected_atom_count(&facts);
+        (facts, atoms_source, atom_count)
     };
 
     let mut problem = Problem::new();
@@ -1952,6 +1982,9 @@ pub(crate) fn reconstruct(
         stats,
     } = &outcome
     else {
+        let Outcome::NoContradiction { residual, stats } = &outcome else {
+            unreachable!()
+        };
         if allow_disequality_split && let Some(certificate) = split_disequality(elab, cx)? {
             return Ok(certificate);
         }
@@ -1965,8 +1998,29 @@ pub(crate) fn reconstruct(
             })
             .collect::<Vec<_>>()
             .join(", ");
+        let residual = residual
+            .iter()
+            .map(|fact| OmegaResidualConstraint {
+                coefficients: fact.coeffs.as_slice().to_vec(),
+                lower: fact.interval.lower,
+                upper: fact.interval.upper,
+            })
+            .collect::<Vec<_>>();
+        let residual_debug = format!("{residual:?}");
+        let total_derivations = problem.dag.nodes().len();
+        elab.record_omega_failure_report(OmegaReport {
+            atoms: atom_count,
+            assumptions: reflected.len(),
+            reachable_derivations: 0,
+            total_derivations,
+            discarded_derivations: total_derivations,
+            logical_splits: 0,
+            stats: *stats,
+            used_lemmas: Vec::new(),
+            residual,
+        });
         return Err(format!(
-            "Omega's real shadow found no contradiction: {outcome:?}; locals [{local_types}]; reflected [{reflected_debug}]",
+            "Omega's real shadow found no contradiction; residual {residual_debug}; locals [{local_types}]; reflected [{reflected_debug}]",
         ));
     };
     let derivation = *derivation;
@@ -2765,12 +2819,19 @@ pub(crate) fn reconstruct(
             expr,
             source,
             report: OmegaReport {
-                atoms: atoms_source.matches("Cons(").count(),
+                atoms: atom_count,
                 assumptions: reflected.len(),
                 reachable_derivations: reachable_derivations.len(),
+                total_derivations: problem.dag.nodes().len(),
+                discarded_derivations: problem
+                    .dag
+                    .nodes()
+                    .len()
+                    .saturating_sub(reachable_derivations.len()),
                 logical_splits: 0,
                 stats: *stats,
                 used_lemmas,
+                residual: Vec::new(),
             },
         });
     }
@@ -2824,12 +2885,19 @@ pub(crate) fn reconstruct(
         expr,
         source,
         report: OmegaReport {
-            atoms: atoms_source.matches("Cons(").count(),
+            atoms: atom_count,
             assumptions: reflected.len(),
             reachable_derivations: reachable_derivations.len(),
+            total_derivations: problem.dag.nodes().len(),
+            discarded_derivations: problem
+                .dag
+                .nodes()
+                .len()
+                .saturating_sub(reachable_derivations.len()),
             logical_splits: 0,
             stats: *stats,
             used_lemmas,
+            residual: Vec::new(),
         },
     })
 }

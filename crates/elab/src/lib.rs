@@ -80,7 +80,7 @@ mod application;
 mod attempt;
 pub mod omega;
 mod omega_cert;
-pub use omega_cert::OmegaReport;
+pub use omega_cert::{OmegaReport, OmegaResidualConstraint};
 pub mod certgen;
 pub mod gate;
 pub mod stats;
@@ -514,6 +514,10 @@ pub struct Elaborator {
     /// Successful Omega reconstruction steps, including recursively generated
     /// logical branches, in checking order.
     omega_reports: RefCell<Vec<OmegaReport>>,
+    /// Exhausted Omega searches. Unlike successful certificate reports these
+    /// are diagnostic history, so declaration rollback deliberately retains
+    /// them for the caller that receives the corresponding error.
+    omega_failure_reports: RefCell<Vec<OmegaReport>>,
     /// Meta-layer definitions and the slots claimed by their `for` clauses
     /// (`metaprograms.rs`). Kept elaborator-side because layer-m terms cannot
     /// enter Ψ; both lookup views commit together after validation.
@@ -1138,6 +1142,7 @@ impl Elaborator {
             fuel: DEFAULT_FUEL,
             value_metrics: None,
             omega_reports: RefCell::new(Vec::new()),
+            omega_failure_reports: RefCell::new(Vec::new()),
             meta_programs: MetaPrograms::default(),
             meta_pushed: RefCell::new(Vec::new()),
             result_only_memo: RefCell::new(HashMap::new()),
@@ -1181,9 +1186,19 @@ impl Elaborator {
         self.value_metrics.as_ref().map(|metrics| metrics.snapshot())
     }
 
-    /// Drain the audit reports produced by successful `omega` uses.
+    pub(crate) fn record_omega_failure_report(&self, report: OmegaReport) {
+        self.omega_failure_reports.borrow_mut().push(report);
+    }
+
+    /// Drain audit reports for successfully reconstructed `omega` uses.
     pub fn take_omega_reports(&self) -> Vec<OmegaReport> {
         self.omega_reports.borrow_mut().drain(..).collect()
+    }
+
+    /// Drain structured reports for exhausted `omega` attempts. These survive
+    /// the failed declaration's ordinary transactional rollback.
+    pub fn take_omega_failure_reports(&self) -> Vec<OmegaReport> {
+        self.omega_failure_reports.borrow_mut().drain(..).collect()
     }
 
     pub(crate) fn profiled_value_arena(&self) -> ValueArena<'_> {

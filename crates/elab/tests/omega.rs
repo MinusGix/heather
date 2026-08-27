@@ -94,6 +94,11 @@ theorem audited(x, y: Int,
     assert_eq!(report.atoms, 2);
     assert_eq!(report.assumptions, 3);
     assert!(report.reachable_derivations >= 3);
+    assert_eq!(
+        report.discarded_derivations,
+        report.total_derivations - report.reachable_derivations
+    );
+    assert!(report.residual.is_empty());
     assert!(report.stats.fourier_motzkin_eliminations >= 1);
     assert!(report.used_lemmas.contains(&"omega::lower_upper_combo"));
 }
@@ -486,10 +491,33 @@ theorem satisfiable(x, y: Int,
 {{ omega }}
 "#
     );
-    let error = elaborator()
+    let mut elab = elaborator();
+    let error = elab
         .elab_module_source("probe", &source)
         .expect_err("a satisfiable system must not produce a certificate");
-    assert!(message(error).contains("real shadow found no contradiction"));
+    let message = message(error);
+    assert!(message.contains("real shadow found no contradiction"));
+    assert!(message.contains(
+        "OmegaResidualConstraint { coefficients: [1], lower: Some(-17), upper: Some(10) }"
+    ));
+    let reports = elab.take_omega_failure_reports();
+    let [report] = reports.as_slice() else {
+        panic!("expected one failed-search report, got {reports:#?}")
+    };
+    assert_eq!(report.atoms, 2);
+    assert_eq!(report.assumptions, 3);
+    assert_eq!(report.reachable_derivations, 0);
+    assert_eq!(report.discarded_derivations, report.total_derivations);
+    assert!(report.total_derivations >= report.assumptions);
+    assert!(report.used_lemmas.is_empty());
+    assert_eq!(
+        report.residual,
+        [heather_elab::OmegaResidualConstraint {
+            coefficients: vec![1],
+            lower: Some(-17),
+            upper: Some(10),
+        }]
+    );
 }
 
 #[test]
