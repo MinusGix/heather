@@ -1,6 +1,6 @@
 ---
 title: Certify linear Nat and Int arithmetic with an Omega-style solver
-status: open
+status: closed
 labels: [proofs,elaboration,metaprogramming,stdlib,arithmetic]
 created: 2026-08-26
 updated: 2026-08-27
@@ -106,11 +106,16 @@ when stuck. Arithmetic overflow is a structured refusal and must never wrap.
 
 ## Explicitly deferred
 
-- dark and grey shadows, and hence completeness for Presburger arithmetic;
+- dark and grey shadows, and hence completeness for Presburger arithmetic
+  ([[omega-dark-grey-shadows]]);
 - division, modulus, and divisibility ([[omega-div-mod-expansion]]);
 - `Nat` subtraction, `min`/`max`, `Fin`, and `BitVec` frontend conveniences;
 - an in-Heather reflected checker or an in-Heather solver implementation;
 - general `grind` orchestration ([[grind-port]]).
+- richer source-level stuck diagnostics ([[omega-stuck-diagnostics]]);
+- reflected differential property testing ([[omega-property-testing]]);
+- search and certificate growth rails ([[omega-performance-telemetry]]);
+- concise general tactic composition ([[tactic-composition-ergonomics]]).
 
 ## What it assumes from elsewhere
 
@@ -230,3 +235,10 @@ when stuck. Arithmetic overflow is a structured refusal and must never wrap.
   depended on the atom row being spelled as literal `Cons` syntax. Dark and
   grey shadows remain explicitly deferred, matching the pinned Lean core's
   own stated scope rather than blocking this diagnostic slice.
+- 2026-08-27: Closed the umbrella implementation issue. The landed solver now
+  owns a coherent real-shadow core, reflected `Nat`/`Int` frontend, shared
+  kernel certificates, logical composition, hard equalities, division/modulus,
+  scaling rails, and structured stuck state. Remaining work is independently
+  owned by [[omega-stuck-diagnostics]], [[omega-dark-grey-shadows]],
+  [[omega-property-testing]], [[omega-performance-telemetry]], and
+  [[tactic-composition-ergonomics]].

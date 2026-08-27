@@ -92,6 +92,7 @@ theorem audited(x, y: Int,
     let reports = elab.take_omega_reports();
     let report = reports.last().expect("one solver report");
     assert_eq!(report.atoms, 2);
+    assert_eq!(report.atom_labels, ["x", "y"]);
     assert_eq!(report.assumptions, 3);
     assert!(report.reachable_derivations >= 3);
     assert_eq!(
@@ -497,14 +498,14 @@ theorem satisfiable(x, y: Int,
         .expect_err("a satisfiable system must not produce a certificate");
     let message = message(error);
     assert!(message.contains("real shadow found no contradiction"));
-    assert!(message.contains(
-        "OmegaResidualConstraint { coefficients: [1], lower: Some(-17), upper: Some(10) }"
-    ));
+    assert!(message.contains("atoms [atom[0], atom[1]]"));
+    assert!(message.contains("residual [-17 <= atom[0] <= 10]"));
     let reports = elab.take_omega_failure_reports();
     let [report] = reports.as_slice() else {
         panic!("expected one failed-search report, got {reports:#?}")
     };
     assert_eq!(report.atoms, 2);
+    assert_eq!(report.atom_labels, ["atom[0]", "atom[1]"]);
     assert_eq!(report.assumptions, 3);
     assert_eq!(report.reachable_derivations, 0);
     assert_eq!(report.discarded_derivations, report.total_derivations);
@@ -516,8 +517,38 @@ theorem satisfiable(x, y: Int,
             coefficients: vec![1],
             lower: Some(-17),
             upper: Some(10),
+            rendered: "-17 <= atom[0] <= 10".into(),
         }]
     );
+}
+
+#[test]
+fn stuck_diagnostics_use_source_level_atom_names() {
+    let source = format!(
+        r#"{PREFIX}
+theorem satisfiable_affine(x, y: Int,
+    lower: OfNat(3) <= int::sub(x, y * OfNat(2)),
+    upper: int::sub(x, y * OfNat(2)) <= OfNat(9)):
+    False
+{{ omega }}
+"#
+    );
+    let mut elab = elaborator();
+    let error = elab
+        .elab_module_source("probe", &source)
+        .expect_err("a satisfiable affine interval must remain stuck");
+    let message = message(error);
+    assert!(message.contains("atoms [x, y]"), "{message}");
+    assert!(
+        message.contains("residual [3 <= x - 2 * y <= 9]"),
+        "{message}"
+    );
+    let reports = elab.take_omega_failure_reports();
+    let [report] = reports.as_slice() else {
+        panic!("expected one failed-search report, got {reports:#?}")
+    };
+    assert_eq!(report.atom_labels, ["x", "y"]);
+    assert_eq!(report.residual[0].rendered, "3 <= x - 2 * y <= 9");
 }
 
 #[test]

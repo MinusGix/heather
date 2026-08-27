@@ -1,0 +1,31 @@
+---
+title: Add concise general tactic-composition syntax
+status: open
+labels: [surface,proofs,elaboration,syntax]
+created: 2026-08-27
+updated: 2026-08-27
+---
+
+Make common proof-tree composition concise without adding solver-specific
+magic. `split_all` should continue to produce ordinary goals and `all_goals`
+should continue to apply one block independently to every current leaf. The
+follow-up is surface syntax and small general combinators for repetition,
+sequencing, and applying a tactic to all goals.
+
+Do not make Omega composable through a special return type or fuse branching
+into arithmetic automation. The same syntax must serve `refl`, `omega`, user
+metaprograms, and future tactics uniformly.
+
+## Acceptance
+
+- Provide a concise spelling for the common `split_all; all_goals { omega }`
+  shape without changing its goal semantics.
+- Define failure and empty-goal behavior for sequencing, repetition, and
+  all-goal application.
+- Preserve the existing explicit block form and nested-goal tests.
+- Keep tactic composition independent of any particular solver.
+
+## What it assumes from elsewhere
+
+- `docs/goal-combinators.md` defines the current `split_all` and `all_goals`
+  behavior that new syntax must preserve.

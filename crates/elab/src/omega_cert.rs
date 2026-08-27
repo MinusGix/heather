@@ -34,11 +34,13 @@ pub struct OmegaResidualConstraint {
     pub coefficients: Vec<Z>,
     pub lower: Option<Z>,
     pub upper: Option<Z>,
+    pub rendered: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OmegaReport {
     pub atoms: usize,
+    pub atom_labels: Vec<String>,
     pub assumptions: usize,
     pub reachable_derivations: usize,
     pub total_derivations: usize,
@@ -52,6 +54,7 @@ pub struct OmegaReport {
 fn wrapper_report(lemma: &'static str, logical_splits: usize) -> OmegaReport {
     OmegaReport {
         atoms: 0,
+        atom_labels: Vec::new(),
         assumptions: 0,
         reachable_derivations: 0,
         total_derivations: 0,
@@ -150,6 +153,61 @@ fn reflected_atom_count(facts: &[InitialAssumption]) -> usize {
         .map(|fact| fact.coeffs.as_slice().len())
         .max()
         .unwrap_or(0)
+}
+
+fn indexed_atom_labels(count: usize) -> Vec<String> {
+    (0..count).map(|index| format!("atom[{index}]")).collect()
+}
+
+fn render_linear(coefficients: &[Z], atom_labels: &[String]) -> String {
+    let mut rendered = String::new();
+    for (index, &coefficient) in coefficients.iter().enumerate() {
+        if coefficient == 0 {
+            continue;
+        }
+        let atom = atom_labels
+            .get(index)
+            .cloned()
+            .unwrap_or_else(|| format!("aux[{}]", index - atom_labels.len()));
+        let magnitude = coefficient.unsigned_abs();
+        let term = if magnitude == 1 {
+            atom
+        } else {
+            format!("{magnitude} * {atom}")
+        };
+        if rendered.is_empty() {
+            if coefficient < 0 {
+                rendered.push('-');
+            }
+            rendered.push_str(&term);
+        } else if coefficient < 0 {
+            rendered.push_str(" - ");
+            rendered.push_str(&term);
+        } else {
+            rendered.push_str(" + ");
+            rendered.push_str(&term);
+        }
+    }
+    if rendered.is_empty() {
+        rendered.push('0');
+    }
+    rendered
+}
+
+fn render_residual(
+    coefficients: &[Z],
+    lower: Option<Z>,
+    upper: Option<Z>,
+    atom_labels: &[String],
+) -> String {
+    let linear = render_linear(coefficients, atom_labels);
+    match (lower, upper) {
+        (Some(lower), Some(upper)) if lower == upper => format!("{linear} = {lower}"),
+        (Some(lower), Some(upper)) => format!("{lower} <= {linear} <= {upper}"),
+        (Some(lower), None) => format!("{lower} <= {linear}"),
+        (None, Some(upper)) => format!("{linear} <= {upper}"),
+        (None, None) => linear,
+    }
 }
 
 #[derive(Clone)]
@@ -1274,7 +1332,7 @@ fn normalize_syntax(syntax: &AffineSyntax, atoms_source: &str) -> Result<Normali
 fn reflect_ordinary(
     elab: &Elaborator,
     cx: &Cx,
-) -> Result<Option<(Vec<InitialAssumption>, String, usize)>, String> {
+) -> Result<Option<(Vec<InitialAssumption>, String, Vec<String>)>, String> {
     let mut atoms = Vec::new();
     let mut relations = Vec::new();
     for pos in 0..cx.names.len() {
@@ -1596,8 +1654,15 @@ fn reflect_ordinary(
             exact: None,
         });
     }
-    let atom_count = atoms.len();
-    Ok(Some((facts, atoms_source, atom_count)))
+    let atom_labels = atoms
+        .iter()
+        .map(|atom| {
+            atom.nat_source
+                .clone()
+                .unwrap_or_else(|| atom.source.clone())
+        })
+        .collect();
+    Ok(Some((facts, atoms_source, atom_labels)))
 }
 
 fn int(value: Z) -> String {
@@ -1732,6 +1797,7 @@ fn split_disequality(elab: &Elaborator, cx: &Cx) -> Result<Option<Certificate>, 
             source,
             report: OmegaReport {
                 atoms: 0,
+                atom_labels: Vec::new(),
                 assumptions: 0,
                 reachable_derivations: 0,
                 total_derivations: 0,
@@ -1768,6 +1834,7 @@ fn split_connective(elab: &Elaborator, cx: &Cx) -> Result<Option<Certificate>, S
             source,
             report: OmegaReport {
                 atoms: 0,
+                atom_labels: Vec::new(),
                 assumptions: 0,
                 reachable_derivations: 0,
                 total_derivations: 0,
@@ -1915,7 +1982,7 @@ pub(crate) fn reconstruct(
         ));
     }
 
-    let (reflected, atoms_source, atom_count) = if let Some(ordinary) = reflect_ordinary(elab, cx)?
+    let (reflected, atoms_source, atom_labels) = if let Some(ordinary) = reflect_ordinary(elab, cx)?
     {
         ordinary
     } else {
@@ -1961,8 +2028,9 @@ pub(crate) fn reconstruct(
             })
             .collect();
         let atom_count = reflected_atom_count(&facts);
-        (facts, atoms_source, atom_count)
+        (facts, atoms_source, indexed_atom_labels(atom_count))
     };
+    let atom_count = atom_labels.len();
 
     let mut problem = Problem::new();
     let reflected_debug = reflected
@@ -2000,16 +2068,27 @@ pub(crate) fn reconstruct(
             .join(", ");
         let residual = residual
             .iter()
-            .map(|fact| OmegaResidualConstraint {
-                coefficients: fact.coeffs.as_slice().to_vec(),
-                lower: fact.interval.lower,
-                upper: fact.interval.upper,
+            .map(|fact| {
+                let coefficients = fact.coeffs.as_slice().to_vec();
+                let lower = fact.interval.lower;
+                let upper = fact.interval.upper;
+                OmegaResidualConstraint {
+                    rendered: render_residual(&coefficients, lower, upper, &atom_labels),
+                    coefficients,
+                    lower,
+                    upper,
+                }
             })
             .collect::<Vec<_>>();
-        let residual_debug = format!("{residual:?}");
+        let residual_display = residual
+            .iter()
+            .map(|constraint| constraint.rendered.as_str())
+            .collect::<Vec<_>>()
+            .join(", ");
         let total_derivations = problem.dag.nodes().len();
         elab.record_omega_failure_report(OmegaReport {
             atoms: atom_count,
+            atom_labels: atom_labels.clone(),
             assumptions: reflected.len(),
             reachable_derivations: 0,
             total_derivations,
@@ -2020,7 +2099,8 @@ pub(crate) fn reconstruct(
             residual,
         });
         return Err(format!(
-            "Omega's real shadow found no contradiction; residual {residual_debug}; locals [{local_types}]; reflected [{reflected_debug}]",
+            "Omega's real shadow found no contradiction; atoms [{}]; residual [{residual_display}]; locals [{local_types}]; reflected [{reflected_debug}]",
+            atom_labels.join(", "),
         ));
     };
     let derivation = *derivation;
@@ -2820,6 +2900,7 @@ pub(crate) fn reconstruct(
             source,
             report: OmegaReport {
                 atoms: atom_count,
+                atom_labels: atom_labels.clone(),
                 assumptions: reflected.len(),
                 reachable_derivations: reachable_derivations.len(),
                 total_derivations: problem.dag.nodes().len(),
@@ -2886,6 +2967,7 @@ pub(crate) fn reconstruct(
         source,
         report: OmegaReport {
             atoms: atom_count,
+            atom_labels,
             assumptions: reflected.len(),
             reachable_derivations: reachable_derivations.len(),
             total_derivations: problem.dag.nodes().len(),
@@ -2919,5 +3001,22 @@ mod tests {
         assert_eq!(coefficient_source("Nil"), Some(vec![]));
         assert_eq!(coefficient_source("Cons(x, Nil)"), None);
         assert_eq!(coefficient_source("Cons(1, Nil) junk"), None);
+    }
+
+    #[test]
+    fn residual_rendering_is_source_level_and_stable() {
+        let labels = vec!["x".into(), "ignored".into(), "f(y)".into()];
+        assert_eq!(
+            render_residual(&[-1, 0, 3], Some(-2), Some(8), &labels),
+            "-2 <= -x + 3 * f(y) <= 8"
+        );
+        assert_eq!(
+            render_residual(&[0, 1], Some(4), Some(4), &labels),
+            "ignored = 4"
+        );
+        assert_eq!(
+            render_residual(&[0, 0, 0, -2], None, Some(7), &labels),
+            "-2 * aux[0] <= 7"
+        );
     }
 }
